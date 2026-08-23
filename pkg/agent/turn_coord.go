@@ -323,7 +323,6 @@ func (al *AgentLoop) askSideQuestion(
 	}()
 	if usedVisionOverride {
 		activeCandidates = visionExecution.Candidates
-		activeModel = resolvedCandidateModel(visionExecution.Candidates, visionExecution.Model)
 		selectedModelName = resolvedCandidateModelName(
 			visionExecution.Candidates,
 			selectedModelName,
@@ -358,9 +357,7 @@ func (al *AgentLoop) askSideQuestion(
 			return nil, err
 		}
 		defer cleanup()
-		if !forceModel || strings.TrimSpace(model) == "" {
-			model = providerModel
-		}
+		model = providerModel
 		callOpts := llmOpts
 		settings := thinkingSettingsFromModelConfig(modelCfg)
 		sideSuppressReasoning = shouldSuppressReasoningFor(settings)
@@ -381,7 +378,6 @@ func (al *AgentLoop) askSideQuestion(
 			opts.Dispatch.SessionScope,
 		)
 	}
-	llmModel := activeModel
 	if al.hooks != nil {
 		llmReq, decision := al.hooks.BeforeLLM(ctx, &LLMHookRequest{
 			Meta: HookMeta{
@@ -390,7 +386,7 @@ func (al *AgentLoop) askSideQuestion(
 				turnContext: cloneTurnContext(turnCtx),
 			},
 			Context:          cloneTurnContext(turnCtx),
-			Model:            llmModel,
+			Model:            selectedModelName,
 			Messages:         messages,
 			Tools:            nil,
 			Options:          llmOpts,
@@ -399,10 +395,13 @@ func (al *AgentLoop) askSideQuestion(
 		switch decision.normalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if llmReq != nil {
-				if strings.TrimSpace(llmReq.Model) != "" && llmReq.Model != llmModel {
+				if llmReq.Model != selectedModelName {
+					if err := requireExactModelName(llmReq.Model); err != nil {
+						return "", fmt.Errorf("before_llm model: %w", err)
+					}
 					hookModelChanged = true
+					selectedModelName = llmReq.Model
 				}
-				llmModel = llmReq.Model
 				messages = llmReq.Messages
 				llmOpts = llmReq.Options
 				delete(llmOpts, "native_search")
@@ -447,7 +446,7 @@ func (al *AgentLoop) askSideQuestion(
 		if len(activeCandidates) > 0 {
 			candidate = activeCandidates[0]
 		}
-		return callProvider(ctx, candidate, llmModel, hookModelChanged, callMessages)
+		return callProvider(ctx, candidate, selectedModelName, hookModelChanged, callMessages)
 	}
 
 	// Retry without media if vision is unsupported
@@ -491,7 +490,7 @@ func (al *AgentLoop) askSideQuestion(
 				turnContext: cloneTurnContext(turnCtx),
 			},
 			Context:  cloneTurnContext(turnCtx),
-			Model:    llmModel,
+			Model:    selectedModelName,
 			Response: resp,
 		})
 		switch decision.normalizedAction() {
@@ -555,58 +554,23 @@ func (al *AgentLoop) sideQuestionModelConfig(
 	if agent == nil {
 		return nil, fmt.Errorf("sideQuestionModelConfig: no agent available for /btw")
 	}
-
+	if err := requireExactModelName(baseModelName); err != nil {
+		return nil, fmt.Errorf("sideQuestionModelConfig: %w", err)
+	}
+	modelName := baseModelName
+	var candidates []providers.FallbackCandidate
 	if name := modelAliasFromCandidateIdentityKey(candidate.IdentityKey); name != "" {
-		modelCfg, err := resolvedModelConfig(al.GetConfig(), name, agent.Workspace)
-		if err == nil {
-			return modelCfg, nil
-		}
-		// Fallback: create a minimal config if lookup fails
+		modelName = name
+		candidates = []providers.FallbackCandidate{candidate}
 	}
-
-	// Older identity keys used provider/model; keep resolving those by model.
-	if name := modelNameFromIdentityKey(candidate.IdentityKey); name != "" {
-		modelCfg, err := resolvedModelConfig(al.GetConfig(), name, agent.Workspace)
-		if err == nil {
-			return modelCfg, nil
-		}
-		// Fallback: create a minimal config if lookup fails
+	modelCfg := resolveActiveModelConfig(
+		al.GetConfig(),
+		agent.Workspace,
+		candidates,
+		modelName,
+	)
+	if modelCfg == nil {
+		return nil, fmt.Errorf("sideQuestionModelConfig: model %q is not configured", modelName)
 	}
-
-	if candidate.Provider != "" && candidate.Model != "" {
-		candidateRef := providers.NormalizeProvider(candidate.Provider) + "/" + candidate.Model
-		if modelCfg, err := resolvedModelConfig(al.GetConfig(), candidateRef, agent.Workspace); err == nil {
-			return modelCfg, nil
-		}
-		return &config.ModelConfig{
-			ModelName: candidateRef,
-			Model:     candidateRef,
-			Workspace: agent.Workspace,
-		}, nil
-	}
-
-	// Otherwise, clean up the base model name and use it
-	baseModelName = strings.TrimSpace(baseModelName)
-	modelCfg, err := resolvedModelConfig(al.GetConfig(), baseModelName, agent.Workspace)
-	if err != nil {
-		// Fallback: create a minimal config for test scenarios
-		model := strings.TrimSpace(baseModelName)
-		if candidate.Model != "" {
-			model = candidate.Model
-		}
-		if candidate.Provider != "" && candidate.Model != "" {
-			model = providers.NormalizeProvider(candidate.Provider) + "/" + candidate.Model
-		} else {
-			model = ensureProtocolModel(model)
-		}
-		return &config.ModelConfig{
-			ModelName: baseModelName,
-			Model:     model,
-			Workspace: agent.Workspace,
-		}, nil
-	}
-
-	// If candidate specifies a different provider/model, override
-	clone := *modelCfg
-	return &clone, nil
+	return modelCfg, nil
 }

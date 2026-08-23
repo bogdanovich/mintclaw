@@ -549,7 +549,8 @@ func TestHandleUpdateConfig_PreservesExecAllowRemoteDefaultWhenOmitted(t *testin
 		"model_list": [
 			{
 				"model_name": "custom-default",
-				"model": "openai/gpt-4o",
+				"provider": "openai",
+				"model": "gpt-4o",
 				"api_keys": ["sk-default"]
 			}
 		]
@@ -572,6 +573,140 @@ func TestHandleUpdateConfig_PreservesExecAllowRemoteDefaultWhenOmitted(t *testin
 	}
 }
 
+func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
+	tests := []struct {
+		name              string
+		registries        string
+		wantRegistryCount int
+		wantGitHub        bool
+		wantToken         string
+	}{
+		{
+			name:              "omitted normalizes to defaults",
+			wantRegistryCount: 2,
+			wantGitHub:        true,
+			wantToken:         "ghp-current",
+		},
+		{
+			name:              "explicit empty disables defaults",
+			registries:        `"registries": {}`,
+			wantRegistryCount: 0,
+		},
+		{
+			name: "rotates token without channels",
+			registries: `"registries": {
+				"github": {
+					"enabled": true,
+					"base_url": "https://github.com",
+					"auth_token": "ghp-new"
+				}
+			}`,
+			wantRegistryCount: 1,
+			wantGitHub:        true,
+			wantToken:         "ghp-new",
+		},
+		{
+			name: "clears token without channels",
+			registries: `"registries": {
+				"github": {
+					"enabled": true,
+					"base_url": "https://github.com",
+					"auth_token": ""
+				}
+			}`,
+			wantRegistryCount: 1,
+			wantGitHub:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+			repository := config.NewRepository(configPath)
+			if _, err := repository.Update(func(cfg *config.Config) error {
+				github, ok := cfg.Tools.Skills.Registries.Get("github")
+				if !ok {
+					return fmt.Errorf("github registry is not configured")
+				}
+				github.AuthToken = *config.NewSecureString("ghp-current")
+				cfg.Tools.Skills.Registries.Set("github", github)
+				return nil
+			}); err != nil {
+				t.Fatalf("seed GitHub token: %v", err)
+			}
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			body := fmt.Sprintf(`{
+				"version": 3,
+				"agents": {
+					"defaults": {
+						"workspace": "~/.mintclaw/workspace"
+					}
+				},
+				"model_list": [
+					{
+						"model_name": "custom-default",
+						"provider": "openai",
+						"model": "gpt-4o",
+						"api_keys": ["sk-default"]
+					}
+				],
+				"tools": {
+					"skills": {%s}
+				}
+			}`, tt.registries)
+			req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			setConfigIfMatch(t, req, configPath)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			public, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			if !strings.Contains(string(public), `"registries"`) {
+				t.Fatalf("persisted config omitted canonical registries field:\n%s", public)
+			}
+
+			cfg, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if got := len(cfg.Tools.Skills.Registries); got != tt.wantRegistryCount {
+				t.Fatalf("loaded registry count = %d, want %d", got, tt.wantRegistryCount)
+			}
+			if cfg.Tools.Skills.Registries == nil {
+				t.Fatal("explicit empty registry map reloaded as nil")
+			}
+			github, hasGitHub := cfg.Tools.Skills.Registries.Get("github")
+			if hasGitHub != tt.wantGitHub {
+				t.Fatalf("loaded GitHub registry = %t, want %t", hasGitHub, tt.wantGitHub)
+			}
+			if hasGitHub && github.AuthToken.String() != tt.wantToken {
+				t.Fatalf("loaded GitHub token = %q, want %q", github.AuthToken.String(), tt.wantToken)
+			}
+			security, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
+			if err != nil {
+				t.Fatalf("ReadFile(.security.yml) error = %v", err)
+			}
+			if strings.Contains(string(security), "ghp-current") != (tt.wantToken == "ghp-current") {
+				t.Fatalf("old GitHub token persistence did not match replacement intent:\n%s", security)
+			}
+			if tt.wantToken != "" && !strings.Contains(string(security), tt.wantToken) {
+				t.Fatalf("persisted security config omitted GitHub token %q:\n%s", tt.wantToken, security)
+			}
+		})
+	}
+}
+
 func TestHandleUpdateConfig_DoesNotInheritDefaultModelFields(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
@@ -590,7 +725,8 @@ func TestHandleUpdateConfig_DoesNotInheritDefaultModelFields(t *testing.T) {
 		"model_list": [
 			{
 				"model_name": "custom-default",
-				"model": "openai/gpt-4o",
+				"provider": "openai",
+				"model": "gpt-4o",
 				"api_keys": ["sk-default"]
 			}
 		]
@@ -1174,9 +1310,8 @@ func setupMintClawEnabledEnv(t *testing.T) (string, func()) {
 
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "custom-default",
-		Model:     "openai/gpt-4o",
-		APIKeys:   config.SimpleSecureStrings("sk-default"),
+		ModelName: "custom-default", Provider: "openai", Model: "gpt-4o",
+		APIKeys: config.SimpleSecureStrings("sk-default"),
 	}}
 	cfg.Agents.Defaults.ModelName = "custom-default"
 	bc := cfg.Channels["mintclaw"]
@@ -1236,7 +1371,8 @@ func TestHandleUpdateConfig_SucceedsWhenMintClawTokenInSecurityOnly(t *testing.T
 		"model_list": [
 			{
 				"model_name": "custom-default",
-				"model": "openai/gpt-4o",
+				"provider": "openai",
+				"model": "gpt-4o",
 				"api_keys": ["sk-default"]
 			}
 		]
@@ -1299,7 +1435,8 @@ func TestHandleUpdateConfig_AppliesGatewayLogLevel(t *testing.T) {
 		"model_list": [
 			{
 				"model_name": "custom-default",
-				"model": "openai/gpt-4o",
+				"provider": "openai",
+				"model": "gpt-4o",
 				"api_keys": ["sk-default"]
 			}
 		]
@@ -1455,6 +1592,199 @@ func TestHandlePatchConfig_DoesNotPersistShadowRegistryAuthTokenField(t *testing
 			"config.json should not persist _auth_token shadow field, got:\n%s",
 			string(rawConfig),
 		)
+	}
+}
+
+func TestHandlePatchConfig_RemovesRegistryWithStoredAuthToken(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	repository := config.NewRepository(configPath)
+	if _, err := repository.Update(func(cfg *config.Config) error {
+		cfg.Tools.Skills.Registries.Set("custom", config.SkillRegistryConfig{
+			Enabled:   true,
+			BaseURL:   "https://skills.example.com",
+			AuthToken: *config.NewSecureString("custom-token"),
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(`{
+		"tools": {
+			"skills": {
+				"registries": {
+					"custom": null
+				}
+			}
+		}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf(
+			"PATCH /api/config status = %d, want %d, body=%s",
+			rec.Code,
+			http.StatusOK,
+			rec.Body.String(),
+		)
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if _, exists := cfg.Tools.Skills.Registries.Get("custom"); exists {
+		t.Fatal("custom registry still exists after PATCH deletion")
+	}
+	securityData, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
+	if err != nil {
+		t.Fatalf("ReadFile(.security.yml) error = %v", err)
+	}
+	if strings.Contains(string(securityData), "registries:\n      custom:") ||
+		strings.Contains(string(securityData), "custom-token") {
+		t.Fatalf("removed registry still exists in .security.yml:\n%s", securityData)
+	}
+}
+
+func TestHandleUpdateConfig_RemovesRegistryWithStoredAuthToken(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	repository := config.NewRepository(configPath)
+	if _, err := repository.Update(func(cfg *config.Config) error {
+		cfg.Tools.Skills.Registries.Set("custom", config.SkillRegistryConfig{
+			Enabled:   true,
+			BaseURL:   "https://skills.example.com",
+			AuthToken: *config.NewSecureString("custom-token"),
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	snapshot, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+	delete(snapshot.Config.Tools.Skills.Registries, "custom")
+	body, err := json.Marshal(snapshot.Config)
+	if err != nil {
+		t.Fatalf("Marshal(config) error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("If-Match", configRevisionETag(snapshot.Revision))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf(
+			"PUT /api/config status = %d, want %d, body=%s",
+			rec.Code,
+			http.StatusOK,
+			rec.Body.String(),
+		)
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if _, exists := cfg.Tools.Skills.Registries.Get("custom"); exists {
+		t.Fatal("custom registry still exists after PUT deletion")
+	}
+	securityData, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
+	if err != nil {
+		t.Fatalf("ReadFile(.security.yml) error = %v", err)
+	}
+	if strings.Contains(string(securityData), "registries:\n      custom:") ||
+		strings.Contains(string(securityData), "custom-token") {
+		t.Fatalf("removed registry still exists in .security.yml:\n%s", securityData)
+	}
+}
+
+func TestHandleResetConfig_DropsCustomRegistryCredential(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	repository := config.NewRepository(configPath)
+	if _, err := repository.Update(func(cfg *config.Config) error {
+		cfg.Tools.Skills.Registries.Set("custom", config.SkillRegistryConfig{
+			Enabled:   true,
+			BaseURL:   "https://skills.example.com",
+			AuthToken: *config.NewSecureString("custom-token"),
+		})
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/config/reset", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf(
+			"POST /api/config/reset status = %d, want %d, body=%s",
+			rec.Code,
+			http.StatusOK,
+			rec.Body.String(),
+		)
+	}
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if _, exists := cfg.Tools.Skills.Registries.Get("custom"); exists {
+		t.Fatal("custom registry still exists after reset")
+	}
+	securityData, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
+	if err != nil {
+		t.Fatalf("ReadFile(.security.yml) error = %v", err)
+	}
+	if strings.Contains(string(securityData), "registries:\n      custom:") ||
+		strings.Contains(string(securityData), "custom-token") {
+		t.Fatalf("reset retained custom registry security:\n%s", securityData)
+	}
+}
+
+func TestHandlePatchConfig_RejectsRemovedSkillRegistryShapes(t *testing.T) {
+	tests := map[string]string{
+		"github sibling": `{"tools":{"skills":{"github":{"token":"old"}}}}`,
+		"registry list":  `{"tools":{"skills":{"registries":[{"name":"github"}]}}}`,
+		"embedded name":  `{"tools":{"skills":{"registries":{"github":{"name":"github"}}}}}`,
+		"token field":    `{"tools":{"skills":{"registries":{"github":{"token":"old"}}}}}`,
+		"nested params":  `{"tools":{"skills":{"registries":{"github":{"param":{"proxy":"old"}}}}}}`,
+	}
+
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+
+			req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("PATCH /api/config status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body)
+			}
+		})
 	}
 }
 

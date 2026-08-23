@@ -252,7 +252,14 @@ func (c *SlackChannel) socketReconnectDelay(attempt int) time.Duration {
 	return delay
 }
 
-func (c *SlackChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *SlackChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *SlackChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
@@ -293,8 +300,15 @@ func (c *SlackChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]str
 	return []string{ts}, nil
 }
 
-// SendMedia implements the channels.MediaSender interface.
-func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+// DeliverMedia implements the channels.MediaSender interface.
+func (c *SlackChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *SlackChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

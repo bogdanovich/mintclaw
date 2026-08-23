@@ -111,23 +111,25 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 		wantModel    string
 	}{
 		{
-			name:         "alias with provider prefix",
+			name:         "alias with explicit provider",
 			aliasName:    "step-3.5-flash",
-			modelName:    "openrouter/stepfun/step-3.5-flash:free",
+			modelName:    "stepfun/step-3.5-flash:free",
+			provider:     "openrouter",
 			apiBase:      "https://openrouter.ai/api/v1",
 			wantProvider: "openrouter",
 			wantModel:    "stepfun/step-3.5-flash:free",
 		},
 		{
-			name:         "alias without provider prefix",
+			name:         "alias with provider-native model",
 			aliasName:    "glm-5",
 			modelName:    "glm-5",
+			provider:     "openai",
 			apiBase:      "https://api.z.ai/api/coding/paas/v4",
 			wantProvider: "openai",
 			wantModel:    "glm-5",
 		},
 		{
-			name:         "explicit provider overrides model prefix",
+			name:         "provider-native slash is preserved",
 			aliasName:    "nvidia-gpt",
 			modelName:    "z-ai/glm-5.1",
 			provider:     "nvidia",
@@ -191,14 +193,12 @@ func TestNewAgentInstance_PreservesDistinctLimiterIdentityForSharedResolvedModel
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "glm-4.7",
-				Model:     "zhipu/glm-4.7",
-				RPM:       1,
+				ModelName: "glm-4.7", Provider: "zhipu", Model: "glm-4.7",
+				RPM: 1,
 			},
 			{
-				ModelName: "glm-4.7__key_1",
-				Model:     "zhipu/glm-4.7",
-				RPM:       3,
+				ModelName: "glm-4.7__key_1", Provider: "zhipu", Model: "glm-4.7",
+				RPM: 3,
 			},
 		},
 	}
@@ -230,14 +230,14 @@ func TestNewAgentInstance_PreservesDistinctLimiterIdentityForSharedResolvedModel
 	}
 }
 
-func TestNewAgentInstance_PreservesConfigIdentityForExplicitProviderModelRef(t *testing.T) {
+func TestNewAgentInstance_PreservesConfigIdentityForExactModelName(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace: tmpDir,
-				ModelName: "nvidia/z-ai/glm-5.1",
+				ModelName: "nvidia-glm",
 			},
 		},
 		ModelList: []*config.ModelConfig{
@@ -369,7 +369,7 @@ func TestPopulateCandidateProviders_SkipsExistingKeys(t *testing.T) {
 
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{
-			{ModelName: "my-gpt", Model: "openai/gpt-4o", APIKeys: config.SimpleSecureStrings("test-key")},
+			{ModelName: "my-gpt", Provider: "openai", Model: "gpt-4o", APIKeys: config.SimpleSecureStrings("test-key")},
 		},
 	}
 	populateCandidateProvidersFromNames(cfg, t.TempDir(), []string{"my-gpt"}, out)
@@ -389,8 +389,7 @@ func TestPopulateCandidateProviders_ResolvesAlias(t *testing.T) {
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "my-gpt",
-				Model:     "openai/gpt-4o",
+				ModelName: "my-gpt", Provider: "openai", Model: "gpt-4o",
 				APIBase:   "https://api.openai.com/v1",
 				Workspace: workspace,
 				Enabled:   true,
@@ -415,8 +414,7 @@ func TestPopulateCandidateProviders_ResolvesProtocolPrefix(t *testing.T) {
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "gemma",
-				Model:     "gemini/gemma-3-27b-it",
+				ModelName: "gemma", Provider: "gemini", Model: "gemma-3-27b-it",
 				APIKeys:   config.SimpleSecureStrings("gemini-test-key"),
 				Workspace: workspace,
 				Enabled:   true,
@@ -437,7 +435,7 @@ func TestPopulateCandidateProviders_EmptyNamesIsNoop(t *testing.T) {
 	out := map[string]providers.LLMProvider{}
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{
-			{ModelName: "my-gpt", Model: "openai/gpt-4o", APIKeys: config.SimpleSecureStrings("key")},
+			{ModelName: "my-gpt", Provider: "openai", Model: "gpt-4o", APIKeys: config.SimpleSecureStrings("key")},
 		},
 	}
 	populateCandidateProvidersFromNames(cfg, t.TempDir(), nil, out)
@@ -464,7 +462,7 @@ func TestPopulateCandidateProviders_UnmatchedNameIsSkipped(t *testing.T) {
 	out := map[string]providers.LLMProvider{}
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{
-			{ModelName: "my-gpt", Model: "openai/gpt-4o", APIKeys: config.SimpleSecureStrings("key")},
+			{ModelName: "my-gpt", Provider: "openai", Model: "gpt-4o", APIKeys: config.SimpleSecureStrings("key")},
 		},
 	}
 	populateCandidateProvidersFromNames(cfg, t.TempDir(), []string{"nonexistent-model"}, out)
@@ -492,22 +490,21 @@ func TestNewAgentInstance_CandidateProvidersPopulatedForCrossProviderFallbacks(t
 		ModelList: []*config.ModelConfig{
 			{
 				ModelName: "mistral-small-3.1",
-				Model:     "openrouter/mistralai/mistral-small-3.1-24b-instruct:free",
+				Provider:  "openrouter",
+				Model:     "mistralai/mistral-small-3.1-24b-instruct:free",
 				APIBase:   "https://openrouter.ai/api/v1",
 				APIKeys:   config.SimpleSecureStrings("sk-or-test"),
 				Workspace: workspace,
 				Enabled:   true,
 			},
 			{
-				ModelName: "gemma-3-27b",
-				Model:     "gemini/gemma-3-27b-it",
+				ModelName: "gemma-3-27b", Provider: "gemini", Model: "gemma-3-27b-it",
 				APIKeys:   config.SimpleSecureStrings("AIzaSy-test"),
 				Workspace: workspace,
 				Enabled:   true,
 			},
 			{
-				ModelName: "gemini-images",
-				Model:     "gemini/gemini-2.5-flash-lite",
+				ModelName: "gemini-images", Provider: "gemini", Model: "gemini-2.5-flash-lite",
 				APIKeys:   config.SimpleSecureStrings("AIzaSy-test"),
 				Workspace: workspace,
 				Enabled:   true,
@@ -803,6 +800,9 @@ Use frontmatter identity.
 				},
 			},
 		},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "frontmatter-model", Provider: "openai", Model: "frontmatter-model",
+		}},
 	}
 
 	agent := NewAgentInstance(&config.AgentConfig{
@@ -831,6 +831,65 @@ Use frontmatter identity.
 	}
 }
 
+func TestNewAgentInstance_RejectsUnknownFrontmatterModel(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": "---\nmodel: unknown-model\n---\n# Agent\n",
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: workspace,
+			ModelName: "configured-model",
+		}},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "configured-model", Provider: "openai", Model: "gpt-5.4",
+		}},
+	}
+
+	agent, err := newAgentInstance(
+		&config.AgentConfig{ID: "research", Workspace: workspace},
+		&cfg.Agents.Defaults,
+		cfg,
+		&mockProvider{},
+		nil,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), `workspace model "unknown-model" is not configured`) {
+		t.Fatalf("newAgentInstance() agent = %#v, error = %v", agent, err)
+	}
+}
+
+func TestNewAgentInstance_RejectsWhitespaceInFrontmatterModel(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": "---\nmodel: \" configured-model \"\n---\n# Agent\n",
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: workspace,
+			ModelName: "configured-model",
+		}},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "configured-model", Provider: "openai", Model: "gpt-5.4",
+		}},
+	}
+
+	agent, err := newAgentInstance(
+		&config.AgentConfig{ID: "research", Workspace: workspace},
+		&cfg.Agents.Defaults,
+		cfg,
+		&mockProvider{},
+		nil,
+		nil,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "workspace model: model_name must not have surrounding whitespace") {
+		t.Fatalf("newAgentInstance() agent = %#v, error = %v", agent, err)
+	}
+}
+
 func TestNewAgentInstance_UsesResolvedProviderForFrontmatterPrimaryModel(t *testing.T) {
 	workspace := setupWorkspace(t, map[string]string{
 		"AGENT.md": `---
@@ -851,8 +910,7 @@ model: claude-frontmatter
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "claude-frontmatter",
-				Model:     "anthropic/claude-3-7-sonnet",
+				ModelName: "claude-frontmatter", Provider: "anthropic", Model: "claude-3-7-sonnet",
 				APIKeys:   config.SimpleSecureStrings("test-anthropic-key"),
 				Workspace: workspace,
 			},

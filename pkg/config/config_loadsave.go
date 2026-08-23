@@ -117,7 +117,7 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 		if err := env.Parse(cfg); err != nil {
 			return err
 		}
-		applySkillsRegistryEnvCompat(cfg)
+		applySkillsRegistryEnvOverrides(cfg)
 	}
 	if err := initChannelList(cfg.Channels, applyRuntimeOverrides); err != nil {
 		return err
@@ -168,6 +168,9 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 	if err := cfg.ValidateModelList(); err != nil {
 		return err
 	}
+	if err := cfg.ValidateModelReferences(); err != nil {
+		return err
+	}
 	if cfg.Agents.Defaults.Workspace == "" {
 		cfg.Agents.Defaults.Workspace = filepath.Join(GetHome(), pkg.WorkspaceName)
 	}
@@ -176,87 +179,115 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 	return nil
 }
 
-func applySkillsRegistryEnvCompat(cfg *Config) {
+func applySkillsRegistryEnvOverrides(cfg *Config) {
 	if cfg == nil {
 		return
 	}
 
-	registryCfg, foundClawHub := cfg.Tools.Skills.Registries.Get("clawhub")
-	if !foundClawHub {
-		registryCfg = SkillRegistryConfig{
-			Name:  "clawhub",
-			Param: map[string]any{},
+	registryCfg, applyClawHub := registryForEnvOverrides(
+		&cfg.Tools.Skills.Registries,
+		"clawhub",
+		envSkillsClawHubEnabled,
+		envSkillsClawHubBaseURL,
+		envSkillsClawHubAuthToken,
+		envSkillsClawHubSearchPath,
+		envSkillsClawHubSkillsPath,
+		envSkillsClawHubDownloadPath,
+		envSkillsClawHubTimeout,
+		envSkillsClawHubMaxZipSize,
+		envSkillsClawHubMaxResponseSize,
+	)
+
+	if applyClawHub {
+		if raw, envSet := os.LookupEnv(envSkillsClawHubEnabled); envSet {
+			if value, err := strconv.ParseBool(strings.TrimSpace(raw)); err == nil {
+				registryCfg.Enabled = value
+			}
 		}
-	}
-	if registryCfg.Param == nil {
-		registryCfg.Param = map[string]any{}
+		if value, envSet := os.LookupEnv(envSkillsClawHubBaseURL); envSet {
+			registryCfg.BaseURL = value
+		}
+		if value, envSet := os.LookupEnv(envSkillsClawHubAuthToken); envSet {
+			registryCfg.AuthToken = *NewSecureString(value)
+		}
+		if value, envSet := os.LookupEnv(envSkillsClawHubSearchPath); envSet {
+			registryCfg.Param["search_path"] = value
+		}
+		if value, envSet := os.LookupEnv(envSkillsClawHubSkillsPath); envSet {
+			registryCfg.Param["skills_path"] = value
+		}
+		if value, envSet := os.LookupEnv(envSkillsClawHubDownloadPath); envSet {
+			registryCfg.Param["download_path"] = value
+		}
+		if raw, envSet := os.LookupEnv(envSkillsClawHubTimeout); envSet {
+			if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+				registryCfg.Param["timeout"] = value
+			}
+		}
+		if raw, envSet := os.LookupEnv(envSkillsClawHubMaxZipSize); envSet {
+			if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+				registryCfg.Param["max_zip_size"] = value
+			}
+		}
+		if raw, envSet := os.LookupEnv(envSkillsClawHubMaxResponseSize); envSet {
+			if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+				registryCfg.Param["max_response_size"] = value
+			}
+		}
+		cfg.Tools.Skills.Registries.Set("clawhub", registryCfg)
 	}
 
-	if raw, envSet := os.LookupEnv(envSkillsClawHubEnabled); envSet {
-		if value, err := strconv.ParseBool(strings.TrimSpace(raw)); err == nil {
-			registryCfg.Enabled = value
-		}
-	}
-	if value, envSet := os.LookupEnv(envSkillsClawHubBaseURL); envSet {
-		registryCfg.BaseURL = value
-	}
-	if value, envSet := os.LookupEnv(envSkillsClawHubAuthToken); envSet {
-		registryCfg.AuthToken = *NewSecureString(value)
-	}
-	if value, envSet := os.LookupEnv(envSkillsClawHubSearchPath); envSet {
-		registryCfg.Param["search_path"] = value
-	}
-	if value, envSet := os.LookupEnv(envSkillsClawHubSkillsPath); envSet {
-		registryCfg.Param["skills_path"] = value
-	}
-	if value, envSet := os.LookupEnv(envSkillsClawHubDownloadPath); envSet {
-		registryCfg.Param["download_path"] = value
-	}
-	if raw, envSet := os.LookupEnv(envSkillsClawHubTimeout); envSet {
-		if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
-			registryCfg.Param["timeout"] = value
-		}
-	}
-	if raw, envSet := os.LookupEnv(envSkillsClawHubMaxZipSize); envSet {
-		if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
-			registryCfg.Param["max_zip_size"] = value
-		}
-	}
-	if raw, envSet := os.LookupEnv(envSkillsClawHubMaxResponseSize); envSet {
-		if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
-			registryCfg.Param["max_response_size"] = value
-		}
-	}
+	githubCfg, applyGitHub := registryForEnvOverrides(
+		&cfg.Tools.Skills.Registries,
+		"github",
+		envSkillsGitHubEnabled,
+		envSkillsGitHubBaseURL,
+		envSkillsGitHubAuthToken,
+		envSkillsGitHubProxy,
+	)
 
-	cfg.Tools.Skills.Registries.Set("clawhub", registryCfg)
-
-	githubCfg, foundGitHub := cfg.Tools.Skills.Registries.Get("github")
-	if !foundGitHub {
-		githubCfg = SkillRegistryConfig{
-			Name:  "github",
-			Param: map[string]any{},
+	if applyGitHub {
+		if raw, envSet := os.LookupEnv(envSkillsGitHubEnabled); envSet {
+			if value, err := strconv.ParseBool(strings.TrimSpace(raw)); err == nil {
+				githubCfg.Enabled = value
+			}
 		}
-	}
-	if githubCfg.Param == nil {
-		githubCfg.Param = map[string]any{}
-	}
-
-	if raw, envSet := os.LookupEnv(envSkillsGitHubEnabled); envSet {
-		if value, err := strconv.ParseBool(strings.TrimSpace(raw)); err == nil {
-			githubCfg.Enabled = value
+		if value, envSet := os.LookupEnv(envSkillsGitHubBaseURL); envSet {
+			githubCfg.BaseURL = value
 		}
+		if value, envSet := os.LookupEnv(envSkillsGitHubAuthToken); envSet {
+			githubCfg.AuthToken = *NewSecureString(value)
+		}
+		if value, envSet := os.LookupEnv(envSkillsGitHubProxy); envSet {
+			githubCfg.Param["proxy"] = value
+		}
+		cfg.Tools.Skills.Registries.Set("github", githubCfg)
 	}
-	if value, envSet := os.LookupEnv(envSkillsGitHubBaseURL); envSet {
-		githubCfg.BaseURL = value
-	}
-	if value, envSet := os.LookupEnv(envSkillsGitHubAuthToken); envSet {
-		githubCfg.AuthToken = *NewSecureString(value)
-	}
-	if value, envSet := os.LookupEnv(envSkillsGitHubProxy); envSet {
-		githubCfg.Param["proxy"] = value
-	}
+}
 
-	cfg.Tools.Skills.Registries.Set("github", githubCfg)
+func registryForEnvOverrides(
+	registries *SkillsRegistriesConfig,
+	name string,
+	envNames ...string,
+) (SkillRegistryConfig, bool) {
+	registry, configured := registries.Get(name)
+	if !configured {
+		envSet := false
+		for _, envName := range envNames {
+			if _, envSet = os.LookupEnv(envName); envSet {
+				break
+			}
+		}
+		if !envSet {
+			return SkillRegistryConfig{}, false
+		}
+		registry, _ = DefaultConfig().Tools.Skills.Registries.Get(name)
+	}
+	registry.Param = cloneRegistryParams(registry.Param)
+	if registry.Param == nil {
+		registry.Param = map[string]any{}
+	}
+	return registry, true
 }
 
 func MakeBackup(path string) error {
@@ -308,7 +339,7 @@ func (c *Config) WorkspacePath() string {
 func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 	matches := c.findMatches(modelName)
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("model %q not found in model_list or providers", modelName)
+		return nil, fmt.Errorf("model %q not found in model_list", modelName)
 	}
 	if len(matches) == 1 {
 		return matches[0], nil
@@ -417,6 +448,34 @@ func (c *Config) ValidateRequestUserInputConfig() error {
 
 func (c *Config) SecurityCopyFrom(path string) error {
 	return loadSecurityConfig(c, securityPath(path))
+}
+
+// SecurityCopyForReplacement preserves security fields while replacing the
+// public config. Security entries for removed registries are admitted only
+// while the existing overlay is decoded and are not copied into the result.
+func (c *Config) SecurityCopyForReplacement(path string, current *Config) error {
+	if c == nil {
+		return errors.New("config is nil")
+	}
+	if c.Tools.Skills.Registries == nil {
+		c.Tools.Skills.Registries = DefaultConfig().Tools.Skills.Registries
+	}
+	removedRegistries := make([]string, 0)
+	if current != nil {
+		for _, name := range current.Tools.Skills.Registries.Names() {
+			if _, survives := c.Tools.Skills.Registries.Get(name); survives {
+				continue
+			}
+			c.Tools.Skills.Registries.Set(name, SkillRegistryConfig{})
+			removedRegistries = append(removedRegistries, name)
+		}
+	}
+
+	err := c.SecurityCopyFrom(path)
+	for _, name := range removedRegistries {
+		delete(c.Tools.Skills.Registries, name)
+	}
+	return err
 }
 
 func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {

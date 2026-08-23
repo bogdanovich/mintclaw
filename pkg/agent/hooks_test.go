@@ -43,9 +43,15 @@ func newHookTestLoop(
 				MaxToolIterations: 10,
 			},
 		},
+		ModelList: []*config.ModelConfig{
+			{ModelName: "test-model", Provider: "openai", Model: "test-model", Enabled: true},
+			{ModelName: "hook-model", Provider: "openai", Model: "hook-model", Enabled: true},
+			{ModelName: "process-model", Provider: "openai", Model: "process-model", Enabled: true},
+		},
 	}
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	useTestSideQuestionProvider(al, provider)
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
 		t.Fatal("expected default agent")
@@ -1514,8 +1520,11 @@ type errorMediaChannel struct {
 	sendErr error
 }
 
-func (f *errorMediaChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
-	return nil, f.sendErr
+func (f *errorMediaChannel) DeliverMedia(
+	context.Context,
+	[]bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.FailedDelivery[bus.OutboundMediaMessage](nil, nil, 0, f.sendErr)
 }
 
 func TestAgentLoop_HookRespond_MediaError(t *testing.T) {

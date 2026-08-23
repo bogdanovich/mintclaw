@@ -288,6 +288,12 @@ func (r *DeliveryRuntime) sendToChannel(
 	}
 
 	// Fallback: direct send (should not happen)
-	_, err = channel.Send(ctx, msg)
-	return err
+	result := channel.DeliverText(ctx, []bus.OutboundMessage{msg})
+	if result.Delivered() {
+		return nil
+	}
+	if result.Err != nil {
+		return result.Err
+	}
+	return errors.New("channel returned an incomplete delivery result")
 }

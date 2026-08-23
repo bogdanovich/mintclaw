@@ -35,8 +35,15 @@ func (c *FeishuChannel) Stop(ctx context.Context) error {
 	return errUnsupported
 }
 
-// Send is a stub method to satisfy the Channel interface
-func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+// DeliverText is a stub method that satisfies the Channel interface.
+func (c *FeishuChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendOutboundText)
+}
+
+func (c *FeishuChannel) sendOutboundText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	return nil, errUnsupported
 }
 
@@ -55,7 +62,14 @@ func (c *FeishuChannel) ReactToMessage(ctx context.Context, chatID, messageID st
 	return func() {}, errUnsupported
 }
 
-// SendMedia is a stub method to satisfy MediaSender
-func (c *FeishuChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+// DeliverMedia is a stub method to satisfy MediaSender.
+func (c *FeishuChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *FeishuChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	return nil, errUnsupported
 }

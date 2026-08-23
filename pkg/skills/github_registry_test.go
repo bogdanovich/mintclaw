@@ -86,7 +86,6 @@ func TestGitHubRegistrySearch(t *testing.T) {
 
 func TestGitHubRegistryProviderDecodesProxyParam(t *testing.T) {
 	builder := buildRegistryProvider("github", config.SkillRegistryConfig{
-		Name:      "github",
 		Enabled:   true,
 		BaseURL:   "https://github.com",
 		AuthToken: *config.NewSecureString("test-token"),

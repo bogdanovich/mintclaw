@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/auth"
@@ -11,9 +12,8 @@ func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = "test-openrouter"
 	modelCfg := &config.ModelConfig{
-		ModelName: "test-openrouter",
-		Model:     "openrouter/auto",
-		APIBase:   "https://openrouter.ai/api/v1",
+		ModelName: "test-openrouter", Provider: "openrouter", Model: "auto",
+		APIBase: "https://openrouter.ai/api/v1",
 	}
 	modelCfg.SetAPIKey("sk-or-test")
 	cfg.ModelList = []*config.ModelConfig{modelCfg}
@@ -33,8 +33,7 @@ func TestCreateProviderReturnsCodexCliProviderForCodexCode(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = "test-codex"
 	cfg.ModelList = []*config.ModelConfig{
 		{
-			ModelName: "test-codex",
-			Model:     "codex-cli/codex-model",
+			ModelName: "test-codex", Provider: "codex-cli", Model: "codex-model",
 			Workspace: "/tmp/workspace",
 		},
 	}
@@ -54,8 +53,7 @@ func TestCreateProviderReturnsClaudeCliProviderForClaudeCli(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = "test-claude-cli"
 	cfg.ModelList = []*config.ModelConfig{
 		{
-			ModelName: "test-claude-cli",
-			Model:     "claude-cli/claude-sonnet",
+			ModelName: "test-claude-cli", Provider: "claude-cli", Model: "claude-sonnet",
 			Workspace: "/tmp/workspace",
 		},
 	}
@@ -87,8 +85,7 @@ func TestCreateProviderReturnsClaudeProviderForAnthropicOAuth(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = "test-claude-oauth"
 	cfg.ModelList = []*config.ModelConfig{
 		{
-			ModelName:  "test-claude-oauth",
-			Model:      "anthropic/claude-sonnet-4.6",
+			ModelName: "test-claude-oauth", Provider: "anthropic", Model: "claude-sonnet-4.6",
 			AuthMethod: "oauth",
 		},
 	}
@@ -118,15 +115,33 @@ func TestCreateImageGenerationProviderFromModelUsesCodexOAuth(t *testing.T) {
 		}, nil
 	}
 
-	provider, model, err := CreateImageGenerationProviderFromModel("openai/gpt-image-2")
-	if err != nil {
-		t.Fatalf("CreateImageGenerationProviderFromModel() error = %v", err)
+	for _, configuredModel := range []string{"openai/gpt-image-2", "openai-codex/gpt-image-2"} {
+		t.Run(configuredModel, func(t *testing.T) {
+			provider, model, err := CreateImageGenerationProviderFromModel(configuredModel)
+			if err != nil {
+				t.Fatalf("CreateImageGenerationProviderFromModel() error = %v", err)
+			}
+			if model != "gpt-image-2" {
+				t.Fatalf("model = %q, want gpt-image-2", model)
+			}
+			if ImageCapabilities(provider).ProviderID != "openai-codex" {
+				t.Fatalf("provider id = %q, want openai-codex", ImageCapabilities(provider).ProviderID)
+			}
+		})
 	}
-	if model != "gpt-image-2" {
-		t.Fatalf("model = %q, want gpt-image-2", model)
+}
+
+func TestCreateImageGenerationProviderFromModelRejectsKnownUnsupportedProvider(t *testing.T) {
+	_, _, err := CreateImageGenerationProviderFromModel("anthropic/imagen")
+	if err == nil || !strings.Contains(err.Error(), `provider "anthropic" does not support image generation`) {
+		t.Fatalf("CreateImageGenerationProviderFromModel() error = %v, want unsupported-provider error", err)
 	}
-	if ImageCapabilities(provider).ProviderID != "openai-codex" {
-		t.Fatalf("provider id = %q, want openai-codex", ImageCapabilities(provider).ProviderID)
+}
+
+func TestSplitImageGenerationModelPreservesUnknownNamespacedModel(t *testing.T) {
+	provider, model := splitImageGenerationModel("vendor/native/model")
+	if provider != "openai" || model != "vendor/native/model" {
+		t.Fatalf("splitImageGenerationModel() = (%q, %q), want (openai, vendor/native/model)", provider, model)
 	}
 }
 

@@ -27,6 +27,22 @@ import (
 
 const testToken = "1234567890:aaaabbbbaaaabbbbaaaabbbbaaaabbbbccc"
 
+func (c *TelegramChannel) deliverTextForTest(
+	ctx context.Context,
+	msg bus.OutboundMessage,
+) ([]string, error) {
+	result := c.DeliverText(ctx, []bus.OutboundMessage{msg})
+	return result.MessageIDs, result.Err
+}
+
+func (c *TelegramChannel) deliverMediaForTest(
+	ctx context.Context,
+	msg bus.OutboundMediaMessage,
+) ([]string, error) {
+	result := c.DeliverMedia(ctx, []bus.OutboundMediaMessage{msg})
+	return result.MessageIDs, result.Err
+}
+
 func TestTelegramMessageDeleteAlreadyAbsent(t *testing.T) {
 	tests := []struct {
 		name string
@@ -375,7 +391,7 @@ func TestSendMedia_ImageFallbacksToDocumentOnInvalidDimensions(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -424,7 +440,7 @@ func TestSendMedia_LocalPartFailureIsNotReportedAsSuccess(t *testing.T) {
 			ch := newTestChannelWithConstructor(t, caller, &stubConstructor{})
 			ch.SetMediaStore(tc.store)
 
-			messageIDs, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+			messageIDs, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 				ChatID: "12345",
 				Parts:  []bus.MediaPart{{Type: "image", Ref: "media://missing"}},
 			})
@@ -453,7 +469,7 @@ func TestSendMedia_PreservesSentIDsWhenLaterPartCannotResolve(t *testing.T) {
 	ch := newTestChannelWithConstructor(t, caller, &multipartRecordingConstructor{})
 	ch.SetMediaStore(store)
 
-	messageIDs, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	messageIDs, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{
 			{Type: "image", Ref: "media://first"},
@@ -615,7 +631,7 @@ func TestSendMedia_ImageNonDimensionErrorDoesNotFallback(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type: "image",
@@ -668,7 +684,7 @@ func TestSendMedia_ImageCaptionParseFallbackRewindsUpload(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -722,7 +738,7 @@ func TestSendMedia_MultipleImagesUseMediaGroup(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{
 			{Type: "image", Ref: firstRef, Caption: "album caption"},
@@ -790,7 +806,7 @@ func TestSendMedia_MediaGroupCaptionParseFailureFallsBackToPlainText(t *testing.
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{
 			{Type: "image", Ref: firstRef, Caption: "**Summary:** hello"},
@@ -876,7 +892,7 @@ func TestSendMedia_MoreThanTenImagesSplitIntoMediaGroups(t *testing.T) {
 		parts = append(parts, part)
 	}
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts:  parts,
 	})
@@ -891,7 +907,7 @@ func TestSendMedia_MoreThanTenImagesSplitIntoMediaGroups(t *testing.T) {
 	require.Len(t, constructor.calls, 2)
 }
 
-func TestSendMediaResultPreservesPartialGroupOutcomeAndRetryAfter(t *testing.T) {
+func TestDeliverMediaPreservesPartialGroupOutcomeAndRetryAfter(t *testing.T) {
 	constructor := &multipartRecordingConstructor{}
 	callIndex := 0
 	caller := &stubCaller{
@@ -923,7 +939,7 @@ func TestSendMediaResultPreservesPartialGroupOutcomeAndRetryAfter(t *testing.T) 
 		require.NoError(t, err)
 		parts = append(parts, bus.MediaPart{Type: "image", Ref: ref})
 	}
-	result := ch.SendMediaResult(t.Context(), []bus.OutboundMediaMessage{{
+	result := ch.DeliverMedia(t.Context(), []bus.OutboundMediaMessage{{
 		ChatID: "12345",
 		Parts:  parts,
 	}})
@@ -937,7 +953,7 @@ func TestSendMediaResultPreservesPartialGroupOutcomeAndRetryAfter(t *testing.T) 
 	}
 }
 
-func TestSendMediaResultPreservesKnownRemainderForAmbiguousGroupFailure(t *testing.T) {
+func TestDeliverMediaPreservesKnownRemainderForAmbiguousGroupFailure(t *testing.T) {
 	constructor := &multipartRecordingConstructor{}
 	callIndex := 0
 	caller := &stubCaller{
@@ -966,7 +982,7 @@ func TestSendMediaResultPreservesKnownRemainderForAmbiguousGroupFailure(t *testi
 		require.NoError(t, err)
 		parts = append(parts, bus.MediaPart{Type: "image", Ref: ref})
 	}
-	result := ch.SendMediaResult(t.Context(), []bus.OutboundMediaMessage{{
+	result := ch.DeliverMedia(t.Context(), []bus.OutboundMediaMessage{{
 		ChatID: "12345",
 		Parts:  parts,
 	}})
@@ -979,7 +995,7 @@ func TestSendMediaResultPreservesKnownRemainderForAmbiguousGroupFailure(t *testi
 	}
 }
 
-func TestSendMediaResultPreservesMediaAfterPartialLongCaptionRejection(t *testing.T) {
+func TestDeliverMediaPreservesMediaAfterPartialLongCaptionRejection(t *testing.T) {
 	constructor := &multipartRecordingConstructor{}
 	callIndex := 0
 	caller := &stubCaller{
@@ -1011,7 +1027,7 @@ func TestSendMediaResultPreservesMediaAfterPartialLongCaptionRejection(t *testin
 	)
 	require.NoError(t, err)
 	longCaption := strings.Repeat("long caption segment ", 400)
-	result := ch.SendMediaResult(t.Context(), []bus.OutboundMediaMessage{{
+	result := ch.DeliverMedia(t.Context(), []bus.OutboundMediaMessage{{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -1065,7 +1081,7 @@ func TestSendMedia_SingleImageLongCaptionSendsTextFirst(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -1115,7 +1131,7 @@ func TestSendMedia_LongCaptionUsesRichMessageWhenEnabled(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "image",
@@ -1177,7 +1193,7 @@ func TestSendMedia_MediaGroupLongCaptionSendsTextFirst(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{
 			{Type: "image", Ref: firstRef, Caption: longCaption},
@@ -1218,7 +1234,7 @@ func TestSendMedia_VideoCaptionUsesHTMLParseMode(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "video",
@@ -1265,7 +1281,7 @@ func TestSendMedia_VideoHTMLCaptionParseFailureFallsBackToPlainText(t *testing.T
 	)
 	require.NoError(t, err)
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts: []bus.MediaPart{{
 			Type:    "video",
@@ -1344,7 +1360,7 @@ func TestSendMedia_MultiGroupLongCaptionSendsTextBeforeGroups(t *testing.T) {
 		parts = append(parts, part)
 	}
 
-	ids, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	ids, err := ch.deliverMediaForTest(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "12345",
 		Parts:  parts,
 	})
@@ -1368,7 +1384,7 @@ func TestSend_EmptyContent(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "",
 	})
@@ -1386,7 +1402,7 @@ func TestSend_ShortMessage_SingleCall(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.UseMarkdownV2 = true
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "Hello, world!",
 	})
@@ -1412,7 +1428,7 @@ func TestSend_ApprovalPromptUsesIdentityBoundInlineKeyboard(t *testing.T) {
 	}.ApplyToContext(&outboundCtx)
 	outboundCtx.Raw[bus.OutboundMetadataKeyInteractionShortID] = "abc12345"
 
-	_, err := ch.Send(t.Context(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
 		ChatID: "12345", Context: outboundCtx, Content: "Approve?", ReplyToMessageID: "42",
 	})
 	require.NoError(t, err)
@@ -1444,7 +1460,7 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	metadata.ApplyToContext(&outboundCtx)
 	outboundCtx.Raw[bus.OutboundMetadataKeyInteractionShortID] = "abc12345"
 
-	_, err := ch.Send(t.Context(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
 		ChatID: "12345", Context: outboundCtx, Content: "Choose an input method",
 	})
 	require.NoError(t, err)
@@ -1476,7 +1492,7 @@ func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
 	}.ApplyToContext(&outboundCtx)
 	outboundCtx.Raw[bus.OutboundMetadataKeyInteractionShortID] = "abc12345"
 
-	_, err := ch.Send(t.Context(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
 		ChatID: "12345", Context: outboundCtx, Content: "What value should be used?",
 	})
 	require.NoError(t, err)
@@ -1500,7 +1516,7 @@ func TestSend_ApprovalFinalRemovesKeyboard(t *testing.T) {
 		InteractionControls: bus.OutboundInteractionControlsRemove,
 	}.ApplyToContext(&outboundCtx)
 
-	_, err := ch.Send(t.Context(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
 		ChatID: "12345", Context: outboundCtx, Content: "Done", ReplyToMessageID: "73",
 	})
 	require.NoError(t, err)
@@ -1674,7 +1690,7 @@ func TestSend_FinalReplyUsesTransportSend(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	ids, err := ch.Send(context.Background(), bus.OutboundMessage{
+	ids, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "final reply",
 		Context: bus.InboundContext{
@@ -1697,7 +1713,7 @@ func TestSend_ToolFeedbackStaysSingleMessageAfterHTMLExpansion(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "🔧 `read_file`\n" + strings.Repeat("<", 2000),
 		Context: bus.InboundContext{
@@ -1748,7 +1764,7 @@ func TestSend_LongMessage_SingleCall(t *testing.T) {
 
 	longContent := strings.Repeat("a", 4000)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: longContent,
 	})
@@ -1772,7 +1788,7 @@ func TestSend_RichMarkdownPayloadOverLimit_SplitsBeforeSending(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.RichMessages.Enabled = true
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: strings.Repeat("a", 4100),
 	})
@@ -1805,7 +1821,7 @@ func TestSend_MarkdownV2Fallback_PerChunk(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.UseMarkdownV2 = true
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "Hello **world**",
 	})
@@ -1825,7 +1841,7 @@ func TestSend_MarkdownV2Fallback_BothFail(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.UseMarkdownV2 = true
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "Hello",
 	})
@@ -1844,7 +1860,7 @@ func TestSend_RichMessagesDisabledUsesLegacySendMessage(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.UseMarkdownV2 = true
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "Hello **world**",
 	})
@@ -1865,7 +1881,7 @@ func TestSend_RichMessagesEnabledKeepsMarkdownV2Path(t *testing.T) {
 	ch.tgCfg.RichMessages.Enabled = true
 	ch.tgCfg.UseMarkdownV2 = true
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "Hello **world**",
 	})
@@ -1889,7 +1905,7 @@ func TestSend_RichMessagesEnabledUsesSendRichMessage(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.RichMessages.Enabled = true
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "Hello **world**",
 	})
@@ -1943,7 +1959,7 @@ func TestSend_RichMessagesFallbackUsesLegacySendMessage(t *testing.T) {
 			ch := newTestChannel(t, caller)
 			ch.tgCfg.RichMessages.Enabled = true
 
-			_, err := ch.Send(context.Background(), bus.OutboundMessage{
+			_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 				ChatID:  "12345",
 				Content: "Hello **world**",
 			})
@@ -2006,7 +2022,7 @@ func TestSend_RichFooterFallbackRetriesPlainWithoutSubTag(t *testing.T) {
 	ch.tgCfg.RichMessages.Enabled = true
 	content := "reply\n\n<a name=\"mintclaw-response-footer\"></a><sub>model: fallback</sub>"
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: content,
 	})
@@ -2027,7 +2043,7 @@ func TestSend_NonFormattingError_DoesNotFallbackToPlainText(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "Hello",
 	})
@@ -2056,7 +2072,7 @@ func TestSend_EntityNotClosedError_FallsBackToPlainText(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.UseMarkdownV2 = true
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "<b>hello",
 	})
@@ -2086,7 +2102,7 @@ func TestSend_BadRequestTagVariant_FallsBackToPlainText(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.UseMarkdownV2 = true
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "<b>hello",
 	})
@@ -2115,7 +2131,7 @@ func TestSend_LongMessage_MarkdownV2Fallback_StopsOnError(t *testing.T) {
 
 	longContent := strings.Repeat("x", 4001)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: longContent,
 	})
@@ -2142,7 +2158,7 @@ func TestSend_LongMessagePreservesIDsBeforeChunkFailure(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	messageIDs, err := ch.Send(context.Background(), bus.OutboundMessage{
+	messageIDs, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: strings.Repeat("x", telegramTextLimit+10),
 	})
@@ -2168,7 +2184,7 @@ func TestSend_MarkdownShortButHTMLEscapingWouldBeLong_SplitsLegacyHTML(t *testin
 		"markdown content must not exceed chunk size",
 	)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: markdownContent,
 	})
@@ -2191,7 +2207,7 @@ func TestSend_RichFallbackSplitsAgainstLegacyHTMLPayload(t *testing.T) {
 	ch.tgCfg.RichMessages.Enabled = true
 
 	markdownContent := strings.Repeat("**a** ", 600) // raw markdown fits, legacy HTML exceeds 4096.
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: markdownContent,
 	})
@@ -2226,7 +2242,7 @@ func TestSend_RichLengthErrorResplitsAndRetries(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.RichMessages.Enabled = true
 
-	ids, err := ch.Send(context.Background(), bus.OutboundMessage{
+	ids, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: strings.Repeat("a", 1000),
 	})
@@ -2313,7 +2329,7 @@ func TestSend_HTMLOverflow_WordBoundary(t *testing.T) {
 		"markdown content must not exceed chunk size for this test",
 	)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "123456",
 		Content: content,
 	})
@@ -2349,7 +2365,7 @@ func TestSend_NotRunning(t *testing.T) {
 	ch := newTestChannel(t, caller)
 	ch.SetRunning(false)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "Hello",
 	})
@@ -2367,7 +2383,7 @@ func TestSend_InvalidChatID(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "not-a-number",
 		Content: "Hello",
 	})
@@ -2424,7 +2440,7 @@ func TestSend_WithForumThreadID(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "-1001234567890/42",
 		Content: "Hello from topic",
 	})
@@ -2441,7 +2457,7 @@ func TestSend_UsesContextTopicIDWhenChatIDDoesNotIncludeThread(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "-1001234567890",
 		Content: "Hello from topic context",
 		Context: bus.InboundContext{
@@ -2785,7 +2801,7 @@ func TestBeginStream_FinalizeHonorsRetryAfterForUnsentLegacyChunk(t *testing.T) 
 	assert.Equal(t, finalContent, delivered.String())
 }
 
-func TestSendMessageResultPreservesTelegramRetryAfter(t *testing.T) {
+func TestDeliverTextPreservesTelegramRetryAfter(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
 			return nil, &ta.Error{
@@ -2796,7 +2812,7 @@ func TestSendMessageResultPreservesTelegramRetryAfter(t *testing.T) {
 		},
 	}
 	ch := newTestChannel(t, caller)
-	result := ch.SendMessageResult(t.Context(), []bus.OutboundMessage{{
+	result := ch.DeliverText(t.Context(), []bus.OutboundMessage{{
 		ChatID:  "12345",
 		Content: "retry later",
 	}})
@@ -2810,7 +2826,7 @@ func TestSendMessageResultPreservesTelegramRetryAfter(t *testing.T) {
 	}
 }
 
-func TestSendMessageResultClassifiesTelegramClientRejection(t *testing.T) {
+func TestDeliverTextClassifiesTelegramClientRejection(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
 			return nil, &ta.Error{
@@ -2820,7 +2836,7 @@ func TestSendMessageResultClassifiesTelegramClientRejection(t *testing.T) {
 		},
 	}
 	ch := newTestChannel(t, caller)
-	result := ch.SendMessageResult(t.Context(), []bus.OutboundMessage{{
+	result := ch.DeliverText(t.Context(), []bus.OutboundMessage{{
 		ChatID:  "12345",
 		Content: "cannot deliver",
 	}})

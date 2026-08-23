@@ -246,7 +246,8 @@ func configureOpenAIAuth(cfg *config.Config, method string) {
 	if !found {
 		cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
 			ModelName:  "gpt-5.4",
-			Model:      "openai/gpt-5.4",
+			Provider:   "openai",
+			Model:      "gpt-5.4",
 			AuthMethod: method,
 		})
 	}
@@ -283,7 +284,8 @@ func configureAnthropicAuth(cfg *config.Config, method string, setNewDefault boo
 	}
 	cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
 		ModelName:  defaultAnthropicModel,
-		Model:      "anthropic/" + defaultAnthropicModel,
+		Provider:   "anthropic",
+		Model:      defaultAnthropicModel,
 		AuthMethod: method,
 	})
 	if setNewDefault || cfg.Agents.Defaults.GetModelName() == "" {
@@ -303,7 +305,8 @@ func configureAntigravityAuth(cfg *config.Config, method string) {
 	if !found {
 		cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
 			ModelName:  "gemini-flash",
-			Model:      "antigravity/gemini-3-flash",
+			Provider:   "antigravity",
+			Model:      "gemini-3-flash",
 			AuthMethod: method,
 		})
 	}

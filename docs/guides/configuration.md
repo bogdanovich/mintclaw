@@ -1073,7 +1073,8 @@ The subagent has access to its configured tools, but completion delivery is owne
 
 ### Model Configuration (model_list)
 
-> **What's New?** MintClaw now prefers explicit `provider` + native `model` configuration (for example `"provider": "zhipu", "model": "glm-4.7"`). The legacy single-field `provider/model` form remains supported for compatibility when `provider` is omitted.
+Every model entry requires an explicit `provider` plus that provider's native
+`model` identifier (for example `"provider": "zhipu", "model": "glm-4.7"`).
 
 This design also enables **multi-agent support** with flexible provider selection:
 
@@ -1171,9 +1172,10 @@ model_list:
   claude-sonnet-4.6:
     api_keys:
       - "sk-ant-your-actual-anthropic-key"
-channels:
+channel_list:
   telegram:
-    token: "your-telegram-bot-token"
+    settings:
+      token: "your-telegram-bot-token"
 web:
   brave:
     api_keys:
@@ -1286,12 +1288,11 @@ For complete documentation, see [`../security/security_configuration.md`](../sec
 >
 > **Note**: The `enabled` field can be set to `false` to disable a model entry without removing it. When omitted, it defaults to `true` during migration for models that have API keys.
 
-Resolution rules:
+Provider/model representation:
 
-- Prefer explicit `"provider": "openai", "model": "gpt-5.4"`.
-- If `provider` is set, MintClaw sends `model` unchanged.
-- If `provider` is omitted, MintClaw treats the first `/` segment in `model` as the provider and everything after that first `/` as the runtime model ID.
-- This means `"model": "openrouter/openai/gpt-5.4"` still works as a compatibility form and sends `openai/gpt-5.4` to OpenRouter.
+- `provider` is required and selects the runtime provider.
+- MintClaw sends `model` unchanged, including any slashes in a provider-native namespaced ID.
+- For example, `"provider": "openrouter", "model": "openai/gpt-5.4"` sends `openai/gpt-5.4` to OpenRouter.
 
 #### Streaming Configuration
 
@@ -1516,7 +1517,7 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 ```
 
 `api_base` defaults to `http://localhost:1234/v1`. API key is optional unless your LM Studio server enables authentication.<br/>
-With explicit `provider`, MintClaw sends `openai/gpt-oss-20b` unchanged to LM Studio. The legacy compatibility form `"model": "lmstudio/openai/gpt-oss-20b"` still resolves to the same upstream model ID when `provider` is omitted.
+MintClaw sends the provider-native `openai/gpt-oss-20b` model ID unchanged to LM Studio.
 
 </details>
 
@@ -1533,7 +1534,7 @@ With explicit `provider`, MintClaw sends `openai/gpt-oss-20b` unchanged to LM St
 }
 ```
 
-With explicit `provider`, MintClaw sends `model` unchanged. That means `"provider": "litellm", "model": "lite-gpt4"` sends `lite-gpt4`, while `"provider": "litellm", "model": "openai/gpt-4o"` sends `openai/gpt-4o`. The legacy compatibility forms `litellm/lite-gpt4` and `litellm/openai/gpt-4o` still resolve the same way when `provider` is omitted.
+MintClaw sends `model` unchanged. That means `"provider": "litellm", "model": "lite-gpt4"` sends `lite-gpt4`, while `"provider": "litellm", "model": "openai/gpt-4o"` sends `openai/gpt-4o`.
 
 </details>
 
@@ -1606,36 +1607,6 @@ MintClaw routes providers by protocol family:
 - **Codex/OAuth**: OpenAI OAuth/token authentication route.
 
 This keeps the runtime lightweight while making new OpenAI-compatible backends mostly a config operation (`api_base` + `api_keys`).
-
-<details>
-<summary><b>Zhipu (legacy providers format)</b></summary>
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "workspace": "~/.mintclaw/workspace",
-      "model": "glm-4.7",
-      "max_tokens": 8192,
-      "temperature": 0.7,
-      "max_tool_iterations": 20,
-      "max_parallel_turns": 1
-    }
-  },
-  "providers": {
-    "zhipu": {
-      "api_key": "Your API Key",
-      "api_base": "https://open.bigmodel.cn/api/paas/v4"
-    }
-  }
-}
-```
-
-> **Note**: The `providers` format is deprecated. Use the new `model_list` format with `.security.yml` for better security.
->
-> **`max_parallel_turns`**: Controls concurrent processing of messages from different sessions. `1` (default) = sequential; `>1` = parallel. Messages from the same session are always serialized. See [Steering docs](../architecture/steering.md) for details.
-
-</details>
 
 <details>
 <summary><b>Full config example</b></summary>

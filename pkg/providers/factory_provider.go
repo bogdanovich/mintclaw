@@ -42,31 +42,13 @@ func createCodexAuthProvider() (LLMProvider, error) {
 	return NewCodexProviderWithTokenSource(cred.AccessToken, cred.AccountID, createCodexTokenSource()), nil
 }
 
-// ExtractProtocol extracts the effective protocol and model identifier from a
-// model configuration.
-//
-// The explicit Provider field takes precedence. When Provider is empty, the
-// protocol is inferred from Model. Plain model names default to "openai".
-// Provider-prefixed models strip the first slash-separated segment from the
-// returned model ID.
-//
-// The returned protocol is normalized to the provider's canonical spelling.
-// Examples:
-//   - Model "openai/gpt-4o" -> ("openai", "gpt-4o")
-//   - Model "nvidia/z-ai/glm-5.1" -> ("nvidia", "z-ai/glm-5.1")
-//   - Provider "nvidia", Model "z-ai/glm-5.1" -> ("nvidia", "z-ai/glm-5.1")
-//   - Provider "openai", Model "openai/gpt-4o" -> ("openai", "openai/gpt-4o")
-//   - Model "gpt-4o" -> ("openai", "gpt-4o")
+// ExtractProtocol returns the explicitly configured provider and its native
+// model identifier. The provider name is normalized to its canonical spelling.
 func ExtractProtocol(cfg *config.ModelConfig) (protocol, modelID string) {
 	if cfg == nil {
 		return "", ""
 	}
-
-	model := strings.TrimSpace(cfg.Model)
-	if provider := strings.TrimSpace(cfg.Provider); provider != "" {
-		return NormalizeProvider(provider), model
-	}
-	return SplitModelProviderAndID(model, "openai")
+	return NormalizeProvider(cfg.Provider), cfg.Model
 }
 
 // ResolveAPIBase returns the configured API base, or the protocol default when
@@ -95,6 +77,9 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 
 	if cfg.Model == "" {
 		return nil, "", fmt.Errorf("model is required")
+	}
+	if cfg.Provider == "" {
+		return nil, "", fmt.Errorf("provider is required")
 	}
 
 	protocol, modelID := ExtractProtocol(cfg)
@@ -368,11 +353,10 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 	}
 }
 
-// CreateImageGenerationProviderFromModel creates a provider for image generation
-// from a provider-prefixed model string. It returns the provider plus the model
-// identifier stripped of the provider prefix.
-func CreateImageGenerationProviderFromModel(model string) (ImageGenerationCapable, string, error) {
-	providerName, modelID := ExtractProtocol(&config.ModelConfig{Model: model})
+// CreateImageGenerationProviderFromModel creates a provider for the independent
+// image-generation model setting, which retains its own optional provider prefix.
+func CreateImageGenerationProviderFromModel(model string) (ImageGenerationProvider, string, error) {
+	providerName, modelID := splitImageGenerationModel(model)
 	if modelID == "" {
 		modelID = "gpt-image-2"
 	}
@@ -382,7 +366,7 @@ func CreateImageGenerationProviderFromModel(model string) (ImageGenerationCapabl
 		if err != nil {
 			return nil, "", err
 		}
-		imageProvider, ok := provider.(ImageGenerationCapable)
+		imageProvider, ok := provider.(ImageGenerationProvider)
 		if !ok || !ImageCapabilities(imageProvider).Supported {
 			return nil, "", fmt.Errorf("provider %q does not support image generation", providerName)
 		}
@@ -390,6 +374,17 @@ func CreateImageGenerationProviderFromModel(model string) (ImageGenerationCapabl
 	default:
 		return nil, "", fmt.Errorf("provider %q does not support image generation", providerName)
 	}
+}
+
+func splitImageGenerationModel(model string) (providerName, modelID string) {
+	model = strings.TrimSpace(model)
+	providerName = "openai"
+	prefix, nativeModel, found := strings.Cut(model, "/")
+	prefix = strings.TrimSpace(prefix)
+	if found && (prefix == "openai-codex" || IsSupportedModelProvider(prefix)) {
+		return NormalizeProvider(prefix), strings.TrimSpace(nativeModel)
+	}
+	return providerName, model
 }
 
 func finalizeProviderFromConfig(

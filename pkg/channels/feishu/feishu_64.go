@@ -146,9 +146,16 @@ func (c *FeishuChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send sends a message using Interactive Card format for markdown rendering.
+// DeliverText sends messages using Interactive Card format for markdown rendering.
 // Falls back to plain text message if card sending fails (e.g., table limit exceeded).
-func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *FeishuChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendOutboundText)
+}
+
+func (c *FeishuChannel) sendOutboundText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	messageIDs, _, err := c.sendMessage(ctx, msg)
 	return messageIDs, err
 }
@@ -158,8 +165,9 @@ func (c *FeishuChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]st
 func (c *FeishuChannel) SendToolFeedbackMessage(
 	ctx context.Context,
 	msg bus.OutboundMessage,
-) ([]string, bool, error) {
-	return c.sendMessage(ctx, msg)
+) (channels.DeliveryResult[bus.OutboundMessage], bool) {
+	messageIDs, editable, err := c.sendMessage(ctx, msg)
+	return channels.FailedDelivery[bus.OutboundMessage](messageIDs, nil, 0, err), editable
 }
 
 func (c *FeishuChannel) sendMessage(ctx context.Context, msg bus.OutboundMessage) ([]string, bool, error) {
@@ -392,9 +400,16 @@ func (c *FeishuChannel) ReactToMessage(ctx context.Context, chatID, messageID st
 	return undo, nil
 }
 
-// SendMedia implements channels.MediaSender.
+// DeliverMedia implements channels.MediaSender.
+func (c *FeishuChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
 // Uploads images/files via Feishu API then sends as messages.
-func (c *FeishuChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+func (c *FeishuChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

@@ -1,7 +1,6 @@
 package skills
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -244,22 +243,6 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 		return metadata
 	}
 
-	// Try JSON first (for backward compatibility)
-	var jsonMeta struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-	}
-	if err := json.Unmarshal([]byte(frontmatter), &jsonMeta); err == nil {
-		if jsonMeta.Name != "" {
-			metadata.Name = jsonMeta.Name
-		}
-		if jsonMeta.Description != "" {
-			metadata.Description = jsonMeta.Description
-		}
-		return metadata
-	}
-
-	// Fall back to simple YAML parsing
 	yamlMeta := sl.parseSimpleYAML(frontmatter)
 	if name := yamlMeta["name"]; name != "" {
 		metadata.Name = name

@@ -99,6 +99,32 @@ func TestRepositoryRejectsStaleReplacement(t *testing.T) {
 	}
 }
 
+func TestRepositoryPersistsExplicitlyEmptySkillsRegistries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	repository := NewRepository(path)
+	cfg := DefaultConfig()
+	cfg.Tools.Skills.Registries = SkillsRegistriesConfig{}
+
+	if _, err := repository.Save(cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	public, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(public), `"registries": {}`) {
+		t.Fatalf("saved registries were not an explicit empty object:\n%s", public)
+	}
+
+	snapshot, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+	if snapshot.Config.Tools.Skills.Registries == nil || len(snapshot.Config.Tools.Skills.Registries) != 0 {
+		t.Fatalf("reloaded registries = %#v, want explicit empty map", snapshot.Config.Tools.Skills.Registries)
+	}
+}
+
 func TestRepositoryRevisionIncludesSecurityDocument(t *testing.T) {
 	t.Setenv("MINTCLAW_KEY_PASSPHRASE", "repository-test-passphrase")
 	mustSetupSSHKey(t)
@@ -493,8 +519,7 @@ func TestRepositorySnapshotMatchesCommittedConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	candidate := DefaultConfig()
 	candidate.ModelList = append(candidate.ModelList, &ModelConfig{
-		ModelName: "virtual",
-		Model:     "virtual",
+		ModelName: "virtual", Provider: "openai", Model: "virtual",
 		isVirtual: true,
 	})
 
@@ -666,10 +691,9 @@ func TestRepositoryUpdatePreservesDurableMultiKeyModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	baseline := DefaultConfig()
 	baseline.ModelList = []*ModelConfig{{
-		ModelName: "multi-key",
-		Model:     "openai/multi-key",
-		APIKeys:   SimpleSecureStrings("key-one", "key-two"),
-		Enabled:   true,
+		ModelName: "multi-key", Provider: "openai", Model: "multi-key",
+		APIKeys: SimpleSecureStrings("key-one", "key-two"),
+		Enabled: true,
 	}}
 	repository := NewRepository(path)
 	if _, err := repository.Save(baseline); err != nil {
@@ -750,6 +774,36 @@ func TestRepositoryResetToDefaultsBacksUpAndPreservesDefaultModelCredential(t *t
 	}
 	if backup.Gateway.Port != 23456 {
 		t.Fatalf("backup gateway port = %d, want 23456", backup.Gateway.Port)
+	}
+}
+
+func TestRepositoryResetToDefaultsDropsCustomRegistryCredential(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Tools.Skills.Registries.Set("custom", SkillRegistryConfig{
+		Enabled:   true,
+		BaseURL:   "https://skills.example.com",
+		AuthToken: *NewSecureString("custom-token"),
+	})
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	snapshot, err := repository.ResetToDefaults()
+	if err != nil {
+		t.Fatalf("ResetToDefaults() error = %v", err)
+	}
+	if _, exists := snapshot.Config.Tools.Skills.Registries.Get("custom"); exists {
+		t.Fatal("ResetToDefaults() retained custom registry")
+	}
+	securityData, err := os.ReadFile(securityPath(path))
+	if err != nil {
+		t.Fatalf("ReadFile(security) error = %v", err)
+	}
+	if strings.Contains(string(securityData), "registries:\n      custom:") ||
+		strings.Contains(string(securityData), "custom-token") {
+		t.Fatalf("ResetToDefaults() retained custom registry security:\n%s", securityData)
 	}
 }
 

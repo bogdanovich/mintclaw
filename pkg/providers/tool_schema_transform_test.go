@@ -21,12 +21,6 @@ type imageToolCaptureProvider struct {
 	request ImageGenerationRequest
 }
 
-func (p *imageToolCaptureProvider) SupportsImageGeneration() bool { return true }
-
-func (p *imageToolCaptureProvider) ImageGenerationProviderID() string { return "image-capture" }
-
-func (p *imageToolCaptureProvider) DefaultImageGenerationModel() string { return "image-default" }
-
 func (p *imageToolCaptureProvider) GenerateImage(
 	_ context.Context,
 	req ImageGenerationRequest,
@@ -155,7 +149,7 @@ func TestWrapProviderWithToolSchemaTransform_GoogleSanitizesSchemas(t *testing.T
 func TestToolSchemaTransformWrapperStreamsWithDeclaredCapabilities(t *testing.T) {
 	capture := &streamingToolCaptureProvider{toolCaptureProvider: toolCaptureProvider{
 		capabilities: ProviderCapabilities{
-			Streaming: StreamingCapabilities{Supported: true, Events: true},
+			Streaming: true,
 		},
 	}}
 	wrapped, err := wrapProviderWithToolSchemaTransform(capture, "simple")

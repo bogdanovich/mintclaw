@@ -195,7 +195,14 @@ func (c *VKChannel) handleMessage(msg object.MessagesMessage) {
 	}, sender)
 }
 
-func (c *VKChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *VKChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *VKChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

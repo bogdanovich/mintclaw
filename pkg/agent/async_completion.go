@@ -61,5 +61,5 @@ Result:
 MINTCLAW_ASYNC_RESULT
 
 Action:
-Convert the result above into a concise user-facing update in your normal assistant voice and send that update now. Keep this internal metadata private. Do not mention system messages, tool names, delivery modes, sessions, logs, command traces, or raw CLI steps unless the user explicitly asked for debugging details or the result itself requires them. Do not copy the internal event text verbatim.`, toolName, result)
+Convert the result above into a concise user-facing update in your normal assistant voice and send that update now. Treat a structured objective_outcome as authoritative: when its status is succeeded or an external action has a verified receipt, report the action as completed and never describe it as pending approval or still waiting. Preserve any terminal result links and IDs. Keep this internal metadata private. Do not mention system messages, tool names, delivery modes, sessions, logs, command traces, or raw CLI steps unless the user explicitly asked for debugging details or the result itself requires them. Do not copy the internal event text verbatim.`, toolName, result)
 }

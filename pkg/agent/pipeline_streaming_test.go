@@ -19,23 +19,15 @@ import (
 type configuredStreamingProvider struct {
 	chatCalls    int
 	streamCalls  int
-	eventCalls   int
 	chatModels   []string
 	streamModels []string
 
 	chatResponse *providers.LLMResponse
 	streamPlan   []configuredStreamingCall
-	eventPlan    []configuredStreamingEventCall
 	afterEvents  func()
 }
 
 type configuredStreamingCall struct {
-	chunks   []string
-	response *providers.LLMResponse
-	err      error
-}
-
-type configuredStreamingEventCall struct {
 	chunks   []providers.StreamChunk
 	response *providers.LLMResponse
 	err      error
@@ -56,32 +48,6 @@ func (p *configuredStreamingProvider) Chat(
 	return &providers.LLMResponse{Content: "chat response"}, nil
 }
 
-func (p *configuredStreamingProvider) ChatStream(
-	ctx context.Context,
-	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
-	onChunk func(accumulated string),
-) (*providers.LLMResponse, error) {
-	p.streamCalls++
-	p.streamModels = append(p.streamModels, model)
-	var plan configuredStreamingCall
-	if len(p.streamPlan) >= p.streamCalls {
-		plan = p.streamPlan[p.streamCalls-1]
-	}
-	for _, chunk := range plan.chunks {
-		onChunk(chunk)
-	}
-	if plan.err != nil {
-		return nil, plan.err
-	}
-	if plan.response != nil {
-		return plan.response, nil
-	}
-	return &providers.LLMResponse{Content: "stream response"}, nil
-}
-
 func (p *configuredStreamingProvider) ChatStreamEvents(
 	ctx context.Context,
 	messages []providers.Message,
@@ -90,19 +56,11 @@ func (p *configuredStreamingProvider) ChatStreamEvents(
 	opts map[string]any,
 	onChunk func(providers.StreamChunk),
 ) (*providers.LLMResponse, error) {
-	p.eventCalls++
 	p.streamCalls++
 	p.streamModels = append(p.streamModels, model)
-	var plan configuredStreamingEventCall
-	if len(p.eventPlan) >= p.eventCalls {
-		plan = p.eventPlan[p.eventCalls-1]
-	} else if len(p.streamPlan) >= p.eventCalls {
-		legacyPlan := p.streamPlan[p.eventCalls-1]
-		plan.response = legacyPlan.response
-		plan.err = legacyPlan.err
-		for _, chunk := range legacyPlan.chunks {
-			plan.chunks = append(plan.chunks, providers.StreamChunk{Content: chunk})
-		}
+	var plan configuredStreamingCall
+	if len(p.streamPlan) >= p.streamCalls {
+		plan = p.streamPlan[p.streamCalls-1]
 	}
 	for _, chunk := range plan.chunks {
 		onChunk(chunk)
@@ -121,6 +79,12 @@ func (p *configuredStreamingProvider) ChatStreamEvents(
 
 func (p *configuredStreamingProvider) GetDefaultModel() string {
 	return "mock-model"
+}
+
+func (p *configuredStreamingProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{
+		Streaming: true,
+	}
 }
 
 type configuredStreamingChatOnlyProvider struct {
@@ -400,7 +364,7 @@ func TestConfiguredStreamingEligibilityGates(t *testing.T) {
 				runConfiguredStreamingTurn(t, al, tt.channel)
 				if provider.streamCalls != tt.wantStreamCalls {
 					t.Fatalf(
-						"ChatStream calls = %d, want %d",
+						"ChatStreamEvents calls = %d, want %d",
 						provider.streamCalls,
 						tt.wantStreamCalls,
 					)
@@ -503,7 +467,7 @@ func TestConfiguredStreamingDisabledForInternalTurnWithoutUserVisibleOutput(t *t
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks:   []string{"internal stream"},
+			chunks:   []providers.StreamChunk{{Content: "internal stream"}},
 			response: &providers.LLMResponse{Content: "stream response"},
 		}},
 		chatResponse: &providers.LLMResponse{Content: "chat response"},
@@ -543,7 +507,7 @@ func TestConfiguredStreamingVisibleSendResponseFalseRetainsFinalizedStreamMarker
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks:   []string{"visible stream"},
+			chunks:   []providers.StreamChunk{{Content: "visible stream"}},
 			response: &providers.LLMResponse{Content: "stream response"},
 		}},
 	}
@@ -565,7 +529,7 @@ func TestConfiguredStreamingStreamsMintClawReasoningBeforeAnswerContent(t *testi
 	msgBus := bus.NewMessageBus()
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
-		eventPlan: []configuredStreamingEventCall{{
+		streamPlan: []configuredStreamingCall{{
 			chunks: []providers.StreamChunk{
 				{ReasoningContent: "thinking"},
 				{ReasoningContent: "thinking more"},
@@ -583,8 +547,8 @@ func TestConfiguredStreamingStreamsMintClawReasoningBeforeAnswerContent(t *testi
 	if got != "answer" {
 		t.Fatalf("response = %q, want answer", got)
 	}
-	if provider.eventCalls != 1 {
-		t.Fatalf("ChatStreamEvents calls = %d, want 1", provider.eventCalls)
+	if provider.streamCalls != 1 {
+		t.Fatalf("ChatStreamEvents calls = %d, want 1", provider.streamCalls)
 	}
 	if len(streamer.reasoningUpdates) != 2 {
 		t.Fatalf("reasoning updates = %v, want two streamed updates", streamer.reasoningUpdates)
@@ -615,7 +579,7 @@ func TestConfiguredStreamingProjectsProviderAccumulatedEvents(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	msgBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, sessionKey))
 	provider := &configuredStreamingProvider{
-		eventPlan: []configuredStreamingEventCall{{
+		streamPlan: []configuredStreamingCall{{
 			chunks: []providers.StreamChunk{
 				{ReasoningContent: "thinking"},
 				{ReasoningContent: "thinking 💡"},
@@ -658,7 +622,7 @@ func TestConfiguredStreamingReasoningOnlyFailureDiscardsAttemptBeforeFallback(t 
 	msgBus := bus.NewMessageBus()
 	msgBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, sessionKey))
 	provider := &configuredStreamingProvider{
-		eventPlan: []configuredStreamingEventCall{{
+		streamPlan: []configuredStreamingCall{{
 			chunks: []providers.StreamChunk{{ReasoningContent: "failed provider reasoning"}},
 			err:    errors.New("stream failed after reasoning"),
 		}},
@@ -691,7 +655,7 @@ func TestConfiguredStreamingLateSteeringDiscardsFinalizedReasoningAttempt(t *tes
 	msgBus := bus.NewMessageBus()
 	msgBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, sessionKey))
 	provider := &configuredStreamingProvider{
-		eventPlan: []configuredStreamingEventCall{
+		streamPlan: []configuredStreamingCall{
 			{
 				chunks: []providers.StreamChunk{{ReasoningContent: "discarded reasoning"}},
 				response: &providers.LLMResponse{
@@ -706,7 +670,7 @@ func TestConfiguredStreamingLateSteeringDiscardsFinalizedReasoningAttempt(t *tes
 	}
 	var al *AgentLoop
 	provider.afterEvents = func() {
-		if provider.eventCalls != 1 {
+		if provider.streamCalls != 1 {
 			return
 		}
 		agent := al.GetRegistry().GetDefaultAgent()
@@ -738,7 +702,7 @@ func TestConfiguredStreamingSuppressesMintClawReasoningWhenThinkingOff(t *testin
 	msgBus := bus.NewMessageBus()
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
-		eventPlan: []configuredStreamingEventCall{{
+		streamPlan: []configuredStreamingCall{{
 			chunks: []providers.StreamChunk{
 				{ReasoningContent: "thinking"},
 				{Content: "answer"},
@@ -786,7 +750,7 @@ func TestConfiguredStreamingFinalFlushFailureAfterVisibleOutputReturnsErrorWitho
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks:   []string{"partial stream"},
+			chunks:   []providers.StreamChunk{{Content: "partial stream"}},
 			response: &providers.LLMResponse{Content: "stream response"},
 		}},
 	}
@@ -887,7 +851,7 @@ func TestConfiguredStreamingUpdateFailureThenStreamErrorFallsBackToChat(t *testi
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks: []string{"not visible"},
+			chunks: []providers.StreamChunk{{Content: "not visible"}},
 			err:    errors.New("stream failed after invisible update"),
 		}},
 		chatResponse: &providers.LLMResponse{Content: "chat fallback after invisible update"},
@@ -929,7 +893,7 @@ func TestConfiguredStreamingUpdateFailureThenStreamSuccessFallsBackToChat(t *tes
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks:   []string{"not visible"},
+			chunks:   []providers.StreamChunk{{Content: "not visible"}},
 			response: &providers.LLMResponse{Content: "stream response"},
 		}},
 		chatResponse: &providers.LLMResponse{Content: "chat fallback after invisible update"},
@@ -971,7 +935,10 @@ func TestConfiguredStreamingLaterUpdateFailureThenStreamSuccessReturnsVisibleErr
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks:   []string{"visible chunk", "failed later chunk"},
+			chunks: []providers.StreamChunk{
+				{Content: "visible chunk"},
+				{Content: "failed later chunk"},
+			},
 			response: &providers.LLMResponse{Content: "stream response"},
 		}},
 		chatResponse: &providers.LLMResponse{Content: "chat fallback after later update failure"},
@@ -1041,17 +1008,19 @@ func TestConfiguredStreamingBeforeLLMModelRewriteReevaluatesModelStreaming(t *te
 				Provider:  "openai",
 				Model:     "openai/" + tt.rewriteModel,
 				Streaming: config.ModelStreamingConfig{Enabled: tt.rewriteModelStreaming},
+				Enabled:   true,
 			})
 			streamer := &recordingStreamer{}
 			msgBus := bus.NewMessageBus()
 			msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 			provider := &configuredStreamingProvider{
 				streamPlan: []configuredStreamingCall{{
-					chunks:   []string{"streamed after hook model rewrite"},
+					chunks:   []providers.StreamChunk{{Content: "streamed after hook model rewrite"}},
 					response: &providers.LLMResponse{Content: "stream response"},
 				}},
 			}
 			al := NewAgentLoop(cfg, msgBus, provider)
+			useTestSideQuestionProvider(al, provider)
 			if err := al.MountHook(NamedHook("rewrite-model", configuredStreamingBeforeModelHook{
 				model: tt.rewriteModel,
 			})); err != nil {
@@ -1061,7 +1030,7 @@ func TestConfiguredStreamingBeforeLLMModelRewriteReevaluatesModelStreaming(t *te
 			got := runConfiguredStreamingTurn(t, al, "mintclaw")
 
 			if provider.streamCalls != tt.wantStreamCalls {
-				t.Fatalf("ChatStream calls = %d, want %d", provider.streamCalls, tt.wantStreamCalls)
+				t.Fatalf("ChatStreamEvents calls = %d, want %d", provider.streamCalls, tt.wantStreamCalls)
 			}
 			if provider.chatCalls != tt.wantChatCalls {
 				t.Fatalf("Chat calls = %d, want %d", provider.chatCalls, tt.wantChatCalls)
@@ -1099,7 +1068,7 @@ func TestConfiguredStreamingPostChunkFailureDoesNotFallBackToChat(t *testing.T) 
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks: []string{"partial"},
+			chunks: []providers.StreamChunk{{Content: "partial"}},
 			err:    errors.New("stream failed after chunk"),
 		}},
 	}
@@ -1138,7 +1107,7 @@ func TestConfiguredStreamingPostChunkEOFDoesNotRetryOrCancelVisibleOutput(t *tes
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks: []string{"partial"},
+			chunks: []providers.StreamChunk{{Content: "partial"}},
 			err:    io.EOF,
 		}},
 		chatResponse: &providers.LLMResponse{Content: "chat retry"},
@@ -1176,7 +1145,7 @@ func TestConfiguredStreamingFinalizesAfterAfterLLMHookMutation(t *testing.T) {
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer, traceScope: &traceScope})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks:   []string{"partial"},
+			chunks:   []providers.StreamChunk{{Content: "partial"}},
 			response: &providers.LLMResponse{Content: "original streamed response"},
 		}},
 	}
@@ -1217,7 +1186,7 @@ func TestConfiguredStreamingAfterLLMAbortCancelsPublishedStream(t *testing.T) {
 			msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 			provider := &configuredStreamingProvider{
 				streamPlan: []configuredStreamingCall{{
-					chunks:   []string{"partial before abort"},
+					chunks:   []providers.StreamChunk{{Content: "partial before abort"}},
 					response: &providers.LLMResponse{Content: "should not be visible"},
 				}},
 			}
@@ -1251,7 +1220,7 @@ func TestConfiguredStreamingFinalizesWithDefaultResponseWhenContentEmpty(t *test
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{{
-			chunks:   []string{"partial response"},
+			chunks:   []providers.StreamChunk{{Content: "partial response"}},
 			response: &providers.LLMResponse{},
 		}},
 	}
@@ -1275,7 +1244,7 @@ func TestConfiguredStreamingToolCallsUseCompleteStreamResponse(t *testing.T) {
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{
 			{
-				chunks: []string{"partial tool-call response"},
+				chunks: []providers.StreamChunk{{Content: "partial tool-call response"}},
 				response: &providers.LLMResponse{
 					Content: "need a tool",
 					ToolCalls: []providers.ToolCall{{
@@ -1301,7 +1270,7 @@ func TestConfiguredStreamingToolCallsUseCompleteStreamResponse(t *testing.T) {
 		t.Fatalf("response = %q, want tool call handled", got)
 	}
 	if provider.streamCalls != 2 {
-		t.Fatalf("ChatStream calls = %d, want 2", provider.streamCalls)
+		t.Fatalf("ChatStreamEvents calls = %d, want 2", provider.streamCalls)
 	}
 	if provider.chatCalls != 0 {
 		t.Fatalf("Chat calls = %d, want 0", provider.chatCalls)
@@ -1325,7 +1294,7 @@ func TestConfiguredStreamingFinalTurnUsesAccumulatedTurnUsage(t *testing.T) {
 	provider := &configuredStreamingProvider{
 		streamPlan: []configuredStreamingCall{
 			{
-				chunks: []string{"partial tool-call response"},
+				chunks: []providers.StreamChunk{{Content: "partial tool-call response"}},
 				response: &providers.LLMResponse{
 					Content: "need a tool",
 					ToolCalls: []providers.ToolCall{{

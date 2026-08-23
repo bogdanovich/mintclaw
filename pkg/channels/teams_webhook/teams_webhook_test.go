@@ -186,7 +186,7 @@ func TestTeamsWebhookChannel_SendNotRunning(t *testing.T) {
 	ctx := context.Background()
 	msg := bus.OutboundMessage{Content: "test", ChatID: "default"}
 
-	_, err = ch.Send(ctx, msg)
+	_, err = ch.sendText(ctx, msg)
 	if err == nil {
 		t.Error("expected error when sending while not running")
 	}
@@ -233,7 +233,7 @@ func TestTeamsWebhookChannel_SendDefaultTargetFallback(t *testing.T) {
 			defer func() { _ = ch.Stop(ctx) }()
 
 			msg := bus.OutboundMessage{Content: "test", ChatID: tt.chatID}
-			_, err = ch.Send(ctx, msg)
+			_, err = ch.sendText(ctx, msg)
 			if err != nil {
 				t.Fatalf("expected success, got error: %v", err)
 			}
@@ -280,7 +280,7 @@ func TestTeamsWebhookChannel_SendSuccess(t *testing.T) {
 
 	msg := bus.OutboundMessage{Content: "Hello Teams!", ChatID: "alerts"}
 
-	_, err = ch.Send(ctx, msg)
+	_, err = ch.sendText(ctx, msg)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestTeamsWebhookChannel_SendError(t *testing.T) {
 
 	msg := bus.OutboundMessage{Content: "test", ChatID: "alerts"}
 
-	_, err = ch.Send(ctx, msg)
+	_, err = ch.sendText(ctx, msg)
 	if err == nil {
 		t.Error("expected error from failed send")
 	}

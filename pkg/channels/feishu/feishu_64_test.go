@@ -336,7 +336,7 @@ func TestSendMedia_SendsCaptionFallbackAfterMedia(t *testing.T) {
 		return "msg-1", nil
 	}
 
-	_, err := ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err := ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		ChatID: "oc_123",
 		Parts: []bus.MediaPart{
 			{Type: "image", Caption: "shared caption"},
@@ -365,17 +365,17 @@ func TestSendToolFeedbackMessage_ReportsPlainTextFallbackAsUneditable(t *testing
 		},
 	}
 	ch.SetRunning(true)
-	messageIDs, editable, err := ch.SendToolFeedbackMessage(context.Background(), bus.OutboundMessage{
+	delivery, editable := ch.SendToolFeedbackMessage(context.Background(), bus.OutboundMessage{
 		ChatID:  "chat-1",
 		Content: "working",
 	})
-	if err != nil {
-		t.Fatalf("SendToolFeedbackMessage() error = %v", err)
+	if delivery.Err != nil {
+		t.Fatalf("SendToolFeedbackMessage() error = %v", delivery.Err)
 	}
 	if editable {
 		t.Fatal("plain-text fallback reported editable")
 	}
-	if !slices.Equal(messageIDs, []string{"text-1"}) {
-		t.Fatalf("message IDs = %v, want [text-1]", messageIDs)
+	if !slices.Equal(delivery.MessageIDs, []string{"text-1"}) {
+		t.Fatalf("message IDs = %v, want [text-1]", delivery.MessageIDs)
 	}
 }

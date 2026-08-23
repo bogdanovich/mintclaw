@@ -21,6 +21,7 @@ type reportedObjectiveOutcome struct {
 	Status         string                  `json:"status"`
 	CompletedItems []reportedObjectiveItem `json:"completed_items"`
 	MissingItems   []string                `json:"missing_items"`
+	Result         string                  `json:"result,omitempty"`
 	Explanation    string                  `json:"explanation,omitempty"`
 }
 
@@ -93,7 +94,7 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 	encoded, _ := json.Marshal(interactionObjectiveChecklist(checklist))
 	return task + "\n\nRuntime outcome contract (required): finish with exactly one JSON block " +
 		objectiveOutcomeStart +
-		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":["objective_2"],"explanation":"specific blocker when partial or blocked"}` +
+		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":["objective_2"],"result":"concise terminal result with links or IDs when succeeded","explanation":"specific blocker when partial or blocked"}` +
 		objectiveOutcomeEnd +
 		". The runtime-owned objective checklist is: " + string(encoded) +
 		". Put every checklist ID exactly once in completed_items or missing_items; never add or rename IDs. " +
@@ -110,8 +111,9 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 		"For each external_action, copy one or more " +
 		"invocation_id values from successful browser_act results into receipt_ids. Do not claim an external action " +
 		"without its runtime receipt. For partial or blocked outcomes, include one concise, specific explanation of " +
-		"the first blocker; the runtime bounds it and labels it as producer-reported. The runtime removes this block " +
-		"before showing your prose."
+		"the first blocker; the runtime bounds it and labels it as producer-reported. For succeeded outcomes, include " +
+		"one concise user-facing result with any requested public links or IDs in result. The runtime removes this block " +
+		"and preserves result as the terminal deliverable."
 }
 
 func extractObjectiveOutcome(
@@ -143,7 +145,43 @@ func extractObjectiveOutcome(
 	if decoder.Decode(&reported) != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return clean, blockedObjectiveOutcome("objective outcome report was invalid")
 	}
-	return clean, validateObjectiveOutcome(reported, audits, checklist)
+	outcome := validateObjectiveOutcome(reported, audits, checklist)
+	if outcome.Status == taskresult.OutcomeSucceeded {
+		if terminalResult := boundedTerminalResult(reported.Result); terminalResult != "" {
+			clean = terminalResult
+		} else if objectiveOutcomeHasReceipt(outcome) {
+			// Compatibility for continuations suspended before the result field
+			// was introduced. A verified external-action receipt makes the
+			// successful terminal state authoritative; retain the child's
+			// bounded detail instead of generic surrounding prose.
+			if legacyResult := boundedTerminalResult(reported.Explanation); legacyResult != "" {
+				clean = legacyResult
+			}
+		}
+	}
+	return clean, outcome
+}
+
+func objectiveOutcomeHasReceipt(outcome *taskresult.Outcome) bool {
+	if outcome == nil {
+		return false
+	}
+	for _, item := range outcome.CompletedItems {
+		if len(item.Receipts) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func boundedTerminalResult(value string) string {
+	value = strings.TrimSpace(value)
+	const limit = 2048
+	runes := []rune(value)
+	if len(runes) > limit {
+		return string(runes[:limit])
+	}
+	return value
 }
 
 func validateObjectiveOutcome(

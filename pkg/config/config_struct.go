@@ -379,88 +379,30 @@ func (v SecureModelList) MarshalYAML() (any, error) {
 }
 
 func (v *SkillsRegistriesConfig) UnmarshalJSON(data []byte) error {
-	var list []json.RawMessage
-	if err := json.Unmarshal(data, &list); err == nil {
-		decodedList := make([]*SkillRegistryConfig, 0, len(list))
-		for _, item := range list {
-			var nameOnly struct {
-				Name string `json:"name"`
-			}
-			if err := json.Unmarshal(item, &nameOnly); err != nil {
-				return err
-			}
-			registry := cloneRegistryConfig(findRegistryConfigByName(*v, nameOnly.Name))
-			if registry == nil {
-				registry = &SkillRegistryConfig{Name: nameOnly.Name}
-			}
-			if err := json.Unmarshal(item, registry); err != nil {
-				return err
-			}
-			decodedList = append(decodedList, registry)
-		}
-		if len(*v) > 0 {
-			for _, registry := range decodedList {
-				if registry == nil {
-					continue
-				}
-				v.Set(registry.Name, *registry)
-			}
-			return nil
-		}
-		*v = decodedList
-		return nil
-	}
-
-	legacy := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &legacy); err != nil {
+	registriesByName := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &registriesByName); err != nil {
 		return err
 	}
-
-	if len(*v) == 0 {
-		keys := make([]string, 0, len(legacy))
-		for name := range legacy {
-			keys = append(keys, name)
-		}
-		sort.Strings(keys)
-		decodedList := make([]*SkillRegistryConfig, 0, len(keys))
-		for _, name := range keys {
-			var registry SkillRegistryConfig
-			if err := json.Unmarshal(legacy[name], &registry); err != nil {
-				return err
-			}
-			registry.Name = name
-			decodedList = append(decodedList, &registry)
-		}
-		*v = decodedList
-		return nil
+	if registriesByName == nil {
+		return fmt.Errorf("skills registries must be an object")
 	}
-
-	for _, name := range sortedRegistryNamesFromJSON(legacy) {
-		registry := cloneRegistryConfig(findRegistryConfigByName(*v, name))
-		if registry == nil {
-			registry = &SkillRegistryConfig{Name: name}
+	existing := *v
+	decoded := make(SkillsRegistriesConfig, len(registriesByName))
+	for _, name := range sortedRegistryNamesFromJSON(registriesByName) {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(name) != name {
+			return fmt.Errorf("skill registry name is required")
 		}
-		if err := json.Unmarshal(legacy[name], registry); err != nil {
+		registry := cloneRegistryConfig(existing[name])
+		if registry == nil {
+			registry = &SkillRegistryConfig{}
+		}
+		if err := json.Unmarshal(registriesByName[name], registry); err != nil {
 			return err
 		}
-		registry.Name = name
-		v.Set(name, *registry)
+		decoded[name] = registry
 	}
+	*v = decoded
 	return nil
-}
-
-func (v SkillsRegistriesConfig) MarshalJSON() ([]byte, error) {
-	if v == nil {
-		return []byte("null"), nil
-	}
-	mm := make(map[string]SkillRegistryConfig, len(v))
-	for _, registry := range v {
-		if registry == nil || registry.Name == "" {
-			continue
-		}
-		mm[registry.Name] = *registry
-	}
-	return json.Marshal(mm)
 }
 
 func (c *SkillRegistryConfig) UnmarshalJSON(data []byte) error {
@@ -468,14 +410,18 @@ func (c *SkillRegistryConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
+	if raw == nil {
+		return fmt.Errorf("skill registry config must be an object")
+	}
 	params := cloneRegistryParams(c.Param)
 	if params == nil {
 		params = map[string]any{}
 	}
-	if value, ok := raw["name"]; ok {
-		if err := json.Unmarshal(value, &c.Name); err != nil {
-			return err
-		}
+	if _, ok := raw["name"]; ok {
+		return fmt.Errorf("skill registry name must be the registries object key")
+	}
+	if _, ok := raw["token"]; ok {
+		return fmt.Errorf("skill registry credentials use auth_token")
 	}
 	if value, ok := raw["enabled"]; ok {
 		if err := json.Unmarshal(value, &c.Enabled); err != nil {
@@ -492,19 +438,12 @@ func (c *SkillRegistryConfig) UnmarshalJSON(data []byte) error {
 			return err
 		}
 	}
-	if value, ok := raw["param"]; ok {
-		var nested map[string]any
-		if err := json.Unmarshal(value, &nested); err != nil {
-			return err
-		}
-		for key, nestedValue := range nested {
-			params[key] = nestedValue
-		}
-	}
 	for key, value := range raw {
 		switch key {
-		case "name", "enabled", "base_url", "auth_token", "param":
+		case "enabled", "base_url", "auth_token":
 			continue
+		case "param":
+			return fmt.Errorf("skill registry parameters are top-level fields")
 		case "_auth_token":
 			// UI/API shadow secret fields should hydrate SecureString only and must
 			// never be persisted as arbitrary registry params.
@@ -526,9 +465,6 @@ func (c SkillRegistryConfig) MarshalJSON() ([]byte, error) {
 		"enabled":  c.Enabled,
 		"base_url": c.BaseURL,
 	}
-	if c.AuthToken.String() != "" {
-		m["auth_token"] = c.AuthToken
-	}
 	for key, value := range c.Param {
 		if key == "" || key == "param" || strings.HasPrefix(key, "_") {
 			continue
@@ -542,126 +478,46 @@ func (c SkillRegistryConfig) MarshalJSON() ([]byte, error) {
 }
 
 func (c *SkillRegistryConfig) UnmarshalYAML(value *yaml.Node) error {
-	var raw map[string]any
-	if err := value.Decode(&raw); err != nil {
-		return err
+	if value == nil || value.Kind != yaml.MappingNode {
+		return fmt.Errorf("skill registry config must be a mapping")
 	}
-	params := cloneRegistryParams(c.Param)
-	if params == nil {
-		params = map[string]any{}
-	}
-	if nested, ok := raw["param"].(map[string]any); ok {
-		for k, v := range nested {
-			params[k] = v
+	foundAuthToken := false
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		keyNode := value.Content[i]
+		valueNode := value.Content[i+1]
+		if keyNode.Value != "auth_token" {
+			return fmt.Errorf("skill registry security config only accepts auth_token")
 		}
-	}
-	for key, v := range raw {
-		switch key {
-		case "name":
-			if s, ok := v.(string); ok {
-				c.Name = s
-			}
-		case "enabled":
-			if b, ok := v.(bool); ok {
-				c.Enabled = b
-			}
-		case "base_url":
-			if s, ok := v.(string); ok {
-				c.BaseURL = s
-			}
-		case "auth_token":
-			data, err := yaml.Marshal(v)
-			if err != nil {
-				return err
-			}
-			if err := yaml.Unmarshal(data, &c.AuthToken); err != nil {
-				return err
-			}
-		case "_auth_token":
-			// UI/API shadow secret fields should hydrate SecureString only and must
-			// never be persisted as arbitrary registry params.
-			continue
-		case "param":
-			continue
-		default:
-			params[key] = v
+		if foundAuthToken {
+			return fmt.Errorf("skill registry security config contains duplicate auth_token")
 		}
+		if valueNode.Kind != yaml.ScalarNode || valueNode.Tag != "!!str" {
+			return fmt.Errorf("skill registry auth_token must be a string")
+		}
+		if err := valueNode.Decode(&c.AuthToken); err != nil {
+			return err
+		}
+		foundAuthToken = true
 	}
-	c.Param = params
 	return nil
 }
 
 func (c SkillRegistryConfig) MarshalYAML() (any, error) {
-	m := map[string]any{
-		"enabled":  c.Enabled,
-		"base_url": c.BaseURL,
-	}
+	m := map[string]any{}
 	if c.AuthToken.String() != "" {
 		m["auth_token"] = c.AuthToken
-	}
-	keys := make([]string, 0, len(c.Param))
-	for key := range c.Param {
-		if key == "" || key == "param" || strings.HasPrefix(key, "_") {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if _, exists := m[key]; exists {
-			continue
-		}
-		m[key] = c.Param[key]
 	}
 	return m, nil
 }
 
 func (v *SkillsRegistriesConfig) UnmarshalYAML(value *yaml.Node) error {
-	decoded, err := decodeRegistryNodesFromYAML(value, nil)
-	if err != nil {
-		logger.Errorf("Decode error: %v", err)
-		return err
+	if value == nil || value.Kind != yaml.MappingNode {
+		return fmt.Errorf("skills registries must be a mapping")
 	}
-	if len(*v) == 0 {
-		keys := make([]string, 0, len(decoded))
-		for name := range decoded {
-			keys = append(keys, name)
-		}
-		sort.Strings(keys)
-		list := make([]*SkillRegistryConfig, 0, len(keys))
-		for _, name := range keys {
-			registry := decoded[name]
-			if registry == nil {
-				continue
-			}
-			list = append(list, registry)
-		}
-		*v = list
-		return nil
+	if *v == nil {
+		*v = make(SkillsRegistriesConfig, len(value.Content)/2)
 	}
-	decoded, err = decodeRegistryNodesFromYAML(value, *v)
-	if err != nil {
-		logger.Errorf("Decode error: %v", err)
-		return err
-	}
-	for _, name := range sortedRegistryNames(decoded) {
-		registry := decoded[name]
-		if registry == nil {
-			continue
-		}
-		v.Set(name, *registry)
-	}
-	return nil
-}
-
-func decodeRegistryNodesFromYAML(
-	value *yaml.Node,
-	existing SkillsRegistriesConfig,
-) (map[string]*SkillRegistryConfig, error) {
-	decoded := make(map[string]*SkillRegistryConfig)
-	if value == nil {
-		return decoded, nil
-	}
+	seen := make(map[string]struct{}, len(value.Content)/2)
 	for i := 0; i+1 < len(value.Content); i += 2 {
 		nameNode := value.Content[i]
 		registryNode := value.Content[i+1]
@@ -669,20 +525,26 @@ func decodeRegistryNodesFromYAML(
 			continue
 		}
 		name := strings.TrimSpace(nameNode.Value)
-		if name == "" {
-			continue
+		if name == "" || name != nameNode.Value {
+			return fmt.Errorf("skill registry name is required")
 		}
-		registry := cloneRegistryConfig(findRegistryConfigByName(existing, name))
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("skills registries contain duplicate registry %q", name)
+		}
+		seen[name] = struct{}{}
+		if registryNode.Tag == "!!null" {
+			return fmt.Errorf("skill registry %q config must be a mapping", name)
+		}
+		registry := cloneRegistryConfig((*v)[name])
 		if registry == nil {
-			registry = &SkillRegistryConfig{Name: name}
+			return fmt.Errorf("skill registry %q is not configured", name)
 		}
 		if err := registryNode.Decode(registry); err != nil {
-			return nil, err
+			return err
 		}
-		registry.Name = name
-		decoded[name] = registry
+		(*v)[name] = registry
 	}
-	return decoded, nil
+	return nil
 }
 
 func cloneRegistryParams(src map[string]any) map[string]any {
@@ -705,25 +567,6 @@ func cloneRegistryConfig(src *SkillRegistryConfig) *SkillRegistryConfig {
 	return &cloned
 }
 
-func findRegistryConfigByName(registries SkillsRegistriesConfig, name string) *SkillRegistryConfig {
-	for _, registry := range registries {
-		if registry == nil || registry.Name != name {
-			continue
-		}
-		return registry
-	}
-	return nil
-}
-
-func sortedRegistryNames(mm map[string]*SkillRegistryConfig) []string {
-	keys := make([]string, 0, len(mm))
-	for name := range mm {
-		keys = append(keys, name)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 func sortedRegistryNamesFromJSON(mm map[string]json.RawMessage) []string {
 	keys := make([]string, 0, len(mm))
 	for name := range mm {
@@ -738,14 +581,14 @@ func (v SkillsRegistriesConfig) MarshalYAML() (any, error) {
 		AuthToken SecureString `yaml:"auth_token,omitempty"`
 	}
 	mm := make(map[string]onlySecureRegistryData)
-	for _, registry := range v {
-		if registry == nil || registry.Name == "" {
+	for name, registry := range v {
+		if strings.TrimSpace(name) == "" || registry == nil {
 			continue
 		}
 		if registry.AuthToken.String() == "" {
 			continue
 		}
-		mm[registry.Name] = onlySecureRegistryData{
+		mm[name] = onlySecureRegistryData{
 			AuthToken: registry.AuthToken,
 		}
 	}

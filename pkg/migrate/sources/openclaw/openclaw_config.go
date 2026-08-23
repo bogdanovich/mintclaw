@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 type OpenClawConfig struct {
@@ -480,7 +481,8 @@ func (c *OpenClawConfig) ConvertToMintClaw(sourceHome string) (*MintClawConfig, 
 	cfg := &MintClawConfig{}
 	var warnings []string
 
-	provider, modelName := c.GetDefaultModel()
+	sourceProvider, modelName := c.GetDefaultModel()
+	runtimeProvider := runtimeProviderForOpenClaw(sourceProvider)
 	cfg.Agents.Defaults.Workspace = c.GetDefaultWorkspace()
 	cfg.Agents.Defaults.ModelName = modelName
 
@@ -488,7 +490,7 @@ func (c *OpenClawConfig) ConvertToMintClaw(sourceHome string) (*MintClawConfig, 
 	defaultAPIKey := ""
 	defaultBaseURL := ""
 
-	if provCfg, ok := providerConfigs[provider]; ok {
+	if provCfg, ok := providerConfigs[sourceProvider]; ok {
 		defaultAPIKey = provCfg.ApiKey
 		defaultBaseURL = provCfg.BaseUrl
 	}
@@ -496,14 +498,15 @@ func (c *OpenClawConfig) ConvertToMintClaw(sourceHome string) (*MintClawConfig, 
 	cfg.ModelList = []ModelConfig{
 		{
 			ModelName: modelName,
-			Model:     fmt.Sprintf("%s/%s", provider, modelName),
+			Provider:  runtimeProvider,
+			Model:     modelName,
 			APIKey:    defaultAPIKey,
 			APIBase:   defaultBaseURL,
 		},
 	}
 
 	for provName, provCfg := range providerConfigs {
-		if provName == provider {
+		if provName == sourceProvider {
 			continue
 		}
 		if provCfg.ApiKey != "" {
@@ -511,7 +514,8 @@ func (c *OpenClawConfig) ConvertToMintClaw(sourceHome string) (*MintClawConfig, 
 		}
 		cfg.ModelList = append(cfg.ModelList, ModelConfig{
 			ModelName: provName,
-			Model:     fmt.Sprintf("%s/%s", provName, provName),
+			Provider:  runtimeProviderForOpenClaw(provName),
+			Model:     provName,
 			APIKey:    provCfg.ApiKey,
 			APIBase:   provCfg.BaseUrl,
 		})
@@ -558,8 +562,16 @@ func (c *OpenClawConfig) ConvertToMintClaw(sourceHome string) (*MintClawConfig, 
 	return cfg, warnings, nil
 }
 
+func runtimeProviderForOpenClaw(sourceProvider string) string {
+	if providers.IsSupportedModelProvider(sourceProvider) {
+		return providers.NormalizeProvider(sourceProvider)
+	}
+	return "openai"
+}
+
 type ModelConfig struct {
 	ModelName string `json:"model_name"`
+	Provider  string `json:"provider"`
 	Model     string `json:"model"`
 	APIBase   string `json:"api_base,omitempty"`
 	APIKey    string `json:"api_key"`
@@ -981,6 +993,7 @@ func (c *MintClawConfig) ToStandardConfig() *config.Config {
 	for _, m := range c.ModelList {
 		mc := &config.ModelConfig{
 			ModelName: m.ModelName,
+			Provider:  m.Provider,
 			Model:     m.Model,
 			APIBase:   m.APIBase,
 			Proxy:     m.Proxy,

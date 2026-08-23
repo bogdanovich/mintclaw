@@ -52,6 +52,12 @@ func (p *blockingCodingProvider) ChatStreamEvents(
 
 func (p *blockingCodingProvider) GetDefaultModel() string { return "coding-test" }
 
+func (p *blockingCodingProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{
+		Streaming: true,
+	}
+}
+
 func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -120,12 +126,11 @@ func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 	}
 }
 
-func TestCodingRuntimeConfigCanonicalizesInferredModelBeforePersistedProvider(t *testing.T) {
+func TestCodingRuntimeConfigPreservesCanonicalModelContract(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ModelList = config.SecureModelList{&config.ModelConfig{
-		ModelName: "coding-model",
-		Model:     "openai/gpt-4o",
-		Enabled:   true,
+		ModelName: "coding-model", Provider: "openai", Model: "gpt-4o",
+		Enabled: true,
 	}}
 
 	runtimeCfg, modelName, providerName, err := codingRuntimeConfig(cfg, thread.Metadata{
@@ -141,7 +146,7 @@ func TestCodingRuntimeConfigCanonicalizesInferredModelBeforePersistedProvider(t 
 	if got := runtimeCfg.ModelList[0].Model; got != "gpt-4o" {
 		t.Fatalf("canonical runtime model = %q, want gpt-4o", got)
 	}
-	if cfg.ModelList[0].Model != "openai/gpt-4o" {
+	if cfg.ModelList[0].Model != "gpt-4o" {
 		t.Fatalf("source model was mutated: %q", cfg.ModelList[0].Model)
 	}
 }

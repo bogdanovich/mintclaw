@@ -536,24 +536,41 @@ func TestValidateToolApprovalConfig(t *testing.T) {
 }
 
 func TestImageGenerateToolsConfig_EffectiveModel(t *testing.T) {
-	defaults := AgentDefaults{}
-
-	if got := (ImageGenerateToolsConfig{}).EffectiveModel(defaults); got != "gpt-image-2" {
+	if got := (ImageGenerateToolsConfig{}).EffectiveModel(); got != "gpt-image-2" {
 		t.Fatalf("default model = %q, want gpt-image-2", got)
 	}
 
 	cfg := ImageGenerateToolsConfig{Model: "openai-codex/gpt-image-2"}
-	if got := cfg.EffectiveModel(defaults); got != "openai-codex/gpt-image-2" {
+	if got := cfg.EffectiveModel(); got != "openai-codex/gpt-image-2" {
 		t.Fatalf("tool model = %q, want openai-codex/gpt-image-2", got)
 	}
+}
 
-	defaults.ImageModel = "legacy-image-model"
-	if got := (ImageGenerateToolsConfig{}).EffectiveModel(defaults); got != "legacy-image-model" {
-		t.Fatalf("legacy default model = %q, want legacy-image-model", got)
-	}
+func TestDecodeCurrentConfigRejectsRemovedAgentImageModelFields(t *testing.T) {
+	t.Parallel()
 
-	if got := (ImageGenerateToolsConfig{}).EffectiveModel(AgentDefaults{}); got != "gpt-image-2" {
-		t.Fatalf("default model = %q, want gpt-image-2", got)
+	for _, test := range []struct {
+		field string
+		value string
+	}{
+		{field: "image_model", value: `"removed"`},
+		{field: "image_model_fallbacks", value: `["removed"]`},
+	} {
+		t.Run(test.field, func(t *testing.T) {
+			t.Parallel()
+
+			raw := fmt.Sprintf(
+				`{"version":%d,"agents":{"defaults":{%q:%s}}}`,
+				CurrentVersion,
+				test.field,
+				test.value,
+			)
+			cfg := DefaultConfig()
+			err := DecodeCurrentConfig([]byte(raw), cfg)
+			if err == nil || !strings.Contains(err.Error(), test.field) {
+				t.Fatalf("DecodeCurrentConfig() error = %v, want removed field %q rejected", err, test.field)
+			}
+		})
 	}
 }
 
@@ -1057,13 +1074,11 @@ func TestSaveConfig_FiltersVirtualModels(t *testing.T) {
 
 	// Manually add a virtual model to ModelList (simulating what expandMultiKeyModels does)
 	primaryModel := &ModelConfig{
-		ModelName: "gpt-4",
-		Model:     "openai/gpt-4o",
-		APIKeys:   SimpleSecureStrings("key1"),
+		ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
+		APIKeys: SimpleSecureStrings("key1"),
 	}
 	virtualModel := &ModelConfig{
-		ModelName: "gpt-4__key_1",
-		Model:     "openai/gpt-4o",
+		ModelName: "gpt-4__key_1", Provider: "openai", Model: "gpt-4o",
 		APIKeys:   SimpleSecureStrings("key2"),
 		isVirtual: true,
 	}
@@ -1603,6 +1618,30 @@ func TestLoadConfig_RejectsDeprecatedEditFileTool(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_RejectsRemovedSkillRegistryShapes(t *testing.T) {
+	tests := map[string]string{
+		"github sibling": `{"version":3,"tools":{"skills":{"github":{"token":"old"}}}}`,
+		"registry list":  `{"version":3,"tools":{"skills":{"registries":[{"name":"github"}]}}}`,
+		"embedded name":  `{"version":3,"tools":{"skills":{"registries":{"github":{"name":"github"}}}}}`,
+		"token field":    `{"version":3,"tools":{"skills":{"registries":{"github":{"token":"old"}}}}}`,
+		"nested params":  `{"version":3,"tools":{"skills":{"registries":{"github":{"param":{"proxy":"old"}}}}}}`,
+	}
+
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("WriteFile() error: %v", err)
+			}
+
+			if _, err := LoadConfig(configPath); err == nil {
+				t.Fatal("LoadConfig() error = nil, want removed shape rejection")
+			}
+		})
+	}
+}
+
 func TestLoadConfig_RequiresCurrentVersionWithoutRewriting(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1960,7 +1999,7 @@ func TestLoadConfig_WebToolsProxy(t *testing.T) {
 	configJSON := `{
 	"version": 3,
   "agents": {"defaults":{"workspace":"./workspace","model_name":"gpt4","max_tokens":8192,"max_tool_iterations":20}},
-  "model_list": [{"model_name":"gpt4","model":"openai/gpt-5.4","api_keys":["x"]}],
+  "model_list": [{"model_name":"gpt4","provider":"openai","model":"gpt-5.4","api_keys":["x"]}],
   "tools": {"web":{"proxy":"http://127.0.0.1:7890"}}
 }`
 	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
@@ -2533,7 +2572,7 @@ func TestLoadConfig_TelegramPlaceholderTextAcceptsSingleString(t *testing.T) {
 func TestLoadConfigReadOnly_WarnsForPlaintextAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	const original = `{"version":3,"model_list":[{"model_name":"test","model":"openai/gpt-4","api_keys":["sk-plaintext"]}]}`
+	const original = `{"version":3,"model_list":[{"model_name":"test","provider":"openai","model":"gpt-4","api_keys":["sk-plaintext"]}]}`
 	if err := os.WriteFile(cfgPath, []byte(original), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2567,7 +2606,7 @@ func TestSaveConfig_EncryptsPlaintextAPIKey(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.ModelList = []*ModelConfig{
-		{ModelName: "test", Model: "openai/gpt-4", APIKeys: SimpleSecureStrings("")},
+		{ModelName: "test", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("")},
 	}
 	cfg.ModelList[0].APIKeys[0].Set("sk-plaintext")
 
@@ -2600,7 +2639,7 @@ func TestSaveConfig_EncryptsPlaintextAPIKey(t *testing.T) {
 func TestLoadConfig_NoSealWithoutPassphrase(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	data := `{"version":3,"model_list":[{"model_name":"test","model":"openai/gpt-4","api_keys":["sk-plaintext"]}]}`
+	data := `{"version":3,"model_list":[{"model_name":"test","provider":"openai","model":"gpt-4","api_keys":["sk-plaintext"]}]}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2627,7 +2666,7 @@ func TestLoadConfig_FileRefNotSealed(t *testing.T) {
 	if err := os.WriteFile(keyFile, []byte("sk-from-file"), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	data := `{"version":3,"model_list":[{"model_name":"test","model":"openai/gpt-4"}]}`
+	data := `{"version":3,"model_list":[{"model_name":"test","provider":"openai","model":"gpt-4"}]}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2635,7 +2674,12 @@ func TestLoadConfig_FileRefNotSealed(t *testing.T) {
 	if err := saveSecurityConfig(
 		secPath,
 		&Config{ModelList: SecureModelList{
-			&ModelConfig{ModelName: "test", APIKeys: SimpleSecureStrings("file://openai.key")},
+			&ModelConfig{
+				ModelName: "test",
+				Provider:  "openai",
+				Model:     "gpt-4",
+				APIKeys:   SimpleSecureStrings("file://openai.key"),
+			},
 		}}); err != nil {
 		t.Fatalf("saveSecurityConfig: %v", err)
 	}
@@ -2669,7 +2713,7 @@ func TestSaveConfig_MixedKeys(t *testing.T) {
 	if err := SaveConfig(cfgPath, &Config{
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
-			{ModelName: "pre", Model: "openai/gpt-4", APIKeys: SimpleSecureStrings("sk-already-plain")},
+			{ModelName: "pre", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-already-plain")},
 		},
 	}); err != nil {
 		t.Fatalf("setup SaveConfig: %v", err)
@@ -2701,19 +2745,16 @@ func TestSaveConfig_MixedKeys(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
 			{
-				ModelName: "plain",
-				Model:     "openai/gpt-4",
-				APIKeys:   SimpleSecureStrings("sk-new-plaintext"),
+				ModelName: "plain", Provider: "openai", Model: "gpt-4",
+				APIKeys: SimpleSecureStrings("sk-new-plaintext"),
 			},
 			{
-				ModelName: "enc",
-				Model:     "openai/gpt-4",
-				APIKeys:   SimpleSecureStrings(alreadyEncrypted),
+				ModelName: "enc", Provider: "openai", Model: "gpt-4",
+				APIKeys: SimpleSecureStrings(alreadyEncrypted),
 			},
 			{
-				ModelName: "file",
-				Model:     "openai/gpt-4",
-				APIKeys:   SimpleSecureStrings("file://api.key"),
+				ModelName: "file", Provider: "openai", Model: "gpt-4",
+				APIKeys: SimpleSecureStrings("file://api.key"),
 			},
 		},
 	}
@@ -2773,7 +2814,7 @@ func TestLoadConfig_MixedKeys_NoPassphrase(t *testing.T) {
 	if err := SaveConfig(cfgPath, &Config{
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
-			{ModelName: "m", Model: "openai/gpt-4", APIKeys: SimpleSecureStrings("sk-secret")},
+			{ModelName: "m", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-secret")},
 		},
 	}); err != nil {
 		t.Fatalf("setup SaveConfig: %v", err)
@@ -2844,7 +2885,7 @@ func TestSaveConfig_UsesPassphraseProvider(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.ModelList = []*ModelConfig{
-		{ModelName: "test", Model: "openai/gpt-4", APIKeys: SimpleSecureStrings("sk-plaintext")},
+		{ModelName: "test", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-plaintext")},
 	}
 	if err := SaveConfig(cfgPath, cfg); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
@@ -2881,7 +2922,7 @@ func TestLoadConfig_UsesPassphraseProvider(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{
 		"version": CurrentVersion,
 		"model_list": []map[string]any{
-			{"model_name": "test", "model": "openai/gpt-4", "api_keys": []string{encrypted}},
+			{"model_name": "test", "provider": "openai", "model": "gpt-4", "api_keys": []string{encrypted}},
 		},
 	})
 	if err = os.WriteFile(cfgPath, raw, 0o600); err != nil {
@@ -2971,7 +3012,7 @@ func TestResolveGatewayLogLevel_UsesEnvOverrideAndNormalizesInvalid(t *testing.T
 	}
 }
 
-func TestLoadConfig_AppliesLegacyClawHubRegistryEnvOverrides(t *testing.T) {
+func TestLoadConfig_AppliesClawHubRegistryEnvOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	data := `{"version":3,"tools":{"skills":{"registries":{"clawhub":{"enabled":true,"base_url":"https://clawhub.ai"}}}}}`
@@ -3051,6 +3092,84 @@ func TestLoadConfig_AppliesGitHubRegistryEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_DoesNotRestoreRemovedRegistriesWithoutEnvOverrides(t *testing.T) {
+	unsetSkillsRegistryEnv(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	data := `{"version":3,"tools":{"skills":{"registries":{}}}}`
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if names := cfg.Tools.Skills.Registries.Names(); len(names) != 0 {
+		t.Fatalf("registry names = %v, want none", names)
+	}
+}
+
+func TestLoadConfig_EnvOverrideCreatesRemovedRegistryFromCurrentDefaults(t *testing.T) {
+	unsetSkillsRegistryEnv(t)
+	t.Setenv(envSkillsGitHubProxy, "http://127.0.0.1:7890")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	data := `{"version":3,"tools":{"skills":{"registries":{}}}}`
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	github, ok := cfg.Tools.Skills.Registries.Get("github")
+	if !ok {
+		t.Fatal("github registry missing")
+	}
+	if !github.Enabled || github.BaseURL != "https://github.com" {
+		t.Fatalf("github registry = %#v, want current defaults", github)
+	}
+	if got := github.Param["proxy"]; got != "http://127.0.0.1:7890" {
+		t.Fatalf("proxy = %v, want environment override", got)
+	}
+	if _, ok = cfg.Tools.Skills.Registries.Get("clawhub"); ok {
+		t.Fatal("clawhub registry restored without an override")
+	}
+}
+
+func unsetSkillsRegistryEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		envSkillsClawHubEnabled,
+		envSkillsClawHubBaseURL,
+		envSkillsClawHubAuthToken,
+		envSkillsClawHubSearchPath,
+		envSkillsClawHubSkillsPath,
+		envSkillsClawHubDownloadPath,
+		envSkillsClawHubTimeout,
+		envSkillsClawHubMaxZipSize,
+		envSkillsClawHubMaxResponseSize,
+		envSkillsGitHubEnabled,
+		envSkillsGitHubBaseURL,
+		envSkillsGitHubAuthToken,
+		envSkillsGitHubProxy,
+	} {
+		value, set := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("Unsetenv(%q): %v", name, err)
+		}
+		t.Cleanup(func() {
+			if set {
+				_ = os.Setenv(name, value)
+			} else {
+				_ = os.Unsetenv(name)
+			}
+		})
+	}
+}
+
 func TestModelConfig_ExtraBodyRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
@@ -3059,8 +3178,7 @@ func TestModelConfig_ExtraBodyRoundTrip(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
 			{
-				ModelName: "test-model",
-				Model:     "openai/test",
+				ModelName: "test-model", Provider: "openai", Model: "test",
 				APIKeys:   SimpleSecureStrings("sk-test"),
 				ExtraBody: map[string]any{"custom_field": "value", "num_field": 42},
 			},
@@ -3095,8 +3213,7 @@ func TestModelConfig_CustomHeadersRoundTrip(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
 			{
-				ModelName:     "test-model",
-				Model:         "openai/test",
+				ModelName: "test-model", Provider: "openai", Model: "test",
 				APIKeys:       SimpleSecureStrings("sk-test"),
 				CustomHeaders: map[string]string{"X-Source": "coding-plan", "X-Agent": "openclaw"},
 			},
@@ -3131,8 +3248,7 @@ func TestModelConfig_ToolSchemaTransformRoundTrip(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
 			{
-				ModelName:           "test-model",
-				Model:               "openai/test",
+				ModelName: "test-model", Provider: "openai", Model: "test",
 				APIKeys:             SimpleSecureStrings("sk-test"),
 				ToolSchemaTransform: "simple",
 			},
@@ -3230,14 +3346,12 @@ func TestFilterSensitiveData_MultipleKeys(t *testing.T) {
 		},
 		ModelList: SecureModelList{
 			&ModelConfig{
-				ModelName: "model1",
-				Model:     "openai/model1",
-				APIKeys:   SecureStrings{NewSecureString("key-one"), NewSecureString("key-two")},
+				ModelName: "model1", Provider: "openai", Model: "model1",
+				APIKeys: SecureStrings{NewSecureString("key-one"), NewSecureString("key-two")},
 			},
 			&ModelConfig{
-				ModelName: "model2",
-				Model:     "openai/model2",
-				APIKeys:   SecureStrings{NewSecureString("key-three")},
+				ModelName: "model2", Provider: "openai", Model: "model2",
+				APIKeys: SecureStrings{NewSecureString("key-three")},
 			},
 		},
 	}
@@ -3277,9 +3391,13 @@ func TestFilterSensitiveData_AllTokenTypes(t *testing.T) {
 			},
 			// Skills tokens
 			Skills: SkillsToolsConfig{
-				Github: SkillsGithubConfig{Token: *NewSecureString("github-token-xyz")},
 				Registries: SkillsRegistriesConfig{
-					&SkillRegistryConfig{Name: "clawhub", AuthToken: *NewSecureString("clawhub-auth-token")},
+					"github": {
+						AuthToken: *NewSecureString("github-token-xyz"),
+					},
+					"clawhub": {
+						AuthToken: *NewSecureString("clawhub-auth-token"),
+					},
 				},
 			},
 		},

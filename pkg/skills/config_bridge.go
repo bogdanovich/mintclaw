@@ -2,77 +2,11 @@ package skills
 
 import "github.com/bogdanovich/mintclaw/pkg/config"
 
-const defaultGitHubRegistryBaseURL = "https://github.com"
-
-// legacyGithubSettings returns the deprecated top-level cfg.Github registry
-// settings consumed by the migration shim; remove with SkillsGithubConfig.
-func legacyGithubSettings(cfg config.SkillsToolsConfig) (baseURL string, token config.SecureString, proxy string) {
-	return cfg.Github.BaseURL, cfg.Github.Token, cfg.Github.Proxy //nolint:staticcheck // legacy cfg.Github migration shim
-}
-
-func effectiveRegistryConfigsFromToolsConfig(cfg config.SkillsToolsConfig) []config.SkillRegistryConfig {
-	effective := make([]config.SkillRegistryConfig, 0, len(cfg.Registries)+1)
-	seen := map[string]struct{}{}
-
-	for _, registryCfg := range cfg.Registries {
-		if registryCfg == nil || registryCfg.Name == "" {
-			continue
-		}
-		resolved := *registryCfg
-		if resolved.Name == "github" {
-			resolved = applyLegacyGithubRegistryCompatibility(cfg, resolved)
-		}
-		effective = append(effective, resolved)
-		seen[resolved.Name] = struct{}{}
-	}
-
-	if _, ok := seen["github"]; ok {
-		return effective
-	}
-
-	baseURL, token, proxy := legacyGithubSettings(cfg)
-	if baseURL == "" && token.String() == "" && proxy == "" {
-		return effective
-	}
-
-	effective = append(effective, applyLegacyGithubRegistryCompatibility(cfg, config.SkillRegistryConfig{
-		Name:    "github",
-		Enabled: true,
-	}))
-	return effective
-}
-
-func applyLegacyGithubRegistryCompatibility(
-	cfg config.SkillsToolsConfig,
-	registryCfg config.SkillRegistryConfig,
-) config.SkillRegistryConfig {
-	if registryCfg.Name != "github" {
-		return registryCfg
-	}
-	baseURL, token, proxy := legacyGithubSettings(cfg)
-	if registryCfg.Param == nil {
-		registryCfg.Param = map[string]any{}
-	}
-	if registryCfg.BaseURL == "" ||
-		(registryCfg.BaseURL == defaultGitHubRegistryBaseURL &&
-			baseURL != "" &&
-			baseURL != defaultGitHubRegistryBaseURL) {
-		registryCfg.BaseURL = baseURL
-	}
-	if registryCfg.AuthToken.String() == "" {
-		registryCfg.AuthToken = token
-	}
-	if _, ok := registryCfg.Param["proxy"]; !ok && proxy != "" {
-		registryCfg.Param["proxy"] = proxy
-	}
-	return registryCfg
-}
-
 func registryProvidersFromToolsConfig(cfg config.SkillsToolsConfig) []RegistryProvider {
-	registryConfigs := effectiveRegistryConfigsFromToolsConfig(cfg)
-	providers := make([]RegistryProvider, 0, len(registryConfigs))
-	for _, registryCfg := range registryConfigs {
-		provider := buildRegistryProvider(registryCfg.Name, registryCfg)
+	providers := make([]RegistryProvider, 0, len(cfg.Registries))
+	for _, name := range cfg.Registries.Names() {
+		registryCfg, _ := cfg.Registries.Get(name)
+		provider := buildRegistryProvider(name, registryCfg)
 		if provider == nil {
 			continue
 		}
@@ -89,27 +23,20 @@ func NewRegistryManagerFromToolsConfig(cfg config.SkillsToolsConfig) *RegistryMa
 }
 
 func LookupRegistryFromToolsConfig(cfg config.SkillsToolsConfig, name string) SkillRegistry {
-	for _, provider := range registryProvidersFromToolsConfig(cfg) {
-		if provider == nil {
-			continue
-		}
-		registry := provider.BuildRegistry()
-		if registry == nil || registry.Name() != name {
-			continue
-		}
-		return registry
+	registryCfg, ok := cfg.Registries.Get(name)
+	if !ok {
+		return nil
 	}
-	return nil
+	provider := buildRegistryProvider(name, registryCfg)
+	if provider == nil {
+		return nil
+	}
+	return provider.BuildRegistry()
 }
 
 func GitHubInstallDirNameFromToolsConfig(cfg config.SkillsToolsConfig, target string) (string, error) {
-	registryCfg, ok := cfg.Registries.Get("github")
-	if ok {
-		registryCfg = applyLegacyGithubRegistryCompatibility(cfg, registryCfg)
-		return githubInstallDirNameWithBaseURL(target, registryCfg.BaseURL)
-	}
-	baseURL, _, _ := legacyGithubSettings(cfg)
-	return githubInstallDirNameWithBaseURL(target, baseURL)
+	registryCfg, _ := cfg.Registries.Get("github")
+	return githubInstallDirNameWithBaseURL(target, registryCfg.BaseURL)
 }
 
 func NormalizeInstallTargetForRegistry(cfg config.SkillsToolsConfig, registryName, target string) string {

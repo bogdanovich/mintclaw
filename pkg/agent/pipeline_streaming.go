@@ -28,7 +28,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	if !p.configuredStreamingEligible(ts, exec) {
 		return nil, false, nil
 	}
-	if !providers.Capabilities(exec.model.activeProvider).Streaming.Supported {
+	if !providers.Capabilities(exec.model.activeProvider).Streaming {
 		logger.DebugCF("agent", "configured streaming not used", map[string]any{
 			"agent_id": ts.agent.ID,
 			"channel":  ts.channel,
@@ -114,12 +114,12 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 				"error":    updateErr.Error(),
 			}
 			if publisher.Published() {
-				logger.WarnCF("agent", "ChatStream update failed after visible output", logFields)
+				logger.WarnCF("agent", "Streaming update failed after visible output", logFields)
 				return nil, true, configuredStreamingVisibleError{err: updateErr}
 			}
 			logger.WarnCF(
 				"agent",
-				"ChatStream update failed before visible output; retrying with Chat",
+				"Streaming update failed before visible output; retrying with Chat",
 				logFields,
 			)
 			publisher.Cancel(ctx)
@@ -140,7 +140,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 		if !publisher.Published() {
 			logger.WarnCF(
 				"agent",
-				"ChatStream failed before visible output; retrying with Chat",
+				"Streaming failed before visible output; retrying with Chat",
 				map[string]any{
 					"agent_id": ts.agent.ID,
 					"channel":  ts.channel,

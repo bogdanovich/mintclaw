@@ -96,8 +96,15 @@ func (c *SlackWebhookChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send delivers a message to the specified Slack webhook target.
-func (c *SlackWebhookChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+// DeliverText delivers messages to the specified Slack webhook target.
+func (c *SlackWebhookChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *SlackWebhookChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

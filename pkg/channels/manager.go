@@ -162,7 +162,10 @@ type toolFeedbackMessageEditor interface {
 }
 
 type toolFeedbackMessageSender interface {
-	SendToolFeedbackMessage(ctx context.Context, msg bus.OutboundMessage) ([]string, bool, error)
+	SendToolFeedbackMessage(
+		ctx context.Context,
+		msg bus.OutboundMessage,
+	) (DeliveryResult[bus.OutboundMessage], bool)
 }
 
 type deliveryCleanupOptions struct {

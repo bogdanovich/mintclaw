@@ -184,7 +184,14 @@ func (c *QQChannel) getChatKind(chatID string) string {
 	return "group"
 }
 
-func (c *QQChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *QQChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *QQChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
@@ -305,11 +312,18 @@ func (c *QQChannel) StartTyping(ctx context.Context, chatID string) (func(), err
 	return cancel, nil
 }
 
-// SendMedia implements the channels.MediaSender interface.
+// DeliverMedia implements the channels.MediaSender interface.
+func (c *QQChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
 // QQ group/C2C media sending is a two-step flow:
 // 1. Upload media to /files using a remote URL or base64-encoded local bytes.
 // 2. Send a msg_type=7 message using the returned file_info.
-func (c *QQChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+func (c *QQChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

@@ -78,16 +78,14 @@ func TestSaveAndLoadSecurityConfig(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: SecureModelList{
 			{
-				ModelName: "model1",
-				Model:     "test/model",
-				APIBase:   "api.example.com",
-				APIKeys:   SecureStrings{NewSecureString("key1"), NewSecureString("key2")},
+				ModelName: "model1", Provider: "openai", Model: "test/model",
+				APIBase: "api.example.com",
+				APIKeys: SecureStrings{NewSecureString("key1"), NewSecureString("key2")},
 			},
 			{
-				ModelName: "model2",
-				Model:     "test/model2",
-				APIBase:   "api2.example.com",
-				APIKeys:   SecureStrings{NewSecureString("model2_key")},
+				ModelName: "model2", Provider: "openai", Model: "test/model2",
+				APIBase: "api2.example.com",
+				APIKeys: SecureStrings{NewSecureString("model2_key")},
 			},
 		},
 		Tools: ToolsConfig{
@@ -98,9 +96,11 @@ func TestSaveAndLoadSecurityConfig(t *testing.T) {
 				},
 			},
 			Skills: SkillsToolsConfig{
-				Github: SkillsGithubConfig{
-					Token: *NewSecureString("github_token"),
-					Proxy: "test proxy",
+				Registries: SkillsRegistriesConfig{
+					"github": {
+						AuthToken: *NewSecureString("github_token"),
+						Param:     map[string]any{"proxy": "test proxy"},
+					},
 				},
 			},
 		},
@@ -212,8 +212,9 @@ web:
     api_keys:
       - brave_key
 skills:
-  github:
-    token: github_token
+  registries:
+    github:
+      auth_token: github_token
 `
 		err = os.WriteFile(secPath, []byte(yamlOutput), 0o600)
 		require.NoError(t, err)
@@ -227,12 +228,15 @@ skills:
 
 		t.Logf("%+v", cfg)
 		t.Logf("%+v", cfg.Tools.Web.Brave.APIKeys)
-		t.Logf("%+v", cfg.Tools.Skills.Github.Token)
+		github, ok := cfg.Tools.Skills.Registries.Get("github")
+		require.True(t, ok)
+		t.Logf("%+v", github.AuthToken)
 		require.EqualValues(t, 2, len(cfg.ModelList))
 		assert.Equal(t, "key1", cfg.ModelList[0].APIKeys[0].String())
 		assert.Equal(t, "key2", cfg.ModelList[0].APIKeys[1].String())
 		assert.Equal(t, "model2_key", cfg.ModelList[1].APIKeys[0].String())
 		assert.EqualValues(t, original.Tools.Web.Brave.APIKeys, cfg.Tools.Web.Brave.APIKeys)
+		assert.Equal(t, "github_token", github.AuthToken.String())
 	})
 
 	t.Run("test for env overwrite", func(t *testing.T) {

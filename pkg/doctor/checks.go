@@ -32,10 +32,8 @@ const (
 	CheckExternalSkillRegistry    = "skills.external_registry"
 	CheckSkillShadowing           = "skills.workspace_global_shadowing"
 	CheckSkillAutoMutability      = "skills.automatic_mutability"
-	CheckModelFallbackMissing     = "models.fallback_missing"
 	CheckModelFallbackDuplicate   = "models.fallback_duplicate"
 	CheckModelFallbackCycle       = "models.fallback_cycle"
-	CheckAgentFallbackMissing     = "agents.fallback_missing"
 	CheckContextTokenInconsistent = "tokens.context_inconsistent"
 )
 
@@ -300,8 +298,9 @@ func checkPlaintextCredentials(raw rawDocuments) []Finding {
 
 func checkSkills(cfg *config.Config) []Finding {
 	var findings []Finding
-	for idx, registry := range cfg.Tools.Skills.Registries {
-		if registry == nil || !registry.Enabled {
+	for _, name := range cfg.Tools.Skills.Registries.Names() {
+		registry, ok := cfg.Tools.Skills.Registries.Get(name)
+		if !ok || !registry.Enabled {
 			continue
 		}
 		if registry.BaseURL != "" && !isLoopbackURL(registry.BaseURL) {
@@ -312,7 +311,7 @@ func checkSkills(cfg *config.Config) []Finding {
 				"External registries can influence skill discovery and installation inputs.",
 				"Enable only trusted registries and pin/review installed skills.",
 				Evidence{
-					Path:    fmt.Sprintf("tools.skills.registries[%d].base_url", idx),
+					Path:    fmt.Sprintf("tools.skills.registries.%s.base_url", name),
 					Summary: "enabled registry has non-loopback base_url",
 				},
 			))
@@ -349,33 +348,18 @@ func checkSkills(cfg *config.Config) []Finding {
 
 func checkFallbacks(cfg *config.Config) []Finding {
 	var findings []Finding
-	modelNames := map[string]struct{}{}
 	graph := map[string][]string{}
 	for _, model := range cfg.ModelList {
 		if model == nil || strings.TrimSpace(model.ModelName) == "" {
 			continue
 		}
 		name := strings.TrimSpace(model.ModelName)
-		modelNames[name] = struct{}{}
 		graph[name] = append(graph[name], model.Fallbacks...)
 		seen := map[string]struct{}{}
 		for _, fallback := range model.Fallbacks {
 			fallback = strings.TrimSpace(fallback)
 			if fallback == "" {
 				continue
-			}
-			if _, ok := modelNames[fallback]; !ok && !modelNameExists(cfg.ModelList, fallback) {
-				findings = append(findings, newFinding(
-					CheckModelFallbackMissing,
-					SeverityFail,
-					"Model fallback references a missing model",
-					"Missing fallback references can break failover when the primary model is unavailable.",
-					"Add the referenced model to model_list or remove the fallback entry.",
-					Evidence{
-						Path:    "model_list." + name + ".fallbacks",
-						Summary: "fallback model is not defined",
-					},
-				))
 			}
 			if _, duplicate := seen[fallback]; duplicate {
 				findings = append(findings, newFinding(
@@ -405,26 +389,6 @@ func checkFallbacks(cfg *config.Config) []Finding {
 				Summary: "fallback cycle detected: " + strings.Join(cycle, " -> "),
 			},
 		))
-	}
-
-	defaults := cfg.Agents.Defaults
-	findings = append(findings, checkModelRefs(
-		"agents.defaults.model_name",
-		append([]string{defaults.ModelName}, defaults.ModelFallbacks...),
-		modelNames,
-	)...)
-	findings = append(findings, checkModelRefs(
-		"agents.defaults.image_model",
-		append([]string{defaults.ImageModel}, defaults.ImageModelFallbacks...),
-		modelNames,
-	)...)
-	for idx, agent := range cfg.Agents.List {
-		findings = append(findings, checkAgentModelRef(idx, "model", agent.Model, modelNames)...)
-		if agent.Subagents != nil {
-			findings = append(
-				findings,
-				checkAgentModelRef(idx, "subagents.model", agent.Subagents.Model, modelNames)...)
-		}
 	}
 	return findings
 }
@@ -568,55 +532,6 @@ func sortedMCPNames(servers map[string]config.MCPServerConfig) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func modelNameExists(models config.SecureModelList, name string) bool {
-	for _, model := range models {
-		if model != nil && strings.TrimSpace(model.ModelName) == name {
-			return true
-		}
-	}
-	return false
-}
-
-func checkAgentModelRef(
-	agentIndex int,
-	field string,
-	model *config.AgentModelConfig,
-	modelNames map[string]struct{},
-) []Finding {
-	if model == nil {
-		return nil
-	}
-	return checkModelRefs(
-		fmt.Sprintf("agents.list[%d].%s", agentIndex, field),
-		append([]string{model.Primary}, model.Fallbacks...),
-		modelNames,
-	)
-}
-
-func checkModelRefs(path string, refs []string, modelNames map[string]struct{}) []Finding {
-	var findings []Finding
-	for _, ref := range refs {
-		ref = strings.TrimSpace(ref)
-		if ref == "" {
-			continue
-		}
-		if _, ok := modelNames[ref]; !ok {
-			findings = append(findings, newFinding(
-				CheckAgentFallbackMissing,
-				SeverityFail,
-				"Agent model reference is missing",
-				"Missing agent model references can prevent agent startup or subagent delegation.",
-				"Add the referenced model to model_list or update the agent model reference.",
-				Evidence{
-					Path:    path,
-					Summary: "referenced model is not defined",
-				},
-			))
-		}
-	}
-	return findings
 }
 
 func findCycles(graph map[string][]string) [][]string {

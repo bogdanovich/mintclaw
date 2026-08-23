@@ -46,7 +46,7 @@ pkg/channels/
 ├── interfaces.go        # Optional capability interfaces (TypingCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder)
 ├── README.md            # English documentation
 ├── README.zh.md         # Chinese documentation
-├── media.go             # MediaSender optional interface
+├── media.go             # Typed MediaSender optional interface
 ├── webhook.go           # WebhookHandler, HealthChecker optional interfaces
 ├── errors.go            # Sentinel errors (ErrNotRunning, ErrRateLimit, ErrTemporary, ErrSendFailed)
 ├── errutil.go           # Error classification helpers
@@ -97,7 +97,7 @@ pkg/identity/
                                     │   └── runTTLJanitor()       Clean up expired Typing/Placeholder
                                     └────────┬──────────┘
                                              │
-                                   channel.Send() / SendMedia()
+                               channel.DeliverText() / SendMedia()
                                              │
                                              ▼
                                     ┌────────────────┐
@@ -249,18 +249,20 @@ func (c *TelegramChannel) Stop(ctx context.Context) error {
 }
 ```
 
-**3e. Send method error returns**
+**3e. Typed text delivery results**
 
 ```go
-// Old code: returned only error
-func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
-    if !c.running { return fmt.Errorf("not running") }
-    // ...
-    if err != nil { return err }
+// DeliverText is the channel's sole public text-delivery contract.
+func (c *TelegramChannel) DeliverText(
+    ctx context.Context,
+    pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+    return channels.DeliverSequentially(ctx, pending, c.sendText)
 }
 
-// New code: return delivered message IDs plus sentinel errors
-func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+// Keep a single-message SDK operation private. DeliverSequentially converts it
+// into confirmed IDs, retryable remainder, acceptance, and error metadata.
+func (c *TelegramChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
     if !c.IsRunning() {
         return nil, channels.ErrNotRunning    // ← Manager will not retry
     }
@@ -385,7 +387,7 @@ The Manager has been completely rewritten. Your modifications will need to accou
 | Old Manager Responsibility | New Manager Responsibility |
 |---|---|
 | Directly construct channels (switch/if-else) | Look up and construct via factory registry |
-| Directly call channel.Send | Per-channel Worker queues + rate limiting + retries |
+| Directly call a channel transport method | Per-channel Worker queues + rate limiting + retries |
 | No message splitting | Automatic splitting based on MaxMessageLength |
 | Each channel runs its own HTTP server | Unified shared HTTP server |
 | No Typing/Placeholder management | Unified preSend handles Typing stop + Reaction undo + Placeholder edit; inbound-side BaseChannel.HandleMessage auto-orchestrates Typing/Reaction/Placeholder |
@@ -509,7 +511,14 @@ func (c *MatrixChannel) Stop(ctx context.Context) error {
     return nil
 }
 
-func (c *MatrixChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *MatrixChannel) DeliverText(
+    ctx context.Context,
+    pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+    return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *MatrixChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
     // 1. Check running state
     if !c.IsRunning() {
         return nil, channels.ErrNotRunning
@@ -601,7 +610,14 @@ Depending on platform capabilities, your channel can optionally implement the fo
 
 ```go
 // If the platform supports sending images/files/audio/video
-func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+func (c *MatrixChannel) DeliverMedia(
+    ctx context.Context,
+    pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+    return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *MatrixChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
     if !c.IsRunning() {
         return nil, channels.ErrNotRunning
     }
@@ -1311,16 +1327,17 @@ type Channel interface {
     Name() string
     Start(ctx context.Context) error
     Stop(ctx context.Context) error
-    Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error)
+    DeliverText(ctx context.Context, pending []bus.OutboundMessage) DeliveryResult[bus.OutboundMessage]
     IsRunning() bool
-    IsAllowed(senderID string) bool
-    IsAllowedSender(sender bus.SenderInfo) bool
     ReasoningChannelID() string
 }
 
 // ===== Optional =====
 type MediaSender interface {
-    SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error)
+    DeliverMedia(
+        ctx context.Context,
+        pending []bus.OutboundMediaMessage,
+    ) DeliveryResult[bus.OutboundMediaMessage]
 }
 
 type TypingCapable interface {

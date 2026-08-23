@@ -117,7 +117,7 @@ type ClawHubConfig struct {
 // RegistryManager coordinates multiple skill registries.
 // It fans out search requests and routes installs to the correct registry.
 type RegistryManager struct {
-	registries    []SkillRegistry
+	registries    map[string]SkillRegistry
 	maxConcurrent int
 	mu            sync.RWMutex
 }
@@ -148,7 +148,7 @@ func ValidateInstallTarget(target string) error {
 // NewRegistryManager creates an empty RegistryManager.
 func NewRegistryManager() *RegistryManager {
 	return &RegistryManager{
-		registries:    make([]SkillRegistry, 0),
+		registries:    make(map[string]SkillRegistry),
 		maxConcurrent: defaultMaxConcurrentSearches,
 	}
 }
@@ -175,29 +175,36 @@ func NewRegistryManagerFromConfig(cfg RegistryConfig) *RegistryManager {
 
 // AddRegistry adds a registry to the manager.
 func (rm *RegistryManager) AddRegistry(r SkillRegistry) {
+	if r == nil {
+		return
+	}
+	name := strings.TrimSpace(r.Name())
+	if name == "" {
+		return
+	}
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	rm.registries = append(rm.registries, r)
+	if rm.registries == nil {
+		rm.registries = make(map[string]SkillRegistry)
+	}
+	rm.registries[name] = r
 }
 
 // GetRegistry returns a registry by name, or nil if not found.
 func (rm *RegistryManager) GetRegistry(name string) SkillRegistry {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
-	for _, r := range rm.registries {
-		if r.Name() == name {
-			return r
-		}
-	}
-	return nil
+	return rm.registries[name]
 }
 
 // SearchAll fans out the query to all registries concurrently
 // and merges results sorted by score descending.
 func (rm *RegistryManager) SearchAll(ctx context.Context, query string, limit int) ([]SearchResult, error) {
 	rm.mu.RLock()
-	regs := make([]SkillRegistry, len(rm.registries))
-	copy(regs, rm.registries)
+	regs := make([]SkillRegistry, 0, len(rm.registries))
+	for _, registry := range rm.registries {
+		regs = append(regs, registry)
+	}
 	rm.mu.RUnlock()
 
 	if len(regs) == 0 {

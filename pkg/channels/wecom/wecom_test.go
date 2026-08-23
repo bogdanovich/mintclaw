@@ -252,7 +252,7 @@ func TestSend_StreamFailureFallsBackToActualChatID(t *testing.T) {
 		return wecomTestAck(nil), nil
 	}
 
-	if _, err := ch.Send(context.Background(), bus.OutboundMessage{
+	if _, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		Channel: "wecom",
 		ChatID:  "chat-1",
 		Content: "hello",
@@ -309,7 +309,7 @@ func TestSend_DoesNotSplitStreamReply(t *testing.T) {
 	}
 
 	content := strings.Repeat("\u4e2d", 30000)
-	if _, err := ch.Send(context.Background(), bus.OutboundMessage{
+	if _, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		Channel: "wecom",
 		ChatID:  "chat-1",
 		Content: content,
@@ -345,7 +345,7 @@ func TestSend_DoesNotSplitActivePush(t *testing.T) {
 	}
 
 	content := strings.Repeat("a", 30000)
-	if _, err := ch.Send(context.Background(), bus.OutboundMessage{
+	if _, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		Channel: "wecom",
 		ChatID:  "chat-1",
 		Content: content,
@@ -408,7 +408,7 @@ func TestSendMedia_SendsActiveImage(t *testing.T) {
 		}
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		Channel: "wecom",
 		ChatID:  "chat-1",
 		Parts: []bus.MediaPart{{
@@ -519,7 +519,7 @@ func TestSendMedia_UsesTurnImageAndFinishesStream(t *testing.T) {
 		}
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		Channel: "wecom",
 		ChatID:  "chat-1",
 		Parts: []bus.MediaPart{{
@@ -615,7 +615,7 @@ func TestSendMedia_SendsActiveFile(t *testing.T) {
 		}
 	}
 
-	_, err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+	_, err = ch.sendMedia(context.Background(), bus.OutboundMediaMessage{
 		Channel: "wecom",
 		ChatID:  "chat-2",
 		Parts: []bus.MediaPart{{

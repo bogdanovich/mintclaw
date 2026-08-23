@@ -41,16 +41,16 @@ func (c ModelStreamingConfig) IsZero() bool {
 
 // ModelConfig represents a model-centric provider configuration.
 // It allows adding new providers (especially OpenAI-compatible ones) via configuration only.
-// The Model field may be either a plain model identifier or a provider-prefixed
-// identifier such as "openai/gpt-5.4" or "nvidia/z-ai/glm-5.1".
+// Provider identifies the configured protocol, while Model is the provider-native
+// identifier and may itself contain slashes, such as "openai/gpt-5.4" on OpenRouter.
 // Supported providers include openai, anthropic, antigravity, claude-cli,
 // codex-cli, github-copilot, and named OpenAI-compatible protocols such as
 // groq, deepseek, modelscope, and novita.
 type ModelConfig struct {
 	// Required fields
 	ModelName string `json:"model_name"` // User-facing alias for the model
-	Provider  string `json:"provider"`   // Provider name for routing and selection. When empty, provider resolution infers it from Model.
-	Model     string `json:"model"`      // Model identifier, optionally provider-prefixed.
+	Provider  string `json:"provider"`   // Provider name for routing and selection
+	Model     string `json:"model"`      // Provider-native model identifier
 
 	// HTTP-based providers
 	APIBase   string   `json:"api_base,omitempty"`  // API endpoint URL
@@ -130,6 +130,15 @@ func (c *ModelConfig) IsVirtual() bool {
 func (c *ModelConfig) Validate() error {
 	if c.ModelName == "" {
 		return fmt.Errorf("model_name is required")
+	}
+	if c.ModelName != strings.TrimSpace(c.ModelName) {
+		return fmt.Errorf("model_name must not have surrounding whitespace")
+	}
+	if c.Provider == "" {
+		return fmt.Errorf("provider is required")
+	}
+	if c.Provider != strings.TrimSpace(c.Provider) {
+		return fmt.Errorf("provider must not have surrounding whitespace")
 	}
 	if c.Model == "" {
 		return fmt.Errorf("model is required")

@@ -46,7 +46,7 @@ pkg/channels/
 ├── interfaces.go        # 可选能力接口（TypingCapable, MessageEditor, ReactionCapable, PlaceholderCapable, PlaceholderRecorder）
 ├── README.md            # 英文文档
 ├── README.zh.md         # 中文文档
-├── media.go             # MediaSender 可选接口
+├── media.go             # 类型化 MediaSender 可选接口
 ├── webhook.go           # WebhookHandler, HealthChecker 可选接口
 ├── errors.go            # 错误哨兵值（ErrNotRunning, ErrRateLimit, ErrTemporary, ErrSendFailed）
 ├── errutil.go           # 错误分类帮助函数
@@ -97,7 +97,7 @@ pkg/identity/
                                     │   └── runTTLJanitor()       清理过期 Typing/Placeholder
                                     └────────┬──────────┘
                                              │
-                                   channel.Send() / SendMedia()
+                               channel.DeliverText() / SendMedia()
                                              │
                                              ▼
                                     ┌────────────────┐
@@ -249,18 +249,20 @@ func (c *TelegramChannel) Stop(ctx context.Context) error {
 }
 ```
 
-**3e. Send 方法的错误返回**
+**3e. 类型化文本投递结果**
 
 ```go
-// 旧代码：只返回 error
-func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
-    if !c.running { return fmt.Errorf("not running") }
-    // ...
-    if err != nil { return err }
+// DeliverText 是 channel 唯一的公开文本投递契约。
+func (c *TelegramChannel) DeliverText(
+    ctx context.Context,
+    pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+    return channels.DeliverSequentially(ctx, pending, c.sendText)
 }
 
-// 新代码：返回投递后的消息 ID，以及供 Manager 判断重试策略的哨兵错误
-func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+// 单消息 SDK 操作保持为私有方法。DeliverSequentially 会将它转换为
+// 已确认的消息 ID、可重试的剩余内容、接收状态和错误元数据。
+func (c *TelegramChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
     if !c.IsRunning() {
         return nil, channels.ErrNotRunning    // ← Manager 不会重试
     }
@@ -384,7 +386,7 @@ Manager 已被完全重写。你的修改需要理解新架构：
 | 旧 Manager 职责 | 新 Manager 职责 |
 |---|---|
 | 直接构造 channel（switch/if-else） | 通过工厂注册表查找并构造 |
-| 直接调用 channel.Send | 通过 per-channel Worker 队列 + 速率限制 + 重试 |
+| 直接调用 channel 传输方法 | 通过 per-channel Worker 队列 + 速率限制 + 重试 |
 | 无消息分割 | 自动根据 MaxMessageLength 分割长消息 |
 | 各 channel 自建 HTTP 服务器 | 统一共享 HTTP 服务器 |
 | 无 Typing/Placeholder 管理 | 统一 preSend 处理 Typing 停止 + Reaction 撤销 + Placeholder 编辑；入站侧 BaseChannel.HandleMessage 自动编排 Typing/Reaction/Placeholder |
@@ -508,7 +510,14 @@ func (c *MatrixChannel) Stop(ctx context.Context) error {
     return nil
 }
 
-func (c *MatrixChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *MatrixChannel) DeliverText(
+    ctx context.Context,
+    pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+    return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *MatrixChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
     // 1. 检查运行状态
     if !c.IsRunning() {
         return nil, channels.ErrNotRunning
@@ -600,7 +609,14 @@ func (c *MatrixChannel) sendToMatrix(ctx context.Context, roomID, content string
 
 ```go
 // 如果平台支持发送图片/文件/音频/视频
-func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+func (c *MatrixChannel) DeliverMedia(
+    ctx context.Context,
+    pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+    return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *MatrixChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
     if !c.IsRunning() {
         return nil, channels.ErrNotRunning
     }
@@ -1307,16 +1323,17 @@ type Channel interface {
     Name() string
     Start(ctx context.Context) error
     Stop(ctx context.Context) error
-    Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error)
+    DeliverText(ctx context.Context, pending []bus.OutboundMessage) DeliveryResult[bus.OutboundMessage]
     IsRunning() bool
-    IsAllowed(senderID string) bool
-    IsAllowedSender(sender bus.SenderInfo) bool
     ReasoningChannelID() string
 }
 
 // ===== 可选实现 =====
 type MediaSender interface {
-    SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error)
+    DeliverMedia(
+        ctx context.Context,
+        pending []bus.OutboundMediaMessage,
+    ) DeliveryResult[bus.OutboundMediaMessage]
 }
 
 type TypingCapable interface {

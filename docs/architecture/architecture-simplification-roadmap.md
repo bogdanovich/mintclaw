@@ -717,6 +717,42 @@ Implementation sequence:
 13. Delete arbitrary-turn `GetActiveTurn` and `InterruptGraceful` APIs. Command
     runtimes bind active-turn inspection to their known workspace and session;
     graceful interruption is session-scoped and fails closed on ambiguity.
+14. Make skill registries one name-keyed current contract. Delete the sibling
+    GitHub settings, list-shaped registry input, direct security entries,
+    merge/PATCH fallbacks, and the JSON-first metadata parser; configuration,
+    security overlays, and runtime lookup use the same registry map.
+15. Make cron mutations one error-returning current contract. Delete implicit
+    legacy defaults and ensure failed persistence cannot leave an in-memory job
+    mutation committed.
+16. Make configured `model_name` the sole model selector identity. Reject
+    dangling static references during config load, reject unknown workspace
+    frontmatter at agent construction, and delete raw model-ID,
+    `provider/model`, provider-alias, and default-provider inference from agent
+    resolution and gateway restart signatures.
+17. Require every model entry to store one explicit provider plus its
+    provider-native model ID. Delete steady-state Web API normalization,
+    provider-prefix/default-provider inference, and the unused fallback parser
+    APIs that preserve those alternate representations.
+18. Make the canonical descriptor the sole source of optional provider
+    capabilities and the descriptor-based image interface the sole image
+    operation. A provider without an optional descriptor advertises no optional
+    features; runtime code no longer infers streaming, thinking, search, or
+    image support from legacy method shapes.
+19. Make event streaming the sole provider streaming contract. Delete the
+    accumulated-text operation, its wrapper adapters, and the event-mode flag;
+    providers declare one streaming boolean and emit `StreamChunk` values
+    directly.
+20. Make typed text delivery the sole channel text contract. Delete the
+    tuple-returning channel method and optional typed sender; every channel
+    returns confirmed IDs, retryable remainder, acceptance, and errors through
+    `DeliveryResult`.
+21. Make typed media delivery the sole optional channel media contract. Delete
+    the tuple-returning media method and optional typed fallback; every
+    media-capable channel returns confirmed IDs, retryable remainder,
+    acceptance, and errors through `DeliveryResult`.
+22. Make `tools.image_generate.model` the sole image-generator selector.
+    Delete the unused agent-default image fallback fields and the cross-section
+    runtime fallback; removed fields are rejected by current-schema decoding.
 
 Exit criteria:
 

@@ -7,62 +7,33 @@ import (
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 )
 
-const legacyImageGenerationMaxResults = 4
-
 var (
 	ErrStreamingContract       = errors.New("provider declares streaming without implementing a streaming operation")
 	ErrImageGenerationContract = errors.New("provider declares image generation without implementing the operation")
 )
 
-// Capabilities returns a normalized descriptor. The structural fallbacks are
-// isolated compatibility for external providers that predate CapabilityProvider.
+// Capabilities returns the provider's normalized descriptor.
 func Capabilities(provider LLMProvider) ProviderCapabilities {
 	if provider == nil {
 		return ProviderCapabilities{}
 	}
-	if capable, ok := provider.(CapabilityProvider); ok {
-		return capable.Capabilities().Normalized()
+	capable, ok := provider.(CapabilityProvider)
+	if !ok {
+		return ProviderCapabilities{}
 	}
-
-	capabilities := ProviderCapabilities{}
-	if _, ok := provider.(StreamingProvider); ok {
-		capabilities.Streaming.Supported = true
-	}
-	if _, ok := provider.(StreamingEventProvider); ok {
-		capabilities.Streaming = StreamingCapabilities{Supported: true, Events: true}
-	}
-	if capable, ok := provider.(interface{ SupportsThinking() bool }); ok {
-		capabilities.Thinking = capable.SupportsThinking()
-	}
-	if capable, ok := provider.(interface{ SupportsNativeSearch() bool }); ok {
-		capabilities.NativeSearch = capable.SupportsNativeSearch()
-	}
-	return capabilities.Normalized()
+	return capable.Capabilities().Normalized()
 }
 
-// ImageCapabilities returns descriptor-first image generation metadata while
-// preserving the legacy external provider contract at one compatibility edge.
-func ImageCapabilities(provider ImageGenerationCapable) ImageGenerationCapabilities {
+// ImageCapabilities returns the provider's normalized image generation metadata.
+func ImageCapabilities(provider ImageGenerationProvider) ImageGenerationCapabilities {
 	if provider == nil {
 		return ImageGenerationCapabilities{}
 	}
-	if capable, ok := provider.(CapabilityProvider); ok {
-		return capable.Capabilities().Normalized().ImageGeneration
-	}
-	if !provider.SupportsImageGeneration() {
-		return ImageGenerationCapabilities{}
-	}
-	return ImageGenerationCapabilities{
-		Supported:    true,
-		ProviderID:   provider.ImageGenerationProviderID(),
-		DefaultModel: provider.DefaultImageGenerationModel(),
-		MaxResults:   legacyImageGenerationMaxResults,
-	}
+	return provider.Capabilities().Normalized().ImageGeneration
 }
 
-// ChatStreamEvents invokes the provider's declared streaming operation and
-// adapts legacy accumulated-text streaming to event chunks. The bool reports
-// whether streaming was declared and attempted.
+// ChatStreamEvents invokes the provider's declared event-streaming operation.
+// The bool reports whether streaming was declared and attempted.
 func ChatStreamEvents(
 	ctx context.Context,
 	provider LLMProvider,
@@ -73,29 +44,17 @@ func ChatStreamEvents(
 	onChunk func(StreamChunk),
 ) (*LLMResponse, bool, error) {
 	capabilities := Capabilities(provider)
-	if !capabilities.Streaming.Supported {
+	if !capabilities.Streaming {
 		return nil, false, nil
 	}
 	if onChunk == nil {
 		onChunk = func(StreamChunk) {}
 	}
-	if capabilities.Streaming.Events {
-		streaming, ok := provider.(StreamingEventProvider)
-		if !ok {
-			return nil, true, ErrStreamingContract
-		}
-		response, err := streaming.ChatStreamEvents(ctx, messages, tools, model, options, onChunk)
-		return response, true, err
-	}
 	streaming, ok := provider.(StreamingProvider)
 	if !ok {
 		return nil, true, ErrStreamingContract
 	}
-	response, err := streaming.ChatStream(ctx, messages, tools, model, options, func(accumulated string) {
-		if onChunk != nil {
-			onChunk(StreamChunk{Content: accumulated})
-		}
-	})
+	response, err := streaming.ChatStreamEvents(ctx, messages, tools, model, options, onChunk)
 	return response, true, err
 }
 

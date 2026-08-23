@@ -44,37 +44,6 @@ func (p *toolSchemaTransformProvider) GetDefaultModel() string {
 	return p.delegate.GetDefaultModel()
 }
 
-func (p *toolSchemaTransformProvider) ChatStream(
-	ctx context.Context,
-	messages []Message,
-	tools []ToolDefinition,
-	model string,
-	options map[string]any,
-	onChunk func(accumulated string),
-) (*LLMResponse, error) {
-	transformed, err := common.TransformToolDefinitions(tools, p.transform)
-	if err != nil {
-		return nil, err
-	}
-	response, attempted, err := ChatStreamEvents(
-		ctx,
-		p.delegate,
-		messages,
-		transformed,
-		model,
-		options,
-		func(chunk StreamChunk) {
-			if onChunk != nil {
-				onChunk(chunk.Content)
-			}
-		},
-	)
-	if !attempted {
-		return nil, ErrStreamingContract
-	}
-	return response, err
-}
-
 func (p *toolSchemaTransformProvider) ChatStreamEvents(
 	ctx context.Context,
 	messages []Message,
@@ -97,9 +66,7 @@ func (p *toolSchemaTransformProvider) ChatStreamEvents(
 func (p *toolSchemaTransformProvider) Capabilities() ProviderCapabilities {
 	capabilities := Capabilities(p.delegate)
 	if capabilities.ImageGeneration.Supported {
-		if _, ok := p.delegate.(interface {
-			GenerateImage(context.Context, ImageGenerationRequest) (*ImageGenerationResponse, error)
-		}); !ok {
+		if _, ok := p.delegate.(ImageGenerationProvider); !ok {
 			capabilities.ImageGeneration = ImageGenerationCapabilities{}
 		}
 	}
@@ -111,9 +78,7 @@ func (p *toolSchemaTransformProvider) GenerateImage(
 	ctx context.Context,
 	req ImageGenerationRequest,
 ) (*ImageGenerationResponse, error) {
-	generator, ok := p.delegate.(interface {
-		GenerateImage(context.Context, ImageGenerationRequest) (*ImageGenerationResponse, error)
-	})
+	generator, ok := p.delegate.(ImageGenerationProvider)
 	if !ok || !p.Capabilities().ImageGeneration.Supported {
 		return nil, ErrImageGenerationContract
 	}

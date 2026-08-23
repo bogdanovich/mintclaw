@@ -7,24 +7,34 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-func TestModelNameFromIdentityKey_LegacyProviderModel(t *testing.T) {
-	if got := modelNameFromIdentityKey("openai/gpt-5.4"); got != "gpt-5.4" {
-		t.Fatalf("modelNameFromIdentityKey() = %q, want %q", got, "gpt-5.4")
-	}
-}
-
-func TestModelNameFromIdentityKey_PreservesNonLegacyIdentity(t *testing.T) {
-	if got := modelNameFromIdentityKey("model_name:primary"); got != "model_name:primary" {
-		t.Fatalf("modelNameFromIdentityKey() = %q, want %q", got, "model_name:primary")
-	}
-}
-
 func TestModelAliasFromCandidateIdentityKey(t *testing.T) {
 	if got := modelAliasFromCandidateIdentityKey("model_name:primary"); got != "primary" {
 		t.Fatalf("modelAliasFromCandidateIdentityKey() = %q, want %q", got, "primary")
 	}
 	if got := modelAliasFromCandidateIdentityKey("openai/gpt-5.4"); got != "" {
 		t.Fatalf("modelAliasFromCandidateIdentityKey() = %q, want empty", got)
+	}
+}
+
+func TestResolveModelCandidateRequiresExactModelName(t *testing.T) {
+	cfg := &config.Config{ModelList: []*config.ModelConfig{{
+		ModelName: "primary",
+		Provider:  "openai",
+		Model:     "gpt-5.4",
+	}}}
+
+	candidate, ok := resolveModelCandidate(cfg, "primary")
+	if !ok {
+		t.Fatal("resolveModelCandidate() did not resolve exact model_name")
+	}
+	if candidate.IdentityKey != "model_name:primary" {
+		t.Fatalf("identity key = %q, want %q", candidate.IdentityKey, "model_name:primary")
+	}
+
+	for _, ref := range []string{"gpt-5.4", "openai/gpt-5.4"} {
+		if candidate, ok = resolveModelCandidate(cfg, ref); ok {
+			t.Fatalf("resolveModelCandidate(%q) = %#v, want no match", ref, candidate)
+		}
 	}
 }
 
@@ -83,7 +93,6 @@ func TestResolveActiveModelConfig_PrefersCandidateIdentityKey(t *testing.T) {
 			IdentityKey: "model_name:suanneng-glm-4.7",
 		}},
 		"glm-4.7",
-		"openai",
 	)
 
 	if got == nil {
@@ -101,13 +110,11 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "lb-model",
-				Model:     "openai/primary",
+				ModelName: "lb-model", Provider: "openai", Model: "primary",
 				Streaming: config.ModelStreamingConfig{Enabled: false},
 			},
 			{
-				ModelName: "lb-model",
-				Model:     "openai/secondary",
+				ModelName: "lb-model", Provider: "openai", Model: "secondary",
 				Streaming: config.ModelStreamingConfig{Enabled: true},
 			},
 		},
@@ -122,21 +129,20 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 			IdentityKey: "model_name:lb-model",
 		}},
 		"lb-model",
-		"openai",
 	)
 
 	if got == nil {
 		t.Fatal("resolveActiveModelConfig() = nil, want model config")
 	}
-	if got.Model != "openai/secondary" {
-		t.Fatalf("model = %q, want openai/secondary", got.Model)
+	if got.Model != "secondary" {
+		t.Fatalf("model = %q, want secondary", got.Model)
 	}
 	if !got.Streaming.Enabled {
 		t.Fatal("streaming.enabled = false, want true from selected load-balanced entry")
 	}
 }
 
-func TestResolveActiveModelConfig_DoesNotFallbackToOpenAIForDefaultProviderCandidate(t *testing.T) {
+func TestResolveActiveModelConfig_RequiresCandidateIdentity(t *testing.T) {
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{
 			{
@@ -156,7 +162,6 @@ func TestResolveActiveModelConfig_DoesNotFallbackToOpenAIForDefaultProviderCandi
 			Model:    "gpt-4o",
 		}},
 		"gpt-4o",
-		"nvidia",
 	)
 
 	if got != nil {

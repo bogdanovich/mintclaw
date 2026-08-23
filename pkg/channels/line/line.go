@@ -456,9 +456,16 @@ func (c *LINEChannel) resolveSource(source webhook.SourceInterface) (senderID, c
 	}
 }
 
-// Send sends a message to LINE. It first tries the Reply API (free)
+// DeliverText sends messages to LINE. It first tries the Reply API (free)
 // using a cached reply token, then falls back to the Push API.
-func (c *LINEChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *LINEChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *LINEChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
@@ -506,11 +513,18 @@ func (c *LINEChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 	return nil, classifySDKError(resp, err)
 }
 
-// SendMedia implements the channels.MediaSender interface.
+// DeliverMedia implements the channels.MediaSender interface.
+func (c *LINEChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
 // LINE requires media to be accessible via public URL; since we only have local files,
 // we fall back to sending a text message with the filename/caption.
 // For full support, an external file hosting service would be needed.
-func (c *LINEChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+func (c *LINEChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

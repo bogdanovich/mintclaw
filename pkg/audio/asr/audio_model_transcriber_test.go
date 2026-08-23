@@ -59,9 +59,7 @@ func TestNewAudioModelTranscriberInvalidConfig(t *testing.T) {
 		},
 		{
 			name: "missing api key",
-			cfg: &config.ModelConfig{
-				Model: "gemini/gemini-2.5-flash",
-			},
+			cfg:  &config.ModelConfig{Provider: "gemini", Model: "gemini-2.5-flash"},
 		},
 	}
 

@@ -288,8 +288,6 @@ type AgentDefaults struct {
 	Provider                  string               `json:"provider"                         env:"MINTCLAW_AGENTS_DEFAULTS_PROVIDER"`
 	ModelName                 string               `json:"model_name"                       env:"MINTCLAW_AGENTS_DEFAULTS_MODEL_NAME"`
 	ModelFallbacks            []string             `json:"model_fallbacks,omitempty"`
-	ImageModel                string               `json:"image_model,omitempty"            env:"MINTCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks       []string             `json:"image_model_fallbacks,omitempty"`
 	MaxTokens                 int                  `json:"max_tokens"                       env:"MINTCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
 	ContextWindow             int                  `json:"context_window,omitempty"         env:"MINTCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64             `json:"temperature,omitempty"            env:"MINTCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
@@ -416,8 +414,7 @@ func (d *AgentDefaults) UseFinalTurnRender() bool {
 	return strings.EqualFold(strings.TrimSpace(d.FinalTurnRenderMode), "llm")
 }
 
-// GetModelName returns the effective model name for the agent defaults.
-// It prefers the new "model_name" field but falls back to "model" for backward compatibility.
+// GetModelName returns the configured default model name.
 func (d *AgentDefaults) GetModelName() string {
 	return d.ModelName
 }

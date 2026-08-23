@@ -176,6 +176,7 @@ func upsertModelDefault(apiBase, apiKey, alias, modelID string, stdout io.Writer
 				continue
 			}
 			if model.ModelName == alias {
+				model.Provider = "openai"
 				model.Model = modelID
 				model.APIBase = apiBase
 				model.APIKeys = secureKeys
@@ -187,6 +188,7 @@ func upsertModelDefault(apiBase, apiKey, alias, modelID string, stdout io.Writer
 		if !found {
 			cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
 				ModelName: alias,
+				Provider:  "openai",
 				Model:     modelID,
 				APIBase:   apiBase,
 				APIKeys:   secureKeys,

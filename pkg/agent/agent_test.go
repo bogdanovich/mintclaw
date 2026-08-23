@@ -39,8 +39,11 @@ type fakeChannel struct{ id string }
 func (f *fakeChannel) Name() string                    { return "fake" }
 func (f *fakeChannel) Start(ctx context.Context) error { return nil }
 func (f *fakeChannel) Stop(ctx context.Context) error  { return nil }
-func (f *fakeChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
-	return nil, nil
+func (f *fakeChannel) DeliverText(
+	context.Context,
+	[]bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.SuccessfulDelivery[bus.OutboundMessage](nil)
 }
 func (f *fakeChannel) IsRunning() bool            { return true }
 func (f *fakeChannel) ReasoningChannelID() string { return f.id }
@@ -52,21 +55,30 @@ type fakeMediaChannel struct {
 	sentMedia    []bus.OutboundMediaMessage
 }
 
-func (f *fakeMediaChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (f *fakeMediaChannel) DeliverText(
+	_ context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.sentMessages = append(f.sentMessages, msg)
-	return nil, nil
+	f.sentMessages = append(f.sentMessages, pending...)
+	return channels.SuccessfulDelivery[bus.OutboundMessage](nil)
 }
 
-func (f *fakeMediaChannel) SendMedia(
+func (f *fakeMediaChannel) DeliverMedia(
 	ctx context.Context,
-	msg bus.OutboundMediaMessage,
-) ([]string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sentMedia = append(f.sentMedia, msg)
-	return nil, nil
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(
+		ctx,
+		pending,
+		func(_ context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.sentMedia = append(f.sentMedia, msg)
+			return nil, nil
+		},
+	)
 }
 
 func (f *fakeMediaChannel) messagesSnapshot() []bus.OutboundMessage {
@@ -83,21 +95,30 @@ type blockingMediaChannel struct {
 	once    sync.Once
 }
 
-func (f *blockingMediaChannel) SendMedia(
+func (f *blockingMediaChannel) DeliverMedia(
 	ctx context.Context,
-	msg bus.OutboundMediaMessage,
-) ([]string, error) {
-	f.once.Do(func() { close(f.started) })
-	select {
-	case <-f.release:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	result := channels.DeliverSequentially(
+		ctx,
+		pending,
+		func(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+			f.once.Do(func() { close(f.started) })
+			select {
+			case <-f.release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			f.mu.Lock()
+			f.sentMedia = append(f.sentMedia, msg)
+			f.mu.Unlock()
+			return []string{"media-1"}, nil
+		},
+	)
+	if result.Delivered() {
+		close(f.done)
 	}
-	f.mu.Lock()
-	f.sentMedia = append(f.sentMedia, msg)
-	f.mu.Unlock()
-	close(f.done)
-	return []string{"media-1"}, nil
+	return result
 }
 
 func newBlockingMediaChannel() *blockingMediaChannel {
@@ -1040,8 +1061,7 @@ func TestProcessMessage_PassesExplicitThinkingOffToCapableProvider(t *testing.T)
 			},
 		},
 		ModelList: []*config.ModelConfig{{
-			ModelName:     "test-model",
-			Model:         "test-model",
+			ModelName: "test-model", Provider: "openai", Model: "test-model",
 			ThinkingLevel: "off",
 		}},
 	}
@@ -1076,8 +1096,7 @@ func TestProcessMessage_PassesExplicitThinkingOffToProviderWithoutThinkingCapabi
 			},
 		},
 		ModelList: []*config.ModelConfig{{
-			ModelName:     "test-model",
-			Model:         "test-model",
+			ModelName: "test-model", Provider: "openai", Model: "test-model",
 			ThinkingLevel: "off",
 		}},
 	}
@@ -1149,8 +1168,7 @@ func TestProcessMessage_SuppressesReasoningWhenThinkingOff(t *testing.T) {
 			},
 		},
 		ModelList: []*config.ModelConfig{{
-			ModelName:     "test-model",
-			Model:         "test-model",
+			ModelName: "test-model", Provider: "openai", Model: "test-model",
 			ThinkingLevel: "off",
 		}},
 	}
@@ -1200,13 +1218,11 @@ func TestProcessMessage_BeforeLLMModelRewriteReevaluatesThinkingOff(t *testing.T
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "plain-model",
-				Model:     "openai/plain-model",
-				Enabled:   true,
+				ModelName: "plain-model", Provider: "openai", Model: "plain-model",
+				Enabled: true,
 			},
 			{
-				ModelName:     "off-model",
-				Model:         "openai/off-model",
+				ModelName: "off-model", Provider: "openai", Model: "off-model",
 				ThinkingLevel: "off",
 				Enabled:       true,
 			},
@@ -1216,6 +1232,7 @@ func TestProcessMessage_BeforeLLMModelRewriteReevaluatesThinkingOff(t *testing.T
 	msgBus := bus.NewMessageBus()
 	provider := &reasoningOptionRecordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	useTestSideQuestionProvider(al, provider)
 	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "off-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
@@ -1260,14 +1277,13 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName:     "off-model",
-				Model:         "openai/off-model",
+				ModelName: "off-model", Provider: "openai", Model: "off-model",
 				ThinkingLevel: "off",
 				Enabled:       true,
 			},
 			{
-				ModelName: "plain-model",
-				Model:     "openai/plain-model",
+				ModelName: "plain-model", Provider: "openai", Model: "plain-model",
+				Enabled: true,
 			},
 		},
 	}
@@ -1275,6 +1291,7 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 	msgBus := bus.NewMessageBus()
 	provider := &reasoningOptionRecordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	useTestSideQuestionProvider(al, provider)
 	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "plain-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
@@ -1307,6 +1324,60 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 	}
 }
 
+func TestProcessMessage_BeforeLLMModelRewriteComparesConfiguredNames(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "primary-alias",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Session: config.SessionConfig{Dimensions: []string{"chat"}},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName: "primary-alias",
+				Provider:  "openai",
+				Model:     "target-alias",
+				Enabled:   true,
+			},
+			{
+				ModelName: "target-alias",
+				Provider:  "openai",
+				Model:     "target-native-model",
+				Enabled:   true,
+			},
+		},
+	}
+
+	provider := &recordingProvider{}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	al.providerFactory = func(mc *config.ModelConfig) (providers.LLMProvider, string, error) {
+		_, modelID := providers.ExtractProtocol(mc)
+		return provider, modelID, nil
+	}
+	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "target-alias"})); err != nil {
+		t.Fatalf("MountHook failed: %v", err)
+	}
+
+	response, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "mintclaw",
+		SenderID: "user1",
+		ChatID:   "mintclaw:model-name-collision",
+		Content:  "hello",
+	})
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "Mock response" {
+		t.Fatalf("processMessage() response = %q, want Mock response", response)
+	}
+	if provider.lastModel != "target-native-model" {
+		t.Fatalf("provider model = %q, want target-native-model", provider.lastModel)
+	}
+}
+
 func TestApplyBeforeLLMModelRewrite_RebuildsExecutionProviders(t *testing.T) {
 	workspace := t.TempDir()
 	cfg := &config.Config{
@@ -1320,16 +1391,14 @@ func TestApplyBeforeLLMModelRewrite_RebuildsExecutionProviders(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "primary-model",
-				Model:     "openai/primary-model",
+				ModelName: "primary-model", Provider: "openai", Model: "primary-model",
 				APIBase:   "https://primary.example.invalid",
 				APIKeys:   config.SimpleSecureStrings("primary-key"),
 				Workspace: workspace,
 				Enabled:   true,
 			},
 			{
-				ModelName: "hook-model",
-				Model:     "openai/hook-model",
+				ModelName: "hook-model", Provider: "openai", Model: "hook-model",
 				APIBase:   "https://hook.example.invalid",
 				APIKeys:   config.SimpleSecureStrings("hook-key"),
 				Workspace: workspace,
@@ -1359,8 +1428,15 @@ func TestApplyBeforeLLMModelRewrite_RebuildsExecutionProviders(t *testing.T) {
 	}
 
 	originalProvider := exec.model.activeProvider
+	whitespaceLLM := &LLMIterationState{llmModel: " hook-model "}
+	if err := pipeline.applyBeforeLLMModelRewrite(ts, exec, whitespaceLLM); err == nil ||
+		!strings.Contains(err.Error(), "surrounding whitespace") {
+		t.Fatalf("applyBeforeLLMModelRewrite() whitespace error = %v", err)
+	}
 	llm := &LLMIterationState{llmModel: "hook-model"}
-	pipeline.applyBeforeLLMModelRewrite(ts, exec, llm)
+	if err := pipeline.applyBeforeLLMModelRewrite(ts, exec, llm); err != nil {
+		t.Fatalf("applyBeforeLLMModelRewrite() error = %v", err)
+	}
 	defer func() {
 		if exec.model.cleanup != nil {
 			exec.model.cleanup()
@@ -1398,8 +1474,7 @@ func TestProcessMessage_BtwCommandSuppressesReasoningWhenThinkingOff(t *testing.
 			},
 		},
 		ModelList: []*config.ModelConfig{{
-			ModelName:     "test-model",
-			Model:         "openai/test-model",
+			ModelName: "test-model", Provider: "openai", Model: "test-model",
 			ThinkingLevel: "off",
 			Enabled:       true,
 		}},
@@ -1454,13 +1529,11 @@ func TestProcessMessage_BtwHookModelRewriteReevaluatesThinkingOff(t *testing.T) 
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "plain-model",
-				Model:     "openai/plain-model",
-				Enabled:   true,
+				ModelName: "plain-model", Provider: "openai", Model: "plain-model",
+				Enabled: true,
 			},
 			{
-				ModelName:     "off-model",
-				Model:         "openai/off-model",
+				ModelName: "off-model", Provider: "openai", Model: "off-model",
 				ThinkingLevel: "off",
 				Enabled:       true,
 			},
@@ -1519,15 +1592,13 @@ func TestProcessMessage_BtwHookModelRewriteDoesNotLeakThinkingOff(t *testing.T) 
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName:     "off-model",
-				Model:         "openai/off-model",
+				ModelName: "off-model", Provider: "openai", Model: "off-model",
 				ThinkingLevel: "off",
 				Enabled:       true,
 			},
 			{
-				ModelName: "plain-model",
-				Model:     "openai/plain-model",
-				Enabled:   true,
+				ModelName: "plain-model", Provider: "openai", Model: "plain-model",
+				Enabled: true,
 			},
 		},
 	}
@@ -1599,7 +1670,9 @@ func TestPipeline_CallLLM_BeforeLLMRewriteDoesNotMutateStickyAutoFallbackSelecti
 	}
 
 	llm := &LLMIterationState{llmModel: "fallback-model"}
-	pipeline.applyBeforeLLMModelRewrite(ts, exec, llm)
+	if err := pipeline.applyBeforeLLMModelRewrite(ts, exec, llm); err != nil {
+		t.Fatalf("applyBeforeLLMModelRewrite() error = %v", err)
+	}
 	defer func() {
 		if exec.model.cleanup != nil {
 			exec.model.cleanup()
@@ -1634,16 +1707,18 @@ func TestProcessMessage_BtwFallbackDoesNotInheritPrimaryThinkingOff(t *testing.T
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
 				ModelName:         "test-model",
-				ModelFallbacks:    []string{"openai/fallback-model"},
+				ModelFallbacks:    []string{"fallback-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
 		},
-		ModelList: []*config.ModelConfig{{
-			ModelName:     "test-model",
-			Model:         "openai/test-model",
-			ThinkingLevel: "off",
-		}},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName: "test-model", Provider: "openai", Model: "test-model",
+				ThinkingLevel: "off",
+			},
+			{ModelName: "fallback-model", Provider: "openai", Model: "fallback-model"},
+		},
 	}
 
 	al := NewAgentLoop(
@@ -1750,7 +1825,7 @@ func TestProcessMessage_BtwCommandRunsWithoutPersistingHistory(t *testing.T) {
 		},
 		// Add model list so isolated provider can resolve the model
 		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Model: "openai/test-model"},
+			{ModelName: "test-model", Provider: "openai", Model: "test-model"},
 		},
 	}
 
@@ -1831,6 +1906,9 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 				MaxToolIterations: 10,
 			},
 		},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "test-model", Provider: "openai", Model: "test-model",
+		}},
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -1891,7 +1969,7 @@ func TestProcessMessage_BtwCommandUsesIsolatedProvider(t *testing.T) {
 		},
 		// Add model list so isolated provider can resolve the model
 		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Model: "openai/test-model"},
+			{ModelName: "test-model", Provider: "openai", Model: "test-model"},
 		},
 	}
 
@@ -1964,7 +2042,7 @@ func TestProcessMessage_BtwCommandRetriesWithoutMediaOnVisionUnsupported(t *test
 		},
 		// Add model list so isolated provider can resolve the model
 		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Model: "openai/test-model"},
+			{ModelName: "test-model", Provider: "openai", Model: "test-model"},
 		},
 	}
 
@@ -2007,8 +2085,8 @@ func TestProcessMessage_BtwCommandUsesProviderFactoryModel(t *testing.T) {
 			},
 		},
 		ModelList: []*config.ModelConfig{
-			{ModelName: "lb-model", Model: "openai/lb-model-a"},
-			{ModelName: "lb-model", Model: "openai/lb-model-b"},
+			{ModelName: "lb-model", Provider: "openai", Model: "lb-model-a"},
+			{ModelName: "lb-model", Provider: "openai", Model: "lb-model-b"},
 		},
 	}
 
@@ -2052,6 +2130,11 @@ func TestProcessMessage_BtwCommandHookModelBypassesFallbackCandidates(t *testing
 				MaxToolIterations: 10,
 			},
 		},
+		ModelList: []*config.ModelConfig{
+			{ModelName: "primary-model", Provider: "openai", Model: "primary-model"},
+			{ModelName: "fallback-model", Provider: "openai", Model: "fallback-model"},
+			{ModelName: "hook-model", Provider: "openai", Model: "hook-native-model"},
+		},
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -2074,8 +2157,8 @@ func TestProcessMessage_BtwCommandHookModelBypassesFallbackCandidates(t *testing
 	if response != "Mock response" {
 		t.Fatalf("processMessage() response = %q, want %q", response, "Mock response")
 	}
-	if provider.lastModel != "hook-model" {
-		t.Fatalf("/btw model = %q, want hook-selected model", provider.lastModel)
+	if provider.lastModel != "hook-native-model" {
+		t.Fatalf("/btw model = %q, want hook-selected native model", provider.lastModel)
 	}
 }
 
@@ -2091,8 +2174,8 @@ func TestAskSideQuestion_UsesEffectiveModelBindingExecutionState(t *testing.T) {
 			},
 		},
 		ModelList: []*config.ModelConfig{
-			{ModelName: "workspace-model", Model: "openai/workspace-model"},
-			{ModelName: "override-model", Model: "openai/override-model"},
+			{ModelName: "workspace-model", Provider: "openai", Model: "workspace-model"},
+			{ModelName: "override-model", Provider: "openai", Model: "override-model"},
 		},
 	}
 
@@ -5386,18 +5469,16 @@ func TestProcessMessage_RemovedSwitchCommandDoesNotAffectShowModel(t *testing.T)
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "local",
-				Model:     "openai/local-model",
-				APIBase:   "https://local.example.invalid/v1",
-				APIKeys:   config.SimpleSecureStrings("test-key"),
-				Enabled:   true,
+				ModelName: "local", Provider: "openai", Model: "local-model",
+				APIBase: "https://local.example.invalid/v1",
+				APIKeys: config.SimpleSecureStrings("test-key"),
+				Enabled: true,
 			},
 			{
-				ModelName: "deepseek",
-				Model:     "openrouter/deepseek/deepseek-v3.2",
-				APIBase:   "https://openrouter.ai/api/v1",
-				APIKeys:   config.SimpleSecureStrings("test-key"),
-				Enabled:   true,
+				ModelName: "deepseek", Provider: "openrouter", Model: "deepseek/deepseek-v3.2",
+				APIBase: "https://openrouter.ai/api/v1",
+				APIKeys: config.SimpleSecureStrings("test-key"),
+				Enabled: true,
 			},
 		},
 	}
@@ -5451,11 +5532,10 @@ func TestProcessMessage_UnknownSlashCommandDoesNotCallLLM(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "local",
-				Model:     "openai/local-model",
-				APIBase:   "https://local.example.invalid/v1",
-				APIKeys:   config.SimpleSecureStrings("test-key"),
-				Enabled:   true,
+				ModelName: "local", Provider: "openai", Model: "local-model",
+				APIBase: "https://local.example.invalid/v1",
+				APIKeys: config.SimpleSecureStrings("test-key"),
+				Enabled: true,
 			},
 		},
 	}
@@ -6357,18 +6437,16 @@ func TestProcessMessage_ModelOverrideSameAsDefaultPreservesLightRouting(t *testi
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "gemini-main",
-				Model:     "gemini/gemini-2.5-flash",
-				APIBase:   heavyServer.URL,
-				APIKeys:   config.SimpleSecureStrings("heavy-key"),
-				Enabled:   true,
+				ModelName: "gemini-main", Provider: "gemini", Model: "gemini-2.5-flash",
+				APIBase: heavyServer.URL,
+				APIKeys: config.SimpleSecureStrings("heavy-key"),
+				Enabled: true,
 			},
 			{
-				ModelName: "qwen-light",
-				Model:     "ollama/qwen2.5:0.5b",
-				APIBase:   lightServer.URL,
-				APIKeys:   config.SimpleSecureStrings("light-key"),
-				Enabled:   true,
+				ModelName: "qwen-light", Provider: "ollama", Model: "qwen2.5:0.5b",
+				APIBase: lightServer.URL,
+				APIKeys: config.SimpleSecureStrings("light-key"),
+				Enabled: true,
 			},
 		},
 	}
@@ -6720,18 +6798,16 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "gemini-main",
-				Model:     "gemini/gemini-2.5-flash",
-				APIBase:   heavyServer.URL,
-				APIKeys:   config.SimpleSecureStrings("heavy-key"),
-				Enabled:   true,
+				ModelName: "gemini-main", Provider: "gemini", Model: "gemini-2.5-flash",
+				APIBase: heavyServer.URL,
+				APIKeys: config.SimpleSecureStrings("heavy-key"),
+				Enabled: true,
 			},
 			{
-				ModelName: "qwen-light",
-				Model:     "ollama/qwen2.5:0.5b",
-				APIBase:   lightServer.URL,
-				APIKeys:   config.SimpleSecureStrings("light-key"),
-				Enabled:   true,
+				ModelName: "qwen-light", Provider: "ollama", Model: "qwen2.5:0.5b",
+				APIBase: lightServer.URL,
+				APIKeys: config.SimpleSecureStrings("light-key"),
+				Enabled: true,
 			},
 		},
 	}
@@ -6803,16 +6879,14 @@ func TestProcessMessage_FallbackUsesPerCandidateProvider(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "mistral-primary",
-				Model:     "openrouter/mistralai/mistral-small-3.1",
+				ModelName: "mistral-primary", Provider: "openrouter", Model: "mistralai/mistral-small-3.1",
 				APIBase:   primaryServer.URL,
 				APIKeys:   config.SimpleSecureStrings("primary-key"),
 				Workspace: workspace,
 				Enabled:   true,
 			},
 			{
-				ModelName: "gemma-fallback",
-				Model:     "openrouter/gemma-3-27b-it",
+				ModelName: "gemma-fallback", Provider: "openrouter", Model: "gemma-3-27b-it",
 				APIBase:   fallbackServer.URL,
 				APIKeys:   config.SimpleSecureStrings("fallback-key"),
 				Workspace: workspace,
@@ -6924,16 +6998,14 @@ func TestProcessMessage_FallbackUsesNestedCandidateVisionOverrides(t *testing.T)
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "primary",
-				Model:     "openrouter/primary-model",
+				ModelName: "primary", Provider: "openrouter", Model: "primary-model",
 				APIBase:   primaryServer.URL,
 				APIKeys:   config.SimpleSecureStrings("primary-key"),
 				Workspace: workspace,
 				Enabled:   true,
 			},
 			{
-				ModelName: "deepseek",
-				Model:     "openrouter/deepseek-chat",
+				ModelName: "deepseek", Provider: "openrouter", Model: "deepseek-chat",
 				APIBase:   textFallbackServer.URL,
 				APIKeys:   config.SimpleSecureStrings("fallback-key"),
 				Workspace: workspace,
@@ -6946,16 +7018,14 @@ func TestProcessMessage_FallbackUsesNestedCandidateVisionOverrides(t *testing.T)
 				},
 			},
 			{
-				ModelName: "vision-primary",
-				Model:     "openrouter/vision-primary",
+				ModelName: "vision-primary", Provider: "openrouter", Model: "vision-primary",
 				APIBase:   visionPrimaryServer.URL,
 				APIKeys:   config.SimpleSecureStrings("vision-primary-key"),
 				Workspace: workspace,
 				Enabled:   true,
 			},
 			{
-				ModelName: "vision-text-fallback",
-				Model:     "openrouter/vision-text-fallback",
+				ModelName: "vision-text-fallback", Provider: "openrouter", Model: "vision-text-fallback",
 				APIBase:   visionTextFallbackServer.URL,
 				APIKeys:   config.SimpleSecureStrings("vision-text-key"),
 				Workspace: workspace,
@@ -6965,8 +7035,7 @@ func TestProcessMessage_FallbackUsesNestedCandidateVisionOverrides(t *testing.T)
 				},
 			},
 			{
-				ModelName: "final-vision",
-				Model:     "openrouter/final-vision",
+				ModelName: "final-vision", Provider: "openrouter", Model: "final-vision",
 				APIBase:   finalVisionServer.URL,
 				APIKeys:   config.SimpleSecureStrings("final-vision-key"),
 				Workspace: workspace,
@@ -7078,16 +7147,14 @@ func TestProcessMessage_FallbackReceivesExplicitThinkingOff(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "primary-model",
-				Model:     "openrouter/primary-model",
+				ModelName: "primary-model", Provider: "openrouter", Model: "primary-model",
 				APIBase:   primaryServer.URL,
 				APIKeys:   config.SimpleSecureStrings("primary-key"),
 				Workspace: workspace,
 				Enabled:   true,
 			},
 			{
-				ModelName:     "doubao-fallback",
-				Model:         "openai/doubao-seed-1-6-flash-250828",
+				ModelName: "doubao-fallback", Provider: "openai", Model: "doubao-seed-1-6-flash-250828",
 				APIBase:       fallbackServer.URL,
 				APIKeys:       config.SimpleSecureStrings("fallback-key"),
 				ThinkingLevel: "off",
@@ -7181,8 +7248,7 @@ func TestProcessMessage_PrimaryThinkingOffDoesNotLeakToFallback(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName:     "primary-model",
-				Model:         "openrouter/primary-model",
+				ModelName: "primary-model", Provider: "openrouter", Model: "primary-model",
 				APIBase:       primaryServer.URL,
 				APIKeys:       config.SimpleSecureStrings("primary-key"),
 				ThinkingLevel: "off",
@@ -7190,8 +7256,7 @@ func TestProcessMessage_PrimaryThinkingOffDoesNotLeakToFallback(t *testing.T) {
 				Enabled:       true,
 			},
 			{
-				ModelName: "doubao-fallback",
-				Model:     "openai/doubao-seed-1-6-flash-250828",
+				ModelName: "doubao-fallback", Provider: "openai", Model: "doubao-seed-1-6-flash-250828",
 				APIBase:   fallbackServer.URL,
 				APIKeys:   config.SimpleSecureStrings("fallback-key"),
 				Workspace: workspace,
@@ -7281,24 +7346,21 @@ func TestProcessMessage_FallbackThinkingOffUsesCandidateIdentity(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "primary-model",
-				Model:     "openrouter/primary-model",
+				ModelName: "primary-model", Provider: "openrouter", Model: "primary-model",
 				APIBase:   primaryServer.URL,
 				APIKeys:   config.SimpleSecureStrings("primary-key"),
 				Workspace: workspace,
 				Enabled:   true,
 			},
 			{
-				ModelName: "doubao-default",
-				Model:     "openai/doubao-seed-1-6-flash-250828",
+				ModelName: "doubao-default", Provider: "openai", Model: "doubao-seed-1-6-flash-250828",
 				APIBase:   fallbackServer.URL,
 				APIKeys:   config.SimpleSecureStrings("fallback-key"),
 				Workspace: workspace,
 				Enabled:   true,
 			},
 			{
-				ModelName:     "doubao-off",
-				Model:         "openai/doubao-seed-1-6-flash-250828",
+				ModelName: "doubao-off", Provider: "openai", Model: "doubao-seed-1-6-flash-250828",
 				APIBase:       fallbackServer.URL,
 				APIKeys:       config.SimpleSecureStrings("fallback-key"),
 				ThinkingLevel: "off",
@@ -7373,8 +7435,7 @@ func TestProcessMessage_FallbackUsesActiveProviderWhenCandidateNotRegistered(t *
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "primary-model",
-				Model:     "openrouter/primary-model",
+				ModelName: "primary-model", Provider: "openrouter", Model: "primary-model",
 				APIBase:   primaryServer.URL,
 				APIKeys:   config.SimpleSecureStrings("primary-key"),
 				Workspace: workspace,
@@ -7760,8 +7821,7 @@ func TestProcessMessage_UsesPerModelVisionOverride(t *testing.T) {
 		ModelList: []*config.ModelConfig{
 			{
 				ModelName: "main-model",
-				Enabled:   true,
-				Model:     "openrouter/deepseek/deepseek-chat",
+				Enabled:   true, Provider: "openrouter", Model: "deepseek/deepseek-chat",
 				Capabilities: &config.ModelCapabilities{
 					Vision: &config.ModelCapabilityOverride{
 						Model: "vision-model",
@@ -7770,8 +7830,7 @@ func TestProcessMessage_UsesPerModelVisionOverride(t *testing.T) {
 			},
 			{
 				ModelName: "vision-model",
-				Enabled:   true,
-				Model:     "openai/gpt-4.1-mini",
+				Enabled:   true, Provider: "openai", Model: "gpt-4.1-mini",
 			},
 		},
 	}
@@ -7850,8 +7909,7 @@ func TestProcessMessage_SwitchesToVisionOverrideAfterLoadImageTool(t *testing.T)
 		ModelList: []*config.ModelConfig{
 			{
 				ModelName: "main-model",
-				Enabled:   true,
-				Model:     "openrouter/deepseek/deepseek-chat",
+				Enabled:   true, Provider: "openrouter", Model: "deepseek/deepseek-chat",
 				Capabilities: &config.ModelCapabilities{
 					Vision: &config.ModelCapabilityOverride{
 						Model: "vision-model",
@@ -7860,8 +7918,7 @@ func TestProcessMessage_SwitchesToVisionOverrideAfterLoadImageTool(t *testing.T)
 			},
 			{
 				ModelName: "vision-model",
-				Enabled:   true,
-				Model:     "openai/gpt-4.1-mini",
+				Enabled:   true, Provider: "openai", Model: "gpt-4.1-mini",
 			},
 		},
 	}

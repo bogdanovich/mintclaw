@@ -132,7 +132,7 @@ func TestStreamCoordinatorOwnsToolFeedbackCoordinator(t *testing.T) {
 
 func TestStreamCoordinatorToolFeedbackFallback(t *testing.T) {
 	state := StreamCoordinator{}
-	messageIDs, err := state.deliverToolFeedback(
+	result, err := state.deliverToolFeedback(
 		context.Background(),
 		"test:chat-1",
 		"",
@@ -146,8 +146,8 @@ func TestStreamCoordinatorToolFeedbackFallback(t *testing.T) {
 			return toolFeedbackSendResult{messageIDs: []string{"message-1"}}, nil
 		},
 	)
-	if err != nil || len(messageIDs) != 1 || messageIDs[0] != "message-1" {
-		t.Fatalf("fallback delivery = (%v, %v)", messageIDs, err)
+	if err != nil || len(result.messageIDs) != 1 || result.messageIDs[0] != "message-1" {
+		t.Fatalf("fallback delivery = (%v, %v)", result.messageIDs, err)
 	}
 }
 

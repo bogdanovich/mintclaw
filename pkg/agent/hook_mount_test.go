@@ -54,9 +54,16 @@ func newConfiguredHookLoop(t *testing.T, provider *llmHookTestProvider, hooks co
 			},
 		},
 		Hooks: hooks,
+		ModelList: []*config.ModelConfig{
+			{ModelName: "test-model", Provider: "openai", Model: "test-model", Enabled: true},
+			{ModelName: "builtin-model", Provider: "openai", Model: "builtin-model", Enabled: true},
+			{ModelName: "process-model", Provider: "openai", Model: "process-model", Enabled: true},
+		},
 	}
 
-	return NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	useTestSideQuestionProvider(al, provider)
+	return al
 }
 
 func TestAgentLoop_ProcessDirectWithChannel_AutoMountsBuiltinHook(t *testing.T) {

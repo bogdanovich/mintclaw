@@ -30,13 +30,21 @@ func newAddCommand(storePath func() string) *cobra.Command {
 			var schedule cron.CronSchedule
 			if every > 0 {
 				everyMS := every * 1000
-				schedule = cron.CronSchedule{Kind: "every", EveryMS: &everyMS}
+				schedule = cron.CronSchedule{Kind: cron.ScheduleEvery, EveryMS: &everyMS}
 			} else {
-				schedule = cron.CronSchedule{Kind: "cron", Expr: cronExp}
+				schedule = cron.CronSchedule{Kind: cron.ScheduleCron, Expr: cronExp}
 			}
 
-			cs := cron.NewCronService(storePath(), nil)
-			job, err := cs.AddJob(name, schedule, "", message, channel, to)
+			cs, err := loadCronService(storePath())
+			if err != nil {
+				return err
+			}
+			job, err := cs.AddJob(name, schedule, cron.CronPayload{
+				Kind:    cron.PayloadAgentTurn,
+				Message: message,
+				Channel: channel,
+				To:      to,
+			})
 			if err != nil {
 				return fmt.Errorf("error adding job: %w", err)
 			}
@@ -51,8 +59,8 @@ func newAddCommand(storePath func() string) *cobra.Command {
 	cmd.Flags().StringVarP(&message, "message", "m", "", "Message for agent")
 	cmd.Flags().Int64VarP(&every, "every", "e", 0, "Run every N seconds")
 	cmd.Flags().StringVarP(&cronExp, "cron", "c", "", "Cron expression (e.g. '0 9 * * *')")
-	cmd.Flags().StringVar(&to, "to", "", "Recipient for delivery")
-	cmd.Flags().StringVar(&channel, "channel", "", "Channel for delivery")
+	cmd.Flags().StringVar(&to, "to", "direct", "Recipient for delivery")
+	cmd.Flags().StringVar(&channel, "channel", "cli", "Channel for delivery")
 
 	_ = cmd.MarkFlagRequired("name")
 	_ = cmd.MarkFlagRequired("message")

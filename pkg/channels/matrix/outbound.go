@@ -29,7 +29,14 @@ func markdownToHTML(md string) string {
 	return strings.TrimSpace(string(markdown.ToHTML([]byte(md), p, renderer)))
 }
 
-func (c *MatrixChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *MatrixChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *MatrixChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
@@ -60,8 +67,15 @@ func (c *MatrixChannel) messageContent(text string) *event.MessageEventContent {
 	return mc
 }
 
-// SendMedia implements channels.MediaSender.
-func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+// DeliverMedia implements channels.MediaSender.
+func (c *MatrixChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *MatrixChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

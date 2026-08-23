@@ -97,9 +97,18 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		cfg.Tools.Exec.AllowRemote = config.DefaultConfig().Tools.Exec.AllowRemote
 	}
 
-	// Load existing config and copy security credentials before validation,
-	// so that security-managed fields (e.g. mintclaw token) are available.
-	err = cfg.SecurityCopyFrom(h.configPath)
+	// Copy security credentials from the same durable revision the client
+	// replaced, while allowing the replacement to remove registry entries.
+	current, err := h.configRepository().ReadDurable()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if current.Revision != expectedRevision {
+		writeConfigConflict(w, &config.ConflictError{Expected: expectedRevision, Actual: current.Revision})
+		return
+	}
+	err = cfg.SecurityCopyForReplacement(h.configPath, current.Config)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to apply security config: %v", err), http.StatusInternalServerError)
 		return
@@ -253,7 +262,7 @@ func applyConfigMergePatch(current *config.Config, patch map[string]any, configP
 	}
 	updated.Session.ApplyDmScope()
 	updated.Session.DeriveDmScope()
-	if err = updated.SecurityCopyFrom(configPath); err != nil {
+	if err = updated.SecurityCopyForReplacement(configPath, current); err != nil {
 		return nil, fmt.Errorf("apply security config: %w", err)
 	}
 	applyConfigSecretsFromMap(&updated, base)
@@ -272,8 +281,8 @@ func (h *Handler) handleResetConfig(w http.ResponseWriter, r *http.Request) {
 		defaults := config.DefaultConfig()
 		defaults.Session.ApplyDmScope()
 		defaults.Session.DeriveDmScope()
-		if securityErr := defaults.SecurityCopyFrom(h.configPath); securityErr != nil {
-			logger.WarnF("could not preserve security config", map[string]any{"error": securityErr})
+		if securityErr := defaults.SecurityCopyForReplacement(h.configPath, cfg); securityErr != nil {
+			return fmt.Errorf("preserve security config: %w", securityErr)
 		}
 		*cfg = *defaults
 		return nil
@@ -371,6 +380,9 @@ func validateConfig(cfg *config.Config) []string {
 
 	// Validate model_list entries
 	if err := cfg.ValidateModelList(); err != nil {
+		errs = append(errs, err.Error())
+	}
+	if err := cfg.ValidateModelReferences(); err != nil {
 		errs = append(errs, err.Error())
 	}
 
@@ -700,11 +712,7 @@ func getSecretString(m map[string]any, key string) (string, bool) {
 }
 
 func applyConfigSecretsFromMap(cfg *config.Config, raw map[string]any) {
-	channelsMap, hasChannels := asMapField(raw, "channel_list")
-	if !hasChannels {
-		return
-	}
-
+	channelsMap, _ := asMapField(raw, "channel_list")
 	for chName, chData := range channelsMap {
 		chMap, ok := chData.(map[string]any)
 		if !ok {
@@ -742,43 +750,19 @@ func applyConfigSecretsFromMap(cfg *config.Config, raw map[string]any) {
 	if !hasSkills {
 		return
 	}
-	if github, hasGithub := asMapField(skills, "github"); hasGithub {
-		if token, hasToken := getSecretString(github, "token"); hasToken {
-			cfg.Tools.Skills.Github.Token.Set(token) //nolint:staticcheck // legacy tools.skills.github PATCH compat
-		}
-	}
-	if registries, hasRegistries := asMapField(skills, "registries"); hasRegistries {
-		for registryName, rawRegistry := range registries {
-			registryMap, ok := rawRegistry.(map[string]any)
-			if !ok {
-				continue
-			}
-			if authToken, hasAuthToken := getSecretString(registryMap, "auth_token"); hasAuthToken {
-				registryCfg, _ := cfg.Tools.Skills.Registries.Get(registryName)
-				registryCfg.AuthToken.Set(authToken)
-				cfg.Tools.Skills.Registries.Set(registryName, registryCfg)
-			}
-		}
-		return
-	}
-
-	registriesList, hasRegistries := skills["registries"].([]any)
+	registries, hasRegistries := asMapField(skills, "registries")
 	if !hasRegistries {
 		return
 	}
-	for _, rawRegistry := range registriesList {
+	for registryName, rawRegistry := range registries {
 		registryMap, ok := rawRegistry.(map[string]any)
 		if !ok {
 			continue
 		}
-		name, _ := registryMap["name"].(string)
-		if name == "" {
-			continue
-		}
 		if authToken, hasAuthToken := getSecretString(registryMap, "auth_token"); hasAuthToken {
-			registryCfg, _ := cfg.Tools.Skills.Registries.Get(name)
+			registryCfg, _ := cfg.Tools.Skills.Registries.Get(registryName)
 			registryCfg.AuthToken.Set(authToken)
-			cfg.Tools.Skills.Registries.Set(name, registryCfg)
+			cfg.Tools.Skills.Registries.Set(registryName, registryCfg)
 		}
 	}
 }

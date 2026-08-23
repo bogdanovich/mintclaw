@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
@@ -27,6 +28,7 @@ type toolFeedbackOperations struct {
 type toolFeedbackSendResult struct {
 	messageIDs []string
 	editable   bool
+	delivery   *DeliveryResult[bus.OutboundMessage]
 }
 
 type trackedToolFeedbackMessage struct {
@@ -130,13 +132,14 @@ func (c *ToolFeedbackCoordinator) Deliver(
 	if send == nil {
 		return nil, ErrSendFailed
 	}
-	return c.deliver(ctx, key, "", chatID, content, operations, func(
+	result, err := c.deliver(ctx, key, "", chatID, content, operations, func(
 		sendCtx context.Context,
 		prepared string,
 	) (toolFeedbackSendResult, error) {
 		messageIDs, err := send(sendCtx, prepared)
 		return toolFeedbackSendResult{messageIDs: messageIDs, editable: operations.edit != nil}, err
 	})
+	return result.messageIDs, err
 }
 
 func (c *ToolFeedbackCoordinator) deliver(
@@ -147,20 +150,20 @@ func (c *ToolFeedbackCoordinator) deliver(
 	content string,
 	operations toolFeedbackOperations,
 	send func(context.Context, string) (toolFeedbackSendResult, error),
-) ([]string, error) {
+) (toolFeedbackSendResult, error) {
 	if send == nil {
-		return nil, ErrSendFailed
+		return toolFeedbackSendResult{}, ErrSendFailed
 	}
 	if c == nil || strings.TrimSpace(key) == "" {
 		result, err := send(ctx, content)
-		return result.messageIDs, err
+		return result, err
 	}
 	key = strings.TrimSpace(key)
 	content = strings.TrimSpace(content)
 	separate := c.separateMessages()
 	entry := c.lockEntry(key)
 	if entry == nil {
-		return nil, ErrNotRunning
+		return toolFeedbackSendResult{}, ErrNotRunning
 	}
 	defer entry.opMu.Unlock()
 	c.retryPendingCleanup(ctx, key, entry)
@@ -169,14 +172,14 @@ func (c *ToolFeedbackCoordinator) deliver(
 	generation = strings.TrimSpace(generation)
 	if _, terminalized := entry.terminalizedGenerations[generation]; generation != "" && terminalized {
 		entry.mu.Unlock()
-		return nil, nil
+		return toolFeedbackSendResult{}, nil
 	}
 	if entry.terminal {
 		_, generationActive := entry.activeGenerations[generation]
 		freshGeneration := generation != "" && !generationActive
 		if !freshGeneration && (entry.terminalUntil.IsZero() || time.Now().Before(entry.terminalUntil)) {
 			entry.mu.Unlock()
-			return nil, nil
+			return toolFeedbackSendResult{}, nil
 		}
 		resetToolFeedbackTerminal(entry)
 	}
@@ -193,7 +196,7 @@ func (c *ToolFeedbackCoordinator) deliver(
 		entry.mu.Lock()
 		if entry.terminal {
 			entry.mu.Unlock()
-			return nil, nil
+			return toolFeedbackSendResult{}, nil
 		}
 	}
 	if entry.current.messageID != "" {
@@ -228,14 +231,14 @@ func (c *ToolFeedbackCoordinator) deliver(
 			c.animator.Clear(key)
 		}
 		if !handled {
-			return []string{current.messageID}, nil
+			return toolFeedbackSendResult{messageIDs: []string{current.messageID}}, nil
 		}
 		if err == nil {
-			return []string{updatedID}, nil
+			return toolFeedbackSendResult{messageIDs: []string{updatedID}}, nil
 		}
 		if !errors.Is(err, ErrSendFailed) || current.operations.delete == nil ||
 			terminal || retired || !unchanged {
-			return nil, err
+			return toolFeedbackSendResult{}, err
 		}
 		return c.replaceTrackedMessage(ctx, key, entry, current, chatID, content, operations, send)
 	}
@@ -260,7 +263,7 @@ func (c *ToolFeedbackCoordinator) deliver(
 		if result.editable && operations.edit != nil {
 			c.animator.RecordEdited(key, messageIDs[0], content)
 		}
-		return messageIDs, err
+		return result, err
 	}
 	entry.mu.Unlock()
 
@@ -268,12 +271,15 @@ func (c *ToolFeedbackCoordinator) deliver(
 		c.cleanupLateMessage(ctx, key, entry, trackedToolFeedbackMessage{
 			chatID: chatID, messageID: messageIDs[0], operations: operations,
 		})
-		messageIDs = nil
+		result.messageIDs = nil
+		if result.delivery != nil {
+			result.delivery.MessageIDs = nil
+		}
 	}
 	if !terminal && !retired {
 		c.retireIdleEntryLocked(key, entry)
 	}
-	return messageIDs, err
+	return result, err
 }
 
 func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
@@ -285,11 +291,11 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 	content string,
 	operations toolFeedbackOperations,
 	send func(context.Context, string) (toolFeedbackSendResult, error),
-) ([]string, error) {
+) (toolFeedbackSendResult, error) {
 	entry.mu.Lock()
 	if entry.terminal || entry.retired || entry.current.messageID != current.messageID {
 		entry.mu.Unlock()
-		return nil, nil
+		return toolFeedbackSendResult{}, nil
 	}
 	entry.sending = true
 	entry.mu.Unlock()
@@ -308,9 +314,12 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 			c.cleanupLateMessage(ctx, key, entry, trackedToolFeedbackMessage{
 				chatID: chatID, messageID: messageIDs[0], operations: operations,
 			})
-			messageIDs = nil
+			result.messageIDs = nil
+			if result.delivery != nil {
+				result.delivery.MessageIDs = nil
+			}
 		}
-		return messageIDs, sendErr
+		return result, sendErr
 	}
 	replacement := trackedToolFeedbackMessage{
 		chatID: chatID, messageID: messageIDs[0],
@@ -331,9 +340,9 @@ func (c *ToolFeedbackCoordinator) replaceTrackedMessage(
 		entry.pendingCleanup = append(entry.pendingCleanup, newPendingToolFeedbackCleanup(current, cleanupErr))
 		entry.mu.Unlock()
 		c.scheduleCleanupMaintenance(key, entry, toolFeedbackCleanupRetryDelay)
-		return messageIDs, sendErr
+		return result, sendErr
 	}
-	return messageIDs, sendErr
+	return result, sendErr
 }
 
 func (c *ToolFeedbackCoordinator) retryPendingCleanup(

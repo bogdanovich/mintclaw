@@ -485,6 +485,11 @@ func collectUnknownJSONFields(raw any, targetType reflect.Type, path string) []s
 	if targetType == nil {
 		return nil
 	}
+	// Registry-specific fields are intentionally open-ended and decoded into
+	// SkillRegistryConfig.Param by its strict custom decoder.
+	if targetType == reflect.TypeOf(SkillRegistryConfig{}) {
+		return nil
+	}
 
 	switch targetType.Kind() {
 	case reflect.Struct:

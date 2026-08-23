@@ -304,7 +304,7 @@ func DefaultConfig() *Config {
 			},
 
 			// Azure OpenAI - https://portal.azure.com
-			// model_name is a user-friendly alias; the model field's path after "azure/" is your deployment name
+			// model_name is a user-friendly alias; model is the Azure deployment name.
 			{
 				ModelName: "azure-gpt5",
 				Provider:  "azure",
@@ -427,14 +427,12 @@ func DefaultConfig() *Config {
 					Enabled: true,
 				},
 				Registries: SkillsRegistriesConfig{
-					&SkillRegistryConfig{
-						Name:    "clawhub",
+					"clawhub": {
 						Enabled: true,
 						BaseURL: "https://clawhub.ai",
 						Param:   map[string]any{},
 					},
-					&SkillRegistryConfig{
-						Name:    "github",
+					"github": {
 						Enabled: true,
 						BaseURL: "https://github.com",
 						Param:   map[string]any{},

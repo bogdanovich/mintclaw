@@ -7,6 +7,8 @@ package config
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,8 +19,8 @@ func TestGetModelConfig_Found(t *testing.T) {
 	cfg := &Config{
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
-			{ModelName: "test-model", Model: "openai/gpt-4o", APIKeys: SimpleSecureStrings("key1")},
-			{ModelName: "other-model", Model: "anthropic/claude", APIKeys: SimpleSecureStrings("key2")},
+			{ModelName: "test-model", Provider: "openai", Model: "gpt-4o", APIKeys: SimpleSecureStrings("key1")},
+			{ModelName: "other-model", Provider: "anthropic", Model: "claude", APIKeys: SimpleSecureStrings("key2")},
 		},
 	}
 
@@ -26,15 +28,15 @@ func TestGetModelConfig_Found(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModelConfig() error = %v", err)
 	}
-	if result.Model != "openai/gpt-4o" {
-		t.Errorf("Model = %q, want %q", result.Model, "openai/gpt-4o")
+	if result.Model != "gpt-4o" {
+		t.Errorf("Model = %q, want %q", result.Model, "gpt-4o")
 	}
 }
 
 func TestGetModelConfig_NotFound(t *testing.T) {
 	cfg := &Config{
 		ModelList: []*ModelConfig{
-			{ModelName: "test-model", Model: "openai/gpt-4o", APIKeys: SimpleSecureStrings("key1")},
+			{ModelName: "test-model", Provider: "openai", Model: "gpt-4o", APIKeys: SimpleSecureStrings("key1")},
 		},
 	}
 
@@ -58,9 +60,9 @@ func TestGetModelConfig_EmptyList(t *testing.T) {
 func TestGetModelConfig_RoundRobin(t *testing.T) {
 	cfg := &Config{
 		ModelList: []*ModelConfig{
-			{ModelName: "lb-model", Model: "openai/gpt-4o-1", APIKeys: SimpleSecureStrings("key1")},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-2", APIKeys: SimpleSecureStrings("key2")},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-3", APIKeys: SimpleSecureStrings("key3")},
+			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-1", APIKeys: SimpleSecureStrings("key1")},
+			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-2", APIKeys: SimpleSecureStrings("key2")},
+			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-3", APIKeys: SimpleSecureStrings("key3")},
 		},
 	}
 
@@ -87,18 +89,18 @@ func TestGetModelConfig_RoundRobinStartsFromFirstMatch(t *testing.T) {
 
 	cfg := &Config{
 		ModelList: []*ModelConfig{
-			{ModelName: "lb-model", Model: "openai/gpt-4o-1", APIKeys: SimpleSecureStrings("key1")},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-2", APIKeys: SimpleSecureStrings("key2")},
-			{ModelName: "lb-model", Model: "openai/gpt-4o-3", APIKeys: SimpleSecureStrings("key3")},
+			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-1", APIKeys: SimpleSecureStrings("key1")},
+			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-2", APIKeys: SimpleSecureStrings("key2")},
+			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-3", APIKeys: SimpleSecureStrings("key3")},
 		},
 	}
 
 	wantOrder := []string{
-		"openai/gpt-4o-1",
-		"openai/gpt-4o-2",
-		"openai/gpt-4o-3",
-		"openai/gpt-4o-1",
-		"openai/gpt-4o-2",
+		"gpt-4o-1",
+		"gpt-4o-2",
+		"gpt-4o-3",
+		"gpt-4o-1",
+		"gpt-4o-2",
 	}
 
 	for i, want := range wantOrder {
@@ -115,8 +117,18 @@ func TestGetModelConfig_RoundRobinStartsFromFirstMatch(t *testing.T) {
 func TestGetModelConfig_Concurrent(t *testing.T) {
 	cfg := &Config{
 		ModelList: []*ModelConfig{
-			{ModelName: "concurrent-model", Model: "openai/gpt-4o-1", APIKeys: SimpleSecureStrings("key1")},
-			{ModelName: "concurrent-model", Model: "openai/gpt-4o-2", APIKeys: SimpleSecureStrings("key2")},
+			{
+				ModelName: "concurrent-model",
+				Provider:  "openai",
+				Model:     "gpt-4o-1",
+				APIKeys:   SimpleSecureStrings("key1"),
+			},
+			{
+				ModelName: "concurrent-model",
+				Provider:  "openai",
+				Model:     "gpt-4o-2",
+				APIKeys:   SimpleSecureStrings("key2"),
+			},
 		},
 	}
 
@@ -195,31 +207,46 @@ func TestModelConfig_Validate(t *testing.T) {
 		{
 			name: "valid config",
 			config: ModelConfig{
-				ModelName: "test",
-				Model:     "openai/gpt-4o",
+				ModelName: "test", Provider: "openai", Model: "gpt-4o",
 			},
 			wantErr: false,
 		},
 		{
 			name: "valid tool schema transform",
 			config: ModelConfig{
-				ModelName:           "test",
-				Model:               "openai/gpt-4o",
+				ModelName: "test", Provider: "openai", Model: "gpt-4o",
 				ToolSchemaTransform: "simple",
 			},
 			wantErr: false,
 		},
 		{
-			name: "missing model_name",
-			config: ModelConfig{
-				Model: "openai/gpt-4o",
-			},
+			name:    "missing model_name",
+			config:  ModelConfig{Provider: "openai", Model: "gpt-4o"},
 			wantErr: true,
 		},
 		{
 			name: "missing model",
 			config: ModelConfig{
-				ModelName: "test",
+				ModelName: "test", Provider: "openai",
+			},
+			wantErr: true,
+		},
+		{
+			name:    "missing provider",
+			config:  ModelConfig{ModelName: "test", Model: "gpt-4o"},
+			wantErr: true,
+		},
+		{
+			name: "provider with surrounding whitespace",
+			config: ModelConfig{
+				ModelName: "test", Provider: " openai ", Model: "gpt-4o",
+			},
+			wantErr: true,
+		},
+		{
+			name: "model_name with surrounding whitespace",
+			config: ModelConfig{
+				ModelName: " test ", Provider: "openai", Model: "gpt-4o",
 			},
 			wantErr: true,
 		},
@@ -231,8 +258,7 @@ func TestModelConfig_Validate(t *testing.T) {
 		{
 			name: "invalid tool schema transform",
 			config: ModelConfig{
-				ModelName:           "test",
-				Model:               "openai/gpt-4o",
+				ModelName: "test", Provider: "openai", Model: "gpt-4o",
 				ToolSchemaTransform: "invalid",
 			},
 			wantErr: true,
@@ -287,8 +313,8 @@ func TestConfig_ValidateModelList(t *testing.T) {
 			name: "valid list",
 			config: &Config{
 				ModelList: []*ModelConfig{
-					{ModelName: "test1", Model: "openai/gpt-4o"},
-					{ModelName: "test2", Model: "anthropic/claude"},
+					{ModelName: "test1", Provider: "openai", Model: "gpt-4o"},
+					{ModelName: "test2", Provider: "anthropic", Model: "claude"},
 				},
 			},
 			wantErr: false,
@@ -297,8 +323,8 @@ func TestConfig_ValidateModelList(t *testing.T) {
 			name: "invalid entry",
 			config: &Config{
 				ModelList: []*ModelConfig{
-					{ModelName: "test1", Model: "openai/gpt-4o"},
-					{ModelName: "", Model: "anthropic/claude"}, // missing model_name
+					{ModelName: "test1", Provider: "openai", Model: "gpt-4o"},
+					{ModelName: "", Provider: "anthropic", Model: "claude"}, // missing model_name
 				},
 			},
 			wantErr: true,
@@ -324,9 +350,9 @@ func TestConfig_ValidateModelList(t *testing.T) {
 			name: "duplicate model_name non-adjacent for load balancing",
 			config: &Config{
 				ModelList: []*ModelConfig{
-					{ModelName: "model-a", Model: "openai/gpt-4o"},
-					{ModelName: "model-b", Model: "anthropic/claude"},
-					{ModelName: "model-a", Model: "openai/gpt-4-turbo"},
+					{ModelName: "model-a", Provider: "openai", Model: "gpt-4o"},
+					{ModelName: "model-b", Provider: "anthropic", Model: "claude"},
+					{ModelName: "model-a", Provider: "openai", Model: "gpt-4-turbo"},
 				},
 			},
 			wantErr: false, // Changed: duplicates are allowed for load balancing
@@ -345,6 +371,216 @@ func TestConfig_ValidateModelList(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestConfig_ValidateModelReferences(t *testing.T) {
+	newConfig := func() *Config {
+		return &Config{
+			ModelList: []*ModelConfig{
+				{ModelName: "primary", Provider: "openai", Model: "gpt-5.4"},
+				{ModelName: "fallback", Provider: "anthropic", Model: "claude-sonnet-4-6"},
+				{ModelName: "provider/native", Provider: "nvidia", Model: "z-ai/glm-5.1"},
+			},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{
+			name: "all selectors use exact model names",
+			mutate: func(cfg *Config) {
+				cfg.ModelList[0].Fallbacks = []string{"fallback"}
+				cfg.ModelList[0].Capabilities = &ModelCapabilities{Vision: &ModelCapabilityOverride{
+					Model:     "provider/native",
+					Fallbacks: []string{"fallback"},
+				}}
+				cfg.Agents.Defaults.ModelName = "primary"
+				cfg.Agents.Defaults.ModelFallbacks = []string{"fallback"}
+				cfg.Agents.Defaults.Routing = &RoutingConfig{LightModel: "provider/native"}
+				cfg.Agents.Defaults.Subagents = &SubagentsConfig{Model: &AgentModelConfig{
+					Primary:   "fallback",
+					Fallbacks: []string{"primary"},
+				}}
+				cfg.Agents.List = []AgentConfig{{
+					Model: &AgentModelConfig{Primary: "provider/native", Fallbacks: []string{"fallback"}},
+					Subagents: &SubagentsConfig{Model: &AgentModelConfig{
+						Primary:   "primary",
+						Fallbacks: []string{"provider/native"},
+					}},
+				}}
+				cfg.Voice.ModelName = "provider/native"
+				cfg.Voice.TTSModelName = "fallback"
+			},
+		},
+		{
+			name: "load balanced aliases remain valid",
+			mutate: func(cfg *Config) {
+				cfg.ModelList = append(
+					cfg.ModelList,
+					&ModelConfig{ModelName: "primary", Provider: "openai", Model: "gpt-5.4-mini"},
+				)
+				cfg.Agents.Defaults.ModelName = "primary"
+			},
+		},
+		{
+			name: "default model",
+			mutate: func(cfg *Config) {
+				cfg.Agents.Defaults.ModelName = "openai/gpt-5.4"
+			},
+			wantErr: `agents.defaults.model_name references unknown model_name "openai/gpt-5.4"`,
+		},
+		{
+			name: "default fallback",
+			mutate: func(cfg *Config) {
+				cfg.Agents.Defaults.ModelFallbacks = []string{""}
+			},
+			wantErr: "agents.defaults.model_fallbacks[0] must not be empty",
+		},
+		{
+			name: "model fallback",
+			mutate: func(cfg *Config) {
+				cfg.ModelList[0].Fallbacks = []string{"openai/gpt-5.4"}
+			},
+			wantErr: `model_list[0].fallbacks[0] references unknown model_name "openai/gpt-5.4"`,
+		},
+		{
+			name: "vision model",
+			mutate: func(cfg *Config) {
+				cfg.ModelList[0].Capabilities = &ModelCapabilities{Vision: &ModelCapabilityOverride{Model: "unknown"}}
+			},
+			wantErr: `model_list[0].capabilities.vision.model references unknown model_name "unknown"`,
+		},
+		{
+			name: "vision fallback",
+			mutate: func(cfg *Config) {
+				cfg.ModelList[0].Capabilities = &ModelCapabilities{Vision: &ModelCapabilityOverride{
+					Fallbacks: []string{"unknown"},
+				}}
+			},
+			wantErr: `model_list[0].capabilities.vision.fallbacks[0] references unknown model_name "unknown"`,
+		},
+		{
+			name: "routing light model",
+			mutate: func(cfg *Config) {
+				cfg.Agents.Defaults.Routing = &RoutingConfig{LightModel: "unknown"}
+			},
+			wantErr: `agents.defaults.routing.light_model references unknown model_name "unknown"`,
+		},
+		{
+			name: "default subagent model",
+			mutate: func(cfg *Config) {
+				cfg.Agents.Defaults.Subagents = &SubagentsConfig{Model: &AgentModelConfig{Primary: "unknown"}}
+			},
+			wantErr: `agents.defaults.subagents.model.primary references unknown model_name "unknown"`,
+		},
+		{
+			name: "default subagent fallback",
+			mutate: func(cfg *Config) {
+				cfg.Agents.Defaults.Subagents = &SubagentsConfig{Model: &AgentModelConfig{
+					Fallbacks: []string{"unknown"},
+				}}
+			},
+			wantErr: `agents.defaults.subagents.model.fallbacks[0] references unknown model_name "unknown"`,
+		},
+		{
+			name: "agent model",
+			mutate: func(cfg *Config) {
+				cfg.Agents.List = []AgentConfig{{Model: &AgentModelConfig{Primary: "unknown"}}}
+			},
+			wantErr: `agents.list[0].model.primary references unknown model_name "unknown"`,
+		},
+		{
+			name: "agent fallback",
+			mutate: func(cfg *Config) {
+				cfg.Agents.List = []AgentConfig{{Model: &AgentModelConfig{Fallbacks: []string{"unknown"}}}}
+			},
+			wantErr: `agents.list[0].model.fallbacks[0] references unknown model_name "unknown"`,
+		},
+		{
+			name: "agent subagent model",
+			mutate: func(cfg *Config) {
+				cfg.Agents.List = []AgentConfig{{
+					Subagents: &SubagentsConfig{Model: &AgentModelConfig{Primary: "unknown"}},
+				}}
+			},
+			wantErr: `agents.list[0].subagents.model.primary references unknown model_name "unknown"`,
+		},
+		{
+			name: "agent subagent fallback",
+			mutate: func(cfg *Config) {
+				cfg.Agents.List = []AgentConfig{{
+					Subagents: &SubagentsConfig{Model: &AgentModelConfig{Fallbacks: []string{"unknown"}}},
+				}}
+			},
+			wantErr: `agents.list[0].subagents.model.fallbacks[0] references unknown model_name "unknown"`,
+		},
+		{
+			name: "voice model",
+			mutate: func(cfg *Config) {
+				cfg.Voice.ModelName = "unknown"
+			},
+			wantErr: `voice.model_name references unknown model_name "unknown"`,
+		},
+		{
+			name: "voice tts model",
+			mutate: func(cfg *Config) {
+				cfg.Voice.TTSModelName = "unknown"
+			},
+			wantErr: `voice.tts_model_name references unknown model_name "unknown"`,
+		},
+		{
+			name: "surrounding whitespace is rejected",
+			mutate: func(cfg *Config) {
+				cfg.Agents.Defaults.ModelName = " primary "
+			},
+			wantErr: "agents.defaults.model_name must not have surrounding whitespace",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := newConfig()
+			tt.mutate(cfg)
+			err := cfg.ValidateModelReferences()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateModelReferences() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ValidateModelReferences() error = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadConfigRejectsUnknownModelReferenceWithoutRewriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	before := []byte(`{
+		"version": 3,
+		"agents": {"defaults": {"model_name": "openai/gpt-5.4"}},
+		"model_list": [{"model_name": "primary", "provider": "openai", "model": "gpt-5.4"}]
+	}`)
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(),
+		`agents.defaults.model_name references unknown model_name "openai/gpt-5.4"`) {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("LoadConfig() rewrote rejected config:\n%s", after)
 	}
 }
 

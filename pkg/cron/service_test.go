@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -74,11 +75,11 @@ func TestSaveStore_FilePermissions(t *testing.T) {
 
 	_, err := cs.AddJob(
 		"test",
-		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
-		"",
-		"hello",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: int64Ptr(60000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
@@ -111,7 +112,11 @@ func TestCronService_CRUD(t *testing.T) {
 
 	// Test AddJob
 	at := time.Now().Add(time.Hour).UnixMilli()
-	job, err := cs.AddJob("Task1", CronSchedule{Kind: "at", AtMS: &at}, "", "msg", "ch", "to")
+	job, err := cs.AddJob(
+		"Task1",
+		CronSchedule{Kind: "at", AtMS: &at},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "ch", To: "to"},
+	)
 	if err != nil || job.ID == "" {
 		t.Fatalf("AddJob failed: %v", err)
 	}
@@ -137,9 +142,8 @@ func TestCronService_CRUD(t *testing.T) {
 	}
 
 	// Test RemoveJob
-	removed := cs.RemoveJob(job.ID)
-	if !removed || len(cs.store.Jobs) != 0 {
-		t.Error("RemoveJob failed")
+	if err := cs.RemoveJob(job.ID); err != nil || len(cs.store.Jobs) != 0 {
+		t.Errorf("RemoveJob failed: %v", err)
 	}
 }
 
@@ -150,11 +154,11 @@ func TestCronService_GetJobReturnsCopy(t *testing.T) {
 	everyMS := int64(60_000)
 	job, err := cs.AddJob(
 		"Task1",
-		CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"",
-		"msg",
-		"ch",
-		"to",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: &everyMS,
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "ch", To: "to"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
@@ -197,7 +201,11 @@ func TestCronService_UpdateJobRecomputesNextRunOnScheduleOrEnabledChange(t *test
 	defer os.Remove(path)
 
 	at := time.Now().Add(time.Hour).UnixMilli()
-	job, err := cs.AddJob("Task1", CronSchedule{Kind: "at", AtMS: &at}, "", "msg", "ch", "to")
+	job, err := cs.AddJob(
+		"Task1",
+		CronSchedule{Kind: "at", AtMS: &at},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "ch", To: "to"},
+	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
 	}
@@ -249,11 +257,11 @@ func TestCronService_UpdateJobPreservesRunStateOnPayloadOnlyChange(t *testing.T)
 	everyMS := int64(60_000)
 	job, err := cs.AddJob(
 		"Task1",
-		CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"",
-		"msg",
-		"ch",
-		"to",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: &everyMS,
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "ch", To: "to"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
@@ -369,7 +377,14 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 
 	// Add a job then runs 100ms from now
 	target := time.Now().Add(100 * time.Millisecond).UnixMilli()
-	job, _ := cs.AddJob("FastJob", CronSchedule{Kind: "at", AtMS: &target}, "", "", "", "")
+	job, err := cs.AddJob(
+		"FastJob",
+		CronSchedule{Kind: ScheduleAt, AtMS: &target},
+		CronPayload{Kind: PayloadAgentTurn, Message: "run", Channel: "cli", To: "direct"},
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
 
 	// Check for job execution with a timeout
 	success := false
@@ -388,7 +403,7 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 		t.Error("Job was not executed in time")
 	}
 
-	// check that the job is removed after execution (DeleteAfterRun = true)
+	// One-time jobs are removed after execution by schedule kind.
 	status := cs.Status()
 	if status["jobs"].(int) != 0 {
 		t.Errorf("Job should be deleted after run, got count: %v", status["jobs"])
@@ -402,7 +417,11 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 	// write a job and persist
 	cs1 := NewCronService(tmpFile, nil)
 	at := int64(2000000000000)
-	if _, err := cs1.AddJob("PersistMe", CronSchedule{Kind: "at", AtMS: &at}, "", "payload", "ch1", ""); err != nil {
+	if _, err := cs1.AddJob(
+		"PersistMe",
+		CronSchedule{Kind: ScheduleAt, AtMS: &at},
+		CronPayload{Kind: PayloadAgentTurn, Message: "payload", Channel: "ch1", To: "recipient"},
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -433,11 +452,152 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 	}
 }
 
+func TestCronServiceRejectsNonCurrentStoreContract(t *testing.T) {
+	validJob := `{
+  "id":"job-1",
+  "name":"job",
+  "enabled":true,
+  "schedule":{"kind":"every","everyMs":60000},
+  "payload":{"kind":"agent_turn","message":"run","channel":"cli","to":"direct"},
+  "state":{},
+  "createdAtMs":1,
+  "updatedAtMs":1
+}`
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "previous version",
+			raw:  `{"version":1,"jobs":[]}`,
+			want: "unsupported cron store version 1",
+		},
+		{
+			name: "legacy delete flag",
+			raw: fmt.Sprintf(
+				`{"version":%d,"jobs":[%s]}`,
+				CurrentStoreVersion,
+				strings.Replace(validJob, `"state":{}`, `"state":{},"deleteAfterRun":false`, 1),
+			),
+			want: "unknown field \"deleteAfterRun\"",
+		},
+		{
+			name: "unknown top level field",
+			raw:  fmt.Sprintf(`{"version":%d,"jobs":[],"legacy":true}`, CurrentStoreVersion),
+			want: "unknown field \"legacy\"",
+		},
+		{
+			name: "missing payload kind",
+			raw: fmt.Sprintf(
+				`{"version":%d,"jobs":[%s]}`,
+				CurrentStoreVersion,
+				strings.Replace(validJob, `"kind":"agent_turn",`, "", 1),
+			),
+			want: `unsupported cron payload kind ""`,
+		},
+		{
+			name: "invalid timezone",
+			raw: fmt.Sprintf(
+				`{"version":%d,"jobs":[%s]}`,
+				CurrentStoreVersion,
+				strings.Replace(
+					validJob,
+					`"schedule":{"kind":"every","everyMs":60000}`,
+					`"schedule":{"kind":"cron","expr":"0 9 * * *","tz":"Not/A_Timezone"}`,
+					1,
+				),
+			),
+			want: "invalid cron timezone",
+		},
+		{
+			name: "null jobs",
+			raw:  fmt.Sprintf(`{"version":%d,"jobs":null}`, CurrentStoreVersion),
+			want: "cron store jobs must be an array",
+		},
+		{
+			name: "duplicate ids",
+			raw:  fmt.Sprintf(`{"version":%d,"jobs":[%s,%s]}`, CurrentStoreVersion, validJob, validJob),
+			want: `duplicates id "job-1"`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "jobs.json")
+			if err := os.WriteFile(path, []byte(test.raw), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			if err := NewCronService(path, nil).Load(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Load() error = %v, want substring %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestAddJobRequiresCurrentDefinition(t *testing.T) {
+	everyMS := int64(60_000)
+	validSchedule := CronSchedule{Kind: ScheduleEvery, EveryMS: &everyMS}
+	validPayload := CronPayload{
+		Kind: PayloadAgentTurn, Message: "run", Channel: "cli", To: "direct",
+	}
+	tests := []struct {
+		name     string
+		jobName  string
+		schedule CronSchedule
+		payload  CronPayload
+	}{
+		{name: "missing name", schedule: validSchedule, payload: validPayload},
+		{name: "missing schedule kind", jobName: "job", payload: validPayload},
+		{
+			name: "multiple schedule shapes", jobName: "job",
+			schedule: CronSchedule{Kind: ScheduleEvery, EveryMS: &everyMS, Expr: "0 9 * * *"},
+			payload:  validPayload,
+		},
+		{name: "missing payload kind", jobName: "job", schedule: validSchedule, payload: CronPayload{
+			Message: "run", Channel: "cli", To: "direct",
+		}},
+		{name: "agent payload with command", jobName: "job", schedule: validSchedule, payload: CronPayload{
+			Kind: PayloadAgentTurn, Message: "run", Command: "date", Channel: "cli", To: "direct",
+		}},
+		{name: "missing delivery target", jobName: "job", schedule: validSchedule, payload: CronPayload{
+			Kind: PayloadAgentTurn, Message: "run",
+		}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "jobs.json")
+			service := NewCronService(path, nil)
+			if _, err := service.AddJob(test.jobName, test.schedule, test.payload); err == nil {
+				t.Fatal("AddJob() error = nil")
+			}
+			if jobs := service.ListJobs(true); len(jobs) != 0 {
+				t.Fatalf("ListJobs() = %#v, want empty store", jobs)
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("invalid job persisted store: Stat() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestUpdateJobRejectsNil(t *testing.T) {
+	service := NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
+	if err := service.UpdateJob(nil); err == nil {
+		t.Fatal("UpdateJob(nil) error = nil")
+	}
+}
+
 func TestCronService_ConcurrentAccess(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.json")
 	cs := NewCronService(path, nil)
 	at := time.Now().Add(time.Hour).UnixMilli()
-	seed, err := cs.AddJob("seed", CronSchedule{Kind: "at", AtMS: &at}, "", "", "", "")
+	seed, err := cs.AddJob(
+		"seed",
+		CronSchedule{Kind: ScheduleAt, AtMS: &at},
+		CronPayload{Kind: PayloadAgentTurn, Message: "seed", Channel: "cli", To: "direct"},
+	)
 	if err != nil {
 		t.Fatalf("AddJob(seed): %v", err)
 	}
@@ -457,11 +617,8 @@ func TestCronService_ConcurrentAccess(t *testing.T) {
 				jobAt := time.Now().Add(time.Hour).UnixMilli()
 				if _, addErr := cs.AddJob(
 					fmt.Sprintf("Job-%d-%d", id, j),
-					CronSchedule{Kind: "at", AtMS: &jobAt},
-					"",
-					"",
-					"",
-					"",
+					CronSchedule{Kind: ScheduleAt, AtMS: &jobAt},
+					CronPayload{Kind: PayloadAgentTurn, Message: "run", Channel: "cli", To: "direct"},
 				); addErr != nil {
 					errCh <- fmt.Errorf("worker %d AddJob(%d): %w", id, j, addErr)
 				}
@@ -536,7 +693,7 @@ func TestCronService_ConcurrentAccess(t *testing.T) {
 	}
 }
 
-func TestAddJobWithPayload_RollsBackLiveStoreOnSaveFailure(t *testing.T) {
+func TestAddJob_RollsBackLiveStoreOnSaveFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Make the store parent a regular file so every save attempt fails.
 	blocker := filepath.Join(tmpDir, "blocker")
@@ -546,16 +703,57 @@ func TestAddJobWithPayload_RollsBackLiveStoreOnSaveFailure(t *testing.T) {
 
 	cs := NewCronService(filepath.Join(blocker, "jobs.json"), nil)
 
-	_, err := cs.AddJobWithPayload(
+	_, err := cs.AddJob(
 		"cmd",
 		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
-		CronPayload{Kind: "agent_turn", Message: "msg", Command: "echo hi", Channel: "internal", To: "me"},
+		CronPayload{Kind: PayloadCommand, Message: "msg", Command: "echo hi", Channel: "internal", To: "me"},
 	)
 	if err == nil {
-		t.Fatal("AddJobWithPayload succeeded, want persistence failure")
+		t.Fatal("AddJob succeeded, want persistence failure")
 	}
 	if jobs := cs.ListJobs(false); len(jobs) != 0 {
 		t.Fatalf("live store still contains %d job(s) after failed persistence, want 0", len(jobs))
+	}
+}
+
+func TestRemoveJob_RollsBackLiveStoreOnSaveFailure(t *testing.T) {
+	root := t.TempDir()
+	storeDir := filepath.Join(root, "store")
+	storePath := filepath.Join(storeDir, "jobs.json")
+	cs := NewCronService(storePath, nil)
+	job, err := cs.AddJob(
+		"task",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
+	)
+	if err != nil {
+		t.Fatalf("AddJob failed: %v", err)
+	}
+	original, err := os.ReadFile(storePath)
+	if err != nil {
+		t.Fatalf("read original store: %v", err)
+	}
+
+	backupDir := filepath.Join(root, "store-backup")
+	if err := os.Rename(storeDir, backupDir); err != nil {
+		t.Fatalf("move store directory: %v", err)
+	}
+	if err := os.WriteFile(storeDir, []byte("blocker"), 0o600); err != nil {
+		t.Fatalf("write store-directory blocker: %v", err)
+	}
+
+	if err := cs.RemoveJob(job.ID); err == nil {
+		t.Fatal("RemoveJob succeeded, want persistence failure")
+	}
+	if _, ok := cs.GetJob(job.ID); !ok {
+		t.Fatal("live store lost job after failed removal persistence")
+	}
+	persisted, err := os.ReadFile(filepath.Join(backupDir, "jobs.json"))
+	if err != nil {
+		t.Fatalf("read durable store: %v", err)
+	}
+	if string(persisted) != string(original) {
+		t.Fatal("durable store changed after failed removal persistence")
 	}
 }
 
@@ -569,7 +767,11 @@ func TestAddJob_DoesNotOverwriteMalformedStore(t *testing.T) {
 
 	cs := NewCronService(storePath, nil)
 
-	_, err := cs.AddJob("test", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "", "hello", "cli", "direct")
+	_, err := cs.AddJob(
+		"test",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
+	)
 	if err == nil {
 		t.Fatal("AddJob succeeded, want load failure")
 	}
@@ -621,17 +823,18 @@ func TestLoadErrRefreshesOnReload(t *testing.T) {
 
 	if _, err := cs.AddJob(
 		"task",
-		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
-		"",
-		"hello",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: int64Ptr(60000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
 	); err == nil {
 		t.Fatal("AddJob succeeded against malformed store, want load failure")
 	}
 
 	// Repair the store on disk and reload: the latched error must clear.
-	if err := os.WriteFile(storePath, []byte(`{"version":1,"jobs":[]}`), 0o600); err != nil {
+	repaired := fmt.Sprintf(`{"version":%d,"jobs":[]}`, CurrentStoreVersion)
+	if err := os.WriteFile(storePath, []byte(repaired), 0o600); err != nil {
 		t.Fatalf("repair store: %v", err)
 	}
 	if err := cs.Load(); err != nil {
@@ -639,11 +842,11 @@ func TestLoadErrRefreshesOnReload(t *testing.T) {
 	}
 	if _, err := cs.AddJob(
 		"task",
-		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
-		"",
-		"hello",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: int64Ptr(60000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
 	); err != nil {
 		t.Fatalf("AddJob after repair failed: %v", err)
 	}
@@ -658,11 +861,11 @@ func TestLoadErrRefreshesOnReload(t *testing.T) {
 	}
 	if _, err := cs.AddJob(
 		"task2",
-		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
-		"",
-		"hello",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: int64Ptr(60000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
 	); err == nil {
 		t.Fatal("AddJob succeeded with latched load error, want failure")
 	}
@@ -681,7 +884,11 @@ func TestLoadFailurePreservesLiveStore(t *testing.T) {
 	storePath := filepath.Join(tmpDir, "jobs.json")
 
 	cs := NewCronService(storePath, nil)
-	job, err := cs.AddJob("task", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "", "hello", "cli", "direct")
+	job, err := cs.AddJob(
+		"task",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
+	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
 	}
@@ -699,11 +906,11 @@ func TestLoadFailurePreservesLiveStore(t *testing.T) {
 	}
 	if _, err := cs.AddJob(
 		"task2",
-		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
-		"",
-		"hello",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: int64Ptr(60000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
 	); err == nil {
 		t.Fatal("AddJob succeeded with latched load error, want failure")
 	}
@@ -719,13 +926,13 @@ func TestCheckJobsSkipsDueJobsAfterFailedReload(t *testing.T) {
 		return "ok", nil
 	})
 
-	job, err := cs.AddJobWithPayload(
+	job, err := cs.AddJob(
 		"due",
 		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
-		CronPayload{Kind: "agent_turn", Message: "msg"},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
 	)
 	if err != nil {
-		t.Fatalf("AddJobWithPayload failed: %v", err)
+		t.Fatalf("AddJob failed: %v", err)
 	}
 	if job.State.NextRunAtMS == nil {
 		t.Fatal("expected next run")
@@ -778,11 +985,11 @@ func TestCheckJobsDoesNotClaimWhenStoreUnavailable(t *testing.T) {
 
 	job, err := cs.AddJob(
 		"due",
-		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
-		"",
-		"msg",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind: "at",
+			AtMS: int64Ptr(time.Now().UnixMilli() + 60000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
@@ -836,11 +1043,11 @@ func TestLoadWaitsForInFlightDispatch(t *testing.T) {
 
 	job, err := cs.AddJob(
 		"due",
-		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
-		"",
-		"msg",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind: "at",
+			AtMS: int64Ptr(time.Now().UnixMilli() + 60000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
@@ -901,11 +1108,11 @@ func TestStopAndDrainWaitsForClaimedDispatchStoreUpdate(t *testing.T) {
 	})
 	job, err := cs.AddJob(
 		"due",
-		CronSchedule{Kind: "every", EveryMS: int64Ptr(time.Minute.Milliseconds())},
-		"",
-		"msg",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: int64Ptr(time.Minute.Milliseconds()),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error = %v", err)
@@ -961,11 +1168,11 @@ func TestPrepareDoesNotDispatchUntilActivate(t *testing.T) {
 	})
 	if _, err := cs.AddJob(
 		"due",
-		CronSchedule{Kind: "every", EveryMS: int64Ptr(time.Minute.Milliseconds())},
-		"",
-		"msg",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: int64Ptr(time.Minute.Milliseconds()),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
 	); err != nil {
 		t.Fatalf("AddJob() error = %v", err)
 	}
@@ -1016,11 +1223,11 @@ func TestLoadLatchesCorruptionDuringInFlightDispatch(t *testing.T) {
 
 	job, err := cs.AddJob(
 		"due",
-		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
-		"",
-		"msg",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind: "at",
+			AtMS: int64Ptr(time.Now().UnixMilli() + 60000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
@@ -1096,20 +1303,17 @@ func TestLoadPublishesFreshSnapshotAfterDispatch(t *testing.T) {
 		return "ok", nil
 	})
 
-	// One-shot "at" job: DeleteAfterRun removes it from the store once run.
+	// One-shot "at" jobs are removed from the store once run.
 	job, err := cs.AddJob(
 		"once",
-		CronSchedule{Kind: "at", AtMS: int64Ptr(time.Now().UnixMilli() + 60000)},
-		"",
-		"msg",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind: "at",
+			AtMS: int64Ptr(time.Now().UnixMilli() + 60000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
-	}
-	if !job.DeleteAfterRun {
-		t.Fatal("expected DeleteAfterRun for at job")
 	}
 	cs.mu.Lock()
 	past := time.Now().UnixMilli() - 1000
@@ -1157,7 +1361,11 @@ func TestLoadMissingFileClearsLiveJobs(t *testing.T) {
 	storePath := filepath.Join(tmpDir, "jobs.json")
 
 	cs := NewCronService(storePath, nil)
-	job, err := cs.AddJob("task", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "", "hello", "cli", "direct")
+	job, err := cs.AddJob(
+		"task",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)},
+		CronPayload{Kind: PayloadAgentTurn, Message: "hello", Channel: "cli", To: "direct"},
+	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
 	}
@@ -1198,7 +1406,11 @@ func TestLoadMissingFileSuppressesInFlightDispatchWrites(t *testing.T) {
 
 	// Recurring job: its completion would persist a next run and recreate a
 	// deleted store if writes were not suppressed during the reload.
-	job, err := cs.AddJob("tick", CronSchedule{Kind: "every", EveryMS: int64Ptr(50)}, "", "msg", "cli", "direct")
+	job, err := cs.AddJob(
+		"tick",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(50)},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
+	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
 	}
@@ -1270,7 +1482,11 @@ func TestLoadMissingFileBlocksMutationsDuringReload(t *testing.T) {
 		return "ok", nil
 	})
 
-	job, err := cs.AddJob("tick", CronSchedule{Kind: "every", EveryMS: int64Ptr(50)}, "", "msg", "cli", "direct")
+	job, err := cs.AddJob(
+		"tick",
+		CronSchedule{Kind: "every", EveryMS: int64Ptr(50)},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
+	)
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
 	}
@@ -1320,18 +1536,18 @@ func TestLoadMissingFileBlocksMutationsDuringReload(t *testing.T) {
 	// rejected instead of persisting the stale live snapshot.
 	if _, err := cs.AddJob(
 		"late",
-		CronSchedule{Kind: "every", EveryMS: int64Ptr(50)},
-		"",
-		"msg",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: int64Ptr(50),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
 	); err == nil {
 		t.Fatalf("AddJob succeeded while missing-store reload was pending")
 	}
 	if err := cs.UpdateJob(job); err == nil {
 		t.Fatalf("UpdateJob succeeded while missing-store reload was pending")
 	}
-	if cs.RemoveJob(job.ID) {
+	if err := cs.RemoveJob(job.ID); err == nil {
 		t.Fatalf("RemoveJob succeeded while missing-store reload was pending")
 	}
 	if _, err := cs.EnableJob(job.ID, false); err == nil {
@@ -1366,11 +1582,11 @@ func TestRunLoopSuspendsAndResumesAfterReload(t *testing.T) {
 	// during the failure/repair sequence.
 	if _, err := cs.AddJob(
 		"tick",
-		CronSchedule{Kind: "every", EveryMS: int64Ptr(60_000)},
-		"",
-		"msg",
-		"cli",
-		"direct",
+		CronSchedule{
+			Kind:    "every",
+			EveryMS: int64Ptr(60_000),
+		},
+		CronPayload{Kind: PayloadAgentTurn, Message: "msg", Channel: "cli", To: "direct"},
 	); err != nil {
 		t.Fatalf("AddJob failed: %v", err)
 	}

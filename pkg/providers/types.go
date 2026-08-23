@@ -30,7 +30,6 @@ type (
 	GeneratedImage              = protocoltypes.GeneratedImage
 	ImageGenerationResponse     = protocoltypes.ImageGenerationResponse
 	ProviderCapabilities        = providercapabilities.ProviderCapabilities
-	StreamingCapabilities       = providercapabilities.StreamingCapabilities
 	ImageGenerationCapabilities = providercapabilities.ImageGenerationCapabilities
 	ToolSchemaLimits            = providercapabilities.ToolSchemaLimits
 )
@@ -59,21 +58,8 @@ type StatefulProvider interface {
 	Close()
 }
 
-// StreamingProvider is an optional interface for providers that support token streaming.
-// onChunk receives the accumulated text so far (not individual deltas).
-// The returned LLMResponse is the same complete response for compatibility with tool-call handling.
+// StreamingProvider is the optional event-streaming contract.
 type StreamingProvider interface {
-	ChatStream(
-		ctx context.Context,
-		messages []Message,
-		tools []ToolDefinition,
-		model string,
-		options map[string]any,
-		onChunk func(accumulated string),
-	) (*LLMResponse, error)
-}
-
-type StreamingEventProvider interface {
 	ChatStreamEvents(
 		ctx context.Context,
 		messages []Message,
@@ -89,17 +75,7 @@ type CapabilityProvider interface {
 	Capabilities() ProviderCapabilities
 }
 
-// ImageGenerationCapable is the legacy provider-owned image generation
-// contract. New providers should also implement CapabilityProvider; the
-// descriptor then takes precedence over these compatibility methods.
-type ImageGenerationCapable interface {
-	SupportsImageGeneration() bool
-	ImageGenerationProviderID() string
-	DefaultImageGenerationModel() string
-	GenerateImage(ctx context.Context, req ImageGenerationRequest) (*ImageGenerationResponse, error)
-}
-
-// ImageGenerationProvider is the descriptor-based image generation contract.
+// ImageGenerationProvider is the current image generation contract.
 type ImageGenerationProvider interface {
 	CapabilityProvider
 	GenerateImage(ctx context.Context, req ImageGenerationRequest) (*ImageGenerationResponse, error)
@@ -179,10 +155,4 @@ func (e *FailoverError) IsRetriable() bool {
 	return e.Reason != FailoverAuth &&
 		e.Reason != FailoverFormat &&
 		e.Reason != FailoverContextOverflow
-}
-
-// ModelConfig holds primary model and fallback list.
-type ModelConfig struct {
-	Primary   string
-	Fallbacks []string
 }

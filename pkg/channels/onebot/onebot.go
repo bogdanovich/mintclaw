@@ -396,7 +396,14 @@ func (c *OneBotChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (c *OneBotChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *OneBotChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *OneBotChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
@@ -450,8 +457,15 @@ func (c *OneBotChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]st
 	return nil, nil
 }
 
-// SendMedia implements the channels.MediaSender interface.
-func (c *OneBotChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
+// DeliverMedia implements the channels.MediaSender interface.
+func (c *OneBotChannel) DeliverMedia(
+	ctx context.Context,
+	pending []bus.OutboundMediaMessage,
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendMedia)
+}
+
+func (c *OneBotChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

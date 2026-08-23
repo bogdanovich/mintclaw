@@ -7,21 +7,17 @@
 - `Error creating provider: model "openrouter/free" not found in model_list`
 - OpenRouter returns 400: `"free is not a valid model ID"`
 
-**Cause:** MintClaw now resolves provider/model in two steps:
+**Cause:** `provider` selects the runtime provider and `model` is sent to it
+unchanged. Omitting `provider` is invalid, and a provider prefix embedded in
+`model` does not select that provider.
 
-- If `provider` is set, the `model` field is sent to that provider unchanged.
-- If `provider` is omitted, MintClaw infers the provider from the first `/` segment and sends everything after that first `/` as the runtime model ID.
-
-For OpenRouter free-tier routing, the preferred config is explicit `provider`.
-
-- **Wrong:** `"model": "free"` → no OpenRouter provider is selected, so `free` is not a valid OpenRouter model route.
+- **Wrong:** `"model": "openrouter/free"` → `provider` is missing.
 - **Right:** `"provider": "openrouter", "model": "free"` → OpenRouter receives `free`.
-- **Also supported:** `"model": "openrouter/free"` → provider resolves to `openrouter`, runtime model ID resolves to `free`.
 
 **Fix:** In `~/.mintclaw/config.json` (or your config path):
 
 1. **agents.defaults.model_name** must match a `model_name` in `model_list` (e.g. `"openrouter-free"`).
-2. That entry should preferably set **provider** to `openrouter`, and **model** should be a valid OpenRouter model ID, for example:
+2. That entry must set **provider** to `openrouter`, and **model** should be a valid OpenRouter model ID, for example:
    - `"free"` – auto free-tier
    - `"google/gemini-2.0-flash-exp:free"`
    - `"meta-llama/llama-3.1-8b-instruct:free"`

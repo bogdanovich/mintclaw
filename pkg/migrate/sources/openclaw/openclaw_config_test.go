@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	providerpkg "github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 func TestLoadOpenClawConfig(t *testing.T) {
@@ -292,6 +293,46 @@ func TestConvertToMintClaw(t *testing.T) {
 	}
 	if !foundWarning {
 		t.Log("warnings should be generated for skills, memory, cron, and unsupported channels")
+	}
+}
+
+func TestConvertToMintClawMapsSourceOnlyProviderToConstructibleRuntime(t *testing.T) {
+	sourceHome := t.TempDir()
+	modelsDir := filepath.Join(sourceHome, "agents", "main", "agent")
+	if err := os.MkdirAll(modelsDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	modelsJSON := `{"providers":{"together":{"baseUrl":"https://api.together.xyz/v1","apiKey":"test-key"}}}`
+	if err := os.WriteFile(filepath.Join(modelsDir, "models.json"), []byte(modelsJSON), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var source OpenClawConfig
+	if err := json.Unmarshal(
+		[]byte(`{"agents":{"defaults":{"model":{"primary":"together/Llama-3.3-70B"}}}}`),
+		&source,
+	); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	converted, _, err := source.ConvertToMintClaw(sourceHome)
+	if err != nil {
+		t.Fatalf("ConvertToMintClaw() error = %v", err)
+	}
+	standard := converted.ToStandardConfig()
+	model, err := standard.GetModelConfig("Llama-3.3-70B")
+	if err != nil {
+		t.Fatalf("GetModelConfig() error = %v", err)
+	}
+	if model.Provider != "openai" || model.Model != "Llama-3.3-70B" ||
+		model.APIBase != "https://api.together.xyz/v1" || model.APIKey() != "test-key" {
+		t.Fatalf("converted model = %#v", model)
+	}
+	_, modelID, err := providerpkg.CreateProviderFromConfig(model)
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig() error = %v", err)
+	}
+	if modelID != "Llama-3.3-70B" {
+		t.Fatalf("model ID = %q, want Llama-3.3-70B", modelID)
 	}
 }
 
@@ -656,9 +697,8 @@ func TestToStandardConfig(t *testing.T) {
 		},
 		ModelList: []ModelConfig{
 			{
-				ModelName: "claude-sonnet-4-20250514",
-				Model:     "anthropic/claude-sonnet-4-20250514",
-				APIKey:    "sk-ant-test",
+				ModelName: "claude-sonnet-4-20250514", Provider: "anthropic", Model: "claude-sonnet-4-20250514",
+				APIKey: "sk-ant-test",
 			},
 		},
 		Channels: ChannelsConfig{

@@ -240,7 +240,31 @@ func newAgentInstance(
 	if promptProfile == RuntimePromptProfilePersonal {
 		definition = loadAgentDefinition(workspace)
 	}
+	frontmatterModel := ""
+	if definition.Agent != nil {
+		frontmatterModel = definition.Agent.Frontmatter.Model
+		if frontmatterModel != "" {
+			if err := requireExactModelName(frontmatterModel); err != nil {
+				return nil, fmt.Errorf("construct agent: workspace model: %w", err)
+			}
+		}
+	}
 	model := resolveAgentModel(agentCfg, defaults, definition)
+	if frontmatterModel != "" {
+		if cfg == nil {
+			return nil, fmt.Errorf("construct agent: workspace model %q requires configuration", model)
+		}
+		configured := false
+		for _, modelCfg := range cfg.ModelList {
+			if modelCfg != nil && modelCfg.ModelName == model {
+				configured = true
+				break
+			}
+		}
+		if !configured {
+			return nil, fmt.Errorf("construct agent: workspace model %q is not configured", model)
+		}
+	}
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 	agentToolPolicy := resolveAgentToolPolicy(definition)
 	agentMCPServerPolicy := resolveAgentMCPServerPolicy(definition)
@@ -630,7 +654,7 @@ func buildAgentRoutingConfig(
 	providerOwnership *providerOwnership,
 ) agentRoutingConfig {
 	routingCfg := agentRoutingConfig{
-		candidates:         resolveModelCandidates(cfg, defaults.Provider, model, fallbacks),
+		candidates:         resolveModelCandidates(cfg, model, fallbacks),
 		candidateProviders: make(map[string]providers.LLMProvider),
 	}
 	populateCandidateProvidersFromNamesTracked(
@@ -646,7 +670,7 @@ func buildAgentRoutingConfig(
 		return routingCfg
 	}
 
-	resolved := resolveModelCandidates(cfg, defaults.Provider, rc.LightModel, nil)
+	resolved := resolveModelCandidates(cfg, rc.LightModel, nil)
 	if len(resolved) == 0 {
 		logger.WarnCF("agent", "Routing light model not found; routing disabled",
 			map[string]any{"light_model": rc.LightModel, "agent_id": agentID})
@@ -691,10 +715,9 @@ func buildAgentRoutingConfig(
 	return routingCfg
 }
 
-// populateCandidateProvidersFromNames resolves each model name (alias or
-// "provider/model") via resolvedModelConfig and creates a dedicated LLMProvider
-// for it. This reuses the canonical config resolution path (GetModelConfig) so
-// alias handling and load-balancing stay consistent with the rest of the codebase.
+// populateCandidateProvidersFromNames resolves each exact configured model_name
+// and creates its dedicated LLMProvider. Duplicate names retain model-list
+// load-balancing behavior.
 func populateCandidateProvidersFromNames(
 	cfg *config.Config,
 	workspace string,
@@ -757,8 +780,8 @@ func resolvePrimaryProviderForAgent(
 		return fallback
 	}
 
-	modelCfg := lookupModelConfigByRef(cfg, model)
-	if modelCfg == nil {
+	modelCfg, err := cfg.GetModelConfig(model)
+	if err != nil || modelCfg == nil {
 		return fallback
 	}
 	clone := *modelCfg
