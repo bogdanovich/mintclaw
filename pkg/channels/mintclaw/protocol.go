@@ -1,9 +1,6 @@
 package mintclaw
 
-import (
-	"strings"
-	"time"
-)
+import "time"
 
 // Protocol message types.
 const (
@@ -23,7 +20,6 @@ const (
 	TypePong          = "pong"
 
 	PayloadKeyContent            = "content"
-	PayloadKeyThought            = "thought"
 	PayloadKeyKind               = "kind"
 	PayloadKeyPlaceholder        = "placeholder"
 	PayloadKeyToolCalls          = "tool_calls"
@@ -64,14 +60,7 @@ func newMessage(msgType string, payload map[string]any) MintClawMessage {
 
 func isThoughtPayload(payload map[string]any) bool {
 	kind, _ := payload[PayloadKeyKind].(string)
-	if strings.EqualFold(strings.TrimSpace(kind), MessageKindThought) {
-		return true
-	}
-
-	// Keep mintclaw_client inbound-compatible with legacy servers that still send
-	// the pre-kind boolean thought marker.
-	thought, _ := payload[PayloadKeyThought].(bool)
-	return thought
+	return kind == MessageKindThought
 }
 
 func newErrorWithPayload(code, message string, extra map[string]any) MintClawMessage {

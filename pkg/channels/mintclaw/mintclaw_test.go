@@ -119,6 +119,9 @@ func TestSend_ThoughtMessageIncludesMetadata(t *testing.T) {
 		if got := payload[PayloadKeyKind]; got != MessageKindThought {
 			t.Fatalf("thought kind = %#v, want %q", got, MessageKindThought)
 		}
+		if _, found := payload["thought"]; found {
+			t.Fatalf("thought payload includes retired boolean marker: %#v", payload)
+		}
 		if got := payload[PayloadKeyModelName]; got != "gpt-5.4-mini" {
 			t.Fatalf("thought model_name = %#v, want %q", got, "gpt-5.4-mini")
 		}
@@ -518,6 +521,9 @@ func TestBeginStream_StreamsReasoningAsThoughtUpdates(t *testing.T) {
 	if got := first.Payload[PayloadKeyKind]; got != MessageKindThought {
 		t.Fatalf("first kind = %#v, want %q", got, MessageKindThought)
 	}
+	if _, found := first.Payload["thought"]; found {
+		t.Fatalf("first payload includes retired boolean marker: %#v", first.Payload)
+	}
 	if got := first.Payload[PayloadKeyContent]; got != "thinking" {
 		t.Fatalf("first content = %#v, want thinking", got)
 	}
@@ -537,6 +543,9 @@ func TestBeginStream_StreamsReasoningAsThoughtUpdates(t *testing.T) {
 	}
 	if got := second.Payload[PayloadKeyKind]; got != MessageKindThought {
 		t.Fatalf("second kind = %#v, want %q", got, MessageKindThought)
+	}
+	if _, found := second.Payload["thought"]; found {
+		t.Fatalf("second payload includes retired boolean marker: %#v", second.Payload)
 	}
 	if got := second.Payload[PayloadKeyContent]; got != "thinking more" {
 		t.Fatalf("second content = %#v, want thinking more", got)

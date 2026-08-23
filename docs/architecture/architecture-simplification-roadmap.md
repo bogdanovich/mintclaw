@@ -711,6 +711,9 @@ Implementation sequence:
     protocol, and downgrade exporter. The active SQLite database passes the
     current schema and integrity checks; runtime and tests use that one store,
     while rollback restores a matching binary and same-time SQLite backup.
+12. Delete the pre-`kind` thought boolean from MintClaw Protocol reads and
+    writes. Current gateways, the web frontend, CLI, and client channel use the
+    typed `kind: "thought"` discriminator as the single message contract.
 
 Exit criteria:
 

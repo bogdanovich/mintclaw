@@ -35,12 +35,6 @@ func (c *MintClawChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]
 	switch {
 	case isThought:
 		payload[PayloadKeyKind] = MessageKindThought
-
-		// This field is kept solely for compatibility with legacy mintclaw clients that
-		// do not yet support the newer "kind" field.
-		// DO NOT use it for any purpose other than legacy client compatibility.
-		payload[PayloadKeyThought] = true
-
 	case isToolCalls:
 		payload[PayloadKeyKind] = MessageKindToolCalls
 		if toolCalls, ok := mintclawToolCallsPayload(msg); ok {
