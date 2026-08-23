@@ -315,7 +315,7 @@ func (c *DeltaChatChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send delivers an outbound message to a Delta Chat chat. ChatID can be the
+// DeliverText delivers outbound messages to a Delta Chat chat. ChatID can be the
 // numeric Delta Chat chat id, an email address, or a known contact/chat name.
 func (c *DeltaChatChannel) DeliverText(
 	ctx context.Context,

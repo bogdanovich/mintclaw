@@ -132,6 +132,8 @@ func DeliverSequentially[T any](
 			var remaining []T
 			if len(ids) == 0 {
 				remaining = pending[index:]
+			} else if index+1 < len(pending) {
+				remaining = pending[index+1:]
 			}
 			return FailedDelivery(messageIDs, remaining, 0, err)
 		}

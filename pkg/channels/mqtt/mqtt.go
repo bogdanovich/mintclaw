@@ -227,7 +227,7 @@ func (c *MQTTChannel) Stop(_ context.Context) error {
 	return nil
 }
 
-// Send publishes a response to the client via MQTT.
+// DeliverText publishes responses to the client via MQTT.
 func (c *MQTTChannel) DeliverText(
 	ctx context.Context,
 	pending []bus.OutboundMessage,

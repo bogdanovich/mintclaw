@@ -96,7 +96,7 @@ func (c *SlackWebhookChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send delivers a message to the specified Slack webhook target.
+// DeliverText delivers messages to the specified Slack webhook target.
 func (c *SlackWebhookChannel) DeliverText(
 	ctx context.Context,
 	pending []bus.OutboundMessage,

@@ -128,7 +128,7 @@ func (c *TeamsWebhookChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send delivers a message to the specified Teams webhook target.
+// DeliverText delivers messages to the specified Teams webhook target.
 // The target is selected by msg.ChatID which must match a key in the webhooks map.
 func (c *TeamsWebhookChannel) DeliverText(
 	ctx context.Context,

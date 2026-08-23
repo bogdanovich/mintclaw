@@ -69,6 +69,33 @@ func TestDeliverSequentiallyDoesNotReplayPartiallyDeliveredPayload(t *testing.T)
 	}
 }
 
+func TestDeliverSequentiallyPreservesUntouchedTailAfterPartialItemFailure(t *testing.T) {
+	t.Parallel()
+
+	var delivered []string
+	result := DeliverSequentially(
+		t.Context(),
+		[]string{"first", "second", "third"},
+		func(_ context.Context, payload string) ([]string, error) {
+			delivered = append(delivered, payload)
+			return []string{"id-partial"}, ErrTemporary
+		},
+	)
+
+	if result.Status != DeliveryPartial || !result.Ambiguous() {
+		t.Fatalf("result = %#v, want ambiguous partial delivery", result)
+	}
+	if !slices.Equal(result.MessageIDs, []string{"id-partial"}) {
+		t.Fatalf("message IDs = %v, want [id-partial]", result.MessageIDs)
+	}
+	if !slices.Equal(result.Remaining, []string{"second", "third"}) {
+		t.Fatalf("remaining payloads = %v, want untouched tail [second third]", result.Remaining)
+	}
+	if !slices.Equal(delivered, []string{"first"}) {
+		t.Fatalf("delivered payloads = %v, want only partially confirmed first payload", delivered)
+	}
+}
+
 func TestDeliverSequentiallyRejectsEmptyPayload(t *testing.T) {
 	t.Parallel()
 

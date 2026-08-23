@@ -146,7 +146,7 @@ func (c *FeishuChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send sends a message using Interactive Card format for markdown rendering.
+// DeliverText sends messages using Interactive Card format for markdown rendering.
 // Falls back to plain text message if card sending fails (e.g., table limit exceeded).
 func (c *FeishuChannel) DeliverText(
 	ctx context.Context,

@@ -456,7 +456,7 @@ func (c *LINEChannel) resolveSource(source webhook.SourceInterface) (senderID, c
 	}
 }
 
-// Send sends a message to LINE. It first tries the Reply API (free)
+// DeliverText sends messages to LINE. It first tries the Reply API (free)
 // using a cached reply token, then falls back to the Push API.
 func (c *LINEChannel) DeliverText(
 	ctx context.Context,

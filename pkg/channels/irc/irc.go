@@ -157,7 +157,7 @@ func (c *IRCChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send sends a message to an IRC channel or user.
+// DeliverText sends messages to an IRC channel or user.
 func (c *IRCChannel) DeliverText(
 	ctx context.Context,
 	pending []bus.OutboundMessage,

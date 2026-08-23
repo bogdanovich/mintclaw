@@ -107,7 +107,7 @@ func (c *DingTalkChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send sends a message to DingTalk via the chatbot reply API
+// DeliverText sends outbound messages to DingTalk via the chatbot reply API.
 func (c *DingTalkChannel) DeliverText(
 	ctx context.Context,
 	pending []bus.OutboundMessage,

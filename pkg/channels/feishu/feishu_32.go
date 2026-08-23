@@ -35,7 +35,7 @@ func (c *FeishuChannel) Stop(ctx context.Context) error {
 	return errUnsupported
 }
 
-// Send is a stub method to satisfy the Channel interface
+// DeliverText is a stub method that satisfies the Channel interface.
 func (c *FeishuChannel) DeliverText(
 	ctx context.Context,
 	pending []bus.OutboundMessage,

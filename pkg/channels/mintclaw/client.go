@@ -294,7 +294,7 @@ func (c *MintClawClientChannel) handleServerMessage(pc *mintclawConn, msg MintCl
 	_ = c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
 }
 
-// Send sends a message to the remote server.
+// DeliverText sends messages to the remote server.
 func (c *MintClawClientChannel) DeliverText(
 	ctx context.Context,
 	pending []bus.OutboundMessage,
