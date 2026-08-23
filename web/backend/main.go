@@ -339,12 +339,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-type launcherAllowlistBypassLogDecision struct {
-	level   logger.LogLevel
-	message string
-	emit    bool
-}
-
 func launcherBindMayExposeBeyondLoopback(hostInput string, public bool) bool {
 	normalizedHostInput := strings.TrimSpace(hostInput)
 	if normalizedHostInput == "" {
@@ -366,35 +360,6 @@ func launcherBindMayExposeBeyondLoopback(hostInput string, public bool) bool {
 	}
 
 	return false
-}
-
-func launcherAllowlistBypassLogPolicy(
-	hostInput string,
-	public bool,
-	cfg launcherconfig.Config,
-) launcherAllowlistBypassLogDecision {
-	if !launcherBindMayExposeBeyondLoopback(hostInput, public) || len(cfg.AllowedCIDRs) == 0 {
-		return launcherAllowlistBypassLogDecision{}
-	}
-
-	switch cfg.AllowLocalhostBypassSource {
-	case launcherconfig.BoolFieldPresent:
-		if cfg.AllowLocalhostBypass {
-			return launcherAllowlistBypassLogDecision{
-				level:   logger.INFO,
-				emit:    true,
-				message: "Launcher public access uses allowed_cidrs with allow_localhost_bypass=true; same-host proxies or tunnels can bypass CIDR restrictions",
-			}
-		}
-	case launcherconfig.BoolFieldNull:
-		return launcherAllowlistBypassLogDecision{
-			level:   logger.WARN,
-			emit:    true,
-			message: "Launcher public access uses allowed_cidrs with allow_localhost_bypass=null; default localhost bypass remains enabled, so same-host proxies or tunnels can bypass CIDR restrictions",
-		}
-	}
-
-	return launcherAllowlistBypassLogDecision{}
 }
 
 func main() {
@@ -519,8 +484,7 @@ func main() {
 	launcherPath := launcherconfig.PathForAppConfig(absPath)
 	launcherCfg, err := launcherconfig.Load(launcherPath, launcherconfig.Default())
 	if err != nil {
-		logger.ErrorC("web", fmt.Sprintf("Warning: Failed to load %s: %v", launcherPath, err))
-		launcherCfg = launcherconfig.Default()
+		logger.Fatalf("Failed to load %s: %v", launcherPath, err)
 	}
 
 	effectivePort := *port
@@ -549,13 +513,13 @@ func main() {
 		logger.InfoC("web", "Ignoring -public because launcher host was explicitly set")
 	}
 
-	if decision := launcherAllowlistBypassLogPolicy(hostInput, effectivePublic, launcherCfg); decision.emit {
-		switch decision.level {
-		case logger.WARN:
-			logger.WarnC("web", decision.message)
-		default:
-			logger.InfoC("web", decision.message)
-		}
+	if launcherBindMayExposeBeyondLoopback(hostInput, effectivePublic) &&
+		len(launcherCfg.AllowedCIDRs) > 0 && launcherCfg.AllowLocalhostBypass {
+		logger.InfoC(
+			"web",
+			"Launcher public access uses allowed_cidrs with allow_localhost_bypass=true; "+
+				"same-host proxies or tunnels can bypass CIDR restrictions",
+		)
 	}
 
 	portNum, err := strconv.Atoi(effectivePort)
@@ -595,29 +559,6 @@ func main() {
 		authStoreErr = nil
 	} else {
 		logger.ErrorC("web", fmt.Sprintf("Warning: could not open auth store: %v", authStoreErr))
-	}
-
-	migrationResult, migrationErr := launcherconfig.MigrateLegacyLauncherToken(
-		context.Background(),
-		passwordStore,
-		launcherPath,
-		launcherCfg,
-	)
-	if migrationErr != nil {
-		logger.Fatalf("Failed to migrate legacy launcher token to password login: %v", migrationErr)
-	}
-	if migrationResult.Migrated {
-		logger.InfoC("web", "Migrated legacy launcher token to dashboard password login")
-	}
-	if migrationResult.CleanupErr != nil {
-		logger.WarnC(
-			"web",
-			fmt.Sprintf(
-				"Legacy launcher token password migration succeeded, but failed to remove launcher_token from %s: %v",
-				launcherPath,
-				migrationResult.CleanupErr,
-			),
-		)
 	}
 
 	var localAutoLogin *middleware.LauncherDashboardLocalAutoLogin

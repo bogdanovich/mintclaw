@@ -36,7 +36,6 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 		AllowLocalhostBypass:  false,
 		TrustedProxyCIDRs:     []string{"172.16.0.0/12"},
 		DashboardPasswordHash: "$2a$12$saved-dashboard-password-hash",
-		LegacyLauncherToken:   "legacy-token-should-not-persist",
 	}
 
 	if err := Save(path, want); err != nil {
@@ -54,9 +53,6 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	if got.DashboardPasswordHash != want.DashboardPasswordHash {
 		t.Fatalf("dashboard_password_hash = %q, want %q", got.DashboardPasswordHash, want.DashboardPasswordHash)
-	}
-	if got.LegacyLauncherToken != "" {
-		t.Fatalf("legacy launcher_token = %q, want empty after Save", got.LegacyLauncherToken)
 	}
 	if len(got.AllowedCIDRs) != len(want.AllowedCIDRs) {
 		t.Fatalf("allowed_cidrs len = %d, want %d", len(got.AllowedCIDRs), len(want.AllowedCIDRs))
@@ -88,22 +84,7 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLoadReadsLegacyLauncherTokenForMigration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "launcher-config.json")
-	if err := os.WriteFile(path, []byte(`{"port":18800,"launcher_token":"legacy-token"}`), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	got, err := Load(path, Default())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if got.LegacyLauncherToken != "legacy-token" {
-		t.Fatalf("legacy launcher_token = %q, want legacy-token", got.LegacyLauncherToken)
-	}
-}
-
-func TestLoadDefaultsAllowLocalhostBypassForLegacyConfig(t *testing.T) {
+func TestLoadDefaultsAllowLocalhostBypassWhenOmitted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "launcher-config.json")
 	if err := os.WriteFile(path, []byte(`{"port":18800,"allowed_cidrs":["10.0.0.0/8"]}`), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -114,43 +95,46 @@ func TestLoadDefaultsAllowLocalhostBypassForLegacyConfig(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if !got.AllowLocalhostBypass {
-		t.Fatal("allow_localhost_bypass = false, want true for legacy config")
-	}
-	if got.AllowLocalhostBypassSource != BoolFieldAbsent {
-		t.Fatalf("allow_localhost_bypass source = %v, want %v", got.AllowLocalhostBypassSource, BoolFieldAbsent)
+		t.Fatal("allow_localhost_bypass = false, want true when omitted")
 	}
 }
 
-func TestLoadTracksAllowLocalhostBypassSource(t *testing.T) {
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "launcher-config.json")
+	if err := os.WriteFile(path, []byte(`{"port":18800,"launcher_token":"removed"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Load(path, Default()); err == nil {
+		t.Fatal("Load() error = nil, want unknown-field error")
+	}
+}
+
+func TestLoadAllowLocalhostBypass(t *testing.T) {
 	tests := []struct {
-		name       string
-		body       string
-		wantValue  bool
-		wantSource BoolFieldSource
+		name      string
+		body      string
+		wantValue bool
 	}{
 		{
-			name:       "explicit true",
-			body:       `{"port":18800,"allow_localhost_bypass":true}`,
-			wantValue:  true,
-			wantSource: BoolFieldPresent,
+			name:      "true",
+			body:      `{"port":18800,"allow_localhost_bypass":true}`,
+			wantValue: true,
 		},
 		{
-			name:       "explicit false",
-			body:       `{"port":18800,"allow_localhost_bypass":false}`,
-			wantValue:  false,
-			wantSource: BoolFieldPresent,
+			name:      "false",
+			body:      `{"port":18800,"allow_localhost_bypass":false}`,
+			wantValue: false,
 		},
 		{
-			name:       "explicit null keeps fallback behavior",
-			body:       `{"port":18800,"allow_localhost_bypass":null}`,
-			wantValue:  true,
-			wantSource: BoolFieldNull,
+			name:      "null keeps default",
+			body:      `{"port":18800,"allow_localhost_bypass":null}`,
+			wantValue: true,
 		},
 		{
-			name:       "omitted uses fallback",
-			body:       `{"port":18800}`,
-			wantValue:  true,
-			wantSource: BoolFieldAbsent,
+			name:      "omitted uses default",
+			body:      `{"port":18800}`,
+			wantValue: true,
 		},
 	}
 
@@ -167,9 +151,6 @@ func TestLoadTracksAllowLocalhostBypassSource(t *testing.T) {
 			}
 			if got.AllowLocalhostBypass != tt.wantValue {
 				t.Fatalf("allow_localhost_bypass = %t, want %t", got.AllowLocalhostBypass, tt.wantValue)
-			}
-			if got.AllowLocalhostBypassSource != tt.wantSource {
-				t.Fatalf("allow_localhost_bypass source = %v, want %v", got.AllowLocalhostBypassSource, tt.wantSource)
 			}
 		})
 	}

@@ -169,6 +169,9 @@ Every implementation packet in this roadmap follows these rules.
 - A temporary adapter lives only at one process boundary, is covered by a
   removal test or tracking item, and is deleted as soon as the fleet is
   upgraded.
+- Periodically declare a coordinated compatibility reset: upgrade every
+  first-party component, delete all pre-reset adapters and fixtures, and begin
+  the rolling window again from that release.
 - Every release that changes an internal wire protocol audits expired adapters
   and old capability aliases.
 
@@ -700,6 +703,10 @@ Implementation sequence:
 9. Delete frontend readers for the superseded detail-visibility preference,
    content-encoded tool calls, and task completion result. Consolidate session
    history media into the current attachment response at the API boundary.
+10. Delete the completed launcher-token migration and the diagnostic-only
+    boolean-origin state. The active launcher config has no token, and its
+    SQLite credential store is initialized; runtime behavior depends only on
+    the current effective config values.
 
 Exit criteria:
 

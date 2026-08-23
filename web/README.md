@@ -132,8 +132,7 @@ The dashboard is protected by password login.
 - When the launcher auto-opens a local browser after startup, it uses a one-shot loopback-only bootstrap endpoint to set the session cookie automatically.
 - On supported platforms, the password is stored as a bcrypt hash in `launcher-auth.db`.
 - On platforms where the SQLite password store is unavailable, the launcher stores the bcrypt hash in `launcher-config.json`.
-- Legacy `launcher_token` values are migrated once into password login and are removed from saved launcher config.
-- `MINTCLAW_LAUNCHER_TOKEN` is deprecated and ignored; after upgrading from env-token auth, open `/launcher-setup` to create a password.
+- `MINTCLAW_LAUNCHER_TOKEN` is not supported; open `/launcher-setup` to create a password.
 - URL token login and `Authorization: Bearer` dashboard auth are not supported.
 
 ### Network Exposure
