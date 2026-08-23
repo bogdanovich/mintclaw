@@ -165,8 +165,9 @@ func (c *FeishuChannel) sendOutboundText(ctx context.Context, msg bus.OutboundMe
 func (c *FeishuChannel) SendToolFeedbackMessage(
 	ctx context.Context,
 	msg bus.OutboundMessage,
-) ([]string, bool, error) {
-	return c.sendMessage(ctx, msg)
+) (channels.DeliveryResult[bus.OutboundMessage], bool) {
+	messageIDs, editable, err := c.sendMessage(ctx, msg)
+	return channels.FailedDelivery[bus.OutboundMessage](messageIDs, nil, 0, err), editable
 }
 
 func (c *FeishuChannel) sendMessage(ctx context.Context, msg bus.OutboundMessage) ([]string, bool, error) {

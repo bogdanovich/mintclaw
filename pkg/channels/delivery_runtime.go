@@ -56,7 +56,7 @@ type deliveryRuntimeHost interface {
 		channelName string,
 		ch Channel,
 		msg bus.OutboundMessage,
-	) ([]string, error)
+	) DeliveryResult[bus.OutboundMessage]
 	preSend(ctx context.Context, name string, msg bus.OutboundMessage, ch Channel) ([]string, bool)
 	preSendMedia(ctx context.Context, name string, msg bus.OutboundMediaMessage, ch Channel)
 }

@@ -324,12 +324,30 @@ type uneditableToolFeedbackTestChannel struct {
 	*toolFeedbackTestChannel
 }
 
+type resultToolFeedbackTestChannel struct {
+	*toolFeedbackTestChannel
+	result     DeliveryResult[bus.OutboundMessage]
+	cancel     context.CancelFunc
+	deliveries int
+}
+
+func (c *resultToolFeedbackTestChannel) DeliverText(
+	context.Context,
+	[]bus.OutboundMessage,
+) DeliveryResult[bus.OutboundMessage] {
+	c.deliveries++
+	if c.cancel != nil {
+		c.cancel()
+	}
+	return c.result
+}
+
 func (c *uneditableToolFeedbackTestChannel) SendToolFeedbackMessage(
 	ctx context.Context,
 	msg bus.OutboundMessage,
-) ([]string, bool, error) {
+) (DeliveryResult[bus.OutboundMessage], bool) {
 	messageIDs, err := c.sendText(ctx, msg)
-	return messageIDs, false, err
+	return FailedDelivery[bus.OutboundMessage](messageIDs, nil, 0, err), false
 }
 
 func (c *toolFeedbackStreamingTestChannel) BeginStream(context.Context, string) (Streamer, error) {
@@ -3003,6 +3021,69 @@ func TestSendWithRetry_ToolFeedbackLifecycleOwnedByManager(t *testing.T) {
 	}
 	if len(ch.edited) != 1 || !strings.HasPrefix(ch.edited[0], "topic-42|msg-1|prepared:") {
 		t.Fatalf("edits = %v, want resolved/prepared feedback edit", ch.edited)
+	}
+}
+
+func TestSendWithRetry_ToolFeedbackPreservesDeliveryResult(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ctx, cancel := context.WithCancel(t.Context())
+	retryAt := time.Now().UTC().Add(time.Hour)
+	remainder := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat-1",
+		Content: "retry this remainder",
+	})
+	ch := &resultToolFeedbackTestChannel{
+		toolFeedbackTestChannel: &toolFeedbackTestChannel{},
+		result: DeliveryResult[bus.OutboundMessage]{
+			MessageIDs: []string{"partial-1"},
+			Status:     DeliveryPartial,
+			Acceptance: DeliveryRejected,
+			Remaining:  []bus.OutboundMessage{remainder},
+			RetryAfter: time.Hour,
+			RetryAt:    retryAt,
+			Err:        ErrRateLimit,
+		},
+		cancel: cancel,
+	}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat-1",
+		Content: "Working...\n- tool: exec",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "chat-1",
+			Raw:     map[string]string{"message_kind": "tool_feedback"},
+		},
+	})
+
+	result := m.deliveryRuntime().sendWithRetryPolicy(
+		ctx,
+		"test",
+		w,
+		feedback,
+		true,
+		publishDefinitiveOutcome,
+	)
+	if ch.deliveries != 1 {
+		t.Fatalf("deliveries = %d, want 1", ch.deliveries)
+	}
+	if !errors.Is(result.Err, ErrRateLimit) || !errors.Is(result.Err, context.Canceled) {
+		t.Fatalf("error = %v, want rate limit plus cancellation", result.Err)
+	}
+	if result.Status != DeliveryPartial || result.Acceptance != DeliveryRejected {
+		t.Fatalf("result = %#v, want rejected partial delivery", result)
+	}
+	if !slices.Equal(result.MessageIDs, []string{"partial-1"}) {
+		t.Fatalf("message IDs = %v, want [partial-1]", result.MessageIDs)
+	}
+	if len(result.Remaining) != 1 || result.Remaining[0].Content != remainder.Content {
+		t.Fatalf("remaining = %#v, want preserved remainder", result.Remaining)
+	}
+	if result.RetryAfter != time.Hour || !result.RetryAt.Equal(retryAt) {
+		t.Fatalf("retry metadata = %v/%v, want %v/%v", result.RetryAfter, result.RetryAt, time.Hour, retryAt)
 	}
 }
 

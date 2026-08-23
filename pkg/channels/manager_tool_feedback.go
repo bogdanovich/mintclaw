@@ -204,7 +204,7 @@ func (m *Manager) deliverToolFeedback(
 	channelName string,
 	ch Channel,
 	msg bus.OutboundMessage,
-) ([]string, error) {
+) DeliveryResult[bus.OutboundMessage] {
 	key, deliveryChatID := toolFeedbackTarget(
 		channelName,
 		ch,
@@ -215,7 +215,7 @@ func (m *Manager) deliverToolFeedback(
 	)
 	content := prepareToolFeedbackMessageContent(ch, msg.Content)
 	operations := toolFeedbackOperationsFor(ch)
-	return m.streamCoordinator().deliverToolFeedback(
+	coordinated, err := m.streamCoordinator().deliverToolFeedback(
 		ctx,
 		key,
 		toolFeedbackGeneration(primaryTraceScope(msg.TraceScopes)),
@@ -226,19 +226,40 @@ func (m *Manager) deliverToolFeedback(
 			sendMsg := msg
 			sendMsg.Content = prepared
 			if sender, ok := ch.(toolFeedbackMessageSender); ok {
-				messageIDs, editable, err := sender.SendToolFeedbackMessage(sendCtx, sendMsg)
-				return toolFeedbackSendResult{messageIDs: messageIDs, editable: editable}, err
+				delivery, editable := sender.SendToolFeedbackMessage(sendCtx, sendMsg)
+				if !delivery.Delivered() && delivery.Err == nil {
+					delivery.Err = errors.New("channel returned an incomplete delivery result")
+				}
+				return toolFeedbackDeliverySendResult(delivery, editable), delivery.Err
 			}
-			result := ch.DeliverText(sendCtx, []bus.OutboundMessage{sendMsg})
-			if !result.Delivered() && result.Err == nil {
-				result.Err = errors.New("channel returned an incomplete delivery result")
+			delivery := ch.DeliverText(sendCtx, []bus.OutboundMessage{sendMsg})
+			if !delivery.Delivered() && delivery.Err == nil {
+				delivery.Err = errors.New("channel returned an incomplete delivery result")
 			}
-			return toolFeedbackSendResult{
-				messageIDs: result.MessageIDs,
-				editable:   operations.edit != nil,
-			}, result.Err
+			return toolFeedbackDeliverySendResult(delivery, operations.edit != nil), delivery.Err
 		},
 	)
+	if coordinated.delivery != nil {
+		return *coordinated.delivery
+	}
+	if err != nil {
+		return FailedDelivery[bus.OutboundMessage](coordinated.messageIDs, nil, 0, err)
+	}
+	return SuccessfulDelivery[bus.OutboundMessage](coordinated.messageIDs)
+}
+
+func toolFeedbackDeliverySendResult(
+	delivery DeliveryResult[bus.OutboundMessage],
+	editable bool,
+) toolFeedbackSendResult {
+	cloned := delivery
+	cloned.MessageIDs = append([]string(nil), delivery.MessageIDs...)
+	cloned.Remaining = cloneDeliveryPayload(delivery.Remaining)
+	return toolFeedbackSendResult{
+		messageIDs: append([]string(nil), delivery.MessageIDs...),
+		editable:   editable,
+		delivery:   &cloned,
+	}
 }
 
 func toolFeedbackGeneration(traceScope runtimeevents.TraceScope) string {

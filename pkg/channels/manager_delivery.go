@@ -416,8 +416,7 @@ func (r *DeliveryRuntime) sendWithRetryPolicy(
 			if isToolFeedback && m.deliveryToolFeedbackEnabled() {
 				// The coordinator must own interim sends so it can retain the
 				// platform message ID and edit the same progress message later.
-				msgIDs, err := m.deliverToolFeedback(ctx, name, w.ch, attemptMsg)
-				return FailedDelivery[bus.OutboundMessage](msgIDs, nil, 0, err)
+				return m.deliverToolFeedback(ctx, name, w.ch, attemptMsg)
 			}
 			return w.ch.DeliverText(ctx, pending)
 		},
