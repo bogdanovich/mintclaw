@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
@@ -53,16 +54,22 @@ func newCoordinatorFeedbackChannel() *coordinatorFeedbackChannel {
 	return &coordinatorFeedbackChannel{events: make(chan bus.OutboundMessage, 16)}
 }
 
-func (c *coordinatorFeedbackChannel) Send(
+func (c *coordinatorFeedbackChannel) DeliverText(
 	ctx context.Context,
-	msg bus.OutboundMessage,
-) ([]string, error) {
-	select {
-	case c.events <- msg:
-		return []string{"message"}, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(
+		ctx,
+		pending,
+		func(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+			select {
+			case c.events <- msg:
+				return []string{"message"}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	)
 }
 
 func (c *coordinatorFeedbackChannel) EditMessage(

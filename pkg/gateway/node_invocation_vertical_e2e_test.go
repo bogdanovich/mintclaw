@@ -859,12 +859,18 @@ func (channel *nodeVerticalSliceChannel) Stop(context.Context) error {
 	return nil
 }
 
-func (channel *nodeVerticalSliceChannel) Send(
-	_ context.Context,
-	message bus.OutboundMessage,
-) ([]string, error) {
-	channel.messages <- message
-	return []string{"node-e2e-message"}, nil
+func (channel *nodeVerticalSliceChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(
+		ctx,
+		pending,
+		func(_ context.Context, message bus.OutboundMessage) ([]string, error) {
+			channel.messages <- message
+			return []string{"node-e2e-message"}, nil
+		},
+	)
 }
 
 func (channel *nodeVerticalSliceChannel) SendMedia(

@@ -21,7 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
-// mockChannel is a test double that delegates Send to a configurable function.
+// mockChannel is a test double that delegates text delivery to a configurable function.
 type mockChannel struct {
 	BaseChannel
 	sendFn            func(ctx context.Context, msg bus.OutboundMessage) error
@@ -64,7 +64,14 @@ func (l *countingListener) Addr() net.Addr {
 	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}
 }
 
-func (m *mockChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (m *mockChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) DeliveryResult[bus.OutboundMessage] {
+	return DeliverSequentially(ctx, pending, m.sendText)
+}
+
+func (m *mockChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	m.sentMessages = append(m.sentMessages, msg)
 	if m.sendFn == nil {
 		return nil, nil
@@ -313,40 +320,55 @@ type toolFeedbackStreamingTestChannel struct {
 	streamer Streamer
 }
 
-type typedToolFeedbackTestChannel struct {
-	*toolFeedbackTestChannel
-	typedCalls int
-}
-
-func (c *typedToolFeedbackTestChannel) SendMessageResult(
-	ctx context.Context,
-	pending []bus.OutboundMessage,
-) DeliveryResult[bus.OutboundMessage] {
-	c.typedCalls++
-	messageIDs, err := c.Send(ctx, pending[0])
-	if err != nil {
-		return FailedDelivery[bus.OutboundMessage](messageIDs, nil, 0, err)
-	}
-	return SuccessfulDelivery[bus.OutboundMessage](messageIDs)
-}
-
 type uneditableToolFeedbackTestChannel struct {
 	*toolFeedbackTestChannel
+}
+
+type resultToolFeedbackTestChannel struct {
+	*toolFeedbackTestChannel
+	result           DeliveryResult[bus.OutboundMessage]
+	results          []DeliveryResult[bus.OutboundMessage]
+	cancel           context.CancelFunc
+	deliveries       int
+	deliveryPayloads [][]bus.OutboundMessage
+}
+
+func (c *resultToolFeedbackTestChannel) DeliverText(
+	_ context.Context,
+	pending []bus.OutboundMessage,
+) DeliveryResult[bus.OutboundMessage] {
+	resultIndex := c.deliveries
+	c.deliveries++
+	c.deliveryPayloads = append(c.deliveryPayloads, cloneDeliveryPayload(pending))
+	if c.cancel != nil {
+		c.cancel()
+	}
+	if resultIndex < len(c.results) {
+		return c.results[resultIndex]
+	}
+	return c.result
 }
 
 func (c *uneditableToolFeedbackTestChannel) SendToolFeedbackMessage(
 	ctx context.Context,
 	msg bus.OutboundMessage,
-) ([]string, bool, error) {
-	messageIDs, err := c.Send(ctx, msg)
-	return messageIDs, false, err
+) (DeliveryResult[bus.OutboundMessage], bool) {
+	messageIDs, err := c.sendText(ctx, msg)
+	return FailedDelivery[bus.OutboundMessage](messageIDs, nil, 0, err), false
 }
 
 func (c *toolFeedbackStreamingTestChannel) BeginStream(context.Context, string) (Streamer, error) {
 	return c.streamer, nil
 }
 
-func (c *toolFeedbackTestChannel) Send(_ context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *toolFeedbackTestChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) DeliveryResult[bus.OutboundMessage] {
+	return DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *toolFeedbackTestChannel) sendText(_ context.Context, msg bus.OutboundMessage) ([]string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sendCalls++
@@ -3009,13 +3031,30 @@ func TestSendWithRetry_ToolFeedbackLifecycleOwnedByManager(t *testing.T) {
 	}
 }
 
-func TestSendWithRetry_TypedChannelKeepsToolFeedbackLifecycle(t *testing.T) {
+func TestSendWithRetry_ToolFeedbackPreservesDeliveryResult(t *testing.T) {
 	m := newTestManager()
 	enableTestToolFeedbackCoordinator(t, m, false)
-	base := &toolFeedbackTestChannel{resolvedID: "topic-42", preparedTag: "prepared:"}
-	ch := &typedToolFeedbackTestChannel{toolFeedbackTestChannel: base}
+	ctx, cancel := context.WithCancel(t.Context())
+	retryAt := time.Now().UTC().Add(time.Hour)
+	remainder := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat-1",
+		Content: "retry this remainder",
+	})
+	ch := &resultToolFeedbackTestChannel{
+		toolFeedbackTestChannel: &toolFeedbackTestChannel{},
+		result: DeliveryResult[bus.OutboundMessage]{
+			MessageIDs: []string{"partial-1"},
+			Status:     DeliveryPartial,
+			Acceptance: DeliveryRejected,
+			Remaining:  []bus.OutboundMessage{remainder},
+			RetryAfter: time.Hour,
+			RetryAt:    retryAt,
+			Err:        ErrRateLimit,
+		},
+		cancel: cancel,
+	}
 	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
-
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
 		ChatID:  "chat-1",
@@ -3026,22 +3065,92 @@ func TestSendWithRetry_TypedChannelKeepsToolFeedbackLifecycle(t *testing.T) {
 			Raw:     map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
-	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
-		t.Fatalf("initial feedback = (%v, %v)", sent, err)
-	}
-	feedback.Content = "Working...\n- tool: read_file"
-	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
-		t.Fatalf("feedback update = (%v, %v)", sent, err)
-	}
 
-	base.mu.Lock()
-	defer base.mu.Unlock()
-	if ch.typedCalls != 0 {
-		t.Fatalf("typed sends = %d, want coordinator-owned delivery", ch.typedCalls)
+	result := m.deliveryRuntime().sendWithRetryPolicy(
+		ctx,
+		"test",
+		w,
+		feedback,
+		true,
+		publishDefinitiveOutcome,
+	)
+	if ch.deliveries != 1 {
+		t.Fatalf("deliveries = %d, want 1", ch.deliveries)
 	}
-	if len(base.operations) != 2 || !strings.HasPrefix(base.operations[0], "send:") ||
-		base.operations[1] != "edit:msg-1" {
-		t.Fatalf("operations = %v, want one send followed by one edit", base.operations)
+	if !errors.Is(result.Err, ErrRateLimit) || !errors.Is(result.Err, context.Canceled) {
+		t.Fatalf("error = %v, want rate limit plus cancellation", result.Err)
+	}
+	if result.Status != DeliveryPartial || result.Acceptance != DeliveryRejected {
+		t.Fatalf("result = %#v, want rejected partial delivery", result)
+	}
+	if !slices.Equal(result.MessageIDs, []string{"partial-1"}) {
+		t.Fatalf("message IDs = %v, want [partial-1]", result.MessageIDs)
+	}
+	if len(result.Remaining) != 1 || result.Remaining[0].Content != remainder.Content {
+		t.Fatalf("remaining = %#v, want preserved remainder", result.Remaining)
+	}
+	if result.RetryAfter != time.Hour || !result.RetryAt.Equal(retryAt) {
+		t.Fatalf("retry metadata = %v/%v, want %v/%v", result.RetryAfter, result.RetryAt, time.Hour, retryAt)
+	}
+}
+
+func TestSendWithRetry_ToolFeedbackDeliversKnownRemainder(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	remainder := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat-1",
+		Content: "retry this remainder",
+	})
+	ch := &resultToolFeedbackTestChannel{
+		toolFeedbackTestChannel: &toolFeedbackTestChannel{},
+		results: []DeliveryResult[bus.OutboundMessage]{
+			{
+				MessageIDs: []string{"partial-1"},
+				Status:     DeliveryPartial,
+				Acceptance: DeliveryRejected,
+				Remaining:  []bus.OutboundMessage{remainder},
+				RetryAfter: time.Nanosecond,
+				Err:        ErrRateLimit,
+			},
+			SuccessfulDelivery[bus.OutboundMessage]([]string{"remainder-2"}),
+		},
+	}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat-1",
+		Content: "Working...\n- tool: exec",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "chat-1",
+			Raw:     map[string]string{"message_kind": "tool_feedback"},
+		},
+	})
+
+	result := m.deliveryRuntime().sendWithRetryPolicy(
+		t.Context(),
+		"test",
+		w,
+		feedback,
+		true,
+		publishDefinitiveOutcome,
+	)
+	if !result.Delivered() {
+		t.Fatalf("result = %#v, want complete delivery", result)
+	}
+	if !slices.Equal(result.MessageIDs, []string{"partial-1", "remainder-2"}) {
+		t.Fatalf("message IDs = %v, want partial and remainder IDs", result.MessageIDs)
+	}
+	if ch.deliveries != 2 {
+		t.Fatalf("deliveries = %d, want initial send plus remainder send", ch.deliveries)
+	}
+	if len(ch.deliveryPayloads) != 2 || len(ch.deliveryPayloads[1]) != 1 ||
+		ch.deliveryPayloads[1][0].Content != remainder.Content {
+		t.Fatalf("delivery payloads = %#v, want second transport call with the remainder", ch.deliveryPayloads)
+	}
+	if len(ch.edited) != 0 {
+		t.Fatalf("edits = %v, want remainder delivered without editing the confirmed carrier", ch.edited)
 	}
 }
 

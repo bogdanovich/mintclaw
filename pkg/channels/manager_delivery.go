@@ -401,6 +401,7 @@ func (r *DeliveryRuntime) sendWithRetryPolicy(
 		return SuccessfulDelivery[bus.OutboundMessage](msgIDs)
 	}
 
+	deliverKnownRemainderDirectly := false
 	result := DeliverWithRetry(
 		ctx,
 		[]bus.OutboundMessage{msg},
@@ -413,21 +414,17 @@ func (r *DeliveryRuntime) sendWithRetryPolicy(
 		},
 		func(ctx context.Context, pending []bus.OutboundMessage) DeliveryResult[bus.OutboundMessage] {
 			attemptMsg := pending[0]
-			var msgIDs []string
-			var err error
-			if isToolFeedback && m.deliveryToolFeedbackEnabled() {
+			if isToolFeedback && m.deliveryToolFeedbackEnabled() && !deliverKnownRemainderDirectly {
 				// The coordinator must own interim sends so it can retain the
 				// platform message ID and edit the same progress message later.
-				msgIDs, err = m.deliverToolFeedback(ctx, name, w.ch, attemptMsg, w.ch.Send)
-			} else if sender, ok := w.ch.(MessageDeliverySender); ok {
-				return sender.SendMessageResult(ctx, pending)
-			} else {
-				msgIDs, err = w.ch.Send(ctx, attemptMsg)
+				delivery := m.deliverToolFeedback(ctx, name, w.ch, attemptMsg)
+				// Once that send confirms a carrier and identifies an unsent
+				// remainder, retry the remainder as transport payload. Re-entering
+				// the coordinator would edit the confirmed carrier and drop it.
+				deliverKnownRemainderDirectly = len(delivery.MessageIDs) > 0 && delivery.Remaining != nil
+				return delivery
 			}
-			if err == nil {
-				return SuccessfulDelivery[bus.OutboundMessage](msgIDs)
-			}
-			return FailedDelivery[bus.OutboundMessage](msgIDs, nil, 0, err)
+			return w.ch.DeliverText(ctx, pending)
 		},
 		func(attempt DeliveryAttempt) {
 			if attempt.Err == nil {

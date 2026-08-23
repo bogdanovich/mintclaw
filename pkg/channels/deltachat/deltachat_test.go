@@ -818,7 +818,7 @@ func TestSend_CurrentNumericChatIDAllowedWithoutRecipientResolution(t *testing.T
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	ids, err := ch.Send(context.Background(), bus.OutboundMessage{
+	ids, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "42",
 		Content: "hello",
 		Context: bus.InboundContext{ChatID: "42", SenderID: "friend@example.org"},
@@ -840,7 +840,7 @@ func TestSend_CrossChatNumericDeniedByDefault(t *testing.T) {
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "99",
 		Content: "hello",
 		Context: bus.InboundContext{ChatID: "42", SenderID: "admin@example.org"},
@@ -859,7 +859,7 @@ func TestSend_EmailRecipientDeniedByDefault(t *testing.T) {
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "friend@example.org",
 		Content: "hello",
 		Context: bus.InboundContext{ChatID: "42", SenderID: "admin@example.org"},
@@ -881,7 +881,7 @@ func TestSend_EmailRecipientRequiresAllowFrom(t *testing.T) {
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "friend@example.org",
 		Content: "hello",
 		Context: bus.InboundContext{ChatID: "42", SenderID: "other@example.org"},
@@ -914,7 +914,7 @@ func TestSend_EmailRecipientUsesSessionScopeSenderForAdmin(t *testing.T) {
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "friend@example.org",
 		Content: "hello",
 		Context: bus.InboundContext{ChatID: "friend@example.org"},
@@ -957,7 +957,7 @@ func TestSend_EmailRecipientResolvesForAllowFromWildcard(t *testing.T) {
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "friend@example.org",
 		Content: "hello",
 	})
@@ -978,7 +978,7 @@ func TestSend_CrossChatNumericUsesSessionScopeChatForGate(t *testing.T) {
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "99",
 		Content: "hello",
 		Context: bus.InboundContext{ChatID: "99", SenderID: "admin@example.org"},
@@ -1020,7 +1020,7 @@ func TestSend_EmailRecipientResolvesForAdmin(t *testing.T) {
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	ids, err := ch.Send(context.Background(), bus.OutboundMessage{
+	ids, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "Friend <friend@example.org>",
 		Content: "hello",
 		Context: bus.InboundContext{ChatID: "42", SenderID: "admin@example.org"},
@@ -1062,7 +1062,7 @@ func TestSend_AliasRecipientResolvesForAdmin(t *testing.T) {
 	ch.accountID = 7
 	ch.SetRunning(true)
 
-	_, err := ch.Send(context.Background(), bus.OutboundMessage{
+	_, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "Alice",
 		Content: "hello",
 		Context: bus.InboundContext{ChatID: "42", SenderID: "admin@example.org"},

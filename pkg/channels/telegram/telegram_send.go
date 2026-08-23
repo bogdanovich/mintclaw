@@ -16,12 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
-func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
-	result := c.SendMessageResult(ctx, []bus.OutboundMessage{msg})
-	return result.MessageIDs, result.Err
-}
-
-func (c *TelegramChannel) SendMessageResult(
+func (c *TelegramChannel) DeliverText(
 	ctx context.Context,
 	pending []bus.OutboundMessage,
 ) channels.DeliveryResult[bus.OutboundMessage] {

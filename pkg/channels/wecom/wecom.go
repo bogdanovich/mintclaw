@@ -187,7 +187,14 @@ func (c *WeComChannel) BeginStream(_ context.Context, chatID string) (channels.S
 	}, nil
 }
 
-func (c *WeComChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *WeComChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *WeComChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

@@ -256,10 +256,9 @@ func (s *StreamCoordinator) deliverToolFeedback(
 	key, generation, chatID, content string,
 	operations toolFeedbackOperations,
 	send func(context.Context, string) (toolFeedbackSendResult, error),
-) ([]string, error) {
+) (toolFeedbackSendResult, error) {
 	if !s.hasToolFeedback() {
-		result, err := send(ctx, content)
-		return result.messageIDs, err
+		return send(ctx, content)
 	}
 	return s.toolFeedback.deliver(ctx, key, generation, chatID, content, operations, send)
 }

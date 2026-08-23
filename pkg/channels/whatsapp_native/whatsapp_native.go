@@ -407,7 +407,14 @@ func (c *WhatsAppNativeChannel) handleIncoming(evt *events.Message) {
 	c.HandleInboundContext(c.runCtx, chatID, content, mediaPaths, inboundCtx, sender)
 }
 
-func (c *WhatsAppNativeChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *WhatsAppNativeChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *WhatsAppNativeChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

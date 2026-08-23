@@ -392,8 +392,15 @@ func (c *WeixinChannel) handleInboundMessage(ctx context.Context, msg WeixinMess
 	_ = c.HandleInboundContext(ctx, fromUserID, content, mediaRefs, inboundCtx, sender)
 }
 
-// Send implements channels.Channel by sending a text message to the WeChat user.
-func (c *WeixinChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+// DeliverText implements channels.Channel by sending text messages to the WeChat user.
+func (c *WeixinChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *WeixinChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

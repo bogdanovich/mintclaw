@@ -47,15 +47,9 @@ type Channel interface {
 	Name() string
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
-	Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error)
+	DeliverText(ctx context.Context, pending []bus.OutboundMessage) DeliveryResult[bus.OutboundMessage]
 	IsRunning() bool
 	ReasoningChannelID() string
-}
-
-// MessageDeliverySender preserves typed transport metadata that the legacy
-// Channel.Send signature cannot represent.
-type MessageDeliverySender interface {
-	SendMessageResult(ctx context.Context, pending []bus.OutboundMessage) DeliveryResult[bus.OutboundMessage]
 }
 
 // BaseChannelOption is a functional option for configuring a BaseChannel.

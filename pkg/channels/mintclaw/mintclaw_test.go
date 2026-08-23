@@ -92,7 +92,7 @@ func TestSend_ThoughtMessageIncludesMetadata(t *testing.T) {
 	defer cleanup()
 	ch.addConnForTest(&mintclawConn{id: "conn-1", conn: clientConn, sessionID: "sess-1"})
 
-	if _, err := ch.Send(context.Background(), bus.OutboundMessage{
+	if _, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "mintclaw:sess-1",
 		Content: "thinking trace",
 		Context: bus.InboundContext{
@@ -152,7 +152,7 @@ func TestSend_FinalMessageIncludesCorrelationMetadata(t *testing.T) {
 		MessageKind:  bus.OutboundMessageKindFinalReply,
 		OutboundKind: bus.OutboundKindFinal,
 	}.ApplyToContext(&ctx)
-	if _, err := ch.Send(context.Background(), bus.OutboundMessage{
+	if _, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:     "mintclaw:sess-final",
 		Content:    "done",
 		Context:    ctx,
@@ -205,7 +205,7 @@ func TestSend_FinalMessageUsesInboundMessageIDOverReplyTarget(t *testing.T) {
 	if msg.ReplyToMessageID != "origin-message" {
 		t.Fatalf("normalized reply target = %q, want origin-message", msg.ReplyToMessageID)
 	}
-	if _, err := ch.Send(context.Background(), msg); err != nil {
+	if _, err := ch.sendText(context.Background(), msg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -297,7 +297,7 @@ func TestSend_ToolCallsMessageIncludesModelName(t *testing.T) {
 	defer cleanup()
 	ch.addConnForTest(&mintclawConn{id: "conn-1", conn: clientConn, sessionID: "sess-1"})
 
-	if _, err := ch.Send(context.Background(), bus.OutboundMessage{
+	if _, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "mintclaw:sess-1",
 		Content: "",
 		Context: bus.InboundContext{

@@ -742,6 +742,10 @@ Implementation sequence:
     accumulated-text operation, its wrapper adapters, and the event-mode flag;
     providers declare one streaming boolean and emit `StreamChunk` values
     directly.
+20. Make typed text delivery the sole channel text contract. Delete the
+    tuple-returning channel method and optional typed sender; every channel
+    returns confirmed IDs, retryable remainder, acceptance, and errors through
+    `DeliveryResult`.
 
 Exit criteria:
 

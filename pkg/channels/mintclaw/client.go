@@ -294,8 +294,15 @@ func (c *MintClawClientChannel) handleServerMessage(pc *mintclawConn, msg MintCl
 	_ = c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
 }
 
-// Send sends a message to the remote server.
-func (c *MintClawClientChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+// DeliverText sends messages to the remote server.
+func (c *MintClawClientChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *MintClawClientChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

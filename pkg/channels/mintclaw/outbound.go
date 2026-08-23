@@ -15,7 +15,14 @@ import (
 
 // mintclawConn represents a single WebSocket connection.
 
-func (c *MintClawChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *MintClawChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *MintClawChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

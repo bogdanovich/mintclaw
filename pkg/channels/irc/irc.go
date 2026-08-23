@@ -157,8 +157,15 @@ func (c *IRCChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send sends a message to an IRC channel or user.
-func (c *IRCChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+// DeliverText sends messages to an IRC channel or user.
+func (c *IRCChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *IRCChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}

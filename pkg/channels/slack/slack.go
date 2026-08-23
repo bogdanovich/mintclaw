@@ -252,7 +252,14 @@ func (c *SlackChannel) socketReconnectDelay(attempt int) time.Duration {
 	return delay
 }
 
-func (c *SlackChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
+func (c *SlackChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) channels.DeliveryResult[bus.OutboundMessage] {
+	return channels.DeliverSequentially(ctx, pending, c.sendText)
+}
+
+func (c *SlackChannel) sendText(ctx context.Context, msg bus.OutboundMessage) ([]string, error) {
 	if !c.IsRunning() {
 		return nil, channels.ErrNotRunning
 	}
