@@ -750,6 +750,9 @@ Implementation sequence:
     the tuple-returning media method and optional typed fallback; every
     media-capable channel returns confirmed IDs, retryable remainder,
     acceptance, and errors through `DeliveryResult`.
+22. Make `tools.image_generate.model` the sole image-generator selector.
+    Delete the unused agent-default image fallback fields and the cross-section
+    runtime fallback; removed fields are rejected by current-schema decoding.
 
 Exit criteria:
 
