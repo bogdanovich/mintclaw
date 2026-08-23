@@ -101,9 +101,9 @@ func TestNodesCommandRejectsInvalidStateFilter(t *testing.T) {
 	}
 }
 
-func TestNodesInvocationStoreInspectAndExport(t *testing.T) {
+func TestNodesInvocationStoreInspect(t *testing.T) {
 	configPath, workspace := writeTestConfig(t)
-	store, err := nodepkg.NewGatewayInvocationSQLiteStore(
+	store, err := nodepkg.NewGatewayInvocationStore(
 		nodepkg.GatewayInvocationStorePath(workspace),
 		16*1024*1024,
 	)
@@ -121,51 +121,12 @@ func TestNodesInvocationStoreInspectAndExport(t *testing.T) {
 		"inspect",
 		"--json",
 	)
-	var report nodepkg.GatewayInvocationSQLiteReport
+	var report nodepkg.GatewayInvocationStoreReport
 	if err = json.Unmarshal(output, &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.SchemaVersion != 1 || report.Records != 0 || !report.MigrationComplete {
+	if report.SchemaVersion != 1 || report.Records != 0 {
 		t.Fatalf("inspection report = %#v", report)
-	}
-	exportPath := filepath.Join(workspace, "state", "node_invocations.rollback.json")
-	output = executeNodesCommand(
-		t,
-		configPath,
-		time.Now(),
-		"invocation-store",
-		"export",
-		"--gateway-stopped",
-		"--output",
-		exportPath,
-	)
-	if !bytes.Contains(output, []byte("exported records=0")) {
-		t.Fatalf("export output = %q", output)
-	}
-	legacy, err := nodepkg.NewGatewayInvocationStore(
-		exportPath,
-		nodepkg.DefaultGatewayInvocationLimit,
-		nodepkg.DefaultGatewayInvocationStoreBytes,
-	)
-	if err != nil {
-		t.Fatalf("open exported legacy snapshot: %v", err)
-	}
-	if err = legacy.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestNodesInvocationStoreExportRequiresStoppedGateway(t *testing.T) {
-	configPath, _ := writeTestConfig(t)
-	cmd := newNodesCommand(commandDeps{
-		configPath: func() string { return configPath },
-		now:        time.Now,
-	})
-	cmd.SetArgs([]string{"invocation-store", "export", "--output", "unused.json"})
-	cmd.SilenceErrors = true
-	cmd.SilenceUsage = true
-	if err := cmd.Execute(); err == nil {
-		t.Fatal("downgrade export accepted a potentially running gateway")
 	}
 }
 

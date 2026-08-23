@@ -35,7 +35,7 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Durable Outbound Delivery](durable-outbound-delivery.md): canonical outbound ownership, typed channel outcomes, retry-safe restart reconciliation, and explicit ambiguity.
 - [Safe Restart And Deploy](safe-restart-and-deploy.md): bounded restart/deploy handoff, shared binary targets, and durability boundaries.
 - [Node Companion](node-companion.md): outbound paired capability hosts, transport and identity boundaries, remote execution policy, and the Linux/macOS MVP.
-- [Gateway Invocation SQLite Admission](gateway-invocation-sqlite-admission.md): transactional high-volume invocation retention, JSON migration, no-replay, and fail-closed downgrade boundaries.
+- [Gateway Invocation SQLite Contract](gateway-invocation-sqlite-admission.md): transactional high-volume invocation retention, current-format admission, no-replay, and fail-closed schema boundaries.
 - [Node Companion Post-MVP Roadmap](node-companion-roadmap.md): ordered future milestones for explicit owner/root shell and PTY access, administrator file transfer, service management, fleet operations, executors, transports, and additional capabilities.
 - [Android Companion Roadmap](android-companion-roadmap.md): native Android
   operator chat and device-node architecture, reliability, permissions,

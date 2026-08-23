@@ -707,6 +707,10 @@ Implementation sequence:
     boolean-origin state. The active launcher config has no token, and its
     SQLite credential store is initialized; runtime behavior depends only on
     the current effective config values.
+11. Delete the gateway invocation JSON engine, startup importer, marker
+    protocol, and downgrade exporter. The active SQLite database passes the
+    current schema and integrity checks; runtime and tests use that one store,
+    while rollback restores a matching binary and same-time SQLite backup.
 
 Exit criteria:
 

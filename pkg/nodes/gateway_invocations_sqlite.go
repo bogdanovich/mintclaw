@@ -18,13 +18,10 @@ import (
 	"unicode"
 
 	_ "modernc.org/sqlite"
-
-	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 const (
 	gatewayInvocationSQLiteSchemaVersion = 1
-	gatewayInvocationMigrationVersion    = 2
 	gatewayInvocationSQLiteBusyTimeout   = 5 * time.Second
 )
 
@@ -102,15 +99,8 @@ UNIQUE(agent_id, session_id, actor_id, tool_call_id, workspace_id, execution_id)
 	},
 }
 
-type gatewayInvocationMigrationMarker struct {
-	Version  int    `json:"version"`
-	Backend  string `json:"backend"`
-	Database string `json:"database"`
-}
-
 type gatewayInvocationSQLiteStore struct {
 	path              string
-	legacy            string
 	maxBytes          int64
 	retention         time.Duration
 	now               func() time.Time
@@ -166,7 +156,7 @@ func newGatewayInvocationSQLiteStoreWithStartupValidation(
 		return nil, errors.New("gateway node invocation SQLite path must end in .db")
 	}
 	if maxBytes <= 0 {
-		maxBytes = DefaultGatewayInvocationSQLiteBytes
+		maxBytes = DefaultGatewayInvocationStoreBytes
 	}
 	if now == nil {
 		now = time.Now
@@ -177,26 +167,13 @@ func newGatewayInvocationSQLiteStoreWithStartupValidation(
 	if err := validateGatewayInvocationSQLiteDirectory(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-
-	legacy := strings.TrimSuffix(path, filepath.Ext(path)) + ".json"
-	release, err := acquireRegistryFileLock(legacy + ".lock")
-	if err != nil {
-		return nil, fmt.Errorf("lock gateway node invocation migration: %w", err)
-	}
-	defer release()
-	legacyKind, document, err := readGatewayInvocationMigrationSource(legacy)
+	releaseInitialization, err := acquireGatewayInvocationSQLiteInitialization(path)
 	if err != nil {
 		return nil, err
 	}
-	if legacyKind == "marker" {
-		if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
-			return nil, errors.New("gateway node invocation migration marker has no durable database")
-		} else if statErr != nil {
-			return nil, fmt.Errorf("inspect gateway node invocation SQLite database behind marker: %w", statErr)
-		}
-	}
+	defer releaseInitialization()
 
-	databaseExisted, databaseIdentity, err := prepareGatewayInvocationSQLiteFile(path)
+	databaseIdentity, err := prepareGatewayInvocationSQLiteFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -223,16 +200,32 @@ func newGatewayInvocationSQLiteStoreWithStartupValidation(
 		return nil, err
 	}
 	store := &gatewayInvocationSQLiteStore{
-		path: path, legacy: legacy, maxBytes: maxBytes,
+		path: path, maxBytes: maxBytes,
 		retention: DefaultGatewayInvocationRetention, now: now, db: db, identity: databaseIdentity,
 		startupValidation: startupValidation,
 	}
-	if err = store.initialize(databaseExisted, legacyKind, document); err != nil {
+	if err = store.initialize(); err != nil {
 		_ = db.Close()
 		_ = databaseIdentity.Close()
 		return nil, err
 	}
 	return store, nil
+}
+
+func acquireGatewayInvocationSQLiteInitialization(path string) (func(), error) {
+	directory, err := openAnchoredDirectory(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("anchor gateway node invocation SQLite initialization: %w", err)
+	}
+	releaseLock, err := directory.acquireLock(filepath.Base(path) + ".init.lock")
+	if err != nil {
+		_ = directory.close()
+		return nil, fmt.Errorf("lock gateway node invocation SQLite initialization: %w", err)
+	}
+	return func() {
+		releaseLock()
+		_ = directory.close()
+	}, nil
 }
 
 func validateGatewayInvocationSQLiteDirectory(path string) error {
@@ -246,10 +239,10 @@ func validateGatewayInvocationSQLiteDirectory(path string) error {
 	return nil
 }
 
-func prepareGatewayInvocationSQLiteFile(path string) (bool, *os.File, error) {
+func prepareGatewayInvocationSQLiteFile(path string) (*os.File, error) {
 	directory, err := openAnchoredDirectory(filepath.Dir(path))
 	if err != nil {
-		return false, nil, fmt.Errorf("anchor gateway node invocation SQLite directory: %w", err)
+		return nil, fmt.Errorf("anchor gateway node invocation SQLite directory: %w", err)
 	}
 	defer func() { _ = directory.close() }()
 	name := filepath.Base(path)
@@ -257,27 +250,27 @@ func prepareGatewayInvocationSQLiteFile(path string) (bool, *os.File, error) {
 	if err == nil {
 		if info.Mode().Perm()&0o077 != 0 {
 			_ = file.Close()
-			return false, nil, errors.New("gateway node invocation SQLite database permissions are too broad")
+			return nil, errors.New("gateway node invocation SQLite database permissions are too broad")
 		}
-		return true, file, nil
+		return file, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return false, nil, fmt.Errorf("inspect gateway node invocation SQLite database: %w", err)
+		return nil, fmt.Errorf("inspect gateway node invocation SQLite database: %w", err)
 	}
 	file, err = directory.createRegularExclusive(name, 0o600)
 	if err != nil {
-		return false, nil, fmt.Errorf("create gateway node invocation SQLite database: %w", err)
+		return nil, fmt.Errorf("create gateway node invocation SQLite database: %w", err)
 	}
 	info, statErr := file.Stat()
 	if statErr != nil {
 		_ = file.Close()
-		return false, nil, fmt.Errorf("inspect new gateway node invocation SQLite database: %w", statErr)
+		return nil, fmt.Errorf("inspect new gateway node invocation SQLite database: %w", statErr)
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
 		_ = file.Close()
-		return false, nil, errors.New("new gateway node invocation SQLite database is unsafe")
+		return nil, errors.New("new gateway node invocation SQLite database is unsafe")
 	}
-	return false, file, nil
+	return file, nil
 }
 
 func validateGatewayInvocationSQLiteSidecars(path string) error {
@@ -317,11 +310,7 @@ func verifyGatewayInvocationSQLiteIdentity(path string, expected *os.File) error
 	return nil
 }
 
-func (store *gatewayInvocationSQLiteStore) initialize(
-	databaseExisted bool,
-	legacyKind string,
-	document gatewayInvocationDocument,
-) error {
+func (store *gatewayInvocationSQLiteStore) initialize() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if store.startupValidation != nil {
@@ -332,9 +321,6 @@ func (store *gatewayInvocationSQLiteStore) initialize(
 	hasSchema, err := store.hasSchema(ctx)
 	if err != nil {
 		return err
-	}
-	if legacyKind == "marker" && (!databaseExisted || !hasSchema) {
-		return errors.New("gateway node invocation migration marker has no valid durable database")
 	}
 	if hasSchema {
 		if err = store.verifySchema(ctx); err != nil {
@@ -360,36 +346,6 @@ func (store *gatewayInvocationSQLiteStore) initialize(
 	}
 	if err = store.applyPageLimit(ctx); err != nil {
 		return err
-	}
-	switch legacyKind {
-	case "marker":
-		// Schema and record integrity were verified before any database mutation.
-	case "snapshot":
-		if err = store.importOrVerify(ctx, document); err != nil {
-			return err
-		}
-		if err = store.verifyIntegrity(ctx); err != nil {
-			return fmt.Errorf("verify imported gateway node invocation SQLite database: %w", err)
-		}
-		if err = writeGatewayInvocationMigrationMarker(store.legacy, store.path); err != nil {
-			return err
-		}
-	case "missing":
-		if databaseExisted && hasSchema {
-			var count int
-			if err = store.db.QueryRowContext(ctx, "SELECT count(*) FROM gateway_invocations").
-				Scan(&count); err != nil {
-				return fmt.Errorf("count unmarked gateway node invocation SQLite database: %w", err)
-			}
-			if count != 0 {
-				return errors.New("gateway node invocation SQLite database lacks downgrade marker")
-			}
-		}
-		if err = writeGatewayInvocationMigrationMarker(store.legacy, store.path); err != nil {
-			return err
-		}
-	default:
-		return errors.New("unsupported gateway node invocation migration state")
 	}
 	if err = store.prune(ctx); err != nil {
 		return fmt.Errorf("prune gateway node invocation SQLite database: %w", err)
@@ -587,102 +543,6 @@ func validateGatewayInvocationRecordForStorage(record GatewayInvocationRecord) e
 	return nil
 }
 
-func readGatewayInvocationMigrationSource(
-	path string,
-) (string, gatewayInvocationDocument, error) {
-	data, err := readGatewayInvocationMigrationBytes(path, DefaultGatewayInvocationStoreBytes)
-	if errors.Is(err, os.ErrNotExist) {
-		return "missing", gatewayInvocationDocument{}, nil
-	}
-	if err != nil {
-		return "", gatewayInvocationDocument{}, fmt.Errorf("read gateway node invocation migration source: %w", err)
-	}
-	var marker gatewayInvocationMigrationMarker
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&marker); err == nil && marker.Version == gatewayInvocationMigrationVersion &&
-		marker.Backend == "sqlite" && marker.Database == filepath.Base(strings.TrimSuffix(path, ".json")+".db") {
-		if err = requireGatewayInvocationJSONEOF(decoder); err == nil {
-			return "marker", gatewayInvocationDocument{}, nil
-		}
-	}
-	var document gatewayInvocationDocument
-	decoder = json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&document); err != nil {
-		return "", gatewayInvocationDocument{}, fmt.Errorf("decode gateway node invocation migration source: %w", err)
-	}
-	if err = requireGatewayInvocationJSONEOF(decoder); err != nil {
-		return "", gatewayInvocationDocument{}, fmt.Errorf("decode gateway node invocation migration source: %w", err)
-	}
-	if document.Version != gatewayInvocationStoreVersion || document.Records == nil {
-		return "", gatewayInvocationDocument{}, errors.New("unsupported gateway node invocation migration source")
-	}
-	return "snapshot", document, nil
-}
-
-func readGatewayInvocationMigrationBytes(path string, maxBytes int) ([]byte, error) {
-	directory, err := openAnchoredDirectory(filepath.Dir(path))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = directory.close() }()
-	file, before, err := directory.openRegular(filepath.Base(path))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = file.Close() }()
-	if before.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("gateway node invocation migration source permissions are too broad")
-	}
-	if before.Size() > int64(maxBytes) {
-		return nil, ErrGatewayInvocationStoreFull
-	}
-	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxBytes {
-		return nil, ErrGatewayInvocationStoreFull
-	}
-	after, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !sameGatewayInvocationFileInfo(before, after) {
-		return nil, errors.New("gateway node invocation migration source changed while reading")
-	}
-	return data, nil
-}
-
-func requireGatewayInvocationJSONEOF(decoder *json.Decoder) error {
-	var extra any
-	err := decoder.Decode(&extra)
-	if errors.Is(err, io.EOF) {
-		return nil
-	}
-	if err == nil {
-		return errors.New("unexpected trailing JSON value")
-	}
-	return err
-}
-
-func writeGatewayInvocationMigrationMarker(path string, database string) error {
-	data, err := json.Marshal(gatewayInvocationMigrationMarker{
-		Version:  gatewayInvocationMigrationVersion,
-		Backend:  "sqlite",
-		Database: filepath.Base(database),
-	})
-	if err != nil {
-		return fmt.Errorf("encode gateway node invocation migration marker: %w", err)
-	}
-	data = append(data, '\n')
-	if err = fileutil.WriteFileAtomic(path, data, 0o600); err != nil {
-		return fmt.Errorf("publish gateway node invocation migration marker: %w", err)
-	}
-	return nil
-}
-
 func chmodGatewayInvocationSQLiteSidecars(path string) error {
 	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
 		info, err := os.Lstat(candidate)
@@ -702,12 +562,12 @@ func chmodGatewayInvocationSQLiteSidecars(path string) error {
 	return nil
 }
 
-// InspectGatewayInvocationSQLite validates and reports a redacted view of an
+// InspectGatewayInvocationStore validates and reports a redacted view of an
 // existing database without running retention or any other mutation.
-func InspectGatewayInvocationSQLite(path string) (GatewayInvocationSQLiteReport, error) {
+func InspectGatewayInvocationStore(path string) (GatewayInvocationStoreReport, error) {
 	store, err := openGatewayInvocationSQLiteReadOnly(path)
 	if err != nil {
-		return GatewayInvocationSQLiteReport{}, err
+		return GatewayInvocationStoreReport{}, err
 	}
 	defer func() {
 		_ = store.db.Close()
@@ -715,15 +575,14 @@ func InspectGatewayInvocationSQLite(path string) (GatewayInvocationSQLiteReport,
 	}()
 	ctx := context.Background()
 	if err = store.verifySchema(ctx); err != nil {
-		return GatewayInvocationSQLiteReport{}, err
+		return GatewayInvocationStoreReport{}, err
 	}
 	if err = store.verifyIntegrity(ctx); err != nil {
-		return GatewayInvocationSQLiteReport{}, err
+		return GatewayInvocationStoreReport{}, err
 	}
-	report := GatewayInvocationSQLiteReport{
-		SchemaVersion:     gatewayInvocationSQLiteSchemaVersion,
-		RetentionSeconds:  int64(DefaultGatewayInvocationRetention / time.Second),
-		MigrationComplete: true,
+	report := GatewayInvocationStoreReport{
+		SchemaVersion:    gatewayInvocationSQLiteSchemaVersion,
+		RetentionSeconds: int64(DefaultGatewayInvocationRetention / time.Second),
 	}
 	if err = store.db.QueryRowContext(ctx, `SELECT count(*),
 coalesce(sum(CASE WHEN state = 'prepared' THEN 1 ELSE 0 END), 0),
@@ -734,7 +593,7 @@ coalesce(min(updated_at), 0) FROM gateway_invocations`).Scan(
 		&report.Dispatched,
 		&report.OldestUpdatedAt,
 	); err != nil {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf("summarize gateway node invocation SQLite database: %w", err)
+		return GatewayInvocationStoreReport{}, fmt.Errorf("summarize gateway node invocation SQLite database: %w", err)
 	}
 	var pageSize, pageCount, freePages int64
 	for query, destination := range map[string]*int64{
@@ -743,183 +602,25 @@ coalesce(min(updated_at), 0) FROM gateway_invocations`).Scan(
 		"PRAGMA freelist_count": &freePages,
 	} {
 		if err = store.db.QueryRowContext(ctx, query).Scan(destination); err != nil {
-			return GatewayInvocationSQLiteReport{}, fmt.Errorf("inspect gateway node invocation SQLite pages: %w", err)
+			return GatewayInvocationStoreReport{}, fmt.Errorf("inspect gateway node invocation SQLite pages: %w", err)
 		}
 	}
 	report.PageBytes = pageCount * pageSize
 	report.FreePageBytes = freePages * pageSize
-	report.MaximumBytes = DefaultGatewayInvocationSQLiteBytes
+	report.MaximumBytes = DefaultGatewayInvocationStoreBytes
 	if err = verifyGatewayInvocationSQLiteIdentity(path, store.identity); err != nil {
-		return GatewayInvocationSQLiteReport{}, err
+		return GatewayInvocationStoreReport{}, err
 	}
 	if report.DatabaseBytes, err = gatewayInvocationSQLiteFileSize(path); err != nil {
-		return GatewayInvocationSQLiteReport{}, err
+		return GatewayInvocationStoreReport{}, err
 	}
 	if report.WALBytes, err = gatewayInvocationSQLiteOptionalFileSize(path + "-wal"); err != nil {
-		return GatewayInvocationSQLiteReport{}, err
+		return GatewayInvocationStoreReport{}, err
 	}
 	if report.SHMBytes, err = gatewayInvocationSQLiteOptionalFileSize(path + "-shm"); err != nil {
-		return GatewayInvocationSQLiteReport{}, err
+		return GatewayInvocationStoreReport{}, err
 	}
 	return report, nil
-}
-
-// ExportGatewayInvocationSQLite recreates the bounded legacy JSON snapshot
-// required before installing a pre-SQLite binary. The caller must first stop
-// the gateway so no authority can be committed after this snapshot.
-func ExportGatewayInvocationSQLite(path, output string, replace bool) (GatewayInvocationSQLiteReport, error) {
-	path = filepath.Clean(path)
-	output = filepath.Clean(output)
-	if filepath.Dir(path) != filepath.Dir(output) {
-		return GatewayInvocationSQLiteReport{}, errors.New(
-			"gateway node invocation export must stay in the protected state directory",
-		)
-	}
-	if err := protectGatewayInvocationSQLiteExportTarget(path, output); err != nil {
-		return GatewayInvocationSQLiteReport{}, err
-	}
-	report, err := InspectGatewayInvocationSQLite(path)
-	if err != nil {
-		return GatewayInvocationSQLiteReport{}, err
-	}
-	if report.Records > DefaultGatewayInvocationLimit {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf(
-			"gateway node invocation downgrade export exceeds legacy record limit: %w",
-			ErrGatewayInvocationStoreFull,
-		)
-	}
-	store, err := openGatewayInvocationSQLiteReadOnly(path)
-	if err != nil {
-		return GatewayInvocationSQLiteReport{}, err
-	}
-	defer func() {
-		_ = store.db.Close()
-		_ = store.identity.Close()
-	}()
-	ctx := context.Background()
-	transaction, err := store.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf("begin gateway node invocation downgrade export: %w", err)
-	}
-	defer func() { _ = transaction.Rollback() }()
-	rows, err := transaction.QueryContext(ctx, gatewayInvocationSelect+" ORDER BY invocation_id")
-	if err != nil {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf("read gateway node invocation downgrade export: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	document := gatewayInvocationDocument{
-		Version: gatewayInvocationStoreVersion,
-		Records: make(map[string]GatewayInvocationRecord, report.Records),
-	}
-	for rows.Next() {
-		record, scanErr := scanGatewayInvocationRecord(rows)
-		if scanErr != nil {
-			return GatewayInvocationSQLiteReport{}, fmt.Errorf(
-				"validate gateway node invocation downgrade export: %w",
-				scanErr,
-			)
-		}
-		document.Records[record.Plan.InvocationID] = record
-	}
-	if err = rows.Err(); err != nil {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf("read gateway node invocation downgrade export: %w", err)
-	}
-	if err = rows.Close(); err != nil {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf("read gateway node invocation downgrade export: %w", err)
-	}
-	if int64(len(document.Records)) != report.Records {
-		return GatewayInvocationSQLiteReport{}, errors.New(
-			"gateway node invocation downgrade export changed while reading",
-		)
-	}
-	data, err := json.Marshal(document)
-	if err != nil {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf("encode gateway node invocation downgrade export: %w", err)
-	}
-	data = append(data, '\n')
-	if len(data) > DefaultGatewayInvocationStoreBytes {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf(
-			"gateway node invocation downgrade export exceeds legacy byte limit: %w",
-			ErrGatewayInvocationStoreFull,
-		)
-	}
-	if err = transaction.Commit(); err != nil {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf("commit gateway node invocation downgrade export: %w", err)
-	}
-	if err = publishGatewayInvocationSQLiteExport(output, data, replace); err != nil {
-		return GatewayInvocationSQLiteReport{}, fmt.Errorf("publish gateway node invocation downgrade export: %w", err)
-	}
-	kind, exported, err := readGatewayInvocationMigrationSource(output)
-	if err != nil || kind != "snapshot" || len(exported.Records) != len(document.Records) {
-		return GatewayInvocationSQLiteReport{}, errors.New(
-			"validate published gateway node invocation downgrade export",
-		)
-	}
-	return report, nil
-}
-
-func protectGatewayInvocationSQLiteExportTarget(path, output string) error {
-	protected := []string{
-		path,
-		strings.TrimSuffix(path, filepath.Ext(path)) + ".json",
-		path + "-wal",
-		path + "-shm",
-	}
-	for _, candidate := range protected {
-		if strings.EqualFold(output, candidate) {
-			return errors.New("gateway node invocation export target is a protected SQLite artifact")
-		}
-		outputInfo, outputErr := os.Stat(output)
-		candidateInfo, candidateErr := os.Stat(candidate)
-		if outputErr == nil && candidateErr == nil && os.SameFile(outputInfo, candidateInfo) {
-			return errors.New("gateway node invocation export target aliases a protected SQLite artifact")
-		}
-		if outputErr != nil && !errors.Is(outputErr, os.ErrNotExist) {
-			return fmt.Errorf("inspect gateway node invocation export target: %w", outputErr)
-		}
-		if candidateErr != nil && !errors.Is(candidateErr, os.ErrNotExist) {
-			return fmt.Errorf("inspect protected gateway node invocation SQLite artifact: %w", candidateErr)
-		}
-	}
-	return nil
-}
-
-func publishGatewayInvocationSQLiteExport(path string, data []byte, replace bool) error {
-	if replace {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
-	}
-	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, ".node-invocations-export-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		_ = temporary.Close()
-		_ = os.Remove(temporaryPath)
-	}()
-	if err = temporary.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err = temporary.Write(data); err != nil {
-		return err
-	}
-	if err = temporary.Sync(); err != nil {
-		return err
-	}
-	if err = temporary.Close(); err != nil {
-		return err
-	}
-	if err = os.Link(temporaryPath, path); err != nil {
-		return err
-	}
-	if err = os.Remove(temporaryPath); err != nil {
-		return &fileutil.CommittedWriteError{Err: err}
-	}
-	if err = fileutil.SyncDirectory(directory); err != nil {
-		return &fileutil.CommittedWriteError{Err: err}
-	}
-	return nil
 }
 
 func openGatewayInvocationSQLiteReadOnly(path string) (*gatewayInvocationSQLiteStore, error) {
@@ -932,14 +633,6 @@ func openGatewayInvocationSQLiteReadOnly(path string) (*gatewayInvocationSQLiteS
 	}
 	if err := validateGatewayInvocationSQLiteSidecars(path); err != nil {
 		return nil, err
-	}
-	legacy := strings.TrimSuffix(path, filepath.Ext(path)) + ".json"
-	kind, _, err := readGatewayInvocationMigrationSource(legacy)
-	if err != nil {
-		return nil, err
-	}
-	if kind != "marker" {
-		return nil, errors.New("gateway node invocation SQLite database lacks migration marker")
 	}
 	directory, err := openAnchoredDirectory(filepath.Dir(path))
 	if err != nil {
@@ -975,7 +668,7 @@ func openGatewayInvocationSQLiteReadOnly(path string) (*gatewayInvocationSQLiteS
 		_ = identity.Close()
 		return nil, err
 	}
-	return &gatewayInvocationSQLiteStore{path: path, legacy: legacy, db: db, identity: identity}, nil
+	return &gatewayInvocationSQLiteStore{path: path, db: db, identity: identity}, nil
 }
 
 func gatewayInvocationSQLiteFileSize(path string) (int64, error) {
@@ -995,51 +688,6 @@ func gatewayInvocationSQLiteOptionalFileSize(path string) (int64, error) {
 		return 0, nil
 	}
 	return size, err
-}
-
-func (store *gatewayInvocationSQLiteStore) importOrVerify(
-	ctx context.Context,
-	document gatewayInvocationDocument,
-) error {
-	transaction, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin gateway node invocation import: %w", err)
-	}
-	defer func() { _ = transaction.Rollback() }()
-	var count int
-	if err = transaction.QueryRowContext(ctx, "SELECT count(*) FROM gateway_invocations").Scan(&count); err != nil {
-		return fmt.Errorf("count gateway node invocation import target: %w", err)
-	}
-	if count == 0 {
-		for invocationID, record := range document.Records {
-			if invocationID != record.Plan.InvocationID {
-				return errors.New("gateway node invocation migration key mismatch")
-			}
-			if err = insertGatewayInvocationRecordForMigration(ctx, transaction, record); err != nil {
-				return fmt.Errorf("import gateway node invocation %q: %w", invocationID, err)
-			}
-		}
-		if err = transaction.Commit(); err != nil {
-			return classifyGatewayInvocationSQLiteError("commit gateway node invocation import", err)
-		}
-		return nil
-	}
-	if count != len(document.Records) {
-		return errors.New("gateway node invocation migration count mismatch")
-	}
-	for invocationID, expected := range document.Records {
-		actual, found, lookupErr := lookupGatewayInvocationRow(ctx, transaction, invocationID)
-		if lookupErr != nil || !found || !sameGatewayInvocationRecord(actual, expected) {
-			return fmt.Errorf("gateway node invocation migration proof mismatch for %q", invocationID)
-		}
-	}
-	return transaction.Commit()
-}
-
-func sameGatewayInvocationRecord(left, right GatewayInvocationRecord) bool {
-	leftJSON, leftErr := json.Marshal(left)
-	rightJSON, rightErr := json.Marshal(right)
-	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
 }
 
 const gatewayInvocationSelect = `SELECT
@@ -1087,12 +735,24 @@ func scanGatewayInvocationRecordUnchecked(
 			"decode canonical invocation record: %w", err,
 		)
 	}
-	if err := requireGatewayInvocationJSONEOF(decoder); err != nil {
+	if err := requireGatewayInvocationRecordJSONEOF(decoder); err != nil {
 		return GatewayInvocationRecord{}, gatewayInvocationProjection{}, fmt.Errorf(
 			"decode canonical invocation record: %w", err,
 		)
 	}
 	return record, projection, nil
+}
+
+func requireGatewayInvocationRecordJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err == nil {
+		return errors.New("unexpected trailing JSON value")
+	}
+	return err
 }
 
 func validateGatewayInvocationProjection(
@@ -1128,19 +788,6 @@ func insertGatewayInvocationRecord(
 	record GatewayInvocationRecord,
 ) error {
 	if err := record.validate(); err != nil {
-		return err
-	}
-	return insertGatewayInvocationRecordUnchecked(ctx, executor, record)
-}
-
-func insertGatewayInvocationRecordForMigration(
-	ctx context.Context,
-	executor interface {
-		ExecContext(context.Context, string, ...any) (sql.Result, error)
-	},
-	record GatewayInvocationRecord,
-) error {
-	if err := validateGatewayInvocationRecordForStorage(record); err != nil {
 		return err
 	}
 	return insertGatewayInvocationRecordUnchecked(ctx, executor, record)
@@ -1324,13 +971,29 @@ func (store *gatewayInvocationSQLiteStore) prepareOwned(
 	if err = retainedRows.Close(); err != nil {
 		return GatewayInvocationRecord{}, false, err
 	}
+	existing, found, err := lookupGatewayInvocationRow(ctx, transaction, plan.InvocationID)
+	if err != nil {
+		return GatewayInvocationRecord{}, false, err
+	}
+	if found {
+		if sameGatewayInvocationBinding(existing, record) {
+			if err = transaction.Commit(); err != nil {
+				return GatewayInvocationRecord{}, false, classifyGatewayInvocationSQLiteError(
+					"commit retained prepare",
+					err,
+				)
+			}
+			return existing, false, nil
+		}
+		return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
+	}
 	var conflictingID string
 	err = transaction.QueryRowContext(
 		ctx,
 		"SELECT invocation_id FROM gateway_invocations WHERE idempotency_key=?",
 		plan.IdempotencyKey,
 	).Scan(&conflictingID)
-	if err == nil && conflictingID != plan.InvocationID {
+	if err == nil {
 		return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {

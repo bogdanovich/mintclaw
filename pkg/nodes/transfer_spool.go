@@ -24,19 +24,20 @@ import (
 )
 
 const (
-	transferSpoolVersion            = 1
-	transferSpoolIndexName          = ".transfer-spool.json"
-	transferSpoolLockName           = ".transfer-spool.lock"
-	TransferArtifactRefPrefix       = "transfer-artifact://"
-	DefaultGatewayTransferLimit     = 256
-	DefaultGatewayTransferSpoolSize = int64(4 * 1024 * 1024 * 1024)
-	DefaultGatewayTransferRetention = 24 * time.Hour
-	MaxGatewayActiveTransfers       = 8
-	MaxTargetProfileActiveTransfers = 2
-	MaxGatewayTransferRetention     = 7 * 24 * time.Hour
-	MaxGatewayTransferLifetime      = time.Hour
-	MaxTransferArtifactBytes        = int64(1024 * 1024 * 1024)
-	MaxTransferArtifactChunkBytes   = 256 * 1024
+	transferSpoolVersion              = 1
+	transferSpoolIndexName            = ".transfer-spool.json"
+	transferSpoolLockName             = ".transfer-spool.lock"
+	maxGatewayTransferSpoolIndexBytes = 32 * 1024 * 1024
+	TransferArtifactRefPrefix         = "transfer-artifact://"
+	DefaultGatewayTransferLimit       = 256
+	DefaultGatewayTransferSpoolSize   = int64(4 * 1024 * 1024 * 1024)
+	DefaultGatewayTransferRetention   = 24 * time.Hour
+	MaxGatewayActiveTransfers         = 8
+	MaxTargetProfileActiveTransfers   = 2
+	MaxGatewayTransferRetention       = 7 * 24 * time.Hour
+	MaxGatewayTransferLifetime        = time.Hour
+	MaxTransferArtifactBytes          = int64(1024 * 1024 * 1024)
+	MaxTransferArtifactChunkBytes     = 256 * 1024
 )
 
 var (
@@ -830,11 +831,11 @@ func (store *GatewayTransferSpool) loadAndReconcile() error {
 	case err != nil:
 		return fmt.Errorf("open gateway transfer spool index: %w", err)
 	default:
-		if info.Size() > DefaultGatewayInvocationStoreBytes {
+		if info.Size() > maxGatewayTransferSpoolIndexBytes {
 			_ = file.Close()
 			return errors.New("gateway transfer spool index exceeds size limit")
 		}
-		data, readErr := io.ReadAll(io.LimitReader(file, DefaultGatewayInvocationStoreBytes+1))
+		data, readErr := io.ReadAll(io.LimitReader(file, maxGatewayTransferSpoolIndexBytes+1))
 		_ = file.Close()
 		if readErr != nil {
 			return fmt.Errorf("read gateway transfer spool index: %w", readErr)
@@ -1023,7 +1024,7 @@ func (store *GatewayTransferSpool) persistLocked() error {
 	if err != nil {
 		return fmt.Errorf("encode gateway transfer spool index: %w", err)
 	}
-	if len(data) > DefaultGatewayInvocationStoreBytes {
+	if len(data) > maxGatewayTransferSpoolIndexBytes {
 		return ErrTransferSpoolFull
 	}
 	return store.writeIndex(data)

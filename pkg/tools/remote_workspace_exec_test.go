@@ -351,7 +351,10 @@ func workspaceExecTestSetup(t *testing.T, allowJobs bool) (*config.Config, *fake
 		}},
 		connected: map[nodes.ID]bool{snapshot.ID: true},
 	}
-	store, err := nodes.NewGatewayInvocationStore(filepath.Join(t.TempDir(), "invocations.json"), 8, 1024*1024)
+	store, err := nodes.NewGatewayInvocationStore(
+		filepath.Join(t.TempDir(), "state", "invocations.db"),
+		1024*1024,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
