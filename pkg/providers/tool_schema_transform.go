@@ -44,37 +44,6 @@ func (p *toolSchemaTransformProvider) GetDefaultModel() string {
 	return p.delegate.GetDefaultModel()
 }
 
-func (p *toolSchemaTransformProvider) ChatStream(
-	ctx context.Context,
-	messages []Message,
-	tools []ToolDefinition,
-	model string,
-	options map[string]any,
-	onChunk func(accumulated string),
-) (*LLMResponse, error) {
-	transformed, err := common.TransformToolDefinitions(tools, p.transform)
-	if err != nil {
-		return nil, err
-	}
-	response, attempted, err := ChatStreamEvents(
-		ctx,
-		p.delegate,
-		messages,
-		transformed,
-		model,
-		options,
-		func(chunk StreamChunk) {
-			if onChunk != nil {
-				onChunk(chunk.Content)
-			}
-		},
-	)
-	if !attempted {
-		return nil, ErrStreamingContract
-	}
-	return response, err
-}
-
 func (p *toolSchemaTransformProvider) ChatStreamEvents(
 	ctx context.Context,
 	messages []Message,

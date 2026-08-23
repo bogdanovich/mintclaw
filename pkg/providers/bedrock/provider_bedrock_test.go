@@ -661,8 +661,8 @@ func TestParseStreamResponse_TextOnly(t *testing.T) {
 
 	var chunks []string
 	stream := newMockStream(events)
-	resp, err := parseStreamResponse(context.Background(), stream, func(accumulated string) {
-		chunks = append(chunks, accumulated)
+	resp, err := parseStreamResponse(context.Background(), stream, func(chunk StreamChunk) {
+		chunks = append(chunks, chunk.Content)
 	}, "")
 
 	require.NoError(t, err)
@@ -764,8 +764,8 @@ func TestParseStreamResponse_TextAndToolCall(t *testing.T) {
 
 	var chunks []string
 	stream := newMockStream(events)
-	resp, err := parseStreamResponse(context.Background(), stream, func(accumulated string) {
-		chunks = append(chunks, accumulated)
+	resp, err := parseStreamResponse(context.Background(), stream, func(chunk StreamChunk) {
+		chunks = append(chunks, chunk.Content)
 	}, "")
 
 	require.NoError(t, err)

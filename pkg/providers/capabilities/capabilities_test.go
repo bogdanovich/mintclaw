@@ -4,7 +4,6 @@ import "testing"
 
 func TestProviderCapabilitiesNormalizedClearsDependentFields(t *testing.T) {
 	capabilities := ProviderCapabilities{
-		Streaming: StreamingCapabilities{Events: true},
 		ImageGeneration: ImageGenerationCapabilities{
 			ProviderID:   "hidden",
 			DefaultModel: "hidden-model",
@@ -13,9 +12,6 @@ func TestProviderCapabilitiesNormalizedClearsDependentFields(t *testing.T) {
 		ToolSchema: ToolSchemaLimits{MaxDepth: -1},
 	}.Normalized()
 
-	if capabilities.Streaming.Events {
-		t.Fatal("event streaming remained enabled without streaming support")
-	}
 	if capabilities.ImageGeneration != (ImageGenerationCapabilities{}) {
 		t.Fatalf("image generation metadata remained without support: %+v", capabilities.ImageGeneration)
 	}

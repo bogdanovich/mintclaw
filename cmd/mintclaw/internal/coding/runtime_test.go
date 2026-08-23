@@ -54,7 +54,7 @@ func (p *blockingCodingProvider) GetDefaultModel() string { return "coding-test"
 
 func (p *blockingCodingProvider) Capabilities() providers.ProviderCapabilities {
 	return providers.ProviderCapabilities{
-		Streaming: providers.StreamingCapabilities{Supported: true, Events: true},
+		Streaming: true,
 	}
 }
 

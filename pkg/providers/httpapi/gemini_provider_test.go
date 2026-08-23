@@ -140,7 +140,7 @@ func TestGeminiProvider_ChatSeparatesThoughtAndToolCall(t *testing.T) {
 	}
 }
 
-func TestGeminiProvider_ChatStreamParsesThoughtTextAndToolCalls(t *testing.T) {
+func TestGeminiProvider_ChatStreamEventsParsesThoughtTextAndToolCalls(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, ":streamGenerateContent") {
 			t.Fatalf("path = %s, expected streamGenerateContent endpoint", r.URL.Path)
@@ -207,18 +207,18 @@ func TestGeminiProvider_ChatStreamParsesThoughtTextAndToolCalls(t *testing.T) {
 
 	provider := NewGeminiProvider("test-key", server.URL, "", "", 0, nil, nil)
 	updates := make([]string, 0)
-	resp, err := provider.ChatStream(
+	resp, err := provider.ChatStreamEvents(
 		t.Context(),
 		[]Message{{Role: "user", Content: "hello"}},
 		nil,
 		"gemini-2.5-flash",
 		nil,
-		func(accumulated string) {
-			updates = append(updates, accumulated)
+		func(chunk StreamChunk) {
+			updates = append(updates, chunk.Content)
 		},
 	)
 	if err != nil {
-		t.Fatalf("ChatStream() error = %v", err)
+		t.Fatalf("ChatStreamEvents() error = %v", err)
 	}
 	if resp.Content != "Hello World" {
 		t.Fatalf("Content = %q, want %q", resp.Content, "Hello World")
@@ -343,7 +343,7 @@ func TestGeminiStreamingReadIdleTimeoutClosesStalledBody(t *testing.T) {
 	}
 }
 
-func TestGeminiProvider_ChatStreamSkipsEmptyDataFrames(t *testing.T) {
+func TestGeminiProvider_ChatStreamEventsSkipsEmptyDataFrames(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, ok := w.(http.Flusher)
@@ -374,7 +374,7 @@ func TestGeminiProvider_ChatStreamSkipsEmptyDataFrames(t *testing.T) {
 	defer server.Close()
 
 	provider := NewGeminiProvider("test-key", server.URL, "", "", 0, nil, nil)
-	resp, err := provider.ChatStream(
+	resp, err := provider.ChatStreamEvents(
 		t.Context(),
 		[]Message{{Role: "user", Content: "hello"}},
 		nil,
@@ -383,7 +383,7 @@ func TestGeminiProvider_ChatStreamSkipsEmptyDataFrames(t *testing.T) {
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("ChatStream() error = %v", err)
+		t.Fatalf("ChatStreamEvents() error = %v", err)
 	}
 	if resp.Content != "ok" {
 		t.Fatalf("Content = %q, want %q", resp.Content, "ok")
@@ -448,7 +448,7 @@ func TestGeminiProvider_BuildRequestBody_PreservesComplexToolSchemasByDefault(t 
 	}
 }
 
-func TestGeminiProvider_ChatStreamReturnsErrorOnInvalidDataFrame(t *testing.T) {
+func TestGeminiProvider_ChatStreamEventsReturnsErrorOnInvalidDataFrame(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, ok := w.(http.Flusher)
@@ -462,7 +462,7 @@ func TestGeminiProvider_ChatStreamReturnsErrorOnInvalidDataFrame(t *testing.T) {
 	defer server.Close()
 
 	provider := NewGeminiProvider("test-key", server.URL, "", "", 0, nil, nil)
-	_, err := provider.ChatStream(
+	_, err := provider.ChatStreamEvents(
 		t.Context(),
 		[]Message{{Role: "user", Content: "hello"}},
 		nil,
@@ -471,7 +471,7 @@ func TestGeminiProvider_ChatStreamReturnsErrorOnInvalidDataFrame(t *testing.T) {
 		nil,
 	)
 	if err == nil {
-		t.Fatal("ChatStream() expected error for invalid SSE data frame")
+		t.Fatal("ChatStreamEvents() expected error for invalid SSE data frame")
 	}
 	if !strings.Contains(err.Error(), "invalid gemini stream chunk") {
 		t.Fatalf("error = %v, want contains %q", err, "invalid gemini stream chunk")
@@ -518,7 +518,7 @@ func TestGeminiProvider_BuildRequestBody_SetsBothThoughtSignatureFormats(t *test
 	}
 }
 
-func TestGeminiProvider_ChatStreamCoalescesToolCallWithoutWireID(t *testing.T) {
+func TestGeminiProvider_ChatStreamEventsCoalescesToolCallWithoutWireID(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, ok := w.(http.Flusher)
@@ -574,7 +574,7 @@ func TestGeminiProvider_ChatStreamCoalescesToolCallWithoutWireID(t *testing.T) {
 	defer server.Close()
 
 	provider := NewGeminiProvider("test-key", server.URL, "", "", 0, nil, nil)
-	resp, err := provider.ChatStream(
+	resp, err := provider.ChatStreamEvents(
 		t.Context(),
 		[]Message{{Role: "user", Content: "hello"}},
 		nil,
@@ -583,7 +583,7 @@ func TestGeminiProvider_ChatStreamCoalescesToolCallWithoutWireID(t *testing.T) {
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("ChatStream() error = %v", err)
+		t.Fatalf("ChatStreamEvents() error = %v", err)
 	}
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("ToolCalls len = %d, want 1", len(resp.ToolCalls))

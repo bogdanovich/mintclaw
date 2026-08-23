@@ -64,7 +64,7 @@ func TestImageCapabilitiesUsesCurrentDescriptor(t *testing.T) {
 func TestChatStreamEventsDispatchesEventProvider(t *testing.T) {
 	provider := &eventTestProvider{descriptorTestProvider: descriptorTestProvider{
 		capabilities: ProviderCapabilities{
-			Streaming: StreamingCapabilities{Supported: true, Events: true},
+			Streaming: true,
 		},
 	}}
 	var got StreamChunk
@@ -81,7 +81,7 @@ func TestChatStreamEventsDispatchesEventProvider(t *testing.T) {
 
 func TestChatStreamEventsRejectsDescriptorOperationMismatch(t *testing.T) {
 	provider := &descriptorTestProvider{capabilities: ProviderCapabilities{
-		Streaming: StreamingCapabilities{Supported: true, Events: true},
+		Streaming: true,
 	}}
 	_, attempted, err := ChatStreamEvents(t.Context(), provider, nil, nil, "test", nil, nil)
 	if !attempted || !errors.Is(err, ErrStreamingContract) {
@@ -92,25 +92,25 @@ func TestChatStreamEventsRejectsDescriptorOperationMismatch(t *testing.T) {
 func TestBuiltinProviderCapabilityDescriptors(t *testing.T) {
 	httpProvider := NewHTTPProvider("key", "https://api.openai.com/v1", "")
 	httpCapabilities := Capabilities(httpProvider)
-	if !httpCapabilities.Streaming.Events || !httpCapabilities.NativeSearch {
+	if !httpCapabilities.Streaming || !httpCapabilities.NativeSearch {
 		t.Fatalf("OpenAI HTTP capabilities = %+v", httpCapabilities)
 	}
 
 	deepSeekProvider := NewHTTPProvider("key", "https://api.deepseek.com/v1", "")
 	deepSeekProvider.SetProviderName("deepseek")
 	deepSeekCapabilities := Capabilities(deepSeekProvider)
-	if !deepSeekCapabilities.Streaming.Events || !deepSeekCapabilities.Thinking ||
+	if !deepSeekCapabilities.Streaming || !deepSeekCapabilities.Thinking ||
 		deepSeekCapabilities.NativeSearch {
 		t.Fatalf("DeepSeek capabilities = %+v", deepSeekCapabilities)
 	}
 
 	geminiCapabilities := Capabilities(NewGeminiProvider("key", "", "", "", 0, nil, nil))
-	if !geminiCapabilities.Streaming.Events || !geminiCapabilities.Thinking {
+	if !geminiCapabilities.Streaming || !geminiCapabilities.Thinking {
 		t.Fatalf("Gemini capabilities = %+v", geminiCapabilities)
 	}
 
 	claudeCapabilities := Capabilities(NewClaudeProvider("token"))
-	if !claudeCapabilities.Thinking || claudeCapabilities.Streaming.Supported {
+	if !claudeCapabilities.Thinking || claudeCapabilities.Streaming {
 		t.Fatalf("Claude OAuth capabilities = %+v", claudeCapabilities)
 	}
 

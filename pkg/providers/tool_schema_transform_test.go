@@ -149,7 +149,7 @@ func TestWrapProviderWithToolSchemaTransform_GoogleSanitizesSchemas(t *testing.T
 func TestToolSchemaTransformWrapperStreamsWithDeclaredCapabilities(t *testing.T) {
 	capture := &streamingToolCaptureProvider{toolCaptureProvider: toolCaptureProvider{
 		capabilities: ProviderCapabilities{
-			Streaming: StreamingCapabilities{Supported: true, Events: true},
+			Streaming: true,
 		},
 	}}
 	wrapped, err := wrapProviderWithToolSchemaTransform(capture, "simple")

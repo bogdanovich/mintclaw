@@ -1433,7 +1433,7 @@ func TestProviderChat_CustomHeadersInjected(t *testing.T) {
 	}
 }
 
-func TestProviderChatStream_CustomHeadersInjected(t *testing.T) {
+func TestProviderChatStreamEvents_CustomHeadersInjected(t *testing.T) {
 	var gotSource, gotAuth, gotUserAgent string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1459,7 +1459,7 @@ func TestProviderChatStream_CustomHeadersInjected(t *testing.T) {
 		}),
 	)
 
-	out, err := p.ChatStream(
+	out, err := p.ChatStreamEvents(
 		t.Context(),
 		[]Message{{Role: "user", Content: "hi"}},
 		nil,
@@ -1468,7 +1468,7 @@ func TestProviderChatStream_CustomHeadersInjected(t *testing.T) {
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("ChatStream() error = %v", err)
+		t.Fatalf("ChatStreamEvents() error = %v", err)
 	}
 	if out.Content != "ok" {
 		t.Fatalf("Content = %q, want %q", out.Content, "ok")
@@ -1484,7 +1484,7 @@ func TestProviderChatStream_CustomHeadersInjected(t *testing.T) {
 	}
 }
 
-func TestProviderChatStream_ParsesReasoningContent(t *testing.T) {
+func TestProviderChatStreamEvents_ParsesReasoningContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(
@@ -1498,7 +1498,7 @@ func TestProviderChatStream_ParsesReasoningContent(t *testing.T) {
 	defer server.Close()
 
 	p := NewProvider("key", server.URL, "")
-	out, err := p.ChatStream(
+	out, err := p.ChatStreamEvents(
 		t.Context(),
 		[]Message{{Role: "user", Content: "weather?"}},
 		nil,
@@ -1507,7 +1507,7 @@ func TestProviderChatStream_ParsesReasoningContent(t *testing.T) {
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("ChatStream() error = %v", err)
+		t.Fatalf("ChatStreamEvents() error = %v", err)
 	}
 	if out.Content != "Checking the weather" {
 		t.Fatalf("Content = %q, want %q", out.Content, "Checking the weather")
@@ -1582,7 +1582,7 @@ func TestProviderChatStreamEvents_EmitsReasoningBeforeContentFromSameEvent(t *te
 	}
 }
 
-func TestProviderChatStream_ParsesMultilineSSEEvent(t *testing.T) {
+func TestProviderChatStreamEvents_ParsesMultilineSSEEvent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(
@@ -1596,7 +1596,7 @@ func TestProviderChatStream_ParsesMultilineSSEEvent(t *testing.T) {
 	defer server.Close()
 
 	p := NewProvider("key", server.URL, "")
-	out, err := p.ChatStream(
+	out, err := p.ChatStreamEvents(
 		t.Context(),
 		[]Message{{Role: "user", Content: "say hello"}},
 		nil,
@@ -1605,7 +1605,7 @@ func TestProviderChatStream_ParsesMultilineSSEEvent(t *testing.T) {
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("ChatStream() error = %v", err)
+		t.Fatalf("ChatStreamEvents() error = %v", err)
 	}
 	if out.Content != "Hello" {
 		t.Fatalf("Content = %q, want %q", out.Content, "Hello")
@@ -1630,7 +1630,7 @@ func TestProviderChatStream_ParsesMultilineSSEEvent(t *testing.T) {
 	}
 }
 
-func TestProviderChatStream_ParsesReasoningVariants(t *testing.T) {
+func TestProviderChatStreamEvents_ParsesReasoningVariants(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(
@@ -1644,7 +1644,7 @@ func TestProviderChatStream_ParsesReasoningVariants(t *testing.T) {
 	defer server.Close()
 
 	p := NewProvider("key", server.URL, "")
-	out, err := p.ChatStream(
+	out, err := p.ChatStreamEvents(
 		t.Context(),
 		[]Message{{Role: "user", Content: "think"}},
 		nil,
@@ -1653,7 +1653,7 @@ func TestProviderChatStream_ParsesReasoningVariants(t *testing.T) {
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("ChatStream() error = %v", err)
+		t.Fatalf("ChatStreamEvents() error = %v", err)
 	}
 	if out.Content != "done" {
 		t.Fatalf("Content = %q, want %q", out.Content, "done")
@@ -1669,7 +1669,7 @@ func TestProviderChatStream_ParsesReasoningVariants(t *testing.T) {
 	}
 }
 
-func TestProviderChatStream_InvalidEventReturnsError(t *testing.T) {
+func TestProviderChatStreamEvents_InvalidEventReturnsError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"choices\":[\n\n"))
@@ -1677,7 +1677,7 @@ func TestProviderChatStream_InvalidEventReturnsError(t *testing.T) {
 	defer server.Close()
 
 	p := NewProvider("key", server.URL, "")
-	_, err := p.ChatStream(
+	_, err := p.ChatStreamEvents(
 		t.Context(),
 		[]Message{{Role: "user", Content: "hi"}},
 		nil,

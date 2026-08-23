@@ -64,7 +64,7 @@ func (p *GeminiProvider) GetDefaultModel() string {
 
 func (p *GeminiProvider) Capabilities() providercapabilities.ProviderCapabilities {
 	return providercapabilities.ProviderCapabilities{
-		Streaming: providercapabilities.StreamingCapabilities{Supported: true, Events: true},
+		Streaming: true,
 		Thinking:  true,
 	}
 }
@@ -111,28 +111,6 @@ func (p *GeminiProvider) Chat(
 	}
 
 	return parseGeminiResponse(&apiResp), nil
-}
-
-func (p *GeminiProvider) ChatStream(
-	ctx context.Context,
-	messages []Message,
-	tools []ToolDefinition,
-	model string,
-	options map[string]any,
-	onChunk func(accumulated string),
-) (*LLMResponse, error) {
-	return p.ChatStreamEvents(
-		ctx,
-		messages,
-		tools,
-		model,
-		options,
-		func(chunk StreamChunk) {
-			if onChunk != nil && strings.TrimSpace(chunk.Content) != "" {
-				onChunk(chunk.Content)
-			}
-		},
-	)
 }
 
 func (p *GeminiProvider) ChatStreamEvents(
