@@ -263,6 +263,31 @@ func (tool *hardAbortApprovalCountingTool) Execute(
 	return toolshared.NewToolResult("protected action hard-aborted")
 }
 
+type suspendingHardAbortApprovalTool struct{ executions int }
+
+func (*suspendingHardAbortApprovalTool) Name() string { return "approval_suspend_hard_abort" }
+func (*suspendingHardAbortApprovalTool) Description() string {
+	return "Run a protected test action that transfers descendant continuation ownership"
+}
+
+func (*suspendingHardAbortApprovalTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (tool *suspendingHardAbortApprovalTool) Execute(
+	ctx context.Context,
+	_ map[string]any,
+) *toolshared.ToolResult {
+	tool.executions++
+	if ts := turnStateFromContext(ctx); ts != nil {
+		_ = ts.requestHardAbort()
+	}
+	return &toolshared.ToolResult{
+		ForLLM:  "descendant task owns a durable continuation",
+		Control: toolshared.ToolControl{TaskSuspended: true},
+	}
+}
+
 type blockingApprovalTool struct {
 	started        chan struct{}
 	canceled       chan struct{}
@@ -4484,6 +4509,74 @@ func TestApprovedToolHardAbortCleansOriginalExecution(t *testing.T) {
 			cleanupTool.executionID,
 			cleanupTool.inbound,
 		)
+	}
+}
+
+func TestApprovedToolDescendantSuspensionDominatesHardAbort(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-suspend-hard-abort", Name: "approval_suspend_hard_abort",
+			Function: &providers.FunctionCall{Name: "approval_suspend_hard_abort", Arguments: `{}`},
+		}},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &suspendingHardAbortApprovalTool{}
+	agent.Tools.Register(tool)
+	cleanupTool := &turnCleanupTestTool{
+		countingTestTool: &countingTestTool{name: "approved-suspension-cleanup"},
+	}
+	agent.Tools.Register(cleanupTool)
+	if err := al.MountHook(NamedHook("approved-descendant-suspension", &durableApprovalHook{
+		actionSummary: "Run the suspending action",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	original := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", MessageID: "suspension-origin",
+	}
+	turnStatus := TurnEndStatusCompleted
+	if response, err := al.runAgentLoop(t.Context(), agent, turnSpec{
+		TurnStatus: &turnStatus,
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-suspend-hard-abort", SessionKey: "session-suspend-hard-abort",
+			UserMessage: "run suspending action", InboundContext: original,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	}); err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial approval turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, "session-suspend-hard-abort")
+	if !ok {
+		t.Fatal("approval interaction is missing")
+	}
+	record, err := registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "allow_once", MessageID: "suspension-answer", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAllowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", MessageID: "suspension-answer",
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, answer, record,
+	); err != nil {
+		t.Fatalf("resumeClaimedInteraction() error = %v", err)
+	}
+	if tool.executions != 1 || cleanupTool.cleanupCalls != 0 {
+		t.Fatalf(
+			"approved descendant suspension = executions %d, cleanup calls %d, want 1/0",
+			tool.executions,
+			cleanupTool.cleanupCalls,
+		)
+	}
+	history := agent.Sessions.GetHistory("session-suspend-hard-abort")
+	_, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+	if resultIndex < 0 || !strings.Contains(history[resultIndex].Content, "durable continuation") {
+		t.Fatalf("suspended approval history = %#v", history)
 	}
 }
 

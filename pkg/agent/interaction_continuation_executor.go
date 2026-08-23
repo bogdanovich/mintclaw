@@ -68,17 +68,17 @@ func (e *interactionContinuationExecutor) execute(
 		if outcome.JournalErr != nil {
 			return turnResult{}, TurnEndStatusError, outcome.JournalErr
 		}
-		if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
-			e.abort()
-			result, abortErr := host.abortTurn(ts)
-			return result, TurnEndStatusAborted, abortErr
-		}
 		if outcome.Control == ToolControlSuspend {
 			ts.setPhase(TurnPhaseSuspended)
 			return turnResult{
 				status:                 TurnEndStatusSuspended,
 				suspendedInteractionID: outcome.SuspendedInteractionID,
 			}, TurnEndStatusSuspended, nil
+		}
+		if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
+			e.abort()
+			result, abortErr := host.abortTurn(ts)
+			return result, TurnEndStatusAborted, abortErr
 		}
 		if e.validateTool != nil {
 			if validateErr := e.validateTool(); validateErr != nil {
