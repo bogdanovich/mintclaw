@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/auth"
@@ -123,6 +124,20 @@ func TestCreateImageGenerationProviderFromModelUsesCodexOAuth(t *testing.T) {
 	}
 	if ImageCapabilities(provider).ProviderID != "openai-codex" {
 		t.Fatalf("provider id = %q, want openai-codex", ImageCapabilities(provider).ProviderID)
+	}
+}
+
+func TestCreateImageGenerationProviderFromModelRejectsKnownUnsupportedProvider(t *testing.T) {
+	_, _, err := CreateImageGenerationProviderFromModel("anthropic/imagen")
+	if err == nil || !strings.Contains(err.Error(), `provider "anthropic" does not support image generation`) {
+		t.Fatalf("CreateImageGenerationProviderFromModel() error = %v, want unsupported-provider error", err)
+	}
+}
+
+func TestSplitImageGenerationModelPreservesUnknownNamespacedModel(t *testing.T) {
+	provider, model := splitImageGenerationModel("vendor/native/model")
+	if provider != "openai" || model != "vendor/native/model" {
+		t.Fatalf("splitImageGenerationModel() = (%q, %q), want (openai, vendor/native/model)", provider, model)
 	}
 }
 
