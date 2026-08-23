@@ -709,11 +709,7 @@ func getSecretString(m map[string]any, key string) (string, bool) {
 }
 
 func applyConfigSecretsFromMap(cfg *config.Config, raw map[string]any) {
-	channelsMap, hasChannels := asMapField(raw, "channel_list")
-	if !hasChannels {
-		return
-	}
-
+	channelsMap, _ := asMapField(raw, "channel_list")
 	for chName, chData := range channelsMap {
 		chMap, ok := chData.(map[string]any)
 		if !ok {

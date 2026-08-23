@@ -577,17 +577,44 @@ func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
 		name              string
 		registries        string
 		wantRegistryCount int
-		wantGitHubToken   bool
+		wantGitHub        bool
+		wantToken         string
 	}{
 		{
 			name:              "omitted normalizes to defaults",
 			wantRegistryCount: 2,
-			wantGitHubToken:   true,
+			wantGitHub:        true,
+			wantToken:         "ghp-current",
 		},
 		{
 			name:              "explicit empty disables defaults",
 			registries:        `"registries": {}`,
 			wantRegistryCount: 0,
+		},
+		{
+			name: "rotates token without channels",
+			registries: `"registries": {
+				"github": {
+					"enabled": true,
+					"base_url": "https://github.com",
+					"auth_token": "ghp-new"
+				}
+			}`,
+			wantRegistryCount: 1,
+			wantGitHub:        true,
+			wantToken:         "ghp-new",
+		},
+		{
+			name: "clears token without channels",
+			registries: `"registries": {
+				"github": {
+					"enabled": true,
+					"base_url": "https://github.com",
+					"auth_token": ""
+				}
+			}`,
+			wantRegistryCount: 1,
+			wantGitHub:        true,
 		},
 	}
 
@@ -658,19 +685,21 @@ func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
 				t.Fatal("explicit empty registry map reloaded as nil")
 			}
 			github, hasGitHub := cfg.Tools.Skills.Registries.Get("github")
-			if hasGitHub != tt.wantGitHubToken {
-				t.Fatalf("loaded GitHub registry = %t, want %t", hasGitHub, tt.wantGitHubToken)
+			if hasGitHub != tt.wantGitHub {
+				t.Fatalf("loaded GitHub registry = %t, want %t", hasGitHub, tt.wantGitHub)
 			}
-			if tt.wantGitHubToken && github.AuthToken.String() != "ghp-current" {
-				t.Fatalf("loaded GitHub token = %q, want preserved token", github.AuthToken.String())
+			if hasGitHub && github.AuthToken.String() != tt.wantToken {
+				t.Fatalf("loaded GitHub token = %q, want %q", github.AuthToken.String(), tt.wantToken)
 			}
 			security, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
 			if err != nil {
 				t.Fatalf("ReadFile(.security.yml) error = %v", err)
 			}
-			hasPersistedToken := strings.Contains(string(security), "ghp-current")
-			if hasPersistedToken != tt.wantGitHubToken {
-				t.Fatalf("persisted GitHub token = %t, want %t:\n%s", hasPersistedToken, tt.wantGitHubToken, security)
+			if strings.Contains(string(security), "ghp-current") != (tt.wantToken == "ghp-current") {
+				t.Fatalf("old GitHub token persistence did not match replacement intent:\n%s", security)
+			}
+			if tt.wantToken != "" && !strings.Contains(string(security), tt.wantToken) {
+				t.Fatalf("persisted security config omitted GitHub token %q:\n%s", tt.wantToken, security)
 			}
 		})
 	}
