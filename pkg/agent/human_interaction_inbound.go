@@ -1781,7 +1781,12 @@ func terminalTurnDeliverable(
 	if deliverable == nil {
 		deliverable = &taskresult.Deliverable{}
 	}
-	if strings.TrimSpace(deliverable.Text) == "" {
+	if objectiveOutcome != nil && objectiveOutcome.Status == taskresult.OutcomeSucceeded &&
+		strings.TrimSpace(content) != "" {
+		// A validated terminal result is canonical for recovery and task status.
+		// Preserve the tool-owned deliverable's other structured fields.
+		deliverable.Text = content
+	} else if strings.TrimSpace(deliverable.Text) == "" {
 		deliverable.Text = content
 	}
 	if objectiveOutcome != nil {

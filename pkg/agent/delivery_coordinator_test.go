@@ -216,6 +216,32 @@ func TestAsyncToolCompletionDelivery_UsesCurrentConfigForFiltering(t *testing.T)
 	}
 }
 
+func TestAsyncCompletionPromptPreservesTerminalObjectiveResult(t *testing.T) {
+	result := (&toolshared.ToolResult{
+		Deliverable: &taskresult.Deliverable{
+			Text: "Published once: https://example.com/item/42; ID: 42",
+			ObjectiveOutcome: &taskresult.Outcome{
+				Status: taskresult.OutcomeSucceeded,
+				CompletedItems: []taskresult.Item{{
+					Item: "publish item", Kind: "external_action",
+					Receipts: []taskresult.Receipt{{ID: "inv-publish", Kind: "external_action"}},
+				}},
+			},
+		},
+	}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly)
+	content := asyncCompletionPrompt("delegate", result.ContentForLLM())
+	for _, required := range []string{
+		"Published once: https://example.com/item/42; ID: 42",
+		`"status":"succeeded"`,
+		"never describe it as pending approval or still waiting",
+		"Preserve any terminal result links and IDs",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("async completion omitted %q: %s", required, content)
+		}
+	}
+}
+
 func TestDeliverAsyncToolCompletion_UserOnlyUpdatesDelivered(t *testing.T) {
 	al, msgBus, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
 	taskID := "coordinator-user-only"
