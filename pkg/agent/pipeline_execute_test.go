@@ -378,6 +378,7 @@ type boundApprovalSuspensionTool struct {
 	executions       int
 	preparationCalls int
 	continued        bool
+	promptSummary    string
 }
 
 func (*boundApprovalSuspensionTool) Name() string { return "bound_approval" }
@@ -408,9 +409,13 @@ func (tool *boundApprovalSuspensionTool) Execute(ctx context.Context, _ map[stri
 		tool.continued = true
 		return toolshared.NewToolResult("approved")
 	}
+	promptSummary := tool.promptSummary
+	if promptSummary == "" {
+		promptSummary = "Publish the prepared browser action"
+	}
 	return &toolshared.ToolResult{
 		Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
-			Kind: interactions.KindApproval, PromptSummary: "Publish the prepared browser action", Timeout: time.Minute,
+			Kind: interactions.KindApproval, PromptSummary: promptSummary, Timeout: time.Minute,
 		}},
 		Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
 	}
@@ -2070,6 +2075,36 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 			manager.consumptions[0].Origin.ArgumentHash,
 			resumeState.opts.ApprovalGrant,
 		)
+	}
+}
+
+func TestPipelineAdmitsSingleLineBrowserApprovalSummary(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	const summary = "Click button \"publish\" on https://post.craigslist.org; effect: `external_commit`"
+	tool := &boundApprovalSuspensionTool{promptSummary: summary}
+	registry.Register(tool)
+	workspace := t.TempDir()
+	agent := &AgentInstance{ID: "browser", Tools: registry, Sessions: session.NewMemoryStore()}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-browser-summary",
+		sessionKey: "session-browser-summary", workspace: workspace,
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "session-browser-summary"}},
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{{
+		ID: "call-browser-summary", Name: tool.Name(), Arguments: map[string]any{"value": "publish"},
+	}}
+	llm.assistantToolCallsPersisted = true
+	manager := &fakeToolSuspensionManager{
+		disposition: ToolSuspensionDisposition{InteractionID: "interaction-browser-summary", Durable: true},
+	}
+	pipeline := &Pipeline{Interaction: PipelineInteractionServices{Suspension: manager}}
+
+	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if outcome.Control != ToolControlSuspend || len(manager.requests) != 1 ||
+		manager.requests[0].ApprovalAction != summary {
+		t.Fatalf("browser approval admission = %+v, requests = %#v", outcome, manager.requests)
 	}
 }
 

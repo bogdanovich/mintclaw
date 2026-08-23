@@ -1668,7 +1668,7 @@ func browserApprovalSummary(preparation browser.Preparation) string {
 		description = fmt.Sprintf("Press document key %q", action.Action.Key)
 	}
 	return fmt.Sprintf(
-		"%s on %s\nEffect: `%s`",
+		"%s on %s; effect: `%s`",
 		description,
 		origin,
 		action.Effect,

@@ -3489,14 +3489,14 @@ func TestApprovalPromptIncludesOnlyUnambiguousExternalObjective(t *testing.T) {
 				},
 			},
 		},
-		ApprovalAction: "Click button \"publish\" on https://post.craigslist.org\nEffect: `external_commit`",
+		ApprovalAction: "Click button \"publish\" on https://post.craigslist.org; effect: `external_commit`",
 	}
 	prompt := renderInteractionPrompt(record)
 	for _, required := range []string{
 		"`browser_act`",
 		"Requested outcome: Republish Lenovo ThinkVision LT1421 at $25",
 		"Exact action: Click button \"publish\" on https://post.craigslist.org",
-		"Effect: `external_commit`",
+		"effect: `external_commit`",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("approval prompt omitted %q: %q", required, prompt)
