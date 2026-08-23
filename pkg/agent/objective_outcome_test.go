@@ -85,9 +85,45 @@ func TestObjectiveOutcomeDropsExplanationOnVerifiedSuccess(t *testing.T) {
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
 		`"missing_items":[],"explanation":"stale blocker"}` + objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "inspected", Kind: "result"}})
-	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
 	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" {
 		t.Fatalf("successful outcome retained explanation: %#v", outcome)
+	}
+	if clean != "" {
+		t.Fatalf("successful read-only outcome retained legacy explanation: %q", clean)
+	}
+}
+
+func TestObjectiveOutcomePreservesSuccessfulTerminalResult(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"Inspection complete: https://example.com/item/42; ID: 42"}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "inspect item", Kind: "result"}})
+	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" ||
+		clean != "Inspection complete: https://example.com/item/42; ID: 42" {
+		t.Fatalf("successful terminal result = %q, outcome = %#v", clean, outcome)
+	}
+}
+
+func TestObjectiveOutcomePreservesLegacySuccessDetailWithVerifiedReceipt(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+		`"receipt_ids":["inv-publish"]}],"missing_items":[],` +
+		`"explanation":"Published once: https://example.com/item/42; ID: 42"}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "publish item", Kind: "external_action",
+	}})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Target: "https://example.com", Action: "click",
+		Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-publish", "effect": "external_commit"},
+	}}
+	clean, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" ||
+		clean != "Published once: https://example.com/item/42; ID: 42" || !objectiveOutcomeHasReceipt(outcome) {
+		t.Fatalf("legacy terminal result = %q, outcome = %#v", clean, outcome)
 	}
 }
 
