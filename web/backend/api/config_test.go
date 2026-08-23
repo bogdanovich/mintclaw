@@ -574,20 +574,20 @@ func TestHandleUpdateConfig_PreservesExecAllowRemoteDefaultWhenOmitted(t *testin
 
 func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
 	tests := []struct {
-		name               string
-		registries         string
-		wantPersistedField bool
-		wantRegistryCount  int
+		name              string
+		registries        string
+		wantRegistryCount int
+		wantGitHubToken   bool
 	}{
 		{
-			name:              "omitted uses defaults",
+			name:              "omitted normalizes to defaults",
 			wantRegistryCount: 2,
+			wantGitHubToken:   true,
 		},
 		{
-			name:               "explicit empty disables defaults",
-			registries:         `"registries": {}`,
-			wantPersistedField: true,
-			wantRegistryCount:  0,
+			name:              "explicit empty disables defaults",
+			registries:        `"registries": {}`,
+			wantRegistryCount: 0,
 		},
 	}
 
@@ -595,6 +595,18 @@ func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			configPath, cleanup := setupOAuthTestEnv(t)
 			defer cleanup()
+			repository := config.NewRepository(configPath)
+			if _, err := repository.Update(func(cfg *config.Config) error {
+				github, ok := cfg.Tools.Skills.Registries.Get("github")
+				if !ok {
+					return fmt.Errorf("github registry is not configured")
+				}
+				github.AuthToken = *config.NewSecureString("ghp-current")
+				cfg.Tools.Skills.Registries.Set("github", github)
+				return nil
+			}); err != nil {
+				t.Fatalf("seed GitHub token: %v", err)
+			}
 
 			h := NewHandler(configPath)
 			mux := http.NewServeMux()
@@ -631,14 +643,8 @@ func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadFile() error = %v", err)
 			}
-			hasPersistedField := strings.Contains(string(public), `"registries"`)
-			if hasPersistedField != tt.wantPersistedField {
-				t.Fatalf(
-					"persisted registries field = %t, want %t:\n%s",
-					hasPersistedField,
-					tt.wantPersistedField,
-					public,
-				)
+			if !strings.Contains(string(public), `"registries"`) {
+				t.Fatalf("persisted config omitted canonical registries field:\n%s", public)
 			}
 
 			cfg, err := config.LoadConfig(configPath)
@@ -648,8 +654,23 @@ func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
 			if got := len(cfg.Tools.Skills.Registries); got != tt.wantRegistryCount {
 				t.Fatalf("loaded registry count = %d, want %d", got, tt.wantRegistryCount)
 			}
-			if tt.wantPersistedField && cfg.Tools.Skills.Registries == nil {
+			if cfg.Tools.Skills.Registries == nil {
 				t.Fatal("explicit empty registry map reloaded as nil")
+			}
+			github, hasGitHub := cfg.Tools.Skills.Registries.Get("github")
+			if hasGitHub != tt.wantGitHubToken {
+				t.Fatalf("loaded GitHub registry = %t, want %t", hasGitHub, tt.wantGitHubToken)
+			}
+			if tt.wantGitHubToken && github.AuthToken.String() != "ghp-current" {
+				t.Fatalf("loaded GitHub token = %q, want preserved token", github.AuthToken.String())
+			}
+			security, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
+			if err != nil {
+				t.Fatalf("ReadFile(.security.yml) error = %v", err)
+			}
+			hasPersistedToken := strings.Contains(string(security), "ghp-current")
+			if hasPersistedToken != tt.wantGitHubToken {
+				t.Fatalf("persisted GitHub token = %t, want %t:\n%s", hasPersistedToken, tt.wantGitHubToken, security)
 			}
 		})
 	}

@@ -454,7 +454,9 @@ func (c *Config) SecurityCopyForReplacement(path string, current *Config) error 
 	if c == nil {
 		return errors.New("config is nil")
 	}
-	registriesOmitted := c.Tools.Skills.Registries == nil
+	if c.Tools.Skills.Registries == nil {
+		c.Tools.Skills.Registries = DefaultConfig().Tools.Skills.Registries
+	}
 	removedRegistries := make([]string, 0)
 	if current != nil {
 		for _, name := range current.Tools.Skills.Registries.Names() {
@@ -469,9 +471,6 @@ func (c *Config) SecurityCopyForReplacement(path string, current *Config) error 
 	err := c.SecurityCopyFrom(path)
 	for _, name := range removedRegistries {
 		delete(c.Tools.Skills.Registries, name)
-	}
-	if registriesOmitted {
-		c.Tools.Skills.Registries = nil
 	}
 	return err
 }
