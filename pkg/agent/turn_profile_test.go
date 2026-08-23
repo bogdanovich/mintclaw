@@ -240,8 +240,7 @@ func TestTurnProfile_BtwCommandUsesEnabledTurnProfile(t *testing.T) {
 			},
 		},
 		ModelList: []*config.ModelConfig{{
-			ModelName: "test-model",
-			Model:     "openai/test-model",
+			ModelName: "test-model", Provider: "openai", Model: "test-model",
 		}},
 	}
 	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
@@ -481,8 +480,7 @@ func TestTurnProfile_BtwCommandDoesNotAddToolFallbackWhenSystemPromptOff(t *test
 			},
 		},
 		ModelList: []*config.ModelConfig{{
-			ModelName: "test-model",
-			Model:     "openai/test-model",
+			ModelName: "test-model", Provider: "openai", Model: "test-model",
 		}},
 	}
 	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
@@ -528,8 +526,7 @@ func TestTurnProfile_BtwHookCannotReenableNativeSearchWhenToolsOff(t *testing.T)
 			},
 		},
 		ModelList: []*config.ModelConfig{{
-			ModelName: "test-model",
-			Model:     "openai/test-model",
+			ModelName: "test-model", Provider: "openai", Model: "test-model",
 		}},
 	}
 	provider := &nativeSearchCaptureProvider{}

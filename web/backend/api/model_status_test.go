@@ -30,7 +30,7 @@ func TestProbeLocalModelAvailability_OpenAICompatibleIncludesAPIKey(t *testing.T
 	defer srv.Close()
 
 	model := &config.ModelConfig{
-		Model:   "openai/custom-model",
+		Provider: "openai", Model: "custom-model",
 		APIBase: srv.URL + "/v1",
 	}
 	model.SetAPIKey(apiKey)
@@ -56,14 +56,12 @@ func TestProbeOpenAICompatibleModel_SupportsBareArrayModels(t *testing.T) {
 }
 
 func TestRequiresRuntimeProbe_LMStudio(t *testing.T) {
-	if !requiresRuntimeProbe(&config.ModelConfig{
-		Model: "lmstudio/openai/gpt-oss-20b",
-	}) {
+	if !requiresRuntimeProbe(&config.ModelConfig{Provider: "lmstudio", Model: "openai/gpt-oss-20b"}) {
 		t.Fatal("requiresRuntimeProbe(lmstudio with default base) = false, want true")
 	}
 
 	if requiresRuntimeProbe(&config.ModelConfig{
-		Model:   "lmstudio/openai/gpt-oss-20b",
+		Provider: "lmstudio", Model: "openai/gpt-oss-20b",
 		APIBase: "https://api.example.com/v1",
 	}) {
 		t.Fatal("requiresRuntimeProbe(lmstudio with remote base) = true, want false")
@@ -71,14 +69,12 @@ func TestRequiresRuntimeProbe_LMStudio(t *testing.T) {
 }
 
 func TestRequiresRuntimeProbe_GPT4Free(t *testing.T) {
-	if !requiresRuntimeProbe(&config.ModelConfig{
-		Model: "gpt4free/gpt-4o-mini",
-	}) {
+	if !requiresRuntimeProbe(&config.ModelConfig{Provider: "gpt4free", Model: "gpt-4o-mini"}) {
 		t.Fatal("requiresRuntimeProbe(gpt4free with default base) = false, want true")
 	}
 
 	if requiresRuntimeProbe(&config.ModelConfig{
-		Model:   "gpt4free/gpt-4o-mini",
+		Provider: "gpt4free", Model: "gpt-4o-mini",
 		APIBase: "https://g4f.space/v1",
 	}) {
 		t.Fatal("requiresRuntimeProbe(gpt4free with remote base) = true, want false")
@@ -86,14 +82,14 @@ func TestRequiresRuntimeProbe_GPT4Free(t *testing.T) {
 }
 
 func TestModelProbeAPIBase_LMStudioDefault(t *testing.T) {
-	got := modelProbeAPIBase(&config.ModelConfig{Model: "lmstudio/openai/gpt-oss-20b"})
+	got := modelProbeAPIBase(&config.ModelConfig{Provider: "lmstudio", Model: "openai/gpt-oss-20b"})
 	if got != "http://localhost:1234/v1" {
 		t.Fatalf("modelProbeAPIBase(lmstudio) = %q, want %q", got, "http://localhost:1234/v1")
 	}
 }
 
 func TestModelProbeAPIBase_GPT4FreeDefault(t *testing.T) {
-	got := modelProbeAPIBase(&config.ModelConfig{Model: "gpt4free/gpt-4o-mini"})
+	got := modelProbeAPIBase(&config.ModelConfig{Provider: "gpt4free", Model: "gpt-4o-mini"})
 	if got != "http://localhost:1337/v1" {
 		t.Fatalf("modelProbeAPIBase(gpt4free) = %q, want %q", got, "http://localhost:1337/v1")
 	}
@@ -118,7 +114,7 @@ func TestProbeLocalModelAvailability_LMStudioUsesOpenAICompatibleProbe(t *testin
 		return true
 	}
 
-	model := &config.ModelConfig{Model: "lmstudio/openai/gpt-oss-20b"}
+	model := &config.ModelConfig{Provider: "lmstudio", Model: "openai/gpt-oss-20b"}
 	if !probeLocalModelAvailability(model) {
 		t.Fatal("probeLocalModelAvailability(lmstudio) = false, want true")
 	}
@@ -146,7 +142,7 @@ func TestProbeLocalModelAvailability_GPT4FreeUsesOpenAICompatibleProbe(t *testin
 		return true
 	}
 
-	model := &config.ModelConfig{Model: "gpt4free/gpt-4o-mini"}
+	model := &config.ModelConfig{Provider: "gpt4free", Model: "gpt-4o-mini"}
 	if !probeLocalModelAvailability(model) {
 		t.Fatal("probeLocalModelAvailability(gpt4free) = false, want true")
 	}
@@ -157,8 +153,7 @@ func TestProbeLocalModelAvailability_GPT4FreeUsesOpenAICompatibleProbe(t *testin
 
 func TestModelProbeCacheKey_DifferentAPIKeysProduceDifferentKeys(t *testing.T) {
 	base := &config.ModelConfig{
-		ModelName:   "local-vllm",
-		Model:       "vllm/custom-model",
+		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
 		APIBase:     "http://127.0.0.1:8000/v1",
 		AuthMethod:  "local",
 		ConnectMode: "",
@@ -178,14 +173,12 @@ func TestModelProbeCacheKey_DifferentAPIKeysProduceDifferentKeys(t *testing.T) {
 
 func TestModelProbeCacheKey_NormalizesTrailingSlashInAPIBase(t *testing.T) {
 	m1 := &config.ModelConfig{
-		ModelName: "local-vllm",
-		Model:     "vllm/custom-model",
-		APIBase:   "http://127.0.0.1:8000/v1",
+		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
+		APIBase: "http://127.0.0.1:8000/v1",
 	}
 	m2 := &config.ModelConfig{
-		ModelName: "local-vllm",
-		Model:     "vllm/custom-model",
-		APIBase:   "http://127.0.0.1:8000/v1/",
+		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
+		APIBase: "http://127.0.0.1:8000/v1/",
 	}
 
 	k1 := modelProbeCacheKey(m1)
@@ -197,15 +190,13 @@ func TestModelProbeCacheKey_NormalizesTrailingSlashInAPIBase(t *testing.T) {
 
 func TestModelProbeCacheKey_IgnoresDisplayAndConnectionFields(t *testing.T) {
 	base := &config.ModelConfig{
-		ModelName:   "vllm-one",
-		Model:       "vllm/custom-model",
+		ModelName: "vllm-one", Provider: "vllm", Model: "custom-model",
 		APIBase:     "http://127.0.0.1:8000/v1",
 		AuthMethod:  "none",
 		ConnectMode: "http",
 	}
 	changed := &config.ModelConfig{
-		ModelName:   "vllm-two",
-		Model:       "vllm/custom-model",
+		ModelName: "vllm-two", Provider: "vllm", Model: "custom-model",
 		APIBase:     "http://127.0.0.1:8000/v1",
 		AuthMethod:  "token",
 		ConnectMode: "ws",
@@ -231,9 +222,8 @@ func TestProbeLocalModelAvailability_SuccessBackoff(t *testing.T) {
 	}
 
 	model := &config.ModelConfig{
-		ModelName: "local-vllm",
-		Model:     "vllm/custom-model",
-		APIBase:   "http://127.0.0.1:8000/v1",
+		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
+		APIBase: "http://127.0.0.1:8000/v1",
 	}
 
 	if !probeLocalModelAvailability(model) {
@@ -288,9 +278,8 @@ func TestProbeLocalModelAvailability_FailureBackoff(t *testing.T) {
 	}
 
 	model := &config.ModelConfig{
-		ModelName: "local-vllm",
-		Model:     "vllm/custom-model",
-		APIBase:   "http://127.0.0.1:8000/v1",
+		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
+		APIBase: "http://127.0.0.1:8000/v1",
 	}
 
 	if probeLocalModelAvailability(model) {
@@ -350,9 +339,8 @@ func TestProbeLocalModelAvailability_ResultFlipResetsBackoff(t *testing.T) {
 	}
 
 	model := &config.ModelConfig{
-		ModelName: "local-vllm",
-		Model:     "vllm/custom-model",
-		APIBase:   "http://127.0.0.1:8000/v1",
+		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
+		APIBase: "http://127.0.0.1:8000/v1",
 	}
 
 	if !probeLocalModelAvailability(model) {
@@ -393,9 +381,8 @@ func TestProbeLocalModelAvailability_DeduplicatesInflightProbe(t *testing.T) {
 	}
 
 	model := &config.ModelConfig{
-		ModelName: "local-vllm",
-		Model:     "vllm/custom-model",
-		APIBase:   "http://127.0.0.1:8000/v1",
+		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
+		APIBase: "http://127.0.0.1:8000/v1",
 	}
 
 	const workers = 8

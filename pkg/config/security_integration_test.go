@@ -50,7 +50,8 @@ func TestSecurityConfigIntegration(t *testing.T) {
   "model_list": [
     {
       "model_name": "test-model",
-      "model": "openai/test-model",
+	  "provider": "openai",
+	  "model": "test-model",
       "api_base": "https://api.openai.com/v1",
       "api_keys": ["sk-from-config-json-direct"]
     }
@@ -147,7 +148,8 @@ func TestSecurityConfigWithAPIKeysArray(t *testing.T) {
   "model_list": [
     {
       "model_name": "multi-key-model",
-      "model": "openai/multi-key-model"
+	  "provider": "openai",
+	  "model": "multi-key-model"
     }
   ]
 }`
@@ -221,7 +223,8 @@ func TestAllSecurityKeysAccessible(t *testing.T) {
   "model_list": [
     {
       "model_name": "test-model-1",
-      "model": "openai/test-model-1"
+	  "provider": "openai",
+	  "model": "test-model-1"
     }
   ],
   "channel_list": {

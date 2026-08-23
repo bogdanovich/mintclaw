@@ -519,8 +519,7 @@ func TestRepositorySnapshotMatchesCommittedConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	candidate := DefaultConfig()
 	candidate.ModelList = append(candidate.ModelList, &ModelConfig{
-		ModelName: "virtual",
-		Model:     "virtual",
+		ModelName: "virtual", Provider: "openai", Model: "virtual",
 		isVirtual: true,
 	})
 
@@ -692,10 +691,9 @@ func TestRepositoryUpdatePreservesDurableMultiKeyModel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	baseline := DefaultConfig()
 	baseline.ModelList = []*ModelConfig{{
-		ModelName: "multi-key",
-		Model:     "openai/multi-key",
-		APIKeys:   SimpleSecureStrings("key-one", "key-two"),
-		Enabled:   true,
+		ModelName: "multi-key", Provider: "openai", Model: "multi-key",
+		APIKeys: SimpleSecureStrings("key-one", "key-two"),
+		Enabled: true,
 	}}
 	repository := NewRepository(path)
 	if _, err := repository.Save(baseline); err != nil {

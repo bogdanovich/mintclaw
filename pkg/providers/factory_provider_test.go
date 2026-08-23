@@ -25,88 +25,34 @@ func TestExtractProtocol(t *testing.T) {
 		wantModelID  string
 	}{
 		{
-			name:         "openai with prefix",
-			config:       &config.ModelConfig{Model: "openai/gpt-4o"},
+			name:         "explicit openai",
+			config:       &config.ModelConfig{Provider: "openai", Model: "gpt-4o"},
 			wantProtocol: "openai",
 			wantModelID:  "gpt-4o",
 		},
 		{
-			name:         "anthropic with prefix",
-			config:       &config.ModelConfig{Model: "anthropic/claude-sonnet-4.6"},
-			wantProtocol: "anthropic",
-			wantModelID:  "claude-sonnet-4.6",
-		},
-		{
-			name:         "no prefix - defaults to openai",
-			config:       &config.ModelConfig{Model: "gpt-4o"},
-			wantProtocol: "openai",
-			wantModelID:  "gpt-4o",
-		},
-		{
-			name:         "groq with prefix",
-			config:       &config.ModelConfig{Model: "groq/llama-3.1-70b"},
-			wantProtocol: "groq",
-			wantModelID:  "llama-3.1-70b",
-		},
-		{
-			name:         "empty string",
-			config:       &config.ModelConfig{Model: ""},
-			wantProtocol: "",
-			wantModelID:  "",
-		},
-		{
-			name:         "with whitespace",
-			config:       &config.ModelConfig{Model: "  openai/gpt-4  "},
-			wantProtocol: "openai",
-			wantModelID:  "gpt-4",
-		},
-		{
-			name:         "multiple slashes",
-			config:       &config.ModelConfig{Model: "nvidia/meta/llama-3.1-8b"},
+			name:         "provider-native slash is preserved",
+			config:       &config.ModelConfig{Provider: "nvidia", Model: "meta/llama-3.1-8b"},
 			wantProtocol: "nvidia",
 			wantModelID:  "meta/llama-3.1-8b",
 		},
 		{
-			name:         "normalizes provider",
-			config:       &config.ModelConfig{Model: "z.ai/glm-5.1"},
+			name:         "provider spelling is normalized",
+			config:       &config.ModelConfig{Provider: "z.ai", Model: "glm-5.1"},
 			wantProtocol: "zai",
 			wantModelID:  "glm-5.1",
 		},
 		{
-			name:         "azure with prefix",
-			config:       &config.ModelConfig{Model: "azure/my-gpt5-deployment"},
-			wantProtocol: "azure",
-			wantModelID:  "my-gpt5-deployment",
-		},
-		{
-			name:         "explicit provider keeps model",
-			config:       &config.ModelConfig{Provider: "nvidia", Model: "z-ai/glm-5.1"},
-			wantProtocol: "nvidia",
-			wantModelID:  "z-ai/glm-5.1",
-		},
-		{
-			name:         "explicit provider preserves matching prefix",
+			name:         "provider-like native prefix is preserved",
 			config:       &config.ModelConfig{Provider: "openai", Model: "openai/gpt-4o"},
 			wantProtocol: "openai",
 			wantModelID:  "openai/gpt-4o",
 		},
 		{
-			name:         "explicit provider preserves aliased prefix",
-			config:       &config.ModelConfig{Provider: "qwen", Model: "qwen/qwen-plus"},
-			wantProtocol: "qwen-portal",
-			wantModelID:  "qwen/qwen-plus",
-		},
-		{
-			name:         "empty provider segment",
-			config:       &config.ModelConfig{Model: "/gpt-4o"},
+			name:         "missing provider is not inferred",
+			config:       &config.ModelConfig{Model: "anthropic/claude-sonnet-4.6"},
 			wantProtocol: "",
-			wantModelID:  "gpt-4o",
-		},
-		{
-			name:         "unknown prefix falls back to openai",
-			config:       &config.ModelConfig{Model: "meta-llama/Llama-3.1-8B-Instruct"},
-			wantProtocol: "openai",
-			wantModelID:  "meta-llama/Llama-3.1-8B-Instruct",
+			wantModelID:  "anthropic/claude-sonnet-4.6",
 		},
 		{
 			name:         "nil config",
@@ -130,9 +76,8 @@ func TestExtractProtocol(t *testing.T) {
 
 func TestCreateProviderFromConfig_OpenAI(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-openai",
-		Model:     "openai/gpt-4o",
-		APIBase:   "https://api.example.com/v1",
+		ModelName: "test-openai", Provider: "openai", Model: "gpt-4o",
+		APIBase: "https://api.example.com/v1",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -241,7 +186,8 @@ func TestCreateProviderFromConfig_DefaultAPIBase(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.ModelConfig{
 				ModelName: "test-" + tt.protocol,
-				Model:     tt.protocol + "/test-model",
+				Provider:  tt.protocol,
+				Model:     "test-model",
 			}
 			cfg.SetAPIKey("test-key")
 
@@ -302,9 +248,8 @@ func TestGetDefaultAPIBase_SiliconFlow(t *testing.T) {
 
 func TestCreateProviderFromConfig_LiteLLM(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-litellm",
-		Model:     "litellm/my-proxy-alias",
-		APIBase:   "http://localhost:4000/v1",
+		ModelName: "test-litellm", Provider: "litellm", Model: "my-proxy-alias",
+		APIBase: "http://localhost:4000/v1",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -324,6 +269,7 @@ func TestCreateProviderFromConfig_LocalProviders(t *testing.T) {
 	tests := []struct {
 		name        string
 		modelName   string
+		provider    string
 		model       string
 		apiKey      string
 		wantModelID string
@@ -331,49 +277,56 @@ func TestCreateProviderFromConfig_LocalProviders(t *testing.T) {
 		{
 			name:        "LMStudio with API key",
 			modelName:   "test-lmstudio",
-			model:       "lmstudio/openai/gpt-oss-20b",
+			provider:    "lmstudio",
+			model:       "openai/gpt-oss-20b",
 			apiKey:      "test-key",
 			wantModelID: "openai/gpt-oss-20b",
 		},
 		{
 			name:        "LMStudio without API key",
 			modelName:   "test-lmstudio",
-			model:       "lmstudio/openai/gpt-oss-20b",
+			provider:    "lmstudio",
+			model:       "openai/gpt-oss-20b",
 			apiKey:      "",
 			wantModelID: "openai/gpt-oss-20b",
 		},
 		{
 			name:        "Ollama with API key",
 			modelName:   "test-ollama",
-			model:       "ollama/llama3.1:8b",
+			provider:    "ollama",
+			model:       "llama3.1:8b",
 			apiKey:      "test-key",
 			wantModelID: "llama3.1:8b",
 		},
 		{
 			name:        "Ollama without API key",
 			modelName:   "test-ollama",
-			model:       "ollama/llama3.1:8b",
+			provider:    "ollama",
+			model:       "llama3.1:8b",
 			apiKey:      "",
 			wantModelID: "llama3.1:8b",
 		},
 		{
 			name:        "VLLM with API key",
 			modelName:   "test-vllm",
-			model:       "vllm/Qwen/Qwen3-8B",
+			provider:    "vllm",
+			model:       "Qwen/Qwen3-8B",
 			apiKey:      "test-key",
 			wantModelID: "Qwen/Qwen3-8B",
 		},
 		{
 			name:        "VLLM without API key",
 			modelName:   "test-vllm",
-			model:       "vllm/Qwen/Qwen3-8B",
+			provider:    "vllm",
+			model:       "Qwen/Qwen3-8B",
 			apiKey:      "",
 			wantModelID: "Qwen/Qwen3-8B",
 		},
 		{
 			name:        "GPT4Free without API key",
 			modelName:   "test-gpt4free",
-			model:       "gpt4free/gpt-4o-mini",
+			provider:    "gpt4free",
+			model:       "gpt-4o-mini",
 			apiKey:      "",
 			wantModelID: "gpt-4o-mini",
 		},
@@ -383,6 +336,7 @@ func TestCreateProviderFromConfig_LocalProviders(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.ModelConfig{
 				ModelName: tt.modelName,
+				Provider:  tt.provider,
 				Model:     tt.model,
 			}
 			if tt.apiKey != "" {
@@ -408,9 +362,8 @@ func TestCreateProviderFromConfig_LocalProviders(t *testing.T) {
 
 func TestCreateProviderFromConfig_LongCat(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-longcat",
-		Model:     "longcat/LongCat-Flash-Thinking",
-		APIBase:   "https://api.longcat.chat/openai",
+		ModelName: "test-longcat", Provider: "longcat", Model: "LongCat-Flash-Thinking",
+		APIBase: "https://api.longcat.chat/openai",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -431,9 +384,8 @@ func TestCreateProviderFromConfig_LongCat(t *testing.T) {
 
 func TestCreateProviderFromConfig_ModelScope(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-modelscope",
-		Model:     "modelscope/Qwen/Qwen3-235B-A22B-Instruct-2507",
-		APIBase:   "https://api-inference.modelscope.cn/v1",
+		ModelName: "test-modelscope", Provider: "modelscope", Model: "Qwen/Qwen3-235B-A22B-Instruct-2507",
+		APIBase: "https://api-inference.modelscope.cn/v1",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -460,8 +412,7 @@ func TestGetDefaultAPIBase_ModelScope(t *testing.T) {
 
 func TestCreateProviderFromConfig_Novita(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-novita",
-		Model:     "novita/deepseek/deepseek-v3.2",
+		ModelName: "test-novita", Provider: "novita", Model: "deepseek/deepseek-v3.2",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -488,9 +439,8 @@ func TestGetDefaultAPIBase_Novita(t *testing.T) {
 
 func TestCreateProviderFromConfig_Mimo(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-mimo",
-		Model:     "mimo/mimo-v2-pro",
-		APIBase:   "https://api.xiaomimimo.com/v1",
+		ModelName: "test-mimo", Provider: "mimo", Model: "mimo-v2-pro",
+		APIBase: "https://api.xiaomimimo.com/v1",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -511,8 +461,7 @@ func TestCreateProviderFromConfig_Mimo(t *testing.T) {
 
 func TestCreateProviderFromConfig_Venice(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-venice",
-		Model:     "venice/venice-uncensored",
+		ModelName: "test-venice", Provider: "venice", Model: "venice-uncensored",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -533,8 +482,7 @@ func TestCreateProviderFromConfig_Venice(t *testing.T) {
 
 func TestCreateProviderFromConfig_NearAI(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-nearai",
-		Model:     "nearai/zai-org/GLM-5.1-FP8",
+		ModelName: "test-nearai", Provider: "nearai", Model: "zai-org/GLM-5.1-FP8",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -555,8 +503,7 @@ func TestCreateProviderFromConfig_NearAI(t *testing.T) {
 
 func TestCreateProviderFromConfig_SiliconFlow(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-siliconflow",
-		Model:     "siliconflow/deepseek-ai/DeepSeek-V3",
+		ModelName: "test-siliconflow", Provider: "siliconflow", Model: "deepseek-ai/DeepSeek-V3",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -583,8 +530,7 @@ func TestGetDefaultAPIBase_Mimo(t *testing.T) {
 
 func TestCreateProviderFromConfig_Anthropic(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-anthropic",
-		Model:     "anthropic/claude-sonnet-4.6",
+		ModelName: "test-anthropic", Provider: "anthropic", Model: "claude-sonnet-4.6",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -602,8 +548,7 @@ func TestCreateProviderFromConfig_Anthropic(t *testing.T) {
 
 func TestCreateProviderFromConfig_Antigravity(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-antigravity",
-		Model:     "antigravity/gemini-2.0-flash",
+		ModelName: "test-antigravity", Provider: "antigravity", Model: "gemini-2.0-flash",
 	}
 
 	provider, modelID, err := CreateProviderFromConfig(cfg)
@@ -620,8 +565,7 @@ func TestCreateProviderFromConfig_Antigravity(t *testing.T) {
 
 func TestCreateProviderFromConfig_Gemini(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-gemini",
-		Model:     "gemini/gemini-2.5-flash",
+		ModelName: "test-gemini", Provider: "gemini", Model: "gemini-2.5-flash",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -642,8 +586,7 @@ func TestCreateProviderFromConfig_Gemini(t *testing.T) {
 
 func TestCreateProviderFromConfig_GeminiMissingAPIKey(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-gemini-no-key",
-		Model:     "gemini/gemini-2.5-flash",
+		ModelName: "test-gemini-no-key", Provider: "gemini", Model: "gemini-2.5-flash",
 	}
 
 	_, _, err := CreateProviderFromConfig(cfg)
@@ -654,9 +597,8 @@ func TestCreateProviderFromConfig_GeminiMissingAPIKey(t *testing.T) {
 
 func TestCreateProviderFromConfig_GeminiCustomAPIBaseWithoutKey(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-gemini-custom-base",
-		Model:     "gemini/gemini-2.5-flash",
-		APIBase:   "https://proxy.example.com/v1beta",
+		ModelName: "test-gemini-custom-base", Provider: "gemini", Model: "gemini-2.5-flash",
+		APIBase: "https://proxy.example.com/v1beta",
 	}
 
 	provider, modelID, err := CreateProviderFromConfig(cfg)
@@ -676,8 +618,7 @@ func TestCreateProviderFromConfig_GeminiCustomAPIBaseWithoutKey(t *testing.T) {
 
 func TestCreateProviderFromConfig_ClaudeCLI(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-claude-cli",
-		Model:     "claude-cli/claude-sonnet-4.6",
+		ModelName: "test-claude-cli", Provider: "claude-cli", Model: "claude-sonnet-4.6",
 	}
 
 	provider, modelID, err := CreateProviderFromConfig(cfg)
@@ -694,8 +635,7 @@ func TestCreateProviderFromConfig_ClaudeCLI(t *testing.T) {
 
 func TestCreateProviderFromConfig_CodexCLI(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-codex-cli",
-		Model:     "codex-cli/codex",
+		ModelName: "test-codex-cli", Provider: "codex-cli", Model: "codex",
 	}
 
 	provider, modelID, err := CreateProviderFromConfig(cfg)
@@ -728,8 +668,7 @@ func TestCreateProviderFromConfig_OpenAIMixedCaseAuthMethodUsesOAuthBranch(t *te
 	})
 
 	cfg := &config.ModelConfig{
-		ModelName:  "test-openai-oauth",
-		Model:      "openai/gpt-5.4",
+		ModelName: "test-openai-oauth", Provider: "openai", Model: "gpt-5.4",
 		AuthMethod: "OAuth",
 	}
 
@@ -747,8 +686,7 @@ func TestCreateProviderFromConfig_OpenAIMixedCaseAuthMethodUsesOAuthBranch(t *te
 
 func TestCreateProviderFromConfig_MissingAPIKey(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-no-key",
-		Model:     "openai/gpt-4o",
+		ModelName: "test-no-key", Provider: "openai", Model: "gpt-4o",
 	}
 
 	_, _, err := CreateProviderFromConfig(cfg)
@@ -771,11 +709,10 @@ func TestCreateProviderFromConfig_UnknownProtocol(t *testing.T) {
 	}
 }
 
-func TestCreateProviderFromConfig_UnknownModelPrefixDefaultsToOpenAI(t *testing.T) {
+func TestCreateProviderFromConfig_PreservesNamespacedNativeModel(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-unknown-model-prefix",
-		Model:     "meta-llama/Llama-3.1-8B-Instruct",
-		APIBase:   "https://api.example.com/v1",
+		ModelName: "test-unknown-model-prefix", Provider: "openai", Model: "meta-llama/Llama-3.1-8B-Instruct",
+		APIBase: "https://api.example.com/v1",
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -800,13 +737,22 @@ func TestCreateProviderFromConfig_NilConfig(t *testing.T) {
 
 func TestCreateProviderFromConfig_EmptyModel(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "test-empty",
-		Model:     "",
+		ModelName: "test-empty", Provider: "openai", Model: "",
 	}
 
 	_, _, err := CreateProviderFromConfig(cfg)
 	if err == nil {
 		t.Fatal("CreateProviderFromConfig() expected error for empty model")
+	}
+}
+
+func TestCreateProviderFromConfig_MissingProvider(t *testing.T) {
+	cfg := &config.ModelConfig{ModelName: "test-missing-provider", Model: "gpt-4o"}
+	cfg.SetAPIKey("test-key")
+
+	_, _, err := CreateProviderFromConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "provider is required") {
+		t.Fatalf("CreateProviderFromConfig() error = %v, want missing-provider error", err)
 	}
 }
 
@@ -819,8 +765,7 @@ func TestCreateProviderFromConfig_RequestTimeoutPropagation(t *testing.T) {
 	defer server.Close()
 
 	cfg := &config.ModelConfig{
-		ModelName:      "test-timeout",
-		Model:          "openai/gpt-4o",
+		ModelName: "test-timeout", Provider: "openai", Model: "gpt-4o",
 		APIBase:        server.URL,
 		RequestTimeout: 1,
 	}
@@ -852,9 +797,8 @@ func TestCreateProviderFromConfig_RequestTimeoutPropagation(t *testing.T) {
 
 func TestCreateProviderFromConfig_Azure(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "azure-gpt5",
-		Model:     "azure/my-gpt5-deployment",
-		APIBase:   "https://my-resource.openai.azure.com",
+		ModelName: "azure-gpt5", Provider: "azure", Model: "my-gpt5-deployment",
+		APIBase: "https://my-resource.openai.azure.com",
 	}
 	cfg.SetAPIKey("test-azure-key")
 
@@ -872,9 +816,8 @@ func TestCreateProviderFromConfig_Azure(t *testing.T) {
 
 func TestCreateProviderFromConfig_AzureOpenAIAlias(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "azure-gpt4",
-		Model:     "azure-openai/my-deployment",
-		APIBase:   "https://my-resource.openai.azure.com",
+		ModelName: "azure-gpt4", Provider: "azure-openai", Model: "my-deployment",
+		APIBase: "https://my-resource.openai.azure.com",
 	}
 	cfg.SetAPIKey("test-azure-key")
 
@@ -892,9 +835,8 @@ func TestCreateProviderFromConfig_AzureOpenAIAlias(t *testing.T) {
 
 func TestCreateProviderFromConfig_AzureMissingAPIKey(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "azure-gpt5",
-		Model:     "azure/my-gpt5-deployment",
-		APIBase:   "https://my-resource.openai.azure.com",
+		ModelName: "azure-gpt5", Provider: "azure", Model: "my-gpt5-deployment",
+		APIBase: "https://my-resource.openai.azure.com",
 	}
 
 	_, _, err := CreateProviderFromConfig(cfg)
@@ -908,8 +850,7 @@ func TestCreateProviderFromConfig_AzureMissingAPIKey(t *testing.T) {
 
 func TestCreateProviderFromConfig_AzureMissingAPIBase(t *testing.T) {
 	cfg := &config.ModelConfig{
-		ModelName: "azure-gpt5",
-		Model:     "azure/my-gpt5-deployment",
+		ModelName: "azure-gpt5", Provider: "azure", Model: "my-gpt5-deployment",
 	}
 	cfg.SetAPIKey("test-azure-key")
 
@@ -933,7 +874,8 @@ func TestCreateProviderFromConfig_QwenInternationalAlias(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.ModelConfig{
 				ModelName: "test-" + tt.protocol,
-				Model:     tt.protocol + "/qwen-max",
+				Provider:  tt.protocol,
+				Model:     "qwen-max",
 			}
 			cfg.SetAPIKey("test-key")
 
@@ -968,7 +910,8 @@ func TestCreateProviderFromConfig_QwenUSAlias(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.ModelConfig{
 				ModelName: "test-" + tt.protocol,
-				Model:     tt.protocol + "/qwen-max",
+				Provider:  tt.protocol,
+				Model:     "qwen-max",
 			}
 			cfg.SetAPIKey("test-key")
 
@@ -1003,7 +946,8 @@ func TestCreateProviderFromConfig_CodingPlanAnthropic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.ModelConfig{
 				ModelName: "test-" + tt.protocol,
-				Model:     tt.protocol + "/claude-sonnet-4-20250514",
+				Provider:  tt.protocol,
+				Model:     "claude-sonnet-4-20250514",
 			}
 			cfg.SetAPIKey("test-key")
 
@@ -1258,9 +1202,8 @@ func TestCreateProviderFromConfig_MinimaxInjectsReasoningSplit(t *testing.T) {
 	defer server.Close()
 
 	cfg := &config.ModelConfig{
-		ModelName: "test-minimax",
-		Model:     "minimax/MiniMax-M2.5",
-		APIBase:   server.URL,
+		ModelName: "test-minimax", Provider: "minimax", Model: "MiniMax-M2.5",
+		APIBase: server.URL,
 	}
 	cfg.SetAPIKey("test-key")
 
@@ -1306,8 +1249,7 @@ func TestCreateProviderFromConfig_MinimaxPreservesUserExtraBody(t *testing.T) {
 	defer server.Close()
 
 	cfg := &config.ModelConfig{
-		ModelName: "test-minimax-custom",
-		Model:     "minimax/MiniMax-M2.5",
+		ModelName: "test-minimax-custom", Provider: "minimax", Model: "MiniMax-M2.5",
 		APIBase:   server.URL,
 		ExtraBody: map[string]any{"custom_field": "test"},
 	}
@@ -1351,8 +1293,7 @@ func TestCreateProviderFromConfig_CustomHeaders(t *testing.T) {
 	defer server.Close()
 
 	cfg := &config.ModelConfig{
-		ModelName:     "test-headers",
-		Model:         "openai/gpt-4o",
+		ModelName: "test-headers", Provider: "openai", Model: "gpt-4o",
 		APIBase:       server.URL,
 		CustomHeaders: map[string]string{"X-Source": "coding-plan", "Authorization": "Token config-auth"},
 	}
@@ -1393,6 +1334,7 @@ func TestCreateProviderFromConfig_UserAgent(t *testing.T) {
 
 	tests := []struct {
 		name      string
+		provider  string
 		model     string
 		userAgent string
 		apiKey    string
@@ -1402,14 +1344,16 @@ func TestCreateProviderFromConfig_UserAgent(t *testing.T) {
 	}{
 		{
 			name:     "openai default user agent",
-			model:    "openai/gpt-4o",
+			provider: "openai",
+			model:    "gpt-4o",
 			apiKey:   "test-key",
 			response: openaiCompatResponse,
 			wantUA:   defaultUA,
 		},
 		{
 			name:      "openai custom user agent",
-			model:     "openai/gpt-4o",
+			provider:  "openai",
+			model:     "gpt-4o",
 			apiKey:    "test-key",
 			userAgent: "MyAgent/1.2.3",
 			response:  openaiCompatResponse,
@@ -1417,14 +1361,16 @@ func TestCreateProviderFromConfig_UserAgent(t *testing.T) {
 		},
 		{
 			name:     "anthropic default user agent",
-			model:    "anthropic/claude-sonnet-4-20250514",
+			provider: "anthropic",
+			model:    "claude-sonnet-4-20250514",
 			apiKey:   "test-key",
 			response: anthropicResponse,
 			wantUA:   defaultUA,
 		},
 		{
 			name:     "anthropic-messages default user agent",
-			model:    "anthropic-messages/claude-sonnet-4-20250514",
+			provider: "anthropic-messages",
+			model:    "claude-sonnet-4-20250514",
 			apiKey:   "test-key",
 			response: anthropicResponse,
 			wantUA:   defaultUA,
@@ -1432,7 +1378,8 @@ func TestCreateProviderFromConfig_UserAgent(t *testing.T) {
 		},
 		{
 			name:     "azure default user agent",
-			model:    "azure/my-deployment",
+			provider: "azure",
+			model:    "my-deployment",
 			apiKey:   "test-azure-key",
 			response: openaiCompatResponse,
 			wantUA:   defaultUA,
@@ -1451,6 +1398,7 @@ func TestCreateProviderFromConfig_UserAgent(t *testing.T) {
 
 			cfg := &config.ModelConfig{
 				ModelName: "test-ua-" + tt.name,
+				Provider:  tt.provider,
 				Model:     tt.model,
 				APIBase:   server.URL,
 				UserAgent: tt.userAgent,
@@ -1495,9 +1443,8 @@ func TestCreateProviderFromConfig_Bedrock(t *testing.T) {
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "")
 
 	cfg := &config.ModelConfig{
-		ModelName: "bedrock-claude",
-		Model:     "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
-		APIBase:   "us-west-2", // Region (also sets AWS region)
+		ModelName: "bedrock-claude", Provider: "bedrock", Model: "us.anthropic.claude-sonnet-4-20250514-v1:0",
+		APIBase: "us-west-2", // Region (also sets AWS region)
 	}
 
 	provider, modelID, err := CreateProviderFromConfig(cfg)
@@ -1533,9 +1480,8 @@ func TestCreateProviderFromConfig_BedrockWithEndpointURL(t *testing.T) {
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "")
 
 	cfg := &config.ModelConfig{
-		ModelName: "bedrock-claude",
-		Model:     "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
-		APIBase:   "https://bedrock-runtime.us-east-1.amazonaws.com", // Full endpoint URL
+		ModelName: "bedrock-claude", Provider: "bedrock", Model: "us.anthropic.claude-sonnet-4-20250514-v1:0",
+		APIBase: "https://bedrock-runtime.us-east-1.amazonaws.com", // Full endpoint URL
 	}
 
 	provider, modelID, err := CreateProviderFromConfig(cfg)

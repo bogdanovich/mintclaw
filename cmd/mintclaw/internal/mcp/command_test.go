@@ -574,10 +574,9 @@ func TestMCPEditTemporaryDocumentMasksAndPreservesSecureValues(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "private",
-		Model:     "openai/private",
-		APIKeys:   config.SimpleSecureStrings("editor-secret"),
-		Enabled:   true,
+		ModelName: "private", Provider: "openai", Model: "private",
+		APIKeys: config.SimpleSecureStrings("editor-secret"),
+		Enabled: true,
 	}}
 	writeMCPConfig(t, configPath, cfg)
 	originalEditor := editorCommand
@@ -614,10 +613,9 @@ func TestMCPEditRejectsCredentialBearingModelRename(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "private",
-		Model:     "openai/private",
-		APIKeys:   config.SimpleSecureStrings("editor-secret"),
-		Enabled:   true,
+		ModelName: "private", Provider: "openai", Model: "private",
+		APIKeys: config.SimpleSecureStrings("editor-secret"),
+		Enabled: true,
 	}}
 	writeMCPConfig(t, configPath, cfg)
 	originalEditor := editorCommand
@@ -664,10 +662,9 @@ func TestMCPEditDoesNotCopyCredentialToAddedDuplicateModelName(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "private",
-		Model:     "openai/private",
-		APIKeys:   config.SimpleSecureStrings("editor-secret"),
-		Enabled:   true,
+		ModelName: "private", Provider: "openai", Model: "private",
+		APIKeys: config.SimpleSecureStrings("editor-secret"),
+		Enabled: true,
 	}}
 	writeMCPConfig(t, configPath, cfg)
 	originalEditor := editorCommand
@@ -684,9 +681,8 @@ func TestMCPEditDoesNotCopyCredentialToAddedDuplicateModelName(t *testing.T) {
 	editorProcessRun = func(*exec.Cmd) error {
 		_, err := config.NewRepository(tempPath).Update(func(edited *config.Config) error {
 			edited.ModelList = append(edited.ModelList, &config.ModelConfig{
-				ModelName: "private",
-				Model:     "openai/other-endpoint",
-				Enabled:   true,
+				ModelName: "private", Provider: "openai", Model: "other-endpoint",
+				Enabled: true,
 			})
 			return nil
 		})
@@ -708,13 +704,12 @@ func TestMCPEditRejectsCredentialRenameIntoExistingDuplicateIdentity(t *testing.
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{
 		{
-			ModelName: "private",
-			Model:     "openai/private",
-			APIKeys:   config.SimpleSecureStrings("private-secret"),
-			Enabled:   true,
+			ModelName: "private", Provider: "openai", Model: "private",
+			APIKeys: config.SimpleSecureStrings("private-secret"),
+			Enabled: true,
 		},
-		{ModelName: "shared", Model: "openai/shared-a", Enabled: true},
-		{ModelName: "shared", Model: "openai/shared-b", Enabled: true},
+		{ModelName: "shared", Provider: "openai", Model: "shared-a", Enabled: true},
+		{ModelName: "shared", Provider: "openai", Model: "shared-b", Enabled: true},
 	}
 	writeMCPConfig(t, configPath, cfg)
 	originalEditor := editorCommand

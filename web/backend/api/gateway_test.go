@@ -579,9 +579,8 @@ func TestGatewayStartReady_LocalModelWithoutAPIKey(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "local-vllm",
-		Model:     "vllm/custom-model",
-		APIBase:   "http://localhost:8000/v1",
+		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
+		APIBase: "http://localhost:8000/v1",
 	}}
 	cfg.Agents.Defaults.ModelName = "local-vllm"
 	err = config.SaveConfig(configPath, cfg)
@@ -616,9 +615,8 @@ func TestGatewayStartReady_LocalModelWithRunningService(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "local-vllm",
-		Model:     "vllm/custom-model",
-		APIBase:   "http://127.0.0.1:8000/v1",
+		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
+		APIBase: "http://127.0.0.1:8000/v1",
 	}}
 	cfg.Agents.Defaults.ModelName = "local-vllm"
 	err = config.SaveConfig(configPath, cfg)
@@ -651,9 +649,8 @@ func TestGatewayStartReady_RemoteVLLMWithAPIKeyDoesNotProbe(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "remote-vllm",
-		Model:     "vllm/custom-model",
-		APIBase:   "https://models.example.com/v1",
+		ModelName: "remote-vllm", Provider: "vllm", Model: "custom-model",
+		APIBase: "https://models.example.com/v1",
 	}}
 	cfg.ModelList[0o0].SetAPIKey("remote-key")
 	cfg.Agents.Defaults.ModelName = "remote-vllm"
@@ -686,8 +683,7 @@ func TestGatewayStartReady_LocalOllamaUsesDefaultProbeBase(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "local-ollama",
-		Model:     "ollama/llama3",
+		ModelName: "local-ollama", Provider: "ollama", Model: "llama3",
 	}}
 	cfg.Agents.Defaults.ModelName = "local-ollama"
 	err = config.SaveConfig(configPath, cfg)
@@ -714,8 +710,7 @@ func TestGatewayStartReady_OAuthModelRequiresStoredCredential(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName:  "openai-oauth",
-		Model:      "openai/gpt-5.4",
+		ModelName: "openai-oauth", Provider: "openai", Model: "gpt-5.4",
 		AuthMethod: "oauth",
 	}}
 	cfg.Agents.Defaults.ModelName = "openai-oauth"
@@ -1058,8 +1053,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
-		ModelName: "second-model",
-		Model:     "openai/gpt-4.1",
+		ModelName: "second-model", Provider: "openai", Model: "gpt-4.1",
 	})
 	cfg.ModelList[len(cfg.ModelList)-1].SetAPIKey("second-key")
 	if err := config.SaveConfig(configPath, cfg); err != nil {
@@ -1362,13 +1356,11 @@ func TestConfigSignatureIncludesModelStreamingForLoadBalancedAliasEntries(t *tes
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{
 		{
-			ModelName: "lb-alias",
-			Model:     "openai/gpt-4o-primary",
+			ModelName: "lb-alias", Provider: "openai", Model: "gpt-4o-primary",
 			Streaming: config.ModelStreamingConfig{Enabled: false},
 		},
 		{
-			ModelName: "lb-alias",
-			Model:     "openai/gpt-4o-secondary",
+			ModelName: "lb-alias", Provider: "openai", Model: "gpt-4o-secondary",
 			Streaming: config.ModelStreamingConfig{Enabled: false},
 		},
 	}

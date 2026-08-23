@@ -110,13 +110,11 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "lb-model",
-				Model:     "openai/primary",
+				ModelName: "lb-model", Provider: "openai", Model: "primary",
 				Streaming: config.ModelStreamingConfig{Enabled: false},
 			},
 			{
-				ModelName: "lb-model",
-				Model:     "openai/secondary",
+				ModelName: "lb-model", Provider: "openai", Model: "secondary",
 				Streaming: config.ModelStreamingConfig{Enabled: true},
 			},
 		},
@@ -136,8 +134,8 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 	if got == nil {
 		t.Fatal("resolveActiveModelConfig() = nil, want model config")
 	}
-	if got.Model != "openai/secondary" {
-		t.Fatalf("model = %q, want openai/secondary", got.Model)
+	if got.Model != "secondary" {
+		t.Fatalf("model = %q, want secondary", got.Model)
 	}
 	if !got.Streaming.Enabled {
 		t.Fatal("streaming.enabled = false, want true from selected load-balanced entry")

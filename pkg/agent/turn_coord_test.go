@@ -448,8 +448,8 @@ func newTurnCoordFallbackTestLoop(
 			},
 		},
 		ModelList: []*config.ModelConfig{
-			{ModelName: "primary-model", Model: "openai/primary-model", Enabled: true},
-			{ModelName: "fallback-model", Model: "openai/fallback-model", Enabled: true},
+			{ModelName: "primary-model", Provider: "openai", Model: "primary-model", Enabled: true},
+			{ModelName: "fallback-model", Provider: "openai", Model: "fallback-model", Enabled: true},
 		},
 	}
 
@@ -1104,14 +1104,12 @@ func TestMaybeBuildVisionExecutionState_UsesRoutedLightModelOverride(t *testing.
 	}
 	al.cfg.ModelList = []*config.ModelConfig{
 		{
-			ModelName: "primary-model",
-			Model:     "openai/gpt-5.4",
-			Enabled:   true,
+			ModelName: "primary-model", Provider: "openai", Model: "gpt-5.4",
+			Enabled: true,
 		},
 		{
-			ModelName: "light-model",
-			Model:     "openai/gpt-5.4-mini",
-			Enabled:   true,
+			ModelName: "light-model", Provider: "openai", Model: "gpt-5.4-mini",
+			Enabled: true,
 			Capabilities: &config.ModelCapabilities{
 				Vision: &config.ModelCapabilityOverride{
 					Model: "openai/gpt-4.1-mini",
@@ -1119,9 +1117,8 @@ func TestMaybeBuildVisionExecutionState_UsesRoutedLightModelOverride(t *testing.
 			},
 		},
 		{
-			ModelName: "openai/gpt-4.1-mini",
-			Model:     "openai/gpt-4.1-mini",
-			Enabled:   true,
+			ModelName: "openai/gpt-4.1-mini", Provider: "openai", Model: "gpt-4.1-mini",
+			Enabled: true,
 		},
 	}
 

@@ -33,7 +33,9 @@ explicit part of a coordinated upgrade.
 
 Every chat, fallback, routing, subagent, voice, TTS, and vision selector names a
 configured `model_list[].model_name` exactly. The provider-native identifier is
-stored only in that entry's `model` field; raw model IDs, `provider/model`
+stored only in that entry's `model` field, and the required `provider` field
+selects its runtime. MintClaw does not infer a provider from `model`; slashes in
+that value belong to the provider-native ID. Raw model IDs, `provider/model`
 references, provider aliases, and `agents.defaults.provider` are not alternate
 selector syntaxes. A `model_name` may contain `/` when that exact text is the
 declared name, and repeated names remain valid for load balancing.

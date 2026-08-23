@@ -64,90 +64,13 @@ type modelResponse struct {
 	DefaultModelAllowed bool   `json:"default_model_allowed"`
 }
 
-func normalizeStoredModelConfig(mc *config.ModelConfig) bool {
-	if mc == nil {
-		return false
-	}
-
-	changed := false
-	model := strings.TrimSpace(mc.Model)
-	if model != mc.Model {
-		mc.Model = model
-		changed = true
-	}
-	provider := strings.TrimSpace(mc.Provider)
-	if provider != mc.Provider {
-		mc.Provider = provider
-		changed = true
-	}
-	authMethod := strings.ToLower(strings.TrimSpace(mc.AuthMethod))
-	if authMethod != mc.AuthMethod {
-		mc.AuthMethod = authMethod
-		changed = true
-	}
-
-	if provider != "" {
-		normalizedProvider := providers.NormalizeProvider(provider)
-		if providers.IsSupportedModelProvider(normalizedProvider) && normalizedProvider != provider {
-			mc.Provider = normalizedProvider
-			changed = true
-		}
-		if mc.Provider == "elevenlabs" {
-			if _, strippedModel, found := strings.Cut(
-				model,
-				"/",
-			); found &&
-				providers.NormalizeProvider(strings.TrimSpace(provider)) == "elevenlabs" {
-				strippedModel = strings.TrimSpace(strippedModel)
-				if strippedModel != "" && strippedModel != mc.Model {
-					mc.Model = strippedModel
-					changed = true
-				}
-			}
-			if strings.TrimSpace(mc.Model) != asr.ElevenLabsSupportedModelID() {
-				mc.Model = asr.ElevenLabsSupportedModelID()
-				changed = true
-			}
-		}
-		return changed
-	}
-
-	effectiveProvider, modelID := providers.SplitModelProviderAndID(model, "openai")
-	if effectiveProvider == "" {
-		return changed
-	}
-	if mc.Provider != effectiveProvider {
-		mc.Provider = effectiveProvider
-		changed = true
-	}
-	if mc.Model != modelID {
-		mc.Model = modelID
-		changed = true
-	}
-	return changed
-}
-
 func normalizeIncomingModelConfig(mc *config.ModelConfig) {
 	if mc == nil {
 		return
 	}
 
-	mc.Model = strings.TrimSpace(mc.Model)
-	mc.Provider = strings.TrimSpace(mc.Provider)
+	mc.Provider = providers.NormalizeProvider(mc.Provider)
 	mc.AuthMethod = strings.ToLower(strings.TrimSpace(mc.AuthMethod))
-	if mc.Provider == "" {
-		mc.Provider, mc.Model = providers.SplitModelProviderAndID(mc.Model, "openai")
-	} else {
-		mc.Provider = providers.NormalizeProvider(mc.Provider)
-		if mc.Provider == "elevenlabs" {
-			if _, strippedModel, found := strings.Cut(mc.Model, "/"); found {
-				strippedModel = strings.TrimSpace(strippedModel)
-				if strippedModel != "" {
-					mc.Model = strippedModel
-				}
-			}
-		}
-	}
 	if mc.Provider == "antigravity" && mc.AuthMethod == "" {
 		mc.AuthMethod = "oauth"
 	}
@@ -190,8 +113,7 @@ func modelProviderOptionsForResponse() []providers.ModelProviderOption {
 }
 
 func defaultModelAllowedForModelConfig(mc *config.ModelConfig) bool {
-	provider, _ := providers.ExtractProtocol(mc)
-	return providers.IsDefaultModelProvider(provider)
+	return mc != nil && providers.IsDefaultModelProvider(mc.Provider)
 }
 
 func validateIncomingModelConfig(mc *config.ModelConfig, existing *config.ModelConfig) error {
@@ -214,26 +136,11 @@ func validateIncomingModelConfig(mc *config.ModelConfig, existing *config.ModelC
 		if existing == nil {
 			return fmt.Errorf("provider %q is not available for new models", mc.Provider)
 		}
-		existingProvider, _ := providers.ExtractProtocol(existing)
-		if providers.NormalizeProvider(existingProvider) != mc.Provider {
+		if providers.NormalizeProvider(existing.Provider) != mc.Provider {
 			return fmt.Errorf("provider %q is not available for selection", mc.Provider)
 		}
 	}
 	return nil
-}
-
-func normalizeStoredModelProviders(cfg *config.Config) bool {
-	if cfg == nil {
-		return false
-	}
-
-	changed := false
-	for _, model := range cfg.ModelList {
-		if normalizeStoredModelConfig(model) {
-			changed = true
-		}
-	}
-	return changed
 }
 
 // handleListModels returns all model_list entries with masked API keys.
@@ -245,10 +152,6 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to load config: %v", err), http.StatusInternalServerError)
 		return
 	}
-
-	// Normalize legacy provider/model storage in memory so GET can round-trip
-	// through the current API shape without mutating the on-disk config.
-	normalizeStoredModelProviders(cfg)
 
 	defaultModel := cfg.Agents.Defaults.GetModelName()
 	modelStatuses := make([]modelConfigurationSummary, len(cfg.ModelList))
@@ -265,12 +168,11 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 
 	models := make([]modelResponse, 0, len(cfg.ModelList))
 	for i, m := range cfg.ModelList {
-		provider, modelID := providers.ExtractProtocol(m)
 		models = append(models, modelResponse{
 			Index:               i,
 			ModelName:           m.ModelName,
-			Provider:            provider,
-			Model:               modelID,
+			Provider:            m.Provider,
+			Model:               m.Model,
 			APIBase:             m.APIBase,
 			APIKey:              maskAPIKey(m.APIKey()),
 			Proxy:               m.Proxy,
@@ -339,7 +241,6 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 	index := 0
 	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
 		cfg.ModelList = append(cfg.ModelList, &mc.ModelConfig)
-		normalizeStoredModelProviders(cfg)
 		index = len(cfg.ModelList) - 1
 		return validateModelReferenceMutation(cfg)
 	})
@@ -433,36 +334,6 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		if _, ok := rawFields["streaming"]; !ok {
 			mc.Streaming = cfg.ModelList[idx].Streaming
 		}
-		// Preserve the existing Provider when the caller omits it. This keeps the
-		// update API backward-compatible for clients that haven't started sending
-		// the new field yet, while still allowing explicit clearing via "".
-		if _, ok := rawFields["provider"]; !ok {
-			mc.Provider = cfg.ModelList[idx].Provider
-			// Older clients still round-trip the legacy model field only. When the
-			// stored config encodes provider/model in Model and has no explicit
-			// Provider field yet, continue preserving that hidden provider prefix.
-			// This keeps provider-omitted updates backward-compatible even when an
-			// older client edits the visible model ID.
-			if strings.TrimSpace(cfg.ModelList[idx].Provider) == "" {
-				existingRawModel := strings.TrimSpace(cfg.ModelList[idx].Model)
-				incomingModel := strings.TrimSpace(mc.Model)
-				existingProtocol, existingModelID := providers.ExtractProtocol(cfg.ModelList[idx])
-				if existingRawModel != "" && existingRawModel != existingModelID && incomingModel != "" {
-					if incomingModel == existingModelID {
-						mc.Model = existingRawModel
-					} else if strings.Contains(incomingModel, "/") && !strings.Contains(existingModelID, "/") {
-						// Older clients never saw the hidden provider prefix for simple
-						// legacy entries such as "openai/gpt-4o". If they now send an
-						// explicit provider/model string, treat it as the caller's full
-						// intent instead of re-applying the old hidden prefix.
-						mc.Model = incomingModel
-					} else if !strings.HasPrefix(incomingModel, existingProtocol+"/") {
-						mc.Model = existingProtocol + "/" + incomingModel
-					}
-				}
-			}
-		}
-
 		normalizeIncomingModelConfig(&mc.ModelConfig)
 		if err = validateIncomingModelConfig(&mc.ModelConfig, cfg.ModelList[idx]); err != nil {
 			return &configMutationRequestError{
@@ -478,7 +349,6 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cfg.ModelList[idx] = &mc.ModelConfig
-		normalizeStoredModelProviders(cfg)
 		if validationErr := validateModelReferenceMutation(cfg); validationErr != nil {
 			return validationErr
 		}
@@ -716,7 +586,7 @@ func (h *Handler) lookupStoredAPIKey(index int, reqProvider, reqAPIBase string) 
 		return ""
 	}
 	stored := cfg.ModelList[index]
-	storedProvider, _ := providers.ExtractProtocol(stored)
+	storedProvider := stored.Provider
 	if providers.NormalizeProvider(reqProvider) != providers.NormalizeProvider(storedProvider) {
 		return ""
 	}
@@ -1058,7 +928,7 @@ func (h *Handler) handleTestInlineModel(w http.ResponseWriter, r *http.Request) 
 		cfg, err := h.readConfig()
 		if err == nil && *req.ModelIndex >= 0 && *req.ModelIndex < len(cfg.ModelList) {
 			stored := cfg.ModelList[*req.ModelIndex]
-			storedProvider, _ := providers.ExtractProtocol(stored)
+			storedProvider := stored.Provider
 			reqProvider := providers.NormalizeProvider(m.Provider)
 			providerMatch := reqProvider == "" || reqProvider == providers.NormalizeProvider(storedProvider)
 

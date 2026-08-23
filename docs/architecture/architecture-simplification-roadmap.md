@@ -729,6 +729,10 @@ Implementation sequence:
     frontmatter at agent construction, and delete raw model-ID,
     `provider/model`, provider-alias, and default-provider inference from agent
     resolution and gateway restart signatures.
+17. Require every model entry to store one explicit provider plus its
+    provider-native model ID. Delete steady-state Web API normalization,
+    provider-prefix/default-provider inference, and the unused fallback parser
+    APIs that preserve those alternate representations.
 
 Exit criteria:
 

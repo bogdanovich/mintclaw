@@ -339,7 +339,7 @@ func (c *Config) WorkspacePath() string {
 func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 	matches := c.findMatches(modelName)
 	if len(matches) == 0 {
-		return nil, fmt.Errorf("model %q not found in model_list or providers", modelName)
+		return nil, fmt.Errorf("model %q not found in model_list", modelName)
 	}
 	if len(matches) == 1 {
 		return matches[0], nil

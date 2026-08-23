@@ -1057,13 +1057,11 @@ func TestSaveConfig_FiltersVirtualModels(t *testing.T) {
 
 	// Manually add a virtual model to ModelList (simulating what expandMultiKeyModels does)
 	primaryModel := &ModelConfig{
-		ModelName: "gpt-4",
-		Model:     "openai/gpt-4o",
-		APIKeys:   SimpleSecureStrings("key1"),
+		ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
+		APIKeys: SimpleSecureStrings("key1"),
 	}
 	virtualModel := &ModelConfig{
-		ModelName: "gpt-4__key_1",
-		Model:     "openai/gpt-4o",
+		ModelName: "gpt-4__key_1", Provider: "openai", Model: "gpt-4o",
 		APIKeys:   SimpleSecureStrings("key2"),
 		isVirtual: true,
 	}
@@ -1984,7 +1982,7 @@ func TestLoadConfig_WebToolsProxy(t *testing.T) {
 	configJSON := `{
 	"version": 3,
   "agents": {"defaults":{"workspace":"./workspace","model_name":"gpt4","max_tokens":8192,"max_tool_iterations":20}},
-  "model_list": [{"model_name":"gpt4","model":"openai/gpt-5.4","api_keys":["x"]}],
+  "model_list": [{"model_name":"gpt4","provider":"openai","model":"gpt-5.4","api_keys":["x"]}],
   "tools": {"web":{"proxy":"http://127.0.0.1:7890"}}
 }`
 	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
@@ -2557,7 +2555,7 @@ func TestLoadConfig_TelegramPlaceholderTextAcceptsSingleString(t *testing.T) {
 func TestLoadConfigReadOnly_WarnsForPlaintextAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	const original = `{"version":3,"model_list":[{"model_name":"test","model":"openai/gpt-4","api_keys":["sk-plaintext"]}]}`
+	const original = `{"version":3,"model_list":[{"model_name":"test","provider":"openai","model":"gpt-4","api_keys":["sk-plaintext"]}]}`
 	if err := os.WriteFile(cfgPath, []byte(original), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2591,7 +2589,7 @@ func TestSaveConfig_EncryptsPlaintextAPIKey(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.ModelList = []*ModelConfig{
-		{ModelName: "test", Model: "openai/gpt-4", APIKeys: SimpleSecureStrings("")},
+		{ModelName: "test", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("")},
 	}
 	cfg.ModelList[0].APIKeys[0].Set("sk-plaintext")
 
@@ -2624,7 +2622,7 @@ func TestSaveConfig_EncryptsPlaintextAPIKey(t *testing.T) {
 func TestLoadConfig_NoSealWithoutPassphrase(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
-	data := `{"version":3,"model_list":[{"model_name":"test","model":"openai/gpt-4","api_keys":["sk-plaintext"]}]}`
+	data := `{"version":3,"model_list":[{"model_name":"test","provider":"openai","model":"gpt-4","api_keys":["sk-plaintext"]}]}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2651,7 +2649,7 @@ func TestLoadConfig_FileRefNotSealed(t *testing.T) {
 	if err := os.WriteFile(keyFile, []byte("sk-from-file"), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	data := `{"version":3,"model_list":[{"model_name":"test","model":"openai/gpt-4"}]}`
+	data := `{"version":3,"model_list":[{"model_name":"test","provider":"openai","model":"gpt-4"}]}`
 	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
@@ -2659,7 +2657,12 @@ func TestLoadConfig_FileRefNotSealed(t *testing.T) {
 	if err := saveSecurityConfig(
 		secPath,
 		&Config{ModelList: SecureModelList{
-			&ModelConfig{ModelName: "test", APIKeys: SimpleSecureStrings("file://openai.key")},
+			&ModelConfig{
+				ModelName: "test",
+				Provider:  "openai",
+				Model:     "gpt-4",
+				APIKeys:   SimpleSecureStrings("file://openai.key"),
+			},
 		}}); err != nil {
 		t.Fatalf("saveSecurityConfig: %v", err)
 	}
@@ -2693,7 +2696,7 @@ func TestSaveConfig_MixedKeys(t *testing.T) {
 	if err := SaveConfig(cfgPath, &Config{
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
-			{ModelName: "pre", Model: "openai/gpt-4", APIKeys: SimpleSecureStrings("sk-already-plain")},
+			{ModelName: "pre", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-already-plain")},
 		},
 	}); err != nil {
 		t.Fatalf("setup SaveConfig: %v", err)
@@ -2725,19 +2728,16 @@ func TestSaveConfig_MixedKeys(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
 			{
-				ModelName: "plain",
-				Model:     "openai/gpt-4",
-				APIKeys:   SimpleSecureStrings("sk-new-plaintext"),
+				ModelName: "plain", Provider: "openai", Model: "gpt-4",
+				APIKeys: SimpleSecureStrings("sk-new-plaintext"),
 			},
 			{
-				ModelName: "enc",
-				Model:     "openai/gpt-4",
-				APIKeys:   SimpleSecureStrings(alreadyEncrypted),
+				ModelName: "enc", Provider: "openai", Model: "gpt-4",
+				APIKeys: SimpleSecureStrings(alreadyEncrypted),
 			},
 			{
-				ModelName: "file",
-				Model:     "openai/gpt-4",
-				APIKeys:   SimpleSecureStrings("file://api.key"),
+				ModelName: "file", Provider: "openai", Model: "gpt-4",
+				APIKeys: SimpleSecureStrings("file://api.key"),
 			},
 		},
 	}
@@ -2797,7 +2797,7 @@ func TestLoadConfig_MixedKeys_NoPassphrase(t *testing.T) {
 	if err := SaveConfig(cfgPath, &Config{
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
-			{ModelName: "m", Model: "openai/gpt-4", APIKeys: SimpleSecureStrings("sk-secret")},
+			{ModelName: "m", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-secret")},
 		},
 	}); err != nil {
 		t.Fatalf("setup SaveConfig: %v", err)
@@ -2868,7 +2868,7 @@ func TestSaveConfig_UsesPassphraseProvider(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.ModelList = []*ModelConfig{
-		{ModelName: "test", Model: "openai/gpt-4", APIKeys: SimpleSecureStrings("sk-plaintext")},
+		{ModelName: "test", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-plaintext")},
 	}
 	if err := SaveConfig(cfgPath, cfg); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
@@ -2905,7 +2905,7 @@ func TestLoadConfig_UsesPassphraseProvider(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{
 		"version": CurrentVersion,
 		"model_list": []map[string]any{
-			{"model_name": "test", "model": "openai/gpt-4", "api_keys": []string{encrypted}},
+			{"model_name": "test", "provider": "openai", "model": "gpt-4", "api_keys": []string{encrypted}},
 		},
 	})
 	if err = os.WriteFile(cfgPath, raw, 0o600); err != nil {
@@ -3161,8 +3161,7 @@ func TestModelConfig_ExtraBodyRoundTrip(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
 			{
-				ModelName: "test-model",
-				Model:     "openai/test",
+				ModelName: "test-model", Provider: "openai", Model: "test",
 				APIKeys:   SimpleSecureStrings("sk-test"),
 				ExtraBody: map[string]any{"custom_field": "value", "num_field": 42},
 			},
@@ -3197,8 +3196,7 @@ func TestModelConfig_CustomHeadersRoundTrip(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
 			{
-				ModelName:     "test-model",
-				Model:         "openai/test",
+				ModelName: "test-model", Provider: "openai", Model: "test",
 				APIKeys:       SimpleSecureStrings("sk-test"),
 				CustomHeaders: map[string]string{"X-Source": "coding-plan", "X-Agent": "openclaw"},
 			},
@@ -3233,8 +3231,7 @@ func TestModelConfig_ToolSchemaTransformRoundTrip(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
 			{
-				ModelName:           "test-model",
-				Model:               "openai/test",
+				ModelName: "test-model", Provider: "openai", Model: "test",
 				APIKeys:             SimpleSecureStrings("sk-test"),
 				ToolSchemaTransform: "simple",
 			},
@@ -3332,14 +3329,12 @@ func TestFilterSensitiveData_MultipleKeys(t *testing.T) {
 		},
 		ModelList: SecureModelList{
 			&ModelConfig{
-				ModelName: "model1",
-				Model:     "openai/model1",
-				APIKeys:   SecureStrings{NewSecureString("key-one"), NewSecureString("key-two")},
+				ModelName: "model1", Provider: "openai", Model: "model1",
+				APIKeys: SecureStrings{NewSecureString("key-one"), NewSecureString("key-two")},
 			},
 			&ModelConfig{
-				ModelName: "model2",
-				Model:     "openai/model2",
-				APIKeys:   SecureStrings{NewSecureString("key-three")},
+				ModelName: "model2", Provider: "openai", Model: "model2",
+				APIKeys: SecureStrings{NewSecureString("key-three")},
 			},
 		},
 	}

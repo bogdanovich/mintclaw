@@ -54,7 +54,7 @@ func TestWhisperTranscriberTranscribeDataUsesConfiguredModel(t *testing.T) {
 	defer server.Close()
 
 	tr := NewWhisperTranscriber(&config.ModelConfig{
-		Model:   "openai/whisper-1",
+		Provider: "openai", Model: "whisper-1",
 		APIBase: server.URL,
 		APIKeys: config.SimpleSecureStrings("sk-openai-test"),
 	})
@@ -88,7 +88,7 @@ func TestWhisperTranscriberUsesEndpointAPIBaseWithoutDoubleAppend(t *testing.T) 
 	defer server.Close()
 
 	tr := NewWhisperTranscriber(&config.ModelConfig{
-		Model:   "groq/whisper-large-v3",
+		Provider: "groq", Model: "whisper-large-v3",
 		APIBase: server.URL + "/audio/transcriptions",
 		APIKeys: config.SimpleSecureStrings("sk-groq-test"),
 	})
@@ -138,7 +138,7 @@ func TestWhisperTranscriberUsesOAuthTokenSource(t *testing.T) {
 	defer server.Close()
 
 	tr := NewWhisperTranscriber(&config.ModelConfig{
-		Model:      "openai/gpt-4o-transcribe",
+		Provider: "openai", Model: "gpt-4o-transcribe",
 		APIBase:    server.URL,
 		AuthMethod: "oauth",
 	})

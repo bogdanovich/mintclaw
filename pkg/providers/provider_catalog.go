@@ -3,7 +3,6 @@ package providers
 import (
 	"cmp"
 	"slices"
-	"strings"
 )
 
 // ModelProviderOptions returns the canonical provider catalog exposed to the Web UI.
@@ -52,37 +51,4 @@ func IsDefaultModelProvider(provider string) bool {
 func IsLocalModelProvider(provider string) bool {
 	option, ok := modelProviderOptionForName(provider)
 	return ok && option.Local
-}
-
-// SplitModelProviderAndID separates a legacy "provider/model" string into its
-// effective provider and canonical model ID. Unknown prefixes are treated as
-// part of the model ID and fall back to defaultProvider.
-func SplitModelProviderAndID(model, defaultProvider string) (provider, modelID string) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return "", ""
-	}
-
-	provider, modelID = splitKnownProviderModel(model)
-	if provider != "" || modelID != "" {
-		return provider, modelID
-	}
-
-	return NormalizeProvider(defaultProvider), model
-}
-
-func splitKnownProviderModel(model string) (provider, modelID string) {
-	provider, modelID, found := strings.Cut(strings.TrimSpace(model), "/")
-	if !found {
-		return "", ""
-	}
-	provider = strings.TrimSpace(provider)
-	modelID = strings.TrimSpace(modelID)
-	if provider == "" {
-		return "", modelID
-	}
-	if !IsSupportedModelProvider(provider) {
-		return "", ""
-	}
-	return NormalizeProvider(provider), modelID
 }

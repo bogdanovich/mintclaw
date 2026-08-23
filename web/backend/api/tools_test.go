@@ -587,9 +587,8 @@ func TestResolveCurrentWebSearchProvider_PrefersStableDefaultForSogouAndDuckDuck
 func TestResolveCurrentWebSearchProvider_IgnoresPreferNativeInConfigView(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "custom-default",
-		Model:     "openai/gpt-4o",
-		APIKeys:   config.SimpleSecureStrings("sk-default"),
+		ModelName: "custom-default", Provider: "openai", Model: "gpt-4o",
+		APIKeys: config.SimpleSecureStrings("sk-default"),
 	}}
 	cfg.Agents.Defaults.ModelName = "custom-default"
 	cfg.Tools.Web.PreferNative = true

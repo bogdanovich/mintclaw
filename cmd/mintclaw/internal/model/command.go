@@ -95,7 +95,13 @@ func listAvailableModels(cfg *config.Config) {
 		if !model.Enabled {
 			continue
 		}
-		fmt.Printf("%s- %s (%s)\n", marker, model.ModelName, model.Model)
+		fmt.Printf(
+			"%s- %s (provider=%s, model=%s)\n",
+			marker,
+			model.ModelName,
+			model.Provider,
+			model.Model,
+		)
 	}
 }
 
