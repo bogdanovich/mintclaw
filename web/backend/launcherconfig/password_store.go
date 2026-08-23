@@ -61,7 +61,6 @@ func (s *PasswordStore) SetPassword(ctx context.Context, plain string) error {
 		return err
 	}
 	cfg.DashboardPasswordHash = string(hash)
-	cfg.LegacyLauncherToken = ""
 	return Save(s.path, cfg)
 }
 

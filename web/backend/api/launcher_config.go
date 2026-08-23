@@ -87,7 +87,6 @@ func (h *Handler) handleUpdateLauncherConfig(w http.ResponseWriter, r *http.Requ
 		cfg.AllowLocalhostBypass = *payload.AllowLocalhostBypass
 	}
 	cfg.TrustedProxyCIDRs = append([]string(nil), payload.TrustedProxyCIDRs...)
-	cfg.LegacyLauncherToken = ""
 	if err := launcherconfig.Validate(cfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

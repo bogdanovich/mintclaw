@@ -286,7 +286,6 @@ Example clean web policy:
 
 - **Config file**: Same directory as `config.json` (or the file pointed to by `MINTCLAW_CONFIG`). The launcher-specific file is `launcher-config.json`.
 - **Password storage**: On supported platforms, the password is stored as a bcrypt hash in `launcher-auth.db`. On platforms where the SQLite password store is unavailable, the bcrypt hash is stored in `launcher-config.json`.
-- **Legacy migration**: Older `launcher_token` values are migrated once into password login and removed from saved launcher config.
 - **Local auto-login**: When the launcher auto-opens a local browser after startup, it uses a one-shot loopback-only bootstrap endpoint to set the session cookie automatically.
 - **Unsupported auth paths**: URL token login (`?token=...`), `MINTCLAW_LAUNCHER_TOKEN`, and `Authorization: Bearer` dashboard auth are no longer supported.
 - **Sign-out**: Use **`POST /api/auth/logout`** with **`Content-Type: application/json`** (body may be `{}`). Do not rely on a GET URL for logout (CSRF-safe pattern).
