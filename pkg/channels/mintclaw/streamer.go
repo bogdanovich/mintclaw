@@ -258,7 +258,6 @@ func (s *mintclawStreamer) sendReasoningLocked(ctx context.Context, content stri
 			PayloadKeyContent: content,
 			"message_id":      reasoningID,
 			PayloadKeyKind:    MessageKindThought,
-			PayloadKeyThought: true,
 		}
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName
@@ -273,7 +272,6 @@ func (s *mintclawStreamer) sendReasoningLocked(ctx context.Context, content stri
 			PayloadKeyContent: content,
 			"message_id":      s.reasoningID,
 			PayloadKeyKind:    MessageKindThought,
-			PayloadKeyThought: true,
 		}
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName

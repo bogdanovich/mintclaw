@@ -572,18 +572,13 @@ func TestIsThoughtPayload(t *testing.T) {
 			want:    true,
 		},
 		{
-			name:    "thought kind ignores case and whitespace",
+			name:    "non-current thought spelling",
 			payload: map[string]any{PayloadKeyKind: "  ThOuGhT  "},
-			want:    true,
+			want:    false,
 		},
 		{
-			name:    "legacy thought bool remains supported for inbound compatibility",
-			payload: map[string]any{PayloadKeyThought: true},
-			want:    true,
-		},
-		{
-			name:    "legacy thought false",
-			payload: map[string]any{PayloadKeyThought: false},
+			name:    "retired boolean marker",
+			payload: map[string]any{"thought": true},
 			want:    false,
 		},
 		{
@@ -640,38 +635,6 @@ func TestMintClawClientChannel_HandleServerMessage_IgnoresThought(t *testing.T) 
 	select {
 	case msg := <-mb.InboundChan():
 		t.Fatalf("expected no inbound publish for thought payload, got %+v", msg)
-	case <-time.After(150 * time.Millisecond):
-	}
-}
-
-func TestMintClawClientChannel_HandleServerMessage_IgnoresLegacyThoughtBool(t *testing.T) {
-	mb := bus.NewMessageBus()
-	bc := &config.Channel{
-		Type:      config.ChannelMintClawClient,
-		Enabled:   true,
-		AllowFrom: config.FlexibleStringSlice{"mintclaw-remote"},
-	}
-	ch, err := NewMintClawClientChannel(bc, &config.MintClawClientSettings{
-		URL: "ws://localhost:8080/ws",
-	}, mb)
-	if err != nil {
-		t.Fatalf("NewMintClawClientChannel() error = %v", err)
-	}
-
-	ch.ctx = context.Background()
-	pc := &mintclawConn{sessionID: "sess-thought-legacy"}
-
-	ch.handleServerMessage(pc, MintClawMessage{
-		Type: TypeMessageCreate,
-		Payload: map[string]any{
-			PayloadKeyContent: "legacy internal reasoning",
-			PayloadKeyThought: true,
-		},
-	})
-
-	select {
-	case msg := <-mb.InboundChan():
-		t.Fatalf("expected no inbound publish for legacy thought payload, got %+v", msg)
 	case <-time.After(150 * time.Millisecond):
 	}
 }
