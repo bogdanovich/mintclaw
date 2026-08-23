@@ -48,6 +48,7 @@ The new `model_list` configuration offers several advantages:
       "model_name": "gpt4",
       "provider": "openai",
       "model": "gpt-5.4",
+      "enabled": true,
       "api_keys": ["sk-your-openai-key"],
       "api_base": "https://api.openai.com/v1"
     },
@@ -55,12 +56,14 @@ The new `model_list` configuration offers several advantages:
       "model_name": "claude-sonnet-4.6",
       "provider": "anthropic",
       "model": "claude-sonnet-4.6",
+      "enabled": true,
       "api_keys": ["sk-ant-your-key"]
     },
     {
       "model_name": "deepseek",
       "provider": "deepseek",
       "model": "deepseek-chat",
+      "enabled": true,
       "api_keys": ["sk-your-deepseek-key"]
     }
   ],
@@ -103,7 +106,7 @@ contain slashes. Examples:
 | `model` | Yes | Provider-native model ID, sent unchanged |
 | `api_base` | No | API endpoint URL |
 | `api_keys` | No | API authentication keys (array; supports multiple keys for load balancing) |
-| `enabled` | No | Whether this model entry is active. Defaults to `true` during migration for models with API keys or named `local-model`. Set to `false` to disable. |
+| `enabled` | Yes for active entries | Sole activation switch. Set it explicitly; credentials and model names do not imply activation. |
 | `proxy` | No | HTTP proxy URL |
 | `auth_method` | No | Authentication method: `oauth`, `token` |
 | `connect_mode` | No | Connection mode for CLI providers: `stdio`, `grpc` |
@@ -127,6 +130,7 @@ There are two ways to configure load balancing:
       "model_name": "gpt4",
       "provider": "openai",
       "model": "gpt-5.4",
+      "enabled": true,
       "api_keys": ["sk-key1", "sk-key2", "sk-key3"],
       "api_base": "https://api.openai.com/v1"
     }
@@ -154,6 +158,7 @@ model_list:
       "model_name": "gpt4",
       "provider": "openai",
       "model": "gpt-5.4",
+      "enabled": true,
       "api_keys": ["sk-key1"],
       "api_base": "https://api1.example.com/v1"
     },
@@ -161,6 +166,7 @@ model_list:
       "model_name": "gpt4",
       "provider": "openai",
       "model": "gpt-5.4",
+      "enabled": true,
       "api_keys": ["sk-key2"],
       "api_base": "https://api2.example.com/v1"
     },
@@ -168,6 +174,7 @@ model_list:
       "model_name": "gpt4",
       "provider": "openai",
       "model": "gpt-5.4",
+      "enabled": true,
       "api_keys": ["sk-key3"],
       "api_base": "https://api3.example.com/v1"
     }
@@ -188,6 +195,7 @@ With `model_list`, adding a new provider requires zero code changes:
       "model_name": "my-custom-llm",
       "provider": "openai",
       "model": "my-model-v1",
+      "enabled": true,
       "api_keys": ["your-api-key"],
       "api_base": "https://api.your-provider.com/v1"
     }

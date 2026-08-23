@@ -239,6 +239,7 @@ func configureOpenAIAuth(cfg *config.Config, method string) {
 	for _, model := range cfg.ModelList {
 		if isOpenAIModel(model) {
 			model.AuthMethod = method
+			model.Enabled = true
 			found = true
 			break
 		}
@@ -249,6 +250,7 @@ func configureOpenAIAuth(cfg *config.Config, method string) {
 			Provider:   "openai",
 			Model:      "gpt-5.4",
 			AuthMethod: method,
+			Enabled:    true,
 		})
 	}
 	cfg.Agents.Defaults.ModelName = "gpt-5.4"
@@ -275,6 +277,7 @@ func configureAnthropicAuth(cfg *config.Config, method string, setNewDefault boo
 	for _, model := range cfg.ModelList {
 		if isAnthropicModel(model) {
 			model.AuthMethod = method
+			model.Enabled = true
 			found = true
 			break
 		}
@@ -287,6 +290,7 @@ func configureAnthropicAuth(cfg *config.Config, method string, setNewDefault boo
 		Provider:   "anthropic",
 		Model:      defaultAnthropicModel,
 		AuthMethod: method,
+		Enabled:    true,
 	})
 	if setNewDefault || cfg.Agents.Defaults.GetModelName() == "" {
 		cfg.Agents.Defaults.ModelName = defaultAnthropicModel
@@ -298,6 +302,7 @@ func configureAntigravityAuth(cfg *config.Config, method string) {
 	for _, model := range cfg.ModelList {
 		if isAntigravityModel(model) {
 			model.AuthMethod = method
+			model.Enabled = true
 			found = true
 			break
 		}
@@ -308,6 +313,7 @@ func configureAntigravityAuth(cfg *config.Config, method string) {
 			Provider:   "antigravity",
 			Model:      "gemini-3-flash",
 			AuthMethod: method,
+			Enabled:    true,
 		})
 	}
 	cfg.Agents.Defaults.ModelName = "gemini-flash"

@@ -997,6 +997,7 @@ func (c *MintClawConfig) ToStandardConfig() *config.Config {
 			Model:     m.Model,
 			APIBase:   m.APIBase,
 			Proxy:     m.Proxy,
+			Enabled:   true,
 		}
 		if m.APIKey != "" {
 			mc.SetAPIKey(m.APIKey)

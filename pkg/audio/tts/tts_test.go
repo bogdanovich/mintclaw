@@ -232,7 +232,7 @@ func TestDetectTTS_UsesMimoProviderForMimoModels(t *testing.T) {
 		ModelList: []*config.ModelConfig{
 			{
 				ModelName: "mimo-tts", Provider: "mimo", Model: "mimo-v2-tts",
-				APIKeys: config.SimpleSecureStrings("sk-mimo"),
+				APIKeys: config.SimpleSecureStrings("sk-mimo"), Enabled: true,
 			},
 		},
 	})
@@ -257,7 +257,7 @@ func TestDetectTTS_UsesOpenAIExtraBodyVoiceAndResponseFormat(t *testing.T) {
 		ModelList: []*config.ModelConfig{
 			{
 				ModelName: "mai-voice", Provider: "openrouter", Model: "microsoft/mai-voice-2",
-				APIKeys: config.SimpleSecureStrings("sk-openrouter"),
+				APIKeys: config.SimpleSecureStrings("sk-openrouter"), Enabled: true,
 				ExtraBody: map[string]any{
 					"voice":           "en-US-Harper:MAI-Voice-2",
 					"response_format": "mp3",
@@ -275,6 +275,22 @@ func TestDetectTTS_UsesOpenAIExtraBodyVoiceAndResponseFormat(t *testing.T) {
 	}
 	if ttsProvider.responseFormat != "mp3" {
 		t.Fatalf("responseFormat mismatch: got %q", ttsProvider.responseFormat)
+	}
+}
+
+func TestDetectTTS_IgnoresDisabledFallbackModel(t *testing.T) {
+	t.Parallel()
+
+	provider := DetectTTS(&config.Config{ModelList: []*config.ModelConfig{{
+		ModelName: "disabled-tts",
+		Provider:  "openai",
+		Model:     "tts-1",
+		APIKeys:   config.SimpleSecureStrings("sk-openai"),
+		Enabled:   false,
+	}}})
+
+	if provider != nil {
+		t.Fatalf("DetectTTS() type = %T, want nil for disabled model", provider)
 	}
 }
 

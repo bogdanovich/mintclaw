@@ -38,6 +38,58 @@ func TestOAuthLoginRejectsUnsupportedMethod(t *testing.T) {
 	}
 }
 
+func TestDefaultOAuthModelsAreEnabled(t *testing.T) {
+	for _, provider := range []string{
+		oauthProviderOpenAI,
+		oauthProviderAnthropic,
+		oauthProviderGoogleAntigravity,
+	} {
+		model := defaultModelConfigForProvider(provider, "oauth")
+		if !model.Enabled {
+			t.Fatalf("default model for %s is disabled", provider)
+		}
+	}
+}
+
+func TestSyncProviderAuthMethodEnablesOnlyOneModelWhenNoneAreActive(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{ModelName: "first", Provider: "openai", Model: "gpt-5.4"},
+		{ModelName: "second", Provider: "openai", Model: "gpt-5.4-mini"},
+	}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	if err = h.syncProviderAuthMethod(oauthProviderOpenAI, "oauth"); err != nil {
+		t.Fatalf("syncProviderAuthMethod() error = %v", err)
+	}
+
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if !updated.ModelList[0].Enabled || updated.ModelList[1].Enabled {
+		t.Fatalf(
+			"enabled states = [%t %t], want [true false]",
+			updated.ModelList[0].Enabled,
+			updated.ModelList[1].Enabled,
+		)
+	}
+	for _, model := range updated.ModelList {
+		if model.AuthMethod != "oauth" {
+			t.Fatalf("model %q auth_method = %q, want oauth", model.ModelName, model.AuthMethod)
+		}
+	}
+}
+
 func TestOAuthBrowserFlowCreatedAndQueried(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

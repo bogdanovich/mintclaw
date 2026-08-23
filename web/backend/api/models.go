@@ -113,7 +113,7 @@ func modelProviderOptionsForResponse() []providers.ModelProviderOption {
 }
 
 func defaultModelAllowedForModelConfig(mc *config.ModelConfig) bool {
-	return mc != nil && providers.IsDefaultModelProvider(mc.Provider)
+	return mc != nil && mc.Enabled && providers.IsDefaultModelProvider(mc.Provider)
 }
 
 func validateIncomingModelConfig(mc *config.ModelConfig, existing *config.ModelConfig) error {
@@ -343,8 +343,7 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		}
 		if cfg.Agents.Defaults.ModelName == cfg.ModelList[idx].ModelName &&
 			!defaultModelAllowedForModelConfig(&mc.ModelConfig) {
-			// Allow users to recover from legacy/invalid defaults by saving the model
-			// and clearing the default chat model reference in the same write.
+			// Keep the saved default usable when this edit disables or changes its model.
 			cfg.Agents.Defaults.ModelName = ""
 		}
 

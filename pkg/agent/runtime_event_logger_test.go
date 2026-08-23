@@ -307,6 +307,7 @@ func TestReloadProviderAndConfigRefreshesModelExecutionConfig(t *testing.T) {
 		Model:     "reloaded-model",
 		APIBase:   "https://example.invalid/v1",
 		APIKeys:   config.SimpleSecureStrings("reloaded-key"),
+		Enabled:   true,
 	}}
 	if err := al.ReloadProviderAndConfig(context.Background(), &mockProvider{}, reloaded); err != nil {
 		t.Fatalf("ReloadProviderAndConfig() error = %v", err)

@@ -76,7 +76,7 @@ func DetectTTS(cfg *config.Config) TTSProvider {
 	}
 
 	for _, mc := range cfg.ModelList {
-		if strings.Contains(strings.ToLower(mc.Model), "tts") && mc.APIKey() != "" {
+		if mc.Enabled && strings.Contains(strings.ToLower(mc.Model), "tts") && mc.APIKey() != "" {
 			if provider := providerFromModelConfig(mc); provider != nil {
 				return provider
 			}

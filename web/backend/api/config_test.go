@@ -1312,6 +1312,7 @@ func setupMintClawEnabledEnv(t *testing.T) (string, func()) {
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "custom-default", Provider: "openai", Model: "gpt-4o",
 		APIKeys: config.SimpleSecureStrings("sk-default"),
+		Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "custom-default"
 	bc := cfg.Channels["mintclaw"]
@@ -1373,7 +1374,8 @@ func TestHandleUpdateConfig_SucceedsWhenMintClawTokenInSecurityOnly(t *testing.T
 				"model_name": "custom-default",
 				"provider": "openai",
 				"model": "gpt-4o",
-				"api_keys": ["sk-default"]
+				"api_keys": ["sk-default"],
+				"enabled": true
 			}
 		]
 	}`))
@@ -1437,7 +1439,8 @@ func TestHandleUpdateConfig_AppliesGatewayLogLevel(t *testing.T) {
 				"model_name": "custom-default",
 				"provider": "openai",
 				"model": "gpt-4o",
-				"api_keys": ["sk-default"]
+				"api_keys": ["sk-default"],
+				"enabled": true
 			}
 		]
 	}`, logger.ERROR)

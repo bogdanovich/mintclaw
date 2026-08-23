@@ -21,6 +21,7 @@ func TestResolveModelCandidateRequiresExactModelName(t *testing.T) {
 		ModelName: "primary",
 		Provider:  "openai",
 		Model:     "gpt-5.4",
+		Enabled:   true,
 	}}}
 
 	candidate, ok := resolveModelCandidate(cfg, "primary")
@@ -73,12 +74,14 @@ func TestResolveActiveModelConfig_PrefersCandidateIdentityKey(t *testing.T) {
 				ModelName: "glm-4.7",
 				Provider:  "zhipu",
 				Model:     "glm-4.7",
+				Enabled:   true,
 				Streaming: config.ModelStreamingConfig{Enabled: false},
 			},
 			{
 				ModelName: "suanneng-glm-4.7",
 				Provider:  "zhipu",
 				Model:     "glm-4.7",
+				Enabled:   true,
 				Streaming: config.ModelStreamingConfig{Enabled: true},
 			},
 		},
@@ -111,10 +114,12 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 		ModelList: []*config.ModelConfig{
 			{
 				ModelName: "lb-model", Provider: "openai", Model: "primary",
+				Enabled:   true,
 				Streaming: config.ModelStreamingConfig{Enabled: false},
 			},
 			{
 				ModelName: "lb-model", Provider: "openai", Model: "secondary",
+				Enabled:   true,
 				Streaming: config.ModelStreamingConfig{Enabled: true},
 			},
 		},
@@ -149,6 +154,7 @@ func TestResolveActiveModelConfig_RequiresCandidateIdentity(t *testing.T) {
 				ModelName: "openai-gpt",
 				Provider:  "openai",
 				Model:     "gpt-4o",
+				Enabled:   true,
 				Streaming: config.ModelStreamingConfig{Enabled: true},
 			},
 		},
@@ -166,5 +172,29 @@ func TestResolveActiveModelConfig_RequiresCandidateIdentity(t *testing.T) {
 
 	if got != nil {
 		t.Fatalf("resolveActiveModelConfig() = %#v, want nil for non-active provider config", got)
+	}
+}
+
+func TestResolveActiveModelConfig_IgnoresDisabledIdentityMatch(t *testing.T) {
+	cfg := &config.Config{ModelList: []*config.ModelConfig{{
+		ModelName: "primary",
+		Provider:  "openai",
+		Model:     "gpt-5.4",
+		Enabled:   false,
+	}}}
+
+	got := resolveActiveModelConfig(
+		cfg,
+		"/workspace",
+		[]providers.FallbackCandidate{{
+			Provider:    "openai",
+			Model:       "gpt-5.4",
+			IdentityKey: "model_name:primary",
+		}},
+		"primary",
+	)
+
+	if got != nil {
+		t.Fatalf("resolveActiveModelConfig() = %#v, want nil for disabled config", got)
 	}
 }

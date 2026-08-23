@@ -87,6 +87,7 @@ func TestHandleAddModelRejectsDanglingFallback(t *testing.T) {
 		"model_name":"new-model",
 		"provider":"openai",
 		"model":"gpt-5.4-mini",
+		"enabled":true,
 		"fallbacks":["missing-model"]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -104,6 +105,32 @@ func TestHandleAddModelRejectsDanglingFallback(t *testing.T) {
 	}
 }
 
+func TestHandleAddModelUsesExplicitEnabledValue(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	disabled := addModelAndLoadLatest(t, configPath, `{
+		"model_name":"disabled-with-key",
+		"provider":"openai",
+		"model":"gpt-5.4-mini",
+		"api_key":"test-key"
+	}`)
+	if disabled.Enabled {
+		t.Fatal("model without enabled field should be inactive")
+	}
+
+	enabled := addModelAndLoadLatest(t, configPath, `{
+		"model_name":"explicitly-enabled",
+		"provider":"openai",
+		"model":"gpt-5.4-mini",
+		"enabled":true,
+		"api_key":"test-key"
+	}`)
+	if !enabled.Enabled {
+		t.Fatal("model with enabled=true should be active")
+	}
+}
+
 func TestHandleUpdateModelRejectsReferencedRename(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
@@ -116,6 +143,7 @@ func TestHandleUpdateModelRejectsReferencedRename(t *testing.T) {
 		ModelName: "referenced-model",
 		Provider:  "openai",
 		Model:     "gpt-5.4",
+		Enabled:   true,
 	}}
 	cfg.Agents.Defaults.ModelName = "referenced-model"
 	if err = config.SaveConfig(configPath, cfg); err != nil {
@@ -130,7 +158,8 @@ func TestHandleUpdateModelRejectsReferencedRename(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/models/0", bytes.NewBufferString(`{
 		"model_name":"renamed-model",
 		"provider":"openai",
-		"model":"gpt-5.4"
+		"model":"gpt-5.4",
+		"enabled":true
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
@@ -156,12 +185,13 @@ func TestHandleDeleteModelRejectsDanglingReference(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.ModelList = []*config.ModelConfig{
-		{ModelName: "referenced-model", Provider: "openai", Model: "gpt-5.4"},
+		{ModelName: "referenced-model", Provider: "openai", Model: "gpt-5.4", Enabled: true},
 		{
 			ModelName: "consumer-model",
 			Provider:  "openai",
 			Model:     "gpt-5.4-mini",
 			Fallbacks: []string{"referenced-model"},
+			Enabled:   true,
 		},
 	}
 	cfg.Agents.Defaults.ModelName = "consumer-model"
@@ -226,7 +256,7 @@ func TestHandleListModels_AvailabilityUsesRuntimeProbesForLocalModels(t *testing
 	cfg.ModelList = []*config.ModelConfig{
 		{
 			ModelName: "openai-oauth", Provider: "openai", Model: "gpt-5.4",
-			AuthMethod: "oauth",
+			AuthMethod: "oauth", Enabled: true,
 		},
 		{
 			ModelName: "vllm-local", Provider: "vllm", Model: "custom-model",
@@ -332,7 +362,7 @@ func TestHandleListModels_AvailabilityForOAuthModelWithCredential(t *testing.T) 
 	}
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "claude-oauth", Provider: "anthropic", Model: "claude-sonnet-4.6",
-		AuthMethod: "oauth",
+		AuthMethod: "oauth", Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "claude-oauth"
 	err = config.SaveConfig(configPath, cfg)
@@ -1641,6 +1671,7 @@ func TestHandleUpdateModel_ClearsDefaultWhenSavingASROnlyModel(t *testing.T) {
 		Provider:  "elevenlabs",
 		Model:     "scribe_v1",
 		APIKeys:   config.SimpleSecureStrings("sk_elevenlabs_test"),
+		Enabled:   true,
 	}}
 	cfg.Agents.Defaults.ModelName = "elevenlabs-asr"
 	if err = config.SaveConfig(configPath, cfg); err != nil {
@@ -2113,6 +2144,43 @@ func TestHandleSetDefaultModel_RejectsNonexistentModel(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "not found") {
 		t.Fatalf("error message should mention 'not found', got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleSetDefaultModel_RejectsDisabledModel(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "disabled-model",
+		Provider:  "openai",
+		Model:     "gpt-5.4",
+		Enabled:   false,
+	}}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/default", bytes.NewBufferString(`{
+		"model_name": "disabled-model"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "cannot be used as the default chat model") {
+		t.Fatalf("body = %q, want disabled model rejection", rec.Body.String())
 	}
 }
 

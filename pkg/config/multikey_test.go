@@ -192,6 +192,7 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 		ThinkingLevel:       "high",
 		ToolSchemaTransform: "simple",
 		Streaming:           ModelStreamingConfig{Enabled: true},
+		Enabled:             true,
 	}
 	modelCfg.APIKeys = SimpleSecureStrings("key0", "key1") // Use internal field for multi-key testing
 	models := []*ModelConfig{modelCfg}
@@ -227,6 +228,9 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 	if !primary.Streaming.Enabled {
 		t.Error("expected streaming config preserved on primary")
 	}
+	if !primary.Enabled {
+		t.Error("expected enabled config preserved on primary")
+	}
 
 	// Check additional entry also preserves fields
 	additional := result[0]
@@ -244,6 +248,9 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 	}
 	if !additional.Streaming.Enabled {
 		t.Error("expected streaming config preserved on additional")
+	}
+	if !additional.Enabled {
+		t.Error("expected enabled config preserved on additional")
 	}
 }
 

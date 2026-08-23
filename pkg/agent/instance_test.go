@@ -160,6 +160,7 @@ func TestNewAgentInstance_ResolveCandidatesFromModelListAlias(t *testing.T) {
 						Model:     tt.modelName,
 						Provider:  tt.provider,
 						APIBase:   tt.apiBase,
+						Enabled:   true,
 					},
 				},
 			}
@@ -194,11 +195,11 @@ func TestNewAgentInstance_PreservesDistinctLimiterIdentityForSharedResolvedModel
 		ModelList: []*config.ModelConfig{
 			{
 				ModelName: "glm-4.7", Provider: "zhipu", Model: "glm-4.7",
-				RPM: 1,
+				RPM: 1, Enabled: true,
 			},
 			{
 				ModelName: "glm-4.7__key_1", Provider: "zhipu", Model: "glm-4.7",
-				RPM: 3,
+				RPM: 3, Enabled: true,
 			},
 		},
 	}
@@ -246,6 +247,7 @@ func TestNewAgentInstance_PreservesConfigIdentityForExactModelName(t *testing.T)
 				Provider:  "nvidia",
 				Model:     "z-ai/glm-5.1",
 				RPM:       7,
+				Enabled:   true,
 			},
 		},
 	}
@@ -802,6 +804,7 @@ Use frontmatter identity.
 		},
 		ModelList: []*config.ModelConfig{{
 			ModelName: "frontmatter-model", Provider: "openai", Model: "frontmatter-model",
+			Enabled: true,
 		}},
 	}
 
@@ -860,6 +863,36 @@ func TestNewAgentInstance_RejectsUnknownFrontmatterModel(t *testing.T) {
 	}
 }
 
+func TestNewAgentInstance_RejectsDisabledFrontmatterModel(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": "---\nmodel: disabled-model\n---\n# Agent\n",
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: workspace,
+			ModelName: "configured-model",
+		}},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "disabled-model", Provider: "openai", Model: "gpt-5.4",
+			Enabled: false,
+		}},
+	}
+
+	agent, err := newAgentInstance(
+		&config.AgentConfig{ID: "research", Workspace: workspace},
+		&cfg.Agents.Defaults,
+		cfg,
+		&mockProvider{},
+		nil,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), `workspace model "disabled-model" is not configured`) {
+		t.Fatalf("newAgentInstance() agent = %#v, error = %v", agent, err)
+	}
+}
+
 func TestNewAgentInstance_RejectsWhitespaceInFrontmatterModel(t *testing.T) {
 	workspace := setupWorkspace(t, map[string]string{
 		"AGENT.md": "---\nmodel: \" configured-model \"\n---\n# Agent\n",
@@ -913,6 +946,7 @@ model: claude-frontmatter
 				ModelName: "claude-frontmatter", Provider: "anthropic", Model: "claude-3-7-sonnet",
 				APIKeys:   config.SimpleSecureStrings("test-anthropic-key"),
 				Workspace: workspace,
+				Enabled:   true,
 			},
 		},
 	}

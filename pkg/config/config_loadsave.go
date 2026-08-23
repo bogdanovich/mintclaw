@@ -333,7 +333,7 @@ func (c *Config) WorkspacePath() string {
 	return fileutil.ExpandHome(c.Agents.Defaults.Workspace)
 }
 
-// GetModelConfig returns the ModelConfig for the given model name.
+// GetModelConfig returns an enabled ModelConfig for the given model name.
 // If multiple configs exist with the same model_name, it uses round-robin
 // selection for load balancing. Returns an error if the model is not found.
 func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
@@ -354,7 +354,7 @@ func (c *Config) GetModelConfig(modelName string) (*ModelConfig, error) {
 func (c *Config) findMatches(modelName string) []*ModelConfig {
 	var matches []*ModelConfig
 	for i := range c.ModelList {
-		if c.ModelList[i].ModelName == modelName {
+		if c.ModelList[i] != nil && c.ModelList[i].Enabled && c.ModelList[i].ModelName == modelName {
 			matches = append(matches, c.ModelList[i])
 		}
 	}
@@ -499,64 +499,20 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 			suffix := fmt.Sprintf("__key_%d", i)
 			expandedName := originalName + suffix
 
-			// Create a copy for the additional key
-			additionalEntry := &ModelConfig{
-				ModelName:           expandedName,
-				Provider:            m.Provider,
-				Model:               m.Model,
-				APIBase:             m.APIBase,
-				APIKeys:             SimpleSecureStrings(keys[i]),
-				Proxy:               m.Proxy,
-				AuthMethod:          m.AuthMethod,
-				ConnectMode:         m.ConnectMode,
-				Workspace:           m.Workspace,
-				RPM:                 m.RPM,
-				MaxTokensField:      m.MaxTokensField,
-				RequestTimeout:      m.RequestTimeout,
-				ThinkingLevel:       m.ThinkingLevel,
-				ToolSchemaTransform: m.ToolSchemaTransform,
-				Streaming:           m.Streaming,
-				ExtraBody:           m.ExtraBody,
-				CustomHeaders:       m.CustomHeaders,
-				Capabilities:        m.Capabilities,
-				UserAgent:           m.UserAgent,
-				isVirtual:           true,
-			}
-			expanded = append(expanded, additionalEntry)
+			additionalEntry := *m
+			additionalEntry.ModelName = expandedName
+			additionalEntry.APIKeys = SimpleSecureStrings(keys[i])
+			additionalEntry.Fallbacks = nil
+			additionalEntry.isVirtual = true
+			expanded = append(expanded, &additionalEntry)
 			fallbackNames = append(fallbackNames, expandedName)
 		}
 
-		// Create the primary entry with first key and fallbacks
-		primaryEntry := &ModelConfig{
-			ModelName:           originalName,
-			Provider:            m.Provider,
-			Model:               m.Model,
-			APIBase:             m.APIBase,
-			Proxy:               m.Proxy,
-			AuthMethod:          m.AuthMethod,
-			ConnectMode:         m.ConnectMode,
-			Workspace:           m.Workspace,
-			RPM:                 m.RPM,
-			MaxTokensField:      m.MaxTokensField,
-			RequestTimeout:      m.RequestTimeout,
-			ThinkingLevel:       m.ThinkingLevel,
-			ToolSchemaTransform: m.ToolSchemaTransform,
-			Streaming:           m.Streaming,
-			ExtraBody:           m.ExtraBody,
-			CustomHeaders:       m.CustomHeaders,
-			Capabilities:        m.Capabilities,
-			UserAgent:           m.UserAgent,
-			APIKeys:             SimpleSecureStrings(keys[0]),
-		}
-
-		// Prepend new fallbacks to existing ones
-		if len(fallbackNames) > 0 {
-			primaryEntry.Fallbacks = append(fallbackNames, m.Fallbacks...)
-		} else if len(m.Fallbacks) > 0 {
-			primaryEntry.Fallbacks = m.Fallbacks
-		}
-
-		expanded = append(expanded, primaryEntry)
+		primaryEntry := *m
+		primaryEntry.APIKeys = SimpleSecureStrings(keys[0])
+		primaryEntry.Fallbacks = append(fallbackNames, m.Fallbacks...)
+		primaryEntry.isVirtual = false
+		expanded = append(expanded, &primaryEntry)
 	}
 
 	return expanded

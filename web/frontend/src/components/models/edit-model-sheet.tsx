@@ -369,6 +369,7 @@ export function EditModelSheet({
         model_name: model.model_name,
         provider: provider,
         model: modelId,
+        enabled: model.enabled,
         api_base: submittedApiBase,
         api_key: form.apiKey.trim() || undefined,
         proxy: form.proxy.trim() || undefined,

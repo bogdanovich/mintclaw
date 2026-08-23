@@ -754,14 +754,22 @@ func (h *Handler) persistCredentialAndConfig(
 func (h *Handler) syncProviderAuthMethod(provider, authMethod string) error {
 	_, err := h.updateConfig(func(cfg *config.Config) error {
 		found := false
+		hasEnabled := false
+		firstMatch := -1
 		for i := range cfg.ModelList {
 			if modelBelongsToProvider(provider, cfg.ModelList[i]) {
 				cfg.ModelList[i].AuthMethod = authMethod
+				if firstMatch == -1 {
+					firstMatch = i
+				}
+				hasEnabled = hasEnabled || cfg.ModelList[i].Enabled
 				found = true
 			}
 		}
 		if !found && authMethod != "" {
 			cfg.ModelList = append(cfg.ModelList, defaultModelConfigForProvider(provider, authMethod))
+		} else if authMethod != "" && !hasEnabled {
+			cfg.ModelList[firstMatch].Enabled = true
 		}
 		return nil
 	})
@@ -790,6 +798,7 @@ func defaultModelConfigForProvider(provider, authMethod string) *config.ModelCon
 			Provider:   "openai",
 			Model:      "gpt-5.4",
 			AuthMethod: authMethod,
+			Enabled:    true,
 		}
 	case oauthProviderAnthropic:
 		return &config.ModelConfig{
@@ -797,6 +806,7 @@ func defaultModelConfigForProvider(provider, authMethod string) *config.ModelCon
 			Provider:   "anthropic",
 			Model:      "claude-sonnet-4.6",
 			AuthMethod: authMethod,
+			Enabled:    true,
 		}
 	case oauthProviderGoogleAntigravity:
 		return &config.ModelConfig{
@@ -804,6 +814,7 @@ func defaultModelConfigForProvider(provider, authMethod string) *config.ModelCon
 			Provider:   "antigravity",
 			Model:      "gemini-3-flash",
 			AuthMethod: authMethod,
+			Enabled:    true,
 		}
 	default:
 		return &config.ModelConfig{}

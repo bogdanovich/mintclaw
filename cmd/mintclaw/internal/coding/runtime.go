@@ -560,7 +560,7 @@ func selectCodingModelConfig(
 ) (*config.ModelConfig, error) {
 	for _, candidate := range cfg.ModelList {
 		if candidate == nil || candidate.ModelName != modelName ||
-			!candidate.IsEffectivelyEnabled() || candidate.IsVirtual() {
+			!candidate.Enabled || candidate.IsVirtual() {
 			continue
 		}
 		if persistedProvider == "" {

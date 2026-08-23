@@ -15,6 +15,7 @@ func TestPipelineModelResolutionUsesConfig(t *testing.T) {
 			ModelName: "kimi",
 			Provider:  "openrouter",
 			Model:     "moonshotai/kimi-k2",
+			Enabled:   true,
 		}},
 	}
 	pipeline := &Pipeline{Cfg: cfg}

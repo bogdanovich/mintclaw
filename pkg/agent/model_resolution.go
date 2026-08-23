@@ -168,7 +168,7 @@ func resolvedSwitchableModelConfig(cfg *config.Config, modelName string) (*confi
 	}
 	var matches []*config.ModelConfig
 	for _, modelCfg := range cfg.ModelList {
-		if modelCfg == nil || modelCfg.IsVirtual() || !modelCfg.IsEffectivelyEnabled() {
+		if modelCfg == nil || modelCfg.IsVirtual() || !modelCfg.Enabled {
 			continue
 		}
 		if modelCfg.ModelName == modelName {
@@ -201,7 +201,7 @@ func resolveActiveModelConfig(
 		identityKey := strings.TrimSpace(candidate.IdentityKey)
 		if identityKey != "" {
 			for _, mc := range cfg.ModelList {
-				if mc == nil || modelConfigIdentityKey(mc) != identityKey {
+				if mc == nil || !mc.Enabled || modelConfigIdentityKey(mc) != identityKey {
 					continue
 				}
 				protocol, modelID := modelProviderAndIDForResolution(mc)

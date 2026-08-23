@@ -1419,6 +1419,7 @@ func newConfiguredStreamingTestConfig(
 			ModelName: "test-model",
 			Provider:  "openai",
 			Model:     "openai/test-model",
+			Enabled:   true,
 			Streaming: config.ModelStreamingConfig{Enabled: modelStreaming},
 		}},
 	}
@@ -1427,6 +1428,7 @@ func newConfiguredStreamingTestConfig(
 			ModelName: "fallback-model",
 			Provider:  "openai",
 			Model:     "openai/fallback-model",
+			Enabled:   true,
 			Streaming: config.ModelStreamingConfig{Enabled: true},
 		})
 	}
