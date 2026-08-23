@@ -326,18 +326,25 @@ type uneditableToolFeedbackTestChannel struct {
 
 type resultToolFeedbackTestChannel struct {
 	*toolFeedbackTestChannel
-	result     DeliveryResult[bus.OutboundMessage]
-	cancel     context.CancelFunc
-	deliveries int
+	result           DeliveryResult[bus.OutboundMessage]
+	results          []DeliveryResult[bus.OutboundMessage]
+	cancel           context.CancelFunc
+	deliveries       int
+	deliveryPayloads [][]bus.OutboundMessage
 }
 
 func (c *resultToolFeedbackTestChannel) DeliverText(
-	context.Context,
-	[]bus.OutboundMessage,
+	_ context.Context,
+	pending []bus.OutboundMessage,
 ) DeliveryResult[bus.OutboundMessage] {
+	resultIndex := c.deliveries
 	c.deliveries++
+	c.deliveryPayloads = append(c.deliveryPayloads, cloneDeliveryPayload(pending))
 	if c.cancel != nil {
 		c.cancel()
+	}
+	if resultIndex < len(c.results) {
+		return c.results[resultIndex]
 	}
 	return c.result
 }
@@ -3084,6 +3091,66 @@ func TestSendWithRetry_ToolFeedbackPreservesDeliveryResult(t *testing.T) {
 	}
 	if result.RetryAfter != time.Hour || !result.RetryAt.Equal(retryAt) {
 		t.Fatalf("retry metadata = %v/%v, want %v/%v", result.RetryAfter, result.RetryAt, time.Hour, retryAt)
+	}
+}
+
+func TestSendWithRetry_ToolFeedbackDeliversKnownRemainder(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	remainder := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat-1",
+		Content: "retry this remainder",
+	})
+	ch := &resultToolFeedbackTestChannel{
+		toolFeedbackTestChannel: &toolFeedbackTestChannel{},
+		results: []DeliveryResult[bus.OutboundMessage]{
+			{
+				MessageIDs: []string{"partial-1"},
+				Status:     DeliveryPartial,
+				Acceptance: DeliveryRejected,
+				Remaining:  []bus.OutboundMessage{remainder},
+				RetryAfter: time.Nanosecond,
+				Err:        ErrRateLimit,
+			},
+			SuccessfulDelivery[bus.OutboundMessage]([]string{"remainder-2"}),
+		},
+	}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test",
+		ChatID:  "chat-1",
+		Content: "Working...\n- tool: exec",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "chat-1",
+			Raw:     map[string]string{"message_kind": "tool_feedback"},
+		},
+	})
+
+	result := m.deliveryRuntime().sendWithRetryPolicy(
+		t.Context(),
+		"test",
+		w,
+		feedback,
+		true,
+		publishDefinitiveOutcome,
+	)
+	if !result.Delivered() {
+		t.Fatalf("result = %#v, want complete delivery", result)
+	}
+	if !slices.Equal(result.MessageIDs, []string{"partial-1", "remainder-2"}) {
+		t.Fatalf("message IDs = %v, want partial and remainder IDs", result.MessageIDs)
+	}
+	if ch.deliveries != 2 {
+		t.Fatalf("deliveries = %d, want initial send plus remainder send", ch.deliveries)
+	}
+	if len(ch.deliveryPayloads) != 2 || len(ch.deliveryPayloads[1]) != 1 ||
+		ch.deliveryPayloads[1][0].Content != remainder.Content {
+		t.Fatalf("delivery payloads = %#v, want second transport call with the remainder", ch.deliveryPayloads)
+	}
+	if len(ch.edited) != 0 {
+		t.Fatalf("edits = %v, want remainder delivered without editing the confirmed carrier", ch.edited)
 	}
 }
 
