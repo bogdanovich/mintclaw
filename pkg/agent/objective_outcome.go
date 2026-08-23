@@ -149,12 +149,14 @@ func extractObjectiveOutcome(
 	if outcome.Status == taskresult.OutcomeSucceeded {
 		if terminalResult := boundedTerminalResult(reported.Result); terminalResult != "" {
 			clean = terminalResult
-		} else if clean == "" && objectiveOutcomeHasReceipt(outcome) {
+		} else if objectiveOutcomeHasReceipt(outcome) {
 			// Compatibility for continuations suspended before the result field
 			// was introduced. A verified external-action receipt makes the
 			// successful terminal state authoritative; retain the child's
-			// bounded detail instead of forcing the parent to reconstruct it.
-			clean = boundedTerminalResult(reported.Explanation)
+			// bounded detail instead of generic surrounding prose.
+			if legacyResult := boundedTerminalResult(reported.Explanation); legacyResult != "" {
+				clean = legacyResult
+			}
 		}
 	}
 	return clean, outcome

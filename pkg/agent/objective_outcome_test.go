@@ -134,7 +134,7 @@ func TestTerminalTurnDeliverableMakesValidatedResultCanonical(t *testing.T) {
 }
 
 func TestObjectiveOutcomePreservesLegacySuccessDetailWithVerifiedReceipt(t *testing.T) {
-	content := objectiveOutcomeStart +
+	content := "The approved action finished.\n" + objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
 		`"receipt_ids":["inv-publish"]}],"missing_items":[],` +
 		`"explanation":"Published once: https://example.com/item/42; ID: 42"}` + objectiveOutcomeEnd
@@ -150,6 +150,12 @@ func TestObjectiveOutcomePreservesLegacySuccessDetailWithVerifiedReceipt(t *test
 	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" ||
 		clean != "Published once: https://example.com/item/42; ID: 42" || !objectiveOutcomeHasReceipt(outcome) {
 		t.Fatalf("legacy terminal result = %q, outcome = %#v", clean, outcome)
+	}
+}
+
+func TestTerminalTurnDeliverableNormalizesEmptyToolDeliverable(t *testing.T) {
+	if deliverable := terminalTurnDeliverable(&taskresult.Deliverable{}, "", nil); deliverable != nil {
+		t.Fatalf("empty terminal deliverable = %#v, want nil", deliverable)
 	}
 }
 

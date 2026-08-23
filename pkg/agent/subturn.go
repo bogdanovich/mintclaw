@@ -845,8 +845,10 @@ func spawnSubTurn(
 		result.WriteAudit = cloneWriteAuditEntries(turnRes.writeAudit)
 		if strings.TrimSpace(turnRes.finalContent) != "" || turnRes.deliverable != nil || objectiveOutcome != nil {
 			deliverable := terminalTurnDeliverable(turnRes.deliverable, parentContent, objectiveOutcome)
-			result.WithDeliverable(deliverable)
-			result.Media = append(result.Media, mediaArtifactRefs(deliverable.Artifacts)...)
+			if deliverable != nil {
+				result.WithDeliverable(deliverable)
+				result.Media = append(result.Media, mediaArtifactRefs(deliverable.Artifacts)...)
+			}
 		}
 		if !cfg.Async {
 			switch deliveryMode {
