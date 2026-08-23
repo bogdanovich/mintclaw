@@ -484,8 +484,7 @@ func main() {
 	launcherPath := launcherconfig.PathForAppConfig(absPath)
 	launcherCfg, err := launcherconfig.Load(launcherPath, launcherconfig.Default())
 	if err != nil {
-		logger.ErrorC("web", fmt.Sprintf("Warning: Failed to load %s: %v", launcherPath, err))
-		launcherCfg = launcherconfig.Default()
+		logger.Fatalf("Failed to load %s: %v", launcherPath, err)
 	}
 
 	effectivePort := *port
