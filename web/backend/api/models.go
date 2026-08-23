@@ -116,6 +116,16 @@ func defaultModelAllowedForModelConfig(mc *config.ModelConfig) bool {
 	return mc != nil && mc.Enabled && providers.IsDefaultModelProvider(mc.Provider)
 }
 
+func defaultModelAllowedForAlias(models []*config.ModelConfig, modelName string) bool {
+	for _, model := range models {
+		if model != nil && model.ModelName == modelName && !model.IsVirtual() &&
+			defaultModelAllowedForModelConfig(model) {
+			return true
+		}
+	}
+	return false
+}
+
 func validateIncomingModelConfig(mc *config.ModelConfig, existing *config.ModelConfig) error {
 	if mc == nil {
 		return fmt.Errorf("model config is required")
@@ -226,6 +236,16 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
+	var rawFields map[string]json.RawMessage
+	if err = json.Unmarshal(body, &rawFields); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+	// The immediately previous Web client omitted enabled when creating models.
+	// Keep that one-release boundary behavior while persisted config remains strict.
+	if _, ok := rawFields["enabled"]; !ok {
+		mc.Enabled = true
+	}
 
 	normalizeIncomingModelConfig(&mc.ModelConfig)
 
@@ -334,6 +354,9 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		if _, ok := rawFields["streaming"]; !ok {
 			mc.Streaming = cfg.ModelList[idx].Streaming
 		}
+		if _, ok := rawFields["enabled"]; !ok {
+			mc.Enabled = cfg.ModelList[idx].Enabled
+		}
 		normalizeIncomingModelConfig(&mc.ModelConfig)
 		if err = validateIncomingModelConfig(&mc.ModelConfig, cfg.ModelList[idx]); err != nil {
 			return &configMutationRequestError{
@@ -341,13 +364,14 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 				err:    fmt.Errorf("validation error: %w", err),
 			}
 		}
-		if cfg.Agents.Defaults.ModelName == cfg.ModelList[idx].ModelName &&
-			!defaultModelAllowedForModelConfig(&mc.ModelConfig) {
-			// Keep the saved default usable when this edit disables or changes its model.
+		previousModelName := cfg.ModelList[idx].ModelName
+		cfg.ModelList[idx] = &mc.ModelConfig
+		if cfg.Agents.Defaults.ModelName == previousModelName && mc.ModelName == previousModelName &&
+			!defaultModelAllowedForAlias(cfg.ModelList, previousModelName) {
+			// Clear a default whose last same-name entry became ineligible. A rename remains a
+			// reference mutation and is rejected below unless another same-name entry still exists.
 			cfg.Agents.Defaults.ModelName = ""
 		}
-
-		cfg.ModelList[idx] = &mc.ModelConfig
 		if validationErr := validateModelReferenceMutation(cfg); validationErr != nil {
 			return validationErr
 		}
@@ -440,24 +464,22 @@ func (h *Handler) handleSetDefaultModel(w http.ResponseWriter, r *http.Request) 
 	}
 
 	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
+		found := false
 		for _, model := range cfg.ModelList {
-			if model.ModelName != req.ModelName {
+			if model == nil || model.ModelName != req.ModelName {
 				continue
 			}
-			if model.IsVirtual() {
-				return &configMutationRequestError{
-					status: http.StatusBadRequest,
-					err:    fmt.Errorf("cannot set virtual model %q as default", req.ModelName),
-				}
+			found = true
+			if !model.IsVirtual() && defaultModelAllowedForModelConfig(model) {
+				cfg.Agents.Defaults.ModelName = req.ModelName
+				return nil
 			}
-			if !defaultModelAllowedForModelConfig(model) {
-				return &configMutationRequestError{
-					status: http.StatusBadRequest,
-					err:    fmt.Errorf("model %q cannot be used as the default chat model", req.ModelName),
-				}
+		}
+		if found {
+			return &configMutationRequestError{
+				status: http.StatusBadRequest,
+				err:    fmt.Errorf("model %q cannot be used as the default chat model", req.ModelName),
 			}
-			cfg.Agents.Defaults.ModelName = req.ModelName
-			return nil
 		}
 		return &configMutationRequestError{
 			status: http.StatusNotFound,
