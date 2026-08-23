@@ -796,16 +796,6 @@ The skills tool configures skill discovery and installation via registries like 
 | `registries.github.auth_token`     | string | `""`                | GitHub personal access token                  |
 | `registries.github.proxy`          | string | `""`                | HTTP proxy for GitHub API requests            |
 
-### Legacy GitHub Config
-
-`github.*` is deprecated. Use `registries.github.*` instead. The legacy fields are still supported for compatibility and will be removed later.
-
-| Config             | Type   | Default              | Description                    |
-|--------------------|--------|----------------------|--------------------------------|
-| `github.base_url`  | string | `https://github.com` | Deprecated GitHub base URL     |
-| `github.proxy`     | string | `""`                | Deprecated GitHub proxy        |
-| `github.token`     | string | `""`                | Deprecated GitHub token        |
-
 ### Search Settings
 
 | Config                    | Type | Default | Description                                |
@@ -839,11 +829,6 @@ The skills tool configures skill discovery and installation via registries like 
 	          "proxy": ""
         }
       },
-      "github": {
-	        "base_url": "https://github.com",
-        "proxy": "",
-        "token": ""
-      },
       "max_concurrent_searches": 2,
       "search_cache": {
         "max_size": 50,
@@ -866,6 +851,13 @@ For example:
 - `MINTCLAW_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10`
 - `MINTCLAW_TOOLS_MCP_ENABLED=true`
 - `MINTCLAW_TOOLS_MCP_MAX_INLINE_TEXT_CHARS=16384`
+
+Skill registry overrides use their name-keyed paths, for example:
+
+- `MINTCLAW_SKILLS_REGISTRIES_CLAWHUB_AUTH_TOKEN=...`
+- `MINTCLAW_SKILLS_REGISTRIES_GITHUB_AUTH_TOKEN=...`
+- `MINTCLAW_SKILLS_REGISTRIES_GITHUB_BASE_URL=https://github.example.com`
+- `MINTCLAW_SKILLS_REGISTRIES_GITHUB_PROXY=http://127.0.0.1:7890`
 
 Note: Nested map-style config (for example `tools.mcp.servers.<name>.*`) is configured in `config.json` rather than
 environment variables.

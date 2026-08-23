@@ -57,14 +57,14 @@ func loadSecurityConfig(cfg *Config, securityPath string) error {
 		return fmt.Errorf("failed to parse security config: %w", err)
 	}
 
-	// Extract channels node (support both 'channels' and 'channel_list' keys)
+	// Extract the current channel_list security overlay.
 	var channelsNode *yaml.Node
 	if len(rootNode.Content) > 0 {
 		content := rootNode.Content[0].Content
 		for i := 0; i < len(content); i += 2 {
 			if i+1 < len(content) {
 				key := content[i].Value
-				if key == "channels" || key == "channel_list" {
+				if key == "channel_list" {
 					channelsNode = content[i+1]
 					break
 				}
@@ -74,11 +74,10 @@ func loadSecurityConfig(cfg *Config, securityPath string) error {
 
 	// Unmarshal non-channel fields from security.yml
 	// This will resolve encrypted values for model_list, tools, etc.
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return fmt.Errorf("failed to parse security config %s: %w", securityPath, err)
-	}
-	if err := applyLegacySkillsSecurityConfig(cfg, data); err != nil {
-		return fmt.Errorf("failed to parse legacy skills security config: %w", err)
 	}
 
 	// Restore channels from saved, then manually merge from security.yml
@@ -92,99 +91,6 @@ func loadSecurityConfig(cfg *Config, securityPath string) error {
 		if err := cfg.Channels.UnmarshalYAML(channelsNode); err != nil {
 			return fmt.Errorf("failed to merge channels from security config: %w", err)
 		}
-	}
-
-	return nil
-}
-
-func applyLegacySkillsSecurityConfig(cfg *Config, data []byte) error {
-	var root yaml.Node
-	if err := yaml.Unmarshal(data, &root); err != nil {
-		return err
-	}
-	if len(root.Content) == 0 {
-		return nil
-	}
-
-	rootMap := root.Content[0]
-	if rootMap == nil || rootMap.Kind != yaml.MappingNode {
-		return nil
-	}
-
-	for i := 0; i+1 < len(rootMap.Content); i += 2 {
-		keyNode := rootMap.Content[i]
-		valueNode := rootMap.Content[i+1]
-		if keyNode == nil || valueNode == nil || strings.TrimSpace(keyNode.Value) != "skills" {
-			continue
-		}
-		return applyLegacySkillsSecurityNode(cfg, valueNode)
-	}
-
-	return nil
-}
-
-func applyLegacySkillsSecurityNode(cfg *Config, skillsNode *yaml.Node) error {
-	if cfg == nil || skillsNode == nil || skillsNode.Kind != yaml.MappingNode {
-		return nil
-	}
-
-	for i := 0; i+1 < len(skillsNode.Content); i += 2 {
-		nameNode := skillsNode.Content[i]
-		valueNode := skillsNode.Content[i+1]
-		if nameNode == nil || valueNode == nil {
-			continue
-		}
-
-		name := strings.TrimSpace(nameNode.Value)
-		if name == "" || name == "registries" {
-			continue
-		}
-
-		if name == "github" {
-			var legacyGitHub SkillsGithubConfig
-			if err := valueNode.Decode(&legacyGitHub); err != nil {
-				return err
-			}
-			if cfg.Tools.Skills.Github.Token.String() == "" && legacyGitHub.Token.String() != "" {
-				cfg.Tools.Skills.Github.Token = legacyGitHub.Token
-			}
-		}
-
-		var legacyRegistry SkillRegistryConfig
-		if err := valueNode.Decode(&legacyRegistry); err != nil {
-			return err
-		}
-		legacyRegistry.Name = name
-		if legacyRegistry.AuthToken.String() == "" {
-			if name == "github" && cfg.Tools.Skills.Github.Token.String() != "" {
-				legacyRegistry.AuthToken = cfg.Tools.Skills.Github.Token
-			} else {
-				continue
-			}
-		}
-
-		registryCfg, ok := cfg.Tools.Skills.Registries.Get(name)
-		if !ok {
-			registryCfg = SkillRegistryConfig{
-				Name:  name,
-				Param: map[string]any{},
-			}
-		}
-		if registryCfg.Param == nil {
-			registryCfg.Param = map[string]any{}
-		}
-		if registryCfg.AuthToken.String() == "" {
-			registryCfg.AuthToken = legacyRegistry.AuthToken
-		}
-		if registryCfg.BaseURL == "" && legacyRegistry.BaseURL != "" {
-			registryCfg.BaseURL = legacyRegistry.BaseURL
-		}
-		for key, value := range legacyRegistry.Param {
-			if _, exists := registryCfg.Param[key]; !exists {
-				registryCfg.Param[key] = value
-			}
-		}
-		cfg.Tools.Skills.Registries.Set(name, registryCfg)
 	}
 
 	return nil

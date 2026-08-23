@@ -1603,6 +1603,30 @@ func TestLoadConfig_RejectsDeprecatedEditFileTool(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_RejectsRemovedSkillRegistryShapes(t *testing.T) {
+	tests := map[string]string{
+		"github sibling": `{"version":3,"tools":{"skills":{"github":{"token":"old"}}}}`,
+		"registry list":  `{"version":3,"tools":{"skills":{"registries":[{"name":"github"}]}}}`,
+		"embedded name":  `{"version":3,"tools":{"skills":{"registries":{"github":{"name":"github"}}}}}`,
+		"token field":    `{"version":3,"tools":{"skills":{"registries":{"github":{"token":"old"}}}}}`,
+		"nested params":  `{"version":3,"tools":{"skills":{"registries":{"github":{"param":{"proxy":"old"}}}}}}`,
+	}
+
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("WriteFile() error: %v", err)
+			}
+
+			if _, err := LoadConfig(configPath); err == nil {
+				t.Fatal("LoadConfig() error = nil, want removed shape rejection")
+			}
+		})
+	}
+}
+
 func TestLoadConfig_RequiresCurrentVersionWithoutRewriting(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2971,7 +2995,7 @@ func TestResolveGatewayLogLevel_UsesEnvOverrideAndNormalizesInvalid(t *testing.T
 	}
 }
 
-func TestLoadConfig_AppliesLegacyClawHubRegistryEnvOverrides(t *testing.T) {
+func TestLoadConfig_AppliesClawHubRegistryEnvOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	data := `{"version":3,"tools":{"skills":{"registries":{"clawhub":{"enabled":true,"base_url":"https://clawhub.ai"}}}}}`
@@ -3277,9 +3301,13 @@ func TestFilterSensitiveData_AllTokenTypes(t *testing.T) {
 			},
 			// Skills tokens
 			Skills: SkillsToolsConfig{
-				Github: SkillsGithubConfig{Token: *NewSecureString("github-token-xyz")},
 				Registries: SkillsRegistriesConfig{
-					&SkillRegistryConfig{Name: "clawhub", AuthToken: *NewSecureString("clawhub-auth-token")},
+					"github": {
+						AuthToken: *NewSecureString("github-token-xyz"),
+					},
+					"clawhub": {
+						AuthToken: *NewSecureString("clawhub-auth-token"),
+					},
 				},
 			},
 		},

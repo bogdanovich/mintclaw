@@ -742,43 +742,19 @@ func applyConfigSecretsFromMap(cfg *config.Config, raw map[string]any) {
 	if !hasSkills {
 		return
 	}
-	if github, hasGithub := asMapField(skills, "github"); hasGithub {
-		if token, hasToken := getSecretString(github, "token"); hasToken {
-			cfg.Tools.Skills.Github.Token.Set(token) //nolint:staticcheck // legacy tools.skills.github PATCH compat
-		}
-	}
-	if registries, hasRegistries := asMapField(skills, "registries"); hasRegistries {
-		for registryName, rawRegistry := range registries {
-			registryMap, ok := rawRegistry.(map[string]any)
-			if !ok {
-				continue
-			}
-			if authToken, hasAuthToken := getSecretString(registryMap, "auth_token"); hasAuthToken {
-				registryCfg, _ := cfg.Tools.Skills.Registries.Get(registryName)
-				registryCfg.AuthToken.Set(authToken)
-				cfg.Tools.Skills.Registries.Set(registryName, registryCfg)
-			}
-		}
-		return
-	}
-
-	registriesList, hasRegistries := skills["registries"].([]any)
+	registries, hasRegistries := asMapField(skills, "registries")
 	if !hasRegistries {
 		return
 	}
-	for _, rawRegistry := range registriesList {
+	for registryName, rawRegistry := range registries {
 		registryMap, ok := rawRegistry.(map[string]any)
 		if !ok {
 			continue
 		}
-		name, _ := registryMap["name"].(string)
-		if name == "" {
-			continue
-		}
 		if authToken, hasAuthToken := getSecretString(registryMap, "auth_token"); hasAuthToken {
-			registryCfg, _ := cfg.Tools.Skills.Registries.Get(name)
+			registryCfg, _ := cfg.Tools.Skills.Registries.Get(registryName)
 			registryCfg.AuthToken.Set(authToken)
-			cfg.Tools.Skills.Registries.Set(name, registryCfg)
+			cfg.Tools.Skills.Registries.Set(registryName, registryCfg)
 		}
 	}
 }

@@ -117,7 +117,7 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 		if err := env.Parse(cfg); err != nil {
 			return err
 		}
-		applySkillsRegistryEnvCompat(cfg)
+		applySkillsRegistryEnvOverrides(cfg)
 	}
 	if err := initChannelList(cfg.Channels, applyRuntimeOverrides); err != nil {
 		return err
@@ -176,7 +176,7 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 	return nil
 }
 
-func applySkillsRegistryEnvCompat(cfg *Config) {
+func applySkillsRegistryEnvOverrides(cfg *Config) {
 	if cfg == nil {
 		return
 	}
@@ -184,7 +184,6 @@ func applySkillsRegistryEnvCompat(cfg *Config) {
 	registryCfg, foundClawHub := cfg.Tools.Skills.Registries.Get("clawhub")
 	if !foundClawHub {
 		registryCfg = SkillRegistryConfig{
-			Name:  "clawhub",
 			Param: map[string]any{},
 		}
 	}
@@ -233,7 +232,6 @@ func applySkillsRegistryEnvCompat(cfg *Config) {
 	githubCfg, foundGitHub := cfg.Tools.Skills.Registries.Get("github")
 	if !foundGitHub {
 		githubCfg = SkillRegistryConfig{
-			Name:  "github",
 			Param: map[string]any{},
 		}
 	}

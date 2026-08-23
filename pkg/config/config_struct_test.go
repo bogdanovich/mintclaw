@@ -149,7 +149,6 @@ func TestLoadSecurityValue(t *testing.T) {
 
 func TestSkillRegistryConfigDecodeParam(t *testing.T) {
 	registry := SkillRegistryConfig{
-		Name: "github",
 		Param: map[string]any{
 			"proxy": "http://127.0.0.1:7890",
 		},
@@ -178,7 +177,6 @@ func TestNormalizeAllowFrom(t *testing.T) {
 
 func TestSkillRegistryConfigJSONFlattensParam(t *testing.T) {
 	registry := SkillRegistryConfig{
-		Name:    "github",
 		Enabled: true,
 		BaseURL: "https://github.com",
 		Param: map[string]any{
@@ -238,10 +236,22 @@ proxy: http://127.0.0.1:7890
 	assert.False(t, exists)
 }
 
+func TestSkillRegistryConfigRejectsRemovedFields(t *testing.T) {
+	var fromJSON SkillRegistryConfig
+	assert.Error(t, json.Unmarshal([]byte(`{"name":"github"}`), &fromJSON))
+	assert.Error(t, json.Unmarshal([]byte(`{"token":"legacy"}`), &fromJSON))
+	assert.Error(t, json.Unmarshal([]byte(`{"param":{"proxy":"legacy"}}`), &fromJSON))
+	assert.Error(t, json.Unmarshal([]byte(`null`), &fromJSON))
+
+	var fromYAML SkillRegistryConfig
+	assert.Error(t, yaml.Unmarshal([]byte("name: github\n"), &fromYAML))
+	assert.Error(t, yaml.Unmarshal([]byte("token: legacy\n"), &fromYAML))
+	assert.Error(t, yaml.Unmarshal([]byte("param:\n  proxy: legacy\n"), &fromYAML))
+}
+
 func TestSkillsRegistriesConfigMarshalYAMLIncludesRegistryToken(t *testing.T) {
 	registries := SkillsRegistriesConfig{
-		&SkillRegistryConfig{
-			Name:      "github",
+		"github": {
 			AuthToken: *NewSecureString("registry-auth-token"),
 		},
 	}
@@ -252,7 +262,7 @@ func TestSkillsRegistriesConfigMarshalYAMLIncludesRegistryToken(t *testing.T) {
 	assert.Contains(t, string(data), "auth_token: registry-auth-token")
 
 	loaded := SkillsRegistriesConfig{
-		&SkillRegistryConfig{Name: "github"},
+		"github": {},
 	}
 	err = yaml.Unmarshal(data, &loaded)
 	assert.NoError(t, err)
@@ -261,7 +271,7 @@ func TestSkillsRegistriesConfigMarshalYAMLIncludesRegistryToken(t *testing.T) {
 	assert.Equal(t, "registry-auth-token", github.AuthToken.String())
 }
 
-func TestSkillsRegistriesConfigUnmarshalYAMLBuildsEntriesFromEmptySlice(t *testing.T) {
+func TestSkillsRegistriesConfigUnmarshalYAMLBuildsEntriesFromEmptyMap(t *testing.T) {
 	var registries SkillsRegistriesConfig
 	err := yaml.Unmarshal([]byte(`github:
   enabled: true
@@ -279,16 +289,14 @@ func TestSkillsRegistriesConfigUnmarshalYAMLBuildsEntriesFromEmptySlice(t *testi
 
 func TestSkillsRegistriesConfigMarshalJSONPreservesObjectShape(t *testing.T) {
 	registries := SkillsRegistriesConfig{
-		&SkillRegistryConfig{
-			Name:    "github",
+		"github": {
 			Enabled: true,
 			BaseURL: "https://ghe.example.com/git",
 			Param: map[string]any{
 				"proxy": "http://127.0.0.1:7890",
 			},
 		},
-		&SkillRegistryConfig{
-			Name:    "clawhub",
+		"clawhub": {
 			Enabled: true,
 			BaseURL: "https://clawhub.ai",
 		},
@@ -344,7 +352,7 @@ func TestSkillsRegistriesConfigUnmarshalJSONPreservesDefaultRegistries(t *testin
 	assert.Empty(t, github.Param)
 }
 
-func TestSkillsRegistriesConfigUnmarshalJSONListPreservesDefaultRegistries(t *testing.T) {
+func TestSkillsRegistriesConfigUnmarshalJSONRejectsListShape(t *testing.T) {
 	registries := DefaultConfig().Tools.Skills.Registries
 
 	err := json.Unmarshal([]byte(`[
@@ -353,21 +361,20 @@ func TestSkillsRegistriesConfigUnmarshalJSONListPreservesDefaultRegistries(t *te
 			"base_url": "https://clawhub.example.com"
 		}
 	]`), &registries)
-	assert.NoError(t, err)
-
-	clawhub, ok := registries.Get("clawhub")
-	assert.True(t, ok)
-	assert.True(t, clawhub.Enabled)
-	assert.Equal(t, "https://clawhub.example.com", clawhub.BaseURL)
-
-	github, ok := registries.Get("github")
-	assert.True(t, ok)
-	assert.True(t, github.Enabled)
-	assert.Equal(t, "https://github.com", github.BaseURL)
-	assert.Empty(t, github.Param)
+	assert.Error(t, err)
 }
 
-func TestSkillsRegistriesConfigUnmarshalYAMLAppendsNewRegistryToExistingSlice(t *testing.T) {
+func TestSkillsRegistriesConfigUnmarshalJSONRejectsNull(t *testing.T) {
+	registries := DefaultConfig().Tools.Skills.Registries
+	assert.Error(t, json.Unmarshal([]byte(`null`), &registries))
+}
+
+func TestSkillsRegistriesConfigUnmarshalYAMLRejectsNullRegistry(t *testing.T) {
+	registries := DefaultConfig().Tools.Skills.Registries
+	assert.Error(t, yaml.Unmarshal([]byte("github: null\n"), &registries))
+}
+
+func TestSkillsRegistriesConfigUnmarshalYAMLAddsRegistryToExistingMap(t *testing.T) {
 	registries := DefaultConfig().Tools.Skills.Registries
 
 	err := yaml.Unmarshal([]byte(`custom:

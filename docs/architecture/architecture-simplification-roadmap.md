@@ -717,6 +717,10 @@ Implementation sequence:
 13. Delete arbitrary-turn `GetActiveTurn` and `InterruptGraceful` APIs. Command
     runtimes bind active-turn inspection to their known workspace and session;
     graceful interruption is session-scoped and fails closed on ambiguity.
+14. Make skill registries one name-keyed current contract. Delete the sibling
+    GitHub settings, list-shaped registry input, direct security entries,
+    merge/PATCH fallbacks, and the JSON-first metadata parser; configuration,
+    security overlays, and runtime lookup use the same registry map.
 
 Exit criteria:
 

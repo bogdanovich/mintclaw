@@ -516,11 +516,6 @@
           "proxy": "http://127.0.0.1:7891"
         }
       },
-      "github": {
-        "base_url": "https://github.com",
-        "proxy": "http://127.0.0.1:7891",
-        "token": ""
-      },
       "max_concurrent_searches": 2,
       "search_cache": {
         "max_size": 50,

@@ -66,9 +66,10 @@ model_list:
     api_keys:
       - sk-secret-key-12345
 
-channels:
+channel_list:
   telegram:
-    token: "123456:ABC-DEF"
+    settings:
+      token: "123456:ABC-DEF"
 ```
 
 And a tool result containing:

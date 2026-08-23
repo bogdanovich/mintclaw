@@ -1458,6 +1458,36 @@ func TestHandlePatchConfig_DoesNotPersistShadowRegistryAuthTokenField(t *testing
 	}
 }
 
+func TestHandlePatchConfig_RejectsRemovedSkillRegistryShapes(t *testing.T) {
+	tests := map[string]string{
+		"github sibling": `{"tools":{"skills":{"github":{"token":"old"}}}}`,
+		"registry list":  `{"tools":{"skills":{"registries":[{"name":"github"}]}}}`,
+		"embedded name":  `{"tools":{"skills":{"registries":{"github":{"name":"github"}}}}}`,
+		"token field":    `{"tools":{"skills":{"registries":{"github":{"token":"old"}}}}}`,
+		"nested params":  `{"tools":{"skills":{"registries":{"github":{"param":{"proxy":"old"}}}}}}`,
+	}
+
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+
+			req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("PATCH /api/config status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body)
+			}
+		})
+	}
+}
+
 func TestHandlePatchConfig_AllowsInvalidDenyRegexPatternsWhenDenyPatternsDisabled(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

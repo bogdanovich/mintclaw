@@ -46,51 +46,63 @@ model_list:
       - "sk-ant-your-actual-anthropic-key"  # Single key in array format
 
 # Channel Tokens
-channels:
-  telegram:
-    token: "your-telegram-bot-token"
-  feishu:
-    app_secret: "your-feishu-app-secret"
-    encrypt_key: "your-feishu-encrypt-key"
-    verification_token: "your-feishu-verification-token"
-  discord:
-    token: "your-discord-bot-token"
-  weixin:
-    token: "your-weixin-token"
-  qq:
-    app_secret: "your-qq-app-secret"
-  dingtalk:
-    client_secret: "your-dingtalk-client-secret"
-  slack:
-    bot_token: "your-slack-bot-token"
-    app_token: "your-slack-app-token"
-  matrix:
-    access_token: "your-matrix-access-token"
-  line:
-    channel_secret: "your-line-channel-secret"
-    channel_access_token: "your-line-channel-access-token"
-  onebot:
-    access_token: "your-onebot-access-token"
-  wecom:
-    token: "your-wecom-token"
-    encoding_aes_key: "your-wecom-encoding-aes-key"
-  wecom_app:
-    corp_secret: "your-wecom-app-corp-secret"
-    token: "your-wecom-app-token"
-    encoding_aes_key: "your-wecom-app-encoding-aes-key"
-  wecom_aibot:
-    secret: "your-wecom-aibot-secret"
-    token: "your-wecom-aibot-token"
-    encoding_aes_key: "your-wecom-aibot-encoding-aes-key"
-  mintclaw:
-    token: "your-mintclaw-token"
-  irc:
-    password: "your-irc-password"
-    nickserv_password: "your-irc-nickserv-password"
-    sasl_password: "your-irc-sasl-password"
-
-# Channel Settings (nested format for channels that use settings block)
 channel_list:
+  telegram:
+    settings:
+      token: "your-telegram-bot-token"
+  feishu:
+    settings:
+      app_secret: "your-feishu-app-secret"
+      encrypt_key: "your-feishu-encrypt-key"
+      verification_token: "your-feishu-verification-token"
+  discord:
+    settings:
+      token: "your-discord-bot-token"
+  weixin:
+    settings:
+      token: "your-weixin-token"
+  qq:
+    settings:
+      app_secret: "your-qq-app-secret"
+  dingtalk:
+    settings:
+      client_secret: "your-dingtalk-client-secret"
+  slack:
+    settings:
+      bot_token: "your-slack-bot-token"
+      app_token: "your-slack-app-token"
+  matrix:
+    settings:
+      access_token: "your-matrix-access-token"
+  line:
+    settings:
+      channel_secret: "your-line-channel-secret"
+      channel_access_token: "your-line-channel-access-token"
+  onebot:
+    settings:
+      access_token: "your-onebot-access-token"
+  wecom:
+    settings:
+      token: "your-wecom-token"
+      encoding_aes_key: "your-wecom-encoding-aes-key"
+  wecom_app:
+    settings:
+      corp_secret: "your-wecom-app-corp-secret"
+      token: "your-wecom-app-token"
+      encoding_aes_key: "your-wecom-app-encoding-aes-key"
+  wecom_aibot:
+    settings:
+      secret: "your-wecom-aibot-secret"
+      token: "your-wecom-aibot-token"
+      encoding_aes_key: "your-wecom-aibot-encoding-aes-key"
+  mintclaw:
+    settings:
+      token: "your-mintclaw-token"
+  irc:
+    settings:
+      password: "your-irc-password"
+      nickserv_password: "your-irc-nickserv-password"
+      sasl_password: "your-irc-sasl-password"
   mqtt:
     settings:
       username: "your-mqtt-username"
@@ -115,10 +127,11 @@ web:
 
 # Skills Registry Tokens
 skills:
-  github:
-    token: "your-github-token"
-  clawhub:
-    auth_token: "your-clawhub-auth-token"
+  registries:
+    github:
+      auth_token: "your-github-token"
+    clawhub:
+      auth_token: "your-clawhub-auth-token"
 ```
 
 ## Usage
@@ -213,27 +226,29 @@ model_list:
 
 ### Channels
 
-Each channel maps its fields directly:
+Each channel uses the same `channel_list.<name>.settings` path as `config.json`:
 
 **In .security.yml:**
 ```yaml
-channels:
+channel_list:
   telegram:
-    token: "value"
+    settings:
+      token: "value"
   feishu:
-    app_secret: "value"
-    encrypt_key: "value"
-    verification_token: "value"
+    settings:
+      app_secret: "value"
+      encrypt_key: "value"
+      verification_token: "value"
   discord:
-    token: "value"
+    settings:
+      token: "value"
 ```
 
 **Mapping:**
-- `channels.telegram.token` → `config.channels.telegram.token`
-- `channels.feishu.app_secret` → `config.channels.feishu.app_secret`
-- etc.
+- `channel_list.telegram.settings.token` → `config.channel_list.telegram.settings.token`
+- `channel_list.feishu.settings.app_secret` → `config.channel_list.feishu.settings.app_secret`
 
-Channels that use a `settings` block (e.g. MQTT) use the `channel_list` key instead:
+MQTT uses the same shape:
 
 ```yaml
 channel_list:
@@ -282,10 +297,11 @@ web:
 **In .security.yml:**
 ```yaml
 skills:
-  github:
-    token: "value"
-  clawhub:
-    auth_token: "value"
+  registries:
+    github:
+      auth_token: "value"
+    clawhub:
+      auth_token: "value"
 ```
 
 ## API Key Formats
@@ -392,11 +408,11 @@ model_list:
 
 Both methods work. The base name match allows you to use simpler keys in `.security.yml` even when your config uses indexed model names for load balancing.
 
-## Backward Compatibility
+## Supported Secret Sources
 
-The system maintains full backward compatibility:
+The current configuration supports these secret sources:
 
-1. **Direct values**: You can still use direct values in `config.json` (not recommended for production)
+1. **Direct values**: You can use direct values in `config.json` (not recommended for production)
 2. **Mixed usage**: You can have some fields in `.security.yml` and others in `config.json`
 3. **Optional security file**: If `.security.yml` doesn't exist, the system will only use values from `config.json`
 4. **Override behavior**: If a field exists in both files, `.security.yml` value takes precedence
@@ -523,9 +539,10 @@ model_list:
     api_keys:
       - "sk-ant-actual-anthropic-key"
 
-channels:
+channel_list:
   telegram:
-    token: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+    settings:
+      token: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
 
 web:
   brave:

@@ -129,6 +129,16 @@ func TestRegistryManagerGetRegistry(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestRegistryManagerAddRegistryReplacesSameName(t *testing.T) {
+	mgr := NewRegistryManager()
+	first := &mockRegistry{name: "clawhub"}
+	second := &mockRegistry{name: "clawhub"}
+	mgr.AddRegistry(first)
+	mgr.AddRegistry(second)
+
+	assert.Same(t, second, mgr.GetRegistry("clawhub"))
+}
+
 func TestRegistryManagerSearchAllRespectLimit(t *testing.T) {
 	mgr := NewRegistryManager()
 	results := make([]SearchResult, 20)
@@ -209,40 +219,9 @@ func TestIsSafeSlug(t *testing.T) {
 	assert.Error(t, utils.ValidateSkillIdentifier("path\\traversal"))
 }
 
-func TestLegacyGithubBaseURLOverridesDefaultRegistryBaseURL(t *testing.T) {
-	cfg := config.DefaultConfig().Tools.Skills
-	cfg.Github.BaseURL = "https://ghe.example.com/git" //nolint:staticcheck // legacy cfg.Github compat test
-
-	registry := LookupRegistryFromToolsConfig(cfg, "github")
-	assert.NotNil(t, registry)
-
-	ghRegistry, ok := registry.(*GitHubRegistry)
-	assert.True(t, ok)
-	assert.Equal(t, "https://ghe.example.com/git", ghRegistry.webBase)
-}
-
-func TestExplicitGithubRegistryBaseURLBeatsLegacyCompat(t *testing.T) {
-	cfg := config.DefaultConfig().Tools.Skills
-	cfg.Github.BaseURL = "https://ghe-legacy.example.com/git" //nolint:staticcheck // legacy cfg.Github compat test
-	cfg.Registries.Set("github", config.SkillRegistryConfig{
-		Name:    "github",
-		Enabled: true,
-		BaseURL: "https://ghe-explicit.example.com/scm",
-		Param:   map[string]any{},
-	})
-
-	registry := LookupRegistryFromToolsConfig(cfg, "github")
-	assert.NotNil(t, registry)
-
-	ghRegistry, ok := registry.(*GitHubRegistry)
-	assert.True(t, ok)
-	assert.Equal(t, "https://ghe-explicit.example.com/scm", ghRegistry.webBase)
-}
-
 func TestNormalizeInstallTargetForRegistryCanonicalizesGitHubURLs(t *testing.T) {
 	cfg := config.DefaultConfig().Tools.Skills
 	cfg.Registries.Set("github", config.SkillRegistryConfig{
-		Name:    "github",
 		Enabled: true,
 		BaseURL: "https://ghe.example.com/git",
 		Param:   map[string]any{},
