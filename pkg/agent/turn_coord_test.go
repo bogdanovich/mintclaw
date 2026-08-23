@@ -209,6 +209,50 @@ func (p *toolCallRespProvider) GetDefaultModel() string {
 	return "tool-model"
 }
 
+type gatedToolCallRespProvider struct {
+	toolName string
+	started  chan struct{}
+	release  chan struct{}
+	mu       sync.Mutex
+	calls    int
+}
+
+func (p *gatedToolCallRespProvider) Chat(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.mu.Unlock()
+	if call != 1 {
+		return &providers.LLMResponse{Content: "must not continue", FinishReason: "stop"}, nil
+	}
+	close(p.started)
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return &providers.LLMResponse{
+		ToolCalls:    []providers.ToolCall{{ID: "call_1", Name: p.toolName}},
+		FinishReason: "tool_calls",
+	}, nil
+}
+
+func (p *gatedToolCallRespProvider) GetDefaultModel() string {
+	return "gated-tool-model"
+}
+
+func (p *gatedToolCallRespProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
 // errorProvider simulates various error conditions
 type errorProvider struct {
 	errType   string
@@ -2086,6 +2130,149 @@ func TestRunTurn_SuspensionSkipsFinalizationAndDefaultResponse(t *testing.T) {
 		if message.Role == "tool" {
 			t.Fatalf("suspended history contains fabricated tool result: %#v", history)
 		}
+	}
+}
+
+func TestRunTurn_DelegatedSuspensionRequeuesAcceptedInboundSteering(t *testing.T) {
+	tool := &fixedToolResultTool{name: "delegated_task", result: &toolshared.ToolResult{
+		ForLLM:  "descendant task owns a durable continuation",
+		ForUser: "must not escape the suspension boundary",
+		Control: toolshared.ToolControl{TaskSuspended: true},
+	}}
+	provider := &toolCallRespProvider{toolName: tool.Name(), response: "must not continue"}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.Tools.Register(tool)
+
+	msgBus, ok := al.bus.(*bus.MessageBus)
+	if !ok {
+		t.Fatalf("message bus = %T, want *bus.MessageBus", al.bus)
+	}
+	spool, err := bus.NewInboundSpool(filepath.Join(t.TempDir(), "spool"))
+	if err != nil {
+		t.Fatalf("NewInboundSpool() error = %v", err)
+	}
+	msgBus.SetInboundSpool(spool)
+	if err := msgBus.PublishInbound(t.Context(), bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "cli", ChatID: "test-chat"},
+		Content: "queued follow-up",
+	}); err != nil {
+		t.Fatalf("PublishInbound() error = %v", err)
+	}
+	inbound := <-msgBus.InboundChan()
+	if inbound.SpoolID == "" {
+		t.Fatal("expected inbound spool ID")
+	}
+
+	opts := normalizeTurnSpec(makeTestTurnSpec("delegated-suspension-steering"))
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID:  "turn-delegated-suspension-steering",
+		context: newTurnContext(opts.Dispatch.InboundContext, nil, nil),
+	})
+	if err := al.enqueueSteeringMessageWithSender(
+		ts.runtimeSessionScope(),
+		agent.ID,
+		"",
+		providers.Message{Role: "user", Content: inbound.Content, InboundSpoolID: inbound.SpoolID},
+	); err != nil {
+		t.Fatalf("enqueueSteeringMessageWithSender() error = %v", err)
+	}
+	waitForSpoolEntries(t, spool.Dir(), "*.processing", 1)
+
+	result, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al))
+	if err != nil {
+		t.Fatalf("runTurn() error = %v", err)
+	}
+	if result.status != TurnEndStatusSuspended || provider.callCount != 1 || tool.executions != 1 {
+		t.Fatalf(
+			"result = %#v, provider calls = %d, tool executions = %d",
+			result,
+			provider.callCount,
+			tool.executions,
+		)
+	}
+	if accepted := ts.acceptedSteeringSnapshot(); len(accepted) != 1 || accepted[0].InboundSpoolID != inbound.SpoolID {
+		t.Fatalf("accepted steering = %#v, want spool ID %q", accepted, inbound.SpoolID)
+	}
+	waitForSpoolEntries(t, spool.Dir(), "*.processing", 0)
+	waitForSpoolEntries(t, spool.Dir(), "*.json", 1)
+	pending, err := spool.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending() error = %v", err)
+	}
+	if len(pending) != 1 || pending[0].SpoolID != inbound.SpoolID {
+		t.Fatalf("pending spool = %#v, want spool ID %q", pending, inbound.SpoolID)
+	}
+}
+
+func TestRunTurn_DelegatedSuspensionReturnsInMemorySteering(t *testing.T) {
+	tool := &fixedToolResultTool{name: "delegated_task", result: &toolshared.ToolResult{
+		ForLLM:  "descendant task owns a durable continuation",
+		ForUser: "must not escape the suspension boundary",
+		Control: toolshared.ToolControl{TaskSuspended: true},
+	}}
+	provider := &gatedToolCallRespProvider{
+		toolName: tool.Name(), started: make(chan struct{}), release: make(chan struct{}),
+	}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	agent.Tools.Register(tool)
+
+	opts := normalizeTurnSpec(makeTestTurnSpec("delegated-suspension-memory-steering"))
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID:  "turn-delegated-suspension-memory-steering",
+		context: newTurnContext(opts.Dispatch.InboundContext, nil, nil),
+	})
+	type turnCompletion struct {
+		result turnResult
+		err    error
+	}
+	completed := make(chan turnCompletion, 1)
+	go func() {
+		result, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al))
+		completed <- turnCompletion{result: result, err: err}
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not start")
+	}
+	if err := al.Steer(
+		agent.Workspace,
+		ts.sessionKey,
+		agent.ID,
+		providers.Message{Role: "user", Content: "queued in-memory follow-up"},
+	); err != nil {
+		t.Fatalf("Steer() error = %v", err)
+	}
+	close(provider.release)
+	var completion turnCompletion
+	select {
+	case completion = <-completed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("turn did not suspend")
+	}
+	result, err := completion.result, completion.err
+	if err != nil {
+		t.Fatalf("runTurn() error = %v", err)
+	}
+	if result.status != TurnEndStatusSuspended || provider.callCount() != 1 || tool.executions != 1 {
+		t.Fatalf(
+			"result = %#v, provider calls = %d, tool executions = %d",
+			result,
+			provider.callCount(),
+			tool.executions,
+		)
+	}
+	if accepted := ts.acceptedSteeringSnapshot(); len(accepted) != 0 {
+		t.Fatalf("accepted steering = %#v, want pending message returned before acceptance", accepted)
+	}
+	if count := al.pendingSteeringCountForScope(ts.runtimeSessionScope()); count != 1 {
+		t.Fatalf("pending steering count = %d, want 1", count)
+	}
+	returned := al.dequeueSteeringMessagesForScope(ts.runtimeSessionScope())
+	if len(returned) != 1 || !strings.Contains(returned[0].Content, "queued in-memory follow-up") {
+		t.Fatalf("returned steering = %#v", returned)
 	}
 }
 

@@ -20,7 +20,7 @@ type syncToolResultDelivery struct {
 }
 
 func requiresTerminalDeliverySettlement(ts *turnState, result *toolshared.ToolResult) bool {
-	return ts != nil && !ts.opts.SuppressToolUserDelivery &&
+	return ts != nil && result != nil && !result.Control.TaskSuspended && !ts.opts.SuppressToolUserDelivery &&
 		isFinalHandledDelivery(result) && hasToolResultDeliveryPayload(result)
 }
 
@@ -52,7 +52,12 @@ func normalizeToolResultForSyncDelivery(ts *turnState, result *toolshared.ToolRe
 	if result == nil {
 		return toolshared.ErrorResult("nil tool result")
 	}
-	if ts != nil && ts.opts.SuppressToolUserDelivery {
+	if result.Control.TaskSuspended {
+		result.ForUser = ""
+		result.Media = nil
+		result.Deliverable = nil
+		result.Delivery = toolshared.ToolDelivery{Intent: toolshared.DeliveryFinalHandled}
+	} else if ts != nil && ts.opts.SuppressToolUserDelivery {
 		result.Delivery.Intent = toolshared.DeliverySilent
 	}
 	return result
@@ -65,6 +70,9 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 	toolName string,
 ) ([]providers.Attachment, *toolshared.ToolResult) {
 	result = normalizeToolResultForSyncDelivery(ts, result)
+	if result.Control.TaskSuspended {
+		return nil, result
+	}
 
 	if !ts.opts.SuppressToolUserDelivery && result.Delivery.IsImmediate() {
 		if len(deliveredToolResultMediaRefs(result)) > 0 && !hasOutboundTransaction(ctx) {

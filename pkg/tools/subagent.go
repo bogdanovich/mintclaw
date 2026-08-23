@@ -152,7 +152,7 @@ func (sm *SubagentManager) Spawn(
 func objectiveItemsParameter() map[string]any {
 	return map[string]any{
 		"type":        "array",
-		"description": "Declared verification contract for the child. Required and validated before browser-capable children execute. Include every outcome the caller needs verified; use external_action for state changes and result for read-only findings. The runtime does not infer omitted intent from task prose.",
+		"description": "Declared verification contract for the child. Required for targets configured to use it. Include every outcome the caller needs verified; use external_action for state changes and result for read-only findings. If an external action should occur only after approval, include the pending state change as external_action and instruct the child to invoke the approval-bound tool so the runtime can suspend before commit; never model the approval boundary as a result or ask the child to stop before the tool call. The runtime does not infer omitted intent from task prose.",
 		"items": map[string]any{
 			"type": "object",
 			"properties": map[string]any{

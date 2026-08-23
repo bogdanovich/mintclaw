@@ -21,6 +21,7 @@ type reportedObjectiveOutcome struct {
 	Status         string                  `json:"status"`
 	CompletedItems []reportedObjectiveItem `json:"completed_items"`
 	MissingItems   []string                `json:"missing_items"`
+	Explanation    string                  `json:"explanation,omitempty"`
 }
 
 func objectiveOutcomeUserContent(content string, outcome *taskresult.Outcome) string {
@@ -38,6 +39,9 @@ func objectiveOutcomeUserContent(content string, outcome *taskresult.Outcome) st
 	}
 	for _, item := range outcome.MissingItems {
 		lines = append(lines, fmt.Sprintf("Not completed: %s", item))
+	}
+	if outcome.Explanation != "" {
+		lines = append(lines, "Reported reason: "+outcome.Explanation)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -89,7 +93,7 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 	encoded, _ := json.Marshal(interactionObjectiveChecklist(checklist))
 	return task + "\n\nRuntime outcome contract (required): finish with exactly one JSON block " +
 		objectiveOutcomeStart +
-		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":["objective_2"]}` +
+		`{"status":"succeeded|partial|blocked","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":["objective_2"],"explanation":"specific blocker when partial or blocked"}` +
 		objectiveOutcomeEnd +
 		". The runtime-owned objective checklist is: " + string(encoded) +
 		". Put every checklist ID exactly once in completed_items or missing_items; never add or rename IDs. " +
@@ -97,11 +101,17 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 		"navigation, or local_edit for non-committing UI steps; use external_commit only immediately before an " +
 		"important external state change; use unknown only when the workflow impact is genuinely unclear. " +
 		"Do not infer click effect from the element role or HTTP method. " +
+		"When an external_action requires human approval, call browser_act with external_commit during this turn; " +
+		"the runtime suspends before execution and preserves the continuation. Never replace that tool call with a " +
+		"prose approval question, a textual awaiting_approval status, or a completed result, and do not close the " +
+		"browser session while the runtime is suspended. " +
 		"For result items, omit receipt_ids or use an empty array; read, navigation, and local_edit invocation IDs " +
 		"are not external-action receipts. " +
 		"For each external_action, copy one or more " +
 		"invocation_id values from successful browser_act results into receipt_ids. Do not claim an external action " +
-		"without its runtime receipt. The runtime removes this block before showing your prose."
+		"without its runtime receipt. For partial or blocked outcomes, include one concise, specific explanation of " +
+		"the first blocker; the runtime bounds it and labels it as producer-reported. The runtime removes this block " +
+		"before showing your prose."
 }
 
 func extractObjectiveOutcome(
@@ -141,12 +151,17 @@ func validateObjectiveOutcome(
 	audits []toolshared.WriteAuditEntry,
 	checklist []runtimeObjectiveItem,
 ) *taskresult.Outcome {
-	switch strings.TrimSpace(reported.Status) {
+	status := strings.TrimSpace(reported.Status)
+	switch status {
 	case string(taskresult.OutcomeSucceeded),
 		string(taskresult.OutcomePartial),
 		string(taskresult.OutcomeBlocked):
 	default:
 		return blockedObjectiveOutcome("objective outcome status was invalid")
+	}
+	if (status == string(taskresult.OutcomePartial) || status == string(taskresult.OutcomeBlocked)) &&
+		strings.TrimSpace(reported.Explanation) == "" {
+		return blockedObjectiveOutcome("objective outcome explanation was required")
 	}
 	receipts := make(map[string]taskresult.Receipt)
 	for _, audit := range audits {
@@ -163,7 +178,7 @@ func validateObjectiveOutcome(
 			Tool: audit.Tool, Summary: audit.Summary, Metadata: copyObjectiveMetadata(audit.Metadata),
 		}
 	}
-	outcome := &taskresult.Outcome{}
+	outcome := &taskresult.Outcome{Explanation: boundedObjectiveText(reported.Explanation)}
 	expected := make(map[string]runtimeObjectiveItem, len(checklist))
 	for _, item := range checklist {
 		expected[item.ID] = item
@@ -291,12 +306,15 @@ func validateObjectiveOutcome(
 			appendMissing("producer reported the objective as partial")
 		}
 	}
+	if outcome.Status == taskresult.OutcomeSucceeded {
+		outcome.Explanation = ""
+	}
 	return outcome
 }
 
 func blockedObjectiveOutcome(reason string) *taskresult.Outcome {
 	return &taskresult.Outcome{
-		Status: taskresult.OutcomeBlocked, MissingItems: []string{reason},
+		Status: taskresult.OutcomeBlocked, MissingItems: []string{reason}, Explanation: reason,
 	}
 }
 

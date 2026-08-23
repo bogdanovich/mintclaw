@@ -136,6 +136,9 @@ type Message struct {
 	PromptSlot     string `json:"-"`
 	PromptSource   string `json:"-"`
 	InboundSpoolID string `json:"-"`
+	// SteeringSenderID preserves the admission scope of an in-memory steering
+	// message when a suspended turn returns it to the runtime queue.
+	SteeringSenderID string `json:"-"`
 }
 
 // ToolExecution is canonical-journal-only evidence that a tool invocation

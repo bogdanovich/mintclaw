@@ -50,10 +50,85 @@ func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *test
 		"read, navigation, or local_edit for non-committing UI steps",
 		"external_commit only immediately before an important external state change",
 		"Do not infer click effect from the element role or HTTP method",
+		"call browser_act with external_commit during this turn",
+		"Never replace that tool call with a prose approval question",
+		"do not close the browser session while the runtime is suspended",
 	} {
 		if !strings.Contains(instruction, required) {
 			t.Fatalf("objective instruction omitted %q: %s", required, instruction)
 		}
+	}
+}
+
+func TestObjectiveOutcomeCarriesBoundedReportedBlocker(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"blocked","completed_items":[],"missing_items":["objective_1"],` +
+		`"explanation":"All six source photo files are missing from temporary storage."}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "upload saved photos", Kind: "external_action",
+	}})
+	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeBlocked ||
+		outcome.Explanation != "All six source photo files are missing from temporary storage." {
+		t.Fatalf("blocked outcome = %#v", outcome)
+	}
+	userContent := objectiveOutcomeUserContent("Photos uploaded.", outcome)
+	if strings.Contains(userContent, "Photos uploaded") ||
+		!strings.Contains(userContent, "Reported reason: All six source photo files are missing") {
+		t.Fatalf("blocked user content = %q", userContent)
+	}
+}
+
+func TestObjectiveOutcomeDropsExplanationOnVerifiedSuccess(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"explanation":"stale blocker"}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "inspected", Kind: "result"}})
+	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" {
+		t.Fatalf("successful outcome retained explanation: %#v", outcome)
+	}
+}
+
+func TestObjectiveOutcomeRequiresExplanationForIncompleteStatus(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		status      string
+		explanation string
+	}{
+		{name: "blocked missing", status: "blocked"},
+		{name: "blocked whitespace", status: "blocked", explanation: "   "},
+		{name: "partial missing", status: "partial"},
+		{name: "partial whitespace", status: "partial", explanation: `\n\t`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			content := objectiveOutcomeStart + `{"status":"` + test.status +
+				`","completed_items":[],"missing_items":["objective_1"],"explanation":"` +
+				test.explanation + `"}` + objectiveOutcomeEnd
+			checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+				Item: "complete the requested result", Kind: "result",
+			}})
+			_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+			if outcome.Status != taskresult.OutcomeBlocked ||
+				outcome.Explanation != "objective outcome explanation was required" {
+				t.Fatalf("outcome = %#v, want invalid-report blocker", outcome)
+			}
+		})
+	}
+}
+
+func TestObjectiveOutcomeBoundsIncompleteExplanation(t *testing.T) {
+	const explanationLimit = 240
+	longExplanation := strings.Repeat("bounded explanation ", explanationLimit)
+	content := objectiveOutcomeStart +
+		`{"status":"blocked","completed_items":[],"missing_items":["objective_1"],"explanation":"` +
+		longExplanation + `"}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "complete result", Kind: "result"}})
+	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeBlocked || outcome.Explanation == "" ||
+		len([]rune(outcome.Explanation)) > explanationLimit {
+		t.Fatalf("bounded outcome explanation = %q (%d bytes)", outcome.Explanation, len(outcome.Explanation))
 	}
 }
 
@@ -139,7 +214,8 @@ func TestExtractObjectiveOutcomeRejectsUnclaimedExternalActionForReadResult(t *t
 
 func TestExtractObjectiveOutcomeNeverUpgradesProducerReportedPartial(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":[]}` +
+		`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"explanation":"producer reported incomplete execution"}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
 	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)

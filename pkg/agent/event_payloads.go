@@ -18,7 +18,7 @@ const (
 	// TurnEndStatusAborted indicates the turn was hard-aborted and rolled back.
 	TurnEndStatusAborted TurnEndStatus = "aborted"
 	// TurnEndStatusSuspended indicates durable continuation ownership moved to
-	// a pending human interaction without completing or failing the turn.
+	// the runtime or a descendant task without completing or failing the turn.
 	TurnEndStatusSuspended TurnEndStatus = "suspended"
 )
 
