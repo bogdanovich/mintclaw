@@ -8,16 +8,8 @@ The new `model_list` configuration offers several advantages:
 
 - **Zero-code provider addition**: Add OpenAI-compatible providers with configuration only
 - **Load balancing**: Configure multiple endpoints for the same model
-- **Explicit provider resolution**: Prefer `provider` + native `model`, with legacy `provider/model` compatibility when needed
+- **Explicit provider resolution**: Every entry stores `provider` separately from its provider-native `model`
 - **Cleaner configuration**: Model-centric instead of vendor-centric
-
-## Timeline
-
-| Version | Status |
-|---------|--------|
-| v1.x | `model_list` introduced, `providers` deprecated but functional |
-| v1.x+1 | Prominent deprecation warnings, migration tool available |
-| v2.0 | `providers` configuration removed |
 
 ## Before and After
 
@@ -83,9 +75,9 @@ The new `model_list` configuration offers several advantages:
 > **Note**: Set `enabled` explicitly in the converted document. Runtime startup
 > does not infer or migrate fields from an older schema version.
 
-## Provider / Model Resolution
+## Provider / Model Contract
 
-Preferred format:
+Every entry must use the current explicit representation:
 
 ```json
 {
@@ -94,35 +86,21 @@ Preferred format:
 }
 ```
 
-Legacy compatibility format:
-
-```json
-{
-  "model": "openai/gpt-5.4"
-}
-```
-
-Resolution rules:
-
-1. If `provider` is set, MintClaw sends `model` unchanged.
-2. If `provider` is omitted, MintClaw treats the first `/` segment in `model` as the provider and everything after that first `/` as the runtime model ID.
-
-Examples:
+`model` is sent to the selected provider unchanged, so provider-native IDs may
+contain slashes. Examples:
 
 | Config | Resolved Provider | Model Sent Upstream |
 |--------|-------------------|---------------------|
 | `"provider": "openai", "model": "gpt-5.4"` | `openai` | `gpt-5.4` |
-| `"model": "openai/gpt-5.4"` | `openai` | `gpt-5.4` |
 | `"provider": "openrouter", "model": "google/gemini-2.0-flash-exp:free"` | `openrouter` | `google/gemini-2.0-flash-exp:free` |
-| `"model": "openrouter/google/gemini-2.0-flash-exp:free"` | `openrouter` | `google/gemini-2.0-flash-exp:free` |
 
 ## ModelConfig Fields
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `model_name` | Yes | User-facing alias for the model |
-| `provider` | No | Preferred provider identifier. When set, `model` is sent unchanged |
-| `model` | Yes | Native model ID when `provider` is set, or legacy `provider/model` when `provider` is omitted |
+| `provider` | Yes | Provider identifier used for routing |
+| `model` | Yes | Provider-native model ID, sent unchanged |
 | `api_base` | No | API endpoint URL |
 | `api_keys` | No | API authentication keys (array; supports multiple keys for load balancing) |
 | `enabled` | No | Whether this model entry is active. Defaults to `true` during migration for models with API keys or named `local-model`. Set to `false` to disable. |
@@ -230,7 +208,7 @@ and then upgrade the coordinated deployment.
 
 - [ ] Identify all providers you're currently using
 - [ ] Create `model_list` entries for each provider
-- [ ] Prefer explicit `provider` values and native model IDs
+- [ ] Set an explicit `provider` and provider-native `model` on every entry
 - [ ] Update `agents.defaults.model_name` to reference the new `model_name`
 - [ ] Test that all models work correctly
 - [ ] Remove or comment out the old `providers` section
@@ -240,7 +218,7 @@ and then upgrade the coordinated deployment.
 ### Model not found error
 
 ```
-model "xxx" not found in model_list or providers
+model "xxx" not found in model_list
 ```
 
 **Solution**: Ensure the `model_name` in `model_list` matches the value in `agents.defaults.model_name`.
@@ -248,10 +226,11 @@ model "xxx" not found in model_list or providers
 ### Unknown protocol error
 
 ```
-unknown provider "xxx" in model "xxx/model-name"
+unknown protocol "xxx" in model "model-name"
 ```
 
-**Solution**: Use a supported `provider` value, or use the legacy `provider/model` compatibility form correctly. See [Provider / Model Resolution](#provider--model-resolution).
+**Solution**: Set `provider` to a supported value and keep `model` as the
+provider-native model ID. See [Provider / Model Contract](#provider--model-contract).
 
 ### Missing API key error
 

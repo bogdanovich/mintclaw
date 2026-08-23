@@ -572,7 +572,7 @@ func selectCodingModelConfig(
 		}
 	}
 	if persistedProvider == "" {
-		return nil, fmt.Errorf("model not found in model_list or providers")
+		return nil, fmt.Errorf("model not found in model_list")
 	}
 	return nil, fmt.Errorf("provider %q has no configured entry for this model alias", persistedProvider)
 }

@@ -34,7 +34,8 @@
 
 ### Model Configuration (model_list)
 
-> **What's New?** MintClaw now prefers explicit `provider` + native `model` configuration (for example `"provider": "zhipu", "model": "glm-4.7"`). The legacy single-field `provider/model` form remains supported for compatibility when `provider` is omitted.
+Every model entry requires an explicit `provider` plus that provider's native
+`model` identifier (for example `"provider": "zhipu", "model": "glm-4.7"`).
 
 For agent dispatch and light-model routing examples, see the [Routing Guide](routing-guide.md).
 
@@ -121,8 +122,8 @@ This design also enables **multi-agent support** with flexible provider selectio
 | Field | Type | Required | Description                                                                                                                                                                                                                                 |
 |-------|------|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `model_name` | string | Yes | Exact name used by every model selector; repeated names intentionally form one load-balanced model                                                                                                                                          |
-| `provider` | string | No | Preferred provider identifier. When present, MintClaw sends `model` unchanged to that provider                                                                                                                                              |
-| `model` | string | Yes | Native model ID when `provider` is set. If `provider` is omitted, the legacy `provider/model` form is still supported                                                                                                                       |
+| `provider` | string | Yes | Provider identifier used for routing                                                                                                                                                                                                      |
+| `model` | string | Yes | Provider-native model ID, sent unchanged; it may contain `/` when the upstream provider uses namespaced IDs                                                                                                                               |
 | `api_keys` | string[] | Yes* | API key(s) for authentication. Multiple keys enable per-request rotation. Not required for local providers (Ollama, LM Studio, VLLM)                                                                                                        |
 | `api_base` | string | No | Override the default API endpoint URL                                                                                                                                                                                                       |
 | `proxy` | string | No | HTTP proxy URL for this model entry                                                                                                                                                                                                         |
@@ -166,21 +167,17 @@ Notes:
 - Default behavior is disabled. If you omit `tool_schema_transform`, MintClaw sends the original tool schema.
 - The setting is per model entry, so you can enable it only for the providers that need it.
 
-#### Provider / Model Resolution
+#### Provider / Model Representation
 
-MintClaw resolves `provider` and the runtime model ID using these rules:
-
-- If `provider` is set, `model` is used as-is.
-- If `provider` is omitted, MintClaw treats the first `/` segment in `model` as the provider and everything after that first `/` as the runtime model ID.
+MintClaw routes through the required `provider` field and sends `model` to that
+provider unchanged. Slashes in `model` belong to the provider-native ID.
 
 Examples:
 
 | Config | Resolved Provider | Model Sent Upstream |
 | --- | --- | --- |
 | `"provider": "openai", "model": "gpt-5.4"` | `openai` | `gpt-5.4` |
-| `"model": "openai/gpt-5.4"` | `openai` | `gpt-5.4` |
 | `"provider": "openrouter", "model": "openai/gpt-5.4"` | `openrouter` | `openai/gpt-5.4` |
-| `"model": "openrouter/openai/gpt-5.4"` | `openrouter` | `openai/gpt-5.4` |
 
 #### Voice Transcription
 
@@ -369,7 +366,7 @@ For direct Anthropic API access or custom endpoints that only support Anthropic'
 ```
 
 `api_base` defaults to `http://localhost:1234/v1`. API key is optional unless your LM Studio server enables authentication.<br/>
-With explicit `provider`, MintClaw sends `openai/gpt-oss-20b` unchanged to the LM Studio server. The legacy compatibility form `"model": "lmstudio/openai/gpt-oss-20b"` still resolves to the same upstream model ID when `provider` is omitted.
+MintClaw sends the provider-native `openai/gpt-oss-20b` model ID unchanged to the LM Studio server.
 
 **Custom Proxy/API**
 
@@ -397,7 +394,7 @@ With explicit `provider`, MintClaw sends `openai/gpt-oss-20b` unchanged to the L
 }
 ```
 
-With explicit `provider`, MintClaw sends `model` unchanged. That means `"provider": "litellm", "model": "lite-gpt4"` sends `lite-gpt4`, while `"provider": "litellm", "model": "openai/gpt-4o"` sends `openai/gpt-4o`. The legacy compatibility forms `litellm/lite-gpt4` and `litellm/openai/gpt-4o` still resolve the same way when `provider` is omitted.
+MintClaw sends `model` unchanged. That means `"provider": "litellm", "model": "lite-gpt4"` sends `lite-gpt4`, while `"provider": "litellm", "model": "openai/gpt-4o"` sends `openai/gpt-4o`.
 
 **Z.AI Coding Plan**
 

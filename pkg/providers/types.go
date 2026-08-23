@@ -180,9 +180,3 @@ func (e *FailoverError) IsRetriable() bool {
 		e.Reason != FailoverFormat &&
 		e.Reason != FailoverContextOverflow
 }
-
-// ModelConfig holds primary model and fallback list.
-type ModelConfig struct {
-	Primary   string
-	Fallbacks []string
-}

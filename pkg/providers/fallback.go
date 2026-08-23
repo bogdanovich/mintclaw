@@ -144,54 +144,6 @@ func NewFallbackChain(cooldown *CooldownTracker, rl *RateLimiterRegistry) *Fallb
 	return &FallbackChain{cooldown: cooldown, rl: rl}
 }
 
-// ResolveCandidates parses model config into a deduplicated candidate list.
-func ResolveCandidates(cfg ModelConfig, defaultProvider string) []FallbackCandidate {
-	return ResolveCandidatesWithLookup(cfg, defaultProvider, nil)
-}
-
-func ResolveCandidatesWithLookup(
-	cfg ModelConfig,
-	defaultProvider string,
-	lookup func(raw string) (resolved string, ok bool),
-) []FallbackCandidate {
-	seen := make(map[string]bool)
-	var candidates []FallbackCandidate
-
-	addCandidate := func(raw string) {
-		candidateRaw := strings.TrimSpace(raw)
-		if lookup != nil {
-			if resolved, ok := lookup(candidateRaw); ok {
-				candidateRaw = resolved
-			}
-		}
-
-		ref := ParseModelRef(candidateRaw, defaultProvider)
-		if ref == nil {
-			return
-		}
-		key := ModelKey(ref.Provider, ref.Model)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		candidates = append(candidates, FallbackCandidate{
-			Provider:    ref.Provider,
-			Model:       ref.Model,
-			DisplayName: candidateRaw,
-		})
-	}
-
-	// Primary first.
-	addCandidate(cfg.Primary)
-
-	// Then fallbacks.
-	for _, fb := range cfg.Fallbacks {
-		addCandidate(fb)
-	}
-
-	return candidates
-}
-
 // Execute runs the fallback chain for text/chat requests.
 // It tries each candidate in order, respecting cooldowns and error classification.
 //

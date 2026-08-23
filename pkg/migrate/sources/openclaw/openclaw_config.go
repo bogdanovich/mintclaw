@@ -496,7 +496,8 @@ func (c *OpenClawConfig) ConvertToMintClaw(sourceHome string) (*MintClawConfig, 
 	cfg.ModelList = []ModelConfig{
 		{
 			ModelName: modelName,
-			Model:     fmt.Sprintf("%s/%s", provider, modelName),
+			Provider:  provider,
+			Model:     modelName,
 			APIKey:    defaultAPIKey,
 			APIBase:   defaultBaseURL,
 		},
@@ -511,7 +512,8 @@ func (c *OpenClawConfig) ConvertToMintClaw(sourceHome string) (*MintClawConfig, 
 		}
 		cfg.ModelList = append(cfg.ModelList, ModelConfig{
 			ModelName: provName,
-			Model:     fmt.Sprintf("%s/%s", provName, provName),
+			Provider:  provName,
+			Model:     provName,
 			APIKey:    provCfg.ApiKey,
 			APIBase:   provCfg.BaseUrl,
 		})
@@ -560,6 +562,7 @@ func (c *OpenClawConfig) ConvertToMintClaw(sourceHome string) (*MintClawConfig, 
 
 type ModelConfig struct {
 	ModelName string `json:"model_name"`
+	Provider  string `json:"provider"`
 	Model     string `json:"model"`
 	APIBase   string `json:"api_base,omitempty"`
 	APIKey    string `json:"api_key"`
@@ -981,6 +984,7 @@ func (c *MintClawConfig) ToStandardConfig() *config.Config {
 	for _, m := range c.ModelList {
 		mc := &config.ModelConfig{
 			ModelName: m.ModelName,
+			Provider:  m.Provider,
 			Model:     m.Model,
 			APIBase:   m.APIBase,
 			Proxy:     m.Proxy,

@@ -656,9 +656,8 @@ func TestToStandardConfig(t *testing.T) {
 		},
 		ModelList: []ModelConfig{
 			{
-				ModelName: "claude-sonnet-4-20250514",
-				Model:     "anthropic/claude-sonnet-4-20250514",
-				APIKey:    "sk-ant-test",
+				ModelName: "claude-sonnet-4-20250514", Provider: "anthropic", Model: "claude-sonnet-4-20250514",
+				APIKey: "sk-ant-test",
 			},
 		},
 		Channels: ChannelsConfig{

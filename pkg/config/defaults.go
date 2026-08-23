@@ -304,7 +304,7 @@ func DefaultConfig() *Config {
 			},
 
 			// Azure OpenAI - https://portal.azure.com
-			// model_name is a user-friendly alias; the model field's path after "azure/" is your deployment name
+			// model_name is a user-friendly alias; model is the Azure deployment name.
 			{
 				ModelName: "azure-gpt5",
 				Provider:  "azure",

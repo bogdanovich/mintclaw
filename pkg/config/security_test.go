@@ -78,16 +78,14 @@ func TestSaveAndLoadSecurityConfig(t *testing.T) {
 		Version: CurrentVersion,
 		ModelList: SecureModelList{
 			{
-				ModelName: "model1",
-				Model:     "test/model",
-				APIBase:   "api.example.com",
-				APIKeys:   SecureStrings{NewSecureString("key1"), NewSecureString("key2")},
+				ModelName: "model1", Provider: "openai", Model: "test/model",
+				APIBase: "api.example.com",
+				APIKeys: SecureStrings{NewSecureString("key1"), NewSecureString("key2")},
 			},
 			{
-				ModelName: "model2",
-				Model:     "test/model2",
-				APIBase:   "api2.example.com",
-				APIKeys:   SecureStrings{NewSecureString("model2_key")},
+				ModelName: "model2", Provider: "openai", Model: "test/model2",
+				APIBase: "api2.example.com",
+				APIKeys: SecureStrings{NewSecureString("model2_key")},
 			},
 		},
 		Tools: ToolsConfig{

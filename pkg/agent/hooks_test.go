@@ -44,9 +44,9 @@ func newHookTestLoop(
 			},
 		},
 		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Model: "openai/test-model", Enabled: true},
-			{ModelName: "hook-model", Model: "openai/hook-model", Enabled: true},
-			{ModelName: "process-model", Model: "openai/process-model", Enabled: true},
+			{ModelName: "test-model", Provider: "openai", Model: "test-model", Enabled: true},
+			{ModelName: "hook-model", Provider: "openai", Model: "hook-model", Enabled: true},
+			{ModelName: "process-model", Provider: "openai", Model: "process-model", Enabled: true},
 		},
 	}
 

@@ -549,7 +549,8 @@ func TestHandleUpdateConfig_PreservesExecAllowRemoteDefaultWhenOmitted(t *testin
 		"model_list": [
 			{
 				"model_name": "custom-default",
-				"model": "openai/gpt-4o",
+				"provider": "openai",
+				"model": "gpt-4o",
 				"api_keys": ["sk-default"]
 			}
 		]
@@ -648,7 +649,8 @@ func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
 				"model_list": [
 					{
 						"model_name": "custom-default",
-						"model": "openai/gpt-4o",
+						"provider": "openai",
+						"model": "gpt-4o",
 						"api_keys": ["sk-default"]
 					}
 				],
@@ -723,7 +725,8 @@ func TestHandleUpdateConfig_DoesNotInheritDefaultModelFields(t *testing.T) {
 		"model_list": [
 			{
 				"model_name": "custom-default",
-				"model": "openai/gpt-4o",
+				"provider": "openai",
+				"model": "gpt-4o",
 				"api_keys": ["sk-default"]
 			}
 		]
@@ -1307,9 +1310,8 @@ func setupMintClawEnabledEnv(t *testing.T) (string, func()) {
 
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{{
-		ModelName: "custom-default",
-		Model:     "openai/gpt-4o",
-		APIKeys:   config.SimpleSecureStrings("sk-default"),
+		ModelName: "custom-default", Provider: "openai", Model: "gpt-4o",
+		APIKeys: config.SimpleSecureStrings("sk-default"),
 	}}
 	cfg.Agents.Defaults.ModelName = "custom-default"
 	bc := cfg.Channels["mintclaw"]
@@ -1369,7 +1371,8 @@ func TestHandleUpdateConfig_SucceedsWhenMintClawTokenInSecurityOnly(t *testing.T
 		"model_list": [
 			{
 				"model_name": "custom-default",
-				"model": "openai/gpt-4o",
+				"provider": "openai",
+				"model": "gpt-4o",
 				"api_keys": ["sk-default"]
 			}
 		]
@@ -1432,7 +1435,8 @@ func TestHandleUpdateConfig_AppliesGatewayLogLevel(t *testing.T) {
 		"model_list": [
 			{
 				"model_name": "custom-default",
-				"model": "openai/gpt-4o",
+				"provider": "openai",
+				"model": "gpt-4o",
 				"api_keys": ["sk-default"]
 			}
 		]

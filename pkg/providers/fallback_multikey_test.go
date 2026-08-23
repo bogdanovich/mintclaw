@@ -6,18 +6,25 @@ import (
 	"testing"
 )
 
+func fallbackCandidates(provider string, models ...string) []FallbackCandidate {
+	candidates := make([]FallbackCandidate, 0, len(models))
+	for _, model := range models {
+		candidates = append(candidates, FallbackCandidate{
+			Provider:    provider,
+			Model:       model,
+			DisplayName: model,
+		})
+	}
+	return candidates
+}
+
 // TestMultiKeyFailover tests the complete failover flow with multiple API keys.
 // This simulates the config expansion scenario where api_keys: ["key1", "key2", "key3"]
 // is expanded into primary + fallbacks.
 func TestMultiKeyFailover(t *testing.T) {
 	// Simulate expanded config: primary with 2 fallbacks
 	// This is what ExpandMultiKeyModels would produce for api_keys: ["key1", "key2", "key3"]
-	cfg := ModelConfig{
-		Primary:   "glm-4.7",
-		Fallbacks: []string{"glm-4.7__key_1", "glm-4.7__key_2"},
-	}
-
-	candidates := ResolveCandidates(cfg, "zhipu")
+	candidates := fallbackCandidates("zhipu", "glm-4.7", "glm-4.7__key_1", "glm-4.7__key_2")
 
 	if len(candidates) != 3 {
 		t.Fatalf("expected 3 candidates, got %d: %v", len(candidates), candidates)
@@ -74,12 +81,7 @@ func TestMultiKeyFailover(t *testing.T) {
 
 // TestMultiKeyFailoverAllFail tests when all keys hit rate limit
 func TestMultiKeyFailoverAllFail(t *testing.T) {
-	cfg := ModelConfig{
-		Primary:   "glm-4.7",
-		Fallbacks: []string{"glm-4.7__key_1", "glm-4.7__key_2"},
-	}
-
-	candidates := ResolveCandidates(cfg, "zhipu")
+	candidates := fallbackCandidates("zhipu", "glm-4.7", "glm-4.7__key_1", "glm-4.7__key_2")
 
 	cooldown := NewCooldownTracker()
 	chain := NewFallbackChain(cooldown, nil)
@@ -119,12 +121,7 @@ func TestMultiKeyFailoverAllFail(t *testing.T) {
 
 // TestMultiKeyFailoverCooldown tests that a key in cooldown is skipped
 func TestMultiKeyFailoverCooldown(t *testing.T) {
-	cfg := ModelConfig{
-		Primary:   "glm-4.7",
-		Fallbacks: []string{"glm-4.7__key_1"},
-	}
-
-	candidates := ResolveCandidates(cfg, "zhipu")
+	candidates := fallbackCandidates("zhipu", "glm-4.7", "glm-4.7__key_1")
 
 	cooldown := NewCooldownTracker()
 	chain := NewFallbackChain(cooldown, nil)
@@ -175,12 +172,7 @@ func TestMultiKeyFailoverCooldown(t *testing.T) {
 
 // TestMultiKeyFailoverWithFormatError tests that format errors are non-retriable
 func TestMultiKeyFailoverWithFormatError(t *testing.T) {
-	cfg := ModelConfig{
-		Primary:   "glm-4.7",
-		Fallbacks: []string{"glm-4.7__key_1"},
-	}
-
-	candidates := ResolveCandidates(cfg, "zhipu")
+	candidates := fallbackCandidates("zhipu", "glm-4.7", "glm-4.7__key_1")
 
 	cooldown := NewCooldownTracker()
 	chain := NewFallbackChain(cooldown, nil)
@@ -227,12 +219,10 @@ func TestMultiKeyWithModelFallback(t *testing.T) {
 	// After ExpandMultiKeyModels, primaryEntry.Fallbacks = ["glm-4.7__key_1", "minimax"]
 	// Note: In production, "minimax" would be resolved via model lookup to "minimax/minimax"
 	// In this test, we use the full format to avoid needing a lookup function.
-	cfg := ModelConfig{
-		Primary:   "glm-4.7",
-		Fallbacks: []string{"glm-4.7__key_1", "minimax/minimax"},
-	}
-
-	candidates := ResolveCandidates(cfg, "zhipu")
+	candidates := append(
+		fallbackCandidates("zhipu", "glm-4.7", "glm-4.7__key_1"),
+		FallbackCandidate{Provider: "minimax", Model: "minimax", DisplayName: "minimax"},
+	)
 
 	// Should have 3 candidates: glm-4.7 (zhipu), glm-4.7__key_1 (zhipu), minimax (minimax)
 	if len(candidates) != 3 {
@@ -329,12 +319,7 @@ func TestMultiKeyWithModelFallback(t *testing.T) {
 
 // TestMultiKeyFailoverMixedErrors tests failover with different error types
 func TestMultiKeyFailoverMixedErrors(t *testing.T) {
-	cfg := ModelConfig{
-		Primary:   "glm-4.7",
-		Fallbacks: []string{"glm-4.7__key_1", "glm-4.7__key_2"},
-	}
-
-	candidates := ResolveCandidates(cfg, "zhipu")
+	candidates := fallbackCandidates("zhipu", "glm-4.7", "glm-4.7__key_1", "glm-4.7__key_2")
 
 	cooldown := NewCooldownTracker()
 	chain := NewFallbackChain(cooldown, nil)

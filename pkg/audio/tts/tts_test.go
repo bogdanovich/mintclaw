@@ -231,9 +231,8 @@ func TestDetectTTS_UsesMimoProviderForMimoModels(t *testing.T) {
 		Voice: config.VoiceConfig{TTSModelName: "mimo-tts"},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "mimo-tts",
-				Model:     "mimo/mimo-v2-tts",
-				APIKeys:   config.SimpleSecureStrings("sk-mimo"),
+				ModelName: "mimo-tts", Provider: "mimo", Model: "mimo-v2-tts",
+				APIKeys: config.SimpleSecureStrings("sk-mimo"),
 			},
 		},
 	})
@@ -257,9 +256,8 @@ func TestDetectTTS_UsesOpenAIExtraBodyVoiceAndResponseFormat(t *testing.T) {
 		Voice: config.VoiceConfig{TTSModelName: "mai-voice"},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "mai-voice",
-				Model:     "openrouter/microsoft/mai-voice-2",
-				APIKeys:   config.SimpleSecureStrings("sk-openrouter"),
+				ModelName: "mai-voice", Provider: "openrouter", Model: "microsoft/mai-voice-2",
+				APIKeys: config.SimpleSecureStrings("sk-openrouter"),
 				ExtraBody: map[string]any{
 					"voice":           "en-US-Harper:MAI-Voice-2",
 					"response_format": "mp3",

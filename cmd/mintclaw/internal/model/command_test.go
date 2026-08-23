@@ -66,16 +66,14 @@ func TestShowCurrentModel_WithDefaultModel(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "gpt-4",
-				Model:     "openai/gpt-4",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "gpt-4", Provider: "openai", Model: "gpt-4",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 			{
-				ModelName: "claude-3",
-				Model:     "anthropic/claude-3",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "claude-3", Provider: "anthropic", Model: "claude-3",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 		},
 	}
@@ -99,10 +97,9 @@ func TestShowCurrentModel_NoDefaultModel(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "gpt-4",
-				Model:     "openai/gpt-4",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "gpt-4", Provider: "openai", Model: "gpt-4",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 		},
 	}
@@ -136,18 +133,16 @@ func TestListAvailableModels_WithModels(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "gpt-4",
-				Model:     "openai/gpt-4",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "gpt-4", Provider: "openai", Model: "gpt-4",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 			{
-				ModelName: "claude-3",
-				Model:     "anthropic/claude-3",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "claude-3", Provider: "anthropic", Model: "claude-3",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
-			{ModelName: "no-key-model", Model: "openai/test"},
+			{ModelName: "no-key-model", Provider: "openai", Model: "test"},
 		},
 	}
 
@@ -156,8 +151,8 @@ func TestListAvailableModels_WithModels(t *testing.T) {
 	})
 
 	assert.NotEmpty(t, output)
-	assert.Contains(t, output, "> - gpt-4 (openai/gpt-4)")
-	assert.Contains(t, output, "claude-3 (anthropic/claude-3)")
+	assert.Contains(t, output, "> - gpt-4 (provider=openai, model=gpt-4)")
+	assert.Contains(t, output, "claude-3 (provider=anthropic, model=claude-3)")
 	assert.NotContains(t, output, "no-key-model")
 }
 
@@ -173,16 +168,14 @@ func TestSetDefaultModel_ValidModel(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "new-model",
-				Model:     "openai/new-model",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "new-model", Provider: "openai", Model: "new-model",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 			{
-				ModelName: "old-model",
-				Model:     "openai/old-model",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "old-model", Provider: "openai", Model: "old-model",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 		},
 	}
@@ -205,8 +198,8 @@ func TestSetDefaultModel_PreservesConcurrentConfigChange(t *testing.T) {
 	initTest(t)
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{
-		{ModelName: "old-model", Model: "openai/old", Enabled: true},
-		{ModelName: "new-model", Model: "openai/new", Enabled: true},
+		{ModelName: "old-model", Provider: "openai", Model: "old", Enabled: true},
+		{ModelName: "new-model", Provider: "openai", Model: "new", Enabled: true},
 	}
 	cfg.Agents.Defaults.ModelName = "old-model"
 	repository := config.NewRepository(configPath)
@@ -247,10 +240,9 @@ func TestSetDefaultModel_InvalidModel(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "existing-model",
-				Model:     "openai/existing",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "existing-model", Provider: "openai", Model: "existing",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 		},
 	}
@@ -272,12 +264,11 @@ func TestSetDefaultModel_ModelWithoutAPIKey(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "existing-model",
-				Model:     "openai/existing",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "existing-model", Provider: "openai", Model: "existing",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
-			{ModelName: "no-key-model", Model: "openai/nokey"},
+			{ModelName: "no-key-model", Provider: "openai", Model: "nokey"},
 		},
 	}
 	require.NoError(t, config.SaveConfig(configPath, cfg))
@@ -328,10 +319,9 @@ func TestModelCommandExecution_Show(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "test-model",
-				Model:     "openai/test",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "test-model", Provider: "openai", Model: "test",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 		},
 	}
@@ -361,16 +351,14 @@ func TestModelCommandExecution_Set(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "old-model",
-				Model:     "openai/old",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "old-model", Provider: "openai", Model: "old",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 			{
-				ModelName: "new-model",
-				Model:     "openai/new",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "new-model", Provider: "openai", Model: "new",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 		},
 	}
@@ -405,22 +393,19 @@ func TestListAvailableModels_MarkerLogic(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "first-model",
-				Model:     "openai/first",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "first-model", Provider: "openai", Model: "first",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 			{
-				ModelName: "middle-model",
-				Model:     "openai/middle",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "middle-model", Provider: "openai", Model: "middle",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 			{
-				ModelName: "last-model",
-				Model:     "openai/last",
-				APIKeys:   config.SecureStrings{config.NewSecureString("test")},
-				Enabled:   true,
+				ModelName: "last-model", Provider: "openai", Model: "last",
+				APIKeys: config.SecureStrings{config.NewSecureString("test")},
+				Enabled: true,
 			},
 		},
 	}
@@ -429,7 +414,7 @@ func TestListAvailableModels_MarkerLogic(t *testing.T) {
 		listAvailableModels(cfg)
 	})
 
-	assert.Contains(t, output, "  - first-model (openai/first)")
-	assert.Contains(t, output, "> - middle-model (openai/middle)")
-	assert.Contains(t, output, "  - last-model (openai/last)")
+	assert.Contains(t, output, "  - first-model (provider=openai, model=first)")
+	assert.Contains(t, output, "> - middle-model (provider=openai, model=middle)")
+	assert.Contains(t, output, "  - last-model (provider=openai, model=last)")
 }

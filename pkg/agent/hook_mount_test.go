@@ -55,9 +55,9 @@ func newConfiguredHookLoop(t *testing.T, provider *llmHookTestProvider, hooks co
 		},
 		Hooks: hooks,
 		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Model: "openai/test-model", Enabled: true},
-			{ModelName: "builtin-model", Model: "openai/builtin-model", Enabled: true},
-			{ModelName: "process-model", Model: "openai/process-model", Enabled: true},
+			{ModelName: "test-model", Provider: "openai", Model: "test-model", Enabled: true},
+			{ModelName: "builtin-model", Provider: "openai", Model: "builtin-model", Enabled: true},
+			{ModelName: "process-model", Provider: "openai", Model: "process-model", Enabled: true},
 		},
 	}
 

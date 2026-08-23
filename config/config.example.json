@@ -69,13 +69,15 @@
   "model_list": [
     {
       "model_name": "gpt-5.4",
-      "model": "openai/gpt-5.4",
+      "provider": "openai",
+      "model": "gpt-5.4",
       "api_keys": ["sk-your-openai-key"],
       "api_base": "https://api.openai.com/v1"
     },
     {
       "model_name": "claude-sonnet-4.6",
-      "model": "anthropic/claude-sonnet-4.6",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4.6",
       "api_keys": ["sk-ant-your-key"],
       "api_base": "https://api.anthropic.com/v1",
       "thinking_level": "high"
@@ -83,61 +85,72 @@
     {
       "_comment": "Anthropic Messages API - use native format for direct Anthropic API access",
       "model_name": "claude-opus-4-6",
-      "model": "anthropic-messages/claude-opus-4-6",
+      "provider": "anthropic-messages",
+      "model": "claude-opus-4-6",
       "api_keys": ["sk-ant-your-key"],
       "api_base": "https://api.anthropic.com"
     },
     {
       "model_name": "gemini",
       "_comment": "Optional: set \"tool_schema_transform\": \"simple\" for providers that reject complex tool JSON Schema.",
-      "model": "antigravity/gemini-2.0-flash",
+      "provider": "antigravity",
+      "model": "gemini-2.0-flash",
       "auth_method": "oauth"
     },
     {
       "model_name": "deepseek",
-      "model": "deepseek/deepseek-chat",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
       "api_keys": ["sk-your-deepseek-key"]
     },
     {
       "model_name": "venice-uncensored",
-      "model": "venice/venice-uncensored",
+      "provider": "venice",
+      "model": "venice-uncensored",
       "api_keys": ["your-venice-api-key"]
     },
     {
       "model_name": "nearai-glm",
-      "model": "nearai/zai-org/GLM-5.1-FP8",
+      "provider": "nearai",
+      "model": "zai-org/GLM-5.1-FP8",
       "api_keys": ["your-nearai-api-key"]
     },
     {
       "model_name": "lmstudio-local",
-      "model": "lmstudio/openai/gpt-oss-20b"
+      "provider": "lmstudio",
+      "model": "openai/gpt-oss-20b"
     },
     {
       "model_name": "longcat",
-      "model": "longcat/LongCat-Flash-Thinking",
+      "provider": "longcat",
+      "model": "LongCat-Flash-Thinking",
       "api_keys": ["your-longcat-api-key"]
     },
     {
       "model_name": "modelscope-qwen",
-      "model": "modelscope/Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "provider": "modelscope",
+      "model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
       "api_keys": ["your-modelscope-access-token"],
       "api_base": "https://api-inference.modelscope.cn/v1"
     },
     {
       "model_name": "azure-gpt5",
-      "model": "azure/my-gpt5-deployment",
+      "provider": "azure",
+      "model": "my-gpt5-deployment",
       "api_keys": ["your-azure-api-key"],
       "api_base": "https://your-resource.openai.azure.com"
     },
     {
       "model_name": "loadbalanced-gpt-5.4",
-      "model": "openai/gpt-5.4",
+      "provider": "openai",
+      "model": "gpt-5.4",
       "api_keys": ["sk-key1"],
       "api_base": "https://api1.example.com/v1"
     },
     {
       "model_name": "loadbalanced-gpt-5.4",
-      "model": "openai/gpt-5.4",
+      "provider": "openai",
+      "model": "gpt-5.4",
       "api_keys": ["sk-key2"],
       "api_base": "https://api2.example.com/v1"
     }
