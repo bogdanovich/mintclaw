@@ -1980,6 +1980,17 @@ func TestBrowserApprovalSummaryNamesDocumentKey(t *testing.T) {
 	}
 }
 
+func TestBrowserApprovalSummaryNamesDownloadAction(t *testing.T) {
+	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
+		CurrentOrigin: "https://example.com", Effect: browser.EffectUnknown,
+		ElementRole: "link", ElementName: "Export report",
+		Action: browser.Action{Kind: browser.ActionDownload},
+	}})
+	if summary != "Download link \"Export report\" on https://example.com\nEffect: `unknown`" {
+		t.Fatalf("approval summary = %q", summary)
+	}
+}
+
 func TestBrowserApprovalSummaryEscapesPageControlledElementName(t *testing.T) {
 	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
 		CurrentOrigin: "https://example.com", Effect: browser.EffectExternalCommit,

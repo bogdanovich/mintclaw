@@ -1681,6 +1681,8 @@ func browserApprovalVerb(kind browser.ActionKind) string {
 		return "Click"
 	case browser.ActionDrag:
 		return "Drag"
+	case browser.ActionDownload:
+		return "Download"
 	default:
 		return "Use"
 	}
