@@ -35,6 +35,9 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 		_ = al.settleInboundAdmission(ctx, msg, admission)
 		return
 	}
+	if c.handleScopedInspectionCommand(ctx, msg, target) {
+		return
+	}
 	cancellation, err := al.cancelInteractionForControlMessage(ctx, msg, target)
 	if err != nil {
 		admission := al.publishInteractionNoticeAdmission(
@@ -85,6 +88,59 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 	}
 
 	c.startWorker(ctx, msg, target, claim)
+}
+
+func (c *inboundTurnCoordinator) handleScopedInspectionCommand(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+) bool {
+	commandName, ok := commands.CommandName(msg.Content)
+	if !ok || commandName != "subagents" || target == nil || target.Agent == nil {
+		return false
+	}
+
+	al := c.al
+	binding := effectiveModelBinding{
+		RouteSessionKey: strings.TrimSpace(target.Allocation.RouteScopeKey),
+		WorkspaceAgent:  target.Agent,
+	}
+	opts := turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: binding.RouteSessionKey,
+			SessionKey:      target.SessionKey,
+			InboundContext:  cloneInboundContext(&msg.Context),
+			UserMessage:     msg.Content,
+		},
+		ModelBinding: binding,
+	}
+	response, handled := al.handleCommand(ctx, msg, binding, &opts)
+	if !handled {
+		return false
+	}
+
+	if al.channelManager != nil {
+		defer al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
+	}
+	metadata := bus.OutboundMetadata{}
+	if al.getActiveTurnState(newRuntimeSessionScope(target.Agent.Workspace, target.SessionKey)) != nil {
+		metadata.OutboundKind = bus.OutboundKindInterim
+	}
+	admission := al.publishResponseWithMetadataAndScopes(
+		ctx,
+		target.Agent.Workspace,
+		target.Agent.ID,
+		msg.Channel,
+		msg.ChatID,
+		target.SessionKey,
+		response,
+		&msg.Context,
+		finalResponseAlwaysPublish,
+		metadata,
+		nil,
+	)
+	_ = al.settleInboundAdmission(ctx, msg, admission)
+	return true
 }
 
 func (c *inboundTurnCoordinator) deferInteractionInbound(

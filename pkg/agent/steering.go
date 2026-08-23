@@ -713,14 +713,6 @@ func (al *AgentLoop) continueRuntimeSession(
 	return response, err
 }
 
-func (al *AgentLoop) InterruptGraceful(hint string) error {
-	ts := al.getAnyActiveTurnState()
-	if ts == nil {
-		return fmt.Errorf("no active turn")
-	}
-	return al.interruptGracefulTurn(ts, hint)
-}
-
 // InterruptGracefulSession requests a terminal summary from the one active
 // turn owned by sessionKey. It fails closed when identical session keys are
 // active in multiple workspaces.
@@ -742,7 +734,7 @@ func (al *AgentLoop) interruptGracefulTurn(ts *turnState, hint string) error {
 
 	al.emitEvent(
 		runtimeevents.KindAgentInterruptReceived,
-		ts.eventMeta("InterruptGraceful", "turn.interrupt.received"),
+		ts.eventMeta("InterruptGracefulSession", "turn.interrupt.received"),
 		InterruptReceivedPayload{
 			Kind:    InterruptKindGraceful,
 			HintLen: len(hint),

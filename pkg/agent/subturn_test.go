@@ -2027,8 +2027,8 @@ func (m *simpleMockProviderAPI) GetDefaultModel() string {
 	return "gpt-4o-mini"
 }
 
-// TestGetActiveTurn verifies that GetActiveTurn returns correct turn information
-func TestGetActiveTurn(t *testing.T) {
+// TestGetActiveTurnBySession verifies exact session-scoped turn inspection.
+func TestGetActiveTurnBySession(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -2089,8 +2089,8 @@ func TestGetActiveTurn(t *testing.T) {
 	}
 }
 
-// TestGetActiveTurn_WithChildren verifies that child turn IDs are correctly reported
-func TestGetActiveTurn_WithChildren(t *testing.T) {
+// TestGetActiveTurnBySession_WithChildren verifies that child turn IDs are correctly reported.
+func TestGetActiveTurnBySession_WithChildren(t *testing.T) {
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
