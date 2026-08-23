@@ -268,12 +268,23 @@ func (al *AgentLoop) buildCommandsRuntime(
 			}
 			return al.channelManager.GetEnabledChannels()
 		},
-		GetActiveTurn: func() any {
-			info := al.GetActiveTurn()
+		GetCurrentTurn: func() *commands.TurnInfo {
+			if opts == nil || workspaceAgent == nil {
+				return nil
+			}
+			info := al.GetActiveTurnByScope(
+				workspaceAgent.Workspace,
+				opts.Dispatch.SessionKey,
+			)
 			if info == nil {
 				return nil
 			}
-			return info
+			return &commands.TurnInfo{
+				TurnID:       info.TurnID,
+				ParentTurnID: info.ParentTurnID,
+				Depth:        info.Depth,
+				ChildTurnIDs: append([]string(nil), info.ChildTurnIDs...),
+			}
 		},
 		SwitchChannel: func(value string) error {
 			if al.channelManager == nil {

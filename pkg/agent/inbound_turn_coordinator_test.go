@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -41,6 +42,60 @@ type postAcceptBlockingBus struct {
 	*bus.MessageBus
 	accepted chan struct{}
 	release  chan struct{}
+}
+
+type coordinatorFeedbackChannel struct {
+	fakeChannel
+	events chan bus.OutboundMessage
+}
+
+func newCoordinatorFeedbackChannel() *coordinatorFeedbackChannel {
+	return &coordinatorFeedbackChannel{events: make(chan bus.OutboundMessage, 16)}
+}
+
+func (c *coordinatorFeedbackChannel) Send(
+	ctx context.Context,
+	msg bus.OutboundMessage,
+) ([]string, error) {
+	select {
+	case c.events <- msg:
+		return []string{"message"}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *coordinatorFeedbackChannel) EditMessage(
+	ctx context.Context,
+	chatID, _ string, content string,
+) error {
+	select {
+	case c.events <- bus.OutboundMessage{ChatID: chatID, Content: content}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func receiveCoordinatorFeedbackChannelMessage(
+	t *testing.T,
+	channel *coordinatorFeedbackChannel,
+	contentSubstring string,
+) bus.OutboundMessage {
+	t.Helper()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case msg := <-channel.events:
+			if strings.Contains(msg.Content, contentSubstring) {
+				return msg
+			}
+		case <-timer.C:
+			t.Fatalf("timeout waiting for channel content containing %q", contentSubstring)
+			return bus.OutboundMessage{}
+		}
+	}
 }
 
 func (b *postAcceptBlockingBus) PublishOutbound(ctx context.Context, msg bus.OutboundMessage) error {
@@ -1307,6 +1362,206 @@ func TestAcquireTurnCapacityDoesNotHoldAdmissionWhileWaitingForWorker(t *testing
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for capacity acquisition")
+	}
+}
+
+func TestInboundTurnCoordinatorHandlesSubagentsBeforeSessionClaim(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		active      bool
+		wantReply   string
+		wantActive  int
+		wantInterim bool
+	}{
+		{name: "idle", wantReply: "No active tasks running in this session."},
+		{name: "active", active: true, wantReply: "turn-active", wantActive: 1, wantInterim: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+			defer cleanup()
+			agent := al.registry.GetDefaultAgent()
+			if agent == nil {
+				t.Fatal("default agent is unavailable")
+			}
+
+			sessionKey := session.BuildOpaqueSessionKey("coordinator-subagents-" + tt.name)
+			scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
+			if tt.active {
+				al.activeTurnStates.Store(scope, &turnState{
+					turnID:       "turn-active",
+					agentID:      agent.ID,
+					workspace:    agent.Workspace,
+					sessionKey:   sessionKey,
+					phase:        TurnPhaseRunning,
+					childTurnIDs: []string{"child-active"},
+				})
+				defer al.activeTurnStates.Delete(scope)
+			}
+
+			msg := bus.NormalizeInboundMessage(bus.InboundMessage{
+				Context:    bus.InboundContext{Channel: "cli", ChatID: "direct", SenderID: "owner"},
+				Content:    "/subagents",
+				SessionKey: sessionKey,
+			})
+			newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
+
+			outbound := receiveCoordinatorCommandReply(t, msgBus)
+			if !strings.Contains(outbound.Content, tt.wantReply) {
+				t.Fatalf("/subagents reply = %q, want substring %q", outbound.Content, tt.wantReply)
+			}
+			metadata := bus.OutboundMetadataFromMessage(outbound)
+			if metadata.IsInterim() != tt.wantInterim || metadata.IsFinal() == tt.wantInterim {
+				t.Fatalf(
+					"/subagents outbound metadata = %#v, want interim=%v",
+					metadata,
+					tt.wantInterim,
+				)
+			}
+			if got := al.ActiveTurnCount(); got != tt.wantActive {
+				t.Fatalf("active turns after /subagents = %d, want %d", got, tt.wantActive)
+			}
+			if got := al.pendingSteeringCountForScope(scope); got != 0 {
+				t.Fatalf("queued steering after /subagents = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestInboundTurnCoordinatorActiveSubagentsDoesNotFinalizeToolFeedback(t *testing.T) {
+	al, cfg, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	channel := newCoordinatorFeedbackChannel()
+	manager := newStartedTestChannelManagerWithConfig(t, cfg, msgBus, nil, "telegram", channel)
+	al.SetChannelManager(manager)
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("default agent is unavailable")
+	}
+	sessionKey := session.BuildOpaqueSessionKey("coordinator-subagents-feedback")
+	scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
+	activeTurn := &turnState{
+		agent:        agent,
+		turnID:       "turn-active",
+		agentID:      agent.ID,
+		workspace:    agent.Workspace,
+		sessionKey:   sessionKey,
+		phase:        TurnPhaseRunning,
+		channel:      "telegram",
+		chatID:       "direct",
+		childTurnIDs: []string{"child-active"},
+		opts: turnSpec{Dispatch: DispatchRequest{
+			SessionKey: sessionKey,
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram",
+				ChatID:  "direct",
+			},
+		}},
+	}
+	al.activeTurnStates.Store(scope, activeTurn)
+	defer al.activeTurnStates.Delete(scope)
+
+	publishFeedback := func(content string) {
+		t.Helper()
+		msg := outboundMessageForTurnWithOptions(
+			activeTurn,
+			content,
+			outboundTurnMessageOptions{kind: messageKindToolFeedback},
+		)
+		if err := al.bus.PublishOutbound(t.Context(), msg); err != nil {
+			t.Fatalf("PublishOutbound(%q) error = %v", content, err)
+		}
+	}
+
+	publishFeedback("before-inspection")
+	receiveCoordinatorFeedbackChannelMessage(t, channel, "before-inspection")
+
+	msg := bus.NormalizeInboundMessage(bus.InboundMessage{
+		Context:    bus.InboundContext{Channel: "telegram", ChatID: "direct", SenderID: "owner"},
+		Content:    "/subagents",
+		SessionKey: sessionKey,
+	})
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
+	inspection := receiveCoordinatorFeedbackChannelMessage(t, channel, "turn-active")
+	metadata := bus.OutboundMetadataFromMessage(inspection)
+	if !metadata.IsInterim() || metadata.IsFinal() {
+		t.Fatalf("active /subagents metadata = %#v, want interim", metadata)
+	}
+
+	publishFeedback("after-inspection")
+	receiveCoordinatorFeedbackChannelMessage(t, channel, "after-inspection")
+}
+
+func TestInboundTurnCoordinatorSubagentsUsesRoutedWorkspace(t *testing.T) {
+	firstWorkspace := t.TempDir()
+	secondWorkspace := t.TempDir()
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Defaults: config.AgentDefaults{
+			Workspace:         firstWorkspace,
+			ModelName:         "test-model",
+			MaxTokens:         4096,
+			MaxToolIterations: 10,
+			ContextManager:    "none",
+		},
+		List: []config.AgentConfig{
+			{ID: "first", Default: true},
+			{ID: "second", Workspace: secondWorkspace},
+		},
+		Dispatch: &config.DispatchConfig{Rules: []config.DispatchRule{{
+			Name: "second-channel", Agent: "second",
+			When: config.DispatchSelector{Channel: "second"},
+		}}},
+	}}
+	msgBus := bus.NewMessageBus()
+	al := NewAgentLoop(cfg, msgBus, &mockProvider{})
+	defer al.Close()
+
+	first, firstOK := al.registry.GetAgent("first")
+	second, secondOK := al.registry.GetAgent("second")
+	if !firstOK || !secondOK {
+		t.Fatal("routed agents are unavailable")
+	}
+	sessionKey := session.BuildOpaqueSessionKey("coordinator-subagents-shared")
+	firstScope := newRuntimeSessionScope(first.Workspace, sessionKey)
+	secondScope := newRuntimeSessionScope(second.Workspace, sessionKey)
+	al.activeTurnStates.Store(firstScope, &turnState{
+		turnID: "turn-first", agentID: first.ID, workspace: first.Workspace,
+		sessionKey: sessionKey, phase: TurnPhaseRunning,
+	})
+	al.activeTurnStates.Store(secondScope, &turnState{
+		turnID: "turn-second", agentID: second.ID, workspace: second.Workspace,
+		sessionKey: sessionKey, phase: TurnPhaseRunning,
+	})
+	defer al.activeTurnStates.Delete(firstScope)
+	defer al.activeTurnStates.Delete(secondScope)
+
+	msg := bus.NormalizeInboundMessage(bus.InboundMessage{
+		Context:    bus.InboundContext{Channel: "second", ChatID: "direct", SenderID: "owner"},
+		Content:    "/subagents",
+		SessionKey: sessionKey,
+	})
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
+
+	outbound := receiveCoordinatorCommandReply(t, msgBus)
+	if !strings.Contains(outbound.Content, "turn-second") || strings.Contains(outbound.Content, "turn-first") {
+		t.Fatalf("/subagents routed reply = %q, want only second workspace turn", outbound.Content)
+	}
+	if got := al.pendingSteeringCountForScope(firstScope); got != 0 {
+		t.Fatalf("first workspace queued steering = %d, want 0", got)
+	}
+	if got := al.pendingSteeringCountForScope(secondScope); got != 0 {
+		t.Fatalf("second workspace queued steering = %d, want 0", got)
+	}
+}
+
+func receiveCoordinatorCommandReply(t *testing.T, msgBus *bus.MessageBus) bus.OutboundMessage {
+	t.Helper()
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		return outbound
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for coordinator command reply")
+		return bus.OutboundMessage{}
 	}
 }
 

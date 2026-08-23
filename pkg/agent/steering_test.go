@@ -1281,7 +1281,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 		t.Fatal("timeout waiting for tool_one to start")
 	}
 
-	if err := steerActiveForTest(al, providers.Message{Role: "user", Content: "change course"}); err != nil {
+	if err := steerActiveForTest(t, al, providers.Message{Role: "user", Content: "change course"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1921,7 +1921,7 @@ func TestAgentLoop_Run_ReleasesInjectedSteeringSpoolOnContinuationSaveFailure(t 
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for first provider call to start")
 	}
-	active := al.GetActiveTurn()
+	active := onlyActiveTurnForTest(t, al)
 	if active == nil || active.SessionKey == "" {
 		t.Fatal("expected active turn with session key")
 	}
@@ -2352,7 +2352,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 		t.Fatal("timeout waiting for first LLM call to start")
 	}
 
-	if err := steerActiveForTest(al, providers.Message{Role: "user", Content: "follow-up instruction"}); err != nil {
+	if err := steerActiveForTest(t, al, providers.Message{Role: "user", Content: "follow-up instruction"}); err != nil {
 		t.Fatalf("Steer failed: %v", err)
 	}
 	close(provider.releaseFirst)
@@ -2434,7 +2434,7 @@ func TestAgentLoop_Steering_DirectResponseInjectsQueuedMessageOnce(t *testing.T)
 		t.Fatal("timeout waiting for first LLM call to start")
 	}
 
-	if err := steerActiveForTest(al, providers.Message{Role: "user", Content: "single follow-up"}); err != nil {
+	if err := steerActiveForTest(t, al, providers.Message{Role: "user", Content: "single follow-up"}); err != nil {
 		t.Fatalf("Steer failed: %v", err)
 	}
 	close(provider.releaseFirst)
@@ -2630,7 +2630,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 	}
 }
 
-func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
+func TestAgentLoop_InterruptGracefulSession_UsesTerminalNoToolCall(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -2715,7 +2715,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 		t.Fatal("timeout waiting for tool_one to start")
 	}
 
-	active := al.GetActiveTurn()
+	active := onlyActiveTurnForTest(t, al)
 	if active == nil {
 		t.Fatal("expected active turn while tool is running")
 	}
@@ -2742,8 +2742,8 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 		t.Fatal("timeout waiting for graceful interrupt result")
 	}
 
-	if active := al.GetActiveTurn(); active != nil {
-		t.Fatalf("expected no active turn after completion, got %#v", active)
+	if activeTurns := al.ActiveTurnCount(); activeTurns != 0 {
+		t.Fatalf("expected no active turn after completion, got %d", activeTurns)
 	}
 
 	provider.mu.Lock()
@@ -2892,7 +2892,7 @@ func TestAgentLoop_HardAbort_AfterToolStartPreservesTerminalResult(t *testing.T)
 		t.Fatal("timeout waiting for interruptible tool to start")
 	}
 
-	if active := al.GetActiveTurn(); active == nil {
+	if active := onlyActiveTurnForTest(t, al); active == nil {
 		t.Fatal("expected active turn before hard abort")
 	}
 
@@ -2912,8 +2912,8 @@ func TestAgentLoop_HardAbort_AfterToolStartPreservesTerminalResult(t *testing.T)
 		t.Fatal("timeout waiting for hard abort result")
 	}
 
-	if active := al.GetActiveTurn(); active != nil {
-		t.Fatalf("expected no active turn after hard abort, got %#v", active)
+	if activeTurns := al.ActiveTurnCount(); activeTurns != 0 {
+		t.Fatalf("expected no active turn after hard abort, got %d", activeTurns)
 	}
 
 	finalHistory := defaultAgent.Sessions.GetHistory(sessionKey)
@@ -3207,7 +3207,7 @@ func TestAgentLoop_SteeringPreservesBatchAndReachesNextModelIteration(t *testing
 	}()
 
 	<-execCh
-	if err := steerActiveForTest(al, providers.Message{Role: "user", Content: "interrupt!"}); err != nil {
+	if err := steerActiveForTest(t, al, providers.Message{Role: "user", Content: "interrupt!"}); err != nil {
 		t.Fatal(err)
 	}
 
