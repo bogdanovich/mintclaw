@@ -485,37 +485,6 @@ func (al *AgentLoop) uniqueActiveTurnForSession(sessionKey string) (*turnState, 
 	return found, ambiguous
 }
 
-// getAnyActiveTurnState returns any active turn state (for backward compatibility)
-func (al *AgentLoop) getAnyActiveTurnState() *turnState {
-	var firstTS *turnState
-	al.activeTurnStates.Range(func(key, value any) bool {
-		if ts, ok := value.(*turnState); ok {
-			firstTS = ts
-			return false
-		}
-		return true
-	})
-	return firstTS
-}
-
-func (al *AgentLoop) GetActiveTurn() *ActiveTurnInfo {
-	// For backward compatibility, return the first active turn found
-	// In the new architecture, there can be multiple concurrent turns
-	var firstTS *turnState
-	al.activeTurnStates.Range(func(key, value any) bool {
-		if ts, ok := value.(*turnState); ok {
-			firstTS = ts
-			return false
-		}
-		return true
-	})
-	if firstTS == nil {
-		return nil
-	}
-	info := firstTS.snapshot()
-	return &info
-}
-
 func (al *AgentLoop) ActiveTurnCount() int {
 	if al == nil {
 		return 0
