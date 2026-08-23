@@ -47,6 +47,16 @@ func Test_markdownToTelegramMarkdownV2(t *testing.T) {
 			expected: "o",
 		},
 		{
+			name:     "technical identifiers are escaped instead of italicized",
+			input:    "browser_act external_commit",
+			expected: `browser\_act external\_commit`,
+		},
+		{
+			name:     "ordinary italic remains supported",
+			input:    "_italic text_",
+			expected: "_italic text_",
+		},
+		{
 			name:     "rich subscript footer degrades to plain text",
 			input:    "reply\n\n<a name=\"mintclaw-response-footer\"></a><sub>model: fallback</sub>",
 			expected: "reply\n\nmodel: fallback",

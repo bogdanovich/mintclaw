@@ -31,9 +31,10 @@ var mdV2SpecialChars = map[rune]bool{
 
 // entityPattern describes one Telegram MarkdownV2 inline entity type.
 type entityPattern struct {
-	re    *regexp.Regexp
-	open  string
-	close string
+	re                   *regexp.Regexp
+	open                 string
+	close                string
+	underscoreBoundaries bool
 }
 
 // allEntityPatterns lists every recognized entity in priority order
@@ -59,7 +60,10 @@ var allEntityPatterns = []entityPattern{
 	// bold  *…*
 	{re: regexp.MustCompile(`\*(?:[^*\\\n]|\\.)*\*`), open: "*", close: "*"},
 	// italic  _…_
-	{re: regexp.MustCompile(`_(?:[^_\\\n]|\\.)*_`), open: "_", close: "_"},
+	{
+		re: regexp.MustCompile(`_(?:[^_\\\n]|\\.)*_`), open: "_", close: "_",
+		underscoreBoundaries: true,
+	},
 	// strikethrough  ~…~
 	{re: regexp.MustCompile(`~(?:[^~\\\n]|\\.)*~`), open: "~", close: "~"},
 }
@@ -124,7 +128,7 @@ func processText(text string) string {
 
 	for i := range allEntityPatterns {
 		p := &allEntityPatterns[i]
-		loc := p.re.FindStringIndex(text)
+		loc := findEntityIndex(text, p)
 		if loc == nil {
 			continue
 		}
@@ -171,6 +175,23 @@ func processText(text string) string {
 	b.WriteString(processText(text[bestEnd:]))
 
 	return b.String()
+}
+
+func findEntityIndex(text string, pattern *entityPattern) []int {
+	searchFrom := 0
+	for searchFrom < len(text) {
+		loc := pattern.re.FindStringIndex(text[searchFrom:])
+		if loc == nil {
+			return nil
+		}
+		loc[0] += searchFrom
+		loc[1] += searchFrom
+		if !pattern.underscoreBoundaries || markdownUnderscoreBoundaries(text, loc[0], loc[1]) {
+			return loc
+		}
+		searchFrom = loc[0] + 1
+	}
+	return nil
 }
 
 // escapeMarkdownV2 escapes every MarkdownV2 special character in a plain-text

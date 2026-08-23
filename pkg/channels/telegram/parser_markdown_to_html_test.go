@@ -33,6 +33,16 @@ func TestMarkdownToTelegramHTML(t *testing.T) {
 			expected: "<i>italic text</i>",
 		},
 		{
+			name:     "technical identifiers keep intraword underscores",
+			input:    "browser_act\nAllow action with external_commit effect",
+			expected: "browser_act\nAllow action with external_commit effect",
+		},
+		{
+			name:     "adjacent italic spans remain supported",
+			input:    "_first_ _second_",
+			expected: "<i>first</i> <i>second</i>",
+		},
+		{
 			name:     "link without underscores in URL",
 			input:    "[click here](https://example.com/path)",
 			expected: `<a href="https://example.com/path">click here</a>`,

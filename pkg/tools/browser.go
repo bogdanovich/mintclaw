@@ -1652,28 +1652,38 @@ func browserApprovalSummary(preparation browser.Preparation) string {
 	if action.DestinationOrigin != "" {
 		origin = action.DestinationOrigin
 	}
-	target := ""
+	description := "Browser " + string(action.Action.Kind) + " action"
 	if action.ElementRole != "" {
-		target = " for " + action.ElementRole
+		description = browserApprovalVerb(action.Action.Kind) + " " + action.ElementRole
 		if action.ElementName != "" {
-			target += fmt.Sprintf(" %q", action.ElementName)
+			description += fmt.Sprintf(" %q", action.ElementName)
 		}
 		if action.Action.Kind == browser.ActionDrag {
-			target += " to " + action.DestinationElementRole
+			description += " to " + action.DestinationElementRole
 			if action.DestinationElementName != "" {
-				target += fmt.Sprintf(" %q", action.DestinationElementName)
+				description += fmt.Sprintf(" %q", action.DestinationElementName)
 			}
 		}
 	} else if action.Action.Kind == browser.ActionPress {
-		target = fmt.Sprintf(" for document key %q", action.Action.Key)
+		description = fmt.Sprintf("Press document key %q", action.Action.Key)
 	}
 	return fmt.Sprintf(
-		"Allow browser %s action%s with %s effect on %s?",
-		action.Action.Kind,
-		target,
-		action.Effect,
+		"%s on %s\nEffect: `%s`",
+		description,
 		origin,
+		action.Effect,
 	)
+}
+
+func browserApprovalVerb(kind browser.ActionKind) string {
+	switch kind {
+	case browser.ActionClick:
+		return "Click"
+	case browser.ActionDrag:
+		return "Drag"
+	default:
+		return "Use"
+	}
 }
 
 func browserOwnerFromContext(ctx context.Context) (browser.Owner, error) {
