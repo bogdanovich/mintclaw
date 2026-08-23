@@ -1216,6 +1216,7 @@ func TestProcessMessage_BeforeLLMModelRewriteReevaluatesThinkingOff(t *testing.T
 	msgBus := bus.NewMessageBus()
 	provider := &reasoningOptionRecordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	useTestSideQuestionProvider(al, provider)
 	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "off-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
@@ -1268,6 +1269,7 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 			{
 				ModelName: "plain-model",
 				Model:     "openai/plain-model",
+				Enabled:   true,
 			},
 		},
 	}
@@ -1275,6 +1277,7 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 	msgBus := bus.NewMessageBus()
 	provider := &reasoningOptionRecordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
+	useTestSideQuestionProvider(al, provider)
 	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "plain-model"})); err != nil {
 		t.Fatalf("MountHook failed: %v", err)
 	}
@@ -1304,6 +1307,60 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("expected reasoning outbound after hook rewrote away from off model")
+	}
+}
+
+func TestProcessMessage_BeforeLLMModelRewriteComparesConfiguredNames(t *testing.T) {
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         t.TempDir(),
+				ModelName:         "primary-alias",
+				MaxTokens:         4096,
+				MaxToolIterations: 10,
+			},
+		},
+		Session: config.SessionConfig{Dimensions: []string{"chat"}},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName: "primary-alias",
+				Provider:  "openai",
+				Model:     "target-alias",
+				Enabled:   true,
+			},
+			{
+				ModelName: "target-alias",
+				Provider:  "openai",
+				Model:     "target-native-model",
+				Enabled:   true,
+			},
+		},
+	}
+
+	provider := &recordingProvider{}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	al.providerFactory = func(mc *config.ModelConfig) (providers.LLMProvider, string, error) {
+		_, modelID := providers.ExtractProtocol(mc)
+		return provider, modelID, nil
+	}
+	if err := al.MountHook(NamedHook("rewrite-model", modelRewriteHook{model: "target-alias"})); err != nil {
+		t.Fatalf("MountHook failed: %v", err)
+	}
+
+	response, err := al.processMessage(context.Background(), bus.InboundMessage{
+		Channel:  "mintclaw",
+		SenderID: "user1",
+		ChatID:   "mintclaw:model-name-collision",
+		Content:  "hello",
+	})
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "Mock response" {
+		t.Fatalf("processMessage() response = %q, want Mock response", response)
+	}
+	if provider.lastModel != "target-native-model" {
+		t.Fatalf("provider model = %q, want target-native-model", provider.lastModel)
 	}
 }
 
@@ -1359,8 +1416,15 @@ func TestApplyBeforeLLMModelRewrite_RebuildsExecutionProviders(t *testing.T) {
 	}
 
 	originalProvider := exec.model.activeProvider
+	whitespaceLLM := &LLMIterationState{llmModel: " hook-model "}
+	if err := pipeline.applyBeforeLLMModelRewrite(ts, exec, whitespaceLLM); err == nil ||
+		!strings.Contains(err.Error(), "surrounding whitespace") {
+		t.Fatalf("applyBeforeLLMModelRewrite() whitespace error = %v", err)
+	}
 	llm := &LLMIterationState{llmModel: "hook-model"}
-	pipeline.applyBeforeLLMModelRewrite(ts, exec, llm)
+	if err := pipeline.applyBeforeLLMModelRewrite(ts, exec, llm); err != nil {
+		t.Fatalf("applyBeforeLLMModelRewrite() error = %v", err)
+	}
 	defer func() {
 		if exec.model.cleanup != nil {
 			exec.model.cleanup()
@@ -1599,7 +1663,9 @@ func TestPipeline_CallLLM_BeforeLLMRewriteDoesNotMutateStickyAutoFallbackSelecti
 	}
 
 	llm := &LLMIterationState{llmModel: "fallback-model"}
-	pipeline.applyBeforeLLMModelRewrite(ts, exec, llm)
+	if err := pipeline.applyBeforeLLMModelRewrite(ts, exec, llm); err != nil {
+		t.Fatalf("applyBeforeLLMModelRewrite() error = %v", err)
+	}
 	defer func() {
 		if exec.model.cleanup != nil {
 			exec.model.cleanup()
@@ -1634,16 +1700,19 @@ func TestProcessMessage_BtwFallbackDoesNotInheritPrimaryThinkingOff(t *testing.T
 			Defaults: config.AgentDefaults{
 				Workspace:         tmpDir,
 				ModelName:         "test-model",
-				ModelFallbacks:    []string{"openai/fallback-model"},
+				ModelFallbacks:    []string{"fallback-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
 		},
-		ModelList: []*config.ModelConfig{{
-			ModelName:     "test-model",
-			Model:         "openai/test-model",
-			ThinkingLevel: "off",
-		}},
+		ModelList: []*config.ModelConfig{
+			{
+				ModelName:     "test-model",
+				Model:         "openai/test-model",
+				ThinkingLevel: "off",
+			},
+			{ModelName: "fallback-model", Model: "openai/fallback-model"},
+		},
 	}
 
 	al := NewAgentLoop(
@@ -1831,6 +1900,10 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 				MaxToolIterations: 10,
 			},
 		},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "test-model",
+			Model:     "openai/test-model",
+		}},
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -2052,6 +2125,11 @@ func TestProcessMessage_BtwCommandHookModelBypassesFallbackCandidates(t *testing
 				MaxToolIterations: 10,
 			},
 		},
+		ModelList: []*config.ModelConfig{
+			{ModelName: "primary-model", Model: "openai/primary-model"},
+			{ModelName: "fallback-model", Model: "openai/fallback-model"},
+			{ModelName: "hook-model", Model: "openai/hook-native-model"},
+		},
 	}
 
 	msgBus := bus.NewMessageBus()
@@ -2074,8 +2152,8 @@ func TestProcessMessage_BtwCommandHookModelBypassesFallbackCandidates(t *testing
 	if response != "Mock response" {
 		t.Fatalf("processMessage() response = %q, want %q", response, "Mock response")
 	}
-	if provider.lastModel != "hook-model" {
-		t.Fatalf("/btw model = %q, want hook-selected model", provider.lastModel)
+	if provider.lastModel != "hook-native-model" {
+		t.Fatalf("/btw model = %q, want hook-selected native model", provider.lastModel)
 	}
 }
 

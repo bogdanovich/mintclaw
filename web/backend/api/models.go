@@ -341,8 +341,11 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 		cfg.ModelList = append(cfg.ModelList, &mc.ModelConfig)
 		normalizeStoredModelProviders(cfg)
 		index = len(cfg.ModelList) - 1
-		return nil
+		return validateModelReferenceMutation(cfg)
 	})
+	if writeConfigMutationError(w, err) {
+		return
+	}
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
 		return
@@ -476,6 +479,9 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 
 		cfg.ModelList[idx] = &mc.ModelConfig
 		normalizeStoredModelProviders(cfg)
+		if validationErr := validateModelReferenceMutation(cfg); validationErr != nil {
+			return validationErr
+		}
 
 		logger.Debugf("update model config: %#v", mc.ModelConfig)
 		return nil
@@ -515,7 +521,7 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		if cfg.Agents.Defaults.ModelName == deletedModelName {
 			cfg.Agents.Defaults.ModelName = ""
 		}
-		return nil
+		return validateModelReferenceMutation(cfg)
 	})
 	if writeConfigMutationError(w, err) {
 		return
@@ -528,6 +534,16 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	writeConfigRevision(w, snapshot.Revision)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func validateModelReferenceMutation(cfg *config.Config) error {
+	if err := cfg.ValidateModelReferences(); err != nil {
+		return &configMutationRequestError{
+			status: http.StatusBadRequest,
+			err:    fmt.Errorf("validation error: %w", err),
+		}
+	}
+	return nil
 }
 
 // handleSetDefaultModel sets the default model for all agents.

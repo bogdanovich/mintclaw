@@ -31,6 +31,17 @@ explicit part of a coordinated upgrade.
   field is not accepted.
 - Removed tool names such as `tools.edit_file` are not ignored.
 
+Every chat, fallback, routing, subagent, voice, TTS, and vision selector names a
+configured `model_list[].model_name` exactly. The provider-native identifier is
+stored only in that entry's `model` field; raw model IDs, `provider/model`
+references, provider aliases, and `agents.defaults.provider` are not alternate
+selector syntaxes. A `model_name` may contain `/` when that exact text is the
+declared name, and repeated names remain valid for load balancing.
+
+Configuration loading rejects unknown references and surrounding whitespace.
+Workspace `AGENT.md` model frontmatter follows the same rule and is rejected
+when the workspace agent is constructed if its exact name is not configured.
+
 See [`config/config.example.json`](../../config/config.example.json) for a
 complete current document.
 

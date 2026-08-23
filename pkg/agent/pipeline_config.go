@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -72,16 +71,6 @@ func (p *Pipeline) filterPendingResultForLLM(content string) string {
 	return p.filterToolContentForLLM(content)
 }
 
-func pipelineDefaultProvider(cfg *config.Config) string {
-	provider := "openai"
-	if cfg != nil {
-		if configured := strings.TrimSpace(cfg.Agents.Defaults.Provider); configured != "" {
-			provider = configured
-		}
-	}
-	return effectiveDefaultProvider(provider)
-}
-
 func (p *Pipeline) modelCandidates(
 	primary string,
 	fallbacks []string,
@@ -89,7 +78,7 @@ func (p *Pipeline) modelCandidates(
 	if p == nil {
 		return nil
 	}
-	return resolveModelCandidates(p.Cfg, pipelineDefaultProvider(p.Cfg), primary, fallbacks)
+	return resolveModelCandidates(p.Cfg, primary, fallbacks)
 }
 
 func (p *Pipeline) activeModelConfig(
@@ -100,13 +89,7 @@ func (p *Pipeline) activeModelConfig(
 	if p == nil {
 		return nil
 	}
-	return resolveActiveModelConfig(
-		p.Cfg,
-		workspace,
-		candidates,
-		activeModel,
-		pipelineDefaultProvider(p.Cfg),
-	)
+	return resolveActiveModelConfig(p.Cfg, workspace, candidates, activeModel)
 }
 
 func (p *Pipeline) buildTurnMessages(

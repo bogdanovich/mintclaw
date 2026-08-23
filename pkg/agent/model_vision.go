@@ -42,7 +42,6 @@ func (m *modelExecutionManager) maybeBuildVisionExecutionState(
 		baseAgent.Workspace,
 		execution.Candidates,
 		execution.Model,
-		cfg.Agents.Defaults.Provider,
 	)
 	primary, fallbacks, ok := resolveVisionOverrideModel(activeModelConfig)
 	if !ok {
@@ -87,7 +86,6 @@ func (m *modelExecutionManager) maybeApplyVisionExecutionState(
 			baseAgent.Workspace,
 			exec.model.activeCandidates,
 			exec.model.activeModel,
-			cfg.Agents.Defaults.Provider,
 		)
 	}
 	primary, fallbacks, ok := resolveVisionOverrideModel(activeModelConfig)
@@ -112,7 +110,6 @@ func (m *modelExecutionManager) maybeApplyVisionExecutionState(
 		baseAgent.Workspace,
 		visionExecution.Candidates,
 		visionExecution.Model,
-		cfg.Agents.Defaults.Provider,
 	)
 	exec.model.llmModelName = resolvedCandidateModelName(
 		visionExecution.Candidates,

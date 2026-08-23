@@ -4,7 +4,7 @@ package agent
 
 import (
 	"context"
-	"strings"
+	"fmt"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -76,10 +76,11 @@ func (p *Pipeline) prepareLLMRequest(
 	llm.llmModel = exec.model.activeModel
 
 	if p.Interaction.Hooks != nil {
+		activeModelName := exec.model.llmModelName
 		request, decision := p.Interaction.Hooks.BeforeLLM(turnCtx, &LLMHookRequest{
 			Meta:             ts.eventMeta("runTurn", "turn.llm.request"),
 			Context:          cloneTurnContext(ts.turnCtx),
-			Model:            llm.llmModel,
+			Model:            activeModelName,
 			Messages:         llm.callMessages,
 			Tools:            llm.providerToolDefs,
 			Options:          llm.llmOpts,
@@ -88,8 +89,7 @@ func (p *Pipeline) prepareLLMRequest(
 		switch decision.normalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if request != nil {
-				previousModel := llm.llmModel
-				llm.llmModel = request.Model
+				requestedModelName := request.Model
 				llm.callMessages = request.Messages
 				llm.providerToolDefs = filterToolsByTurnProfile(request.Tools, ts.profile)
 				llm.llmOpts = request.Options
@@ -98,8 +98,14 @@ func (p *Pipeline) prepareLLMRequest(
 				if !nativeSearchAllowed {
 					delete(llm.llmOpts, "native_search")
 				}
-				if strings.TrimSpace(llm.llmModel) != "" && llm.llmModel != previousModel {
-					p.applyBeforeLLMModelRewrite(ts, exec, llm)
+				if requestedModelName != activeModelName {
+					if err := requireExactModelName(requestedModelName); err != nil {
+						return llmStageResult{}, fmt.Errorf("before_llm model: %w", err)
+					}
+					llm.llmModel = requestedModelName
+					if err := p.applyBeforeLLMModelRewrite(ts, exec, llm); err != nil {
+						return llmStageResult{}, err
+					}
 					applyTurnThinkingOptions(exec, llm, execution, exec.model.activeProvider, true)
 				}
 			}

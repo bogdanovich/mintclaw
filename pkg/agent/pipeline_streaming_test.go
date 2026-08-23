@@ -1041,6 +1041,7 @@ func TestConfiguredStreamingBeforeLLMModelRewriteReevaluatesModelStreaming(t *te
 				Provider:  "openai",
 				Model:     "openai/" + tt.rewriteModel,
 				Streaming: config.ModelStreamingConfig{Enabled: tt.rewriteModelStreaming},
+				Enabled:   true,
 			})
 			streamer := &recordingStreamer{}
 			msgBus := bus.NewMessageBus()
@@ -1052,6 +1053,7 @@ func TestConfiguredStreamingBeforeLLMModelRewriteReevaluatesModelStreaming(t *te
 				}},
 			}
 			al := NewAgentLoop(cfg, msgBus, provider)
+			useTestSideQuestionProvider(al, provider)
 			if err := al.MountHook(NamedHook("rewrite-model", configuredStreamingBeforeModelHook{
 				model: tt.rewriteModel,
 			})); err != nil {

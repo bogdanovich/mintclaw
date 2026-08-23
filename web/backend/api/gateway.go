@@ -25,7 +25,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/netbind"
 	ppid "github.com/bogdanovich/mintclaw/pkg/pid"
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/web/backend/utils"
 )
 
@@ -495,10 +494,6 @@ func computeModelStreamingSignatures(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil
 	}
-	defaultProvider := strings.TrimSpace(cfg.Agents.Defaults.Provider)
-	if defaultProvider == "" {
-		defaultProvider = "openai"
-	}
 	names := []string{strings.TrimSpace(cfg.Agents.Defaults.GetModelName())}
 	names = append(names, cfg.Agents.Defaults.ModelFallbacks...)
 	if cfg.Agents.Defaults.Routing != nil {
@@ -521,7 +516,7 @@ func computeModelStreamingSignatures(cfg *config.Config) []string {
 			continue
 		}
 		seenNames[name] = true
-		for _, match := range modelConfigsMatchingSignatureRef(cfg.ModelList, name, defaultProvider) {
+		for _, match := range modelConfigsMatchingName(cfg.ModelList, name) {
 			mc := match.model
 			entry := strings.Join([]string{
 				name,
@@ -546,92 +541,21 @@ type signatureModelConfigMatch struct {
 	model *config.ModelConfig
 }
 
-func modelConfigsMatchingSignatureRef(
+func modelConfigsMatchingName(
 	modelList []*config.ModelConfig,
-	raw string,
-	defaultProvider string,
+	name string,
 ) []signatureModelConfigMatch {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	if name == "" {
 		return nil
 	}
 	matches := make([]signatureModelConfigMatch, 0, 1)
 	for i, mc := range modelList {
-		if mc == nil || strings.TrimSpace(mc.ModelName) != raw {
+		if mc == nil || mc.ModelName != name {
 			continue
 		}
 		matches = append(matches, signatureModelConfigMatch{index: i, model: mc})
 	}
-	if len(matches) > 0 {
-		return matches
-	}
-	for i, mc := range modelList {
-		if mc == nil || strings.TrimSpace(mc.Model) != raw {
-			continue
-		}
-		return []signatureModelConfigMatch{{index: i, model: mc}}
-	}
-	for i, mc := range modelList {
-		if modelConfigMatchesBareRef(mc, raw, defaultProvider) {
-			return []signatureModelConfigMatch{{index: i, model: mc}}
-		}
-	}
-
-	rawRef := providers.ParseModelRef(raw, "")
-	rawHasProvider := rawRef != nil && hasUnambiguousProviderPrefix(raw) &&
-		strings.TrimSpace(rawRef.Provider) != "" && strings.TrimSpace(rawRef.Model) != ""
-	if rawHasProvider {
-		for i, mc := range modelList {
-			if modelConfigMatchesProviderRef(mc, raw) {
-				return []signatureModelConfigMatch{{index: i, model: mc}}
-			}
-		}
-	}
-	return nil
-}
-
-func hasUnambiguousProviderPrefix(raw string) bool {
-	provider, _, found := strings.Cut(strings.TrimSpace(raw), "/")
-	if !found {
-		return false
-	}
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	if provider == "" {
-		return false
-	}
-	normalizedProvider := providers.NormalizeProvider(provider)
-	return providers.IsSupportedModelProvider(normalizedProvider)
-}
-
-func modelConfigMatchesProviderRef(mc *config.ModelConfig, raw string) bool {
-	if mc == nil {
-		return false
-	}
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return false
-	}
-	rawRef := providers.ParseModelRef(raw, "")
-	if rawRef == nil || strings.TrimSpace(rawRef.Provider) == "" || strings.TrimSpace(rawRef.Model) == "" {
-		return false
-	}
-	protocol, modelID := providers.ExtractProtocol(mc)
-	return providers.ModelKey(protocol, modelID) == providers.ModelKey(rawRef.Provider, rawRef.Model)
-}
-
-func modelConfigMatchesBareRef(mc *config.ModelConfig, raw string, defaultProvider string) bool {
-	if mc == nil {
-		return false
-	}
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return false
-	}
-	protocol, modelID := providers.ExtractProtocol(mc)
-	if strings.TrimSpace(modelID) != raw {
-		return false
-	}
-	return providers.NormalizeProvider(protocol) == providers.NormalizeProvider(defaultProvider)
+	return matches
 }
 
 func computeChannelSignatures(channels config.ChannelsConfig) []string {

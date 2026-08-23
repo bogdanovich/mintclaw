@@ -721,6 +721,14 @@ Implementation sequence:
     GitHub settings, list-shaped registry input, direct security entries,
     merge/PATCH fallbacks, and the JSON-first metadata parser; configuration,
     security overlays, and runtime lookup use the same registry map.
+15. Make cron mutations one error-returning current contract. Delete implicit
+    legacy defaults and ensure failed persistence cannot leave an in-memory job
+    mutation committed.
+16. Make configured `model_name` the sole model selector identity. Reject
+    dangling static references during config load, reject unknown workspace
+    frontmatter at agent construction, and delete raw model-ID,
+    `provider/model`, provider-alias, and default-provider inference from agent
+    resolution and gateway restart signatures.
 
 Exit criteria:
 

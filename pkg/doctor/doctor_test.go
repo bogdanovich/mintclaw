@@ -25,7 +25,7 @@ func TestRunStableOrderingAndJSONSchema(t *testing.T) {
   "version": 3,
   "gateway": {"host": "0.0.0.0"},
   "agents": {"defaults": {"workspace": "`+dir+`", "restrict_to_workspace": true, "max_tokens": 200, "context_window": 100, "summarize_token_percent": 75}},
-  "model_list": [{"model_name": "a", "provider": "openai", "model": "a", "enabled": true, "fallbacks": ["missing"]}],
+  "model_list": [{"model_name": "a", "provider": "openai", "model": "a", "enabled": true, "fallbacks": ["a"]}],
   "channel_list": {}
 }`)
 
@@ -127,24 +127,6 @@ func TestFileAndEnvCredentialReferencesAreNotPlaintextFindings(t *testing.T) {
 			t.Fatalf("unexpected plaintext finding for reference credential: %+v", finding)
 		}
 	}
-}
-
-func TestDefaultAgentFallbackReferencesAreAudited(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.ModelList = config.SecureModelList{
-		&config.ModelConfig{ModelName: "primary"},
-	}
-	cfg.Agents.Defaults.ModelName = "primary"
-	cfg.Agents.Defaults.ModelFallbacks = []string{"missing"}
-
-	findings := checkFallbacks(cfg)
-	for _, finding := range findings {
-		if finding.ID == CheckAgentFallbackMissing && len(finding.Evidence) == 1 &&
-			finding.Evidence[0].Path == "agents.defaults.model_name" {
-			return
-		}
-	}
-	t.Fatalf("missing defaults fallback finding: %+v", findings)
 }
 
 func TestToolApprovalAllowAllIsFailFinding(t *testing.T) {

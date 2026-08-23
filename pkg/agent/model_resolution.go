@@ -8,15 +8,14 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-func ensureProtocolModel(model string) string {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return ""
+func requireExactModelName(value string) error {
+	if value == "" {
+		return fmt.Errorf("model_name is required")
 	}
-	if strings.Contains(model, "/") {
-		return model
+	if value != strings.TrimSpace(value) {
+		return fmt.Errorf("model_name must not have surrounding whitespace")
 	}
-	return "openai/" + model
+	return nil
 }
 
 func modelConfigIdentityKey(mc *config.ModelConfig) string {
@@ -29,15 +28,7 @@ func modelConfigIdentityKey(mc *config.ModelConfig) string {
 	return ""
 }
 
-func effectiveDefaultProvider(defaultProvider string) string {
-	defaultProvider = strings.TrimSpace(defaultProvider)
-	if defaultProvider == "" {
-		return "openai"
-	}
-	return providers.NormalizeProvider(defaultProvider)
-}
-
-func modelProviderAndIDForResolution(defaultProvider string, mc *config.ModelConfig) (provider string, modelID string) {
+func modelProviderAndIDForResolution(mc *config.ModelConfig) (provider string, modelID string) {
 	if mc == nil {
 		return "", ""
 	}
@@ -45,7 +36,6 @@ func modelProviderAndIDForResolution(defaultProvider string, mc *config.ModelCon
 }
 
 func cloneModelConfigForResolution(
-	defaultProvider string,
 	mc *config.ModelConfig,
 	workspace string,
 ) *config.ModelConfig {
@@ -60,14 +50,13 @@ func cloneModelConfigForResolution(
 }
 
 func candidateFromModelConfig(
-	defaultProvider string,
 	mc *config.ModelConfig,
 ) (providers.FallbackCandidate, bool) {
 	if mc == nil {
 		return providers.FallbackCandidate{}, false
 	}
 
-	protocol, modelID := modelProviderAndIDForResolution(defaultProvider, mc)
+	protocol, modelID := modelProviderAndIDForResolution(mc)
 	if strings.TrimSpace(modelID) == "" {
 		return providers.FallbackCandidate{}, false
 	}
@@ -81,82 +70,23 @@ func candidateFromModelConfig(
 	}, true
 }
 
-func lookupModelConfigByRef(cfg *config.Config, raw string, defaultProvider ...string) *config.ModelConfig {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || cfg == nil {
-		return nil
-	}
-
-	if mc, err := cfg.GetModelConfig(raw); err == nil && mc != nil && strings.TrimSpace(mc.Model) != "" {
-		return mc
-	}
-
-	rawRef := providers.ParseModelRef(raw, "")
-	rawKey := ""
-	if rawRef != nil && strings.TrimSpace(rawRef.Provider) != "" && strings.TrimSpace(rawRef.Model) != "" {
-		rawKey = providers.ModelKey(rawRef.Provider, rawRef.Model)
-	}
-
-	fallbackProvider := ""
-	if len(defaultProvider) > 0 {
-		fallbackProvider = effectiveDefaultProvider(defaultProvider[0])
-	}
-	for i := range cfg.ModelList {
-		mc := cfg.ModelList[i]
-		if mc == nil {
-			continue
-		}
-		fullModel := strings.TrimSpace(mc.Model)
-		if fullModel == "" {
-			continue
-		}
-		protocol, modelID := modelProviderAndIDForResolution(fallbackProvider, mc)
-		if fullModel == raw {
-			return mc
-		}
-		if modelID == raw {
-			if fallbackProvider == "" || providers.NormalizeProvider(protocol) == fallbackProvider {
-				return mc
-			}
-		}
-		if rawKey != "" && providers.ModelKey(protocol, modelID) == rawKey {
-			return mc
-		}
-	}
-
-	return nil
-}
-
 func resolveModelCandidate(
 	cfg *config.Config,
-	defaultProvider string,
-	raw string,
+	modelName string,
 ) (providers.FallbackCandidate, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" || cfg == nil {
 		return providers.FallbackCandidate{}, false
 	}
-	defaultProvider = effectiveDefaultProvider(defaultProvider)
-
-	if mc := lookupModelConfigByRef(cfg, raw, defaultProvider); mc != nil {
-		return candidateFromModelConfig(defaultProvider, mc)
-	}
-
-	ref := providers.ParseModelRef(raw, defaultProvider)
-	if ref == nil {
+	mc, err := cfg.GetModelConfig(modelName)
+	if err != nil || mc == nil {
 		return providers.FallbackCandidate{}, false
 	}
-
-	return providers.FallbackCandidate{
-		Provider:    ref.Provider,
-		Model:       ref.Model,
-		DisplayName: raw,
-	}, true
+	return candidateFromModelConfig(mc)
 }
 
 func resolveModelCandidates(
 	cfg *config.Config,
-	defaultProvider string,
 	primary string,
 	fallbacks []string,
 ) []providers.FallbackCandidate {
@@ -164,7 +94,7 @@ func resolveModelCandidates(
 	candidates := make([]providers.FallbackCandidate, 0, 1+len(fallbacks))
 
 	addCandidate := func(raw string) {
-		candidate, ok := resolveModelCandidate(cfg, defaultProvider, raw)
+		candidate, ok := resolveModelCandidate(cfg, raw)
 		if !ok {
 			return
 		}
@@ -261,12 +191,10 @@ func resolveActiveModelConfig(
 	workspace string,
 	candidates []providers.FallbackCandidate,
 	activeModel string,
-	defaultProvider string,
 ) *config.ModelConfig {
 	if cfg == nil {
 		return nil
 	}
-	defaultProvider = effectiveDefaultProvider(defaultProvider)
 
 	if len(candidates) > 0 {
 		candidate := candidates[0]
@@ -276,26 +204,17 @@ func resolveActiveModelConfig(
 				if mc == nil || modelConfigIdentityKey(mc) != identityKey {
 					continue
 				}
-				protocol, modelID := modelProviderAndIDForResolution(defaultProvider, mc)
+				protocol, modelID := modelProviderAndIDForResolution(mc)
 				if providers.ModelKey(protocol, modelID) == providers.ModelKey(candidate.Provider, candidate.Model) {
-					return cloneModelConfigForResolution(defaultProvider, mc, workspace)
+					return cloneModelConfigForResolution(mc, workspace)
 				}
-			}
-		}
-		for _, mc := range cfg.ModelList {
-			if mc == nil {
-				continue
-			}
-			protocol, modelID := modelProviderAndIDForResolution(defaultProvider, mc)
-			if providers.ModelKey(protocol, modelID) == providers.ModelKey(candidate.Provider, candidate.Model) {
-				return cloneModelConfigForResolution(defaultProvider, mc, workspace)
 			}
 		}
 		return nil
 	}
 
-	if mc := lookupModelConfigByRef(cfg, activeModel, defaultProvider); mc != nil {
-		return cloneModelConfigForResolution(defaultProvider, mc, workspace)
+	if mc, err := cfg.GetModelConfig(strings.TrimSpace(activeModel)); err == nil {
+		return cloneModelConfigForResolution(mc, workspace)
 	}
 
 	return nil

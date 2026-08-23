@@ -447,10 +447,15 @@ func newTurnCoordFallbackTestLoop(
 				MaxToolIterations: 10,
 			},
 		},
+		ModelList: []*config.ModelConfig{
+			{ModelName: "primary-model", Model: "openai/primary-model", Enabled: true},
+			{ModelName: "fallback-model", Model: "openai/fallback-model", Enabled: true},
+		},
 	}
 
 	msgBus := bus.NewMessageBus()
 	al := NewAgentLoop(cfg, msgBus, provider)
+	useTestSideQuestionProvider(al, provider)
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
 		t.Fatal("expected default agent")

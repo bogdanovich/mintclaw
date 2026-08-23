@@ -416,8 +416,7 @@ func (d *AgentDefaults) UseFinalTurnRender() bool {
 	return strings.EqualFold(strings.TrimSpace(d.FinalTurnRenderMode), "llm")
 }
 
-// GetModelName returns the effective model name for the agent defaults.
-// It prefers the new "model_name" field but falls back to "model" for backward compatibility.
+// GetModelName returns the configured default model name.
 func (d *AgentDefaults) GetModelName() string {
 	return d.ModelName
 }

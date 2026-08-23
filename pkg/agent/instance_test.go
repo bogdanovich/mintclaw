@@ -230,14 +230,14 @@ func TestNewAgentInstance_PreservesDistinctLimiterIdentityForSharedResolvedModel
 	}
 }
 
-func TestNewAgentInstance_PreservesConfigIdentityForExplicitProviderModelRef(t *testing.T) {
+func TestNewAgentInstance_PreservesConfigIdentityForExactModelName(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Workspace: tmpDir,
-				ModelName: "nvidia/z-ai/glm-5.1",
+				ModelName: "nvidia-glm",
 			},
 		},
 		ModelList: []*config.ModelConfig{
@@ -803,6 +803,10 @@ Use frontmatter identity.
 				},
 			},
 		},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "frontmatter-model",
+			Model:     "openai/frontmatter-model",
+		}},
 	}
 
 	agent := NewAgentInstance(&config.AgentConfig{
@@ -828,6 +832,67 @@ Use frontmatter identity.
 	}
 	if agent.AllowsMCPServer("slack") {
 		t.Fatal("expected slack MCP server to be blocked by frontmatter allowlist")
+	}
+}
+
+func TestNewAgentInstance_RejectsUnknownFrontmatterModel(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": "---\nmodel: unknown-model\n---\n# Agent\n",
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: workspace,
+			ModelName: "configured-model",
+		}},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "configured-model",
+			Model:     "openai/gpt-5.4",
+		}},
+	}
+
+	agent, err := newAgentInstance(
+		&config.AgentConfig{ID: "research", Workspace: workspace},
+		&cfg.Agents.Defaults,
+		cfg,
+		&mockProvider{},
+		nil,
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), `workspace model "unknown-model" is not configured`) {
+		t.Fatalf("newAgentInstance() agent = %#v, error = %v", agent, err)
+	}
+}
+
+func TestNewAgentInstance_RejectsWhitespaceInFrontmatterModel(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": "---\nmodel: \" configured-model \"\n---\n# Agent\n",
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: workspace,
+			ModelName: "configured-model",
+		}},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "configured-model",
+			Model:     "openai/gpt-5.4",
+		}},
+	}
+
+	agent, err := newAgentInstance(
+		&config.AgentConfig{ID: "research", Workspace: workspace},
+		&cfg.Agents.Defaults,
+		cfg,
+		&mockProvider{},
+		nil,
+		nil,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "workspace model: model_name must not have surrounding whitespace") {
+		t.Fatalf("newAgentInstance() agent = %#v, error = %v", agent, err)
 	}
 }
 

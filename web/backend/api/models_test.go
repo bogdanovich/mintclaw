@@ -74,6 +74,121 @@ func addModelAndLoadLatest(t *testing.T, configPath string, body string) *config
 	return cfg.ModelList[len(cfg.ModelList)-1]
 }
 
+func TestHandleAddModelRejectsDanglingFallback(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models", bytes.NewBufferString(`{
+		"model_name":"new-model",
+		"provider":"openai",
+		"model":"gpt-5.4-mini",
+		"fallbacks":["missing-model"]
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() after rejected add error = %v", err)
+	}
+	if len(cfg.ModelList) != 1 {
+		t.Fatalf("model_list length = %d, want unchanged length 1", len(cfg.ModelList))
+	}
+}
+
+func TestHandleUpdateModelRejectsReferencedRename(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "referenced-model",
+		Provider:  "openai",
+		Model:     "gpt-5.4",
+	}}
+	cfg.Agents.Defaults.ModelName = "referenced-model"
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/models/0", bytes.NewBufferString(`{
+		"model_name":"renamed-model",
+		"provider":"openai",
+		"model":"gpt-5.4"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	unchanged, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() after rejected update error = %v", err)
+	}
+	if got := unchanged.ModelList[0].ModelName; got != "referenced-model" {
+		t.Fatalf("model_name = %q, want unchanged referenced-model", got)
+	}
+}
+
+func TestHandleDeleteModelRejectsDanglingReference(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{ModelName: "referenced-model", Provider: "openai", Model: "gpt-5.4"},
+		{
+			ModelName: "consumer-model",
+			Provider:  "openai",
+			Model:     "gpt-5.4-mini",
+			Fallbacks: []string{"referenced-model"},
+		},
+	}
+	cfg.Agents.Defaults.ModelName = "consumer-model"
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/models/0", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	unchanged, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() after rejected delete error = %v", err)
+	}
+	if len(unchanged.ModelList) != 2 {
+		t.Fatalf("model_list length = %d, want unchanged length 2", len(unchanged.ModelList))
+	}
+}
+
 func TestHandleListModels_AvailabilityUsesRuntimeProbesForLocalModels(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

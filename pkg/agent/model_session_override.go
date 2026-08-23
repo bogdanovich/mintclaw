@@ -162,7 +162,6 @@ func (m *modelExecutionManager) buildExecutionStateForModel(
 
 	overrideCandidates := resolveModelCandidates(
 		cfg,
-		cfg.Agents.Defaults.Provider,
 		modelName,
 		fallbacks,
 	)
@@ -320,7 +319,6 @@ func (al *AgentLoop) buildModelSelectionInspection(
 			if cfg != nil {
 				inspection.Execution.Candidates = resolveModelCandidates(
 					cfg,
-					cfg.Agents.Defaults.Provider,
 					inspection.Override.Model,
 					workspaceAgent.Fallbacks,
 				)

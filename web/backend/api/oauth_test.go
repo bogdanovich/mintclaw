@@ -282,7 +282,7 @@ func setupOAuthTestEnv(t *testing.T) (string, func()) {
 		Model:     "openai/gpt-4o",
 		APIKeys:   config.SimpleSecureStrings("sk-default"),
 	}}
-	cfg.Agents.Defaults.ModelName = "custom-default"
+	cfg.Agents.Defaults.ModelName = ""
 
 	configPath := filepath.Join(tmp, "config.json")
 	if err := config.SaveConfig(configPath, cfg); err != nil {

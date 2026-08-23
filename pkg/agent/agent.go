@@ -696,8 +696,6 @@ func agentMessageToolSentToTurnTarget(
 
 // sideQuestionModelName determines which model name to use for side questions.
 
-// modelNameFromIdentityKey extracts the model name from an identity key.
-
 // closeProviderIfStateful closes a provider if it implements StatefulProvider.
 
 // makePendingTurnID generates a unique turn ID for placeholder turns.

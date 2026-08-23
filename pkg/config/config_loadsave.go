@@ -168,6 +168,9 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 	if err := cfg.ValidateModelList(); err != nil {
 		return err
 	}
+	if err := cfg.ValidateModelReferences(); err != nil {
+		return err
+	}
 	if cfg.Agents.Defaults.Workspace == "" {
 		cfg.Agents.Defaults.Workspace = filepath.Join(GetHome(), pkg.WorkspaceName)
 	}
