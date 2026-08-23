@@ -365,6 +365,7 @@ type fixedToolResultTool struct {
 	name       string
 	result     *toolshared.ToolResult
 	executions int
+	onExecute  func()
 }
 
 type protectedFixedToolResultTool struct {
@@ -423,7 +424,46 @@ func (t *fixedToolResultTool) Parameters() map[string]any {
 
 func (t *fixedToolResultTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	t.executions++
+	if t.onExecute != nil {
+		t.onExecute()
+	}
 	return t.result
+}
+
+type afterToolDecisionHook struct {
+	action HookAction
+}
+
+func (*afterToolDecisionHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision) {
+	return req, HookDecision{Action: HookActionContinue}
+}
+
+func (*afterToolDecisionHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision) {
+	return resp, HookDecision{Action: HookActionContinue}
+}
+
+func (*afterToolDecisionHook) BeforeTool(
+	_ context.Context,
+	req *ToolCallHookRequest,
+) (*ToolCallHookRequest, HookDecision) {
+	return req, HookDecision{Action: HookActionContinue}
+}
+
+func (hook *afterToolDecisionHook) AfterTool(
+	_ context.Context,
+	resp *ToolResultHookResponse,
+) (*ToolResultHookResponse, HookDecision) {
+	return resp, HookDecision{Action: hook.action}
+}
+
+func (*afterToolDecisionHook) ApproveTool(context.Context, *ToolApprovalRequest) ApprovalDecision {
+	return ApprovalDecision{Approved: true}
 }
 
 type recordingToolResultDelivery struct {
@@ -1705,6 +1745,65 @@ func TestPipelineDelegatedTaskSuspensionSurvivesAfterToolRewrite(t *testing.T) {
 			if !strings.Contains(result.Content, "replacement") && !strings.Contains(result.Content, "ipc:") {
 				t.Fatalf("hook replacement was not retained: %#v", result)
 			}
+		})
+	}
+}
+
+func TestPipelineDelegatedTaskSuspensionDominatesPostExecutionAbort(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		hookAction HookAction
+		hardAbort  bool
+	}{
+		{name: "concurrent hard abort", hardAbort: true},
+		{name: "after-tool abort", hookAction: HookActionAbortTurn},
+		{name: "after-tool hard abort", hookAction: HookActionHardAbort},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			suspendedResult := &toolshared.ToolResult{
+				ForLLM:  "descendant task owns a durable continuation",
+				ForUser: "must not escape the suspension boundary",
+				Control: toolshared.ToolControl{TaskSuspended: true},
+			}
+			suspendedTool := &fixedToolResultTool{name: "delegated_task", result: suspendedResult}
+			deferredTool := &countingTestTool{name: "deferred_tool"}
+			registry := tools.NewToolRegistry()
+			registry.Register(suspendedTool)
+			registry.Register(deferredTool)
+			agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
+			ts := &turnState{
+				agent: agent, agentID: agent.ID, turnID: "turn-suspension-post-execution-abort",
+				sessionKey: "session-suspension-post-execution-abort",
+			}
+			if test.hardAbort {
+				suspendedTool.onExecute = func() { _ = ts.requestHardAbort() }
+			}
+			calls := []providers.ToolCall{
+				{ID: "call-suspended", Name: suspendedTool.Name()},
+				{ID: "call-deferred", Name: deferredTool.Name()},
+			}
+			exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+			llm := newLLMIterationState(1)
+			llm.normalizedToolCalls = calls
+			llm.assistantToolCallsPersisted = true
+			feedback := &immediateDeliveryFeedbackManager{}
+			pipeline := &Pipeline{Interaction: PipelineInteractionServices{ToolFeedback: feedback}}
+			if test.hookAction != "" {
+				pipeline.Interaction.Hooks = &afterToolDecisionHook{action: test.hookAction}
+			}
+
+			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+			if outcome.Control != ToolControlSuspend || outcome.AbortCause != TurnAbortNone ||
+				deferredTool.executions != 0 || !feedback.paused {
+				t.Fatalf(
+					"outcome = %#v, deferred executions = %d, feedback paused = %v",
+					outcome,
+					deferredTool.executions,
+					feedback.paused,
+				)
+			}
+			matchingToolResult(t, exec.messages, "call-suspended")
+			matchingToolResult(t, exec.messages, "call-deferred")
 		})
 	}
 }

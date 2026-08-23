@@ -434,6 +434,31 @@ func TestSteeringQueue_DequeueForTurnPrefersCurrentSenderAndKeepsOthersQueued(t 
 	}
 }
 
+func TestSteeringQueue_ReturnForTurnPreservesSenderScope(t *testing.T) {
+	sq := newSteeringQueue(SteeringOneAtATime)
+	scope := testSessionScope("session-returned-sender")
+	if err := sq.pushScopeWithSender(
+		scope,
+		providers.Message{Role: "user", Content: "only user a"},
+		"user-a",
+	); err != nil {
+		t.Fatalf("push steering: %v", err)
+	}
+
+	dequeued := sq.dequeueScopeForTurn(scope, "user-a")
+	if len(dequeued) != 1 {
+		t.Fatalf("dequeued messages = %#v, want one", dequeued)
+	}
+	sq.returnSteeringMessagesForTurn(scope, dequeued)
+	if leaked := sq.dequeueScopeForTurn(scope, "user-b"); len(leaked) != 0 {
+		t.Fatalf("sender-scoped steering leaked to user-b: %#v", leaked)
+	}
+	returned := sq.dequeueScopeForTurn(scope, "user-a")
+	if len(returned) != 1 || returned[0].Content != "only user a" {
+		t.Fatalf("returned steering = %#v, want user-a message", returned)
+	}
+}
+
 func TestSteeringQueue_DequeueContinuationBatchesOldestDeferredSender(t *testing.T) {
 	sq := newSteeringQueue(SteeringOneAtATime)
 

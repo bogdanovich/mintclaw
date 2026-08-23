@@ -473,7 +473,8 @@ type outcomeBrowserApprovalTool struct {
 func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		Content: "Both items were published.\n" + objectiveOutcomeStart +
-			`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":["objective_2"]}` +
+			`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+			`"missing_items":["objective_2"],"explanation":"the second item was not published"}` +
 			objectiveOutcomeEnd,
 		FinishReason: "stop",
 	}}}

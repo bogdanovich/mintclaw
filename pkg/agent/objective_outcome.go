@@ -151,12 +151,17 @@ func validateObjectiveOutcome(
 	audits []toolshared.WriteAuditEntry,
 	checklist []runtimeObjectiveItem,
 ) *taskresult.Outcome {
-	switch strings.TrimSpace(reported.Status) {
+	status := strings.TrimSpace(reported.Status)
+	switch status {
 	case string(taskresult.OutcomeSucceeded),
 		string(taskresult.OutcomePartial),
 		string(taskresult.OutcomeBlocked):
 	default:
 		return blockedObjectiveOutcome("objective outcome status was invalid")
+	}
+	if (status == string(taskresult.OutcomePartial) || status == string(taskresult.OutcomeBlocked)) &&
+		strings.TrimSpace(reported.Explanation) == "" {
+		return blockedObjectiveOutcome("objective outcome explanation was required")
 	}
 	receipts := make(map[string]taskresult.Receipt)
 	for _, audit := range audits {
@@ -309,7 +314,7 @@ func validateObjectiveOutcome(
 
 func blockedObjectiveOutcome(reason string) *taskresult.Outcome {
 	return &taskresult.Outcome{
-		Status: taskresult.OutcomeBlocked, MissingItems: []string{reason},
+		Status: taskresult.OutcomeBlocked, MissingItems: []string{reason}, Explanation: reason,
 	}
 }
 

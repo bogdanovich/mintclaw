@@ -1256,7 +1256,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 	}
 	toolDuration := time.Since(toolStart)
 
-	if ts.hardAbortRequested() {
+	if ts.hardAbortRequested() && !call.taskSuspended {
 		resolveCanceledToolSuspension(execCtx, toolResult)
 		if toolResult != nil && toolResult.Control.Suspension == nil {
 			effectiveCall := tc
@@ -1298,9 +1298,15 @@ func (runner *toolLoopRunner) invokeToolCall(
 				}
 			}
 		case HookActionAbortTurn:
+			if call.taskSuspended {
+				break
+			}
 			resolveCanceledToolSuspension(execCtx, toolResult)
 			return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHook})
 		case HookActionHardAbort:
+			if call.taskSuspended {
+				break
+			}
 			resolveCanceledToolSuspension(execCtx, toolResult)
 			_ = ts.requestHardAbort()
 			return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})

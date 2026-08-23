@@ -91,7 +91,10 @@ func (sq *steeringQueue) returnSteeringMessagesForTurn(
 	}
 	returned := make([]steeringEntry, 0, len(messages))
 	for _, msg := range messages {
-		returned = append(returned, steeringEntry{msg: msg})
+		returned = append(returned, steeringEntry{
+			msg:      msg,
+			senderID: strings.TrimSpace(msg.SteeringSenderID),
+		})
 	}
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
@@ -249,7 +252,9 @@ func entryMessages(entries []steeringEntry) []providers.Message {
 	}
 	msgs := make([]providers.Message, 0, len(entries))
 	for _, entry := range entries {
-		msgs = append(msgs, entry.msg)
+		msg := entry.msg
+		msg.SteeringSenderID = entry.senderID
+		msgs = append(msgs, msg)
 	}
 	return msgs
 }
