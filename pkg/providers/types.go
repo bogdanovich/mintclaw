@@ -30,7 +30,6 @@ type (
 	GeneratedImage              = protocoltypes.GeneratedImage
 	ImageGenerationResponse     = protocoltypes.ImageGenerationResponse
 	ProviderCapabilities        = providercapabilities.ProviderCapabilities
-	StreamingCapabilities       = providercapabilities.StreamingCapabilities
 	ImageGenerationCapabilities = providercapabilities.ImageGenerationCapabilities
 	ToolSchemaLimits            = providercapabilities.ToolSchemaLimits
 )
@@ -59,21 +58,8 @@ type StatefulProvider interface {
 	Close()
 }
 
-// StreamingProvider is an optional interface for providers that support token streaming.
-// onChunk receives the accumulated text so far (not individual deltas).
-// The returned LLMResponse is the same complete response for compatibility with tool-call handling.
+// StreamingProvider is the optional event-streaming contract.
 type StreamingProvider interface {
-	ChatStream(
-		ctx context.Context,
-		messages []Message,
-		tools []ToolDefinition,
-		model string,
-		options map[string]any,
-		onChunk func(accumulated string),
-	) (*LLMResponse, error)
-}
-
-type StreamingEventProvider interface {
 	ChatStreamEvents(
 		ctx context.Context,
 		messages []Message,

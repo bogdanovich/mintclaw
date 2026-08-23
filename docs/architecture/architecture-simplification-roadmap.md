@@ -738,6 +738,10 @@ Implementation sequence:
     operation. A provider without an optional descriptor advertises no optional
     features; runtime code no longer infers streaming, thinking, search, or
     image support from legacy method shapes.
+19. Make event streaming the sole provider streaming contract. Delete the
+    accumulated-text operation, its wrapper adapters, and the event-mode flag;
+    providers declare one streaming boolean and emit `StreamChunk` values
+    directly.
 
 Exit criteria:
 

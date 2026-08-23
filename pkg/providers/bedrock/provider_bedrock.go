@@ -36,6 +36,7 @@ type (
 	ToolCall               = protocoltypes.ToolCall
 	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
+	StreamChunk            = protocoltypes.StreamChunk
 	UsageInfo              = protocoltypes.UsageInfo
 	Message                = protocoltypes.Message
 	ToolDefinition         = protocoltypes.ToolDefinition
@@ -51,7 +52,7 @@ type Provider struct {
 
 func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
 	return providercapabilities.ProviderCapabilities{
-		Streaming: providercapabilities.StreamingCapabilities{Supported: true},
+		Streaming: true,
 	}
 }
 
@@ -250,15 +251,14 @@ func (p *Provider) Chat(
 	return parseResponse(output)
 }
 
-// ChatStream sends messages to AWS Bedrock using the ConverseStream API.
-// It streams the accumulated text so far via the onChunk callback and returns the complete response.
-func (p *Provider) ChatStream(
+// ChatStreamEvents sends messages to AWS Bedrock using the ConverseStream API.
+func (p *Provider) ChatStreamEvents(
 	ctx context.Context,
 	messages []Message,
 	tools []ToolDefinition,
 	model string,
 	options map[string]any,
-	onChunk func(accumulated string),
+	onChunk func(StreamChunk),
 ) (*LLMResponse, error) {
 	if p.requestTimeout > 0 {
 		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
@@ -300,7 +300,7 @@ type converseStreamReader interface {
 func parseStreamResponse(
 	ctx context.Context,
 	stream converseStreamReader,
-	onChunk func(accumulated string),
+	onChunk func(StreamChunk),
 	requestID string,
 ) (resp *LLMResponse, err error) {
 	if stream == nil {
@@ -356,7 +356,7 @@ func parseStreamResponse(
 				case *types.ContentBlockDeltaMemberText:
 					textContent.WriteString(delta.Value)
 					if onChunk != nil {
-						onChunk(textContent.String())
+						onChunk(StreamChunk{Content: textContent.String()})
 					}
 				case *types.ContentBlockDeltaMemberToolUse:
 					idx := int(aws.ToInt32(e.Value.ContentBlockIndex))

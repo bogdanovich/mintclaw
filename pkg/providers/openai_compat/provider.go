@@ -52,7 +52,7 @@ func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
 		return providercapabilities.ProviderCapabilities{}
 	}
 	return providercapabilities.ProviderCapabilities{
-		Streaming:    providercapabilities.StreamingCapabilities{Supported: true, Events: true},
+		Streaming:    true,
 		Thinking:     p.supportsThinking(),
 		NativeSearch: p.supportsNativeSearch(),
 	}
@@ -156,7 +156,7 @@ func NewProviderWithMaxTokensFieldAndTimeout(
 	)
 }
 
-// buildRequestBody constructs the common request body for Chat and ChatStream.
+// buildRequestBody constructs the common request body for chat and streaming requests.
 func (p *Provider) buildRequestBody(
 	messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) map[string]any {
@@ -514,30 +514,6 @@ func (p *Provider) Chat(
 	}
 
 	return httperrors.ReadAndParseResponse(resp, p.apiBase)
-}
-
-// ChatStream implements streaming via OpenAI-compatible SSE (stream: true).
-// onChunk receives the accumulated text so far on each text delta.
-func (p *Provider) ChatStream(
-	ctx context.Context,
-	messages []Message,
-	tools []ToolDefinition,
-	model string,
-	options map[string]any,
-	onChunk func(accumulated string),
-) (*LLMResponse, error) {
-	return p.ChatStreamEvents(
-		ctx,
-		messages,
-		tools,
-		model,
-		options,
-		func(chunk StreamChunk) {
-			if onChunk != nil && strings.TrimSpace(chunk.Content) != "" {
-				onChunk(chunk.Content)
-			}
-		},
-	)
 }
 
 func (p *Provider) ChatStreamEvents(

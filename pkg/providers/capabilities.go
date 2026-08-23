@@ -32,9 +32,8 @@ func ImageCapabilities(provider ImageGenerationProvider) ImageGenerationCapabili
 	return provider.Capabilities().Normalized().ImageGeneration
 }
 
-// ChatStreamEvents invokes the provider's declared streaming operation and
-// adapts legacy accumulated-text streaming to event chunks. The bool reports
-// whether streaming was declared and attempted.
+// ChatStreamEvents invokes the provider's declared event-streaming operation.
+// The bool reports whether streaming was declared and attempted.
 func ChatStreamEvents(
 	ctx context.Context,
 	provider LLMProvider,
@@ -45,29 +44,17 @@ func ChatStreamEvents(
 	onChunk func(StreamChunk),
 ) (*LLMResponse, bool, error) {
 	capabilities := Capabilities(provider)
-	if !capabilities.Streaming.Supported {
+	if !capabilities.Streaming {
 		return nil, false, nil
 	}
 	if onChunk == nil {
 		onChunk = func(StreamChunk) {}
 	}
-	if capabilities.Streaming.Events {
-		streaming, ok := provider.(StreamingEventProvider)
-		if !ok {
-			return nil, true, ErrStreamingContract
-		}
-		response, err := streaming.ChatStreamEvents(ctx, messages, tools, model, options, onChunk)
-		return response, true, err
-	}
 	streaming, ok := provider.(StreamingProvider)
 	if !ok {
 		return nil, true, ErrStreamingContract
 	}
-	response, err := streaming.ChatStream(ctx, messages, tools, model, options, func(accumulated string) {
-		if onChunk != nil {
-			onChunk(StreamChunk{Content: accumulated})
-		}
-	})
+	response, err := streaming.ChatStreamEvents(ctx, messages, tools, model, options, onChunk)
 	return response, true, err
 }
 
