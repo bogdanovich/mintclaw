@@ -8,6 +8,16 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
+func requireExactModelName(value string) error {
+	if value == "" {
+		return fmt.Errorf("model_name is required")
+	}
+	if value != strings.TrimSpace(value) {
+		return fmt.Errorf("model_name must not have surrounding whitespace")
+	}
+	return nil
+}
+
 func modelConfigIdentityKey(mc *config.ModelConfig) string {
 	if mc == nil {
 		return ""

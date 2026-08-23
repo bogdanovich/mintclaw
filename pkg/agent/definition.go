@@ -237,7 +237,7 @@ func parseAgentFrontmatter(path, frontmatter string) (AgentFrontmatter, error) {
 		Description: strings.TrimSpace(typed.Description),
 		Tools:       policyAllowPatterns(toolPolicy),
 		ToolPolicy:  toolPolicy,
-		Model:       strings.TrimSpace(typed.Model),
+		Model:       typed.Model,
 		MaxTurns:    typed.MaxTurns,
 		Skills:      append([]string(nil), typed.Skills...),
 		MCPServers:  policyAllowPatterns(mcpPolicy),

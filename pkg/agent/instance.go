@@ -240,8 +240,17 @@ func newAgentInstance(
 	if promptProfile == RuntimePromptProfilePersonal {
 		definition = loadAgentDefinition(workspace)
 	}
+	frontmatterModel := ""
+	if definition.Agent != nil {
+		frontmatterModel = definition.Agent.Frontmatter.Model
+		if frontmatterModel != "" {
+			if err := requireExactModelName(frontmatterModel); err != nil {
+				return nil, fmt.Errorf("construct agent: workspace model: %w", err)
+			}
+		}
+	}
 	model := resolveAgentModel(agentCfg, defaults, definition)
-	if definition.Agent != nil && strings.TrimSpace(definition.Agent.Frontmatter.Model) != "" {
+	if frontmatterModel != "" {
 		if cfg == nil {
 			return nil, fmt.Errorf("construct agent: workspace model %q requires configuration", model)
 		}

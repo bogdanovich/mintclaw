@@ -504,7 +504,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		llmResp, decision := p.Interaction.Hooks.AfterLLM(turnCtx, &LLMHookResponse{
 			Meta:     ts.eventMeta("runTurn", "turn.llm.response"),
 			Context:  cloneTurnContext(ts.turnCtx),
-			Model:    llm.llmModel,
+			Model:    exec.model.llmModelName,
 			Response: llm.response,
 		})
 		switch decision.normalizedAction() {
@@ -856,9 +856,9 @@ func (p *Pipeline) applyBeforeLLMModelRewrite(
 	if p == nil || ts == nil || ts.agent == nil || exec == nil || llm == nil {
 		return nil
 	}
-	rawModel := strings.TrimSpace(llm.llmModel)
-	if rawModel == "" {
-		return nil
+	rawModel := llm.llmModel
+	if err := requireExactModelName(rawModel); err != nil {
+		return fmt.Errorf("before_llm model rewrite: %w", err)
 	}
 
 	execution, cleanup, err := p.Context.ModelExecution.buildExecutionStateForModel(

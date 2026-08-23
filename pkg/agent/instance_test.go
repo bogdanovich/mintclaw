@@ -865,6 +865,37 @@ func TestNewAgentInstance_RejectsUnknownFrontmatterModel(t *testing.T) {
 	}
 }
 
+func TestNewAgentInstance_RejectsWhitespaceInFrontmatterModel(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": "---\nmodel: \" configured-model \"\n---\n# Agent\n",
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: workspace,
+			ModelName: "configured-model",
+		}},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "configured-model",
+			Model:     "openai/gpt-5.4",
+		}},
+	}
+
+	agent, err := newAgentInstance(
+		&config.AgentConfig{ID: "research", Workspace: workspace},
+		&cfg.Agents.Defaults,
+		cfg,
+		&mockProvider{},
+		nil,
+		nil,
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "workspace model: model_name must not have surrounding whitespace") {
+		t.Fatalf("newAgentInstance() agent = %#v, error = %v", agent, err)
+	}
+}
+
 func TestNewAgentInstance_UsesResolvedProviderForFrontmatterPrimaryModel(t *testing.T) {
 	workspace := setupWorkspace(t, map[string]string{
 		"AGENT.md": `---
