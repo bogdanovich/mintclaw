@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -251,12 +252,10 @@ type ExecConfig struct {
 }
 
 type SkillsToolsConfig struct {
-	ToolConfig `                       yaml:"-"                    envPrefix:"MINTCLAW_TOOLS_SKILLS_"`
-	Registries SkillsRegistriesConfig `yaml:"registries,omitempty"                                    json:"registries"`
-	// Deprecated: use registries.github instead.
-	Github                SkillsGithubConfig `yaml:"github,omitempty" json:"github"`
-	MaxConcurrentSearches int                `yaml:"-"                json:"max_concurrent_searches" env:"MINTCLAW_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
-	SearchCache           SearchCacheConfig  `yaml:"-"                json:"search_cache"`
+	ToolConfig            `                       yaml:"-"                    envPrefix:"MINTCLAW_TOOLS_SKILLS_"`
+	Registries            SkillsRegistriesConfig `yaml:"registries,omitempty"                                    json:"registries,omitzero"`
+	MaxConcurrentSearches int                    `yaml:"-"                                                       json:"max_concurrent_searches" env:"MINTCLAW_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
+	SearchCache           SearchCacheConfig      `yaml:"-"                                                       json:"search_cache"`
 }
 
 type MediaCleanupConfig struct {
@@ -393,7 +392,7 @@ type SearchCacheConfig struct {
 	TTLSeconds int `json:"ttl_seconds" env:"MINTCLAW_SKILLS_SEARCH_CACHE_TTL_SECONDS"`
 }
 
-type SkillsRegistriesConfig []*SkillRegistryConfig
+type SkillsRegistriesConfig map[string]*SkillRegistryConfig
 
 func (c *SkillsRegistriesConfig) Get(name string) (SkillRegistryConfig, bool) {
 	if c == nil {
@@ -403,13 +402,11 @@ func (c *SkillsRegistriesConfig) Get(name string) (SkillRegistryConfig, bool) {
 	if name == "" {
 		return SkillRegistryConfig{}, false
 	}
-	for _, registry := range *c {
-		if registry == nil || registry.Name != name {
-			continue
-		}
-		return *registry, true
+	registry, ok := (*c)[name]
+	if !ok || registry == nil {
+		return SkillRegistryConfig{}, false
 	}
-	return SkillRegistryConfig{}, false
+	return *registry, true
 }
 
 func (c *SkillsRegistriesConfig) Set(name string, cfg SkillRegistryConfig) {
@@ -420,25 +417,28 @@ func (c *SkillsRegistriesConfig) Set(name string, cfg SkillRegistryConfig) {
 	if name == "" {
 		return
 	}
-	cfg.Name = name
-	for i, registry := range *c {
-		if registry == nil || registry.Name != name {
-			continue
-		}
-		(*c)[i] = &cfg
-		return
+	if *c == nil {
+		*c = make(SkillsRegistriesConfig)
 	}
-	*c = append(*c, &cfg)
+	(*c)[name] = &cfg
 }
 
-type SkillsGithubConfig struct {
-	BaseURL string       `json:"base_url,omitempty" yaml:"-"               env:"MINTCLAW_TOOLS_SKILLS_GITHUB_BASE_URL"`
-	Token   SecureString `json:"token,omitzero"     yaml:"token,omitempty" env:"MINTCLAW_TOOLS_SKILLS_GITHUB_TOKEN"`
-	Proxy   string       `json:"proxy,omitempty"    yaml:"-"               env:"MINTCLAW_TOOLS_SKILLS_GITHUB_PROXY"`
+func (c *SkillsRegistriesConfig) Names() []string {
+	if c == nil {
+		return nil
+	}
+	names := make([]string, 0, len(*c))
+	for name, registry := range *c {
+		if strings.TrimSpace(name) == "" || registry == nil {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 type SkillRegistryConfig struct {
-	Name      string         `json:"name,omitempty"      yaml:"-"                    env:"-"`
 	Enabled   bool           `json:"enabled"             yaml:"-"                    env:"-"`
 	BaseURL   string         `json:"base_url"            yaml:"-"                    env:"-"`
 	AuthToken SecureString   `json:"auth_token,omitzero" yaml:"auth_token,omitempty" env:"-"`

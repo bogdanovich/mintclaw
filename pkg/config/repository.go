@@ -190,6 +190,10 @@ func (r *Repository) ResetToDefaults() (Snapshot, error) {
 		if _, recoverErr := r.recoverLocked(); recoverErr != nil {
 			return recoverErr
 		}
+		current, loadErr := loadConfigForUpdate(r.path)
+		if loadErr != nil {
+			return loadErr
+		}
 		if backupErr := MakeBackup(r.path); backupErr != nil {
 			return fmt.Errorf("backup before reset: %w", backupErr)
 		}
@@ -197,7 +201,7 @@ func (r *Repository) ResetToDefaults() (Snapshot, error) {
 		cfg := DefaultConfig()
 		cfg.Session.ApplyDmScope()
 		cfg.Session.DeriveDmScope()
-		if securityErr := cfg.SecurityCopyFrom(r.path); securityErr != nil {
+		if securityErr := cfg.SecurityCopyForReplacement(r.path, current); securityErr != nil {
 			return fmt.Errorf("preserve security config: %w", securityErr)
 		}
 

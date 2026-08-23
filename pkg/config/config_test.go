@@ -1603,6 +1603,30 @@ func TestLoadConfig_RejectsDeprecatedEditFileTool(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_RejectsRemovedSkillRegistryShapes(t *testing.T) {
+	tests := map[string]string{
+		"github sibling": `{"version":3,"tools":{"skills":{"github":{"token":"old"}}}}`,
+		"registry list":  `{"version":3,"tools":{"skills":{"registries":[{"name":"github"}]}}}`,
+		"embedded name":  `{"version":3,"tools":{"skills":{"registries":{"github":{"name":"github"}}}}}`,
+		"token field":    `{"version":3,"tools":{"skills":{"registries":{"github":{"token":"old"}}}}}`,
+		"nested params":  `{"version":3,"tools":{"skills":{"registries":{"github":{"param":{"proxy":"old"}}}}}}`,
+	}
+
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			configPath := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("WriteFile() error: %v", err)
+			}
+
+			if _, err := LoadConfig(configPath); err == nil {
+				t.Fatal("LoadConfig() error = nil, want removed shape rejection")
+			}
+		})
+	}
+}
+
 func TestLoadConfig_RequiresCurrentVersionWithoutRewriting(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2971,7 +2995,7 @@ func TestResolveGatewayLogLevel_UsesEnvOverrideAndNormalizesInvalid(t *testing.T
 	}
 }
 
-func TestLoadConfig_AppliesLegacyClawHubRegistryEnvOverrides(t *testing.T) {
+func TestLoadConfig_AppliesClawHubRegistryEnvOverrides(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	data := `{"version":3,"tools":{"skills":{"registries":{"clawhub":{"enabled":true,"base_url":"https://clawhub.ai"}}}}}`
@@ -3048,6 +3072,84 @@ func TestLoadConfig_AppliesGitHubRegistryEnvOverrides(t *testing.T) {
 	}
 	if got := github.Param["proxy"]; got != "http://127.0.0.1:7890" {
 		t.Fatalf("proxy = %v, want %q", got, "http://127.0.0.1:7890")
+	}
+}
+
+func TestLoadConfig_DoesNotRestoreRemovedRegistriesWithoutEnvOverrides(t *testing.T) {
+	unsetSkillsRegistryEnv(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	data := `{"version":3,"tools":{"skills":{"registries":{}}}}`
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if names := cfg.Tools.Skills.Registries.Names(); len(names) != 0 {
+		t.Fatalf("registry names = %v, want none", names)
+	}
+}
+
+func TestLoadConfig_EnvOverrideCreatesRemovedRegistryFromCurrentDefaults(t *testing.T) {
+	unsetSkillsRegistryEnv(t)
+	t.Setenv(envSkillsGitHubProxy, "http://127.0.0.1:7890")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	data := `{"version":3,"tools":{"skills":{"registries":{}}}}`
+	if err := os.WriteFile(cfgPath, []byte(data), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	github, ok := cfg.Tools.Skills.Registries.Get("github")
+	if !ok {
+		t.Fatal("github registry missing")
+	}
+	if !github.Enabled || github.BaseURL != "https://github.com" {
+		t.Fatalf("github registry = %#v, want current defaults", github)
+	}
+	if got := github.Param["proxy"]; got != "http://127.0.0.1:7890" {
+		t.Fatalf("proxy = %v, want environment override", got)
+	}
+	if _, ok = cfg.Tools.Skills.Registries.Get("clawhub"); ok {
+		t.Fatal("clawhub registry restored without an override")
+	}
+}
+
+func unsetSkillsRegistryEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		envSkillsClawHubEnabled,
+		envSkillsClawHubBaseURL,
+		envSkillsClawHubAuthToken,
+		envSkillsClawHubSearchPath,
+		envSkillsClawHubSkillsPath,
+		envSkillsClawHubDownloadPath,
+		envSkillsClawHubTimeout,
+		envSkillsClawHubMaxZipSize,
+		envSkillsClawHubMaxResponseSize,
+		envSkillsGitHubEnabled,
+		envSkillsGitHubBaseURL,
+		envSkillsGitHubAuthToken,
+		envSkillsGitHubProxy,
+	} {
+		value, set := os.LookupEnv(name)
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("Unsetenv(%q): %v", name, err)
+		}
+		t.Cleanup(func() {
+			if set {
+				_ = os.Setenv(name, value)
+			} else {
+				_ = os.Unsetenv(name)
+			}
+		})
 	}
 }
 
@@ -3277,9 +3379,13 @@ func TestFilterSensitiveData_AllTokenTypes(t *testing.T) {
 			},
 			// Skills tokens
 			Skills: SkillsToolsConfig{
-				Github: SkillsGithubConfig{Token: *NewSecureString("github-token-xyz")},
 				Registries: SkillsRegistriesConfig{
-					&SkillRegistryConfig{Name: "clawhub", AuthToken: *NewSecureString("clawhub-auth-token")},
+					"github": {
+						AuthToken: *NewSecureString("github-token-xyz"),
+					},
+					"clawhub": {
+						AuthToken: *NewSecureString("clawhub-auth-token"),
+					},
 				},
 			},
 		},

@@ -1171,9 +1171,10 @@ model_list:
   claude-sonnet-4.6:
     api_keys:
       - "sk-ant-your-actual-anthropic-key"
-channels:
+channel_list:
   telegram:
-    token: "your-telegram-bot-token"
+    settings:
+      token: "your-telegram-bot-token"
 web:
   brave:
     api_keys:

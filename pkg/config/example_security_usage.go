@@ -43,12 +43,14 @@ model_list:
 	    - "sk-ant-your-actual-anthropic-key"  # Single key in array format
 
 # Channel Tokens
-channels:
+channel_list:
 
 	telegram:
-	  token: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+	  settings:
+	    token: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
 	discord:
-	  token: "your-discord-bot-token"
+	  settings:
+	    token: "your-discord-bot-token"
 
 # Web Tool Keys
 # Brave, Tavily, Perplexity, Kagi: Use 'api_keys' array
@@ -84,7 +86,7 @@ Note: Sensitive fields are omitted because they're loaded from .security.yml
 ```json
 
 	{
-	  "version": 1,
+	  "version": 3,
 	  "agents": {
 	    "defaults": {
 	      "workspace": "~/mintclaw-workspace",
@@ -196,49 +198,64 @@ model_list:
 ## Channel Tokens/Secrets
 
 ```yaml
-channels:
+channel_list:
 
 	telegram:
-	  token: "value"
+	  settings:
+	    token: "value"
 	feishu:
-	  app_secret: "value"
-	  encrypt_key: "value"
-	  verification_token: "value"
+	  settings:
+	    app_secret: "value"
+	    encrypt_key: "value"
+	    verification_token: "value"
 	discord:
-	  token: "value"
+	  settings:
+	    token: "value"
 	weixin:
-	  token: "value"
+	  settings:
+	    token: "value"
 	qq:
-	  app_secret: "value"
+	  settings:
+	    app_secret: "value"
 	dingtalk:
-	  client_secret: "value"
+	  settings:
+	    client_secret: "value"
 	slack:
-	  bot_token: "value"
-	  app_token: "value"
+	  settings:
+	    bot_token: "value"
+	    app_token: "value"
 	matrix:
-	  access_token: "value"
+	  settings:
+	    access_token: "value"
 	line:
-	  channel_secret: "value"
-	  channel_access_token: "value"
+	  settings:
+	    channel_secret: "value"
+	    channel_access_token: "value"
 	onebot:
-	  access_token: "value"
+	  settings:
+	    access_token: "value"
 	wecom:
-	  token: "value"
-	  encoding_aes_key: "value"
+	  settings:
+	    token: "value"
+	    encoding_aes_key: "value"
 	wecom_app:
-	  corp_secret: "value"
-	  token: "value"
-	  encoding_aes_key: "value"
+	  settings:
+	    corp_secret: "value"
+	    token: "value"
+	    encoding_aes_key: "value"
 	wecom_aibot:
-	  secret: "value"
-	  token: "value"
-	  encoding_aes_key: "value"
+	  settings:
+	    secret: "value"
+	    token: "value"
+	    encoding_aes_key: "value"
 	mintclaw:
-	  token: "value"
+	  settings:
+	    token: "value"
 	irc:
-	  password: "value"
-	  nickserv_password: "value"
-	  sasl_password: "value"
+	  settings:
+	    password: "value"
+	    nickserv_password: "value"
+	    sasl_password: "value"
 
 ## Web Tool API Keys
 
@@ -280,16 +297,17 @@ Use `api_key` (singular) single string format.
 ```yaml
 skills:
 
-	github:
-	  token: "value"
-	clawhub:
-	  auth_token: "value"
+	registries:
+	  github:
+	    auth_token: "value"
+	  clawhub:
+	    auth_token: "value"
 
 ```
 
-# Backward Compatibility
+# Direct Configuration Values
 
-You can still use direct values in config.json if needed:
+You can use direct values in config.json if needed:
 
 ```json
 
@@ -332,7 +350,7 @@ You can also mix security values and direct values:
 2. .security.yml values
 3. config.json direct values (lowest priority)
 
-# Migration from Old Config
+# Moving Secrets from Config
 
 ## Step 1: Backup your config
 ```bash
@@ -549,7 +567,7 @@ export MINTCLAW_TOOLS_WEB_BRAVE_API_KEY="brave-key-from-env"
 export MINTCLAW_TOOLS_WEB_BAIDU_API_KEY="baidu-key-from-env"
 
 # Skills
-export MINTCLAW_TOOLS_SKILLS_GITHUB_TOKEN="github-token-from-env"
+export MINTCLAW_SKILLS_REGISTRIES_GITHUB_AUTH_TOKEN="github-token-from-env"
 ```
 
 Environment variables have the highest priority and will override both config.json

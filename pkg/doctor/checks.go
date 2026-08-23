@@ -300,8 +300,9 @@ func checkPlaintextCredentials(raw rawDocuments) []Finding {
 
 func checkSkills(cfg *config.Config) []Finding {
 	var findings []Finding
-	for idx, registry := range cfg.Tools.Skills.Registries {
-		if registry == nil || !registry.Enabled {
+	for _, name := range cfg.Tools.Skills.Registries.Names() {
+		registry, ok := cfg.Tools.Skills.Registries.Get(name)
+		if !ok || !registry.Enabled {
 			continue
 		}
 		if registry.BaseURL != "" && !isLoopbackURL(registry.BaseURL) {
@@ -312,7 +313,7 @@ func checkSkills(cfg *config.Config) []Finding {
 				"External registries can influence skill discovery and installation inputs.",
 				"Enable only trusted registries and pin/review installed skills.",
 				Evidence{
-					Path:    fmt.Sprintf("tools.skills.registries[%d].base_url", idx),
+					Path:    fmt.Sprintf("tools.skills.registries.%s.base_url", name),
 					Summary: "enabled registry has non-loopback base_url",
 				},
 			))
