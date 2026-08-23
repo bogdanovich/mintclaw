@@ -14,50 +14,9 @@ import (
 	"time"
 )
 
-func TestGatewayInvocationSQLiteMigratesLegacySnapshotAndRejectsDowngrade(t *testing.T) {
-	workspace := t.TempDir()
-	legacyPath := GatewayInvocationLegacyStorePath(workspace)
-	legacy, err := NewGatewayInvocationStore(legacyPath, 8, 1024*1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plan := gatewayTestPlan(t, "inv_sqlite_migrate", "idem_sqlite_migrate", time.Now())
-	if _, _, err = legacy.Prepare("vpn", "call-sqlite-migrate", plan, gatewayTestDescriptor()); err != nil {
-		t.Fatal(err)
-	}
-	if err = legacy.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := NewGatewayInvocationSQLiteStore(GatewayInvocationStorePath(workspace), 16*1024*1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeGatewayInvocationSQLiteTestStore(t, store)()
-	record, found, err := store.Lookup(gatewayTestPrincipal(plan), plan.InvocationID)
-	if err != nil || !found || record.Plan.PlanHash != plan.PlanHash {
-		t.Fatalf("migrated record = (%#v, %v, %v)", record, found, err)
-	}
-	data, err := os.ReadFile(legacyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var marker gatewayInvocationMigrationMarker
-	if err = json.Unmarshal(data, &marker); err != nil {
-		t.Fatal(err)
-	}
-	if marker.Version != gatewayInvocationMigrationVersion || marker.Backend != "sqlite" ||
-		marker.Database != filepath.Base(GatewayInvocationStorePath(workspace)) {
-		t.Fatalf("migration marker = %#v", marker)
-	}
-	if _, err = NewGatewayInvocationStore(legacyPath, 8, 1024*1024); err == nil {
-		t.Fatal("legacy store accepted SQLite downgrade marker")
-	}
-}
-
 func TestGatewayInvocationSQLiteRejectsNonCurrentBrowserSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,16 +38,16 @@ func TestGatewayInvocationSQLiteRejectsNonCurrentBrowserSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	record.ExpectedPlanHash = record.Plan.PlanHash
-	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
+	writeGatewayInvocationSQLiteRecordForTest(t, path, record)
 
-	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
+	if _, err = NewGatewayInvocationStore(path, 16*1024*1024); err == nil {
 		t.Fatal("non-current browser output schema was accepted")
 	}
 }
 
 func TestGatewayInvocationSQLiteRetainsOpaqueDispatchedTombstone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,9 +57,9 @@ func TestGatewayInvocationSQLiteRetainsOpaqueDispatchedTombstone(t *testing.T) {
 	record := gatewayBrowserObserveRecord(t, time.Now(), "opaque_tombstone")
 	record.Descriptor.OutputSchema = json.RawMessage(`{"type":"object","additionalProperties":false}`)
 	bindOpaqueGatewayInvocationTombstone(t, &record)
-	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
+	writeGatewayInvocationSQLiteRecordForTest(t, path, record)
 
-	store, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err = NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatalf("reopen with opaque tombstone: %v", err)
 	}
@@ -113,7 +72,7 @@ func TestGatewayInvocationSQLiteRetainsOpaqueDispatchedTombstone(t *testing.T) {
 
 func TestGatewayInvocationSQLiteRejectsOversizedOpaqueDispatchedTombstone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,9 +84,9 @@ func TestGatewayInvocationSQLiteRejectsOversizedOpaqueDispatchedTombstone(t *tes
 		Guidance: []string{strings.Repeat("x", MaxCatalogBytes)},
 	}
 	bindOpaqueGatewayInvocationTombstone(t, &record)
-	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
+	writeGatewayInvocationSQLiteRecordForTest(t, path, record)
 
-	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil ||
+	if _, err = NewGatewayInvocationStore(path, 16*1024*1024); err == nil ||
 		!strings.Contains(err.Error(), "opaque tombstone descriptor is too large") {
 		t.Fatalf("reopen with oversized opaque tombstone error = %v", err)
 	}
@@ -135,7 +94,7 @@ func TestGatewayInvocationSQLiteRejectsOversizedOpaqueDispatchedTombstone(t *tes
 
 func TestGatewayInvocationSQLiteRejectsOpaqueNonBrowserDispatchedTombstone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,63 +110,10 @@ func TestGatewayInvocationSQLiteRejectsOpaqueNonBrowserDispatchedTombstone(t *te
 	}
 	record.Descriptor.ModelContract = &CommandModelContract{}
 	bindOpaqueGatewayInvocationTombstone(t, &record)
-	writeGatewayInvocationSQLiteRecordForMigrationTest(t, path, record)
+	writeGatewayInvocationSQLiteRecordForTest(t, path, record)
 
-	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
+	if _, err = NewGatewayInvocationStore(path, 16*1024*1024); err == nil {
 		t.Fatal("opaque non-browser dispatched tombstone was accepted")
-	}
-}
-
-func TestGatewayInvocationSQLiteMigratesProductionShapedSnapshot(t *testing.T) {
-	workspace := t.TempDir()
-	legacyPath := GatewayInvocationLegacyStorePath(workspace)
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	clock := time.Now()
-	legacy := newGatewayInvocationStore("", 512, DefaultGatewayInvocationStoreBytes, func() time.Time { return clock })
-	for index := 0; index < 256; index++ {
-		plan := gatewayTestPlan(
-			t,
-			fmt.Sprintf("inv_sqlite_production_%03d", index),
-			fmt.Sprintf("idem_sqlite_production_%03d", index),
-			clock,
-		)
-		if _, created, err := legacy.Prepare(
-			"vpn",
-			fmt.Sprintf("call-sqlite-production-%03d", index),
-			plan,
-			gatewayTestDescriptor(),
-		); err != nil || !created {
-			t.Fatalf("prepare production-shaped record %d = (%v, %v)", index, created, err)
-		}
-	}
-	data, err := json.Marshal(gatewayInvocationDocument{
-		Version: gatewayInvocationStoreVersion,
-		Records: legacy.records,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(legacyPath, append(data, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	backend, err := newGatewayInvocationSQLiteStore(
-		GatewayInvocationStorePath(workspace),
-		16*1024*1024,
-		func() time.Time { return clock },
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store := &GatewayInvocationStore{sqlite: backend}
-	defer closeGatewayInvocationSQLiteTestStore(t, store)()
-	var count int
-	if err = store.sqlite.db.QueryRow("SELECT count(*) FROM gateway_invocations").Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 256 {
-		t.Fatalf("migrated production-shaped records = %d, want 256", count)
 	}
 }
 
@@ -234,16 +140,16 @@ func gatewayBrowserObserveRecord(
 		t.Fatal("browser observe descriptor is missing")
 	}
 	input, err := json.Marshal(BrowserObserveInput{
-		SessionID:          "browser_session_receipt_migration",
-		TabID:              "browser_tab_receipt_migration",
+		SessionID:          "browser_session_receipt",
+		TabID:              "browser_tab_receipt",
 		SnapshotGeneration: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := invocationRequest(input)
-	request.InvocationID = "inv_browser_receipt_migration_" + suffix
-	request.IdempotencyKey = "idem_browser_receipt_migration_" + suffix
+	request.InvocationID = "inv_browser_receipt_" + suffix
+	request.IdempotencyKey = "idem_browser_receipt_" + suffix
 	request.Command = descriptor.Name
 	request.Input = input
 	plan, err := PrepareExecutionPlan(
@@ -272,7 +178,7 @@ func gatewayBrowserObserveRecord(
 	}
 	now := preparedAt.UnixNano()
 	return GatewayInvocationRecord{
-		Target: "companion", ToolCallID: "call-browser-receipt-migration-" + suffix,
+		Target: "companion", ToolCallID: "call-browser-receipt-" + suffix,
 		Plan: plan, Descriptor: descriptor, ExpectedPlanHash: plan.PlanHash,
 		State: GatewayInvocationPrepared, CreatedAt: now, UpdatedAt: now,
 	}
@@ -299,7 +205,7 @@ func bindOpaqueGatewayInvocationTombstone(t *testing.T, record *GatewayInvocatio
 	record.UpdatedAt = record.DispatchedAt
 }
 
-func writeGatewayInvocationSQLiteRecordForMigrationTest(
+func writeGatewayInvocationSQLiteRecordForTest(
 	t *testing.T,
 	path string,
 	record GatewayInvocationRecord,
@@ -336,7 +242,7 @@ dispatched_at, plan_expires_at, record_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,
 
 func TestGatewayInvocationSQLiteLifecycleSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +255,7 @@ func TestGatewayInvocationSQLiteLifecycleSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err = NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,6 +271,42 @@ func TestGatewayInvocationSQLiteLifecycleSurvivesRestart(t *testing.T) {
 	record, requested, err := store.RequestCancellation(gatewayTestPrincipal(plan), plan.InvocationID)
 	if err != nil || !requested || record.Cancellation == nil {
 		t.Fatalf("cancel = (%#v, %v, %v)", record, requested, err)
+	}
+}
+
+func TestGatewayInvocationStoreRejectsAuthorityRebinding(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeGatewayInvocationSQLiteTestStore(t, store)()
+	first := gatewayTestPlan(t, "inv_first", "idem_first", time.Now())
+	if _, _, err = store.Prepare("vpn", "call-1", first, gatewayTestDescriptor()); err != nil {
+		t.Fatal(err)
+	}
+
+	second := gatewayTestPlan(t, "inv_second", "idem_second", time.Now())
+	for name, prepare := range map[string]func() error{
+		"tool call": func() error {
+			_, _, prepareErr := store.Prepare("vpn", "call-1", second, gatewayTestDescriptor())
+			return prepareErr
+		},
+		"invocation": func() error {
+			_, _, prepareErr := store.Prepare("other", "call-2", first, gatewayTestDescriptor())
+			return prepareErr
+		},
+		"idempotency key": func() error {
+			reusedKey := gatewayTestPlan(t, "inv_other", first.IdempotencyKey, time.Now())
+			_, _, prepareErr := store.Prepare("vpn", "call-2", reusedKey, gatewayTestDescriptor())
+			return prepareErr
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if prepareErr := prepare(); !errors.Is(prepareErr, ErrGatewayInvocationConflict) {
+				t.Fatalf("Prepare() error = %v", prepareErr)
+			}
+		})
 	}
 }
 
@@ -401,11 +343,75 @@ func TestGatewayInvocationSQLiteSchemaInitializationRollsBackAndRestarts(t *test
 	if err = os.Chmod(path, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatalf("restart after interrupted schema initialization: %v", err)
 	}
 	defer closeGatewayInvocationSQLiteTestStore(t, store)()
+}
+
+func TestGatewayInvocationSQLiteConcurrentInitialization(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+	const constructors = 16
+	type result struct {
+		store *GatewayInvocationStore
+		err   error
+	}
+	results := make(chan result, constructors)
+	var start sync.WaitGroup
+	start.Add(1)
+	var workers sync.WaitGroup
+	for range constructors {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			start.Wait()
+			store, err := NewGatewayInvocationStore(path, 16*1024*1024)
+			results <- result{store: store, err: err}
+		}()
+	}
+	start.Done()
+	workers.Wait()
+	close(results)
+
+	opened := 0
+	for constructor := range results {
+		if constructor.err != nil {
+			t.Errorf("concurrent constructor: %v", constructor.err)
+			continue
+		}
+		opened++
+		store := constructor.store
+		t.Cleanup(func() {
+			if err := store.Close(); err != nil {
+				t.Errorf("close concurrently initialized store: %v", err)
+			}
+		})
+	}
+	if opened != constructors {
+		t.Fatalf("opened stores = %d, want %d", opened, constructors)
+	}
+}
+
+func TestGatewayInvocationSQLiteRejectsSymlinkInitializationLock(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "initialization.lock")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "node_invocations.db")
+	if err := os.Symlink(target, path+".init.lock"); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := NewGatewayInvocationStore(path, 16*1024*1024); err == nil {
+		t.Fatal("symlinked initialization lock was accepted")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected initialization lock created database: %v", err)
+	}
 }
 
 func TestGatewayInvocationSQLiteStartupValidationHasNoBusyTimeoutDeadline(t *testing.T) {
@@ -443,7 +449,7 @@ func TestGatewayInvocationSQLiteStartupValidationHasNoBusyTimeoutDeadline(t *tes
 
 func TestGatewayInvocationSQLitePreservesActorAndWorkspaceIsolation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +500,7 @@ func TestGatewayInvocationSQLitePreservesActorAndWorkspaceIsolation(t *testing.T
 
 func TestGatewayInvocationSQLiteByToolCallSelectsExactExecutionScope(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -539,12 +545,12 @@ func TestGatewayInvocationSQLiteByToolCallSelectsExactExecutionScope(t *testing.
 
 func TestGatewayInvocationSQLiteConcurrentPrepareHasOneWinner(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	first, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	first, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeGatewayInvocationSQLiteTestStore(t, first)()
-	second, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	second, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -588,12 +594,12 @@ func TestGatewayInvocationSQLiteConcurrentPrepareHasOneWinner(t *testing.T) {
 
 func TestGatewayInvocationSQLiteConcurrentDispatchHasOneWinner(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	first, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	first, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeGatewayInvocationSQLiteTestStore(t, first)()
-	second, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	second, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +652,7 @@ func TestGatewayInvocationSQLitePrunesExpiredAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &GatewayInvocationStore{sqlite: backend}
+	store := &GatewayInvocationStore{backend: backend}
 	defer closeGatewayInvocationSQLiteTestStore(t, store)()
 
 	prepared := gatewayTestPlan(t, "inv_sqlite_expired", "idem_sqlite_expired", clock)
@@ -706,7 +712,7 @@ func TestGatewayInvocationSQLitePrunesExpiredAuthority(t *testing.T) {
 
 func TestGatewayInvocationSQLiteRejectsProjectionCorruptionOnRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -714,7 +720,7 @@ func TestGatewayInvocationSQLiteRejectsProjectionCorruptionOnRestart(t *testing.
 	if _, _, err = store.Prepare("vpn", "call-sqlite-corrupt", plan, gatewayTestDescriptor()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.sqlite.db.Exec(
+	if _, err = store.backend.db.Exec(
 		"UPDATE gateway_invocations SET target='changed' WHERE invocation_id=?",
 		plan.InvocationID,
 	); err != nil {
@@ -723,7 +729,7 @@ func TestGatewayInvocationSQLiteRejectsProjectionCorruptionOnRestart(t *testing.
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
+	if _, err = NewGatewayInvocationStore(path, 16*1024*1024); err == nil {
 		t.Fatal("projection corruption was accepted on restart")
 	}
 }
@@ -731,7 +737,7 @@ func TestGatewayInvocationSQLiteRejectsProjectionCorruptionOnRestart(t *testing.
 func TestGatewayInvocationSQLiteRejectsDatabasePathReplacement(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "state")
 	path := filepath.Join(directory, "node_invocations.db")
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -750,99 +756,6 @@ func TestGatewayInvocationSQLiteRejectsDatabasePathReplacement(t *testing.T) {
 	plan := gatewayTestPlan(t, "inv_sqlite_replaced", "idem_sqlite_replaced", time.Now())
 	if _, _, err = store.Prepare("vpn", "call-sqlite-replaced", plan, gatewayTestDescriptor()); err == nil {
 		t.Fatal("replacement SQLite database path was accepted")
-	}
-}
-
-func TestGatewayInvocationSQLiteRejectsDuplicateLegacyOwnership(t *testing.T) {
-	workspace := t.TempDir()
-	legacyPath := GatewayInvocationLegacyStorePath(workspace)
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	clock := time.Now()
-	records := make(map[string]GatewayInvocationRecord)
-	for index, identity := range []struct {
-		invocationID   string
-		idempotencyKey string
-	}{
-		{invocationID: "inv_sqlite_duplicate_one", idempotencyKey: "idem_sqlite_duplicate_one"},
-		{invocationID: "inv_sqlite_duplicate_two", idempotencyKey: "idem_sqlite_duplicate_two"},
-	} {
-		legacy := newGatewayInvocationStore("", 8, 1024*1024, func() time.Time { return clock })
-		plan := gatewayTestPlan(t, identity.invocationID, identity.idempotencyKey, clock)
-		record, created, err := legacy.Prepare(
-			"vpn",
-			"call-sqlite-duplicate",
-			plan,
-			gatewayTestDescriptor(),
-		)
-		if err != nil || !created {
-			t.Fatalf("prepare duplicate fixture %d = (%v, %v)", index, created, err)
-		}
-		records[plan.InvocationID] = record
-	}
-	data, err := json.Marshal(gatewayInvocationDocument{Version: gatewayInvocationStoreVersion, Records: records})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(legacyPath, append(data, '\n'), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = NewGatewayInvocationSQLiteStore(GatewayInvocationStorePath(workspace), 16*1024*1024); err == nil {
-		t.Fatal("duplicate legacy tool-call ownership was imported")
-	}
-}
-
-func TestGatewayInvocationSQLiteFailsClosedForMarkerWithoutDatabase(t *testing.T) {
-	workspace := t.TempDir()
-	legacyPath := GatewayInvocationLegacyStorePath(workspace)
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeGatewayInvocationMigrationMarker(legacyPath, GatewayInvocationStorePath(workspace)); err != nil {
-		t.Fatal(err)
-	}
-	_, err := NewGatewayInvocationSQLiteStore(GatewayInvocationStorePath(workspace), 16*1024*1024)
-	if err == nil {
-		t.Fatal("marker without durable database was accepted")
-	}
-	if _, statErr := os.Stat(GatewayInvocationStorePath(workspace)); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("marker-only startup created database: %v", statErr)
-	}
-}
-
-func TestGatewayInvocationSQLiteFailsClosedForMarkerWithTruncatedDatabase(t *testing.T) {
-	workspace := t.TempDir()
-	path := GatewayInvocationStorePath(workspace)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err = writeGatewayInvocationMigrationMarker(GatewayInvocationLegacyStorePath(workspace), path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
-		t.Fatal("marker-backed truncated database was accepted")
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = database.Close() }()
-	var schemaObjects int
-	if err = database.QueryRow("SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(
-		&schemaObjects,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if schemaObjects != 0 {
-		t.Fatalf("failed startup mutated truncated database with %d schema objects", schemaObjects)
 	}
 }
 
@@ -877,53 +790,8 @@ ON gateway_invocations(state, updated_at, plan_expires_at);`)
 	if err = os.Chmod(path, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err = writeGatewayInvocationMigrationMarker(GatewayInvocationLegacyStorePath(workspace), path); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = NewGatewayInvocationSQLiteStore(path, 16*1024*1024); err == nil {
-		t.Fatal("marker-backed schema without authority constraints was accepted")
-	}
-}
-
-func TestGatewayInvocationSQLiteRejectsSymlinkMigrationSource(t *testing.T) {
-	workspace := t.TempDir()
-	legacyPath := GatewayInvocationLegacyStorePath(workspace)
-	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(t.TempDir(), "marker.json")
-	if err := writeGatewayInvocationMigrationMarker(target, GatewayInvocationStorePath(workspace)); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, legacyPath); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
-	}
-	_, err := NewGatewayInvocationSQLiteStore(GatewayInvocationStorePath(workspace), 16*1024*1024)
-	if err == nil {
-		t.Fatal("symlink migration source was accepted")
-	}
-}
-
-func TestGatewayInvocationSQLiteRecoversEmptyDatabaseBeforeMarker(t *testing.T) {
-	workspace := t.TempDir()
-	path := GatewayInvocationStorePath(workspace)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeGatewayInvocationSQLiteTestStore(t, store)()
-	if _, err = os.Stat(GatewayInvocationLegacyStorePath(workspace)); err != nil {
-		t.Fatalf("recovered startup did not publish marker: %v", err)
+	if _, err = NewGatewayInvocationStore(path, 16*1024*1024); err == nil {
+		t.Fatal("schema without authority constraints was accepted")
 	}
 }
 
@@ -934,7 +802,7 @@ func TestGatewayInvocationSQLiteCapacityIsByteBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &GatewayInvocationStore{sqlite: backend}
+	store := &GatewayInvocationStore{backend: backend}
 	defer closeGatewayInvocationSQLiteTestStore(t, store)()
 	full := false
 	for index := 0; index < 1000; index++ {
@@ -973,116 +841,35 @@ func TestGatewayInvocationSQLiteCapacityIsByteBounded(t *testing.T) {
 	}
 }
 
-func TestGatewayInvocationSQLiteInspectAndDowngradeExport(t *testing.T) {
+func TestGatewayInvocationSQLiteInspect(t *testing.T) {
 	workspace := t.TempDir()
 	path := GatewayInvocationStorePath(workspace)
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
+	store, err := NewGatewayInvocationStore(path, 16*1024*1024)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan := gatewayTestPlan(t, "inv_sqlite_export", "idem_sqlite_export", time.Now())
-	prepared, created, prepareErr := store.Prepare(
+	plan := gatewayTestPlan(t, "inv_sqlite_inspect", "idem_sqlite_inspect", time.Now())
+	_, created, prepareErr := store.Prepare(
 		"vpn",
-		"call-sqlite-export",
+		"call-sqlite-inspect",
 		plan,
 		gatewayTestDescriptor(),
 	)
 	if prepareErr != nil || !created {
-		t.Fatalf("prepare export record = (%v, %v)", created, prepareErr)
+		t.Fatalf("prepare inspection record = (%v, %v)", created, prepareErr)
 	}
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	report, err := InspectGatewayInvocationSQLite(path)
+	report, err := InspectGatewayInvocationStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if report.SchemaVersion != gatewayInvocationSQLiteSchemaVersion || report.Records != 1 ||
-		report.Prepared != 1 || report.Dispatched != 0 || !report.MigrationComplete ||
+		report.Prepared != 1 || report.Dispatched != 0 ||
 		report.MaximumBytes < 16*1024*1024 || report.RetentionSeconds != int64(7*24*time.Hour/time.Second) {
 		t.Fatalf("inspection report = %#v", report)
-	}
-
-	output := filepath.Join(filepath.Dir(path), "node_invocations.rollback.json")
-	exportedReport, err := ExportGatewayInvocationSQLite(path, output, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if exportedReport.Records != 1 {
-		t.Fatalf("export report = %#v", exportedReport)
-	}
-	legacy, err := NewGatewayInvocationStore(output, DefaultGatewayInvocationLimit, DefaultGatewayInvocationStoreBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = legacy.Close() }()
-	record, found, err := legacy.Lookup(gatewayTestPrincipal(plan), plan.InvocationID)
-	if err != nil || !found || !sameGatewayInvocationRecord(record, prepared) {
-		t.Fatalf("exported record = (%#v, %v, %v)", record, found, err)
-	}
-}
-
-func TestGatewayInvocationSQLiteDowngradeExportIsBoundedAndProtected(t *testing.T) {
-	workspace := t.TempDir()
-	path := GatewayInvocationStorePath(workspace)
-	store, err := NewGatewayInvocationSQLiteStore(path, 16*1024*1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = ExportGatewayInvocationSQLite(path, filepath.Join(t.TempDir(), "export.json"), false); err == nil {
-		t.Fatal("export outside protected state directory succeeded")
-	}
-	if _, err = ExportGatewayInvocationSQLite(path, path, true); err == nil {
-		t.Fatal("export over database succeeded")
-	}
-	for _, protected := range []string{
-		filepath.Join(filepath.Dir(path), strings.ToUpper(filepath.Base(path))),
-		path + "-wal",
-		path + "-shm",
-		GatewayInvocationLegacyStorePath(workspace),
-	} {
-		if _, err = ExportGatewayInvocationSQLite(path, protected, true); err == nil {
-			t.Fatalf("export over protected SQLite artifact %q succeeded", protected)
-		}
-	}
-	alias := filepath.Join(filepath.Dir(path), "database-alias")
-	if err = os.Link(path, alias); err != nil {
-		t.Skipf("hard links unavailable: %v", err)
-	}
-	if _, err = ExportGatewayInvocationSQLite(path, alias, true); err == nil {
-		t.Fatal("export over hard-link database alias succeeded")
-	}
-}
-
-func TestGatewayInvocationSQLiteDowngradeExportPublicationHonorsReplace(t *testing.T) {
-	directory := t.TempDir()
-	output := filepath.Join(directory, "node_invocations.rollback.json")
-	if err := os.WriteFile(output, []byte("retained"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := publishGatewayInvocationSQLiteExport(output, []byte("new"), false); err == nil {
-		t.Fatal("no-replace publication overwrote an existing target")
-	}
-	data, err := os.ReadFile(output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "retained" {
-		t.Fatalf("no-replace publication changed target to %q", data)
-	}
-	if err = publishGatewayInvocationSQLiteExport(output, []byte("new"), true); err != nil {
-		t.Fatal(err)
-	}
-	data, err = os.ReadFile(output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "new" {
-		t.Fatalf("replace publication left target as %q", data)
 	}
 }
 

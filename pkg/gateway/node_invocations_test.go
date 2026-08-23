@@ -875,7 +875,6 @@ func newTestNodeInvocationSourceWithRuntime(
 	t.Helper()
 	store, err := nodes.NewGatewayInvocationStore(
 		nodes.GatewayInvocationStorePath(t.TempDir()),
-		8,
 		1024*1024,
 	)
 	if err != nil {

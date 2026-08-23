@@ -1,9 +1,11 @@
 # Gateway Invocation SQLite Production Proof
 
-Status: complete on 2026-08-12 for the `main` profile.
+Status: archived cutover evidence from 2026-08-12 for the `main` profile. The
+commands and rollback procedures recorded here are historical and are not the
+current operations contract.
 
 This record closes the implementation sequence admitted by
-[Gateway Invocation SQLite Admission](../architecture/gateway-invocation-sqlite-admission.md).
+[Gateway Invocation SQLite Contract](../gateway-invocation-sqlite-admission.md).
 It covers only the gateway invocation store. No unrelated JSON store was
 migrated.
 
@@ -83,8 +85,8 @@ The exporter did not modify the production database. Default publication is
 atomic no-clobber; explicit replacement still rejects the database, marker,
 WAL, SHM, case variants, and existing filesystem aliases. A real downgrade
 must still stop the gateway, export the latest store, atomically replace the
-marker, and install the older binary in that order, as described in the
-[operations runbook](gateway-invocation-sqlite.md).
+marker, and install the older binary in that order. That procedure belonged to
+the retired release and is not a current MintClaw command.
 
 ## Real model-facing and recovery proof
 

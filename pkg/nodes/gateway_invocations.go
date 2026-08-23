@@ -2,32 +2,21 @@ package nodes
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"math"
-	"os"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 const (
-	gatewayInvocationStoreVersion      = 1
-	DefaultGatewayInvocationLimit      = 8192
-	DefaultGatewayInvocationStoreBytes = 32 * 1024 * 1024
-	DefaultGatewayInvocationRetention  = 7 * 24 * time.Hour
-	maxGatewayToolCallIDLength         = 512
-	maxGatewayTargetLength             = 64
+	DefaultGatewayInvocationRetention = 7 * 24 * time.Hour
+	maxGatewayToolCallIDLength        = 512
+	maxGatewayTargetLength            = 64
 )
 
-const DefaultGatewayInvocationSQLiteBytes int64 = 4 * 1024 * 1024 * 1024
+const DefaultGatewayInvocationStoreBytes int64 = 4 * 1024 * 1024 * 1024
 
 var (
 	ErrGatewayInvocationConflict      = errors.New("gateway node invocation conflicts with durable state")
@@ -85,64 +74,34 @@ type GatewayInvocationPrincipal struct {
 	ExecutionID string
 }
 
-type gatewayInvocationDocument struct {
-	Version int                                `json:"version"`
-	Records map[string]GatewayInvocationRecord `json:"records"`
-}
-
-// GatewayInvocationSQLiteReport is a redacted operational view of the
+// GatewayInvocationStoreReport is a redacted operational view of the
 // gateway invocation database. It intentionally contains no authority,
 // identities, plans, arguments, or record payloads.
-type GatewayInvocationSQLiteReport struct {
-	SchemaVersion     int   `json:"schema_version"`
-	Records           int64 `json:"records"`
-	Prepared          int64 `json:"prepared"`
-	Dispatched        int64 `json:"dispatched"`
-	DatabaseBytes     int64 `json:"database_bytes"`
-	WALBytes          int64 `json:"wal_bytes"`
-	SHMBytes          int64 `json:"shm_bytes"`
-	PageBytes         int64 `json:"page_bytes"`
-	FreePageBytes     int64 `json:"free_page_bytes"`
-	MaximumBytes      int64 `json:"maximum_bytes"`
-	OldestUpdatedAt   int64 `json:"oldest_updated_at,omitempty"`
-	RetentionSeconds  int64 `json:"retention_seconds"`
-	MigrationComplete bool  `json:"migration_complete"`
+type GatewayInvocationStoreReport struct {
+	SchemaVersion    int   `json:"schema_version"`
+	Records          int64 `json:"records"`
+	Prepared         int64 `json:"prepared"`
+	Dispatched       int64 `json:"dispatched"`
+	DatabaseBytes    int64 `json:"database_bytes"`
+	WALBytes         int64 `json:"wal_bytes"`
+	SHMBytes         int64 `json:"shm_bytes"`
+	PageBytes        int64 `json:"page_bytes"`
+	FreePageBytes    int64 `json:"free_page_bytes"`
+	MaximumBytes     int64 `json:"maximum_bytes"`
+	OldestUpdatedAt  int64 `json:"oldest_updated_at,omitempty"`
+	RetentionSeconds int64 `json:"retention_seconds"`
 }
 
-// GatewayInvocationStore persists prepared plan ownership across gateway
-// restarts. Runtime gateways use the transactional SQLite backend; the legacy
-// JSON backend remains available only for migration and focused compatibility
-// tests.
+// GatewayInvocationStore persists prepared plan ownership in SQLite.
 type GatewayInvocationStore struct {
-	sqlite *gatewayInvocationSQLiteStore
-
-	path       string
-	maxRecords int
-	maxBytes   int
-	retention  time.Duration
-	now        func() time.Time
-	writeFile  func(string, []byte, os.FileMode) error
-	readFile   func(string, int) (gatewayInvocationDocument, *os.File, error)
-
-	mu      sync.Mutex
-	records map[string]GatewayInvocationRecord
-	loaded  bool
-	// file pins the exact validated file identity so an atomic replacement
-	// cannot recycle it into a false unchanged-file cache hit.
-	file    *os.File
-	missing bool
-	closed  bool
+	backend *gatewayInvocationSQLiteStore
 }
 
 func GatewayInvocationStorePath(workspace string) string {
 	return filepath.Join(workspace, "state", "node_invocations.db")
 }
 
-func GatewayInvocationLegacyStorePath(workspace string) string {
-	return filepath.Join(workspace, "state", "node_invocations.json")
-}
-
-func NewGatewayInvocationSQLiteStore(
+func NewGatewayInvocationStore(
 	path string,
 	maxBytes int64,
 ) (*GatewayInvocationStore, error) {
@@ -150,58 +109,7 @@ func NewGatewayInvocationSQLiteStore(
 	if err != nil {
 		return nil, err
 	}
-	return &GatewayInvocationStore{sqlite: backend}, nil
-}
-
-func NewGatewayInvocationStore(
-	path string,
-	maxRecords int,
-	maxBytes int,
-) (*GatewayInvocationStore, error) {
-	path = filepath.Clean(path)
-	if path == "." || path == string(filepath.Separator) {
-		return nil, errors.New("gateway node invocation store path is required")
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create gateway node invocation store directory: %w", err)
-	}
-	store := newGatewayInvocationStore(path, maxRecords, maxBytes, time.Now)
-	store.mu.Lock()
-	release, err := store.lockAndReloadLocked()
-	if err != nil {
-		store.mu.Unlock()
-		return nil, err
-	}
-	release()
-	store.mu.Unlock()
-	return store, nil
-}
-
-func newGatewayInvocationStore(
-	path string,
-	maxRecords int,
-	maxBytes int,
-	now func() time.Time,
-) *GatewayInvocationStore {
-	if maxRecords <= 0 {
-		maxRecords = DefaultGatewayInvocationLimit
-	}
-	if maxBytes <= 0 {
-		maxBytes = DefaultGatewayInvocationStoreBytes
-	}
-	if now == nil {
-		now = time.Now
-	}
-	return &GatewayInvocationStore{
-		path:       path,
-		maxRecords: maxRecords,
-		maxBytes:   maxBytes,
-		retention:  DefaultGatewayInvocationRetention,
-		now:        now,
-		writeFile:  fileutil.WriteFileAtomic,
-		readFile:   readGatewayInvocationDocument,
-		records:    make(map[string]GatewayInvocationRecord),
-	}
+	return &GatewayInvocationStore{backend: backend}, nil
 }
 
 func (store *GatewayInvocationStore) Prepare(
@@ -228,231 +136,28 @@ func (store *GatewayInvocationStore) PrepareOwned(
 	plan ExecutionPlan,
 	descriptor CommandDescriptor,
 ) (GatewayInvocationRecord, bool, error) {
-	if store != nil && store.sqlite != nil {
-		return store.sqlite.prepareOwned(principal, target, toolCallID, plan, descriptor)
-	}
-	principal.AgentID = strings.TrimSpace(principal.AgentID)
-	principal.SessionID = strings.TrimSpace(principal.SessionID)
-	principal.ActorID = strings.TrimSpace(principal.ActorID)
-	principal.WorkspaceID = strings.TrimSpace(principal.WorkspaceID)
-	principal.ExecutionID = strings.TrimSpace(principal.ExecutionID)
-	if principal.AgentID != plan.AgentID ||
-		principal.SessionID != plan.SessionID ||
-		principal.ActorID != plan.ActorID ||
-		(principal.WorkspaceID == "") != (principal.ExecutionID == "") {
-		return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
-	}
-	now := store.now()
-	record := GatewayInvocationRecord{
-		Target:           strings.TrimSpace(target),
-		ToolCallID:       strings.TrimSpace(toolCallID),
-		Plan:             cloneExecutionPlan(plan),
-		Descriptor:       cloneCommandDescriptor(descriptor),
-		ExpectedPlanHash: plan.PlanHash,
-		State:            GatewayInvocationPrepared,
-		CreatedAt:        now.UnixNano(),
-		UpdatedAt:        now.UnixNano(),
-		WorkspaceID:      strings.TrimSpace(principal.WorkspaceID),
-		ExecutionID:      strings.TrimSpace(principal.ExecutionID),
-	}
-	if err := record.validate(); err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	if now.Unix() >= plan.ExpiresAt {
-		return GatewayInvocationRecord{}, false, fmt.Errorf(
-			"%w: execution plan expired before persistence",
-			ErrInvalidInvocation,
-		)
-	}
-
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	release, err := store.lockAndReloadLocked()
-	if err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	defer release()
-	now = store.now()
-	if now.Unix() >= plan.ExpiresAt {
-		return GatewayInvocationRecord{}, false, fmt.Errorf(
-			"%w: execution plan expired before persistence",
-			ErrInvalidInvocation,
-		)
-	}
-	record.CreatedAt = now.UnixNano()
-	record.UpdatedAt = record.CreatedAt
-	previous := cloneGatewayInvocationRecords(store.records)
-	store.pruneLocked(now)
-	pruned := len(previous) != len(store.records)
-	for _, existing := range store.records {
-		if existing.Plan.IdempotencyKey == plan.IdempotencyKey &&
-			!sameGatewayInvocationBinding(existing, record) {
-			store.records = previous
-			return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
-		}
-		if sameGatewayToolCall(
-			existing,
-			plan.AgentID,
-			plan.SessionID,
-			plan.ActorID,
-			record.ToolCallID,
-		) && gatewayInvocationScopeMatches(existing, principal) {
-			if sameGatewayInvocationBinding(existing, record) {
-				if pruned {
-					if err := store.persistMutationLocked(previous); err != nil {
-						return GatewayInvocationRecord{}, false, fmt.Errorf(
-							"persist pruned node invocations: %w",
-							err,
-						)
-					}
-				}
-				return cloneGatewayInvocationRecord(existing), false, nil
-			}
-			store.records = previous
-			return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
-		}
-	}
-	if existing, found := store.records[plan.InvocationID]; found {
-		if sameGatewayInvocationBinding(existing, record) {
-			if pruned {
-				if err := store.persistMutationLocked(previous); err != nil {
-					return GatewayInvocationRecord{}, false, fmt.Errorf(
-						"persist pruned node invocations: %w",
-						err,
-					)
-				}
-			}
-			return cloneGatewayInvocationRecord(existing), false, nil
-		}
-		store.records = previous
-		return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
-	}
-	if len(store.records) >= store.maxRecords {
-		store.records = previous
-		return GatewayInvocationRecord{}, false, ErrGatewayInvocationStoreFull
-	}
-	store.records[plan.InvocationID] = record
-	if err := store.persistMutationLocked(previous); err != nil {
-		return GatewayInvocationRecord{}, false, fmt.Errorf(
-			"persist prepared node invocation: %w",
-			err,
-		)
-	}
-	return cloneGatewayInvocationRecord(record), true, nil
+	return store.backend.prepareOwned(principal, target, toolCallID, plan, descriptor)
 }
 
 func (store *GatewayInvocationStore) ByToolCall(
 	principal GatewayInvocationPrincipal,
 	toolCallID string,
 ) (GatewayInvocationRecord, bool, error) {
-	if store != nil && store.sqlite != nil {
-		return store.sqlite.byToolCall(principal, toolCallID)
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	release, err := store.lockAndReloadLocked()
-	if err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	defer release()
-	if err := store.pruneAndPersistLocked(store.now()); err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	for _, record := range store.records {
-		if sameGatewayToolCall(
-			record,
-			principal.AgentID,
-			principal.SessionID,
-			principal.ActorID,
-			toolCallID,
-		) && gatewayInvocationScopeMatches(record, principal) {
-			return cloneGatewayInvocationRecord(record), true, nil
-		}
-	}
-	return GatewayInvocationRecord{}, false, nil
+	return store.backend.byToolCall(principal, toolCallID)
 }
 
 func (store *GatewayInvocationStore) Lookup(
 	principal GatewayInvocationPrincipal,
 	invocationID string,
 ) (GatewayInvocationRecord, bool, error) {
-	if store != nil && store.sqlite != nil {
-		return store.sqlite.lookup(principal, invocationID)
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	release, err := store.lockAndReloadLocked()
-	if err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	defer release()
-	if err := store.pruneAndPersistLocked(store.now()); err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	record, found := store.records[invocationID]
-	if !found ||
-		record.Plan.AgentID != principal.AgentID ||
-		record.Plan.SessionID != principal.SessionID ||
-		record.Plan.ActorID != principal.ActorID ||
-		!gatewayInvocationWorkspaceMatches(record, principal) {
-		return GatewayInvocationRecord{}, false, nil
-	}
-	return cloneGatewayInvocationRecord(record), true, nil
+	return store.backend.lookup(principal, invocationID)
 }
 
 func (store *GatewayInvocationStore) RequestCancellation(
 	principal GatewayInvocationPrincipal,
 	invocationID string,
 ) (GatewayInvocationRecord, bool, error) {
-	if store != nil && store.sqlite != nil {
-		return store.sqlite.requestCancellation(principal, invocationID)
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	release, err := store.lockAndReloadLocked()
-	if err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	defer release()
-	if err := store.pruneAndPersistLocked(store.now()); err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	record, found := store.records[invocationID]
-	if !found {
-		return GatewayInvocationRecord{}, false, ErrGatewayInvocationNotFound
-	}
-	if record.Plan.AgentID != principal.AgentID ||
-		record.Plan.SessionID != principal.SessionID ||
-		record.Plan.ActorID != principal.ActorID ||
-		!gatewayInvocationScopeMatches(record, principal) {
-		return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
-	}
-	if record.State != GatewayInvocationDispatched {
-		return GatewayInvocationRecord{}, false, ErrGatewayInvocationNotDispatched
-	}
-	if record.Cancellation != nil {
-		return cloneGatewayInvocationRecord(record), false, nil
-	}
-	previous := cloneGatewayInvocationRecords(store.records)
-	now := store.now().UnixNano()
-	if now <= record.UpdatedAt {
-		if record.UpdatedAt == math.MaxInt64 {
-			return GatewayInvocationRecord{}, false, fmt.Errorf(
-				"%w: invocation timestamp exhausted",
-				ErrInvalidInvocation,
-			)
-		}
-		now = record.UpdatedAt + 1
-	}
-	record.Cancellation = &GatewayInvocationCancellation{RequestedAt: now}
-	record.UpdatedAt = now
-	store.records[invocationID] = record
-	if err := store.persistMutationLocked(previous); err != nil {
-		return cloneGatewayInvocationRecord(record),
-			fileutil.IsCommittedWriteError(err),
-			fmt.Errorf("persist node invocation cancellation: %w", err)
-	}
-	return cloneGatewayInvocationRecord(record), true, nil
+	return store.backend.requestCancellation(principal, invocationID)
 }
 
 func (store *GatewayInvocationStore) MarkDispatched(
@@ -460,414 +165,18 @@ func (store *GatewayInvocationStore) MarkDispatched(
 	invocationID string,
 	expectedPlanHash string,
 ) (GatewayInvocationRecord, bool, error) {
-	if store != nil && store.sqlite != nil {
-		return store.sqlite.markDispatched(owner, invocationID, expectedPlanHash)
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if err := owner.validate(); err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	release, err := store.lockAndReloadLocked()
-	if err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	defer release()
-	if err := store.pruneAndPersistLocked(store.now()); err != nil {
-		return GatewayInvocationRecord{}, false, err
-	}
-	record, found := store.records[invocationID]
-	if !found {
-		return GatewayInvocationRecord{}, false, ErrGatewayInvocationNotFound
-	}
-	if !owner.matches(record) {
-		return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
-	}
-	if err := record.Plan.ValidateAgainstHash(expectedPlanHash); err != nil ||
-		record.ExpectedPlanHash != expectedPlanHash {
-		return GatewayInvocationRecord{}, false, ErrGatewayInvocationConflict
-	}
-	if record.State == GatewayInvocationDispatched {
-		return cloneGatewayInvocationRecord(record), false, nil
-	}
-	previous := cloneGatewayInvocationRecords(store.records)
-	now := store.now().UnixNano()
-	if now <= record.UpdatedAt {
-		if record.UpdatedAt == math.MaxInt64 {
-			return GatewayInvocationRecord{}, false, fmt.Errorf(
-				"%w: invocation timestamp exhausted",
-				ErrInvalidInvocation,
-			)
-		}
-		now = record.UpdatedAt + 1
-	}
-	record.State = GatewayInvocationDispatched
-	record.DispatchedAt = now
-	record.UpdatedAt = now
-	store.records[invocationID] = record
-	if err := store.persistMutationLocked(previous); err != nil {
-		return cloneGatewayInvocationRecord(record),
-			fileutil.IsCommittedWriteError(err),
-			fmt.Errorf("persist dispatched node invocation: %w", err)
-	}
-	return cloneGatewayInvocationRecord(record), true, nil
+	return store.backend.markDispatched(owner, invocationID, expectedPlanHash)
 }
 
-func (store *GatewayInvocationStore) lockAndReloadLocked() (func(), error) {
-	if store.closed {
-		return nil, os.ErrClosed
-	}
-	if store.path == "" {
-		return func() {}, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(store.path), 0o700); err != nil {
-		return nil, fmt.Errorf("create gateway node invocation store directory: %w", err)
-	}
-	release, err := acquireRegistryFileLock(store.path + ".lock")
-	if err != nil {
-		return nil, err
-	}
-	if err := store.loadLocked(); err != nil {
-		release()
-		return nil, fmt.Errorf("reload gateway node invocation store under lock: %w", err)
-	}
-	return release, nil
-}
-
-func (store *GatewayInvocationStore) loadLocked() error {
-	info, err := os.Stat(store.path)
-	if errors.Is(err, os.ErrNotExist) {
-		if store.loaded && store.missing {
-			return nil
-		}
-		store.records = make(map[string]GatewayInvocationRecord)
-		store.loaded = true
-		store.replaceCachedFileLocked(nil)
-		store.missing = true
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("stat gateway node invocation store: %w", err)
-	}
-	if store.loaded && !store.missing && sameGatewayInvocationPathFile(store.file, info) {
-		return nil
-	}
-	if info.Size() > int64(store.maxBytes) {
-		return ErrGatewayInvocationStoreFull
-	}
-	document, validatedFile, err := store.readFile(store.path, store.maxBytes)
-	if err != nil {
-		return err
-	}
-	if validatedFile == nil {
-		return errors.New("gateway node invocation store reader did not retain its file")
-	}
-	keepValidatedFile := false
-	defer func() {
-		if !keepValidatedFile {
-			_ = validatedFile.Close()
-		}
-	}()
-	if document.Version != gatewayInvocationStoreVersion ||
-		document.Records == nil ||
-		len(document.Records) > store.maxRecords {
-		return errors.New("gateway node invocation store has invalid metadata")
-	}
-	toolCalls := make(map[string]string, len(document.Records))
-	idempotency := make(map[string]string, len(document.Records))
-	validatedDescriptors := make(map[string][]CommandDescriptor)
-	for invocationID, record := range document.Records {
-		if invocationID != record.Plan.InvocationID {
-			return errors.New("gateway node invocation store has mismatched record identity")
-		}
-		if err := record.validateWithDescriptorCache(validatedDescriptors); err != nil {
-			return fmt.Errorf("validate gateway node invocation %q: %w", invocationID, err)
-		}
-		toolCallKey := gatewayToolCallKey(
-			record.Plan.AgentID,
-			record.Plan.SessionID,
-			record.Plan.ActorID,
-			record.ToolCallID,
-		)
-		if existing := toolCalls[toolCallKey]; existing != "" {
-			return fmt.Errorf(
-				"gateway node invocations %q and %q share tool-call ownership",
-				existing,
-				invocationID,
-			)
-		}
-		toolCalls[toolCallKey] = invocationID
-		if existing := idempotency[record.Plan.IdempotencyKey]; existing != "" {
-			return fmt.Errorf(
-				"gateway node invocations %q and %q share idempotency authority",
-				existing,
-				invocationID,
-			)
-		}
-		idempotency[record.Plan.IdempotencyKey] = invocationID
-	}
-	store.records = cloneGatewayInvocationRecords(document.Records)
-	store.loaded = true
-	store.replaceCachedFileLocked(validatedFile)
-	keepValidatedFile = true
-	store.missing = false
-	if err := store.pruneAndPersistLocked(store.now()); err != nil {
-		return fmt.Errorf("prune gateway node invocation store: %w", err)
-	}
-	return nil
-}
-
-func sameGatewayInvocationFileInfo(left, right os.FileInfo) bool {
-	return left != nil && right != nil && os.SameFile(left, right) &&
-		left.Size() == right.Size() && left.ModTime().Equal(right.ModTime())
-}
-
-func sameGatewayInvocationPathFile(file *os.File, pathInfo os.FileInfo) bool {
-	if file == nil {
-		return false
-	}
-	fileInfo, err := file.Stat()
-	return err == nil && sameGatewayInvocationFileInfo(fileInfo, pathInfo)
-}
-
-func (store *GatewayInvocationStore) replaceCachedFileLocked(file *os.File) {
-	previous := store.file
-	store.file = file
-	if previous != nil && previous != file {
-		_ = previous.Close()
-	}
-}
-
-func (store *GatewayInvocationStore) invalidateCachedFileLocked() {
-	store.loaded = false
-	store.replaceCachedFileLocked(nil)
-}
-
-// Close releases the retained file identity. It is safe to call repeatedly;
-// no store operation is admitted after the first close.
 func (store *GatewayInvocationStore) Close() error {
-	if store == nil {
+	if store == nil || store.backend == nil {
 		return nil
 	}
-	if store.sqlite != nil {
-		return store.sqlite.close()
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if store.closed {
-		return nil
-	}
-	store.closed = true
-	store.loaded = false
-	file := store.file
-	store.file = nil
-	if file == nil {
-		return nil
-	}
-	return file.Close()
-}
-
-func readGatewayInvocationDocument(
-	path string,
-	maxBytes int,
-) (document gatewayInvocationDocument, retained *os.File, returnErr error) {
-	file, err := openGatewayInvocationFile(path)
-	if err != nil {
-		return gatewayInvocationDocument{}, nil, fmt.Errorf(
-			"open gateway node invocation store: %w",
-			err,
-		)
-	}
-	defer func() {
-		if returnErr != nil {
-			_ = file.Close()
-		}
-	}()
-	info, err := file.Stat()
-	if err != nil {
-		return gatewayInvocationDocument{}, nil, fmt.Errorf(
-			"stat open gateway node invocation store: %w",
-			err,
-		)
-	}
-	if info.Size() > int64(maxBytes) {
-		return gatewayInvocationDocument{}, nil, ErrGatewayInvocationStoreFull
-	}
-	decoder := json.NewDecoder(io.LimitReader(file, int64(maxBytes)+1))
-	decoder.DisallowUnknownFields()
-	if decodeErr := decoder.Decode(&document); decodeErr != nil {
-		return gatewayInvocationDocument{}, nil, fmt.Errorf(
-			"decode gateway node invocation store: %w",
-			decodeErr,
-		)
-	}
-	if trailingErr := decoder.Decode(new(any)); !errors.Is(trailingErr, io.EOF) {
-		return gatewayInvocationDocument{}, nil, errors.New(
-			"decode gateway node invocation store: trailing data",
-		)
-	}
-	after, err := file.Stat()
-	if err != nil {
-		return gatewayInvocationDocument{}, nil, fmt.Errorf(
-			"restat open gateway node invocation store: %w",
-			err,
-		)
-	}
-	if !sameGatewayInvocationFileInfo(info, after) {
-		return gatewayInvocationDocument{}, nil, errors.New(
-			"gateway node invocation store changed while reading",
-		)
-	}
-	return document, file, nil
-}
-
-func (store *GatewayInvocationStore) saveLocked() error {
-	document := gatewayInvocationDocument{
-		Version: gatewayInvocationStoreVersion,
-		Records: store.records,
-	}
-	data, err := json.Marshal(document)
-	if err != nil {
-		return err
-	}
-	if len(data)+1 > store.maxBytes {
-		return ErrGatewayInvocationStoreFull
-	}
-	if store.path == "" {
-		return nil
-	}
-	data = append(data, '\n')
-	if writeErr := store.writeFile(store.path, data, 0o600); writeErr != nil {
-		store.invalidateCachedFileLocked()
-		return writeErr
-	}
-	file, err := identifyGatewayInvocationFile(store.path, data)
-	if err != nil {
-		store.invalidateCachedFileLocked()
-		return err
-	}
-	store.loaded = true
-	store.replaceCachedFileLocked(file)
-	store.missing = false
-	return nil
-}
-
-func identifyGatewayInvocationFile(path string, expected []byte) (retained *os.File, returnErr error) {
-	file, err := openGatewayInvocationFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("open persisted gateway node invocation store: %w", err)
-	}
-	defer func() {
-		if returnErr != nil {
-			_ = file.Close()
-		}
-	}()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("stat persisted gateway node invocation store: %w", err)
-	}
-	if info.Size() != int64(len(expected)) {
-		return nil, errors.New("persisted gateway node invocation store changed after write")
-	}
-	actual, err := io.ReadAll(io.LimitReader(file, int64(len(expected))+1))
-	if err != nil {
-		return nil, fmt.Errorf("read persisted gateway node invocation store: %w", err)
-	}
-	if !bytes.Equal(actual, expected) {
-		return nil, errors.New("persisted gateway node invocation store changed after write")
-	}
-	after, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("restat persisted gateway node invocation store: %w", err)
-	}
-	if !sameGatewayInvocationFileInfo(info, after) {
-		return nil, errors.New("persisted gateway node invocation store changed after write")
-	}
-	return file, nil
-}
-
-func (store *GatewayInvocationStore) pruneLocked(now time.Time) {
-	retentionBefore := now.Add(-store.retention).UnixNano()
-	for invocationID, record := range store.records {
-		if record.State == GatewayInvocationPrepared && now.Unix() >= record.Plan.ExpiresAt {
-			delete(store.records, invocationID)
-			continue
-		}
-		if record.State == GatewayInvocationDispatched && record.UpdatedAt < retentionBefore {
-			delete(store.records, invocationID)
-		}
-	}
-}
-
-func (store *GatewayInvocationStore) pruneAndPersistLocked(now time.Time) error {
-	previous := cloneGatewayInvocationRecords(store.records)
-	store.pruneLocked(now)
-	if len(previous) == len(store.records) {
-		return nil
-	}
-	return store.persistMutationLocked(previous)
-}
-
-func (store *GatewayInvocationStore) persistMutationLocked(
-	previous map[string]GatewayInvocationRecord,
-) error {
-	if err := store.ensureCachedFileCanonicalLocked(); err != nil {
-		store.records = previous
-		return err
-	}
-	err := store.saveLocked()
-	if err != nil && !fileutil.IsCommittedWriteError(err) {
-		store.records = previous
-	}
-	return err
-}
-
-func (store *GatewayInvocationStore) ensureCachedFileCanonicalLocked() error {
-	if store.path == "" {
-		return nil
-	}
-	info, err := os.Stat(store.path)
-	if store.loaded && store.missing && errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err == nil && store.loaded && !store.missing &&
-		sameGatewayInvocationPathFile(store.file, info) {
-		return nil
-	}
-	store.invalidateCachedFileLocked()
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("verify canonical gateway node invocation store: %w", err)
-	}
-	return fmt.Errorf(
-		"%w: gateway node invocation store changed before mutation",
-		ErrGatewayInvocationConflict,
-	)
+	return store.backend.close()
 }
 
 func (record GatewayInvocationRecord) validate() error {
 	return record.validateFields(false)
-}
-
-func (record GatewayInvocationRecord) validateWithDescriptorCache(
-	cache map[string][]CommandDescriptor,
-) error {
-	descriptorValidated := false
-	for _, descriptor := range cache[record.Plan.DescriptorHash] {
-		if reflect.DeepEqual(descriptor, record.Descriptor) {
-			descriptorValidated = true
-			break
-		}
-	}
-	if err := record.validateFields(descriptorValidated); err != nil {
-		return err
-	}
-	if !descriptorValidated {
-		cache[record.Plan.DescriptorHash] = append(
-			cache[record.Plan.DescriptorHash],
-			cloneCommandDescriptor(record.Descriptor),
-		)
-	}
-	return nil
 }
 
 func (record GatewayInvocationRecord) validateFields(descriptorValidated bool) error {
@@ -944,26 +253,6 @@ func gatewayInvocationWorkspaceMatches(
 		record.WorkspaceID == strings.TrimSpace(principal.WorkspaceID)
 }
 
-func sameGatewayToolCall(
-	record GatewayInvocationRecord,
-	agentID string,
-	sessionID string,
-	actorID string,
-	toolCallID string,
-) bool {
-	return record.Plan.AgentID == strings.TrimSpace(agentID) &&
-		record.Plan.SessionID == strings.TrimSpace(sessionID) &&
-		record.Plan.ActorID == strings.TrimSpace(actorID) &&
-		record.ToolCallID == strings.TrimSpace(toolCallID)
-}
-
-func gatewayToolCallKey(agentID string, sessionID string, actorID string, toolCallID string) string {
-	return strings.TrimSpace(agentID) + "\x00" +
-		strings.TrimSpace(sessionID) + "\x00" +
-		strings.TrimSpace(actorID) + "\x00" +
-		strings.TrimSpace(toolCallID)
-}
-
 func sameGatewayInvocationBinding(
 	left GatewayInvocationRecord,
 	right GatewayInvocationRecord,
@@ -1003,16 +292,6 @@ func (owner GatewayInvocationOwner) matches(record GatewayInvocationRecord) bool
 		strings.TrimSpace(owner.ToolCallID) == record.ToolCallID &&
 		strings.TrimSpace(owner.WorkspaceID) == record.WorkspaceID &&
 		strings.TrimSpace(owner.ExecutionID) == record.ExecutionID
-}
-
-func cloneGatewayInvocationRecords(
-	records map[string]GatewayInvocationRecord,
-) map[string]GatewayInvocationRecord {
-	cloned := make(map[string]GatewayInvocationRecord, len(records))
-	for invocationID, record := range records {
-		cloned[invocationID] = cloneGatewayInvocationRecord(record)
-	}
-	return cloned
 }
 
 func cloneGatewayInvocationRecord(record GatewayInvocationRecord) GatewayInvocationRecord {

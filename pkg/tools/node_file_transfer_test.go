@@ -831,8 +831,7 @@ func newFakeNodeFileTransferSourceForDescriptor(
 		connected: map[nodes.ID]bool{snapshot.ID: true},
 	}
 	store, err := nodes.NewGatewayInvocationStore(
-		filepath.Join(t.TempDir(), "node-file-invocations.json"),
-		8,
+		filepath.Join(t.TempDir(), "state", "node-file-invocations.db"),
 		1024*1024,
 	)
 	if err != nil {
