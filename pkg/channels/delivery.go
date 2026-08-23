@@ -29,17 +29,19 @@ const (
 
 // DeliveryResult carries the transport-independent outcome of a delivery.
 // A non-nil Remaining slice identifies payload that can be retried without
-// replaying confirmed IDs. Acceptance records whether that retry may duplicate
-// an unconfirmed operation.
+// replaying confirmed IDs. UnresolvedPartial records that an earlier portion
+// remains ambiguous even though Remaining can be retried safely. Acceptance
+// records whether the failed operation may have been accepted remotely.
 type DeliveryResult[T any] struct {
-	MessageIDs []string
-	Status     DeliveryStatus
-	Acceptance DeliveryAcceptance
-	Remaining  []T
-	RetryAfter time.Duration
-	RetryAt    time.Time
-	Attempts   int
-	Err        error
+	MessageIDs        []string
+	Status            DeliveryStatus
+	Acceptance        DeliveryAcceptance
+	Remaining         []T
+	UnresolvedPartial bool
+	RetryAfter        time.Duration
+	RetryAt           time.Time
+	Attempts          int
+	Err               error
 }
 
 func (r DeliveryResult[T]) Delivered() bool {
@@ -135,7 +137,9 @@ func DeliverSequentially[T any](
 			} else if index+1 < len(pending) {
 				remaining = pending[index+1:]
 			}
-			return FailedDelivery(messageIDs, remaining, 0, err)
+			result := FailedDelivery(messageIDs, remaining, 0, err)
+			result.UnresolvedPartial = len(ids) > 0 && len(remaining) > 0
+			return result
 		}
 	}
 	return SuccessfulDelivery[T](messageIDs)
@@ -189,6 +193,9 @@ func DeliverWithRetry[T any](
 	var confirmedIDs []string
 	var result DeliveryResult[T]
 	acceptanceUnknown := false
+	var unresolvedPartial DeliveryResult[T]
+	hasUnresolvedPartial := false
+	currentUnresolvedPartial := false
 	maxRetries := max(policy.MaxRetries, 0)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -203,6 +210,23 @@ func DeliverWithRetry[T any](
 		acceptanceUnknown = acceptanceUnknown || result.Ambiguous()
 		result.Attempts = attempt + 1
 		confirmedIDs = append(confirmedIDs, result.MessageIDs...)
+		currentUnresolvedPartial = result.UnresolvedPartial
+		if currentUnresolvedPartial {
+			if !hasUnresolvedPartial {
+				unresolvedPartial = result
+			} else {
+				unresolvedPartial.Acceptance = combineDeliveryAcceptance(
+					unresolvedPartial.Acceptance,
+					result.Acceptance,
+				)
+				unresolvedPartial.Err = errors.Join(unresolvedPartial.Err, result.Err)
+				if !result.RetryAt.IsZero() || result.RetryAfter > 0 {
+					unresolvedPartial.RetryAfter = result.RetryAfter
+					unresolvedPartial.RetryAt = result.RetryAt
+				}
+			}
+			hasUnresolvedPartial = true
+		}
 		if observe != nil {
 			observe(DeliveryAttempt{
 				Number:   attempt + 1,
@@ -215,6 +239,14 @@ func DeliverWithRetry[T any](
 		if result.Delivered() {
 			result.MessageIDs = confirmedIDs
 			result.Remaining = nil
+			if hasUnresolvedPartial {
+				result.Status = DeliveryPartial
+				result.Acceptance = unresolvedPartial.Acceptance
+				result.UnresolvedPartial = true
+				result.RetryAfter = unresolvedPartial.RetryAfter
+				result.RetryAt = unresolvedPartial.RetryAt
+				result.Err = unresolvedPartial.Err
+			}
 			return result
 		}
 
@@ -232,6 +264,9 @@ func DeliverWithRetry[T any](
 		}
 		if err := waitForDeliveryRetry(ctx, result, policy, attempt); err != nil {
 			result.Err = errors.Join(result.Err, err)
+			if currentUnresolvedPartial {
+				unresolvedPartial.Err = errors.Join(unresolvedPartial.Err, err)
+			}
 			break
 		}
 	}
@@ -241,10 +276,34 @@ func DeliverWithRetry[T any](
 	if len(confirmedIDs) > 0 {
 		result.Status = DeliveryPartial
 	}
+	if hasUnresolvedPartial {
+		if !currentUnresolvedPartial && result.Err != nil {
+			result.Acceptance = combineDeliveryAcceptance(unresolvedPartial.Acceptance, result.Acceptance)
+			result.Err = errors.Join(unresolvedPartial.Err, result.Err)
+		} else {
+			result.Acceptance = unresolvedPartial.Acceptance
+			result.Err = unresolvedPartial.Err
+		}
+		result.UnresolvedPartial = true
+		if result.RetryAfter == 0 && result.RetryAt.IsZero() {
+			result.RetryAfter = unresolvedPartial.RetryAfter
+			result.RetryAt = unresolvedPartial.RetryAt
+		}
+	}
 	if acceptanceUnknown {
 		result.Acceptance = DeliveryAcceptanceUnknown
 	}
 	return result
+}
+
+func combineDeliveryAcceptance(left, right DeliveryAcceptance) DeliveryAcceptance {
+	if left == DeliveryAcceptanceUnknown || right == DeliveryAcceptanceUnknown {
+		return DeliveryAcceptanceUnknown
+	}
+	if left == DeliveryAccepted || right == DeliveryAccepted {
+		return DeliveryAccepted
+	}
+	return DeliveryRejected
 }
 
 func deliveryResultMayRetry[T any](result DeliveryResult[T], policy DeliveryRetryPolicy) bool {
@@ -253,6 +312,9 @@ func deliveryResultMayRetry[T any](result DeliveryResult[T], policy DeliveryRetr
 	}
 	if result.Status == DeliveryPartial && result.Remaining == nil {
 		return false
+	}
+	if result.UnresolvedPartial && len(result.Remaining) > 0 {
+		return true
 	}
 	return !result.Ambiguous() || policy.RetryAmbiguous
 }

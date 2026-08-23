@@ -91,8 +91,51 @@ func TestDeliverSequentiallyPreservesUntouchedTailAfterPartialItemFailure(t *tes
 	if !slices.Equal(result.Remaining, []string{"second", "third"}) {
 		t.Fatalf("remaining payloads = %v, want untouched tail [second third]", result.Remaining)
 	}
+	if !result.UnresolvedPartial {
+		t.Fatal("partial current payload was not marked unresolved")
+	}
 	if !slices.Equal(delivered, []string{"first"}) {
 		t.Fatalf("delivered payloads = %v, want only partially confirmed first payload", delivered)
+	}
+}
+
+func TestDeliverWithRetryDrainsUntouchedTailWithoutResolvingPartialItem(t *testing.T) {
+	t.Parallel()
+
+	var attempts [][]string
+	var delivered []string
+	result := DeliverWithRetry(
+		t.Context(),
+		[]string{"first", "second"},
+		DeliveryRetryPolicy{MaxRetries: 1, RetryAmbiguous: false},
+		func(ctx context.Context, pending []string) DeliveryResult[string] {
+			attempts = append(attempts, cloneDeliveryPayload(pending))
+			return DeliverSequentially(ctx, pending, func(_ context.Context, payload string) ([]string, error) {
+				delivered = append(delivered, payload)
+				if payload == "first" {
+					return []string{"id-first-partial"}, ErrTemporary
+				}
+				return []string{"id-second"}, nil
+			})
+		},
+		nil,
+	)
+
+	if result.Delivered() || result.Status != DeliveryPartial || !result.UnresolvedPartial {
+		t.Fatalf("result = %#v, want sticky unresolved partial delivery", result)
+	}
+	if !errors.Is(result.Err, ErrTemporary) || result.Acceptance != DeliveryAcceptanceUnknown {
+		t.Fatalf("result = %#v, want original ambiguous partial error", result)
+	}
+	if !slices.Equal(result.MessageIDs, []string{"id-first-partial", "id-second"}) {
+		t.Fatalf("message IDs = %v, want partial and drained-tail IDs", result.MessageIDs)
+	}
+	if result.Remaining != nil {
+		t.Fatalf("remaining payloads = %v, want drained tail", result.Remaining)
+	}
+	if result.Attempts != 2 || !slices.Equal(delivered, []string{"first", "second"}) ||
+		len(attempts) != 2 || !slices.Equal(attempts[1], []string{"second"}) {
+		t.Fatalf("attempts = %v, delivered = %v; want safe tail drained on the second attempt", attempts, delivered)
 	}
 }
 
