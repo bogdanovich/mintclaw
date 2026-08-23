@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -104,6 +105,13 @@ func newTestCronTool(t *testing.T) *CronTool {
 	return newTestCronToolWithConfig(t, config.DefaultConfig())
 }
 
+func TestNewCronToolRequiresConfig(t *testing.T) {
+	service := cron.NewCronService(filepath.Join(t.TempDir(), "jobs.json"), nil)
+	if _, err := NewCronTool(service, &stubJobExecutor{}, bus.NewMessageBus(), t.TempDir(), true, 0, nil); err == nil {
+		t.Fatal("NewCronTool() error = nil")
+	}
+}
+
 func parseCronJobResult(t *testing.T, result *toolshared.ToolResult) cron.CronJob {
 	t.Helper()
 	text := result.ForLLM
@@ -120,22 +128,19 @@ func parseCronJobResult(t *testing.T, result *toolshared.ToolResult) cron.CronJo
 func addTestCronJob(t *testing.T, tool *CronTool, name, channel, chatID, command string) *cron.CronJob {
 	t.Helper()
 	everyMS := int64(60_000)
+	payloadKind := cron.PayloadAgentTurn
+	if command != "" {
+		payloadKind = cron.PayloadCommand
+	}
 	job, err := tool.cronService.AddJob(
 		name,
-		cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"agent_turn",
-		name+" message",
-		channel,
-		chatID,
+		cron.CronSchedule{Kind: cron.ScheduleEvery, EveryMS: &everyMS},
+		cron.CronPayload{
+			Kind: payloadKind, Message: name + " message", Command: command, Channel: channel, To: chatID,
+		},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
-	}
-	if command != "" {
-		job.Payload.Command = command
-		if err := tool.cronService.UpdateJob(job); err != nil {
-			t.Fatalf("UpdateJob() error: %v", err)
-		}
 	}
 	return job
 }
@@ -147,6 +152,7 @@ func TestCronTool_CommandBlockedFromRemoteChannel(t *testing.T) {
 	result := tool.Execute(ctx, map[string]any{
 		"action":          "add",
 		"message":         "check disk",
+		"payload_kind":    "command",
 		"command":         "df -h",
 		"command_confirm": true,
 		"at_seconds":      float64(60),
@@ -167,10 +173,11 @@ func TestCronTool_CommandAllowedFromRemoteChannelAllowlist(t *testing.T) {
 	tool := newTestCronToolWithConfig(t, cfg)
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 	result := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "check disk",
-		"command":    "df -h",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "check disk",
+		"payload_kind": "command",
+		"command":      "df -h",
+		"at_seconds":   float64(60),
 	})
 
 	if result.IsError {
@@ -185,10 +192,11 @@ func TestCronTool_CommandAllowedFromRemoteChatIDAllowlist(t *testing.T) {
 	tool := newTestCronToolWithConfig(t, cfg)
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "1234567890")
 	result := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "check disk",
-		"command":    "df -h",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "check disk",
+		"payload_kind": "command",
+		"command":      "df -h",
+		"at_seconds":   float64(60),
 	})
 
 	if result.IsError {
@@ -203,10 +211,11 @@ func TestCronTool_CommandAllowedFromRemoteWildcardAllowlist(t *testing.T) {
 	tool := newTestCronToolWithConfig(t, cfg)
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 	result := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "check disk",
-		"command":    "df -h",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "check disk",
+		"payload_kind": "command",
+		"command":      "df -h",
+		"at_seconds":   float64(60),
 	})
 
 	if result.IsError {
@@ -221,10 +230,11 @@ func TestCronTool_CommandAllowedRemoteWildcardRequiresNonEmptyChannel(t *testing
 	tool := newTestCronToolWithConfig(t, cfg)
 	ctx := toolshared.WithToolContext(context.Background(), "", "chat-1")
 	result := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "check disk",
-		"command":    "df -h",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "check disk",
+		"payload_kind": "command",
+		"command":      "df -h",
+		"at_seconds":   float64(60),
 	})
 
 	if !result.IsError {
@@ -244,6 +254,7 @@ func TestCronTool_CommandBlockedFromDifferentRemoteChatID(t *testing.T) {
 	result := tool.Execute(ctx, map[string]any{
 		"action":          "add",
 		"message":         "check disk",
+		"payload_kind":    "command",
 		"command":         "df -h",
 		"command_confirm": true,
 		"at_seconds":      float64(60),
@@ -265,10 +276,11 @@ func TestCronTool_CommandAllowedRemoteRequiresConfirmWhenAllowCommandDisabled(t 
 	tool := newTestCronToolWithConfig(t, cfg)
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 	result := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "check disk",
-		"command":    "df -h",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "check disk",
+		"payload_kind": "command",
+		"command":      "df -h",
+		"at_seconds":   float64(60),
 	})
 
 	if !result.IsError {
@@ -286,10 +298,11 @@ func TestCronTool_AllowCommandDoesNotBypassRemoteAllowlist(t *testing.T) {
 	tool := newTestCronToolWithConfig(t, cfg)
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 	result := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "check disk",
-		"command":    "df -h",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "check disk",
+		"payload_kind": "command",
+		"command":      "df -h",
+		"at_seconds":   float64(60),
 	})
 
 	if !result.IsError {
@@ -304,10 +317,11 @@ func TestCronTool_CommandDoesNotRequireConfirmByDefault(t *testing.T) {
 	tool := newTestCronTool(t)
 	ctx := toolshared.WithToolContext(context.Background(), "cli", "direct")
 	result := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "check disk",
-		"command":    "df -h",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "check disk",
+		"payload_kind": "command",
+		"command":      "df -h",
+		"at_seconds":   float64(60),
 	})
 
 	if result.IsError {
@@ -325,10 +339,11 @@ func TestCronTool_CommandRequiresConfirmWhenAllowCommandDisabled(t *testing.T) {
 	tool := newTestCronToolWithConfig(t, cfg)
 	ctx := toolshared.WithToolContext(context.Background(), "cli", "direct")
 	result := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "check disk",
-		"command":    "df -h",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "check disk",
+		"payload_kind": "command",
+		"command":      "df -h",
+		"at_seconds":   float64(60),
 	})
 
 	if !result.IsError {
@@ -348,6 +363,7 @@ func TestCronTool_CommandAllowedWithConfirmWhenAllowCommandDisabled(t *testing.T
 	result := tool.Execute(ctx, map[string]any{
 		"action":          "add",
 		"message":         "check disk",
+		"payload_kind":    "command",
 		"command":         "df -h",
 		"command_confirm": true,
 		"at_seconds":      float64(60),
@@ -373,6 +389,7 @@ func TestCronTool_CommandBlockedWhenExecDisabled(t *testing.T) {
 	result := tool.Execute(ctx, map[string]any{
 		"action":          "add",
 		"message":         "check disk",
+		"payload_kind":    "command",
 		"command":         "df -h",
 		"command_confirm": true,
 		"at_seconds":      float64(60),
@@ -409,13 +426,71 @@ func TestCronTool_AddJobStoresExplicitDeliverTextPayloadKind(t *testing.T) {
 	}
 }
 
+func TestCronTool_AddRequiresCurrentContract(t *testing.T) {
+	tool := newTestCronTool(t)
+	ctx := toolshared.WithToolContext(context.Background(), "cli", "direct")
+	tests := []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{
+			name: "missing payload kind",
+			args: map[string]any{"action": "add", "message": "run", "at_seconds": float64(60)},
+			want: "payload_kind is required",
+		},
+		{
+			name: "missing schedule",
+			args: map[string]any{"action": "add", "message": "run", "payload_kind": "agent_turn"},
+			want: "one of at_seconds",
+		},
+		{
+			name: "multiple schedules",
+			args: map[string]any{
+				"action": "add", "message": "run", "payload_kind": "agent_turn",
+				"every_seconds": float64(60), "cron_expr": "0 9 * * *",
+			},
+			want: "only one of",
+		},
+		{
+			name: "zero valued extra schedule",
+			args: map[string]any{
+				"action": "add", "message": "run", "payload_kind": "agent_turn",
+				"at_seconds": float64(60), "every_seconds": float64(0),
+			},
+			want: "every_seconds must be a positive integer",
+		},
+		{
+			name: "command without command kind",
+			args: map[string]any{
+				"action": "add", "message": "run", "payload_kind": "agent_turn",
+				"at_seconds": float64(60), "command": "date",
+			},
+			want: "command requires payload_kind=command",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := tool.Execute(ctx, test.args)
+			if !result.IsError || !strings.Contains(result.ForLLM, test.want) {
+				t.Fatalf("Execute() = %#v, want error containing %q", result, test.want)
+			}
+		})
+	}
+	if jobs := tool.cronService.ListJobs(true); len(jobs) != 0 {
+		t.Fatalf("invalid additions persisted jobs: %#v", jobs)
+	}
+}
+
 func TestCronTool_UpdateJobCanChangePayloadKind(t *testing.T) {
 	tool := newTestCronTool(t)
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 	add := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "reminder text",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "reminder text",
+		"payload_kind": "agent_turn",
+		"at_seconds":   float64(60),
 	})
 	if add.IsError {
 		t.Fatalf("add error: %s", add.ForLLM)
@@ -451,6 +526,7 @@ func TestCronTool_CommandAllowedFromInternalChannel(t *testing.T) {
 	result := tool.Execute(ctx, map[string]any{
 		"action":          "add",
 		"message":         "check disk",
+		"payload_kind":    "command",
 		"command":         "df -h",
 		"command_confirm": true,
 		"at_seconds":      float64(60),
@@ -468,9 +544,10 @@ func TestCronTool_CommandAllowedFromInternalChannel(t *testing.T) {
 func TestCronTool_AddJobRequiresSessionContext(t *testing.T) {
 	tool := newTestCronTool(t)
 	result := tool.Execute(context.Background(), map[string]any{
-		"action":     "add",
-		"message":    "reminder",
-		"at_seconds": float64(60),
+		"action":       "add",
+		"message":      "reminder",
+		"payload_kind": "agent_turn",
+		"at_seconds":   float64(60),
 	})
 
 	if !result.IsError {
@@ -486,9 +563,10 @@ func TestCronTool_NonCommandJobAllowedFromRemoteChannel(t *testing.T) {
 	tool := newTestCronTool(t)
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 	result := tool.Execute(ctx, map[string]any{
-		"action":     "add",
-		"message":    "time to stretch",
-		"at_seconds": float64(600),
+		"action":       "add",
+		"message":      "time to stretch",
+		"payload_kind": "agent_turn",
+		"at_seconds":   float64(600),
 	})
 
 	if result.IsError {
@@ -503,11 +581,11 @@ func TestCronTool_GetReturnsFullJobPayload(t *testing.T) {
 	message := strings.Repeat("daily briefing details ", 8)
 	job, err := tool.cronService.AddJob(
 		"daily",
-		cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"",
-		message,
-		"telegram",
-		"chat-1",
+		cron.CronSchedule{
+			Kind:    "every",
+			EveryMS: &everyMS,
+		},
+		cron.CronPayload{Kind: cron.PayloadAgentTurn, Message: message, Channel: "telegram", To: "chat-1"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
@@ -539,11 +617,16 @@ func TestCronTool_UpdateSchedulePreservesPayload(t *testing.T) {
 	ctx := toolshared.WithToolContext(context.Background(), "cli", "direct")
 	original, err := tool.cronService.AddJob(
 		"AI daily",
-		cron.CronSchedule{Kind: "cron", Expr: "0 8 * * *"},
-		"",
-		"fetch RSS, include source links",
-		"weixin",
-		"chat-1",
+		cron.CronSchedule{
+			Kind: "cron",
+			Expr: "0 8 * * *",
+		},
+		cron.CronPayload{
+			Kind:    cron.PayloadAgentTurn,
+			Message: "fetch RSS, include source links",
+			Channel: "weixin",
+			To:      "chat-1",
+		},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
@@ -572,9 +655,6 @@ func TestCronTool_UpdateSchedulePreservesPayload(t *testing.T) {
 	if updated.Schedule.Kind != "cron" || updated.Schedule.Expr != "30 10 * * *" {
 		t.Fatalf("schedule not updated: %+v", updated.Schedule)
 	}
-	if updated.DeleteAfterRun {
-		t.Fatal("cron schedule should not delete after run")
-	}
 }
 
 func TestCronTool_UpdateMessagePreservesScheduleAndNextRun(t *testing.T) {
@@ -583,11 +663,11 @@ func TestCronTool_UpdateMessagePreservesScheduleAndNextRun(t *testing.T) {
 	everyMS := int64(120_000)
 	original, err := tool.cronService.AddJob(
 		"reminder",
-		cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"",
-		"old message",
-		"telegram",
-		"chat-1",
+		cron.CronSchedule{
+			Kind:    "every",
+			EveryMS: &everyMS,
+		},
+		cron.CronPayload{Kind: cron.PayloadAgentTurn, Message: "old message", Channel: "telegram", To: "chat-1"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
@@ -626,11 +706,11 @@ func TestCronTool_UpdateValidationErrors(t *testing.T) {
 	ctx := toolshared.WithToolContext(context.Background(), "cli", "direct")
 	job, err := tool.cronService.AddJob(
 		"job",
-		cron.CronSchedule{Kind: "cron", Expr: "0 8 * * *"},
-		"",
-		"message",
-		"cli",
-		"direct",
+		cron.CronSchedule{
+			Kind: "cron",
+			Expr: "0 8 * * *",
+		},
+		cron.CronPayload{Kind: cron.PayloadAgentTurn, Message: "message", Channel: "cli", To: "direct"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
@@ -683,51 +763,46 @@ func TestCronTool_ListFiltersJobsForRemoteChannel(t *testing.T) {
 
 	ownJob, err := tool.cronService.AddJob(
 		"own",
-		cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"",
-		"visible",
-		"telegram",
-		"chat-1",
+		cron.CronSchedule{
+			Kind:    "every",
+			EveryMS: &everyMS,
+		},
+		cron.CronPayload{Kind: cron.PayloadAgentTurn, Message: "visible", Channel: "telegram", To: "chat-1"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
 	}
 	otherChatJob, err := tool.cronService.AddJob(
 		"other-chat",
-		cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"",
-		"hidden",
-		"telegram",
-		"chat-2",
+		cron.CronSchedule{
+			Kind:    "every",
+			EveryMS: &everyMS,
+		},
+		cron.CronPayload{Kind: cron.PayloadAgentTurn, Message: "hidden", Channel: "telegram", To: "chat-2"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
 	}
 	otherChannelJob, err := tool.cronService.AddJob(
 		"other-channel",
-		cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"",
-		"hidden",
-		"feishu",
-		"chat-1",
+		cron.CronSchedule{
+			Kind:    "every",
+			EveryMS: &everyMS,
+		},
+		cron.CronPayload{Kind: cron.PayloadAgentTurn, Message: "hidden", Channel: "feishu", To: "chat-1"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
 	}
 	commandJob, err := tool.cronService.AddJob(
 		"command",
-		cron.CronSchedule{Kind: "every", EveryMS: &everyMS},
-		"",
-		"hidden command",
-		"telegram",
-		"chat-1",
+		cron.CronSchedule{Kind: cron.ScheduleEvery, EveryMS: &everyMS},
+		cron.CronPayload{
+			Kind: cron.PayloadCommand, Message: "hidden command", Command: "df -h", Channel: "telegram", To: "chat-1",
+		},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
-	}
-	commandJob.Payload.Command = "df -h"
-	if err := tool.cronService.UpdateJob(commandJob); err != nil {
-		t.Fatalf("UpdateJob() error: %v", err)
 	}
 
 	result := tool.Execute(ctx, map[string]any{"action": "list"})
@@ -749,11 +824,11 @@ func TestCronTool_RemoteCannotAccessOtherChatJob(t *testing.T) {
 	tool := newTestCronTool(t)
 	job, err := tool.cronService.AddJob(
 		"private",
-		cron.CronSchedule{Kind: "cron", Expr: "0 8 * * *"},
-		"",
-		"secret",
-		"telegram",
-		"chat-1",
+		cron.CronSchedule{
+			Kind: "cron",
+			Expr: "0 8 * * *",
+		},
+		cron.CronPayload{Kind: cron.PayloadAgentTurn, Message: "secret", Channel: "telegram", To: "chat-1"},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
@@ -782,18 +857,13 @@ func TestCronTool_RemoteCannotAccessCommandJob(t *testing.T) {
 	tool := newTestCronTool(t)
 	job, err := tool.cronService.AddJob(
 		"command",
-		cron.CronSchedule{Kind: "cron", Expr: "0 8 * * *"},
-		"",
-		"run command",
-		"telegram",
-		"chat-1",
+		cron.CronSchedule{Kind: cron.ScheduleCron, Expr: "0 8 * * *"},
+		cron.CronPayload{
+			Kind: cron.PayloadCommand, Message: "run command", Command: "df -h", Channel: "telegram", To: "chat-1",
+		},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
-	}
-	job.Payload.Command = "df -h"
-	if err := tool.cronService.UpdateJob(job); err != nil {
-		t.Fatalf("UpdateJob() error: %v", err)
 	}
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 
@@ -981,6 +1051,42 @@ func TestCronTool_AllowlistedRemoteCanManageOwnCommandJob(t *testing.T) {
 	}
 }
 
+func TestCronTool_RemoveReportsPersistenceFailure(t *testing.T) {
+	root := t.TempDir()
+	storeDir := filepath.Join(root, "store")
+	service := cron.NewCronService(filepath.Join(storeDir, "jobs.json"), nil)
+	tool, err := NewCronTool(
+		service,
+		nil,
+		bus.NewMessageBus(),
+		t.TempDir(),
+		true,
+		0,
+		config.DefaultConfig(),
+	)
+	if err != nil {
+		t.Fatalf("NewCronTool() error: %v", err)
+	}
+	job := addTestCronJob(t, tool, "task", "telegram", "chat-1", "")
+
+	backupDir := filepath.Join(root, "store-backup")
+	if err := os.Rename(storeDir, backupDir); err != nil {
+		t.Fatalf("move store directory: %v", err)
+	}
+	if err := os.WriteFile(storeDir, []byte("blocker"), 0o600); err != nil {
+		t.Fatalf("write store-directory blocker: %v", err)
+	}
+
+	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
+	result := tool.Execute(ctx, map[string]any{"action": "remove", "job_id": job.ID})
+	if !result.IsError || !strings.Contains(result.ForLLM, "failed to save store after remove") {
+		t.Fatalf("remove result = %+v, want persistence error", result)
+	}
+	if _, ok := service.GetJob(job.ID); !ok {
+		t.Fatal("tool removal dropped live job after persistence failure")
+	}
+}
+
 func TestCronTool_RemoteCannotManageOtherChatJob(t *testing.T) {
 	for _, action := range []string{"remove", "enable", "disable"} {
 		t.Run(action, func(t *testing.T) {
@@ -1121,11 +1227,11 @@ func TestCronTool_CommandUpdateSafetyGates(t *testing.T) {
 		ctx := toolshared.WithToolContext(context.Background(), "cli", "direct")
 		job, err := tool.cronService.AddJob(
 			"job",
-			cron.CronSchedule{Kind: "cron", Expr: "0 8 * * *"},
-			"",
-			"message",
-			"cli",
-			"direct",
+			cron.CronSchedule{
+				Kind: "cron",
+				Expr: "0 8 * * *",
+			},
+			cron.CronPayload{Kind: cron.PayloadAgentTurn, Message: "message", Channel: "cli", To: "direct"},
 		)
 		if err != nil {
 			t.Fatalf("AddJob() error: %v", err)
@@ -1134,6 +1240,7 @@ func TestCronTool_CommandUpdateSafetyGates(t *testing.T) {
 		result := tool.Execute(ctx, map[string]any{
 			"action":          "update",
 			"job_id":          job.ID,
+			"payload_kind":    "command",
 			"command":         "df -h",
 			"command_confirm": true,
 		})
@@ -1150,20 +1257,21 @@ func TestCronTool_CommandUpdateSafetyGates(t *testing.T) {
 		ctx := toolshared.WithToolContext(context.Background(), "cli", "direct")
 		job, err := tool.cronService.AddJob(
 			"job",
-			cron.CronSchedule{Kind: "cron", Expr: "0 8 * * *"},
-			"",
-			"message",
-			"cli",
-			"direct",
+			cron.CronSchedule{
+				Kind: "cron",
+				Expr: "0 8 * * *",
+			},
+			cron.CronPayload{Kind: cron.PayloadAgentTurn, Message: "message", Channel: "cli", To: "direct"},
 		)
 		if err != nil {
 			t.Fatalf("AddJob() error: %v", err)
 		}
 
 		result := tool.Execute(ctx, map[string]any{
-			"action":  "update",
-			"job_id":  job.ID,
-			"command": "df -h",
+			"action":       "update",
+			"job_id":       job.ID,
+			"payload_kind": "command",
+			"command":      "df -h",
 		})
 
 		if !result.IsError || !strings.Contains(result.ForLLM, "command_confirm=true") {
@@ -1173,6 +1281,7 @@ func TestCronTool_CommandUpdateSafetyGates(t *testing.T) {
 		result = tool.Execute(ctx, map[string]any{
 			"action":          "update",
 			"job_id":          job.ID,
+			"payload_kind":    "command",
 			"command":         "df -h",
 			"command_confirm": true,
 		})
@@ -1188,6 +1297,7 @@ func TestCronTool_CommandUpdateSafetyGates(t *testing.T) {
 		result = tool.Execute(ctx, map[string]any{
 			"action":          "update",
 			"job_id":          job.ID,
+			"payload_kind":    "agent_turn",
 			"command":         "",
 			"command_confirm": true,
 		})
@@ -1207,18 +1317,13 @@ func TestCronTool_InternalCanAccessCommandJobFromAnyChannel(t *testing.T) {
 	ctx := toolshared.WithToolContext(context.Background(), "cli", "direct")
 	job, err := tool.cronService.AddJob(
 		"command",
-		cron.CronSchedule{Kind: "cron", Expr: "0 8 * * *"},
-		"",
-		"run command",
-		"telegram",
-		"chat-1",
+		cron.CronSchedule{Kind: cron.ScheduleCron, Expr: "0 8 * * *"},
+		cron.CronPayload{
+			Kind: cron.PayloadCommand, Message: "run command", Command: "df -h", Channel: "telegram", To: "chat-1",
+		},
 	)
 	if err != nil {
 		t.Fatalf("AddJob() error: %v", err)
-	}
-	job.Payload.Command = "df -h"
-	if err := tool.cronService.UpdateJob(job); err != nil {
-		t.Fatalf("UpdateJob() error: %v", err)
 	}
 
 	getResult := tool.Execute(ctx, map[string]any{"action": "get", "job_id": job.ID})
@@ -1253,6 +1358,7 @@ func TestCronTool_ExecuteJobPublishesErrorWhenExecDisabled(t *testing.T) {
 
 	tool := newTestCronToolWithConfig(t, cfg)
 	job := &cron.CronJob{}
+	job.Payload.Kind = cron.PayloadCommand
 	job.Payload.Channel = "cli"
 	job.Payload.To = "direct"
 	job.Payload.Command = "df -h"
@@ -1283,6 +1389,7 @@ func TestCronTool_ExecuteJobPublishesAgentResponse(t *testing.T) {
 	tool.SetTaskRegistry(registry)
 
 	job := &cron.CronJob{ID: "job-1"}
+	job.Payload.Kind = cron.PayloadAgentTurn
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "send me a poem"
@@ -1407,6 +1514,7 @@ func TestCronTool_ExecuteJobSkipsEmptyAgentResponse(t *testing.T) {
 	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
 
 	job := &cron.CronJob{ID: "job-empty"}
+	job.Payload.Kind = cron.PayloadAgentTurn
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "say nothing"
@@ -1425,6 +1533,7 @@ func TestCronTool_ExecuteJobSkipsNoReplySentinel(t *testing.T) {
 	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
 
 	job := &cron.CronJob{ID: "job-no-reply"}
+	job.Payload.Kind = cron.PayloadAgentTurn
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "only reply if actionable"
@@ -1443,6 +1552,7 @@ func TestCronTool_ExecuteJobSkipsHeartbeatOKSentinel(t *testing.T) {
 	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
 
 	job := &cron.CronJob{ID: "job-heartbeat-ok"}
+	job.Payload.Kind = cron.PayloadAgentTurn
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "heartbeat"
@@ -1461,6 +1571,7 @@ func TestCronTool_ExecuteJobSkipsWhenMessageToolAlreadySent(t *testing.T) {
 	tool := newTestCronToolWithExecutorAndConfig(t, executor, config.DefaultConfig())
 
 	job := &cron.CronJob{ID: "job-msg-sent"}
+	job.Payload.Kind = cron.PayloadAgentTurn
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "send weather"
@@ -1483,6 +1594,7 @@ func TestCronTool_ExecuteJobSkipsWhenMessageToolAlreadySent(t *testing.T) {
 func TestCronTool_ExecuteJobRunsCommand(t *testing.T) {
 	tool := newTestCronToolWithConfig(t, config.DefaultConfig())
 	job := &cron.CronJob{}
+	job.Payload.Kind = cron.PayloadCommand
 	job.Payload.Channel = "cli"
 	job.Payload.To = "direct"
 	job.Payload.Command = "echo cron-test-ok"
@@ -1515,6 +1627,7 @@ func TestCronTool_ExecuteJobReturnsErrorWithoutPublish(t *testing.T) {
 	tool.SetTaskRegistry(registry)
 
 	job := &cron.CronJob{ID: "job-err"}
+	job.Payload.Kind = cron.PayloadAgentTurn
 	job.Payload.Channel = "telegram"
 	job.Payload.To = "chat-1"
 	job.Payload.Message = "do something"
@@ -1548,6 +1661,7 @@ func TestCronTool_ExecuteJobCommandRecordsTaskRegistry(t *testing.T) {
 	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
 	tool.SetTaskRegistry(registry)
 	job := &cron.CronJob{ID: "job-command"}
+	job.Payload.Kind = cron.PayloadCommand
 	job.Payload.Channel = "cli"
 	job.Payload.To = "direct"
 	job.Payload.Command = "df -h"

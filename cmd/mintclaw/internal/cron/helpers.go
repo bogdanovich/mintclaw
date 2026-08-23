@@ -7,13 +7,24 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/cron"
 )
 
-func cronListCmd(storePath string) {
+func loadCronService(storePath string) (*cron.CronService, error) {
 	cs := cron.NewCronService(storePath, nil)
+	if err := cs.Load(); err != nil {
+		return nil, fmt.Errorf("load cron store: %w", err)
+	}
+	return cs, nil
+}
+
+func cronListCmd(storePath string) error {
+	cs, err := loadCronService(storePath)
+	if err != nil {
+		return err
+	}
 	jobs := cs.ListJobs(true) // Show all jobs, including disabled
 
 	if len(jobs) == 0 {
 		fmt.Println("No scheduled jobs.")
-		return
+		return nil
 	}
 
 	fmt.Println("\nScheduled Jobs:")
@@ -44,23 +55,34 @@ func cronListCmd(storePath string) {
 		fmt.Printf("    Status: %s\n", status)
 		fmt.Printf("    Next run: %s\n", nextRun)
 	}
+	return nil
 }
 
-func cronRemoveCmd(storePath, jobID string) {
-	cs := cron.NewCronService(storePath, nil)
-	if cs.RemoveJob(jobID) {
-		fmt.Printf("✓ Removed job %s\n", jobID)
-	} else {
-		fmt.Printf("✗ Job %s not found\n", jobID)
+func cronRemoveCmd(storePath, jobID string) error {
+	cs, err := loadCronService(storePath)
+	if err != nil {
+		return err
 	}
+	if err := cs.RemoveJob(jobID); err != nil {
+		return err
+	}
+	fmt.Printf("✓ Removed job %s\n", jobID)
+	return nil
 }
 
-func cronSetJobEnabled(storePath, jobID string, enabled bool) {
-	cs := cron.NewCronService(storePath, nil)
+func cronSetJobEnabled(storePath, jobID string, enabled bool) error {
+	cs, err := loadCronService(storePath)
+	if err != nil {
+		return err
+	}
 	job, err := cs.EnableJob(jobID, enabled)
 	if err != nil {
-		fmt.Printf("✗ %v\n", err)
-		return
+		return err
 	}
-	fmt.Printf("✓ Job '%s' enabled\n", job.Name)
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	fmt.Printf("✓ Job '%s' %s\n", job.Name, state)
+	return nil
 }
