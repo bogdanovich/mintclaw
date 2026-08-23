@@ -99,6 +99,32 @@ func TestRepositoryRejectsStaleReplacement(t *testing.T) {
 	}
 }
 
+func TestRepositoryPersistsExplicitlyEmptySkillsRegistries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	repository := NewRepository(path)
+	cfg := DefaultConfig()
+	cfg.Tools.Skills.Registries = SkillsRegistriesConfig{}
+
+	if _, err := repository.Save(cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	public, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(public), `"registries": {}`) {
+		t.Fatalf("saved registries were not an explicit empty object:\n%s", public)
+	}
+
+	snapshot, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+	if snapshot.Config.Tools.Skills.Registries == nil || len(snapshot.Config.Tools.Skills.Registries) != 0 {
+		t.Fatalf("reloaded registries = %#v, want explicit empty map", snapshot.Config.Tools.Skills.Registries)
+	}
+}
+
 func TestRepositoryRevisionIncludesSecurityDocument(t *testing.T) {
 	t.Setenv("MINTCLAW_KEY_PASSPHRASE", "repository-test-passphrase")
 	mustSetupSSHKey(t)

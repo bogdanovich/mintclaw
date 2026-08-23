@@ -253,7 +253,7 @@ type ExecConfig struct {
 
 type SkillsToolsConfig struct {
 	ToolConfig            `                       yaml:"-"                    envPrefix:"MINTCLAW_TOOLS_SKILLS_"`
-	Registries            SkillsRegistriesConfig `yaml:"registries,omitempty"                                    json:"registries,omitempty"`
+	Registries            SkillsRegistriesConfig `yaml:"registries,omitempty"                                    json:"registries,omitzero"`
 	MaxConcurrentSearches int                    `yaml:"-"                                                       json:"max_concurrent_searches" env:"MINTCLAW_TOOLS_SKILLS_MAX_CONCURRENT_SEARCHES"`
 	SearchCache           SearchCacheConfig      `yaml:"-"                                                       json:"search_cache"`
 }
