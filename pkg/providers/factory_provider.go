@@ -381,7 +381,7 @@ func splitImageGenerationModel(model string) (providerName, modelID string) {
 	providerName = "openai"
 	prefix, nativeModel, found := strings.Cut(model, "/")
 	prefix = strings.TrimSpace(prefix)
-	if found && IsSupportedModelProvider(prefix) {
+	if found && (prefix == "openai-codex" || IsSupportedModelProvider(prefix)) {
 		return NormalizeProvider(prefix), strings.TrimSpace(nativeModel)
 	}
 	return providerName, model

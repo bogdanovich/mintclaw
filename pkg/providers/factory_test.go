@@ -115,15 +115,19 @@ func TestCreateImageGenerationProviderFromModelUsesCodexOAuth(t *testing.T) {
 		}, nil
 	}
 
-	provider, model, err := CreateImageGenerationProviderFromModel("openai/gpt-image-2")
-	if err != nil {
-		t.Fatalf("CreateImageGenerationProviderFromModel() error = %v", err)
-	}
-	if model != "gpt-image-2" {
-		t.Fatalf("model = %q, want gpt-image-2", model)
-	}
-	if ImageCapabilities(provider).ProviderID != "openai-codex" {
-		t.Fatalf("provider id = %q, want openai-codex", ImageCapabilities(provider).ProviderID)
+	for _, configuredModel := range []string{"openai/gpt-image-2", "openai-codex/gpt-image-2"} {
+		t.Run(configuredModel, func(t *testing.T) {
+			provider, model, err := CreateImageGenerationProviderFromModel(configuredModel)
+			if err != nil {
+				t.Fatalf("CreateImageGenerationProviderFromModel() error = %v", err)
+			}
+			if model != "gpt-image-2" {
+				t.Fatalf("model = %q, want gpt-image-2", model)
+			}
+			if ImageCapabilities(provider).ProviderID != "openai-codex" {
+				t.Fatalf("provider id = %q, want openai-codex", ImageCapabilities(provider).ProviderID)
+			}
+		})
 	}
 }
 
