@@ -355,7 +355,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 
 // CreateImageGenerationProviderFromModel creates a provider for the independent
 // image-generation model setting, which retains its own optional provider prefix.
-func CreateImageGenerationProviderFromModel(model string) (ImageGenerationCapable, string, error) {
+func CreateImageGenerationProviderFromModel(model string) (ImageGenerationProvider, string, error) {
 	providerName, modelID := splitImageGenerationModel(model)
 	if modelID == "" {
 		modelID = "gpt-image-2"
@@ -366,7 +366,7 @@ func CreateImageGenerationProviderFromModel(model string) (ImageGenerationCapabl
 		if err != nil {
 			return nil, "", err
 		}
-		imageProvider, ok := provider.(ImageGenerationCapable)
+		imageProvider, ok := provider.(ImageGenerationProvider)
 		if !ok || !ImageCapabilities(imageProvider).Supported {
 			return nil, "", fmt.Errorf("provider %q does not support image generation", providerName)
 		}

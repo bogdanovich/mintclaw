@@ -31,55 +31,6 @@ func (p *fakeImageGenerationProvider) Capabilities() providers.ProviderCapabilit
 	}}
 }
 
-func (p *fakeImageGenerationProvider) SupportsImageGeneration() bool { return true }
-
-func (p *fakeImageGenerationProvider) ImageGenerationProviderID() string { return p.id }
-
-func (p *fakeImageGenerationProvider) DefaultImageGenerationModel() string { return p.defaultModel }
-
-type legacyImageGenerationProvider struct {
-	request providers.ImageGenerationRequest
-}
-
-func (p *legacyImageGenerationProvider) SupportsImageGeneration() bool { return true }
-
-func (p *legacyImageGenerationProvider) ImageGenerationProviderID() string { return "legacy-image" }
-
-func (p *legacyImageGenerationProvider) DefaultImageGenerationModel() string { return "legacy-default" }
-
-func (p *legacyImageGenerationProvider) GenerateImage(
-	_ context.Context,
-	req providers.ImageGenerationRequest,
-) (*providers.ImageGenerationResponse, error) {
-	p.request = req
-	return &providers.ImageGenerationResponse{Images: []providers.GeneratedImage{{
-		Data:     []byte("legacy-image"),
-		MimeType: "image/png",
-		Ext:      "png",
-	}}}, nil
-}
-
-func TestImageGenerateToolAcceptsLegacyExternalProvider(t *testing.T) {
-	provider := &legacyImageGenerationProvider{}
-	tool := NewImageGenerateTool(
-		t.TempDir(),
-		"",
-		media.NewFileMediaStore(),
-		WithImageGenerationProvider(provider),
-	)
-
-	result := tool.Execute(t.Context(), map[string]any{"prompt": "legacy icon", "count": float64(12)})
-	if result.IsError {
-		t.Fatalf("Execute returned error: %s", result.ContentForLLM())
-	}
-	if provider.request.Model != "legacy-default" {
-		t.Fatalf("model = %q, want legacy-default", provider.request.Model)
-	}
-	if provider.request.Count != 4 {
-		t.Fatalf("count = %d, want legacy safety cap 4", provider.request.Count)
-	}
-}
-
 func TestImageGenerateToolUsesProviderResultLimit(t *testing.T) {
 	provider := &fakeImageGenerationProvider{id: "test-provider", maxResults: 2}
 	tool := NewImageGenerateTool(

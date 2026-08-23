@@ -241,18 +241,6 @@ func (p *CodexProvider) Capabilities() providercapabilities.ProviderCapabilities
 	}
 }
 
-func (p *CodexProvider) SupportsImageGeneration() bool {
-	return p.Capabilities().ImageGeneration.Supported
-}
-
-func (p *CodexProvider) ImageGenerationProviderID() string {
-	return p.Capabilities().ImageGeneration.ProviderID
-}
-
-func (p *CodexProvider) DefaultImageGenerationModel() string {
-	return p.Capabilities().ImageGeneration.DefaultModel
-}
-
 func resolveCodexModel(model string) (string, string) {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {

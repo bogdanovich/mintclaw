@@ -26,16 +26,16 @@ type ImageGenerateTool struct {
 	workspace  string
 	model      string
 	outputDir  string
-	provider   providers.ImageGenerationCapable
+	provider   providers.ImageGenerationProvider
 	resolver   ImageGenerationProviderResolver
 	mediaStore media.MediaStore
 }
 
 type ImageGenerateToolOption func(*ImageGenerateTool)
 
-type ImageGenerationProviderResolver func(model string) (providers.ImageGenerationCapable, string, error)
+type ImageGenerationProviderResolver func(model string) (providers.ImageGenerationProvider, string, error)
 
-func WithImageGenerationProvider(provider providers.ImageGenerationCapable) ImageGenerateToolOption {
+func WithImageGenerationProvider(provider providers.ImageGenerationProvider) ImageGenerateToolOption {
 	return func(t *ImageGenerateTool) {
 		if provider != nil {
 			t.provider = provider

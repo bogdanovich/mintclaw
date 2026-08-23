@@ -14,7 +14,6 @@ var (
 	_ CapabilityProvider      = (*ClaudeProvider)(nil)
 	_ CapabilityProvider      = (*CodexProvider)(nil)
 	_ ImageGenerationProvider = (*CodexProvider)(nil)
-	_ ImageGenerationCapable  = (*CodexProvider)(nil)
 	_ CapabilityProvider      = (*AntigravityProvider)(nil)
 	_ CapabilityProvider      = (*ClaudeCliProvider)(nil)
 	_ CapabilityProvider      = (*CodexCliProvider)(nil)

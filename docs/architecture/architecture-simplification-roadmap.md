@@ -733,6 +733,11 @@ Implementation sequence:
     provider-native model ID. Delete steady-state Web API normalization,
     provider-prefix/default-provider inference, and the unused fallback parser
     APIs that preserve those alternate representations.
+18. Make the canonical descriptor the sole source of optional provider
+    capabilities and the descriptor-based image interface the sole image
+    operation. A provider without an optional descriptor advertises no optional
+    features; runtime code no longer infers streaming, thinking, search, or
+    image support from legacy method shapes.
 
 Exit criteria:
 
