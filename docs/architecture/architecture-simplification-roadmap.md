@@ -795,6 +795,10 @@ Implementation sequence:
     its nil-safe pass-through wrappers. The turn runner retains process and
     spool-settlement lifecycle; in-turn abort, steering, filtering, events,
     and final rendering use the immutable pipeline snapshot directly.
+31. Flatten `PipelineRuntimeServices` into direct pipeline-owned dependencies.
+    Keep narrow bus and event interfaces where alternate implementations
+    exist; use concrete active-request and abort owners, and delete their
+    single-implementation interfaces and test-only `AgentLoop` pass-throughs.
 
 Exit criteria:
 

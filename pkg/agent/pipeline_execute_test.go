@@ -663,7 +663,7 @@ func TestToolExecutionEndEventCarriesVerifiedWriteAudit(t *testing.T) {
 		ID: "call-write", Name: tool.Name(), Arguments: map[string]any{},
 	}}
 	emitter := &captureRuntimeEmitter{}
-	pipeline := &Pipeline{Runtime: PipelineRuntimeServices{Events: emitter}}
+	pipeline := &Pipeline{events: emitter}
 
 	if outcome := pipeline.ExecuteTools(
 		t.Context(),
@@ -941,7 +941,7 @@ func TestPipelineToolResultJournalFailurePreventsEveryDeliveryMode(t *testing.T)
 			llm.assistantToolCallsPersisted = true
 			delivery := &recordingToolResultDelivery{}
 			pipeline := &Pipeline{
-				Runtime: PipelineRuntimeServices{Bus: delivery},
+				bus: delivery,
 				Interaction: PipelineInteractionServices{
 					SyncToolDelivery: delivery,
 				},
@@ -1174,7 +1174,7 @@ func TestPipelineSuppressedToolDeliveryRetainsHandledAndImmediateMedia(t *testin
 			llm.assistantToolCallsPersisted = true
 			delivery := &recordingToolResultDelivery{}
 			pipeline := &Pipeline{
-				Runtime: PipelineRuntimeServices{Bus: delivery},
+				bus: delivery,
 				Interaction: PipelineInteractionServices{
 					SyncToolDelivery: delivery,
 				},
@@ -1377,7 +1377,7 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	feedback := &immediateDeliveryFeedbackManager{}
 	emitter := &captureRuntimeEmitter{}
 	pipeline := &Pipeline{
-		Runtime:     PipelineRuntimeServices{Events: emitter},
+		events:      emitter,
 		Interaction: PipelineInteractionServices{Suspension: manager, ToolFeedback: feedback},
 	}
 
@@ -2343,7 +2343,7 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
 	emitter := &captureRuntimeEmitter{}
-	pipeline := &Pipeline{Runtime: PipelineRuntimeServices{Events: emitter}}
+	pipeline := &Pipeline{events: emitter}
 
 	for i := 1; i <= 3; i++ {
 		llm.iteration = i
@@ -2439,7 +2439,7 @@ func TestPipelineLoopGuardUsesDurableProjectionForProtectedArguments(t *testing.
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
 	emitter := &captureRuntimeEmitter{}
-	pipeline := &Pipeline{Runtime: PipelineRuntimeServices{Events: emitter}}
+	pipeline := &Pipeline{events: emitter}
 	canaries := []string{"protected-loop-alpha", "protected-loop-beta", "protected-loop-gamma"}
 
 	for index, canary := range canaries {
@@ -2509,7 +2509,7 @@ func TestPipelineProtectedToolResultStaysInMemoryAndIsRedactedFromDurableState(t
 	emitter := &captureRuntimeEmitter{}
 	pipeline := &Pipeline{
 		Cfg:     cfg,
-		Runtime: PipelineRuntimeServices{Events: emitter},
+		events:  emitter,
 		Context: PipelineContextServices{Runtime: contextManager},
 		Interaction: PipelineInteractionServices{
 			Hooks: &protectedResultRegistrySwapHook{agent: agent},
@@ -2592,7 +2592,7 @@ func TestPipelineEmergencyHaltTerminatesUnknownSuccessfulLoop(t *testing.T) {
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	llm := newLLMIterationState(1)
 	emitter := &captureRuntimeEmitter{}
-	pipeline := &Pipeline{Runtime: PipelineRuntimeServices{Events: emitter}}
+	pipeline := &Pipeline{events: emitter}
 
 	for i := 1; i <= config.IdenticalCallHalt; i++ {
 		llm.iteration = i

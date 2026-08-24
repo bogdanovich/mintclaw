@@ -24,10 +24,6 @@ func (c *activeRequestCounter) inc() {
 	c.mu.Unlock()
 }
 
-func (c *activeRequestCounter) activeRequestsInc() {
-	c.inc()
-}
-
 func (c *activeRequestCounter) dec() {
 	c.mu.Lock()
 	c.count--
@@ -35,10 +31,6 @@ func (c *activeRequestCounter) dec() {
 		c.cond.Broadcast()
 	}
 	c.mu.Unlock()
-}
-
-func (c *activeRequestCounter) activeRequestsDec() {
-	c.dec()
 }
 
 func (c *activeRequestCounter) wait(ctx context.Context, timeout time.Duration) bool {

@@ -442,8 +442,9 @@ func TestReloadProviderAndConfigWaitsForInFlightRequestsBeforeClosingOldProvider
 
 func TestWaitForActiveRequestsHonorsContextCancellation(t *testing.T) {
 	al := &AgentLoop{}
-	al.activeRequestsInc()
-	defer al.activeRequestsDec()
+	counter := al.activeRequestCounter()
+	counter.inc()
+	defer counter.dec()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

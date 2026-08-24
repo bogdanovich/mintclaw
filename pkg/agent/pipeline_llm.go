@@ -321,7 +321,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			)
 
 			if retry == 0 && !constants.IsInternalChannel(ts.channel) {
-				_ = p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(
+				_ = p.bus.PublishOutbound(ctx, outboundMessageForTurn(
 					ts,
 					"Context window exceeded. Compressing history and retrying...",
 				))
