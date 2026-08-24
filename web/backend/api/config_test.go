@@ -194,7 +194,6 @@ func TestHandleGetConfig_ReturnsRevisionWithoutWritingConfig(t *testing.T) {
 		Version int `json:"version"`
 		Session struct {
 			Dimensions []string `json:"dimensions"`
-			DmScope    string   `json:"dm_scope"`
 		} `json:"session"`
 	}
 	if err = json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
@@ -206,8 +205,8 @@ func TestHandleGetConfig_ReturnsRevisionWithoutWritingConfig(t *testing.T) {
 	if len(response.Session.Dimensions) != 1 || response.Session.Dimensions[0] != "chat" {
 		t.Fatalf("response session.dimensions = %v, want [chat]", response.Session.Dimensions)
 	}
-	if response.Session.DmScope != "per-channel" {
-		t.Fatalf("response session.dm_scope = %q, want previous-client alias per-channel", response.Session.DmScope)
+	if bytes.Contains(rec.Body.Bytes(), []byte(`"dm_scope"`)) {
+		t.Fatalf("response contains removed session.dm_scope field: %s", rec.Body.Bytes())
 	}
 	publicAfter, _ := os.ReadFile(configPath)
 	securityAfter, _ := os.ReadFile(securityPath)
@@ -216,80 +215,18 @@ func TestHandleGetConfig_ReturnsRevisionWithoutWritingConfig(t *testing.T) {
 	}
 }
 
-func TestTranslatePreviousWebSessionScope(t *testing.T) {
-	tests := []struct {
-		scope string
-		want  []string
-	}{
-		{scope: "per-channel-peer", want: []string{"chat", "sender"}},
-		{scope: "per-channel", want: []string{"chat"}},
-		{scope: "per-peer", want: []string{"sender"}},
-		{scope: "global", want: []string{}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.scope, func(t *testing.T) {
-			root := map[string]any{"session": map[string]any{"dm_scope": tt.scope}}
-			if err := translatePreviousWebSessionScope(root); err != nil {
-				t.Fatalf("translatePreviousWebSessionScope() error = %v", err)
-			}
-			session := root["session"].(map[string]any)
-			if _, exists := session["dm_scope"]; exists {
-				t.Fatal("previous session field survived boundary translation")
-			}
-			dimensions, ok := session["dimensions"].([]string)
-			if !ok || strings.Join(dimensions, ",") != strings.Join(tt.want, ",") {
-				t.Fatalf("translated dimensions = %#v, want %v", session["dimensions"], tt.want)
-			}
-		})
-	}
-
-	root := map[string]any{"session": map[string]any{
-		"dimensions": []string{"space", "topic"},
-		"dm_scope":   "per-peer",
-	}}
-	if err := translatePreviousWebSessionScope(root); err != nil {
-		t.Fatalf("translate current dimensions: %v", err)
-	}
-	session := root["session"].(map[string]any)
-	if _, exists := session["dm_scope"]; exists {
-		t.Fatal("previous session field survived alongside current dimensions")
-	}
-	if dimensions := session["dimensions"].([]string); strings.Join(dimensions, ",") != "space,topic" {
-		t.Fatalf("current dimensions = %v, want [space topic]", dimensions)
-	}
-}
-
-func TestHandleUpdateConfigTranslatesPreviousWebSessionScope(t *testing.T) {
+func TestHandlePatchConfigPersistsCanonicalSessionDimensions(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
-
-	repository := config.NewRepository(configPath)
-	snapshot, err := repository.ReadOnly()
-	if err != nil {
-		t.Fatalf("ReadOnly() error = %v", err)
-	}
-	body, err := json.Marshal(snapshot.Config)
-	if err != nil {
-		t.Fatalf("Marshal(config) error = %v", err)
-	}
-	var payload map[string]any
-	if err = json.Unmarshal(body, &payload); err != nil {
-		t.Fatalf("Unmarshal(config) error = %v", err)
-	}
-	session := payload["session"].(map[string]any)
-	delete(session, "dimensions")
-	session["dm_scope"] = "per-peer"
-	body, err = json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("Marshal(previous client payload) error = %v", err)
-	}
 
 	h := NewHandler(configPath)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
-	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewReader(body))
-	req.Header.Set("If-Match", configRevisionETag(snapshot.Revision))
+	req := httptest.NewRequest(
+		http.MethodPatch,
+		"/api/config",
+		bytes.NewBufferString(`{"session":{"dimensions":[]}}`),
+	)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -300,63 +237,8 @@ func TestHandleUpdateConfigTranslatesPreviousWebSessionScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
-	if len(updated.Session.Dimensions) != 1 || updated.Session.Dimensions[0] != "sender" {
-		t.Fatalf("Session.Dimensions = %v, want [sender]", updated.Session.Dimensions)
-	}
-	publicData, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("ReadFile(config) error = %v", err)
-	}
-	if bytes.Contains(publicData, []byte(`"dm_scope"`)) {
-		t.Fatalf("persisted config contains previous Web field: %s", publicData)
-	}
-}
-
-func TestHandlePatchConfigPersistsCanonicalSessionDimensions(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-		want []string
-	}{
-		{name: "current empty dimensions", body: `{"session":{"dimensions":[]}}`, want: []string{}},
-		{
-			name: "previous Web scope",
-			body: `{"session":{"dm_scope":"per-channel-peer"}}`,
-			want: []string{"chat", "sender"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			configPath, cleanup := setupOAuthTestEnv(t)
-			defer cleanup()
-
-			h := NewHandler(configPath)
-			mux := http.NewServeMux()
-			h.RegisterRoutes(mux)
-			req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(tt.body))
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
-			}
-
-			updated, err := config.LoadConfig(configPath)
-			if err != nil {
-				t.Fatalf("LoadConfig() error = %v", err)
-			}
-			if updated.Session.Dimensions == nil ||
-				strings.Join(updated.Session.Dimensions, ",") != strings.Join(tt.want, ",") {
-				t.Fatalf("Session.Dimensions = %#v, want %v", updated.Session.Dimensions, tt.want)
-			}
-			publicData, err := os.ReadFile(configPath)
-			if err != nil {
-				t.Fatalf("ReadFile(config) error = %v", err)
-			}
-			if bytes.Contains(publicData, []byte(`"dm_scope"`)) {
-				t.Fatalf("persisted config contains previous Web field: %s", publicData)
-			}
-		})
+	if updated.Session.Dimensions == nil || len(updated.Session.Dimensions) != 0 {
+		t.Fatalf("Session.Dimensions = %#v, want explicit empty dimensions", updated.Session.Dimensions)
 	}
 }
 
@@ -407,6 +289,13 @@ func TestHandleUpdateConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) 
 				payload["bindings"] = []any{}
 			},
 			wantError: "unknown field(s): bindings",
+		},
+		{
+			name: "removed_session_scope_field",
+			mutate: func(payload map[string]any) {
+				payload["session"].(map[string]any)["dm_scope"] = "per-channel"
+			},
+			wantError: "unknown field(s): session.dm_scope",
 		},
 	}
 	for _, test := range tests {
@@ -486,6 +375,11 @@ func TestHandlePatchConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) {
 			name:      "removed_field_null_tombstone",
 			body:      `{"bindings":null}`,
 			wantError: "unknown field(s): bindings",
+		},
+		{
+			name:      "removed_session_scope_field",
+			body:      `{"session":{"dm_scope":"per-channel"}}`,
+			wantError: "unknown field(s): session.dm_scope",
 		},
 		{
 			name:      "nested_removed_field_null_tombstone",

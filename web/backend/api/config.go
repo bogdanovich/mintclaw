@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -44,80 +43,9 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	writeConfigRevision(w, snapshot.Revision)
-	if err := json.NewEncoder(w).Encode(newConfigAPIResponse(snapshot.Config)); err != nil {
+	if err := json.NewEncoder(w).Encode(snapshot.Config); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
-}
-
-type previousWebSessionScope struct {
-	name       string
-	dimensions []string
-}
-
-// previousWebSessionScopes is a one-release HTTP-boundary adapter. Persisted
-// configuration and current clients use session.dimensions exclusively.
-var previousWebSessionScopes = []previousWebSessionScope{
-	{name: "per-channel-peer", dimensions: []string{"chat", "sender"}},
-	{name: "per-channel", dimensions: []string{"chat"}},
-	{name: "per-peer", dimensions: []string{"sender"}},
-	{name: "global", dimensions: []string{}},
-}
-
-type configResponseBase config.Config
-
-type previousWebSessionResponse struct {
-	config.SessionConfig
-	DmScope string `json:"dm_scope,omitempty"`
-}
-
-type configAPIResponse struct {
-	*configResponseBase
-	Session previousWebSessionResponse `json:"session"`
-}
-
-func newConfigAPIResponse(cfg *config.Config) configAPIResponse {
-	return configAPIResponse{
-		configResponseBase: (*configResponseBase)(cfg),
-		Session: previousWebSessionResponse{
-			SessionConfig: cfg.Session,
-			DmScope:       previousWebScopeForDimensions(cfg.Session.Dimensions),
-		},
-	}
-}
-
-func previousWebScopeForDimensions(dimensions []string) string {
-	for _, scope := range previousWebSessionScopes {
-		if slices.Equal(dimensions, scope.dimensions) {
-			return scope.name
-		}
-	}
-	return ""
-}
-
-func translatePreviousWebSessionScope(root map[string]any) error {
-	session, ok := root["session"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	rawScope, hasScope := session["dm_scope"]
-	if !hasScope {
-		return nil
-	}
-	delete(session, "dm_scope")
-	if _, hasDimensions := session["dimensions"]; hasDimensions {
-		return nil
-	}
-	scopeName, ok := rawScope.(string)
-	if !ok {
-		return errors.New("session.dm_scope must be a string")
-	}
-	for _, scope := range previousWebSessionScopes {
-		if scope.name == scopeName {
-			session["dimensions"] = append([]string{}, scope.dimensions...)
-			return nil
-		}
-	}
-	return fmt.Errorf("unsupported session.dm_scope %q", scopeName)
 }
 
 // handleUpdateConfig updates the complete system configuration.
@@ -146,10 +74,6 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = config.ValidateConfigJSON(body); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
-		return
-	}
-	if err = translatePreviousWebSessionScope(raw); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
 		return
 	}
@@ -254,18 +178,9 @@ func (h *Handler) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid config patch: %v", err), http.StatusBadRequest)
 		return
 	}
-	if err = translatePreviousWebSessionScope(patch); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid config patch: %v", err), http.StatusBadRequest)
-		return
-	}
-	normalizedPatchBody, err := json.Marshal(patch)
-	if err != nil {
-		http.Error(w, "Failed to normalize config patch", http.StatusBadRequest)
-		return
-	}
 	var validationErrors []string
 	snapshot, err := h.updateConfig(func(cfg *config.Config) error {
-		if validateErr := config.ValidateConfigPatchJSON(normalizedPatchBody, cfg); validateErr != nil {
+		if validateErr := config.ValidateConfigPatchJSON(patchBody, cfg); validateErr != nil {
 			return &configPatchRequestError{err: fmt.Errorf("invalid config patch: %w", validateErr)}
 		}
 		updated, updateErr := applyConfigMergePatch(cfg, patch, h.configPath)
