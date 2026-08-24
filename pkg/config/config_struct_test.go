@@ -164,7 +164,7 @@ func TestSkillRegistryConfigDecodeParam(t *testing.T) {
 
 func TestNormalizeAllowFrom(t *testing.T) {
 	got := NormalizeAllowFrom([]string{" owner-1 ", "", "  ", "*"})
-	if !reflect.DeepEqual(got, FlexibleStringSlice{"owner-1", "*"}) {
+	if !reflect.DeepEqual(got, []string{"owner-1", "*"}) {
 		t.Fatalf("NormalizeAllowFrom() = %#v", got)
 	}
 	if !IsPublicAllowFrom(got) {

@@ -67,13 +67,13 @@ func TestExplicitChannelAllowFrom(t *testing.T) {
 	t.Run("normalizes sender IDs", func(t *testing.T) {
 		allowFrom, err := explicitChannelAllowFrom([]string{" owner-1 ", ""}, false)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"owner-1"}, []string(allowFrom))
+		assert.Equal(t, []string{"owner-1"}, allowFrom)
 	})
 
 	t.Run("public uses wildcard", func(t *testing.T) {
 		allowFrom, err := explicitChannelAllowFrom(nil, true)
 		require.NoError(t, err)
-		assert.Equal(t, []string{"*"}, []string(allowFrom))
+		assert.Equal(t, []string{"*"}, allowFrom)
 	})
 }
 

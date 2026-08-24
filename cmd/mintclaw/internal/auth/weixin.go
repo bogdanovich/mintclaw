@@ -53,7 +53,7 @@ Example:
 func runWeixinOnboard(
 	baseURL, proxy string,
 	timeout time.Duration,
-	allowFrom config.FlexibleStringSlice,
+	allowFrom []string,
 ) error {
 	fmt.Println("Starting Weixin (WeChat personal) login...")
 	fmt.Println()
@@ -100,7 +100,7 @@ func runWeixinOnboard(
 // saveWeixinConfig patches channels.weixin in the config and saves it.
 func saveWeixinConfig(
 	token, baseURL, proxy string,
-	allowFrom config.FlexibleStringSlice,
+	allowFrom []string,
 ) error {
 	cfgPath := internal.GetConfigPath()
 	if _, err := internal.LoadConfigAt(cfgPath); err != nil {
@@ -132,7 +132,7 @@ func saveWeixinConfig(
 	return err
 }
 
-func printManualWeixinConfig(token, baseURL string, allowFrom config.FlexibleStringSlice) {
+func printManualWeixinConfig(token, baseURL string, allowFrom []string) {
 	fmt.Println()
 	fmt.Println("Add the following to the channels section of your mintclaw config:")
 	fmt.Println()

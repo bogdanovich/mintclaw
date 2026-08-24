@@ -103,7 +103,7 @@ func newWeComCommand() *cobra.Command {
 	return cmd
 }
 
-func authWeComCmd(timeout time.Duration, allowFrom config.FlexibleStringSlice) error {
+func authWeComCmd(timeout time.Duration, allowFrom []string) error {
 	return authWeComCmdWithScanner(
 		context.Background(),
 		os.Stdout,
@@ -117,7 +117,7 @@ func authWeComCmdWithScanner(
 	ctx context.Context,
 	writer io.Writer,
 	timeout time.Duration,
-	allowFrom config.FlexibleStringSlice,
+	allowFrom []string,
 	scanner wecomQRScanner,
 ) error {
 	if scanner == nil {
@@ -173,7 +173,7 @@ func defaultWeComQRFlowOptions(timeout time.Duration) wecomQRFlowOptions {
 func applyWeComAuthResult(
 	cfg *config.Config,
 	botInfo wecomQRBotInfo,
-	allowFrom config.FlexibleStringSlice,
+	allowFrom []string,
 ) {
 	bc := cfg.Channels.GetByType(config.ChannelWeCom)
 	if bc == nil {

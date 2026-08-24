@@ -29,9 +29,9 @@ func NewAuthCommand() *cobra.Command {
 	return cmd
 }
 
-func explicitChannelAllowFrom(values []string, public bool) (config.FlexibleStringSlice, error) {
+func explicitChannelAllowFrom(values []string, public bool) ([]string, error) {
 	if public {
-		return config.FlexibleStringSlice{"*"}, nil
+		return []string{"*"}, nil
 	}
 
 	allowFrom := config.NormalizeAllowFrom(values)

@@ -578,14 +578,14 @@ func computeChannelSignatures(channels config.ChannelsConfig) []string {
 		}
 
 		payload := struct {
-			Enabled            bool                       `json:"enabled"`
-			Type               string                     `json:"type"`
-			AllowFrom          config.FlexibleStringSlice `json:"allow_from,omitempty"`
-			ReasoningChannelID string                     `json:"reasoning_channel_id,omitempty"`
-			GroupTrigger       config.GroupTriggerConfig  `json:"group_trigger,omitempty"`
-			Typing             config.TypingConfig        `json:"typing,omitempty"`
-			Placeholder        config.PlaceholderConfig   `json:"placeholder,omitempty"`
-			Settings           json.RawMessage            `json:"settings,omitempty"`
+			Enabled            bool                      `json:"enabled"`
+			Type               string                    `json:"type"`
+			AllowFrom          []string                  `json:"allow_from,omitempty"`
+			ReasoningChannelID string                    `json:"reasoning_channel_id,omitempty"`
+			GroupTrigger       config.GroupTriggerConfig `json:"group_trigger,omitempty"`
+			Typing             config.TypingConfig       `json:"typing,omitempty"`
+			Placeholder        config.PlaceholderConfig  `json:"placeholder,omitempty"`
+			Settings           json.RawMessage           `json:"settings,omitempty"`
 		}{
 			Enabled:            channel.Enabled,
 			Type:               channel.Type,

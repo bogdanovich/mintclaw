@@ -62,7 +62,7 @@ func (c *IRCChannel) Start(ctx context.Context) error {
 	if realName == "" {
 		realName = c.config.Nick
 	}
-	caps := []string(c.config.RequestCaps)
+	caps := c.config.RequestCaps
 	if len(caps) == 0 {
 		caps = []string{"server-time", "message-tags"}
 	}

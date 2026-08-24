@@ -15,16 +15,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
-// FlexibleStringSlice is a []string that also accepts JSON numbers,
-// so allow_from can contain both "123" and 123.
-// It also supports parsing comma-separated strings from environment variables,
-// including both English (,) and Chinese (，) commas.
-type FlexibleStringSlice []string
-
 // NormalizeAllowFrom trims sender entries and removes blanks so every caller
 // applies the same empty-list policy.
-func NormalizeAllowFrom(values []string) FlexibleStringSlice {
-	normalized := make(FlexibleStringSlice, 0, len(values))
+func NormalizeAllowFrom(values []string) []string {
+	normalized := make([]string, 0, len(values))
 	for _, value := range values {
 		if value = strings.TrimSpace(value); value != "" {
 			normalized = append(normalized, value)
@@ -40,86 +34,6 @@ func IsPublicAllowFrom(values []string) bool {
 		}
 	}
 	return false
-}
-
-func (f *FlexibleStringSlice) UnmarshalJSON(data []byte) error {
-	if string(data) == "null" {
-		*f = nil
-		return nil
-	}
-
-	// Accept a single JSON string for convenience, e.g.:
-	// "text": "Thinking..."
-	var singleString string
-	if err := json.Unmarshal(data, &singleString); err == nil {
-		*f = FlexibleStringSlice{singleString}
-		return nil
-	}
-
-	// Accept a single JSON number too, to keep symmetry with mixed allow_from
-	// payloads that may contain numeric identifiers.
-	var singleNumber float64
-	if err := json.Unmarshal(data, &singleNumber); err == nil {
-		*f = FlexibleStringSlice{fmt.Sprintf("%.0f", singleNumber)}
-		return nil
-	}
-
-	// Try []string first
-	var ss []string
-	if err := json.Unmarshal(data, &ss); err == nil {
-		*f = ss
-		return nil
-	}
-
-	// Try []interface{} to handle mixed types
-	var raw []any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		var s string
-		// fail over to compatible to old format string
-		if err = json.Unmarshal(data, &s); err != nil {
-			return err
-		}
-		*f = []string{s}
-		return nil
-	}
-
-	result := make([]string, 0, len(raw))
-	for _, v := range raw {
-		switch val := v.(type) {
-		case string:
-			result = append(result, val)
-		case float64:
-			result = append(result, fmt.Sprintf("%.0f", val))
-		default:
-			result = append(result, fmt.Sprintf("%v", val))
-		}
-	}
-	*f = result
-	return nil
-}
-
-// UnmarshalText implements encoding.TextUnmarshaler to support env variable parsing.
-// It handles comma-separated values with both English (,) and Chinese (，) commas.
-func (f *FlexibleStringSlice) UnmarshalText(text []byte) error {
-	if len(text) == 0 {
-		*f = nil
-		return nil
-	}
-
-	s := string(text)
-	// Replace Chinese comma with English comma, then split
-	s = strings.ReplaceAll(s, "，", ",")
-	parts := strings.Split(s, ",")
-
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			result = append(result, part)
-		}
-	}
-	*f = result
-	return nil
 }
 
 const (

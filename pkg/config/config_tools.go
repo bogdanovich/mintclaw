@@ -224,10 +224,10 @@ type WebToolsConfig struct {
 	PreferNative bool `yaml:"-" json:"prefer_native" env:"MINTCLAW_TOOLS_WEB_PREFER_NATIVE"`
 	// Proxy is an optional proxy URL for web tools (http/https/socks5/socks5h).
 	// For authenticated proxies, prefer HTTP_PROXY/HTTPS_PROXY env vars instead of embedding credentials in config.
-	Proxy                string              `yaml:"-" json:"proxy,omitempty"                  env:"MINTCLAW_TOOLS_WEB_PROXY"`
-	FetchLimitBytes      int64               `yaml:"-" json:"fetch_limit_bytes,omitempty"      env:"MINTCLAW_TOOLS_WEB_FETCH_LIMIT_BYTES"`
-	Format               string              `yaml:"-" json:"format,omitempty"                 env:"MINTCLAW_TOOLS_WEB_FORMAT"`
-	PrivateHostWhitelist FlexibleStringSlice `yaml:"-" json:"private_host_whitelist,omitempty" env:"MINTCLAW_TOOLS_WEB_PRIVATE_HOST_WHITELIST"`
+	Proxy                string   `yaml:"-" json:"proxy,omitempty"                  env:"MINTCLAW_TOOLS_WEB_PROXY"`
+	FetchLimitBytes      int64    `yaml:"-" json:"fetch_limit_bytes,omitempty"      env:"MINTCLAW_TOOLS_WEB_FETCH_LIMIT_BYTES"`
+	Format               string   `yaml:"-" json:"format,omitempty"                 env:"MINTCLAW_TOOLS_WEB_FORMAT"`
+	PrivateHostWhitelist []string `yaml:"-" json:"private_host_whitelist,omitempty" env:"MINTCLAW_TOOLS_WEB_PRIVATE_HOST_WHITELIST"`
 }
 
 type CronToolsConfig struct {

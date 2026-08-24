@@ -91,7 +91,7 @@ func TestDispatchIncoming_DeniesBeforeSideEffects(t *testing.T) {
 	t.Parallel()
 
 	messageBus := bus.NewMessageBus()
-	ch := newTestWeComChannelWithAllowFrom(t, messageBus, config.FlexibleStringSlice{"trusted-user"})
+	ch := newTestWeComChannelWithAllowFrom(t, messageBus, []string{"trusted-user"})
 
 	var commands []wecomCommand
 	ch.commandSend = func(cmd wecomCommand, _ time.Duration) (wecomEnvelope, error) {
@@ -665,13 +665,13 @@ func TestSendMedia_SendsActiveFile(t *testing.T) {
 }
 
 func newTestWeComChannel(t *testing.T, messageBus *bus.MessageBus) *WeComChannel {
-	return newTestWeComChannelWithAllowFrom(t, messageBus, config.FlexibleStringSlice{"*"})
+	return newTestWeComChannelWithAllowFrom(t, messageBus, []string{"*"})
 }
 
 func newTestWeComChannelWithAllowFrom(
 	t *testing.T,
 	messageBus *bus.MessageBus,
-	allowFrom config.FlexibleStringSlice,
+	allowFrom []string,
 ) *WeComChannel {
 	t.Helper()
 

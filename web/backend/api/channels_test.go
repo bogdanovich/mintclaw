@@ -27,7 +27,7 @@ func TestHandleGetChannelConfig_ReturnsSecretPresenceWithoutLeakingSecrets(t *te
 	bcfg := decoded.(*config.FeishuSettings)
 	bcfg.AppID = "cli_test_app"
 	bcfg.AppSecret = *config.NewSecureString("feishu-secret-from-security")
-	bc.AllowFrom = config.FlexibleStringSlice{"ou_test_user"}
+	bc.AllowFrom = []string{"ou_test_user"}
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -110,7 +110,7 @@ func TestHandleGetChannelConfig_ReturnsCommonFieldsWhenSettingsEmpty(t *testing.
 	}
 	bc := cfg.Channels[config.ChannelFeishu]
 	bc.Enabled = true
-	bc.AllowFrom = config.FlexibleStringSlice{"ou_common_user"}
+	bc.AllowFrom = []string{"ou_common_user"}
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}

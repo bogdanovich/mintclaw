@@ -30,7 +30,7 @@ func newTestMintClawChannel(t *testing.T) *MintClawChannel {
 	bc := &config.Channel{
 		Type:      config.ChannelMintClaw,
 		Enabled:   true,
-		AllowFrom: config.FlexibleStringSlice{"mintclaw-user"},
+		AllowFrom: []string{"mintclaw-user"},
 	}
 	cfg := &config.MintClawSettings{}
 	cfg.SetToken("test-token")
@@ -48,7 +48,7 @@ func TestHandleMessageSend_ForwardsMessageMetadata(t *testing.T) {
 	bc := &config.Channel{
 		Type:      config.ChannelMintClaw,
 		Enabled:   true,
-		AllowFrom: config.FlexibleStringSlice{"mintclaw-user"},
+		AllowFrom: []string{"mintclaw-user"},
 	}
 	cfg := &config.MintClawSettings{}
 	cfg.SetToken("test-token")

@@ -135,10 +135,10 @@ func TestApplyWeComAuthResult(t *testing.T) {
 	applyWeComAuthResult(cfg, wecomQRBotInfo{
 		BotID:  "bot-1",
 		Secret: "secret-1",
-	}, config.FlexibleStringSlice{"owner-1"})
+	}, []string{"owner-1"})
 
 	assert.True(t, wecom.Enabled)
-	assert.Equal(t, config.FlexibleStringSlice{"owner-1"}, wecom.AllowFrom)
+	assert.Equal(t, []string{"owner-1"}, wecom.AllowFrom)
 	assert.Equal(t, "bot-1", weCfg.BotID)
 	assert.Equal(t, "secret-1", weCfg.Secret.String())
 	assert.Equal(t, wecomDefaultWebSocketURL, weCfg.WebSocketURL)
@@ -156,7 +156,7 @@ func TestAuthWeComCmdWithScanner(t *testing.T) {
 		context.Background(),
 		&output,
 		time.Second,
-		config.FlexibleStringSlice{"owner-1"},
+		[]string{"owner-1"},
 		func(_ context.Context, opts wecomQRFlowOptions) (wecomQRBotInfo, error) {
 			assert.Equal(t, wecomQRSourceID, opts.SourceID)
 			return wecomQRBotInfo{
@@ -174,7 +174,7 @@ func TestAuthWeComCmdWithScanner(t *testing.T) {
 	require.NoError(t, err)
 	weCfg := decoded.(*config.WeComSettings)
 	assert.True(t, wecom.Enabled)
-	assert.Equal(t, config.FlexibleStringSlice{"owner-1"}, wecom.AllowFrom)
+	assert.Equal(t, []string{"owner-1"}, wecom.AllowFrom)
 	assert.Equal(t, "bot-1", weCfg.BotID)
 	assert.Equal(t, "secret-1", weCfg.Secret.String())
 	assert.Equal(t, wecomDefaultWebSocketURL, weCfg.WebSocketURL)

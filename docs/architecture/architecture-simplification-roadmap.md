@@ -771,6 +771,10 @@ Implementation sequence:
     Delete the bidirectional scope synchronization machinery, keep only a
     one-release Web boundary adapter, and remove that adapter at the next
     coordinated compatibility reset.
+25. Make JSON string arrays the sole persisted list shape. Delete the
+    `FlexibleStringSlice` scalar, mixed-array, and custom text decoders; retain
+    friendly scalar normalization only at the current Web request boundary and
+    use the standard environment parser for comma-separated overrides.
 
 Exit criteria:
 
