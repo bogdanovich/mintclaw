@@ -1187,7 +1187,12 @@ func TestCompanionBrowserSnapshotTransferRecoveryOverProductionWSS(t *testing.T)
 			}
 			observation, observeErr := worker.Observe(t.Context())
 			if observeErr != nil || observation.URL != "https://example.com/" || len(observation.Snapshot) < 150*1024 {
-				t.Fatalf("recovered Observe() = url %q bytes %d, %v", observation.URL, len(observation.Snapshot), observeErr)
+				t.Fatalf(
+					"recovered Observe() = url %q bytes %d, %v",
+					observation.URL,
+					len(observation.Snapshot),
+					observeErr,
+				)
 			}
 			worker.mu.Lock()
 			generation = worker.snapshotGeneration
