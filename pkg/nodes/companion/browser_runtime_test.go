@@ -27,6 +27,9 @@ type fakeBrowserCommandHost struct {
 	dialogAction     browser.Action
 	ordinaryActions  []browser.Action
 	ordinaryRequests []nodes.BrowserHostActRequest
+	downloadRequests []nodes.BrowserHostActRequest
+	downloadOutput   nodes.BrowserOutputDescriptor
+	downloadError    error
 	contextCalls     int
 	contextError     error
 	closed           int
@@ -37,6 +40,14 @@ type fakeBrowserCommandHost struct {
 	observeSnapshot  string
 	navigateSnapshot string
 	routedSessions   []string
+}
+
+func (host *fakeBrowserCommandHost) Download(
+	_ context.Context,
+	request nodes.BrowserHostActRequest,
+) (nodes.BrowserOutputDescriptor, error) {
+	host.downloadRequests = append(host.downloadRequests, request)
+	return host.downloadOutput, host.downloadError
 }
 
 func (host *fakeBrowserCommandHost) BrowserProfiles() []nodes.BrowserProfileDescriptor {
@@ -155,6 +166,37 @@ func TestRuntimeExecutesTypedFileChooser(t *testing.T) {
 		request.ArtifactBytes != input.ArtifactBytes || request.ArtifactFilename != input.ArtifactFilename ||
 		request.ArtifactContentType != input.ArtifactContentType {
 		t.Fatalf("file chooser request = %#v", request)
+	}
+}
+
+func TestRuntimePreservesDownloadSuccessWhenArtifactIsUnavailable(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.profiles[0].DryRun = false
+	host.profiles[0].AllowApprovedActions = true
+	host.profiles[0].Actions = []string{"download", "navigate"}
+	host.downloadError = nodes.ErrBrowserHostArtifactUnavailable
+	runtime := newBrowserRuntimeFixture(t, host)
+	input := nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_download_1",
+		Action:             browser.Action{Kind: browser.ActionDownload, Ref: "semantic_ref_1"},
+		Effect:             "unknown", CurrentOrigin: "https://example.com",
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "link", ExpectedName: "Download",
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+	}
+	var err error
+	input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := invokeBrowserRuntime(t, runtime, nodes.BrowserCommandAct, input)
+	var result nodes.BrowserActResult
+	if err = json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.State != "succeeded" || result.Output != nil || len(host.downloadRequests) != 1 {
+		t.Fatalf("download result = %#v; requests = %#v", result, host.downloadRequests)
 	}
 }
 

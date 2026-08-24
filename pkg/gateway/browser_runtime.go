@@ -261,16 +261,17 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 			if err != nil {
 				return tools.BrowserTargetDiagnostics{}, err
 			}
-			uploadAvailable := source.ArtifactTransferAvailable()
+			artifactTransferAvailable := source.ArtifactTransferAvailable()
+			uploadAvailable := artifactTransferAvailable
 			screenshotAvailable := source.ScreenshotAvailable()
-			downloadAvailable := uploadAvailable && source.DownloadAvailable()
+			downloadAvailable := artifactTransferAvailable && source.downloadAvailable
 			handoffAvailable := source.HandoffAvailable()
 			if source.config != nil {
 				if configured, ok := source.config.Tools.Browser.Targets[target]; ok &&
 					configured.EffectivePlacement() == config.BrowserPlacementNode {
 					screenshotAvailable = screenshotAvailable && readinessByProfile != nil && contexts
 					uploadAvailable = uploadAvailable && slices.Contains(actions, browser.ActionUpload)
-					downloadAvailable = downloadAvailable && slices.Contains(actions, browser.ActionDownload)
+					downloadAvailable = artifactTransferAvailable && slices.Contains(actions, browser.ActionDownload)
 					handoffAvailable = false
 				}
 			}
@@ -503,7 +504,7 @@ func (source *gatewayBrowserToolSource) PrepareAction(
 			return browser.Preparation{}, recoverErr
 		}
 	}
-	if request.Action.Kind == browser.ActionFileChooser {
+	if request.Action.Kind == browser.ActionFileChooser || request.Action.Kind == browser.ActionUpload {
 		binding, err := source.resolveBrowserUpload(ctx, request)
 		if err != nil {
 			return browser.Preparation{}, err

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -432,6 +433,79 @@ func TestBrowserHostCapturesApprovedDownloadAsPrivateOutput(t *testing.T) {
 	}
 	if len(worker.actions) != 1 || worker.actions[0].Kind != browserworker.DriverDownloadAction ||
 		worker.actions[0].Target != "download_target" {
+		t.Fatalf("driver actions = %#v", worker.actions)
+	}
+}
+
+func TestBrowserHostPreservesDownloadSuccessWhenOutputRegistrationIsFull(t *testing.T) {
+	payload := []byte("companion download fixture")
+	path := filepath.Join(t.TempDir(), "fixture.txt")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(payload)
+	observation := browserworker.DriverObservation{
+		URL: "https://example.com/download", Origin: "https://example.com", Title: "Download",
+		Snapshot: "- button \"Download\" [ref=download_target]",
+		Elements: []browserworker.DriverElement{{Target: "download_target", Role: "button", Name: "Download"}},
+	}
+	worker := &fakeBrowserHostWorker{
+		status:       browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{observation, observation, observation},
+		download: browserworker.DriverDownload{
+			Path: path, Filename: "fixture.txt", ContentType: "text/plain",
+			SHA256: hex.EncodeToString(digest[:]), Size: int64(len(payload)),
+		},
+	}
+	profile := browserHostProfileFixture()
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	request := browserHostOpenFixture()
+	request.DryRun = false
+	if _, err = host.Open(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil || len(observed.Elements) != 1 {
+		t.Fatalf("Observe() = %#v, %v", observed, err)
+	}
+	host.transferMu.Lock()
+	for index := range maxBrowserOutputArtifacts {
+		host.outputArtifacts[fmt.Sprintf("prefill_%d", index)] = browserOutputArtifact{
+			descriptor: nodes.BrowserOutputDescriptor{ExpiresAt: time.Now().Add(time.Hour).Unix()},
+			expiryStop: func() {},
+		}
+	}
+	host.transferMu.Unlock()
+	action := nodes.BrowserHostActRequest{
+		SessionID: request.SessionID, RoutedSessionID: request.RoutedSessionID,
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		ActionInvocationID: "browser_download_full",
+		Action:             browserworker.Action{Kind: browserworker.ActionDownload, Ref: observed.Elements[0].Ref},
+		Effect:             "unknown", CurrentOrigin: observed.Origin,
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: request.BrowserPolicyRevision,
+		ProfileRevision: profile.Revision, ExpectedRole: "button", ExpectedName: "Download",
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+		AgentID: request.AgentID, ActorID: request.ActorID,
+	}
+	action.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(action))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor, downloadErr := host.Download(t.Context(), action); !errors.Is(
+		downloadErr, nodes.ErrBrowserHostArtifactUnavailable,
+	) || descriptor != (nodes.BrowserOutputDescriptor{}) {
+		t.Fatalf("Download() = %#v, %v", descriptor, downloadErr)
+	}
+	if len(worker.actions) != 1 || worker.actions[0].Kind != browserworker.DriverDownloadAction {
 		t.Fatalf("driver actions = %#v", worker.actions)
 	}
 }

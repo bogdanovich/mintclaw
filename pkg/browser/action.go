@@ -711,7 +711,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		prepared.DestinationOrigin = destination
 		prepared.Effect = EffectNavigation
 	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover,
-		ActionFileChooser, ActionDownload:
+		ActionFileChooser, ActionUpload, ActionDownload:
 		element, ok := slot.refs[request.Action.Ref]
 		if !ok {
 			return PreparedAction{}, ErrStale
@@ -739,7 +739,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 			prepared.Effect = EffectLocalEdit
 		case ActionHover:
 			prepared.Effect = EffectRead
-		case ActionFileChooser:
+		case ActionFileChooser, ActionUpload:
 			if element.Role != "button" || request.Upload == nil || request.Upload.Size < 1 ||
 				request.Upload.Size > int64(broker.config.Limits.Effective().UploadBytes) ||
 				!validDigest(request.Upload.SHA256) || request.Upload.Path == "" || request.Upload.Filename == "" ||
@@ -1357,7 +1357,7 @@ func (broker *Broker) driverActionForPrepared(
 	case ActionNavigate:
 		return DriverAction{Kind: DriverNavigate, URL: prepared.Action.URL}, nil
 	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover,
-		ActionFileChooser, ActionDownload:
+		ActionFileChooser, ActionUpload, ActionDownload:
 		element, ok := slot.refs[prepared.Action.Ref]
 		if !ok {
 			return DriverAction{}, ErrStale
@@ -1382,7 +1382,7 @@ func (broker *Broker) driverActionForPrepared(
 			kind = DriverUncheck
 		case ActionHover:
 			kind = DriverHover
-		case ActionFileChooser:
+		case ActionFileChooser, ActionUpload:
 			kind = DriverUpload
 			binding, exists := slot.uploads[prepared.ID]
 			if !exists || binding.Ref != prepared.Action.ArtifactRef || binding.SHA256 != prepared.ArtifactSHA256 ||

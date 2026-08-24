@@ -661,6 +661,17 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 	downloadStart += len(downloadMarker)
 	downloadEnd := strings.Index(downloadObservation.Snapshot[downloadStart:], "]")
+	if browserSource.downloadAvailable {
+		t.Fatal("production-WSS fixture unexpectedly enabled gateway-local Playwright downloads")
+	}
+	actTool := tools.NewBrowserActTool(cfg, browserSource)
+	actionSchema, err := json.Marshal(actTool.Parameters())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(actionSchema), `"const":"download"`) {
+		t.Fatalf("browser_act schema omitted the selected node download action: %s", actionSchema)
+	}
 	download, err := browserSource.PrepareAction(uploadContext, browser.PrepareActionRequest{
 		Owner: owner, RequestID: "browser-wss-download", SessionID: first.ID, TabID: first.TabID,
 		SnapshotID: downloadObservation.SnapshotID, SnapshotGeneration: downloadObservation.SnapshotGeneration,
@@ -727,6 +738,24 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	)
 	if recoveryErr != nil || !recoveredFound || recoveredArtifact.Size != int64(len(host.output)) {
 		t.Fatalf("recovered download artifact = %#v, found=%t, %v", recoveredArtifact, recoveredFound, recoveryErr)
+	}
+	recoveryObservation, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryNavigation, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "browser-wss-download-recovery-navigation",
+		SessionID: first.ID, TabID: first.TabID,
+		SnapshotID: recoveryObservation.SnapshotID, SnapshotGeneration: recoveryObservation.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/download-recovery"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invocation, err = browserSource.ExecuteAction(
+		uploadContext, owner, recoveryNavigation.Action.ID, nil,
+	); err != nil || invocation.State != browser.InvocationSucceeded {
+		t.Fatalf("download recovery navigation = %#v, %v", invocation, err)
 	}
 
 	failedObservation, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
@@ -986,6 +1015,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		"observe",
 		"download",
 		"observe",
+		"navigate",
 		"download",
 		"close",
 		"open",
@@ -1699,7 +1729,11 @@ func (host *wssBrowserHost) Navigate(
 		host.mu.Unlock()
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
 	}
-	if current != request.CurrentOrigin && request.CurrentOrigin != "about:blank" {
+	currentOrigin := current
+	if parsed, err := urlpkg.Parse(current); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		currentOrigin = parsed.Scheme + "://" + parsed.Host
+	}
+	if currentOrigin != request.CurrentOrigin && request.CurrentOrigin != "about:blank" {
 		host.mu.Unlock()
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostStale
 	}
@@ -1771,6 +1805,8 @@ func (host *wssBrowserHost) Act(
 		return host.Drag(ctx, request)
 	case browser.ActionFileChooser:
 		return host.FileChooser(ctx, request)
+	case browser.ActionUpload:
+		return host.Upload(ctx, request)
 	default:
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
 	}

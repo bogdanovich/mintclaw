@@ -1241,7 +1241,8 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 		fileChooserAvailable = tool.runtime.fileChooserAvailable()
 	}
 	actions = slices.DeleteFunc(actions, func(action browseraction.ActionKind) bool {
-		return action == browseraction.ActionFileChooser && !fileChooserAvailable ||
+		return (action == browseraction.ActionFileChooser || action == browseraction.ActionUpload) &&
+			!fileChooserAvailable ||
 			action == browseraction.ActionDownload && !downloadAvailable
 	})
 	actionSchema := browseraction.Schema(actions, limits.TextInputBytes, false)
@@ -1612,7 +1613,7 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	if action.Kind == browser.ActionDownload && action.Deliver && !toolshared.ToolRecoverableOutbound(ctx) {
 		return browser.Preparation{}, browser.ErrDenied
 	}
-	if action.Kind == browser.ActionFileChooser &&
+	if (action.Kind == browser.ActionFileChooser || action.Kind == browser.ActionUpload) &&
 		!tool.runtime.source.ArtifactTransferAvailable() {
 		return browser.Preparation{}, browser.ErrDriverIncompatible
 	}
