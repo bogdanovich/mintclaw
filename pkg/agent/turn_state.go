@@ -218,6 +218,7 @@ type LLMIterationState struct {
 	llmOpts                     map[string]any
 	gracefulTerminal            bool
 	useNativeSearch             bool
+	protectedDiagnosticContext  bool
 	assistantToolCallsPersisted bool
 	assistantToolCallsWriteErr  error
 	codingInstructionBarrier    bool

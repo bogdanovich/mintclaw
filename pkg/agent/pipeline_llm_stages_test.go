@@ -17,7 +17,29 @@ import (
 type (
 	durableProjectionTestTool    struct{}
 	resultOnlyDurabilityTestTool struct{}
+	duplicateRootMarkerHook      struct{}
 )
+
+func (*duplicateRootMarkerHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	next := req.Clone()
+	for _, message := range next.Messages {
+		if diagnosticTurnBoundaryMessage(message) {
+			next.Messages = append(next.Messages, message)
+			break
+		}
+	}
+	return next, HookDecision{Action: HookActionModify}, nil
+}
+
+func (*duplicateRootMarkerHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
 
 func (durableProjectionTestTool) Name() string        { return "protected_test" }
 func (durableProjectionTestTool) Description() string { return "test protected arguments" }
@@ -172,6 +194,55 @@ func TestBrowserDiagnosticsFollowUpMarksTerminalOutcomeProtected(t *testing.T) {
 	if outcome.Control != ControlBreak || outcome.FinalContent != llm.response.Content ||
 		!outcome.FinalContentProtected {
 		t.Fatalf("protected diagnostics outcome = %#v", outcome)
+	}
+}
+
+func TestBrowserDiagnosticsTaintSurvivesHookDuplicatedRootMarker(t *testing.T) {
+	const canary = "browser-diagnostics-hook-cloned-root-canary-64aef2"
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		Content: "diagnostic detail " + canary,
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	if err := al.MountHook(NamedHook("duplicate-root-marker", &duplicateRootMarkerHook{})); err != nil {
+		t.Fatalf("MountHook() error = %v", err)
+	}
+
+	pipeline := newTestPipeline(al)
+	ts := newTurnState(agent, makeTestTurnSpec("diagnostics-hook-root-session"), turnEventScope{
+		turnID: "diagnostics-hook-root-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	exec.messages = append(exec.messages,
+		providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{{
+			ID: "diagnostics-call", Name: "browser_diagnostics",
+			Function: &providers.FunctionCall{Name: "browser_diagnostics"},
+		}}},
+		providers.Message{Role: "tool", ToolCallID: "diagnostics-call", Content: canary},
+	)
+
+	llm := newLLMIterationState(1)
+	if stage, prepareErr := pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); prepareErr != nil ||
+		stage.disposition == llmStageComplete {
+		t.Fatalf("prepare = %+v, %v", stage, prepareErr)
+	}
+	if !llm.protectedDiagnosticContext {
+		t.Fatal("hook-cleared diagnostics sensitivity captured from runtime-owned messages")
+	}
+	if stage, invokeErr := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, llm); invokeErr != nil ||
+		stage.disposition == llmStageComplete {
+		t.Fatalf("invoke = %+v, %v", stage, invokeErr)
+	}
+	outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil {
+		t.Fatalf("normalizeAndDispatchLLMResponse() error = %v", err)
+	}
+	if outcome.Control != ControlBreak || outcome.FinalContent != llm.response.Content ||
+		!outcome.FinalContentProtected {
+		t.Fatalf("hook-cloned root diagnostics outcome = %#v", outcome)
 	}
 }
 

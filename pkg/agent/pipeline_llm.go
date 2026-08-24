@@ -573,6 +573,11 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		llm.response,
 		llm.callMessages,
 	)
+	sensitiveDiagnosticResponse = sensitiveDiagnosticResponse || llm.protectedDiagnosticContext
+	if sensitiveDiagnosticResponse {
+		diagnosticResponseContent = ""
+		diagnosticResponseReasoning = ""
+	}
 	p.emitEvent(
 		runtimeevents.KindAgentLLMResponse,
 		ts.eventMeta("runTurn", "turn.llm.response"),
