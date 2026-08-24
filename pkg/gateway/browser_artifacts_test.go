@@ -596,11 +596,12 @@ func TestGatewayBrowserDownloadPreservesTerminalSuccessWhenMediaRegistrationFail
 	if len(match) != 2 {
 		t.Fatalf("observation snapshot = %q", observation.Snapshot)
 	}
-	preparation, err := source.PrepareAction(gatewayBrowserArtifactContext(workspace), browser.PrepareActionRequest{
+	prepareRequest := browser.PrepareActionRequest{
 		Owner: owner, RequestID: "request_delivery_failure", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
 		Action: browser.Action{Kind: browser.ActionDownload, Ref: match[1], Deliver: true},
-	})
+	}
+	preparation, err := source.PrepareAction(gatewayBrowserArtifactContext(workspace), prepareRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,7 +610,11 @@ func TestGatewayBrowserDownloadPreservesTerminalSuccessWhenMediaRegistrationFail
 	if err != nil || result.State != browser.InvocationSucceeded || result.Download != nil || worker.executeCalls != 1 {
 		t.Fatalf("ExecuteAction() = %#v, %v; driver calls = %d", result, err, worker.executeCalls)
 	}
-	replayed, err := source.ExecuteAction(ctx, owner, preparation.Action.ID, &preparation.Approval)
+	replayedPreparation, err := source.PrepareAction(ctx, prepareRequest)
+	if err != nil || replayedPreparation.Action.ID != preparation.Action.ID {
+		t.Fatalf("replayed PrepareAction() = %#v, %v", replayedPreparation, err)
+	}
+	replayed, err := source.ExecuteAction(ctx, owner, replayedPreparation.Action.ID, &replayedPreparation.Approval)
 	if err != nil || replayed.State != browser.InvocationSucceeded || replayed.Download != nil ||
 		worker.executeCalls != 1 {
 		t.Fatalf("replayed ExecuteAction() = %#v, %v; driver calls = %d", replayed, err, worker.executeCalls)

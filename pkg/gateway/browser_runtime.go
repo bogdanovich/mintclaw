@@ -479,17 +479,22 @@ func (source *gatewayBrowserToolSource) PrepareAction(
 	request browser.PrepareActionRequest,
 ) (browser.Preparation, error) {
 	if request.Action.Kind == browser.ActionDownload {
+		var recoveryState browser.InvocationState
 		recovered, recoverErr := withGatewayBrowserBroker(
 			ctx, source,
 			func(ctx context.Context, broker *browser.Broker) (browser.Preparation, error) {
-				preparation, found, err := broker.RecoverableDownloadPreparation(ctx, request)
+				preparation, state, found, err := broker.RecoverableDownloadPreparation(ctx, request)
 				if err != nil || !found {
 					return browser.Preparation{}, err
 				}
+				recoveryState = state
 				return preparation, nil
 			},
 		)
 		if recoverErr == nil && recovered.Action.ID != "" {
+			if recoveryState == browser.InvocationSucceeded {
+				return recovered, nil
+			}
 			_, artifactFound, _ := source.lookupBrowserDownload(
 				ctx, request.Owner, request.RequestID, request.SessionID, false,
 			)

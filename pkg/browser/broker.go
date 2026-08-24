@@ -248,38 +248,38 @@ func (broker *Broker) PreparedAction(ctx context.Context, owner Owner, id string
 
 func (broker *Broker) RecoverableDownloadPreparation(
 	ctx context.Context, request PrepareActionRequest,
-) (Preparation, bool, error) {
+) (Preparation, InvocationState, bool, error) {
 	if request.Owner.Validate() != nil || !validIdentifier(request.RequestID) ||
 		!validIdentifier(request.SessionID) || !validIdentifier(request.TabID) ||
 		!validIdentifier(request.SnapshotID) || request.SnapshotGeneration == 0 ||
 		request.Action.Kind != ActionDownload ||
 		request.Action.Validate(broker.config.Limits.Effective().TextInputBytes) != nil {
-		return Preparation{}, false, ErrInvalid
+		return Preparation{}, "", false, ErrInvalid
 	}
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 	preparedID := derivedIdentifier("prepared", request.Owner, request.SessionID, request.RequestID)
 	prepared, err := broker.store.GetPreparedAction(ctx, preparedID)
 	if errors.Is(err, ErrNotFound) {
-		return Preparation{}, false, nil
+		return Preparation{}, "", false, nil
 	}
 	if err != nil {
-		return Preparation{}, false, err
+		return Preparation{}, "", false, err
 	}
 	if prepared.Owner != request.Owner || prepared.SessionID != request.SessionID ||
 		prepared.TabID != request.TabID || prepared.SnapshotID != request.SnapshotID ||
 		prepared.SnapshotGeneration != request.SnapshotGeneration || prepared.Action != request.Action {
-		return Preparation{}, false, ErrConflict
+		return Preparation{}, "", false, ErrConflict
 	}
 	invocationID := derivedIdentifier("invocation", request.Owner, request.SessionID, request.RequestID)
 	invocation, err := broker.store.GetInvocation(ctx, invocationID)
 	if err != nil {
-		return Preparation{}, false, err
+		return Preparation{}, "", false, err
 	}
 	if invocation.State != InvocationAccepted && invocation.State != InvocationSucceeded {
-		return Preparation{}, false, nil
+		return Preparation{}, "", false, nil
 	}
-	return preparationView(prepared), true, nil
+	return preparationView(prepared), invocation.State, true, nil
 }
 
 func (broker *Broker) RecoverAcceptedDownload(
