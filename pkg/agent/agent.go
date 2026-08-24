@@ -95,6 +95,7 @@ type AgentLoop struct {
 // turnSpec is the canonical runtime representation of one admitted turn.
 // Entrypoint-specific requests are normalized into this shape before execution.
 type turnSpec struct {
+	mode                         turnMode
 	Dispatch                     DispatchRequest
 	ModelBinding                 effectiveModelBinding
 	TaskID                       string // Durable task owning this turn, when one exists
@@ -117,7 +118,6 @@ type turnSpec struct {
 	DefaultResponse              string                    // Response when LLM returns empty
 	EnableSummary                bool                      // Whether to trigger summarization
 	SuppressBackgroundCompaction bool                      // Whether this short-lived caller can outlive background work
-	TreatInputAsPrompt           bool                      // Whether slash-prefixed input bypasses personal command dispatch
 	SendResponse                 bool                      // Whether to send response via bus
 	ExpectFinalDelivery          bool                      // Whether an outer coordinator will publish the final response
 	FinalDeliveryObservation     *finalDeliveryObservation // Collects state settled by an outer final response
@@ -127,8 +127,6 @@ type turnSpec struct {
 	SuppressToolUserDelivery     bool                      // Whether direct user-facing delivery from tools is suppressed for this turn
 	SuppressToolFeedback         bool                      // Whether to suppress inline tool feedback messages
 	NoHistory                    bool                      // If true, don't load session history (for heartbeat)
-	ExcludeInheritedNodeFiles    bool                      // Remove inherited node file tools from this internal turn
-	SkipInitialSteeringPoll      bool                      // If true, skip the steering poll at loop start (used by Continue)
 }
 
 type continuationTarget struct {
@@ -465,7 +463,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 	}
 	if changed {
 		agent = currentAgent
-		if opts.ExcludeInheritedNodeFiles {
+		if opts.mode == turnModeScheduled || opts.mode == turnModeHeartbeat {
 			agent = agentWithoutInheritedNodeFileTools(agent)
 		}
 		binding := al.bindEffectiveModel(opts.ModelBinding.RouteSessionKey, agent)

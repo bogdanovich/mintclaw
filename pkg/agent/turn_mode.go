@@ -20,7 +20,7 @@ const (
 )
 
 func newTurnSpec(mode turnMode, dispatch DispatchRequest, binding effectiveModelBinding) turnSpec {
-	spec := turnSpec{Dispatch: dispatch, ModelBinding: binding}
+	spec := turnSpec{mode: mode, Dispatch: dispatch, ModelBinding: binding}
 	switch mode {
 	case turnModeInbound:
 		spec.DefaultResponse = defaultResponse
@@ -29,10 +29,8 @@ func newTurnSpec(mode turnMode, dispatch DispatchRequest, binding effectiveModel
 		spec.AllowInterimMintClawPublish = true
 	case turnModeCoding:
 		spec.DefaultResponse = defaultResponse
-		spec.TreatInputAsPrompt = true
 		spec.ExpectFinalDelivery = true
 	case turnModeScheduled, turnModeHeartbeat:
-		spec.ExcludeInheritedNodeFiles = true
 		spec.DefaultResponse = defaultResponse
 		spec.SuppressToolFeedback = true
 		spec.NoHistory = true
@@ -49,16 +47,17 @@ func newTurnSpec(mode turnMode, dispatch DispatchRequest, binding effectiveModel
 	case turnModeSteering:
 		spec.DefaultResponse = defaultResponse
 		spec.EnableSummary = true
-		spec.SkipInitialSteeringPoll = true
 	case turnModeInteractionContinuation:
 		spec.DefaultResponse = defaultResponse
 		spec.EnableSummary = true
 		spec.AllowInterimMintClawPublish = true
-		spec.SkipInitialSteeringPoll = true
 	case turnModeChild:
-		spec.SkipInitialSteeringPoll = true
 	default:
 		panic("unsupported turn mode")
 	}
 	return spec
+}
+
+func (m turnMode) skipsInitialSteeringPoll() bool {
+	return m == turnModeSteering || m == turnModeInteractionContinuation || m == turnModeChild
 }

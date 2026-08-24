@@ -376,7 +376,7 @@ func (al *AgentLoop) processInboundMessageTurn(
 
 	// context-dependent commands check their own Runtime fields and report
 	// "unavailable" when the required capability is nil.
-	if !opts.TreatInputAsPrompt {
+	if opts.mode != turnModeCoding {
 		if response, handled := al.handleCommand(ctx, msg, turn.ModelBinding, &opts); handled {
 			return response, nil
 		}
