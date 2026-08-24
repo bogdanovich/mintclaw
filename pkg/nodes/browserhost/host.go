@@ -115,6 +115,11 @@ type BrowserHost struct {
 }
 
 func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*BrowserHost, error) {
+	for alias, profile := range profiles {
+		if profile.Enabled && companion.VerifyBrowserProfileRuntimeIdentity(profile) != nil {
+			return nil, fmt.Errorf("browser profile %q runtime is unavailable", alias)
+		}
+	}
 	factories := make(map[string]browserHostFactory)
 	for alias, profile := range profiles {
 		if !profile.Enabled {
@@ -295,6 +300,14 @@ func (host *BrowserHost) Open(
 	}
 	host.sessions[request.SessionID] = session
 	host.mu.Unlock()
+	if host.verifyProfile(profile) != nil {
+		host.mu.Lock()
+		if host.sessions[request.SessionID] == session {
+			delete(host.sessions, request.SessionID)
+		}
+		host.mu.Unlock()
+		return BrowserHostSession{}, ErrBrowserHostDenied
+	}
 
 	opened, openErr := host.factories[request.Profile].Open(ctx, browserworker.WorkerOpenRequest{
 		SessionID: request.SessionID, Target: companionBrowserTarget,

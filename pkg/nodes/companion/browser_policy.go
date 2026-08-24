@@ -66,6 +66,13 @@ type BrowserProfilePolicy struct {
 	// canonicalization. It is runtime-only authority used to derive the child
 	// PATH without exposing host filesystem details in config or catalogs.
 	driverLauncherPath string
+	// browserExecutablePath records an explicitly configured Playwright browser
+	// executable after validation. It remains companion-local and is rechecked
+	// before the browser host starts so a stale catalog cannot authorize a
+	// missing runtime.
+	browserExecutablePath string
+	browserExecutableHash string
+	browserExecutableInfo os.FileInfo
 }
 
 // DriverLauncherDirectory returns the normalized launcher's directory for the
@@ -164,6 +171,14 @@ func normalizeBrowserProfile(
 				"driver_arguments contains an option reserved for the companion browser host",
 			)
 		}
+	}
+	profile.DriverArguments, profile.browserExecutablePath, profile.browserExecutableHash,
+		profile.browserExecutableInfo, err = normalizeBrowserRuntimeExecutable(
+		profile.DriverArguments,
+		baseDir,
+	)
+	if err != nil {
+		return BrowserProfilePolicy{}, err
 	}
 	profileDirectory, err := resolveExistingBrowserDirectory(baseDir, profile.ProfileDirectory)
 	if err != nil {
@@ -291,7 +306,77 @@ func resolveBrowserExecutable(baseDir, configured string) (string, string, error
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
 		return "", "", errors.New("driver_executable must be an executable regular file")
 	}
+	targetDirectory, err := os.Stat(filepath.Dir(realPath))
+	if err != nil || !targetDirectory.IsDir() || validateBrowserDriverDirectory(targetDirectory) != nil {
+		return "", "", errors.New("driver_executable target directory is not trusted")
+	}
 	return filepath.Clean(realPath), launcherPath, nil
+}
+
+func normalizeBrowserRuntimeExecutable(
+	arguments []string,
+	baseDir string,
+) ([]string, string, string, os.FileInfo, error) {
+	normalized := append([]string(nil), arguments...)
+	configuredIndex := -1
+	configured := ""
+	joined := false
+	for index := 0; index < len(normalized); index++ {
+		argument := normalized[index]
+		switch {
+		case argument == "--executable-path":
+			if configuredIndex >= 0 || index+1 >= len(normalized) || normalized[index+1] == "" {
+				return nil, "", "", nil, errors.New("browser executable path is invalid")
+			}
+			configuredIndex, configured = index+1, normalized[index+1]
+			index++
+		case strings.HasPrefix(argument, "--executable-path="):
+			if configuredIndex >= 0 {
+				return nil, "", "", nil, errors.New("browser executable path is duplicated")
+			}
+			configuredIndex = index
+			configured = strings.TrimPrefix(argument, "--executable-path=")
+			joined = true
+		}
+	}
+	if configuredIndex < 0 {
+		return normalized, "", "", nil, nil
+	}
+	executable, _, err := resolveBrowserExecutable(baseDir, configured)
+	if err != nil {
+		return nil, "", "", nil, fmt.Errorf("validate browser executable path: %w", err)
+	}
+	digest, info, err := browserExecutableDigest(executable)
+	if err != nil {
+		return nil, "", "", nil, fmt.Errorf("validate browser executable path: %w", err)
+	}
+	if joined {
+		normalized[configuredIndex] = "--executable-path=" + executable
+	} else {
+		normalized[configuredIndex] = executable
+	}
+	return normalized, executable, digest, info, nil
+}
+
+func browserExecutableDigest(path string) (string, os.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", nil, errors.New("browser executable is unavailable")
+	}
+	defer func() { _ = file.Close() }()
+	before, err := file.Stat()
+	if err != nil || validateBrowserExecutableFile(before) != nil {
+		return "", nil, errors.New("browser executable is not a trusted regular file")
+	}
+	hasher := sha256.New()
+	if _, err = io.Copy(hasher, file); err != nil {
+		return "", nil, errors.New("browser executable could not be verified")
+	}
+	after, err := os.Stat(path)
+	if err != nil || !os.SameFile(before, after) || validateBrowserExecutableFile(after) != nil {
+		return "", nil, errors.New("browser executable identity changed")
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), after, nil
 }
 
 func verifyBrowserExecutableDigest(path, expected string) error {
@@ -315,6 +400,17 @@ func verifyBrowserExecutableDigest(path, expected string) error {
 }
 
 func verifyBrowserProfileRuntimeIdentity(profile BrowserProfilePolicy) error {
+	if profile.browserExecutablePath != "" {
+		executable, _, err := resolveBrowserExecutable("", profile.browserExecutablePath)
+		if err != nil || executable != profile.browserExecutablePath {
+			return errors.New("browser runtime executable identity changed")
+		}
+		digest, info, err := browserExecutableDigest(executable)
+		if err != nil || digest != profile.browserExecutableHash ||
+			profile.browserExecutableInfo == nil || !os.SameFile(profile.browserExecutableInfo, info) {
+			return errors.New("browser runtime executable identity changed")
+		}
+	}
 	launcherDirectory := profile.DriverLauncherDirectory()
 	realLauncherDirectory, err := filepath.EvalSymlinks(launcherDirectory)
 	if err != nil || filepath.Clean(realLauncherDirectory) != launcherDirectory {

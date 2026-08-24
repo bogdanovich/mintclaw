@@ -112,6 +112,152 @@ func TestConfigAcceptsExplicitApprovedActionBrowserProfile(t *testing.T) {
 	}
 }
 
+func TestConfigValidatesExplicitBrowserRuntimeExecutable(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	runtimeExecutable := filepath.Join(baseDir, "browser-runtime")
+	if err := os.WriteFile(runtimeExecutable, []byte("runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.DriverArguments = append(profile.DriverArguments, "--executable-path="+runtimeExecutable)
+
+	cfg, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := cfg.BrowserProfiles["managed"]
+	canonicalRuntime, err := filepath.EvalSymlinks(runtimeExecutable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.browserExecutablePath != canonicalRuntime ||
+		ready.DriverArguments[len(ready.DriverArguments)-1] != "--executable-path="+canonicalRuntime {
+		t.Fatalf("normalized browser runtime = %#v", ready)
+	}
+	replacement := filepath.Join(baseDir, "replacement-runtime")
+	if err = os.WriteFile(replacement, []byte("replacement"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(replacement, runtimeExecutable); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyBrowserProfileRuntimeIdentity(ready); err == nil ||
+		!strings.Contains(err.Error(), "browser runtime executable identity changed") {
+		t.Fatalf("runtime identity error = %v", err)
+	}
+}
+
+func TestConfigRejectsIdenticalBrowserRuntimeReplacement(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	runtimeExecutable := filepath.Join(baseDir, "browser-runtime")
+	const runtimeContents = "identical runtime"
+	if err := os.WriteFile(runtimeExecutable, []byte(runtimeContents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.DriverArguments = append(profile.DriverArguments, "--executable-path="+runtimeExecutable)
+	cfg, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(baseDir, "replacement-runtime")
+	if err = os.WriteFile(replacement, []byte(runtimeContents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(replacement, runtimeExecutable); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyBrowserProfileRuntimeIdentity(cfg.BrowserProfiles["managed"]); err == nil ||
+		!strings.Contains(err.Error(), "browser runtime executable identity changed") {
+		t.Fatalf("identical replacement runtime identity error = %v", err)
+	}
+}
+
+func TestConfigRejectsBrowserRuntimeSymlinkIntoUnsafeDirectory(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	trustedDir := filepath.Join(baseDir, "trusted")
+	unsafeDir := filepath.Join(baseDir, "unsafe")
+	if err := os.Mkdir(trustedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(unsafeDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unsafeDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	runtimeExecutable := filepath.Join(unsafeDir, "browser-runtime")
+	if err := os.WriteFile(runtimeExecutable, []byte("runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(trustedDir, "browser-runtime")
+	if err := os.Symlink(runtimeExecutable, link); err != nil {
+		t.Fatal(err)
+	}
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.DriverArguments = append(profile.DriverArguments, "--executable-path="+link)
+
+	_, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err == nil || !strings.Contains(err.Error(), "target directory is not trusted") {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+}
+
+func TestConfigRejectsMissingExplicitBrowserRuntimeExecutable(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.DriverArguments = append(profile.DriverArguments, "--executable-path=missing-browser")
+
+	_, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err == nil || !strings.Contains(err.Error(), "validate browser executable path") {
+		t.Fatalf("Normalize() error = %v", err)
+	}
+}
+
+func TestNormalizeBrowserRuntimeExecutableSupportsSplitPathsAndRejectsDuplicates(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	runtimeExecutable := filepath.Join(baseDir, "browser runtime=value")
+	if err := os.WriteFile(runtimeExecutable, []byte("runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	arguments, executable, digest, info, err := normalizeBrowserRuntimeExecutable(
+		[]string{"--browser=chromium", "--executable-path", runtimeExecutable},
+		baseDir,
+	)
+	if err != nil || executable == "" || digest == "" || info == nil || len(arguments) != 3 ||
+		arguments[1] != "--executable-path" || arguments[2] != executable {
+		t.Fatalf(
+			"normalizeBrowserRuntimeExecutable() = %#v, %q, %q, %#v, %v",
+			arguments, executable, digest, info, err,
+		)
+	}
+	for _, invalid := range [][]string{
+		{"--executable-path="},
+		{"--executable-path=" + runtimeExecutable, "--executable-path", runtimeExecutable},
+	} {
+		if _, _, _, _, err = normalizeBrowserRuntimeExecutable(invalid, baseDir); err == nil {
+			t.Fatalf("normalizeBrowserRuntimeExecutable(%#v) succeeded", invalid)
+		}
+	}
+}
+
 func TestConfigRejectsUnsafeCompanionBrowserProfiles(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	tests := []struct {

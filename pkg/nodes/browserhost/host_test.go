@@ -1623,6 +1623,24 @@ func TestBrowserHostRechecksExecutableIdentityBeforeEveryOpen(t *testing.T) {
 	}
 }
 
+func TestBrowserHostRechecksExecutableAfterSessionReservationBeforeLaunch(t *testing.T) {
+	factory := &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{}}
+	host := newTestBrowserHost(t, factory)
+	checks := 0
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error {
+		checks++
+		if checks == 2 {
+			return errors.New("digest changed")
+		}
+		return nil
+	}
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); !errors.Is(err, ErrBrowserHostDenied) ||
+		checks != 2 || len(factory.requests) != 0 || len(host.sessions) != 0 {
+		t.Fatalf("pre-launch replacement: error=%v checks=%d requests=%d sessions=%d",
+			err, checks, len(factory.requests), len(host.sessions))
+	}
+}
+
 func TestBrowserHostFailedOpenCleansReturnedWorkerAndReportsSafeState(t *testing.T) {
 	worker := &fakeBrowserHostWorker{}
 	factory := &fakeBrowserHostFactory{
@@ -2032,6 +2050,10 @@ func TestNewBrowserHostBuildsPassiveFactoryFromNormalizedPolicy(t *testing.T) {
 	if err = os.Mkdir(lockDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	runtimeExecutable := filepath.Join(root, "browser-runtime")
+	if err = os.WriteFile(runtimeExecutable, []byte("runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := (companion.Config{
 		GatewayURL: "wss://gateway.example",
 		BrowserProfiles: map[string]companion.BrowserProfilePolicy{
@@ -2040,7 +2062,9 @@ func TestNewBrowserHostBuildsPassiveFactoryFromNormalizedPolicy(t *testing.T) {
 				AllowedAgents: []string{"browser"}, AllowedActors: []string{"owner"},
 				Driver:           nodes.BrowserDriverPlaywrightMCP,
 				DriverExecutable: executable, DriverExecutableSHA256: hex.EncodeToString(digest[:]),
-				DriverArguments:  []string{"--browser=chrome"},
+				DriverArguments: []string{
+					"--browser=chrome", "--executable-path=" + runtimeExecutable,
+				},
 				ProfileDirectory: profileDir, LockFile: filepath.Join(lockDir, "browser.lock"),
 				Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
 				DryRun: true, AllowedActions: []string{"navigate"}, Headed: true,
@@ -2053,6 +2077,13 @@ func TestNewBrowserHostBuildsPassiveFactoryFromNormalizedPolicy(t *testing.T) {
 	host, err := NewBrowserHost(cfg.BrowserProfiles)
 	if err != nil || host == nil || len(host.factories) != 1 || len(host.sessions) != 0 {
 		t.Fatalf("NewBrowserHost() = %#v, %v", host, err)
+	}
+	if err = os.Remove(runtimeExecutable); err != nil {
+		t.Fatal(err)
+	}
+	if host, err = NewBrowserHost(cfg.BrowserProfiles); err == nil || host != nil ||
+		!strings.Contains(err.Error(), "runtime is unavailable") {
+		t.Fatalf("NewBrowserHost() stale runtime = %#v, %v", host, err)
 	}
 }
 
