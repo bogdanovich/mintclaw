@@ -470,7 +470,7 @@ func TestReloadProviderAndConfigWaitsForInFlightRequestsBeforeClosingOldProvider
 
 func TestWaitForActiveRequestsHonorsContextCancellation(t *testing.T) {
 	counter := newActiveRequestCounter()
-	al := &AgentLoop{activeRequests: counter}
+	al := &AgentLoop{turns: &turnRuntime{activeRequests: counter}}
 	counter.inc()
 	defer counter.dec()
 

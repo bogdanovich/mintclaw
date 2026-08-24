@@ -829,6 +829,11 @@ Implementation sequence:
 38. Make `bus.Streamer` the sole channel streaming interface. Delete the
     `channels.Streamer` source alias retained for older implementations and
     update every current channel and fixture to name the canonical owner.
+39. Make one concrete `turnRuntime` own admission, active session and route
+    claims, pending stops, request tracking, sequencing, inbound spool
+    settlement, and runner generations. Delete the corresponding mutable
+    `AgentLoop` fields and runner/admission pass-throughs, and remove the unused
+    context API that exposed `AgentLoop` as a child-tool service locator.
 
 Exit criteria:
 

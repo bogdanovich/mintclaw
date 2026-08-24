@@ -84,31 +84,9 @@ type subTurnRuntimeConfig struct {
 
 // ====================== SubTurn Config ======================
 
-// SubTurnConfig configures the execution of a child sub-turn.
-//
-// Usage Examples:
-//
-// Synchronous sub-turn (Async=false):
-//
-//	cfg := SubTurnConfig{
-//	    Model: "gpt-4o-mini",
-//	    SystemPrompt: "Analyze this code",
-//	    Async: false,  // Result returned immediately
-//	}
-//	result, err := SpawnSubTurn(ctx, cfg)
-//	// Use result directly here
-//	processResult(result)
-//
-// Asynchronous sub-turn (Async=true):
-//
-//	cfg := SubTurnConfig{
-//	    Model: "gpt-4o-mini",
-//	    SystemPrompt: "Background analysis",
-//	    Async: true,  // Result delivered to channel
-//	}
-//	result, err := SpawnSubTurn(ctx, cfg)
-//	// Result also available in parent's pendingResults channel
-//	// Parent turn will poll and process it in a later iteration
+// SubTurnConfig is the normalized runtime request used by the registered child
+// runner. Tools construct their public request and pass it through
+// AgentLoopSpawner rather than recovering AgentLoop from context.
 type SubTurnConfig struct {
 	Model        string
 	Tools        []toolshared.Tool
@@ -194,22 +172,6 @@ type SubTurnConfig struct {
 	ObjectiveItems []toolshared.ObjectiveSpec
 }
 
-// ====================== Context Keys ======================
-type agentLoopKeyType struct{}
-
-var agentLoopKey = agentLoopKeyType{}
-
-// WithAgentLoop injects AgentLoop into context for tool access
-func WithAgentLoop(ctx context.Context, al *AgentLoop) context.Context {
-	return context.WithValue(ctx, agentLoopKey, al)
-}
-
-// AgentLoopFromContext retrieves AgentLoop from context
-func AgentLoopFromContext(ctx context.Context) *AgentLoop {
-	al, _ := ctx.Value(agentLoopKey).(*AgentLoop)
-	return al
-}
-
 // ====================== Helper Functions ======================
 
 func (al *AgentLoop) generateSubTurnID() string {
@@ -261,26 +223,6 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 // NewSubTurnSpawner creates a SubTurnSpawner for the given AgentLoop.
 func NewSubTurnSpawner(al *AgentLoop) *AgentLoopSpawner {
 	return &AgentLoopSpawner{al: al}
-}
-
-// SpawnSubTurn is the exported entry point for tools to spawn sub-turns.
-// It retrieves AgentLoop and parent turnState from context and delegates to spawnSubTurn.
-func SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*toolshared.ToolResult, error) {
-	al := AgentLoopFromContext(ctx)
-	if al == nil {
-		return nil, errors.New(
-			"AgentLoop not found in context - ensure context is properly initialized",
-		)
-	}
-
-	parentTS := turnStateFromContext(ctx)
-	if parentTS == nil {
-		return nil, errors.New(
-			"parent turnState not found in context - cannot spawn sub-turn outside of a turn",
-		)
-	}
-
-	return spawnSubTurn(ctx, al, parentTS, cfg)
 }
 
 func removeUserDeliveryTools(registry *tools.ToolRegistry) {
@@ -378,7 +320,7 @@ func (al *AgentLoop) acquireSubTurnAgentAdmission(
 			active, limit, waitStarted, timeout,
 		)
 	}
-	admittedCtx, releaseAdmission, err := al.acquireAgentTurnObserved(
+	admittedCtx, releaseAdmission, err := al.turns.acquireAgentTurnObserved(
 		waitCtx,
 		agentID,
 		func(currentActive, currentLimit int) {
@@ -729,14 +671,12 @@ func spawnSubTurn(
 
 	// IMPORTANT: Put childTS into childCtx so that code inside the turn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)
-	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
-
 	childTS.ctx = childCtx
 
 	// Register child turn state so GetAllActiveTurns/Subagents can find it
 	childScope := newRuntimeSubTurnScope(childTS.workspace, childID)
-	al.activeTurnStates.Store(childScope, childTS)
-	defer al.activeTurnStates.Delete(childScope)
+	al.turns.activeTurnStates.Store(childScope, childTS)
+	defer al.turns.activeTurnStates.Delete(childScope)
 
 	// 5. Establish parent-child relationship (thread-safe)
 	parentTS.mu.Lock()
@@ -801,7 +741,7 @@ func spawnSubTurn(
 	}()
 
 	// 8. Execute sub-turn via the real agent loop.
-	turnRes, turnErr := al.currentTurnRunner().run(childCtx, childTS, nil)
+	turnRes, turnErr := al.turns.currentRunner().run(childCtx, childTS, nil)
 	var objectiveOutcome *taskresult.Outcome
 	if turnErr == nil && turnRes.status != TurnEndStatusSuspended {
 		turnRes.finalContent, objectiveOutcome = extractObjectiveOutcome(

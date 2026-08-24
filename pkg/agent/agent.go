@@ -72,7 +72,6 @@ type AgentLoop struct {
 	steering                   *steeringQueue
 	compactionRunner           *backgroundCompactionRunner
 	pendingSkills              sync.Map
-	pendingStops               sync.Map
 	asyncCompletions           sync.Map
 	taskRegistries             sync.Map
 	interactionRegistries      sync.Map
@@ -90,24 +89,14 @@ type AgentLoop struct {
 	isolatedSkillBootstrap bool
 
 	// workerSem limits concurrent turn processing workers.
-	workerSem chan struct{}
-	// agentTurnAdmissions applies optional per-agent limits across every turn entry path.
-	agentTurnAdmissions *agentTurnAdmissionController
-
-	// activeTurnStates tracks active turns per session to prevent duplicates.
-	activeTurnStates    sync.Map
-	activeRouteSessions sync.Map
-	sessionNow          func() time.Time
-	subTurnCounter      atomic.Int64
-
-	turnSeq atomic.Uint64
-
-	activeRequests *activeRequestCounter
+	workerSem      chan struct{}
+	turns          *turnRuntime
+	sessionNow     func() time.Time
+	subTurnCounter atomic.Int64
 
 	reloadFunc func() error
 
 	providerFactory func(*config.ModelConfig) (providers.LLMProvider, string, error)
-	turnRunner      *turnRunner
 }
 
 // turnSpec is the canonical runtime representation of one admitted turn.
@@ -470,7 +459,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 	if agent == nil {
 		return "", fmt.Errorf("agent is unavailable")
 	}
-	admittedCtx, releaseAdmission, err := al.acquireAgentTurn(ctx, agent.ID)
+	admittedCtx, releaseAdmission, err := al.turns.acquireAgentTurn(ctx, agent.ID)
 	if err != nil {
 		return "", err
 	}
@@ -541,7 +530,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 		)
 	}
 	var result turnResult
-	result, err = al.currentTurnRunner().run(ctx, ts, execute)
+	result, err = al.turns.currentRunner().run(ctx, ts, execute)
 	if err != nil {
 		return "", err
 	}

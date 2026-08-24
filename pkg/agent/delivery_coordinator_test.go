@@ -322,7 +322,7 @@ func TestDeliverAsyncToolCompletion_ParentPublishFailureUpdatesFailed(t *testing
 		ForLLM:  "parent data",
 		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly)
-	al.bus = failingMessageBus{}
+	setTestMessageBus(al, failingMessageBus{})
 
 	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
@@ -533,7 +533,7 @@ func TestDeliverAsyncToolCompletion_MediaDeliveryFailureRecordsFailed(t *testing
 		},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
-	al.bus = failingMessageBus{}
+	setTestMessageBus(al, failingMessageBus{})
 	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "spawn",
@@ -725,7 +725,7 @@ func TestDeliverAsyncToolCompletion_FailedDeliveryRecordsCompletionError(t *test
 		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
-	al.bus = failingMessageBus{}
+	setTestMessageBus(al, failingMessageBus{})
 	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "spawn",

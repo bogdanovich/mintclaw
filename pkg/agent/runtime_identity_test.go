@@ -39,7 +39,7 @@ func testSessionScope(sessionKey string) runtimeSessionScope {
 
 func testRuntimeSessionScope(al *AgentLoop, sessionKey string) runtimeSessionScope {
 	if al != nil {
-		if turn, ambiguous := al.uniqueActiveTurnForSession(sessionKey); turn != nil && !ambiguous {
+		if turn, ambiguous := al.turns.uniqueActiveTurnForSession(sessionKey); turn != nil && !ambiguous {
 			return turn.runtimeSessionScope()
 		}
 		if al.steering != nil {
@@ -89,7 +89,7 @@ func onlyActiveTurnForTest(t *testing.T, al *AgentLoop) *ActiveTurnInfo {
 	}
 	var active *ActiveTurnInfo
 	ambiguous := false
-	al.activeTurnStates.Range(func(_, value any) bool {
+	al.turns.activeTurnStates.Range(func(_, value any) bool {
 		ts, ok := value.(*turnState)
 		if !ok {
 			return true
@@ -117,25 +117,25 @@ func (al *AgentLoop) agentByRuntimeIDForTest(agentID string) *AgentInstance {
 }
 
 func TestRuntimeSessionClaimsAreWorkspaceScoped(t *testing.T) {
-	al := &AgentLoop{}
+	al := &AgentLoop{turns: newTurnRuntime(nil, nil)}
 	first := newRuntimeSessionScope("/workspace/first", "shared-session")
 	second := newRuntimeSessionScope("/workspace/second", "shared-session")
 
-	firstClaim, firstClaimed := al.claimRuntimeSession(first, "pending-first")
-	secondClaim, secondClaimed := al.claimRuntimeSession(second, "pending-second")
+	firstClaim, firstClaimed := al.turns.claimRuntimeSession(first, "pending-first")
+	secondClaim, secondClaimed := al.turns.claimRuntimeSession(second, "pending-second")
 	if !firstClaimed || !secondClaimed {
 		t.Fatalf("claims = (%t, %t), want both workspaces claimed", firstClaimed, secondClaimed)
 	}
 	t.Cleanup(firstClaim.releaseIfOwned)
 	t.Cleanup(secondClaim.releaseIfOwned)
 
-	if got := al.getActiveTurnState(first); got != firstClaim.placeholder {
+	if got := al.turns.activeTurnState(first); got != firstClaim.placeholder {
 		t.Fatalf("first active turn = %p, want %p", got, firstClaim.placeholder)
 	}
-	if got := al.getActiveTurnState(second); got != secondClaim.placeholder {
+	if got := al.turns.activeTurnState(second); got != secondClaim.placeholder {
 		t.Fatalf("second active turn = %p, want %p", got, secondClaim.placeholder)
 	}
-	if _, ambiguous := al.uniqueActiveTurnForSession("shared-session"); !ambiguous {
+	if _, ambiguous := al.turns.uniqueActiveTurnForSession("shared-session"); !ambiguous {
 		t.Fatal("session-only lookup did not fail closed across workspaces")
 	}
 	if err := al.InterruptGracefulSession("shared-session", "stop"); err == nil {
@@ -147,7 +147,8 @@ func TestCommandRuntimeInspectsExactTurnScope(t *testing.T) {
 	firstAgent := &AgentInstance{ID: "first", Workspace: "/workspace/first"}
 	secondAgent := &AgentInstance{ID: "second", Workspace: "/workspace/second"}
 	al := &AgentLoop{
-		cfg: &config.Config{},
+		cfg:   &config.Config{},
+		turns: newTurnRuntime(nil, nil),
 		registry: &AgentRegistry{agents: map[string]*AgentInstance{
 			firstAgent.ID: firstAgent, secondAgent.ID: secondAgent,
 		}},
@@ -157,8 +158,8 @@ func TestCommandRuntimeInspectsExactTurnScope(t *testing.T) {
 		{turnID: "first-turn", workspace: firstAgent.Workspace, sessionKey: "shared-session"},
 		{turnID: "second-turn", workspace: secondAgent.Workspace, sessionKey: "shared-session"},
 	} {
-		al.registerActiveTurn(turn)
-		defer al.clearActiveTurn(turn)
+		al.turns.registerActiveTurn(turn)
+		defer al.turns.clearActiveTurn(turn)
 	}
 
 	runtime := al.buildCommandsRuntime(
@@ -173,7 +174,7 @@ func TestCommandRuntimeInspectsExactTurnScope(t *testing.T) {
 }
 
 func TestRuntimeRouteClaimsAreWorkspaceScoped(t *testing.T) {
-	al := &AgentLoop{}
+	al := &AgentLoop{turns: newTurnRuntime(nil, nil)}
 	first := &inboundDispatchTarget{
 		Agent:      &AgentInstance{ID: "first", Workspace: "/workspace/first"},
 		SessionKey: "shared-session", RouteClaimKey: "route:shared",
@@ -183,8 +184,8 @@ func TestRuntimeRouteClaimsAreWorkspaceScoped(t *testing.T) {
 		SessionKey: "shared-session", RouteClaimKey: "route:shared",
 	}
 
-	firstClaim, _, firstClaimed := al.claimRuntimeRouteSession(first, "pending-first")
-	secondClaim, _, secondClaimed := al.claimRuntimeRouteSession(second, "pending-second")
+	firstClaim, _, firstClaimed := al.turns.claimRuntimeRouteSession(first, "pending-first")
+	secondClaim, _, secondClaimed := al.turns.claimRuntimeRouteSession(second, "pending-second")
 	if !firstClaimed || !secondClaimed {
 		t.Fatalf("route claims = (%t, %t), want both workspaces claimed", firstClaimed, secondClaimed)
 	}
@@ -217,15 +218,15 @@ func TestSteeringQueueSeparatesIdenticalSessionsAcrossWorkspaces(t *testing.T) {
 }
 
 func TestPendingStopsAreWorkspaceScoped(t *testing.T) {
-	al := &AgentLoop{}
+	al := &AgentLoop{turns: newTurnRuntime(nil, nil)}
 	first := newRuntimeSessionScope("/workspace/first", "shared-session")
 	second := newRuntimeSessionScope("/workspace/second", "shared-session")
-	al.markPendingStop(first)
+	al.turns.markPendingStop(first)
 
-	if al.takePendingStop(second) {
+	if al.turns.takePendingStop(second) {
 		t.Fatal("second workspace consumed the first workspace stop")
 	}
-	if !al.takePendingStop(first) {
+	if !al.turns.takePendingStop(first) {
 		t.Fatal("first workspace did not retain its pending stop")
 	}
 }

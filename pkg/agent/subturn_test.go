@@ -763,10 +763,10 @@ func TestSpawnSubTurnInheritsSameAgentAdmission(t *testing.T) {
 	if parentAgent == nil {
 		t.Fatal("expected default parent agent")
 	}
-	al.agentTurnAdmissions.update(&AgentRegistry{agents: map[string]*AgentInstance{
+	al.turns.admissions.update(&AgentRegistry{agents: map[string]*AgentInstance{
 		parentAgent.ID: {ID: parentAgent.ID, MaxParallelTurns: 1},
 	}})
-	parentCtx, release, err := al.acquireAgentTurn(context.Background(), parentAgent.ID)
+	parentCtx, release, err := al.turns.acquireAgentTurn(context.Background(), parentAgent.ID)
 	if err != nil {
 		t.Fatalf("acquireAgentTurn() error = %v", err)
 	}
@@ -818,7 +818,7 @@ func TestSpawnSubTurnTimesOutBeforeBusyTargetStarts(t *testing.T) {
 	)
 	defer closeRuntimeEvents()
 
-	busyCtx, releaseBusy, err := al.acquireAgentTurn(t.Context(), "browser")
+	busyCtx, releaseBusy, err := al.turns.acquireAgentTurn(t.Context(), "browser")
 	if err != nil {
 		t.Fatalf("acquireAgentTurn(browser) error = %v", err)
 	}
@@ -826,7 +826,7 @@ func TestSpawnSubTurnTimesOutBeforeBusyTargetStarts(t *testing.T) {
 	_ = busyCtx
 
 	parentAgent := al.registry.GetDefaultAgent()
-	parentCtx, releaseParent, err := al.acquireAgentTurn(t.Context(), parentAgent.ID)
+	parentCtx, releaseParent, err := al.turns.acquireAgentTurn(t.Context(), parentAgent.ID)
 	if err != nil {
 		t.Fatalf("acquireAgentTurn(main) error = %v", err)
 	}
@@ -962,12 +962,12 @@ func TestSpawnSubTurnExecutionTimeoutStartsAfterAdmission(t *testing.T) {
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	defer al.Close()
 
-	_, releaseBusy, err := al.acquireAgentTurn(t.Context(), "browser")
+	_, releaseBusy, err := al.turns.acquireAgentTurn(t.Context(), "browser")
 	if err != nil {
 		t.Fatalf("acquireAgentTurn(browser) error = %v", err)
 	}
 	parentAgent := al.registry.GetDefaultAgent()
-	parentCtx, releaseParent, err := al.acquireAgentTurn(t.Context(), parentAgent.ID)
+	parentCtx, releaseParent, err := al.turns.acquireAgentTurn(t.Context(), parentAgent.ID)
 	if err != nil {
 		releaseBusy()
 		t.Fatalf("acquireAgentTurn(main) error = %v", err)
@@ -1027,12 +1027,12 @@ func TestSpawnSubTurnCancellationWhileQueuedReleasesAdmissions(t *testing.T) {
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	defer al.Close()
 
-	_, releaseBusy, err := al.acquireAgentTurn(t.Context(), "browser")
+	_, releaseBusy, err := al.turns.acquireAgentTurn(t.Context(), "browser")
 	if err != nil {
 		t.Fatalf("acquireAgentTurn(browser) error = %v", err)
 	}
 	parentAgent := al.registry.GetDefaultAgent()
-	parentBase, releaseParent, err := al.acquireAgentTurn(t.Context(), parentAgent.ID)
+	parentBase, releaseParent, err := al.turns.acquireAgentTurn(t.Context(), parentAgent.ID)
 	if err != nil {
 		releaseBusy()
 		t.Fatalf("acquireAgentTurn(main) error = %v", err)
@@ -1074,7 +1074,7 @@ func TestSpawnSubTurnCancellationWhileQueuedReleasesAdmissions(t *testing.T) {
 	releaseBusy()
 	releaseParent()
 	nextCtx, nextCancel := context.WithTimeout(t.Context(), time.Second)
-	_, releaseNext, err := al.acquireAgentTurn(nextCtx, "browser")
+	_, releaseNext, err := al.turns.acquireAgentTurn(nextCtx, "browser")
 	nextCancel()
 	if err != nil {
 		t.Fatalf("browser admission leaked after queued cancellation: %v", err)
@@ -1120,7 +1120,7 @@ func TestSpawnSubTurnRetainsAdmissionAfterParentRelease(t *testing.T) {
 	if parentAgent == nil {
 		t.Fatal("expected default parent agent")
 	}
-	parentCtx, releaseParent, err := al.acquireAgentTurn(context.Background(), parentAgent.ID)
+	parentCtx, releaseParent, err := al.turns.acquireAgentTurn(context.Background(), parentAgent.ID)
 	if err != nil {
 		t.Fatalf("acquireAgentTurn() error = %v", err)
 	}
@@ -1149,7 +1149,7 @@ func TestSpawnSubTurnRetainsAdmissionAfterParentRelease(t *testing.T) {
 
 	releaseParent()
 	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	_, _, err = al.acquireAgentTurn(waitCtx, parentAgent.ID)
+	_, _, err = al.turns.acquireAgentTurn(waitCtx, parentAgent.ID)
 	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("independent acquire while child active error = %v, want deadline exceeded", err)
@@ -1165,7 +1165,7 @@ func TestSpawnSubTurnRetainsAdmissionAfterParentRelease(t *testing.T) {
 		t.Fatal("timed out waiting for child completion")
 	}
 
-	_, releaseNext, err := al.acquireAgentTurn(context.Background(), parentAgent.ID)
+	_, releaseNext, err := al.turns.acquireAgentTurn(context.Background(), parentAgent.ID)
 	if err != nil {
 		t.Fatalf("acquireAgentTurn() after child completion error = %v", err)
 	}
@@ -1208,7 +1208,7 @@ func TestSpawnSubTurn_EphemeralSessionIsolation(t *testing.T) {
 	// checking the parent session key is only used by the parent store.
 	// If isolation is correct, parent.session.GetHistory(childID) is always empty
 	// (the child never wrote to the parent store).
-	al.activeTurnStates.Range(func(k, v any) bool {
+	al.turns.activeTurnStates.Range(func(k, v any) bool {
 		// No active turns should remain after spawnSubTurn returns
 		t.Errorf("unexpected active turn state left after spawnSubTurn: key=%v", k)
 		return true
@@ -1366,8 +1366,8 @@ func TestDequeuePendingSubTurnResults(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 4),
 	}
 	scope := ts.runtimeSessionScope()
-	al.activeTurnStates.Store(scope, ts)
-	defer al.activeTurnStates.Delete(scope)
+	al.turns.activeTurnStates.Store(scope, ts)
+	defer al.turns.activeTurnStates.Delete(scope)
 
 	// Put 3 results in
 	ts.pendingResults <- &toolshared.ToolResult{ForLLM: "result-1"}
@@ -1388,7 +1388,7 @@ func TestDequeuePendingSubTurnResults(t *testing.T) {
 	}
 
 	// After removing from activeTurnStates, returns nil
-	al.activeTurnStates.Delete(scope)
+	al.turns.activeTurnStates.Delete(scope)
 	if results := al.dequeuePendingSubTurnResults(sessionKey); results != nil {
 		t.Error("expected nil for unregistered session")
 	}
@@ -1459,8 +1459,8 @@ func TestHardAbortCascading(t *testing.T) {
 		al:             al,
 	}
 	rootScope := rootTS.runtimeSessionScope()
-	al.activeTurnStates.Store(rootScope, rootTS)
-	defer al.activeTurnStates.Delete(rootScope)
+	al.turns.activeTurnStates.Store(rootScope, rootTS)
+	defer al.turns.activeTurnStates.Delete(rootScope)
 
 	// Child turn with an INDEPENDENT context (simulates spawnSubTurn behavior:
 	// context.WithTimeout(context.Background(), ...) — NOT derived from parent).
@@ -1476,8 +1476,8 @@ func TestHardAbortCascading(t *testing.T) {
 		al:             al,
 	}
 	childScope := newRuntimeSubTurnScope(childTS.workspace, childID)
-	al.activeTurnStates.Store(childScope, childTS)
-	defer al.activeTurnStates.Delete(childScope)
+	al.turns.activeTurnStates.Store(childScope, childTS)
+	defer al.turns.activeTurnStates.Delete(childScope)
 
 	// Wire child into root's childTurnIDs (as spawnSubTurn would do)
 	rootTS.childTurnIDs = append(rootTS.childTurnIDs, childID)
@@ -1550,7 +1550,7 @@ func TestHardAbortSessionRollback(t *testing.T) {
 	rootTS.captureCanonicalRestorePoint(sess.GetHistory(""), sess.GetSummary(""))
 
 	// Register the turn state
-	al.activeTurnStates.Store(rootTS.runtimeSessionScope(), rootTS)
+	al.turns.activeTurnStates.Store(rootTS.runtimeSessionScope(), rootTS)
 
 	// Simulate adding messages during the turn (e.g., user input + assistant response)
 	sess.AddMessage("", "user", "new user message")
@@ -1745,7 +1745,7 @@ func TestHardAbortOrderOfOperations(t *testing.T) {
 	}
 	rootTS.captureCanonicalRestorePoint(sess.GetHistory("")[:1], sess.GetSummary(""))
 
-	al.activeTurnStates.Store(rootTS.runtimeSessionScope(), rootTS)
+	al.turns.activeTurnStates.Store(rootTS.runtimeSessionScope(), rootTS)
 
 	// Trigger HardAbort
 	err := al.HardAbort("test-session-order")
@@ -1840,8 +1840,8 @@ func TestFinalPollCapturesLateResults(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 4),
 	}
 	scope := ts.runtimeSessionScope()
-	al.activeTurnStates.Store(scope, ts)
-	defer al.activeTurnStates.Delete(scope)
+	al.turns.activeTurnStates.Store(scope, ts)
+	defer al.turns.activeTurnStates.Delete(scope)
 
 	// Simulate results arriving after last iteration poll
 	ts.pendingResults <- &toolshared.ToolResult{ForLLM: "result 1"}
@@ -2057,8 +2057,8 @@ func TestGetActiveTurnBySession(t *testing.T) {
 	sessionKey := "test-session"
 	rootTS.sessionKey = sessionKey
 	scope := rootTS.runtimeSessionScope()
-	al.activeTurnStates.Store(scope, rootTS)
-	defer al.activeTurnStates.Delete(scope)
+	al.turns.activeTurnStates.Store(scope, rootTS)
+	defer al.turns.activeTurnStates.Delete(scope)
 
 	// Test: GetActiveTurn should return turn info
 	info := al.GetActiveTurnBySession(sessionKey)
@@ -2118,8 +2118,8 @@ func TestGetActiveTurnBySession_WithChildren(t *testing.T) {
 	sessionKey := "test-session-with-children"
 	rootTS.sessionKey = sessionKey
 	scope := rootTS.runtimeSessionScope()
-	al.activeTurnStates.Store(scope, rootTS)
-	defer al.activeTurnStates.Delete(scope)
+	al.turns.activeTurnStates.Store(scope, rootTS)
+	defer al.turns.activeTurnStates.Delete(scope)
 
 	info := al.GetActiveTurnBySession(sessionKey)
 	if info == nil {
@@ -2883,7 +2883,6 @@ func TestSpawnSubTurn_ReturnsStructuredCompletionWithMedia(t *testing.T) {
 		},
 	}
 	ctx := withTurnState(context.Background(), parentTS)
-	ctx = WithAgentLoop(ctx, al)
 
 	result, err := spawnSubTurn(ctx, al, parentTS, SubTurnConfig{
 		SystemPrompt: "make artifact",
@@ -3249,12 +3248,12 @@ func TestGrandchildAbort_CascadingCancellation(t *testing.T) {
 	grandparentScope := grandparentTS.runtimeSessionScope()
 	parentScope := newRuntimeSubTurnScope(parentTS.workspace, parentTS.turnID)
 	childScope := newRuntimeSubTurnScope(childTS.workspace, childTS.turnID)
-	al.activeTurnStates.Store(grandparentScope, grandparentTS)
-	al.activeTurnStates.Store(parentScope, parentTS)
-	al.activeTurnStates.Store(childScope, childTS)
-	defer al.activeTurnStates.Delete(grandparentScope)
-	defer al.activeTurnStates.Delete(parentScope)
-	defer al.activeTurnStates.Delete(childScope)
+	al.turns.activeTurnStates.Store(grandparentScope, grandparentTS)
+	al.turns.activeTurnStates.Store(parentScope, parentTS)
+	al.turns.activeTurnStates.Store(childScope, childTS)
+	defer al.turns.activeTurnStates.Delete(grandparentScope)
+	defer al.turns.activeTurnStates.Delete(parentScope)
+	defer al.turns.activeTurnStates.Delete(childScope)
 
 	// All contexts must be active before the abort
 	for _, ctx := range []context.Context{gpCtx, parentCtx, childCtx} {
@@ -3978,10 +3977,10 @@ func TestDurableSyncDelegateFailureRejectsRecoveredParentFinal(t *testing.T) {
 		t.Fatal("test agent loop does not use MessageBus")
 	}
 	childRejection := errors.New("child outbound rejected")
-	al.bus = &finalResponseAdmissionTestBus{
+	setTestMessageBus(al, &finalResponseAdmissionTestBus{
 		MessageBus:     msgBus,
 		publishResults: []error{childRejection, nil},
-	}
+	})
 	alpha, ok := al.registry.GetAgent("alpha")
 	if !ok {
 		t.Fatal("alpha agent not found")

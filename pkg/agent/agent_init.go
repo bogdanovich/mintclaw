@@ -62,18 +62,17 @@ func newAgentLoopWithRegistry(
 	}
 
 	al := &AgentLoop{
-		bus:                 msgBus,
-		cfg:                 cfg,
-		registry:            registry,
-		fallback:            fallbackChain,
-		cmdRegistry:         commands.NewRegistry(commands.BuiltinDefinitions()),
-		steering:            newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
-		activeRequests:      newActiveRequestCounter(),
-		workerSem:           make(chan struct{}, workerPoolSize),
-		agentTurnAdmissions: newAgentTurnAdmissionController(registry),
-		ownsRuntimeEvents:   true,
-		interactionCatalog:  interactions.NewWorkspaceCatalog(config.GetHome()),
-		startupResult:       make(chan error, 1),
+		bus:                msgBus,
+		cfg:                cfg,
+		registry:           registry,
+		fallback:           fallbackChain,
+		cmdRegistry:        commands.NewRegistry(commands.BuiltinDefinitions()),
+		steering:           newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+		workerSem:          make(chan struct{}, workerPoolSize),
+		turns:              newTurnRuntime(registry, msgBus),
+		ownsRuntimeEvents:  true,
+		interactionCatalog: interactions.NewWorkspaceCatalog(config.GetHome()),
+		startupResult:      make(chan error, 1),
 	}
 	al.compactionRunner = &backgroundCompactionRunner{
 		contextManager: func() ContextManager {
@@ -125,7 +124,7 @@ func newAgentLoopWithRegistry(
 			}
 		}
 	}
-	al.turnRunner = newTurnRunner(al, cfg)
+	al.turns.replaceRunner(newTurnRunner(al, cfg))
 
 	return al
 }

@@ -169,9 +169,9 @@ func (al *AgentLoop) recoverPromptDeliveryExhaustion(
 		},
 		SessionKey: record.Route.SessionKey,
 	}
-	claim, _, claimed := al.claimRuntimeRouteSession(
+	claim, _, claimed := al.turns.claimRuntimeRouteSession(
 		target,
-		fmt.Sprintf("pending-interaction-prompt-exhaustion-%s-%d", record.ShortID, al.turnSeq.Add(1)),
+		fmt.Sprintf("pending-interaction-prompt-exhaustion-%s-%d", record.ShortID, al.turns.nextSequence()),
 	)
 	if !claimed {
 		return false
@@ -307,15 +307,15 @@ func (al *AgentLoop) recoverCancelingInteraction(
 		},
 		SessionKey: record.Route.SessionKey,
 	}
-	claim, _, claimed := al.claimRuntimeRouteSession(
+	claim, _, claimed := al.turns.claimRuntimeRouteSession(
 		target,
-		fmt.Sprintf("pending-interaction-cancel-recovery-%s-%d", record.ShortID, al.turnSeq.Add(1)),
+		fmt.Sprintf("pending-interaction-cancel-recovery-%s-%d", record.ShortID, al.turns.nextSequence()),
 	)
 	if !claimed {
 		return false
 	}
 	defer claim.releaseIfOwned()
-	al.takePendingStop(newRuntimeSessionScope(
+	al.turns.takePendingStop(newRuntimeSessionScope(
 		agent.Workspace,
 		interactionContinuationSessionKey(record),
 	))
@@ -820,9 +820,9 @@ func (al *AgentLoop) recoverClaimedInteraction(
 		},
 		SessionKey: record.Route.SessionKey,
 	}
-	claim, _, claimed := al.claimRuntimeRouteSession(
+	claim, _, claimed := al.turns.claimRuntimeRouteSession(
 		target,
-		fmt.Sprintf("pending-interaction-recovery-%s-%d", record.ShortID, al.turnSeq.Add(1)),
+		fmt.Sprintf("pending-interaction-recovery-%s-%d", record.ShortID, al.turns.nextSequence()),
 	)
 	if !claimed {
 		return false

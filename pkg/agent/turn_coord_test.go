@@ -1955,8 +1955,8 @@ func TestHardAbortSnapshotFailureIsNotReportedAsSuccessfulRollback(t *testing.T)
 	); err != nil {
 		t.Fatal(err)
 	}
-	al.registerActiveTurn(ts)
-	defer al.clearActiveTurn(ts)
+	al.turns.registerActiveTurn(ts)
+	defer al.turns.clearActiveTurn(ts)
 
 	err := al.HardAbort(ts.sessionKey)
 	if !errors.Is(err, injectedErr) {
@@ -1993,8 +1993,8 @@ func TestHardAbortRestoresCanonicalHistoryWhenPromptAssemblyIsEmpty(t *testing.T
 	if _, err := pipeline.SetupTurn(t.Context(), ts); err != nil {
 		t.Fatal(err)
 	}
-	al.registerActiveTurn(ts)
-	defer al.clearActiveTurn(ts)
+	al.turns.registerActiveTurn(ts)
+	defer al.turns.clearActiveTurn(ts)
 
 	if err := al.HardAbort(sessionKey); err != nil {
 		t.Fatal(err)

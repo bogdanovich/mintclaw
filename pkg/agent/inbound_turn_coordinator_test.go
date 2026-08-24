@@ -191,7 +191,7 @@ func TestOutboundTransactionRejectsDuplicateWhilePublicationIsInFlight(t *testin
 		publishStart: make(chan struct{}),
 		publishBlock: make(chan struct{}),
 	}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	agent := al.registry.GetDefaultAgent()
 	publish := func(ctx context.Context) finalResponseAdmission {
 		return al.publishResponseWithContextIfNeeded(
@@ -250,7 +250,7 @@ func TestOutboundTransactionConsumerCanFinishBeforePublisherReturns(t *testing.T
 		accepted:   make(chan struct{}),
 		release:    make(chan struct{}),
 	}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	agent := al.registry.GetDefaultAgent()
 	result := make(chan finalResponseAdmission, 1)
 	go func() {
@@ -303,7 +303,7 @@ func TestSettleInboundAdmissionReleasesAfterAckFailure(t *testing.T) {
 		MessageBus: msgBus,
 		ackErrByID: map[string]error{"spool-root-ack": ackErr},
 	}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	msg := bus.InboundMessage{SpoolID: "spool-root-ack"}
 	err := al.settleInboundAdmission(
 		t.Context(),
@@ -327,7 +327,7 @@ func TestInteractionNoticeReleasesInboundAfterAckFailure(t *testing.T) {
 		MessageBus: msgBus,
 		ackErrByID: map[string]error{"spool-interaction-ack": ackErr},
 	}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	agent := al.registry.GetDefaultAgent()
 	msg := bus.InboundMessage{
 		Context:  bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
@@ -370,7 +370,7 @@ func TestOutboundTransactionPersistsBeforePublishAndSuppressesSameProcessReplay(
 	root := t.TempDir()
 	installTestOutboundCoordinator(t, al, root)
 	trackingBus := &finalResponseAdmissionTestBus{MessageBus: msgBus}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	agent := al.registry.GetDefaultAgent()
 
 	ctx := withOutboundTransaction(t.Context(), "spool-durable-final")
@@ -735,10 +735,10 @@ func TestOutboundTransactionRetainsChildFailureAfterSuccessfulRootPublish(t *tes
 	defer cleanup()
 	installTestOutboundCoordinator(t, al, t.TempDir())
 	rejection := errors.New("child bus admission rejected")
-	al.bus = &finalResponseAdmissionTestBus{
+	setTestMessageBus(al, &finalResponseAdmissionTestBus{
 		MessageBus:     msgBus,
 		publishResults: []error{rejection, nil},
-	}
+	})
 	agent := al.registry.GetDefaultAgent()
 	ctx := withOutboundTransaction(t.Context(), "spool-child-failure")
 
@@ -856,7 +856,7 @@ func TestProcessMessageSyncKeepsCancellationRetryable(t *testing.T) {
 	defer cleanup()
 	msgBus := al.bus.(*bus.MessageBus)
 	trackingBus := &finalResponseAdmissionTestBus{MessageBus: msgBus}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	installTestOutboundCoordinator(t, al, t.TempDir())
 	msg := bus.InboundMessage{
 		Context: bus.InboundContext{
@@ -898,7 +898,7 @@ func TestSteeringAckFailureRejectsRootSettlement(t *testing.T) {
 		MessageBus: msgBus,
 		ackErrByID: map[string]error{"spool-steering": ackErr},
 	}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 
 	err := al.settleSteeringMessages(
 		finalResponseAdmission{status: finalResponseAdmissionAccepted},
@@ -968,7 +968,7 @@ func TestInboundTurnCoordinatorAcknowledgesAcceptedFinalResponse(t *testing.T) {
 	al, _, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	trackingBus := &finalResponseAdmissionTestBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	msg := finalResponseAdmissionInboundMessage("spool-accepted")
 
 	runFinalResponseAdmissionTurn(t, al, msg)
@@ -1003,7 +1003,7 @@ func TestInboundTurnCoordinatorReleasesRootJournalFailuresBeforeLLM(t *testing.T
 				err:          journalErr,
 			}
 			trackingBus := &finalResponseAdmissionTestBus{MessageBus: al.bus.(*bus.MessageBus)}
-			al.bus = trackingBus
+			setTestMessageBus(al, trackingBus)
 			msg := finalResponseAdmissionInboundMessage("spool-root-" + stage)
 
 			runFinalResponseAdmissionTurn(t, al, msg)
@@ -1045,7 +1045,7 @@ func TestInboundTurnCoordinatorReleasesRejectedFinalResponse(t *testing.T) {
 				MessageBus: al.bus.(*bus.MessageBus),
 				publishErr: tt.err,
 			}
-			al.bus = trackingBus
+			setTestMessageBus(al, trackingBus)
 			msg := finalResponseAdmissionInboundMessage("spool-rejected")
 
 			runFinalResponseAdmissionTurn(t, al, msg)
@@ -1069,7 +1069,7 @@ func TestInboundTurnCoordinatorReleasesOriginalAndSteeringAfterAggregateRejectio
 		MessageBus: al.bus.(*bus.MessageBus),
 		publishErr: rejection,
 	}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	msg := finalResponseAdmissionInboundMessage("spool-original")
 	coordinator, target, claim := prepareFinalResponseAdmissionTurn(t, al, msg, "spool-steering")
 
@@ -1092,7 +1092,7 @@ func TestInboundTurnCoordinatorReleasesActiveTurnSteeringAfterAggregateRejection
 		MessageBus: al.bus.(*bus.MessageBus),
 		publishErr: rejection,
 	}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	msg := finalResponseAdmissionInboundMessage("spool-original")
 	coordinator, target, claim := prepareFinalResponseAdmissionTurnForSender(
 		t,
@@ -1149,7 +1149,7 @@ func TestInboundTurnCoordinatorSettlesOriginalAndSteeringAdmissionsIndependently
 				MessageBus:     al.bus.(*bus.MessageBus),
 				publishResults: append([]error(nil), tt.publishResults...),
 			}
-			al.bus = trackingBus
+			setTestMessageBus(al, trackingBus)
 			msg := finalResponseAdmissionInboundMessage("spool-original")
 			coordinator, target, claim := prepareFinalResponseAdmissionTurn(t, al, msg, "spool-steering")
 
@@ -1214,7 +1214,7 @@ func TestInboundTurnCoordinatorSettlesHandledNoOutputIndependently(t *testing.T)
 				MessageBus:     al.bus.(*bus.MessageBus),
 				publishResults: []error{rejection},
 			}
-			al.bus = trackingBus
+			setTestMessageBus(al, trackingBus)
 			store := media.NewFileMediaStore()
 			al.SetMediaStore(store)
 			al.SetChannelManager(newStartedTestChannelManager(
@@ -1323,17 +1323,19 @@ func containsExactly(values []string, wants ...string) bool {
 func TestAcquireTurnCapacityDoesNotHoldAdmissionWhileWaitingForWorker(t *testing.T) {
 	al := &AgentLoop{
 		workerSem: make(chan struct{}, 1),
-		agentTurnAdmissions: &agentTurnAdmissionController{
-			limits:  map[string]int{"agent-a": 1},
-			active:  make(map[string]int),
-			changed: make(chan struct{}),
+		turns: &turnRuntime{
+			admissions: &agentTurnAdmissionController{
+				limits:  map[string]int{"agent-a": 1},
+				active:  make(map[string]int),
+				changed: make(chan struct{}),
+			},
 		},
 	}
 	al.workerSem <- struct{}{}
 	coordinator := newInboundTurnCoordinator(al)
-	al.agentTurnAdmissions.mu.Lock()
-	admissionReleased := al.agentTurnAdmissions.changed
-	al.agentTurnAdmissions.mu.Unlock()
+	al.turns.admissions.mu.Lock()
+	admissionReleased := al.turns.admissions.changed
+	al.turns.admissions.mu.Unlock()
 
 	capacityDone := make(chan error, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1354,7 +1356,7 @@ func TestAcquireTurnCapacityDoesNotHoldAdmissionWhileWaitingForWorker(t *testing
 	// The queued inbound turn must release agent-a while the only worker is
 	// occupied, allowing the running worker to delegate to agent-a.
 	delegateCtx, delegateCancel := context.WithTimeout(context.Background(), time.Second)
-	_, releaseDelegate, err := al.acquireAgentTurn(delegateCtx, "agent-a")
+	_, releaseDelegate, err := al.turns.acquireAgentTurn(delegateCtx, "agent-a")
 	delegateCancel()
 	if err != nil {
 		t.Fatalf("delegate acquireAgentTurn() error = %v", err)
@@ -1394,7 +1396,7 @@ func TestInboundTurnCoordinatorHandlesSubagentsBeforeSessionClaim(t *testing.T) 
 			sessionKey := session.BuildOpaqueSessionKey("coordinator-subagents-" + tt.name)
 			scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
 			if tt.active {
-				al.activeTurnStates.Store(scope, &turnState{
+				al.turns.activeTurnStates.Store(scope, &turnState{
 					turnID:       "turn-active",
 					agentID:      agent.ID,
 					workspace:    agent.Workspace,
@@ -1402,7 +1404,7 @@ func TestInboundTurnCoordinatorHandlesSubagentsBeforeSessionClaim(t *testing.T) 
 					phase:        TurnPhaseRunning,
 					childTurnIDs: []string{"child-active"},
 				})
-				defer al.activeTurnStates.Delete(scope)
+				defer al.turns.activeTurnStates.Delete(scope)
 			}
 
 			msg := bus.NormalizeInboundMessage(bus.InboundMessage{
@@ -1465,8 +1467,8 @@ func TestInboundTurnCoordinatorActiveSubagentsDoesNotFinalizeToolFeedback(t *tes
 			},
 		}},
 	}
-	al.activeTurnStates.Store(scope, activeTurn)
-	defer al.activeTurnStates.Delete(scope)
+	al.turns.activeTurnStates.Store(scope, activeTurn)
+	defer al.turns.activeTurnStates.Delete(scope)
 
 	publishFeedback := func(content string) {
 		t.Helper()
@@ -1531,16 +1533,16 @@ func TestInboundTurnCoordinatorSubagentsUsesRoutedWorkspace(t *testing.T) {
 	sessionKey := session.BuildOpaqueSessionKey("coordinator-subagents-shared")
 	firstScope := newRuntimeSessionScope(first.Workspace, sessionKey)
 	secondScope := newRuntimeSessionScope(second.Workspace, sessionKey)
-	al.activeTurnStates.Store(firstScope, &turnState{
+	al.turns.activeTurnStates.Store(firstScope, &turnState{
 		turnID: "turn-first", agentID: first.ID, workspace: first.Workspace,
 		sessionKey: sessionKey, phase: TurnPhaseRunning,
 	})
-	al.activeTurnStates.Store(secondScope, &turnState{
+	al.turns.activeTurnStates.Store(secondScope, &turnState{
 		turnID: "turn-second", agentID: second.ID, workspace: second.Workspace,
 		sessionKey: sessionKey, phase: TurnPhaseRunning,
 	})
-	defer al.activeTurnStates.Delete(firstScope)
-	defer al.activeTurnStates.Delete(secondScope)
+	defer al.turns.activeTurnStates.Delete(firstScope)
+	defer al.turns.activeTurnStates.Delete(secondScope)
 
 	msg := bus.NormalizeInboundMessage(bus.InboundMessage{
 		Context:    bus.InboundContext{Channel: "second", ChatID: "direct", SenderID: "owner"},
@@ -1584,7 +1586,7 @@ func coordinatorTestTarget(routeScopeKey, sessionKey string) *inboundDispatchTar
 }
 
 func TestInboundTurnCoordinatorClaimSessionSerializesSession(t *testing.T) {
-	al := &AgentLoop{}
+	al := &AgentLoop{turns: newTurnRuntime(nil, nil)}
 	coord := newInboundTurnCoordinator(al)
 
 	firstTarget := coordinatorTestTarget("route-1", "session-1")
@@ -1601,7 +1603,7 @@ func TestInboundTurnCoordinatorClaimSessionSerializesSession(t *testing.T) {
 	if !isPendingTurnState(claim.placeholder) {
 		t.Fatalf("placeholder turn id = %q, want pending turn", claim.placeholder.turnID)
 	}
-	if got := al.getActiveTurnState(firstTarget.runtimeSessionScope()); got != claim.placeholder {
+	if got := al.turns.activeTurnState(firstTarget.runtimeSessionScope()); got != claim.placeholder {
 		t.Fatalf("active turn = %p, want placeholder %p", got, claim.placeholder)
 	}
 
@@ -1615,13 +1617,13 @@ func TestInboundTurnCoordinatorClaimSessionSerializesSession(t *testing.T) {
 	if activeTarget != firstTarget {
 		t.Fatal("route claim did not retain the original dispatch target")
 	}
-	if got := al.getActiveTurnState(firstTarget.runtimeSessionScope()); got != claim.placeholder {
+	if got := al.turns.activeTurnState(firstTarget.runtimeSessionScope()); got != claim.placeholder {
 		t.Fatalf("active turn changed after rejected claim: got %p, want %p", got, claim.placeholder)
 	}
 }
 
 func TestInboundTurnCoordinatorCleanupOnlyClearsOwnedPlaceholder(t *testing.T) {
-	al := &AgentLoop{}
+	al := &AgentLoop{turns: newTurnRuntime(nil, nil)}
 	coord := newInboundTurnCoordinator(al)
 
 	first, _, claimed := coord.claimSession(coordinatorTestTarget("route-1", "session-1"))
@@ -1630,25 +1632,25 @@ func TestInboundTurnCoordinatorCleanupOnlyClearsOwnedPlaceholder(t *testing.T) {
 	}
 
 	replacement := &turnState{
-		turnID:     makePendingTurnID("session-1", al.turnSeq.Add(1)),
+		turnID:     makePendingTurnID("session-1", al.turns.nextSequence()),
 		workspace:  first.scope.workspace,
 		sessionKey: first.scope.sessionKey,
 		phase:      TurnPhaseSetup,
 	}
-	al.activeTurnStates.Store(first.scope, replacement)
+	al.turns.activeTurnStates.Store(first.scope, replacement)
 
 	first.releaseIfOwned()
-	if got := al.getActiveTurnState(first.scope); got != replacement {
+	if got := al.turns.activeTurnState(first.scope); got != replacement {
 		t.Fatalf("cleanup removed unowned placeholder: got %p, want replacement %p", got, replacement)
 	}
 
 	replacementClaim := &runtimeSessionClaim{
-		al:          al,
+		runtime:     al.turns,
 		scope:       first.scope,
 		placeholder: replacement,
 	}
 	replacementClaim.releaseIfOwned()
-	if got := al.getActiveTurnState(first.scope); got != nil {
+	if got := al.turns.activeTurnState(first.scope); got != nil {
 		t.Fatalf("cleanup left owned placeholder active: got %p", got)
 	}
 }

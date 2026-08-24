@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	agentinterfaces "github.com/bogdanovich/mintclaw/pkg/agent/interfaces"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -67,11 +68,15 @@ func (al *AgentLoop) processMessageSync(ctx context.Context, msg bus.InboundMess
 	)
 }
 
-func (al *AgentLoop) ackInboundMessage(ctx context.Context, msg bus.InboundMessage) error {
-	if msg.SpoolID == "" || al.bus == nil {
+type inboundSpool struct {
+	bus agentinterfaces.MessageBus
+}
+
+func (s *inboundSpool) ack(ctx context.Context, msg bus.InboundMessage) error {
+	if msg.SpoolID == "" || s == nil || s.bus == nil {
 		return nil
 	}
-	if err := al.bus.AckInbound(ctx, msg); err != nil {
+	if err := s.bus.AckInbound(ctx, msg); err != nil {
 		logger.WarnCF("agent", "Failed to ack inbound spool entry",
 			map[string]any{
 				"spool_id":    msg.SpoolID,
@@ -85,15 +90,15 @@ func (al *AgentLoop) ackInboundMessage(ctx context.Context, msg bus.InboundMessa
 	return nil
 }
 
-func (al *AgentLoop) releaseInboundMessage(
+func (s *inboundSpool) release(
 	ctx context.Context,
 	msg bus.InboundMessage,
 	cause error,
 ) {
-	if msg.SpoolID == "" || al.bus == nil {
+	if msg.SpoolID == "" || s == nil || s.bus == nil {
 		return
 	}
-	if err := al.bus.ReleaseInbound(ctx, msg, cause); err != nil {
+	if err := s.bus.ReleaseInbound(ctx, msg, cause); err != nil {
 		logger.WarnCF("agent", "Failed to release inbound spool entry",
 			map[string]any{
 				"spool_id":    msg.SpoolID,
@@ -253,9 +258,9 @@ func (al *AgentLoop) settleSteeringMessages(
 	messages []providers.Message,
 ) error {
 	if admission.permitsInboundAck() {
-		return al.ackAcceptedSteeringMessagesChecked(context.Background(), messages)
+		return al.turns.inbound.ackAcceptedSteeringMessagesChecked(context.Background(), messages)
 	}
-	al.releaseSteeringMessages(context.Background(), messages, admission.err)
+	al.turns.inbound.releaseSteeringMessages(context.Background(), messages, admission.err)
 	return nil
 }
 
@@ -434,7 +439,7 @@ func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (*inboundDisp
 	allocation := al.allocateRouteSession(route, msg)
 	routeClaimKey := runtimeRouteClaimKey(allocation.RouteScopeKey, msg.SessionKey)
 	routeScope := newRuntimeRouteScope(agent.Workspace, routeClaimKey)
-	if activeTarget, ok := al.activeRouteSessions.Load(routeScope); ok {
+	if activeTarget, ok := al.turns.activeRouteSessions.Load(routeScope); ok {
 		target, targetOK := activeTarget.(*inboundDispatchTarget)
 		if targetOK {
 			al.touchActiveSessionLifecycle(target)

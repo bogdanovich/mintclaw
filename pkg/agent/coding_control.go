@@ -14,7 +14,7 @@ func (al *AgentLoop) CompactCodingSession(ctx context.Context, sessionKey string
 		return fmt.Errorf("coding context manager is unavailable")
 	}
 	sessionKey = strings.TrimSpace(sessionKey)
-	if active, ambiguous := al.uniqueActiveTurnForSession(sessionKey); ambiguous {
+	if active, ambiguous := al.turns.uniqueActiveTurnForSession(sessionKey); ambiguous {
 		return fmt.Errorf("session %s is active in multiple workspaces", sessionKey)
 	} else if active != nil {
 		return fmt.Errorf("session %s has an active turn", sessionKey)

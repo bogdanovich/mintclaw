@@ -451,16 +451,19 @@ func newTurnState(agent *AgentInstance, opts turnSpec, scope turnEventScope) *tu
 	return ts
 }
 
-func (al *AgentLoop) registerActiveTurn(ts *turnState) {
-	al.activeTurnStates.Store(ts.runtimeSessionScope(), ts)
+func (r *turnRuntime) registerActiveTurn(ts *turnState) {
+	r.activeTurnStates.Store(ts.runtimeSessionScope(), ts)
 }
 
-func (al *AgentLoop) clearActiveTurn(ts *turnState) {
-	al.activeTurnStates.Delete(ts.runtimeSessionScope())
+func (r *turnRuntime) clearActiveTurn(ts *turnState) {
+	r.activeTurnStates.Delete(ts.runtimeSessionScope())
 }
 
-func (al *AgentLoop) getActiveTurnState(scope runtimeSessionScope) *turnState {
-	if val, ok := al.activeTurnStates.Load(scope); ok {
+func (r *turnRuntime) activeTurnState(scope runtimeSessionScope) *turnState {
+	if r == nil {
+		return nil
+	}
+	if val, ok := r.activeTurnStates.Load(scope); ok {
 		if ts, ok := val.(*turnState); ok {
 			return ts
 		}
@@ -470,11 +473,14 @@ func (al *AgentLoop) getActiveTurnState(scope runtimeSessionScope) *turnState {
 	return nil
 }
 
-func (al *AgentLoop) uniqueActiveTurnForSession(sessionKey string) (*turnState, bool) {
+func (r *turnRuntime) uniqueActiveTurnForSession(sessionKey string) (*turnState, bool) {
+	if r == nil {
+		return nil, false
+	}
 	sessionKey = strings.TrimSpace(sessionKey)
 	var found *turnState
 	ambiguous := false
-	al.activeTurnStates.Range(func(key, value any) bool {
+	r.activeTurnStates.Range(func(key, value any) bool {
 		scope, isRoot := key.(runtimeSessionScope)
 		if !isRoot || scope.sessionKey != sessionKey {
 			return true
@@ -494,11 +500,11 @@ func (al *AgentLoop) uniqueActiveTurnForSession(sessionKey string) (*turnState, 
 }
 
 func (al *AgentLoop) ActiveTurnCount() int {
-	if al == nil {
+	if al == nil || al.turns == nil {
 		return 0
 	}
 	count := 0
-	al.activeTurnStates.Range(func(_, value any) bool {
+	al.turns.activeTurnStates.Range(func(_, value any) bool {
 		if _, ok := value.(*turnState); ok {
 			count++
 		}
@@ -508,7 +514,10 @@ func (al *AgentLoop) ActiveTurnCount() int {
 }
 
 func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {
-	ts, ambiguous := al.uniqueActiveTurnForSession(sessionKey)
+	if al == nil || al.turns == nil {
+		return nil
+	}
+	ts, ambiguous := al.turns.uniqueActiveTurnForSession(sessionKey)
 	if ts == nil || ambiguous {
 		return nil
 	}
@@ -517,7 +526,10 @@ func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {
 }
 
 func (al *AgentLoop) GetActiveTurnByScope(workspace, sessionKey string) *ActiveTurnInfo {
-	ts := al.getActiveTurnState(newRuntimeSessionScope(workspace, sessionKey))
+	if al == nil || al.turns == nil {
+		return nil
+	}
+	ts := al.turns.activeTurnState(newRuntimeSessionScope(workspace, sessionKey))
 	if ts == nil {
 		return nil
 	}
@@ -1121,7 +1133,7 @@ func (ts *turnState) Finish(isHardAbort bool) {
 		children := append([]string(nil), ts.childTurnIDs...)
 		ts.mu.RUnlock()
 		for _, childID := range children {
-			if val, ok := ts.al.activeTurnStates.Load(
+			if val, ok := ts.al.turns.activeTurnStates.Load(
 				newRuntimeSubTurnScope(ts.workspace, childID),
 			); ok {
 				if child, ok := val.(*turnState); ok {

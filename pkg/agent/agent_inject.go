@@ -421,8 +421,8 @@ func (al *AgentLoop) SetChannelManager(cm interfaces.ChannelManager) {
 	al.mu.Lock()
 	defer al.mu.Unlock()
 	al.channelManager = cm
-	if al.turnRunner != nil {
-		al.replaceTurnRunnerLocked(al.cfg)
+	if al.turns.currentRunner() != nil {
+		al.turns.replaceRunner(newTurnRunner(al, al.cfg))
 	}
 }
 
@@ -441,8 +441,8 @@ func (al *AgentLoop) GetConfig() *config.Config {
 func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	al.mu.Lock()
 	al.mediaStore = s
-	if al.turnRunner != nil {
-		al.replaceTurnRunnerLocked(al.cfg)
+	if al.turns.currentRunner() != nil {
+		al.turns.replaceRunner(newTurnRunner(al, al.cfg))
 	}
 	al.mu.Unlock()
 

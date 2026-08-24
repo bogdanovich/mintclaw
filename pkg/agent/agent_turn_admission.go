@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-
-	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
 type agentTurnAdmissionsKey struct{}
@@ -175,7 +173,10 @@ func (al *AgentLoop) QuiesceTurns(ctx context.Context) (func(), error) {
 	if al == nil {
 		return nil, fmt.Errorf("agent loop is nil")
 	}
-	return al.agentTurnAdmissions.pause(ctx)
+	if al.turns == nil || al.turns.admissions == nil {
+		return func() {}, nil
+	}
+	return al.turns.admissions.pause(ctx)
 }
 
 func (al *AgentLoop) currentAgentGeneration(agent *AgentInstance) (*AgentInstance, bool, error) {
@@ -207,40 +208,6 @@ func (c *agentTurnAdmissionController) release(agentID string) {
 func (c *agentTurnAdmissionController) notifyLocked() {
 	close(c.changed)
 	c.changed = make(chan struct{})
-}
-
-func (al *AgentLoop) acquireAgentTurn(
-	ctx context.Context,
-	agentID string,
-) (context.Context, func(), error) {
-	return al.acquireAgentTurnObserved(ctx, agentID, nil)
-}
-
-func (al *AgentLoop) acquireAgentTurnObserved(
-	ctx context.Context,
-	agentID string,
-	onWait func(active, limit int),
-) (context.Context, func(), error) {
-	agentID = routing.NormalizeAgentID(agentID)
-	if agentID == "" || al == nil || al.agentTurnAdmissions == nil {
-		return ctx, func() {}, nil
-	}
-	if admissions, ok := ctx.Value(agentTurnAdmissionsKey{}).(map[string]*agentTurnAdmissionLease); ok {
-		if admissions[agentID] != nil {
-			return ctx, func() {}, nil
-		}
-	}
-
-	release, err := al.agentTurnAdmissions.acquireObserved(ctx, agentID, onWait)
-	if err != nil {
-		return ctx, nil, err
-	}
-
-	lease := newAgentTurnAdmissionLease(release)
-	admissions := cloneAgentTurnAdmissions(ctx)
-	admissions[agentID] = lease
-	admittedCtx := context.WithValue(ctx, agentTurnAdmissionsKey{}, admissions)
-	return admittedCtx, lease.releaseRef, nil
 }
 
 func inheritAgentTurnAdmissions(dst context.Context, src context.Context) (context.Context, func()) {

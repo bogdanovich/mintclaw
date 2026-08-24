@@ -398,7 +398,7 @@ func (al *AgentLoop) enqueueSteeringMessageWithSender(
 		Source:    "Steer",
 		TracePath: "turn.interrupt.received",
 	}
-	if ts := al.getActiveTurnState(scope); ts != nil {
+	if ts := al.turns.activeTurnState(scope); ts != nil {
 		meta = ts.eventMeta("Steer", "turn.interrupt.received")
 	} else {
 		if strings.TrimSpace(agentID) != "" {
@@ -476,22 +476,22 @@ func (al *AgentLoop) dequeueSteeringBatchForContinuation(
 	return al.steering.dequeueScopeForContinuationBatch(scope)
 }
 
-func (al *AgentLoop) ackAcceptedSteeringMessages(ctx context.Context, msgs []providers.Message) {
-	if err := al.ackAcceptedSteeringMessagesChecked(ctx, msgs); err != nil {
+func (s *inboundSpool) ackAcceptedSteeringMessages(ctx context.Context, msgs []providers.Message) {
+	if err := s.ackAcceptedSteeringMessagesChecked(ctx, msgs); err != nil {
 		if transaction := outboundTransactionFromContext(ctx); transaction != nil {
 			transaction.fail(err)
 		}
 	}
 }
 
-func (al *AgentLoop) ackAcceptedSteeringMessagesChecked(ctx context.Context, msgs []providers.Message) error {
+func (s *inboundSpool) ackAcceptedSteeringMessagesChecked(ctx context.Context, msgs []providers.Message) error {
 	var ackErr error
 	for _, msg := range msgs {
 		if msg.InboundSpoolID == "" {
 			continue
 		}
-		if err := al.ackInboundMessage(ctx, bus.InboundMessage{SpoolID: msg.InboundSpoolID}); err != nil {
-			al.releaseInboundMessage(
+		if err := s.ack(ctx, bus.InboundMessage{SpoolID: msg.InboundSpoolID}); err != nil {
+			s.release(
 				context.Background(),
 				bus.InboundMessage{SpoolID: msg.InboundSpoolID},
 				err,
@@ -502,7 +502,7 @@ func (al *AgentLoop) ackAcceptedSteeringMessagesChecked(ctx context.Context, msg
 	return ackErr
 }
 
-func (al *AgentLoop) releaseSteeringMessages(
+func (s *inboundSpool) releaseSteeringMessages(
 	ctx context.Context,
 	msgs []providers.Message,
 	cause error,
@@ -511,7 +511,7 @@ func (al *AgentLoop) releaseSteeringMessages(
 		if msg.InboundSpoolID == "" {
 			continue
 		}
-		al.releaseInboundMessage(ctx, bus.InboundMessage{SpoolID: msg.InboundSpoolID}, cause)
+		s.release(ctx, bus.InboundMessage{SpoolID: msg.InboundSpoolID}, cause)
 	}
 }
 
@@ -645,9 +645,9 @@ func (al *AgentLoop) continueRuntimeSession(
 	if agent == nil {
 		return "", fmt.Errorf("no agent available for session %q in workspace %q", scope.sessionKey, scope.workspace)
 	}
-	claim, claimed := al.claimRuntimeSession(
+	claim, claimed := al.turns.claimRuntimeSession(
 		scope,
-		"pending-continue-"+scope.sessionKey+"-"+fmt.Sprintf("%d", al.turnSeq.Add(1)),
+		"pending-continue-"+scope.sessionKey+"-"+fmt.Sprintf("%d", al.turns.nextSequence()),
 	)
 	if !claimed {
 		if active := al.GetActiveTurnByScope(scope.workspace, scope.sessionKey); active != nil {
@@ -700,15 +700,15 @@ func (al *AgentLoop) continueRuntimeSession(
 		target.heldFinalDeliveryObservation(),
 	)
 	if err != nil {
-		al.releaseSteeringMessages(context.Background(), steeringMsgs, err)
+		al.turns.inbound.releaseSteeringMessages(context.Background(), steeringMsgs, err)
 		return response, err
 	}
 	if strings.TrimSpace(response) == "" {
-		al.ackAcceptedSteeringMessages(ctx, steeringMsgs)
+		al.turns.inbound.ackAcceptedSteeringMessages(ctx, steeringMsgs)
 	} else if target.holdSteeringSettlement {
 		target.unsettledSteering = append(target.unsettledSteering, steeringMsgs...)
 	} else {
-		al.ackAcceptedSteeringMessages(ctx, steeringMsgs)
+		al.turns.inbound.ackAcceptedSteeringMessages(ctx, steeringMsgs)
 	}
 	return response, err
 }
@@ -717,7 +717,7 @@ func (al *AgentLoop) continueRuntimeSession(
 // turn owned by sessionKey. It fails closed when identical session keys are
 // active in multiple workspaces.
 func (al *AgentLoop) InterruptGracefulSession(sessionKey, hint string) error {
-	ts, ambiguous := al.uniqueActiveTurnForSession(sessionKey)
+	ts, ambiguous := al.turns.uniqueActiveTurnForSession(sessionKey)
 	if ambiguous {
 		return fmt.Errorf("session %s is active in multiple workspaces", sessionKey)
 	}
@@ -750,7 +750,7 @@ func (al *AgentLoop) interruptGracefulTurn(ts *turnState, hint string) error {
 // session and returns all available results without blocking.
 // Returns nil if no active turn state exists for this session.
 func (al *AgentLoop) dequeuePendingSubTurnResults(sessionKey string) []*toolshared.ToolResult {
-	ts, ambiguous := al.uniqueActiveTurnForSession(sessionKey)
+	ts, ambiguous := al.turns.uniqueActiveTurnForSession(sessionKey)
 	if ts == nil || ambiguous {
 		return nil
 	}
@@ -777,7 +777,7 @@ func (al *AgentLoop) dequeuePendingSubTurnResults(sessionKey string) []*toolshar
 // For graceful interruption that allows the agent to finish the current tool and summarize,
 // use Steer() instead.
 func (al *AgentLoop) HardAbort(sessionKey string) error {
-	ts, ambiguous := al.uniqueActiveTurnForSession(sessionKey)
+	ts, ambiguous := al.turns.uniqueActiveTurnForSession(sessionKey)
 	if ambiguous {
 		return fmt.Errorf("session %s is active in multiple workspaces", sessionKey)
 	}
@@ -788,7 +788,7 @@ func (al *AgentLoop) HardAbort(sessionKey string) error {
 }
 
 func (al *AgentLoop) hardAbortScope(scope runtimeSessionScope) error {
-	tsInterface, ok := al.activeTurnStates.Load(scope)
+	tsInterface, ok := al.turns.activeTurnStates.Load(scope)
 	if !ok {
 		return fmt.Errorf("no active turn state found for session %s", scope.sessionKey)
 	}

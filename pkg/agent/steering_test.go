@@ -707,7 +707,7 @@ func TestAgentLoop_DequeueSteeringDoesNotAckInboundSpool(t *testing.T) {
 		t.Fatalf("dequeued messages = %d, want 1", len(msgs))
 	}
 	waitForSpoolEntries(t, spool.Dir(), "*.processing", 1)
-	al.ackAcceptedSteeringMessages(context.Background(), msgs)
+	al.turns.inbound.ackAcceptedSteeringMessages(context.Background(), msgs)
 	waitForSpoolEntries(t, spool.Dir(), "*.processing", 0)
 }
 
@@ -796,7 +796,7 @@ func TestAgentLoop_Continue_AcksSteeringAcceptedDuringActiveTurn(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 	defer al.Close()
 	recordingBus := &recordingMessageBus{MessageBus: msgBus}
-	al.bus = recordingBus
+	setTestMessageBus(al, recordingBus)
 
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
@@ -1871,7 +1871,7 @@ func TestAgentLoop_Run_ReleasesInjectedSteeringSpoolOnContinuationSaveFailure(t 
 	al := NewAgentLoop(cfg, msgBus, provider)
 	installTestOutboundCoordinator(t, al, tmpDir)
 	monitoredBus := &recordingMessageBus{MessageBus: al.bus}
-	al.bus = monitoredBus
+	setTestMessageBus(al, monitoredBus)
 
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {
@@ -2199,7 +2199,7 @@ func TestAgentLoop_Run_PendingStopStillContinuesQueuedFollowUp(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		ts := al.getActiveTurnState(testRuntimeSessionScope(al, targetSessionKey))
+		ts := al.turns.activeTurnState(testRuntimeSessionScope(al, targetSessionKey))
 		if ts != nil && strings.HasPrefix(ts.turnID, pendingTurnPrefix) {
 			break
 		}

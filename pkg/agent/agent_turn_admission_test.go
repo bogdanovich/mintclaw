@@ -30,21 +30,23 @@ func (provider *admissionGenerationProvider) Chat(
 
 func TestAcquireAgentTurnSerializesConfiguredAgent(t *testing.T) {
 	al := &AgentLoop{
-		agentTurnAdmissions: &agentTurnAdmissionController{
-			limits:  map[string]int{"browser": 1},
-			active:  make(map[string]int),
-			changed: make(chan struct{}),
+		turns: &turnRuntime{
+			admissions: &agentTurnAdmissionController{
+				limits:  map[string]int{"browser": 1},
+				active:  make(map[string]int),
+				changed: make(chan struct{}),
+			},
 		},
 	}
 
-	firstCtx, releaseFirst, err := al.acquireAgentTurn(context.Background(), "browser")
+	firstCtx, releaseFirst, err := al.turns.acquireAgentTurn(context.Background(), "browser")
 	if err != nil {
 		t.Fatalf("first acquireAgentTurn() error = %v", err)
 	}
 	defer releaseFirst()
 
 	// Nested turns inherit the admission and must not deadlock on the same agent.
-	_, releaseNested, err := al.acquireAgentTurn(firstCtx, "browser")
+	_, releaseNested, err := al.turns.acquireAgentTurn(firstCtx, "browser")
 	if err != nil {
 		t.Fatalf("nested acquireAgentTurn() error = %v", err)
 	}
@@ -52,7 +54,7 @@ func TestAcquireAgentTurnSerializesConfiguredAgent(t *testing.T) {
 
 	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, _, err = al.acquireAgentTurn(waitCtx, "browser")
+	_, _, err = al.turns.acquireAgentTurn(waitCtx, "browser")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("blocked acquireAgentTurn() error = %v, want deadline exceeded", err)
 	}
@@ -60,14 +62,16 @@ func TestAcquireAgentTurnSerializesConfiguredAgent(t *testing.T) {
 
 func TestAcquireAgentTurnAllowsUnconfiguredAgent(t *testing.T) {
 	al := &AgentLoop{
-		agentTurnAdmissions: &agentTurnAdmissionController{
-			limits:  map[string]int{"browser": 1},
-			active:  make(map[string]int),
-			changed: make(chan struct{}),
+		turns: &turnRuntime{
+			admissions: &agentTurnAdmissionController{
+				limits:  map[string]int{"browser": 1},
+				active:  make(map[string]int),
+				changed: make(chan struct{}),
+			},
 		},
 	}
 
-	_, release, err := al.acquireAgentTurn(context.Background(), "main")
+	_, release, err := al.turns.acquireAgentTurn(context.Background(), "main")
 	if err != nil {
 		t.Fatalf("acquireAgentTurn() error = %v", err)
 	}
@@ -147,7 +151,7 @@ func TestAgentTurnAdmissionReloadPreservesActiveTurns(t *testing.T) {
 
 func TestQuiesceTurnsDrainsActiveAndBlocksNewAdmissions(t *testing.T) {
 	controller := newAgentTurnAdmissionController(nil)
-	loop := &AgentLoop{agentTurnAdmissions: controller}
+	loop := &AgentLoop{turns: &turnRuntime{admissions: controller}}
 	releaseActive, err := controller.acquire(context.Background(), "main")
 	if err != nil {
 		t.Fatalf("initial acquire() error = %v", err)
@@ -319,7 +323,7 @@ func TestReloadProviderAndConfigRefreshesAgentTurnAdmissions(t *testing.T) {
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	_, release, err := al.acquireAgentTurn(context.Background(), "browser")
+	_, release, err := al.turns.acquireAgentTurn(context.Background(), "browser")
 	if err != nil {
 		t.Fatalf("initial acquireAgentTurn() error = %v", err)
 	}
@@ -346,14 +350,14 @@ func TestReloadProviderAndConfigRefreshesAgentTurnAdmissions(t *testing.T) {
 		t.Fatalf("ReloadProviderAndConfig() error = %v", err)
 	}
 
-	_, release, err = al.acquireAgentTurn(context.Background(), "browser")
+	_, release, err = al.turns.acquireAgentTurn(context.Background(), "browser")
 	if err != nil {
 		t.Fatalf("first acquireAgentTurn() after reload error = %v", err)
 	}
 	defer release()
 	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, _, err = al.acquireAgentTurn(waitCtx, "browser")
+	_, _, err = al.turns.acquireAgentTurn(waitCtx, "browser")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("acquireAgentTurn() after reload error = %v, want deadline exceeded", err)
 	}
@@ -391,12 +395,12 @@ func TestInheritAgentTurnAdmissionsDetachesCancellation(t *testing.T) {
 }
 
 func TestInheritedAdmissionsAllowAgentRoundTrip(t *testing.T) {
-	al := &AgentLoop{agentTurnAdmissions: &agentTurnAdmissionController{
+	al := &AgentLoop{turns: &turnRuntime{admissions: &agentTurnAdmissionController{
 		limits:  map[string]int{"agent-a": 1, "agent-b": 1},
 		active:  make(map[string]int),
 		changed: make(chan struct{}),
-	}}
-	aCtx, releaseA, err := al.acquireAgentTurn(context.Background(), "agent-a")
+	}}}
+	aCtx, releaseA, err := al.turns.acquireAgentTurn(context.Background(), "agent-a")
 	if err != nil {
 		t.Fatalf("acquire agent-a error = %v", err)
 	}
@@ -404,7 +408,7 @@ func TestInheritedAdmissionsAllowAgentRoundTrip(t *testing.T) {
 
 	bBaseCtx, releaseAncestors := inheritAgentTurnAdmissions(context.Background(), aCtx)
 	defer releaseAncestors()
-	bCtx, releaseB, err := al.acquireAgentTurn(bBaseCtx, "agent-b")
+	bCtx, releaseB, err := al.turns.acquireAgentTurn(bBaseCtx, "agent-b")
 	if err != nil {
 		t.Fatalf("acquire agent-b error = %v", err)
 	}
@@ -412,7 +416,7 @@ func TestInheritedAdmissionsAllowAgentRoundTrip(t *testing.T) {
 
 	nestedBaseCtx, releaseNestedAncestors := inheritAgentTurnAdmissions(context.Background(), bCtx)
 	defer releaseNestedAncestors()
-	_, releaseNestedA, err := al.acquireAgentTurn(nestedBaseCtx, "agent-a")
+	_, releaseNestedA, err := al.turns.acquireAgentTurn(nestedBaseCtx, "agent-a")
 	if err != nil {
 		t.Fatalf("reacquire inherited agent-a error = %v", err)
 	}
