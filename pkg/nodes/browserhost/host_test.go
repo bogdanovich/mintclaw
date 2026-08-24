@@ -511,6 +511,15 @@ func TestBrowserHostPreservesDownloadSuccessWhenOutputRegistrationIsFull(t *test
 }
 
 func TestBrowserHostAdvancesAuthorityAfterPostClickDownloadArtifactFailure(t *testing.T) {
+	for _, status := range []string{"oversize", "read_failed"} {
+		t.Run(status, func(t *testing.T) {
+			testBrowserHostPostClickDownloadArtifactFailure(t, status)
+		})
+	}
+}
+
+func testBrowserHostPostClickDownloadArtifactFailure(t *testing.T, status string) {
+	t.Helper()
 	observation := browserworker.DriverObservation{
 		URL: "https://example.com/download", Origin: "https://example.com", Title: "Download",
 		Snapshot: "- button \"Download\" [ref=download_target]",
@@ -519,7 +528,10 @@ func TestBrowserHostAdvancesAuthorityAfterPostClickDownloadArtifactFailure(t *te
 	worker := &fakeBrowserHostWorker{
 		status:       browserworker.WorkerReady,
 		observations: []browserworker.DriverObservation{observation, observation, observation, observation},
-		downloadErr:  &browserworker.DownloadArtifactError{Err: browserworker.ErrDriverIncompatible},
+		downloadErr: fmt.Errorf(
+			"%s: %w", status,
+			&browserworker.DownloadArtifactError{Err: browserworker.ErrDriverIncompatible},
+		),
 	}
 	profile := browserHostProfileFixture()
 	host, err := newBrowserHost(
@@ -541,7 +553,7 @@ func TestBrowserHostAdvancesAuthorityAfterPostClickDownloadArtifactFailure(t *te
 	action := nodes.BrowserHostActRequest{
 		SessionID: request.SessionID, RoutedSessionID: request.RoutedSessionID,
 		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
-		ActionInvocationID: "browser_download_capture_failure",
+		ActionInvocationID: "browser_download_capture_failure_" + status,
 		Action:             browserworker.Action{Kind: browserworker.ActionDownload, Ref: observed.Elements[0].Ref},
 		Effect:             "unknown", CurrentOrigin: observed.Origin,
 		PreparedActionHash: strings.Repeat("d", 64), BrowserPolicyRevision: request.BrowserPolicyRevision,

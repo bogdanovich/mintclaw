@@ -335,7 +335,8 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 		artifactTransferAvailable := tool.runtime.source.ArtifactTransferAvailable()
 		if !artifactTransferAvailable {
 			actions = slices.DeleteFunc(actions, func(action browser.ActionKind) bool {
-				return action == browser.ActionFileChooser || action == browser.ActionDownload
+				return action == browser.ActionFileChooser || action == browser.ActionUpload ||
+					action == browser.ActionDownload
 			})
 		}
 		uploadAvailable := capabilitiesAvailable && artifactTransferAvailable && diagnostics.Upload

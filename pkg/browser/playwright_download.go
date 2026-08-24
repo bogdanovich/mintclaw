@@ -298,6 +298,10 @@ func (worker *playwrightWorker) captureDownload(
 	if worker.networkProxy != nil && worker.networkProxy.Denials() > denialsBefore {
 		return DriverDownload{}, ErrDenied
 	}
+	if len(fields) >= 3 && fields[1] == "error" &&
+		(fields[2] == "oversize" || fields[2] == "read_failed") {
+		return DriverDownload{}, &DownloadArtifactError{Err: ErrDriverIncompatible}
+	}
 	if len(fields) >= 2 && fields[1] == "complete" && len(fields) != 6 {
 		return DriverDownload{}, &DownloadArtifactError{Err: ErrDriverIncompatible}
 	}
