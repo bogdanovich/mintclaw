@@ -775,6 +775,10 @@ Implementation sequence:
     `FlexibleStringSlice` scalar, mixed-array, and custom text decoders; retain
     friendly scalar normalization only at the current Web request boundary and
     use the standard environment parser for comma-separated overrides.
+26. Make the node registry validate stored command schemas directly. Persist
+    compact current JSON at the writer, delete load-time command-schema
+    compaction and browser-schema reconstruction, and reject catalogs whose
+    authority-bearing descriptors no longer match the current contract.
 
 Exit criteria:
 
