@@ -2156,7 +2156,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 		if mode == toolshared.AsyncDeliveryParentOnly {
 			terminalStatus = taskregistry.DeliverySessionQueued
 		}
-		al.updateAsyncTaskDeliveryStatus(workspace, taskID, terminalStatus, completionID, "")
+		al.tasks.updateDeliveryStatus(workspace, taskID, terminalStatus, completionID, "")
 		task, ok = taskRegistry.Get(taskID)
 		if !ok {
 			return fmt.Errorf("owning task %q is unavailable after delivery settlement", taskID)

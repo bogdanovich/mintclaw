@@ -619,7 +619,7 @@ func (al *AgentLoop) processAsyncCompletionWithDelivery(
 
 	completionID := strings.TrimSpace(input.CompletionID)
 	if completionID != "" && !hasOutboundTransaction(ctx) {
-		if _, loaded := al.asyncCompletions.LoadOrStore(completionID, struct{}{}); loaded {
+		if !al.tasks.claimCompletion(completionID) {
 			logger.InfoCF("agent", "Skipping duplicate async completion",
 				map[string]any{
 					"completion_id": completionID,
@@ -629,7 +629,7 @@ func (al *AgentLoop) processAsyncCompletionWithDelivery(
 		}
 		defer func() {
 			if err != nil {
-				al.asyncCompletions.LoadAndDelete(completionID)
+				al.tasks.releaseCompletion(completionID)
 			}
 		}()
 	}

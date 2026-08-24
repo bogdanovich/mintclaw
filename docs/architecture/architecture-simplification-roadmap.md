@@ -844,6 +844,13 @@ Implementation sequence:
     workspace catalog serialization, and recovery admission. Delete those six
     mutable fields from `AgentLoop`, and make every reloadable interaction
     component reference the same stable owner.
+42. Extract one process-wide `taskCoordinator` to own task registries,
+    restart reconciliation, terminal-task context, durable delivery state, and
+    async-completion admission. Make it depend directly on the interaction
+    owner, delete the two remaining task/completion maps from `AgentLoop`,
+    replace the pipeline's terminal-task `AgentLoop` service locator, and
+    remove its three task-state callbacks, config callback, and duplicate
+    user-delivery callback.
 
 Exit criteria:
 

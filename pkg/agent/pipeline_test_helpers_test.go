@@ -20,6 +20,12 @@ func runTestTurn(
 }
 
 func ensureTestTurnRunner(al *AgentLoop) {
+	if al.interactions.currentConfig == nil {
+		al.interactions.configure(al.GetConfig, al.codingProfile, al.observeInteractionEvent)
+	}
+	if al.tasks.currentConfig == nil {
+		al.tasks = newTaskCoordinator(al.GetConfig, al.codingProfile, &al.interactions)
+	}
 	if al.turns == nil {
 		al.turns = newTurnRuntime(al.registry, al.bus)
 	}

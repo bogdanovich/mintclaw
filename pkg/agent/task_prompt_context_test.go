@@ -60,7 +60,7 @@ func TestTerminalTaskContextForTurnFiltersAndBoundsAuthoritativeRecords(t *testi
 			t.Fatal(err)
 		}
 	}
-	messages := al.terminalTaskContextForTurn(ts)
+	messages := al.tasks.terminalTaskContextForTurn(ts)
 	if len(messages) != maxTerminalTaskPromptRecords {
 		t.Fatalf("terminal context count = %d, want %d", len(messages), maxTerminalTaskPromptRecords)
 	}
@@ -73,7 +73,7 @@ func TestTerminalTaskContextForTurnFiltersAndBoundsAuthoritativeRecords(t *testi
 		}
 	}
 	ts.opts.NoHistory = true
-	if messages := al.terminalTaskContextForTurn(ts); len(messages) != 0 {
+	if messages := al.tasks.terminalTaskContextForTurn(ts); len(messages) != 0 {
 		t.Fatalf("NoHistory terminal context = %#v, want empty", messages)
 	}
 }

@@ -190,17 +190,24 @@ func (p CodingRuntimeProfile) AgentLayout(agentID string) (CodingRuntimeLayout, 
 }
 
 func (al *AgentLoop) codingLayoutForWorkspace(workspace string) (CodingRuntimeLayout, bool) {
-	if al == nil || al.codingProfile == nil {
+	if al == nil {
+		return CodingRuntimeLayout{}, false
+	}
+	return codingLayoutForWorkspace(al.codingProfile, workspace)
+}
+
+func codingLayoutForWorkspace(profile *CodingRuntimeProfile, workspace string) (CodingRuntimeLayout, bool) {
+	if profile == nil {
 		return CodingRuntimeLayout{}, false
 	}
 	want := normalizeRuntimeWorkspace(workspace)
-	agentIDs := make([]string, 0, len(al.codingProfile.agentLayouts))
-	for agentID := range al.codingProfile.agentLayouts {
+	agentIDs := make([]string, 0, len(profile.agentLayouts))
+	for agentID := range profile.agentLayouts {
 		agentIDs = append(agentIDs, agentID)
 	}
 	sort.Strings(agentIDs)
 	for _, agentID := range agentIDs {
-		layout := al.codingProfile.agentLayouts[agentID]
+		layout := profile.agentLayouts[agentID]
 		if normalizeRuntimeWorkspace(layout.ExecutionRoot()) == want {
 			return layout, true
 		}

@@ -83,6 +83,8 @@ func newAgentLoopWithRegistry(
 			opt(al)
 		}
 	}
+	al.interactions.configure(al.GetConfig, al.codingProfile, al.observeInteractionEvent)
+	al.tasks = newTaskCoordinator(al.GetConfig, al.codingProfile, &al.interactions)
 	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && al.state == nil {
 		if !al.isolatedToolBootstrap {
 			manager, err := state.NewManagerChecked(defaultAgent.Workspace)

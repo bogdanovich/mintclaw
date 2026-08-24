@@ -2511,7 +2511,7 @@ func TestRecoveryFailsInteractionAfterFinalDeliveryRetryBudget(t *testing.T) {
 	if err = os.Chmod(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	al.taskRegistries.Delete(workspace)
+	al.tasks.registries.Delete(workspace)
 	al.interactions.registries.Delete(workspace)
 	registry = al.interactionRegistryForWorkspace(workspace)
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
@@ -2596,7 +2596,7 @@ func TestRecoveryFailsInteractionAfterPromptDeliveryRetryBudget(t *testing.T) {
 	if err = os.Chmod(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	al.taskRegistries.Delete(workspace)
+	al.tasks.registries.Delete(workspace)
 	al.interactions.registries.Delete(workspace)
 	_ = al.taskRegistryForWorkspace(workspace)
 	registry = al.interactionRegistryForWorkspace(workspace)
@@ -3026,7 +3026,7 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 				}
 			}
 
-			al.taskRegistries.Delete(normalizeRuntimeWorkspace(workspace))
+			al.tasks.registries.Delete(normalizeRuntimeWorkspace(workspace))
 			al.interactions.registries.Delete(workspace)
 			if reloaded := al.interactionRegistryForWorkspace(workspace); reloaded.LastLoadError() != nil {
 				t.Fatalf("reload prepared interaction registry: %v", reloaded.LastLoadError())
