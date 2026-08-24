@@ -764,7 +764,8 @@ func diagnosticToolPreviewAllowed(tool string) bool {
 	}
 	switch tool {
 	case "nodes", "nodes_invoke", "nodes_file_info", "nodes_upload", "nodes_download", "nodes_status", "nodes_cancel",
-		"request_user_input", "workspace_exec", "browser_observe", "browser_capture", "browser_act", "browser_contexts":
+		"request_user_input", "workspace_exec", "browser_observe", "browser_capture", "browser_diagnostics",
+		"browser_act", "browser_contexts":
 		return false
 	default:
 		return true

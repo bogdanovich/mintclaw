@@ -457,6 +457,61 @@ func TestBrowserObservationResultIsRedactedFromLogsAndTraces(t *testing.T) {
 	}
 }
 
+func TestBrowserDiagnosticsResultIsProtectedAcrossDiagnosticProjections(t *testing.T) {
+	messages := func(canary string) []providers.Message {
+		return []providers.Message{
+			{
+				Role: "assistant",
+				ToolCalls: []providers.ToolCall{{
+					ID: "diagnostics-call", Name: "browser_diagnostics",
+					Function: &providers.FunctionCall{
+						Name: "browser_diagnostics", Arguments: `{"browser_session_id":"session"}`,
+					},
+				}},
+			},
+			{
+				Role:       "tool",
+				ToolCallID: "diagnostics-call",
+				Content:    `{"browser_session_id":"session","categories":[{"entries":[{"origin":"https://private.example","path":"/` + canary + `","message_hash":"` + canary + `"}]}]}`,
+			},
+		}
+	}
+	const canary = "browser-diagnostics-private-canary-9f4a2d7c"
+	request := messages(canary)
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	for _, preview := range []string{
+		formatMessagesForLog(request),
+		diagnosticMessagesPreview(cfg, request),
+	} {
+		if strings.Contains(preview, canary) || !strings.Contains(strings.ToLower(preview), "redact") {
+			t.Fatalf("browser diagnostics leaked through log/trace projection: %s", preview)
+		}
+	}
+	firstHash := safeJSONHash(traceCaptureSettings{}, diagnosticPromptHashMessages(request))
+	secondHash := safeJSONHash(
+		traceCaptureSettings{},
+		diagnosticPromptHashMessages(messages("browser-diagnostics-private-canary-other")),
+	)
+	if firstHash == "" || firstHash != secondHash {
+		t.Fatalf("protected diagnostics prompt hashes differ: %q != %q", firstHash, secondHash)
+	}
+	projected, err := json.Marshal(diagnosticPromptHashMessages(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(projected, []byte(canary)) || !bytes.Contains(projected, []byte("protected_result")) {
+		t.Fatalf("diagnostics prompt-hash projection is unsafe: %s", projected)
+	}
+	content, reasoning, sensitive := diagnosticLLMResponseContent(&providers.LLMResponse{
+		Content: "diagnostics path " + canary, Reasoning: "diagnostics hash " + canary,
+	}, request)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("diagnostics follow-up projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+}
+
 func TestPendingProtectedToolCallIDReuseFailsClosed(t *testing.T) {
 	const canary = "pending-reused-fill-result-canary-54eb7e0c"
 	messages := []providers.Message{
