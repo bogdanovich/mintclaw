@@ -6,13 +6,6 @@ type turnAbortController struct {
 	events runtimeEventEmitter
 }
 
-func (al *AgentLoop) turnAbortController() *turnAbortController {
-	if al == nil {
-		return nil
-	}
-	return &turnAbortController{events: al.runtimeEventEmitter()}
-}
-
 func (c *turnAbortController) abortTurn(ts *turnState) (turnResult, error) {
 	if ts == nil {
 		return turnResult{status: TurnEndStatusAborted}, nil

@@ -791,6 +791,10 @@ Implementation sequence:
     isolated roots and restart-only lifecycle. Delete the unused personal
     profile path, its policy switches, and its storage-cutover plan; keep the
     current hot-reloadable gateway workspace lifecycle explicit.
+30. Delete the single-implementation `turnRuntimeHost` callback interface and
+    its nil-safe pass-through wrappers. The turn runner retains process and
+    spool-settlement lifecycle; in-turn abort, steering, filtering, events,
+    and final rendering use the immutable pipeline snapshot directly.
 
 Exit criteria:
 

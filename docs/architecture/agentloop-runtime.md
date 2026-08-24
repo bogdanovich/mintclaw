@@ -14,7 +14,6 @@ delegated to `Pipeline`.
 | `runtimeSessionClaim` | atomic session placeholder claim/release semantics shared by inbound workers and recovery | turn execution, routing, delivery |
 | `inboundMessageTurn` | normalized inbound route/session/model/dispatch envelope for one message | command handling or pipeline execution |
 | `turnRunner` | one runtime generation's turn lifecycle, config snapshot, and pipeline wiring | process reload policy or LLM/tool iteration mechanics |
-| `turnRuntimeHost` | narrow host callbacks needed by in-turn execution: runtime events, abort, steering ack/release, sensitive-data filtering, final reply rendering | LLM/tool iteration mechanics, active-turn registration, or pipeline phase policy |
 | `Pipeline` | context assembly, LLM calls, tool loops, steering injection during a turn, finalization | inbound bus scheduling or session claiming |
 
 ## Inbound Flow
@@ -53,18 +52,24 @@ selects the current `turnRunner`; that runner wraps the turn with lifecycle
 concerns and delegates turn progression to:
 
 ```go
-pipeline.runTurnLoop(ctx, turnCtx, ts, host)
+pipeline.runTurnLoop(ctx, turnCtx, ts)
 ```
 
 Code below that boundary should be considered turn execution and belongs in
 `Pipeline` or pipeline-owned helpers.
 
-Host-owned callbacks are exposed to the turn loop through `turnRuntimeHost`.
 `AgentLoop` constructs one runner and pipeline snapshot during initialization,
 then atomically replaces the runner when config or injected runtime wiring
 changes. Admitted turns retain their original runner; new turns use the new
 generation. This avoids rebuilding dependency bags for every user and child
 turn without allowing a reload to mutate an in-flight pipeline.
+
+In-turn events, aborts, steering polls, sensitive-data filtering, and final
+render policy use that pipeline snapshot directly. `turnRunner` calls
+`AgentLoop` only for the process lifecycle it actually owns: turn admission,
+active-turn registration, context publication for tools, and inbound spool
+settlement. There is no single-implementation callback interface between the
+runner and pipeline.
 
 Config-derived turn behavior reads that runner-owned `Cfg` snapshot directly.
 It does not pass through policy interfaces for model selection, retries,
