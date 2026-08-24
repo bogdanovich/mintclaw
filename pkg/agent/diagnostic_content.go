@@ -242,30 +242,10 @@ func diagnosticLLMResponseContent(
 	if diagnosticToolCallsContainSensitiveEvidence(response.ToolCalls) ||
 		diagnosticContentContainsArtifactReference(response.Content) ||
 		diagnosticContentContainsArtifactReference(reasoning) ||
-		diagnosticMessagesEndWithSensitiveResult(requestMessages) {
+		diagnosticCurrentTurnContainsSensitiveEvidence(requestMessages) {
 		return "", "", true
 	}
 	return response.Content, reasoning, false
-}
-
-func diagnosticMessagesEndWithSensitiveResult(messages []providers.Message) bool {
-	if len(messages) == 0 {
-		return false
-	}
-	classifications := diagnosticMessageClassifications(messages)
-	for index := len(messages) - 1; index >= 0; index-- {
-		message := messages[index]
-		if diagnosticSyntheticInterruptMessage(message) {
-			continue
-		}
-		if message.Role != "tool" {
-			break
-		}
-		if classifications[index].sensitive {
-			return true
-		}
-	}
-	return false
 }
 
 func diagnosticMessagesContainSensitiveEvidence(messages []providers.Message) bool {
@@ -275,6 +255,28 @@ func diagnosticMessagesContainSensitiveEvidence(messages []providers.Message) bo
 		}
 	}
 	return false
+}
+
+func diagnosticCurrentTurnContainsSensitiveEvidence(messages []providers.Message) bool {
+	start := 0
+	for index, message := range messages {
+		if diagnosticTurnBoundaryMessage(message) {
+			start = index
+		}
+	}
+	return diagnosticMessagesContainSensitiveEvidence(messages[start:])
+}
+
+func diagnosticTurnBoundaryMessage(message providers.Message) bool {
+	if message.Role != "user" {
+		return false
+	}
+	if message.PromptLayer == "" && message.PromptSlot == "" && message.PromptSource == "" {
+		return true
+	}
+	return message.PromptLayer == string(PromptLayerTurn) &&
+		message.PromptSlot == string(PromptSlotMessage) &&
+		message.PromptSource == string(PromptSourceUserMessage)
 }
 
 func diagnosticSyntheticInterruptMessage(message providers.Message) bool {

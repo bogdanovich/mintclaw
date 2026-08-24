@@ -510,6 +510,47 @@ func TestBrowserDiagnosticsResultIsProtectedAcrossDiagnosticProjections(t *testi
 	if !sensitive || content != "" || reasoning != "" {
 		t.Fatalf("diagnostics follow-up projection = (%q, %q, %v)", content, reasoning, sensitive)
 	}
+
+	intervening := append([]providers.Message{userPromptMessage("inspect diagnostics", nil)}, request...)
+	intervening = append(intervening, steeringPromptMessage(providers.Message{
+		Role: "user", Content: "also explain what happened",
+	}))
+	content, reasoning, sensitive = diagnosticLLMResponseContent(&providers.LLMResponse{
+		Content: "diagnostics path " + canary, Reasoning: "diagnostics hash " + canary,
+	}, intervening)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("diagnostics steering projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+
+	intervening = append(intervening,
+		providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{{
+			ID: "safe-call", Name: "get_current_time",
+		}}},
+		providers.Message{Role: "tool", ToolCallID: "safe-call", Content: `{"time":"12:00"}`},
+	)
+	safeToolResponse := &providers.LLMResponse{
+		Content: "diagnostics path " + canary, Reasoning: "diagnostics hash " + canary,
+		ToolCalls: []providers.ToolCall{{
+			ID: "allowed-follow-up", Name: "get_current_time",
+			Arguments: map[string]any{"private_context": canary},
+		}},
+	}
+	content, reasoning, sensitive = diagnosticLLMResponseContent(safeToolResponse, intervening)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("diagnostics safe-tool projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+	toolPreview := diagnosticToolCallsPreviewWithSensitivity(cfg, safeToolResponse.ToolCalls, sensitive)
+	if strings.Contains(toolPreview, canary) || !strings.Contains(toolPreview, "arguments_redacted") {
+		t.Fatalf("diagnostics safe-tool arguments leaked: %s", toolPreview)
+	}
+
+	laterTurn := append(intervening, userPromptMessage("new unrelated turn", nil))
+	content, reasoning, sensitive = diagnosticLLMResponseContent(&providers.LLMResponse{
+		Content: "safe content", Reasoning: "safe reasoning",
+	}, laterTurn)
+	if sensitive || content != "safe content" || reasoning != "safe reasoning" {
+		t.Fatalf("later turn projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
 }
 
 func TestPendingProtectedToolCallIDReuseFailsClosed(t *testing.T) {

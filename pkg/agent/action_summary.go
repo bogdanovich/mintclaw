@@ -344,7 +344,7 @@ func tryRenderFinalTurnReply(
 	}
 
 	messages := buildFinalTurnRenderMessages(exec)
-	protected := fallback.protected || diagnosticMessagesContainSensitiveEvidence(messages)
+	protected := fallback.protected || diagnosticCurrentTurnContainsSensitiveEvidence(messages)
 	instruction := buildFinalTurnRenderInstruction(exec)
 	messages = append(messages, providers.Message{
 		Role:    "user",
