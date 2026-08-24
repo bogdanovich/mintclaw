@@ -817,6 +817,10 @@ Implementation sequence:
     accessors, the runtime-event adapter factory, and the unused synchronous
     delivery factory/pass-through; preserve nil handling at actual call
     boundaries without creating alternate owners.
+36. Complete the planned Web session-contract compatibility reset. Delete the
+    one-release `session.dm_scope` response alias and PUT/PATCH translator;
+    emit and accept only `session.dimensions`, with removed fields rejected by
+    current-schema validation.
 
 Exit criteria:
 
