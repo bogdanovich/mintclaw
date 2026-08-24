@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -152,7 +151,7 @@ func TestFileRegistryRejectsNonCurrentBrowserSchema(t *testing.T) {
 	}
 }
 
-func TestFileRegistryQuarantinesApprovedNodeWithStoredBrowserSchemaDrift(t *testing.T) {
+func TestFileRegistryRejectsApprovedNodeWithStoredBrowserSchemaDrift(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	registry, err := NewFileRegistry(path, 4)
 	if err != nil {
@@ -175,7 +174,7 @@ func TestFileRegistryQuarantinesApprovedNodeWithStoredBrowserSchemaDrift(t *test
 	for _, descriptor := range descriptors {
 		commands = append(commands, descriptor.Name)
 	}
-	approved, err := registry.Approve(pairing.Node.ID, PairingApproval{
+	_, err = registry.Approve(pairing.Node.ID, PairingApproval{
 		Aliases: []Alias{"browser-node"}, AllowedCommands: commands, At: 2,
 	})
 	if err != nil {
@@ -209,28 +208,8 @@ func TestFileRegistryQuarantinesApprovedNodeWithStoredBrowserSchemaDrift(t *test
 		t.Fatal(err)
 	}
 
-	reloaded, err := NewFileRegistry(path, 4)
-	if err != nil {
-		t.Fatalf("NewFileRegistry() error = %v", err)
-	}
-	registration, found, err := reloaded.Registration(pairing.Node.ID)
-	if err != nil || !found {
-		t.Fatalf("Registration() = %#v, %t, %v", registration, found, err)
-	}
-	if registration.Snapshot.State != StateIncompatible ||
-		registration.Snapshot.CatalogHash == registration.ApprovedCatalogHash ||
-		registration.ApprovedCatalogHash != record.ApprovedCatalogHash ||
-		!slices.Equal(registration.AllowedCommands, approved.AllowedCommands) {
-		t.Fatalf(
-			"migrated state = %q, catalog = %q, approved = %q, commands = %#v",
-			registration.Snapshot.State,
-			registration.Snapshot.CatalogHash,
-			registration.ApprovedCatalogHash,
-			registration.AllowedCommands,
-		)
-	}
-	if err = registration.Snapshot.Validate(); err != nil {
-		t.Fatalf("migrated snapshot error = %v", err)
+	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+		t.Fatalf("NewFileRegistry() error = %v, want ErrInvalidCapability", err)
 	}
 }
 
@@ -366,7 +345,7 @@ func TestFileRegistryApprovesOnlyAdvertisedCommands(t *testing.T) {
 	}
 }
 
-func TestFileRegistryCompactsPrettyPrintedBrowserSchemasBeforeValidation(t *testing.T) {
+func TestFileRegistryPersistsMaximumBrowserCatalogForDirectReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	registry, err := NewFileRegistry(path, 4)
 	if err != nil {

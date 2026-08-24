@@ -517,7 +517,7 @@ func (registry *FileRegistry) pendingCountLocked() int {
 
 func (registry *FileRegistry) save(records map[string]registryRecord) error {
 	document := registryDocument{Version: registryFileVersion, Records: records}
-	data, err := json.MarshalIndent(document, "", "  ")
+	data, err := json.Marshal(document)
 	if err != nil {
 		return fmt.Errorf("encode node registry: %w", err)
 	}
@@ -568,16 +568,9 @@ func (registry *FileRegistry) load() error {
 		if id != string(record.Snapshot.ID) {
 			return fmt.Errorf("node registry key %q does not match record id %q", id, record.Snapshot.ID)
 		}
-		if err := compactStoredCommandSchemas(&record.Snapshot); err != nil {
-			return fmt.Errorf("validate node registry record %q: %w", id, err)
-		}
-		if err := upgradeStoredBrowserSchemas(&record); err != nil {
-			return fmt.Errorf("validate node registry record %q: %w", id, err)
-		}
 		if err := record.Snapshot.Validate(); err != nil {
 			return fmt.Errorf("validate node registry record %q: %w", id, err)
 		}
-		document.Records[id] = record
 		if record.Snapshot.State == StatePendingPairing &&
 			(record.RequestedRole != "companion" || record.RequestedAt <= 0) {
 			return fmt.Errorf("validate pending node registry record %q: missing pairing identity", id)
@@ -598,78 +591,6 @@ func (registry *FileRegistry) load() error {
 	}
 	registry.records = document.Records
 	return nil
-}
-
-func upgradeStoredBrowserSchemas(record *registryRecord) error {
-	if record == nil || record.Snapshot.State == StatePendingPairing {
-		return nil
-	}
-	changed := false
-	for index := range record.Snapshot.Catalog.Commands {
-		descriptor := &record.Snapshot.Catalog.Commands[index]
-		if !IsBrowserCommand(descriptor.Name) || len(descriptor.BrowserProfiles) == 0 {
-			continue
-		}
-		candidate := *descriptor
-		candidate.InputSchema = BrowserCommandInputSchema(candidate.Name, candidate.BrowserProfiles)
-		candidate.OutputSchema = BrowserCommandOutputSchema(candidate.Name, candidate.BrowserProfiles)
-		if err := candidate.validateBrowserProfiles(); err != nil {
-			return err
-		}
-		actualInput, inputErr := canonicalJSON(descriptor.InputSchema)
-		expectedInput, expectedInputErr := canonicalJSON(candidate.InputSchema)
-		actualOutput, outputErr := canonicalJSON(descriptor.OutputSchema)
-		expectedOutput, expectedOutputErr := canonicalJSON(candidate.OutputSchema)
-		if inputErr != nil || expectedInputErr != nil || outputErr != nil || expectedOutputErr != nil {
-			return fmt.Errorf("%w: invalid stored browser schema", ErrInvalidCapability)
-		}
-		if bytes.Equal(actualInput, expectedInput) && bytes.Equal(actualOutput, expectedOutput) {
-			continue
-		}
-		descriptor.InputSchema = candidate.InputSchema
-		descriptor.OutputSchema = candidate.OutputSchema
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	catalogHash, err := record.Snapshot.Catalog.Hash()
-	if err != nil {
-		return err
-	}
-	record.Snapshot.CatalogHash = catalogHash
-	if record.Snapshot.State != StateRevoked {
-		record.Snapshot.State = StateIncompatible
-		record.Snapshot.DisconnectReason = "stored browser contract changed; companion must reconnect"
-	}
-	return nil
-}
-
-func compactStoredCommandSchemas(snapshot *Snapshot) error {
-	if snapshot == nil {
-		return fmt.Errorf("%w: node snapshot is unavailable", ErrInvalidNode)
-	}
-	for index := range snapshot.Catalog.Commands {
-		descriptor := &snapshot.Catalog.Commands[index]
-		input, err := compactStoredSchema("input", descriptor.InputSchema)
-		if err != nil {
-			return err
-		}
-		output, err := compactStoredSchema("output", descriptor.OutputSchema)
-		if err != nil {
-			return err
-		}
-		descriptor.InputSchema, descriptor.OutputSchema = input, output
-	}
-	return nil
-}
-
-func compactStoredSchema(label string, schema json.RawMessage) (json.RawMessage, error) {
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, schema); err != nil {
-		return nil, fmt.Errorf("%w: invalid %s schema", ErrInvalidCapability, label)
-	}
-	return append(json.RawMessage(nil), compact.Bytes()...), nil
 }
 
 func normalizeAliases(aliases []Alias) ([]Alias, error) {
