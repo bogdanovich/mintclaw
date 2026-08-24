@@ -14,22 +14,6 @@ type modelExecutionManager struct {
 	providerFactory func() modelProviderFactory
 }
 
-func (al *AgentLoop) modelExecutionManager() *modelExecutionManager {
-	if al == nil {
-		return nil
-	}
-	if al.modelExecution == nil {
-		al.modelExecution = &modelExecutionManager{
-			configProvider: al.GetConfig,
-			state:          al.state,
-			providerFactory: func() modelProviderFactory {
-				return al.providerFactory
-			},
-		}
-	}
-	return al.modelExecution
-}
-
 func (m *modelExecutionManager) config() *config.Config {
 	if m == nil {
 		return nil

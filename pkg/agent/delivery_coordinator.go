@@ -60,7 +60,7 @@ func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery 
 	}
 	return &asyncToolCompletionDelivery{
 		currentConfig: al.GetConfig,
-		events:        al.runtimeEventEmitter(),
+		events:        &agentRuntimeEventEmitter{events: al.runtimeEvents},
 		deliverToUser: al.deliverToolResultToUserWithScopes,
 		synthesizeCompletion: func(ctx context.Context, input AsyncCompletionInput) (string, error) {
 			return al.processAsyncCompletionWithDelivery(ctx, input, false)

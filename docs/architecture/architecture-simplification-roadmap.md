@@ -812,6 +812,11 @@ Implementation sequence:
     `AgentLoop.Run` and remains correctly run-scoped. Delete the test-only
     `AgentLoop` reasoning component factory and pass-through façade; test the
     pipeline-owned reasoning component directly.
+35. Make constructor-owned active-request, background-compaction, and
+    model-execution components explicit. Delete their lazy `AgentLoop`
+    accessors, the runtime-event adapter factory, and the unused synchronous
+    delivery factory/pass-through; preserve nil handling at actual call
+    boundaries without creating alternate owners.
 
 Exit criteria:
 

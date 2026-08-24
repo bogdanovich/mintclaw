@@ -680,34 +680,9 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 	return defaultAgent.Provider, true
 }
 
-func (al *AgentLoop) activeRequestCounter() *activeRequestCounter {
-	if al == nil {
-		return nil
-	}
-	if al.activeRequests == nil {
-		al.activeRequests = newActiveRequestCounter()
-	}
-	return al.activeRequests
-}
-
-func (al *AgentLoop) backgroundCompactionRunner() *backgroundCompactionRunner {
-	if al == nil {
-		return nil
-	}
-	if al.compactionRunner == nil {
-		al.compactionRunner = &backgroundCompactionRunner{
-			contextManager: func() ContextManager {
-				return al.contextManager
-			},
-		}
-	}
-	return al.compactionRunner
-}
-
 func (al *AgentLoop) waitForActiveRequests(ctx context.Context, timeout time.Duration) bool {
-	counter := al.activeRequestCounter()
-	if counter == nil {
+	if al == nil || al.activeRequests == nil {
 		return true
 	}
-	return counter.wait(ctx, timeout)
+	return al.activeRequests.wait(ctx, timeout)
 }

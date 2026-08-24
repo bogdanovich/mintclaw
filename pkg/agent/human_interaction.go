@@ -161,7 +161,7 @@ func (al *AgentLoop) observeInteractionEvent(
 		record.Status == interactions.StatusFailed) {
 		al.dismissTerminalInteractionToolFeedback(record)
 	}
-	al.runtimeEventEmitter().emitEvent(kind, HookMeta{
+	al.emitEvent(kind, HookMeta{
 		TraceScope: runtimeevents.NewTraceScope(workspace, record.Origin.TurnID),
 		AgentID:    record.Route.AgentID,
 		SessionKey: record.Route.SessionKey,
