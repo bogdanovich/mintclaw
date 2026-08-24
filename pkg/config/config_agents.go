@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
-	"slices"
 	"strings"
 	"time"
 )
@@ -95,9 +94,8 @@ type DispatchSelector struct {
 }
 
 type SessionConfig struct {
-	Dimensions    []string                `json:"dimensions,omitempty"`
+	Dimensions    []string                `json:"dimensions"`
 	IdentityLinks map[string][]string     `json:"identity_links,omitempty"`
-	DmScope       string                  `json:"dm_scope,omitempty"`
 	Lifecycle     *SessionLifecycleConfig `json:"lifecycle,omitempty"`
 }
 
@@ -152,46 +150,6 @@ func (s *SessionLifecycleConfig) Validate() error {
 	default:
 		return fmt.Errorf("unsupported session.lifecycle.strategy %q", s.Strategy)
 	}
-}
-
-// ApplyDmScope translates the user-facing dm_scope value into the internal
-// dimensions array that the routing layer consumes. It is a no-op when
-// DmScope is empty or when Dimensions is already set (explicit Dimensions
-// take precedence over the derived value).
-func (s *SessionConfig) ApplyDmScope() {
-	if s.DmScope == "" || len(s.Dimensions) > 0 {
-		return
-	}
-	switch s.DmScope {
-	case "per-channel-peer":
-		s.Dimensions = []string{"chat", "sender"}
-	case "per-channel":
-		s.Dimensions = []string{"chat"}
-	case "per-peer":
-		s.Dimensions = []string{"sender"}
-	case "global":
-		s.Dimensions = nil
-	}
-}
-
-// DeriveDmScope sets DmScope based on Dimensions when DmScope is empty.
-// This handles legacy/fresh configs that only have explicit Dimensions
-// without a corresponding DmScope value, ensuring the API response always
-// includes a dm_scope that matches the actual runtime dimensions.
-func (s *SessionConfig) DeriveDmScope() {
-	if s.DmScope != "" || len(s.Dimensions) == 0 {
-		return
-	}
-	switch {
-	case slices.Equal(s.Dimensions, []string{"chat", "sender"}):
-		s.DmScope = "per-channel-peer"
-	case slices.Equal(s.Dimensions, []string{"chat"}):
-		s.DmScope = "per-channel"
-	case slices.Equal(s.Dimensions, []string{"sender"}):
-		s.DmScope = "per-peer"
-	}
-	// Dimensions not matching any known scope mapping (custom array)
-	// is fine — DmScope stays empty and the UI can handle it.
 }
 
 // RoutingConfig controls the intelligent model routing feature.

@@ -767,6 +767,10 @@ Implementation sequence:
 23. Make `model_list[].enabled` the sole model-activation contract. Delete
     API-key and `local-model` inference, persist the boolean explicitly, and
     carry it through every model creation and multi-key expansion path.
+24. Make `session.dimensions` the sole persisted session-partition contract.
+    Delete the bidirectional scope synchronization machinery, keep only a
+    one-release Web boundary adapter, and remove that adapter at the next
+    coordinated compatibility reset.
 
 Exit criteria:
 

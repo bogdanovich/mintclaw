@@ -21,7 +21,7 @@ export interface CoreConfigForm {
   summarizeMessageThreshold: string
   summarizeTokenPercent: string
   turnProfile: TurnProfileForm
-  dmScope: string
+  sessionDimensions: string[]
   heartbeatEnabled: boolean
   heartbeatInterval: string
   devicesEnabled: boolean
@@ -73,34 +73,38 @@ export interface LauncherForm {
   dashboardPasswordConfirm: string
 }
 
-export const DM_SCOPE_OPTIONS = [
+export const SESSION_DIMENSION_PRESETS = [
   {
-    value: "per-channel-peer",
-    labelKey: "pages.config.session_scope_per_channel_peer",
-    labelDefault: "Per Channel + Peer",
-    descKey: "pages.config.session_scope_per_channel_peer_desc",
-    descDefault: "Separate context for each user in each channel.",
+    value: "chat-sender",
+    dimensions: ["chat", "sender"],
+    labelKey: "pages.config.session_dimensions_chat_sender",
+    labelDefault: "Chat + Sender",
+    descKey: "pages.config.session_dimensions_chat_sender_desc",
+    descDefault: "Separate context for each sender in each chat.",
   },
   {
-    value: "per-channel",
-    labelKey: "pages.config.session_scope_per_channel",
-    labelDefault: "Per Channel",
-    descKey: "pages.config.session_scope_per_channel_desc",
-    descDefault: "One shared context per channel.",
+    value: "chat",
+    dimensions: ["chat"],
+    labelKey: "pages.config.session_dimensions_chat",
+    labelDefault: "Chat",
+    descKey: "pages.config.session_dimensions_chat_desc",
+    descDefault: "One shared context per chat.",
   },
   {
-    value: "per-peer",
-    labelKey: "pages.config.session_scope_per_peer",
-    labelDefault: "Per Peer",
-    descKey: "pages.config.session_scope_per_peer_desc",
-    descDefault: "One context per user across channels.",
+    value: "sender",
+    dimensions: ["sender"],
+    labelKey: "pages.config.session_dimensions_sender",
+    labelDefault: "Sender",
+    descKey: "pages.config.session_dimensions_sender_desc",
+    descDefault: "One context per sender across chats.",
   },
   {
-    value: "global",
-    labelKey: "pages.config.session_scope_global",
-    labelDefault: "Global",
-    descKey: "pages.config.session_scope_global_desc",
-    descDefault: "All messages share one global context.",
+    value: "route",
+    dimensions: [],
+    labelKey: "pages.config.session_dimensions_route",
+    labelDefault: "Route",
+    descKey: "pages.config.session_dimensions_route_desc",
+    descDefault: "Share context within the same agent, channel, and account.",
   },
 ] as const
 
@@ -133,7 +137,7 @@ export const EMPTY_FORM: CoreConfigForm = {
     toolsMode: "default",
     toolsAllowText: "",
   },
-  dmScope: "per-channel-peer",
+  sessionDimensions: ["chat"],
   heartbeatEnabled: true,
   heartbeatInterval: "30",
   devicesEnabled: false,
@@ -166,6 +170,13 @@ function asRecord(value: unknown): JsonRecord {
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : ""
+}
+
+function asStringArray(value: unknown, fallback: string[]): string[] {
+  if (!Array.isArray(value)) {
+    return [...fallback]
+  }
+  return value.filter((item): item is string => typeof item === "string")
 }
 
 function asBool(value: unknown): boolean {
@@ -362,7 +373,10 @@ export function buildFormFromConfig(config: unknown): CoreConfigForm {
       EMPTY_FORM.summarizeTokenPercent,
     ),
     turnProfile: mapTurnProfile(defaults.turn_profile),
-    dmScope: asString(session.dm_scope) || EMPTY_FORM.dmScope,
+    sessionDimensions: asStringArray(
+      session.dimensions,
+      EMPTY_FORM.sessionDimensions,
+    ),
     heartbeatEnabled:
       heartbeat.enabled === undefined
         ? EMPTY_FORM.heartbeatEnabled

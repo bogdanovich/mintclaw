@@ -628,7 +628,7 @@ mintclaw agent -m "Hello"
     }
   },
   "session": {
-    "dm_scope": "per-channel-peer"
+    "dimensions": ["chat", "sender"]
   },
   "providers": {
     "openrouter": {

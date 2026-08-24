@@ -21,7 +21,7 @@ type Config struct {
 	Version     int               `json:"version"                 yaml:"-"`
 	Isolation   IsolationConfig   `json:"isolation,omitempty"     yaml:"-"`
 	Agents      AgentsConfig      `json:"agents"                  yaml:"-"`
-	Session     SessionConfig     `json:"session,omitempty"       yaml:"-"`
+	Session     SessionConfig     `json:"session"                 yaml:"-"`
 	Diagnostics DiagnosticsConfig `json:"diagnostics,omitempty"   yaml:"-"`
 	Tasks       TaskConfig        `json:"task_registry,omitempty" yaml:"-"`
 	Execution   ExecutionConfig   `json:"execution,omitempty"     yaml:"-"`
@@ -112,24 +112,4 @@ type BuildInfo struct {
 	GitCommit string `json:"git_commit"`
 	BuildTime string `json:"build_time"`
 	GoVersion string `json:"go_version"`
-}
-
-// MarshalJSON implements custom JSON marshaling for Config
-// to omit providers section when empty and session when empty.
-func (c *Config) MarshalJSON() ([]byte, error) {
-	type Alias Config
-	aux := &struct {
-		Session *SessionConfig `json:"session,omitempty"`
-		*Alias
-	}{
-		Alias: (*Alias)(c),
-	}
-
-	if len(c.Session.Dimensions) > 0 || len(c.Session.IdentityLinks) > 0 ||
-		c.Session.DmScope != "" || c.Session.Lifecycle != nil {
-		sessionCfg := c.Session
-		aux.Session = &sessionCfg
-	}
-
-	return json.Marshal(aux)
 }

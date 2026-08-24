@@ -199,8 +199,6 @@ func (r *Repository) ResetToDefaults() (Snapshot, error) {
 		}
 
 		cfg := DefaultConfig()
-		cfg.Session.ApplyDmScope()
-		cfg.Session.DeriveDmScope()
 		if securityErr := cfg.SecurityCopyForReplacement(r.path, current); securityErr != nil {
 			return fmt.Errorf("preserve security config: %w", securityErr)
 		}
@@ -295,6 +293,7 @@ func marshalConfigDocuments(cfg *Config) (configDocuments, error) {
 			CurrentVersion,
 		)
 	}
+	copyCfg.Session.Dimensions = append([]string{}, cfg.Session.Dimensions...)
 	copyCfg.Channels = make(ChannelsConfig, len(cfg.Channels))
 	for name, channel := range cfg.Channels {
 		if channel == nil {
