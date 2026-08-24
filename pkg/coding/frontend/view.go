@@ -15,6 +15,7 @@ var (
 	ErrTranscriptPagingUnsupported = errors.New("coding transcript paging is unsupported")
 	ErrTranscriptHistoryChanged    = errors.New("coding transcript history changed after opening")
 	ErrWorkspaceRefreshUnsupported = errors.New("coding workspace refresh is unsupported")
+	ErrCommandUnsupported          = errors.New("coding controller command is not supported")
 )
 
 type Activity string

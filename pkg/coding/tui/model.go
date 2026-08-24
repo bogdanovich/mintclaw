@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -35,6 +36,13 @@ type SubscriptionErrorMsg struct {
 }
 
 type CommandErrorMsg struct {
+	Operation string
+	Err       error
+}
+
+// CommandResultMsg completes one typed slash command. Authoritative success
+// state arrives through the ordinary current-view subscription.
+type CommandResultMsg struct {
 	Operation string
 	Err       error
 }
@@ -84,6 +92,7 @@ type Model struct {
 	expandedToolID      string
 	refreshingWorkspace bool
 	workspaceNotice     string
+	commandPanel        commandPanel
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -207,6 +216,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case CommandErrorMsg:
 		m.err = message.Err
 		return m, nil
+	case CommandResultMsg:
+		if message.Err != nil {
+			m.err = slashCommandError(message.Operation, message.Err)
+		} else {
+			m.err = nil
+		}
+		return m, nil
 	case SubmitResultMsg:
 		m.submitting = false
 		if message.Err != nil {
@@ -266,7 +282,11 @@ func (m *Model) View() string {
 	if m.height <= 4 {
 		return m.composer.View() + "\n" + clipLine(status, m.width)
 	}
-	return m.viewport.View() + "\n" + m.composer.View() + "\n" + clipLine(status, m.width)
+	body := m.viewport.View()
+	if m.commandPanel != commandPanelNone {
+		body = m.commandPanelView()
+	}
+	return body + "\n" + m.composer.View() + "\n" + clipLine(status, m.width)
 }
 
 func (m *Model) ComposerValue() string {
@@ -389,6 +409,12 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	switch message.String() {
+	case "esc":
+		if m.commandPanel != commandPanelNone {
+			m.commandPanel = commandPanelNone
+			m.err = nil
+			return true, nil
+		}
 	case "ctrl+r":
 		if activeWork(m.snapshot.Activity) || m.initialTurnPending {
 			m.workspaceNotice = "repository refresh is available when idle"
@@ -420,6 +446,10 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.err = errors.New("enter a coding prompt; use Ctrl+J for a new line")
 			return true, nil
 		}
+		if handled, command := m.handleSlashCommand(prompt); handled {
+			return true, command
+		}
+		prompt = unescapeSlashPrompt(prompt)
 		m.submitting = true
 		m.err = nil
 		m.admitInitialTurn()
@@ -619,6 +649,19 @@ func commandCmd(operation string, command func(context.Context) error) tea.Cmd {
 			return CommandErrorMsg{Operation: operation, Err: err}
 		}
 		return nil
+	}
+}
+
+func typedCommandCmd(
+	ctx context.Context,
+	operation string,
+	command func(context.Context) error,
+) tea.Cmd {
+	return func() tea.Msg {
+		if command == nil {
+			return CommandResultMsg{Operation: operation, Err: fmt.Errorf("coding controller is unavailable")}
+		}
+		return CommandResultMsg{Operation: operation, Err: command(ctx)}
 	}
 }
 

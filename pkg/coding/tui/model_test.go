@@ -29,6 +29,13 @@ type fakeController struct {
 	refreshes    atomic.Int32
 	refreshErr   error
 	refreshState *codingworkspace.Snapshot
+	compacts     atomic.Int32
+	renames      atomic.Int32
+	newThreads   atomic.Int32
+	compactErr   error
+	renameErr    error
+	newThreadErr error
+	renameTitles []string
 }
 
 func (f *fakeController) Submit(_ context.Context, prompt string) error {
@@ -65,9 +72,30 @@ func (f *fakeController) HardCancel(context.Context) error {
 	f.hardCancels.Add(1)
 	return nil
 }
-func (f *fakeController) Compact(context.Context) error        { return nil }
-func (f *fakeController) Rename(context.Context, string) error { return nil }
-func (f *fakeController) NewThread(context.Context) error      { return nil }
+
+func (f *fakeController) Compact(context.Context) error {
+	f.compacts.Add(1)
+	if f.compactErr != nil {
+		return f.compactErr
+	}
+	f.CompactionStarted("", "manual", false)
+	f.CompactionCompleted("", "manual", 256, false, false)
+	return nil
+}
+
+func (f *fakeController) Rename(_ context.Context, title string) error {
+	f.renames.Add(1)
+	f.mu.Lock()
+	f.renameTitles = append(f.renameTitles, title)
+	f.mu.Unlock()
+	return f.renameErr
+}
+
+func (f *fakeController) NewThread(context.Context) error {
+	f.newThreads.Add(1)
+	return f.newThreadErr
+}
+
 func (f *fakeController) Close(context.Context) error {
 	f.closes.Add(1)
 	return nil

@@ -1386,6 +1386,9 @@ Done when:
 
 Dependencies: P4.2, P4.3
 
+Implementation evidence:
+[`local-coding-agent-p4-commands-help.md`](local-coding-agent-p4-commands-help.md)
+
 Scope:
 
 - Add discoverable commands for help, new thread, status, model, diff, compact,
@@ -1397,6 +1400,11 @@ Scope:
   retain command-specific mirrors of runtime state.
 - Apply command results through the same current-view subscription used by
   ordinary streaming, tool, workspace, and compaction updates.
+- Do not invent thread-lifecycle persistence in the terminal layer. P4.5 must
+  surface actionable typed-command errors where the native controller does not
+  yet implement rename or in-place controller switching; P6.1 owns durable
+  rename, while new-thread guidance reuses `mintclaw code` until switching is
+  separately admitted.
 
 Done when:
 
@@ -1405,6 +1413,8 @@ Done when:
 - `/compact` invokes the real compaction lifecycle, not a synthetic prompt.
 - Slow/coalesced presentation updates converge to the command result visible
   in the authoritative current view.
+- Unsupported lifecycle commands identify the safe available workflow instead
+  of claiming success or mutating frontend-only metadata.
 
 #### P4 exit gate
 
