@@ -804,6 +804,10 @@ Implementation sequence:
     concrete runtime-generation owners. Preserve the context-runtime,
     steering, and media seams because they have real substitutes, and delete
     model-execution `AgentLoop` pass-throughs made unused by the concrete owner.
+33. Keep the semantic `PipelineInteractionServices` grouping, but make fallback
+    execution and asynchronous tool completion concrete. Delete their
+    single-implementation interfaces and the optional fallback-observer type
+    assertion; preserve interaction seams with real test substitutes.
 
 Exit criteria:
 

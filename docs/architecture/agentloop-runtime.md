@@ -88,6 +88,12 @@ interfaces because they have real substitutes. Background compaction, model
 execution, and terminal-task context use their concrete generation owners so
 the immutable pipeline snapshot remains explicit across reloads.
 
+Pipeline interaction wiring follows the same rule. Reasoning, feedback,
+synchronous delivery, hooks, and suspension retain interfaces because tests
+provide real substitutes. Fallback execution and asynchronous tool completion
+use their concrete generation owners; fallback-attempt observation is a direct
+capability rather than an optional type assertion.
+
 ## Session Claiming
 
 `runtimeSessionClaim` is the shared session ownership primitive. A claim stores
