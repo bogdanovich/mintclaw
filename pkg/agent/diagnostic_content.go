@@ -268,13 +268,8 @@ func diagnosticCurrentTurnContainsSensitiveEvidence(messages []providers.Message
 }
 
 func diagnosticTurnBoundaryMessage(message providers.Message) bool {
-	if message.Role != "user" {
-		return false
-	}
-	if message.PromptLayer == "" && message.PromptSlot == "" && message.PromptSource == "" {
-		return true
-	}
-	return message.PromptLayer == string(PromptLayerTurn) &&
+	return message.Role == "user" &&
+		message.PromptLayer == string(PromptLayerTurn) &&
 		message.PromptSlot == string(PromptSlotMessage) &&
 		message.PromptSource == string(PromptSourceUserMessage)
 }

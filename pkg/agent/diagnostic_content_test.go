@@ -544,6 +544,23 @@ func TestBrowserDiagnosticsResultIsProtectedAcrossDiagnosticProjections(t *testi
 		t.Fatalf("diagnostics safe-tool arguments leaked: %s", toolPreview)
 	}
 
+	hookAppended := append(intervening, providers.Message{
+		Role: "user", Content: "hook-added context without trusted prompt metadata",
+	})
+	content, reasoning, sensitive = diagnosticLLMResponseContent(safeToolResponse, hookAppended)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("hook-appended diagnostics projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+
+	roundTripped := make([]providers.Message, 0, len(hookAppended))
+	for _, message := range hookAppended {
+		roundTripped = append(roundTripped, providerVisibleMessage(message))
+	}
+	content, reasoning, sensitive = diagnosticLLMResponseContent(safeToolResponse, roundTripped)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("round-tripped diagnostics projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+
 	laterTurn := append(intervening, userPromptMessage("new unrelated turn", nil))
 	content, reasoning, sensitive = diagnosticLLMResponseContent(&providers.LLMResponse{
 		Content: "safe content", Reasoning: "safe reasoning",
@@ -779,7 +796,7 @@ func TestDiagnosticLLMResponseSuppressesImmediateNodeFileFollowUp(t *testing.T) 
 		t.Fatalf("follow-up response projection = (%q, %q, %v)", content, reasoning, sensitive)
 	}
 
-	request = append(request, providers.Message{Role: "user", Content: "new unrelated turn"})
+	request = append(request, userPromptMessage("new unrelated turn", nil))
 	content, reasoning, sensitive = diagnosticLLMResponseContent(&providers.LLMResponse{
 		Content: "safe content", Reasoning: "safe reasoning",
 	}, request)
@@ -818,7 +835,7 @@ func TestDiagnosticLLMResponseSuppressesNodeFileGracefulInterrupt(t *testing.T) 
 	content, reasoning, sensitive = diagnosticLLMResponseContent(&providers.LLMResponse{
 		Content: "safe content", Reasoning: "safe reasoning",
 	}, request)
-	if sensitive || content != "safe content" || reasoning != "safe reasoning" {
+	if !sensitive || content != "" || reasoning != "" {
 		t.Fatalf("untrusted lookalike projection = (%q, %q, %v)", content, reasoning, sensitive)
 	}
 }
