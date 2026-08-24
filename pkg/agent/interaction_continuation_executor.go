@@ -92,7 +92,7 @@ func (e *interactionContinuationExecutor) execute(
 		ts.opts.ApprovalGrant = nil
 		if outcome.Control == ToolControlBreak && llm.toolResponseDisposition == toolResponseHandled {
 			result, finalizeErr := pipeline.finalizeTurn(
-				turnCtx, ts, exec, llm, TurnEndStatusCompleted, "",
+				turnCtx, ts, exec, llm, TurnEndStatusCompleted, terminalContent{},
 			)
 			if finalizeErr != nil {
 				return result, TurnEndStatusError, finalizeErr

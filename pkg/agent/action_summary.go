@@ -328,9 +328,9 @@ func tryRenderFinalTurnReply(
 	cfg *config.Config,
 	ts *turnState,
 	exec *turnExecution,
-	fallback string,
-) (string, bool) {
-	fallback = strings.TrimSpace(fallback)
+	fallback terminalContent,
+) (terminalContent, bool) {
+	fallback.content = strings.TrimSpace(fallback.content)
 	if !finalTurnRenderEligibleForConfig(cfg, exec) {
 		return fallback, false
 	}
@@ -344,6 +344,7 @@ func tryRenderFinalTurnReply(
 	}
 
 	messages := buildFinalTurnRenderMessages(exec)
+	protected := fallback.protected || diagnosticMessagesContainSensitiveEvidence(messages)
 	instruction := buildFinalTurnRenderInstruction(exec)
 	messages = append(messages, providers.Message{
 		Role:    "user",
@@ -382,7 +383,7 @@ func tryRenderFinalTurnReply(
 			"messages_count":      len(messages),
 			"action_record_count": len(exec.actionLog),
 		})
-	return content, true
+	return terminalContent{content: content, protected: protected}, true
 }
 
 func renderFinalTurnReply(
@@ -390,13 +391,14 @@ func renderFinalTurnReply(
 	cfg *config.Config,
 	ts *turnState,
 	exec *turnExecution,
-	fallback string,
-) string {
+	fallback terminalContent,
+) terminalContent {
 	content, ok := tryRenderFinalTurnReply(ctx, cfg, ts, exec, fallback)
 	if ok {
 		return content
 	}
-	return strings.TrimSpace(fallback)
+	fallback.content = strings.TrimSpace(fallback.content)
+	return fallback
 }
 
 func shouldFinalizeAfterToolLoopWithRenderConfig(

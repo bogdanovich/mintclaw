@@ -102,17 +102,17 @@ func TestLLMCallOutcomeTerminalCandidate(t *testing.T) {
 	tests := []struct {
 		name    string
 		outcome LLMCallOutcome
-		want    string
+		want    terminalContent
 	}{
 		{
 			name:    "continue retains prior answer",
 			outcome: LLMCallOutcome{Control: ControlContinue},
-			want:    "retained answer",
+			want:    terminalContent{content: "retained answer", protected: true},
 		},
 		{
 			name:    "tool loop retains prior answer",
 			outcome: LLMCallOutcome{Control: ControlToolLoop},
-			want:    "retained answer",
+			want:    terminalContent{content: "retained answer", protected: true},
 		},
 		{
 			name: "terminal answer replaces prior answer",
@@ -120,7 +120,7 @@ func TestLLMCallOutcomeTerminalCandidate(t *testing.T) {
 				Control:      ControlBreak,
 				FinalContent: "replacement answer",
 			},
-			want: "replacement answer",
+			want: terminalContent{content: "replacement answer"},
 		},
 		{
 			name:    "empty terminal answer clears prior answer",
@@ -130,8 +130,9 @@ func TestLLMCallOutcomeTerminalCandidate(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := test.outcome.terminalCandidate("retained answer"); got != test.want {
-				t.Fatalf("terminal candidate = %q, want %q", got, test.want)
+			retained := terminalContent{content: "retained answer", protected: true}
+			if got := test.outcome.terminalCandidate(retained); got != test.want {
+				t.Fatalf("terminal candidate = %#v, want %#v", got, test.want)
 			}
 		})
 	}

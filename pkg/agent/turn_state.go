@@ -71,11 +71,16 @@ type LLMCallOutcome struct {
 	AbortCause            TurnAbortCause
 }
 
-func (o LLMCallOutcome) terminalCandidate(retained string) string {
+type terminalContent struct {
+	content   string
+	protected bool
+}
+
+func (o LLMCallOutcome) terminalCandidate(retained terminalContent) terminalContent {
 	if o.Control != ControlBreak {
 		return retained
 	}
-	return o.FinalContent
+	return terminalContent{content: o.FinalContent, protected: o.FinalContentProtected}
 }
 
 // ToolControl signals returned from ExecuteTools to drive tool loop iteration.
@@ -561,15 +566,10 @@ func (ts *turnState) currentIteration() int {
 	return ts.iteration
 }
 
-func (ts *turnState) setFinalContent(content string) {
+func (ts *turnState) setFinalContent(content string, protected bool) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.finalContent = content
-}
-
-func (ts *turnState) setFinalContentProtected(protected bool) {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	ts.finalContentProtected = protected
 }
 

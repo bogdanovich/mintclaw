@@ -36,7 +36,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 	turnStatus := TurnEndStatusCompleted
 	messages := exec.messages
 	maxMediaSize := p.maxMediaSize()
-	finalContent := ""
+	finalContent := terminalContent{}
 	mediaResolver := p.Context.MediaResolver
 	llm := newLLMIterationState(0)
 
@@ -177,14 +177,13 @@ func (p *Pipeline) runPreparedTurnLoop(
 				return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
 			}
 			// Ensure empty response falls back to DefaultResponse
-			if finalContent == "" {
-				finalContent = ts.opts.DefaultResponse
+			if finalContent.content == "" {
+				finalContent = terminalContent{content: ts.opts.DefaultResponse}
 			}
 			if p.continueWithPendingSubTurnResults(ts, exec) {
 				messages = exec.messages
 				continue
 			}
-			ts.setFinalContentProtected(llmOutcome.FinalContentProtected)
 			finalContent = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, finalContent)
 			result, finalizeErr := p.finalizeTurn(
 				turnCtx,
@@ -260,9 +259,9 @@ func (p *Pipeline) runPreparedTurnLoop(
 					suspendedInteractionID: toolOutcome.SuspendedInteractionID,
 				}, turnStatus, nil
 			case ToolControlHalt:
-				finalContent = toolOutcome.FinalContent
-				if strings.TrimSpace(finalContent) == "" {
-					finalContent = "The tool loop was stopped by runtime safety protection."
+				finalContent = terminalContent{content: toolOutcome.FinalContent}
+				if strings.TrimSpace(finalContent.content) == "" {
+					finalContent.content = "The tool loop was stopped by runtime safety protection."
 				}
 				result, finalizeErr := p.finalizeTurn(
 					turnCtx,
@@ -289,10 +288,10 @@ func (p *Pipeline) runPreparedTurnLoop(
 				// ExecuteTools returned ControlBreak. A handled tool response suppresses
 				// DefaultResponse; otherwise use outcome content when present.
 				if strings.TrimSpace(toolOutcome.FinalContent) != "" {
-					finalContent = toolOutcome.FinalContent
+					finalContent = terminalContent{content: toolOutcome.FinalContent}
 				}
 				if llm.toolResponseDisposition == toolResponseHandled {
-					finalContent = ""
+					finalContent = terminalContent{}
 				}
 				if p.continueWithPendingSubTurnResults(ts, exec) {
 					messages = exec.messages
@@ -321,11 +320,11 @@ func (p *Pipeline) runPreparedTurnLoop(
 		return result, turnStatus, abortErr
 	}
 
-	if finalContent == "" {
+	if finalContent.content == "" {
 		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
-			finalContent = toolLimitResponse
+			finalContent = terminalContent{content: toolLimitResponse}
 		} else {
-			finalContent = ts.opts.DefaultResponse
+			finalContent = terminalContent{content: ts.opts.DefaultResponse}
 		}
 	}
 	finalContent = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, finalContent)

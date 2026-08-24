@@ -41,6 +41,7 @@ type finalizationDelivery struct {
 // iteration-owned state out of the finalization phase.
 type FinalizationContext struct {
 	content          string
+	contentProtected bool
 	status           TurnEndStatus
 	disposition      finalResponseDisposition
 	modelName        string
@@ -59,7 +60,7 @@ func newFinalizationContext(
 	exec *turnExecution,
 	llm *LLMIterationState,
 	status TurnEndStatus,
-	content string,
+	terminal terminalContent,
 ) FinalizationContext {
 	_, inputTokens, outputTokens, totalTokens := ts.llmUsageTotals()
 	disposition := finalResponsePending
@@ -71,7 +72,7 @@ func newFinalizationContext(
 	if disposition == finalResponsePending && !ts.opts.NoHistory {
 		message := providers.Message{
 			Role:             "assistant",
-			Content:          content,
+			Content:          terminal.content,
 			ModelName:        exec.model.llmModelName,
 			ReasoningContent: responseReasoningContent(llm.response),
 			Deliverable:      taskresult.CloneDeliverable(exec.deliverable),
@@ -80,7 +81,8 @@ func newFinalizationContext(
 	}
 
 	return FinalizationContext{
-		content:          content,
+		content:          terminal.content,
+		contentProtected: terminal.protected,
 		status:           status,
 		disposition:      disposition,
 		modelName:        exec.model.llmModelName,
@@ -114,9 +116,9 @@ func (p *Pipeline) finalizeTurn(
 	exec *turnExecution,
 	llm *LLMIterationState,
 	status TurnEndStatus,
-	content string,
+	terminal terminalContent,
 ) (turnResult, error) {
-	finalization := newFinalizationContext(ts, exec, llm, status, content)
+	finalization := newFinalizationContext(ts, exec, llm, status, terminal)
 	return p.Finalize(turnCtx, ts, finalization)
 }
 
@@ -138,7 +140,7 @@ func (p *Pipeline) Finalize(
 	}
 
 	ts.setPhase(TurnPhaseFinalizing)
-	ts.setFinalContent(finalization.content)
+	ts.setFinalContent(finalization.content, finalization.contentProtected)
 	if finalization.historyMessage != nil {
 		finalMsg := *finalization.historyMessage
 		if writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, finalMsg); writeErr != nil {

@@ -268,6 +268,15 @@ func diagnosticMessagesEndWithSensitiveResult(messages []providers.Message) bool
 	return false
 }
 
+func diagnosticMessagesContainSensitiveEvidence(messages []providers.Message) bool {
+	for _, classification := range diagnosticMessageClassifications(messages) {
+		if classification.sensitive {
+			return true
+		}
+	}
+	return false
+}
+
 func diagnosticSyntheticInterruptMessage(message providers.Message) bool {
 	return message.PromptLayer == string(PromptLayerTurn) &&
 		message.PromptSlot == string(PromptSlotInterrupt) &&
