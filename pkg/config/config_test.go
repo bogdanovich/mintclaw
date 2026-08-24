@@ -2122,163 +2122,47 @@ func TestDefaultConfig_SessionDimensions(t *testing.T) {
 	}
 }
 
-func TestSessionConfig_ApplyDmScope(t *testing.T) {
-	tests := []struct {
-		name       string
-		dmScope    string
-		dimensions []string
-		want       []string
-	}{
-		{
-			name:    "per-channel-peer",
-			dmScope: "per-channel-peer",
-			want:    []string{"chat", "sender"},
-		},
-		{
-			name:    "per-channel",
-			dmScope: "per-channel",
-			want:    []string{"chat"},
-		},
-		{
-			name:    "per-peer",
-			dmScope: "per-peer",
-			want:    []string{"sender"},
-		},
-		{
-			name:    "global",
-			dmScope: "global",
-			want:    nil,
-		},
-		{
-			name:       "explicit dimensions take precedence",
-			dmScope:    "per-channel-peer",
-			dimensions: []string{"sender"},
-			want:       []string{"sender"},
-		},
-		{
-			name:    "empty dm_scope is no-op",
-			dmScope: "",
-			want:    nil,
-		},
-	}
+func TestSaveConfigPreservesSessionDimensions(t *testing.T) {
+	mustSetupSSHKey(t)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &SessionConfig{
-				DmScope:    tt.dmScope,
-				Dimensions: tt.dimensions,
+	for _, dimensions := range [][]string{{}, {"space", "topic"}} {
+		name := "empty"
+		if len(dimensions) > 0 {
+			name = strings.Join(dimensions, "-")
+		}
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			cfg := DefaultConfig()
+			cfg.Session.Dimensions = append([]string{}, dimensions...)
+			if err := SaveConfig(path, cfg); err != nil {
+				t.Fatalf("SaveConfig() error = %v", err)
 			}
-			s.ApplyDmScope()
-			if len(s.Dimensions) != len(tt.want) {
-				t.Fatalf("Dimensions = %v, want %v", s.Dimensions, tt.want)
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
 			}
-			for i, v := range tt.want {
-				if s.Dimensions[i] != v {
-					t.Errorf("Dimensions[%d] = %q, want %q", i, s.Dimensions[i], v)
-				}
+			if len(dimensions) == 0 && !strings.Contains(string(data), `"dimensions": []`) {
+				t.Fatalf("saved config does not contain explicit empty dimensions: %s", data)
+			}
+
+			loaded, err := LoadConfig(path)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if loaded.Session.Dimensions == nil ||
+				strings.Join(loaded.Session.Dimensions, ",") != strings.Join(dimensions, ",") {
+				t.Fatalf("Session.Dimensions = %v, want %v", loaded.Session.Dimensions, dimensions)
 			}
 		})
 	}
 }
 
-func TestSessionConfig_DeriveDmScope(t *testing.T) {
-	tests := []struct {
-		name       string
-		dimensions []string
-		dmScope    string
-		wantScope  string
-	}{
-		{
-			name:       "per-channel-peer from dimensions",
-			dimensions: []string{"chat", "sender"},
-			wantScope:  "per-channel-peer",
-		},
-		{
-			name:       "per-channel from dimensions",
-			dimensions: []string{"chat"},
-			wantScope:  "per-channel",
-		},
-		{
-			name:       "per-peer from dimensions",
-			dimensions: []string{"sender"},
-			wantScope:  "per-peer",
-		},
-		{
-			name:       "custom dimensions does not set scope",
-			dimensions: []string{"chat", "extra"},
-			wantScope:  "",
-		},
-		{
-			name:       "empty dimensions does not set scope",
-			dimensions: nil,
-			wantScope:  "",
-		},
-		{
-			name:       "existing dm_scope is not overwritten",
-			dimensions: []string{"chat", "sender"},
-			dmScope:    "per-channel",
-			wantScope:  "per-channel",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &SessionConfig{
-				DmScope:    tt.dmScope,
-				Dimensions: tt.dimensions,
-			}
-			s.DeriveDmScope()
-			if s.DmScope != tt.wantScope {
-				t.Errorf("DmScope = %q, want %q", s.DmScope, tt.wantScope)
-			}
-		})
-	}
-}
-
-func TestSessionConfig_ApplyDmScope_ClearsStaleDimensions(t *testing.T) {
-	// Simulates the PATCH handler scenario: dm_scope changed but stale
-	// dimensions remain from the old scope. After clearing dimensions,
-	// ApplyDmScope should re-derive from the new dm_scope.
-	tests := []struct {
-		name    string
-		dmScope string
-		want    []string
-	}{
-		{
-			name:    "per-channel-peer to per-channel",
-			dmScope: "per-channel",
-			want:    []string{"chat"},
-		},
-		{
-			name:    "per-channel-peer to per-peer",
-			dmScope: "per-peer",
-			want:    []string{"sender"},
-		},
-		{
-			name:    "per-channel-peer to global",
-			dmScope: "global",
-			want:    nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &SessionConfig{
-				DmScope:    tt.dmScope,
-				Dimensions: []string{"chat", "sender"}, // stale from per-channel-peer
-			}
-			// Simulate what the PATCH handler does: clear dimensions when dm_scope changes
-			s.Dimensions = nil
-			s.ApplyDmScope()
-			if len(s.Dimensions) != len(tt.want) {
-				t.Fatalf("Dimensions = %v, want %v", s.Dimensions, tt.want)
-			}
-			for i, v := range tt.want {
-				if s.Dimensions[i] != v {
-					t.Errorf("Dimensions[%d] = %q, want %q", i, s.Dimensions[i], v)
-				}
-			}
-		})
+func TestDecodeCurrentConfigRejectsPreviousSessionScopeField(t *testing.T) {
+	var cfg Config
+	err := DecodeCurrentConfig([]byte(`{"version":3,"session":{"dm_scope":"per-channel"}}`), &cfg)
+	if err == nil || !strings.Contains(err.Error(), "session.dm_scope") {
+		t.Fatalf("DecodeCurrentConfig() error = %v, want unknown session.dm_scope rejection", err)
 	}
 }
 

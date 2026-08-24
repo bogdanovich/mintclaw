@@ -5,10 +5,10 @@ import { useTranslation } from "react-i18next"
 
 import {
   type CoreConfigForm,
-  DM_SCOPE_OPTIONS,
   type LauncherForm,
   type MCPServerForm,
   type MCPServerType,
+  SESSION_DIMENSION_PRESETS,
   type TurnProfileForm,
   type TurnProfileMode,
 } from "@/components/config/form-model"
@@ -897,9 +897,15 @@ interface RuntimeSectionProps {
 
 export function RuntimeSection({ form, onFieldChange }: RuntimeSectionProps) {
   const { t } = useTranslation()
-  const selectedDmScopeOption = DM_SCOPE_OPTIONS.find(
-    (scope) => scope.value === form.dmScope,
+  const selectedSessionPreset = SESSION_DIMENSION_PRESETS.find(
+    (preset) =>
+      preset.dimensions.length === form.sessionDimensions.length &&
+      preset.dimensions.every(
+        (dimension, index) => dimension === form.sessionDimensions[index],
+      ),
   )
+  const selectedSessionValue =
+    selectedSessionPreset?.value ?? `custom:${form.sessionDimensions.join(",")}`
 
   return (
     <ConfigSectionCard title={t("pages.config.sections.runtime")}>
@@ -909,26 +915,33 @@ export function RuntimeSection({ form, onFieldChange }: RuntimeSectionProps) {
         layout="setting-row"
       >
         <Select
-          value={form.dmScope}
-          onValueChange={(value) => onFieldChange("dmScope", value)}
+          value={selectedSessionValue}
+          onValueChange={(value) => {
+            const preset = SESSION_DIMENSION_PRESETS.find(
+              (candidate) => candidate.value === value,
+            )
+            if (preset) {
+              onFieldChange("sessionDimensions", [...preset.dimensions])
+            }
+          }}
         >
           <SelectTrigger className="w-full">
             <SelectValue>
-              {selectedDmScopeOption
+              {selectedSessionPreset
                 ? t(
-                    selectedDmScopeOption.labelKey,
-                    selectedDmScopeOption.labelDefault,
+                    selectedSessionPreset.labelKey,
+                    selectedSessionPreset.labelDefault,
                   )
-                : form.dmScope}
+                : form.sessionDimensions.join(", ")}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            {DM_SCOPE_OPTIONS.map((scope) => (
-              <SelectItem key={scope.value} value={scope.value}>
+            {SESSION_DIMENSION_PRESETS.map((preset) => (
+              <SelectItem key={preset.value} value={preset.value}>
                 <div className="flex flex-col gap-0.5">
-                  <span className="font-medium">{t(scope.labelKey)}</span>
+                  <span className="font-medium">{t(preset.labelKey)}</span>
                   <span className="text-muted-foreground text-xs">
-                    {t(scope.descKey)}
+                    {t(preset.descKey)}
                   </span>
                 </div>
               </SelectItem>

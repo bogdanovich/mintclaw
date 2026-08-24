@@ -175,10 +175,173 @@ func TestHandleGetConfig_ReturnsRevisionWithoutWritingConfig(t *testing.T) {
 	if etag := rec.Header().Get("ETag"); len(etag) != 66 || etag[0] != '"' || etag[len(etag)-1] != '"' {
 		t.Fatalf("ETag = %q, want quoted SHA-256 revision", etag)
 	}
+	var response struct {
+		Version int `json:"version"`
+		Session struct {
+			Dimensions []string `json:"dimensions"`
+			DmScope    string   `json:"dm_scope"`
+		} `json:"session"`
+	}
+	if err = json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Unmarshal(response) error = %v", err)
+	}
+	if response.Version != config.CurrentVersion {
+		t.Fatalf("response version = %d, want %d", response.Version, config.CurrentVersion)
+	}
+	if len(response.Session.Dimensions) != 1 || response.Session.Dimensions[0] != "chat" {
+		t.Fatalf("response session.dimensions = %v, want [chat]", response.Session.Dimensions)
+	}
+	if response.Session.DmScope != "per-channel" {
+		t.Fatalf("response session.dm_scope = %q, want previous-client alias per-channel", response.Session.DmScope)
+	}
 	publicAfter, _ := os.ReadFile(configPath)
 	securityAfter, _ := os.ReadFile(securityPath)
 	if !bytes.Equal(publicBefore, publicAfter) || !bytes.Equal(securityBefore, securityAfter) {
 		t.Fatal("GET /api/config modified durable config documents")
+	}
+}
+
+func TestTranslatePreviousWebSessionScope(t *testing.T) {
+	tests := []struct {
+		scope string
+		want  []string
+	}{
+		{scope: "per-channel-peer", want: []string{"chat", "sender"}},
+		{scope: "per-channel", want: []string{"chat"}},
+		{scope: "per-peer", want: []string{"sender"}},
+		{scope: "global", want: []string{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.scope, func(t *testing.T) {
+			root := map[string]any{"session": map[string]any{"dm_scope": tt.scope}}
+			if err := translatePreviousWebSessionScope(root); err != nil {
+				t.Fatalf("translatePreviousWebSessionScope() error = %v", err)
+			}
+			session := root["session"].(map[string]any)
+			if _, exists := session["dm_scope"]; exists {
+				t.Fatal("previous session field survived boundary translation")
+			}
+			dimensions, ok := session["dimensions"].([]string)
+			if !ok || strings.Join(dimensions, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("translated dimensions = %#v, want %v", session["dimensions"], tt.want)
+			}
+		})
+	}
+
+	root := map[string]any{"session": map[string]any{
+		"dimensions": []string{"space", "topic"},
+		"dm_scope":   "per-peer",
+	}}
+	if err := translatePreviousWebSessionScope(root); err != nil {
+		t.Fatalf("translate current dimensions: %v", err)
+	}
+	session := root["session"].(map[string]any)
+	if _, exists := session["dm_scope"]; exists {
+		t.Fatal("previous session field survived alongside current dimensions")
+	}
+	if dimensions := session["dimensions"].([]string); strings.Join(dimensions, ",") != "space,topic" {
+		t.Fatalf("current dimensions = %v, want [space topic]", dimensions)
+	}
+}
+
+func TestHandleUpdateConfigTranslatesPreviousWebSessionScope(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	repository := config.NewRepository(configPath)
+	snapshot, err := repository.ReadOnly()
+	if err != nil {
+		t.Fatalf("ReadOnly() error = %v", err)
+	}
+	body, err := json.Marshal(snapshot.Config)
+	if err != nil {
+		t.Fatalf("Marshal(config) error = %v", err)
+	}
+	var payload map[string]any
+	if err = json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("Unmarshal(config) error = %v", err)
+	}
+	session := payload["session"].(map[string]any)
+	delete(session, "dimensions")
+	session["dm_scope"] = "per-peer"
+	body, err = json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal(previous client payload) error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewReader(body))
+	req.Header.Set("If-Match", configRevisionETag(snapshot.Revision))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if len(updated.Session.Dimensions) != 1 || updated.Session.Dimensions[0] != "sender" {
+		t.Fatalf("Session.Dimensions = %v, want [sender]", updated.Session.Dimensions)
+	}
+	publicData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) error = %v", err)
+	}
+	if bytes.Contains(publicData, []byte(`"dm_scope"`)) {
+		t.Fatalf("persisted config contains previous Web field: %s", publicData)
+	}
+}
+
+func TestHandlePatchConfigPersistsCanonicalSessionDimensions(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{name: "current empty dimensions", body: `{"session":{"dimensions":[]}}`, want: []string{}},
+		{
+			name: "previous Web scope",
+			body: `{"session":{"dm_scope":"per-channel-peer"}}`,
+			want: []string{"chat", "sender"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(tt.body))
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			updated, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if updated.Session.Dimensions == nil ||
+				strings.Join(updated.Session.Dimensions, ",") != strings.Join(tt.want, ",") {
+				t.Fatalf("Session.Dimensions = %#v, want %v", updated.Session.Dimensions, tt.want)
+			}
+			publicData, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile(config) error = %v", err)
+			}
+			if bytes.Contains(publicData, []byte(`"dm_scope"`)) {
+				t.Fatalf("persisted config contains previous Web field: %s", publicData)
+			}
+		})
 	}
 }
 

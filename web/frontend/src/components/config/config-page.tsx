@@ -309,13 +309,9 @@ export function ConfigPage() {
 
       if (configDirty) {
         const workspace = form.workspace.trim()
-        const dmScope = form.dmScope.trim()
 
         if (!workspace) {
           throw new Error("Workspace path is required.")
-        }
-        if (!dmScope) {
-          throw new Error("Session scope is required.")
         }
 
         if (
@@ -584,7 +580,7 @@ export function ConfigPage() {
             },
           },
           session: {
-            dm_scope: dmScope,
+            dimensions: form.sessionDimensions,
           },
           tools: {
             cron: {

@@ -174,8 +174,6 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 	if cfg.Agents.Defaults.Workspace == "" {
 		cfg.Agents.Defaults.Workspace = filepath.Join(GetHome(), pkg.WorkspaceName)
 	}
-	cfg.Session.ApplyDmScope()
-	cfg.Session.DeriveDmScope()
 	return nil
 }
 

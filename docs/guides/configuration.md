@@ -566,7 +566,7 @@ Match values use the same scope vocabulary as the session system:
 
 Rules may optionally override the global `session.dimensions` value through
 `session_dimensions`. This allows routing and session allocation to stay aligned
-without reintroducing the old `bindings` or `dm_scope` formats.
+without introducing a second session-scope representation.
 
 Example:
 
@@ -1627,8 +1627,7 @@ This keeps the runtime lightweight while making new OpenAI-compatible backends m
     }
   },
   "session": {
-    "dm_scope": "per-channel-peer",
-    "backlog_limit": 20
+    "dimensions": ["chat", "sender"]
   },
   "channel_list": {
     "telegram": {
