@@ -17,6 +17,20 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
+func TestValidateConfigRejectsInvalidMCPContract(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Tools.MCP.Servers["remote"] = config.MCPServerConfig{
+		Enabled: true,
+		Type:    "http",
+		URL:     "https://example.invalid/mcp",
+		Command: "unexpected-command",
+	}
+	errs := validateConfig(cfg)
+	if got := strings.Join(errs, "\n"); !strings.Contains(got, "http transport does not support command") {
+		t.Fatalf("validateConfig() errors = %q, want MCP transport field error", got)
+	}
+}
+
 func TestHandlePatchConfig_PreservesTurnProfile(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

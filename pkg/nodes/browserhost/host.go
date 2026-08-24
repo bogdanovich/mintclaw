@@ -204,7 +204,6 @@ func companionPlaywrightServer(profile companion.BrowserProfilePolicy) (config.M
 	return config.MCPServerConfig{
 		Enabled: false, Command: profile.DriverExecutable, Args: args, Type: "stdio",
 		Env:               map[string]string{"PATH": driverPath},
-		SessionLossReplay: config.MCPSessionLossReplayNever,
 		ExclusiveLockFile: profile.LockFile,
 	}, nil
 }

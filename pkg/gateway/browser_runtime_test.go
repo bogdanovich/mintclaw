@@ -287,7 +287,6 @@ func gatewayBrowserConfig(workspace string) *config.Config {
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Tools.MCP.Servers["playwright"] = config.MCPServerConfig{
 		Enabled: false, Command: "npx", Type: "stdio",
-		SessionLossReplay: config.MCPSessionLossReplayNever,
 		ExclusiveLockFile: filepath.Join(workspace, "playwright.lock"),
 	}
 	cfg.Tools.Browser = config.BrowserToolsConfig{

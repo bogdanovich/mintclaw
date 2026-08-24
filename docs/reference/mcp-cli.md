@@ -117,7 +117,7 @@ Supported flags:
 | `--env`, `-e` | Add a stdio environment variable in `KEY=value` format. Repeatable. Values are saved to config. |
 | `--env-file` | Attach an env file path to a stdio server. Recommended for secrets you do not want stored inline in `config.json`. |
 | `--header`, `-H` | Add an HTTP header in `Name: Value` or `Name=Value` format. Repeatable. |
-| `--transport`, `-t` | Transport type: `stdio` (default), `http` / `streamable-http`, or `sse`. |
+| `--transport`, `-t` | Transport type: `stdio` (default), `http`, or `sse`. |
 | `--force`, `-f` | Overwrite an existing server entry without confirmation. |
 | `--deferred` | Mark the server as deferred: tools are hidden and discoverable on demand. |
 | `--no-deferred` | Mark the server as non-deferred: tools are always loaded into context. |
@@ -217,14 +217,14 @@ For `stdio`:
 - `--header` is rejected
 - `-- <command> [args...]` is supported and recommended for unambiguous parsing
 
-For `http` / `streamable-http` / `sse`:
+For `http` / `sse`:
 
 - `<command-or-url>` must be a valid URL
 - extra command args are rejected
 - `--env` is rejected
 - `--env-file` is rejected
 - `--header` is supported and stored in `headers`
-- `http` and `streamable-http` use streamable HTTP request-response mode
+- `http` uses streamable HTTP request-response mode
 - `sse` uses the same streamable HTTP transport, but also enables the optional standalone SSE listener for server-initiated notifications
 
 Overwrite behavior:
@@ -293,8 +293,8 @@ mintclaw mcp show <name> --timeout 15s
 This connects to the named server and prints:
 
 - server metadata: name, transport type, target, enabled state, deferred
-  override, effective session-loss replay policy, whether an exclusive lock is
-  configured, env var names, env file, and header names
+  override, whether an exclusive lock is configured, env var names, env file,
+  and header names
 - every tool the server exposes, with its name, description, and parameters (name, type, required/optional, description)
 
 On wide terminals the output is a styled box matching the `mcp list` look. On narrow terminals or non-TTY stdout, plain text is printed instead.
@@ -309,7 +309,6 @@ Example output (wide terminal):
 │ Target      npx -y @modelcontextprotocol/server-fs /tmp  │
 │ Enabled     yes                                          │
 │ Deferred    no                                           │
-│ Session replay  once                                     │
 │ Exclusive lock  no                                       │
 │                                                          │
 │ Tools (3)                                                │
@@ -334,7 +333,7 @@ Notes:
 
 - if the server is disabled in config, `mcp show` prints the metadata only and skips tool discovery
 - configuration metadata is printed even when live discovery fails, so the
-  effective replay policy and presence of an exclusive lease remain visible
+  presence of an exclusive lease remains visible
 - failed probes reduce the target to the stdio executable basename or remote
   scheme and host; command arguments, URL credentials, paths, and queries are
   omitted
@@ -350,11 +349,10 @@ Syntax:
 mintclaw mcp test <name>
 ```
 
-This prints the effective session replay policy and whether an exclusive lease
-is configured, then performs a direct connection test for one configured entry
-and prints the number of discovered tools when successful. If another process
-holds the lease, the command reports a bounded busy result without printing the
-configured lock path.
+This prints whether an exclusive lease is configured, then performs a direct
+connection test for one configured entry and prints the number of discovered
+tools when successful. If another process holds the lease, the command reports
+a bounded busy result without printing the configured lock path.
 
 It is useful when:
 

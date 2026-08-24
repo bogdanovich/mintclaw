@@ -589,25 +589,21 @@ and injected into the context for a configured number of turns (`ttl`).
 | --- | --- | --- | --- |
 | `enabled` | bool | yes | Enable this MCP server |
 | `deferred` | bool | no | Override deferred mode for this server only. `true` = tools are hidden and discoverable via search; `false` = tools are always visible in context. When omitted, the global `discovery.enabled` value applies. |
-| `type` | string | no | Transport type: `stdio`, `sse`, `http` |
+| `type` | string | yes | Transport type: exactly `stdio`, `sse`, or `http` |
 | `command` | string | stdio | Executable command for stdio transport |
 | `args` | array | no | Command arguments for stdio transport |
 | `env` | object | no | Environment variables for stdio process |
 | `env_file` | string | no | Path to environment file for stdio process |
 | `url` | string | sse/http | Endpoint URL for `sse`/`http` transport |
 | `headers` | object | no | HTTP headers for `sse`/`http` transport |
-| `session_loss_replay` | string | no | `once` (default) reconnects and invokes an interrupted call once; `never` reconnects for future calls but returns the interrupted call as uncertain without replay |
 | `exclusive_lock_file` | string | no | Absolute path to an operator-owned, non-blocking exclusive lease for a stdio server; omitted by default |
 
 ### Transport Behavior
 
-- If `type` is omitted, transport is auto-detected:
-    - `url` is set → `sse`
-    - `command` is set → `stdio`
 - `http` and `sse` both use `url` + optional `headers`.
 - `env` and `env_file` are only applied to `stdio` servers.
-- Use `session_loss_replay: "never"` for servers whose tools may have external
-  effects that cannot be safely repeated after a lost response.
+- If a session is lost during a call, MintClaw reconnects for future calls and
+  reports the interrupted outcome as uncertain. It never repeats that call.
 - Use `exclusive_lock_file` when a stdio server owns a persistent resource such
   as a browser profile. Its parent directory must already exist. MintClaw holds
   the OS lock across reconnects and releases it when the manager closes; remote
@@ -623,9 +619,10 @@ and injected into the context for a configured number of turns (`ttl`).
     "mcp": {
       "enabled": true,
       "servers": {
-        "filesystem": {
-          "enabled": true,
-          "command": "npx",
+		"filesystem": {
+		  "enabled": true,
+		  "type": "stdio",
+		  "command": "npx",
           "args": [
             "-y",
             "@modelcontextprotocol/server-filesystem",
@@ -678,9 +675,10 @@ dynamically only when requested by the user.*
         "use_regex": false
       },
       "servers": {
-        "github": {
-          "enabled": true,
-          "command": "npx",
+		"github": {
+		  "enabled": true,
+		  "type": "stdio",
+		  "command": "npx",
           "args": [
             "-y",
             "@modelcontextprotocol/server-github"
@@ -689,18 +687,19 @@ dynamically only when requested by the user.*
             "GITHUB_PERSONAL_ACCESS_TOKEN": "YOUR_GITHUB_TOKEN"
           }
         },
-        "postgres": {
-          "enabled": true,
-          "command": "npx",
+		"postgres": {
+		  "enabled": true,
+		  "type": "stdio",
+		  "command": "npx",
           "args": [
             "-y",
             "@modelcontextprotocol/server-postgres",
             "postgresql://user:password@localhost/dbname"
           ]
         },
-        "slack": {
-          "enabled": true,
-          "type": "slack",
+		"slack": {
+		  "enabled": true,
+		  "type": "stdio",
           "command": "npx",
           "args": [
             "-y",
@@ -734,25 +733,29 @@ default (deferred). `aws` explicitly opts in to deferred mode even though it is 
         "use_bm25": true
       },
       "servers": {
-        "filesystem": {
-          "enabled": true,
+		"filesystem": {
+		  "enabled": true,
+		  "type": "stdio",
           "command": "npx",
           "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
           "deferred": false
         },
-        "context7": {
-          "enabled": true,
+		"context7": {
+		  "enabled": true,
+		  "type": "stdio",
           "command": "npx",
           "args": ["-y", "@upstash/context7-mcp"]
         },
-        "aws": {
-          "enabled": true,
+		"aws": {
+		  "enabled": true,
+		  "type": "stdio",
           "command": "npx",
           "args": ["-y", "aws-mcp-server"],
           "deferred": true
         },
-        "inventorydb": {
-          "enabled": true,
+		"inventorydb": {
+		  "enabled": true,
+		  "type": "stdio",
           "command": "/path/to/inventorydb-mcp",
           "deferred": true,
           "visible_tools": [

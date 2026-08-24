@@ -20,10 +20,11 @@ func TestValidateMCPExclusiveLockFile(t *testing.T) {
 		server  MCPServerConfig
 		wantErr string
 	}{
-		{name: "omitted", server: MCPServerConfig{Command: "example"}},
+		{name: "omitted", server: MCPServerConfig{Type: "stdio", Command: "example"}},
 		{
 			name: "valid stdio lease",
 			server: MCPServerConfig{
+				Type:              "stdio",
 				Command:           "example",
 				ExclusiveLockFile: validPath,
 			},
@@ -40,6 +41,7 @@ func TestValidateMCPExclusiveLockFile(t *testing.T) {
 		{
 			name: "relative path",
 			server: MCPServerConfig{
+				Type:              "stdio",
 				Command:           "example",
 				ExclusiveLockFile: "playwright.lock",
 			},
@@ -48,6 +50,7 @@ func TestValidateMCPExclusiveLockFile(t *testing.T) {
 		{
 			name: "unclean path",
 			server: MCPServerConfig{
+				Type:    "stdio",
 				Command: "example",
 				ExclusiveLockFile: parent + string(os.PathSeparator) + "nested" +
 					string(os.PathSeparator) + ".." + string(os.PathSeparator) + "playwright.lock",
@@ -57,6 +60,7 @@ func TestValidateMCPExclusiveLockFile(t *testing.T) {
 		{
 			name: "missing parent",
 			server: MCPServerConfig{
+				Type:              "stdio",
 				Command:           "example",
 				ExclusiveLockFile: filepath.Join(parent, "missing", "playwright.lock"),
 			},
@@ -65,6 +69,7 @@ func TestValidateMCPExclusiveLockFile(t *testing.T) {
 		{
 			name: "parent is a file",
 			server: MCPServerConfig{
+				Type:              "stdio",
 				Command:           "example",
 				ExclusiveLockFile: filepath.Join(notDirectory, "playwright.lock"),
 			},
@@ -73,6 +78,7 @@ func TestValidateMCPExclusiveLockFile(t *testing.T) {
 		{
 			name: "oversized path",
 			server: MCPServerConfig{
+				Type:              "stdio",
 				Command:           "example",
 				ExclusiveLockFile: string(os.PathSeparator) + strings.Repeat("a", maxMCPExclusiveLockFilePathBytes),
 			},

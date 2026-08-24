@@ -473,10 +473,10 @@ func TestCallTool_ErrorsForClosedOrMissingServer(t *testing.T) {
 	})
 }
 
-func TestConnectServer_StreamableHTTPRequestResponseMode(t *testing.T) {
+func TestConnectServer_HTTPRequestResponseMode(t *testing.T) {
 	t.Parallel()
 
-	for _, transportType := range []string{"http", "streamable-http"} {
+	for _, transportType := range []string{"http"} {
 		t.Run(transportType, func(t *testing.T) {
 			t.Parallel()
 
@@ -600,7 +600,7 @@ func TestConnectServer_StreamableHTTPRequestResponseMode(t *testing.T) {
 	}
 }
 
-func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
+func TestCallTool_ReportsUncertainOutcomeWhenHTTPServerLosesSession(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {
 		connectServerFunc = originalConnectServerFunc
@@ -639,22 +639,15 @@ func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	mgr := NewManager()
 	mgr.servers["flaky"] = staleConn
 
-	result, err := mgr.CallTool(context.Background(), "flaky", "echo", map[string]any{
+	result, callErr := mgr.CallTool(context.Background(), "flaky", "echo", map[string]any{
 		"query": "hello",
 	})
-	if err != nil {
-		t.Fatalf("CallTool() error = %v", err)
+	if result != nil {
+		t.Fatalf("CallTool() result = %#v, want nil", result)
 	}
-	if result == nil || len(result.Content) != 1 {
-		t.Fatalf("CallTool() returned unexpected content: %#v", result)
-	}
-
-	text, ok := result.Content[0].(*sdkmcp.TextContent)
-	if !ok {
-		t.Fatalf("CallTool() content type = %T, want *sdkmcp.TextContent", result.Content[0])
-	}
-	if text.Text != "reconnected" {
-		t.Fatalf("CallTool() text = %q, want %q", text.Text, "reconnected")
+	var uncertainErr *CallOutcomeUncertainError
+	if !errors.As(callErr, &uncertainErr) || !uncertainErr.Reconnected {
+		t.Fatalf("CallTool() error = %v, want reconnected CallOutcomeUncertainError", callErr)
 	}
 
 	conn, ok := mgr.GetServer("flaky")
@@ -670,81 +663,12 @@ func TestCallTool_ReconnectsWhenHTTPServerLosesSession(t *testing.T) {
 	if staleTransport.toolCallCalls != 1 {
 		t.Fatalf("stale toolCallCalls = %d, want 1", staleTransport.toolCallCalls)
 	}
-	if freshTransport.toolCallCalls != 1 {
-		t.Fatalf("fresh toolCallCalls = %d, want 1", freshTransport.toolCallCalls)
-	}
-}
-
-func TestCallTool_DoesNotReplayWhenSessionLossReplayIsNever(t *testing.T) {
-	originalConnectServerFunc := connectServerFunc
-	t.Cleanup(func() {
-		connectServerFunc = originalConnectServerFunc
-	})
-
-	staleConn, staleTransport, err := newScriptedServerConnection(
-		"session-1",
-		nil,
-		fmt.Errorf(`sending "tools/call": failed to connect (session ID: session-1): %w`, sdkmcp.ErrSessionMissing),
-	)
-	if err != nil {
-		t.Fatalf("newScriptedServerConnection(stale) error = %v", err)
-	}
-	staleConn.Config.SessionLossReplay = config.MCPSessionLossReplayNever
-
-	freshConn, freshTransport, err := newScriptedServerConnection(
-		"session-2",
-		&sdkmcp.CallToolResult{
-			Content: []sdkmcp.Content{
-				&sdkmcp.TextContent{Text: "must not be returned"},
-			},
-		},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("newScriptedServerConnection(fresh) error = %v", err)
-	}
-
-	connectCalls := 0
-	connectServerFunc = func(context.Context, string, config.MCPServerConfig) (*ServerConnection, error) {
-		connectCalls++
-		return freshConn, nil
-	}
-
-	mgr := NewManager()
-	mgr.servers["playwright"] = staleConn
-
-	result, callErr := mgr.CallTool(
-		context.Background(),
-		"playwright",
-		"browser_click",
-		map[string]any{"ref": "e1"},
-	)
-	if result != nil {
-		t.Fatalf("CallTool() result = %#v, want nil", result)
-	}
-	var uncertainErr *CallOutcomeUncertainError
-	if !errors.As(callErr, &uncertainErr) {
-		t.Fatalf("CallTool() error = %v, want CallOutcomeUncertainError", callErr)
-	}
-	if uncertainErr.Server != "playwright" || uncertainErr.Tool != "browser_click" || !uncertainErr.Reconnected {
-		t.Fatalf("CallTool() uncertain error = %+v", uncertainErr)
-	}
-	if connectCalls != 1 {
-		t.Fatalf("connectCalls = %d, want 1", connectCalls)
-	}
-	if staleTransport.toolCallCalls != 1 {
-		t.Fatalf("stale toolCallCalls = %d, want 1", staleTransport.toolCallCalls)
-	}
 	if freshTransport.toolCallCalls != 0 {
 		t.Fatalf("fresh toolCallCalls = %d, want 0", freshTransport.toolCallCalls)
 	}
-	conn, ok := mgr.GetServer("playwright")
-	if !ok || conn.Session.ID() != "session-2" {
-		t.Fatalf("GetServer(playwright) = %#v, %v; want replacement session", conn, ok)
-	}
 }
 
-func TestCallTool_RecoversBeforeNextCallWhenNoReplayReconnectFails(t *testing.T) {
+func TestCallTool_RecoversBeforeNextCallWhenReconnectFails(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {
 		connectServerFunc = originalConnectServerFunc
@@ -758,8 +682,6 @@ func TestCallTool_RecoversBeforeNextCallWhenNoReplayReconnectFails(t *testing.T)
 	if err != nil {
 		t.Fatalf("newScriptedServerConnection(stale) error = %v", err)
 	}
-	staleConn.Config.SessionLossReplay = config.MCPSessionLossReplayNever
-
 	freshConn, freshTransport, err := newScriptedServerConnection(
 		"session-2",
 		&sdkmcp.CallToolResult{
@@ -826,7 +748,7 @@ func TestCallTool_RecoversBeforeNextCallWhenNoReplayReconnectFails(t *testing.T)
 	}
 }
 
-func TestConnectServerRejectsUnknownSessionLossReplay(t *testing.T) {
+func TestConnectServerRejectsMissingTransport(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {
 		connectServerFunc = originalConnectServerFunc
@@ -840,12 +762,11 @@ func TestConnectServerRejectsUnknownSessionLossReplay(t *testing.T) {
 
 	mgr := NewManager()
 	err := mgr.ConnectServer(context.Background(), "invalid", config.MCPServerConfig{
-		Enabled:           true,
-		Command:           "example",
-		SessionLossReplay: "automatic",
+		Enabled: true,
+		Command: "example",
 	})
 	if err == nil {
-		t.Fatal("ConnectServer() error = nil, want invalid replay policy")
+		t.Fatal("ConnectServer() error = nil, want missing transport error")
 	}
 	if connectCalls != 0 {
 		t.Fatalf("connectCalls = %d, want 0", connectCalls)
@@ -865,6 +786,7 @@ func TestConnectServerReleasesExclusiveLeaseAfterConnectionFailure(t *testing.T)
 	mgr := NewManager()
 	err := mgr.ConnectServer(context.Background(), "playwright", config.MCPServerConfig{
 		Enabled:           true,
+		Type:              "stdio",
 		Command:           "example",
 		ExclusiveLockFile: lockPath,
 	})
@@ -892,7 +814,7 @@ func TestConnectServerRetainsPartialConnectionWhenRejectionCleanupFails(t *testi
 	lockPath := filepath.Join(t.TempDir(), "playwright.lock")
 	mgr := NewManager()
 	err := mgr.ConnectServer(context.Background(), "playwright", config.MCPServerConfig{
-		Enabled: true, Command: "example", ExclusiveLockFile: lockPath,
+		Enabled: true, Type: "stdio", Command: "example", ExclusiveLockFile: lockPath,
 	})
 	if err == nil || !strings.Contains(err.Error(), "tool discovery failed") ||
 		!strings.Contains(err.Error(), "process tree still alive") {
@@ -939,7 +861,7 @@ func TestCloseWaitsForConnectionRejectionCleanupHandoff(t *testing.T) {
 	connectErrCh := make(chan error, 1)
 	go func() {
 		connectErrCh <- mgr.ConnectServer(context.Background(), "playwright", config.MCPServerConfig{
-			Enabled: true, Command: "example", ExclusiveLockFile: lockPath,
+			Enabled: true, Type: "stdio", Command: "example", ExclusiveLockFile: lockPath,
 		})
 	}()
 	<-connectStarted
@@ -1111,18 +1033,20 @@ func TestExclusiveLeaseIsHeldAcrossReconnectAndReleasedOnClose(t *testing.T) {
 	mgr := NewManager()
 	if err := mgr.ConnectServer(context.Background(), "playwright", config.MCPServerConfig{
 		Enabled:           true,
+		Type:              "stdio",
 		Command:           "example",
 		ExclusiveLockFile: lockPath,
 	}); err != nil {
 		t.Fatalf("ConnectServer() error = %v", err)
 	}
 
-	result, err := mgr.CallTool(context.Background(), "playwright", "browser_snapshot", nil)
-	if err != nil || result == nil {
-		t.Fatalf("CallTool() result = %#v, error = %v", result, err)
+	result, callErr := mgr.CallTool(context.Background(), "playwright", "browser_snapshot", nil)
+	var uncertainErr *CallOutcomeUncertainError
+	if result != nil || !errors.As(callErr, &uncertainErr) || !uncertainErr.Reconnected {
+		t.Fatalf("CallTool() result = %#v, error = %v; want uncertain reconnected outcome", result, callErr)
 	}
-	if connectCalls != 2 || freshTransport.toolCallCalls != 1 {
-		t.Fatalf("connectCalls = %d, fresh tool calls = %d; want 2, 1", connectCalls, freshTransport.toolCallCalls)
+	if connectCalls != 2 || freshTransport.toolCallCalls != 0 {
+		t.Fatalf("connectCalls = %d, fresh tool calls = %d; want 2, 0", connectCalls, freshTransport.toolCallCalls)
 	}
 	if err := mgr.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -1151,7 +1075,7 @@ func TestReconnectRetriesStaleCleanupBeforeStartingFreshTree(t *testing.T) {
 	staleCleanup := &retryableTestCleanup{}
 	staleConn.cleanup = staleCleanup
 	lockPath := filepath.Join(t.TempDir(), "playwright.lock")
-	staleConn.Config = config.MCPServerConfig{Command: "example", ExclusiveLockFile: lockPath}
+	staleConn.Config = config.MCPServerConfig{Type: "stdio", Command: "example", ExclusiveLockFile: lockPath}
 	lease, err := acquireExclusiveServerLease("playwright", lockPath)
 	if err != nil {
 		t.Fatalf("acquireExclusiveServerLease() error = %v", err)
@@ -1303,7 +1227,7 @@ func TestReconnectRetainsPartialFreshTreeWithoutExclusiveLease(t *testing.T) {
 
 	mgr := NewManager()
 	if err = mgr.ConnectServer(context.Background(), "playwright", config.MCPServerConfig{
-		Enabled: true, Command: "example",
+		Enabled: true, Type: "stdio", Command: "example",
 	}); err != nil {
 		t.Fatalf("ConnectServer() error = %v", err)
 	}
@@ -1331,7 +1255,7 @@ func TestReconnectRetainsPartialFreshTreeWithoutExclusiveLease(t *testing.T) {
 	}
 }
 
-func TestCallTool_ReconnectsWhenStdioTransportIsClosed(t *testing.T) {
+func TestCallTool_ReportsUncertainOutcomeWhenStdioTransportIsClosed(t *testing.T) {
 	originalConnectServerFunc := connectServerFunc
 	t.Cleanup(func() {
 		connectServerFunc = originalConnectServerFunc
@@ -1370,23 +1294,20 @@ func TestCallTool_ReconnectsWhenStdioTransportIsClosed(t *testing.T) {
 	mgr := NewManager()
 	mgr.servers["flaky"] = staleConn
 
-	result, err := mgr.CallTool(context.Background(), "flaky", "echo", map[string]any{"query": "hello"})
-	if err != nil {
-		t.Fatalf("CallTool() error = %v", err)
+	result, callErr := mgr.CallTool(context.Background(), "flaky", "echo", map[string]any{"query": "hello"})
+	if result != nil {
+		t.Fatalf("CallTool() result = %#v, want nil", result)
 	}
-	if result == nil || len(result.Content) != 1 {
-		t.Fatalf("CallTool() returned unexpected content: %#v", result)
-	}
-	text, ok := result.Content[0].(*sdkmcp.TextContent)
-	if !ok || text.Text != "reconnected" {
-		t.Fatalf("CallTool() content = %#v, want reconnected text", result.Content)
+	var uncertainErr *CallOutcomeUncertainError
+	if !errors.As(callErr, &uncertainErr) || !uncertainErr.Reconnected {
+		t.Fatalf("CallTool() error = %v, want reconnected CallOutcomeUncertainError", callErr)
 	}
 	if connectCalls != 1 {
 		t.Fatalf("connectCalls = %d, want 1", connectCalls)
 	}
-	if staleTransport.toolCallCalls != 1 || freshTransport.toolCallCalls != 1 {
+	if staleTransport.toolCallCalls != 1 || freshTransport.toolCallCalls != 0 {
 		t.Fatalf(
-			"tool call counts stale=%d fresh=%d, want 1 each",
+			"tool call counts stale=%d fresh=%d, want 1 and 0",
 			staleTransport.toolCallCalls,
 			freshTransport.toolCallCalls,
 		)

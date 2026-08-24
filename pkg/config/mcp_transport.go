@@ -2,80 +2,71 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
+	"sort"
 )
 
 const maxMCPExclusiveLockFilePathBytes = 4096
 
-// MCPSessionLossReplay controls whether MintClaw replays a tool call after
-// reconnecting an MCP server whose session was lost during that call.
-type MCPSessionLossReplay string
-
-const (
-	// MCPSessionLossReplayOnce preserves the historical behavior: reconnect
-	// and invoke the same tool call once on the replacement session.
-	MCPSessionLossReplayOnce MCPSessionLossReplay = "once"
-	// MCPSessionLossReplayNever reconnects for future calls but reports the
-	// interrupted call as uncertain without invoking it again.
-	MCPSessionLossReplayNever MCPSessionLossReplay = "never"
-)
-
-// NormalizeMCPTransportType canonicalizes MCP transport names used in config.
-// "http" is MintClaw's streamable HTTP request-response mode, and
-// "streamable-http" is accepted as an explicit alias for the same transport.
-func NormalizeMCPTransportType(transport string) string {
-	normalized := strings.ToLower(strings.TrimSpace(transport))
-
-	switch normalized {
-	case "streamable-http", "streamable_http", "streamablehttp":
-		return "http"
+// Validate requires one explicit transport contract and rejects fields that
+// belong to another transport. Config conversion belongs outside the runtime.
+func (server MCPServerConfig) Validate() error {
+	switch server.Type {
+	case "stdio":
+		if server.Command == "" {
+			return fmt.Errorf("stdio transport requires command")
+		}
+		if server.URL != "" {
+			return fmt.Errorf("stdio transport does not support url")
+		}
+		if len(server.Headers) > 0 {
+			return fmt.Errorf("stdio transport does not support headers")
+		}
+	case "sse", "http":
+		if server.URL == "" {
+			return fmt.Errorf("%s transport requires url", server.Type)
+		}
+		parsed, err := url.ParseRequestURI(server.URL)
+		if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return fmt.Errorf("%s transport requires a valid absolute HTTP(S) url", server.Type)
+		}
+		if server.Command != "" {
+			return fmt.Errorf("%s transport does not support command", server.Type)
+		}
+		if len(server.Args) > 0 {
+			return fmt.Errorf("%s transport does not support args", server.Type)
+		}
+		if len(server.Env) > 0 {
+			return fmt.Errorf("%s transport does not support env", server.Type)
+		}
+		if server.EnvFile != "" {
+			return fmt.Errorf("%s transport does not support env_file", server.Type)
+		}
+		if server.ExclusiveLockFile != "" {
+			return fmt.Errorf("%s transport does not support exclusive_lock_file", server.Type)
+		}
 	default:
-		return normalized
+		return fmt.Errorf("unsupported MCP transport type %q (supported: stdio, sse, http)", server.Type)
 	}
+	return ValidateMCPExclusiveLockFile(server)
 }
 
-// EffectiveMCPTransportType returns the normalized configured transport, or the
-// inferred default when the config leaves Type empty.
-func EffectiveMCPTransportType(server MCPServerConfig) string {
-	if transport := NormalizeMCPTransportType(server.Type); transport != "" {
-		return transport
+// ValidateMCPConfig validates every configured server, including disabled
+// templates that another subsystem may start directly.
+func (c *Config) ValidateMCPConfig() error {
+	names := make([]string, 0, len(c.Tools.MCP.Servers))
+	for name := range c.Tools.MCP.Servers {
+		names = append(names, name)
 	}
-	if server.URL != "" {
-		return "sse"
+	sort.Strings(names)
+	for _, name := range names {
+		if err := c.Tools.MCP.Servers[name].Validate(); err != nil {
+			return fmt.Errorf("tools.mcp.servers.%s: %w", name, err)
+		}
 	}
-	if server.Command != "" {
-		return "stdio"
-	}
-	return ""
-}
-
-// NormalizeMCPSessionLossReplay canonicalizes configured replay policy names.
-func NormalizeMCPSessionLossReplay(policy MCPSessionLossReplay) MCPSessionLossReplay {
-	return MCPSessionLossReplay(strings.ToLower(strings.TrimSpace(string(policy))))
-}
-
-// EffectiveMCPSessionLossReplay returns the configured policy or the
-// backward-compatible default when it is omitted.
-func EffectiveMCPSessionLossReplay(server MCPServerConfig) MCPSessionLossReplay {
-	if policy := NormalizeMCPSessionLossReplay(server.SessionLossReplay); policy != "" {
-		return policy
-	}
-	return MCPSessionLossReplayOnce
-}
-
-// ValidateMCPSessionLossReplay rejects policies the MCP manager cannot enforce.
-func ValidateMCPSessionLossReplay(server MCPServerConfig) error {
-	switch EffectiveMCPSessionLossReplay(server) {
-	case MCPSessionLossReplayOnce, MCPSessionLossReplayNever:
-		return nil
-	default:
-		return fmt.Errorf(
-			"unsupported MCP session_loss_replay %q (supported: once, never)",
-			server.SessionLossReplay,
-		)
-	}
+	return nil
 }
 
 // ValidateMCPExclusiveLockFile validates an optional cross-process lease path
@@ -85,7 +76,7 @@ func ValidateMCPExclusiveLockFile(server MCPServerConfig) error {
 	if path == "" {
 		return nil
 	}
-	if EffectiveMCPTransportType(server) != "stdio" {
+	if server.Type != "stdio" {
 		return fmt.Errorf("exclusive_lock_file is supported only for stdio MCP servers")
 	}
 	if len(path) > maxMCPExclusiveLockFilePathBytes {

@@ -71,7 +71,7 @@ func TestIntegration_RealConfiguredServer(t *testing.T) {
 
 	t.Logf(
 		"connected to real MCP server via %s with %d tool(s)",
-		config.EffectiveMCPTransportType(serverCfg),
+		serverCfg.Type,
 		len(tools),
 	)
 	for _, tool := range tools {

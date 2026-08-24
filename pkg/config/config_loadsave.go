@@ -137,6 +137,9 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 	if err := cfg.ValidateExecutionTargets(); err != nil {
 		return err
 	}
+	if err := cfg.ValidateMCPConfig(); err != nil {
+		return err
+	}
 	if err := cfg.ValidateBrowserConfig(); err != nil {
 		return err
 	}

@@ -78,19 +78,11 @@ const mcpConfigSchemaJSON = `{
                     "type": "object",
                     "additionalProperties": { "type": "string" }
                   },
-                  "session_loss_replay": {
-                    "type": "string",
-                    "enum": ["once", "never"]
-                  },
                   "exclusive_lock_file": {
                     "type": "string"
                   }
                 },
-                "required": ["enabled"],
-                "anyOf": [
-                  { "required": ["command"] },
-                  { "required": ["url"] }
-                ],
+                "required": ["enabled", "type"],
                 "additionalProperties": false
               }
             }
@@ -134,12 +126,10 @@ func updateValidatedConfig(mutate func(*config.Config) error) error {
 			callbackErr = mutateErr
 			return mutateErr
 		}
-		normalizedCfg, normalizeErr := normalizeAndValidateConfig(cfg)
-		if normalizeErr != nil {
-			callbackErr = normalizeErr
-			return normalizeErr
+		if validateErr := validateConfigForSave(cfg); validateErr != nil {
+			callbackErr = validateErr
+			return validateErr
 		}
-		*cfg = *normalizedCfg
 		return nil
 	})
 	if callbackErr != nil {
@@ -151,45 +141,23 @@ func updateValidatedConfig(mutate func(*config.Config) error) error {
 	return nil
 }
 
-func normalizeAndValidateConfig(cfg *config.Config) (*config.Config, error) {
+func validateConfigForSave(cfg *config.Config) error {
 	if cfg == nil {
-		return nil, fmt.Errorf("config is nil")
+		return fmt.Errorf("config is nil")
 	}
 
-	normalizedCfg := normalizedConfigForSave(cfg)
-
-	data, err := json.Marshal(normalizedCfg)
+	data, err := json.Marshal(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to serialize config: %w", err)
+		return fmt.Errorf("failed to serialize config: %w", err)
 	}
 
 	if err := validateConfigDocument(data); err != nil {
-		return nil, err
+		return err
 	}
-
-	return normalizedCfg, nil
-}
-
-func normalizedConfigForSave(cfg *config.Config) *config.Config {
-	clone := *cfg
-	if cfg.Tools.MCP.Servers == nil {
-		return &clone
+	if err := cfg.ValidateMCPConfig(); err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
 	}
-
-	clone.Tools = cfg.Tools
-	clone.Tools.MCP = cfg.Tools.MCP
-	clone.Tools.MCP.Servers = make(map[string]config.MCPServerConfig, len(cfg.Tools.MCP.Servers))
-	for name, server := range cfg.Tools.MCP.Servers {
-		if server.Type != "" {
-			server.Type = config.NormalizeMCPTransportType(server.Type)
-		}
-		if server.SessionLossReplay != "" {
-			server.SessionLossReplay = config.NormalizeMCPSessionLossReplay(server.SessionLossReplay)
-		}
-		clone.Tools.MCP.Servers[name] = server
-	}
-
-	return &clone
+	return nil
 }
 
 func validateConfigDocument(data []byte) error {
@@ -223,16 +191,8 @@ func loadMCPConfigSchema() (*jsonschema.Resolved, error) {
 	return mcpConfigSchema, errMcpConfigSchema
 }
 
-func inferTransportType(server config.MCPServerConfig) string {
-	transport := config.EffectiveMCPTransportType(server)
-	if transport == "" {
-		return "unknown"
-	}
-	return transport
-}
-
 func renderServerTarget(server config.MCPServerConfig) string {
-	transport := inferTransportType(server)
+	transport := server.Type
 	if transport == "http" || transport == "sse" {
 		if server.URL == "" {
 			return "<missing url>"
@@ -251,7 +211,7 @@ func renderServerTarget(server config.MCPServerConfig) string {
 const maxMCPFailureTargetRunes = 256
 
 func renderServerFailureTarget(server config.MCPServerConfig) string {
-	transport := inferTransportType(server)
+	transport := server.Type
 	if transport == "http" || transport == "sse" {
 		if server.URL == "" {
 			return "<missing url>"

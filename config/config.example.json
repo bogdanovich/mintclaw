@@ -463,11 +463,13 @@
         },
         "filesystem": {
           "enabled": false,
+          "type": "stdio",
           "command": "npx",
           "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
         },
         "github": {
           "enabled": false,
+          "type": "stdio",
           "command": "npx",
           "args": ["-y", "@modelcontextprotocol/server-github"],
           "env": {
@@ -476,6 +478,7 @@
         },
         "brave-search": {
           "enabled": false,
+          "type": "stdio",
           "command": "npx",
           "args": ["-y", "@modelcontextprotocol/server-brave-search"],
           "env": {
@@ -484,6 +487,7 @@
         },
         "postgres": {
           "enabled": false,
+          "type": "stdio",
           "command": "npx",
           "args": [
             "-y",
@@ -493,6 +497,7 @@
         },
         "slack": {
           "enabled": false,
+          "type": "stdio",
           "command": "npx",
           "args": ["-y", "@modelcontextprotocol/server-slack"],
           "env": {

@@ -243,7 +243,7 @@ func checkMCP(cfg *config.Config) []Finding {
 		if !server.Enabled {
 			continue
 		}
-		transport := config.EffectiveMCPTransportType(server)
+		transport := server.Type
 		if transport == "sse" || transport == "http" {
 			findings = append(findings, newFinding(
 				CheckMCPRemoteTransport,

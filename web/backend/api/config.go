@@ -467,6 +467,9 @@ func validateConfig(cfg *config.Config) []string {
 	if err := cfg.Session.Lifecycle.Validate(); err != nil {
 		errs = append(errs, err.Error())
 	}
+	if err := cfg.ValidateMCPConfig(); err != nil {
+		errs = append(errs, err.Error())
+	}
 
 	// Gateway port range
 	if cfg.Gateway.Port != 0 && (cfg.Gateway.Port < 1 || cfg.Gateway.Port > 65535) {

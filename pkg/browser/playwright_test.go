@@ -3190,7 +3190,6 @@ func TestNewPlaywrightManagedHostFactoryRetargetsPrivateAdapter(t *testing.T) {
 		},
 		ServerConfig: config.MCPServerConfig{
 			Command: "npx", Args: []string{"@playwright/mcp@0.0.78"}, Type: "stdio",
-			SessionLossReplay: config.MCPSessionLossReplayNever,
 			ExclusiveLockFile: lockFile,
 		},
 	}
@@ -3206,11 +3205,6 @@ func TestNewPlaywrightManagedHostFactoryRetargetsPrivateAdapter(t *testing.T) {
 	host.ServerConfig.Args[0] = "mutated"
 	if factory.serverConfig.Args[0] != "@playwright/mcp@0.0.78" {
 		t.Fatal("managed host factory retained caller-owned server arguments")
-	}
-
-	host.ServerConfig.SessionLossReplay = config.MCPSessionLossReplayOnce
-	if _, err = NewPlaywrightManagedHostFactory(host); !errors.Is(err, ErrDenied) {
-		t.Fatalf("replay-enabled managed host error = %v", err)
 	}
 }
 

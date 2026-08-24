@@ -1281,7 +1281,6 @@ func admittedBrowserConfig() *config.Config {
 	root := config.DefaultConfig()
 	root.Tools.MCP.Servers["playwright"] = config.MCPServerConfig{
 		Enabled: false, Command: "npx", Type: "stdio",
-		SessionLossReplay: config.MCPSessionLossReplayNever,
 		ExclusiveLockFile: "/var/lib/mintclaw/playwright.lock",
 	}
 	root.Tools.Browser = config.BrowserToolsConfig{

@@ -266,14 +266,11 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 			target.DriverServer,
 		)
 	}
-	if EffectiveMCPTransportType(server) != "stdio" {
+	if server.Type != "stdio" {
 		return fmt.Errorf("browser driver server %q must use stdio", target.DriverServer)
 	}
 	if strings.TrimSpace(server.Command) == "" {
 		return fmt.Errorf("browser driver server %q requires a command", target.DriverServer)
-	}
-	if EffectiveMCPSessionLossReplay(server) != MCPSessionLossReplayNever {
-		return fmt.Errorf("browser driver server %q must use session_loss_replay=never", target.DriverServer)
 	}
 	if strings.TrimSpace(server.ExclusiveLockFile) == "" {
 		return fmt.Errorf("browser driver server %q requires exclusive_lock_file", target.DriverServer)

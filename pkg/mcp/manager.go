@@ -375,11 +375,7 @@ func (m *Manager) ConnectServer(
 	name string,
 	cfg config.MCPServerConfig,
 ) error {
-	if err := config.ValidateMCPSessionLossReplay(cfg); err != nil {
-		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, err)
-		return err
-	}
-	if err := config.ValidateMCPExclusiveLockFile(cfg); err != nil {
+	if err := cfg.Validate(); err != nil {
 		m.publishServerEvent(runtimeevents.KindMCPServerFailed, name, cfg, 0, err)
 		return err
 	}
@@ -388,8 +384,6 @@ func (m *Manager) ConnectServer(
 		return err
 	}
 	defer m.wg.Done()
-	cfg.SessionLossReplay = config.EffectiveMCPSessionLossReplay(cfg)
-
 	m.publishServerEvent(runtimeevents.KindMCPServerConnecting, name, cfg, 0, nil)
 	var lease *exclusiveServerLease
 	if cfg.ExclusiveLockFile != "" {
@@ -487,14 +481,10 @@ func connectServer(
 		Version: "1.0.0",
 	}, nil)
 
-	// Create transport based on configuration
-	// Auto-detect transport type if not explicitly specified
+	// Create transport based on configuration.
 	var transport mcp.Transport
 	var commandTransport *isolatedCommandTransport
-	transportType := config.EffectiveMCPTransportType(cfg)
-	if transportType == "" {
-		return nil, fmt.Errorf("either URL or command must be provided")
-	}
+	transportType := cfg.Type
 
 	switch transportType {
 	case "sse", "http":
@@ -504,11 +494,9 @@ func connectServer(
 
 		// Configure DisableStandaloneSSE based on transport type.
 		// - "http": Streamable HTTP request-response mode. Disable the standalone
-		//   SSE stream to avoid compatibility issues with servers that don't
-		//   support the optional GET listener.
+		//   SSE stream for servers that do not support the optional GET listener.
 		// - "sse": Bidirectional mode. Enable the standalone SSE stream to receive
 		//   server-initiated notifications (e.g., ToolListChangedNotification).
-		// - Empty or auto-detected: Defaults to "sse" behavior (standalone SSE enabled).
 		disableStandaloneSSE := transportType == "http"
 
 		logger.DebugCF("mcp", "Using SSE/HTTP transport",
@@ -577,10 +565,7 @@ func connectServer(
 		commandTransport = &isolatedCommandTransport{ServerName: name, Command: cmd}
 		transport = commandTransport
 	default:
-		return nil, fmt.Errorf(
-			"unsupported transport type: %s (supported: stdio, sse, http, streamable-http)",
-			transportType,
-		)
+		return nil, fmt.Errorf("unsupported transport type: %s (supported: stdio, sse, http)", transportType)
 	}
 
 	// Connect to server
@@ -691,29 +676,19 @@ func (m *Manager) CallTool(
 					"reason": "session_lost",
 				})
 
-			reconnectedConn, reconnectErr := m.reconnectServer(ctx, serverName, conn)
-			if config.EffectiveMCPSessionLossReplay(conn.Config) == config.MCPSessionLossReplayNever {
-				if reconnectErr != nil {
-					logger.WarnCF("mcp", "MCP server reconnect failed after uncertain tool call",
-						map[string]any{
-							"server": serverName,
-							"tool":   toolName,
-							"reason": "reconnect_failed",
-						})
-				}
-				return nil, &CallOutcomeUncertainError{
-					Server:      serverName,
-					Tool:        toolName,
-					Reconnected: reconnectErr == nil,
-				}
-			}
+			_, reconnectErr := m.reconnectServer(ctx, serverName, conn)
 			if reconnectErr != nil {
-				return nil, fmt.Errorf("failed to recover lost MCP session: %w", reconnectErr)
+				logger.WarnCF("mcp", "MCP server reconnect failed after uncertain tool call",
+					map[string]any{
+						"server": serverName,
+						"tool":   toolName,
+						"reason": "reconnect_failed",
+					})
 			}
-
-			result, err = reconnectedConn.Session.CallTool(ctx, params)
-			if err == nil {
-				return result, nil
+			return nil, &CallOutcomeUncertainError{
+				Server:      serverName,
+				Tool:        toolName,
+				Reconnected: reconnectErr == nil,
 			}
 		}
 
