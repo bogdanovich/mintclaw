@@ -256,7 +256,7 @@ func newAgentInstance(
 		}
 		configured := false
 		for _, modelCfg := range cfg.ModelList {
-			if modelCfg != nil && modelCfg.ModelName == model {
+			if modelCfg != nil && modelCfg.Enabled && modelCfg.ModelName == model {
 				configured = true
 				break
 			}

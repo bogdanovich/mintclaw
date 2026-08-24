@@ -1082,7 +1082,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 - **Model fallbacks**: Configure primary and fallback models for resilience
 - **Load balancing**: Distribute requests across multiple endpoints or keys
 - **Centralized configuration**: Manage all providers in one place
-- **Model enable/disable**: Use the `enabled` field to temporarily disable a model without removing its configuration
+- **Model enable/disable**: Set `enabled` explicitly; it is the sole activation switch
 
 #### Vision overrides for `load_image`
 
@@ -1100,6 +1100,7 @@ active chat model. If a model needs a different vision-capable backend for
       "model_name": "deepseek-main",
       "provider": "openrouter",
       "model": "deepseek/deepseek-chat",
+      "enabled": true,
       "capabilities": {
         "vision": {
           "model": "gemini-flash-lite",
@@ -1196,7 +1197,8 @@ chmod 600 ~/.mintclaw/.security.yml
     {
       "model_name": "gpt-5.4",
       "provider": "openai",
-      "model": "gpt-5.4"
+      "model": "gpt-5.4",
+      "enabled": true
       // api_key loaded from .security.yml
     }
   ],
@@ -1255,24 +1257,28 @@ For complete documentation, see [`../security/security_configuration.md`](../sec
       "model_name": "ark-code-latest",
       "provider": "volcengine",
       "model": "ark-code-latest",
+      "enabled": true,
       "api_keys": ["sk-your-api-key"]
     },
     {
       "model_name": "gpt-5.4",
       "provider": "openai",
       "model": "gpt-5.4",
+      "enabled": true,
       "api_keys": ["sk-your-openai-key"]
     },
     {
       "model_name": "claude-sonnet-4.6",
       "provider": "anthropic",
       "model": "claude-sonnet-4.6",
+      "enabled": true,
       "api_keys": ["sk-ant-your-key"]
     },
     {
       "model_name": "glm-4.7",
       "provider": "zhipu",
       "model": "glm-4.7",
+      "enabled": true,
       "api_keys": ["your-zhipu-key"]
     }
   ],
@@ -1286,7 +1292,9 @@ For complete documentation, see [`../security/security_configuration.md`](../sec
 
 > **Security Note**: You can remove `api_keys` fields from your config and store them in `.security.yml` instead. See [Security Configuration](#-security-configuration-recommended) above for details.
 >
-> **Note**: The `enabled` field can be set to `false` to disable a model entry without removing it. When omitted, it defaults to `true` during migration for models that have API keys.
+> **Note**: `enabled` is the only activation switch. Set it to `true` for every
+> active entry. Omitting it is equivalent to `false`; API keys and the
+> `local-model` alias do not activate an entry implicitly.
 
 Provider/model representation:
 

@@ -19,8 +19,14 @@ func TestGetModelConfig_Found(t *testing.T) {
 	cfg := &Config{
 		Version: CurrentVersion,
 		ModelList: []*ModelConfig{
-			{ModelName: "test-model", Provider: "openai", Model: "gpt-4o", APIKeys: SimpleSecureStrings("key1")},
-			{ModelName: "other-model", Provider: "anthropic", Model: "claude", APIKeys: SimpleSecureStrings("key2")},
+			{
+				ModelName: "test-model", Provider: "openai", Model: "gpt-4o",
+				APIKeys: SimpleSecureStrings("key1"), Enabled: true,
+			},
+			{
+				ModelName: "other-model", Provider: "anthropic", Model: "claude",
+				APIKeys: SimpleSecureStrings("key2"), Enabled: true,
+			},
 		},
 	}
 
@@ -30,6 +36,22 @@ func TestGetModelConfig_Found(t *testing.T) {
 	}
 	if result.Model != "gpt-4o" {
 		t.Errorf("Model = %q, want %q", result.Model, "gpt-4o")
+	}
+}
+
+func TestGetModelConfig_RequiresExplicitEnabled(t *testing.T) {
+	cfg := &Config{ModelList: []*ModelConfig{
+		{
+			ModelName: "key-only", Provider: "openai", Model: "gpt-5.4",
+			APIKeys: SimpleSecureStrings("key"),
+		},
+		{ModelName: "local-model", Provider: "openai", Model: "local-model"},
+	}}
+
+	for _, modelName := range []string{"key-only", "local-model"} {
+		if _, err := cfg.GetModelConfig(modelName); err == nil {
+			t.Fatalf("GetModelConfig(%q) resolved a disabled model", modelName)
+		}
 	}
 }
 
@@ -60,9 +82,18 @@ func TestGetModelConfig_EmptyList(t *testing.T) {
 func TestGetModelConfig_RoundRobin(t *testing.T) {
 	cfg := &Config{
 		ModelList: []*ModelConfig{
-			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-1", APIKeys: SimpleSecureStrings("key1")},
-			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-2", APIKeys: SimpleSecureStrings("key2")},
-			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-3", APIKeys: SimpleSecureStrings("key3")},
+			{
+				ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-1",
+				APIKeys: SimpleSecureStrings("key1"), Enabled: true,
+			},
+			{
+				ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-2",
+				APIKeys: SimpleSecureStrings("key2"), Enabled: true,
+			},
+			{
+				ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-3",
+				APIKeys: SimpleSecureStrings("key3"), Enabled: true,
+			},
 		},
 	}
 
@@ -89,9 +120,18 @@ func TestGetModelConfig_RoundRobinStartsFromFirstMatch(t *testing.T) {
 
 	cfg := &Config{
 		ModelList: []*ModelConfig{
-			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-1", APIKeys: SimpleSecureStrings("key1")},
-			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-2", APIKeys: SimpleSecureStrings("key2")},
-			{ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-3", APIKeys: SimpleSecureStrings("key3")},
+			{
+				ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-1",
+				APIKeys: SimpleSecureStrings("key1"), Enabled: true,
+			},
+			{
+				ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-2",
+				APIKeys: SimpleSecureStrings("key2"), Enabled: true,
+			},
+			{
+				ModelName: "lb-model", Provider: "openai", Model: "gpt-4o-3",
+				APIKeys: SimpleSecureStrings("key3"), Enabled: true,
+			},
 		},
 	}
 
@@ -122,12 +162,14 @@ func TestGetModelConfig_Concurrent(t *testing.T) {
 				Provider:  "openai",
 				Model:     "gpt-4o-1",
 				APIKeys:   SimpleSecureStrings("key1"),
+				Enabled:   true,
 			},
 			{
 				ModelName: "concurrent-model",
 				Provider:  "openai",
 				Model:     "gpt-4o-2",
 				APIKeys:   SimpleSecureStrings("key2"),
+				Enabled:   true,
 			},
 		},
 	}
@@ -275,6 +317,27 @@ func TestModelConfig_Validate(t *testing.T) {
 	}
 }
 
+func TestModelConfig_MarshalAlwaysIncludesEnabled(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		data, err := json.Marshal(ModelConfig{
+			ModelName: "test",
+			Provider:  "openai",
+			Model:     "gpt-5.4",
+			Enabled:   enabled,
+		})
+		if err != nil {
+			t.Fatalf("Marshal() error = %v", err)
+		}
+		want := `"enabled":false`
+		if enabled {
+			want = `"enabled":true`
+		}
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("Marshal() = %s, want %s", data, want)
+		}
+	}
+}
+
 func TestModelConfig_VisionCapabilities(t *testing.T) {
 	var cfg ModelConfig
 	err := json.Unmarshal([]byte(`{
@@ -378,9 +441,9 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 	newConfig := func() *Config {
 		return &Config{
 			ModelList: []*ModelConfig{
-				{ModelName: "primary", Provider: "openai", Model: "gpt-5.4"},
-				{ModelName: "fallback", Provider: "anthropic", Model: "claude-sonnet-4-6"},
-				{ModelName: "provider/native", Provider: "nvidia", Model: "z-ai/glm-5.1"},
+				{ModelName: "primary", Provider: "openai", Model: "gpt-5.4", Enabled: true},
+				{ModelName: "fallback", Provider: "anthropic", Model: "claude-sonnet-4-6", Enabled: true},
+				{ModelName: "provider/native", Provider: "nvidia", Model: "z-ai/glm-5.1", Enabled: true},
 			},
 		}
 	}
@@ -421,17 +484,25 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 			mutate: func(cfg *Config) {
 				cfg.ModelList = append(
 					cfg.ModelList,
-					&ModelConfig{ModelName: "primary", Provider: "openai", Model: "gpt-5.4-mini"},
+					&ModelConfig{ModelName: "primary", Provider: "openai", Model: "gpt-5.4-mini", Enabled: true},
 				)
 				cfg.Agents.Defaults.ModelName = "primary"
 			},
+		},
+		{
+			name: "disabled model",
+			mutate: func(cfg *Config) {
+				cfg.ModelList[0].Enabled = false
+				cfg.Agents.Defaults.ModelName = "primary"
+			},
+			wantErr: `agents.defaults.model_name references unknown or disabled model_name "primary"`,
 		},
 		{
 			name: "default model",
 			mutate: func(cfg *Config) {
 				cfg.Agents.Defaults.ModelName = "openai/gpt-5.4"
 			},
-			wantErr: `agents.defaults.model_name references unknown model_name "openai/gpt-5.4"`,
+			wantErr: `agents.defaults.model_name references unknown or disabled model_name "openai/gpt-5.4"`,
 		},
 		{
 			name: "default fallback",
@@ -445,14 +516,22 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 			mutate: func(cfg *Config) {
 				cfg.ModelList[0].Fallbacks = []string{"openai/gpt-5.4"}
 			},
-			wantErr: `model_list[0].fallbacks[0] references unknown model_name "openai/gpt-5.4"`,
+			wantErr: `model_list[0].fallbacks[0] references unknown or disabled model_name "openai/gpt-5.4"`,
+		},
+		{
+			name: "disabled model fallback",
+			mutate: func(cfg *Config) {
+				cfg.ModelList[0].Enabled = false
+				cfg.ModelList[0].Fallbacks = []string{"unknown"}
+			},
+			wantErr: `model_list[0].fallbacks[0] references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "vision model",
 			mutate: func(cfg *Config) {
 				cfg.ModelList[0].Capabilities = &ModelCapabilities{Vision: &ModelCapabilityOverride{Model: "unknown"}}
 			},
-			wantErr: `model_list[0].capabilities.vision.model references unknown model_name "unknown"`,
+			wantErr: `model_list[0].capabilities.vision.model references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "vision fallback",
@@ -461,21 +540,31 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 					Fallbacks: []string{"unknown"},
 				}}
 			},
-			wantErr: `model_list[0].capabilities.vision.fallbacks[0] references unknown model_name "unknown"`,
+			wantErr: `model_list[0].capabilities.vision.fallbacks[0] references unknown or disabled model_name "unknown"`,
+		},
+		{
+			name: "disabled model vision selector",
+			mutate: func(cfg *Config) {
+				cfg.ModelList[0].Enabled = false
+				cfg.ModelList[0].Capabilities = &ModelCapabilities{
+					Vision: &ModelCapabilityOverride{Model: "unknown"},
+				}
+			},
+			wantErr: `model_list[0].capabilities.vision.model references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "routing light model",
 			mutate: func(cfg *Config) {
 				cfg.Agents.Defaults.Routing = &RoutingConfig{LightModel: "unknown"}
 			},
-			wantErr: `agents.defaults.routing.light_model references unknown model_name "unknown"`,
+			wantErr: `agents.defaults.routing.light_model references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "default subagent model",
 			mutate: func(cfg *Config) {
 				cfg.Agents.Defaults.Subagents = &SubagentsConfig{Model: &AgentModelConfig{Primary: "unknown"}}
 			},
-			wantErr: `agents.defaults.subagents.model.primary references unknown model_name "unknown"`,
+			wantErr: `agents.defaults.subagents.model.primary references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "default subagent fallback",
@@ -484,21 +573,21 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 					Fallbacks: []string{"unknown"},
 				}}
 			},
-			wantErr: `agents.defaults.subagents.model.fallbacks[0] references unknown model_name "unknown"`,
+			wantErr: `agents.defaults.subagents.model.fallbacks[0] references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "agent model",
 			mutate: func(cfg *Config) {
 				cfg.Agents.List = []AgentConfig{{Model: &AgentModelConfig{Primary: "unknown"}}}
 			},
-			wantErr: `agents.list[0].model.primary references unknown model_name "unknown"`,
+			wantErr: `agents.list[0].model.primary references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "agent fallback",
 			mutate: func(cfg *Config) {
 				cfg.Agents.List = []AgentConfig{{Model: &AgentModelConfig{Fallbacks: []string{"unknown"}}}}
 			},
-			wantErr: `agents.list[0].model.fallbacks[0] references unknown model_name "unknown"`,
+			wantErr: `agents.list[0].model.fallbacks[0] references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "agent subagent model",
@@ -507,7 +596,7 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 					Subagents: &SubagentsConfig{Model: &AgentModelConfig{Primary: "unknown"}},
 				}}
 			},
-			wantErr: `agents.list[0].subagents.model.primary references unknown model_name "unknown"`,
+			wantErr: `agents.list[0].subagents.model.primary references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "agent subagent fallback",
@@ -516,21 +605,21 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 					Subagents: &SubagentsConfig{Model: &AgentModelConfig{Fallbacks: []string{"unknown"}}},
 				}}
 			},
-			wantErr: `agents.list[0].subagents.model.fallbacks[0] references unknown model_name "unknown"`,
+			wantErr: `agents.list[0].subagents.model.fallbacks[0] references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "voice model",
 			mutate: func(cfg *Config) {
 				cfg.Voice.ModelName = "unknown"
 			},
-			wantErr: `voice.model_name references unknown model_name "unknown"`,
+			wantErr: `voice.model_name references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "voice tts model",
 			mutate: func(cfg *Config) {
 				cfg.Voice.TTSModelName = "unknown"
 			},
-			wantErr: `voice.tts_model_name references unknown model_name "unknown"`,
+			wantErr: `voice.tts_model_name references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "surrounding whitespace is rejected",
@@ -572,7 +661,41 @@ func TestLoadConfigRejectsUnknownModelReferenceWithoutRewriting(t *testing.T) {
 
 	_, err := LoadConfig(path)
 	if err == nil || !strings.Contains(err.Error(),
-		`agents.defaults.model_name references unknown model_name "openai/gpt-5.4"`) {
+		`agents.defaults.model_name references unknown or disabled model_name "openai/gpt-5.4"`) {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("LoadConfig() rewrote rejected config:\n%s", after)
+	}
+}
+
+func TestLoadConfigRejectsDormantModelReferenceWithoutRewriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	before := []byte(`{
+		"version": 3,
+		"agents": {"defaults": {"model_name": "primary"}},
+		"model_list": [
+			{"model_name": "primary", "provider": "openai", "model": "gpt-5.4", "enabled": true},
+			{
+				"model_name": "dormant",
+				"provider": "openai",
+				"model": "gpt-5.4-mini",
+				"enabled": false,
+				"fallbacks": ["missing"]
+			}
+		]
+	}`)
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(),
+		`model_list[1].fallbacks[0] references unknown or disabled model_name "missing"`) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	after, readErr := os.ReadFile(path)

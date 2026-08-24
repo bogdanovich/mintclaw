@@ -9,9 +9,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
-// LocalModel is a special model name that indicates that the model is local and with or without api_key.
-const LocalModel = "local-model"
-
 func NewModelCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "model [model_name]",
@@ -116,7 +113,7 @@ func setDefaultModel(configPath, modelName string) error {
 				break
 			}
 		}
-		if !modelFound && modelName != LocalModel {
+		if !modelFound {
 			selectionErr = fmt.Errorf("cannot found model '%s' in config", modelName)
 			return selectionErr
 		}

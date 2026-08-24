@@ -26,7 +26,10 @@ func testProviderWorkspace(t *testing.T, provider any) string {
 func TestCreateProvider_ClaudeCli(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{
-		{ModelName: "claude-sonnet-4.6", Provider: "claude-cli", Model: "claude-sonnet-4.6", Workspace: "/test/ws"},
+		{
+			ModelName: "claude-sonnet-4.6", Provider: "claude-cli", Model: "claude-sonnet-4.6",
+			Workspace: "/test/ws", Enabled: true,
+		},
 	}
 	cfg.Agents.Defaults.ModelName = "claude-sonnet-4.6"
 
@@ -47,7 +50,7 @@ func TestCreateProvider_ClaudeCli(t *testing.T) {
 func TestCreateProvider_ClaudeCode(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{
-		{ModelName: "claude-code", Provider: "claude-cli", Model: "claude-code"},
+		{ModelName: "claude-code", Provider: "claude-cli", Model: "claude-code", Enabled: true},
 	}
 	cfg.Agents.Defaults.ModelName = "claude-code"
 
@@ -63,7 +66,7 @@ func TestCreateProvider_ClaudeCode(t *testing.T) {
 func TestCreateProvider_ClaudeCodec(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{
-		{ModelName: "claudecode", Provider: "claude-cli", Model: "claudecode"},
+		{ModelName: "claudecode", Provider: "claude-cli", Model: "claudecode", Enabled: true},
 	}
 	cfg.Agents.Defaults.ModelName = "claudecode"
 
@@ -79,7 +82,7 @@ func TestCreateProvider_ClaudeCodec(t *testing.T) {
 func TestCreateProvider_ClaudeCliDefaultWorkspace(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ModelList = []*config.ModelConfig{
-		{ModelName: "claude-cli", Provider: "claude-cli", Model: "claude-sonnet"},
+		{ModelName: "claude-cli", Provider: "claude-cli", Model: "claude-sonnet", Enabled: true},
 	}
 	cfg.Agents.Defaults.ModelName = "claude-cli"
 	cfg.Agents.Defaults.Workspace = ""

@@ -370,6 +370,7 @@ func TestGatewayStartReady_RejectsASROnlyDefaultModel(t *testing.T) {
 		Provider:  "elevenlabs",
 		Model:     "scribe_v1",
 		APIKeys:   config.SimpleSecureStrings("sk_elevenlabs_test"),
+		Enabled:   true,
 	}}
 	cfg.Agents.Defaults.ModelName = "elevenlabs-asr"
 
@@ -505,7 +506,7 @@ func TestGatewayStartReady_RejectsUnknownDefaultModel(t *testing.T) {
 
 	h := NewHandler(configPath)
 	ready, reason, err := h.gatewayStartReady()
-	if err == nil || !strings.Contains(err.Error(), `references unknown model_name "missing-model"`) {
+	if err == nil || !strings.Contains(err.Error(), `references unknown or disabled model_name "missing-model"`) {
 		t.Fatalf("gatewayStartReady() = (%v, %q, %v), want config validation error", ready, reason, err)
 	}
 }
@@ -514,6 +515,7 @@ func TestGatewayStartReady_ValidDefaultModel(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	err := config.SaveConfig(configPath, cfg)
 	if err != nil {
@@ -534,6 +536,7 @@ func TestGatewayStartReady_DefaultModelWithoutCredential(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("")
 	cfg.ModelList[0].AuthMethod = ""
 	err := config.SaveConfig(configPath, cfg)
@@ -580,7 +583,7 @@ func TestGatewayStartReady_LocalModelWithoutAPIKey(t *testing.T) {
 	}
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
-		APIBase: "http://localhost:8000/v1",
+		APIBase: "http://localhost:8000/v1", Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "local-vllm"
 	err = config.SaveConfig(configPath, cfg)
@@ -616,7 +619,7 @@ func TestGatewayStartReady_LocalModelWithRunningService(t *testing.T) {
 	}
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
-		APIBase: "http://127.0.0.1:8000/v1",
+		APIBase: "http://127.0.0.1:8000/v1", Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "local-vllm"
 	err = config.SaveConfig(configPath, cfg)
@@ -650,7 +653,7 @@ func TestGatewayStartReady_RemoteVLLMWithAPIKeyDoesNotProbe(t *testing.T) {
 	}
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "remote-vllm", Provider: "vllm", Model: "custom-model",
-		APIBase: "https://models.example.com/v1",
+		APIBase: "https://models.example.com/v1", Enabled: true,
 	}}
 	cfg.ModelList[0o0].SetAPIKey("remote-key")
 	cfg.Agents.Defaults.ModelName = "remote-vllm"
@@ -684,6 +687,7 @@ func TestGatewayStartReady_LocalOllamaUsesDefaultProbeBase(t *testing.T) {
 	}
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "local-ollama", Provider: "ollama", Model: "llama3",
+		Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "local-ollama"
 	err = config.SaveConfig(configPath, cfg)
@@ -711,7 +715,7 @@ func TestGatewayStartReady_OAuthModelRequiresStoredCredential(t *testing.T) {
 	}
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "openai-oauth", Provider: "openai", Model: "gpt-5.4",
-		AuthMethod: "oauth",
+		AuthMethod: "oauth", Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "openai-oauth"
 	err = config.SaveConfig(configPath, cfg)
@@ -1051,9 +1055,10 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
-		ModelName: "second-model", Provider: "openai", Model: "gpt-4.1",
+		ModelName: "second-model", Provider: "openai", Model: "gpt-4.1", Enabled: true,
 	})
 	cfg.ModelList[len(cfg.ModelList)-1].SetAPIKey("second-key")
 	if err := config.SaveConfig(configPath, cfg); err != nil {
@@ -1132,6 +1137,7 @@ func TestGatewayStatusRequiresRestartAfterToolChange(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.Tools.WriteFile.Enabled = true
 	if err := config.SaveConfig(configPath, cfg); err != nil {
@@ -1195,6 +1201,7 @@ func TestGatewayStatusRequiresRestartAfterChannelChange(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
@@ -1261,6 +1268,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelStreamingChange(t *testing
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.ModelList[0].Streaming = config.ModelStreamingConfig{Enabled: false}
 	if err := config.SaveConfig(configPath, cfg); err != nil {
@@ -1320,6 +1328,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelStreamingChange(t *testing
 
 func TestConfigSignatureIncludesModelStreamingForExactDefaultModelName(t *testing.T) {
 	cfg := config.DefaultConfig()
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].ModelName = "friendly-alias"
 	cfg.ModelList[0].Model = "openai/gpt-4o-ref"
 	cfg.Agents.Defaults.ModelName = "friendly-alias"
@@ -1340,6 +1349,7 @@ func TestModelConfigsMatchingNameRequiresExactModelName(t *testing.T) {
 		ModelName: "friendly-alias",
 		Provider:  "openai",
 		Model:     "gpt-4o",
+		Enabled:   true,
 	}}
 
 	if matches := modelConfigsMatchingName(models, "friendly-alias"); len(matches) != 1 || matches[0].index != 0 {
@@ -1357,10 +1367,12 @@ func TestConfigSignatureIncludesModelStreamingForLoadBalancedAliasEntries(t *tes
 	cfg.ModelList = []*config.ModelConfig{
 		{
 			ModelName: "lb-alias", Provider: "openai", Model: "gpt-4o-primary",
+			Enabled:   true,
 			Streaming: config.ModelStreamingConfig{Enabled: false},
 		},
 		{
 			ModelName: "lb-alias", Provider: "openai", Model: "gpt-4o-secondary",
+			Enabled:   true,
 			Streaming: config.ModelStreamingConfig{Enabled: false},
 		},
 	}
@@ -1383,12 +1395,14 @@ func TestConfigSignatureIncludesLoadBalancedDuplicateEntryIndex(t *testing.T) {
 			ModelName: "lb-alias",
 			Provider:  "openai",
 			Model:     "gpt-4o",
+			Enabled:   true,
 			Streaming: config.ModelStreamingConfig{Enabled: false},
 		},
 		{
 			ModelName: "lb-alias",
 			Provider:  "openai",
 			Model:     "gpt-4o",
+			Enabled:   true,
 			Streaming: config.ModelStreamingConfig{Enabled: true},
 		},
 	}
@@ -1411,6 +1425,7 @@ func TestGatewayStatusRequiresRestartAfterWebSearchConfigChange(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.Tools.Web.Enabled = true
 	cfg.Tools.Web.Provider = "sogou"
@@ -1475,6 +1490,7 @@ func TestGatewayStatusNoRestartRequiredForNonSensitiveChanges(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.Agents.Defaults.MaxTokens = 1000
 	if err := config.SaveConfig(configPath, cfg); err != nil {
@@ -1538,7 +1554,11 @@ func TestGatewayStatusNoRestartRequiredWhenNotRunning(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
+	cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
+		ModelName: "different-model", Provider: "openai", Model: "gpt-4.1", Enabled: true,
+	})
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -1672,6 +1692,7 @@ func TestGatewayRestartKeepsRunningProcessWhenPreconditionsFail(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("")
 	cfg.ModelList[0].AuthMethod = ""
 	if err := config.SaveConfig(configPath, cfg); err != nil {
@@ -1725,6 +1746,7 @@ func TestGatewayRestartKeepsOldProcessWhenItDoesNotExitInTime(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
@@ -1791,6 +1813,7 @@ func TestGatewayRestartReturnsErrorStatusWhenReplacementFailsToStart(t *testing.
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)

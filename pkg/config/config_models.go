@@ -75,10 +75,8 @@ type ModelConfig struct {
 
 	APIKeys SecureStrings `json:"api_keys,omitzero" yaml:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
 
-	// Enabled indicates whether this model entry is active. When omitted in
-	// existing configs, the field is inferred during load: models with API keys
-	// or the reserved "local-model" name are auto-enabled.
-	Enabled bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// Enabled is the sole switch controlling whether this model entry is active.
+	Enabled bool `json:"enabled" yaml:"enabled"`
 	// UserAgent is the user agent string to use for HTTP requests.
 	UserAgent string `json:"user_agent,omitempty" yaml:"-"`
 
@@ -94,23 +92,6 @@ type ModelCapabilities struct {
 type ModelCapabilityOverride struct {
 	Model     string   `json:"model,omitempty"`
 	Fallbacks []string `json:"fallbacks,omitempty"`
-}
-
-// IsEffectivelyEnabled reports whether a model entry should be treated as active.
-// For backward compatibility, models with API keys or the reserved "local-model"
-// alias remain active even when callers construct Config directly without
-// materializing Enabled=true first.
-func (c *ModelConfig) IsEffectivelyEnabled() bool {
-	if c == nil {
-		return false
-	}
-	if c.Enabled {
-		return true
-	}
-	if len(c.APIKeys) > 0 {
-		return true
-	}
-	return strings.TrimSpace(c.ModelName) == "local-model"
 }
 
 // APIKey returns the first API key from apiKeys

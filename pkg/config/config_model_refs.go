@@ -5,18 +5,18 @@ import (
 	"strings"
 )
 
-// ValidateModelReferences requires every configured model selector to name a
-// model_list entry exactly. ModelConfig.Model remains the provider-native model
-// identifier; it is not a selector alias.
+// ValidateModelReferences requires every configured model selector to name an
+// enabled model_list entry exactly. ModelConfig.Model remains the provider-native
+// model identifier; it is not a selector alias.
 func (c *Config) ValidateModelReferences() error {
 	if c == nil {
 		return nil
 	}
 
-	configured := make(map[string]struct{}, len(c.ModelList))
+	enabled := make(map[string]struct{}, len(c.ModelList))
 	for _, model := range c.ModelList {
-		if model != nil && model.ModelName != "" {
-			configured[model.ModelName] = struct{}{}
+		if model != nil && model.Enabled && model.ModelName != "" {
+			enabled[model.ModelName] = struct{}{}
 		}
 	}
 
@@ -27,8 +27,8 @@ func (c *Config) ValidateModelReferences() error {
 		if ref != strings.TrimSpace(ref) {
 			return fmt.Errorf("%s must not have surrounding whitespace", path)
 		}
-		if _, ok := configured[ref]; !ok {
-			return fmt.Errorf("%s references unknown model_name %q", path, ref)
+		if _, ok := enabled[ref]; !ok {
+			return fmt.Errorf("%s references unknown or disabled model_name %q", path, ref)
 		}
 		return nil
 	}

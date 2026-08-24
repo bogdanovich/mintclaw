@@ -376,7 +376,7 @@ func (al *AgentLoop) buildCommandsRuntime(
 			}
 			modelsByName := make(map[string]*modelAggregate)
 			for idx, modelCfg := range cfg.ModelList {
-				if modelCfg == nil || modelCfg.IsVirtual() || !modelCfg.IsEffectivelyEnabled() {
+				if modelCfg == nil || modelCfg.IsVirtual() || !modelCfg.Enabled {
 					continue
 				}
 				entry, ok := modelsByName[modelCfg.ModelName]

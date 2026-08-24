@@ -1999,7 +1999,7 @@ func TestLoadConfig_WebToolsProxy(t *testing.T) {
 	configJSON := `{
 	"version": 3,
   "agents": {"defaults":{"workspace":"./workspace","model_name":"gpt4","max_tokens":8192,"max_tool_iterations":20}},
-  "model_list": [{"model_name":"gpt4","provider":"openai","model":"gpt-5.4","api_keys":["x"]}],
+  "model_list": [{"model_name":"gpt4","provider":"openai","model":"gpt-5.4","api_keys":["x"],"enabled":true}],
   "tools": {"web":{"proxy":"http://127.0.0.1:7890"}}
 }`
 	if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
@@ -3307,6 +3307,7 @@ func TestFilterSensitiveData(t *testing.T) {
 		&ModelConfig{
 			ModelName: "test",
 			APIKeys:   SimpleSecureStrings("sk-long-key-12345"),
+			Enabled:   true,
 		},
 	}
 	m, err := cfg.GetModelConfig("test")

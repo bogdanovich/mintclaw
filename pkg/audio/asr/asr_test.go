@@ -25,7 +25,7 @@ func TestDetectTranscriber(t *testing.T) {
 				ModelList: []*config.ModelConfig{
 					{
 						ModelName: "voice-gemini", Provider: "gemini", Model: "gemini-2.5-flash",
-						APIKeys: config.SimpleSecureStrings("sk-gemini-model"),
+						APIKeys: config.SimpleSecureStrings("sk-gemini-model"), Enabled: true,
 					},
 				},
 			},
@@ -38,7 +38,7 @@ func TestDetectTranscriber(t *testing.T) {
 				ModelList: []*config.ModelConfig{
 					{
 						ModelName: "my-asr-model", Provider: "elevenlabs", Model: "scribe_v1",
-						APIKeys: config.SimpleSecureStrings("sk_elevenlabs_test"),
+						APIKeys: config.SimpleSecureStrings("sk_elevenlabs_test"), Enabled: true,
 					},
 				},
 			},
@@ -54,6 +54,7 @@ func TestDetectTranscriber(t *testing.T) {
 						Provider:  "elevenlabs",
 						Model:     "scribe_v1",
 						APIKeys:   config.SimpleSecureStrings("sk_elevenlabs_test"),
+						Enabled:   true,
 					},
 				},
 			},
@@ -66,7 +67,7 @@ func TestDetectTranscriber(t *testing.T) {
 				ModelList: []*config.ModelConfig{
 					{
 						ModelName: "my-asr-model", Provider: "groq", Model: "whisper-large-v3",
-						APIKeys: config.SimpleSecureStrings("sk-groq-model"),
+						APIKeys: config.SimpleSecureStrings("sk-groq-model"), Enabled: true,
 					},
 				},
 			},
@@ -79,7 +80,7 @@ func TestDetectTranscriber(t *testing.T) {
 				ModelList: []*config.ModelConfig{
 					{
 						ModelName: "my-asr-model", Provider: "openai", Model: "whisper-1",
-						APIKeys: config.SimpleSecureStrings("sk-openai-model"),
+						APIKeys: config.SimpleSecureStrings("sk-openai-model"), Enabled: true,
 					},
 				},
 			},
@@ -92,7 +93,7 @@ func TestDetectTranscriber(t *testing.T) {
 				ModelList: []*config.ModelConfig{
 					{
 						ModelName: "my-asr-model", Provider: "openai", Model: "gpt-4o-audio-preview",
-						APIKeys: config.SimpleSecureStrings("sk-openai"),
+						APIKeys: config.SimpleSecureStrings("sk-openai"), Enabled: true,
 					},
 				},
 			},
@@ -109,6 +110,7 @@ func TestDetectTranscriber(t *testing.T) {
 						Model:     "my-audio-deployment",
 						APIKeys:   config.SimpleSecureStrings("sk-azure"),
 						APIBase:   "https://example.openai.azure.com",
+						Enabled:   true,
 					},
 				},
 			},
@@ -121,7 +123,7 @@ func TestDetectTranscriber(t *testing.T) {
 				ModelList: []*config.ModelConfig{
 					{
 						ModelName: "voice-anthropic", Provider: "anthropic", Model: "claude-sonnet-4.6",
-						APIKeys: config.SimpleSecureStrings("sk-anthropic"),
+						APIKeys: config.SimpleSecureStrings("sk-anthropic"), Enabled: true,
 					},
 				},
 			},
@@ -133,7 +135,7 @@ func TestDetectTranscriber(t *testing.T) {
 				ModelList: []*config.ModelConfig{
 					{
 						ModelName: "groq", Provider: "groq", Model: "whisper-large-v3",
-						APIKeys: config.SimpleSecureStrings("sk-groq-model"),
+						APIKeys: config.SimpleSecureStrings("sk-groq-model"), Enabled: true,
 					},
 				},
 			},
@@ -146,7 +148,7 @@ func TestDetectTranscriber(t *testing.T) {
 				ModelList: []*config.ModelConfig{
 					{
 						ModelName: "other", Provider: "gemini", Model: "gemini-2.5-flash",
-						APIKeys: config.SimpleSecureStrings("sk-other-model"),
+						APIKeys: config.SimpleSecureStrings("sk-other-model"), Enabled: true,
 					},
 				},
 			},
@@ -163,10 +165,11 @@ func TestDetectTranscriber(t *testing.T) {
 						Provider: "openai",
 						Model:    "elevenlabs",
 						APIKeys:  config.SimpleSecureStrings("sk_elevenlabs_test"),
+						Enabled:  true,
 					},
 					{
 						ModelName: "voice-gemini", Provider: "gemini", Model: "gemini-2.5-flash",
-						APIKeys: config.SimpleSecureStrings("sk-gemini-model"),
+						APIKeys: config.SimpleSecureStrings("sk-gemini-model"), Enabled: true,
 					},
 				},
 			},

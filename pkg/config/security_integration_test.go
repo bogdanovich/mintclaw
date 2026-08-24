@@ -149,7 +149,8 @@ func TestSecurityConfigWithAPIKeysArray(t *testing.T) {
     {
       "model_name": "multi-key-model",
 	  "provider": "openai",
-	  "model": "multi-key-model"
+	  "model": "multi-key-model",
+	  "enabled": true
     }
   ]
 }`

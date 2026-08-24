@@ -1063,6 +1063,7 @@ func TestProcessMessage_PassesExplicitThinkingOffToCapableProvider(t *testing.T)
 		ModelList: []*config.ModelConfig{{
 			ModelName: "test-model", Provider: "openai", Model: "test-model",
 			ThinkingLevel: "off",
+			Enabled:       true,
 		}},
 	}
 
@@ -1098,6 +1099,7 @@ func TestProcessMessage_PassesExplicitThinkingOffToProviderWithoutThinkingCapabi
 		ModelList: []*config.ModelConfig{{
 			ModelName: "test-model", Provider: "openai", Model: "test-model",
 			ThinkingLevel: "off",
+			Enabled:       true,
 		}},
 	}
 
@@ -1135,6 +1137,7 @@ func TestProcessMessagePassesDeepSeekThinkingLevelToCapableProvider(t *testing.T
 			Provider:      "deepseek",
 			Model:         "deepseek-v4-flash",
 			ThinkingLevel: "xhigh",
+			Enabled:       true,
 		}},
 	}
 
@@ -1170,6 +1173,7 @@ func TestProcessMessage_SuppressesReasoningWhenThinkingOff(t *testing.T) {
 		ModelList: []*config.ModelConfig{{
 			ModelName: "test-model", Provider: "openai", Model: "test-model",
 			ThinkingLevel: "off",
+			Enabled:       true,
 		}},
 	}
 
@@ -1716,8 +1720,9 @@ func TestProcessMessage_BtwFallbackDoesNotInheritPrimaryThinkingOff(t *testing.T
 			{
 				ModelName: "test-model", Provider: "openai", Model: "test-model",
 				ThinkingLevel: "off",
+				Enabled:       true,
 			},
-			{ModelName: "fallback-model", Provider: "openai", Model: "fallback-model"},
+			{ModelName: "fallback-model", Provider: "openai", Model: "fallback-model", Enabled: true},
 		},
 	}
 
@@ -1825,7 +1830,7 @@ func TestProcessMessage_BtwCommandRunsWithoutPersistingHistory(t *testing.T) {
 		},
 		// Add model list so isolated provider can resolve the model
 		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Provider: "openai", Model: "test-model"},
+			{ModelName: "test-model", Provider: "openai", Model: "test-model", Enabled: true},
 		},
 	}
 
@@ -1908,6 +1913,7 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 		},
 		ModelList: []*config.ModelConfig{{
 			ModelName: "test-model", Provider: "openai", Model: "test-model",
+			Enabled: true,
 		}},
 	}
 
@@ -1969,7 +1975,7 @@ func TestProcessMessage_BtwCommandUsesIsolatedProvider(t *testing.T) {
 		},
 		// Add model list so isolated provider can resolve the model
 		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Provider: "openai", Model: "test-model"},
+			{ModelName: "test-model", Provider: "openai", Model: "test-model", Enabled: true},
 		},
 	}
 
@@ -2042,7 +2048,7 @@ func TestProcessMessage_BtwCommandRetriesWithoutMediaOnVisionUnsupported(t *test
 		},
 		// Add model list so isolated provider can resolve the model
 		ModelList: []*config.ModelConfig{
-			{ModelName: "test-model", Provider: "openai", Model: "test-model"},
+			{ModelName: "test-model", Provider: "openai", Model: "test-model", Enabled: true},
 		},
 	}
 
@@ -2085,8 +2091,8 @@ func TestProcessMessage_BtwCommandUsesProviderFactoryModel(t *testing.T) {
 			},
 		},
 		ModelList: []*config.ModelConfig{
-			{ModelName: "lb-model", Provider: "openai", Model: "lb-model-a"},
-			{ModelName: "lb-model", Provider: "openai", Model: "lb-model-b"},
+			{ModelName: "lb-model", Provider: "openai", Model: "lb-model-a", Enabled: true},
+			{ModelName: "lb-model", Provider: "openai", Model: "lb-model-b", Enabled: true},
 		},
 	}
 
@@ -2131,9 +2137,9 @@ func TestProcessMessage_BtwCommandHookModelBypassesFallbackCandidates(t *testing
 			},
 		},
 		ModelList: []*config.ModelConfig{
-			{ModelName: "primary-model", Provider: "openai", Model: "primary-model"},
-			{ModelName: "fallback-model", Provider: "openai", Model: "fallback-model"},
-			{ModelName: "hook-model", Provider: "openai", Model: "hook-native-model"},
+			{ModelName: "primary-model", Provider: "openai", Model: "primary-model", Enabled: true},
+			{ModelName: "fallback-model", Provider: "openai", Model: "fallback-model", Enabled: true},
+			{ModelName: "hook-model", Provider: "openai", Model: "hook-native-model", Enabled: true},
 		},
 	}
 
@@ -2174,8 +2180,8 @@ func TestAskSideQuestion_UsesEffectiveModelBindingExecutionState(t *testing.T) {
 			},
 		},
 		ModelList: []*config.ModelConfig{
-			{ModelName: "workspace-model", Provider: "openai", Model: "workspace-model"},
-			{ModelName: "override-model", Provider: "openai", Model: "override-model"},
+			{ModelName: "workspace-model", Provider: "openai", Model: "workspace-model", Enabled: true},
+			{ModelName: "override-model", Provider: "openai", Model: "override-model", Enabled: true},
 		},
 	}
 
@@ -6692,7 +6698,7 @@ func TestProcessMessage_ListModelsShowsConfiguredAliases(t *testing.T) {
 	}
 }
 
-func TestProcessMessage_ListModelsShowsInferredEnabledAlias(t *testing.T) {
+func TestProcessMessage_ListModelsRequiresExplicitEnabled(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -6722,10 +6728,10 @@ func TestProcessMessage_ListModelsShowsInferredEnabledAlias(t *testing.T) {
 				APIKeys:   config.SimpleSecureStrings("test-key"),
 			},
 			{
-				ModelName: "disabled-model",
-				Model:     "openai/disabled-model",
+				ModelName: "enabled-model",
+				Model:     "openai/enabled-model",
 				Provider:  "openai",
-				Enabled:   false,
+				Enabled:   true,
 			},
 		},
 	}
@@ -6744,14 +6750,14 @@ func TestProcessMessage_ListModelsShowsInferredEnabledAlias(t *testing.T) {
 		},
 		Content: "/list models",
 	})
-	if !strings.Contains(resp, "- local-model (current)") {
-		t.Fatalf("local-model should be listed via legacy inferred enablement: %q", resp)
+	if !strings.Contains(resp, "- enabled-model") {
+		t.Fatalf("explicitly enabled model should be listed: %q", resp)
 	}
-	if !strings.Contains(resp, "- api-key-alias") {
-		t.Fatalf("api-key-alias should be listed via API key inferred enablement: %q", resp)
+	if strings.Contains(resp, "local-model") {
+		t.Fatalf("local-model without enabled=true should not be listed: %q", resp)
 	}
-	if strings.Contains(resp, "disabled-model") {
-		t.Fatalf("disabled model should not be listed: %q", resp)
+	if strings.Contains(resp, "api-key-alias") {
+		t.Fatalf("model with only an API key should not be listed: %q", resp)
 	}
 }
 
@@ -7439,6 +7445,7 @@ func TestProcessMessage_FallbackUsesActiveProviderWhenCandidateNotRegistered(t *
 				APIBase:   primaryServer.URL,
 				APIKeys:   config.SimpleSecureStrings("primary-key"),
 				Workspace: workspace,
+				Enabled:   true,
 			},
 		},
 	}

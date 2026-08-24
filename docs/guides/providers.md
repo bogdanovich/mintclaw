@@ -88,24 +88,28 @@ This design also enables **multi-agent support** with flexible provider selectio
       "model_name": "ark-code-latest",
       "provider": "volcengine",
       "model": "ark-code-latest",
+      "enabled": true,
       "api_keys": ["sk-your-api-key"]
     },
     {
       "model_name": "gpt-5.4",
       "provider": "openai",
       "model": "gpt-5.4",
+      "enabled": true,
       "api_keys": ["sk-your-openai-key"]
     },
     {
       "model_name": "claude-sonnet-4.6",
       "provider": "anthropic",
       "model": "claude-sonnet-4.6",
+      "enabled": true,
       "api_keys": ["sk-ant-your-key"]
     },
     {
       "model_name": "glm-4.7",
       "provider": "zhipu",
       "model": "glm-4.7",
+      "enabled": true,
       "api_keys": ["your-zhipu-key"]
     }
   ],
@@ -137,7 +141,7 @@ This design also enables **multi-agent support** with flexible provider selectio
 | `streaming.enabled` | bool | No | Opt-in for provider streaming on this model entry. Defaults to `false` and also requires the active channel's `settings.streaming.enabled` to be `true`. |
 | `rpm` | int | No | Per-minute request rate limit                                                                                                                                                                                                               |
 | `fallbacks` | string[] | No | Exact `model_name` values for automatic failover                                                                                                                                                                                            |
-| `enabled` | bool | No | Whether this model entry is active (default: `true`)                                                                                                                                                                                        |
+| `enabled` | bool | No | Sole activation switch for this model entry. Omitted or `false` entries are inactive; API keys and model names do not imply activation.                                                                                                     |
 
 When streaming is disabled, omit the `streaming` block. Writing `"streaming": {"enabled": false}` is optional and not needed in generated or hand-written config.
 

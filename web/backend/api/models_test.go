@@ -87,6 +87,7 @@ func TestHandleAddModelRejectsDanglingFallback(t *testing.T) {
 		"model_name":"new-model",
 		"provider":"openai",
 		"model":"gpt-5.4-mini",
+		"enabled":true,
 		"fallbacks":["missing-model"]
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -104,6 +105,132 @@ func TestHandleAddModelRejectsDanglingFallback(t *testing.T) {
 	}
 }
 
+func TestHandleAddModelSupportsPreviousClientAndExplicitEnabledValue(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	previousClient := addModelAndLoadLatest(t, configPath, `{
+		"model_name":"previous-client",
+		"provider":"openai",
+		"model":"gpt-5.4-mini",
+		"api_key":"test-key"
+	}`)
+	if !previousClient.Enabled {
+		t.Fatal("model without enabled field should be active at the previous-client API boundary")
+	}
+
+	disabled := addModelAndLoadLatest(t, configPath, `{
+		"model_name":"explicitly-disabled",
+		"provider":"openai",
+		"model":"gpt-5.4-mini",
+		"enabled":false,
+		"api_key":"test-key"
+	}`)
+	if disabled.Enabled {
+		t.Fatal("model with enabled=false should be inactive")
+	}
+
+	enabled := addModelAndLoadLatest(t, configPath, `{
+		"model_name":"explicitly-enabled",
+		"provider":"openai",
+		"model":"gpt-5.4-mini",
+		"enabled":true,
+		"api_key":"test-key"
+	}`)
+	if !enabled.Enabled {
+		t.Fatal("model with enabled=true should be active")
+	}
+}
+
+func TestHandleUpdateModelPreservesOmittedEnabledValue(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "active-model",
+		Provider:  "openai",
+		Model:     "gpt-5.4",
+		Enabled:   true,
+	}}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/models/0", bytes.NewBufferString(`{
+		"model_name":"active-model",
+		"provider":"openai",
+		"model":"gpt-5.4-mini"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if !updated.ModelList[0].Enabled {
+		t.Fatal("enabled = false, want preserved true when previous client omits field")
+	}
+}
+
+func TestHandleUpdateModelKeepsDefaultWhenAliasHasAnotherEligibleEntry(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4", Enabled: true},
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4-mini", Enabled: true},
+	}
+	cfg.Agents.Defaults.ModelName = "balanced"
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/models/0", bytes.NewBufferString(`{
+		"model_name":"balanced",
+		"provider":"openai",
+		"model":"gpt-5.4",
+		"enabled":false
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if updated.ModelList[0].Enabled {
+		t.Fatal("updated alias entry should be explicitly disabled")
+	}
+	if got := updated.Agents.Defaults.ModelName; got != "balanced" {
+		t.Fatalf("default model = %q, want balanced while another alias entry is eligible", got)
+	}
+}
+
 func TestHandleUpdateModelRejectsReferencedRename(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
@@ -116,6 +243,7 @@ func TestHandleUpdateModelRejectsReferencedRename(t *testing.T) {
 		ModelName: "referenced-model",
 		Provider:  "openai",
 		Model:     "gpt-5.4",
+		Enabled:   true,
 	}}
 	cfg.Agents.Defaults.ModelName = "referenced-model"
 	if err = config.SaveConfig(configPath, cfg); err != nil {
@@ -130,7 +258,8 @@ func TestHandleUpdateModelRejectsReferencedRename(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPut, "/api/models/0", bytes.NewBufferString(`{
 		"model_name":"renamed-model",
 		"provider":"openai",
-		"model":"gpt-5.4"
+		"model":"gpt-5.4",
+		"enabled":true
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
@@ -156,12 +285,13 @@ func TestHandleDeleteModelRejectsDanglingReference(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.ModelList = []*config.ModelConfig{
-		{ModelName: "referenced-model", Provider: "openai", Model: "gpt-5.4"},
+		{ModelName: "referenced-model", Provider: "openai", Model: "gpt-5.4", Enabled: true},
 		{
 			ModelName: "consumer-model",
 			Provider:  "openai",
 			Model:     "gpt-5.4-mini",
 			Fallbacks: []string{"referenced-model"},
+			Enabled:   true,
 		},
 	}
 	cfg.Agents.Defaults.ModelName = "consumer-model"
@@ -186,6 +316,46 @@ func TestHandleDeleteModelRejectsDanglingReference(t *testing.T) {
 	}
 	if len(unchanged.ModelList) != 2 {
 		t.Fatalf("model_list length = %d, want unchanged length 2", len(unchanged.ModelList))
+	}
+}
+
+func TestHandleDeleteModelKeepsDefaultWhenAliasHasAnotherEligibleEntry(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4", Enabled: true},
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4-mini", Enabled: true},
+	}
+	cfg.Agents.Defaults.ModelName = "balanced"
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/models/0", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if len(updated.ModelList) != 1 {
+		t.Fatalf("model_list length = %d, want 1", len(updated.ModelList))
+	}
+	if got := updated.Agents.Defaults.ModelName; got != "balanced" {
+		t.Fatalf("default model = %q, want balanced while another alias entry is eligible", got)
 	}
 }
 
@@ -226,7 +396,7 @@ func TestHandleListModels_AvailabilityUsesRuntimeProbesForLocalModels(t *testing
 	cfg.ModelList = []*config.ModelConfig{
 		{
 			ModelName: "openai-oauth", Provider: "openai", Model: "gpt-5.4",
-			AuthMethod: "oauth",
+			AuthMethod: "oauth", Enabled: true,
 		},
 		{
 			ModelName: "vllm-local", Provider: "vllm", Model: "custom-model",
@@ -332,7 +502,7 @@ func TestHandleListModels_AvailabilityForOAuthModelWithCredential(t *testing.T) 
 	}
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "claude-oauth", Provider: "anthropic", Model: "claude-sonnet-4.6",
-		AuthMethod: "oauth",
+		AuthMethod: "oauth", Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "claude-oauth"
 	err = config.SaveConfig(configPath, cfg)
@@ -1641,6 +1811,7 @@ func TestHandleUpdateModel_ClearsDefaultWhenSavingASROnlyModel(t *testing.T) {
 		Provider:  "elevenlabs",
 		Model:     "scribe_v1",
 		APIKeys:   config.SimpleSecureStrings("sk_elevenlabs_test"),
+		Enabled:   true,
 	}}
 	cfg.Agents.Defaults.ModelName = "elevenlabs-asr"
 	if err = config.SaveConfig(configPath, cfg); err != nil {
@@ -2113,6 +2284,82 @@ func TestHandleSetDefaultModel_RejectsNonexistentModel(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "not found") {
 		t.Fatalf("error message should mention 'not found', got: %s", rec.Body.String())
+	}
+}
+
+func TestHandleSetDefaultModel_RejectsDisabledModel(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "disabled-model",
+		Provider:  "openai",
+		Model:     "gpt-5.4",
+		Enabled:   false,
+	}}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/default", bytes.NewBufferString(`{
+		"model_name": "disabled-model"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "cannot be used as the default chat model") {
+		t.Fatalf("body = %q, want disabled model rejection", rec.Body.String())
+	}
+}
+
+func TestHandleSetDefaultModelAcceptsAliasWithEnabledEntryAfterDisabledEntry(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4", Enabled: false},
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4-mini", Enabled: true},
+	}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/default", bytes.NewBufferString(`{
+		"model_name": "balanced"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if got := updated.Agents.Defaults.ModelName; got != "balanced" {
+		t.Fatalf("default model = %q, want balanced", got)
 	}
 }
 

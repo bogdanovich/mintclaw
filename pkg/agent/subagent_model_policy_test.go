@@ -185,6 +185,7 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 				Model:     "test-model",
 				APIKeys:   config.SimpleSecureStrings("test-key"),
 				APIBase:   "https://example.invalid/v1",
+				Enabled:   true,
 			},
 			{
 				ModelName: "gemini-flash-lite",
@@ -192,6 +193,7 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 				Model:     "gemini-flash-lite",
 				APIKeys:   config.SimpleSecureStrings("test-key"),
 				APIBase:   "https://example.invalid/v1",
+				Enabled:   true,
 			},
 			{
 				ModelName: "light-model",
@@ -199,6 +201,7 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 				Model:     "light-model",
 				APIKeys:   config.SimpleSecureStrings("test-key"),
 				APIBase:   "https://example.invalid/v1",
+				Enabled:   true,
 			},
 		},
 	}

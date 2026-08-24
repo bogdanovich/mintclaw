@@ -743,6 +743,9 @@ func TestToStandardConfig(t *testing.T) {
 		if m.ModelName == "claude-sonnet-4-20250514" {
 			foundModel = true
 			foundAPIKey = m.APIKey()
+			if !m.Enabled {
+				t.Fatal("converted model is disabled")
+			}
 			break
 		}
 	}

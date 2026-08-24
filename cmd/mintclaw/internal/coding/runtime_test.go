@@ -228,6 +228,7 @@ func TestCodingRuntimeConfigSkipsDisabledAliasEntries(t *testing.T) {
 			ModelName: "coding-model",
 			Provider:  "openai",
 			Model:     "disabled-model",
+			APIKeys:   config.SimpleSecureStrings("disabled-key"),
 		},
 		&config.ModelConfig{
 			ModelName: "coding-model",

@@ -753,6 +753,9 @@ Implementation sequence:
 22. Make `tools.image_generate.model` the sole image-generator selector.
     Delete the unused agent-default image fallback fields and the cross-section
     runtime fallback; removed fields are rejected by current-schema decoding.
+23. Make `model_list[].enabled` the sole model-activation contract. Delete
+    API-key and `local-model` inference, persist the boolean explicitly, and
+    carry it through every model creation and multi-key expansion path.
 
 Exit criteria:
 

@@ -252,6 +252,28 @@ func TestSetDefaultModel_InvalidModel(t *testing.T) {
 	assert.EqualError(t, err, "cannot found model 'nonexistent-model' in config")
 }
 
+func TestSetDefaultModel_RejectsUnconfiguredLocalModel(t *testing.T) {
+	initTest(t)
+
+	cfg := &config.Config{
+		Version: config.CurrentVersion,
+		ModelList: []*config.ModelConfig{{
+			ModelName: "existing-model",
+			Provider:  "openai",
+			Model:     "existing",
+			Enabled:   true,
+		}},
+	}
+	require.NoError(t, config.SaveConfig(configPath, cfg))
+
+	err := setDefaultModel(configPath, "local-model")
+	assert.EqualError(t, err, "cannot found model 'local-model' in config")
+
+	updated, loadErr := config.LoadConfig(configPath)
+	require.NoError(t, loadErr)
+	assert.Empty(t, updated.Agents.Defaults.ModelName)
+}
+
 func TestSetDefaultModel_ModelWithoutAPIKey(t *testing.T) {
 	initTest(t)
 

@@ -550,7 +550,7 @@ func modelConfigsMatchingName(
 	}
 	matches := make([]signatureModelConfigMatch, 0, 1)
 	for i, mc := range modelList {
-		if mc == nil || mc.ModelName != name {
+		if mc == nil || !mc.Enabled || mc.ModelName != name {
 			continue
 		}
 		matches = append(matches, signatureModelConfigMatch{index: i, model: mc})
