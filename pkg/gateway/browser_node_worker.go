@@ -495,13 +495,23 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 		if !result.ProtectedResult {
 			if result.Output != nil {
 				streamed := result
+				descriptorValidated := false
 				for attempt := 0; attempt < 2; attempt++ {
-					result, err = worker.receiveBrowserSnapshot(ctx, streamed, descriptor.Name, requestKey)
+					var validated bool
+					result, validated, err = worker.receiveBrowserSnapshot(
+						ctx, streamed, descriptor.Name, requestKey,
+					)
+					descriptorValidated = descriptorValidated || validated
 					if err == nil || ctx.Err() != nil {
 						break
 					}
 				}
 				if err != nil {
+					if descriptorValidated {
+						if advanceErr := worker.advanceRemoteSnapshotGeneration(nextGeneration); advanceErr != nil {
+							return browser.DriverObservation{}, advanceErr
+						}
+					}
 					return browser.DriverObservation{}, browser.ErrSnapshotTransfer
 				}
 			}
@@ -731,7 +741,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	if result.Observation != nil && result.Observation.Output != nil {
 		streamed := *result.Observation
 		for attempt := 0; attempt < 2; attempt++ {
-			*result.Observation, snapshotTransferErr = worker.receiveBrowserSnapshot(
+			*result.Observation, _, snapshotTransferErr = worker.receiveBrowserSnapshot(
 				ctx, streamed, descriptor.Name, "act_"+request.InvocationID,
 			)
 			if snapshotTransferErr == nil || ctx.Err() != nil {
@@ -1257,9 +1267,9 @@ func (worker *nodeBrowserWorker) receiveBrowserSnapshot(
 	result nodes.BrowserObservationResult,
 	command string,
 	requestKey string,
-) (nodes.BrowserObservationResult, error) {
+) (nodes.BrowserObservationResult, bool, error) {
 	if result.Output == nil {
-		return result, nil
+		return result, false, nil
 	}
 	output := *result.Output
 	principal := worker.principal()
@@ -1277,26 +1287,34 @@ func (worker *nodeBrowserWorker) receiveBrowserSnapshot(
 		output.Size <= uint64(protocol.MaxTransferChunkBytes) ||
 		output.Size > uint64(worker.limits.ToolResultBytes) || output.ExpiresAt <= time.Now().Unix() ||
 		result.Snapshot != "" || len(result.Elements) != 0 {
-		return nodes.BrowserObservationResult{}, browser.ErrDriverIncompatible
+		return nodes.BrowserObservationResult{}, false, browser.ErrDriverIncompatible
 	}
 	digest, err := hex.DecodeString(output.SHA256)
 	if err != nil || len(digest) != sha256.Size {
-		return nodes.BrowserObservationResult{}, browser.ErrDriverIncompatible
+		return nodes.BrowserObservationResult{}, false, browser.ErrDriverIncompatible
 	}
+	transferDeadline := time.Now().Add(
+		time.Duration(worker.limits.Effective().ActionSeconds) * time.Second,
+	)
+	if outputDeadline := time.Unix(output.ExpiresAt, 0); outputDeadline.Before(transferDeadline) {
+		transferDeadline = outputDeadline
+	}
+	transferCtx, cancelTransfer := context.WithDeadline(ctx, transferDeadline)
+	defer cancelTransfer()
 	var bindingDigest [sha256.Size]byte
 	copy(bindingDigest[:], digest)
 	sessions, err := worker.factory.source.runtime.transferSessionsSnapshot(
 		worker.factory.source.registryPath, worker.factory.source.generation,
 	)
 	if err != nil {
-		return nodes.BrowserObservationResult{}, browser.ErrSnapshotTransfer
+		return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 	}
-	stream, err := sessions.OpenTransfer(ctx, worker.nodeID, nodews.TransferBinding{
+	stream, err := sessions.OpenTransfer(transferCtx, worker.nodeID, nodews.TransferBinding{
 		TransferID: output.TransferID, Direction: protocol.TransferDownload,
 		PolicyRevision: output.ProfileRevision, TotalSize: output.Size, SHA256: bindingDigest,
 	})
 	if err != nil {
-		return nodes.BrowserObservationResult{}, browser.ErrSnapshotTransfer
+		return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 	}
 	frame := protocol.TransferFrame{
 		Type: protocol.TransferFramePrepare, Direction: protocol.TransferDownload,
@@ -1313,57 +1331,71 @@ func (worker *nodeBrowserWorker) receiveBrowserSnapshot(
 		}
 	}()
 	frame.Payload, err = json.Marshal(output)
-	if err != nil || stream.Send(ctx, frame) != nil {
-		return nodes.BrowserObservationResult{}, browser.ErrSnapshotTransfer
+	if err != nil || stream.Send(transferCtx, frame) != nil {
+		return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 	}
 	buffer := bytes.NewBuffer(make([]byte, 0, int(output.Size)))
 	for {
-		response, receiveErr := stream.Receive(ctx)
+		response, receiveErr := stream.Receive(transferCtx)
 		if receiveErr != nil {
-			return nodes.BrowserObservationResult{}, browser.ErrSnapshotTransfer
+			return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 		}
 		switch response.Type {
 		case protocol.TransferFrameAccept:
 			continue
 		case protocol.TransferFrameChunk:
 			if buffer.Len()+len(response.Payload) > worker.limits.ToolResultBytes {
-				return nodes.BrowserObservationResult{}, browser.ErrDriverIncompatible
+				return nodes.BrowserObservationResult{}, true, browser.ErrDriverIncompatible
 			}
 			_, _ = buffer.Write(response.Payload)
 			ack := frame
 			ack.Type, ack.Sequence, ack.Payload = protocol.TransferFrameAck, response.Sequence, nil
-			if stream.Send(ctx, ack) != nil {
-				return nodes.BrowserObservationResult{}, browser.ErrSnapshotTransfer
+			if stream.Send(transferCtx, ack) != nil {
+				return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 			}
 		case protocol.TransferFrameStatus:
 			payload := buffer.Bytes()
 			sum := sha256.Sum256(payload)
 			if uint64(len(payload)) != output.Size || !bytes.Equal(sum[:], bindingDigest[:]) {
-				return nodes.BrowserObservationResult{}, browser.ErrDriverIncompatible
+				return nodes.BrowserObservationResult{}, true, browser.ErrDriverIncompatible
 			}
 			decoded, decodeErr := nodes.DecodeBrowserSnapshotPayload(payload, browserNodeLimits(worker.limits))
 			if decodeErr != nil {
-				return nodes.BrowserObservationResult{}, browser.ErrDriverIncompatible
+				return nodes.BrowserObservationResult{}, true, browser.ErrDriverIncompatible
 			}
 			commit := frame
 			commit.Type, commit.Payload = protocol.TransferFrameCommit, nil
-			if stream.Send(ctx, commit) != nil {
-				return nodes.BrowserObservationResult{}, browser.ErrSnapshotTransfer
+			if stream.Send(transferCtx, commit) != nil {
+				return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 			}
-			committed, commitErr := stream.Receive(ctx)
+			committed, commitErr := stream.Receive(transferCtx)
 			if commitErr != nil || committed.Type != protocol.TransferFrameCommitted ||
 				stream.ReleaseCommitted() != nil {
-				return nodes.BrowserObservationResult{}, browser.ErrSnapshotTransfer
+				return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 			}
 			released = true
 			result.Snapshot, result.Elements, result.Output = decoded.Snapshot, decoded.Elements, nil
-			return result, nil
+			return result, true, nil
 		case protocol.TransferFrameDeny, protocol.TransferFrameFailure:
-			return nodes.BrowserObservationResult{}, browser.ErrSnapshotTransfer
+			return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 		default:
-			return nodes.BrowserObservationResult{}, browser.ErrDriverIncompatible
+			return nodes.BrowserObservationResult{}, true, browser.ErrDriverIncompatible
 		}
 	}
+}
+
+func (worker *nodeBrowserWorker) advanceRemoteSnapshotGeneration(generation uint64) error {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closed || worker.snapshotGeneration+1 != generation {
+		return browser.ErrStale
+	}
+	worker.snapshotGeneration = generation
+	worker.cachedObservation = nil
+	worker.elements = make(map[string]browser.DriverElement)
+	worker.currentOrigin = ""
+	worker.documentID = ""
+	return nil
 }
 
 func cancelBrowserOutputTransferBestEffort(

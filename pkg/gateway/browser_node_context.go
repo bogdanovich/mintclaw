@@ -227,7 +227,9 @@ func (worker *nodeBrowserWorker) invokeContextOnce(
 	if result.Observation != nil && result.Observation.Output != nil {
 		streamed := *result.Observation
 		for attempt := 0; attempt < 2; attempt++ {
-			*result.Observation, err = worker.receiveBrowserSnapshot(ctx, streamed, descriptor.Name, requestKey)
+			*result.Observation, _, err = worker.receiveBrowserSnapshot(
+				ctx, streamed, descriptor.Name, requestKey,
+			)
 			if err == nil || ctx.Err() != nil {
 				break
 			}

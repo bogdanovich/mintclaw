@@ -1077,6 +1077,131 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 }
 
+func TestCompanionBrowserSnapshotTransferRecoveryOverProductionWSS(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		kind string
+	}{
+		{name: "lost final commit receipt", kind: "drop_commit"},
+		{name: "stalled accepted transfer", kind: "stall_after_accept"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			workspace := t.TempDir()
+			registry, admission, runtimeState := newVerticalSliceNodeRuntime(t, workspace)
+			server := httptest.NewTLSServer(admission)
+			defer server.Close()
+			defer closeVerticalSliceAdmission(t, admission)
+
+			host := &wssBrowserHost{profile: wssBrowserProfile()}
+			identity, identityErr := companion.LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity"))
+			if identityErr != nil {
+				t.Fatal(identityErr)
+			}
+			commands := browserRuntimeCommands()
+			policy := nodes.LocalCommandPolicy{
+				Revision: "browser-wss-snapshot-recovery-policy", AllowedCommands: commands,
+				MaximumRisk: nodes.RiskWrite, MaxTimeoutSeconds: nodes.MaxBrowserActionSeconds,
+				MaxOutputBytes: nodes.MaxBrowserToolResultBytes,
+			}
+			ledger, ledgerErr := companion.NewFileInvocationLedger(
+				companion.InvocationLedgerPath(filepath.Join(t.TempDir(), "runtime")),
+				companion.DefaultInvocationLedgerLimit,
+				companion.DefaultInvocationLedgerBytes,
+			)
+			if ledgerErr != nil {
+				t.Fatal(ledgerErr)
+			}
+			defer ledger.Close()
+			commandRuntime, runtimeErr := companion.NewRuntime(
+				identity.ID, "browser-wss-snapshot-recovery-test", policy, ledger,
+				companion.WithBrowserHost(host),
+			)
+			if runtimeErr != nil {
+				t.Fatal(runtimeErr)
+			}
+			clientConfig := wssBrowserCompanionConfig(t, server, policy)
+			client := wssBrowserClient(t, clientConfig, identity, commandRuntime, host)
+			result, authenticateErr := client.Authenticate(t.Context())
+			if authenticateErr != nil || result.State != nodes.StatePendingPairing {
+				t.Fatalf("bootstrap admission = %#v, %v", result, authenticateErr)
+			}
+			if _, approveErr := registry.Approve(identity.ID, nodes.PairingApproval{
+				Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: commands, At: time.Now().Unix(),
+			}); approveErr != nil {
+				t.Fatal(approveErr)
+			}
+			run := startWSSBrowserClient(t, client)
+			defer run.stop(t)
+			waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
+
+			cfg := wssBrowserGatewayConfig(t, workspace)
+			factory, factoryErr := newGatewayBrowserWorkerFactory(cfg, runtimeState)
+			if factoryErr != nil {
+				t.Fatal(factoryErr)
+			}
+			host.setLargeSnapshots(true)
+			host.setSnapshotOutputTTL(2 * time.Second)
+			sessionID := "browser_snapshot_" + strings.ReplaceAll(test.name, " ", "_")
+			opened, openErr := factory.Open(t.Context(), browser.WorkerOpenRequest{
+				Owner: browser.Owner{
+					ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+					SessionKey: sessionID, ExecutionID: "execution_" + sessionID,
+				},
+				SessionID: sessionID, Target: "companion", Profile: "managed", DryRun: false,
+				Limits: cfg.Tools.Browser.Limits.Effective(),
+			})
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			worker := opened.Owner.(*nodeBrowserWorker)
+			host.mu.Lock()
+			host.urls[sessionID] = "https://example.com/"
+			host.mu.Unlock()
+			switch test.kind {
+			case "drop_commit":
+				host.dropNextOutputCommitReceipt()
+			case "stall_after_accept":
+				host.stallNextOutputAfterAccept()
+			default:
+				t.Fatalf("unknown transfer fault %q", test.kind)
+			}
+			started := time.Now()
+			_, observeErr := worker.Observe(context.Background())
+			if !errors.Is(observeErr, browser.ErrSnapshotTransfer) {
+				t.Fatalf("first Observe() error = %v, want snapshot transfer failure", observeErr)
+			}
+			if elapsed := time.Since(started); elapsed > 10*time.Second {
+				t.Fatalf("browser-owned transfer deadline elapsed = %v, want <= 10s", elapsed)
+			}
+			worker.mu.Lock()
+			generation := worker.snapshotGeneration
+			publicGeneration := worker.publicSnapshotGeneration
+			staleAuthority := worker.documentID != "" || worker.currentOrigin != "" || len(worker.elements) != 0
+			worker.mu.Unlock()
+			if generation != 1 || publicGeneration != 0 || staleAuthority {
+				t.Fatalf(
+					"failed transfer authority generation=%d public=%d stale=%v",
+					generation, publicGeneration, staleAuthority,
+				)
+			}
+			observation, observeErr := worker.Observe(t.Context())
+			if observeErr != nil || observation.URL != "https://example.com/" || len(observation.Snapshot) < 150*1024 {
+				t.Fatalf("recovered Observe() = url %q bytes %d, %v", observation.URL, len(observation.Snapshot), observeErr)
+			}
+			worker.mu.Lock()
+			generation = worker.snapshotGeneration
+			worker.mu.Unlock()
+			if generation != 2 {
+				t.Fatalf("recovered remote generation = %d, want 2", generation)
+			}
+			if closeErr := worker.Close(t.Context()); closeErr != nil {
+				t.Fatalf("Close() error = %v", closeErr)
+			}
+		})
+	}
+}
+
 func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	workspace := t.TempDir()
 	registry, admission, runtimeState := newVerticalSliceNodeRuntime(t, workspace)
@@ -1434,32 +1559,36 @@ func prepareWSSBrowserRestartPlan(
 }
 
 type wssBrowserHost struct {
-	mu               sync.Mutex
-	profile          nodes.BrowserProfileDescriptor
-	commands         []string
-	urls             map[string]string
-	contexts         map[string]nodes.BrowserContextCatalog
-	snapshots        map[string]uint64
-	pendingDialogs   map[string]*nodes.BrowserDialogObservation
-	navigateEntered  chan struct{}
-	navigateRelease  chan struct{}
-	navigateFailure  bool
-	fillDenied       bool
-	contextStale     bool
-	transfer         *wssBrowserTransfer
-	uploaded         []byte
-	output           []byte
-	outputDescriptor nodes.BrowserOutputDescriptor
-	outputActive     bool
-	outputOffset     int
-	outputSequence   uint64
-	outputChunks     int
-	corruptOutputs   int
-	outputCancels    int
-	largeSnapshots   bool
-	policies         map[string]string
-	limits           map[string]nodes.BrowserLimits
-	expires          map[string]int64
+	mu                sync.Mutex
+	profile           nodes.BrowserProfileDescriptor
+	commands          []string
+	urls              map[string]string
+	contexts          map[string]nodes.BrowserContextCatalog
+	snapshots         map[string]uint64
+	pendingDialogs    map[string]*nodes.BrowserDialogObservation
+	navigateEntered   chan struct{}
+	navigateRelease   chan struct{}
+	navigateFailure   bool
+	fillDenied        bool
+	contextStale      bool
+	transfer          *wssBrowserTransfer
+	uploaded          []byte
+	output            []byte
+	outputDescriptor  nodes.BrowserOutputDescriptor
+	outputActive      bool
+	outputOffset      int
+	outputSequence    uint64
+	outputChunks      int
+	corruptOutputs    int
+	outputCancels     int
+	dropOutputCommit  int
+	stallOutputStart  int
+	outputUnavailable bool
+	snapshotOutputTTL time.Duration
+	largeSnapshots    bool
+	policies          map[string]string
+	limits            map[string]nodes.BrowserLimits
+	expires           map[string]int64
 }
 
 type wssBrowserTransfer struct {
@@ -1506,7 +1635,8 @@ func (host *wssBrowserHost) HandleTransferFrame(
 		case protocol.TransferFramePrepare:
 			var descriptor nodes.BrowserOutputDescriptor
 			if json.Unmarshal(frame.Payload, &descriptor) != nil || descriptor != host.outputDescriptor ||
-				frame.TransferID != descriptor.TransferID || frame.TotalSize != descriptor.Size || host.outputActive {
+				frame.TransferID != descriptor.TransferID || frame.TotalSize != descriptor.Size || host.outputActive ||
+				host.outputUnavailable {
 				response.Type = protocol.TransferFrameDeny
 				return send(response)
 			}
@@ -1517,6 +1647,10 @@ func (host *wssBrowserHost) HandleTransferFrame(
 			response.Type = protocol.TransferFrameAccept
 			if err := send(response); err != nil {
 				return err
+			}
+			if host.stallOutputStart > 0 {
+				host.stallOutputStart--
+				return nil
 			}
 			return host.sendOutputChunkLocked(frame, send)
 		case protocol.TransferFrameAck:
@@ -1534,6 +1668,11 @@ func (host *wssBrowserHost) HandleTransferFrame(
 			host.outputActive = false
 			host.outputOffset = 0
 			host.outputSequence = 0
+			if host.dropOutputCommit > 0 {
+				host.dropOutputCommit--
+				host.outputUnavailable = true
+				return nil
+			}
 			response.Type = protocol.TransferFrameCommitted
 			return send(response)
 		case protocol.TransferFrameCancel:
@@ -1619,6 +1758,24 @@ func (host *wssBrowserHost) setLargeSnapshots(enabled bool) {
 	host.mu.Lock()
 	defer host.mu.Unlock()
 	host.largeSnapshots = enabled
+}
+
+func (host *wssBrowserHost) setSnapshotOutputTTL(ttl time.Duration) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.snapshotOutputTTL = ttl
+}
+
+func (host *wssBrowserHost) dropNextOutputCommitReceipt() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.dropOutputCommit++
+}
+
+func (host *wssBrowserHost) stallNextOutputAfterAccept() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.stallOutputStart++
 }
 
 func (host *wssBrowserHost) outputChunkCount() int {
@@ -1751,6 +1908,11 @@ func (host *wssBrowserHost) PrepareObservationOutput(
 	}
 	digest := sha256.Sum256(payload)
 	host.output = payload
+	host.outputUnavailable = false
+	expiresAt := host.expires[result.SessionID]
+	if host.snapshotOutputTTL > 0 {
+		expiresAt = min(expiresAt, time.Now().Add(host.snapshotOutputTTL).Unix())
+	}
 	host.outputDescriptor = nodes.BrowserOutputDescriptor{
 		TransferID: browserNodeStableID("browser_snapshot", request.InvocationID),
 		Kind:       nodes.BrowserOutputSnapshot, SessionID: result.SessionID,
@@ -1761,7 +1923,7 @@ func (host *wssBrowserHost) PrepareObservationOutput(
 		SnapshotGeneration: result.SnapshotGeneration,
 		Filename:           "browser-snapshot.json", ContentType: "application/json",
 		Size: uint64(len(payload)), SHA256: hex.EncodeToString(digest[:]),
-		CapturedAt: time.Now().Unix(), ExpiresAt: host.expires[result.SessionID],
+		CapturedAt: time.Now().Unix(), ExpiresAt: expiresAt,
 		CleanupPolicy: "session_or_expiry",
 	}
 	result.Snapshot = ""
