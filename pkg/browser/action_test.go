@@ -51,6 +51,7 @@ type actionTestWorker struct {
 	diagnosticsErr         error
 	diagnosticsCalls       int
 	diagnosticCategories   []DiagnosticCategory
+	onDiagnostics          func()
 }
 
 func (worker *actionTestWorker) Diagnostics(
@@ -59,6 +60,9 @@ func (worker *actionTestWorker) Diagnostics(
 ) (DiagnosticSummary, error) {
 	worker.diagnosticsCalls++
 	worker.diagnosticCategories = append([]DiagnosticCategory(nil), categories...)
+	if worker.onDiagnostics != nil {
+		worker.onDiagnostics()
+	}
 	return worker.diagnostics, worker.diagnosticsErr
 }
 
@@ -2944,6 +2948,12 @@ func TestBrokerDiagnosticsUsesFreshOwnedSessionWithoutDurableMutation(t *testing
 	if _, err = broker.Diagnostics(context.Background(), bound); err != nil {
 		t.Fatalf("fresh bound Diagnostics() error = %v", err)
 	}
+	worker.onDiagnostics = func() { worker.navigationID = "navigation_2" }
+	if _, err = broker.Diagnostics(context.Background(), bound); !errors.Is(err, ErrStale) {
+		t.Fatalf("document-changed bound Diagnostics() error = %v", err)
+	}
+	worker.onDiagnostics = nil
+	worker.navigationID = "navigation_1"
 	bound.SnapshotGeneration++
 	if _, err = broker.Diagnostics(context.Background(), bound); !errors.Is(err, ErrStale) {
 		t.Fatalf("stale bound Diagnostics() error = %v", err)

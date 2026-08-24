@@ -595,6 +595,15 @@ func (worker *nodeBrowserWorker) ObserveWithNavigationIdentity(
 	return observation, identity, nil
 }
 
+func (worker *nodeBrowserWorker) NavigationIdentity(context.Context) (string, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closed || worker.documentID == "" {
+		return "", browser.ErrWorkerUnavailable
+	}
+	return worker.documentID, nil
+}
+
 func (worker *nodeBrowserWorker) Resolve(
 	_ context.Context,
 	target string,

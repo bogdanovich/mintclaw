@@ -664,8 +664,19 @@ func (catalog CapabilityCatalog) Validate() error {
 		}
 		seen[descriptor.Name] = struct{}{}
 	}
-	if browserCommandCount != 0 && browserCommandCount != len(currentBrowserCommandSpecs) {
-		return fmt.Errorf("%w: browser catalog lacks the complete current command set", ErrInvalidCapability)
+	if browserCommandCount != 0 {
+		legacyCount := len(currentBrowserCommandSpecs) - 1
+		if browserCommandCount != len(currentBrowserCommandSpecs) && browserCommandCount != legacyCount {
+			return fmt.Errorf("%w: browser catalog lacks a complete supported command set", ErrInvalidCapability)
+		}
+		for _, command := range currentBrowserCommandSpecs {
+			if browserCommandCount == legacyCount && command.name == BrowserCommandDiagnostics {
+				continue
+			}
+			if _, present := seen[command.name]; !present {
+				return fmt.Errorf("%w: browser catalog lacks a complete supported command set", ErrInvalidCapability)
+			}
+		}
 	}
 	return nil
 }

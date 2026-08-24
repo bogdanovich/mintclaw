@@ -150,6 +150,22 @@ func TestPlaywrightWorkerDiagnosticsRejectsUnsafeDriverOutput(t *testing.T) {
 	}
 }
 
+func TestPlaywrightDiagnosticsReducerBoundsSourceDataAndRequestState(t *testing.T) {
+	for _, invariant := range []string{
+		"let remaining = 8192",
+		"args.slice(0, 16)",
+		"truncateUTF8(raw, 65536)",
+		"if (state.requests.size >= 256)",
+	} {
+		if !strings.Contains(playwrightDiagnosticsInitCode, invariant) {
+			t.Fatalf("diagnostics reducer lacks source bound %q", invariant)
+		}
+	}
+	if count := strings.Count(playwrightDiagnosticsInitCode, "state.requests.set("); count != 1 {
+		t.Fatalf("diagnostics reducer has %d request-map insertion paths, want 1 bounded path", count)
+	}
+}
+
 func TestPlaywrightWorkerUsesMonotonicCDPNavigationIdentity(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {

@@ -69,13 +69,25 @@ func TestBrowserCatalogRequiresOneCurrentProfileSet(t *testing.T) {
 	}
 }
 
-func TestBrowserCatalogRequiresCompleteCurrentCommandSet(t *testing.T) {
+func TestBrowserCatalogAcceptsPreviousCommandSetWithoutDiagnostics(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = (CapabilityCatalog{Commands: descriptors[:len(descriptors)-1]}).Validate(); err == nil {
-		t.Fatal("browser catalog accepted an incomplete current command set")
+	if err = (CapabilityCatalog{Commands: descriptors[:len(descriptors)-1]}).Validate(); err != nil {
+		t.Fatalf("previous browser command set rejected: %v", err)
+	}
+}
+
+func TestBrowserCatalogRejectsIncompleteSupportedCommandSet(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutCapture := append([]CommandDescriptor(nil), descriptors[:6]...)
+	withoutCapture = append(withoutCapture, descriptors[7])
+	if err = (CapabilityCatalog{Commands: withoutCapture}).Validate(); err == nil {
+		t.Fatal("browser catalog accepted diagnostics while omitting a core command")
 	}
 }
 

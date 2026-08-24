@@ -94,9 +94,30 @@ const playwrightDiagnosticsInitCode = `async (page) => {
   };
   const hash = (domain, value) => {
     const raw = String(value || "");
-    const bounded = raw.length <= 65536 ? raw : raw.slice(0, 32768) + raw.slice(-32768) + "|length=" + raw.length;
+    const bounded = truncateUTF8(raw, 65536);
     return sha256(domain + "\0" + bounded);
   };
+	const consoleProjection = args => {
+		const result = [];
+		let remaining = 8192;
+		const field = (value, maximum) => {
+			if (remaining <= 0 || value === undefined || value === null) return "";
+			const type = typeof value;
+			const text = type === "string" || type === "number" || type === "boolean" || type === "bigint"
+				? String(value) : "";
+			const bounded = truncateUTF8(text, Math.min(maximum, remaining));
+			remaining -= utf8(bounded).length;
+			return bounded;
+		};
+		for (const arg of (Array.isArray(args) ? args.slice(0, 16) : [])) {
+			result.push({
+				type: field(arg && arg.type, 32), subtype: field(arg && arg.subtype, 32),
+				value: field(arg && arg.value, 1024), description: field(arg && arg.description, 1024)
+			});
+			if (remaining <= 0) break;
+		}
+		return result;
+	};
   const safeURL = raw => {
     try {
       const value = new URL(String(raw || ""));
@@ -125,7 +146,7 @@ const playwrightDiagnosticsInitCode = `async (page) => {
     const frames = event && event.stackTrace && event.stackTrace.callFrames || [];
     const frame = frames[0] || {};
     const location = safeURL(frame.url);
-    const values = (event && event.args || []).map(arg => ({ type: arg && arg.type, subtype: arg && arg.subtype, value: arg && arg.value, description: arg && arg.description }));
+    const values = consoleProjection(event && event.args);
     push("console_errors", {
       timestamp: Math.floor(Date.now() / 1000), severity: severity === "assert" ? "error" : severity,
       origin: location.origin || "", path: location.path || "",
@@ -152,12 +173,12 @@ const playwrightDiagnosticsInitCode = `async (page) => {
   });
   state.cdp.on("Network.responseReceived", event => {
     if (!event || !event.requestId || !event.response || Number(event.response.status) < 400) return;
-    const request = state.requests.get(event.requestId) || {};
-    request.reported = true;
-    state.requests.set(event.requestId, request);
+    const request = state.requests.get(event.requestId);
+    if (request) request.reported = true;
+		const location = request || { ...safeURL(event.response.url), resource_class: resourceClass(event.type) };
     push("failed_requests", {
-      timestamp: Math.floor(Date.now() / 1000), resource_class: request.resource_class || resourceClass(event.type),
-      failure_code: "http_error", origin: request.origin || "", path: request.path || "",
+      timestamp: Math.floor(Date.now() / 1000), resource_class: location.resource_class || resourceClass(event.type),
+      failure_code: "http_error", origin: location.origin || "", path: location.path || "",
       message_hash: hash("mintclaw.browser.request-failure.v1", "http_status_" + String(event.response.status))
     });
   });

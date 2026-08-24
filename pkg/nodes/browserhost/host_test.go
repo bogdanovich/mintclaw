@@ -79,6 +79,7 @@ type fakeBrowserHostWorker struct {
 	diagnostics             browserworker.DiagnosticSummary
 	diagnosticsErr          error
 	diagnosticsCategories   []browserworker.DiagnosticCategory
+	onDiagnostics           func()
 }
 
 func (worker *fakeBrowserHostWorker) Diagnostics(
@@ -86,6 +87,9 @@ func (worker *fakeBrowserHostWorker) Diagnostics(
 	categories []browserworker.DiagnosticCategory,
 ) (browserworker.DiagnosticSummary, error) {
 	worker.diagnosticsCategories = append([]browserworker.DiagnosticCategory(nil), categories...)
+	if worker.onDiagnostics != nil {
+		worker.onDiagnostics()
+	}
 	return worker.diagnostics, worker.diagnosticsErr
 }
 
@@ -382,6 +386,10 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 func TestBrowserHostDiagnosticsEnforcesFreshAuthorityAndSafeSummary(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{{
+			URL: "about:blank", Origin: "about:blank", Snapshot: "blank",
+		}},
+		navigationIdentities: []string{"navigation_1", "navigation_1", "navigation_1", "navigation_1"},
 		diagnostics: browserworker.DiagnosticSummary{
 			Categories: []browserworker.DiagnosticCategorySummary{{
 				Category: browserworker.DiagnosticFailedRequests, Count: 1,
@@ -416,7 +424,16 @@ func TestBrowserHostDiagnosticsEnforcesFreshAuthorityAndSafeSummary(t *testing.T
 	if _, err = host.Diagnostics(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 		t.Fatalf("stale Diagnostics() error = %v", err)
 	}
-	request.SnapshotGeneration--
+	observation, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SnapshotGeneration = observation.SnapshotGeneration
+	worker.onDiagnostics = func() { worker.navigationIdentities[3] = "navigation_2" }
+	if _, err = host.Diagnostics(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+		t.Fatalf("document-changed Diagnostics() error = %v", err)
+	}
+	worker.onDiagnostics = nil
 	worker.diagnostics.Categories[0].Entries[0].Path = "/api?credential=canary"
 	if _, err = host.Diagnostics(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) {
 		t.Fatalf("unsafe Diagnostics() error = %v", err)

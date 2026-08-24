@@ -139,7 +139,7 @@ func (broker *Broker) Diagnostics(
 	if request.TabID != "" {
 		tabID = request.TabID
 	}
-	session, _, actionWorker, err := broker.actionSessionLocked(
+	session, slot, actionWorker, err := broker.actionSessionLocked(
 		ctx, request.Owner, request.SessionID, tabID,
 	)
 	if err != nil {
@@ -157,12 +157,37 @@ func (broker *Broker) Diagnostics(
 	if !ok {
 		return DiagnosticSummary{}, ErrDriverIncompatible
 	}
+	var navigationWorker NavigationIdentityWorker
+	var expectedNavigationID string
+	if request.TabID != "" {
+		navigationWorker, ok = actionWorker.(NavigationIdentityWorker)
+		if !ok || slot == nil || slot.navigationID == "" {
+			return DiagnosticSummary{}, ErrStale
+		}
+		expectedNavigationID = slot.navigationID
+		currentNavigationID, navigationErr := navigationWorker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			return DiagnosticSummary{}, navigationErr
+		}
+		if currentNavigationID == "" || currentNavigationID != expectedNavigationID {
+			return DiagnosticSummary{}, ErrStale
+		}
+	}
 	summary, err := worker.Diagnostics(ctx, categories)
 	if err != nil {
 		if errors.Is(err, ErrWorkerUnavailable) || errors.Is(err, ErrDriverIncompatible) {
 			return DiagnosticSummary{}, broker.handleObservationErrorLocked(ctx, session, err)
 		}
 		return DiagnosticSummary{}, err
+	}
+	if navigationWorker != nil {
+		currentNavigationID, navigationErr := navigationWorker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			return DiagnosticSummary{}, navigationErr
+		}
+		if currentNavigationID == "" || currentNavigationID != expectedNavigationID {
+			return DiagnosticSummary{}, ErrStale
+		}
 	}
 	summary.SessionID = session.ID
 	summary.TabID = session.TabID

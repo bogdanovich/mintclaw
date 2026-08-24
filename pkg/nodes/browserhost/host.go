@@ -84,6 +84,7 @@ type browserHostSession struct {
 	elementBindingKey     []byte
 	elementRefs           map[string]browserworker.DriverElement
 	observationDigest     []byte
+	navigationIdentity    string
 	expiresAt             time.Time
 	idleExpiresAt         time.Time
 }
@@ -467,9 +468,32 @@ func (host *BrowserHost) Diagnostics(
 	if !ok {
 		return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostDenied
 	}
+	var expectedNavigation string
+	if session.snapshotGeneration > 0 {
+		if session.navigationWorker == nil || session.navigationIdentity == "" {
+			return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostStale
+		}
+		expectedNavigation = session.navigationIdentity
+		beforeNavigation, navigationErr := session.navigationWorker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			return nodes.BrowserDiagnosticsResult{}, navigationErr
+		}
+		if beforeNavigation == "" || beforeNavigation != expectedNavigation {
+			return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostStale
+		}
+	}
 	summary, err := worker.Diagnostics(ctx, categories)
 	if err != nil {
 		return nodes.BrowserDiagnosticsResult{}, err
+	}
+	if expectedNavigation != "" {
+		afterNavigation, navigationErr := session.navigationWorker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			return nodes.BrowserDiagnosticsResult{}, navigationErr
+		}
+		if afterNavigation == "" || afterNavigation != expectedNavigation {
+			return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostStale
+		}
 	}
 	if err = browserworker.ValidateDiagnosticSummary(summary, categories); err != nil {
 		return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostLost
@@ -1684,6 +1708,7 @@ func browserHostObservation(
 	navigationIdentity string,
 ) BrowserHostObservation {
 	session.observationDigest = browserHostObservationDigest(session, observation, navigationIdentity)
+	session.navigationIdentity = navigationIdentity
 	elements := make([]BrowserHostElement, len(observation.Elements))
 	snapshot := observation.Snapshot
 	session.elementRefs = make(map[string]browserworker.DriverElement, len(observation.Elements))
