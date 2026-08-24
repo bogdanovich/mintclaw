@@ -31,7 +31,7 @@ func newTurnRunner(al *AgentLoop, cfg *config.Config) *turnRunner {
 	}
 	syncDelivery := &syncToolResultDelivery{deliverToUser: al.deliverToolResultToUser}
 	asyncDelivery := newAsyncToolCompletionDelivery(al, events)
-	interaction := &humanInteractionRuntime{al: al}
+	interaction := &humanInteractionRuntime{al: al, coordinator: &al.interactions}
 
 	runner := &turnRunner{
 		runtime:      al.turns,

@@ -310,6 +310,10 @@ the interaction with `agent_unavailable` rather than leaving durable orphaned
 state. Empty stores are removed from the catalog only after a healthy load and
 successful retention prune. Catalog registration and interaction creation are
 serialized against that cleanup so a newly created store cannot lose discovery.
+One process-wide interaction coordinator owns that serialization together with
+the registry cache, in-memory resolution callbacks, resume-flight deduplication,
+and recovery admission. Reloadable delivery components reference this stable
+owner instead of copying its mutable state.
 
 ## `request_user_input` Tool
 
