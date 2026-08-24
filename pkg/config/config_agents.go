@@ -178,7 +178,7 @@ type ToolFeedbackConfig struct {
 	Enabled                bool   `json:"enabled"                   env:"MINTCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED"`
 	MaxArgsLength          int    `json:"max_args_length"           env:"MINTCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_MAX_ARGS_LENGTH"`
 	SeparateMessages       bool   `json:"separate_messages"         env:"MINTCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_SEPARATE_MESSAGES"`
-	Subagents              *bool  `json:"subagents,omitempty"`
+	Subagents              bool   `json:"subagents"`
 	Style                  string `json:"style,omitempty"           env:"MINTCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_STYLE"`
 	AnimationIntervalSecs  int    `json:"animation_interval_secs"   env:"MINTCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_ANIMATION_INTERVAL_SECS"`
 	EditMinIntervalSeconds int    `json:"edit_min_interval_seconds" env:"MINTCLAW_AGENTS_DEFAULTS_TOOL_FEEDBACK_EDIT_MIN_INTERVAL_SECONDS"`
@@ -333,10 +333,9 @@ func (d *AgentDefaults) IsToolFeedbackEnabled() bool {
 }
 
 // IsSubagentToolFeedbackEnabled returns true when subagent turns should publish
-// visible tool feedback. It defaults to true for backward compatibility when
-// tool_feedback itself is enabled.
+// visible tool feedback.
 func (d *AgentDefaults) IsSubagentToolFeedbackEnabled() bool {
-	return d.ToolFeedback.Subagents == nil || *d.ToolFeedback.Subagents
+	return d.ToolFeedback.Subagents
 }
 
 // IsToolFeedbackSeparateMessagesEnabled returns true when each tool feedback

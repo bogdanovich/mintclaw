@@ -45,6 +45,7 @@ func DefaultConfig() *Config {
 					Enabled:                false,
 					MaxArgsLength:          300,
 					SeparateMessages:       false,
+					Subagents:              true,
 					AnimationIntervalSecs:  0,
 					EditMinIntervalSeconds: 0,
 				},
