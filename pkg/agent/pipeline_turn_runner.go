@@ -61,7 +61,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 			exec.markSteeringObserved()
 			exec.pendingMessages = nil
 		}
-		if iteration == 1 && !ts.opts.SkipInitialSteeringPoll {
+		if iteration == 1 && !ts.opts.mode.skipsInitialSteeringPoll() {
 			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 				exec.markSteeringObserved()
 				pendingMessages = append(pendingMessages, steerMsgs...)

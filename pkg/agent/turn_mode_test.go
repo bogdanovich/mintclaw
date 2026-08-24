@@ -11,9 +11,9 @@ func TestNewTurnSpecAppliesModeContract(t *testing.T) {
 		sendResponse                bool
 		expectFinalDelivery         bool
 		allowInterimMintClawPublish bool
-		treatInputAsPrompt          bool
 		suppressToolFeedback        bool
 		noHistory                   bool
+		bypassCommands              bool
 		excludeInheritedNodeFiles   bool
 		skipInitialSteeringPoll     bool
 	}{
@@ -23,7 +23,7 @@ func TestNewTurnSpecAppliesModeContract(t *testing.T) {
 		},
 		{
 			name: "coding", mode: turnModeCoding, defaultResponse: defaultResponse,
-			expectFinalDelivery: true, treatInputAsPrompt: true,
+			expectFinalDelivery: true, bypassCommands: true,
 		},
 		{
 			name: "scheduled", mode: turnModeScheduled, defaultResponse: defaultResponse,
@@ -60,7 +60,7 @@ func TestNewTurnSpecAppliesModeContract(t *testing.T) {
 			binding := effectiveModelBinding{RouteSessionKey: "route-1"}
 			got := newTurnSpec(tt.mode, dispatch, binding)
 			if got.Dispatch.SessionKey != dispatch.SessionKey ||
-				got.ModelBinding.RouteSessionKey != binding.RouteSessionKey {
+				got.ModelBinding.RouteSessionKey != binding.RouteSessionKey || got.mode != tt.mode {
 				t.Fatalf("identity = (%q,%q), want (%q,%q)",
 					got.Dispatch.SessionKey, got.ModelBinding.RouteSessionKey,
 					dispatch.SessionKey, binding.RouteSessionKey)
@@ -68,10 +68,11 @@ func TestNewTurnSpecAppliesModeContract(t *testing.T) {
 			if got.DefaultResponse != tt.defaultResponse || got.EnableSummary != tt.enableSummary ||
 				got.SendResponse != tt.sendResponse || got.ExpectFinalDelivery != tt.expectFinalDelivery ||
 				got.AllowInterimMintClawPublish != tt.allowInterimMintClawPublish ||
-				got.TreatInputAsPrompt != tt.treatInputAsPrompt ||
 				got.SuppressToolFeedback != tt.suppressToolFeedback || got.NoHistory != tt.noHistory ||
-				got.ExcludeInheritedNodeFiles != tt.excludeInheritedNodeFiles ||
-				got.SkipInitialSteeringPoll != tt.skipInitialSteeringPoll {
+				(got.mode == turnModeCoding) != tt.bypassCommands ||
+				(got.mode == turnModeScheduled || got.mode == turnModeHeartbeat) !=
+					tt.excludeInheritedNodeFiles ||
+				got.mode.skipsInitialSteeringPoll() != tt.skipInitialSteeringPoll {
 				t.Fatalf("mode contract = %#v", got)
 			}
 		})

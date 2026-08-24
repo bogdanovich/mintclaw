@@ -522,11 +522,13 @@ Exit criteria:
 
 Depends on: A1
 
+Status: implemented
+
 Scope:
 
-- define explicit current request types for user turns, child turns,
-  interaction resumes, coding turns, and recovery;
-- normalize them once into a small internal turn specification;
+- make user turns, child turns, interaction resumes, coding turns, and recovery
+  select one explicit current turn mode;
+- normalize that mode once into a small internal turn specification;
 - remove boolean combinations that describe modes indirectly; and
 - make invalid combinations unrepresentable or rejected at construction.
 
@@ -538,7 +540,7 @@ Tests:
 
 Exit criteria:
 
-- callers select a request type instead of constructing a boolean bag; and
+- callers select a turn mode instead of constructing a boolean bag; and
 - `processOptions` is removed.
 
 Implementation sequence:
@@ -551,9 +553,13 @@ Implementation sequence:
    its `turnSpec` from the mode's canonical behavior. An architecture checkpoint
    rejected separate request wrappers because they added more production
    scaffolding than they removed.
-3. Delete remaining behavior fields when the mode constructor makes them
-   redundant; retain fields only when their value genuinely varies within one
-   mode, without storing speculative mode state on each turn.
+3. Retain the one selected `turnMode` on the normalized specification and
+   derive command dispatch, scheduled agent projection, and initial steering
+   polling from it. Delete the three independent booleans that could disagree
+   with that mode.
+4. Retain only fields whose values genuinely vary within a mode, plus
+   value-bearing data such as the caller's empty-response text. Do not add
+   separate request wrappers or another turn-policy object.
 
 ### C1 — Collapse the in-process coding frontend protocol
 
