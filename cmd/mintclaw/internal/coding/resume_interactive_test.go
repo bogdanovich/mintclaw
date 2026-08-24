@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -221,6 +222,80 @@ func TestCanceledResumePickerDoesNotAcquireOrCreateController(t *testing.T) {
 		return nil, nil
 	}
 	executeCommand(t, newResumeCommand(deps))
+}
+
+func TestInteractiveResumePersistsProjectIdentityResolvedUnderLease(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "tracked.txt"), []byte("initial\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.email", "resume@example.invalid"},
+		{"config", "user.name", "Resume Test"},
+		{"add", "."},
+		{"commit", "-m", "initial"},
+	} {
+		runPickerGit(t, project, args...)
+	}
+	now := time.Date(2026, time.August, 16, 13, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	var created commandResult
+	if err := json.Unmarshal(executeCommand(t, newCodeCommand(deps), "follow branch", "--json"), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	deps = testDependencies(home, project, &now)
+	deps.terminal = func(io.Reader, io.Writer, bool) tui.TerminalCapabilities {
+		return tui.TerminalCapabilities{Interactive: true}
+	}
+	deps.newPickerSource = func(*thread.Store, thread.ProjectIdentity) (codingpicker.Source, error) {
+		return staticPickerSource{}, nil
+	}
+	deps.runPicker = func(context.Context, codingpicker.Source, tui.PickerOptions) (tui.PickerSelection, error) {
+		runPickerGit(t, project, "switch", "-c", "feature/resumed")
+		return tui.PickerSelection{ThreadID: created.ThreadID}, nil
+	}
+	var admitted thread.ProjectIdentity
+	deps.newController = func(request codingTurnRequest, resumed bool) (frontend.Controller, error) {
+		if !resumed {
+			t.Fatal("resume controller was not marked resumed")
+		}
+		admitted = request.Metadata.Project
+		projector, err := frontend.NewProjector(created.ThreadID, frontend.ProjectionLimits{})
+		if err != nil {
+			return nil, err
+		}
+		projector.Open(true)
+		return &interactiveLeaseController{Projector: projector, lease: request.Lease}, nil
+	}
+	deps.runTUI = func(ctx context.Context, controller frontend.Controller, _ tui.Options) error {
+		return controller.Close(ctx)
+	}
+	executeCommand(t, newResumeCommand(deps))
+
+	current, err := thread.ResolveProject(t.Context(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admitted.GitBranch != "feature/resumed" || admitted != current {
+		t.Fatalf("admitted project = %+v, want current %+v", admitted, current)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.Load(created.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Project != current {
+		t.Fatalf("persisted project = %+v, want current %+v", metadata.Project, current)
+	}
 }
 
 func stringsContainAll(value string, fragments ...string) bool {

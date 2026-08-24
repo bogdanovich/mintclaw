@@ -101,27 +101,30 @@ func RunPicker(
 }
 
 type pickerModel struct {
-	ctx              context.Context
-	source           codingpicker.Source
-	query            codingpicker.Query
-	page             codingpicker.Page
-	selected         int
-	selectedThreadID string
-	canceled         bool
-	loading          bool
-	searching        bool
-	search           textinput.Model
-	notice           string
-	err              error
-	width            int
-	height           int
-	now              func() time.Time
+	ctx               context.Context
+	source            codingpicker.Source
+	query             codingpicker.Query
+	pageQuery         codingpicker.Query
+	page              codingpicker.Page
+	selected          int
+	selectedThreadID  string
+	canceled          bool
+	loading           bool
+	searching         bool
+	search            textinput.Model
+	notice            string
+	err               error
+	width             int
+	height            int
+	now               func() time.Time
+	requestGeneration uint64
 }
 
 type pickerPageMsg struct {
-	query codingpicker.Query
-	page  codingpicker.Page
-	err   error
+	generation uint64
+	query      codingpicker.Query
+	page       codingpicker.Page
+	err        error
 }
 
 func newPickerModel(
@@ -136,7 +139,7 @@ func newPickerModel(
 	search.Placeholder = "title, preview, path, branch, or ID"
 	search.CharLimit = pickerSearchRunes
 	return &pickerModel{
-		ctx: ctx, source: source, query: query, page: page, search: search,
+		ctx: ctx, source: source, query: query, pageQuery: query, page: page, search: search,
 		width: 80, height: 24, now: now,
 	}
 }
@@ -151,13 +154,14 @@ func (m *pickerModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.search.Width = max(1, m.width-len(m.search.Prompt))
 		return m, nil
 	case pickerPageMsg:
-		if message.query != m.query {
+		if message.generation != m.requestGeneration || message.query != m.query {
 			return m, nil
 		}
 		m.loading = false
 		m.err = message.err
 		if message.err == nil {
 			m.page = message.page
+			m.pageQuery = message.query
 			m.selected = 0
 			m.notice = ""
 		}
@@ -237,23 +241,23 @@ func (m *pickerModel) updateKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *pickerModel) load(query codingpicker.Query) tea.Cmd {
-	if m.loading {
-		return nil
-	}
 	m.query = query
 	m.loading = true
+	m.requestGeneration++
+	generation := m.requestGeneration
 	m.notice = ""
 	m.err = nil
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, pickerPageTimeout)
 		defer cancel()
 		page, err := m.source.Page(ctx, query)
-		return pickerPageMsg{query: query, page: page, err: err}
+		return pickerPageMsg{generation: generation, query: query, page: page, err: err}
 	}
 }
 
 func (m *pickerModel) selectCurrent() (tea.Model, tea.Cmd) {
-	if m.loading || len(m.page.Items) == 0 || m.selected >= len(m.page.Items) {
+	if m.loading || m.err != nil || m.pageQuery != m.query || len(m.page.Items) == 0 ||
+		m.selected >= len(m.page.Items) {
 		return m, nil
 	}
 	item := m.page.Items[m.selected]
@@ -329,6 +333,8 @@ func (m *pickerModel) header() string {
 	}
 	if m.loading {
 		parts = append(parts, "loading…")
+	} else if m.err != nil {
+		parts = append(parts, "load failed")
 	} else {
 		start := 0
 		end := 0

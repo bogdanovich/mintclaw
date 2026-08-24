@@ -600,8 +600,16 @@ func prepareResumedThread(
 	if err != nil {
 		return thread.Metadata{}, lease, err
 	}
+	var admittedProject thread.ProjectIdentity
 	switch inspection.State {
 	case thread.LocationAvailable:
+		if inspection.Current == nil {
+			return thread.Metadata{}, lease, fmt.Errorf(
+				"resume: thread %q project identity is unavailable after inspection",
+				metadata.ThreadID,
+			)
+		}
+		admittedProject = *inspection.Current
 	case thread.LocationMismatch:
 		return thread.Metadata{}, lease, fmt.Errorf(
 			"resume: thread %q belongs to %q, not current project %q; change directory before resuming",
@@ -638,7 +646,7 @@ func prepareResumedThread(
 		metadata.Model = resolvedModel
 		metadata.Provider = resolvedProvider
 	}
-	metadata.Project = project
+	metadata.Project = admittedProject
 	metadata.UpdatedAt = deps.now().UTC()
 	if err := metadata.Validate(); err != nil {
 		return thread.Metadata{}, lease, err

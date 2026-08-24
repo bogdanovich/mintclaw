@@ -170,6 +170,67 @@ func TestPickerEmptyAndErrorPagesRemainUsable(t *testing.T) {
 	}
 }
 
+func TestPickerLatestRequestWinsAndFailedPageCannotBeSelected(t *testing.T) {
+	item := codingpicker.Item{
+		ThreadID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Title: "Current", Preview: "ready",
+		ProjectRoot: "/work", InvocationCWD: "/work", CurrentProject: true,
+		Location: codingpicker.LocationAvailable,
+	}
+	latest := item
+	latest.ThreadID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	latest.Title = "Latest"
+	injected := fmt.Errorf("catalog unavailable")
+	source := &fakePickerSource{page: func(query codingpicker.Query) (codingpicker.Page, error) {
+		switch query.Search {
+		case "latest":
+			return codingpicker.Page{Items: []codingpicker.Item{latest}, Matched: 1}, nil
+		case "fail":
+			return codingpicker.Page{}, injected
+		default:
+			return codingpicker.Page{Items: []codingpicker.Item{item}, Matched: 1}, nil
+		}
+	}}
+	initialQuery := codingpicker.Query{Limit: 20}
+	model := newPickerModel(
+		t.Context(), source, initialQuery, codingpicker.Page{Items: []codingpicker.Item{item}, Matched: 1}, time.Now,
+	)
+
+	staleCommand := model.load(codingpicker.Query{Search: "stale", Limit: 20})
+	latestQuery := codingpicker.Query{Search: "latest", Limit: 20}
+	latestCommand := model.load(latestQuery)
+	updated, _ := model.Update(latestCommand())
+	model = updated.(*pickerModel)
+	updated, _ = model.Update(staleCommand())
+	model = updated.(*pickerModel)
+	if model.query != latestQuery || model.pageQuery != latestQuery || len(model.page.Items) != 1 ||
+		model.page.Items[0].ThreadID != latest.ThreadID {
+		t.Fatalf(
+			"stale request replaced latest page: query=%+v pageQuery=%+v page=%+v",
+			model.query,
+			model.pageQuery,
+			model.page,
+		)
+	}
+
+	failedQuery := codingpicker.Query{Search: "fail", Limit: 20}
+	failedCommand := model.load(failedQuery)
+	updated, _ = model.Update(failedCommand())
+	model = updated.(*pickerModel)
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*pickerModel)
+	if model.err == nil || model.query != failedQuery || model.pageQuery == failedQuery ||
+		model.selectedThreadID != "" || command != nil {
+		t.Fatalf(
+			"failed page remained selectable: error=%v query=%+v pageQuery=%+v selected=%q command=%v",
+			model.err,
+			model.query,
+			model.pageQuery,
+			model.selectedThreadID,
+			command,
+		)
+	}
+}
+
 func TestRunPickerReturnsSelectedOrCanceledThread(t *testing.T) {
 	item := codingpicker.Item{
 		ThreadID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Title: "Thread", Preview: "ready",
