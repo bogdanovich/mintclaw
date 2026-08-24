@@ -37,7 +37,7 @@ B0 is complete and deployed:
 - core merge `d733841788e54678e535aedf9353233d1c3383db` and workspace
   merge `02b93d7955b3e4088b971fb88fbe73c6183a10b3` are ancestors of the
   B1 base or deployed workspace state;
-- the deployed Playwright server uses `session_loss_replay=never`;
+- interrupted MCP calls are never replayed after session loss;
 - the managed profile has an exclusive OS-backed lease;
 - the browser specialist has an explicit MCP-server allowlist;
 - operator probes return bounded startup, busy, and compatibility state;
@@ -195,7 +195,7 @@ second process holding or bypassing the profile lock, the driver PR stops.
 
 The adapter is not authoritative for target selection, profile selection,
 origin policy, effect class, approval, retry, session recovery, or retention.
-The B0 no-replay policy remains active below the adapter.
+The B0 no-blind-replay invariant remains active below the adapter.
 
 ## Configuration And Deny-By-Default Rollout
 
@@ -234,8 +234,8 @@ Rules:
 - omitted `tools.browser`, target, or profile enablement grants no authority;
 - aliases are bounded opaque names and never expand to model-visible paths;
 - `driver_server` must resolve to a configured local stdio MCP server template
-  with `session_loss_replay=never` and an exclusive lock; the browser worker,
-  not the generic MCP manager, owns its process and client lifetime;
+  with an exclusive lock; the browser worker, not the generic MCP manager,
+  owns its process and client lifetime;
 - only `mode=managed` is valid in B1;
 - allowed origins are normalized `http` or `https` origins without path,
   query, fragment, user information, or wildcard public suffix;

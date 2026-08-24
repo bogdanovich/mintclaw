@@ -56,28 +56,6 @@ func TestRenderServerFailureTargetIsBoundedAndOmitsSensitiveDetails(t *testing.T
 	}
 }
 
-func TestBuildServerInfoProjectsEffectiveSessionLossReplay(t *testing.T) {
-	defaultInfo := buildServerInfo("default", config.MCPServerConfig{}, false)
-	if defaultInfo.SessionLossReplay != string(config.MCPSessionLossReplayOnce) {
-		t.Fatalf(
-			"default SessionLossReplay = %q, want %q",
-			defaultInfo.SessionLossReplay,
-			config.MCPSessionLossReplayOnce,
-		)
-	}
-
-	neverInfo := buildServerInfo("never", config.MCPServerConfig{
-		SessionLossReplay: config.MCPSessionLossReplayNever,
-	}, false)
-	if neverInfo.SessionLossReplay != string(config.MCPSessionLossReplayNever) {
-		t.Fatalf(
-			"never SessionLossReplay = %q, want %q",
-			neverInfo.SessionLossReplay,
-			config.MCPSessionLossReplayNever,
-		)
-	}
-}
-
 func TestBuildServerInfoReportsExclusiveLockWithoutPath(t *testing.T) {
 	lockPath := "/private/operator/playwright.lock"
 	info := buildServerInfo("playwright", config.MCPServerConfig{
@@ -92,7 +70,7 @@ func TestBuildServerInfoReportsExclusiveLockWithoutPath(t *testing.T) {
 	}
 }
 
-func TestMCPConfigSchemaValidatesSessionLossReplay(t *testing.T) {
+func TestMCPConfigSchemaRequiresCurrentTransport(t *testing.T) {
 	valid := []byte(`{
 		"tools": {
 			"mcp": {
@@ -100,8 +78,8 @@ func TestMCPConfigSchemaValidatesSessionLossReplay(t *testing.T) {
 				"servers": {
 					"playwright": {
 						"enabled": true,
+						"type": "stdio",
 						"command": "npx",
-						"session_loss_replay": "never",
 						"exclusive_lock_file": "/tmp/playwright.lock"
 					}
 				}
@@ -119,14 +97,13 @@ func TestMCPConfigSchemaValidatesSessionLossReplay(t *testing.T) {
 				"servers": {
 					"playwright": {
 						"enabled": true,
-						"command": "npx",
-						"session_loss_replay": "automatic"
+						"command": "npx"
 					}
 				}
 			}
 		}
 	}`)
 	if err := validateConfigDocument(invalid); err == nil {
-		t.Fatal("validateConfigDocument(invalid) error = nil, want enum failure")
+		t.Fatal("validateConfigDocument(invalid) error = nil, want missing type failure")
 	}
 }

@@ -376,10 +376,8 @@ func newPlaywrightManagedHostFactory(
 		len(host.ProfileConfig.AllowedOrigins) != 0 {
 		return nil, ErrDenied
 	}
-	if config.EffectiveMCPTransportType(host.ServerConfig) != "stdio" ||
+	if host.ServerConfig.Type != "stdio" ||
 		strings.TrimSpace(host.ServerConfig.Command) == "" ||
-		config.EffectiveMCPSessionLossReplay(host.ServerConfig) !=
-			config.MCPSessionLossReplayNever ||
 		strings.TrimSpace(host.ServerConfig.ExclusiveLockFile) == "" {
 		return nil, ErrDenied
 	}

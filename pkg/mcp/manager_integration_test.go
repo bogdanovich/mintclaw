@@ -20,7 +20,7 @@ import (
 )
 
 // Run with: go test -tags=integration ./pkg/mcp
-func TestIntegration_StreamableHTTPCompatibility(t *testing.T) {
+func TestIntegration_StreamableHTTPContract(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -45,13 +45,6 @@ func TestIntegration_StreamableHTTPCompatibility(t *testing.T) {
 			jsonResponse:            false,
 			rejectStandaloneGET:     false,
 			wantResponseContentType: "text/event-stream",
-		},
-		{
-			name:                    "streamable-http-alias/json-only-without-get-listener",
-			transportType:           "streamable-http",
-			jsonResponse:            true,
-			rejectStandaloneGET:     true,
-			wantResponseContentType: "application/json",
 		},
 	}
 
@@ -97,7 +90,7 @@ func TestIntegration_StreamableHTTPCompatibility(t *testing.T) {
 				t.Fatalf("Manager.Close() error = %v", err)
 			}
 
-			assertRecordedCompatibility(t, recorder.snapshot(), tt.wantResponseContentType)
+			assertRecordedContract(t, recorder.snapshot(), tt.wantResponseContentType)
 		})
 	}
 }
@@ -251,7 +244,7 @@ func extractTextResult(t *testing.T, result *sdkmcp.CallToolResult) string {
 	return text.Text
 }
 
-func assertRecordedCompatibility(
+func assertRecordedContract(
 	t *testing.T,
 	requests []recordedRequest,
 	wantResponseContentType string,

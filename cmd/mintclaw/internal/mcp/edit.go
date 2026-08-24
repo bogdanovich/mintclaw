@@ -70,11 +70,10 @@ func newEditCommand() *cobra.Command {
 			if err = reconcileEditedModelCredentials(snapshot.Config, edited.Config); err != nil {
 				return err
 			}
-			normalizedCfg, err := normalizeAndValidateConfig(edited.Config)
-			if err != nil {
+			if err = validateConfigForSave(edited.Config); err != nil {
 				return err
 			}
-			if _, err = mcpConfigRepository().Replace(snapshot.Revision, normalizedCfg); err != nil {
+			if _, err = mcpConfigRepository().Replace(snapshot.Revision, edited.Config); err != nil {
 				if errors.Is(err, config.ErrConfigConflict) {
 					return fmt.Errorf("config changed while editor was open: %w", err)
 				}

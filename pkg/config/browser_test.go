@@ -270,7 +270,7 @@ func TestBrowserConfigRequiresToolResultEnvelopeHeadroom(t *testing.T) {
 	}
 }
 
-func TestBrowserConfigRequiresSessionScopedNoReplayDriver(t *testing.T) {
+func TestBrowserConfigRequiresSessionScopedDriver(t *testing.T) {
 	tests := []struct {
 		name    string
 		mutate  func(*Config)
@@ -284,15 +284,6 @@ func TestBrowserConfigRequiresSessionScopedNoReplayDriver(t *testing.T) {
 				cfg.Tools.MCP.Servers["playwright"] = server
 			},
 			wantErr: "must not be enabled in the generic MCP manager",
-		},
-		{
-			name: "replay once",
-			mutate: func(cfg *Config) {
-				server := cfg.Tools.MCP.Servers["playwright"]
-				server.SessionLossReplay = MCPSessionLossReplayOnce
-				cfg.Tools.MCP.Servers["playwright"] = server
-			},
-			wantErr: "session_loss_replay=never",
 		},
 		{
 			name: "missing lease",
@@ -698,7 +689,6 @@ func browserConfigFixture(t *testing.T) *Config {
 		Command:           "npx",
 		Args:              []string{"-y", "@playwright/mcp@0.0.78"},
 		Type:              "stdio",
-		SessionLossReplay: MCPSessionLossReplayNever,
 		ExclusiveLockFile: filepath.Join(t.TempDir(), "playwright.lock"),
 	}
 	cfg.Tools.Browser = BrowserToolsConfig{

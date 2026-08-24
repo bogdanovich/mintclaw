@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
 func newTestCommand() *cobra.Command {
@@ -34,9 +32,8 @@ func newTestCommand() *cobra.Command {
 			}
 			fmt.Fprintf(
 				cmd.OutOrStdout(),
-				"MCP server %q configuration: session replay=%s, exclusive lock=%s.\n",
+				"MCP server %q configuration: exclusive lock=%s.\n",
 				name,
-				config.EffectiveMCPSessionLossReplay(server),
 				exclusiveLock,
 			)
 

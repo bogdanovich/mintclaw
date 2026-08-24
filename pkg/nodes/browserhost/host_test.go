@@ -1945,7 +1945,7 @@ func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
 	}
 	joined := strings.Join(server.Args, "\x00")
 	if server.Command != profile.DriverExecutable ||
-		server.SessionLossReplay != "never" || server.ExclusiveLockFile != profile.LockFile ||
+		server.ExclusiveLockFile != profile.LockFile ||
 		server.Env["PATH"] != "/usr/local/lib/node_modules/npm/bin:/usr/bin:/bin" || len(server.Env) != 1 ||
 		!strings.Contains(joined, "--user-data-dir\x00"+profile.ProfileDirectory) ||
 		!strings.Contains(joined, "--output-mode\x00stdout") ||

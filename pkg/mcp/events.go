@@ -79,5 +79,5 @@ func setMCPAttrString(attrs map[string]any, key, value string) {
 }
 
 func mcpTransportType(cfg config.MCPServerConfig) string {
-	return config.EffectiveMCPTransportType(cfg)
+	return cfg.Type
 }

@@ -779,6 +779,10 @@ Implementation sequence:
     compact current JSON at the writer, delete load-time command-schema
     compaction and browser-schema reconstruction, and reject catalogs whose
     authority-bearing descriptors no longer match the current contract.
+27. Make MCP configuration one explicit current contract. Require exactly one
+    of `stdio`, `http`, or `sse`, reject fields from another transport, delete
+    transport aliases and inference, and make every interrupted session-loss
+    call uncertain after reconnect without configurable replay.
 
 Exit criteria:
 

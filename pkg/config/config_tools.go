@@ -491,20 +491,12 @@ type MCPServerConfig struct {
 	Env map[string]string `json:"env,omitempty"`
 	// EnvFile is the path to a file containing environment variables (stdio only)
 	EnvFile string `json:"env_file,omitempty"`
-	// Type is "stdio", "sse", "http", or "streamable-http".
-	// "http" and "streamable-http" both select streamable HTTP request-response
-	// mode, while "sse" keeps the standalone SSE listener enabled for
-	// server-initiated notifications. Defaults: stdio if command is set, sse if
-	// url is set.
-	Type string `json:"type,omitempty"`
+	// Type is exactly one of "stdio", "sse", or "http".
+	Type string `json:"type"`
 	// URL is used for SSE/HTTP transport
 	URL string `json:"url,omitempty"`
 	// Headers are HTTP headers to send with requests (sse/http only)
 	Headers map[string]string `json:"headers,omitempty"`
-	// SessionLossReplay controls whether a tool call is invoked once on a
-	// replacement MCP session after the original session is lost. Empty keeps
-	// the backward-compatible `once` behavior.
-	SessionLossReplay MCPSessionLossReplay `json:"session_loss_replay,omitempty"`
 	// ExclusiveLockFile is an optional cross-process lease for stdio servers.
 	// It is held for the lifetime of the managed server, including reconnects.
 	ExclusiveLockFile string `json:"exclusive_lock_file,omitempty"`

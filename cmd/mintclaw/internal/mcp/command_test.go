@@ -316,7 +316,7 @@ func TestMCPAddHTTPServer(t *testing.T) {
 	assert.Empty(t, server.Command)
 }
 
-func TestMCPAddSupportsStreamableHTTPAlias(t *testing.T) {
+func TestMCPAddRejectsUnknownTransport(t *testing.T) {
 	configPath := setupMCPConfigEnv(t)
 
 	cmd := NewMCPCommand()
@@ -324,34 +324,31 @@ func TestMCPAddSupportsStreamableHTTPAlias(t *testing.T) {
 		"add",
 		"context7",
 		"--transport",
-		"streamable-http",
+		"websocket",
 		"https://mcp.context7.com/mcp",
 	}, "")
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unsupported transport "websocket"`)
 
 	cfg := readMCPConfig(t, configPath)
-	server := cfg.Tools.MCP.Servers["context7"]
-	assert.Equal(t, "http", server.Type)
-	assert.Equal(t, "https://mcp.context7.com/mcp", server.URL)
+	_, exists := cfg.Tools.MCP.Servers["context7"]
+	assert.False(t, exists)
 }
 
-func TestNormalizeAndValidateConfigNormalizesStreamableHTTPAlias(t *testing.T) {
+func TestValidateConfigForSaveRejectsUnknownTransport(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.MCP.Enabled = true
 	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 		"context7": {
 			Enabled: true,
-			Type:    "streamable-http",
+			Type:    "websocket",
 			URL:     "https://mcp.context7.com/mcp",
 		},
 	}
 
-	normalized, err := normalizeAndValidateConfig(cfg)
-	require.NoError(t, err)
-	server := normalized.Tools.MCP.Servers["context7"]
-	assert.Equal(t, "http", server.Type)
-	assert.Equal(t, "https://mcp.context7.com/mcp", server.URL)
-	assert.Equal(t, "streamable-http", cfg.Tools.MCP.Servers["context7"].Type)
+	err := validateConfigForSave(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "config validation failed")
 }
 
 func TestMCPAddPreservesInterleavedDisjointConfigChange(t *testing.T) {
@@ -875,7 +872,7 @@ func TestMCPTestUsesProbe(t *testing.T) {
 	cmd := NewMCPCommand()
 	output, err := executeCommand(cmd, []string{"test", "filesystem"}, "")
 	require.NoError(t, err)
-	assert.Contains(t, output, `session replay=once, exclusive lock=no`)
+	assert.Contains(t, output, `exclusive lock=no`)
 	assert.Contains(t, output, `MCP server "filesystem" reachable (2 tools)`)
 }
 
@@ -892,7 +889,6 @@ func TestMCPTestReportsExclusiveLeaseBusyWithoutLockPath(t *testing.T) {
 						Enabled:           true,
 						Type:              "stdio",
 						Command:           "npx",
-						SessionLossReplay: config.MCPSessionLossReplayNever,
 						ExclusiveLockFile: lockPath,
 					},
 				},
@@ -911,7 +907,7 @@ func TestMCPTestReportsExclusiveLeaseBusyWithoutLockPath(t *testing.T) {
 	cmd := NewMCPCommand()
 	output, err := executeCommand(cmd, []string{"test", "playwright"}, "")
 	require.Error(t, err)
-	assert.Contains(t, output, `session replay=never, exclusive lock=yes`)
+	assert.Contains(t, output, `exclusive lock=yes`)
 	assert.Contains(t, err.Error(), `MCP server "playwright" is busy`)
 	assert.NotContains(t, output, lockPath)
 	assert.NotContains(t, err.Error(), lockPath)
@@ -1059,7 +1055,6 @@ func TestMCPShowReportsConfigurationWhenExclusiveLeaseIsBusy(t *testing.T) {
 						Type:              "stdio",
 						Command:           commandPath,
 						Args:              []string{"--token", secretArgument},
-						SessionLossReplay: config.MCPSessionLossReplayNever,
 						ExclusiveLockFile: lockPath,
 					},
 				},
@@ -1078,7 +1073,6 @@ func TestMCPShowReportsConfigurationWhenExclusiveLeaseIsBusy(t *testing.T) {
 	cmd := NewMCPCommand()
 	output, err := executeCommand(cmd, []string{"show", "playwright"}, "")
 	require.Error(t, err)
-	assert.Contains(t, output, "Session replay: never")
 	assert.Contains(t, output, "Exclusive lock: yes")
 	assert.Contains(t, output, "Target: playwright-mcp")
 	assert.Contains(t, output, "Tool discovery unavailable: configured exclusive lease is busy.")

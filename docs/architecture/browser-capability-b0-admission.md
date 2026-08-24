@@ -13,7 +13,6 @@ without introducing the first-party browser broker or model-facing
 
 The implementation may add:
 
-- an explicit per-server MCP session-loss replay policy;
 - an explicit uncertain result when an MCP call may have reached the server
   but cannot be proven terminal;
 - a configured cross-process exclusive lease for one stdio MCP server;
@@ -105,7 +104,7 @@ replay the uncertain call.
 | Browser specialist identity and workspace | Existing agent registry and workspace configuration |
 | MCP servers usable by the specialist | `AGENT.md` `mcpServers` policy intersected with enabled global MCP configuration |
 | Playwright package, browser executable, profile, and output arguments | Operator-owned `tools.mcp.servers.playwright` configuration |
-| Session-loss replay behavior | Validated MCP server configuration and MCP manager implementation |
+| Session-loss recovery behavior | MCP manager implementation |
 | Exclusive profile/process lease | OS lock on the configured absolute lock file |
 | MCP process connection and discovered tools | Live MCP manager connection |
 | Job workflow and pending approval | Existing browser specialist checkpoint |
@@ -124,24 +123,9 @@ B0 does not classify individual Playwright MCP tools by name. Tool naming is an
 external driver contract and cannot safely identify every mutation or future
 tool.
 
-The MCP server configuration gains:
-
-```json
-{
-  "session_loss_replay": "once"
-}
-```
-
-Supported values are:
-
-- `once`: preserve the existing compatibility behavior by reconnecting and
-  invoking the same call once;
-- `never`: reconnect the server for future calls but never invoke the failed
-  call on the replacement session.
-
-An omitted value resolves to `once` for backward compatibility. Unknown values
-fail configuration validation. The deployed `playwright` server explicitly
-uses `never`.
+MintClaw applies one server-wide rule: after session loss it reconnects for
+future calls, reports the interrupted call as uncertain, and never invokes
+that call on the replacement session. This behavior is not configurable.
 
 The policy is server-wide because the current runtime cannot authoritatively
 distinguish read-only Playwright operations from browser mutations. B0 accepts
@@ -173,15 +157,12 @@ boundary: save the job state, observe current external state with a new call
 when safe, and never repeat a publish/send/delete/purchase action merely
 because the previous tool result was lost.
 
-### Existing `once` behavior
+### Universal recovery behavior
 
-Servers using `once` retain the current one-reconnect/one-replay behavior.
-Concurrent calls encountering the same stale connection continue to serialize
-replacement through the existing reconnect mutex and reuse the replacement
-connection.
-
-B0 does not change generic MCP retry policy globally, infer safety from MCP
-annotations, or add more than one replay.
+Concurrent calls encountering the same stale connection serialize replacement
+through the reconnect mutex and reuse the replacement connection. Every
+interrupted call remains uncertain and is not issued on that replacement.
+MintClaw does not infer replay safety from MCP annotations.
 
 ### Exclusive stdio server lease
 
@@ -288,8 +269,8 @@ Required operator evidence combines:
 - `mintclaw mcp show playwright` for sanitized configuration state;
 - `mintclaw mcp test playwright` for process startup, protocol handshake, and
   discovered tool catalog;
-- explicit display of effective `session_loss_replay` and whether an exclusive
-  lock is configured, without printing the lock path;
+- explicit display of whether an exclusive lock is configured, without
+  printing the lock path;
 - a busy result when another process holds the lease;
 - runtime events for connecting, connected, failed, call end, uncertain
   outcome, and reconnect result;
@@ -302,17 +283,14 @@ B0 does not parse Playwright command arguments in generic core doctor code,
 launch a browser from passive `doctor`, expose raw executable/profile/output
 paths to the model, or use diagnostics to acknowledge or retry workflow state.
 
-## Configuration And Migration
+## Configuration And Cutover
 
-Fresh and existing configurations preserve `session_loss_replay=once` when the
-field is omitted. Existing stdio servers have no exclusive lease until an
-operator configures one.
-
-The B0 code may land before the deployed configuration changes:
-
-- missing new fields preserve current behavior;
-- invalid values fail validation before the affected server starts;
-- adding `exclusive_lock_file` does not move or rewrite the profile;
+Every MCP server declares exactly one current transport type: `stdio`, `http`,
+or `sse`. Stdio servers have no exclusive lease until an operator configures
+one. A breaking configuration change is handled by a coordinated deployment,
+not by runtime inference or translation. Invalid values fail validation before
+the affected server starts, and adding `exclusive_lock_file` does not move or
+rewrite the profile.
 - changing the Playwright server to `never` takes effect after the normal safe
   gateway restart;
 - adding the browser `mcpServers` policy changes registration only for that
@@ -341,8 +319,7 @@ Example deployed shape:
       "--user-data-dir=/home/server/.mintclaw/main/browser-profile/mintclaw-browser-profile",
       "--output-dir=/home/server/.mintclaw/main/browser-output"
     ],
-    "session_loss_replay": "never",
-    "exclusive_lock_file": "/home/server/.mintclaw/main/browser-profile/playwright.lock"
+	"exclusive_lock_file": "/home/server/.mintclaw/main/browser-profile/playwright.lock"
   }
 }
 ```
@@ -414,19 +391,18 @@ added by B0 is redacted or omitted from normal events.
 
 ## Validation Requirements
 
-### Replay-policy tests
+### Session-loss tests
 
 Tests use scripted MCP transports and deterministic barriers:
 
-- default/`once` reconnects and invokes exactly once on the fresh session;
-- `never` invokes only the stale session, reconnects once, and returns typed
-  uncertainty;
-- `never` remains uncertain when reconnect fails;
+- session loss invokes only the stale session, reconnects once, and returns
+  typed uncertainty;
+- the call remains uncertain when reconnect fails;
 - an ordinary tool error does not reconnect or become uncertain;
 - concurrent callers share one replacement session without replaying
-  `never` calls;
+  interrupted calls;
 - manager close racing reconnect does not issue a fresh call;
-- config parsing rejects unknown policy values.
+- configuration has no replay-policy field.
 
 ### Lease tests
 
@@ -457,7 +433,7 @@ Tests run real OS locks where supported:
 - the browser agent registers only `playwright` and `obsidian_personal` MCP
   servers;
 - main and other agents retain their independently configured MCP policy;
-- `mcp show` omits lock path and renders effective replay policy;
+- `mcp show` omits the lock path and renders current server metadata;
 - `mcp test playwright` succeeds when idle and reports busy while the deployed
   gateway owns the profile lease;
 - one browser observation workflow completes;
@@ -475,9 +451,8 @@ Each item is a separate merge unit based on the latest merged `main`. A
 dependent item begins only after its predecessor merges.
 
 1. **Admission contract:** this architecture-only PR.
-2. **No-blind-replay contract:** add `session_loss_replay`, typed uncertainty,
-   redacted outcome events, CLI safe projection, and deterministic manager/tool
-   tests.
+2. **No-blind-replay contract:** add typed uncertainty, redacted outcome
+   events, and deterministic manager/tool tests.
 3. **Exclusive stdio lease:** add `exclusive_lock_file`, cross-platform
    non-blocking locking, reconnect ownership, CLI safe projection, and
    lifecycle tests.
@@ -500,17 +475,16 @@ model-tool contracts merely because the browser deployment motivates it.
 
 ## Exact Definition Of Done
 
-### Gate 1: backward-compatible configuration
+### Gate 1: current configuration
 
-- existing servers with omitted fields retain one replay and no exclusive
-  lease;
+- every server declares one exact transport and no replay policy field;
 - invalid values fail before server startup;
-- config cloning, CLI edit, and serialization preserve the new fields;
+- CLI edit and serialization preserve the current fields;
 - no fresh installation gains browser authority.
 
 ### Gate 2: no runtime blind replay
 
-- deployed Playwright uses `session_loss_replay=never`;
+- no configured MCP server can enable replay;
 - a session-loss call is not issued on the replacement session;
 - the current tool result is explicitly uncertain;
 - later calls may use the reconnected server;
@@ -542,8 +516,7 @@ model-tool contracts merely because the browser deployment motivates it.
 
 ### Gate 6: bounded diagnostics
 
-- operators can see effective replay and configured-lock state without the
-  lock path;
+- operators can see configured-lock state without the lock path;
 - MCP probe distinguishes healthy, failed startup, and busy lease;
 - deployed checks verify the exact browser executable and required tool
   catalog;

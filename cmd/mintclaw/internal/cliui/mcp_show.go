@@ -16,7 +16,6 @@ type MCPShowServer struct {
 	Enabled           bool
 	EffectiveDeferred bool // resolved value (per-server override or global default)
 	DeferredExplicit  bool // true = per-server override set, false = inherited from global
-	SessionLossReplay string
 	ExclusiveLock     bool
 	EnvKeys           []string // sorted env var names (values intentionally omitted)
 	EnvFile           string
@@ -75,7 +74,6 @@ func printMCPShowPlain(
 		deferredLabel += " (default)"
 	}
 	fmt.Fprintf(w, "Deferred: %s\n", deferredLabel)
-	fmt.Fprintf(w, "Session replay: %s\n", server.SessionLossReplay)
 	fmt.Fprintf(w, "Exclusive lock: %s\n", boolWord(server.ExclusiveLock))
 	if len(server.EnvKeys) > 0 {
 		fmt.Fprintf(w, "Env vars: %s\n", strings.Join(server.EnvKeys, ", "))
@@ -178,7 +176,6 @@ func printMCPShowFancy(
 		deferredVal += "  " + mcpTagStyle().Render("(default)")
 	}
 	writeKV("Deferred", deferredVal)
-	writeKV("Session replay", server.SessionLossReplay)
 	writeKV("Exclusive lock", coloredBool(server.ExclusiveLock))
 	if len(server.EnvKeys) > 0 {
 		writeKV("Env vars", mutedStyle().Render(strings.Join(server.EnvKeys, ", ")))

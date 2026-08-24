@@ -219,12 +219,11 @@ func buildServerInfo(name string, server config.MCPServerConfig, discoveryEnable
 	}
 	info := cliui.MCPShowServer{
 		Name:              name,
-		Type:              inferTransportType(server),
+		Type:              server.Type,
 		Target:            renderServerTarget(server),
 		Enabled:           server.Enabled,
 		EffectiveDeferred: effectiveDeferred,
 		DeferredExplicit:  deferredExplicit,
-		SessionLossReplay: string(config.EffectiveMCPSessionLossReplay(server)),
 		ExclusiveLock:     server.ExclusiveLockFile != "",
 		EnvFile:           server.EnvFile,
 	}
