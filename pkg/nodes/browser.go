@@ -1570,6 +1570,21 @@ func BrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
+	return browserCommandOutputSchema(command, profiles, true)
+}
+
+func legacyBrowserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	return browserCommandOutputSchema(command, profiles, false)
+}
+
+func browserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+	diagnostics bool,
+) json.RawMessage {
 	if len(profiles) == 0 {
 		return json.RawMessage("false")
 	}
@@ -1591,6 +1606,16 @@ func BrowserCommandOutputSchema(
 	case BrowserCommandSessionStatus, BrowserCommandSessionClose:
 		return mustJSON(baseStatus)
 	case BrowserCommandSessionOpen:
+		featureRequired := []string{"observe", "navigate", "contexts", "screenshot", "download"}
+		featureProperties := map[string]any{
+			"observe": map[string]any{"type": "boolean"}, "navigate": map[string]any{"type": "boolean"},
+			"contexts":   map[string]any{"type": "boolean"},
+			"screenshot": map[string]any{"type": "boolean"}, "download": map[string]any{"type": "boolean"},
+		}
+		if diagnostics {
+			featureRequired = append(featureRequired, "diagnostics")
+			featureProperties["diagnostics"] = map[string]any{"type": "boolean"}
+		}
 		return mustJSON(map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -1608,13 +1633,7 @@ func BrowserCommandOutputSchema(
 				"controller": map[string]any{"const": "agent"},
 				"features": map[string]any{
 					"type": "object", "additionalProperties": false,
-					"required": []string{"observe", "navigate", "contexts", "screenshot", "download", "diagnostics"},
-					"properties": map[string]any{
-						"observe": map[string]any{"type": "boolean"}, "navigate": map[string]any{"type": "boolean"},
-						"contexts":   map[string]any{"type": "boolean"},
-						"screenshot": map[string]any{"type": "boolean"}, "download": map[string]any{"type": "boolean"},
-						"diagnostics": map[string]any{"type": "boolean"},
-					},
+					"required": featureRequired, "properties": featureProperties,
 				},
 				"expires_at":      map[string]any{"type": "integer", "minimum": 1},
 				"idle_expires_at": map[string]any{"type": "integer", "minimum": 1},

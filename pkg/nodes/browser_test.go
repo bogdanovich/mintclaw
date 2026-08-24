@@ -74,7 +74,15 @@ func TestBrowserCatalogAcceptsPreviousCommandSetWithoutDiagnostics(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = (CapabilityCatalog{Commands: descriptors[:len(descriptors)-1]}).Validate(); err != nil {
+	legacy := append([]CommandDescriptor(nil), descriptors[:len(descriptors)-1]...)
+	if err = (CapabilityCatalog{Commands: legacy}).Validate(); err == nil {
+		t.Fatal("seven-command catalog with current session-open schema was accepted")
+	}
+	legacy[0].OutputSchema = legacyBrowserCommandOutputSchema(
+		BrowserCommandSessionOpen,
+		legacy[0].BrowserProfiles,
+	)
+	if err = (CapabilityCatalog{Commands: legacy}).Validate(); err != nil {
 		t.Fatalf("previous browser command set rejected: %v", err)
 	}
 }

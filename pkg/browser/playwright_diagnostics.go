@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -13,9 +14,10 @@ const (
 	playwrightDiagnosticsResultMarker = "MINTCLAW_DIAGNOSTICS_RESULT_V1"
 )
 
-const playwrightDiagnosticsInitCode = `async (page) => {
+const playwrightDiagnosticsInitTemplate = `async (page) => {
   const key = Symbol.for("mintclaw.browser.diagnostics.v1");
   if (page[key]) return "MINTCLAW_DIAGNOSTICS_INIT_V1|ok";
+	const diagnosticURLBytes = MINTCLAW_MAX_DIAGNOSTIC_URL_BYTES;
   const utf8 = value => {
     const bytes = [];
     for (const character of String(value || "")) {
@@ -122,8 +124,8 @@ const playwrightDiagnosticsInitCode = `async (page) => {
     try {
       const value = new URL(String(raw || ""));
       if ((value.protocol !== "http:" && value.protocol !== "https:") || value.username || value.password) return {};
-      const origin = value.origin.toLowerCase().slice(0, 4096);
-      const path = truncateUTF8(value.pathname || "/", 4096);
+			const origin = truncateUTF8(value.origin.toLowerCase(), diagnosticURLBytes);
+			const path = truncateUTF8(value.pathname || "/", diagnosticURLBytes);
       return { origin, path };
     } catch (_) { return {}; }
   };
@@ -207,6 +209,13 @@ const playwrightDiagnosticsInitCode = `async (page) => {
   page.once("close", () => { delete page[key]; state.cdp.detach().catch(() => {}); });
   return "MINTCLAW_DIAGNOSTICS_INIT_V1|ok";
 }`
+
+var playwrightDiagnosticsInitCode = strings.Replace(
+	playwrightDiagnosticsInitTemplate,
+	"MINTCLAW_MAX_DIAGNOSTIC_URL_BYTES",
+	strconv.Itoa(MaxURLBytes),
+	1,
+)
 
 func playwrightDiagnosticsReadCode(categories []DiagnosticCategory) string {
 	encoded, _ := json.Marshal(categories)

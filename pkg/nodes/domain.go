@@ -461,7 +461,15 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return err
 	}
 	actualOutput, err := canonicalJSON(descriptor.OutputSchema)
-	if err != nil || !bytes.Equal(actualOutput, expectedOutput) {
+	outputMatches := err == nil && bytes.Equal(actualOutput, expectedOutput)
+	if !outputMatches && descriptor.Name == BrowserCommandSessionOpen {
+		legacyOutput, legacyErr := canonicalJSON(legacyBrowserCommandOutputSchema(
+			descriptor.Name,
+			descriptor.BrowserProfiles,
+		))
+		outputMatches = legacyErr == nil && bytes.Equal(actualOutput, legacyOutput)
+	}
+	if !outputMatches {
 		return fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
 	}
 	return nil
@@ -614,6 +622,7 @@ func (catalog CapabilityCatalog) Validate() error {
 	totalBytes := 0
 	var browserProfiles []BrowserProfileDescriptor
 	browserCommandCount := 0
+	browserDescriptors := make(map[string]CommandDescriptor)
 	for _, descriptor := range catalog.Commands {
 		totalBytes += len(descriptor.Name) + len(descriptor.InputSchema) + len(descriptor.OutputSchema)
 		if descriptor.ModelContract != nil {
@@ -650,6 +659,7 @@ func (catalog CapabilityCatalog) Validate() error {
 		}
 		if IsBrowserCommand(descriptor.Name) {
 			browserCommandCount++
+			browserDescriptors[descriptor.Name] = descriptor
 			if browserProfiles == nil {
 				browserProfiles = descriptor.BrowserProfiles
 			} else if !reflect.DeepEqual(browserProfiles, descriptor.BrowserProfiles) {
@@ -676,6 +686,22 @@ func (catalog CapabilityCatalog) Validate() error {
 			if _, present := seen[command.name]; !present {
 				return fmt.Errorf("%w: browser catalog lacks a complete supported command set", ErrInvalidCapability)
 			}
+		}
+		sessionOpen := browserDescriptors[BrowserCommandSessionOpen]
+		expectedSessionOpen := BrowserCommandOutputSchema(BrowserCommandSessionOpen, sessionOpen.BrowserProfiles)
+		if browserCommandCount == legacyCount {
+			expectedSessionOpen = legacyBrowserCommandOutputSchema(
+				BrowserCommandSessionOpen,
+				sessionOpen.BrowserProfiles,
+			)
+		}
+		actualOutput, actualErr := canonicalJSON(sessionOpen.OutputSchema)
+		expectedOutput, expectedErr := canonicalJSON(expectedSessionOpen)
+		if actualErr != nil || expectedErr != nil || !bytes.Equal(actualOutput, expectedOutput) {
+			return fmt.Errorf(
+				"%w: browser session-open schema does not match command-set version",
+				ErrInvalidCapability,
+			)
 		}
 	}
 	return nil
