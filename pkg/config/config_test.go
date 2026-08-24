@@ -1181,6 +1181,9 @@ func TestConfigExample_WebProviderIsAuto(t *testing.T) {
 	if cfg.Tools.Web.Provider != "auto" {
 		t.Fatalf("config.example.json tools.web.provider = %q, want auto", cfg.Tools.Web.Provider)
 	}
+	if err := cfg.ValidateMCPConfig(); err != nil {
+		t.Fatalf("config.example.json MCP contract error: %v", err)
+	}
 }
 
 func TestDefaultConfig_ToolFeedbackDisabled(t *testing.T) {

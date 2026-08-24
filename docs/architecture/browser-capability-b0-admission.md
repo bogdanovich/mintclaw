@@ -134,7 +134,7 @@ than risking duplicate external action.
 
 ### Explicit uncertain outcome
 
-When a configured `never` server loses its session during `tools/call`:
+When a server loses its session during `tools/call`:
 
 1. the original call is never issued again;
 2. the manager attempts one serialized reconnect so later calls can use a
@@ -291,16 +291,17 @@ one. A breaking configuration change is handled by a coordinated deployment,
 not by runtime inference or translation. Invalid values fail validation before
 the affected server starts, and adding `exclusive_lock_file` does not move or
 rewrite the profile.
-- changing the Playwright server to `never` takes effect after the normal safe
+
+- changing the explicit transport contract takes effect after the normal safe
   gateway restart;
 - adding the browser `mcpServers` policy changes registration only for that
   agent;
-- rollback removes the two server fields and workspace allowlist, then
-  restarts the gateway using the previous binary.
+- rollback restores the backed-up pre-cutover configuration and workspace
+  allowlist with the previous binary, then restarts the gateway.
 
-Configuration tools that clone or rewrite MCP server entries must preserve the
-new fields. The initial CLI need not add dedicated flags; advanced operators
-may edit the raw config, while `mcp show` renders the effective safe state.
+Configuration tools that rewrite MCP server entries must preserve the current
+fields. Operators may edit the raw config, while `mcp show` renders the current
+safe state.
 
 Example deployed shape:
 
@@ -340,14 +341,8 @@ call started
     |
     +-- session-loss error
             |
-            +-- policy=once
-            |       |
-            |       +-- reconnect + one call ----> terminal or failed
-            |
-            +-- policy=never
-                    |
-                    +-- reconnect for future calls
-                    +-- current call ------------> uncertain
+            +-- reconnect for future calls
+            +-- current call ---------------------> uncertain
 ```
 
 The uncertain result is terminal for the MintClaw tool invocation. It is not a
@@ -356,8 +351,8 @@ new invocation with a new model decision.
 
 Cancellation before or during the MCP call retains existing context semantics.
 B0 does not claim that canceling a dispatched external browser action rolls it
-back. If cancellation and session loss race after dispatch under `never`, the
-reported action outcome remains uncertain.
+back. If cancellation and session loss race after dispatch, the reported
+action outcome remains uncertain.
 
 ## Runtime Events And Redaction
 
