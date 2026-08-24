@@ -799,6 +799,11 @@ Implementation sequence:
     Keep narrow bus and event interfaces where alternate implementations
     exist; use concrete active-request and abort owners, and delete their
     single-implementation interfaces and test-only `AgentLoop` pass-throughs.
+32. Keep the semantic `PipelineContextServices` grouping, but replace its
+    background-compaction, model-execution, and terminal-task interfaces with
+    concrete runtime-generation owners. Preserve the context-runtime,
+    steering, and media seams because they have real substitutes, and delete
+    model-execution `AgentLoop` pass-throughs made unused by the concrete owner.
 
 Exit criteria:
 

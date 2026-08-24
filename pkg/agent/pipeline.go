@@ -40,11 +40,11 @@ func (p *Pipeline) hashToolArguments(workspace string, arguments map[string]any)
 
 type PipelineContextServices struct {
 	Runtime              pipelineContextRuntime
-	BackgroundCompaction backgroundCompactionScheduler
-	ModelExecution       modelExecutionResolver
+	BackgroundCompaction *backgroundCompactionRunner
+	ModelExecution       *modelExecutionManager
 	Steering             steeringDequeuer
 	MediaResolver        mediaResolver
-	TerminalTasks        terminalTaskContextProvider
+	TerminalTasks        *AgentLoop
 }
 
 type PipelineInteractionServices struct {
@@ -120,46 +120,6 @@ type pipelineContextRuntime interface {
 	Assemble(ctx context.Context, req *AssembleRequest) (*AssembleResponse, error)
 	Compact(ctx context.Context, req *CompactRequest) error
 	Ingest(ctx context.Context, req *IngestRequest) error
-}
-
-type terminalTaskContextProvider interface {
-	terminalTaskContextForTurn(ts *turnState) []providers.Message
-}
-
-type backgroundCompactionScheduler interface {
-	scheduleBackgroundCompaction(
-		agent *AgentInstance,
-		sessionKey string,
-		reason ContextCompressReason,
-		budget int,
-		messageKind string,
-	)
-}
-
-type modelExecutionResolver interface {
-	selectCandidates(
-		execution effectiveExecutionState,
-		userMsg string,
-		history []providers.Message,
-		routeSessionKey string,
-	) modelSelectionDecision
-	maybeBuildVisionExecutionState(
-		baseAgent *AgentInstance,
-		execution effectiveExecutionState,
-		messages []providers.Message,
-	) (effectiveExecutionState, func(), string, bool, error)
-	maybeApplyVisionExecutionState(baseAgent *AgentInstance, exec *turnExecution) (bool, error)
-	buildExecutionStateForModel(
-		baseAgent *AgentInstance,
-		modelName string,
-		fallbacks []string,
-	) (effectiveExecutionState, func(), error)
-	updateAutoFallbackSelection(
-		routeSessionKey string,
-		selectedCandidates []providers.FallbackCandidate,
-		result *providers.FallbackResult,
-		usedLight bool,
-	)
 }
 
 type steeringDequeuer interface {

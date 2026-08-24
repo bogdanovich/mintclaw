@@ -293,19 +293,6 @@ func (m *modelExecutionManager) updateAutoFallbackSelection(
 	_ = m.setAutoModelSelection(routeSessionKey, selection)
 }
 
-func (al *AgentLoop) updateAutoFallbackSelection(
-	routeSessionKey string,
-	selectedCandidates []providers.FallbackCandidate,
-	result *providers.FallbackResult,
-	usedLight bool,
-) {
-	manager := al.modelExecutionManager()
-	if manager == nil {
-		return
-	}
-	manager.updateAutoFallbackSelection(routeSessionKey, selectedCandidates, result, usedLight)
-}
-
 func (al *AgentLoop) getAutoModelSelection(routeSessionKey string) (state.AutoModelSelection, bool) {
 	manager := al.modelExecutionManager()
 	if manager == nil {
