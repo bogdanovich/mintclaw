@@ -294,30 +294,27 @@ func (m *modelExecutionManager) updateAutoFallbackSelection(
 }
 
 func (al *AgentLoop) getAutoModelSelection(routeSessionKey string) (state.AutoModelSelection, bool) {
-	manager := al.modelExecutionManager()
-	if manager == nil {
+	if al == nil || al.modelExecution == nil {
 		return state.AutoModelSelection{}, false
 	}
-	return manager.getAutoModelSelection(routeSessionKey)
+	return al.modelExecution.getAutoModelSelection(routeSessionKey)
 }
 
 func (al *AgentLoop) setAutoModelSelection(
 	routeSessionKey string,
 	selection state.AutoModelSelection,
 ) error {
-	manager := al.modelExecutionManager()
-	if manager == nil {
+	if al == nil || al.modelExecution == nil {
 		return fmt.Errorf("model execution manager not initialized")
 	}
-	return manager.setAutoModelSelection(routeSessionKey, selection)
+	return al.modelExecution.setAutoModelSelection(routeSessionKey, selection)
 }
 
 func (al *AgentLoop) clearAutoModelSelection(routeSessionKey string) error {
-	manager := al.modelExecutionManager()
-	if manager == nil {
+	if al == nil || al.modelExecution == nil {
 		return fmt.Errorf("model execution manager not initialized")
 	}
-	return manager.clearAutoModelSelection(routeSessionKey)
+	return al.modelExecution.clearAutoModelSelection(routeSessionKey)
 }
 
 func (al *AgentLoop) selectCandidates(
@@ -326,20 +323,18 @@ func (al *AgentLoop) selectCandidates(
 	history []providers.Message,
 	routeSessionKey string,
 ) modelSelectionDecision {
-	manager := al.modelExecutionManager()
-	if manager == nil {
+	if al == nil || al.modelExecution == nil {
 		return modelSelectionDecision{}
 	}
-	return manager.selectCandidates(execution, userMsg, history, routeSessionKey)
+	return al.modelExecution.selectCandidates(execution, userMsg, history, routeSessionKey)
 }
 
 func (al *AgentLoop) previewStickyAutoFallback(
 	decision modelSelectionDecision,
 	routeSessionKey string,
 ) modelSelectionDecision {
-	manager := al.modelExecutionManager()
-	if manager == nil {
+	if al == nil || al.modelExecution == nil {
 		return decision
 	}
-	return manager.previewStickyAutoFallback(decision, routeSessionKey)
+	return al.modelExecution.previewStickyAutoFallback(decision, routeSessionKey)
 }

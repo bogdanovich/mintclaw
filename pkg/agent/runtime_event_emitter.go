@@ -6,15 +6,6 @@ type agentRuntimeEventEmitter struct {
 	events runtimeevents.Bus
 }
 
-func (al *AgentLoop) runtimeEventEmitter() *agentRuntimeEventEmitter {
-	if al == nil {
-		return nil
-	}
-	return &agentRuntimeEventEmitter{
-		events: al.runtimeEvents,
-	}
-}
-
 func (e *agentRuntimeEventEmitter) emitEvent(kind runtimeevents.Kind, meta HookMeta, payload any) {
 	clonedMeta := cloneHookMeta(meta)
 	eventCtx := cloneTurnContext(clonedMeta.turnContext)

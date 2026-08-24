@@ -136,15 +136,6 @@ func fatalMCPServerErrorReply(serverName, toolName string) string {
 	return "I hit a backend MCP transport error and stopped instead of trying workarounds. Please restart or fix that MCP server, then try again."
 }
 
-func (al *AgentLoop) applySyncToolResultDelivery(
-	ctx context.Context,
-	ts *turnState,
-	result *toolshared.ToolResult,
-	toolName string,
-) ([]providers.Attachment, *toolshared.ToolResult) {
-	return al.syncToolResultDelivery().applySyncToolResultDelivery(ctx, ts, result, toolName)
-}
-
 func mcpServerNameForTool(registry *tools.ToolRegistry, toolName string) string {
 	if registry == nil {
 		return ""

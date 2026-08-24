@@ -206,6 +206,7 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 		},
 	}
 	al := &AgentLoop{cfg: cfg}
+	al.modelExecution = &modelExecutionManager{configProvider: al.GetConfig}
 	router := routing.New(routing.RouterConfig{LightModel: "light-model", Threshold: 1})
 	target := &AgentInstance{
 		ID:            "child",

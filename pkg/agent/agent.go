@@ -626,11 +626,10 @@ func (al *AgentLoop) scheduleBackgroundCompaction(
 	budget int,
 	messageKind string,
 ) {
-	runner := al.backgroundCompactionRunner()
-	if runner == nil {
+	if al == nil || al.compactionRunner == nil {
 		return
 	}
-	runner.scheduleBackgroundCompaction(agent, sessionKey, reason, budget, messageKind)
+	al.compactionRunner.scheduleBackgroundCompaction(agent, sessionKey, reason, budget, messageKind)
 }
 
 func agentMessageToolSentToTurnTarget(

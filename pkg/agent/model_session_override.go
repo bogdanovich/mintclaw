@@ -229,11 +229,10 @@ func (al *AgentLoop) buildExecutionStateForModel(
 	modelName string,
 	fallbacks []string,
 ) (effectiveExecutionState, func(), error) {
-	manager := al.modelExecutionManager()
-	if manager == nil {
+	if al == nil || al.modelExecution == nil {
 		return effectiveExecutionState{}, nil, fmt.Errorf("model execution manager not initialized")
 	}
-	return manager.buildExecutionStateForModel(baseAgent, modelName, fallbacks)
+	return al.modelExecution.buildExecutionStateForModel(baseAgent, modelName, fallbacks)
 }
 
 func (al *AgentLoop) buildSessionOverrideExecution(

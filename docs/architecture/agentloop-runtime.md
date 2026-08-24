@@ -87,6 +87,13 @@ interfaces because tests and alternate buses provide real implementations.
 Active-request counting and turn abort use their concrete owners; they do not
 sit behind a service bag or single-implementation interface.
 
+`NewAgentLoop` constructs the active-request counter, background-compaction
+runner, and model-execution manager exactly once. Host-side callers use those
+owned fields directly; there are no lazy accessors that create alternate
+runtime owners after construction. Event emission likewise constructs its
+small concrete adapter at the wiring boundary rather than through an
+`AgentLoop` factory.
+
 Pipeline context wiring keeps its semantic grouping, but not artificial
 interfaces. Context assembly, steering, and media resolution retain narrow
 interfaces because they have real substitutes. Background compaction, model
@@ -102,6 +109,10 @@ capability rather than an optional type assertion.
 Reasoning publication is owned by the pipeline's concrete component. There is
 no test-only `AgentLoop` component factory or reasoning pass-through façade;
 component behavior is tested at its actual owner.
+
+Synchronous tool-result delivery is generation-owned pipeline wiring. The
+unused `AgentLoop` delivery factory and pass-through are absent, so there is no
+second host-side route to the same component.
 
 ## Session Claiming
 

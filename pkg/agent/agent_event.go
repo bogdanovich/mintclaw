@@ -39,7 +39,10 @@ func (ts turnEventScope) traceScope() runtimeevents.TraceScope {
 }
 
 func (al *AgentLoop) emitEvent(kind runtimeevents.Kind, meta HookMeta, payload any) {
-	al.runtimeEventEmitter().emitEvent(kind, meta, payload)
+	if al == nil {
+		return
+	}
+	(&agentRuntimeEventEmitter{events: al.runtimeEvents}).emitEvent(kind, meta, payload)
 }
 
 // MountHook registers an in-process hook on the agent loop.

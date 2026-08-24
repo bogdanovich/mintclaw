@@ -41,13 +41,6 @@ func hasToolResultDeliveryPayload(result *toolshared.ToolResult) bool {
 		result.Delivery.AsyncMode == toolshared.AsyncDeliveryUserOnly
 }
 
-func (al *AgentLoop) syncToolResultDelivery() *syncToolResultDelivery {
-	if al == nil {
-		return nil
-	}
-	return &syncToolResultDelivery{deliverToUser: al.deliverToolResultToUser}
-}
-
 func normalizeToolResultForSyncDelivery(ts *turnState, result *toolshared.ToolResult) *toolshared.ToolResult {
 	if result == nil {
 		return toolshared.ErrorResult("nil tool result")

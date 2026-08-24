@@ -60,11 +60,10 @@ func (al *AgentLoop) maybeBuildVisionExecutionState(
 	execution effectiveExecutionState,
 	messages []providers.Message,
 ) (effectiveExecutionState, func(), string, bool, error) {
-	manager := al.modelExecutionManager()
-	if manager == nil {
+	if al == nil || al.modelExecution == nil {
 		return execution, nil, visionRouteSameModel, false, nil
 	}
-	return manager.maybeBuildVisionExecutionState(baseAgent, execution, messages)
+	return al.modelExecution.maybeBuildVisionExecutionState(baseAgent, execution, messages)
 }
 
 func (m *modelExecutionManager) maybeApplyVisionExecutionState(
