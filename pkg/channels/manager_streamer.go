@@ -333,9 +333,9 @@ func (s *splitMarkerStreamer) runFinalizeHook(ctx context.Context, content strin
 	}
 }
 
-// finalizeHookStreamer wraps a Streamer to run a hook on Finalize.
+// finalizeHookStreamer wraps a bus.Streamer to run a hook on Finalize.
 type finalizeHookStreamer struct {
-	Streamer
+	bus.Streamer
 	onFinalize  func(context.Context, string)
 	clearMarker func()
 	footer      responseFooterStreamState

@@ -256,12 +256,12 @@ func (s *recordingStreamSegment) SetAgentID(agentID string) {
 
 type mockStreamingChannel struct {
 	mockMessageEditor
-	streamer        Streamer
-	beginStreamFn   func(context.Context, string) (Streamer, error)
+	streamer        bus.Streamer
+	beginStreamFn   func(context.Context, string) (bus.Streamer, error)
 	resolveChatIDFn func(chatID string, outboundCtx *bus.InboundContext) string
 }
 
-func (m *mockStreamingChannel) BeginStream(ctx context.Context, chatID string) (Streamer, error) {
+func (m *mockStreamingChannel) BeginStream(ctx context.Context, chatID string) (bus.Streamer, error) {
 	if m.beginStreamFn != nil {
 		return m.beginStreamFn(ctx, chatID)
 	}
@@ -322,7 +322,7 @@ type toolFeedbackTestChannel struct {
 
 type toolFeedbackStreamingTestChannel struct {
 	*toolFeedbackTestChannel
-	streamer Streamer
+	streamer bus.Streamer
 }
 
 type uneditableToolFeedbackTestChannel struct {
@@ -362,7 +362,7 @@ func (c *uneditableToolFeedbackTestChannel) SendToolFeedbackMessage(
 	return FailedDelivery[bus.OutboundMessage](messageIDs, nil, 0, err), false
 }
 
-func (c *toolFeedbackStreamingTestChannel) BeginStream(context.Context, string) (Streamer, error) {
+func (c *toolFeedbackStreamingTestChannel) BeginStream(context.Context, string) (bus.Streamer, error) {
 	return c.streamer, nil
 }
 
@@ -5673,7 +5673,7 @@ func TestGetStreamer_SplitOnMarkerStreamsSeparateSegments(t *testing.T) {
 
 	var segments []*recordingStreamSegment
 	ch := &mockStreamingChannel{
-		beginStreamFn: func(context.Context, string) (Streamer, error) {
+		beginStreamFn: func(context.Context, string) (bus.Streamer, error) {
 			segment := &recordingStreamSegment{}
 			segments = append(segments, segment)
 			return segment, nil
@@ -5739,7 +5739,7 @@ func TestGetStreamer_SplitOnMarkerFooterOnlyOnFinalSegment(t *testing.T) {
 
 	var segments []*recordingStreamSegment
 	ch := &mockStreamingChannel{
-		beginStreamFn: func(context.Context, string) (Streamer, error) {
+		beginStreamFn: func(context.Context, string) (bus.Streamer, error) {
 			segment := &recordingStreamSegment{}
 			segments = append(segments, segment)
 			return segment, nil
@@ -5784,7 +5784,7 @@ func TestGetStreamer_SplitOnMarkerTerminalMarkerFooterAfterUsage(t *testing.T) {
 
 	var segments []*recordingStreamSegment
 	ch := &mockStreamingChannel{
-		beginStreamFn: func(context.Context, string) (Streamer, error) {
+		beginStreamFn: func(context.Context, string) (bus.Streamer, error) {
 			segment := &recordingStreamSegment{}
 			segments = append(segments, segment)
 			return segment, nil
@@ -5827,7 +5827,7 @@ func TestGetStreamer_SplitOnMarkerConsecutiveTerminalMarkersFooterAfterUsage(t *
 
 	var segments []*recordingStreamSegment
 	ch := &mockStreamingChannel{
-		beginStreamFn: func(context.Context, string) (Streamer, error) {
+		beginStreamFn: func(context.Context, string) (bus.Streamer, error) {
 			segment := &recordingStreamSegment{}
 			segments = append(segments, segment)
 			return segment, nil
@@ -5877,7 +5877,7 @@ func TestGetStreamer_SplitOnMarkerKeepsReasoningOnInitialStreamer(t *testing.T) 
 	next := &recordingStreamSegment{}
 	callCount := 0
 	ch := &mockStreamingChannel{
-		beginStreamFn: func(context.Context, string) (Streamer, error) {
+		beginStreamFn: func(context.Context, string) (bus.Streamer, error) {
 			callCount++
 			if callCount == 1 {
 				return initial, nil
@@ -5927,7 +5927,7 @@ func TestGetStreamer_SplitOnMarkerPreservesModelNameSetter(t *testing.T) {
 	next := &recordingStreamSegment{}
 	callCount := 0
 	ch := &mockStreamingChannel{
-		beginStreamFn: func(context.Context, string) (Streamer, error) {
+		beginStreamFn: func(context.Context, string) (bus.Streamer, error) {
 			callCount++
 			if callCount == 1 {
 				return initial, nil
@@ -5975,7 +5975,7 @@ func TestGetStreamer_SplitOnMarkerPreservesAgentIDAcrossSegments(t *testing.T) {
 
 	var segments []*recordingStreamSegment
 	ch := &mockStreamingChannel{
-		beginStreamFn: func(context.Context, string) (Streamer, error) {
+		beginStreamFn: func(context.Context, string) (bus.Streamer, error) {
 			segment := &recordingStreamSegment{}
 			segments = append(segments, segment)
 			return segment, nil
