@@ -165,17 +165,17 @@ func TestChannelAllowFromFindingsDistinguishEmptyAndWildcard(t *testing.T) {
 		"blocked": {
 			Type:      config.ChannelTelegram,
 			Enabled:   true,
-			AllowFrom: config.FlexibleStringSlice{"", "  "},
+			AllowFrom: []string{"", "  "},
 		},
 		"public": {
 			Type:      config.ChannelSlack,
 			Enabled:   true,
-			AllowFrom: config.FlexibleStringSlice{"*"},
+			AllowFrom: []string{"*"},
 		},
 		"private": {
 			Type:      config.ChannelDiscord,
 			Enabled:   true,
-			AllowFrom: config.FlexibleStringSlice{"owner-1"},
+			AllowFrom: []string{"owner-1"},
 		},
 	}
 

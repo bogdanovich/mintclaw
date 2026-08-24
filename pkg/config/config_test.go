@@ -1547,6 +1547,92 @@ func TestLoadConfig_RejectsUnknownChannelSettingsWithoutRewriting(t *testing.T) 
 	}
 }
 
+func TestLoadConfigRejectsNonStringArrayItemsWithoutRewriting(t *testing.T) {
+	tests := []struct {
+		name     string
+		document string
+		wantPath string
+	}{
+		{
+			name: "ordinary config field",
+			document: `{
+				"version": 3,
+				"tools": {"web": {"private_host_whitelist": ["localhost", null]}}
+			}`,
+			wantPath: "tools.web.private_host_whitelist[1]",
+		},
+		{
+			name: "channel common field",
+			document: `{
+				"version": 3,
+				"channel_list": {
+					"telegram": {"type": "telegram", "allow_from": ["trusted", null]}
+				}
+			}`,
+			wantPath: "channel_list.telegram.allow_from[1]",
+		},
+		{
+			name: "placeholder text",
+			document: `{
+				"version": 3,
+				"channel_list": {
+					"telegram": {"type": "telegram", "placeholder": {"text": ["Wait", null]}}
+				}
+			}`,
+			wantPath: "channel_list.telegram.placeholder.text[1]",
+		},
+		{
+			name: "registered channel setting",
+			document: `{
+				"version": 3,
+				"channel_list": {
+					"irc": {"type": "irc", "settings": {"channels": ["#ops", null]}}
+				}
+			}`,
+			wantPath: "channel_list.irc.settings.channels[1]",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte(test.document), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			_, err := LoadConfig(configPath)
+			if err == nil || !strings.Contains(err.Error(), test.wantPath) {
+				t.Fatalf("LoadConfig() error = %v, want path %q", err, test.wantPath)
+			}
+			stored, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			if string(stored) != test.document {
+				t.Fatalf("LoadConfig() rewrote rejected config to %q", stored)
+			}
+		})
+	}
+}
+
+func TestDecodeCurrentConfigAllowsNullStringArrayFields(t *testing.T) {
+	cfg := DefaultConfig()
+	err := DecodeCurrentConfig([]byte(`{
+		"version": 3,
+		"tools": {"web": {"private_host_whitelist": null}},
+		"channel_list": {
+			"irc": {
+				"type": "irc",
+				"allow_from": null,
+				"placeholder": {"text": null},
+				"settings": {"channels": null}
+			}
+		}
+	}`), cfg)
+	if err != nil {
+		t.Fatalf("DecodeCurrentConfig() error = %v", err)
+	}
+}
+
 func TestLoadConfig_RejectsDuplicateFieldsWithoutRewriting(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -2232,185 +2318,35 @@ func TestConfig_UnmarshalIsolation(t *testing.T) {
 	}
 }
 
-// TestFlexibleStringSlice_UnmarshalText tests UnmarshalText with various comma separators
-func TestFlexibleStringSlice_UnmarshalText(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected []string
-	}{
-		{
-			name:     "English commas only",
-			input:    "123,456,789",
-			expected: []string{"123", "456", "789"},
-		},
-		{
-			name:     "Chinese commas only",
-			input:    "123，456，789",
-			expected: []string{"123", "456", "789"},
-		},
-		{
-			name:     "Mixed English and Chinese commas",
-			input:    "123,456，789",
-			expected: []string{"123", "456", "789"},
-		},
-		{
-			name:     "Single value",
-			input:    "123",
-			expected: []string{"123"},
-		},
-		{
-			name:     "Values with whitespace",
-			input:    " 123 , 456 , 789 ",
-			expected: []string{"123", "456", "789"},
-		},
-		{
-			name:     "Empty string",
-			input:    "",
-			expected: nil,
-		},
-		{
-			name:     "Only commas - English",
-			input:    ",,",
-			expected: []string{},
-		},
-		{
-			name:     "Only commas - Chinese",
-			input:    "，，",
-			expected: []string{},
-		},
-		{
-			name:     "Mixed commas with empty parts",
-			input:    "123,,456，，789",
-			expected: []string{"123", "456", "789"},
-		},
-		{
-			name:     "Complex mixed values",
-			input:    "user1@example.com，user2@test.com, admin@domain.org",
-			expected: []string{"user1@example.com", "user2@test.com", "admin@domain.org"},
-		},
+func TestChannelStringArraysRequireCanonicalJSON(t *testing.T) {
+	var channel Channel
+	if err := json.Unmarshal(
+		[]byte(`{"allow_from":["123"],"placeholder":{"text":["Thinking..."]}}`),
+		&channel,
+	); err != nil {
+		t.Fatalf("json.Unmarshal(canonical arrays) error = %v", err)
 	}
+	assert.Equal(t, []string{"123"}, channel.AllowFrom)
+	assert.Equal(t, []string{"Thinking..."}, channel.Placeholder.Text)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var f FlexibleStringSlice
-			err := f.UnmarshalText([]byte(tt.input))
-			if err != nil {
-				t.Fatalf("UnmarshalText(%q) error = %v", tt.input, err)
-			}
-
-			if tt.expected == nil {
-				if f != nil {
-					t.Errorf("UnmarshalText(%q) = %v, want nil", tt.input, f)
-				}
-				return
-			}
-
-			if len(f) != len(tt.expected) {
-				t.Errorf(
-					"UnmarshalText(%q) length = %d, want %d",
-					tt.input,
-					len(f),
-					len(tt.expected),
-				)
-				return
-			}
-
-			for i, v := range tt.expected {
-				if f[i] != v {
-					t.Errorf("UnmarshalText(%q)[%d] = %q, want %q", tt.input, i, f[i], v)
-				}
+	for name, input := range map[string]string{
+		"scalar allow_from":      `{"allow_from":"123"}`,
+		"numeric allow_from":     `{"allow_from":123}`,
+		"mixed allow_from":       `{"allow_from":["123",456]}`,
+		"scalar placeholder":     `{"placeholder":{"text":"Thinking..."}}`,
+		"numeric placeholder":    `{"placeholder":{"text":123}}`,
+		"mixed placeholder text": `{"placeholder":{"text":["Thinking...",123]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var decoded Channel
+			if err := json.Unmarshal([]byte(input), &decoded); err == nil {
+				t.Fatalf("json.Unmarshal(%s) error = nil, want canonical string-array rejection", input)
 			}
 		})
 	}
 }
 
-// TestFlexibleStringSlice_UnmarshalText_EmptySliceConsistency tests nil vs empty slice behavior
-func TestFlexibleStringSlice_UnmarshalText_EmptySliceConsistency(t *testing.T) {
-	t.Run("Empty string returns nil", func(t *testing.T) {
-		var f FlexibleStringSlice
-		err := f.UnmarshalText([]byte(""))
-		if err != nil {
-			t.Fatalf("UnmarshalText error = %v", err)
-		}
-		if f != nil {
-			t.Errorf("Empty string should return nil, got %v", f)
-		}
-	})
-
-	t.Run("Commas only returns empty slice", func(t *testing.T) {
-		var f FlexibleStringSlice
-		err := f.UnmarshalText([]byte(",,,"))
-		if err != nil {
-			t.Fatalf("UnmarshalText error = %v", err)
-		}
-		if f == nil {
-			t.Error("Commas only should return empty slice, not nil")
-		}
-		if len(f) != 0 {
-			t.Errorf("Expected empty slice, got %v", f)
-		}
-	})
-}
-
-func TestFlexibleStringSlice_UnmarshalJSON(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected []string
-	}{
-		{
-			name:     "null",
-			input:    `null`,
-			expected: nil,
-		},
-		{
-			name:     "single string",
-			input:    `"Thinking..."`,
-			expected: []string{"Thinking..."},
-		},
-		{
-			name:     "single number",
-			input:    `123`,
-			expected: []string{"123"},
-		},
-		{
-			name:     "string array",
-			input:    `["Thinking...", "Still working..."]`,
-			expected: []string{"Thinking...", "Still working..."},
-		},
-		{
-			name:     "mixed array",
-			input:    `["123", 456]`,
-			expected: []string{"123", "456"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var f FlexibleStringSlice
-			if err := json.Unmarshal([]byte(tt.input), &f); err != nil {
-				t.Fatalf("json.Unmarshal(%s) error = %v", tt.input, err)
-			}
-			if tt.expected == nil {
-				if f != nil {
-					t.Fatalf("json.Unmarshal(%s) = %#v, want nil slice", tt.input, f)
-				}
-				return
-			}
-			if len(f) != len(tt.expected) {
-				t.Fatalf("json.Unmarshal(%s) len = %d, want %d", tt.input, len(f), len(tt.expected))
-			}
-			for i, want := range tt.expected {
-				if f[i] != want {
-					t.Fatalf("json.Unmarshal(%s)[%d] = %q, want %q", tt.input, i, f[i], want)
-				}
-			}
-		})
-	}
-}
-
-func TestLoadConfig_TelegramPlaceholderTextAcceptsSingleString(t *testing.T) {
+func TestLoadConfig_TelegramPlaceholderTextRejectsSingleString(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	data := `{
@@ -2440,13 +2376,15 @@ func TestLoadConfig_TelegramPlaceholderTextAcceptsSingleString(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	cfg, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("LoadConfig() error = %v", err)
+	if _, err := LoadConfig(cfgPath); err == nil {
+		t.Fatal("LoadConfig() error = nil, want scalar placeholder.text rejection")
 	}
-	bc := cfg.Channels.Get("telegram")
-	if got := []string(bc.Placeholder.Text); len(got) != 1 || got[0] != "Thinking..." {
-		t.Fatalf("placeholder.text = %#v, want [\"Thinking...\"]", got)
+	stored, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(stored) != data {
+		t.Fatalf("LoadConfig() rewrote rejected config to %q", stored)
 	}
 }
 

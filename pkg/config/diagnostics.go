@@ -19,10 +19,11 @@ func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectUnknownJSONFields(raw, reflect.TypeOf(target), label); err != nil {
+	targetType := reflect.TypeOf(target)
+	if err := validateJSONShape(raw, targetType, label); err != nil {
 		return err
 	}
-	if err := rejectUnknownChannelSettings(raw, nil, label); err != nil {
+	if err := validateChannelSettingsJSON(raw, nil, label); err != nil {
 		return err
 	}
 
@@ -46,18 +47,21 @@ func ValidateConfigPatchJSON(data []byte, current *Config) error {
 	if err != nil {
 		return err
 	}
-	if err := rejectUnknownJSONFields(raw, reflect.TypeOf(&Config{}), "config patch"); err != nil {
+	if err := validateJSONShape(raw, reflect.TypeOf(&Config{}), "config patch"); err != nil {
 		return err
 	}
-	return rejectUnknownChannelSettings(raw, current, "config patch")
+	return validateChannelSettingsJSON(raw, current, "config patch")
 }
 
-func rejectUnknownJSONFields(raw any, targetType reflect.Type, label string) error {
-	unknownFields := collectUnknownJSONFields(raw, targetType, "")
-	return unknownJSONFieldsError(unknownFields, label)
+func validateJSONShape(raw any, targetType reflect.Type, label string) error {
+	issues := collectJSONShapeIssues(raw, targetType, "")
+	if err := unknownJSONFieldsError(issues.unknownFields, label); err != nil {
+		return err
+	}
+	return nonStringArrayItemsError(issues.nonStringItems, label)
 }
 
-func rejectUnknownChannelSettings(raw any, current *Config, label string) error {
+func validateChannelSettingsJSON(raw any, current *Config, label string) error {
 	root, ok := raw.(map[string]any)
 	if !ok {
 		return nil
@@ -67,7 +71,7 @@ func rejectUnknownChannelSettings(raw any, current *Config, label string) error 
 		return nil
 	}
 
-	var unknownFields []string
+	var issues jsonShapeIssues
 	for name, rawChannel := range channels {
 		channel, ok := rawChannel.(map[string]any)
 		if !ok {
@@ -92,12 +96,24 @@ func rejectUnknownChannelSettings(raw any, current *Config, label string) error 
 			continue
 		}
 		settingsPath := appendJSONPath(appendJSONPath("channel_list", name), "settings")
-		unknownFields = append(
-			unknownFields,
-			collectUnknownJSONFields(settings, reflect.TypeOf(settingsTarget), settingsPath)...,
-		)
+		issues.add(collectJSONShapeIssues(settings, reflect.TypeOf(settingsTarget), settingsPath))
 	}
-	return unknownJSONFieldsError(unknownFields, label)
+	if err := unknownJSONFieldsError(issues.unknownFields, label); err != nil {
+		return err
+	}
+	return nonStringArrayItemsError(issues.nonStringItems, label)
+}
+
+func nonStringArrayItemsError(paths []string, label string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	sort.Strings(paths)
+	return fmt.Errorf(
+		"%s contains non-string item(s) in string array(s): %s",
+		label,
+		strings.Join(paths, ", "),
+	)
 }
 
 func unknownJSONFieldsError(unknownFields []string, label string) error {
@@ -480,61 +496,79 @@ func maxRuneCount(s string, count int) int {
 	return utf8.RuneCountInString(string(runes[:count]))
 }
 
-func collectUnknownJSONFields(raw any, targetType reflect.Type, path string) []string {
+type jsonShapeIssues struct {
+	unknownFields  []string
+	nonStringItems []string
+}
+
+func (i *jsonShapeIssues) add(other jsonShapeIssues) {
+	i.unknownFields = append(i.unknownFields, other.unknownFields...)
+	i.nonStringItems = append(i.nonStringItems, other.nonStringItems...)
+}
+
+func collectJSONShapeIssues(raw any, targetType reflect.Type, path string) jsonShapeIssues {
 	targetType = derefType(targetType)
 	if targetType == nil {
-		return nil
+		return jsonShapeIssues{}
 	}
 	// Registry-specific fields are intentionally open-ended and decoded into
 	// SkillRegistryConfig.Param by its strict custom decoder.
 	if targetType == reflect.TypeOf(SkillRegistryConfig{}) {
-		return nil
+		return jsonShapeIssues{}
 	}
 
 	switch targetType.Kind() {
 	case reflect.Struct:
 		obj, ok := raw.(map[string]any)
 		if !ok {
-			return nil
+			return jsonShapeIssues{}
 		}
 		fieldMap := jsonFieldTypeMap(targetType)
-		var issues []string
+		var issues jsonShapeIssues
 		for key, value := range obj {
 			fieldType, exists := fieldMap[key]
 			fieldPath := appendJSONPath(path, key)
 			if !exists {
-				issues = append(issues, fieldPath)
+				issues.unknownFields = append(issues.unknownFields, fieldPath)
 				continue
 			}
-			issues = append(issues, collectUnknownJSONFields(value, fieldType, fieldPath)...)
+			issues.add(collectJSONShapeIssues(value, fieldType, fieldPath))
 		}
 		return issues
 	case reflect.Slice, reflect.Array:
 		items, ok := raw.([]any)
 		if !ok {
-			return nil
+			return jsonShapeIssues{}
 		}
-		var issues []string
-		elemType := targetType.Elem()
+		elemType := derefType(targetType.Elem())
+		var issues jsonShapeIssues
+		if elemType != nil && elemType.Kind() == reflect.String {
+			for i, item := range items {
+				if _, ok := item.(string); !ok {
+					issues.nonStringItems = append(issues.nonStringItems, fmt.Sprintf("%s[%d]", path, i))
+				}
+			}
+			return issues
+		}
 		for i, item := range items {
 			itemPath := fmt.Sprintf("%s[%d]", path, i)
-			issues = append(issues, collectUnknownJSONFields(item, elemType, itemPath)...)
+			issues.add(collectJSONShapeIssues(item, elemType, itemPath))
 		}
 		return issues
 	case reflect.Map:
 		obj, ok := raw.(map[string]any)
 		if !ok {
-			return nil
+			return jsonShapeIssues{}
 		}
-		var issues []string
+		var issues jsonShapeIssues
 		elemType := targetType.Elem()
 		for key, value := range obj {
 			fieldPath := appendJSONPath(path, key)
-			issues = append(issues, collectUnknownJSONFields(value, elemType, fieldPath)...)
+			issues.add(collectJSONShapeIssues(value, elemType, fieldPath))
 		}
 		return issues
 	default:
-		return nil
+		return jsonShapeIssues{}
 	}
 }
 

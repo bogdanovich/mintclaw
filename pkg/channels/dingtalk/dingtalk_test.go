@@ -30,7 +30,7 @@ func newTestDingTalkChannel(
 		bc = &config.Channel{
 			Type:      config.ChannelDingTalk,
 			Enabled:   true,
-			AllowFrom: config.FlexibleStringSlice{"*"},
+			AllowFrom: []string{"*"},
 		}
 	}
 	ch, err := NewDingTalkChannel(bc, &cfg, msgBus)
@@ -55,7 +55,7 @@ func TestOnChatBotMessageReceived_GroupMentionOnlyUsesIsInAtListAndStripsMention
 	bc := &config.Channel{
 		Type:         config.ChannelDingTalk,
 		Enabled:      true,
-		AllowFrom:    config.FlexibleStringSlice{"*"},
+		AllowFrom:    []string{"*"},
 		GroupTrigger: config.GroupTriggerConfig{MentionOnly: true},
 	}
 	ch, msgBus := newTestDingTalkChannel(t, config.DingTalkSettings{}, bc)

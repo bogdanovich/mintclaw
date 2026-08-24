@@ -11,13 +11,13 @@ import (
 func TestValidateWecomAllowFrom(t *testing.T) {
 	tests := []struct {
 		name      string
-		allowFrom config.FlexibleStringSlice
+		allowFrom []string
 		wantErr   bool
 	}{
 		{name: "omitted denies binding", wantErr: true},
-		{name: "blank denies binding", allowFrom: config.FlexibleStringSlice{"  "}, wantErr: true},
-		{name: "trusted sender permits binding", allowFrom: config.FlexibleStringSlice{"owner-1"}},
-		{name: "wildcard permits binding", allowFrom: config.FlexibleStringSlice{"*"}},
+		{name: "blank denies binding", allowFrom: []string{"  "}, wantErr: true},
+		{name: "trusted sender permits binding", allowFrom: []string{"owner-1"}},
+		{name: "wildcard permits binding", allowFrom: []string{"*"}},
 	}
 
 	for _, tt := range tests {

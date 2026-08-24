@@ -7,15 +7,15 @@ type WhatsAppSettings struct {
 }
 
 type TelegramSettings struct {
-	Token             SecureString        `json:"token,omitzero"              yaml:"token,omitempty" env:"MINTCLAW_CHANNELS_TELEGRAM_TOKEN"`
-	BaseURL           string              `json:"base_url"                    yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_BASE_URL"`
-	Proxy             string              `json:"proxy"                       yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_PROXY"`
-	Streaming         StreamingConfig     `json:"streaming,omitzero"          yaml:"-"`
-	RichMessages      RichMessagesConfig  `json:"rich_messages,omitzero"      yaml:"-"`
-	UseMarkdownV2     bool                `json:"use_markdown_v2"             yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
-	MediaGroupDelayMS int                 `json:"media_group_delay_ms"        yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_MEDIA_GROUP_DELAY_MS"`
-	AllowedTopicIDs   FlexibleStringSlice `json:"allowed_topic_ids,omitempty" yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_ALLOWED_TOPIC_IDS"`
-	IgnoredTopicIDs   FlexibleStringSlice `json:"ignored_topic_ids,omitempty" yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_IGNORED_TOPIC_IDS"`
+	Token             SecureString       `json:"token,omitzero"              yaml:"token,omitempty" env:"MINTCLAW_CHANNELS_TELEGRAM_TOKEN"`
+	BaseURL           string             `json:"base_url"                    yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_BASE_URL"`
+	Proxy             string             `json:"proxy"                       yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_PROXY"`
+	Streaming         StreamingConfig    `json:"streaming,omitzero"          yaml:"-"`
+	RichMessages      RichMessagesConfig `json:"rich_messages,omitzero"      yaml:"-"`
+	UseMarkdownV2     bool               `json:"use_markdown_v2"             yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
+	MediaGroupDelayMS int                `json:"media_group_delay_ms"        yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_MEDIA_GROUP_DELAY_MS"`
+	AllowedTopicIDs   []string           `json:"allowed_topic_ids,omitempty" yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_ALLOWED_TOPIC_IDS"`
+	IgnoredTopicIDs   []string           `json:"ignored_topic_ids,omitempty" yaml:"-"               env:"MINTCLAW_CHANNELS_TELEGRAM_IGNORED_TOPIC_IDS"`
 }
 
 type RichMessagesConfig struct {
@@ -27,12 +27,12 @@ func (c RichMessagesConfig) IsZero() bool {
 }
 
 type FeishuSettings struct {
-	AppID               string              `json:"app_id"                      yaml:"-"                            env:"MINTCLAW_CHANNELS_FEISHU_APP_ID"`
-	AppSecret           SecureString        `json:"app_secret,omitzero"         yaml:"app_secret,omitempty"         env:"MINTCLAW_CHANNELS_FEISHU_APP_SECRET"`
-	EncryptKey          SecureString        `json:"encrypt_key,omitzero"        yaml:"encrypt_key,omitempty"        env:"MINTCLAW_CHANNELS_FEISHU_ENCRYPT_KEY"`
-	VerificationToken   SecureString        `json:"verification_token,omitzero" yaml:"verification_token,omitempty" env:"MINTCLAW_CHANNELS_FEISHU_VERIFICATION_TOKEN"`
-	RandomReactionEmoji FlexibleStringSlice `json:"random_reaction_emoji"       yaml:"-"                            env:"MINTCLAW_CHANNELS_FEISHU_RANDOM_REACTION_EMOJI"`
-	IsLark              bool                `json:"is_lark"                     yaml:"-"                            env:"MINTCLAW_CHANNELS_FEISHU_IS_LARK"`
+	AppID               string       `json:"app_id"                      yaml:"-"                            env:"MINTCLAW_CHANNELS_FEISHU_APP_ID"`
+	AppSecret           SecureString `json:"app_secret,omitzero"         yaml:"app_secret,omitempty"         env:"MINTCLAW_CHANNELS_FEISHU_APP_SECRET"`
+	EncryptKey          SecureString `json:"encrypt_key,omitzero"        yaml:"encrypt_key,omitempty"        env:"MINTCLAW_CHANNELS_FEISHU_ENCRYPT_KEY"`
+	VerificationToken   SecureString `json:"verification_token,omitzero" yaml:"verification_token,omitempty" env:"MINTCLAW_CHANNELS_FEISHU_VERIFICATION_TOKEN"`
+	RandomReactionEmoji []string     `json:"random_reaction_emoji"       yaml:"-"                            env:"MINTCLAW_CHANNELS_FEISHU_RANDOM_REACTION_EMOJI"`
+	IsLark              bool         `json:"is_lark"                     yaml:"-"                            env:"MINTCLAW_CHANNELS_FEISHU_IS_LARK"`
 }
 
 type DiscordSettings struct {
@@ -60,10 +60,10 @@ type DingTalkSettings struct {
 }
 
 type SlackSettings struct {
-	BotToken          SecureString        `json:"bot_token,omitzero"            yaml:"bot_token,omitempty" env:"MINTCLAW_CHANNELS_SLACK_BOT_TOKEN"`
-	AppToken          SecureString        `json:"app_token,omitzero"            yaml:"app_token,omitempty" env:"MINTCLAW_CHANNELS_SLACK_APP_TOKEN"`
-	AllowedChannelIDs FlexibleStringSlice `json:"allowed_channel_ids,omitempty" yaml:"-"                   env:"MINTCLAW_CHANNELS_SLACK_ALLOWED_CHANNEL_IDS"`
-	IgnoredChannelIDs FlexibleStringSlice `json:"ignored_channel_ids,omitempty" yaml:"-"                   env:"MINTCLAW_CHANNELS_SLACK_IGNORED_CHANNEL_IDS"`
+	BotToken          SecureString `json:"bot_token,omitzero"            yaml:"bot_token,omitempty" env:"MINTCLAW_CHANNELS_SLACK_BOT_TOKEN"`
+	AppToken          SecureString `json:"app_token,omitzero"            yaml:"app_token,omitempty" env:"MINTCLAW_CHANNELS_SLACK_APP_TOKEN"`
+	AllowedChannelIDs []string     `json:"allowed_channel_ids,omitempty" yaml:"-"                   env:"MINTCLAW_CHANNELS_SLACK_ALLOWED_CHANNEL_IDS"`
+	IgnoredChannelIDs []string     `json:"ignored_channel_ids,omitempty" yaml:"-"                   env:"MINTCLAW_CHANNELS_SLACK_IGNORED_CHANNEL_IDS"`
 }
 
 type MatrixSettings struct {
@@ -118,7 +118,7 @@ type OneBotSettings struct {
 }
 
 type WeComGroupConfig struct {
-	AllowFrom FlexibleStringSlice `json:"allow_from,omitempty"`
+	AllowFrom []string `json:"allow_from,omitempty"`
 }
 
 type WeComSettings struct {
@@ -171,17 +171,17 @@ type MintClawClientSettings struct {
 }
 
 type IRCSettings struct {
-	Server           string              `json:"server"                     yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_SERVER"`
-	TLS              bool                `json:"tls"                        yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_TLS"`
-	Nick             string              `json:"nick"                       yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_NICK"`
-	User             string              `json:"user,omitempty"             yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_USER"`
-	RealName         string              `json:"real_name,omitempty"        yaml:"-"`
-	Password         SecureString        `json:"password,omitzero"          yaml:"password,omitempty"          env:"MINTCLAW_CHANNELS_IRC_PASSWORD"`
-	NickServPassword SecureString        `json:"nickserv_password,omitzero" yaml:"nickserv_password,omitempty" env:"MINTCLAW_CHANNELS_IRC_NICKSERV_PASSWORD"`
-	SASLUser         string              `json:"sasl_user"                  yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_SASL_USER"`
-	SASLPassword     SecureString        `json:"sasl_password,omitzero"     yaml:"sasl_password,omitempty"     env:"MINTCLAW_CHANNELS_IRC_SASL_PASSWORD"`
-	Channels         FlexibleStringSlice `json:"channels"                   yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_CHANNELS"`
-	RequestCaps      FlexibleStringSlice `json:"request_caps,omitempty"     yaml:"-"`
+	Server           string       `json:"server"                     yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_SERVER"`
+	TLS              bool         `json:"tls"                        yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_TLS"`
+	Nick             string       `json:"nick"                       yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_NICK"`
+	User             string       `json:"user,omitempty"             yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_USER"`
+	RealName         string       `json:"real_name,omitempty"        yaml:"-"`
+	Password         SecureString `json:"password,omitzero"          yaml:"password,omitempty"          env:"MINTCLAW_CHANNELS_IRC_PASSWORD"`
+	NickServPassword SecureString `json:"nickserv_password,omitzero" yaml:"nickserv_password,omitempty" env:"MINTCLAW_CHANNELS_IRC_NICKSERV_PASSWORD"`
+	SASLUser         string       `json:"sasl_user"                  yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_SASL_USER"`
+	SASLPassword     SecureString `json:"sasl_password,omitzero"     yaml:"sasl_password,omitempty"     env:"MINTCLAW_CHANNELS_IRC_SASL_PASSWORD"`
+	Channels         []string     `json:"channels"                   yaml:"-"                           env:"MINTCLAW_CHANNELS_IRC_CHANNELS"`
+	RequestCaps      []string     `json:"request_caps,omitempty"     yaml:"-"`
 }
 
 type VKSettings struct {

@@ -153,8 +153,8 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid config: %v", err), http.StatusBadRequest)
 		return
 	}
-	if err = normalizeChannelArrayFields(raw); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid channel array field: %v", err), http.StatusBadRequest)
+	if err = normalizeConfigStringArrayFields(raw, nil); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid string array field: %v", err), http.StatusBadRequest)
 		return
 	}
 	normalizedBody, err := json.Marshal(raw)
@@ -318,6 +318,9 @@ func (e *configPatchRequestError) Unwrap() error {
 }
 
 func applyConfigMergePatch(current *config.Config, patch map[string]any, configPath string) (*config.Config, error) {
+	if err := normalizeConfigStringArrayFields(patch, current); err != nil {
+		return nil, &configPatchRequestError{err: fmt.Errorf("invalid string array field: %w", err)}
+	}
 	existing, err := json.Marshal(current)
 	if err != nil {
 		return nil, fmt.Errorf("serialize current config: %w", err)
@@ -327,9 +330,6 @@ func applyConfigMergePatch(current *config.Config, patch map[string]any, configP
 		return nil, fmt.Errorf("parse current config: %w", err)
 	}
 	mergeMap(base, patch)
-	if err = normalizeChannelArrayFields(base); err != nil {
-		return nil, &configPatchRequestError{err: fmt.Errorf("invalid channel array field: %w", err)}
-	}
 	merged, err := json.Marshal(base)
 	if err != nil {
 		return nil, fmt.Errorf("serialize merged config: %w", err)
@@ -601,7 +601,23 @@ type stringArrayParserOptions struct {
 	stripHiddenChars bool
 }
 
-func normalizeChannelArrayFields(raw map[string]any) error {
+func normalizeConfigStringArrayFields(raw map[string]any, current *config.Config) error {
+	if toolsMap, hasTools := asMapField(raw, "tools"); hasTools {
+		if webMap, hasWeb := asMapField(toolsMap, "web"); hasWeb {
+			if rawWhitelist, exists := webMap["private_host_whitelist"]; exists {
+				normalized, err := normalizeStringArrayValue(rawWhitelist, stringArrayParserOptions{})
+				if err != nil {
+					return fmt.Errorf("tools.web.private_host_whitelist: %w", err)
+				}
+				webMap["private_host_whitelist"] = normalized
+			}
+		}
+	}
+
+	return normalizeChannelArrayFields(raw, current)
+}
+
+func normalizeChannelArrayFields(raw map[string]any, current *config.Config) error {
 	channelsMap, hasChannels := asMapField(raw, "channel_list")
 	if !hasChannels {
 		return nil
@@ -634,12 +650,22 @@ func normalizeChannelArrayFields(raw map[string]any) error {
 			}
 		}
 
+		if placeholder, ok := asMapField(chMap, "placeholder"); ok {
+			if rawText, exists := placeholder["text"]; exists {
+				normalized, err := normalizeLiteralStringArrayValue(rawText)
+				if err != nil {
+					return fmt.Errorf("channel_list.%s.placeholder.text: %w", channelName, err)
+				}
+				placeholder["text"] = normalized
+			}
+		}
+
 		settingsMap, hasSettings := asMapField(chMap, "settings")
 		if !hasSettings {
 			continue
 		}
 
-		settingsType := channelSettingsType(defaultCfg, channelName, chMap)
+		settingsType := channelSettingsType(defaultCfg, current, channelName, chMap)
 		if settingsType == nil {
 			continue
 		}
@@ -674,11 +700,20 @@ func normalizeChannelArrayFields(raw map[string]any) error {
 
 func channelSettingsType(
 	defaultCfg *config.Config,
+	current *config.Config,
 	channelName string,
 	channelMap map[string]any,
 ) reflect.Type {
 	if channelType, _ := channelMap["type"].(string); channelType != "" {
 		if bc := defaultCfg.Channels.GetByType(channelType); bc != nil {
+			if decoded, err := bc.GetDecoded(); err == nil && decoded != nil {
+				return derefType(reflect.TypeOf(decoded))
+			}
+		}
+	}
+
+	if current != nil {
+		if bc := current.Channels.Get(channelName); bc != nil {
 			if decoded, err := bc.GetDecoded(); err == nil && decoded != nil {
 				return derefType(reflect.TypeOf(decoded))
 			}
@@ -715,20 +750,40 @@ func normalizeStringArrayValue(value any, options stringArrayParserOptions) ([]s
 	case float64:
 		return normalizeStringArrayItems([]string{fmt.Sprintf("%.0f", typed)}, options), nil
 	case []string:
-		return normalizeStringArrayItems(typed, options), nil
+		return append([]string(nil), typed...), nil
 	case []any:
-		items := make([]string, 0, len(typed))
-		for _, item := range typed {
-			switch raw := item.(type) {
-			case string:
-				items = append(items, raw)
-			case float64:
-				items = append(items, fmt.Sprintf("%.0f", raw))
-			default:
+		items := make([]string, len(typed))
+		for i, item := range typed {
+			raw, ok := item.(string)
+			if !ok {
 				return nil, fmt.Errorf("unsupported list item type %T", item)
 			}
+			items[i] = raw
 		}
-		return normalizeStringArrayItems(items, options), nil
+		return items, nil
+	default:
+		return nil, fmt.Errorf("unsupported list field type %T", value)
+	}
+}
+
+func normalizeLiteralStringArrayValue(value any) ([]string, error) {
+	switch typed := value.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		return []string{typed}, nil
+	case []string:
+		return append([]string(nil), typed...), nil
+	case []any:
+		items := make([]string, len(typed))
+		for i, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("unsupported list item type %T", item)
+			}
+			items[i] = text
+		}
+		return items, nil
 	default:
 		return nil, fmt.Errorf("unsupported list field type %T", value)
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1050,6 +1051,10 @@ func TestHandlePatchConfig_NormalizesStringChannelArrayFields(t *testing.T) {
 				"group_trigger": {
 					"prefixes": "/，!;\n?，/"
 				},
+				"placeholder": {
+					"enabled": true,
+					"text": "Working, please wait"
+				},
 				"settings": {
 					"allow_origins": "https://a.example.com，http://localhost:5173，https://a.example.com"
 				}
@@ -1100,6 +1105,22 @@ func TestHandlePatchConfig_NormalizesStringChannelArrayFields(t *testing.T) {
 			mintclawChannel.GroupTrigger.Prefixes,
 		)
 	}
+	if len(mintclawChannel.Placeholder.Text) != 1 ||
+		mintclawChannel.Placeholder.Text[0] != "Working, please wait" {
+		t.Fatalf(
+			"mintclaw placeholder.text = %#v, want [\"Working, please wait\"]",
+			mintclawChannel.Placeholder.Text,
+		)
+	}
+	assertPersistedStringArray(
+		t,
+		configPath,
+		[]string{"Working, please wait"},
+		"channel_list",
+		"mintclaw",
+		"placeholder",
+		"text",
+	)
 
 	decoded, err := mintclawChannel.GetDecoded()
 	if err != nil {
@@ -1134,6 +1155,260 @@ func TestHandlePatchConfig_NormalizesStringChannelArrayFields(t *testing.T) {
 			"irc request_caps = %#v, want [\"multi-prefix\", \"echo-message\", \"batch\"]",
 			ircCfg.RequestCaps,
 		)
+	}
+}
+
+func TestHandlePatchConfig_NormalizesStringArraySettingsForNamedChannel(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	if _, err := config.NewRepository(configPath).Update(func(cfg *config.Config) error {
+		cfg.Channels["telegram_alerts"] = &config.Channel{
+			Type:     config.ChannelTelegram,
+			Settings: config.RawNode(`{}`),
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("add named channel: %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(`{
+		"channel_list": {
+			"telegram_alerts": {
+				"settings": {"allowed_topic_ids": "100, 200"}
+			}
+		}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig(updated) error = %v", err)
+	}
+	decoded, err := updated.Channels["telegram_alerts"].GetDecoded()
+	if err != nil {
+		t.Fatalf("GetDecoded() error = %v", err)
+	}
+	settings := decoded.(*config.TelegramSettings)
+	want := []string{"100", "200"}
+	if !reflect.DeepEqual(settings.AllowedTopicIDs, want) {
+		t.Fatalf("allowed_topic_ids = %#v, want %#v", settings.AllowedTopicIDs, want)
+	}
+}
+
+func TestHandlePatchConfig_PreservesCanonicalPlaceholderText(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	want := []string{"Wait", "Wait", " Hold "}
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.Channels[config.ChannelMintClaw].Placeholder.Text = want
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(`{
+		"agents": {"defaults": {"max_tokens": 1234}}
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig(updated) error = %v", err)
+	}
+	got := updated.Channels[config.ChannelMintClaw].Placeholder.Text
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("placeholder.text = %#v, want %#v", got, want)
+	}
+	assertPersistedStringArray(
+		t,
+		configPath,
+		want,
+		"channel_list",
+		config.ChannelMintClaw,
+		"placeholder",
+		"text",
+	)
+}
+
+func TestHandlePatchConfig_PreservesCanonicalWebPrivateHostWhitelist(t *testing.T) {
+	want := []string{" 127.0.0.1 ", "127.0.0.1", ""}
+	for _, tt := range []struct {
+		name  string
+		setup bool
+		body  string
+	}{
+		{
+			name:  "unrelated patch",
+			setup: true,
+			body:  `{"agents":{"defaults":{"max_tokens":1234}}}`,
+		},
+		{
+			name: "explicit array",
+			body: `{
+				"tools": {
+					"web": {
+						"private_host_whitelist": [" 127.0.0.1 ", "127.0.0.1", ""]
+					}
+				}
+			}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+
+			if tt.setup {
+				cfg, err := config.LoadConfig(configPath)
+				if err != nil {
+					t.Fatalf("LoadConfig() error = %v", err)
+				}
+				cfg.Tools.Web.PrivateHostWhitelist = want
+				if err = config.SaveConfig(configPath, cfg); err != nil {
+					t.Fatalf("SaveConfig() error = %v", err)
+				}
+			}
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			updated, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig(updated) error = %v", err)
+			}
+			if !reflect.DeepEqual(updated.Tools.Web.PrivateHostWhitelist, want) {
+				t.Fatalf("private_host_whitelist = %#v, want %#v", updated.Tools.Web.PrivateHostWhitelist, want)
+			}
+			assertPersistedStringArray(t, configPath, want, "tools", "web", "private_host_whitelist")
+		})
+	}
+}
+
+func TestHandleConfigWrite_NormalizesWebPrivateHostWhitelist(t *testing.T) {
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+
+			repository := config.NewRepository(configPath)
+			snapshot, err := repository.ReadOnly()
+			if err != nil {
+				t.Fatalf("ReadOnly() error = %v", err)
+			}
+			payload := map[string]any{
+				"tools": map[string]any{
+					"web": map[string]any{},
+				},
+			}
+			if method == http.MethodPut {
+				body, marshalErr := json.Marshal(snapshot.Config)
+				if marshalErr != nil {
+					t.Fatalf("Marshal(config) error = %v", marshalErr)
+				}
+				if unmarshalErr := json.Unmarshal(body, &payload); unmarshalErr != nil {
+					t.Fatalf("Unmarshal(config) error = %v", unmarshalErr)
+				}
+			}
+			toolsMap := payload["tools"].(map[string]any)
+			webMap := toolsMap["web"].(map[string]any)
+			webMap["private_host_whitelist"] = "localhost, 10.0.0.0/8, localhost"
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal(payload) error = %v", err)
+			}
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			req := httptest.NewRequest(method, "/api/config", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			if method == http.MethodPut {
+				req.Header.Set("If-Match", configRevisionETag(snapshot.Revision))
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			updated, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			want := []string{"localhost", "10.0.0.0/8"}
+			if len(updated.Tools.Web.PrivateHostWhitelist) != len(want) ||
+				updated.Tools.Web.PrivateHostWhitelist[0] != want[0] ||
+				updated.Tools.Web.PrivateHostWhitelist[1] != want[1] {
+				t.Fatalf(
+					"private_host_whitelist = %#v, want %#v",
+					updated.Tools.Web.PrivateHostWhitelist,
+					want,
+				)
+			}
+			assertPersistedStringArray(t, configPath, want, "tools", "web", "private_host_whitelist")
+		})
+	}
+}
+
+func assertPersistedStringArray(t *testing.T, configPath string, want []string, path ...string) {
+	t.Helper()
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) error = %v", err)
+	}
+	var current any
+	if err = json.Unmarshal(data, &current); err != nil {
+		t.Fatalf("Unmarshal(config) error = %v", err)
+	}
+	for _, key := range path {
+		object, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("persisted %s parent = %T, want object", strings.Join(path, "."), current)
+		}
+		current, ok = object[key]
+		if !ok {
+			t.Fatalf("persisted %s is missing", strings.Join(path, "."))
+		}
+	}
+	items, ok := current.([]any)
+	if !ok {
+		t.Fatalf("persisted %s = %T, want array", strings.Join(path, "."), current)
+	}
+	if len(items) != len(want) {
+		t.Fatalf("persisted %s length = %d, want %d", strings.Join(path, "."), len(items), len(want))
+	}
+	for i, item := range items {
+		if item != want[i] {
+			t.Fatalf("persisted %s[%d] = %#v, want %q", strings.Join(path, "."), i, item, want[i])
+		}
 	}
 }
 
@@ -1176,7 +1451,68 @@ func TestHandlePatchConfig_NormalizesSingleNumericAllowFrom(t *testing.T) {
 	}
 }
 
-func TestHandlePatchConfig_RejectsInvalidChannelArrayFields(t *testing.T) {
+func TestHandleConfigWriteRejectsMixedStringArrays(t *testing.T) {
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+
+			before, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile(config) error = %v", err)
+			}
+			payload := map[string]any{
+				"channel_list": map[string]any{
+					"telegram": map[string]any{"type": "telegram"},
+				},
+			}
+			if method == http.MethodPut {
+				cfg, loadErr := config.LoadConfig(configPath)
+				if loadErr != nil {
+					t.Fatalf("LoadConfig() error = %v", loadErr)
+				}
+				body, marshalErr := json.Marshal(cfg)
+				if marshalErr != nil {
+					t.Fatalf("Marshal(config) error = %v", marshalErr)
+				}
+				if unmarshalErr := json.Unmarshal(body, &payload); unmarshalErr != nil {
+					t.Fatalf("Unmarshal(config) error = %v", unmarshalErr)
+				}
+			}
+			channelsMap := payload["channel_list"].(map[string]any)
+			telegramMap := channelsMap[config.ChannelTelegram].(map[string]any)
+			telegramMap["allow_from"] = []any{"trusted", 123}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal(payload) error = %v", err)
+			}
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			req := httptest.NewRequest(method, "/api/config", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			if method == http.MethodPut {
+				setConfigIfMatch(t, req, configPath)
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+
+			after, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile(config) after request error = %v", err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatal("rejected request changed persisted config")
+			}
+		})
+	}
+}
+
+func TestHandlePatchConfig_RejectsInvalidStringArrayFields(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
@@ -1185,7 +1521,7 @@ func TestHandlePatchConfig_RejectsInvalidChannelArrayFields(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	telegramChannel := cfg.Channels[config.ChannelTelegram]
-	telegramChannel.AllowFrom = config.FlexibleStringSlice{"existing-user"}
+	telegramChannel.AllowFrom = []string{"existing-user"}
 	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatalf("SaveConfig() error = %v", err)
 	}
@@ -1225,6 +1561,38 @@ func TestHandlePatchConfig_RejectsInvalidChannelArrayFields(t *testing.T) {
 						"settings": {
 							"channels": {"name": "#ops"}
 						}
+					}
+				}
+			}`,
+		},
+		{
+			name: "boolean placeholder text",
+			body: `{
+				"channel_list": {
+					"telegram": {
+						"type": "telegram",
+						"placeholder": {"text": true}
+					}
+				}
+			}`,
+		},
+		{
+			name: "numeric placeholder item",
+			body: `{
+				"channel_list": {
+					"telegram": {
+						"type": "telegram",
+						"placeholder": {"text": ["Wait", 1]}
+					}
+				}
+			}`,
+		},
+		{
+			name: "object private host whitelist",
+			body: `{
+				"tools": {
+					"web": {
+						"private_host_whitelist": {"host": "localhost"}
 					}
 				}
 			}`,
@@ -1321,7 +1689,7 @@ func TestHandlePatchConfig_ClearingAllowFromDoesNotLeaveEmptyStringItem(t *testi
 	}
 	feishuChannel := cfg.Channels[config.ChannelFeishu]
 	feishuChannel.Enabled = true
-	feishuChannel.AllowFrom = config.FlexibleStringSlice{"ou_existing_user"}
+	feishuChannel.AllowFrom = []string{"ou_existing_user"}
 	decoded, err := feishuChannel.GetDecoded()
 	if err != nil {
 		t.Fatalf("GetDecoded() error = %v", err)

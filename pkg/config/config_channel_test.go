@@ -119,7 +119,7 @@ func TestChannel_JSON_Unmarshal(t *testing.T) {
 
 	assert.True(t, ch.Enabled)
 	assert.Equal(t, "telegram", ch.Type)
-	assert.Equal(t, FlexibleStringSlice{"user1", "user2"}, ch.AllowFrom)
+	assert.Equal(t, []string{"user1", "user2"}, ch.AllowFrom)
 	assert.Equal(t, "-100xxx", ch.ReasoningChannelID)
 	assert.False(t, ch.SettingsIsEmpty())
 
@@ -265,7 +265,7 @@ func TestInitChannelList_TelegramStreamingEnvCompatibility(t *testing.T) {
 	assert.Equal(t, 0, mintclawCfg.Streaming.MinGrowthChars)
 }
 
-func TestInitChannelList_TelegramTopicFilterEnvCompatibility(t *testing.T) {
+func TestInitChannelList_TelegramTopicFilterEnv(t *testing.T) {
 	t.Setenv("MINTCLAW_CHANNELS_TELEGRAM_ALLOWED_TOPIC_IDS", "3565,7777")
 	t.Setenv("MINTCLAW_CHANNELS_TELEGRAM_IGNORED_TOPIC_IDS", "6")
 
@@ -285,8 +285,8 @@ func TestInitChannelList_TelegramTopicFilterEnvCompatibility(t *testing.T) {
 		t.Fatalf("telegram GetDecoded() error = %v", err)
 	}
 	tgCfg := tgDecoded.(*TelegramSettings)
-	assert.Equal(t, []string{"3565", "7777"}, []string(tgCfg.AllowedTopicIDs))
-	assert.Equal(t, []string{"6"}, []string(tgCfg.IgnoredTopicIDs))
+	assert.Equal(t, []string{"3565", "7777"}, tgCfg.AllowedTopicIDs)
+	assert.Equal(t, []string{"6"}, tgCfg.IgnoredTopicIDs)
 }
 
 func TestInitChannelList_RejectsNegativeStreamingDeliveryValues(t *testing.T) {

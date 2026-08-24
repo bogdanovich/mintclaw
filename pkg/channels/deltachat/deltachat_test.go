@@ -195,7 +195,7 @@ func TestHandleMessageMarksSeenOnlyAfterDispatch(t *testing.T) {
 
 			ch := newTestChannelWithBus(t, msgBus, func(bc *config.Channel) {
 				bc.GroupTrigger.MentionOnly = tt.mentionOnly
-				bc.AllowFrom = config.FlexibleStringSlice{"alice@example.org"}
+				bc.AllowFrom = []string{"alice@example.org"}
 			})
 			ch.ctx = context.Background()
 			ch.accountID = 7
@@ -871,7 +871,7 @@ func TestSend_EmailRecipientDeniedByDefault(t *testing.T) {
 
 func TestSend_EmailRecipientRequiresAllowFrom(t *testing.T) {
 	ch := newTestChannelWithBus(t, bus.NewMessageBus(), func(bc *config.Channel) {
-		bc.AllowFrom = config.FlexibleStringSlice{"admin@example.org"}
+		bc.AllowFrom = []string{"admin@example.org"}
 	})
 	ch.config.AllowCrosspost = true
 	ch.rpc, _ = newMockRPC(t, func(req rpcRequest) string {
@@ -893,7 +893,7 @@ func TestSend_EmailRecipientRequiresAllowFrom(t *testing.T) {
 
 func TestSend_EmailRecipientUsesSessionScopeSenderForAdmin(t *testing.T) {
 	ch := newTestChannelWithBus(t, bus.NewMessageBus(), func(bc *config.Channel) {
-		bc.AllowFrom = config.FlexibleStringSlice{"admin@example.org"}
+		bc.AllowFrom = []string{"admin@example.org"}
 	})
 	ch.config.AllowCrosspost = true
 
@@ -936,7 +936,7 @@ func TestSend_EmailRecipientUsesSessionScopeSenderForAdmin(t *testing.T) {
 
 func TestSend_EmailRecipientResolvesForAllowFromWildcard(t *testing.T) {
 	ch := newTestChannelWithBus(t, bus.NewMessageBus(), func(bc *config.Channel) {
-		bc.AllowFrom = config.FlexibleStringSlice{"*"}
+		bc.AllowFrom = []string{"*"}
 	})
 	ch.config.AllowCrosspost = true
 
@@ -994,7 +994,7 @@ func TestSend_CrossChatNumericUsesSessionScopeChatForGate(t *testing.T) {
 
 func TestSend_EmailRecipientResolvesForAdmin(t *testing.T) {
 	ch := newTestChannelWithBus(t, bus.NewMessageBus(), func(bc *config.Channel) {
-		bc.AllowFrom = config.FlexibleStringSlice{"admin@example.org"}
+		bc.AllowFrom = []string{"admin@example.org"}
 	})
 	ch.config.AllowCrosspost = true
 
@@ -1038,7 +1038,7 @@ func TestSend_EmailRecipientResolvesForAdmin(t *testing.T) {
 
 func TestSend_AliasRecipientResolvesForAdmin(t *testing.T) {
 	ch := newTestChannelWithBus(t, bus.NewMessageBus(), func(bc *config.Channel) {
-		bc.AllowFrom = config.FlexibleStringSlice{"admin@example.org"}
+		bc.AllowFrom = []string{"admin@example.org"}
 	})
 	ch.config.AllowCrosspost = true
 

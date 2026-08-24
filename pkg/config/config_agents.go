@@ -394,8 +394,8 @@ type TypingConfig struct {
 
 // PlaceholderConfig controls placeholder message behavior (Phase 10).
 type PlaceholderConfig struct {
-	Enabled bool                `json:"enabled"`
-	Text    FlexibleStringSlice `json:"text,omitempty"`
+	Enabled bool     `json:"enabled"`
+	Text    []string `json:"text,omitempty"`
 }
 
 // GetRandomText returns a random placeholder text, or default if none set.

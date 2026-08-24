@@ -157,7 +157,7 @@ func defaultChannelConfig(configKey string) *config.Channel {
 func addChannelCommonConfig(settings map[string]any, bc *config.Channel) {
 	settings["enabled"] = bc.Enabled
 	if len(bc.AllowFrom) > 0 {
-		settings["allow_from"] = []string(bc.AllowFrom)
+		settings["allow_from"] = bc.AllowFrom
 	}
 	if bc.ReasoningChannelID != "" {
 		settings["reasoning_channel_id"] = bc.ReasoningChannelID
