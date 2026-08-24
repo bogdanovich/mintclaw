@@ -8,8 +8,8 @@ Roadmap packet: P4.1
 
 The coding terminal application is a Bubble Tea shell in `pkg/coding/tui`.
 It consumes only the transport-neutral `frontend.Controller`: the shell takes
-an initial authoritative snapshot, follows revisioned deltas, and requests a
-replacement snapshot when the retained delta window has advanced. It does not
+an initial authoritative snapshot and subscribes to later immutable current
+views through a coalescing one-slot channel. It does not
 import the agent loop, persistence implementation, or runtime event payloads.
 
 `mintclaw code <prompt>` selects the shell only when both standard input and
@@ -36,7 +36,7 @@ owns the surrounding controller lifecycle:
   context was canceled or a long-running session exceeded an earlier deadline.
 
 After an initial prompt is admitted, the model retains a frontend-local
-pending-active marker until the authoritative turn lifecycle delta arrives.
+pending-active marker until the authoritative turn lifecycle view arrives.
 This closes the short gap between controller admission and `TurnStarted`
 projection, so an immediate `Ctrl+C` remains a graceful interrupt instead of
 falling through the stale idle exit path.
@@ -72,7 +72,7 @@ Automated tests cover:
 - selection of the interactive path only after terminal admission and release
   of the coding-thread lease when the shell exits;
 - non-TTY capability rejection and preservation of the plain command path;
-- revisioned watch delivery and snapshot-based gap recovery;
+- current-view subscription, coalescing, and convergence after slow consumers;
 - focus/blur and tiny/resized terminal state transitions;
 - bounded valid-UTF-8 final scrollback summaries; and
 - pseudo-terminal normal `Ctrl+C`, SIGTERM, and induced Bubble Tea panic paths,

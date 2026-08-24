@@ -17,33 +17,38 @@ import (
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
 	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingpicker "github.com/bogdanovich/mintclaw/pkg/coding/picker"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
 )
 
 type dependencies struct {
-	home          func() string
-	cwd           func() (string, error)
-	now           func() time.Time
-	newThreadID   func() string
-	turnRunner    codingTurnRunner
-	resolveModel  func(string) (string, string, error)
-	terminal      func(io.Reader, io.Writer, bool) tui.TerminalCapabilities
-	newController func(codingTurnRequest, bool) (frontend.Controller, error)
-	runTUI        func(context.Context, frontend.Controller, tui.Options) error
+	home            func() string
+	cwd             func() (string, error)
+	now             func() time.Time
+	newThreadID     func() string
+	turnRunner      codingTurnRunner
+	resolveModel    func(string) (string, string, error)
+	terminal        func(io.Reader, io.Writer, bool) tui.TerminalCapabilities
+	newController   func(codingTurnRequest, bool) (frontend.Controller, error)
+	runTUI          func(context.Context, frontend.Controller, tui.Options) error
+	newPickerSource func(*thread.Store, thread.ProjectIdentity) (codingpicker.Source, error)
+	runPicker       func(context.Context, codingpicker.Source, tui.PickerOptions) (tui.PickerSelection, error)
 }
 
 func defaultDependencies() dependencies {
 	return dependencies{
-		home:          internal.GetMintClawHome,
-		cwd:           os.Getwd,
-		now:           time.Now,
-		newThreadID:   thread.NewThreadID,
-		turnRunner:    newNativeCodingTurnRunner(),
-		resolveModel:  resolveNativeCodingModel,
-		terminal:      detectCodingTerminal,
-		newController: newNativeCodingController,
-		runTUI:        tui.Run,
+		home:            internal.GetMintClawHome,
+		cwd:             os.Getwd,
+		now:             time.Now,
+		newThreadID:     thread.NewThreadID,
+		turnRunner:      newNativeCodingTurnRunner(),
+		resolveModel:    resolveNativeCodingModel,
+		terminal:        detectCodingTerminal,
+		newController:   newNativeCodingController,
+		runTUI:          tui.Run,
+		newPickerSource: newPickerCatalogSource,
+		runPicker:       tui.RunPicker,
 	}
 }
 
@@ -126,6 +131,12 @@ func completeDependencies(deps dependencies) dependencies {
 	if deps.runTUI == nil {
 		deps.runTUI = tui.Run
 	}
+	if deps.newPickerSource == nil {
+		deps.newPickerSource = newPickerCatalogSource
+	}
+	if deps.runPicker == nil {
+		deps.runPicker = tui.RunPicker
+	}
 	return deps
 }
 
@@ -207,6 +218,7 @@ func NewResumeCommand() *cobra.Command {
 }
 
 func newResumeCommand(deps dependencies) *cobra.Command {
+	deps = completeDependencies(deps)
 	var all bool
 	var last bool
 	var model string
@@ -233,6 +245,13 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 				json:      jsonOutput,
 				offset:    offset,
 				limit:     limit,
+			}
+			noColor, _ := cmd.Flags().GetBool("no-color")
+			capabilities := deps.terminal(cmd.InOrStdin(), cmd.OutOrStdout(), noColor)
+			if !jsonOutput && capabilities.Interactive && offset == 0 && limit == 0 {
+				return runResumeInteractive(
+					cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), deps, options, noColor,
+				)
 			}
 			return runResume(cmd.Context(), cmd.OutOrStdout(), deps, options)
 		},
@@ -303,16 +322,7 @@ type resumeOptions struct {
 	limit     int
 }
 
-func runResume(
-	ctx context.Context,
-	out io.Writer,
-	deps dependencies,
-	options resumeOptions,
-) error {
-	project, store, resolveErr := resolveEnvironment(ctx, deps)
-	if resolveErr != nil {
-		return resolveErr
-	}
+func validateResumeOptions(options resumeOptions) error {
 	if options.threadID != "" && options.last {
 		return fmt.Errorf("resume: thread ID and --last are mutually exclusive")
 	}
@@ -324,6 +334,127 @@ func runResume(
 	}
 	if (options.threadID != "" || options.last) && (options.offset != 0 || options.limit != 0) {
 		return fmt.Errorf("resume: --offset and --limit are list-only options")
+	}
+	return nil
+}
+
+func runResumeInteractive(
+	ctx context.Context,
+	in io.Reader,
+	out io.Writer,
+	deps dependencies,
+	options resumeOptions,
+	noColor bool,
+) error {
+	if err := validateResumeOptions(options); err != nil {
+		return err
+	}
+	if options.promptSet {
+		if err := thread.ValidatePrompt(options.prompt); err != nil {
+			return err
+		}
+	}
+	project, store, err := resolveEnvironment(ctx, deps)
+	if err != nil {
+		return err
+	}
+	threadID := options.threadID
+	if threadID == "" && options.last {
+		threadID, err = selectLastResumeThread(ctx, store, project, options.all)
+		if err != nil {
+			return err
+		}
+	}
+	if threadID == "" {
+		source, sourceErr := deps.newPickerSource(store, project)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		selection, pickerErr := deps.runPicker(ctx, source, tui.PickerOptions{
+			Input:           in,
+			Output:          out,
+			AlternateScreen: true,
+			AllProjects:     options.all,
+			Environment:     os.Environ(),
+			NoColor:         noColor,
+			Now:             deps.now,
+		})
+		if pickerErr != nil {
+			return pickerErr
+		}
+		if selection.Canceled {
+			return nil
+		}
+		threadID = selection.ThreadID
+		if strings.TrimSpace(threadID) == "" {
+			return fmt.Errorf("resume picker returned no thread selection")
+		}
+	}
+	metadata, lease, err := prepareResumedThread(ctx, store, project, deps, threadID, options, true)
+	if err != nil {
+		return err
+	}
+	frontendController, err := deps.newController(codingTurnRequest{
+		Store: store, Lease: lease, Metadata: metadata,
+	}, true)
+	if err != nil {
+		return errors.Join(err, lease.Release())
+	}
+	initialPrompt := ""
+	if options.promptSet {
+		initialPrompt = options.prompt
+	}
+	return deps.runTUI(ctx, frontendController, tui.Options{
+		Input:           in,
+		Output:          out,
+		InitialPrompt:   initialPrompt,
+		AlternateScreen: true,
+		ReportFocus:     true,
+		NoColor:         noColor,
+		Environment:     os.Environ(),
+	})
+}
+
+func selectLastResumeThread(
+	ctx context.Context,
+	store *thread.Store,
+	project thread.ProjectIdentity,
+	all bool,
+) (string, error) {
+	catalog, err := thread.NewCatalog(store, thread.CatalogOptions{})
+	if err != nil {
+		return "", err
+	}
+	query := thread.CatalogQuery{All: all, Last: true}
+	if !all {
+		query.ProjectKey = project.ProjectKey
+	}
+	page, err := catalog.Query(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	if len(page.Threads) == 0 {
+		scope := "the current project"
+		if all {
+			scope = "any project"
+		}
+		return "", fmt.Errorf("resume: no coding threads found for %s", scope)
+	}
+	return page.Threads[0].ThreadID, nil
+}
+
+func runResume(
+	ctx context.Context,
+	out io.Writer,
+	deps dependencies,
+	options resumeOptions,
+) error {
+	if err := validateResumeOptions(options); err != nil {
+		return err
+	}
+	project, store, resolveErr := resolveEnvironment(ctx, deps)
+	if resolveErr != nil {
+		return resolveErr
 	}
 	catalog, catalogErr := thread.NewCatalog(store, thread.CatalogOptions{})
 	if catalogErr != nil {
@@ -346,10 +477,7 @@ func runResume(
 	page, queryErr := catalog.Query(ctx, query)
 	if queryErr != nil {
 		if options.threadID != "" && errors.Is(queryErr, fs.ErrNotExist) {
-			return fmt.Errorf(
-				"resume: coding thread %q was not found; run `mintclaw resume` or `mintclaw resume --all`",
-				options.threadID,
-			)
+			return resumeThreadNotFoundError(options.threadID)
 		}
 		return queryErr
 	}
@@ -382,45 +510,6 @@ func resumeSelectedThread(
 	threadID string,
 	options resumeOptions,
 ) (result commandResult, resultErr error) {
-	lease, leaseErr := store.AcquireLease(threadID)
-	if leaseErr != nil {
-		return commandResult{}, leaseErr
-	}
-	promptStored := false
-	defer func() {
-		resultErr = errors.Join(resultErr, lease.Release())
-		resultErr = preserveCommittedPromptState(threadID, promptStored, resultErr)
-	}()
-	metadata, loadErr := store.Load(threadID)
-	if loadErr != nil {
-		return commandResult{}, loadErr
-	}
-	inspection, inspectionErr := thread.InspectLocation(ctx, metadata.Project, project.InvocationCWD)
-	if inspectionErr != nil {
-		return commandResult{}, inspectionErr
-	}
-	switch inspection.State {
-	case thread.LocationAvailable:
-	case thread.LocationMismatch:
-		return commandResult{}, fmt.Errorf(
-			"resume: thread %q belongs to %q, not current project %q; change directory before resuming",
-			metadata.ThreadID,
-			metadata.Project.ProjectRoot,
-			project.ProjectRoot,
-		)
-	case thread.LocationMissing, thread.LocationMoved:
-		return commandResult{}, fmt.Errorf(
-			"resume: thread %q project location %q is %s; explicit relocation is required",
-			metadata.ThreadID,
-			metadata.Project.ProjectRoot,
-			inspection.State,
-		)
-	default:
-		return commandResult{}, fmt.Errorf(
-			"resume: thread %q has unknown project location state",
-			metadata.ThreadID,
-		)
-	}
 	updatedPreview := ""
 	if options.promptSet {
 		if err := thread.ValidatePrompt(options.prompt); err != nil {
@@ -432,36 +521,18 @@ func resumeSelectedThread(
 		}
 		updatedPreview = preview
 	}
-	if options.model != "" {
-		resolvedModel, resolvedProvider, err := deps.resolveModel(options.model)
-		if err != nil {
-			return commandResult{}, err
-		}
-		metadata.Model = resolvedModel
-		metadata.Provider = resolvedProvider
-	} else if options.promptSet &&
-		(strings.TrimSpace(metadata.Model) == "" || strings.TrimSpace(metadata.Provider) == "") {
-		resolvedModel, resolvedProvider, err := deps.resolveModel(metadata.Model)
-		if err != nil {
-			return commandResult{}, err
-		}
-		metadata.Model = resolvedModel
-		metadata.Provider = resolvedProvider
-	}
-	metadata.Project = project
-	metadata.UpdatedAt = deps.now().UTC()
-	if err := metadata.Validate(); err != nil {
+	metadata, lease, err := prepareResumedThread(ctx, store, project, deps, threadID, options, options.promptSet)
+	if err != nil {
 		return commandResult{}, err
 	}
-	if _, err := runtimeLayoutFor(store, metadata); err != nil {
-		return commandResult{}, err
-	}
+	promptStored := false
+	defer func() {
+		resultErr = errors.Join(resultErr, lease.Release())
+		resultErr = preserveCommittedPromptState(threadID, promptStored, resultErr)
+	}()
 	var outcome codingTurnOutcome
 	var turnErr error
 	if options.promptSet {
-		if err := store.Save(metadata); err != nil {
-			return commandResult{}, err
-		}
 		outcome, turnErr = deps.turnRunner.Run(ctx, codingTurnRequest{
 			Store: store, Lease: lease, Metadata: metadata, Prompt: options.prompt,
 		})
@@ -493,6 +564,108 @@ func resumeSelectedThread(
 		return commandResult{}, buildErr
 	}
 	return result, nil
+}
+
+func prepareResumedThread(
+	ctx context.Context,
+	store *thread.Store,
+	project thread.ProjectIdentity,
+	deps dependencies,
+	threadID string,
+	options resumeOptions,
+	requireModel bool,
+) (metadata thread.Metadata, lease *thread.Lease, resultErr error) {
+	lease, err := store.AcquireLease(threadID)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return thread.Metadata{}, nil, resumeThreadNotFoundError(threadID)
+		}
+		return thread.Metadata{}, nil, err
+	}
+	admitted := false
+	defer func() {
+		if !admitted {
+			resultErr = errors.Join(resultErr, lease.Release())
+			lease = nil
+		}
+	}()
+	metadata, err = store.Load(threadID)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return thread.Metadata{}, lease, resumeThreadNotFoundError(threadID)
+		}
+		return thread.Metadata{}, lease, err
+	}
+	inspection, err := thread.InspectLocation(ctx, metadata.Project, project.InvocationCWD)
+	if err != nil {
+		return thread.Metadata{}, lease, err
+	}
+	var admittedProject thread.ProjectIdentity
+	switch inspection.State {
+	case thread.LocationAvailable:
+		if inspection.Current == nil {
+			return thread.Metadata{}, lease, fmt.Errorf(
+				"resume: thread %q project identity is unavailable after inspection",
+				metadata.ThreadID,
+			)
+		}
+		admittedProject = *inspection.Current
+	case thread.LocationMismatch:
+		return thread.Metadata{}, lease, fmt.Errorf(
+			"resume: thread %q belongs to %q, not current project %q; change directory before resuming",
+			metadata.ThreadID,
+			metadata.Project.ProjectRoot,
+			project.ProjectRoot,
+		)
+	case thread.LocationMissing, thread.LocationMoved:
+		return thread.Metadata{}, lease, fmt.Errorf(
+			"resume: thread %q project location %q is %s; explicit relocation is required",
+			metadata.ThreadID,
+			metadata.Project.ProjectRoot,
+			inspection.State,
+		)
+	default:
+		return thread.Metadata{}, lease, fmt.Errorf(
+			"resume: thread %q has unknown project location state",
+			metadata.ThreadID,
+		)
+	}
+	if options.model != "" {
+		resolvedModel, resolvedProvider, resolveErr := deps.resolveModel(options.model)
+		if resolveErr != nil {
+			return thread.Metadata{}, lease, resolveErr
+		}
+		metadata.Model = resolvedModel
+		metadata.Provider = resolvedProvider
+	} else if requireModel &&
+		(strings.TrimSpace(metadata.Model) == "" || strings.TrimSpace(metadata.Provider) == "") {
+		resolvedModel, resolvedProvider, resolveErr := deps.resolveModel(metadata.Model)
+		if resolveErr != nil {
+			return thread.Metadata{}, lease, resolveErr
+		}
+		metadata.Model = resolvedModel
+		metadata.Provider = resolvedProvider
+	}
+	metadata.Project = admittedProject
+	metadata.UpdatedAt = deps.now().UTC()
+	if err := metadata.Validate(); err != nil {
+		return thread.Metadata{}, lease, err
+	}
+	if _, err := runtimeLayoutFor(store, metadata); err != nil {
+		return thread.Metadata{}, lease, err
+	}
+	if err := store.Save(metadata); err != nil {
+		return thread.Metadata{}, lease, err
+	}
+	admitted = true
+	return metadata, lease, nil
+}
+
+func resumeThreadNotFoundError(threadID string) error {
+	return fmt.Errorf(
+		"resume: coding thread %q was not found; run `mintclaw resume` or `mintclaw resume --all`",
+		threadID,
+	)
 }
 
 func committedPromptOperationError(threadID string, err error) error {

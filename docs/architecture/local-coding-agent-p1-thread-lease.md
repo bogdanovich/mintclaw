@@ -106,6 +106,13 @@ recovers automatically without ever allowing two cooperating writers.
 any release error. A failed owner-record write releases and closes the lock
 before returning, so an initialization error cannot strand ownership.
 
+P4.4 may call `InspectLease` to annotate a resume-picker row. Inspection uses
+the same rooted opener and an immediate OS lock attempt, releases immediately
+when the thread is available, and returns bounded owner diagnostics when it is
+busy. This is deliberately a moment-in-time, non-owning hint: it does not write
+an owner record and can race immediately after it returns. Resume admission
+must still call `AcquireLease` and treat that result as authoritative.
+
 ## Evidence
 
 Focused contract tests prove:
@@ -117,6 +124,8 @@ Focused contract tests prove:
   child crash releases the lock for the parent;
 - malformed stale owner content is overwritten after a legitimate acquire;
 - current-project read-only catalog listing succeeds while the thread is leased;
+- non-owning inspection reports a live owner and availability after release
+  without substituting for writer admission;
 - missing threads and invalid owner records fail closed;
 - Unix lock files are private and symbolic links, hard links, and FIFOs are
   rejected without blocking;

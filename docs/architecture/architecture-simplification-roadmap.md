@@ -597,6 +597,17 @@ Implemented shape:
 - protocol versions, revisions, delta variants, retained changes, and gap
   recovery are absent from this in-process boundary.
 
+Downstream P4 integration rules:
+
+- the resume picker is a separate pre-controller catalogue screen with one
+  replaceable bounded page; it does not extend `ThreadSnapshot`, introduce a
+  reducer, or treat discovery observations as write authority;
+- selected threads still pass through canonical metadata reload, project
+  validation, and OS-backed lease acquisition before an active presentation
+  store is constructed; and
+- in-app commands consume the subscribed current view and the typed controller
+  sink instead of recreating command-specific mirrors or a delta protocol.
+
 ### X1 — Require the current configuration only
 
 Scope:

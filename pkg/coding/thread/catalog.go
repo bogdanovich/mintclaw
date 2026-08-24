@@ -18,6 +18,7 @@ const (
 	DefaultCatalogPageSize        = 100
 	DefaultCatalogMaxPageSize     = 500
 	DefaultCatalogSkipReportLimit = 50
+	MaxCatalogSearchBytes         = 256
 
 	catalogReadBatchSize = 128
 	skipEntryMaxBytes    = 128
@@ -90,6 +91,7 @@ type CatalogQuery struct {
 	ProjectKey string
 	All        bool
 	Last       bool
+	Search     string
 	Offset     int
 	Limit      int
 }
@@ -123,7 +125,8 @@ func (c *Catalog) Query(ctx context.Context, query CatalogQuery) (CatalogPage, e
 		return CatalogPage{}, err
 	}
 	if query.ThreadID != "" {
-		if query.ProjectKey != "" || query.All || query.Last || query.Offset != 0 || query.Limit != 0 {
+		if query.ProjectKey != "" || query.All || query.Last || query.Search != "" || query.Offset != 0 ||
+			query.Limit != 0 {
 			return CatalogPage{}, fmt.Errorf("coding thread catalog: exact ID cannot be combined with list options")
 		}
 		metadata, err := c.loadExact(query.ThreadID)
@@ -145,6 +148,13 @@ func (c *Catalog) Query(ctx context.Context, query CatalogQuery) (CatalogPage, e
 	}
 	if query.ProjectKey != "" && !validProjectKey(query.ProjectKey) {
 		return CatalogPage{}, fmt.Errorf("coding thread catalog: project key is invalid")
+	}
+	if query.Search != strings.TrimSpace(query.Search) || !utf8.ValidString(query.Search) ||
+		len(query.Search) > MaxCatalogSearchBytes {
+		return CatalogPage{}, fmt.Errorf(
+			"coding thread catalog: search must be trimmed valid UTF-8 within %d bytes",
+			MaxCatalogSearchBytes,
+		)
 	}
 	if query.Offset < 0 || query.Offset > c.options.ScanLimit {
 		return CatalogPage{}, fmt.Errorf("coding thread catalog: offset is outside the scan bound")
@@ -246,7 +256,8 @@ func (c *Catalog) scan(
 				page.addSkipped(c.options.SkipReportLimit, threadID, "metadata_unreadable_or_invalid")
 				continue
 			}
-			if query.All || metadata.Project.ProjectKey == query.ProjectKey {
+			if (query.All || metadata.Project.ProjectKey == query.ProjectKey) &&
+				metadataMatchesSearch(metadata, query.Search) {
 				page.Matched++
 				if len(retained) < retain {
 					heap.Push(&retained, metadata)
@@ -264,6 +275,27 @@ func (c *Catalog) scan(
 			return CatalogPage{}, nil, fmt.Errorf("coding thread catalog: read threads root: %w", readErr)
 		}
 	}
+}
+
+func metadataMatchesSearch(metadata Metadata, search string) bool {
+	search = strings.ToLower(search)
+	if search == "" {
+		return true
+	}
+	fields := []string{
+		metadata.ThreadID,
+		metadata.Title,
+		metadata.Preview,
+		metadata.Project.ProjectRoot,
+		metadata.Project.InvocationCWD,
+		metadata.Project.GitBranch,
+	}
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), search) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Catalog) loadExact(threadID string) (Metadata, error) {

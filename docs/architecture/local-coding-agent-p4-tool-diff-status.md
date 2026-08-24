@@ -67,8 +67,8 @@ Automated tests cover:
 - project, branch, model/provider, context, and activity status composition;
 - explicit refresh serialization, unsupported capability behavior, native runtime
   publication, and branch/clean-state updates in the model; and
-- the existing bounded projector, delta-resync, workspace observer, terminal-width,
-  and race suites.
+- the existing bounded projector, current-view coalescing, workspace observer,
+  terminal-width, and race suites.
 
 P4.4 owns the resume picker. P4.5 owns the full in-app command/help surface; P4.3
 exposes only the direct presentation controls and Ctrl+R refresh needed by these

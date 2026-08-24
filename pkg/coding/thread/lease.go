@@ -43,6 +43,14 @@ type LeaseBusyError struct {
 	Owner    *LeaseOwner
 }
 
+// LeaseInspection is a moment-in-time, non-owning view of the authoritative
+// OS lock. Available observations can become busy immediately afterward, so
+// callers must still AcquireLease before every mutation.
+type LeaseInspection struct {
+	Busy  bool
+	Owner *LeaseOwner
+}
+
 func (e *LeaseBusyError) Error() string {
 	if e == nil {
 		return ErrLeaseBusy.Error()
@@ -141,6 +149,40 @@ func (s *Store) AcquireLease(threadID string) (*Lease, error) {
 		owner.Hostname = strings.TrimSpace(hostname)
 	}
 	return s.acquireLease(threadID, owner)
+}
+
+// InspectLease probes the authoritative lock without writing an owner record.
+// It is suitable for picker diagnostics only and never grants write access.
+func (s *Store) InspectLease(threadID string) (LeaseInspection, error) {
+	if s == nil {
+		return LeaseInspection{}, fmt.Errorf("coding thread store is nil")
+	}
+	if err := validateThreadID(threadID); err != nil {
+		return LeaseInspection{}, err
+	}
+	file, err := s.openLeaseFile(threadID)
+	if err != nil {
+		return LeaseInspection{}, fmt.Errorf("coding thread lease inspection: open %q: %w", threadID, err)
+	}
+	if err := tryAcquireThreadLeaseFile(file); err != nil {
+		if errors.Is(err, ErrLeaseBusy) {
+			owner, _ := readLeaseOwner(file)
+			_ = file.Close()
+			return LeaseInspection{Busy: true, Owner: owner}, nil
+		}
+		_ = file.Close()
+		return LeaseInspection{}, fmt.Errorf("coding thread lease inspection: probe %q: %w", threadID, err)
+	}
+	releaseErr := releaseThreadLeaseFile(file)
+	closeErr := file.Close()
+	if releaseErr != nil || closeErr != nil {
+		return LeaseInspection{}, fmt.Errorf(
+			"coding thread lease inspection: release %q: %w",
+			threadID,
+			errors.Join(releaseErr, closeErr),
+		)
+	}
+	return LeaseInspection{}, nil
 }
 
 func (s *Store) acquireLease(threadID string, owner LeaseOwner) (*Lease, error) {

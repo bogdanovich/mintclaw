@@ -100,6 +100,23 @@ func TestCatalogProjectScopeAllLastExplicitAndPagination(t *testing.T) {
 	if got := catalogTitles(exact.Threads); !reflect.DeepEqual(got, []string{"b-newest"}) {
 		t.Fatalf("exact thread = %v", got)
 	}
+	searched, err := catalog.Query(t.Context(), CatalogQuery{
+		ProjectKey: projectA.ProjectKey,
+		Search:     "MIDDLE",
+	})
+	if err != nil {
+		t.Fatalf("Query(search) error = %v", err)
+	}
+	if got := catalogTitles(searched.Threads); !reflect.DeepEqual(got, []string{"a-middle"}) {
+		t.Fatalf("searched project page = %v", got)
+	}
+	searchedAll, err := catalog.Query(t.Context(), CatalogQuery{All: true, Search: "project-b"})
+	if err != nil {
+		t.Fatalf("Query(all search) error = %v", err)
+	}
+	if got := catalogTitles(searchedAll.Threads); !reflect.DeepEqual(got, []string{"b-newest"}) {
+		t.Fatalf("searched all-project page = %v", got)
+	}
 }
 
 func TestCatalogFreshStoreIsEmpty(t *testing.T) {
@@ -347,6 +364,8 @@ func TestCatalogValidatesQueriesAndCancellation(t *testing.T) {
 		{All: true, Limit: DefaultCatalogMaxPageSize + 1},
 		{All: true, Last: true, Offset: 1},
 		{ThreadID: uuid.NewString(), All: true},
+		{All: true, Search: " leading"},
+		{All: true, Search: strings.Repeat("x", MaxCatalogSearchBytes+1)},
 	}
 	for _, query := range invalid {
 		if _, err := catalog.Query(t.Context(), query); err == nil {

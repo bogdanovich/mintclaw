@@ -8,8 +8,8 @@ Roadmap packet: P4.2
 
 The terminal keeps two bounded views of a coding thread:
 
-- the live authoritative snapshot and revisioned deltas owned by the frontend
-  projector; and
+- the live authoritative current snapshot and coalescing subscription owned by
+  the frontend projector; and
 - an optional, read-only historical window hydrated from the canonical session
   transcript.
 
@@ -40,8 +40,8 @@ expansion belong to P4.3.
 
 The viewport follows streaming output only while it is already at the bottom.
 After manual scrolling, refreshes anchor to the visible entity ID and line offset.
-The same anchor is restored after snapshot resynchronization when that entity is
-still retained. Page Up at the hydrated boundary requests an older window, and
+The same anchor is restored after a replacement current view when that entity
+is still retained. Page Up at the hydrated boundary requests an older window, and
 Alt+End replaces it with the latest historical window when newer hydrated state
 was dropped to enforce the bound.
 
@@ -67,8 +67,8 @@ Automated tests cover:
   draft-preserving history navigation;
 - cell-bounded CJK, combining-mark, emoji, right-to-left-adjacent, and composed
   input plus control-sequence sanitization;
-- manual-scroll anchoring during streaming, bottom-follow behavior, and snapshot
-  resynchronization without composer loss;
+- manual-scroll anchoring during streaming, bottom-follow behavior, and
+  coalesced current-view replacement without composer loss;
 - bounded historical paging across JSONL logical truncation and controller/runtime
   boundaries; and
 - exclusion of tool/system secrets and valid-UTF-8 truncation during hydration.

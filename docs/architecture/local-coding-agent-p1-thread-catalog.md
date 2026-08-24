@@ -47,6 +47,12 @@ P1.4 inspects the selected thread's current location after selection.
 combined with offset or page size. `All` may be combined with `Last`, but an
 all-project query cannot also carry a project key.
 
+P4.4 adds bounded case-insensitive metadata search before ordering and
+pagination. The query is trimmed, must be valid UTF-8, and is limited to 256
+bytes. It matches only the thread ID, title, preview, project root, invocation
+cwd, and persisted branch; canonical transcript content is never opened or
+searched. Exact-ID lookup cannot be combined with search.
+
 ## Hard bounds
 
 Production defaults are also hard maxima; custom options may only tighten
@@ -61,6 +67,7 @@ them:
 | Returned skip diagnostics | 50 |
 | Skip entry text | 128 UTF-8 bytes |
 | Skip reason text | 256 UTF-8 bytes |
+| Search query | 256 UTF-8 bytes |
 
 The directory is read in batches of at most 128 rather than with an unbounded
 `os.ReadDir` call. Each read is also capped by the remaining scan allowance;
