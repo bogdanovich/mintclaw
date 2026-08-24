@@ -1221,6 +1221,7 @@ func (*BrowserActTool) Name() string { return "browser_act" }
 func (*BrowserActTool) Description() string {
 	return "Prepare and execute exactly one fresh-reference browser action. For every click, declare its workflow effect: " +
 		"read, navigation, or local_edit executes without human approval; external_commit or unknown suspends for durable approval. " +
+		"For non-click actions, omit effect; a redundant value is ignored because the broker derives the fixed effect. " +
 		"Classify from the user request and runtime objective checklist, not from the element role or HTTP method. " +
 		"Use external_commit immediately before an important external state change such as publishing, submitting an order, " +
 		"sending, deleting, or replying; use navigation for ordinary page/tab/form-step transitions. " +
@@ -1283,7 +1284,7 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 			"effect": map[string]any{
 				"type": "string",
 				"enum": []string{"read", "navigation", "local_edit", "external_commit", "unknown"},
-				"description": "Required for click and forbidden for other action kinds. Declare workflow impact: " +
+				"description": "Required for click and ignored for other action kinds. Declare workflow impact: " +
 					"external_commit only immediately before an important external state change; unknown when genuinely unsure.",
 			},
 		},
@@ -1361,6 +1362,11 @@ func (*BrowserActTool) CanonicalArguments(args map[string]any) (map[string]any, 
 		if value, present := projected[field]; present && value == nil {
 			delete(projected, field)
 		}
+	}
+	action, _ := projected["action"].(map[string]any)
+	kind, _ := action["kind"].(string)
+	if kind != string(browser.ActionClick) {
+		delete(projected, "effect")
 	}
 	return projected, nil
 }
@@ -1608,8 +1614,6 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 		if !effectPresent || !ok || !declaredEffect.Valid() {
 			return browser.Preparation{}, browser.ErrInvalid
 		}
-	} else if effectPresent {
-		return browser.Preparation{}, browser.ErrInvalid
 	}
 	if action.Kind == browser.ActionDownload && action.Deliver && !toolshared.ToolRecoverableOutbound(ctx) {
 		return browser.Preparation{}, browser.ErrDenied
