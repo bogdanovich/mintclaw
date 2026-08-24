@@ -1351,7 +1351,10 @@ Done when:
 
 #### P4.4 — Resume picker
 
-Dependencies: P1.2, P4.1
+Dependencies: P1.2, P1.3, P1.4, P4.1
+
+Implementation evidence:
+[`local-coding-agent-p4-resume-picker.md`](local-coding-agent-p4-resume-picker.md)
 
 Scope:
 
@@ -1359,12 +1362,25 @@ Scope:
 - Show title, preview, age, branch, path, dirty/stale/missing state, and short ID.
 - Scope to the current project by default with an explicit all-project toggle.
 - Define keyboard and screen-reader-friendly selection behavior.
+- Make interactive `mintclaw resume`, explicit-ID resume, and `--last` enter the
+  same resumed TUI after selection; preserve bounded plain/JSON listing for
+  non-TTY callers.
+- Keep the picker as one pre-controller current catalogue page. Search, scope,
+  refresh, and pagination replace that page directly; they do not add another
+  reducer, revision log, delta protocol, replay window, or reconnect contract.
+- Keep catalogue, Git, location, and lease observations as discovery hints.
+  The command layer must acquire the selected thread lease, reload canonical
+  metadata, and revalidate the current project before constructing a
+  controller.
 
 Done when:
 
 - Empty, large, corrupt-entry, missing-project, and currently-locked catalogues
   are usable.
 - Selection never silently bypasses a project mismatch or live lease.
+- Picker cancellation owns no lease or controller, and an available picker row
+  cannot substitute for final admission under the authoritative OS lock.
+- P4.4 adds no compatibility path for the removed revision/delta frontend.
 
 #### P4.5 — Commands and help
 
@@ -1376,18 +1392,28 @@ Scope:
   rename, and exit.
 - Keep command parsing frontend-owned and typed at the controller boundary.
 - Document keyboard bindings in-app.
+- Read status and diff information from the subscribed current
+  `ThreadSnapshot`; do not reconstruct a second frontend state machine or
+  retain command-specific mirrors of runtime state.
+- Apply command results through the same current-view subscription used by
+  ordinary streaming, tool, workspace, and compaction updates.
 
 Done when:
 
 - Every command has state-transition tests.
 - Unknown commands remain in the composer or produce an actionable error.
 - `/compact` invokes the real compaction lifecycle, not a synthetic prompt.
+- Slow/coalesced presentation updates converge to the command result visible
+  in the authoritative current view.
 
 #### P4 exit gate
 
-The mandatory TUI can create/resume threads, stream work, render tools and
-repository changes, interrupt safely, and restore the terminal. This is an
-alpha-quality coding agent; long-session continuity remains a release blocker.
+The mandatory TUI can create/resume threads, stream work through the current
+presentation subscription, render tools and repository changes, interrupt
+safely, and restore the terminal. The resume picker and active-thread TUI each
+own one current in-process view and do not reintroduce the removed speculative
+IPC protocol. This is an alpha-quality coding agent; long-session continuity
+remains a release blocker.
 
 ### P5 — Coding compaction and resume continuity
 

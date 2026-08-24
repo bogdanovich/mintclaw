@@ -50,9 +50,18 @@ func TestThreadLeaseIsExclusiveAndReportsOwner(t *testing.T) {
 	if !strings.Contains(err.Error(), "owner pid 4242 on fixture-host") {
 		t.Fatalf("busy error lacks bounded owner diagnostic: %v", err)
 	}
+	inspection, err := store.InspectLease(metadata.ThreadID)
+	if err != nil || !inspection.Busy || inspection.Owner == nil ||
+		!reflect.DeepEqual(*inspection.Owner, wantOwner) {
+		t.Fatalf("busy inspection = %#v, %v", inspection, err)
+	}
 
 	if err := lease.Release(); err != nil {
 		t.Fatalf("Release() error = %v", err)
+	}
+	inspection, err = store.InspectLease(metadata.ThreadID)
+	if err != nil || inspection.Busy || inspection.Owner != nil {
+		t.Fatalf("available inspection = %#v, %v", inspection, err)
 	}
 	if err := lease.Release(); err != nil {
 		t.Fatalf("second Release() error = %v", err)
