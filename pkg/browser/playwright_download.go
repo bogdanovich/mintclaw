@@ -298,6 +298,9 @@ func (worker *playwrightWorker) captureDownload(
 	if worker.networkProxy != nil && worker.networkProxy.Denials() > denialsBefore {
 		return DriverDownload{}, ErrDenied
 	}
+	if len(fields) >= 2 && fields[1] == "complete" && len(fields) != 6 {
+		return DriverDownload{}, &DownloadArtifactError{Err: ErrDriverIncompatible}
+	}
 	if len(fields) != 6 || fields[1] != "complete" {
 		return DriverDownload{}, ErrDriverIncompatible
 	}
@@ -306,7 +309,7 @@ func (worker *playwrightWorker) captureDownload(
 	declaredBytes, sizeErr := strconv.ParseInt(fields[4], 10, 64)
 	if dispositionErr != nil || contentTypeErr != nil || sizeErr != nil ||
 		declaredBytes < 1 || declaredBytes > maximumBytes {
-		return DriverDownload{}, ErrDriverIncompatible
+		return DriverDownload{}, &DownloadArtifactError{Err: ErrDriverIncompatible}
 	}
 
 	hasher := sha256.New()
@@ -317,17 +320,17 @@ func (worker *playwrightWorker) captureDownload(
 		}
 		chunk, decodeErr := base64.StdEncoding.DecodeString(encoded)
 		if decodeErr != nil || written+int64(len(chunk)) > maximumBytes {
-			return DriverDownload{}, ErrDriverIncompatible
+			return DriverDownload{}, &DownloadArtifactError{Err: ErrDriverIncompatible}
 		}
 		count, writeErr := io.MultiWriter(file, hasher).Write(chunk)
 		if writeErr != nil || count != len(chunk) {
-			return DriverDownload{}, ErrWorkerUnavailable
+			return DriverDownload{}, &DownloadArtifactError{Err: ErrWorkerUnavailable}
 		}
 		written += int64(count)
 	}
 
 	if written != declaredBytes || file.Sync() != nil || file.Close() != nil {
-		return DriverDownload{}, ErrDriverIncompatible
+		return DriverDownload{}, &DownloadArtifactError{Err: ErrDriverIncompatible}
 	}
 	keep = true
 	return DriverDownload{

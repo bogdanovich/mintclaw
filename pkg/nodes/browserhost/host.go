@@ -1254,17 +1254,23 @@ func (host *BrowserHost) executeAction(
 			driverAction,
 		)
 	}
+	downloadArtifactUnavailable := false
 	if executeErr != nil {
-		cancelAction()
-		if errors.Is(executeErr, browserworker.ErrStale) {
-			return BrowserHostObservation{}, ErrBrowserHostStale
+		var artifactFailure *browserworker.DownloadArtifactError
+		if action == "download" && errors.As(executeErr, &artifactFailure) {
+			downloadArtifactUnavailable = true
+		} else {
+			cancelAction()
+			if errors.Is(executeErr, browserworker.ErrStale) {
+				return BrowserHostObservation{}, ErrBrowserHostStale
+			}
+			if errors.Is(executeErr, browserworker.ErrDenied) {
+				delete(session.actionInvocations, request.ActionInvocationID)
+				return BrowserHostObservation{}, ErrBrowserHostDenied
+			}
+			host.quarantineActionLocked(session)
+			return BrowserHostObservation{}, ErrBrowserHostLost
 		}
-		if errors.Is(executeErr, browserworker.ErrDenied) {
-			delete(session.actionInvocations, request.ActionInvocationID)
-			return BrowserHostObservation{}, ErrBrowserHostDenied
-		}
-		host.quarantineActionLocked(session)
-		return BrowserHostObservation{}, ErrBrowserHostLost
 	}
 	if actionCtx.Err() != nil || !host.now().UTC().Before(actionDeadline) {
 		cancelAction()
@@ -1280,7 +1286,11 @@ func (host *BrowserHost) executeAction(
 	}
 	session.snapshotGeneration++
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
-	return browserHostObservation(request.SessionID, session, observation, navigationIdentity), nil
+	result := browserHostObservation(request.SessionID, session, observation, navigationIdentity)
+	if downloadArtifactUnavailable {
+		return result, nodes.ErrBrowserHostArtifactUnavailable
+	}
+	return result, nil
 }
 
 func observeBrowserHostNavigation(

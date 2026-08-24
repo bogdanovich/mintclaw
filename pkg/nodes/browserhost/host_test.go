@@ -510,6 +510,76 @@ func TestBrowserHostPreservesDownloadSuccessWhenOutputRegistrationIsFull(t *test
 	}
 }
 
+func TestBrowserHostAdvancesAuthorityAfterPostClickDownloadArtifactFailure(t *testing.T) {
+	observation := browserworker.DriverObservation{
+		URL: "https://example.com/download", Origin: "https://example.com", Title: "Download",
+		Snapshot: "- button \"Download\" [ref=download_target]",
+		Elements: []browserworker.DriverElement{{Target: "download_target", Role: "button", Name: "Download"}},
+	}
+	worker := &fakeBrowserHostWorker{
+		status:       browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{observation, observation, observation, observation},
+		downloadErr:  &browserworker.DownloadArtifactError{Err: browserworker.ErrDriverIncompatible},
+	}
+	profile := browserHostProfileFixture()
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	request := browserHostOpenFixture()
+	if _, err = host.Open(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := nodes.BrowserHostActRequest{
+		SessionID: request.SessionID, RoutedSessionID: request.RoutedSessionID,
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		ActionInvocationID: "browser_download_capture_failure",
+		Action:             browserworker.Action{Kind: browserworker.ActionDownload, Ref: observed.Elements[0].Ref},
+		Effect:             "unknown", CurrentOrigin: observed.Origin,
+		PreparedActionHash: strings.Repeat("d", 64), BrowserPolicyRevision: request.BrowserPolicyRevision,
+		ProfileRevision: profile.Revision, ExpectedRole: "button", ExpectedName: "Download",
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+		AgentID: request.AgentID, ActorID: request.ActorID,
+	}
+	action.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(action))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor, downloadErr := host.Download(t.Context(), action); !errors.Is(
+		downloadErr, nodes.ErrBrowserHostArtifactUnavailable,
+	) || descriptor != (nodes.BrowserOutputDescriptor{}) {
+		t.Fatalf("Download() = %#v, %v", descriptor, downloadErr)
+	}
+	if len(worker.actions) != 1 {
+		t.Fatalf("driver actions = %#v", worker.actions)
+	}
+	action.SnapshotGeneration++
+	action.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(action))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, replayErr := host.Download(t.Context(), action); !errors.Is(replayErr, ErrBrowserHostStale) {
+		t.Fatalf("replayed Download() error = %v", replayErr)
+	}
+	if len(worker.actions) != 1 {
+		t.Fatalf("driver replayed after artifact failure: %#v", worker.actions)
+	}
+	refreshedRequest := browserHostObserveFixture()
+	refreshedRequest.SnapshotGeneration = action.SnapshotGeneration + 1
+	refreshed, err := host.Observe(t.Context(), refreshedRequest)
+	if err != nil || refreshed.SnapshotGeneration != refreshedRequest.SnapshotGeneration {
+		t.Fatalf("Observe() after artifact failure = %#v, %v", refreshed, err)
+	}
+}
+
 func TestBrowserHostAllowsOnlyUnknownEffectDownloadInDryRun(t *testing.T) {
 	payload := []byte("dry-run companion download fixture")
 	path := filepath.Join(t.TempDir(), "fixture.txt")

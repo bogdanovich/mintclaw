@@ -150,6 +150,25 @@ func TestPlaywrightWorkerRejectsMalformedNavigationIdentity(t *testing.T) {
 	}
 }
 
+func TestPlaywrightDownloadMarksPostClickDecodeFailureArtifactUnavailable(t *testing.T) {
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult(
+			"### Result\nMINTCLAW_DL_V1|complete|attachment%3Bfilename%3Dfixture.txt|text%2Fplain|1|%%%",
+		),
+	}}
+	worker := &playwrightWorker{
+		client: client, outputDir: t.TempDir(), downloadReady: true,
+		limits: config.BrowserLimitsConfig{}.Effective(),
+	}
+	_, err := worker.Download(t.Context(), DriverAction{
+		Kind: DriverDownloadAction, Target: "e1", Element: "Download",
+	}, 1024)
+	var artifactFailure *DownloadArtifactError
+	if !errors.As(err, &artifactFailure) || !errors.Is(err, ErrDriverIncompatible) {
+		t.Fatalf("Download() error = %v, want post-click artifact failure", err)
+	}
+}
+
 func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {
