@@ -33,6 +33,8 @@ type fakeController struct {
 	renames      atomic.Int32
 	newThreads   atomic.Int32
 	compactErr   error
+	compactStart chan struct{}
+	compactWait  <-chan struct{}
 	renameErr    error
 	newThreadErr error
 	renameTitles []string
@@ -73,8 +75,18 @@ func (f *fakeController) HardCancel(context.Context) error {
 	return nil
 }
 
-func (f *fakeController) Compact(context.Context) error {
+func (f *fakeController) Compact(ctx context.Context) error {
 	f.compacts.Add(1)
+	if f.compactStart != nil {
+		close(f.compactStart)
+	}
+	if f.compactWait != nil {
+		select {
+		case <-f.compactWait:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if f.compactErr != nil {
 		return f.compactErr
 	}

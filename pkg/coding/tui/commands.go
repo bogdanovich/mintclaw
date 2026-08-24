@@ -85,6 +85,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		m.commandPanel = commandPanelNone
 		m.err = nil
 		m.clearCommandDraft()
+		m.pendingSlashCommand = "compact"
 		return true, typedCommandCmd(m.ctx, "compact", m.controller.Compact)
 	case "/rename":
 		if command.args == "" {
@@ -94,6 +95,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		m.commandPanel = commandPanelNone
 		m.err = nil
 		m.clearCommandDraft()
+		m.pendingSlashCommand = "rename"
 		return true, typedCommandCmd(m.ctx, "rename", func(ctx context.Context) error {
 			return m.controller.Rename(ctx, command.args)
 		})
@@ -104,6 +106,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		m.commandPanel = commandPanelNone
 		m.err = nil
 		m.clearCommandDraft()
+		m.pendingSlashCommand = "new"
 		return true, typedCommandCmd(m.ctx, "new", m.controller.NewThread)
 	case "/exit", "/quit", "/q":
 		if !noArgs() {

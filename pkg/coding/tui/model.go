@@ -50,8 +50,9 @@ type CommandResultMsg struct {
 // SubmitResultMsg completes one composer submission without discarding a
 // draft when controller admission fails.
 type SubmitResultMsg struct {
-	Prompt string
-	Err    error
+	Prompt        string
+	HistoryPrompt string
+	Err           error
 }
 
 // TranscriptPageMsg delivers optional canonical transcript hydration.
@@ -85,6 +86,7 @@ type Model struct {
 	focused             bool
 	err                 error
 	submitting          bool
+	pendingSlashCommand string
 	composerHistory     []string
 	historyIndex        int
 	historyDraft        string
@@ -217,6 +219,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = message.Err
 		return m, nil
 	case CommandResultMsg:
+		m.pendingSlashCommand = ""
 		if message.Err != nil {
 			m.err = slashCommandError(message.Operation, message.Err)
 		} else {
@@ -232,7 +235,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
-		m.rememberPrompt(message.Prompt)
+		m.rememberPrompt(message.HistoryPrompt)
 		m.composer.Reset()
 		m.historyIndex = -1
 		m.historyDraft = ""
@@ -269,6 +272,9 @@ func (m *Model) View() string {
 	status := m.statusLine()
 	if m.submitting {
 		status = "submitting prompt…"
+	}
+	if m.pendingSlashCommand != "" {
+		status = m.pendingSlashCommand + " command…"
 	}
 	if m.err != nil {
 		status = "frontend error: " + m.err.Error()
@@ -441,19 +447,23 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		if message.Paste {
 			return true, nil
 		}
-		prompt := m.composer.Value()
-		if strings.TrimSpace(prompt) == "" {
+		if m.pendingSlashCommand != "" {
+			m.err = fmt.Errorf("%s command is still running", m.pendingSlashCommand)
+			return true, nil
+		}
+		draft := m.composer.Value()
+		if strings.TrimSpace(draft) == "" {
 			m.err = errors.New("enter a coding prompt; use Ctrl+J for a new line")
 			return true, nil
 		}
-		if handled, command := m.handleSlashCommand(prompt); handled {
+		if handled, command := m.handleSlashCommand(draft); handled {
 			return true, command
 		}
-		prompt = unescapeSlashPrompt(prompt)
+		prompt := unescapeSlashPrompt(draft)
 		m.submitting = true
 		m.err = nil
 		m.admitInitialTurn()
-		return true, submitCmd(m.ctx, m.controller, prompt)
+		return true, submitCmd(m.ctx, m.controller, prompt, draft)
 	case "alt+up":
 		m.navigateHistory(-1)
 		return true, textarea.Blink
@@ -665,12 +675,25 @@ func typedCommandCmd(
 	}
 }
 
-func submitCmd(ctx context.Context, controller frontend.Controller, prompt string) tea.Cmd {
+func submitCmd(
+	ctx context.Context,
+	controller frontend.Controller,
+	prompt string,
+	historyPrompt string,
+) tea.Cmd {
 	return func() tea.Msg {
 		if controller == nil {
-			return SubmitResultMsg{Prompt: prompt, Err: errors.New("coding controller is unavailable")}
+			return SubmitResultMsg{
+				Prompt:        prompt,
+				HistoryPrompt: historyPrompt,
+				Err:           errors.New("coding controller is unavailable"),
+			}
 		}
-		return SubmitResultMsg{Prompt: prompt, Err: controller.Submit(ctx, prompt)}
+		return SubmitResultMsg{
+			Prompt:        prompt,
+			HistoryPrompt: historyPrompt,
+			Err:           controller.Submit(ctx, prompt),
+		}
 	}
 }
 

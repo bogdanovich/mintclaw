@@ -20,6 +20,14 @@ state. Compaction activity and its terminal result arrive through the same
 coalescing current-view subscription as turns, tools, workspace observations,
 and context usage.
 
+Only one slash mutation may be awaiting controller admission at a time. Its
+typed result clears that frontend admission gate before a later prompt or
+mutation can be submitted, preserving the order in which the user pressed
+Enter even though Bubble Tea executes commands asynchronously. Editing remains
+available while admission is pending. Escaped prompts retain their original
+`//` spelling in composer history while only the unescaped value crosses the
+controller boundary, so recall cannot turn prompt text into a command.
+
 `/rename` and `/new` also exercise their admitted typed controller methods.
 The current native controller deliberately returns a shared unsupported error:
 P6.1 owns durable thread rename, and active-controller switching has not been
@@ -65,6 +73,8 @@ Automated tests cover:
 - live `/status`, `/model`, and `/diff` rendering from replacement current
   snapshots, including branch and clean/dirty changes;
 - typed compact, rename, and new-thread dispatch plus explicit exit;
+- serialized mutation admission against a blocking controller and safe recall
+  and resubmission of escaped slash prompts;
 - real projected compaction completion becoming visible through a later
   current snapshot rather than a local success flag; and
 - operation-specific safe guidance for unsupported native lifecycle commands.

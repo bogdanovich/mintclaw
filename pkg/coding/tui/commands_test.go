@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -183,6 +184,23 @@ func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	if prompts := controller.submittedPrompts(); len(prompts) != 1 || prompts[0] != "/status is prompt text" {
 		t.Fatalf("escaped slash prompts = %v", prompts)
 	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp, Alt: true})
+	if model.ComposerValue() != "//status is prompt text" {
+		t.Fatalf("escaped history prompt = %q", model.ComposerValue())
+	}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || model.commandPanel != commandPanelNone {
+		t.Fatalf("recalled escaped prompt became a command: panel=%v command=%v", model.commandPanel, command)
+	}
+	message, ok = command().(SubmitResultMsg)
+	if !ok {
+		t.Fatalf("recalled escaped prompt result = %T", message)
+	}
+	model = updateModel(t, model, message)
+	if prompts := controller.submittedPrompts(); len(prompts) != 2 || prompts[1] != "/status is prompt text" {
+		t.Fatalf("recalled escaped prompts = %v", prompts)
+	}
 
 	model.composer.SetValue("/exit")
 	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -194,6 +212,70 @@ func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	}
 	if _, ok := command().(tea.QuitMsg); !ok {
 		t.Fatalf("/exit command = %T", command())
+	}
+}
+
+func TestSlashMutationBlocksLaterSubmissionUntilAdmissionCompletes(t *testing.T) {
+	controller := newController(t)
+	controller.compactStart = make(chan struct{})
+	compactRelease := make(chan struct{})
+	controller.compactWait = compactRelease
+	model, err := NewModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model.composer.SetValue("/compact")
+	updated, compactCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if compactCommand == nil || model.pendingSlashCommand != "compact" {
+		t.Fatalf("compact admission state: command=%v pending=%q", compactCommand, model.pendingSlashCommand)
+	}
+	compactResult := make(chan tea.Msg, 1)
+	go func() { compactResult <- compactCommand() }()
+	select {
+	case <-controller.compactStart:
+	case <-time.After(time.Second):
+		t.Fatal("compact command did not reach controller")
+	}
+
+	model.composer.SetValue("later prompt")
+	updated, laterCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if laterCommand != nil || controller.submits.Load() != 0 || model.ComposerValue() != "later prompt" ||
+		model.err == nil || !strings.Contains(model.err.Error(), "compact command is still running") {
+		t.Fatalf(
+			"later admission overtook compact: command=%v submits=%d draft=%q err=%v",
+			laterCommand,
+			controller.submits.Load(),
+			model.ComposerValue(),
+			model.err,
+		)
+	}
+
+	close(compactRelease)
+	select {
+	case result := <-compactResult:
+		model = updateModel(t, model, result)
+	case <-time.After(time.Second):
+		t.Fatal("compact command did not complete")
+	}
+	if model.pendingSlashCommand != "" {
+		t.Fatalf("completed compact left pending command %q", model.pendingSlashCommand)
+	}
+	updated, laterCommand = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if laterCommand == nil || !model.submitting {
+		t.Fatal("later prompt was not admitted after compact completion")
+	}
+	model = updateModel(t, model, laterCommand())
+	if controller.submits.Load() != 1 || model.submitting || model.ComposerValue() != "" {
+		t.Fatalf(
+			"later submit result: calls=%d submitting=%v draft=%q",
+			controller.submits.Load(),
+			model.submitting,
+			model.ComposerValue(),
+		)
 	}
 }
 
