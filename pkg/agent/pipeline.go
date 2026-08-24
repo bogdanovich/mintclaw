@@ -44,7 +44,7 @@ type PipelineContextServices struct {
 	ModelExecution       *modelExecutionManager
 	Steering             steeringDequeuer
 	MediaResolver        mediaResolver
-	TerminalTasks        *AgentLoop
+	TerminalTasks        *taskCoordinator
 }
 
 type PipelineInteractionServices struct {

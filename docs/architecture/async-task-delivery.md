@@ -9,6 +9,13 @@ MintClaw background work now uses an explicit task/completion/delivery shape:
 5. Parent synthesis calls `processAsyncCompletion` directly. It must not publish a synthetic `system` inbound message.
 6. The task registry records delivery status, completion id, delivery timestamp, and delivery error if one occurs.
 
+One process-wide `taskCoordinator` owns registry construction, restart
+reconciliation, terminal-task prompt context, durable delivery decisions, and
+async-completion admission. Reloadable async delivery components reference that
+same concrete owner and reuse the generation's synchronous user-delivery
+component. They do not carry task-state/config/user-delivery callbacks or ask
+`AgentLoop` to rediscover the registry.
+
 ## Current Ownership Boundaries
 
 The runtime now has three distinct delivery paths, and each has a clear owner:

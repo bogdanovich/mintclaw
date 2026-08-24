@@ -25,11 +25,11 @@ func backgroundTaskStatusSafetyRule() string {
 		"A terminal task does not satisfy a new request."
 }
 
-func (al *AgentLoop) terminalTaskContextForTurn(ts *turnState) []providers.Message {
-	if al == nil || ts == nil || ts.opts.NoHistory || ts.agent == nil {
+func (c *taskCoordinator) terminalTaskContextForTurn(ts *turnState) []providers.Message {
+	if c == nil || ts == nil || ts.opts.NoHistory || ts.agent == nil {
 		return nil
 	}
-	registry := al.taskRegistryForWorkspace(ts.workspace)
+	registry := c.configuredRegistry(ts.workspace)
 	if registry == nil {
 		return nil
 	}
@@ -56,7 +56,7 @@ func (al *AgentLoop) terminalTaskContextForTurn(ts *turnState) []providers.Messa
 	messages := make([]providers.Message, 0, len(records))
 	for _, record := range records {
 		summary := terminalTaskPromptSummary(record)
-		if cfg := al.GetConfig(); cfg != nil {
+		if cfg := c.config(); cfg != nil {
 			summary = cfg.FilterSensitiveData(summary)
 		}
 		content := fmt.Sprintf(

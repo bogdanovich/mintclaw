@@ -4,11 +4,81 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
+
+// taskCoordinator owns process-wide task registries and async-completion
+// admission. Runner generations share this state while retaining their own
+// delivery wiring.
+type taskCoordinator struct {
+	registries       sync.Map
+	completionClaims sync.Map
+	currentConfig    func() *config.Config
+	codingProfile    *CodingRuntimeProfile
+	interactions     *interactionCoordinator
+}
+
+func newTaskCoordinator(
+	currentConfig func() *config.Config,
+	codingProfile *CodingRuntimeProfile,
+	interactions *interactionCoordinator,
+) taskCoordinator {
+	return taskCoordinator{
+		currentConfig: currentConfig,
+		codingProfile: codingProfile,
+		interactions:  interactions,
+	}
+}
+
+func (c *taskCoordinator) config() *config.Config {
+	if c == nil || c.currentConfig == nil {
+		return nil
+	}
+	return c.currentConfig()
+}
+
+func (c *taskCoordinator) registry(workspace string) *taskregistry.Registry {
+	if c == nil {
+		return nil
+	}
+	workspace = normalizeRuntimeWorkspace(workspace)
+	if workspace == "" {
+		return nil
+	}
+	value, ok := c.registries.Load(workspace)
+	if !ok {
+		return nil
+	}
+	registry, _ := value.(*taskregistry.Registry)
+	return registry
+}
+
+func (c *taskCoordinator) configuredRegistry(workspace string) *taskregistry.Registry {
+	if c == nil {
+		return nil
+	}
+	workspace = normalizeRuntimeWorkspace(workspace)
+	if workspace == "" {
+		return nil
+	}
+	if registry := c.registry(workspace); registry != nil {
+		return registry
+	}
+	storePath := taskregistry.WorkspaceStorePath(workspace)
+	if layout, ok := codingLayoutForWorkspace(c.codingProfile, workspace); ok {
+		storePath = layout.StatePaths().TaskRegistryFile
+	}
+	options := taskregistry.Options{}
+	if cfg := c.config(); cfg != nil {
+		options = cfg.Tasks.Options()
+	}
+	return c.loadRegistry(workspace, storePath, options, c.interactions)
+}
 
 func (al *AgentLoop) taskRegistryForWorkspace(workspace string) *taskregistry.Registry {
 	if al == nil {
@@ -18,34 +88,51 @@ func (al *AgentLoop) taskRegistryForWorkspace(workspace string) *taskregistry.Re
 	if workspace == "" {
 		return nil
 	}
-	if existing, ok := al.taskRegistries.Load(workspace); ok {
-		if registry, ok := existing.(*taskregistry.Registry); ok {
-			return registry
-		}
+	if registry := al.tasks.registry(workspace); registry != nil {
+		return registry
 	}
+	// Task restoration needs the authoritative interaction relation before it
+	// can decide which active tasks still have a live durable owner.
+	_ = al.interactionRegistryForWorkspace(workspace)
 	storePath := taskregistry.WorkspaceStorePath(workspace)
 	if layout, ok := al.codingLayoutForWorkspace(workspace); ok {
 		storePath = layout.StatePaths().TaskRegistryFile
 	}
-	registry := taskregistry.NewRegistryWithOptions(
+	registry := al.tasks.loadRegistry(
+		workspace,
 		storePath,
 		al.taskRegistryOptions(),
+		&al.interactions,
 	)
 	if al.codingProfile != nil && registry.LastLoadError() != nil {
 		al.runtimeInitErr = fmt.Errorf("load coding task registry: %w", registry.LastLoadError())
 	}
-	actual, _ := al.taskRegistries.LoadOrStore(workspace, registry)
-	if stored, ok := actual.(*taskregistry.Registry); ok {
-		if stored == registry {
-			al.reconcileActiveTasksAfterRegistryRestore(workspace, stored)
-			al.reconcilePendingTerminalTaskDelivery(workspace, stored)
-			al.logTaskRegistryStats(workspace, stored)
-		}
-		return stored
+	return registry
+}
+
+func (c *taskCoordinator) loadRegistry(
+	workspace string,
+	storePath string,
+	options taskregistry.Options,
+	interactions *interactionCoordinator,
+) *taskregistry.Registry {
+	if c == nil {
+		return nil
 	}
-	al.reconcileActiveTasksAfterRegistryRestore(workspace, registry)
-	al.reconcilePendingTerminalTaskDelivery(workspace, registry)
-	al.logTaskRegistryStats(workspace, registry)
+	if registry := c.registry(workspace); registry != nil {
+		return registry
+	}
+	candidate := taskregistry.NewRegistryWithOptions(storePath, options)
+	actual, loaded := c.registries.LoadOrStore(workspace, candidate)
+	registry, _ := actual.(*taskregistry.Registry)
+	if registry == nil {
+		registry = candidate
+	}
+	if !loaded {
+		c.reconcileActiveTasksAfterRegistryRestore(workspace, registry, interactions)
+		c.reconcilePendingTerminalTaskDelivery(workspace, registry)
+		logTaskRegistryStats(workspace, registry)
+	}
 	return registry
 }
 
@@ -56,7 +143,7 @@ func (al *AgentLoop) taskRegistryOptions() taskregistry.Options {
 	return taskregistry.Options{}
 }
 
-func (al *AgentLoop) logTaskRegistryStats(workspace string, registry *taskregistry.Registry) {
+func logTaskRegistryStats(workspace string, registry *taskregistry.Registry) {
 	if registry == nil {
 		return
 	}
@@ -89,7 +176,7 @@ func (al *AgentLoop) TaskRegistryForWorkspace(workspace string) *taskregistry.Re
 	return al.taskRegistryForWorkspace(workspace)
 }
 
-func (al *AgentLoop) updateAsyncTaskDeliveryStatus(
+func (c *taskCoordinator) updateDeliveryStatus(
 	workspace string,
 	taskID string,
 	status taskregistry.DeliveryStatus,
@@ -100,7 +187,7 @@ func (al *AgentLoop) updateAsyncTaskDeliveryStatus(
 	if taskID == "" || status == "" {
 		return
 	}
-	registry := al.taskRegistryForWorkspace(workspace)
+	registry := c.configuredRegistry(workspace)
 	if registry == nil {
 		return
 	}
@@ -127,7 +214,7 @@ func (al *AgentLoop) updateAsyncTaskDeliveryStatus(
 	})
 }
 
-func (al *AgentLoop) recordAsyncTaskDeliveryDecision(
+func (c *taskCoordinator) recordDeliveryDecision(
 	workspace string,
 	decision AsyncDeliveryDecision,
 	completionID string,
@@ -137,7 +224,7 @@ func (al *AgentLoop) recordAsyncTaskDeliveryDecision(
 	if taskID == "" {
 		return
 	}
-	registry := al.taskRegistryForWorkspace(workspace)
+	registry := c.configuredRegistry(workspace)
 	if registry == nil {
 		return
 	}
@@ -155,7 +242,7 @@ func (al *AgentLoop) recordAsyncTaskDeliveryDecision(
 	})
 }
 
-func (al *AgentLoop) asyncTaskDeliveryAlreadyHandled(
+func (c *taskCoordinator) deliveryAlreadyHandled(
 	workspace string,
 	taskID string,
 	completionID string,
@@ -165,7 +252,7 @@ func (al *AgentLoop) asyncTaskDeliveryAlreadyHandled(
 	if taskID == "" || completionID == "" {
 		return false
 	}
-	registry := al.taskRegistryForWorkspace(workspace)
+	registry := c.configuredRegistry(workspace)
 	if registry == nil {
 		return false
 	}
@@ -183,7 +270,7 @@ func (al *AgentLoop) asyncTaskDeliveryAlreadyHandled(
 	}
 }
 
-func (al *AgentLoop) reconcilePendingTerminalTaskDelivery(
+func (c *taskCoordinator) reconcilePendingTerminalTaskDelivery(
 	workspace string,
 	registry *taskregistry.Registry,
 ) {
@@ -212,9 +299,10 @@ func (al *AgentLoop) reconcilePendingTerminalTaskDelivery(
 		})
 }
 
-func (al *AgentLoop) reconcileActiveTasksAfterRegistryRestore(
+func (c *taskCoordinator) reconcileActiveTasksAfterRegistryRestore(
 	workspace string,
 	registry *taskregistry.Registry,
+	interactions *interactionCoordinator,
 ) {
 	if registry == nil {
 		return
@@ -223,7 +311,7 @@ func (al *AgentLoop) reconcileActiveTasksAfterRegistryRestore(
 	if len(active) == 0 {
 		return
 	}
-	protectedTaskIDs, protectionErr := al.activeInteractionTaskIDs(workspace)
+	protectedTaskIDs, protectionErr := interactions.activeTaskIDs(workspace)
 	if protectionErr != nil {
 		logger.WarnCF("agent", "Skipped active task reconciliation because interaction state is unavailable",
 			map[string]any{
@@ -245,15 +333,23 @@ func (al *AgentLoop) reconcileActiveTasksAfterRegistryRestore(
 		})
 }
 
-func (al *AgentLoop) activeInteractionTaskIDs(workspace string) (map[string]struct{}, error) {
-	registry := al.interactionRegistryForWorkspace(workspace)
-	if registry == nil {
-		return nil, fmt.Errorf("interaction registry is unavailable")
+func (c *taskCoordinator) claimCompletion(completionID string) bool {
+	if c == nil {
+		return false
 	}
-	if err := registry.LastLoadError(); err != nil {
-		return nil, fmt.Errorf("load interaction registry: %w", err)
+	completionID = strings.TrimSpace(completionID)
+	if completionID == "" {
+		return false
 	}
-	return registry.NonterminalTaskIDs(), nil
+	_, loaded := c.completionClaims.LoadOrStore(completionID, struct{}{})
+	return !loaded
+}
+
+func (c *taskCoordinator) releaseCompletion(completionID string) {
+	if c == nil {
+		return
+	}
+	c.completionClaims.Delete(strings.TrimSpace(completionID))
 }
 
 func errString(err error) string {

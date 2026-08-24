@@ -29,8 +29,8 @@ func newTurnRunner(al *AgentLoop, cfg *config.Config) *turnRunner {
 		channelManager:      al.channelManager,
 		getFeedbackOverride: al.getToolFeedbackOverride,
 	}
-	syncDelivery := &syncToolResultDelivery{deliverToUser: al.deliverToolResultToUser}
-	asyncDelivery := newAsyncToolCompletionDelivery(al, events)
+	syncDelivery := &syncToolResultDelivery{deliverToUser: al.deliverToolResultToUserWithScopes}
+	asyncDelivery := newAsyncToolCompletionDelivery(al, events, syncDelivery)
 	interaction := &humanInteractionRuntime{al: al, coordinator: &al.interactions}
 
 	runner := &turnRunner{
@@ -60,7 +60,7 @@ func newTurnRunner(al *AgentLoop, cfg *config.Config) *turnRunner {
 			ModelExecution:       al.modelExecution,
 			Steering:             al.steering,
 			MediaResolver:        al.mediaStore,
-			TerminalTasks:        al,
+			TerminalTasks:        &al.tasks,
 		},
 		Interaction: PipelineInteractionServices{
 			Reasoning:        reasoning,

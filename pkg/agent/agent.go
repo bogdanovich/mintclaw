@@ -71,8 +71,7 @@ type AgentLoop struct {
 	steering              *steeringQueue
 	compactionRunner      *backgroundCompactionRunner
 	pendingSkills         sync.Map
-	asyncCompletions      sync.Map
-	taskRegistries        sync.Map
+	tasks                 taskCoordinator
 	interactions          interactionCoordinator
 	runtimeTools          map[string]RuntimeToolFactory
 	runtimeAgentTools     map[string]RuntimeAgentToolFactory

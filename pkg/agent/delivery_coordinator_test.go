@@ -185,10 +185,9 @@ func TestAsyncToolCompletionDelivery_UsesCurrentConfigForFiltering(t *testing.T)
 
 	currentCfg := oldCfg
 	var gotInput AsyncCompletionInput
+	tasks := newTaskCoordinator(func() *config.Config { return currentCfg }, nil, nil)
 	delivery := &asyncToolCompletionDelivery{
-		currentConfig: func() *config.Config {
-			return currentCfg
-		},
+		tasks: &tasks,
 		synthesizeCompletion: func(_ context.Context, input AsyncCompletionInput) (string, error) {
 			gotInput = input
 			return "", nil

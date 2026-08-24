@@ -90,48 +90,11 @@ func (al *AgentLoop) interactionRegistryForWorkspace(workspace string) *interact
 	if al == nil {
 		return nil
 	}
-	workspace = strings.TrimSpace(workspace)
-	if workspace == "" {
-		return nil
-	}
-	if existing, ok := al.interactions.registries.Load(workspace); ok {
-		registry, _ := existing.(*interactions.Registry)
-		return registry
-	}
-	options := interactions.Options{}
-	if cfg := al.GetConfig(); cfg != nil {
-		options.TerminalRetention = cfg.Tools.RequestUserInput.Retention()
-	}
-	storePath := interactions.WorkspaceStorePath(workspace)
-	if layout, ok := al.codingLayoutForWorkspace(workspace); ok {
-		storePath = layout.StatePaths().InteractionFile
-	}
-	registry := interactions.NewRegistryWithOptions(
-		storePath,
-		options,
-	)
-	if al.codingProfile != nil && registry.LastLoadError() != nil {
+	registry := al.interactions.registryForWorkspace(workspace)
+	if al.codingProfile != nil && registry != nil && registry.LastLoadError() != nil {
 		al.runtimeInitErr = fmt.Errorf("load coding interaction registry: %w", registry.LastLoadError())
 	}
-	actual, loaded := al.interactions.registries.LoadOrStore(workspace, registry)
-	stored, _ := actual.(*interactions.Registry)
-	if stored == nil {
-		stored = registry
-	}
-	if !loaded {
-		stored.Subscribe(func(observation interactions.EventObservation) {
-			al.observeInteractionEvent(workspace, observation)
-		})
-		stats := stored.Stats()
-		logger.InfoCF("agent", "Loaded human interaction registry", map[string]any{
-			"workspace":       workspace,
-			"records":         stats.RecordCount,
-			"nonterminal":     stats.NonterminalCount,
-			"retention_hours": int(stats.Retention / time.Hour),
-			"load_error":      errString(stored.LastLoadError()),
-		})
-	}
-	return stored
+	return registry
 }
 
 func (al *AgentLoop) observeInteractionEvent(

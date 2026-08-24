@@ -12,6 +12,7 @@ delegated to `Pipeline`.
 | `AgentLoop` | process lifecycle, service wiring, registry/config access, public APIs, channel/bus integration | live turn registries or LLM/tool iteration mechanics |
 | `turnRuntime` | turn admission, active session and route claims, pending stops, request tracking, sequencing, inbound spool settlement, current runner generation | process reload policy or LLM/tool iteration mechanics |
 | `interactionCoordinator` | process-lifetime interaction registry cache, resolution callbacks, resume-flight deduplication, workspace catalog serialization, recovery admission | generation-specific delivery wiring or turn execution |
+| `taskCoordinator` | process-lifetime task registry creation and reconciliation, terminal-task context, delivery state, async-completion admission | transport delivery, parent synthesis, or generation-specific wiring |
 | `inboundTurnCoordinator` | inbound scheduling, same-session serialization, busy-session steering enqueue, worker goroutine lifecycle, ack/release decisions | route normalization or LLM/tool execution |
 | `runtimeSessionClaim` | atomic session placeholder claim/release semantics shared by inbound workers and recovery | turn execution, routing, delivery |
 | `inboundMessageTurn` | normalized inbound route/session/model/dispatch envelope for one message | command handling or pipeline execution |
@@ -123,6 +124,14 @@ callbacks, resume-flight deduplication, catalog serialization, and recovery
 admission. Each runner generation receives a human-interaction component that
 references that stable coordinator. Config reload therefore replaces delivery
 behavior without copying or resetting mutable interaction state.
+
+Task state follows the same process lifetime. One `taskCoordinator` owns task
+registry creation, restart reconciliation against the concrete interaction
+owner, terminal-task prompt context, durable delivery decisions, and
+async-completion admission. The pipeline receives that coordinator directly;
+it no longer receives `AgentLoop` as a terminal-task service locator. Async
+delivery also uses the coordinator and the generation's concrete user-delivery
+component directly instead of five host callbacks.
 
 Reasoning publication is owned by the pipeline's concrete component. There is
 no test-only `AgentLoop` component factory or reasoning pass-through façade;

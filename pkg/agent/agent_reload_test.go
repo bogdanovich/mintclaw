@@ -62,6 +62,12 @@ func TestPrepareConfigReloadDoesNotPublishBeforeCommit(t *testing.T) {
 		originalRunner.interaction.coordinator != &loop.interactions {
 		t.Fatal("turn runner and pipeline do not share the generation's interaction components")
 	}
+	if originalRunner.pipeline.Context.TerminalTasks != &loop.tasks ||
+		originalRunner.pipeline.Interaction.ToolDelivery.tasks != &loop.tasks ||
+		originalRunner.pipeline.Interaction.SyncToolDelivery !=
+			originalRunner.pipeline.Interaction.ToolDelivery.userDelivery {
+		t.Fatal("turn runner components do not share their concrete owners")
+	}
 
 	next := *cfg
 	next.Agents.Defaults.ModelName = "prepared-model"
@@ -128,6 +134,15 @@ func TestPrepareConfigReloadPublishesOnlyAtCommit(t *testing.T) {
 	if committedRunner.interaction.coordinator != &loop.interactions ||
 		originalRunner.interaction.coordinator != committedRunner.interaction.coordinator {
 		t.Fatal("reload replaced the process-wide interaction coordinator")
+	}
+	if committedRunner.pipeline.Context.TerminalTasks != &loop.tasks ||
+		committedRunner.pipeline.Interaction.ToolDelivery.tasks != &loop.tasks ||
+		committedRunner.pipeline.Interaction.SyncToolDelivery !=
+			committedRunner.pipeline.Interaction.ToolDelivery.userDelivery ||
+		originalRunner.pipeline.Context.TerminalTasks != committedRunner.pipeline.Context.TerminalTasks ||
+		originalRunner.pipeline.Interaction.ToolDelivery.tasks !=
+			committedRunner.pipeline.Interaction.ToolDelivery.tasks {
+		t.Fatal("reload broke process-wide task or generation delivery ownership")
 	}
 	if got := provider.closed.Load(); got != 0 {
 		t.Fatalf("committed provider close count = %d, want 0", got)
