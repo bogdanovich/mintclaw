@@ -510,6 +510,76 @@ func TestBrowserHostPreservesDownloadSuccessWhenOutputRegistrationIsFull(t *test
 	}
 }
 
+func TestBrowserHostAllowsOnlyUnknownEffectDownloadInDryRun(t *testing.T) {
+	payload := []byte("dry-run companion download fixture")
+	path := filepath.Join(t.TempDir(), "fixture.txt")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(payload)
+	observation := browserworker.DriverObservation{
+		URL: "https://example.com/download", Origin: "https://example.com", Title: "Download",
+		Snapshot: "- link \"Download\" [ref=download_target]",
+		Elements: []browserworker.DriverElement{{Target: "download_target", Role: "link", Name: "Download"}},
+	}
+	worker := &fakeBrowserHostWorker{
+		status:       browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{observation, observation, observation},
+		download: browserworker.DriverDownload{
+			Path: path, Filename: "fixture.txt", ContentType: "text/plain",
+			SHA256: hex.EncodeToString(digest[:]), Size: int64(len(payload)),
+		},
+	}
+	profile := browserHostProfileFixture()
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	open := browserHostOpenFixture()
+	if _, err = host.Open(t.Context(), open); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil || len(observed.Elements) != 1 {
+		t.Fatalf("Observe() = %#v, %v", observed, err)
+	}
+	action := nodes.BrowserHostActRequest{
+		SessionID: open.SessionID, RoutedSessionID: open.RoutedSessionID,
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		ActionInvocationID: "browser_download_dry_run",
+		Action:             browserworker.Action{Kind: browserworker.ActionDownload, Ref: observed.Elements[0].Ref},
+		Effect:             "unknown", CurrentOrigin: observed.Origin,
+		PreparedActionHash: strings.Repeat("c", 64), BrowserPolicyRevision: open.BrowserPolicyRevision,
+		ProfileRevision: profile.Revision, ExpectedRole: "link", ExpectedName: "Download",
+		WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+		AgentID: open.AgentID, ActorID: open.ActorID,
+	}
+	action.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(action))
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := host.Download(t.Context(), action)
+	if err != nil || descriptor.Kind != nodes.BrowserOutputDownload || len(worker.actions) != 1 {
+		t.Fatalf("dry-run Download() = %#v, %v; actions = %#v", descriptor, err, worker.actions)
+	}
+	external := action
+	external.SnapshotGeneration++
+	external.ActionInvocationID = "browser_download_dry_run_external"
+	external.Effect = "external_commit"
+	external.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(external))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = host.Download(t.Context(), external); !errors.Is(err, ErrBrowserHostDenied) ||
+		len(worker.actions) != 1 {
+		t.Fatalf("external-commit dry-run Download() error = %v; actions = %#v", err, worker.actions)
+	}
+}
+
 func TestBrowserHostCapturesAndRetainsExactObservationIdempotently(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,

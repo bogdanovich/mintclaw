@@ -1104,11 +1104,12 @@ func (host *BrowserHost) executeAction(
 		)) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
-	if ((action == "click" && nodes.BrowserClickRequiresApproval(request.Effect)) ||
+	requiresApproval := (action == "click" && nodes.BrowserClickRequiresApproval(request.Effect)) ||
 		action == "download" || action == "drag" || action == "upload" || action == "press" ||
-		(action == "dialog" && request.Action.Decision == "accept")) &&
-		(session.profile.DryRun || !session.profile.AllowApprovedActions ||
-			!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) {
+		(action == "dialog" && request.Action.Decision == "accept")
+	dryRunDownload := action == "download" && request.Effect == "unknown" && session.profile.DryRun
+	if requiresApproval && (!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) ||
+		(!dryRunDownload && (session.profile.DryRun || !session.profile.AllowApprovedActions))) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	var boundElement browserworker.DriverElement

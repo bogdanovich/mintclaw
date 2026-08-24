@@ -698,11 +698,22 @@ func (worker *nodeBrowserWorker) DownloadPrepared(
 	if err = worker.invoke(ctx, descriptor, "act_"+request.InvocationID, input, &result); err != nil {
 		return browser.DriverDownload{}, err
 	}
-	if result.ActionInvocationID != request.InvocationID || result.State != "succeeded" || result.Output == nil {
-		if result.ActionInvocationID == request.InvocationID && result.State == "succeeded" {
-			return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: browser.ErrDriverIncompatible}
-		}
+	if result.ActionInvocationID != request.InvocationID || result.State != "succeeded" {
 		return browser.DriverDownload{}, browser.ErrWorkerUnavailable
+	}
+	worker.mu.Lock()
+	if worker.closed || worker.snapshotGeneration != generation {
+		worker.mu.Unlock()
+		return browser.DriverDownload{}, browser.ErrStale
+	}
+	worker.snapshotGeneration = generation + 1
+	worker.cachedObservation = nil
+	worker.elements = make(map[string]browser.DriverElement)
+	worker.currentOrigin = ""
+	worker.documentID = ""
+	worker.mu.Unlock()
+	if result.Output == nil {
+		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: browser.ErrDriverIncompatible}
 	}
 	output := *result.Output
 	principal := worker.principal()
@@ -717,17 +728,6 @@ func (worker *nodeBrowserWorker) DownloadPrepared(
 		output.Size < 1 || output.Size > uint64(maximum) || output.Filename == "" || output.ContentType == "" {
 		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: browser.ErrDriverIncompatible}
 	}
-	worker.mu.Lock()
-	if worker.closed || worker.snapshotGeneration != generation {
-		worker.mu.Unlock()
-		return browser.DriverDownload{}, browser.ErrStale
-	}
-	worker.snapshotGeneration = generation + 1
-	worker.cachedObservation = nil
-	worker.elements = make(map[string]browser.DriverElement)
-	worker.currentOrigin = ""
-	worker.documentID = ""
-	worker.mu.Unlock()
 	var record nodes.TransferArtifactRecord
 	for attempt := 0; attempt < 2; attempt++ {
 		record, err = worker.receiveBrowserOutput(

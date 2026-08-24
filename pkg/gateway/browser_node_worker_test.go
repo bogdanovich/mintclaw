@@ -82,7 +82,9 @@ func (handler *browserNodeTestHandler) Invoke(
 		}
 		result = nodes.BrowserSessionResult{
 			SessionID: input.SessionID, State: "ready", TabID: "tab_primary", Controller: "agent",
-			Features:  nodes.BrowserHostFeatures{Observe: true, Navigate: true, Contexts: true},
+			Features: nodes.BrowserHostFeatures{
+				Observe: true, Navigate: true, Contexts: true, Download: true,
+			},
 			ExpiresAt: time.Now().Add(time.Hour).Unix(), IdleExpiresAt: time.Now().Add(time.Minute).Unix(),
 		}
 	case nodes.BrowserCommandSessionStatus:
@@ -389,6 +391,58 @@ func TestGatewayBrowserWorkerRefreshesRecoveredObservationWithFreshInvocation(t 
 	}
 	if !slices.Equal(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestGatewayBrowserWorkerAdvancesAfterDownloadWithoutOutput(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	if _, err = worker.Observe(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	handler.redactNextActObservation = true
+	request := browser.WorkerPreparedAction{
+		InvocationID: "invocation_download",
+		Prepared: browser.PreparedAction{
+			ID: "prepared_download", RequestID: "request_download",
+			SessionID: worker.sessionID, TabID: worker.tabID,
+			Action: browser.Action{Kind: browser.ActionDownload, Ref: "host_ref_1"},
+			Effect: browser.EffectUnknown, CurrentOrigin: "https://example.com",
+			ActionHash: strings.Repeat("a", 64), ElementRole: "button", ElementName: "Save",
+		},
+		Action:       browser.Action{Kind: browser.ActionDownload, Ref: "host_ref_1"},
+		DriverAction: browser.DriverAction{Kind: browser.DriverDownloadAction, Target: "host_ref_1"},
+	}
+	ctx := gatewayBrowserArtifactContext(cfg.WorkspacePath())
+	var artifactErr *browser.DownloadArtifactError
+	if _, downloadErr := worker.DownloadPrepared(
+		ctx, request, int64(cfg.Tools.Browser.Limits.Effective().DownloadBytes),
+	); !errors.As(downloadErr, &artifactErr) {
+		t.Fatalf("DownloadPrepared() error = %v, want artifact unavailable", downloadErr)
+	}
+	worker.mu.Lock()
+	generation := worker.snapshotGeneration
+	worker.mu.Unlock()
+	if generation != 2 {
+		t.Fatalf("post-download generation = %d, want 2", generation)
+	}
+	if _, err = worker.Observe(t.Context()); err != nil {
+		t.Fatalf("Observe() after unavailable download error = %v", err)
 	}
 }
 
@@ -972,7 +1026,9 @@ func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testin
 		t.Context(), "companion", []string{"managed"},
 	)
 	if err != nil || !slices.Equal(
-		diagnostics.Actions, []browser.ActionKind{browser.ActionNavigate, browser.ActionScroll},
+		diagnostics.Actions, []browser.ActionKind{
+			browser.ActionNavigate, browser.ActionDownload, browser.ActionScroll,
+		},
 	) || diagnostics.Profiles["managed"].Status != browser.ReadinessReady {
 		t.Fatalf("target diagnostics = %#v, %v", diagnostics, err)
 	}
@@ -1201,7 +1257,7 @@ func browserNodeTestRuntime(
 	profiles := []nodes.BrowserProfileDescriptor{{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		DryRun: true, Actions: []string{"navigate", "scroll"}, Limits: nodes.BrowserLimits{}.Effective(),
+		DryRun: true, Actions: []string{"download", "navigate", "scroll"}, Limits: nodes.BrowserLimits{}.Effective(),
 	}}
 	descriptors, err := nodes.BrowserCommandDescriptors(profiles)
 	if err != nil {

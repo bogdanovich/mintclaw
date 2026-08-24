@@ -581,7 +581,11 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					}
 					return nil, executeErr
 				}
-				return sink(executeCtx, prepared, download)
+				terminal, sinkErr := sink(executeCtx, prepared, download)
+				if sinkErr != nil {
+					return downloadArtifactUnavailableResult()
+				}
+				return terminal, nil
 			}
 			if preparedDispatch {
 				if executeErr := preparedWorker.ExecutePrepared(executeCtx, workerPreparedAction); executeErr != nil {
@@ -617,6 +621,10 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		ctx, prepared.SessionID, invocation, progressSignature,
 	)
 	return invocation, errors.Join(executeErr, postActionErr)
+}
+
+func downloadArtifactUnavailableResult() (json.RawMessage, error) {
+	return json.RawMessage(`{"status":"completed","artifact_state":"unavailable"}`), nil
 }
 
 func (broker *Broker) finalizeActionInvocationLocked(
