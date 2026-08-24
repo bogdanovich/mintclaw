@@ -826,6 +826,9 @@ Implementation sequence:
     `DefaultConfig`, apply the same defaults at file and API decode boundaries,
     preserve explicit `false` during serialization, and remove the runtime nil
     fallback.
+38. Make `bus.Streamer` the sole channel streaming interface. Delete the
+    `channels.Streamer` source alias retained for older implementations and
+    update every current channel and fixture to name the canonical owner.
 
 Exit criteria:
 

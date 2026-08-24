@@ -12,6 +12,7 @@ import (
 
 	"github.com/mymmrac/telego"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
@@ -20,7 +21,7 @@ import (
 func (c *TelegramChannel) BeginStream(
 	ctx context.Context,
 	chatID string,
-) (channels.Streamer, error) {
+) (bus.Streamer, error) {
 	if !c.tgCfg.Streaming.Enabled {
 		return nil, fmt.Errorf("streaming disabled in config")
 	}

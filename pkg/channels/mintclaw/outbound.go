@@ -119,7 +119,7 @@ func (c *MintClawChannel) SendPlaceholder(ctx context.Context, chatID string) (s
 }
 
 // BeginStream implements channels.StreamingCapable for MintClaw WebUI.
-func (c *MintClawChannel) BeginStream(ctx context.Context, chatID string) (channels.Streamer, error) {
+func (c *MintClawChannel) BeginStream(ctx context.Context, chatID string) (bus.Streamer, error) {
 	return c.beginStream(ctx, chatID, "", "", runtimeevents.TraceScope{})
 }
 
@@ -130,7 +130,7 @@ func (c *MintClawChannel) BeginStreamForScope(
 	sessionKey string,
 	requestID string,
 	traceScope runtimeevents.TraceScope,
-) (channels.Streamer, error) {
+) (bus.Streamer, error) {
 	return c.beginStream(ctx, chatID, sessionKey, requestID, traceScope)
 }
 
@@ -140,7 +140,7 @@ func (c *MintClawChannel) beginStream(
 	sessionKey string,
 	requestID string,
 	traceScope runtimeevents.TraceScope,
-) (channels.Streamer, error) {
+) (bus.Streamer, error) {
 	if c == nil || c.config == nil || !c.config.Streaming.Enabled {
 		return nil, fmt.Errorf("streaming disabled in config")
 	}

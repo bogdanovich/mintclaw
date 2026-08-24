@@ -58,7 +58,7 @@ type PlaceholderCapable interface {
 // (e.g. Telegram bot without forum mode). In that case, Update becomes a no-op
 // and Finalize still delivers the final message.
 type StreamingCapable interface {
-	BeginStream(ctx context.Context, chatID string) (Streamer, error)
+	BeginStream(ctx context.Context, chatID string) (bus.Streamer, error)
 }
 
 // ScopedStreamingCapable lets a channel preserve the exact turn identity on
@@ -70,12 +70,8 @@ type ScopedStreamingCapable interface {
 		sessionKey string,
 		requestID string,
 		traceScope runtimeevents.TraceScope,
-	) (Streamer, error)
+	) (bus.Streamer, error)
 }
-
-// Streamer is defined in pkg/bus to avoid circular imports.
-// This alias keeps channel implementations using channels.Streamer unchanged.
-type Streamer = bus.Streamer
 
 // PlaceholderRecorder is injected into channels by Manager.
 // Channels call these methods on inbound to register typing/placeholder state.

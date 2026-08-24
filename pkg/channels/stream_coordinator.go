@@ -76,7 +76,7 @@ func (s *StreamCoordinator) getStreamer(
 		return nil, false
 	}
 
-	beginStream := func(beginCtx context.Context) (Streamer, error) {
+	beginStream := func(beginCtx context.Context) (bus.Streamer, error) {
 		if scoped, scopedOK := ch.(ScopedStreamingCapable); scopedOK {
 			return scoped.BeginStreamForScope(beginCtx, chatID, sessionKey, requestID, traceScope)
 		}
