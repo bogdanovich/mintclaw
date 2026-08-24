@@ -89,31 +89,6 @@ func TestRenderPromptPartsLegacy_UsesLayerAndSlotOrder(t *testing.T) {
 	}
 }
 
-func TestBuildMessagesFromPrompt_IncludesSystemPromptOverlay(t *testing.T) {
-	t.Setenv("MINTCLAW_BUILTIN_SKILLS", t.TempDir())
-	cb := NewContextBuilder(t.TempDir())
-
-	messages := cb.BuildMessagesFromPrompt(PromptBuildRequest{
-		CurrentMessage: "do child task",
-		Overlays: promptOverlaysForOptions(turnSpec{
-			SystemPromptOverride: "Use child-only system instructions.",
-		}),
-	})
-
-	if len(messages) < 2 {
-		t.Fatalf("messages len = %d, want at least 2", len(messages))
-	}
-	if messages[0].Role != "system" {
-		t.Fatalf("messages[0].Role = %q, want system", messages[0].Role)
-	}
-	if !strings.Contains(messages[0].Content, "Use child-only system instructions.") {
-		t.Fatalf("system prompt missing overlay: %q", messages[0].Content)
-	}
-	if messages[1].Role != "user" || messages[1].Content != "do child task" {
-		t.Fatalf("messages[1] = %#v, want user task", messages[1])
-	}
-}
-
 func TestBuildMessagesFromPrompt_MediaOnlyCurrentTurnGetsStandaloneMarker(t *testing.T) {
 	cb := NewContextBuilder(t.TempDir())
 

@@ -88,10 +88,10 @@ type subTurnRuntimeConfig struct {
 // runner. Tools construct their public request and pass it through
 // AgentLoopSpawner rather than recovering AgentLoop from context.
 type SubTurnConfig struct {
-	Model        string
-	Tools        []toolshared.Tool
-	SystemPrompt string
-	MaxTokens    int
+	Model      string
+	Tools      []toolshared.Tool
+	TaskPrompt string
+	MaxTokens  int
 
 	// Async controls the result delivery mechanism:
 	//
@@ -144,10 +144,6 @@ type SubTurnConfig struct {
 	// hard context window limit. When exceeded, older messages are intelligently
 	// truncated while preserving system messages and recent context.
 	MaxContextRunes int
-
-	// ActualSystemPrompt is injected as the true 'system' role message for the childAgent.
-	// The legacy SystemPrompt field is actually used as the first 'user' message (task description).
-	ActualSystemPrompt string
 
 	// InitialMessages preloads the ephemeral session history before the agent loop starts.
 	// Used by evaluator-optimizer patterns to pass the full worker context across multiple iterations.
@@ -202,8 +198,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 	agentCfg := SubTurnConfig{
 		Model:              cfg.Model,
 		Tools:              cfg.Tools,
-		SystemPrompt:       cfg.SystemPrompt,
-		ActualSystemPrompt: cfg.ActualSystemPrompt,
+		TaskPrompt:         cfg.TaskPrompt,
 		InitialMessages:    cfg.InitialMessages,
 		InitialTokenBudget: cfg.InitialTokenBudget,
 		MaxTokens:          cfg.MaxTokens,
@@ -578,7 +573,7 @@ func spawnSubTurn(
 		(!cfg.Async && deliveryMode == toolshared.AsyncDeliveryParentOnly)) {
 		removeUserDeliveryTools(agent.Tools)
 	}
-	childTask := cfg.SystemPrompt
+	childTask := cfg.TaskPrompt
 	if requireObjectiveOutcome {
 		childTask = browserObjectiveOutcomeInstruction(childTask, objectiveChecklist)
 	}
@@ -621,7 +616,6 @@ func spawnSubTurn(
 	opts.InteractionRouteKey = parentTS.opts.Dispatch.RouteSessionKey
 	opts.SenderDisplayName = parentTS.opts.SenderDisplayName
 	opts.TurnProfile = parentTS.profile
-	opts.SystemPromptOverride = cfg.ActualSystemPrompt
 	opts.InitialSteeringMessages = cfg.InitialMessages
 	opts.SendResponse = !requireObjectiveOutcome && !hasOutboundTransaction(childCtx) && !cfg.Async &&
 		(deliveryMode == toolshared.AsyncDeliveryUserOnly || deliveryMode == toolshared.AsyncDeliveryUserAndParent)

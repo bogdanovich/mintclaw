@@ -23,7 +23,7 @@ func (m *mockSpawner) SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*too
 	}
 
 	// Extract task from system prompt for response
-	task := cfg.SystemPrompt
+	task := cfg.TaskPrompt
 	if strings.Contains(task, "Task: ") {
 		parts := strings.Split(task, "Task: ")
 		if len(parts) > 1 {

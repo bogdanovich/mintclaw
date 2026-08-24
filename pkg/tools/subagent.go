@@ -28,14 +28,13 @@ type SubTurnSpawner interface {
 type SubTurnConfig struct {
 	Model              string
 	Tools              []toolshared.Tool
-	SystemPrompt       string
+	TaskPrompt         string
 	MaxTokens          int
 	Temperature        float64
 	Async              bool          // true for async (spawn), false for sync (subagent)
 	Critical           bool          // continue running after parent finishes gracefully
 	Timeout            time.Duration // 0 = use default (5 minutes)
 	MaxContextRunes    int           // 0 = auto, -1 = no limit, >0 = explicit limit
-	ActualSystemPrompt string
 	InitialMessages    []providers.Message
 	InitialTokenBudget *atomic.Int64 // Shared token budget for team members; nil if no budget
 	TargetAgentID      string        // If set, run as this agent (its workspace, model, tools)
@@ -222,7 +221,7 @@ func (sm *SubagentManager) runTask(
 	result, err := sm.spawnSubTurn(ctx, SubTurnConfig{
 		TaskID:         task.TaskID,
 		TargetAgentID:  task.AgentID,
-		SystemPrompt:   buildSpawnSystemPrompt(task.Task, task.Label),
+		TaskPrompt:     buildSpawnSystemPrompt(task.Task, task.Label),
 		Critical:       true,
 		ObjectiveItems: append([]toolshared.ObjectiveSpec(nil), objectiveItems...),
 	})
@@ -456,7 +455,7 @@ Task: %s`,
 	if t.manager != nil {
 		result, err := t.manager.spawnSubTurn(ctx, SubTurnConfig{
 			Tools:          nil, // Will inherit from parent via context
-			SystemPrompt:   systemPrompt,
+			TaskPrompt:     systemPrompt,
 			Async:          false, // Synchronous execution
 			ObjectiveItems: objectiveItems,
 		})

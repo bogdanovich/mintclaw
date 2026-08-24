@@ -180,20 +180,6 @@ func normalizePromptBuildRequestRelations(
 
 func promptOverlaysForOptions(opts turnSpec) []PromptPart {
 	var overlays []PromptPart
-	systemPrompt := strings.TrimSpace(opts.SystemPromptOverride)
-	if systemPrompt != "" {
-		overlays = append(overlays, PromptPart{
-			ID:      "instruction.subturn_profile",
-			Layer:   PromptLayerInstruction,
-			Slot:    PromptSlotWorkspace,
-			Source:  PromptSource{ID: PromptSourceSubTurnProfile, Name: "subturn.profile"},
-			Title:   "SubTurn System Instructions",
-			Content: systemPrompt,
-			Stable:  false,
-			Cache:   PromptCacheNone,
-		})
-	}
-
 	if activeGoal := strings.TrimSpace(opts.ActiveGoal); activeGoal != "" {
 		overlays = append(overlays, PromptPart{
 			ID:      "context.active_goal",

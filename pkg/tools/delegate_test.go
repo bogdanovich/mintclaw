@@ -30,7 +30,7 @@ func (m *delegateMockSpawner) SpawnSubTurn(_ context.Context, cfg SubTurnConfig)
 		return m.result, nil
 	}
 	return &toolshared.ToolResult{
-		ForLLM:  "completed: " + cfg.SystemPrompt,
+		ForLLM:  "completed: " + cfg.TaskPrompt,
 		ForUser: "completed",
 	}, nil
 }
@@ -119,8 +119,8 @@ func TestDelegateTool_Execute_Success(t *testing.T) {
 	if spawner.lastCfg.Async {
 		t.Error("delegate should be synchronous (Async=false)")
 	}
-	if spawner.lastCfg.SystemPrompt != "summarize the logs" {
-		t.Errorf("SystemPrompt = %q, want %q", spawner.lastCfg.SystemPrompt, "summarize the logs")
+	if spawner.lastCfg.TaskPrompt != "summarize the logs" {
+		t.Errorf("TaskPrompt = %q, want %q", spawner.lastCfg.TaskPrompt, "summarize the logs")
 	}
 	if spawner.lastCfg.DeliveryMode != toolshared.AsyncDeliveryParentOnly {
 		t.Errorf("DeliveryMode = %q, want %q", spawner.lastCfg.DeliveryMode, toolshared.AsyncDeliveryParentOnly)

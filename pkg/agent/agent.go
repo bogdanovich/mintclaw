@@ -112,7 +112,6 @@ type turnSpec struct {
 	CodingContext                CodingPromptContext // Runtime-owned coding identity for prompt assembly
 	ForcedSkills                 []string            // Skills explicitly requested for this message
 	TurnProfile                  config.EffectiveTurnProfile
-	SystemPromptOverride         string                    // Override the default system prompt (Used by SubTurns)
 	InitialSteeringMessages      []providers.Message       // Steering messages from refactor/agent
 	ActiveGoal                   string                    // Dynamic session goal reminder for normal LLM turns
 	DefaultResponse              string                    // Response when LLM returns empty
