@@ -1652,6 +1652,26 @@ func browserApprovalSummary(preparation browser.Preparation) string {
 	if action.DestinationOrigin != "" {
 		origin = action.DestinationOrigin
 	}
+	return fmt.Sprintf(
+		"%s on %s; effect: `%s`",
+		browserApprovalDescription(action),
+		origin,
+		action.Effect,
+	)
+}
+
+func browserApprovalDescription(action browser.PreparedAction) string {
+	switch action.Action.Kind {
+	case browser.ActionDialog:
+		description := browserDialogApprovalVerb(action.Action.Decision) + " " + action.DialogType + " dialog"
+		if action.Action.PromptProvided {
+			description += " with prompt input provided"
+		}
+		return description
+	case browser.ActionPress:
+		return fmt.Sprintf("Press document key %q", action.Action.Key)
+	}
+
 	description := "Browser " + string(action.Action.Kind) + " action"
 	if action.ElementRole != "" {
 		description = browserApprovalVerb(action.Action.Kind) + " " + action.ElementRole
@@ -1664,15 +1684,15 @@ func browserApprovalSummary(preparation browser.Preparation) string {
 				description += fmt.Sprintf(" %q", action.DestinationElementName)
 			}
 		}
-	} else if action.Action.Kind == browser.ActionPress {
-		description = fmt.Sprintf("Press document key %q", action.Action.Key)
 	}
-	return fmt.Sprintf(
-		"%s on %s; effect: `%s`",
-		description,
-		origin,
-		action.Effect,
-	)
+	return description
+}
+
+func browserDialogApprovalVerb(decision string) string {
+	if decision == "accept" {
+		return "Accept"
+	}
+	return "Dismiss"
 }
 
 func browserApprovalVerb(kind browser.ActionKind) string {

@@ -1980,6 +1980,49 @@ func TestBrowserApprovalSummaryNamesDocumentKey(t *testing.T) {
 	}
 }
 
+func TestBrowserApprovalSummaryDescribesDialogDecisionWithoutPromptValue(t *testing.T) {
+	tests := []struct {
+		name   string
+		action browser.PreparedAction
+		want   string
+	}{
+		{
+			name: "accept prompt with protected input",
+			action: browser.PreparedAction{
+				CurrentOrigin: "https://example.com", Effect: browser.EffectExternalCommit,
+				DialogType: "prompt", InputDigest: "protected-input-digest", InputBytes: 12,
+				Action: browser.Action{Kind: browser.ActionDialog, Decision: "accept", PromptProvided: true},
+			},
+			want: "Accept prompt dialog with prompt input provided on https://example.com; effect: `external_commit`",
+		},
+		{
+			name: "dismiss confirm",
+			action: browser.PreparedAction{
+				CurrentOrigin: "https://example.com", Effect: browser.EffectRead, DialogType: "confirm",
+				Action: browser.Action{Kind: browser.ActionDialog, Decision: "dismiss"},
+			},
+			want: "Dismiss confirm dialog on https://example.com; effect: `read`",
+		},
+		{
+			name: "accept alert without input",
+			action: browser.PreparedAction{
+				CurrentOrigin: "https://example.com", Effect: browser.EffectExternalCommit, DialogType: "alert",
+				Action: browser.Action{Kind: browser.ActionDialog, Decision: "accept"},
+			},
+			want: "Accept alert dialog on https://example.com; effect: `external_commit`",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary := browserApprovalSummary(browser.Preparation{Action: test.action})
+			includesInputDigest := test.action.InputDigest != "" && strings.Contains(summary, test.action.InputDigest)
+			if summary != test.want || includesInputDigest {
+				t.Fatalf("approval summary = %q, want %q", summary, test.want)
+			}
+		})
+	}
+}
+
 func TestBrowserApprovalSummaryNamesDownloadAction(t *testing.T) {
 	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
 		CurrentOrigin: "https://example.com", Effect: browser.EffectUnknown,
