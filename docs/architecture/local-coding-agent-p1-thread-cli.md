@@ -76,7 +76,7 @@ root, so neither canonical JSONL nor future Seahorse state accumulates in one
 global coding database.
 
 Before the first write and before every resume mutation, the command binds the
-thread root into the admitted coding `RuntimeLayout`. Its physical and
+thread root into the admitted coding `CodingRuntimeLayout`. Its physical and
 symlink-aware containment validation rejects an overridden MintClaw home that
 equals or descends from the canonical project root. Rejection is side-effect
 free; it cannot create the in-project state path while discovering the error.

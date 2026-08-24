@@ -109,15 +109,15 @@ func (al *AgentLoop) interactionRegistryForWorkspace(workspace string) *interact
 		options.TerminalRetention = cfg.Tools.RequestUserInput.Retention()
 	}
 	storePath := interactions.WorkspaceStorePath(workspace)
-	if layout, ok := al.runtimeLayoutForWorkspace(workspace); ok {
+	if layout, ok := al.codingLayoutForWorkspace(workspace); ok {
 		storePath = layout.StatePaths().InteractionFile
 	}
 	registry := interactions.NewRegistryWithOptions(
 		storePath,
 		options,
 	)
-	if al.runtimeProfile != nil && registry.LastLoadError() != nil {
-		al.runtimeProfileInitErr = fmt.Errorf("load strict interaction registry: %w", registry.LastLoadError())
+	if al.codingProfile != nil && registry.LastLoadError() != nil {
+		al.runtimeInitErr = fmt.Errorf("load coding interaction registry: %w", registry.LastLoadError())
 	}
 	actual, loaded := al.interactionRegistries.LoadOrStore(workspace, registry)
 	stored, _ := actual.(*interactions.Registry)

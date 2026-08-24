@@ -7,9 +7,9 @@ Roadmap packet: P0.3 in
 
 ## Decision
 
-A strict `RuntimeProfile` owns one construction-time `RuntimeStoreFactory`.
+A `CodingRuntimeProfile` owns one construction-time `CodingRuntimeStoreFactory`.
 The factory opens both the canonical JSONL session store and the derived
-Seahorse engine from paths supplied by the already validated `RuntimeLayout`.
+Seahorse engine from paths supplied by the already validated `CodingRuntimeLayout`.
 Agent and context construction no longer rediscover those paths from the
 execution workspace.
 
@@ -25,20 +25,17 @@ are rooted together but remain outside the source checkout:
 
 Consequently, two resumable coding threads have two different Seahorse SQLite
 files. MintClaw does not accumulate all coding history in a process-global
-database. A personal runtime similarly resolves one context database per
-personal-agent state owner; admitting the complete personal tool bootstrap on
-the strict constructor is completed by the dependent P0.4 cutover.
+database. Personal gateway context remains owned by the separate gateway
+workspace lifecycle.
 
 ## Authority and Recovery
 
 JSONL is the durable conversation authority. Seahorse ingests and reconciles
 from that transcript, so `seahorse.db` is disposable and rebuildable. The
-strict constructor does not read or migrate legacy workspace session paths and
-rejects a configured custom Seahorse `dbPath`; deployment is responsible for
-moving and verifying existing personal state once, without indefinite fallback
-reads.
+coding constructor reads only its admitted thread state root and rejects a
+configured custom Seahorse `dbPath`.
 
-Strict profiles admit only the stateless `none` manager and the owner-scoped
+Coding profiles admit only the stateless `none` manager and the thread-scoped
 `seahorse` manager. Other registered context managers remain rejected before
 store construction until they define an equivalent state-root contract.
 
@@ -60,10 +57,8 @@ Seahorse uses the same injected factory and layout-derived path. A context
 construction failure closes the partial context manager and the complete
 registry, including every canonical store and internally owned provider.
 
-The legacy `NewAgentLoop` path retains its existing migration and fallback
-behavior. P0.4 adds the strict personal profile without changing that gateway
-catalogue; deployment may perform the one-time state move before switching
-entry points.
+`NewAgentLoopChecked` remains the current gateway constructor. It does not
+instantiate a `CodingRuntimeProfile` or share coding-thread storage policy.
 
 ## Done Evidence
 
@@ -73,9 +68,9 @@ Focused tests prove that:
   its execution root;
 - canonical JSONL and Seahorse are created below their respective external
   state directories;
-- two coding-thread owners resolve to different `context/seahorse.db` files;
+- two coding threads resolve to different `context/seahorse.db` files;
 - context directories and database targets are preflighted fail-closed;
-- a custom runtime-profile Seahorse path is rejected;
+- a custom coding-profile Seahorse path is rejected;
 - an unsupported context manager is rejected before any store is opened;
 - nil and typed-nil canonical store products are rejected immediately;
 - a nil Seahorse engine product closes the canonical store through normal
@@ -87,6 +82,6 @@ Focused tests prove that:
 - failure of a later Seahorse runtime closes the already opened engine and all
   canonical stores instead of leaking a partial context manager.
 
-P0.4 now selects explicit personal and coding tool profiles without changing
-the persistence authority or adding another storage construction path. See
+P0.4 selects the isolated coding tool profile without changing gateway
+persistence authority or adding another gateway storage path. See
 [`local-coding-agent-p0-tool-profiles.md`](local-coding-agent-p0-tool-profiles.md).

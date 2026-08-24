@@ -787,6 +787,10 @@ Implementation sequence:
     Remove the uncalled browser click-effect and Web local-IP aliases, and make
     every Seahorse leaf-compaction caller select its current force mode
     explicitly instead of relying on a variadic default.
+29. Scope runtime profiles to the coding frontend that actually uses their
+    isolated roots and restart-only lifecycle. Delete the unused personal
+    profile path, its policy switches, and its storage-cutover plan; keep the
+    current hot-reloadable gateway workspace lifecycle explicit.
 
 Exit criteria:
 

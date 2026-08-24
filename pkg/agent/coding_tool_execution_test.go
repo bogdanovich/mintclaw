@@ -104,7 +104,7 @@ func TestAdd(t *testing.T) {
 
 	_, profile := newCodingToolTestProfile(t, project, stateRoot)
 	cfg := codingToolTestConfig()
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), provider, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), provider, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestAdd(t *testing.T) {
 		Response: llmscenario.TextResponse("resume observed"),
 	})
 	_, resumeProfile := newCodingToolTestProfile(t, project, stateRoot)
-	resumed, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), resumeProvider, resumeProfile)
+	resumed, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), resumeProvider, resumeProfile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,10 +261,10 @@ func requireNoToolExecutionMetadata(messages []providers.Message) error {
 	return nil
 }
 
-func newCodingToolTestProfile(t *testing.T, project, stateRoot string) (RuntimeLayout, RuntimeProfile) {
+func newCodingToolTestProfile(t *testing.T, project, stateRoot string) (CodingRuntimeLayout, CodingRuntimeProfile) {
 	t.Helper()
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-tools"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-tools",
 		project,
 		stateRoot,
 		[]string{project},
@@ -272,7 +272,7 @@ func newCodingToolTestProfile(t *testing.T, project, stateRoot string) (RuntimeL
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
 		t.Fatal(err)
 	}

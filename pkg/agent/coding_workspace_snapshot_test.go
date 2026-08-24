@@ -73,8 +73,8 @@ func TestCodingWorkspaceSnapshotRefreshesPromptAndEmitsFrontendObservation(t *te
 		},
 	)
 
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-workspace"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-workspace",
 		project,
 		stateRoot,
 		[]string{project},
@@ -82,7 +82,7 @@ func TestCodingWorkspaceSnapshotRefreshesPromptAndEmitsFrontendObservation(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestCodingWorkspaceSnapshotRefreshesPromptAndEmitsFrontendObservation(t *te
 	cfg.Agents.Defaults.Provider = "test-provider"
 	cfg.Agents.Defaults.ModelName = "coding-workspace-model"
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
-	loop, err := NewAgentLoopWithRuntimeProfile(
+	loop, err := NewCodingAgentLoop(
 		cfg,
 		bus.NewMessageBus(),
 		provider,

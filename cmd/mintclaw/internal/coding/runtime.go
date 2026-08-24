@@ -132,7 +132,7 @@ func openNativeCodingRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("coding runtime: create provider: %w", err)
 	}
-	profile, err := agent.NewRuntimeProfile(agent.RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func openNativeCodingRuntime(
 		}
 		messageBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, request.Metadata.SessionKey))
 	}
-	loop, err := agent.NewAgentLoopWithRuntimeProfile(
+	loop, err := agent.NewCodingAgentLoop(
 		runtimeCfg,
 		messageBus,
 		provider,

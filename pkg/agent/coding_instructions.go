@@ -77,7 +77,7 @@ type codingInstructionTarget struct {
 	Recursive bool
 }
 
-func newCodingInstructionLoader(layout RuntimeLayout) *codingInstructionLoader {
+func newCodingInstructionLoader(layout CodingRuntimeLayout) *codingInstructionLoader {
 	projectRoot := filepath.Clean(layout.ExecutionRoot())
 	loader := &codingInstructionLoader{
 		projectRoot:   projectRoot,

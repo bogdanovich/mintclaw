@@ -33,7 +33,7 @@ type AgentInstance struct {
 	Model                     string
 	Fallbacks                 []string
 	Workspace                 string
-	Layout                    RuntimeLayout
+	CodingLayout              CodingRuntimeLayout
 	MaxIterations             int
 	MaxTokens                 int
 	Temperature               float64
@@ -144,9 +144,7 @@ type agentToolInitConfig struct {
 }
 
 type runtimeInstanceDependencies struct {
-	storeFactory  RuntimeStoreFactory
-	toolProfile   RuntimeToolProfile
-	promptProfile RuntimePromptProfile
+	storeFactory CodingRuntimeStoreFactory
 }
 
 type agentIdentityConfig struct {
@@ -186,23 +184,19 @@ func NewAgentInstance(
 	return instance
 }
 
-// newAgentInstanceWithRuntimeLayout constructs an agent from a layout that was
-// resolved before registry construction. MintClaw-owned session state is opened
-// under StateRoot; ExecutionRoot is never created by construction.
-func newAgentInstanceWithRuntimeLayout(
+// newCodingAgentInstance constructs an isolated coding agent from a layout
+// resolved before registry construction. MintClaw-owned session state is
+// opened under StateRoot; ExecutionRoot is never created by construction.
+func newCodingAgentInstance(
 	agentCfg *config.AgentConfig,
 	defaults *config.AgentDefaults,
 	cfg *config.Config,
 	provider providers.LLMProvider,
-	layout RuntimeLayout,
-	storeFactory RuntimeStoreFactory,
-	toolProfile RuntimeToolProfile,
-	promptProfile RuntimePromptProfile,
+	layout CodingRuntimeLayout,
+	storeFactory CodingRuntimeStoreFactory,
 ) (*AgentInstance, error) {
 	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
-		storeFactory:  storeFactory,
-		toolProfile:   toolProfile,
-		promptProfile: promptProfile,
+		storeFactory: storeFactory,
 	})
 }
 
@@ -211,7 +205,7 @@ func newAgentInstance(
 	defaults *config.AgentDefaults,
 	cfg *config.Config,
 	provider providers.LLMProvider,
-	layout *RuntimeLayout,
+	layout *CodingRuntimeLayout,
 	runtimeDeps *runtimeInstanceDependencies,
 ) (*AgentInstance, error) {
 	if cfg != nil {
@@ -223,21 +217,16 @@ func newAgentInstance(
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	if layout != nil {
 		if err := layout.Validate(); err != nil {
-			return nil, fmt.Errorf("construct agent: invalid runtime layout: %w", err)
+			return nil, fmt.Errorf("construct agent: invalid coding layout: %w", err)
 		}
 		workspace = layout.ExecutionRoot()
 	} else {
 		_ = os.MkdirAll(workspace, 0o755)
 	}
 
-	toolProfile := RuntimeToolProfilePersonal
-	promptProfile := RuntimePromptProfilePersonal
-	if runtimeDeps != nil {
-		toolProfile = runtimeDeps.toolProfile
-		promptProfile = runtimeDeps.promptProfile
-	}
+	codingRuntime := layout != nil
 	definition := AgentContextDefinition{}
-	if promptProfile == RuntimePromptProfilePersonal {
+	if !codingRuntime {
 		definition = loadAgentDefinition(workspace)
 	}
 	frontmatterModel := ""
@@ -268,7 +257,7 @@ func newAgentInstance(
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 	agentToolPolicy := resolveAgentToolPolicy(definition)
 	agentMCPServerPolicy := resolveAgentMCPServerPolicy(definition)
-	if toolProfile == RuntimeToolProfileCoding {
+	if codingRuntime {
 		// Repository frontmatter cannot mutate the admitted coding catalog.
 		agentToolPolicy = nil
 		agentMCPServerPolicy = &PatternPolicy{Allow: []string{}, form: patternPolicyFormList}
@@ -282,7 +271,7 @@ func newAgentInstance(
 	var contextBuilder *ContextBuilder
 	if layout != nil {
 		var err error
-		factory := RuntimeStoreFactory(defaultRuntimeStoreFactory{})
+		factory := CodingRuntimeStoreFactory(defaultCodingRuntimeStoreFactory{})
 		if runtimeDeps != nil && runtimeDeps.storeFactory != nil {
 			factory = runtimeDeps.storeFactory
 		}
@@ -291,9 +280,9 @@ func newAgentInstance(
 			return nil, fmt.Errorf("construct agent: %w", err)
 		}
 		if runtimeDependencyIsNil(sessions) {
-			return nil, fmt.Errorf("construct agent: runtime store factory returned a nil session store")
+			return nil, fmt.Errorf("construct agent: coding store factory returned a nil session store")
 		}
-		contextBuilder, err = newRuntimeContextBuilder(*layout, promptProfile)
+		contextBuilder, err = newCodingContextBuilder(*layout)
 		if err != nil {
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
@@ -306,29 +295,18 @@ func newAgentInstance(
 		}
 		contextBuilder = NewContextBuilder(workspace)
 	}
-	if promptProfile == RuntimePromptProfilePersonal {
+	if !codingRuntime {
 		contextBuilder = contextBuilder.
 			WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker).
 			WithPromptMemoryConfig(defaults.PromptMemory)
 	}
 
 	identity := buildAgentIdentityConfig(defaults, agentCfg, definition)
-	if promptProfile == RuntimePromptProfileCoding {
+	if codingRuntime {
 		identity.agentName = "MintClaw coding agent"
 		identity.subagents = nil
 		identity.skillsFilter = nil
 		contextBuilder.WithCodingPromptModel(model)
-	}
-	if layout != nil {
-		owner := layout.Owner()
-		if owner.Kind == RuntimeOwnerPersonalAgent && owner.ID != identity.agentID {
-			_ = sessions.Close()
-			return nil, fmt.Errorf(
-				"construct agent %q: personal runtime owner is %q",
-				identity.agentID,
-				owner.ID,
-			)
-		}
 	}
 	providerOwnership := newProviderOwnership(provider)
 	provider = resolvePrimaryProviderForAgent(
@@ -345,7 +323,7 @@ func newAgentInstance(
 	if layout != nil {
 		toolInit.execScratch = filepath.Join(layout.StatePaths().OperationalRoot, "tmp")
 	}
-	if toolProfile == RuntimeToolProfileCoding {
+	if codingRuntime {
 		workingDirectory := workspace
 		if contextBuilder.codingInstructions != nil {
 			workingDirectory = contextBuilder.codingInstructions.workingDirectory()
@@ -409,7 +387,7 @@ func newAgentInstance(
 		}
 	}
 	if layout != nil {
-		instance.Layout = *layout
+		instance.CodingLayout = *layout
 	}
 	return instance, nil
 }

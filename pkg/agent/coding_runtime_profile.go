@@ -16,126 +16,82 @@ import (
 	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
-// RuntimeProfile is the immutable set of layouts admitted before registry construction.
-type RuntimeProfile struct {
-	agentLayouts  map[string]RuntimeLayout
-	storeFactory  RuntimeStoreFactory
-	toolProfile   RuntimeToolProfile
-	promptProfile RuntimePromptProfile
+// CodingRuntimeProfile is the immutable set of coding-thread layouts admitted
+// before registry construction.
+type CodingRuntimeProfile struct {
+	agentLayouts map[string]CodingRuntimeLayout
+	storeFactory CodingRuntimeStoreFactory
 }
 
-// RuntimeToolProfile selects the complete pre-construction tool and trust
-// policy for a homogeneous runtime owner domain.
-type RuntimeToolProfile string
-
-const (
-	RuntimeToolProfilePersonal RuntimeToolProfile = "personal"
-	RuntimeToolProfileCoding   RuntimeToolProfile = "coding"
-)
-
-// RuntimePromptProfile selects the prompt identity and context admitted for a
-// homogeneous runtime owner domain. It is deliberately separate from the tool
-// profile so prompt and capability policy cannot become implicitly coupled.
-type RuntimePromptProfile string
-
-const (
-	RuntimePromptProfilePersonal RuntimePromptProfile = "personal"
-	RuntimePromptProfileCoding   RuntimePromptProfile = "coding"
-)
-
-// RuntimeStoreFactory opens the canonical and derived stores owned by a
-// resolved runtime layout. Implementations must not fall back to legacy paths.
-type RuntimeStoreFactory interface {
-	NewSessionStore(layout RuntimeLayout) (session.SessionStore, error)
+// CodingRuntimeStoreFactory opens the canonical and derived stores owned by a
+// resolved coding layout. Implementations open only layout-derived paths.
+type CodingRuntimeStoreFactory interface {
+	NewSessionStore(layout CodingRuntimeLayout) (session.SessionStore, error)
 	NewSeahorseEngine(config seahorse.Config, complete seahorse.CompleteFn) (*seahorse.Engine, error)
 }
 
-type defaultRuntimeStoreFactory struct{}
+type defaultCodingRuntimeStoreFactory struct{}
 
-func (defaultRuntimeStoreFactory) NewSessionStore(layout RuntimeLayout) (session.SessionStore, error) {
+func (defaultCodingRuntimeStoreFactory) NewSessionStore(layout CodingRuntimeLayout) (session.SessionStore, error) {
 	return initRuntimeSessionStore(layout.StatePaths().SessionsRoot)
 }
 
-func (defaultRuntimeStoreFactory) NewSeahorseEngine(
+func (defaultCodingRuntimeStoreFactory) NewSeahorseEngine(
 	config seahorse.Config,
 	complete seahorse.CompleteFn,
 ) (*seahorse.Engine, error) {
 	return seahorse.NewEngine(config, complete)
 }
 
-// RuntimeProfileBinding binds one configured runtime agent to its state owner.
-// Personal agents use the same canonical ID for both. A coding frontend may
-// bind its configured agent to a distinct coding-thread owner ID.
-type RuntimeProfileBinding struct {
+// CodingRuntimeBinding binds one configured runtime agent to a coding thread.
+// The configured agent ID and thread ID are independent.
+type CodingRuntimeBinding struct {
 	AgentID string
-	Layout  RuntimeLayout
+	Layout  CodingRuntimeLayout
 }
 
-// NewRuntimeProfile validates and indexes bindings without creating filesystem state.
-func NewRuntimeProfile(bindings ...RuntimeProfileBinding) (RuntimeProfile, error) {
-	return NewRuntimeProfileWithStoreFactory(defaultRuntimeStoreFactory{}, bindings...)
+// NewCodingRuntimeProfile validates and indexes bindings without creating filesystem state.
+func NewCodingRuntimeProfile(bindings ...CodingRuntimeBinding) (CodingRuntimeProfile, error) {
+	return NewCodingRuntimeProfileWithStoreFactory(defaultCodingRuntimeStoreFactory{}, bindings...)
 }
 
-// NewRuntimeProfileWithStoreFactory creates a profile with construction-time
+// NewCodingRuntimeProfileWithStoreFactory creates a profile with construction-time
 // store injection. It is primarily useful for alternate frontends and fault
-// injection; normal callers should use NewRuntimeProfile.
-func NewRuntimeProfileWithStoreFactory(
-	storeFactory RuntimeStoreFactory,
-	bindings ...RuntimeProfileBinding,
-) (RuntimeProfile, error) {
+// injection; normal callers should use NewCodingRuntimeProfile.
+func NewCodingRuntimeProfileWithStoreFactory(
+	storeFactory CodingRuntimeStoreFactory,
+	bindings ...CodingRuntimeBinding,
+) (CodingRuntimeProfile, error) {
 	if runtimeDependencyIsNil(storeFactory) {
-		return RuntimeProfile{}, fmt.Errorf("runtime profile: store factory is required")
+		return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: store factory is required")
 	}
-	profile := RuntimeProfile{
-		agentLayouts: make(map[string]RuntimeLayout, len(bindings)),
+	profile := CodingRuntimeProfile{
+		agentLayouts: make(map[string]CodingRuntimeLayout, len(bindings)),
 		storeFactory: storeFactory,
 	}
-	var profileOwnerKind RuntimeOwnerKind
+	threadAgents := make(map[string]string, len(bindings))
 	for index, binding := range bindings {
 		layout := binding.Layout
 		if err := layout.Validate(); err != nil {
-			return RuntimeProfile{}, fmt.Errorf("runtime profile: layout %d: %w", index, err)
+			return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: layout %d: %w", index, err)
 		}
 		agentID := routing.NormalizeAgentID(binding.AgentID)
-		owner := layout.Owner()
-		if owner.Kind == RuntimeOwnerPersonalAgent && owner.ID != agentID {
-			return RuntimeProfile{}, fmt.Errorf(
-				"runtime profile: personal owner %q does not match agent %q",
-				owner.ID,
+		if _, exists := profile.agentLayouts[agentID]; exists {
+			return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: duplicate agent binding %q", agentID)
+		}
+		if existingAgent, exists := threadAgents[layout.ThreadID()]; exists {
+			return CodingRuntimeProfile{}, fmt.Errorf(
+				"coding runtime profile: thread %q is bound to agents %q and %q",
+				layout.ThreadID(),
+				existingAgent,
 				agentID,
 			)
 		}
-		if owner.Kind != RuntimeOwnerPersonalAgent && owner.Kind != RuntimeOwnerCodingThread {
-			return RuntimeProfile{}, fmt.Errorf(
-				"runtime profile: layout %d has unsupported owner kind %q",
-				index,
-				owner.Kind,
-			)
-		}
-		if profileOwnerKind == "" {
-			profileOwnerKind = owner.Kind
-			switch owner.Kind {
-			case RuntimeOwnerPersonalAgent:
-				profile.toolProfile = RuntimeToolProfilePersonal
-				profile.promptProfile = RuntimePromptProfilePersonal
-			case RuntimeOwnerCodingThread:
-				profile.toolProfile = RuntimeToolProfileCoding
-				profile.promptProfile = RuntimePromptProfileCoding
-			}
-		} else if owner.Kind != profileOwnerKind {
-			return RuntimeProfile{}, fmt.Errorf(
-				"runtime profile: mixed owner kinds %q and %q are not supported",
-				profileOwnerKind,
-				owner.Kind,
-			)
-		}
-		if _, exists := profile.agentLayouts[agentID]; exists {
-			return RuntimeProfile{}, fmt.Errorf("runtime profile: duplicate agent binding %q", agentID)
-		}
 		profile.agentLayouts[agentID] = layout
+		threadAgents[layout.ThreadID()] = agentID
 	}
 	if len(profile.agentLayouts) == 0 {
-		return RuntimeProfile{}, fmt.Errorf("runtime profile: at least one agent binding is required")
+		return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: at least one agent binding is required")
 	}
 	for stateIndex, stateBinding := range bindings {
 		for executionIndex, executionBinding := range bindings {
@@ -147,16 +103,16 @@ func NewRuntimeProfileWithStoreFactory(
 				executionBinding.Layout.ExecutionRoot(),
 			)
 			if err != nil {
-				return RuntimeProfile{}, fmt.Errorf(
-					"runtime profile: compare state root for agent %q with execution root for agent %q: %w",
+				return CodingRuntimeProfile{}, fmt.Errorf(
+					"coding runtime profile: compare state root for agent %q with execution root for agent %q: %w",
 					routing.NormalizeAgentID(stateBinding.AgentID),
 					routing.NormalizeAgentID(executionBinding.AgentID),
 					err,
 				)
 			}
 			if inside {
-				return RuntimeProfile{}, fmt.Errorf(
-					"runtime profile: state root for agent %q must be outside execution root for agent %q",
+				return CodingRuntimeProfile{}, fmt.Errorf(
+					"coding runtime profile: state root for agent %q must be outside execution root for agent %q",
 					routing.NormalizeAgentID(stateBinding.AgentID),
 					routing.NormalizeAgentID(executionBinding.AgentID),
 				)
@@ -172,59 +128,46 @@ func NewRuntimeProfileWithStoreFactory(
 				right.Layout.ExecutionRoot(),
 			)
 			if err != nil {
-				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare execution roots: %w", err)
+				return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: compare execution roots: %w", err)
 			}
 			rightInsideLeftExecution, err := runtimeLayoutPathWithin(
 				right.Layout.ExecutionRoot(),
 				left.Layout.ExecutionRoot(),
 			)
 			if err != nil {
-				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare execution roots: %w", err)
+				return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: compare execution roots: %w", err)
 			}
 			if leftInsideRightExecution && rightInsideLeftExecution {
-				return RuntimeProfile{}, fmt.Errorf(
-					"runtime profile: agents %q and %q cannot share an execution root",
+				return CodingRuntimeProfile{}, fmt.Errorf(
+					"coding runtime profile: agents %q and %q cannot share an execution root",
 					routing.NormalizeAgentID(left.AgentID),
 					routing.NormalizeAgentID(right.AgentID),
 				)
-			}
-			if left.Layout.Owner() == right.Layout.Owner() {
-				continue
 			}
 			leftInsideRight, err := runtimeLayoutPathWithin(
 				left.Layout.StateRoot(),
 				right.Layout.StateRoot(),
 			)
 			if err != nil {
-				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare owner state roots: %w", err)
+				return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: compare thread state roots: %w", err)
 			}
 			rightInsideLeft, err := runtimeLayoutPathWithin(
 				right.Layout.StateRoot(),
 				left.Layout.StateRoot(),
 			)
 			if err != nil {
-				return RuntimeProfile{}, fmt.Errorf("runtime profile: compare owner state roots: %w", err)
+				return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: compare thread state roots: %w", err)
 			}
 			if leftInsideRight || rightInsideLeft {
-				return RuntimeProfile{}, fmt.Errorf(
-					"runtime profile: state roots for distinct owners %q and %q must not overlap",
-					left.Layout.Owner().ID,
-					right.Layout.Owner().ID,
+				return CodingRuntimeProfile{}, fmt.Errorf(
+					"coding runtime profile: state roots for threads %q and %q must not overlap",
+					left.Layout.ThreadID(),
+					right.Layout.ThreadID(),
 				)
 			}
 		}
 	}
 	return profile, nil
-}
-
-// ToolProfile returns the immutable tool/trust profile selected by the owner domain.
-func (p RuntimeProfile) ToolProfile() RuntimeToolProfile {
-	return p.toolProfile
-}
-
-// PromptProfile returns the immutable prompt identity selected by the owner domain.
-func (p RuntimeProfile) PromptProfile() RuntimePromptProfile {
-	return p.promptProfile
 }
 
 func runtimeDependencyIsNil(dependency any) bool {
@@ -241,120 +184,113 @@ func runtimeDependencyIsNil(dependency any) bool {
 }
 
 // AgentLayout returns the layout bound to a canonical configured agent ID.
-func (p RuntimeProfile) AgentLayout(agentID string) (RuntimeLayout, bool) {
+func (p CodingRuntimeProfile) AgentLayout(agentID string) (CodingRuntimeLayout, bool) {
 	layout, ok := p.agentLayouts[routing.NormalizeAgentID(agentID)]
 	return layout, ok
 }
 
-func (al *AgentLoop) runtimeLayoutForWorkspace(workspace string) (RuntimeLayout, bool) {
-	if al == nil || al.runtimeProfile == nil {
-		return RuntimeLayout{}, false
+func (al *AgentLoop) codingLayoutForWorkspace(workspace string) (CodingRuntimeLayout, bool) {
+	if al == nil || al.codingProfile == nil {
+		return CodingRuntimeLayout{}, false
 	}
 	want := normalizeRuntimeWorkspace(workspace)
-	agentIDs := make([]string, 0, len(al.runtimeProfile.agentLayouts))
-	for agentID := range al.runtimeProfile.agentLayouts {
+	agentIDs := make([]string, 0, len(al.codingProfile.agentLayouts))
+	for agentID := range al.codingProfile.agentLayouts {
 		agentIDs = append(agentIDs, agentID)
 	}
 	sort.Strings(agentIDs)
 	for _, agentID := range agentIDs {
-		layout := al.runtimeProfile.agentLayouts[agentID]
+		layout := al.codingProfile.agentLayouts[agentID]
 		if normalizeRuntimeWorkspace(layout.ExecutionRoot()) == want {
 			return layout, true
 		}
 	}
-	return RuntimeLayout{}, false
+	return CodingRuntimeLayout{}, false
 }
 
-func (al *AgentLoop) hasCodingToolProfile() bool {
-	return al != nil && al.runtimeProfile != nil && al.runtimeProfile.toolProfile == RuntimeToolProfileCoding
+func (al *AgentLoop) usesCodingProfile() bool {
+	return al != nil && al.codingProfile != nil
 }
 
 func (al *AgentLoop) codingRuntimeTargetForSession(
 	sessionKey string,
-) (*AgentInstance, RuntimeLayout, error) {
-	if !al.hasCodingToolProfile() {
-		return nil, RuntimeLayout{}, fmt.Errorf("runtime does not use the coding profile")
+) (*AgentInstance, CodingRuntimeLayout, error) {
+	if !al.usesCodingProfile() {
+		return nil, CodingRuntimeLayout{}, fmt.Errorf("runtime does not use the coding profile")
 	}
 	sessionKey = strings.TrimSpace(sessionKey)
-	var matchedAgent *AgentInstance
-	var matchedLayout RuntimeLayout
-	for agentID, layout := range al.runtimeProfile.agentLayouts {
-		owner := layout.Owner()
-		if owner.Kind != RuntimeOwnerCodingThread || "coding:"+owner.ID != sessionKey {
+	for agentID, layout := range al.codingProfile.agentLayouts {
+		if "coding:"+layout.ThreadID() != sessionKey {
 			continue
-		}
-		if matchedAgent != nil {
-			return nil, RuntimeLayout{}, fmt.Errorf("coding runtime session %q has multiple owners", sessionKey)
 		}
 		agent, ok := al.GetRegistry().GetAgent(agentID)
 		if !ok || agent == nil {
-			return nil, RuntimeLayout{}, fmt.Errorf("coding runtime owner %q has no agent", owner.ID)
+			return nil, CodingRuntimeLayout{}, fmt.Errorf(
+				"coding runtime thread %q has no agent",
+				layout.ThreadID(),
+			)
 		}
-		matchedAgent = agent
-		matchedLayout = layout
+		return agent, layout, nil
 	}
-	if matchedAgent == nil {
-		return nil, RuntimeLayout{}, fmt.Errorf("coding runtime session %q has no admitted owner", sessionKey)
-	}
-	return matchedAgent, matchedLayout, nil
+	return nil, CodingRuntimeLayout{}, fmt.Errorf("coding runtime session %q has no admitted thread", sessionKey)
 }
 
-func (p RuntimeProfile) validateAgentIDs(agentIDs []string) error {
+func (p CodingRuntimeProfile) validateAgentIDs(agentIDs []string) error {
 	configured := make(map[string]struct{}, len(agentIDs))
 	for _, agentID := range agentIDs {
 		canonicalID := routing.NormalizeAgentID(agentID)
 		if _, duplicate := configured[canonicalID]; duplicate {
-			return fmt.Errorf("runtime profile: duplicate configured agent ID %q", canonicalID)
+			return fmt.Errorf("coding runtime profile: duplicate configured agent ID %q", canonicalID)
 		}
 		configured[canonicalID] = struct{}{}
 		if _, ok := p.agentLayouts[canonicalID]; !ok {
-			return fmt.Errorf("runtime profile: no layout for agent %q", canonicalID)
+			return fmt.Errorf("coding runtime profile: no layout for agent %q", canonicalID)
 		}
 	}
 	if len(configured) != len(p.agentLayouts) {
 		for agentID := range p.agentLayouts {
 			if _, ok := configured[agentID]; !ok {
-				return fmt.Errorf("runtime profile: layout for unconfigured agent %q", agentID)
+				return fmt.Errorf("coding runtime profile: layout for unconfigured agent %q", agentID)
 			}
 		}
 	}
 	return nil
 }
 
-func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
-	refreshedBindings := make([]RuntimeProfileBinding, 0, len(agentIDs))
+func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
+	refreshedBindings := make([]CodingRuntimeBinding, 0, len(agentIDs))
 	for _, agentID := range agentIDs {
 		layout, ok := p.AgentLayout(agentID)
 		if !ok {
-			return fmt.Errorf("runtime profile: no layout for agent %q", routing.NormalizeAgentID(agentID))
+			return fmt.Errorf("coding runtime profile: no layout for agent %q", routing.NormalizeAgentID(agentID))
 		}
-		refreshedLayout, err := NewRuntimeLayout(
-			layout.Owner(),
+		refreshedLayout, err := NewCodingRuntimeLayout(
+			layout.ThreadID(),
 			layout.ExecutionRoot(),
 			layout.StateRoot(),
 			layout.InstructionRoots(),
 		)
 		if err != nil {
 			return fmt.Errorf(
-				"runtime profile: refresh layout for agent %q: %w",
+				"coding runtime profile: refresh layout for agent %q: %w",
 				routing.NormalizeAgentID(agentID),
 				err,
 			)
 		}
-		refreshedBindings = append(refreshedBindings, RuntimeProfileBinding{
+		refreshedBindings = append(refreshedBindings, CodingRuntimeBinding{
 			AgentID: agentID,
 			Layout:  refreshedLayout,
 		})
 	}
-	refreshedProfile, err := NewRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)
+	refreshedProfile, err := NewCodingRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)
 	if err != nil {
-		return fmt.Errorf("runtime profile: refresh physical root isolation: %w", err)
+		return fmt.Errorf("coding runtime profile: refresh physical root isolation: %w", err)
 	}
 
 	for _, agentID := range agentIDs {
 		layout, ok := refreshedProfile.AgentLayout(agentID)
 		if !ok {
-			return fmt.Errorf("runtime profile: no layout for agent %q", routing.NormalizeAgentID(agentID))
+			return fmt.Errorf("coding runtime profile: no layout for agent %q", routing.NormalizeAgentID(agentID))
 		}
 		paths := layout.StatePaths()
 		for _, target := range []struct {
@@ -369,7 +305,7 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 		} {
 			if err := preflightRuntimeDirectory(target.path); err != nil {
 				return fmt.Errorf(
-					"runtime profile: preflight %s state for agent %q: %w",
+					"coding runtime profile: preflight %s state for agent %q: %w",
 					target.name,
 					routing.NormalizeAgentID(agentID),
 					err,
@@ -378,14 +314,14 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 		}
 		if err := preflightRuntimeFile(filepath.Join(paths.ContextRoot, "seahorse.db")); err != nil {
 			return fmt.Errorf(
-				"runtime profile: preflight Seahorse state for agent %q: %w",
+				"coding runtime profile: preflight Seahorse state for agent %q: %w",
 				routing.NormalizeAgentID(agentID),
 				err,
 			)
 		}
 		if err := preflightRuntimeOperationalFiles(paths); err != nil {
 			return fmt.Errorf(
-				"runtime profile: preflight operational state for agent %q: %w",
+				"coding runtime profile: preflight operational state for agent %q: %w",
 				routing.NormalizeAgentID(agentID),
 				err,
 			)
@@ -394,7 +330,7 @@ func (p RuntimeProfile) preflightStatePaths(agentIDs []string) error {
 	return nil
 }
 
-func preflightRuntimeOperationalFiles(paths RuntimeStatePaths) error {
+func preflightRuntimeOperationalFiles(paths CodingRuntimeStatePaths) error {
 	for _, target := range []struct {
 		name string
 		path string
@@ -493,13 +429,4 @@ func probeRuntimeDirectory(directory string) error {
 		return fmt.Errorf("remove directory creatability probe %q: %w", probe, err)
 	}
 	return nil
-}
-
-func (p RuntimeProfile) hasCodingOwner() bool {
-	for _, layout := range p.agentLayouts {
-		if layout.Owner().Kind == RuntimeOwnerCodingThread {
-			return true
-		}
-	}
-	return false
 }

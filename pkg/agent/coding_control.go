@@ -28,7 +28,7 @@ func (al *AgentLoop) CompactCodingSession(ctx context.Context, sessionKey string
 		budget = agent.ContextWindow
 	}
 	if budget <= 0 {
-		return fmt.Errorf("coding runtime owner %q has no context budget", agent.ID)
+		return fmt.Errorf("coding runtime agent %q has no context budget", agent.ID)
 	}
 	return al.contextManager.Compact(ctx, &CompactRequest{
 		Agent:      agent,

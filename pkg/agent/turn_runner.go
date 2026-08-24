@@ -50,10 +50,10 @@ func newPipeline(al *AgentLoop, cfg *config.Config) *Pipeline {
 			TurnControl:    &turnAbortController{events: events},
 		},
 		retrySleeper:         contextRetrySleeper{},
-		trustAllTools:        al.hasCodingToolProfile(),
-		durableToolLifecycle: al.hasCodingToolProfile(),
+		trustAllTools:        al.usesCodingProfile(),
+		durableToolLifecycle: al.usesCodingProfile(),
 		hashArguments: func(workspace string, arguments map[string]any) (string, error) {
-			if layout, ok := al.runtimeLayoutForWorkspace(workspace); ok {
+			if layout, ok := al.codingLayoutForWorkspace(workspace); ok {
 				return interactions.HashArgumentsAtPath(layout.StatePaths().InteractionKeyFile, arguments)
 			}
 			return interactions.HashArguments(workspace, arguments)

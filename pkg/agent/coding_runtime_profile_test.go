@@ -64,8 +64,8 @@ func (s *trackedRuntimeSessionStore) Close() error {
 	return s.SessionStore.Close()
 }
 
-type trackingRuntimeStoreFactory struct {
-	delegate        defaultRuntimeStoreFactory
+type trackingCodingRuntimeStoreFactory struct {
+	delegate        defaultCodingRuntimeStoreFactory
 	failSessionAt   int
 	failSeahorse    bool
 	failSeahorseAt  int
@@ -79,29 +79,29 @@ type trackingRuntimeStoreFactory struct {
 	engines         []*seahorse.Engine
 }
 
-func TestNewRuntimeProfileWithStoreFactoryRejectsTypedNil(t *testing.T) {
+func TestNewCodingRuntimeProfileWithStoreFactoryRejectsTypedNil(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-typed-nil"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-typed-nil",
 		executionRoot,
 		filepath.Join(root, "state"),
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	var factory *trackingRuntimeStoreFactory
-	profile, err := NewRuntimeProfileWithStoreFactory(
+	var factory *trackingCodingRuntimeStoreFactory
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(
 		factory,
-		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+		CodingRuntimeBinding{AgentID: "main", Layout: layout},
 	)
 	if err == nil || !strings.Contains(err.Error(), "store factory is required") {
-		t.Fatalf("NewRuntimeProfileWithStoreFactory() = %#v, %v, want typed-nil rejection", profile, err)
+		t.Fatalf("NewCodingRuntimeProfileWithStoreFactory() = %#v, %v, want typed-nil rejection", profile, err)
 	}
 }
 
-func (f *trackingRuntimeStoreFactory) NewSessionStore(layout RuntimeLayout) (session.SessionStore, error) {
+func (f *trackingCodingRuntimeStoreFactory) NewSessionStore(layout CodingRuntimeLayout) (session.SessionStore, error) {
 	f.sessionCalls++
 	if f.sessionCalls == f.failSessionAt {
 		return nil, errInjectedRuntimeStore
@@ -122,7 +122,7 @@ func (f *trackingRuntimeStoreFactory) NewSessionStore(layout RuntimeLayout) (ses
 	return tracked, nil
 }
 
-func (f *trackingRuntimeStoreFactory) NewSeahorseEngine(
+func (f *trackingCodingRuntimeStoreFactory) NewSeahorseEngine(
 	config seahorse.Config,
 	complete seahorse.CompleteFn,
 ) (*seahorse.Engine, error) {
@@ -258,22 +258,22 @@ func TestAgentInstanceCloseAggregatesOwnedRuntimeErrors(t *testing.T) {
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) {
+func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
 	stateRoot := filepath.Join(root, "private", "main")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-1"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-1",
 		executionRoot,
 		stateRoot,
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 
 	cfg := config.DefaultConfig()
@@ -293,14 +293,14 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 			Command: []string{"sh", "-c", `touch "$1"`, "hook", hookMarker},
 		},
 	}
-	loop, err := NewAgentLoopWithRuntimeProfile(
+	loop, err := NewCodingAgentLoop(
 		cfg,
 		bus.NewMessageBus(),
 		&mockProvider{},
 		profile,
 	)
 	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
 
@@ -311,8 +311,8 @@ func TestNewAgentLoopWithRuntimeProfileSeparatesExecutionAndState(t *testing.T) 
 	if agent.Workspace != layout.ExecutionRoot() {
 		t.Fatalf("Workspace = %q, want execution root %q", agent.Workspace, layout.ExecutionRoot())
 	}
-	if agent.Layout.StateRoot() != layout.StateRoot() {
-		t.Fatalf("Layout.StateRoot() = %q, want %q", agent.Layout.StateRoot(), layout.StateRoot())
+	if agent.CodingLayout.StateRoot() != layout.StateRoot() {
+		t.Fatalf("CodingLayout.StateRoot() = %q, want %q", agent.CodingLayout.StateRoot(), layout.StateRoot())
 	}
 	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
 		t.Fatalf("coding tools = %v, want %v", got, codingRuntimeToolNames)
@@ -397,21 +397,18 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 		}
 	}
 
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-isolated"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-isolated",
 		executionRoot,
 		stateRoot,
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
-	}
-	if profile.PromptProfile() != RuntimePromptProfileCoding {
-		t.Fatalf("PromptProfile() = %q, want coding", profile.PromptProfile())
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 
 	cfg := config.DefaultConfig()
@@ -434,9 +431,9 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	}
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Name: "Configured Persona", Default: true}}
 	provider := &promptCapturingProvider{}
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), provider, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), provider, profile)
 	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
 
@@ -511,8 +508,8 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 
 	const sessionKey = "coding:thread-isolated"
 	if _, err := loop.ProcessDirect(t.Context(), "wrong thread", "coding:another-thread"); err == nil ||
-		!strings.Contains(err.Error(), "has no admitted owner") {
-		t.Fatalf("ProcessDirect(wrong thread) error = %v, want owner rejection", err)
+		!strings.Contains(err.Error(), "has no admitted thread") {
+		t.Fatalf("ProcessDirect(wrong thread) error = %v, want thread rejection", err)
 	}
 	if _, err := loop.ProcessDirect(t.Context(), "persist only here", sessionKey); err != nil {
 		t.Fatalf("ProcessDirect() error = %v", err)
@@ -550,32 +547,32 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	}
 }
 
-func TestCodingDirectResolvesEachAdmittedThreadOwner(t *testing.T) {
+func TestCodingDirectResolvesEachAdmittedThread(t *testing.T) {
 	root := t.TempDir()
-	mainLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+	mainLayout, err := NewCodingRuntimeLayout(
+		"thread-main",
 		filepath.Join(root, "project-main"),
 		filepath.Join(root, "state-main"),
 		[]string{filepath.Join(root, "project-main")},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(main) error = %v", err)
 	}
-	supportLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+	supportLayout, err := NewCodingRuntimeLayout(
+		"thread-support",
 		filepath.Join(root, "project-support"),
 		filepath.Join(root, "state-support"),
 		[]string{filepath.Join(root, "project-support")},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(support) error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(
-		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
-		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	profile, err := NewCodingRuntimeProfile(
+		CodingRuntimeBinding{AgentID: "main", Layout: mainLayout},
+		CodingRuntimeBinding{AgentID: "support", Layout: supportLayout},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -583,9 +580,9 @@ func TestCodingDirectResolvesEachAdmittedThreadOwner(t *testing.T) {
 		{ID: "main", Default: true},
 		{ID: "support"},
 	}
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
 
@@ -611,41 +608,41 @@ func TestCodingDirectResolvesEachAdmittedThreadOwner(t *testing.T) {
 		}
 	}
 	if _, err := loop.ProcessDirect(t.Context(), "unknown", "coding:thread-unknown"); err == nil ||
-		!strings.Contains(err.Error(), "has no admitted owner") {
-		t.Fatalf("ProcessDirect(unknown) error = %v, want fail-closed owner rejection", err)
+		!strings.Contains(err.Error(), "has no admitted thread") {
+		t.Fatalf("ProcessDirect(unknown) error = %v, want fail-closed thread rejection", err)
 	}
 }
 
-func TestNewRuntimeProfileRejectsStateInsideAnotherExecutionRoot(t *testing.T) {
+func TestNewCodingRuntimeProfileRejectsStateInsideAnotherExecutionRoot(t *testing.T) {
 	root := t.TempDir()
 	firstExecution := filepath.Join(root, "project-a")
 	secondExecution := filepath.Join(root, "project-b")
-	firstLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-a"},
+	firstLayout, err := NewCodingRuntimeLayout(
+		"thread-a",
 		firstExecution,
 		filepath.Join(secondExecution, ".mintclaw", "thread-a"),
 		[]string{firstExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(first) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(first) error = %v", err)
 	}
 	secondState := filepath.Join(root, "state", "thread-b")
-	secondLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-b"},
+	secondLayout, err := NewCodingRuntimeLayout(
+		"thread-b",
 		secondExecution,
 		secondState,
 		[]string{secondExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(second) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(second) error = %v", err)
 	}
 
-	profile, err := NewRuntimeProfile(
-		RuntimeProfileBinding{AgentID: "main", Layout: firstLayout},
-		RuntimeProfileBinding{AgentID: "support", Layout: secondLayout},
+	profile, err := NewCodingRuntimeProfile(
+		CodingRuntimeBinding{AgentID: "main", Layout: firstLayout},
+		CodingRuntimeBinding{AgentID: "support", Layout: secondLayout},
 	)
 	if err == nil {
-		t.Fatalf("NewRuntimeProfile() = %#v, want cross-agent root rejection", profile)
+		t.Fatalf("NewCodingRuntimeProfile() = %#v, want cross-agent root rejection", profile)
 	}
 	if _, statErr := os.Stat(firstLayout.StateRoot()); !os.IsNotExist(statErr) {
 		t.Fatalf("rejected profile created first state root: %v", statErr)
@@ -655,7 +652,7 @@ func TestNewRuntimeProfileRejectsStateInsideAnotherExecutionRoot(t *testing.T) {
 	}
 }
 
-func TestNewRuntimeProfileRejectsOverlappingStateRootsForDistinctOwners(t *testing.T) {
+func TestNewCodingRuntimeProfileRejectsOverlappingStateRootsForDistinctThreads(t *testing.T) {
 	for _, test := range []struct {
 		name        string
 		secondState func(string) string
@@ -676,31 +673,31 @@ func TestNewRuntimeProfileRejectsOverlappingStateRootsForDistinctOwners(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			firstState := filepath.Join(root, "state", "thread-a")
-			firstLayout, err := NewRuntimeLayout(
-				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-a"},
+			firstLayout, err := NewCodingRuntimeLayout(
+				"thread-a",
 				filepath.Join(root, "project-a"),
 				firstState,
 				[]string{filepath.Join(root, "project-a")},
 			)
 			if err != nil {
-				t.Fatalf("NewRuntimeLayout(first) error = %v", err)
+				t.Fatalf("NewCodingRuntimeLayout(first) error = %v", err)
 			}
-			secondLayout, err := NewRuntimeLayout(
-				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-b"},
+			secondLayout, err := NewCodingRuntimeLayout(
+				"thread-b",
 				filepath.Join(root, "project-b"),
 				test.secondState(firstState),
 				[]string{filepath.Join(root, "project-b")},
 			)
 			if err != nil {
-				t.Fatalf("NewRuntimeLayout(second) error = %v", err)
+				t.Fatalf("NewCodingRuntimeLayout(second) error = %v", err)
 			}
 
-			profile, err := NewRuntimeProfile(
-				RuntimeProfileBinding{AgentID: "main", Layout: firstLayout},
-				RuntimeProfileBinding{AgentID: "support", Layout: secondLayout},
+			profile, err := NewCodingRuntimeProfile(
+				CodingRuntimeBinding{AgentID: "main", Layout: firstLayout},
+				CodingRuntimeBinding{AgentID: "support", Layout: secondLayout},
 			)
 			if err == nil {
-				t.Fatalf("NewRuntimeProfile() = %#v, want overlapping-state rejection", profile)
+				t.Fatalf("NewCodingRuntimeProfile() = %#v, want overlapping-state rejection", profile)
 			}
 			if _, statErr := os.Stat(firstState); !os.IsNotExist(statErr) {
 				t.Fatalf("rejected profile created state root: %v", statErr)
@@ -709,55 +706,55 @@ func TestNewRuntimeProfileRejectsOverlappingStateRootsForDistinctOwners(t *testi
 	}
 }
 
-func TestNewRuntimeProfileRejectsSharedExecutionRootForDistinctOwners(t *testing.T) {
+func TestNewCodingRuntimeProfileRejectsSharedExecutionRootForDistinctThreads(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
-	first, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-one"},
+	first, err := NewCodingRuntimeLayout(
+		"thread-one",
 		executionRoot,
 		filepath.Join(root, "state-one"),
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(first) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(first) error = %v", err)
 	}
-	second, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-two"},
+	second, err := NewCodingRuntimeLayout(
+		"thread-two",
 		executionRoot,
 		filepath.Join(root, "state-two"),
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(second) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(second) error = %v", err)
 	}
-	if _, err := NewRuntimeProfile(
-		RuntimeProfileBinding{AgentID: "main", Layout: first},
-		RuntimeProfileBinding{AgentID: "support", Layout: second},
+	if _, err := NewCodingRuntimeProfile(
+		CodingRuntimeBinding{AgentID: "main", Layout: first},
+		CodingRuntimeBinding{AgentID: "support", Layout: second},
 	); err == nil || !strings.Contains(err.Error(), "share an execution root") {
-		t.Fatalf("NewRuntimeProfile(shared execution root) error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile(shared execution root) error = %v", err)
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileRejectsUnusableStatePaths(t *testing.T) {
+func TestNewCodingAgentLoopRejectsUnusableStatePaths(t *testing.T) {
 	for _, test := range []struct {
 		name      string
-		blockPath func(RuntimeLayout) string
+		blockPath func(CodingRuntimeLayout) string
 	}{
 		{
 			name: "sessions root",
-			blockPath: func(layout RuntimeLayout) string {
+			blockPath: func(layout CodingRuntimeLayout) string {
 				return layout.StatePaths().SessionsRoot
 			},
 		},
 		{
 			name: "context root",
-			blockPath: func(layout RuntimeLayout) string {
+			blockPath: func(layout CodingRuntimeLayout) string {
 				return layout.StatePaths().ContextRoot
 			},
 		},
 		{
 			name: "memory root",
-			blockPath: func(layout RuntimeLayout) string {
+			blockPath: func(layout CodingRuntimeLayout) string {
 				return layout.StatePaths().MemoryRoot
 			},
 		},
@@ -765,14 +762,14 @@ func TestNewAgentLoopWithRuntimeProfileRejectsUnusableStatePaths(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			executionRoot := filepath.Join(root, "project")
-			layout, err := NewRuntimeLayout(
-				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-state-error"},
+			layout, err := NewCodingRuntimeLayout(
+				"thread-state-error",
 				executionRoot,
 				filepath.Join(root, "state"),
 				[]string{executionRoot},
 			)
 			if err != nil {
-				t.Fatalf("NewRuntimeLayout() error = %v", err)
+				t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 			}
 			blockedPath := test.blockPath(layout)
 			if err := os.MkdirAll(filepath.Dir(blockedPath), 0o755); err != nil {
@@ -781,22 +778,22 @@ func TestNewAgentLoopWithRuntimeProfileRejectsUnusableStatePaths(t *testing.T) {
 			if err := os.WriteFile(blockedPath, []byte("not a directory"), 0o600); err != nil {
 				t.Fatalf("WriteFile() error = %v", err)
 			}
-			profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+			profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 			if err != nil {
-				t.Fatalf("NewRuntimeProfile() error = %v", err)
+				t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 			}
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.ContextManager = "none"
 
-			loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 			if err == nil {
 				if loop != nil {
 					loop.Close()
 				}
-				t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want unusable-state error")
+				t.Fatal("NewCodingAgentLoop() error = nil, want unusable-state error")
 			}
 			if loop != nil {
-				t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+				t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 			}
 			if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 				t.Fatalf("failed construction created execution root: %v", statErr)
@@ -805,22 +802,22 @@ func TestNewAgentLoopWithRuntimeProfileRejectsUnusableStatePaths(t *testing.T) {
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfilePreflightsAllOwners(t *testing.T) {
+func TestNewCodingAgentLoopPreflightsAllBindings(t *testing.T) {
 	root := t.TempDir()
 	mainExecution := filepath.Join(root, "main-project")
 	mainState := filepath.Join(root, "state", "main")
-	mainLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: "main"},
+	mainLayout, err := NewCodingRuntimeLayout(
+		"thread-main",
 		mainExecution,
 		mainState,
 		[]string{mainExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: mainLayout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: mainLayout})
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -829,7 +826,7 @@ func TestNewAgentLoopWithRuntimeProfilePreflightsAllOwners(t *testing.T) {
 		{ID: "support"},
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(
+	loop, err := NewCodingAgentLoop(
 		cfg,
 		bus.NewMessageBus(),
 		&mockProvider{},
@@ -840,10 +837,10 @@ func TestNewAgentLoopWithRuntimeProfilePreflightsAllOwners(t *testing.T) {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want missing-owner error")
+		t.Fatal("NewCodingAgentLoop() error = nil, want missing-binding error")
 	}
 	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 	}
 	if _, statErr := os.Stat(mainExecution); !os.IsNotExist(statErr) {
 		t.Fatalf("failed preflight created execution root: stat error = %v", statErr)
@@ -853,29 +850,29 @@ func TestNewAgentLoopWithRuntimeProfilePreflightsAllOwners(t *testing.T) {
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfilePreflightsLaterStateBeforeConstruction(t *testing.T) {
+func TestNewCodingAgentLoopPreflightsLaterStateBeforeConstruction(t *testing.T) {
 	root := t.TempDir()
 	mainExecution := filepath.Join(root, "main-project")
 	mainState := filepath.Join(root, "state", "main")
-	mainLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+	mainLayout, err := NewCodingRuntimeLayout(
+		"thread-main",
 		mainExecution,
 		mainState,
 		[]string{mainExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(main) error = %v", err)
 	}
 	supportExecution := filepath.Join(root, "support-project")
 	supportState := filepath.Join(root, "state", "support")
-	supportLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+	supportLayout, err := NewCodingRuntimeLayout(
+		"thread-support",
 		supportExecution,
 		supportState,
 		[]string{supportExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(support) error = %v", err)
 	}
 	if err := os.MkdirAll(supportState, 0o755); err != nil {
 		t.Fatalf("MkdirAll(support state) error = %v", err)
@@ -883,12 +880,12 @@ func TestNewAgentLoopWithRuntimeProfilePreflightsLaterStateBeforeConstruction(t 
 	if err := os.WriteFile(supportLayout.StatePaths().SessionsRoot, []byte("blocked"), 0o600); err != nil {
 		t.Fatalf("WriteFile(blocked sessions) error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(
-		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
-		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	profile, err := NewCodingRuntimeProfile(
+		CodingRuntimeBinding{AgentID: "main", Layout: mainLayout},
+		CodingRuntimeBinding{AgentID: "support", Layout: supportLayout},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -897,54 +894,54 @@ func TestNewAgentLoopWithRuntimeProfilePreflightsLaterStateBeforeConstruction(t 
 		{ID: "support"},
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want later-state preflight error")
+		t.Fatal("NewCodingAgentLoop() error = nil, want later-state preflight error")
 	}
 	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 	}
 	if _, statErr := os.Stat(mainState); !os.IsNotExist(statErr) {
-		t.Fatalf("failed preflight created earlier owner state: %v", statErr)
+		t.Fatalf("failed preflight created earlier thread state: %v", statErr)
 	}
 	if _, statErr := os.Stat(mainExecution); !os.IsNotExist(statErr) {
 		t.Fatalf("failed preflight created earlier execution root: %v", statErr)
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileRevalidatesPhysicalStateIsolation(t *testing.T) {
+func TestNewCodingAgentLoopRevalidatesPhysicalStateIsolation(t *testing.T) {
 	root := t.TempDir()
 	mainExecution := filepath.Join(root, "main-project")
 	mainState := filepath.Join(root, "state-main")
-	mainLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+	mainLayout, err := NewCodingRuntimeLayout(
+		"thread-main",
 		mainExecution,
 		mainState,
 		[]string{mainExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(main) error = %v", err)
 	}
 	supportExecution := filepath.Join(root, "support-project")
 	supportState := filepath.Join(root, "state-support")
-	supportLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+	supportLayout, err := NewCodingRuntimeLayout(
+		"thread-support",
 		supportExecution,
 		supportState,
 		[]string{supportExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(support) error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(
-		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
-		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	profile, err := NewCodingRuntimeProfile(
+		CodingRuntimeBinding{AgentID: "main", Layout: mainLayout},
+		CodingRuntimeBinding{AgentID: "support", Layout: supportLayout},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	if err := os.MkdirAll(mainState, 0o755); err != nil {
 		t.Fatalf("MkdirAll(main state) error = %v", err)
@@ -959,15 +956,15 @@ func TestNewAgentLoopWithRuntimeProfileRevalidatesPhysicalStateIsolation(t *test
 		{ID: "support"},
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want physical-root isolation error")
+		t.Fatal("NewCodingAgentLoop() error = nil, want physical-root isolation error")
 	}
 	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 	}
 	for _, path := range []string{
 		mainLayout.StatePaths().SessionsRoot,
@@ -979,26 +976,26 @@ func TestNewAgentLoopWithRuntimeProfileRevalidatesPhysicalStateIsolation(t *test
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileRejectsDerivedStateSymlinks(t *testing.T) {
+func TestNewCodingAgentLoopRejectsDerivedStateSymlinks(t *testing.T) {
 	for _, test := range []struct {
 		name       string
-		linkedPath func(RuntimeLayout) string
+		linkedPath func(CodingRuntimeLayout) string
 	}{
 		{
 			name: "sessions",
-			linkedPath: func(layout RuntimeLayout) string {
+			linkedPath: func(layout CodingRuntimeLayout) string {
 				return layout.StatePaths().SessionsRoot
 			},
 		},
 		{
 			name: "context",
-			linkedPath: func(layout RuntimeLayout) string {
+			linkedPath: func(layout CodingRuntimeLayout) string {
 				return layout.StatePaths().ContextRoot
 			},
 		},
 		{
 			name: "memory",
-			linkedPath: func(layout RuntimeLayout) string {
+			linkedPath: func(layout CodingRuntimeLayout) string {
 				return layout.StatePaths().MemoryRoot
 			},
 		},
@@ -1007,18 +1004,18 @@ func TestNewAgentLoopWithRuntimeProfileRejectsDerivedStateSymlinks(t *testing.T)
 			root := t.TempDir()
 			executionRoot := filepath.Join(root, "project")
 			stateRoot := filepath.Join(root, "state")
-			layout, err := NewRuntimeLayout(
-				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-symlink"},
+			layout, err := NewCodingRuntimeLayout(
+				"thread-symlink",
 				executionRoot,
 				stateRoot,
 				[]string{executionRoot},
 			)
 			if err != nil {
-				t.Fatalf("NewRuntimeLayout() error = %v", err)
+				t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 			}
-			profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+			profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 			if err != nil {
-				t.Fatalf("NewRuntimeProfile() error = %v", err)
+				t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 			}
 			target := filepath.Join(executionRoot, "redirected-state")
 			if err := os.MkdirAll(target, 0o755); err != nil {
@@ -1033,15 +1030,15 @@ func TestNewAgentLoopWithRuntimeProfileRejectsDerivedStateSymlinks(t *testing.T)
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.ContextManager = "none"
 
-			loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 			if err == nil {
 				if loop != nil {
 					loop.Close()
 				}
-				t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want derived-symlink rejection")
+				t.Fatal("NewCodingAgentLoop() error = nil, want derived-symlink rejection")
 			}
 			if loop != nil {
-				t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+				t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 			}
 			entries, readErr := os.ReadDir(target)
 			if readErr != nil {
@@ -1054,21 +1051,21 @@ func TestNewAgentLoopWithRuntimeProfileRejectsDerivedStateSymlinks(t *testing.T)
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileRejectsSeahorseDatabaseSymlink(t *testing.T) {
+func TestNewCodingAgentLoopRejectsSeahorseDatabaseSymlink(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-db-symlink"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-db-symlink",
 		executionRoot,
 		filepath.Join(root, "state"),
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	if err := os.MkdirAll(layout.StatePaths().ContextRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(context root) error = %v", err)
@@ -1083,15 +1080,15 @@ func TestNewAgentLoopWithRuntimeProfileRejectsSeahorseDatabaseSymlink(t *testing
 	}
 	cfg := config.DefaultConfig()
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want Seahorse symlink rejection")
+		t.Fatal("NewCodingAgentLoop() error = nil, want Seahorse symlink rejection")
 	}
 	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 	}
 	info, statErr := os.Stat(target)
 	if statErr != nil || info.Size() != 0 {
@@ -1099,40 +1096,40 @@ func TestNewAgentLoopWithRuntimeProfileRejectsSeahorseDatabaseSymlink(t *testing
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileRejectsInvalidOperationalLeaves(t *testing.T) {
+func TestNewCodingAgentLoopRejectsInvalidOperationalLeaves(t *testing.T) {
 	for _, test := range []struct {
 		name    string
-		path    func(RuntimeStatePaths) string
+		path    func(CodingRuntimeStatePaths) string
 		content []byte
 		link    bool
 	}{
-		{name: "runtime state symlink", path: func(paths RuntimeStatePaths) string {
+		{name: "runtime state symlink", path: func(paths CodingRuntimeStatePaths) string {
 			return paths.RuntimeStateFile
 		}, link: true},
-		{name: "corrupt runtime state", path: func(paths RuntimeStatePaths) string {
+		{name: "corrupt runtime state", path: func(paths CodingRuntimeStatePaths) string {
 			return paths.RuntimeStateFile
 		}, content: []byte("{")},
-		{name: "corrupt task registry", path: func(paths RuntimeStatePaths) string {
+		{name: "corrupt task registry", path: func(paths CodingRuntimeStatePaths) string {
 			return paths.TaskRegistryFile
 		}, content: []byte("{")},
-		{name: "corrupt interaction registry", path: func(paths RuntimeStatePaths) string {
+		{name: "corrupt interaction registry", path: func(paths CodingRuntimeStatePaths) string {
 			return paths.InteractionFile
 		}, content: []byte("{")},
-		{name: "invalid interaction key", path: func(paths RuntimeStatePaths) string {
+		{name: "invalid interaction key", path: func(paths CodingRuntimeStatePaths) string {
 			return paths.InteractionKeyFile
 		}, content: []byte("short")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			executionRoot := filepath.Join(root, "project")
-			layout, err := NewRuntimeLayout(
-				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-operational"},
+			layout, err := NewCodingRuntimeLayout(
+				"thread-operational",
 				executionRoot,
 				filepath.Join(root, "state"),
 				[]string{executionRoot},
 			)
 			if err != nil {
-				t.Fatalf("NewRuntimeLayout() error = %v", err)
+				t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 			}
 			leaf := test.path(layout.StatePaths())
 			if err := os.MkdirAll(filepath.Dir(leaf), 0o700); err != nil {
@@ -1149,21 +1146,21 @@ func TestNewAgentLoopWithRuntimeProfileRejectsInvalidOperationalLeaves(t *testin
 			} else if err := os.WriteFile(leaf, test.content, 0o600); err != nil {
 				t.Fatalf("WriteFile(leaf) error = %v", err)
 			}
-			profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+			profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 			if err != nil {
-				t.Fatalf("NewRuntimeProfile() error = %v", err)
+				t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 			}
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.ContextManager = "none"
-			loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 			if err == nil {
 				if loop != nil {
 					loop.Close()
 				}
-				t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want invalid-leaf rejection")
+				t.Fatal("NewCodingAgentLoop() error = nil, want invalid-leaf rejection")
 			}
 			if loop != nil {
-				t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+				t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 			}
 			if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
 				t.Fatalf("failed operational preflight created execution root: %v", statErr)
@@ -1172,32 +1169,32 @@ func TestNewAgentLoopWithRuntimeProfileRejectsInvalidOperationalLeaves(t *testin
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileChecksLaterStateCreatability(t *testing.T) {
+func TestNewCodingAgentLoopChecksLaterStateCreatability(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not enforce Unix directory mode bits")
 	}
 	root := t.TempDir()
 	mainExecution := filepath.Join(root, "main-project")
 	mainState := filepath.Join(root, "state-main")
-	mainLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+	mainLayout, err := NewCodingRuntimeLayout(
+		"thread-main",
 		mainExecution,
 		mainState,
 		[]string{mainExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(main) error = %v", err)
 	}
 	supportExecution := filepath.Join(root, "support-project")
 	supportState := filepath.Join(root, "state-support")
-	supportLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+	supportLayout, err := NewCodingRuntimeLayout(
+		"thread-support",
 		supportExecution,
 		supportState,
 		[]string{supportExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(support) error = %v", err)
 	}
 	if err := os.MkdirAll(supportState, 0o500); err != nil {
 		t.Fatalf("MkdirAll(support state) error = %v", err)
@@ -1205,12 +1202,12 @@ func TestNewAgentLoopWithRuntimeProfileChecksLaterStateCreatability(t *testing.T
 	t.Cleanup(func() {
 		_ = os.Chmod(supportState, 0o700)
 	})
-	profile, err := NewRuntimeProfile(
-		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
-		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	profile, err := NewCodingRuntimeProfile(
+		CodingRuntimeBinding{AgentID: "main", Layout: mainLayout},
+		CodingRuntimeBinding{AgentID: "support", Layout: supportLayout},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -1219,57 +1216,57 @@ func TestNewAgentLoopWithRuntimeProfileChecksLaterStateCreatability(t *testing.T
 		{ID: "support"},
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatal("NewAgentLoopWithRuntimeProfile() error = nil, want state-creatability error")
+		t.Fatal("NewCodingAgentLoop() error = nil, want state-creatability error")
 	}
 	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 	}
 	if _, statErr := os.Stat(mainState); !os.IsNotExist(statErr) {
-		t.Fatalf("failed creatability preflight created earlier owner state: %v", statErr)
+		t.Fatalf("failed creatability preflight created earlier thread state: %v", statErr)
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileDoesNotMigrateLegacySessions(t *testing.T) {
+func TestNewCodingAgentLoopDoesNotConvertJSONSessions(t *testing.T) {
 	root := t.TempDir()
 	mainExecution := filepath.Join(root, "main-project")
-	mainLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-main"},
+	mainLayout, err := NewCodingRuntimeLayout(
+		"thread-main",
 		mainExecution,
 		filepath.Join(root, "state-main"),
 		[]string{mainExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(main) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(main) error = %v", err)
 	}
 	supportExecution := filepath.Join(root, "support-project")
-	supportLayout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-support"},
+	supportLayout, err := NewCodingRuntimeLayout(
+		"thread-support",
 		supportExecution,
 		filepath.Join(root, "state-support"),
 		[]string{supportExecution},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(support) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(support) error = %v", err)
 	}
 	supportSessions := supportLayout.StatePaths().SessionsRoot
 	if err := os.MkdirAll(filepath.Join(supportSessions, "blocked.meta.json"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(blocked metadata) error = %v", err)
 	}
-	legacySession := filepath.Join(supportSessions, "blocked.json")
-	if err := os.WriteFile(legacySession, []byte(`{"key":"blocked","messages":[]}`), 0o600); err != nil {
-		t.Fatalf("WriteFile(legacy session) error = %v", err)
+	jsonSession := filepath.Join(supportSessions, "blocked.json")
+	if err := os.WriteFile(jsonSession, []byte(`{"key":"blocked","messages":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(JSON session) error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(
-		RuntimeProfileBinding{AgentID: "main", Layout: mainLayout},
-		RuntimeProfileBinding{AgentID: "support", Layout: supportLayout},
+	profile, err := NewCodingRuntimeProfile(
+		CodingRuntimeBinding{AgentID: "main", Layout: mainLayout},
+		CodingRuntimeBinding{AgentID: "support", Layout: supportLayout},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -1278,44 +1275,44 @@ func TestNewAgentLoopWithRuntimeProfileDoesNotMigrateLegacySessions(t *testing.T
 		{ID: "support"},
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
-	if _, statErr := os.Stat(legacySession); statErr != nil {
-		t.Fatalf("strict runtime mutated legacy session: %v", statErr)
+	if _, statErr := os.Stat(jsonSession); statErr != nil {
+		t.Fatalf("coding runtime mutated JSON session: %v", statErr)
 	}
 	if _, statErr := os.Stat(filepath.Join(supportSessions, "blocked.jsonl")); !os.IsNotExist(statErr) {
-		t.Fatalf("strict runtime created migrated JSONL: %v", statErr)
+		t.Fatalf("coding runtime created converted JSONL: %v", statErr)
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfileRoutesCodingSeahorseToStateRoot(t *testing.T) {
+func TestNewCodingAgentLoopRoutesCodingSeahorseToStateRoot(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
 	stateRoot := filepath.Join(root, "state")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-1"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-1",
 		executionRoot,
 		stateRoot,
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	if contextManagerConfigName(cfg) != "seahorse" {
 		t.Fatalf("default context manager = %q, want seahorse", contextManagerConfigName(cfg))
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
 	wantTools := append([]string(nil), codingRuntimeToolNames...)
@@ -1325,7 +1322,7 @@ func TestNewAgentLoopWithRuntimeProfileRoutesCodingSeahorseToStateRoot(t *testin
 		t.Fatalf("Seahorse coding tools = %v, want %v", got, wantTools)
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
-		t.Fatalf("strict construction created execution root: %v", statErr)
+		t.Fatalf("coding construction created execution root: %v", statErr)
 	}
 	wantDB := filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db")
 	if _, statErr := os.Stat(wantDB); statErr != nil {
@@ -1337,9 +1334,9 @@ func TestNewAgentLoopWithRuntimeProfileRoutesCodingSeahorseToStateRoot(t *testin
 	}
 }
 
-func TestRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing.T) {
+func TestCodingRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing.T) {
 	root := t.TempDir()
-	bindings := make([]RuntimeProfileBinding, 0, 2)
+	bindings := make([]CodingRuntimeBinding, 0, 2)
 	wantPaths := make([]string, 0, 2)
 	for _, spec := range []struct {
 		agentID string
@@ -1349,22 +1346,22 @@ func TestRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing.T) {
 		{agentID: "support", thread: "thread-two"},
 	} {
 		executionRoot := filepath.Join(root, "projects", spec.thread)
-		layout, err := NewRuntimeLayout(
-			RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: spec.thread},
+		layout, err := NewCodingRuntimeLayout(
+			spec.thread,
 			executionRoot,
 			filepath.Join(root, "state", spec.thread),
 			[]string{executionRoot},
 		)
 		if err != nil {
-			t.Fatalf("NewRuntimeLayout(%s) error = %v", spec.thread, err)
+			t.Fatalf("NewCodingRuntimeLayout(%s) error = %v", spec.thread, err)
 		}
-		bindings = append(bindings, RuntimeProfileBinding{AgentID: spec.agentID, Layout: layout})
+		bindings = append(bindings, CodingRuntimeBinding{AgentID: spec.agentID, Layout: layout})
 		wantPaths = append(wantPaths, filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db"))
 	}
-	factory := &trackingRuntimeStoreFactory{}
-	profile, err := NewRuntimeProfileWithStoreFactory(factory, bindings...)
+	factory := &trackingCodingRuntimeStoreFactory{}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(factory, bindings...)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfileWithStoreFactory() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = []config.AgentConfig{
@@ -1372,9 +1369,9 @@ func TestRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing.T) {
 		{ID: "support"},
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
 	if len(factory.seahorsePaths) != len(wantPaths) {
@@ -1397,26 +1394,26 @@ func TestRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing.T) {
 	}
 }
 
-func TestRuntimeProfileStoreConstructionRollsBackEarlierSessions(t *testing.T) {
+func TestCodingRuntimeProfileStoreConstructionRollsBackEarlierSessions(t *testing.T) {
 	root := t.TempDir()
-	bindings := make([]RuntimeProfileBinding, 0, 2)
+	bindings := make([]CodingRuntimeBinding, 0, 2)
 	for _, id := range []string{"main", "support"} {
 		executionRoot := filepath.Join(root, "projects", id)
-		layout, err := NewRuntimeLayout(
-			RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-" + id},
+		layout, err := NewCodingRuntimeLayout(
+			"thread-"+id,
 			executionRoot,
 			filepath.Join(root, "state", id),
 			[]string{executionRoot},
 		)
 		if err != nil {
-			t.Fatalf("NewRuntimeLayout(%s) error = %v", id, err)
+			t.Fatalf("NewCodingRuntimeLayout(%s) error = %v", id, err)
 		}
-		bindings = append(bindings, RuntimeProfileBinding{AgentID: id, Layout: layout})
+		bindings = append(bindings, CodingRuntimeBinding{AgentID: id, Layout: layout})
 	}
-	factory := &trackingRuntimeStoreFactory{failSessionAt: 2}
-	profile, err := NewRuntimeProfileWithStoreFactory(factory, bindings...)
+	factory := &trackingCodingRuntimeStoreFactory{failSessionAt: 2}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(factory, bindings...)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfileWithStoreFactory() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -1425,35 +1422,35 @@ func TestRuntimeProfileStoreConstructionRollsBackEarlierSessions(t *testing.T) {
 		{ID: "support"},
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if !errors.Is(err, errInjectedRuntimeStore) {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want injected failure", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v, want injected failure", err)
 	}
 	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 	}
 	if len(factory.sessions) != 1 || factory.sessions[0].closeCount != 1 {
 		t.Fatalf("opened sessions = %#v, want one store closed exactly once", factory.sessions)
 	}
 }
 
-func TestRuntimeProfileRejectsNilSessionStoreProducts(t *testing.T) {
+func TestCodingRuntimeProfileRejectsNilSessionStoreProducts(t *testing.T) {
 	for _, test := range []struct {
 		name      string
-		configure func(*trackingRuntimeStoreFactory)
+		configure func(*trackingCodingRuntimeStoreFactory)
 	}{
 		{
 			name: "nil interface",
-			configure: func(factory *trackingRuntimeStoreFactory) {
+			configure: func(factory *trackingCodingRuntimeStoreFactory) {
 				factory.nilSession = true
 			},
 		},
 		{
 			name: "typed nil",
-			configure: func(factory *trackingRuntimeStoreFactory) {
+			configure: func(factory *trackingCodingRuntimeStoreFactory) {
 				factory.typedNilSession = true
 			},
 		},
@@ -1461,72 +1458,72 @@ func TestRuntimeProfileRejectsNilSessionStoreProducts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			executionRoot := filepath.Join(root, "project")
-			layout, err := NewRuntimeLayout(
-				RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-nil-session"},
+			layout, err := NewCodingRuntimeLayout(
+				"thread-nil-session",
 				executionRoot,
 				filepath.Join(root, "state"),
 				[]string{executionRoot},
 			)
 			if err != nil {
-				t.Fatalf("NewRuntimeLayout() error = %v", err)
+				t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 			}
-			factory := &trackingRuntimeStoreFactory{}
+			factory := &trackingCodingRuntimeStoreFactory{}
 			test.configure(factory)
-			profile, err := NewRuntimeProfileWithStoreFactory(
+			profile, err := NewCodingRuntimeProfileWithStoreFactory(
 				factory,
-				RuntimeProfileBinding{AgentID: "main", Layout: layout},
+				CodingRuntimeBinding{AgentID: "main", Layout: layout},
 			)
 			if err != nil {
-				t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+				t.Fatalf("NewCodingRuntimeProfileWithStoreFactory() error = %v", err)
 			}
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.ContextManager = "none"
 
-			loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 			if err == nil || !strings.Contains(err.Error(), "nil session store") {
 				if loop != nil {
 					loop.Close()
 				}
-				t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want nil-store rejection", err)
+				t.Fatalf("NewCodingAgentLoop() error = %v, want nil-store rejection", err)
 			}
 			if loop != nil {
-				t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+				t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 			}
 		})
 	}
 }
 
-func TestRuntimeProfileContextConstructionFailureClosesCanonicalStore(t *testing.T) {
+func TestCodingRuntimeProfileContextConstructionFailureClosesCanonicalStore(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-context-failure"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-context-failure",
 		executionRoot,
 		filepath.Join(root, "state"),
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	factory := &trackingRuntimeStoreFactory{failSeahorse: true}
-	profile, err := NewRuntimeProfileWithStoreFactory(
+	factory := &trackingCodingRuntimeStoreFactory{failSeahorse: true}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(
 		factory,
-		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+		CodingRuntimeBinding{AgentID: "main", Layout: layout},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfileWithStoreFactory() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if !errors.Is(err, errInjectedRuntimeStore) {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want injected failure", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v, want injected failure", err)
 	}
 	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 	}
 	if len(factory.sessions) != 1 || factory.sessions[0].closeCount != 1 {
 		t.Fatalf("opened sessions = %#v, want canonical store closed exactly once", factory.sessions)
@@ -1537,63 +1534,63 @@ func TestRuntimeProfileContextConstructionFailureClosesCanonicalStore(t *testing
 	}
 }
 
-func TestRuntimeProfileNilSeahorseEngineClosesCanonicalStore(t *testing.T) {
+func TestCodingRuntimeProfileNilSeahorseEngineClosesCanonicalStore(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-nil-seahorse"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-nil-seahorse",
 		executionRoot,
 		filepath.Join(root, "state"),
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	factory := &trackingRuntimeStoreFactory{nilSeahorse: true}
-	profile, err := NewRuntimeProfileWithStoreFactory(
+	factory := &trackingCodingRuntimeStoreFactory{nilSeahorse: true}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(
 		factory,
-		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+		CodingRuntimeBinding{AgentID: "main", Layout: layout},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfileWithStoreFactory() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil || !strings.Contains(err.Error(), "nil Seahorse engine") {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want nil-engine rejection", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v, want nil-engine rejection", err)
 	}
 	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 	}
 	if len(factory.sessions) != 1 || factory.sessions[0].closeCount != 1 {
 		t.Fatalf("opened sessions = %#v, want canonical store closed exactly once", factory.sessions)
 	}
 }
 
-func TestRuntimeProfileLaterContextFailureClosesPartialManager(t *testing.T) {
+func TestCodingRuntimeProfileLaterContextFailureClosesPartialManager(t *testing.T) {
 	root := t.TempDir()
-	bindings := make([]RuntimeProfileBinding, 0, 2)
+	bindings := make([]CodingRuntimeBinding, 0, 2)
 	for _, id := range []string{"main", "support"} {
 		executionRoot := filepath.Join(root, "projects", id)
-		layout, err := NewRuntimeLayout(
-			RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-context-" + id},
+		layout, err := NewCodingRuntimeLayout(
+			"thread-context-"+id,
 			executionRoot,
 			filepath.Join(root, "state", id),
 			[]string{executionRoot},
 		)
 		if err != nil {
-			t.Fatalf("NewRuntimeLayout(%s) error = %v", id, err)
+			t.Fatalf("NewCodingRuntimeLayout(%s) error = %v", id, err)
 		}
-		bindings = append(bindings, RuntimeProfileBinding{AgentID: id, Layout: layout})
+		bindings = append(bindings, CodingRuntimeBinding{AgentID: id, Layout: layout})
 	}
-	factory := &trackingRuntimeStoreFactory{failSeahorseAt: 2}
-	profile, err := NewRuntimeProfileWithStoreFactory(factory, bindings...)
+	factory := &trackingCodingRuntimeStoreFactory{failSeahorseAt: 2}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(factory, bindings...)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfileWithStoreFactory() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = []config.AgentConfig{
@@ -1601,15 +1598,15 @@ func TestRuntimeProfileLaterContextFailureClosesPartialManager(t *testing.T) {
 		{ID: "support"},
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if !errors.Is(err, errInjectedRuntimeStore) {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want injected failure", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v, want injected failure", err)
 	}
 	if loop != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() loop = %T, want nil", loop)
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
 	}
 	if len(factory.sessions) != 2 {
 		t.Fatalf("opened sessions = %d, want 2", len(factory.sessions))
@@ -1631,35 +1628,35 @@ func TestRuntimeProfileLaterContextFailureClosesPartialManager(t *testing.T) {
 	}
 }
 
-func TestRuntimeProfileRejectsCustomSeahorsePathAndRollsBack(t *testing.T) {
+func TestCodingRuntimeProfileRejectsCustomSeahorsePathAndRollsBack(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-custom-db"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-custom-db",
 		executionRoot,
 		filepath.Join(root, "state"),
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	factory := &trackingRuntimeStoreFactory{}
-	profile, err := NewRuntimeProfileWithStoreFactory(
+	factory := &trackingCodingRuntimeStoreFactory{}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(
 		factory,
-		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+		CodingRuntimeBinding{AgentID: "main", Layout: layout},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfileWithStoreFactory() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManagerConfig = []byte(`{"dbPath":"/tmp/not-owner-scoped.db"}`)
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil || !strings.Contains(err.Error(), "custom dbPath") {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want custom-dbPath rejection", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v, want custom-dbPath rejection", err)
 	}
 	if len(factory.sessions) != 1 || factory.sessions[0].closeCount != 1 {
 		t.Fatalf("opened sessions = %#v, want canonical store closed exactly once", factory.sessions)
@@ -1669,36 +1666,36 @@ func TestRuntimeProfileRejectsCustomSeahorsePathAndRollsBack(t *testing.T) {
 	}
 }
 
-func TestRuntimeProfileRejectsUnsupportedContextManagerBeforeStores(t *testing.T) {
+func TestCodingRuntimeProfileRejectsUnsupportedContextManagerBeforeStores(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
 	stateRoot := filepath.Join(root, "state")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-unsupported-context"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-unsupported-context",
 		executionRoot,
 		stateRoot,
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	factory := &trackingRuntimeStoreFactory{}
-	profile, err := NewRuntimeProfileWithStoreFactory(
+	factory := &trackingCodingRuntimeStoreFactory{}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(
 		factory,
-		RuntimeProfileBinding{AgentID: "main", Layout: layout},
+		CodingRuntimeBinding{AgentID: "main", Layout: layout},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfileWithStoreFactory() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfileWithStoreFactory() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "custom"
 
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
-	if err == nil || !strings.Contains(err.Error(), "no owner-scoped storage contract") {
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err == nil || !strings.Contains(err.Error(), "no thread-scoped storage contract") {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v, want unsupported-context rejection", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v, want unsupported-context rejection", err)
 	}
 	if factory.sessionCalls != 0 || len(factory.seahorsePaths) != 0 {
 		t.Fatalf(
@@ -1715,82 +1712,28 @@ func TestRuntimeProfileRejectsUnsupportedContextManagerBeforeStores(t *testing.T
 	}
 }
 
-func TestNewAgentLoopWithRuntimeProfilePreservesPersonalCatalogueAndExternalState(t *testing.T) {
-	root := t.TempDir()
-	executionRoot := filepath.Join(root, "personal-project")
-	stateRoot := filepath.Join(root, "personal-state")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: "main"},
-		executionRoot,
-		stateRoot,
-		[]string{executionRoot},
-	)
-	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
-	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
-	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ContextManager = "none"
-	legacyWorkspace := filepath.Join(root, "legacy-workspace")
-	cfg.Agents.Defaults.Workspace = legacyWorkspace
-	legacy := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
-	t.Cleanup(legacy.Close)
-	wantTools := legacy.GetRegistry().GetDefaultAgent().Tools.List()
-
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
-	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
-	}
-	t.Cleanup(loop.Close)
-	gotTools := loop.GetRegistry().GetDefaultAgent().Tools.List()
-	if !slices.Equal(gotTools, wantTools) {
-		t.Fatalf("strict personal tools = %v, want legacy catalog %v", gotTools, wantTools)
-	}
-	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
-		t.Fatalf("strict personal construction created execution-root state: %v", statErr)
-	}
-	if err := loop.state.SetLastChannel("test"); err != nil {
-		t.Fatalf("persist strict personal state: %v", err)
-	}
-	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
-		t.Fatalf("strict personal state persistence wrote under execution root: %v", statErr)
-	}
-	for _, path := range []string{
-		layout.StatePaths().SessionsRoot,
-		layout.StatePaths().RuntimeStateFile,
-		filepath.Join(layout.StatePaths().OperationalRoot, "tmp"),
-	} {
-		if _, statErr := os.Stat(path); statErr != nil {
-			t.Fatalf("strict personal path %q missing: %v", path, statErr)
-		}
-	}
-}
-
-func TestRuntimeProfileRejectsHotReloadWithoutMutation(t *testing.T) {
+func TestCodingRuntimeProfileRejectsHotReloadWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
 	stateRoot := filepath.Join(root, "state")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-reload"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-reload",
 		executionRoot,
 		stateRoot,
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
 	originalRegistry := loop.GetRegistry()
@@ -1800,14 +1743,15 @@ func TestRuntimeProfileRejectsHotReloadWithoutMutation(t *testing.T) {
 		t.Fatal("ReloadProviderAndConfig() error = nil, want restart requirement")
 	}
 	if loop.GetRegistry() != originalRegistry {
-		t.Fatal("rejected reload replaced the runtime-profile registry")
+		t.Fatal("rejected reload replaced the coding-profile registry")
 	}
 	agent := loop.GetRegistry().GetDefaultAgent()
 	if agent == nil {
 		t.Fatal("default agent is nil after rejected reload")
 	}
-	if agent.Layout.Owner() != layout.Owner() || agent.Layout.StateRoot() != layout.StateRoot() {
-		t.Fatalf("layout after rejected reload = %#v, want %#v", agent.Layout, layout)
+	if agent.CodingLayout.ThreadID() != layout.ThreadID() ||
+		agent.CodingLayout.StateRoot() != layout.StateRoot() {
+		t.Fatalf("layout after rejected reload = %#v, want %#v", agent.CodingLayout, layout)
 	}
 	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
 		t.Fatalf("coding tools after rejected reload = %v, want %v", got, codingRuntimeToolNames)
@@ -1820,18 +1764,18 @@ func TestRuntimeProfileRejectsHotReloadWithoutMutation(t *testing.T) {
 func TestCodingRuntimeProfileKeepsMCPIsolatedWhenReloadRejected(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-mcp"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-mcp",
 		executionRoot,
 		filepath.Join(root, "state"),
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
@@ -1839,9 +1783,9 @@ func TestCodingRuntimeProfileKeepsMCPIsolatedWhenReloadRejected(t *testing.T) {
 	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 		"must-not-start": {Enabled: true, Command: filepath.Join(root, "missing-mcp-server")},
 	}
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
 
@@ -1870,22 +1814,22 @@ func TestCodingRuntimeProfileIsolatedSkillsKeepExternalMemory(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
 	stateRoot := filepath.Join(root, "state")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-skills"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-skills",
 		executionRoot,
 		stateRoot,
 		[]string{executionRoot},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
-	loop, err := NewAgentLoopWithRuntimeProfile(
+	loop, err := NewCodingAgentLoop(
 		cfg,
 		bus.NewMessageBus(),
 		&mockProvider{},
@@ -1893,7 +1837,7 @@ func TestCodingRuntimeProfileIsolatedSkillsKeepExternalMemory(t *testing.T) {
 		WithIsolatedSkillBootstrap(),
 	)
 	if err != nil {
-		t.Fatalf("NewAgentLoopWithRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
 	t.Cleanup(loop.Close)
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {
@@ -1995,7 +1939,7 @@ func TestCodingPromptUsesEachCrossProviderFallbackIdentity(t *testing.T) {
 }
 
 func configureCodingPromptTestAgent(agent *AgentInstance, threadID string) {
-	agent.ContextBuilder.promptProfile = RuntimePromptProfileCoding
+	agent.ContextBuilder.codingPrompt = true
 	agent.ContextBuilder.codingContext = codingPromptTestContext(agent, threadID)
 	agent.ContextBuilder.InvalidateCache()
 }
@@ -2027,111 +1971,66 @@ func assertCodingProviderIdentity(
 	}
 }
 
-func TestNewRuntimeProfileValidatesBindings(t *testing.T) {
+func TestNewCodingRuntimeProfileValidatesBindings(t *testing.T) {
 	root := t.TempDir()
-	personal, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: "main"},
-		filepath.Join(root, "personal-project"),
-		filepath.Join(root, "personal-state"),
-		[]string{filepath.Join(root, "personal-project")},
-	)
-	if err != nil {
-		t.Fatalf("NewRuntimeLayout(personal) error = %v", err)
+	if _, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main"}); err == nil ||
+		!strings.Contains(err.Error(), "thread ID") {
+		t.Fatalf("NewCodingRuntimeProfile(empty layout) error = %v", err)
 	}
-	coding, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-1"},
+	coding, err := NewCodingRuntimeLayout(
+		"thread-1",
 		filepath.Join(root, "coding-project"),
 		filepath.Join(root, "coding-state"),
 		[]string{filepath.Join(root, "coding-project")},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout(coding) error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout(coding) error = %v", err)
 	}
 
-	personalBinding := RuntimeProfileBinding{AgentID: "main", Layout: personal}
-	if _, err = NewRuntimeProfile(personalBinding, personalBinding); err == nil {
-		t.Fatal("NewRuntimeProfile(duplicate) error = nil")
+	codingBinding := CodingRuntimeBinding{AgentID: "main", Layout: coding}
+	if _, err = NewCodingRuntimeProfile(codingBinding); err != nil {
+		t.Fatalf("NewCodingRuntimeProfile(coding) error = %v", err)
 	}
-	if _, err = NewRuntimeProfile(RuntimeProfileBinding{AgentID: "support", Layout: personal}); err == nil {
-		t.Fatal("NewRuntimeProfile(mismatched personal owner) error = nil")
+	if _, err = NewCodingRuntimeProfile(codingBinding, codingBinding); err == nil {
+		t.Fatal("NewCodingRuntimeProfile(duplicate) error = nil")
 	}
-	if _, err = NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: coding}); err != nil {
-		t.Fatalf("NewRuntimeProfile(coding) error = %v", err)
-	}
-	if _, err = NewRuntimeProfile(
-		RuntimeProfileBinding{AgentID: "main", Layout: personal},
-		RuntimeProfileBinding{AgentID: "coding", Layout: coding},
-	); err == nil {
-		t.Fatal("NewRuntimeProfile(mixed owners) error = nil")
+	if _, err = NewCodingRuntimeProfile(
+		codingBinding,
+		CodingRuntimeBinding{AgentID: "support", Layout: coding},
+	); err == nil || !strings.Contains(err.Error(), "thread \"thread-1\" is bound to agents") {
+		t.Fatalf("NewCodingRuntimeProfile(shared thread) error = %v", err)
 	}
 }
 
-func TestRuntimeProfileRequiresExactConfiguredAgentSet(t *testing.T) {
+func TestCodingRuntimeProfileRequiresExactConfiguredAgentSet(t *testing.T) {
 	root := t.TempDir()
-	newPersonalLayout := func(id string) RuntimeLayout {
+	newCodingLayout := func(id string) CodingRuntimeLayout {
 		t.Helper()
-		layout, err := NewRuntimeLayout(
-			RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: id},
+		layout, err := NewCodingRuntimeLayout(
+			"thread-"+id,
 			filepath.Join(root, id+"-project"),
 			filepath.Join(root, id+"-state"),
 			[]string{filepath.Join(root, id+"-project")},
 		)
 		if err != nil {
-			t.Fatalf("NewRuntimeLayout(%s) error = %v", id, err)
+			t.Fatalf("NewCodingRuntimeLayout(%s) error = %v", id, err)
 		}
 		return layout
 	}
-	profile, err := NewRuntimeProfile(
-		RuntimeProfileBinding{AgentID: "main", Layout: newPersonalLayout("main")},
-		RuntimeProfileBinding{AgentID: "support", Layout: newPersonalLayout("support")},
+	profile, err := NewCodingRuntimeProfile(
+		CodingRuntimeBinding{AgentID: "main", Layout: newCodingLayout("main")},
+		CodingRuntimeBinding{AgentID: "support", Layout: newCodingLayout("support")},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
-	if _, err = newAgentRegistryWithRuntimeProfile(cfg, &mockProvider{}, profile); err == nil {
-		t.Fatal("newAgentRegistryWithRuntimeProfile(extra binding) error = nil")
+	if _, err = newAgentRegistryWithCodingRuntimeProfile(cfg, &mockProvider{}, profile); err == nil {
+		t.Fatal("newAgentRegistryWithCodingRuntimeProfile(extra binding) error = nil")
 	}
 	cfg.Agents.List = []config.AgentConfig{{ID: "main"}, {ID: " MAIN "}}
-	if _, err = newAgentRegistryWithRuntimeProfile(cfg, &mockProvider{}, profile); err == nil {
-		t.Fatal("newAgentRegistryWithRuntimeProfile(duplicate configured ID) error = nil")
-	}
-}
-
-func TestStrictPersonalRuntimeRejectsMultipleOwnersBeforeConstruction(t *testing.T) {
-	root := t.TempDir()
-	bindings := make([]RuntimeProfileBinding, 0, 2)
-	for _, agentID := range []string{"main", "support"} {
-		executionRoot := filepath.Join(root, agentID+"-project")
-		layout, err := NewRuntimeLayout(
-			RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: agentID},
-			executionRoot,
-			filepath.Join(root, agentID+"-state"),
-			[]string{executionRoot},
-		)
-		if err != nil {
-			t.Fatalf("NewRuntimeLayout(%s) error = %v", agentID, err)
-		}
-		bindings = append(bindings, RuntimeProfileBinding{AgentID: agentID, Layout: layout})
-	}
-	profile, err := NewRuntimeProfile(bindings...)
-	if err != nil {
-		t.Fatalf("NewRuntimeProfile() error = %v", err)
-	}
-	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ContextManager = "none"
-	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}, {ID: "support"}}
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
-	if err == nil || !strings.Contains(err.Error(), "exactly one owner") {
-		if loop != nil {
-			loop.Close()
-		}
-		t.Fatalf("NewAgentLoopWithRuntimeProfile(multi-personal) error = %v", err)
-	}
-	for _, binding := range bindings {
-		if _, statErr := os.Stat(binding.Layout.StateRoot()); !os.IsNotExist(statErr) {
-			t.Fatalf("rejected strict personal profile created state root %q: %v", binding.Layout.StateRoot(), statErr)
-		}
+	if _, err = newAgentRegistryWithCodingRuntimeProfile(cfg, &mockProvider{}, profile); err == nil {
+		t.Fatal("newAgentRegistryWithCodingRuntimeProfile(duplicate configured ID) error = nil")
 	}
 }

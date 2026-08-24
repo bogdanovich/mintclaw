@@ -34,7 +34,7 @@ type RuntimeToolDecoratorFactory func(
 ) (toolshared.Tool, error)
 
 func (al *AgentLoop) RegisterTool(tool toolshared.Tool) {
-	if al == nil || al.hasCodingToolProfile() {
+	if al == nil || al.usesCodingProfile() {
 		return
 	}
 	registry := al.GetRegistry()
@@ -45,7 +45,7 @@ func (al *AgentLoop) RegisterRuntimeTool(name string, factory RuntimeToolFactory
 	if al == nil {
 		return fmt.Errorf("agent loop is nil")
 	}
-	if al.hasCodingToolProfile() {
+	if al.usesCodingProfile() {
 		return fmt.Errorf("coding runtime profiles do not admit runtime tools")
 	}
 	name = strings.TrimSpace(name)
@@ -77,7 +77,7 @@ func (al *AgentLoop) RegisterRuntimeAgentTool(name string, factory RuntimeAgentT
 	if al == nil {
 		return fmt.Errorf("agent loop is nil")
 	}
-	if al.hasCodingToolProfile() {
+	if al.usesCodingProfile() {
 		return fmt.Errorf("coding runtime profiles do not admit runtime tools")
 	}
 	name = strings.TrimSpace(name)
@@ -189,7 +189,7 @@ func (al *AgentLoop) RegisterRuntimeToolDecorator(name string, factory RuntimeTo
 	if al == nil {
 		return fmt.Errorf("agent loop is nil")
 	}
-	if al.hasCodingToolProfile() {
+	if al.usesCodingProfile() {
 		return fmt.Errorf("coding runtime profiles do not admit runtime tool decorators")
 	}
 	name = strings.TrimSpace(name)
