@@ -36,6 +36,11 @@ delegated to `Pipeline`.
 This keeps same-session messages serialized while allowing different sessions
 to run concurrently up to the configured worker limit.
 
+`AgentLoop.Run` constructs one run-scoped `inboundTurnCoordinator` before the
+receive loop and reuses it for every inbound message. The coordinator has no
+reload-generation state, so retaining another copy on `AgentLoop` would only
+duplicate ownership.
+
 ## Turn Launch Boundary
 
 `processMessage` is the last host-side step before turn execution. It prepares
@@ -93,6 +98,10 @@ synchronous delivery, hooks, and suspension retain interfaces because tests
 provide real substitutes. Fallback execution and asynchronous tool completion
 use their concrete generation owners; fallback-attempt observation is a direct
 capability rather than an optional type assertion.
+
+Reasoning publication is owned by the pipeline's concrete component. There is
+no test-only `AgentLoop` component factory or reasoning pass-through façade;
+component behavior is tested at its actual owner.
 
 ## Session Claiming
 
