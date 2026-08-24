@@ -3453,7 +3453,7 @@ func TestApprovalPromptAndAnswerUseFixedPolicyChoices(t *testing.T) {
 		ApprovalAction: "Run a protected deployment command?",
 	}
 	prompt := renderInteractionPrompt(record)
-	want := "deploy\nRun a protected deployment command?\n\n" +
+	want := "`deploy`\nAllow this action?\n\nExact action: Run a protected deployment command?\n\n" +
 		"`/answer APR123 allow_once`\n`/answer APR123 deny`"
 	if prompt != want {
 		t.Fatalf("approval prompt = %q, want %q", prompt, want)
@@ -3473,6 +3473,41 @@ func TestApprovalPromptAndAnswerUseFixedPolicyChoices(t *testing.T) {
 	}
 	if _, err = parseInteractionAnswer(record, "always", "message-invalid"); err == nil {
 		t.Fatal("approval parser accepted a persistent grant")
+	}
+}
+
+func TestApprovalPromptIncludesOnlyUnambiguousExternalObjective(t *testing.T) {
+	record := interactions.Record{
+		Kind: interactions.KindApproval, ShortID: "APR123",
+		Origin: interactions.Origin{
+			ToolName: "browser_act",
+			ObjectiveChecklist: []interactions.ObjectiveChecklistItem{
+				{ID: "objective_1", Item: "Find the expired listing", Kind: "result"},
+				{
+					ID: "objective_2", Item: "Republish Lenovo ThinkVision LT1421 at $25",
+					Kind: "external_action",
+				},
+			},
+		},
+		ApprovalAction: "Click button \"publish\" on https://post.craigslist.org; effect: `external_commit`",
+	}
+	prompt := renderInteractionPrompt(record)
+	for _, required := range []string{
+		"`browser_act`",
+		"Requested outcome: Republish Lenovo ThinkVision LT1421 at $25",
+		"Exact action: Click button \"publish\" on https://post.craigslist.org",
+		"effect: `external_commit`",
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("approval prompt omitted %q: %q", required, prompt)
+		}
+	}
+
+	record.Origin.ObjectiveChecklist = append(record.Origin.ObjectiveChecklist, interactions.ObjectiveChecklistItem{
+		ID: "objective_3", Item: "Publish a second listing", Kind: "external_action",
+	})
+	if ambiguous := renderInteractionPrompt(record); strings.Contains(ambiguous, "Requested outcome:") {
+		t.Fatalf("ambiguous approval prompt selected an objective: %q", ambiguous)
 	}
 }
 

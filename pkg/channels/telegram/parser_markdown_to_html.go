@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var (
 	reEscapedBlockquote = regexp.MustCompile(`(?m)^&gt;\s*(.*)$`)
 	reLink              = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
 	reBoldUnder         = regexp.MustCompile(`__(.+?)__`)
-	reItalic            = regexp.MustCompile(`_([^_]+)_`)
+	reItalic            = regexp.MustCompile(`_([^_\n]+)_`)
 	reStrike            = regexp.MustCompile(`~~(.+?)~~`)
 	reListItem          = regexp.MustCompile(`^[-*]\s+`)
 	reCodeBlock         = regexp.MustCompile("```[\\w]*\\n?([\\s\\S]*?)```")
@@ -40,13 +42,7 @@ func markdownToTelegramHTML(text string) string {
 	text = escapeHTML(text)
 	text = reBoldStar.ReplaceAllString(text, "<b>$1</b>")
 	text = reBoldUnder.ReplaceAllString(text, "<b>$1</b>")
-	text = reItalic.ReplaceAllStringFunc(text, func(s string) string {
-		match := reItalic.FindStringSubmatch(s)
-		if len(match) < 2 {
-			return s
-		}
-		return "<i>" + match[1] + "</i>"
-	})
+	text = replaceMarkdownItalics(text)
 	text = reStrike.ReplaceAllString(text, "<s>$1</s>")
 	text = reListItem.ReplaceAllString(text, "• ")
 
@@ -90,6 +86,51 @@ func markdownToTelegramHTML(text string) string {
 	text = reEscapedBlockquote.ReplaceAllString(text, "<blockquote>$1</blockquote>")
 
 	return text
+}
+
+func replaceMarkdownItalics(text string) string {
+	var builder strings.Builder
+	cursor := 0
+	searchFrom := 0
+	for searchFrom < len(text) {
+		match := reItalic.FindStringSubmatchIndex(text[searchFrom:])
+		if match == nil {
+			break
+		}
+		start := searchFrom + match[0]
+		end := searchFrom + match[1]
+		if !markdownUnderscoreBoundaries(text, start, end) {
+			searchFrom = start + 1
+			continue
+		}
+		builder.WriteString(text[cursor:start])
+		builder.WriteString("<i>")
+		builder.WriteString(text[searchFrom+match[2] : searchFrom+match[3]])
+		builder.WriteString("</i>")
+		cursor = end
+		searchFrom = end
+	}
+	if cursor == 0 {
+		return text
+	}
+	builder.WriteString(text[cursor:])
+	return builder.String()
+}
+
+func markdownUnderscoreBoundaries(text string, start, end int) bool {
+	if start > 0 {
+		previous, _ := utf8.DecodeLastRuneInString(text[:start])
+		if unicode.IsLetter(previous) || unicode.IsNumber(previous) {
+			return false
+		}
+	}
+	if end < len(text) {
+		next, _ := utf8.DecodeRuneInString(text[end:])
+		if unicode.IsLetter(next) || unicode.IsNumber(next) {
+			return false
+		}
+	}
+	return true
 }
 
 type linkMatch struct {

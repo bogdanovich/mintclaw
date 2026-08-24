@@ -597,8 +597,14 @@ func interactionHasFinalDelivery(record interactions.Record, deliveryID string) 
 func renderInteractionPrompt(record interactions.Record) string {
 	var builder strings.Builder
 	if record.Kind == interactions.KindApproval {
+		builder.WriteString("`")
 		builder.WriteString(strings.TrimSpace(record.Origin.ToolName))
-		builder.WriteString("\n")
+		builder.WriteString("`\nAllow this action?")
+		if objective := soleExternalActionObjective(record.Origin.ObjectiveChecklist); objective != "" {
+			builder.WriteString("\n\nRequested outcome: ")
+			builder.WriteString(objective)
+		}
+		builder.WriteString("\n\nExact action: ")
 		builder.WriteString(strings.TrimSpace(record.ApprovalAction))
 		fmt.Fprintf(
 			&builder,
@@ -630,6 +636,22 @@ func renderInteractionPrompt(record interactions.Record) string {
 		fmt.Fprintf(&builder, "\n`%s: …`", question.ID)
 	}
 	return builder.String()
+}
+
+func soleExternalActionObjective(checklist []interactions.ObjectiveChecklistItem) string {
+	objective := ""
+	externalActions := 0
+	for _, item := range checklist {
+		if strings.TrimSpace(item.Kind) != "external_action" {
+			continue
+		}
+		externalActions++
+		if externalActions > 1 {
+			return ""
+		}
+		objective = strings.TrimSpace(item.Item)
+	}
+	return objective
 }
 
 func renderSingleInteractionQuestion(builder *strings.Builder, question interactions.Question) {

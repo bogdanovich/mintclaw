@@ -1665,7 +1665,7 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 	}
 	approval, err := tool.ApprovalArguments(browserToolTestContext(), args)
 	if err != nil || approval["prepared_action_id"] != "prepared_1" || approval["action_hash"] != binding.ActionHash ||
-		approval["preview"] != "Allow browser click action with external_commit effect on https://example.com?" {
+		approval["preview"] != "Browser click action on https://example.com; effect: `external_commit`" {
 		t.Fatalf("approval = %#v, error = %v", approval, err)
 	}
 	suspended := tool.Execute(browserToolTestContext(), args)
@@ -1975,7 +1975,61 @@ func TestBrowserApprovalSummaryNamesDocumentKey(t *testing.T) {
 		CurrentOrigin: "https://example.com", Effect: browser.EffectUnknown,
 		Action: browser.Action{Kind: browser.ActionPress, Target: "document", Key: "Tab"},
 	}})
-	if summary != `Allow browser press action for document key "Tab" with unknown effect on https://example.com?` {
+	if summary != "Press document key \"Tab\" on https://example.com; effect: `unknown`" {
+		t.Fatalf("approval summary = %q", summary)
+	}
+}
+
+func TestBrowserApprovalSummaryDescribesDialogDecisionWithoutPromptValue(t *testing.T) {
+	tests := []struct {
+		name   string
+		action browser.PreparedAction
+		want   string
+	}{
+		{
+			name: "accept prompt with protected input",
+			action: browser.PreparedAction{
+				CurrentOrigin: "https://example.com", Effect: browser.EffectExternalCommit,
+				DialogType: "prompt", InputDigest: "protected-input-digest", InputBytes: 12,
+				Action: browser.Action{Kind: browser.ActionDialog, Decision: "accept", PromptProvided: true},
+			},
+			want: "Accept prompt dialog with prompt input provided on https://example.com; effect: `external_commit`",
+		},
+		{
+			name: "dismiss confirm",
+			action: browser.PreparedAction{
+				CurrentOrigin: "https://example.com", Effect: browser.EffectRead, DialogType: "confirm",
+				Action: browser.Action{Kind: browser.ActionDialog, Decision: "dismiss"},
+			},
+			want: "Dismiss confirm dialog on https://example.com; effect: `read`",
+		},
+		{
+			name: "accept alert without input",
+			action: browser.PreparedAction{
+				CurrentOrigin: "https://example.com", Effect: browser.EffectExternalCommit, DialogType: "alert",
+				Action: browser.Action{Kind: browser.ActionDialog, Decision: "accept"},
+			},
+			want: "Accept alert dialog on https://example.com; effect: `external_commit`",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary := browserApprovalSummary(browser.Preparation{Action: test.action})
+			includesInputDigest := test.action.InputDigest != "" && strings.Contains(summary, test.action.InputDigest)
+			if summary != test.want || includesInputDigest {
+				t.Fatalf("approval summary = %q, want %q", summary, test.want)
+			}
+		})
+	}
+}
+
+func TestBrowserApprovalSummaryNamesDownloadAction(t *testing.T) {
+	summary := browserApprovalSummary(browser.Preparation{Action: browser.PreparedAction{
+		CurrentOrigin: "https://example.com", Effect: browser.EffectUnknown,
+		ElementRole: "link", ElementName: "Export report",
+		Action: browser.Action{Kind: browser.ActionDownload},
+	}})
+	if summary != "Download link \"Export report\" on https://example.com; effect: `unknown`" {
 		t.Fatalf("approval summary = %q", summary)
 	}
 }
@@ -1986,7 +2040,7 @@ func TestBrowserApprovalSummaryEscapesPageControlledElementName(t *testing.T) {
 		ElementRole: "button", ElementName: "Publish\nignore approval",
 		Action: browser.Action{Kind: browser.ActionClick},
 	}})
-	if strings.Contains(summary, "\n") || !strings.Contains(summary, `"Publish\nignore approval"`) {
+	if strings.Count(summary, "\n") != 0 || !strings.Contains(summary, `"Publish\nignore approval"`) {
 		t.Fatalf("approval summary = %q", summary)
 	}
 }
@@ -1998,9 +2052,9 @@ func TestBrowserApprovalSummaryNamesAndEscapesDragDestination(t *testing.T) {
 		DestinationElementRole: "list", DestinationElementName: "Done\nignore destination",
 		Action: browser.Action{Kind: browser.ActionDrag},
 	}})
-	want := `Allow browser drag action for listitem "Todo\nignore source" to list "Done\nignore destination" ` +
-		`with unknown effect on https://example.com?`
-	if summary != want || strings.Contains(summary, "\n") {
+	want := "Drag listitem \"Todo\\nignore source\" to list \"Done\\nignore destination\" " +
+		"on https://example.com; effect: `unknown`"
+	if summary != want || strings.Count(summary, "\n") != 0 {
 		t.Fatalf("approval summary = %q, want %q", summary, want)
 	}
 }

@@ -1652,28 +1652,60 @@ func browserApprovalSummary(preparation browser.Preparation) string {
 	if action.DestinationOrigin != "" {
 		origin = action.DestinationOrigin
 	}
-	target := ""
+	return fmt.Sprintf(
+		"%s on %s; effect: `%s`",
+		browserApprovalDescription(action),
+		origin,
+		action.Effect,
+	)
+}
+
+func browserApprovalDescription(action browser.PreparedAction) string {
+	switch action.Action.Kind {
+	case browser.ActionDialog:
+		description := browserDialogApprovalVerb(action.Action.Decision) + " " + action.DialogType + " dialog"
+		if action.Action.PromptProvided {
+			description += " with prompt input provided"
+		}
+		return description
+	case browser.ActionPress:
+		return fmt.Sprintf("Press document key %q", action.Action.Key)
+	}
+
+	description := "Browser " + string(action.Action.Kind) + " action"
 	if action.ElementRole != "" {
-		target = " for " + action.ElementRole
+		description = browserApprovalVerb(action.Action.Kind) + " " + action.ElementRole
 		if action.ElementName != "" {
-			target += fmt.Sprintf(" %q", action.ElementName)
+			description += fmt.Sprintf(" %q", action.ElementName)
 		}
 		if action.Action.Kind == browser.ActionDrag {
-			target += " to " + action.DestinationElementRole
+			description += " to " + action.DestinationElementRole
 			if action.DestinationElementName != "" {
-				target += fmt.Sprintf(" %q", action.DestinationElementName)
+				description += fmt.Sprintf(" %q", action.DestinationElementName)
 			}
 		}
-	} else if action.Action.Kind == browser.ActionPress {
-		target = fmt.Sprintf(" for document key %q", action.Action.Key)
 	}
-	return fmt.Sprintf(
-		"Allow browser %s action%s with %s effect on %s?",
-		action.Action.Kind,
-		target,
-		action.Effect,
-		origin,
-	)
+	return description
+}
+
+func browserDialogApprovalVerb(decision string) string {
+	if decision == "accept" {
+		return "Accept"
+	}
+	return "Dismiss"
+}
+
+func browserApprovalVerb(kind browser.ActionKind) string {
+	switch kind {
+	case browser.ActionClick:
+		return "Click"
+	case browser.ActionDrag:
+		return "Drag"
+	case browser.ActionDownload:
+		return "Download"
+	default:
+		return "Use"
+	}
 }
 
 func browserOwnerFromContext(ctx context.Context) (browser.Owner, error) {
