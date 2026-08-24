@@ -72,6 +72,7 @@ type BrowserProfilePolicy struct {
 	// missing runtime.
 	browserExecutablePath string
 	browserExecutableHash string
+	browserExecutableInfo os.FileInfo
 }
 
 // DriverLauncherDirectory returns the normalized launcher's directory for the
@@ -171,7 +172,8 @@ func normalizeBrowserProfile(
 			)
 		}
 	}
-	profile.DriverArguments, profile.browserExecutablePath, profile.browserExecutableHash, err = normalizeBrowserRuntimeExecutable(
+	profile.DriverArguments, profile.browserExecutablePath, profile.browserExecutableHash,
+		profile.browserExecutableInfo, err = normalizeBrowserRuntimeExecutable(
 		profile.DriverArguments,
 		baseDir,
 	)
@@ -314,7 +316,7 @@ func resolveBrowserExecutable(baseDir, configured string) (string, string, error
 func normalizeBrowserRuntimeExecutable(
 	arguments []string,
 	baseDir string,
-) ([]string, string, string, error) {
+) ([]string, string, string, os.FileInfo, error) {
 	normalized := append([]string(nil), arguments...)
 	configuredIndex := -1
 	configured := ""
@@ -324,13 +326,13 @@ func normalizeBrowserRuntimeExecutable(
 		switch {
 		case argument == "--executable-path":
 			if configuredIndex >= 0 || index+1 >= len(normalized) || normalized[index+1] == "" {
-				return nil, "", "", errors.New("browser executable path is invalid")
+				return nil, "", "", nil, errors.New("browser executable path is invalid")
 			}
 			configuredIndex, configured = index+1, normalized[index+1]
 			index++
 		case strings.HasPrefix(argument, "--executable-path="):
 			if configuredIndex >= 0 {
-				return nil, "", "", errors.New("browser executable path is duplicated")
+				return nil, "", "", nil, errors.New("browser executable path is duplicated")
 			}
 			configuredIndex = index
 			configured = strings.TrimPrefix(argument, "--executable-path=")
@@ -338,43 +340,43 @@ func normalizeBrowserRuntimeExecutable(
 		}
 	}
 	if configuredIndex < 0 {
-		return normalized, "", "", nil
+		return normalized, "", "", nil, nil
 	}
 	executable, _, err := resolveBrowserExecutable(baseDir, configured)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("validate browser executable path: %w", err)
+		return nil, "", "", nil, fmt.Errorf("validate browser executable path: %w", err)
 	}
-	digest, err := browserExecutableDigest(executable)
+	digest, info, err := browserExecutableDigest(executable)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("validate browser executable path: %w", err)
+		return nil, "", "", nil, fmt.Errorf("validate browser executable path: %w", err)
 	}
 	if joined {
 		normalized[configuredIndex] = "--executable-path=" + executable
 	} else {
 		normalized[configuredIndex] = executable
 	}
-	return normalized, executable, digest, nil
+	return normalized, executable, digest, info, nil
 }
 
-func browserExecutableDigest(path string) (string, error) {
+func browserExecutableDigest(path string) (string, os.FileInfo, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", errors.New("browser executable is unavailable")
+		return "", nil, errors.New("browser executable is unavailable")
 	}
 	defer func() { _ = file.Close() }()
 	before, err := file.Stat()
 	if err != nil || validateBrowserExecutableFile(before) != nil {
-		return "", errors.New("browser executable is not a trusted regular file")
+		return "", nil, errors.New("browser executable is not a trusted regular file")
 	}
 	hasher := sha256.New()
 	if _, err = io.Copy(hasher, file); err != nil {
-		return "", errors.New("browser executable could not be verified")
+		return "", nil, errors.New("browser executable could not be verified")
 	}
 	after, err := os.Stat(path)
 	if err != nil || !os.SameFile(before, after) || validateBrowserExecutableFile(after) != nil {
-		return "", errors.New("browser executable identity changed")
+		return "", nil, errors.New("browser executable identity changed")
 	}
-	return hex.EncodeToString(hasher.Sum(nil)), nil
+	return hex.EncodeToString(hasher.Sum(nil)), after, nil
 }
 
 func verifyBrowserExecutableDigest(path, expected string) error {
@@ -403,8 +405,9 @@ func verifyBrowserProfileRuntimeIdentity(profile BrowserProfilePolicy) error {
 		if err != nil || executable != profile.browserExecutablePath {
 			return errors.New("browser runtime executable identity changed")
 		}
-		digest, err := browserExecutableDigest(executable)
-		if err != nil || digest != profile.browserExecutableHash {
+		digest, info, err := browserExecutableDigest(executable)
+		if err != nil || digest != profile.browserExecutableHash ||
+			profile.browserExecutableInfo == nil || !os.SameFile(profile.browserExecutableInfo, info) {
 			return errors.New("browser runtime executable identity changed")
 		}
 	}

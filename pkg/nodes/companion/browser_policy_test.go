@@ -151,6 +151,36 @@ func TestConfigValidatesExplicitBrowserRuntimeExecutable(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsIdenticalBrowserRuntimeReplacement(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	runtimeExecutable := filepath.Join(baseDir, "browser-runtime")
+	const runtimeContents = "identical runtime"
+	if err := os.WriteFile(runtimeExecutable, []byte(runtimeContents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.DriverArguments = append(profile.DriverArguments, "--executable-path="+runtimeExecutable)
+	cfg, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(baseDir, "replacement-runtime")
+	if err = os.WriteFile(replacement, []byte(runtimeContents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(replacement, runtimeExecutable); err != nil {
+		t.Fatal(err)
+	}
+	if err = verifyBrowserProfileRuntimeIdentity(cfg.BrowserProfiles["managed"]); err == nil ||
+		!strings.Contains(err.Error(), "browser runtime executable identity changed") {
+		t.Fatalf("identical replacement runtime identity error = %v", err)
+	}
+}
+
 func TestConfigRejectsBrowserRuntimeSymlinkIntoUnsafeDirectory(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	baseDir := t.TempDir()
@@ -207,19 +237,22 @@ func TestNormalizeBrowserRuntimeExecutableSupportsSplitPathsAndRejectsDuplicates
 	if err := os.WriteFile(runtimeExecutable, []byte("runtime"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	arguments, executable, digest, err := normalizeBrowserRuntimeExecutable(
+	arguments, executable, digest, info, err := normalizeBrowserRuntimeExecutable(
 		[]string{"--browser=chromium", "--executable-path", runtimeExecutable},
 		baseDir,
 	)
-	if err != nil || executable == "" || digest == "" || len(arguments) != 3 ||
+	if err != nil || executable == "" || digest == "" || info == nil || len(arguments) != 3 ||
 		arguments[1] != "--executable-path" || arguments[2] != executable {
-		t.Fatalf("normalizeBrowserRuntimeExecutable() = %#v, %q, %q, %v", arguments, executable, digest, err)
+		t.Fatalf(
+			"normalizeBrowserRuntimeExecutable() = %#v, %q, %q, %#v, %v",
+			arguments, executable, digest, info, err,
+		)
 	}
 	for _, invalid := range [][]string{
 		{"--executable-path="},
 		{"--executable-path=" + runtimeExecutable, "--executable-path", runtimeExecutable},
 	} {
-		if _, _, _, err = normalizeBrowserRuntimeExecutable(invalid, baseDir); err == nil {
+		if _, _, _, _, err = normalizeBrowserRuntimeExecutable(invalid, baseDir); err == nil {
 			t.Fatalf("normalizeBrowserRuntimeExecutable(%#v) succeeded", invalid)
 		}
 	}
