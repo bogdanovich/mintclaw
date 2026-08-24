@@ -14,7 +14,7 @@ delegated to `Pipeline`.
 | `inboundTurnCoordinator` | inbound scheduling, same-session serialization, busy-session steering enqueue, worker goroutine lifecycle, ack/release decisions | route normalization or LLM/tool execution |
 | `runtimeSessionClaim` | atomic session placeholder claim/release semantics shared by inbound workers and recovery | turn execution, routing, delivery |
 | `inboundMessageTurn` | normalized inbound route/session/model/dispatch envelope for one message | command handling or pipeline execution |
-| `turnRunner` | one runtime generation's turn lifecycle, config snapshot, and pipeline wiring | process reload policy or LLM/tool iteration mechanics |
+| `turnRunner` | one runtime generation's turn lifecycle, config snapshot, interaction components, and pipeline wiring | process reload policy or LLM/tool iteration mechanics |
 | `Pipeline` | context assembly, LLM calls, tool loops, steering injection during a turn, finalization | inbound bus scheduling or session claiming |
 
 ## Inbound Flow
@@ -65,11 +65,13 @@ Code below that boundary should be considered turn execution and belongs in
 `Pipeline` or pipeline-owned helpers.
 
 `AgentLoop` constructs one `turnRuntime` during initialization. That owner
-constructs one runner and pipeline snapshot, then atomically replaces only the
-runner generation when config or injected runtime wiring changes. Admitted
-turns retain their original runner; new turns use the new generation. This
-avoids rebuilding dependency bags for every user and child turn without
-allowing a reload to mutate an in-flight pipeline.
+constructs one runner generation with one reasoning publisher, feedback
+publisher, synchronous delivery component, asynchronous delivery component,
+interaction runtime, and pipeline snapshot. It atomically replaces that whole
+generation when config or injected runtime wiring changes. Admitted turns
+retain their original runner; new turns use the new generation. This avoids
+rebuilding dependency bags for every user and child turn without allowing a
+reload to mutate an in-flight pipeline.
 
 In-turn events, aborts, steering polls, sensitive-data filtering, and final
 render policy use that pipeline snapshot directly. `turnRunner` uses its
@@ -106,6 +108,13 @@ synchronous delivery, hooks, and suspension retain interfaces because tests
 provide real substitutes. Fallback execution and asynchronous tool completion
 use their concrete generation owners; fallback-attempt observation is a direct
 capability rather than an optional type assertion.
+
+The runner constructs each concrete interaction component once and gives the
+pipeline interfaces references to those same instances. Host-side recovery,
+task completion, final-response cleanup, and subturn admission use the current
+runner's concrete component instead of asking `AgentLoop` to reconstruct one.
+Prompt delivery stays on the interaction runtime, so suspension does not call
+back through `AgentLoop` merely to rediscover its owner.
 
 Reasoning publication is owned by the pipeline's concrete component. There is
 no test-only `AgentLoop` component factory or reasoning pass-through façade;

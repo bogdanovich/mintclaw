@@ -834,6 +834,11 @@ Implementation sequence:
     settlement, and runner generations. Delete the corresponding mutable
     `AgentLoop` fields and runner/admission pass-throughs, and remove the unused
     context API that exposed `AgentLoop` as a child-tool service locator.
+40. Make each `turnRunner` generation construct and retain one reasoning,
+    feedback, synchronous delivery, asynchronous delivery, and interaction
+    component set. Give `Pipeline` those same instances, route host-side work
+    through the current runner owner, and delete the `AgentLoop` factories and
+    delivery pass-throughs that rebuilt equivalent components per call.
 
 Exit criteria:
 

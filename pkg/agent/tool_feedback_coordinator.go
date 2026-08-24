@@ -44,18 +44,6 @@ type toolFeedbackPublisher struct {
 	getFeedbackOverride func(routeSessionKey string) (bool, bool)
 }
 
-func (al *AgentLoop) toolFeedbackPublisher() *toolFeedbackPublisher {
-	if al == nil {
-		return nil
-	}
-	return &toolFeedbackPublisher{
-		bus:                 al.bus,
-		cfg:                 al.GetConfig(),
-		channelManager:      al.channelManager,
-		getFeedbackOverride: al.getToolFeedbackOverride,
-	}
-}
-
 func (tf *toolFeedbackPublisher) publishToolFeedbackForCall(
 	ctx context.Context,
 	ts *turnState,

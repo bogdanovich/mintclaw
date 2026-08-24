@@ -376,7 +376,7 @@ func (al *AgentLoop) recoverInteractionPromptAt(
 			}
 		}
 	}
-	current, intent, err := al.deliverInteractionPrompt(ctx, registry, workspace, record)
+	current, intent, err := al.turns.currentRunner().interaction.deliverPrompt(ctx, registry, workspace, record)
 	if err == nil {
 		return true
 	}

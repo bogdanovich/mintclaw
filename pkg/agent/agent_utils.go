@@ -230,10 +230,6 @@ func toolFeedbackArgsPreview(args map[string]any, maxLen int) string {
 	return utils.Truncate(argsJSON, maxLen)
 }
 
-func shouldPublishToolFeedback(al *AgentLoop, ts *turnState) bool {
-	return al.toolFeedbackPublisher().shouldPublishToolFeedback(ts)
-}
-
 func toolFeedbackTitleForTurn(ts *turnState) string {
 	if ts == nil || !strings.HasPrefix(strings.TrimSpace(ts.sessionKey), "subturn-") {
 		return ""

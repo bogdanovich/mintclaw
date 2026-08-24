@@ -12,17 +12,11 @@ type turnRunner struct {
 	runtime      *turnRuntime
 	pipeline     *Pipeline
 	traceCapture *traceCaptureManager
+	toolFeedback *toolFeedbackPublisher
+	interaction  *humanInteractionRuntime
 }
 
 func newTurnRunner(al *AgentLoop, cfg *config.Config) *turnRunner {
-	return &turnRunner{
-		runtime:      al.turns,
-		pipeline:     newPipeline(al, cfg),
-		traceCapture: al.traceCapture,
-	}
-}
-
-func newPipeline(al *AgentLoop, cfg *config.Config) *Pipeline {
 	events := &agentRuntimeEventEmitter{events: al.runtimeEvents}
 	reasoning := &reasoningPublisherComponent{
 		bus:            al.bus,
@@ -35,8 +29,17 @@ func newPipeline(al *AgentLoop, cfg *config.Config) *Pipeline {
 		channelManager:      al.channelManager,
 		getFeedbackOverride: al.getToolFeedbackOverride,
 	}
+	syncDelivery := &syncToolResultDelivery{deliverToUser: al.deliverToolResultToUser}
+	asyncDelivery := newAsyncToolCompletionDelivery(al, events)
+	interaction := &humanInteractionRuntime{al: al}
 
-	return &Pipeline{
+	runner := &turnRunner{
+		runtime:      al.turns,
+		traceCapture: al.traceCapture,
+		toolFeedback: toolFeedback,
+		interaction:  interaction,
+	}
+	runner.pipeline = &Pipeline{
 		Cfg:                  cfg,
 		bus:                  al.bus,
 		events:               events,
@@ -62,11 +65,12 @@ func newPipeline(al *AgentLoop, cfg *config.Config) *Pipeline {
 		Interaction: PipelineInteractionServices{
 			Reasoning:        reasoning,
 			ToolFeedback:     toolFeedback,
-			SyncToolDelivery: &syncToolResultDelivery{deliverToUser: al.deliverToolResultToUser},
-			ToolDelivery:     al.asyncToolCompletionDelivery(),
+			SyncToolDelivery: syncDelivery,
+			ToolDelivery:     asyncDelivery,
 			Hooks:            al.hooks,
 			Fallback:         al.fallback,
-			Suspension:       &humanInteractionRuntime{al: al},
+			Suspension:       interaction,
 		},
 	}
+	return runner
 }

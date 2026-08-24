@@ -85,13 +85,6 @@ type InteractionEventPayload struct {
 	Success       *bool                  `json:"success,omitempty"`
 }
 
-func (al *AgentLoop) humanInteractionRuntime() *humanInteractionRuntime {
-	if al == nil {
-		return nil
-	}
-	return &humanInteractionRuntime{al: al}
-}
-
 func (al *AgentLoop) interactionRegistryForWorkspace(workspace string) *interactions.Registry {
 	if al == nil {
 		return nil
@@ -159,7 +152,7 @@ func (al *AgentLoop) observeInteractionEvent(
 	chained := observation.Event.Code == "continued_with_next_interaction"
 	if !chained && (record.Status == interactions.StatusResolved || record.Status == interactions.StatusCancelled ||
 		record.Status == interactions.StatusFailed) {
-		al.dismissTerminalInteractionToolFeedback(record)
+		al.turns.currentRunner().toolFeedback.dismissTerminalInteraction(record)
 	}
 	al.emitEvent(kind, HookMeta{
 		TraceScope: runtimeevents.NewTraceScope(workspace, record.Origin.TurnID),
@@ -196,8 +189,8 @@ func (al *AgentLoop) abandonInactiveInteractionPrompt(record interactions.Record
 	}
 }
 
-func (al *AgentLoop) dismissTerminalInteractionToolFeedback(record interactions.Record) {
-	if al == nil || al.channelManager == nil || strings.TrimSpace(record.Route.Channel) == "" ||
+func (tf *toolFeedbackPublisher) dismissTerminalInteraction(record interactions.Record) {
+	if tf == nil || tf.channelManager == nil || strings.TrimSpace(record.Route.Channel) == "" ||
 		strings.TrimSpace(record.Route.ChatID) == "" {
 		return
 	}
@@ -208,7 +201,7 @@ func (al *AgentLoop) dismissTerminalInteractionToolFeedback(record interactions.
 		interactionContinuationSessionKey(record),
 		nil,
 	)
-	al.toolFeedbackPublisher().dismissToolFeedback(context.Background(), target)
+	tf.dismissToolFeedback(context.Background(), target)
 }
 
 func (al *AgentLoop) resolveInteractionDomainState(observation interactions.EventObservation) {
@@ -318,7 +311,7 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 		runtime.al.interactionResolutions.Store(record.ID, request.Resolution)
 	}
 	disposition := ToolSuspensionDisposition{InteractionID: record.ID, Durable: true}
-	_, _, err = runtime.al.deliverInteractionPrompt(ctx, registry, request.Workspace, record)
+	_, _, err = runtime.deliverPrompt(ctx, registry, request.Workspace, record)
 	if err != nil {
 		return disposition, err
 	}
@@ -440,7 +433,7 @@ func bindInteractionPromptDelivery(
 	return registry.BindPromptDelivery(record.ID, record.Revision, deliveryID)
 }
 
-func (al *AgentLoop) deliverInteractionPrompt(
+func (runtime *humanInteractionRuntime) deliverPrompt(
 	ctx context.Context,
 	registry *interactions.Registry,
 	workspace string,
@@ -450,7 +443,7 @@ func (al *AgentLoop) deliverInteractionPrompt(
 	if err != nil {
 		return record, outbox.Intent{}, fmt.Errorf("bind interaction prompt delivery: %w", err)
 	}
-	intent, deliveryErr := al.humanInteractionRuntime().publishPrompt(ctx, registry, workspace, record)
+	intent, deliveryErr := runtime.publishPrompt(ctx, registry, workspace, record)
 	if deliveryErr != nil {
 		return record, intent, deliveryErr
 	}

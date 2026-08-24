@@ -327,7 +327,7 @@ func (al *AgentLoop) acquireSubTurnAgentAdmission(
 			active = currentActive
 			limit = currentLimit
 			emitAdmission("queued")
-			go al.toolFeedbackPublisher().publishSubTurnAdmissionWait(
+			go al.turns.currentRunner().toolFeedback.publishSubTurnAdmissionWait(
 				waitCtx, parentTS, agentID+" agent", timeout,
 			)
 		},
@@ -415,7 +415,7 @@ func spawnSubTurn(
 			semAcquired = true
 		default:
 			emitParentAdmission("queued")
-			go al.toolFeedbackPublisher().publishSubTurnAdmissionWait(
+			go al.turns.currentRunner().toolFeedback.publishSubTurnAdmissionWait(
 				admissionCtx, parentTS, "parent subturn capacity", rtCfg.concurrencyTimeout,
 			)
 			select {

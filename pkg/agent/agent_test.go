@@ -650,7 +650,7 @@ func TestPublishResponseIfNeeded_DismissesToolFeedbackWhenMessageToolAlreadySent
 	_ = provider
 
 	cm := &recordingChannelManager{}
-	al.channelManager = cm
+	al.SetChannelManager(cm)
 
 	defaultAgent := al.registry.GetDefaultAgent()
 	if defaultAgent == nil {
@@ -764,7 +764,7 @@ func TestShouldPublishToolFeedback_SubTurnUsesRouteSessionOverride(t *testing.T)
 		},
 	}
 
-	if shouldPublishToolFeedback(al, ts) {
+	if al.turns.currentRunner().toolFeedback.shouldPublishToolFeedback(ts) {
 		t.Fatal("expected child turn tool feedback to inherit disabled route-session override")
 	}
 }
