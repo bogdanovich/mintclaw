@@ -46,9 +46,10 @@ type PassiveReadiness struct {
 // TargetDiagnostics is one immutable worker-factory capability snapshot for a
 // target and its configured profiles.
 type TargetDiagnostics struct {
-	Actions  []ActionKind
-	Profiles map[string]DriverReadiness
-	Contexts bool
+	Actions     []ActionKind
+	Profiles    map[string]DriverReadiness
+	Contexts    bool
+	Diagnostics bool
 }
 
 type targetDiagnosticsFactory interface {

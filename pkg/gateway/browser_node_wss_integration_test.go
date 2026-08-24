@@ -798,6 +798,20 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		countWSSBrowserCommand(host.commandSequence(), "download") != beforeDownloads+1 {
 		t.Fatalf("unavailable download replay = %#v, %v; commands = %#v", invocation, err, host.commandSequence())
 	}
+	diagnostics, err := broker.Diagnostics(t.Context(), browser.DiagnosticsRequest{
+		Owner: owner, SessionID: first.ID,
+		Categories: []browser.DiagnosticCategory{
+			browser.DiagnosticConsoleErrors, browser.DiagnosticFailedRequests, browser.DiagnosticPageCrashes,
+		},
+	})
+	if err != nil || len(diagnostics.Categories) != 3 ||
+		diagnostics.Categories[0].Entries[0].Path != "/private-wss-diagnostic-canary" {
+		t.Fatalf("companion diagnostics = %#v, %v; commands=%#v", diagnostics, err, host.commandSequence())
+	}
+	retainedLedger, err := os.ReadFile(ledgerPath)
+	if err != nil || bytes.Contains(retainedLedger, []byte("private-wss-diagnostic-canary")) {
+		t.Fatalf("companion ledger retained live diagnostics: %v, %s", err, retainedLedger)
+	}
 	closed, err := broker.Close(t.Context(), owner, first.ID)
 	if err != nil || closed.State != browser.SessionClosed {
 		t.Fatalf("first close = %#v, %v", closed, err)
@@ -1017,6 +1031,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		"observe",
 		"navigate",
 		"download",
+		"diagnostics",
 		"close",
 		"open",
 		"status",
@@ -1631,6 +1646,40 @@ func (host *wssBrowserHost) Observe(
 	return result, nil
 }
 
+func (host *wssBrowserHost) Diagnostics(
+	_ context.Context,
+	request nodes.BrowserHostDiagnosticsRequest,
+) (nodes.BrowserDiagnosticsResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.commands = append(host.commands, "diagnostics")
+	generation, found := host.snapshots[request.SessionID]
+	if !found {
+		return nodes.BrowserDiagnosticsResult{}, nodes.ErrBrowserHostNotFound
+	}
+	if generation != request.SnapshotGeneration {
+		return nodes.BrowserDiagnosticsResult{}, nodes.ErrBrowserHostStale
+	}
+	categories := make([]nodes.BrowserDiagnosticCategory, len(request.Categories))
+	for index, category := range request.Categories {
+		categories[index] = nodes.BrowserDiagnosticCategory{
+			Category: category,
+			Entries:  []nodes.BrowserDiagnosticEntry{},
+		}
+		if category == "console_errors" {
+			categories[index].Count = 1
+			categories[index].Entries = []nodes.BrowserDiagnosticEntry{{
+				Timestamp: 1, Severity: "error", Origin: "https://example.com",
+				Path: "/private-wss-diagnostic-canary", MessageHash: strings.Repeat("a", 64),
+			}}
+		}
+	}
+	return nodes.BrowserDiagnosticsResult{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration, Categories: categories,
+	}, nil
+}
+
 func wssBrowserDocumentID(sessionID string, generation uint64) string {
 	return browserNodeStableID("document", sessionID, fmt.Sprint(generation))
 }
@@ -2231,6 +2280,7 @@ func wssBrowserSessionResult(sessionID, state string) nodes.BrowserSessionResult
 		SessionID: sessionID, State: state, TabID: "tab_primary", Controller: "agent",
 		Features: nodes.BrowserHostFeatures{
 			Observe: true, Navigate: true, Contexts: true, Screenshot: true, Download: true,
+			Diagnostics: true,
 		},
 		ExpiresAt: time.Now().Add(time.Hour).Unix(), IdleExpiresAt: time.Now().Add(time.Minute).Unix(),
 	}
@@ -2303,6 +2353,7 @@ func browserRuntimeCommands() []string {
 		nodes.BrowserCommandSessionStatus,
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandCapture,
+		nodes.BrowserCommandDiagnostics,
 		nodes.BrowserCommandAct,
 		nodes.BrowserCommandContexts,
 		nodes.BrowserCommandSessionClose,

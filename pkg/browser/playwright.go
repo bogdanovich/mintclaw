@@ -649,6 +649,10 @@ func (factory *PlaywrightWorkerFactory) Open(
 		return failedPlaywrightOpen(worker, ErrDriverIncompatible)
 	}
 	worker.catalogRevision = catalogRevision
+	if err = worker.initializeDiagnostics(ctx); err != nil {
+		factory.readiness.Store(playwrightReadinessIncompatible)
+		return failedPlaywrightOpen(worker, ErrDriverIncompatible)
+	}
 	factory.readiness.Store(playwrightReadinessReady)
 	return WorkerOpenResult{Owner: worker}, nil
 }
@@ -1550,6 +1554,8 @@ func (worker *playwrightWorker) DownloadAvailable() bool {
 func (factory *PlaywrightWorkerFactory) DownloadAvailable() bool {
 	return factory != nil && factory.downloadReady
 }
+
+func (*PlaywrightWorkerFactory) DiagnosticsAvailable() bool { return true }
 
 func (worker *playwrightWorker) callRawText(
 	ctx context.Context,

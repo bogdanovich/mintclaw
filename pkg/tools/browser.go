@@ -57,6 +57,10 @@ type BrowserContextToolSource interface {
 	) (browser.ContextResult, error)
 }
 
+type BrowserDiagnosticsToolSource interface {
+	Diagnostics(context.Context, browser.DiagnosticsRequest) (browser.DiagnosticSummary, error)
+}
+
 type browserTurnCleanupSource interface {
 	CloseOwner(context.Context, browser.Owner) error
 }
@@ -66,14 +70,15 @@ type browserTurnCleanupSource interface {
 // runtime generation so discovery cannot combine stale capability flags with
 // unavailable readiness.
 type BrowserTargetDiagnostics struct {
-	Profiles   map[string]browser.PassiveReadiness
-	Actions    []browser.ActionKind
-	Screenshot bool
-	Upload     bool
-	Download   bool
-	HeadedView bool
-	Handoff    bool
-	Contexts   bool
+	Profiles    map[string]browser.PassiveReadiness
+	Actions     []browser.ActionKind
+	Screenshot  bool
+	Upload      bool
+	Download    bool
+	HeadedView  bool
+	Handoff     bool
+	Contexts    bool
+	Diagnostics bool
 }
 
 type browserToolRuntime struct {
@@ -83,12 +88,13 @@ type browserToolRuntime struct {
 }
 
 type (
-	BrowserTargetsTool  struct{ runtime *browserToolRuntime }
-	BrowserSessionTool  struct{ runtime *browserToolRuntime }
-	BrowserContextsTool struct{ runtime *browserToolRuntime }
-	BrowserObserveTool  struct{ runtime *browserToolRuntime }
-	BrowserCaptureTool  struct{ runtime *browserToolRuntime }
-	BrowserActTool      struct{ runtime *browserToolRuntime }
+	BrowserTargetsTool     struct{ runtime *browserToolRuntime }
+	BrowserSessionTool     struct{ runtime *browserToolRuntime }
+	BrowserContextsTool    struct{ runtime *browserToolRuntime }
+	BrowserObserveTool     struct{ runtime *browserToolRuntime }
+	BrowserCaptureTool     struct{ runtime *browserToolRuntime }
+	BrowserDiagnosticsTool struct{ runtime *browserToolRuntime }
+	BrowserActTool         struct{ runtime *browserToolRuntime }
 )
 
 func NewBrowserTargetsTool(cfg *config.Config, source BrowserToolSource) *BrowserTargetsTool {
@@ -97,6 +103,10 @@ func NewBrowserTargetsTool(cfg *config.Config, source BrowserToolSource) *Browse
 
 func NewBrowserSessionTool(cfg *config.Config, source BrowserToolSource) *BrowserSessionTool {
 	return &BrowserSessionTool{runtime: newBrowserToolRuntime(cfg, source)}
+}
+
+func NewBrowserDiagnosticsTool(cfg *config.Config, source BrowserToolSource) *BrowserDiagnosticsTool {
+	return &BrowserDiagnosticsTool{runtime: newBrowserToolRuntime(cfg, source)}
 }
 
 func (tool *BrowserSessionTool) CleanupTurn(ctx context.Context) error {
@@ -172,6 +182,10 @@ func (tool *BrowserObserveTool) ToolEnabledForAgent(agentID string) bool {
 
 func (tool *BrowserCaptureTool) ToolEnabledForAgent(agentID string) bool {
 	return tool != nil && tool.runtime.enabledForAgent(agentID) && tool.runtime.source.ScreenshotAvailable()
+}
+
+func (tool *BrowserDiagnosticsTool) ToolEnabledForAgent(agentID string) bool {
+	return tool != nil && tool.runtime.enabledForAgent(agentID)
 }
 
 func (tool *BrowserContextsTool) ToolEnabledForAgent(agentID string) bool {
@@ -371,7 +385,7 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 				ElementScreenshot: screenshotAvailable,
 				Upload:            uploadAvailable,
 				Download:          downloadAvailable,
-				Diagnostics:       true,
+				Diagnostics:       capabilitiesAvailable && diagnostics.Diagnostics,
 				HeadedView:        capabilitiesAvailable && diagnostics.HeadedView,
 				Handoff:           capabilitiesAvailable && diagnostics.Handoff,
 			},
@@ -1073,6 +1087,135 @@ func (tool *BrowserObserveTool) screenshotResult(
 	}).WithOutboundCommit(func(commitCtx context.Context) error {
 		return tool.runtime.source.ClaimScreenshotDelivery(commitCtx, delivery)
 	}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+}
+
+func (*BrowserDiagnosticsTool) Name() string { return "browser_diagnostics" }
+func (*BrowserDiagnosticsTool) Description() string {
+	return "Return bounded privacy-safe console-error, failed-request, and page-crash summaries for one owned browser session."
+}
+
+func (*BrowserDiagnosticsTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"browser_session_id": map[string]any{
+				"type": "string", "minLength": 1,
+				"description": "Owned browser session. Diagnostics never open or renew a session.",
+			},
+			"categories": map[string]any{
+				"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
+				"description": "Privacy-safe diagnostic categories to return in canonical order.",
+				"items": map[string]any{"type": "string", "enum": []string{
+					"console_errors", "failed_requests", "page_crashes",
+				}},
+			},
+			"tab_id": map[string]any{
+				"type":        "string",
+				"minLength":   1,
+				"description": "Optional fresh tab authority; when supplied, copy all snapshot authority from one browser_observe result.",
+			},
+			"frame_id": map[string]any{
+				"type": "string", "minLength": 1,
+				"description": "Optional fresh frame authority copied with the tab and snapshot binding.",
+			},
+			"context_catalog_id": map[string]any{
+				"type": "string", "minLength": 1,
+				"description": "Optional fresh context catalog authority copied with context_generation.",
+			},
+			"context_generation": map[string]any{
+				"type": "integer", "minimum": 1,
+				"description": "Required when context_catalog_id is supplied.",
+			},
+			"snapshot_id": map[string]any{
+				"type": "string", "minLength": 1,
+				"description": "Required when tab_id is supplied; copy from the same fresh observation.",
+			},
+			"snapshot_generation": map[string]any{
+				"type": "integer", "minimum": 1,
+				"description": "Required when tab_id is supplied; copy from the same fresh observation.",
+			},
+		},
+		"required": []string{"browser_session_id", "categories"},
+	}
+}
+
+func (*BrowserDiagnosticsTool) ToolLoopSemantics() loopguard.Semantics {
+	return loopguard.SemanticsReadOnlyIdempotent
+}
+
+func (*BrowserDiagnosticsTool) ProtectedDurableResult(map[string]any) bool { return true }
+
+func (*BrowserDiagnosticsTool) DurableArguments(args map[string]any) (map[string]any, error) {
+	return cloneBrowserToolArguments(args)
+}
+
+func (tool *BrowserDiagnosticsTool) Execute(
+	ctx context.Context,
+	args map[string]any,
+) *toolshared.ToolResult {
+	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
+		return browserErrorResult(
+			"not_granted", "Browser access is not granted to this agent.", "use_an_authorized_agent",
+		)
+	}
+	source, ok := tool.runtime.source.(BrowserDiagnosticsToolSource)
+	if !ok {
+		return browserToolError(browser.ErrDriverIncompatible)
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return browserToolError(err)
+	}
+	sessionID, sessionOK := args["browser_session_id"].(string)
+	categories, categoriesOK := browserDiagnosticCategories(args["categories"])
+	if !sessionOK || !categoriesOK {
+		return browserToolError(browser.ErrInvalid)
+	}
+	request := browser.DiagnosticsRequest{Owner: owner, SessionID: sessionID, Categories: categories}
+	request.TabID, _ = args["tab_id"].(string)
+	request.FrameID, _ = args["frame_id"].(string)
+	request.ContextCatalogID, _ = args["context_catalog_id"].(string)
+	request.SnapshotID, _ = args["snapshot_id"].(string)
+	contextGeneration, contextOK := browserInteger(args["context_generation"])
+	snapshotGeneration, snapshotOK := browserInteger(args["snapshot_generation"])
+	if _, present := args["context_generation"]; present && (!contextOK || contextGeneration < 1) {
+		return browserToolError(browser.ErrInvalid)
+	}
+	if _, present := args["snapshot_generation"]; present && (!snapshotOK || snapshotGeneration < 1) {
+		return browserToolError(browser.ErrInvalid)
+	}
+	request.ContextGeneration = uint64(contextGeneration)
+	request.SnapshotGeneration = uint64(snapshotGeneration)
+	summary, err := source.Diagnostics(ctx, request)
+	if err != nil {
+		return browserToolError(err)
+	}
+	return tool.runtime.result(summary)
+}
+
+func browserDiagnosticCategories(value any) ([]browser.DiagnosticCategory, bool) {
+	var values []string
+	switch typed := value.(type) {
+	case []string:
+		values = append(values, typed...)
+	case []any:
+		values = make([]string, 0, len(typed))
+		for _, item := range typed {
+			value, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			values = append(values, value)
+		}
+	default:
+		return nil, false
+	}
+	categories := make([]browser.DiagnosticCategory, len(values))
+	for index, value := range values {
+		categories[index] = browser.DiagnosticCategory(value)
+	}
+	normalized, err := browser.NormalizeDiagnosticCategories(categories)
+	return normalized, err == nil
 }
 
 func (*BrowserCaptureTool) Name() string { return "browser_capture" }

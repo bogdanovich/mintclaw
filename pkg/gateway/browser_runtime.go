@@ -257,7 +257,9 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 		ctx,
 		source,
 		func(ctx context.Context, broker *browser.Broker) (tools.BrowserTargetDiagnostics, error) {
-			actions, readinessByProfile, contexts, err := broker.PassiveTargetDiagnostics(ctx, target, profiles)
+			actions, readinessByProfile, contexts, diagnostics, err := broker.PassiveTargetDiagnostics(
+				ctx, target, profiles,
+			)
 			if err != nil {
 				return tools.BrowserTargetDiagnostics{}, err
 			}
@@ -276,14 +278,15 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 				}
 			}
 			result := tools.BrowserTargetDiagnostics{
-				Profiles:   make(map[string]browser.PassiveReadiness, len(profiles)),
-				Actions:    actions,
-				Screenshot: screenshotAvailable,
-				Upload:     uploadAvailable,
-				Download:   downloadAvailable,
-				HeadedView: handoffAvailable,
-				Handoff:    handoffAvailable,
-				Contexts:   contexts,
+				Profiles:    make(map[string]browser.PassiveReadiness, len(profiles)),
+				Actions:     actions,
+				Screenshot:  screenshotAvailable,
+				Upload:      uploadAvailable,
+				Download:    downloadAvailable,
+				HeadedView:  handoffAvailable,
+				Handoff:     handoffAvailable,
+				Contexts:    contexts,
+				Diagnostics: diagnostics,
 			}
 			for _, profile := range profiles {
 				result.Profiles[profile] = readinessByProfile[profile]
@@ -416,6 +419,19 @@ func (source *gatewayBrowserToolSource) Observe(
 		source,
 		func(ctx context.Context, broker *browser.Broker) (browser.Observation, error) {
 			return broker.Observe(ctx, owner, sessionID, tabID)
+		},
+	)
+}
+
+func (source *gatewayBrowserToolSource) Diagnostics(
+	ctx context.Context,
+	request browser.DiagnosticsRequest,
+) (browser.DiagnosticSummary, error) {
+	return withGatewayBrowserBroker(
+		ctx,
+		source,
+		func(ctx context.Context, broker *browser.Broker) (browser.DiagnosticSummary, error) {
+			return broker.Diagnostics(ctx, request)
 		},
 	)
 }
@@ -662,6 +678,13 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 			}
 			return tools.NewBrowserCaptureTool(reloadCfg, source), nil
 		},
+		"browser_diagnostics": func(reloadCfg *config.Config) (toolshared.Tool, error) {
+			source, err := sourceFor(reloadCfg)
+			if err != nil {
+				return nil, err
+			}
+			return tools.NewBrowserDiagnosticsTool(reloadCfg, source), nil
+		},
 		"browser_contexts": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
@@ -678,7 +701,8 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 		},
 	}
 	for _, name := range []string{
-		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture", "browser_act",
+		"browser_targets", "browser_session", "browser_contexts", "browser_observe", "browser_capture",
+		"browser_diagnostics", "browser_act",
 	} {
 		if err := agentLoop.RegisterRuntimeTool(name, factories[name]); err != nil {
 			return err

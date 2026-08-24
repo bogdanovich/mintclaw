@@ -50,6 +50,13 @@ type ActionWorker interface {
 	CatalogRevision() string
 }
 
+// DiagnosticsWorker returns only source-bounded, privacy-safe summaries from
+// one live browser worker. Raw driver diagnostics never cross this boundary.
+type DiagnosticsWorker interface {
+	ActionWorker
+	Diagnostics(context.Context, []DiagnosticCategory) (DiagnosticSummary, error)
+}
+
 // ContextWorker is the private multi-document driver boundary. Implementations
 // retain every Playwright page, frame, and tab index behind opaque context IDs.
 // The broker must not advertise context support unless this complete interface
@@ -559,28 +566,28 @@ func (broker *Broker) PassiveTargetDiagnostics(
 	ctx context.Context,
 	targetName string,
 	profileNames []string,
-) ([]ActionKind, map[string]PassiveReadiness, bool, error) {
+) ([]ActionKind, map[string]PassiveReadiness, bool, bool, error) {
 	factory, ok := broker.factory.(targetDiagnosticsFactory)
 	if !ok {
-		return nil, nil, false, ErrWorkerUnavailable
+		return nil, nil, false, false, ErrWorkerUnavailable
 	}
 	diagnostics, err := factory.PassiveTargetDiagnostics(ctx, targetName, profileNames)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, false, false, err
 	}
 	profiles := make(map[string]PassiveReadiness, len(profileNames))
 	for _, profileName := range profileNames {
 		driver, found := diagnostics.Profiles[profileName]
 		if !found {
-			return nil, nil, false, ErrWorkerUnavailable
+			return nil, nil, false, false, ErrWorkerUnavailable
 		}
 		availability, availabilityErr := broker.ProfileAvailability(ctx, targetName, profileName)
 		if availabilityErr != nil {
-			return nil, nil, false, availabilityErr
+			return nil, nil, false, false, availabilityErr
 		}
 		profiles[profileName] = passiveReadiness(availability, driver)
 	}
-	return diagnostics.Actions, profiles, diagnostics.Contexts, nil
+	return diagnostics.Actions, profiles, diagnostics.Contexts, diagnostics.Diagnostics, nil
 }
 
 func passiveReadiness(availability ProfileAvailability, driver DriverReadiness) PassiveReadiness {

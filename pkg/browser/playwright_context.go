@@ -170,6 +170,10 @@ func (worker *playwrightWorker) OpenTab(ctx context.Context) (ContextCatalog, er
 		worker.lost = true
 		return ContextCatalog{}, ErrDriverIncompatible
 	}
+	if err = worker.initializeDiagnostics(ctx); err != nil {
+		worker.lost = true
+		return ContextCatalog{}, ErrDriverIncompatible
+	}
 	return catalog, nil
 }
 
@@ -255,6 +259,10 @@ func (worker *playwrightWorker) selectContextLocked(
 	if selectedRaw.Selected != worker.contextState.tabs[tabID] {
 		worker.lost = true
 		return DriverObservation{}, ContextCatalog{}, "", ErrStale
+	}
+	if err = worker.initializeDiagnostics(ctx); err != nil {
+		worker.lost = true
+		return DriverObservation{}, ContextCatalog{}, "", ErrDriverIncompatible
 	}
 	var navigationID string
 	if bindNavigationIdentity {

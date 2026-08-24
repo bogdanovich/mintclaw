@@ -614,11 +614,11 @@ func durableInvocationSuccess(
 	plan nodes.ExecutionPlan,
 	result json.RawMessage,
 ) (json.RawMessage, error) {
-	if plan.Command == nodes.BrowserCommandObserve {
-		// Observations are live page data. In particular, an accessibility
-		// snapshot can echo a value supplied by an earlier protected fill. A
-		// fixed terminal receipt proves completion without making the page data
-		// recoverable or replayable from the companion ledger.
+	if plan.Command == nodes.BrowserCommandObserve || plan.Command == nodes.BrowserCommandDiagnostics {
+		// Observations and diagnostics are live page data. An accessibility
+		// snapshot can echo a protected fill, while even bounded diagnostics
+		// remain session-private. A fixed receipt keeps either result out of the
+		// companion ledger.
 		return json.RawMessage(`{"protected_result":true}`), nil
 	}
 	if plan.Command == nodes.BrowserCommandContexts {

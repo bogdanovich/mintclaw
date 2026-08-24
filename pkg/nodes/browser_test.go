@@ -3,6 +3,7 @@ package nodes
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(descriptors) != 7 {
+	if len(descriptors) != 8 {
 		t.Fatalf("descriptor count = %d", len(descriptors))
 	}
 	for _, descriptor := range descriptors {
@@ -43,7 +44,8 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 		descriptors[3].Name != BrowserCommandAct || descriptors[3].Risk != RiskWrite ||
 		descriptors[4].Name != BrowserCommandContexts || descriptors[4].Risk != RiskWrite ||
 		descriptors[5].Name != BrowserCommandSessionClose || descriptors[5].Risk != RiskWrite ||
-		descriptors[6].Name != BrowserCommandCapture || descriptors[6].Risk != RiskRead {
+		descriptors[6].Name != BrowserCommandCapture || descriptors[6].Risk != RiskRead ||
+		descriptors[7].Name != BrowserCommandDiagnostics || descriptors[7].Risk != RiskRead {
 		t.Fatalf("descriptor order or risks = %#v", descriptors)
 	}
 }
@@ -1039,6 +1041,7 @@ func TestBrowserOutputSchemasAcceptOnlyExactProtectedRecoveryReceipts(t *testing
 		t.Fatal(err)
 	}
 	assertBrowserOutputValid(t, descriptors[2], map[string]any{"protected_result": true})
+	assertBrowserOutputValid(t, descriptors[7], map[string]any{"protected_result": true})
 	assertBrowserOutputValid(t, descriptors[4], map[string]any{
 		"operation": "select", "protected_result": true,
 	})
@@ -1048,6 +1051,8 @@ func TestBrowserOutputSchemasAcceptOnlyExactProtectedRecoveryReceipts(t *testing
 	}{
 		{descriptors[2], map[string]any{"protected_result": false}},
 		{descriptors[2], map[string]any{"protected_result": true, "url": "https://private.example"}},
+		{descriptors[7], map[string]any{"protected_result": false}},
+		{descriptors[7], map[string]any{"protected_result": true, "count": 1}},
 		{descriptors[4], map[string]any{"protected_result": true}},
 		{descriptors[4], map[string]any{"operation": "unknown", "protected_result": true}},
 		{descriptors[4], map[string]any{
@@ -1056,6 +1061,59 @@ func TestBrowserOutputSchemasAcceptOnlyExactProtectedRecoveryReceipts(t *testing
 		}},
 	} {
 		assertBrowserOutputInvalid(t, invalid.descriptor, invalid.value)
+	}
+}
+
+func TestBrowserDiagnosticsOutputRejectsSensitiveOrInconsistentFields(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
+		browserProfileDescriptorFixture(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := map[string]any{
+		"timestamp": 1, "severity": "error", "origin": "https://example.com", "path": "/safe",
+		"message_hash": strings.Repeat("a", 64),
+	}
+	result := map[string]any{
+		"session_id": "session_1", "tab_id": "tab_1", "snapshot_generation": 26,
+		"categories": []any{map[string]any{
+			"category": "console_errors", "count": 1, "omitted_count": 0,
+			"truncated": false, "entries": []any{entry},
+		}},
+	}
+	assertBrowserOutputValid(t, descriptors[7], result)
+
+	unsafeEntry := maps.Clone(entry)
+	unsafeEntry["origin"] = "https://example.com?credential=canary"
+	result["categories"] = []any{map[string]any{
+		"category": "console_errors", "count": 1, "omitted_count": 0,
+		"truncated": false, "entries": []any{unsafeEntry},
+	}}
+	assertBrowserOutputInvalid(t, descriptors[7], result)
+
+	result["categories"] = []any{map[string]any{
+		"category": "console_errors", "count": 2, "omitted_count": 0,
+		"truncated": false, "entries": []any{entry},
+	}}
+	assertBrowserOutputInvalid(t, descriptors[7], result)
+}
+
+func TestBrowserDiagnosticsInputRejectsNonCanonicalGenerationAndUnknownFields(t *testing.T) {
+	for _, input := range []string{
+		`{"session_id":"session_1","tab_id":"tab_1","snapshot_generation":1.5,"categories":["console_errors"]}`,
+		`{"session_id":"session_1","tab_id":"tab_1","snapshot_generation":0,"categories":["console_errors"],"raw_console":"secret"}`,
+	} {
+		var value BrowserDiagnosticsInput
+		if err := json.Unmarshal([]byte(input), &value); err == nil {
+			t.Fatalf("Unmarshal(%s) accepted malformed diagnostics input", input)
+		}
+	}
+	var value BrowserDiagnosticsInput
+	if err := json.Unmarshal([]byte(
+		`{"session_id":"session_1","tab_id":"tab_1","snapshot_generation":0,"categories":["console_errors"]}`,
+	), &value); err != nil || value.SnapshotGeneration != 0 {
+		t.Fatalf("canonical zero-generation input = %+v, %v", value, err)
 	}
 }
 
