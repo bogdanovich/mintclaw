@@ -411,7 +411,8 @@ func (h *Handler) handleDeleteModel(w http.ResponseWriter, r *http.Request) {
 		}
 		deletedModelName := cfg.ModelList[idx].ModelName
 		cfg.ModelList = append(cfg.ModelList[:idx], cfg.ModelList[idx+1:]...)
-		if cfg.Agents.Defaults.ModelName == deletedModelName {
+		if cfg.Agents.Defaults.ModelName == deletedModelName &&
+			!defaultModelAllowedForAlias(cfg.ModelList, deletedModelName) {
 			cfg.Agents.Defaults.ModelName = ""
 		}
 		return validateModelReferenceMutation(cfg)

@@ -319,6 +319,46 @@ func TestHandleDeleteModelRejectsDanglingReference(t *testing.T) {
 	}
 }
 
+func TestHandleDeleteModelKeepsDefaultWhenAliasHasAnotherEligibleEntry(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4", Enabled: true},
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4-mini", Enabled: true},
+	}
+	cfg.Agents.Defaults.ModelName = "balanced"
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/models/0", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if len(updated.ModelList) != 1 {
+		t.Fatalf("model_list length = %d, want 1", len(updated.ModelList))
+	}
+	if got := updated.Agents.Defaults.ModelName; got != "balanced" {
+		t.Fatalf("default model = %q, want balanced while another alias entry is eligible", got)
+	}
+}
+
 func TestHandleListModels_AvailabilityUsesRuntimeProbesForLocalModels(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
