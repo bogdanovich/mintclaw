@@ -746,8 +746,7 @@ func TestShouldPublishToolFeedback_SubTurnUsesRouteSessionOverride(t *testing.T)
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 	cfg.Agents.Defaults.ToolFeedback.Enabled = true
-	subagentsEnabled := true
-	cfg.Agents.Defaults.ToolFeedback.Subagents = &subagentsEnabled
+	cfg.Agents.Defaults.ToolFeedback.Subagents = true
 
 	if err := al.setToolFeedbackOverride("route-session-1", false); err != nil {
 		t.Fatalf("setToolFeedbackOverride() error = %v", err)

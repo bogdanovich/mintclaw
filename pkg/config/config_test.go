@@ -1194,6 +1194,9 @@ func TestDefaultConfig_ToolFeedbackDisabled(t *testing.T) {
 	if !cfg.Agents.Defaults.IsSubagentToolFeedbackEnabled() {
 		t.Fatal("DefaultConfig().Agents.Defaults.IsSubagentToolFeedbackEnabled() should default to true")
 	}
+	if !cfg.Agents.Defaults.ToolFeedback.Subagents {
+		t.Fatal("DefaultConfig().Agents.Defaults.ToolFeedback.Subagents should be true")
+	}
 	if cfg.Agents.Defaults.ToolFeedback.SeparateMessages {
 		t.Fatal("DefaultConfig().Agents.Defaults.ToolFeedback.SeparateMessages should be false")
 	}
@@ -1377,6 +1380,23 @@ func TestLoadConfig_ToolFeedbackSubagentsFalse(t *testing.T) {
 	}
 	if cfg.Agents.Defaults.IsSubagentToolFeedbackEnabled() {
 		t.Fatal("agents.defaults.tool_feedback.subagents = true, want false")
+	}
+}
+
+func TestToolFeedbackSubagentsFalseRoundTrips(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents.Defaults.ToolFeedback.Subagents = false
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal(config) error = %v", err)
+	}
+	decoded := DefaultConfig()
+	if err = json.Unmarshal(data, decoded); err != nil {
+		t.Fatalf("Unmarshal(config) error = %v", err)
+	}
+	if decoded.Agents.Defaults.ToolFeedback.Subagents {
+		t.Fatal("agents.defaults.tool_feedback.subagents did not preserve explicit false")
 	}
 }
 

@@ -821,6 +821,11 @@ Implementation sequence:
     one-release `session.dm_scope` response alias and PUT/PATCH translator;
     emit and accept only `session.dimensions`, with removed fields rejected by
     current-schema validation.
+37. Replace the pointer-backed `tool_feedback.subagents` compatibility default
+    with the current boolean contract. Keep the default explicit in
+    `DefaultConfig`, apply the same defaults at file and API decode boundaries,
+    preserve explicit `false` during serialization, and remove the runtime nil
+    fallback.
 
 Exit criteria:
 

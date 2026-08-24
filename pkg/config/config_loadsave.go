@@ -72,26 +72,38 @@ func loadConfigReadOnly(path string, applyRuntimeOverrides bool) (*Config, error
 }
 
 func loadConfig(data []byte) (*Config, error) {
+	return decodeCurrentConfigWithDefaults(data, "config.json")
+}
+
+func decodeCurrentConfigWithDefaults(data []byte, label string) (*Config, error) {
 	cfg := DefaultConfig()
 	// Go's JSON decoder reuses existing slice elements. Decode once into an
 	// empty value so user-supplied model entries cannot inherit default fields.
 	var provided Config
-	if err := decodeCurrentConfig(data, &provided, "config.json"); err != nil {
+	if err := decodeCurrentConfig(data, &provided, label); err != nil {
 		return nil, err
 	}
 	if len(provided.ModelList) > 0 {
 		cfg.ModelList = nil
 	}
-	if err := decodeCurrentConfig(data, cfg, "config.json"); err != nil {
+	if err := decodeCurrentConfig(data, cfg, label); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-// DecodeCurrentConfig decodes a configuration document using the same strict
-// schema rules as the file loader.
+// DecodeCurrentConfig decodes a configuration document using the same defaults
+// and strict schema rules as the file loader.
 func DecodeCurrentConfig(data []byte, target *Config) error {
-	return decodeCurrentConfig(data, target, "config")
+	if target == nil {
+		return errors.New("config decode target must not be nil")
+	}
+	decoded, err := decodeCurrentConfigWithDefaults(data, "config")
+	if err != nil {
+		return err
+	}
+	*target = *decoded
+	return nil
 }
 
 func decodeCurrentConfig(data []byte, target *Config, label string) error {

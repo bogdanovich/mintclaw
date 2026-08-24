@@ -242,6 +242,103 @@ func TestHandlePatchConfigPersistsCanonicalSessionDimensions(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateConfigAppliesToolFeedbackSubagentsDefault(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  bool
+	}{
+		{name: "omitted", value: nil, want: true},
+		{name: "explicit_false", value: false, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+
+			repository := config.NewRepository(configPath)
+			snapshot, err := repository.ReadOnly()
+			if err != nil {
+				t.Fatalf("ReadOnly() error = %v", err)
+			}
+			body, err := json.Marshal(snapshot.Config)
+			if err != nil {
+				t.Fatalf("Marshal(config) error = %v", err)
+			}
+			var payload map[string]any
+			if err = json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("Unmarshal(config) error = %v", err)
+			}
+			toolFeedback := payload["agents"].(map[string]any)["defaults"].(map[string]any)["tool_feedback"].(map[string]any)
+			if test.value == nil {
+				delete(toolFeedback, "subagents")
+			} else {
+				toolFeedback["subagents"] = test.value
+			}
+			body, err = json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal(payload) error = %v", err)
+			}
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewReader(body))
+			req.Header.Set("If-Match", configRevisionETag(snapshot.Revision))
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			updated, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if got := updated.Agents.Defaults.ToolFeedback.Subagents; got != test.want {
+				t.Fatalf("tool_feedback.subagents = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestHandlePatchConfigAppliesToolFeedbackSubagentsDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "deleted", body: `{"agents":{"defaults":{"tool_feedback":{"subagents":null}}}}`, want: true},
+		{name: "explicit_false", body: `{"agents":{"defaults":{"tool_feedback":{"subagents":false}}}}`, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+
+			h := NewHandler(configPath)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			req := httptest.NewRequest(http.MethodPatch, "/api/config", bytes.NewBufferString(test.body))
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			updated, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			if got := updated.Agents.Defaults.ToolFeedback.Subagents; got != test.want {
+				t.Fatalf("tool_feedback.subagents = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestHandleUpdateConfig_RequiresRevision(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
