@@ -9,7 +9,8 @@ delegated to `Pipeline`.
 
 | Layer | Owns | Should Not Own |
 | --- | --- | --- |
-| `AgentLoop` | process lifecycle, service wiring, registry/config access, public APIs, active-turn registry, channel/bus integration | turn lifecycle or LLM/tool iteration mechanics |
+| `AgentLoop` | process lifecycle, service wiring, registry/config access, public APIs, channel/bus integration | live turn registries or LLM/tool iteration mechanics |
+| `turnRuntime` | turn admission, active session and route claims, pending stops, request tracking, sequencing, inbound spool settlement, current runner generation | process reload policy or LLM/tool iteration mechanics |
 | `inboundTurnCoordinator` | inbound scheduling, same-session serialization, busy-session steering enqueue, worker goroutine lifecycle, ack/release decisions | route normalization or LLM/tool execution |
 | `runtimeSessionClaim` | atomic session placeholder claim/release semantics shared by inbound workers and recovery | turn execution, routing, delivery |
 | `inboundMessageTurn` | normalized inbound route/session/model/dispatch envelope for one message | command handling or pipeline execution |
@@ -52,8 +53,8 @@ then calls:
 al.runAgentLoop(ctx, turn.Agent, opts)
 ```
 
-`runAgentLoop` remains the boundary for one logical agent turn. `AgentLoop`
-selects the current `turnRunner`; that runner wraps the turn with lifecycle
+`runAgentLoop` remains the boundary for one logical agent turn. The loop's
+`turnRuntime` selects the current `turnRunner`; that runner wraps the turn with lifecycle
 concerns and delegates turn progression to:
 
 ```go
@@ -63,18 +64,19 @@ pipeline.runTurnLoop(ctx, turnCtx, ts)
 Code below that boundary should be considered turn execution and belongs in
 `Pipeline` or pipeline-owned helpers.
 
-`AgentLoop` constructs one runner and pipeline snapshot during initialization,
-then atomically replaces the runner when config or injected runtime wiring
-changes. Admitted turns retain their original runner; new turns use the new
-generation. This avoids rebuilding dependency bags for every user and child
-turn without allowing a reload to mutate an in-flight pipeline.
+`AgentLoop` constructs one `turnRuntime` during initialization. That owner
+constructs one runner and pipeline snapshot, then atomically replaces only the
+runner generation when config or injected runtime wiring changes. Admitted
+turns retain their original runner; new turns use the new generation. This
+avoids rebuilding dependency bags for every user and child turn without
+allowing a reload to mutate an in-flight pipeline.
 
 In-turn events, aborts, steering polls, sensitive-data filtering, and final
-render policy use that pipeline snapshot directly. `turnRunner` calls
-`AgentLoop` only for the process lifecycle it actually owns: turn admission,
-active-turn registration, context publication for tools, and inbound spool
-settlement. There is no single-implementation callback interface between the
-runner and pipeline.
+render policy use that pipeline snapshot directly. `turnRunner` uses its
+concrete `turnRuntime` for admission, active-turn registration, and inbound
+spool settlement. Child tools receive their registered child runner explicitly;
+the turn context no longer publishes `AgentLoop` as a service locator. There is
+no single-implementation callback interface between the runner and pipeline.
 
 Config-derived turn behavior reads that runner-owned `Cfg` snapshot directly.
 It does not pass through policy interfaces for model selection, retries,
@@ -87,12 +89,11 @@ interfaces because tests and alternate buses provide real implementations.
 Active-request counting and turn abort use their concrete owners; they do not
 sit behind a service bag or single-implementation interface.
 
-`NewAgentLoop` constructs the active-request counter, background-compaction
-runner, and model-execution manager exactly once. Host-side callers use those
-owned fields directly; there are no lazy accessors that create alternate
-runtime owners after construction. Event emission likewise constructs its
-small concrete adapter at the wiring boundary rather than through an
-`AgentLoop` factory.
+`NewAgentLoop` constructs the turn runtime, background-compaction runner, and
+model-execution manager exactly once. The active-request counter belongs to the
+turn runtime; there are no lazy accessors that create alternate owners after
+construction. Event emission likewise constructs its small concrete adapter at
+the wiring boundary rather than through an `AgentLoop` factory.
 
 Pipeline context wiring keeps its semantic grouping, but not artificial
 interfaces. Context assembly, steering, and media resolution retain narrow
@@ -117,7 +118,7 @@ second host-side route to the same component.
 ## Session Claiming
 
 `runtimeSessionClaim` is the shared session ownership primitive. A claim stores
-a setup placeholder in `AgentLoop.activeTurnStates` with `LoadOrStore`, so two
+a setup placeholder in `turnRuntime.activeTurnStates` with `LoadOrStore`, so two
 messages for the same session cannot both launch workers during setup.
 
 Claims release only the exact placeholder they installed. This is intentional:
@@ -146,9 +147,9 @@ user message.
 
 Some coupling remains by design:
 
-- `AgentLoop` still owns `activeTurnStates` because `/stop`, `/subagents`,
-  hard abort, recovery, and runtime observability all need the same live turn
-  registry.
+- `/stop`, `/subagents`, hard abort, recovery, and runtime observability all
+  use the one `turnRuntime` registry composed by `AgentLoop`; none owns a
+  parallel map.
 - `processMessage` still handles commands before `runAgentLoop` because commands
   need routed session/model context but should not always start an LLM turn.
 - `runTurnWithSteering` still publishes the final joined response after

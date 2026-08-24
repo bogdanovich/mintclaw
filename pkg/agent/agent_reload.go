@@ -133,9 +133,9 @@ func (prepared *PreparedConfigReload) Commit(ctx context.Context) error {
 	oldRegistry := al.registry
 	al.cfg = cfg
 	al.registry = registry
-	al.agentTurnAdmissions.update(registry)
+	al.turns.admissions.update(registry)
 	al.fallback = fallbackForRegistry(registry)
-	al.replaceTurnRunnerLocked(cfg)
+	al.turns.replaceRunner(newTurnRunner(al, cfg))
 	al.mu.Unlock()
 
 	prepared.committed = true

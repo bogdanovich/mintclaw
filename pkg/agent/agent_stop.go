@@ -28,10 +28,10 @@ func (al *AgentLoop) tryHandleStopCommand(
 	// message's worker which hasn't started yet — arm a pending stop so the
 	// worker will bail when it checks before running.
 	if err == nil && !result.Stopped {
-		if ts := al.getActiveTurnState(scope); ts != nil {
+		if ts := al.turns.activeTurnState(scope); ts != nil {
 			snap := ts.snapshot()
 			if strings.HasPrefix(snap.TurnID, pendingTurnPrefix) {
-				al.markPendingStop(scope)
+				al.turns.markPendingStop(scope)
 				result.Stopped = true
 			}
 		}
@@ -79,7 +79,7 @@ func (al *AgentLoop) stopActiveTurnForScope(scope runtimeSessionScope) (commands
 	cleared := al.clearSteeringMessagesForScope(scope)
 	al.clearPendingSkills(scope)
 
-	ts := al.getActiveTurnState(scope)
+	ts := al.turns.activeTurnState(scope)
 	if ts == nil {
 		result.Stopped = cleared > 0
 		return result, nil
@@ -98,7 +98,7 @@ func (al *AgentLoop) stopActiveTurnForScope(scope runtimeSessionScope) (commands
 	}
 
 	if err := al.hardAbortScope(scope); err != nil {
-		if al.getActiveTurnState(scope) == nil {
+		if al.turns.activeTurnState(scope) == nil {
 			result.Stopped = cleared > 0
 			return result, nil
 		}
@@ -109,18 +109,18 @@ func (al *AgentLoop) stopActiveTurnForScope(scope runtimeSessionScope) (commands
 	return result, nil
 }
 
-func (al *AgentLoop) markPendingStop(scope runtimeSessionScope) {
+func (r *turnRuntime) markPendingStop(scope runtimeSessionScope) {
 	if !scope.complete() {
 		return
 	}
-	al.pendingStops.Store(scope, struct{}{})
+	r.pendingStops.Store(scope, struct{}{})
 }
 
-func (al *AgentLoop) takePendingStop(scope runtimeSessionScope) bool {
+func (r *turnRuntime) takePendingStop(scope runtimeSessionScope) bool {
 	if !scope.complete() {
 		return false
 	}
-	_, ok := al.pendingStops.LoadAndDelete(scope)
+	_, ok := r.pendingStops.LoadAndDelete(scope)
 	return ok
 }
 

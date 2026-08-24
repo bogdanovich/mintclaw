@@ -9,22 +9,17 @@ import (
 // generation. AgentLoop replaces the runner when runtime wiring changes;
 // already admitted turns keep the generation they started with.
 type turnRunner struct {
-	host     *AgentLoop
-	pipeline *Pipeline
+	runtime      *turnRuntime
+	pipeline     *Pipeline
+	traceCapture *traceCaptureManager
 }
 
 func newTurnRunner(al *AgentLoop, cfg *config.Config) *turnRunner {
-	return &turnRunner{host: al, pipeline: newPipeline(al, cfg)}
-}
-
-func (al *AgentLoop) currentTurnRunner() *turnRunner {
-	al.mu.RLock()
-	defer al.mu.RUnlock()
-	return al.turnRunner
-}
-
-func (al *AgentLoop) replaceTurnRunnerLocked(cfg *config.Config) {
-	al.turnRunner = newTurnRunner(al, cfg)
+	return &turnRunner{
+		runtime:      al.turns,
+		pipeline:     newPipeline(al, cfg),
+		traceCapture: al.traceCapture,
+	}
 }
 
 func newPipeline(al *AgentLoop, cfg *config.Config) *Pipeline {
@@ -45,7 +40,7 @@ func newPipeline(al *AgentLoop, cfg *config.Config) *Pipeline {
 		Cfg:                  cfg,
 		bus:                  al.bus,
 		events:               events,
-		activeRequests:       al.activeRequests,
+		activeRequests:       al.turns.activeRequests,
 		turnControl:          &turnAbortController{events: events},
 		retrySleeper:         contextRetrySleeper{},
 		trustAllTools:        al.usesCodingProfile(),

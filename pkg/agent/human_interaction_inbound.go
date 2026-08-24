@@ -143,9 +143,9 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	claimTurnID := fmt.Sprintf(
 		"pending-interaction-cancel-%s-%d",
 		record.ShortID,
-		al.turnSeq.Add(1),
+		al.turns.nextSequence(),
 	)
-	claim, _, claimed := al.claimRuntimeRouteSession(
+	claim, _, claimed := al.turns.claimRuntimeRouteSession(
 		target,
 		claimTurnID,
 	)
@@ -187,7 +187,7 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 	}
 	continuationAgent := al.interactionContinuationAgent(record, target.Agent)
 	if continuationAgent != nil {
-		al.takePendingStop(newRuntimeSessionScope(
+		al.turns.takePendingStop(newRuntimeSessionScope(
 			continuationAgent.Workspace,
 			interactionContinuationSessionKey(record),
 		))
@@ -285,16 +285,16 @@ func (al *AgentLoop) abortInteractionContinuation(
 		agent.Workspace,
 		interactionContinuationSessionKey(record),
 	)
-	ts := al.getActiveTurnState(scope)
+	ts := al.turns.activeTurnState(scope)
 	if ts == nil {
-		al.markPendingStop(scope)
+		al.turns.markPendingStop(scope)
 		return nil
 	}
 	if strings.HasPrefix(ts.snapshot().TurnID, pendingTurnPrefix) {
-		al.markPendingStop(scope)
+		al.turns.markPendingStop(scope)
 		return nil
 	}
-	if err := al.hardAbortScope(scope); err != nil && al.getActiveTurnState(scope) != nil {
+	if err := al.hardAbortScope(scope); err != nil && al.turns.activeTurnState(scope) != nil {
 		return err
 	}
 	return nil
@@ -313,7 +313,7 @@ func (al *AgentLoop) waitForInteractionCancellationClaim(
 			return nil, false
 		case <-timer.C:
 		}
-		claim, _, claimed := al.claimRuntimeRouteSession(target, turnID)
+		claim, _, claimed := al.turns.claimRuntimeRouteSession(target, turnID)
 		if claimed {
 			return claim, true
 		}
@@ -427,7 +427,7 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 	if shortID != "" && (classification.Disposition == explicitInteractionAnswerRetry ||
 		classification.Disposition == explicitInteractionAnswerUnavailable) {
 		logExplicitInteractionAnswerDisposition(classification.Record, msg, classification.Disposition)
-		c.al.releaseInboundMessage(
+		c.al.turns.inbound.release(
 			context.Background(),
 			msg,
 			fmt.Errorf("interaction answer identity is waiting for durable admission"),
@@ -661,7 +661,7 @@ func (c *inboundTurnCoordinator) handleInteractionInbound(
 			interactionRouteAuthorizes(record.Route, target, msg.Context) &&
 			(record.Status == interactions.StatusClaimed || record.Status == interactions.StatusResuming) {
 			if err := c.enqueueContendedInteractionInbound(ctx, msg, target, record); err != nil {
-				c.al.releaseInboundMessage(context.Background(), msg, err)
+				c.al.turns.inbound.release(context.Background(), msg, err)
 			}
 			return
 		}
@@ -731,7 +731,7 @@ func (c *inboundTurnCoordinator) runContendedInteractionInbound(
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			c.al.releaseInboundMessage(context.Background(), msg, ctx.Err())
+			c.al.turns.inbound.release(context.Background(), msg, ctx.Err())
 			return
 		case <-timer.C:
 		}
@@ -745,7 +745,7 @@ func (c *inboundTurnCoordinator) runContendedInteractionInbound(
 				msg,
 				explicitInteractionAnswerRetry,
 			)
-			c.al.releaseInboundMessage(
+			c.al.turns.inbound.release(
 				context.Background(),
 				msg,
 				errors.New("interaction answer is waiting for durable admission"),
@@ -766,7 +766,7 @@ func (c *inboundTurnCoordinator) runInteractionWorker(
 	admittedCtx, releaseCapacity, err := c.acquireTurnCapacity(ctx, target.Agent.ID)
 	if err != nil {
 		claim.releaseIfOwned()
-		c.al.releaseInboundMessage(context.Background(), msg, err)
+		c.al.turns.inbound.release(context.Background(), msg, err)
 		return
 	}
 	defer releaseCapacity()
@@ -784,7 +784,7 @@ func (c *inboundTurnCoordinator) runInteractionWorker(
 			"error":       processErr.Error(),
 		})
 		if ownership == interactionInboundCallerOwned {
-			c.al.releaseInboundMessage(context.Background(), msg, processErr)
+			c.al.turns.inbound.release(context.Background(), msg, processErr)
 		}
 		return
 	}

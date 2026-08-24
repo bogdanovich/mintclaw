@@ -19,9 +19,9 @@ func (r *turnRunner) run(
 	ts *turnState,
 	execute pipelineTurnExecutionFunc,
 ) (result turnResult, err error) {
-	al := r.host
+	runtime := r.runtime
 	pipeline := r.pipeline
-	ctx, releaseAdmission, err := al.acquireAgentTurn(ctx, ts.agentID)
+	ctx, releaseAdmission, err := runtime.acquireAgentTurn(ctx, ts.agentID)
 	if err != nil {
 		return turnResult{}, err
 	}
@@ -32,15 +32,15 @@ func (r *turnRunner) run(
 	ts.setTurnCancel(turnCancel)
 	ts.ctx = turnCtx
 
-	// Inject turnState and AgentLoop into context so tools (e.g. spawn) can retrieve them.
+	// Tools receive the current turn through context; child execution is wired
+	// explicitly through their registered runner.
 	turnCtx = withTurnState(turnCtx, ts)
-	turnCtx = WithAgentLoop(turnCtx, al)
 
-	al.registerActiveTurn(ts)
-	defer al.clearActiveTurn(ts)
+	runtime.registerActiveTurn(ts)
+	defer runtime.clearActiveTurn(ts)
 	defer ts.Finish(false)
 
-	if al.takePendingStop(ts.runtimeSessionScope()) {
+	if runtime.takePendingStop(ts.runtimeSessionScope()) {
 		_ = ts.requestHardAbort()
 	}
 
@@ -65,11 +65,11 @@ func (r *turnRunner) run(
 				finalSuccessfulPath = append([]string(nil), attemptedSkills...)
 			}
 		}
-		if al.traceCapture != nil && al.traceCapture.enabled() {
+		if r.traceCapture != nil && r.traceCapture.enabled() {
 			pipeline.emitEvent(
 				runtimeevents.KindAgentContextSnapshot,
 				ts.eventMeta("runTurn", "turn.context.snapshot"),
-				buildContextSnapshotPayload(al.GetConfig(), ts),
+				buildContextSnapshotPayload(pipeline.Cfg, ts),
 			)
 		}
 		pipeline.emitEvent(
@@ -128,10 +128,10 @@ func (r *turnRunner) run(
 				ts.opts.FinalDeliveryObservation.observeSteering(acceptedSteering)
 				return
 			}
-			al.ackAcceptedSteeringMessages(ctx, acceptedSteering)
+			runtime.inbound.ackAcceptedSteeringMessages(ctx, acceptedSteering)
 			return
 		}
-		al.releaseSteeringMessages(context.Background(), acceptedSteering, err)
+		runtime.inbound.releaseSteeringMessages(context.Background(), acceptedSteering, err)
 	}()
 
 	if ts.hardAbortRequested() {

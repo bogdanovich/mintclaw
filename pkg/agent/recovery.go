@@ -83,7 +83,7 @@ func (al *AgentLoop) recoverUnansweredSession(
 	if scope != nil && strings.TrimSpace(scope.RouteScopeKey) != "" {
 		routeScopeKey = strings.TrimSpace(scope.RouteScopeKey)
 	}
-	turnID := "pending-recovery-" + sessionKey + "-" + fmt.Sprintf("%d", al.turnSeq.Add(1))
+	turnID := "pending-recovery-" + sessionKey + "-" + fmt.Sprintf("%d", al.turns.nextSequence())
 	var (
 		claim   *runtimeSessionClaim
 		claimed bool
@@ -99,9 +99,9 @@ func (al *AgentLoop) recoverUnansweredSession(
 			},
 			SessionKey: sessionKey,
 		}
-		claim, _, claimed = al.claimRuntimeRouteSession(target, turnID)
+		claim, _, claimed = al.turns.claimRuntimeRouteSession(target, turnID)
 	} else {
-		claim, claimed = al.claimRuntimeSession(
+		claim, claimed = al.turns.claimRuntimeSession(
 			newRuntimeSessionScope(agent.Workspace, sessionKey), turnID,
 		)
 	}

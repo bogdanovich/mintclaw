@@ -3152,7 +3152,7 @@ func TestDeliverToolResultToUser_NoBusDoesNotReportQueuedMedia(t *testing.T) {
 	}
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
-	al.bus = nil
+	setTestMessageBus(al, nil)
 	store := media.NewFileMediaStore()
 	al.SetMediaStore(store)
 
@@ -3205,7 +3205,7 @@ func TestDeliverExplicitToolOutbound_NoBusDoesNotReportQueuedText(t *testing.T) 
 	}
 
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
-	al.bus = nil
+	setTestMessageBus(al, nil)
 
 	agent := al.registry.GetDefaultAgent()
 	if agent == nil {

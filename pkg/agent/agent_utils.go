@@ -681,8 +681,8 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 }
 
 func (al *AgentLoop) waitForActiveRequests(ctx context.Context, timeout time.Duration) bool {
-	if al == nil || al.activeRequests == nil {
+	if al == nil || al.turns == nil || al.turns.activeRequests == nil {
 		return true
 	}
-	return al.activeRequests.wait(ctx, timeout)
+	return al.turns.activeRequests.wait(ctx, timeout)
 }

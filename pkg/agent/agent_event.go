@@ -12,7 +12,7 @@ func (al *AgentLoop) newTurnEventScope(
 	agentID, workspace, sessionKey string,
 	turnCtx *TurnContext,
 ) turnEventScope {
-	seq := al.turnSeq.Add(1)
+	seq := al.turns.nextSequence()
 	return turnEventScope{
 		agentID:    agentID,
 		workspace:  workspace,

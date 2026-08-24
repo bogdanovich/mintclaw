@@ -3252,7 +3252,7 @@ func TestMalformedMultilineAnswerCanRetryAndResumeExactlyOnce(t *testing.T) {
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 
 	sessionKey := "session-multiline-answer-retry"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Configure the test"})
@@ -3841,7 +3841,7 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 		t.Fatalf("aborted approved tool published a final response: %#v", final)
 	case <-time.After(100 * time.Millisecond):
 	}
-	claim, _, claimed := al.claimRuntimeRouteSession(target, "post-approval-stop-reuse")
+	claim, _, claimed := al.turns.claimRuntimeRouteSession(target, "post-approval-stop-reuse")
 	if !claimed {
 		t.Fatal("canceled approved tool did not release the route for reuse")
 	}
@@ -5038,7 +5038,7 @@ func TestClaimedAnswerIsNotReleasedAfterResumeFailure(t *testing.T) {
 	manager := newInteractionChannelManager()
 	al.channelManager = manager
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 	sessionKey := "session-claimed-spool-ownership"
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
@@ -5062,7 +5062,7 @@ func TestClaimedAnswerIsNotReleasedAfterResumeFailure(t *testing.T) {
 	}
 	msg.Context.MessageID = "answer-claimed"
 	scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
-	claim, claimed := al.claimRuntimeSession(scope, "test-claimed-spool")
+	claim, claimed := al.turns.claimRuntimeSession(scope, "test-claimed-spool")
 	if !claimed {
 		t.Fatal("failed to claim test session")
 	}
@@ -5091,7 +5091,7 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 	sessionKey := "session-resume-additional-input"
 	continuationSessionKey := "task-resume-additional-input"
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -5121,7 +5121,7 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 	}
 	msg.Context.MessageID = "answer-2"
 	ownerScope := newRuntimeSessionScope(agent.Workspace, sessionKey)
-	claim, claimed := al.claimRuntimeSession(ownerScope, "test-active-resume")
+	claim, claimed := al.turns.claimRuntimeSession(ownerScope, "test-active-resume")
 	if !claimed {
 		t.Fatal("failed to claim test session")
 	}
@@ -5162,7 +5162,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 
 	const (
 		ownerSession        = "owner-approval-steering"
@@ -5275,7 +5275,7 @@ func TestConcurrentExplicitInteractionAnswersNeverBecomeSteering(t *testing.T) {
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 
 	sessionKey := "session-concurrent-explicit-answers"
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "Choose a value"})
@@ -5482,7 +5482,7 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 			defer cleanup()
 			tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-			al.bus = tracker
+			setTestMessageBus(al, tracker)
 			sessionKey := "session-answer-admission-contention-" + test.name
 			request := testToolSuspensionRequest(agent.Workspace)
 			request.Route.SessionKey = sessionKey
@@ -5503,7 +5503,7 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 				Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
 			}
 			scope := newRuntimeSessionScope(agent.Workspace, sessionKey)
-			blocker, claimed := al.claimRuntimeSession(scope, "answer-admission-blocker")
+			blocker, claimed := al.turns.claimRuntimeSession(scope, "answer-admission-blocker")
 			if !claimed {
 				t.Fatal("failed to claim the interaction session blocker")
 			}
@@ -5574,7 +5574,7 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 	sessionKey := "session-retained-replay"
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
@@ -5668,7 +5668,7 @@ func TestReloadedClaimedInteractionRejectsLosingProjectedAnswer(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 	sessionKey := "session-reloaded-claimed-answer"
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = sessionKey
@@ -5756,7 +5756,7 @@ func TestTaskInteractionConcurrentExplicitAnswersStartOneContinuation(t *testing
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 
 	sessionKey := session.BuildOpaqueSessionKey("agent:main:test:task-concurrent-answer-owner")
 	continuationSessionKey := session.BuildOpaqueSessionKey("agent:main:test:task-concurrent-answer-child")
@@ -6054,7 +6054,7 @@ func TestStopCancellationFencesClaimedInteractionBeforeRouteWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-interaction-resume")
+	activeClaim, _, claimed := al.turns.claimRuntimeRouteSession(target, "pending-interaction-resume")
 	if !claimed {
 		t.Fatal("failed to claim the interaction route at the claimed boundary")
 	}
@@ -6100,7 +6100,7 @@ func TestStopCancellationFencesClaimedInteractionBeforeRouteWait(t *testing.T) {
 	if record.Status != interactions.StatusCancelled || record.Revision <= fencedRevision {
 		t.Fatalf("boundary interaction = %#v", record)
 	}
-	if _, armed := al.pendingStops.Load(continuationScope); armed {
+	if _, armed := al.turns.pendingStops.Load(continuationScope); armed {
 		t.Fatal("boundary cancellation left a pending stop armed")
 	}
 }
@@ -6118,7 +6118,7 @@ func TestStopCancellationRecoveryClearsTimedOutPendingStop(t *testing.T) {
 	})
 	record, target := prepareWaitingControlInteraction(t, al, agent, stop, "")
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
-	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-unregistered-continuation")
+	activeClaim, _, claimed := al.turns.claimRuntimeRouteSession(target, "pending-unregistered-continuation")
 	if !claimed {
 		t.Fatal("failed to hold the interaction route")
 	}
@@ -6140,7 +6140,7 @@ func TestStopCancellationRecoveryClearsTimedOutPendingStop(t *testing.T) {
 		agent.Workspace,
 		interactionContinuationSessionKey(record),
 	)
-	if _, armed := al.pendingStops.Load(continuationScope); !armed {
+	if _, armed := al.turns.pendingStops.Load(continuationScope); !armed {
 		t.Fatal("timed-out stop did not arm the continuation marker")
 	}
 	activeClaim.releaseIfOwned()
@@ -6152,7 +6152,7 @@ func TestStopCancellationRecoveryClearsTimedOutPendingStop(t *testing.T) {
 	if record.Status != interactions.StatusCancelled {
 		t.Fatalf("interaction after cancellation recovery = %#v", record)
 	}
-	if al.takePendingStop(continuationScope) {
+	if al.turns.takePendingStop(continuationScope) {
 		t.Fatal("next continuation turn consumed a stale recovered stop")
 	}
 }
@@ -6199,7 +6199,7 @@ func TestStopCancellationReloadsWaitingInteractionAfterAnswerAdmission(t *testin
 	case <-time.After(time.Second):
 		t.Fatal("stop did not pause after loading the waiting interaction")
 	}
-	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-interaction-answer")
+	activeClaim, _, claimed := al.turns.claimRuntimeRouteSession(target, "pending-interaction-answer")
 	if !claimed {
 		t.Fatal("failed to claim the route for answer admission")
 	}
@@ -6297,7 +6297,7 @@ func TestStopCancellationAbortsActiveInteractionContinuation(t *testing.T) {
 		t.Fatalf("aborted interaction published a final response: %#v", final)
 	case <-time.After(100 * time.Millisecond):
 	}
-	claim, _, claimed := al.claimRuntimeRouteSession(target, "post-stop-reuse")
+	claim, _, claimed := al.turns.claimRuntimeRouteSession(target, "post-stop-reuse")
 	if !claimed {
 		t.Fatal("canceled interaction did not release the route for reuse")
 	}
@@ -6309,7 +6309,7 @@ func TestStopCancellationWinsModelFinalizationBoundary(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	trackingBus := &finalResponseAdmissionTestBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	manager := newInteractionChannelManager()
 	al.channelManager = manager
 	stop := testInboundMessage(bus.InboundMessage{
@@ -6428,7 +6428,7 @@ func TestLateResumingSteeringHandsOffToOwnerExactlyOnce(t *testing.T) {
 	defer cleanup()
 	installInteractionChannelManager(t, al, newInteractionChannelManager())
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    "start interaction",
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:late-resume-owner"),
@@ -6560,7 +6560,7 @@ func TestResumeErrorTeardownSealsStaleInboundFlight(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    "start interaction",
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:error-handoff-owner"),
@@ -6669,7 +6669,7 @@ func TestCrossAgentResumeErrorHandoffUsesContinuationWorkspace(t *testing.T) {
 	ownerAgent, _ := al.registry.GetAgent("alpha")
 	continuationAgent, _ := al.registry.GetAgent("beta")
 	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
-	al.bus = tracker
+	setTestMessageBus(al, tracker)
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    "start cross-agent interaction",
 		SessionKey: session.BuildOpaqueSessionKey("agent:alpha:test:cross-agent-handoff-owner"),
@@ -6924,7 +6924,7 @@ func TestStopCancellationWinsPrecomputedFinalizationBoundary(t *testing.T) {
 	agent.Sessions.AddFullMessage(target.SessionKey, providers.Message{
 		Role: "assistant", Content: "precomputed final response",
 	})
-	activeClaim, _, claimed := al.claimRuntimeRouteSession(target, "pending-precomputed-final")
+	activeClaim, _, claimed := al.turns.claimRuntimeRouteSession(target, "pending-precomputed-final")
 	if !claimed {
 		t.Fatal("failed to claim the precomputed-final route")
 	}
@@ -7677,7 +7677,7 @@ func TestInteractionWorkerReleasesSessionBeforeDrainingDeferredIngress(t *testin
 		RouteClaimKey: runtimeRouteClaimKey(request.Route.RouteSessionKey, ""),
 		Allocation:    session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
 	}
-	claim, _, claimed := al.claimRuntimeRouteSession(target, "pending-interaction-drain")
+	claim, _, claimed := al.turns.claimRuntimeRouteSession(target, "pending-interaction-drain")
 	if !claimed {
 		t.Fatal("failed to claim interaction session")
 	}
@@ -7696,7 +7696,7 @@ func TestInteractionWorkerReleasesSessionBeforeDrainingDeferredIngress(t *testin
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for deferred continuation")
 	}
-	if contender, _, contenderClaimed := al.claimRuntimeRouteSession(
+	if contender, _, contenderClaimed := al.turns.claimRuntimeRouteSession(
 		target,
 		"newer-inbound-during-drain",
 	); contenderClaimed {
@@ -8277,7 +8277,7 @@ func TestDrainDeferredInteractionIngressReleasesSteeringAfterAggregateRejection(
 		MessageBus: al.bus.(*bus.MessageBus),
 		publishErr: rejection,
 	}
-	al.bus = trackingBus
+	setTestMessageBus(al, trackingBus)
 	sessionKey := "session-deferred-admission"
 	if err := al.enqueueSteeringMessageWithSender(
 		newRuntimeSessionScope(agent.Workspace, sessionKey),

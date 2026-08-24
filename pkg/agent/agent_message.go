@@ -337,7 +337,7 @@ func (al *AgentLoop) processInboundMessageTurn(
 	}
 
 	defer func() { turn.Cleanup() }()
-	admittedCtx, releaseAdmission, err := al.acquireAgentTurn(ctx, turn.Agent.ID)
+	admittedCtx, releaseAdmission, err := al.turns.acquireAgentTurn(ctx, turn.Agent.ID)
 	if err != nil {
 		return "", err
 	}

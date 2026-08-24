@@ -123,7 +123,7 @@ func (c *inboundTurnCoordinator) handleScopedInspectionCommand(
 		defer al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
 	}
 	metadata := bus.OutboundMetadata{}
-	if al.getActiveTurnState(newRuntimeSessionScope(target.Agent.Workspace, target.SessionKey)) != nil {
+	if al.turns.activeTurnState(newRuntimeSessionScope(target.Agent.Workspace, target.SessionKey)) != nil {
 		metadata.OutboundKind = bus.OutboundKindInterim
 	}
 	admission := al.publishResponseWithMetadataAndScopes(
@@ -149,7 +149,7 @@ func (c *inboundTurnCoordinator) deferInteractionInbound(
 	target *inboundDispatchTarget,
 ) {
 	if err := c.enqueueDeferredInteractionInbound(ctx, msg, target); err != nil {
-		c.al.releaseInboundMessage(context.Background(), msg, err)
+		c.al.turns.inbound.release(context.Background(), msg, err)
 	}
 }
 
@@ -176,9 +176,9 @@ func (c *inboundTurnCoordinator) claimSession(
 	target *inboundDispatchTarget,
 ) (*runtimeSessionClaim, *inboundDispatchTarget, bool) {
 	al := c.al
-	return al.claimRuntimeRouteSession(
+	return al.turns.claimRuntimeRouteSession(
 		target,
-		makePendingTurnID(target.SessionKey, al.turnSeq.Add(1)),
+		makePendingTurnID(target.SessionKey, al.turns.nextSequence()),
 	)
 }
 
@@ -189,7 +189,7 @@ func (c *inboundTurnCoordinator) handleBusySession(
 ) {
 	al := c.al
 	if target == nil || target.Agent == nil {
-		al.releaseInboundMessage(ctx, msg, fmt.Errorf("active session target is unavailable"))
+		al.turns.inbound.release(ctx, msg, fmt.Errorf("active session target is unavailable"))
 		return
 	}
 	scope := target.runtimeSessionScope()
@@ -212,7 +212,7 @@ func (c *inboundTurnCoordinator) handleBusySession(
 				"chat_id":     msg.ChatID,
 				"session_key": scope.sessionKey,
 			})
-		al.releaseInboundMessage(ctx, msg, err)
+		al.turns.inbound.release(ctx, msg, err)
 	}
 }
 
@@ -232,13 +232,13 @@ func (al *AgentLoop) settleInboundAdmission(
 ) error {
 	admission = transactionAdmission(ctx, admission)
 	if admission.permitsInboundAck() {
-		if err := al.ackInboundMessage(ctx, msg); err != nil {
-			al.releaseInboundMessage(context.Background(), msg, err)
+		if err := al.turns.inbound.ack(ctx, msg); err != nil {
+			al.turns.inbound.release(context.Background(), msg, err)
 			return err
 		}
 		return nil
 	}
-	al.releaseInboundMessage(context.Background(), msg, admission.err)
+	al.turns.inbound.release(context.Background(), msg, admission.err)
 	return admission.err
 }
 
@@ -252,7 +252,7 @@ func (c *inboundTurnCoordinator) runWorker(
 	admittedCtx, releaseCapacity, err := c.acquireTurnCapacity(ctx, target.Agent.ID)
 	if err != nil {
 		claim.releaseIfOwned()
-		al.releaseInboundMessage(context.Background(), msg, err)
+		al.turns.inbound.release(context.Background(), msg, err)
 		return
 	}
 	defer releaseCapacity()
@@ -260,7 +260,7 @@ func (c *inboundTurnCoordinator) runWorker(
 	currentAgent, changed, err := al.currentAgentGeneration(target.Agent)
 	if err != nil {
 		claim.releaseIfOwned()
-		al.releaseInboundMessage(context.Background(), msg, err)
+		al.turns.inbound.release(context.Background(), msg, err)
 		return
 	}
 	if changed {
@@ -276,7 +276,7 @@ func (c *inboundTurnCoordinator) runWorker(
 		defer al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
 	}
 
-	if al.takePendingStop(claim.scope) {
+	if al.turns.takePendingStop(claim.scope) {
 		c.handlePendingStop(ctx, msg, claim, target)
 		return
 	}
@@ -291,7 +291,7 @@ func (c *inboundTurnCoordinator) acquireTurnCapacity(
 	agentID string,
 ) (context.Context, func(), error) {
 	for {
-		admittedCtx, releaseAdmission, err := c.al.acquireAgentTurn(ctx, agentID)
+		admittedCtx, releaseAdmission, err := c.al.turns.acquireAgentTurn(ctx, agentID)
 		if err != nil {
 			return ctx, nil, err
 		}
