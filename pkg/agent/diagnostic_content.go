@@ -220,7 +220,7 @@ func diagnosticBrowserFillCall(call providers.ToolCall) bool {
 	if !actionKind.Valid() {
 		return true
 	}
-	return actionKind == browseraction.ActionFill
+	return actionKind == browseraction.ActionFill || actionKind == browseraction.ActionUpload
 }
 
 func diagnosticLLMResponseContent(
