@@ -19,6 +19,22 @@ type fakePickerSource struct {
 	page    func(codingpicker.Query) (codingpicker.Page, error)
 }
 
+type cancelAwarePickerSource struct {
+	started  chan codingpicker.Query
+	canceled chan codingpicker.Query
+	page     codingpicker.Page
+}
+
+func (s *cancelAwarePickerSource) Page(ctx context.Context, query codingpicker.Query) (codingpicker.Page, error) {
+	if query.Search != "blocking" {
+		return s.page, nil
+	}
+	s.started <- query
+	<-ctx.Done()
+	s.canceled <- query
+	return codingpicker.Page{}, ctx.Err()
+}
+
 func (s *fakePickerSource) Page(
 	_ context.Context,
 	query codingpicker.Query,
@@ -183,7 +199,9 @@ func TestPickerLatestRequestWinsAndFailedPageCannotBeSelected(t *testing.T) {
 	source := &fakePickerSource{page: func(query codingpicker.Query) (codingpicker.Page, error) {
 		switch query.Search {
 		case "latest":
-			return codingpicker.Page{Items: []codingpicker.Item{latest}, Matched: 1}, nil
+			return codingpicker.Page{
+				Items: []codingpicker.Item{latest}, Matched: 2, HasMore: true, NextOffset: 20,
+			}, nil
 		case "fail":
 			return codingpicker.Page{}, injected
 		default:
@@ -214,9 +232,28 @@ func TestPickerLatestRequestWinsAndFailedPageCannotBeSelected(t *testing.T) {
 
 	failedQuery := codingpicker.Query{Search: "fail", Limit: 20}
 	failedCommand := model.load(failedQuery)
+	generation := model.requestGeneration
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = updated.(*pickerModel)
+	if command != nil || model.query != failedQuery || model.requestGeneration != generation {
+		t.Fatalf(
+			"pending query paginated from stale page: query=%+v generation=%d",
+			model.query,
+			model.requestGeneration,
+		)
+	}
 	updated, _ = model.Update(failedCommand())
 	model = updated.(*pickerModel)
-	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = updated.(*pickerModel)
+	if command != nil || model.query != failedQuery || model.requestGeneration != generation {
+		t.Fatalf(
+			"failed query paginated from stale page: query=%+v generation=%d",
+			model.query,
+			model.requestGeneration,
+		)
+	}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(*pickerModel)
 	if model.err == nil || model.query != failedQuery || model.pageQuery == failedQuery ||
 		model.selectedThreadID != "" || command != nil {
@@ -228,6 +265,42 @@ func TestPickerLatestRequestWinsAndFailedPageCannotBeSelected(t *testing.T) {
 			model.selectedThreadID,
 			command,
 		)
+	}
+}
+
+func TestPickerCancelsSupersededLoad(t *testing.T) {
+	latestQuery := codingpicker.Query{Search: "latest", Limit: 20}
+	latestPage := codingpicker.Page{Matched: 1}
+	source := &cancelAwarePickerSource{
+		started: make(chan codingpicker.Query, 1), canceled: make(chan codingpicker.Query, 1), page: latestPage,
+	}
+	model := newPickerModel(
+		t.Context(), source, codingpicker.Query{Limit: 20}, codingpicker.Page{}, time.Now,
+	)
+	blockingCommand := model.load(codingpicker.Query{Search: "blocking", Limit: 20})
+	blockingResult := make(chan tea.Msg, 1)
+	go func() { blockingResult <- blockingCommand() }()
+	select {
+	case <-source.started:
+	case <-time.After(time.Second):
+		t.Fatal("blocking picker request did not start")
+	}
+
+	latestCommand := model.load(latestQuery)
+	select {
+	case <-source.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("superseded picker request was not canceled")
+	}
+	updated, _ := model.Update(<-blockingResult)
+	model = updated.(*pickerModel)
+	if !model.loading || model.query != latestQuery {
+		t.Fatalf("stale cancellation changed latest request: loading=%t query=%+v", model.loading, model.query)
+	}
+	updated, _ = model.Update(latestCommand())
+	model = updated.(*pickerModel)
+	if model.loading || model.err != nil || model.pageQuery != latestQuery || model.page.Matched != latestPage.Matched {
+		t.Fatalf("latest request did not complete: %+v", model)
 	}
 }
 

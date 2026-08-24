@@ -118,6 +118,7 @@ type pickerModel struct {
 	height            int
 	now               func() time.Time
 	requestGeneration uint64
+	loadCancel        context.CancelFunc
 }
 
 type pickerPageMsg struct {
@@ -158,6 +159,7 @@ func (m *pickerModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.loading = false
+		m.loadCancel = nil
 		m.err = message.err
 		if message.err == nil {
 			m.page = message.page
@@ -198,6 +200,7 @@ func (m *pickerModel) updateSearch(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *pickerModel) updateKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch message.String() {
 	case "ctrl+c", "esc", "q", "Q":
+		m.cancelLoad()
 		m.canceled = true
 		return m, tea.Quit
 	case "/", "s", "S":
@@ -223,13 +226,13 @@ func (m *pickerModel) updateKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selected++
 		}
 	case "pgup", "left", "h", "p":
-		if m.query.Offset > 0 {
+		if m.canPage() && m.query.Offset > 0 {
 			query := m.query
 			query.Offset = max(0, query.Offset-query.Limit)
 			return m, m.load(query)
 		}
 	case "pgdown", "right", "l", "n":
-		if m.page.HasMore {
+		if m.canPage() && m.page.HasMore {
 			query := m.query
 			query.Offset = m.page.NextOffset
 			return m, m.load(query)
@@ -241,18 +244,32 @@ func (m *pickerModel) updateKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *pickerModel) load(query codingpicker.Query) tea.Cmd {
+	m.cancelLoad()
 	m.query = query
 	m.loading = true
 	m.requestGeneration++
 	generation := m.requestGeneration
 	m.notice = ""
 	m.err = nil
+	requestCtx, cancel := context.WithTimeout(m.ctx, pickerPageTimeout)
+	m.loadCancel = cancel
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, pickerPageTimeout)
 		defer cancel()
-		page, err := m.source.Page(ctx, query)
+		page, err := m.source.Page(requestCtx, query)
 		return pickerPageMsg{generation: generation, query: query, page: page, err: err}
 	}
+}
+
+func (m *pickerModel) cancelLoad() {
+	if m.loadCancel == nil {
+		return
+	}
+	m.loadCancel()
+	m.loadCancel = nil
+}
+
+func (m *pickerModel) canPage() bool {
+	return !m.loading && m.err == nil && m.pageQuery == m.query
 }
 
 func (m *pickerModel) selectCurrent() (tea.Model, tea.Cmd) {
