@@ -252,7 +252,7 @@ func TestDeliverAsyncToolCompletion_UserOnlyUpdatesDelivered(t *testing.T) {
 		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
-	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "spawn",
 		CompletionID: "completion-user-only",
@@ -299,7 +299,7 @@ func TestDeliverAsyncToolCompletion_ParentOnlyUpdatesSessionQueued(t *testing.T)
 		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly)
 
-	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "delegate",
 		CompletionID: "completion-parent-only",
@@ -324,7 +324,7 @@ func TestDeliverAsyncToolCompletion_ParentPublishFailureUpdatesFailed(t *testing
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly)
 	setTestMessageBus(al, failingMessageBus{})
 
-	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "delegate",
 		CompletionID: "completion-parent-publish-failed",
@@ -348,7 +348,7 @@ func TestDeliverAsyncToolCompletion_EmptyParentSynthesisUpdatesFailed(t *testing
 		Control: toolshared.ToolControl{TaskID: taskID},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryParentOnly)
 
-	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "delegate",
 		CompletionID: "completion-parent-empty",
@@ -385,7 +385,7 @@ func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) 
 		Decision:     decideAsyncToolResultDelivery(result),
 	}
 
-	al.deliverAsyncToolCompletion(req)
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(req)
 	userOutbound := waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
 		return msg.Content == "user visible"
 	})
@@ -404,7 +404,7 @@ func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) 
 		"parent duplicate",
 	)
 	req.TurnState = reloadedTS
-	reloaded.deliverAsyncToolCompletion(req)
+	reloaded.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(req)
 	assertNoOutboundMessage(t, reloadedBus, "duplicate user_and_parent delivery")
 	assertTaskDeliveryStatusForTest(t, reloaded, workspace, taskID, taskregistry.DeliveryDelivered)
 }
@@ -426,11 +426,11 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateUserDelivery(t *testing.T) {
 		Decision:     decideAsyncToolResultDelivery(result),
 	}
 
-	al.deliverAsyncToolCompletion(req)
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(req)
 	waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
 		return msg.Content == "user once"
 	})
-	al.deliverAsyncToolCompletion(req)
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(req)
 	assertNoOutboundMessage(t, msgBus, "duplicate user delivery")
 }
 
@@ -451,7 +451,7 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateParentDeliveryAfterReload(t *t
 		Decision:     decideAsyncToolResultDelivery(result),
 	}
 
-	al.deliverAsyncToolCompletion(req)
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(req)
 	waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
 		return msg.Content == "parent once"
 	})
@@ -462,7 +462,7 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateParentDeliveryAfterReload(t *t
 		"parent duplicate",
 	)
 	req.TurnState = reloadedTS
-	reloaded.deliverAsyncToolCompletion(req)
+	reloaded.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(req)
 	assertNoOutboundMessage(t, reloadedBus, "duplicate parent delivery")
 	assertTaskDeliveryStatusForTest(t, reloaded, workspace, taskID, taskregistry.DeliverySessionQueued)
 }
@@ -492,7 +492,7 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateMediaAfterReload(t *testing.T)
 		Decision:     decideAsyncToolResultDelivery(result),
 	}
 
-	al.deliverAsyncToolCompletion(req)
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(req)
 	media := waitForOutboundMediaMessage(t, msgBus.OutboundMediaChan(), 2*time.Second)
 	if len(media.Parts) != 1 || media.Parts[0].Ref != "media://video-1" {
 		t.Fatalf("media parts = %+v, want media://video-1", media.Parts)
@@ -510,7 +510,7 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateMediaAfterReload(t *testing.T)
 		"duplicate should not synthesize",
 	)
 	req.TurnState = reloadedTS
-	reloaded.deliverAsyncToolCompletion(req)
+	reloaded.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(req)
 	assertNoOutboundMediaMessage(t, reloadedBus, "duplicate media delivery after reload")
 	assertNoOutboundMessage(t, reloadedBus, "duplicate media parent synthesis after reload")
 	assertTaskDeliveryStatusForTest(t, reloaded, workspace, taskID, taskregistry.DeliveryDelivered)
@@ -534,7 +534,7 @@ func TestDeliverAsyncToolCompletion_MediaDeliveryFailureRecordsFailed(t *testing
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
 	setTestMessageBus(al, failingMessageBus{})
-	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "spawn",
 		CompletionID: "failed-media-completion",
@@ -726,7 +726,7 @@ func TestDeliverAsyncToolCompletion_FailedDeliveryRecordsCompletionError(t *test
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
 	setTestMessageBus(al, failingMessageBus{})
-	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "spawn",
 		CompletionID: "failed-completion",
@@ -761,7 +761,7 @@ func TestDeliverAsyncToolCompletion_UserOnlyDurableDeliverableIsDelivered(t *tes
 		Deliverable: &taskresult.Deliverable{Text: fullReport},
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
-	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "spawn",
 		CompletionID: "durable-report-completion",
@@ -786,7 +786,7 @@ func TestDeliverAsyncToolCompletion_ErrorDeliveryUpdatesTaskStatus(t *testing.T)
 		IsError: true,
 	}).WithAsyncDelivery(toolshared.AsyncDeliveryUserOnly)
 
-	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		TurnState:    ts,
 		ToolName:     "spawn",
 		CompletionID: "error-completion",

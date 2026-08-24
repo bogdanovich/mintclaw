@@ -54,13 +54,16 @@ type asyncToolCompletionDelivery struct {
 	updateAsyncTaskDeliveryStatus   func(workspace, taskID string, status taskregistry.DeliveryStatus, completionID, errorSummary string)
 }
 
-func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery {
+func newAsyncToolCompletionDelivery(
+	al *AgentLoop,
+	events runtimeEventEmitter,
+) *asyncToolCompletionDelivery {
 	if al == nil {
 		return nil
 	}
 	return &asyncToolCompletionDelivery{
 		currentConfig: al.GetConfig,
-		events:        &agentRuntimeEventEmitter{events: al.runtimeEvents},
+		events:        events,
 		deliverToUser: al.deliverToolResultToUserWithScopes,
 		synthesizeCompletion: func(ctx context.Context, input AsyncCompletionInput) (string, error) {
 			return al.processAsyncCompletionWithDelivery(ctx, input, false)
@@ -73,10 +76,6 @@ func (al *AgentLoop) asyncToolCompletionDelivery() *asyncToolCompletionDelivery 
 		recordAsyncTaskDeliveryDecision: al.recordAsyncTaskDeliveryDecision,
 		updateAsyncTaskDeliveryStatus:   al.updateAsyncTaskDeliveryStatus,
 	}
-}
-
-func (al *AgentLoop) deliverAsyncToolCompletion(req AsyncDeliveryRequest) {
-	al.asyncToolCompletionDelivery().deliverAsyncToolCompletion(req)
 }
 
 func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDeliveryRequest) {

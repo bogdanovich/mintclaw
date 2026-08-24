@@ -619,6 +619,7 @@ func attachInteractionOutbox(
 	manager *interactionChannelManager,
 ) *outbox.Coordinator {
 	t.Helper()
+	ensureTestTurnRunner(al)
 	coordinator, err := outbox.OpenCoordinator(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -666,6 +667,7 @@ func installInteractionChannelManager(
 
 func openTestInteractionOutbox(t *testing.T, al *AgentLoop) *outbox.Coordinator {
 	t.Helper()
+	ensureTestTurnRunner(al)
 	coordinator, err := outbox.OpenCoordinator(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1454,7 +1456,7 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 	request.Route.ChatType = "supergroup"
 	request.Route.TopicID = "1771"
 	request.ExecutionContext = &bus.InboundContext{MessageID: "question-origin"}
-	disposition, err := al.humanInteractionRuntime().SuspendToolCall(t.Context(), request)
+	disposition, err := (&humanInteractionRuntime{al: al}).SuspendToolCall(t.Context(), request)
 	if err != nil || !disposition.Durable || disposition.InteractionID == "" {
 		t.Fatalf("SuspendToolCall() = (%#v, %v)", disposition, err)
 	}
@@ -1491,7 +1493,6 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 
 func TestTerminalInteractionDismissesContinuationToolFeedbackCarrier(t *testing.T) {
 	manager := &recordingChannelManager{}
-	al := &AgentLoop{channelManager: manager}
 	record := interactions.Record{
 		Route: interactions.Route{
 			Channel: "telegram", ChatID: "chat-1", SessionKey: "owner-session",
@@ -1503,7 +1504,7 @@ func TestTerminalInteractionDismissesContinuationToolFeedbackCarrier(t *testing.
 			},
 		},
 	}
-	al.dismissTerminalInteractionToolFeedback(record)
+	(&toolFeedbackPublisher{channelManager: manager}).dismissTerminalInteraction(record)
 	if len(manager.dismissedTargets) != 1 {
 		t.Fatalf("dismissed targets = %#v, want one", manager.dismissedTargets)
 	}
@@ -1517,6 +1518,7 @@ func TestTerminalInteractionDismissesContinuationToolFeedbackCarrier(t *testing.
 func TestChainedInteractionKeepsContinuationToolFeedbackCarrier(t *testing.T) {
 	manager := &recordingChannelManager{}
 	al := &AgentLoop{channelManager: manager}
+	ensureTestTurnRunner(al)
 	record := interactions.Record{
 		ID: "interaction-chain", Status: interactions.StatusResolved,
 		Route: interactions.Route{
@@ -1582,7 +1584,12 @@ func TestNonTelegramApprovalPromptCarriesGenericControlsWithoutReplyThread(t *te
 	}
 	record = bindTestInteractionPrompt(t, registry, record)
 
-	if _, err = al.humanInteractionRuntime().publishPrompt(t.Context(), registry, workspace, record); err != nil {
+	if _, err = (&humanInteractionRuntime{al: al}).publishPrompt(
+		t.Context(),
+		registry,
+		workspace,
+		record,
+	); err != nil {
 		t.Fatal(err)
 	}
 	prompt := <-manager.sent
@@ -1749,6 +1756,7 @@ func TestInteractionAnswerContentConcurrentConfigReload(t *testing.T) {
 func TestInteractionEventsDoNotProjectOwningTaskState(t *testing.T) {
 	workspace := t.TempDir()
 	al := &AgentLoop{cfg: config.DefaultConfig()}
+	ensureTestTurnRunner(al)
 	tasks := al.taskRegistryForWorkspace(workspace)
 	if err := tasks.Upsert(taskregistry.Record{
 		TaskID: "task-1", Status: taskregistry.StatusRunning,
@@ -2357,7 +2365,7 @@ func TestHumanInteractionPromptFailureRemainsAmbiguousAndDoesNotRetry(t *testing
 	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
 	coordinator := attachInteractionOutbox(t, al, messageBus, manager)
 	workspace := t.TempDir()
-	disposition, err := al.humanInteractionRuntime().SuspendToolCall(
+	disposition, err := (&humanInteractionRuntime{al: al}).SuspendToolCall(
 		t.Context(),
 		testToolSuspensionRequest(workspace),
 	)
@@ -2372,7 +2380,7 @@ func TestHumanInteractionPromptFailureRemainsAmbiguousAndDoesNotRetry(t *testing
 	}
 
 	manager.setSendError(nil)
-	if _, duplicateIntent, retryErr := al.deliverInteractionPrompt(
+	if _, duplicateIntent, retryErr := (&humanInteractionRuntime{al: al}).deliverPrompt(
 		t.Context(),
 		al.interactionRegistryForWorkspace(workspace),
 		workspace,
@@ -2394,7 +2402,7 @@ func TestHumanInteractionDefiniteNotSentPromptRetries(t *testing.T) {
 	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
 	coordinator := attachInteractionOutbox(t, al, messageBus, manager)
 	workspace := t.TempDir()
-	disposition, err := al.humanInteractionRuntime().SuspendToolCall(
+	disposition, err := (&humanInteractionRuntime{al: al}).SuspendToolCall(
 		t.Context(),
 		testToolSuspensionRequest(workspace),
 	)
@@ -2409,7 +2417,7 @@ func TestHumanInteractionDefiniteNotSentPromptRetries(t *testing.T) {
 	}
 
 	manager.setSendError(nil)
-	record, delivered, retryErr := al.deliverInteractionPrompt(
+	record, delivered, retryErr := (&humanInteractionRuntime{al: al}).deliverPrompt(
 		t.Context(), registry, workspace, record,
 	)
 	if retryErr != nil || delivered.Status != outbox.StatusDelivered || delivered.Attempts != 2 {

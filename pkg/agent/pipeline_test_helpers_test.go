@@ -7,7 +7,7 @@ import (
 )
 
 func newTestPipeline(al *AgentLoop) *Pipeline {
-	return newPipeline(al, al.GetConfig())
+	return newTurnRunner(al, al.GetConfig()).pipeline
 }
 
 func runTestTurn(
@@ -17,6 +17,15 @@ func runTestTurn(
 	pipeline *Pipeline,
 ) (turnResult, error) {
 	return (&turnRunner{runtime: al.turns, pipeline: pipeline, traceCapture: al.traceCapture}).run(ctx, ts, nil)
+}
+
+func ensureTestTurnRunner(al *AgentLoop) {
+	if al.turns == nil {
+		al.turns = newTurnRuntime(al.registry, al.bus)
+	}
+	if al.turns.currentRunner() == nil {
+		al.turns.replaceRunner(newTurnRunner(al, al.cfg))
+	}
 }
 
 func setTestContextManager(al *AgentLoop, manager ContextManager) {

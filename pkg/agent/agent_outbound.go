@@ -259,7 +259,7 @@ func (al *AgentLoop) publishResponseWithMetadataAndScopes(
 	}
 
 	if policy == finalResponseSuppressIfMessageToolSent && messageToolSentToSameChat {
-		al.toolFeedbackPublisher().dismissToolFeedback(ctx, msg)
+		al.turns.currentRunner().toolFeedback.dismissToolFeedback(ctx, msg)
 		logger.DebugCF(
 			"agent",
 			"Skipped outbound (message tool already sent to same chat)",

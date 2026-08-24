@@ -57,6 +57,10 @@ func TestPrepareConfigReloadDoesNotPublishBeforeCommit(t *testing.T) {
 	if originalRunner.runtime != loop.turns {
 		t.Fatal("turn runner is detached from the loop's turn runtime")
 	}
+	if originalRunner.pipeline.Interaction.ToolFeedback != originalRunner.toolFeedback ||
+		originalRunner.pipeline.Interaction.Suspension != originalRunner.interaction {
+		t.Fatal("turn runner and pipeline do not share the generation's interaction components")
+	}
 
 	next := *cfg
 	next.Agents.Defaults.ModelName = "prepared-model"
@@ -112,6 +116,13 @@ func TestPrepareConfigReloadPublishesOnlyAtCommit(t *testing.T) {
 	if committedRunner == nil || committedRunner == originalRunner ||
 		committedRunner.pipeline.Cfg != &next || originalRunner.pipeline.Cfg != cfg {
 		t.Fatal("commit did not replace the turn runner generation atomically")
+	}
+	if committedRunner.toolFeedback == originalRunner.toolFeedback ||
+		committedRunner.interaction == originalRunner.interaction ||
+		committedRunner.pipeline.Interaction.Reasoning == originalRunner.pipeline.Interaction.Reasoning ||
+		committedRunner.pipeline.Interaction.SyncToolDelivery == originalRunner.pipeline.Interaction.SyncToolDelivery ||
+		committedRunner.pipeline.Interaction.ToolDelivery == originalRunner.pipeline.Interaction.ToolDelivery {
+		t.Fatal("commit retained an interaction component from the previous runner generation")
 	}
 	if got := provider.closed.Load(); got != 0 {
 		t.Fatalf("committed provider close count = %d, want 0", got)

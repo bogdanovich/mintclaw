@@ -2046,7 +2046,7 @@ func (al *AgentLoop) dismissInteractionToolFeedback(
 		traceScopes,
 	)
 	dismissCtx, dismissCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	al.toolFeedbackPublisher().dismissToolFeedback(dismissCtx, target)
+	al.turns.currentRunner().toolFeedback.dismissToolFeedback(dismissCtx, target)
 	dismissCancel()
 }
 
@@ -2135,7 +2135,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 		),
 	}
 	completionID := "interaction:" + record.ID
-	al.deliverAsyncToolCompletion(AsyncDeliveryRequest{
+	al.turns.currentRunner().pipeline.Interaction.ToolDelivery.deliverAsyncToolCompletion(AsyncDeliveryRequest{
 		Context:      deliveryCtx,
 		TurnState:    turnState,
 		ToolName:     task.TaskKind,
