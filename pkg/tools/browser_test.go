@@ -1202,6 +1202,15 @@ func TestBrowserToolStaleErrorRemainsOperationNeutral(t *testing.T) {
 	}
 }
 
+func TestBrowserToolSnapshotTransferErrorIsSafeAndRetryable(t *testing.T) {
+	result := browserToolError(browser.ErrSnapshotTransfer)
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"code":"snapshot_transfer_failed"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"observe_again"`) {
+		t.Fatalf("snapshot transfer browser result = %#v", result)
+	}
+}
+
 func TestBrowserObserveRecoversOneStaleTopLevelRead(t *testing.T) {
 	source := &fakeBrowserToolSource{
 		available: true,

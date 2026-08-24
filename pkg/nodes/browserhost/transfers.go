@@ -96,6 +96,74 @@ const (
 	maxBrowserOutputArtifacts  = 8
 )
 
+// PrepareObservationOutput moves only a large semantic projection out of the
+// generic invocation result. Small observations remain inline. The returned
+// descriptor is authority-bound and the payload remains private to the
+// authenticated output-transfer stream.
+func (host *BrowserHost) PrepareObservationOutput(
+	request nodes.BrowserHostObservationOutputRequest,
+	result nodes.BrowserObservationResult,
+) (nodes.BrowserObservationResult, error) {
+	if host == nil || result.Output != nil || result.ProtectedResult ||
+		request.SessionID != result.SessionID || !browserHostIdentifier(request.InvocationID) ||
+		!browserHostIdentifier(request.WorkspaceID) || !browserHostIdentifier(request.BrowserTarget) {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	payload, err := json.Marshal(nodes.BrowserSnapshotPayload{
+		Snapshot: result.Snapshot, Elements: result.Elements,
+	})
+	if err != nil {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	if len(payload) <= protocol.MaxTransferChunkBytes {
+		return result, nil
+	}
+	host.mu.Lock()
+	session := host.sessions[request.SessionID]
+	host.mu.Unlock()
+	if session == nil {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostNotFound
+	}
+	session.mu.Lock()
+	now := host.now().UTC()
+	authorized := session.state == "ready" && session.routedSessionID == request.RoutedSessionID &&
+		session.agentID == request.AgentID && session.actorID == request.ActorID &&
+		session.tabID == result.TabID && session.snapshotGeneration == result.SnapshotGeneration &&
+		result.DocumentID != "" && now.Before(session.expiresAt) && now.Before(session.idleExpiresAt) &&
+		len(payload) <= session.limits.ToolResultBytes
+	profileRevision := session.profile.Revision
+	policyRevision := session.browserPolicyRevision
+	expiresAt := min(
+		session.expiresAt.Unix(),
+		now.Add(time.Duration(session.limits.PreparedSeconds)*time.Second).Unix(),
+	)
+	limits := session.limits
+	session.mu.Unlock()
+	if !authorized {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	if _, err = nodes.DecodeBrowserSnapshotPayload(payload, limits); err != nil {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	descriptor, err := host.RegisterOutput(nodes.BrowserOutputDescriptor{
+		Kind:      nodes.BrowserOutputSnapshot,
+		SessionID: result.SessionID, RoutedSessionID: request.RoutedSessionID,
+		AgentID: request.AgentID, ActorID: request.ActorID, WorkspaceID: request.WorkspaceID,
+		Target: request.BrowserTarget, ProfileRevision: profileRevision,
+		BrowserPolicyRevision: policyRevision, InvocationID: request.InvocationID,
+		TabID: result.TabID, DocumentID: result.DocumentID,
+		SnapshotGeneration: result.SnapshotGeneration,
+		Filename:           "browser-snapshot.json", ContentType: "application/json", ExpiresAt: expiresAt,
+	}, payload)
+	if err != nil {
+		return nodes.BrowserObservationResult{}, err
+	}
+	result.Snapshot = ""
+	result.Elements = []nodes.BrowserElement{}
+	result.Output = &descriptor
+	return result, nil
+}
+
 // RegisterOutput stores one immutable browser-owned result for a later
 // authenticated download-direction transfer. Trusted capture code supplies
 // the complete authority descriptor; the host fills the content binding and
@@ -277,7 +345,7 @@ func browserOutputLimit(limits nodes.BrowserLimits, kind string) int {
 	case nodes.BrowserOutputDownload:
 		return limits.DownloadBytes
 	case nodes.BrowserOutputSnapshot:
-		return limits.SnapshotBytes
+		return limits.ToolResultBytes
 	default:
 		return 0
 	}
@@ -546,8 +614,12 @@ func (host *BrowserHost) commitBrowserOutput(
 		host.transferMu.Unlock()
 		return send(browserTransferResponse(frame, protocol.TransferFrameFailure, "transfer_conflict"))
 	}
+	discardAfterCommit := transfer.artifact.descriptor.Kind == nodes.BrowserOutputSnapshot
 	host.removeBrowserOutputTransferLocked(frame.TransferID, transfer)
 	err := send(browserTransferResponse(frame, protocol.TransferFrameCommitted, "committed"))
+	if discardAfterCommit {
+		host.removeBrowserOutputLocked(frame.TransferID)
+	}
 	host.transferMu.Unlock()
 	return err
 }

@@ -1222,3 +1222,25 @@ func browserLimitsValue(limits BrowserLimits) map[string]any {
 		"tool_result_bytes": limits.ToolResultBytes, "retention_seconds": limits.RetentionSecs,
 	}
 }
+
+func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
+	limits := BrowserLimits{}.Effective()
+	tests := map[string][]byte{
+		"unknown field": []byte(`{"snapshot":"page","elements":[],"secret":"value"}`),
+		"trailing JSON": []byte(`{"snapshot":"page","elements":[]} {}`),
+		"duplicate ref": []byte(
+			`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","name":"Save"},` +
+				`{"ref":"ref_1","role":"button","name":"Save again"}]}`,
+		),
+		"oversized snapshot": []byte(
+			`{"snapshot":"` + strings.Repeat("x", limits.SnapshotBytes+1) + `","elements":[]}`,
+		),
+	}
+	for name, payload := range tests {
+		t.Run(name, func(t *testing.T) {
+			if decoded, err := DecodeBrowserSnapshotPayload(payload, limits); err == nil {
+				t.Fatalf("DecodeBrowserSnapshotPayload() accepted %#v", decoded)
+			}
+		})
+	}
+}

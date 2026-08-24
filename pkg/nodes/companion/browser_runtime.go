@@ -36,6 +36,13 @@ type browserDownloadCommandHost interface {
 	Download(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserOutputDescriptor, error)
 }
 
+type browserObservationOutputHost interface {
+	PrepareObservationOutput(
+		nodes.BrowserHostObservationOutputRequest,
+		nodes.BrowserObservationResult,
+	) (nodes.BrowserObservationResult, error)
+}
+
 type browserCommandHandler struct {
 	command         string
 	descriptorValue nodes.CommandDescriptor
@@ -130,6 +137,9 @@ func (handler *browserCommandHandler) execute(
 			SnapshotGeneration: input.SnapshotGeneration,
 			AgentID:            invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 		})
+		if err == nil {
+			result, err = handler.prepareObservationOutput(invocation, input.WorkspaceID, input.BrowserTarget, result)
+		}
 		return result, browserCommandFailure(err)
 	case nodes.BrowserCommandCapture:
 		captureHost, ok := handler.host.(browserCaptureCommandHost)
@@ -304,11 +314,34 @@ func (handler *browserCommandHandler) executeAct(
 		}
 		return nil, browserCommandFailure(err)
 	}
+	observation, err = handler.prepareObservationOutput(
+		invocation, input.WorkspaceID, input.BrowserTarget, observation,
+	)
+	if err != nil {
+		return nil, browserCommandFailure(err)
+	}
 	return nodes.BrowserActResult{
 		ActionInvocationID: input.ActionInvocationID,
 		State:              "succeeded",
 		Observation:        &observation,
 	}, nil
+}
+
+func (handler *browserCommandHandler) prepareObservationOutput(
+	invocation commandInvocation,
+	workspaceID string,
+	browserTarget string,
+	observation nodes.BrowserObservationResult,
+) (nodes.BrowserObservationResult, error) {
+	host, ok := handler.host.(browserObservationOutputHost)
+	if !ok {
+		return observation, nil
+	}
+	return host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
+		SessionID: observation.SessionID, RoutedSessionID: invocation.Plan.SessionID,
+		InvocationID: invocation.Plan.InvocationID, WorkspaceID: workspaceID,
+		BrowserTarget: browserTarget, AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+	}, observation)
 }
 
 func browserEphemeralActionValue(

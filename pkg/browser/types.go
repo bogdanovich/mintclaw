@@ -41,6 +41,7 @@ var (
 	ErrNotFound             = errors.New("browser state not found")
 	ErrApprovalRequired     = errors.New("browser action requires approval")
 	ErrNoProgress           = errors.New("browser action is not making progress")
+	ErrSnapshotTransfer     = errors.New("browser snapshot transfer failed")
 	ErrSnapshotInvalidation = errors.New("browser snapshot invalidation failed")
 	ErrStale                = errors.New("browser state revision is stale")
 	ErrWorkerUnavailable    = errors.New("browser worker is unavailable")

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
@@ -271,6 +272,8 @@ type BrowserObserveInput struct {
 	TabID              string `json:"tab_id"`
 	SnapshotGeneration uint64 `json:"snapshot_generation"`
 	Screenshot         bool   `json:"screenshot"`
+	WorkspaceID        string `json:"workspace_id,omitempty"`
+	BrowserTarget      string `json:"browser_target,omitempty"`
 }
 
 type BrowserDiagnosticsInput struct {
@@ -353,9 +356,16 @@ func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
 		TabID              string          `json:"tab_id"`
 		SnapshotGeneration json.RawMessage `json:"snapshot_generation"`
 		Screenshot         bool            `json:"screenshot"`
+		WorkspaceID        string          `json:"workspace_id"`
+		BrowserTarget      string          `json:"browser_target"`
 	}
-	if err := json.Unmarshal(data, &value); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
 		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser observe input", ErrInvalidCapability)
 	}
 	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
 	if err != nil {
@@ -364,6 +374,7 @@ func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
 	*input = BrowserObserveInput{
 		SessionID: value.SessionID, TabID: value.TabID,
 		SnapshotGeneration: generation, Screenshot: value.Screenshot,
+		WorkspaceID: value.WorkspaceID, BrowserTarget: value.BrowserTarget,
 	}
 	return nil
 }
@@ -903,6 +914,7 @@ type BrowserObservationResult struct {
 	Truncated          bool                      `json:"truncated"`
 	ProtectedResult    bool                      `json:"protected_result,omitempty"`
 	DocumentID         string                    `json:"document_id,omitempty"`
+	Output             *BrowserOutputDescriptor  `json:"output,omitempty"`
 }
 
 func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
@@ -919,6 +931,7 @@ func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 		Truncated          bool                      `json:"truncated"`
 		ProtectedResult    bool                      `json:"protected_result,omitempty"`
 		DocumentID         string                    `json:"document_id,omitempty"`
+		Output             *BrowserOutputDescriptor  `json:"output,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -933,8 +946,48 @@ func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
 		Elements: value.Elements, PendingDialog: value.PendingDialog, Truncated: value.Truncated,
 		ProtectedResult: value.ProtectedResult,
 		DocumentID:      value.DocumentID,
+		Output:          value.Output,
 	}
 	return nil
+}
+
+// BrowserSnapshotPayload is the private streamed portion of a large semantic
+// observation. It crosses only the authenticated browser output-transfer
+// channel and is reconstructed in memory by the gateway.
+type BrowserSnapshotPayload struct {
+	Snapshot string           `json:"snapshot"`
+	Elements []BrowserElement `json:"elements"`
+}
+
+func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSnapshotPayload, error) {
+	if len(data) == 0 || len(data) > limits.ToolResultBytes {
+		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
+	}
+	var payload BrowserSnapshotPayload
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return BrowserSnapshotPayload{}, fmt.Errorf("%w: trailing browser snapshot payload", ErrInvalidInvocation)
+	}
+	if !utf8.ValidString(payload.Snapshot) || len(payload.Snapshot) > limits.SnapshotBytes ||
+		len(payload.Elements) > limits.SnapshotRefs {
+		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
+	}
+	seen := make(map[string]struct{}, len(payload.Elements))
+	for _, element := range payload.Elements {
+		if !validInvocationIdentifier(element.Ref) || !utf8.ValidString(element.Role) ||
+			!utf8.ValidString(element.Name) || len(element.Role) > 128 || len(element.Name) > 4096 {
+			return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot element", ErrInvalidInvocation)
+		}
+		if _, duplicate := seen[element.Ref]; duplicate {
+			return BrowserSnapshotPayload{}, fmt.Errorf("%w: duplicate browser snapshot element", ErrInvalidInvocation)
+		}
+		seen[element.Ref] = struct{}{}
+	}
+	return payload, nil
 }
 
 type BrowserActResult struct {
@@ -1082,6 +1135,16 @@ type BrowserHostObserveRequest struct {
 	Screenshot         bool
 	AgentID            string
 	ActorID            string
+}
+
+type BrowserHostObservationOutputRequest struct {
+	SessionID       string
+	RoutedSessionID string
+	InvocationID    string
+	WorkspaceID     string
+	BrowserTarget   string
+	AgentID         string
+	ActorID         string
 }
 
 type BrowserHostDiagnosticsRequest struct {
@@ -1262,8 +1325,8 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 				input.ArtifactContentType != "") ||
 		kind != browseraction.ActionFill && kind != browseraction.ActionSelect && kind != browseraction.ActionDialog &&
 			(input.InputDigest != "" || input.InputBytes != 0) ||
-		kind != browseraction.ActionDownload &&
-			(input.WorkspaceID != "" || input.RouteID != "" || input.BrowserTarget != "") {
+		kind != browseraction.ActionDownload && input.RouteID != "" ||
+		(input.WorkspaceID == "") != (input.BrowserTarget == "") {
 		return invalidBrowserActInput()
 	}
 	valid := false
@@ -1432,6 +1495,8 @@ func browserCommandInputSchema(
 		add("tab_id", identifier)
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
 		add("screenshot", map[string]any{"type": "boolean"})
+		properties["workspace_id"] = identifier
+		properties["browser_target"] = identifier
 	case BrowserCommandDiagnostics:
 		add("session_id", identifier)
 		add("tab_id", identifier)
@@ -1836,6 +1901,7 @@ func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 				},
 			},
 		},
+		"output": browserSnapshotOutputDescriptorSchema(limits.ToolResultBytes),
 	}
 	return mustJSON(map[string]any{
 		"type":                 "object",
@@ -1851,6 +1917,16 @@ func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 			"truncated",
 		},
 		"properties": properties,
+		"oneOf": []any{
+			map[string]any{"not": map[string]any{"required": []string{"output"}}},
+			map[string]any{
+				"required": []string{"output"},
+				"properties": map[string]any{
+					"snapshot": map[string]any{"const": ""},
+					"elements": map[string]any{"maxItems": 0},
+				},
+			},
+		},
 	})
 }
 
@@ -1951,6 +2027,35 @@ func browserDownloadOutputDescriptorSchema(maximumBytes int) map[string]any {
 			"snapshot_generation": map[string]any{"type": "integer", "minimum": 1},
 			"filename":            map[string]any{"type": "string", "minLength": 1, "maxLength": 255},
 			"content_type":        map[string]any{"type": "string", "minLength": 1, "maxLength": 255},
+			"size":                map[string]any{"type": "integer", "minimum": 1, "maximum": maximumBytes},
+			"sha256":              map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
+			"captured_at":         map[string]any{"type": "integer", "minimum": 1},
+			"expires_at":          map[string]any{"type": "integer", "minimum": 1},
+			"cleanup_policy":      map[string]any{"const": "session_or_expiry"},
+		},
+	}
+}
+
+func browserSnapshotOutputDescriptorSchema(maximumBytes int) map[string]any {
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{
+			"transfer_id", "kind", "session_id", "routed_session_id", "agent_id", "actor_id",
+			"workspace_id", "target", "profile_revision", "browser_policy_revision", "invocation_id",
+			"tab_id", "document_id", "snapshot_generation", "filename", "content_type", "size",
+			"sha256", "captured_at", "expires_at", "cleanup_policy",
+		},
+		"properties": map[string]any{
+			"transfer_id": identifier, "kind": map[string]any{"const": BrowserOutputSnapshot},
+			"session_id": identifier, "routed_session_id": identifier, "agent_id": identifier,
+			"actor_id": identifier, "workspace_id": identifier, "target": identifier,
+			"profile_revision":        identifier,
+			"browser_policy_revision": map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
+			"invocation_id":           identifier, "tab_id": identifier, "document_id": identifier,
+			"snapshot_generation": map[string]any{"type": "integer", "minimum": 1},
+			"filename":            map[string]any{"const": "browser-snapshot.json"},
+			"content_type":        map[string]any{"const": "application/json"},
 			"size":                map[string]any{"type": "integer", "minimum": 1, "maximum": maximumBytes},
 			"sha256":              map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
 			"captured_at":         map[string]any{"type": "integer", "minimum": 1},
