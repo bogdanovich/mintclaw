@@ -17,7 +17,7 @@ var (
 	ErrTurnActive       = errors.New("coding turn is active")
 	ErrCompactionActive = errors.New("coding compaction is active")
 	ErrNoActiveTurn     = errors.New("no coding turn is active")
-	ErrUnsupported      = errors.New("coding controller command is not supported")
+	ErrUnsupported      = frontend.ErrCommandUnsupported
 	ErrHardCanceled     = errors.New("coding turn was hard-canceled")
 )
 

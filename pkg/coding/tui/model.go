@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -39,11 +40,19 @@ type CommandErrorMsg struct {
 	Err       error
 }
 
+// CommandResultMsg completes one typed slash command. Authoritative success
+// state arrives through the ordinary current-view subscription.
+type CommandResultMsg struct {
+	Operation string
+	Err       error
+}
+
 // SubmitResultMsg completes one composer submission without discarding a
 // draft when controller admission fails.
 type SubmitResultMsg struct {
-	Prompt string
-	Err    error
+	Prompt        string
+	HistoryPrompt string
+	Err           error
 }
 
 // TranscriptPageMsg delivers optional canonical transcript hydration.
@@ -77,6 +86,7 @@ type Model struct {
 	focused             bool
 	err                 error
 	submitting          bool
+	pendingSlashCommand string
 	composerHistory     []string
 	historyIndex        int
 	historyDraft        string
@@ -84,6 +94,7 @@ type Model struct {
 	expandedToolID      string
 	refreshingWorkspace bool
 	workspaceNotice     string
+	commandPanel        commandPanel
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -207,6 +218,14 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case CommandErrorMsg:
 		m.err = message.Err
 		return m, nil
+	case CommandResultMsg:
+		m.pendingSlashCommand = ""
+		if message.Err != nil {
+			m.err = slashCommandError(message.Operation, message.Err)
+		} else {
+			m.err = nil
+		}
+		return m, nil
 	case SubmitResultMsg:
 		m.submitting = false
 		if message.Err != nil {
@@ -216,7 +235,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
-		m.rememberPrompt(message.Prompt)
+		m.rememberPrompt(message.HistoryPrompt)
 		m.composer.Reset()
 		m.historyIndex = -1
 		m.historyDraft = ""
@@ -254,6 +273,9 @@ func (m *Model) View() string {
 	if m.submitting {
 		status = "submitting prompt…"
 	}
+	if m.pendingSlashCommand != "" {
+		status = m.pendingSlashCommand + " command…"
+	}
 	if m.err != nil {
 		status = "frontend error: " + m.err.Error()
 	}
@@ -266,7 +288,11 @@ func (m *Model) View() string {
 	if m.height <= 4 {
 		return m.composer.View() + "\n" + clipLine(status, m.width)
 	}
-	return m.viewport.View() + "\n" + m.composer.View() + "\n" + clipLine(status, m.width)
+	body := m.viewport.View()
+	if m.commandPanel != commandPanelNone {
+		body = m.commandPanelView()
+	}
+	return body + "\n" + m.composer.View() + "\n" + clipLine(status, m.width)
 }
 
 func (m *Model) ComposerValue() string {
@@ -389,6 +415,12 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	switch message.String() {
+	case "esc":
+		if m.commandPanel != commandPanelNone {
+			m.commandPanel = commandPanelNone
+			m.err = nil
+			return true, nil
+		}
 	case "ctrl+r":
 		if activeWork(m.snapshot.Activity) || m.initialTurnPending {
 			m.workspaceNotice = "repository refresh is available when idle"
@@ -415,15 +447,23 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		if message.Paste {
 			return true, nil
 		}
-		prompt := m.composer.Value()
-		if strings.TrimSpace(prompt) == "" {
+		if m.pendingSlashCommand != "" {
+			m.err = fmt.Errorf("%s command is still running", m.pendingSlashCommand)
+			return true, nil
+		}
+		draft := m.composer.Value()
+		if strings.TrimSpace(draft) == "" {
 			m.err = errors.New("enter a coding prompt; use Ctrl+J for a new line")
 			return true, nil
 		}
+		if handled, command := m.handleSlashCommand(draft); handled {
+			return true, command
+		}
+		prompt := unescapeSlashPrompt(draft)
 		m.submitting = true
 		m.err = nil
 		m.admitInitialTurn()
-		return true, submitCmd(m.ctx, m.controller, prompt)
+		return true, submitCmd(m.ctx, m.controller, prompt, draft)
 	case "alt+up":
 		m.navigateHistory(-1)
 		return true, textarea.Blink
@@ -622,12 +662,38 @@ func commandCmd(operation string, command func(context.Context) error) tea.Cmd {
 	}
 }
 
-func submitCmd(ctx context.Context, controller frontend.Controller, prompt string) tea.Cmd {
+func typedCommandCmd(
+	ctx context.Context,
+	operation string,
+	command func(context.Context) error,
+) tea.Cmd {
+	return func() tea.Msg {
+		if command == nil {
+			return CommandResultMsg{Operation: operation, Err: fmt.Errorf("coding controller is unavailable")}
+		}
+		return CommandResultMsg{Operation: operation, Err: command(ctx)}
+	}
+}
+
+func submitCmd(
+	ctx context.Context,
+	controller frontend.Controller,
+	prompt string,
+	historyPrompt string,
+) tea.Cmd {
 	return func() tea.Msg {
 		if controller == nil {
-			return SubmitResultMsg{Prompt: prompt, Err: errors.New("coding controller is unavailable")}
+			return SubmitResultMsg{
+				Prompt:        prompt,
+				HistoryPrompt: historyPrompt,
+				Err:           errors.New("coding controller is unavailable"),
+			}
 		}
-		return SubmitResultMsg{Prompt: prompt, Err: controller.Submit(ctx, prompt)}
+		return SubmitResultMsg{
+			Prompt:        prompt,
+			HistoryPrompt: historyPrompt,
+			Err:           controller.Submit(ctx, prompt),
+		}
 	}
 }
 
