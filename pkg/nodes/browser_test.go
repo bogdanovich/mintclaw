@@ -1225,9 +1225,16 @@ func browserLimitsValue(limits BrowserLimits) map[string]any {
 
 func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
 	limits := BrowserLimits{}.Effective()
+	invalidUTF8 := append([]byte(`{"snapshot":"page`), 0xff)
+	invalidUTF8 = append(invalidUTF8, []byte(`","elements":[]}`)...)
 	tests := map[string][]byte{
-		"unknown field":    []byte(`{"snapshot":"page","elements":[],"secret":"value"}`),
-		"trailing JSON":    []byte(`{"snapshot":"page","elements":[]} {}`),
+		"unknown field":      []byte(`{"snapshot":"page","elements":[],"secret":"value"}`),
+		"trailing JSON":      []byte(`{"snapshot":"page","elements":[]} {}`),
+		"duplicate snapshot": []byte(`{"snapshot":"first","snapshot":"second","elements":[]}`),
+		"duplicate element role": []byte(
+			`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","role":"link","name":"Save"}]}`,
+		),
+		"invalid UTF-8":    invalidUTF8,
 		"missing snapshot": []byte(`{"elements":[]}`),
 		"missing elements": []byte(`{"snapshot":"page"}`),
 		"null elements":    []byte(`{"snapshot":"page","elements":null}`),
@@ -1236,7 +1243,9 @@ func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
 		"missing role":     []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","name":"Save"}]}`),
 		"null role":        []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":null,"name":"Save"}]}`),
 		"missing name":     []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button"}]}`),
-		"null name":        []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","name":null}]}`),
+		"null name": []byte(
+			`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","name":null}]}`,
+		),
 		"duplicate ref": []byte(
 			`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","name":"Save"},` +
 				`{"ref":"ref_1","role":"button","name":"Save again"}]}`,

@@ -17,6 +17,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/internal/jsonstrict"
 )
 
 var (
@@ -964,6 +965,12 @@ type BrowserSnapshotPayload struct {
 func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSnapshotPayload, error) {
 	if len(data) == 0 || len(data) > limits.ToolResultBytes {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
+	}
+	if !utf8.Valid(data) {
+		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
+	}
+	if _, err := jsonstrict.Decode(data); err != nil {
+		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
 	}
 	var value struct {
 		Snapshot *string `json:"snapshot"`
