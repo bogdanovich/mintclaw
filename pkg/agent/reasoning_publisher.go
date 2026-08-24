@@ -21,17 +21,6 @@ type reasoningPublisherComponent struct {
 	channelManager interfaces.ChannelManager
 }
 
-func (al *AgentLoop) reasoningPublisher() *reasoningPublisherComponent {
-	if al == nil {
-		return nil
-	}
-	return &reasoningPublisherComponent{
-		bus:            al.bus,
-		cfg:            al.GetConfig(),
-		channelManager: al.channelManager,
-	}
-}
-
 func (rp *reasoningPublisherComponent) targetReasoningChannelID(channelName string) (chatID string) {
 	if rp == nil || rp.channelManager == nil {
 		return ""

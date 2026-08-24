@@ -1097,32 +1097,3 @@ func messageToolSentToSameChat(
 	mt, ok := tool.(*integrationtools.MessageTool)
 	return ok && mt.HasSentTo(sessionKey, channel, chatID)
 }
-
-func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {
-	return al.reasoningPublisher().targetReasoningChannelID(channelName)
-}
-
-func (al *AgentLoop) publishMintClawReasoning(
-	ctx context.Context,
-	reasoningContent, chatID, sessionKey, modelName string,
-) {
-	al.reasoningPublisher().publishMintClawReasoning(ctx, reasoningContent, chatID, sessionKey, modelName)
-}
-
-func (al *AgentLoop) publishMintClawToolCallInterim(
-	ctx context.Context,
-	ts *turnState,
-	modelName string,
-	reasoningContent string,
-	content string,
-	toolCalls []providers.ToolCall,
-) {
-	al.reasoningPublisher().publishMintClawToolCallInterim(ctx, ts, modelName, reasoningContent, content, toolCalls)
-}
-
-func (al *AgentLoop) handleReasoning(
-	ctx context.Context,
-	reasoningContent, channelName, channelID string,
-) {
-	al.reasoningPublisher().handleReasoning(ctx, reasoningContent, channelName, channelID)
-}

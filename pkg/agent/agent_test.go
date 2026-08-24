@@ -934,11 +934,10 @@ func TestDeliverFinalTurnResult_DirectTelegramDeliveryIncludesResponseFooter(t *
 }
 
 func TestPublishMintClawReasoningIncludesSessionKey(t *testing.T) {
-	al, _, msgBus, provider, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	_ = provider
+	msgBus := bus.NewMessageBus()
+	publisher := &reasoningPublisherComponent{bus: msgBus}
 
-	al.publishMintClawReasoning(context.Background(), "reasoning", "mintclaw-chat", "session-1", "")
+	publisher.publishMintClawReasoning(context.Background(), "reasoning", "mintclaw-chat", "session-1", "")
 
 	select {
 	case outbound := <-msgBus.OutboundChan():
@@ -8342,25 +8341,8 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 }
 
 func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "agent-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-		},
-	}
-
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{})
-	chManager, err := channels.NewManager(&config.Config{}, bus.NewMessageBus(), nil)
+	msgBus := bus.NewMessageBus()
+	chManager, err := channels.NewManager(&config.Config{}, msgBus, nil)
 	if err != nil {
 		t.Fatalf("Failed to create channel manager: %v", err)
 	}
@@ -8379,7 +8361,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 	} {
 		chManager.RegisterChannel(name, &fakeChannel{id: id})
 	}
-	al.SetChannelManager(chManager)
+	publisher := &reasoningPublisherComponent{bus: msgBus, channelManager: chManager}
 	tests := []struct {
 		channel string
 		wantID  string
@@ -8400,7 +8382,7 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.channel, func(t *testing.T) {
-			got := al.targetReasoningChannelID(tt.channel)
+			got := publisher.targetReasoningChannelID(tt.channel)
 			if got != tt.wantID {
 				t.Fatalf("targetReasoningChannelID(%q) = %q, want %q", tt.channel, got, tt.wantID)
 			}
@@ -8409,30 +8391,15 @@ func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
 }
 
 func TestHandleReasoning(t *testing.T) {
-	newLoop := func(t *testing.T) (*AgentLoop, *bus.MessageBus) {
+	newPublisher := func(t *testing.T) (*reasoningPublisherComponent, *bus.MessageBus) {
 		t.Helper()
-		tmpDir, err := os.MkdirTemp("", "agent-test-*")
-		if err != nil {
-			t.Fatalf("Failed to create temp dir: %v", err)
-		}
-		t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
-		cfg := &config.Config{
-			Agents: config.AgentsConfig{
-				Defaults: config.AgentDefaults{
-					Workspace:         tmpDir,
-					ModelName:         "test-model",
-					MaxTokens:         4096,
-					MaxToolIterations: 10,
-				},
-			},
-		}
 		msgBus := bus.NewMessageBus()
-		return NewAgentLoop(cfg, msgBus, &mockProvider{}), msgBus
+		return &reasoningPublisherComponent{bus: msgBus}, msgBus
 	}
 
 	t.Run("skips when any required field is empty", func(t *testing.T) {
-		al, msgBus := newLoop(t)
-		al.handleReasoning(context.Background(), "reasoning", "telegram", "")
+		publisher, msgBus := newPublisher(t)
+		publisher.handleReasoning(context.Background(), "reasoning", "telegram", "")
 
 		select {
 		case msg := <-msgBus.OutboundChan():
@@ -8442,8 +8409,8 @@ func TestHandleReasoning(t *testing.T) {
 	})
 
 	t.Run("publishes one message for non telegram", func(t *testing.T) {
-		al, msgBus := newLoop(t)
-		al.handleReasoning(context.Background(), "hello reasoning", "slack", "channel-1")
+		publisher, msgBus := newPublisher(t)
+		publisher.handleReasoning(context.Background(), "hello reasoning", "slack", "channel-1")
 
 		msg, ok := <-msgBus.OutboundChan()
 		if !ok {
@@ -8455,9 +8422,9 @@ func TestHandleReasoning(t *testing.T) {
 	})
 
 	t.Run("publishes one message for telegram", func(t *testing.T) {
-		al, msgBus := newLoop(t)
+		publisher, msgBus := newPublisher(t)
 		reasoning := "hello telegram reasoning"
-		al.handleReasoning(context.Background(), reasoning, "telegram", "tg-chat")
+		publisher.handleReasoning(context.Background(), reasoning, "telegram", "tg-chat")
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -8485,7 +8452,7 @@ func TestHandleReasoning(t *testing.T) {
 		}
 	})
 	t.Run("returns promptly when bus is full", func(t *testing.T) {
-		al, msgBus := newLoop(t)
+		publisher, msgBus := newPublisher(t)
 
 		// Fill the outbound bus buffer until a publish would block.
 		// Use a short timeout to detect when the buffer is full,
@@ -8508,7 +8475,7 @@ func TestHandleReasoning(t *testing.T) {
 		defer cancel()
 
 		start := time.Now()
-		al.handleReasoning(ctx, "should timeout", "slack", "channel-full")
+		publisher.handleReasoning(ctx, "should timeout", "slack", "channel-full")
 		elapsed := time.Since(start)
 
 		// handleReasoning uses a 5s internal timeout, but the parent context

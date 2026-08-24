@@ -808,6 +808,10 @@ Implementation sequence:
     execution and asynchronous tool completion concrete. Delete their
     single-implementation interfaces and the optional fallback-observer type
     assertion; preserve interaction seams with real test substitutes.
+34. Confirm that inbound coordination is already constructed once per
+    `AgentLoop.Run` and remains correctly run-scoped. Delete the test-only
+    `AgentLoop` reasoning component factory and pass-through façade; test the
+    pipeline-owned reasoning component directly.
 
 Exit criteria:
 
