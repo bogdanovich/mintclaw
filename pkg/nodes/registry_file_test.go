@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -148,6 +149,88 @@ func TestFileRegistryRejectsNonCurrentBrowserSchema(t *testing.T) {
 	}
 	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("NewFileRegistry() error = %v", err)
+	}
+}
+
+func TestFileRegistryQuarantinesApprovedNodeWithStoredBrowserSchemaDrift(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "registry.json")
+	registry, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing := testPendingPairing(t, 1)
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing.Node.Catalog = CapabilityCatalog{Commands: descriptors}
+	pairing.Node.CatalogHash, err = pairing.Node.Catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = registry.UpsertPending(pairing); err != nil {
+		t.Fatal(err)
+	}
+	commands := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		commands = append(commands, descriptor.Name)
+	}
+	approved, err := registry.Approve(pairing.Node.ID, PairingApproval{
+		Aliases: []Alias{"browser-node"}, AllowedCommands: commands, At: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document registryDocument
+	if err = json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	record := document.Records[string(pairing.Node.ID)]
+	for index := range record.Snapshot.Catalog.Commands {
+		if record.Snapshot.Catalog.Commands[index].Name == BrowserCommandAct {
+			record.Snapshot.Catalog.Commands[index].InputSchema = json.RawMessage(`{"type":"object"}`)
+		}
+	}
+	record.Snapshot.CatalogHash, err = record.Snapshot.Catalog.canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.ApprovedCatalogHash = record.Snapshot.CatalogHash
+	document.Records[string(pairing.Node.ID)] = record
+	data, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatalf("NewFileRegistry() error = %v", err)
+	}
+	registration, found, err := reloaded.Registration(pairing.Node.ID)
+	if err != nil || !found {
+		t.Fatalf("Registration() = %#v, %t, %v", registration, found, err)
+	}
+	if registration.Snapshot.State != StateIncompatible ||
+		registration.Snapshot.CatalogHash == registration.ApprovedCatalogHash ||
+		registration.ApprovedCatalogHash != record.ApprovedCatalogHash ||
+		!slices.Equal(registration.AllowedCommands, approved.AllowedCommands) {
+		t.Fatalf(
+			"migrated state = %q, catalog = %q, approved = %q, commands = %#v",
+			registration.Snapshot.State,
+			registration.Snapshot.CatalogHash,
+			registration.ApprovedCatalogHash,
+			registration.AllowedCommands,
+		)
+	}
+	if err = registration.Snapshot.Validate(); err != nil {
+		t.Fatalf("migrated snapshot error = %v", err)
 	}
 }
 

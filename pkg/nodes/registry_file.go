@@ -571,6 +571,9 @@ func (registry *FileRegistry) load() error {
 		if err := compactStoredCommandSchemas(&record.Snapshot); err != nil {
 			return fmt.Errorf("validate node registry record %q: %w", id, err)
 		}
+		if err := upgradeStoredBrowserSchemas(&record); err != nil {
+			return fmt.Errorf("validate node registry record %q: %w", id, err)
+		}
 		if err := record.Snapshot.Validate(); err != nil {
 			return fmt.Errorf("validate node registry record %q: %w", id, err)
 		}
@@ -594,6 +597,51 @@ func (registry *FileRegistry) load() error {
 		return fmt.Errorf("validate node registry namespace: %w", err)
 	}
 	registry.records = document.Records
+	return nil
+}
+
+func upgradeStoredBrowserSchemas(record *registryRecord) error {
+	if record == nil || record.Snapshot.State == StatePendingPairing {
+		return nil
+	}
+	changed := false
+	for index := range record.Snapshot.Catalog.Commands {
+		descriptor := &record.Snapshot.Catalog.Commands[index]
+		if !IsBrowserCommand(descriptor.Name) || len(descriptor.BrowserProfiles) == 0 {
+			continue
+		}
+		candidate := *descriptor
+		candidate.InputSchema = BrowserCommandInputSchema(candidate.Name, candidate.BrowserProfiles)
+		candidate.OutputSchema = BrowserCommandOutputSchema(candidate.Name, candidate.BrowserProfiles)
+		if err := candidate.validateBrowserProfiles(); err != nil {
+			return err
+		}
+		actualInput, inputErr := canonicalJSON(descriptor.InputSchema)
+		expectedInput, expectedInputErr := canonicalJSON(candidate.InputSchema)
+		actualOutput, outputErr := canonicalJSON(descriptor.OutputSchema)
+		expectedOutput, expectedOutputErr := canonicalJSON(candidate.OutputSchema)
+		if inputErr != nil || expectedInputErr != nil || outputErr != nil || expectedOutputErr != nil {
+			return fmt.Errorf("%w: invalid stored browser schema", ErrInvalidCapability)
+		}
+		if bytes.Equal(actualInput, expectedInput) && bytes.Equal(actualOutput, expectedOutput) {
+			continue
+		}
+		descriptor.InputSchema = candidate.InputSchema
+		descriptor.OutputSchema = candidate.OutputSchema
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	catalogHash, err := record.Snapshot.Catalog.Hash()
+	if err != nil {
+		return err
+	}
+	record.Snapshot.CatalogHash = catalogHash
+	if record.Snapshot.State != StateRevoked {
+		record.Snapshot.State = StateIncompatible
+		record.Snapshot.DisconnectReason = "stored browser contract changed; companion must reconnect"
+	}
 	return nil
 }
 
