@@ -94,13 +94,13 @@ func newAgentRegistry(
 	return registry, nil
 }
 
-// newAgentRegistryWithRuntimeProfile resolves every configured owner before it
-// constructs the first agent. A missing or mismatched layout therefore cannot
+// newAgentRegistryWithCodingRuntimeProfile resolves every configured binding
+// before it constructs the first agent. A missing or mismatched layout cannot
 // leave a partially populated registry behind.
-func newAgentRegistryWithRuntimeProfile(
+func newAgentRegistryWithCodingRuntimeProfile(
 	cfg *config.Config,
 	provider providers.LLMProvider,
-	profile RuntimeProfile,
+	profile CodingRuntimeProfile,
 ) (*AgentRegistry, error) {
 	agentConfigs := cfg.Agents.List
 	if len(agentConfigs) == 0 {
@@ -126,15 +126,13 @@ func newAgentRegistryWithRuntimeProfile(
 		agentCfg := &agentConfigs[index]
 		agentID := routing.NormalizeAgentID(agentCfg.ID)
 		layout, _ := profile.AgentLayout(agentID)
-		instance, err := newAgentInstanceWithRuntimeLayout(
+		instance, err := newCodingAgentInstance(
 			agentCfg,
 			&cfg.Agents.Defaults,
 			cfg,
 			provider,
 			layout,
 			profile.storeFactory,
-			profile.toolProfile,
-			profile.promptProfile,
 		)
 		if err != nil {
 			registry.Close()

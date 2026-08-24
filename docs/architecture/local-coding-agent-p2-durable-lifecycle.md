@@ -66,7 +66,7 @@ in later turns.
 
 ## Scope and compatibility
 
-Start markers and startup repair are enabled only by the strict coding tool
+Start markers and startup repair are enabled only by the coding tool
 profile. Personal-agent session recovery, including unanswered-user replay,
 keeps its existing behavior. Read-only idempotent coding tools use the existing
 assistant-intent and terminal-result pair without an extra start-marker write.

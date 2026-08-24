@@ -237,7 +237,7 @@ func (s *Store) Root() string {
 	return s.root
 }
 
-// ThreadRoot returns the owner-scoped state root consumed by RuntimeLayout.
+// ThreadRoot returns the thread-scoped state root consumed by CodingRuntimeLayout.
 func (s *Store) ThreadRoot(threadID string) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("coding thread store is nil")

@@ -38,10 +38,10 @@ type AgentLoop struct {
 	bus      interfaces.MessageBus
 	cfg      *config.Config
 	registry *AgentRegistry
-	// runtimeProfile marks a pre-construction loop whose updates require restart.
-	// Nil selects the legacy config-only loop with its existing reload behavior.
-	runtimeProfile *RuntimeProfile
-	state          *state.Manager
+	// codingProfile is present only for the isolated coding frontend. Personal
+	// gateway and CLI loops use their current config-owned workspace lifecycle.
+	codingProfile *CodingRuntimeProfile
+	state         *state.Manager
 
 	// Runtime event system
 	runtimeEvents      runtimeevents.Bus
@@ -59,7 +59,7 @@ type AgentLoop struct {
 	startupResult              chan error
 	contextManager             ContextManager
 	contextManagerInitErr      error
-	runtimeProfileInitErr      error
+	runtimeInitErr             error
 	fallback                   *providers.FallbackChain
 	modelExecution             *modelExecutionManager
 	channelManager             interfaces.ChannelManager
@@ -355,8 +355,8 @@ func (al *AgentLoop) ValidateConfigReload(cfg *config.Config) error {
 	if cfg == nil {
 		return fmt.Errorf("config cannot be nil")
 	}
-	if al.runtimeProfile != nil {
-		return fmt.Errorf("runtime-profile loops require restart; hot reload is not supported")
+	if al.codingProfile != nil {
+		return fmt.Errorf("coding-profile loops require restart; hot reload is not supported")
 	}
 	if _, stateless := al.contextManager.(*noneContextManager); !stateless ||
 		contextManagerConfigName(cfg) != "none" {

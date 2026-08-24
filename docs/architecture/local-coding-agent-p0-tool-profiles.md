@@ -5,22 +5,15 @@ Roadmap packet: P0.4 in
 
 ## Decision
 
-Runtime owner admission now selects an immutable tool profile before agent
-construction. A homogeneous personal-agent profile selects `personal`; a
-homogeneous coding-thread profile selects `coding`. Persisted configuration is
-an input to construction and is never rewritten to express this choice.
+Coding-thread admission selects one immutable trusted-local tool catalogue
+before agent construction. Persisted personal configuration is an input to
+model selection and is never rewritten to express coding trust.
 
-The personal profile preserves the existing config-driven gateway catalogue.
-Its canonical transcript, derived context, memory, runtime state, task and
-interaction registries, approval key, and exec scratch are rooted in the
-admitted state layout rather than the execution workspace.
-
-Strict personal admission currently accepts one owner per loop. The legacy
-gateway retains its existing multi-agent behavior; a future owner-aware
-operational-state service is required before a strict loop can safely combine
-multiple personal owners. Coding profiles may contain multiple owners because
-they do not mount personal operational-state or goal services, and duplicate
-execution roots are rejected.
+The personal gateway retains its config-driven catalogue, approval policy,
+workspace state, and multi-agent lifecycle. It is not represented as a coding
+profile. Coding profiles may contain multiple threads; they do not mount
+personal operational-state or goal services, and duplicate execution roots are
+rejected.
 
 The coding profile exposes exactly these core tools:
 
@@ -68,18 +61,17 @@ wait, and cleanup errors through agent shutdown. A genuine termination failure
 returns promptly instead of waiting indefinitely for a child that may remain
 alive; successfully signaled processes are always reaped before shutdown ends.
 
-Strict construction preflights every operational leaf and rejects symlinks,
+Coding construction preflights every operational leaf and rejects symlinks,
 wrong file types, unreadable files, malformed state/registry snapshots, and
 invalid approval keys instead of silently starting from empty state. Snapshot
-validation is read-only until every owner passes admission.
+validation is read-only until every thread passes admission.
 
 ## Verification contract
 
 Focused tests enumerate the complete coding catalogue with MCP and hooks
 enabled in configuration, verify Seahorse's two deliberate additions, reject
-dynamic tool and hook expansion, and assert trusted execution without config
-mutation. A paired legacy/strict personal test verifies identical personal
-tool catalogues while all MintClaw-owned writes stay under the state root.
+dynamic tool and hook expansion, assert trusted execution without config
+mutation, and prove the coding layout cannot express a personal-agent layout.
 
 This completes the P0 runtime-construction sequence. Later packets can build a
 terminal frontend and coding session lifecycle on this boundary without

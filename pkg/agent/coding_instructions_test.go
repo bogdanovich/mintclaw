@@ -398,8 +398,8 @@ func TestCodingPromptRefreshesGlobalRepositoryAndCWDInstructions(t *testing.T) {
 	writeCodingInstructionTestFile(t, filepath.Join(project, "AGENTS.md"), "repository rules")
 	nestedPath := filepath.Join(cwd, "AGENTS.override.md")
 	writeCodingInstructionTestFile(t, nestedPath, "cwd override v1")
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-prompt-instructions"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-prompt-instructions",
 		project,
 		filepath.Join(root, "state"),
 		[]string{global, project, cwd},
@@ -407,7 +407,7 @@ func TestCodingPromptRefreshesGlobalRepositoryAndCWDInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	builder, err := newRuntimeContextBuilder(layout, RuntimePromptProfileCoding)
+	builder, err := newCodingContextBuilder(layout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,8 +536,8 @@ func TestCodingExecDefaultsToInvocationCWD(t *testing.T) {
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-exec-cwd"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-exec-cwd",
 		project,
 		filepath.Join(root, "state"),
 		[]string{project, cwd},
@@ -545,13 +545,13 @@ func TestCodingExecDefaultsToInvocationCWD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,8 +635,8 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 			Response: llmscenario.TextResponse("done"),
 		},
 	)
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-barrier"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-barrier",
 		project,
 		stateRoot,
 		[]string{project, cwd},
@@ -644,7 +644,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, err := NewRuntimeProfile(RuntimeProfileBinding{AgentID: "main", Layout: layout})
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +653,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 	cfg.Agents.Defaults.Provider = "test-provider"
 	cfg.Agents.Defaults.ModelName = "coding-instruction-model"
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
-	loop, err := NewAgentLoopWithRuntimeProfile(cfg, bus.NewMessageBus(), provider, profile)
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), provider, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,14 +682,14 @@ func newCodingInstructionTestLoader(
 	instructionRoots []string,
 ) *codingInstructionLoader {
 	t.Helper()
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-instructions"},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-instructions",
 		project,
 		state,
 		instructionRoots,
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
 	return newCodingInstructionLoader(layout)
 }

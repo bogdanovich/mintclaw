@@ -102,7 +102,7 @@ func boundedLifecycleText(value string, maxBytes int) string {
 }
 
 func (al *AgentLoop) repairCodingToolLifecycles(ctx context.Context) error {
-	if al == nil || !al.hasCodingToolProfile() {
+	if al == nil || !al.usesCodingProfile() {
 		return nil
 	}
 	registry := al.GetRegistry()

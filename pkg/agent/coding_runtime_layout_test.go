@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRuntimeLayoutStatePathOwnership(t *testing.T) {
+func TestCodingRuntimeLayoutStatePathOwnership(t *testing.T) {
 	root := t.TempDir()
 	canonicalRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -19,18 +19,18 @@ func TestRuntimeLayoutStatePathOwnership(t *testing.T) {
 	wantWorkspace := filepath.Join(canonicalRoot, "workspace")
 	wantStateRoot := filepath.Join(canonicalRoot, "state", "agents", "main")
 	instructionRoots := []string{workspace}
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: " MAIN "},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-main",
 		workspace,
 		stateRoot,
 		instructionRoots,
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
 	instructionRoots[0] = "changed-after-construction"
-	if layout.Owner() != (RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: "main"}) {
-		t.Fatalf("Owner() = %#v", layout.Owner())
+	if layout.ThreadID() != "thread-main" {
+		t.Fatalf("ThreadID() = %q", layout.ThreadID())
 	}
 	if layout.ExecutionRoot() != wantWorkspace || layout.StateRoot() != wantStateRoot {
 		t.Fatalf("roots = execution %q, state %q", layout.ExecutionRoot(), layout.StateRoot())
@@ -45,7 +45,7 @@ func TestRuntimeLayoutStatePathOwnership(t *testing.T) {
 	}
 
 	paths := layout.StatePaths()
-	wants := RuntimeStatePaths{
+	wants := CodingRuntimeStatePaths{
 		SessionsRoot:       filepath.Join(wantStateRoot, "sessions"),
 		ContextRoot:        filepath.Join(wantStateRoot, "context"),
 		MemoryRoot:         filepath.Join(wantStateRoot, "memory"),
@@ -62,32 +62,7 @@ func TestRuntimeLayoutStatePathOwnership(t *testing.T) {
 	}
 }
 
-func TestNewRuntimeLayoutCanonicalizesPersonalOwnerID(t *testing.T) {
-	root := t.TempDir()
-	tests := map[string]string{
-		" MAIN ":        "main",
-		"Main":          "main",
-		"Support Agent": "support-agent",
-	}
-	for input, want := range tests {
-		t.Run(input, func(t *testing.T) {
-			layout, err := NewRuntimeLayout(
-				RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: input},
-				filepath.Join(root, "workspace"),
-				filepath.Join(root, "state", want),
-				[]string{filepath.Join(root, "workspace")},
-			)
-			if err != nil {
-				t.Fatalf("NewRuntimeLayout() error = %v", err)
-			}
-			if got := layout.Owner().ID; got != want {
-				t.Fatalf("Owner().ID = %q, want %q", got, want)
-			}
-		})
-	}
-}
-
-func TestNewRuntimeLayoutStoresCanonicalResolvedPaths(t *testing.T) {
+func TestNewCodingRuntimeLayoutStoresCanonicalResolvedPaths(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
 	stateRoot := filepath.Join(root, "state")
@@ -118,14 +93,14 @@ func TestNewRuntimeLayoutStoresCanonicalResolvedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	layout, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: " thread-1 "},
+	layout, err := NewCodingRuntimeLayout(
+		"thread-1",
 		" "+relativeProject+" ",
 		" "+relativeState+" ",
 		[]string{" " + relativeProject + " "},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
 	wantProject, err := filepath.EvalSymlinks(project)
 	if err != nil {
@@ -141,87 +116,85 @@ func TestNewRuntimeLayoutStoresCanonicalResolvedPaths(t *testing.T) {
 	if !reflect.DeepEqual(layout.InstructionRoots(), []string{wantProject}) {
 		t.Fatalf("InstructionRoots() = %#v", layout.InstructionRoots())
 	}
-	if layout.Owner().ID != "thread-1" {
-		t.Fatalf("Owner().ID = %q", layout.Owner().ID)
+	if layout.ThreadID() != "thread-1" {
+		t.Fatalf("ThreadID() = %q", layout.ThreadID())
 	}
 }
 
-func TestNewRuntimeLayoutRejectsIncompleteContract(t *testing.T) {
+func TestNewCodingRuntimeLayoutRejectsIncompleteContract(t *testing.T) {
 	root := t.TempDir()
-	validOwner := RuntimeOwner{Kind: RuntimeOwnerPersonalAgent, ID: "main"}
+	validThreadID := "thread-main"
 	workspace := filepath.Join(root, "workspace")
 	stateRoot := filepath.Join(root, "state")
 	tests := []struct {
 		name             string
-		owner            RuntimeOwner
+		threadID         string
 		executionRoot    string
 		stateRoot        string
 		instructionRoots []string
 		wantError        string
 	}{
 		{
-			name: "owner ID", owner: RuntimeOwner{Kind: RuntimeOwnerPersonalAgent}, executionRoot: workspace,
-			stateRoot: stateRoot, instructionRoots: []string{workspace}, wantError: "owner ID",
+			name: "thread ID", executionRoot: workspace, stateRoot: stateRoot,
+			instructionRoots: []string{workspace}, wantError: "thread ID",
 		},
 		{
-			name: "owner kind", owner: RuntimeOwner{Kind: "unknown", ID: "main"}, executionRoot: workspace,
-			stateRoot: stateRoot, instructionRoots: []string{workspace}, wantError: "owner kind",
+			name: "trimmed thread ID", threadID: " thread-main ", executionRoot: workspace,
+			stateRoot: stateRoot, instructionRoots: []string{workspace}, wantError: "must be trimmed",
 		},
 		{
-			name: "execution root", owner: validOwner, stateRoot: stateRoot,
+			name: "execution root", threadID: validThreadID, stateRoot: stateRoot,
 			instructionRoots: []string{workspace}, wantError: "execution root",
 		},
 		{
-			name: "state root", owner: validOwner, executionRoot: workspace,
+			name: "state root", threadID: validThreadID, executionRoot: workspace,
 			instructionRoots: []string{workspace}, wantError: "state root",
 		},
 		{
-			name: "instruction roots", owner: validOwner, executionRoot: workspace,
+			name: "instruction roots", threadID: validThreadID, executionRoot: workspace,
 			stateRoot: stateRoot, wantError: "instruction root",
 		},
 		{
-			name: "empty instruction root", owner: validOwner, executionRoot: workspace,
+			name: "empty instruction root", threadID: validThreadID, executionRoot: workspace,
 			stateRoot: stateRoot, instructionRoots: []string{" "}, wantError: "instruction root 0",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NewRuntimeLayout(
-				test.owner,
+			_, err := NewCodingRuntimeLayout(
+				test.threadID,
 				test.executionRoot,
 				test.stateRoot,
 				test.instructionRoots,
 			)
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {
-				t.Fatalf("NewRuntimeLayout() error = %v, want containing %q", err, test.wantError)
+				t.Fatalf("NewCodingRuntimeLayout() error = %v, want containing %q", err, test.wantError)
 			}
 		})
 	}
 }
 
-func TestRuntimeLayoutRejectsStateInsideExecutionRoot(t *testing.T) {
+func TestCodingRuntimeLayoutRejectsStateInsideExecutionRoot(t *testing.T) {
 	project := filepath.Join(t.TempDir(), "project")
 	if err := os.MkdirAll(project, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	for _, ownerKind := range []RuntimeOwnerKind{RuntimeOwnerPersonalAgent, RuntimeOwnerCodingThread} {
-		for _, stateRoot := range []string{project, filepath.Join(project, ".mintclaw")} {
-			_, err := NewRuntimeLayout(
-				RuntimeOwner{Kind: ownerKind, ID: "owner-1"},
-				project,
-				stateRoot,
-				[]string{project},
-			)
-			if err == nil || !strings.Contains(err.Error(), "outside the execution root") {
-				t.Fatalf("NewRuntimeLayout() error = %v for owner %q, state root %q", err, ownerKind, stateRoot)
-			}
+	for _, stateRoot := range []string{project, filepath.Join(project, ".mintclaw")} {
+		_, err := NewCodingRuntimeLayout(
+			"thread-1",
+			project,
+			stateRoot,
+			[]string{project},
+		)
+		if err == nil || !strings.Contains(err.Error(), "outside the execution root") {
+			t.Fatalf("NewCodingRuntimeLayout() error = %v for state root %q", err, stateRoot)
 		}
 	}
 }
 
-func TestRuntimeLayoutRejectsCaseAliasOnCaseInsensitiveFilesystem(t *testing.T) {
+func TestCodingRuntimeLayoutRejectsCaseAliasOnCaseInsensitiveFilesystem(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "Project")
 	if err := os.MkdirAll(project, 0o755); err != nil {
@@ -243,18 +216,18 @@ func TestRuntimeLayoutRejectsCaseAliasOnCaseInsensitiveFilesystem(t *testing.T) 
 		t.Skip("case alias resolves to a different directory")
 	}
 
-	_, err = NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-1"},
+	_, err = NewCodingRuntimeLayout(
+		"thread-1",
 		project,
 		filepath.Join(caseAlias, ".mintclaw", "thread-1"),
 		[]string{project},
 	)
 	if err == nil || !strings.Contains(err.Error(), "outside the execution root") {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
 }
 
-func TestRuntimeLayoutRejectsStateThroughSymlinkedAncestor(t *testing.T) {
+func TestCodingRuntimeLayoutRejectsStateThroughSymlinkedAncestor(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
 	if err := os.MkdirAll(project, 0o755); err != nil {
@@ -265,18 +238,18 @@ func TestRuntimeLayoutRejectsStateThroughSymlinkedAncestor(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 
-	_, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-1"},
+	_, err := NewCodingRuntimeLayout(
+		"thread-1",
 		project,
 		filepath.Join(linkedProject, "state", "thread-1"),
 		[]string{project},
 	)
 	if err == nil || !strings.Contains(err.Error(), "outside the execution root") {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
 }
 
-func TestRuntimeLayoutRejectsDanglingSymlinkAncestor(t *testing.T) {
+func TestCodingRuntimeLayoutRejectsDanglingSymlinkAncestor(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
 	if err := os.MkdirAll(project, 0o755); err != nil {
@@ -288,32 +261,32 @@ func TestRuntimeLayoutRejectsDanglingSymlinkAncestor(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 
-	_, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-1"},
+	_, err := NewCodingRuntimeLayout(
+		"thread-1",
 		project,
 		filepath.Join(danglingLink, "thread-1"),
 		[]string{project},
 	)
 	if err == nil || !strings.Contains(err.Error(), "resolve state root") {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
 	if _, statErr := os.Stat(danglingTarget); !os.IsNotExist(statErr) {
 		t.Fatalf("validation created dangling target unexpectedly: %v", statErr)
 	}
 }
 
-func TestRuntimeLayoutAllowsExternalStateRoot(t *testing.T) {
+func TestCodingRuntimeLayoutAllowsExternalStateRoot(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
 	stateRoot := filepath.Join(root, "mintclaw-state", "threads", "thread-1")
-	_, err := NewRuntimeLayout(
-		RuntimeOwner{Kind: RuntimeOwnerCodingThread, ID: "thread-1"},
+	_, err := NewCodingRuntimeLayout(
+		"thread-1",
 		project,
 		stateRoot,
 		[]string{project},
 	)
 	if err != nil {
-		t.Fatalf("NewRuntimeLayout() error = %v", err)
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
 	}
 	if _, err := os.Stat(project); !os.IsNotExist(err) {
 		t.Fatalf("Validate() created or observed project unexpectedly: %v", err)

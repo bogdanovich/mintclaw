@@ -5,39 +5,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
-// RuntimeOwnerKind identifies the domain that owns a runtime layout.
-type RuntimeOwnerKind string
-
-const (
-	// RuntimeOwnerPersonalAgent identifies an always-on personal agent.
-	RuntimeOwnerPersonalAgent RuntimeOwnerKind = "personal_agent"
-	// RuntimeOwnerCodingThread identifies a project-aware coding thread.
-	RuntimeOwnerCodingThread RuntimeOwnerKind = "coding_thread"
-)
-
-// RuntimeOwner is the stable identity used for runtime state ownership.
-type RuntimeOwner struct {
-	Kind RuntimeOwnerKind
-	ID   string
-}
-
-// RuntimeLayout separates the roots historically represented by AgentInstance.Workspace.
+// CodingRuntimeLayout separates coding-thread execution, instruction, and
+// MintClaw-owned state roots.
 //
-// Every runtime keeps StateRoot outside ExecutionRoot so construction cannot
-// place MintClaw-owned state in a personal workspace or source checkout.
-type RuntimeLayout struct {
-	owner            RuntimeOwner
+// StateRoot remains outside ExecutionRoot so construction cannot place
+// MintClaw-owned state in a source checkout.
+type CodingRuntimeLayout struct {
+	threadID         string
 	executionRoot    string
 	stateRoot        string
 	instructionRoots []string
 }
 
-// RuntimeStatePaths names the MintClaw-owned paths below a runtime state root.
-type RuntimeStatePaths struct {
+// CodingRuntimeStatePaths names the MintClaw-owned paths below a runtime state root.
+type CodingRuntimeStatePaths struct {
 	SessionsRoot       string
 	ContextRoot        string
 	MemoryRoot         string
@@ -50,43 +33,37 @@ type RuntimeStatePaths struct {
 	MediaRoot          string
 }
 
-// NewRuntimeLayout validates and returns a side-effect-free runtime layout.
-func NewRuntimeLayout(
-	owner RuntimeOwner,
+// NewCodingRuntimeLayout validates and returns a side-effect-free coding layout.
+func NewCodingRuntimeLayout(
+	threadID string,
 	executionRoot string,
 	stateRoot string,
 	instructionRoots []string,
-) (RuntimeLayout, error) {
-	ownerID := strings.TrimSpace(owner.ID)
-	if ownerID == "" {
-		return RuntimeLayout{}, fmt.Errorf("runtime layout: owner ID is required")
+) (CodingRuntimeLayout, error) {
+	if strings.TrimSpace(threadID) == "" {
+		return CodingRuntimeLayout{}, fmt.Errorf("coding runtime layout: thread ID is required")
 	}
-	switch owner.Kind {
-	case RuntimeOwnerPersonalAgent:
-		owner.ID = routing.NormalizeAgentID(ownerID)
-	case RuntimeOwnerCodingThread:
-		owner.ID = ownerID
-	default:
-		return RuntimeLayout{}, fmt.Errorf("runtime layout: unsupported owner kind %q", owner.Kind)
+	if threadID != strings.TrimSpace(threadID) {
+		return CodingRuntimeLayout{}, fmt.Errorf("coding runtime layout: thread ID must be trimmed")
 	}
 
-	resolvedExecutionRoot, err := resolveRuntimeLayoutPath(executionRoot)
+	resolvedExecutionRoot, err := resolveCodingRuntimeLayoutPath(executionRoot)
 	if err != nil {
-		return RuntimeLayout{}, fmt.Errorf("runtime layout: resolve execution root: %w", err)
+		return CodingRuntimeLayout{}, fmt.Errorf("coding runtime layout: resolve execution root: %w", err)
 	}
-	resolvedStateRoot, err := resolveRuntimeLayoutPath(stateRoot)
+	resolvedStateRoot, err := resolveCodingRuntimeLayoutPath(stateRoot)
 	if err != nil {
-		return RuntimeLayout{}, fmt.Errorf("runtime layout: resolve state root: %w", err)
+		return CodingRuntimeLayout{}, fmt.Errorf("coding runtime layout: resolve state root: %w", err)
 	}
 	if len(instructionRoots) == 0 {
-		return RuntimeLayout{}, fmt.Errorf("runtime layout: at least one instruction root is required")
+		return CodingRuntimeLayout{}, fmt.Errorf("coding runtime layout: at least one instruction root is required")
 	}
 	resolvedInstructionRoots := make([]string, len(instructionRoots))
 	for index, root := range instructionRoots {
-		resolved, resolveErr := resolveRuntimeLayoutPath(root)
+		resolved, resolveErr := resolveCodingRuntimeLayoutPath(root)
 		if resolveErr != nil {
-			return RuntimeLayout{}, fmt.Errorf(
-				"runtime layout: resolve instruction root %d: %w",
+			return CodingRuntimeLayout{}, fmt.Errorf(
+				"coding runtime layout: resolve instruction root %d: %w",
 				index,
 				resolveErr,
 			)
@@ -94,42 +71,42 @@ func NewRuntimeLayout(
 		resolvedInstructionRoots[index] = resolved
 	}
 
-	layout := RuntimeLayout{
-		owner:            owner,
+	layout := CodingRuntimeLayout{
+		threadID:         threadID,
 		executionRoot:    resolvedExecutionRoot,
 		stateRoot:        resolvedStateRoot,
 		instructionRoots: resolvedInstructionRoots,
 	}
 	if err := layout.Validate(); err != nil {
-		return RuntimeLayout{}, err
+		return CodingRuntimeLayout{}, err
 	}
 	return layout, nil
 }
 
-// Owner returns the stable owner of this runtime.
-func (l RuntimeLayout) Owner() RuntimeOwner {
-	return l.owner
+// ThreadID returns the stable coding thread that owns this runtime.
+func (l CodingRuntimeLayout) ThreadID() string {
+	return l.threadID
 }
 
 // ExecutionRoot returns the cwd/project authority for tools and subprocesses.
-func (l RuntimeLayout) ExecutionRoot() string {
+func (l CodingRuntimeLayout) ExecutionRoot() string {
 	return l.executionRoot
 }
 
 // StateRoot returns the external root for MintClaw-owned runtime state.
-func (l RuntimeLayout) StateRoot() string {
+func (l CodingRuntimeLayout) StateRoot() string {
 	return l.stateRoot
 }
 
 // InstructionRoots returns an ordered copy of the instruction search roots.
-func (l RuntimeLayout) InstructionRoots() []string {
+func (l CodingRuntimeLayout) InstructionRoots() []string {
 	return append([]string(nil), l.instructionRoots...)
 }
 
 // StatePaths returns the path ownership contract for state-producing runtime services.
-func (l RuntimeLayout) StatePaths() RuntimeStatePaths {
+func (l CodingRuntimeLayout) StatePaths() CodingRuntimeStatePaths {
 	operationalRoot := runtimeLayoutJoin(l.stateRoot, "runtime")
-	return RuntimeStatePaths{
+	return CodingRuntimeStatePaths{
 		SessionsRoot:       runtimeLayoutJoin(l.stateRoot, "sessions"),
 		ContextRoot:        runtimeLayoutJoin(l.stateRoot, "context"),
 		MemoryRoot:         runtimeLayoutJoin(l.stateRoot, "memory"),
@@ -143,43 +120,34 @@ func (l RuntimeLayout) StatePaths() RuntimeStatePaths {
 	}
 }
 
-// Validate checks the root and owner invariants without creating filesystem state.
-func (l RuntimeLayout) Validate() error {
-	if strings.TrimSpace(l.owner.ID) == "" {
-		return fmt.Errorf("runtime layout: owner ID is required")
+// Validate checks the coding-thread root invariants without creating filesystem state.
+func (l CodingRuntimeLayout) Validate() error {
+	if strings.TrimSpace(l.threadID) == "" {
+		return fmt.Errorf("coding runtime layout: thread ID is required")
 	}
-	switch l.owner.Kind {
-	case RuntimeOwnerPersonalAgent:
-		if l.owner.ID != routing.NormalizeAgentID(l.owner.ID) {
-			return fmt.Errorf("runtime layout: personal owner ID must be canonical")
-		}
-	case RuntimeOwnerCodingThread:
-		if l.owner.ID != strings.TrimSpace(l.owner.ID) {
-			return fmt.Errorf("runtime layout: coding owner ID must be trimmed")
-		}
-	default:
-		return fmt.Errorf("runtime layout: unsupported owner kind %q", l.owner.Kind)
+	if l.threadID != strings.TrimSpace(l.threadID) {
+		return fmt.Errorf("coding runtime layout: thread ID must be trimmed")
 	}
 	if strings.TrimSpace(l.executionRoot) == "" {
-		return fmt.Errorf("runtime layout: execution root is required")
+		return fmt.Errorf("coding runtime layout: execution root is required")
 	}
 	if strings.TrimSpace(l.stateRoot) == "" {
-		return fmt.Errorf("runtime layout: state root is required")
+		return fmt.Errorf("coding runtime layout: state root is required")
 	}
 	if len(l.instructionRoots) == 0 {
-		return fmt.Errorf("runtime layout: at least one instruction root is required")
+		return fmt.Errorf("coding runtime layout: at least one instruction root is required")
 	}
 	for index, root := range l.instructionRoots {
 		if strings.TrimSpace(root) == "" {
-			return fmt.Errorf("runtime layout: instruction root %d is empty", index)
+			return fmt.Errorf("coding runtime layout: instruction root %d is empty", index)
 		}
 	}
 	stateInsideExecution, err := runtimeLayoutPathWithin(l.stateRoot, l.executionRoot)
 	if err != nil {
-		return fmt.Errorf("runtime layout: check state root containment: %w", err)
+		return fmt.Errorf("coding runtime layout: check state root containment: %w", err)
 	}
 	if stateInsideExecution {
-		return fmt.Errorf("runtime layout: state root must be outside the execution root")
+		return fmt.Errorf("coding runtime layout: state root must be outside the execution root")
 	}
 	return nil
 }
@@ -222,9 +190,9 @@ func runtimeLayoutPathWithin(candidate, root string) (bool, error) {
 	}
 }
 
-// resolveRuntimeLayoutPath returns an absolute path resolved through its nearest
+// resolveCodingRuntimeLayoutPath returns an absolute path resolved through its nearest
 // existing ancestor. An existing but unresolvable ancestor fails closed.
-func resolveRuntimeLayoutPath(path string) (string, error) {
+func resolveCodingRuntimeLayoutPath(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("path is required")

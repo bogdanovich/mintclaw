@@ -9,7 +9,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
-func TestWithStateManagerRetainsRuntimeOwner(t *testing.T) {
+func TestWithStateManagerRetainsInjectedManager(t *testing.T) {
 	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
 		Workspace: t.TempDir(), ModelName: "test-model", MaxTokens: 100, MaxToolIterations: 2,
 		ContextManager: "none",

@@ -52,7 +52,7 @@ func (al *AgentLoop) ProcessDirectWithOptions(
 	content, sessionKey, channel, chatID string,
 	opts DirectTurnOptions,
 ) (string, error) {
-	if al.hasCodingToolProfile() {
+	if al.usesCodingProfile() {
 		return al.processCodingDirect(ctx, content, sessionKey, opts)
 	}
 	return al.processDirectWithChannel(ctx, content, sessionKey, channel, chatID, false, opts)
@@ -81,7 +81,7 @@ func (al *AgentLoop) processCodingDirect(
 
 	inboundContext := &bus.InboundContext{
 		Channel:  "coding",
-		ChatID:   layout.Owner().ID,
+		ChatID:   layout.ThreadID(),
 		ChatType: "direct",
 	}
 	route := &routing.ResolvedRoute{
@@ -102,7 +102,7 @@ func (al *AgentLoop) processCodingDirect(
 	codingContext := CodingPromptContext{
 		ProjectRoot:      layout.ExecutionRoot(),
 		WorkingDirectory: workingDirectory,
-		ThreadID:         layout.Owner().ID,
+		ThreadID:         layout.ThreadID(),
 		SessionKey:       wantSessionKey,
 		TrustMode:        CodingTrustModeYolo,
 		Model:            resolvedCandidateModelName(execution.Candidates, execution.Model),

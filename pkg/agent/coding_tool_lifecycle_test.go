@@ -165,7 +165,7 @@ func TestCodingStartupRepairsCrashFixturesWithoutReplayingMutation(t *testing.T)
 		t.Fatal(err)
 	}
 
-	loop, err := NewAgentLoopWithRuntimeProfile(
+	loop, err := NewCodingAgentLoop(
 		codingToolTestConfig(), bus.NewMessageBus(), &mockProvider{}, profile,
 	)
 	if err != nil {
@@ -201,7 +201,7 @@ func TestCodingToolDoesNotRunWhenStartMarkerCannotBePersisted(t *testing.T) {
 			}),
 		),
 	})
-	loop, err := NewAgentLoopWithRuntimeProfile(
+	loop, err := NewCodingAgentLoop(
 		codingToolTestConfig(), bus.NewMessageBus(), provider, profile,
 	)
 	if err != nil {
@@ -261,7 +261,7 @@ func TestCodingRejectsAmbiguousToolCallIDsBeforeExecution(t *testing.T) {
 					Content: "writing", ToolCalls: test.calls,
 				},
 			})
-			loop, err := NewAgentLoopWithRuntimeProfile(
+			loop, err := NewCodingAgentLoop(
 				codingToolTestConfig(), bus.NewMessageBus(), provider, profile,
 			)
 			if err != nil {
@@ -310,7 +310,7 @@ func TestCodingTurnPersistsAcceptedUserMessageBeforeProviderCall(t *testing.T) {
 		Response: llmscenario.TextResponse("observed"),
 	})
 	var err error
-	loop, err = NewAgentLoopWithRuntimeProfile(
+	loop, err = NewCodingAgentLoop(
 		codingToolTestConfig(), bus.NewMessageBus(), provider, profile,
 	)
 	if err != nil {

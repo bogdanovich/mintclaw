@@ -20,7 +20,7 @@ The coding command remains the owner of thread admission:
 
 The runtime adapter owns only one turn. It loads configuration, resolves the
 thread's persisted model selection, constructs exactly one `main` coding agent,
-binds that agent to the thread's strict runtime layout, and calls
+binds that agent to the thread's coding runtime layout, and calls
 `ProcessDirect` with the canonical `coding:<thread-id>` session key. This keeps
 the CLI outside provider, tool, prompt, journal, workspace-refresh, and crash
 repair internals.

@@ -24,15 +24,15 @@ func (al *AgentLoop) taskRegistryForWorkspace(workspace string) *taskregistry.Re
 		}
 	}
 	storePath := taskregistry.WorkspaceStorePath(workspace)
-	if layout, ok := al.runtimeLayoutForWorkspace(workspace); ok {
+	if layout, ok := al.codingLayoutForWorkspace(workspace); ok {
 		storePath = layout.StatePaths().TaskRegistryFile
 	}
 	registry := taskregistry.NewRegistryWithOptions(
 		storePath,
 		al.taskRegistryOptions(),
 	)
-	if al.runtimeProfile != nil && registry.LastLoadError() != nil {
-		al.runtimeProfileInitErr = fmt.Errorf("load strict task registry: %w", registry.LastLoadError())
+	if al.codingProfile != nil && registry.LastLoadError() != nil {
+		al.runtimeInitErr = fmt.Errorf("load coding task registry: %w", registry.LastLoadError())
 	}
 	actual, _ := al.taskRegistries.LoadOrStore(workspace, registry)
 	if stored, ok := actual.(*taskregistry.Registry); ok {

@@ -41,9 +41,9 @@ func WithStateManager(manager *state.Manager) AgentLoopOption {
 	}
 }
 
-func withRuntimeProfile(profile RuntimeProfile) AgentLoopOption {
+func withCodingRuntimeProfile(profile CodingRuntimeProfile) AgentLoopOption {
 	return func(al *AgentLoop) {
-		al.runtimeProfile = &profile
+		al.codingProfile = &profile
 	}
 }
 

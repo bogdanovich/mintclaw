@@ -29,14 +29,14 @@ The admitted coding state layout is:
   threads/
     <thread-uuid>/
       thread.meta.json
-      sessions/                 canonical JSONL, opened by RuntimeLayout
+      sessions/                 canonical JSONL, opened by CodingRuntimeLayout
       context/
         seahorse.db             derived and disposable
       thread.lock               reserved for P1.3
 ```
 
 `Store.ThreadRoot` returns `threads/<uuid>` as the owner-scoped state root for
-the existing strict `RuntimeLayout`. The UUID is validated before path joining,
+the existing `CodingRuntimeLayout`. The UUID is validated before path joining,
 so an explicit ID cannot escape the store. Direct addressing avoids a full
 catalogue scan for `resume <id>` and gives each thread its own JSONL and
 Seahorse database. No global coding SQLite file is introduced.
@@ -167,4 +167,4 @@ Focused tests prove:
 P1.2 can now scan only bounded `thread.meta.json` files, isolate corrupt
 entries, and filter by `project_key`. P1.3 can place its OS-backed writer lease
 at the reserved per-thread root. P1.4 can bind `Store.ThreadRoot` directly into
-the existing coding `RuntimeLayout`.
+the existing coding `CodingRuntimeLayout`.

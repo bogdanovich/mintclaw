@@ -86,18 +86,10 @@ func newAgentLoopWithRegistry(
 		}
 	}
 	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && al.state == nil {
-		if layout, ok := profileLayoutForAgent(al.runtimeProfile, defaultAgent.ID); ok &&
-			al.runtimeProfile.toolProfile == RuntimeToolProfilePersonal {
-			manager, err := state.NewManagerAtChecked(layout.StatePaths().RuntimeStateFile)
-			if err != nil {
-				al.runtimeProfileInitErr = fmt.Errorf("load runtime state: %w", err)
-			} else {
-				al.state = manager
-			}
-		} else if !al.isolatedToolBootstrap {
+		if !al.isolatedToolBootstrap {
 			manager, err := state.NewManagerChecked(defaultAgent.Workspace)
 			if err != nil {
-				al.runtimeProfileInitErr = fmt.Errorf("load runtime state: %w", err)
+				al.runtimeInitErr = fmt.Errorf("load runtime state: %w", err)
 			} else {
 				al.state = manager
 			}
@@ -125,7 +117,7 @@ func newAgentLoopWithRegistry(
 	if !al.isolatedToolBootstrap {
 		registerSharedTools(al, cfg, msgBus, registry, provider)
 	}
-	if al.hasCodingToolProfile() {
+	if al.usesCodingProfile() {
 		for _, agentID := range registry.ListAgentIDs() {
 			if instance, ok := registry.GetAgent(agentID); ok && instance != nil {
 				instance.Tools.Seal()
@@ -150,8 +142,8 @@ func NewAgentLoopChecked(
 		return nil, err
 	}
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
-	if al.runtimeProfileInitErr != nil {
-		err := al.runtimeProfileInitErr
+	if al.runtimeInitErr != nil {
+		err := al.runtimeInitErr
 		al.Close()
 		return nil, err
 	}
@@ -162,37 +154,30 @@ func NewAgentLoopChecked(
 	return al, nil
 }
 
-// NewAgentLoopWithRuntimeProfile applies a resolved profile before registry and
-// agent construction. It is the strict entry point for frontends that require
-// distinct execution and state roots.
-func NewAgentLoopWithRuntimeProfile(
+// NewCodingAgentLoop applies a resolved coding-thread profile before registry
+// and agent construction.
+func NewCodingAgentLoop(
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
-	profile RuntimeProfile,
+	profile CodingRuntimeProfile,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
-	if profile.toolProfile == RuntimeToolProfilePersonal && len(profile.agentLayouts) != 1 {
-		return nil, fmt.Errorf("strict personal runtime profiles currently require exactly one owner")
-	}
 	contextManagerName := contextManagerConfigName(cfg)
 	if contextManagerName != "none" && contextManagerName != "seahorse" {
 		return nil, fmt.Errorf(
-			"runtime profile context manager %q has no owner-scoped storage contract",
+			"coding profile context manager %q has no thread-scoped storage contract",
 			contextManagerName,
 		)
 	}
-	registry, err := newAgentRegistryWithRuntimeProfile(cfg, provider, profile)
+	registry, err := newAgentRegistryWithCodingRuntimeProfile(cfg, provider, profile)
 	if err != nil {
 		return nil, err
 	}
-	opts = append([]AgentLoopOption{withRuntimeProfile(profile)}, opts...)
-	if profile.hasCodingOwner() {
-		opts = append([]AgentLoopOption{WithIsolatedToolBootstrap()}, opts...)
-	}
+	opts = append([]AgentLoopOption{withCodingRuntimeProfile(profile), WithIsolatedToolBootstrap()}, opts...)
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
-	if al.runtimeProfileInitErr != nil {
-		err := al.runtimeProfileInitErr
+	if al.runtimeInitErr != nil {
+		err := al.runtimeInitErr
 		al.Close()
 		return nil, err
 	}
@@ -246,7 +231,7 @@ func registerSharedTools(
 		if cfg.Tools.IsToolEnabled("memory") {
 			workspace := agent.Workspace
 			memoryRoot := workspace
-			if layout, ok := profileLayoutForAgent(al.runtimeProfile, agent.ID); ok {
+			if layout, ok := codingLayoutForAgent(al.codingProfile, agent.ID); ok {
 				memoryRoot = layout.StateRoot()
 			}
 			registerToolIfAllowed(
@@ -455,9 +440,9 @@ func registerSharedTools(
 	}
 }
 
-func profileLayoutForAgent(profile *RuntimeProfile, agentID string) (RuntimeLayout, bool) {
+func codingLayoutForAgent(profile *CodingRuntimeProfile, agentID string) (CodingRuntimeLayout, bool) {
 	if profile == nil {
-		return RuntimeLayout{}, false
+		return CodingRuntimeLayout{}, false
 	}
 	return profile.AgentLayout(agentID)
 }

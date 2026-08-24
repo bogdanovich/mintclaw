@@ -346,21 +346,21 @@ A bounded P0 refactor is warranted. A broad `AgentLoop` rewrite is not.
                                       |
                  +--------------------+--------------------+
                  |                                         |
-        personal runtime profile                  coding runtime profile
+        personal gateway runtime                  coding runtime profile
         gateway and channels                      local controller and TUI
         routed SessionScope                       project CodingThread
         workspace state                           external coding state root
         channel delivery                          terminal event projection
 ```
 
-### Runtime profile contract
+### Coding runtime profile contract
 
 The exact Go type is an implementation decision, but construction must resolve
 these values before an agent instance or stateful service is created:
 
 | Value | Meaning |
 | --- | --- |
-| Runtime owner | Stable identity used for claims, traces, caches, and state ownership |
+| Coding thread ID | Stable identity used for claims, traces, caches, and state ownership |
 | Execution root | Canonical cwd or project root used by code tools and subprocesses |
 | State root | Private MintClaw directory for sessions, Seahorse, traces, and locks |
 | Instruction roots | Ordered global and project paths used for prompt instructions |
@@ -370,11 +370,10 @@ these values before an agent instance or stateful service is created:
 | Output profile | Channel delivery or terminal-facing stream/event projection |
 | Trust profile | Existing gateway approvals or trusted-local no-prompt execution |
 
-Personal and coding profiles both use owner-scoped state roots outside their
-execution roots. The current personal workspace state is moved once during a
-backed-up deployment cutover; runtime code does not retain permanent dual-read
-or fallback paths. Behavioral data and semantics are preserved, not the old
-directory layout.
+The coding profile uses an owner-scoped state root outside its source checkout.
+The personal gateway retains its config-owned workspace lifecycle and hot
+reload model; it does not adopt coding-thread identity, storage, or trust
+semantics merely for structural symmetry.
 
 ### Coding thread domain
 

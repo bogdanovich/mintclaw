@@ -25,7 +25,7 @@ import (
 
 type ContextBuilder struct {
 	workspace          string
-	promptProfile      RuntimePromptProfile
+	codingPrompt       bool
 	codingContext      CodingPromptContext
 	codingInstructions *codingInstructionLoader
 	codingWorkspace    *codingworkspace.Observer
@@ -114,28 +114,25 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 	return newContextBuilderWithMemoryOwner(workspace, workspace)
 }
 
-func newRuntimeContextBuilder(layout RuntimeLayout, promptProfile RuntimePromptProfile) (*ContextBuilder, error) {
+func newCodingContextBuilder(layout CodingRuntimeLayout) (*ContextBuilder, error) {
 	memoryStore, err := newMemoryStoreChecked(layout.StateRoot())
 	if err != nil {
 		return nil, fmt.Errorf("initialize runtime prompt memory: %w", err)
 	}
 	builder := newContextBuilderWithMemoryStore(layout.ExecutionRoot(), memoryStore)
-	builder.promptProfile = promptProfile
-	if promptProfile == RuntimePromptProfileCoding {
-		owner := layout.Owner()
-		builder.codingInstructions = newCodingInstructionLoader(layout)
-		builder.codingWorkspace = codingworkspace.NewObserver(
-			layout.ExecutionRoot(),
-			builder.codingInstructions.workingDirectory(),
-			codingworkspace.Limits{},
-		)
-		builder.codingContext = CodingPromptContext{
-			ProjectRoot:      layout.ExecutionRoot(),
-			WorkingDirectory: builder.codingInstructions.workingDirectory(),
-			ThreadID:         owner.ID,
-			SessionKey:       "coding:" + owner.ID,
-			TrustMode:        CodingTrustModeYolo,
-		}
+	builder.codingPrompt = true
+	builder.codingInstructions = newCodingInstructionLoader(layout)
+	builder.codingWorkspace = codingworkspace.NewObserver(
+		layout.ExecutionRoot(),
+		builder.codingInstructions.workingDirectory(),
+		codingworkspace.Limits{},
+	)
+	builder.codingContext = CodingPromptContext{
+		ProjectRoot:      layout.ExecutionRoot(),
+		WorkingDirectory: builder.codingInstructions.workingDirectory(),
+		ThreadID:         layout.ThreadID(),
+		SessionKey:       "coding:" + layout.ThreadID(),
+		TrustMode:        CodingTrustModeYolo,
 	}
 	return builder, nil
 }
@@ -311,7 +308,7 @@ func (cb *ContextBuilder) BuildSystemPromptParts() []PromptPart {
 }
 
 func (cb *ContextBuilder) buildSystemPromptPartsForProfile(opts systemPromptBuildOptions) []PromptPart {
-	if cb.promptProfile == RuntimePromptProfileCoding {
+	if cb.codingPrompt {
 		return cb.buildCodingSystemPromptParts()
 	}
 	return cb.buildSystemPromptParts(opts)
@@ -479,7 +476,7 @@ func (cb *ContextBuilder) BuildSystemPromptWithCache() string {
 	// Coding instructions have their own path-identity cache and can change in
 	// directories that are intentionally outside the personal prompt cache's
 	// tracked bootstrap paths.
-	if cb.promptProfile == RuntimePromptProfileCoding {
+	if cb.codingPrompt {
 		return cb.BuildSystemPrompt()
 	}
 	// Try read lock first — fast path when cache is valid
@@ -528,7 +525,7 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 	if req.SuppressDefaultSystemPrompt {
 		return "", nil
 	}
-	if cb.promptProfile == RuntimePromptProfileCoding {
+	if cb.codingPrompt {
 		parts := cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{})
 		staticPrompt := renderPromptPartsLegacy(parts)
 		return staticPrompt, []providers.ContentBlock{promptContentBlock(PromptPart{
@@ -578,7 +575,7 @@ func (cb *ContextBuilder) withCodingExecutionContext(
 	messages []providers.Message,
 	context CodingPromptContext,
 ) []providers.Message {
-	if cb == nil || cb.promptProfile != RuntimePromptProfileCoding {
+	if cb == nil || !cb.codingPrompt {
 		return messages
 	}
 
@@ -1083,7 +1080,7 @@ func (cb *ContextBuilder) BuildMessages(
 
 func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []providers.Message {
 	messages := []providers.Message{}
-	if cb != nil && cb.promptProfile == RuntimePromptProfileCoding {
+	if cb != nil && cb.codingPrompt {
 		cb.refreshCodingWorkspace(context.Background())
 	}
 
@@ -1115,7 +1112,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	}
 
 	promptParts := append([]PromptPart(nil), req.Overlays...)
-	personalPrompt := cb.promptProfile != RuntimePromptProfileCoding
+	personalPrompt := !cb.codingPrompt
 	if !req.SuppressDefaultSystemPrompt && personalPrompt && !req.SuppressSkillContext {
 		activeSkills := append([]string(nil), req.ActiveSkills...)
 		if len(req.AllowedSkills) > 0 {

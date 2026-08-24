@@ -115,7 +115,7 @@ func (al *AgentLoop) ensureHooksInitialized(ctx context.Context) error {
 	if al == nil || al.cfg == nil || al.hooks == nil {
 		return nil
 	}
-	if al.hasCodingToolProfile() {
+	if al.usesCodingProfile() {
 		return nil
 	}
 

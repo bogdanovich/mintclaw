@@ -47,7 +47,7 @@ func (al *AgentLoop) MountHook(reg HookRegistration) error {
 	if al == nil || al.hooks == nil {
 		return fmt.Errorf("hook manager is not initialized")
 	}
-	if al.hasCodingToolProfile() {
+	if al.usesCodingProfile() {
 		return fmt.Errorf("coding runtime profiles do not admit hooks")
 	}
 	return al.hooks.Mount(reg)

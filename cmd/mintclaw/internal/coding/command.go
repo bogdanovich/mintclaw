@@ -742,19 +742,19 @@ func resultFor(
 	}, nil
 }
 
-func runtimeLayoutFor(store *thread.Store, metadata thread.Metadata) (agent.RuntimeLayout, error) {
+func runtimeLayoutFor(store *thread.Store, metadata thread.Metadata) (agent.CodingRuntimeLayout, error) {
 	stateRoot, err := store.ThreadRoot(metadata.ThreadID)
 	if err != nil {
-		return agent.RuntimeLayout{}, err
+		return agent.CodingRuntimeLayout{}, err
 	}
-	layout, err := agent.NewRuntimeLayout(
-		agent.RuntimeOwner{Kind: agent.RuntimeOwnerCodingThread, ID: metadata.ThreadID},
+	layout, err := agent.NewCodingRuntimeLayout(
+		metadata.ThreadID,
 		metadata.Project.ProjectRoot,
 		stateRoot,
 		codingInstructionRoots(store, metadata),
 	)
 	if err != nil {
-		return agent.RuntimeLayout{}, fmt.Errorf("coding command: validate external runtime state: %w", err)
+		return agent.CodingRuntimeLayout{}, fmt.Errorf("coding command: validate external runtime state: %w", err)
 	}
 	return layout, nil
 }
