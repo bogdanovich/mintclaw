@@ -82,6 +82,12 @@ interfaces because tests and alternate buses provide real implementations.
 Active-request counting and turn abort use their concrete owners; they do not
 sit behind a service bag or single-implementation interface.
 
+Pipeline context wiring keeps its semantic grouping, but not artificial
+interfaces. Context assembly, steering, and media resolution retain narrow
+interfaces because they have real substitutes. Background compaction, model
+execution, and terminal-task context use their concrete generation owners so
+the immutable pipeline snapshot remains explicit across reloads.
+
 ## Session Claiming
 
 `runtimeSessionClaim` is the shared session ownership primitive. A claim stores

@@ -125,17 +125,6 @@ func (m *modelExecutionManager) maybeApplyVisionExecutionState(
 	return true, nil
 }
 
-func (al *AgentLoop) maybeApplyVisionExecutionState(
-	baseAgent *AgentInstance,
-	exec *turnExecution,
-) (bool, error) {
-	manager := al.modelExecutionManager()
-	if manager == nil {
-		return false, nil
-	}
-	return manager.maybeApplyVisionExecutionState(baseAgent, exec)
-}
-
 func (p *Pipeline) callFallbackCandidateWithCapabilities(
 	ctx context.Context,
 	ts *turnState,
