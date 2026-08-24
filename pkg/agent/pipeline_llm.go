@@ -89,8 +89,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 
 		if len(exec.model.activeCandidates) > 1 && p.Interaction.Fallback != nil {
 			fallbackAttempt := 0
-			fbResult, fbErr := executeFallbackWithObserver(
-				p.Interaction.Fallback,
+			fbResult, fbErr := p.Interaction.Fallback.ExecuteCandidateObserved(
 				providerCtx,
 				exec.model.activeCandidates,
 				func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {

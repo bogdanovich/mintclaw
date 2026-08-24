@@ -51,9 +51,9 @@ type PipelineInteractionServices struct {
 	Reasoning        reasoningPublisher
 	ToolFeedback     toolFeedbackManager
 	SyncToolDelivery syncToolResultDeliveryManager
-	ToolDelivery     toolDeliveryManager
+	ToolDelivery     *asyncToolCompletionDelivery
 	Hooks            hookInterceptor
-	Fallback         fallbackExecutor
+	Fallback         *providers.FallbackChain
 	Suspension       toolSuspensionManager
 }
 
@@ -144,10 +144,6 @@ type reasoningPublisher interface {
 	handleReasoning(ctx context.Context, reasoningContent, channelName, channelID string)
 }
 
-type toolDeliveryManager interface {
-	deliverAsyncToolCompletion(req AsyncDeliveryRequest)
-}
-
 type syncToolResultDeliveryManager interface {
 	applySyncToolResultDelivery(
 		ctx context.Context,
@@ -181,36 +177,6 @@ type hookInterceptor interface {
 		resp *ToolResultHookResponse,
 	) (*ToolResultHookResponse, HookDecision)
 	ApproveTool(ctx context.Context, req *ToolApprovalRequest) ApprovalDecision
-}
-
-type fallbackExecutor interface {
-	ExecuteCandidate(
-		ctx context.Context,
-		candidates []providers.FallbackCandidate,
-		run func(context.Context, providers.FallbackCandidate) (*providers.LLMResponse, error),
-	) (*providers.FallbackResult, error)
-}
-
-type observedFallbackExecutor interface {
-	ExecuteCandidateObserved(
-		ctx context.Context,
-		candidates []providers.FallbackCandidate,
-		run func(context.Context, providers.FallbackCandidate) (*providers.LLMResponse, error),
-		observer providers.FallbackAttemptObserver,
-	) (*providers.FallbackResult, error)
-}
-
-func executeFallbackWithObserver(
-	executor fallbackExecutor,
-	ctx context.Context,
-	candidates []providers.FallbackCandidate,
-	run func(context.Context, providers.FallbackCandidate) (*providers.LLMResponse, error),
-	observer providers.FallbackAttemptObserver,
-) (*providers.FallbackResult, error) {
-	if observed, ok := executor.(observedFallbackExecutor); ok {
-		return observed.ExecuteCandidateObserved(ctx, candidates, run, observer)
-	}
-	return executor.ExecuteCandidate(ctx, candidates, run)
 }
 
 type mediaResolver interface {
