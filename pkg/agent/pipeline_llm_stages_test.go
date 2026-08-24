@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -17,7 +18,9 @@ import (
 type (
 	durableProjectionTestTool    struct{}
 	resultOnlyDurabilityTestTool struct{}
-	duplicateRootMarkerHook      struct{}
+	duplicateRootMarkerHook      struct {
+		events chan runtimeevents.Event
+	}
 )
 
 func (*duplicateRootMarkerHook) BeforeLLM(
@@ -39,6 +42,16 @@ func (*duplicateRootMarkerHook) AfterLLM(
 	resp *LLMHookResponse,
 ) (*LLMHookResponse, HookDecision, error) {
 	return resp.Clone(), HookDecision{Action: HookActionContinue}, nil
+}
+
+func (h *duplicateRootMarkerHook) OnRuntimeEvent(_ context.Context, event runtimeevents.Event) error {
+	if h != nil && h.events != nil && event.Kind == runtimeevents.KindAgentLLMResponse {
+		select {
+		case h.events <- event:
+		default:
+		}
+	}
+	return nil
 }
 
 func (durableProjectionTestTool) Name() string        { return "protected_test" }
@@ -204,7 +217,8 @@ func TestBrowserDiagnosticsTaintSurvivesHookDuplicatedRootMarker(t *testing.T) {
 	}}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
-	if err := al.MountHook(NamedHook("duplicate-root-marker", &duplicateRootMarkerHook{})); err != nil {
+	hook := &duplicateRootMarkerHook{events: make(chan runtimeevents.Event, 1)}
+	if err := al.MountHook(NamedHook("duplicate-root-marker", hook)); err != nil {
 		t.Fatalf("MountHook() error = %v", err)
 	}
 
@@ -243,6 +257,20 @@ func TestBrowserDiagnosticsTaintSurvivesHookDuplicatedRootMarker(t *testing.T) {
 	if outcome.Control != ControlBreak || outcome.FinalContent != llm.response.Content ||
 		!outcome.FinalContentProtected {
 		t.Fatalf("hook-cloned root diagnostics outcome = %#v", outcome)
+	}
+	select {
+	case event := <-hook.events:
+		payload, ok := event.Payload.(LLMResponsePayload)
+		if !ok {
+			t.Fatalf("LLM response event payload = %T", event.Payload)
+		}
+		want := diagnosticSafeHash(pipeline.Cfg, protectedTurnFinalDiagnosticReceipt)
+		if payload.ResponseHash != want ||
+			payload.ResponseHash == diagnosticSafeHash(pipeline.Cfg, llm.response.Content) {
+			t.Fatalf("protected response hash = %q, want fixed receipt %q", payload.ResponseHash, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for protected LLM response event")
 	}
 }
 

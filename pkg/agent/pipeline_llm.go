@@ -578,11 +578,15 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		diagnosticResponseContent = ""
 		diagnosticResponseReasoning = ""
 	}
+	diagnosticResponseHash := diagnosticSafeHash(p.Cfg, llm.response.Content)
+	if sensitiveDiagnosticResponse {
+		diagnosticResponseHash = diagnosticSafeHash(p.Cfg, protectedTurnFinalDiagnosticReceipt)
+	}
 	p.emitEvent(
 		runtimeevents.KindAgentLLMResponse,
 		ts.eventMeta("runTurn", "turn.llm.response"),
 		LLMResponsePayload{
-			ResponseHash:     diagnosticSafeHash(p.Cfg, llm.response.Content),
+			ResponseHash:     diagnosticResponseHash,
 			ContentLen:       len(llm.response.Content),
 			ToolCalls:        len(llm.response.ToolCalls),
 			HasReasoning:     llm.response.Reasoning != "" || llm.response.ReasoningContent != "",
