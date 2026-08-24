@@ -783,6 +783,10 @@ Implementation sequence:
     of `stdio`, `http`, or `sse`, reject fields from another transport, delete
     transport aliases and inference, and make every interrupted session-loss
     call uncertain after reconnect without configurable replay.
+28. Delete unused compatibility helper APIs and implicit internal call modes.
+    Remove the uncalled browser click-effect and Web local-IP aliases, and make
+    every Seahorse leaf-compaction caller select its current force mode
+    explicitly instead of relying on a variadic default.
 
 Exit criteria:
 

@@ -139,11 +139,6 @@ func GetLocalIPv6() string {
 	return addrs[0]
 }
 
-// GetLocalIP returns a non-loopback local IPv4 address for backward compatibility.
-func GetLocalIP() string {
-	return GetLocalIPv4()
-}
-
 // OpenBrowser automatically opens the given URL in the default browser.
 func OpenBrowser(url string) error {
 	switch runtime.GOOS {

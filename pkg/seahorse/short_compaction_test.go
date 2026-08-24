@@ -1176,7 +1176,7 @@ func TestCompactLeafForceBypassesFreshTail(t *testing.T) {
 	}
 
 	// Without force: should return nil (all in fresh tail)
-	summaryID, err := ce.compactLeaf(ctx, convID)
+	summaryID, err := ce.compactLeaf(ctx, convID, false)
 	if err != nil {
 		t.Fatalf("compactLeaf no-force: %v", err)
 	}
@@ -1218,7 +1218,7 @@ func TestCompactLeafAccumulatesUpToLeafChunkTokens(t *testing.T) {
 		}
 	}
 
-	summaryID, err := ce.compactLeaf(ctx, convID)
+	summaryID, err := ce.compactLeaf(ctx, convID, false)
 	if err != nil {
 		t.Fatalf("compactLeaf: %v", err)
 	}
