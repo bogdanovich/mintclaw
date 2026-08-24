@@ -42,7 +42,6 @@ func (e *interactionContinuationExecutor) execute(
 	ctx context.Context,
 	turnCtx context.Context,
 	ts *turnState,
-	host turnRuntimeHost,
 	pipeline *Pipeline,
 ) (turnResult, TurnEndStatus, error) {
 	exec, err := pipeline.SetupTurn(turnCtx, ts)
@@ -77,7 +76,7 @@ func (e *interactionContinuationExecutor) execute(
 		}
 		if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
 			e.abort()
-			result, abortErr := host.abortTurn(ts)
+			result, abortErr := pipeline.abortTurn(ts)
 			return result, TurnEndStatusAborted, abortErr
 		}
 		if e.validateTool != nil {
@@ -102,7 +101,7 @@ func (e *interactionContinuationExecutor) execute(
 		}
 	}
 
-	return pipeline.runPreparedTurnLoop(ctx, turnCtx, ts, host, exec)
+	return pipeline.runPreparedTurnLoop(ctx, turnCtx, ts, exec)
 }
 
 func repairJournaledToolPair(

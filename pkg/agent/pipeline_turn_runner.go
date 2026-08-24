@@ -14,7 +14,6 @@ func (p *Pipeline) runTurnLoop(
 	ctx context.Context,
 	turnCtx context.Context,
 	ts *turnState,
-	host turnRuntimeHost,
 ) (turnResult, TurnEndStatus, error) {
 	exec, err := p.SetupTurn(turnCtx, ts)
 	if err != nil {
@@ -25,14 +24,13 @@ func (p *Pipeline) runTurnLoop(
 			exec.model.cleanup()
 		}
 	}()
-	return p.runPreparedTurnLoop(ctx, turnCtx, ts, host, exec)
+	return p.runPreparedTurnLoop(ctx, turnCtx, ts, exec)
 }
 
 func (p *Pipeline) runPreparedTurnLoop(
 	ctx context.Context,
 	turnCtx context.Context,
 	ts *turnState,
-	host turnRuntimeHost,
 	exec *turnExecution,
 ) (turnResult, TurnEndStatus, error) {
 	turnStatus := TurnEndStatusCompleted
@@ -50,7 +48,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 		}
 		if ts.hardAbortRequested() {
 			turnStatus = TurnEndStatusAborted
-			result, abortErr := host.abortTurn(ts)
+			result, abortErr := p.abortTurn(ts)
 			return result, turnStatus, abortErr
 		}
 
@@ -64,10 +62,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 			exec.pendingMessages = nil
 		}
 		if iteration == 1 && !ts.opts.SkipInitialSteeringPoll {
-			if steerMsgs := host.dequeueSteeringMessagesForTurn(
-				ts.runtimeSessionScope(),
-				ts.opts.Dispatch.SenderID(),
-			); len(steerMsgs) > 0 {
+			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 				exec.markSteeringObserved()
 				pendingMessages = append(pendingMessages, steerMsgs...)
 			}
@@ -101,7 +96,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 		// Poll for pending SubTurn results.
 		if ts.pendingResults != nil {
 			if result, ok := ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
-				content := host.filterSensitiveData(result.ForLLM)
+				content := p.filterPendingResultForLLM(result.ForLLM)
 				msg := subTurnResultPromptMessage(content)
 				pendingMessages = append(pendingMessages, msg)
 			}
@@ -135,7 +130,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 						"media_count": len(pm.Media),
 					})
 			}
-			host.emitEvent(
+			p.emitEvent(
 				runtimeevents.KindAgentSteeringInjected,
 				ts.eventMeta("runTurn", "turn.steering.injected"),
 				SteeringInjectedPayload{
@@ -174,7 +169,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 		case ControlBreak:
 			if llmOutcome.AbortCause == TurnAbortHard {
 				turnStatus = TurnEndStatusAborted
-				result, abortErr := host.abortTurn(ts)
+				result, abortErr := p.abortTurn(ts)
 				return result, turnStatus, abortErr
 			}
 			if llmOutcome.AbortCause == TurnAbortHook {
@@ -189,7 +184,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 				messages = exec.messages
 				continue
 			}
-			finalContent = host.renderFinalTurnReply(turnCtx, ts, exec, finalContent)
+			finalContent = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, finalContent)
 			result, finalizeErr := p.finalizeTurn(
 				turnCtx,
 				ts,
@@ -220,8 +215,9 @@ func (p *Pipeline) runPreparedTurnLoop(
 				messages = exec.messages
 				continue
 			case ToolControlFinalize:
-				renderedContent, rendered := host.tryRenderFinalTurnReply(
+				renderedContent, rendered := tryRenderFinalTurnReply(
 					turnCtx,
+					p.Cfg,
 					ts,
 					exec,
 					finalContent,
@@ -231,11 +227,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 					messages = exec.messages
 					continue
 				}
-				if steerMsgs := host.dequeueSteeringMessagesForTurn(
-					ts.runtimeSessionScope(), ts.opts.Dispatch.SenderID(),
-				); len(
-					steerMsgs,
-				) > 0 {
+				if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 					exec.markSteeringObserved()
 					logger.InfoCF(
 						"agent",
@@ -286,7 +278,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 			case ToolControlBreak:
 				if toolOutcome.AbortCause == TurnAbortHard {
 					turnStatus = TurnEndStatusAborted
-					result, abortErr := host.abortTurn(ts)
+					result, abortErr := p.abortTurn(ts)
 					return result, turnStatus, abortErr
 				}
 				if toolOutcome.AbortCause == TurnAbortHook {
@@ -305,7 +297,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 					messages = exec.messages
 					continue
 				}
-				finalContent = host.renderFinalTurnReply(turnCtx, ts, exec, finalContent)
+				finalContent = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, finalContent)
 				result, finalizeErr := p.finalizeTurn(
 					turnCtx,
 					ts,
@@ -324,7 +316,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 
 	if ts.hardAbortRequested() {
 		turnStatus = TurnEndStatusAborted
-		result, abortErr := host.abortTurn(ts)
+		result, abortErr := p.abortTurn(ts)
 		return result, turnStatus, abortErr
 	}
 
@@ -335,12 +327,12 @@ func (p *Pipeline) runPreparedTurnLoop(
 			finalContent = ts.opts.DefaultResponse
 		}
 	}
-	finalContent = host.renderFinalTurnReply(turnCtx, ts, exec, finalContent)
+	finalContent = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, finalContent)
 
 	// Check hard abort before finalizing (may have been set during tool execution)
 	if ts.hardAbortRequested() {
 		turnStatus = TurnEndStatusAborted
-		result, abortErr := host.abortTurn(ts)
+		result, abortErr := p.abortTurn(ts)
 		return result, turnStatus, abortErr
 	}
 

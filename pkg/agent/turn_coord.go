@@ -27,7 +27,6 @@ func (r *turnRunner) run(
 	}
 	defer releaseAdmission()
 
-	host := turnRuntimeHost(al)
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	defer turnCancel()
 	ts.setTurnCancel(turnCancel)
@@ -67,13 +66,13 @@ func (r *turnRunner) run(
 			}
 		}
 		if al.traceCapture != nil && al.traceCapture.enabled() {
-			host.emitEvent(
+			pipeline.emitEvent(
 				runtimeevents.KindAgentContextSnapshot,
 				ts.eventMeta("runTurn", "turn.context.snapshot"),
 				buildContextSnapshotPayload(al.GetConfig(), ts),
 			)
 		}
-		host.emitEvent(
+		pipeline.emitEvent(
 			runtimeevents.KindAgentTurnEnd,
 			ts.eventMeta("runTurn", "turn.end"),
 			TurnEndPayload{
@@ -128,18 +127,18 @@ func (r *turnRunner) run(
 				ts.opts.FinalDeliveryObservation.observeSteering(acceptedSteering)
 				return
 			}
-			host.ackAcceptedSteeringMessages(ctx, acceptedSteering)
+			al.ackAcceptedSteeringMessages(ctx, acceptedSteering)
 			return
 		}
-		host.releaseSteeringMessages(context.Background(), acceptedSteering, err)
+		al.releaseSteeringMessages(context.Background(), acceptedSteering, err)
 	}()
 
 	if ts.hardAbortRequested() {
 		turnStatus = TurnEndStatusAborted
-		return host.abortTurn(ts)
+		return pipeline.abortTurn(ts)
 	}
 
-	host.emitEvent(
+	pipeline.emitEvent(
 		runtimeevents.KindAgentTurnStart,
 		ts.eventMeta("runTurn", "turn.start"),
 		TurnStartPayload{
@@ -153,15 +152,11 @@ func (r *turnRunner) run(
 	}
 
 	if execute == nil {
-		result, turnStatus, err = pipeline.runTurnLoop(ctx, turnCtx, ts, host)
+		result, turnStatus, err = pipeline.runTurnLoop(ctx, turnCtx, ts)
 	} else {
-		result, turnStatus, err = execute(ctx, turnCtx, ts, host, pipeline)
+		result, turnStatus, err = execute(ctx, turnCtx, ts, pipeline)
 	}
 	return result, err
-}
-
-func (al *AgentLoop) abortTurn(ts *turnState) (turnResult, error) {
-	return al.turnAbortController().abortTurn(ts)
 }
 
 func (al *AgentLoop) resolveContextManager() (ContextManager, error) {

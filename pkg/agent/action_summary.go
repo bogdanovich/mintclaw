@@ -236,13 +236,6 @@ func appendTurnWriteAudit(
 	return records
 }
 
-func finalTurnRenderEligible(al *AgentLoop, exec *turnExecution) bool {
-	if al == nil || exec == nil {
-		return false
-	}
-	return finalTurnRenderEligibleForConfig(al.cfg, exec)
-}
-
 func finalTurnRenderEligibleForConfig(cfg *config.Config, exec *turnExecution) bool {
 	if cfg == nil || exec == nil {
 		return false
@@ -332,13 +325,13 @@ func buildFinalTurnRenderInstruction(exec *turnExecution) string {
 
 func tryRenderFinalTurnReply(
 	ctx context.Context,
-	al *AgentLoop,
+	cfg *config.Config,
 	ts *turnState,
 	exec *turnExecution,
 	fallback string,
 ) (string, bool) {
 	fallback = strings.TrimSpace(fallback)
-	if !finalTurnRenderEligible(al, exec) {
+	if !finalTurnRenderEligibleForConfig(cfg, exec) {
 		return fallback, false
 	}
 	if exec == nil || len(exec.messages) == 0 {
@@ -394,12 +387,12 @@ func tryRenderFinalTurnReply(
 
 func renderFinalTurnReply(
 	ctx context.Context,
-	al *AgentLoop,
+	cfg *config.Config,
 	ts *turnState,
 	exec *turnExecution,
 	fallback string,
 ) string {
-	content, ok := tryRenderFinalTurnReply(ctx, al, ts, exec, fallback)
+	content, ok := tryRenderFinalTurnReply(ctx, cfg, ts, exec, fallback)
 	if ok {
 		return content
 	}

@@ -458,7 +458,6 @@ type pipelineTurnExecutionFunc func(
 	ctx context.Context,
 	turnCtx context.Context,
 	ts *turnState,
-	host turnRuntimeHost,
 	pipeline *Pipeline,
 ) (turnResult, TurnEndStatus, error)
 
