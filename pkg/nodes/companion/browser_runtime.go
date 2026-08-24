@@ -137,10 +137,16 @@ func (handler *browserCommandHandler) execute(
 			SnapshotGeneration: input.SnapshotGeneration,
 			AgentID:            invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 		})
-		if err == nil {
-			result, err = handler.prepareObservationOutput(invocation, input.WorkspaceID, input.BrowserTarget, result)
+		if err != nil {
+			return result, browserCommandFailure(err)
 		}
-		return result, browserCommandFailure(err)
+		result, err = handler.prepareObservationOutput(invocation, input.WorkspaceID, input.BrowserTarget, result)
+		if err != nil {
+			// The read already advanced the host generation. Persist a protected
+			// success so the gateway can advance and issue a fresh read identity.
+			return protectedBrowserObservationReceipt()
+		}
+		return result, nil
 	case nodes.BrowserCommandCapture:
 		captureHost, ok := handler.host.(browserCaptureCommandHost)
 		if !ok {
@@ -195,6 +201,17 @@ func (handler *browserCommandHandler) execute(
 		})
 		if err != nil && input.Operation != "list" && errors.Is(err, nodes.ErrBrowserHostLost) {
 			return nil, fmt.Errorf("%w: browser context outcome is unknown", ErrInvocationOutcomeUnknown)
+		}
+		if err == nil && result.Observation != nil {
+			observation, stageErr := handler.prepareObservationOutput(
+				invocation, input.WorkspaceID, input.BrowserTarget, *result.Observation,
+			)
+			if stageErr != nil {
+				// Selection already completed. Preserve that known mutation and let
+				// the gateway recover with list plus observe instead of replaying it.
+				return protectedBrowserContextReceipt(input.Operation)
+			}
+			result.Observation = &observation
 		}
 		return result, browserCommandFailure(err)
 	case nodes.BrowserCommandSessionClose:
@@ -318,13 +335,33 @@ func (handler *browserCommandHandler) executeAct(
 		invocation, input.WorkspaceID, input.BrowserTarget, observation,
 	)
 	if err != nil {
-		return nil, browserCommandFailure(err)
+		// The accepted action is authoritative even if its fresh projection
+		// cannot be staged. Return a succeeded receipt without page data so the
+		// gateway recovers with a new read-only observe and never replays it.
+		return succeededBrowserActionReceipt(input.ActionInvocationID)
 	}
 	return nodes.BrowserActResult{
 		ActionInvocationID: input.ActionInvocationID,
 		State:              "succeeded",
 		Observation:        &observation,
 	}, nil
+}
+
+func protectedBrowserObservationReceipt() (any, error) {
+	return struct {
+		ProtectedResult bool `json:"protected_result"`
+	}{ProtectedResult: true}, nil
+}
+
+func protectedBrowserContextReceipt(operation string) (any, error) {
+	return struct {
+		Operation       string `json:"operation"`
+		ProtectedResult bool   `json:"protected_result"`
+	}{Operation: operation, ProtectedResult: true}, nil
+}
+
+func succeededBrowserActionReceipt(invocationID string) (any, error) {
+	return nodes.BrowserActResult{ActionInvocationID: invocationID, State: "succeeded"}, nil
 }
 
 func (handler *browserCommandHandler) prepareObservationOutput(

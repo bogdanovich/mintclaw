@@ -148,6 +148,8 @@ func (input *BrowserContextInput) UnmarshalJSON(data []byte) error {
 		ProfileRevision   string          `json:"profile_revision"`
 		Operation         string          `json:"operation"`
 		RequestID         string          `json:"request_id"`
+		WorkspaceID       string          `json:"workspace_id,omitempty"`
+		BrowserTarget     string          `json:"browser_target,omitempty"`
 		ContextCatalogID  string          `json:"context_catalog_id,omitempty"`
 		ContextGeneration json.RawMessage `json:"context_generation,omitempty"`
 		AuthorityDigest   string          `json:"authority_digest,omitempty"`
@@ -169,6 +171,7 @@ func (input *BrowserContextInput) UnmarshalJSON(data []byte) error {
 	*input = BrowserContextInput{
 		SessionID: value.SessionID, ProfileRevision: value.ProfileRevision,
 		Operation: value.Operation, RequestID: value.RequestID,
+		WorkspaceID: value.WorkspaceID, BrowserTarget: value.BrowserTarget,
 		ContextCatalogID: value.ContextCatalogID, ContextGeneration: contextGeneration,
 		AuthorityDigest: value.AuthorityDigest, AuthorityBytes: int(authorityBytes),
 		TabID: value.TabID, FrameID: value.FrameID,

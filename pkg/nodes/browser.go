@@ -775,6 +775,8 @@ type BrowserContextInput struct {
 	ProfileRevision   string `json:"profile_revision"`
 	Operation         string `json:"operation"`
 	RequestID         string `json:"request_id"`
+	WorkspaceID       string `json:"workspace_id,omitempty"`
+	BrowserTarget     string `json:"browser_target,omitempty"`
 	ContextCatalogID  string `json:"context_catalog_id,omitempty"`
 	ContextGeneration uint64 `json:"context_generation,omitempty"`
 	AuthorityDigest   string `json:"authority_digest,omitempty"`
@@ -963,15 +965,22 @@ func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSna
 	if len(data) == 0 || len(data) > limits.ToolResultBytes {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
 	}
-	var payload BrowserSnapshotPayload
+	var value struct {
+		Snapshot *string           `json:"snapshot"`
+		Elements *[]BrowserElement `json:"elements"`
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil {
+	if err := decoder.Decode(&value); err != nil {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: trailing browser snapshot payload", ErrInvalidInvocation)
 	}
+	if value.Snapshot == nil || value.Elements == nil {
+		return BrowserSnapshotPayload{}, fmt.Errorf("%w: incomplete browser snapshot payload", ErrInvalidInvocation)
+	}
+	payload := BrowserSnapshotPayload{Snapshot: *value.Snapshot, Elements: *value.Elements}
 	if !utf8.ValidString(payload.Snapshot) || len(payload.Snapshot) > limits.SnapshotBytes ||
 		len(payload.Elements) > limits.SnapshotRefs {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
@@ -1592,6 +1601,8 @@ func browserCommandInputSchema(
 		}
 		properties["tab_id"] = identifier
 		properties["frame_id"] = identifier
+		properties["workspace_id"] = identifier
+		properties["browser_target"] = identifier
 		profileConstraint = map[string]any{"oneOf": []any{
 			map[string]any{
 				"properties": map[string]any{"operation": map[string]any{"enum": []string{"list", "open"}}},

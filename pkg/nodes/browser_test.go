@@ -1226,8 +1226,11 @@ func browserLimitsValue(limits BrowserLimits) map[string]any {
 func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
 	limits := BrowserLimits{}.Effective()
 	tests := map[string][]byte{
-		"unknown field": []byte(`{"snapshot":"page","elements":[],"secret":"value"}`),
-		"trailing JSON": []byte(`{"snapshot":"page","elements":[]} {}`),
+		"unknown field":    []byte(`{"snapshot":"page","elements":[],"secret":"value"}`),
+		"trailing JSON":    []byte(`{"snapshot":"page","elements":[]} {}`),
+		"missing snapshot": []byte(`{"elements":[]}`),
+		"missing elements": []byte(`{"snapshot":"page"}`),
+		"null elements":    []byte(`{"snapshot":"page","elements":null}`),
 		"duplicate ref": []byte(
 			`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","name":"Save"},` +
 				`{"ref":"ref_1","role":"button","name":"Save again"}]}`,
@@ -1243,4 +1246,38 @@ func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBrowserContextOutputSchemaAcceptsStreamedSelectionSnapshot(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := map[string]any{
+		"operation": "select",
+		"context_catalog": map[string]any{
+			"context_catalog_id": "catalog_1", "context_generation": 2,
+			"selected_tab_id": "tab_1", "tabs": []any{map[string]any{
+				"tab_id": "tab_1", "kind": "primary", "creation_sequence": 1,
+				"document_generation": 2, "url": "https://example.com/", "origin": "https://example.com",
+			}},
+		},
+		"observation": map[string]any{
+			"session_id": "session_1", "tab_id": "tab_1", "snapshot_generation": 2,
+			"url": "https://example.com/", "origin": "https://example.com",
+			"snapshot": "", "elements": []any{}, "truncated": false, "document_id": "document_2",
+			"output": map[string]any{
+				"transfer_id": "transfer_1", "kind": BrowserOutputSnapshot,
+				"session_id": "session_1", "routed_session_id": "routed_1",
+				"agent_id": "browser", "actor_id": "actor_1", "workspace_id": "workspace_1",
+				"target": "companion", "profile_revision": "managed-v1",
+				"browser_policy_revision": strings.Repeat("a", 64), "invocation_id": "invocation_1",
+				"tab_id": "tab_1", "document_id": "document_2", "snapshot_generation": 2,
+				"filename": "browser-snapshot.json", "content_type": "application/json",
+				"size": 128 * 1024, "sha256": strings.Repeat("b", 64),
+				"captured_at": 1, "expires_at": 2, "cleanup_policy": "session_or_expiry",
+			},
+		},
+	}
+	assertBrowserOutputValid(t, descriptors[4], result)
 }

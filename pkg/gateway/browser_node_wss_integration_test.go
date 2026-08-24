@@ -1112,7 +1112,7 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientConfig := wssBrowserCompanionConfig(t, server, policy)
-	client := wssBrowserClient(t, clientConfig, identity, commandRuntime)
+	client := wssBrowserClient(t, clientConfig, identity, commandRuntime, host)
 	result, err := client.Authenticate(t.Context())
 	if err != nil || result.State != nodes.StatePendingPairing {
 		t.Fatalf("bootstrap admission = %#v, %v", result, err)
@@ -1180,25 +1180,6 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	}
 	selectedTab := opened.Catalog.Tabs[1]
 	selectPreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
-		Owner: owner, RequestID: "context_wss_select_stale", SessionID: session.ID,
-		Operation:        browser.ContextSelect,
-		ContextCatalogID: opened.Catalog.ID, ContextGeneration: opened.Catalog.Generation,
-		TabID: selectedTab.ID, FrameID: selectedTab.Frames[0].ID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	host.failNextContextStale()
-	stale, err := broker.ExecuteContext(t.Context(), selectPreparation, nil)
-	if !errors.Is(err, browser.ErrStale) || stale.Invocation == nil ||
-		stale.Invocation.State != browser.InvocationFailed || stale.Invocation.SafeFailure != "context_stale" {
-		t.Fatalf("ExecuteContext(stale select) = %#v, %v", stale, err)
-	}
-	status, err := broker.Status(t.Context(), owner, session.ID)
-	if err != nil || status.State != browser.SessionReady {
-		t.Fatalf("Status(after stale select) = %#v, %v", status, err)
-	}
-	selectPreparation, err = broker.PrepareContext(t.Context(), browser.ContextRequest{
 		Owner: owner, RequestID: "context_wss_select", SessionID: session.ID,
 		Operation:        browser.ContextSelect,
 		ContextCatalogID: opened.Catalog.ID, ContextGeneration: opened.Catalog.Generation,
@@ -1207,12 +1188,50 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectDrop.arm()
+	host.setLargeSnapshots(true)
 	selected, err := broker.ExecuteContext(t.Context(), selectPreparation, nil)
+	host.setLargeSnapshots(false)
 	if err != nil || selected.Observation == nil ||
 		selected.Catalog.SelectedFrameID != selectedTab.Frames[0].ID ||
-		selected.Observation.URL != "https://example.com/popup" || !selectDrop.didDrop() {
-		t.Fatalf("ExecuteContext(select) = %#v, %v", selected, err)
+		selected.Observation.URL != "https://example.com/popup" ||
+		len(selected.Observation.Snapshot) < 150*1024 || host.outputChunkCount() < 2 {
+		t.Fatalf(
+			"ExecuteContext(select) = %#v, %v; chunks=%d commands=%#v",
+			selected, err, host.outputChunkCount(), host.commandSequence(),
+		)
+	}
+	stalePreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
+		Owner: owner, RequestID: "context_wss_select_stale", SessionID: session.ID,
+		Operation:        browser.ContextSelect,
+		ContextCatalogID: selected.Catalog.ID, ContextGeneration: selected.Catalog.Generation,
+		TabID: selected.Catalog.Tabs[0].ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.failNextContextStale()
+	stale, err := broker.ExecuteContext(t.Context(), stalePreparation, nil)
+	if !errors.Is(err, browser.ErrStale) || stale.Invocation == nil ||
+		stale.Invocation.State != browser.InvocationFailed || stale.Invocation.SafeFailure != "context_stale" {
+		t.Fatalf("ExecuteContext(stale select) = %#v, %v", stale, err)
+	}
+	status, err := broker.Status(t.Context(), owner, session.ID)
+	if err != nil || status.State != browser.SessionReady {
+		t.Fatalf("Status(after stale select) = %#v, %v", status, err)
+	}
+	recoveryPreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
+		Owner: owner, RequestID: "context_wss_select_recovery", SessionID: session.ID,
+		Operation:        browser.ContextSelect,
+		ContextCatalogID: selected.Catalog.ID, ContextGeneration: selected.Catalog.Generation,
+		TabID: selected.Catalog.Tabs[0].ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectDrop.arm()
+	recovered, err := broker.ExecuteContext(t.Context(), recoveryPreparation, nil)
+	if err != nil || recovered.Observation == nil || !selectDrop.didDrop() {
+		t.Fatalf("ExecuteContext(recovered select) = %#v, %v", recovered, err)
 	}
 	retained, err := os.ReadFile(ledgerPath)
 	if err != nil {
@@ -1225,7 +1244,7 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	closePreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
 		Owner: owner, RequestID: "context_wss_close", SessionID: session.ID,
 		Operation:        browser.ContextClose,
-		ContextCatalogID: selected.Catalog.ID, ContextGeneration: selected.Catalog.Generation,
+		ContextCatalogID: recovered.Catalog.ID, ContextGeneration: recovered.Catalog.Generation,
 		TabID: selectedTab.ID,
 	})
 	if err != nil || !closePreparation.RequiresApproval {
@@ -1250,10 +1269,11 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 			selectCount++
 		}
 	}
-	if selectCount != 2 {
-		// One stale attempt and one accepted attempt are expected; recovery
-		// must use list+observe rather than replaying the accepted select.
-		t.Fatalf("browser host select count = %d, want 2: %#v", selectCount, host.commandSequence())
+	if selectCount != 3 {
+		// One stale attempt, one streamed selection, and one accepted dropped
+		// selection are expected. Recovery must use list+observe rather than
+		// replaying the accepted selection.
+		t.Fatalf("browser host select count = %d, want 3: %#v", selectCount, host.commandSequence())
 	}
 }
 
@@ -1840,6 +1860,8 @@ func (host *wssBrowserHost) Contexts(
 		observation := wssBrowserObservation(nodes.BrowserHostObserveRequest{
 			SessionID: request.SessionID, TabID: "tab_primary", SnapshotGeneration: generation,
 		}, "https://example.com/popup")
+		observation.DocumentID = wssBrowserDocumentID(request.SessionID, generation)
+		observation = host.largeObservationLocked(observation)
 		result.Observation = &observation
 	case "close":
 		if request.Authority == nil || request.Authority.ID != catalog.ID || len(catalog.Tabs) < 2 {

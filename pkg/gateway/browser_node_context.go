@@ -191,8 +191,9 @@ func (worker *nodeBrowserWorker) invokeContextOnce(
 	}
 	input := nodes.BrowserContextInput{
 		SessionID: worker.sessionID, ProfileRevision: worker.profileRevision,
-		Operation: operation,
-		RequestID: browserNodeStableID("context", worker.sessionID, operation, fmt.Sprint(sequence)),
+		Operation:   operation,
+		RequestID:   browserNodeStableID("context", worker.sessionID, operation, fmt.Sprint(sequence)),
+		WorkspaceID: worker.factory.workspaceID, BrowserTarget: worker.browserTarget,
 	}
 	var ephemeralInput json.RawMessage
 	if binding != nil {
@@ -214,15 +215,32 @@ func (worker *nodeBrowserWorker) invokeContextOnce(
 		input.FrameID = binding.FrameID
 	}
 	var result nodes.BrowserContextResult
+	requestKey := fmt.Sprintf("context_%s_%d", operation, sequence)
 	if err = worker.invokeWithEphemeral(
-		ctx, descriptor, fmt.Sprintf("context_%s_%d", operation, sequence), input, ephemeralInput, &result,
+		ctx, descriptor, requestKey, input, ephemeralInput, &result,
 	); err != nil {
 		return nodes.BrowserContextResult{}, err
 	}
 	if result.Operation != operation {
 		return nodes.BrowserContextResult{}, browser.ErrDriverIncompatible
 	}
+	if result.Observation != nil && result.Observation.Output != nil {
+		streamed := *result.Observation
+		for attempt := 0; attempt < 2; attempt++ {
+			*result.Observation, err = worker.receiveBrowserSnapshot(ctx, streamed, descriptor.Name, requestKey)
+			if err == nil || ctx.Err() != nil {
+				break
+			}
+		}
+		if err != nil {
+			return protectedNodeBrowserContextResult(operation)
+		}
+	}
 	return result, nil
+}
+
+func protectedNodeBrowserContextResult(operation string) (nodes.BrowserContextResult, error) {
+	return nodes.BrowserContextResult{Operation: operation, ProtectedResult: true}, nil
 }
 
 func (worker *nodeBrowserWorker) clearContextObservation() {
