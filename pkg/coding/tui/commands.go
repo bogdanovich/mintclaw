@@ -182,7 +182,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 	case commandPanelModel:
 		return strings.Join([]string{
 			"Current coding model",
-			"model: " + modelStatus(snapshot.Metadata),
+			"model: " + boundedSingleLine(modelStatus(snapshot.Metadata), 512),
 			"In-session model switching is not admitted yet. Use mintclaw resume <thread-id> --model <name>.",
 		}, "\n")
 	case commandPanelDiff:
@@ -195,18 +195,18 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 func statusPanelContent(snapshot frontend.ThreadSnapshot) string {
 	lines := []string{
 		"Current coding thread status",
-		"thread: " + snapshot.ThreadID,
+		"thread: " + boundedSingleLine(snapshot.ThreadID, 256),
 		"title: " + fallbackStatusValue(snapshot.Metadata.Title),
-		"activity: " + activityStatus(snapshot),
+		"activity: " + boundedSingleLine(activityStatus(snapshot), 512),
 		"project: " + fallbackStatusValue(snapshot.Metadata.ProjectRoot),
 		"cwd: " + fallbackStatusValue(snapshot.Metadata.CWD),
-		"model: " + modelStatus(snapshot.Metadata),
+		"model: " + boundedSingleLine(modelStatus(snapshot.Metadata), 512),
 		"context: " + strings.TrimPrefix(contextStatus(snapshot.ContextUsage), "context "),
 	}
 	if workspace := snapshot.Workspace; workspace != nil {
 		lines = append(
 			lines,
-			"branch: "+branchStatus(workspace),
+			"branch: "+boundedSingleLine(branchStatus(workspace), 512),
 			"repository: "+repositoryStatus(
 				workspace.Git.Available,
 				workspace.Git.StatusAvailable,
@@ -217,7 +217,7 @@ func statusPanelContent(snapshot frontend.ThreadSnapshot) string {
 	if compaction := snapshot.LastCompaction; compaction != nil {
 		lines = append(lines, fmt.Sprintf(
 			"last compaction: %s, %d tokens saved",
-			compaction.Status,
+			boundedSingleLine(string(compaction.Status), 128),
 			compaction.TokensSaved,
 		))
 	}
@@ -236,7 +236,7 @@ func diffPanelContent(snapshot frontend.ThreadSnapshot) string {
 	}
 	lines = append(lines,
 		"root: "+fallbackStatusValue(workspace.ProjectRoot),
-		"branch: "+branchStatus(workspace),
+		"branch: "+boundedSingleLine(branchStatus(workspace), 512),
 		"repository: "+repositoryStatus(true, workspace.Git.StatusAvailable, workspace.Git.Dirty),
 	)
 	if workspace.DiffStatAvailable {
@@ -251,11 +251,11 @@ func diffPanelContent(snapshot frontend.ThreadSnapshot) string {
 		lines = append(lines, "diff stat unavailable")
 	}
 	for _, changed := range workspace.ChangedPaths {
-		path := changed.Path
+		path := boundedSingleLine(changed.Path, 512)
 		if changed.OriginalPath != "" {
-			path = changed.OriginalPath + " -> " + changed.Path
+			path = boundedSingleLine(changed.OriginalPath, 512) + " -> " + path
 		}
-		lines = append(lines, changed.Status+" "+path)
+		lines = append(lines, boundedSingleLine(changed.Status, 32)+" "+path)
 	}
 	if len(workspace.ChangedPaths) == 0 && workspace.Git.StatusAvailable {
 		lines = append(lines, "no changed paths")
@@ -264,7 +264,7 @@ func diffPanelContent(snapshot frontend.ThreadSnapshot) string {
 		lines = append(lines, "[repository observation truncated]")
 	}
 	if workspace.Warning != "" {
-		lines = append(lines, "warning: "+workspace.Warning)
+		lines = append(lines, "warning: "+boundedSingleLine(workspace.Warning, 512))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -287,5 +287,5 @@ func fallbackStatusValue(value string) string {
 	if value == "" {
 		return "unknown"
 	}
-	return value
+	return boundedSingleLine(value, 512)
 }

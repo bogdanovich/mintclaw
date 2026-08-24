@@ -134,6 +134,67 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 	}
 }
 
+func TestCommandPanelsEscapeStructuredSnapshotFields(t *testing.T) {
+	snapshot := frontend.ThreadSnapshot{
+		ThreadID: "thread\nforged-thread\tcell",
+		Metadata: frontend.ThreadMetadata{
+			Title:       "title\nforged-title\tcell",
+			ProjectRoot: "/project\nforged-project",
+			CWD:         "/cwd\tforged-cwd",
+			Model:       "model\nforged-model",
+			Provider:    "provider\tforged-provider",
+		},
+		Activity: frontend.ActivityRunning,
+		Status:   "working\nforged-status\tcell",
+		Workspace: &codingworkspace.Snapshot{
+			ProjectRoot: "/root\nforged-root",
+			Git: codingworkspace.GitState{
+				Available: true, StatusAvailable: true, Branch: "branch\nforged-branch",
+			},
+			ChangedPaths: []codingworkspace.ChangedPath{{
+				Status:       " M\nforged-status",
+				Path:         "new\nforged-path\tcell",
+				OriginalPath: "old\tforged-original",
+			}},
+			Warning: "warning\nforged-warning\tcell",
+		},
+	}
+
+	status := statusPanelContent(snapshot)
+	for _, want := range []string{
+		`thread: thread\nforged-thread\tcell`,
+		`title: title\nforged-title\tcell`,
+		`activity: running/working\nforged-status\tcell`,
+		`project: /project\nforged-project`,
+		`cwd: /cwd\tforged-cwd`,
+		`model: model\nforged-model/provider\tforged-provider`,
+		`branch: branch\nforged-branch`,
+	} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("escaped status panel omits %q: %q", want, status)
+		}
+	}
+
+	diff := diffPanelContent(snapshot)
+	for _, want := range []string{
+		`root: /root\nforged-root`,
+		` M\nforged-status old\tforged-original -> new\nforged-path\tcell`,
+		`warning: warning\nforged-warning\tcell`,
+	} {
+		if !strings.Contains(diff, want) {
+			t.Fatalf("escaped diff panel omits %q: %q", want, diff)
+		}
+	}
+
+	snapshot.Workspace.Git = codingworkspace.GitState{
+		UnavailableReason: "reason\nforged-reason\tcell",
+	}
+	diff = diffPanelContent(snapshot)
+	if !strings.Contains(diff, `Git unavailable: reason\nforged-reason\tcell`) {
+		t.Fatalf("escaped unavailable reason = %q", diff)
+	}
+}
+
 func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	controller := newController(t)
 	model, err := NewModel(controller)
