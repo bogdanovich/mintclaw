@@ -19,20 +19,16 @@ import (
 // execution. The owning turnRunner is replaced when runtime wiring changes.
 type Pipeline struct {
 	Cfg                  *config.Config
-	Runtime              PipelineRuntimeServices
 	Context              PipelineContextServices
 	Interaction          PipelineInteractionServices
+	bus                  pipelineBus
+	events               runtimeEventEmitter
+	activeRequests       *activeRequestCounter
+	turnControl          *turnAbortController
 	retrySleeper         retrySleeper
 	trustAllTools        bool
 	durableToolLifecycle bool
 	hashArguments        func(string, map[string]any) (string, error)
-}
-
-type PipelineRuntimeServices struct {
-	Bus            pipelineBus
-	Events         runtimeEventEmitter
-	ActiveRequests activeRequestTracker
-	TurnControl    turnController
 }
 
 func (p *Pipeline) hashToolArguments(workspace string, arguments map[string]any) (string, error) {
@@ -140,11 +136,6 @@ type backgroundCompactionScheduler interface {
 	)
 }
 
-type activeRequestTracker interface {
-	activeRequestsInc()
-	activeRequestsDec()
-}
-
 type modelExecutionResolver interface {
 	selectCandidates(
 		execution effectiveExecutionState,
@@ -221,10 +212,6 @@ type toolFeedbackManager interface {
 	shouldPublishToolFeedback(ts *turnState) bool
 }
 
-type turnController interface {
-	abortTurn(ts *turnState) (turnResult, error)
-}
-
 type hookInterceptor interface {
 	BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLMHookRequest, HookDecision)
 	AfterLLM(ctx context.Context, resp *LLMHookResponse) (*LLMHookResponse, HookDecision)
@@ -271,16 +258,16 @@ type mediaResolver interface {
 }
 
 func (p *Pipeline) emitEvent(kind runtimeevents.Kind, meta HookMeta, payload any) {
-	if p == nil || p.Runtime.Events == nil {
+	if p == nil || p.events == nil {
 		return
 	}
-	p.Runtime.Events.emitEvent(kind, meta, payload)
+	p.events.emitEvent(kind, meta, payload)
 }
 
 func (p *Pipeline) trackActiveRequest() func() {
-	if p == nil || p.Runtime.ActiveRequests == nil {
+	if p == nil || p.activeRequests == nil {
 		return func() {}
 	}
-	p.Runtime.ActiveRequests.activeRequestsInc()
-	return p.Runtime.ActiveRequests.activeRequestsDec
+	p.activeRequests.inc()
+	return p.activeRequests.dec
 }

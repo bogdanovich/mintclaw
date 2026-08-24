@@ -108,10 +108,10 @@ func (p *Pipeline) updateAutoFallbackSelection(
 }
 
 func (p *Pipeline) abortTurn(ts *turnState) (turnResult, error) {
-	if p == nil || p.Runtime.TurnControl == nil {
+	if p == nil || p.turnControl == nil {
 		return turnResult{status: TurnEndStatusAborted}, nil
 	}
-	return p.Runtime.TurnControl.abortTurn(ts)
+	return p.turnControl.abortTurn(ts)
 }
 
 func (p *Pipeline) targetReasoningChannelID(channelName string) string {

@@ -704,21 +704,6 @@ func (al *AgentLoop) backgroundCompactionRunner() *backgroundCompactionRunner {
 	return al.compactionRunner
 }
 
-// activeRequestsInc atomically increments the active request count.
-func (al *AgentLoop) activeRequestsInc() {
-	if counter := al.activeRequestCounter(); counter != nil {
-		counter.inc()
-	}
-}
-
-// activeRequestsDec atomically decrements the active request count and wakes
-// any goroutine blocked in waitForActiveRequests when the count reaches zero.
-func (al *AgentLoop) activeRequestsDec() {
-	if counter := al.activeRequestCounter(); counter != nil {
-		counter.dec()
-	}
-}
-
 func (al *AgentLoop) waitForActiveRequests(ctx context.Context, timeout time.Duration) bool {
 	counter := al.activeRequestCounter()
 	if counter == nil {

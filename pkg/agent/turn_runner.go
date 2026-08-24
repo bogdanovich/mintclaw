@@ -42,13 +42,11 @@ func newPipeline(al *AgentLoop, cfg *config.Config) *Pipeline {
 	}
 
 	return &Pipeline{
-		Cfg: cfg,
-		Runtime: PipelineRuntimeServices{
-			Bus:            al.bus,
-			Events:         events,
-			ActiveRequests: al.activeRequests,
-			TurnControl:    &turnAbortController{events: events},
-		},
+		Cfg:                  cfg,
+		bus:                  al.bus,
+		events:               events,
+		activeRequests:       al.activeRequests,
+		turnControl:          &turnAbortController{events: events},
 		retrySleeper:         contextRetrySleeper{},
 		trustAllTools:        al.usesCodingProfile(),
 		durableToolLifecycle: al.usesCodingProfile(),

@@ -77,6 +77,11 @@ streaming, media limits, prompt construction, or tool-content filtering. Keep a
 seam only when the runtime has a real alternate implementation, such as the
 deterministic retry sleeper used by timing tests.
 
+Pipeline runtime wiring is also direct. Bus and event emission retain narrow
+interfaces because tests and alternate buses provide real implementations.
+Active-request counting and turn abort use their concrete owners; they do not
+sit behind a service bag or single-implementation interface.
+
 ## Session Claiming
 
 `runtimeSessionClaim` is the shared session ownership primitive. A claim stores

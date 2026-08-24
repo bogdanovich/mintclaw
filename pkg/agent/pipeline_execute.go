@@ -701,7 +701,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					hookResult.ForUser != "" &&
 					ts.opts.SendResponse
 				if shouldSendForUser {
-					_ = p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, hookResult.ForUser))
+					_ = p.bus.PublishOutbound(ctx, outboundMessageForTurn(ts, hookResult.ForUser))
 				}
 
 				if !hookResult.Delivery.IsFinalHandled() {
@@ -1497,7 +1497,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		toolResult.ForUser != "" &&
 		ts.opts.SendResponse
 	if shouldSendForUser {
-		_ = p.Runtime.Bus.PublishOutbound(ctx, outboundMessageForTurn(ts, toolResult.ForUser))
+		_ = p.bus.PublishOutbound(ctx, outboundMessageForTurn(ts, toolResult.ForUser))
 		logger.DebugCF("agent", "Sent tool result to user",
 			map[string]any{
 				"tool":        toolName,

@@ -38,7 +38,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 		return nil, false, nil
 	}
 
-	streamer, ok := p.Runtime.Bus.GetStreamer(
+	streamer, ok := p.bus.GetStreamer(
 		ctx,
 		ts.channel,
 		ts.chatID,
@@ -271,7 +271,7 @@ func cancelConfiguredStreamingLLM(ctx context.Context, llm *LLMIterationState) {
 }
 
 func (p *Pipeline) configuredStreamingEligible(ts *turnState, exec *turnExecution) bool {
-	if p == nil || ts == nil || exec == nil || p.Runtime.Bus == nil {
+	if p == nil || ts == nil || exec == nil || p.bus == nil {
 		logger.DebugCF("agent", "configured streaming not used", map[string]any{
 			"reason": "missing_pipeline_state",
 		})
