@@ -507,15 +507,6 @@ func BrowserApprovalDigestMatches(input BrowserActInput) bool {
 	return err == nil && subtle.ConstantTimeCompare([]byte(expected), []byte(input.ApprovalDigest)) == 1
 }
 
-// BrowserClickEffect returns the legacy conservative effect for callers that
-// do not declare a click's workflow effect.
-func BrowserClickEffect(role string) string {
-	if role == "button" {
-		return "external_commit"
-	}
-	return "unknown"
-}
-
 // BrowserClickEffectValid reports whether effect is part of the declared
 // click workflow contract shared by the gateway, companion, and browser host.
 func BrowserClickEffectValid(effect string) bool {

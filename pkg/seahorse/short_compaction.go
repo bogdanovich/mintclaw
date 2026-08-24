@@ -47,7 +47,7 @@ func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input Comp
 	result := &CompactResult{}
 
 	// Phase 1: leaf compaction (synchronous, every turn)
-	summaryID, err := e.compactLeaf(ctx, convID)
+	summaryID, err := e.compactLeaf(ctx, convID, false)
 	if err != nil {
 		return nil, fmt.Errorf("compact leaf: %w", err)
 	}
@@ -256,9 +256,9 @@ func (e *CompactionEngine) summaryPrefixTokens(ctx context.Context, convID int64
 }
 
 // compactLeaf compresses the oldest contiguous message chunk into a leaf summary.
-// When force is true, the legacy FreshTailCount protection is bypassed. An
+// When force is true, the default FreshTailCount protection is bypassed. An
 // explicitly configured RecentTailTurns boundary is never bypassed.
-func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force ...bool) (*string, error) {
+func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force bool) (*string, error) {
 	items, err := e.store.GetContextItems(ctx, convID)
 	if err != nil {
 		return nil, err
@@ -280,8 +280,7 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 	}
 
 	// Calculate fresh tail boundary (bypass when forced)
-	useForce := len(force) > 0 && force[0]
-	tailStartIdx, err := e.freshTailStartIndex(ctx, items, useForce)
+	tailStartIdx, err := e.freshTailStartIndex(ctx, items, force)
 	if err != nil {
 		return nil, err
 	}
