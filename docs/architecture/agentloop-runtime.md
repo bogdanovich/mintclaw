@@ -11,6 +11,7 @@ delegated to `Pipeline`.
 | --- | --- | --- |
 | `AgentLoop` | process lifecycle, service wiring, registry/config access, public APIs, channel/bus integration | live turn registries or LLM/tool iteration mechanics |
 | `turnRuntime` | turn admission, active session and route claims, pending stops, request tracking, sequencing, inbound spool settlement, current runner generation | process reload policy or LLM/tool iteration mechanics |
+| `interactionCoordinator` | process-lifetime interaction registry cache, resolution callbacks, resume-flight deduplication, workspace catalog serialization, recovery admission | generation-specific delivery wiring or turn execution |
 | `inboundTurnCoordinator` | inbound scheduling, same-session serialization, busy-session steering enqueue, worker goroutine lifecycle, ack/release decisions | route normalization or LLM/tool execution |
 | `runtimeSessionClaim` | atomic session placeholder claim/release semantics shared by inbound workers and recovery | turn execution, routing, delivery |
 | `inboundMessageTurn` | normalized inbound route/session/model/dispatch envelope for one message | command handling or pipeline execution |
@@ -115,6 +116,13 @@ task completion, final-response cleanup, and subturn admission use the current
 runner's concrete component instead of asking `AgentLoop` to reconstruct one.
 Prompt delivery stays on the interaction runtime, so suspension does not call
 back through `AgentLoop` merely to rediscover its owner.
+
+Interaction durability has a different lifetime from delivery wiring. One
+process-wide `interactionCoordinator` owns registry caching, resolution
+callbacks, resume-flight deduplication, catalog serialization, and recovery
+admission. Each runner generation receives a human-interaction component that
+references that stable coordinator. Config reload therefore replaces delivery
+behavior without copying or resetting mutable interaction state.
 
 Reasoning publication is owned by the pipeline's concrete component. There is
 no test-only `AgentLoop` component factory or reasoning pass-through façade;

@@ -14,7 +14,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
-	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
@@ -62,17 +61,17 @@ func newAgentLoopWithRegistry(
 	}
 
 	al := &AgentLoop{
-		bus:                msgBus,
-		cfg:                cfg,
-		registry:           registry,
-		fallback:           fallbackChain,
-		cmdRegistry:        commands.NewRegistry(commands.BuiltinDefinitions()),
-		steering:           newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
-		workerSem:          make(chan struct{}, workerPoolSize),
-		turns:              newTurnRuntime(registry, msgBus),
-		ownsRuntimeEvents:  true,
-		interactionCatalog: interactions.NewWorkspaceCatalog(config.GetHome()),
-		startupResult:      make(chan error, 1),
+		bus:               msgBus,
+		cfg:               cfg,
+		registry:          registry,
+		fallback:          fallbackChain,
+		cmdRegistry:       commands.NewRegistry(commands.BuiltinDefinitions()),
+		steering:          newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+		workerSem:         make(chan struct{}, workerPoolSize),
+		turns:             newTurnRuntime(registry, msgBus),
+		ownsRuntimeEvents: true,
+		interactions:      newInteractionCoordinator(config.GetHome()),
+		startupResult:     make(chan error, 1),
 	}
 	al.compactionRunner = &backgroundCompactionRunner{
 		contextManager: func() ContextManager {

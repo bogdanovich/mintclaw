@@ -22,7 +22,8 @@ const (
 )
 
 type humanInteractionRuntime struct {
-	al *AgentLoop
+	al          *AgentLoop
+	coordinator *interactionCoordinator
 }
 
 func (al *AgentLoop) cleanupInteractionOriginTools(
@@ -93,7 +94,7 @@ func (al *AgentLoop) interactionRegistryForWorkspace(workspace string) *interact
 	if workspace == "" {
 		return nil
 	}
-	if existing, ok := al.interactionRegistries.Load(workspace); ok {
+	if existing, ok := al.interactions.registries.Load(workspace); ok {
 		registry, _ := existing.(*interactions.Registry)
 		return registry
 	}
@@ -112,7 +113,7 @@ func (al *AgentLoop) interactionRegistryForWorkspace(workspace string) *interact
 	if al.codingProfile != nil && registry.LastLoadError() != nil {
 		al.runtimeInitErr = fmt.Errorf("load coding interaction registry: %w", registry.LastLoadError())
 	}
-	actual, loaded := al.interactionRegistries.LoadOrStore(workspace, registry)
+	actual, loaded := al.interactions.registries.LoadOrStore(workspace, registry)
 	stored, _ := actual.(*interactions.Registry)
 	if stored == nil {
 		stored = registry
@@ -213,7 +214,7 @@ func (al *AgentLoop) resolveInteractionDomainState(observation interactions.Even
 	default:
 		return
 	}
-	value, ok := al.interactionResolutions.LoadAndDelete(observation.Record.ID)
+	value, ok := al.interactions.resolutions.LoadAndDelete(observation.Record.ID)
 	if !ok {
 		return
 	}
@@ -256,31 +257,19 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 	ctx context.Context,
 	request ToolSuspensionRequest,
 ) (ToolSuspensionDisposition, error) {
-	if runtime == nil || runtime.al == nil {
+	if runtime == nil || runtime.al == nil || runtime.coordinator == nil {
 		return ToolSuspensionDisposition{}, interactions.ErrStoreUnavailable
 	}
 	registry := runtime.al.interactionRegistryForWorkspace(request.Workspace)
 	if registry == nil {
 		return ToolSuspensionDisposition{}, interactions.ErrStoreUnavailable
 	}
-	catalogLocked := false
-	if runtime.al.interactionCatalog != nil {
-		runtime.al.interactionCatalogMu.Lock()
-		catalogLocked = true
-		if err := runtime.al.interactionCatalog.Register(request.Workspace); err != nil {
-			runtime.al.interactionCatalogMu.Unlock()
-			return ToolSuspensionDisposition{}, fmt.Errorf(
-				"register interaction workspace: %w",
-				err,
-			)
-		}
-	}
 	executionContext := cloneInboundContext(request.ExecutionContext)
 	approvalAction := ""
 	if request.Prompt.Kind == interactions.KindApproval {
 		approvalAction = request.ApprovalAction
 	}
-	record, err := registry.Create(interactions.CreateRequest{
+	record, err := runtime.coordinator.create(request.Workspace, registry, interactions.CreateRequest{
 		Kind:  request.Prompt.Kind,
 		Route: request.Route,
 		Origin: interactions.Origin{
@@ -301,14 +290,11 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 		ApprovalAction: approvalAction,
 		ExpiresAt:      time.Now().Add(request.Prompt.Timeout),
 	})
-	if catalogLocked {
-		runtime.al.interactionCatalogMu.Unlock()
-	}
 	if err != nil {
 		return ToolSuspensionDisposition{}, err
 	}
 	if request.Resolution != nil {
-		runtime.al.interactionResolutions.Store(record.ID, request.Resolution)
+		runtime.coordinator.resolutions.Store(record.ID, request.Resolution)
 	}
 	disposition := ToolSuspensionDisposition{InteractionID: record.ID, Durable: true}
 	_, _, err = runtime.deliverPrompt(ctx, registry, request.Workspace, record)

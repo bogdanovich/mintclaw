@@ -58,7 +58,8 @@ func TestPrepareConfigReloadDoesNotPublishBeforeCommit(t *testing.T) {
 		t.Fatal("turn runner is detached from the loop's turn runtime")
 	}
 	if originalRunner.pipeline.Interaction.ToolFeedback != originalRunner.toolFeedback ||
-		originalRunner.pipeline.Interaction.Suspension != originalRunner.interaction {
+		originalRunner.pipeline.Interaction.Suspension != originalRunner.interaction ||
+		originalRunner.interaction.coordinator != &loop.interactions {
 		t.Fatal("turn runner and pipeline do not share the generation's interaction components")
 	}
 
@@ -123,6 +124,10 @@ func TestPrepareConfigReloadPublishesOnlyAtCommit(t *testing.T) {
 		committedRunner.pipeline.Interaction.SyncToolDelivery == originalRunner.pipeline.Interaction.SyncToolDelivery ||
 		committedRunner.pipeline.Interaction.ToolDelivery == originalRunner.pipeline.Interaction.ToolDelivery {
 		t.Fatal("commit retained an interaction component from the previous runner generation")
+	}
+	if committedRunner.interaction.coordinator != &loop.interactions ||
+		originalRunner.interaction.coordinator != committedRunner.interaction.coordinator {
+		t.Fatal("reload replaced the process-wide interaction coordinator")
 	}
 	if got := provider.closed.Load(); got != 0 {
 		t.Fatalf("committed provider close count = %d, want 0", got)

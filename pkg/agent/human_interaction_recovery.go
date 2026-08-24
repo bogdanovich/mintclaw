@@ -30,13 +30,13 @@ func (al *AgentLoop) scheduleHumanInteractionRecovery(ctx context.Context) {
 // RecoverHumanInteractions retries prompt delivery, claims timeouts, and
 // resumes answers whose durable owner disappeared during restart or reload.
 func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
-	if al == nil || !al.interactionRecoveryRunning.CompareAndSwap(false, true) {
+	if al == nil || !al.interactions.recoveryRunning.CompareAndSwap(false, true) {
 		return 0
 	}
-	defer al.interactionRecoveryRunning.Store(false)
+	defer al.interactions.recoveryRunning.Store(false)
 	al.loadCatalogedInteractionRegistries()
 	recovered := 0
-	al.interactionRegistries.Range(func(key, value any) bool {
+	al.interactions.registries.Range(func(key, value any) bool {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -89,24 +89,12 @@ func (al *AgentLoop) RecoverHumanInteractions(ctx context.Context) int {
 				}
 			}
 		}
-		al.interactionCatalogMu.Lock()
-		pruneErr := registry.Prune(time.Now())
-		if pruneErr != nil {
-			logger.WarnCF("agent", "Failed to prune human interaction registry", map[string]any{
+		if err := al.interactions.prune(workspace, registry, time.Now()); err != nil {
+			logger.WarnCF("agent", "Failed to reconcile human interaction registry", map[string]any{
 				"workspace": workspace,
-				"error":     pruneErr.Error(),
+				"error":     err.Error(),
 			})
 		}
-		if pruneErr == nil && registry.LastLoadError() == nil &&
-			registry.Stats().RecordCount == 0 && al.interactionCatalog != nil {
-			if err := al.interactionCatalog.Remove(workspace); err != nil {
-				logger.WarnCF("agent", "Failed to remove empty interaction workspace", map[string]any{
-					"workspace": workspace,
-					"error":     err.Error(),
-				})
-			}
-		}
-		al.interactionCatalogMu.Unlock()
 		return true
 	})
 	return recovered
@@ -244,10 +232,10 @@ func (al *AgentLoop) failRecoveredInteraction(
 }
 
 func (al *AgentLoop) loadCatalogedInteractionRegistries() {
-	if al == nil || al.interactionCatalog == nil {
+	if al == nil {
 		return
 	}
-	workspaces, err := al.interactionCatalog.List()
+	workspaces, err := al.interactions.catalogedWorkspaces()
 	if err != nil {
 		logger.WarnCF("agent", "Interaction workspace catalog has invalid entries", map[string]any{
 			"error": err.Error(),

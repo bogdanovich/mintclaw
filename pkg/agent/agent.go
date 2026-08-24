@@ -23,7 +23,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/constants"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
-	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
@@ -56,34 +55,29 @@ type AgentLoop struct {
 	running atomic.Bool
 	// startupResult carries the outcome of Run's initialization phase (hooks
 	// and MCP). Buffered so Run never blocks when no caller waits for startup.
-	startupResult              chan error
-	contextManager             ContextManager
-	contextManagerInitErr      error
-	runtimeInitErr             error
-	fallback                   *providers.FallbackChain
-	modelExecution             *modelExecutionManager
-	channelManager             interfaces.ChannelManager
-	mediaStore                 media.MediaStore
-	outboundOutbox             *outbox.Coordinator
-	transcriber                asr.Transcriber
-	cmdRegistry                *commands.Registry
-	mcp                        mcpRuntime
-	hookRuntime                hookRuntime
-	steering                   *steeringQueue
-	compactionRunner           *backgroundCompactionRunner
-	pendingSkills              sync.Map
-	asyncCompletions           sync.Map
-	taskRegistries             sync.Map
-	interactionRegistries      sync.Map
-	interactionResolutions     sync.Map
-	interactionResumeFlights   sync.Map
-	interactionCatalog         *interactions.WorkspaceCatalog
-	interactionCatalogMu       sync.Mutex
-	interactionRecoveryRunning atomic.Bool
-	runtimeTools               map[string]RuntimeToolFactory
-	runtimeAgentTools          map[string]RuntimeAgentToolFactory
-	runtimeToolDecorators      map[string]RuntimeToolDecoratorFactory
-	mu                         sync.RWMutex
+	startupResult         chan error
+	contextManager        ContextManager
+	contextManagerInitErr error
+	runtimeInitErr        error
+	fallback              *providers.FallbackChain
+	modelExecution        *modelExecutionManager
+	channelManager        interfaces.ChannelManager
+	mediaStore            media.MediaStore
+	outboundOutbox        *outbox.Coordinator
+	transcriber           asr.Transcriber
+	cmdRegistry           *commands.Registry
+	mcp                   mcpRuntime
+	hookRuntime           hookRuntime
+	steering              *steeringQueue
+	compactionRunner      *backgroundCompactionRunner
+	pendingSkills         sync.Map
+	asyncCompletions      sync.Map
+	taskRegistries        sync.Map
+	interactions          interactionCoordinator
+	runtimeTools          map[string]RuntimeToolFactory
+	runtimeAgentTools     map[string]RuntimeAgentToolFactory
+	runtimeToolDecorators map[string]RuntimeToolDecoratorFactory
+	mu                    sync.RWMutex
 
 	isolatedToolBootstrap  bool
 	isolatedSkillBootstrap bool

@@ -1348,7 +1348,7 @@ func (al *AgentLoop) loadInteractionResumeFlight(
 	workspace string,
 	interactionID string,
 ) (*interactionResumeFlight, bool) {
-	flight, ok := al.interactionResumeFlights.Load(interactionResumeFlightKey(workspace, interactionID))
+	flight, ok := al.interactions.resumeFlights.Load(interactionResumeFlightKey(workspace, interactionID))
 	if !ok {
 		return nil, false
 	}
@@ -1426,7 +1426,7 @@ func (al *AgentLoop) startInteractionResumeFlight(
 ) (string, *interactionResumeFlight, bool) {
 	key := interactionResumeFlightKey(workspace, interactionID)
 	candidate := &interactionResumeFlight{done: make(chan struct{})}
-	actual, loaded := al.interactionResumeFlights.LoadOrStore(key, candidate)
+	actual, loaded := al.interactions.resumeFlights.LoadOrStore(key, candidate)
 	if loaded {
 		return key, actual.(*interactionResumeFlight), false
 	}
@@ -1443,7 +1443,7 @@ func (al *AgentLoop) finishInteractionResumeFlight(
 	flight.handled = handled
 	flight.err = err
 	close(flight.done)
-	al.interactionResumeFlights.Delete(key)
+	al.interactions.resumeFlights.Delete(key)
 }
 
 func (al *AgentLoop) resumeClaimedInteraction(

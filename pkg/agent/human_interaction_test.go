@@ -1456,7 +1456,9 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 	request.Route.ChatType = "supergroup"
 	request.Route.TopicID = "1771"
 	request.ExecutionContext = &bus.InboundContext{MessageID: "question-origin"}
-	disposition, err := (&humanInteractionRuntime{al: al}).SuspendToolCall(t.Context(), request)
+	disposition, err := (&humanInteractionRuntime{al: al, coordinator: &al.interactions}).SuspendToolCall(
+		t.Context(), request,
+	)
 	if err != nil || !disposition.Durable || disposition.InteractionID == "" {
 		t.Fatalf("SuspendToolCall() = (%#v, %v)", disposition, err)
 	}
@@ -1810,7 +1812,7 @@ func TestInteractionResolutionCallbackRunsOnceForTerminalHumanOutcome(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			al := &AgentLoop{cfg: config.DefaultConfig()}
 			called := make(chan interactions.Outcome, 1)
-			al.interactionResolutions.Store(
+			al.interactions.resolutions.Store(
 				"interaction-browser",
 				func(_ context.Context, outcome interactions.Outcome) error {
 					called <- outcome
@@ -2335,7 +2337,7 @@ func TestNewAgentLoopRegistersRequestUserInputByDefault(t *testing.T) {
 	if agent == nil || !agent.Tools.HasRegistered("request_user_input") {
 		t.Fatal("request_user_input is not registered by default")
 	}
-	if _, ok := al.interactionRegistries.Load(agent.Workspace); !ok {
+	if _, ok := al.interactions.registries.Load(agent.Workspace); !ok {
 		t.Fatal("interaction registry was not initialized for recovery")
 	}
 }
@@ -2353,7 +2355,7 @@ func TestDisabledRequestUserInputStillInitializesRecoveryRegistry(t *testing.T) 
 	if agent.Tools.HasRegistered("request_user_input") {
 		t.Fatal("disabled request_user_input was registered")
 	}
-	if _, ok := al.interactionRegistries.Load(agent.Workspace); !ok {
+	if _, ok := al.interactions.registries.Load(agent.Workspace); !ok {
 		t.Fatal("disabled tool prevented durable interaction recovery")
 	}
 }
@@ -2365,7 +2367,7 @@ func TestHumanInteractionPromptFailureRemainsAmbiguousAndDoesNotRetry(t *testing
 	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
 	coordinator := attachInteractionOutbox(t, al, messageBus, manager)
 	workspace := t.TempDir()
-	disposition, err := (&humanInteractionRuntime{al: al}).SuspendToolCall(
+	disposition, err := (&humanInteractionRuntime{al: al, coordinator: &al.interactions}).SuspendToolCall(
 		t.Context(),
 		testToolSuspensionRequest(workspace),
 	)
@@ -2402,7 +2404,7 @@ func TestHumanInteractionDefiniteNotSentPromptRetries(t *testing.T) {
 	al := &AgentLoop{cfg: config.DefaultConfig(), bus: messageBus, channelManager: manager}
 	coordinator := attachInteractionOutbox(t, al, messageBus, manager)
 	workspace := t.TempDir()
-	disposition, err := (&humanInteractionRuntime{al: al}).SuspendToolCall(
+	disposition, err := (&humanInteractionRuntime{al: al, coordinator: &al.interactions}).SuspendToolCall(
 		t.Context(),
 		testToolSuspensionRequest(workspace),
 	)
@@ -2510,7 +2512,7 @@ func TestRecoveryFailsInteractionAfterFinalDeliveryRetryBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	al.taskRegistries.Delete(workspace)
-	al.interactionRegistries.Delete(workspace)
+	al.interactions.registries.Delete(workspace)
 	registry = al.interactionRegistryForWorkspace(workspace)
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
@@ -2595,7 +2597,7 @@ func TestRecoveryFailsInteractionAfterPromptDeliveryRetryBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	al.taskRegistries.Delete(workspace)
-	al.interactionRegistries.Delete(workspace)
+	al.interactions.registries.Delete(workspace)
 	_ = al.taskRegistryForWorkspace(workspace)
 	registry = al.interactionRegistryForWorkspace(workspace)
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
@@ -3025,7 +3027,7 @@ func TestRecoveryRetriesPreparedTaskFinalBeforeExternalSend(t *testing.T) {
 			}
 
 			al.taskRegistries.Delete(normalizeRuntimeWorkspace(workspace))
-			al.interactionRegistries.Delete(workspace)
+			al.interactions.registries.Delete(workspace)
 			if reloaded := al.interactionRegistryForWorkspace(workspace); reloaded.LastLoadError() != nil {
 				t.Fatalf("reload prepared interaction registry: %v", reloaded.LastLoadError())
 			}
@@ -4427,7 +4429,7 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	// model process restart before the approval answer arrives.
 	original.ReplyHandles["telegram"] = "mutated"
 	original.Raw["thread_ts"] = "mutated"
-	al.interactionRegistries.Delete(agent.Workspace)
+	al.interactions.registries.Delete(agent.Workspace)
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, ok := activeInteractionForSession(registry, "session-context")
 	if !ok || record.Origin.ExecutionContext == nil {
@@ -4833,7 +4835,7 @@ func TestExpiredAllowOnceNeverExecutesProtectedTool(t *testing.T) {
 				registryPath,
 				interactions.Options{Now: func() time.Time { return now }},
 			)
-			al.interactionRegistries.Store(agent.Workspace, registry)
+			al.interactions.registries.Store(agent.Workspace, registry)
 			inbound := &bus.InboundContext{
 				Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
 				MessageID: "origin-message",
@@ -4876,7 +4878,7 @@ func TestExpiredAllowOnceNeverExecutesProtectedTool(t *testing.T) {
 				if registry.LastLoadError() != nil {
 					t.Fatal(registry.LastLoadError())
 				}
-				al.interactionRegistries.Store(agent.Workspace, registry)
+				al.interactions.registries.Store(agent.Workspace, registry)
 				record, _ = registry.Get(record.ID)
 			}
 			if err = al.resumeClaimedInteraction(
@@ -6028,7 +6030,7 @@ func TestStopDoesNotCancelBoundFinalizationAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	record = bindTestInteractionFinal(t, registry, record)
-	al.interactionRegistries.Delete(agent.Workspace)
+	al.interactions.registries.Delete(agent.Workspace)
 
 	result, cancelErr := al.cancelInteractionForControlMessage(t.Context(), stop, target)
 	if cancelErr == nil || !strings.Contains(cancelErr.Error(), "finalization already started") {
@@ -8211,7 +8213,7 @@ func TestRecoverHumanInteractionsTerminalizesCatalogedOrphanWorkspace(t *testing
 	if err := catalog.Register(orphanWorkspace); err != nil {
 		t.Fatal(err)
 	}
-	al.interactionCatalog = catalog
+	al.interactions.catalog = catalog
 
 	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(orphanWorkspace))
 	request := testToolSuspensionRequest(orphanWorkspace)
@@ -8333,7 +8335,7 @@ func TestRecoveryKeepsCatalogEntryWhenRegistryLoadFails(t *testing.T) {
 	if err := catalog.Register(workspace); err != nil {
 		t.Fatal(err)
 	}
-	al.interactionCatalog = catalog
+	al.interactions.catalog = catalog
 
 	al.RecoverHumanInteractions(t.Context())
 	workspaces, err := catalog.List()

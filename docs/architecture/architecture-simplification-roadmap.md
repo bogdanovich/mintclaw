@@ -839,6 +839,11 @@ Implementation sequence:
     component set. Give `Pipeline` those same instances, route host-side work
     through the current runner owner, and delete the `AgentLoop` factories and
     delivery pass-throughs that rebuilt equivalent components per call.
+41. Extract one process-wide `interactionCoordinator` to own the interaction
+    registry cache, resolution callbacks, resume-flight deduplication,
+    workspace catalog serialization, and recovery admission. Delete those six
+    mutable fields from `AgentLoop`, and make every reloadable interaction
+    component reference the same stable owner.
 
 Exit criteria:
 
