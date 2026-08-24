@@ -537,11 +537,11 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					}
 					return json.RawMessage(`{"status":"completed"}`), nil
 				}
-				transferWorker, ok := worker.(TransferWorker)
-				if !ok {
-					return nil, ErrDriverIncompatible
-				}
 				if artifactInputAction(prepared.Action.Kind) {
+					_, ok := worker.(TransferWorker)
+					if !ok {
+						return nil, ErrDriverIncompatible
+					}
 					checkedUpload, ok := worker.(NavigationCheckedUploadWorker)
 					if !ok || slot.navigationID == "" {
 						return nil, ErrDriverIncompatible
@@ -558,13 +558,34 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 				if sink == nil {
 					return nil, ErrDriverIncompatible
 				}
-				download, executeErr := transferWorker.Download(
-					executeCtx, driverAction, int64(broker.config.Limits.Effective().DownloadBytes),
-				)
+				maximum := int64(broker.config.Limits.Effective().DownloadBytes)
+				var download DriverDownload
+				var executeErr error
+				if preparedDispatch {
+					remote, ok := worker.(PreparedDownloadWorker)
+					if !ok {
+						return nil, ErrDriverIncompatible
+					}
+					download, executeErr = remote.DownloadPrepared(executeCtx, workerPreparedAction, maximum)
+				} else {
+					transferWorker, ok := worker.(TransferWorker)
+					if !ok {
+						return nil, ErrDriverIncompatible
+					}
+					download, executeErr = transferWorker.Download(executeCtx, driverAction, maximum)
+				}
 				if executeErr != nil {
+					var artifactFailure *DownloadArtifactError
+					if errors.As(executeErr, &artifactFailure) {
+						return json.RawMessage(`{"status":"completed","artifact_state":"unavailable"}`), nil
+					}
 					return nil, executeErr
 				}
-				return sink(executeCtx, prepared, download)
+				terminal, sinkErr := sink(executeCtx, prepared, download)
+				if sinkErr != nil {
+					return downloadArtifactUnavailableResult()
+				}
+				return terminal, nil
 			}
 			if preparedDispatch {
 				if executeErr := preparedWorker.ExecutePrepared(executeCtx, workerPreparedAction); executeErr != nil {
@@ -600,6 +621,10 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		ctx, prepared.SessionID, invocation, progressSignature,
 	)
 	return invocation, errors.Join(executeErr, postActionErr)
+}
+
+func downloadArtifactUnavailableResult() (json.RawMessage, error) {
+	return json.RawMessage(`{"status":"completed","artifact_state":"unavailable"}`), nil
 }
 
 func (broker *Broker) finalizeActionInvocationLocked(
@@ -694,7 +719,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		prepared.DestinationOrigin = destination
 		prepared.Effect = EffectNavigation
 	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover,
-		ActionFileChooser, ActionDownload:
+		ActionFileChooser, ActionUpload, ActionDownload:
 		element, ok := slot.refs[request.Action.Ref]
 		if !ok {
 			return PreparedAction{}, ErrStale
@@ -722,7 +747,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 			prepared.Effect = EffectLocalEdit
 		case ActionHover:
 			prepared.Effect = EffectRead
-		case ActionFileChooser:
+		case ActionFileChooser, ActionUpload:
 			if element.Role != "button" || request.Upload == nil || request.Upload.Size < 1 ||
 				request.Upload.Size > int64(broker.config.Limits.Effective().UploadBytes) ||
 				!validDigest(request.Upload.SHA256) || request.Upload.Path == "" || request.Upload.Filename == "" ||
@@ -733,7 +758,11 @@ func (broker *Broker) resolvePreparedActionLocked(
 			prepared.ArtifactBytes = request.Upload.Size
 			prepared.ArtifactFilename = request.Upload.Filename
 			prepared.ArtifactContentType = request.Upload.ContentType
-			prepared.Effect = EffectLocalEdit
+			if request.Action.Kind == ActionUpload {
+				prepared.Effect = EffectUnknown
+			} else {
+				prepared.Effect = EffectLocalEdit
+			}
 		case ActionDownload:
 			prepared.Effect = classifyClickEffect(element)
 		case ActionFill:
@@ -1336,7 +1365,7 @@ func (broker *Broker) driverActionForPrepared(
 	case ActionNavigate:
 		return DriverAction{Kind: DriverNavigate, URL: prepared.Action.URL}, nil
 	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover,
-		ActionFileChooser, ActionDownload:
+		ActionFileChooser, ActionUpload, ActionDownload:
 		element, ok := slot.refs[prepared.Action.Ref]
 		if !ok {
 			return DriverAction{}, ErrStale
@@ -1361,7 +1390,7 @@ func (broker *Broker) driverActionForPrepared(
 			kind = DriverUncheck
 		case ActionHover:
 			kind = DriverHover
-		case ActionFileChooser:
+		case ActionFileChooser, ActionUpload:
 			kind = DriverUpload
 			binding, exists := slot.uploads[prepared.ID]
 			if !exists || binding.Ref != prepared.Action.ArtifactRef || binding.SHA256 != prepared.ArtifactSHA256 ||
@@ -1423,7 +1452,7 @@ func (broker *Broker) rememberUpload(slot *workerSlot, prepared PreparedAction, 
 }
 
 func artifactInputAction(kind ActionKind) bool {
-	return kind == ActionFileChooser
+	return kind == ActionFileChooser || kind == ActionUpload
 }
 
 func workerActionForPrepared(prepared Action, driver DriverAction) (Action, error) {
@@ -1467,7 +1496,7 @@ func workerActionForPrepared(prepared Action, driver DriverAction) (Action, erro
 			return Action{}, ErrInvalid
 		}
 		action.SourceRef, action.DestinationRef = driver.Target, driver.DestinationTarget
-	case ActionFileChooser:
+	case ActionFileChooser, ActionUpload:
 		if driver.Kind != DriverUpload {
 			return Action{}, ErrInvalid
 		}

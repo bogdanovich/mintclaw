@@ -151,6 +151,14 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 			actions = []browser.ActionKind{
 				browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
 				browser.ActionSelect, browser.ActionCheck, browser.ActionUncheck, browser.ActionHover,
+				browser.ActionFileChooser, browser.ActionUpload,
+			}
+			downloadAvailable := true
+			if capability, supported := factory.local.(interface{ DownloadAvailable() bool }); supported {
+				downloadAvailable = capability.DownloadAvailable()
+			}
+			if downloadAvailable {
+				actions = append(actions, browser.ActionDownload)
 			}
 			if dragAvailable {
 				actions = append(actions, browser.ActionDrag)
@@ -230,12 +238,9 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 			if action == "drag" && localProfile.DryRun {
 				continue
 			}
-			if action == "check" || action == "click" || action == "dialog" || action == "drag" ||
-				action == "file_chooser" || action == "fill" || action == "hover" ||
-				action == "navigate" ||
-				action == "press" ||
-				action == "scroll" ||
-				action == "select" || action == "uncheck" {
+			switch action {
+			case "check", "click", "dialog", "download", "drag", "file_chooser", "upload", "fill", "hover",
+				"navigate", "press", "scroll", "select", "uncheck":
 				current[action] = struct{}{}
 			}
 		}
@@ -254,6 +259,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		for _, action := range []browser.ActionKind{
 			browser.ActionNavigate, browser.ActionClick, browser.ActionFill, browser.ActionCheck,
 			browser.ActionUncheck, browser.ActionHover, browser.ActionDrag, browser.ActionFileChooser,
+			browser.ActionUpload, browser.ActionDownload,
 			browser.ActionPress, browser.ActionScroll,
 			browser.ActionSelect, browser.ActionDialog,
 		} {
@@ -333,7 +339,8 @@ func (factory *nodeBrowserWorkerFactory) Open(
 	}
 	if result.SessionID != request.SessionID || result.State != "ready" ||
 		result.TabID == "" || result.Controller != "agent" ||
-		!result.Features.Observe || !result.Features.Navigate || !result.Features.Contexts {
+		!result.Features.Observe || !result.Features.Navigate || !result.Features.Contexts ||
+		(slices.Contains(worker.actions, "download") && !result.Features.Download) {
 		return browser.WorkerOpenResult{Owner: worker}, browser.ErrDriverIncompatible
 	}
 	worker.tabID = result.TabID
@@ -517,7 +524,7 @@ func (*nodeBrowserWorker) Execute(context.Context, browser.DriverAction) error {
 }
 
 func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind) bool {
-	return kind.Valid() && kind != browser.ActionDownload && slices.Contains(worker.actions, string(kind))
+	return kind.Valid() && slices.Contains(worker.actions, string(kind))
 }
 
 func (worker *nodeBrowserWorker) ExecutePrepared(
@@ -547,7 +554,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	}
 	if action.Kind == "click" || action.Kind == "fill" || action.Kind == "select" || action.Kind == "check" ||
 		action.Kind == "uncheck" || action.Kind == "hover" || action.Kind == "drag" ||
-		action.Kind == "file_chooser" {
+		action.Kind == "file_chooser" || action.Kind == "upload" {
 		input.ExpectedRole = request.Prepared.ElementRole
 		input.ExpectedName = request.Prepared.ElementName
 	}
@@ -555,7 +562,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		input.DestinationExpectedRole = request.Prepared.DestinationElementRole
 		input.DestinationExpectedName = request.Prepared.DestinationElementName
 	}
-	if action.Kind == "file_chooser" {
+	if action.Kind == "file_chooser" || action.Kind == "upload" {
 		input.ArtifactSHA256 = request.Prepared.ArtifactSHA256
 		input.ArtifactBytes = request.Prepared.ArtifactBytes
 		input.ArtifactFilename = request.Prepared.ArtifactFilename
@@ -589,6 +596,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 	}
 	if action.Kind == "drag" || action.Kind == "press" ||
 		(action.Kind == "click" && nodes.BrowserClickRequiresApproval(input.Effect)) ||
+		action.Kind == "upload" ||
 		(action.Kind == "dialog" && action.Decision == "accept") {
 		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
 		if err != nil {
@@ -639,11 +647,118 @@ func (worker *nodeBrowserWorker) StagePreparedAction(
 	ctx context.Context,
 	request browser.WorkerPreparedAction,
 ) error {
-	if request.Validate(nodes.MaxBrowserTextInputBytes) != nil || request.Action.Kind != browser.ActionFileChooser ||
+	if request.Validate(nodes.MaxBrowserTextInputBytes) != nil ||
+		(request.Action.Kind != browser.ActionFileChooser && request.Action.Kind != browser.ActionUpload) ||
 		!worker.SupportsPreparedAction(request.Action.Kind) {
 		return browser.ErrDenied
 	}
 	return worker.stageBrowserArtifact(ctx, request)
+}
+
+func (worker *nodeBrowserWorker) DownloadPrepared(
+	ctx context.Context,
+	request browser.WorkerPreparedAction,
+	maximum int64,
+) (browser.DriverDownload, error) {
+	if request.Prepared.Action.Kind != browser.ActionDownload ||
+		request.DriverAction.Kind != browser.DriverDownloadAction ||
+		!worker.SupportsPreparedAction(browser.ActionDownload) || maximum < 1 ||
+		maximum > int64(worker.limits.DownloadBytes) {
+		return browser.DriverDownload{}, browser.ErrDenied
+	}
+	artifactOwner, _, err := browserScreenshotOwners(
+		ctx, worker.factory.config.WorkspacePath(), request.Prepared.SessionID, request.Prepared.RequestID,
+	)
+	if err != nil {
+		return browser.DriverDownload{}, browser.ErrDenied
+	}
+	worker.mu.Lock()
+	generation := worker.snapshotGeneration
+	worker.mu.Unlock()
+	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandAct)
+	if err != nil {
+		return browser.DriverDownload{}, err
+	}
+	input := nodes.BrowserActInput{
+		SessionID: worker.sessionID, TabID: worker.tabID, SnapshotGeneration: generation,
+		ActionInvocationID: request.InvocationID,
+		Action:             browser.Action{Kind: browser.ActionDownload, Ref: request.DriverAction.Target},
+		Effect:             string(request.Prepared.Effect), CurrentOrigin: request.Prepared.CurrentOrigin,
+		PreparedActionHash:    request.Prepared.ActionHash,
+		BrowserPolicyRevision: worker.factory.policyRevision, ProfileRevision: worker.profileRevision,
+		ExpectedRole: request.Prepared.ElementRole, ExpectedName: request.Prepared.ElementName,
+		WorkspaceID: artifactOwner.WorkspaceID, RouteID: artifactOwner.RouteID,
+		BrowserTarget: worker.browserTarget,
+	}
+	input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
+	if err != nil {
+		return browser.DriverDownload{}, browser.ErrDenied
+	}
+	var result nodes.BrowserActResult
+	if err = worker.invoke(ctx, descriptor, "act_"+request.InvocationID, input, &result); err != nil {
+		return browser.DriverDownload{}, err
+	}
+	if result.ActionInvocationID != request.InvocationID || result.State != "succeeded" {
+		return browser.DriverDownload{}, browser.ErrWorkerUnavailable
+	}
+	worker.mu.Lock()
+	if worker.closed || worker.snapshotGeneration != generation {
+		worker.mu.Unlock()
+		return browser.DriverDownload{}, browser.ErrStale
+	}
+	worker.snapshotGeneration = generation + 1
+	worker.cachedObservation = nil
+	worker.elements = make(map[string]browser.DriverElement)
+	worker.currentOrigin = ""
+	worker.documentID = ""
+	worker.mu.Unlock()
+	if result.Output == nil {
+		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: browser.ErrDriverIncompatible}
+	}
+	output := *result.Output
+	principal := worker.principal()
+	if output.Kind != nodes.BrowserOutputDownload || output.SessionID != worker.sessionID ||
+		output.RoutedSessionID != principal.SessionID || output.AgentID != principal.AgentID ||
+		output.ActorID != principal.ActorID || output.WorkspaceID != artifactOwner.WorkspaceID ||
+		output.RouteID != artifactOwner.RouteID || output.Target != worker.browserTarget ||
+		output.ProfileRevision != worker.profileRevision ||
+		output.BrowserPolicyRevision != worker.factory.policyRevision ||
+		output.InvocationID != request.InvocationID || output.TabID != worker.tabID ||
+		output.SnapshotGeneration != generation+1 || output.CaptureTarget != "" || output.ElementRef != "" ||
+		output.Size < 1 || output.Size > uint64(maximum) || output.Filename == "" || output.ContentType == "" {
+		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: browser.ErrDriverIncompatible}
+	}
+	var record nodes.TransferArtifactRecord
+	for attempt := 0; attempt < 2; attempt++ {
+		record, err = worker.receiveBrowserOutput(
+			ctx, artifactOwner, output, browserDownloadSourceKind,
+			request.Prepared.TabID, request.Prepared.ID, request.Prepared.SnapshotGeneration,
+		)
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+	}
+	if err != nil {
+		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: err}
+	}
+	spool, err := worker.factory.source.runtime.gatewayTransferSpool(
+		nodes.GatewayTransferSpoolPath(worker.factory.config.WorkspacePath()),
+	)
+	if err != nil {
+		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: browser.ErrWorkerUnavailable}
+	}
+	file, retained, err := spool.ResolveOwned(artifactOwner, record.Ref)
+	if err != nil {
+		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: err}
+	}
+	path := file.Name()
+	if closeErr := file.Close(); closeErr != nil {
+		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: closeErr}
+	}
+	return browser.DriverDownload{
+		Path: path, Filename: retained.Spec.Filename, ContentType: retained.Spec.ContentType,
+		SHA256: retained.Spec.SHA256, Size: retained.Spec.DeclaredSize,
+	}, nil
 }
 
 func (worker *nodeBrowserWorker) stageBrowserArtifact(
@@ -870,7 +985,10 @@ func (worker *nodeBrowserWorker) CaptureRetainedScreenshot(
 		output.ContentType != "image/png" || output.Size < 1 || output.Size > uint64(maximum) {
 		return browser.DriverScreenshot{}, browser.ErrDriverIncompatible
 	}
-	record, err := worker.receiveBrowserOutput(ctx, artifactOwner, output, request.Target)
+	record, err := worker.receiveBrowserOutput(
+		ctx, artifactOwner, output, browserScreenshotKind(request.Target),
+		output.TabID, output.SnapshotID, output.SnapshotGeneration,
+	)
 	if err != nil {
 		return browser.DriverScreenshot{}, err
 	}
@@ -887,7 +1005,10 @@ func (worker *nodeBrowserWorker) receiveBrowserOutput(
 	ctx context.Context,
 	owner nodes.TransferArtifactOwner,
 	descriptor nodes.BrowserOutputDescriptor,
-	target browser.ScreenshotTarget,
+	sourceKind string,
+	sourceScope string,
+	sourceID string,
+	sourceRevision uint64,
 ) (nodes.TransferArtifactRecord, error) {
 	spool, err := worker.factory.source.runtime.gatewayTransferSpool(
 		nodes.GatewayTransferSpoolPath(worker.factory.config.WorkspacePath()),
@@ -898,8 +1019,8 @@ func (worker *nodeBrowserWorker) receiveBrowserOutput(
 	spec := nodes.TransferArtifactSpec{
 		TransferID: owner.ToolCallID, Direction: nodes.TransferDirectionDownload,
 		Target: worker.browserTarget, ProfileRevision: descriptor.BrowserPolicyRevision,
-		SourceKind: browserScreenshotKind(target), SourceScope: descriptor.TabID,
-		SourceID: descriptor.SnapshotID, SourceRevision: descriptor.SnapshotGeneration,
+		SourceKind: sourceKind, SourceScope: sourceScope,
+		SourceID: sourceID, SourceRevision: sourceRevision,
 		Filename: descriptor.Filename, ContentType: descriptor.ContentType,
 		DeclaredSize: int64(descriptor.Size), SHA256: descriptor.SHA256, ExpiresAt: descriptor.ExpiresAt,
 	}

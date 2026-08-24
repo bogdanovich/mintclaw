@@ -1391,7 +1391,7 @@ func TestBrowserTargetsOmitsArtifactActionsWhenTransferIsUnavailable(t *testing.
 	source := &fakeBrowserToolSource{
 		available: true, transferUnavailable: true,
 		actions: []browser.ActionKind{
-			browser.ActionNavigate, browser.ActionFileChooser, browser.ActionDownload,
+			browser.ActionNavigate, browser.ActionFileChooser, browser.ActionUpload, browser.ActionDownload,
 		},
 	}
 	var result browserTargetResult

@@ -236,6 +236,11 @@ func validBrowserOutputDescriptor(descriptor nodes.BrowserOutputDescriptor) bool
 			(descriptor.CaptureTarget == "element" && descriptor.ElementRef == "")) {
 		return false
 	}
+	if descriptor.Kind == nodes.BrowserOutputDownload &&
+		(!browserHostIdentifier(descriptor.RouteID) || descriptor.CaptureTarget != "" ||
+			descriptor.ElementRef != "" || descriptor.TabID == "" || descriptor.SnapshotGeneration == 0) {
+		return false
+	}
 	return descriptor.TabID != "" || descriptor.SnapshotGeneration == 0
 }
 
@@ -657,7 +662,9 @@ func (host *BrowserHost) prepareBrowserArtifact(
 	authorized := session.state == "ready" && session.profile.Revision == frame.PolicyRevision &&
 		session.browserPolicyRevision == request.BrowserPolicyRevision &&
 		session.routedSessionID == request.RoutedSessionID && session.agentID == request.AgentID &&
-		session.actorID == request.ActorID && slicesContains(session.profile.AllowedActions, "file_chooser") &&
+		session.actorID == request.ActorID &&
+		(slicesContains(session.profile.AllowedActions, "file_chooser") ||
+			slicesContains(session.profile.AllowedActions, "upload")) &&
 		frame.TotalSize <= uint64(session.limits.UploadBytes) && now.Before(session.expiresAt) &&
 		now.Before(session.idleExpiresAt) && now.Unix() < request.ExpiresAt &&
 		request.ExpiresAt <= now.Add(time.Duration(session.limits.PreparedSeconds)*time.Second).Unix()

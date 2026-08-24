@@ -488,6 +488,14 @@ func (factory *gatewayArtifactRecoveryFactory) Open(
 	return browser.WorkerOpenResult{Owner: factory.worker}, nil
 }
 
+type gatewayWorkerFactory struct{ worker browser.Worker }
+
+func (factory *gatewayWorkerFactory) Open(
+	context.Context, browser.WorkerOpenRequest,
+) (browser.WorkerOpenResult, error) {
+	return browser.WorkerOpenResult{Owner: factory.worker}, nil
+}
+
 type gatewayArtifactRecoveryWorker struct{ executeCalls int }
 
 func (*gatewayArtifactRecoveryWorker) Status(context.Context) (browser.WorkerStatus, error) {
@@ -513,6 +521,105 @@ func (worker *gatewayArtifactRecoveryWorker) Execute(context.Context, browser.Dr
 	return nil
 }
 func (*gatewayArtifactRecoveryWorker) CatalogRevision() string { return strings.Repeat("c", 64) }
+
+type gatewayDownloadWorker struct {
+	gatewayArtifactRecoveryWorker
+	download browser.DriverDownload
+}
+
+func (*gatewayDownloadWorker) Upload(context.Context, browser.DriverAction) error {
+	return browser.ErrDriverIncompatible
+}
+
+func (worker *gatewayDownloadWorker) Download(
+	context.Context, browser.DriverAction, int64,
+) (browser.DriverDownload, error) {
+	worker.executeCalls++
+	return worker.download, nil
+}
+
+func TestGatewayBrowserDownloadPreservesTerminalSuccessWhenMediaRegistrationFails(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := gatewayBrowserConfig(workspace)
+	profile := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget].Profiles[config.BrowserDefaultProfile]
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget].Profiles[config.BrowserDefaultProfile] = profile
+	policyRevision, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("download with unavailable delivery fixture")
+	path := filepath.Join(t.TempDir(), "fixture.txt")
+	if err = os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(payload)
+	worker := &gatewayDownloadWorker{download: browser.DriverDownload{
+		Path: path, Filename: "fixture.txt", ContentType: "text/plain",
+		SHA256: hex.EncodeToString(digest[:]), Size: int64(len(payload)),
+	}}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), &gatewayWorkerFactory{worker: worker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &nodeAdmissionRuntime{}
+	t.Cleanup(func() {
+		if runtime.transferSpool != nil {
+			_ = runtime.transferSpool.Close()
+		}
+	})
+	registrationErr := errors.New("media registration unavailable")
+	source := &gatewayBrowserToolSource{
+		services: &services{
+			Browser: &browserRuntime{broker: broker, policyRevision: policyRevision}, NodeAdmission: runtime,
+			MediaStore: failingBrowserScreenshotMediaStore{err: registrationErr},
+		},
+		policyRevision: policyRevision, workspace: workspace,
+		screenshotRetention: time.Hour, limits: cfg.Tools.Browser.Limits.Effective(),
+	}
+	owner := browser.Owner{
+		ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "route_1", ExecutionID: "execution_1",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`\[ref=([^]]+)\]`).FindStringSubmatch(observation.Snapshot)
+	if len(match) != 2 {
+		t.Fatalf("observation snapshot = %q", observation.Snapshot)
+	}
+	prepareRequest := browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_delivery_failure", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionDownload, Ref: match[1], Deliver: true},
+	}
+	preparation, err := source.PrepareAction(gatewayBrowserArtifactContext(workspace), prepareRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := gatewayBrowserArtifactContext(workspace)
+	result, err := source.ExecuteAction(ctx, owner, preparation.Action.ID, &preparation.Approval)
+	if err != nil || result.State != browser.InvocationSucceeded || result.Download != nil || worker.executeCalls != 1 {
+		t.Fatalf("ExecuteAction() = %#v, %v; driver calls = %d", result, err, worker.executeCalls)
+	}
+	replayedPreparation, err := source.PrepareAction(ctx, prepareRequest)
+	if err != nil || replayedPreparation.Action.ID != preparation.Action.ID {
+		t.Fatalf("replayed PrepareAction() = %#v, %v", replayedPreparation, err)
+	}
+	replayed, err := source.ExecuteAction(ctx, owner, replayedPreparation.Action.ID, &replayedPreparation.Approval)
+	if err != nil || replayed.State != browser.InvocationSucceeded || replayed.Download != nil ||
+		worker.executeCalls != 1 {
+		t.Fatalf("replayed ExecuteAction() = %#v, %v; driver calls = %d", replayed, err, worker.executeCalls)
+	}
+}
 
 func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing.T) {
 	workspace := t.TempDir()

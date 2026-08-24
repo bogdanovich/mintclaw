@@ -14,6 +14,7 @@ func TestOrdinaryInteractionActionContracts(t *testing.T) {
 		{Kind: ActionHover, Ref: "ref_hover"},
 		{Kind: ActionDrag, SourceRef: "ref_source", DestinationRef: "ref_destination"},
 		{Kind: ActionFileChooser, Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
+		{Kind: ActionUpload, Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
 	}
 	for _, action := range valid {
 		if err := action.Validate(1024); err != nil {
@@ -22,7 +23,6 @@ func TestOrdinaryInteractionActionContracts(t *testing.T) {
 	}
 
 	invalid := []Action{
-		{Kind: ActionKind("upload"), Ref: "ref_file", ArtifactRef: "transfer-artifact://artifact_1"},
 		{Kind: ActionDialog, DialogID: "not an identifier", Decision: "dismiss"},
 		{Kind: ActionDialog, DialogID: "dialog_" + strings.Repeat("x", MaxIdentifierBytes), Decision: "dismiss"},
 		{Kind: ActionCheck, Ref: "ref_check", SourceRef: "ref_source"},

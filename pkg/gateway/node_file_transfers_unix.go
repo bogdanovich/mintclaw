@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
@@ -26,7 +27,21 @@ func (*gatewayBrowserToolSource) ScreenshotAvailable() bool { return true }
 func (*gatewayBrowserToolSource) ArtifactTransferAvailable() bool { return true }
 
 func (source *gatewayBrowserToolSource) DownloadAvailable() bool {
-	return source != nil && source.downloadAvailable
+	if source == nil {
+		return false
+	}
+	if source.downloadAvailable {
+		return true
+	}
+	if source.config == nil {
+		return false
+	}
+	for _, target := range source.config.Tools.Browser.Targets {
+		if target.Enabled && target.EffectivePlacement() == config.BrowserPlacementNode {
+			return true
+		}
+	}
+	return false
 }
 
 func openNodeTransferMedia(path string) (*os.File, os.FileInfo, error) {

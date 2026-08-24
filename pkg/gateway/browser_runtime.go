@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -260,16 +261,17 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 			if err != nil {
 				return tools.BrowserTargetDiagnostics{}, err
 			}
-			uploadAvailable := source.ArtifactTransferAvailable()
+			artifactTransferAvailable := source.ArtifactTransferAvailable()
+			uploadAvailable := artifactTransferAvailable
 			screenshotAvailable := source.ScreenshotAvailable()
-			downloadAvailable := uploadAvailable && source.DownloadAvailable()
+			downloadAvailable := artifactTransferAvailable && source.downloadAvailable
 			handoffAvailable := source.HandoffAvailable()
 			if source.config != nil {
 				if configured, ok := source.config.Tools.Browser.Targets[target]; ok &&
 					configured.EffectivePlacement() == config.BrowserPlacementNode {
 					screenshotAvailable = screenshotAvailable && readinessByProfile != nil && contexts
-					uploadAvailable = false
-					downloadAvailable = false
+					uploadAvailable = uploadAvailable && slices.Contains(actions, browser.ActionUpload)
+					downloadAvailable = artifactTransferAvailable && slices.Contains(actions, browser.ActionDownload)
 					handoffAvailable = false
 				}
 			}
@@ -477,23 +479,25 @@ func (source *gatewayBrowserToolSource) PrepareAction(
 	request browser.PrepareActionRequest,
 ) (browser.Preparation, error) {
 	if request.Action.Kind == browser.ActionDownload {
+		var recoveryState browser.InvocationState
 		recovered, recoverErr := withGatewayBrowserBroker(
 			ctx, source,
 			func(ctx context.Context, broker *browser.Broker) (browser.Preparation, error) {
-				preparation, found, err := broker.RecoverableDownloadPreparation(ctx, request)
+				preparation, state, found, err := broker.RecoverableDownloadPreparation(ctx, request)
 				if err != nil || !found {
 					return browser.Preparation{}, err
 				}
+				recoveryState = state
 				return preparation, nil
 			},
 		)
 		if recoverErr == nil && recovered.Action.ID != "" {
-			_, artifactFound, artifactErr := source.lookupBrowserDownload(
-				ctx, request.Owner, request.RequestID, request.SessionID, request.Action.Deliver,
-			)
-			if artifactErr != nil {
-				return browser.Preparation{}, artifactErr
+			if recoveryState == browser.InvocationSucceeded {
+				return recovered, nil
 			}
+			_, artifactFound, _ := source.lookupBrowserDownload(
+				ctx, request.Owner, request.RequestID, request.SessionID, false,
+			)
 			if artifactFound {
 				return recovered, nil
 			}
@@ -502,7 +506,7 @@ func (source *gatewayBrowserToolSource) PrepareAction(
 			return browser.Preparation{}, recoverErr
 		}
 	}
-	if request.Action.Kind == browser.ActionFileChooser {
+	if request.Action.Kind == browser.ActionFileChooser || request.Action.Kind == browser.ActionUpload {
 		binding, err := source.resolveBrowserUpload(ctx, request)
 		if err != nil {
 			return browser.Preparation{}, err
@@ -534,12 +538,9 @@ func (source *gatewayBrowserToolSource) ExecuteAction(
 			}
 			var artifact *browser.DownloadArtifact
 			if prepared.Action.Kind == browser.ActionDownload {
-				retained, found, lookupErr := source.lookupBrowserDownload(
-					ctx, owner, prepared.RequestID, prepared.SessionID, prepared.Action.Deliver,
+				retained, found, _ := source.lookupBrowserDownload(
+					ctx, owner, prepared.RequestID, prepared.SessionID, false,
 				)
-				if lookupErr != nil {
-					return browser.Invocation{}, lookupErr
-				}
 				if found {
 					terminal, marshalErr := json.Marshal(map[string]any{"status": "completed", "artifact": retained})
 					if marshalErr != nil {
@@ -547,13 +548,25 @@ func (source *gatewayBrowserToolSource) ExecuteAction(
 					}
 					recovered, recoverErr := broker.RecoverAcceptedDownload(ctx, owner, preparedID, terminal)
 					if recoverErr == nil {
-						recovered.Download = &retained
+						if !prepared.Action.Deliver {
+							recovered.Download = &retained
+						} else if delivered, deliveredFound, deliveredErr := source.lookupBrowserDownload(
+							ctx, owner, prepared.RequestID, prepared.SessionID, true,
+						); deliveredErr == nil && deliveredFound {
+							recovered.Download = &delivered
+						}
 						return recovered, nil
 					}
 					if !errors.Is(recoverErr, browser.ErrConflict) {
 						return recovered, recoverErr
 					}
-					artifact = &retained
+					if !prepared.Action.Deliver {
+						artifact = &retained
+					} else if delivered, deliveredFound, deliveredErr := source.lookupBrowserDownload(
+						ctx, owner, prepared.RequestID, prepared.SessionID, true,
+					); deliveredErr == nil && deliveredFound {
+						artifact = &delivered
+					}
 				}
 			}
 			invocation, executeErr := broker.ExecuteActionWithDownloadSink(
@@ -585,10 +598,7 @@ func (source *gatewayBrowserToolSource) ExecuteAction(
 					retained, found, lookupErr := source.lookupBrowserDownload(
 						ctx, owner, prepared.RequestID, prepared.SessionID, prepared.Action.Deliver,
 					)
-					if lookupErr != nil {
-						return invocation, lookupErr
-					}
-					if found {
+					if lookupErr == nil && found {
 						artifact = &retained
 					}
 				}

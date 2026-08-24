@@ -17,11 +17,12 @@ import (
 )
 
 var (
-	ErrBrowserHostDenied   = errors.New("companion browser authority denied")
-	ErrBrowserHostBusy     = errors.New("companion browser profile is busy")
-	ErrBrowserHostNotFound = errors.New("companion browser session not found")
-	ErrBrowserHostStale    = errors.New("companion browser state is stale")
-	ErrBrowserHostLost     = errors.New("companion browser session is lost")
+	ErrBrowserHostDenied              = errors.New("companion browser authority denied")
+	ErrBrowserHostBusy                = errors.New("companion browser profile is busy")
+	ErrBrowserHostNotFound            = errors.New("companion browser session not found")
+	ErrBrowserHostStale               = errors.New("companion browser state is stale")
+	ErrBrowserHostLost                = errors.New("companion browser session is lost")
+	ErrBrowserHostArtifactUnavailable = errors.New("companion browser artifact is unavailable")
 )
 
 const (
@@ -352,6 +353,9 @@ type BrowserActInput struct {
 	ArtifactFilename        string               `json:"artifact_filename,omitempty"`
 	ArtifactContentType     string               `json:"artifact_content_type,omitempty"`
 	ApprovalDigest          string               `json:"approval_digest,omitempty"`
+	WorkspaceID             string               `json:"workspace_id,omitempty"`
+	RouteID                 string               `json:"route_id,omitempty"`
+	BrowserTarget           string               `json:"browser_target,omitempty"`
 }
 
 func (input BrowserActInput) MarshalJSON() ([]byte, error) {
@@ -394,6 +398,9 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		ArtifactFilename        string               `json:"artifact_filename,omitempty"`
 		ArtifactContentType     string               `json:"artifact_content_type,omitempty"`
 		ApprovalDigest          string               `json:"approval_digest,omitempty"`
+		WorkspaceID             string               `json:"workspace_id,omitempty"`
+		RouteID                 string               `json:"route_id,omitempty"`
+		BrowserTarget           string               `json:"browser_target,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -433,6 +440,7 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		ArtifactSHA256: value.ArtifactSHA256, ArtifactBytes: int64(artifactBytes),
 		ArtifactFilename: value.ArtifactFilename, ArtifactContentType: value.ArtifactContentType,
 		ApprovalDigest: value.ApprovalDigest,
+		WorkspaceID:    value.WorkspaceID, RouteID: value.RouteID, BrowserTarget: value.BrowserTarget,
 	}
 	return nil
 }
@@ -772,6 +780,7 @@ type BrowserActResult struct {
 	State              string                    `json:"state"`
 	Reason             string                    `json:"reason,omitempty"`
 	Observation        *BrowserObservationResult `json:"observation,omitempty"`
+	Output             *BrowserOutputDescriptor  `json:"output,omitempty"`
 }
 
 const (
@@ -946,6 +955,9 @@ type BrowserHostActRequest struct {
 	ArtifactBytes           int64
 	ArtifactFilename        string
 	ArtifactContentType     string
+	WorkspaceID             string
+	RouteID                 string
+	BrowserTarget           string
 	AgentID                 string
 	ActorID                 string
 }
@@ -1076,11 +1088,13 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 			(input.DestinationExpectedRole != "" || input.DestinationExpectedName != "") ||
 		kind != browseraction.ActionDialog &&
 			(input.DialogType != "" || input.DialogMessageDigest != "" || input.DialogMessageBytes != 0) ||
-		kind != browseraction.ActionFileChooser &&
+		kind != browseraction.ActionFileChooser && kind != browseraction.ActionUpload &&
 			(input.ArtifactSHA256 != "" || input.ArtifactBytes != 0 || input.ArtifactFilename != "" ||
 				input.ArtifactContentType != "") ||
 		kind != browseraction.ActionFill && kind != browseraction.ActionSelect && kind != browseraction.ActionDialog &&
-			(input.InputDigest != "" || input.InputBytes != 0) {
+			(input.InputDigest != "" || input.InputBytes != 0) ||
+		kind != browseraction.ActionDownload &&
+			(input.WorkspaceID != "" || input.RouteID != "" || input.BrowserTarget != "") {
 		return invalidBrowserActInput()
 	}
 	valid := false
@@ -1117,8 +1131,16 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 			input.ArtifactBytes <= int64(profile.Limits.UploadBytes) && input.ArtifactFilename != "" &&
 			len(input.ArtifactFilename) <= 255 && input.ArtifactContentType != "" &&
 			len(input.ArtifactContentType) <= 255 && input.ApprovalDigest == ""
+	case browseraction.ActionUpload:
+		valid = input.Effect == "unknown" && input.ExpectedRole == "button" &&
+			validSHA256Digest(input.ArtifactSHA256) && input.ArtifactBytes > 0 &&
+			input.ArtifactBytes <= int64(profile.Limits.UploadBytes) && input.ArtifactFilename != "" &&
+			len(input.ArtifactFilename) <= 255 && input.ArtifactContentType != "" &&
+			len(input.ArtifactContentType) <= 255 && BrowserApprovalDigestMatches(input)
 	case browseraction.ActionDownload:
-		valid = input.Effect == "download" && BrowserApprovalDigestMatches(input)
+		valid = BrowserClickEffectValid(input.Effect) && input.ExpectedRole != "" &&
+			input.WorkspaceID != "" && input.RouteID != "" &&
+			input.BrowserTarget != "" && BrowserApprovalDigestMatches(input)
 	}
 	if !valid {
 		return invalidBrowserActInput()
@@ -1142,7 +1164,7 @@ func browserActionUsesElementSemantics(kind browseraction.ActionKind) bool {
 	switch kind {
 	case browseraction.ActionClick, browseraction.ActionFill, browseraction.ActionSelect, browseraction.ActionCheck,
 		browseraction.ActionUncheck, browseraction.ActionHover, browseraction.ActionDrag,
-		browseraction.ActionFileChooser:
+		browseraction.ActionFileChooser, browseraction.ActionUpload, browseraction.ActionDownload:
 		return true
 	default:
 		return false
@@ -1312,6 +1334,9 @@ func browserCommandInputSchema(
 			"type": "string", "minLength": 1, "maxLength": 255,
 		}
 		properties["approval_digest"] = digest
+		properties["workspace_id"] = identifier
+		properties["route_id"] = identifier
+		properties["browser_target"] = identifier
 	case BrowserCommandContexts:
 		add("session_id", identifier)
 		add("profile_revision", map[string]any{"enum": profileRevisions})
@@ -1434,6 +1459,7 @@ func BrowserCommandOutputSchema(
 				"reason":               safeReason,
 				"observation":          rawSchema(browserObservationSchema(limits)),
 				"artifact":             browserArtifactSchema(limits.DownloadBytes),
+				"output":               browserDownloadOutputDescriptorSchema(limits.DownloadBytes),
 			},
 		})
 	case BrowserCommandContexts:
@@ -1650,6 +1676,35 @@ func browserOutputDescriptorSchema(maximumBytes int) map[string]any {
 			"element_ref":         optionalIdentifier,
 			"filename":            map[string]any{"const": "browser-screenshot.png"},
 			"content_type":        map[string]any{"const": "image/png"},
+			"size":                map[string]any{"type": "integer", "minimum": 1, "maximum": maximumBytes},
+			"sha256":              map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
+			"captured_at":         map[string]any{"type": "integer", "minimum": 1},
+			"expires_at":          map[string]any{"type": "integer", "minimum": 1},
+			"cleanup_policy":      map[string]any{"const": "session_or_expiry"},
+		},
+	}
+}
+
+func browserDownloadOutputDescriptorSchema(maximumBytes int) map[string]any {
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{
+			"transfer_id", "kind", "session_id", "routed_session_id", "agent_id", "actor_id",
+			"workspace_id", "route_id", "target", "profile_revision", "browser_policy_revision", "invocation_id",
+			"tab_id", "snapshot_generation", "filename", "content_type", "size", "sha256", "captured_at",
+			"expires_at", "cleanup_policy",
+		},
+		"properties": map[string]any{
+			"transfer_id": identifier, "kind": map[string]any{"const": BrowserOutputDownload},
+			"session_id": identifier, "routed_session_id": identifier, "agent_id": identifier,
+			"actor_id": identifier, "workspace_id": identifier, "route_id": identifier, "target": identifier,
+			"profile_revision":        identifier,
+			"browser_policy_revision": map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
+			"invocation_id":           identifier, "tab_id": identifier,
+			"snapshot_generation": map[string]any{"type": "integer", "minimum": 1},
+			"filename":            map[string]any{"type": "string", "minLength": 1, "maxLength": 255},
+			"content_type":        map[string]any{"type": "string", "minLength": 1, "maxLength": 255},
 			"size":                map[string]any{"type": "integer", "minimum": 1, "maximum": maximumBytes},
 			"sha256":              map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
 			"captured_at":         map[string]any{"type": "integer", "minimum": 1},

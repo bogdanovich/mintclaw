@@ -1036,6 +1036,54 @@ func TestBrokerBindsFileChooserArtifactAndRequiresApprovalForDownloadClick(t *te
 	}
 }
 
+func TestBrokerPreservesDownloadSuccessWhenRetentionSinkFails(t *testing.T) {
+	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
+	owner := testOwner()
+	worker.observation = driverObservationFixture(DriverElement{Target: "e3", Role: "link", Name: "Download"})
+	worker.resolveElement = worker.observation.Elements[0]
+	worker.download = DriverDownload{
+		Path: "/private/output/result.txt", Filename: "result.txt", ContentType: "text/plain",
+		SHA256: strings.Repeat("b", 64), Size: 9,
+	}
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_download_sink_failure", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionDownload, Ref: onlyVisibleRef(t, observation.Snapshot)},
+	})
+	if err != nil || !prepared.RequiresApproval {
+		t.Fatalf("PrepareAction(download) = %#v, %v", prepared, err)
+	}
+	sinkCalls := 0
+	failingSink := func(context.Context, PreparedAction, DriverDownload) (json.RawMessage, error) {
+		sinkCalls++
+		return nil, errors.New("retention unavailable")
+	}
+	invocation, err := broker.ExecuteActionWithDownloadSink(
+		t.Context(), owner, prepared.Action.ID, &prepared.Approval, failingSink,
+	)
+	if err != nil || invocation.State != InvocationSucceeded ||
+		!bytes.Contains(invocation.TerminalResult, []byte(`"artifact_state":"unavailable"`)) ||
+		len(worker.actions) != 1 || sinkCalls != 1 {
+		t.Fatalf(
+			"download with failed sink = %#v, %v; actions = %#v; sink calls = %d",
+			invocation, err, worker.actions, sinkCalls,
+		)
+	}
+	replayed, err := broker.ExecuteActionWithDownloadSink(
+		t.Context(), owner, prepared.Action.ID, &prepared.Approval, failingSink,
+	)
+	if err != nil || replayed.State != InvocationSucceeded || len(worker.actions) != 1 || sinkCalls != 1 {
+		t.Fatalf(
+			"replayed download with failed sink = %#v, %v; actions = %#v; sink calls = %d",
+			replayed, err, worker.actions, sinkCalls,
+		)
+	}
+}
+
 func TestBrokerStagesPreparedArtifactBeforeDurableAcceptance(t *testing.T) {
 	store := NewMemoryStore()
 	baseWorker := &actionTestWorker{observation: driverObservationFixture(

@@ -150,6 +150,55 @@ func TestPlaywrightWorkerRejectsMalformedNavigationIdentity(t *testing.T) {
 	}
 }
 
+func TestPlaywrightDownloadMarksPostClickDecodeFailureArtifactUnavailable(t *testing.T) {
+	tests := []struct {
+		name, result string
+	}{
+		{name: "malformed complete payload", result: "complete|attachment%3Bfilename%3Dfixture.txt|text%2Fplain|1|%%%"},
+		{name: "oversize stream", result: "error|oversize"},
+		{name: "failed stream read", result: "error|read_failed"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+				"browser_run_code_unsafe": playwrightTextResult("### Result\nMINTCLAW_DL_V1|" + test.result),
+			}}
+			worker := &playwrightWorker{
+				client: client, outputDir: t.TempDir(), downloadReady: true,
+				limits: config.BrowserLimitsConfig{}.Effective(),
+			}
+			_, err := worker.Download(t.Context(), DriverAction{
+				Kind: DriverDownloadAction, Target: "e1", Element: "Download",
+			}, 1024)
+			var artifactFailure *DownloadArtifactError
+			if !errors.As(err, &artifactFailure) || !errors.Is(err, ErrDriverIncompatible) || len(client.calls) != 1 {
+				t.Fatalf("Download() error = %v, calls = %#v; want one post-click artifact failure", err, client.calls)
+			}
+		})
+	}
+}
+
+func TestPlaywrightDownloadKeepsPredispatchFailureOrdinary(t *testing.T) {
+	for _, status := range []string{"stale_target", "unsupported_target"} {
+		t.Run(status, func(t *testing.T) {
+			client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+				"browser_run_code_unsafe": playwrightTextResult("### Result\nMINTCLAW_DL_V1|error|" + status),
+			}}
+			worker := &playwrightWorker{
+				client: client, outputDir: t.TempDir(), downloadReady: true,
+				limits: config.BrowserLimitsConfig{}.Effective(),
+			}
+			_, err := worker.Download(t.Context(), DriverAction{
+				Kind: DriverDownloadAction, Target: "e1", Element: "Download",
+			}, 1024)
+			var artifactFailure *DownloadArtifactError
+			if !errors.Is(err, ErrDriverIncompatible) || errors.As(err, &artifactFailure) {
+				t.Fatalf("Download() error = %v, want ordinary pre-dispatch failure", err)
+			}
+		})
+	}
+}
+
 func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {
@@ -784,7 +833,7 @@ func TestPlaywrightWorkerCapturesExactlyOneBoundedDownload(t *testing.T) {
 		}},
 	}
 	worker := &playwrightWorker{
-		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output,
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output, downloadReady: true,
 	}
 	download, err := worker.Download(context.Background(), DriverAction{
 		Kind: DriverDownloadAction, Target: "e7", Element: "Download",
@@ -823,6 +872,21 @@ func TestPlaywrightWorkerCapturesExactlyOneBoundedDownload(t *testing.T) {
 	}
 }
 
+func TestPlaywrightWorkerHidesDownloadWithoutSupportedBoundary(t *testing.T) {
+	client := &fakePlaywrightClient{}
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: t.TempDir(),
+	}
+	if worker.DownloadAvailable() {
+		t.Fatal("download reported available without a supported browser boundary")
+	}
+	if _, err := worker.Download(context.Background(), DriverAction{
+		Kind: DriverDownloadAction, Target: "e7", Element: "Download",
+	}, 1024); !errors.Is(err, ErrWorkerUnavailable) || len(client.calls) != 0 {
+		t.Fatalf("unsupported Download() error = %v; calls = %#v", err, client.calls)
+	}
+}
+
 func TestPlaywrightWorkerRejectsChunkBeforeWritingPastDownloadLimit(t *testing.T) {
 	output := t.TempDir()
 	oversize := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 2048))
@@ -833,7 +897,7 @@ func TestPlaywrightWorkerRejectsChunkBeforeWritingPastDownloadLimit(t *testing.T
 		}},
 	}
 	worker := &playwrightWorker{
-		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output,
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output, downloadReady: true,
 	}
 	_, err := worker.Download(context.Background(), DriverAction{
 		Kind: DriverDownloadAction, Target: "e7", Element: "Download",
@@ -859,7 +923,7 @@ func TestPlaywrightWorkerAcceptsNearLimitBinaryEncoding(t *testing.T) {
 		}},
 	}
 	worker := &playwrightWorker{
-		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output,
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(), outputDir: output, downloadReady: true,
 	}
 	download, err := worker.Download(context.Background(), DriverAction{
 		Kind: DriverDownloadAction, Target: "e7", Element: "Download",

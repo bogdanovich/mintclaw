@@ -28,6 +28,10 @@ type browserCaptureCommandHost interface {
 	Capture(context.Context, nodes.BrowserHostCaptureRequest) (nodes.BrowserOutputDescriptor, error)
 }
 
+type browserDownloadCommandHost interface {
+	Download(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserOutputDescriptor, error)
+}
+
 type browserCommandHandler struct {
 	command         string
 	descriptorValue nodes.CommandDescriptor
@@ -248,7 +252,32 @@ func (handler *browserCommandHandler) executeAct(
 		ArtifactSHA256: input.ArtifactSHA256, ArtifactBytes: input.ArtifactBytes,
 		ArtifactFilename: input.ArtifactFilename, ArtifactContentType: input.ArtifactContentType,
 		ApprovalDigest: input.ApprovalDigest,
-		AgentID:        invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+		WorkspaceID:    input.WorkspaceID, RouteID: input.RouteID, BrowserTarget: input.BrowserTarget,
+		AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+	}
+	if input.Action.Kind == "download" {
+		downloadHost, ok := handler.host.(browserDownloadCommandHost)
+		if !ok {
+			return nil, browserCommandFailure(nodes.ErrBrowserHostDenied)
+		}
+		output, downloadErr := downloadHost.Download(ctx, request)
+		if errors.Is(downloadErr, nodes.ErrBrowserHostArtifactUnavailable) {
+			return nodes.BrowserActResult{
+				ActionInvocationID: input.ActionInvocationID,
+				State:              "succeeded",
+			}, nil
+		}
+		if downloadErr != nil {
+			if errors.Is(downloadErr, nodes.ErrBrowserHostLost) {
+				return nil, fmt.Errorf("%w: browser action outcome is unknown", ErrInvocationOutcomeUnknown)
+			}
+			return nil, browserCommandFailure(downloadErr)
+		}
+		return nodes.BrowserActResult{
+			ActionInvocationID: input.ActionInvocationID,
+			State:              "succeeded",
+			Output:             &output,
+		}, nil
 	}
 	observation, err := handler.host.Act(ctx, request)
 	if err != nil {

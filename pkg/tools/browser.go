@@ -335,11 +335,15 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 		artifactTransferAvailable := tool.runtime.source.ArtifactTransferAvailable()
 		if !artifactTransferAvailable {
 			actions = slices.DeleteFunc(actions, func(action browser.ActionKind) bool {
-				return action == browser.ActionFileChooser || action == browser.ActionDownload
+				return action == browser.ActionFileChooser || action == browser.ActionUpload ||
+					action == browser.ActionDownload
 			})
 		}
 		uploadAvailable := capabilitiesAvailable && artifactTransferAvailable && diagnostics.Upload
-		downloadAvailable := uploadAvailable && diagnostics.Download
+		downloadAvailable := capabilitiesAvailable && artifactTransferAvailable && diagnostics.Download
+		if uploadAvailable && !slices.Contains(actions, browser.ActionUpload) {
+			actions = append(actions, browser.ActionUpload)
+		}
 		if uploadAvailable && !slices.Contains(actions, browser.ActionFileChooser) {
 			actions = append(actions, browser.ActionFileChooser)
 		}
@@ -1238,7 +1242,8 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 		fileChooserAvailable = tool.runtime.fileChooserAvailable()
 	}
 	actions = slices.DeleteFunc(actions, func(action browseraction.ActionKind) bool {
-		return action == browseraction.ActionFileChooser && !fileChooserAvailable ||
+		return (action == browseraction.ActionFileChooser || action == browseraction.ActionUpload) &&
+			!fileChooserAvailable ||
 			action == browseraction.ActionDownload && !downloadAvailable
 	})
 	actionSchema := browseraction.Schema(actions, limits.TextInputBytes, false)
@@ -1408,13 +1413,14 @@ func (tool *BrowserActTool) ApprovalArguments(ctx context.Context, args map[stri
 }
 
 type browserActionResult struct {
-	InvocationID string                      `json:"invocation_id"`
-	Effect       browser.Effect              `json:"effect"`
-	State        browser.InvocationState     `json:"state"`
-	Reason       string                      `json:"reason,omitempty"`
-	FailureClass browser.OutcomeFailureClass `json:"failure_class,omitempty"`
-	Observation  *browserObservationView     `json:"observation,omitempty"`
-	Artifact     *browser.DownloadArtifact   `json:"artifact,omitempty"`
+	InvocationID  string                      `json:"invocation_id"`
+	Effect        browser.Effect              `json:"effect"`
+	State         browser.InvocationState     `json:"state"`
+	Reason        string                      `json:"reason,omitempty"`
+	FailureClass  browser.OutcomeFailureClass `json:"failure_class,omitempty"`
+	Observation   *browserObservationView     `json:"observation,omitempty"`
+	Artifact      *browser.DownloadArtifact   `json:"artifact,omitempty"`
+	ArtifactState string                      `json:"artifact_state,omitempty"`
 }
 
 func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -1471,6 +1477,12 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 		result.FailureClass = invocation.Diagnostic.FailureClass
 	}
 	result.Artifact = invocation.Download
+	if preparation.Action.Action.Kind == browser.ActionDownload {
+		result.ArtifactState = "unavailable"
+		if invocation.Download != nil {
+			result.ArtifactState = "committed"
+		}
+	}
 	if invocation.State == browser.InvocationSucceeded {
 		var observation browser.Observation
 		var observeErr error
@@ -1602,7 +1614,7 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	if action.Kind == browser.ActionDownload && action.Deliver && !toolshared.ToolRecoverableOutbound(ctx) {
 		return browser.Preparation{}, browser.ErrDenied
 	}
-	if action.Kind == browser.ActionFileChooser &&
+	if (action.Kind == browser.ActionFileChooser || action.Kind == browser.ActionUpload) &&
 		!tool.runtime.source.ArtifactTransferAvailable() {
 		return browser.Preparation{}, browser.ErrDriverIncompatible
 	}

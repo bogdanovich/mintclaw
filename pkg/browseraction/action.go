@@ -35,6 +35,7 @@ const (
 	ActionHover       ActionKind = "hover"
 	ActionDrag        ActionKind = "drag"
 	ActionFileChooser ActionKind = "file_chooser"
+	ActionUpload      ActionKind = "upload"
 	ActionDownload    ActionKind = "download"
 )
 
@@ -52,6 +53,7 @@ var (
 		ActionHover,
 		ActionDrag,
 		ActionFileChooser,
+		ActionUpload,
 		ActionDownload,
 	}
 	currentKeys = [...]string{
@@ -161,7 +163,7 @@ func (action *Action) Validate(maxTextBytes int) error {
 		(action.Kind == ActionDialog && !validIdentifier(action.DialogID)) {
 		return fmt.Errorf("%w: malformed browser authority", ErrInvalid)
 	}
-	if (action.Kind != ActionFileChooser && action.ArtifactRef != "") ||
+	if (action.Kind != ActionFileChooser && action.Kind != ActionUpload && action.ArtifactRef != "") ||
 		(action.Kind != ActionDownload && action.Deliver) {
 		return fmt.Errorf("%w: malformed browser artifact action", ErrInvalid)
 	}
@@ -223,6 +225,14 @@ func (action *Action) Validate(maxTextBytes int) error {
 			action.PromptProvided || action.Deliver || action.SourceRef != "" || action.DestinationRef != "" ||
 			action.DialogID != "" {
 			return fmt.Errorf("%w: malformed file chooser action", ErrInvalid)
+		}
+	case ActionUpload:
+		if !validIdentifier(action.Ref) || !strings.HasPrefix(action.ArtifactRef, "transfer-artifact://") ||
+			len(action.ArtifactRef) > 512 || action.URL != "" || action.Target != "" || action.Value != "" ||
+			action.Key != "" || action.Direction != "" || action.Amount != 0 || action.Decision != "" ||
+			action.PromptProvided || action.Deliver || action.SourceRef != "" || action.DestinationRef != "" ||
+			action.DialogID != "" {
+			return fmt.Errorf("%w: malformed upload action", ErrInvalid)
 		}
 	case ActionDownload:
 		if !validIdentifier(action.Ref) || action.ArtifactRef != "" || action.URL != "" || action.Target != "" ||
@@ -336,7 +346,7 @@ func strictSchemaBranch(kind ActionKind, maxTextBytes int) map[string]any {
 		required = append(required, "dialog_id", "decision")
 	case ActionDrag:
 		required = append(required, "source_ref", "destination_ref")
-	case ActionFileChooser:
+	case ActionFileChooser, ActionUpload:
 		required = append(required, "ref", "artifact_ref")
 	}
 	branch["required"] = required
@@ -473,7 +483,7 @@ func schemaFields(kinds []ActionKind) schemaField {
 			fields |= schemaDialog | schemaValue
 		case ActionDrag:
 			fields |= schemaDragRefs
-		case ActionFileChooser:
+		case ActionFileChooser, ActionUpload:
 			fields |= schemaRef | schemaArtifact
 		case ActionDownload:
 			fields |= schemaRef | schemaDeliver

@@ -129,6 +129,15 @@ type PreparedActionStager interface {
 	StagePreparedAction(context.Context, WorkerPreparedAction) error
 }
 
+// PreparedDownloadWorker executes one accepted remote download against the
+// exact durable authority carried by WorkerPreparedAction. The returned file
+// is gateway-local: the remote worker must first transfer and commit the
+// immutable browser-owned output without replaying the page action.
+type PreparedDownloadWorker interface {
+	PreparedActionWorker
+	DownloadPrepared(context.Context, WorkerPreparedAction, int64) (DriverDownload, error)
+}
+
 type WorkerPreparedAction struct {
 	InvocationID string
 	Prepared     PreparedAction
@@ -181,10 +190,33 @@ type DriverDownload struct {
 	Size                                int64
 }
 
+// DownloadArtifactError means the accepted browser download completed, but
+// its immutable output could not be committed into gateway retention. The
+// action is terminal and must never be replayed; callers report artifact
+// availability separately from the action outcome.
+type DownloadArtifactError struct {
+	Err error
+}
+
+func (failure *DownloadArtifactError) Error() string {
+	return "browser download artifact is unavailable"
+}
+
+func (failure *DownloadArtifactError) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.Err
+}
+
 type TransferWorker interface {
 	ActionWorker
 	Upload(context.Context, DriverAction) error
 	Download(context.Context, DriverAction, int64) (DriverDownload, error)
+}
+
+type DownloadCapabilityWorker interface {
+	DownloadAvailable() bool
 }
 
 // NavigationCheckedUploadWorker performs the final driver-owned navigation
@@ -216,38 +248,38 @@ func (broker *Broker) PreparedAction(ctx context.Context, owner Owner, id string
 
 func (broker *Broker) RecoverableDownloadPreparation(
 	ctx context.Context, request PrepareActionRequest,
-) (Preparation, bool, error) {
+) (Preparation, InvocationState, bool, error) {
 	if request.Owner.Validate() != nil || !validIdentifier(request.RequestID) ||
 		!validIdentifier(request.SessionID) || !validIdentifier(request.TabID) ||
 		!validIdentifier(request.SnapshotID) || request.SnapshotGeneration == 0 ||
 		request.Action.Kind != ActionDownload ||
 		request.Action.Validate(broker.config.Limits.Effective().TextInputBytes) != nil {
-		return Preparation{}, false, ErrInvalid
+		return Preparation{}, "", false, ErrInvalid
 	}
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
 	preparedID := derivedIdentifier("prepared", request.Owner, request.SessionID, request.RequestID)
 	prepared, err := broker.store.GetPreparedAction(ctx, preparedID)
 	if errors.Is(err, ErrNotFound) {
-		return Preparation{}, false, nil
+		return Preparation{}, "", false, nil
 	}
 	if err != nil {
-		return Preparation{}, false, err
+		return Preparation{}, "", false, err
 	}
 	if prepared.Owner != request.Owner || prepared.SessionID != request.SessionID ||
 		prepared.TabID != request.TabID || prepared.SnapshotID != request.SnapshotID ||
 		prepared.SnapshotGeneration != request.SnapshotGeneration || prepared.Action != request.Action {
-		return Preparation{}, false, ErrConflict
+		return Preparation{}, "", false, ErrConflict
 	}
 	invocationID := derivedIdentifier("invocation", request.Owner, request.SessionID, request.RequestID)
 	invocation, err := broker.store.GetInvocation(ctx, invocationID)
 	if err != nil {
-		return Preparation{}, false, err
+		return Preparation{}, "", false, err
 	}
 	if invocation.State != InvocationAccepted && invocation.State != InvocationSucceeded {
-		return Preparation{}, false, nil
+		return Preparation{}, "", false, nil
 	}
-	return preparationView(prepared), true, nil
+	return preparationView(prepared), invocation.State, true, nil
 }
 
 func (broker *Broker) RecoverAcceptedDownload(
