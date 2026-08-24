@@ -57,7 +57,7 @@ func (c *Config) ValidateModelReferences() error {
 	}
 
 	for index, model := range c.ModelList {
-		if model == nil || !model.Enabled {
+		if model == nil {
 			continue
 		}
 		path := fmt.Sprintf("model_list[%d]", index)

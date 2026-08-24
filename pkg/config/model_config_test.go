@@ -519,6 +519,14 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 			wantErr: `model_list[0].fallbacks[0] references unknown or disabled model_name "openai/gpt-5.4"`,
 		},
 		{
+			name: "disabled model fallback",
+			mutate: func(cfg *Config) {
+				cfg.ModelList[0].Enabled = false
+				cfg.ModelList[0].Fallbacks = []string{"unknown"}
+			},
+			wantErr: `model_list[0].fallbacks[0] references unknown or disabled model_name "unknown"`,
+		},
+		{
 			name: "vision model",
 			mutate: func(cfg *Config) {
 				cfg.ModelList[0].Capabilities = &ModelCapabilities{Vision: &ModelCapabilityOverride{Model: "unknown"}}
@@ -533,6 +541,16 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 				}}
 			},
 			wantErr: `model_list[0].capabilities.vision.fallbacks[0] references unknown or disabled model_name "unknown"`,
+		},
+		{
+			name: "disabled model vision selector",
+			mutate: func(cfg *Config) {
+				cfg.ModelList[0].Enabled = false
+				cfg.ModelList[0].Capabilities = &ModelCapabilities{
+					Vision: &ModelCapabilityOverride{Model: "unknown"},
+				}
+			},
+			wantErr: `model_list[0].capabilities.vision.model references unknown or disabled model_name "unknown"`,
 		},
 		{
 			name: "routing light model",
@@ -644,6 +662,40 @@ func TestLoadConfigRejectsUnknownModelReferenceWithoutRewriting(t *testing.T) {
 	_, err := LoadConfig(path)
 	if err == nil || !strings.Contains(err.Error(),
 		`agents.defaults.model_name references unknown or disabled model_name "openai/gpt-5.4"`) {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("LoadConfig() rewrote rejected config:\n%s", after)
+	}
+}
+
+func TestLoadConfigRejectsDormantModelReferenceWithoutRewriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	before := []byte(`{
+		"version": 3,
+		"agents": {"defaults": {"model_name": "primary"}},
+		"model_list": [
+			{"model_name": "primary", "provider": "openai", "model": "gpt-5.4", "enabled": true},
+			{
+				"model_name": "dormant",
+				"provider": "openai",
+				"model": "gpt-5.4-mini",
+				"enabled": false,
+				"fallbacks": ["missing"]
+			}
+		]
+	}`)
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := LoadConfig(path)
+	if err == nil || !strings.Contains(err.Error(),
+		`model_list[1].fallbacks[0] references unknown or disabled model_name "missing"`) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	after, readErr := os.ReadFile(path)

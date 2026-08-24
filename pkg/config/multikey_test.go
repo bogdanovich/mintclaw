@@ -9,6 +9,7 @@ func TestExpandMultiKeyModels_SingleKey(t *testing.T) {
 		{
 			ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
 			APIKeys: SimpleSecureStrings("single-key"),
+			Enabled: true,
 		},
 	}
 
@@ -31,12 +32,33 @@ func TestExpandMultiKeyModels_SingleKey(t *testing.T) {
 	}
 }
 
+func TestExpandMultiKeyModels_DisabledDoesNotExpand(t *testing.T) {
+	model := &ModelConfig{
+		ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
+		APIKeys: SimpleSecureStrings("key0", "key1"),
+		Enabled: false,
+	}
+
+	result := expandMultiKeyModels([]*ModelConfig{model})
+
+	if len(result) != 1 {
+		t.Fatalf("expected one dormant model, got %d", len(result))
+	}
+	if result[0] != model {
+		t.Fatal("disabled model should retain its persisted entry")
+	}
+	if len(result[0].Fallbacks) != 0 {
+		t.Fatalf("disabled model fallbacks = %v, want none generated", result[0].Fallbacks)
+	}
+}
+
 func TestExpandMultiKeyModels_APIKeysOnly(t *testing.T) {
 	models := []*ModelConfig{
 		{
 			ModelName: "glm-4.7", Provider: "zhipu", Model: "glm-4.7",
 			APIBase: "https://api.example.com",
 			APIKeys: SimpleSecureStrings("key1", "key2", "key3"),
+			Enabled: true,
 		},
 	}
 
@@ -89,6 +111,7 @@ func TestExpandMultiKeyModels_APIKeyAndAPIKeys(t *testing.T) {
 		{
 			ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
 			APIKeys: SimpleSecureStrings("key0", "key1", "key2"),
+			Enabled: true,
 		},
 	}
 
@@ -112,6 +135,7 @@ func TestExpandMultiKeyModels_APIKeyAndAPIKeys(t *testing.T) {
 func TestExpandMultiKeyModels_WithExistingFallbacks(t *testing.T) {
 	modelCfg := &ModelConfig{
 		ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
+		Enabled: true,
 	}
 	modelCfg.APIKeys = SimpleSecureStrings("key0", "key1") // Use internal field for multi-key testing
 	modelCfg.Fallbacks = []string{"claude-3"}
@@ -139,6 +163,7 @@ func TestExpandMultiKeyModels_EmptyAPIKeys(t *testing.T) {
 		{
 			ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
 			APIKeys: SimpleSecureStrings(),
+			Enabled: true,
 		},
 	}
 
@@ -159,6 +184,7 @@ func TestExpandMultiKeyModels_Deduplication(t *testing.T) {
 		{
 			ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
 			APIKeys: SimpleSecureStrings("key1", "key2", "key1"), // Duplicate key1
+			Enabled: true,
 		},
 	}
 
@@ -257,6 +283,7 @@ func TestExpandMultiKeyModels_PreservesOtherFields(t *testing.T) {
 func TestExpandMultiKeyModels_PreservesCapabilities(t *testing.T) {
 	modelCfg := &ModelConfig{
 		ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
+		Enabled: true,
 		Capabilities: &ModelCapabilities{
 			Vision: &ModelCapabilityOverride{
 				Model:     "openai/gpt-4.1-mini",
@@ -290,6 +317,7 @@ func TestExpandMultiKeyModels_IsVirtualFlag(t *testing.T) {
 		{
 			ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
 			APIKeys: SimpleSecureStrings("key1", "key2", "key3"),
+			Enabled: true,
 		},
 	}
 
@@ -340,6 +368,7 @@ func TestExpandMultiKeyModels_SingleKey_NotVirtual(t *testing.T) {
 		{
 			ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o",
 			APIKeys: SimpleSecureStrings("single-key"),
+			Enabled: true,
 		},
 	}
 

@@ -482,6 +482,12 @@ func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {
 	var expanded []*ModelConfig
 
 	for _, m := range models {
+		// Dormant entries do not participate in runtime selection, so keep their
+		// persisted shape instead of manufacturing disabled fallback aliases.
+		if m == nil || !m.Enabled {
+			expanded = append(expanded, m)
+			continue
+		}
 		keys := m.APIKeys.Values()
 
 		// Single key or no keys: keep as-is
