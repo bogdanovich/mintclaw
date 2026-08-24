@@ -1744,9 +1744,18 @@ func TestBrowserActRequiresDeclaredEffectOnlyForClicks(t *testing.T) {
 	extra := maps.Clone(base)
 	extra["action"] = map[string]any{"kind": "scroll", "direction": "down", "amount": 1}
 	extra["effect"] = "read"
-	if result := tool.Execute(browserToolTestContext(), extra); result == nil || !result.IsError ||
-		!strings.Contains(result.ForLLM, `"code":"invalid_request"`) {
-		t.Fatalf("non-click effect result = %#v", result)
+	if _, err := tool.prepare(browserToolTestContext(), extra); err != nil {
+		t.Fatalf("prepare redundant non-click effect error = %v", err)
+	}
+	if source.prepareRequest.DeclaredEffect != "" {
+		t.Fatalf("redundant non-click effect reached broker = %q", source.prepareRequest.DeclaredEffect)
+	}
+	projected, err := tool.CanonicalArguments(extra)
+	if err != nil {
+		t.Fatalf("CanonicalArguments() error = %v", err)
+	}
+	if _, present := projected["effect"]; present {
+		t.Fatalf("canonical non-click arguments retain effect: %#v", projected)
 	}
 }
 
