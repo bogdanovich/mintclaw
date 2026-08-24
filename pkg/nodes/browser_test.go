@@ -1231,6 +1231,12 @@ func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
 		"missing snapshot": []byte(`{"elements":[]}`),
 		"missing elements": []byte(`{"snapshot":"page"}`),
 		"null elements":    []byte(`{"snapshot":"page","elements":null}`),
+		"missing ref":      []byte(`{"snapshot":"page","elements":[{"role":"button","name":"Save"}]}`),
+		"null ref":         []byte(`{"snapshot":"page","elements":[{"ref":null,"role":"button","name":"Save"}]}`),
+		"missing role":     []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","name":"Save"}]}`),
+		"null role":        []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":null,"name":"Save"}]}`),
+		"missing name":     []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button"}]}`),
+		"null name":        []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","name":null}]}`),
 		"duplicate ref": []byte(
 			`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","name":"Save"},` +
 				`{"ref":"ref_1","role":"button","name":"Save again"}]}`,
@@ -1245,6 +1251,16 @@ func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
 				t.Fatalf("DecodeBrowserSnapshotPayload() accepted %#v", decoded)
 			}
 		})
+	}
+}
+
+func TestDecodeBrowserSnapshotPayloadPreservesPresentEmptyElementStrings(t *testing.T) {
+	decoded, err := DecodeBrowserSnapshotPayload(
+		[]byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":"","name":""}]}`),
+		BrowserLimits{}.Effective(),
+	)
+	if err != nil || len(decoded.Elements) != 1 || decoded.Elements[0].Role != "" || decoded.Elements[0].Name != "" {
+		t.Fatalf("DecodeBrowserSnapshotPayload() = %#v, %v", decoded, err)
 	}
 }
 

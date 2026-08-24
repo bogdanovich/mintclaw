@@ -966,8 +966,12 @@ func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSna
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
 	}
 	var value struct {
-		Snapshot *string           `json:"snapshot"`
-		Elements *[]BrowserElement `json:"elements"`
+		Snapshot *string `json:"snapshot"`
+		Elements *[]struct {
+			Ref  *string `json:"ref"`
+			Role *string `json:"role"`
+			Name *string `json:"name"`
+		} `json:"elements"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -980,13 +984,20 @@ func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSna
 	if value.Snapshot == nil || value.Elements == nil {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: incomplete browser snapshot payload", ErrInvalidInvocation)
 	}
-	payload := BrowserSnapshotPayload{Snapshot: *value.Snapshot, Elements: *value.Elements}
-	if !utf8.ValidString(payload.Snapshot) || len(payload.Snapshot) > limits.SnapshotBytes ||
-		len(payload.Elements) > limits.SnapshotRefs {
+	if !utf8.ValidString(*value.Snapshot) || len(*value.Snapshot) > limits.SnapshotBytes ||
+		len(*value.Elements) > limits.SnapshotRefs {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
 	}
-	seen := make(map[string]struct{}, len(payload.Elements))
-	for _, element := range payload.Elements {
+	payload := BrowserSnapshotPayload{
+		Snapshot: *value.Snapshot,
+		Elements: make([]BrowserElement, 0, len(*value.Elements)),
+	}
+	seen := make(map[string]struct{}, len(*value.Elements))
+	for _, value := range *value.Elements {
+		if value.Ref == nil || value.Role == nil || value.Name == nil {
+			return BrowserSnapshotPayload{}, fmt.Errorf("%w: incomplete browser snapshot element", ErrInvalidInvocation)
+		}
+		element := BrowserElement{Ref: *value.Ref, Role: *value.Role, Name: *value.Name}
 		if !validInvocationIdentifier(element.Ref) || !utf8.ValidString(element.Role) ||
 			!utf8.ValidString(element.Name) || len(element.Role) > 128 || len(element.Name) > 4096 {
 			return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot element", ErrInvalidInvocation)
@@ -995,6 +1006,7 @@ func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSna
 			return BrowserSnapshotPayload{}, fmt.Errorf("%w: duplicate browser snapshot element", ErrInvalidInvocation)
 		}
 		seen[element.Ref] = struct{}{}
+		payload.Elements = append(payload.Elements, element)
 	}
 	return payload, nil
 }
