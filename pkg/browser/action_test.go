@@ -47,6 +47,23 @@ type actionTestWorker struct {
 	humanControl           bool
 	beginHumanErr          error
 	endHumanErr            error
+	diagnostics            DiagnosticSummary
+	diagnosticsErr         error
+	diagnosticsCalls       int
+	diagnosticCategories   []DiagnosticCategory
+	onDiagnostics          func()
+}
+
+func (worker *actionTestWorker) Diagnostics(
+	_ context.Context,
+	categories []DiagnosticCategory,
+) (DiagnosticSummary, error) {
+	worker.diagnosticsCalls++
+	worker.diagnosticCategories = append([]DiagnosticCategory(nil), categories...)
+	if worker.onDiagnostics != nil {
+		worker.onDiagnostics()
+	}
+	return worker.diagnostics, worker.diagnosticsErr
 }
 
 func (worker *actionTestWorker) AuthorizeFill(
@@ -2876,6 +2893,79 @@ func TestObserveDoesNotProbeWorkerStatusBeforeReconnectableFailure(t *testing.T)
 func openActionTestBroker(t *testing.T, store Store) (*Broker, *actionTestWorker, Session) {
 	t.Helper()
 	return openActionTestBrokerWithConfig(t, admittedBrowserConfig(), store)
+}
+
+func TestBrokerDiagnosticsUsesFreshOwnedSessionWithoutDurableMutation(t *testing.T) {
+	store := NewMemoryStore()
+	broker, worker, session := openActionTestBroker(t, store)
+	owner := testOwner()
+	worker.diagnostics = DiagnosticSummary{Categories: []DiagnosticCategorySummary{
+		{
+			Category: DiagnosticConsoleErrors, Count: 1,
+			Entries: []DiagnosticEntry{{
+				Timestamp: 1, Severity: "error", Origin: "https://example.com", Path: "/safe",
+				MessageHash: strings.Repeat("a", 64),
+			}},
+		},
+		{Category: DiagnosticPageCrashes, Entries: []DiagnosticEntry{}},
+	}}
+	before, err := broker.Status(context.Background(), owner, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary, err := broker.Diagnostics(context.Background(), DiagnosticsRequest{
+		Owner: owner, SessionID: session.ID,
+		Categories: []DiagnosticCategory{DiagnosticPageCrashes, DiagnosticConsoleErrors},
+	})
+	if err != nil {
+		t.Fatalf("Diagnostics() error = %v", err)
+	}
+	after, err := broker.Status(context.Background(), owner, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Revision != after.Revision || before.UpdatedAt != after.UpdatedAt {
+		t.Fatalf("diagnostics mutated durable session: before=%+v after=%+v", before, after)
+	}
+	wantCategories := []DiagnosticCategory{DiagnosticConsoleErrors, DiagnosticPageCrashes}
+	if !reflect.DeepEqual(worker.diagnosticCategories, wantCategories) || worker.diagnosticsCalls != 1 {
+		t.Fatalf("worker diagnostics = %#v, calls %d", worker.diagnosticCategories, worker.diagnosticsCalls)
+	}
+	if summary.SessionID != session.ID || summary.TabID != session.TabID ||
+		len(summary.Categories) != 2 || summary.Categories[0].Category != DiagnosticConsoleErrors {
+		t.Fatalf("Diagnostics() = %+v", summary)
+	}
+	observation, err := broker.Observe(context.Background(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.diagnostics.Categories = worker.diagnostics.Categories[:1]
+	bound := DiagnosticsRequest{
+		Owner: owner, SessionID: session.ID, TabID: observation.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Categories: []DiagnosticCategory{DiagnosticConsoleErrors},
+	}
+	if _, err = broker.Diagnostics(context.Background(), bound); err != nil {
+		t.Fatalf("fresh bound Diagnostics() error = %v", err)
+	}
+	worker.onDiagnostics = func() { worker.navigationID = "navigation_2" }
+	if _, err = broker.Diagnostics(context.Background(), bound); !errors.Is(err, ErrStale) {
+		t.Fatalf("document-changed bound Diagnostics() error = %v", err)
+	}
+	worker.onDiagnostics = nil
+	worker.navigationID = "navigation_1"
+	bound.SnapshotGeneration++
+	if _, err = broker.Diagnostics(context.Background(), bound); !errors.Is(err, ErrStale) {
+		t.Fatalf("stale bound Diagnostics() error = %v", err)
+	}
+	wrongOwner := owner
+	wrongOwner.ExecutionID = "other_execution"
+	if _, err = broker.Diagnostics(context.Background(), DiagnosticsRequest{
+		Owner: wrongOwner, SessionID: session.ID,
+		Categories: []DiagnosticCategory{DiagnosticConsoleErrors},
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("wrong-owner Diagnostics() error = %v", err)
+	}
 }
 
 func openActionTestBrokerWithConfig(

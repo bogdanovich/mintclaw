@@ -37,20 +37,21 @@ type playwrightCall struct {
 }
 
 type fakePlaywrightClient struct {
-	mu          sync.Mutex
-	catalog     []*sdkmcp.Tool
-	connectErr  error
-	connectCtx  context.Context
-	connectName string
-	connectCfg  config.MCPServerConfig
-	pingErr     error
-	calls       []playwrightCall
-	callErrors  map[string]error
-	callResults map[string]*sdkmcp.CallToolResult
-	callQueues  map[string][]*sdkmcp.CallToolResult
-	onCall      func(string)
-	closeErr    error
-	closeCalls  int
+	mu                  sync.Mutex
+	catalog             []*sdkmcp.Tool
+	connectErr          error
+	connectCtx          context.Context
+	connectName         string
+	connectCfg          config.MCPServerConfig
+	pingErr             error
+	calls               []playwrightCall
+	callErrors          map[string]error
+	callResults         map[string]*sdkmcp.CallToolResult
+	callQueues          map[string][]*sdkmcp.CallToolResult
+	onCall              func(string)
+	closeErr            error
+	closeCalls          int
+	diagnosticInitCalls int
 }
 
 func (client *fakePlaywrightClient) Connect(
@@ -73,6 +74,12 @@ func (client *fakePlaywrightClient) CallTool(
 	tool string,
 	arguments map[string]any,
 ) (*sdkmcp.CallToolResult, error) {
+	if tool == "browser_run_code_unsafe" && arguments["code"] == playwrightDiagnosticsInitCode {
+		client.mu.Lock()
+		client.diagnosticInitCalls++
+		client.mu.Unlock()
+		return playwrightTextResult("### Result\n\"MINTCLAW_DIAGNOSTICS_INIT_V1|ok\""), nil
+	}
 	cloned := make(map[string]any, len(arguments))
 	for key, value := range arguments {
 		cloned[key] = value
@@ -100,6 +107,78 @@ func (client *fakePlaywrightClient) CallTool(
 		return result, nil
 	}
 	return playwrightTextResult("ok"), nil
+}
+
+func TestPlaywrightWorkerDiagnosticsParsesOnlyBoundedSafeSummary(t *testing.T) {
+	payload := `{"categories":[{"category":"console_errors","count":1,"omitted_count":0,"truncated":false,"entries":[{"timestamp":1,"severity":"error","origin":"https://example.com","path":"/safe","line":7,"message_hash":"` + strings.Repeat(
+		"a",
+		64,
+	) + `"}]}],"truncated":false}`
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult(
+			"### Result\nMINTCLAW_DIAGNOSTICS_RESULT_V1|ok|" + url.QueryEscape(payload),
+		),
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	summary, err := worker.Diagnostics(t.Context(), []DiagnosticCategory{DiagnosticConsoleErrors})
+	if err != nil {
+		t.Fatalf("Diagnostics() error = %v", err)
+	}
+	if len(summary.Categories) != 1 || summary.Categories[0].Entries[0].Path != "/safe" || worker.lost {
+		t.Fatalf("Diagnostics() = %+v, lost=%v", summary, worker.lost)
+	}
+	if len(client.calls) != 1 || client.calls[0].tool != "browser_run_code_unsafe" ||
+		!strings.Contains(client.calls[0].arguments["code"].(string), "MINTCLAW_DIAGNOSTICS_RESULT_V1") {
+		t.Fatalf("calls = %#v", client.calls)
+	}
+}
+
+func TestPlaywrightWorkerDiagnosticsRejectsUnsafeDriverOutput(t *testing.T) {
+	payload := `{"categories":[{"category":"failed_requests","count":1,"omitted_count":0,"truncated":false,"entries":[{"timestamp":1,"origin":"https://example.com?secret=canary","path":"/safe"}]}],"truncated":false}`
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult(
+			"### Result\nMINTCLAW_DIAGNOSTICS_RESULT_V1|ok|" + url.QueryEscape(payload),
+		),
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	if _, err := worker.Diagnostics(
+		t.Context(),
+		[]DiagnosticCategory{DiagnosticFailedRequests},
+	); !errors.Is(err, ErrDriverIncompatible) ||
+		!worker.lost {
+		t.Fatalf("Diagnostics() error = %v, lost=%v", err, worker.lost)
+	}
+}
+
+func diagnosticSummaryHasOversizeLocation(summary DiagnosticSummary) bool {
+	for _, category := range summary.Categories {
+		for _, entry := range category.Entries {
+			if len(entry.Origin) > MaxURLBytes || len(entry.Path) > MaxURLBytes {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestPlaywrightDiagnosticsReducerBoundsSourceDataAndRequestState(t *testing.T) {
+	for _, invariant := range []string{
+		"let remaining = 8192",
+		"args.slice(0, 16)",
+		"truncateUTF8(raw, 65536)",
+		"if (state.requests.size >= 256)",
+		"const diagnosticURLBytes = " + strconv.Itoa(MaxURLBytes),
+	} {
+		if !strings.Contains(playwrightDiagnosticsInitCode, invariant) {
+			t.Fatalf("diagnostics reducer lacks source bound %q", invariant)
+		}
+	}
+	if count := strings.Count(playwrightDiagnosticsInitCode, "state.requests.set("); count != 1 {
+		t.Fatalf("diagnostics reducer has %d request-map insertion paths, want 1 bounded path", count)
+	}
+	if strings.Contains(playwrightDiagnosticsInitCode, "4096") {
+		t.Fatal("diagnostics reducer retained a URL limit above the shared Go contract")
+	}
 }
 
 func TestPlaywrightWorkerUsesMonotonicCDPNavigationIdentity(t *testing.T) {
@@ -2248,6 +2327,21 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	var privateProbeRequests atomic.Int64
 	var privateProbeURL string
 	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/diagnostic-long/") {
+			http.Error(writer, "long diagnostic path", http.StatusServiceUnavailable)
+			return
+		}
+		if request.URL.Path == "/diagnostic-failure" {
+			if hijacker, ok := writer.(http.Hijacker); ok {
+				connection, _, hijackErr := hijacker.Hijack()
+				if hijackErr == nil {
+					_ = connection.Close()
+					return
+				}
+			}
+			http.Error(writer, "diagnostic failure", http.StatusServiceUnavailable)
+			return
+		}
 		if request.URL.Path == "/download" {
 			writer.Header().Set("Content-Disposition", `attachment; filename="bounded.txt"`)
 			writer.Header().Set("Content-Type", "text/plain")
@@ -2295,7 +2389,13 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 		if request.URL.Path == "/private-subresource-page" {
 			privateImage = fmt.Sprintf(`<img src="%s" alt="private probe">`, privateProbeURL)
 		}
+		longDiagnosticPath := strings.Repeat("x", MaxURLBytes+512)
 		_, _ = fmt.Fprintf(writer, `<!doctype html><title>MintClaw Fixture</title>
+<script>
+console.error("diagnostic-console-secret-canary");
+fetch("/diagnostic-failure?credential=diagnostic-query-secret-canary").catch(() => {});
+fetch("/diagnostic-long/%s").catch(() => {});
+</script>
 <form onsubmit="event.preventDefault(); document.querySelector('output').textContent='Saved '+document.querySelector('input').value">
 <label>Name <input aria-label="Name"></label>
 <label>Race name <input id="race-name" aria-label="Race name"></label>
@@ -2313,7 +2413,7 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 <div role="list" aria-label="Done" ondragover="event.preventDefault()"
  ondrop="event.preventDefault(); document.querySelector('#drag-result').textContent=event.dataTransfer.getData('text/plain')">
 Done</div><output id="drag-result"></output>
-%s<div style="height:2000px"></div>`, privateImage)
+%s<div style="height:2000px"></div>`, longDiagnosticPath, privateImage)
 	}))
 	defer fixture.Close()
 	privateProbeURL = fixture.URL + "/private-probe"
@@ -2388,6 +2488,18 @@ Done</div><output id="drag-result"></output>
 	fixtureNavigation, err := worker.NavigationIdentity(ctx)
 	if err != nil || fixtureNavigation == blankNavigation {
 		t.Fatalf("navigated NavigationIdentity() = %q, initial %q, error %v", fixtureNavigation, blankNavigation, err)
+	}
+	diagnostics, err := worker.Diagnostics(ctx, []DiagnosticCategory{
+		DiagnosticConsoleErrors, DiagnosticFailedRequests, DiagnosticPageCrashes,
+	})
+	diagnosticsJSON, marshalErr := json.Marshal(diagnostics)
+	if err != nil || marshalErr != nil || len(diagnostics.Categories) != 3 ||
+		diagnostics.Categories[0].Count < 1 || diagnostics.Categories[1].Count < 1 ||
+		diagnosticSummaryHasOversizeLocation(diagnostics) || worker.lost ||
+		bytes.Contains(diagnosticsJSON, []byte("diagnostic-console-secret-canary")) ||
+		bytes.Contains(diagnosticsJSON, []byte("diagnostic-query-secret-canary")) ||
+		bytes.Contains(diagnosticsJSON, []byte("credential=")) {
+		t.Fatalf("Diagnostics() = %s, %v, marshal %v", diagnosticsJSON, err, marshalErr)
 	}
 	pushStateResult, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
 		"code": `async (page) => {
@@ -2784,6 +2896,9 @@ Done</div><output id="drag-result"></output>
 		t.Fatalf("read output directory: %v", readErr)
 	}
 	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "console-") && strings.HasSuffix(entry.Name(), ".log") {
+			continue
+		}
 		info, infoErr := entry.Info()
 		if infoErr != nil || info.Size() > 1024 {
 			t.Fatalf("output after oversize download = %q, %#v, %v", entry.Name(), info, infoErr)

@@ -573,11 +573,20 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		llm.response,
 		llm.callMessages,
 	)
+	sensitiveDiagnosticResponse = sensitiveDiagnosticResponse || llm.protectedDiagnosticContext
+	if sensitiveDiagnosticResponse {
+		diagnosticResponseContent = ""
+		diagnosticResponseReasoning = ""
+	}
+	diagnosticResponseHash := diagnosticSafeHash(p.Cfg, llm.response.Content)
+	if sensitiveDiagnosticResponse {
+		diagnosticResponseHash = diagnosticSafeHash(p.Cfg, protectedTurnFinalDiagnosticReceipt)
+	}
 	p.emitEvent(
 		runtimeevents.KindAgentLLMResponse,
 		ts.eventMeta("runTurn", "turn.llm.response"),
 		LLMResponsePayload{
-			ResponseHash:     diagnosticSafeHash(p.Cfg, llm.response.Content),
+			ResponseHash:     diagnosticResponseHash,
 			ContentLen:       len(llm.response.Content),
 			ToolCalls:        len(llm.response.ToolCalls),
 			HasReasoning:     llm.response.Reasoning != "" || llm.response.ReasoningContent != "",
@@ -656,7 +665,10 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 				"iteration":     iteration,
 				"content_chars": len(responseContent),
 			})
-		return LLMCallOutcome{Control: ControlBreak, FinalContent: responseContent}, nil
+		return LLMCallOutcome{
+			Control: ControlBreak, FinalContent: responseContent,
+			FinalContentProtected: sensitiveDiagnosticResponse,
+		}, nil
 	}
 	cancelConfiguredStreamingLLM(turnCtx, llm)
 

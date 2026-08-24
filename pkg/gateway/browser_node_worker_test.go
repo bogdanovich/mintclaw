@@ -37,6 +37,7 @@ type browserNodeTestHandler struct {
 	redactNextActObservation bool
 	redactNextObservation    bool
 	redactNextContext        bool
+	redactNextDiagnostics    bool
 	dynamicContextCatalog    bool
 	closeFailureCode         string
 }
@@ -83,7 +84,7 @@ func (handler *browserNodeTestHandler) Invoke(
 		result = nodes.BrowserSessionResult{
 			SessionID: input.SessionID, State: "ready", TabID: "tab_primary", Controller: "agent",
 			Features: nodes.BrowserHostFeatures{
-				Observe: true, Navigate: true, Contexts: true, Download: true,
+				Observe: true, Navigate: true, Contexts: true, Download: true, Diagnostics: true,
 			},
 			ExpiresAt: time.Now().Add(time.Hour).Unix(), IdleExpiresAt: time.Now().Add(time.Minute).Unix(),
 		}
@@ -109,6 +110,30 @@ func (handler *browserNodeTestHandler) Invoke(
 		if handler.redactNextObservation {
 			result = nodes.BrowserObservationResult{ProtectedResult: true}
 			handler.redactNextObservation = false
+		}
+	case nodes.BrowserCommandDiagnostics:
+		var input nodes.BrowserDiagnosticsInput
+		_ = json.Unmarshal(plan.Input, &input)
+		categories := make([]nodes.BrowserDiagnosticCategory, len(input.Categories))
+		for index, category := range input.Categories {
+			categories[index] = nodes.BrowserDiagnosticCategory{
+				Category: category, Entries: []nodes.BrowserDiagnosticEntry{},
+			}
+			if category == "console_errors" {
+				categories[index].Count = 1
+				categories[index].Entries = []nodes.BrowserDiagnosticEntry{{
+					Timestamp: 1, Severity: "error", Origin: "https://example.com", Path: "/safe",
+					MessageHash: strings.Repeat("a", 64),
+				}}
+			}
+		}
+		result = nodes.BrowserDiagnosticsResult{
+			SessionID: input.SessionID, TabID: input.TabID,
+			SnapshotGeneration: input.SnapshotGeneration, Categories: categories,
+		}
+		if handler.redactNextDiagnostics {
+			result = nodes.BrowserDiagnosticsResult{ProtectedResult: true}
+			handler.redactNextDiagnostics = false
 		}
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
@@ -388,6 +413,42 @@ func TestGatewayBrowserWorkerRefreshesRecoveredObservationWithFreshInvocation(t 
 		nodes.BrowserCommandSessionOpen,
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandObserve,
+	}
+	if !slices.Equal(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestGatewayBrowserWorkerRefreshesProtectedDiagnosticsWithFreshInvocation(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	handler.redactNextDiagnostics = true
+	summary, err := worker.Diagnostics(t.Context(), []browser.DiagnosticCategory{browser.DiagnosticConsoleErrors})
+	if err != nil || len(summary.Categories) != 1 || summary.Categories[0].Entries[0].Path != "/safe" {
+		t.Fatalf("recovered diagnostics = %#v, %v", summary, err)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	handler.mu.Unlock()
+	want := []string{
+		nodes.BrowserCommandSessionOpen,
+		nodes.BrowserCommandDiagnostics,
+		nodes.BrowserCommandDiagnostics,
 	}
 	if !slices.Equal(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
@@ -1054,6 +1115,49 @@ func TestGatewayBrowserWorkerReadinessRequiresAllApprovedTypedCommands(t *testin
 	}
 }
 
+func TestGatewayBrowserDiagnosticsCapabilityIsIndependentFromCoreReadiness(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := make([]string, 0, len(handler.registration.AllowedCommands)-1)
+	for _, command := range handler.registration.AllowedCommands {
+		if command != nodes.BrowserCommandDiagnostics {
+			allowed = append(allowed, command)
+		}
+	}
+	if _, err = runtime.registry.Approve(handler.registration.Snapshot.ID, nodes.PairingApproval{
+		Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: allowed,
+		At: time.Now().Add(time.Second).Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := factory.(*gatewayBrowserWorkerFactory).PassiveTargetDiagnostics(
+		t.Context(), "companion", []string{"managed"},
+	)
+	if err != nil || diagnostics.Profiles["managed"].Status != browser.ReadinessReady ||
+		!diagnostics.Contexts || diagnostics.Diagnostics || len(diagnostics.Actions) == 0 {
+		t.Fatalf("target diagnostics = %#v, %v", diagnostics, err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatalf("core browser open failed without diagnostics approval: %v", err)
+	}
+	if _, err = opened.Owner.(*nodeBrowserWorker).Diagnostics(
+		t.Context(), []browser.DiagnosticCategory{browser.DiagnosticConsoleErrors},
+	); !errors.Is(err, browser.ErrDenied) {
+		t.Fatalf("unapproved Diagnostics() error = %v", err)
+	}
+}
+
 type readyLocalBrowserFactory struct{}
 
 func (*readyLocalBrowserFactory) Open(
@@ -1070,6 +1174,8 @@ func (*readyLocalBrowserFactory) PassiveReadiness() browser.DriverReadiness {
 		Compatibility: browser.CompatibilityCompatible,
 	}
 }
+
+func (*readyLocalBrowserFactory) DiagnosticsAvailable() bool { return true }
 
 func TestGatewayLocalDiagnosticsHideDragFromDryRunAndMixedProfiles(t *testing.T) {
 	cfg, _, _ := browserNodeTestRuntime(t)

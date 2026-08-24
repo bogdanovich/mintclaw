@@ -342,15 +342,15 @@ func TestBrokerPassiveTargetDiagnosticsUsesOneFactorySnapshot(t *testing.T) {
 		diagnostics: TargetDiagnostics{
 			Actions:  []ActionKind{ActionNavigate, ActionScroll},
 			Profiles: map[string]DriverReadiness{"managed": ready},
-			Contexts: true,
+			Contexts: true, Diagnostics: true,
 		},
 	}
 	broker := newTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)
-	actions, profiles, contexts, err := broker.PassiveTargetDiagnostics(
+	actions, profiles, contexts, diagnostics, err := broker.PassiveTargetDiagnostics(
 		context.Background(), "gateway", []string{"managed"},
 	)
 	if err != nil || !slices.Equal(actions, []ActionKind{ActionNavigate, ActionScroll}) ||
-		profiles["managed"].Status != ReadinessReady || !contexts || factory.diagnosticCalls != 1 ||
+		profiles["managed"].Status != ReadinessReady || !contexts || !diagnostics || factory.diagnosticCalls != 1 ||
 		factory.readinessCalls != 0 {
 		t.Fatalf("diagnostics = %#v, %#v, %v; factory = %#v", actions, profiles, err, factory)
 	}

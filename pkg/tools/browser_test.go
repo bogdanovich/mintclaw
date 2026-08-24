@@ -39,6 +39,7 @@ type fakeBrowserToolSource struct {
 	contextCatalog        browser.ContextCatalog
 	contextPreparation    browser.ContextPreparation
 	contextResult         browser.ContextResult
+	diagnostics           browser.DiagnosticSummary
 	err                   error
 	observeErrors         []error
 	executeErr            error
@@ -62,6 +63,7 @@ type fakeBrowserToolSource struct {
 	prepareCalls           int
 	executeCalls           int
 	contextRequest         browser.ContextRequest
+	diagnosticsRequest     browser.DiagnosticsRequest
 	contextApproval        *browser.ApprovalBinding
 	profileStatus          browser.ProfileAvailability
 	readiness              browser.PassiveReadiness
@@ -279,6 +281,14 @@ func (source *fakeBrowserToolSource) ObserveContext(
 	return source.observe, source.nextObserveError()
 }
 
+func (source *fakeBrowserToolSource) Diagnostics(
+	_ context.Context,
+	request browser.DiagnosticsRequest,
+) (browser.DiagnosticSummary, error) {
+	source.diagnosticsRequest = request
+	return source.diagnostics, source.err
+}
+
 func (source *fakeBrowserToolSource) ListContexts(
 	_ context.Context,
 	_ browser.Owner,
@@ -385,13 +395,14 @@ func (source *fakeBrowserToolSource) PassiveTargetDiagnostics(
 		}
 	}
 	return BrowserTargetDiagnostics{
-		Profiles:   byProfile,
-		Actions:    actions,
-		Contexts:   true,
-		Screenshot: !source.screenshotUnavailable,
-		Upload:     !source.transferUnavailable,
-		Download:   !source.transferUnavailable && !source.downloadUnavailable,
-		HeadedView: source.handoffReady, Handoff: source.handoffReady,
+		Profiles:    byProfile,
+		Actions:     actions,
+		Contexts:    true,
+		Diagnostics: true,
+		Screenshot:  !source.screenshotUnavailable,
+		Upload:      !source.transferUnavailable,
+		Download:    !source.transferUnavailable && !source.downloadUnavailable,
+		HeadedView:  source.handoffReady, Handoff: source.handoffReady,
 	}, nil
 }
 
@@ -576,6 +587,53 @@ func decodeBrowserToolResult(t *testing.T, result *toolshared.ToolResult, target
 	}
 	if err := json.Unmarshal([]byte(result.ContentForLLM()), target); err != nil {
 		t.Fatalf("decode result: %v; content = %q", err, result.ContentForLLM())
+	}
+}
+
+func TestBrowserDiagnosticsReturnsProtectedBoundedSummary(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, diagnostics: browser.DiagnosticSummary{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotID: "snapshot_1",
+		SnapshotGeneration: 3,
+		Categories: []browser.DiagnosticCategorySummary{{
+			Category: browser.DiagnosticConsoleErrors, Count: 1,
+			Entries: []browser.DiagnosticEntry{{
+				Timestamp: 1, Severity: "error", Origin: "https://example.com", Path: "/safe",
+				MessageHash: strings.Repeat("a", 64),
+			}},
+		}},
+	}}
+	tool := NewBrowserDiagnosticsTool(browserToolTestConfig(), source)
+	args := map[string]any{
+		"browser_session_id": "browser_session_1",
+		"categories":         []any{"console_errors"},
+		"tab_id":             "tab_primary", "snapshot_id": "snapshot_1",
+		"snapshot_generation": 3,
+	}
+	var summary browser.DiagnosticSummary
+	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), args), &summary)
+	if !tool.ProtectedDurableResult(args) || summary.Categories[0].Entries[0].Path != "/safe" {
+		t.Fatalf("diagnostics result = %+v, protected=%v", summary, tool.ProtectedDurableResult(args))
+	}
+	if source.diagnosticsRequest.SessionID != "browser_session_1" ||
+		source.diagnosticsRequest.TabID != "tab_primary" ||
+		source.diagnosticsRequest.SnapshotGeneration != 3 ||
+		!reflect.DeepEqual(
+			source.diagnosticsRequest.Categories,
+			[]browser.DiagnosticCategory{browser.DiagnosticConsoleErrors},
+		) {
+		t.Fatalf("diagnostics request = %+v", source.diagnosticsRequest)
+	}
+}
+
+func TestBrowserDiagnosticsRejectsDuplicateCategories(t *testing.T) {
+	result := NewBrowserDiagnosticsTool(
+		browserToolTestConfig(), &fakeBrowserToolSource{available: true},
+	).Execute(browserToolTestContext(), map[string]any{
+		"browser_session_id": "browser_session_1",
+		"categories":         []any{"console_errors", "console_errors"},
+	})
+	if result == nil || !result.IsError || !strings.Contains(result.ContentForLLM(), "invalid_request") {
+		t.Fatalf("result = %#v", result)
 	}
 }
 
@@ -789,7 +847,7 @@ func TestBrowserTargetsReportsUnavailableRuntimeWithoutAdvertisingCapabilities(t
 	if len(result.Targets) != 1 || result.Targets[0].Status != browser.ReadinessUnavailable ||
 		result.Targets[0].Reason != "runtime_unavailable" ||
 		result.Targets[0].Features.Screenshot || result.Targets[0].Features.Upload ||
-		result.Targets[0].Features.Download || !result.Targets[0].Features.Diagnostics ||
+		result.Targets[0].Features.Download || result.Targets[0].Features.Diagnostics ||
 		len(result.Targets[0].Actions) != 0 ||
 		result.Targets[0].Profiles[0].Readiness.Code != "runtime_unavailable" ||
 		!result.Targets[0].Profiles[0].Readiness.Passive || source.readinessCalls != 1 {

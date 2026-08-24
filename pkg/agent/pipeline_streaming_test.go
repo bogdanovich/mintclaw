@@ -1371,7 +1371,7 @@ func TestPipelineFinalizeUsesAccumulatedTurnUsage(t *testing.T) {
 		},
 		newLLMIterationState(1),
 		TurnEndStatusCompleted,
-		"final answer",
+		terminalContent{content: "final answer"},
 	)
 	if err != nil {
 		t.Fatalf("Finalize() error = %v", err)

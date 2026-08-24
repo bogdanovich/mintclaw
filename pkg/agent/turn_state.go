@@ -65,16 +65,22 @@ const (
 
 // LLMCallOutcome is the explicit result of one LLM phase.
 type LLMCallOutcome struct {
-	Control      Control
-	FinalContent string
-	AbortCause   TurnAbortCause
+	Control               Control
+	FinalContent          string
+	FinalContentProtected bool
+	AbortCause            TurnAbortCause
 }
 
-func (o LLMCallOutcome) terminalCandidate(retained string) string {
+type terminalContent struct {
+	content   string
+	protected bool
+}
+
+func (o LLMCallOutcome) terminalCandidate(retained terminalContent) terminalContent {
 	if o.Control != ControlBreak {
 		return retained
 	}
-	return o.FinalContent
+	return terminalContent{content: o.FinalContent, protected: o.FinalContentProtected}
 }
 
 // ToolControl signals returned from ExecuteTools to drive tool loop iteration.
@@ -212,6 +218,7 @@ type LLMIterationState struct {
 	llmOpts                     map[string]any
 	gracefulTerminal            bool
 	useNativeSearch             bool
+	protectedDiagnosticContext  bool
 	assistantToolCallsPersisted bool
 	assistantToolCallsWriteErr  error
 	codingInstructionBarrier    bool
@@ -329,10 +336,11 @@ type turnState struct {
 	userMessage string
 	media       []string
 
-	phase        TurnPhase
-	iteration    int
-	startedAt    time.Time
-	finalContent string
+	phase                 TurnPhase
+	iteration             int
+	startedAt             time.Time
+	finalContent          string
+	finalContentProtected bool
 
 	followUps []bus.InboundMessage
 
@@ -559,10 +567,17 @@ func (ts *turnState) currentIteration() int {
 	return ts.iteration
 }
 
-func (ts *turnState) setFinalContent(content string) {
+func (ts *turnState) setFinalContent(content string, protected bool) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.finalContent = content
+	ts.finalContentProtected = protected
+}
+
+func (ts *turnState) finalContentProtectedSnapshot() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.finalContentProtected
 }
 
 func (ts *turnState) finalContentLen() int {

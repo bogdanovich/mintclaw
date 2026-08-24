@@ -48,7 +48,9 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 		llmModel:           "provider/fallback-model",
 	}
 
-	finalization := newFinalizationContext(ts, exec, llm, TurnEndStatusCompleted, "final answer")
+	finalization := newFinalizationContext(
+		ts, exec, llm, TurnEndStatusCompleted, terminalContent{content: "final answer"},
+	)
 
 	if finalization.disposition != finalResponsePending {
 		t.Fatalf("disposition = %v, want pending", finalization.disposition)
@@ -108,7 +110,7 @@ func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T
 		},
 	}
 	llm := &LLMIterationState{toolResponseDisposition: toolResponseHandled}
-	finalization := newFinalizationContext(ts, exec, llm, TurnEndStatusCompleted, "")
+	finalization := newFinalizationContext(ts, exec, llm, TurnEndStatusCompleted, terminalContent{})
 	if finalization.disposition != finalResponseAlreadyHandled {
 		t.Fatalf("disposition = %v, want already handled", finalization.disposition)
 	}
@@ -171,7 +173,7 @@ func TestNewFinalizationContextSuppressesOnlyBackgroundCompaction(t *testing.T) 
 		&turnExecution{},
 		&LLMIterationState{},
 		TurnEndStatusCompleted,
-		"done",
+		terminalContent{content: "done"},
 	)
 	if finalization.delivery.compactAfterDelivery {
 		t.Fatal("short-lived caller requested post-delivery compaction")

@@ -78,6 +78,7 @@ type TurnEndPayload struct {
 	ContextUsedTokens     int
 	ContextLimitTokens    int
 	FinalContentLen       int
+	FinalContentProtected bool
 	UserMessage           string
 	FinalContent          string
 	ActiveSkills          []string

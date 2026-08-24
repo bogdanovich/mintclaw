@@ -17,6 +17,7 @@ type fakeBrowserCommandHost struct {
 	profiles         []nodes.BrowserProfileDescriptor
 	opened           int
 	observed         int
+	diagnosed        int
 	navigated        int
 	clicked          int
 	filled           int
@@ -40,6 +41,25 @@ type fakeBrowserCommandHost struct {
 	observeSnapshot  string
 	navigateSnapshot string
 	routedSessions   []string
+}
+
+func (host *fakeBrowserCommandHost) Diagnostics(
+	_ context.Context,
+	request nodes.BrowserHostDiagnosticsRequest,
+) (nodes.BrowserDiagnosticsResult, error) {
+	host.diagnosed++
+	host.routedSessions = append(host.routedSessions, request.RoutedSessionID)
+	return nodes.BrowserDiagnosticsResult{
+		SessionID: request.SessionID, TabID: request.TabID,
+		SnapshotGeneration: request.SnapshotGeneration,
+		Categories: []nodes.BrowserDiagnosticCategory{{
+			Category: "console_errors", Count: 1,
+			Entries: []nodes.BrowserDiagnosticEntry{{
+				Timestamp: 1, Severity: "error", Origin: "https://example.com",
+				Path: "/private-diagnostic-canary", MessageHash: strings.Repeat("a", 64),
+			}},
+		}},
+	}, nil
 }
 
 func (host *fakeBrowserCommandHost) Download(
@@ -775,6 +795,28 @@ func TestRuntimeKeepsBrowserObservationLiveButStoresOnlyProtectedReceipt(t *test
 	}
 }
 
+func TestRuntimeKeepsBrowserDiagnosticsLiveButStoresOnlyProtectedReceipt(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	runtime := newBrowserRuntimeFixture(t, host)
+	input, err := json.Marshal(nodes.BrowserDiagnosticsInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		Categories: []string{"console_errors"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandDiagnostics, input)
+	result, err := runtime.Invoke(t.Context(), plan)
+	if err != nil || !bytes.Contains(result, []byte("private-diagnostic-canary")) || host.diagnosed != 1 {
+		t.Fatalf("live diagnostics result = %s, %v; calls=%d", result, err, host.diagnosed)
+	}
+	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+	if !found || bytes.Contains(record.Result, []byte("private-diagnostic-canary")) ||
+		string(record.Result) != `{"protected_result":true}` {
+		t.Fatalf("durable diagnostics receipt = %#v", record)
+	}
+}
+
 func TestRuntimeStoresBrowserActionReceiptWithoutFreshObservation(t *testing.T) {
 	host := browserRuntimeHostFixture()
 	const canary = "prior-form-value-in-action-observation-31c804e7"
@@ -940,6 +982,7 @@ func browserRuntimeCommands() []string {
 		nodes.BrowserCommandSessionStatus,
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandCapture,
+		nodes.BrowserCommandDiagnostics,
 		nodes.BrowserCommandAct,
 		nodes.BrowserCommandContexts,
 		nodes.BrowserCommandSessionClose,

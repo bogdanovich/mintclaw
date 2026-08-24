@@ -84,6 +84,7 @@ type browserHostSession struct {
 	elementBindingKey     []byte
 	elementRefs           map[string]browserworker.DriverElement
 	observationDigest     []byte
+	navigationIdentity    string
 	expiresAt             time.Time
 	idleExpiresAt         time.Time
 }
@@ -430,6 +431,94 @@ func (host *BrowserHost) Observe(
 	session.snapshotGeneration = request.SnapshotGeneration
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
 	return browserHostObservation(request.SessionID, session, observation, navigationIdentity), nil
+}
+
+func (host *BrowserHost) Diagnostics(
+	ctx context.Context,
+	request nodes.BrowserHostDiagnosticsRequest,
+) (nodes.BrowserDiagnosticsResult, error) {
+	session, err := host.authorizedSession(BrowserHostStatusRequest{
+		SessionID: request.SessionID, ProfileRevision: host.sessionProfileRevision(request.SessionID),
+		RoutedSessionID: request.RoutedSessionID,
+		AgentID:         request.AgentID, ActorID: request.ActorID,
+	})
+	if err != nil {
+		return nodes.BrowserDiagnosticsResult{}, err
+	}
+	categories := make([]browserworker.DiagnosticCategory, len(request.Categories))
+	for index, category := range request.Categories {
+		categories[index] = browserworker.DiagnosticCategory(category)
+	}
+	categories, err = browserworker.NormalizeDiagnosticCategories(categories)
+	if err != nil {
+		return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostDenied
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.state != "ready" || session.worker == nil {
+		return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostLost
+	}
+	if host.expireSessionLocked(ctx, session) {
+		return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostLost
+	}
+	if request.TabID != session.tabID || request.SnapshotGeneration != session.snapshotGeneration {
+		return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostStale
+	}
+	worker, ok := session.worker.(browserworker.DiagnosticsWorker)
+	if !ok {
+		return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostDenied
+	}
+	var expectedNavigation string
+	if session.snapshotGeneration > 0 {
+		if session.navigationWorker == nil || session.navigationIdentity == "" {
+			return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostStale
+		}
+		expectedNavigation = session.navigationIdentity
+		beforeNavigation, navigationErr := session.navigationWorker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			return nodes.BrowserDiagnosticsResult{}, navigationErr
+		}
+		if beforeNavigation == "" || beforeNavigation != expectedNavigation {
+			return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostStale
+		}
+	}
+	summary, err := worker.Diagnostics(ctx, categories)
+	if err != nil {
+		return nodes.BrowserDiagnosticsResult{}, err
+	}
+	if expectedNavigation != "" {
+		afterNavigation, navigationErr := session.navigationWorker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			return nodes.BrowserDiagnosticsResult{}, navigationErr
+		}
+		if afterNavigation == "" || afterNavigation != expectedNavigation {
+			return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostStale
+		}
+	}
+	if err = browserworker.ValidateDiagnosticSummary(summary, categories); err != nil {
+		return nodes.BrowserDiagnosticsResult{}, ErrBrowserHostLost
+	}
+	result := nodes.BrowserDiagnosticsResult{
+		SessionID: session.sessionID, TabID: session.tabID,
+		SnapshotGeneration: session.snapshotGeneration,
+		Categories:         make([]nodes.BrowserDiagnosticCategory, len(summary.Categories)),
+		Truncated:          summary.Truncated,
+	}
+	for index, category := range summary.Categories {
+		result.Categories[index] = nodes.BrowserDiagnosticCategory{
+			Category: string(category.Category), Count: category.Count,
+			OmittedCount: category.OmittedCount, Truncated: category.Truncated,
+			Entries: make([]nodes.BrowserDiagnosticEntry, len(category.Entries)),
+		}
+		for entryIndex, entry := range category.Entries {
+			result.Categories[index].Entries[entryIndex] = nodes.BrowserDiagnosticEntry{
+				Timestamp: entry.Timestamp, Severity: entry.Severity,
+				ResourceClass: entry.ResourceClass, FailureCode: entry.FailureCode,
+				Origin: entry.Origin, Path: entry.Path, Line: entry.Line, MessageHash: entry.MessageHash,
+			}
+		}
+	}
+	return result, nil
 }
 
 // Capture retains one immutable PNG for the exact last observation. The
@@ -1595,16 +1684,18 @@ func browserHostSessionView(session *browserHostSession) BrowserHostSession {
 	if capability, ok := session.worker.(browserworker.DownloadCapabilityWorker); ok {
 		downloadAvailable = downloadAvailable && capability.DownloadAvailable()
 	}
+	_, diagnosticsAvailable := session.worker.(browserworker.DiagnosticsWorker)
 	return BrowserHostSession{
 		SessionID: session.sessionID,
 		State:     session.state, Reason: session.safeFailure, Recovery: recovery,
 		TabID: session.tabID, Controller: "agent",
 		Features: BrowserHostFeatures{
-			Observe:    true,
-			Navigate:   slices.Contains(session.profile.AllowedActions, "navigate"),
-			Contexts:   session.contextWorker != nil,
-			Screenshot: pageScreenshot && elementScreenshot,
-			Download:   downloadAvailable && slices.Contains(session.profile.AllowedActions, "download"),
+			Observe:     true,
+			Navigate:    slices.Contains(session.profile.AllowedActions, "navigate"),
+			Contexts:    session.contextWorker != nil,
+			Screenshot:  pageScreenshot && elementScreenshot,
+			Download:    downloadAvailable && slices.Contains(session.profile.AllowedActions, "download"),
+			Diagnostics: diagnosticsAvailable,
 		},
 		ExpiresAt: session.expiresAt.Unix(), IdleExpiresAt: session.idleExpiresAt.Unix(),
 	}
@@ -1617,6 +1708,7 @@ func browserHostObservation(
 	navigationIdentity string,
 ) BrowserHostObservation {
 	session.observationDigest = browserHostObservationDigest(session, observation, navigationIdentity)
+	session.navigationIdentity = navigationIdentity
 	elements := make([]BrowserHostElement, len(observation.Elements))
 	snapshot := observation.Snapshot
 	session.elementRefs = make(map[string]browserworker.DriverElement, len(observation.Elements))

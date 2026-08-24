@@ -12,21 +12,29 @@ import (
 )
 
 const (
-	diagnosticTurnInputBytes        = 4 * 1024
-	diagnosticTurnFinalBytes        = 8 * 1024
-	diagnosticModelMessagesBytes    = 10 * 1024
-	diagnosticModelResponseBytes    = 6 * 1024
-	diagnosticModelReasoningBytes   = 3 * 1024
-	diagnosticModelToolCallsBytes   = 2 * 1024
-	diagnosticToolArgumentsBytes    = 6 * 1024
-	diagnosticToolResultBytes       = 8 * 1024
-	diagnosticErrorBytes            = 2 * 1024
-	diagnosticSteeringBytes         = 4 * 1024
-	diagnosticSerializedArgsBytes   = 4 * 1024
-	fallbackDiagnosticMetadataBytes = 240
-	maxDiagnosticMessages           = 64
-	maxDiagnosticToolCalls          = 64
+	protectedTurnFinalDiagnosticReceipt = "Protected model response omitted from diagnostic state."
+	diagnosticTurnInputBytes            = 4 * 1024
+	diagnosticTurnFinalBytes            = 8 * 1024
+	diagnosticModelMessagesBytes        = 10 * 1024
+	diagnosticModelResponseBytes        = 6 * 1024
+	diagnosticModelReasoningBytes       = 3 * 1024
+	diagnosticModelToolCallsBytes       = 2 * 1024
+	diagnosticToolArgumentsBytes        = 6 * 1024
+	diagnosticToolResultBytes           = 8 * 1024
+	diagnosticErrorBytes                = 2 * 1024
+	diagnosticSteeringBytes             = 4 * 1024
+	diagnosticSerializedArgsBytes       = 4 * 1024
+	fallbackDiagnosticMetadataBytes     = 240
+	maxDiagnosticMessages               = 64
+	maxDiagnosticToolCalls              = 64
 )
+
+func diagnosticTurnFinalContent(payload TurnEndPayload) (string, int) {
+	if payload.FinalContentProtected {
+		return protectedTurnFinalDiagnosticReceipt, len(protectedTurnFinalDiagnosticReceipt)
+	}
+	return payload.FinalContent, payload.FinalContentLen
+}
 
 func diagnosticContentEnabled(cfg *config.Config) bool {
 	return cfg != nil &&
@@ -234,30 +242,36 @@ func diagnosticLLMResponseContent(
 	if diagnosticToolCallsContainSensitiveEvidence(response.ToolCalls) ||
 		diagnosticContentContainsArtifactReference(response.Content) ||
 		diagnosticContentContainsArtifactReference(reasoning) ||
-		diagnosticMessagesEndWithSensitiveResult(requestMessages) {
+		diagnosticCurrentTurnContainsSensitiveEvidence(requestMessages) {
 		return "", "", true
 	}
 	return response.Content, reasoning, false
 }
 
-func diagnosticMessagesEndWithSensitiveResult(messages []providers.Message) bool {
-	if len(messages) == 0 {
-		return false
-	}
-	classifications := diagnosticMessageClassifications(messages)
-	for index := len(messages) - 1; index >= 0; index-- {
-		message := messages[index]
-		if diagnosticSyntheticInterruptMessage(message) {
-			continue
-		}
-		if message.Role != "tool" {
-			break
-		}
-		if classifications[index].sensitive {
+func diagnosticMessagesContainSensitiveEvidence(messages []providers.Message) bool {
+	for _, classification := range diagnosticMessageClassifications(messages) {
+		if classification.sensitive {
 			return true
 		}
 	}
 	return false
+}
+
+func diagnosticCurrentTurnContainsSensitiveEvidence(messages []providers.Message) bool {
+	start := 0
+	for index, message := range messages {
+		if diagnosticTurnBoundaryMessage(message) {
+			start = index
+		}
+	}
+	return diagnosticMessagesContainSensitiveEvidence(messages[start:])
+}
+
+func diagnosticTurnBoundaryMessage(message providers.Message) bool {
+	return message.Role == "user" &&
+		message.PromptLayer == string(PromptLayerTurn) &&
+		message.PromptSlot == string(PromptSlotMessage) &&
+		message.PromptSource == string(PromptSourceUserMessage)
 }
 
 func diagnosticSyntheticInterruptMessage(message providers.Message) bool {

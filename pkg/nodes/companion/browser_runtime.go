@@ -28,6 +28,10 @@ type browserCaptureCommandHost interface {
 	Capture(context.Context, nodes.BrowserHostCaptureRequest) (nodes.BrowserOutputDescriptor, error)
 }
 
+type browserDiagnosticsCommandHost interface {
+	Diagnostics(context.Context, nodes.BrowserHostDiagnosticsRequest) (nodes.BrowserDiagnosticsResult, error)
+}
+
 type browserDownloadCommandHost interface {
 	Download(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserOutputDescriptor, error)
 }
@@ -138,6 +142,20 @@ func (handler *browserCommandHandler) execute(
 		}
 		result, err := captureHost.Capture(ctx, nodes.BrowserHostCaptureRequest{
 			BrowserCaptureInput: input, RoutedSessionID: invocation.Plan.SessionID,
+			AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+		})
+		return result, browserCommandFailure(err)
+	case nodes.BrowserCommandDiagnostics:
+		diagnosticsHost, ok := handler.host.(browserDiagnosticsCommandHost)
+		if !ok {
+			return nil, ErrCommandUnavailable
+		}
+		var input nodes.BrowserDiagnosticsInput
+		if err := json.Unmarshal(invocation.Input, &input); err != nil {
+			return nil, browserCommandFailure(err)
+		}
+		result, err := diagnosticsHost.Diagnostics(ctx, nodes.BrowserHostDiagnosticsRequest{
+			BrowserDiagnosticsInput: input, RoutedSessionID: invocation.Plan.SessionID,
 			AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 		})
 		return result, browserCommandFailure(err)

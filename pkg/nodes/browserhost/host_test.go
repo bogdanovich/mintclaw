@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -75,6 +76,21 @@ type fakeBrowserHostWorker struct {
 	contextSelectCalls      int
 	contextSelectErr        error
 	contextSelectMutates    bool
+	diagnostics             browserworker.DiagnosticSummary
+	diagnosticsErr          error
+	diagnosticsCategories   []browserworker.DiagnosticCategory
+	onDiagnostics           func()
+}
+
+func (worker *fakeBrowserHostWorker) Diagnostics(
+	_ context.Context,
+	categories []browserworker.DiagnosticCategory,
+) (browserworker.DiagnosticSummary, error) {
+	worker.diagnosticsCategories = append([]browserworker.DiagnosticCategory(nil), categories...)
+	if worker.onDiagnostics != nil {
+		worker.onDiagnostics()
+	}
+	return worker.diagnostics, worker.diagnosticsErr
 }
 
 func (worker *fakeBrowserHostWorker) AuthorizeFill(
@@ -364,6 +380,63 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 	})
 	if err != nil || closed.State != "closed" || worker.closeCalls != 1 {
 		t.Fatalf("repeated Close() = %#v, %v, calls = %d", closed, err, worker.closeCalls)
+	}
+}
+
+func TestBrowserHostDiagnosticsEnforcesFreshAuthorityAndSafeSummary(t *testing.T) {
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{{
+			URL: "about:blank", Origin: "about:blank", Snapshot: "blank",
+		}},
+		navigationIdentities: []string{"navigation_1", "navigation_1", "navigation_1", "navigation_1"},
+		diagnostics: browserworker.DiagnosticSummary{
+			Categories: []browserworker.DiagnosticCategorySummary{{
+				Category: browserworker.DiagnosticFailedRequests, Count: 1,
+				Entries: []browserworker.DiagnosticEntry{{
+					Timestamp: 1, ResourceClass: "fetch", FailureCode: "network_failed",
+					Origin: "https://example.com", Path: "/api", MessageHash: strings.Repeat("a", 64),
+				}},
+			}},
+		},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	opened, err := host.Open(t.Context(), browserHostOpenFixture())
+	if err != nil || !opened.Features.Diagnostics {
+		t.Fatalf("Open() = %+v, %v", opened, err)
+	}
+	request := nodes.BrowserHostDiagnosticsRequest{
+		BrowserDiagnosticsInput: nodes.BrowserDiagnosticsInput{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 0,
+			Categories: []string{"failed_requests"},
+		},
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+	result, err := host.Diagnostics(t.Context(), request)
+	if err != nil || result.Categories[0].Entries[0].Path != "/api" ||
+		!reflect.DeepEqual(
+			worker.diagnosticsCategories,
+			[]browserworker.DiagnosticCategory{browserworker.DiagnosticFailedRequests},
+		) {
+		t.Fatalf("Diagnostics() = %+v, %v", result, err)
+	}
+	request.SnapshotGeneration++
+	if _, err = host.Diagnostics(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+		t.Fatalf("stale Diagnostics() error = %v", err)
+	}
+	observation, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.SnapshotGeneration = observation.SnapshotGeneration
+	worker.onDiagnostics = func() { worker.navigationIdentities[3] = "navigation_2" }
+	if _, err = host.Diagnostics(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+		t.Fatalf("document-changed Diagnostics() error = %v", err)
+	}
+	worker.onDiagnostics = nil
+	worker.diagnostics.Categories[0].Entries[0].Path = "/api?credential=canary"
+	if _, err = host.Diagnostics(t.Context(), request); !errors.Is(err, ErrBrowserHostLost) {
+		t.Fatalf("unsafe Diagnostics() error = %v", err)
 	}
 }
 

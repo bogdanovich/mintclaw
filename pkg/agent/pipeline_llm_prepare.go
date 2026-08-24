@@ -62,6 +62,11 @@ func (p *Pipeline) prepareLLMRequest(
 		llm.providerToolDefs = nil
 		ts.markGracefulTerminalUsed()
 	}
+	// Hooks may append, reorder, or clone non-system messages, including a
+	// genuine root-turn marker. Capture sensitivity from the runtime-owned
+	// request before exposing a clone to hooks, then only allow later stages to
+	// add sensitivity. Hook-returned message metadata must never clear it.
+	llm.protectedDiagnosticContext = diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages)
 
 	llm.llmOpts = map[string]any{
 		"max_tokens":       ts.agent.MaxTokens,
@@ -118,6 +123,8 @@ func (p *Pipeline) prepareLLMRequest(
 			return completeLLMStage(LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}), nil
 		}
 	}
+	llm.protectedDiagnosticContext = llm.protectedDiagnosticContext ||
+		diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages)
 
 	llm.callMessages = codingMessagesForCandidate(
 		ts,

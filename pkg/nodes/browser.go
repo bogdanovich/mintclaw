@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net/url"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
@@ -52,11 +54,14 @@ const (
 	MaxBrowserTextInputBytes     = 16 * 1024
 	// JSON can encode one accepted input byte as a six-byte Unicode escape.
 	// The fixed allowance covers the transport-only {"value": ...} wrapper.
-	MaxBrowserEphemeralInputBytes = MaxBrowserTextInputBytes*6 + 128
-	MaxBrowserContextInputBytes   = 64*1024 + 128
-	MaxBrowserToolResultBytes     = 320 * 1024
-	MaxBrowserRetentionSeconds    = 7 * 24 * 60 * 60
-	MinBrowserToolResultBytes     = 64 * 1024
+	MaxBrowserEphemeralInputBytes     = MaxBrowserTextInputBytes*6 + 128
+	MaxBrowserContextInputBytes       = 64*1024 + 128
+	MaxBrowserToolResultBytes         = 320 * 1024
+	MaxBrowserDiagnosticEntries       = 32
+	MaxBrowserDiagnosticCategoryBytes = 16 * 1024
+	MaxBrowserDiagnosticBytes         = 48 * 1024
+	MaxBrowserRetentionSeconds        = 7 * 24 * 60 * 60
+	MinBrowserToolResultBytes         = 64 * 1024
 )
 
 const (
@@ -64,6 +69,7 @@ const (
 	BrowserCommandSessionStatus = "browser.session.status.v1"
 	BrowserCommandObserve       = "browser.observe.v1"
 	BrowserCommandCapture       = "browser.capture.v1"
+	BrowserCommandDiagnostics   = "browser.diagnostics.v1"
 	BrowserCommandAct           = "browser.act.v1"
 	BrowserCommandContexts      = "browser.contexts.v1"
 	BrowserCommandSessionClose  = "browser.session.close.v1"
@@ -80,6 +86,7 @@ var currentBrowserCommandSpecs = [...]struct {
 	{BrowserCommandContexts, RiskWrite},
 	{BrowserCommandSessionClose, RiskWrite},
 	{BrowserCommandCapture, RiskRead},
+	{BrowserCommandDiagnostics, RiskRead},
 }
 
 type BrowserLimits struct {
@@ -264,6 +271,39 @@ type BrowserObserveInput struct {
 	TabID              string `json:"tab_id"`
 	SnapshotGeneration uint64 `json:"snapshot_generation"`
 	Screenshot         bool   `json:"screenshot"`
+}
+
+type BrowserDiagnosticsInput struct {
+	SessionID          string   `json:"session_id"`
+	TabID              string   `json:"tab_id"`
+	SnapshotGeneration uint64   `json:"snapshot_generation"`
+	Categories         []string `json:"categories"`
+}
+
+func (input *BrowserDiagnosticsInput) UnmarshalJSON(data []byte) error {
+	var value struct {
+		SessionID          string          `json:"session_id"`
+		TabID              string          `json:"tab_id"`
+		SnapshotGeneration json.RawMessage `json:"snapshot_generation"`
+		Categories         []string        `json:"categories"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser diagnostics input", ErrInvalidCapability)
+	}
+	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
+	if err != nil {
+		return err
+	}
+	*input = BrowserDiagnosticsInput{
+		SessionID: value.SessionID, TabID: value.TabID,
+		SnapshotGeneration: generation, Categories: append([]string(nil), value.Categories...),
+	}
+	return nil
 }
 
 type BrowserCaptureInput struct {
@@ -551,11 +591,134 @@ func BrowserPressKeyValid(key string) bool {
 }
 
 type BrowserHostFeatures struct {
-	Observe    bool `json:"observe"`
-	Navigate   bool `json:"navigate"`
-	Contexts   bool `json:"contexts"`
-	Screenshot bool `json:"screenshot"`
-	Download   bool `json:"download"`
+	Observe     bool `json:"observe"`
+	Navigate    bool `json:"navigate"`
+	Contexts    bool `json:"contexts"`
+	Screenshot  bool `json:"screenshot"`
+	Download    bool `json:"download"`
+	Diagnostics bool `json:"diagnostics"`
+}
+
+type BrowserDiagnosticEntry struct {
+	Timestamp     int64  `json:"timestamp"`
+	Severity      string `json:"severity,omitempty"`
+	ResourceClass string `json:"resource_class,omitempty"`
+	FailureCode   string `json:"failure_code,omitempty"`
+	Origin        string `json:"origin,omitempty"`
+	Path          string `json:"path,omitempty"`
+	Line          int    `json:"line,omitempty"`
+	MessageHash   string `json:"message_hash,omitempty"`
+}
+
+func (entry *BrowserDiagnosticEntry) UnmarshalJSON(data []byte) error {
+	var value struct {
+		Timestamp     json.RawMessage `json:"timestamp"`
+		Severity      string          `json:"severity"`
+		ResourceClass string          `json:"resource_class"`
+		FailureCode   string          `json:"failure_code"`
+		Origin        string          `json:"origin"`
+		Path          string          `json:"path"`
+		Line          json.RawMessage `json:"line"`
+		MessageHash   string          `json:"message_hash"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser diagnostic entry", ErrInvalidCapability)
+	}
+	timestamp, err := decodeCanonicalBrowserTimestamp(value.Timestamp)
+	if err != nil {
+		return err
+	}
+	line, err := decodeCanonicalBrowserInt(value.Line)
+	if err != nil {
+		return err
+	}
+	*entry = BrowserDiagnosticEntry{
+		Timestamp: timestamp, Severity: value.Severity, ResourceClass: value.ResourceClass,
+		FailureCode: value.FailureCode, Origin: value.Origin, Path: value.Path,
+		Line: line, MessageHash: value.MessageHash,
+	}
+	return nil
+}
+
+type BrowserDiagnosticCategory struct {
+	Category     string                   `json:"category"`
+	Count        int                      `json:"count"`
+	OmittedCount int                      `json:"omitted_count"`
+	Truncated    bool                     `json:"truncated"`
+	Entries      []BrowserDiagnosticEntry `json:"entries"`
+}
+
+func (category *BrowserDiagnosticCategory) UnmarshalJSON(data []byte) error {
+	var value struct {
+		Category     string                   `json:"category"`
+		Count        json.RawMessage          `json:"count"`
+		OmittedCount json.RawMessage          `json:"omitted_count"`
+		Truncated    bool                     `json:"truncated"`
+		Entries      []BrowserDiagnosticEntry `json:"entries"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser diagnostic category", ErrInvalidCapability)
+	}
+	count, err := decodeCanonicalBrowserInt(value.Count)
+	if err != nil {
+		return err
+	}
+	omitted, err := decodeCanonicalBrowserInt(value.OmittedCount)
+	if err != nil {
+		return err
+	}
+	*category = BrowserDiagnosticCategory{
+		Category: value.Category, Count: count, OmittedCount: omitted,
+		Truncated: value.Truncated, Entries: value.Entries,
+	}
+	return nil
+}
+
+type BrowserDiagnosticsResult struct {
+	SessionID          string                      `json:"session_id"`
+	TabID              string                      `json:"tab_id"`
+	SnapshotGeneration uint64                      `json:"snapshot_generation"`
+	Categories         []BrowserDiagnosticCategory `json:"categories,omitempty"`
+	Truncated          bool                        `json:"truncated,omitempty"`
+	ProtectedResult    bool                        `json:"protected_result,omitempty"`
+}
+
+func (result *BrowserDiagnosticsResult) UnmarshalJSON(data []byte) error {
+	var value struct {
+		SessionID          string                      `json:"session_id"`
+		TabID              string                      `json:"tab_id"`
+		SnapshotGeneration json.RawMessage             `json:"snapshot_generation"`
+		Categories         []BrowserDiagnosticCategory `json:"categories"`
+		Truncated          bool                        `json:"truncated"`
+		ProtectedResult    bool                        `json:"protected_result"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser diagnostics result", ErrInvalidCapability)
+	}
+	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
+	if err != nil {
+		return err
+	}
+	*result = BrowserDiagnosticsResult{
+		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
+		Categories: value.Categories, Truncated: value.Truncated, ProtectedResult: value.ProtectedResult,
+	}
+	return nil
 }
 
 type BrowserFrameContext struct {
@@ -672,6 +835,14 @@ func decodeCanonicalBrowserTimestamp(data json.RawMessage) (int64, error) {
 		return 0, fmt.Errorf("%w: browser timestamp must be a nonnegative integer", ErrInvalidCapability)
 	}
 	return value.Num().Int64(), nil
+}
+
+func decodeCanonicalBrowserInt(data json.RawMessage) (int, error) {
+	value, err := decodeCanonicalBrowserTimestamp(data)
+	if err != nil || uint64(value) > uint64(^uint(0)>>1) {
+		return 0, fmt.Errorf("%w: browser integer is outside bounds", ErrInvalidCapability)
+	}
+	return int(value), nil
 }
 
 // decodeCanonicalBrowserGeneration accepts exponent notation emitted by the
@@ -911,6 +1082,13 @@ type BrowserHostObserveRequest struct {
 	Screenshot         bool
 	AgentID            string
 	ActorID            string
+}
+
+type BrowserHostDiagnosticsRequest struct {
+	BrowserDiagnosticsInput
+	RoutedSessionID string
+	AgentID         string
+	ActorID         string
 }
 
 type BrowserHostCaptureRequest struct {
@@ -1254,6 +1432,14 @@ func browserCommandInputSchema(
 		add("tab_id", identifier)
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
 		add("screenshot", map[string]any{"type": "boolean"})
+	case BrowserCommandDiagnostics:
+		add("session_id", identifier)
+		add("tab_id", identifier)
+		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 0})
+		add("categories", map[string]any{
+			"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
+			"items": map[string]any{"enum": []string{"console_errors", "failed_requests", "page_crashes"}},
+		})
 	case BrowserCommandCapture:
 		add("session_id", identifier)
 		add("tab_id", identifier)
@@ -1384,6 +1570,21 @@ func BrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
+	return browserCommandOutputSchema(command, profiles, true)
+}
+
+func legacyBrowserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	return browserCommandOutputSchema(command, profiles, false)
+}
+
+func browserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+	diagnostics bool,
+) json.RawMessage {
 	if len(profiles) == 0 {
 		return json.RawMessage("false")
 	}
@@ -1405,6 +1606,16 @@ func BrowserCommandOutputSchema(
 	case BrowserCommandSessionStatus, BrowserCommandSessionClose:
 		return mustJSON(baseStatus)
 	case BrowserCommandSessionOpen:
+		featureRequired := []string{"observe", "navigate", "contexts", "screenshot", "download"}
+		featureProperties := map[string]any{
+			"observe": map[string]any{"type": "boolean"}, "navigate": map[string]any{"type": "boolean"},
+			"contexts":   map[string]any{"type": "boolean"},
+			"screenshot": map[string]any{"type": "boolean"}, "download": map[string]any{"type": "boolean"},
+		}
+		if diagnostics {
+			featureRequired = append(featureRequired, "diagnostics")
+			featureProperties["diagnostics"] = map[string]any{"type": "boolean"}
+		}
 		return mustJSON(map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -1422,12 +1633,7 @@ func BrowserCommandOutputSchema(
 				"controller": map[string]any{"const": "agent"},
 				"features": map[string]any{
 					"type": "object", "additionalProperties": false,
-					"required": []string{"observe", "navigate", "contexts", "screenshot", "download"},
-					"properties": map[string]any{
-						"observe": map[string]any{"type": "boolean"}, "navigate": map[string]any{"type": "boolean"},
-						"contexts":   map[string]any{"type": "boolean"},
-						"screenshot": map[string]any{"type": "boolean"}, "download": map[string]any{"type": "boolean"},
-					},
+					"required": featureRequired, "properties": featureProperties,
 				},
 				"expires_at":      map[string]any{"type": "integer", "minimum": 1},
 				"idle_expires_at": map[string]any{"type": "integer", "minimum": 1},
@@ -1436,6 +1642,11 @@ func BrowserCommandOutputSchema(
 	case BrowserCommandObserve:
 		return mustJSON(map[string]any{"oneOf": []any{
 			rawSchema(browserObservationSchema(limits)),
+			browserProtectedResultReceiptSchema(nil),
+		}})
+	case BrowserCommandDiagnostics:
+		return mustJSON(map[string]any{"oneOf": []any{
+			browserDiagnosticsResultSchema(),
 			browserProtectedResultReceiptSchema(nil),
 		}})
 	case BrowserCommandCapture:
@@ -1643,6 +1854,50 @@ func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 	})
 }
 
+func browserDiagnosticsResultSchema() map[string]any {
+	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
+	digest := map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}
+	entry := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"timestamp"},
+		"properties": map[string]any{
+			"timestamp":      map[string]any{"type": "integer", "minimum": 1},
+			"severity":       map[string]any{"enum": []string{"error", "warning"}},
+			"resource_class": map[string]any{"type": "string", "maxLength": 32},
+			"failure_code":   map[string]any{"type": "string", "maxLength": 64},
+			"origin":         map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
+			"path":           map[string]any{"type": "string", "maxLength": MaxBrowserURLBytes},
+			"line":           map[string]any{"type": "integer", "minimum": 0},
+			"message_hash":   digest,
+		},
+	}
+	category := map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"category", "count", "omitted_count", "truncated", "entries"},
+		"properties": map[string]any{
+			"category":      map[string]any{"enum": []string{"console_errors", "failed_requests", "page_crashes"}},
+			"count":         map[string]any{"type": "integer", "minimum": 0},
+			"omitted_count": map[string]any{"type": "integer", "minimum": 0},
+			"truncated":     map[string]any{"type": "boolean"},
+			"entries": map[string]any{
+				"type": "array", "maxItems": MaxBrowserDiagnosticEntries, "items": entry,
+			},
+		},
+	}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"required": []string{"session_id", "tab_id", "snapshot_generation", "categories"},
+		"properties": map[string]any{
+			"session_id": identifier, "tab_id": identifier,
+			"snapshot_generation": map[string]any{"type": "integer", "minimum": 0},
+			"categories": map[string]any{
+				"type": "array", "minItems": 1, "maxItems": 3, "items": category,
+			},
+			"truncated": map[string]any{"type": "boolean"},
+		},
+	}
+}
+
 func browserOutputDescriptorSchema(maximumBytes int) map[string]any {
 	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 	optionalIdentifier := map[string]any{"type": "string", "maxLength": MaxIDLength}
@@ -1777,6 +2032,19 @@ func validateBrowserInvocationOutput(
 			return nil
 		}
 		return validateBrowserObservationBytes(output, limits)
+	case BrowserCommandDiagnostics:
+		if output["protected_result"] == true {
+			return nil
+		}
+		encoded, err := json.Marshal(output)
+		if err != nil || len(encoded) > MaxBrowserDiagnosticBytes {
+			return fmt.Errorf("%w: browser diagnostics exceed the result limit", ErrInvalidCapability)
+		}
+		var result BrowserDiagnosticsResult
+		if err = json.Unmarshal(encoded, &result); err != nil || !validBrowserDiagnosticsResult(result) {
+			return fmt.Errorf("%w: malformed browser diagnostics", ErrInvalidCapability)
+		}
+		return nil
 	case BrowserCommandContexts:
 		if output["protected_result"] == true {
 			return nil
@@ -1795,6 +2063,75 @@ func validateBrowserInvocationOutput(
 	default:
 		return nil
 	}
+}
+
+func validBrowserDiagnosticsResult(result BrowserDiagnosticsResult) bool {
+	if result.SessionID == "" || result.TabID == "" || len(result.Categories) == 0 ||
+		len(result.Categories) > 3 {
+		return false
+	}
+	order := map[string]int{"console_errors": 0, "failed_requests": 1, "page_crashes": 2}
+	lastOrder := -1
+	anyTruncated := false
+	for _, category := range result.Categories {
+		categoryOrder, ok := order[category.Category]
+		if !ok || categoryOrder <= lastOrder || category.Count < 0 || category.OmittedCount < 0 ||
+			category.Count != len(category.Entries)+category.OmittedCount ||
+			category.Truncated != (category.OmittedCount > 0) ||
+			len(category.Entries) > MaxBrowserDiagnosticEntries {
+			return false
+		}
+		encoded, err := json.Marshal(category)
+		if err != nil || len(encoded) > MaxBrowserDiagnosticCategoryBytes {
+			return false
+		}
+		lastOrder = categoryOrder
+		anyTruncated = anyTruncated || category.Truncated
+		for _, entry := range category.Entries {
+			if !validBrowserDiagnosticEntry(category.Category, entry) {
+				return false
+			}
+		}
+	}
+	return result.Truncated == anyTruncated
+}
+
+func validBrowserDiagnosticEntry(category string, entry BrowserDiagnosticEntry) bool {
+	if entry.Timestamp <= 0 || entry.Line < 0 ||
+		(entry.MessageHash != "" && !validSHA256Digest(entry.MessageHash)) ||
+		!validBrowserDiagnosticLocation(entry.Origin, entry.Path) {
+		return false
+	}
+	switch category {
+	case "console_errors":
+		return (entry.Severity == "error" || entry.Severity == "warning") &&
+			entry.ResourceClass == "" && entry.FailureCode == "" && entry.MessageHash != ""
+	case "failed_requests":
+		return entry.Severity == "" && slices.Contains([]string{
+			"document", "stylesheet", "image", "media", "font", "script", "texttrack", "xhr",
+			"fetch", "eventsource", "websocket", "manifest", "other",
+		}, entry.ResourceClass) && slices.Contains(
+			[]string{"network_failed", "canceled", "blocked", "http_error"}, entry.FailureCode,
+		) &&
+			entry.Line == 0 && entry.MessageHash != ""
+	case "page_crashes":
+		return entry.Severity == "" && entry.ResourceClass == "" && entry.FailureCode == "page_crashed" &&
+			entry.Origin == "" && entry.Path == "" && entry.Line == 0 && entry.MessageHash == ""
+	default:
+		return false
+	}
+}
+
+func validBrowserDiagnosticLocation(origin, path string) bool {
+	if origin == "" || path == "" {
+		return origin == "" && path == ""
+	}
+	if strings.ContainsAny(origin+path, "?#") || !strings.HasPrefix(path, "/") {
+		return false
+	}
+	parsed, err := url.Parse(origin)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" &&
+		parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
 func validateBrowserObservationBytes(

@@ -89,6 +89,7 @@ func (r *turnRunner) run(
 				ContextUsedTokens:     contextUsedTokens,
 				ContextLimitTokens:    contextLimitTokens,
 				FinalContentLen:       ts.finalContentLen(),
+				FinalContentProtected: ts.finalContentProtectedSnapshot(),
 				UserMessage:           ts.userMessage,
 				FinalContent:          ts.finalContentSnapshot(),
 				ActiveSkills:          append([]string(nil), ts.activeSkills...),

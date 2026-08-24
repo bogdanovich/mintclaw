@@ -147,6 +147,10 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 			}
 		}
 		actions := []browser.ActionKind(nil)
+		diagnosticsAvailable := false
+		if capability, supported := factory.local.(interface{ DiagnosticsAvailable() bool }); supported {
+			diagnosticsAvailable = capability.DiagnosticsAvailable()
+		}
 		if driver.Status != browser.ReadinessUnavailable {
 			actions = []browser.ActionKind{
 				browser.ActionNavigate, browser.ActionClick, browser.ActionFill,
@@ -167,6 +171,7 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		return browser.TargetDiagnostics{
 			Actions: actions, Profiles: profiles, Contexts: driver.Status != browser.ReadinessUnavailable,
+			Diagnostics: driver.Status != browser.ReadinessUnavailable && diagnosticsAvailable,
 		}, nil
 	}
 	profiles := make(map[string]browser.DriverReadiness, len(profileNames))
@@ -190,18 +195,21 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 	}
 	var intersection map[string]struct{}
 	allProfilesReady := true
+	allDiagnosticsReady := true
 	for _, profileName := range profileNames {
 		localProfile, enabled := target.Profiles[profileName]
 		if !enabled || !localProfile.Enabled {
 			profiles[profileName] = unavailableNodeBrowserReadiness("profile_unavailable", "configure_profile")
 			allProfilesReady = false
+			allDiagnosticsReady = false
 			continue
 		}
 		var remoteProfile nodes.BrowserProfileDescriptor
 		profileReady := true
 		for _, command := range []string{
 			nodes.BrowserCommandSessionOpen, nodes.BrowserCommandSessionStatus,
-			nodes.BrowserCommandObserve, nodes.BrowserCommandCapture, nodes.BrowserCommandAct, nodes.BrowserCommandContexts,
+			nodes.BrowserCommandObserve, nodes.BrowserCommandCapture,
+			nodes.BrowserCommandAct, nodes.BrowserCommandContexts,
 			nodes.BrowserCommandSessionClose,
 		} {
 			descriptor, approved := browserApprovedDescriptor(record.Snapshot, record.Registration, command)
@@ -226,7 +234,19 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 		}
 		if !profileReady {
 			allProfilesReady = false
+			allDiagnosticsReady = false
 			continue
+		}
+		diagnosticDescriptor, diagnosticApproved := browserApprovedDescriptor(
+			record.Snapshot, record.Registration, nodes.BrowserCommandDiagnostics,
+		)
+		diagnosticProfile, diagnosticProfileAvailable := browserDescriptorProfile(
+			diagnosticDescriptor, profileName,
+		)
+		if !diagnosticApproved || !diagnosticProfileAvailable ||
+			!browserProfileIntersects(localProfile, factory.config.Tools.Browser.Limits, diagnosticProfile) ||
+			!browserProfilesEqual(remoteProfile, diagnosticProfile) {
+			allDiagnosticsReady = false
 		}
 		profiles[profileName] = browser.DriverReadiness{
 			Status: browser.ReadinessReady, Driver: browser.ReadinessReady,
@@ -268,7 +288,10 @@ func (factory *gatewayBrowserWorkerFactory) PassiveTargetDiagnostics(
 			}
 		}
 	}
-	return browser.TargetDiagnostics{Actions: actions, Profiles: profiles, Contexts: allProfilesReady}, nil
+	return browser.TargetDiagnostics{
+		Actions: actions, Profiles: profiles, Contexts: allProfilesReady,
+		Diagnostics: allProfilesReady && allDiagnosticsReady,
+	}, nil
 }
 
 func (factory *gatewayBrowserWorkerFactory) PassiveTargetReadiness(
@@ -375,6 +398,7 @@ type nodeBrowserWorker struct {
 	observeRecoverySequence uint64
 	contextSequence         uint64
 	contextCatalogDigest    string
+	diagnosticsSequence     uint64
 	closed                  bool
 }
 
@@ -493,6 +517,71 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 	return browser.DriverObservation{}, browser.ErrWorkerUnavailable
 }
 
+func (worker *nodeBrowserWorker) Diagnostics(
+	ctx context.Context,
+	categories []browser.DiagnosticCategory,
+) (browser.DiagnosticSummary, error) {
+	normalized, err := browser.NormalizeDiagnosticCategories(categories)
+	if err != nil {
+		return browser.DiagnosticSummary{}, err
+	}
+	worker.mu.Lock()
+	if worker.closed {
+		worker.mu.Unlock()
+		return browser.DiagnosticSummary{}, browser.ErrWorkerUnavailable
+	}
+	worker.diagnosticsSequence++
+	sequence := worker.diagnosticsSequence
+	generation := worker.snapshotGeneration
+	tabID := worker.tabID
+	worker.mu.Unlock()
+	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandDiagnostics)
+	if err != nil {
+		return browser.DiagnosticSummary{}, err
+	}
+	input := nodes.BrowserDiagnosticsInput{
+		SessionID: worker.sessionID, TabID: tabID, SnapshotGeneration: generation,
+		Categories: make([]string, len(normalized)),
+	}
+	for index, category := range normalized {
+		input.Categories[index] = string(category)
+	}
+	for attempt := 0; attempt < 10; attempt++ {
+		var result nodes.BrowserDiagnosticsResult
+		requestKey := fmt.Sprintf("diagnostics_%d_%d", sequence, attempt)
+		if err = worker.invoke(ctx, descriptor, requestKey, input, &result); err != nil {
+			return browser.DiagnosticSummary{}, err
+		}
+		if result.ProtectedResult {
+			continue
+		}
+		if result.SessionID != worker.sessionID || result.TabID != tabID ||
+			result.SnapshotGeneration != generation || len(result.Categories) != len(normalized) {
+			return browser.DiagnosticSummary{}, browser.ErrDriverIncompatible
+		}
+		summary := browser.DiagnosticSummary{
+			Categories: make([]browser.DiagnosticCategorySummary, len(result.Categories)),
+			Truncated:  result.Truncated,
+		}
+		for index, category := range result.Categories {
+			summary.Categories[index] = browser.DiagnosticCategorySummary{
+				Category: browser.DiagnosticCategory(category.Category), Count: category.Count,
+				OmittedCount: category.OmittedCount, Truncated: category.Truncated,
+				Entries: make([]browser.DiagnosticEntry, len(category.Entries)),
+			}
+			for entryIndex, entry := range category.Entries {
+				summary.Categories[index].Entries[entryIndex] = browser.DiagnosticEntry{
+					Timestamp: entry.Timestamp, Severity: entry.Severity,
+					ResourceClass: entry.ResourceClass, FailureCode: entry.FailureCode,
+					Origin: entry.Origin, Path: entry.Path, Line: entry.Line, MessageHash: entry.MessageHash,
+				}
+			}
+		}
+		return summary, nil
+	}
+	return browser.DiagnosticSummary{}, browser.ErrWorkerUnavailable
+}
+
 func (worker *nodeBrowserWorker) ObserveWithNavigationIdentity(
 	ctx context.Context,
 ) (browser.DriverObservation, string, error) {
@@ -504,6 +593,15 @@ func (worker *nodeBrowserWorker) ObserveWithNavigationIdentity(
 	identity := worker.documentID
 	worker.mu.Unlock()
 	return observation, identity, nil
+}
+
+func (worker *nodeBrowserWorker) NavigationIdentity(context.Context) (string, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closed || worker.documentID == "" {
+		return "", browser.ErrWorkerUnavailable
+	}
+	return worker.documentID, nil
 }
 
 func (worker *nodeBrowserWorker) Resolve(

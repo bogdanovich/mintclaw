@@ -457,6 +457,119 @@ func TestBrowserObservationResultIsRedactedFromLogsAndTraces(t *testing.T) {
 	}
 }
 
+func TestBrowserDiagnosticsResultIsProtectedAcrossDiagnosticProjections(t *testing.T) {
+	messages := func(canary string) []providers.Message {
+		return []providers.Message{
+			{
+				Role: "assistant",
+				ToolCalls: []providers.ToolCall{{
+					ID: "diagnostics-call", Name: "browser_diagnostics",
+					Function: &providers.FunctionCall{
+						Name: "browser_diagnostics", Arguments: `{"browser_session_id":"session"}`,
+					},
+				}},
+			},
+			{
+				Role:       "tool",
+				ToolCallID: "diagnostics-call",
+				Content:    `{"browser_session_id":"session","categories":[{"entries":[{"origin":"https://private.example","path":"/` + canary + `","message_hash":"` + canary + `"}]}]}`,
+			},
+		}
+	}
+	const canary = "browser-diagnostics-private-canary-9f4a2d7c"
+	request := messages(canary)
+	cfg := config.DefaultConfig()
+	cfg.Diagnostics.TraceCapture.Enabled = true
+	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
+	for _, preview := range []string{
+		formatMessagesForLog(request),
+		diagnosticMessagesPreview(cfg, request),
+	} {
+		if strings.Contains(preview, canary) || !strings.Contains(strings.ToLower(preview), "redact") {
+			t.Fatalf("browser diagnostics leaked through log/trace projection: %s", preview)
+		}
+	}
+	firstHash := safeJSONHash(traceCaptureSettings{}, diagnosticPromptHashMessages(request))
+	secondHash := safeJSONHash(
+		traceCaptureSettings{},
+		diagnosticPromptHashMessages(messages("browser-diagnostics-private-canary-other")),
+	)
+	if firstHash == "" || firstHash != secondHash {
+		t.Fatalf("protected diagnostics prompt hashes differ: %q != %q", firstHash, secondHash)
+	}
+	projected, err := json.Marshal(diagnosticPromptHashMessages(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(projected, []byte(canary)) || !bytes.Contains(projected, []byte("protected_result")) {
+		t.Fatalf("diagnostics prompt-hash projection is unsafe: %s", projected)
+	}
+	content, reasoning, sensitive := diagnosticLLMResponseContent(&providers.LLMResponse{
+		Content: "diagnostics path " + canary, Reasoning: "diagnostics hash " + canary,
+	}, request)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("diagnostics follow-up projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+
+	intervening := append([]providers.Message{userPromptMessage("inspect diagnostics", nil)}, request...)
+	intervening = append(intervening, steeringPromptMessage(providers.Message{
+		Role: "user", Content: "also explain what happened",
+	}))
+	content, reasoning, sensitive = diagnosticLLMResponseContent(&providers.LLMResponse{
+		Content: "diagnostics path " + canary, Reasoning: "diagnostics hash " + canary,
+	}, intervening)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("diagnostics steering projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+
+	intervening = append(intervening,
+		providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{{
+			ID: "safe-call", Name: "get_current_time",
+		}}},
+		providers.Message{Role: "tool", ToolCallID: "safe-call", Content: `{"time":"12:00"}`},
+	)
+	safeToolResponse := &providers.LLMResponse{
+		Content: "diagnostics path " + canary, Reasoning: "diagnostics hash " + canary,
+		ToolCalls: []providers.ToolCall{{
+			ID: "allowed-follow-up", Name: "get_current_time",
+			Arguments: map[string]any{"private_context": canary},
+		}},
+	}
+	content, reasoning, sensitive = diagnosticLLMResponseContent(safeToolResponse, intervening)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("diagnostics safe-tool projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+	toolPreview := diagnosticToolCallsPreviewWithSensitivity(cfg, safeToolResponse.ToolCalls, sensitive)
+	if strings.Contains(toolPreview, canary) || !strings.Contains(toolPreview, "arguments_redacted") {
+		t.Fatalf("diagnostics safe-tool arguments leaked: %s", toolPreview)
+	}
+
+	hookAppended := append(intervening, providers.Message{
+		Role: "user", Content: "hook-added context without trusted prompt metadata",
+	})
+	content, reasoning, sensitive = diagnosticLLMResponseContent(safeToolResponse, hookAppended)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("hook-appended diagnostics projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+
+	roundTripped := make([]providers.Message, 0, len(hookAppended))
+	for _, message := range hookAppended {
+		roundTripped = append(roundTripped, providerVisibleMessage(message))
+	}
+	content, reasoning, sensitive = diagnosticLLMResponseContent(safeToolResponse, roundTripped)
+	if !sensitive || content != "" || reasoning != "" {
+		t.Fatalf("round-tripped diagnostics projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+
+	laterTurn := append(intervening, userPromptMessage("new unrelated turn", nil))
+	content, reasoning, sensitive = diagnosticLLMResponseContent(&providers.LLMResponse{
+		Content: "safe content", Reasoning: "safe reasoning",
+	}, laterTurn)
+	if sensitive || content != "safe content" || reasoning != "safe reasoning" {
+		t.Fatalf("later turn projection = (%q, %q, %v)", content, reasoning, sensitive)
+	}
+}
+
 func TestPendingProtectedToolCallIDReuseFailsClosed(t *testing.T) {
 	const canary = "pending-reused-fill-result-canary-54eb7e0c"
 	messages := []providers.Message{
@@ -683,7 +796,7 @@ func TestDiagnosticLLMResponseSuppressesImmediateNodeFileFollowUp(t *testing.T) 
 		t.Fatalf("follow-up response projection = (%q, %q, %v)", content, reasoning, sensitive)
 	}
 
-	request = append(request, providers.Message{Role: "user", Content: "new unrelated turn"})
+	request = append(request, userPromptMessage("new unrelated turn", nil))
 	content, reasoning, sensitive = diagnosticLLMResponseContent(&providers.LLMResponse{
 		Content: "safe content", Reasoning: "safe reasoning",
 	}, request)
@@ -722,7 +835,7 @@ func TestDiagnosticLLMResponseSuppressesNodeFileGracefulInterrupt(t *testing.T) 
 	content, reasoning, sensitive = diagnosticLLMResponseContent(&providers.LLMResponse{
 		Content: "safe content", Reasoning: "safe reasoning",
 	}, request)
-	if sensitive || content != "safe content" || reasoning != "safe reasoning" {
+	if !sensitive || content != "" || reasoning != "" {
 		t.Fatalf("untrusted lookalike projection = (%q, %q, %v)", content, reasoning, sensitive)
 	}
 }

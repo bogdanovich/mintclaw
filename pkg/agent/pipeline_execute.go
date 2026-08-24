@@ -1716,7 +1716,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 			})
 		}
 		ts.setPhase(TurnPhaseCompleted)
-		ts.setFinalContent("")
+		ts.setFinalContent("", false)
 		p.dismissToolFeedbackForTurn(ctx, ts)
 		logger.InfoCF("agent", "Tool output satisfied delivery; ending turn without follow-up LLM",
 			map[string]any{
