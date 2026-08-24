@@ -1278,6 +1278,10 @@ interactive terminal application remains P4 work.
 
 Goal: replace the direct coding renderer with a stable interactive TUI.
 
+Status: complete. See the [P4 exit record](local-coding-agent-p4-exit.md)
+for the merged packets, validation evidence, current-view architecture, and
+explicit P5 boundary.
+
 #### P4.1 — Application shell and terminal lifecycle
 
 Dependencies: P3.2, P3.3
@@ -1424,6 +1428,9 @@ safely, and restore the terminal. The resume picker and active-thread TUI each
 own one current in-process view and do not reintroduce the removed speculative
 IPC protocol. This is an alpha-quality coding agent; long-session continuity
 remains a release blocker.
+
+Completed by the [P4 exit record](local-coding-agent-p4-exit.md). P5 remains
+required before the local coding agent is release-ready.
 
 ### P5 — Coding compaction and resume continuity
 
