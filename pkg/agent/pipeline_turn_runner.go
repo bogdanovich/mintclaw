@@ -184,6 +184,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 				messages = exec.messages
 				continue
 			}
+			ts.setFinalContentProtected(llmOutcome.FinalContentProtected)
 			finalContent = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, finalContent)
 			result, finalizeErr := p.finalizeTurn(
 				turnCtx,

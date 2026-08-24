@@ -65,9 +65,10 @@ const (
 
 // LLMCallOutcome is the explicit result of one LLM phase.
 type LLMCallOutcome struct {
-	Control      Control
-	FinalContent string
-	AbortCause   TurnAbortCause
+	Control               Control
+	FinalContent          string
+	FinalContentProtected bool
+	AbortCause            TurnAbortCause
 }
 
 func (o LLMCallOutcome) terminalCandidate(retained string) string {
@@ -329,10 +330,11 @@ type turnState struct {
 	userMessage string
 	media       []string
 
-	phase        TurnPhase
-	iteration    int
-	startedAt    time.Time
-	finalContent string
+	phase                 TurnPhase
+	iteration             int
+	startedAt             time.Time
+	finalContent          string
+	finalContentProtected bool
 
 	followUps []bus.InboundMessage
 
@@ -563,6 +565,18 @@ func (ts *turnState) setFinalContent(content string) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.finalContent = content
+}
+
+func (ts *turnState) setFinalContentProtected(protected bool) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.finalContentProtected = protected
+}
+
+func (ts *turnState) finalContentProtectedSnapshot() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.finalContentProtected
 }
 
 func (ts *turnState) finalContentLen() int {

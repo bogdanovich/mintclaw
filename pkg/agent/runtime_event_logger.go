@@ -157,6 +157,20 @@ func (l *runtimeEventLogger) handle(_ context.Context, evt runtimeevents.Event) 
 
 func runtimeEventLogSafePayload(payload any) any {
 	switch value := payload.(type) {
+	case TurnEndPayload:
+		if value.FinalContentProtected {
+			value.FinalContent, value.FinalContentLen = diagnosticTurnFinalContent(value)
+		}
+		return value
+	case *TurnEndPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		if safe.FinalContentProtected {
+			safe.FinalContent, safe.FinalContentLen = diagnosticTurnFinalContent(safe)
+		}
+		return &safe
 	case LLMFallbackAttemptPayload:
 		value.DiagnosticMessage = ""
 		return value
@@ -292,7 +306,8 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["total_tokens"] = payload.TotalTokens
 		fields["context_used_tokens"] = payload.ContextUsedTokens
 		fields["context_limit_tokens"] = payload.ContextLimitTokens
-		fields["final_len"] = payload.FinalContentLen
+		_, finalContentLen := diagnosticTurnFinalContent(payload)
+		fields["final_len"] = finalContentLen
 	case LLMRequestPayload:
 		fields["model"] = payload.Model
 		fields["messages"] = payload.MessagesCount

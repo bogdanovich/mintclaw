@@ -258,9 +258,10 @@ func (p *turnTraceProjector) observeRuntimeEvent(event runtimeevents.Event) {
 	deliveryExpected := false
 	if payload, ok := event.Payload.(TurnEndPayload); ok {
 		deliveryExpected = payload.DeliveryExpected
+		finalContent, finalContentLen := diagnosticTurnFinalContent(payload)
 		trace.builder.SetOutcome(diagnostictrace.Outcome{
-			Status: string(payload.Status), ContentHash: safeHash(settings, payload.FinalContent),
-			ContentLen: payload.FinalContentLen,
+			Status: string(payload.Status), ContentHash: safeHash(settings, finalContent),
+			ContentLen: finalContentLen,
 		})
 	}
 	if deliveryExpected {
@@ -427,13 +428,14 @@ func runtimeEventRecord(
 			return diagnostictrace.Record{}, false, false
 		}
 		kind = diagnostictrace.RecordTurnEnd
+		finalContent, finalContentLen := diagnosticTurnFinalContent(value)
 		payload = diagnostictrace.TurnPayload{
 			Status:     string(value.Status),
-			FinalHash:  safeHash(settings, value.FinalContent),
-			FinalLen:   value.FinalContentLen,
+			FinalHash:  safeHash(settings, finalContent),
+			FinalLen:   finalContentLen,
 			Iterations: value.Iterations,
 			FinalPreview: captureTextPreview(
-				settings, value.FinalContent, diagnosticTurnFinalBytes,
+				settings, finalContent, diagnosticTurnFinalBytes,
 			),
 		}
 		critical = true

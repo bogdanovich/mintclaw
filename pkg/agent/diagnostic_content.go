@@ -12,21 +12,29 @@ import (
 )
 
 const (
-	diagnosticTurnInputBytes        = 4 * 1024
-	diagnosticTurnFinalBytes        = 8 * 1024
-	diagnosticModelMessagesBytes    = 10 * 1024
-	diagnosticModelResponseBytes    = 6 * 1024
-	diagnosticModelReasoningBytes   = 3 * 1024
-	diagnosticModelToolCallsBytes   = 2 * 1024
-	diagnosticToolArgumentsBytes    = 6 * 1024
-	diagnosticToolResultBytes       = 8 * 1024
-	diagnosticErrorBytes            = 2 * 1024
-	diagnosticSteeringBytes         = 4 * 1024
-	diagnosticSerializedArgsBytes   = 4 * 1024
-	fallbackDiagnosticMetadataBytes = 240
-	maxDiagnosticMessages           = 64
-	maxDiagnosticToolCalls          = 64
+	protectedTurnFinalDiagnosticReceipt = "Protected model response omitted from diagnostic state."
+	diagnosticTurnInputBytes            = 4 * 1024
+	diagnosticTurnFinalBytes            = 8 * 1024
+	diagnosticModelMessagesBytes        = 10 * 1024
+	diagnosticModelResponseBytes        = 6 * 1024
+	diagnosticModelReasoningBytes       = 3 * 1024
+	diagnosticModelToolCallsBytes       = 2 * 1024
+	diagnosticToolArgumentsBytes        = 6 * 1024
+	diagnosticToolResultBytes           = 8 * 1024
+	diagnosticErrorBytes                = 2 * 1024
+	diagnosticSteeringBytes             = 4 * 1024
+	diagnosticSerializedArgsBytes       = 4 * 1024
+	fallbackDiagnosticMetadataBytes     = 240
+	maxDiagnosticMessages               = 64
+	maxDiagnosticToolCalls              = 64
 )
+
+func diagnosticTurnFinalContent(payload TurnEndPayload) (string, int) {
+	if payload.FinalContentProtected {
+		return protectedTurnFinalDiagnosticReceipt, len(protectedTurnFinalDiagnosticReceipt)
+	}
+	return payload.FinalContent, payload.FinalContentLen
+}
 
 func diagnosticContentEnabled(cfg *config.Config) bool {
 	return cfg != nil &&

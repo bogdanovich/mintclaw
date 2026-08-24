@@ -141,6 +141,40 @@ func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testi
 	}
 }
 
+func TestBrowserDiagnosticsFollowUpMarksTerminalOutcomeProtected(t *testing.T) {
+	const canary = "browser-diagnostics-final-canary-1d7e9c"
+	provider := &sequenceProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+
+	pipeline := newTestPipeline(al)
+	ts := newTurnState(agent, makeTestTurnSpec("diagnostics-final-session"), turnEventScope{
+		turnID: "diagnostics-final-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	llm := newLLMIterationState(1)
+	llm.callMessages = []providers.Message{
+		{Role: "assistant", ToolCalls: []providers.ToolCall{{
+			ID: "diagnostics-call", Name: "browser_diagnostics",
+			Function: &providers.FunctionCall{Name: "browser_diagnostics"},
+		}}},
+		{Role: "tool", ToolCallID: "diagnostics-call", Content: canary},
+	}
+	llm.response = &providers.LLMResponse{Content: "diagnostic detail " + canary}
+
+	outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil {
+		t.Fatalf("normalizeAndDispatchLLMResponse() error = %v", err)
+	}
+	if outcome.Control != ControlBreak || outcome.FinalContent != llm.response.Content ||
+		!outcome.FinalContentProtected {
+		t.Fatalf("protected diagnostics outcome = %#v", outcome)
+	}
+}
+
 func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testing.T) {
 	secret := "ephemeral-browser-fill-canary"
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{

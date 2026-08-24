@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -236,6 +237,47 @@ func TestTraceCaptureMetadataOnlyOmitsContentPreviews(t *testing.T) {
 	if fallbackPayload.ClassificationSource != "message_pattern" || fallbackPayload.ErrorPreview != "" ||
 		fallbackPayload.RequestID != "[REDACTED]" {
 		t.Fatalf("metadata fallback payload = %#v", fallbackPayload)
+	}
+}
+
+func TestProtectedTurnFinalUsesContentIndependentTraceReceipt(t *testing.T) {
+	const canary = "browser-diagnostics-trace-canary-8f2c4e"
+	settings := traceCaptureSettings{contentMode: diagnostictrace.ContentRedacted}
+	record, critical, ok := runtimeEventRecord(
+		settings,
+		&activeTraceCapture{startedAt: time.Now()},
+		runtimeevents.Event{
+			Kind: runtimeevents.KindAgentTurnEnd,
+			Time: time.Now(),
+			Payload: TurnEndPayload{
+				Status: TurnEndStatusCompleted, FinalContent: canary, FinalContentLen: len(canary),
+				FinalContentProtected: true,
+			},
+		},
+	)
+	if !ok || !critical {
+		t.Fatalf("protected turn record = (ok=%v critical=%v)", ok, critical)
+	}
+	if bytes.Contains(record.Data, []byte(canary)) {
+		t.Fatalf("protected turn record leaked canary: %s", record.Data)
+	}
+	var payload diagnostictrace.TurnPayload
+	if err := json.Unmarshal(record.Data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.FinalPreview != protectedTurnFinalDiagnosticReceipt ||
+		payload.FinalHash != safeHash(settings, protectedTurnFinalDiagnosticReceipt) ||
+		payload.FinalLen != len(protectedTurnFinalDiagnosticReceipt) {
+		t.Fatalf("protected turn projection = %#v", payload)
+	}
+
+	other := TurnEndPayload{
+		FinalContent: "different-private-value", FinalContentLen: len("different-private-value"),
+		FinalContentProtected: true,
+	}
+	content, contentLen := diagnosticTurnFinalContent(other)
+	if content != protectedTurnFinalDiagnosticReceipt || contentLen != len(protectedTurnFinalDiagnosticReceipt) {
+		t.Fatalf("second protected turn projection = (%q, %d)", content, contentLen)
 	}
 }
 

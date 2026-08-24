@@ -179,6 +179,34 @@ func TestRuntimeEventLogSafePayloadOmitsFallbackDiagnosticMessage(t *testing.T) 
 	}
 }
 
+func TestRuntimeEventLogSafePayloadReplacesProtectedTurnFinal(t *testing.T) {
+	const canary = "browser-diagnostics-turn-end-canary-3a8c6f"
+	payload := TurnEndPayload{
+		Status: TurnEndStatusCompleted, FinalContent: canary, FinalContentLen: len(canary),
+		FinalContentProtected: true,
+	}
+
+	for _, input := range []any{payload, &payload} {
+		safe := runtimeEventLogSafePayload(input)
+		var got TurnEndPayload
+		switch value := safe.(type) {
+		case TurnEndPayload:
+			got = value
+		case *TurnEndPayload:
+			got = *value
+		default:
+			t.Fatalf("safe payload type = %T", safe)
+		}
+		if got.FinalContent != protectedTurnFinalDiagnosticReceipt ||
+			got.FinalContentLen != len(protectedTurnFinalDiagnosticReceipt) {
+			t.Fatalf("safe protected turn payload = %#v", got)
+		}
+	}
+	if payload.FinalContent != canary || payload.FinalContentLen != len(canary) {
+		t.Fatal("log-safe projection mutated the event payload")
+	}
+}
+
 func TestRuntimeEventLogSafePayloadOmitsToolObservation(t *testing.T) {
 	payload := ToolExecEndPayload{
 		Tool:        "exec",

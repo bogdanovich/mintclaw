@@ -656,7 +656,10 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 				"iteration":     iteration,
 				"content_chars": len(responseContent),
 			})
-		return LLMCallOutcome{Control: ControlBreak, FinalContent: responseContent}, nil
+		return LLMCallOutcome{
+			Control: ControlBreak, FinalContent: responseContent,
+			FinalContentProtected: sensitiveDiagnosticResponse,
+		}, nil
 	}
 	cancelConfiguredStreamingLLM(turnCtx, llm)
 
