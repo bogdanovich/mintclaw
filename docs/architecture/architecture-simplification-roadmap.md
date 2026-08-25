@@ -167,7 +167,8 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 53 to #889; 54 to #890; 55 to #891; 56 to #892; 57 to #893; 58 to #894;
 59 to #895; and 60 to #896.
 
-The 2026-08-24 read-only deployed audit also established these rollout facts:
+The 2026-08-24 read-only deployed audit established these rollout facts at
+that time:
 
 - the installed server remains at `1adb08f7`, so merged architecture work after
   that revision is not yet deployed;
@@ -177,8 +178,48 @@ The 2026-08-24 read-only deployed audit also established these rollout facts:
   `AGENTS.md` is shadowed by the current personal-profile reader;
 - 5,570 retained messages across the active stores omit `created_at`, while the
   current writer assigns it to new messages; and
-- all six active node-registry records omit `key_algorithm` and therefore still
-  rely on the empty-value-to-Ed25519 reader.
+- all six retained node-registry records omit `key_algorithm` and therefore
+  still rely on the empty-value-to-Ed25519 reader.
+
+The 2026-08-25 read-only R1 preflight superseded the installed-revision fact
+above and refined the reset scope:
+
+- the gateway fleet is healthy but split across two effective revisions: the
+  main gateway runs `4ecd74c3`, while four other gateways still run
+  `631aaff8` from deleted executable inodes; rollback must therefore capture
+  the effective binary for each process rather than only the current file at
+  its configured path;
+- the sole connected browser-capable companion already runs `4ecd74c3` and
+  advertises the complete current browser catalogue. A temporary package test
+  proved that all six retained node identities deterministically normalize to
+  Ed25519 and that their derived identifiers remain unchanged;
+- current Ed25519 companion construction still omits `key_algorithm`; only the
+  gateway-side reader supplies Ed25519. R1 therefore needs a bridge packet that
+  makes companions emit the explicit field while the gateway still accepts the
+  omitted form, followed by a fleet upgrade before that reader is deleted;
+- the node registry contains four connected, one pending-pairing, and one
+  revoked record. Two connected Linux companions are local canary services at
+  `631aaff8` and `74998a25`; another connected Linux companion remains on
+  `03b08be2`. They must be upgraded or deliberately retired before the gateway
+  requires explicit `key_algorithm`;
+- the five version 3 configurations describe 21 agents across 20 distinct
+  personal workspaces. Every workspace has `AGENT.md`; the machine metadata to
+  transfer comprises 21 names, 21 descriptions, 20 tool policies, and one MCP
+  policy, with no deployed Markdown model or skill override. A copy-free
+  conversion rehearsal produced version 4 documents that passed current
+  strict decoding and validation for every profile;
+- one spouse workspace already contains a different, currently shadowed
+  `AGENTS.md`. The cutover must back up both documents and resolve that collision
+  explicitly instead of silently overwriting or concatenating instructions;
+- active task events use `task_event.v2`, outbox entries use version 2, and the
+  active interaction registry uses the version 1 snapshot and event contracts.
+  Session JSONL and metadata plus Seahorse SQLite remain current stores, so the
+  structural inventory found no additional persisted-shape conversion gate;
+  and
+- the active profile trees occupy about 6.3 GiB while the filesystem has about
+  7.5 GiB free. Fifty-one earlier backup directories occupy about 26 GiB, so R1
+  requires a capacity gate and explicit authorization before moving or deleting
+  any retained backup.
 
 ### Re-audit corrections
 
@@ -206,9 +247,9 @@ separation and standards alignment.
 
 | Debt | Classification | Current evidence | Owner and removal gate |
 | --- | --- | --- | --- |
-| Previous and older browser catalogue schemas | Temporary first-party wire adapter | PR #865 reconstructs the previous streamed-snapshot schema and retains the earlier session-open output schema after a companion rollout failed | Architecture simplification owner; upgrade every browser companion through the bridge release, then delete the historical generators in R1 |
-| Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | Six active registry records omit the field and normalize to Ed25519 | Architecture simplification owner; convert the current records or re-enrol the nodes, upgrade companions, then require the field in R1 |
-| Deployed version 3 personal profiles | Coordinated persisted-config and workspace cutover | PR #881 makes version 4 config the sole machine authority and root `AGENTS.md` the sole personal prose file; the five deployed profiles still use the pre-cutover shape | Architecture simplification owner; convert and validate every deployed profile while stopped in R1 before installing the version 4 binary |
+| Previous and older browser catalogue schemas | Temporary first-party wire adapter | PR #865 reconstructs the previous streamed-snapshot schema and retains the earlier session-open output schema after a companion rollout failed; the sole connected browser-capable companion now advertises the current catalogue | Architecture simplification owner; verify the current companion remains connected through cutover, then delete the historical generators in R1 |
+| Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | Six retained registry records omit the field and deterministically normalize to Ed25519; current Ed25519 companion construction also omits it, and three connected non-browser companions remain on older builds | Architecture simplification owner; first merge a bridge packet that emits the field, convert every retained record or deliberately remove it, upgrade or retire older connected companions, then require the field in R1 |
+| Deployed version 3 personal profiles | Coordinated persisted-config and workspace cutover | PR #881 makes version 4 config the sole machine authority and root `AGENTS.md` the sole personal prose file; five deployed configs, 21 agents, and 20 personal workspaces still use the pre-cutover shape | Architecture simplification owner; convert and validate every configured agent and distinct workspace while stopped in R1 before installing the version 4 binary |
 
 The current implementation also has one non-blocking observability follow-up,
 not a compatibility adapter: an exact deny rule can be reported as an unknown
@@ -1129,8 +1170,9 @@ Scope:
   cannot start after silently losing Markdown-owned identity or deny policy;
   the coordinated profile conversion writes all current fields before the new
   binary is started; and
-- cut the five deployed profiles over once, delete the singular `AGENT.md`
-  parser and frontmatter ownership, and avoid a steady-state dual reader.
+- cut every configured agent and distinct personal workspace in the five
+  deployed profiles over once, delete the singular `AGENT.md` parser and
+  frontmatter ownership, and avoid a steady-state dual reader.
 
 Tests:
 
@@ -1161,7 +1203,8 @@ Implemented shape:
 - the runtime no longer reads root `AGENT.md` or `IDENTITY.md`, and onboarding
   preserves existing workspace prose while creating missing templates; and
 - merge completion does not satisfy the deployed cutover criterion: the five
-  active profiles still require the stopped-service R1 conversion before this
+  active configs, their 21 agent entries, and their 20 distinct personal
+  workspaces still require the stopped-service R1 conversion before this
   binary may be deployed.
 
 ### R1 — Execute the coordinated first-party compatibility reset
@@ -1172,20 +1215,27 @@ Deployment requires explicit user authorization.
 
 Scope:
 
-1. back up the current configuration, matching installed binary, profile
-   Markdown, and all MintClaw durable state, explicitly including sessions,
-   tasks, interactions, outbox, cron, node registry, browser state, and
-   invocation state;
-2. deploy a bridge release containing PR #865 and upgrade every first-party
-   browser companion to advertise the current streamed-snapshot contract;
-3. convert the six current node records to explicit Ed25519 or re-enrol them,
-   and verify every connected companion sends `key_algorithm`;
-4. perform the P1 personal-instruction cutover and validate every active
-   profile before restart;
-5. delete previous and older browser schema generators, empty-algorithm
+1. satisfy the capacity gate, then back up the current configuration, the
+   effective running binary for every process, all personal Markdown, and all
+   MintClaw durable state, explicitly including sessions, tasks, interactions,
+   outbox, cron, node registry, browser state, media indexes and assets, and
+   invocation state; do not assume that the file currently present at a
+   configured executable path matches a process running a deleted inode;
+2. treat the PR #865 browser bridge cycle as satisfied for the sole connected
+   browser-capable companion and verify that it remains on the current
+   streamed-snapshot contract;
+3. merge and stage a node-identity bridge release that makes Ed25519 companions
+   send explicit `key_algorithm` while the gateway still accepts the omitted
+   form, then upgrade or deliberately retire every older connected companion;
+4. convert every retained node record to explicit Ed25519 or deliberately
+   remove it, and verify every connected companion sends `key_algorithm`;
+5. perform the P1 cutover for all 21 configured agent entries and 20 distinct
+   personal workspaces, resolve the one pre-existing `AGENTS.md` collision
+   explicitly, and validate every active profile before restart;
+6. delete previous and older browser schema generators, empty-algorithm
    normalization, expired wire aliases, and their old fixtures in one removal
    release; and
-6. deploy and verify the removal release, then exercise rollback using the
+7. deploy and verify the removal release, then exercise rollback using the
    matching binary and same-time state backup.
 
 Exit criteria:
