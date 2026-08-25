@@ -15,6 +15,11 @@ import (
 
 var configPath = ""
 
+func saveTestConfig(path string, cfg *config.Config) error {
+	_, err := config.NewRepository(path).Save(cfg)
+	return err
+}
+
 func initTest(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath = filepath.Join(tmpDir, "config.json")
@@ -180,7 +185,7 @@ func TestSetDefaultModel_ValidModel(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, config.SaveConfig(configPath, cfg))
+	require.NoError(t, saveTestConfig(configPath, cfg))
 
 	output := captureStdout(func() {
 		err := setDefaultModel(configPath, "new-model")
@@ -248,7 +253,7 @@ func TestSetDefaultModel_InvalidModel(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, config.SaveConfig(configPath, cfg))
+	require.NoError(t, saveTestConfig(configPath, cfg))
 
 	err := setDefaultModel(configPath, "nonexistent-model")
 	assert.EqualError(t, err, "cannot found model 'nonexistent-model' in config")
@@ -267,7 +272,7 @@ func TestSetDefaultModel_RejectsUnconfiguredLocalModel(t *testing.T) {
 			Enabled:   true,
 		}},
 	}
-	require.NoError(t, config.SaveConfig(configPath, cfg))
+	require.NoError(t, saveTestConfig(configPath, cfg))
 
 	err := setDefaultModel(configPath, "local-model")
 	assert.EqualError(t, err, "cannot found model 'local-model' in config")
@@ -297,12 +302,12 @@ func TestSetDefaultModel_ModelWithoutAPIKey(t *testing.T) {
 			{ModelName: "no-key-model", Provider: "openai", Model: "nokey"},
 		},
 	}
-	require.NoError(t, config.SaveConfig(configPath, cfg))
+	require.NoError(t, saveTestConfig(configPath, cfg))
 
 	assert.Error(t, setDefaultModel(configPath, "no-key-model"))
 }
 
-func TestSetDefaultModel_SaveConfigError(t *testing.T) {
+func TestSetDefaultModel_RepositorySaveError(t *testing.T) {
 	// Use an invalid path to trigger save error
 	invalidPath := "/nonexistent/directory/config.json"
 
@@ -353,7 +358,7 @@ func TestModelCommandExecution_Show(t *testing.T) {
 		},
 	}
 
-	err := config.SaveConfig(configPath, cfg)
+	err := saveTestConfig(configPath, cfg)
 	require.NoError(t, err)
 
 	cmd := NewModelCommand()
@@ -391,7 +396,7 @@ func TestModelCommandExecution_Set(t *testing.T) {
 		},
 	}
 
-	err := config.SaveConfig(configPath, cfg)
+	err := saveTestConfig(configPath, cfg)
 	require.NoError(t, err)
 
 	cmd := NewModelCommand()

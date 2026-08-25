@@ -20,6 +20,11 @@ import (
 	mintclawmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 )
 
+func saveTestConfig(path string, cfg *config.Config) error {
+	_, err := config.NewRepository(path).Save(cfg)
+	return err
+}
+
 func TestNewMCPCommand(t *testing.T) {
 	cmd := NewMCPCommand()
 
@@ -1103,7 +1108,7 @@ func writeMCPConfig(t *testing.T, path string, cfg *config.Config) {
 		cfg.Agents.List = []config.AgentConfig{config.DefaultAgentConfig()}
 	}
 
-	require.NoError(t, config.SaveConfig(path, cfg))
+	require.NoError(t, saveTestConfig(path, cfg))
 }
 
 func readMCPConfig(t *testing.T, path string) *config.Config {

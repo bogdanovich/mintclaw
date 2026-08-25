@@ -345,10 +345,6 @@ func toNameIndex(list []*ModelConfig) []string {
 	return nameList
 }
 
-func SaveConfig(path string, cfg *Config) error {
-	return writeConfigDocuments(path, cfg)
-}
-
 func (c *Config) WorkspacePath() string {
 	return fileutil.ExpandHome(c.Agents.Defaults.Workspace)
 }

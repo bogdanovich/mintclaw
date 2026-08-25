@@ -140,8 +140,8 @@ func TestEnsureMintClawChannel_PreservesUserSettings(t *testing.T) {
 	mintclawCfg.SetToken("user-custom-token")
 	mintclawCfg.AllowTokenQuery = true
 	mintclawCfg.AllowOrigins = []string{"https://myapp.example.com"}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -225,8 +225,8 @@ func TestEnsureMintClawChannel_ConfiguresMintClawWithoutGateway(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = ""
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -478,8 +478,8 @@ func TestHandleWebSocketProxyReloadsGatewayTargetFromConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Gateway.Host = "127.0.0.1"
 	cfg.Gateway.Port = mustGatewayTestPort(t, server1.URL)
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 	cmd := startGatewayLikeProcess(t)
 	t.Cleanup(func() {
@@ -516,8 +516,8 @@ func TestHandleWebSocketProxyReloadsGatewayTargetFromConfig(t *testing.T) {
 	}
 
 	cfg.Gateway.Port = mustGatewayTestPort(t, server2.URL)
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	req2 := newMintClawProxyRequest(http.MethodGet, "/mintclaw/ws")
@@ -564,8 +564,8 @@ func TestHandleWebSocketProxyLoadsCachedMintClawTokenWhenMissing(t *testing.T) {
 	mintclawCfg := decoded.(*config.MintClawSettings)
 	bc.Enabled = true
 	mintclawCfg.SetToken("cached-token")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 	cmd := startGatewayLikeProcess(t)
 	t.Cleanup(func() {
@@ -640,8 +640,8 @@ func TestHandleWebSocketProxyLoadsPidDataOnDemand(t *testing.T) {
 		t.Fatalf("GetDecoded() error = %v", err)
 	}
 	decoded.(*config.MintClawSettings).SetToken("ui-token")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	cmd := startGatewayLikeProcess(t)
@@ -716,8 +716,8 @@ func TestCreateMintClawHTTPProxyInjectsGatewayAuth(t *testing.T) {
 		t.Fatalf("GetDecoded() error = %v", err)
 	}
 	decoded.(*config.MintClawSettings).SetToken("ui-token")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	proxy := h.createMintClawHTTPProxy("ui-token")
@@ -780,8 +780,8 @@ func TestHandleMintClawMediaProxyUsesRawBearerToken(t *testing.T) {
 		t.Fatalf("GetDecoded() error = %v", err)
 	}
 	decoded.(*config.MintClawSettings).SetToken("ui-token")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	cmd := startGatewayLikeProcess(t)
@@ -838,8 +838,8 @@ func TestHandleWebSocketProxyRejectsStalePidDataAfterProcessExit(t *testing.T) {
 		t.Fatalf("GetDecoded() error = %v", err)
 	}
 	decoded.(*config.MintClawSettings).SetToken("ui-token")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	cmd := startLongRunningProcess(t)
@@ -913,8 +913,8 @@ func TestHandleWebSocketProxy_AllowsArbitraryOrigin(t *testing.T) {
 		t.Fatalf("GetDecoded() error = %v", err)
 	}
 	decoded.(*config.MintClawSettings).SetToken("ui-token")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	cmd := startGatewayLikeProcess(t)

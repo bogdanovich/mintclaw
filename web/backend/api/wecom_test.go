@@ -26,8 +26,8 @@ func TestValidateWecomAllowFrom(t *testing.T) {
 			cfg := config.DefaultConfig()
 			wecom := cfg.Channels.Get(config.ChannelWeCom)
 			wecom.AllowFrom = tt.allowFrom
-			if err := config.SaveConfig(path, cfg); err != nil {
-				t.Fatalf("SaveConfig() error = %v", err)
+			if err := saveTestConfig(path, cfg); err != nil {
+				t.Fatalf("saveTestConfig() error = %v", err)
 			}
 
 			handler := &Handler{configPath: path}

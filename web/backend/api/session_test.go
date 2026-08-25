@@ -1552,9 +1552,9 @@ func TestHandleGetSession_UsesConfiguredToolFeedbackMaxArgsLength(t *testing.T) 
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Agents.Defaults.ToolFeedback.MaxArgsLength = 20
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	dir := sessionsTestDir(t, configPath)
@@ -1632,9 +1632,9 @@ func TestHandleGetSession_UsesToolArgumentsWhenExplanationMissing(t *testing.T) 
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Agents.Defaults.ToolFeedback.MaxArgsLength = 20
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	dir := sessionsTestDir(t, configPath)

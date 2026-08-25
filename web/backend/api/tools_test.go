@@ -30,9 +30,9 @@ func TestHandleListTools(t *testing.T) {
 	cfg.Tools.MCP.Discovery.Enabled = true
 	cfg.Tools.MCP.Discovery.UseRegex = true
 	cfg.Tools.MCP.Discovery.UseBM25 = false
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -97,8 +97,8 @@ func TestHandleListTools(t *testing.T) {
 		}
 
 		cfg.Tools.Serial.Enabled = true
-		if err := config.SaveConfig(configPath, cfg); err != nil {
-			t.Fatalf("SaveConfig() error = %v", err)
+		if err := saveTestConfig(configPath, cfg); err != nil {
+			t.Fatalf("saveTestConfig() error = %v", err)
 		}
 
 		rec = httptest.NewRecorder()
@@ -122,8 +122,8 @@ func TestHandleListTools(t *testing.T) {
 		cfg.Tools.I2C.Enabled = true
 		cfg.Tools.SPI.Enabled = true
 		cfg.Tools.Serial.Enabled = true
-		if err := config.SaveConfig(configPath, cfg); err != nil {
-			t.Fatalf("SaveConfig() error = %v", err)
+		if err := saveTestConfig(configPath, cfg); err != nil {
+			t.Fatalf("saveTestConfig() error = %v", err)
 		}
 
 		rec = httptest.NewRecorder()
@@ -174,9 +174,9 @@ func TestHandleUpdateToolState(t *testing.T) {
 	cfg.Tools.MCP.Enabled = false
 	cfg.Tools.MCP.Discovery.Enabled = false
 	cfg.Tools.MCP.Discovery.UseRegex = false
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -278,8 +278,8 @@ func TestHandleListTools_ReportsWebSearchEnabledWhenToolIsOn(t *testing.T) {
 			cfg.Tools.Web.DuckDuckGo.Enabled = false
 			cfg.Tools.Web.Brave.Enabled = true
 			cfg.Tools.Web.Brave.SetAPIKeys(nil)
-			if err := config.SaveConfig(configPath, cfg); err != nil {
-				t.Fatalf("SaveConfig() error = %v", err)
+			if err := saveTestConfig(configPath, cfg); err != nil {
+				t.Fatalf("saveTestConfig() error = %v", err)
 			}
 
 			h := NewHandler(configPath)
@@ -328,8 +328,8 @@ func TestHandleGetWebSearchConfig(t *testing.T) {
 	cfg.Tools.Web.Sogou.MaxResults = 6
 	cfg.Tools.Web.Brave.Enabled = true
 	cfg.Tools.Web.Brave.SetAPIKey("brave-test-key")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -373,8 +373,8 @@ func TestHandleGetWebSearchConfig_DoesNotExposeNativeAsCurrentService(t *testing
 	cfg.Tools.Web.DuckDuckGo.Enabled = false
 	cfg.Tools.Web.Brave.Enabled = true
 	cfg.Tools.Web.Brave.SetAPIKeys(nil)
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -410,8 +410,8 @@ func TestHandleUpdateWebSearchConfig(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Tools.Web.Brave.SetAPIKeys([]string{"brave-old-1", "brave-old-2"})
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -473,8 +473,8 @@ func TestHandleUpdateWebSearchConfig_PreservesAndReplacesMultiKeys(t *testing.T)
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Tools.Web.Brave.SetAPIKeys([]string{"brave-old-1", "brave-old-2"})
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)

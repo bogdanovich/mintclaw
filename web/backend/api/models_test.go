@@ -156,8 +156,8 @@ func TestHandleUpdateModelPreservesOmittedEnabledValue(t *testing.T) {
 		Model:     "gpt-5.4",
 		Enabled:   true,
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -197,8 +197,8 @@ func TestHandleModelsRoundTripsCatalogContextMetadata(t *testing.T) {
 		ModelName: "catalog-model", Provider: "openai", Model: "gpt-future", Enabled: true,
 		ContextWindow: 345_000, MaxContextWindow: 900_000,
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -255,8 +255,8 @@ func TestHandleUpdateModelKeepsDefaultWhenAliasHasAnotherEligibleEntry(t *testin
 		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4-mini", Enabled: true},
 	}
 	cfg.Agents.Defaults.ModelName = "balanced"
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -303,8 +303,8 @@ func TestHandleUpdateModelRejectsReferencedRename(t *testing.T) {
 		Enabled:   true,
 	}}
 	cfg.Agents.Defaults.ModelName = "referenced-model"
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -352,8 +352,8 @@ func TestHandleDeleteModelRejectsDanglingReference(t *testing.T) {
 		},
 	}
 	cfg.Agents.Defaults.ModelName = "consumer-model"
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -389,8 +389,8 @@ func TestHandleDeleteModelKeepsDefaultWhenAliasHasAnotherEligibleEntry(t *testin
 		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4-mini", Enabled: true},
 	}
 	cfg.Agents.Defaults.ModelName = "balanced"
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -474,9 +474,9 @@ func TestHandleListModels_AvailabilityUsesRuntimeProbesForLocalModels(t *testing
 		},
 	}
 	cfg.Agents.Defaults.ModelName = "openai-oauth"
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -562,9 +562,9 @@ func TestHandleListModels_AvailabilityForOAuthModelWithCredential(t *testing.T) 
 		AuthMethod: "oauth", Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "claude-oauth"
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	if setCredentialErr := auth.SetCredential(oauthProviderAnthropic, &auth.AuthCredential{
@@ -638,9 +638,9 @@ func TestHandleListModels_AntigravityImplicitOAuthAvailability(t *testing.T) {
 		Provider:  "antigravity",
 		Model:     "gemini-3-flash",
 	}}
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	if err := auth.SetCredential(oauthProviderGoogleAntigravity, &auth.AuthCredential{
@@ -692,8 +692,8 @@ func TestHandleListModels_BedrockUsesAmbientCredentialStatus(t *testing.T) {
 		Provider:  "bedrock",
 		Model:     "us.anthropic.claude-sonnet-4-20250514-v1:0",
 	}}
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -758,8 +758,8 @@ func TestHandleListModels_CLIProvidersRequireInstalledCommands(t *testing.T) {
 			Model:     "codex-cli",
 		},
 	}
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -850,8 +850,8 @@ func TestHandleListModels_ProbesLocalModelsConcurrently(t *testing.T) {
 			APIBase: "http://127.0.0.1:8001/v1",
 		},
 	}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -901,8 +901,8 @@ func TestHandleListModels_NormalizesWildcardLocalAPIBaseForProbe(t *testing.T) {
 		ModelName: "vllm-local", Provider: "vllm", Model: "custom-model",
 		APIBase: "http://0.0.0.0:8000/v1",
 	}}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -953,8 +953,8 @@ func TestHandleListModels_StatusMarksUnreachableLocalModel(t *testing.T) {
 		APIBase: "http://127.0.0.1:8000/v1",
 		APIKeys: config.SimpleSecureStrings("test-key"),
 	}}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1012,8 +1012,8 @@ func TestHandleListModels_RuntimeProbeUsesExplicitProviderField(t *testing.T) {
 		Model:     "custom-model",
 		APIBase:   "http://127.0.0.1:8000/v1",
 	}}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1122,8 +1122,8 @@ func TestHandleListModels_ReturnsStreamingConfig(t *testing.T) {
 		APIKeys:   config.SimpleSecureStrings("sk-existing"),
 		Streaming: config.ModelStreamingConfig{Enabled: true},
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1223,8 +1223,8 @@ func TestHandleAddModel_DoesNotRewriteCanonicalElevenLabsASRConfig(t *testing.T)
 		ModelName: "elevenlabs-asr", Provider: "elevenlabs", Model: "scribe_v1",
 		APIKeys: config.SimpleSecureStrings("sk_elevenlabs_test"),
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1442,9 +1442,9 @@ func TestHandleUpdateModel_CustomHeadersPreserveAndClear(t *testing.T) {
 		APIKeys:       config.SimpleSecureStrings("sk-existing"),
 		CustomHeaders: map[string]string{"X-Source": "coding-plan"},
 	}}
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1508,9 +1508,9 @@ func TestHandleUpdateModel_ToolSchemaTransformPreserveAndClear(t *testing.T) {
 		APIKeys:             config.SimpleSecureStrings("sk-existing"),
 		ToolSchemaTransform: "simple",
 	}}
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1574,8 +1574,8 @@ func TestHandleUpdateModel_StreamingPreserveAndChange(t *testing.T) {
 		APIKeys:   config.SimpleSecureStrings("sk-existing"),
 		Streaming: config.ModelStreamingConfig{Enabled: true},
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1637,8 +1637,8 @@ func TestHandleUpdateModel_PersistsProvider(t *testing.T) {
 		Model:     "gpt-4o",
 		Provider:  "openai",
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1680,8 +1680,8 @@ func TestHandleUpdateModel_PreservesExplicitProviderPrefixedModel(t *testing.T) 
 		Model:     "gpt-4o",
 		Provider:  "openai",
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1726,9 +1726,9 @@ func TestHandleListModels_PreservesExplicitProviderPrefixedModel(t *testing.T) {
 		Provider:  "openrouter",
 		Model:     "openrouter/auto",
 	}}
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1773,8 +1773,8 @@ func TestHandleListModels_ExposesElevenLabsASRProvider(t *testing.T) {
 		ModelName: "elevenlabs-asr", Provider: "elevenlabs", Model: "scribe_v1",
 		APIKeys: config.SimpleSecureStrings("sk_elevenlabs_test"),
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1820,8 +1820,8 @@ func TestHandleUpdateModel_RejectsMissingProvider(t *testing.T) {
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "openrouter-model", Provider: "openrouter", Model: "openai/gpt-5.4",
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1871,8 +1871,8 @@ func TestHandleUpdateModel_ClearsDefaultWhenSavingASROnlyModel(t *testing.T) {
 		Enabled:   true,
 	}}
 	cfg.Agents.Defaults.ModelName = "elevenlabs-asr"
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1938,9 +1938,9 @@ func TestHandleListModels_ReturnsProviderOptionsWithoutRewritingConfig(t *testin
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "openrouter-model", Provider: "openrouter", Model: "openai/gpt-5.4",
 	}}
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -2096,8 +2096,8 @@ func TestHandleListModels_ReturnsProviderField(t *testing.T) {
 		Model:     "z-ai/glm-5.1",
 		APIKeys:   config.SimpleSecureStrings("nv-key"),
 	}}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -2137,8 +2137,8 @@ func TestHandleListModels_PreservesKnownProviderInCatalog(t *testing.T) {
 	cfg.ModelList = []*config.ModelConfig{{
 		ModelName: "bedrock-claude", Provider: "bedrock", Model: "us.anthropic.claude-sonnet-4-20250514-v1:0",
 	}}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -2197,8 +2197,8 @@ func TestHandleUpdateModel_AllowsExistingBedrockProvider(t *testing.T) {
 		Model:     "us.anthropic.claude-sonnet-4-20250514-v1:0",
 		APIBase:   "us-west-2",
 	}}
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -2257,8 +2257,8 @@ func TestHandleListModels_ReturnsStoredProviderField(t *testing.T) {
 			Model:     "qwen3-coder-plus",
 		},
 	}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -2306,7 +2306,7 @@ func TestHandleListModels_ReturnsStoredProviderField(t *testing.T) {
 
 // TestHandleSetDefaultModel_RejectsNonexistentModel tests that setting a non-existent
 // model as default returns 404. This covers the case where virtual models (which are
-// filtered by SaveConfig) cannot be set as default.
+// filtered by saveTestConfig) cannot be set as default.
 func TestHandleSetDefaultModel_RejectsNonexistentModel(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
@@ -2319,8 +2319,8 @@ func TestHandleSetDefaultModel_RejectsNonexistentModel(t *testing.T) {
 	cfg.ModelList = []*config.ModelConfig{
 		{ModelName: "gpt-4", Provider: "openai", Model: "gpt-4o"},
 	}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	// Try to set a non-existent model (like a virtual model name) as default
@@ -2358,8 +2358,8 @@ func TestHandleSetDefaultModel_RejectsDisabledModel(t *testing.T) {
 		Model:     "gpt-5.4",
 		Enabled:   false,
 	}}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -2393,8 +2393,8 @@ func TestHandleSetDefaultModelAcceptsAliasWithEnabledEntryAfterDisabledEntry(t *
 		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4", Enabled: false},
 		{ModelName: "balanced", Provider: "openai", Model: "gpt-5.4-mini", Enabled: true},
 	}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -2436,8 +2436,8 @@ func TestHandleSetDefaultModel_RejectsElevenLabsASRProvider(t *testing.T) {
 			APIKeys:   config.SimpleSecureStrings("sk_elevenlabs_test"),
 		},
 	}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -2925,8 +2925,8 @@ func TestHandleFetchModels_ModelIndexUsesStoredKey(t *testing.T) {
 		},
 	}
 	configPath := filepath.Join(tmp, "config.json")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig error: %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig error: %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -2982,8 +2982,8 @@ func TestHandleFetchModels_ModelIndexProviderMismatchRejectsKey(t *testing.T) {
 		},
 	}
 	configPath := filepath.Join(tmp, "config.json")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig error: %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig error: %v", err)
 	}
 
 	h := NewHandler(configPath)

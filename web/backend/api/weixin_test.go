@@ -18,8 +18,8 @@ func TestSaveWeixinBindingReturnsSuccessWhenRestartFails(t *testing.T) {
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	originalHealthGet := gatewayHealthGet

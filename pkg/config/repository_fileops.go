@@ -11,8 +11,3 @@ var (
 	configSyncDirectory   = fileutil.SyncDirectory
 	configRemoveFile      = os.Remove
 )
-
-func writeConfigDocuments(path string, cfg *Config) error {
-	_, err := NewRepository(path).Save(cfg)
-	return err
-}

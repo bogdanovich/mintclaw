@@ -669,7 +669,7 @@ export MINTCLAW_CREDENTIAL_PASSPHRASE="your-secure-passphrase"
 
 2. When saving config, API keys will be encrypted automatically:
 ```go
-SaveConfig(path, config)
+_, err := config.NewRepository(path).Save(cfg)
 ```
 
 ### Encrypted Format

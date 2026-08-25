@@ -24,6 +24,11 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+func saveTestConfig(path string, cfg *config.Config) error {
+	_, err := config.NewRepository(path).Save(cfg)
+	return err
+}
+
 func TestRun_StartupFailuresReturnErrorAndEmitStructuredLog(t *testing.T) {
 	t.Parallel()
 
@@ -53,8 +58,8 @@ func TestRun_StartupFailuresReturnErrorAndEmitStructuredLog(t *testing.T) {
 				cfg := config.DefaultConfig()
 				cfg.Gateway.Port = 0
 				cfgPath := filepath.Join(dir, "config.json")
-				if err := config.SaveConfig(cfgPath, cfg); err != nil {
-					t.Fatalf("SaveConfig() error = %v", err)
+				if err := saveTestConfig(cfgPath, cfg); err != nil {
+					t.Fatalf("saveTestConfig() error = %v", err)
 				}
 				return cfgPath
 			},
@@ -75,8 +80,8 @@ func TestRun_StartupFailuresReturnErrorAndEmitStructuredLog(t *testing.T) {
 					ID: "main", Default: true, Workspace: filepath.Join(dir, "agent-workspace"),
 				}}
 				cfgPath := filepath.Join(dir, "state-config.json")
-				if err := config.SaveConfig(cfgPath, cfg); err != nil {
-					t.Fatalf("SaveConfig() error = %v", err)
+				if err := saveTestConfig(cfgPath, cfg); err != nil {
+					t.Fatalf("saveTestConfig() error = %v", err)
 				}
 				return cfgPath
 			},

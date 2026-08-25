@@ -106,8 +106,8 @@ func TestGatewayProxyURLUsesConfiguredHost(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Gateway.Host = "192.168.1.10"
 	cfg.Gateway.Port = 18791
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	if got := h.gatewayProxyURL().String(); got != "http://192.168.1.10:18791" {

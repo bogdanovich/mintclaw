@@ -164,8 +164,9 @@ func (r *Repository) Replace(expected Revision, cfg *Config) (Snapshot, error) {
 	return snapshot, err
 }
 
-// Save performs an unconditional serialized replacement. It exists for
-// compatibility while callers migrate to Update or revision-checked Replace.
+// Save performs an unconditional serialized replacement. It is intended for
+// explicit import and newly generated temporary-config boundaries where no
+// concurrent revision needs to be preserved.
 func (r *Repository) Save(cfg *Config) (Snapshot, error) {
 	if cfg == nil {
 		return Snapshot{}, errors.New("configuration is nil")
