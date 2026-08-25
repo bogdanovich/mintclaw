@@ -303,7 +303,7 @@ The current direct CLI is not a coding frontend:
   protocol.
 - The root process prints a large banner before ordinary commands unless a
   narrow machine-output condition suppresses it.
-- `AGENT.md` or `AGENTS.md` loading is rooted at one configured workspace; it
+- Personal `AGENT.md` loading is rooted at one configured workspace; it
   does not implement hierarchical project instruction discovery.
 - Git branch, HEAD, diff, worktree, and repository movement are not part of the
   session model.

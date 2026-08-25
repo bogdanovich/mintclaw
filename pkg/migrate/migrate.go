@@ -156,8 +156,8 @@ func (m *MigrateInstance) Plan(opts Options, sourceHome, targetHome string) ([]A
 
 		if _, err := os.Stat(srcWorkspace); err == nil {
 			wsActions, err := internal.PlanWorkspaceMigration(srcWorkspace, dstWorkspace,
-				handler.GetMigrateableFiles(),
-				handler.GetMigrateableDirs(),
+				handler.WorkspaceFiles(),
+				handler.WorkspaceDirs(),
 				force)
 			if err != nil {
 				return nil, nil, fmt.Errorf("planning workspace migration: %w", err)

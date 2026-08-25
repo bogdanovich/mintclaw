@@ -143,14 +143,8 @@ func descriptorIdentity(agentID string, definition AgentContextDefinition) (stri
 		}
 	}
 
-	if description == "" &&
-		definition.Agent != nil {
-		switch definition.Source {
-		case AgentDefinitionSourceAgent:
-			description = firstNonEmptyLine(definition.Agent.Body)
-		case AgentDefinitionSourceAgents:
-			description = firstMeaningfulParagraph(definition.Agent.Body)
-		}
+	if description == "" && definition.Agent != nil {
+		description = firstNonEmptyLine(definition.Agent.Body)
 	}
 
 	return name, description
@@ -163,38 +157,6 @@ func firstNonEmptyLine(content string) string {
 		if trimmed != "" {
 			return trimmed
 		}
-	}
-	return ""
-}
-
-func firstMeaningfulParagraph(content string) string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	paragraphs := strings.Split(content, "\n\n")
-	for _, paragraph := range paragraphs {
-		lines := strings.Split(paragraph, "\n")
-		parts := make([]string, 0, len(lines))
-		inFence := false
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "```") {
-				inFence = !inFence
-				continue
-			}
-			if inFence || trimmed == "" {
-				continue
-			}
-			if strings.HasPrefix(trimmed, "#") {
-				continue
-			}
-			if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
-				trimmed = strings.TrimSpace(trimmed[2:])
-			}
-			parts = append(parts, trimmed)
-		}
-		if len(parts) == 0 {
-			continue
-		}
-		return strings.Join(parts, " ")
 	}
 	return ""
 }

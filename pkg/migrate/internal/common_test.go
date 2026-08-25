@@ -70,7 +70,7 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 	err := os.MkdirAll(srcWorkspace, 0o755)
 	require.NoError(t, err)
 
-	err = os.WriteFile(filepath.Join(srcWorkspace, "file1.txt"), []byte("content"), 0o644)
+	err = os.WriteFile(filepath.Join(srcWorkspace, "source.txt"), []byte("content"), 0o644)
 	require.NoError(t, err)
 
 	err = os.MkdirAll(filepath.Join(srcWorkspace, "subdir"), 0o755)
@@ -82,13 +82,15 @@ func TestPlanWorkspaceMigration(t *testing.T) {
 	actions, err := PlanWorkspaceMigration(
 		srcWorkspace,
 		dstWorkspace,
-		[]string{"file1.txt"},
+		[]WorkspaceFile{{Source: "source.txt", Target: "target.txt"}},
 		[]string{"subdir"},
 		false,
 	)
 	require.NoError(t, err)
 
 	assert.GreaterOrEqual(t, len(actions), 1)
+	assert.Equal(t, filepath.Join(srcWorkspace, "source.txt"), actions[0].Source)
+	assert.Equal(t, filepath.Join(dstWorkspace, "target.txt"), actions[0].Target)
 }
 
 func TestPlanWorkspaceMigrationExistingFile(t *testing.T) {
@@ -130,7 +132,7 @@ func TestPlanWorkspaceMigrationExistingFile(t *testing.T) {
 			actions, err := PlanWorkspaceMigration(
 				srcWorkspace,
 				dstWorkspace,
-				[]string{"file1.txt"},
+				[]WorkspaceFile{{Source: "file1.txt", Target: "file1.txt"}},
 				[]string{},
 				tt.force,
 			)
@@ -148,7 +150,7 @@ func TestPlanWorkspaceMigrationNonExistentSource(t *testing.T) {
 	actions, err := PlanWorkspaceMigration(
 		filepath.Join(tmpDir, "nonexistent"),
 		filepath.Join(tmpDir, "dst", "workspace"),
-		[]string{"file1.txt"},
+		[]WorkspaceFile{{Source: "file1.txt", Target: "file1.txt"}},
 		[]string{},
 		false,
 	)

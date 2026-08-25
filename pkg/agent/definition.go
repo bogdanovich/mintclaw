@@ -13,15 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
-// AgentDefinitionSource identifies which agent bootstrap file produced the definition.
-type AgentDefinitionSource string
-
-const (
-	// AgentDefinitionSourceAgent indicates the new AGENT.md format.
-	AgentDefinitionSourceAgent AgentDefinitionSource = "AGENT.md"
-	// AgentDefinitionSourceAgents indicates the legacy AGENTS.md format.
-	AgentDefinitionSourceAgents AgentDefinitionSource = "AGENTS.md"
-)
+const agentDefinitionFile = "AGENT.md"
 
 // AgentFrontmatter holds machine-readable AGENT.md configuration.
 //
@@ -55,7 +47,7 @@ const (
 	patternPolicyFormObject
 )
 
-// AgentPromptDefinition represents the parsed AGENT.md or AGENTS.md prompt file.
+// AgentPromptDefinition represents the parsed AGENT.md prompt file.
 type AgentPromptDefinition struct {
 	Path           string           `json:"path"`
 	Raw            string           `json:"raw"`
@@ -79,17 +71,12 @@ type UserDefinition struct {
 
 // AgentContextDefinition captures the workspace agent definition in a runtime-friendly shape.
 type AgentContextDefinition struct {
-	Source AgentDefinitionSource  `json:"source,omitempty"`
-	Agent  *AgentPromptDefinition `json:"agent,omitempty"`
-	Soul   *SoulDefinition        `json:"soul,omitempty"`
-	User   *UserDefinition        `json:"user,omitempty"`
+	Agent *AgentPromptDefinition `json:"agent,omitempty"`
+	Soul  *SoulDefinition        `json:"soul,omitempty"`
+	User  *UserDefinition        `json:"user,omitempty"`
 }
 
 // LoadAgentDefinition parses the workspace agent bootstrap files.
-//
-// It prefers the new AGENT.md format and its paired SOUL.md file. When the
-// structured files are absent, it falls back to the legacy AGENTS.md layout so
-// the current runtime can transition incrementally.
 func (cb *ContextBuilder) LoadAgentDefinition() AgentContextDefinition {
 	return loadAgentDefinition(cb.workspace)
 }
@@ -97,57 +84,29 @@ func (cb *ContextBuilder) LoadAgentDefinition() AgentContextDefinition {
 func loadAgentDefinition(workspace string) AgentContextDefinition {
 	definition := AgentContextDefinition{}
 	definition.User = loadUserDefinition(workspace)
-	agentPath := filepath.Join(workspace, string(AgentDefinitionSourceAgent))
+	agentPath := filepath.Join(workspace, agentDefinitionFile)
 	if content, err := os.ReadFile(agentPath); err == nil {
 		prompt := parseAgentPromptDefinition(agentPath, string(content))
-		definition.Source = AgentDefinitionSourceAgent
 		definition.Agent = &prompt
-		soulPath := filepath.Join(workspace, "SOUL.md")
-		if content, err := os.ReadFile(soulPath); err == nil {
-			definition.Soul = &SoulDefinition{
-				Path:    soulPath,
-				Content: string(content),
-			}
-		}
-		return definition
 	}
 
-	legacyPath := filepath.Join(workspace, string(AgentDefinitionSourceAgents))
-	if content, err := os.ReadFile(legacyPath); err == nil {
-		definition.Source = AgentDefinitionSourceAgents
-		definition.Agent = &AgentPromptDefinition{
-			Path: legacyPath,
-			Raw:  string(content),
-			Body: string(content),
-		}
-	}
-
-	defaultSoulPath := filepath.Join(workspace, "SOUL.md")
-	if definition.Source != "" || fileExists(defaultSoulPath) {
-		if content, err := os.ReadFile(defaultSoulPath); err == nil {
-			definition.Soul = &SoulDefinition{
-				Path:    defaultSoulPath,
-				Content: string(content),
-			}
+	soulPath := filepath.Join(workspace, "SOUL.md")
+	if content, err := os.ReadFile(soulPath); err == nil {
+		definition.Soul = &SoulDefinition{
+			Path:    soulPath,
+			Content: string(content),
 		}
 	}
 
 	return definition
 }
 
-func (definition AgentContextDefinition) trackedPaths(workspace string) []string {
-	paths := []string{
-		filepath.Join(workspace, string(AgentDefinitionSourceAgent)),
+func agentDefinitionPaths(workspace string) []string {
+	return []string{
+		filepath.Join(workspace, agentDefinitionFile),
 		filepath.Join(workspace, "SOUL.md"),
 		filepath.Join(workspace, "USER.md"),
 	}
-	if definition.Source != AgentDefinitionSourceAgent {
-		paths = append(paths,
-			filepath.Join(workspace, string(AgentDefinitionSourceAgents)),
-			filepath.Join(workspace, "IDENTITY.md"),
-		)
-	}
-	return uniquePaths(paths)
 }
 
 func loadUserDefinition(workspace string) *UserDefinition {
@@ -372,11 +331,6 @@ func uniquePaths(paths []string) []string {
 		result = append(result, cleaned)
 	}
 	return result
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func errorString(err error) string {

@@ -9,7 +9,7 @@ collapsed into one universal memory database.
 | Layer | Source of truth | Prompt behavior | Owner |
 | --- | --- | --- | --- |
 | Stable user facts | `USER.md` and curated `memory/MEMORY.md` entries | Bounded bootstrap context | Workspace operator and curated-memory tool |
-| Stable agent and environment facts | `AGENT.md`, `SOUL.md`, `IDENTITY.md`, and other bootstrap files | Bounded bootstrap context | Workspace operator |
+| Stable agent and environment facts | `AGENT.md` and `SOUL.md` | Bounded bootstrap context | Workspace operator |
 | Episodic notes | `memory/YYYYMM/YYYYMMDD.md` | Bounded recent window | Agent and workspace tools |
 | Canonical session history | JSONL session store | Selected by the active context manager | Session subsystem |
 | Derived recall and summaries | Seahorse SQLite | Bounded assembly and explicit retrieval tools | Seahorse; rebuildable from canonical history |
@@ -35,7 +35,7 @@ truncate older content before newer content. Truncation is deterministic and
 visible in the rendered prompt; it must never silently make an oversized model
 request.
 
-`USER.md` and other bootstrap files follow the bootstrap-file budget policy.
+`AGENT.md`, `SOUL.md`, and `USER.md` follow the bootstrap-file budget policy.
 Seahorse history and summary budgets are separate because they operate on
 conversation records rather than workspace Markdown.
 

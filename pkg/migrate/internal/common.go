@@ -21,22 +21,22 @@ func ResolveWorkspace(homeDir string) string {
 
 func PlanWorkspaceMigration(
 	srcWorkspace, dstWorkspace string,
-	migrateableFiles []string,
-	migrateableDirs []string,
+	files []WorkspaceFile,
+	dirs []string,
 	force bool,
 ) ([]Action, error) {
 	var actions []Action
 
-	for _, filename := range migrateableFiles {
-		src := filepath.Join(srcWorkspace, filename)
-		dst := filepath.Join(dstWorkspace, filename)
+	for _, file := range files {
+		src := filepath.Join(srcWorkspace, file.Source)
+		dst := filepath.Join(dstWorkspace, file.Target)
 		action := planFileCopy(src, dst, force)
 		if action.Type != ActionSkip || action.Description != "" {
 			actions = append(actions, action)
 		}
 	}
 
-	for _, dirname := range migrateableDirs {
+	for _, dirname := range dirs {
 		srcDir := filepath.Join(srcWorkspace, dirname)
 		if _, err := os.Stat(srcDir); os.IsNotExist(err) {
 			continue

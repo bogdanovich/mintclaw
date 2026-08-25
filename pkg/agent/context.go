@@ -770,8 +770,7 @@ func (cb *ContextBuilder) InvalidateCache() {
 // invalidation (bootstrap files + memory). Skill roots are handled separately
 // because they require both directory-level and recursive file-level checks.
 func (cb *ContextBuilder) sourcePaths() []string {
-	agentDefinition := cb.LoadAgentDefinition()
-	paths := agentDefinition.trackedPaths(cb.workspace)
+	paths := agentDefinitionPaths(cb.workspace)
 	paths = append(paths, cb.memory.promptSourcePaths()...)
 	return uniquePaths(paths)
 }
@@ -986,11 +985,7 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 
 	agentDefinition := cb.LoadAgentDefinition()
 	if agentDefinition.Agent != nil {
-		label := string(agentDefinition.Source)
-		if label == "" {
-			label = relativeWorkspacePath(cb.workspace, agentDefinition.Agent.Path)
-		}
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", label, agentDefinition.Agent.Body)
+		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", agentDefinitionFile, agentDefinition.Agent.Body)
 	}
 	if agentDefinition.Soul != nil {
 		fmt.Fprintf(
@@ -1002,13 +997,6 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 	}
 	if agentDefinition.User != nil {
 		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
-	}
-
-	if agentDefinition.Source != AgentDefinitionSourceAgent {
-		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
-		if data, err := os.ReadFile(filePath); err == nil {
-			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "IDENTITY.md", data)
-		}
 	}
 
 	return sb.String()

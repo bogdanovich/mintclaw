@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bogdanovich/mintclaw/pkg/migrate/internal"
 )
 
 func TestNewMigrateInstance(t *testing.T) {
@@ -82,6 +84,28 @@ func TestMigrateInstancePlanWithInvalidSource(t *testing.T) {
 
 	_, _, err := instance.Plan(Options{}, "/tmp/source", "/tmp/target")
 	require.Error(t, err)
+}
+
+func TestMigrateInstancePlansOpenclawAgentDefinitionForCurrentFilename(t *testing.T) {
+	sourceHome := t.TempDir()
+	targetHome := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(sourceHome, "openclaw.json"), []byte("{}"), 0o600))
+	sourceWorkspace := filepath.Join(sourceHome, "workspace")
+	require.NoError(t, os.MkdirAll(sourceWorkspace, 0o755))
+	sourceAgent := filepath.Join(sourceWorkspace, "AGENTS.md")
+	require.NoError(t, os.WriteFile(sourceAgent, []byte("# Imported agent"), 0o600))
+
+	instance := NewMigrateInstance(Options{SourceHome: sourceHome})
+	actions, warnings, err := instance.Plan(
+		Options{WorkspaceOnly: true},
+		sourceHome,
+		targetHome,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, warnings)
+	require.NotEmpty(t, actions)
+	assert.Equal(t, sourceAgent, actions[0].Source)
+	assert.Equal(t, filepath.Join(targetHome, "workspace", "AGENT.md"), actions[0].Target)
 }
 
 func TestMigrateInstancePlanConfigOnlyAndWorkspaceOnlyMutuallyExclusive(t *testing.T) {
@@ -364,11 +388,11 @@ func TestPrintPlanEmpty(t *testing.T) {
 }
 
 type mockOperation struct {
-	sourceHome   string
-	sourceConfig string
-	sourceWs     string
-	migrateFiles []string
-	migrateDirs  []string
+	sourceHome     string
+	sourceConfig   string
+	sourceWs       string
+	workspaceFiles []internal.WorkspaceFile
+	workspaceDirs  []string
 }
 
 func (m *mockOperation) GetSourceName() string { return "mock" }
@@ -396,16 +420,16 @@ func (m *mockOperation) GetSourceConfigFile() (string, error) {
 	return "/tmp/mock/config.json", nil
 }
 func (m *mockOperation) ExecuteConfigMigration(src, dst string) error { return nil }
-func (m *mockOperation) GetMigrateableFiles() []string {
-	if m.migrateFiles != nil {
-		return m.migrateFiles
+func (m *mockOperation) WorkspaceFiles() []internal.WorkspaceFile {
+	if m.workspaceFiles != nil {
+		return m.workspaceFiles
 	}
-	return []string{}
+	return nil
 }
 
-func (m *mockOperation) GetMigrateableDirs() []string {
-	if m.migrateDirs != nil {
-		return m.migrateDirs
+func (m *mockOperation) WorkspaceDirs() []string {
+	if m.workspaceDirs != nil {
+		return m.workspaceDirs
 	}
-	return []string{}
+	return nil
 }

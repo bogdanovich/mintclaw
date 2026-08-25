@@ -1,13 +1,15 @@
 package openclaw
 
-var migrateableFiles = []string{
-	"AGENTS.md",
-	"SOUL.md",
-	"USER.md",
-	"HEARTBEAT.md",
+import "github.com/bogdanovich/mintclaw/pkg/migrate/internal"
+
+var workspaceFiles = []internal.WorkspaceFile{
+	{Source: "AGENTS.md", Target: "AGENT.md"},
+	{Source: "SOUL.md", Target: "SOUL.md"},
+	{Source: "USER.md", Target: "USER.md"},
+	{Source: "HEARTBEAT.md", Target: "HEARTBEAT.md"},
 }
 
-var migrateableDirs = []string{
+var workspaceDirs = []string{
 	"memory",
 	"skills",
 }
