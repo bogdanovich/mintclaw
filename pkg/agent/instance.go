@@ -309,7 +309,8 @@ func newAgentInstance(
 		contextBuilder.WithCodingPromptModel(model)
 	}
 	providerOwnership := newProviderOwnership(provider)
-	provider = resolvePrimaryProviderForAgent(
+	var selectedModel *config.ModelConfig
+	provider, selectedModel = resolvePrimaryProviderForAgent(
 		cfg,
 		workspace,
 		identity.agentID,
@@ -335,7 +336,7 @@ func newAgentInstance(
 	} else {
 		initCoreAgentTools(workspace, cfg, toolInit)
 	}
-	runtimeCfg := buildAgentRuntimeConfig(defaults, cfg, model)
+	runtimeCfg := buildAgentRuntimeConfig(defaults, selectedModel)
 	routingCfg := buildAgentRoutingConfig(
 		cfg,
 		defaults,
@@ -573,8 +574,7 @@ func buildAgentIdentityConfig(
 
 func buildAgentRuntimeConfig(
 	defaults *config.AgentDefaults,
-	cfg *config.Config,
-	model string,
+	selectedModel *config.ModelConfig,
 ) agentRuntimeConfig {
 	maxIterations := defaults.MaxToolIterations
 	if maxIterations == 0 {
@@ -585,11 +585,6 @@ func buildAgentRuntimeConfig(
 	if maxTokens == 0 {
 		maxTokens = 8192
 	}
-	var selectedModel *config.ModelConfig
-	if modelConfig, err := cfg.GetModelConfig(model); err == nil {
-		selectedModel = modelConfig
-	}
-
 	contextWindow := defaults.ContextWindow
 	if contextWindow == 0 {
 		contextWindow = modelContextWindow(selectedModel)
@@ -781,15 +776,15 @@ func resolvePrimaryProviderForAgent(
 	model string,
 	fallback providers.LLMProvider,
 	providerOwnership *providerOwnership,
-) providers.LLMProvider {
+) (providers.LLMProvider, *config.ModelConfig) {
 	model = strings.TrimSpace(model)
 	if cfg == nil || model == "" {
-		return fallback
+		return fallback, nil
 	}
 
 	modelCfg, err := cfg.GetModelConfig(model)
 	if err != nil || modelCfg == nil {
-		return fallback
+		return fallback, nil
 	}
 	clone := *modelCfg
 	if clone.Workspace == "" {
@@ -804,13 +799,13 @@ func resolvePrimaryProviderForAgent(
 				"model":    model,
 				"error":    err.Error(),
 			})
-		return fallback
+		return fallback, nil
 	}
 	if resolvedProvider == nil {
-		return fallback
+		return fallback, nil
 	}
 	providerOwnership.trackCreated(resolvedProvider)
-	return resolvedProvider
+	return resolvedProvider, &clone
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.

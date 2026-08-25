@@ -15,7 +15,7 @@ func TestBuildAgentRuntimeConfigUsesConfiguredModelContextWindow(t *testing.T) {
 		},
 	}}
 	defaults := &config.AgentDefaults{MaxTokens: 32_768}
-	got := buildAgentRuntimeConfig(defaults, cfg, "remote")
+	got := buildAgentRuntimeConfig(defaults, cfg.ModelList[0])
 	if got.contextWindow != 345_000 {
 		t.Fatalf("context window = %d, want 345000", got.contextWindow)
 	}
@@ -29,7 +29,7 @@ func TestBuildAgentRuntimeConfigUsesBundledCodexMetadata(t *testing.T) {
 		},
 	}}
 	defaults := &config.AgentDefaults{MaxTokens: 32_768}
-	got := buildAgentRuntimeConfig(defaults, cfg, providers.CodexDefaultModel)
+	got := buildAgentRuntimeConfig(defaults, cfg.ModelList[0])
 	if got.contextWindow != providers.CodexDefaultContextWindow {
 		t.Fatalf("context window = %d, want %d", got.contextWindow, providers.CodexDefaultContextWindow)
 	}
@@ -43,8 +43,66 @@ func TestBuildAgentRuntimeConfigPreservesExplicitContextWindow(t *testing.T) {
 		},
 	}}
 	defaults := &config.AgentDefaults{MaxTokens: 32_768, ContextWindow: 123_456}
-	got := buildAgentRuntimeConfig(defaults, cfg, providers.CodexDefaultModel)
+	got := buildAgentRuntimeConfig(defaults, cfg.ModelList[0])
 	if got.contextWindow != 123_456 {
 		t.Fatalf("context window = %d, want explicit override 123456", got.contextWindow)
+	}
+}
+
+func TestRuntimeConfigBindsContextWindowToLoadBalancedProviderSelection(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: workspace,
+			ModelName: "balanced",
+		}},
+		ModelList: config.SecureModelList{
+			{
+				ModelName: "balanced", Provider: "openai", Model: "gpt-first",
+				APIBase: "https://example.invalid/v1", ContextWindow: 111_000, Enabled: true,
+			},
+			{
+				ModelName: "balanced", Provider: "openai", Model: "gpt-second",
+				APIBase: "https://example.invalid/v1", ContextWindow: 222_000, Enabled: true,
+			},
+		},
+	}
+
+	fallback := &mockProvider{}
+	provider, selected := resolvePrimaryProviderForAgent(
+		cfg,
+		workspace,
+		"main",
+		"balanced",
+		fallback,
+		newProviderOwnership(fallback),
+	)
+	if providersShareIdentity(provider, fallback) || selected == nil {
+		t.Fatalf("provider selection fell back: provider = %T, selected = %+v", provider, selected)
+	}
+
+	wantByModel := map[string]int{"gpt-first": 111_000, "gpt-second": 222_000}
+	want, ok := wantByModel[selected.Model]
+	if !ok {
+		t.Fatalf("selected provider model = %q", selected.Model)
+	}
+	// A second lookup advances round-robin and demonstrates why runtime metadata
+	// must use the entry returned with the provider rather than resolving again.
+	next, err := cfg.GetModelConfig("balanced")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Model == selected.Model {
+		t.Fatalf("round-robin did not advance: selected = %q, next = %q", selected.Model, next.Model)
+	}
+
+	runtimeCfg := buildAgentRuntimeConfig(&cfg.Agents.Defaults, selected)
+	if runtimeCfg.contextWindow != want {
+		t.Fatalf(
+			"context window = %d, want %d for selected provider model %q",
+			runtimeCfg.contextWindow,
+			want,
+			selected.Model,
+		)
 	}
 }
