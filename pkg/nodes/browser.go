@@ -1695,33 +1695,55 @@ func BrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, true, true)
+	return browserCommandOutputSchema(command, profiles, true, browserSnapshotSchemaCurrent)
+}
+
+func previousStreamedBrowserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	return browserCommandOutputSchema(command, profiles, true, browserSnapshotSchemaToolResult)
 }
 
 func previousBrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, true, false)
+	return browserCommandOutputSchema(command, profiles, true, browserSnapshotSchemaInline)
 }
 
 func legacyBrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, false, false)
+	return browserCommandOutputSchema(command, profiles, false, browserSnapshotSchemaInline)
 }
+
+type browserSnapshotSchemaGeneration uint8
+
+const (
+	browserSnapshotSchemaInline browserSnapshotSchemaGeneration = iota
+	browserSnapshotSchemaToolResult
+	browserSnapshotSchemaCurrent
+)
 
 func browserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 	diagnostics bool,
-	streamedSnapshots bool,
+	snapshotGeneration browserSnapshotSchemaGeneration,
 ) json.RawMessage {
 	if len(profiles) == 0 {
 		return json.RawMessage("false")
 	}
 	limits := strictestBrowserLimits(profiles)
+	streamedSnapshotMaximum := 0
+	switch snapshotGeneration {
+	case browserSnapshotSchemaToolResult:
+		streamedSnapshotMaximum = limits.ToolResultBytes
+	case browserSnapshotSchemaCurrent:
+		streamedSnapshotMaximum = BrowserSnapshotPayloadLimit(limits)
+	}
 	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 	state := map[string]any{
 		"enum": []string{"opening", "ready", "closing", "closed", "lost", "unknown"},
@@ -1774,7 +1796,7 @@ func browserCommandOutputSchema(
 		})
 	case BrowserCommandObserve:
 		return mustJSON(map[string]any{"oneOf": []any{
-			rawSchema(browserObservationSchema(limits, streamedSnapshots)),
+			rawSchema(browserObservationSchema(limits, streamedSnapshotMaximum)),
 			browserProtectedResultReceiptSchema(nil),
 		}})
 	case BrowserCommandDiagnostics:
@@ -1794,7 +1816,7 @@ func browserCommandOutputSchema(
 				"reason":               safeReason,
 				"observation": rawSchema(browserObservationSchema(
 					limits,
-					streamedSnapshots,
+					streamedSnapshotMaximum,
 				)),
 				"artifact": browserArtifactSchema(limits.DownloadBytes),
 				"output":   browserDownloadOutputDescriptorSchema(limits.DownloadBytes),
@@ -1802,7 +1824,7 @@ func browserCommandOutputSchema(
 		})
 	case BrowserCommandContexts:
 		return mustJSON(map[string]any{"oneOf": []any{
-			browserContextCommandResultSchema(limits, streamedSnapshots),
+			browserContextCommandResultSchema(limits, streamedSnapshotMaximum),
 			browserProtectedResultReceiptSchema(map[string]any{
 				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
 			}),
@@ -1814,11 +1836,11 @@ func browserCommandOutputSchema(
 
 func browserContextCommandResultSchema(
 	limits BrowserLimits,
-	streamedSnapshots bool,
+	streamedSnapshotMaximum int,
 ) map[string]any {
 	return browserContextCommandResultSchemaWithObservation(
 		limits,
-		browserObservationSchema(limits, streamedSnapshots),
+		browserObservationSchema(limits, streamedSnapshotMaximum),
 	)
 }
 
@@ -1944,7 +1966,7 @@ func browserLimitsSchema(maximum BrowserLimits) map[string]any {
 	}
 }
 
-func browserObservationSchema(limits BrowserLimits, streamedSnapshots bool) json.RawMessage {
+func browserObservationSchema(limits BrowserLimits, streamedSnapshotMaximum int) json.RawMessage {
 	properties := map[string]any{
 		"session_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 		"tab_id":              map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
@@ -1994,10 +2016,8 @@ func browserObservationSchema(limits BrowserLimits, streamedSnapshots bool) json
 		},
 		"properties": properties,
 	}
-	if streamedSnapshots {
-		properties["output"] = browserSnapshotOutputDescriptorSchema(
-			BrowserSnapshotPayloadLimit(limits),
-		)
+	if streamedSnapshotMaximum > 0 {
+		properties["output"] = browserSnapshotOutputDescriptorSchema(streamedSnapshotMaximum)
 		schema["oneOf"] = []any{
 			map[string]any{"not": map[string]any{"required": []string{"output"}}},
 			map[string]any{

@@ -109,6 +109,40 @@ func TestBrowserCatalogAcceptsPreviousSnapshotSchemaGeneration(t *testing.T) {
 	}
 }
 
+func TestBrowserCatalogAcceptsPreviousStreamedSnapshotSchemaGeneration(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		descriptors[index].OutputSchema = previousStreamedBrowserCommandOutputSchema(
+			descriptors[index].Name,
+			descriptors[index].BrowserProfiles,
+		)
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err != nil {
+		t.Fatalf("previous streamed snapshot schema generation rejected: %v", err)
+	}
+}
+
+func TestBrowserCatalogRejectsMixedStreamedSnapshotSchemaGenerations(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandObserve {
+			descriptors[index].OutputSchema = previousStreamedBrowserCommandOutputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("mixed streamed snapshot schema generations were accepted")
+	}
+}
+
 func TestBrowserCatalogRejectsMixedSnapshotSchemaGenerations(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
 	if err != nil {
