@@ -110,9 +110,10 @@ type BrowserHost struct {
 	outputTransfers    map[string]*browserOutputTransfer
 	outputExpiryAfter  func(time.Duration) <-chan time.Time
 
-	beforeTransferAdmission func()
-	beforeTransferCleanup   func()
-	beforeOutputFrameSend   func(protocol.TransferFrame)
+	beforeTransferAdmission  func()
+	beforeTransferCleanup    func()
+	beforeOutputFrameSend    func(protocol.TransferFrame)
+	beforeOutputRegistration func()
 }
 
 func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*BrowserHost, error) {
@@ -599,8 +600,7 @@ func (host *BrowserHost) Capture(
 		}
 		return nodes.BrowserOutputDescriptor{}, context.DeadlineExceeded
 	}
-	currentDigest := browserHostObservationDigest(session, observation, navigationIdentity)
-	if !hmac.Equal(currentDigest, session.observationDigest) {
+	if navigationIdentity == "" || navigationIdentity != session.navigationIdentity {
 		cancelAction()
 		session.mu.Unlock()
 		return nodes.BrowserOutputDescriptor{}, ErrBrowserHostStale
@@ -610,10 +610,21 @@ func (host *BrowserHost) Capture(
 	if input.Target == "element" {
 		element, found := session.elementRefs[input.Ref]
 		worker, supported := session.worker.(browserworker.ElementScreenshotWorker)
-		if !found || !supported {
+		if !supported {
 			cancelAction()
 			session.mu.Unlock()
 			return nodes.BrowserOutputDescriptor{}, browserworker.ErrDriverIncompatible
+		}
+		matches := 0
+		for _, current := range observation.Elements {
+			if current.Target == element.Target && current.Role == element.Role && current.Name == element.Name {
+				matches++
+			}
+		}
+		if !found || matches != 1 {
+			cancelAction()
+			session.mu.Unlock()
+			return nodes.BrowserOutputDescriptor{}, ErrBrowserHostStale
 		}
 		screenshot, err = worker.CaptureElementScreenshot(
 			actionCtx, navigationIdentity, observation.Origin, element, maximum,
@@ -669,8 +680,12 @@ func (host *BrowserHost) Capture(
 	}
 	content := append([]byte(nil), screenshot.Data...)
 	session.idleExpiresAt = host.now().UTC().Add(time.Duration(session.limits.IdleSeconds) * time.Second)
+	if host.beforeOutputRegistration != nil {
+		host.beforeOutputRegistration()
+	}
+	registered, registerErr := host.registerOutputLocked(session, descriptor, content)
 	session.mu.Unlock()
-	return host.RegisterOutput(descriptor, content)
+	return registered, registerErr
 }
 
 func (host *BrowserHost) Act(
