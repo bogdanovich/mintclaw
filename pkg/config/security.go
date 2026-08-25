@@ -113,6 +113,13 @@ func retainChannelSecuritySettings(node *yaml.Node, allowed map[string]struct{})
 }
 
 func validateChannelSecuritySettings(node *yaml.Node, current *Config, label string) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf(
+			"failed to validate channel security config: %s channel_list must be an object",
+			label,
+		)
+	}
+
 	var channels map[string]any
 	if err := node.Decode(&channels); err != nil {
 		return fmt.Errorf("failed to validate channel security config: %w", err)
@@ -141,7 +148,7 @@ func validateChannelSecuritySettings(node *yaml.Node, current *Config, label str
 			}
 		}
 		normalized[name] = map[string]any{
-			"type":     existing.Type,
+			"type":     effectiveChannelType(name, existing.Type),
 			"settings": channel["settings"],
 		}
 	}

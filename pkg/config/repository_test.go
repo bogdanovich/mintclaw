@@ -361,6 +361,40 @@ func TestSecurityCopyForReplacementBindsChannelSecretsToDurableType(t *testing.T
 	}
 }
 
+func TestSecurityCopyForReplacementPreservesSecretForInferredType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Channels[ChannelTelegram] = testReplacementChannel(
+		t,
+		ChannelTelegram,
+		`{"token":"telegram-secret"}`,
+	)
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	current, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+
+	replacement := DefaultConfig()
+	replacement.Channels[ChannelTelegram] = &Channel{Enabled: true, Settings: []byte(`{}`)}
+	if err = replacement.SecurityCopyForReplacement(path, current.Config); err != nil {
+		t.Fatalf("SecurityCopyForReplacement() error = %v", err)
+	}
+	if err = InitChannelList(replacement.Channels); err != nil {
+		t.Fatalf("InitChannelList() error = %v", err)
+	}
+	decoded, err := replacement.Channels.Get(ChannelTelegram).GetDecoded()
+	if err != nil {
+		t.Fatalf("GetDecoded() error = %v", err)
+	}
+	if token := decoded.(*TelegramSettings).Token.String(); token != "telegram-secret" {
+		t.Fatalf("replacement token = %q, want %q", token, "telegram-secret")
+	}
+}
+
 func testReplacementChannel(t *testing.T, channelType string, settings string) *Channel {
 	t.Helper()
 	channel := &Channel{Enabled: true, Type: channelType, Settings: []byte(settings)}

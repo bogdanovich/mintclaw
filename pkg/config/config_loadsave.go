@@ -490,7 +490,8 @@ func (c *Config) SecurityCopyForReplacement(path string, current *Config) error 
 		}
 		for name, durable := range current.Channels {
 			replacement := c.Channels.Get(name)
-			if durable != nil && replacement != nil && durable.Type == replacement.Type {
+			if durable != nil && replacement != nil &&
+				effectiveChannelType(name, durable.Type) == effectiveChannelType(name, replacement.Type) {
 				matchingChannels[name] = struct{}{}
 			}
 		}

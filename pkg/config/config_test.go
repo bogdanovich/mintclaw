@@ -1000,6 +1000,33 @@ func TestLoadConfigRejectsNonObjectSecurityOverlayChannels(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsNonObjectSecurityOverlayChannelList(t *testing.T) {
+	for _, value := range []string{"null", "removed-secret", "[]"} {
+		t.Run(value, func(t *testing.T) {
+			directory := t.TempDir()
+			configPath := filepath.Join(directory, "config.json")
+			raw := fmt.Sprintf(
+				`{"version":%d,"channel_list":{"telegram":{"settings":{}}}}`,
+				CurrentVersion,
+			)
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("WriteFile(config.json) error: %v", err)
+			}
+			securityPath := filepath.Join(directory, SecurityConfigFile)
+			security := fmt.Sprintf("channel_list: %s\n", value)
+			if err := os.WriteFile(securityPath, []byte(security), 0o600); err != nil {
+				t.Fatalf("WriteFile(%s) error: %v", SecurityConfigFile, err)
+			}
+
+			_, err := LoadConfig(configPath)
+			want := "channel_list must be an object"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("LoadConfig() error = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
 func TestValidateSingletonChannels_RejectsMultipleInstances(t *testing.T) {
 	channels := ChannelsConfig{
 		"mintclaw1": &Channel{Enabled: true, Type: ChannelMintClaw},

@@ -655,9 +655,7 @@ func defaultChannels() ChannelsConfig {
 			continue
 		}
 		bc.SetName(name)
-		if bc.Type == "" {
-			bc.Type = name
-		}
+		bc.Type = effectiveChannelType(name, bc.Type)
 		channels[name] = bc
 	}
 	return channels
