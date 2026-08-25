@@ -228,14 +228,15 @@ authorization; the generic registry owns only catalogue membership and
 lifecycle.
 
 PR #887 deletes the unused exported `SaveConfig` alias and its private wrapper.
-`Repository.Save` is the sole config-persistence entrypoint, retained at the
-explicit OpenClaw import and temporary MCP-edit boundaries; tests use the same
-repository contract through package-local setup helpers.
+`Repository` is the sole config-persistence owner. Its unconditional `Save`
+operation remains current at the explicit OpenClaw import and temporary
+MCP-edit boundaries, while managed config mutation continues to use `Update`
+or revision-checked `Replace`; tests use the same repository contract through
+package-local setup helpers.
 
 Other matches remain candidates, not automatic deletions. The final audit must
-prove whether unconditional config repository replacement, raw outbound
-metadata, benchmark baselines, and stale `Legacy` names express required
-current semantics or obsolete compatibility.
+prove whether raw outbound metadata, benchmark baselines, and stale `Legacy`
+names express required current semantics or obsolete compatibility.
 
 ## Canonical Contract And Bounded Compatibility Rules
 
@@ -1018,10 +1019,11 @@ Implementation sequence:
     remains at the typed agent-policy boundary; the registry no longer owns a
     second policy map, registration branch, clone path, or discovery-tool
     exception.
-51. Make `Repository.Save` the sole config-persistence entrypoint. Delete the
-    unused exported `SaveConfig` alias and its private wrapper, migrate test
-    setup to the repository contract, and simplify enforcement to reject only
-    direct config-file mutation outside the repository package.
+51. Make `Repository` the sole config-persistence owner. Delete the unused
+    exported `SaveConfig` alias and its private wrapper, retain unconditional
+    `Save` only at explicit import and temporary-config boundaries, migrate
+    test setup to the repository contract, and simplify enforcement to reject
+    only direct config-file mutation outside the repository package.
 
 Exit criteria:
 
