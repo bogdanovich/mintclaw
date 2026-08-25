@@ -205,13 +205,11 @@ type PromptRegistry struct {
 	mu           sync.RWMutex
 	sources      map[PromptSourceID]PromptSourceDescriptor
 	contributors []PromptContributor
-	warned       map[PromptSourceID]struct{}
 }
 
 func NewPromptRegistry() *PromptRegistry {
 	r := &PromptRegistry{
 		sources: make(map[PromptSourceID]PromptSourceDescriptor),
-		warned:  make(map[PromptSourceID]struct{}),
 	}
 	for _, desc := range builtinPromptSources() {
 		if err := r.RegisterSource(desc); err != nil {
@@ -415,21 +413,12 @@ func (r *PromptRegistry) ValidatePart(part PromptPart) error {
 		return fmt.Errorf("prompt part %q has empty source id", part.ID)
 	}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	desc, ok := r.sources[sourceID]
 	if !ok {
-		if _, warned := r.warned[sourceID]; !warned {
-			r.warned[sourceID] = struct{}{}
-			logger.WarnCF("agent", "Unregistered prompt source allowed in compatibility mode", map[string]any{
-				"source": sourceID,
-				"layer":  part.Layer,
-				"slot":   part.Slot,
-				"part":   part.ID,
-			})
-		}
-		return nil
+		return fmt.Errorf("prompt source %q is not registered", sourceID)
 	}
 	if promptPlacementAllowed(desc.Allowed, PromptPlacement{Layer: part.Layer, Slot: part.Slot}) {
 		return nil

@@ -35,7 +35,7 @@ func TestPromptRegistry_RejectsRegisteredSourceWrongPlacement(t *testing.T) {
 	}
 }
 
-func TestPromptRegistry_AllowsUnregisteredSourceInCompatibilityMode(t *testing.T) {
+func TestPromptRegistry_RejectsUnregisteredSource(t *testing.T) {
 	registry := NewPromptRegistry()
 
 	err := registry.ValidatePart(PromptPart{
@@ -45,8 +45,36 @@ func TestPromptRegistry_AllowsUnregisteredSourceInCompatibilityMode(t *testing.T
 		Source:  PromptSource{ID: "mcp:dynamic-server"},
 		Content: "dynamic MCP prompt",
 	})
-	if err != nil {
-		t.Fatalf("ValidatePart() error = %v, want nil for unregistered source", err)
+	if err == nil || !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("ValidatePart() error = %v, want unregistered source error", err)
+	}
+}
+
+func TestPromptRegistry_CollectRejectsContributorWithUnregisteredOutputSource(t *testing.T) {
+	registry := NewPromptRegistry()
+	if err := registry.RegisterContributor(testPromptContributor{
+		desc: PromptSourceDescriptor{
+			ID:      "test:registered",
+			Owner:   "test",
+			Allowed: []PromptPlacement{{Layer: PromptLayerCapability, Slot: PromptSlotMCP}},
+		},
+		part: PromptPart{
+			ID:      "capability.mcp.unregistered",
+			Layer:   PromptLayerCapability,
+			Slot:    PromptSlotMCP,
+			Source:  PromptSource{ID: "test:unregistered"},
+			Content: "unregistered contributor prompt",
+		},
+	}); err != nil {
+		t.Fatalf("RegisterContributor() error = %v", err)
+	}
+
+	parts, err := registry.Collect(context.Background(), PromptBuildRequest{})
+	if err == nil || !strings.Contains(err.Error(), "not registered") {
+		t.Fatalf("Collect() error = %v, want unregistered source error", err)
+	}
+	if len(parts) != 0 {
+		t.Fatalf("Collect() parts = %#v, want no accepted parts", parts)
 	}
 }
 
