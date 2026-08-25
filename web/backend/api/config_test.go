@@ -17,6 +17,11 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
+func saveTestConfig(path string, cfg *config.Config) error {
+	_, err := config.NewRepository(path).Save(cfg)
+	return err
+}
+
 func TestValidateConfigRejectsInvalidMCPContract(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.MCP.Servers["remote"] = config.MCPServerConfig{
@@ -49,8 +54,8 @@ func TestHandlePatchConfig_PreservesTurnProfile(t *testing.T) {
 			Allow: []string{"web_search", "web_fetch"},
 		},
 	}
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -1219,8 +1224,8 @@ func TestHandlePatchConfig_PreservesCanonicalPlaceholderText(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	cfg.Channels[config.ChannelMintClaw].Placeholder.Text = want
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1288,8 +1293,8 @@ func TestHandlePatchConfig_PreservesCanonicalWebPrivateHostWhitelist(t *testing.
 					t.Fatalf("LoadConfig() error = %v", err)
 				}
 				cfg.Tools.Web.PrivateHostWhitelist = want
-				if err = config.SaveConfig(configPath, cfg); err != nil {
-					t.Fatalf("SaveConfig() error = %v", err)
+				if err = saveTestConfig(configPath, cfg); err != nil {
+					t.Fatalf("saveTestConfig() error = %v", err)
 				}
 			}
 
@@ -1527,8 +1532,8 @@ func TestHandlePatchConfig_RejectsInvalidStringArrayFields(t *testing.T) {
 	}
 	telegramChannel := cfg.Channels[config.ChannelTelegram]
 	telegramChannel.AllowFrom = []string{"existing-user"}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	tests := []struct {
@@ -1702,8 +1707,8 @@ func TestHandlePatchConfig_ClearingAllowFromDoesNotLeaveEmptyStringItem(t *testi
 	feishuCfg := decoded.(*config.FeishuSettings)
 	feishuCfg.AppID = "cli_existing_app"
 	feishuCfg.AppSecret = *config.NewSecureString("existing-secret")
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1764,8 +1769,8 @@ func TestHandlePatchConfig_CreatesMissingChannelWithTypeAndSecret(t *testing.T) 
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	delete(cfg.Channels, config.ChannelIRC)
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1861,8 +1866,8 @@ func setupMintClawEnabledEnv(t *testing.T) (string, func()) {
 	mintclawCfg.Token = *config.NewSecureString("test-mintclaw-token")
 
 	configPath := filepath.Join(tmp, "config.json")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig error: %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig error: %v", err)
 	}
 
 	cleanup := func() {

@@ -11,6 +11,11 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
+func saveTestConfig(path string, cfg *config.Config) error {
+	_, err := config.NewRepository(path).Save(cfg)
+	return err
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 
@@ -76,8 +81,8 @@ func TestStatusCmd_RecognizesProviderFieldWithoutModelPrefix(t *testing.T) {
 			},
 		},
 	}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("config.SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	output := captureStdout(t, statusCmd)

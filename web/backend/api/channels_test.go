@@ -28,8 +28,8 @@ func TestHandleGetChannelConfig_ReturnsSecretPresenceWithoutLeakingSecrets(t *te
 	bcfg.AppID = "cli_test_app"
 	bcfg.AppSecret = *config.NewSecureString("feishu-secret-from-security")
 	bc.AllowFrom = []string{"ou_test_user"}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -111,8 +111,8 @@ func TestHandleGetChannelConfig_ReturnsCommonFieldsWhenSettingsEmpty(t *testing.
 	bc := cfg.Channels[config.ChannelFeishu]
 	bc.Enabled = true
 	bc.AllowFrom = []string{"ou_common_user"}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -195,8 +195,8 @@ func TestHandleGetChannelConfig_ReturnsConfiguredStreaming(t *testing.T) {
 	if err := config.InitChannelList(cfg.Channels); err != nil {
 		t.Fatalf("InitChannelList() error = %v", err)
 	}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -246,8 +246,8 @@ func TestHandleGetChannelConfig_ReturnsDefaultShapeForMissingChannel(t *testing.
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	delete(cfg.Channels, config.ChannelIRC)
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)

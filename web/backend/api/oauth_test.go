@@ -63,8 +63,8 @@ func TestSyncProviderAuthMethodEnablesOnlyOneModelWhenNoneAreActive(t *testing.T
 		{ModelName: "first", Provider: "openai", Model: "gpt-5.4"},
 		{ModelName: "second", Provider: "openai", Model: "gpt-5.4-mini"},
 	}
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -222,8 +222,8 @@ func TestOAuthLogoutClearsCredentialAndConfig(t *testing.T) {
 		ModelName: "gpt-5.4", Provider: "openai", Model: "gpt-5.4",
 		AuthMethod: "oauth",
 	})
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig error: %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig error: %v", err)
 	}
 	if err = auth.SetCredential(oauthProviderOpenAI, &auth.AuthCredential{
 		AccessToken: "token-before-logout",
@@ -280,8 +280,8 @@ func TestOAuthLogoutClearsAuthMethodForExplicitProviderField(t *testing.T) {
 		Model:      "gpt-5.4",
 		AuthMethod: "oauth",
 	})
-	if err = config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig error: %v", err)
+	if err = saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig error: %v", err)
 	}
 	if err = auth.SetCredential(oauthProviderOpenAI, &auth.AuthCredential{
 		AccessToken: "token-before-logout",
@@ -335,8 +335,8 @@ func setupOAuthTestEnv(t *testing.T) (string, func()) {
 	cfg.Agents.Defaults.ModelName = ""
 
 	configPath := filepath.Join(tmp, "config.json")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig error: %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig error: %v", err)
 	}
 
 	cleanup := func() {

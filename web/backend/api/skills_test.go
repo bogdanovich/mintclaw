@@ -46,9 +46,9 @@ func TestHandleListSkills(t *testing.T) {
 
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	if err := os.MkdirAll(filepath.Join(workspace, "skills", "workspace-skill"), 0o755); err != nil {
@@ -156,9 +156,9 @@ func TestHandleGetSkill(t *testing.T) {
 
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	skillDir := filepath.Join(workspace, "skills", "viewer-skill")
@@ -213,9 +213,9 @@ func TestHandleGetSkillUsesResolvedPath(t *testing.T) {
 
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	skillDir := filepath.Join(workspace, "skills", "folder-name")
@@ -264,9 +264,9 @@ func TestHandleImportSkill(t *testing.T) {
 	}
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	var body bytes.Buffer
@@ -349,8 +349,8 @@ func TestHandleImportSkillZip(t *testing.T) {
 	}
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	zipContent := buildSkillZip(t, map[string]string{
@@ -415,8 +415,8 @@ func TestHandleImportSkillZipRejectsArchiveWithoutSkill(t *testing.T) {
 	}
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	zipContent := buildSkillZip(t, map[string]string{
@@ -463,8 +463,8 @@ func TestHandleImportSkillRollsBackOnOriginMetadataWriteFailure(t *testing.T) {
 	}
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	previousPersist := persistSkillOriginMeta
@@ -517,8 +517,8 @@ func TestHandleDeleteSkill(t *testing.T) {
 	}
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	skillDir := filepath.Join(workspace, "skills", "delete-me")
@@ -561,8 +561,8 @@ func TestHandleDeleteSkillPrefersWorkspaceMatch(t *testing.T) {
 	t.Setenv(config.EnvHome, homeDir)
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	workspaceSkillDir := filepath.Join(workspace, "skills", "delete-me-workspace")
@@ -660,8 +660,8 @@ func TestHandleSearchSkills(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -740,8 +740,8 @@ func TestHandleSearchSkillsUsesGitHubResultVersionInURL(t *testing.T) {
 	clawHubRegistry, _ := cfg.Tools.Skills.Registries.Get("clawhub")
 	clawHubRegistry.Enabled = false
 	cfg.Tools.Skills.Registries.Set("clawhub", clawHubRegistry)
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -793,8 +793,8 @@ func TestHandleSearchSkillsGitHubRateLimitDegradesGracefully(t *testing.T) {
 	clawHubRegistry, _ := cfg.Tools.Skills.Registries.Get("clawhub")
 	clawHubRegistry.Enabled = false
 	cfg.Tools.Skills.Registries.Set("clawhub", clawHubRegistry)
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -873,8 +873,8 @@ func TestHandleSearchSkillsPagination(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -947,8 +947,8 @@ func TestHandleSearchSkillsClampsRegistryFanout(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1030,8 +1030,8 @@ func TestHandleInstallSkill(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -1127,8 +1127,8 @@ func TestHandleInstallSkillForcePreservesExistingSkillOnFailure(t *testing.T) {
 	}
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	skillDir := filepath.Join(workspace, "skills", "github")
@@ -1164,8 +1164,8 @@ func TestHandleInstallSkillForcePreservesExistingSkillOnFailure(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -1209,8 +1209,8 @@ func TestHandleInstallSkillDefaultsRegistryToGitHub(t *testing.T) {
 	}
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	cfg.Agents.Defaults.Workspace = workspace
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	var server *httptest.Server
@@ -1241,8 +1241,8 @@ func TestHandleInstallSkillDefaultsRegistryToGitHub(t *testing.T) {
 	}
 	githubRegistry.BaseURL = server.URL
 	cfg.Tools.Skills.Registries.Set("github", githubRegistry)
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -1322,8 +1322,8 @@ func TestHandleInstallSkillTracksGitHubURLInstallsAsInstalled(t *testing.T) {
 	clawHubRegistry, _ := cfg.Tools.Skills.Registries.Get("clawhub")
 	clawHubRegistry.Enabled = false
 	cfg.Tools.Skills.Registries.Set("clawhub", clawHubRegistry)
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -1421,8 +1421,8 @@ func TestHandleSearchSkillsMarksDirectoryCollisionAsInstalled(t *testing.T) {
 	githubRegistry, _ := cfg.Tools.Skills.Registries.Get("github")
 	githubRegistry.Enabled = false
 	cfg.Tools.Skills.Registries.Set("github", githubRegistry)
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -1489,8 +1489,8 @@ func TestHandleInstallSkillRollsBackOnOriginMetadataWriteFailure(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	previousPersist := persistSkillOriginMeta
@@ -1577,8 +1577,8 @@ func TestHandleInstallSkillSerializesConcurrentRequests(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -1690,8 +1690,8 @@ func TestHandleImportSkillWaitsForConcurrentInstall(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)
@@ -1807,8 +1807,8 @@ func TestHandleInstallSkillRejectsInvalidArchive(t *testing.T) {
 	defer server.Close()
 
 	setClawHubBaseURL(cfg, server.URL)
-	if saveErr := config.SaveConfig(configPath, cfg); saveErr != nil {
-		t.Fatalf("SaveConfig() error = %v", saveErr)
+	if saveErr := saveTestConfig(configPath, cfg); saveErr != nil {
+		t.Fatalf("saveTestConfig() error = %v", saveErr)
 	}
 
 	h := NewHandler(configPath)

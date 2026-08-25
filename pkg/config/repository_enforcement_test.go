@@ -32,7 +32,7 @@ func TestProductionConfigWritersUseRepository(t *testing.T) {
 			if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
 				return nil
 			}
-			return rejectLegacyConfigWriter(t, repositoryRoot, path)
+			return rejectDirectConfigWriter(t, repositoryRoot, path)
 		})
 		if err != nil {
 			t.Fatalf("scan production config writers under %s: %v", productionRoot, err)
@@ -40,23 +40,12 @@ func TestProductionConfigWritersUseRepository(t *testing.T) {
 	}
 }
 
-func rejectLegacyConfigWriter(t *testing.T, repositoryRoot, path string) error {
+func rejectDirectConfigWriter(t *testing.T, repositoryRoot, path string) error {
 	t.Helper()
 	fileSet := token.NewFileSet()
 	file, err := parser.ParseFile(fileSet, path, nil, 0)
 	if err != nil {
 		return err
-	}
-	configAliases := make(map[string]struct{})
-	for _, importSpec := range file.Imports {
-		if strings.Trim(importSpec.Path.Value, `"`) != "github.com/bogdanovich/mintclaw/pkg/config" {
-			continue
-		}
-		alias := "config"
-		if importSpec.Name != nil {
-			alias = importSpec.Name.Name
-		}
-		configAliases[alias] = struct{}{}
 	}
 	configPathAliases := collectConfigPathAliases(file)
 
@@ -65,34 +54,17 @@ func rejectLegacyConfigWriter(t *testing.T, repositoryRoot, path string) error {
 		if !ok {
 			return true
 		}
-		violation := ""
-		switch function := call.Fun.(type) {
-		case *ast.Ident:
-			_, dotConfigImport := configAliases["."]
-			if function.Name == "SaveConfig" && (file.Name.Name == "config" || dotConfigImport) {
-				violation = "legacy SaveConfig writer"
-			}
-		case *ast.SelectorExpr:
-			receiver, receiverOK := function.X.(*ast.Ident)
-			if receiverOK {
-				_, configImport := configAliases[receiver.Name]
-				if configImport && function.Sel.Name == "SaveConfig" {
-					violation = "legacy SaveConfig writer"
-				}
-			}
-			if violation == "" && isConfigFileMutation(function.Sel.Name, call.Args, configPathAliases) &&
-				!strings.HasPrefix(path, filepath.Join(repositoryRoot, "pkg", "config")+string(filepath.Separator)) {
-				violation = "direct config file writer"
-			}
+		function, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || !isConfigFileMutation(function.Sel.Name, call.Args, configPathAliases) ||
+			strings.HasPrefix(path, filepath.Join(repositoryRoot, "pkg", "config")+string(filepath.Separator)) {
+			return true
 		}
-		if violation != "" {
-			position := fileSet.Position(call.Pos())
-			relativePath, relErr := filepath.Rel(repositoryRoot, path)
-			if relErr != nil {
-				relativePath = path
-			}
-			t.Errorf("%s %s:%d must use config.Repository", violation, relativePath, position.Line)
+		position := fileSet.Position(call.Pos())
+		relativePath, relErr := filepath.Rel(repositoryRoot, path)
+		if relErr != nil {
+			relativePath = path
 		}
+		t.Errorf("direct config file writer %s:%d must use config.Repository", relativePath, position.Line)
 		return true
 	})
 	return nil

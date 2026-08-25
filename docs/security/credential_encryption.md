@@ -17,7 +17,7 @@ export MINTCLAW_KEY_PASSPHRASE="your-passphrase"
 
 Run `mintclaw onboard` — it prompts for your passphrase and generates the SSH key,
 then automatically re-encrypts any plaintext `api_key` entries in your config on
-the next `SaveConfig` call. The resulting `enc://` value will look like:
+the next `Repository.Save` call. The resulting `enc://` value will look like:
 
 ```
 enc://AAAA...base64...

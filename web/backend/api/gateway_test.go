@@ -190,8 +190,8 @@ func newGatewayStartTestHandler(t *testing.T) *Handler {
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -296,8 +296,8 @@ func TestStartGatewayLocked_UsesReloadedConfigForBootSignature(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	delete(cfg.Channels, "mintclaw")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -374,9 +374,9 @@ func TestGatewayStartReady_RejectsASROnlyDefaultModel(t *testing.T) {
 	}}
 	cfg.Agents.Defaults.ModelName = "elevenlabs-asr"
 
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -499,9 +499,9 @@ func TestGatewayStartReady_RejectsUnknownDefaultModel(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = "missing-model"
-	err := config.SaveConfig(configPath, cfg)
+	err := saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -517,9 +517,9 @@ func TestGatewayStartReady_ValidDefaultModel(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
-	err := config.SaveConfig(configPath, cfg)
+	err := saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -539,9 +539,9 @@ func TestGatewayStartReady_DefaultModelWithoutCredential(t *testing.T) {
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("")
 	cfg.ModelList[0].AuthMethod = ""
-	err := config.SaveConfig(configPath, cfg)
+	err := saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -586,9 +586,9 @@ func TestGatewayStartReady_LocalModelWithoutAPIKey(t *testing.T) {
 		APIBase: "http://localhost:8000/v1", Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "local-vllm"
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -622,9 +622,9 @@ func TestGatewayStartReady_LocalModelWithRunningService(t *testing.T) {
 		APIBase: "http://127.0.0.1:8000/v1", Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "local-vllm"
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -657,9 +657,9 @@ func TestGatewayStartReady_RemoteVLLMWithAPIKeyDoesNotProbe(t *testing.T) {
 	}}
 	cfg.ModelList[0o0].SetAPIKey("remote-key")
 	cfg.Agents.Defaults.ModelName = "remote-vllm"
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -690,9 +690,9 @@ func TestGatewayStartReady_LocalOllamaUsesDefaultProbeBase(t *testing.T) {
 		Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "local-ollama"
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -718,9 +718,9 @@ func TestGatewayStartReady_OAuthModelRequiresStoredCredential(t *testing.T) {
 		AuthMethod: "oauth", Enabled: true,
 	}}
 	cfg.Agents.Defaults.ModelName = "openai-oauth"
-	err = config.SaveConfig(configPath, cfg)
+	err = saveTestConfig(configPath, cfg)
 	if err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1061,8 +1061,8 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 		ModelName: "second-model", Provider: "openai", Model: "gpt-4.1", Enabled: true,
 	})
 	cfg.ModelList[len(cfg.ModelList)-1].SetAPIKey("second-key")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1096,8 +1096,8 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	updatedCfg.Agents.Defaults.ModelName = "second-model"
-	if err := config.SaveConfig(configPath, updatedCfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, updatedCfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
@@ -1140,8 +1140,8 @@ func TestGatewayStatusRequiresRestartAfterToolChange(t *testing.T) {
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.Tools.WriteFile.Enabled = true
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1166,8 +1166,8 @@ func TestGatewayStatusRequiresRestartAfterToolChange(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	updatedCfg.Tools.WriteFile.Enabled = false
-	if err := config.SaveConfig(configPath, updatedCfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, updatedCfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
@@ -1203,8 +1203,8 @@ func TestGatewayStatusRequiresRestartAfterChannelChange(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1233,8 +1233,8 @@ func TestGatewayStatusRequiresRestartAfterChannelChange(t *testing.T) {
 		t.Fatalf("expected default telegram channel config")
 	}
 	telegram.Enabled = !telegram.Enabled
-	if err := config.SaveConfig(configPath, updatedCfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, updatedCfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
@@ -1271,8 +1271,8 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelStreamingChange(t *testing
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.ModelList[0].Streaming = config.ModelStreamingConfig{Enabled: false}
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1297,8 +1297,8 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelStreamingChange(t *testing
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	updatedCfg.ModelList[0].Streaming = config.ModelStreamingConfig{Enabled: true}
-	if err := config.SaveConfig(configPath, updatedCfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, updatedCfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
@@ -1429,8 +1429,8 @@ func TestGatewayStatusRequiresRestartAfterWebSearchConfigChange(t *testing.T) {
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.Tools.Web.Enabled = true
 	cfg.Tools.Web.Provider = "sogou"
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1455,8 +1455,8 @@ func TestGatewayStatusRequiresRestartAfterWebSearchConfigChange(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	updatedCfg.Tools.Web.Provider = "duckduckgo"
-	if err := config.SaveConfig(configPath, updatedCfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, updatedCfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
@@ -1493,8 +1493,8 @@ func TestGatewayStatusNoRestartRequiredForNonSensitiveChanges(t *testing.T) {
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
 	cfg.Agents.Defaults.MaxTokens = 1000
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1519,8 +1519,8 @@ func TestGatewayStatusNoRestartRequiredForNonSensitiveChanges(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	updatedCfg.Agents.Defaults.MaxTokens = 2000
-	if err := config.SaveConfig(configPath, updatedCfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, updatedCfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
@@ -1559,8 +1559,8 @@ func TestGatewayStatusNoRestartRequiredWhenNotRunning(t *testing.T) {
 	cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
 		ModelName: "different-model", Provider: "openai", Model: "gpt-4.1", Enabled: true,
 	})
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1579,8 +1579,8 @@ func TestGatewayStatusNoRestartRequiredWhenNotRunning(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	updatedCfg.Agents.Defaults.ModelName = "different-model"
-	if err := config.SaveConfig(configPath, updatedCfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, updatedCfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
@@ -1695,8 +1695,8 @@ func TestGatewayRestartKeepsRunningProcessWhenPreconditionsFail(t *testing.T) {
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("")
 	cfg.ModelList[0].AuthMethod = ""
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1748,8 +1748,8 @@ func TestGatewayRestartKeepsOldProcessWhenItDoesNotExitInTime(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	h := NewHandler(configPath)
@@ -1815,8 +1815,8 @@ func TestGatewayRestartReturnsErrorStatusWhenReplacementFailsToStart(t *testing.
 	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
 	cfg.ModelList[0].Enabled = true
 	cfg.ModelList[0].SetAPIKey("test-key")
-	if err := config.SaveConfig(configPath, cfg); err != nil {
-		t.Fatalf("SaveConfig() error = %v", err)
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
 	invalidBinaryPath := filepath.Join(t.TempDir(), "fake-mintclaw")

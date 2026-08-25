@@ -13,6 +13,11 @@ import (
 	nodepkg "github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
+func saveTestConfig(path string, cfg *config.Config) error {
+	_, err := config.NewRepository(path).Save(cfg)
+	return err
+}
+
 func TestNodesCommandApproveDescribeAndRevoke(t *testing.T) {
 	configPath, workspace := writeTestConfig(t)
 	pairing := writePendingPairing(t, workspace, 100)
@@ -162,7 +167,7 @@ func writeTestConfig(t *testing.T) (string, string) {
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Nodes.Enabled = true
 	cfg.Nodes.MaxPendingPairings = 4
-	if err := config.SaveConfig(configPath, cfg); err != nil {
+	if err := saveTestConfig(configPath, cfg); err != nil {
 		t.Fatal(err)
 	}
 	return configPath, workspace
