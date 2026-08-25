@@ -131,30 +131,54 @@ func buildTranscriptView(
 			display = append(display, workspaceChangesEntry(*workspace))
 		}
 	}
-	lastAssistant := -1
+	lastEntryByTurn := make(map[string]int)
+	latestTurnID := ""
 	for index := range entries {
-		if entries[index].Kind == frontend.EntryAssistant {
-			lastAssistant = index
+		turnID := entries[index].TurnID
+		if turnID != "" {
+			lastEntryByTurn[turnID] = index
+			latestTurnID = turnID
 		}
 	}
+	deferredAssistants := make(map[string][]frontend.TranscriptEntry)
+	latestTurnHasCompletedAnswer := false
 	for index, entry := range entries {
 		if entry.Kind == frontend.EntryAssistant {
-			appendTools(entry.TurnID)
-			if index == lastAssistant {
-				appendRepositoryState()
-			}
+			deferredAssistants[entry.TurnID] = append(deferredAssistants[entry.TurnID], entry)
+			latestTurnHasCompletedAnswer = latestTurnHasCompletedAnswer ||
+				(entry.TurnID == latestTurnID && entry.Complete)
+		} else {
+			display = appendTranscriptViewEntry(display, entry)
 		}
-		display = append(display, transcriptViewEntry{
-			id: entry.ID, label: transcriptEntryLabel(entry.Kind), text: entry.Text, truncated: entry.Truncated,
-		})
+		if index != lastEntryByTurn[entry.TurnID] {
+			continue
+		}
+		appendTools(entry.TurnID)
+		if entry.TurnID == latestTurnID && latestTurnHasCompletedAnswer {
+			continue
+		}
+		for _, assistant := range deferredAssistants[entry.TurnID] {
+			display = appendTranscriptViewEntry(display, assistant)
+		}
+		delete(deferredAssistants, entry.TurnID)
 	}
 	for _, tool := range tools {
 		appendTools(tool.TurnID)
 	}
-	if lastAssistant < 0 {
-		appendRepositoryState()
+	appendRepositoryState()
+	for _, assistant := range deferredAssistants[latestTurnID] {
+		display = appendTranscriptViewEntry(display, assistant)
 	}
 	return display
+}
+
+func appendTranscriptViewEntry(
+	display []transcriptViewEntry,
+	entry frontend.TranscriptEntry,
+) []transcriptViewEntry {
+	return append(display, transcriptViewEntry{
+		id: entry.ID, label: transcriptEntryLabel(entry.Kind), text: entry.Text, truncated: entry.Truncated,
+	})
 }
 
 func toolViewID(tool frontend.ToolState) string {
