@@ -3,7 +3,6 @@ package agent
 import (
 	"crypto/sha256"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -21,7 +20,6 @@ import (
 const (
 	defaultCodingInstructionFileBytes  = 16 * 1024
 	defaultCodingInstructionTotalBytes = 64 * 1024
-	defaultCodingInstructionScanDirs   = 4096
 	codingInstructionMarkerPrefix      = "<!-- mintclaw-project-instruction:"
 	codingInstructionMarkerSuffix      = " -->"
 )
@@ -39,7 +37,6 @@ type codingInstructionLoader struct {
 
 	maxFileBytes  int
 	maxTotalBytes int
-	maxScanDirs   int
 
 	mu    sync.Mutex
 	cache map[string]codingInstructionCacheEntry
@@ -74,7 +71,6 @@ type codingInstructionBundle struct {
 type codingInstructionTarget struct {
 	Path      string
 	Directory bool
-	Recursive bool
 }
 
 func newCodingInstructionLoader(layout CodingRuntimeLayout) *codingInstructionLoader {
@@ -84,7 +80,6 @@ func newCodingInstructionLoader(layout CodingRuntimeLayout) *codingInstructionLo
 		initialCWD:    projectRoot,
 		maxFileBytes:  defaultCodingInstructionFileBytes,
 		maxTotalBytes: defaultCodingInstructionTotalBytes,
-		maxScanDirs:   defaultCodingInstructionScanDirs,
 		cache:         make(map[string]codingInstructionCacheEntry),
 	}
 
@@ -128,22 +123,19 @@ func (loader *codingInstructionLoader) forTargets(targets []codingInstructionTar
 
 	bundle := codingInstructionBundle{}
 	for _, target := range targets {
-		directory, recursive, diagnostic := loader.targetDirectory(target)
+		directory, diagnostic := loader.targetDirectory(target)
 		if diagnostic.Message != "" {
 			bundle.Diagnostics = append(bundle.Diagnostics, diagnostic)
 			continue
 		}
 		loader.appendProjectChain(&bundle, directory)
-		if recursive {
-			loader.appendRecursiveInstructions(&bundle, directory)
-		}
 	}
 	return loader.boundBundle(bundle)
 }
 
 func (loader *codingInstructionLoader) targetDirectory(
 	target codingInstructionTarget,
-) (string, bool, codingInstructionDiagnostic) {
+) (string, codingInstructionDiagnostic) {
 	path := strings.TrimSpace(target.Path)
 	if path == "" {
 		path = "."
@@ -154,14 +146,13 @@ func (loader *codingInstructionLoader) targetDirectory(
 	path = filepath.Clean(path)
 	resolved, err := resolveCodingTarget(path)
 	if err != nil {
-		return "", false, codingInstructionWarning(path, err.Error())
+		return "", codingInstructionWarning(path, err.Error())
 	}
 	if !codingPathWithin(resolved, loader.projectRoot) {
-		return "", false, codingInstructionWarning(path, "path resolves outside the admitted project root")
+		return "", codingInstructionWarning(path, "path resolves outside the admitted project root")
 	}
 
 	directory := resolved
-	recursive := target.Recursive
 	if !target.Directory {
 		if info, statErr := os.Stat(resolved); statErr == nil && info.IsDir() {
 			directory = resolved
@@ -170,9 +161,8 @@ func (loader *codingInstructionLoader) targetDirectory(
 		}
 	} else if info, statErr := os.Stat(resolved); statErr == nil && !info.IsDir() {
 		directory = filepath.Dir(resolved)
-		recursive = false
 	}
-	return directory, recursive, codingInstructionDiagnostic{}
+	return directory, codingInstructionDiagnostic{}
 }
 
 func resolveCodingTarget(path string) (string, error) {
@@ -218,41 +208,6 @@ func (loader *codingInstructionLoader) appendProjectChain(
 		loader.appendDirectoryInstruction(bundle, directory, loader.projectRoot, false)
 	}
 }
-
-func (loader *codingInstructionLoader) appendRecursiveInstructions(
-	bundle *codingInstructionBundle,
-	root string,
-) {
-	visited := 0
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			bundle.Diagnostics = append(bundle.Diagnostics, codingInstructionWarning(path, walkErr.Error()))
-			if entry != nil && entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !entry.IsDir() {
-			return nil
-		}
-		visited++
-		if visited > loader.maxScanDirs {
-			return errCodingInstructionScanLimit
-		}
-		loader.appendDirectoryInstruction(bundle, path, loader.projectRoot, false)
-		return nil
-	})
-	if errors.Is(err, errCodingInstructionScanLimit) {
-		bundle.Diagnostics = append(bundle.Diagnostics, codingInstructionWarning(
-			root,
-			fmt.Sprintf("recursive instruction scan stopped after %d directories", loader.maxScanDirs),
-		))
-	} else if err != nil && !os.IsNotExist(err) {
-		bundle.Diagnostics = append(bundle.Diagnostics, codingInstructionWarning(root, err.Error()))
-	}
-}
-
-var errCodingInstructionScanLimit = fmt.Errorf("coding instruction directory scan limit reached")
 
 func (loader *codingInstructionLoader) appendDirectoryInstruction(
 	bundle *codingInstructionBundle,

@@ -149,12 +149,12 @@ func codingInstructionTargets(toolName string, arguments map[string]any) []codin
 	case "list_dir":
 		return []codingInstructionTarget{{Path: pathArgument("path"), Directory: true}}
 	case "search_files":
-		return []codingInstructionTarget{{Path: pathArgument("path"), Directory: true, Recursive: true}}
+		return []codingInstructionTarget{{Path: pathArgument("path"), Directory: true}}
 	case "exec":
 		if action := pathArgument("action"); action != "run" {
 			return nil
 		}
-		return []codingInstructionTarget{{Path: pathArgument("cwd"), Directory: true, Recursive: true}}
+		return []codingInstructionTarget{{Path: pathArgument("cwd"), Directory: true}}
 	case "apply_patch":
 		input := pathArgument("input")
 		operations, err := patchformat.Parse(input, 0)

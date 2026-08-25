@@ -108,22 +108,51 @@ func buildTranscriptView(
 	expandedToolID string,
 ) []transcriptViewEntry {
 	display := make([]transcriptViewEntry, 0, len(entries)+len(tools)+2)
-	for _, entry := range entries {
+	toolsByTurn := make(map[string][]frontend.ToolState)
+	for _, tool := range tools {
+		toolsByTurn[tool.TurnID] = append(toolsByTurn[tool.TurnID], tool)
+	}
+	appendTools := func(turnID string) {
+		for _, tool := range toolsByTurn[turnID] {
+			id := toolViewID(tool)
+			display = append(display, transcriptViewEntry{
+				id:    id,
+				label: toolCardLabel(tool, id == selectedToolID),
+				text:  toolCardText(tool, id == expandedToolID),
+			})
+		}
+		delete(toolsByTurn, turnID)
+	}
+	appendRepositoryState := func() {
+		if entry, ok := verifiedWritesEntry(changedFiles); ok {
+			display = append(display, entry)
+		}
+		if workspace != nil {
+			display = append(display, workspaceChangesEntry(*workspace))
+		}
+	}
+	lastAssistant := -1
+	for index := range entries {
+		if entries[index].Kind == frontend.EntryAssistant {
+			lastAssistant = index
+		}
+	}
+	for index, entry := range entries {
+		if entry.Kind == frontend.EntryAssistant {
+			appendTools(entry.TurnID)
+			if index == lastAssistant {
+				appendRepositoryState()
+			}
+		}
 		display = append(display, transcriptViewEntry{
 			id: entry.ID, label: transcriptEntryLabel(entry.Kind), text: entry.Text, truncated: entry.Truncated,
 		})
 	}
 	for _, tool := range tools {
-		id := toolViewID(tool)
-		display = append(display, transcriptViewEntry{
-			id: id, label: toolCardLabel(tool, id == selectedToolID), text: toolCardText(tool, id == expandedToolID),
-		})
+		appendTools(tool.TurnID)
 	}
-	if entry, ok := verifiedWritesEntry(changedFiles); ok {
-		display = append(display, entry)
-	}
-	if workspace != nil {
-		display = append(display, workspaceChangesEntry(*workspace))
+	if lastAssistant < 0 {
+		appendRepositoryState()
 	}
 	return display
 }

@@ -470,6 +470,11 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	if messages[0].Content != wantSystem {
 		t.Fatalf("coding system prompt =\n%s\nwant:\n%s", messages[0].Content, wantSystem)
 	}
+	for _, expected := range []string{"exec with rg or rg --files", "Gather only the evidence needed"} {
+		if !strings.Contains(messages[0].Content, expected) {
+			t.Fatalf("coding system prompt omits efficient inspection guidance %q:\n%s", expected, messages[0].Content)
+		}
+	}
 	for _, forbidden := range []string{
 		"PERSONAL AGENT BODY",
 		"PERSONAL SOUL",

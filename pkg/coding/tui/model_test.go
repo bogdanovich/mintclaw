@@ -253,6 +253,27 @@ func TestTranscriptRenderingIsCellBoundedAndSanitizesControls(t *testing.T) {
 	}
 }
 
+func TestTranscriptKeepsFinalAssistantAnswerAfterToolsAndRepositoryState(t *testing.T) {
+	entries := []frontend.TranscriptEntry{
+		{ID: "user", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "inspect", Complete: true},
+		{ID: "assistant", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "final answer", Complete: true},
+	}
+	tools := []frontend.ToolState{
+		{TurnID: "turn-1", CallID: "call-1", Name: "exec", Status: frontend.ToolSucceeded},
+	}
+	workspace := &codingworkspace.Snapshot{ProjectRoot: "/work/project", CWD: "/work/project"}
+	display := buildTranscriptView(entries, tools, nil, workspace, "", "")
+	if len(display) != 4 {
+		t.Fatalf("display entries = %+v", display)
+	}
+	wantIDs := []string{"user", "view:tool:turn-1:call-1", "view:workspace", "assistant"}
+	for index, want := range wantIDs {
+		if display[index].id != want {
+			t.Fatalf("display[%d].id = %q, want %q; display=%+v", index, display[index].id, want, display)
+		}
+	}
+}
+
 func TestUnsupportedOrChangedHistoryDisablesPagingWithoutFrontendError(t *testing.T) {
 	controller := newController(t)
 	model, err := NewModel(controller)
