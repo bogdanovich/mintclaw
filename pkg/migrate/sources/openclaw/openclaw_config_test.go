@@ -89,7 +89,7 @@ func TestLoadOpenClawConfig(t *testing.T) {
 		t.Errorf("expected workspace '~/.mintclaw/workspace', got '%s'", workspace)
 	}
 
-	agents := cfg.GetAgents()
+	agents := cfg.Agents.List
 	if len(agents) != 1 {
 		t.Errorf("expected 1 agent, got %d", len(agents))
 	}
@@ -105,61 +105,6 @@ func TestLoadOpenClawConfig(t *testing.T) {
 	}
 	if cfg.Channels.Telegram.BotToken == nil || *cfg.Channels.Telegram.BotToken != "test-token" {
 		t.Error("telegram bot token not parsed correctly")
-	}
-}
-
-func TestGetProviderConfig(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "openclaw.json")
-
-	testConfig := `{
-		"models": {
-			"providers": {
-				"anthropic": {
-					"api_key": "sk-ant-test",
-					"base_url": "https://api.anthropic.com",
-					"max_tokens": 4096
-				},
-				"openai": {
-					"api_key": "sk-test",
-					"base_url": "https://api.openai.com"
-				}
-			}
-		}
-	}`
-
-	err := os.WriteFile(configPath, []byte(testConfig), 0o644)
-	if err != nil {
-		t.Fatalf("failed to write test config: %v", err)
-	}
-
-	cfg, err := LoadOpenClawConfig(configPath)
-	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
-	}
-
-	providers := GetProviderConfig(cfg.Models)
-	if len(providers) != 2 {
-		t.Errorf("expected 2 providers, got %d", len(providers))
-	}
-
-	if anthropic, ok := providers["anthropic"]; ok {
-		if anthropic.APIKey != "sk-ant-test" {
-			t.Errorf("expected anthropic api_key 'sk-ant-test', got '%s'", anthropic.APIKey)
-		}
-		if anthropic.BaseURL != "https://api.anthropic.com" {
-			t.Errorf("expected anthropic base_url 'https://api.anthropic.com', got '%s'", anthropic.BaseURL)
-		}
-	} else {
-		t.Error("anthropic provider not found")
-	}
-
-	if openai, ok := providers["openai"]; ok {
-		if openai.APIKey != "sk-test" {
-			t.Errorf("expected openai api_key 'sk-test', got '%s'", openai.APIKey)
-		}
-	} else {
-		t.Error("openai provider not found")
 	}
 }
 
@@ -552,38 +497,6 @@ func TestOpenClawAgentModel(t *testing.T) {
 	}
 }
 
-func TestChannelEnabled(t *testing.T) {
-	cfg := &OpenClawConfig{
-		Channels: &OpenClawChannels{
-			Telegram: &OpenClawTelegramConfig{
-				Enabled: boolPtr(true),
-			},
-			Discord: &OpenClawDiscordConfig{
-				Enabled: boolPtr(false),
-			},
-			Slack: &OpenClawSlackConfig{
-				Enabled: boolPtr(true),
-			},
-		},
-	}
-
-	if !cfg.IsChannelEnabled("telegram") {
-		t.Error("telegram should be enabled")
-	}
-	if cfg.IsChannelEnabled("discord") {
-		t.Error("discord should be disabled")
-	}
-	if !cfg.IsChannelEnabled("slack") {
-		t.Error("slack should be enabled (explicitly set)")
-	}
-	if !cfg.IsChannelEnabled("matrix") {
-		t.Error("matrix should be enabled (nil config defaults to enabled)")
-	}
-	if cfg.IsChannelEnabled("line") {
-		t.Error("line should return false (not in switch cases)")
-	}
-}
-
 func TestGetDefaultModel(t *testing.T) {
 	cfg := &OpenClawConfig{
 		Agents: &OpenClawAgents{
@@ -651,31 +564,6 @@ func TestHasFunctions(t *testing.T) {
 	}
 	if cfg2.HasMemory() {
 		t.Error("should not have memory")
-	}
-}
-
-func TestLoadOpenClawConfigFromDir(t *testing.T) {
-	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "openclaw.json")
-
-	testConfig := `{"agents": {}}`
-	err := os.WriteFile(configPath, []byte(testConfig), 0o644)
-	if err != nil {
-		t.Fatalf("failed to write test config: %v", err)
-	}
-
-	cfg, err := LoadOpenClawConfigFromDir(tmpDir)
-	if err != nil {
-		t.Fatalf("failed to load config from dir: %v", err)
-	}
-
-	if cfg.Agents == nil {
-		t.Error("agents should not be nil")
-	}
-
-	_, err = LoadOpenClawConfigFromDir("/nonexistent/dir")
-	if err == nil {
-		t.Error("should return error for nonexistent dir")
 	}
 }
 
@@ -868,8 +756,4 @@ func TestGetProviderConfigFromDirNotExist(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
-}
-
-func boolPtr(b bool) *bool {
-	return &b
 }
