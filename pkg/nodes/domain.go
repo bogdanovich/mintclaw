@@ -450,7 +450,13 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return err
 	}
 	actualInput, err := canonicalJSON(descriptor.InputSchema)
-	if err != nil || !bytes.Equal(actualInput, expectedInput) {
+	inputMatchesCurrent := err == nil && bytes.Equal(actualInput, expectedInput)
+	previousInput, previousInputErr := canonicalJSON(previousBrowserCommandInputSchema(
+		descriptor.Name,
+		descriptor.BrowserProfiles,
+	))
+	inputMatchesPrevious := previousInputErr == nil && bytes.Equal(actualInput, previousInput)
+	if !inputMatchesCurrent && !inputMatchesPrevious {
 		return fmt.Errorf("%w: browser input schema does not match typed contract", ErrInvalidCapability)
 	}
 	expectedOutput, err := canonicalJSON(BrowserCommandOutputSchema(
@@ -461,7 +467,13 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return err
 	}
 	actualOutput, err := canonicalJSON(descriptor.OutputSchema)
-	outputMatches := err == nil && bytes.Equal(actualOutput, expectedOutput)
+	outputMatchesCurrent := err == nil && bytes.Equal(actualOutput, expectedOutput)
+	previousOutput, previousOutputErr := canonicalJSON(previousBrowserCommandOutputSchema(
+		descriptor.Name,
+		descriptor.BrowserProfiles,
+	))
+	outputMatchesPrevious := previousOutputErr == nil && bytes.Equal(actualOutput, previousOutput)
+	outputMatches := outputMatchesCurrent || outputMatchesPrevious
 	if !outputMatches && descriptor.Name == BrowserCommandSessionOpen {
 		legacyOutput, legacyErr := canonicalJSON(legacyBrowserCommandOutputSchema(
 			descriptor.Name,
@@ -472,7 +484,39 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	if !outputMatches {
 		return fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
 	}
+	if (descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandContexts) &&
+		inputMatchesCurrent != outputMatchesCurrent {
+		return fmt.Errorf("%w: browser snapshot schema generations disagree", ErrInvalidCapability)
+	}
 	return nil
+}
+
+func browserDescriptorUsesStreamedSnapshots(descriptor CommandDescriptor) (bool, error) {
+	actual, err := canonicalJSON(descriptor.OutputSchema)
+	if err != nil {
+		return false, err
+	}
+	current, err := canonicalJSON(BrowserCommandOutputSchema(
+		descriptor.Name,
+		descriptor.BrowserProfiles,
+	))
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(actual, current) {
+		return true, nil
+	}
+	previous, err := canonicalJSON(previousBrowserCommandOutputSchema(
+		descriptor.Name,
+		descriptor.BrowserProfiles,
+	))
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(actual, previous) {
+		return false, nil
+	}
+	return false, fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
 }
 
 func (descriptor CommandDescriptor) validateUpdateProfiles() error {
@@ -702,6 +746,23 @@ func (catalog CapabilityCatalog) Validate() error {
 				"%w: browser session-open schema does not match command-set version",
 				ErrInvalidCapability,
 			)
+		}
+		var streamedSnapshots *bool
+		for _, name := range []string{BrowserCommandObserve, BrowserCommandAct, BrowserCommandContexts} {
+			current, currentErr := browserDescriptorUsesStreamedSnapshots(browserDescriptors[name])
+			if currentErr != nil {
+				return currentErr
+			}
+			if streamedSnapshots == nil {
+				streamedSnapshots = &current
+				continue
+			}
+			if *streamedSnapshots != current {
+				return fmt.Errorf(
+					"%w: browser commands disagree on snapshot schema generation",
+					ErrInvalidCapability,
+				)
+			}
 		}
 	}
 	return nil

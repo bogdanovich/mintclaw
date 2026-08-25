@@ -1465,12 +1465,20 @@ func invalidBrowserActInput() error {
 }
 
 func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
-	return browserCommandInputSchema(command, profiles)
+	return browserCommandInputSchema(command, profiles, true)
+}
+
+func previousBrowserCommandInputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	return browserCommandInputSchema(command, profiles, false)
 }
 
 func browserCommandInputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
+	streamedSnapshots bool,
 ) json.RawMessage {
 	profileBranches := make([]any, 0, len(profiles))
 	profileRevisions := make([]string, 0, len(profiles))
@@ -1523,8 +1531,10 @@ func browserCommandInputSchema(
 		add("tab_id", identifier)
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
 		add("screenshot", map[string]any{"type": "boolean"})
-		properties["workspace_id"] = identifier
-		properties["browser_target"] = identifier
+		if streamedSnapshots {
+			properties["workspace_id"] = identifier
+			properties["browser_target"] = identifier
+		}
 	case BrowserCommandDiagnostics:
 		add("session_id", identifier)
 		add("tab_id", identifier)
@@ -1620,8 +1630,10 @@ func browserCommandInputSchema(
 		}
 		properties["tab_id"] = identifier
 		properties["frame_id"] = identifier
-		properties["workspace_id"] = identifier
-		properties["browser_target"] = identifier
+		if streamedSnapshots {
+			properties["workspace_id"] = identifier
+			properties["browser_target"] = identifier
+		}
 		profileConstraint = map[string]any{"oneOf": []any{
 			map[string]any{
 				"properties": map[string]any{"operation": map[string]any{"enum": []string{"list", "open"}}},
@@ -1665,20 +1677,28 @@ func BrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, true)
+	return browserCommandOutputSchema(command, profiles, true, true)
+}
+
+func previousBrowserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	return browserCommandOutputSchema(command, profiles, true, false)
 }
 
 func legacyBrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, false)
+	return browserCommandOutputSchema(command, profiles, false, false)
 }
 
 func browserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 	diagnostics bool,
+	streamedSnapshots bool,
 ) json.RawMessage {
 	if len(profiles) == 0 {
 		return json.RawMessage("false")
@@ -1736,7 +1756,7 @@ func browserCommandOutputSchema(
 		})
 	case BrowserCommandObserve:
 		return mustJSON(map[string]any{"oneOf": []any{
-			rawSchema(browserObservationSchema(limits)),
+			rawSchema(browserObservationSchema(limits, streamedSnapshots)),
 			browserProtectedResultReceiptSchema(nil),
 		}})
 	case BrowserCommandDiagnostics:
@@ -1754,14 +1774,17 @@ func browserCommandOutputSchema(
 				"action_invocation_id": identifier,
 				"state":                map[string]any{"enum": []string{"accepted", "succeeded", "failed", "unknown"}},
 				"reason":               safeReason,
-				"observation":          rawSchema(browserObservationSchema(limits)),
-				"artifact":             browserArtifactSchema(limits.DownloadBytes),
-				"output":               browserDownloadOutputDescriptorSchema(limits.DownloadBytes),
+				"observation": rawSchema(browserObservationSchema(
+					limits,
+					streamedSnapshots,
+				)),
+				"artifact": browserArtifactSchema(limits.DownloadBytes),
+				"output":   browserDownloadOutputDescriptorSchema(limits.DownloadBytes),
 			},
 		})
 	case BrowserCommandContexts:
 		return mustJSON(map[string]any{"oneOf": []any{
-			browserContextCommandResultSchema(limits),
+			browserContextCommandResultSchema(limits, streamedSnapshots),
 			browserProtectedResultReceiptSchema(map[string]any{
 				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
 			}),
@@ -1771,8 +1794,14 @@ func browserCommandOutputSchema(
 	}
 }
 
-func browserContextCommandResultSchema(limits BrowserLimits) map[string]any {
-	return browserContextCommandResultSchemaWithObservation(limits, browserObservationSchema(limits))
+func browserContextCommandResultSchema(
+	limits BrowserLimits,
+	streamedSnapshots bool,
+) map[string]any {
+	return browserContextCommandResultSchemaWithObservation(
+		limits,
+		browserObservationSchema(limits, streamedSnapshots),
+	)
 }
 
 func browserContextCommandResultSchemaWithObservation(
@@ -1897,7 +1926,7 @@ func browserLimitsSchema(maximum BrowserLimits) map[string]any {
 	}
 }
 
-func browserObservationSchema(limits BrowserLimits) json.RawMessage {
+func browserObservationSchema(limits BrowserLimits, streamedSnapshots bool) json.RawMessage {
 	properties := map[string]any{
 		"session_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 		"tab_id":              map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
@@ -1931,9 +1960,8 @@ func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 				},
 			},
 		},
-		"output": browserSnapshotOutputDescriptorSchema(limits.ToolResultBytes),
 	}
-	return mustJSON(map[string]any{
+	schema := map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"required": []string{
@@ -1947,7 +1975,10 @@ func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 			"truncated",
 		},
 		"properties": properties,
-		"oneOf": []any{
+	}
+	if streamedSnapshots {
+		properties["output"] = browserSnapshotOutputDescriptorSchema(limits.ToolResultBytes)
+		schema["oneOf"] = []any{
 			map[string]any{"not": map[string]any{"required": []string{"output"}}},
 			map[string]any{
 				"required": []string{"output"},
@@ -1956,8 +1987,9 @@ func browserObservationSchema(limits BrowserLimits) json.RawMessage {
 					"elements": map[string]any{"maxItems": 0},
 				},
 			},
-		},
-	})
+		}
+	}
+	return mustJSON(schema)
 }
 
 func browserDiagnosticsResultSchema() map[string]any {
