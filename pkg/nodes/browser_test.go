@@ -87,6 +87,49 @@ func TestBrowserCatalogAcceptsPreviousCommandSetWithoutDiagnostics(t *testing.T)
 	}
 }
 
+func TestBrowserCatalogAcceptsPreviousSnapshotSchemaGeneration(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		descriptors[index].InputSchema = previousBrowserCommandInputSchema(
+			descriptors[index].Name,
+			descriptors[index].BrowserProfiles,
+		)
+		descriptors[index].OutputSchema = previousBrowserCommandOutputSchema(
+			descriptors[index].Name,
+			descriptors[index].BrowserProfiles,
+		)
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err != nil {
+		t.Fatalf("previous snapshot schema generation rejected: %v", err)
+	}
+}
+
+func TestBrowserCatalogRejectsMixedSnapshotSchemaGenerations(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name != BrowserCommandObserve {
+			continue
+		}
+		descriptors[index].InputSchema = previousBrowserCommandInputSchema(
+			descriptors[index].Name,
+			descriptors[index].BrowserProfiles,
+		)
+		descriptors[index].OutputSchema = previousBrowserCommandOutputSchema(
+			descriptors[index].Name,
+			descriptors[index].BrowserProfiles,
+		)
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("mixed snapshot schema generations were accepted")
+	}
+}
+
 func TestBrowserCatalogRejectsIncompleteSupportedCommandSet(t *testing.T) {
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
 	if err != nil {
