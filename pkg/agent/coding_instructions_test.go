@@ -134,7 +134,7 @@ func TestCodingInstructionTurnStateScopesSiblingsAndDeduplicatesHistory(t *testi
 	}
 }
 
-func TestCodingInstructionRecursiveSearchDiscoversNestedScopes(t *testing.T) {
+func TestCodingInstructionSearchLoadsOnlyTheTargetDirectoryChain(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
 	for _, subtree := range []string{"a", "b"} {
@@ -152,11 +152,13 @@ func TestCodingInstructionRecursiveSearchDiscoversNestedScopes(t *testing.T) {
 	)
 	state := newCodingInstructionTurnState(loader, nil)
 	bundle, discovered := state.discover("search_files", map[string]any{"path": ".", "pattern": "TODO"})
-	if !discovered || len(bundle.Documents) != 2 {
-		t.Fatalf("recursive discovery = %#v, %v", bundle, discovered)
+	if discovered || len(bundle.Documents) != 0 || len(bundle.Diagnostics) != 0 {
+		t.Fatalf("root search loaded descendant instructions = %#v, %v", bundle, discovered)
 	}
-	if bundle.Documents[0].Scope == bundle.Documents[1].Scope {
-		t.Fatalf("recursive scopes collapsed: %#v", bundle.Documents)
+
+	bundle, discovered = state.discover("search_files", map[string]any{"path": "a", "pattern": "TODO"})
+	if !discovered || len(bundle.Documents) != 1 || bundle.Documents[0].Content != "rules a" {
+		t.Fatalf("targeted search discovery = %#v, %v", bundle, discovered)
 	}
 }
 
@@ -365,25 +367,6 @@ func TestCodingInstructionSelectionInvalidatesOnOverrideCreateAndDelete(t *testi
 	}
 }
 
-func TestCodingInstructionRecursiveScanReportsBound(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "project")
-	if err := os.MkdirAll(filepath.Join(project, "a", "b"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	loader := newCodingInstructionTestLoader(
-		t,
-		project,
-		filepath.Join(root, "state"),
-		[]string{project},
-	)
-	loader.maxScanDirs = 1
-	bundle := loader.forTargets([]codingInstructionTarget{{Path: ".", Directory: true, Recursive: true}})
-	if len(bundle.Diagnostics) != 1 || !strings.Contains(bundle.Diagnostics[0].Message, "stopped after 1") {
-		t.Fatalf("scan limit diagnostics = %#v", bundle.Diagnostics)
-	}
-}
-
 func TestCodingPromptRefreshesGlobalRepositoryAndCWDInstructions(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
@@ -463,13 +446,13 @@ func TestCodingInstructionTargetsCoverPathAwareCodingTools(t *testing.T) {
 			name:      "search",
 			tool:      "search_files",
 			arguments: map[string]any{"path": "a"},
-			want:      []codingInstructionTarget{{Path: "a", Directory: true, Recursive: true}},
+			want:      []codingInstructionTarget{{Path: "a", Directory: true}},
 		},
 		{
 			name:      "exec",
 			tool:      "exec",
 			arguments: map[string]any{"action": "run", "cwd": "a"},
-			want:      []codingInstructionTarget{{Path: "a", Directory: true, Recursive: true}},
+			want:      []codingInstructionTarget{{Path: "a", Directory: true}},
 		},
 		{
 			name:      "patch",
