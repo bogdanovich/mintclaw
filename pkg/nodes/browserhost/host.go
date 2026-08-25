@@ -1794,7 +1794,11 @@ func browserHostElementRef(
 		len(element.Name),
 		element.Name,
 	)
-	return "href_" + hex.EncodeToString(hash.Sum(nil))
+	// The Playwright projector reserves 36 bytes for each opaque reference.
+	// Keep the authority-bound host token within that exact width so binding a
+	// dense, valid projection cannot expand it beyond the semantic limit. A
+	// 128-bit HMAC tag remains unguessable for the lifetime of the session.
+	return "ref_" + hex.EncodeToString(hash.Sum(nil)[:16])
 }
 
 func authorizeBrowserProfile(

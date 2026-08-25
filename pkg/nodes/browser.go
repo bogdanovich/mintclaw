@@ -17,7 +17,6 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
-	"github.com/bogdanovich/mintclaw/pkg/nodes/internal/jsonstrict"
 )
 
 var (
@@ -56,9 +55,15 @@ const (
 	MaxBrowserTextInputBytes     = 16 * 1024
 	// JSON can encode one accepted input byte as a six-byte Unicode escape.
 	// The fixed allowance covers the transport-only {"value": ...} wrapper.
-	MaxBrowserEphemeralInputBytes     = MaxBrowserTextInputBytes*6 + 128
-	MaxBrowserContextInputBytes       = 64*1024 + 128
-	MaxBrowserToolResultBytes         = 320 * 1024
+	MaxBrowserEphemeralInputBytes = MaxBrowserTextInputBytes*6 + 128
+	MaxBrowserContextInputBytes   = 64*1024 + 128
+	MaxBrowserToolResultBytes     = 320 * 1024
+	// A streamed semantic snapshot contains the bounded snapshot plus a private
+	// element catalog. JSON escaping can expand each accepted input byte by up
+	// to six bytes, so this transport-only ceiling must not reuse the smaller
+	// model-facing tool result budget.
+	MaxBrowserSnapshotPayloadBytes = (MaxBrowserSnapshotBytes+
+		MaxBrowserSnapshotRefs*(MaxIDLength+128+4096))*6 + 4096
 	MaxBrowserDiagnosticEntries       = 32
 	MaxBrowserDiagnosticCategoryBytes = 16 * 1024
 	MaxBrowserDiagnosticBytes         = 48 * 1024
@@ -963,59 +968,175 @@ type BrowserSnapshotPayload struct {
 }
 
 func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSnapshotPayload, error) {
-	if len(data) == 0 || len(data) > limits.ToolResultBytes {
+	if len(data) == 0 || len(data) > BrowserSnapshotPayloadLimit(limits) {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
 	}
 	if !utf8.Valid(data) {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
 	}
-	if _, err := jsonstrict.Decode(data); err != nil {
-		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
-	}
-	var value struct {
-		Snapshot *string `json:"snapshot"`
-		Elements *[]struct {
-			Ref  *string `json:"ref"`
-			Role *string `json:"role"`
-			Name *string `json:"name"`
-		} `json:"elements"`
-	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
-		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
+	payload, err := decodeBrowserSnapshotPayloadObject(decoder, limits)
+	if err != nil {
+		return BrowserSnapshotPayload{}, err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if _, err = decoder.Token(); !errors.Is(err, io.EOF) {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: trailing browser snapshot payload", ErrInvalidInvocation)
 	}
-	if value.Snapshot == nil || value.Elements == nil {
+	return payload, nil
+}
+
+func decodeBrowserSnapshotPayloadObject(
+	decoder *json.Decoder,
+	limits BrowserLimits,
+) (BrowserSnapshotPayload, error) {
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+	}
+	var payload BrowserSnapshotPayload
+	seenSnapshot, seenElements := false, false
+	for decoder.More() {
+		field, err := decoder.Token()
+		name, ok := field.(string)
+		if err != nil || !ok {
+			return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+		}
+		switch name {
+		case "snapshot":
+			value, valueErr := decodeBrowserSnapshotString(decoder)
+			if seenSnapshot || valueErr != nil {
+				return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+			}
+			payload.Snapshot = value
+			seenSnapshot = true
+			if !utf8.ValidString(payload.Snapshot) || len(payload.Snapshot) > limits.SnapshotBytes {
+				return BrowserSnapshotPayload{}, browserSnapshotPayloadExceedsBounds()
+			}
+		case "elements":
+			if seenElements {
+				return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+			}
+			seenElements = true
+			payload.Elements, err = decodeBrowserSnapshotElements(decoder, limits.SnapshotRefs)
+			if err != nil {
+				return BrowserSnapshotPayload{}, err
+			}
+		default:
+			return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+		}
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+	}
+	if !seenSnapshot || !seenElements {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: incomplete browser snapshot payload", ErrInvalidInvocation)
 	}
-	if !utf8.ValidString(*value.Snapshot) || len(*value.Snapshot) > limits.SnapshotBytes ||
-		len(*value.Elements) > limits.SnapshotRefs {
-		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
-	}
-	payload := BrowserSnapshotPayload{
-		Snapshot: *value.Snapshot,
-		Elements: make([]BrowserElement, 0, len(*value.Elements)),
-	}
-	seen := make(map[string]struct{}, len(*value.Elements))
-	for _, value := range *value.Elements {
-		if value.Ref == nil || value.Role == nil || value.Name == nil {
-			return BrowserSnapshotPayload{}, fmt.Errorf("%w: incomplete browser snapshot element", ErrInvalidInvocation)
-		}
-		element := BrowserElement{Ref: *value.Ref, Role: *value.Role, Name: *value.Name}
-		if !validInvocationIdentifier(element.Ref) || !utf8.ValidString(element.Role) ||
-			!utf8.ValidString(element.Name) || len(element.Role) > 128 || len(element.Name) > 4096 {
-			return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot element", ErrInvalidInvocation)
-		}
-		if _, duplicate := seen[element.Ref]; duplicate {
-			return BrowserSnapshotPayload{}, fmt.Errorf("%w: duplicate browser snapshot element", ErrInvalidInvocation)
-		}
-		seen[element.Ref] = struct{}{}
-		payload.Elements = append(payload.Elements, element)
-	}
 	return payload, nil
+}
+
+func decodeBrowserSnapshotElements(decoder *json.Decoder, maximum int) ([]BrowserElement, error) {
+	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
+		return nil, malformedBrowserSnapshotPayload()
+	}
+	elements := make([]BrowserElement, 0, min(max(maximum, 0), MaxBrowserSnapshotRefs))
+	seenRefs := make(map[string]struct{}, cap(elements))
+	for decoder.More() {
+		if len(elements) >= maximum {
+			return nil, browserSnapshotPayloadExceedsBounds()
+		}
+		element, err := decodeBrowserSnapshotElement(decoder)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := seenRefs[element.Ref]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate browser snapshot element", ErrInvalidInvocation)
+		}
+		seenRefs[element.Ref] = struct{}{}
+		elements = append(elements, element)
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
+		return nil, malformedBrowserSnapshotPayload()
+	}
+	return elements, nil
+}
+
+func decodeBrowserSnapshotElement(decoder *json.Decoder) (BrowserElement, error) {
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return BrowserElement{}, malformedBrowserSnapshotPayload()
+	}
+	var element BrowserElement
+	seenRef, seenRole, seenName := false, false, false
+	for decoder.More() {
+		field, err := decoder.Token()
+		name, ok := field.(string)
+		if err != nil || !ok {
+			return BrowserElement{}, malformedBrowserSnapshotPayload()
+		}
+		switch name {
+		case "ref":
+			value, valueErr := decodeBrowserSnapshotString(decoder)
+			if seenRef || valueErr != nil {
+				return BrowserElement{}, malformedBrowserSnapshotPayload()
+			}
+			element.Ref = value
+			seenRef = true
+		case "role":
+			value, valueErr := decodeBrowserSnapshotString(decoder)
+			if seenRole || valueErr != nil {
+				return BrowserElement{}, malformedBrowserSnapshotPayload()
+			}
+			element.Role = value
+			seenRole = true
+		case "name":
+			value, valueErr := decodeBrowserSnapshotString(decoder)
+			if seenName || valueErr != nil {
+				return BrowserElement{}, malformedBrowserSnapshotPayload()
+			}
+			element.Name = value
+			seenName = true
+		default:
+			return BrowserElement{}, malformedBrowserSnapshotPayload()
+		}
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return BrowserElement{}, malformedBrowserSnapshotPayload()
+	}
+	if !seenRef || !seenRole || !seenName {
+		return BrowserElement{}, fmt.Errorf("%w: incomplete browser snapshot element", ErrInvalidInvocation)
+	}
+	if !validInvocationIdentifier(element.Ref) || !utf8.ValidString(element.Role) ||
+		!utf8.ValidString(element.Name) || len(element.Role) > 128 || len(element.Name) > 4096 {
+		return BrowserElement{}, fmt.Errorf("%w: malformed browser snapshot element", ErrInvalidInvocation)
+	}
+	return element, nil
+}
+
+func decodeBrowserSnapshotString(decoder *json.Decoder) (string, error) {
+	token, err := decoder.Token()
+	value, ok := token.(string)
+	if err != nil || !ok {
+		return "", malformedBrowserSnapshotPayload()
+	}
+	return value, nil
+}
+
+func malformedBrowserSnapshotPayload() error {
+	return fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
+}
+
+func browserSnapshotPayloadExceedsBounds() error {
+	return fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
+}
+
+// BrowserSnapshotPayloadLimit bounds only the private authenticated transfer
+// representation. The reconstructed observation remains subject to the
+// independent model-facing tool result budget.
+func BrowserSnapshotPayloadLimit(limits BrowserLimits) int {
+	snapshotBytes := min(max(limits.SnapshotBytes, 0), MaxBrowserSnapshotBytes)
+	snapshotRefs := min(max(limits.SnapshotRefs, 0), MaxBrowserSnapshotRefs)
+	return min(
+		(snapshotBytes+snapshotRefs*(MaxIDLength+128+4096))*6+4096,
+		MaxBrowserSnapshotPayloadBytes,
+	)
 }
 
 type BrowserActResult struct {
@@ -1166,13 +1287,14 @@ type BrowserHostObserveRequest struct {
 }
 
 type BrowserHostObservationOutputRequest struct {
-	SessionID       string
-	RoutedSessionID string
-	InvocationID    string
-	WorkspaceID     string
-	BrowserTarget   string
-	AgentID         string
-	ActorID         string
+	SessionID         string
+	RoutedSessionID   string
+	InvocationID      string
+	WorkspaceID       string
+	BrowserTarget     string
+	AgentID           string
+	ActorID           string
+	InlineResultBytes int
 }
 
 type BrowserHostDiagnosticsRequest struct {
@@ -1677,33 +1799,55 @@ func BrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, true, true)
+	return browserCommandOutputSchema(command, profiles, true, browserSnapshotSchemaCurrent)
+}
+
+func previousStreamedBrowserCommandOutputSchema(
+	command string,
+	profiles []BrowserProfileDescriptor,
+) json.RawMessage {
+	return browserCommandOutputSchema(command, profiles, true, browserSnapshotSchemaToolResult)
 }
 
 func previousBrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, true, false)
+	return browserCommandOutputSchema(command, profiles, true, browserSnapshotSchemaInline)
 }
 
 func legacyBrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, false, false)
+	return browserCommandOutputSchema(command, profiles, false, browserSnapshotSchemaInline)
 }
+
+type browserSnapshotSchemaGeneration uint8
+
+const (
+	browserSnapshotSchemaInline browserSnapshotSchemaGeneration = iota
+	browserSnapshotSchemaToolResult
+	browserSnapshotSchemaCurrent
+)
 
 func browserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 	diagnostics bool,
-	streamedSnapshots bool,
+	snapshotGeneration browserSnapshotSchemaGeneration,
 ) json.RawMessage {
 	if len(profiles) == 0 {
 		return json.RawMessage("false")
 	}
 	limits := strictestBrowserLimits(profiles)
+	streamedSnapshotMaximum := 0
+	switch snapshotGeneration {
+	case browserSnapshotSchemaToolResult:
+		streamedSnapshotMaximum = limits.ToolResultBytes
+	case browserSnapshotSchemaCurrent:
+		streamedSnapshotMaximum = BrowserSnapshotPayloadLimit(limits)
+	}
 	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 	state := map[string]any{
 		"enum": []string{"opening", "ready", "closing", "closed", "lost", "unknown"},
@@ -1756,7 +1900,7 @@ func browserCommandOutputSchema(
 		})
 	case BrowserCommandObserve:
 		return mustJSON(map[string]any{"oneOf": []any{
-			rawSchema(browserObservationSchema(limits, streamedSnapshots)),
+			rawSchema(browserObservationSchema(limits, streamedSnapshotMaximum)),
 			browserProtectedResultReceiptSchema(nil),
 		}})
 	case BrowserCommandDiagnostics:
@@ -1776,7 +1920,7 @@ func browserCommandOutputSchema(
 				"reason":               safeReason,
 				"observation": rawSchema(browserObservationSchema(
 					limits,
-					streamedSnapshots,
+					streamedSnapshotMaximum,
 				)),
 				"artifact": browserArtifactSchema(limits.DownloadBytes),
 				"output":   browserDownloadOutputDescriptorSchema(limits.DownloadBytes),
@@ -1784,7 +1928,7 @@ func browserCommandOutputSchema(
 		})
 	case BrowserCommandContexts:
 		return mustJSON(map[string]any{"oneOf": []any{
-			browserContextCommandResultSchema(limits, streamedSnapshots),
+			browserContextCommandResultSchema(limits, streamedSnapshotMaximum),
 			browserProtectedResultReceiptSchema(map[string]any{
 				"operation": map[string]any{"enum": []string{"list", "open", "select", "close"}},
 			}),
@@ -1796,11 +1940,11 @@ func browserCommandOutputSchema(
 
 func browserContextCommandResultSchema(
 	limits BrowserLimits,
-	streamedSnapshots bool,
+	streamedSnapshotMaximum int,
 ) map[string]any {
 	return browserContextCommandResultSchemaWithObservation(
 		limits,
-		browserObservationSchema(limits, streamedSnapshots),
+		browserObservationSchema(limits, streamedSnapshotMaximum),
 	)
 }
 
@@ -1926,7 +2070,7 @@ func browserLimitsSchema(maximum BrowserLimits) map[string]any {
 	}
 }
 
-func browserObservationSchema(limits BrowserLimits, streamedSnapshots bool) json.RawMessage {
+func browserObservationSchema(limits BrowserLimits, streamedSnapshotMaximum int) json.RawMessage {
 	properties := map[string]any{
 		"session_id":          map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
 		"tab_id":              map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength},
@@ -1976,8 +2120,8 @@ func browserObservationSchema(limits BrowserLimits, streamedSnapshots bool) json
 		},
 		"properties": properties,
 	}
-	if streamedSnapshots {
-		properties["output"] = browserSnapshotOutputDescriptorSchema(limits.ToolResultBytes)
+	if streamedSnapshotMaximum > 0 {
+		properties["output"] = browserSnapshotOutputDescriptorSchema(streamedSnapshotMaximum)
 		schema["oneOf"] = []any{
 			map[string]any{"not": map[string]any{"required": []string{"output"}}},
 			map[string]any{

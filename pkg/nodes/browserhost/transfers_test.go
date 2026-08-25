@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -218,12 +219,19 @@ func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) 
 }
 
 func TestBrowserHostStreamsLargeObservationAndDiscardsCommittedSnapshot(t *testing.T) {
-	largeSnapshot := "- button \"Save\" [ref=driver_ref_1]\n" + strings.Repeat("\"", 150*1024)
+	largeSnapshot := "- button \"Save\" [ref=driver_ref_1]\n" + strings.Repeat("x", 210*1024)
+	elements := make([]browserworker.DriverElement, 0, nodes.MaxBrowserSnapshotRefs)
+	for index := 0; index < nodes.MaxBrowserSnapshotRefs; index++ {
+		elements = append(elements, browserworker.DriverElement{
+			Target: fmt.Sprintf("driver_ref_%d", index), Role: "region",
+			Name: strings.Repeat("nested semantic name ", 12),
+		})
+	}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,
 		observations: []browserworker.DriverObservation{{
 			URL: "https://example.com/", Origin: "https://example.com", Snapshot: largeSnapshot,
-			Elements: []browserworker.DriverElement{{Target: "driver_ref_1", Role: "button", Name: "Save"}},
+			Elements: elements,
 		}},
 		navigationIdentities: []string{"navigation_1", "navigation_1"},
 	}})
@@ -241,7 +249,7 @@ func TestBrowserHostStreamsLargeObservationAndDiscardsCommittedSnapshot(t *testi
 	}, observed)
 	if err != nil || streamed.Output == nil || streamed.Snapshot != "" || len(streamed.Elements) != 0 ||
 		streamed.Output.Kind != nodes.BrowserOutputSnapshot ||
-		streamed.Output.Size <= uint64(protocol.MaxTransferChunkBytes) {
+		streamed.Output.Size <= uint64(nodes.MaxBrowserToolResultBytes) {
 		t.Fatalf("PrepareObservationOutput() = %#v, %v", streamed, err)
 	}
 	payload := downloadBrowserOutput(t, host, *streamed.Output, nil)
@@ -255,6 +263,97 @@ func TestBrowserHostStreamsLargeObservationAndDiscardsCommittedSnapshot(t *testi
 	host.transferMu.Unlock()
 	if retained || active {
 		t.Fatalf("committed semantic snapshot remained retained=%v active=%v", retained, active)
+	}
+}
+
+func TestBrowserHostStagesSingleChunkObservationAboveNegotiatedResultBudget(t *testing.T) {
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{{
+			URL: "https://example.com/", Origin: "https://example.com",
+			Snapshot: strings.Repeat("x", 160*1024),
+		}},
+		navigationIdentities: []string{"navigation_1", "navigation_1"},
+	}})
+	open := browserHostOpenFixture()
+	open.Limits.ToolResultBytes = 150 * 1024
+	if _, err := host.Open(t.Context(), open); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inline, err := json.Marshal(observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamed, err := host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
+		SessionID: observed.SessionID, RoutedSessionID: "routed_session_1",
+		InvocationID: "browser_observe_single_chunk_1", WorkspaceID: "workspace_1",
+		BrowserTarget: "companion", AgentID: "browser", ActorID: "telegram:owner",
+		InlineResultBytes: len(inline),
+	}, observed)
+	if err != nil || streamed.Output == nil || streamed.Output.Size >= uint64(protocol.MaxTransferChunkBytes) ||
+		streamed.Output.Size <= uint64(open.Limits.ToolResultBytes) {
+		t.Fatalf("PrepareObservationOutput() = %#v, %v", streamed, err)
+	}
+	payload := downloadBrowserOutput(t, host, *streamed.Output, nil)
+	decoded, err := nodes.DecodeBrowserSnapshotPayload(payload, open.Limits)
+	if err != nil || decoded.Snapshot != observed.Snapshot {
+		t.Fatalf("single-chunk streamed snapshot = %#v, %v", decoded, err)
+	}
+}
+
+func TestBrowserHostDiscardsUnreturnedObservationOutput(t *testing.T) {
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{{
+			URL: "https://example.com/", Origin: "https://example.com",
+			Snapshot: strings.Repeat("x", 160*1024),
+		}},
+		navigationIdentities: []string{"navigation_1", "navigation_1"},
+	}})
+	open := browserHostOpenFixture()
+	open.Limits.ToolResultBytes = 150 * 1024
+	if _, err := host.Open(t.Context(), open); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inline, err := json.Marshal(observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamed, err := host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
+		SessionID: observed.SessionID, RoutedSessionID: "routed_session_1",
+		InvocationID: "browser_observe_discard_1", WorkspaceID: "workspace_1",
+		BrowserTarget: "companion", AgentID: "browser", ActorID: "telegram:owner",
+		InlineResultBytes: len(inline),
+	}, observed)
+	if err != nil || streamed.Output == nil {
+		t.Fatalf("PrepareObservationOutput() = %#v, %v", streamed, err)
+	}
+	host.transferMu.Lock()
+	artifact := host.outputArtifacts[streamed.Output.TransferID]
+	host.transferMu.Unlock()
+	if artifact.path == "" {
+		t.Fatal("staged output was not retained")
+	}
+	if err = host.DiscardObservationOutput(*streamed.Output); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Stat(artifact.path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("discarded output remains: %v", statErr)
+	}
+	host.transferMu.Lock()
+	_, retained := host.outputArtifacts[streamed.Output.TransferID]
+	_, active := host.outputTransfers[streamed.Output.TransferID]
+	host.transferMu.Unlock()
+	if retained || active {
+		t.Fatalf("discarded output retained=%v active=%v", retained, active)
 	}
 }
 

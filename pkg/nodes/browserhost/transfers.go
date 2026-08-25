@@ -115,9 +115,6 @@ func (host *BrowserHost) PrepareObservationOutput(
 	if err != nil {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
 	}
-	if len(payload) <= protocol.MaxTransferChunkBytes {
-		return result, nil
-	}
 	host.mu.Lock()
 	session := host.sessions[request.SessionID]
 	host.mu.Unlock()
@@ -130,7 +127,7 @@ func (host *BrowserHost) PrepareObservationOutput(
 		session.agentID == request.AgentID && session.actorID == request.ActorID &&
 		session.tabID == result.TabID && session.snapshotGeneration == result.SnapshotGeneration &&
 		result.DocumentID != "" && now.Before(session.expiresAt) && now.Before(session.idleExpiresAt) &&
-		len(payload) <= session.limits.ToolResultBytes
+		len(payload) <= nodes.BrowserSnapshotPayloadLimit(session.limits)
 	profileRevision := session.profile.Revision
 	policyRevision := session.browserPolicyRevision
 	expiresAt := min(
@@ -141,6 +138,10 @@ func (host *BrowserHost) PrepareObservationOutput(
 	session.mu.Unlock()
 	if !authorized {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	if len(payload) <= protocol.MaxTransferChunkBytes &&
+		max(len(payload), request.InlineResultBytes) <= limits.ToolResultBytes {
+		return result, nil
 	}
 	if _, err = nodes.DecodeBrowserSnapshotPayload(payload, limits); err != nil {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
@@ -251,6 +252,25 @@ func (host *BrowserHost) RegisterOutput(
 	return descriptor, nil
 }
 
+// DiscardObservationOutput removes a staged semantic snapshot that the
+// companion cannot return within the complete command-result budget.
+func (host *BrowserHost) DiscardObservationOutput(descriptor nodes.BrowserOutputDescriptor) error {
+	if host == nil || descriptor.Kind != nodes.BrowserOutputSnapshot || descriptor.TransferID == "" {
+		return nodes.ErrBrowserHostDenied
+	}
+	host.transferMu.Lock()
+	defer host.transferMu.Unlock()
+	artifact, ok := host.outputArtifacts[descriptor.TransferID]
+	if !ok {
+		return nodes.ErrBrowserHostNotFound
+	}
+	if artifact.descriptor != descriptor || host.outputTransfers[descriptor.TransferID] != nil {
+		return nodes.ErrBrowserHostDenied
+	}
+	host.removeBrowserOutputLocked(descriptor.TransferID)
+	return nil
+}
+
 func (host *BrowserHost) watchBrowserOutputExpiry(
 	ctx context.Context,
 	transferID string,
@@ -345,7 +365,7 @@ func browserOutputLimit(limits nodes.BrowserLimits, kind string) int {
 	case nodes.BrowserOutputDownload:
 		return limits.DownloadBytes
 	case nodes.BrowserOutputSnapshot:
-		return limits.ToolResultBytes
+		return nodes.BrowserSnapshotPayloadLimit(limits)
 	default:
 		return 0
 	}
