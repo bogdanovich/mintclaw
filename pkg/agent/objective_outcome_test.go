@@ -306,6 +306,26 @@ func TestExtractObjectiveOutcomeAccountsForCommitWithUnverifiedPostcondition(t *
 	}
 }
 
+func TestExtractObjectiveOutcomeDoesNotHideCommitBehindSucceededMissingItem(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[],"missing_items":["objective_1"]}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "submit the form", Kind: "external_action",
+	}})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-submit", "effect": "external_commit"},
+	}}
+
+	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		len(outcome.MissingItems) != 2 ||
+		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "receipt was not claimed") {
+		t.Fatalf("succeeded status hid an unclaimed commit: %#v", outcome)
+	}
+}
+
 func TestExtractObjectiveOutcomeKeepsAmbiguousUnclaimedCommitDiagnostic(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"blocked","completed_items":[],"missing_items":["objective_1"],` +

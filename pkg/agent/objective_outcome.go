@@ -358,14 +358,18 @@ func validateObjectiveOutcome(
 			unclaimedReceipts++
 		}
 	}
+	reportedStatus := strings.TrimSpace(reported.Status)
 	// A single unclaimed commit and a single producer-reported missing external
 	// objective have an unambiguous relationship: the commit ran, but its
-	// requested postcondition was not verified. The missing objective already
-	// represents that incomplete result, so do not add a contradictory orphan
-	// receipt diagnostic. Preserve the diagnostic for ambiguous or unexpected
-	// commits so the runtime never silently accounts for extra external actions.
+	// requested postcondition was not verified. An explicitly incomplete outcome
+	// carries the required explanation, so the missing objective already
+	// represents that incomplete result. Preserve the diagnostic for succeeded,
+	// ambiguous, or unexpected commits so the runtime never silently accounts for
+	// extra external actions.
+	unverifiedPostcondition := reportedStatus == string(taskresult.OutcomePartial) ||
+		reportedStatus == string(taskresult.OutcomeBlocked)
 	if unclaimedReceipts > 0 &&
-		(!partitionValid || unclaimedReceipts != 1 || missingExternalObjectives != 1) {
+		(!unverifiedPostcondition || !partitionValid || unclaimedReceipts != 1 || missingExternalObjectives != 1) {
 		appendPriorityMissing(
 			"an external browser action completed, but its receipt was not claimed by a completed " +
 				"external_action objective",
@@ -382,7 +386,7 @@ func validateObjectiveOutcome(
 			appendMissing("no objective items were completed")
 		}
 	}
-	switch strings.TrimSpace(reported.Status) {
+	switch reportedStatus {
 	case string(taskresult.OutcomeBlocked):
 		outcome.Status = taskresult.OutcomeBlocked
 		if len(outcome.MissingItems) == 0 {
