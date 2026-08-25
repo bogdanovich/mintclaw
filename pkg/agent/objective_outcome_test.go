@@ -53,6 +53,7 @@ func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *test
 		"call browser_act with external_commit during this turn",
 		"Never replace that tool call with a prose approval question",
 		"do not close the browser session while the runtime is suspended",
+		"keep the external_action item missing and explain the unverified postcondition",
 	} {
 		if !strings.Contains(instruction, required) {
 			t.Fatalf("objective instruction omitted %q: %s", required, instruction)
@@ -277,6 +278,54 @@ func TestExtractObjectiveOutcomeRejectsUnclaimedExternalActionForReadResult(t *t
 		len(outcome.CompletedItems) != 1 || len(outcome.MissingItems) != 1 ||
 		!strings.Contains(outcome.MissingItems[0], "external browser action") {
 		t.Fatalf("unclaimed external action did not downgrade read result: %#v", outcome)
+	}
+}
+
+func TestExtractObjectiveOutcomeAccountsForCommitWithUnverifiedPostcondition(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"blocked","completed_items":[],` +
+		`"missing_items":["objective_1","objective_2"],` +
+		`"explanation":"The commit ran, but the external system did not expose a confirmation."}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{Item: "report the submission result", Kind: "result"},
+		{Item: "submit the form exactly once", Kind: "external_action"},
+	})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-submit", "effect": "external_commit"},
+	}}
+
+	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		len(outcome.MissingItems) != 2 || outcome.MissingItems[0] != "report the submission result" ||
+		outcome.MissingItems[1] != "submit the form exactly once" {
+		t.Fatalf("unverified postcondition outcome = %#v", outcome)
+	}
+}
+
+func TestExtractObjectiveOutcomeKeepsAmbiguousUnclaimedCommitDiagnostic(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"blocked","completed_items":[],"missing_items":["objective_1"],` +
+		`"explanation":"The external result could not be verified."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "submit the form", Kind: "external_action",
+	}})
+	audits := []toolshared.WriteAuditEntry{
+		{
+			Kind: "external_action", Tool: "browser_act", Success: true,
+			Metadata: map[string]string{"invocation_id": "inv-one", "effect": "external_commit"},
+		},
+		{
+			Kind: "external_action", Tool: "browser_act", Success: true,
+			Metadata: map[string]string{"invocation_id": "inv-two", "effect": "external_commit"},
+		},
+	}
+
+	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome == nil || len(outcome.MissingItems) != 2 ||
+		!strings.Contains(outcome.MissingItems[1], "receipt was not claimed") {
+		t.Fatalf("ambiguous unclaimed commits were hidden: %#v", outcome)
 	}
 }
 

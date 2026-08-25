@@ -110,7 +110,9 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 		"are not external-action receipts. " +
 		"For each external_action, copy one or more " +
 		"invocation_id values from successful browser_act results into receipt_ids. Do not claim an external action " +
-		"without its runtime receipt. For partial or blocked outcomes, include one concise, specific explanation of " +
+		"without its runtime receipt. If the commit ran but later verification cannot confirm the requested external " +
+		"effect, keep the external_action item missing and explain the unverified postcondition instead of claiming it " +
+		"completed. For partial or blocked outcomes, include one concise, specific explanation of " +
 		"the first blocker; the runtime bounds it and labels it as producer-reported. For succeeded outcomes, include " +
 		"one concise user-facing result with any requested public links or IDs in result. The runtime removes this block " +
 		"and preserves result as the terminal deliverable."
@@ -223,6 +225,7 @@ func validateObjectiveOutcome(
 	}
 	partitioned := make(map[string]struct{}, len(checklist))
 	consumedReceipts := make(map[string]struct{})
+	missingExternalObjectives := 0
 	missingSeen := make(map[string]struct{})
 	appendMissing := func(item string) {
 		item = boundedObjectiveText(item)
@@ -247,6 +250,9 @@ func validateObjectiveOutcome(
 			continue
 		}
 		partitioned[id] = struct{}{}
+		if item.Kind == "external_action" {
+			missingExternalObjectives++
+		}
 		appendMissing(item.Item)
 	}
 	for _, reportedItem := range reported.CompletedItems {
@@ -310,11 +316,23 @@ func validateObjectiveOutcome(
 		}
 		outcome.CompletedItems = append(outcome.CompletedItems, item)
 	}
+	unclaimedReceipts := 0
 	for receiptID := range receipts {
 		if _, consumed := consumedReceipts[receiptID]; !consumed {
-			appendMissing("an external browser action was not associated with an external_action objective")
-			break
+			unclaimedReceipts++
 		}
+	}
+	// A single unclaimed commit and a single producer-reported missing external
+	// objective have an unambiguous relationship: the commit ran, but its
+	// requested postcondition was not verified. The missing objective already
+	// represents that incomplete result, so do not add a contradictory orphan
+	// receipt diagnostic. Preserve the diagnostic for ambiguous or unexpected
+	// commits so the runtime never silently accounts for extra external actions.
+	if unclaimedReceipts > 0 && (unclaimedReceipts != 1 || missingExternalObjectives != 1) {
+		appendMissing(
+			"an external browser action completed, but its receipt was not claimed by a completed " +
+				"external_action objective",
+		)
 	}
 	for _, item := range checklist {
 		if _, found := partitioned[item.ID]; !found {
