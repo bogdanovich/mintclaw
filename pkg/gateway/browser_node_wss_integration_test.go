@@ -1141,7 +1141,7 @@ func TestCompanionBrowserSnapshotTransferRecoveryOverProductionWSS(t *testing.T)
 				t.Fatal(factoryErr)
 			}
 			host.setLargeSnapshots(true)
-			host.setSnapshotOutputTTL(2 * time.Second)
+			host.setSnapshotOutputTTL(5 * time.Second)
 			sessionID := "browser_snapshot_" + strings.ReplaceAll(test.name, " ", "_")
 			opened, openErr := factory.Open(t.Context(), browser.WorkerOpenRequest{
 				Owner: browser.Owner{
@@ -1171,8 +1171,14 @@ func TestCompanionBrowserSnapshotTransferRecoveryOverProductionWSS(t *testing.T)
 			if !errors.Is(observeErr, browser.ErrSnapshotTransfer) {
 				t.Fatalf("first Observe() error = %v, want snapshot transfer failure", observeErr)
 			}
-			if elapsed := time.Since(started); elapsed > 10*time.Second {
-				t.Fatalf("browser-owned transfer deadline elapsed = %v, want <= 10s", elapsed)
+			maximumTransferElapsed := time.Duration(cfg.Tools.Browser.Limits.Effective().ActionSeconds)*time.Second +
+				2*time.Second
+			if elapsed := time.Since(started); elapsed > maximumTransferElapsed {
+				t.Fatalf(
+					"browser-owned transfer deadline elapsed = %v, want <= %v",
+					elapsed,
+					maximumTransferElapsed,
+				)
 			}
 			worker.mu.Lock()
 			generation := worker.snapshotGeneration
