@@ -537,8 +537,11 @@ func connectServer(
 				"server":  name,
 				"command": cfg.Command,
 			})
-		// Create command with context
-		cmd := exec.CommandContext(ctx, fileutil.ExpandHome(cfg.Command), cfg.Args...)
+		// The isolated transport owns the complete subprocess lifecycle. Binding
+		// the command to ctx would let os/exec kill only the MCP leader before
+		// transport cleanup can stop browser descendants that created a separate
+		// process group.
+		cmd := exec.Command(fileutil.ExpandHome(cfg.Command), cfg.Args...)
 
 		var envVars map[string]string
 		if cfg.EnvFile != "" {
