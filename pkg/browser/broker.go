@@ -50,6 +50,13 @@ type ActionWorker interface {
 	CatalogRevision() string
 }
 
+// PrivateObservationWorker provides observations used only for broker-side
+// validation. These reads must not advance authority exposed to callers.
+type PrivateObservationWorker interface {
+	ActionWorker
+	ObservePrivate(context.Context) (DriverObservation, error)
+}
+
 // DiagnosticsWorker returns only source-bounded, privacy-safe summaries from
 // one live browser worker. Raw driver diagnostics never cross this boundary.
 type DiagnosticsWorker interface {

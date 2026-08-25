@@ -465,6 +465,10 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 	return worker.observe(ctx, true)
 }
 
+func (worker *nodeBrowserWorker) ObservePrivate(ctx context.Context) (browser.DriverObservation, error) {
+	return worker.observe(ctx, false)
+}
+
 func (worker *nodeBrowserWorker) observe(
 	ctx context.Context,
 	publish bool,

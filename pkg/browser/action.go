@@ -693,7 +693,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 	switch request.Action.Kind {
 	case ActionNavigate:
 		if remote, ok := worker.(PreparedActionWorker); !ok || !remote.SupportsPreparedAction(ActionNavigate) {
-			observation, observeErr := worker.Observe(ctx)
+			observation, observeErr := observePrivate(ctx, worker)
 			if observeErr != nil {
 				return PreparedAction{}, observeErr
 			}
@@ -815,7 +815,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		prepared.DestinationElementPosition = destinationPosition
 		prepared.Effect = EffectUnknown
 	case ActionPress, ActionScroll:
-		observation, observeErr := worker.Observe(ctx)
+		observation, observeErr := observePrivate(ctx, worker)
 		if observeErr != nil {
 			return PreparedAction{}, observeErr
 		}
@@ -834,7 +834,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 			prepared.Effect = EffectRead
 		}
 	case ActionDialog:
-		observation, observeErr := worker.Observe(ctx)
+		observation, observeErr := observePrivate(ctx, worker)
 		if observeErr != nil {
 			return PreparedAction{}, observeErr
 		}
@@ -909,7 +909,7 @@ func (broker *Broker) revalidatePreparedLocked(
 		if remote, ok := worker.(PreparedActionWorker); ok && remote.SupportsPreparedAction(prepared.Action.Kind) {
 			return nil
 		}
-		observation, err := worker.Observe(ctx)
+		observation, err := observePrivate(ctx, worker)
 		if err != nil {
 			return err
 		}
@@ -922,7 +922,7 @@ func (broker *Broker) revalidatePreparedLocked(
 		return nil
 	}
 	if prepared.Action.Kind == ActionDialog {
-		observation, err := worker.Observe(ctx)
+		observation, err := observePrivate(ctx, worker)
 		if err != nil {
 			return err
 		}
@@ -1162,13 +1162,54 @@ func observeWithNavigationCheck(
 	return observation, after, nil
 }
 
+func observePrivate(
+	ctx context.Context,
+	worker ActionWorker,
+) (DriverObservation, error) {
+	if private, ok := worker.(PrivateObservationWorker); ok {
+		return private.ObservePrivate(ctx)
+	}
+	return worker.Observe(ctx)
+}
+
+func observePrivateWithNavigationCheck(
+	ctx context.Context,
+	worker ActionWorker,
+) (DriverObservation, string, error) {
+	private, ok := worker.(PrivateObservationWorker)
+	if !ok {
+		return observeWithNavigationCheck(ctx, worker)
+	}
+	checkedWorker, ok := worker.(NavigationIdentityWorker)
+	if !ok {
+		observation, err := private.ObservePrivate(ctx)
+		return observation, "", err
+	}
+	before, err := checkedWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return DriverObservation{}, "", err
+	}
+	observation, err := private.ObservePrivate(ctx)
+	if err != nil {
+		return DriverObservation{}, "", err
+	}
+	after, err := checkedWorker.NavigationIdentity(ctx)
+	if err != nil {
+		return DriverObservation{}, "", err
+	}
+	if before == "" || before != after {
+		return DriverObservation{}, "", ErrStale
+	}
+	return observation, after, nil
+}
+
 func resolveDragFromFreshObservation(
 	ctx context.Context,
 	worker ActionWorker,
 	source DriverElement,
 	destination DriverElement,
 ) (DriverElement, DriverElement, string, string, error) {
-	observation, navigationID, err := observeWithNavigationCheck(ctx, worker)
+	observation, navigationID, err := observePrivateWithNavigationCheck(ctx, worker)
 	if err != nil {
 		return DriverElement{}, DriverElement{}, "", "", err
 	}

@@ -45,6 +45,22 @@ type browserNodeTestHandler struct {
 	closeFailureCode         string
 }
 
+type browserNodeRecordingFactory struct {
+	browser.WorkerFactory
+	worker *nodeBrowserWorker
+}
+
+func (factory *browserNodeRecordingFactory) Open(
+	ctx context.Context,
+	request browser.WorkerOpenRequest,
+) (browser.WorkerOpenResult, error) {
+	opened, err := factory.WorkerFactory.Open(ctx, request)
+	if err == nil {
+		factory.worker, _ = opened.Owner.(*nodeBrowserWorker)
+	}
+	return opened, err
+}
+
 func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
 
 func (*browserNodeTestHandler) Close(context.Context) error { return nil }
@@ -121,6 +137,7 @@ func (handler *browserNodeTestHandler) Invoke(
 			url, origin = "about:blank", "about:blank"
 		}
 		observation := browserNodeTestObservation(input.SessionID, input.TabID, input.SnapshotGeneration, url, origin)
+		observation.DocumentID = browserNodeStableID("document", input.SessionID, url)
 		if handler.elementRole != "" && len(observation.Elements) == 1 {
 			observation.Elements[0].Role = handler.elementRole
 			observation.Elements[0].Name = handler.elementName
@@ -156,6 +173,11 @@ func (handler *browserNodeTestHandler) Invoke(
 			result = nodes.BrowserDiagnosticsResult{ProtectedResult: true}
 			handler.redactNextDiagnostics = false
 		}
+	case nodes.BrowserCommandCapture:
+		// The focused worker tests only need to prove that capture passes local
+		// generation preflight and reaches companion dispatch. An empty output
+		// descriptor then fails closed before any transfer is attempted.
+		result = nodes.BrowserOutputDescriptor{}
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
 		_ = json.Unmarshal(plan.Input, &input)
@@ -179,6 +201,7 @@ func (handler *browserNodeTestHandler) Invoke(
 			input.SessionID, input.TabID, input.SnapshotGeneration+1,
 			handler.currentURL, handler.currentOrigin,
 		)
+		observation.DocumentID = browserNodeStableID("document", input.SessionID, handler.currentURL)
 		if handler.elementRole != "" && len(observation.Elements) == 1 {
 			observation.Elements[0].Role = handler.elementRole
 			observation.Elements[0].Name = handler.elementName
@@ -401,6 +424,92 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 	}
 	if !slices.Equal(commands, want) {
 		t.Fatalf("companion commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestGatewayBrowserWorkerKeepsCaptureAuthorityAfterPrivateScrollValidation(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	baseFactory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &browserNodeRecordingFactory{WorkerFactory: baseFactory}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigate, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_navigate", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.ExecuteAction(t.Context(), owner, navigate.Action.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	observation, err = broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_scroll", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionScroll, Direction: "down", Amount: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if factory.worker == nil {
+		t.Fatal("node browser worker was not recorded")
+	}
+	factory.worker.mu.Lock()
+	remoteGeneration := factory.worker.snapshotGeneration
+	publicGeneration := factory.worker.publicSnapshotGeneration
+	factory.worker.mu.Unlock()
+	if remoteGeneration != 3 || publicGeneration != 2 {
+		t.Fatalf(
+			"post-validation generations remote=%d public=%d, want remote=3 public=2",
+			remoteGeneration,
+			publicGeneration,
+		)
+	}
+	captureOwner := nodes.TransferArtifactOwner{
+		WorkspaceID: "workspace_capture", AgentID: "agent_capture", ActorID: "actor_capture",
+		RouteID: "route_capture", SessionID: session.ID, ToolCallID: "capture_after_scroll_validation",
+	}
+	_, captureErr := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: captureOwner.ToolCallID, SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Target: browser.ScreenshotTargetPage,
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: captureOwner.WorkspaceID, AgentID: captureOwner.AgentID,
+			ActorID: captureOwner.ActorID, RouteID: captureOwner.RouteID,
+			SessionID: captureOwner.SessionID, ToolCallID: captureOwner.ToolCallID,
+		},
+	})
+	if captureErr == nil || errors.Is(captureErr, browser.ErrStale) {
+		t.Fatalf("capture after private scroll validation error = %v, want dispatched non-stale failure", captureErr)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	handler.mu.Unlock()
+	if !slices.Contains(commands, nodes.BrowserCommandCapture) {
+		t.Fatalf("capture did not reach companion dispatch: %#v", commands)
 	}
 }
 
