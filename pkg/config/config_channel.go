@@ -716,6 +716,13 @@ func isValidChannelType(channelType string) bool {
 	return ok
 }
 
+func effectiveChannelType(name, channelType string) string {
+	if channelType != "" {
+		return channelType
+	}
+	return name
+}
+
 // InitChannelList validates and initializes all channels in the ChannelsConfig.
 // It performs three steps:
 //  1. Validates that each channel has a non-empty Type
@@ -746,10 +753,8 @@ func initializeChannelList(channels ChannelsConfig, applyRuntimeOverrides, prese
 		}
 		// Ensure channel name is set from the map key
 		bc.SetName(name)
-		// Infer Type from map key if not explicitly set
-		if bc.Type == "" {
-			bc.Type = name
-		}
+		// Infer Type from map key if not explicitly set.
+		bc.Type = effectiveChannelType(name, bc.Type)
 		if !isValidChannelType(bc.Type) {
 			return fmt.Errorf("channel %q has unknown type %q", name, bc.Type)
 		}

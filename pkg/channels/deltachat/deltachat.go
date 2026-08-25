@@ -72,14 +72,6 @@ var defaultChatmailRelays = []chatmailRelay{
 	{"delta.disobey.net", "Roon, Netherlands"},
 }
 
-var managedAccountConfigKeys = []string{
-	"addr",
-	"mail_server",
-	"mail_port",
-	"send_server",
-	"send_port",
-}
-
 // dcAccount is one entry from get_all_accounts.
 type dcAccount struct {
 	ID   int64  `json:"id"`
@@ -984,17 +976,7 @@ func (c *DeltaChatChannel) ensureAccount(ctx context.Context) error {
 	}
 
 	if accountID == 0 {
-		if c.config.Password.String() == "" {
-			return c.passwordRequiredError("account not found")
-		}
-
-		raw, callErr := c.rpc.call(ctx, "add_account")
-		if callErr != nil {
-			return fmt.Errorf("deltachat add_account: %w", callErr)
-		}
-		if decErr := json.Unmarshal(raw, &accountID); decErr != nil {
-			return fmt.Errorf("deltachat add_account decode: %w", decErr)
-		}
+		return c.accountUnavailableError("account not found")
 	}
 
 	configured, err := c.isConfigured(ctx, accountID)
@@ -1002,23 +984,7 @@ func (c *DeltaChatChannel) ensureAccount(ctx context.Context) error {
 		return err
 	}
 	if !configured {
-		if err := c.configureAccount(ctx, accountID); err != nil {
-			return err
-		}
-	} else if c.config.Password.String() != "" {
-		changed, err := c.accountConfigChanged(ctx, accountID)
-		if err != nil {
-			logger.WarnCF("deltachat", "Could not read account config; reconfiguring", map[string]any{
-				"email": c.config.Email,
-				"error": err.Error(),
-			})
-			changed = true
-		}
-		if changed {
-			if err := c.configureAccount(ctx, accountID); err != nil {
-				return err
-			}
-		}
+		return c.accountUnavailableError("account is not configured")
 	}
 
 	if _, err := c.rpc.call(ctx, "select_account", accountID); err != nil {
@@ -1122,7 +1088,7 @@ func (c *DeltaChatChannel) getAccountConfigString(ctx context.Context, accountID
 	return *value, nil
 }
 
-func (c *DeltaChatChannel) passwordRequiredError(reason string) error {
+func (c *DeltaChatChannel) accountUnavailableError(reason string) error {
 	return fmt.Errorf("deltachat: account %s is not configured in data_dir %s (%s)",
 		c.config.Email, c.dataDir, reason)
 }
@@ -1151,91 +1117,8 @@ func (c *DeltaChatChannel) applyProfileConfig(ctx context.Context, accountID int
 	return nil
 }
 
-// configureAccount writes the managed account settings and runs the (network-bound)
-// provider auto-configuration.
-func (c *DeltaChatChannel) configureAccount(ctx context.Context, accountID int64) error {
-	if c.config.Password.String() == "" {
-		return c.passwordRequiredError("account is not configured")
-	}
-
-	cfgMap := accountConfigMap(c.config)
-	if _, err := c.rpc.call(ctx, "batch_set_config", accountID, cfgMap); err != nil {
-		return fmt.Errorf("deltachat set account config: %w", err)
-	}
-
-	logger.InfoCF("deltachat", "Configuring account (validating credentials)", map[string]any{
-		"email": c.config.Email,
-	})
-	confCtx, cancel := context.WithTimeout(ctx, configureTimeout)
-	defer cancel()
-	if _, err := c.rpc.call(confCtx, "configure", accountID); err != nil {
-		return fmt.Errorf("deltachat configure (check email/password/server): %w", err)
-	}
-	return nil
-}
-
-func (c *DeltaChatChannel) accountConfigChanged(ctx context.Context, accountID int64) (bool, error) {
-	want := accountConfigMap(c.config)
-	for _, key := range managedAccountConfigKeys {
-		raw, err := c.rpc.call(ctx, "get_config", accountID, key)
-		if err != nil {
-			return false, fmt.Errorf("deltachat get config %s: %w", key, err)
-		}
-		var got *string
-		if err := json.Unmarshal(raw, &got); err != nil {
-			return false, fmt.Errorf("deltachat get config %s decode: %w", key, err)
-		}
-		if !accountConfigValueEqual(got, want[key]) {
-			logger.InfoCF("deltachat", "Account config changed; reconfiguring", map[string]any{
-				"email": c.config.Email,
-				"key":   key,
-			})
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func accountConfigValueEqual(got, want *string) bool {
-	if want == nil {
-		return got == nil || *got == ""
-	}
-	if got == nil {
-		return *want == ""
-	}
-	return *got == *want
-}
-
-func accountConfigMap(cfg *config.DeltaChatSettings) map[string]*string {
-	cfgMap := map[string]*string{
-		"addr":        accountConfigString(cfg.Email),
-		"mail_server": accountConfigOptionalString(cfg.IMAPServer),
-		"mail_port":   accountConfigOptionalInt(cfg.IMAPPort),
-		"send_server": accountConfigOptionalString(cfg.SMTPServer),
-		"send_port":   accountConfigOptionalInt(cfg.SMTPPort),
-	}
-	if password := cfg.Password.String(); password != "" {
-		cfgMap["mail_pw"] = accountConfigString(password)
-	}
-	return cfgMap
-}
-
 func accountConfigString(value string) *string {
 	return &value
-}
-
-func accountConfigOptionalString(value string) *string {
-	if value == "" {
-		return nil
-	}
-	return accountConfigString(value)
-}
-
-func accountConfigOptionalInt(value int) *string {
-	if value <= 0 {
-		return nil
-	}
-	return accountConfigString(strconv.Itoa(value))
 }
 
 func (c *DeltaChatChannel) listAccounts(ctx context.Context) ([]dcAccount, error) {

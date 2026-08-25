@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/caarlos0/env/v11"
+	"gopkg.in/yaml.v3"
 
 	"github.com/bogdanovich/mintclaw/pkg"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
@@ -470,10 +471,15 @@ func (c *Config) SecurityCopyForReplacement(path string, current *Config) error 
 	if c == nil {
 		return errors.New("config is nil")
 	}
+	replacementChannelSecurity, err := marshalReplacementChannelSecurity(c.Channels)
+	if err != nil {
+		return fmt.Errorf("preserve replacement channel security: %w", err)
+	}
 	if c.Tools.Skills.Registries == nil {
 		c.Tools.Skills.Registries = DefaultConfig().Tools.Skills.Registries
 	}
 	removedRegistries := make([]string, 0)
+	matchingChannels := make(map[string]struct{})
 	if current != nil {
 		for _, name := range current.Tools.Skills.Registries.Names() {
 			if _, survives := c.Tools.Skills.Registries.Get(name); survives {
@@ -482,13 +488,48 @@ func (c *Config) SecurityCopyForReplacement(path string, current *Config) error 
 			c.Tools.Skills.Registries.Set(name, SkillRegistryConfig{})
 			removedRegistries = append(removedRegistries, name)
 		}
+		for name, durable := range current.Channels {
+			replacement := c.Channels.Get(name)
+			if durable != nil && replacement != nil &&
+				effectiveChannelType(name, durable.Type) == effectiveChannelType(name, replacement.Type) {
+				matchingChannels[name] = struct{}{}
+			}
+		}
 	}
 
-	err := c.SecurityCopyFrom(path)
+	err = loadSecurityConfigForChannels(c, securityPath(path), matchingChannels)
 	for _, name := range removedRegistries {
 		delete(c.Tools.Skills.Registries, name)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if replacementChannelSecurity != nil {
+		if err = c.Channels.UnmarshalYAML(replacementChannelSecurity); err != nil {
+			return fmt.Errorf("restore replacement channel security: %w", err)
+		}
+	}
+	return nil
+}
+
+func marshalReplacementChannelSecurity(channels ChannelsConfig) (*yaml.Node, error) {
+	if len(channels) == 0 {
+		return nil, nil
+	}
+	typedChannels := make(ChannelsConfig, len(channels))
+	for name, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		copy := *channel
+		copy.Type = effectiveChannelType(name, copy.Type)
+		typedChannels[name] = &copy
+	}
+	var node yaml.Node
+	if err := node.Encode(typedChannels); err != nil {
+		return nil, err
+	}
+	return &node, nil
 }
 
 func expandMultiKeyModels(models []*ModelConfig) []*ModelConfig {

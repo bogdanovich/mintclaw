@@ -63,13 +63,9 @@ If `email` is missing, the startup error lists the built-in relay choices copied
 from Parla. You can use one of those relay markers, or a custom chatmail relay
 with the same `@server.name` form.
 
-`password` is not needed for MintClaw-created chatmail accounts. Omit it when
-`email` points to an already configured account in `data_dir`; the JSON-RPC
-server owns the mailbox password. The legacy password-based path remains only
-for classic email accounts that MintClaw must configure itself. In that mode,
-`password` is a secure field; on first config load it is moved to
-`~/.mintclaw/.security.yml`, and it can also be set with
-`MINTCLAW_CHANNELS_DELTACHAT_PASSWORD`.
+When `email` points to a full address, that account must already be configured
+in `data_dir`. The JSON-RPC server owns its mailbox credentials; MintClaw does
+not copy mailbox passwords or server settings into its configuration.
 
 `display_name` and `avatar_image` are optional profile settings. When present,
 MintClaw applies them on every startup, so changing the avatar path in config is
@@ -79,14 +75,11 @@ enough to update the bot profile.
 |-------|----------|-------------|
 | `email` | Yes | Full bot mailbox address, or first-run relay marker such as `@nine.testrun.org` |
 | `rpc_server_path` | No | Path to `deltachat-rpc-server`; only needed when it is not on `PATH` |
-| `password` | No | Legacy only; required when MintClaw must configure/reconfigure a classic mailbox itself |
 | `display_name` | No | Startup-applied profile name shown to contacts and used for group mention detection |
 | `avatar_image` | No | Startup-applied profile avatar image path; `~` is expanded. Missing files are warned and ignored |
 | `data_dir` | No | Account database directory. Default: `~/.mintclaw/deltachat/<channel-name>` |
 | `invite_link` | No | Delta Chat invite link to join on startup |
 | `allow_crosspost` | No | Default `false`. When `true`, senders allowed by `allow_from` may use `message` tool targets outside the current chat, or resolve recipients by email/contact/chat name |
-| `imap_server`, `imap_port` | No | Manual IMAP override for password-based configuration |
-| `smtp_server`, `smtp_port` | No | Manual SMTP override for password-based configuration |
 
 Standard channel fields such as `allow_from`, `group_trigger`, and
 `reasoning_channel_id` also apply.
@@ -99,9 +92,8 @@ full address and run MintClaw again. On later runs, MintClaw selects the
 configured account by `email`, applies optional profile settings, marks it as a
 bot, and starts IO.
 
-With a new `data_dir` plus legacy `password`, MintClaw can still configure a
-classic email account and validate the mailbox credentials; after that, the
-account is reused from the local data directory.
+For an existing classic email account, configure it with Delta Chat before
+starting MintClaw, then point `email` and `data_dir` at that account.
 
 Delta Chat requires peers to learn the bot's encryption key before messaging
 it. On startup MintClaw prints the bot invite link and QR code. Add the bot from
@@ -141,7 +133,6 @@ Delta Chat with that invite, not by typing the bare email address.
 | `email is required` | Choose one listed chatmail server, set `email` to a first-run marker such as `@nine.testrun.org`, run `mintclaw g`, then replace it with the generated full email |
 | `created chatmail account ...` | Replace the `@server` marker in `email` with the generated full email and run MintClaw again |
 | `account ... is not configured in data_dir` | Point `data_dir` at the existing JSON-RPC account store, or use `email="@server"` to create one |
-| `configure (check email/password/server)` | Check credentials, app password requirements, or IMAP/SMTP overrides |
 | Bot does not answer in a group | Check `group_trigger`; mention `display_name` or use a configured prefix |
 | Bot ignores a sender | Add the sender email to `allow_from`, or use `["*"]` for open access |
 | Sender cannot message the bot | Re-add the bot with the startup QR/invite so Delta Chat can establish encryption |

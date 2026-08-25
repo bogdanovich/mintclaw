@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 
@@ -32,6 +33,14 @@ func securityPath(configPath string) string {
 // loadSecurityConfig loads the security configuration from security.yml
 // and merges secure field values into the config.
 func loadSecurityConfig(cfg *Config, securityPath string) error {
+	return loadSecurityConfigForChannels(cfg, securityPath, nil)
+}
+
+func loadSecurityConfigForChannels(
+	cfg *Config,
+	securityPath string,
+	allowedChannels map[string]struct{},
+) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
@@ -44,55 +53,121 @@ func loadSecurityConfig(cfg *Config, securityPath string) error {
 		return fmt.Errorf("failed to read security config: %w", err)
 	}
 
-	// Save existing channels and ModelList before unmarshal
-	savedChannels := make(ChannelsConfig, len(cfg.Channels))
-	for name, bc := range cfg.Channels {
-		savedChannels[name] = bc
-	}
-	// savedModelList := cfg.ModelList
-
-	// Parse YAML into a yaml.Node tree to extract channels node
+	// Parse YAML into a yaml.Node tree so channels can be validated and merged
+	// separately from the other security fields.
 	var rootNode yaml.Node
-	if err := yaml.Unmarshal(data, &rootNode); err != nil {
+	if err = yaml.Unmarshal(data, &rootNode); err != nil {
 		return fmt.Errorf("failed to parse security config: %w", err)
 	}
 
-	// Extract the current channel_list security overlay.
-	var channelsNode *yaml.Node
-	if len(rootNode.Content) > 0 {
-		content := rootNode.Content[0].Content
-		for i := 0; i < len(content); i += 2 {
-			if i+1 < len(content) {
-				key := content[i].Value
-				if key == "channel_list" {
-					channelsNode = content[i+1]
-					break
-				}
-			}
+	channelsNode := channelSecuritySettingsNode(&rootNode)
+	if allowedChannels != nil {
+		retainChannelSecuritySettings(channelsNode, allowedChannels)
+		data, err = yaml.Marshal(&rootNode)
+		if err != nil {
+			return fmt.Errorf("failed to filter channel security config: %w", err)
 		}
 	}
 
-	// Unmarshal non-channel fields from security.yml
-	// This will resolve encrypted values for model_list, tools, etc.
+	if channelsNode != nil {
+		if err := validateChannelSecuritySettings(channelsNode, cfg, securityPath); err != nil {
+			return err
+		}
+	}
+
+	// Decode only after channel identity, shape, and settings have passed the
+	// current schema. A rejected overlay therefore cannot mutate cfg first.
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return fmt.Errorf("failed to parse security config %s: %w", securityPath, err)
 	}
+	return nil
+}
 
-	// Restore channels from saved, then manually merge from security.yml
-	cfg.Channels = make(ChannelsConfig)
-	for name, savedBC := range savedChannels {
-		cfg.Channels[name] = savedBC
+func channelSecuritySettingsNode(root *yaml.Node) *yaml.Node {
+	if root == nil || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		return nil
 	}
-
-	// If we found a channels node in security.yml, merge it into existing channels
-	if channelsNode != nil {
-		if err := cfg.Channels.UnmarshalYAML(channelsNode); err != nil {
-			return fmt.Errorf("failed to merge channels from security config: %w", err)
+	content := root.Content[0].Content
+	for index := 0; index+1 < len(content); index += 2 {
+		if content[index].Value == "channel_list" {
+			return content[index+1]
 		}
 	}
+	return nil
+}
 
+func retainChannelSecuritySettings(node *yaml.Node, allowed map[string]struct{}) {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return
+	}
+	filtered := make([]*yaml.Node, 0, len(node.Content))
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if _, ok := allowed[node.Content[index].Value]; !ok {
+			continue
+		}
+		filtered = append(filtered, node.Content[index], node.Content[index+1])
+	}
+	node.Content = filtered
+}
+
+func validateChannelSecuritySettings(node *yaml.Node, current *Config, label string) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf(
+			"failed to validate channel security config: %s channel_list must be an object",
+			label,
+		)
+	}
+
+	var channels map[string]any
+	if err := node.Decode(&channels); err != nil {
+		return fmt.Errorf("failed to validate channel security config: %w", err)
+	}
+
+	normalized := make(map[string]any, len(channels))
+	var unknownFields []string
+	var nonObjectEntries []string
+	for name, rawChannel := range channels {
+		existing := current.Channels.Get(name)
+		if existing == nil {
+			unknownFields = append(unknownFields, appendJSONPath("channel_list", name))
+			continue
+		}
+		channel, ok := rawChannel.(map[string]any)
+		if !ok {
+			nonObjectEntries = append(nonObjectEntries, appendJSONPath("channel_list", name))
+			continue
+		}
+		for field := range channel {
+			if field != "settings" {
+				unknownFields = append(
+					unknownFields,
+					appendJSONPath(appendJSONPath("channel_list", name), field),
+				)
+			}
+		}
+		normalized[name] = map[string]any{
+			"type":     effectiveChannelType(name, existing.Type),
+			"settings": channel["settings"],
+		}
+	}
+	if err := unknownJSONFieldsError(unknownFields, label); err != nil {
+		return fmt.Errorf("failed to validate channel security config: %w", err)
+	}
+	if len(nonObjectEntries) != 0 {
+		sort.Strings(nonObjectEntries)
+		return fmt.Errorf(
+			"failed to validate channel security config: %s channel entries must be objects: %s",
+			label,
+			strings.Join(nonObjectEntries, ", "),
+		)
+	}
+
+	raw := map[string]any{"channel_list": normalized}
+	if err := validateChannelSettingsJSON(raw, current, label); err != nil {
+		return fmt.Errorf("failed to validate channel security config: %w", err)
+	}
 	return nil
 }
 
