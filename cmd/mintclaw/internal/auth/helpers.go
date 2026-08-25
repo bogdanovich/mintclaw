@@ -55,10 +55,12 @@ func authLoginOpenAI(useDeviceCode bool, noBrowser bool) error {
 		return fmt.Errorf("failed to save credentials: %w", err)
 	}
 
-	if _, err = updateAuthConfig(func(cfg *config.Config) error {
-		configureOpenAIAuth(cfg, "oauth")
+	model := preferredOpenAIModel(cred)
+	appCfg, err := updateAuthConfig(func(cfg *config.Config) error {
+		configureOpenAIAuth(cfg, "oauth", model)
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("could not update config: %w", err)
 	}
 
@@ -66,9 +68,18 @@ func authLoginOpenAI(useDeviceCode bool, noBrowser bool) error {
 	if cred.AccountID != "" {
 		fmt.Printf("Account: %s\n", cred.AccountID)
 	}
-	fmt.Println("Default model set to: gpt-5.4")
+	fmt.Printf("Default model set to: %s\n", configuredDefaultModel(appCfg, model.Slug))
 
 	return nil
+}
+
+func configuredDefaultModel(cfg *config.Config, fallback string) string {
+	if cfg != nil {
+		if model := strings.TrimSpace(cfg.Agents.Defaults.GetModelName()); model != "" {
+			return model
+		}
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func authLoginGoogleAntigravity(noBrowser bool) error {
@@ -211,13 +222,17 @@ func authLoginPasteToken(provider string) error {
 	if err = auth.SetCredential(provider, cred); err != nil {
 		return fmt.Errorf("failed to save credentials: %w", err)
 	}
+	var openAIModel providers.CodexModelInfo
+	if provider == "openai" {
+		openAIModel = preferredOpenAIModel(cred)
+	}
 
 	appCfg, err := updateAuthConfig(func(appCfg *config.Config) error {
 		switch provider {
 		case "anthropic":
 			configureAnthropicAuth(appCfg, "token", true)
 		case "openai":
-			configureOpenAIAuth(appCfg, "token")
+			configureOpenAIAuth(appCfg, "token", openAIModel)
 		}
 		return nil
 	})
@@ -234,26 +249,100 @@ func authLoginPasteToken(provider string) error {
 	return nil
 }
 
-func configureOpenAIAuth(cfg *config.Config, method string) {
-	found := false
+func configureOpenAIAuth(cfg *config.Config, method string, selected providers.CodexModelInfo) {
+	if strings.TrimSpace(selected.Slug) == "" {
+		selected = providers.DefaultCodexModelInfo()
+	}
+	selectedID := normalizeOpenAIModelID(selected.Slug)
 	for _, model := range cfg.ModelList {
-		if isOpenAIModel(model) {
+		if isOpenAIModel(model) && normalizeOpenAIModelID(model.Model) == selectedID &&
+			openAIModelAliasIsUnambiguous(cfg, model, selectedID) {
 			model.AuthMethod = method
 			model.Enabled = true
-			found = true
-			break
+			model.ContextWindow = selected.ContextWindow
+			model.MaxContextWindow = selected.MaxContextWindow
+			cfg.Agents.Defaults.ModelName = model.ModelName
+			return
 		}
 	}
-	if !found {
-		cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
-			ModelName:  "gpt-5.4",
-			Provider:   "openai",
-			Model:      "gpt-5.4",
-			AuthMethod: method,
-			Enabled:    true,
-		})
+	modelName := availableOpenAIModelAlias(cfg, selected.Slug)
+	cfg.ModelList = append(cfg.ModelList, &config.ModelConfig{
+		ModelName:        modelName,
+		Provider:         "openai",
+		Model:            selected.Slug,
+		AuthMethod:       method,
+		ContextWindow:    selected.ContextWindow,
+		MaxContextWindow: selected.MaxContextWindow,
+		Enabled:          true,
+	})
+	cfg.Agents.Defaults.ModelName = modelName
+}
+
+func normalizeOpenAIModelID(model string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return strings.TrimPrefix(model, "openai/")
+}
+
+func openAIModelAliasIsUnambiguous(
+	cfg *config.Config,
+	candidate *config.ModelConfig,
+	selectedID string,
+) bool {
+	alias := strings.TrimSpace(candidate.ModelName)
+	if alias == "" {
+		return false
 	}
-	cfg.Agents.Defaults.ModelName = "gpt-5.4"
+	for _, model := range cfg.ModelList {
+		if model == nil || model == candidate || !model.Enabled || model.ModelName != alias {
+			continue
+		}
+		if !isOpenAIModel(model) || normalizeOpenAIModelID(model.Model) != selectedID {
+			return false
+		}
+	}
+	return true
+}
+
+func availableOpenAIModelAlias(cfg *config.Config, slug string) string {
+	base := strings.TrimSpace(slug)
+	if base == "" {
+		base = providers.CodexDefaultModel
+	}
+	candidates := []string{base, "openai/" + base, base + "-openai"}
+	for suffix := 2; ; suffix++ {
+		for _, candidate := range candidates {
+			if modelAliasIsAvailable(cfg, candidate) {
+				return candidate
+			}
+		}
+		candidates = []string{fmt.Sprintf("%s-openai-%d", base, suffix)}
+	}
+}
+
+func modelAliasIsAvailable(cfg *config.Config, alias string) bool {
+	for _, model := range cfg.ModelList {
+		if model != nil && model.Enabled && model.ModelName == alias {
+			return false
+		}
+	}
+	return true
+}
+
+func preferredOpenAIModel(credential *auth.AuthCredential) providers.CodexModelInfo {
+	fallback := providers.DefaultCodexModelInfo()
+	if credential == nil || strings.TrimSpace(credential.AccessToken) == "" {
+		return fallback
+	}
+	models, err := providers.FetchCodexModels(
+		context.Background(),
+		credential.AccessToken,
+		credential.AccountID,
+	)
+	if err != nil {
+		fmt.Printf("Warning: could not refresh OpenAI model catalog: %v\n", err)
+		return fallback
+	}
+	return providers.PreferredCodexModel(models)
 }
 
 func updateAuthConfig(mutate func(*config.Config) error) (*config.Config, error) {

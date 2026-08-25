@@ -65,9 +65,9 @@ type AgentInstance struct {
 	// LightProvider is the concrete provider instance for the configured light model.
 	// It is only used when routing selects the light tier for a turn.
 	LightProvider providers.LLMProvider
-	// CandidateProviders maps "provider/model" keys to per-candidate LLMProvider
-	// instances. This allows each fallback model to use its own api_base and api_key
-	// from model_list, instead of inheriting the primary model's provider config.
+	// CandidateProviders maps exact candidate keys to per-candidate LLMProvider
+	// instances. This allows each fallback model-list row to use its own api_base
+	// and api_key instead of inheriting another row's provider config.
 	CandidateProviders map[string]providers.LLMProvider
 	ToolLoopDetection  loopguard.Config
 	ownedProviders     []providers.StatefulProvider
@@ -309,7 +309,9 @@ func newAgentInstance(
 		contextBuilder.WithCodingPromptModel(model)
 	}
 	providerOwnership := newProviderOwnership(provider)
-	provider = resolvePrimaryProviderForAgent(
+	var selectedModel *resolvedModelSelection
+	var primaryProviderExact bool
+	provider, selectedModel, primaryProviderExact = resolvePrimaryProviderForAgent(
 		cfg,
 		workspace,
 		identity.agentID,
@@ -335,16 +337,26 @@ func newAgentInstance(
 	} else {
 		initCoreAgentTools(workspace, cfg, toolInit)
 	}
-	runtimeCfg := buildAgentRuntimeConfig(defaults, cfg, model)
+	var selectedModelConfig *config.ModelConfig
+	if selectedModel != nil {
+		selectedModelConfig = selectedModel.modelConfig
+	}
+	runtimeCfg := buildAgentRuntimeConfig(defaults, selectedModelConfig)
 	routingCfg := buildAgentRoutingConfig(
 		cfg,
 		defaults,
 		workspace,
-		model,
+		selectedModel,
 		fallbacks,
 		identity.agentID,
 		providerOwnership,
 	)
+	if !primaryProviderExact && len(routingCfg.candidates) > 0 {
+		routingCfg.candidates[0].ProviderConfigOrdinal = 0
+	}
+	if primaryProviderExact && provider != nil && len(routingCfg.candidates) > 0 {
+		routingCfg.candidateProviders[candidateProviderKey(routingCfg.candidates[0])] = provider
+	}
 
 	instance := &AgentInstance{
 		ID:                        identity.agentID,
@@ -573,8 +585,7 @@ func buildAgentIdentityConfig(
 
 func buildAgentRuntimeConfig(
 	defaults *config.AgentDefaults,
-	cfg *config.Config,
-	model string,
+	selectedModel *config.ModelConfig,
 ) agentRuntimeConfig {
 	maxIterations := defaults.MaxToolIterations
 	if maxIterations == 0 {
@@ -585,8 +596,10 @@ func buildAgentRuntimeConfig(
 	if maxTokens == 0 {
 		maxTokens = 8192
 	}
-
 	contextWindow := defaults.ContextWindow
+	if contextWindow == 0 {
+		contextWindow = modelContextWindow(selectedModel)
+	}
 	if contextWindow == 0 {
 		contextWindow = maxTokens * 4
 	}
@@ -597,8 +610,8 @@ func buildAgentRuntimeConfig(
 	}
 
 	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
+	if selectedModel != nil {
+		thinkingLevelStr = selectedModel.ThinkingLevel
 	}
 
 	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
@@ -623,22 +636,49 @@ func buildAgentRuntimeConfig(
 	}
 }
 
+func modelContextWindow(modelConfig *config.ModelConfig) int {
+	if modelConfig == nil {
+		return 0
+	}
+	if modelConfig.ContextWindow > 0 {
+		return modelConfig.ContextWindow
+	}
+	protocol, modelID := providers.ExtractProtocol(modelConfig)
+	if protocol != "openai" {
+		return 0
+	}
+	authMethod := strings.ToLower(strings.TrimSpace(modelConfig.AuthMethod))
+	if authMethod != "oauth" && authMethod != "token" {
+		return 0
+	}
+	metadata, ok := providers.BundledCodexModel(modelID)
+	if !ok {
+		return 0
+	}
+	return metadata.ContextWindow
+}
+
 func buildAgentRoutingConfig(
 	cfg *config.Config,
 	defaults *config.AgentDefaults,
-	workspace, model string,
+	workspace string,
+	selectedModel *resolvedModelSelection,
 	fallbacks []string,
 	agentID string,
 	providerOwnership *providerOwnership,
 ) agentRoutingConfig {
 	routingCfg := agentRoutingConfig{
-		candidates:         resolveModelCandidates(cfg, model, fallbacks),
+		candidates:         resolveModelCandidatesFromSelection(cfg, selectedModel, fallbacks),
 		candidateProviders: make(map[string]providers.LLMProvider),
 	}
-	populateCandidateProvidersFromNamesTracked(
+	fallbackCandidates := routingCfg.candidates
+	if len(fallbackCandidates) > 0 {
+		fallbackCandidates = fallbackCandidates[1:]
+	}
+	populateCandidateProvidersFromCandidatesTracked(
 		cfg,
 		workspace,
-		fallbacks,
+		fallbackCandidates,
 		routingCfg.candidateProviders,
 		providerOwnership,
 	)
@@ -648,14 +688,7 @@ func buildAgentRoutingConfig(
 		return routingCfg
 	}
 
-	resolved := resolveModelCandidates(cfg, rc.LightModel, nil)
-	if len(resolved) == 0 {
-		logger.WarnCF("agent", "Routing light model not found; routing disabled",
-			map[string]any{"light_model": rc.LightModel, "agent_id": agentID})
-		return routingCfg
-	}
-
-	lightModelCfg, err := resolvedModelConfig(cfg, rc.LightModel, workspace)
+	lightSelection, err := resolveModelSelection(cfg, rc.LightModel, workspace)
 	if err != nil {
 		logger.WarnCF(
 			"agent",
@@ -668,8 +701,9 @@ func buildAgentRoutingConfig(
 		)
 		return routingCfg
 	}
+	resolved := resolveModelCandidatesFromSelection(cfg, &lightSelection, nil)
 
-	lightProvider, _, err := providers.CreateProviderFromConfig(lightModelCfg)
+	lightProvider, _, err := providers.CreateProviderFromConfig(lightSelection.modelConfig)
 	if err != nil {
 		logger.WarnCF("agent", "Routing light model provider init failed; routing disabled",
 			map[string]any{"light_model": rc.LightModel, "agent_id": agentID, "error": err.Error()})
@@ -683,48 +717,55 @@ func buildAgentRoutingConfig(
 	routingCfg.lightCandidates = resolved
 	routingCfg.lightProvider = lightProvider
 	providerOwnership.trackCreated(lightProvider)
-	populateCandidateProvidersFromNamesTracked(
-		cfg,
-		workspace,
-		[]string{rc.LightModel},
-		routingCfg.candidateProviders,
-		providerOwnership,
-	)
+	if len(resolved) > 0 {
+		routingCfg.candidateProviders[candidateProviderKey(resolved[0])] = lightProvider
+	}
 	return routingCfg
 }
 
-// populateCandidateProvidersFromNames resolves each exact configured model_name
-// and creates its dedicated LLMProvider. Duplicate names retain model-list
-// load-balancing behavior.
-func populateCandidateProvidersFromNames(
+func resolveModelCandidatesFromSelection(
 	cfg *config.Config,
-	workspace string,
-	names []string,
-	out map[string]providers.LLMProvider,
-) {
-	populateCandidateProvidersFromNamesTracked(cfg, workspace, names, out, nil)
+	selection *resolvedModelSelection,
+	fallbacks []string,
+) []providers.FallbackCandidate {
+	candidates := make([]providers.FallbackCandidate, 0, 1+len(fallbacks))
+	seen := make(map[string]bool, 1+len(fallbacks))
+	if selection != nil {
+		primary, ok := candidateFromModelSelection(*selection)
+		if ok {
+			candidates = append(candidates, primary)
+			seen[primary.StableKey()] = true
+		}
+	}
+	for _, fallback := range resolveModelCandidates(cfg, "", fallbacks) {
+		if seen[fallback.StableKey()] {
+			continue
+		}
+		candidates = append(candidates, fallback)
+		seen[fallback.StableKey()] = true
+	}
+	return candidates
 }
 
-func populateCandidateProvidersFromNamesTracked(
+func populateCandidateProvidersFromCandidatesTracked(
 	cfg *config.Config,
 	workspace string,
-	names []string,
+	candidates []providers.FallbackCandidate,
 	out map[string]providers.LLMProvider,
 	providerOwnership *providerOwnership,
 ) {
-	if cfg == nil || len(names) == 0 {
+	if cfg == nil || len(candidates) == 0 {
 		return
 	}
-	for _, name := range names {
-		mc, err := resolvedModelConfig(cfg, strings.TrimSpace(name), workspace)
-		if err != nil {
+	for _, candidate := range candidates {
+		mc := resolveActiveModelConfig(cfg, workspace, []providers.FallbackCandidate{candidate}, candidate.Model)
+		if mc == nil {
 			logger.WarnCF("agent",
 				"fallback provider: no model_list entry found; will inherit primary provider credentials",
-				map[string]any{"name": name, "error": err.Error()})
+				map[string]any{"name": candidate.DisplayName})
 			continue
 		}
-		protocol, modelID := providers.ExtractProtocol(mc)
-		key := providers.ModelKey(protocol, modelID)
+		key := candidateProviderKey(candidate)
 		if _, exists := out[key]; exists {
 			continue
 		}
@@ -752,22 +793,18 @@ func resolvePrimaryProviderForAgent(
 	model string,
 	fallback providers.LLMProvider,
 	providerOwnership *providerOwnership,
-) providers.LLMProvider {
+) (providers.LLMProvider, *resolvedModelSelection, bool) {
 	model = strings.TrimSpace(model)
 	if cfg == nil || model == "" {
-		return fallback
+		return fallback, nil, false
 	}
 
-	modelCfg, err := cfg.GetModelConfig(model)
-	if err != nil || modelCfg == nil {
-		return fallback
-	}
-	clone := *modelCfg
-	if clone.Workspace == "" {
-		clone.Workspace = workspace
+	selection, err := resolveModelSelection(cfg, model, workspace)
+	if err != nil || selection.modelConfig == nil {
+		return fallback, nil, false
 	}
 
-	resolvedProvider, _, err := providers.CreateProviderFromConfig(&clone)
+	resolvedProvider, _, err := providers.CreateProviderFromConfig(selection.modelConfig)
 	if err != nil {
 		logger.WarnCF("agent", "Primary model provider init failed; using injected provider",
 			map[string]any{
@@ -775,13 +812,13 @@ func resolvePrimaryProviderForAgent(
 				"model":    model,
 				"error":    err.Error(),
 			})
-		return fallback
+		return fallback, &selection, false
 	}
 	if resolvedProvider == nil {
-		return fallback
+		return fallback, &selection, false
 	}
 	providerOwnership.trackCreated(resolvedProvider)
-	return resolvedProvider
+	return resolvedProvider, &selection, true
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.

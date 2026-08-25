@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +15,15 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
+
+func populateCandidateProvidersFromNames(
+	cfg *config.Config,
+	workspace string,
+	names []string,
+	out map[string]providers.LLMProvider,
+) {
+	populateCandidateProvidersFromCandidatesTracked(cfg, workspace, resolveModelCandidates(cfg, "", names), out, nil)
+}
 
 func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
@@ -366,7 +378,9 @@ func TestPopulateCandidateProviders_NilCfgIsNoop(t *testing.T) {
 // present in the output map is not overwritten.
 func TestPopulateCandidateProviders_SkipsExistingKeys(t *testing.T) {
 	existing := &mockProvider{}
-	key := providers.ModelKey("openai", "gpt-4o")
+	key := candidateProviderKey(providers.FallbackCandidate{
+		Provider: "openai", Model: "gpt-4o", ProviderConfigOrdinal: 1,
+	})
 	out := map[string]providers.LLMProvider{key: existing}
 
 	cfg := &config.Config{
@@ -400,7 +414,9 @@ func TestPopulateCandidateProviders_ResolvesAlias(t *testing.T) {
 	}
 	populateCandidateProvidersFromNames(cfg, workspace, []string{"my-gpt"}, out)
 
-	key := providers.ModelKey("openai", "gpt-4o")
+	key := candidateProviderKey(providers.FallbackCandidate{
+		Provider: "openai", Model: "gpt-4o", ProviderConfigOrdinal: 1,
+	})
 	if out[key] == nil {
 		t.Fatalf("expected CandidateProviders[%q] to be populated for alias", key)
 	}
@@ -425,7 +441,9 @@ func TestPopulateCandidateProviders_ResolvesProtocolPrefix(t *testing.T) {
 	}
 	populateCandidateProvidersFromNames(cfg, workspace, []string{"gemma"}, out)
 
-	key := providers.ModelKey("gemini", "gemma-3-27b-it")
+	key := candidateProviderKey(providers.FallbackCandidate{
+		Provider: "gemini", Model: "gemma-3-27b-it", ProviderConfigOrdinal: 1,
+	})
 	if out[key] == nil {
 		t.Fatalf("expected CandidateProviders[%q] to be populated for protocol-prefixed model", key)
 	}
@@ -474,6 +492,82 @@ func TestPopulateCandidateProviders_UnmatchedNameIsSkipped(t *testing.T) {
 	}
 }
 
+func TestPopulateCandidateProviders_BindsDuplicateAliasToSelectedRow(t *testing.T) {
+	workspace := t.TempDir()
+	firstCalls := 0
+	secondCalls := 0
+	newServer := func(calls *int, content string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			*calls++
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"choices": []map[string]any{{
+					"message": map[string]any{"content": content}, "finish_reason": "stop",
+				}},
+			})
+		}))
+	}
+	firstServer := newServer(&firstCalls, "first")
+	defer firstServer.Close()
+	secondServer := newServer(&secondCalls, "second")
+	defer secondServer.Close()
+
+	cfg := &config.Config{ModelList: []*config.ModelConfig{
+		{
+			ModelName: "fallback", Provider: "openai", Model: "same-model",
+			APIBase: firstServer.URL, APIKeys: config.SimpleSecureStrings("first-key"), Enabled: true,
+		},
+		{
+			ModelName: "fallback", Provider: "openai", Model: "same-model",
+			APIBase: secondServer.URL, APIKeys: config.SimpleSecureStrings("second-key"), Enabled: true,
+		},
+	}}
+	candidates := resolveModelCandidates(cfg, "", []string{"fallback"})
+	if len(candidates) != 1 || candidates[0].ConfigOrdinal < 1 || candidates[0].ConfigOrdinal > 2 {
+		t.Fatalf("candidates = %+v, want one exact model-list row", candidates)
+	}
+
+	candidateProviders := make(map[string]providers.LLMProvider)
+	populateCandidateProvidersFromCandidatesTracked(
+		cfg,
+		workspace,
+		candidates,
+		candidateProviders,
+		nil,
+	)
+	provider, err := providerForFallbackCandidate(candidateProviders, nil, candidates[0])
+	if err != nil {
+		t.Fatalf("providerForFallbackCandidate() error = %v", err)
+	}
+	response, err := provider.Chat(
+		context.Background(),
+		[]providers.Message{{Role: "user", Content: "hello"}},
+		nil,
+		candidates[0].Model,
+		map[string]any{},
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	wantContent := "first"
+	wantFirstCalls := 1
+	wantSecondCalls := 0
+	if candidates[0].ConfigOrdinal == 2 {
+		wantContent = "second"
+		wantFirstCalls = 0
+		wantSecondCalls = 1
+	}
+	if response.Content != wantContent || firstCalls != wantFirstCalls || secondCalls != wantSecondCalls {
+		t.Fatalf(
+			"selected ordinal = %d, response = %q, first calls = %d, second calls = %d; want exact selected row",
+			candidates[0].ConfigOrdinal,
+			response.Content,
+			firstCalls,
+			secondCalls,
+		)
+	}
+}
+
 // TestNewAgentInstance_CandidateProvidersPopulatedForCrossProviderFallbacks
 // mirrors the exact scenario from bug #2140: primary model on OpenRouter with
 // Gemini fallbacks. Each entry must get its own provider instance so that
@@ -519,8 +613,12 @@ func TestNewAgentInstance_CandidateProvidersPopulatedForCrossProviderFallbacks(t
 
 	// Only fallback models need entries — the primary uses the injected provider directly.
 	wantKeys := []string{
-		providers.ModelKey("gemini", "gemma-3-27b-it"),
-		providers.ModelKey("gemini", "gemini-2.5-flash-lite"),
+		candidateProviderKey(providers.FallbackCandidate{
+			Provider: "gemini", Model: "gemma-3-27b-it", ProviderConfigOrdinal: 2,
+		}),
+		candidateProviderKey(providers.FallbackCandidate{
+			Provider: "gemini", Model: "gemini-2.5-flash-lite", ProviderConfigOrdinal: 3,
+		}),
 	}
 
 	for _, key := range wantKeys {

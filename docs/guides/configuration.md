@@ -1083,6 +1083,11 @@ This design also enables **multi-agent support** with flexible provider selectio
 - **Centralized configuration**: Manage all providers in one place
 - **Model enable/disable**: Set `enabled` explicitly; it is the sole activation switch
 
+`model_list[].context_window` and `model_list[].max_context_window` hold provider-reported model metadata. OpenAI
+device/browser login refreshes these values from the Codex model catalog and selects its highest-priority visible model;
+if the catalog is temporarily unavailable, MintClaw uses its bundled catalog. An explicit
+`agents.defaults.context_window` remains the operator override and takes precedence over model metadata.
+
 #### Vision overrides for `load_image`
 
 Image understanding is configured per model entry, not through the

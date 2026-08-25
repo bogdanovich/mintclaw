@@ -29,8 +29,8 @@ func TestBuildCodexParams_BasicMessage(t *testing.T) {
 	if !params.Instructions.Valid() {
 		t.Fatal("Instructions should be set")
 	}
-	if params.Instructions.Or("") != defaultCodexInstructions {
-		t.Errorf("Instructions = %q, want %q", params.Instructions.Or(""), defaultCodexInstructions)
+	if params.Instructions.Or("") != codexDefaultInstructions {
+		t.Errorf("Instructions = %q, want %q", params.Instructions.Or(""), codexDefaultInstructions)
 	}
 	if params.MaxOutputTokens.Valid() {
 		t.Fatalf("MaxOutputTokens should not be set for Codex backend")
@@ -770,7 +770,7 @@ func TestCodexProvider_ChatRoundTrip_ModelFallbackFromUnsupported(t *testing.T) 
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
-		if reqBody["model"] != codexDefaultModel {
+		if reqBody["model"] != CodexDefaultModel {
 			http.Error(w, "unsupported model", http.StatusBadRequest)
 			return
 		}
@@ -814,7 +814,7 @@ func TestCodexProvider_ChatRoundTrip_ModelFallbackFromUnsupported(t *testing.T) 
 	provider.client = createOpenAITestClient(server.URL, "test-token", "acc-123")
 
 	messages := []Message{{Role: "user", Content: "Hello"}}
-	resp, err := provider.Chat(t.Context(), messages, nil, "gpt-5.3-codex", nil)
+	resp, err := provider.Chat(t.Context(), messages, nil, "glm-4.7", nil)
 	if err != nil {
 		t.Fatalf("Chat() error: %v", err)
 	}
@@ -825,8 +825,8 @@ func TestCodexProvider_ChatRoundTrip_ModelFallbackFromUnsupported(t *testing.T) 
 
 func TestCodexProvider_GetDefaultModel(t *testing.T) {
 	p := NewCodexProvider("test-token", "")
-	if got := p.GetDefaultModel(); got != codexDefaultModel {
-		t.Errorf("GetDefaultModel() = %q, want %q", got, codexDefaultModel)
+	if got := p.GetDefaultModel(); got != CodexDefaultModel {
+		t.Errorf("GetDefaultModel() = %q, want %q", got, CodexDefaultModel)
 	}
 }
 
@@ -837,14 +837,14 @@ func TestResolveCodexModel(t *testing.T) {
 		wantModel    string
 		wantFallback bool
 	}{
-		{name: "empty", input: "", wantModel: codexDefaultModel, wantFallback: true},
+		{name: "empty", input: "", wantModel: CodexDefaultModel, wantFallback: true},
 		{
 			name:         "unsupported namespace",
 			input:        "anthropic/claude-3.5",
-			wantModel:    codexDefaultModel,
+			wantModel:    CodexDefaultModel,
 			wantFallback: true,
 		},
-		{name: "non-openai prefixed", input: "glm-4.7", wantModel: codexDefaultModel, wantFallback: true},
+		{name: "non-openai prefixed", input: "glm-4.7", wantModel: CodexDefaultModel, wantFallback: true},
 		{name: "openai prefix", input: "openai/gpt-5.3-codex", wantModel: "gpt-5.3-codex", wantFallback: false},
 		{name: "direct gpt", input: "gpt-4o", wantModel: "gpt-4o", wantFallback: false},
 	}

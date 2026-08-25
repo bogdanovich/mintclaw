@@ -185,6 +185,63 @@ func TestHandleUpdateModelPreservesOmittedEnabledValue(t *testing.T) {
 	}
 }
 
+func TestHandleModelsRoundTripsCatalogContextMetadata(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	cfg, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "catalog-model", Provider: "openai", Model: "gpt-future", Enabled: true,
+		ContextWindow: 345_000, MaxContextWindow: 900_000,
+	}}
+	if err = config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	listRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(listRecorder, httptest.NewRequest(http.MethodGet, "/api/models", nil))
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want %d, body=%s", listRecorder.Code, http.StatusOK, listRecorder.Body.String())
+	}
+	var listed struct {
+		Models []modelResponse `json:"models"`
+	}
+	if err = json.Unmarshal(listRecorder.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode GET response: %v", err)
+	}
+	if len(listed.Models) != 1 || listed.Models[0].ContextWindow != 345_000 ||
+		listed.Models[0].MaxContextWindow != 900_000 {
+		t.Fatalf("GET models = %+v", listed.Models)
+	}
+
+	updateRecorder := httptest.NewRecorder()
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/models/0", bytes.NewBufferString(`{
+		"model_name":"catalog-model",
+		"provider":"openai",
+		"model":"gpt-future"
+	}`))
+	updateRequest.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want %d, body=%s", updateRecorder.Code, http.StatusOK, updateRecorder.Body.String())
+	}
+
+	updated, err := config.LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() after PUT error = %v", err)
+	}
+	if updated.ModelList[0].ContextWindow != 345_000 || updated.ModelList[0].MaxContextWindow != 900_000 {
+		t.Fatalf("context metadata after PUT = %+v", updated.ModelList[0])
+	}
+}
+
 func TestHandleUpdateModelKeepsDefaultWhenAliasHasAnotherEligibleEntry(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

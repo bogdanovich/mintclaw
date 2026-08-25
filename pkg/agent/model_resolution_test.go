@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -144,6 +145,60 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 	}
 	if !got.Streaming.Enabled {
 		t.Fatal("streaming.enabled = false, want true from selected load-balanced entry")
+	}
+}
+
+func TestResolveActiveModelConfig_UsesExactDuplicateEntryOrdinal(t *testing.T) {
+	cfg := &config.Config{ModelList: []*config.ModelConfig{
+		{
+			ModelName: "lb-model", Provider: "openai", Model: "same-model", Enabled: true,
+			Streaming: config.ModelStreamingConfig{Enabled: false},
+		},
+		{
+			ModelName: "lb-model", Provider: "openai", Model: "same-model", Enabled: true,
+			Streaming: config.ModelStreamingConfig{Enabled: true},
+		},
+	}}
+
+	got := resolveActiveModelConfig(
+		cfg,
+		"/workspace",
+		[]providers.FallbackCandidate{{
+			Provider: "openai", Model: "same-model", IdentityKey: "model_name:lb-model", ConfigOrdinal: 2,
+		}},
+		"lb-model",
+	)
+
+	if got == nil || !got.Streaming.Enabled {
+		t.Fatalf("resolveActiveModelConfig() = %+v, want exact second entry", got)
+	}
+}
+
+func TestProviderForFallbackCandidate_FailsClosedForMissingExactProvider(t *testing.T) {
+	activeProvider := &mockProvider{}
+	candidate := providers.FallbackCandidate{
+		Provider: "openai", Model: "fallback-model", ProviderConfigOrdinal: 2,
+	}
+
+	got, err := providerForFallbackCandidate(nil, activeProvider, candidate)
+	if err == nil {
+		t.Fatalf("providerForFallbackCandidate() = %#v, want exact-provider error", got)
+	}
+	if !strings.Contains(err.Error(), "row 2") {
+		t.Fatalf("providerForFallbackCandidate() error = %q, want exact row", err)
+	}
+}
+
+func TestProviderForFallbackCandidate_LegacyCandidateUsesActiveProvider(t *testing.T) {
+	activeProvider := &mockProvider{}
+	candidate := providers.FallbackCandidate{Provider: "openai", Model: "fallback-model"}
+
+	got, err := providerForFallbackCandidate(nil, activeProvider, candidate)
+	if err != nil {
+		t.Fatalf("providerForFallbackCandidate() error = %v", err)
+	}
+	if got != activeProvider {
+		t.Fatalf("providerForFallbackCandidate() = %#v, want active provider", got)
 	}
 }
 

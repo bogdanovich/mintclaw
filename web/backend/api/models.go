@@ -51,6 +51,8 @@ type modelResponse struct {
 	MaxTokensField      string                      `json:"max_tokens_field,omitempty"`
 	RequestTimeout      int                         `json:"request_timeout,omitempty"`
 	ThinkingLevel       string                      `json:"thinking_level,omitempty"`
+	ContextWindow       int                         `json:"context_window,omitempty"`
+	MaxContextWindow    int                         `json:"max_context_window,omitempty"`
 	ToolSchemaTransform string                      `json:"tool_schema_transform,omitempty"`
 	Streaming           config.ModelStreamingConfig `json:"streaming,omitempty"`
 	ExtraBody           map[string]any              `json:"extra_body,omitempty"`
@@ -193,6 +195,8 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			MaxTokensField:      m.MaxTokensField,
 			RequestTimeout:      m.RequestTimeout,
 			ThinkingLevel:       m.ThinkingLevel,
+			ContextWindow:       m.ContextWindow,
+			MaxContextWindow:    m.MaxContextWindow,
 			ToolSchemaTransform: m.ToolSchemaTransform,
 			Streaming:           m.Streaming,
 			ExtraBody:           m.ExtraBody,
@@ -356,6 +360,12 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, ok := rawFields["enabled"]; !ok {
 			mc.Enabled = cfg.ModelList[idx].Enabled
+		}
+		if _, ok := rawFields["context_window"]; !ok {
+			mc.ContextWindow = cfg.ModelList[idx].ContextWindow
+		}
+		if _, ok := rawFields["max_context_window"]; !ok {
+			mc.MaxContextWindow = cfg.ModelList[idx].MaxContextWindow
 		}
 		normalizeIncomingModelConfig(&mc.ModelConfig)
 		if err = validateIncomingModelConfig(&mc.ModelConfig, cfg.ModelList[idx]); err != nil {

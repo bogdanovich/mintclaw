@@ -16,11 +16,13 @@ type FallbackChain struct {
 
 // FallbackCandidate represents one model/provider to try.
 type FallbackCandidate struct {
-	Provider    string
-	Model       string
-	DisplayName string // optional configured alias/raw model label for persistence/UI
-	RPM         int    // requests per minute; 0 means unrestricted
-	IdentityKey string // optional stable config identity for cooldown/rate limiting
+	Provider              string
+	Model                 string
+	DisplayName           string // optional configured alias/raw model label for persistence/UI
+	RPM                   int    // requests per minute; 0 means unrestricted
+	IdentityKey           string // optional stable config identity for cooldown/rate limiting
+	ConfigOrdinal         int
+	ProviderConfigOrdinal int
 }
 
 // StableKey returns the candidate's config-level identity when available,

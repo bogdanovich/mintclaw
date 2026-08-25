@@ -906,14 +906,20 @@ func (p *Pipeline) applyBeforeLLMModelRewrite(
 func providerForFallbackCandidate(
 	candidateProviders map[string]providers.LLMProvider,
 	activeProvider providers.LLMProvider,
-	provider string,
-	model string,
+	candidate providers.FallbackCandidate,
 ) (providers.LLMProvider, error) {
-	if cp, ok := candidateProviders[providers.ModelKey(provider, model)]; ok && cp != nil {
+	if cp, ok := candidateProviders[candidateProviderKey(candidate)]; ok && cp != nil {
+		return cp, nil
+	}
+	if candidate.ProviderConfigOrdinal > 0 {
+		return nil, fmt.Errorf("fallback model %q has no provider for row %d", candidate.Model,
+			candidate.ProviderConfigOrdinal)
+	}
+	if cp, ok := candidateProviders[providers.ModelKey(candidate.Provider, candidate.Model)]; ok && cp != nil {
 		return cp, nil
 	}
 	if activeProvider == nil {
-		return nil, fmt.Errorf("fallback model %q has no active provider", model)
+		return nil, fmt.Errorf("fallback model %q has no active provider", candidate.Model)
 	}
 	return activeProvider, nil
 }

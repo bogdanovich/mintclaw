@@ -1457,8 +1457,7 @@ func TestApplyBeforeLLMModelRewrite_RebuildsExecutionProviders(t *testing.T) {
 	if _, err := providerForFallbackCandidate(
 		exec.model.candidateProviders,
 		exec.model.activeProvider,
-		"openai",
-		"hook-model",
+		providers.FallbackCandidate{Provider: "openai", Model: "hook-model"},
 	); err != nil {
 		t.Fatalf("providerForFallbackCandidate() error = %v", err)
 	}
