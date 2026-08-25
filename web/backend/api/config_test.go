@@ -709,7 +709,7 @@ func TestHandleUpdateConfig_PreservesExecAllowRemoteDefaultWhenOmitted(t *testin
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewBufferString(`{
-"version": 3,
+"version": 4,
 		"agents": {
 			"defaults": {
 				"workspace": "~/.mintclaw/workspace"
@@ -809,7 +809,7 @@ func TestHandleUpdateConfig_PreservesSkillsRegistryIntent(t *testing.T) {
 			mux := http.NewServeMux()
 			h.RegisterRoutes(mux)
 			body := fmt.Sprintf(`{
-				"version": 3,
+				"version": 4,
 				"agents": {
 					"defaults": {
 						"workspace": "~/.mintclaw/workspace"
@@ -885,7 +885,7 @@ func TestHandleUpdateConfig_DoesNotInheritDefaultModelFields(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewBufferString(`{
-		"version": 3,
+		"version": 4,
 		"agents": {
 			"defaults": {
 				"workspace": "~/.mintclaw/workspace"
@@ -1886,7 +1886,7 @@ func TestHandleUpdateConfig_SucceedsWhenMintClawTokenInSecurityOnly(t *testing.T
 
 	// PUT request with mintclaw enabled but no token in JSON — token is in .security.yml
 	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewBufferString(`{
-		"version": 3,
+		"version": 4,
 		"agents": {
 			"defaults": {
 				"workspace": "~/.mintclaw/workspace",
@@ -1960,7 +1960,7 @@ func TestHandlePatchConfig_SucceedsWhenMintClawTokenInSecurityOnly(t *testing.T)
 
 func TestHandleUpdateConfig_AppliesGatewayLogLevel(t *testing.T) {
 	assertGatewayLogLevelApplied(t, http.MethodPut, `{
-		"version": 3,
+		"version": 4,
 		"agents": {
 			"defaults": {
 				"workspace": "~/.mintclaw/workspace",

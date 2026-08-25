@@ -549,7 +549,7 @@ document to the current schema before upgrading; startup does not migrate it.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "model_list": [
     {
       "model_name": "glm-4.7",

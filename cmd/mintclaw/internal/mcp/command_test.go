@@ -1099,6 +1099,9 @@ func writeMCPConfig(t *testing.T, path string, cfg *config.Config) {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
+	if len(cfg.Agents.List) == 0 {
+		cfg.Agents.List = []config.AgentConfig{config.DefaultAgentConfig()}
+	}
 
 	require.NoError(t, config.SaveConfig(path, cfg))
 }

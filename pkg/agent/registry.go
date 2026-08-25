@@ -54,34 +54,24 @@ func newAgentRegistry(
 
 	agentConfigs := cfg.Agents.List
 	if len(agentConfigs) == 0 {
-		implicitAgent := &config.AgentConfig{
-			ID:      "main",
-			Default: true,
-		}
-		instance, err := newAgentInstance(implicitAgent, &cfg.Agents.Defaults, cfg, provider, nil, nil)
+		agentConfigs = []config.AgentConfig{config.DefaultAgentConfig()}
+	}
+	for i := range agentConfigs {
+		ac := &agentConfigs[i]
+		id := routing.NormalizeAgentID(ac.ID)
+		instance, err := newAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider, nil, nil)
 		if err != nil {
-			return nil, fmt.Errorf("construct implicit main agent: %w", err)
+			registry.Close()
+			return nil, fmt.Errorf("construct agent %q: %w", id, err)
 		}
-		registry.agents["main"] = instance
-		logger.InfoCF("agent", "Created implicit main agent (no agents.list configured)", nil)
-	} else {
-		for i := range agentConfigs {
-			ac := &agentConfigs[i]
-			id := routing.NormalizeAgentID(ac.ID)
-			instance, err := newAgentInstance(ac, &cfg.Agents.Defaults, cfg, provider, nil, nil)
-			if err != nil {
-				registry.Close()
-				return nil, fmt.Errorf("construct agent %q: %w", id, err)
-			}
-			registry.agents[id] = instance
-			logger.InfoCF("agent", "Registered agent",
-				map[string]any{
-					"agent_id":  id,
-					"name":      ac.Name,
-					"workspace": instance.Workspace,
-					"model":     instance.Model,
-				})
-		}
+		registry.agents[id] = instance
+		logger.InfoCF("agent", "Registered agent",
+			map[string]any{
+				"agent_id":  id,
+				"name":      ac.Name,
+				"workspace": instance.Workspace,
+				"model":     instance.Model,
+			})
 	}
 
 	for _, instance := range registry.agents {
@@ -104,7 +94,7 @@ func newAgentRegistryWithCodingRuntimeProfile(
 ) (*AgentRegistry, error) {
 	agentConfigs := cfg.Agents.List
 	if len(agentConfigs) == 0 {
-		agentConfigs = []config.AgentConfig{{ID: "main", Default: true}}
+		return nil, fmt.Errorf("construct coding agent registry: agents.list must contain at least one agent")
 	}
 	agentIDs := make([]string, len(agentConfigs))
 	for index := range agentConfigs {

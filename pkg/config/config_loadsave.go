@@ -87,7 +87,13 @@ func decodeCurrentConfigWithDefaults(data []byte, label string) (*Config, error)
 	if len(provided.ModelList) > 0 {
 		cfg.ModelList = nil
 	}
+	if provided.Agents.List != nil {
+		cfg.Agents.List = nil
+	}
 	if err := decodeCurrentConfig(data, cfg, label); err != nil {
+		return nil, err
+	}
+	if err := cfg.ValidateAgents(); err != nil {
 		return nil, err
 	}
 	return cfg, nil

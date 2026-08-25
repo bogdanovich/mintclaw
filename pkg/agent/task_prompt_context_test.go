@@ -130,7 +130,7 @@ func TestTerminalTaskContextIsVisibleToSameSessionRepeatRequest(t *testing.T) {
 	workspace := t.TempDir()
 	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
 		Workspace: workspace, ModelName: "test-model", MaxTokens: 4096,
-	}}}
+	}, List: []config.AgentConfig{{ID: "main", Default: true}}}}
 	provider := &recordingProvider{}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	agent := al.registry.GetDefaultAgent()

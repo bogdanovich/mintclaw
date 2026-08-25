@@ -46,7 +46,7 @@ func TestDiagnosticTraceCaptureUsesOnlySupportedRuntimeModes(t *testing.T) {
 func TestLoadConfigDiagnosticTraceCapture(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{
-  "version": 3,
+  "version": 4,
   "diagnostics": {
     "trace_capture": {
       "enabled": true,
@@ -72,8 +72,8 @@ func TestLoadConfigDiagnosticTraceCapture(t *testing.T) {
 
 func TestLoadConfigRejectsRemovedEvaluationTraceConfig(t *testing.T) {
 	tests := map[string]string{
-		"evaluation root": `{"version":3,"evaluation":{"trace_capture":{"enabled":true}}}`,
-		"max corrections": `{"version":3,"diagnostics":{"trace_capture":{"max_corrections":8}}}`,
+		"evaluation root": `{"version":4,"evaluation":{"trace_capture":{"enabled":true}}}`,
+		"max corrections": `{"version":4,"diagnostics":{"trace_capture":{"max_corrections":8}}}`,
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"path"
 	"strings"
 	"time"
 )
@@ -55,15 +56,94 @@ func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
 }
 
 type AgentConfig struct {
-	ID               string            `json:"id"`
-	Default          bool              `json:"default,omitempty"`
-	Name             string            `json:"name,omitempty"`
-	Workspace        string            `json:"workspace,omitempty"`
-	Model            *AgentModelConfig `json:"model,omitempty"`
-	Skills           []string          `json:"skills,omitempty"`
-	Subagents        *SubagentsConfig  `json:"subagents,omitempty"`
-	TargetPolicy     *TargetPolicy     `json:"target_policy,omitempty"`
-	MaxParallelTurns int               `json:"max_parallel_turns,omitempty"`
+	ID               string                 `json:"id"`
+	Default          bool                   `json:"default,omitempty"`
+	Name             string                 `json:"name,omitempty"`
+	Description      string                 `json:"description,omitempty"`
+	Workspace        string                 `json:"workspace,omitempty"`
+	Model            *AgentModelConfig      `json:"model,omitempty"`
+	Skills           []string               `json:"skills,omitempty"`
+	ToolPolicy       *AgentCapabilityPolicy `json:"tool_policy,omitempty"`
+	MCPServerPolicy  *AgentCapabilityPolicy `json:"mcp_server_policy,omitempty"`
+	Subagents        *SubagentsConfig       `json:"subagents,omitempty"`
+	TargetPolicy     *TargetPolicy          `json:"target_policy,omitempty"`
+	MaxParallelTurns int                    `json:"max_parallel_turns,omitempty"`
+}
+
+type AgentCapabilityDefault string
+
+const (
+	AgentCapabilityDefaultAllow AgentCapabilityDefault = "allow"
+	AgentCapabilityDefaultDeny  AgentCapabilityDefault = "deny"
+)
+
+// AgentCapabilityPolicy is the canonical per-agent admission policy for tools
+// and MCP servers. Deny patterns always override allowed patterns.
+type AgentCapabilityPolicy struct {
+	Default AgentCapabilityDefault `json:"default"`
+	Allow   []string               `json:"allow,omitempty"`
+	Deny    []string               `json:"deny,omitempty"`
+}
+
+// ValidateAgents validates the current agent list and its capability policies.
+func (c *Config) ValidateAgents() error {
+	if c == nil {
+		return errors.New("config is nil")
+	}
+	if len(c.Agents.List) == 0 {
+		return errors.New("agents.list must contain at least one agent")
+	}
+	for index := range c.Agents.List {
+		agent := &c.Agents.List[index]
+		if err := agent.ToolPolicy.Validate(fmt.Sprintf("agents.list[%d].tool_policy", index)); err != nil {
+			return err
+		}
+		if err := agent.MCPServerPolicy.Validate(fmt.Sprintf("agents.list[%d].mcp_server_policy", index)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *AgentCapabilityPolicy) Validate(label string) error {
+	if p == nil {
+		return nil
+	}
+
+	switch p.Default {
+	case AgentCapabilityDefaultAllow:
+		if len(p.Allow) > 0 {
+			return fmt.Errorf("%s.allow must be empty when default is %q", label, p.Default)
+		}
+	case AgentCapabilityDefaultDeny:
+	default:
+		return fmt.Errorf("%s.default must be %q or %q", label, AgentCapabilityDefaultAllow, AgentCapabilityDefaultDeny)
+	}
+
+	if err := validateAgentCapabilityPatterns(label+".allow", p.Allow); err != nil {
+		return err
+	}
+	return validateAgentCapabilityPatterns(label+".deny", p.Deny)
+}
+
+func validateAgentCapabilityPatterns(label string, patterns []string) error {
+	seen := make(map[string]struct{}, len(patterns))
+	for index, pattern := range patterns {
+		if pattern == "" || strings.TrimSpace(pattern) != pattern {
+			return fmt.Errorf("%s[%d] must be a non-empty pattern without surrounding whitespace", label, index)
+		}
+		if strings.ToLower(pattern) != pattern {
+			return fmt.Errorf("%s[%d] must be lowercase", label, index)
+		}
+		if _, err := path.Match(pattern, ""); err != nil {
+			return fmt.Errorf("%s[%d] is invalid: %w", label, index, err)
+		}
+		if _, ok := seen[pattern]; ok {
+			return fmt.Errorf("%s[%d] duplicates %q", label, index, pattern)
+		}
+		seen[pattern] = struct{}{}
+	}
+	return nil
 }
 
 type SubagentsConfig struct {

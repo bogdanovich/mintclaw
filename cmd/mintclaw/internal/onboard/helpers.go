@@ -199,12 +199,13 @@ func copyEmbeddedToTarget(targetDir string) error {
 		if filepath.IsAbs(new_path) {
 			return fmt.Errorf("unexpected absolute embedded path %s", path)
 		}
-		if new_path == "AGENTS.md" || new_path == "IDENTITY.md" {
-			return nil
-		}
-
 		// Build target file path
 		targetPath := filepath.Join(targetDir, new_path)
+		if _, statErr := os.Stat(targetPath); statErr == nil {
+			return nil
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("failed to inspect target file %s: %w", targetPath, statErr)
+		}
 
 		// Ensure target file's directory exists
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {

@@ -30,6 +30,7 @@ import (
 type AgentInstance struct {
 	ID                        string
 	Name                      string
+	Description               string
 	Model                     string
 	Fallbacks                 []string
 	Workspace                 string
@@ -47,11 +48,10 @@ type AgentInstance struct {
 	ContextBuilder            *ContextBuilder
 	Tools                     *tools.ToolRegistry
 	trustedToolRegistry       *tools.ToolRegistry
-	Definition                AgentContextDefinition
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
-	MCPServerPolicy           *PatternPolicy
-	ToolPolicy                *PatternPolicy
+	MCPServerPolicy           *config.AgentCapabilityPolicy
+	ToolPolicy                *config.AgentCapabilityPolicy
 	Candidates                []providers.FallbackCandidate
 	MaxParallelTurns          int
 
@@ -138,7 +138,7 @@ type agentToolInitConfig struct {
 	readRestrict  bool
 	allowRead     []*regexp.Regexp
 	allowWrite    []*regexp.Regexp
-	toolPolicy    *PatternPolicy
+	toolPolicy    *config.AgentCapabilityPolicy
 	toolsRegistry *tools.ToolRegistry
 	execScratch   string
 }
@@ -150,6 +150,7 @@ type runtimeInstanceDependencies struct {
 type agentIdentityConfig struct {
 	agentID      string
 	agentName    string
+	description  string
 	subagents    *config.SubagentsConfig
 	skillsFilter []string
 }
@@ -225,42 +226,17 @@ func newAgentInstance(
 	}
 
 	codingRuntime := layout != nil
-	definition := AgentContextDefinition{}
-	if !codingRuntime {
-		definition = loadAgentDefinition(workspace)
-	}
-	frontmatterModel := ""
-	if definition.Agent != nil {
-		frontmatterModel = definition.Agent.Frontmatter.Model
-		if frontmatterModel != "" {
-			if err := requireExactModelName(frontmatterModel); err != nil {
-				return nil, fmt.Errorf("construct agent: workspace model: %w", err)
-			}
-		}
-	}
-	model := resolveAgentModel(agentCfg, defaults, definition)
-	if frontmatterModel != "" {
-		if cfg == nil {
-			return nil, fmt.Errorf("construct agent: workspace model %q requires configuration", model)
-		}
-		configured := false
-		for _, modelCfg := range cfg.ModelList {
-			if modelCfg != nil && modelCfg.Enabled && modelCfg.ModelName == model {
-				configured = true
-				break
-			}
-		}
-		if !configured {
-			return nil, fmt.Errorf("construct agent: workspace model %q is not configured", model)
-		}
-	}
+	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
-	agentToolPolicy := resolveAgentToolPolicy(definition)
-	agentMCPServerPolicy := resolveAgentMCPServerPolicy(definition)
+	var agentToolPolicy, agentMCPServerPolicy *config.AgentCapabilityPolicy
+	if agentCfg != nil {
+		agentToolPolicy = agentCfg.ToolPolicy
+		agentMCPServerPolicy = agentCfg.MCPServerPolicy
+	}
 	if codingRuntime {
-		// Repository frontmatter cannot mutate the admitted coding catalog.
+		// Project instructions cannot mutate the admitted coding catalog.
 		agentToolPolicy = nil
-		agentMCPServerPolicy = &PatternPolicy{Allow: []string{}, form: patternPolicyFormList}
+		agentMCPServerPolicy = &config.AgentCapabilityPolicy{Default: config.AgentCapabilityDefaultDeny}
 	}
 
 	sessionsDir := filepath.Join(workspace, "sessions")
@@ -301,9 +277,10 @@ func newAgentInstance(
 			WithPromptMemoryConfig(defaults.PromptMemory)
 	}
 
-	identity := buildAgentIdentityConfig(defaults, agentCfg, definition)
+	identity := buildAgentIdentityConfig(defaults, agentCfg)
 	if codingRuntime {
 		identity.agentName = "MintClaw coding agent"
+		identity.description = ""
 		identity.subagents = nil
 		identity.skillsFilter = nil
 		contextBuilder.WithCodingPromptModel(model)
@@ -319,7 +296,7 @@ func newAgentInstance(
 		provider,
 		providerOwnership,
 	)
-	warnOnUnknownAgentMCPServerDeclarations(identity.agentID, workspace, cfg, definition)
+	warnOnUnknownAgentMCPServerDeclarations(identity.agentID, workspace, cfg, agentMCPServerPolicy)
 
 	toolInit := newAgentToolInitConfig(defaults, cfg, agentToolPolicy)
 	if layout != nil {
@@ -361,6 +338,7 @@ func newAgentInstance(
 	instance := &AgentInstance{
 		ID:                        identity.agentID,
 		Name:                      identity.agentName,
+		Description:               identity.description,
 		Model:                     model,
 		Fallbacks:                 fallbacks,
 		Workspace:                 workspace,
@@ -376,7 +354,6 @@ func newAgentInstance(
 		Sessions:                  sessions,
 		ContextBuilder:            contextBuilder,
 		Tools:                     toolInit.toolsRegistry,
-		Definition:                definition,
 		Subagents:                 identity.subagents,
 		SkillsFilter:              identity.skillsFilter,
 		MCPServerPolicy:           agentMCPServerPolicy,
@@ -431,7 +408,7 @@ func loopGuardConfigFromConfig(cfg config.ToolLoopDetectionConfig) loopguard.Con
 func newAgentToolInitConfig(
 	defaults *config.AgentDefaults,
 	cfg *config.Config,
-	toolPolicy *PatternPolicy,
+	toolPolicy *config.AgentCapabilityPolicy,
 ) agentToolInitConfig {
 	restrict := defaults.RestrictToWorkspace
 	return agentToolInitConfig{
@@ -561,7 +538,6 @@ func initCodingAgentTools(
 func buildAgentIdentityConfig(
 	defaults *config.AgentDefaults,
 	agentCfg *config.AgentConfig,
-	definition AgentContextDefinition,
 ) agentIdentityConfig {
 	identity := agentIdentityConfig{
 		agentID: routing.DefaultAgentID,
@@ -570,16 +546,17 @@ func buildAgentIdentityConfig(
 		return identity
 	}
 	identity.agentID = routing.NormalizeAgentID(agentCfg.ID)
-	identity.agentName = agentCfg.Name
-	if definition.Agent != nil && strings.TrimSpace(definition.Agent.Frontmatter.Name) != "" {
-		identity.agentName = strings.TrimSpace(definition.Agent.Frontmatter.Name)
+	identity.agentName = strings.TrimSpace(agentCfg.Name)
+	if identity.agentName == "" {
+		identity.agentName = identity.agentID
 	}
+	identity.description = strings.TrimSpace(agentCfg.Description)
 	var defaultsSubagents *config.SubagentsConfig
 	if defaults != nil {
 		defaultsSubagents = defaults.Subagents
 	}
 	identity.subagents = mergeSubagentsConfig(defaultsSubagents, agentCfg.Subagents)
-	identity.skillsFilter = resolveAgentSkillsFilter(agentCfg, definition)
+	identity.skillsFilter = resolveAgentSkillsFilter(agentCfg)
 	return identity
 }
 
@@ -840,11 +817,7 @@ func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentD
 func resolveAgentModel(
 	agentCfg *config.AgentConfig,
 	defaults *config.AgentDefaults,
-	definition AgentContextDefinition,
 ) string {
-	if definition.Agent != nil && strings.TrimSpace(definition.Agent.Frontmatter.Model) != "" {
-		return strings.TrimSpace(definition.Agent.Frontmatter.Model)
-	}
 	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
 		return strings.TrimSpace(agentCfg.Model.Primary)
 	}
@@ -861,11 +834,7 @@ func resolveAgentFallbacks(agentCfg *config.AgentConfig, defaults *config.AgentD
 
 func resolveAgentSkillsFilter(
 	agentCfg *config.AgentConfig,
-	definition AgentContextDefinition,
 ) []string {
-	if definition.Agent != nil && definition.Agent.Frontmatter.Skills != nil {
-		return append([]string(nil), definition.Agent.Frontmatter.Skills...)
-	}
 	if agentCfg == nil || agentCfg.Skills == nil {
 		return nil
 	}

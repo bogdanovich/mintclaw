@@ -8,9 +8,10 @@ Roadmap packet: P2.2 in
 ## Decision
 
 Coding runtimes load declarative project instructions independently from the
-personal-agent bootstrap. A coding thread never interprets personal
-`AGENT.md`, `SOUL.md`, `USER.md`, skills, hooks, or executable repository
-configuration as project instructions.
+personal-agent bootstrap. A coding thread never loads personal `SOUL.md`,
+`USER.md`, skills, hooks, or executable repository configuration as project
+instructions. A root `AGENTS.md` is admitted only through the coding project's
+hierarchical instruction rules, not through the personal bootstrap loader.
 
 MintClaw recognizes these filenames, in descending same-directory priority:
 

@@ -13,7 +13,7 @@ instead of creating `tmp_*` files in the workspace root.
 ## Why
 
 The workspace root contains durable agent state and operator-facing files such as
-`AGENT.md`, `USER.md`, `SOUL.md`, `TODO.md`, `memory/`, `skills/`, and
+`AGENTS.md`, `USER.md`, `SOUL.md`, `TODO.md`, `memory/`, `skills/`, and
 `state/`. Root-level scratch files make the workspace hard to inspect and can be
 mistaken for persistent state.
 

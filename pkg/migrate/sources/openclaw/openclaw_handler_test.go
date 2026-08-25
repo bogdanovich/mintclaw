@@ -125,7 +125,7 @@ func TestOpenclawHandlerWorkspaceFiles(t *testing.T) {
 
 	files := handler.WorkspaceFiles()
 	assert.NotEmpty(t, files)
-	assert.Contains(t, files, internal.WorkspaceFile{Source: "AGENTS.md", Target: "AGENT.md"})
+	assert.Contains(t, files, internal.WorkspaceFile{Source: "AGENTS.md", Target: "AGENTS.md"})
 	assert.Contains(t, files, internal.WorkspaceFile{Source: "SOUL.md", Target: "SOUL.md"})
 	assert.Contains(t, files, internal.WorkspaceFile{Source: "USER.md", Target: "USER.md"})
 }
@@ -159,6 +159,8 @@ func TestOpenclawHandlerExecuteConfigMigrationUsesRepository(t *testing.T) {
 	snapshot, err := config.NewRepository(destination).ReadDurable()
 	require.NoError(t, err)
 	assert.Equal(t, config.CurrentVersion, snapshot.Config.Version)
+	require.Len(t, snapshot.Config.Agents.List, 1)
+	assert.Equal(t, config.DefaultAgentConfig(), snapshot.Config.Agents.List[0])
 	assert.NotEmpty(t, snapshot.Revision)
 }
 

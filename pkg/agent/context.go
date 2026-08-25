@@ -770,7 +770,7 @@ func (cb *ContextBuilder) InvalidateCache() {
 // invalidation (bootstrap files + memory). Skill roots are handled separately
 // because they require both directory-level and recursive file-level checks.
 func (cb *ContextBuilder) sourcePaths() []string {
-	paths := agentDefinitionPaths(cb.workspace)
+	paths := personalContextPaths(cb.workspace)
 	paths = append(paths, cb.memory.promptSourcePaths()...)
 	return uniquePaths(paths)
 }
@@ -983,20 +983,25 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 func (cb *ContextBuilder) LoadBootstrapFiles() string {
 	var sb strings.Builder
 
-	agentDefinition := cb.LoadAgentDefinition()
-	if agentDefinition.Agent != nil {
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", agentDefinitionFile, agentDefinition.Agent.Body)
-	}
-	if agentDefinition.Soul != nil {
+	personalContext := cb.loadPersonalContext()
+	if personalContext.Instructions != nil {
 		fmt.Fprintf(
 			&sb,
 			"## %s\n\n%s\n\n",
-			relativeWorkspacePath(cb.workspace, agentDefinition.Soul.Path),
-			agentDefinition.Soul.Content,
+			personalInstructionsFile,
+			personalContext.Instructions.Content,
 		)
 	}
-	if agentDefinition.User != nil {
-		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", agentDefinition.User.Content)
+	if personalContext.Soul != nil {
+		fmt.Fprintf(
+			&sb,
+			"## %s\n\n%s\n\n",
+			relativeWorkspacePath(cb.workspace, personalContext.Soul.Path),
+			personalContext.Soul.Content,
+		)
+	}
+	if personalContext.User != nil {
+		fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "USER.md", personalContext.User.Content)
 	}
 
 	return sb.String()

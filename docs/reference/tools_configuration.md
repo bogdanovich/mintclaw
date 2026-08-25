@@ -2,7 +2,9 @@
 
 MintClaw's tools configuration is located in the `tools` field of `config.json`.
 
-> **Related:** Per-agent tool filtering is configured in each agent's `AGENT.md` frontmatter, not under the top-level `tools` section. See the [Configuration Guide](../guides/configuration.md#per-agent-tool-filtering).
+> **Related:** Per-agent tool and MCP filtering is configured in
+> `agents.list[].tool_policy` and `agents.list[].mcp_server_policy`. See the
+> [Configuration Guide](../guides/configuration.md#agent-identity-and-capability-policy).
 
 ## Directory Structure
 

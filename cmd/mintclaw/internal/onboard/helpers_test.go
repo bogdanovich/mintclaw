@@ -16,7 +16,7 @@ func TestCopyEmbeddedToTargetUsesStructuredAgentFiles(t *testing.T) {
 		t.Fatalf("copyEmbeddedToTarget() error = %v", err)
 	}
 
-	agentPath := filepath.Join(targetDir, "AGENT.md")
+	agentPath := filepath.Join(targetDir, "AGENTS.md")
 	if _, err := os.Stat(agentPath); err != nil {
 		t.Fatalf("expected %s to exist: %v", agentPath, err)
 	}
@@ -31,11 +31,34 @@ func TestCopyEmbeddedToTargetUsesStructuredAgentFiles(t *testing.T) {
 		t.Fatalf("expected %s to exist: %v", userPath, err)
 	}
 
-	for _, legacyName := range []string{"AGENTS.md", "IDENTITY.md"} {
+	for _, legacyName := range []string{"AGENT.md", "IDENTITY.md"} {
 		legacyPath := filepath.Join(targetDir, legacyName)
 		if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
 			t.Fatalf("expected legacy file %s to be absent, got err=%v", legacyPath, err)
 		}
+	}
+}
+
+func TestCopyEmbeddedToTargetPreservesExistingAgentInstructions(t *testing.T) {
+	targetDir := t.TempDir()
+	agentPath := filepath.Join(targetDir, "AGENTS.md")
+	const instructions = "# Personal instructions\n\nKeep this content.\n"
+	if err := os.WriteFile(agentPath, []byte(instructions), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := copyEmbeddedToTarget(targetDir); err != nil {
+		t.Fatalf("copyEmbeddedToTarget() error = %v", err)
+	}
+	got, err := os.ReadFile(agentPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(got) != instructions {
+		t.Fatalf("AGENTS.md = %q, want existing instructions preserved", got)
+	}
+	if _, err = os.Stat(filepath.Join(targetDir, "SOUL.md")); err != nil {
+		t.Fatalf("missing template was not created: %v", err)
 	}
 }
 

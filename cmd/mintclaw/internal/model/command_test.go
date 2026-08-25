@@ -162,6 +162,7 @@ func TestSetDefaultModel_ValidModel(t *testing.T) {
 	cfg := &config.Config{
 		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{config.DefaultAgentConfig()},
 			Defaults: config.AgentDefaults{
 				ModelName: "old-model",
 			},
@@ -234,6 +235,7 @@ func TestSetDefaultModel_InvalidModel(t *testing.T) {
 	cfg := &config.Config{
 		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{config.DefaultAgentConfig()},
 			Defaults: config.AgentDefaults{
 				ModelName: "existing-model",
 			},
@@ -257,6 +259,7 @@ func TestSetDefaultModel_RejectsUnconfiguredLocalModel(t *testing.T) {
 
 	cfg := &config.Config{
 		Version: config.CurrentVersion,
+		Agents:  config.AgentsConfig{List: []config.AgentConfig{config.DefaultAgentConfig()}},
 		ModelList: []*config.ModelConfig{{
 			ModelName: "existing-model",
 			Provider:  "openai",
@@ -280,6 +283,7 @@ func TestSetDefaultModel_ModelWithoutAPIKey(t *testing.T) {
 	cfg := &config.Config{
 		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{config.DefaultAgentConfig()},
 			Defaults: config.AgentDefaults{
 				ModelName: "existing-model",
 			},
@@ -335,6 +339,7 @@ func TestModelCommandExecution_Show(t *testing.T) {
 	cfg := &config.Config{
 		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{config.DefaultAgentConfig()},
 			Defaults: config.AgentDefaults{
 				ModelName: "test-model",
 			},
@@ -367,6 +372,7 @@ func TestModelCommandExecution_Set(t *testing.T) {
 	cfg := &config.Config{
 		Version: config.CurrentVersion,
 		Agents: config.AgentsConfig{
+			List: []config.AgentConfig{config.DefaultAgentConfig()},
 			Defaults: config.AgentDefaults{
 				ModelName: "old-model",
 			},

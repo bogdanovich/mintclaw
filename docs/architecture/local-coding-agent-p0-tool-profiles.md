@@ -41,9 +41,9 @@ gateway approval behavior remain unchanged. Exec scratch is placed at
 create the source root.
 
 Coding profiles do not initialize MCP, configured hooks, or process hooks and
-reject dynamic hook and runtime-tool mounting. Repository agent frontmatter
-cannot broaden the coding catalogue or admit MCP servers. Project-local
-executable extensions therefore require a future explicit trust design.
+reject dynamic hook and runtime-tool mounting. Repository instructions cannot
+broaden the coding catalogue or admit MCP servers. Project-local executable
+extensions therefore require a future explicit trust design.
 
 After Seahorse registers its deliberate retrieval tools, each coding tool
 registry is sealed against direct registration, replacement, removal,

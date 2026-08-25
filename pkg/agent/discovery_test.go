@@ -10,7 +10,7 @@ import (
 
 func TestAgentRegistry_ListAgentsBuildsStructuredDescriptors(t *testing.T) {
 	mainWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 name: Main Frontmatter Name
 description: Structured main agent
 ---
@@ -22,7 +22,7 @@ Handle general requests.
 	defer cleanupWorkspace(t, mainWorkspace)
 
 	supportWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 name: Support Frontmatter Name
 description: Support frontmatter description
 ---
@@ -34,8 +34,19 @@ Handle support tickets carefully.
 	defer cleanupWorkspace(t, supportWorkspace)
 
 	cfg := testCfg([]config.AgentConfig{
-		{ID: "main", Default: true, Name: "Configured Main", Workspace: mainWorkspace},
-		{ID: "support", Workspace: supportWorkspace},
+		{
+			ID:          "main",
+			Default:     true,
+			Name:        "Configured Main",
+			Description: "Configured main agent",
+			Workspace:   mainWorkspace,
+		},
+		{
+			ID:          "support",
+			Name:        "Configured Support",
+			Description: "Configured support agent",
+			Workspace:   supportWorkspace,
+		},
 	})
 
 	registry := NewAgentRegistry(cfg, &mockRegistryProvider{})
@@ -48,22 +59,22 @@ Handle support tickets carefully.
 	if descriptors[0].ID != "main" {
 		t.Fatalf("expected current workspace agent first, got %q", descriptors[0].ID)
 	}
-	if descriptors[0].Name != "Main Frontmatter Name" {
-		t.Fatalf("expected frontmatter name to drive discovery, got %q", descriptors[0].Name)
+	if descriptors[0].Name != "Configured Main" {
+		t.Fatalf("expected config name to drive discovery, got %q", descriptors[0].Name)
 	}
-	if descriptors[0].Description != "Structured main agent" {
-		t.Fatalf("expected frontmatter description, got %q", descriptors[0].Description)
+	if descriptors[0].Description != "Configured main agent" {
+		t.Fatalf("expected config description, got %q", descriptors[0].Description)
 	}
 
 	support, ok := registry.GetAgentDescriptor("support")
 	if !ok || support == nil {
 		t.Fatal("expected support descriptor lookup to succeed")
 	}
-	if support.Name != "Support Frontmatter Name" {
-		t.Fatalf("expected support frontmatter name, got %q", support.Name)
+	if support.Name != "Configured Support" {
+		t.Fatalf("expected support config name, got %q", support.Name)
 	}
-	if support.Description != "Support frontmatter description" {
-		t.Fatalf("expected support frontmatter description, got %q", support.Description)
+	if support.Description != "Configured support agent" {
+		t.Fatalf("expected support config description, got %q", support.Description)
 	}
 }
 
@@ -118,7 +129,7 @@ func TestAgentRegistry_ListSpawnableAgentsRequiresSpawnTool(t *testing.T) {
 
 func TestContextBuilder_BuildMessagesIncludesAgentDiscoverySection(t *testing.T) {
 	mainWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 description: Main agent
 ---
 # Agent
@@ -129,7 +140,7 @@ Generalist.
 	defer cleanupWorkspace(t, mainWorkspace)
 
 	researchWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 name: Research Agent
 description: Research specialist
 ---
@@ -141,7 +152,7 @@ Investigate deeply.
 	defer cleanupWorkspace(t, researchWorkspace)
 
 	restrictedWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 name: Restricted Agent
 description: Restricted specialist
 ---
@@ -161,8 +172,13 @@ Handle restricted work.
 				AllowAgents: []string{"research"},
 			},
 		},
-		{ID: "research", Workspace: researchWorkspace},
-		{ID: "restricted", Workspace: restrictedWorkspace},
+		{ID: "research", Name: "Research Agent", Description: "Research specialist", Workspace: researchWorkspace},
+		{
+			ID:          "restricted",
+			Name:        "Restricted Agent",
+			Description: "Restricted specialist",
+			Workspace:   restrictedWorkspace,
+		},
 	})
 	cfg.Tools.ReadFile.Enabled = true
 	cfg.Tools.WriteFile.Enabled = true
@@ -215,7 +231,7 @@ Handle restricted work.
 
 func TestContextBuilder_BuildMessagesOmitsAgentDiscoveryWithoutSpawnPermissions(t *testing.T) {
 	mainWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 description: Main agent
 ---
 # Agent
@@ -226,7 +242,7 @@ Generalist.
 	defer cleanupWorkspace(t, mainWorkspace)
 
 	researchWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 description: Research specialist
 ---
 # Agent
@@ -277,7 +293,7 @@ Investigate deeply.
 
 func TestContextBuilder_BuildMessagesOmitsAgentDiscoveryWithoutSpawnTool(t *testing.T) {
 	mainWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 description: Main agent
 tools: [read_file]
 ---
@@ -289,7 +305,7 @@ Generalist.
 	defer cleanupWorkspace(t, mainWorkspace)
 
 	researchWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 description: Research specialist
 ---
 # Agent
@@ -304,6 +320,10 @@ Investigate deeply.
 			ID:        "main",
 			Default:   true,
 			Workspace: mainWorkspace,
+			ToolPolicy: &config.AgentCapabilityPolicy{
+				Default: config.AgentCapabilityDefaultDeny,
+				Allow:   []string{"read_file"},
+			},
 			Subagents: &config.SubagentsConfig{
 				AllowAgents: []string{"research"},
 			},
@@ -347,7 +367,7 @@ Investigate deeply.
 
 func TestContextBuilder_BuildMessagesOmitsAgentDiscoverySectionForSingleton(t *testing.T) {
 	mainWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 description: Main agent
 ---
 # Agent
@@ -392,9 +412,9 @@ Generalist.
 	}
 }
 
-func TestAgentRegistry_ListAgentsFallsBackToFirstNonEmptyAgentLine(t *testing.T) {
+func TestAgentRegistry_ListAgentsDoesNotInferDescriptionFromProse(t *testing.T) {
 	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 name: Research Agent
 ---
 
@@ -414,7 +434,7 @@ Second line.
 	if !ok || descriptor == nil {
 		t.Fatal("expected research descriptor lookup to succeed")
 	}
-	if descriptor.Description != "First useful line." {
-		t.Fatalf("descriptor.Description = %q, want %q", descriptor.Description, "First useful line.")
+	if descriptor.Name != "research" || descriptor.Description != "" {
+		t.Fatalf("descriptor = %#v, want config-derived name and empty description", descriptor)
 	}
 }

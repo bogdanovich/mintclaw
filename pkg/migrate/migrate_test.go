@@ -104,7 +104,7 @@ func TestMigrateInstancePlansOpenclawAgentDefinitionForCurrentFilename(t *testin
 	assert.Empty(t, warnings)
 	require.NotEmpty(t, actions)
 	assert.Equal(t, sourceAgent, actions[0].Source)
-	assert.Equal(t, filepath.Join(targetHome, "workspace", "AGENT.md"), actions[0].Target)
+	assert.Equal(t, filepath.Join(targetHome, "workspace", "AGENTS.md"), actions[0].Target)
 }
 
 func TestMigrateInstancePlansMappedAgentDefinitionCollision(t *testing.T) {
@@ -135,7 +135,7 @@ func TestMigrateInstancePlansMappedAgentDefinitionCollision(t *testing.T) {
 			require.NoError(t, os.MkdirAll(sourceWorkspace, 0o755))
 			require.NoError(t, os.MkdirAll(targetWorkspace, 0o755))
 			require.NoError(t, os.WriteFile(filepath.Join(sourceWorkspace, "AGENTS.md"), []byte("source"), 0o600))
-			require.NoError(t, os.WriteFile(filepath.Join(targetWorkspace, "AGENT.md"), []byte("target"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(targetWorkspace, "AGENTS.md"), []byte("target"), 0o600))
 
 			instance := NewMigrateInstance(Options{SourceHome: sourceHome})
 			actions, _, err := instance.Plan(tt.opts, sourceHome, targetHome)
@@ -392,7 +392,7 @@ func TestPrintPlan(t *testing.T) {
 		{
 			Type:        ActionCopy,
 			Source:      "/source/workspace/AGENTS.md",
-			Target:      "/target/workspace/AGENT.md",
+			Target:      "/target/workspace/AGENTS.md",
 			Description: "copy file",
 		},
 		{
@@ -420,10 +420,10 @@ func TestPrintPlan(t *testing.T) {
 
 	var output bytes.Buffer
 	printPlan(&output, actions, warnings)
-	assert.Contains(t, output.String(), "[copy]    AGENTS.md -> AGENT.md")
+	assert.Contains(t, output.String(), "[copy]    AGENTS.md")
 	assert.Equal(
 		t,
-		"workspace/AGENTS.md -> workspace/AGENT.md",
+		"workspace/AGENTS.md",
 		fileActionLabel(actions[1], "/source", "/target"),
 	)
 }

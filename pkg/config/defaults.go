@@ -14,6 +14,15 @@ import (
 
 const defaultMediaRetentionMinutes = 7 * 24 * 60
 
+func DefaultAgentConfig() AgentConfig {
+	return AgentConfig{
+		ID:          "main",
+		Default:     true,
+		Name:        "mintclaw",
+		Description: "The default general-purpose assistant for everyday conversation, problem solving, and workspace help.",
+	}
+}
+
 // DefaultConfig returns the default configuration for MintClaw.
 func DefaultConfig() *Config {
 	workspacePath := filepath.Join(GetHome(), pkg.WorkspaceName)
@@ -58,6 +67,7 @@ func DefaultConfig() *Config {
 				MaxLLMRetries:       2,
 				LLMRetryBackoffSecs: 2,
 			},
+			List: []AgentConfig{DefaultAgentConfig()},
 		},
 		Session: SessionConfig{
 			Dimensions: []string{"chat"},

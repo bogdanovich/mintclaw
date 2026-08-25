@@ -31,15 +31,15 @@ func normalizedMCPServerNameSet(
 
 func warnOnUnknownAgentToolDeclarations(
 	agentID, workspace string,
-	definition AgentContextDefinition,
+	policy *config.AgentCapabilityPolicy,
 	registry *tools.ToolRegistry,
 ) {
-	if registry == nil || frontmatterParseFailed(definition) {
+	if registry == nil {
 		return
 	}
 
-	if unknownTools := unknownAgentToolNames(registry, definition); len(unknownTools) > 0 {
-		logger.WarnCF("agent", "AGENT.md declares unregistered tool names",
+	if unknownTools := unknownAgentToolNames(registry, policy); len(unknownTools) > 0 {
+		logger.WarnCF("agent", "Agent config declares unregistered tool names",
 			map[string]any{
 				"agent_id":  agentID,
 				"workspace": workspace,
@@ -51,14 +51,14 @@ func warnOnUnknownAgentToolDeclarations(
 func warnOnUnknownAgentMCPServerDeclarations(
 	agentID, workspace string,
 	cfg *config.Config,
-	definition AgentContextDefinition,
+	policy *config.AgentCapabilityPolicy,
 ) {
-	if cfg == nil || frontmatterParseFailed(definition) {
+	if cfg == nil {
 		return
 	}
 
-	if unknownServers := unknownAgentMCPServerNames(cfg, definition); len(unknownServers) > 0 {
-		logger.WarnCF("agent", "AGENT.md declares unknown MCP server names",
+	if unknownServers := unknownAgentMCPServerNames(cfg, policy); len(unknownServers) > 0 {
+		logger.WarnCF("agent", "Agent config declares unknown MCP server names",
 			map[string]any{
 				"agent_id":    agentID,
 				"workspace":   workspace,
@@ -69,15 +69,16 @@ func warnOnUnknownAgentMCPServerDeclarations(
 
 func unknownAgentToolNames(
 	registry *tools.ToolRegistry,
-	definition AgentContextDefinition,
+	policy *config.AgentCapabilityPolicy,
 ) []string {
-	if definition.Agent == nil || definition.Agent.Frontmatter.ToolPolicy == nil {
+	if policy == nil {
 		return nil
 	}
 
 	known := registeredRuntimeToolNames(registry)
 	unknown := make(map[string]struct{})
-	for _, raw := range definition.Agent.Frontmatter.ToolPolicy.Allow {
+	patterns := append(append([]string(nil), policy.Allow...), policy.Deny...)
+	for _, raw := range patterns {
 		name := strings.ToLower(strings.TrimSpace(raw))
 		if name == "" || strings.HasPrefix(name, dynamicMCPToolPrefix) || containsGlobMeta(name) {
 			continue
@@ -106,14 +107,15 @@ func registeredRuntimeToolNames(registry *tools.ToolRegistry) map[string]struct{
 	return known
 }
 
-func unknownAgentMCPServerNames(cfg *config.Config, definition AgentContextDefinition) []string {
-	if cfg == nil || definition.Agent == nil || definition.Agent.Frontmatter.MCPPolicy == nil {
+func unknownAgentMCPServerNames(cfg *config.Config, policy *config.AgentCapabilityPolicy) []string {
+	if cfg == nil || policy == nil {
 		return nil
 	}
 
 	knownServers := normalizedMCPServerNameSet(cfg.Tools.MCP.Servers)
 	unknown := make(map[string]struct{})
-	for _, raw := range definition.Agent.Frontmatter.MCPPolicy.Allow {
+	patterns := append(append([]string(nil), policy.Allow...), policy.Deny...)
+	for _, raw := range patterns {
 		name := normalizeMCPServerName(raw)
 		if name == "" || containsGlobMeta(name) {
 			continue
@@ -140,84 +142,6 @@ func sortedKeys(values map[string]struct{}) []string {
 	return result
 }
 
-func resolveAgentToolPolicy(definition AgentContextDefinition) *PatternPolicy {
-	if frontmatterParseFailed(definition) {
-		return &PatternPolicy{Allow: []string{}, form: patternPolicyFormList}
-	}
-	if definition.Agent == nil || !frontmatterDeclaresField(definition, "tools") {
-		return nil
-	}
-	return normalizePatternPolicy(definition.Agent.Frontmatter.ToolPolicy)
-}
-
-func resolveAgentMCPServerPolicy(definition AgentContextDefinition) *PatternPolicy {
-	if frontmatterParseFailed(definition) {
-		return &PatternPolicy{Allow: []string{}, form: patternPolicyFormList}
-	}
-	if definition.Agent == nil || !frontmatterDeclaresField(definition, "mcpServers") {
-		return nil
-	}
-	return normalizePatternPolicy(definition.Agent.Frontmatter.MCPPolicy)
-}
-
-func normalizePatternPolicy(policy *PatternPolicy) *PatternPolicy {
-	if policy == nil {
-		return nil
-	}
-
-	normalized := &PatternPolicy{form: policy.form}
-	normalized.Allow = normalizePatterns(policy.Allow)
-	normalized.Deny = normalizePatterns(policy.Deny)
-
-	if policy.form == patternPolicyFormList && len(normalized.Allow) == 0 {
-		normalized.Allow = []string{}
-	}
-
-	return normalized
-}
-
-func normalizePatterns(patterns []string) []string {
-	if len(patterns) == 0 {
-		return nil
-	}
-	seen := make(map[string]struct{}, len(patterns))
-	result := make([]string, 0, len(patterns))
-	for _, raw := range patterns {
-		trimmed := strings.ToLower(strings.TrimSpace(raw))
-		if trimmed == "" {
-			continue
-		}
-		if _, ok := seen[trimmed]; ok {
-			continue
-		}
-		seen[trimmed] = struct{}{}
-		result = append(result, trimmed)
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	sort.Strings(result)
-	return result
-}
-
 func containsGlobMeta(value string) bool {
 	return strings.ContainsAny(value, "*?[")
-}
-
-func frontmatterDeclaresField(definition AgentContextDefinition, field string) bool {
-	if definition.Agent == nil || definition.Agent.Frontmatter.Fields == nil {
-		return false
-	}
-	_, ok := definition.Agent.Frontmatter.Fields[field]
-	return ok
-}
-
-func frontmatterParseFailed(definition AgentContextDefinition) bool {
-	if definition.Agent == nil {
-		return false
-	}
-	if strings.TrimSpace(definition.Agent.RawFrontmatter) == "" {
-		return false
-	}
-	return strings.TrimSpace(definition.Agent.FrontmatterErr) != ""
 }

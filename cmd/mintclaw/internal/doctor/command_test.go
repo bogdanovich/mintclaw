@@ -31,7 +31,7 @@ func TestNewDoctorCommand(t *testing.T) {
 func TestCommandReturnsExitErrorAfterRendering(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
-	config := `{"version":3,"gateway":{"host":"0.0.0.0"},"channel_list":{},"model_list":[]}`
+	config := `{"version":4,"gateway":{"host":"0.0.0.0"},"channel_list":{},"model_list":[]}`
 	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}

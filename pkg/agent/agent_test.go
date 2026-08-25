@@ -471,6 +471,7 @@ func newTestAgentLoop(
 				MaxToolIterations: 10,
 				ContextManager:    "none",
 			},
+			List: []config.AgentConfig{{ID: "main", Default: true}},
 		},
 	}
 	msgBus = bus.NewMessageBus()
@@ -2528,15 +2529,8 @@ func TestToolRegistry_ToolRegistration(t *testing.T) {
 	}
 }
 
-func TestAgentLoopRegisterToolRespectsExplicitEmptyFrontmatterTools(t *testing.T) {
+func TestAgentLoopRegisterToolRespectsDenyAllConfigPolicy(t *testing.T) {
 	tmpDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tmpDir, "AGENT.md"), []byte(`---
-tools: []
----
-# Agent
-`), 0o600); err != nil {
-		t.Fatalf("write AGENT.md: %v", err)
-	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -2546,6 +2540,13 @@ tools: []
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{
+				ID:      "main",
+				Default: true,
+				ToolPolicy: &config.AgentCapabilityPolicy{
+					Default: config.AgentCapabilityDefaultDeny,
+				},
+			}},
 		},
 	}
 
@@ -2553,21 +2554,12 @@ tools: []
 	al.RegisterTool(&mockCustomTool{})
 
 	if _, ok := al.GetRegistry().GetDefaultAgent().Tools.Get("mock_custom"); ok {
-		t.Fatal("expected runtime RegisterTool to respect tools: [] and skip mock_custom")
+		t.Fatal("expected runtime RegisterTool to respect deny-all policy and skip mock_custom")
 	}
 }
 
-func TestAgentLoopRegisterToolRespectsFrontmatterDenyPolicy(t *testing.T) {
+func TestAgentLoopRegisterToolRespectsConfigDenyPolicy(t *testing.T) {
 	tmpDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(tmpDir, "AGENT.md"), []byte(`---
-tools:
-  deny:
-    - mock_custom
----
-# Agent
-`), 0o600); err != nil {
-		t.Fatalf("write AGENT.md: %v", err)
-	}
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -2577,6 +2569,14 @@ tools:
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
+			List: []config.AgentConfig{{
+				ID:      "main",
+				Default: true,
+				ToolPolicy: &config.AgentCapabilityPolicy{
+					Default: config.AgentCapabilityDefaultAllow,
+					Deny:    []string{"mock_custom"},
+				},
+			}},
 		},
 	}
 
@@ -8073,7 +8073,7 @@ func TestAgentLoop_VisionRetryRequiresConfirmedHistoryReplacement(t *testing.T) 
 				ModelName:         "test-model",
 				MaxTokens:         4096,
 				MaxToolIterations: 3,
-			}}}
+			}, List: []config.AgentConfig{{ID: "main", Default: true}}}}
 			provider := &visionUnsupportedMediaProvider{}
 			al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 			t.Cleanup(func() { al.Close() })
@@ -8129,7 +8129,7 @@ func TestAgentLoop_VisionRetryPreservesCompleteCanonicalHistory(t *testing.T) {
 		MaxTokens:         4096,
 		MaxToolIterations: 3,
 		ContextManager:    "none",
-	}}}
+	}, List: []config.AgentConfig{{ID: "main", Default: true}}}}
 	provider := &visionUnsupportedMediaProvider{}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	t.Cleanup(func() { al.Close() })
@@ -8686,7 +8686,7 @@ func TestProcessScheduledDoesNotInheritNodeFileTools(t *testing.T) {
 		Workspace: workspace,
 		ModelName: "test-model",
 		MaxTokens: 4096,
-	}}}
+	}, List: []config.AgentConfig{{ID: "main", Default: true}}}}
 	provider := &recordingProvider{}
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 	for _, name := range []string{

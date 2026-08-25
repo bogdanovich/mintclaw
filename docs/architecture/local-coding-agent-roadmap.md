@@ -303,7 +303,7 @@ The current direct CLI is not a coding frontend:
   protocol.
 - The root process prints a large banner before ordinary commands unless a
   narrow machine-output condition suppresses it.
-- Personal `AGENT.md` loading is rooted at one configured workspace; it
+- Personal `AGENTS.md` prose loading is rooted at one configured workspace; it
   does not implement hierarchical project instruction discovery.
 - Git branch, HEAD, diff, worktree, and repository movement are not part of the
   session model.
@@ -1050,7 +1050,8 @@ Done when:
 - Work that moves from one subtree to another receives the applicable nested
   instructions without globally applying either subtree's rules.
 - Precedence, byte limits, symlinks, and cache invalidation are tested.
-- Personal `AGENT.md` and coding `AGENTS.md` semantics are not conflated.
+- Personal root `AGENTS.md` prose and hierarchical coding `AGENTS.md` scopes
+  are not conflated.
 
 #### P2.3 — Deterministic workspace snapshot
 

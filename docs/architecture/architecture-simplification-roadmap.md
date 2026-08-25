@@ -1012,6 +1012,10 @@ Scope:
 - keep personal-profile roots and coding-project instruction roots explicit in
   their respective runtime profiles so identical filenames do not imply shared
   authority; and
+- advance the sole accepted config schema to version 4 so a version 3 profile
+  cannot start after silently losing Markdown-owned identity or deny policy;
+  the coordinated profile conversion writes all current fields before the new
+  binary is started; and
 - cut the five deployed profiles over once, delete the singular `AGENT.md`
   parser and frontmatter ownership, and avoid a steady-state dual reader.
 
@@ -1028,6 +1032,8 @@ Exit criteria:
 
 - `AGENTS.md` has standard prose semantics;
 - one typed config contract owns every machine-interpreted profile field;
+- version 3 configuration is rejected rather than interpreted under version 4
+  authority rules;
 - no runtime reads personal `AGENT.md` or parses Markdown frontmatter as
   authority; and
 - deployed personal workspaces contain the current prose filename before the

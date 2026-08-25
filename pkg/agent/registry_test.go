@@ -251,21 +251,14 @@ func TestAgentInstance_FallbackExplicitEmpty(t *testing.T) {
 	}
 }
 
-func TestNewAgentLoop_AgentToolAllowlistFiltersRuntimeTools(t *testing.T) {
+func TestNewAgentLoop_AgentToolPolicyFiltersRuntimeTools(t *testing.T) {
 	mainWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Agent\nMain agent.\n",
+		"AGENTS.md": "# Agent\nMain agent.\n",
 	})
 	defer cleanupWorkspace(t, mainWorkspace)
 
 	researchWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
-tools: [read_file, write_file, web_search, web_fetch, message]
-skills: [deep-research]
----
-# Agent
-
-Research agent.
-`,
+		"AGENTS.md": "# Agent\n\nResearch agent.\n",
 	})
 	defer cleanupWorkspace(t, researchWorkspace)
 
@@ -274,6 +267,11 @@ Research agent.
 		{
 			ID:        "research",
 			Workspace: researchWorkspace,
+			Skills:    []string{"deep-research"},
+			ToolPolicy: &config.AgentCapabilityPolicy{
+				Default: config.AgentCapabilityDefaultDeny,
+				Allow:   []string{"read_file", "write_file", "web_search", "web_fetch", "message"},
+			},
 		},
 	})
 	cfg.Agents.Defaults.Workspace = mainWorkspace
@@ -304,25 +302,19 @@ Research agent.
 
 	for _, blocked := range []string{"exec", "list_dir", "spawn", "subagent"} {
 		if _, ok := research.Tools.Get(blocked); ok {
-			t.Fatalf("expected %q to be blocked by allowlist", blocked)
+			t.Fatalf("expected %q to be blocked by policy", blocked)
 		}
 	}
 }
 
-func TestNewAgentLoop_AgentToolAllowlistRequiresExactRuntimeToolNames(t *testing.T) {
+func TestNewAgentLoop_AgentToolPolicyRequiresExactRuntimeToolNames(t *testing.T) {
 	mainWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Agent\nMain agent.\n",
+		"AGENTS.md": "# Agent\nMain agent.\n",
 	})
 	defer cleanupWorkspace(t, mainWorkspace)
 
 	researchWorkspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
-tools: [web]
----
-# Agent
-
-Research agent.
-`,
+		"AGENTS.md": "# Agent\n\nResearch agent.\n",
 	})
 	defer cleanupWorkspace(t, researchWorkspace)
 
@@ -331,6 +323,10 @@ Research agent.
 		{
 			ID:        "research",
 			Workspace: researchWorkspace,
+			ToolPolicy: &config.AgentCapabilityPolicy{
+				Default: config.AgentCapabilityDefaultDeny,
+				Allow:   []string{"web"},
+			},
 		},
 	})
 	cfg.Agents.Defaults.Workspace = mainWorkspace
@@ -346,7 +342,7 @@ Research agent.
 	}
 
 	if _, ok := research.Tools.Get("web_search"); ok {
-		t.Fatal("web_search should not be registered when allowlist contains only web")
+		t.Fatal("web_search should not be registered when policy allows only web")
 	}
 	if slices.Contains(research.Tools.List(), "web_search") {
 		t.Fatalf("research tools = %v, expected web_search to be absent", research.Tools.List())

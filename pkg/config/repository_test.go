@@ -705,6 +705,26 @@ func TestRepositorySaveRejectsNonCurrentVersionWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestRepositorySaveRejectsInvalidAgentPolicyWithoutWriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	candidate := DefaultConfig()
+	candidate.Agents.List[0].ToolPolicy = &AgentCapabilityPolicy{
+		Default: AgentCapabilityDefaultDeny,
+		Allow:   []string{"["},
+	}
+
+	_, err := NewRepository(path).Save(candidate)
+	if err == nil || !strings.Contains(err.Error(), "agents.list[0].tool_policy.allow[0] is invalid") {
+		t.Fatalf("Save() error = %v, want invalid agent policy rejection", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("config file after rejected save: %v", err)
+	}
+	if _, err := os.Stat(securityPath(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("security file after rejected save: %v", err)
+	}
+}
+
 func TestLoadConfigRecoversInterruptedConfigurationTransaction(t *testing.T) {
 	t.Setenv("MINTCLAW_KEY_PASSPHRASE", "repository-test-passphrase")
 	mustSetupSSHKey(t)
@@ -1033,7 +1053,7 @@ func TestRepositoryResetRejectsUnreadableSecurityWithoutChangingConfig(t *testin
 func TestLoadConfigDoesNotPersistRuntimeEnvironmentOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	baseline := []byte(
-		`{"version":3,"agents":{"defaults":{}},"channel_list":{},"model_list":[],` +
+		`{"version":4,"agents":{"defaults":{}},"channel_list":{},"model_list":[],` +
 			`"gateway":{"log_level":"warn"},"tools":{},"heartbeat":{},"devices":{},"voice":{}}`,
 	)
 	if err := os.WriteFile(path, baseline, 0o600); err != nil {
