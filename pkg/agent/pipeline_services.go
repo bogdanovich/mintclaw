@@ -24,11 +24,38 @@ func persistFullSessionMessage(
 	sessionKey string,
 	msg *providers.Message,
 ) error {
-	if msg.CreatedAt == nil || msg.CreatedAt.IsZero() {
-		createdAt := time.Now()
-		msg.CreatedAt = &createdAt
-	}
+	assignCanonicalTimestamp(msg, time.Now())
 	return store.AppendTurnMessage(ctx, sessionKey, *msg)
+}
+
+func assignCanonicalTimestamp(msg *providers.Message, fallback time.Time) {
+	if msg.CreatedAt != nil && !msg.CreatedAt.IsZero() {
+		return
+	}
+	createdAt := fallback
+	msg.CreatedAt = &createdAt
+}
+
+func assignCanonicalPairTimestamps(live, durable *providers.Message, fallback time.Time) {
+	if durable.CreatedAt != nil && !durable.CreatedAt.IsZero() {
+		createdAt := *durable.CreatedAt
+		live.CreatedAt = &createdAt
+		return
+	}
+	if live.CreatedAt != nil && !live.CreatedAt.IsZero() {
+		createdAt := *live.CreatedAt
+		durable.CreatedAt = &createdAt
+		return
+	}
+	assignCanonicalTimestamp(live, fallback)
+	assignCanonicalTimestamp(durable, fallback)
+}
+
+func assignCanonicalBatchTimestamps(live, durable []providers.Message) {
+	now := time.Now()
+	for i := range min(len(live), len(durable)) {
+		assignCanonicalPairTimestamps(&live[i], &durable[i], now)
+	}
 }
 
 func (p *Pipeline) ingestMessage(

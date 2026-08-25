@@ -660,7 +660,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					if hookResult.Control.TaskSuspended {
 						runner.commitDelegatedTaskSuspensionBatch(toolResultMsg, durableToolResultMsg, i+1)
 					} else {
-						aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
+						aborted, err := runner.commitExecutedToolResult(&toolResultMsg, &durableToolResultMsg)
 						if err != nil {
 							return stopToolBatch(ToolLoopOutcome{})
 						}
@@ -1452,7 +1452,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		if toolResult.Control.TaskSuspended {
 			runner.commitDelegatedTaskSuspensionBatch(toolResultMsg, durableToolResultMsg, i+1)
 		} else {
-			aborted, err := runner.commitExecutedToolResult(toolResultMsg, durableToolResultMsg)
+			aborted, err := runner.commitExecutedToolResult(&toolResultMsg, &durableToolResultMsg)
 			if err != nil {
 				return stopToolBatch(ToolLoopOutcome{})
 			}
@@ -1797,25 +1797,29 @@ func (r *toolLoopRunner) appendToolMessageWithContext(
 	msg providers.Message,
 	ingest toolMessageIngestMode,
 ) error {
-	return r.appendToolMessageWithDurableContext(ctx, msg, msg, ingest)
+	durableMsg := msg
+	return r.appendToolMessageWithDurableContext(ctx, &msg, &durableMsg, ingest)
 }
 
 func (r *toolLoopRunner) appendToolMessageWithDurableContext(
 	ctx context.Context,
-	msg providers.Message,
-	durableMsg providers.Message,
+	msg *providers.Message,
+	durableMsg *providers.Message,
 	ingest toolMessageIngestMode,
 ) error {
-	r.messages = append(r.messages, msg)
+	if r.ts != nil && !r.ts.opts.NoHistory {
+		assignCanonicalPairTimestamps(msg, durableMsg, time.Now())
+	}
+	r.messages = append(r.messages, *msg)
 	if r.ts == nil || r.ts.opts.NoHistory {
 		return nil
 	}
-	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, &durableMsg)
+	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, durableMsg)
 	if writeErr == nil {
-		r.ts.recordPersistedMessagePair(msg, durableMsg)
+		r.ts.recordPersistedMessagePair(*msg, *durableMsg)
 	}
 	if ingest == toolMessagePersistAndIngest && r.p != nil {
-		r.p.ingestMessage(ctx, r.ts, durableMsg, writeErr)
+		r.p.ingestMessage(ctx, r.ts, *durableMsg, writeErr)
 	} else if writeErr != nil {
 		logger.WarnCF("agent", "Canonical tool message write failed", map[string]any{
 			"session_key": r.ts.sessionKey,
@@ -1858,8 +1862,8 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	}
 	return r.appendToolMessageWithDurableContext(
 		ctx,
-		msg,
-		durableMsg,
+		&msg,
+		&durableMsg,
 		toolMessagePersistOnly,
 	)
 }
@@ -1900,12 +1904,13 @@ func pendingFinalHandledToolResultMessages(
 	}
 	durable := live
 	durable.Content = durableToolResultContent(live.Content, protectedResult)
+	assignCanonicalPairTimestamps(&live, &durable, time.Now())
 	return live, durable
 }
 
 func pendingToolResultMatches(candidate providers.Message, pending providers.Message) bool {
-	// Canonical stores assign CreatedAt during append; the live/persisted pair
-	// intentionally retains the exact message assembled by the active turn.
+	// Timestamp is not part of the semantic identity used to find a journaled
+	// tool result for replacement.
 	candidate.CreatedAt = nil
 	pending.CreatedAt = nil
 	return messagesEquivalent(candidate, pending)
@@ -2047,6 +2052,7 @@ func (r *toolLoopRunner) commitPendingToolBatch(
 		liveMessages = append(liveMessages, skipped)
 		durableMessages = append(durableMessages, skipped)
 	}
+	assignCanonicalBatchTimestamps(liveMessages, durableMessages)
 	if r.ts != nil && !r.ts.opts.NoHistory {
 		_, err := r.ts.agent.Sessions.MutateTurnHistory(
 			ctx,
@@ -2102,6 +2108,7 @@ func (r *toolLoopRunner) commitDelegatedTaskSuspensionBatch(
 		liveMessages = append(liveMessages, skipped)
 		durableMessages = append(durableMessages, skipped)
 	}
+	assignCanonicalBatchTimestamps(liveMessages, durableMessages)
 
 	ctx := r.turnCtx
 	if ctx == nil {
@@ -2130,7 +2137,7 @@ func (r *toolLoopRunner) commitDelegatedTaskSuspensionBatch(
 		}
 	}
 	if persisted && r.p != nil && r.ts != nil && !r.ts.opts.NoHistory {
-		r.p.ingestMessage(ctx, r.ts, durableResultMsg, nil)
+		r.p.ingestMessage(ctx, r.ts, durableMessages[0], nil)
 	}
 
 	r.messages = append(r.messages, liveMessages...)
@@ -2150,8 +2157,8 @@ func (r *toolLoopRunner) commitDelegatedTaskSuspensionBatch(
 }
 
 func (r *toolLoopRunner) commitExecutedToolResult(
-	msg providers.Message,
-	durableMsg providers.Message,
+	msg *providers.Message,
+	durableMsg *providers.Message,
 ) (bool, error) {
 	ctx := r.turnCtx
 	if ctx == nil {
@@ -2168,7 +2175,7 @@ func (r *toolLoopRunner) commitExecutedToolResult(
 		return true, nil
 	}
 	if r.ts != nil && !r.ts.opts.NoHistory && r.p != nil {
-		r.p.ingestMessage(r.turnCtx, r.ts, durableMsg, nil)
+		r.p.ingestMessage(r.turnCtx, r.ts, *durableMsg, nil)
 	}
 	return r.ts.hardAbortRequested(), nil
 }
@@ -2251,6 +2258,8 @@ func (r *toolLoopRunner) replaceJournaledToolResult(
 	} else {
 		ctx = context.WithoutCancel(ctx)
 	}
+	replacementMsg.CreatedAt = expectedMsg.CreatedAt
+	replacementDurableMsg.CreatedAt = expectedDurableMsg.CreatedAt
 	if r.ts != nil && !r.ts.opts.NoHistory {
 		changed, err := r.ts.agent.Sessions.MutateTurnHistory(
 			ctx,
