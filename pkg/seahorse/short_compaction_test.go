@@ -307,6 +307,63 @@ func TestCompactCondensed(t *testing.T) {
 	}
 }
 
+func TestCompactCondensedOmitsUnknownTimeMetadata(t *testing.T) {
+	ce, store, conversationID := newTestCompactionEngine(t)
+	ctx := t.Context()
+	var prompt string
+	ce.complete = func(_ context.Context, input string, _ CompleteOptions) (string, error) {
+		prompt = input
+		return "Condensed summary without partial time metadata.", nil
+	}
+
+	for i := 0; i < CondensedMinFanout; i++ {
+		createdAt := time.Date(2026, time.August, 20+i, 12, 0, 0, 0, time.UTC)
+		input := CreateSummaryInput{
+			ConversationID: conversationID,
+			Kind:           SummaryKindLeaf,
+			Depth:          0,
+			Content:        fmt.Sprintf("leaf summary %d", i),
+			TokenCount:     500,
+			EarliestAt:     &createdAt,
+			LatestAt:       &createdAt,
+		}
+		if i == 1 {
+			input.EarliestAt = nil
+			input.LatestAt = nil
+			input.Content = "leaf summary with unknown time"
+		}
+		summary, err := store.CreateSummary(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateSummary %d: %v", i, err)
+		}
+		if err := store.AppendContextSummary(ctx, conversationID, summary.SummaryID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	summaryID, err := ce.compactCondensed(ctx, conversationID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaryID == nil {
+		t.Fatal("expected condensed summary")
+	}
+	if strings.Contains(prompt, "[ - ]") {
+		t.Fatalf("condensation prompt contains empty time header: %q", prompt)
+	}
+	if !strings.Contains(prompt, "leaf summary with unknown time") {
+		t.Fatalf("condensation prompt omitted unknown-time content: %q", prompt)
+	}
+
+	summary, err := store.GetSummary(ctx, *summaryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.EarliestAt != nil || summary.LatestAt != nil {
+		t.Fatalf("condensed bounds = %v..%v, want unknown", summary.EarliestAt, summary.LatestAt)
+	}
+}
+
 func TestCompactCondensedDoesNotOrphanSummaryWhenCandidatesRemovedConcurrently(t *testing.T) {
 	// Reproduce orphan bug: candidates found by selectOldestChunkAtDepth are removed
 	// from context_items between candidate selection and ordinal range scan.
