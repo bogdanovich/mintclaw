@@ -281,15 +281,6 @@ type OpenClawSkills struct {
 	Load    json.RawMessage            `json:"load"`
 }
 
-type OpenClawProviderConfig struct {
-	APIKey  string `json:"api_key"`
-	BaseURL string `json:"base_url"`
-}
-
-func (c *OpenClawConfig) GetEnabled() bool {
-	return true
-}
-
 func LoadOpenClawConfig(path string) (*OpenClawConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -302,39 +293,6 @@ func LoadOpenClawConfig(path string) (*OpenClawConfig, error) {
 	}
 
 	return &config, nil
-}
-
-func LoadOpenClawConfigFromDir(dir string) (*OpenClawConfig, error) {
-	candidates := []string{
-		filepath.Join(dir, "openclaw.json"),
-		filepath.Join(dir, "config.json"),
-	}
-
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return LoadOpenClawConfig(p)
-		}
-	}
-
-	return nil, fmt.Errorf("no config file found in %s", dir)
-}
-
-func GetProviderConfig(models *OpenClawModels) map[string]OpenClawProviderConfig {
-	result := make(map[string]OpenClawProviderConfig)
-	if models == nil || models.Providers == nil {
-		return result
-	}
-
-	for name, raw := range models.Providers {
-		var prov OpenClawProviderConfig
-		if err := json.Unmarshal(raw, &prov); err != nil {
-			continue
-		}
-		mappedName := mapProvider(name)
-		result[mappedName] = prov
-	}
-
-	return result
 }
 
 func GetProviderConfigFromDir(dir string) map[string]ProviderConfig {
@@ -365,62 +323,6 @@ func GetProviderConfigFromDir(dir string) map[string]ProviderConfig {
 	return result
 }
 
-func (c *OpenClawConfig) IsChannelEnabled(name string) bool {
-	switch name {
-	case "telegram":
-		return c.Channels.Telegram == nil || c.Channels.Telegram.Enabled == nil || *c.Channels.Telegram.Enabled
-	case "discord":
-		return c.Channels.Discord == nil || c.Channels.Discord.Enabled == nil || *c.Channels.Discord.Enabled
-	case "slack":
-		return c.Channels.Slack == nil || c.Channels.Slack.Enabled == nil || *c.Channels.Slack.Enabled
-	case "matrix":
-		return c.Channels.Matrix == nil || c.Channels.Matrix.Enabled == nil || *c.Channels.Matrix.Enabled
-	case "whatsapp":
-		return c.Channels.WhatsApp == nil || c.Channels.WhatsApp.Enabled == nil || *c.Channels.WhatsApp.Enabled
-	case "feishu":
-		return c.Channels.Feishu == nil || c.Channels.Feishu.Enabled == nil || *c.Channels.Feishu.Enabled
-	default:
-		return false
-	}
-}
-
-func GetChannelAllowFrom(ch any) []string {
-	switch c := ch.(type) {
-	case *OpenClawTelegramConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawDiscordConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawSlackConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawMatrixConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawWhatsAppConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	case *OpenClawFeishuConfig:
-		if c == nil {
-			return nil
-		}
-		return c.AllowFrom
-	default:
-		return nil
-	}
-}
-
 func (c *OpenClawConfig) GetDefaultModel() (provider, model string) {
 	if c.Agents == nil || c.Agents.Defaults == nil || c.Agents.Defaults.Model == nil {
 		return "anthropic", "claude-sonnet-4-20250514"
@@ -444,13 +346,6 @@ func (c *OpenClawConfig) GetDefaultWorkspace() string {
 		return ""
 	}
 	return rewriteWorkspacePath(*c.Agents.Defaults.Workspace)
-}
-
-func (c *OpenClawConfig) GetAgents() []OpenClawAgentEntry {
-	if c.Agents == nil {
-		return nil
-	}
-	return c.Agents.List
 }
 
 func (c *OpenClawConfig) HasSkills() bool {
