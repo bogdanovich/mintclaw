@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -170,6 +171,34 @@ func TestResolveActiveModelConfig_UsesExactDuplicateEntryOrdinal(t *testing.T) {
 
 	if got == nil || !got.Streaming.Enabled {
 		t.Fatalf("resolveActiveModelConfig() = %+v, want exact second entry", got)
+	}
+}
+
+func TestProviderForFallbackCandidate_FailsClosedForMissingExactProvider(t *testing.T) {
+	activeProvider := &mockProvider{}
+	candidate := providers.FallbackCandidate{
+		Provider: "openai", Model: "fallback-model", ConfigOrdinal: 2,
+	}
+
+	got, err := providerForFallbackCandidate(nil, activeProvider, candidate)
+	if err == nil {
+		t.Fatalf("providerForFallbackCandidate() = %#v, want exact-provider error", got)
+	}
+	if !strings.Contains(err.Error(), "model-list row 2") {
+		t.Fatalf("providerForFallbackCandidate() error = %q, want exact row", err)
+	}
+}
+
+func TestProviderForFallbackCandidate_LegacyCandidateUsesActiveProvider(t *testing.T) {
+	activeProvider := &mockProvider{}
+	candidate := providers.FallbackCandidate{Provider: "openai", Model: "fallback-model"}
+
+	got, err := providerForFallbackCandidate(nil, activeProvider, candidate)
+	if err != nil {
+		t.Fatalf("providerForFallbackCandidate() error = %v", err)
+	}
+	if got != activeProvider {
+		t.Fatalf("providerForFallbackCandidate() = %#v, want active provider", got)
 	}
 }
 

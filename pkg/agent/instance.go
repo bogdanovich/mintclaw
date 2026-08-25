@@ -350,6 +350,9 @@ func newAgentInstance(
 		identity.agentID,
 		providerOwnership,
 	)
+	if provider != nil && len(routingCfg.candidates) > 0 {
+		routingCfg.candidateProviders[candidateProviderKey(routingCfg.candidates[0])] = provider
+	}
 
 	instance := &AgentInstance{
 		ID:                        identity.agentID,

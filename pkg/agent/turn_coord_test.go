@@ -460,6 +460,10 @@ func newTurnCoordFallbackTestLoop(
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
+	if len(agent.Candidates) < 2 {
+		t.Fatalf("candidates = %+v, want primary and fallback", agent.Candidates)
+	}
+	agent.CandidateProviders[candidateProviderKey(agent.Candidates[1])] = provider
 
 	return al, agent, func() {
 		al.Close()
