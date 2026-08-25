@@ -1908,7 +1908,8 @@ func (host *wssBrowserHost) PrepareObservationOutput(
 	if err != nil || len(payload) > nodes.BrowserSnapshotPayloadLimit(host.limits[result.SessionID]) {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
 	}
-	if len(payload) <= protocol.MaxTransferChunkBytes {
+	if len(payload) <= protocol.MaxTransferChunkBytes &&
+		max(len(payload), request.InlineResultBytes) <= host.limits[result.SessionID].ToolResultBytes {
 		return result, nil
 	}
 	digest := sha256.Sum256(payload)

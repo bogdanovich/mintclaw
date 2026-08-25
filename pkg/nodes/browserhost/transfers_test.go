@@ -266,6 +266,45 @@ func TestBrowserHostStreamsLargeObservationAndDiscardsCommittedSnapshot(t *testi
 	}
 }
 
+func TestBrowserHostStagesSingleChunkObservationAboveNegotiatedResultBudget(t *testing.T) {
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{{
+			URL: "https://example.com/", Origin: "https://example.com",
+			Snapshot: strings.Repeat("x", 160*1024),
+		}},
+		navigationIdentities: []string{"navigation_1", "navigation_1"},
+	}})
+	open := browserHostOpenFixture()
+	open.Limits.ToolResultBytes = 150 * 1024
+	if _, err := host.Open(t.Context(), open); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inline, err := json.Marshal(observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamed, err := host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
+		SessionID: observed.SessionID, RoutedSessionID: "routed_session_1",
+		InvocationID: "browser_observe_single_chunk_1", WorkspaceID: "workspace_1",
+		BrowserTarget: "companion", AgentID: "browser", ActorID: "telegram:owner",
+		InlineResultBytes: len(inline),
+	}, observed)
+	if err != nil || streamed.Output == nil || streamed.Output.Size >= uint64(protocol.MaxTransferChunkBytes) ||
+		streamed.Output.Size <= uint64(open.Limits.ToolResultBytes) {
+		t.Fatalf("PrepareObservationOutput() = %#v, %v", streamed, err)
+	}
+	payload := downloadBrowserOutput(t, host, *streamed.Output, nil)
+	decoded, err := nodes.DecodeBrowserSnapshotPayload(payload, open.Limits)
+	if err != nil || decoded.Snapshot != observed.Snapshot {
+		t.Fatalf("single-chunk streamed snapshot = %#v, %v", decoded, err)
+	}
+}
+
 func TestBrowserOutputTransferCancelWakesStreamAndRetainsOutput(t *testing.T) {
 	content := bytes.Repeat([]byte("bounded-output"), 30000)
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{

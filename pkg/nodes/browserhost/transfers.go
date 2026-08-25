@@ -115,9 +115,6 @@ func (host *BrowserHost) PrepareObservationOutput(
 	if err != nil {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
 	}
-	if len(payload) <= protocol.MaxTransferChunkBytes {
-		return result, nil
-	}
 	host.mu.Lock()
 	session := host.sessions[request.SessionID]
 	host.mu.Unlock()
@@ -141,6 +138,10 @@ func (host *BrowserHost) PrepareObservationOutput(
 	session.mu.Unlock()
 	if !authorized {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	if len(payload) <= protocol.MaxTransferChunkBytes &&
+		max(len(payload), request.InlineResultBytes) <= limits.ToolResultBytes {
+		return result, nil
 	}
 	if _, err = nodes.DecodeBrowserSnapshotPayload(payload, limits); err != nil {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied

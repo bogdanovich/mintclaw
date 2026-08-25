@@ -140,7 +140,9 @@ func (handler *browserCommandHandler) execute(
 		if err != nil {
 			return result, browserCommandFailure(err)
 		}
-		result, err = handler.prepareObservationOutput(invocation, input.WorkspaceID, input.BrowserTarget, result)
+		result, err = handler.prepareObservationOutput(
+			invocation, input.WorkspaceID, input.BrowserTarget, result, result,
+		)
 		if err != nil {
 			// The read already advanced the host generation. Persist a protected
 			// success so the gateway can advance and issue a fresh read identity.
@@ -204,7 +206,7 @@ func (handler *browserCommandHandler) execute(
 		}
 		if err == nil && result.Observation != nil {
 			observation, stageErr := handler.prepareObservationOutput(
-				invocation, input.WorkspaceID, input.BrowserTarget, *result.Observation,
+				invocation, input.WorkspaceID, input.BrowserTarget, *result.Observation, result,
 			)
 			if stageErr != nil {
 				// Selection already completed. Preserve that known mutation and let
@@ -331,8 +333,13 @@ func (handler *browserCommandHandler) executeAct(
 		}
 		return nil, browserCommandFailure(err)
 	}
+	inlineResult := nodes.BrowserActResult{
+		ActionInvocationID: input.ActionInvocationID,
+		State:              "succeeded",
+		Observation:        &observation,
+	}
 	observation, err = handler.prepareObservationOutput(
-		invocation, input.WorkspaceID, input.BrowserTarget, observation,
+		invocation, input.WorkspaceID, input.BrowserTarget, observation, inlineResult,
 	)
 	if err != nil {
 		// The accepted action is authoritative even if its fresh projection
@@ -369,15 +376,21 @@ func (handler *browserCommandHandler) prepareObservationOutput(
 	workspaceID string,
 	browserTarget string,
 	observation nodes.BrowserObservationResult,
+	inlineResult any,
 ) (nodes.BrowserObservationResult, error) {
 	host, ok := handler.host.(browserObservationOutputHost)
 	if !ok {
 		return observation, nil
 	}
+	encoded, err := json.Marshal(inlineResult)
+	if err != nil {
+		return nodes.BrowserObservationResult{}, err
+	}
 	return host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
 		SessionID: observation.SessionID, RoutedSessionID: invocation.Plan.SessionID,
 		InvocationID: invocation.Plan.InvocationID, WorkspaceID: workspaceID,
 		BrowserTarget: browserTarget, AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+		InlineResultBytes: len(encoded),
 	}, observation)
 }
 

@@ -17,7 +17,6 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
-	"github.com/bogdanovich/mintclaw/pkg/nodes/internal/jsonstrict"
 )
 
 var (
@@ -975,53 +974,157 @@ func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSna
 	if !utf8.Valid(data) {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
 	}
-	if _, err := jsonstrict.Decode(data); err != nil {
-		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
-	}
-	var value struct {
-		Snapshot *string `json:"snapshot"`
-		Elements *[]struct {
-			Ref  *string `json:"ref"`
-			Role *string `json:"role"`
-			Name *string `json:"name"`
-		} `json:"elements"`
-	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
-		return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
+	payload, err := decodeBrowserSnapshotPayloadObject(decoder, limits)
+	if err != nil {
+		return BrowserSnapshotPayload{}, err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+	if _, err = decoder.Token(); !errors.Is(err, io.EOF) {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: trailing browser snapshot payload", ErrInvalidInvocation)
 	}
-	if value.Snapshot == nil || value.Elements == nil {
+	return payload, nil
+}
+
+func decodeBrowserSnapshotPayloadObject(
+	decoder *json.Decoder,
+	limits BrowserLimits,
+) (BrowserSnapshotPayload, error) {
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+	}
+	var payload BrowserSnapshotPayload
+	seenSnapshot, seenElements := false, false
+	for decoder.More() {
+		field, err := decoder.Token()
+		name, ok := field.(string)
+		if err != nil || !ok {
+			return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+		}
+		switch name {
+		case "snapshot":
+			value, valueErr := decodeBrowserSnapshotString(decoder)
+			if seenSnapshot || valueErr != nil {
+				return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+			}
+			payload.Snapshot = value
+			seenSnapshot = true
+			if !utf8.ValidString(payload.Snapshot) || len(payload.Snapshot) > limits.SnapshotBytes {
+				return BrowserSnapshotPayload{}, browserSnapshotPayloadExceedsBounds()
+			}
+		case "elements":
+			if seenElements {
+				return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+			}
+			seenElements = true
+			payload.Elements, err = decodeBrowserSnapshotElements(decoder, limits.SnapshotRefs)
+			if err != nil {
+				return BrowserSnapshotPayload{}, err
+			}
+		default:
+			return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+		}
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return BrowserSnapshotPayload{}, malformedBrowserSnapshotPayload()
+	}
+	if !seenSnapshot || !seenElements {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: incomplete browser snapshot payload", ErrInvalidInvocation)
 	}
-	if !utf8.ValidString(*value.Snapshot) || len(*value.Snapshot) > limits.SnapshotBytes ||
-		len(*value.Elements) > limits.SnapshotRefs {
-		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
-	}
-	payload := BrowserSnapshotPayload{
-		Snapshot: *value.Snapshot,
-		Elements: make([]BrowserElement, 0, len(*value.Elements)),
-	}
-	seen := make(map[string]struct{}, len(*value.Elements))
-	for _, value := range *value.Elements {
-		if value.Ref == nil || value.Role == nil || value.Name == nil {
-			return BrowserSnapshotPayload{}, fmt.Errorf("%w: incomplete browser snapshot element", ErrInvalidInvocation)
-		}
-		element := BrowserElement{Ref: *value.Ref, Role: *value.Role, Name: *value.Name}
-		if !validInvocationIdentifier(element.Ref) || !utf8.ValidString(element.Role) ||
-			!utf8.ValidString(element.Name) || len(element.Role) > 128 || len(element.Name) > 4096 {
-			return BrowserSnapshotPayload{}, fmt.Errorf("%w: malformed browser snapshot element", ErrInvalidInvocation)
-		}
-		if _, duplicate := seen[element.Ref]; duplicate {
-			return BrowserSnapshotPayload{}, fmt.Errorf("%w: duplicate browser snapshot element", ErrInvalidInvocation)
-		}
-		seen[element.Ref] = struct{}{}
-		payload.Elements = append(payload.Elements, element)
-	}
 	return payload, nil
+}
+
+func decodeBrowserSnapshotElements(decoder *json.Decoder, maximum int) ([]BrowserElement, error) {
+	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
+		return nil, malformedBrowserSnapshotPayload()
+	}
+	elements := make([]BrowserElement, 0, min(max(maximum, 0), MaxBrowserSnapshotRefs))
+	seenRefs := make(map[string]struct{}, cap(elements))
+	for decoder.More() {
+		if len(elements) >= maximum {
+			return nil, browserSnapshotPayloadExceedsBounds()
+		}
+		element, err := decodeBrowserSnapshotElement(decoder)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := seenRefs[element.Ref]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate browser snapshot element", ErrInvalidInvocation)
+		}
+		seenRefs[element.Ref] = struct{}{}
+		elements = append(elements, element)
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim(']') {
+		return nil, malformedBrowserSnapshotPayload()
+	}
+	return elements, nil
+}
+
+func decodeBrowserSnapshotElement(decoder *json.Decoder) (BrowserElement, error) {
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return BrowserElement{}, malformedBrowserSnapshotPayload()
+	}
+	var element BrowserElement
+	seenRef, seenRole, seenName := false, false, false
+	for decoder.More() {
+		field, err := decoder.Token()
+		name, ok := field.(string)
+		if err != nil || !ok {
+			return BrowserElement{}, malformedBrowserSnapshotPayload()
+		}
+		switch name {
+		case "ref":
+			value, valueErr := decodeBrowserSnapshotString(decoder)
+			if seenRef || valueErr != nil {
+				return BrowserElement{}, malformedBrowserSnapshotPayload()
+			}
+			element.Ref = value
+			seenRef = true
+		case "role":
+			value, valueErr := decodeBrowserSnapshotString(decoder)
+			if seenRole || valueErr != nil {
+				return BrowserElement{}, malformedBrowserSnapshotPayload()
+			}
+			element.Role = value
+			seenRole = true
+		case "name":
+			value, valueErr := decodeBrowserSnapshotString(decoder)
+			if seenName || valueErr != nil {
+				return BrowserElement{}, malformedBrowserSnapshotPayload()
+			}
+			element.Name = value
+			seenName = true
+		default:
+			return BrowserElement{}, malformedBrowserSnapshotPayload()
+		}
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return BrowserElement{}, malformedBrowserSnapshotPayload()
+	}
+	if !seenRef || !seenRole || !seenName {
+		return BrowserElement{}, fmt.Errorf("%w: incomplete browser snapshot element", ErrInvalidInvocation)
+	}
+	if !validInvocationIdentifier(element.Ref) || !utf8.ValidString(element.Role) ||
+		!utf8.ValidString(element.Name) || len(element.Role) > 128 || len(element.Name) > 4096 {
+		return BrowserElement{}, fmt.Errorf("%w: malformed browser snapshot element", ErrInvalidInvocation)
+	}
+	return element, nil
+}
+
+func decodeBrowserSnapshotString(decoder *json.Decoder) (string, error) {
+	token, err := decoder.Token()
+	value, ok := token.(string)
+	if err != nil || !ok {
+		return "", malformedBrowserSnapshotPayload()
+	}
+	return value, nil
+}
+
+func malformedBrowserSnapshotPayload() error {
+	return fmt.Errorf("%w: malformed browser snapshot payload", ErrInvalidInvocation)
+}
+
+func browserSnapshotPayloadExceedsBounds() error {
+	return fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
 }
 
 // BrowserSnapshotPayloadLimit bounds only the private authenticated transfer
@@ -1184,13 +1287,14 @@ type BrowserHostObserveRequest struct {
 }
 
 type BrowserHostObservationOutputRequest struct {
-	SessionID       string
-	RoutedSessionID string
-	InvocationID    string
-	WorkspaceID     string
-	BrowserTarget   string
-	AgentID         string
-	ActorID         string
+	SessionID         string
+	RoutedSessionID   string
+	InvocationID      string
+	WorkspaceID       string
+	BrowserTarget     string
+	AgentID           string
+	ActorID           string
+	InlineResultBytes int
 }
 
 type BrowserHostDiagnosticsRequest struct {

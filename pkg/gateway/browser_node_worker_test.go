@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
 	nodews "github.com/bogdanovich/mintclaw/pkg/nodes/ws"
 )
 
@@ -1210,6 +1211,18 @@ func TestGatewayBrowserCatalogRejectsMismatchedCommandProfile(t *testing.T) {
 	})
 	if !errors.Is(err, nodes.ErrInvalidCapability) {
 		t.Fatalf("mutate mismatched profile catalog error = %v", err)
+	}
+}
+
+func TestGatewayAcceptsSingleChunkSnapshotAboveNegotiatedResultBudget(t *testing.T) {
+	limits := config.BrowserLimitsConfig{}.Effective()
+	limits.ToolResultBytes = 150 * 1024
+	size := uint64(160 * 1024)
+	if size >= uint64(protocol.MaxTransferChunkBytes) || size <= uint64(limits.ToolResultBytes) {
+		t.Fatal("invalid single-chunk snapshot fixture")
+	}
+	if !validBrowserSnapshotOutputSize(size, limits) {
+		t.Fatal("gateway rejected a bounded single-chunk snapshot descriptor")
 	}
 }
 

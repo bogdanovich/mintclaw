@@ -1342,6 +1342,29 @@ func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
 	}
 }
 
+func TestDecodeBrowserSnapshotPayloadRejectsElement501BeforeMaterializingIt(t *testing.T) {
+	limits := BrowserLimits{}.Effective()
+	var payload strings.Builder
+	payload.WriteString(`{"snapshot":"page","elements":[`)
+	for index := 0; index < limits.SnapshotRefs; index++ {
+		if index > 0 {
+			payload.WriteByte(',')
+		}
+		fmt.Fprintf(
+			&payload,
+			`{"ref":"ref_%d","role":"button","name":"Save"}`,
+			index,
+		)
+	}
+	// The 501st value is intentionally not an element object. The decoder must
+	// reject the count before attempting to decode or allocate this value.
+	payload.WriteString(`,"not-an-element"]}`)
+	_, err := DecodeBrowserSnapshotPayload([]byte(payload.String()), limits)
+	if err == nil || !strings.Contains(err.Error(), "exceeds bounds") {
+		t.Fatalf("DecodeBrowserSnapshotPayload() error = %v", err)
+	}
+}
+
 func TestDecodeBrowserSnapshotPayloadPreservesPresentEmptyElementStrings(t *testing.T) {
 	decoded, err := DecodeBrowserSnapshotPayload(
 		[]byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":"","name":""}]}`),

@@ -1284,8 +1284,7 @@ func (worker *nodeBrowserWorker) receiveBrowserSnapshot(
 		output.RouteID != "" || output.FrameID != "" || output.ContextID != "" ||
 		output.SnapshotID != "" || output.CaptureTarget != "" || output.ElementRef != "" ||
 		output.Filename != "browser-snapshot.json" || output.ContentType != "application/json" ||
-		output.Size <= uint64(protocol.MaxTransferChunkBytes) ||
-		output.Size > uint64(nodes.BrowserSnapshotPayloadLimit(browserNodeLimits(worker.limits))) ||
+		!validBrowserSnapshotOutputSize(output.Size, worker.limits) ||
 		output.ExpiresAt <= time.Now().Unix() ||
 		result.Snapshot != "" || len(result.Elements) != 0 {
 		return nodes.BrowserObservationResult{}, false, browser.ErrDriverIncompatible
@@ -1384,6 +1383,11 @@ func (worker *nodeBrowserWorker) receiveBrowserSnapshot(
 			return nodes.BrowserObservationResult{}, true, browser.ErrDriverIncompatible
 		}
 	}
+}
+
+func validBrowserSnapshotOutputSize(size uint64, limits config.BrowserLimitsConfig) bool {
+	return size > 0 &&
+		size <= uint64(nodes.BrowserSnapshotPayloadLimit(browserNodeLimits(limits)))
 }
 
 func (worker *nodeBrowserWorker) advanceRemoteSnapshotGeneration(generation uint64) error {
