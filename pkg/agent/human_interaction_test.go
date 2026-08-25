@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -4700,6 +4703,8 @@ func TestApprovedToolHardAbortCleansWhenJournalFails(t *testing.T) {
 
 type journalReceiptApprovalTool struct {
 	executions int
+	endpoint   string
+	nonce      string
 }
 
 func (*journalReceiptApprovalTool) Name() string { return "browser_act" }
@@ -4711,10 +4716,30 @@ func (*journalReceiptApprovalTool) Parameters() map[string]any {
 }
 
 func (tool *journalReceiptApprovalTool) Execute(
-	context.Context,
-	map[string]any,
+	ctx context.Context,
+	_ map[string]any,
 ) *toolshared.ToolResult {
 	tool.executions++
+	if tool.endpoint != "" {
+		request, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodPost,
+			tool.endpoint,
+			strings.NewReader("nonce="+tool.nonce),
+		)
+		if err != nil {
+			return toolshared.ErrorResult(err.Error())
+		}
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			return toolshared.ErrorResult(err.Error())
+		}
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode != http.StatusOK || response.Header.Get("X-Smoke-Receipt") != tool.nonce {
+			return toolshared.ErrorResult("external commit postcondition was not verified")
+		}
+	}
 	return toolshared.NewToolResult(`{"invocation_id":"inv-journal","state":"succeeded"}`).
 		WithWriteAudit(toolshared.WriteAuditEntry{
 			Kind: "external_action", Target: "https://example.com", Action: "click",
@@ -4724,6 +4749,19 @@ func (tool *journalReceiptApprovalTool) Execute(
 }
 
 func TestApprovedExternalReceiptSurvivesToolResultJournalFailure(t *testing.T) {
+	const nonce = "mintclaw-approval-smoke"
+	var submissions atomic.Int64
+	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.FormValue("nonce") != nonce {
+			http.Error(writer, "invalid smoke submission", http.StatusBadRequest)
+			return
+		}
+		submissions.Add(1)
+		writer.Header().Set("X-Smoke-Receipt", nonce)
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer fixture.Close()
+
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{
 			ID: "call-journal-receipt", Name: "browser_act",
@@ -4734,7 +4772,7 @@ func TestApprovedExternalReceiptSurvivesToolResultJournalFailure(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
 	installInteractionChannelManager(t, al, newInteractionChannelManager())
-	tool := &journalReceiptApprovalTool{}
+	tool := &journalReceiptApprovalTool{endpoint: fixture.URL, nonce: nonce}
 	agent.Tools.Register(tool)
 	if err := al.MountHook(NamedHook("approved-journal-receipt", &durableApprovalHook{
 		actionSummary: "Commit the external action",
@@ -4755,6 +4793,9 @@ func TestApprovedExternalReceiptSurvivesToolResultJournalFailure(t *testing.T) {
 	}); err != nil || turnStatus != TurnEndStatusSuspended {
 		t.Fatalf("initial approval turn = (%q, %v)", turnStatus, err)
 	}
+	if submissions.Load() != 0 {
+		t.Fatalf("external action ran before approval: submissions=%d", submissions.Load())
+	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, ok := activeInteractionForSession(registry, "session-journal-receipt")
 	if !ok {
@@ -4774,9 +4815,14 @@ func TestApprovedExternalReceiptSurvivesToolResultJournalFailure(t *testing.T) {
 		t.Fatalf("first resume error = %v, want %v", err, journalErr)
 	}
 	current, _ := registry.Get(record.ID)
-	if tool.executions != 1 || len(current.OutcomeReceipts) != 1 ||
+	if tool.executions != 1 || submissions.Load() != 1 || len(current.OutcomeReceipts) != 1 ||
 		current.OutcomeReceipts[0].ID != "inv-journal" {
-		t.Fatalf("post-journal interaction = %#v, executions=%d", current, tool.executions)
+		t.Fatalf(
+			"post-journal interaction = %#v, executions=%d, submissions=%d",
+			current,
+			tool.executions,
+			submissions.Load(),
+		)
 	}
 
 	agent.Sessions = baseStore
@@ -4787,8 +4833,14 @@ func TestApprovedExternalReceiptSurvivesToolResultJournalFailure(t *testing.T) {
 	}
 	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(current))
 	_, resultIndex := interactionToolPairIndexes(history, current.Origin.ToolCallID)
-	if resultIndex < 0 || !strings.Contains(history[resultIndex].Content, "inv-journal") || tool.executions != 1 {
-		t.Fatalf("recovered history = %#v, executions=%d", history, tool.executions)
+	if resultIndex < 0 || !strings.Contains(history[resultIndex].Content, "inv-journal") ||
+		tool.executions != 1 || submissions.Load() != 1 {
+		t.Fatalf(
+			"recovered history = %#v, executions=%d, submissions=%d",
+			history,
+			tool.executions,
+			submissions.Load(),
+		)
 	}
 }
 

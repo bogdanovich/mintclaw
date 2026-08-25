@@ -110,7 +110,9 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 		"are not external-action receipts. " +
 		"For each external_action, copy one or more " +
 		"invocation_id values from successful browser_act results into receipt_ids. Do not claim an external action " +
-		"without its runtime receipt. For partial or blocked outcomes, include one concise, specific explanation of " +
+		"without its runtime receipt. If the commit ran but later verification cannot confirm the requested external " +
+		"effect, keep the external_action item missing and explain the unverified postcondition instead of claiming it " +
+		"completed. For partial or blocked outcomes, include one concise, specific explanation of " +
 		"the first blocker; the runtime bounds it and labels it as producer-reported. For succeeded outcomes, include " +
 		"one concise user-facing result with any requested public links or IDs in result. The runtime removes this block " +
 		"and preserves result as the terminal deliverable."
@@ -223,6 +225,8 @@ func validateObjectiveOutcome(
 	}
 	partitioned := make(map[string]struct{}, len(checklist))
 	consumedReceipts := make(map[string]struct{})
+	missingExternalObjectives := 0
+	partitionValid := true
 	missingSeen := make(map[string]struct{})
 	appendMissing := func(item string) {
 		item = boundedObjectiveText(item)
@@ -235,32 +239,58 @@ func validateObjectiveOutcome(
 		missingSeen[item] = struct{}{}
 		outcome.MissingItems = append(outcome.MissingItems, item)
 	}
+	appendPriorityMissing := func(item string) {
+		item = boundedObjectiveText(item)
+		if item == "" {
+			return
+		}
+		if _, exists := missingSeen[item]; exists {
+			return
+		}
+		if len(outcome.MissingItems) < objectiveOutcomeLimit {
+			missingSeen[item] = struct{}{}
+			outcome.MissingItems = append(outcome.MissingItems, item)
+			return
+		}
+		replaced := outcome.MissingItems[len(outcome.MissingItems)-1]
+		delete(missingSeen, replaced)
+		missingSeen[item] = struct{}{}
+		outcome.MissingItems[len(outcome.MissingItems)-1] = item
+	}
 	for _, id := range reported.MissingItems {
 		id = strings.TrimSpace(id)
 		item, found := expected[id]
 		if !found {
+			partitionValid = false
 			appendMissing("objective outcome contained an unknown checklist ID")
 			continue
 		}
 		if _, duplicate := partitioned[id]; duplicate {
+			partitionValid = false
 			appendMissing(item.Item + " (objective ID was reported more than once)")
 			continue
 		}
 		partitioned[id] = struct{}{}
+		if item.Kind == "external_action" {
+			missingExternalObjectives++
+		}
 		appendMissing(item.Item)
 	}
 	for _, reportedItem := range reported.CompletedItems {
 		if len(outcome.CompletedItems) >= objectiveOutcomeLimit {
+			partitionValid = false
 			appendMissing("additional completed items were omitted by the runtime limit")
 			break
 		}
 		id := strings.TrimSpace(reportedItem.ObjectiveID)
 		spec, found := expected[id]
 		if !found {
+			partitionValid = false
 			appendMissing("objective outcome contained an unknown checklist ID")
 			continue
 		}
 		if _, duplicate := partitioned[id]; duplicate {
+			partitionValid = false
 			appendMissing(spec.Item + " (objective ID was reported more than once)")
 			continue
 		}
@@ -275,6 +305,7 @@ func validateObjectiveOutcome(
 				}
 			}
 			if unexpectedExternalAction {
+				partitionValid = false
 				appendMissing(item.Item + " (read-only result included a verified external-action receipt)")
 				continue
 			}
@@ -283,6 +314,7 @@ func validateObjectiveOutcome(
 		}
 		valid := true
 		seenReceipts := make(map[string]struct{})
+		stagedReceiptIDs := make([]string, 0, len(reportedItem.ReceiptIDs))
 		for _, receiptID := range reportedItem.ReceiptIDs {
 			receiptID = strings.TrimSpace(receiptID)
 			if _, duplicate := seenReceipts[receiptID]; duplicate {
@@ -298,28 +330,50 @@ func validateObjectiveOutcome(
 				valid = false
 				continue
 			}
-			consumedReceipts[receiptID] = struct{}{}
+			stagedReceiptIDs = append(stagedReceiptIDs, receiptID)
 			item.Receipts = append(item.Receipts, receipt)
 		}
 		if item.Kind == "external_action" && len(item.Receipts) == 0 {
 			valid = false
 		}
 		if !valid {
+			partitionValid = false
 			appendMissing(item.Item + " (missing verified runtime receipt)")
 			continue
 		}
-		outcome.CompletedItems = append(outcome.CompletedItems, item)
-	}
-	for receiptID := range receipts {
-		if _, consumed := consumedReceipts[receiptID]; !consumed {
-			appendMissing("an external browser action was not associated with an external_action objective")
-			break
+		for _, receiptID := range stagedReceiptIDs {
+			consumedReceipts[receiptID] = struct{}{}
 		}
+		outcome.CompletedItems = append(outcome.CompletedItems, item)
 	}
 	for _, item := range checklist {
 		if _, found := partitioned[item.ID]; !found {
+			partitionValid = false
 			appendMissing(item.Item + " (objective ID was omitted from the outcome)")
 		}
+	}
+	unclaimedReceipts := 0
+	for receiptID := range receipts {
+		if _, consumed := consumedReceipts[receiptID]; !consumed {
+			unclaimedReceipts++
+		}
+	}
+	reportedStatus := strings.TrimSpace(reported.Status)
+	// A single unclaimed commit and a single producer-reported missing external
+	// objective have an unambiguous relationship: the commit ran, but its
+	// requested postcondition was not verified. An explicitly incomplete outcome
+	// carries the required explanation, so the missing objective already
+	// represents that incomplete result. Preserve the diagnostic for succeeded,
+	// ambiguous, or unexpected commits so the runtime never silently accounts for
+	// extra external actions.
+	unverifiedPostcondition := reportedStatus == string(taskresult.OutcomePartial) ||
+		reportedStatus == string(taskresult.OutcomeBlocked)
+	if unclaimedReceipts > 0 &&
+		(!unverifiedPostcondition || !partitionValid || unclaimedReceipts != 1 || missingExternalObjectives != 1) {
+		appendPriorityMissing(
+			"an external browser action completed, but its receipt was not claimed by a completed " +
+				"external_action objective",
+		)
 	}
 	switch {
 	case len(outcome.MissingItems) == 0 && len(outcome.CompletedItems) > 0:
@@ -332,7 +386,7 @@ func validateObjectiveOutcome(
 			appendMissing("no objective items were completed")
 		}
 	}
-	switch strings.TrimSpace(reported.Status) {
+	switch reportedStatus {
 	case string(taskresult.OutcomeBlocked):
 		outcome.Status = taskresult.OutcomeBlocked
 		if len(outcome.MissingItems) == 0 {
