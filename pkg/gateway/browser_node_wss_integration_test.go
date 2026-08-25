@@ -1176,7 +1176,7 @@ func TestCompanionBrowserSnapshotTransferRecoveryOverProductionWSS(t *testing.T)
 			}
 			worker.mu.Lock()
 			generation := worker.snapshotGeneration
-			publicGeneration := worker.publicSnapshotGeneration
+			publicGeneration := worker.published.generation
 			staleAuthority := worker.documentID != "" || worker.currentOrigin != "" || len(worker.elements) != 0
 			worker.mu.Unlock()
 			if generation != 1 || publicGeneration != 0 || staleAuthority {

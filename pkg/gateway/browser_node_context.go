@@ -61,7 +61,7 @@ func (worker *nodeBrowserWorker) SelectContext(
 		worker.elements = make(map[string]browser.DriverElement)
 		worker.currentOrigin = ""
 		worker.documentID = ""
-		worker.publicDocumentID = ""
+		worker.clearPublishedBindingLocked()
 		worker.mu.Unlock()
 		observation, observeErr := worker.Observe(ctx)
 		if observeErr != nil {
@@ -140,7 +140,7 @@ func (worker *nodeBrowserWorker) acceptContextCatalog(
 		worker.elements = make(map[string]browser.DriverElement)
 		worker.currentOrigin = ""
 		worker.documentID = ""
-		worker.publicDocumentID = ""
+		worker.clearPublishedBindingLocked()
 	}
 	return nil
 }
@@ -253,7 +253,7 @@ func (worker *nodeBrowserWorker) clearContextObservation() {
 	worker.elements = make(map[string]browser.DriverElement)
 	worker.currentOrigin = ""
 	worker.documentID = ""
-	worker.publicDocumentID = ""
+	worker.clearPublishedBindingLocked()
 	worker.mu.Unlock()
 }
 

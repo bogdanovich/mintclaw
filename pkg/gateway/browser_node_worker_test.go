@@ -29,6 +29,7 @@ type browserNodeTestHandler struct {
 	contextOperations        []string
 	observeInputs            []nodes.BrowserObserveInput
 	actInputs                []nodes.BrowserActInput
+	captureInputs            []nodes.BrowserCaptureInput
 	actPlanInputs            []json.RawMessage
 	invocations              map[string]nodes.InvocationRecord
 	currentURL               string
@@ -42,6 +43,7 @@ type browserNodeTestHandler struct {
 	redactNextContext        bool
 	redactNextDiagnostics    bool
 	dynamicContextCatalog    bool
+	rotateElementRefs        bool
 	closeFailureCode         string
 }
 
@@ -140,6 +142,11 @@ func (handler *browserNodeTestHandler) Invoke(
 		observation.DocumentID = browserNodeStableID(
 			"document", input.SessionID, fmt.Sprint(input.SnapshotGeneration),
 		)
+		if handler.rotateElementRefs && len(observation.Elements) == 1 {
+			rotatedRef := fmt.Sprintf("host_ref_%d", input.SnapshotGeneration)
+			observation.Elements[0].Ref = rotatedRef
+			observation.Snapshot = strings.ReplaceAll(observation.Snapshot, "host_ref_1", rotatedRef)
+		}
 		if handler.elementRole != "" && len(observation.Elements) == 1 {
 			observation.Elements[0].Role = handler.elementRole
 			observation.Elements[0].Name = handler.elementName
@@ -176,6 +183,9 @@ func (handler *browserNodeTestHandler) Invoke(
 			handler.redactNextDiagnostics = false
 		}
 	case nodes.BrowserCommandCapture:
+		var input nodes.BrowserCaptureInput
+		_ = json.Unmarshal(plan.Input, &input)
+		handler.captureInputs = append(handler.captureInputs, input)
 		// The focused worker tests only need to prove that capture passes local
 		// generation preflight and reaches companion dispatch. An empty output
 		// descriptor then fails closed before any transfer is attempted.
@@ -206,6 +216,11 @@ func (handler *browserNodeTestHandler) Invoke(
 		observation.DocumentID = browserNodeStableID(
 			"document", input.SessionID, fmt.Sprint(input.SnapshotGeneration+1),
 		)
+		if handler.rotateElementRefs && len(observation.Elements) == 1 {
+			rotatedRef := fmt.Sprintf("host_ref_%d", input.SnapshotGeneration+1)
+			observation.Elements[0].Ref = rotatedRef
+			observation.Snapshot = strings.ReplaceAll(observation.Snapshot, "host_ref_1", rotatedRef)
+		}
 		if handler.elementRole != "" && len(observation.Elements) == 1 {
 			observation.Elements[0].Role = handler.elementRole
 			observation.Elements[0].Name = handler.elementName
@@ -433,6 +448,7 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 
 func TestGatewayBrowserWorkerKeepsCaptureAuthorityAfterPrivateScrollValidation(t *testing.T) {
 	cfg, runtime, handler := browserNodeTestRuntime(t)
+	handler.rotateElementRefs = true
 	baseFactory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
 	if err != nil {
 		t.Fatal(err)
@@ -483,9 +499,9 @@ func TestGatewayBrowserWorkerKeepsCaptureAuthorityAfterPrivateScrollValidation(t
 	}
 	factory.worker.mu.Lock()
 	remoteGeneration := factory.worker.snapshotGeneration
-	publicGeneration := factory.worker.publicSnapshotGeneration
+	publicGeneration := factory.worker.published.generation
 	remoteDocumentID := factory.worker.documentID
-	publicDocumentID := factory.worker.publicDocumentID
+	publicDocumentID := factory.worker.published.documentID
 	factory.worker.mu.Unlock()
 	if remoteGeneration != 3 || publicGeneration != 2 {
 		t.Fatalf(
@@ -523,6 +539,65 @@ func TestGatewayBrowserWorkerKeepsCaptureAuthorityAfterPrivateScrollValidation(t
 	handler.mu.Unlock()
 	if !slices.Contains(commands, nodes.BrowserCommandCapture) {
 		t.Fatalf("capture did not reach companion dispatch: %#v", commands)
+	}
+	elementStart := strings.Index(observation.Snapshot, "[ref=")
+	if elementStart < 0 {
+		t.Fatalf("published snapshot has no element ref: %q", observation.Snapshot)
+	}
+	elementStart += len("[ref=")
+	elementEnd := strings.Index(observation.Snapshot[elementStart:], "]")
+	if elementEnd < 1 {
+		t.Fatalf("published snapshot has malformed element ref: %q", observation.Snapshot)
+	}
+	elementOwner := captureOwner
+	elementOwner.ToolCallID = "element_capture_after_scroll_validation"
+	_, elementCaptureErr := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: elementOwner.ToolCallID, SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Target: browser.ScreenshotTargetElement,
+		Ref:    observation.Snapshot[elementStart : elementStart+elementEnd],
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: elementOwner.WorkspaceID, AgentID: elementOwner.AgentID,
+			ActorID: elementOwner.ActorID, RouteID: elementOwner.RouteID,
+			SessionID: elementOwner.SessionID, ToolCallID: elementOwner.ToolCallID,
+		},
+	})
+	if elementCaptureErr == nil || errors.Is(elementCaptureErr, browser.ErrStale) {
+		t.Fatalf(
+			"element capture after private validation error = %v, want dispatched non-stale failure",
+			elementCaptureErr,
+		)
+	}
+	handler.mu.Lock()
+	captureInputs := append([]nodes.BrowserCaptureInput(nil), handler.captureInputs...)
+	handler.mu.Unlock()
+	if len(captureInputs) != 2 || captureInputs[0].Target != "page" ||
+		captureInputs[1].Target != "element" || captureInputs[1].Ref != "host_ref_3" {
+		t.Fatalf("capture dispatch inputs = %#v, want page then rebound element host_ref_3", captureInputs)
+	}
+}
+
+func TestNodeBrowserWorkerElementCaptureRebindFailsClosedWhenAmbiguous(t *testing.T) {
+	worker := &nodeBrowserWorker{
+		elements: map[string]browser.DriverElement{
+			"current_1": {Target: "current_1", Role: "button", Name: "Save"},
+		},
+		published: nodeBrowserPublishedAuthority{elements: map[string]browser.DriverElement{
+			"public_1": {Target: "public_1", Role: "button", Name: "Save"},
+			"public_2": {Target: "public_2", Role: "button", Name: "Save"},
+		}},
+	}
+	if rebound := worker.rebindPublishedElementLocked(worker.published.elements["public_1"]); rebound != "" {
+		t.Fatalf("ambiguous published element rebound to %q", rebound)
+	}
+	worker.published.elements = map[string]browser.DriverElement{
+		"public_1": {Target: "public_1", Role: "button", Name: "Save"},
+	}
+	worker.elements["current_2"] = browser.DriverElement{
+		Target: "current_2", Role: "button", Name: "Save",
+	}
+	if rebound := worker.rebindPublishedElementLocked(worker.published.elements["public_1"]); rebound != "" {
+		t.Fatalf("ambiguous current element rebound to %q", rebound)
 	}
 }
 
@@ -767,7 +842,7 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 				t.Fatal(err)
 			}
 			worker.mu.Lock()
-			initialPublicGeneration := worker.publicSnapshotGeneration
+			initialPublicGeneration := worker.published.generation
 			worker.mu.Unlock()
 			if initialPublicGeneration != 1 {
 				t.Fatalf("initial public generation = %d, want 1", initialPublicGeneration)
@@ -785,7 +860,7 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 				t.Fatal(err)
 			}
 			worker.mu.Lock()
-			postActionPublicGeneration := worker.publicSnapshotGeneration
+			postActionPublicGeneration := worker.published.generation
 			worker.mu.Unlock()
 			if postActionPublicGeneration != 1 {
 				t.Fatalf(
@@ -801,7 +876,7 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 				t.Fatalf("fresh post-navigation observation = %#v, %v", observation, err)
 			}
 			worker.mu.Lock()
-			finalPublicGeneration := worker.publicSnapshotGeneration
+			finalPublicGeneration := worker.published.generation
 			worker.mu.Unlock()
 			if finalPublicGeneration != 2 {
 				t.Fatalf(
