@@ -260,7 +260,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
 
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
-		Model: agent.Model, SystemPrompt: "deploy", TaskID: "subagent-1", Critical: true,
+		Model: agent.Model, TaskPrompt: "deploy", TaskID: "subagent-1", Critical: true,
 	})
 	if err != nil || result == nil || !result.Control.TaskSuspended {
 		t.Fatalf("spawnSubTurn() = (%#v, %v), want suspended durable task", result, err)
@@ -424,7 +424,7 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	parent.pendingResults = make(chan *toolshared.ToolResult, 4)
 	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
-		Model: agent.Model, SystemPrompt: "deploy", TaskID: "subagent-approval", Critical: true,
+		Model: agent.Model, TaskPrompt: "deploy", TaskID: "subagent-approval", Critical: true,
 		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "production action", Kind: "external_action"}},
 	})
 	if err != nil || result == nil || !result.Control.TaskSuspended {
@@ -492,7 +492,7 @@ func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
 
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
-		Model: agent.Model, SystemPrompt: "publish both items",
+		Model: agent.Model, TaskPrompt: "publish both items",
 		DeliveryMode: toolshared.AsyncDeliveryUserOnly,
 		ObjectiveItems: []toolshared.ObjectiveSpec{
 			{Item: "Yakima published", Kind: "result"},
@@ -642,7 +642,7 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 	t.Cleanup(func() { _ = persistentStore.Close() })
 
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
-		TargetAgentID: beta.ID, Model: beta.Model, SystemPrompt: "run protected action",
+		TargetAgentID: beta.ID, Model: beta.Model, TaskPrompt: "run protected action",
 		TaskID: taskID, Critical: true,
 	})
 	if err != nil || result == nil || !result.Control.TaskSuspended {
@@ -782,9 +782,9 @@ func TestSpawnSubTurnInheritsSameAgentAdmission(t *testing.T) {
 		agent:          parentAgent,
 	}
 	result, err := spawnSubTurn(parentCtx, al, parent, SubTurnConfig{
-		Model:        "test-model",
-		SystemPrompt: "complete the child turn",
-		Timeout:      250 * time.Millisecond,
+		Model:      "test-model",
+		TaskPrompt: "complete the child turn",
+		Timeout:    250 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("spawnSubTurn() error = %v", err)
@@ -842,7 +842,7 @@ func TestSpawnSubTurnTimesOutBeforeBusyTargetStarts(t *testing.T) {
 	startedAt := time.Now()
 	_, err = spawnSubTurn(parentCtx, al, parent, SubTurnConfig{
 		TargetAgentID: "browser",
-		SystemPrompt:  "must not start",
+		TaskPrompt:    "must not start",
 		Timeout:       time.Minute,
 	})
 	if !errors.Is(err, ErrConcurrencyTimeout) {
@@ -913,9 +913,9 @@ func TestSpawnSubTurnReportsParentCapacityTimeout(t *testing.T) {
 	}
 
 	_, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
-		Model:        "test-model",
-		SystemPrompt: "must not start",
-		Timeout:      time.Minute,
+		Model:      "test-model",
+		TaskPrompt: "must not start",
+		Timeout:    time.Minute,
 	})
 	if !errors.Is(err, ErrConcurrencyTimeout) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("spawnSubTurn() error = %v, want admission deadline", err)
@@ -985,7 +985,7 @@ func TestSpawnSubTurnExecutionTimeoutStartsAfterAdmission(t *testing.T) {
 	go func() {
 		_, spawnErr := spawnSubTurn(parentCtx, al, parent, SubTurnConfig{
 			TargetAgentID: "browser",
-			SystemPrompt:  "finish after admission",
+			TaskPrompt:    "finish after admission",
 			Timeout:       500 * time.Millisecond,
 		})
 		childDone <- spawnErr
@@ -1050,7 +1050,7 @@ func TestSpawnSubTurnCancellationWhileQueuedReleasesAdmissions(t *testing.T) {
 	go func() {
 		_, spawnErr := spawnSubTurn(parentCtx, al, parent, SubTurnConfig{
 			TargetAgentID: "browser",
-			SystemPrompt:  "must be canceled before start",
+			TaskPrompt:    "must be canceled before start",
 			Timeout:       time.Minute,
 		})
 		childDone <- spawnErr
@@ -1135,9 +1135,9 @@ func TestSpawnSubTurnRetainsAdmissionAfterParentRelease(t *testing.T) {
 	childDone := make(chan error, 1)
 	go func() {
 		_, spawnErr := spawnSubTurn(parentCtx, al, parent, SubTurnConfig{
-			Model:        "test-model",
-			SystemPrompt: "wait for release",
-			Timeout:      2 * time.Second,
+			Model:      "test-model",
+			TaskPrompt: "wait for release",
+			Timeout:    2 * time.Second,
 		})
 		childDone <- spawnErr
 	}()
@@ -2459,7 +2459,7 @@ func TestSpawnSubTurn_DefaultSyncDeliveryRemovesUserDeliveryTools(t *testing.T) 
 
 	_, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta",
-		SystemPrompt:  "capture child tool list",
+		TaskPrompt:    "capture child tool list",
 		// DeliveryMode intentionally omitted. Sync sub-turns default to parent_only.
 	})
 	if err != nil {
@@ -2495,7 +2495,7 @@ func TestSpawnSubTurnBrowserChecklistRequiredBeforeExecution(t *testing.T) {
 		opts:           turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-browser-preflight"}},
 	}
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
-		TargetAgentID: "beta", SystemPrompt: "publish an item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
+		TargetAgentID: "beta", TaskPrompt: "publish an item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
 	})
 	if err != nil || result == nil || result.Deliverable == nil || result.Deliverable.ObjectiveOutcome == nil ||
 		result.Deliverable.ObjectiveOutcome.Status != taskresult.OutcomeBlocked {
@@ -2530,7 +2530,7 @@ func TestSpawnSubTurnBrowserRemovesDirectDeliveryToolsForUserOnly(t *testing.T) 
 		opts:           turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-browser-delivery"}},
 	}
 	_, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
-		TargetAgentID: "beta", SystemPrompt: "inspect one item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
+		TargetAgentID: "beta", TaskPrompt: "inspect one item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
 		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "inspect one item", Kind: "result"}},
 	})
 	if err != nil {
@@ -2653,7 +2653,7 @@ func TestSpawnSubTurn_TargetAgentIDRemovesNodeFileTools(t *testing.T) {
 
 	if _, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta",
-		SystemPrompt:  "capture delegated tool list",
+		TaskPrompt:    "capture delegated tool list",
 	}); err != nil {
 		t.Fatalf("spawnSubTurn failed: %v", err)
 	}
@@ -2731,8 +2731,8 @@ func TestSpawnSubTurn_InheritsSuppressToolFeedback(t *testing.T) {
 	}
 
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
-		Model:        "test-model",
-		SystemPrompt: "read the file",
+		Model:      "test-model",
+		TaskPrompt: "read the file",
 	})
 	if err != nil {
 		t.Fatalf("spawnSubTurn failed: %v", err)
@@ -2811,9 +2811,9 @@ func TestSpawnSubTurn_DurableTaskDismissesPublishedToolFeedbackSession(t *testin
 
 	const taskID = "subagent-durable-feedback"
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
-		Model:        "test-model",
-		SystemPrompt: "read the file",
-		TaskID:       taskID,
+		Model:      "test-model",
+		TaskPrompt: "read the file",
+		TaskID:     taskID,
 	})
 	if err != nil {
 		t.Fatalf("spawnSubTurn failed: %v", err)
@@ -2885,7 +2885,7 @@ func TestSpawnSubTurn_ReturnsStructuredCompletionWithMedia(t *testing.T) {
 	ctx := withTurnState(context.Background(), parentTS)
 
 	result, err := spawnSubTurn(ctx, al, parentTS, SubTurnConfig{
-		SystemPrompt: "make artifact",
+		TaskPrompt:   "make artifact",
 		Model:        "test-model",
 		DeliveryMode: toolshared.AsyncDeliveryParentOnly,
 	})
@@ -3683,7 +3683,7 @@ func TestSpawnSubTurn_TargetAgentID_UsesTargetAgent(t *testing.T) {
 
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta",
-		SystemPrompt:  "task for beta",
+		TaskPrompt:    "task for beta",
 	})
 	if err != nil {
 		t.Fatalf("spawnSubTurn failed: %v", err)
@@ -3718,7 +3718,7 @@ func TestSpawnSubTurn_TargetAgentID_NotFound(t *testing.T) {
 
 	_, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "nonexistent",
-		SystemPrompt:  "task",
+		TaskPrompt:    "task",
 	})
 
 	if err == nil {
@@ -3826,7 +3826,7 @@ func TestSpawnSubTurn_TargetAgentID_EmptyModelAccepted(t *testing.T) {
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		Model:         "", // intentionally empty
 		TargetAgentID: "beta",
-		SystemPrompt:  "task for beta",
+		TaskPrompt:    "task for beta",
 	})
 	if err != nil {
 		t.Fatalf("should accept empty Model when TargetAgentID is set, got: %v", err)

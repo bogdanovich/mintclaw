@@ -26,8 +26,7 @@ When spawning a SubTurn, you must provide a `SubTurnConfig`:
 | :--- | :--- | :--- |
 | `Model` | `string` | The LLM model to use for the sub-turn (e.g., `gpt-4o-mini`). **Required.** |
 | `Tools` | `[]tools.Tool` | Tools granted to the sub-turn. If empty, it inherits the parent's tools. |
-| `SystemPrompt` | `string` | The task description for the sub-turn. Sent as the first user message to the LLM (not as a system prompt override). |
-| `ActualSystemPrompt` | `string` | Optional explicit system prompt to replace the agent's default. Leave empty to inherit the parent agent's system prompt. |
+| `TaskPrompt` | `string` | The task instruction for the sub-turn. Sent as the first user message; the selected agent owns its system instructions. |
 | `MaxTokens` | `int` | Maximum tokens for the generated response. |
 | `Async` | `bool` | Controls the result delivery mode (Synchronous vs. Asynchronous). |
 | `Critical` | `bool` | If `true`, the sub-turn continues running even if the parent finishes gracefully. |
@@ -56,9 +55,9 @@ This is the standard mode where the caller needs the result immediately to proce
 **Example:**
 ```go
 cfg := agent.SubTurnConfig{
-    Model:        "gpt-4o-mini",
-    SystemPrompt: "Analyze the provided codebase...",
-    Async:        false,
+	Model:      "gpt-4o-mini",
+	TaskPrompt: "Analyze the provided codebase...",
+	Async:      false,
 }
 result, err := agent.SpawnSubTurn(ctx, cfg)
 // Process result immediately
@@ -75,9 +74,9 @@ Used for "fire-and-forget" operations or parallel processing where the parent tu
 **Example:**
 ```go
 cfg := agent.SubTurnConfig{
-    Model:        "gpt-4o-mini",
-    SystemPrompt: "Run a background security scan...",
-    Async:        true,
+	Model:      "gpt-4o-mini",
+	TaskPrompt: "Run a background security scan...",
+	Async:      true,
 }
 result, err := agent.SpawnSubTurn(ctx, cfg)
 // The result will also be injected into the parent loop later via channel
@@ -275,7 +274,7 @@ When a result becomes orphan:
 cfg := agent.SubTurnConfig{
     Model: "gpt-4o-mini",
     Tools: []tools.Tool{readOnlyTool}, // Only read-only access
-    SystemPrompt: "Analyze the file structure...",
+    TaskPrompt: "Analyze the file structure...",
 }
 ```
 

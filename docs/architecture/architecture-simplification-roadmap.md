@@ -857,6 +857,10 @@ Implementation sequence:
     replace the pipeline's terminal-task `AgentLoop` service locator, and
     remove its three task-state callbacks, config callback, and duplicate
     user-delivery callback.
+43. Make `TaskPrompt` the sole child-turn instruction field. Delete the unused
+    `ActualSystemPrompt` shadow, its producerless runtime override and prompt
+    source, and the historically inverted `SystemPrompt` name from both sides
+    of the in-repository tool/agent boundary.
 
 Exit criteria:
 

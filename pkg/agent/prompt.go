@@ -57,7 +57,6 @@ const (
 	PromptSourceToolRegistry   PromptSourceID = "tool_registry:native"
 	PromptSourceToolDiscovery  PromptSourceID = "tool_registry:discovery"
 	PromptSourceOutputPolicy   PromptSourceID = "runtime.output"
-	PromptSourceSubTurnProfile PromptSourceID = "subturn.profile"
 	PromptSourceUserMessage    PromptSourceID = "turn:user_message"
 	PromptSourceSteering       PromptSourceID = "turn:steering"
 	PromptSourceSubTurnResult  PromptSourceID = "turn:subturn_result"
@@ -308,13 +307,6 @@ func builtinPromptSources() []PromptSourceDescriptor {
 			Description:     "Output formatting policy",
 			Allowed:         []PromptPlacement{{Layer: PromptLayerContext, Slot: PromptSlotOutput}},
 			StableByDefault: true,
-		},
-		{
-			ID:              PromptSourceSubTurnProfile,
-			Owner:           "subturn",
-			Description:     "Child agent profile instructions",
-			Allowed:         []PromptPlacement{{Layer: PromptLayerInstruction, Slot: PromptSlotWorkspace}},
-			StableByDefault: false,
 		},
 		{
 			ID:              PromptSourceUserMessage,

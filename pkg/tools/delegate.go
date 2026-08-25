@@ -154,7 +154,7 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 		TaskID:         taskID,
 		TargetAgentID:  agentID,
-		SystemPrompt:   task,
+		TaskPrompt:     task,
 		Async:          false,
 		DeliveryMode:   deliveryMode,
 		Timeout:        timeout,

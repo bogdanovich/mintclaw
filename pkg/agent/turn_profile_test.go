@@ -604,9 +604,9 @@ func TestTurnProfile_SubTurnInheritsParentToolProfile(t *testing.T) {
 	})
 
 	_, err = spawnSubTurn(context.Background(), al, parentTS, SubTurnConfig{
-		Model:        "test-model",
-		SystemPrompt: "child task",
-		Timeout:      time.Second,
+		Model:      "test-model",
+		TaskPrompt: "child task",
+		Timeout:    time.Second,
 	})
 	if err != nil {
 		t.Fatalf("spawnSubTurn() error = %v", err)
@@ -616,40 +616,6 @@ func TestTurnProfile_SubTurnInheritsParentToolProfile(t *testing.T) {
 	}
 	if provider.tools[0].Function.Name != "echo_text" {
 		t.Fatalf("child provider tool = %q, want echo_text", provider.tools[0].Function.Name)
-	}
-}
-
-func TestTurnProfile_SystemPromptOffUsesExternalPromptOnly(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				TurnProfile: config.TurnProfileConfig{
-					Enabled:      true,
-					History:      config.TurnProfileBlock{Mode: config.TurnProfileModeOff},
-					SystemPrompt: config.TurnProfileBlock{Mode: config.TurnProfileModeOff},
-					Skills:       config.TurnProfileBlock{Mode: config.TurnProfileModeOff},
-					Tools:        config.TurnProfileBlock{Mode: config.TurnProfileModeOff},
-				},
-			},
-		},
-	}
-	provider := &turnProfileCaptureProvider{}
-	al := newTurnProfileAgentLoop(t, cfg, provider)
-	agent := al.GetRegistry().GetDefaultAgent()
-
-	_, err := al.runAgentLoop(context.Background(), agent, turnSpec{
-		Dispatch:             DispatchRequest{SessionKey: "agent:default:test-external-prompt", UserMessage: "hello"},
-		DefaultResponse:      defaultResponse,
-		SystemPromptOverride: "External prompt only.",
-	})
-	if err != nil {
-		t.Fatalf("runAgentLoop() error = %v", err)
-	}
-	if len(provider.messages) != 2 {
-		t.Fatalf("messages len = %d, want system + user", len(provider.messages))
-	}
-	if strings.TrimSpace(provider.messages[0].Content) != "External prompt only." {
-		t.Fatalf("system prompt = %q, want external only", provider.messages[0].Content)
 	}
 }
 
