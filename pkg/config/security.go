@@ -104,7 +104,37 @@ func validateChannelSecuritySettings(node *yaml.Node, current *Config, label str
 	if err := node.Decode(&channels); err != nil {
 		return fmt.Errorf("failed to validate channel security config: %w", err)
 	}
-	raw := map[string]any{"channel_list": channels}
+
+	normalized := make(map[string]any, len(channels))
+	var unknownFields []string
+	for name, rawChannel := range channels {
+		channel, ok := rawChannel.(map[string]any)
+		if !ok {
+			continue
+		}
+		existing := current.Channels.Get(name)
+		if existing == nil {
+			unknownFields = append(unknownFields, appendJSONPath("channel_list", name))
+			continue
+		}
+		for field := range channel {
+			if field != "settings" {
+				unknownFields = append(
+					unknownFields,
+					appendJSONPath(appendJSONPath("channel_list", name), field),
+				)
+			}
+		}
+		normalized[name] = map[string]any{
+			"type":     existing.Type,
+			"settings": channel["settings"],
+		}
+	}
+	if err := unknownJSONFieldsError(unknownFields, label); err != nil {
+		return fmt.Errorf("failed to validate channel security config: %w", err)
+	}
+
+	raw := map[string]any{"channel_list": normalized}
 	if err := validateChannelSettingsJSON(raw, current, label); err != nil {
 		return fmt.Errorf("failed to validate channel security config: %w", err)
 	}
