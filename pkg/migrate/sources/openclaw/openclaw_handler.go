@@ -83,12 +83,12 @@ func (o *OpenclawHandler) GetSourceConfigFile() (string, error) {
 	return o.sourceConfigFile, nil
 }
 
-func (o *OpenclawHandler) GetMigrateableFiles() []string {
-	return migrateableFiles
+func (o *OpenclawHandler) WorkspaceFiles() []internal.WorkspaceFile {
+	return workspaceFiles
 }
 
-func (o *OpenclawHandler) GetMigrateableDirs() []string {
-	return migrateableDirs
+func (o *OpenclawHandler) WorkspaceDirs() []string {
+	return workspaceDirs
 }
 
 func (o *OpenclawHandler) ExecuteConfigMigration(srcConfigPath, dstConfigPath string) error {

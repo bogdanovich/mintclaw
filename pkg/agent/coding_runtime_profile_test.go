@@ -386,10 +386,9 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 		t.Fatalf("create execution root: %v", err)
 	}
 	personalFiles := map[string]string{
-		"AGENT.md":    "---\nname: Project Persona\nmodel: project-model\nskills: [personal]\n---\nPERSONAL AGENT BODY",
-		"SOUL.md":     "PERSONAL SOUL",
-		"USER.md":     "PERSONAL USER",
-		"IDENTITY.md": "PERSONAL IDENTITY",
+		"AGENT.md": "---\nname: Project Persona\nmodel: project-model\nskills: [personal]\n---\nPERSONAL AGENT BODY",
+		"SOUL.md":  "PERSONAL SOUL",
+		"USER.md":  "PERSONAL USER",
 	}
 	for name, content := range personalFiles {
 		if err := os.WriteFile(filepath.Join(executionRoot, name), []byte(content), 0o600); err != nil {

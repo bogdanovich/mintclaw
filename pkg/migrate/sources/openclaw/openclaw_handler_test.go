@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/migrate/internal"
 )
 
 func TestNewOpenclawHandler(t *testing.T) {
@@ -111,7 +112,7 @@ func TestOpenclawHandlerGetSourceConfigFileWithConfigJson(t *testing.T) {
 	assert.Equal(t, configPath, configFile)
 }
 
-func TestOpenclawHandlerGetMigrateableFiles(t *testing.T) {
+func TestOpenclawHandlerWorkspaceFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "openclaw.json")
 	err := os.WriteFile(configPath, []byte("{}"), 0o644)
@@ -122,14 +123,14 @@ func TestOpenclawHandlerGetMigrateableFiles(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	files := handler.GetMigrateableFiles()
+	files := handler.WorkspaceFiles()
 	assert.NotEmpty(t, files)
-	assert.Contains(t, files, "AGENTS.md")
-	assert.Contains(t, files, "SOUL.md")
-	assert.Contains(t, files, "USER.md")
+	assert.Contains(t, files, internal.WorkspaceFile{Source: "AGENTS.md", Target: "AGENT.md"})
+	assert.Contains(t, files, internal.WorkspaceFile{Source: "SOUL.md", Target: "SOUL.md"})
+	assert.Contains(t, files, internal.WorkspaceFile{Source: "USER.md", Target: "USER.md"})
 }
 
-func TestOpenclawHandlerGetMigrateableDirs(t *testing.T) {
+func TestOpenclawHandlerWorkspaceDirs(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "openclaw.json")
 	err := os.WriteFile(configPath, []byte("{}"), 0o644)
@@ -140,7 +141,7 @@ func TestOpenclawHandlerGetMigrateableDirs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	dirs := handler.GetMigrateableDirs()
+	dirs := handler.WorkspaceDirs()
 	assert.NotEmpty(t, dirs)
 	assert.Contains(t, dirs, "memory")
 	assert.Contains(t, dirs, "skills")

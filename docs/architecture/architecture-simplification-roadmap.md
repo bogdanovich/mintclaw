@@ -861,6 +861,15 @@ Implementation sequence:
     `ActualSystemPrompt` shadow, its producerless runtime override and prompt
     source, and the historically inverted `SystemPrompt` name from both sides
     of the in-repository tool/agent boundary.
+44. Make root `AGENT.md` the sole personal workspace definition. Delete the
+    root `AGENTS.md` and `IDENTITY.md` readers, the definition-source enum, and
+    source-dependent prompt and cache branches. Translate the current OpenClaw
+    import product's `AGENTS.md` to `AGENT.md` once at the explicit import
+    boundary instead of carrying a second runtime reader. A read-only deployed
+    audit confirmed that all five active profiles already have root `AGENT.md`;
+    an extra root `AGENTS.md` was already shadowed and unused. Project and
+    skill-level coding `AGENTS.md` files remain a separate current instruction
+    contract.
 
 Exit criteria:
 

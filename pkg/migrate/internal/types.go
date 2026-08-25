@@ -17,11 +17,16 @@ type Operation interface {
 	GetSourceWorkspace() (string, error)
 	GetSourceConfigFile() (string, error)
 	ExecuteConfigMigration(srcConfigPath, dstConfigPath string) error
-	GetMigrateableFiles() []string
-	GetMigrateableDirs() []string
+	WorkspaceFiles() []WorkspaceFile
+	WorkspaceDirs() []string
 }
 
 type HandlerFactory func(opts Options) Operation
+
+type WorkspaceFile struct {
+	Source string
+	Target string
+}
 
 type ActionType int
 

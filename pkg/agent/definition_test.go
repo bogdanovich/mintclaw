@@ -37,9 +37,6 @@ Act directly and use tools first.
 	cb := NewContextBuilder(tmpDir)
 	definition := cb.LoadAgentDefinition()
 
-	if definition.Source != AgentDefinitionSourceAgent {
-		t.Fatalf("expected source %q, got %q", AgentDefinitionSourceAgent, definition.Source)
-	}
 	if definition.Agent == nil {
 		t.Fatal("expected AGENT.md definition to be loaded")
 	}
@@ -124,30 +121,26 @@ mcpServers:
 	}
 }
 
-func TestLoadAgentDefinitionFallsBackToLegacyAgentsMarkdown(t *testing.T) {
+func TestLoadAgentDefinitionIgnoresUnsupportedPersonalFiles(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENTS.md": "# Legacy Agent\nKeep compatibility.",
-		"SOUL.md":   "# Soul\nLegacy soul.",
+		"AGENTS.md":   "# Unsupported Agent\nDo not load this file.",
+		"IDENTITY.md": "# Unsupported Identity\nDo not load this file.",
+		"SOUL.md":     "# Soul\nCurrent soul.",
 	})
 	defer cleanupWorkspace(t, tmpDir)
 
 	cb := NewContextBuilder(tmpDir)
 	definition := cb.LoadAgentDefinition()
 
-	if definition.Source != AgentDefinitionSourceAgents {
-		t.Fatalf("expected source %q, got %q", AgentDefinitionSourceAgents, definition.Source)
+	if definition.Agent != nil {
+		t.Fatal("unsupported AGENTS.md was loaded as a personal agent definition")
 	}
-	if definition.Agent == nil {
-		t.Fatal("expected AGENTS.md to be loaded")
+	if definition.Soul == nil || !strings.Contains(definition.Soul.Content, "Current soul") {
+		t.Fatal("expected SOUL.md to load independently")
 	}
-	if definition.Agent.RawFrontmatter != "" {
-		t.Fatalf("legacy AGENTS.md should not have frontmatter, got %q", definition.Agent.RawFrontmatter)
-	}
-	if !strings.Contains(definition.Agent.Body, "Keep compatibility") {
-		t.Fatalf("expected legacy body to be preserved, got %q", definition.Agent.Body)
-	}
-	if definition.Soul == nil || !strings.Contains(definition.Soul.Content, "Legacy soul") {
-		t.Fatal("expected default SOUL.md to be loaded for legacy format")
+	bootstrap := cb.LoadBootstrapFiles()
+	if strings.Contains(bootstrap, "Do not load this file") {
+		t.Fatalf("unsupported personal files reached the bootstrap prompt: %q", bootstrap)
 	}
 }
 
@@ -218,8 +211,7 @@ model: codex-mini
 
 Follow the body prompt.
 `,
-		"SOUL.md":     "# Soul\nSpeak plainly.",
-		"IDENTITY.md": "# Identity\nWorkspace identity.",
+		"SOUL.md": "# Soul\nSpeak plainly.",
 	})
 	defer cleanupWorkspace(t, tmpDir)
 
@@ -240,9 +232,6 @@ Follow the body prompt.
 	}
 	if !strings.Contains(bootstrap, "SOUL.md") {
 		t.Fatalf("expected bootstrap to label SOUL.md, got %q", bootstrap)
-	}
-	if strings.Contains(bootstrap, "Workspace identity") {
-		t.Fatalf("structured bootstrap should ignore IDENTITY.md, got %q", bootstrap)
 	}
 }
 
@@ -265,19 +254,19 @@ func TestLoadBootstrapFilesIncludesWorkspaceUserMarkdown(t *testing.T) {
 	}
 }
 
-func TestStructuredAgentIgnoresIdentityChanges(t *testing.T) {
+func TestUnsupportedPersonalFilesDoNotInvalidateCache(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
 		"AGENT.md":    "# Agent\nFollow the new structure.",
 		"SOUL.md":     "# Soul\nVersion one.",
-		"IDENTITY.md": "# Identity\nLegacy identity.",
+		"IDENTITY.md": "# Unsupported Identity\nVersion one.",
 	})
 	defer cleanupWorkspace(t, tmpDir)
 
 	cb := NewContextBuilder(tmpDir)
 
 	promptV1 := cb.BuildSystemPromptWithCache()
-	if strings.Contains(promptV1, "Legacy identity") {
-		t.Fatalf("structured prompt should not include IDENTITY.md, got %q", promptV1)
+	if strings.Contains(promptV1, "Unsupported Identity") {
+		t.Fatalf("unsupported IDENTITY.md reached the prompt: %q", promptV1)
 	}
 
 	identityPath := filepath.Join(tmpDir, "IDENTITY.md")
@@ -293,12 +282,12 @@ func TestStructuredAgentIgnoresIdentityChanges(t *testing.T) {
 	changed := cb.sourceFilesChangedLocked()
 	cb.systemPromptMutex.RUnlock()
 	if changed {
-		t.Fatal("IDENTITY.md should not invalidate cache for structured agent definitions")
+		t.Fatal("unsupported IDENTITY.md invalidated the prompt cache")
 	}
 
 	promptV2 := cb.BuildSystemPromptWithCache()
 	if promptV1 != promptV2 {
-		t.Fatal("structured prompt should remain stable after IDENTITY.md changes")
+		t.Fatal("prompt changed after an unsupported IDENTITY.md update")
 	}
 }
 

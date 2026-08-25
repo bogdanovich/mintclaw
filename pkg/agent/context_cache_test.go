@@ -135,7 +135,7 @@ func TestSingleSystemMessage(t *testing.T) {
 
 func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"IDENTITY.md": "# Identity\nTest agent.",
+		"AGENT.md": "# Agent\nTest agent.",
 	})
 	defer os.RemoveAll(tmpDir)
 

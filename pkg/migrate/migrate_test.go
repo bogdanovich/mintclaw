@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,6 +83,67 @@ func TestMigrateInstancePlanWithInvalidSource(t *testing.T) {
 
 	_, _, err := instance.Plan(Options{}, "/tmp/source", "/tmp/target")
 	require.Error(t, err)
+}
+
+func TestMigrateInstancePlansOpenclawAgentDefinitionForCurrentFilename(t *testing.T) {
+	sourceHome := t.TempDir()
+	targetHome := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(sourceHome, "openclaw.json"), []byte("{}"), 0o600))
+	sourceWorkspace := filepath.Join(sourceHome, "workspace")
+	require.NoError(t, os.MkdirAll(sourceWorkspace, 0o755))
+	sourceAgent := filepath.Join(sourceWorkspace, "AGENTS.md")
+	require.NoError(t, os.WriteFile(sourceAgent, []byte("# Imported agent"), 0o600))
+
+	instance := NewMigrateInstance(Options{SourceHome: sourceHome})
+	actions, warnings, err := instance.Plan(
+		Options{WorkspaceOnly: true},
+		sourceHome,
+		targetHome,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, warnings)
+	require.NotEmpty(t, actions)
+	assert.Equal(t, sourceAgent, actions[0].Source)
+	assert.Equal(t, filepath.Join(targetHome, "workspace", "AGENT.md"), actions[0].Target)
+}
+
+func TestMigrateInstancePlansMappedAgentDefinitionCollision(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       Options
+		wantAction ActionType
+	}{
+		{
+			name:       "forced import backs up current file",
+			opts:       Options{WorkspaceOnly: true, Force: true},
+			wantAction: ActionBackup,
+		},
+		{
+			name:       "refresh overwrites current file",
+			opts:       Options{WorkspaceOnly: true, Refresh: true},
+			wantAction: ActionCopy,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sourceHome := t.TempDir()
+			targetHome := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(sourceHome, "openclaw.json"), []byte("{}"), 0o600))
+			sourceWorkspace := filepath.Join(sourceHome, "workspace")
+			targetWorkspace := filepath.Join(targetHome, "workspace")
+			require.NoError(t, os.MkdirAll(sourceWorkspace, 0o755))
+			require.NoError(t, os.MkdirAll(targetWorkspace, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(sourceWorkspace, "AGENTS.md"), []byte("source"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(targetWorkspace, "AGENT.md"), []byte("target"), 0o600))
+
+			instance := NewMigrateInstance(Options{SourceHome: sourceHome})
+			actions, _, err := instance.Plan(tt.opts, sourceHome, targetHome)
+			require.NoError(t, err)
+			require.NotEmpty(t, actions)
+			assert.Equal(t, tt.wantAction, actions[0].Type)
+		})
+	}
 }
 
 func TestMigrateInstancePlanConfigOnlyAndWorkspaceOnlyMutuallyExclusive(t *testing.T) {
@@ -329,8 +391,8 @@ func TestPrintPlan(t *testing.T) {
 		},
 		{
 			Type:        ActionCopy,
-			Source:      "/source/file.txt",
-			Target:      "/target/file.txt",
+			Source:      "/source/workspace/AGENTS.md",
+			Target:      "/target/workspace/AGENT.md",
 			Description: "copy file",
 		},
 		{
@@ -356,19 +418,26 @@ func TestPrintPlan(t *testing.T) {
 		"Warning: source directory not found",
 	}
 
-	PrintPlan(actions, warnings)
+	var output bytes.Buffer
+	printPlan(&output, actions, warnings)
+	assert.Contains(t, output.String(), "[copy]    AGENTS.md -> AGENT.md")
+	assert.Equal(
+		t,
+		"workspace/AGENTS.md -> workspace/AGENT.md",
+		fileActionLabel(actions[1], "/source", "/target"),
+	)
 }
 
 func TestPrintPlanEmpty(t *testing.T) {
-	PrintPlan([]Action{}, []string{})
+	printPlan(&bytes.Buffer{}, []Action{}, []string{})
 }
 
 type mockOperation struct {
-	sourceHome   string
-	sourceConfig string
-	sourceWs     string
-	migrateFiles []string
-	migrateDirs  []string
+	sourceHome     string
+	sourceConfig   string
+	sourceWs       string
+	workspaceFiles []WorkspaceFile
+	workspaceDirs  []string
 }
 
 func (m *mockOperation) GetSourceName() string { return "mock" }
@@ -396,16 +465,16 @@ func (m *mockOperation) GetSourceConfigFile() (string, error) {
 	return "/tmp/mock/config.json", nil
 }
 func (m *mockOperation) ExecuteConfigMigration(src, dst string) error { return nil }
-func (m *mockOperation) GetMigrateableFiles() []string {
-	if m.migrateFiles != nil {
-		return m.migrateFiles
+func (m *mockOperation) WorkspaceFiles() []WorkspaceFile {
+	if m.workspaceFiles != nil {
+		return m.workspaceFiles
 	}
-	return []string{}
+	return nil
 }
 
-func (m *mockOperation) GetMigrateableDirs() []string {
-	if m.migrateDirs != nil {
-		return m.migrateDirs
+func (m *mockOperation) WorkspaceDirs() []string {
+	if m.workspaceDirs != nil {
+		return m.workspaceDirs
 	}
-	return []string{}
+	return nil
 }

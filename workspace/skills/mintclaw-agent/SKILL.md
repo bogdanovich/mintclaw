@@ -600,7 +600,6 @@ Default workspace layout:
 ├── skills/
 ├── AGENT.md
 ├── HEARTBEAT.md
-├── IDENTITY.md
 ├── SOUL.md
 └── USER.md
 ```

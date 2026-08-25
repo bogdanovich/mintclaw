@@ -21,27 +21,27 @@ func ResolveWorkspace(homeDir string) string {
 
 func PlanWorkspaceMigration(
 	srcWorkspace, dstWorkspace string,
-	migrateableFiles []string,
-	migrateableDirs []string,
-	force bool,
+	files []WorkspaceFile,
+	dirs []string,
+	overwrite bool,
 ) ([]Action, error) {
 	var actions []Action
 
-	for _, filename := range migrateableFiles {
-		src := filepath.Join(srcWorkspace, filename)
-		dst := filepath.Join(dstWorkspace, filename)
-		action := planFileCopy(src, dst, force)
+	for _, file := range files {
+		src := filepath.Join(srcWorkspace, file.Source)
+		dst := filepath.Join(dstWorkspace, file.Target)
+		action := planFileCopy(src, dst, overwrite)
 		if action.Type != ActionSkip || action.Description != "" {
 			actions = append(actions, action)
 		}
 	}
 
-	for _, dirname := range migrateableDirs {
+	for _, dirname := range dirs {
 		srcDir := filepath.Join(srcWorkspace, dirname)
 		if _, err := os.Stat(srcDir); os.IsNotExist(err) {
 			continue
 		}
-		dirActions, err := planDirCopy(srcDir, filepath.Join(dstWorkspace, dirname), force)
+		dirActions, err := planDirCopy(srcDir, filepath.Join(dstWorkspace, dirname), overwrite)
 		if err != nil {
 			return nil, err
 		}
@@ -51,7 +51,7 @@ func PlanWorkspaceMigration(
 	return actions, nil
 }
 
-func planFileCopy(src, dst string, force bool) Action {
+func planFileCopy(src, dst string, overwrite bool) Action {
 	if _, err := os.Stat(src); os.IsNotExist(err) {
 		return Action{
 			Type:        ActionSkip,
@@ -62,7 +62,7 @@ func planFileCopy(src, dst string, force bool) Action {
 	}
 
 	_, dstExists := os.Stat(dst)
-	if dstExists == nil && !force {
+	if dstExists == nil && !overwrite {
 		return Action{
 			Type:        ActionBackup,
 			Source:      src,
@@ -79,7 +79,7 @@ func planFileCopy(src, dst string, force bool) Action {
 	}
 }
 
-func planDirCopy(srcDir, dstDir string, force bool) ([]Action, error) {
+func planDirCopy(srcDir, dstDir string, overwrite bool) ([]Action, error) {
 	var actions []Action
 
 	err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
@@ -103,7 +103,7 @@ func planDirCopy(srcDir, dstDir string, force bool) ([]Action, error) {
 			return nil
 		}
 
-		action := planFileCopy(path, dst, force)
+		action := planFileCopy(path, dst, overwrite)
 		actions = append(actions, action)
 		return nil
 	})

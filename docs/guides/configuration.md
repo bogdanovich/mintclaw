@@ -62,7 +62,6 @@ MintClaw stores data in your configured workspace (default: `~/.mintclaw/workspa
 ├── skills/           # Custom skills
 ├── AGENT.md          # Agent behavior guide
 ├── HEARTBEAT.md      # Periodic task prompts (checked every 30 min)
-├── IDENTITY.md       # Agent identity
 ├── SOUL.md           # Agent soul
 └── USER.md           # User preferences
 ```
