@@ -112,10 +112,6 @@ func (c *DiscordChannel) handleVoiceCommand(s *discordgo.Session, m *discordgo.M
 	return false
 }
 
-func VoiceReceiveActive(vc *discordgo.VoiceConnection) bool {
-	return vc != nil && vc.OpusRecv != nil
-}
-
 func streamOggOpusToDiscord(ctx context.Context, vc *discordgo.VoiceConnection, r io.Reader) (retErr error) {
 	// Recover from panic if vc.OpusSend is closed mid-send (e.g. on disconnect)
 	defer func() {

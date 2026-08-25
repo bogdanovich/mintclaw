@@ -120,22 +120,3 @@ func GetTurns(sample *LocomoSample) []LocomoTurn {
 	}
 	return all
 }
-
-// GetTurnByDiaID finds a specific turn by dia_id (e.g. "D1:3").
-func GetTurnByDiaID(sample *LocomoSample, diaID string) *LocomoTurn {
-	turns := GetTurns(sample)
-	for i := range turns {
-		if turns[i].DiaID == diaID {
-			return &turns[i]
-		}
-	}
-	return nil
-}
-
-// GetSpeakers returns the two speaker names from conversation metadata.
-func GetSpeakers(conv map[string]json.RawMessage) (string, string) {
-	var a, b string
-	_ = json.Unmarshal(conv["speaker_a"], &a)
-	_ = json.Unmarshal(conv["speaker_b"], &b)
-	return a, b
-}

@@ -121,12 +121,6 @@ func SetLevel(level LogLevel) {
 	zerolog.SetGlobalLevel(level)
 }
 
-func SetConsoleLevel(level LogLevel) {
-	mu.Lock()
-	defer mu.Unlock()
-	logger = logger.Level(level)
-}
-
 // SetTimeFormat overrides the console timestamp layout used by the global
 // logger. The default is "15:04:05"; the change applies to subsequent writes
 // even after the logger is initialized, and a disabled console stays disabled.
@@ -375,10 +369,6 @@ func Debugf(message string, ss ...any) {
 	logMessage(DEBUG, "", fmt.Sprintf(message, ss...), nil)
 }
 
-func DebugF(message string, fields map[string]any) {
-	logMessage(DEBUG, "", message, fields)
-}
-
 func DebugCF(component string, message string, fields map[string]any) {
 	logMessage(DEBUG, component, message, fields)
 }
@@ -447,16 +437,8 @@ func Fatal(message string) {
 	logMessage(FATAL, "", message, nil)
 }
 
-func FatalC(component string, message string) {
-	logMessage(FATAL, component, message, nil)
-}
-
 func Fatalf(message string, ss ...any) {
 	logMessage(FATAL, "", fmt.Sprintf(message, ss...), nil)
-}
-
-func FatalF(message string, fields map[string]any) {
-	logMessage(FATAL, "", message, fields)
 }
 
 func FatalCF(component string, message string, fields map[string]any) {

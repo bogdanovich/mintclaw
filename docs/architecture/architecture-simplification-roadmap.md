@@ -1,7 +1,8 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through P1 and X3.58, X3.59 is in
-review, and the coordinated compatibility reset, deployment, and Z1 remain open
+Status: active; implementation is merged through P1 and X3.59, X3.60 is in
+review, and the coordinated compatibility reset, deployment, and Z1
+remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -155,8 +156,8 @@ reset criteria.
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
-| X3.1-X3.58 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#894 | Merged |
-| X3.59 | #895 | In review |
+| X3.1-X3.59 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#895 | Merged |
+| X3.60 | #896 | In review |
 | P1 | #881 | Merged; deployed config and profile cutover remains in R1 |
 | Z1 | Not yet applicable | Open |
 
@@ -165,8 +166,8 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 26 to #843; 27 to #845; 28 to #846; 29-37 to #848-#856; 38 to #858;
 39-42 to #859-#862; 43 to #864; 44 to #866; 45 to #868; 46 to #872;
 47 to #878; 48 to #880; 49 to #885; 50 to #886; 51 to #887; 52 to #888;
-53 to #889; 54 to #890; 55 to #891; 56 to #892; 57 to #893; 58 to #894; and
-59 to #895.
+53 to #889; 54 to #890; 55 to #891; 56 to #892; 57 to #893; 58 to #894;
+59 to #895; and 60 to #896.
 
 The 2026-08-24 read-only deployed audit also established these rollout facts:
 
@@ -1075,6 +1076,12 @@ Implementation sequence:
     default self-update, and tag/nightly release URL lookup. Keep the
     context-aware, configurable, and canonical factory entry points used by
     current callers.
+60. Finish the tracked zero-caller utility cleanup. Delete unused package-level
+    logger variants and console-level setter, adaptive-any host helpers, the
+    Discord voice-receive predicate, the Web language getter, and two LOCOMO
+    selectors. Retain documented channel-registry discovery, the console
+    restoration test seam, active loopback helpers, and third-party logger
+    interface methods.
 
 Exit criteria:
 
@@ -1141,7 +1148,7 @@ Implemented shape:
 
 ### R1 — Execute the coordinated first-party compatibility reset
 
-Depends on: P1 and X3.46-X3.59
+Depends on: P1 and X3.46-X3.60
 
 Deployment requires explicit user authorization.
 
