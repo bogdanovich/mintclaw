@@ -1,7 +1,7 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through X3.45, while re-audit,
-coordinated compatibility reset, deployment, and Z1 remain open
+Status: active; implementation is merged through P1, while the coordinated
+compatibility reset, deployment, and Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -155,13 +155,15 @@ reset criteria.
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
-| X3.1-X3.45 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, and #868 | Merged |
+| X3.1-X3.48 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, and #880 | Merged |
+| P1 | #881 | Merged; deployed config and profile cutover remains in R1 |
 | Z1 | Not yet applicable | Open |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 14 to #826; 15 to #827; 16-23 to #828-#835; 24 to #837; 25 to #839;
 26 to #843; 27 to #845; 28 to #846; 29-37 to #848-#856; 38 to #858;
-39-42 to #859-#862; 43 to #864; 44 to #866; and 45 to #868.
+39-42 to #859-#862; 43 to #864; 44 to #866; 45 to #868; 46 to #872;
+47 to #878; and 48 to #880.
 
 The 2026-08-24 read-only deployed audit also established these rollout facts:
 
@@ -204,10 +206,14 @@ separation and standards alignment.
 | --- | --- | --- | --- |
 | Previous and older browser catalogue schemas | Temporary first-party wire adapter | PR #865 reconstructs the previous streamed-snapshot schema and retains the earlier session-open output schema after a companion rollout failed | Architecture simplification owner; upgrade every browser companion through the bridge release, then delete the historical generators in R1 |
 | Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | Six active registry records omit the field and normalize to Ed25519 | Architecture simplification owner; convert the current records or re-enrol the nodes, upgrade companions, then require the field in R1 |
-| Missing inbound timestamps imply recency | Historical persisted-state inference | 5,570 retained records omit `created_at`; current writers populate it | Agent inbound owner; X3.46 makes missing time fail closed without making old history unreadable |
-| Unknown prompt sources are accepted | Internal API compatibility mode | `PromptRegistry.ValidatePart` warns and accepts an unregistered source | Prompt registry owner; X3.47 registers current producers and rejects unknown sources |
-| Objective `explanation` substitutes for missing `result` | Historical suspended-state inference | Successful receipt-bearing continuations can still project an old field into the current result | Task result owner; X3.48 removes the inference after reconciling the active objective-accounting work |
-| Singular personal profile manifest | Current MintClaw-specific contract, not wire compatibility | `AGENT.md` combines prose with typed identity and policy frontmatter; standard coding `AGENTS.md` is already separate | Agent configuration owner; P1 moves machine settings to current config before a coordinated prose-file cutover |
+| Deployed version 3 personal profiles | Coordinated persisted-config and workspace cutover | PR #881 makes version 4 config the sole machine authority and root `AGENTS.md` the sole personal prose file; the five deployed profiles still use the pre-cutover shape | Architecture simplification owner; convert and validate every deployed profile while stopped in R1 before installing the version 4 binary |
+
+The current implementation also has one non-blocking observability follow-up,
+not a compatibility adapter: an exact deny rule can be reported as an unknown
+tool or MCP server after policy filtering removes the denied capability from
+the discovered catalogue. A later agent-policy diagnostics packet should make
+configured denies quiet while continuing to warn about genuinely unknown
+allow or deny patterns.
 
 Other matches remain candidates, not automatic deletions. The final audit must
 prove whether the scope-less tool-feedback lookup, unconditional config
@@ -1036,8 +1042,20 @@ Exit criteria:
   authority rules;
 - no runtime reads personal `AGENT.md` or parses Markdown frontmatter as
   authority; and
-- deployed personal workspaces contain the current prose filename before the
-  old reader is removed.
+- deployed personal workspaces contain the current prose filename before a
+  binary without the old reader is installed.
+
+Implemented shape:
+
+- PR #881 makes config version 4 the sole owner of personal identity, model,
+  skills, tool policy, and MCP-server policy;
+- root `AGENTS.md`, `SOUL.md`, and `USER.md` are loaded as prose without
+  machine-interpreted frontmatter;
+- the runtime no longer reads root `AGENT.md` or `IDENTITY.md`, and onboarding
+  preserves existing workspace prose while creating missing templates; and
+- merge completion does not satisfy the deployed cutover criterion: the five
+  active profiles still require the stopped-service R1 conversion before this
+  binary may be deployed.
 
 ### R1 — Execute the coordinated first-party compatibility reset
 
