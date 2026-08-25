@@ -78,10 +78,6 @@ func FormatToolFeedbackMessageWithStyleAndTitle(
 	return FormatToolFeedbackMessage(toolName, explanation, argsPreview)
 }
 
-func FormatWorkingSummaryToolFeedbackMessage(toolName, argsPreview string) string {
-	return FormatWorkingSummaryToolFeedbackMessageWithTitle("", toolName, argsPreview)
-}
-
 func FormatWorkingSummaryToolFeedbackMessageWithTitle(title, toolName, argsPreview string) string {
 	toolName = strings.TrimSpace(toolName)
 	header := workingSummaryHeader(title)
