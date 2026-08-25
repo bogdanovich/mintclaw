@@ -1,7 +1,7 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through P1, while the coordinated
-compatibility reset, deployment, and Z1 remain open
+Status: active; implementation is merged through P1 and X3.49, while the
+coordinated compatibility reset, deployment, and Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -155,7 +155,7 @@ reset criteria.
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
-| X3.1-X3.48 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, and #880 | Merged |
+| X3.1-X3.49 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, and #885 | Merged |
 | P1 | #881 | Merged; deployed config and profile cutover remains in R1 |
 | Z1 | Not yet applicable | Open |
 
@@ -163,7 +163,7 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 14 to #826; 15 to #827; 16-23 to #828-#835; 24 to #837; 25 to #839;
 26 to #843; 27 to #845; 28 to #846; 29-37 to #848-#856; 38 to #858;
 39-42 to #859-#862; 43 to #864; 44 to #866; 45 to #868; 46 to #872;
-47 to #878; and 48 to #880.
+47 to #878; 48 to #880; and 49 to #885.
 
 The 2026-08-24 read-only deployed audit also established these rollout facts:
 
@@ -215,10 +215,15 @@ the discovered catalogue. A later agent-policy diagnostics packet should make
 configured denies quiet while continuing to warn about genuinely unknown
 allow or deny patterns.
 
+PR #885 classifies the scope-less tool-feedback lookup as obsolete inference
+left behind after session-stable ownership replaced the older turn-scoped
+design. It deletes the active-entry scan; cleanup now requires the same
+explicit session or trace identity used by publication.
+
 Other matches remain candidates, not automatic deletions. The final audit must
-prove whether the scope-less tool-feedback lookup, unconditional config
-repository replacement, raw outbound metadata, benchmark baselines, and stale
-`Legacy` names express required current semantics or obsolete compatibility.
+prove whether unconditional config repository replacement, raw outbound
+metadata, benchmark baselines, and stale `Legacy` names express required
+current semantics or obsolete compatibility.
 
 ## Canonical Contract And Bounded Compatibility Rules
 
@@ -993,6 +998,10 @@ Implementation sequence:
     `explanation` as terminal output merely because a receipt exists. Reconcile
     this packet with the focused objective-receipt accounting work before
     changing the shared parser.
+49. Delete scope-less tool-feedback target inference. Publication, pause,
+    terminalization, and cleanup use one explicit session key or trace scope;
+    missing identity must not scan concurrent coordinator state and guess the
+    only currently active scoped carrier.
 
 Exit criteria:
 
@@ -1059,7 +1068,7 @@ Implemented shape:
 
 ### R1 — Execute the coordinated first-party compatibility reset
 
-Depends on: P1 and X3.46-X3.48
+Depends on: P1 and X3.46-X3.49
 
 Deployment requires explicit user authorization.
 
