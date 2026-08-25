@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,12 +103,12 @@ func (m *MigrateInstance) Run(opts Options) (*Result, error) {
 	fmt.Println()
 
 	if opts.DryRun {
-		PrintPlan(actions, warnings)
+		PrintPlan(os.Stdout, actions, warnings)
 		return &Result{Warnings: warnings}, nil
 	}
 
 	if !opts.Force {
-		PrintPlan(actions, warnings)
+		PrintPlan(os.Stdout, actions, warnings)
 		if !Confirm() {
 			fmt.Println("Aborted.")
 			return &Result{Warnings: warnings}, nil
@@ -127,8 +128,6 @@ func (m *MigrateInstance) Plan(opts Options, sourceHome, targetHome string) ([]A
 	if err != nil {
 		return nil, nil, err
 	}
-
-	force := opts.Force || opts.Refresh
 
 	if !opts.WorkspaceOnly {
 		configPath, err := handler.GetSourceConfigFile()
@@ -158,7 +157,7 @@ func (m *MigrateInstance) Plan(opts Options, sourceHome, targetHome string) ([]A
 			wsActions, err := internal.PlanWorkspaceMigration(srcWorkspace, dstWorkspace,
 				handler.WorkspaceFiles(),
 				handler.WorkspaceDirs(),
-				force)
+				opts.Refresh)
 			if err != nil {
 				return nil, nil, fmt.Errorf("planning workspace migration: %w", err)
 			}
@@ -217,7 +216,7 @@ func (m *MigrateInstance) Execute(actions []Action, sourceHome, targetHome strin
 				fmt.Printf("  ✗ Copy failed: %s\n", action.Source)
 			} else {
 				result.FilesCopied++
-				fmt.Printf("  ✓ Copied %s\n", internal.RelPath(action.Source, sourceHome))
+				fmt.Printf("  ✓ Copied %s\n", fileActionLabel(action, sourceHome, targetHome))
 			}
 		case ActionCopy:
 			if err := os.MkdirAll(filepath.Dir(action.Target), 0o755); err != nil {
@@ -229,7 +228,7 @@ func (m *MigrateInstance) Execute(actions []Action, sourceHome, targetHome strin
 				fmt.Printf("  ✗ Copy failed: %s\n", action.Source)
 			} else {
 				result.FilesCopied++
-				fmt.Printf("  ✓ Copied %s\n", internal.RelPath(action.Source, sourceHome))
+				fmt.Printf("  ✓ Copied %s\n", fileActionLabel(action, sourceHome, targetHome))
 			}
 		case ActionSkip:
 			result.FilesSkipped++
@@ -277,8 +276,8 @@ func (m *MigrateInstance) PrintSummary(result *Result) {
 	}
 }
 
-func PrintPlan(actions []Action, warnings []string) {
-	fmt.Println("Planned actions:")
+func PrintPlan(w io.Writer, actions []Action, warnings []string) {
+	fmt.Fprintln(w, "Planned actions:")
 	copies := 0
 	skips := 0
 	backups := 0
@@ -287,34 +286,53 @@ func PrintPlan(actions []Action, warnings []string) {
 	for _, action := range actions {
 		switch action.Type {
 		case ActionConvertConfig:
-			fmt.Printf("  [config]  %s -> %s\n", action.Source, action.Target)
+			fmt.Fprintf(w, "  [config]  %s -> %s\n", action.Source, action.Target)
 			configCount++
 		case ActionCopy:
-			fmt.Printf("  [copy]    %s\n", filepath.Base(action.Source))
+			fmt.Fprintf(w, "  [copy]    %s\n", fileActionLabel(action, "", ""))
 			copies++
 		case ActionBackup:
-			fmt.Printf("  [backup]  %s (exists, will backup and overwrite)\n", filepath.Base(action.Target))
+			fmt.Fprintf(
+				w,
+				"  [backup]  %s (exists, will backup and overwrite)\n",
+				fileActionLabel(action, "", ""),
+			)
 			backups++
 			copies++
 		case ActionSkip:
 			if action.Description != "" {
-				fmt.Printf("  [skip]    %s (%s)\n", filepath.Base(action.Source), action.Description)
+				fmt.Fprintf(w, "  [skip]    %s (%s)\n", fileActionLabel(action, "", ""), action.Description)
 			}
 			skips++
 		case ActionCreateDir:
-			fmt.Printf("  [mkdir]   %s\n", action.Target)
+			fmt.Fprintf(w, "  [mkdir]   %s\n", action.Target)
 		}
 	}
 
 	if len(warnings) > 0 {
-		fmt.Println()
-		fmt.Println("Warnings:")
-		for _, w := range warnings {
-			fmt.Printf("  - %s\n", w)
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Warnings:")
+		for _, warning := range warnings {
+			fmt.Fprintf(w, "  - %s\n", warning)
 		}
 	}
 
-	fmt.Println()
-	fmt.Printf("%d files to copy, %d configs to convert, %d backups needed, %d skipped\n",
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%d files to copy, %d configs to convert, %d backups needed, %d skipped\n",
 		copies, configCount, backups, skips)
+}
+
+func fileActionLabel(action Action, sourceRoot, targetRoot string) string {
+	source := filepath.Base(action.Source)
+	if sourceRoot != "" {
+		source = internal.RelPath(action.Source, sourceRoot)
+	}
+	target := filepath.Base(action.Target)
+	if targetRoot != "" {
+		target = internal.RelPath(action.Target, targetRoot)
+	}
+	if source == target {
+		return source
+	}
+	return fmt.Sprintf("%s -> %s", source, target)
 }

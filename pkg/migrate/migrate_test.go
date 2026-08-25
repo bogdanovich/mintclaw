@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,6 +107,45 @@ func TestMigrateInstancePlansOpenclawAgentDefinitionForCurrentFilename(t *testin
 	require.NotEmpty(t, actions)
 	assert.Equal(t, sourceAgent, actions[0].Source)
 	assert.Equal(t, filepath.Join(targetHome, "workspace", "AGENT.md"), actions[0].Target)
+}
+
+func TestMigrateInstancePlansMappedAgentDefinitionCollision(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       Options
+		wantAction ActionType
+	}{
+		{
+			name:       "forced import backs up current file",
+			opts:       Options{WorkspaceOnly: true, Force: true},
+			wantAction: ActionBackup,
+		},
+		{
+			name:       "refresh overwrites current file",
+			opts:       Options{WorkspaceOnly: true, Refresh: true},
+			wantAction: ActionCopy,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sourceHome := t.TempDir()
+			targetHome := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(sourceHome, "openclaw.json"), []byte("{}"), 0o600))
+			sourceWorkspace := filepath.Join(sourceHome, "workspace")
+			targetWorkspace := filepath.Join(targetHome, "workspace")
+			require.NoError(t, os.MkdirAll(sourceWorkspace, 0o755))
+			require.NoError(t, os.MkdirAll(targetWorkspace, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(sourceWorkspace, "AGENTS.md"), []byte("source"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(targetWorkspace, "AGENT.md"), []byte("target"), 0o600))
+
+			instance := NewMigrateInstance(Options{SourceHome: sourceHome})
+			actions, _, err := instance.Plan(tt.opts, sourceHome, targetHome)
+			require.NoError(t, err)
+			require.NotEmpty(t, actions)
+			assert.Equal(t, tt.wantAction, actions[0].Type)
+		})
+	}
 }
 
 func TestMigrateInstancePlanConfigOnlyAndWorkspaceOnlyMutuallyExclusive(t *testing.T) {
@@ -353,8 +393,8 @@ func TestPrintPlan(t *testing.T) {
 		},
 		{
 			Type:        ActionCopy,
-			Source:      "/source/file.txt",
-			Target:      "/target/file.txt",
+			Source:      "/source/workspace/AGENTS.md",
+			Target:      "/target/workspace/AGENT.md",
 			Description: "copy file",
 		},
 		{
@@ -380,11 +420,18 @@ func TestPrintPlan(t *testing.T) {
 		"Warning: source directory not found",
 	}
 
-	PrintPlan(actions, warnings)
+	var output bytes.Buffer
+	PrintPlan(&output, actions, warnings)
+	assert.Contains(t, output.String(), "[copy]    AGENTS.md -> AGENT.md")
+	assert.Equal(
+		t,
+		"workspace/AGENTS.md -> workspace/AGENT.md",
+		fileActionLabel(actions[1], "/source", "/target"),
+	)
 }
 
 func TestPrintPlanEmpty(t *testing.T) {
-	PrintPlan([]Action{}, []string{})
+	PrintPlan(&bytes.Buffer{}, []Action{}, []string{})
 }
 
 type mockOperation struct {
