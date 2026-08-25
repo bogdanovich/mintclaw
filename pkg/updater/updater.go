@@ -185,14 +185,6 @@ func UpdateSelfFromRelease(releaseURL, platform, arch, programName string) error
 	return nil
 }
 
-// UpdateSelf updates the running executable by fetching the latest release
-// and applying the binary matching programName.
-func UpdateSelf(programName string) error {
-	// By default, select the latest stable release when no explicit
-	// release URL is provided. Use --nightly or a custom URL to override.
-	return UpdateSelfFromRelease("", runtime.GOOS, runtime.GOARCH, programName)
-}
-
 // GetReleaseAPIURL returns the GitHub Releases API URL for the given repo owner.
 // Example: owner="sky5454" -> https://api.github.com/repos/sky5454/mintclaw/releases/latest
 func GetReleaseAPIURL(owner string) string {
@@ -202,18 +194,6 @@ func GetReleaseAPIURL(owner string) string {
 // GetProdReleaseAPIURL returns the production release API URL.
 func GetProdReleaseAPIURL() string {
 	return GetReleaseAPIURL("bogdanovich")
-}
-
-// GetReleaseTagAPIURL returns the GitHub Releases API URL for a specific tag.
-// Example: owner="bogdanovich", tag="nightly" ->
-// https://api.github.com/repos/bogdanovich/mintclaw/releases/tags/nightly
-func GetReleaseTagAPIURL(owner, tag string) string {
-	return fmt.Sprintf("https://api.github.com/repos/%s/mintclaw/releases/tags/%s", owner, tag)
-}
-
-// GetNightlyReleaseAPIURL returns the nightly release API URL for the production repo.
-func GetNightlyReleaseAPIURL() string {
-	return GetReleaseTagAPIURL("bogdanovich", "nightly")
 }
 
 // findAssetURL resolves the appropriate asset URL for the given release

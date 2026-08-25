@@ -84,10 +84,6 @@ func GenerateState() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-func LoginBrowser(cfg OAuthProviderConfig) (*AuthCredential, error) {
-	return LoginBrowserWithOptions(cfg, LoginBrowserOptions{})
-}
-
 func LoginBrowserWithOptions(cfg OAuthProviderConfig, opts LoginBrowserOptions) (*AuthCredential, error) {
 	pkce, err := GeneratePKCE()
 	if err != nil {
