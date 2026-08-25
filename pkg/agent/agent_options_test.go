@@ -13,7 +13,7 @@ func TestWithStateManagerRetainsInjectedManager(t *testing.T) {
 	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
 		Workspace: t.TempDir(), ModelName: "test-model", MaxTokens: 100, MaxToolIterations: 2,
 		ContextManager: "none",
-	}}}
+	}, List: []config.AgentConfig{{ID: "main", Default: true}}}}
 	manager := state.NewManager(t.TempDir())
 	loop := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, WithStateManager(manager))
 	t.Cleanup(loop.Close)
@@ -27,7 +27,7 @@ func TestWithIsolatedToolBootstrapSkipsSharedProductionStateAndTools(t *testing.
 	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
 		Workspace: t.TempDir(), ModelName: "test-model", MaxTokens: 100, MaxToolIterations: 2,
 		ContextManager: "none",
-	}}}
+	}, List: []config.AgentConfig{{ID: "main", Default: true}}}}
 	loop := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, WithIsolatedToolBootstrap())
 	t.Cleanup(loop.Close)
 
@@ -50,7 +50,7 @@ func TestWithIsolatedSkillBootstrapUsesOnlyWorkspaceSkillRoot(t *testing.T) {
 	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
 		Workspace: workspace, ModelName: "test-model", MaxTokens: 100, MaxToolIterations: 2,
 		ContextManager: "none",
-	}}}
+	}, List: []config.AgentConfig{{ID: "main", Default: true}}}}
 	loop := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, WithIsolatedSkillBootstrap())
 	t.Cleanup(loop.Close)
 

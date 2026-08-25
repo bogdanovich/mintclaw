@@ -1,11 +1,11 @@
 # Config Schema Contract
 
 MintClaw accepts one `config.json` schema at runtime. The `version` field is
-required and must equal `config.CurrentVersion`; the current value is `3`.
+required and must equal `config.CurrentVersion`; the current value is `4`.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "agents": {},
   "channel_list": {},
   "model_list": [],
@@ -41,8 +41,9 @@ selector syntaxes. A `model_name` may contain `/` when that exact text is the
 declared name, and repeated names remain valid for load balancing.
 
 Configuration loading rejects unknown references and surrounding whitespace.
-Workspace `AGENT.md` model frontmatter follows the same rule and is rejected
-when the workspace agent is constructed if its exact name is not configured.
+Agent identity, model, skills, tool policy, and MCP server policy are accepted
+only from the typed `agents.list` entries. Workspace Markdown is prose and is
+never interpreted as configuration.
 
 See [`config/config.example.json`](../../config/config.example.json) for a
 complete current document.

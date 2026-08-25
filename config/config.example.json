@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "agents": {
     "defaults": {
       "workspace": "~/.mintclaw/workspace",
@@ -36,13 +36,19 @@
       {
         "id": "main",
         "default": true,
-        "tools": {
+        "name": "mintclaw",
+        "description": "The default general-purpose assistant.",
+        "tool_policy": {
+          "default": "allow",
           "deny": ["mcp_gpt_researcher_*"]
         }
       },
       {
         "id": "deep-research",
-        "tools": {
+        "name": "Deep Research",
+        "description": "Specialist for evidence gathering and synthesis.",
+        "tool_policy": {
+          "default": "deny",
           "allow": ["*"]
         }
       }

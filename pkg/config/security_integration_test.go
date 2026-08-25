@@ -46,7 +46,7 @@ func TestSecurityConfigIntegration(t *testing.T) {
 		// Create config.json with direct security values using the current schema.
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 3,
+  "version": 4,
   "model_list": [
     {
       "model_name": "test-model",
@@ -144,7 +144,7 @@ func TestSecurityConfigWithAPIKeysArray(t *testing.T) {
 		// Create config with APIKeys array
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 3,
+  "version": 4,
   "model_list": [
     {
       "model_name": "multi-key-model",
@@ -220,7 +220,7 @@ func TestAllSecurityKeysAccessible(t *testing.T) {
 		// Create config.json without sensitive values (they'll be in .security.yml)
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 3,
+  "version": 4,
   "model_list": [
     {
       "model_name": "test-model-1",
@@ -554,7 +554,7 @@ skills:
 
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 3,
+  "version": 4,
   "tools": {
     "skills": {
       "registries": {
@@ -596,7 +596,7 @@ skills:
 
 		configPath := filepath.Join(tmpDir, "config.json")
 		configContent := `{
-  "version": 3,
+  "version": 4,
   "tools": {
     "skills": {
       "registries": {
@@ -646,7 +646,7 @@ skills:
 			t.Run(name, func(t *testing.T) {
 				tmpDir := t.TempDir()
 				configPath := filepath.Join(tmpDir, "config.json")
-				require.NoError(t, os.WriteFile(configPath, []byte(`{"version":3}`), 0o644))
+				require.NoError(t, os.WriteFile(configPath, []byte(`{"version":4}`), 0o644))
 				securityPath := filepath.Join(tmpDir, SecurityConfigFile)
 				require.NoError(t, os.WriteFile(securityPath, []byte(securityContent), 0o600))
 

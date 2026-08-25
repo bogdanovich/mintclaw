@@ -125,7 +125,7 @@ func TestOpenclawHandlerWorkspaceFiles(t *testing.T) {
 
 	files := handler.WorkspaceFiles()
 	assert.NotEmpty(t, files)
-	assert.Contains(t, files, internal.WorkspaceFile{Source: "AGENTS.md", Target: "AGENT.md"})
+	assert.Contains(t, files, internal.WorkspaceFile{Source: "AGENTS.md", Target: "AGENTS.md"})
 	assert.Contains(t, files, internal.WorkspaceFile{Source: "SOUL.md", Target: "SOUL.md"})
 	assert.Contains(t, files, internal.WorkspaceFile{Source: "USER.md", Target: "USER.md"})
 }

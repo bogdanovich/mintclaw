@@ -86,7 +86,7 @@ Note: Sensitive fields are omitted because they're loaded from .security.yml
 ```json
 
 	{
-	  "version": 3,
+	  "version": 4,
 	  "agents": {
 	    "defaults": {
 	      "workspace": "~/mintclaw-workspace",

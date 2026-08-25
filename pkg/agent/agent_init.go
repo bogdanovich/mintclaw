@@ -436,7 +436,7 @@ func registerSharedTools(
 			})
 			registerToolIfAllowed(agent, delegateTool)
 		}
-		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.Definition, agent.Tools)
+		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.ToolPolicy, agent.Tools)
 	}
 }
 

@@ -121,44 +121,11 @@ func (r *AgentRegistry) GetAgentDescriptor(agentID string) (*AgentDescriptor, bo
 }
 
 func (r *AgentRegistry) buildAgentDescriptorLocked(agent *AgentInstance) AgentDescriptor {
-	definition := loadAgentDefinition(agent.Workspace)
-	name, description := descriptorIdentity(agent.ID, definition)
-
 	return AgentDescriptor{
 		ID:          agent.ID,
-		Name:        name,
-		Description: description,
+		Name:        agent.Name,
+		Description: agent.Description,
 	}
-}
-
-func descriptorIdentity(agentID string, definition AgentContextDefinition) (string, string) {
-	name := agentID
-	description := ""
-	if definition.Agent != nil {
-		if trimmed := strings.TrimSpace(definition.Agent.Frontmatter.Name); trimmed != "" {
-			name = trimmed
-		}
-		if trimmed := strings.TrimSpace(definition.Agent.Frontmatter.Description); trimmed != "" {
-			description = trimmed
-		}
-	}
-
-	if description == "" && definition.Agent != nil {
-		description = firstNonEmptyLine(definition.Agent.Body)
-	}
-
-	return name, description
-}
-
-func firstNonEmptyLine(content string) string {
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }
 
 func (r *AgentRegistry) workspaceForAgentIDLocked(agentID string) string {

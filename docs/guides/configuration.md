@@ -60,13 +60,13 @@ MintClaw stores data in your configured workspace (default: `~/.mintclaw/workspa
 ├── state/            # Persistent state (last channel, durable ingress spool, etc.)
 ├── cron/             # Scheduled jobs database
 ├── skills/           # Custom skills
-├── AGENT.md          # Agent behavior guide
+├── AGENTS.md         # Agent behavior instructions
 ├── HEARTBEAT.md      # Periodic task prompts (checked every 30 min)
 ├── SOUL.md           # Agent soul
 └── USER.md           # User preferences
 ```
 
-> **Note:** Changes to `AGENT.md`, `SOUL.md`, `USER.md`, `memory/MEMORY.md`, and selected daily notes are automatically detected at runtime. The daily-note selection also refreshes when the local date changes. You do **not** need to restart the gateway after editing these files.
+> **Note:** Changes to `AGENTS.md`, `SOUL.md`, `USER.md`, `memory/MEMORY.md`, and selected daily notes are automatically detected at runtime. The daily-note selection also refreshes when the local date changes. You do **not** need to restart the gateway after editing these files.
 
 ### Prompt Memory Budgets
 
@@ -641,56 +641,50 @@ the admission instead of reacquiring it. Live configuration reloads update the
 limit without forgetting work that is already active. Omit the field or set it
 to `0` to use no additional per-agent limit.
 
-### Agent Tool Allowlist
+### Agent Identity and Capability Policy
 
-Per-agent tool declarations live in `AGENT.md` frontmatter, not in `config.json`.
+`agents.list` is the sole machine-readable owner of each agent's identity,
+model, skills, tool policy, and MCP server policy. The workspace `AGENTS.md` is
+prose only; Markdown fields never change runtime authority.
 
-If `tools` is omitted from frontmatter, the agent gets the normal globally enabled tool set. If `tools` is present, MintClaw applies the declared tool policy during registration.
-
-```md
----
-name: Research Agent
-description: Specialist for web research and in-depth analysis.
-tools: [read_file, write_file, web_search, web_fetch, message]
-skills: [deep-research]
-mcpServers: [web-index]
----
-
-You are the research agent.
+```json
+{
+  "agents": {
+    "list": [
+      {
+        "id": "research",
+        "name": "Research Agent",
+        "description": "Specialist for web research and evidence synthesis.",
+        "model": "research-model",
+        "skills": ["deep-research"],
+        "tool_policy": {
+          "default": "deny",
+          "allow": ["read_file", "write_file", "web_*", "message"],
+          "deny": ["web_admin_*"]
+        },
+        "mcp_server_policy": {
+          "default": "deny",
+          "allow": ["web-index"]
+        }
+      }
+    ]
+  }
+}
 ```
 
-Notes:
+Each policy has one explicit default:
 
-- List form is shorthand for an allow policy.
-- Tool and MCP server names can be declared either as an exact-name list or as an `allow` / `deny` policy object.
-- Pattern matching uses shell-style globs against the runtime tool name or MCP server name.
-- Use runtime tool names such as `web_search`, `web_fetch`, `spawn`, `subagent`, `send_file`.
-- Tool declarations in `AGENT.md` are used by runtime/tooling, but they are not injected into the discovery prompt.
+- `"default": "allow"` admits globally enabled capabilities except matching
+  `deny` patterns. An `allow` list is invalid because it would be redundant.
+- `"default": "deny"` admits only matching `allow` patterns. An empty or
+  omitted `allow` list denies everything.
+- `deny` always wins when an allowed and denied pattern overlap.
+- Patterns use shell-style globs against final runtime tool or normalized MCP
+  server names.
 
-Examples:
-
-```md
----
-tools:
-  allow:
-    - mcp_*
-    - web_fetch
-  deny:
-    - mcp_gpt_researcher_*
-mcpServers:
-  allow:
-    - github
-    - filesystem
----
-```
-
-Policy rules:
-
-- omitted field: no frontmatter restriction
-- list form: allowlist shorthand
-- `deny` is applied after `allow`
-- `deny` wins on overlap
-- explicit empty list blocks all values for that field
+Omitting a policy applies no per-agent restriction. Global tool enablement,
+MCP configuration, approvals, and other runtime gates still apply before an
+agent can use a capability.
 
 ### Agent Discovery (Automatic)
 
@@ -703,16 +697,18 @@ Each entry includes:
 | Field | Meaning |
 |-------|---------|
 | `id` | Stable agent id |
-| `name` | Agent identity name from `AGENT.md` frontmatter |
-| `description` | Agent identity description from `AGENT.md` frontmatter |
+| `name` | Agent identity name from `agents.list[].name` |
+| `description` | Agent identity description from `agents.list[].description` |
 
 Important behavior:
 
 - The discovery section appears only when the current agent has the `spawn` tool and includes only peer agents it is permitted to spawn via `subagents.allow_agents`.
 - The current agent and non-spawnable peers are omitted, so the model does not plan against unavailable agents.
 - Discovery is intentionally lightweight. It gives the model only the identity it needs to choose a peer: `id`, `name`, and `description`.
-- `config.json` remains the infrastructure layer: workspace, default agent selection, routing, and subagent permissions. Those permissions also gate discovery visibility.
-- `AGENT.md` remains the identity layer. Runtime/tool code can still use its `tools`, `skills`, `mcpServers`, and `model` fields when delegation happens.
+- `config.json` owns identity, workspace, model, skills, capability policy,
+  default-agent selection, routing, and subagent permissions. Those permissions
+  also gate discovery visibility.
+- `AGENTS.md` contributes prose instructions only.
 
 Example injected shape:
 
@@ -729,51 +725,6 @@ Example injected shape:
 ```
 
 In practice, this means a generalist agent can choose a peer based on its role description, then call `spawn` with the peer's `agent_id`. The runtime resolves the rest.
-
-### Per-agent tool filtering
-
-Per-agent tool filtering is defined in `AGENT.md` frontmatter.
-
-```md
----
-tools:
-  deny:
-    - mcp_gpt_researcher_*
----
-
-# Agent
-```
-
-This keeps capability policy attached to the agent definition itself, and runtime enforces it during tool registration.
-
-Rules:
-
-- If neither `allow` nor `deny` is set, the agent sees the normal tool set.
-- If `allow` is set, it acts like a whitelist:
-  - only tool names matching at least one `allow` glob remain visible.
-- If `deny` is set, matching tools are removed from the visible set.
-- If both are set:
-  1. `allow` is applied first
-  2. `deny` is applied second
-  3. `deny` wins on overlap
-
-Examples:
-
-- `allow: ["mcp_*", "web_fetch"]`
-  - agent sees only MCP tools plus `web_fetch`
-- `deny: ["mcp_gpt_researcher_*"]`
-  - agent sees everything except GPT Researcher tools
-- `allow: ["mcp_*"]` + `deny: ["mcp_gpt_researcher_*"]`
-  - agent sees only MCP tools, except GPT Researcher tools
-
-Patterns use shell-style globs matched against the final runtime tool name, for example:
-
-- `mcp_gpt_researcher_*`
-- `mcp_inventorydb_*`
-- `web_*`
-- `spawn`
-
-This filtering is enforced at tool registration time. Filtered tools do not appear in the agent's prompt/tool list and cannot be called by that agent.
 
 ### 🔒 Security Sandbox
 

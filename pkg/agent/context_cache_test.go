@@ -44,7 +44,7 @@ func setupWorkspace(t *testing.T, files map[string]string) string {
 // Codex (only reads last system message as instructions).
 func TestSingleSystemMessage(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Agent\nTest agent.",
+		"AGENTS.md": "# Agent\nTest agent.",
 	})
 	defer os.RemoveAll(tmpDir)
 
@@ -135,7 +135,7 @@ func TestSingleSystemMessage(t *testing.T) {
 
 func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Agent\nTest agent.",
+		"AGENTS.md": "# Agent\nTest agent.",
 	})
 	defer os.RemoveAll(tmpDir)
 
@@ -209,7 +209,7 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 	}{
 		{
 			name:       "bootstrap file change",
-			file:       "AGENT.md",
+			file:       "AGENTS.md",
 			contentV1:  "# Original Agent",
 			contentV2:  "# Updated Agent",
 			checkField: "Updated Agent",
@@ -293,7 +293,7 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 // even when source files haven't changed (useful for tests and reload commands).
 func TestExplicitInvalidateCache(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Test Agent",
+		"AGENTS.md": "# Test Agent",
 	})
 	defer os.RemoveAll(tmpDir)
 
@@ -320,8 +320,8 @@ func TestExplicitInvalidateCache(t *testing.T) {
 // when no files change (regression test for issue #607).
 func TestCacheStability(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Agent\nContent",
-		"SOUL.md":  "# Soul\nContent",
+		"AGENTS.md": "# Agent\nContent",
+		"SOUL.md":   "# Soul\nContent",
 	})
 	defer os.RemoveAll(tmpDir)
 
@@ -626,7 +626,7 @@ description: delete-me-v1
 // Run with: go test -race ./pkg/agent/ -run TestConcurrentBuildSystemPromptWithCache
 func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md":             "# Agent\nConcurrency test agent.",
+		"AGENTS.md":            "# Agent\nConcurrency test agent.",
 		"SOUL.md":              "# Soul\nBe helpful.",
 		"memory/MEMORY.md":     "# Memory\nUser prefers Go.",
 		"skills/demo/SKILL.md": "---\nname: demo\ndescription: \"demo skill\"\n---\n# Demo",
@@ -827,7 +827,7 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 	if err := os.MkdirAll(filepath.Join(tmpDir, "skills"), 0o755); err != nil {
 		b.Fatal(err)
 	}
-	for _, name := range []string{"AGENT.md", "SOUL.md"} {
+	for _, name := range []string{"AGENTS.md", "SOUL.md"} {
 		if err := os.WriteFile(
 			filepath.Join(tmpDir, name),
 			[]byte(strings.Repeat("Content.\n", 10)),

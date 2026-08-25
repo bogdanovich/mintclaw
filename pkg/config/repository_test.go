@@ -1033,7 +1033,7 @@ func TestRepositoryResetRejectsUnreadableSecurityWithoutChangingConfig(t *testin
 func TestLoadConfigDoesNotPersistRuntimeEnvironmentOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	baseline := []byte(
-		`{"version":3,"agents":{"defaults":{}},"channel_list":{},"model_list":[],` +
+		`{"version":4,"agents":{"defaults":{}},"channel_list":{},"model_list":[],` +
 			`"gateway":{"log_level":"warn"},"tools":{},"heartbeat":{},"devices":{},"voice":{}}`,
 	)
 	if err := os.WriteFile(path, baseline, 0o600); err != nil {

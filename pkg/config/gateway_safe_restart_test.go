@@ -7,7 +7,7 @@ import (
 
 func TestGatewaySafeRestartConfigParsing(t *testing.T) {
 	raw := []byte(`{
-		"version": 3,
+		"version": 4,
 		"gateway": {
 			"safe_restart": {
 				"enabled": true,
@@ -54,7 +54,7 @@ func TestGatewaySafeRestartDefaultDisabled(t *testing.T) {
 
 func TestGatewayDeployConfigParsing(t *testing.T) {
 	raw := []byte(`{
-		"version": 3,
+		"version": 4,
 		"gateway": {
 			"deploy": {
 				"enabled": true,

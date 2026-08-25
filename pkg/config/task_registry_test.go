@@ -9,7 +9,7 @@ import (
 func TestLoadConfigTaskRegistryDefaultsAndOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{
-  "version": 3,
+  "version": 4,
   "task_registry": {
     "terminal_retention_hours": 24,
     "max_records": 12,

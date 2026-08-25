@@ -42,7 +42,7 @@ The new `model_list` configuration offers several advantages:
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "model_list": [
     {
       "model_name": "gpt4",

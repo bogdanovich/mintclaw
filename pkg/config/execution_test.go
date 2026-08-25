@@ -239,7 +239,7 @@ func TestValidateExecutionTargetsRejectsOversizedTargetSet(t *testing.T) {
 func TestLoadConfigRejectsUnknownExecutionTargetReference(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(`{
-		"version": 3,
+		"version": 4,
 		"agents": {
 			"defaults": {
 				"target_policy": {"allowed_targets": ["missing"]}
@@ -268,7 +268,7 @@ func TestConfigLoadersPreserveExecutionTargetPolicy(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")
 			if err := os.WriteFile(path, []byte(`{
-				"version": 3,
+				"version": 4,
 				"agents": {
 					"defaults": {
 						"target_policy": {
@@ -309,7 +309,7 @@ func TestConfigLoadersPreserveExecutionTargetPolicy(t *testing.T) {
 func TestInvalidTargetPolicyDoesNotRewriteConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	original := []byte(`{
-		"version": 3,
+		"version": 4,
 		"agents": {
 			"defaults": {
 				"target_policy": {"allowed_targets": ["missing"]}

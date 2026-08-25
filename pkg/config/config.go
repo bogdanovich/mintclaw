@@ -9,7 +9,7 @@ import (
 var rrCounter atomic.Uint64
 
 // CurrentVersion is the only config schema version accepted at runtime.
-const CurrentVersion = 3
+const CurrentVersion = 4
 
 func init() {
 	initChannel()

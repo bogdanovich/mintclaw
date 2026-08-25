@@ -248,7 +248,7 @@ func liveTestConfig(t *testing.T, serverURL, token string) string {
 	host := parsed.Hostname()
 	port := parsed.Port()
 	path := filepath.Join(t.TempDir(), "config.json")
-	content := `{"version":3,"gateway":{"host":` + strconvQuote(host) + `,"port":` + port +
+	content := `{"version":4,"gateway":{"host":` + strconvQuote(host) + `,"port":` + port +
 		`},"channel_list":{"mintclaw":{"type":"mintclaw","enabled":true,"settings":{"token":` +
 		strconvQuote(token) + `}}}}`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

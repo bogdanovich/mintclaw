@@ -3,6 +3,7 @@ package agent
 import (
 	"path"
 
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -15,13 +16,13 @@ func agentAllowsTool(agent *AgentInstance, toolName string) bool {
 	return toolAllowedByPolicy(agent.ToolPolicy, toolName)
 }
 
-func toolAllowedByPolicy(policy *PatternPolicy, toolName string) bool {
+func toolAllowedByPolicy(policy *config.AgentCapabilityPolicy, toolName string) bool {
 	if policy == nil {
 		return true
 	}
 
-	allowed := true
-	if policy.form == patternPolicyFormList || len(policy.Allow) > 0 {
+	allowed := policy.Default == config.AgentCapabilityDefaultAllow
+	if policy.Default == config.AgentCapabilityDefaultDeny {
 		allowed = matchesAnyGlob(toolName, policy.Allow)
 	}
 	if !allowed {
@@ -36,7 +37,7 @@ func toolAllowedByPolicy(policy *PatternPolicy, toolName string) bool {
 func registerToolWithPolicies(
 	registry *tools.ToolRegistry,
 	tool toolshared.Tool,
-	policies ...*PatternPolicy,
+	policies ...*config.AgentCapabilityPolicy,
 ) bool {
 	if registry == nil || tool == nil {
 		return false

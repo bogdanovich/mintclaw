@@ -651,7 +651,7 @@ func TestConfig_ValidateModelReferences(t *testing.T) {
 func TestLoadConfigRejectsUnknownModelReferenceWithoutRewriting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	before := []byte(`{
-		"version": 3,
+		"version": 4,
 		"agents": {"defaults": {"model_name": "openai/gpt-5.4"}},
 		"model_list": [{"model_name": "primary", "provider": "openai", "model": "gpt-5.4"}]
 	}`)
@@ -676,7 +676,7 @@ func TestLoadConfigRejectsUnknownModelReferenceWithoutRewriting(t *testing.T) {
 func TestLoadConfigRejectsDormantModelReferenceWithoutRewriting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	before := []byte(`{
-		"version": 3,
+		"version": 4,
 		"agents": {"defaults": {"model_name": "primary"}},
 		"model_list": [
 			{"model_name": "primary", "provider": "openai", "model": "gpt-5.4", "enabled": true},

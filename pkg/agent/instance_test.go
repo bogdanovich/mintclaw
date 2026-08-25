@@ -796,13 +796,10 @@ func TestNewAgentInstance_WriteFileCopyReflectsAvailableAltTools(t *testing.T) {
 	})
 }
 
-// Availability follows the per-agent allowlist, not just the enable flag:
-// append_file enabled globally but hidden by frontmatter must not be named.
-func TestNewAgentInstance_WriteFileCopyExcludesAllowlistHiddenAltTools(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": "---\ntools: [write_file]\n---\n# Agent\n",
-	})
-	defer cleanupWorkspace(t, workspace)
+// Availability follows the per-agent policy, not just the enable flag:
+// append_file enabled globally but denied for this agent must not be named.
+func TestNewAgentInstance_WriteFileCopyExcludesPolicyHiddenAltTools(t *testing.T) {
+	workspace := t.TempDir()
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -820,10 +817,14 @@ func TestNewAgentInstance_WriteFileCopyExcludesAllowlistHiddenAltTools(t *testin
 	agent := NewAgentInstance(&config.AgentConfig{
 		ID:        "restricted",
 		Workspace: workspace,
+		ToolPolicy: &config.AgentCapabilityPolicy{
+			Default: config.AgentCapabilityDefaultDeny,
+			Allow:   []string{"write_file"},
+		},
 	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
 
 	if _, ok := agent.Tools.Get("append_file"); ok {
-		t.Fatal("append_file should be blocked by the allowlist")
+		t.Fatal("append_file should be blocked by the agent policy")
 	}
 
 	writeTool, ok := agent.Tools.Get("write_file")
@@ -831,7 +832,7 @@ func TestNewAgentInstance_WriteFileCopyExcludesAllowlistHiddenAltTools(t *testin
 		t.Fatal("write_file tool not registered")
 	}
 	if desc := writeTool.Description(); strings.Contains(desc, "append_file") {
-		t.Fatalf("write_file must not name allowlist-hidden tools, got: %q", desc)
+		t.Fatalf("write_file must not name policy-hidden tools, got: %q", desc)
 	}
 }
 
@@ -869,16 +870,18 @@ func TestNewAgentInstance_InvalidExecConfigDoesNotExit(t *testing.T) {
 	}
 }
 
-func TestNewAgentInstance_UsesFrontmatterModelAndSkills(t *testing.T) {
+func TestNewAgentInstance_UsesConfigAuthorityAndIgnoresMarkdownMachineFields(t *testing.T) {
 	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
+		"AGENTS.md": `---
 model: frontmatter-model
 skills: [frontmatter-skill]
 mcpServers: [GitHub, filesystem]
+tools: []
+unknownAuthority: true
 ---
-# Agent
+# Instructions
 
-Use frontmatter identity.
+Treat these fields as prose.
 `,
 	})
 	defer cleanupWorkspace(t, workspace)
@@ -891,6 +894,7 @@ Use frontmatter identity.
 			},
 		},
 		Tools: config.ToolsConfig{
+			ReadFile: config.ReadFileToolConfig{Enabled: true},
 			MCP: config.MCPConfig{
 				Servers: map[string]config.MCPServerConfig{
 					"github":        {Enabled: true},
@@ -901,7 +905,7 @@ Use frontmatter identity.
 			},
 		},
 		ModelList: []*config.ModelConfig{{
-			ModelName: "frontmatter-model", Provider: "openai", Model: "frontmatter-model",
+			ModelName: "config-model", Provider: "openai", Model: "config-model",
 			Enabled: true,
 		}},
 	}
@@ -913,123 +917,37 @@ Use frontmatter identity.
 			Primary: "config-model",
 		},
 		Skills: []string{"config-skill"},
+		MCPServerPolicy: &config.AgentCapabilityPolicy{
+			Default: config.AgentCapabilityDefaultDeny,
+			Allow:   []string{"github", "filesystem"},
+		},
 	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
 
-	if agent.Model != "frontmatter-model" {
-		t.Fatalf("agent.Model = %q, want frontmatter-model", agent.Model)
+	if agent.Model != "config-model" {
+		t.Fatalf("agent.Model = %q, want config-model", agent.Model)
 	}
-	if len(agent.SkillsFilter) != 1 || agent.SkillsFilter[0] != "frontmatter-skill" {
-		t.Fatalf("agent.SkillsFilter = %v, want [frontmatter-skill]", agent.SkillsFilter)
+	if len(agent.SkillsFilter) != 1 || agent.SkillsFilter[0] != "config-skill" {
+		t.Fatalf("agent.SkillsFilter = %v, want [config-skill]", agent.SkillsFilter)
 	}
 	if !agent.AllowsMCPServer("github") {
-		t.Fatal("expected github MCP server to be allowed from frontmatter")
+		t.Fatal("expected github MCP server to be allowed from config")
 	}
 	if !agent.AllowsMCPServer("FILESYSTEM") {
 		t.Fatal("expected filesystem MCP server matching to be case-insensitive")
 	}
 	if agent.AllowsMCPServer("slack") {
-		t.Fatal("expected slack MCP server to be blocked by frontmatter allowlist")
+		t.Fatal("expected slack MCP server to be blocked by config policy")
+	}
+	if _, ok := agent.Tools.Get("read_file"); !ok {
+		t.Fatal("Markdown tools field changed config-owned tool admission")
+	}
+	if bootstrap := agent.ContextBuilder.LoadBootstrapFiles(); !strings.Contains(bootstrap, "unknownAuthority: true") {
+		t.Fatalf("AGENTS.md was not retained as prose: %q", bootstrap)
 	}
 }
 
-func TestNewAgentInstance_RejectsUnknownFrontmatterModel(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": "---\nmodel: unknown-model\n---\n# Agent\n",
-	})
-	defer cleanupWorkspace(t, workspace)
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
-			Workspace: workspace,
-			ModelName: "configured-model",
-		}},
-		ModelList: []*config.ModelConfig{{
-			ModelName: "configured-model", Provider: "openai", Model: "gpt-5.4",
-		}},
-	}
-
-	agent, err := newAgentInstance(
-		&config.AgentConfig{ID: "research", Workspace: workspace},
-		&cfg.Agents.Defaults,
-		cfg,
-		&mockProvider{},
-		nil,
-		nil,
-	)
-	if err == nil || !strings.Contains(err.Error(), `workspace model "unknown-model" is not configured`) {
-		t.Fatalf("newAgentInstance() agent = %#v, error = %v", agent, err)
-	}
-}
-
-func TestNewAgentInstance_RejectsDisabledFrontmatterModel(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": "---\nmodel: disabled-model\n---\n# Agent\n",
-	})
-	defer cleanupWorkspace(t, workspace)
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
-			Workspace: workspace,
-			ModelName: "configured-model",
-		}},
-		ModelList: []*config.ModelConfig{{
-			ModelName: "disabled-model", Provider: "openai", Model: "gpt-5.4",
-			Enabled: false,
-		}},
-	}
-
-	agent, err := newAgentInstance(
-		&config.AgentConfig{ID: "research", Workspace: workspace},
-		&cfg.Agents.Defaults,
-		cfg,
-		&mockProvider{},
-		nil,
-		nil,
-	)
-	if err == nil || !strings.Contains(err.Error(), `workspace model "disabled-model" is not configured`) {
-		t.Fatalf("newAgentInstance() agent = %#v, error = %v", agent, err)
-	}
-}
-
-func TestNewAgentInstance_RejectsWhitespaceInFrontmatterModel(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": "---\nmodel: \" configured-model \"\n---\n# Agent\n",
-	})
-	defer cleanupWorkspace(t, workspace)
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
-			Workspace: workspace,
-			ModelName: "configured-model",
-		}},
-		ModelList: []*config.ModelConfig{{
-			ModelName: "configured-model", Provider: "openai", Model: "gpt-5.4",
-		}},
-	}
-
-	agent, err := newAgentInstance(
-		&config.AgentConfig{ID: "research", Workspace: workspace},
-		&cfg.Agents.Defaults,
-		cfg,
-		&mockProvider{},
-		nil,
-		nil,
-	)
-	if err == nil ||
-		!strings.Contains(err.Error(), "workspace model: model_name must not have surrounding whitespace") {
-		t.Fatalf("newAgentInstance() agent = %#v, error = %v", agent, err)
-	}
-}
-
-func TestNewAgentInstance_UsesResolvedProviderForFrontmatterPrimaryModel(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
-model: claude-frontmatter
----
-# Agent
-`,
-	})
-	defer cleanupWorkspace(t, workspace)
+func TestNewAgentInstance_UsesResolvedProviderForConfigPrimaryModel(t *testing.T) {
+	workspace := t.TempDir()
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1041,7 +959,7 @@ model: claude-frontmatter
 		},
 		ModelList: []*config.ModelConfig{
 			{
-				ModelName: "claude-frontmatter", Provider: "anthropic", Model: "claude-3-7-sonnet",
+				ModelName: "claude-config", Provider: "anthropic", Model: "claude-3-7-sonnet",
 				APIKeys:   config.SimpleSecureStrings("test-anthropic-key"),
 				Workspace: workspace,
 				Enabled:   true,
@@ -1053,10 +971,11 @@ model: claude-frontmatter
 	agent := NewAgentInstance(&config.AgentConfig{
 		ID:        "research",
 		Workspace: workspace,
+		Model:     &config.AgentModelConfig{Primary: "claude-config"},
 	}, &cfg.Agents.Defaults, cfg, defaultProvider)
 
-	if agent.Model != "claude-frontmatter" {
-		t.Fatalf("agent.Model = %q, want %q", agent.Model, "claude-frontmatter")
+	if agent.Model != "claude-config" {
+		t.Fatalf("agent.Model = %q, want %q", agent.Model, "claude-config")
 	}
 	if len(agent.Candidates) != 1 {
 		t.Fatalf("len(agent.Candidates) = %d, want 1", len(agent.Candidates))
@@ -1073,14 +992,7 @@ model: claude-frontmatter
 }
 
 func TestNewAgentInstance_SuppressesToolDiscoveryPromptWhenNoMCPServersSelected(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
-mcpServers: []
----
-# Agent
-`,
-	})
-	defer cleanupWorkspace(t, workspace)
+	workspace := t.TempDir()
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1107,10 +1019,13 @@ mcpServers: []
 	agent := NewAgentInstance(&config.AgentConfig{
 		ID:        "research",
 		Workspace: workspace,
+		MCPServerPolicy: &config.AgentCapabilityPolicy{
+			Default: config.AgentCapabilityDefaultDeny,
+		},
 	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
 
 	if agent.AllowsMCPServer("github") {
-		t.Fatal("expected empty mcpServers allowlist to deny all servers")
+		t.Fatal("expected deny-by-default policy to block all servers")
 	}
 	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
 	if prompt := messages[0].Content; strings.Contains(prompt, tools.BM25SearchToolName) {
@@ -1119,14 +1034,7 @@ mcpServers: []
 }
 
 func TestNewAgentInstance_DoesNotPredeclareToolDiscoveryFromConfigOnly(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
-mcpServers: [github]
----
-# Agent
-`,
-	})
-	defer cleanupWorkspace(t, workspace)
+	workspace := t.TempDir()
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1153,6 +1061,10 @@ mcpServers: [github]
 	agent := NewAgentInstance(&config.AgentConfig{
 		ID:        "research",
 		Workspace: workspace,
+		MCPServerPolicy: &config.AgentCapabilityPolicy{
+			Default: config.AgentCapabilityDefaultDeny,
+			Allow:   []string{"github"},
+		},
 	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
 
 	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
@@ -1161,113 +1073,8 @@ mcpServers: [github]
 	}
 }
 
-func TestNewAgentInstance_InvalidFrontmatterFailsClosedForToolsAndMCPServers(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
-tools: [read_file
-mcpServers: [github]
----
-# Agent
-`,
-	})
-	defer cleanupWorkspace(t, workspace)
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace: workspace,
-				ModelName: "default-model",
-			},
-		},
-		Tools: config.ToolsConfig{
-			ReadFile: config.ReadFileToolConfig{Enabled: true},
-		},
-	}
-
-	agent := NewAgentInstance(&config.AgentConfig{
-		ID:        "research",
-		Workspace: workspace,
-	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
-
-	if _, ok := agent.Tools.Get("read_file"); ok {
-		t.Fatal("expected malformed frontmatter to fail closed and block read_file")
-	}
-	if agent.AllowsMCPServer("github") {
-		t.Fatal("expected malformed frontmatter to fail closed for MCP servers")
-	}
-}
-
-func TestNewAgentInstance_ExplicitEmptyToolsFieldBlocksAllTools(t *testing.T) {
-	tests := []struct {
-		name         string
-		toolsSnippet string
-	}{
-		{
-			name:         "empty list",
-			toolsSnippet: "tools: []",
-		},
-		{
-			name:         "blank field",
-			toolsSnippet: "tools:",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			workspace := setupWorkspace(t, map[string]string{
-				"AGENT.md": `---
-` + tt.toolsSnippet + `
----
-# Agent
-`,
-			})
-			defer cleanupWorkspace(t, workspace)
-
-			cfg := &config.Config{
-				Agents: config.AgentsConfig{
-					Defaults: config.AgentDefaults{
-						Workspace: workspace,
-						ModelName: "default-model",
-					},
-				},
-				Tools: config.ToolsConfig{
-					ReadFile: config.ReadFileToolConfig{Enabled: true},
-					ListDir:  config.ToolConfig{Enabled: true},
-				},
-			}
-
-			agent := NewAgentInstance(&config.AgentConfig{
-				ID:        "research",
-				Workspace: workspace,
-			}, &cfg.Agents.Defaults, cfg, &mockProvider{})
-
-			if got := agent.Tools.List(); len(got) != 0 {
-				t.Fatalf("agent tools = %v, want no registered tools", got)
-			}
-			if _, ok := agent.Tools.Get("read_file"); ok {
-				t.Fatal("expected read_file to be blocked by explicit empty tools field")
-			}
-			if _, ok := agent.Tools.Get("list_dir"); ok {
-				t.Fatal("expected list_dir to be blocked by explicit empty tools field")
-			}
-		})
-	}
-}
-
-func TestNewAgentInstance_FrontmatterToolPolicySupportsAllowAndDenyPatterns(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
-tools:
-  allow:
-    - read_*
-    - list_*
-  deny:
-    - list_dir
----
-# Agent
-`,
-	})
-	defer cleanupWorkspace(t, workspace)
+func TestNewAgentInstance_DenyByDefaultToolPolicyBlocksAllTools(t *testing.T) {
+	workspace := t.TempDir()
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1285,30 +1092,48 @@ tools:
 	agent := NewAgentInstance(&config.AgentConfig{
 		ID:        "research",
 		Workspace: workspace,
+		ToolPolicy: &config.AgentCapabilityPolicy{
+			Default: config.AgentCapabilityDefaultDeny,
+		},
 	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
 
-	if _, ok := agent.Tools.Get("read_file"); !ok {
-		t.Fatal("expected read_file to be allowed by frontmatter policy")
-	}
-	if _, ok := agent.Tools.Get("list_dir"); ok {
-		t.Fatal("expected list_dir to be denied by frontmatter policy")
+	if got := agent.Tools.List(); len(got) != 0 {
+		t.Fatalf("agent tools = %v, want no registered tools", got)
 	}
 }
 
-func TestNewAgentInstance_MCPServerPolicySupportsAllowAndDenyPatterns(t *testing.T) {
-	workspace := setupWorkspace(t, map[string]string{
-		"AGENT.md": `---
-mcpServers:
-  allow:
-    - git*
-    - filesystem
-  deny:
-    - github-legacy
----
-# Agent
-`,
-	})
-	defer cleanupWorkspace(t, workspace)
+func TestNewAgentInstance_ConfigToolPolicySupportsAllowAndDenyPatterns(t *testing.T) {
+	workspace := t.TempDir()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+			Workspace: workspace,
+			ModelName: "default-model",
+		}},
+		Tools: config.ToolsConfig{
+			ReadFile: config.ReadFileToolConfig{Enabled: true},
+			ListDir:  config.ToolConfig{Enabled: true},
+		},
+	}
+	agent := NewAgentInstance(&config.AgentConfig{
+		ID:        "research",
+		Workspace: workspace,
+		ToolPolicy: &config.AgentCapabilityPolicy{
+			Default: config.AgentCapabilityDefaultDeny,
+			Allow:   []string{"read_*", "list_*"},
+			Deny:    []string{"list_dir"},
+		},
+	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if _, ok := agent.Tools.Get("read_file"); !ok {
+		t.Fatal("expected read_file to be allowed by config policy")
+	}
+	if _, ok := agent.Tools.Get("list_dir"); ok {
+		t.Fatal("expected list_dir to be denied by config policy")
+	}
+}
+
+func TestNewAgentInstance_ConfigMCPServerPolicySupportsAllowAndDenyPatterns(t *testing.T) {
+	workspace := t.TempDir()
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -1322,6 +1147,11 @@ mcpServers:
 	agent := NewAgentInstance(&config.AgentConfig{
 		ID:        "research",
 		Workspace: workspace,
+		MCPServerPolicy: &config.AgentCapabilityPolicy{
+			Default: config.AgentCapabilityDefaultDeny,
+			Allow:   []string{"git*", "filesystem"},
+			Deny:    []string{"github-legacy"},
+		},
 	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
 
 	if !agent.AllowsMCPServer("github") {

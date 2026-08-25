@@ -22,7 +22,7 @@ func writeConfig(t *testing.T, dir, body string) string {
 func TestRunStableOrderingAndJSONSchema(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `{
-  "version": 3,
+  "version": 4,
   "gateway": {"host": "0.0.0.0"},
   "agents": {"defaults": {"workspace": "`+dir+`", "restrict_to_workspace": true, "max_tokens": 200, "context_window": 100, "summarize_token_percent": 75}},
   "model_list": [{"model_name": "a", "provider": "openai", "model": "a", "enabled": true, "fallbacks": ["a"]}],
@@ -63,7 +63,7 @@ func TestPlaintextCredentialFindingRedactsValue(t *testing.T) {
 	dir := t.TempDir()
 	secret := "sk-test-secret-value"
 	path := writeConfig(t, dir, `{
-  "version": 3,
+  "version": 4,
   "agents": {"defaults": {"workspace": "`+dir+`", "restrict_to_workspace": true}},
   "model_list": [{"model_name": "a", "provider": "openai", "model": "a", "enabled": true, "api_keys": ["`+secret+`"]}],
   "channel_list": {}
@@ -88,7 +88,7 @@ func TestPlaintextCredentialFindingRedactsValue(t *testing.T) {
 func TestReadOnlyDoesNotCreateBackupsOrSecurityFile(t *testing.T) {
 	dir := t.TempDir()
 	path := writeConfig(t, dir, `{
-  "version": 3,
+  "version": 4,
   "agents": {"defaults": {"workspace": "`+dir+`", "restrict_to_workspace": true}},
   "model_list": [{"model_name": "a", "provider": "openai", "model": "a", "enabled": true}],
   "channel_list": {}

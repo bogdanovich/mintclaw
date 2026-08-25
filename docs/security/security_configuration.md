@@ -492,7 +492,7 @@ Returns the path to `.security.yml` relative to the config file.
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "agents": {
     "defaults": {
       "workspace": "~/mintclaw-workspace",

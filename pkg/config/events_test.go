@@ -28,7 +28,7 @@ func TestDefaultEventLoggingConfig(t *testing.T) {
 func TestLoadConfigEventLoggingOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	data := []byte(`{
-		"version": 3,
+		"version": 4,
 		"events": {
 			"logging": {
 				"enabled": false,
@@ -74,7 +74,7 @@ func TestLoadConfigEventLoggingEnvOverrides(t *testing.T) {
 	t.Setenv("MINTCLAW_EVENTS_LOGGING_INCLUDE_PAYLOAD", "true")
 
 	path := filepath.Join(t.TempDir(), "config.json")
-	data := []byte(`{"version": 3}`)
+	data := []byte(`{"version": 4}`)
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

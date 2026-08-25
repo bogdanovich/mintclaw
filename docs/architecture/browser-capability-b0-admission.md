@@ -102,7 +102,7 @@ replay the uncertain call.
 | Decision | Authoritative source |
 | --- | --- |
 | Browser specialist identity and workspace | Existing agent registry and workspace configuration |
-| MCP servers usable by the specialist | `AGENT.md` `mcpServers` policy intersected with enabled global MCP configuration |
+| MCP servers usable by the specialist | `agents.list[].mcp_server_policy` intersected with enabled global MCP configuration |
 | Playwright package, browser executable, profile, and output arguments | Operator-owned `tools.mcp.servers.playwright` configuration |
 | Session-loss recovery behavior | MCP manager implementation |
 | Exclusive profile/process lease | OS lock on the configured absolute lock file |
@@ -203,13 +203,13 @@ profile locking remains an independent final defense.
 
 ### Browser specialist MCP boundary
 
-The deployed browser `AGENT.md` declares an explicit MCP server allowlist:
+The browser agent's config entry declares an explicit MCP server policy:
 
-```yaml
-mcpServers:
-  allow:
-    - playwright
-    - obsidian_personal
+```json
+"mcp_server_policy": {
+  "default": "deny",
+  "allow": ["playwright", "obsidian_personal"]
+}
 ```
 
 `playwright` is required for browser execution. `obsidian_personal` remains
@@ -494,7 +494,7 @@ model-tool contracts merely because the browser deployment motivates it.
 
 ### Gate 4: specialist MCP boundary
 
-- browser `AGENT.md` explicitly allows only `playwright` and
+- browser agent config explicitly allows only `playwright` and
   `obsidian_personal` MCP servers;
 - unrelated MCP tools are not registered for that agent;
 - existing browser and Vipassana flows retain required sources;

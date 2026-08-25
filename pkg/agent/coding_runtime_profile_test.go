@@ -437,12 +437,11 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	t.Cleanup(loop.Close)
 
 	agent := loop.GetRegistry().GetDefaultAgent()
-	if agent.Name != "MintClaw coding agent" || agent.Model != "configured-model" || agent.Definition.Agent != nil {
+	if agent.Name != "MintClaw coding agent" || agent.Model != "configured-model" {
 		t.Fatalf(
-			"coding identity = name:%q model:%q definition:%#v",
+			"coding identity = name:%q model:%q",
 			agent.Name,
 			agent.Model,
-			agent.Definition.Agent,
 		)
 	}
 	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{

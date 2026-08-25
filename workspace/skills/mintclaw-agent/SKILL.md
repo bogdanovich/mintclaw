@@ -273,8 +273,10 @@ Specialized subagents are configured through the multi-agent system, not through
 
 The two important layers are:
 
-- `config.json` defines which peer agents exist and which ones a given agent is allowed to spawn via `subagents.allow_agents`
-- each agent's `AGENT.md` defines the identity that makes that peer worth spawning: `name`, `description`, tools, skills, MCP servers, and optional model overrides
+- `config.json` defines which peer agents exist, their identity, model, skills,
+  tool and MCP policies, and which peers an agent may spawn through
+  `subagents.allow_agents`
+- each workspace's `AGENTS.md` contains prose instructions only
 
 Minimal shape:
 
@@ -290,22 +292,25 @@ Minimal shape:
         }
       },
       {
-        "id": "research"
+        "id": "research",
+        "name": "Research Agent",
+        "description": "Specialist for deep web research, evidence gathering, and synthesis.",
+        "skills": ["deep-research"],
+        "tool_policy": {
+          "default": "deny",
+          "allow": ["web_search", "web_fetch", "message"]
+        }
       }
     ]
   }
 }
 ```
 
-Example `AGENT.md` for a specialist:
+Example `AGENTS.md` for the specialist's prose instructions:
 
 ```md
----
-name: Research Agent
-description: Specialist for deep web research, evidence gathering, and synthesis.
-tools: [web_search, web_fetch, message]
-skills: [deep-research]
----
+You are the research specialist. Gather primary evidence, preserve source
+attribution, and distinguish verified facts from inference.
 ```
 
 ### Automatic Agent Discovery
@@ -598,7 +603,7 @@ Default workspace layout:
 ├── state/
 ├── cron/
 ├── skills/
-├── AGENT.md
+├── AGENTS.md
 ├── HEARTBEAT.md
 ├── SOUL.md
 └── USER.md

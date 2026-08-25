@@ -199,10 +199,6 @@ func copyEmbeddedToTarget(targetDir string) error {
 		if filepath.IsAbs(new_path) {
 			return fmt.Errorf("unexpected absolute embedded path %s", path)
 		}
-		if new_path == "AGENTS.md" || new_path == "IDENTITY.md" {
-			return nil
-		}
-
 		// Build target file path
 		targetPath := filepath.Join(targetDir, new_path)
 
