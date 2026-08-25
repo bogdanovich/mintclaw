@@ -18,6 +18,7 @@ type (
 	Action         = internal.Action
 	Result         = internal.Result
 	HandlerFactory = internal.HandlerFactory
+	WorkspaceFile  = internal.WorkspaceFile
 )
 
 const (
@@ -103,12 +104,12 @@ func (m *MigrateInstance) Run(opts Options) (*Result, error) {
 	fmt.Println()
 
 	if opts.DryRun {
-		PrintPlan(os.Stdout, actions, warnings)
+		PrintPlan(actions, warnings)
 		return &Result{Warnings: warnings}, nil
 	}
 
 	if !opts.Force {
-		PrintPlan(os.Stdout, actions, warnings)
+		PrintPlan(actions, warnings)
 		if !Confirm() {
 			fmt.Println("Aborted.")
 			return &Result{Warnings: warnings}, nil
@@ -276,7 +277,11 @@ func (m *MigrateInstance) PrintSummary(result *Result) {
 	}
 }
 
-func PrintPlan(w io.Writer, actions []Action, warnings []string) {
+func PrintPlan(actions []Action, warnings []string) {
+	printPlan(os.Stdout, actions, warnings)
+}
+
+func printPlan(w io.Writer, actions []Action, warnings []string) {
 	fmt.Fprintln(w, "Planned actions:")
 	copies := 0
 	skips := 0

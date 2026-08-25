@@ -8,8 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/bogdanovich/mintclaw/pkg/migrate/internal"
 )
 
 func TestNewMigrateInstance(t *testing.T) {
@@ -421,7 +419,7 @@ func TestPrintPlan(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	PrintPlan(&output, actions, warnings)
+	printPlan(&output, actions, warnings)
 	assert.Contains(t, output.String(), "[copy]    AGENTS.md -> AGENT.md")
 	assert.Equal(
 		t,
@@ -431,14 +429,14 @@ func TestPrintPlan(t *testing.T) {
 }
 
 func TestPrintPlanEmpty(t *testing.T) {
-	PrintPlan(&bytes.Buffer{}, []Action{}, []string{})
+	printPlan(&bytes.Buffer{}, []Action{}, []string{})
 }
 
 type mockOperation struct {
 	sourceHome     string
 	sourceConfig   string
 	sourceWs       string
-	workspaceFiles []internal.WorkspaceFile
+	workspaceFiles []WorkspaceFile
 	workspaceDirs  []string
 }
 
@@ -467,7 +465,7 @@ func (m *mockOperation) GetSourceConfigFile() (string, error) {
 	return "/tmp/mock/config.json", nil
 }
 func (m *mockOperation) ExecuteConfigMigration(src, dst string) error { return nil }
-func (m *mockOperation) WorkspaceFiles() []internal.WorkspaceFile {
+func (m *mockOperation) WorkspaceFiles() []WorkspaceFile {
 	if m.workspaceFiles != nil {
 		return m.workspaceFiles
 	}
