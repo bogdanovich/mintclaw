@@ -21,6 +21,9 @@ type FallbackCandidate struct {
 	DisplayName string // optional configured alias/raw model label for persistence/UI
 	RPM         int    // requests per minute; 0 means unrestricted
 	IdentityKey string // optional stable config identity for cooldown/rate limiting
+	// ConfigOrdinal is the one-based model_list row selected for this runtime.
+	// It is intentionally separate from IdentityKey, which can be shared by load-balanced rows.
+	ConfigOrdinal int
 }
 
 // StableKey returns the candidate's config-level identity when available,

@@ -309,7 +309,7 @@ func newAgentInstance(
 		contextBuilder.WithCodingPromptModel(model)
 	}
 	providerOwnership := newProviderOwnership(provider)
-	var selectedModel *config.ModelConfig
+	var selectedModel *resolvedModelSelection
 	provider, selectedModel = resolvePrimaryProviderForAgent(
 		cfg,
 		workspace,
@@ -336,7 +336,11 @@ func newAgentInstance(
 	} else {
 		initCoreAgentTools(workspace, cfg, toolInit)
 	}
-	runtimeCfg := buildAgentRuntimeConfig(defaults, selectedModel)
+	var selectedModelConfig *config.ModelConfig
+	if selectedModel != nil {
+		selectedModelConfig = selectedModel.modelConfig
+	}
+	runtimeCfg := buildAgentRuntimeConfig(defaults, selectedModelConfig)
 	routingCfg := buildAgentRoutingConfig(
 		cfg,
 		defaults,
@@ -651,13 +655,13 @@ func buildAgentRoutingConfig(
 	cfg *config.Config,
 	defaults *config.AgentDefaults,
 	workspace string,
-	selectedModel *config.ModelConfig,
+	selectedModel *resolvedModelSelection,
 	fallbacks []string,
 	agentID string,
 	providerOwnership *providerOwnership,
 ) agentRoutingConfig {
 	routingCfg := agentRoutingConfig{
-		candidates:         resolveModelCandidatesFromSelectedPrimary(cfg, selectedModel, fallbacks),
+		candidates:         resolveModelCandidatesFromSelection(cfg, selectedModel, fallbacks),
 		candidateProviders: make(map[string]providers.LLMProvider),
 	}
 	populateCandidateProvidersFromNamesTracked(
@@ -673,14 +677,7 @@ func buildAgentRoutingConfig(
 		return routingCfg
 	}
 
-	resolved := resolveModelCandidates(cfg, rc.LightModel, nil)
-	if len(resolved) == 0 {
-		logger.WarnCF("agent", "Routing light model not found; routing disabled",
-			map[string]any{"light_model": rc.LightModel, "agent_id": agentID})
-		return routingCfg
-	}
-
-	lightModelCfg, err := resolvedModelConfig(cfg, rc.LightModel, workspace)
+	lightSelection, err := resolveModelSelection(cfg, rc.LightModel, workspace)
 	if err != nil {
 		logger.WarnCF(
 			"agent",
@@ -693,8 +690,9 @@ func buildAgentRoutingConfig(
 		)
 		return routingCfg
 	}
+	resolved := resolveModelCandidatesFromSelection(cfg, &lightSelection, nil)
 
-	lightProvider, _, err := providers.CreateProviderFromConfig(lightModelCfg)
+	lightProvider, _, err := providers.CreateProviderFromConfig(lightSelection.modelConfig)
 	if err != nil {
 		logger.WarnCF("agent", "Routing light model provider init failed; routing disabled",
 			map[string]any{"light_model": rc.LightModel, "agent_id": agentID, "error": err.Error()})
@@ -718,16 +716,19 @@ func buildAgentRoutingConfig(
 	return routingCfg
 }
 
-func resolveModelCandidatesFromSelectedPrimary(
+func resolveModelCandidatesFromSelection(
 	cfg *config.Config,
-	selectedModel *config.ModelConfig,
+	selection *resolvedModelSelection,
 	fallbacks []string,
 ) []providers.FallbackCandidate {
 	candidates := make([]providers.FallbackCandidate, 0, 1+len(fallbacks))
 	seen := make(map[string]bool, 1+len(fallbacks))
-	if primary, ok := candidateFromModelConfig(selectedModel); ok {
-		candidates = append(candidates, primary)
-		seen[primary.StableKey()] = true
+	if selection != nil {
+		primary, ok := candidateFromModelSelection(*selection)
+		if ok {
+			candidates = append(candidates, primary)
+			seen[primary.StableKey()] = true
+		}
 	}
 	for _, fallback := range resolveModelCandidates(cfg, "", fallbacks) {
 		if seen[fallback.StableKey()] {
@@ -798,22 +799,18 @@ func resolvePrimaryProviderForAgent(
 	model string,
 	fallback providers.LLMProvider,
 	providerOwnership *providerOwnership,
-) (providers.LLMProvider, *config.ModelConfig) {
+) (providers.LLMProvider, *resolvedModelSelection) {
 	model = strings.TrimSpace(model)
 	if cfg == nil || model == "" {
 		return fallback, nil
 	}
 
-	modelCfg, err := cfg.GetModelConfig(model)
-	if err != nil || modelCfg == nil {
+	selection, err := resolveModelSelection(cfg, model, workspace)
+	if err != nil || selection.modelConfig == nil {
 		return fallback, nil
 	}
-	clone := *modelCfg
-	if clone.Workspace == "" {
-		clone.Workspace = workspace
-	}
 
-	resolvedProvider, _, err := providers.CreateProviderFromConfig(&clone)
+	resolvedProvider, _, err := providers.CreateProviderFromConfig(selection.modelConfig)
 	if err != nil {
 		logger.WarnCF("agent", "Primary model provider init failed; using injected provider",
 			map[string]any{
@@ -821,13 +818,13 @@ func resolvePrimaryProviderForAgent(
 				"model":    model,
 				"error":    err.Error(),
 			})
-		return fallback, &clone
+		return fallback, &selection
 	}
 	if resolvedProvider == nil {
-		return fallback, &clone
+		return fallback, &selection
 	}
 	providerOwnership.trackCreated(resolvedProvider)
-	return resolvedProvider, &clone
+	return resolvedProvider, &selection
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.

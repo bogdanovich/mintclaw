@@ -42,6 +42,24 @@ func TestPreferredCodexModelFallsBackToBundledDefault(t *testing.T) {
 	}
 }
 
+func TestPreferredCodexModelRejectsInvalidDurableMetadata(t *testing.T) {
+	got := PreferredCodexModel([]CodexModelInfo{
+		{Slug: "bad model", ContextWindow: 100, MaxContextWindow: 100, Priority: 1, Visibility: "list"},
+		{Slug: "too-small-max", ContextWindow: 200, MaxContextWindow: 100, Priority: 2, Visibility: "list"},
+		{Slug: "  valid-model  ", ContextWindow: 300, MaxContextWindow: 400, Priority: 3, Visibility: " list "},
+	})
+	if got.Slug != "valid-model" || got.ContextWindow != 300 || got.Visibility != "list" {
+		t.Fatalf("preferred model = %+v", got)
+	}
+
+	fallback := PreferredCodexModel([]CodexModelInfo{
+		{Slug: "/invalid", ContextWindow: 100, Priority: 1, Visibility: "list"},
+	})
+	if fallback.Slug != CodexDefaultModel {
+		t.Fatalf("fallback model = %+v", fallback)
+	}
+}
+
 func TestBundledCodexModelNormalizesOpenAINamespace(t *testing.T) {
 	got, ok := BundledCodexModel("openai/GPT-5.6-SOL")
 	if !ok || got.ContextWindow != CodexDefaultContextWindow {

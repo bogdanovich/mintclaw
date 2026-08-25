@@ -147,6 +147,32 @@ func TestResolveActiveModelConfig_LoadBalancedAliasUsesSelectedCandidate(t *test
 	}
 }
 
+func TestResolveActiveModelConfig_UsesExactDuplicateEntryOrdinal(t *testing.T) {
+	cfg := &config.Config{ModelList: []*config.ModelConfig{
+		{
+			ModelName: "lb-model", Provider: "openai", Model: "same-model", Enabled: true,
+			Streaming: config.ModelStreamingConfig{Enabled: false},
+		},
+		{
+			ModelName: "lb-model", Provider: "openai", Model: "same-model", Enabled: true,
+			Streaming: config.ModelStreamingConfig{Enabled: true},
+		},
+	}}
+
+	got := resolveActiveModelConfig(
+		cfg,
+		"/workspace",
+		[]providers.FallbackCandidate{{
+			Provider: "openai", Model: "same-model", IdentityKey: "model_name:lb-model", ConfigOrdinal: 2,
+		}},
+		"lb-model",
+	)
+
+	if got == nil || !got.Streaming.Enabled {
+		t.Fatalf("resolveActiveModelConfig() = %+v, want exact second entry", got)
+	}
+}
+
 func TestResolveActiveModelConfig_RequiresCandidateIdentity(t *testing.T) {
 	cfg := &config.Config{
 		ModelList: []*config.ModelConfig{

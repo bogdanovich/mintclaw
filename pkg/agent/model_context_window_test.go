@@ -80,11 +80,12 @@ func TestRuntimeConfigBindsContextWindowToLoadBalancedProviderSelection(t *testi
 	if providersShareIdentity(provider, fallback) || selected == nil {
 		t.Fatalf("provider selection fell back: provider = %T, selected = %+v", provider, selected)
 	}
+	selectedConfig := selected.modelConfig
 
 	wantByModel := map[string]int{"gpt-first": 111_000, "gpt-second": 222_000}
-	want, ok := wantByModel[selected.Model]
+	want, ok := wantByModel[selectedConfig.Model]
 	if !ok {
-		t.Fatalf("selected provider model = %q", selected.Model)
+		t.Fatalf("selected provider model = %q", selectedConfig.Model)
 	}
 	// A second lookup advances round-robin and demonstrates why runtime metadata
 	// must use the entry returned with the provider rather than resolving again.
@@ -92,17 +93,17 @@ func TestRuntimeConfigBindsContextWindowToLoadBalancedProviderSelection(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next.Model == selected.Model {
-		t.Fatalf("round-robin did not advance: selected = %q, next = %q", selected.Model, next.Model)
+	if next.Model == selectedConfig.Model {
+		t.Fatalf("round-robin did not advance: selected = %q, next = %q", selectedConfig.Model, next.Model)
 	}
 
-	runtimeCfg := buildAgentRuntimeConfig(&cfg.Agents.Defaults, selected)
+	runtimeCfg := buildAgentRuntimeConfig(&cfg.Agents.Defaults, selectedConfig)
 	if runtimeCfg.contextWindow != want {
 		t.Fatalf(
 			"context window = %d, want %d for selected provider model %q",
 			runtimeCfg.contextWindow,
 			want,
-			selected.Model,
+			selectedConfig.Model,
 		)
 	}
 	routingCfg := buildAgentRoutingConfig(
@@ -114,7 +115,8 @@ func TestRuntimeConfigBindsContextWindowToLoadBalancedProviderSelection(t *testi
 		"main",
 		newProviderOwnership(provider),
 	)
-	if len(routingCfg.candidates) != 1 || routingCfg.candidates[0].Model != selected.Model {
-		t.Fatalf("primary candidates = %+v, selected model = %q", routingCfg.candidates, selected.Model)
+	if len(routingCfg.candidates) != 1 || routingCfg.candidates[0].Model != selectedConfig.Model ||
+		routingCfg.candidates[0].ConfigOrdinal != selected.configOrdinal {
+		t.Fatalf("primary candidates = %+v, selected = %+v", routingCfg.candidates, selected)
 	}
 }

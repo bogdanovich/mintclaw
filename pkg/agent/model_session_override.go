@@ -149,20 +149,20 @@ func (m *modelExecutionManager) buildExecutionStateForModel(
 		return effectiveExecutionState{}, nil, fmt.Errorf("agent not initialized")
 	}
 	cfg := m.config()
-	modelCfg, err := resolvedModelConfig(cfg, modelName, baseAgent.Workspace)
+	selection, err := resolveModelSelection(cfg, modelName, baseAgent.Workspace)
 	if err != nil {
 		return effectiveExecutionState{}, nil, err
 	}
 
 	factory := m.currentProviderFactory()
-	overrideProvider, _, err := factory(modelCfg)
+	overrideProvider, _, err := factory(selection.modelConfig)
 	if err != nil {
 		return effectiveExecutionState{}, nil, fmt.Errorf("failed to initialize model %q: %w", modelName, err)
 	}
 
-	overrideCandidates := resolveModelCandidates(
+	overrideCandidates := resolveModelCandidatesFromSelection(
 		cfg,
-		modelName,
+		&selection,
 		fallbacks,
 	)
 	if len(overrideCandidates) == 0 {
@@ -219,8 +219,8 @@ func (m *modelExecutionManager) buildExecutionStateForModel(
 		Provider:                overrideProvider,
 		Candidates:              overrideCandidates,
 		CandidateProviders:      candidateProviders,
-		ThinkingLevel:           parseThinkingLevel(modelCfg.ThinkingLevel),
-		ThinkingLevelConfigured: isConfiguredThinkingLevel(modelCfg.ThinkingLevel),
+		ThinkingLevel:           parseThinkingLevel(selection.modelConfig.ThinkingLevel),
+		ThinkingLevelConfigured: isConfiguredThinkingLevel(selection.modelConfig.ThinkingLevel),
 	}, cleanup, nil
 }
 

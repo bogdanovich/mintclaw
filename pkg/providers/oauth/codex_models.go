@@ -63,10 +63,11 @@ func DefaultCodexModelInfo() CodexModelInfo {
 func PreferredCodexModel(models []CodexModelInfo) CodexModelInfo {
 	visible := make([]CodexModelInfo, 0, len(models))
 	for _, model := range models {
-		if strings.TrimSpace(model.Slug) == "" || model.ContextWindow <= 0 || model.Visibility != "list" {
+		normalized, ok := normalizeCodexModelInfo(model)
+		if !ok {
 			continue
 		}
-		visible = append(visible, model)
+		visible = append(visible, normalized)
 	}
 	if len(visible) == 0 {
 		return DefaultCodexModelInfo()
@@ -75,6 +76,19 @@ func PreferredCodexModel(models []CodexModelInfo) CodexModelInfo {
 		return visible[left].Priority < visible[right].Priority
 	})
 	return visible[0]
+}
+
+func normalizeCodexModelInfo(model CodexModelInfo) (CodexModelInfo, bool) {
+	model.Slug = strings.TrimSpace(model.Slug)
+	model.Visibility = strings.TrimSpace(model.Visibility)
+	if model.Visibility != "list" || model.Slug == "" || model.ContextWindow <= 0 ||
+		model.MaxContextWindow < 0 ||
+		strings.ContainsAny(model.Slug, " \t\n\r") || strings.HasPrefix(model.Slug, "/") ||
+		strings.Contains(model.Slug, "//") ||
+		(model.MaxContextWindow > 0 && model.ContextWindow > model.MaxContextWindow) {
+		return CodexModelInfo{}, false
+	}
+	return model, true
 }
 
 // FetchCodexModels retrieves the model catalog for an authenticated ChatGPT account.

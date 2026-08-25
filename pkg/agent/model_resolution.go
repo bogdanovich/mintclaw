@@ -8,6 +8,11 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
+type resolvedModelSelection struct {
+	modelConfig   *config.ModelConfig
+	configOrdinal int
+}
+
 func requireExactModelName(value string) error {
 	if value == "" {
 		return fmt.Errorf("model_name is required")
@@ -49,9 +54,10 @@ func cloneModelConfigForResolution(
 	return &clone
 }
 
-func candidateFromModelConfig(
-	mc *config.ModelConfig,
+func candidateFromModelSelection(
+	selection resolvedModelSelection,
 ) (providers.FallbackCandidate, bool) {
+	mc := selection.modelConfig
 	if mc == nil {
 		return providers.FallbackCandidate{}, false
 	}
@@ -62,11 +68,12 @@ func candidateFromModelConfig(
 	}
 
 	return providers.FallbackCandidate{
-		Provider:    protocol,
-		Model:       modelID,
-		DisplayName: strings.TrimSpace(mc.ModelName),
-		RPM:         mc.RPM,
-		IdentityKey: modelConfigIdentityKey(mc),
+		Provider:      protocol,
+		Model:         modelID,
+		DisplayName:   strings.TrimSpace(mc.ModelName),
+		RPM:           mc.RPM,
+		IdentityKey:   modelConfigIdentityKey(mc),
+		ConfigOrdinal: selection.configOrdinal,
 	}, true
 }
 
@@ -78,11 +85,11 @@ func resolveModelCandidate(
 	if modelName == "" || cfg == nil {
 		return providers.FallbackCandidate{}, false
 	}
-	mc, err := cfg.GetModelConfig(modelName)
-	if err != nil || mc == nil {
+	selection, err := resolveModelSelection(cfg, modelName, "")
+	if err != nil {
 		return providers.FallbackCandidate{}, false
 	}
-	return candidateFromModelConfig(mc)
+	return candidateFromModelSelection(selection)
 }
 
 func resolveModelCandidates(
@@ -142,20 +149,33 @@ func resolvedCandidateModelName(candidates []providers.FallbackCandidate, fallba
 }
 
 func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("config is nil")
-	}
-	modelCfg, err := resolvedSwitchableModelConfig(cfg, strings.TrimSpace(modelName))
+	selection, err := resolveModelSelection(cfg, modelName, workspace)
 	if err != nil {
 		return nil, err
 	}
+	return selection.modelConfig, nil
+}
 
-	clone := *modelCfg
-	if clone.Workspace == "" {
-		clone.Workspace = workspace
+func resolveModelSelection(
+	cfg *config.Config,
+	modelName, workspace string,
+) (resolvedModelSelection, error) {
+	if cfg == nil {
+		return resolvedModelSelection{}, fmt.Errorf("config is nil")
 	}
-
-	return &clone, nil
+	modelCfg, err := resolvedSwitchableModelConfig(cfg, strings.TrimSpace(modelName))
+	if err != nil {
+		return resolvedModelSelection{}, err
+	}
+	clone := cloneModelConfigForResolution(modelCfg, workspace)
+	ordinal := 0
+	for index, candidate := range cfg.ModelList {
+		if candidate == modelCfg {
+			ordinal = index + 1
+			break
+		}
+	}
+	return resolvedModelSelection{modelConfig: clone, configOrdinal: ordinal}, nil
 }
 
 func resolvedSwitchableModelConfig(cfg *config.Config, modelName string) (*config.ModelConfig, error) {
@@ -198,6 +218,17 @@ func resolveActiveModelConfig(
 
 	if len(candidates) > 0 {
 		candidate := candidates[0]
+		if candidate.ConfigOrdinal > 0 && candidate.ConfigOrdinal <= len(cfg.ModelList) {
+			mc := cfg.ModelList[candidate.ConfigOrdinal-1]
+			if mc == nil || !mc.Enabled || modelConfigIdentityKey(mc) != strings.TrimSpace(candidate.IdentityKey) {
+				return nil
+			}
+			protocol, modelID := modelProviderAndIDForResolution(mc)
+			if providers.ModelKey(protocol, modelID) != providers.ModelKey(candidate.Provider, candidate.Model) {
+				return nil
+			}
+			return cloneModelConfigForResolution(mc, workspace)
+		}
 		identityKey := strings.TrimSpace(candidate.IdentityKey)
 		if identityKey != "" {
 			for _, mc := range cfg.ModelList {
