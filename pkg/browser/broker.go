@@ -50,6 +50,27 @@ type ActionWorker interface {
 	CatalogRevision() string
 }
 
+// PrivateObservationWorker provides observations used only for broker-side
+// validation. These reads must not publish caller-visible snapshot authority.
+type PrivateObservationWorker interface {
+	ActionWorker
+	ObservePrivate(context.Context) (DriverObservation, error)
+}
+
+// ObservationPublication is an immutable worker authority prepared after
+// observation validation. Commit is called only after the broker durably
+// persists the corresponding snapshot generation.
+type ObservationPublication interface {
+	Commit(uint64)
+}
+
+// ObservationPublicationWorker stages the exact private authority associated
+// with one navigation identity without changing published worker state.
+type ObservationPublicationWorker interface {
+	ActionWorker
+	PrepareObservationPublication(string) (ObservationPublication, error)
+}
+
 // DiagnosticsWorker returns only source-bounded, privacy-safe summaries from
 // one live browser worker. Raw driver diagnostics never cross this boundary.
 type DiagnosticsWorker interface {
