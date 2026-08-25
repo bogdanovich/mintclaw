@@ -874,11 +874,30 @@ func TestDefaultConfig_DeltaChatExample(t *testing.T) {
 	if settings.Email != "@nine.testrun.org" {
 		t.Fatalf("DefaultConfig().deltachat.settings.email = %q, want @nine.testrun.org", settings.Email)
 	}
-	if settings.Password.String() != "" {
-		t.Fatal("DefaultConfig().deltachat.settings.password should be empty")
-	}
 	if settings.DisplayName == "" {
 		t.Fatal("DefaultConfig().deltachat.settings.display_name should be populated")
+	}
+}
+
+func TestLoadConfigRejectsRemovedDeltaChatMailboxSettings(t *testing.T) {
+	for _, field := range []string{"password", "imap_server", "imap_port", "smtp_server", "smtp_port"} {
+		t.Run(field, func(t *testing.T) {
+			raw := fmt.Sprintf(
+				`{"version":%d,"channel_list":{"deltachat":{"settings":{"email":"bot@example.org",%q:null}}}}`,
+				CurrentVersion,
+				field,
+			)
+			configPath := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("WriteFile() error: %v", err)
+			}
+
+			_, err := LoadConfig(configPath)
+			want := "unknown field(s): channel_list.deltachat.settings." + field
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("LoadConfig() error = %v, want %q", err, want)
+			}
+		})
 	}
 }
 

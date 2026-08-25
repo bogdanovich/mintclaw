@@ -870,6 +870,11 @@ Implementation sequence:
     an extra root `AGENTS.md` was already shadowed and unused. Project and
     skill-level coding `AGENTS.md` files remain a separate current instruction
     contract.
+45. Make the Delta Chat account store the sole owner of mailbox credentials.
+    Delete MintClaw's password, IMAP, and SMTP settings plus its account
+    configuration and drift-reconciliation paths. Full email addresses must
+    identify an already configured account; the explicit chatmail bootstrap
+    flow remains the current account-creation path.
 
 Exit criteria:
 
