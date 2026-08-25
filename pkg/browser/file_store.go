@@ -546,6 +546,27 @@ func (store *FileStore) PrunePreparedActions(_ context.Context, expiredBefore in
 	return store.persistLocked(previousSessions, previousPrepared, previousInvocations)
 }
 
+func (store *FileStore) PruneSessions(_ context.Context, terminalBefore int64) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := store.ensureOpenLocked(); err != nil {
+		return err
+	}
+	previousSessions, previousPrepared, previousInvocations := store.cloneLocked()
+	changed := false
+	for id, session := range store.sessions {
+		if session.State.Terminal() && session.UpdatedAt > 0 && session.UpdatedAt < terminalBefore &&
+			!sessionReferenced(store.prepared, store.invocations, id) {
+			delete(store.sessions, id)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return store.persistLocked(previousSessions, previousPrepared, previousInvocations)
+}
+
 func (store *FileStore) cloneLocked() (
 	map[string]Session,
 	map[string]PreparedAction,
