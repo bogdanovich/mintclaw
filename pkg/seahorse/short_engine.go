@@ -533,12 +533,13 @@ func messagesMatch(a, b Message) bool {
 	return a.Content == b.Content
 }
 
-// messageCreatedAtMatches treats a missing timestamp as unspecified. Current
-// message inputs may omit CreatedAt; when both sides provide it, it must match.
+// messageCreatedAtMatches compares source timestamps exactly after normalization.
+// Internal ordering uses message IDs and context ordinals, so it must not turn
+// an unknown source time into an implicit match for a synthetic timestamp.
 func messageCreatedAtMatches(a, b time.Time) bool {
 	na := normalizeMessageCreatedAt(a)
 	nb := normalizeMessageCreatedAt(b)
-	return na.IsZero() || nb.IsZero() || na.Equal(nb)
+	return na.Equal(nb)
 }
 
 // partsMatch compares two slices of MessagePart for equality.

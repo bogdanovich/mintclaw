@@ -43,7 +43,7 @@ type seahorseAgentRuntime struct {
 	agentID   string
 }
 
-const seahorseReconciliationGeneration = 1
+const seahorseReconciliationGeneration = 2
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
 func newSeahorseContextManager(rawConfig json.RawMessage, al *AgentLoop) (ContextManager, error) {
