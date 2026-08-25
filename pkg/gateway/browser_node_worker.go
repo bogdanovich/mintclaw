@@ -490,6 +490,22 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 		var result nodes.BrowserObservationResult
 		err = worker.invoke(ctx, descriptor, requestKey, input, &result)
 		if err != nil {
+			if errors.Is(err, browser.ErrStale) && ctx.Err() == nil {
+				// A read-only observation can race a document or frame
+				// transition before the remote snapshot generation advances.
+				// Its durable failed receipt is bound to the invocation ID, so
+				// retry with a fresh identity instead of replaying that receipt.
+				worker.mu.Lock()
+				if worker.closed || worker.snapshotGeneration+1 != nextGeneration {
+					worker.mu.Unlock()
+					return browser.DriverObservation{}, browser.ErrStale
+				}
+				worker.observeRecoverySequence++
+				recovery := worker.observeRecoverySequence
+				worker.mu.Unlock()
+				requestKey = fmt.Sprintf("observe_%d_stale_recovery_%d", nextGeneration, recovery)
+				continue
+			}
 			return browser.DriverObservation{}, err
 		}
 		if !result.ProtectedResult {
