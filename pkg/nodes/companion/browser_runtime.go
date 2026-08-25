@@ -43,6 +43,10 @@ type browserObservationOutputHost interface {
 	) (nodes.BrowserObservationResult, error)
 }
 
+type browserObservationOutputDiscardHost interface {
+	DiscardObservationOutput(nodes.BrowserOutputDescriptor) error
+}
+
 type browserCommandHandler struct {
 	command         string
 	descriptorValue nodes.CommandDescriptor
@@ -214,6 +218,11 @@ func (handler *browserCommandHandler) execute(
 				return protectedBrowserContextReceipt(input.Operation)
 			}
 			result.Observation = &observation
+			staged, encodeErr := json.Marshal(result)
+			if encodeErr != nil || len(staged) > invocation.Plan.OutputLimitBytes {
+				handler.discardObservationOutput(observation.Output)
+				return protectedBrowserContextReceipt(input.Operation)
+			}
 		}
 		return result, browserCommandFailure(err)
 	case nodes.BrowserCommandSessionClose:
@@ -225,6 +234,18 @@ func (handler *browserCommandHandler) execute(
 		return browserStatusResult(result), browserCommandFailure(err)
 	default:
 		return nil, ErrCommandUnavailable
+	}
+}
+
+func (handler *browserCommandHandler) discardObservationOutput(
+	descriptor *nodes.BrowserOutputDescriptor,
+) {
+	if descriptor == nil {
+		return
+	}
+	host, ok := handler.host.(browserObservationOutputDiscardHost)
+	if ok {
+		_ = host.DiscardObservationOutput(*descriptor)
 	}
 }
 

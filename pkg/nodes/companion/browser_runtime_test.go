@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
@@ -41,6 +42,9 @@ type fakeBrowserCommandHost struct {
 	observeSnapshot  string
 	navigateSnapshot string
 	prepareOutputErr error
+	preparedOutput   *nodes.BrowserOutputDescriptor
+	discardedOutputs []nodes.BrowserOutputDescriptor
+	largeCatalog     bool
 	routedSessions   []string
 }
 
@@ -51,7 +55,20 @@ func (host *fakeBrowserCommandHost) PrepareObservationOutput(
 	if host.prepareOutputErr != nil {
 		return nodes.BrowserObservationResult{}, host.prepareOutputErr
 	}
+	if host.preparedOutput != nil {
+		descriptor := *host.preparedOutput
+		result.Output = &descriptor
+		result.Snapshot = ""
+		result.Elements = []nodes.BrowserElement{}
+	}
 	return result, nil
+}
+
+func (host *fakeBrowserCommandHost) DiscardObservationOutput(
+	descriptor nodes.BrowserOutputDescriptor,
+) error {
+	host.discardedOutputs = append(host.discardedOutputs, descriptor)
+	return nil
 }
 
 func (host *fakeBrowserCommandHost) Diagnostics(
@@ -260,6 +277,18 @@ func (host *fakeBrowserCommandHost) Contexts(
 			}},
 		},
 	}
+	if host.largeCatalog {
+		result.Catalog.Tabs = make([]nodes.BrowserTabContext, 0, nodes.MaxBrowserTabs)
+		for index := 0; index < nodes.MaxBrowserTabs; index++ {
+			prefix := fmt.Sprintf("https://example.com/tab/%d/", index)
+			result.Catalog.Tabs = append(result.Catalog.Tabs, nodes.BrowserTabContext{
+				ID: fmt.Sprintf("context_tab_%d", index+1), Kind: "page",
+				CreationSequence: uint64(index + 1), DocumentGeneration: 1,
+				URL:    prefix + strings.Repeat("x", nodes.MaxBrowserURLBytes-len(prefix)),
+				Origin: "https://example.com",
+			})
+		}
+	}
 	if request.Operation == "select" {
 		observation := browserRuntimeObservation(request.SessionID, "tab_primary", 1)
 		observation.Snapshot = "transient_context_observation"
@@ -420,6 +449,64 @@ func TestRuntimePreservesKnownOutcomesWhenObservationStagingFails(t *testing.T) 
 			)
 		}
 	})
+}
+
+func TestRuntimeProtectsOversizedContextResultAfterObservationStaging(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.largeCatalog = true
+	host.preparedOutput = &nodes.BrowserOutputDescriptor{
+		TransferID: "browser_output_context_1", Kind: nodes.BrowserOutputSnapshot,
+		SessionID: "browser_session_1", RoutedSessionID: "session_test",
+		AgentID: "browser", ActorID: "actor_test", WorkspaceID: "workspace_1",
+		Target: "companion", ProfileRevision: "managed-v1",
+		BrowserPolicyRevision: strings.Repeat("a", 64), InvocationID: "context_oversized_1",
+		TabID: "tab_primary", SnapshotGeneration: 1, Filename: "snapshot.json",
+		ContentType: "application/json", Size: 1024, SHA256: strings.Repeat("b", 64),
+		CapturedAt: 1, ExpiresAt: 2, CleanupPolicy: "consume_or_expire",
+	}
+	runtime := newBrowserRuntimeFixture(t, host)
+	authority := nodes.BrowserContextCatalog{
+		ID: "context_catalog_1", Generation: 1, SelectedTabID: "context_tab_1",
+		Tabs: []nodes.BrowserTabContext{{
+			ID: "context_tab_1", Kind: "primary", CreationSequence: 1,
+			DocumentGeneration: 1, URL: "about:blank", Origin: "about:blank",
+		}},
+	}
+	ephemeral, err := json.Marshal(struct {
+		Authority nodes.BrowserContextCatalog `json:"authority"`
+	}{Authority: authority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := nodes.BrowserContextAuthorityDigest(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := json.Marshal(nodes.BrowserContextInput{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		Operation: "select", RequestID: "context_oversized_1",
+		WorkspaceID: "workspace_1", BrowserTarget: "companion",
+		ContextCatalogID: authority.ID, ContextGeneration: authority.Generation,
+		AuthorityDigest: digest, AuthorityBytes: len(ephemeral), TabID: "context_tab_1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlanAtWithOutputLimit(
+		t, runtime, nodes.BrowserCommandContexts, input, time.Now().UTC(), time.Minute, 64*1024,
+	)
+	raw, err := runtime.InvokeWithEphemeral(t.Context(), plan, ephemeral)
+	var result nodes.BrowserContextResult
+	if decodeErr := json.Unmarshal(raw, &result); err != nil || decodeErr != nil ||
+		!result.ProtectedResult || result.Operation != "select" || host.contextCalls != 1 {
+		t.Fatalf(
+			"oversized context = %#v, invoke=%v decode=%v; calls=%d",
+			result, err, decodeErr, host.contextCalls,
+		)
+	}
+	if len(host.discardedOutputs) != 1 || host.discardedOutputs[0] != *host.preparedOutput {
+		t.Fatalf("discarded outputs = %#v", host.discardedOutputs)
+	}
 }
 
 func TestRuntimeExecutesTypedBrowserContextCatalog(t *testing.T) {

@@ -252,6 +252,25 @@ func (host *BrowserHost) RegisterOutput(
 	return descriptor, nil
 }
 
+// DiscardObservationOutput removes a staged semantic snapshot that the
+// companion cannot return within the complete command-result budget.
+func (host *BrowserHost) DiscardObservationOutput(descriptor nodes.BrowserOutputDescriptor) error {
+	if host == nil || descriptor.Kind != nodes.BrowserOutputSnapshot || descriptor.TransferID == "" {
+		return nodes.ErrBrowserHostDenied
+	}
+	host.transferMu.Lock()
+	defer host.transferMu.Unlock()
+	artifact, ok := host.outputArtifacts[descriptor.TransferID]
+	if !ok {
+		return nodes.ErrBrowserHostNotFound
+	}
+	if artifact.descriptor != descriptor || host.outputTransfers[descriptor.TransferID] != nil {
+		return nodes.ErrBrowserHostDenied
+	}
+	host.removeBrowserOutputLocked(descriptor.TransferID)
+	return nil
+}
+
 func (host *BrowserHost) watchBrowserOutputExpiry(
 	ctx context.Context,
 	transferID string,
