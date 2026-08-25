@@ -901,6 +901,29 @@ func TestLoadConfigRejectsRemovedDeltaChatMailboxSettings(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsRemovedDeltaChatPasswordFromSecurityOverlay(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "config.json")
+	raw := fmt.Sprintf(
+		`{"version":%d,"channel_list":{"deltachat":{"settings":{"email":"bot@example.org"}}}}`,
+		CurrentVersion,
+	)
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile(config.json) error: %v", err)
+	}
+	securityPath := filepath.Join(directory, SecurityConfigFile)
+	security := "channel_list:\n  deltachat:\n    settings:\n      password: removed-secret\n"
+	if err := os.WriteFile(securityPath, []byte(security), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error: %v", SecurityConfigFile, err)
+	}
+
+	_, err := LoadConfig(configPath)
+	want := "unknown field(s): channel_list.deltachat.settings.password"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("LoadConfig() error = %v, want %q", err, want)
+	}
+}
+
 func TestValidateSingletonChannels_RejectsMultipleInstances(t *testing.T) {
 	channels := ChannelsConfig{
 		"mintclaw1": &Channel{Enabled: true, Type: ChannelMintClaw},

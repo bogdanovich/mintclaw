@@ -88,11 +88,26 @@ func loadSecurityConfig(cfg *Config, securityPath string) error {
 
 	// If we found a channels node in security.yml, merge it into existing channels
 	if channelsNode != nil {
+		if err := validateChannelSecuritySettings(channelsNode, cfg, securityPath); err != nil {
+			return err
+		}
 		if err := cfg.Channels.UnmarshalYAML(channelsNode); err != nil {
 			return fmt.Errorf("failed to merge channels from security config: %w", err)
 		}
 	}
 
+	return nil
+}
+
+func validateChannelSecuritySettings(node *yaml.Node, current *Config, label string) error {
+	var channels map[string]any
+	if err := node.Decode(&channels); err != nil {
+		return fmt.Errorf("failed to validate channel security config: %w", err)
+	}
+	raw := map[string]any{"channel_list": channels}
+	if err := validateChannelSettingsJSON(raw, current, label); err != nil {
+		return fmt.Errorf("failed to validate channel security config: %w", err)
+	}
 	return nil
 }
 
