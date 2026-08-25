@@ -143,7 +143,12 @@ func (p *Pipeline) Finalize(
 	ts.setFinalContent(finalization.content, finalization.contentProtected)
 	if finalization.historyMessage != nil {
 		finalMsg := *finalization.historyMessage
-		if writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, finalMsg); writeErr != nil {
+		if writeErr := persistFullSessionMessage(
+			turnCtx,
+			ts.agent.Sessions,
+			ts.sessionKey,
+			&finalMsg,
+		); writeErr != nil {
 			finalization.stream.cancel(turnCtx)
 			return turnResult{status: TurnEndStatusError}, writeErr
 		}

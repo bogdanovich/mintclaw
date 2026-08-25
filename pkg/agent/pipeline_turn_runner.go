@@ -111,7 +111,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 				messages = append(messages, providerMsg)
 				totalContentLen += len(providerMsg.Content)
 				if !ts.opts.NoHistory {
-					writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, pm)
+					writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &pm)
 					if writeErr != nil {
 						turnStatus = TurnEndStatusError
 						return turnResult{}, turnStatus, fmt.Errorf("persist steering message: %w", writeErr)

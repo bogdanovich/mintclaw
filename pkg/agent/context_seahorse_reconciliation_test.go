@@ -275,6 +275,64 @@ func TestSeahorseReconciliationAppendAndReplace(t *testing.T) {
 	}
 }
 
+func TestSeahorseFastIngestPreservesCanonicalTimestamp(t *testing.T) {
+	tests := []struct {
+		name      string
+		createdAt *time.Time
+	}{
+		{name: "nil"},
+		{name: "zero", createdAt: new(time.Time)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager, canonical := newReconciliationTestManager(t)
+			ctx := t.Context()
+			key := "fast-ingest-timestamp-" + test.name
+			runtime := singleTestRuntime(manager)
+
+			if err := canonical.AddMessage(ctx, key, "assistant", "existing history"); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.ensureReconciled(ctx, key, runtime.sessions); err != nil {
+				t.Fatal(err)
+			}
+
+			message := providers.Message{
+				Role:      "user",
+				Content:   "Here is what I ate",
+				CreatedAt: test.createdAt,
+			}
+			if err := persistFullSessionMessage(ctx, runtime.sessions, key, &message); err != nil {
+				t.Fatal(err)
+			}
+			if message.CreatedAt == nil || message.CreatedAt.IsZero() {
+				t.Fatalf("canonical message timestamp = %v, want current time", message.CreatedAt)
+			}
+			before := manager.reconciliations.Load()
+			if err := manager.Ingest(ctx, &IngestRequest{SessionKey: key, Message: message}); err != nil {
+				t.Fatal(err)
+			}
+			if got := manager.reconciliations.Load(); got != before {
+				t.Fatalf("fast ingest performed %d full reconciliations, want %d", got, before)
+			}
+
+			assembled, err := manager.Assemble(ctx, &AssembleRequest{SessionKey: key, Budget: 1000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(assembled.History) != 2 {
+				t.Fatalf("assembled history = %#v, want two messages", assembled.History)
+			}
+			got := assembled.History[1].CreatedAt
+			want := normalizeSeahorseMessageCreatedAt(message.CreatedAt)
+			if got == nil || !got.Equal(want) {
+				t.Fatalf("assembled timestamp = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestSeahorseReconciliationGenerationAndFailureRetry(t *testing.T) {
 	mgr, canonical := newReconciliationTestManager(t)
 	key := "retry"

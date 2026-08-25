@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -21,9 +22,13 @@ func persistFullSessionMessage(
 	ctx context.Context,
 	store session.SessionStore,
 	sessionKey string,
-	msg providers.Message,
+	msg *providers.Message,
 ) error {
-	return store.AppendTurnMessage(ctx, sessionKey, msg)
+	if msg.CreatedAt == nil || msg.CreatedAt.IsZero() {
+		createdAt := time.Now()
+		msg.CreatedAt = &createdAt
+	}
+	return store.AppendTurnMessage(ctx, sessionKey, *msg)
 }
 
 func (p *Pipeline) ingestMessage(

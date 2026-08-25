@@ -1692,7 +1692,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				turnCtx,
 				ts.agent.Sessions,
 				ts.sessionKey,
-				summaryMsg,
+				&summaryMsg,
 			)
 			if writeErr != nil {
 				// The durable tool result already records the side-effect outcome;
@@ -1810,7 +1810,7 @@ func (r *toolLoopRunner) appendToolMessageWithDurableContext(
 	if r.ts == nil || r.ts.opts.NoHistory {
 		return nil
 	}
-	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, durableMsg)
+	writeErr := persistFullSessionMessage(ctx, r.ts.agent.Sessions, r.ts.sessionKey, &durableMsg)
 	if writeErr == nil {
 		r.ts.recordPersistedMessagePair(msg, durableMsg)
 	}
@@ -2360,7 +2360,7 @@ func (r *toolLoopRunner) appendInjectedTurnMessage(msg providers.Message) {
 	if r.ts == nil || r.ts.opts.NoHistory {
 		return
 	}
-	writeErr := persistFullSessionMessage(r.turnCtx, r.ts.agent.Sessions, r.ts.sessionKey, msg)
+	writeErr := persistFullSessionMessage(r.turnCtx, r.ts.agent.Sessions, r.ts.sessionKey, &msg)
 	if writeErr == nil {
 		r.ts.recordPersistedMessage(msg)
 	}
