@@ -1,7 +1,8 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through P1 and X3.60, and the
-coordinated compatibility reset, deployment, and Z1 remain open
+Status: active; implementation is merged through P1 and X3.60, the node
+identity bridge is merged, and its rollout, the coordinated compatibility
+reset, deployment, and Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -157,6 +158,7 @@ reset criteria.
 | X2 | #803 and #807 | Merged |
 | X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
 | P1 | #881 | Merged; deployed config and profile cutover remains in R1 |
+| R1 node-identity bridge | #899 | Merged; companion rollout and adapter removal remain in R1 |
 | Z1 | Not yet applicable | Open |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
@@ -248,7 +250,7 @@ separation and standards alignment.
 | Debt | Classification | Current evidence | Owner and removal gate |
 | --- | --- | --- | --- |
 | Previous and older browser catalogue schemas | Temporary first-party wire adapter | PR #865 reconstructs the previous streamed-snapshot schema and retains the earlier session-open output schema after a companion rollout failed; the sole connected browser-capable companion now advertises the current catalogue | Architecture simplification owner; verify the current companion remains connected through cutover, then delete the historical generators in R1 |
-| Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | Six retained registry records omit the field and deterministically normalize to Ed25519; current Ed25519 companion construction also omits it, and three connected non-browser companions remain on older builds | Architecture simplification owner; first merge a bridge packet that emits the field, convert every retained record or deliberately remove it, upgrade or retire older connected companions, then require the field in R1 |
+| Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | PR #899 makes current Ed25519 companion construction emit the explicit field; six retained deployed records still omit it, and three connected non-browser companions remain on older builds | Architecture simplification owner; deploy the bridge to every retained companion, convert every retained record or deliberately remove it, upgrade or retire older connected companions, then require the field in R1 |
 | Deployed version 3 personal profiles | Coordinated persisted-config and workspace cutover | PR #881 makes version 4 config the sole machine authority and root `AGENTS.md` the sole personal prose file; five deployed configs, 21 agents, and 20 personal workspaces still use the pre-cutover shape | Architecture simplification owner; convert and validate every configured agent and distinct workspace while stopped in R1 before installing the version 4 binary |
 
 The current implementation also has one non-blocking observability follow-up,
@@ -1224,9 +1226,10 @@ Scope:
 2. treat the PR #865 browser bridge cycle as satisfied for the sole connected
    browser-capable companion and verify that it remains on the current
    streamed-snapshot contract;
-3. merge and stage a node-identity bridge release that makes Ed25519 companions
-   send explicit `key_algorithm` while the gateway still accepts the omitted
-   form, then upgrade or deliberately retire every older connected companion;
+3. stage the merged PR #899 node-identity bridge release, which makes Ed25519
+   companions send explicit `key_algorithm` while the gateway still accepts
+   the omitted form, then upgrade or deliberately retire every older connected
+   companion;
 4. convert every retained node record to explicit Ed25519 or deliberately
    remove it, and verify every connected companion sends `key_algorithm`;
 5. perform the P1 cutover for all 21 configured agent entries and 20 distinct
