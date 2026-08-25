@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,6 +81,7 @@ type fakeBrowserHostWorker struct {
 	diagnosticsErr          error
 	diagnosticsCategories   []browserworker.DiagnosticCategory
 	onDiagnostics           func()
+	captureCalls            int
 }
 
 func (worker *fakeBrowserHostWorker) Diagnostics(
@@ -132,11 +134,12 @@ func (worker *fakeBrowserHostWorker) NavigationIdentity(context.Context) (string
 	return identity, nil
 }
 
-func (*fakeBrowserHostWorker) CapturePageScreenshot(
+func (worker *fakeBrowserHostWorker) CapturePageScreenshot(
 	context.Context,
 	string,
 	int,
 ) (browserworker.DriverScreenshot, error) {
+	worker.captureCalls++
 	return browserworker.DriverScreenshot{
 		ContentType: "image/png",
 		Data:        []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 1},
@@ -735,12 +738,15 @@ func TestBrowserHostAllowsOnlyUnknownEffectDownloadInDryRun(t *testing.T) {
 	}
 }
 
-func TestBrowserHostCapturesAndRetainsExactObservationIdempotently(t *testing.T) {
+func TestBrowserHostCapturesNavigationBoundPageIdempotently(t *testing.T) {
 	worker := &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,
 		observations: []browserworker.DriverObservation{
 			{URL: "https://example.com/", Origin: "https://example.com", Snapshot: "page"},
-			{URL: "https://example.com/", Origin: "https://example.com", Snapshot: "page"},
+			{
+				URL: "https://example.com/", Origin: "https://example.com",
+				Snapshot: "page changed after the retained semantic observation",
+			},
 		},
 		navigationIdentities: []string{"navigation_1", "navigation_1", "navigation_1", "navigation_1"},
 	}
@@ -781,6 +787,119 @@ func TestBrowserHostCapturesAndRetainsExactObservationIdempotently(t *testing.T)
 	host.transferMu.Unlock()
 	if count != 1 {
 		t.Fatalf("retained output count = %d, want 1", count)
+	}
+}
+
+func TestBrowserHostSerializesConcurrentCaptureRegistration(t *testing.T) {
+	observation := browserworker.DriverObservation{
+		URL: "https://example.com/", Origin: "https://example.com", Snapshot: "page",
+	}
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			observation,
+			observation,
+			observation,
+		},
+		navigationIdentities: []string{
+			"navigation_1", "navigation_1", "navigation_1", "navigation_1",
+			"navigation_1", "navigation_1",
+		},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := BrowserHostCaptureRequest{
+		BrowserCaptureInput: nodes.BrowserCaptureInput{
+			SessionID: observed.SessionID, TabID: observed.TabID,
+			SnapshotID: "snapshot_gateway_1", SnapshotGeneration: observed.SnapshotGeneration,
+			DocumentID: observed.DocumentID, InvocationID: "capture_concurrent_1",
+			WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+			Target: "page", ProfileRevision: "managed-v1",
+			BrowserPolicyRevision: strings.Repeat("a", 64),
+		},
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+	registrationEntered := make(chan struct{})
+	registrationRelease := make(chan struct{})
+	var once sync.Once
+	host.beforeOutputRegistration = func() {
+		once.Do(func() {
+			close(registrationEntered)
+			<-registrationRelease
+		})
+	}
+	type captureResult struct {
+		descriptor nodes.BrowserOutputDescriptor
+		err        error
+	}
+	results := make(chan captureResult, 2)
+	capture := func() {
+		descriptor, captureErr := host.Capture(t.Context(), request)
+		results <- captureResult{descriptor: descriptor, err: captureErr}
+	}
+	go capture()
+	<-registrationEntered
+	go capture()
+	close(registrationRelease)
+	first, second := <-results, <-results
+	if first.err != nil || second.err != nil || first.descriptor != second.descriptor ||
+		first.descriptor.TransferID == "" {
+		t.Fatalf("concurrent captures = %#v, %#v", first, second)
+	}
+	if worker.captureCalls != 1 {
+		t.Fatalf("driver capture calls = %d, want 1", worker.captureCalls)
+	}
+	host.transferMu.Lock()
+	count := len(host.outputArtifacts)
+	host.transferMu.Unlock()
+	if count != 1 {
+		t.Fatalf("retained output count = %d, want 1", count)
+	}
+}
+
+func TestBrowserHostElementCaptureRequiresFreshSemanticTarget(t *testing.T) {
+	initial := browserworker.DriverObservation{
+		URL: "https://example.com/", Origin: "https://example.com", Snapshot: "button",
+		Elements: []browserworker.DriverElement{{Target: "target_1", Role: "button", Name: "Save"}},
+	}
+	changed := initial
+	changed.Snapshot = "button detached"
+	changed.Elements = nil
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			initial,
+			changed,
+		},
+		navigationIdentities: []string{"navigation_1", "navigation_1", "navigation_1", "navigation_1"},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil || len(observation.Elements) != 1 {
+		t.Fatalf("Observe() = %+v, %v", observation, err)
+	}
+	request := BrowserHostCaptureRequest{
+		BrowserCaptureInput: nodes.BrowserCaptureInput{
+			SessionID: observation.SessionID, TabID: observation.TabID,
+			SnapshotID: "snapshot_gateway_1", SnapshotGeneration: observation.SnapshotGeneration,
+			DocumentID: observation.DocumentID, InvocationID: "capture_element_request_1",
+			WorkspaceID: "workspace_1", RouteID: "route_1", BrowserTarget: "companion",
+			Target: "element", Ref: observation.Elements[0].Ref, ProfileRevision: "managed-v1",
+			BrowserPolicyRevision: strings.Repeat("a", 64),
+		},
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	}
+	if _, err = host.Capture(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
+		t.Fatalf("Capture() detached element error = %v, want stale", err)
 	}
 }
 

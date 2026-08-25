@@ -185,6 +185,18 @@ func (host *BrowserHost) RegisterOutput(
 		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostNotFound
 	}
 	session.mu.Lock()
+	defer session.mu.Unlock()
+	return host.registerOutputLocked(session, descriptor, content)
+}
+
+// registerOutputLocked binds validation and storage to one session authority
+// epoch. Callers must hold session.mu so a duplicate invocation cannot race
+// artifact registration with a second capture.
+func (host *BrowserHost) registerOutputLocked(
+	session *browserHostSession,
+	descriptor nodes.BrowserOutputDescriptor,
+	content []byte,
+) (nodes.BrowserOutputDescriptor, error) {
 	now := host.now().UTC()
 	limit := browserOutputLimit(session.limits, descriptor.Kind)
 	authorized := session.state == "ready" && session.routedSessionID == descriptor.RoutedSessionID &&
@@ -199,7 +211,6 @@ func (host *BrowserHost) RegisterOutput(
 			descriptor.SnapshotGeneration == session.snapshotGeneration
 	}
 	if !authorized {
-		session.mu.Unlock()
 		return nodes.BrowserOutputDescriptor{}, nodes.ErrBrowserHostDenied
 	}
 	digest := sha256.Sum256(content)
@@ -213,7 +224,6 @@ func (host *BrowserHost) RegisterOutput(
 		PolicyRevision: descriptor.ProfileRevision, TotalSize: descriptor.Size, SHA256: digest,
 	}
 	host.transferMu.Lock()
-	session.mu.Unlock()
 	defer host.transferMu.Unlock()
 	host.expireBrowserArtifactsLocked()
 	if existing, ok := host.outputArtifacts[descriptor.TransferID]; ok {
