@@ -85,21 +85,15 @@ type MatrixSettings struct {
 // configured account in DataDir; a first-run marker such as "@nine.testrun.org"
 // creates a chatmail account and tells the user which full email to save.
 // Mailbox credentials stay in the Delta Chat account store. DisplayName and
-// AvatarImage are optional profile settings applied on startup. Password remains
-// only for legacy MintClaw-managed email configuration.
+// AvatarImage are optional profile settings applied on startup.
 type DeltaChatSettings struct {
-	Email          string       `json:"email"                     yaml:"-"                  env:"MINTCLAW_CHANNELS_DELTACHAT_EMAIL"`
-	Password       SecureString `json:"password,omitzero"         yaml:"password,omitempty" env:"MINTCLAW_CHANNELS_DELTACHAT_PASSWORD"`
-	DisplayName    string       `json:"display_name,omitempty"    yaml:"-"                  env:"MINTCLAW_CHANNELS_DELTACHAT_DISPLAY_NAME"`
-	AvatarImage    string       `json:"avatar_image,omitempty"    yaml:"-"                  env:"MINTCLAW_CHANNELS_DELTACHAT_AVATAR_IMAGE"`
-	DataDir        string       `json:"data_dir,omitempty"        yaml:"-"                  env:"MINTCLAW_CHANNELS_DELTACHAT_DATA_DIR"`
-	RPCServerPath  string       `json:"rpc_server_path,omitempty" yaml:"-"                  env:"MINTCLAW_CHANNELS_DELTACHAT_RPC_SERVER_PATH"`
-	InviteLink     string       `json:"invite_link,omitempty"     yaml:"-"                  env:"MINTCLAW_CHANNELS_DELTACHAT_INVITE_LINK"`
-	AllowCrosspost bool         `json:"allow_crosspost,omitempty" yaml:"-"                  env:"MINTCLAW_CHANNELS_DELTACHAT_ALLOW_CROSSPOST"`
-	IMAPServer     string       `json:"imap_server,omitempty"     yaml:"-"`
-	IMAPPort       int          `json:"imap_port,omitempty"       yaml:"-"`
-	SMTPServer     string       `json:"smtp_server,omitempty"     yaml:"-"`
-	SMTPPort       int          `json:"smtp_port,omitempty"       yaml:"-"`
+	Email          string `json:"email"                     yaml:"-" env:"MINTCLAW_CHANNELS_DELTACHAT_EMAIL"`
+	DisplayName    string `json:"display_name,omitempty"    yaml:"-" env:"MINTCLAW_CHANNELS_DELTACHAT_DISPLAY_NAME"`
+	AvatarImage    string `json:"avatar_image,omitempty"    yaml:"-" env:"MINTCLAW_CHANNELS_DELTACHAT_AVATAR_IMAGE"`
+	DataDir        string `json:"data_dir,omitempty"        yaml:"-" env:"MINTCLAW_CHANNELS_DELTACHAT_DATA_DIR"`
+	RPCServerPath  string `json:"rpc_server_path,omitempty" yaml:"-" env:"MINTCLAW_CHANNELS_DELTACHAT_RPC_SERVER_PATH"`
+	InviteLink     string `json:"invite_link,omitempty"     yaml:"-" env:"MINTCLAW_CHANNELS_DELTACHAT_INVITE_LINK"`
+	AllowCrosspost bool   `json:"allow_crosspost,omitempty" yaml:"-" env:"MINTCLAW_CHANNELS_DELTACHAT_ALLOW_CROSSPOST"`
 }
 
 type LINESettings struct {

@@ -85,12 +85,10 @@ func validateChannelSettingsJSON(raw any, current *Config, label string) error {
 		channelType, _ := channel["type"].(string)
 		if channelType == "" && current != nil {
 			if existing := current.Channels.Get(name); existing != nil {
-				channelType = existing.Type
+				channelType = effectiveChannelType(name, existing.Type)
 			}
 		}
-		if channelType == "" {
-			channelType = name
-		}
+		channelType = effectiveChannelType(name, channelType)
 		settingsTarget := newChannelSettings(channelType)
 		if settingsTarget == nil {
 			continue

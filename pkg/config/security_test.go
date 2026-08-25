@@ -187,18 +187,23 @@ func TestSaveAndLoadSecurityConfig(t *testing.T) {
 		assert.Contains(t, getSetting("qq")["app_secret"], "qq_app_secret")
 		assert.Contains(t, getSetting("mintclaw_client")["token"], "mintclaw_client_token")
 
-		// Rewrite file with deterministic content for load test (use channel_list)
+		// Rewrite file with deterministic current-format content for the load test.
 		yamlOutput := `channel_list:
   telegram:
-    token: telegram_token
+    settings:
+      token: telegram_token
   feishu:
-    app_secret: feishu_app_secret
+    settings:
+      app_secret: feishu_app_secret
   discord:
-    token: discord_token
+    settings:
+      token: discord_token
   qq:
-    app_secret: qq_app_secret
+    settings:
+      app_secret: qq_app_secret
   mintclaw_client:
-    token: mintclaw_client_token
+    settings:
+      token: mintclaw_client_token
 model_list:
   model1:0:
     api_keys:

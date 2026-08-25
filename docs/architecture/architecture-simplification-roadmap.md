@@ -1,8 +1,23 @@
 # Architecture Simplification Roadmap
 
-Status: active
+Status: active; implementation is merged through X3.45, while re-audit,
+coordinated compatibility reset, deployment, and Z1 remain open
 
-Audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
+Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
+
+Re-audit baseline: `origin/main` at `d864bb7e`, 2026-08-24
+
+## Current Execution Objective
+
+Finish the simplification program with one canonical internal runtime and
+persisted contract. Preserve only bounded additive current-plus-previous
+first-party wire compatibility; remove historical readers and schema
+generators, deprecated aliases, implicit old-state inference, duplicate
+ownership, and service-locator layers. Preserve legitimate failover, product
+aliases, and external protocols. Align prose instructions with the `AGENTS.md`
+standard after separating personal profile metadata from prose, delete all
+registered rollout debt at a coordinated reset, and complete the final audit,
+explicitly authorized deployment, and rollback exercise.
 
 ## Decision
 
@@ -95,7 +110,7 @@ The audit identified the following change-amplification signals:
 | Verified child objective outcomes | One result concept changed 33 files in PR #780 |
 | Human interaction recovery | PRs #770 through #776 repeatedly crossed interaction, task, channel, pipeline, and delivery ownership |
 
-The implementation baseline also contains:
+At the original audit baseline, production also contained:
 
 - two browser action representations plus repeated action-kind switches;
 - complete generators for several historical browser schemas;
@@ -111,6 +126,93 @@ The implementation baseline also contains:
 - legacy subagent execution and `spawn_status` fallback paths; and
 - a coding frontend with distributed-client synchronization machinery even
   though its current producer and TUI consumer are in one process.
+
+## Progress And Re-audit Evidence
+
+Roadmap status uses three distinct meanings:
+
+- **merged** means the implementation is present on `origin/main`;
+- **deployed** means the active server and dependent first-party clients run a
+  mutually compatible merged revision; and
+- **reset complete** means temporary rollout adapters have also been deleted
+  and the removal release has been deployed and verified.
+
+Merging a packet does not by itself satisfy its deployed-state or compatibility
+reset criteria.
+
+| Packet | Merged evidence | Re-audit status |
+| --- | --- | --- |
+| S0 | #784 | Merged |
+| B1 | #787 | Merged, but PR #865 later introduced temporary browser schema-generation debt |
+| B2 | #788 and #790 | Merged; the canonical action contract remains, with PR #865 isolated at catalogue admission |
+| T1 | #791, with correctness follow-ups #806 and #824 | Merged |
+| T2a | #792 | Merged |
+| T2b | #794 | Merged |
+| D1 | #795 and #796 | Merged |
+| D2 | #798 and #799 | Merged |
+| A1 | #800 and #801, completed by X3.30-X3.42 | Merged |
+| A2 | #808, #809, and #863 | Merged |
+| C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
+| X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
+| X2 | #803 and #807 | Merged |
+| X3.1-X3.45 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, and #868 | Merged |
+| Z1 | Not yet applicable | Open |
+
+The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
+14 to #826; 15 to #827; 16-23 to #828-#835; 24 to #837; 25 to #839;
+26 to #843; 27 to #845; 28 to #846; 29-37 to #848-#856; 38 to #858;
+39-42 to #859-#862; 43 to #864; 44 to #866; and 45 to #868.
+
+The 2026-08-24 read-only deployed audit also established these rollout facts:
+
+- the installed server remains at `1adb08f7`, so merged architecture work after
+  that revision is not yet deployed;
+- all five active configurations use the current Delta Chat and nested channel
+  security shapes;
+- all five active personal profiles have root `AGENT.md`; one extra root
+  `AGENTS.md` is shadowed by the current personal-profile reader;
+- 5,570 retained messages across the active stores omit `created_at`, while the
+  current writer assigns it to new messages; and
+- all six active node-registry records omit `key_algorithm` and therefore still
+  rely on the empty-value-to-Ed25519 reader.
+
+### Re-audit corrections
+
+The original keyword inventory was useful for discovery but too broad as an
+architectural rule. `alias`, `fallback`, and `compatible` also name legitimate
+current concepts: configured model and node aliases, provider failover, default
+values inside one current contract, and external OpenAI-compatible APIs. They
+must not be removed merely because of their spelling.
+
+The deciding question is whether a branch preserves a historical MintClaw
+representation or creates a second owner for a current fact. Z1 therefore uses
+semantic classification in addition to keyword search.
+
+The re-audit also found that `AGENTS.md` must not be described generically as a
+legacy file. It is the [cross-tool coding-instruction convention](https://agents.md/)
+supported by [Codex](https://learn.chatgpt.com/docs/agent-configuration/agents-md),
+[Jules](https://jules.google/docs/), GitHub Copilot, and other coding agents,
+and MintClaw's coding runtime already discovers it hierarchically. MintClaw's
+singular `AGENT.md` is a separate PicoClaw-derived personal profile manifest
+with typed frontmatter. Packet X3.44 removed a dual reader at that
+personal-profile boundary; packet P1 below owns the final metadata/prose
+separation and standards alignment.
+
+### Open compatibility and simplification debt
+
+| Debt | Classification | Current evidence | Owner and removal gate |
+| --- | --- | --- | --- |
+| Previous and older browser catalogue schemas | Temporary first-party wire adapter | PR #865 reconstructs the previous streamed-snapshot schema and retains the earlier session-open output schema after a companion rollout failed | Architecture simplification owner; upgrade every browser companion through the bridge release, then delete the historical generators in R1 |
+| Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | Six active registry records omit the field and normalize to Ed25519 | Architecture simplification owner; convert the current records or re-enrol the nodes, upgrade companions, then require the field in R1 |
+| Missing inbound timestamps imply recency | Historical persisted-state inference | 5,570 retained records omit `created_at`; current writers populate it | Agent inbound owner; X3.46 makes missing time fail closed without making old history unreadable |
+| Unknown prompt sources are accepted | Internal API compatibility mode | `PromptRegistry.ValidatePart` warns and accepts an unregistered source | Prompt registry owner; X3.47 registers current producers and rejects unknown sources |
+| Objective `explanation` substitutes for missing `result` | Historical suspended-state inference | Successful receipt-bearing continuations can still project an old field into the current result | Task result owner; X3.48 removes the inference after reconciling the active objective-accounting work |
+| Singular personal profile manifest | Current MintClaw-specific contract, not wire compatibility | `AGENT.md` combines prose with typed identity and policy frontmatter; standard coding `AGENTS.md` is already separate | Agent configuration owner; P1 moves machine settings to current config before a coordinated prose-file cutover |
+
+Other matches remain candidates, not automatic deletions. The final audit must
+prove whether the scope-less tool-feedback lookup, unconditional config
+repository replacement, raw outbound metadata, benchmark baselines, and stale
+`Legacy` names express required current semantics or obsolete compatibility.
 
 ## Canonical Contract And Bounded Compatibility Rules
 
@@ -491,7 +593,7 @@ Exit criteria:
 
 ### A1 — Replace the `AgentLoop` service bag with owned coordinators
 
-Depends on: T2 and D2
+Depends on: T2b and D2
 
 Scope:
 
@@ -521,8 +623,6 @@ Exit criteria:
 ### A2 — Replace `processOptions` with explicit turn requests
 
 Depends on: A1
-
-Status: implemented
 
 Scope:
 
@@ -564,8 +664,6 @@ Implementation sequence:
 ### C1 — Collapse the in-process coding frontend protocol
 
 Depends on: A1
-
-Status: implemented
 
 Scope:
 
@@ -635,8 +733,6 @@ Exit criteria:
 - the deployed config passes strict validation before the new binary starts.
 
 ### X2 — Require current session and state storage only
-
-Status: implemented
 
 Scope:
 
@@ -861,15 +957,36 @@ Implementation sequence:
     `ActualSystemPrompt` shadow, its producerless runtime override and prompt
     source, and the historically inverted `SystemPrompt` name from both sides
     of the in-repository tool/agent boundary.
-44. Make root `AGENT.md` the sole personal workspace definition. Delete the
-    root `AGENTS.md` and `IDENTITY.md` readers, the definition-source enum, and
-    source-dependent prompt and cache branches. Translate the current OpenClaw
-    import product's `AGENTS.md` to `AGENT.md` once at the explicit import
-    boundary instead of carrying a second runtime reader. A read-only deployed
-    audit confirmed that all five active profiles already have root `AGENT.md`;
-    an extra root `AGENTS.md` was already shadowed and unused. Project and
-    skill-level coding `AGENTS.md` files remain a separate current instruction
-    contract.
+44. Remove the dual reader from the MintClaw-specific personal workspace
+    profile boundary. Make root `AGENT.md` the sole immediate structured
+    personal definition, delete the personal `AGENTS.md` and `IDENTITY.md`
+    readers, the definition-source enum, and source-dependent prompt and cache
+    branches, and translate the current OpenClaw import product's personal
+    `AGENTS.md` at that explicit import boundary. A read-only deployed audit
+    confirmed that all five active profiles already have root `AGENT.md`; an
+    extra root `AGENTS.md` was shadowed and unused. This packet does not
+    classify the standard as legacy: project and skill-level coding
+    `AGENTS.md` files remain the current cross-tool instruction contract. P1
+    owns the later separation of profile metadata from standard prose.
+45. Make the Delta Chat account store the sole owner of mailbox credentials.
+    Delete MintClaw's password, IMAP, and SMTP settings plus its account
+    configuration and drift-reconciliation paths. Full email addresses must
+    identify an already configured account; the explicit chatmail bootstrap
+    flow remains the current account-creation path.
+46. Require timestamp evidence before classifying inbound media as an adjacent
+    follow-up. A missing or zero `created_at` remains readable history but does
+    not prove recency. Delete the redundant current-turn relation aliases,
+    input wrapper, and second classifier layer so one canonical relation type
+    and classifier own the decision.
+47. Make prompt-source registration fail closed. Register every current static
+    and dynamic contributor before collection, reject an unknown source instead
+    of warning and accepting it in compatibility mode, and retain placement
+    validation on the same registry owner.
+48. Remove historical objective-result inference. A successful child outcome
+    must carry the current bounded `result`; do not reinterpret an old
+    `explanation` as terminal output merely because a receipt exists. Reconcile
+    this packet with the focused objective-receipt accounting work before
+    changing the shared parser.
 
 Exit criteria:
 
@@ -880,9 +997,76 @@ Exit criteria:
 - current third-party integrations are explicitly named and do not depend on
   internal compatibility shims.
 
+### P1 — Separate personal profile metadata from standard instructions
+
+Depends on: X3.44
+
+Scope:
+
+- make the current agent configuration the sole owner of machine-interpreted
+  identity, model, skill, tool, and MCP policy fields;
+- make standard Markdown `AGENTS.md` the prose instruction document rather
+  than embedding a MintClaw-only configuration schema in it;
+- preserve `SOUL.md` and `USER.md` as explicitly MintClaw-specific personal
+  context layers;
+- keep personal-profile roots and coding-project instruction roots explicit in
+  their respective runtime profiles so identical filenames do not imply shared
+  authority; and
+- cut the five deployed profiles over once, delete the singular `AGENT.md`
+  parser and frontmatter ownership, and avoid a steady-state dual reader.
+
+Tests:
+
+- agent identity and policy resolve from one current configuration owner;
+- personal prose and hierarchical coding-project instructions load only in
+  their admitted runtime scopes;
+- an unknown machine field in Markdown cannot affect runtime authority; and
+- the OpenClaw importer preserves prose at its explicit import boundary without
+  adding another runtime format.
+
+Exit criteria:
+
+- `AGENTS.md` has standard prose semantics;
+- one typed config contract owns every machine-interpreted profile field;
+- no runtime reads personal `AGENT.md` or parses Markdown frontmatter as
+  authority; and
+- deployed personal workspaces contain the current prose filename before the
+  old reader is removed.
+
+### R1 — Execute the coordinated first-party compatibility reset
+
+Depends on: P1 and X3.46-X3.48
+
+Deployment requires explicit user authorization.
+
+Scope:
+
+1. back up current configuration, session state, node registry, browser state,
+   invocation state, and profile Markdown with their matching installed binary;
+2. deploy a bridge release containing PR #865 and upgrade every first-party
+   browser companion to advertise the current streamed-snapshot contract;
+3. convert the six current node records to explicit Ed25519 or re-enrol them,
+   and verify every connected companion sends `key_algorithm`;
+4. perform the P1 personal-instruction cutover and validate every active
+   profile before restart;
+5. delete previous and older browser schema generators, empty-algorithm
+   normalization, expired wire aliases, and their old fixtures in one removal
+   release; and
+6. deploy and verify the removal release, then exercise rollback using the
+   matching binary and same-time state backup.
+
+Exit criteria:
+
+- every registered first-party peer uses the current protocol major and current
+  authority-bearing capabilities;
+- no production code reconstructs an older browser catalogue;
+- every persisted and wire node identity names its key algorithm;
+- no pre-reset personal-profile reader remains; and
+- deployed verification and rollback evidence are recorded in the final audit.
+
 ### Z1 — Final zero-legacy audit
 
-Depends on: all preceding packets
+Depends on: all preceding packets, including R1
 
 Audit every production match for:
 
@@ -892,15 +1076,27 @@ deprecated
 backward compatibility
 compatibility fallback
 migration
-alias
 old schema
 old version
 ```
 
+Also search semantically for historical-schema generators, omitted-field
+normalization, version-selected implementations, dual readers or writers,
+deprecated callable entrypoints, and names such as `previous*Schema`. Search
+for `alias` and `fallback` as discovery aids, but do not treat a match as debt
+until its semantics are classified.
+
 Each surviving match must be one of:
 
 - a current external protocol or import product;
+- a current product concept such as configured aliases, provider failover, or
+  a documented default inside the sole current contract;
+- additive first-party wire compatibility inside the current rolling window,
+  with no historical implementation and with any temporary adapter registered
+  with an owner and removal gate;
 - current operating-system or architecture portability;
+- a development benchmark whose historical baseline is the behavior being
+  measured rather than a product input contract;
 - historical documentation under an archive; or
 - a strict rejection message for an unsupported version.
 
@@ -966,6 +1162,9 @@ The roadmap is complete when:
 - `AgentLoop` composes explicit coordinators and has explicit turn entrypoints;
 - the coding TUI consumes one in-process presentation store;
 - configuration and sessions accept only their current formats;
+- typed configuration owns personal profile metadata while standard
+  `AGENTS.md` owns prose instructions;
+- the compatibility-debt register is empty after the coordinated reset;
 - the zero-legacy audit passes; and
 - the coordinated deployment and rollback procedure has been exercised with
   the current server and clients.

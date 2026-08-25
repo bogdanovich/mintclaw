@@ -287,6 +287,137 @@ func TestRepositorySeparatesRawChannelCredentials(t *testing.T) {
 	}
 }
 
+func TestSecurityCopyForReplacementBindsChannelSecretsToDurableType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Channels["custom"] = testReplacementChannel(
+		t,
+		ChannelTelegram,
+		`{"token":"telegram-secret"}`,
+	)
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	current, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		channel   *Channel
+		wantToken string
+	}{
+		{
+			name:      "same type preserves durable secret",
+			channel:   testReplacementChannel(t, ChannelTelegram, `{}`),
+			wantToken: "telegram-secret",
+		},
+		{
+			name:      "retyped channel drops durable secret",
+			channel:   testReplacementChannel(t, ChannelDiscord, `{}`),
+			wantToken: "",
+		},
+		{
+			name:      "retyped channel retains replacement secret",
+			channel:   testReplacementChannel(t, ChannelDiscord, `{"token":"discord-secret"}`),
+			wantToken: "discord-secret",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			replacement := DefaultConfig()
+			replacement.Channels["custom"] = test.channel
+			if err := replacement.SecurityCopyForReplacement(path, current.Config); err != nil {
+				t.Fatalf("SecurityCopyForReplacement() error = %v", err)
+			}
+			decoded, err := replacement.Channels.Get("custom").GetDecoded()
+			if err != nil {
+				t.Fatalf("GetDecoded() error = %v", err)
+			}
+			var token string
+			switch settings := decoded.(type) {
+			case *TelegramSettings:
+				token = settings.Token.String()
+			case *DiscordSettings:
+				token = settings.Token.String()
+			default:
+				t.Fatalf("replacement settings type = %T", decoded)
+			}
+			if token != test.wantToken {
+				t.Fatalf("replacement token = %q, want %q", token, test.wantToken)
+			}
+		})
+	}
+
+	replacement := DefaultConfig()
+	delete(replacement.Channels, "custom")
+	if err = replacement.SecurityCopyForReplacement(path, current.Config); err != nil {
+		t.Fatalf("SecurityCopyForReplacement(remove) error = %v", err)
+	}
+	if replacement.Channels.Get("custom") != nil {
+		t.Fatal("SecurityCopyForReplacement() restored removed channel")
+	}
+}
+
+func TestSecurityCopyForReplacementPreservesSecretForInferredType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Channels[ChannelTelegram] = testReplacementChannel(
+		t,
+		ChannelTelegram,
+		`{"token":"telegram-secret"}`,
+	)
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	current, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name      string
+		settings  string
+		wantToken string
+	}{
+		{name: "durable secret", settings: `{}`, wantToken: "telegram-secret"},
+		{name: "explicit replacement secret", settings: `{"token":"replacement-secret"}`, wantToken: "replacement-secret"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			replacement := DefaultConfig()
+			replacement.Channels[ChannelTelegram] = &Channel{
+				Enabled:  true,
+				Settings: []byte(test.settings),
+			}
+			if err = replacement.SecurityCopyForReplacement(path, current.Config); err != nil {
+				t.Fatalf("SecurityCopyForReplacement() error = %v", err)
+			}
+			if err = InitChannelList(replacement.Channels); err != nil {
+				t.Fatalf("InitChannelList() error = %v", err)
+			}
+			decoded, decodeErr := replacement.Channels.Get(ChannelTelegram).GetDecoded()
+			if decodeErr != nil {
+				t.Fatalf("GetDecoded() error = %v", decodeErr)
+			}
+			if token := decoded.(*TelegramSettings).Token.String(); token != test.wantToken {
+				t.Fatalf("replacement token = %q, want %q", token, test.wantToken)
+			}
+		})
+	}
+}
+
+func testReplacementChannel(t *testing.T, channelType string, settings string) *Channel {
+	t.Helper()
+	channel := &Channel{Enabled: true, Type: channelType, Settings: []byte(settings)}
+	if _, err := channel.GetDecoded(); err != nil {
+		t.Fatalf("GetDecoded(%s) error = %v", channelType, err)
+	}
+	return channel
+}
+
 func TestRepositoryRollsBackCommittedStagingErrorClassification(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	baseline := DefaultConfig()
