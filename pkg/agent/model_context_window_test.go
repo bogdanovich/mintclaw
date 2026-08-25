@@ -21,6 +21,31 @@ func TestBuildAgentRuntimeConfigUsesConfiguredModelContextWindow(t *testing.T) {
 	}
 }
 
+func TestResolvePrimaryProviderForAgent_ReportsInjectedCompatibilityFallback(t *testing.T) {
+	fallback := &mockProvider{}
+	cfg := &config.Config{ModelList: config.SecureModelList{{
+		ModelName: "configured", Provider: "openai", Model: "configured-model", Enabled: true,
+	}}}
+
+	provider, selected, exact := resolvePrimaryProviderForAgent(
+		cfg,
+		t.TempDir(),
+		"main",
+		"configured",
+		fallback,
+		newProviderOwnership(fallback),
+	)
+	if !providersShareIdentity(provider, fallback) {
+		t.Fatalf("provider = %T, want injected fallback", provider)
+	}
+	if selected == nil || selected.configOrdinal != 1 {
+		t.Fatalf("selected = %+v, want configured row", selected)
+	}
+	if exact {
+		t.Fatal("exact = true, want compatibility fallback provenance")
+	}
+}
+
 func TestBuildAgentRuntimeConfigUsesBundledCodexMetadata(t *testing.T) {
 	cfg := &config.Config{ModelList: config.SecureModelList{
 		{
@@ -69,7 +94,7 @@ func TestRuntimeConfigBindsContextWindowToLoadBalancedProviderSelection(t *testi
 	}
 
 	fallback := &mockProvider{}
-	provider, selected := resolvePrimaryProviderForAgent(
+	provider, selected, exact := resolvePrimaryProviderForAgent(
 		cfg,
 		workspace,
 		"main",
@@ -77,8 +102,8 @@ func TestRuntimeConfigBindsContextWindowToLoadBalancedProviderSelection(t *testi
 		fallback,
 		newProviderOwnership(fallback),
 	)
-	if providersShareIdentity(provider, fallback) || selected == nil {
-		t.Fatalf("provider selection fell back: provider = %T, selected = %+v", provider, selected)
+	if providersShareIdentity(provider, fallback) || selected == nil || !exact {
+		t.Fatalf("provider selection fell back: provider = %T, selected = %+v, exact = %t", provider, selected, exact)
 	}
 	selectedConfig := selected.modelConfig
 

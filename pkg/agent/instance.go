@@ -310,7 +310,8 @@ func newAgentInstance(
 	}
 	providerOwnership := newProviderOwnership(provider)
 	var selectedModel *resolvedModelSelection
-	provider, selectedModel = resolvePrimaryProviderForAgent(
+	var primaryProviderExact bool
+	provider, selectedModel, primaryProviderExact = resolvePrimaryProviderForAgent(
 		cfg,
 		workspace,
 		identity.agentID,
@@ -341,16 +342,22 @@ func newAgentInstance(
 		selectedModelConfig = selectedModel.modelConfig
 	}
 	runtimeCfg := buildAgentRuntimeConfig(defaults, selectedModelConfig)
+	routingSelection := selectedModel
+	if selectedModel != nil && !primaryProviderExact {
+		legacySelection := *selectedModel
+		legacySelection.configOrdinal = 0
+		routingSelection = &legacySelection
+	}
 	routingCfg := buildAgentRoutingConfig(
 		cfg,
 		defaults,
 		workspace,
-		selectedModel,
+		routingSelection,
 		fallbacks,
 		identity.agentID,
 		providerOwnership,
 	)
-	if provider != nil && len(routingCfg.candidates) > 0 {
+	if primaryProviderExact && provider != nil && len(routingCfg.candidates) > 0 {
 		routingCfg.candidateProviders[candidateProviderKey(routingCfg.candidates[0])] = provider
 	}
 
@@ -820,15 +827,15 @@ func resolvePrimaryProviderForAgent(
 	model string,
 	fallback providers.LLMProvider,
 	providerOwnership *providerOwnership,
-) (providers.LLMProvider, *resolvedModelSelection) {
+) (providers.LLMProvider, *resolvedModelSelection, bool) {
 	model = strings.TrimSpace(model)
 	if cfg == nil || model == "" {
-		return fallback, nil
+		return fallback, nil, false
 	}
 
 	selection, err := resolveModelSelection(cfg, model, workspace)
 	if err != nil || selection.modelConfig == nil {
-		return fallback, nil
+		return fallback, nil, false
 	}
 
 	resolvedProvider, _, err := providers.CreateProviderFromConfig(selection.modelConfig)
@@ -839,13 +846,13 @@ func resolvePrimaryProviderForAgent(
 				"model":    model,
 				"error":    err.Error(),
 			})
-		return fallback, &selection
+		return fallback, &selection, false
 	}
 	if resolvedProvider == nil {
-		return fallback, &selection
+		return fallback, &selection, false
 	}
 	providerOwnership.trackCreated(resolvedProvider)
-	return resolvedProvider, &selection
+	return resolvedProvider, &selection, true
 }
 
 // resolveAgentWorkspace determines the workspace directory for an agent.
