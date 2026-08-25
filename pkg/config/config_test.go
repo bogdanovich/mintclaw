@@ -947,6 +947,59 @@ func TestLoadConfigRejectsSecurityOverlayChannelTypeOverride(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsNonObjectSecurityOverlayChannels(t *testing.T) {
+	tests := []struct {
+		name     string
+		channel  string
+		value    string
+		wantText string
+	}{
+		{
+			name:    "unknown null channel",
+			channel: "mqtt", value: "null",
+			wantText: "unknown field(s): channel_list.mqtt",
+		},
+		{
+			name:    "current null channel",
+			channel: "deltachat", value: "null",
+			wantText: "channel entries must be objects: channel_list.deltachat",
+		},
+		{
+			name:    "current scalar channel",
+			channel: "deltachat", value: "removed-secret",
+			wantText: "channel entries must be objects: channel_list.deltachat",
+		},
+		{
+			name:    "current list channel",
+			channel: "deltachat", value: "[]",
+			wantText: "channel entries must be objects: channel_list.deltachat",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			configPath := filepath.Join(directory, "config.json")
+			raw := fmt.Sprintf(
+				`{"version":%d,"channel_list":{"deltachat":{"settings":{"email":"bot@example.org"}}}}`,
+				CurrentVersion,
+			)
+			if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+				t.Fatalf("WriteFile(config.json) error: %v", err)
+			}
+			securityPath := filepath.Join(directory, SecurityConfigFile)
+			security := fmt.Sprintf("channel_list:\n  %s: %s\n", test.channel, test.value)
+			if err := os.WriteFile(securityPath, []byte(security), 0o600); err != nil {
+				t.Fatalf("WriteFile(%s) error: %v", SecurityConfigFile, err)
+			}
+
+			_, err := LoadConfig(configPath)
+			if err == nil || !strings.Contains(err.Error(), test.wantText) {
+				t.Fatalf("LoadConfig() error = %v, want %q", err, test.wantText)
+			}
+		})
+	}
+}
+
 func TestValidateSingletonChannels_RejectsMultipleInstances(t *testing.T) {
 	channels := ChannelsConfig{
 		"mintclaw1": &Channel{Enabled: true, Type: ChannelMintClaw},

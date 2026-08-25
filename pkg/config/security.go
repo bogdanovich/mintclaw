@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 
@@ -134,14 +135,16 @@ func validateChannelSecuritySettings(node *yaml.Node, current *Config, label str
 
 	normalized := make(map[string]any, len(channels))
 	var unknownFields []string
+	var nonObjectEntries []string
 	for name, rawChannel := range channels {
-		channel, ok := rawChannel.(map[string]any)
-		if !ok {
-			continue
-		}
 		existing := current.Channels.Get(name)
 		if existing == nil {
 			unknownFields = append(unknownFields, appendJSONPath("channel_list", name))
+			continue
+		}
+		channel, ok := rawChannel.(map[string]any)
+		if !ok {
+			nonObjectEntries = append(nonObjectEntries, appendJSONPath("channel_list", name))
 			continue
 		}
 		for field := range channel {
@@ -159,6 +162,14 @@ func validateChannelSecuritySettings(node *yaml.Node, current *Config, label str
 	}
 	if err := unknownJSONFieldsError(unknownFields, label); err != nil {
 		return fmt.Errorf("failed to validate channel security config: %w", err)
+	}
+	if len(nonObjectEntries) != 0 {
+		sort.Strings(nonObjectEntries)
+		return fmt.Errorf(
+			"failed to validate channel security config: %s channel entries must be objects: %s",
+			label,
+			strings.Join(nonObjectEntries, ", "),
+		)
 	}
 
 	raw := map[string]any{"channel_list": normalized}
