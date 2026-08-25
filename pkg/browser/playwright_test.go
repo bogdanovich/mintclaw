@@ -3149,10 +3149,14 @@ func TestPlaywrightWorkerRealBrowserAnyHTTPLoopbackFixture(t *testing.T) {
 	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
 	server := root.Tools.MCP.Servers["playwright"]
 	driverTemp := t.TempDir()
+	driverOutputRoot := filepath.Join(driverTemp, "output")
+	if mkdirErr := os.Mkdir(driverOutputRoot, 0o700); mkdirErr != nil {
+		t.Fatal(mkdirErr)
+	}
 	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
 	server.Args = []string{
 		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome", "--isolated",
-		"--output-mode=stdout", "--output-dir=" + filepath.Join(driverTemp, "output"),
+		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
 	}
 	root.Tools.MCP.Servers["playwright"] = server
 	factory, err := NewPlaywrightWorkerFactory(root)

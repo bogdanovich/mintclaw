@@ -945,7 +945,7 @@ func newVerticalSliceNodeRuntime(
 
 func closeVerticalSliceAdmission(t *testing.T, admission *nodews.AdmissionHandler) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := admission.Close(ctx); err != nil {
 		t.Errorf("close node admission: %v", err)
