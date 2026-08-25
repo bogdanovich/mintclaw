@@ -462,6 +462,16 @@ func (worker *nodeBrowserWorker) Close(ctx context.Context) error {
 }
 
 func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObservation, error) {
+	return worker.observe(ctx, true)
+}
+
+func (worker *nodeBrowserWorker) observe(
+	ctx context.Context,
+	publish bool,
+) (browser.DriverObservation, error) {
+	// Action execution may obtain an observation only to cache it for the
+	// broker's next Observe call. Such private reads advance remote authority,
+	// but become public only when the broker actually consumes them.
 	worker.mu.Lock()
 	if worker.closed {
 		worker.mu.Unlock()
@@ -471,6 +481,9 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 		result := *worker.cachedObservation
 		worker.cachedObservation = nil
 		worker.rememberElementsLocked(result)
+		if publish {
+			worker.publicSnapshotGeneration++
+		}
 		worker.mu.Unlock()
 		return result, nil
 	}
@@ -531,7 +544,7 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 					return browser.DriverObservation{}, browser.ErrSnapshotTransfer
 				}
 			}
-			return worker.acceptObservation(result, nextGeneration)
+			return worker.acceptObservation(result, nextGeneration, publish)
 		}
 		// The previous observe completed remotely, but its live response was
 		// lost and only a page-data-free receipt survived. A read may safely
@@ -784,12 +797,12 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		worker.currentOrigin = ""
 		worker.documentID = ""
 		worker.mu.Unlock()
-		observation, err = worker.Observe(ctx)
+		observation, err = worker.observe(ctx, false)
 		if err != nil && snapshotTransferErr != nil {
 			err = errors.Join(browser.ErrSnapshotTransfer, err)
 		}
 	} else {
-		observation, err = worker.acceptObservation(*result.Observation, generation+1)
+		observation, err = worker.acceptObservation(*result.Observation, generation+1, false)
 	}
 	if err != nil {
 		return err
@@ -1046,6 +1059,7 @@ func (worker *nodeBrowserWorker) CatalogRevision() string {
 func (worker *nodeBrowserWorker) acceptObservation(
 	result nodes.BrowserObservationResult,
 	expectedGeneration uint64,
+	publish bool,
 ) (browser.DriverObservation, error) {
 	if result.SessionID != worker.sessionID || result.TabID != worker.tabID ||
 		result.SnapshotGeneration != expectedGeneration {
@@ -1068,7 +1082,9 @@ func (worker *nodeBrowserWorker) acceptObservation(
 	}
 	worker.mu.Lock()
 	worker.snapshotGeneration = result.SnapshotGeneration
-	worker.publicSnapshotGeneration++
+	if publish {
+		worker.publicSnapshotGeneration++
+	}
 	worker.currentOrigin = observation.Origin
 	worker.documentID = result.DocumentID
 	worker.rememberElementsLocked(observation)

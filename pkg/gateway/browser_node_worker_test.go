@@ -644,6 +644,12 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 			if _, err = worker.Observe(t.Context()); err != nil {
 				t.Fatal(err)
 			}
+			worker.mu.Lock()
+			initialPublicGeneration := worker.publicSnapshotGeneration
+			worker.mu.Unlock()
+			if initialPublicGeneration != 1 {
+				t.Fatalf("initial public generation = %d, want 1", initialPublicGeneration)
+			}
 			if err = worker.ExecutePrepared(t.Context(), browser.WorkerPreparedAction{
 				InvocationID: "invocation_navigate",
 				Action:       browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
@@ -656,12 +662,30 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 			}); err != nil {
 				t.Fatal(err)
 			}
+			worker.mu.Lock()
+			postActionPublicGeneration := worker.publicSnapshotGeneration
+			worker.mu.Unlock()
+			if postActionPublicGeneration != 1 {
+				t.Fatalf(
+					"private action observation advanced public generation to %d, want 1",
+					postActionPublicGeneration,
+				)
+			}
 			if _, err = worker.ContextCatalog(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			observation, err := worker.Observe(t.Context())
 			if err != nil || observation.URL != "https://example.com/" {
 				t.Fatalf("fresh post-navigation observation = %#v, %v", observation, err)
+			}
+			worker.mu.Lock()
+			finalPublicGeneration := worker.publicSnapshotGeneration
+			worker.mu.Unlock()
+			if finalPublicGeneration != 2 {
+				t.Fatalf(
+					"fresh broker-visible observation public generation = %d, want 2",
+					finalPublicGeneration,
+				)
 			}
 			handler.mu.Lock()
 			commands := append([]string(nil), handler.commands...)

@@ -78,7 +78,7 @@ func (worker *nodeBrowserWorker) SelectContext(
 	worker.mu.Lock()
 	expectedGeneration := worker.snapshotGeneration + 1
 	worker.mu.Unlock()
-	observation, err := worker.acceptObservation(*result.Observation, expectedGeneration)
+	observation, err := worker.acceptObservation(*result.Observation, expectedGeneration, true)
 	if err != nil {
 		return browser.DriverObservation{}, browser.ContextCatalog{}, err
 	}
