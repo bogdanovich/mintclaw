@@ -395,6 +395,7 @@ type nodeBrowserWorker struct {
 	elements                 map[string]browser.DriverElement
 	currentOrigin            string
 	documentID               string
+	publicDocumentID         string
 	statusSequence           uint64
 	observeRecoverySequence  uint64
 	contextSequence          uint64
@@ -457,6 +458,7 @@ func (worker *nodeBrowserWorker) Close(ctx context.Context) error {
 	worker.elements = make(map[string]browser.DriverElement)
 	worker.currentOrigin = ""
 	worker.documentID = ""
+	worker.publicDocumentID = ""
 	worker.mu.Unlock()
 	return nil
 }
@@ -487,6 +489,7 @@ func (worker *nodeBrowserWorker) observe(
 		worker.rememberElementsLocked(result)
 		if publish {
 			worker.publicSnapshotGeneration++
+			worker.publicDocumentID = worker.documentID
 		}
 		worker.mu.Unlock()
 		return result, nil
@@ -564,6 +567,7 @@ func (worker *nodeBrowserWorker) observe(
 		worker.elements = make(map[string]browser.DriverElement)
 		worker.currentOrigin = ""
 		worker.documentID = ""
+		worker.publicDocumentID = ""
 		worker.observeRecoverySequence++
 		recovery := worker.observeRecoverySequence
 		worker.mu.Unlock()
@@ -885,6 +889,7 @@ func (worker *nodeBrowserWorker) DownloadPrepared(
 	worker.elements = make(map[string]browser.DriverElement)
 	worker.currentOrigin = ""
 	worker.documentID = ""
+	worker.publicDocumentID = ""
 	worker.mu.Unlock()
 	if result.Output == nil {
 		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: browser.ErrDriverIncompatible}
@@ -1088,6 +1093,7 @@ func (worker *nodeBrowserWorker) acceptObservation(
 	worker.snapshotGeneration = result.SnapshotGeneration
 	if publish {
 		worker.publicSnapshotGeneration++
+		worker.publicDocumentID = result.DocumentID
 	}
 	worker.currentOrigin = observation.Origin
 	worker.documentID = result.DocumentID
@@ -1121,8 +1127,9 @@ func (worker *nodeBrowserWorker) CaptureRetainedScreenshot(
 	generation := worker.snapshotGeneration
 	publicGeneration := worker.publicSnapshotGeneration
 	currentDocumentID := worker.documentID
+	publicDocumentID := worker.publicDocumentID
 	worker.mu.Unlock()
-	if publicGeneration != request.SnapshotGeneration || currentDocumentID != documentID {
+	if publicGeneration != request.SnapshotGeneration || publicDocumentID != documentID {
 		return browser.DriverScreenshot{}, browser.ErrStale
 	}
 	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandCapture)
@@ -1139,7 +1146,7 @@ func (worker *nodeBrowserWorker) CaptureRetainedScreenshot(
 	input := nodes.BrowserCaptureInput{
 		SessionID: worker.sessionID, TabID: worker.tabID, FrameID: request.FrameID,
 		ContextID: request.ContextCatalogID, SnapshotID: request.SnapshotID,
-		SnapshotGeneration: generation, DocumentID: documentID, InvocationID: request.RequestID,
+		SnapshotGeneration: generation, DocumentID: currentDocumentID, InvocationID: request.RequestID,
 		WorkspaceID: retention.WorkspaceID, RouteID: retention.RouteID,
 		BrowserTarget: worker.browserTarget,
 		Target:        string(request.Target), Ref: remoteRef,
@@ -1158,7 +1165,7 @@ func (worker *nodeBrowserWorker) CaptureRetainedScreenshot(
 		output.BrowserPolicyRevision != worker.factory.policyRevision ||
 		output.InvocationID != request.RequestID || output.TabID != worker.tabID ||
 		output.FrameID != request.FrameID || output.ContextID != request.ContextCatalogID ||
-		output.DocumentID != documentID || output.SnapshotID != request.SnapshotID ||
+		output.DocumentID != currentDocumentID || output.SnapshotID != request.SnapshotID ||
 		output.SnapshotGeneration != generation || output.CaptureTarget != string(request.Target) ||
 		output.ElementRef != remoteRef || output.Filename != browserScreenshotFilename ||
 		output.ContentType != "image/png" || output.Size < 1 || output.Size > uint64(maximum) {
@@ -1437,6 +1444,7 @@ func (worker *nodeBrowserWorker) advanceRemoteSnapshotGeneration(generation uint
 	worker.elements = make(map[string]browser.DriverElement)
 	worker.currentOrigin = ""
 	worker.documentID = ""
+	worker.publicDocumentID = ""
 	return nil
 }
 

@@ -137,7 +137,9 @@ func (handler *browserNodeTestHandler) Invoke(
 			url, origin = "about:blank", "about:blank"
 		}
 		observation := browserNodeTestObservation(input.SessionID, input.TabID, input.SnapshotGeneration, url, origin)
-		observation.DocumentID = browserNodeStableID("document", input.SessionID, url)
+		observation.DocumentID = browserNodeStableID(
+			"document", input.SessionID, fmt.Sprint(input.SnapshotGeneration),
+		)
 		if handler.elementRole != "" && len(observation.Elements) == 1 {
 			observation.Elements[0].Role = handler.elementRole
 			observation.Elements[0].Name = handler.elementName
@@ -201,7 +203,9 @@ func (handler *browserNodeTestHandler) Invoke(
 			input.SessionID, input.TabID, input.SnapshotGeneration+1,
 			handler.currentURL, handler.currentOrigin,
 		)
-		observation.DocumentID = browserNodeStableID("document", input.SessionID, handler.currentURL)
+		observation.DocumentID = browserNodeStableID(
+			"document", input.SessionID, fmt.Sprint(input.SnapshotGeneration+1),
+		)
 		if handler.elementRole != "" && len(observation.Elements) == 1 {
 			observation.Elements[0].Role = handler.elementRole
 			observation.Elements[0].Name = handler.elementName
@@ -480,12 +484,21 @@ func TestGatewayBrowserWorkerKeepsCaptureAuthorityAfterPrivateScrollValidation(t
 	factory.worker.mu.Lock()
 	remoteGeneration := factory.worker.snapshotGeneration
 	publicGeneration := factory.worker.publicSnapshotGeneration
+	remoteDocumentID := factory.worker.documentID
+	publicDocumentID := factory.worker.publicDocumentID
 	factory.worker.mu.Unlock()
 	if remoteGeneration != 3 || publicGeneration != 2 {
 		t.Fatalf(
 			"post-validation generations remote=%d public=%d, want remote=3 public=2",
 			remoteGeneration,
 			publicGeneration,
+		)
+	}
+	if remoteDocumentID == "" || publicDocumentID == "" || remoteDocumentID == publicDocumentID {
+		t.Fatalf(
+			"post-validation documents remote=%q public=%q, want distinct non-empty bindings",
+			remoteDocumentID,
+			publicDocumentID,
 		)
 	}
 	captureOwner := nodes.TransferArtifactOwner{
