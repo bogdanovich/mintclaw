@@ -956,6 +956,68 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 	})
 }
 
+func TestBrowserHostReferenceBindingPreservesProjectedSnapshotLimit(t *testing.T) {
+	elements := make([]browserworker.DriverElement, 0, nodes.MaxBrowserSnapshotRefs)
+	var snapshot strings.Builder
+	rewrittenBytes := 0
+	for index := 0; index < nodes.MaxBrowserSnapshotRefs; index++ {
+		target := fmt.Sprintf("e%d", index+1)
+		line := fmt.Sprintf("- region [ref=%s]\n", target)
+		snapshot.WriteString(line)
+		rewrittenBytes += len(line) - len(target) + len("ref_00000000000000000000000000000000")
+		elements = append(elements, browserworker.DriverElement{
+			Target: target, Role: "region", Name: fmt.Sprintf("Region %d", index+1),
+		})
+	}
+	if rewrittenBytes >= nodes.MaxBrowserSnapshotBytes {
+		t.Fatalf("reference fixture uses %d bytes before padding", rewrittenBytes)
+	}
+	snapshot.WriteString(strings.Repeat("x", nodes.MaxBrowserSnapshotBytes-rewrittenBytes))
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{{
+			URL: "https://example.com/", Origin: "https://example.com",
+			Snapshot: snapshot.String(), Elements: elements,
+		}},
+		navigationIdentities: []string{"navigation_1", "navigation_1"},
+	}})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil || len(observed.Snapshot) != nodes.MaxBrowserSnapshotBytes ||
+		len(observed.Elements) != nodes.MaxBrowserSnapshotRefs {
+		t.Fatalf(
+			"Observe() snapshot bytes=%d elements=%d, error=%v",
+			len(observed.Snapshot), len(observed.Elements), err,
+		)
+	}
+	for _, element := range observed.Elements {
+		if len(element.Ref) != len("ref_00000000000000000000000000000000") ||
+			!strings.Contains(observed.Snapshot, "[ref="+element.Ref+"]") {
+			t.Fatalf("bound reference = %q", element.Ref)
+		}
+	}
+	streamed, err := host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
+		SessionID: observed.SessionID, RoutedSessionID: "routed_session_1",
+		InvocationID: "browser_observe_dense_refs_1", WorkspaceID: "workspace_1",
+		BrowserTarget: "companion", AgentID: "browser", ActorID: "telegram:owner",
+	}, observed)
+	if err != nil || streamed.Output == nil {
+		t.Fatalf("PrepareObservationOutput() = %#v, %v", streamed, err)
+	}
+	payload := downloadBrowserOutput(t, host, *streamed.Output, nil)
+	decoded, err := nodes.DecodeBrowserSnapshotPayload(payload, nodes.BrowserLimits{}.Effective())
+	if err != nil || decoded.Snapshot != observed.Snapshot || len(decoded.Elements) != len(observed.Elements) {
+		t.Fatalf(
+			"decoded dense snapshot bytes=%d elements=%d, error=%v",
+			len(decoded.Snapshot),
+			len(decoded.Elements),
+			err,
+		)
+	}
+}
+
 func TestBrowserHostExecutesBoundProtectedDialog(t *testing.T) {
 	message := "Type confirmation"
 	pending := browserworker.DriverObservation{
