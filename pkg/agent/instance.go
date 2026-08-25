@@ -342,21 +342,18 @@ func newAgentInstance(
 		selectedModelConfig = selectedModel.modelConfig
 	}
 	runtimeCfg := buildAgentRuntimeConfig(defaults, selectedModelConfig)
-	routingSelection := selectedModel
-	if selectedModel != nil && !primaryProviderExact {
-		legacySelection := *selectedModel
-		legacySelection.configOrdinal = 0
-		routingSelection = &legacySelection
-	}
 	routingCfg := buildAgentRoutingConfig(
 		cfg,
 		defaults,
 		workspace,
-		routingSelection,
+		selectedModel,
 		fallbacks,
 		identity.agentID,
 		providerOwnership,
 	)
+	if !primaryProviderExact && len(routingCfg.candidates) > 0 {
+		routingCfg.candidates[0].ProviderConfigOrdinal = 0
+	}
 	if primaryProviderExact && provider != nil && len(routingCfg.candidates) > 0 {
 		routingCfg.candidateProviders[candidateProviderKey(routingCfg.candidates[0])] = provider
 	}
@@ -748,37 +745,6 @@ func resolveModelCandidatesFromSelection(
 		seen[fallback.StableKey()] = true
 	}
 	return candidates
-}
-
-// populateCandidateProvidersFromNames resolves each exact configured model_name
-// and creates its dedicated LLMProvider. Duplicate names retain model-list
-// load-balancing behavior.
-func populateCandidateProvidersFromNames(
-	cfg *config.Config,
-	workspace string,
-	names []string,
-	out map[string]providers.LLMProvider,
-) {
-	populateCandidateProvidersFromNamesTracked(cfg, workspace, names, out, nil)
-}
-
-func populateCandidateProvidersFromNamesTracked(
-	cfg *config.Config,
-	workspace string,
-	names []string,
-	out map[string]providers.LLMProvider,
-	providerOwnership *providerOwnership,
-) {
-	if cfg == nil || len(names) == 0 {
-		return
-	}
-	populateCandidateProvidersFromCandidatesTracked(
-		cfg,
-		workspace,
-		resolveModelCandidates(cfg, "", names),
-		out,
-		providerOwnership,
-	)
 }
 
 func populateCandidateProvidersFromCandidatesTracked(

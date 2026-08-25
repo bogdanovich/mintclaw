@@ -911,12 +911,9 @@ func providerForFallbackCandidate(
 	if cp, ok := candidateProviders[candidateProviderKey(candidate)]; ok && cp != nil {
 		return cp, nil
 	}
-	if candidate.ConfigOrdinal > 0 {
-		return nil, fmt.Errorf(
-			"fallback model %q has no provider for model-list row %d",
-			candidate.Model,
-			candidate.ConfigOrdinal,
-		)
+	if candidate.ProviderConfigOrdinal > 0 {
+		return nil, fmt.Errorf("fallback model %q has no provider for row %d", candidate.Model,
+			candidate.ProviderConfigOrdinal)
 	}
 	if cp, ok := candidateProviders[providers.ModelKey(candidate.Provider, candidate.Model)]; ok && cp != nil {
 		return cp, nil

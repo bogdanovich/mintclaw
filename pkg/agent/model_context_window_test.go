@@ -46,6 +46,52 @@ func TestResolvePrimaryProviderForAgent_ReportsInjectedCompatibilityFallback(t *
 	}
 }
 
+func TestInjectedCompatibilityProviderPreservesExactPrimaryMetadata(t *testing.T) {
+	workspace := t.TempDir()
+	defaults := config.AgentDefaults{Workspace: workspace, ModelName: "compat-duplicate"}
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: defaults},
+		ModelList: config.SecureModelList{
+			{
+				ModelName: "compat-duplicate", Provider: "openai", Model: "same-model", Enabled: true,
+				Streaming: config.ModelStreamingConfig{Enabled: false},
+			},
+			{
+				ModelName: "compat-duplicate", Provider: "openai", Model: "same-model", Enabled: true,
+				Streaming: config.ModelStreamingConfig{Enabled: true},
+			},
+		},
+	}
+	var first resolvedModelSelection
+	for range 2 {
+		selection, err := resolveModelSelection(cfg, defaults.ModelName, workspace)
+		if err != nil {
+			t.Fatalf("resolveModelSelection() error = %v", err)
+		}
+		if selection.configOrdinal == 1 {
+			first = selection
+			break
+		}
+	}
+	if first.configOrdinal != 1 {
+		t.Fatalf("initial selection = %+v, want first row", first)
+	}
+
+	agent := NewAgentInstance(nil, &defaults, cfg, &mockProvider{})
+	defer func() { _ = agent.Close() }()
+	if len(agent.Candidates) == 0 {
+		t.Fatal("primary candidate is missing")
+	}
+	candidate := agent.Candidates[0]
+	if candidate.ConfigOrdinal != 2 || candidate.ProviderConfigOrdinal != 0 {
+		t.Fatalf("candidate = %+v, want row-2 metadata with compatibility provider", candidate)
+	}
+	metadata := resolveActiveModelConfig(cfg, workspace, agent.Candidates, candidate.Model)
+	if metadata == nil || !metadata.Streaming.Enabled {
+		t.Fatalf("metadata = %+v, want exact second row", metadata)
+	}
+}
+
 func TestBuildAgentRuntimeConfigUsesBundledCodexMetadata(t *testing.T) {
 	cfg := &config.Config{ModelList: config.SecureModelList{
 		{

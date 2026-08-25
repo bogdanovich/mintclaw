@@ -16,6 +16,15 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
+func populateCandidateProvidersFromNames(
+	cfg *config.Config,
+	workspace string,
+	names []string,
+	out map[string]providers.LLMProvider,
+) {
+	populateCandidateProvidersFromCandidatesTracked(cfg, workspace, resolveModelCandidates(cfg, "", names), out, nil)
+}
+
 func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "agent-instance-test-*")
 	if err != nil {
@@ -370,7 +379,7 @@ func TestPopulateCandidateProviders_NilCfgIsNoop(t *testing.T) {
 func TestPopulateCandidateProviders_SkipsExistingKeys(t *testing.T) {
 	existing := &mockProvider{}
 	key := candidateProviderKey(providers.FallbackCandidate{
-		Provider: "openai", Model: "gpt-4o", ConfigOrdinal: 1,
+		Provider: "openai", Model: "gpt-4o", ProviderConfigOrdinal: 1,
 	})
 	out := map[string]providers.LLMProvider{key: existing}
 
@@ -406,7 +415,7 @@ func TestPopulateCandidateProviders_ResolvesAlias(t *testing.T) {
 	populateCandidateProvidersFromNames(cfg, workspace, []string{"my-gpt"}, out)
 
 	key := candidateProviderKey(providers.FallbackCandidate{
-		Provider: "openai", Model: "gpt-4o", ConfigOrdinal: 1,
+		Provider: "openai", Model: "gpt-4o", ProviderConfigOrdinal: 1,
 	})
 	if out[key] == nil {
 		t.Fatalf("expected CandidateProviders[%q] to be populated for alias", key)
@@ -433,7 +442,7 @@ func TestPopulateCandidateProviders_ResolvesProtocolPrefix(t *testing.T) {
 	populateCandidateProvidersFromNames(cfg, workspace, []string{"gemma"}, out)
 
 	key := candidateProviderKey(providers.FallbackCandidate{
-		Provider: "gemini", Model: "gemma-3-27b-it", ConfigOrdinal: 1,
+		Provider: "gemini", Model: "gemma-3-27b-it", ProviderConfigOrdinal: 1,
 	})
 	if out[key] == nil {
 		t.Fatalf("expected CandidateProviders[%q] to be populated for protocol-prefixed model", key)
@@ -605,10 +614,10 @@ func TestNewAgentInstance_CandidateProvidersPopulatedForCrossProviderFallbacks(t
 	// Only fallback models need entries — the primary uses the injected provider directly.
 	wantKeys := []string{
 		candidateProviderKey(providers.FallbackCandidate{
-			Provider: "gemini", Model: "gemma-3-27b-it", ConfigOrdinal: 2,
+			Provider: "gemini", Model: "gemma-3-27b-it", ProviderConfigOrdinal: 2,
 		}),
 		candidateProviderKey(providers.FallbackCandidate{
-			Provider: "gemini", Model: "gemini-2.5-flash-lite", ConfigOrdinal: 3,
+			Provider: "gemini", Model: "gemini-2.5-flash-lite", ProviderConfigOrdinal: 3,
 		}),
 	}
 

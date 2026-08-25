@@ -68,21 +68,25 @@ func candidateFromModelSelection(
 	}
 
 	return providers.FallbackCandidate{
-		Provider:      protocol,
-		Model:         modelID,
-		DisplayName:   strings.TrimSpace(mc.ModelName),
-		RPM:           mc.RPM,
-		IdentityKey:   modelConfigIdentityKey(mc),
-		ConfigOrdinal: selection.configOrdinal,
+		Provider:              protocol,
+		Model:                 modelID,
+		DisplayName:           strings.TrimSpace(mc.ModelName),
+		RPM:                   mc.RPM,
+		IdentityKey:           modelConfigIdentityKey(mc),
+		ConfigOrdinal:         selection.configOrdinal,
+		ProviderConfigOrdinal: selection.configOrdinal,
 	}, true
 }
 
 func candidateProviderKey(candidate providers.FallbackCandidate) string {
-	base := providers.ModelKey(candidate.Provider, candidate.Model)
-	if candidate.ConfigOrdinal <= 0 {
-		return base
+	if candidate.ProviderConfigOrdinal > 0 {
+		return fmt.Sprintf(
+			"%s#model-list:%d",
+			providers.ModelKey(candidate.Provider, candidate.Model),
+			candidate.ProviderConfigOrdinal,
+		)
 	}
-	return fmt.Sprintf("%s#model-list:%d", base, candidate.ConfigOrdinal)
+	return providers.ModelKey(candidate.Provider, candidate.Model)
 }
 
 func resolveModelCandidate(
