@@ -24,10 +24,6 @@ const (
 	InboundRelationStandalone            InboundRelationKind = "standalone"
 	InboundRelationReplyToMessage        InboundRelationKind = "reply_to_message"
 	InboundRelationAdjacentFollowupMedia InboundRelationKind = "adjacent_followup_media"
-
-	currentTurnRelationStandalone            = InboundRelationStandalone
-	currentTurnRelationReplyToMessage        = InboundRelationReplyToMessage
-	currentTurnRelationAdjacentFollowupMedia = InboundRelationAdjacentFollowupMedia
 )
 
 type InboundMessageRelation struct {
@@ -39,34 +35,6 @@ func (r InboundMessageRelation) IsZero() bool {
 	return r.Kind == ""
 }
 
-type currentTurnRelation = InboundMessageRelation
-
-type currentTurnRelationInput struct {
-	Content                    string
-	Media                      []string
-	ReplyToMessageID           string
-	AllowAdjacentMediaFollowup bool
-	History                    []providers.Message
-	Now                        time.Time
-}
-
-func classifyCurrentTurnRelation(input currentTurnRelationInput) currentTurnRelation {
-	content := strings.TrimSpace(input.Content)
-	_, placeholderOnly := attachmentOnlyPlaceholders[content]
-	mediaOnly := len(input.Media) > 0 && (content == "" || placeholderOnly)
-	if !mediaOnly {
-		return currentTurnRelation{Kind: currentTurnRelationStandalone, MediaOnly: false}
-	}
-	if strings.TrimSpace(input.ReplyToMessageID) != "" {
-		return currentTurnRelation{Kind: currentTurnRelationReplyToMessage, MediaOnly: true}
-	}
-	if input.AllowAdjacentMediaFollowup &&
-		recentUserFollowupCandidate(input.History, input.Now, adjacentMediaFollowupWindow) {
-		return currentTurnRelation{Kind: currentTurnRelationAdjacentFollowupMedia, MediaOnly: true}
-	}
-	return currentTurnRelation{Kind: currentTurnRelationStandalone, MediaOnly: true}
-}
-
 func classifyPromptCurrentMessageRelation(
 	content string,
 	media []string,
@@ -75,14 +43,19 @@ func classifyPromptCurrentMessageRelation(
 	history []providers.Message,
 	now time.Time,
 ) InboundMessageRelation {
-	return classifyCurrentTurnRelation(currentTurnRelationInput{
-		Content:                    content,
-		Media:                      media,
-		ReplyToMessageID:           replyToMessageID,
-		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
-		History:                    history,
-		Now:                        now,
-	})
+	content = strings.TrimSpace(content)
+	_, placeholderOnly := attachmentOnlyPlaceholders[content]
+	mediaOnly := len(media) > 0 && (content == "" || placeholderOnly)
+	if !mediaOnly {
+		return InboundMessageRelation{Kind: InboundRelationStandalone, MediaOnly: false}
+	}
+	if strings.TrimSpace(replyToMessageID) != "" {
+		return InboundMessageRelation{Kind: InboundRelationReplyToMessage, MediaOnly: true}
+	}
+	if allowAdjacentMediaFollowup && recentUserFollowupCandidate(history, now, adjacentMediaFollowupWindow) {
+		return InboundMessageRelation{Kind: InboundRelationAdjacentFollowupMedia, MediaOnly: true}
+	}
+	return InboundMessageRelation{Kind: InboundRelationStandalone, MediaOnly: true}
 }
 
 func recentUserFollowupCandidate(history []providers.Message, now time.Time, window time.Duration) bool {
@@ -112,12 +85,7 @@ func recentUserFollowupCandidate(history []providers.Message, now time.Time, win
 	}
 
 	if lastUser.CreatedAt == nil || lastUser.CreatedAt.IsZero() {
-		// Legacy/default session history does not always preserve timestamps on
-		// replayed providers.Message values. In that case, fall back to the
-		// structural "latest user message still at the tail with no assistant
-		// reply after it" signal rather than disabling adjacent media follow-up
-		// behavior entirely for normal sessions.
-		return true
+		return false
 	}
 	if now.Sub(*lastUser.CreatedAt) > window {
 		return false
