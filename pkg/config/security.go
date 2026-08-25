@@ -32,6 +32,14 @@ func securityPath(configPath string) string {
 // loadSecurityConfig loads the security configuration from security.yml
 // and merges secure field values into the config.
 func loadSecurityConfig(cfg *Config, securityPath string) error {
+	return loadSecurityConfigForChannels(cfg, securityPath, nil)
+}
+
+func loadSecurityConfigForChannels(
+	cfg *Config,
+	securityPath string,
+	allowedChannels map[string]struct{},
+) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
@@ -44,49 +52,30 @@ func loadSecurityConfig(cfg *Config, securityPath string) error {
 		return fmt.Errorf("failed to read security config: %w", err)
 	}
 
-	// Save existing channels and ModelList before unmarshal
-	savedChannels := make(ChannelsConfig, len(cfg.Channels))
-	for name, bc := range cfg.Channels {
-		savedChannels[name] = bc
-	}
-	// savedModelList := cfg.ModelList
-
-	// Parse YAML into a yaml.Node tree to extract channels node
+	// Parse YAML into a yaml.Node tree so channels can be validated and merged
+	// separately from the other security fields.
 	var rootNode yaml.Node
-	if err := yaml.Unmarshal(data, &rootNode); err != nil {
+	if err = yaml.Unmarshal(data, &rootNode); err != nil {
 		return fmt.Errorf("failed to parse security config: %w", err)
 	}
 
-	// Extract the current channel_list security overlay.
-	var channelsNode *yaml.Node
-	if len(rootNode.Content) > 0 {
-		content := rootNode.Content[0].Content
-		for i := 0; i < len(content); i += 2 {
-			if i+1 < len(content) {
-				key := content[i].Value
-				if key == "channel_list" {
-					channelsNode = content[i+1]
-					break
-				}
-			}
-		}
+	channelsNode, nonChannelData, err := splitChannelSecurityDocument(&rootNode)
+	if err != nil {
+		return fmt.Errorf("failed to parse security config: %w", err)
+	}
+	if allowedChannels != nil {
+		channelsNode = filterChannelSecuritySettings(channelsNode, allowedChannels)
 	}
 
-	// Unmarshal non-channel fields from security.yml
-	// This will resolve encrypted values for model_list, tools, etc.
-	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	// Resolve encrypted values for model_list, tools, and other non-channel
+	// settings. channel_list is absent here so an overlay cannot mutate a
+	// channel before its current schema has been validated below.
+	decoder := yaml.NewDecoder(bytes.NewReader(nonChannelData))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
 		return fmt.Errorf("failed to parse security config %s: %w", securityPath, err)
 	}
 
-	// Restore channels from saved, then manually merge from security.yml
-	cfg.Channels = make(ChannelsConfig)
-	for name, savedBC := range savedChannels {
-		cfg.Channels[name] = savedBC
-	}
-
-	// If we found a channels node in security.yml, merge it into existing channels
 	if channelsNode != nil {
 		if err := validateChannelSecuritySettings(channelsNode, cfg, securityPath); err != nil {
 			return err
@@ -97,6 +86,44 @@ func loadSecurityConfig(cfg *Config, securityPath string) error {
 	}
 
 	return nil
+}
+
+func splitChannelSecurityDocument(root *yaml.Node) (*yaml.Node, []byte, error) {
+	if root == nil || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
+		data, err := yaml.Marshal(root)
+		return nil, data, err
+	}
+
+	document := *root
+	mapping := *root.Content[0]
+	mapping.Content = make([]*yaml.Node, 0, len(root.Content[0].Content))
+	var channels *yaml.Node
+	content := root.Content[0].Content
+	for index := 0; index+1 < len(content); index += 2 {
+		if content[index].Value == "channel_list" {
+			channels = content[index+1]
+			continue
+		}
+		mapping.Content = append(mapping.Content, content[index], content[index+1])
+	}
+	document.Content = []*yaml.Node{&mapping}
+	data, err := yaml.Marshal(&document)
+	return channels, data, err
+}
+
+func filterChannelSecuritySettings(node *yaml.Node, allowed map[string]struct{}) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return node
+	}
+	filtered := *node
+	filtered.Content = make([]*yaml.Node, 0, len(node.Content))
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if _, ok := allowed[node.Content[index].Value]; !ok {
+			continue
+		}
+		filtered.Content = append(filtered.Content, node.Content[index], node.Content[index+1])
+	}
+	return &filtered
 }
 
 func validateChannelSecuritySettings(node *yaml.Node, current *Config, label string) error {
