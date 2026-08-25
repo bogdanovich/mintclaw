@@ -752,6 +752,10 @@ func seahorseToProviderMessages(result *seahorse.AssembleResult) []protocoltypes
 			ModelName:        msg.ModelName,
 			ReasoningContent: msg.ReasoningContent,
 		}
+		if !msg.CreatedAt.IsZero() {
+			createdAt := msg.CreatedAt
+			pm.CreatedAt = &createdAt
+		}
 
 		// Reconstruct ToolCalls from parts
 		for _, part := range msg.Parts {
