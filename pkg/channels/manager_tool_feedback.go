@@ -159,7 +159,7 @@ func (m *Manager) beginToolFeedbackTerminals(
 	if m == nil || !m.streamCoordinator().hasToolFeedback() {
 		return nil
 	}
-	keys, scoped := m.resolveToolFeedbackTargets(
+	keys, scoped := toolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
 	return m.streamCoordinator().beginToolFeedbackTerminals(
@@ -316,7 +316,7 @@ func (m *Manager) PauseToolFeedback(ctx context.Context, target bus.OutboundMess
 	if !ok {
 		return
 	}
-	keys, scoped := m.resolveToolFeedbackTargets(
+	keys, scoped := toolFeedbackTargets(
 		channelName,
 		ch,
 		outboundMessageChatID(target),
@@ -336,29 +336,10 @@ func (m *Manager) dismissToolFeedbackTargets(
 	sessionKey string,
 	traceScopes []runtimeevents.TraceScope,
 ) {
-	keys, scoped := m.resolveToolFeedbackTargets(
-		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
-	)
-	m.streamCoordinator().dismissToolFeedback(ctx, keys, scoped || strings.TrimSpace(sessionKey) != "")
-}
-
-func (m *Manager) resolveToolFeedbackTargets(
-	channelName string,
-	ch Channel,
-	chatID string,
-	outboundCtx *bus.InboundContext,
-	sessionKey string,
-	traceScopes []runtimeevents.TraceScope,
-) ([]string, bool) {
 	keys, scoped := toolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	if !scoped && len(keys) == 1 {
-		if key, ok := m.streamCoordinator().singleActiveScopedToolFeedbackKey(keys[0]); ok {
-			return []string{key}, true
-		}
-	}
-	return keys, scoped
+	m.streamCoordinator().dismissToolFeedback(ctx, keys, scoped || strings.TrimSpace(sessionKey) != "")
 }
 
 func prepareToolFeedbackMessageContent(ch Channel, content string) string {

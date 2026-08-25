@@ -3554,6 +3554,50 @@ func TestToolFeedbackLifecycle_IsolatedByTurnScope(t *testing.T) {
 	}
 }
 
+func TestDismissToolFeedback_MissingIdentityDoesNotGuessScopedTarget(t *testing.T) {
+	m := newTestManager()
+	enableTestToolFeedbackCoordinator(t, m, false)
+	ch := &toolFeedbackTestChannel{}
+	m.lifecycle.storeChannel("test", ch)
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	traceScope := runtimeevents.NewTraceScope("/workspace/main", "turn-1")
+	feedback := testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1", Content: "working",
+		TraceScopes: []runtimeevents.TraceScope{traceScope},
+		Context: bus.InboundContext{
+			Channel: "test", ChatID: "chat-1",
+			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
+		},
+	})
+	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
+		t.Fatalf("initial feedback = (%v, %v)", sent, err)
+	}
+
+	m.DismissToolFeedback(t.Context(), bus.OutboundMessage{
+		Channel: "test", ChatID: "chat-1",
+		Context: bus.InboundContext{Channel: "test", ChatID: "chat-1"},
+	})
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 1 {
+		t.Fatalf("ActiveCount() after identity-less dismissal = %d, want 1", count)
+	}
+
+	feedback.Content = "still working"
+	if ids, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent ||
+		!slices.Equal(ids, []string{"msg-1"}) {
+		t.Fatalf("scoped feedback update = (%v, %v, %v), want edit of msg-1", ids, sent, err)
+	}
+
+	m.DismissToolFeedback(t.Context(), feedback)
+	if count := m.streamCoordinator().activeToolFeedbackCount(); count != 0 {
+		t.Fatalf("ActiveCount() after scoped dismissal = %d, want 0", count)
+	}
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	if want := []string{"send:working", "edit:msg-1", "delete:msg-1"}; !slices.Equal(ch.operations, want) {
+		t.Fatalf("operations = %v, want %v", ch.operations, want)
+	}
+}
+
 func TestDismissToolFeedback_PreservesSessionAndTurnIdentity(t *testing.T) {
 	m := newTestManager()
 	enableTestToolFeedbackCoordinator(t, m, false)
