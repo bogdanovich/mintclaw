@@ -189,18 +189,16 @@ func TestRegisterMCPServerPromptContributorMixedVisibility(t *testing.T) {
 	}
 }
 
-func TestToolRegistryIncludesReportsOnlyRegisteredTools(t *testing.T) {
+func TestToolRegistryIncludesReportsHiddenRegisteredTools(t *testing.T) {
 	registry := agenttools.NewToolRegistry()
-	registry.SetAllowlist([]string{"mcp_github_search"})
 
 	registry.RegisterHidden(&allowlistTestTool{name: "mcp_github_search"})
-	registry.RegisterHidden(&allowlistTestTool{name: "mcp_github_create_issue"})
 
 	if !toolRegistryIncludes(registry, "mcp_github_search") {
 		t.Fatal("expected hidden registered MCP tool to be included")
 	}
 	if toolRegistryIncludes(registry, "mcp_github_create_issue") {
-		t.Fatal("blocked MCP tool should not be included")
+		t.Fatal("unregistered MCP tool should not be included")
 	}
 }
 

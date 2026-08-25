@@ -334,7 +334,6 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	agent.Tools.Register(&allowlistTestTool{name: "exec"})
 	agent.Tools.RegisterHidden(&allowlistTestTool{name: "hidden-extra"})
 	agent.Tools.Unregister("read_file")
-	agent.Tools.SetAllowlist([]string{})
 	if gotExec, ok := agent.Tools.Get("exec"); !ok || gotExec != originalExec {
 		t.Fatal("sealed coding registry replaced its trusted exec tool")
 	}

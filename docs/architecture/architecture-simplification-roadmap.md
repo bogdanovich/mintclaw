@@ -1,6 +1,6 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through P1 and X3.49, while the
+Status: active; implementation is merged through P1 and X3.50, while the
 coordinated compatibility reset, deployment, and Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
@@ -155,7 +155,7 @@ reset criteria.
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
-| X3.1-X3.49 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, and #885 | Merged |
+| X3.1-X3.50 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885, and #886 | Merged |
 | P1 | #881 | Merged; deployed config and profile cutover remains in R1 |
 | Z1 | Not yet applicable | Open |
 
@@ -163,7 +163,7 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 14 to #826; 15 to #827; 16-23 to #828-#835; 24 to #837; 25 to #839;
 26 to #843; 27 to #845; 28 to #846; 29-37 to #848-#856; 38 to #858;
 39-42 to #859-#862; 43 to #864; 44 to #866; 45 to #868; 46 to #872;
-47 to #878; 48 to #880; and 49 to #885.
+47 to #878; 48 to #880; 49 to #885; and 50 to #886.
 
 The 2026-08-24 read-only deployed audit also established these rollout facts:
 
@@ -219,6 +219,12 @@ PR #885 classifies the scope-less tool-feedback lookup as obsolete inference
 left behind after session-stable ownership replaced the older turn-scoped
 design. It deletes the active-entry scan; cleanup now requires the same
 explicit session or trace identity used by publication.
+
+PR #886 deletes the unused `ToolRegistry.SetAllowlist` API, its registration
+filter, clone state, and discovery-tool exception. Typed
+`AgentCapabilityPolicy` is the sole production owner of per-agent tool
+authorization; the generic registry owns only catalogue membership and
+lifecycle.
 
 Other matches remain candidates, not automatic deletions. The final audit must
 prove whether unconditional config repository replacement, raw outbound
@@ -1002,6 +1008,10 @@ Implementation sequence:
     terminalization, and cleanup use one explicit session key or trace scope;
     missing identity must not scan concurrent coordinator state and guess the
     only currently active scoped carrier.
+50. Delete the unused generic tool-registry allowlist. Per-agent authorization
+    remains at the typed agent-policy boundary; the registry no longer owns a
+    second policy map, registration branch, clone path, or discovery-tool
+    exception.
 
 Exit criteria:
 
@@ -1068,7 +1078,7 @@ Implemented shape:
 
 ### R1 — Execute the coordinated first-party compatibility reset
 
-Depends on: P1 and X3.46-X3.49
+Depends on: P1 and X3.46-X3.50
 
 Deployment requires explicit user authorization.
 

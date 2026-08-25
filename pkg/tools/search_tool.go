@@ -299,15 +299,6 @@ func (t *BM25SearchTool) getOrBuildEngine() *bm25CachedEngine {
 	return cached
 }
 
-func isToolDiscoveryToolName(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case BM25SearchToolName, RegexSearchToolName:
-		return true
-	default:
-		return false
-	}
-}
-
 // SearchBM25 ranks hidden tools against query using BM25 via utils.BM25Engine.
 // This non-cached variant rebuilds the engine on every call. Used by tests
 // and any code that doesn't hold a BM25SearchTool instance.
