@@ -40,7 +40,18 @@ type fakeBrowserCommandHost struct {
 	fillSnapshot     string
 	observeSnapshot  string
 	navigateSnapshot string
+	prepareOutputErr error
 	routedSessions   []string
+}
+
+func (host *fakeBrowserCommandHost) PrepareObservationOutput(
+	_ nodes.BrowserHostObservationOutputRequest,
+	result nodes.BrowserObservationResult,
+) (nodes.BrowserObservationResult, error) {
+	if host.prepareOutputErr != nil {
+		return nodes.BrowserObservationResult{}, host.prepareOutputErr
+	}
+	return result, nil
 }
 
 func (host *fakeBrowserCommandHost) Diagnostics(
@@ -331,6 +342,84 @@ func TestRuntimeExecutesTypedBrowserLifecycle(t *testing.T) {
 			t.Fatalf("routed session calls = %#v", host.routedSessions)
 		}
 	}
+}
+
+func TestRuntimePreservesKnownOutcomesWhenObservationStagingFails(t *testing.T) {
+	t.Run("observe", func(t *testing.T) {
+		host := browserRuntimeHostFixture()
+		host.prepareOutputErr = errors.New("snapshot staging unavailable")
+		runtime := newBrowserRuntimeFixture(t, host)
+		raw := invokeBrowserRuntime(t, runtime, nodes.BrowserCommandObserve, nodes.BrowserObserveInput{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			WorkspaceID: "workspace_1", BrowserTarget: "companion",
+		})
+		var result nodes.BrowserObservationResult
+		if err := json.Unmarshal(raw, &result); err != nil || !result.ProtectedResult || host.observed != 1 {
+			t.Fatalf("staging-failed observe = %#v, %v; calls=%d", result, err, host.observed)
+		}
+	})
+
+	t.Run("action", func(t *testing.T) {
+		host := browserRuntimeHostFixture()
+		host.prepareOutputErr = errors.New("snapshot staging unavailable")
+		runtime := newBrowserRuntimeFixture(t, host)
+		raw := invokeBrowserRuntime(t, runtime, nodes.BrowserCommandAct, nodes.BrowserActInput{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_staging_failure_action_1",
+			Action:             browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
+			Effect:             "navigation", CurrentOrigin: "about:blank",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", WorkspaceID: "workspace_1", BrowserTarget: "companion",
+		})
+		var result nodes.BrowserActResult
+		if err := json.Unmarshal(raw, &result); err != nil || result.State != "succeeded" ||
+			result.Observation != nil || host.navigated != 1 {
+			t.Fatalf("staging-failed action = %#v, %v; calls=%d", result, err, host.navigated)
+		}
+	})
+
+	t.Run("context select", func(t *testing.T) {
+		host := browserRuntimeHostFixture()
+		host.prepareOutputErr = errors.New("snapshot staging unavailable")
+		runtime := newBrowserRuntimeFixture(t, host)
+		authority := nodes.BrowserContextCatalog{
+			ID: "context_catalog_1", Generation: 1, SelectedTabID: "context_tab_1",
+			Tabs: []nodes.BrowserTabContext{{
+				ID: "context_tab_1", Kind: "primary", CreationSequence: 1,
+				DocumentGeneration: 1, URL: "about:blank", Origin: "about:blank",
+			}},
+		}
+		ephemeral, err := json.Marshal(struct {
+			Authority nodes.BrowserContextCatalog `json:"authority"`
+		}{Authority: authority})
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest, err := nodes.BrowserContextAuthorityDigest(authority)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, err := json.Marshal(nodes.BrowserContextInput{
+			SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+			Operation: "select", RequestID: "context_staging_failure_1",
+			WorkspaceID: "workspace_1", BrowserTarget: "companion",
+			ContextCatalogID: authority.ID, ContextGeneration: authority.Generation,
+			AuthorityDigest: digest, AuthorityBytes: len(ephemeral), TabID: "context_tab_1",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := testRuntimePlan(t, runtime, nodes.BrowserCommandContexts, input)
+		raw, err := runtime.InvokeWithEphemeral(t.Context(), plan, ephemeral)
+		var result nodes.BrowserContextResult
+		if decodeErr := json.Unmarshal(raw, &result); err != nil || decodeErr != nil ||
+			!result.ProtectedResult || result.Operation != "select" || host.contextCalls != 1 {
+			t.Fatalf(
+				"staging-failed context = %#v, invoke=%v decode=%v; calls=%d",
+				result, err, decodeErr, host.contextCalls,
+			)
+		}
+	})
 }
 
 func TestRuntimeExecutesTypedBrowserContextCatalog(t *testing.T) {

@@ -1222,3 +1222,87 @@ func browserLimitsValue(limits BrowserLimits) map[string]any {
 		"tool_result_bytes": limits.ToolResultBytes, "retention_seconds": limits.RetentionSecs,
 	}
 }
+
+func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
+	limits := BrowserLimits{}.Effective()
+	invalidUTF8 := append([]byte(`{"snapshot":"page`), 0xff)
+	invalidUTF8 = append(invalidUTF8, []byte(`","elements":[]}`)...)
+	tests := map[string][]byte{
+		"unknown field":      []byte(`{"snapshot":"page","elements":[],"secret":"value"}`),
+		"trailing JSON":      []byte(`{"snapshot":"page","elements":[]} {}`),
+		"duplicate snapshot": []byte(`{"snapshot":"first","snapshot":"second","elements":[]}`),
+		"duplicate element role": []byte(
+			`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","role":"link","name":"Save"}]}`,
+		),
+		"invalid UTF-8":    invalidUTF8,
+		"missing snapshot": []byte(`{"elements":[]}`),
+		"missing elements": []byte(`{"snapshot":"page"}`),
+		"null elements":    []byte(`{"snapshot":"page","elements":null}`),
+		"missing ref":      []byte(`{"snapshot":"page","elements":[{"role":"button","name":"Save"}]}`),
+		"null ref":         []byte(`{"snapshot":"page","elements":[{"ref":null,"role":"button","name":"Save"}]}`),
+		"missing role":     []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","name":"Save"}]}`),
+		"null role":        []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":null,"name":"Save"}]}`),
+		"missing name":     []byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button"}]}`),
+		"null name": []byte(
+			`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","name":null}]}`,
+		),
+		"duplicate ref": []byte(
+			`{"snapshot":"page","elements":[{"ref":"ref_1","role":"button","name":"Save"},` +
+				`{"ref":"ref_1","role":"button","name":"Save again"}]}`,
+		),
+		"oversized snapshot": []byte(
+			`{"snapshot":"` + strings.Repeat("x", limits.SnapshotBytes+1) + `","elements":[]}`,
+		),
+	}
+	for name, payload := range tests {
+		t.Run(name, func(t *testing.T) {
+			if decoded, err := DecodeBrowserSnapshotPayload(payload, limits); err == nil {
+				t.Fatalf("DecodeBrowserSnapshotPayload() accepted %#v", decoded)
+			}
+		})
+	}
+}
+
+func TestDecodeBrowserSnapshotPayloadPreservesPresentEmptyElementStrings(t *testing.T) {
+	decoded, err := DecodeBrowserSnapshotPayload(
+		[]byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":"","name":""}]}`),
+		BrowserLimits{}.Effective(),
+	)
+	if err != nil || len(decoded.Elements) != 1 || decoded.Elements[0].Role != "" || decoded.Elements[0].Name != "" {
+		t.Fatalf("DecodeBrowserSnapshotPayload() = %#v, %v", decoded, err)
+	}
+}
+
+func TestBrowserContextOutputSchemaAcceptsStreamedSelectionSnapshot(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := map[string]any{
+		"operation": "select",
+		"context_catalog": map[string]any{
+			"context_catalog_id": "catalog_1", "context_generation": 2,
+			"selected_tab_id": "tab_1", "tabs": []any{map[string]any{
+				"tab_id": "tab_1", "kind": "primary", "creation_sequence": 1,
+				"document_generation": 2, "url": "https://example.com/", "origin": "https://example.com",
+			}},
+		},
+		"observation": map[string]any{
+			"session_id": "session_1", "tab_id": "tab_1", "snapshot_generation": 2,
+			"url": "https://example.com/", "origin": "https://example.com",
+			"snapshot": "", "elements": []any{}, "truncated": false, "document_id": "document_2",
+			"output": map[string]any{
+				"transfer_id": "transfer_1", "kind": BrowserOutputSnapshot,
+				"session_id": "session_1", "routed_session_id": "routed_1",
+				"agent_id": "browser", "actor_id": "actor_1", "workspace_id": "workspace_1",
+				"target": "companion", "profile_revision": "managed-v1",
+				"browser_policy_revision": strings.Repeat("a", 64), "invocation_id": "invocation_1",
+				"tab_id": "tab_1", "document_id": "document_2", "snapshot_generation": 2,
+				"filename": "browser-snapshot.json", "content_type": "application/json",
+				"size": 128 * 1024, "sha256": strings.Repeat("b", 64),
+				"captured_at": 1, "expires_at": 2, "cleanup_policy": "session_or_expiry",
+			},
+		},
+	}
+	assertBrowserOutputValid(t, descriptors[4], result)
+}

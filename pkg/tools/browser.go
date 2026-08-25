@@ -1947,6 +1947,12 @@ func browserToolError(err error) *toolshared.ToolResult {
 		return browserErrorResult("state_conflict", "Browser state changed concurrently.", "observe_again")
 	case errors.Is(err, browser.ErrDriverIncompatible):
 		return browserErrorResult("driver_incompatible", "The browser driver is incompatible.", "contact_operator")
+	case errors.Is(err, browser.ErrSnapshotTransfer):
+		return browserErrorResult(
+			"snapshot_transfer_failed",
+			"The browser snapshot could not be transferred.",
+			"observe_again",
+		)
 	case errors.Is(err, browser.ErrWorkerUnavailable), errors.Is(err, browser.ErrDriverRejected):
 		return browserErrorResult("driver_unavailable", "The browser driver is unavailable.", "retry_or_reopen")
 	default:

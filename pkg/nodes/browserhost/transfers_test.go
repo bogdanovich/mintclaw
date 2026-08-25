@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -213,6 +214,47 @@ func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) 
 	}
 	if _, statErr := os.Stat(artifact.path); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("output survived session close: %v", statErr)
+	}
+}
+
+func TestBrowserHostStreamsLargeObservationAndDiscardsCommittedSnapshot(t *testing.T) {
+	largeSnapshot := "- button \"Save\" [ref=driver_ref_1]\n" + strings.Repeat("\"", 150*1024)
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{{
+			URL: "https://example.com/", Origin: "https://example.com", Snapshot: largeSnapshot,
+			Elements: []browserworker.DriverElement{{Target: "driver_ref_1", Role: "button", Name: "Save"}},
+		}},
+		navigationIdentities: []string{"navigation_1", "navigation_1"},
+	}})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil || observed.DocumentID == "" {
+		t.Fatalf("Observe() = %#v, %v", observed, err)
+	}
+	streamed, err := host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
+		SessionID: observed.SessionID, RoutedSessionID: "routed_session_1",
+		InvocationID: "browser_observe_large_1", WorkspaceID: "workspace_1",
+		BrowserTarget: "companion", AgentID: "browser", ActorID: "telegram:owner",
+	}, observed)
+	if err != nil || streamed.Output == nil || streamed.Snapshot != "" || len(streamed.Elements) != 0 ||
+		streamed.Output.Kind != nodes.BrowserOutputSnapshot ||
+		streamed.Output.Size <= uint64(protocol.MaxTransferChunkBytes) {
+		t.Fatalf("PrepareObservationOutput() = %#v, %v", streamed, err)
+	}
+	payload := downloadBrowserOutput(t, host, *streamed.Output, nil)
+	decoded, err := nodes.DecodeBrowserSnapshotPayload(payload, nodes.BrowserLimits{}.Effective())
+	if err != nil || decoded.Snapshot != observed.Snapshot || !reflect.DeepEqual(decoded.Elements, observed.Elements) {
+		t.Fatalf("streamed snapshot = %#v, %v", decoded, err)
+	}
+	host.transferMu.Lock()
+	_, retained := host.outputArtifacts[streamed.Output.TransferID]
+	_, active := host.outputTransfers[streamed.Output.TransferID]
+	host.transferMu.Unlock()
+	if retained || active {
+		t.Fatalf("committed semantic snapshot remained retained=%v active=%v", retained, active)
 	}
 }
 

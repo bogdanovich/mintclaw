@@ -193,13 +193,29 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	host.setLargeSnapshots(true)
+	largeTransferCancels := host.outputCancelCount()
+	host.corruptOutputChunks(2)
 	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
+	host.setLargeSnapshots(false)
 	if err != nil || invocation.State != browser.InvocationSucceeded {
 		t.Fatalf("navigate invocation = %#v, %v", invocation, err)
 	}
+	if chunks := host.outputChunkCount(); chunks < 2 {
+		t.Fatalf("large action observation used %d WSS chunks, want at least 2", chunks)
+	}
+	if cancels := host.outputCancelCount(); cancels != largeTransferCancels+2 ||
+		countWSSBrowserCommand(host.commandSequence(), "navigate") != 1 ||
+		countWSSBrowserCommand(host.commandSequence(), "observe") != 2 {
+		t.Fatalf("large observation recovery cancels=%d, navigate commands=%#v", cancels, host.commandSequence())
+	}
 	final, err := broker.Observe(t.Context(), owner, first.ID, first.TabID)
-	if err != nil || final.URL != "https://example.com/" || final.SnapshotGeneration != 2 {
-		t.Fatalf("final observation = %#v, %v", final, err)
+	if err != nil || final.URL != "https://example.com/" || final.SnapshotGeneration != 2 ||
+		len(final.Snapshot) < 150*1024 {
+		t.Fatalf(
+			"final observation generation=%d url=%q snapshot_bytes=%d error=%v commands=%#v",
+			final.SnapshotGeneration, final.URL, len(final.Snapshot), err, host.commandSequence(),
+		)
 	}
 	elementMarker := `[ref=`
 	elementStart := strings.Index(final.Snapshot, elementMarker)
@@ -722,7 +738,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	invocation, err = browserSource.ExecuteAction(
 		uploadContext, owner, corruptDownload.Action.ID, &corruptDownload.Approval,
 	)
-	if err != nil || invocation.State != browser.InvocationSucceeded || host.outputCancelCount() != 2 ||
+	if err != nil || invocation.State != browser.InvocationSucceeded || host.outputCancelCount() != 4 ||
 		countWSSBrowserCommand(host.commandSequence(), "download") != beforeDownloads+1 {
 		t.Fatalf("corrupt download invocation = %#v, %v; commands = %#v", invocation, err, host.commandSequence())
 	}
@@ -787,7 +803,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	)
 	if err != nil || invocation.State != browser.InvocationSucceeded || invocation.Download != nil ||
 		!bytes.Contains(invocation.TerminalResult, []byte(`"artifact_state":"unavailable"`)) ||
-		host.outputCancelCount() != 4 ||
+		host.outputCancelCount() != 6 ||
 		countWSSBrowserCommand(host.commandSequence(), "download") != beforeDownloads+1 {
 		t.Fatalf("unavailable download invocation = %#v, %v; commands = %#v", invocation, err, host.commandSequence())
 	}
@@ -1002,6 +1018,9 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		"observe",
 		"capture",
 		"navigate",
+		// A corrupted post-action snapshot transfer triggers a fresh observe,
+		// never a replay of the accepted navigation.
+		"observe",
 		"capture",
 		"fill",
 		"click",
@@ -1058,6 +1077,136 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	}
 }
 
+func TestCompanionBrowserSnapshotTransferRecoveryOverProductionWSS(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		kind string
+	}{
+		{name: "lost final commit receipt", kind: "drop_commit"},
+		{name: "stalled accepted transfer", kind: "stall_after_accept"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			workspace := t.TempDir()
+			registry, admission, runtimeState := newVerticalSliceNodeRuntime(t, workspace)
+			server := httptest.NewTLSServer(admission)
+			defer server.Close()
+			defer closeVerticalSliceAdmission(t, admission)
+
+			host := &wssBrowserHost{profile: wssBrowserProfile()}
+			identity, identityErr := companion.LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity"))
+			if identityErr != nil {
+				t.Fatal(identityErr)
+			}
+			commands := browserRuntimeCommands()
+			policy := nodes.LocalCommandPolicy{
+				Revision: "browser-wss-snapshot-recovery-policy", AllowedCommands: commands,
+				MaximumRisk: nodes.RiskWrite, MaxTimeoutSeconds: nodes.MaxBrowserActionSeconds,
+				MaxOutputBytes: nodes.MaxBrowserToolResultBytes,
+			}
+			ledger, ledgerErr := companion.NewFileInvocationLedger(
+				companion.InvocationLedgerPath(filepath.Join(t.TempDir(), "runtime")),
+				companion.DefaultInvocationLedgerLimit,
+				companion.DefaultInvocationLedgerBytes,
+			)
+			if ledgerErr != nil {
+				t.Fatal(ledgerErr)
+			}
+			defer ledger.Close()
+			commandRuntime, runtimeErr := companion.NewRuntime(
+				identity.ID, "browser-wss-snapshot-recovery-test", policy, ledger,
+				companion.WithBrowserHost(host),
+			)
+			if runtimeErr != nil {
+				t.Fatal(runtimeErr)
+			}
+			clientConfig := wssBrowserCompanionConfig(t, server, policy)
+			client := wssBrowserClient(t, clientConfig, identity, commandRuntime, host)
+			result, authenticateErr := client.Authenticate(t.Context())
+			if authenticateErr != nil || result.State != nodes.StatePendingPairing {
+				t.Fatalf("bootstrap admission = %#v, %v", result, authenticateErr)
+			}
+			if _, approveErr := registry.Approve(identity.ID, nodes.PairingApproval{
+				Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: commands, At: time.Now().Unix(),
+			}); approveErr != nil {
+				t.Fatal(approveErr)
+			}
+			run := startWSSBrowserClient(t, client)
+			defer run.stop(t)
+			waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
+
+			cfg := wssBrowserGatewayConfig(t, workspace)
+			factory, factoryErr := newGatewayBrowserWorkerFactory(cfg, runtimeState)
+			if factoryErr != nil {
+				t.Fatal(factoryErr)
+			}
+			host.setLargeSnapshots(true)
+			host.setSnapshotOutputTTL(2 * time.Second)
+			sessionID := "browser_snapshot_" + strings.ReplaceAll(test.name, " ", "_")
+			opened, openErr := factory.Open(t.Context(), browser.WorkerOpenRequest{
+				Owner: browser.Owner{
+					ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+					SessionKey: sessionID, ExecutionID: "execution_" + sessionID,
+				},
+				SessionID: sessionID, Target: "companion", Profile: "managed", DryRun: false,
+				Limits: cfg.Tools.Browser.Limits.Effective(),
+			})
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			worker := opened.Owner.(*nodeBrowserWorker)
+			host.mu.Lock()
+			host.urls[sessionID] = "https://example.com/"
+			host.mu.Unlock()
+			switch test.kind {
+			case "drop_commit":
+				host.dropNextOutputCommitReceipt()
+			case "stall_after_accept":
+				host.stallNextOutputAfterAccept()
+			default:
+				t.Fatalf("unknown transfer fault %q", test.kind)
+			}
+			started := time.Now()
+			_, observeErr := worker.Observe(context.Background())
+			if !errors.Is(observeErr, browser.ErrSnapshotTransfer) {
+				t.Fatalf("first Observe() error = %v, want snapshot transfer failure", observeErr)
+			}
+			if elapsed := time.Since(started); elapsed > 10*time.Second {
+				t.Fatalf("browser-owned transfer deadline elapsed = %v, want <= 10s", elapsed)
+			}
+			worker.mu.Lock()
+			generation := worker.snapshotGeneration
+			publicGeneration := worker.publicSnapshotGeneration
+			staleAuthority := worker.documentID != "" || worker.currentOrigin != "" || len(worker.elements) != 0
+			worker.mu.Unlock()
+			if generation != 1 || publicGeneration != 0 || staleAuthority {
+				t.Fatalf(
+					"failed transfer authority generation=%d public=%d stale=%v",
+					generation, publicGeneration, staleAuthority,
+				)
+			}
+			observation, observeErr := worker.Observe(t.Context())
+			if observeErr != nil || observation.URL != "https://example.com/" || len(observation.Snapshot) < 150*1024 {
+				t.Fatalf(
+					"recovered Observe() = url %q bytes %d, %v",
+					observation.URL,
+					len(observation.Snapshot),
+					observeErr,
+				)
+			}
+			worker.mu.Lock()
+			generation = worker.snapshotGeneration
+			worker.mu.Unlock()
+			if generation != 2 {
+				t.Fatalf("recovered remote generation = %d, want 2", generation)
+			}
+			if closeErr := worker.Close(t.Context()); closeErr != nil {
+				t.Fatalf("Close() error = %v", closeErr)
+			}
+		})
+	}
+}
+
 func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	workspace := t.TempDir()
 	registry, admission, runtimeState := newVerticalSliceNodeRuntime(t, workspace)
@@ -1093,7 +1242,7 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientConfig := wssBrowserCompanionConfig(t, server, policy)
-	client := wssBrowserClient(t, clientConfig, identity, commandRuntime)
+	client := wssBrowserClient(t, clientConfig, identity, commandRuntime, host)
 	result, err := client.Authenticate(t.Context())
 	if err != nil || result.State != nodes.StatePendingPairing {
 		t.Fatalf("bootstrap admission = %#v, %v", result, err)
@@ -1161,25 +1310,6 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	}
 	selectedTab := opened.Catalog.Tabs[1]
 	selectPreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
-		Owner: owner, RequestID: "context_wss_select_stale", SessionID: session.ID,
-		Operation:        browser.ContextSelect,
-		ContextCatalogID: opened.Catalog.ID, ContextGeneration: opened.Catalog.Generation,
-		TabID: selectedTab.ID, FrameID: selectedTab.Frames[0].ID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	host.failNextContextStale()
-	stale, err := broker.ExecuteContext(t.Context(), selectPreparation, nil)
-	if !errors.Is(err, browser.ErrStale) || stale.Invocation == nil ||
-		stale.Invocation.State != browser.InvocationFailed || stale.Invocation.SafeFailure != "context_stale" {
-		t.Fatalf("ExecuteContext(stale select) = %#v, %v", stale, err)
-	}
-	status, err := broker.Status(t.Context(), owner, session.ID)
-	if err != nil || status.State != browser.SessionReady {
-		t.Fatalf("Status(after stale select) = %#v, %v", status, err)
-	}
-	selectPreparation, err = broker.PrepareContext(t.Context(), browser.ContextRequest{
 		Owner: owner, RequestID: "context_wss_select", SessionID: session.ID,
 		Operation:        browser.ContextSelect,
 		ContextCatalogID: opened.Catalog.ID, ContextGeneration: opened.Catalog.Generation,
@@ -1188,12 +1318,50 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selectDrop.arm()
+	host.setLargeSnapshots(true)
 	selected, err := broker.ExecuteContext(t.Context(), selectPreparation, nil)
+	host.setLargeSnapshots(false)
 	if err != nil || selected.Observation == nil ||
 		selected.Catalog.SelectedFrameID != selectedTab.Frames[0].ID ||
-		selected.Observation.URL != "https://example.com/popup" || !selectDrop.didDrop() {
-		t.Fatalf("ExecuteContext(select) = %#v, %v", selected, err)
+		selected.Observation.URL != "https://example.com/popup" ||
+		len(selected.Observation.Snapshot) < 150*1024 || host.outputChunkCount() < 2 {
+		t.Fatalf(
+			"ExecuteContext(select) = %#v, %v; chunks=%d commands=%#v",
+			selected, err, host.outputChunkCount(), host.commandSequence(),
+		)
+	}
+	stalePreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
+		Owner: owner, RequestID: "context_wss_select_stale", SessionID: session.ID,
+		Operation:        browser.ContextSelect,
+		ContextCatalogID: selected.Catalog.ID, ContextGeneration: selected.Catalog.Generation,
+		TabID: selected.Catalog.Tabs[0].ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.failNextContextStale()
+	stale, err := broker.ExecuteContext(t.Context(), stalePreparation, nil)
+	if !errors.Is(err, browser.ErrStale) || stale.Invocation == nil ||
+		stale.Invocation.State != browser.InvocationFailed || stale.Invocation.SafeFailure != "context_stale" {
+		t.Fatalf("ExecuteContext(stale select) = %#v, %v", stale, err)
+	}
+	status, err := broker.Status(t.Context(), owner, session.ID)
+	if err != nil || status.State != browser.SessionReady {
+		t.Fatalf("Status(after stale select) = %#v, %v", status, err)
+	}
+	recoveryPreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
+		Owner: owner, RequestID: "context_wss_select_recovery", SessionID: session.ID,
+		Operation:        browser.ContextSelect,
+		ContextCatalogID: selected.Catalog.ID, ContextGeneration: selected.Catalog.Generation,
+		TabID: selected.Catalog.Tabs[0].ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectDrop.arm()
+	recovered, err := broker.ExecuteContext(t.Context(), recoveryPreparation, nil)
+	if err != nil || recovered.Observation == nil || !selectDrop.didDrop() {
+		t.Fatalf("ExecuteContext(recovered select) = %#v, %v", recovered, err)
 	}
 	retained, err := os.ReadFile(ledgerPath)
 	if err != nil {
@@ -1206,7 +1374,7 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 	closePreparation, err := broker.PrepareContext(t.Context(), browser.ContextRequest{
 		Owner: owner, RequestID: "context_wss_close", SessionID: session.ID,
 		Operation:        browser.ContextClose,
-		ContextCatalogID: selected.Catalog.ID, ContextGeneration: selected.Catalog.Generation,
+		ContextCatalogID: recovered.Catalog.ID, ContextGeneration: recovered.Catalog.Generation,
 		TabID: selectedTab.ID,
 	})
 	if err != nil || !closePreparation.RequiresApproval {
@@ -1231,10 +1399,11 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 			selectCount++
 		}
 	}
-	if selectCount != 2 {
-		// One stale attempt and one accepted attempt are expected; recovery
-		// must use list+observe rather than replaying the accepted select.
-		t.Fatalf("browser host select count = %d, want 2: %#v", selectCount, host.commandSequence())
+	if selectCount != 3 {
+		// One stale attempt, one streamed selection, and one accepted dropped
+		// selection are expected. Recovery must use list+observe rather than
+		// replaying the accepted selection.
+		t.Fatalf("browser host select count = %d, want 3: %#v", selectCount, host.commandSequence())
 	}
 }
 
@@ -1395,25 +1564,36 @@ func prepareWSSBrowserRestartPlan(
 }
 
 type wssBrowserHost struct {
-	mu               sync.Mutex
-	profile          nodes.BrowserProfileDescriptor
-	commands         []string
-	urls             map[string]string
-	contexts         map[string]nodes.BrowserContextCatalog
-	snapshots        map[string]uint64
-	pendingDialogs   map[string]*nodes.BrowserDialogObservation
-	navigateEntered  chan struct{}
-	navigateRelease  chan struct{}
-	navigateFailure  bool
-	fillDenied       bool
-	contextStale     bool
-	transfer         *wssBrowserTransfer
-	uploaded         []byte
-	output           []byte
-	outputDescriptor nodes.BrowserOutputDescriptor
-	outputActive     bool
-	corruptOutputs   int
-	outputCancels    int
+	mu                sync.Mutex
+	profile           nodes.BrowserProfileDescriptor
+	commands          []string
+	urls              map[string]string
+	contexts          map[string]nodes.BrowserContextCatalog
+	snapshots         map[string]uint64
+	pendingDialogs    map[string]*nodes.BrowserDialogObservation
+	navigateEntered   chan struct{}
+	navigateRelease   chan struct{}
+	navigateFailure   bool
+	fillDenied        bool
+	contextStale      bool
+	transfer          *wssBrowserTransfer
+	uploaded          []byte
+	output            []byte
+	outputDescriptor  nodes.BrowserOutputDescriptor
+	outputActive      bool
+	outputOffset      int
+	outputSequence    uint64
+	outputChunks      int
+	corruptOutputs    int
+	outputCancels     int
+	dropOutputCommit  int
+	stallOutputStart  int
+	outputUnavailable bool
+	snapshotOutputTTL time.Duration
+	largeSnapshots    bool
+	policies          map[string]string
+	limits            map[string]nodes.BrowserLimits
+	expires           map[string]int64
 }
 
 type wssBrowserTransfer struct {
@@ -1460,32 +1640,44 @@ func (host *wssBrowserHost) HandleTransferFrame(
 		case protocol.TransferFramePrepare:
 			var descriptor nodes.BrowserOutputDescriptor
 			if json.Unmarshal(frame.Payload, &descriptor) != nil || descriptor != host.outputDescriptor ||
-				frame.TransferID != descriptor.TransferID || frame.TotalSize != descriptor.Size || host.outputActive {
+				frame.TransferID != descriptor.TransferID || frame.TotalSize != descriptor.Size || host.outputActive ||
+				host.outputUnavailable {
 				response.Type = protocol.TransferFrameDeny
 				return send(response)
 			}
 			host.outputActive = true
+			host.outputOffset = 0
+			host.outputSequence = 0
+			host.outputChunks = 0
 			response.Type = protocol.TransferFrameAccept
 			if err := send(response); err != nil {
 				return err
 			}
-			response.Type, response.Sequence = protocol.TransferFrameChunk, 1
-			response.Payload = append([]byte(nil), host.output...)
-			if host.corruptOutputs > 0 {
-				host.corruptOutputs--
-				response.Payload[len(response.Payload)-1] ^= 0xff
+			if host.stallOutputStart > 0 {
+				host.stallOutputStart--
+				return nil
 			}
-			return send(response)
+			return host.sendOutputChunkLocked(frame, send)
 		case protocol.TransferFrameAck:
-			if frame.Sequence != 1 || !host.outputActive {
+			if frame.Sequence != host.outputSequence || !host.outputActive {
 				response.Type = protocol.TransferFrameFailure
 				return send(response)
+			}
+			if host.outputOffset < len(host.output) {
+				return host.sendOutputChunkLocked(frame, send)
 			}
 			response.Type, response.Sequence = protocol.TransferFrameStatus, 0
 			response.Payload, _ = json.Marshal(map[string]string{"status": "received"})
 			return send(response)
 		case protocol.TransferFrameCommit:
 			host.outputActive = false
+			host.outputOffset = 0
+			host.outputSequence = 0
+			if host.dropOutputCommit > 0 {
+				host.dropOutputCommit--
+				host.outputUnavailable = true
+				return nil
+			}
 			response.Type = protocol.TransferFrameCommitted
 			return send(response)
 		case protocol.TransferFrameCancel:
@@ -1530,6 +1722,27 @@ func (host *wssBrowserHost) HandleTransferFrame(
 	return send(response)
 }
 
+func (host *wssBrowserHost) sendOutputChunkLocked(
+	frame protocol.TransferFrame,
+	send func(protocol.TransferFrame) error,
+) error {
+	end := min(host.outputOffset+protocol.MaxTransferChunkBytes, len(host.output))
+	if end <= host.outputOffset {
+		return errors.New("empty WSS browser output chunk")
+	}
+	host.outputSequence++
+	response := frame
+	response.Type, response.Sequence = protocol.TransferFrameChunk, host.outputSequence
+	response.Payload = append([]byte(nil), host.output[host.outputOffset:end]...)
+	host.outputOffset = end
+	host.outputChunks++
+	if host.corruptOutputs > 0 && host.outputSequence == 1 {
+		host.corruptOutputs--
+		response.Payload[len(response.Payload)-1] ^= 0xff
+	}
+	return send(response)
+}
+
 func (host *wssBrowserHost) corruptNextOutputChunk() {
 	host.corruptOutputChunks(1)
 }
@@ -1544,6 +1757,36 @@ func (host *wssBrowserHost) outputCancelCount() int {
 	host.mu.Lock()
 	defer host.mu.Unlock()
 	return host.outputCancels
+}
+
+func (host *wssBrowserHost) setLargeSnapshots(enabled bool) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.largeSnapshots = enabled
+}
+
+func (host *wssBrowserHost) setSnapshotOutputTTL(ttl time.Duration) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.snapshotOutputTTL = ttl
+}
+
+func (host *wssBrowserHost) dropNextOutputCommitReceipt() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.dropOutputCommit++
+}
+
+func (host *wssBrowserHost) stallNextOutputAfterAccept() {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.stallOutputStart++
+}
+
+func (host *wssBrowserHost) outputChunkCount() int {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	return host.outputChunks
 }
 
 func (host *wssBrowserHost) Capture(
@@ -1606,8 +1849,14 @@ func (host *wssBrowserHost) Open(
 		host.contexts = make(map[string]nodes.BrowserContextCatalog)
 		host.snapshots = make(map[string]uint64)
 		host.pendingDialogs = make(map[string]*nodes.BrowserDialogObservation)
+		host.policies = make(map[string]string)
+		host.limits = make(map[string]nodes.BrowserLimits)
+		host.expires = make(map[string]int64)
 	}
 	host.urls[request.SessionID] = "about:blank"
+	host.policies[request.SessionID] = request.BrowserPolicyRevision
+	host.limits[request.SessionID] = request.Limits
+	host.expires[request.SessionID] = time.Now().Add(time.Hour).Unix()
 	host.contexts[request.SessionID] = wssBrowserContextCatalog(false)
 	return wssBrowserSessionResult(request.SessionID, "ready"), nil
 }
@@ -1638,12 +1887,63 @@ func (host *wssBrowserHost) Observe(
 	}
 	host.snapshots[request.SessionID] = request.SnapshotGeneration
 	result := wssBrowserObservation(request, url)
+	result = host.largeObservationLocked(result)
 	result.DocumentID = wssBrowserDocumentID(request.SessionID, request.SnapshotGeneration)
 	if pending := host.pendingDialogs[request.SessionID]; pending != nil {
 		copy := *pending
 		result.PendingDialog = &copy
 	}
 	return result, nil
+}
+
+func (host *wssBrowserHost) PrepareObservationOutput(
+	request nodes.BrowserHostObservationOutputRequest,
+	result nodes.BrowserObservationResult,
+) (nodes.BrowserObservationResult, error) {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	payload, err := json.Marshal(nodes.BrowserSnapshotPayload{
+		Snapshot: result.Snapshot, Elements: result.Elements,
+	})
+	if err != nil || len(payload) > host.limits[result.SessionID].ToolResultBytes {
+		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
+	}
+	if len(payload) <= protocol.MaxTransferChunkBytes {
+		return result, nil
+	}
+	digest := sha256.Sum256(payload)
+	host.output = payload
+	host.outputUnavailable = false
+	expiresAt := host.expires[result.SessionID]
+	if host.snapshotOutputTTL > 0 {
+		expiresAt = min(expiresAt, time.Now().Add(host.snapshotOutputTTL).Unix())
+	}
+	host.outputDescriptor = nodes.BrowserOutputDescriptor{
+		TransferID: browserNodeStableID("browser_snapshot", request.InvocationID),
+		Kind:       nodes.BrowserOutputSnapshot, SessionID: result.SessionID,
+		RoutedSessionID: request.RoutedSessionID, AgentID: request.AgentID, ActorID: request.ActorID,
+		WorkspaceID: request.WorkspaceID, Target: request.BrowserTarget,
+		ProfileRevision: host.profile.Revision, BrowserPolicyRevision: host.policies[result.SessionID],
+		InvocationID: request.InvocationID, TabID: result.TabID, DocumentID: result.DocumentID,
+		SnapshotGeneration: result.SnapshotGeneration,
+		Filename:           "browser-snapshot.json", ContentType: "application/json",
+		Size: uint64(len(payload)), SHA256: hex.EncodeToString(digest[:]),
+		CapturedAt: time.Now().Unix(), ExpiresAt: expiresAt,
+		CleanupPolicy: "session_or_expiry",
+	}
+	result.Snapshot = ""
+	result.Elements = []nodes.BrowserElement{}
+	result.Output = &host.outputDescriptor
+	return result, nil
+}
+
+func (host *wssBrowserHost) largeObservationLocked(
+	result nodes.BrowserObservationResult,
+) nodes.BrowserObservationResult {
+	if host.largeSnapshots && result.Snapshot != "" {
+		result.Snapshot += "\n" + strings.Repeat("\"", 150*1024)
+	}
+	return result
 }
 
 func (host *wssBrowserHost) Diagnostics(
@@ -1727,6 +2027,8 @@ func (host *wssBrowserHost) Contexts(
 		observation := wssBrowserObservation(nodes.BrowserHostObserveRequest{
 			SessionID: request.SessionID, TabID: "tab_primary", SnapshotGeneration: generation,
 		}, "https://example.com/popup")
+		observation.DocumentID = wssBrowserDocumentID(request.SessionID, generation)
+		observation = host.largeObservationLocked(observation)
 		result.Observation = &observation
 	case "close":
 		if request.Authority == nil || request.Authority.ID != catalog.ID || len(catalog.Tabs) < 2 {
@@ -1802,10 +2104,11 @@ func (host *wssBrowserHost) Navigate(
 	defer host.mu.Unlock()
 	host.urls[request.SessionID] = request.Action.URL
 	host.snapshots[request.SessionID] = request.SnapshotGeneration + 1
-	return wssBrowserObservation(nodes.BrowserHostObserveRequest{
+	result := wssBrowserObservation(nodes.BrowserHostObserveRequest{
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration + 1,
-	}, request.Action.URL), nil
+	}, request.Action.URL)
+	return host.largeObservationLocked(result), nil
 }
 
 func (host *wssBrowserHost) Scroll(
@@ -1909,6 +2212,7 @@ func (host *wssBrowserHost) Drag(
 		DestinationExpectedRole: request.DestinationExpectedRole,
 		DestinationExpectedName: request.DestinationExpectedName,
 		ApprovalDigest:          request.ApprovalDigest,
+		WorkspaceID:             request.WorkspaceID, BrowserTarget: request.BrowserTarget,
 	}
 	if request.Action.Kind != "drag" || request.Action.SourceRef != "host_ref_7" ||
 		request.Action.DestinationRef != "host_ref_8" || request.ExpectedRole != "listitem" ||
@@ -1970,6 +2274,7 @@ func (host *wssBrowserHost) Upload(
 		ExpectedName: request.ExpectedName, ArtifactSHA256: request.ArtifactSHA256,
 		ArtifactBytes: request.ArtifactBytes, ArtifactFilename: request.ArtifactFilename,
 		ArtifactContentType: request.ArtifactContentType, ApprovalDigest: request.ApprovalDigest,
+		WorkspaceID: request.WorkspaceID, BrowserTarget: request.BrowserTarget,
 	}
 	if !found || host.transfer == nil || request.Action.Kind != "upload" ||
 		request.Action.Ref != "host_ref_9" || request.ExpectedRole != "button" ||
@@ -2082,6 +2387,7 @@ func (host *wssBrowserHost) Dialog(
 		DialogMessageBytes: request.DialogMessageBytes,
 		InputDigest:        request.InputDigest, InputBytes: request.InputBytes,
 		ApprovalDigest: request.ApprovalDigest,
+		WorkspaceID:    request.WorkspaceID, BrowserTarget: request.BrowserTarget,
 	}
 	if pending == nil || request.Action.Decision != "accept" || !request.Action.PromptProvided ||
 		request.Action.Value == "" || request.DialogType != pending.Type ||
@@ -2125,6 +2431,7 @@ func (host *wssBrowserHost) Click(
 		BrowserPolicyRevision: request.BrowserPolicyRevision, ProfileRevision: request.ProfileRevision,
 		ExpectedRole: request.ExpectedRole, ExpectedName: request.ExpectedName,
 		ApprovalDigest: request.ApprovalDigest,
+		WorkspaceID:    request.WorkspaceID, BrowserTarget: request.BrowserTarget,
 	}
 	if request.Action.Ref != "host_ref_1" || request.ExpectedRole != "button" ||
 		request.ExpectedName != "Save" || !nodes.BrowserApprovalDigestMatches(input) {
@@ -2212,6 +2519,7 @@ func (host *wssBrowserHost) Press(
 		PreparedActionHash:    request.PreparedActionHash,
 		BrowserPolicyRevision: request.BrowserPolicyRevision, ProfileRevision: request.ProfileRevision,
 		ApprovalDigest: request.ApprovalDigest,
+		WorkspaceID:    request.WorkspaceID, BrowserTarget: request.BrowserTarget,
 	}
 	if request.Action.Target != "document" || request.Action.Key != "Tab" ||
 		request.Effect != "unknown" || !nodes.BrowserApprovalDigestMatches(input) {
