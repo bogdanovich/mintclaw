@@ -353,11 +353,7 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 	// Create summary in store
 	tokenCount := tokenizer.EstimateMessageTokens(providers.Message{Content: content})
 
-	var earliestAt, latestAt *time.Time
-	if len(sourceMessages) > 0 {
-		earliestAt = &sourceMessages[0].CreatedAt
-		latestAt = &sourceMessages[len(sourceMessages)-1].CreatedAt
-	}
+	earliestAt, latestAt := messageTimeBounds(sourceMessages)
 
 	summary, err := e.store.CreateSummary(ctx, CreateSummaryInput{
 		ConversationID:      convID,
@@ -889,14 +885,31 @@ func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) {
 func formatMessagesForSummary(messages []Message) string {
 	var result string
 	for _, m := range messages {
-		ts := m.CreatedAt.Format("2006-01-02 15:04 MST")
 		content := m.Content
 		if content == "" && len(m.Parts) > 0 {
 			content = partsToReadableContent(m.Parts)
 		}
-		result += fmt.Sprintf("[%s]\n%s\n\n", ts, content)
+		if m.CreatedAt.IsZero() {
+			result += content + "\n\n"
+			continue
+		}
+		result += fmt.Sprintf("[%s]\n%s\n\n", m.CreatedAt.Format("2006-01-02 15:04 MST"), content)
 	}
 	return result
+}
+
+func messageTimeBounds(messages []Message) (*time.Time, *time.Time) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	for _, message := range messages {
+		if message.CreatedAt.IsZero() {
+			return nil, nil
+		}
+	}
+	earliest := messages[0].CreatedAt
+	latest := messages[len(messages)-1].CreatedAt
+	return &earliest, &latest
 }
 
 func formatSummariesForCondensation(summaries []Summary) string {

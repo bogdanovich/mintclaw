@@ -176,6 +176,56 @@ func TestCompactLeaf(t *testing.T) {
 	}
 }
 
+func TestCompactLeafOmitsUnknownTimestampMetadata(t *testing.T) {
+	ce, store, conversationID := newTestCompactionEngine(t)
+	ctx := t.Context()
+	var prompt string
+	ce.complete = func(_ context.Context, input string, _ CompleteOptions) (string, error) {
+		prompt = input
+		return "Summary without invented time metadata.", nil
+	}
+
+	for i := 0; i < LeafMinFanout; i++ {
+		message, err := store.AddMessageWithReasoning(
+			ctx,
+			conversationID,
+			"user",
+			fmt.Sprintf("unknown timestamp message %d", i),
+			"",
+			"",
+			100,
+			time.Time{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !message.CreatedAt.IsZero() {
+			t.Fatalf("stored CreatedAt = %v, want unknown", message.CreatedAt)
+		}
+		if err := store.AppendContextMessage(ctx, conversationID, message.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	summaryID, err := ce.compactLeaf(ctx, conversationID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summaryID == nil {
+		t.Fatal("expected leaf summary")
+	}
+	if strings.Contains(prompt, "0001-01-01") {
+		t.Fatalf("compaction prompt contains invented timestamp: %q", prompt)
+	}
+	summary, err := store.GetSummary(ctx, *summaryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.EarliestAt != nil || summary.LatestAt != nil {
+		t.Fatalf("summary bounds = %v..%v, want unknown", summary.EarliestAt, summary.LatestAt)
+	}
+}
+
 func TestCompactLeafNoCandidate(t *testing.T) {
 	ce, _, convID := newTestCompactionEngine(t)
 	ctx := context.Background()
