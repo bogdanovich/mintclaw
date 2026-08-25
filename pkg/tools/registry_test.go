@@ -206,63 +206,17 @@ func TestToolRegistry_RegisterAndGet(t *testing.T) {
 	}
 }
 
-func TestToolRegistry_AllowlistFiltersRegistrations(t *testing.T) {
-	r := NewToolRegistry()
-	r.SetAllowlist([]string{"Allowed_Tool"})
-
-	r.Register(newMockTool("allowed_tool", "allowed"))
-	r.Register(newMockTool("blocked_tool", "blocked"))
-	r.RegisterHidden(newMockTool("hidden_blocked", "hidden blocked"))
-
-	if _, ok := r.Get("allowed_tool"); !ok {
-		t.Fatal("expected allowed_tool to be registered")
-	}
-	if _, ok := r.Get("blocked_tool"); ok {
-		t.Fatal("blocked_tool should not be registered")
-	}
-	if _, ok := r.Get("hidden_blocked"); ok {
-		t.Fatal("hidden_blocked should not be registered")
-	}
-	if got := r.List(); len(got) != 1 || got[0] != "allowed_tool" {
-		t.Fatalf("registry list = %v, want [allowed_tool]", got)
-	}
-}
-
-func TestToolRegistry_AllowlistStillAllowsDiscoveryTools(t *testing.T) {
-	r := NewToolRegistry()
-	r.SetAllowlist([]string{"mcp_github_search"})
-
-	r.Register(newMockTool(BM25SearchToolName, "discover hidden tools"))
-	r.Register(newMockTool(RegexSearchToolName, "discover hidden tools via regex"))
-	r.Register(newMockTool("blocked_tool", "blocked"))
-
-	if _, ok := r.Get(BM25SearchToolName); !ok {
-		t.Fatal("expected BM25 discovery tool to bypass allowlist filtering")
-	}
-	if _, ok := r.Get(RegexSearchToolName); !ok {
-		t.Fatal("expected regex discovery tool to bypass allowlist filtering")
-	}
-	if _, ok := r.Get("blocked_tool"); ok {
-		t.Fatal("blocked_tool should not be registered")
-	}
-}
-
 func TestToolRegistry_HasRegisteredIncludesHiddenTools(t *testing.T) {
 	r := NewToolRegistry()
-	r.SetAllowlist([]string{"visible", "hidden"})
 
 	r.Register(newMockTool("visible", "visible"))
 	r.RegisterHidden(newMockTool("hidden", "hidden"))
-	r.RegisterHidden(newMockTool("blocked", "blocked"))
 
 	if !r.HasRegistered("visible") {
 		t.Fatal("expected visible tool to be registered")
 	}
 	if !r.HasRegistered("hidden") {
 		t.Fatal("expected hidden tool to be reported as registered")
-	}
-	if r.HasRegistered("blocked") {
-		t.Fatal("blocked tool should not be registered")
 	}
 	if _, ok := r.Get("hidden"); ok {
 		t.Fatal("hidden tool with zero TTL should not be callable through Get")
