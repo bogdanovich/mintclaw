@@ -29,10 +29,13 @@ type browserNodeTestHandler struct {
 	contextOperations        []string
 	observeInputs            []nodes.BrowserObserveInput
 	actInputs                []nodes.BrowserActInput
+	captureInputs            []nodes.BrowserCaptureInput
 	actPlanInputs            []json.RawMessage
 	invocations              map[string]nodes.InvocationRecord
 	currentURL               string
 	currentOrigin            string
+	nextObserveURL           string
+	nextObserveOrigin        string
 	elementRole              string
 	elementName              string
 	pendingDialog            *nodes.BrowserDialogObservation
@@ -42,7 +45,41 @@ type browserNodeTestHandler struct {
 	redactNextContext        bool
 	redactNextDiagnostics    bool
 	dynamicContextCatalog    bool
+	rotateElementRefs        bool
 	closeFailureCode         string
+}
+
+type browserNodeRecordingFactory struct {
+	browser.WorkerFactory
+	worker *nodeBrowserWorker
+}
+
+func (factory *browserNodeRecordingFactory) Open(
+	ctx context.Context,
+	request browser.WorkerOpenRequest,
+) (browser.WorkerOpenResult, error) {
+	opened, err := factory.WorkerFactory.Open(ctx, request)
+	if err == nil {
+		factory.worker, _ = opened.Owner.(*nodeBrowserWorker)
+	}
+	return opened, err
+}
+
+type browserNodeFailSessionUpdateStore struct {
+	browser.Store
+	failNextObservation bool
+}
+
+func (store *browserNodeFailSessionUpdateStore) UpdateSession(
+	ctx context.Context,
+	expected uint64,
+	next browser.Session,
+) error {
+	if store.failNextObservation && next.SnapshotGeneration > 0 {
+		store.failNextObservation = false
+		return browser.ErrStale
+	}
+	return store.Store.UpdateSession(ctx, expected, next)
 }
 
 func (*browserNodeTestHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
@@ -120,7 +157,19 @@ func (handler *browserNodeTestHandler) Invoke(
 		if url == "" {
 			url, origin = "about:blank", "about:blank"
 		}
+		if handler.nextObserveURL != "" {
+			url, origin = handler.nextObserveURL, handler.nextObserveOrigin
+			handler.nextObserveURL, handler.nextObserveOrigin = "", ""
+		}
 		observation := browserNodeTestObservation(input.SessionID, input.TabID, input.SnapshotGeneration, url, origin)
+		observation.DocumentID = browserNodeStableID(
+			"document", input.SessionID, fmt.Sprint(input.SnapshotGeneration),
+		)
+		if handler.rotateElementRefs && len(observation.Elements) == 1 {
+			rotatedRef := fmt.Sprintf("host_ref_%d", input.SnapshotGeneration)
+			observation.Elements[0].Ref = rotatedRef
+			observation.Snapshot = strings.ReplaceAll(observation.Snapshot, "host_ref_1", rotatedRef)
+		}
 		if handler.elementRole != "" && len(observation.Elements) == 1 {
 			observation.Elements[0].Role = handler.elementRole
 			observation.Elements[0].Name = handler.elementName
@@ -156,6 +205,11 @@ func (handler *browserNodeTestHandler) Invoke(
 			result = nodes.BrowserDiagnosticsResult{ProtectedResult: true}
 			handler.redactNextDiagnostics = false
 		}
+	case nodes.BrowserCommandCapture:
+		var input nodes.BrowserCaptureInput
+		_ = json.Unmarshal(plan.Input, &input)
+		handler.captureInputs = append(handler.captureInputs, input)
+		result = nodes.BrowserOutputDescriptor{}
 	case nodes.BrowserCommandAct:
 		var input nodes.BrowserActInput
 		_ = json.Unmarshal(plan.Input, &input)
@@ -179,6 +233,14 @@ func (handler *browserNodeTestHandler) Invoke(
 			input.SessionID, input.TabID, input.SnapshotGeneration+1,
 			handler.currentURL, handler.currentOrigin,
 		)
+		observation.DocumentID = browserNodeStableID(
+			"document", input.SessionID, fmt.Sprint(input.SnapshotGeneration+1),
+		)
+		if handler.rotateElementRefs && len(observation.Elements) == 1 {
+			rotatedRef := fmt.Sprintf("host_ref_%d", input.SnapshotGeneration+1)
+			observation.Elements[0].Ref = rotatedRef
+			observation.Snapshot = strings.ReplaceAll(observation.Snapshot, "host_ref_1", rotatedRef)
+		}
 		if handler.elementRole != "" && len(observation.Elements) == 1 {
 			observation.Elements[0].Role = handler.elementRole
 			observation.Elements[0].Name = handler.elementName
@@ -401,6 +463,316 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 	}
 	if !slices.Equal(commands, want) {
 		t.Fatalf("companion commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestGatewayBrowserWorkerCommitsPublicationAfterSessionPersistence(t *testing.T) {
+	cfg, runtime, _ := browserNodeTestRuntime(t)
+	baseFactory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &browserNodeRecordingFactory{WorkerFactory: baseFactory}
+	store := &browserNodeFailSessionUpdateStore{Store: browser.NewMemoryStore()}
+	broker, err := browser.NewBroker(cfg, store, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.failNextObservation = true
+	if _, err = broker.Observe(t.Context(), owner, session.ID, session.TabID); !errors.Is(err, browser.ErrStale) {
+		t.Fatalf("Observe() failed persistence error = %v, want stale", err)
+	}
+	factory.worker.mu.Lock()
+	failedGeneration := factory.worker.published.generation
+	factory.worker.mu.Unlock()
+	if failedGeneration != 0 {
+		t.Fatalf("failed persistence published generation %d", failedGeneration)
+	}
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil || observation.SnapshotGeneration != 1 {
+		t.Fatalf("recovered Observe() = %#v, %v", observation, err)
+	}
+	factory.worker.mu.Lock()
+	published := factory.worker.published
+	remoteGeneration := factory.worker.snapshotGeneration
+	factory.worker.mu.Unlock()
+	if published.generation != 1 || published.documentID == "" || remoteGeneration != 2 {
+		t.Fatalf("committed authority = %#v remote_generation=%d", published, remoteGeneration)
+	}
+}
+
+func TestGatewayBrowserWorkerCaptureUsesCommittedAndCurrentAuthorities(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	handler.rotateElementRefs = true
+	baseFactory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &browserNodeRecordingFactory{WorkerFactory: baseFactory}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigate, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_navigate", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.ExecuteAction(t.Context(), owner, navigate.Action.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_scroll", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionScroll, Direction: "down", Amount: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	factory.worker.mu.Lock()
+	published := factory.worker.published
+	remoteGeneration := factory.worker.snapshotGeneration
+	remoteDocumentID := factory.worker.documentID
+	factory.worker.mu.Unlock()
+	if published.generation != 2 || remoteGeneration != 3 || published.documentID == remoteDocumentID {
+		t.Fatalf(
+			"post-validation authority published=%#v remote_generation=%d remote_document=%q",
+			published, remoteGeneration, remoteDocumentID,
+		)
+	}
+	captureOwner := nodes.TransferArtifactOwner{
+		WorkspaceID: "workspace_capture", AgentID: "agent_capture", ActorID: "actor_capture",
+		RouteID: "route_capture", SessionID: session.ID, ToolCallID: "page_capture_after_validation",
+	}
+	_, captureErr := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: captureOwner.ToolCallID, SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Target: browser.ScreenshotTargetPage,
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: captureOwner.WorkspaceID, AgentID: captureOwner.AgentID,
+			ActorID: captureOwner.ActorID, RouteID: captureOwner.RouteID,
+			SessionID: captureOwner.SessionID, ToolCallID: captureOwner.ToolCallID,
+		},
+	})
+	if captureErr == nil || errors.Is(captureErr, browser.ErrStale) {
+		t.Fatalf("page capture error = %v, want dispatched non-stale failure", captureErr)
+	}
+	elementStart := strings.Index(observation.Snapshot, "[ref=")
+	if elementStart < 0 {
+		t.Fatalf("published snapshot has no element ref: %q", observation.Snapshot)
+	}
+	elementStart += len("[ref=")
+	elementEnd := strings.Index(observation.Snapshot[elementStart:], "]")
+	if elementEnd < 1 {
+		t.Fatalf("published snapshot has malformed element ref: %q", observation.Snapshot)
+	}
+	elementOwner := captureOwner
+	elementOwner.ToolCallID = "element_capture_after_validation"
+	_, elementErr := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: elementOwner.ToolCallID, SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Target: browser.ScreenshotTargetElement,
+		Ref:    observation.Snapshot[elementStart : elementStart+elementEnd],
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: elementOwner.WorkspaceID, AgentID: elementOwner.AgentID,
+			ActorID: elementOwner.ActorID, RouteID: elementOwner.RouteID,
+			SessionID: elementOwner.SessionID, ToolCallID: elementOwner.ToolCallID,
+		},
+	})
+	if elementErr == nil || errors.Is(elementErr, browser.ErrStale) {
+		t.Fatalf("element capture error = %v, want dispatched non-stale failure", elementErr)
+	}
+	handler.mu.Lock()
+	captureInputs := append([]nodes.BrowserCaptureInput(nil), handler.captureInputs...)
+	handler.mu.Unlock()
+	if len(captureInputs) != 2 || captureInputs[0].Target != "page" ||
+		captureInputs[1].Target != "element" || captureInputs[1].Ref != "host_ref_3" {
+		t.Fatalf("capture dispatch inputs = %#v, want page then rebound host_ref_3", captureInputs)
+	}
+}
+
+func TestGatewayBrowserWorkerRejectsCaptureAfterCrossOriginPrivateObservation(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	baseFactory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := &browserNodeRecordingFactory{WorkerFactory: baseFactory}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		SessionKey: "session_test", ExecutionID: "execution_test",
+	}
+	session, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	navigate, err := broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_navigate", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: initial.SnapshotID, SnapshotGeneration: initial.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.ExecuteAction(t.Context(), owner, navigate.Action.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.nextObserveURL = "https://other.example/"
+	handler.nextObserveOrigin = "https://other.example"
+	if _, err = broker.PrepareAction(t.Context(), browser.PrepareActionRequest{
+		Owner: owner, RequestID: "request_scroll", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: browser.Action{Kind: browser.ActionScroll, Direction: "down", Amount: 1},
+	}); !errors.Is(err, browser.ErrStale) {
+		t.Fatalf("cross-origin private validation error = %v, want stale", err)
+	}
+	captureOwner := nodes.TransferArtifactOwner{
+		WorkspaceID: "workspace_capture", AgentID: "agent_capture", ActorID: "actor_capture",
+		RouteID: "route_capture", SessionID: session.ID, ToolCallID: "capture_cross_origin",
+	}
+	_, captureErr := broker.CaptureScreenshot(t.Context(), browser.ScreenshotRequest{
+		Owner: owner, RequestID: captureOwner.ToolCallID, SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Target: browser.ScreenshotTargetPage,
+		Retention: &browser.ScreenshotRetentionAuthority{
+			WorkspaceID: captureOwner.WorkspaceID, AgentID: captureOwner.AgentID,
+			ActorID: captureOwner.ActorID, RouteID: captureOwner.RouteID,
+			SessionID: captureOwner.SessionID, ToolCallID: captureOwner.ToolCallID,
+		},
+	})
+	if !errors.Is(captureErr, browser.ErrStale) {
+		t.Fatalf("cross-origin capture error = %v, want stale", captureErr)
+	}
+	handler.mu.Lock()
+	captureCount := len(handler.captureInputs)
+	handler.mu.Unlock()
+	if captureCount != 0 {
+		t.Fatalf("cross-origin capture reached companion %d times", captureCount)
+	}
+}
+
+func TestNodeBrowserWorkerFreshObservationInvalidatesOlderActionCache(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	if _, err = worker.Observe(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err = worker.ExecutePrepared(t.Context(), browser.WorkerPreparedAction{
+		InvocationID: "invocation_navigate",
+		Action:       browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
+		Prepared: browser.PreparedAction{
+			Action: browser.Action{Kind: browser.ActionNavigate},
+			Effect: browser.EffectNavigation, CurrentOrigin: "about:blank",
+			ActionHash: strings.Repeat("a", 64),
+		},
+		DriverAction: browser.DriverAction{Kind: browser.DriverNavigate, URL: "https://example.com/"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fresh := browserNodeTestObservation(
+		worker.sessionID, worker.tabID, 3, "https://example.com/popup", "https://example.com",
+	)
+	fresh.DocumentID = browserNodeStableID("document", worker.sessionID, "3")
+	if _, err = worker.acceptObservation(fresh, 3); err != nil {
+		t.Fatal(err)
+	}
+	worker.mu.Lock()
+	cached := worker.cachedObservation != nil
+	worker.mu.Unlock()
+	if cached {
+		t.Fatal("fresh context observation retained older action cache")
+	}
+	if _, err = worker.Observe(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	handler.mu.Lock()
+	observeInputs := append([]nodes.BrowserObserveInput(nil), handler.observeInputs...)
+	handler.mu.Unlock()
+	if len(observeInputs) != 2 || observeInputs[1].SnapshotGeneration != 4 {
+		t.Fatalf("post-context observe inputs = %#v, want fresh remote generation 4", observeInputs)
+	}
+}
+
+func TestNodeBrowserWorkerElementPublicationRebindFailsClosedWhenAmbiguous(t *testing.T) {
+	worker := &nodeBrowserWorker{
+		elements: map[string]browser.DriverElement{
+			"current_1": {Target: "current_1", Role: "button", Name: "Save"},
+		},
+		published: nodeBrowserObservationAuthority{elements: map[string]browser.DriverElement{
+			"public_1": {Target: "public_1", Role: "button", Name: "Save"},
+			"public_2": {Target: "public_2", Role: "button", Name: "Save"},
+		}},
+	}
+	if rebound := worker.rebindPublishedElementLocked(worker.published.elements["public_1"]); rebound != "" {
+		t.Fatalf("ambiguous published element rebound to %q", rebound)
+	}
+	worker.published.elements = map[string]browser.DriverElement{
+		"public_1": {Target: "public_1", Role: "button", Name: "Save"},
+	}
+	worker.elements["current_2"] = browser.DriverElement{
+		Target: "current_2", Role: "button", Name: "Save",
+	}
+	if rebound := worker.rebindPublishedElementLocked(worker.published.elements["public_1"]); rebound != "" {
+		t.Fatalf("ambiguous current element rebound to %q", rebound)
 	}
 }
 

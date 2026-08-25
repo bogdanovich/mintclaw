@@ -370,6 +370,31 @@ func (factory *nodeBrowserWorkerFactory) Open(
 	return browser.WorkerOpenResult{Owner: worker}, nil
 }
 
+type nodeBrowserObservationAuthority struct {
+	generation uint64
+	origin     string
+	documentID string
+	elements   map[string]browser.DriverElement
+}
+
+type nodeBrowserObservationPublication struct {
+	worker    *nodeBrowserWorker
+	authority nodeBrowserObservationAuthority
+	once      sync.Once
+}
+
+func (publication *nodeBrowserObservationPublication) Commit(generation uint64) {
+	publication.once.Do(func() {
+		if publication.worker == nil || generation == 0 {
+			return
+		}
+		publication.authority.generation = generation
+		publication.worker.mu.Lock()
+		publication.worker.published = publication.authority
+		publication.worker.mu.Unlock()
+	})
+}
+
 type nodeBrowserWorker struct {
 	factory           *nodeBrowserWorkerFactory
 	owner             browser.Owner
@@ -388,19 +413,19 @@ type nodeBrowserWorker struct {
 	actions           []string
 	tabID             string
 
-	mu                       sync.Mutex
-	snapshotGeneration       uint64
-	publicSnapshotGeneration uint64
-	cachedObservation        *browser.DriverObservation
-	elements                 map[string]browser.DriverElement
-	currentOrigin            string
-	documentID               string
-	statusSequence           uint64
-	observeRecoverySequence  uint64
-	contextSequence          uint64
-	contextCatalogDigest     string
-	diagnosticsSequence      uint64
-	closed                   bool
+	mu                      sync.Mutex
+	snapshotGeneration      uint64
+	published               nodeBrowserObservationAuthority
+	cachedObservation       *browser.DriverObservation
+	elements                map[string]browser.DriverElement
+	currentOrigin           string
+	documentID              string
+	statusSequence          uint64
+	observeRecoverySequence uint64
+	contextSequence         uint64
+	contextCatalogDigest    string
+	diagnosticsSequence     uint64
+	closed                  bool
 }
 
 var errNodeBrowserSessionNotFound = errors.New("companion browser session not found")
@@ -457,11 +482,20 @@ func (worker *nodeBrowserWorker) Close(ctx context.Context) error {
 	worker.elements = make(map[string]browser.DriverElement)
 	worker.currentOrigin = ""
 	worker.documentID = ""
+	worker.clearPublishedAuthorityLocked()
 	worker.mu.Unlock()
 	return nil
 }
 
 func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObservation, error) {
+	return worker.observe(ctx)
+}
+
+func (worker *nodeBrowserWorker) ObservePrivate(ctx context.Context) (browser.DriverObservation, error) {
+	return worker.observe(ctx)
+}
+
+func (worker *nodeBrowserWorker) observe(ctx context.Context) (browser.DriverObservation, error) {
 	worker.mu.Lock()
 	if worker.closed {
 		worker.mu.Unlock()
@@ -547,6 +581,7 @@ func (worker *nodeBrowserWorker) Observe(ctx context.Context) (browser.DriverObs
 		worker.elements = make(map[string]browser.DriverElement)
 		worker.currentOrigin = ""
 		worker.documentID = ""
+		worker.clearPublishedAuthorityLocked()
 		worker.observeRecoverySequence++
 		recovery := worker.observeRecoverySequence
 		worker.mu.Unlock()
@@ -868,6 +903,7 @@ func (worker *nodeBrowserWorker) DownloadPrepared(
 	worker.elements = make(map[string]browser.DriverElement)
 	worker.currentOrigin = ""
 	worker.documentID = ""
+	worker.clearPublishedAuthorityLocked()
 	worker.mu.Unlock()
 	if result.Output == nil {
 		return browser.DriverDownload{}, &browser.DownloadArtifactError{Err: browser.ErrDriverIncompatible}
@@ -1067,8 +1103,8 @@ func (worker *nodeBrowserWorker) acceptObservation(
 		}
 	}
 	worker.mu.Lock()
+	worker.cachedObservation = nil
 	worker.snapshotGeneration = result.SnapshotGeneration
-	worker.publicSnapshotGeneration++
 	worker.currentOrigin = observation.Origin
 	worker.documentID = result.DocumentID
 	worker.rememberElementsLocked(observation)
@@ -1099,27 +1135,30 @@ func (worker *nodeBrowserWorker) CaptureRetainedScreenshot(
 	}
 	worker.mu.Lock()
 	generation := worker.snapshotGeneration
-	publicGeneration := worker.publicSnapshotGeneration
 	currentDocumentID := worker.documentID
-	worker.mu.Unlock()
-	if publicGeneration != request.SnapshotGeneration || currentDocumentID != documentID {
+	if worker.published.generation != request.SnapshotGeneration ||
+		worker.published.documentID != documentID || worker.published.origin == "" ||
+		worker.published.origin != worker.currentOrigin {
+		worker.mu.Unlock()
 		return browser.DriverScreenshot{}, browser.ErrStale
 	}
+	remoteRef := ""
+	if request.Target == browser.ScreenshotTargetElement {
+		remoteRef = worker.rebindPublishedElementLocked(element)
+		if remoteRef == "" {
+			worker.mu.Unlock()
+			return browser.DriverScreenshot{}, browser.ErrStale
+		}
+	}
+	worker.mu.Unlock()
 	descriptor, _, err := worker.resolveAuthority(nodes.BrowserCommandCapture)
 	if err != nil {
 		return browser.DriverScreenshot{}, err
 	}
-	remoteRef := ""
-	if request.Target == browser.ScreenshotTargetElement {
-		remoteRef = element.Target
-		if remoteRef == "" {
-			return browser.DriverScreenshot{}, browser.ErrStale
-		}
-	}
 	input := nodes.BrowserCaptureInput{
 		SessionID: worker.sessionID, TabID: worker.tabID, FrameID: request.FrameID,
 		ContextID: request.ContextCatalogID, SnapshotID: request.SnapshotID,
-		SnapshotGeneration: generation, DocumentID: documentID, InvocationID: request.RequestID,
+		SnapshotGeneration: generation, DocumentID: currentDocumentID, InvocationID: request.RequestID,
 		WorkspaceID: retention.WorkspaceID, RouteID: retention.RouteID,
 		BrowserTarget: worker.browserTarget,
 		Target:        string(request.Target), Ref: remoteRef,
@@ -1138,7 +1177,7 @@ func (worker *nodeBrowserWorker) CaptureRetainedScreenshot(
 		output.BrowserPolicyRevision != worker.factory.policyRevision ||
 		output.InvocationID != request.RequestID || output.TabID != worker.tabID ||
 		output.FrameID != request.FrameID || output.ContextID != request.ContextCatalogID ||
-		output.DocumentID != documentID || output.SnapshotID != request.SnapshotID ||
+		output.DocumentID != currentDocumentID || output.SnapshotID != request.SnapshotID ||
 		output.SnapshotGeneration != generation || output.CaptureTarget != string(request.Target) ||
 		output.ElementRef != remoteRef || output.Filename != browserScreenshotFilename ||
 		output.ContentType != "image/png" || output.Size < 1 || output.Size > uint64(maximum) {
@@ -1417,6 +1456,7 @@ func (worker *nodeBrowserWorker) advanceRemoteSnapshotGeneration(generation uint
 	worker.elements = make(map[string]browser.DriverElement)
 	worker.currentOrigin = ""
 	worker.documentID = ""
+	worker.clearPublishedAuthorityLocked()
 	return nil
 }
 
@@ -1452,6 +1492,58 @@ func (worker *nodeBrowserWorker) rememberElementsLocked(observation browser.Driv
 	for _, element := range observation.Elements {
 		worker.elements[element.Target] = element
 	}
+}
+
+func (worker *nodeBrowserWorker) PrepareObservationPublication(
+	navigationID string,
+) (browser.ObservationPublication, error) {
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.closed || navigationID == "" || navigationID != worker.documentID ||
+		worker.currentOrigin == "" {
+		return nil, browser.ErrStale
+	}
+	authority := nodeBrowserObservationAuthority{
+		origin: worker.currentOrigin, documentID: worker.documentID,
+		elements: make(map[string]browser.DriverElement, len(worker.elements)),
+	}
+	for target, element := range worker.elements {
+		authority.elements[target] = element
+	}
+	return &nodeBrowserObservationPublication{worker: worker, authority: authority}, nil
+}
+
+func (worker *nodeBrowserWorker) clearPublishedAuthorityLocked() {
+	worker.published.origin = ""
+	worker.published.documentID = ""
+	worker.published.elements = nil
+}
+
+func (worker *nodeBrowserWorker) rebindPublishedElementLocked(
+	element browser.DriverElement,
+) string {
+	published, ok := worker.published.elements[element.Target]
+	if !ok || published.Role != element.Role || published.Name != element.Name {
+		return ""
+	}
+	publicMatches := 0
+	for _, candidate := range worker.published.elements {
+		if candidate.Role == published.Role && candidate.Name == published.Name {
+			publicMatches++
+		}
+	}
+	remoteRef := ""
+	remoteMatches := 0
+	for _, candidate := range worker.elements {
+		if candidate.Role == published.Role && candidate.Name == published.Name {
+			remoteMatches++
+			remoteRef = candidate.Target
+		}
+	}
+	if publicMatches != 1 || remoteMatches != 1 {
+		return ""
+	}
+	return remoteRef
 }
 
 func (worker *nodeBrowserWorker) resolveAuthority(

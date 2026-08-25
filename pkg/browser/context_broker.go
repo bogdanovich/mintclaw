@@ -212,14 +212,21 @@ func (broker *Broker) ExecuteContext(
 				catalog, err = worker.OpenTab(executeCtx)
 			case ContextSelect:
 				var observed DriverObservation
+				var navigationID string
 				authority := newContextMutationAuthority(
 					*session.ContextAuthority, request.TabID, request.FrameID,
 				)
-				observed, catalog, err = worker.SelectContext(executeCtx, authority)
+				if identityWorker, ok := worker.(ContextSelectionIdentityWorker); ok {
+					observed, catalog, navigationID, err = identityWorker.SelectContextWithNavigationIdentity(
+						executeCtx, authority,
+					)
+				} else {
+					observed, catalog, err = worker.SelectContext(executeCtx, authority)
+				}
 				if err == nil {
 					var materialized Observation
 					materialized, err = broker.persistContextObservationLocked(
-						executeCtx, session, catalog, observed,
+						executeCtx, session, worker, catalog, observed, navigationID,
 					)
 					if err == nil {
 						selectedObservation = &materialized
@@ -442,8 +449,10 @@ func normalizeContextCatalog(
 func (broker *Broker) persistContextObservationLocked(
 	ctx context.Context,
 	session Session,
+	worker ContextWorker,
 	driverCatalog ContextCatalog,
 	driverObservation DriverObservation,
+	navigationID string,
 ) (Observation, error) {
 	catalog, err := broker.persistContextCatalogLocked(ctx, session, driverCatalog)
 	if err != nil {
@@ -453,7 +462,7 @@ func (broker *Broker) persistContextObservationLocked(
 	if err != nil || session.ContextAuthority == nil || session.ContextAuthority.Generation != catalog.Generation {
 		return Observation{}, errors.Join(err, ErrStale)
 	}
-	return broker.persistDriverObservationLocked(ctx, session, driverObservation)
+	return broker.persistDriverObservationLocked(ctx, session, worker, driverObservation, navigationID)
 }
 
 func contextRequestMatchesSession(session Session, request ContextRequest) bool {
