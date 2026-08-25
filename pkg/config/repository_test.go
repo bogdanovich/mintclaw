@@ -378,20 +378,34 @@ func TestSecurityCopyForReplacementPreservesSecretForInferredType(t *testing.T) 
 		t.Fatalf("ReadDurable() error = %v", err)
 	}
 
-	replacement := DefaultConfig()
-	replacement.Channels[ChannelTelegram] = &Channel{Enabled: true, Settings: []byte(`{}`)}
-	if err = replacement.SecurityCopyForReplacement(path, current.Config); err != nil {
-		t.Fatalf("SecurityCopyForReplacement() error = %v", err)
-	}
-	if err = InitChannelList(replacement.Channels); err != nil {
-		t.Fatalf("InitChannelList() error = %v", err)
-	}
-	decoded, err := replacement.Channels.Get(ChannelTelegram).GetDecoded()
-	if err != nil {
-		t.Fatalf("GetDecoded() error = %v", err)
-	}
-	if token := decoded.(*TelegramSettings).Token.String(); token != "telegram-secret" {
-		t.Fatalf("replacement token = %q, want %q", token, "telegram-secret")
+	for _, test := range []struct {
+		name      string
+		settings  string
+		wantToken string
+	}{
+		{name: "durable secret", settings: `{}`, wantToken: "telegram-secret"},
+		{name: "explicit replacement secret", settings: `{"token":"replacement-secret"}`, wantToken: "replacement-secret"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			replacement := DefaultConfig()
+			replacement.Channels[ChannelTelegram] = &Channel{
+				Enabled:  true,
+				Settings: []byte(test.settings),
+			}
+			if err = replacement.SecurityCopyForReplacement(path, current.Config); err != nil {
+				t.Fatalf("SecurityCopyForReplacement() error = %v", err)
+			}
+			if err = InitChannelList(replacement.Channels); err != nil {
+				t.Fatalf("InitChannelList() error = %v", err)
+			}
+			decoded, decodeErr := replacement.Channels.Get(ChannelTelegram).GetDecoded()
+			if decodeErr != nil {
+				t.Fatalf("GetDecoded() error = %v", decodeErr)
+			}
+			if token := decoded.(*TelegramSettings).Token.String(); token != test.wantToken {
+				t.Fatalf("replacement token = %q, want %q", token, test.wantToken)
+			}
+		})
 	}
 }
 

@@ -516,8 +516,17 @@ func marshalReplacementChannelSecurity(channels ChannelsConfig) (*yaml.Node, err
 	if len(channels) == 0 {
 		return nil, nil
 	}
+	typedChannels := make(ChannelsConfig, len(channels))
+	for name, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		copy := *channel
+		copy.Type = effectiveChannelType(name, copy.Type)
+		typedChannels[name] = &copy
+	}
 	var node yaml.Node
-	if err := node.Encode(channels); err != nil {
+	if err := node.Encode(typedChannels); err != nil {
 		return nil, err
 	}
 	return &node, nil
