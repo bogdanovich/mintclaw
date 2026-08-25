@@ -429,6 +429,50 @@ func TestSeahorseAssemblePreservesActiveToolTurnAcrossSanitization(t *testing.T)
 	}
 }
 
+func TestSeahorseAssemblePreservesTimestampForAdjacentMediaClassification(t *testing.T) {
+	engine, err := seahorse.NewEngine(seahorse.Config{
+		DBPath: t.TempDir() + "/seahorse.db",
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	ctx := t.Context()
+	now := time.Date(2026, 8, 25, 6, 0, 0, 0, time.UTC)
+	createdAt := now.Add(-time.Minute)
+	_, err = engine.Ingest(ctx, "test:adjacent-media", []seahorse.Message{
+		providerToSeahorseMessage(protocoltypes.Message{
+			Role:      "user",
+			Content:   "Here is what I ate",
+			CreatedAt: &createdAt,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	result, err := engine.Assemble(ctx, "test:adjacent-media", seahorse.AssembleInput{Budget: 1000})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	history := seahorseToProviderMessages(result)
+	if len(history) != 1 || history[0].CreatedAt == nil || !history[0].CreatedAt.Equal(createdAt) {
+		t.Fatalf("assembled history timestamp = %#v, want %v", history, createdAt)
+	}
+
+	relation := classifyPromptCurrentMessageRelation(
+		"[image]",
+		[]string{"data:image/png;base64,abc123"},
+		"",
+		true,
+		history,
+		now,
+	)
+	if relation.Kind != InboundRelationAdjacentFollowupMedia {
+		t.Fatalf("relation = %#v, want adjacent follow-up media", relation)
+	}
+}
+
 func TestSeahorseToProviderMessagesToolResult(t *testing.T) {
 	msg := seahorse.Message{
 		Role:       "tool",

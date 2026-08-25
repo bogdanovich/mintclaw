@@ -266,12 +266,12 @@ func currentTurnUserPromptMessage(
 			"Treat the attached media as the current turn input.",
 		}
 		switch relation.Kind {
-		case currentTurnRelationReplyToMessage:
+		case InboundRelationReplyToMessage:
 			lines = append(
 				lines,
 				"This message was sent as a reply to an earlier chat message, so use that quoted/reply context when relevant.",
 			)
-		case currentTurnRelationAdjacentFollowupMedia:
+		case InboundRelationAdjacentFollowupMedia:
 			lines = append(
 				lines,
 				"This media-only message arrived shortly after the user's previous message and likely adds context to it.",

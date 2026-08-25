@@ -10,7 +10,7 @@ import (
 
 // AddMessage appends a message to a conversation.
 func (s *Store) AddMessage(ctx context.Context, convID int64, role, content string, tokenCount int) (*Message, error) {
-	return s.AddMessageWithReasoning(ctx, convID, role, content, "", "", tokenCount, time.Time{})
+	return s.AddMessageWithReasoning(ctx, convID, role, content, "", "", tokenCount, time.Now())
 }
 
 // AddMessageWithReasoning appends a message with reasoning content to a conversation.
@@ -78,7 +78,7 @@ func (s *Store) AddMessageWithParts(
 	parts []MessagePart,
 	tokenCount int,
 ) (*Message, error) {
-	return s.AddMessageWithPartsAndReasoning(ctx, convID, role, parts, "", "", tokenCount, time.Time{})
+	return s.AddMessageWithPartsAndReasoning(ctx, convID, role, parts, "", "", tokenCount, time.Now())
 }
 
 // AddMessageWithPartsAndReasoning adds a message with structured parts and reasoning content.
@@ -186,9 +186,6 @@ func (s *Store) appendMessagesTx(ctx context.Context, tx *sql.Tx, convID int64, 
 
 func addMessageTx(ctx context.Context, tx *sql.Tx, convID int64, message Message) (*Message, error) {
 	storedCreatedAt := normalizeMessageCreatedAt(message.CreatedAt)
-	if storedCreatedAt.IsZero() {
-		storedCreatedAt = normalizeMessageCreatedAt(time.Now())
-	}
 	content := message.Content
 	if len(message.Parts) > 0 {
 		content = partsToReadableContent(message.Parts)

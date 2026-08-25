@@ -43,7 +43,7 @@ type seahorseAgentRuntime struct {
 	agentID   string
 }
 
-const seahorseReconciliationGeneration = 1
+const seahorseReconciliationGeneration = 2
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
 func newSeahorseContextManager(rawConfig json.RawMessage, al *AgentLoop) (ContextManager, error) {
@@ -751,6 +751,10 @@ func seahorseToProviderMessages(result *seahorse.AssembleResult) []protocoltypes
 			Content:          msg.Content,
 			ModelName:        msg.ModelName,
 			ReasoningContent: msg.ReasoningContent,
+		}
+		if !msg.CreatedAt.IsZero() {
+			createdAt := msg.CreatedAt
+			pm.CreatedAt = &createdAt
 		}
 
 		// Reconstruct ToolCalls from parts

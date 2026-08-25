@@ -1881,7 +1881,8 @@ func TestProcessMessage_BtwCommandRunsWithoutPersistingHistory(t *testing.T) {
 
 	expectedProviderHistory := append([]providers.Message(nil), initialHistory...)
 	for i := range expectedProviderHistory {
-		expectedProviderHistory[i].CreatedAt = nil
+		createdAt := normalizeSeahorseMessageCreatedAt(expectedProviderHistory[i].CreatedAt)
+		expectedProviderHistory[i].CreatedAt = &createdAt
 	}
 	if !reflect.DeepEqual(provider.lastMessages[1:3], expectedProviderHistory) {
 		t.Fatalf("provider history = %#v, want %#v", provider.lastMessages[1:3], expectedProviderHistory)

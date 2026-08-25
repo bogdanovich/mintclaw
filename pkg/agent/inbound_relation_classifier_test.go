@@ -7,119 +7,152 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-func TestClassifyCurrentTurnRelation_ReplyWinsForMediaOnly(t *testing.T) {
-	got := classifyCurrentTurnRelation(currentTurnRelationInput{
-		Content:          "[media only]",
-		Media:            []string{"media://image-1"},
-		ReplyToMessageID: "reply-1",
-	})
+func TestClassifyPromptCurrentMessageRelation_ReplyWinsForMediaOnly(t *testing.T) {
+	got := classifyPromptCurrentMessageRelation(
+		"[media only]",
+		[]string{"media://image-1"},
+		"reply-1",
+		false,
+		nil,
+		time.Time{},
+	)
 
-	if got.Kind != currentTurnRelationReplyToMessage {
-		t.Fatalf("Kind = %q, want %q", got.Kind, currentTurnRelationReplyToMessage)
+	if got.Kind != InboundRelationReplyToMessage {
+		t.Fatalf("Kind = %q, want %q", got.Kind, InboundRelationReplyToMessage)
 	}
 	if !got.MediaOnly {
 		t.Fatal("MediaOnly = false, want true")
 	}
 }
 
-func TestClassifyCurrentTurnRelation_AdjacentMediaFollowup(t *testing.T) {
-	ts := time.Now().Add(-time.Minute)
+func TestClassifyPromptCurrentMessageRelation_AdjacentMediaFollowup(t *testing.T) {
+	now := time.Now()
+	ts := now.Add(-time.Minute)
 
-	got := classifyCurrentTurnRelation(currentTurnRelationInput{
-		Content:                    "[media only]",
-		Media:                      []string{"media://image-1"},
-		AllowAdjacentMediaFollowup: true,
-		History: []providers.Message{
+	got := classifyPromptCurrentMessageRelation(
+		"[media only]",
+		[]string{"media://image-1"},
+		"",
+		true,
+		[]providers.Message{
 			{Role: "user", Content: "Here is what I ate", CreatedAt: &ts},
 		},
-		Now: time.Now(),
-	})
+		now,
+	)
 
-	if got.Kind != currentTurnRelationAdjacentFollowupMedia {
-		t.Fatalf("Kind = %q, want %q", got.Kind, currentTurnRelationAdjacentFollowupMedia)
+	if got.Kind != InboundRelationAdjacentFollowupMedia {
+		t.Fatalf("Kind = %q, want %q", got.Kind, InboundRelationAdjacentFollowupMedia)
 	}
 }
 
-func TestClassifyCurrentTurnRelation_AdjacentMediaFollowupRequiresExplicitAllow(t *testing.T) {
-	ts := time.Now().Add(-time.Minute)
+func TestClassifyPromptCurrentMessageRelation_AdjacentMediaFollowupRequiresExplicitAllow(t *testing.T) {
+	now := time.Now()
+	ts := now.Add(-time.Minute)
 
-	got := classifyCurrentTurnRelation(currentTurnRelationInput{
-		Content: "[media only]",
-		Media:   []string{"media://image-1"},
-		History: []providers.Message{
+	got := classifyPromptCurrentMessageRelation(
+		"[media only]",
+		[]string{"media://image-1"},
+		"",
+		false,
+		[]providers.Message{
 			{Role: "user", Content: "Here is what I ate", CreatedAt: &ts},
 		},
-		Now: time.Now(),
-	})
+		now,
+	)
 
-	if got.Kind != currentTurnRelationStandalone {
-		t.Fatalf("Kind = %q, want %q", got.Kind, currentTurnRelationStandalone)
+	if got.Kind != InboundRelationStandalone {
+		t.Fatalf("Kind = %q, want %q", got.Kind, InboundRelationStandalone)
 	}
 	if !got.MediaOnly {
 		t.Fatal("MediaOnly = false, want true")
 	}
 }
 
-func TestClassifyCurrentTurnRelation_AdjacentMediaFollowupWithoutTimestamp(t *testing.T) {
-	got := classifyCurrentTurnRelation(currentTurnRelationInput{
-		Content:                    "[media only]",
-		Media:                      []string{"media://image-1"},
-		AllowAdjacentMediaFollowup: true,
-		History: []providers.Message{
-			{Role: "user", Content: "Here is what I ate"},
-		},
-		Now: time.Now(),
-	})
+func TestClassifyPromptCurrentMessageRelation_AdjacentMediaFollowupRequiresTimestamp(t *testing.T) {
+	zero := time.Time{}
+	for _, test := range []struct {
+		name      string
+		createdAt *time.Time
+	}{
+		{name: "missing"},
+		{name: "zero", createdAt: &zero},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := classifyPromptCurrentMessageRelation(
+				"[media only]",
+				[]string{"media://image-1"},
+				"",
+				true,
+				[]providers.Message{
+					{Role: "user", Content: "Here is what I ate", CreatedAt: test.createdAt},
+				},
+				time.Now(),
+			)
 
-	if got.Kind != currentTurnRelationAdjacentFollowupMedia {
-		t.Fatalf("Kind = %q, want %q", got.Kind, currentTurnRelationAdjacentFollowupMedia)
+			if got.Kind != InboundRelationStandalone {
+				t.Fatalf("Kind = %q, want %q", got.Kind, InboundRelationStandalone)
+			}
+			if !got.MediaOnly {
+				t.Fatal("MediaOnly = false, want true")
+			}
+		})
 	}
 }
 
-func TestClassifyCurrentTurnRelation_StandaloneAfterAssistantReply(t *testing.T) {
+func TestClassifyPromptCurrentMessageRelation_StandaloneAfterAssistantReply(t *testing.T) {
 	userTS := time.Now().Add(-time.Minute)
 	assistantTS := time.Now().Add(-30 * time.Second)
 
-	got := classifyCurrentTurnRelation(currentTurnRelationInput{
-		Content: "[media only]",
-		Media:   []string{"media://image-1"},
-		History: []providers.Message{
+	got := classifyPromptCurrentMessageRelation(
+		"[media only]",
+		[]string{"media://image-1"},
+		"",
+		true,
+		[]providers.Message{
 			{Role: "user", Content: "Here is what I ate", CreatedAt: &userTS},
 			{Role: "assistant", Content: "Saved.", CreatedAt: &assistantTS},
 		},
-		Now: time.Now(),
-	})
+		time.Now(),
+	)
 
-	if got.Kind != currentTurnRelationStandalone {
-		t.Fatalf("Kind = %q, want %q", got.Kind, currentTurnRelationStandalone)
+	if got.Kind != InboundRelationStandalone {
+		t.Fatalf("Kind = %q, want %q", got.Kind, InboundRelationStandalone)
 	}
 	if !got.MediaOnly {
 		t.Fatal("MediaOnly = false, want true")
 	}
 }
 
-func TestClassifyCurrentTurnRelation_TextMessageStaysStandalone(t *testing.T) {
-	got := classifyCurrentTurnRelation(currentTurnRelationInput{
-		Content: "this is plain text",
-		Media:   []string{"media://image-1"},
-	})
+func TestClassifyPromptCurrentMessageRelation_TextMessageStaysStandalone(t *testing.T) {
+	got := classifyPromptCurrentMessageRelation(
+		"this is plain text",
+		[]string{"media://image-1"},
+		"",
+		false,
+		nil,
+		time.Time{},
+	)
 
-	if got.Kind != currentTurnRelationStandalone {
-		t.Fatalf("Kind = %q, want %q", got.Kind, currentTurnRelationStandalone)
+	if got.Kind != InboundRelationStandalone {
+		t.Fatalf("Kind = %q, want %q", got.Kind, InboundRelationStandalone)
 	}
 	if got.MediaOnly {
 		t.Fatal("MediaOnly = true, want false")
 	}
 }
 
-func TestClassifyCurrentTurnRelation_KnownAttachmentPlaceholderCountsAsMediaOnly(t *testing.T) {
-	got := classifyCurrentTurnRelation(currentTurnRelationInput{
-		Content: "[image]",
-		Media:   []string{"media://image-1"},
-	})
+func TestClassifyPromptCurrentMessageRelation_KnownAttachmentPlaceholderCountsAsMediaOnly(t *testing.T) {
+	got := classifyPromptCurrentMessageRelation(
+		"[image]",
+		[]string{"media://image-1"},
+		"",
+		false,
+		nil,
+		time.Time{},
+	)
 
-	if got.Kind != currentTurnRelationStandalone {
-		t.Fatalf("Kind = %q, want %q", got.Kind, currentTurnRelationStandalone)
+	if got.Kind != InboundRelationStandalone {
+		t.Fatalf("Kind = %q, want %q", got.Kind, InboundRelationStandalone)
 	}
 	if !got.MediaOnly {
 		t.Fatal("MediaOnly = false, want true")

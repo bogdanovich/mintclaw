@@ -447,7 +447,7 @@ func (al *AgentLoop) observeMessage(ctx context.Context, msg bus.ObservedMessage
 		Content: content,
 		Media:   append([]string(nil), msg.Media...),
 	}
-	writeErr := persistFullSessionMessage(ctx, agent.Sessions, sessionKey, record)
+	writeErr := persistFullSessionMessage(ctx, agent.Sessions, sessionKey, &record)
 	if writeErr != nil {
 		logger.WarnCF("agent", "Failed to persist observed message", map[string]any{
 			"session_key": sessionKey,

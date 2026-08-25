@@ -3031,6 +3031,83 @@ func TestPipelineAppendToolMessage_PersistsAndIngests(t *testing.T) {
 	}
 }
 
+func TestToolResultCommitPathsShareCanonicalTimestamp(t *testing.T) {
+	tests := []struct {
+		name   string
+		commit func(*testing.T, *toolLoopRunner, *providers.Message, *providers.Message)
+	}{
+		{
+			name: "executed result",
+			commit: func(t *testing.T, runner *toolLoopRunner, live, durable *providers.Message) {
+				t.Helper()
+				aborted, err := runner.commitExecutedToolResult(live, durable)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if aborted {
+					t.Fatal("tool result commit unexpectedly aborted")
+				}
+			},
+		},
+		{
+			name: "delegated suspension",
+			commit: func(t *testing.T, runner *toolLoopRunner, live, durable *providers.Message) {
+				t.Helper()
+				runner.toolCalls = []providers.ToolCall{{ID: live.ToolCallID, Name: "delegated_task"}}
+				runner.commitDelegatedTaskSuspensionBatch(*live, *durable, 1)
+				*live = runner.messages[0]
+				*durable = runner.ts.persistedMessages[0]
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := session.NewMemoryStore()
+			contextManager := &trackingContextManager{}
+			pipeline := &Pipeline{Context: PipelineContextServices{Runtime: contextManager}}
+			agent := &AgentInstance{ID: "main", Sessions: store}
+			turn := &turnState{agent: agent, sessionKey: "canonical-tool-result"}
+			runner := &toolLoopRunner{
+				p:       pipeline,
+				turnCtx: t.Context(),
+				ts:      turn,
+				exec:    newTurnExecution(agent, turn.opts, nil, "", nil),
+			}
+			live := providers.Message{Role: "tool", Content: "result", ToolCallID: "call-1"}
+			durable := live
+			durable.Content = "durable result"
+
+			test.commit(t, runner, &live, &durable)
+
+			history := store.GetHistory(turn.sessionKey)
+			if len(history) != 1 || len(turn.liveTurnMessages) != 1 || len(turn.persistedMessages) != 1 {
+				t.Fatalf(
+					"history/live/durable lengths = %d/%d/%d, want 1/1/1",
+					len(history),
+					len(turn.liveTurnMessages),
+					len(turn.persistedMessages),
+				)
+			}
+			if got := contextManager.ingestCalls.Load(); got != 1 || contextManager.lastIngest == nil {
+				t.Fatalf("ingest calls = %d, last = %#v, want one", got, contextManager.lastIngest)
+			}
+			want := history[0].CreatedAt
+			for source, createdAt := range map[string]*time.Time{
+				"live argument":        live.CreatedAt,
+				"durable argument":     durable.CreatedAt,
+				"live turn state":      turn.liveTurnMessages[0].CreatedAt,
+				"durable turn state":   turn.persistedMessages[0].CreatedAt,
+				"context manager copy": contextManager.lastIngest.Message.CreatedAt,
+			} {
+				if want == nil || createdAt == nil || !createdAt.Equal(*want) {
+					t.Fatalf("%s timestamp = %v, canonical = %v", source, createdAt, want)
+				}
+			}
+		})
+	}
+}
+
 func TestPipelineAppendSkippedToolMessages_PersistsRemainingWithoutIngest(t *testing.T) {
 	sessionStore := session.NewMemoryStore()
 	cm := &trackingContextManager{}

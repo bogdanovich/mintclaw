@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -18,6 +19,24 @@ import (
 type clearFailingSessionStore struct {
 	session.SessionStore
 	err error
+}
+
+type staticHistorySessionStore struct {
+	session.SessionStore
+	history  []providers.Message
+	revision memory.HistoryRevision
+}
+
+func (s *staticHistorySessionStore) GetHistory(string) []providers.Message {
+	return append([]providers.Message(nil), s.history...)
+}
+
+func (s *staticHistorySessionStore) GetHistoryWithError(string) ([]providers.Message, error) {
+	return s.GetHistory(""), nil
+}
+
+func (s *staticHistorySessionStore) GetHistoryRevision(string) (memory.HistoryRevision, error) {
+	return s.revision, nil
 }
 
 func (s *clearFailingSessionStore) ClearSession(context.Context, string) error {
@@ -55,6 +74,77 @@ func TestSeahorseReconciliationCleanRevisionSkipsDeepComparison(t *testing.T) {
 	}
 	if got := mgr.reconciliations.Load(); got != before {
 		t.Fatalf("unchanged revision reconciliations = %d, want %d", got, before)
+	}
+}
+
+func TestSeahorseReconciliationDoesNotTurnUnknownTimeIntoRecencyEvidence(t *testing.T) {
+	tests := []struct {
+		name      string
+		createdAt *time.Time
+	}{
+		{name: "nil"},
+		{name: "zero", createdAt: new(time.Time)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := t.Context()
+			now := time.Date(2026, 8, 25, 8, 0, 0, 0, time.UTC)
+			key := "unknown-time-" + test.name
+			engine, err := seahorse.NewEngine(seahorse.Config{DBPath: t.TempDir() + "/seahorse.db"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = engine.Close() })
+
+			revision := memory.HistoryRevision{Revision: 1, Count: 1}
+			store := &staticHistorySessionStore{
+				SessionStore: session.NewMemoryStore(),
+				history: []providers.Message{{
+					Role:      "user",
+					Content:   "Here is what I ate",
+					CreatedAt: test.createdAt,
+				}},
+				revision: revision,
+			}
+			manager := newSingleRuntimeTestManager(engine, store)
+
+			_, err = engine.Ingest(ctx, key, []seahorse.Message{{
+				Role:      "user",
+				Content:   "Here is what I ate",
+				CreatedAt: now,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.GetRetrieval().Store().SetReconciliationState(ctx, seahorse.ReconciliationState{
+				SessionKey:       key,
+				SourceRevision:   revision.Revision,
+				SourceCount:      revision.Count,
+				SchemaGeneration: seahorseReconciliationGeneration - 1,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			assembled, err := manager.Assemble(ctx, &AssembleRequest{SessionKey: key, Budget: 1000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(assembled.History) != 1 || assembled.History[0].CreatedAt != nil {
+				t.Fatalf("assembled history = %#v, want one message with unknown time", assembled.History)
+			}
+			relation := classifyPromptCurrentMessageRelation(
+				"[image]",
+				[]string{"data:image/png;base64,abc123"},
+				"",
+				true,
+				assembled.History,
+				now,
+			)
+			if relation.Kind != InboundRelationStandalone {
+				t.Fatalf("relation = %#v, want standalone", relation)
+			}
+		})
 	}
 }
 
@@ -182,6 +272,64 @@ func TestSeahorseReconciliationAppendAndReplace(t *testing.T) {
 	messages, _ := engine.GetRetrieval().Store().GetMessages(ctx, conv.ConversationID, 0, 0)
 	if len(messages) != 1 || messages[0].Content != "replacement" {
 		t.Fatalf("reconciled messages = %#v", messages)
+	}
+}
+
+func TestSeahorseFastIngestPreservesCanonicalTimestamp(t *testing.T) {
+	tests := []struct {
+		name      string
+		createdAt *time.Time
+	}{
+		{name: "nil"},
+		{name: "zero", createdAt: new(time.Time)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager, canonical := newReconciliationTestManager(t)
+			ctx := t.Context()
+			key := "fast-ingest-timestamp-" + test.name
+			runtime := singleTestRuntime(manager)
+
+			if err := canonical.AddMessage(ctx, key, "assistant", "existing history"); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.ensureReconciled(ctx, key, runtime.sessions); err != nil {
+				t.Fatal(err)
+			}
+
+			message := providers.Message{
+				Role:      "user",
+				Content:   "Here is what I ate",
+				CreatedAt: test.createdAt,
+			}
+			if err := persistFullSessionMessage(ctx, runtime.sessions, key, &message); err != nil {
+				t.Fatal(err)
+			}
+			if message.CreatedAt == nil || message.CreatedAt.IsZero() {
+				t.Fatalf("canonical message timestamp = %v, want current time", message.CreatedAt)
+			}
+			before := manager.reconciliations.Load()
+			if err := manager.Ingest(ctx, &IngestRequest{SessionKey: key, Message: message}); err != nil {
+				t.Fatal(err)
+			}
+			if got := manager.reconciliations.Load(); got != before {
+				t.Fatalf("fast ingest performed %d full reconciliations, want %d", got, before)
+			}
+
+			assembled, err := manager.Assemble(ctx, &AssembleRequest{SessionKey: key, Budget: 1000})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(assembled.History) != 2 {
+				t.Fatalf("assembled history = %#v, want two messages", assembled.History)
+			}
+			got := assembled.History[1].CreatedAt
+			want := normalizeSeahorseMessageCreatedAt(message.CreatedAt)
+			if got == nil || !got.Equal(want) {
+				t.Fatalf("assembled timestamp = %v, want %v", got, want)
+			}
+		})
 	}
 }
 
