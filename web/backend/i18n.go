@@ -96,11 +96,6 @@ func SetLanguage(lang string) {
 	}
 }
 
-// GetLanguage returns the current language
-func GetLanguage() Language {
-	return currentLang
-}
-
 // T translates a key to the current language
 func T(key TranslationKey, args ...any) string {
 	if trans, ok := translations[currentLang][key]; ok {
