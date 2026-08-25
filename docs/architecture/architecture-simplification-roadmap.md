@@ -1,6 +1,6 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through P1 and X3.51, X3.52 is in
+Status: active; implementation is merged through P1 and X3.52, X3.53 is in
 review, and the coordinated compatibility reset, deployment, and Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
@@ -155,8 +155,8 @@ reset criteria.
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
-| X3.1-X3.51 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#887 | Merged |
-| X3.52 | #888 | In review |
+| X3.1-X3.52 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#888 | Merged |
+| X3.53 | #889 | In review |
 | P1 | #881 | Merged; deployed config and profile cutover remains in R1 |
 | Z1 | Not yet applicable | Open |
 
@@ -164,8 +164,8 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 14 to #826; 15 to #827; 16-23 to #828-#835; 24 to #837; 25 to #839;
 26 to #843; 27 to #845; 28 to #846; 29-37 to #848-#856; 38 to #858;
 39-42 to #859-#862; 43 to #864; 44 to #866; 45 to #868; 46 to #872;
-47 to #878; 48 to #880; 49 to #885; 50 to #886; 51 to #887; and 52 to
-#888.
+47 to #878; 48 to #880; 49 to #885; 50 to #886; 51 to #887; 52 to #888;
+and 53 to #889.
 
 The 2026-08-24 read-only deployed audit also established these rollout facts:
 
@@ -239,6 +239,11 @@ PR #888 deletes the caller-free `Manager.SendToChannel` API and its direct
 transport fallback. Active synchronous and queued delivery continue through
 the delivery runtime's canonical worker, which owns rate limiting, retries,
 ordering, tool feedback, and outcome publication.
+
+PR #889 deletes the caller-free Ed25519-only `IdentityProof.Verify` wrapper.
+Node admission and current tests use the algorithm-aware `VerifyIdentity`
+contract; Ed25519 remains supported, and the empty-algorithm wire and storage
+adapter remains isolated for the coordinated R1 cutover.
 
 Other matches remain candidates, not automatic deletions. The final audit must
 prove whether raw outbound metadata, benchmark baselines, and stale `Legacy`
@@ -1034,6 +1039,10 @@ Implementation sequence:
     transport fallback. Keep synchronous and queued delivery on the canonical
     per-channel worker so no callable path bypasses its rate limiting, retries,
     ordering, tool-feedback, or outcome-publication ownership.
+53. Delete the unused Ed25519-only `IdentityProof.Verify` compatibility
+    wrapper. Keep `VerifyIdentity` as the sole algorithm-aware proof verifier;
+    this callable API cleanup does not remove Ed25519 or the separately tracked
+    empty-algorithm wire and storage adapter before R1.
 
 Exit criteria:
 
@@ -1100,7 +1109,7 @@ Implemented shape:
 
 ### R1 — Execute the coordinated first-party compatibility reset
 
-Depends on: P1 and X3.46-X3.52
+Depends on: P1 and X3.46-X3.53
 
 Deployment requires explicit user authorization.
 
