@@ -60,71 +60,56 @@ func loadSecurityConfigForChannels(
 		return fmt.Errorf("failed to parse security config: %w", err)
 	}
 
-	channelsNode, nonChannelData, err := splitChannelSecurityDocument(&rootNode)
-	if err != nil {
-		return fmt.Errorf("failed to parse security config: %w", err)
-	}
+	channelsNode := channelSecuritySettingsNode(&rootNode)
 	if allowedChannels != nil {
-		channelsNode = filterChannelSecuritySettings(channelsNode, allowedChannels)
-	}
-
-	// Resolve encrypted values for model_list, tools, and other non-channel
-	// settings. channel_list is absent here so an overlay cannot mutate a
-	// channel before its current schema has been validated below.
-	decoder := yaml.NewDecoder(bytes.NewReader(nonChannelData))
-	decoder.KnownFields(true)
-	if err := decoder.Decode(cfg); err != nil {
-		return fmt.Errorf("failed to parse security config %s: %w", securityPath, err)
+		retainChannelSecuritySettings(channelsNode, allowedChannels)
+		data, err = yaml.Marshal(&rootNode)
+		if err != nil {
+			return fmt.Errorf("failed to filter channel security config: %w", err)
+		}
 	}
 
 	if channelsNode != nil {
 		if err := validateChannelSecuritySettings(channelsNode, cfg, securityPath); err != nil {
 			return err
 		}
-		if err := cfg.Channels.UnmarshalYAML(channelsNode); err != nil {
-			return fmt.Errorf("failed to merge channels from security config: %w", err)
-		}
 	}
 
+	// Decode only after channel identity, shape, and settings have passed the
+	// current schema. A rejected overlay therefore cannot mutate cfg first.
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
+		return fmt.Errorf("failed to parse security config %s: %w", securityPath, err)
+	}
 	return nil
 }
 
-func splitChannelSecurityDocument(root *yaml.Node) (*yaml.Node, []byte, error) {
+func channelSecuritySettingsNode(root *yaml.Node) *yaml.Node {
 	if root == nil || len(root.Content) == 0 || root.Content[0].Kind != yaml.MappingNode {
-		data, err := yaml.Marshal(root)
-		return nil, data, err
+		return nil
 	}
-
-	document := *root
-	mapping := *root.Content[0]
-	mapping.Content = make([]*yaml.Node, 0, len(root.Content[0].Content))
-	var channels *yaml.Node
 	content := root.Content[0].Content
 	for index := 0; index+1 < len(content); index += 2 {
 		if content[index].Value == "channel_list" {
-			channels = content[index+1]
-			continue
+			return content[index+1]
 		}
-		mapping.Content = append(mapping.Content, content[index], content[index+1])
 	}
-	document.Content = []*yaml.Node{&mapping}
-	data, err := yaml.Marshal(&document)
-	return channels, data, err
+	return nil
 }
 
-func filterChannelSecuritySettings(node *yaml.Node, allowed map[string]struct{}) *yaml.Node {
+func retainChannelSecuritySettings(node *yaml.Node, allowed map[string]struct{}) {
 	if node == nil || node.Kind != yaml.MappingNode {
-		return node
+		return
 	}
-	filtered := *node
-	filtered.Content = make([]*yaml.Node, 0, len(node.Content))
+	filtered := make([]*yaml.Node, 0, len(node.Content))
 	for index := 0; index+1 < len(node.Content); index += 2 {
 		if _, ok := allowed[node.Content[index].Value]; !ok {
 			continue
 		}
-		filtered.Content = append(filtered.Content, node.Content[index], node.Content[index+1])
+		filtered = append(filtered, node.Content[index], node.Content[index+1])
 	}
-	return &filtered
+	node.Content = filtered
 }
 
 func validateChannelSecuritySettings(node *yaml.Node, current *Config, label string) error {
