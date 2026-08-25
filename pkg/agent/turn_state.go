@@ -1319,8 +1319,3 @@ func turnStateFromContext(ctx context.Context) *turnState {
 	ts, _ := ctx.Value(turnStateKey).(*turnState)
 	return ts
 }
-
-// TurnStateFromContext retrieves turnState from context (exported for tools)
-func TurnStateFromContext(ctx context.Context) *turnState {
-	return turnStateFromContext(ctx)
-}
