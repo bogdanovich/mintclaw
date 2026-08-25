@@ -117,12 +117,6 @@ func WithCustomHeaders(customHeaders map[string]string) Option {
 	}
 }
 
-func WithProviderName(providerName string) Option {
-	return func(p *Provider) {
-		p.providerName = strings.ToLower(strings.TrimSpace(providerName))
-	}
-}
-
 func NewProvider(apiKey, apiBase, proxy string, opts ...Option) *Provider {
 	p := &Provider{
 		apiKey:     apiKey,
@@ -137,23 +131,6 @@ func NewProvider(apiKey, apiBase, proxy string, opts ...Option) *Provider {
 	}
 
 	return p
-}
-
-func NewProviderWithMaxTokensField(apiKey, apiBase, proxy, maxTokensField string) *Provider {
-	return NewProvider(apiKey, apiBase, proxy, WithMaxTokensField(maxTokensField))
-}
-
-func NewProviderWithMaxTokensFieldAndTimeout(
-	apiKey, apiBase, proxy, maxTokensField string,
-	requestTimeoutSeconds int,
-) *Provider {
-	return NewProvider(
-		apiKey,
-		apiBase,
-		proxy,
-		WithMaxTokensField(maxTokensField),
-		WithRequestTimeout(time.Duration(requestTimeoutSeconds)*time.Second),
-	)
 }
 
 // buildRequestBody constructs the common request body for chat and streaming requests.
