@@ -1009,19 +1009,21 @@ func (c *MintClawConfig) ToStandardConfig() *config.Config {
 	cfg.Gateway = c.Gateway.ToStandardGateway()
 	cfg.Tools = c.Tools.ToStandardTools()
 
-	cfg.Agents.List = make([]config.AgentConfig, len(c.Agents.List))
-	for i, a := range c.Agents.List {
-		cfg.Agents.List[i] = config.AgentConfig{
-			ID:        a.ID,
-			Default:   a.Default,
-			Name:      a.Name,
-			Workspace: a.Workspace,
-			Skills:    a.Skills,
-		}
-		if a.Model != nil {
-			cfg.Agents.List[i].Model = &config.AgentModelConfig{
-				Primary:   a.Model.Primary,
-				Fallbacks: a.Model.Fallbacks,
+	if len(c.Agents.List) > 0 {
+		cfg.Agents.List = make([]config.AgentConfig, len(c.Agents.List))
+		for i, a := range c.Agents.List {
+			cfg.Agents.List[i] = config.AgentConfig{
+				ID:        a.ID,
+				Default:   a.Default,
+				Name:      a.Name,
+				Workspace: a.Workspace,
+				Skills:    a.Skills,
+			}
+			if a.Model != nil {
+				cfg.Agents.List[i].Model = &config.AgentModelConfig{
+					Primary:   a.Model.Primary,
+					Fallbacks: a.Model.Fallbacks,
+				}
 			}
 		}
 	}

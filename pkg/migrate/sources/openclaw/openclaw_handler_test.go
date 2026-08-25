@@ -159,6 +159,8 @@ func TestOpenclawHandlerExecuteConfigMigrationUsesRepository(t *testing.T) {
 	snapshot, err := config.NewRepository(destination).ReadDurable()
 	require.NoError(t, err)
 	assert.Equal(t, config.CurrentVersion, snapshot.Config.Version)
+	require.Len(t, snapshot.Config.Agents.List, 1)
+	assert.Equal(t, config.DefaultAgentConfig(), snapshot.Config.Agents.List[0])
 	assert.NotEmpty(t, snapshot.Revision)
 }
 
