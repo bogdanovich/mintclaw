@@ -274,7 +274,7 @@ When a result becomes orphan:
 cfg := agent.SubTurnConfig{
     Model: "gpt-4o-mini",
     Tools: []tools.Tool{readOnlyTool}, // Only read-only access
-    SystemPrompt: "Analyze the file structure...",
+    TaskPrompt: "Analyze the file structure...",
 }
 ```
 
