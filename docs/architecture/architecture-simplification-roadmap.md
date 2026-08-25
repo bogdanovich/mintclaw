@@ -1,8 +1,7 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through P1 and X3.59, X3.60 is in
-review, and the coordinated compatibility reset, deployment, and Z1
-remain open
+Status: active; implementation is merged through P1 and X3.60, and the
+coordinated compatibility reset, deployment, and Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -156,8 +155,7 @@ reset criteria.
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
-| X3.1-X3.59 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#895 | Merged |
-| X3.60 | #896 | In review |
+| X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
 | P1 | #881 | Merged; deployed config and profile cutover remains in R1 |
 | Z1 | Not yet applicable | Open |
 
@@ -255,6 +253,26 @@ contract and continues to read channel, provider, and agent fields directly.
 Other matches remain candidates, not automatic deletions. The final audit must
 prove whether raw outbound metadata, benchmark baselines, and stale `Legacy`
 names express required current semantics or obsolete compatibility.
+
+The 2026-08-25 source-only pre-R1 audit found no additional unregistered
+compatibility adapter:
+
+- a Git-tracked zero-caller scan after PR #896 found no further caller-free
+  production facade; the remaining low-reference exports are active entry
+  points, documented extension contracts, or deliberate test and integration
+  seams;
+- the historical browser schema generators and empty node-key-algorithm
+  normalization remain the only source-level historical MintClaw
+  implementations, and both already have R1 removal gates above;
+- task deliverable normalization constructs the current canonical report at
+  the registry owner for both new mutations and loaded snapshots; it does not
+  select a historical report implementation, but R1 must still inventory the
+  deployed task registry before rollout rather than assuming its shape; and
+- the other production keyword matches are benchmark baselines, external
+  provider or platform protocols, provider failover and current defaults, or
+  strict rejection of removed inputs. A few current helper names and comments
+  still use `legacy` descriptively; Z1 must rename that stale terminology or
+  justify it without preserving an alternate path.
 
 ## Canonical Contract And Bounded Compatibility Rules
 
@@ -1154,8 +1172,10 @@ Deployment requires explicit user authorization.
 
 Scope:
 
-1. back up current configuration, session state, node registry, browser state,
-   invocation state, and profile Markdown with their matching installed binary;
+1. back up the current configuration, matching installed binary, profile
+   Markdown, and all MintClaw durable state, explicitly including sessions,
+   tasks, interactions, outbox, cron, node registry, browser state, and
+   invocation state;
 2. deploy a bridge release containing PR #865 and upgrade every first-party
    browser companion to advertise the current streamed-snapshot contract;
 3. convert the six current node records to explicit Ed25519 or re-enrol them,
