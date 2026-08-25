@@ -384,7 +384,8 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 			},
 		}}},
 		{Content: "approved task completed\n" + objectiveOutcomeStart +
-			`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":["inv-approved"]}],"missing_items":[]}` +
+			`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+			`"receipt_ids":["inv-approved"]}],"missing_items":[],"result":"approved task completed"}` +
 			objectiveOutcomeEnd, FinishReason: "stop"},
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
@@ -2550,7 +2551,7 @@ func TestSpawnSubTurnBrowserRemovesDirectDeliveryToolsForUserOnly(t *testing.T) 
 func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testing.T) {
 	const outcome = "inspected\n" + objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
-		`"missing_items":[]}` + objectiveOutcomeEnd
+		`"missing_items":[],"result":"inspected"}` + objectiveOutcomeEnd
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{Content: outcome, FinishReason: "stop"},
 		{Content: outcome, FinishReason: "stop"},

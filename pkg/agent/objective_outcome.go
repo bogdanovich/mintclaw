@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	objectiveOutcomeStart = "<task_outcome>"
-	objectiveOutcomeEnd   = "</task_outcome>"
-	objectiveOutcomeLimit = 64
+	objectiveOutcomeStart          = "<task_outcome>"
+	objectiveOutcomeEnd            = "</task_outcome>"
+	objectiveOutcomeLimit          = 64
+	objectiveOutcomeResultRequired = "objective outcome result was required"
 )
 
 type reportedObjectiveOutcome struct {
@@ -149,31 +150,9 @@ func extractObjectiveOutcome(
 	}
 	outcome := validateObjectiveOutcome(reported, audits, checklist)
 	if outcome.Status == taskresult.OutcomeSucceeded {
-		if terminalResult := boundedTerminalResult(reported.Result); terminalResult != "" {
-			clean = terminalResult
-		} else if objectiveOutcomeHasReceipt(outcome) {
-			// Compatibility for continuations suspended before the result field
-			// was introduced. A verified external-action receipt makes the
-			// successful terminal state authoritative; retain the child's
-			// bounded detail instead of generic surrounding prose.
-			if legacyResult := boundedTerminalResult(reported.Explanation); legacyResult != "" {
-				clean = legacyResult
-			}
-		}
+		clean = boundedTerminalResult(reported.Result)
 	}
 	return clean, outcome
-}
-
-func objectiveOutcomeHasReceipt(outcome *taskresult.Outcome) bool {
-	if outcome == nil {
-		return false
-	}
-	for _, item := range outcome.CompletedItems {
-		if len(item.Receipts) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func boundedTerminalResult(value string) string {
@@ -203,6 +182,7 @@ func validateObjectiveOutcome(
 		strings.TrimSpace(reported.Explanation) == "" {
 		return blockedObjectiveOutcome("objective outcome explanation was required")
 	}
+	missingResult := status == string(taskresult.OutcomeSucceeded) && boundedTerminalResult(reported.Result) == ""
 	receipts := make(map[string]taskresult.Receipt)
 	for _, audit := range audits {
 		if !audit.Success || audit.Kind != "external_action" || audit.Tool != "browser_act" ||
@@ -352,6 +332,9 @@ func validateObjectiveOutcome(
 			appendMissing(item.Item + " (objective ID was omitted from the outcome)")
 		}
 	}
+	if missingResult {
+		appendMissing(objectiveOutcomeResultRequired)
+	}
 	unclaimedReceipts := 0
 	for receiptID := range receipts {
 		if _, consumed := consumedReceipts[receiptID]; !consumed {
@@ -398,7 +381,9 @@ func validateObjectiveOutcome(
 			appendMissing("producer reported the objective as partial")
 		}
 	}
-	if outcome.Status == taskresult.OutcomeSucceeded {
+	if missingResult {
+		outcome.Explanation = objectiveOutcomeResultRequired
+	} else if outcome.Status == taskresult.OutcomeSucceeded {
 		outcome.Explanation = ""
 	}
 	return outcome

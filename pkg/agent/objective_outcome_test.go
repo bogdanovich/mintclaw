@@ -17,7 +17,8 @@ func TestExtractObjectiveOutcomeDowngradesUnverifiedExternalItem(t *testing.T) {
     {"objective_id":"objective_1","receipt_ids":["inv_yakima"]},
     {"objective_id":"objective_2","receipt_ids":["inv_missing"]}
   ],
-  "missing_items":[]
+  "missing_items":[],
+  "result":"Published what could be completed."
 }` + objectiveOutcomeEnd
 	audits := []toolshared.WriteAuditEntry{{
 		Kind: "external_action", Target: "https://example.com/yakima", Action: "click",
@@ -83,17 +84,16 @@ func TestObjectiveOutcomeCarriesBoundedReportedBlocker(t *testing.T) {
 	}
 }
 
-func TestObjectiveOutcomeDropsExplanationOnVerifiedSuccess(t *testing.T) {
+func TestObjectiveOutcomeRequiresResultForSuccess(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
 		`"missing_items":[],"explanation":"stale blocker"}` + objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "inspected", Kind: "result"}})
 	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
-	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" {
-		t.Fatalf("successful outcome retained explanation: %#v", outcome)
-	}
-	if clean != "" {
-		t.Fatalf("successful read-only outcome retained legacy explanation: %q", clean)
+	if clean != "" || outcome.Status != taskresult.OutcomePartial ||
+		outcome.Explanation != objectiveOutcomeResultRequired || len(outcome.CompletedItems) != 1 ||
+		len(outcome.MissingItems) != 1 || outcome.MissingItems[0] != objectiveOutcomeResultRequired {
+		t.Fatalf("clean = %q; outcome = %#v", clean, outcome)
 	}
 }
 
@@ -107,6 +107,29 @@ func TestObjectiveOutcomePreservesSuccessfulTerminalResult(t *testing.T) {
 	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" ||
 		clean != "Inspection complete: https://example.com/item/42; ID: 42" {
 		t.Fatalf("successful terminal result = %q, outcome = %#v", clean, outcome)
+	}
+}
+
+func TestObjectiveOutcomeUsesCurrentResultWithVerifiedReceipt(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+		`"receipt_ids":["inv-publish"]}],"missing_items":[],` +
+		`"result":"Published once: https://example.com/item/42; ID: 42","explanation":"stale detail"}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "publish item", Kind: "external_action",
+	}})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Target: "https://example.com", Action: "click",
+		Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-publish", "effect": "external_commit"},
+	}}
+	clean, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if clean != "Published once: https://example.com/item/42; ID: 42" ||
+		outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" ||
+		len(outcome.CompletedItems) != 1 || len(outcome.CompletedItems[0].Receipts) != 1 ||
+		len(outcome.MissingItems) != 0 {
+		t.Fatalf("clean = %q; outcome = %#v", clean, outcome)
 	}
 }
 
@@ -136,7 +159,7 @@ func TestTerminalTurnDeliverableMakesValidatedResultCanonical(t *testing.T) {
 	}
 }
 
-func TestObjectiveOutcomePreservesLegacySuccessDetailWithVerifiedReceipt(t *testing.T) {
+func TestObjectiveOutcomeDoesNotUseExplanationAsReceiptResult(t *testing.T) {
 	content := "The approved action finished.\n" + objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
 		`"receipt_ids":["inv-publish"]}],"missing_items":[],` +
@@ -150,9 +173,14 @@ func TestObjectiveOutcomePreservesLegacySuccessDetailWithVerifiedReceipt(t *test
 		Metadata: map[string]string{"invocation_id": "inv-publish", "effect": "external_commit"},
 	}}
 	clean, outcome := extractObjectiveOutcome(content, audits, true, checklist)
-	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" ||
-		clean != "Published once: https://example.com/item/42; ID: 42" || !objectiveOutcomeHasReceipt(outcome) {
-		t.Fatalf("legacy terminal result = %q, outcome = %#v", clean, outcome)
+	if clean != "The approved action finished." || outcome.Status != taskresult.OutcomePartial ||
+		outcome.Explanation != objectiveOutcomeResultRequired || len(outcome.CompletedItems) != 1 ||
+		len(outcome.CompletedItems[0].Receipts) != 1 || len(outcome.MissingItems) != 1 ||
+		outcome.MissingItems[0] != objectiveOutcomeResultRequired {
+		t.Fatalf("clean = %q; outcome = %#v", clean, outcome)
+	}
+	if projection := objectiveOutcomeUserContent(clean, outcome); strings.Contains(projection, "Published once") {
+		t.Fatalf("legacy explanation projected as terminal result: %q", projection)
 	}
 }
 
@@ -205,7 +233,8 @@ func TestObjectiveOutcomeBoundsIncompleteExplanation(t *testing.T) {
 
 func TestExtractObjectiveOutcomeRejectsNonBrowserExternalReceipt(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":["inv-fake"]}],"missing_items":[]}` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+		`"receipt_ids":["inv-fake"]}],"missing_items":[],"result":"Published."}` +
 		objectiveOutcomeEnd
 	audits := []toolshared.WriteAuditEntry{{
 		Kind: "external_action", Tool: "custom_tool", Success: true,
@@ -221,7 +250,8 @@ func TestExtractObjectiveOutcomeRejectsNonBrowserExternalReceipt(t *testing.T) {
 
 func TestExtractObjectiveOutcomeUsesRuntimeClassification(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":[]}` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"Account updated."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
 		Item: "like and follow the account", Kind: "external_action",
@@ -244,7 +274,8 @@ func TestExtractObjectiveOutcomeRequiresBrowserChildReport(t *testing.T) {
 
 func TestExtractObjectiveOutcomeAcceptsReadResultWithoutWriteReceipt(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":[]}` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"Account inspection complete."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
 	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
@@ -256,7 +287,8 @@ func TestExtractObjectiveOutcomeAcceptsReadResultWithoutWriteReceipt(t *testing.
 
 func TestExtractObjectiveOutcomeIgnoresNavigationInvocationIDForReadResult(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":["inv-navigation"]}],"missing_items":[]}` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+		`"receipt_ids":["inv-navigation"]}],"missing_items":[],"result":"Account inspection complete."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
 	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
@@ -268,7 +300,8 @@ func TestExtractObjectiveOutcomeIgnoresNavigationInvocationIDForReadResult(t *te
 
 func TestExtractObjectiveOutcomeRejectsUnclaimedExternalActionForReadResult(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":[]}` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"Account inspection complete."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
 	audits := []toolshared.WriteAuditEntry{{
@@ -308,7 +341,8 @@ func TestExtractObjectiveOutcomeAccountsForCommitWithUnverifiedPostcondition(t *
 
 func TestExtractObjectiveOutcomeDoesNotHideCommitBehindSucceededMissingItem(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[],"missing_items":["objective_1"]}` +
+		`{"status":"succeeded","completed_items":[],"missing_items":["objective_1"],` +
+		`"result":"Submission complete."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
 		Item: "submit the form", Kind: "external_action",
@@ -376,7 +410,7 @@ func TestExtractObjectiveOutcomeDoesNotConsumeReceiptFromRejectedCompletedItem(t
 	content := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[` +
 		`{"objective_id":"objective_1","receipt_ids":["inv-valid","inv-unknown"]}],` +
-		`"missing_items":[]}` + objectiveOutcomeEnd
+		`"missing_items":[],"result":"Submission complete."}` + objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
 		Item: "submit the form", Kind: "external_action",
 	}})
@@ -443,7 +477,8 @@ func TestExtractObjectiveOutcomeNeverUpgradesProducerReportedPartial(t *testing.
 
 func TestExtractObjectiveOutcomeRejectsOmittedRequestedItem(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],"missing_items":[]}` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"Active postings inspected."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
 		{Item: "inspect active postings", Kind: "result"},
@@ -460,7 +495,8 @@ func TestExtractObjectiveOutcomeDoesNotReuseReceiptAcrossActions(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[` +
 		`{"objective_id":"objective_1","receipt_ids":["inv-one"]},` +
-		`{"objective_id":"objective_2","receipt_ids":["inv-one"]}],"missing_items":[]}` +
+		`{"objective_id":"objective_2","receipt_ids":["inv-one"]}],"missing_items":[],` +
+		`"result":"Publishing complete."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
 		{Item: "publish Yakima", Kind: "external_action"},
