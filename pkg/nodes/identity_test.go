@@ -162,7 +162,7 @@ func TestIdentityProofRejectsCatalogHashMismatch(t *testing.T) {
 	}
 }
 
-func TestLegacyIdentityProofTranscriptRemainsByteCompatible(t *testing.T) {
+func TestLegacyIdentityProofTranscriptAcceptedDuringBridge(t *testing.T) {
 	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x42}, ed25519.SeedSize))
 	proof, err := NewIdentityProof(
 		privateKey, "challenge", ProtocolV1, ProtocolV1,
@@ -171,9 +171,10 @@ func TestLegacyIdentityProofTranscriptRemainsByteCompatible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proof.KeyAlgorithm != "" {
-		t.Fatalf("legacy key algorithm = %q, want omitted", proof.KeyAlgorithm)
+	if proof.KeyAlgorithm != KeyAlgorithmEd25519 {
+		t.Fatalf("key algorithm = %q, want explicit Ed25519", proof.KeyAlgorithm)
 	}
+	proof.KeyAlgorithm = ""
 	transcript, err := proof.transcript()
 	if err != nil {
 		t.Fatal(err)
@@ -187,12 +188,13 @@ func TestLegacyIdentityProofTranscriptRemainsByteCompatible(t *testing.T) {
 	if string(transcript) != want {
 		t.Fatalf("legacy transcript changed:\n got %q\nwant %q", transcript, want)
 	}
-	if !ed25519.Verify(
-		privateKey.Public().(ed25519.PublicKey),
-		transcript,
-		mustDecodeIdentityValue(t, proof.Signature),
-	) {
+	legacySignature := ed25519.Sign(privateKey, transcript)
+	if !ed25519.Verify(privateKey.Public().(ed25519.PublicKey), transcript, legacySignature) {
 		t.Fatal("legacy signature does not verify over the compatibility transcript")
+	}
+	proof.Signature = base64.RawURLEncoding.EncodeToString(legacySignature)
+	if _, err := proof.VerifyIdentity(); err != nil {
+		t.Fatalf("legacy VerifyIdentity() error during bridge = %v", err)
 	}
 }
 
@@ -208,19 +210,22 @@ func TestExplicitEd25519AlgorithmIsTranscriptBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacyTranscript, err := proof.transcript()
+	if proof.KeyAlgorithm != KeyAlgorithmEd25519 {
+		t.Fatalf("key algorithm = %q, want explicit Ed25519", proof.KeyAlgorithm)
+	}
+	algorithmTranscript, err := proof.transcript()
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof.KeyAlgorithm = KeyAlgorithmEd25519
-	algorithmTranscript, err := proof.transcript()
+	proof.KeyAlgorithm = ""
+	legacyTranscript, err := proof.transcript()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Equal(legacyTranscript, algorithmTranscript) {
 		t.Fatal("explicit algorithm reused the legacy transcript domain")
 	}
-	proof.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, algorithmTranscript))
+	proof.KeyAlgorithm = KeyAlgorithmEd25519
 	if _, err := proof.VerifyIdentity(); err != nil {
 		t.Fatalf("explicit Ed25519 VerifyIdentity() error = %v", err)
 	}
