@@ -151,6 +151,7 @@ func NewIdentityProof(
 		Nonce:          nonce,
 		NodeID:         nodeID,
 		PublicKey:      base64.RawURLEncoding.EncodeToString(publicKey),
+		KeyAlgorithm:   KeyAlgorithmEd25519,
 		MinProtocol:    minProtocol,
 		MaxProtocol:    maxProtocol,
 		ClientVersion:  clientVersion,
