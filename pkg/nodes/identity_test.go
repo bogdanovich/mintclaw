@@ -31,17 +31,18 @@ func TestIdentityProofRoundTripAndTamperDetection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicKey, err := proof.Verify()
+	identity, err := proof.VerifyIdentity()
 	if err != nil {
-		t.Fatalf("Verify() error = %v", err)
+		t.Fatalf("VerifyIdentity() error = %v", err)
 	}
-	if !publicKey.Equal(privateKey.Public()) {
+	if identity.Algorithm != KeyAlgorithmEd25519 ||
+		!bytes.Equal(identity.Bytes, privateKey.Public().(ed25519.PublicKey)) {
 		t.Fatal("verified public key does not match signer")
 	}
 
 	proof.Platform = "darwin"
-	if _, err := proof.Verify(); !errors.Is(err, ErrInvalidIdentityProof) {
-		t.Fatalf("tampered Verify() error = %v", err)
+	if _, err := proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
+		t.Fatalf("tampered VerifyIdentity() error = %v", err)
 	}
 }
 
@@ -64,13 +65,13 @@ func TestIdentityProofExecutionProfileRoundTripAndTamperDetection(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := proof.Verify(); err != nil {
-		t.Fatalf("Verify() error = %v", err)
+	if _, err := proof.VerifyIdentity(); err != nil {
+		t.Fatalf("VerifyIdentity() error = %v", err)
 	}
 
 	proof.PolicyRevision = "policy-2"
-	if _, err := proof.Verify(); !errors.Is(err, ErrInvalidIdentityProof) {
-		t.Fatalf("tampered execution profile Verify() error = %v", err)
+	if _, err := proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
+		t.Fatalf("tampered execution profile VerifyIdentity() error = %v", err)
 	}
 }
 
@@ -156,8 +157,8 @@ func TestIdentityProofRejectsCatalogHashMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof.CatalogHash = "not-the-catalog-hash"
-	if _, err := proof.Verify(); !errors.Is(err, ErrInvalidIdentityProof) {
-		t.Fatalf("Verify() error = %v", err)
+	if _, err := proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
+		t.Fatalf("VerifyIdentity() error = %v", err)
 	}
 }
 
@@ -220,8 +221,8 @@ func TestExplicitEd25519AlgorithmIsTranscriptBound(t *testing.T) {
 		t.Fatal("explicit algorithm reused the legacy transcript domain")
 	}
 	proof.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, algorithmTranscript))
-	if _, err := proof.Verify(); err != nil {
-		t.Fatalf("explicit Ed25519 Verify() error = %v", err)
+	if _, err := proof.VerifyIdentity(); err != nil {
+		t.Fatalf("explicit Ed25519 VerifyIdentity() error = %v", err)
 	}
 }
 
@@ -233,19 +234,15 @@ func TestP256IdentityProofRoundTripAndAlgorithmBinding(t *testing.T) {
 	}
 	verified, err := proof.VerifyIdentity()
 	if err != nil {
-		t.Fatalf("Verify() error = %v", err)
+		t.Fatalf("VerifyIdentity() error = %v", err)
 	}
 	wantPublicKey := testP256PublicKeyBytes(t, privateKey)
 	if verified.Algorithm != KeyAlgorithmECDSAP256SHA256 || !bytes.Equal(verified.Bytes, wantPublicKey) {
 		t.Fatal("verified P-256 public key does not match signer")
 	}
-	if _, err := proof.Verify(); !errors.Is(err, ErrInvalidIdentityProof) {
-		t.Fatalf("legacy Verify() accepted P-256 identity: %v", err)
-	}
-
 	proof.KeyAlgorithm = KeyAlgorithmEd25519
 	if _, err := proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
-		t.Fatalf("algorithm-confused Verify() error = %v", err)
+		t.Fatalf("algorithm-confused VerifyIdentity() error = %v", err)
 	}
 }
 
@@ -257,7 +254,7 @@ func TestP256IdentityProofRejectsHighSSignature(t *testing.T) {
 	highS.FillBytes(signature[32:])
 	proof.Signature = base64.RawURLEncoding.EncodeToString(signature)
 	if _, err := proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
-		t.Fatalf("high-S Verify() error = %v", err)
+		t.Fatalf("high-S VerifyIdentity() error = %v", err)
 	}
 }
 
@@ -316,7 +313,7 @@ func TestP256IdentityProofRejectsMalformedPublicKeysAndSignatures(t *testing.T) 
 			candidate := proof
 			test.mutate(&candidate)
 			if _, verifyErr := candidate.VerifyIdentity(); !errors.Is(verifyErr, ErrInvalidIdentityProof) {
-				t.Fatalf("Verify() error = %v", verifyErr)
+				t.Fatalf("VerifyIdentity() error = %v", verifyErr)
 			}
 		})
 	}
@@ -371,7 +368,7 @@ func TestP256LanguageNeutralFixture(t *testing.T) {
 		t.Fatal("fixture transcript does not match canonical proof transcript")
 	}
 	if _, err := fixture.Proof.VerifyIdentity(); err != nil {
-		t.Fatalf("fixture Verify() error = %v", err)
+		t.Fatalf("fixture VerifyIdentity() error = %v", err)
 	}
 }
 

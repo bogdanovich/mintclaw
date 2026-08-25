@@ -129,8 +129,8 @@ func TestRuntimeClientAuthenticatesExecutionProfile(t *testing.T) {
 		proof.PolicyRevision != policy.Revision {
 		t.Fatalf("runtime proof = %#v", proof)
 	}
-	if _, verifyErr := proof.Verify(); verifyErr != nil {
-		t.Fatalf("Verify() error = %v", verifyErr)
+	if _, verifyErr := proof.VerifyIdentity(); verifyErr != nil {
+		t.Fatalf("VerifyIdentity() error = %v", verifyErr)
 	}
 }
 
