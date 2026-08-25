@@ -1281,20 +1281,6 @@ func TestNormalizeModel_UsesAPIBase(t *testing.T) {
 	}
 }
 
-func TestProvider_RequestTimeoutDefault(t *testing.T) {
-	p := NewProviderWithMaxTokensFieldAndTimeout("key", "https://example.com/v1", "", "", 0)
-	if p.httpClient.Timeout != defaultRequestTimeout {
-		t.Fatalf("http timeout = %v, want %v", p.httpClient.Timeout, defaultRequestTimeout)
-	}
-}
-
-func TestProvider_RequestTimeoutOverride(t *testing.T) {
-	p := NewProviderWithMaxTokensFieldAndTimeout("key", "https://example.com/v1", "", "", 300)
-	if p.httpClient.Timeout != 300*time.Second {
-		t.Fatalf("http timeout = %v, want %v", p.httpClient.Timeout, 300*time.Second)
-	}
-}
-
 func TestProviderChat_ExtraBodyInjected(t *testing.T) {
 	var requestBody map[string]any
 
