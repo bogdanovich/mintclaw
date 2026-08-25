@@ -63,10 +63,6 @@ func NewWhisperTranscriber(modelCfg *config.ModelConfig) *WhisperTranscriber {
 	return tr
 }
 
-func NewGroqTranscriber(apiKey, modelID string) *WhisperTranscriber {
-	return newWhisperTranscriber(apiKey, "https://api.groq.com/openai/v1", modelID, "groq")
-}
-
 func newWhisperTranscriber(apiKey, apiBase, modelID, providerName string) *WhisperTranscriber {
 	if modelID == "" {
 		return nil

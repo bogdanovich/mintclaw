@@ -34,11 +34,6 @@ func handleResponse(resp *http.Response, apiBase string, maxBytes int64, idleTim
 	return newResponse(resp, body, apiBase, readErr)
 }
 
-// NewResponse normalizes an already-buffered non-OK provider response.
-func NewResponse(resp *http.Response, body []byte, apiBase string) error {
-	return newResponse(resp, body, apiBase, nil)
-}
-
 // ReadResponseBody reads a response expected to return HTTP 200. A non-OK
 // response is normalized even when reading its body also fails.
 func ReadResponseBody(resp *http.Response, apiBase string) ([]byte, error) {
