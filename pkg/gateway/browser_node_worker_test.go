@@ -27,6 +27,7 @@ type browserNodeTestHandler struct {
 	registration             nodes.Registration
 	commands                 []string
 	contextOperations        []string
+	observeInputs            []nodes.BrowserObserveInput
 	actInputs                []nodes.BrowserActInput
 	actPlanInputs            []json.RawMessage
 	invocations              map[string]nodes.InvocationRecord
@@ -37,6 +38,7 @@ type browserNodeTestHandler struct {
 	pendingDialog            *nodes.BrowserDialogObservation
 	redactNextActObservation bool
 	redactNextObservation    bool
+	staleNextObservation     bool
 	redactNextContext        bool
 	redactNextDiagnostics    bool
 	dynamicContextCatalog    bool
@@ -96,6 +98,24 @@ func (handler *browserNodeTestHandler) Invoke(
 	case nodes.BrowserCommandObserve:
 		var input nodes.BrowserObserveInput
 		_ = json.Unmarshal(plan.Input, &input)
+		handler.observeInputs = append(handler.observeInputs, input)
+		if handler.staleNextObservation {
+			handler.staleNextObservation = false
+			now := time.Now().UnixNano()
+			handler.invocations[plan.InvocationID] = nodes.InvocationRecord{
+				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
+				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
+				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
+				AcceptedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				Failure: &nodes.InvocationFailure{
+					Code: "STALE_BROWSER_STATE", Message: "browser state is stale",
+				},
+			}
+			return nil, true, nodes.NewInvocationDispatchError(
+				"STALE_BROWSER_STATE",
+				errors.New("transient private browser authority changed"),
+			)
+		}
 		url, origin := handler.currentURL, handler.currentOrigin
 		if url == "" {
 			url, origin = "about:blank", "about:blank"
@@ -417,6 +437,47 @@ func TestGatewayBrowserWorkerRefreshesRecoveredObservationWithFreshInvocation(t 
 	}
 	if !slices.Equal(commands, want) {
 		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+}
+
+func TestGatewayBrowserWorkerRetriesTransientStaleObservationWithFreshInvocation(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	handler.staleNextObservation = true
+	observation, err := worker.Observe(t.Context())
+	if err != nil || observation.URL != "about:blank" {
+		t.Fatalf("recovered observation = %#v, %v", observation, err)
+	}
+	handler.mu.Lock()
+	commands := append([]string(nil), handler.commands...)
+	observeInputs := append([]nodes.BrowserObserveInput(nil), handler.observeInputs...)
+	handler.mu.Unlock()
+	want := []string{
+		nodes.BrowserCommandSessionOpen,
+		nodes.BrowserCommandObserve,
+		nodes.BrowserCommandObserve,
+	}
+	if !slices.Equal(commands, want) {
+		t.Fatalf("commands = %#v, want %#v", commands, want)
+	}
+	if len(observeInputs) != 2 || observeInputs[0].SnapshotGeneration != 1 ||
+		observeInputs[1].SnapshotGeneration != observeInputs[0].SnapshotGeneration {
+		t.Fatalf("observe inputs = %#v, want two reads at generation 1", observeInputs)
 	}
 }
 
