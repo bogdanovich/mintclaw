@@ -263,8 +263,7 @@ func (p *Pipeline) callResolvedFallbackCandidate(
 	candidateProvider, err := providerForFallbackCandidate(
 		candidateProviders,
 		activeProvider,
-		candidate.Provider,
-		candidate.Model,
+		candidate,
 	)
 	if err != nil {
 		return nil, err

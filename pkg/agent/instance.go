@@ -65,9 +65,9 @@ type AgentInstance struct {
 	// LightProvider is the concrete provider instance for the configured light model.
 	// It is only used when routing selects the light tier for a turn.
 	LightProvider providers.LLMProvider
-	// CandidateProviders maps "provider/model" keys to per-candidate LLMProvider
-	// instances. This allows each fallback model to use its own api_base and api_key
-	// from model_list, instead of inheriting the primary model's provider config.
+	// CandidateProviders maps exact candidate keys to per-candidate LLMProvider
+	// instances. This allows each fallback model-list row to use its own api_base
+	// and api_key instead of inheriting another row's provider config.
 	CandidateProviders map[string]providers.LLMProvider
 	ToolLoopDetection  loopguard.Config
 	ownedProviders     []providers.StatefulProvider
@@ -664,10 +664,14 @@ func buildAgentRoutingConfig(
 		candidates:         resolveModelCandidatesFromSelection(cfg, selectedModel, fallbacks),
 		candidateProviders: make(map[string]providers.LLMProvider),
 	}
-	populateCandidateProvidersFromNamesTracked(
+	fallbackCandidates := routingCfg.candidates
+	if len(fallbackCandidates) > 0 {
+		fallbackCandidates = fallbackCandidates[1:]
+	}
+	populateCandidateProvidersFromCandidatesTracked(
 		cfg,
 		workspace,
-		fallbacks,
+		fallbackCandidates,
 		routingCfg.candidateProviders,
 		providerOwnership,
 	)
@@ -706,13 +710,9 @@ func buildAgentRoutingConfig(
 	routingCfg.lightCandidates = resolved
 	routingCfg.lightProvider = lightProvider
 	providerOwnership.trackCreated(lightProvider)
-	populateCandidateProvidersFromNamesTracked(
-		cfg,
-		workspace,
-		[]string{rc.LightModel},
-		routingCfg.candidateProviders,
-		providerOwnership,
-	)
+	if len(resolved) > 0 {
+		routingCfg.candidateProviders[candidateProviderKey(resolved[0])] = lightProvider
+	}
 	return routingCfg
 }
 
@@ -762,16 +762,34 @@ func populateCandidateProvidersFromNamesTracked(
 	if cfg == nil || len(names) == 0 {
 		return
 	}
-	for _, name := range names {
-		mc, err := resolvedModelConfig(cfg, strings.TrimSpace(name), workspace)
-		if err != nil {
+	populateCandidateProvidersFromCandidatesTracked(
+		cfg,
+		workspace,
+		resolveModelCandidates(cfg, "", names),
+		out,
+		providerOwnership,
+	)
+}
+
+func populateCandidateProvidersFromCandidatesTracked(
+	cfg *config.Config,
+	workspace string,
+	candidates []providers.FallbackCandidate,
+	out map[string]providers.LLMProvider,
+	providerOwnership *providerOwnership,
+) {
+	if cfg == nil || len(candidates) == 0 {
+		return
+	}
+	for _, candidate := range candidates {
+		mc := resolveActiveModelConfig(cfg, workspace, []providers.FallbackCandidate{candidate}, candidate.Model)
+		if mc == nil {
 			logger.WarnCF("agent",
 				"fallback provider: no model_list entry found; will inherit primary provider credentials",
-				map[string]any{"name": name, "error": err.Error()})
+				map[string]any{"name": candidate.DisplayName})
 			continue
 		}
-		protocol, modelID := providers.ExtractProtocol(mc)
-		key := providers.ModelKey(protocol, modelID)
+		key := candidateProviderKey(candidate)
 		if _, exists := out[key]; exists {
 			continue
 		}

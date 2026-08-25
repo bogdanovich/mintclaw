@@ -77,6 +77,14 @@ func candidateFromModelSelection(
 	}, true
 }
 
+func candidateProviderKey(candidate providers.FallbackCandidate) string {
+	base := providers.ModelKey(candidate.Provider, candidate.Model)
+	if candidate.ConfigOrdinal <= 0 {
+		return base
+	}
+	return fmt.Sprintf("%s#model-list:%d", base, candidate.ConfigOrdinal)
+}
+
 func resolveModelCandidate(
 	cfg *config.Config,
 	modelName string,
@@ -146,14 +154,6 @@ func resolvedCandidateModelName(candidates []providers.FallbackCandidate, fallba
 		}
 	}
 	return strings.TrimSpace(fallback)
-}
-
-func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
-	selection, err := resolveModelSelection(cfg, modelName, workspace)
-	if err != nil {
-		return nil, err
-	}
-	return selection.modelConfig, nil
 }
 
 func resolveModelSelection(

@@ -183,14 +183,15 @@ func (m *modelExecutionManager) buildExecutionStateForModel(
 	if candidateProviders == nil {
 		candidateProviders = make(map[string]providers.LLMProvider)
 	}
-	populateCandidateProvidersFromNames(
+	populateCandidateProvidersFromCandidatesTracked(
 		cfg,
 		baseAgent.Workspace,
-		append([]string{modelName}, fallbacks...),
+		overrideCandidates[1:],
 		candidateProviders,
+		nil,
 	)
 	if len(overrideCandidates) > 0 {
-		candidateProviders[overrideCandidates[0].StableKey()] = overrideProvider
+		candidateProviders[candidateProviderKey(overrideCandidates[0])] = overrideProvider
 	}
 
 	cleanup := func() {
