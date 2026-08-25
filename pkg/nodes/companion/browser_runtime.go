@@ -43,6 +43,10 @@ type browserObservationOutputHost interface {
 	) (nodes.BrowserObservationResult, error)
 }
 
+type browserObservationOutputDiscardHost interface {
+	DiscardObservationOutput(nodes.BrowserOutputDescriptor) error
+}
+
 type browserCommandHandler struct {
 	command         string
 	descriptorValue nodes.CommandDescriptor
@@ -140,7 +144,9 @@ func (handler *browserCommandHandler) execute(
 		if err != nil {
 			return result, browserCommandFailure(err)
 		}
-		result, err = handler.prepareObservationOutput(invocation, input.WorkspaceID, input.BrowserTarget, result)
+		result, err = handler.prepareObservationOutput(
+			invocation, input.WorkspaceID, input.BrowserTarget, result, result,
+		)
 		if err != nil {
 			// The read already advanced the host generation. Persist a protected
 			// success so the gateway can advance and issue a fresh read identity.
@@ -204,7 +210,7 @@ func (handler *browserCommandHandler) execute(
 		}
 		if err == nil && result.Observation != nil {
 			observation, stageErr := handler.prepareObservationOutput(
-				invocation, input.WorkspaceID, input.BrowserTarget, *result.Observation,
+				invocation, input.WorkspaceID, input.BrowserTarget, *result.Observation, result,
 			)
 			if stageErr != nil {
 				// Selection already completed. Preserve that known mutation and let
@@ -212,6 +218,11 @@ func (handler *browserCommandHandler) execute(
 				return protectedBrowserContextReceipt(input.Operation)
 			}
 			result.Observation = &observation
+			staged, encodeErr := json.Marshal(result)
+			if encodeErr != nil || len(staged) > invocation.Plan.OutputLimitBytes {
+				handler.discardObservationOutput(observation.Output)
+				return protectedBrowserContextReceipt(input.Operation)
+			}
 		}
 		return result, browserCommandFailure(err)
 	case nodes.BrowserCommandSessionClose:
@@ -223,6 +234,18 @@ func (handler *browserCommandHandler) execute(
 		return browserStatusResult(result), browserCommandFailure(err)
 	default:
 		return nil, ErrCommandUnavailable
+	}
+}
+
+func (handler *browserCommandHandler) discardObservationOutput(
+	descriptor *nodes.BrowserOutputDescriptor,
+) {
+	if descriptor == nil {
+		return
+	}
+	host, ok := handler.host.(browserObservationOutputDiscardHost)
+	if ok {
+		_ = host.DiscardObservationOutput(*descriptor)
 	}
 }
 
@@ -331,8 +354,13 @@ func (handler *browserCommandHandler) executeAct(
 		}
 		return nil, browserCommandFailure(err)
 	}
+	inlineResult := nodes.BrowserActResult{
+		ActionInvocationID: input.ActionInvocationID,
+		State:              "succeeded",
+		Observation:        &observation,
+	}
 	observation, err = handler.prepareObservationOutput(
-		invocation, input.WorkspaceID, input.BrowserTarget, observation,
+		invocation, input.WorkspaceID, input.BrowserTarget, observation, inlineResult,
 	)
 	if err != nil {
 		// The accepted action is authoritative even if its fresh projection
@@ -369,15 +397,21 @@ func (handler *browserCommandHandler) prepareObservationOutput(
 	workspaceID string,
 	browserTarget string,
 	observation nodes.BrowserObservationResult,
+	inlineResult any,
 ) (nodes.BrowserObservationResult, error) {
 	host, ok := handler.host.(browserObservationOutputHost)
 	if !ok {
 		return observation, nil
 	}
+	encoded, err := json.Marshal(inlineResult)
+	if err != nil {
+		return nodes.BrowserObservationResult{}, err
+	}
 	return host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
 		SessionID: observation.SessionID, RoutedSessionID: invocation.Plan.SessionID,
 		InvocationID: invocation.Plan.InvocationID, WorkspaceID: workspaceID,
 		BrowserTarget: browserTarget, AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+		InlineResultBytes: len(encoded),
 	}, observation)
 }
 

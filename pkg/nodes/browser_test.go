@@ -3,7 +3,9 @@ package nodes
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +106,40 @@ func TestBrowserCatalogAcceptsPreviousSnapshotSchemaGeneration(t *testing.T) {
 	}
 	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err != nil {
 		t.Fatalf("previous snapshot schema generation rejected: %v", err)
+	}
+}
+
+func TestBrowserCatalogAcceptsPreviousStreamedSnapshotSchemaGeneration(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		descriptors[index].OutputSchema = previousStreamedBrowserCommandOutputSchema(
+			descriptors[index].Name,
+			descriptors[index].BrowserProfiles,
+		)
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err != nil {
+		t.Fatalf("previous streamed snapshot schema generation rejected: %v", err)
+	}
+}
+
+func TestBrowserCatalogRejectsMixedStreamedSnapshotSchemaGenerations(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name == BrowserCommandObserve {
+			descriptors[index].OutputSchema = previousStreamedBrowserCommandOutputSchema(
+				descriptors[index].Name,
+				descriptors[index].BrowserProfiles,
+			)
+		}
+	}
+	if err = (CapabilityCatalog{Commands: descriptors}).Validate(); err == nil {
+		t.Fatal("mixed streamed snapshot schema generations were accepted")
 	}
 }
 
@@ -1306,12 +1342,62 @@ func TestDecodeBrowserSnapshotPayloadRejectsUntrustedShape(t *testing.T) {
 	}
 }
 
+func TestDecodeBrowserSnapshotPayloadRejectsElement501BeforeMaterializingIt(t *testing.T) {
+	limits := BrowserLimits{}.Effective()
+	var payload strings.Builder
+	payload.WriteString(`{"snapshot":"page","elements":[`)
+	for index := 0; index < limits.SnapshotRefs; index++ {
+		if index > 0 {
+			payload.WriteByte(',')
+		}
+		fmt.Fprintf(
+			&payload,
+			`{"ref":"ref_%d","role":"button","name":"Save"}`,
+			index,
+		)
+	}
+	// The 501st value is intentionally not an element object. The decoder must
+	// reject the count before attempting to decode or allocate this value.
+	payload.WriteString(`,"not-an-element"]}`)
+	_, err := DecodeBrowserSnapshotPayload([]byte(payload.String()), limits)
+	if err == nil || !strings.Contains(err.Error(), "exceeds bounds") {
+		t.Fatalf("DecodeBrowserSnapshotPayload() error = %v", err)
+	}
+}
+
 func TestDecodeBrowserSnapshotPayloadPreservesPresentEmptyElementStrings(t *testing.T) {
 	decoded, err := DecodeBrowserSnapshotPayload(
 		[]byte(`{"snapshot":"page","elements":[{"ref":"ref_1","role":"","name":""}]}`),
 		BrowserLimits{}.Effective(),
 	)
 	if err != nil || len(decoded.Elements) != 1 || decoded.Elements[0].Role != "" || decoded.Elements[0].Name != "" {
+		t.Fatalf("DecodeBrowserSnapshotPayload() = %#v, %v", decoded, err)
+	}
+}
+
+func TestDecodeBrowserSnapshotPayloadAcceptsPrivateEnvelopeAboveToolResultBudget(t *testing.T) {
+	limits := BrowserLimits{}.Effective()
+	elements := make([]BrowserElement, 0, limits.SnapshotRefs)
+	for index := 0; index < limits.SnapshotRefs; index++ {
+		elements = append(elements, BrowserElement{
+			Ref:  fmt.Sprintf("ref_%d", index),
+			Role: "region",
+			Name: strings.Repeat("nested semantic name ", 12),
+		})
+	}
+	want := BrowserSnapshotPayload{
+		Snapshot: strings.Repeat("nested semantic snapshot\n", 9000),
+		Elements: elements,
+	}
+	payload, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) <= limits.ToolResultBytes {
+		t.Fatalf("fixture payload = %d, want above tool result budget %d", len(payload), limits.ToolResultBytes)
+	}
+	decoded, err := DecodeBrowserSnapshotPayload(payload, limits)
+	if err != nil || !reflect.DeepEqual(decoded, want) {
 		t.Fatalf("DecodeBrowserSnapshotPayload() = %#v, %v", decoded, err)
 	}
 }

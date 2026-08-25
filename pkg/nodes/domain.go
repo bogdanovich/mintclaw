@@ -468,12 +468,20 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	}
 	actualOutput, err := canonicalJSON(descriptor.OutputSchema)
 	outputMatchesCurrent := err == nil && bytes.Equal(actualOutput, expectedOutput)
+	previousStreamedOutput, previousStreamedOutputErr := canonicalJSON(
+		previousStreamedBrowserCommandOutputSchema(
+			descriptor.Name,
+			descriptor.BrowserProfiles,
+		),
+	)
+	outputMatchesPreviousStreamed := previousStreamedOutputErr == nil &&
+		bytes.Equal(actualOutput, previousStreamedOutput)
 	previousOutput, previousOutputErr := canonicalJSON(previousBrowserCommandOutputSchema(
 		descriptor.Name,
 		descriptor.BrowserProfiles,
 	))
 	outputMatchesPrevious := previousOutputErr == nil && bytes.Equal(actualOutput, previousOutput)
-	outputMatches := outputMatchesCurrent || outputMatchesPrevious
+	outputMatches := outputMatchesCurrent || outputMatchesPreviousStreamed || outputMatchesPrevious
 	if !outputMatches && descriptor.Name == BrowserCommandSessionOpen {
 		legacyOutput, legacyErr := canonicalJSON(legacyBrowserCommandOutputSchema(
 			descriptor.Name,
@@ -485,38 +493,53 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
 	}
 	if (descriptor.Name == BrowserCommandObserve || descriptor.Name == BrowserCommandContexts) &&
-		inputMatchesCurrent != outputMatchesCurrent {
+		(inputMatchesCurrent != (outputMatchesCurrent || outputMatchesPreviousStreamed)) {
 		return fmt.Errorf("%w: browser snapshot schema generations disagree", ErrInvalidCapability)
 	}
 	return nil
 }
 
-func browserDescriptorUsesStreamedSnapshots(descriptor CommandDescriptor) (bool, error) {
+func browserDescriptorSnapshotGeneration(
+	descriptor CommandDescriptor,
+) (browserSnapshotSchemaGeneration, error) {
 	actual, err := canonicalJSON(descriptor.OutputSchema)
 	if err != nil {
-		return false, err
+		return browserSnapshotSchemaInline, err
 	}
 	current, err := canonicalJSON(BrowserCommandOutputSchema(
 		descriptor.Name,
 		descriptor.BrowserProfiles,
 	))
 	if err != nil {
-		return false, err
+		return browserSnapshotSchemaInline, err
 	}
 	if bytes.Equal(actual, current) {
-		return true, nil
+		return browserSnapshotSchemaCurrent, nil
+	}
+	previousStreamed, err := canonicalJSON(previousStreamedBrowserCommandOutputSchema(
+		descriptor.Name,
+		descriptor.BrowserProfiles,
+	))
+	if err != nil {
+		return browserSnapshotSchemaInline, err
+	}
+	if bytes.Equal(actual, previousStreamed) {
+		return browserSnapshotSchemaToolResult, nil
 	}
 	previous, err := canonicalJSON(previousBrowserCommandOutputSchema(
 		descriptor.Name,
 		descriptor.BrowserProfiles,
 	))
 	if err != nil {
-		return false, err
+		return browserSnapshotSchemaInline, err
 	}
 	if bytes.Equal(actual, previous) {
-		return false, nil
+		return browserSnapshotSchemaInline, nil
 	}
-	return false, fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
+	return browserSnapshotSchemaInline, fmt.Errorf(
+		"%w: browser output schema does not match typed contract",
+		ErrInvalidCapability,
+	)
 }
 
 func (descriptor CommandDescriptor) validateUpdateProfiles() error {
@@ -747,17 +770,17 @@ func (catalog CapabilityCatalog) Validate() error {
 				ErrInvalidCapability,
 			)
 		}
-		var streamedSnapshots *bool
+		var snapshotGeneration *browserSnapshotSchemaGeneration
 		for _, name := range []string{BrowserCommandObserve, BrowserCommandAct, BrowserCommandContexts} {
-			current, currentErr := browserDescriptorUsesStreamedSnapshots(browserDescriptors[name])
-			if currentErr != nil {
-				return currentErr
+			generation, generationErr := browserDescriptorSnapshotGeneration(browserDescriptors[name])
+			if generationErr != nil {
+				return generationErr
 			}
-			if streamedSnapshots == nil {
-				streamedSnapshots = &current
+			if snapshotGeneration == nil {
+				snapshotGeneration = &generation
 				continue
 			}
-			if *streamedSnapshots != current {
+			if *snapshotGeneration != generation {
 				return fmt.Errorf(
 					"%w: browser commands disagree on snapshot schema generation",
 					ErrInvalidCapability,
