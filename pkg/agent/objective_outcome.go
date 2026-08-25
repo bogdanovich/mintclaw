@@ -226,6 +226,7 @@ func validateObjectiveOutcome(
 	partitioned := make(map[string]struct{}, len(checklist))
 	consumedReceipts := make(map[string]struct{})
 	missingExternalObjectives := 0
+	partitionValid := true
 	missingSeen := make(map[string]struct{})
 	appendMissing := func(item string) {
 		item = boundedObjectiveText(item)
@@ -242,10 +243,12 @@ func validateObjectiveOutcome(
 		id = strings.TrimSpace(id)
 		item, found := expected[id]
 		if !found {
+			partitionValid = false
 			appendMissing("objective outcome contained an unknown checklist ID")
 			continue
 		}
 		if _, duplicate := partitioned[id]; duplicate {
+			partitionValid = false
 			appendMissing(item.Item + " (objective ID was reported more than once)")
 			continue
 		}
@@ -257,16 +260,19 @@ func validateObjectiveOutcome(
 	}
 	for _, reportedItem := range reported.CompletedItems {
 		if len(outcome.CompletedItems) >= objectiveOutcomeLimit {
+			partitionValid = false
 			appendMissing("additional completed items were omitted by the runtime limit")
 			break
 		}
 		id := strings.TrimSpace(reportedItem.ObjectiveID)
 		spec, found := expected[id]
 		if !found {
+			partitionValid = false
 			appendMissing("objective outcome contained an unknown checklist ID")
 			continue
 		}
 		if _, duplicate := partitioned[id]; duplicate {
+			partitionValid = false
 			appendMissing(spec.Item + " (objective ID was reported more than once)")
 			continue
 		}
@@ -281,6 +287,7 @@ func validateObjectiveOutcome(
 				}
 			}
 			if unexpectedExternalAction {
+				partitionValid = false
 				appendMissing(item.Item + " (read-only result included a verified external-action receipt)")
 				continue
 			}
@@ -311,10 +318,17 @@ func validateObjectiveOutcome(
 			valid = false
 		}
 		if !valid {
+			partitionValid = false
 			appendMissing(item.Item + " (missing verified runtime receipt)")
 			continue
 		}
 		outcome.CompletedItems = append(outcome.CompletedItems, item)
+	}
+	for _, item := range checklist {
+		if _, found := partitioned[item.ID]; !found {
+			partitionValid = false
+			appendMissing(item.Item + " (objective ID was omitted from the outcome)")
+		}
 	}
 	unclaimedReceipts := 0
 	for receiptID := range receipts {
@@ -328,16 +342,12 @@ func validateObjectiveOutcome(
 	// represents that incomplete result, so do not add a contradictory orphan
 	// receipt diagnostic. Preserve the diagnostic for ambiguous or unexpected
 	// commits so the runtime never silently accounts for extra external actions.
-	if unclaimedReceipts > 0 && (unclaimedReceipts != 1 || missingExternalObjectives != 1) {
+	if unclaimedReceipts > 0 &&
+		(!partitionValid || unclaimedReceipts != 1 || missingExternalObjectives != 1) {
 		appendMissing(
 			"an external browser action completed, but its receipt was not claimed by a completed " +
 				"external_action objective",
 		)
-	}
-	for _, item := range checklist {
-		if _, found := partitioned[item.ID]; !found {
-			appendMissing(item.Item + " (objective ID was omitted from the outcome)")
-		}
 	}
 	switch {
 	case len(outcome.MissingItems) == 0 && len(outcome.CompletedItems) > 0:

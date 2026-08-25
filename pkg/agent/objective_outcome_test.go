@@ -329,6 +329,27 @@ func TestExtractObjectiveOutcomeKeepsAmbiguousUnclaimedCommitDiagnostic(t *testi
 	}
 }
 
+func TestExtractObjectiveOutcomeDoesNotAccountReceiptWithOmittedExternalObjective(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"blocked","completed_items":[],"missing_items":["objective_1"],` +
+		`"explanation":"The external result could not be verified."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+		{Item: "submit the first form", Kind: "external_action"},
+		{Item: "submit the second form", Kind: "external_action"},
+	})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-ambiguous", "effect": "external_commit"},
+	}}
+
+	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome == nil || len(outcome.MissingItems) != 3 ||
+		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "objective ID was omitted") ||
+		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "receipt was not claimed") {
+		t.Fatalf("ambiguous omitted external objective was hidden: %#v", outcome)
+	}
+}
+
 func TestExtractObjectiveOutcomeNeverUpgradesProducerReportedPartial(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
