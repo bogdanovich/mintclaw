@@ -239,6 +239,24 @@ func validateObjectiveOutcome(
 		missingSeen[item] = struct{}{}
 		outcome.MissingItems = append(outcome.MissingItems, item)
 	}
+	appendPriorityMissing := func(item string) {
+		item = boundedObjectiveText(item)
+		if item == "" {
+			return
+		}
+		if _, exists := missingSeen[item]; exists {
+			return
+		}
+		if len(outcome.MissingItems) < objectiveOutcomeLimit {
+			missingSeen[item] = struct{}{}
+			outcome.MissingItems = append(outcome.MissingItems, item)
+			return
+		}
+		replaced := outcome.MissingItems[len(outcome.MissingItems)-1]
+		delete(missingSeen, replaced)
+		missingSeen[item] = struct{}{}
+		outcome.MissingItems[len(outcome.MissingItems)-1] = item
+	}
 	for _, id := range reported.MissingItems {
 		id = strings.TrimSpace(id)
 		item, found := expected[id]
@@ -296,6 +314,7 @@ func validateObjectiveOutcome(
 		}
 		valid := true
 		seenReceipts := make(map[string]struct{})
+		stagedReceiptIDs := make([]string, 0, len(reportedItem.ReceiptIDs))
 		for _, receiptID := range reportedItem.ReceiptIDs {
 			receiptID = strings.TrimSpace(receiptID)
 			if _, duplicate := seenReceipts[receiptID]; duplicate {
@@ -311,7 +330,7 @@ func validateObjectiveOutcome(
 				valid = false
 				continue
 			}
-			consumedReceipts[receiptID] = struct{}{}
+			stagedReceiptIDs = append(stagedReceiptIDs, receiptID)
 			item.Receipts = append(item.Receipts, receipt)
 		}
 		if item.Kind == "external_action" && len(item.Receipts) == 0 {
@@ -321,6 +340,9 @@ func validateObjectiveOutcome(
 			partitionValid = false
 			appendMissing(item.Item + " (missing verified runtime receipt)")
 			continue
+		}
+		for _, receiptID := range stagedReceiptIDs {
+			consumedReceipts[receiptID] = struct{}{}
 		}
 		outcome.CompletedItems = append(outcome.CompletedItems, item)
 	}
@@ -344,7 +366,7 @@ func validateObjectiveOutcome(
 	// commits so the runtime never silently accounts for extra external actions.
 	if unclaimedReceipts > 0 &&
 		(!partitionValid || unclaimedReceipts != 1 || missingExternalObjectives != 1) {
-		appendMissing(
+		appendPriorityMissing(
 			"an external browser action completed, but its receipt was not claimed by a completed " +
 				"external_action objective",
 		)

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -347,6 +349,62 @@ func TestExtractObjectiveOutcomeDoesNotAccountReceiptWithOmittedExternalObjectiv
 		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "objective ID was omitted") ||
 		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "receipt was not claimed") {
 		t.Fatalf("ambiguous omitted external objective was hidden: %#v", outcome)
+	}
+}
+
+func TestExtractObjectiveOutcomeDoesNotConsumeReceiptFromRejectedCompletedItem(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":["inv-valid","inv-unknown"]}],` +
+		`"missing_items":[]}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "submit the form", Kind: "external_action",
+	}})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-valid", "effect": "external_commit"},
+	}}
+
+	_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if outcome == nil || len(outcome.CompletedItems) != 0 || len(outcome.MissingItems) != 2 ||
+		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "missing verified runtime receipt") ||
+		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "receipt was not claimed") {
+		t.Fatalf("rejected item consumed its valid receipt: %#v", outcome)
+	}
+}
+
+func TestExtractObjectiveOutcomePrioritizesOrphanReceiptAtMissingLimit(t *testing.T) {
+	specs := make([]toolshared.ObjectiveSpec, objectiveOutcomeLimit)
+	missingIDs := make([]string, objectiveOutcomeLimit)
+	for index := range objectiveOutcomeLimit {
+		specs[index] = toolshared.ObjectiveSpec{
+			Item: "external action " + strconv.Itoa(index+1), Kind: "external_action",
+		}
+		missingIDs[index] = "objective_" + strconv.Itoa(index+1)
+	}
+	reported, err := json.Marshal(reportedObjectiveOutcome{
+		Status:       string(taskresult.OutcomeBlocked),
+		MissingItems: missingIDs,
+		Explanation:  "The external results could not be verified.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checklist := normalizeObjectiveChecklist(specs)
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-orphan", "effect": "external_commit"},
+	}}
+
+	_, outcome := extractObjectiveOutcome(
+		objectiveOutcomeStart+string(reported)+objectiveOutcomeEnd,
+		audits,
+		true,
+		checklist,
+	)
+	if outcome == nil || len(outcome.MissingItems) != objectiveOutcomeLimit ||
+		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "receipt was not claimed") {
+		t.Fatalf("orphan receipt diagnostic was dropped at the missing-item limit: %#v", outcome)
 	}
 }
 
