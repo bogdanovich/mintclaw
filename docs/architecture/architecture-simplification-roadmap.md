@@ -1,6 +1,6 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through P1 and X3.54, X3.55 is in
+Status: active; implementation is merged through P1 and X3.55, X3.56 is in
 review, and the coordinated compatibility reset, deployment, and Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
@@ -155,8 +155,8 @@ reset criteria.
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
-| X3.1-X3.54 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#890 | Merged |
-| X3.55 | #891 | In review |
+| X3.1-X3.55 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#891 | Merged |
+| X3.56 | #892 | In review |
 | P1 | #881 | Merged; deployed config and profile cutover remains in R1 |
 | Z1 | Not yet applicable | Open |
 
@@ -165,7 +165,7 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 26 to #843; 27 to #845; 28 to #846; 29-37 to #848-#856; 38 to #858;
 39-42 to #859-#862; 43 to #864; 44 to #866; 45 to #868; 46 to #872;
 47 to #878; 48 to #880; 49 to #885; 50 to #886; 51 to #887; 52 to #888;
-53 to #889; 54 to #890; and 55 to #891.
+53 to #889; 54 to #890; 55 to #891; and 56 to #892.
 
 The 2026-08-24 read-only deployed audit also established these rollout facts:
 
@@ -1056,6 +1056,10 @@ Implementation sequence:
     provider-name option. Keep `NewProvider` with functional options as the
     sole constructor, retain direct option coverage, and keep the factory's
     current `SetProviderName` path instead of a second configuration API.
+56. Make image-generation provider resolution one direct current dependency.
+    Delete the unused exported resolver type and option plus the per-tool
+    callback field. When no concrete provider is injected for testing, lazily
+    call the canonical provider factory once on first execution.
 
 Exit criteria:
 
@@ -1122,7 +1126,7 @@ Implemented shape:
 
 ### R1 — Execute the coordinated first-party compatibility reset
 
-Depends on: P1 and X3.46-X3.55
+Depends on: P1 and X3.46-X3.56
 
 Deployment requires explicit user authorization.
 

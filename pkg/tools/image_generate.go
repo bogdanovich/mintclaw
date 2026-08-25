@@ -27,26 +27,15 @@ type ImageGenerateTool struct {
 	model      string
 	outputDir  string
 	provider   providers.ImageGenerationProvider
-	resolver   ImageGenerationProviderResolver
 	mediaStore media.MediaStore
 }
 
 type ImageGenerateToolOption func(*ImageGenerateTool)
 
-type ImageGenerationProviderResolver func(model string) (providers.ImageGenerationProvider, string, error)
-
 func WithImageGenerationProvider(provider providers.ImageGenerationProvider) ImageGenerateToolOption {
 	return func(t *ImageGenerateTool) {
 		if provider != nil {
 			t.provider = provider
-		}
-	}
-}
-
-func WithImageGenerationProviderResolver(resolver ImageGenerationProviderResolver) ImageGenerateToolOption {
-	return func(t *ImageGenerateTool) {
-		if resolver != nil {
-			t.resolver = resolver
 		}
 	}
 }
@@ -66,7 +55,6 @@ func NewImageGenerateTool(
 	tool := &ImageGenerateTool{
 		workspace:  workspace,
 		model:      model,
-		resolver:   providers.CreateImageGenerationProviderFromModel,
 		mediaStore: store,
 	}
 	for _, option := range options {
@@ -137,8 +125,8 @@ func (t *ImageGenerateTool) Execute(ctx context.Context, args map[string]any) *t
 	if t.mediaStore == nil {
 		return toolshared.ErrorResult("media store not configured")
 	}
-	if t.provider == nil && t.resolver != nil {
-		provider, model, err := t.resolver(t.model)
+	if t.provider == nil {
+		provider, model, err := providers.CreateImageGenerationProviderFromModel(t.model)
 		if err != nil {
 			return toolshared.ErrorResult(fmt.Sprintf("image generation provider not configured: %v", err)).
 				WithError(err)
