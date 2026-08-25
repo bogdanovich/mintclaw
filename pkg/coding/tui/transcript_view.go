@@ -143,10 +143,9 @@ func buildTranscriptView(
 	deferredAssistants := make(map[string][]frontend.TranscriptEntry)
 	latestTurnHasCompletedAnswer := false
 	for index, entry := range entries {
-		if entry.Kind == frontend.EntryAssistant {
+		if entry.Kind == frontend.EntryAssistant && entry.Complete {
 			deferredAssistants[entry.TurnID] = append(deferredAssistants[entry.TurnID], entry)
-			latestTurnHasCompletedAnswer = latestTurnHasCompletedAnswer ||
-				(entry.TurnID == latestTurnID && entry.Complete)
+			latestTurnHasCompletedAnswer = latestTurnHasCompletedAnswer || entry.TurnID == latestTurnID
 		} else {
 			display = appendTranscriptViewEntry(display, entry)
 		}

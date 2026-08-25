@@ -285,6 +285,17 @@ func TestTranscriptKeepsCompletedAssistantAfterLaterTurnWarning(t *testing.T) {
 	assertTranscriptViewIDs(t, display, wantIDs)
 }
 
+func TestTranscriptKeepsIncompleteAssistantBeforeLaterTurnError(t *testing.T) {
+	entries := []frontend.TranscriptEntry{
+		{ID: "user", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "inspect", Complete: true},
+		{ID: "assistant", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "partial answer"},
+		{ID: "error", TurnID: "turn-1", Kind: frontend.EntryError, Text: "provider failed", Complete: true},
+	}
+	display := buildTranscriptView(entries, nil, nil, nil, "", "")
+	wantIDs := []string{"user", "assistant", "error"}
+	assertTranscriptViewIDs(t, display, wantIDs)
+}
+
 func TestTranscriptKeepsRepositoryStateWithNewestLiveTurn(t *testing.T) {
 	entries := []frontend.TranscriptEntry{
 		{ID: "user-1", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "first", Complete: true},
