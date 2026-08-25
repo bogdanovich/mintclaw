@@ -293,13 +293,6 @@ func (s *StreamCoordinator) pauseToolFeedback(
 	}
 }
 
-func (s *StreamCoordinator) singleActiveScopedToolFeedbackKey(base string) (string, bool) {
-	if !s.hasToolFeedback() {
-		return "", false
-	}
-	return s.toolFeedback.singleActiveScopedKey(base)
-}
-
 func (s *StreamCoordinator) releaseToolFeedbackTerminals(keys []string) {
 	if !s.hasToolFeedback() {
 		return
