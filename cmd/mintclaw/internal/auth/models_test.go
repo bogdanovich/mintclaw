@@ -114,3 +114,9 @@ func TestConfigureOpenAIAuthAvoidsAmbiguousLoadBalancedAlias(t *testing.T) {
 		t.Fatalf("dedicated model = %+v", model)
 	}
 }
+
+func TestConfiguredDefaultModelFallsBackWithoutConfigSnapshot(t *testing.T) {
+	if got := configuredDefaultModel(nil, "gpt-next"); got != "gpt-next" {
+		t.Fatalf("configured default = %q, want gpt-next", got)
+	}
+}

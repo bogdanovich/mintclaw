@@ -68,9 +68,18 @@ func authLoginOpenAI(useDeviceCode bool, noBrowser bool) error {
 	if cred.AccountID != "" {
 		fmt.Printf("Account: %s\n", cred.AccountID)
 	}
-	fmt.Printf("Default model set to: %s\n", appCfg.Agents.Defaults.GetModelName())
+	fmt.Printf("Default model set to: %s\n", configuredDefaultModel(appCfg, model.Slug))
 
 	return nil
+}
+
+func configuredDefaultModel(cfg *config.Config, fallback string) string {
+	if cfg != nil {
+		if model := strings.TrimSpace(cfg.Agents.Defaults.GetModelName()); model != "" {
+			return model
+		}
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func authLoginGoogleAntigravity(noBrowser bool) error {
