@@ -87,7 +87,13 @@ func decodeCurrentConfigWithDefaults(data []byte, label string) (*Config, error)
 	if len(provided.ModelList) > 0 {
 		cfg.ModelList = nil
 	}
+	if provided.Agents.List != nil {
+		cfg.Agents.List = nil
+	}
 	if err := decodeCurrentConfig(data, cfg, label); err != nil {
+		return nil, err
+	}
+	if err := cfg.ValidateAgents(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
@@ -167,18 +173,6 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 	}
 	if err := cfg.Agents.Defaults.PromptMemory.Validate(); err != nil {
 		return err
-	}
-	if len(cfg.Agents.List) == 0 {
-		return errors.New("agents.list must contain at least one agent")
-	}
-	for index := range cfg.Agents.List {
-		agent := &cfg.Agents.List[index]
-		if err := agent.ToolPolicy.Validate(fmt.Sprintf("agents.list[%d].tool_policy", index)); err != nil {
-			return err
-		}
-		if err := agent.MCPServerPolicy.Validate(fmt.Sprintf("agents.list[%d].mcp_server_policy", index)); err != nil {
-			return err
-		}
 	}
 	if err := cfg.Session.Lifecycle.Validate(); err != nil {
 		return err

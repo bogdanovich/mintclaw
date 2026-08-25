@@ -293,6 +293,9 @@ func marshalConfigDocuments(cfg *Config) (configDocuments, error) {
 			CurrentVersion,
 		)
 	}
+	if err := copyCfg.ValidateAgents(); err != nil {
+		return configDocuments{}, err
+	}
 	copyCfg.Session.Dimensions = append([]string{}, cfg.Session.Dimensions...)
 	copyCfg.Channels = make(ChannelsConfig, len(cfg.Channels))
 	for name, channel := range cfg.Channels {

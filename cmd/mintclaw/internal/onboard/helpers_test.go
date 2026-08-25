@@ -39,6 +39,29 @@ func TestCopyEmbeddedToTargetUsesStructuredAgentFiles(t *testing.T) {
 	}
 }
 
+func TestCopyEmbeddedToTargetPreservesExistingAgentInstructions(t *testing.T) {
+	targetDir := t.TempDir()
+	agentPath := filepath.Join(targetDir, "AGENTS.md")
+	const instructions = "# Personal instructions\n\nKeep this content.\n"
+	if err := os.WriteFile(agentPath, []byte(instructions), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if err := copyEmbeddedToTarget(targetDir); err != nil {
+		t.Fatalf("copyEmbeddedToTarget() error = %v", err)
+	}
+	got, err := os.ReadFile(agentPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(got) != instructions {
+		t.Fatalf("AGENTS.md = %q, want existing instructions preserved", got)
+	}
+	if _, err = os.Stat(filepath.Join(targetDir, "SOUL.md")); err != nil {
+		t.Fatalf("missing template was not created: %v", err)
+	}
+}
+
 func TestSaveOnboardConfigRejectsStaleExistingSnapshot(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	repository := config.NewRepository(path)

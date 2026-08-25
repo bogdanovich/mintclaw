@@ -85,6 +85,26 @@ type AgentCapabilityPolicy struct {
 	Deny    []string               `json:"deny,omitempty"`
 }
 
+// ValidateAgents validates the current agent list and its capability policies.
+func (c *Config) ValidateAgents() error {
+	if c == nil {
+		return errors.New("config is nil")
+	}
+	if len(c.Agents.List) == 0 {
+		return errors.New("agents.list must contain at least one agent")
+	}
+	for index := range c.Agents.List {
+		agent := &c.Agents.List[index]
+		if err := agent.ToolPolicy.Validate(fmt.Sprintf("agents.list[%d].tool_policy", index)); err != nil {
+			return err
+		}
+		if err := agent.MCPServerPolicy.Validate(fmt.Sprintf("agents.list[%d].mcp_server_policy", index)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *AgentCapabilityPolicy) Validate(label string) error {
 	if p == nil {
 		return nil

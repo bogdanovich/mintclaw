@@ -702,6 +702,53 @@ func TestAgentCapabilityPolicyValidate(t *testing.T) {
 	}
 }
 
+func TestDecodeCurrentConfigExplicitAgentsDoNotInheritDefaultAgentFields(t *testing.T) {
+	raw := fmt.Sprintf(`{
+		"version": %d,
+		"agents": {
+			"list": [
+				{"id": "support"},
+				{"id": "main", "default": true}
+			]
+		}
+	}`, CurrentVersion)
+
+	var cfg Config
+	if err := DecodeCurrentConfig([]byte(raw), &cfg); err != nil {
+		t.Fatalf("DecodeCurrentConfig() error = %v", err)
+	}
+	if len(cfg.Agents.List) != 2 {
+		t.Fatalf("agents.list len = %d, want 2", len(cfg.Agents.List))
+	}
+	support := cfg.Agents.List[0]
+	if support.ID != "support" || support.Default || support.Name != "" || support.Description != "" {
+		t.Fatalf("support agent inherited default fields: %#v", support)
+	}
+	main := cfg.Agents.List[1]
+	if main.ID != "main" || !main.Default {
+		t.Fatalf("main agent = %#v", main)
+	}
+}
+
+func TestDecodeCurrentConfigRejectsInvalidAgentPolicy(t *testing.T) {
+	raw := fmt.Sprintf(`{
+		"version": %d,
+		"agents": {
+			"list": [{
+				"id": "main",
+				"default": true,
+				"tool_policy": {"default": "deny", "allow": ["["]}
+			}]
+		}
+	}`, CurrentVersion)
+
+	var cfg Config
+	err := DecodeCurrentConfig([]byte(raw), &cfg)
+	if err == nil || !strings.Contains(err.Error(), "agents.list[0].tool_policy.allow[0] is invalid") {
+		t.Fatalf("DecodeCurrentConfig() error = %v, want invalid agent policy rejection", err)
+	}
+}
+
 func TestLoadConfigRejectsExplicitEmptyAgentsList(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	raw := fmt.Sprintf(`{"version":%d,"agents":{"list":[]}}`, CurrentVersion)
@@ -2802,6 +2849,7 @@ func TestSaveConfig_MixedKeys(t *testing.T) {
 	// Pre-encrypt one key so we have a genuine enc:// value to put in the config.
 	if err := SaveConfig(cfgPath, &Config{
 		Version: CurrentVersion,
+		Agents:  AgentsConfig{List: []AgentConfig{DefaultAgentConfig()}},
 		ModelList: []*ModelConfig{
 			{ModelName: "pre", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-already-plain")},
 		},
@@ -2833,6 +2881,7 @@ func TestSaveConfig_MixedKeys(t *testing.T) {
 	}
 	cfg := &Config{
 		Version: CurrentVersion,
+		Agents:  AgentsConfig{List: []AgentConfig{DefaultAgentConfig()}},
 		ModelList: []*ModelConfig{
 			{
 				ModelName: "plain", Provider: "openai", Model: "gpt-4",
@@ -2903,6 +2952,7 @@ func TestLoadConfig_MixedKeys_NoPassphrase(t *testing.T) {
 	mustSetupSSHKey(t)
 	if err := SaveConfig(cfgPath, &Config{
 		Version: CurrentVersion,
+		Agents:  AgentsConfig{List: []AgentConfig{DefaultAgentConfig()}},
 		ModelList: []*ModelConfig{
 			{ModelName: "m", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-secret")},
 		},
@@ -3266,6 +3316,7 @@ func TestModelConfig_ExtraBodyRoundTrip(t *testing.T) {
 
 	cfg := &Config{
 		Version: CurrentVersion,
+		Agents:  AgentsConfig{List: []AgentConfig{DefaultAgentConfig()}},
 		ModelList: []*ModelConfig{
 			{
 				ModelName: "test-model", Provider: "openai", Model: "test",
@@ -3301,6 +3352,7 @@ func TestModelConfig_CustomHeadersRoundTrip(t *testing.T) {
 
 	cfg := &Config{
 		Version: CurrentVersion,
+		Agents:  AgentsConfig{List: []AgentConfig{DefaultAgentConfig()}},
 		ModelList: []*ModelConfig{
 			{
 				ModelName: "test-model", Provider: "openai", Model: "test",
@@ -3336,6 +3388,7 @@ func TestModelConfig_ToolSchemaTransformRoundTrip(t *testing.T) {
 
 	cfg := &Config{
 		Version: CurrentVersion,
+		Agents:  AgentsConfig{List: []AgentConfig{DefaultAgentConfig()}},
 		ModelList: []*ModelConfig{
 			{
 				ModelName: "test-model", Provider: "openai", Model: "test",
