@@ -13,6 +13,15 @@ type (
 	CodexProvider        = oauthprovider.CodexProvider
 )
 
+const (
+	CodexDefaultModel            = oauthprovider.CodexDefaultModel
+	CodexDefaultContextWindow    = oauthprovider.CodexDefaultContextWindow
+	CodexDefaultMaxContextWindow = oauthprovider.CodexDefaultMaxContextWindow
+	CodexModelsClientVersion     = oauthprovider.CodexModelsClientVersion
+)
+
+type CodexModelInfo = oauthprovider.CodexModelInfo
+
 func NewAntigravityProvider() *AntigravityProvider {
 	return oauthprovider.NewAntigravityProvider()
 }
@@ -43,6 +52,25 @@ func NewCodexProviderWithTokenSource(
 	token, accountID string, tokenSource func() (string, string, error),
 ) *CodexProvider {
 	return oauthprovider.NewCodexProviderWithTokenSource(token, accountID, tokenSource)
+}
+
+func BundledCodexModel(model string) (CodexModelInfo, bool) {
+	return oauthprovider.BundledCodexModel(model)
+}
+
+func DefaultCodexModelInfo() CodexModelInfo {
+	return oauthprovider.DefaultCodexModelInfo()
+}
+
+func PreferredCodexModel(models []CodexModelInfo) CodexModelInfo {
+	return oauthprovider.PreferredCodexModel(models)
+}
+
+func FetchCodexModels(
+	ctx context.Context,
+	token, accountID string,
+) ([]CodexModelInfo, error) {
+	return oauthprovider.FetchCodexModels(ctx, token, accountID)
 }
 
 // FetchAntigravityProjectID retrieves the Google Cloud project ID with a

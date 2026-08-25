@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	codexDefaultModel        = "gpt-5.3-codex"
 	codexDefaultInstructions = "You are Codex, a coding assistant."
 )
 
@@ -29,8 +28,6 @@ type CodexProvider struct {
 	tokenSource     func() (string, string, error)
 	enableWebSearch bool
 }
-
-const defaultCodexInstructions = "You are Codex, a coding assistant."
 
 func NewCodexProvider(token, accountID string) *CodexProvider {
 	opts := []option.RequestOption{
@@ -222,7 +219,7 @@ func codexToolCallFromOutputItem(item responses.ResponseOutputItemUnion) (ToolCa
 }
 
 func (p *CodexProvider) GetDefaultModel() string {
-	return codexDefaultModel
+	return CodexDefaultModel
 }
 
 func (p *CodexProvider) Capabilities() providercapabilities.ProviderCapabilities {
@@ -244,13 +241,13 @@ func (p *CodexProvider) Capabilities() providercapabilities.ProviderCapabilities
 func resolveCodexModel(model string) (string, string) {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
-		return codexDefaultModel, "empty model"
+		return CodexDefaultModel, "empty model"
 	}
 
 	if after, ok := strings.CutPrefix(m, "openai/"); ok {
 		m = after
 	} else if strings.Contains(m, "/") {
-		return codexDefaultModel, "non-openai model namespace"
+		return CodexDefaultModel, "non-openai model namespace"
 	}
 
 	unsupportedPrefixes := []string{
@@ -272,7 +269,7 @@ func resolveCodexModel(model string) (string, string) {
 	}
 	for _, prefix := range unsupportedPrefixes {
 		if strings.HasPrefix(m, prefix) {
-			return codexDefaultModel, "unsupported model prefix"
+			return CodexDefaultModel, "unsupported model prefix"
 		}
 	}
 
@@ -280,7 +277,7 @@ func resolveCodexModel(model string) (string, string) {
 		return m, ""
 	}
 
-	return codexDefaultModel, "unsupported model family"
+	return CodexDefaultModel, "unsupported model family"
 }
 
 func buildCodexParams(
@@ -303,7 +300,7 @@ func buildCodexParams(
 		params.Instructions = openai.Opt(instructions)
 	} else {
 		// ChatGPT Codex backend requires instructions to be present.
-		params.Instructions = openai.Opt(defaultCodexInstructions)
+		params.Instructions = openai.Opt(codexDefaultInstructions)
 	}
 
 	// Prompt caching: pass a stable cache key so OpenAI can bucket requests

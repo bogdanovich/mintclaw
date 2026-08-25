@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
 func TestNewModelsCommand(t *testing.T) {
@@ -28,9 +29,9 @@ func TestConfigureAuthEnablesMatchedModel(t *testing.T) {
 	}{
 		{
 			name:  "openai",
-			model: &config.ModelConfig{ModelName: "gpt", Provider: "openai", Model: "gpt-5.4"},
+			model: &config.ModelConfig{ModelName: "gpt", Provider: "openai", Model: providers.CodexDefaultModel},
 			configure: func(cfg *config.Config) {
-				configureOpenAIAuth(cfg, "oauth")
+				configureOpenAIAuth(cfg, "oauth", providers.DefaultCodexModelInfo())
 			},
 		},
 		{
@@ -57,5 +58,24 @@ func TestConfigureAuthEnablesMatchedModel(t *testing.T) {
 				t.Fatal("configured model was not enabled")
 			}
 		})
+	}
+}
+
+func TestConfigureOpenAIAuthAddsPreferredModelWithContextMetadata(t *testing.T) {
+	cfg := &config.Config{ModelList: config.SecureModelList{
+		{ModelName: "older", Provider: "openai", Model: "gpt-5.4", Enabled: true},
+	}}
+	selected := providers.CodexModelInfo{
+		Slug: "gpt-next", ContextWindow: 300_000, MaxContextWindow: 900_000,
+	}
+	configureOpenAIAuth(cfg, "oauth", selected)
+
+	if cfg.Agents.Defaults.ModelName != "gpt-next" || len(cfg.ModelList) != 2 {
+		t.Fatalf("configured defaults = %q, models = %+v", cfg.Agents.Defaults.ModelName, cfg.ModelList)
+	}
+	model := cfg.ModelList[1]
+	if model.Model != "gpt-next" || model.AuthMethod != "oauth" || !model.Enabled ||
+		model.ContextWindow != 300_000 || model.MaxContextWindow != 900_000 {
+		t.Fatalf("preferred model config = %+v", model)
 	}
 }

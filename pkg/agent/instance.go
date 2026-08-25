@@ -585,8 +585,15 @@ func buildAgentRuntimeConfig(
 	if maxTokens == 0 {
 		maxTokens = 8192
 	}
+	var selectedModel *config.ModelConfig
+	if modelConfig, err := cfg.GetModelConfig(model); err == nil {
+		selectedModel = modelConfig
+	}
 
 	contextWindow := defaults.ContextWindow
+	if contextWindow == 0 {
+		contextWindow = modelContextWindow(selectedModel)
+	}
 	if contextWindow == 0 {
 		contextWindow = maxTokens * 4
 	}
@@ -597,8 +604,8 @@ func buildAgentRuntimeConfig(
 	}
 
 	var thinkingLevelStr string
-	if mc, err := cfg.GetModelConfig(model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
+	if selectedModel != nil {
+		thinkingLevelStr = selectedModel.ThinkingLevel
 	}
 
 	summarizeMessageThreshold := defaults.SummarizeMessageThreshold
@@ -621,6 +628,28 @@ func buildAgentRuntimeConfig(
 		summarizeMessageThreshold: summarizeMessageThreshold,
 		summarizeTokenPercent:     summarizeTokenPercent,
 	}
+}
+
+func modelContextWindow(modelConfig *config.ModelConfig) int {
+	if modelConfig == nil {
+		return 0
+	}
+	if modelConfig.ContextWindow > 0 {
+		return modelConfig.ContextWindow
+	}
+	protocol, modelID := providers.ExtractProtocol(modelConfig)
+	if protocol != "openai" {
+		return 0
+	}
+	authMethod := strings.ToLower(strings.TrimSpace(modelConfig.AuthMethod))
+	if authMethod != "oauth" && authMethod != "token" {
+		return 0
+	}
+	metadata, ok := providers.BundledCodexModel(modelID)
+	if !ok {
+		return 0
+	}
+	return metadata.ContextWindow
 }
 
 func buildAgentRoutingConfig(

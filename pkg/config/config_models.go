@@ -67,6 +67,8 @@ type ModelConfig struct {
 	MaxTokensField      string               `json:"max_tokens_field,omitempty"` // Field name for max tokens (e.g., "max_completion_tokens")
 	RequestTimeout      int                  `json:"request_timeout,omitempty"`
 	ThinkingLevel       string               `json:"thinking_level,omitempty"`        // Extended thinking: off|low|medium|high|xhigh|adaptive
+	ContextWindow       int                  `json:"context_window,omitempty"`        // Provider-reported context window
+	MaxContextWindow    int                  `json:"max_context_window,omitempty"`    // Maximum supported context override
 	ToolSchemaTransform string               `json:"tool_schema_transform,omitempty"` // Optional tool schema compatibility transform (e.g. "simple")
 	Streaming           ModelStreamingConfig `json:"streaming,omitzero"`              // Opt-in for provider streaming on this model entry
 	ExtraBody           map[string]any       `json:"extra_body,omitempty"`            // Additional fields to inject into request body
@@ -141,6 +143,12 @@ func (c *ModelConfig) Validate() error {
 	// Reject consecutive slashes
 	if strings.Contains(c.Model, "//") {
 		return fmt.Errorf("model identifier must not contain //")
+	}
+	if c.ContextWindow < 0 || c.MaxContextWindow < 0 {
+		return fmt.Errorf("context windows must not be negative")
+	}
+	if c.MaxContextWindow > 0 && c.ContextWindow > c.MaxContextWindow {
+		return fmt.Errorf("context_window must not exceed max_context_window")
 	}
 	return nil
 }
