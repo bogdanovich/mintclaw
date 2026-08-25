@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -218,12 +219,19 @@ func TestBrowserOutputTransferIsAuthorityBoundChunkedAndRetryable(t *testing.T) 
 }
 
 func TestBrowserHostStreamsLargeObservationAndDiscardsCommittedSnapshot(t *testing.T) {
-	largeSnapshot := "- button \"Save\" [ref=driver_ref_1]\n" + strings.Repeat("\"", 150*1024)
+	largeSnapshot := "- button \"Save\" [ref=driver_ref_1]\n" + strings.Repeat("x", 210*1024)
+	elements := make([]browserworker.DriverElement, 0, nodes.MaxBrowserSnapshotRefs)
+	for index := 0; index < nodes.MaxBrowserSnapshotRefs; index++ {
+		elements = append(elements, browserworker.DriverElement{
+			Target: fmt.Sprintf("driver_ref_%d", index), Role: "region",
+			Name: strings.Repeat("nested semantic name ", 12),
+		})
+	}
 	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,
 		observations: []browserworker.DriverObservation{{
 			URL: "https://example.com/", Origin: "https://example.com", Snapshot: largeSnapshot,
-			Elements: []browserworker.DriverElement{{Target: "driver_ref_1", Role: "button", Name: "Save"}},
+			Elements: elements,
 		}},
 		navigationIdentities: []string{"navigation_1", "navigation_1"},
 	}})
@@ -241,7 +249,7 @@ func TestBrowserHostStreamsLargeObservationAndDiscardsCommittedSnapshot(t *testi
 	}, observed)
 	if err != nil || streamed.Output == nil || streamed.Snapshot != "" || len(streamed.Elements) != 0 ||
 		streamed.Output.Kind != nodes.BrowserOutputSnapshot ||
-		streamed.Output.Size <= uint64(protocol.MaxTransferChunkBytes) {
+		streamed.Output.Size <= uint64(nodes.MaxBrowserToolResultBytes) {
 		t.Fatalf("PrepareObservationOutput() = %#v, %v", streamed, err)
 	}
 	payload := downloadBrowserOutput(t, host, *streamed.Output, nil)

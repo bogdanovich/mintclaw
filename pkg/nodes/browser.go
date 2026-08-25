@@ -56,9 +56,15 @@ const (
 	MaxBrowserTextInputBytes     = 16 * 1024
 	// JSON can encode one accepted input byte as a six-byte Unicode escape.
 	// The fixed allowance covers the transport-only {"value": ...} wrapper.
-	MaxBrowserEphemeralInputBytes     = MaxBrowserTextInputBytes*6 + 128
-	MaxBrowserContextInputBytes       = 64*1024 + 128
-	MaxBrowserToolResultBytes         = 320 * 1024
+	MaxBrowserEphemeralInputBytes = MaxBrowserTextInputBytes*6 + 128
+	MaxBrowserContextInputBytes   = 64*1024 + 128
+	MaxBrowserToolResultBytes     = 320 * 1024
+	// A streamed semantic snapshot contains the bounded snapshot plus a private
+	// element catalog. JSON escaping can expand each accepted input byte by up
+	// to six bytes, so this transport-only ceiling must not reuse the smaller
+	// model-facing tool result budget.
+	MaxBrowserSnapshotPayloadBytes = (MaxBrowserSnapshotBytes+
+		MaxBrowserSnapshotRefs*(MaxIDLength+128+4096))*6 + 4096
 	MaxBrowserDiagnosticEntries       = 32
 	MaxBrowserDiagnosticCategoryBytes = 16 * 1024
 	MaxBrowserDiagnosticBytes         = 48 * 1024
@@ -963,7 +969,7 @@ type BrowserSnapshotPayload struct {
 }
 
 func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSnapshotPayload, error) {
-	if len(data) == 0 || len(data) > limits.ToolResultBytes {
+	if len(data) == 0 || len(data) > BrowserSnapshotPayloadLimit(limits) {
 		return BrowserSnapshotPayload{}, fmt.Errorf("%w: browser snapshot payload exceeds bounds", ErrInvalidInvocation)
 	}
 	if !utf8.Valid(data) {
@@ -1016,6 +1022,18 @@ func DecodeBrowserSnapshotPayload(data []byte, limits BrowserLimits) (BrowserSna
 		payload.Elements = append(payload.Elements, element)
 	}
 	return payload, nil
+}
+
+// BrowserSnapshotPayloadLimit bounds only the private authenticated transfer
+// representation. The reconstructed observation remains subject to the
+// independent model-facing tool result budget.
+func BrowserSnapshotPayloadLimit(limits BrowserLimits) int {
+	snapshotBytes := min(max(limits.SnapshotBytes, 0), MaxBrowserSnapshotBytes)
+	snapshotRefs := min(max(limits.SnapshotRefs, 0), MaxBrowserSnapshotRefs)
+	return min(
+		(snapshotBytes+snapshotRefs*(MaxIDLength+128+4096))*6+4096,
+		MaxBrowserSnapshotPayloadBytes,
+	)
 }
 
 type BrowserActResult struct {
@@ -1977,7 +1995,9 @@ func browserObservationSchema(limits BrowserLimits, streamedSnapshots bool) json
 		"properties": properties,
 	}
 	if streamedSnapshots {
-		properties["output"] = browserSnapshotOutputDescriptorSchema(limits.ToolResultBytes)
+		properties["output"] = browserSnapshotOutputDescriptorSchema(
+			BrowserSnapshotPayloadLimit(limits),
+		)
 		schema["oneOf"] = []any{
 			map[string]any{"not": map[string]any{"required": []string{"output"}}},
 			map[string]any{

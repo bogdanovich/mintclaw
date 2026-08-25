@@ -3,7 +3,9 @@ package nodes
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1312,6 +1314,33 @@ func TestDecodeBrowserSnapshotPayloadPreservesPresentEmptyElementStrings(t *test
 		BrowserLimits{}.Effective(),
 	)
 	if err != nil || len(decoded.Elements) != 1 || decoded.Elements[0].Role != "" || decoded.Elements[0].Name != "" {
+		t.Fatalf("DecodeBrowserSnapshotPayload() = %#v, %v", decoded, err)
+	}
+}
+
+func TestDecodeBrowserSnapshotPayloadAcceptsPrivateEnvelopeAboveToolResultBudget(t *testing.T) {
+	limits := BrowserLimits{}.Effective()
+	elements := make([]BrowserElement, 0, limits.SnapshotRefs)
+	for index := 0; index < limits.SnapshotRefs; index++ {
+		elements = append(elements, BrowserElement{
+			Ref:  fmt.Sprintf("ref_%d", index),
+			Role: "region",
+			Name: strings.Repeat("nested semantic name ", 12),
+		})
+	}
+	want := BrowserSnapshotPayload{
+		Snapshot: strings.Repeat("nested semantic snapshot\n", 9000),
+		Elements: elements,
+	}
+	payload, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) <= limits.ToolResultBytes {
+		t.Fatalf("fixture payload = %d, want above tool result budget %d", len(payload), limits.ToolResultBytes)
+	}
+	decoded, err := DecodeBrowserSnapshotPayload(payload, limits)
+	if err != nil || !reflect.DeepEqual(decoded, want) {
 		t.Fatalf("DecodeBrowserSnapshotPayload() = %#v, %v", decoded, err)
 	}
 }

@@ -1905,7 +1905,7 @@ func (host *wssBrowserHost) PrepareObservationOutput(
 	payload, err := json.Marshal(nodes.BrowserSnapshotPayload{
 		Snapshot: result.Snapshot, Elements: result.Elements,
 	})
-	if err != nil || len(payload) > host.limits[result.SessionID].ToolResultBytes {
+	if err != nil || len(payload) > nodes.BrowserSnapshotPayloadLimit(host.limits[result.SessionID]) {
 		return nodes.BrowserObservationResult{}, nodes.ErrBrowserHostDenied
 	}
 	if len(payload) <= protocol.MaxTransferChunkBytes {
@@ -1941,7 +1941,10 @@ func (host *wssBrowserHost) largeObservationLocked(
 	result nodes.BrowserObservationResult,
 ) nodes.BrowserObservationResult {
 	if host.largeSnapshots && result.Snapshot != "" {
-		result.Snapshot += "\n" + strings.Repeat("\"", 150*1024)
+		// JSON escaping makes the private transfer envelope larger than the
+		// independent model-facing result budget while the semantic snapshot
+		// itself remains within its negotiated bound.
+		result.Snapshot += "\n" + strings.Repeat("\"", 170*1024)
 	}
 	return result
 }

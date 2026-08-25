@@ -130,7 +130,7 @@ func (host *BrowserHost) PrepareObservationOutput(
 		session.agentID == request.AgentID && session.actorID == request.ActorID &&
 		session.tabID == result.TabID && session.snapshotGeneration == result.SnapshotGeneration &&
 		result.DocumentID != "" && now.Before(session.expiresAt) && now.Before(session.idleExpiresAt) &&
-		len(payload) <= session.limits.ToolResultBytes
+		len(payload) <= nodes.BrowserSnapshotPayloadLimit(session.limits)
 	profileRevision := session.profile.Revision
 	policyRevision := session.browserPolicyRevision
 	expiresAt := min(
@@ -345,7 +345,7 @@ func browserOutputLimit(limits nodes.BrowserLimits, kind string) int {
 	case nodes.BrowserOutputDownload:
 		return limits.DownloadBytes
 	case nodes.BrowserOutputSnapshot:
-		return limits.ToolResultBytes
+		return nodes.BrowserSnapshotPayloadLimit(limits)
 	default:
 		return 0
 	}

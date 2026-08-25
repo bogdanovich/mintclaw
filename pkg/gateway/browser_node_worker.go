@@ -1285,7 +1285,8 @@ func (worker *nodeBrowserWorker) receiveBrowserSnapshot(
 		output.SnapshotID != "" || output.CaptureTarget != "" || output.ElementRef != "" ||
 		output.Filename != "browser-snapshot.json" || output.ContentType != "application/json" ||
 		output.Size <= uint64(protocol.MaxTransferChunkBytes) ||
-		output.Size > uint64(worker.limits.ToolResultBytes) || output.ExpiresAt <= time.Now().Unix() ||
+		output.Size > uint64(nodes.BrowserSnapshotPayloadLimit(browserNodeLimits(worker.limits))) ||
+		output.ExpiresAt <= time.Now().Unix() ||
 		result.Snapshot != "" || len(result.Elements) != 0 {
 		return nodes.BrowserObservationResult{}, false, browser.ErrDriverIncompatible
 	}
@@ -1344,7 +1345,8 @@ func (worker *nodeBrowserWorker) receiveBrowserSnapshot(
 		case protocol.TransferFrameAccept:
 			continue
 		case protocol.TransferFrameChunk:
-			if buffer.Len()+len(response.Payload) > worker.limits.ToolResultBytes {
+			if buffer.Len()+len(response.Payload) >
+				nodes.BrowserSnapshotPayloadLimit(browserNodeLimits(worker.limits)) {
 				return nodes.BrowserObservationResult{}, true, browser.ErrDriverIncompatible
 			}
 			_, _ = buffer.Write(response.Payload)
