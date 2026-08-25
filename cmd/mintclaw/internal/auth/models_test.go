@@ -79,3 +79,38 @@ func TestConfigureOpenAIAuthAddsPreferredModelWithContextMetadata(t *testing.T) 
 		t.Fatalf("preferred model config = %+v", model)
 	}
 }
+
+func TestConfigureOpenAIAuthPreservesNamespacedModelAlias(t *testing.T) {
+	model := &config.ModelConfig{
+		ModelName: "fast", Provider: "openai", Model: "openai/gpt-next", Enabled: true,
+	}
+	cfg := &config.Config{ModelList: config.SecureModelList{model}}
+	selected := providers.CodexModelInfo{Slug: "gpt-next", ContextWindow: 300_000}
+
+	configureOpenAIAuth(cfg, "oauth", selected)
+
+	if len(cfg.ModelList) != 1 || cfg.Agents.Defaults.ModelName != "fast" {
+		t.Fatalf("default = %q, models = %+v", cfg.Agents.Defaults.ModelName, cfg.ModelList)
+	}
+	if model.AuthMethod != "oauth" || model.ContextWindow != 300_000 {
+		t.Fatalf("namespaced model = %+v", model)
+	}
+}
+
+func TestConfigureOpenAIAuthAvoidsAmbiguousLoadBalancedAlias(t *testing.T) {
+	cfg := &config.Config{ModelList: config.SecureModelList{
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-old", Enabled: true},
+		{ModelName: "balanced", Provider: "openai", Model: "gpt-next", Enabled: true},
+	}}
+	selected := providers.CodexModelInfo{Slug: "gpt-next", ContextWindow: 300_000}
+
+	configureOpenAIAuth(cfg, "oauth", selected)
+
+	if cfg.Agents.Defaults.ModelName != "gpt-next" || len(cfg.ModelList) != 3 {
+		t.Fatalf("default = %q, models = %+v", cfg.Agents.Defaults.ModelName, cfg.ModelList)
+	}
+	model := cfg.ModelList[2]
+	if model.ModelName != "gpt-next" || model.Model != "gpt-next" || model.AuthMethod != "oauth" {
+		t.Fatalf("dedicated model = %+v", model)
+	}
+}

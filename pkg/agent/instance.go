@@ -341,7 +341,7 @@ func newAgentInstance(
 		cfg,
 		defaults,
 		workspace,
-		model,
+		selectedModel,
 		fallbacks,
 		identity.agentID,
 		providerOwnership,
@@ -650,13 +650,14 @@ func modelContextWindow(modelConfig *config.ModelConfig) int {
 func buildAgentRoutingConfig(
 	cfg *config.Config,
 	defaults *config.AgentDefaults,
-	workspace, model string,
+	workspace string,
+	selectedModel *config.ModelConfig,
 	fallbacks []string,
 	agentID string,
 	providerOwnership *providerOwnership,
 ) agentRoutingConfig {
 	routingCfg := agentRoutingConfig{
-		candidates:         resolveModelCandidates(cfg, model, fallbacks),
+		candidates:         resolveModelCandidatesFromSelectedPrimary(cfg, selectedModel, fallbacks),
 		candidateProviders: make(map[string]providers.LLMProvider),
 	}
 	populateCandidateProvidersFromNamesTracked(
@@ -715,6 +716,27 @@ func buildAgentRoutingConfig(
 		providerOwnership,
 	)
 	return routingCfg
+}
+
+func resolveModelCandidatesFromSelectedPrimary(
+	cfg *config.Config,
+	selectedModel *config.ModelConfig,
+	fallbacks []string,
+) []providers.FallbackCandidate {
+	candidates := make([]providers.FallbackCandidate, 0, 1+len(fallbacks))
+	seen := make(map[string]bool, 1+len(fallbacks))
+	if primary, ok := candidateFromModelConfig(selectedModel); ok {
+		candidates = append(candidates, primary)
+		seen[primary.StableKey()] = true
+	}
+	for _, fallback := range resolveModelCandidates(cfg, "", fallbacks) {
+		if seen[fallback.StableKey()] {
+			continue
+		}
+		candidates = append(candidates, fallback)
+		seen[fallback.StableKey()] = true
+	}
+	return candidates
 }
 
 // populateCandidateProvidersFromNames resolves each exact configured model_name
@@ -799,10 +821,10 @@ func resolvePrimaryProviderForAgent(
 				"model":    model,
 				"error":    err.Error(),
 			})
-		return fallback, nil
+		return fallback, &clone
 	}
 	if resolvedProvider == nil {
-		return fallback, nil
+		return fallback, &clone
 	}
 	providerOwnership.trackCreated(resolvedProvider)
 	return resolvedProvider, &clone

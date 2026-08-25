@@ -105,4 +105,16 @@ func TestRuntimeConfigBindsContextWindowToLoadBalancedProviderSelection(t *testi
 			selected.Model,
 		)
 	}
+	routingCfg := buildAgentRoutingConfig(
+		cfg,
+		&cfg.Agents.Defaults,
+		workspace,
+		selected,
+		nil,
+		"main",
+		newProviderOwnership(provider),
+	)
+	if len(routingCfg.candidates) != 1 || routingCfg.candidates[0].Model != selected.Model {
+		t.Fatalf("primary candidates = %+v, selected model = %q", routingCfg.candidates, selected.Model)
+	}
 }
