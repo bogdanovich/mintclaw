@@ -584,6 +584,112 @@ func TestBrokerSweepPrunesOnlyExpiredTerminalInvocations(t *testing.T) {
 	}
 }
 
+func TestBrokerSweepPrunesTerminalSessionsAfterRetention(t *testing.T) {
+	root := admittedBrowserConfig()
+	root.Tools.Browser.Limits.RetentionSecs = 5
+	store := NewMemoryStore()
+	broker := lifecycleTestBroker(t, root, store, &fakeWorkerFactory{})
+	now := time.Unix(4_000, 0).UTC()
+	broker.now = func() time.Time { return now }
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := preparedInvocation(session, "invocation_session_retention")
+	if err = store.CreateInvocation(context.Background(), invocation); err != nil {
+		t.Fatal(err)
+	}
+	invocation.State = InvocationCanceled
+	invocation.Revision++
+	invocation.UpdatedAt = invocation.CreatedAt + 1
+	invocation.CompletedAt = invocation.UpdatedAt
+	invocation.SafeFailure = "canceled"
+	if err = store.UpdateInvocation(context.Background(), 1, invocation); err != nil {
+		t.Fatal(err)
+	}
+	session, err = broker.Close(context.Background(), owner, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now = time.Unix(0, session.UpdatedAt).Add(4 * time.Second)
+	if err = broker.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.GetSession(context.Background(), session.ID); err != nil {
+		t.Fatalf("GetSession() before retention error = %v", err)
+	}
+
+	now = time.Unix(0, session.UpdatedAt).Add(6 * time.Second)
+	if err = broker.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.GetInvocation(context.Background(), invocation.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetInvocation() after retention error = %v, want ErrNotFound", err)
+	}
+	if _, err = store.GetSession(context.Background(), session.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetSession() after retention error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestBrokerSweepRecoversFileStoreCapacityFromRetainedTerminalSession(t *testing.T) {
+	root := admittedBrowserConfig()
+	root.Tools.Browser.Limits.RetentionSecs = 5
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewFileStore(filepath.Join(directory, "browser.json"), 2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	broker := lifecycleTestBroker(t, root, store, &fakeWorkerFactory{})
+	now := time.Unix(5_000, 0).UTC()
+	broker.now = func() time.Time { return now }
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := preparedInvocation(session, "invocation_capacity_retention")
+	if err = store.CreateInvocation(context.Background(), invocation); err != nil {
+		t.Fatal(err)
+	}
+	invocation.State = InvocationCanceled
+	invocation.Revision++
+	invocation.UpdatedAt = invocation.CreatedAt + 1
+	invocation.CompletedAt = invocation.UpdatedAt
+	invocation.SafeFailure = "canceled"
+	if err = store.UpdateInvocation(context.Background(), 1, invocation); err != nil {
+		t.Fatal(err)
+	}
+	session, err = broker.Close(context.Background(), owner, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	}); !errors.Is(err, ErrStoreFull) {
+		t.Fatalf("Open() at capacity error = %v, want ErrStoreFull", err)
+	}
+
+	now = time.Unix(0, session.UpdatedAt).Add(6 * time.Second)
+	if err = broker.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	}); err != nil {
+		t.Fatalf("Open() after retention sweep error = %v", err)
+	}
+}
+
 func TestBrokerPolicyChangeInvalidatesSession(t *testing.T) {
 	factory := &fakeWorkerFactory{}
 	broker := lifecycleTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)

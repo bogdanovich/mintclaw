@@ -25,6 +25,7 @@ type Store interface {
 	UpdateInvocation(context.Context, uint64, Invocation) error
 	PruneInvocations(context.Context, int64) error
 	PrunePreparedActions(context.Context, int64) error
+	PruneSessions(context.Context, int64) error
 }
 
 type MemoryStore struct {
@@ -325,6 +326,36 @@ func (store *MemoryStore) PrunePreparedActions(_ context.Context, expiredBefore 
 		}
 	}
 	return nil
+}
+
+func (store *MemoryStore) PruneSessions(_ context.Context, terminalBefore int64) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for id, session := range store.sessions {
+		if session.State.Terminal() && session.UpdatedAt > 0 && session.UpdatedAt < terminalBefore &&
+			!sessionReferenced(store.prepared, store.invocations, id) {
+			delete(store.sessions, id)
+		}
+	}
+	return nil
+}
+
+func sessionReferenced(
+	prepared map[string]PreparedAction,
+	invocations map[string]Invocation,
+	sessionID string,
+) bool {
+	for _, action := range prepared {
+		if action.SessionID == sessionID {
+			return true
+		}
+	}
+	for _, invocation := range invocations {
+		if invocation.SessionID == sessionID {
+			return true
+		}
+	}
+	return false
 }
 
 func validatePreparationPair(prepared PreparedAction, invocation Invocation) error {

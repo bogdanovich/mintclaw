@@ -1049,6 +1049,9 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 	if err = broker.store.PrunePreparedActions(ctx, now.Add(-retention).UnixNano()); err != nil {
 		sweepErr = errors.Join(sweepErr, err)
 	}
+	if err = broker.store.PruneSessions(ctx, now.Add(-retention).UnixNano()); err != nil {
+		sweepErr = errors.Join(sweepErr, err)
+	}
 	return sweepErr
 }
 
