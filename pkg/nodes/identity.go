@@ -170,19 +170,6 @@ func NewIdentityProof(
 	return proof, nil
 }
 
-// Verify preserves the legacy Ed25519 API. Algorithm-agile admission uses
-// VerifyIdentity.
-func (proof IdentityProof) Verify() (ed25519.PublicKey, error) {
-	identity, err := proof.VerifyIdentity()
-	if err != nil {
-		return nil, err
-	}
-	if identity.Algorithm != KeyAlgorithmEd25519 {
-		return nil, fmt.Errorf("%w: identity is not Ed25519", ErrInvalidIdentityProof)
-	}
-	return ed25519.PublicKey(identity.Bytes), nil
-}
-
 // VerifyIdentity verifies either admitted node-authentication algorithm.
 func (proof IdentityProof) VerifyIdentity() (IdentityPublicKey, error) {
 	if err := proof.validateClaims(); err != nil {
