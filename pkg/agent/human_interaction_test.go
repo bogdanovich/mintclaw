@@ -2147,7 +2147,7 @@ func TestProjectedInteractionCallbackPersistsFinalReplyTarget(t *testing.T) {
 	}
 }
 
-func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *testing.T) {
+func TestParentOnlyTaskApprovalDeliversOnlyParentResult(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
@@ -2214,14 +2214,22 @@ func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *te
 	}
 
 	select {
-	case acknowledgement := <-manager.sent:
-		if acknowledgement.Content == "raw child final" ||
-			acknowledgement.ReplyToMessageID != "typed-fallback-answer" ||
-			!bus.OutboundMetadataFromMessage(acknowledgement).RemovesInteractionControls() {
-			t.Fatalf("approval control acknowledgement = %#v", acknowledgement)
+	case outbound := <-manager.sent:
+		metadata := bus.OutboundMetadataFromMessage(outbound)
+		if strings.TrimSpace(outbound.Content) == "" ||
+			outbound.Content == "raw child final" ||
+			outbound.Content == "Response recorded." ||
+			metadata.OutboundKind != bus.OutboundKindFinal ||
+			metadata.MessageKind != bus.OutboundMessageKindFinalReply {
+			t.Fatalf("parent approval completion = %#v", outbound)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("parent-only approval did not remove Telegram controls")
+		t.Fatal("parent-only approval completion was not delivered")
+	}
+	select {
+	case extra := <-manager.sent:
+		t.Fatalf("parent-only approval delivered an extra message: %#v", extra)
+	default:
 	}
 	task, _ := tasks.Get("approval-parent")
 	if task.Status != taskregistry.StatusSucceeded ||
@@ -2229,7 +2237,7 @@ func TestParentOnlyTaskApprovalRemovesTelegramControlsWithoutLeakingResult(t *te
 		t.Fatalf("parent-only approval task = %#v", task)
 	}
 	resolved, _ := registry.Get(record.ID)
-	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) == 0 {
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) != 1 {
 		t.Fatalf("parent-only approval interaction = %#v", resolved)
 	}
 	select {

@@ -2100,7 +2100,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}
 	deliveryCtx := al.withInteractionFinalTransaction(ctx, registry, workspace, record)
 	if mode == toolshared.AsyncDeliveryParentOnly &&
-		(record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion) &&
+		record.Kind == interactions.KindQuestion &&
 		strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
 		if err := al.deliverInteractionControlsRemoved(deliveryCtx, workspace, record, inbound); err != nil {
 			return err
