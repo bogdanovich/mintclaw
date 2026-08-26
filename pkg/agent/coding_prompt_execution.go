@@ -1,10 +1,25 @@
 package agent
 
 import (
+	"context"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+func codingMessagesForProviderCall(
+	ctx context.Context,
+	ts *turnState,
+	messages []providers.Message,
+	candidates []providers.FallbackCandidate,
+	modelFallback string,
+	providerFallback string,
+) []providers.Message {
+	if ts != nil && ts.agent != nil && ts.agent.ContextBuilder != nil {
+		ts.agent.ContextBuilder.refreshCodingWorkspace(ctx)
+	}
+	return codingMessagesForCandidate(ts, messages, candidates, modelFallback, providerFallback)
+}
 
 func codingMessagesForCandidate(
 	ts *turnState,

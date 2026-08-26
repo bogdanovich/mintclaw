@@ -1,15 +1,66 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+type workspaceRetryProvider struct {
+	mu    sync.Mutex
+	calls [][]providers.Message
+}
+
+func (provider *workspaceRetryProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	provider.calls = append(provider.calls, cloneProviderMessages(messages))
+	if len(provider.calls) == 1 {
+		return nil, errors.New("status 429: retry workspace snapshot")
+	}
+	return &providers.LLMResponse{Content: "done", FinishReason: "stop"}, nil
+}
+
+func (provider *workspaceRetryProvider) GetDefaultModel() string { return "coding-workspace-model" }
+
+func (provider *workspaceRetryProvider) Calls() [][]providers.Message {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	calls := make([][]providers.Message, len(provider.calls))
+	for index := range provider.calls {
+		calls[index] = cloneProviderMessages(provider.calls[index])
+	}
+	return calls
+}
+
+type workspaceMutationRetrySleeper struct {
+	mutate func()
+}
+
+func (sleeper workspaceMutationRetrySleeper) Sleep(ctx context.Context, _ time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	sleeper.mutate()
+	return nil
+}
 
 func TestCodingPromptReanchorsCompactedSummaryToFreshWorkspace(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
@@ -112,6 +163,79 @@ func TestCodingPromptSurfacesBoundedWorkspaceCaptureFailure(t *testing.T) {
 			!strings.Contains(snapshot, "Snapshot warning:") &&
 			!strings.Contains(snapshot, "Snapshot status: prompt truncated")) {
 		t.Fatalf("bounded failed snapshot = %#v", runtimePart)
+	}
+}
+
+func TestCodingProviderRetryRefreshesWorkspaceSnapshot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is unavailable")
+	}
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCodingWorkspaceTestFile(t, filepath.Join(project, "tracked.txt"), "baseline\n")
+	runCodingWorkspaceGit(t, project, "init", "-b", "main")
+	runCodingWorkspaceGit(t, project, "config", "user.email", "mintclaw-tests@example.invalid")
+	runCodingWorkspaceGit(t, project, "config", "user.name", "MintClaw Tests")
+	runCodingWorkspaceGit(t, project, "add", "tracked.txt")
+	runCodingWorkspaceGit(t, project, "commit", "-m", "initial")
+
+	layout, err := NewCodingRuntimeLayout(
+		"thread-retry-reanchor",
+		project,
+		filepath.Join(root, "state"),
+		[]string{project},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &workspaceRetryProvider{}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.Provider = "test-provider"
+	cfg.Agents.Defaults.ModelName = "coding-workspace-model"
+	cfg.Agents.Defaults.MaxLLMRetries = 1
+	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
+	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), provider, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+	runner := loop.turns.currentRunner()
+	if runner == nil || runner.pipeline == nil {
+		t.Fatal("coding turn runner is unavailable")
+	}
+	runner.pipeline.retrySleeper = workspaceMutationRetrySleeper{mutate: func() {
+		runCodingWorkspaceGit(t, project, "switch", "-c", "changed-during-retry")
+		writeCodingWorkspaceTestFile(t, filepath.Join(project, "retry.txt"), "external retry change\n")
+	}}
+
+	response, err := loop.ProcessDirect(t.Context(), "inspect", "coding:thread-retry-reanchor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response != "done" {
+		t.Fatalf("response = %q, want done", response)
+	}
+	calls := provider.Calls()
+	if len(calls) != 2 || len(calls[0]) == 0 || len(calls[1]) == 0 {
+		t.Fatalf("provider calls = %#v, want two populated attempts", calls)
+	}
+	firstSystem := calls[0][0].Content
+	secondSystem := calls[1][0].Content
+	if !strings.Contains(firstSystem, "Branch: main") || !strings.Contains(firstSystem, "Status: clean") {
+		t.Fatalf("first provider attempt workspace = %q", firstSystem)
+	}
+	for _, want := range []string{"Branch: changed-during-retry", "Status: dirty", `?? "retry.txt"`} {
+		if !strings.Contains(secondSystem, want) {
+			t.Fatalf("retried provider attempt missing %q: %s", want, secondSystem)
+		}
 	}
 }
 

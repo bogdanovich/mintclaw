@@ -18,6 +18,9 @@ Personal-agent prompt ordering and summary wording are unchanged.
 
 - Coding message assembly refreshes the workspace observer before composing
   the provider request, including the first request after resume.
+- Every actual coding provider invocation refreshes and re-renders the live
+  block, including transient retries, fallback candidates, and a streaming
+  attempt that falls back to a non-streaming call.
 - The compacted summary is labeled as model-generated historical context, not
   live repository state.
 - The summary and runtime snapshot remain separate structured system parts

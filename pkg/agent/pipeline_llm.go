@@ -197,6 +197,14 @@ func (p *Pipeline) invokeLLMWithRetry(
 	var err error
 	maxRetries, backoffSecs := p.llmRetrySettings()
 	for retry := 0; retry <= maxRetries; retry++ {
+		llm.callMessages = codingMessagesForProviderCall(
+			turnCtx,
+			ts,
+			llm.callMessages,
+			exec.model.activeCandidates,
+			llm.llmModel,
+			primaryCandidateProvider(exec.model.activeCandidates),
+		)
 		llm.response, err = callLLM(llm.callMessages, llm.providerToolDefs)
 		if err == nil {
 			break
