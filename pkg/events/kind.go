@@ -21,6 +21,8 @@ const (
 	KindAgentContextCompress Kind = "agent.context.compress"
 	// KindAgentContextCompressStart begins one context compaction attempt.
 	KindAgentContextCompressStart Kind = "agent.context.compress_start"
+	// KindAgentContextCompressProgress reports useful work within one compaction attempt.
+	KindAgentContextCompressProgress Kind = "agent.context.compress_progress"
 	// KindAgentContextCompressEnd completes one context compaction attempt.
 	KindAgentContextCompressEnd Kind = "agent.context.compress_end"
 	// KindAgentContextSnapshot captures a bounded final context identity.
@@ -151,6 +153,7 @@ var knownKinds = []Kind{
 	KindAgentLLMFallbackAttempt,
 	KindAgentContextCompress,
 	KindAgentContextCompressStart,
+	KindAgentContextCompressProgress,
 	KindAgentContextCompressEnd,
 	KindAgentContextSnapshot,
 	KindAgentWorkspaceSnapshot,

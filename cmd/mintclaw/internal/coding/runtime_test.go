@@ -485,6 +485,17 @@ func TestNativeControllerDoesNotReusePriorOutcomeAfterPreTurnFailure(t *testing.
 	}
 }
 
+func TestCodingDirectTurnOptionsEnableBackgroundCompactionForPersistentRuntime(t *testing.T) {
+	persistent := codingDirectTurnOptions(true, nil)
+	if persistent.SuppressBackgroundCompaction || !persistent.EnableStreaming {
+		t.Fatalf("persistent coding options = %+v", persistent)
+	}
+	shortLived := codingDirectTurnOptions(false, nil)
+	if !shortLived.SuppressBackgroundCompaction || shortLived.EnableStreaming {
+		t.Fatalf("short-lived coding options = %+v", shortLived)
+	}
+}
+
 func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {

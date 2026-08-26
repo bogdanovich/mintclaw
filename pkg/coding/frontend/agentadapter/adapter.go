@@ -176,21 +176,25 @@ func (a *Adapter) project(event runtimeevents.Event) {
 	case runtimeevents.KindAgentContextCompressStart:
 		payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
 		if ok {
-			background := backgroundCompaction(turnID, payload.Reason)
-			a.projector.CompactionStarted(turnID, safeToken(string(payload.Reason)), background)
+			a.projectCompaction(turnID, payload, frontend.CompactionRunning)
+		}
+	case runtimeevents.KindAgentContextCompressProgress:
+		payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
+		if ok {
+			a.projectCompaction(turnID, payload, frontend.CompactionProgress)
 		}
 	case runtimeevents.KindAgentContextCompressEnd:
 		payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
 		if ok {
-			background := backgroundCompaction(turnID, payload.Reason)
-			reason := safeToken(string(payload.Reason))
 			switch payload.Status {
 			case agent.ContextCompressLifecycleCompleted:
-				a.projector.CompactionCompleted(turnID, reason, payload.TokensSaved, false, background)
-			case agent.ContextCompressLifecycleNoop:
-				a.projector.CompactionCompleted(turnID, reason, 0, true, background)
+				a.projectCompaction(turnID, payload, frontend.CompactionCompleted)
+			case agent.ContextCompressLifecycleNoProgress:
+				a.projectCompaction(turnID, payload, frontend.CompactionNoProgress)
+			case agent.ContextCompressLifecycleInterrupted:
+				a.projectCompaction(turnID, payload, frontend.CompactionInterrupted)
 			case agent.ContextCompressLifecycleFailed:
-				a.projector.CompactionFailed(turnID, reason, background)
+				a.projectCompaction(turnID, payload, frontend.CompactionFailed)
 			}
 		}
 	case runtimeevents.KindAgentWorkspaceSnapshot:
@@ -212,6 +216,24 @@ func (a *Adapter) project(event runtimeevents.Event) {
 			a.projector.TurnFailed(turnID, "agent error")
 		}
 	}
+}
+
+func (a *Adapter) projectCompaction(
+	turnID string,
+	payload agent.ContextCompressLifecyclePayload,
+	status frontend.CompactionStatus,
+) {
+	a.projector.CompactionUpdate(frontend.CompactionState{
+		TurnID:             turnID,
+		AttemptID:          safeToken(payload.AttemptID),
+		ThreadID:           safeToken(payload.ThreadID),
+		TranscriptRevision: payload.TranscriptRevision,
+		TranscriptCount:    payload.TranscriptCount,
+		Reason:             safeToken(string(payload.Reason)),
+		Status:             status,
+		TokensSaved:        payload.TokensSaved,
+		Background:         backgroundCompaction(turnID, payload.Reason),
+	})
 }
 
 func projectWriteAudit(audit []toolshared.WriteAuditEntry) []frontend.WriteAudit {
@@ -289,7 +311,8 @@ func backgroundCompaction(turnID string, reason agent.ContextCompressReason) boo
 	if reason == agent.ContextCompressReasonManual {
 		return false
 	}
-	return strings.TrimSpace(turnID) == "" || reason == agent.ContextCompressReasonSummarize
+	return strings.TrimSpace(turnID) == "" || reason == agent.ContextCompressReasonProactive ||
+		reason == agent.ContextCompressReasonSummarize
 }
 
 func (a *Adapter) projectTurnEnd(turnID string, value any) {

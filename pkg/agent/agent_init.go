@@ -73,11 +73,11 @@ func newAgentLoopWithRegistry(
 		interactions:      newInteractionCoordinator(config.GetHome()),
 		startupResult:     make(chan error, 1),
 	}
-	al.compactionRunner = &backgroundCompactionRunner{
-		contextManager: func() ContextManager {
+	al.compactionRunner = newBackgroundCompactionRunner(
+		func() ContextManager {
 			return al.contextManager
 		},
-	}
+	)
 	for _, opt := range opts {
 		if opt != nil {
 			opt(al)

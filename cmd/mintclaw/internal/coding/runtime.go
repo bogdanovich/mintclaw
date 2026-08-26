@@ -227,11 +227,7 @@ func (r *nativeCodingRuntime) runTurn(
 		r.metadata.SessionKey,
 		"coding",
 		r.metadata.ThreadID,
-		agent.DirectTurnOptions{
-			SuppressBackgroundCompaction: true,
-			EnableStreaming:              r.streaming,
-			OnTurnReady:                  onReady,
-		},
+		codingDirectTurnOptions(r.streaming, onReady),
 	)
 	after, historyErr := r.readTurnHistory(
 		context.WithoutCancel(ctx),
@@ -268,6 +264,14 @@ func (r *nativeCodingRuntime) runTurn(
 		}
 	}
 	return outcome, turnErr
+}
+
+func codingDirectTurnOptions(streaming bool, onReady func()) agent.DirectTurnOptions {
+	return agent.DirectTurnOptions{
+		SuppressBackgroundCompaction: !streaming,
+		EnableStreaming:              streaming,
+		OnTurnReady:                  onReady,
+	}
 }
 
 func (r *nativeCodingRuntime) Interrupt(_ context.Context) error {

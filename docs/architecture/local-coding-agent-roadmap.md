@@ -1485,6 +1485,9 @@ Done when:
 
 #### P5.3 — Compaction lifecycle and ownership
 
+Implemented contract:
+[`local-coding-agent-p5-compaction-lifecycle.md`](local-coding-agent-p5-compaction-lifecycle.md)
+
 Dependencies: P3.1, P5.1
 
 Scope:

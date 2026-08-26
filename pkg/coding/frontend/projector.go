@@ -420,7 +420,7 @@ func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) {
 }
 
 func (p *Projector) CompactionStarted(turnID, reason string, background bool) {
-	p.compaction(
+	p.CompactionUpdate(
 		CompactionState{
 			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionRunning, Background: background,
 		},
@@ -434,9 +434,9 @@ func (p *Projector) CompactionCompleted(
 ) {
 	status := CompactionCompleted
 	if noProgress {
-		status = CompactionNoop
+		status = CompactionNoProgress
 	}
-	p.compaction(
+	p.CompactionUpdate(
 		CompactionState{
 			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: status,
 			TokensSaved: max(0, tokensSaved), Background: background,
@@ -445,11 +445,16 @@ func (p *Projector) CompactionCompleted(
 }
 
 func (p *Projector) CompactionFailed(turnID, reason string, background bool) {
-	p.compaction(
+	p.CompactionUpdate(
 		CompactionState{
 			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionFailed, Background: background,
 		},
 	)
+}
+
+// CompactionUpdate projects one correlated compaction lifecycle observation.
+func (p *Projector) CompactionUpdate(compaction CompactionState) {
+	p.compaction(compaction)
 }
 
 func (p *Projector) compaction(compaction CompactionState) {
@@ -470,7 +475,9 @@ func (p *Projector) compaction(compaction CompactionState) {
 			p.foregroundCompactionActive = true
 			state.Activity = ActivityCompacting
 			state.Status = "compacting context"
-		case CompactionNoop:
+		case CompactionProgress:
+			return
+		case CompactionNoProgress:
 			activity, ok := p.releaseCompactionActivity(state.Activity, compaction.TurnID)
 			if !ok {
 				return
@@ -491,6 +498,13 @@ func (p *Projector) compaction(compaction CompactionState) {
 			}
 			state.Activity = activity
 			state.Status = "context compaction failed"
+		case CompactionInterrupted:
+			activity, ok := p.releaseCompactionActivity(state.Activity, compaction.TurnID)
+			if !ok {
+				return
+			}
+			state.Activity = activity
+			state.Status = "context compaction interrupted"
 		}
 	})
 }

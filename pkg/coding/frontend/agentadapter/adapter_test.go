@@ -55,9 +55,15 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 		}},
 	})
 	publish(runtimeevents.KindAgentContextCompressStart, agent.ContextCompressLifecyclePayload{
+		AttemptID: "attempt-1", ThreadID: "thread-1", TranscriptRevision: 9, TranscriptCount: 14,
 		Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleStarted,
 	})
+	publish(runtimeevents.KindAgentContextCompressProgress, agent.ContextCompressLifecyclePayload{
+		AttemptID: "attempt-1", ThreadID: "thread-1", TranscriptRevision: 9, TranscriptCount: 14,
+		Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleProgress, TokensSaved: 200,
+	})
 	publish(runtimeevents.KindAgentContextCompressEnd, agent.ContextCompressLifecyclePayload{
+		AttemptID: "attempt-1", ThreadID: "thread-1", TranscriptRevision: 9, TranscriptCount: 14,
 		Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleCompleted, TokensSaved: 400,
 	})
 	publish(runtimeevents.KindAgentTurnEnd, agent.TurnEndPayload{
@@ -87,6 +93,11 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	if len(snapshot.ChangedFiles) != 1 || snapshot.ChangedFiles[0].Path != "main.go" ||
 		snapshot.ChangedFiles[0].CallID != "call-1" {
 		t.Fatalf("verified changed files = %+v", snapshot.ChangedFiles)
+	}
+	if snapshot.LastCompaction == nil || snapshot.LastCompaction.AttemptID != "attempt-1" ||
+		snapshot.LastCompaction.ThreadID != "thread-1" || snapshot.LastCompaction.TranscriptRevision != 9 ||
+		snapshot.LastCompaction.TranscriptCount != 14 {
+		t.Fatalf("compaction correlation = %+v", snapshot.LastCompaction)
 	}
 	if strings.Contains(snapshot.Tools[0].Arguments, "secret command") ||
 		snapshot.Tools[0].Arguments != "fields: command, timeout" {
@@ -302,6 +313,15 @@ func TestAdapterProjectsCorrelatedForegroundCompactionFailure(t *testing.T) {
 	if snapshot.Activity != frontend.ActivityRunning || snapshot.LastCompaction == nil ||
 		snapshot.LastCompaction.Status != frontend.CompactionFailed || snapshot.Status != "context compaction failed" {
 		t.Fatalf("failed compaction snapshot = %+v", snapshot)
+	}
+}
+
+func TestBackgroundCompactionClassification(t *testing.T) {
+	if !backgroundCompaction("turn-1", agent.ContextCompressReasonProactive) ||
+		!backgroundCompaction("turn-1", agent.ContextCompressReasonSummarize) ||
+		backgroundCompaction("turn-1", agent.ContextCompressReasonRetry) ||
+		backgroundCompaction("", agent.ContextCompressReasonManual) {
+		t.Fatal("compaction trigger ownership was classified incorrectly")
 	}
 }
 

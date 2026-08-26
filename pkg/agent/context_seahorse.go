@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
@@ -279,15 +281,31 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 }
 
 // Compact compresses conversation history via seahorse summarization.
-func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactRequest) error {
+func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactRequest) (compactErr error) {
 	if req == nil {
 		return nil
 	}
+	lifecycle := ContextCompressLifecyclePayload{
+		AttemptID: uuid.NewString(),
+		Reason:    req.Reason,
+		Status:    ContextCompressLifecycleStarted,
+	}
+	if req.Agent != nil {
+		lifecycle.ThreadID = req.Agent.CodingLayout.ThreadID()
+	}
 	status := ContextCompressLifecycleFailed
 	tokensSaved := 0
-	m.emitCompactLifecycleEvent(req, ContextCompressLifecycleStarted, 0)
+	started := false
 	defer func() {
-		m.emitCompactLifecycleEvent(req, status, tokensSaved)
+		if !started {
+			m.emitCompactLifecycleEvent(req, lifecycle)
+		}
+		if errors.Is(compactErr, context.Canceled) || errors.Is(compactErr, context.DeadlineExceeded) {
+			status = ContextCompressLifecycleInterrupted
+		}
+		lifecycle.Status = status
+		lifecycle.TokensSaved = tokensSaved
+		m.emitCompactLifecycleEvent(req, lifecycle)
 	}()
 	runtime, runtimeErr := m.runtimeFor(req.Agent)
 	if runtimeErr != nil {
@@ -301,6 +319,16 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	if err := m.ensureReconciledRuntime(ctx, runtime, req.SessionKey); err != nil {
 		return err
 	}
+	if runtime.sessions != nil {
+		revision, err := historyRevision(runtime.sessions, req.SessionKey)
+		if err != nil {
+			return err
+		}
+		lifecycle.TranscriptRevision = revision.Revision
+		lifecycle.TranscriptCount = revision.Count
+	}
+	m.emitCompactLifecycleEvent(req, lifecycle)
+	started = true
 
 	// Overflow retry uses aggressive CompactUntilUnder to guarantee the next LLM
 	// request has a smaller assembled history. Manual frontend compaction uses
@@ -312,11 +340,14 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		req.Budget > 0 {
 		result, compactErr := runtime.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
 		if compactErr == nil && compactResultHasProgress(result) {
+			lifecycle.Status = ContextCompressLifecycleProgress
+			lifecycle.TokensSaved = result.TokensSaved
+			m.emitCompactLifecycleEvent(req, lifecycle)
 			status = ContextCompressLifecycleCompleted
 			tokensSaved = result.TokensSaved
 			m.emitCompactEvent(req, result)
 		} else if compactErr == nil {
-			status = ContextCompressLifecycleNoop
+			status = ContextCompressLifecycleNoProgress
 		}
 		return compactErr
 	}
@@ -328,11 +359,14 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	})
 	if err == nil {
 		if compactResultHasProgress(result) {
+			lifecycle.Status = ContextCompressLifecycleProgress
+			lifecycle.TokensSaved = result.TokensSaved
+			m.emitCompactLifecycleEvent(req, lifecycle)
 			status = ContextCompressLifecycleCompleted
 			tokensSaved = result.TokensSaved
 			m.emitCompactEvent(req, result)
 		} else {
-			status = ContextCompressLifecycleNoop
+			status = ContextCompressLifecycleNoProgress
 		}
 	}
 	return err
@@ -363,22 +397,25 @@ func (m *seahorseContextManager) emitCompactEvent(req *CompactRequest, result *s
 
 func (m *seahorseContextManager) emitCompactLifecycleEvent(
 	req *CompactRequest,
-	status ContextCompressLifecycleStatus,
-	tokensSaved int,
+	payload ContextCompressLifecyclePayload,
 ) {
 	if m.al == nil || req == nil {
 		return
 	}
 	kind := runtimeevents.KindAgentContextCompressEnd
 	tracePath := "turn.context.compress.end"
-	if status == ContextCompressLifecycleStarted {
+	switch payload.Status {
+	case ContextCompressLifecycleStarted:
 		kind = runtimeevents.KindAgentContextCompressStart
 		tracePath = "turn.context.compress.start"
+	case ContextCompressLifecycleProgress:
+		kind = runtimeevents.KindAgentContextCompressProgress
+		tracePath = "turn.context.compress.progress"
 	}
 	m.al.emitEvent(
 		kind,
 		m.compactEventMeta(req, tracePath),
-		ContextCompressLifecyclePayload{Reason: req.Reason, Status: status, TokensSaved: tokensSaved},
+		payload,
 	)
 }
 

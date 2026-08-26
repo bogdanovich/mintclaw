@@ -152,18 +152,24 @@ type ContextUsage struct {
 type CompactionStatus string
 
 const (
-	CompactionRunning   CompactionStatus = "running"
-	CompactionCompleted CompactionStatus = "completed"
-	CompactionNoop      CompactionStatus = "no_op"
-	CompactionFailed    CompactionStatus = "failed"
+	CompactionRunning     CompactionStatus = "running"
+	CompactionProgress    CompactionStatus = "progress"
+	CompactionCompleted   CompactionStatus = "completed"
+	CompactionNoProgress  CompactionStatus = "no_progress"
+	CompactionInterrupted CompactionStatus = "interrupted"
+	CompactionFailed      CompactionStatus = "failed"
 )
 
 type CompactionState struct {
-	TurnID      string           `json:"turn_id,omitempty"`
-	Reason      string           `json:"reason,omitempty"`
-	Status      CompactionStatus `json:"status"`
-	TokensSaved int              `json:"tokens_saved,omitempty"`
-	Background  bool             `json:"background,omitempty"`
+	TurnID             string           `json:"turn_id,omitempty"`
+	AttemptID          string           `json:"attempt_id,omitempty"`
+	ThreadID           string           `json:"thread_id,omitempty"`
+	TranscriptRevision uint64           `json:"transcript_revision,omitempty"`
+	TranscriptCount    int              `json:"transcript_count,omitempty"`
+	Reason             string           `json:"reason,omitempty"`
+	Status             CompactionStatus `json:"status"`
+	TokensSaved        int              `json:"tokens_saved,omitempty"`
+	Background         bool             `json:"background,omitempty"`
 }
 
 // ThreadSnapshot is the authoritative, bounded in-process presentation view.
