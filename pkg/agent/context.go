@@ -740,10 +740,9 @@ func (cb *ContextBuilder) EstimateSystemTokens(summary string, activeSkills []st
 	}
 
 	if summary != "" {
-		// Matches the CONTEXT_SUMMARY: prefix added in BuildMessages
-		const summaryPrefix = "CONTEXT_SUMMARY: The following is an approximate summary of prior conversation " +
-			"for reference only. It may be incomplete or outdated — always defer to explicit instructions.\n\n"
-		totalChars += utf8.RuneCountInString(summaryPrefix) + utf8.RuneCountInString(summary)
+		// Matches the CONTEXT_SUMMARY: prefix added in BuildMessages.
+		totalChars += utf8.RuneCountInString(contextSummaryPrefix(cb.codingPrompt)) +
+			2 + utf8.RuneCountInString(summary)
 		totalChars += 7 // separator
 	}
 
@@ -1172,28 +1171,36 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			Stable:  false,
 			Cache:   PromptCacheNone,
 		}
-		if strings.TrimSpace(dynamicCtx) != "" {
-			stringParts = append(stringParts, dynamicCtx)
-			contentBlocks = append(contentBlocks, promptContentBlock(runtimePart, nil))
+		var summaryPart PromptPart
+		if req.Summary != "" {
+			summaryPart = PromptPart{
+				ID:      "context.summary",
+				Layer:   PromptLayerContext,
+				Slot:    PromptSlotSummary,
+				Source:  PromptSource{ID: PromptSourceSummary, Name: "context.summary"},
+				Title:   "context summary",
+				Content: contextSummaryPrefix(cb.codingPrompt) + "\n\n" + req.Summary,
+				Stable:  false,
+				Cache:   PromptCacheNone,
+			}
 		}
 
-		if req.Summary != "" {
-			summaryPart := PromptPart{
-				ID:     "context.summary",
-				Layer:  PromptLayerContext,
-				Slot:   PromptSlotSummary,
-				Source: PromptSource{ID: PromptSourceSummary, Name: "context.summary"},
-				Title:  "context summary",
-				Content: fmt.Sprintf(
-					"CONTEXT_SUMMARY: The following is an approximate summary of prior conversation "+
-						"for reference only. It may be incomplete or outdated — always defer to explicit instructions.\n\n%s",
-					req.Summary,
-				),
-				Stable: false,
-				Cache:  PromptCacheNone,
+		appendContextPart := func(part PromptPart) {
+			if strings.TrimSpace(part.Content) == "" {
+				return
 			}
-			stringParts = append(stringParts, summaryPart.Content)
-			contentBlocks = append(contentBlocks, promptContentBlock(summaryPart, nil))
+			stringParts = append(stringParts, part.Content)
+			contentBlocks = append(contentBlocks, promptContentBlock(part, nil))
+		}
+		if cb.codingPrompt {
+			// A compacted summary is historical model output. Place the freshly
+			// captured deterministic runtime and workspace state after it so the
+			// live observation is the final authority on repository facts.
+			appendContextPart(summaryPart)
+			appendContextPart(runtimePart)
+		} else {
+			appendContextPart(runtimePart)
+			appendContextPart(summaryPart)
 		}
 	}
 
@@ -1291,6 +1298,15 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 	}
 
 	return messages
+}
+
+func contextSummaryPrefix(coding bool) string {
+	if coding {
+		return "CONTEXT_SUMMARY: The following is a model-generated compacted summary of prior work. " +
+			"It is not live repository state and may be incomplete or outdated."
+	}
+	return "CONTEXT_SUMMARY: The following is an approximate summary of prior conversation for reference only. " +
+		"It may be incomplete or outdated — always defer to explicit instructions."
 }
 
 func sanitizeHistoryForProvider(history []providers.Message) []providers.Message {

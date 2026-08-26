@@ -79,6 +79,16 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 	chunkCount := 0
 	firstChunkAt := time.Time{}
 	lastChunkAt := time.Time{}
+	freshMessagesForChat := func() []providers.Message {
+		return codingMessagesForProviderCall(
+			ctx,
+			ts,
+			messagesForCall,
+			exec.model.activeCandidates,
+			llm.llmModel,
+			primaryCandidateProvider(exec.model.activeCandidates),
+		)
+	}
 	recordChunk := func() {
 		now := time.Now()
 		chunkCount++
@@ -125,7 +135,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			publisher.Cancel(ctx)
 			fallbackResponse, err := exec.model.activeProvider.Chat(
 				ctx,
-				messagesForCall,
+				freshMessagesForChat(),
 				toolDefsForCall,
 				llm.llmModel,
 				llm.llmOpts,
@@ -151,7 +161,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			publisher.Cancel(ctx)
 			fallbackResponse, err := exec.model.activeProvider.Chat(
 				ctx,
-				messagesForCall,
+				freshMessagesForChat(),
 				toolDefsForCall,
 				llm.llmModel,
 				llm.llmOpts,

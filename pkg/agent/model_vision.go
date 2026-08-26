@@ -284,7 +284,8 @@ func (p *Pipeline) callResolvedFallbackCandidate(
 		ts.agent.ID,
 	)
 	llm.suppressReasoning = shouldSuppressReasoningFor(candidateThinking)
-	messages = codingMessagesForCandidate(
+	messages = codingMessagesForProviderCall(
+		ctx,
 		ts,
 		messages,
 		[]providers.FallbackCandidate{candidate},

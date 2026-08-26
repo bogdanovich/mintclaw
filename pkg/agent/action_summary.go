@@ -344,6 +344,14 @@ func tryRenderFinalTurnReply(
 	}
 
 	messages := buildFinalTurnRenderMessages(exec)
+	messages = codingMessagesForProviderCall(
+		ctx,
+		ts,
+		messages,
+		exec.model.activeCandidates,
+		model,
+		primaryCandidateProvider(exec.model.activeCandidates),
+	)
 	protected := fallback.protected || diagnosticCurrentTurnContainsSensitiveEvidence(messages)
 	instruction := buildFinalTurnRenderInstruction(exec)
 	messages = append(messages, providers.Message{
