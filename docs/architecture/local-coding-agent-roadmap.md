@@ -1466,6 +1466,9 @@ Done when:
 
 Dependencies: P2.3, P5.1
 
+Implementation contract:
+[`local-coding-agent-p5-workspace-reanchoring.md`](local-coding-agent-p5-workspace-reanchoring.md)
+
 Scope:
 
 - Inject a fresh bounded workspace snapshot after compacted context is assembled.
