@@ -368,6 +368,26 @@ func TestSeahorseReconciliationGenerationAndFailureRetry(t *testing.T) {
 	if state.SchemaGeneration != seahorseReconciliationGeneration {
 		t.Fatalf("generation = %d", state.SchemaGeneration)
 	}
+	conversation, err := store.GetConversationBySessionKey(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleSummary, err := store.CreateSummary(context.Background(), seahorse.CreateSummaryInput{
+		ConversationID: conversation.ConversationID,
+		Kind:           seahorse.SummaryKindLeaf,
+		Content:        "stale personal-policy summary",
+		TokenCount:     10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendContextSummary(
+		context.Background(),
+		conversation.ConversationID,
+		staleSummary.SummaryID,
+	); err != nil {
+		t.Fatal(err)
+	}
 
 	runtime := singleTestRuntime(mgr)
 	runtime.reconciliationGeneration = seahorse.SummaryPolicyCodingV1.ReconciliationGeneration(
@@ -383,6 +403,16 @@ func TestSeahorseReconciliationGenerationAndFailureRetry(t *testing.T) {
 	state, _ = store.GetReconciliationState(context.Background(), key)
 	if state.SchemaGeneration != runtime.reconciliationGeneration {
 		t.Fatalf("policy generation = %d, want %d", state.SchemaGeneration, runtime.reconciliationGeneration)
+	}
+	if _, err := store.GetSummary(context.Background(), staleSummary.SummaryID); err == nil {
+		t.Fatal("policy generation rebuild retained a stale summary")
+	}
+	items, err := store.GetContextItems(context.Background(), conversation.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ItemType != "message" {
+		t.Fatalf("policy generation rebuild context = %#v, want canonical raw message", items)
 	}
 }
 

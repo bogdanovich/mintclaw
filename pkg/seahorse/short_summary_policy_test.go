@@ -1,6 +1,8 @@
 package seahorse
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -126,5 +128,65 @@ func TestSummaryPolicyReconciliationGenerationIsVersioned(t *testing.T) {
 	}
 	if got := SummaryPolicyCodingV1.ReconciliationGeneration(base); got == base {
 		t.Fatalf("coding generation = %d, want distinct versioned generation", got)
+	}
+}
+
+func TestCodingLeafCompactionKeepsToolBatchTogetherAcrossTokenTarget(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	conversation, err := store.GetOrCreateConversation(ctx, "coding-tool-batch")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	calls := make([]retentionTestCall, 0, 10)
+	for index := 0; index < 10; index++ {
+		calls = append(calls, retentionTestCall{
+			id:     "call-" + string(rune('a'+index)),
+			name:   "read_file",
+			status: "success",
+			content: "result-head\n" + strings.Repeat(string(rune('a'+index)), 6000) +
+				fmt.Sprintf("\nresult-tail-%d", index),
+		})
+	}
+	messages := retentionTestMessages(calls)
+	messages = append(messages, Message{Role: "assistant", Content: "inspection complete", TokenCount: 100})
+	messages = append(messages, Message{Role: "user", Content: "next turn", TokenCount: 100})
+	for index := range messages {
+		switch messages[index].Role {
+		case "tool":
+			messages[index].TokenCount = 3000
+		default:
+			messages[index].TokenCount = 100
+		}
+		added, addErr := addRetentionTestMessage(ctx, store, conversation.ConversationID, messages[index])
+		if addErr != nil {
+			t.Fatal(addErr)
+		}
+		if appendErr := store.AppendContextMessage(ctx, conversation.ConversationID, added.ID); appendErr != nil {
+			t.Fatal(appendErr)
+		}
+	}
+
+	var prompt string
+	engine := &CompactionEngine{
+		store:  store,
+		config: Config{SummaryPolicy: SummaryPolicyCodingV1},
+		complete: func(_ context.Context, input string, _ CompleteOptions) (string, error) {
+			prompt = input
+			return "State: inspected\nDecisions: none\nFiles: none\nValidation: not run\n" +
+				"Next action: continue\nBlockers: none\nExpand for details about: tool output", nil
+		},
+	}
+	if _, err := engine.compactLeaf(ctx, conversation.ConversationID, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "coding tool result: read_file; status=success") ||
+		!strings.Contains(prompt, "historical tool output elided") ||
+		!strings.Contains(prompt, "result-tail-9") || strings.Contains(prompt, strings.Repeat("j", 6000)) {
+		t.Fatalf("coding compaction split or failed to bound the tool batch:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "next turn") {
+		t.Fatal("coding compaction crossed into the next user turn")
 	}
 }

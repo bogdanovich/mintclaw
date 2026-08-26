@@ -37,6 +37,9 @@ retention-projected messages and annotates matched tool results with tool name
 and persisted outcome. Large successful non-mutation output is reduced to a
 deterministic UTF-8-safe head and tail plus its original byte count and any
 artifact-reference lines that would otherwise fall in the omitted middle.
+Coding leaf selection extends a token-sized chunk to the next user-turn
+boundary, so one assistant tool batch cannot strand its results in a later leaf
+without the originating call metadata.
 
 The generic byte projection does not elide:
 

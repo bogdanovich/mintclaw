@@ -315,6 +315,12 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 	if chunkStart == -1 || (chunkEnd-chunkStart+1) < LeafMinFanout {
 		return nil, nil
 	}
+	if e.config.SummaryPolicy.isCoding() {
+		chunkEnd, err = e.extendCodingChunkToTurnBoundary(ctx, items, chunkEnd, tailStartIdx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	chunk = items[chunkStart : chunkEnd+1]
 
@@ -387,6 +393,30 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 	}
 
 	return &summary.SummaryID, nil
+}
+
+// extendCodingChunkToTurnBoundary keeps one coding turn's assistant tool calls
+// and results together even when the nominal leaf token target falls inside
+// the tool batch. The protected recent-tail boundary remains authoritative.
+func (e *CompactionEngine) extendCodingChunkToTurnBoundary(
+	ctx context.Context,
+	items []ContextItem,
+	chunkEnd, tailStart int,
+) (int, error) {
+	for next := chunkEnd + 1; next < tailStart; next++ {
+		if items[next].ItemType != "message" {
+			break
+		}
+		message, err := e.store.GetMessageByID(ctx, items[next].MessageID)
+		if err != nil {
+			return chunkEnd, err
+		}
+		if message.Role == "user" {
+			break
+		}
+		chunkEnd = next
+	}
+	return chunkEnd, nil
 }
 
 // compactCondensed compresses multiple summaries into one higher-level summary.

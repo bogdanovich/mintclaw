@@ -545,6 +545,7 @@ func (m *seahorseContextManager) reconcile(
 	ctx context.Context,
 	runtime *seahorseAgentRuntime,
 	sessionKey string,
+	forceDerivedRebuild bool,
 ) error {
 	history, err := canonicalHistory(runtime.sessions, sessionKey)
 	if err != nil {
@@ -553,6 +554,11 @@ func (m *seahorseContextManager) reconcile(
 	msgs := make([]seahorse.Message, len(history))
 	for i, h := range history {
 		msgs[i] = providerToSeahorseMessage(h)
+	}
+	if forceDerivedRebuild {
+		if err := runtime.engine.ClearSession(ctx, sessionKey); err != nil {
+			return fmt.Errorf("seahorse force derived rebuild: %w", err)
+		}
 	}
 	if len(msgs) == 0 {
 		return runtime.engine.ClearSession(ctx, sessionKey)
@@ -601,7 +607,8 @@ func (m *seahorseContextManager) ensureReconciledRuntime(
 	}
 	started := time.Now()
 	m.reconciliations.Add(1)
-	if err := m.reconcile(ctx, runtime, sessionKey); err != nil {
+	forceDerivedRebuild := state == nil || state.SchemaGeneration != runtime.reconciliationGeneration
+	if err := m.reconcile(ctx, runtime, sessionKey, forceDerivedRebuild); err != nil {
 		return fmt.Errorf("seahorse reconcile: %w", err)
 	}
 	if err := m.setReconciliationState(ctx, runtime, sessionKey, revision); err != nil {
