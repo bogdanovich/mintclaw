@@ -106,6 +106,30 @@ func TestPersonalSummaryPolicyDoesNotElideToolOutput(t *testing.T) {
 	}
 }
 
+func TestCodingToolResultProjectionRendersMultipartArtifactEvidence(t *testing.T) {
+	content := "result-head\n" + strings.Repeat("x", 6000) + "\nresult-tail"
+	messages := retentionTestMessages([]retentionTestCall{
+		{id: "media", name: "read_file", status: "success", content: content, media: true},
+	})
+	projected := projectCodingSummaryToolResults(messages, SummaryPolicyCodingV1)
+	formatted := formatMessagesForSummary(projected)
+	for _, required := range []string{
+		"coding tool result: read_file; status=success",
+		"historical tool output elided",
+		"[media: media://artifact",
+	} {
+		if !strings.Contains(formatted, required) {
+			t.Fatalf("multipart coding summary input missing %q:\n%s", required, formatted)
+		}
+	}
+	if strings.Contains(formatted, strings.Repeat("x", 6000)) {
+		t.Fatal("multipart coding summary input retained unbounded tool output")
+	}
+	if len(messages[2].Parts) != 2 || messages[2].Parts[0].Text != content {
+		t.Fatal("multipart projection mutated canonical input")
+	}
+}
+
 func TestCodingDeterministicFallbackHasContinuationFields(t *testing.T) {
 	result := truncateSummary(
 		[]Message{{Role: "tool", Content: strings.Repeat("output", 1000)}},

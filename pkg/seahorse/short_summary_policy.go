@@ -85,7 +85,7 @@ func projectCodingSummaryToolResults(messages []Message, policy SummaryPolicy) [
 			bounded = boundCodingToolResult(toolName, result.ToolResultStatus, content)
 		}
 		result.Text = bounded
-		projected[i].Content = bounded
+		projected[i].Content = partsToReadableContent(projected[i].Parts)
 		projected[i].TokenCount = EstimateMessageTokens(projected[i])
 	}
 	return projected
