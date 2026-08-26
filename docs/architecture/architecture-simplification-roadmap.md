@@ -1,8 +1,9 @@
 # Architecture Simplification Roadmap
 
 Status: active; implementation is merged through P1 and X3.60, the node
-identity bridge is merged, and its rollout, the coordinated compatibility
-reset, deployment, and Z1 remain open
+identity bridge is merged and deployed to the two local canaries, and the
+remaining companion rollout, coordinated compatibility reset, deployment, and
+Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -158,7 +159,7 @@ reset criteria.
 | X2 | #803 and #807 | Merged |
 | X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
 | P1 | #881 | Merged; deployed config and profile cutover remains in R1 |
-| R1 node-identity bridge | #899 | Merged; companion rollout and adapter removal remain in R1 |
+| R1 node-identity bridge | #899 | Merged and deployed to local `p5a-canary` and `p3-canary`; remaining companion rollout and adapter removal remain in R1 |
 | Z1 | Not yet applicable | Open |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
@@ -223,6 +224,27 @@ above and refined the reset scope:
   requires a capacity gate and explicit authorization before moving or deleting
   any retained backup.
 
+The authorized 2026-08-25 local bridge rollout completed the first two
+companion upgrades and is recorded in
+[R1 Local Node-Identity Bridge Rollout](../operations/architecture-simplification-r1-node-bridge.md):
+
+- `p5a-canary` and `p3-canary` now run the exact `71ad3e53` node build and are
+  connected as `v0.1.0-p8a.2-814-g71ad3e53`;
+- the privileged P3 service helper is a same-release deployment unit with the
+  P3 node. A node-only attempt failed closed while loading the helper snapshot,
+  the previous pair was restored and verified, and the coordinated current
+  node/helper upgrade then succeeded;
+- both local nodes remained stable with zero service restarts and empty
+  warning-level journals after the final start, while the gateway fleet,
+  profiles, and registry records were not manually changed;
+- the connected Darwin `ab-local-test` companion remains at `4ecd74c3`, the
+  connected Linux `vpn` companion remains at `03b08be2`, and the older pending
+  Darwin and revoked Linux records still require an explicit upgrade,
+  conversion, retirement, or removal decision; and
+- all six persisted registry records still omit `key_algorithm`, including the
+  two upgraded local peers. The external record conversion in R1 therefore
+  remains mandatory before the empty-algorithm reader can be deleted.
+
 ### Re-audit corrections
 
 The original keyword inventory was useful for discovery but too broad as an
@@ -250,7 +272,7 @@ separation and standards alignment.
 | Debt | Classification | Current evidence | Owner and removal gate |
 | --- | --- | --- | --- |
 | Previous and older browser catalogue schemas | Temporary first-party wire adapter | PR #865 reconstructs the previous streamed-snapshot schema and retains the earlier session-open output schema after a companion rollout failed; the sole connected browser-capable companion now advertises the current catalogue | Architecture simplification owner; verify the current companion remains connected through cutover, then delete the historical generators in R1 |
-| Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | PR #899 makes current Ed25519 companion construction emit the explicit field; six retained deployed records still omit it, and three connected non-browser companions remain on older builds | Architecture simplification owner; deploy the bridge to every retained companion, convert every retained record or deliberately remove it, upgrade or retire older connected companions, then require the field in R1 |
+| Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | PR #899 makes current Ed25519 companion construction emit the explicit field; local `p5a-canary` and `p3-canary` run that bridge, but all six retained records omit the field and the connected Darwin `ab-local-test` and Linux `vpn` peers remain on pre-bridge builds | Architecture simplification owner; upgrade or retire the remaining connected companions, convert every retained record or deliberately remove it, then require the field in R1 |
 | Deployed version 3 personal profiles | Coordinated persisted-config and workspace cutover | PR #881 makes version 4 config the sole machine authority and root `AGENTS.md` the sole personal prose file; five deployed configs, 21 agents, and 20 personal workspaces still use the pre-cutover shape | Architecture simplification owner; convert and validate every configured agent and distinct workspace while stopped in R1 before installing the version 4 binary |
 
 The current implementation also has one non-blocking observability follow-up,
