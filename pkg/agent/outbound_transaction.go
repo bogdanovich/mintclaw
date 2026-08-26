@@ -116,6 +116,12 @@ func (t *outboundTransaction) nextIdentity(kind outbox.Kind, channel, chatID, se
 	}
 }
 
+func (t *outboundTransaction) reserveOrdinal() {
+	if t != nil {
+		t.ordinal.Add(1)
+	}
+}
+
 func (t *outboundTransaction) fail(err error) {
 	if t == nil || err == nil {
 		return
