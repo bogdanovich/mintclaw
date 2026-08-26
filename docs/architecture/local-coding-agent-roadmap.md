@@ -1441,6 +1441,9 @@ pressure, repeated compaction, and process restart.
 
 Dependencies: P0.3, P2.1
 
+Implementation contract:
+[`local-coding-agent-p5-compaction-policy.md`](local-coding-agent-p5-compaction-policy.md)
+
 Scope:
 
 - Make Seahorse summary policy selectable by runtime context profile.

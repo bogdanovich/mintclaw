@@ -182,6 +182,16 @@ projection. `durable` is an explicit operator assertion that the configured tool
 the receipt should tell the model how to query that source again. Runtime logs report preserved, safety-preserved,
 receipted, durable, and transient counts without recording result content.
 
+Coding runtimes add a second, summary-only projection after the configured tool-result retention policy. It annotates
+matched results with the persisted tool outcome and deterministically bounds large successful non-mutation output to a
+UTF-8-safe head and tail. Failure, uncertain outcome, file-mutation evidence, and artifact references remain available
+to the summarizer. This projection never changes ordinary assembled history or either canonical storage layer.
+
+The summary contract is selected by runtime profile. The zero-value personal policy retains the original prompts;
+`coding-v1` requires explicit repository state, changed paths, validation status, blockers, and a next action in leaf,
+aggressive, condensed, and deterministic-fallback summaries. Summary-policy versions contribute to the reconciliation
+generation, so coding derived state can be rebuilt from canonical JSONL without invalidating personal-agent summaries.
+
 ## Scope Construction Rules
 
 `pkg/session/allocator.go` builds scope values from normalized inbound context.

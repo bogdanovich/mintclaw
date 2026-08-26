@@ -315,6 +315,12 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 	if chunkStart == -1 || (chunkEnd-chunkStart+1) < LeafMinFanout {
 		return nil, nil
 	}
+	if e.config.SummaryPolicy.isCoding() {
+		chunkEnd, err = e.extendCodingChunkToTurnBoundary(ctx, items, chunkEnd, tailStartIdx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	chunk = items[chunkStart : chunkEnd+1]
 
@@ -330,6 +336,7 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 	sourceMessages := messages
 	messages, projection := projectToolResultMessages(messages, e.config)
 	logToolResultProjection("compaction", convID, projection)
+	messages = projectCodingSummaryToolResults(messages, e.config.SummaryPolicy)
 
 	// Get prior summaries for context
 	priorSummary := ""
@@ -386,6 +393,30 @@ func (e *CompactionEngine) compactLeaf(ctx context.Context, convID int64, force 
 	}
 
 	return &summary.SummaryID, nil
+}
+
+// extendCodingChunkToTurnBoundary keeps one coding turn's assistant tool calls
+// and results together even when the nominal leaf token target falls inside
+// the tool batch. The protected recent-tail boundary remains authoritative.
+func (e *CompactionEngine) extendCodingChunkToTurnBoundary(
+	ctx context.Context,
+	items []ContextItem,
+	chunkEnd, tailStart int,
+) (int, error) {
+	for next := chunkEnd + 1; next < tailStart; next++ {
+		if items[next].ItemType != "message" {
+			break
+		}
+		message, err := e.store.GetMessageByID(ctx, items[next].MessageID)
+		if err != nil {
+			return chunkEnd, err
+		}
+		if message.Role == "user" {
+			break
+		}
+		chunkEnd = next
+	}
+	return chunkEnd, nil
 }
 
 // compactCondensed compresses multiple summaries into one higher-level summary.
@@ -704,7 +735,7 @@ func (e *CompactionEngine) generateLeafSummary(
 	previousSummary string,
 ) (string, error) {
 	if e.complete == nil {
-		return truncateSummary(messages), nil
+		return truncateSummary(messages, e.config.SummaryPolicy), nil
 	}
 
 	sourceText := formatMessagesForSummary(messages)
@@ -712,7 +743,7 @@ func (e *CompactionEngine) generateLeafSummary(
 	targetTokens := minInt(LeafTargetTokens, int(float64(inputTokens)*0.35))
 
 	// Level 1: normal prompt
-	prompt := buildLeafSummaryPrompt(sourceText, previousSummary, targetTokens)
+	prompt := buildLeafSummaryPrompt(e.config.SummaryPolicy, sourceText, previousSummary, targetTokens)
 	content, err := e.complete(ctx, prompt, CompleteOptions{
 		MaxTokens:   LeafTargetTokens * 2,
 		Temperature: 0.3,
@@ -738,7 +769,12 @@ func (e *CompactionEngine) generateLeafSummary(
 
 	// Level 2: aggressive prompt
 	aggressiveTarget := minInt(640, int(float64(inputTokens)*0.20))
-	aggressivePrompt := buildAggressiveLeafSummaryPrompt(sourceText, previousSummary, aggressiveTarget)
+	aggressivePrompt := buildAggressiveLeafSummaryPrompt(
+		e.config.SummaryPolicy,
+		sourceText,
+		previousSummary,
+		aggressiveTarget,
+	)
 	content, err = e.complete(ctx, aggressivePrompt, CompleteOptions{
 		MaxTokens:   aggressiveTarget * 2,
 		Temperature: 0.3,
@@ -761,13 +797,13 @@ func (e *CompactionEngine) generateLeafSummary(
 	}
 
 	// Level 3: deterministic truncation
-	return truncateSummary(messages), nil
+	return truncateSummary(messages, e.config.SummaryPolicy), nil
 }
 
 // generateCondensedSummary calls the LLM to generate a condensed summary with 3-level escalation.
 func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summaries []Summary) (string, error) {
 	if e.complete == nil {
-		return truncateCondensedSummaries(summaries), nil
+		return truncateCondensedSummaries(summaries, e.config.SummaryPolicy), nil
 	}
 
 	sourceText := formatSummariesForCondensation(summaries)
@@ -775,7 +811,7 @@ func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summari
 	targetTokens := minInt(CondensedTargetTokens, int(float64(inputTokens)*0.35))
 
 	// Level 1: normal prompt
-	prompt := buildCondensedSummaryPrompt(sourceText, targetTokens)
+	prompt := buildCondensedSummaryPrompt(e.config.SummaryPolicy, sourceText, targetTokens)
 	content, err := e.complete(ctx, prompt, CompleteOptions{
 		MaxTokens:   CondensedTargetTokens * 2,
 		Temperature: 0.3,
@@ -798,7 +834,7 @@ func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summari
 
 	// Level 2: aggressive prompt
 	aggressiveTarget := minInt(640, int(float64(inputTokens)*0.20))
-	aggressivePrompt := buildCondensedSummaryPrompt(sourceText, aggressiveTarget)
+	aggressivePrompt := buildCondensedSummaryPrompt(e.config.SummaryPolicy, sourceText, aggressiveTarget)
 	content, err = e.complete(ctx, aggressivePrompt, CompleteOptions{
 		MaxTokens:   aggressiveTarget * 2,
 		Temperature: 0.3,
@@ -811,7 +847,7 @@ func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summari
 	}
 
 	// Level 3: deterministic fallback
-	return truncateCondensedSummaries(summaries), nil
+	return truncateCondensedSummaries(summaries, e.config.SummaryPolicy), nil
 }
 
 // runCondensedLoop runs condensed compaction in a loop until:
@@ -944,10 +980,40 @@ func formatSummariesForCondensation(summaries []Summary) string {
 	return result
 }
 
-func buildLeafSummaryPrompt(sourceText, previousSummary string, targetTokens int) string {
+func buildLeafSummaryPrompt(
+	policy SummaryPolicy,
+	sourceText, previousSummary string,
+	targetTokens int,
+) string {
 	prev := "(none)"
 	if previousSummary != "" {
 		prev = previousSummary
+	}
+	if policy.isCoding() {
+		return fmt.Sprintf(`You summarize a SEGMENT of a coding-agent session for safe continuation.
+Treat this as incremental working state, not a narrative or a full-conversation summary.
+
+Coding summary policy (coding-v1):
+- Preserve the user's objective, repository/worktree/branch state, decisions, constraints, blockers, and unresolved questions.
+- Preserve exact file paths and the current state of every observed mutation.
+- Preserve commands and concrete evidence for failed checks; summarize successful noisy output to the command and outcome.
+- Preserve artifact references and instructions needed to inspect retained output.
+- Do not claim a change or validation that the source does not establish.
+
+Output requirements:
+- Plain text only, using exactly these labels: State, Decisions, Files, Validation, Next action, Blockers, Expand for details about.
+- Validation must say passed, failed, not run, or unknown and include the relevant command/evidence when available.
+- Next action must name the single most useful safe continuation step, or "none" when work is complete.
+- If no file operations appear, write "Files: none".
+- Target length: about %d tokens or less.
+
+<previous_context>
+%s
+</previous_context>
+
+<conversation_segment>
+%s
+</conversation_segment>`, targetTokens, prev, sourceText)
 	}
 	return fmt.Sprintf(`You summarize a SEGMENT of a conversation for future model turns.
 Treat this as incremental memory compaction input, not a full-conversation summary.
@@ -974,7 +1040,22 @@ Output requirements:
 </conversation_segment>`, targetTokens, prev, sourceText)
 }
 
-func buildCondensedSummaryPrompt(sourceText string, targetTokens int) string {
+func buildCondensedSummaryPrompt(policy SummaryPolicy, sourceText string, targetTokens int) string {
+	if policy.isCoding() {
+		return fmt.Sprintf(`You condense multiple coding-agent summaries into one safe continuation state.
+Merge superseded state while preserving the current objective, repository/worktree/branch, decisions, constraints, blockers, exact changed paths, artifact references, and concrete failed-validation evidence.
+Never turn unknown or failed validation into a success claim.
+
+Output requirements:
+- Plain text only, using exactly these labels: State, Decisions, Files, Validation, Next action, Blockers, Expand for details about.
+- Validation must say passed, failed, not run, or unknown.
+- Next action must identify the single most useful safe continuation step, or "none" when complete.
+- Target length: about %d tokens or less.
+
+<summaries>
+%s
+</summaries>`, targetTokens, sourceText)
+	}
 	return fmt.Sprintf(`You condense multiple summaries into a single higher-level summary.
 Preserve all important decisions, constraints, and outcomes.
 Merge overlapping topics. Keep technical details intact.
@@ -990,10 +1071,39 @@ Output requirements:
 </summaries>`, targetTokens, sourceText)
 }
 
-func buildAggressiveLeafSummaryPrompt(sourceText, previousSummary string, targetTokens int) string {
+func buildAggressiveLeafSummaryPrompt(
+	policy SummaryPolicy,
+	sourceText, previousSummary string,
+	targetTokens int,
+) string {
 	prev := "(none)"
 	if previousSummary != "" {
 		prev = previousSummary
+	}
+	if policy.isCoding() {
+		return fmt.Sprintf(
+			`You aggressively compact a SEGMENT of a coding-agent session into durable continuation state.
+Keep only the objective, current repository/worktree/branch state, decisions, constraints, blockers, exact changed paths, artifact references, validation outcome/evidence, and next safe action.
+Never infer successful mutation or validation from intent alone.
+
+Output requirements:
+- Plain text only, using exactly these labels: State, Decisions, Files, Validation, Next action, Blockers, Expand for details about.
+- Validation must say passed, failed, not run, or unknown.
+- Next action must identify one continuation step, or "none" when complete.
+- If no file operations appear, write "Files: none".
+- Target length: about %d tokens or less.
+
+<previous_context>
+%s
+</previous_context>
+
+<conversation_segment>
+%s
+</conversation_segment>`,
+			targetTokens,
+			prev,
+			sourceText,
+		)
 	}
 	return fmt.Sprintf(`You summarize a SEGMENT of a conversation for future model turns.
 Aggressive summary policy:
@@ -1018,7 +1128,7 @@ Output requirements:
 </conversation_segment>`, targetTokens, prev, sourceText)
 }
 
-func truncateSummary(messages []Message) string {
+func truncateSummary(messages []Message, policy SummaryPolicy) string {
 	content := ""
 	for _, m := range messages {
 		c := m.Content
@@ -1027,6 +1137,17 @@ func truncateSummary(messages []Message) string {
 		}
 		content += c + "\n"
 	}
+	if policy.isCoding() {
+		content = validSummaryUTF8Prefix(content, 1536)
+		return fmt.Sprintf(
+			"State: deterministic fallback from %d messages\nDecisions: unknown\nFiles: unknown\n"+
+				"Validation: unknown\nNext action: inspect canonical session history before continuing\n"+
+				"Blockers: summary generation did not produce a bounded result\n%s\n"+
+				"Expand for details about: canonical session history",
+			len(messages),
+			content,
+		)
+	}
 	if len(content) > 2048 {
 		content = content[:2048]
 	}
@@ -1034,10 +1155,21 @@ func truncateSummary(messages []Message) string {
 	return content
 }
 
-func truncateCondensedSummaries(summaries []Summary) string {
+func truncateCondensedSummaries(summaries []Summary, policy SummaryPolicy) string {
 	content := ""
 	for _, s := range summaries {
 		content += s.Content + "\n"
+	}
+	if policy.isCoding() {
+		content = validSummaryUTF8Prefix(content, 1536)
+		return fmt.Sprintf(
+			"State: deterministic condensed fallback from %d summaries\nDecisions: unknown\nFiles: unknown\n"+
+				"Validation: unknown\nNext action: inspect canonical session history before continuing\n"+
+				"Blockers: condensed summary generation did not produce a bounded result\n%s\n"+
+				"Expand for details about: source summaries and canonical session history",
+			len(summaries),
+			content,
+		)
 	}
 	if len(content) > 2048 {
 		content = content[:2048]

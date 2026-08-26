@@ -28,6 +28,7 @@ type Config struct {
 	RecentTailTurns          int                              `json:"recentTailTurns,omitempty"`
 	MaxRetrievalScope        string                           `json:"maxRetrievalScope,omitempty"`
 	ResultRetentionPolicy    toolpolicy.ResultRetentionPolicy `json:"-"`
+	SummaryPolicy            SummaryPolicy                    `json:"-"`
 }
 
 // CompleteFn is the LLM completion function type.
@@ -139,6 +140,9 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	}
 	if err := config.ResultRetentionPolicy.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid tool result retention config: %w", err)
+	}
+	if err := config.SummaryPolicy.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid summary policy config: %w", err)
 	}
 	dir := filepath.Dir(config.DBPath)
 	if dir != "" && dir != "." {
