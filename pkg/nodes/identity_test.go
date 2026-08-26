@@ -162,42 +162,6 @@ func TestIdentityProofRejectsCatalogHashMismatch(t *testing.T) {
 	}
 }
 
-func TestLegacyIdentityProofTranscriptAcceptedDuringBridge(t *testing.T) {
-	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x42}, ed25519.SeedSize))
-	proof, err := NewIdentityProof(
-		privateKey, "challenge", ProtocolV1, ProtocolV1,
-		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, ExecutionProfile{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if proof.KeyAlgorithm != KeyAlgorithmEd25519 {
-		t.Fatalf("key algorithm = %q, want explicit Ed25519", proof.KeyAlgorithm)
-	}
-	proof.KeyAlgorithm = ""
-	transcript, err := proof.transcript()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "mintclaw-node-auth-v1\x00" +
-		`{"nonce":"challenge","node_id":"` + string(proof.NodeID) +
-		`","public_key":"` + proof.PublicKey +
-		`","min_protocol":1,"max_protocol":1,"client_version":"v0.1.0",` +
-		`"platform":"linux","architecture":"amd64","requested_role":"companion",` +
-		`"catalog_hash":"` + proof.CatalogHash + `","executor":"","policy_revision":""}`
-	if string(transcript) != want {
-		t.Fatalf("legacy transcript changed:\n got %q\nwant %q", transcript, want)
-	}
-	legacySignature := ed25519.Sign(privateKey, transcript)
-	if !ed25519.Verify(privateKey.Public().(ed25519.PublicKey), transcript, legacySignature) {
-		t.Fatal("legacy signature does not verify over the compatibility transcript")
-	}
-	proof.Signature = base64.RawURLEncoding.EncodeToString(legacySignature)
-	if _, err := proof.VerifyIdentity(); err != nil {
-		t.Fatalf("legacy VerifyIdentity() error during bridge = %v", err)
-	}
-}
-
 func TestExplicitEd25519AlgorithmIsTranscriptBound(t *testing.T) {
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -217,17 +181,30 @@ func TestExplicitEd25519AlgorithmIsTranscriptBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proof.KeyAlgorithm = ""
-	legacyTranscript, err := proof.transcript()
+	if !bytes.HasPrefix(algorithmTranscript, []byte("mintclaw-node-auth-v1:ed25519\x00")) ||
+		!bytes.Contains(algorithmTranscript, []byte(`"key_algorithm":"ed25519"`)) {
+		t.Fatalf("transcript is not algorithm-bound: %q", algorithmTranscript)
+	}
+	if _, err := proof.VerifyIdentity(); err != nil {
+		t.Fatalf("explicit Ed25519 VerifyIdentity() error = %v", err)
+	}
+}
+
+func TestIdentityProofRejectsMissingKeyAlgorithm(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Equal(legacyTranscript, algorithmTranscript) {
-		t.Fatal("explicit algorithm reused the legacy transcript domain")
+	proof, err := NewIdentityProof(
+		privateKey, "challenge", ProtocolV1, ProtocolV1,
+		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, ExecutionProfile{},
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	proof.KeyAlgorithm = KeyAlgorithmEd25519
-	if _, err := proof.VerifyIdentity(); err != nil {
-		t.Fatalf("explicit Ed25519 VerifyIdentity() error = %v", err)
+	proof.KeyAlgorithm = ""
+	if _, err := proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
+		t.Fatalf("VerifyIdentity() error = %v, want ErrInvalidIdentityProof", err)
 	}
 }
 

@@ -772,6 +772,7 @@ func newRealNodePreparationFixture(t *testing.T) *realNodePreparationFixture {
 	if err := registry.UpsertPending(nodes.PendingPairing{
 		Node:          snapshot,
 		PublicKey:     publicKey,
+		KeyAlgorithm:  nodes.KeyAlgorithmEd25519,
 		RequestedRole: "companion",
 		RequestedAt:   1,
 	}); err != nil {

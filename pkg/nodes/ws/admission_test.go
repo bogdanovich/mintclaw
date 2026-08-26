@@ -463,6 +463,7 @@ func testInvocationAdmission(
 	if upsertErr := registry.UpsertPending(nodes.PendingPairing{
 		Node:          snapshot,
 		PublicKey:     publicKey,
+		KeyAlgorithm:  nodes.KeyAlgorithmEd25519,
 		RequestedRole: "companion",
 		RequestedAt:   1,
 	}); upsertErr != nil {
@@ -917,7 +918,7 @@ func androidIdentityTranscript(t *testing.T, proof nodes.IdentityProof) []byte {
 		Nonce             string             `json:"nonce"`
 		NodeID            nodes.ID           `json:"node_id"`
 		PublicKey         string             `json:"public_key"`
-		KeyAlgorithm      nodes.KeyAlgorithm `json:"key_algorithm,omitempty"`
+		KeyAlgorithm      nodes.KeyAlgorithm `json:"key_algorithm"`
 		EnrollmentOfferID string             `json:"enrollment_offer_id,omitempty"`
 		MinProtocol       int                `json:"min_protocol"`
 		MaxProtocol       int                `json:"max_protocol"`

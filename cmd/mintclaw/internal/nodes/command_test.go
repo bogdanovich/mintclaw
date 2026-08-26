@@ -206,6 +206,7 @@ func writePendingPairing(t *testing.T, workspace string, timestamp int64) nodepk
 			LastSeenAt:      timestamp,
 		},
 		PublicKey:     publicKey,
+		KeyAlgorithm:  nodepkg.KeyAlgorithmEd25519,
 		RequestedRole: "companion",
 		RequestedAt:   timestamp,
 	}

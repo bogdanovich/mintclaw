@@ -1778,8 +1778,9 @@ func browserNodeTestRegisterReplacement(
 	snapshot.Aliases = nil
 	snapshot.LastSeenAt = time.Now().Unix()
 	if err = runtime.registry.UpsertPending(nodes.PendingPairing{
-		Node: snapshot, PublicKey: publicKey, RequestedRole: "companion",
-		RequestedAt: time.Now().Unix(),
+		Node: snapshot, PublicKey: publicKey, KeyAlgorithm: nodes.KeyAlgorithmEd25519,
+		RequestedRole: "companion",
+		RequestedAt:   time.Now().Unix(),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1840,7 +1841,8 @@ func browserNodeTestRuntime(
 		LastSeenAt: time.Now().Unix(),
 	}
 	if err = registry.UpsertPending(nodes.PendingPairing{
-		Node: snapshot, PublicKey: publicKey, RequestedRole: "companion", RequestedAt: time.Now().Unix(),
+		Node: snapshot, PublicKey: publicKey, KeyAlgorithm: nodes.KeyAlgorithmEd25519,
+		RequestedRole: "companion", RequestedAt: time.Now().Unix(),
 	}); err != nil {
 		t.Fatal(err)
 	}

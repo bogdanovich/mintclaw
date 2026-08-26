@@ -1587,20 +1587,12 @@ func invalidBrowserActInput() error {
 }
 
 func BrowserCommandInputSchema(command string, profiles []BrowserProfileDescriptor) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, true)
-}
-
-func previousBrowserCommandInputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	return browserCommandInputSchema(command, profiles, false)
+	return browserCommandInputSchema(command, profiles)
 }
 
 func browserCommandInputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
-	streamedSnapshots bool,
 ) json.RawMessage {
 	profileBranches := make([]any, 0, len(profiles))
 	profileRevisions := make([]string, 0, len(profiles))
@@ -1653,10 +1645,8 @@ func browserCommandInputSchema(
 		add("tab_id", identifier)
 		add("snapshot_generation", map[string]any{"type": "integer", "minimum": 1})
 		add("screenshot", map[string]any{"type": "boolean"})
-		if streamedSnapshots {
-			properties["workspace_id"] = identifier
-			properties["browser_target"] = identifier
-		}
+		properties["workspace_id"] = identifier
+		properties["browser_target"] = identifier
 	case BrowserCommandDiagnostics:
 		add("session_id", identifier)
 		add("tab_id", identifier)
@@ -1752,10 +1742,8 @@ func browserCommandInputSchema(
 		}
 		properties["tab_id"] = identifier
 		properties["frame_id"] = identifier
-		if streamedSnapshots {
-			properties["workspace_id"] = identifier
-			properties["browser_target"] = identifier
-		}
+		properties["workspace_id"] = identifier
+		properties["browser_target"] = identifier
 		profileConstraint = map[string]any{"oneOf": []any{
 			map[string]any{
 				"properties": map[string]any{"operation": map[string]any{"enum": []string{"list", "open"}}},
@@ -1799,55 +1787,11 @@ func BrowserCommandOutputSchema(
 	command string,
 	profiles []BrowserProfileDescriptor,
 ) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, true, browserSnapshotSchemaCurrent)
-}
-
-func previousStreamedBrowserCommandOutputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, true, browserSnapshotSchemaToolResult)
-}
-
-func previousBrowserCommandOutputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, true, browserSnapshotSchemaInline)
-}
-
-func legacyBrowserCommandOutputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-) json.RawMessage {
-	return browserCommandOutputSchema(command, profiles, false, browserSnapshotSchemaInline)
-}
-
-type browserSnapshotSchemaGeneration uint8
-
-const (
-	browserSnapshotSchemaInline browserSnapshotSchemaGeneration = iota
-	browserSnapshotSchemaToolResult
-	browserSnapshotSchemaCurrent
-)
-
-func browserCommandOutputSchema(
-	command string,
-	profiles []BrowserProfileDescriptor,
-	diagnostics bool,
-	snapshotGeneration browserSnapshotSchemaGeneration,
-) json.RawMessage {
 	if len(profiles) == 0 {
 		return json.RawMessage("false")
 	}
 	limits := strictestBrowserLimits(profiles)
-	streamedSnapshotMaximum := 0
-	switch snapshotGeneration {
-	case browserSnapshotSchemaToolResult:
-		streamedSnapshotMaximum = limits.ToolResultBytes
-	case browserSnapshotSchemaCurrent:
-		streamedSnapshotMaximum = BrowserSnapshotPayloadLimit(limits)
-	}
+	streamedSnapshotMaximum := BrowserSnapshotPayloadLimit(limits)
 	identifier := map[string]any{"type": "string", "minLength": 1, "maxLength": MaxIDLength}
 	state := map[string]any{
 		"enum": []string{"opening", "ready", "closing", "closed", "lost", "unknown"},
@@ -1871,10 +1815,8 @@ func browserCommandOutputSchema(
 			"contexts":   map[string]any{"type": "boolean"},
 			"screenshot": map[string]any{"type": "boolean"}, "download": map[string]any{"type": "boolean"},
 		}
-		if diagnostics {
-			featureRequired = append(featureRequired, "diagnostics")
-			featureProperties["diagnostics"] = map[string]any{"type": "boolean"}
-		}
+		featureRequired = append(featureRequired, "diagnostics")
+		featureProperties["diagnostics"] = map[string]any{"type": "boolean"}
 		return mustJSON(map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
