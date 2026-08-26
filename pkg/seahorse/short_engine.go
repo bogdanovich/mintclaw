@@ -103,7 +103,7 @@ type CompactionEngine struct {
 	store          *Store
 	config         Config
 	complete       CompleteFn
-	condensing     sync.Map // map[int64]struct{} — dedup for async condensed goroutines
+	condensing     sync.Map // map[int64]*condensedRun — dedup and join condensed work
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 }

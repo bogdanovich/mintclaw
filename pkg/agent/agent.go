@@ -279,6 +279,13 @@ func (al *AgentLoop) CloseContext(ctx context.Context) error {
 		logger.ErrorCF("agent", "Failed to close outbound outbox", map[string]any{"error": err.Error()})
 		closeErrors = append(closeErrors, fmt.Errorf("close outbound outbox: %w", err))
 	}
+	if err := al.compactionRunner.Close(ctx); err != nil {
+		logger.ErrorCF("agent", "Failed to stop background context compaction", map[string]any{
+			"error": err.Error(),
+		})
+		closeErrors = append(closeErrors, fmt.Errorf("stop background context compaction: %w", err))
+		return errors.Join(closeErrors...)
+	}
 	mcpManager := al.mcp.takeManager()
 
 	if mcpManager != nil {

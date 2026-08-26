@@ -1125,10 +1125,10 @@ func TestGenerateCondensedSummaryHardCapsOversizedOutput(t *testing.T) {
 	}
 }
 
-// --- Async Condensed Compaction (Phase 2) ---
+// --- Joined Condensed Compaction (Phase 2) ---
 
-func TestCompactAsyncReturnsBeforeCondensed(t *testing.T) {
-	// Use a slow CompleteFn to verify Compact returns before condensed finishes
+func TestCompactWaitsForCondensed(t *testing.T) {
+	// Use a slow CompleteFn to verify Compact joins condensed work.
 	var callCount int32
 	slowComplete := func(ctx context.Context, prompt string, opts CompleteOptions) (string, error) {
 		atomic.AddInt32(&callCount, 1)
@@ -1170,7 +1170,7 @@ func TestCompactAsyncReturnsBeforeCondensed(t *testing.T) {
 		}
 	}
 
-	// Compact with force — should return quickly, condensed runs async
+	// Compact with force must not return while condensed work still owns the store/provider.
 	start := time.Now()
 	result, err := ce.Compact(ctx, convID, CompactInput{Force: true})
 	elapsed := time.Since(start)
@@ -1182,15 +1182,11 @@ func TestCompactAsyncReturnsBeforeCondensed(t *testing.T) {
 		t.Fatal("expected non-nil result")
 	}
 
-	// Should return well before the 500ms LLM call
-	if elapsed > 200*time.Millisecond {
-		t.Errorf("Compact took %v, should return before async condensed finishes", elapsed)
+	if elapsed < 400*time.Millisecond {
+		t.Errorf("Compact took %v, returned before condensed work finished", elapsed)
 	}
 
-	// Wait for async to complete
-	time.Sleep(800 * time.Millisecond)
-
-	// Verify condensed summary was created by background goroutine
+	// The condensed summary is visible when Compact returns.
 	summaries, _ := s.GetSummariesByConversation(ctx, convID)
 	foundCondensed := false
 	for _, sum := range summaries {
@@ -1200,11 +1196,11 @@ func TestCompactAsyncReturnsBeforeCondensed(t *testing.T) {
 		}
 	}
 	if !foundCondensed {
-		t.Error("expected at least one condensed summary from async Phase 2")
+		t.Error("expected at least one condensed summary before Compact returned")
 	}
 }
 
-func TestCompactAsyncDedup(t *testing.T) {
+func TestCompactJoinedDedup(t *testing.T) {
 	var callCount int32
 	slowComplete := func(ctx context.Context, prompt string, opts CompleteOptions) (string, error) {
 		atomic.AddInt32(&callCount, 1)
@@ -1246,7 +1242,7 @@ func TestCompactAsyncDedup(t *testing.T) {
 		}
 	}
 
-	// Call Compact twice rapidly
+	// Sequential calls do not repeat already completed condensed work.
 	if _, err := ce.Compact(ctx, convID, CompactInput{Force: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -1254,12 +1250,7 @@ func TestCompactAsyncDedup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Wait for async to finish
-	time.Sleep(600 * time.Millisecond)
-
-	// LLM should only be called once for condensed (dedup)
-	// callCount may be 0 if no leaf was created (only condensed in goroutine)
-	// The key is that we don't get 2+ condensed calls
+	// The LLM is called at most once for the available condensed candidate.
 	if atomic.LoadInt32(&callCount) > 1 {
 		t.Errorf("LLM called %d times, expected at most 1 (dedup)", callCount)
 	}

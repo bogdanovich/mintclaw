@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
@@ -205,7 +207,7 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 	if err := m.ensureConversationProvenance(ctx, runtime, req.SessionKey); err != nil {
 		return nil, err
 	}
-	if err := m.ensureReconciledRuntime(ctx, runtime, req.SessionKey); err != nil {
+	if _, err := m.ensureReconciledRuntime(ctx, runtime, req.SessionKey); err != nil {
 		return nil, err
 	}
 
@@ -279,15 +281,31 @@ func (m *seahorseContextManager) Assemble(ctx context.Context, req *AssembleRequ
 }
 
 // Compact compresses conversation history via seahorse summarization.
-func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactRequest) error {
+func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactRequest) (compactErr error) {
 	if req == nil {
 		return nil
 	}
+	lifecycle := ContextCompressLifecyclePayload{
+		AttemptID: uuid.NewString(),
+		Reason:    req.Reason,
+		Status:    ContextCompressLifecycleStarted,
+	}
+	if req.Agent != nil {
+		lifecycle.ThreadID = req.Agent.CodingLayout.ThreadID()
+	}
 	status := ContextCompressLifecycleFailed
 	tokensSaved := 0
-	m.emitCompactLifecycleEvent(req, ContextCompressLifecycleStarted, 0)
+	started := false
 	defer func() {
-		m.emitCompactLifecycleEvent(req, status, tokensSaved)
+		if !started {
+			m.emitCompactLifecycleEvent(req, lifecycle)
+		}
+		if errors.Is(compactErr, context.Canceled) || errors.Is(compactErr, context.DeadlineExceeded) {
+			status = ContextCompressLifecycleInterrupted
+		}
+		lifecycle.Status = status
+		lifecycle.TokensSaved = tokensSaved
+		m.emitCompactLifecycleEvent(req, lifecycle)
 	}()
 	runtime, runtimeErr := m.runtimeFor(req.Agent)
 	if runtimeErr != nil {
@@ -298,9 +316,16 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	if err := m.ensureConversationProvenance(ctx, runtime, req.SessionKey); err != nil {
 		return err
 	}
-	if err := m.ensureReconciledRuntime(ctx, runtime, req.SessionKey); err != nil {
+	revision, err := m.ensureReconciledRuntime(ctx, runtime, req.SessionKey)
+	if err != nil {
 		return err
 	}
+	if runtime.sessions != nil {
+		lifecycle.TranscriptRevision = revision.Revision
+		lifecycle.TranscriptCount = revision.Count
+	}
+	m.emitCompactLifecycleEvent(req, lifecycle)
+	started = true
 
 	// Overflow retry uses aggressive CompactUntilUnder to guarantee the next LLM
 	// request has a smaller assembled history. Manual frontend compaction uses
@@ -311,12 +336,19 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		(req.Reason == ContextCompressReasonProactive && runtime.engine.AbsoluteBudgetsEnabled())) &&
 		req.Budget > 0 {
 		result, compactErr := runtime.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
-		if compactErr == nil && compactResultHasProgress(result) {
-			status = ContextCompressLifecycleCompleted
+		if compactResultHasProgress(result) {
+			lifecycle.Status = ContextCompressLifecycleProgress
+			lifecycle.TokensSaved = result.TokensSaved
+			m.emitCompactLifecycleEvent(req, lifecycle)
 			tokensSaved = result.TokensSaved
 			m.emitCompactEvent(req, result)
-		} else if compactErr == nil {
-			status = ContextCompressLifecycleNoop
+		}
+		if compactErr == nil {
+			if compactResultHasProgress(result) {
+				status = ContextCompressLifecycleCompleted
+			} else {
+				status = ContextCompressLifecycleNoProgress
+			}
 		}
 		return compactErr
 	}
@@ -326,13 +358,18 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 			req.Reason == ContextCompressReasonManual,
 		Budget: &req.Budget,
 	})
+	if compactResultHasProgress(result) {
+		lifecycle.Status = ContextCompressLifecycleProgress
+		lifecycle.TokensSaved = result.TokensSaved
+		m.emitCompactLifecycleEvent(req, lifecycle)
+		tokensSaved = result.TokensSaved
+		m.emitCompactEvent(req, result)
+	}
 	if err == nil {
 		if compactResultHasProgress(result) {
 			status = ContextCompressLifecycleCompleted
-			tokensSaved = result.TokensSaved
-			m.emitCompactEvent(req, result)
 		} else {
-			status = ContextCompressLifecycleNoop
+			status = ContextCompressLifecycleNoProgress
 		}
 	}
 	return err
@@ -363,22 +400,25 @@ func (m *seahorseContextManager) emitCompactEvent(req *CompactRequest, result *s
 
 func (m *seahorseContextManager) emitCompactLifecycleEvent(
 	req *CompactRequest,
-	status ContextCompressLifecycleStatus,
-	tokensSaved int,
+	payload ContextCompressLifecyclePayload,
 ) {
 	if m.al == nil || req == nil {
 		return
 	}
 	kind := runtimeevents.KindAgentContextCompressEnd
 	tracePath := "turn.context.compress.end"
-	if status == ContextCompressLifecycleStarted {
+	switch payload.Status {
+	case ContextCompressLifecycleStarted:
 		kind = runtimeevents.KindAgentContextCompressStart
 		tracePath = "turn.context.compress.start"
+	case ContextCompressLifecycleProgress:
+		kind = runtimeevents.KindAgentContextCompressProgress
+		tracePath = "turn.context.compress.progress"
 	}
 	m.al.emitEvent(
 		kind,
 		m.compactEventMeta(req, tracePath),
-		ContextCompressLifecyclePayload{Reason: req.Reason, Status: status, TokensSaved: tokensSaved},
+		payload,
 	)
 }
 
@@ -431,7 +471,8 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 	}
 	if req.CanonicalWriteErr != nil {
 		if canonicalHistoryContains(runtime.sessions, req.SessionKey, req.Message) {
-			return m.ensureReconciledRuntime(ctx, runtime, req.SessionKey)
+			_, err := m.ensureReconciledRuntime(ctx, runtime, req.SessionKey)
+			return err
 		}
 		logger.WarnCF("seahorse", "canonical history write failed; ingesting live message without watermark",
 			map[string]any{"session": req.SessionKey, "error": req.CanonicalWriteErr.Error()})
@@ -457,13 +498,14 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 		state.SourceRevision+1 == revision.Revision && state.SourceCount+1 == revision.Count &&
 		state.SourceSkip == revision.Skip {
 		msg := providerToSeahorseMessage(req.Message)
-		if _, err := runtime.engine.Ingest(ctx, req.SessionKey, []seahorse.Message{msg}); err != nil {
-			return err
+		if _, ingestErr := runtime.engine.Ingest(ctx, req.SessionKey, []seahorse.Message{msg}); ingestErr != nil {
+			return ingestErr
 		}
 		return m.setReconciliationState(ctx, runtime, req.SessionKey, revision)
 	}
 
-	return m.ensureReconciledRuntime(ctx, runtime, req.SessionKey)
+	_, err = m.ensureReconciledRuntime(ctx, runtime, req.SessionKey)
+	return err
 }
 
 func (m *seahorseContextManager) ensureConversationProvenance(
@@ -546,10 +588,10 @@ func (m *seahorseContextManager) reconcile(
 	runtime *seahorseAgentRuntime,
 	sessionKey string,
 	forceDerivedRebuild bool,
-) error {
-	history, err := canonicalHistory(runtime.sessions, sessionKey)
+) (memory.HistoryRevision, error) {
+	history, revision, err := canonicalHistoryAtStableRevision(runtime.sessions, sessionKey)
 	if err != nil {
-		return err
+		return memory.HistoryRevision{}, err
 	}
 	msgs := make([]seahorse.Message, len(history))
 	for i, h := range history {
@@ -557,13 +599,37 @@ func (m *seahorseContextManager) reconcile(
 	}
 	if forceDerivedRebuild {
 		if err := runtime.engine.ClearSession(ctx, sessionKey); err != nil {
-			return fmt.Errorf("seahorse force derived rebuild: %w", err)
+			return memory.HistoryRevision{}, fmt.Errorf("seahorse force derived rebuild: %w", err)
 		}
 	}
 	if len(msgs) == 0 {
-		return runtime.engine.ClearSession(ctx, sessionKey)
+		return revision, runtime.engine.ClearSession(ctx, sessionKey)
 	}
-	return runtime.engine.Bootstrap(ctx, sessionKey, msgs)
+	return revision, runtime.engine.Bootstrap(ctx, sessionKey, msgs)
+}
+
+func canonicalHistoryAtStableRevision(
+	store session.SessionStore,
+	key string,
+) ([]providers.Message, memory.HistoryRevision, error) {
+	for range 3 {
+		before, err := historyRevision(store, key)
+		if err != nil {
+			return nil, memory.HistoryRevision{}, err
+		}
+		history, err := canonicalHistory(store, key)
+		if err != nil {
+			return nil, memory.HistoryRevision{}, err
+		}
+		after, err := historyRevision(store, key)
+		if err != nil {
+			return nil, memory.HistoryRevision{}, err
+		}
+		if before == after && !after.Dirty {
+			return history, after, nil
+		}
+	}
+	return nil, memory.HistoryRevision{}, fmt.Errorf("canonical history changed during reconciliation")
 }
 
 func canonicalHistory(store session.SessionStore, key string) ([]providers.Message, error) {
@@ -583,41 +649,43 @@ func (m *seahorseContextManager) ensureReconciled(
 		return err
 	}
 	runtime.sessions = store
-	return m.ensureReconciledRuntime(ctx, runtime, sessionKey)
+	_, err = m.ensureReconciledRuntime(ctx, runtime, sessionKey)
+	return err
 }
 
 func (m *seahorseContextManager) ensureReconciledRuntime(
 	ctx context.Context,
 	runtime *seahorseAgentRuntime,
 	sessionKey string,
-) error {
+) (memory.HistoryRevision, error) {
 	if runtime.sessions == nil {
-		return nil
+		return memory.HistoryRevision{}, nil
 	}
 	revision, err := historyRevision(runtime.sessions, sessionKey)
 	if err != nil {
-		return fmt.Errorf("seahorse history revision: %w", err)
+		return memory.HistoryRevision{}, fmt.Errorf("seahorse history revision: %w", err)
 	}
 	state, err := runtime.engine.GetRetrieval().Store().GetReconciliationState(ctx, sessionKey)
 	if err != nil {
-		return err
+		return memory.HistoryRevision{}, err
 	}
 	if reconciliationMatches(state, revision, runtime.reconciliationGeneration) {
-		return nil
+		return revision, nil
 	}
 	started := time.Now()
 	m.reconciliations.Add(1)
 	forceDerivedRebuild := state == nil || state.SchemaGeneration != runtime.reconciliationGeneration
-	if err := m.reconcile(ctx, runtime, sessionKey, forceDerivedRebuild); err != nil {
-		return fmt.Errorf("seahorse reconcile: %w", err)
+	reconciledRevision, err := m.reconcile(ctx, runtime, sessionKey, forceDerivedRebuild)
+	if err != nil {
+		return memory.HistoryRevision{}, fmt.Errorf("seahorse reconcile: %w", err)
 	}
-	if err := m.setReconciliationState(ctx, runtime, sessionKey, revision); err != nil {
-		return err
+	if err := m.setReconciliationState(ctx, runtime, sessionKey, reconciledRevision); err != nil {
+		return memory.HistoryRevision{}, err
 	}
 	logger.InfoCF("seahorse", "reconciled canonical history", map[string]any{
-		"session": sessionKey, "messages": revision.Count, "duration": time.Since(started),
+		"session": sessionKey, "messages": reconciledRevision.Count, "duration": time.Since(started),
 	})
-	return nil
+	return reconciledRevision, nil
 }
 
 func reconciliationMatches(
@@ -682,7 +750,7 @@ func (m *seahorseContextManager) StartBackgroundReconciliation(ctx context.Conte
 			}
 			for _, key := range runtime.sessions.ListSessions() {
 				unlock := m.lockSession(runtime.agentID + ":" + key)
-				err := m.ensureReconciledRuntime(ctx, runtime, key)
+				_, err = m.ensureReconciledRuntime(ctx, runtime, key)
 				unlock()
 				if err != nil && ctx.Err() == nil {
 					logger.WarnCF("seahorse", "background reconciliation failed", map[string]any{

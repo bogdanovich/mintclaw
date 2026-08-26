@@ -177,18 +177,24 @@ type ContextCompressPayload struct {
 type ContextCompressLifecycleStatus string
 
 const (
-	ContextCompressLifecycleStarted   ContextCompressLifecycleStatus = "started"
-	ContextCompressLifecycleCompleted ContextCompressLifecycleStatus = "completed"
-	ContextCompressLifecycleNoop      ContextCompressLifecycleStatus = "no_op"
-	ContextCompressLifecycleFailed    ContextCompressLifecycleStatus = "failed"
+	ContextCompressLifecycleStarted     ContextCompressLifecycleStatus = "started"
+	ContextCompressLifecycleProgress    ContextCompressLifecycleStatus = "progress"
+	ContextCompressLifecycleCompleted   ContextCompressLifecycleStatus = "completed"
+	ContextCompressLifecycleNoProgress  ContextCompressLifecycleStatus = "no_progress"
+	ContextCompressLifecycleInterrupted ContextCompressLifecycleStatus = "interrupted"
+	ContextCompressLifecycleFailed      ContextCompressLifecycleStatus = "failed"
 )
 
 // ContextCompressLifecyclePayload pairs every attempted compaction without
 // carrying raw errors or summarized content into frontend observations.
 type ContextCompressLifecyclePayload struct {
-	Reason      ContextCompressReason
-	Status      ContextCompressLifecycleStatus
-	TokensSaved int
+	AttemptID          string
+	ThreadID           string
+	TranscriptRevision uint64
+	TranscriptCount    int
+	Reason             ContextCompressReason
+	Status             ContextCompressLifecycleStatus
+	TokensSaved        int
 }
 
 type ContextSnapshotPayload struct {

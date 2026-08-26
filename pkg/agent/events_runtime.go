@@ -44,7 +44,8 @@ func runtimeSeverityForAgentEvent(kind runtimeevents.Kind, payload any) runtimee
 		return runtimeevents.SeverityWarn
 	case runtimeevents.KindAgentContextCompressEnd:
 		lifecycle, ok := payload.(ContextCompressLifecyclePayload)
-		if ok && lifecycle.Status == ContextCompressLifecycleFailed {
+		if ok && (lifecycle.Status == ContextCompressLifecycleFailed ||
+			lifecycle.Status == ContextCompressLifecycleInterrupted) {
 			return runtimeevents.SeverityWarn
 		}
 		return runtimeevents.SeverityInfo

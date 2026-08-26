@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1156,7 +1158,7 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 	t.Cleanup(func() { _ = runtimeBus.Close() })
 	subscription, events, err := runtimeBus.Channel().
 		OfKind(runtimeevents.KindAgentContextCompressStart, runtimeevents.KindAgentContextCompressEnd).
-		SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "compression-lifecycle", Buffer: 4})
+		SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "compression-lifecycle", Buffer: 6})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1169,7 +1171,7 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	assertCompactLifecyclePair(t, events, ContextCompressLifecycleNoop, ContextCompressReasonProactive)
+	assertCompactLifecyclePair(t, events, ContextCompressLifecycleNoProgress, ContextCompressReasonProactive)
 
 	err = manager.Compact(t.Context(), &CompactRequest{
 		Agent: &AgentInstance{ID: "missing"}, SessionKey: "missing", Reason: ContextCompressReasonRetry,
@@ -1178,6 +1180,16 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 		t.Fatal("missing runtime compaction unexpectedly succeeded")
 	}
 	assertCompactLifecyclePair(t, events, ContextCompressLifecycleFailed, ContextCompressReasonRetry)
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = manager.Compact(canceled, &CompactRequest{
+		SessionKey: "canceled", Reason: ContextCompressReasonManual,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled compaction error = %v, want context.Canceled", err)
+	}
+	assertCompactLifecyclePair(t, events, ContextCompressLifecycleInterrupted, ContextCompressReasonManual)
 }
 
 func assertCompactLifecyclePair(
@@ -1196,6 +1208,165 @@ func assertCompactLifecyclePair(
 		startPayload.Status != ContextCompressLifecycleStarted || endPayload.Status != wantEnd ||
 		startPayload.Reason != wantReason || endPayload.Reason != wantReason {
 		t.Fatalf("compaction lifecycle = start:%+v end:%+v", started, ended)
+	}
+	if startPayload.AttemptID == "" || startPayload.AttemptID != endPayload.AttemptID {
+		t.Fatalf("compaction attempt identity = start:%q end:%q", startPayload.AttemptID, endPayload.AttemptID)
+	}
+}
+
+func TestSeahorseCompactProgressEventPreservesCorrelation(t *testing.T) {
+	runtimeBus := runtimeevents.NewBus()
+	t.Cleanup(func() { _ = runtimeBus.Close() })
+	subscription, events, err := runtimeBus.Channel().
+		OfKind(runtimeevents.KindAgentContextCompressProgress).
+		SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "compression-progress", Buffer: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+	manager := &seahorseContextManager{al: &AgentLoop{runtimeEvents: runtimeBus}}
+	payload := ContextCompressLifecyclePayload{
+		AttemptID: "attempt-1", ThreadID: "thread-1", TranscriptRevision: 7, TranscriptCount: 12,
+		Reason: ContextCompressReasonManual, Status: ContextCompressLifecycleProgress, TokensSaved: 42,
+	}
+	manager.emitCompactLifecycleEvent(&CompactRequest{SessionKey: "coding:thread-1"}, payload)
+	event := receiveRuntimeEvent(t, events)
+	got, ok := event.Payload.(ContextCompressLifecyclePayload)
+	if !ok || event.Kind != runtimeevents.KindAgentContextCompressProgress || got != payload {
+		t.Fatalf("progress event = %+v", event)
+	}
+}
+
+func TestSeahorseCompactPreservesPartialProgressOnFailure(t *testing.T) {
+	var calls atomic.Int32
+	injected := errors.New("injected later compaction failure")
+	engine, err := seahorse.NewEngine(
+		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")},
+		func(context.Context, string, seahorse.CompleteOptions) (string, error) {
+			if calls.Add(1) == 1 {
+				return "compact summary", nil
+			}
+			return "", injected
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	runtimeBus := runtimeevents.NewBus()
+	t.Cleanup(func() { _ = runtimeBus.Close() })
+	subscription, events, err := runtimeBus.Channel().OfKind(
+		runtimeevents.KindAgentContextCompressStart,
+		runtimeevents.KindAgentContextCompressProgress,
+		runtimeevents.KindAgentContextCompressEnd,
+	).SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "partial-progress", Buffer: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+	manager := newSingleRuntimeTestManager(engine, nil)
+	manager.al = &AgentLoop{runtimeEvents: runtimeBus}
+	for i := 0; i < 40; i++ {
+		if err := manager.Ingest(t.Context(), &IngestRequest{
+			SessionKey: "partial",
+			Message:    protocoltypes.Message{Role: "user", Content: strings.Repeat("evidence ", 250)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = manager.Compact(t.Context(), &CompactRequest{
+		SessionKey: "partial", Reason: ContextCompressReasonRetry, Budget: 1,
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("Compact() error = %v, want %v", err, injected)
+	}
+	started := receiveRuntimeEvent(t, events)
+	progress := receiveRuntimeEvent(t, events)
+	ended := receiveRuntimeEvent(t, events)
+	progressPayload := progress.Payload.(ContextCompressLifecyclePayload)
+	endPayload := ended.Payload.(ContextCompressLifecyclePayload)
+	if started.Kind != runtimeevents.KindAgentContextCompressStart ||
+		progress.Kind != runtimeevents.KindAgentContextCompressProgress ||
+		ended.Kind != runtimeevents.KindAgentContextCompressEnd ||
+		progressPayload.TokensSaved <= 0 || endPayload.TokensSaved != progressPayload.TokensSaved ||
+		endPayload.Status != ContextCompressLifecycleFailed {
+		t.Fatalf("partial progress lifecycle = start:%+v progress:%+v end:%+v", started, progress, ended)
+	}
+}
+
+func TestSeahorseRoutineCompactPreservesPartialProgressOnFailure(t *testing.T) {
+	var calls atomic.Int32
+	injected := errors.New("injected condensed failure")
+	engine, err := seahorse.NewEngine(
+		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")},
+		func(context.Context, string, seahorse.CompleteOptions) (string, error) {
+			if calls.Add(1) == 1 {
+				return "compact leaf summary", nil
+			}
+			return "", injected
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	runtimeBus := runtimeevents.NewBus()
+	t.Cleanup(func() { _ = runtimeBus.Close() })
+	subscription, events, err := runtimeBus.Channel().OfKind(
+		runtimeevents.KindAgentContextCompressStart,
+		runtimeevents.KindAgentContextCompressProgress,
+		runtimeevents.KindAgentContextCompressEnd,
+	).SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "routine-partial-progress", Buffer: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+	manager := newSingleRuntimeTestManager(engine, nil)
+	manager.al = &AgentLoop{runtimeEvents: runtimeBus}
+	const key = "routine-partial"
+	conversation, err := engine.GetRetrieval().Store().GetOrCreateConversation(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < seahorse.FreshTailCount+seahorse.CondensedMinFanout*2; i++ {
+		now := time.Now().UTC()
+		summary, createErr := engine.GetRetrieval().Store().CreateSummary(t.Context(), seahorse.CreateSummaryInput{
+			ConversationID: conversation.ConversationID,
+			Kind:           seahorse.SummaryKindLeaf,
+			Depth:          0,
+			Content:        "existing leaf summary",
+			TokenCount:     100,
+			EarliestAt:     &now,
+			LatestAt:       &now,
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		if appendErr := engine.GetRetrieval().Store().AppendContextSummary(
+			t.Context(),
+			conversation.ConversationID,
+			summary.SummaryID,
+		); appendErr != nil {
+			t.Fatal(appendErr)
+		}
+	}
+	err = manager.Compact(t.Context(), &CompactRequest{
+		SessionKey: key, Reason: ContextCompressReasonManual,
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("Compact() error = %v, want %v", err, injected)
+	}
+	started := receiveRuntimeEvent(t, events)
+	progress := receiveRuntimeEvent(t, events)
+	ended := receiveRuntimeEvent(t, events)
+	progressPayload := progress.Payload.(ContextCompressLifecyclePayload)
+	endPayload := ended.Payload.(ContextCompressLifecyclePayload)
+	if started.Kind != runtimeevents.KindAgentContextCompressStart ||
+		progress.Kind != runtimeevents.KindAgentContextCompressProgress ||
+		ended.Kind != runtimeevents.KindAgentContextCompressEnd ||
+		progressPayload.TokensSaved <= 0 || endPayload.TokensSaved != progressPayload.TokensSaved ||
+		endPayload.Status != ContextCompressLifecycleFailed {
+		t.Fatalf("routine partial lifecycle = start:%+v progress:%+v end:%+v", started, progress, ended)
 	}
 }
 

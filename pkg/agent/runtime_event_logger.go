@@ -362,6 +362,10 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["leaf_summaries"] = payload.LeafSummaries
 		fields["condensed_summaries"] = payload.CondensedSummaries
 	case ContextCompressLifecyclePayload:
+		fields["attempt_id"] = payload.AttemptID
+		fields["thread_id"] = payload.ThreadID
+		fields["transcript_revision"] = payload.TranscriptRevision
+		fields["transcript_count"] = payload.TranscriptCount
 		fields["reason"] = payload.Reason
 		fields["status"] = payload.Status
 		fields["tokens_saved"] = payload.TokensSaved

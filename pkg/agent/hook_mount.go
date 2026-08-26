@@ -328,6 +328,7 @@ func validHookEventKinds() map[string]string {
 	kinds["llm_fallback_attempt"] = runtimeevents.KindAgentLLMFallbackAttempt.String()
 	kinds["context_compress"] = runtimeevents.KindAgentContextCompress.String()
 	kinds["context_compress_start"] = runtimeevents.KindAgentContextCompressStart.String()
+	kinds["context_compress_progress"] = runtimeevents.KindAgentContextCompressProgress.String()
 	kinds["context_compress_end"] = runtimeevents.KindAgentContextCompressEnd.String()
 	kinds["context_snapshot"] = runtimeevents.KindAgentContextSnapshot.String()
 	kinds["session_summarize"] = runtimeevents.KindAgentSessionSummarize.String()

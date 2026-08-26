@@ -230,7 +230,7 @@ func TestStandaloneForegroundCompactionOwnsIdleActivity(t *testing.T) {
 	projector.CompactionCompleted("", "manual", 0, true, false)
 	completed := snapshotForTest(t, projector)
 	if completed.Activity != ActivityIdle || completed.LastCompaction == nil ||
-		completed.LastCompaction.Status != CompactionNoop {
+		completed.LastCompaction.Status != CompactionNoProgress {
 		t.Fatalf("standalone compaction completion = %+v", completed)
 	}
 }
@@ -244,6 +244,20 @@ func TestCompactionEndPreservesNewerInterruptState(t *testing.T) {
 	view := snapshotForTest(t, projector)
 	if view.Activity != ActivityInterrupting || view.Status != "interrupt requested" ||
 		view.LastCompaction == nil || view.LastCompaction.Status != CompactionFailed {
+		t.Fatalf("interrupted compaction view = %+v", view)
+	}
+}
+
+func TestForegroundCompactionInterruptedReleasesActivity(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "fix it")
+	projector.CompactionStarted("turn-1", "llm_retry", false)
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", Reason: "llm_retry", Status: CompactionInterrupted,
+	})
+	view := snapshotForTest(t, projector)
+	if view.Activity != ActivityRunning || view.Status != "context compaction interrupted" ||
+		view.LastCompaction == nil || view.LastCompaction.Status != CompactionInterrupted {
 		t.Fatalf("interrupted compaction view = %+v", view)
 	}
 }
