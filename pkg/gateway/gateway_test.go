@@ -1123,6 +1123,22 @@ func TestGatewayAgentRuntimeStopBoundsRunLoopWait(t *testing.T) {
 	}
 }
 
+func TestCloseGatewayProviderAfterAgentStop(t *testing.T) {
+	provider := &trackedStartupProvider{}
+	closeGatewayProviderAfterAgentStop(provider, true, context.DeadlineExceeded)
+	if provider.closed.Load() {
+		t.Fatal("provider closed after agent drain failed")
+	}
+	closeGatewayProviderAfterAgentStop(provider, false, nil)
+	if provider.closed.Load() {
+		t.Fatal("provider closed during a partial gateway shutdown")
+	}
+	closeGatewayProviderAfterAgentStop(provider, true, nil)
+	if !provider.closed.Load() {
+		t.Fatal("provider remained open after a successful full agent drain")
+	}
+}
+
 func receiveGatewayRuntimeEvent(t *testing.T, ch <-chan runtimeevents.Event) runtimeevents.Event {
 	t.Helper()
 

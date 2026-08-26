@@ -1367,10 +1367,6 @@ func shutdownGateway(
 		agentRuntime.cancel()
 	}
 
-	if cp, ok := provider.(providers.StatefulProvider); ok && fullShutdown {
-		cp.Close()
-	}
-
 	var shutdownErrors []error
 	if err := stopAndCleanupServices(runningServices, gracefulShutdownTimeout, false); err != nil {
 		shutdownErrors = append(shutdownErrors, fmt.Errorf("stopping gateway services: %w", err))
@@ -1380,9 +1376,11 @@ func shutdownGateway(
 		msgBus.Close()
 	}
 
-	if err := agentRuntime.stop(shutdownCtx, agentLoop); err != nil {
-		shutdownErrors = append(shutdownErrors, err)
+	agentStopErr := agentRuntime.stop(shutdownCtx, agentLoop)
+	if agentStopErr != nil {
+		shutdownErrors = append(shutdownErrors, agentStopErr)
 	}
+	closeGatewayProviderAfterAgentStop(provider, fullShutdown, agentStopErr)
 	if len(shutdownErrors) > 0 {
 		err := errors.Join(shutdownErrors...)
 		logger.ErrorCF("gateway", "Gateway stopped with cleanup failures", map[string]any{"error": err.Error()})
@@ -1391,6 +1389,19 @@ func shutdownGateway(
 
 	logger.Info("✓ Gateway stopped")
 	return nil
+}
+
+func closeGatewayProviderAfterAgentStop(
+	provider providers.LLMProvider,
+	fullShutdown bool,
+	agentStopErr error,
+) {
+	if agentStopErr != nil || !fullShutdown {
+		return
+	}
+	if stateful, ok := provider.(providers.StatefulProvider); ok {
+		stateful.Close()
+	}
 }
 
 func handleConfigReload(

@@ -23,6 +23,11 @@ shutdown first stops and drains those workers, then closes Seahorse, providers,
 and the event bus. A bounded shutdown that cannot drain returns an error without
 closing dependencies underneath an active worker.
 
+Seahorse condensed compaction is joined by its `Compact` caller rather than
+detached into an unowned nested goroutine. Full gateway shutdown closes an
+externally owned provider only after the agent runtime drain succeeds; a timed
+out drain deliberately leaves that provider open for a safe cleanup retry.
+
 Manual compaction is serialized with foreground turns by the coding controller.
 All Seahorse assemble, ingest, clear, and compact operations for a session use
 the same session lock, so emergency or background compaction cannot summarize
@@ -39,8 +44,9 @@ Every attempted compaction emits a correlated lifecycle:
 
 The lifecycle payload carries a unique attempt ID, coding thread ID, source
 transcript revision and message count, trigger reason, and tokens saved. The
-revision is captured while holding the session lock after canonical-to-derived
-reconciliation. Failures that occur before a runtime or revision can be
+revision comes from the stable canonical snapshot actually installed by
+canonical-to-derived reconciliation while holding the session lock. Failures
+that occur before a runtime or revision can be
 resolved still receive a paired attempt ID, with unavailable correlation fields
 left empty.
 

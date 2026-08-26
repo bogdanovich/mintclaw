@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
@@ -25,6 +26,38 @@ type staticHistorySessionStore struct {
 	session.SessionStore
 	history  []providers.Message
 	revision memory.HistoryRevision
+}
+
+type advancingRevisionSessionStore struct {
+	*staticHistorySessionStore
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *advancingRevisionSessionStore) GetHistoryRevision(string) (memory.HistoryRevision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	revision := s.revision
+	if s.calls > 1 {
+		revision.Revision++
+		revision.Count++
+	}
+	return revision, nil
+}
+
+func (s *advancingRevisionSessionStore) GetHistory(string) []providers.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	history := append([]providers.Message(nil), s.history...)
+	if s.calls > 1 {
+		history = append(history, providers.Message{Role: "assistant", Content: "new canonical message"})
+	}
+	return history
+}
+
+func (s *advancingRevisionSessionStore) GetHistoryWithError(key string) ([]providers.Message, error) {
+	return s.GetHistory(key), nil
 }
 
 func (s *staticHistorySessionStore) GetHistory(string) []providers.Message {
@@ -74,6 +107,51 @@ func TestSeahorseReconciliationCleanRevisionSkipsDeepComparison(t *testing.T) {
 	}
 	if got := mgr.reconciliations.Load(); got != before {
 		t.Fatalf("unchanged revision reconciliations = %d, want %d", got, before)
+	}
+}
+
+func TestSeahorseCompactCorrelatesStableReconciledRevision(t *testing.T) {
+	key := "stable-revision"
+	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: t.TempDir() + "/seahorse.db"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	store := &advancingRevisionSessionStore{staticHistorySessionStore: &staticHistorySessionStore{
+		SessionStore: session.NewMemoryStore(),
+		history:      []providers.Message{{Role: "user", Content: "canonical"}},
+		revision:     memory.HistoryRevision{Revision: 7, Count: 1},
+	}}
+	runtimeBus := runtimeevents.NewBus()
+	t.Cleanup(func() { _ = runtimeBus.Close() })
+	subscription, events, err := runtimeBus.Channel().
+		OfKind(runtimeevents.KindAgentContextCompressStart, runtimeevents.KindAgentContextCompressEnd).
+		SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "stable-revision", Buffer: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+	manager := newSingleRuntimeTestManager(engine, store)
+	manager.al = &AgentLoop{runtimeEvents: runtimeBus}
+	if err := manager.Compact(
+		t.Context(),
+		&CompactRequest{SessionKey: key, Reason: ContextCompressReasonProactive},
+	); err != nil {
+		t.Fatal(err)
+	}
+	started := receiveRuntimeEvent(t, events)
+	ended := receiveRuntimeEvent(t, events)
+	startPayload := started.Payload.(ContextCompressLifecyclePayload)
+	endPayload := ended.Payload.(ContextCompressLifecyclePayload)
+	if startPayload.TranscriptRevision != 8 || startPayload.TranscriptCount != 2 ||
+		endPayload.TranscriptRevision != 8 || endPayload.TranscriptCount != 2 {
+		t.Fatalf("lifecycle revisions = start:%+v end:%+v", startPayload, endPayload)
+	}
+	store.mu.Lock()
+	calls := store.calls
+	store.mu.Unlock()
+	if calls != 3 {
+		t.Fatalf("history revision reads = %d, want initial plus stable snapshot pair", calls)
 	}
 }
 
