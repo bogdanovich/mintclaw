@@ -1294,6 +1294,82 @@ func TestSeahorseCompactPreservesPartialProgressOnFailure(t *testing.T) {
 	}
 }
 
+func TestSeahorseRoutineCompactPreservesPartialProgressOnFailure(t *testing.T) {
+	var calls atomic.Int32
+	injected := errors.New("injected condensed failure")
+	engine, err := seahorse.NewEngine(
+		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")},
+		func(context.Context, string, seahorse.CompleteOptions) (string, error) {
+			if calls.Add(1) == 1 {
+				return "compact leaf summary", nil
+			}
+			return "", injected
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	runtimeBus := runtimeevents.NewBus()
+	t.Cleanup(func() { _ = runtimeBus.Close() })
+	subscription, events, err := runtimeBus.Channel().OfKind(
+		runtimeevents.KindAgentContextCompressStart,
+		runtimeevents.KindAgentContextCompressProgress,
+		runtimeevents.KindAgentContextCompressEnd,
+	).SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "routine-partial-progress", Buffer: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+	manager := newSingleRuntimeTestManager(engine, nil)
+	manager.al = &AgentLoop{runtimeEvents: runtimeBus}
+	const key = "routine-partial"
+	conversation, err := engine.GetRetrieval().Store().GetOrCreateConversation(t.Context(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < seahorse.FreshTailCount+seahorse.CondensedMinFanout*2; i++ {
+		now := time.Now().UTC()
+		summary, createErr := engine.GetRetrieval().Store().CreateSummary(t.Context(), seahorse.CreateSummaryInput{
+			ConversationID: conversation.ConversationID,
+			Kind:           seahorse.SummaryKindLeaf,
+			Depth:          0,
+			Content:        "existing leaf summary",
+			TokenCount:     100,
+			EarliestAt:     &now,
+			LatestAt:       &now,
+		})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		if appendErr := engine.GetRetrieval().Store().AppendContextSummary(
+			t.Context(),
+			conversation.ConversationID,
+			summary.SummaryID,
+		); appendErr != nil {
+			t.Fatal(appendErr)
+		}
+	}
+	err = manager.Compact(t.Context(), &CompactRequest{
+		SessionKey: key, Reason: ContextCompressReasonManual,
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("Compact() error = %v, want %v", err, injected)
+	}
+	started := receiveRuntimeEvent(t, events)
+	progress := receiveRuntimeEvent(t, events)
+	ended := receiveRuntimeEvent(t, events)
+	progressPayload := progress.Payload.(ContextCompressLifecyclePayload)
+	endPayload := ended.Payload.(ContextCompressLifecyclePayload)
+	if started.Kind != runtimeevents.KindAgentContextCompressStart ||
+		progress.Kind != runtimeevents.KindAgentContextCompressProgress ||
+		ended.Kind != runtimeevents.KindAgentContextCompressEnd ||
+		progressPayload.TokensSaved <= 0 || endPayload.TokensSaved != progressPayload.TokensSaved ||
+		endPayload.Status != ContextCompressLifecycleFailed {
+		t.Fatalf("routine partial lifecycle = start:%+v progress:%+v end:%+v", started, progress, ended)
+	}
+}
+
 // TestSeahorseRealLoopNoDuplicateMessages tests the real-world scenario:
 // 1. Start AgentLoop with seahorse context manager
 // 2. Run a turn (user message -> LLM response)

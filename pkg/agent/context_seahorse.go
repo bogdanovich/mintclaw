@@ -358,14 +358,16 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 			req.Reason == ContextCompressReasonManual,
 		Budget: &req.Budget,
 	})
+	if compactResultHasProgress(result) {
+		lifecycle.Status = ContextCompressLifecycleProgress
+		lifecycle.TokensSaved = result.TokensSaved
+		m.emitCompactLifecycleEvent(req, lifecycle)
+		tokensSaved = result.TokensSaved
+		m.emitCompactEvent(req, result)
+	}
 	if err == nil {
 		if compactResultHasProgress(result) {
-			lifecycle.Status = ContextCompressLifecycleProgress
-			lifecycle.TokensSaved = result.TokensSaved
-			m.emitCompactLifecycleEvent(req, lifecycle)
 			status = ContextCompressLifecycleCompleted
-			tokensSaved = result.TokensSaved
-			m.emitCompactEvent(req, result)
 		} else {
 			status = ContextCompressLifecycleNoProgress
 		}
