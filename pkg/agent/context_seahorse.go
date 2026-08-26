@@ -37,10 +37,11 @@ type seahorseContextManager struct {
 }
 
 type seahorseAgentRuntime struct {
-	engine    *seahorse.Engine
-	sessions  session.SessionStore
-	workspace string
-	agentID   string
+	engine                   *seahorse.Engine
+	sessions                 session.SessionStore
+	workspace                string
+	agentID                  string
+	reconciliationGeneration int
 }
 
 const seahorseReconciliationGeneration = 2
@@ -102,6 +103,7 @@ func newSeahorseAgentRuntime(
 	storeFactory := CodingRuntimeStoreFactory(defaultCodingRuntimeStoreFactory{})
 	if al.codingProfile != nil {
 		storeFactory = al.codingProfile.storeFactory
+		seahorseConfig.SummaryPolicy = seahorse.SummaryPolicyCodingV1
 		if seahorseConfig.DBPath != dbPath {
 			return nil, fmt.Errorf("custom dbPath is not supported with a coding profile")
 		}
@@ -121,6 +123,9 @@ func newSeahorseAgentRuntime(
 		sessions:  agent.Sessions,
 		workspace: agent.Workspace,
 		agentID:   agent.ID,
+		reconciliationGeneration: seahorseConfig.SummaryPolicy.ReconciliationGeneration(
+			seahorseReconciliationGeneration,
+		),
 	}, nil
 }
 
@@ -448,7 +453,7 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 	if err != nil {
 		return err
 	}
-	if state != nil && !revision.Dirty && state.SchemaGeneration == seahorseReconciliationGeneration &&
+	if state != nil && !revision.Dirty && state.SchemaGeneration == runtime.reconciliationGeneration &&
 		state.SourceRevision+1 == revision.Revision && state.SourceCount+1 == revision.Count &&
 		state.SourceSkip == revision.Skip {
 		msg := providerToSeahorseMessage(req.Message)
@@ -591,7 +596,7 @@ func (m *seahorseContextManager) ensureReconciledRuntime(
 	if err != nil {
 		return err
 	}
-	if reconciliationMatches(state, revision) {
+	if reconciliationMatches(state, revision, runtime.reconciliationGeneration) {
 		return nil
 	}
 	started := time.Now()
@@ -608,9 +613,13 @@ func (m *seahorseContextManager) ensureReconciledRuntime(
 	return nil
 }
 
-func reconciliationMatches(state *seahorse.ReconciliationState, revision memory.HistoryRevision) bool {
+func reconciliationMatches(
+	state *seahorse.ReconciliationState,
+	revision memory.HistoryRevision,
+	generation int,
+) bool {
 	return state != nil && !revision.Dirty &&
-		state.SchemaGeneration == seahorseReconciliationGeneration &&
+		state.SchemaGeneration == generation &&
 		state.SourceRevision == revision.Revision && state.SourceCount == revision.Count &&
 		state.SourceSkip == revision.Skip && state.SourceFileSize == revision.FileSize &&
 		state.SourceModTimeNS == revision.ModTimeNS
@@ -625,7 +634,7 @@ func (m *seahorseContextManager) setReconciliationState(
 	return runtime.engine.GetRetrieval().Store().SetReconciliationState(ctx, seahorse.ReconciliationState{
 		SessionKey: key, SourceRevision: revision.Revision, SourceCount: revision.Count,
 		SourceSkip: revision.Skip, SourceFileSize: revision.FileSize,
-		SourceModTimeNS: revision.ModTimeNS, SchemaGeneration: seahorseReconciliationGeneration,
+		SourceModTimeNS: revision.ModTimeNS, SchemaGeneration: runtime.reconciliationGeneration,
 	})
 }
 

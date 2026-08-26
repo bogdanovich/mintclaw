@@ -79,7 +79,7 @@ func TestTruncateSummaryIncludesParts(t *testing.T) {
 		},
 	}
 
-	result := truncateSummary(messages)
+	result := truncateSummary(messages, SummaryPolicyPersonal)
 
 	// Must contain plain text
 	if !contains(result, "run the tests") {

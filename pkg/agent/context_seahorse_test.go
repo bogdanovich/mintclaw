@@ -49,9 +49,10 @@ func newSingleRuntimeTestManager(
 	return &seahorseContextManager{
 		runtimes: map[string]*seahorseAgentRuntime{
 			agentID: {
-				engine:   engine,
-				sessions: sessions,
-				agentID:  agentID,
+				engine:                   engine,
+				sessions:                 sessions,
+				agentID:                  agentID,
+				reconciliationGeneration: seahorseReconciliationGeneration,
 			},
 		},
 		defaultAgentID: agentID,
@@ -92,6 +93,17 @@ func TestResolveSeahorseConfigInjectsToolPolicy(t *testing.T) {
 	}
 	if got := cfg.ResultRetentionPolicy["log_meal"]; got != retention["log_meal"] {
 		t.Fatalf("retention rule = %#v", got)
+	}
+}
+
+func TestCodingSummaryPolicyUsesIndependentReconciliationGeneration(t *testing.T) {
+	personal := seahorse.SummaryPolicyPersonal.ReconciliationGeneration(seahorseReconciliationGeneration)
+	coding := seahorse.SummaryPolicyCodingV1.ReconciliationGeneration(seahorseReconciliationGeneration)
+	if personal != seahorseReconciliationGeneration {
+		t.Fatalf("personal generation = %d, want %d", personal, seahorseReconciliationGeneration)
+	}
+	if coding == personal {
+		t.Fatalf("coding generation = %d, want value distinct from personal", coding)
 	}
 }
 

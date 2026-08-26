@@ -76,6 +76,7 @@ type trackingCodingRuntimeStoreFactory struct {
 	seahorseCalls   int
 	sessions        []*trackedRuntimeSessionStore
 	seahorsePaths   []string
+	seahorseConfigs []seahorse.Config
 	engines         []*seahorse.Engine
 }
 
@@ -128,6 +129,7 @@ func (f *trackingCodingRuntimeStoreFactory) NewSeahorseEngine(
 ) (*seahorse.Engine, error) {
 	f.seahorseCalls++
 	f.seahorsePaths = append(f.seahorsePaths, config.DBPath)
+	f.seahorseConfigs = append(f.seahorseConfigs, config)
 	if f.failSeahorse || f.seahorseCalls == f.failSeahorseAt {
 		return nil, errInjectedRuntimeStore
 	}
@@ -1378,6 +1380,14 @@ func TestCodingRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing
 	t.Cleanup(loop.Close)
 	if len(factory.seahorsePaths) != len(wantPaths) {
 		t.Fatalf("Seahorse paths = %v, want %v", factory.seahorsePaths, wantPaths)
+	}
+	if len(factory.seahorseConfigs) != len(wantPaths) {
+		t.Fatalf("Seahorse configs = %d, want %d", len(factory.seahorseConfigs), len(wantPaths))
+	}
+	for _, seahorseConfig := range factory.seahorseConfigs {
+		if seahorseConfig.SummaryPolicy != seahorse.SummaryPolicyCodingV1 {
+			t.Fatalf("coding summary policy = %q, want coding-v1", seahorseConfig.SummaryPolicy)
+		}
 	}
 	gotPaths := make(map[string]struct{}, len(factory.seahorsePaths))
 	for _, gotPath := range factory.seahorsePaths {

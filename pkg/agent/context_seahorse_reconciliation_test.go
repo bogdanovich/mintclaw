@@ -368,6 +368,22 @@ func TestSeahorseReconciliationGenerationAndFailureRetry(t *testing.T) {
 	if state.SchemaGeneration != seahorseReconciliationGeneration {
 		t.Fatalf("generation = %d", state.SchemaGeneration)
 	}
+
+	runtime := singleTestRuntime(mgr)
+	runtime.reconciliationGeneration = seahorse.SummaryPolicyCodingV1.ReconciliationGeneration(
+		seahorseReconciliationGeneration,
+	)
+	before = mgr.reconciliations.Load()
+	if err := mgr.ensureReconciled(context.Background(), key, runtime.sessions); err != nil {
+		t.Fatal(err)
+	}
+	if mgr.reconciliations.Load() != before+1 {
+		t.Fatal("summary policy version change did not force reconciliation")
+	}
+	state, _ = store.GetReconciliationState(context.Background(), key)
+	if state.SchemaGeneration != runtime.reconciliationGeneration {
+		t.Fatalf("policy generation = %d, want %d", state.SchemaGeneration, runtime.reconciliationGeneration)
+	}
 }
 
 func TestSeahorseIngestKeepsLiveMessageAfterCanonicalWriteFailure(t *testing.T) {
