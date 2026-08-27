@@ -349,9 +349,10 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return nil
 	}
 	lifecycle := ContextCompressLifecyclePayload{
-		AttemptID: uuid.NewString(),
-		Reason:    req.Reason,
-		Status:    ContextCompressLifecycleStarted,
+		AttemptID:  uuid.NewString(),
+		Reason:     req.Reason,
+		Background: req.Background,
+		Status:     ContextCompressLifecycleStarted,
 	}
 	if req.Agent != nil {
 		lifecycle.ThreadID = req.Agent.CodingLayout.ThreadID()

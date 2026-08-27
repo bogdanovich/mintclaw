@@ -91,8 +91,12 @@ func TestLifecycleProjectsOneCurrentView(t *testing.T) {
 	projector.ToolCompleted("turn-1", "call-1", "exec", "done", 0, false, []WriteAudit{{
 		Kind: "file", Target: "main.go", Action: "update", Success: true,
 	}})
-	projector.CompactionStarted("turn-1", "llm_retry", false)
-	projector.CompactionCompleted("turn-1", "llm_retry", 10, false, false)
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", Reason: "llm_retry", Status: CompactionRunning,
+	})
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", Reason: "llm_retry", Status: CompactionCompleted, TokensSaved: 10,
+	})
 	projector.TurnCompleted("turn-1", "completed")
 
 	view := snapshotForTest(t, projector)
@@ -222,12 +226,12 @@ func TestTurnOutcomesAreTypedAndCorrelated(t *testing.T) {
 
 func TestStandaloneForegroundCompactionOwnsIdleActivity(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
-	projector.CompactionStarted("", "manual", false)
+	projector.CompactionUpdate(CompactionState{Reason: "manual", Status: CompactionRunning})
 	started := snapshotForTest(t, projector)
 	if started.Activity != ActivityCompacting || started.LastCompaction == nil || started.LastCompaction.Background {
 		t.Fatalf("standalone compaction start = %+v", started)
 	}
-	projector.CompactionCompleted("", "manual", 0, true, false)
+	projector.CompactionUpdate(CompactionState{Reason: "manual", Status: CompactionNoProgress})
 	completed := snapshotForTest(t, projector)
 	if completed.Activity != ActivityIdle || completed.LastCompaction == nil ||
 		completed.LastCompaction.Status != CompactionNoProgress {
@@ -238,9 +242,13 @@ func TestStandaloneForegroundCompactionOwnsIdleActivity(t *testing.T) {
 func TestCompactionEndPreservesNewerInterruptState(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	projector.TurnStarted("turn-1", "fix it")
-	projector.CompactionStarted("turn-1", "llm_retry", false)
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", Reason: "llm_retry", Status: CompactionRunning,
+	})
 	projector.InterruptRequested()
-	projector.CompactionFailed("turn-1", "llm_retry", false)
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", Reason: "llm_retry", Status: CompactionFailed,
+	})
 	view := snapshotForTest(t, projector)
 	if view.Activity != ActivityInterrupting || view.Status != "interrupt requested" ||
 		view.LastCompaction == nil || view.LastCompaction.Status != CompactionFailed {
@@ -251,7 +259,9 @@ func TestCompactionEndPreservesNewerInterruptState(t *testing.T) {
 func TestForegroundCompactionInterruptedReleasesActivity(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	projector.TurnStarted("turn-1", "fix it")
-	projector.CompactionStarted("turn-1", "llm_retry", false)
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", Reason: "llm_retry", Status: CompactionRunning,
+	})
 	projector.CompactionUpdate(CompactionState{
 		TurnID: "turn-1", Reason: "llm_retry", Status: CompactionInterrupted,
 	})
@@ -267,7 +277,9 @@ func TestLateCompactionStartDoesNotClaimNewerTurnActivity(t *testing.T) {
 	projector.TurnStarted("turn-1", "first")
 	projector.TurnCompleted("turn-1", "completed")
 	projector.TurnStarted("turn-2", "second")
-	projector.CompactionStarted("turn-1", "llm_retry", false)
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", Reason: "llm_retry", Status: CompactionRunning,
+	})
 	view := snapshotForTest(t, projector)
 	if view.Activity != ActivityRunning || view.Status != "running" ||
 		view.LastCompaction == nil || view.LastCompaction.TurnID != "turn-1" {
@@ -282,19 +294,29 @@ func TestBackgroundCompactionDoesNotStrandForegroundActivity(t *testing.T) {
 		want CompactionStatus
 	}{
 		{name: "background start", end: func(p *Projector) {
-			p.CompactionStarted("", "summarize", true)
-			p.CompactionCompleted("turn-1", "llm_retry", 12, false, false)
+			p.CompactionUpdate(CompactionState{
+				Reason: "summarize", Status: CompactionRunning, Background: true,
+			})
+			p.CompactionUpdate(CompactionState{
+				TurnID: "turn-1", Reason: "llm_retry", Status: CompactionCompleted, TokensSaved: 12,
+			})
 		}, want: CompactionCompleted},
 		{name: "background completion", end: func(p *Projector) {
-			p.CompactionCompleted("", "summarize", 4, false, true)
-			p.CompactionFailed("turn-1", "llm_retry", false)
+			p.CompactionUpdate(CompactionState{
+				Reason: "summarize", Status: CompactionCompleted, TokensSaved: 4, Background: true,
+			})
+			p.CompactionUpdate(CompactionState{
+				TurnID: "turn-1", Reason: "llm_retry", Status: CompactionFailed,
+			})
 		}, want: CompactionFailed},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			projector := newTestProjector(t, ProjectionLimits{})
 			projector.TurnStarted("turn-1", "fix it")
-			projector.CompactionStarted("turn-1", "llm_retry", false)
+			projector.CompactionUpdate(CompactionState{
+				TurnID: "turn-1", Reason: "llm_retry", Status: CompactionRunning,
+			})
 			test.end(projector)
 			view := snapshotForTest(t, projector)
 			if view.Activity != ActivityRunning || view.LastCompaction == nil ||

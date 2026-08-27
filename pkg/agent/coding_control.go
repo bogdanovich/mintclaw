@@ -62,5 +62,6 @@ func (al *AgentLoop) CompactCodingSession(ctx context.Context, sessionKey string
 		Workspace:  agent.Workspace,
 		Reason:     ContextCompressReasonManual,
 		Budget:     budget,
+		Background: false,
 	})
 }

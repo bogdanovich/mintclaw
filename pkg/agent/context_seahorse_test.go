@@ -1171,11 +1171,17 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 	manager.al = &AgentLoop{runtimeEvents: runtimeBus}
 
 	if err = manager.Compact(t.Context(), &CompactRequest{
-		SessionKey: "empty", Reason: ContextCompressReasonProactive,
+		SessionKey: "empty", Reason: ContextCompressReasonProactive, Background: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	assertCompactLifecyclePair(t, events, ContextCompressLifecycleNoProgress, ContextCompressReasonProactive)
+	assertCompactLifecyclePair(
+		t,
+		events,
+		ContextCompressLifecycleNoProgress,
+		ContextCompressReasonProactive,
+		true,
+	)
 
 	err = manager.Compact(t.Context(), &CompactRequest{
 		Agent: &AgentInstance{ID: "missing"}, SessionKey: "missing", Reason: ContextCompressReasonRetry,
@@ -1183,7 +1189,7 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing runtime compaction unexpectedly succeeded")
 	}
-	assertCompactLifecyclePair(t, events, ContextCompressLifecycleFailed, ContextCompressReasonRetry)
+	assertCompactLifecyclePair(t, events, ContextCompressLifecycleFailed, ContextCompressReasonRetry, false)
 
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -1193,7 +1199,7 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled compaction error = %v, want context.Canceled", err)
 	}
-	assertCompactLifecyclePair(t, events, ContextCompressLifecycleInterrupted, ContextCompressReasonManual)
+	assertCompactLifecyclePair(t, events, ContextCompressLifecycleInterrupted, ContextCompressReasonManual, false)
 }
 
 func TestSeahorseCompactTerminalPrecedesNextSessionStart(t *testing.T) {
@@ -1337,6 +1343,7 @@ func assertCompactLifecyclePair(
 	events <-chan runtimeevents.Event,
 	wantEnd ContextCompressLifecycleStatus,
 	wantReason ContextCompressReason,
+	wantBackground bool,
 ) {
 	t.Helper()
 	started := receiveRuntimeEvent(t, events)
@@ -1346,7 +1353,8 @@ func assertCompactLifecyclePair(
 	if started.Kind != runtimeevents.KindAgentContextCompressStart ||
 		ended.Kind != runtimeevents.KindAgentContextCompressEnd || !startOK || !endOK ||
 		startPayload.Status != ContextCompressLifecycleStarted || endPayload.Status != wantEnd ||
-		startPayload.Reason != wantReason || endPayload.Reason != wantReason {
+		startPayload.Reason != wantReason || endPayload.Reason != wantReason ||
+		startPayload.Background != wantBackground || endPayload.Background != wantBackground {
 		t.Fatalf("compaction lifecycle = start:%+v end:%+v", started, ended)
 	}
 	if startPayload.AttemptID == "" || startPayload.AttemptID != endPayload.AttemptID {

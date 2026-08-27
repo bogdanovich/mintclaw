@@ -419,39 +419,6 @@ func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) {
 	})
 }
 
-func (p *Projector) CompactionStarted(turnID, reason string, background bool) {
-	p.CompactionUpdate(
-		CompactionState{
-			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionRunning, Background: background,
-		},
-	)
-}
-
-func (p *Projector) CompactionCompleted(
-	turnID, reason string,
-	tokensSaved int,
-	noProgress, background bool,
-) {
-	status := CompactionCompleted
-	if noProgress {
-		status = CompactionNoProgress
-	}
-	p.CompactionUpdate(
-		CompactionState{
-			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: status,
-			TokensSaved: max(0, tokensSaved), Background: background,
-		},
-	)
-}
-
-func (p *Projector) CompactionFailed(turnID, reason string, background bool) {
-	p.CompactionUpdate(
-		CompactionState{
-			TurnID: normalizeOptionalTurnID(turnID), Reason: reason, Status: CompactionFailed, Background: background,
-		},
-	)
-}
-
 // CompactionUpdate projects one correlated compaction lifecycle observation.
 func (p *Projector) CompactionUpdate(compaction CompactionState) {
 	p.compaction(compaction)
@@ -763,10 +730,6 @@ func normalizeTurnID(turnID string) string {
 		return turnID
 	}
 	return "current"
-}
-
-func normalizeOptionalTurnID(turnID string) string {
-	return strings.TrimSpace(turnID)
 }
 
 func toolByID(tools []ToolState, turnID, callID string) ToolState {

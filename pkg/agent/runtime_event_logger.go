@@ -367,6 +367,7 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["transcript_revision"] = payload.TranscriptRevision
 		fields["transcript_count"] = payload.TranscriptCount
 		fields["reason"] = payload.Reason
+		fields["background"] = payload.Background
 		fields["status"] = payload.Status
 		fields["tokens_saved"] = payload.TokensSaved
 	case ContextSnapshotPayload:

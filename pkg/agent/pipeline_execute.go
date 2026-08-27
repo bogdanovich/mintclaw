@@ -1713,6 +1713,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				Workspace:  ts.workspace,
 				Reason:     ContextCompressReasonSummarize,
 				Budget:     ts.agent.ContextWindow,
+				Background: false,
 			})
 		}
 		ts.setPhase(TurnPhaseCompleted)
