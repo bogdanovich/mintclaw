@@ -27,28 +27,38 @@ type DelegateTool struct {
 	taskSeq                    atomic.Int64
 }
 
-func NewDelegateTool() *DelegateTool {
-	return &DelegateTool{}
+type DelegateToolConfig struct {
+	Spawner                    SubTurnSpawner
+	AllowTarget                func(targetAgentID string) bool
+	RequiresObjectiveChecklist func(targetAgentID string) bool
+	SelfAgentID                string
+	TaskRegistry               *taskregistry.Registry
 }
 
-func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
-	t.spawner = spawner
-}
-
-func (t *DelegateTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
-	t.allowlistCheck = check
-}
-
-func (t *DelegateTool) SetObjectiveChecklistRequirement(check func(targetAgentID string) bool) {
-	t.requiresObjectiveChecklist = check
-}
-
-func (t *DelegateTool) SetSelfAgentID(id string) {
-	t.selfAgentID = id
-}
-
-func (t *DelegateTool) SetTaskRegistry(registry *taskregistry.Registry) {
-	t.taskRegistry = registry
+func NewDelegateTool(config DelegateToolConfig) (*DelegateTool, error) {
+	if config.Spawner == nil {
+		return nil, errors.New("delegate child runner is required")
+	}
+	if config.TaskRegistry == nil {
+		return nil, errors.New("delegate task registry is required")
+	}
+	if config.AllowTarget == nil {
+		return nil, errors.New("delegate allow-list policy is required")
+	}
+	if config.RequiresObjectiveChecklist == nil {
+		return nil, errors.New("delegate objective policy is required")
+	}
+	if strings.TrimSpace(config.SelfAgentID) == "" {
+		return nil, errors.New("delegate self agent ID is required")
+	}
+	selfAgentID := routing.NormalizeAgentID(config.SelfAgentID)
+	return &DelegateTool{
+		spawner:                    config.Spawner,
+		allowlistCheck:             config.AllowTarget,
+		requiresObjectiveChecklist: config.RequiresObjectiveChecklist,
+		selfAgentID:                selfAgentID,
+		taskRegistry:               config.TaskRegistry,
+	}, nil
 }
 
 func (t *DelegateTool) Name() string {
@@ -122,22 +132,18 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
 
-	if t.selfAgentID != "" && agentID == t.selfAgentID {
+	if agentID == t.selfAgentID {
 		return toolshared.ErrorResult("cannot delegate to self")
 	}
 
-	if t.allowlistCheck != nil && !t.allowlistCheck(agentID) {
+	if !t.allowlistCheck(agentID) {
 		return toolshared.ErrorResult(fmt.Sprintf("not allowed to delegate to agent %q", agentID))
 	}
-	if t.requiresObjectiveChecklist != nil && t.requiresObjectiveChecklist(agentID) && len(objectiveItems) == 0 {
+	if t.requiresObjectiveChecklist(agentID) && len(objectiveItems) == 0 {
 		return toolshared.ErrorResult(
 			"objective_items is required for this delegation target; " +
 				"retry delegate with every requested result or external action declared",
 		)
-	}
-
-	if t.spawner == nil {
-		return toolshared.ErrorResult("delegate tool not configured")
 	}
 
 	taskID := t.nextTaskID()
@@ -224,7 +230,7 @@ func (t *DelegateTool) recordDelegateTask(
 	summary string,
 	deliverable *taskresult.Deliverable,
 ) {
-	if t == nil || t.taskRegistry == nil || taskID == "" {
+	if taskID == "" {
 		return
 	}
 	now := time.Now().UnixMilli()

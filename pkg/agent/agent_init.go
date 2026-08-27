@@ -402,30 +402,55 @@ func registerSharedTools(
 			}
 		}
 
+		currentAgentID := agentID
+		canTargetAgent := func(targetAgentID string) bool {
+			return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+		}
+		targetRequiresObjectiveChecklist := func(targetAgentID string) bool {
+			if targetAgentID == "" {
+				targetAgentID = currentAgentID
+			}
+			target, found := registry.GetAgent(targetAgentID)
+			return found && target.Tools != nil && target.Tools.HasRegistered("browser_act")
+		}
+
 		spawnEnabled := cfg.Tools.IsToolEnabled("spawn")
 		subagentEnabled := cfg.Tools.IsToolEnabled("subagent")
 		if spawnEnabled && subagentEnabled {
-			subagentManager := tools.NewSubagentManagerWithRegistry(
-				agent.Model,
-				taskRegistry,
-			)
-			subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
-			subagentManager.SetSpawner(NewSubTurnSpawner(al))
-			spawnTool := tools.NewSpawnTool(subagentManager)
-			currentAgentID := agentID
-			spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
-				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+			subagentManager, managerErr := tools.NewSubagentManager(tools.SubagentManagerConfig{
+				DefaultModel: agent.Model,
+				MaxTokens:    agent.MaxTokens,
+				Temperature:  agent.Temperature,
+				Spawner:      NewSubTurnSpawner(al),
+				TaskRegistry: taskRegistry,
 			})
-			spawnTool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
-				if targetAgentID == "" {
-					targetAgentID = currentAgentID
+			if managerErr != nil {
+				logger.ErrorCF("agent", "Failed to initialize subagent manager", map[string]any{
+					"agent_id": agentID,
+					"error":    managerErr.Error(),
+				})
+			} else {
+				spawnTool, spawnErr := tools.NewSpawnTool(tools.SpawnToolConfig{
+					Manager:                    subagentManager,
+					AllowTarget:                canTargetAgent,
+					RequiresObjectiveChecklist: targetRequiresObjectiveChecklist,
+				})
+				subagentTool, subagentErr := tools.NewSubagentTool(subagentManager)
+				if spawnErr != nil {
+					logger.ErrorCF("agent", "Failed to initialize subagent tools", map[string]any{
+						"agent_id": agentID,
+						"error":    spawnErr.Error(),
+					})
+				} else if subagentErr != nil {
+					logger.ErrorCF("agent", "Failed to initialize subagent tools", map[string]any{
+						"agent_id": agentID,
+						"error":    subagentErr.Error(),
+					})
+				} else {
+					registerToolIfAllowed(agent, spawnTool)
+					registerToolIfAllowed(agent, subagentTool)
 				}
-				target, ok := registry.GetAgent(targetAgentID)
-				return ok && target.Tools != nil && target.Tools.HasRegistered("browser_act")
-			})
-
-			registerToolIfAllowed(agent, spawnTool)
-			registerToolIfAllowed(agent, tools.NewSubagentTool(subagentManager))
+			}
 		} else if spawnEnabled {
 			logger.WarnCF("agent", "spawn tool requires subagent to be enabled", nil)
 		}
@@ -439,19 +464,21 @@ func registerSharedTools(
 		// mechanism directly (not SubagentManager) and is independent of the
 		// subagent tool.
 		if len(registry.ListAgentIDs()) > 1 {
-			delegateTool := tools.NewDelegateTool()
-			delegateTool.SetSpawner(NewSubTurnSpawner(al))
-			delegateTool.SetTaskRegistry(taskRegistry)
-			currentAgentID := agentID
-			delegateTool.SetSelfAgentID(currentAgentID)
-			delegateTool.SetAllowlistChecker(func(targetAgentID string) bool {
-				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+			delegateTool, delegateErr := tools.NewDelegateTool(tools.DelegateToolConfig{
+				Spawner:                    NewSubTurnSpawner(al),
+				AllowTarget:                canTargetAgent,
+				RequiresObjectiveChecklist: targetRequiresObjectiveChecklist,
+				SelfAgentID:                currentAgentID,
+				TaskRegistry:               taskRegistry,
 			})
-			delegateTool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
-				target, ok := registry.GetAgent(targetAgentID)
-				return ok && target.Tools != nil && target.Tools.HasRegistered("browser_act")
-			})
-			registerToolIfAllowed(agent, delegateTool)
+			if delegateErr != nil {
+				logger.ErrorCF("agent", "Failed to initialize delegate tool", map[string]any{
+					"agent_id": agentID,
+					"error":    delegateErr.Error(),
+				})
+			} else {
+				registerToolIfAllowed(agent, delegateTool)
+			}
 		}
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.ToolPolicy, agent.Tools)
 	}

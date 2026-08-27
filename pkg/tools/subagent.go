@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -44,42 +43,39 @@ type SubTurnConfig struct {
 }
 
 type SubagentManager struct {
-	mu             sync.RWMutex
-	defaultModel   string
-	maxTokens      int
-	temperature    float64
-	hasMaxTokens   bool
-	hasTemperature bool
-	spawner        SubTurnSpawner
-	taskRegistry   *taskregistry.Registry
+	defaultModel string
+	maxTokens    int
+	temperature  float64
+	spawner      SubTurnSpawner
+	taskRegistry *taskregistry.Registry
 }
 
-// NewSubagentManagerWithRegistry requires the canonical task registry shared
-// by every manager that owns the same workspace.
-func NewSubagentManagerWithRegistry(
-	defaultModel string,
-	registry *taskregistry.Registry,
-) *SubagentManager {
-	return &SubagentManager{
-		defaultModel: defaultModel,
-		taskRegistry: registry,
+// SubagentManagerConfig contains the immutable dependencies and LLM defaults
+// shared by synchronous and background child turns.
+type SubagentManagerConfig struct {
+	DefaultModel string
+	MaxTokens    int
+	Temperature  float64
+	Spawner      SubTurnSpawner
+	TaskRegistry *taskregistry.Registry
+}
+
+// NewSubagentManager requires the canonical task registry shared by every
+// manager that owns the same workspace and the child-turn package boundary.
+func NewSubagentManager(config SubagentManagerConfig) (*SubagentManager, error) {
+	if config.Spawner == nil {
+		return nil, errors.New("subagent child runner is required")
 	}
-}
-
-func (sm *SubagentManager) SetSpawner(spawner SubTurnSpawner) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.spawner = spawner
-}
-
-// SetLLMOptions sets max tokens and temperature for subagent LLM calls.
-func (sm *SubagentManager) SetLLMOptions(maxTokens int, temperature float64) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.maxTokens = maxTokens
-	sm.hasMaxTokens = true
-	sm.temperature = temperature
-	sm.hasTemperature = true
+	if config.TaskRegistry == nil {
+		return nil, errors.New("subagent task registry is required")
+	}
+	return &SubagentManager{
+		defaultModel: config.DefaultModel,
+		maxTokens:    config.MaxTokens,
+		temperature:  config.Temperature,
+		spawner:      config.Spawner,
+		taskRegistry: config.TaskRegistry,
+	}, nil
 }
 
 func (sm *SubagentManager) Spawn(
@@ -89,16 +85,6 @@ func (sm *SubagentManager) Spawn(
 	callback toolshared.AsyncCallback,
 	objectiveSets ...[]toolshared.ObjectiveSpec,
 ) (string, error) {
-	if sm == nil || sm.taskRegistry == nil {
-		return "", errors.New("subagent task registry is unavailable")
-	}
-	sm.mu.RLock()
-	runnerAvailable := sm.spawner != nil
-	sm.mu.RUnlock()
-	if !runnerAvailable {
-		return "", errors.New("subagent child runner is unavailable")
-	}
-
 	taskID := "subagent-" + uuid.NewString()
 	var objectiveItems []toolshared.ObjectiveSpec
 	if len(objectiveSets) > 0 {
@@ -262,30 +248,16 @@ func (sm *SubagentManager) spawnSubTurn(
 	ctx context.Context,
 	cfg SubTurnConfig,
 ) (*toolshared.ToolResult, error) {
-	if sm == nil {
-		return nil, errors.New("subagent child runner is unavailable")
-	}
-	sm.mu.RLock()
-	spawner := sm.spawner
-	defaultModel := sm.defaultModel
-	maxTokens := sm.maxTokens
-	temperature := sm.temperature
-	hasMaxTokens := sm.hasMaxTokens
-	hasTemperature := sm.hasTemperature
-	sm.mu.RUnlock()
-	if spawner == nil {
-		return nil, errors.New("subagent child runner is unavailable")
-	}
 	if cfg.Model == "" {
-		cfg.Model = defaultModel
+		cfg.Model = sm.defaultModel
 	}
-	if cfg.MaxTokens == 0 && hasMaxTokens {
-		cfg.MaxTokens = maxTokens
+	if cfg.MaxTokens == 0 {
+		cfg.MaxTokens = sm.maxTokens
 	}
-	if cfg.Temperature == 0 && hasTemperature {
-		cfg.Temperature = temperature
+	if cfg.Temperature == 0 {
+		cfg.Temperature = sm.temperature
 	}
-	return spawner.SpawnSubTurn(ctx, cfg)
+	return sm.spawner.SpawnSubTurn(ctx, cfg)
 }
 
 func (sm *SubagentManager) updateTask(
@@ -295,9 +267,6 @@ func (sm *SubagentManager) updateTask(
 	summary string,
 	mutate func(*taskregistry.Record),
 ) error {
-	if sm == nil || sm.taskRegistry == nil {
-		return errors.New("subagent task registry is unavailable")
-	}
 	return sm.taskRegistry.Update(taskID, func(stored *taskregistry.Record) {
 		now := time.Now().UnixMilli()
 		stored.Status = status
@@ -335,9 +304,6 @@ func (sm *SubagentManager) recordTaskOrLog(
 }
 
 func (sm *SubagentManager) recordTaskResult(taskID string, result *toolshared.ToolResult) {
-	if sm == nil || sm.taskRegistry == nil {
-		return
-	}
 	summary := ""
 	if result != nil {
 		summary = result.ContentForLLM()
@@ -389,8 +355,11 @@ type SubagentTool struct {
 	manager *SubagentManager
 }
 
-func NewSubagentTool(manager *SubagentManager) *SubagentTool {
-	return &SubagentTool{manager: manager}
+func NewSubagentTool(manager *SubagentManager) (*SubagentTool, error) {
+	if manager == nil {
+		return nil, errors.New("subagent manager is required")
+	}
+	return &SubagentTool{manager: manager}, nil
 }
 
 func (t *SubagentTool) Name() string {
@@ -452,47 +421,42 @@ Task: %s`,
 		)
 	}
 
-	if t.manager != nil {
-		result, err := t.manager.spawnSubTurn(ctx, SubTurnConfig{
-			Tools:          nil, // Will inherit from parent via context
-			TaskPrompt:     systemPrompt,
-			Async:          false, // Synchronous execution
-			ObjectiveItems: objectiveItems,
-		})
-		if err != nil {
-			return toolshared.ErrorResult(fmt.Sprintf("Subagent execution failed: %v", err)).WithError(err)
-		}
-		if result == nil {
-			return toolshared.ErrorResult("Subagent execution returned no result")
-		}
-		if result.Control.TaskSuspended {
-			return result
-		}
-
-		// Format result for display
-		userContent := result.ForLLM
-		if result.ForUser != "" {
-			userContent = result.ForUser
-		}
-		maxUserLen := 500
-		if len(userContent) > maxUserLen {
-			userContent = userContent[:maxUserLen] + "..."
-		}
-
-		labelStr := label
-		if labelStr == "" {
-			labelStr = "(unnamed)"
-		}
-		llmContent := fmt.Sprintf("Subagent task completed:\nLabel: %s\nResult: %s",
-			labelStr, result.ForLLM)
-
-		result.ForLLM = llmContent
-		result.ForUser = userContent
-		result.Control.Async = false
-		result.Delivery.Intent = toolshared.DeliveryDefault
+	result, err := t.manager.spawnSubTurn(ctx, SubTurnConfig{
+		Tools:          nil, // Will inherit from parent via context
+		TaskPrompt:     systemPrompt,
+		Async:          false, // Synchronous execution
+		ObjectiveItems: objectiveItems,
+	})
+	if err != nil {
+		return toolshared.ErrorResult(fmt.Sprintf("Subagent execution failed: %v", err)).WithError(err)
+	}
+	if result == nil {
+		return toolshared.ErrorResult("Subagent execution returned no result")
+	}
+	if result.Control.TaskSuspended {
 		return result
 	}
 
-	// Fallback: spawner not configured
-	return toolshared.ErrorResult("Subagent manager not configured").WithError(fmt.Errorf("spawner not set"))
+	// Format result for display
+	userContent := result.ForLLM
+	if result.ForUser != "" {
+		userContent = result.ForUser
+	}
+	maxUserLen := 500
+	if len(userContent) > maxUserLen {
+		userContent = userContent[:maxUserLen] + "..."
+	}
+
+	labelStr := label
+	if labelStr == "" {
+		labelStr = "(unnamed)"
+	}
+	llmContent := fmt.Sprintf("Subagent task completed:\nLabel: %s\nResult: %s",
+		labelStr, result.ForLLM)
+
+	result.ForLLM = llmContent
+	result.ForUser = userContent
+	result.Control.Async = false
+	result.Delivery.Intent = toolshared.DeliveryDefault
+	return result
 }
