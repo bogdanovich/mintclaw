@@ -158,7 +158,7 @@ func (p *Pipeline) Finalize(
 
 	contextUsage := computeContextUsage(ts.agent, ts.sessionKey)
 	streamErr := finalization.stream.finalize(turnCtx, ts, finalization.content, contextUsage)
-	// If streaming never became visible, keep the legacy MintClaw interim publish path
+	// If streaming never became visible, publish through the non-streaming bus path
 	// so the final answer is still delivered outside normal SendResponse.
 	if ((streamErr != nil && !isConfiguredStreamingVisibleError(streamErr)) || finalization.stream.fallback) &&
 		!finalization.delivery.sendResponse && finalization.delivery.allowInterimMintClawPublish &&
