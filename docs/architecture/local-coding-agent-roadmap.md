@@ -1553,6 +1553,9 @@ Done when:
 
 Dependencies: P5.4, P5.5
 
+Implementation evidence:
+[`local-coding-agent-p5-long-session-evaluation.md`](local-coding-agent-p5-long-session-evaluation.md)
+
 Scope:
 
 - Build a synthetic repository and multi-turn coding transcript large enough
