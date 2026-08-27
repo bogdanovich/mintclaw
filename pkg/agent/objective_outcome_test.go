@@ -53,7 +53,8 @@ func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *test
 		"read, navigation, or local_edit for non-committing UI steps",
 		"external_commit only immediately before an important external state change",
 		"Do not infer click effect from the element role or HTTP method",
-		"call browser_act with external_commit during this turn",
+		"call browser_act during this turn with the effect required by the trusted browser contract",
+		"external_commit for a known important external state change, or unknown only",
 		"Never replace that tool call with a prose approval question",
 		"do not close the browser session while the runtime is suspended",
 		"keep the external_action item missing and explain the unverified postcondition",
@@ -130,6 +131,51 @@ func TestObjectiveOutcomeUsesCurrentResultWithVerifiedReceipt(t *testing.T) {
 		len(outcome.CompletedItems) != 1 || len(outcome.CompletedItems[0].Receipts) != 1 ||
 		len(outcome.MissingItems) != 0 {
 		t.Fatalf("clean = %q; outcome = %#v", clean, outcome)
+	}
+}
+
+func TestObjectiveOutcomeAcceptsApprovedUnknownEffectReceipt(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+		`"receipt_ids":["inv-upload"]}],"missing_items":[],"result":"Uploaded once."}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "upload file", Kind: "external_action",
+	}})
+	audits := []toolshared.WriteAuditEntry{{
+		Kind: "external_action", Target: "https://example.com", Action: "upload",
+		Tool: "browser_act", Success: true,
+		Metadata: map[string]string{"invocation_id": "inv-upload", "effect": "unknown"},
+	}}
+	clean, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+	if clean != "Uploaded once." || outcome.Status != taskresult.OutcomeSucceeded ||
+		len(outcome.CompletedItems) != 1 || len(outcome.CompletedItems[0].Receipts) != 1 ||
+		outcome.CompletedItems[0].Receipts[0].ID != "inv-upload" || len(outcome.MissingItems) != 0 {
+		t.Fatalf("clean = %q; outcome = %#v", clean, outcome)
+	}
+}
+
+func TestObjectiveOutcomeRejectsNonExternalReceiptEffects(t *testing.T) {
+	for _, effect := range []string{"read", "navigation", "local_edit"} {
+		t.Run(effect, func(t *testing.T) {
+			content := objectiveOutcomeStart +
+				`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+				`"receipt_ids":["inv-action"]}],"missing_items":[],"result":"Completed."}` +
+				objectiveOutcomeEnd
+			checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+				Item: "perform external action", Kind: "external_action",
+			}})
+			audits := []toolshared.WriteAuditEntry{{
+				Kind: "external_action", Tool: "browser_act", Success: true,
+				Metadata: map[string]string{"invocation_id": "inv-action", "effect": effect},
+			}}
+			_, outcome := extractObjectiveOutcome(content, audits, true, checklist)
+			if outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+				len(outcome.MissingItems) != 1 ||
+				!strings.Contains(outcome.MissingItems[0], "missing verified runtime receipt") {
+				t.Fatalf("effect %q produced outcome %#v", effect, outcome)
+			}
+		})
 	}
 }
 
