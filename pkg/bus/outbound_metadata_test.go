@@ -1,161 +1,164 @@
 package bus
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
-func TestOutboundMetadataApplyToContextAndReadBack(t *testing.T) {
-	ctx := InboundContext{
-		Raw: map[string]string{
-			"existing": "kept",
-		},
-	}
-	OutboundMetadata{
-		MessageKind:       " final_reply ",
-		ToolCalls:         " calls ",
+func TestNormalizeOutboundMetadataCanonicalizesCurrentContract(t *testing.T) {
+	metadata := NormalizeOutboundMetadata(OutboundMetadata{
+		MessageKind: " tool_calls ",
+		ToolCalls: []OutboundToolCall{{
+			ID: " call-1 ", Function: &OutboundToolCallFunction{Name: " read_file "},
+		}},
 		OutboundKind:      " final ",
 		ModelName:         " fallback-model ",
 		DefaultModelName:  " primary-model ",
-		UsageInputTokens:  10252,
+		UsageInputTokens:  -1,
 		UsageOutputTokens: 4500,
-		UsageTotalTokens:  14752,
-	}.ApplyToContext(&ctx)
+		UsageTotalTokens:  4500,
+		RequestID:         " request-1 ",
+	})
 
-	if got := ctx.Raw["existing"]; got != "kept" {
-		t.Fatalf("existing raw value = %q, want kept", got)
+	if metadata.MessageKind != OutboundMessageKindToolCalls ||
+		len(metadata.ToolCalls) != 1 || metadata.ToolCalls[0].ID != "call-1" ||
+		metadata.ToolCalls[0].Function == nil || metadata.ToolCalls[0].Function.Name != "read_file" ||
+		metadata.OutboundKind != OutboundKindFinal || metadata.ModelName != "fallback-model" ||
+		metadata.DefaultModelName != "primary-model" || metadata.UsageInputTokens != 0 ||
+		metadata.UsageOutputTokens != 4500 || metadata.UsageTotalTokens != 4500 ||
+		metadata.RequestID != "request-1" {
+		t.Fatalf("normalized metadata = %#v", metadata)
 	}
-	if got := ctx.Raw[OutboundMetadataKeyMessageKind]; got != OutboundMessageKindFinalReply {
-		t.Fatalf("message kind raw = %q, want %q", got, OutboundMessageKindFinalReply)
+	if err := ValidateOutboundMetadata(metadata); err != nil {
+		t.Fatalf("ValidateOutboundMetadata() error = %v", err)
 	}
-
-	metadata := OutboundMetadataFromContext(ctx)
-	if metadata.MessageKind != OutboundMessageKindFinalReply ||
-		metadata.ToolCalls != "calls" ||
-		metadata.OutboundKind != OutboundKindFinal ||
-		metadata.ModelName != "fallback-model" ||
-		metadata.DefaultModelName != "primary-model" ||
-		metadata.UsageInputTokens != 10252 ||
-		metadata.UsageOutputTokens != 4500 ||
-		metadata.UsageTotalTokens != 14752 {
-		t.Fatalf("metadata round trip = %#v", metadata)
-	}
-	if !metadata.IsFinal() {
-		t.Fatal("expected metadata to be final")
-	}
-	if !metadata.BypassesPlaceholderEdit() {
-		t.Fatal("expected final_reply to bypass placeholder edit")
+	if !metadata.IsFinal() || !metadata.BypassesPlaceholderEdit() {
+		t.Fatalf("final metadata semantics = %#v", metadata)
 	}
 }
 
-func TestOutboundMetadataInteractionControls(t *testing.T) {
-	var ctx InboundContext
-	OutboundMetadata{
-		InteractionKind:     OutboundInteractionApproval,
-		InteractionControls: OutboundInteractionControlsPrompt,
-	}.ApplyToContext(&ctx)
-
-	metadata := OutboundMetadataFromContext(ctx)
-	if !metadata.IsApprovalPrompt() || metadata.RemovesInteractionControls() {
-		t.Fatalf("approval prompt metadata = %#v", metadata)
-	}
-	if !metadata.BypassesPlaceholderEdit() {
-		t.Fatal("approval prompt must bypass metadata-loss placeholder edits")
-	}
-
-	ctx = InboundContext{}
-	OutboundMetadata{
-		InteractionKind:     OutboundInteractionApproval,
-		InteractionControls: OutboundInteractionControlsRemove,
-	}.ApplyToContext(&ctx)
-	metadata = OutboundMetadataFromContext(ctx)
-	if metadata.IsApprovalPrompt() || !metadata.RemovesInteractionControls() {
-		t.Fatalf("approval removal metadata = %#v", metadata)
-	}
-
-	ctx = InboundContext{}
-	questionMetadata := OutboundMetadata{
-		InteractionKind:     OutboundInteractionQuestion,
-		InteractionControls: OutboundInteractionControlsPrompt,
-	}
-	questionMetadata = questionMetadata.WithInteractionChoices([]string{"Yes", "No"})
-	questionMetadata.ApplyToContext(&ctx)
-	metadata = OutboundMetadataFromContext(ctx)
-	if !metadata.IsQuestionPrompt() || metadata.IsApprovalPrompt() ||
-		len(metadata.InteractionChoices()) != 2 || metadata.InteractionChoices()[0] != "Yes" ||
-		!metadata.BypassesPlaceholderEdit() {
-		t.Fatalf("question prompt metadata = %#v", metadata)
-	}
-
-	ctx = InboundContext{}
-	OutboundMetadata{
-		InteractionKind:     OutboundInteractionQuestion,
-		InteractionControls: OutboundInteractionControlsRemove,
-	}.ApplyToContext(&ctx)
-	metadata = OutboundMetadataFromContext(ctx)
-	if metadata.IsQuestionPrompt() || !metadata.RemovesInteractionControls() {
-		t.Fatalf("question removal metadata = %#v", metadata)
-	}
-}
-
-func TestOutboundMetadataRejectsMalformedInteractionChoices(t *testing.T) {
-	for name, encoded := range map[string]string{
-		"invalid json": `{`,
-		"empty":        `[]`,
-		"too many":     `["1","2","3","4"]`,
-		"blank":        `["Yes",""]`,
+func TestValidateOutboundMetadataRejectsNoncanonicalValues(t *testing.T) {
+	for name, metadata := range map[string]OutboundMetadata{
+		"whitespace": {ModelName: " model "},
+		"negative usage": {
+			UsageInputTokens: -1,
+		},
+		"invalid choices":          {Choices: []string{"Yes", ""}},
+		"unsupported message kind": {MessageKind: "legacy"},
+		"unsupported outbound kind": {
+			OutboundKind: "legacy",
+		},
+		"unsupported interaction kind": {
+			InteractionKind: "legacy",
+		},
+		"unsupported interaction controls": {
+			InteractionControls: "legacy",
+		},
+		"tool calls without kind": {
+			ToolCalls: []OutboundToolCall{{Function: &OutboundToolCallFunction{Name: "read_file"}}},
+		},
+		"tool calls kind without calls": {
+			MessageKind: OutboundMessageKindToolCalls,
+		},
+		"empty tool call": {
+			MessageKind: OutboundMessageKindToolCalls,
+			ToolCalls:   []OutboundToolCall{{}},
+		},
+		"noncanonical tool call": {
+			MessageKind: OutboundMessageKindToolCalls,
+			ToolCalls: []OutboundToolCall{{
+				Function: &OutboundToolCallFunction{Name: " read_file "},
+			}},
+		},
+		"prompt without kind": {
+			InteractionControls: OutboundInteractionControlsPrompt,
+			InteractionID:       "interaction-1",
+			InteractionShortID:  "short-1",
+		},
+		"prompt without identity": {
+			InteractionKind:     OutboundInteractionApproval,
+			InteractionControls: OutboundInteractionControlsPrompt,
+		},
+		"choices outside question prompt": {
+			Choices: []string{"Yes", "No"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			metadata := OutboundMetadataFromRaw(map[string]string{
-				OutboundMetadataKeyChoices: encoded,
-			})
-			if metadata.InteractionChoices() != nil {
-				t.Fatalf("malformed choices accepted: %#v", metadata.InteractionChoices())
+			if err := ValidateOutboundMetadata(metadata); err == nil {
+				t.Fatalf("ValidateOutboundMetadata(%#v) succeeded", metadata)
 			}
 		})
 	}
 }
 
-func TestOutboundMetadataInterimKind(t *testing.T) {
-	var ctx InboundContext
-	OutboundMetadata{OutboundKind: " INTERIM "}.ApplyToContext(&ctx)
+func TestOutboundMetadataMergeClonesInteractionChoices(t *testing.T) {
+	choices := []string{" Yes ", "No"}
+	metadata := OutboundMetadata{RequestID: "request-1"}.Merge(
+		OutboundMetadata{InteractionKind: OutboundInteractionQuestion}.WithInteractionChoices(choices),
+	)
+	choices[0] = "changed"
+	read := metadata.InteractionChoices()
+	read[0] = "also changed"
 
-	metadata := OutboundMetadataFromContext(ctx)
-	if !metadata.IsInterim() || metadata.IsFinal() {
-		t.Fatalf("interim metadata = %#v", metadata)
+	if metadata.RequestID != "request-1" || metadata.InteractionKind != OutboundInteractionQuestion ||
+		len(metadata.Choices) != 2 || metadata.Choices[0] != "Yes" {
+		t.Fatalf("merged metadata = %#v", metadata)
 	}
 }
 
-func TestOutboundMetadataFromRawSanitizesUsage(t *testing.T) {
-	metadata := OutboundMetadataFromRaw(map[string]string{
-		OutboundMetadataKeyUsageInput:  "-1",
-		OutboundMetadataKeyUsageOutput: "not-a-number",
-		OutboundMetadataKeyUsageTotal:  "10",
+func TestOutboundMetadataInteractionControls(t *testing.T) {
+	approval := OutboundMetadata{
+		InteractionKind:     OutboundInteractionApproval,
+		InteractionControls: OutboundInteractionControlsPrompt,
+		InteractionID:       "approval-1",
+		InteractionShortID:  "short-1",
+	}
+	if !approval.IsApprovalPrompt() || approval.RemovesInteractionControls() || !approval.BypassesPlaceholderEdit() {
+		t.Fatalf("approval prompt metadata = %#v", approval)
+	}
+
+	question := OutboundMetadata{
+		InteractionKind:     OutboundInteractionQuestion,
+		InteractionControls: OutboundInteractionControlsPrompt,
+		InteractionID:       "question-1",
+		InteractionShortID:  "short-2",
+	}.WithInteractionChoices([]string{"Yes", "No"})
+	if !question.IsQuestionPrompt() || question.IsApprovalPrompt() || len(question.InteractionChoices()) != 2 {
+		t.Fatalf("question prompt metadata = %#v", question)
+	}
+
+	removal := OutboundMetadata{
+		InteractionKind:     OutboundInteractionQuestion,
+		InteractionControls: OutboundInteractionControlsRemove,
+	}
+	if removal.IsQuestionPrompt() || !removal.RemovesInteractionControls() {
+		t.Fatalf("question removal metadata = %#v", removal)
+	}
+	for _, metadata := range []OutboundMetadata{approval, question, removal} {
+		if err := ValidateOutboundMetadata(metadata); err != nil {
+			t.Fatalf("ValidateOutboundMetadata(%#v) error = %v", metadata, err)
+		}
+	}
+}
+
+func TestOutboundMessageJSONOmitsZeroMetadata(t *testing.T) {
+	encoded, err := json.Marshal(OutboundMessage{Content: "hello"})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), `"metadata"`) {
+		t.Fatalf("zero metadata was serialized: %s", encoded)
+	}
+
+	encoded, err = json.Marshal(OutboundMessage{
+		Content:  "hello",
+		Metadata: OutboundMetadata{OutboundKind: OutboundKindFinal},
 	})
-
-	if metadata.UsageInputTokens != 0 ||
-		metadata.UsageOutputTokens != 0 ||
-		metadata.UsageTotalTokens != 10 {
-		t.Fatalf("usage tokens = %#v", metadata)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
 	}
-}
-
-func TestOutboundMetadataApplyToContextIgnoresZeroValues(t *testing.T) {
-	var ctx InboundContext
-	OutboundMetadata{}.ApplyToContext(&ctx)
-	if ctx.Raw != nil {
-		t.Fatalf("empty metadata created raw map: %#v", ctx.Raw)
-	}
-
-	OutboundMetadata{
-		MessageKind:       OutboundMessageKindToolFeedback,
-		UsageInputTokens:  -1,
-		UsageOutputTokens: 0,
-	}.ApplyToContext(&ctx)
-	if got := ctx.Raw[OutboundMetadataKeyMessageKind]; got != OutboundMessageKindToolFeedback {
-		t.Fatalf("message kind raw = %q, want %q", got, OutboundMessageKindToolFeedback)
-	}
-	if _, ok := ctx.Raw[OutboundMetadataKeyUsageInput]; ok {
-		t.Fatal("negative usage input should not be serialized")
-	}
-	if metadata := OutboundMetadataFromContext(ctx); !metadata.IsToolFeedback() {
-		t.Fatalf("expected tool feedback metadata, got %#v", metadata)
+	if !strings.Contains(string(encoded), `"metadata":{"outbound_kind":"final"}`) {
+		t.Fatalf("typed metadata was not serialized: %s", encoded)
 	}
 }

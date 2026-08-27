@@ -177,7 +177,7 @@ func telegramMessageDeleteAlreadyAbsent(err error) bool {
 }
 
 func outboundMessageIsToolFeedback(msg bus.OutboundMessage) bool {
-	return bus.OutboundMetadataFromMessage(msg).IsToolFeedback()
+	return msg.Metadata.IsToolFeedback()
 }
 
 // SendPlaceholder implements channels.PlaceholderCapable.

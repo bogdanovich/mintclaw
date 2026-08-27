@@ -6,7 +6,7 @@ import "github.com/bogdanovich/mintclaw/pkg/bus"
 // message is terminal user-facing content that should clear any previously
 // tracked tool-feedback carrier after a fresh send.
 func OutboundMessageDismissesTrackedToolFeedback(msg bus.OutboundMessage) bool {
-	metadata := bus.OutboundMetadataFromMessage(msg)
+	metadata := msg.Metadata
 	if metadata.IsToolFeedback() || metadata.IsThought() || metadata.IsToolCalls() {
 		return false
 	}

@@ -81,8 +81,8 @@ func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelation(t *testing.T)
 				outbound.Context.SenderID, outbound.Context.ChatType)
 		}
 		if outbound.Context.Raw["session_id"] != "live-session" ||
-			outbound.Context.Raw[metadataKeyMessageKind] != messageKindFinalReply {
-			t.Fatalf("outbound metadata = %#v", outbound.Context.Raw)
+			outbound.Metadata.MessageKind != bus.OutboundMessageKindFinalReply {
+			t.Fatalf("outbound context = %#v, metadata = %#v", outbound.Context, outbound.Metadata)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected final outbound")
@@ -1480,8 +1480,8 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	if out1.Content != "continued response" {
 		t.Fatalf("expected continued response, got %q", out1.Content)
 	}
-	if got := strings.TrimSpace(out1.Context.Raw[metadataKeyMessageKind]); got != messageKindFinalReply {
-		t.Fatalf("expected continued response to be marked %q, got %q", messageKindFinalReply, got)
+	if got := strings.TrimSpace(out1.Metadata.MessageKind); got != bus.OutboundMessageKindFinalReply {
+		t.Fatalf("expected continued response to be marked %q, got %q", bus.OutboundMessageKindFinalReply, got)
 	}
 
 	noExtraCtx, cancelNoExtra := context.WithTimeout(context.Background(), 200*time.Millisecond)

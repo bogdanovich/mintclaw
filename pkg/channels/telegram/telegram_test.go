@@ -1421,15 +1421,14 @@ func TestSend_ApprovalPromptUsesIdentityBoundInlineKeyboard(t *testing.T) {
 	}
 	ch := newTestChannel(t, caller)
 	ch.tgCfg.RichMessages.Enabled = true
-	outboundCtx := bus.InboundContext{}
-	bus.OutboundMetadata{
+	metadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionApproval,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
-	}.ApplyToContext(&outboundCtx)
-	outboundCtx.Raw[bus.OutboundMetadataKeyInteractionShortID] = "abc12345"
+		InteractionShortID:  "abc12345",
+	}
 
 	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
-		ChatID: "12345", Context: outboundCtx, Content: "Approve?", ReplyToMessageID: "42",
+		ChatID: "12345", Metadata: metadata, Content: "Approve?", ReplyToMessageID: "42",
 	})
 	require.NoError(t, err)
 	require.Len(t, caller.calls, 1)
@@ -1451,17 +1450,15 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 		},
 	}
 	ch := newTestChannel(t, caller)
-	outboundCtx := bus.InboundContext{}
 	metadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
+		InteractionShortID:  "abc12345",
 	}
 	metadata = metadata.WithInteractionChoices([]string{"Generate it", "Enter manually"})
-	metadata.ApplyToContext(&outboundCtx)
-	outboundCtx.Raw[bus.OutboundMetadataKeyInteractionShortID] = "abc12345"
 
 	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
-		ChatID: "12345", Context: outboundCtx, Content: "Choose an input method",
+		ChatID: "12345", Metadata: metadata, Content: "Choose an input method",
 	})
 	require.NoError(t, err)
 	require.Len(t, caller.calls, 1)
@@ -1485,15 +1482,14 @@ func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
 		},
 	}
 	ch := newTestChannel(t, caller)
-	outboundCtx := bus.InboundContext{}
-	bus.OutboundMetadata{
+	metadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
-	}.ApplyToContext(&outboundCtx)
-	outboundCtx.Raw[bus.OutboundMetadataKeyInteractionShortID] = "abc12345"
+		InteractionShortID:  "abc12345",
+	}
 
 	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
-		ChatID: "12345", Context: outboundCtx, Content: "What value should be used?",
+		ChatID: "12345", Metadata: metadata, Content: "What value should be used?",
 	})
 	require.NoError(t, err)
 	var payload map[string]any
@@ -1510,14 +1506,13 @@ func TestSend_ApprovalFinalRemovesKeyboard(t *testing.T) {
 		},
 	}
 	ch := newTestChannel(t, caller)
-	outboundCtx := bus.InboundContext{}
-	bus.OutboundMetadata{
+	metadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionApproval,
 		InteractionControls: bus.OutboundInteractionControlsRemove,
-	}.ApplyToContext(&outboundCtx)
+	}
 
 	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
-		ChatID: "12345", Context: outboundCtx, Content: "Done", ReplyToMessageID: "73",
+		ChatID: "12345", Metadata: metadata, Content: "Done", ReplyToMessageID: "73",
 	})
 	require.NoError(t, err)
 	require.Len(t, caller.calls, 1)
@@ -1691,11 +1686,9 @@ func TestSend_FinalReplyUsesTransportSend(t *testing.T) {
 	ch := newTestChannel(t, caller)
 
 	ids, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
-		ChatID:  "12345",
-		Content: "final reply",
-		Context: bus.InboundContext{
-			Raw: map[string]string{"message_kind": "final_reply"},
-		},
+		ChatID:   "12345",
+		Content:  "final reply",
+		Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindFinalReply},
 	})
 
 	assert.NoError(t, err)
@@ -1716,12 +1709,12 @@ func TestSend_ToolFeedbackStaysSingleMessageAfterHTMLExpansion(t *testing.T) {
 	_, err := ch.deliverTextForTest(context.Background(), bus.OutboundMessage{
 		ChatID:  "12345",
 		Content: "🔧 `read_file`\n" + strings.Repeat("<", 2000),
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "telegram",
 			ChatID:  "12345",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 
@@ -3568,11 +3561,11 @@ func TestHandleMessage_ActiveCancelControlPassesGroupMentionOnly(t *testing.T) {
 func TestInteractionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *testing.T) {
 	ch := &TelegramChannel{}
 	ctx := bus.InboundContext{SenderID: "15"}
-	bus.OutboundMetadata{
+	metadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
-	}.WithInteractionChoices([]string{"Generate it"}).ApplyToContext(&ctx)
-	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx}, -100123, 1771)
+	}.WithInteractionChoices([]string{"Generate it"})
+	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: metadata}, -100123, 1771)
 	message := &telego.Message{
 		Text: "Generate it", Chat: telego.Chat{ID: -100123}, MessageThreadID: 1771,
 	}
@@ -3581,12 +3574,11 @@ func TestInteractionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *t
 	_, response = ch.telegramInteractionMetadata(message, message.Text, "16")
 	assert.Empty(t, response)
 
-	removeCtx := bus.InboundContext{SenderID: "15"}
-	bus.OutboundMetadata{
+	removeMetadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsRemove,
-	}.ApplyToContext(&removeCtx)
-	ch.updateInteractionControls(bus.OutboundMessage{Context: removeCtx}, -100123, 1771)
+	}
+	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: removeMetadata}, -100123, 1771)
 	_, response = ch.telegramInteractionMetadata(message, message.Text, "15")
 	assert.Empty(t, response)
 }
@@ -3594,12 +3586,12 @@ func TestInteractionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *t
 func TestSyncInteractionControlsRebuildsQuestionRouting(t *testing.T) {
 	ch := &TelegramChannel{}
 	ctx := bus.InboundContext{SenderID: "15", TopicID: "1771"}
-	bus.OutboundMetadata{
+	metadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
-	}.WithInteractionChoices([]string{"Generate it"}).ApplyToContext(&ctx)
+	}.WithInteractionChoices([]string{"Generate it"})
 	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
-		Channel: "telegram", ChatID: "-100123/1771", Context: ctx,
+		Channel: "telegram", ChatID: "-100123/1771", Context: ctx, Metadata: metadata,
 	}))
 	_, response := ch.telegramInteractionMetadata(&telego.Message{
 		Text: "Generate it", Chat: telego.Chat{ID: -100123}, MessageThreadID: 1771,
@@ -3610,12 +3602,12 @@ func TestSyncInteractionControlsRebuildsQuestionRouting(t *testing.T) {
 func TestSyncInteractionControlsTracksFreeTextQuestionWithoutChoices(t *testing.T) {
 	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
 	ctx := bus.InboundContext{SenderID: "15"}
-	bus.OutboundMetadata{
+	metadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
-	}.ApplyToContext(&ctx)
+	}
 	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
-		Channel: "telegram", ChatID: "-100123", Context: ctx,
+		Channel: "telegram", ChatID: "-100123", Context: ctx, Metadata: metadata,
 	}))
 	message := &telego.Message{
 		Text: "generate it yourself", Chat: telego.Chat{ID: -100123},
@@ -3630,13 +3622,12 @@ func TestSyncInteractionControlsTracksFreeTextQuestionWithoutChoices(t *testing.
 	)
 	assert.Equal(t, "generate it yourself", response)
 
-	removeCtx := bus.InboundContext{SenderID: "15"}
-	bus.OutboundMetadata{
+	removeMetadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsRemove,
-	}.ApplyToContext(&removeCtx)
+	}
 	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
-		Channel: "telegram", ChatID: "-100123", Context: removeCtx,
+		Channel: "telegram", ChatID: "-100123", Context: ctx, Metadata: removeMetadata,
 	}))
 	_, response = ch.telegramInteractionMetadata(message, "generate it yourself", "15")
 	assert.Empty(t, response)
@@ -3644,15 +3635,14 @@ func TestSyncInteractionControlsTracksFreeTextQuestionWithoutChoices(t *testing.
 
 func TestSyncInteractionControlsTracksApprovalIdentity(t *testing.T) {
 	ch := &TelegramChannel{}
-	ctx := bus.InboundContext{SenderID: "15", Raw: map[string]string{
-		bus.OutboundMetadataKeyInteractionShortID: "abc12345",
-	}}
-	bus.OutboundMetadata{
+	ctx := bus.InboundContext{SenderID: "15"}
+	metadata := bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionApproval,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
-	}.ApplyToContext(&ctx)
+		InteractionShortID:  "abc12345",
+	}
 	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
-		Channel: "telegram", ChatID: "-100123/1771", Context: ctx,
+		Channel: "telegram", ChatID: "-100123/1771", Context: ctx, Metadata: metadata,
 	}))
 	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
 }

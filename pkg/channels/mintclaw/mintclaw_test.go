@@ -95,13 +95,13 @@ func TestSend_ThoughtMessageIncludesMetadata(t *testing.T) {
 	if _, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "mintclaw:sess-1",
 		Content: "thinking trace",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindThought,
+			ModelName:   "gpt-5.4-mini",
+		},
 		Context: bus.InboundContext{
 			Channel: "mintclaw",
 			ChatID:  "mintclaw:sess-1",
-			Raw: map[string]string{
-				"message_kind":      MessageKindThought,
-				PayloadKeyModelName: "gpt-5.4-mini",
-			},
 		},
 	}); err != nil {
 		t.Fatalf("Send(thought) error = %v", err)
@@ -143,19 +143,18 @@ func TestSend_FinalMessageIncludesCorrelationMetadata(t *testing.T) {
 	defer cleanup()
 	ch.addConnForTest(&mintclawConn{id: "conn-final", conn: clientConn, sessionID: "sess-final"})
 
-	ctx := bus.InboundContext{
-		Channel: "mintclaw", ChatID: "mintclaw:sess-final", MessageID: "request-final", Raw: map[string]string{},
-	}
-	ctx.Raw[PayloadKeyInteractionID] = "interaction-final"
-	ctx.Raw[PayloadKeyInteractionShortID] = "short-final"
-	bus.OutboundMetadata{
-		MessageKind:  bus.OutboundMessageKindFinalReply,
-		OutboundKind: bus.OutboundKindFinal,
-	}.ApplyToContext(&ctx)
 	if _, err := ch.sendText(context.Background(), bus.OutboundMessage{
-		ChatID:     "mintclaw:sess-final",
-		Content:    "done",
-		Context:    ctx,
+		ChatID:  "mintclaw:sess-final",
+		Content: "done",
+		Context: bus.InboundContext{
+			Channel: "mintclaw", ChatID: "mintclaw:sess-final", MessageID: "request-final",
+		},
+		Metadata: bus.OutboundMetadata{
+			MessageKind:        bus.OutboundMessageKindFinalReply,
+			OutboundKind:       bus.OutboundKindFinal,
+			InteractionID:      "interaction-final",
+			InteractionShortID: "short-final",
+		},
 		AgentID:    "main",
 		SessionKey: "sk_v1_final",
 		TraceScopes: []runtimeevents.TraceScope{
@@ -191,13 +190,13 @@ func TestSend_FinalMessageUsesInboundMessageIDOverReplyTarget(t *testing.T) {
 		MessageID:        "request-final",
 		ReplyToMessageID: "origin-message",
 	}
-	bus.OutboundMetadata{
-		MessageKind:  bus.OutboundMessageKindFinalReply,
-		OutboundKind: bus.OutboundKindFinal,
-	}.ApplyToContext(&ctx)
 	msg, err := bus.NormalizeOutboundMessage(bus.OutboundMessage{
 		Content: "done",
 		Context: ctx,
+		Metadata: bus.OutboundMetadata{
+			MessageKind:  bus.OutboundMessageKindFinalReply,
+			OutboundKind: bus.OutboundKindFinal,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -300,14 +299,19 @@ func TestSend_ToolCallsMessageIncludesModelName(t *testing.T) {
 	if _, err := ch.sendText(context.Background(), bus.OutboundMessage{
 		ChatID:  "mintclaw:sess-1",
 		Content: "",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolCalls,
+			ModelName:   "gpt-5.4",
+			ToolCalls: []bus.OutboundToolCall{{
+				ID: "call_1", Type: "function",
+				Function: &bus.OutboundToolCallFunction{
+					Name: "read_file", Arguments: `{"path":"README.md"}`,
+				},
+			}},
+		},
 		Context: bus.InboundContext{
 			Channel: "mintclaw",
 			ChatID:  "mintclaw:sess-1",
-			Raw: map[string]string{
-				"message_kind":      MessageKindToolCalls,
-				PayloadKeyModelName: "gpt-5.4",
-				PayloadKeyToolCalls: `[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]`,
-			},
 		},
 	}); err != nil {
 		t.Fatalf("Send(tool_calls) error = %v", err)

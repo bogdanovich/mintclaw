@@ -198,13 +198,15 @@ func (al *AgentLoop) runTurnAndDrainSteering(
 	aggregateAdmission := finalResponseAdmission{status: finalResponseAdmissionNotRequired}
 	finalResponse := joinSteeringResponses(responses)
 	if finalResponse != "" {
-		finalContext := outboundContextWithMessageKind(
+		finalContext := outboundContextFromInbound(
 			&initialMsg.Context,
 			target.Channel,
 			target.ChatID,
 			initialMsg.Context.ReplyToMessageID,
-			messageKindFinalReply,
 		)
+		target.responseMetadata = target.responseMetadata.Merge(bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindFinalReply,
+		})
 		aggregateAdmission = al.publishResponseWithMetadataAndScopes(
 			ctx,
 			target.Workspace,

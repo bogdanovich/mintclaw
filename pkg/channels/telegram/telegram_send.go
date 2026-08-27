@@ -94,8 +94,8 @@ type sendChunkParams struct {
 }
 
 func telegramInteractionReplyMarkup(msg bus.OutboundMessage) telego.ReplyMarkup {
-	metadata := bus.OutboundMetadataFromMessage(msg)
-	shortID := strings.TrimSpace(msg.Context.Raw[bus.OutboundMetadataKeyInteractionShortID])
+	metadata := msg.Metadata
+	shortID := strings.TrimSpace(metadata.InteractionShortID)
 	if (metadata.IsApprovalPrompt() || metadata.IsQuestionPrompt()) && shortID == "" {
 		return nil
 	}

@@ -1956,10 +1956,12 @@ func (al *AgentLoop) deliverInteractionFinal(
 	if record.Kind == interactions.KindApproval || record.Kind == interactions.KindQuestion {
 		inbound.ReplyToMessageID = interactionResponseReplyTarget(record, inbound)
 	}
-	bus.OutboundMetadata{
+	metadata := bus.OutboundMetadata{
 		InteractionKind:     string(record.Kind),
 		InteractionControls: bus.OutboundInteractionControlsRemove,
-	}.ApplyToContext(&inbound)
+		InteractionID:       record.ID,
+		InteractionShortID:  record.ShortID,
+	}
 	if strings.TrimSpace(record.Origin.TaskID) != "" {
 		return al.deliverTaskInteractionFinal(
 			ctx, registry, interactionWorkspace, record, inbound, content, deliverable, traceScopes,
@@ -1976,24 +1978,18 @@ func (al *AgentLoop) deliverInteractionFinal(
 		}
 		return err
 	}
-	bus.OutboundMetadata{
+	metadata = metadata.Merge(bus.OutboundMetadata{
 		MessageKind:  bus.OutboundMessageKindFinalReply,
 		OutboundKind: bus.OutboundKindFinal,
-	}.ApplyToContext(&inbound)
+	})
 	if !supportsDurableDeliveryReceipts(al.channelManager) {
 		return fmt.Errorf("durable channel delivery receipts are unavailable")
 	}
 	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryFinalReady)
 	al.dismissInteractionToolFeedback(ctx, record, inbound, traceScopes)
-	if inbound.Raw == nil {
-		inbound.Raw = make(map[string]string)
-	}
-	inbound.Raw[interactionIDMetadata] = record.ID
-	inbound.Raw[interactionShortIDMeta] = record.ShortID
-	inbound.Raw["delivery_key"] = interactionDeliveryKey(record.ID, "final")
 	message := bus.OutboundMessage{
 		Channel: record.Route.Channel, ChatID: record.Route.ChatID,
-		Context: inbound, AgentID: record.Route.AgentID,
+		Context: inbound, Metadata: metadata, AgentID: record.Route.AgentID,
 		SessionKey: record.Route.SessionKey, Content: content,
 		ReplyToMessageID: inbound.ReplyToMessageID,
 	}
@@ -2092,11 +2088,17 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	default:
 		mode = toolshared.AsyncDeliveryUserOnly
 	}
+	metadata := bus.OutboundMetadata{
+		InteractionKind:     string(record.Kind),
+		InteractionControls: bus.OutboundInteractionControlsRemove,
+		InteractionID:       record.ID,
+		InteractionShortID:  record.ShortID,
+	}
 	if mode != toolshared.AsyncDeliveryParentOnly {
-		bus.OutboundMetadata{
+		metadata = metadata.Merge(bus.OutboundMetadata{
 			MessageKind:  bus.OutboundMessageKindFinalReply,
 			OutboundKind: bus.OutboundKindFinal,
-		}.ApplyToContext(&inbound)
+		})
 	}
 	deliveryCtx := al.withInteractionFinalTransaction(ctx, registry, workspace, record)
 	if mode == toolshared.AsyncDeliveryParentOnly &&
@@ -2143,6 +2145,7 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 		Result:       result,
 		Decision:     decideAsyncToolResultDelivery(result),
 		TraceScopes:  traceScopes,
+		Metadata:     metadata,
 	})
 	if err := outboundTransactionFromContext(deliveryCtx).awaitDelivered(deliveryCtx); err != nil {
 		return err
@@ -2186,22 +2189,19 @@ func (al *AgentLoop) deliverInteractionControlsRemoved(
 	record interactions.Record,
 	inbound bus.InboundContext,
 ) error {
-	if inbound.Raw == nil {
-		inbound.Raw = make(map[string]string)
-	}
-	inbound.Raw[interactionIDMetadata] = record.ID
-	inbound.Raw[interactionShortIDMeta] = record.ShortID
-	inbound.Raw["delivery_key"] = interactionDeliveryKey(record.ID, "controls_removed")
-	bus.OutboundMetadata{
+	metadata := bus.OutboundMetadata{
 		InteractionKind:     string(record.Kind),
 		InteractionControls: bus.OutboundInteractionControlsRemove,
-	}.ApplyToContext(&inbound)
+		InteractionID:       record.ID,
+		InteractionShortID:  record.ShortID,
+	}
 	replyToMessageID := interactionResponseReplyTarget(record, inbound)
 	inbound.ReplyToMessageID = replyToMessageID
 	_, err := al.publishTransactionMessage(ctx, workspace, bus.OutboundMessage{
 		Channel:          record.Route.Channel,
 		ChatID:           record.Route.ChatID,
 		Context:          inbound,
+		Metadata:         metadata,
 		AgentID:          record.Route.AgentID,
 		SessionKey:       record.Route.SessionKey,
 		Content:          "Response recorded.",

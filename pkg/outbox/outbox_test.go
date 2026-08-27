@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,77 @@ func TestStorePersistsDeliveryLifecycle(t *testing.T) {
 	}
 	if loaded.Status != StatusDelivered || loaded.Attempts != 1 {
 		t.Fatalf("Get() reopened = status %q attempts %d", loaded.Status, loaded.Attempts)
+	}
+}
+
+func TestStorePersistsTypedOutboundMetadata(t *testing.T) {
+	store := openTestStore(t)
+	identity := testIdentity()
+	intent, err := NewMessageIntent("/agents/main", identity, bus.OutboundMessage{
+		Metadata: bus.OutboundMetadata{
+			MessageKind:  " tool_calls ",
+			OutboundKind: " interim ",
+			ToolCalls: []bus.OutboundToolCall{{
+				ID: " call-1 ", Function: &bus.OutboundToolCallFunction{Name: " read_file "},
+			}},
+		},
+		Content: "response",
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("NewMessageIntent() error = %v", err)
+	}
+	created, err := store.Create(intent)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	loaded, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	metadata := loaded.Message.Metadata
+	if loaded.Version != 3 || metadata.MessageKind != bus.OutboundMessageKindToolCalls ||
+		metadata.OutboundKind != bus.OutboundKindInterim || len(metadata.ToolCalls) != 1 ||
+		metadata.ToolCalls[0].ID != "call-1" || metadata.ToolCalls[0].Function == nil ||
+		metadata.ToolCalls[0].Function.Name != "read_file" {
+		t.Fatalf("loaded typed metadata = %#v in version %d", metadata, loaded.Version)
+	}
+}
+
+func TestStoreRejectsPreviousRecordVersionAndInvalidCurrentMetadata(t *testing.T) {
+	store := openTestStore(t)
+	previous := newTestIntent(t, "previous", 0)
+	previous.Version = recordVersion - 1
+	if err := store.write(previous); err != nil {
+		t.Fatalf("write previous record: %v", err)
+	}
+	if _, err := store.Get(
+		previous.ID,
+	); err == nil ||
+		!strings.Contains(err.Error(), "unsupported outbox record version 2") {
+		t.Fatalf("Get(previous) error = %v", err)
+	}
+
+	for name, metadata := range map[string]bus.OutboundMetadata{
+		"empty tool calls": {
+			MessageKind: bus.OutboundMessageKindToolCalls,
+		},
+		"empty tool call": {
+			MessageKind: bus.OutboundMessageKindToolCalls,
+			ToolCalls:   []bus.OutboundToolCall{{}},
+		},
+		"prompt without short ID": {
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+			InteractionID:       "interaction-1",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := newTestIntent(t, name, 1)
+			invalid.Message.Metadata = metadata
+			if _, err := store.Create(invalid); err == nil {
+				t.Fatalf("Create(%s metadata) succeeded", name)
+			}
+		})
 	}
 }
 

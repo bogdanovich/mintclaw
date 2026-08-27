@@ -195,7 +195,7 @@ func (m *Manager) beginOutboundToolFeedbackTerminals(
 		&msg.Context,
 		msg.SessionKey,
 		msg.TraceScopes,
-		bus.OutboundMetadataFromMessage(msg).IsInterim(),
+		msg.Metadata.IsInterim(),
 	)
 }
 

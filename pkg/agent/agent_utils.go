@@ -108,13 +108,13 @@ func markFinalOutbound(msg *bus.OutboundMessage) {
 	if msg == nil {
 		return
 	}
-	bus.OutboundMetadata{OutboundKind: bus.OutboundKindFinal}.ApplyToContext(&msg.Context)
+	msg.Metadata = msg.Metadata.Merge(bus.OutboundMetadata{OutboundKind: bus.OutboundKindFinal})
 }
 
 type outboundTurnMessageOptions struct {
 	kind      string
 	modelName string
-	raw       map[string]string
+	toolCalls []bus.OutboundToolCall
 }
 
 func outboundMessageForTurnWithOptions(
@@ -125,41 +125,12 @@ func outboundMessageForTurnWithOptions(
 	msg := outboundMessageForTurn(ts, content)
 	trimmedKind := strings.TrimSpace(opts.kind)
 	trimmedModelName := strings.TrimSpace(opts.modelName)
-	rawCount := len(opts.raw)
-	if trimmedKind != "" {
-		rawCount++
-	}
-	if trimmedModelName != "" {
-		rawCount++
-	}
-	if rawCount == 0 {
-		return msg
-	}
-
-	bus.OutboundMetadata{MessageKind: trimmedKind, ModelName: trimmedModelName}.ApplyToContext(&msg.Context)
-	for key, value := range opts.raw {
-		if strings.TrimSpace(key) == "" {
-			continue
-		}
-		if msg.Context.Raw == nil {
-			msg.Context.Raw = make(map[string]string, rawCount)
-		}
-		msg.Context.Raw[key] = value
-	}
+	msg.Metadata = bus.NormalizeOutboundMetadata(bus.OutboundMetadata{
+		MessageKind: trimmedKind,
+		ModelName:   trimmedModelName,
+		ToolCalls:   opts.toolCalls,
+	})
 	return msg
-}
-
-func outboundContextWithMessageKind(
-	inboundCtx *bus.InboundContext,
-	channel, chatID, replyToMessageID, kind string,
-) bus.InboundContext {
-	ctx := outboundContextFromInbound(inboundCtx, channel, chatID, replyToMessageID)
-	kind = strings.TrimSpace(kind)
-	if kind == "" {
-		return ctx
-	}
-	bus.OutboundMetadata{MessageKind: kind}.ApplyToContext(&ctx)
-	return ctx
 }
 
 func latestUserContent(messages []providers.Message) string {

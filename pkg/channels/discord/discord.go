@@ -360,7 +360,7 @@ func (c *DiscordChannel) SendPlaceholder(ctx context.Context, chatID string) (st
 }
 
 func outboundMessageIsToolFeedback(msg bus.OutboundMessage) bool {
-	return bus.OutboundMetadataFromMessage(msg).IsToolFeedback()
+	return msg.Metadata.IsToolFeedback()
 }
 
 func (c *DiscordChannel) sendChunk(ctx context.Context, channelID, content, replyToID string) (string, error) {

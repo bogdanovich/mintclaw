@@ -97,7 +97,7 @@ func (c *MintClawChannel) sendMedia(ctx context.Context, msg bus.OutboundMediaMe
 		"attachments":     attachments,
 		"message_id":      msgID,
 	})
-	if modelName := strings.TrimSpace(msg.Context.Raw[PayloadKeyModelName]); modelName != "" {
+	if modelName := strings.TrimSpace(msg.Metadata.ModelName); modelName != "" {
 		outMsg.Payload[PayloadKeyModelName] = modelName
 	}
 

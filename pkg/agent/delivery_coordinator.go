@@ -41,6 +41,7 @@ type AsyncDeliveryRequest struct {
 	Result       *toolshared.ToolResult
 	Decision     AsyncDeliveryDecision
 	TraceScopes  []runtimeevents.TraceScope
+	Metadata     bus.OutboundMetadata
 }
 
 type asyncToolCompletionDelivery struct {
@@ -87,7 +88,13 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	if delivery.DeliveryMode == "" {
 		delivery = decideAsyncToolResultDelivery(result)
 	}
-	ts = turnStateForAsyncUserDelivery(ts, delivery)
+	metadata := req.Metadata
+	if delivery.DeliveryMode == toolshared.AsyncDeliveryUserOnly {
+		metadata = metadata.Merge(bus.OutboundMetadata{
+			MessageKind:  bus.OutboundMessageKindFinalReply,
+			OutboundKind: bus.OutboundKindFinal,
+		})
+	}
 	completionID := strings.TrimSpace(req.CompletionID)
 	deliveryContext := req.Context
 	if deliveryContext == nil {
@@ -114,7 +121,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		if content != "" && result.Delivery.Intent != toolshared.DeliverySilent {
 			outCtx, outCancel := context.WithTimeout(context.WithoutCancel(deliveryContext), 5*time.Second)
 			defer outCancel()
-			msg, err := outboundMessageForTraceSettlement(ts, content, req.TraceScopes)
+			msg, err := outboundMessageForTraceSettlement(ts, content, req.TraceScopes, metadata)
 			if err != nil {
 				deliveryErr = err.Error()
 			} else if err := d.publishMessage(outCtx, ts.workspace, msg); err != nil {
@@ -161,7 +168,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		userDelivered := false
 		userDeliveryErr := ""
 		if _, outcome, err := d.deliverToUserResult(
-			outCtx, ts, result, asyncToolName, req.TraceScopes,
+			outCtx, ts, result, asyncToolName, req.TraceScopes, metadata,
 		); err != nil {
 			userDeliveryErr = err.Error()
 			logger.WarnCF("agent", "Failed to deliver async tool result to user",
@@ -175,7 +182,7 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 			userDelivered = true
 		} else if outcome == toolResultDeliveryNone && strings.TrimSpace(result.ForUser) != "" &&
 			result.Delivery.Intent != toolshared.DeliverySilent {
-			msg, err := outboundMessageForTraceSettlement(ts, result.ForUser, req.TraceScopes)
+			msg, err := outboundMessageForTraceSettlement(ts, result.ForUser, req.TraceScopes, metadata)
 			if err != nil {
 				userDeliveryErr = err.Error()
 			} else if err := d.publishMessage(outCtx, ts.workspace, msg); err != nil {
@@ -287,12 +294,12 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	}
 	if err == nil {
 		var msg bus.OutboundMessage
-		msg, err = outboundMessageForTraceSettlement(ts, synthesized, req.TraceScopes)
+		msg, err = outboundMessageForTraceSettlement(ts, synthesized, req.TraceScopes, metadata)
 		if err == nil {
-			bus.OutboundMetadata{
+			msg.Metadata = msg.Metadata.Merge(bus.OutboundMetadata{
 				MessageKind:  bus.OutboundMessageKindFinalReply,
 				OutboundKind: bus.OutboundKindFinal,
-			}.ApplyToContext(&msg.Context)
+			})
 			err = d.publishMessage(completionCtx, ts.workspace, msg)
 		}
 	}
@@ -339,36 +346,6 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 	}
 }
 
-func turnStateForAsyncUserDelivery(
-	ts *turnState,
-	delivery AsyncDeliveryDecision,
-) *turnState {
-	if ts == nil || delivery.DeliveryMode != toolshared.AsyncDeliveryUserOnly {
-		return ts
-	}
-
-	cloned := &turnState{
-		agent:      ts.agent,
-		opts:       ts.opts,
-		turnID:     ts.turnID,
-		agentID:    ts.agentID,
-		sessionKey: ts.sessionKey,
-		channel:    ts.channel,
-		chatID:     ts.chatID,
-		workspace:  ts.workspace,
-	}
-	inbound := cloneInboundContext(ts.opts.Dispatch.InboundContext)
-	if inbound == nil {
-		inbound = &bus.InboundContext{}
-	}
-	bus.OutboundMetadata{
-		MessageKind:  bus.OutboundMessageKindFinalReply,
-		OutboundKind: bus.OutboundKindFinal,
-	}.ApplyToContext(inbound)
-	cloned.opts.Dispatch.InboundContext = inbound
-	return cloned
-}
-
 func (d *asyncToolCompletionDelivery) publishMessage(
 	ctx context.Context,
 	workspace string,
@@ -393,19 +370,22 @@ func (d *asyncToolCompletionDelivery) deliverToUserResult(
 	result *toolshared.ToolResult,
 	toolName string,
 	traceScopes []runtimeevents.TraceScope,
+	metadata bus.OutboundMetadata,
 ) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 	if d == nil || d.userDelivery == nil || d.userDelivery.deliverToUser == nil {
 		return nil, toolResultDeliveryNone, fmt.Errorf("tool result delivery is not initialized")
 	}
-	return d.userDelivery.deliverToUser(ctx, ts, result, toolName, traceScopes)
+	return d.userDelivery.deliverToUser(ctx, ts, result, toolName, traceScopes, metadata)
 }
 
 func outboundMessageForTraceSettlement(
 	ts *turnState,
 	content string,
 	traceScopes []runtimeevents.TraceScope,
+	metadata bus.OutboundMetadata,
 ) (bus.OutboundMessage, error) {
 	msg := outboundMessageForTurn(ts, content)
+	msg.Metadata = msg.Metadata.Merge(metadata)
 	if err := bus.SetOutboundTraceScopes(&msg, traceScopes); err != nil {
 		return bus.OutboundMessage{}, err
 	}

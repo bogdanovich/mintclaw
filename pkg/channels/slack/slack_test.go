@@ -446,11 +446,9 @@ func TestSlackChannelSend_ToolFeedbackUsesTransportSend(t *testing.T) {
 	}
 
 	toolFeedback := bus.OutboundMessage{
-		ChatID:  "C123456",
-		Content: "Working...\n• tool: `read_file` — `README.md`",
-		Context: bus.InboundContext{Raw: map[string]string{
-			"message_kind": "tool_feedback",
-		}},
+		ChatID:   "C123456",
+		Content:  "Working...\n• tool: `read_file` — `README.md`",
+		Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 	}
 
 	msgIDs, err := ch.sendText(context.Background(), toolFeedback)

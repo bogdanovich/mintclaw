@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -56,7 +57,7 @@ type sessionChatMessage struct {
 	ModelName   string                  `json:"model_name,omitempty"`
 	CreatedAt   *time.Time              `json:"created_at,omitempty"`
 	Attachments []sessionChatAttachment `json:"attachments,omitempty"`
-	ToolCalls   []utils.VisibleToolCall `json:"tool_calls,omitempty"`
+	ToolCalls   []bus.OutboundToolCall  `json:"tool_calls,omitempty"`
 }
 
 type sessionChatAttachment struct {

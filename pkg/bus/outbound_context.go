@@ -51,6 +51,7 @@ func NormalizeOutboundMessage(msg OutboundMessage) (OutboundMessage, error) {
 		msg.Context.ReplyToMessageID = msg.ReplyToMessageID
 	}
 	msg.Scope = cloneOutboundScope(msg.Scope)
+	msg.Metadata = NormalizeOutboundMetadata(msg.Metadata)
 	var err error
 	msg.TraceScopes, err = NormalizeTraceScopes(msg.TraceScopes)
 	if len(msg.TraceScopes) == 0 {
@@ -152,6 +153,7 @@ func NormalizeOutboundMediaMessage(msg OutboundMediaMessage) (OutboundMediaMessa
 		msg.ChatID = msg.Context.ChatID
 	}
 	msg.Scope = cloneOutboundScope(msg.Scope)
+	msg.Metadata = NormalizeOutboundMetadata(msg.Metadata)
 	if msg.Recovery != nil {
 		recovery := *msg.Recovery
 		msg.Recovery = &recovery

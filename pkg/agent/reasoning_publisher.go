@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -46,17 +45,15 @@ func (rp *reasoningPublisherComponent) publishMintClawReasoning(
 	pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer pubCancel()
 
-	raw := map[string]string{metadataKeyMessageKind: messageKindThought}
-	if trimmedModelName := strings.TrimSpace(modelName); trimmedModelName != "" {
-		raw["model_name"] = trimmedModelName
-	}
-
 	if err := rp.bus.PublishOutbound(pubCtx, bus.OutboundMessage{
 		Context: bus.InboundContext{
 			Channel: "mintclaw",
 			ChatID:  chatID,
-			Raw:     raw,
 		},
+		Metadata: bus.NormalizeOutboundMetadata(bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindThought,
+			ModelName:   modelName,
+		}),
 		SessionKey: sessionKey,
 		Content:    reasoningContent,
 	}); err != nil {
@@ -95,7 +92,7 @@ func (rp *reasoningPublisherComponent) publishMintClawToolCallInterim(
 				ts,
 				reasoningContent,
 				outboundTurnMessageOptions{
-					kind:      messageKindThought,
+					kind:      bus.OutboundMessageKindThought,
 					modelName: modelName,
 				},
 			),
@@ -148,26 +145,14 @@ func (rp *reasoningPublisherComponent) publishMintClawToolCallInterim(
 		return
 	}
 
-	rawToolCalls, err := json.Marshal(visibleToolCalls)
-	if err != nil {
-		logger.WarnCF("agent", "Failed to serialize mintclaw tool calls", map[string]any{
-			"channel": ts.channel,
-			"chat_id": ts.chatID,
-			"error":   err.Error(),
-		})
-		return
-	}
-
 	msg := outboundMessageForTurnWithOptions(ts, "", outboundTurnMessageOptions{
-		kind:      messageKindToolCalls,
+		kind:      bus.OutboundMessageKindToolCalls,
 		modelName: modelName,
-		raw: map[string]string{
-			metadataKeyToolCalls: string(rawToolCalls),
-		},
+		toolCalls: visibleToolCalls,
 	})
 
 	pubCtx, pubCancel := context.WithTimeout(ctx, 3*time.Second)
-	err = rp.bus.PublishOutbound(pubCtx, msg)
+	err := rp.bus.PublishOutbound(pubCtx, msg)
 	pubCancel()
 	if err != nil && !errors.Is(err, context.DeadlineExceeded) &&
 		!errors.Is(err, context.Canceled) &&
