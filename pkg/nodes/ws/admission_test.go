@@ -458,6 +458,8 @@ func testInvocationAdmission(
 		SoftwareVersion: "v0.1.0",
 		CatalogHash:     catalogHash,
 		Catalog:         catalog,
+		Executor:        "local",
+		PolicyRevision:  "policy-1",
 		LastSeenAt:      1,
 	}
 	if upsertErr := registry.UpsertPending(nodes.PendingPairing{
@@ -544,7 +546,7 @@ func TestAdmissionPersistsSignedIdentityOverWSS(t *testing.T) {
 	proof, err := nodes.NewIdentityProof(
 		privateKey, challenge.Nonce, nodes.ProtocolV1, nodes.ProtocolV1,
 		"v0.1.0", "linux", "amd64", nodes.CapabilityCatalog{},
-		nodes.ExecutionProfile{},
+		nodes.ExecutionProfile{Executor: "local", PolicyRevision: "policy-1"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -818,7 +820,7 @@ func authenticateTestConnection(
 	proof, err := nodes.NewIdentityProof(
 		privateKey, challenge.Nonce, nodes.ProtocolV1, nodes.ProtocolV1,
 		"v0.1.0", "linux", "amd64", nodes.CapabilityCatalog{},
-		nodes.ExecutionProfile{},
+		nodes.ExecutionProfile{Executor: "local", PolicyRevision: "policy-1"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -884,6 +886,7 @@ func androidEnrollmentProof(
 		MinProtocol: nodes.ProtocolV1, MaxProtocol: nodes.ProtocolV1,
 		ClientVersion: "android-wss-test", Platform: "android", Architecture: "arm64-v8a",
 		RequestedRole: "companion", CatalogHash: catalogHash, Catalog: catalog,
+		Executor: "local", PolicyRevision: "policy-1",
 	}
 	transcript := androidIdentityTranscript(t, proof)
 	digest := sha256.Sum256(transcript)

@@ -62,8 +62,8 @@ type IdentityProof struct {
 	RequestedRole     string            `json:"requested_role"`
 	CatalogHash       string            `json:"catalog_hash"`
 	Catalog           CapabilityCatalog `json:"catalog"`
-	Executor          string            `json:"executor,omitempty"`
-	PolicyRevision    string            `json:"policy_revision,omitempty"`
+	Executor          string            `json:"executor"`
+	PolicyRevision    string            `json:"policy_revision"`
 }
 
 type identityTranscript struct {
@@ -124,7 +124,7 @@ func NewIdentityProof(
 	if len(privateKey) != ed25519.PrivateKeySize {
 		return IdentityProof{}, fmt.Errorf("%w: malformed private key", ErrInvalidIdentityProof)
 	}
-	if err := profile.ValidateOptional(); err != nil {
+	if err := profile.Validate(); err != nil {
 		return IdentityProof{}, err
 	}
 	if err := validateCompanionCatalog(catalog); err != nil {
@@ -270,7 +270,7 @@ func (proof IdentityProof) validateClaims() error {
 	if err := (ExecutionProfile{
 		Executor:       proof.Executor,
 		PolicyRevision: proof.PolicyRevision,
-	}).ValidateOptional(); err != nil {
+	}).Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidIdentityProof, err)
 	}
 	return nil

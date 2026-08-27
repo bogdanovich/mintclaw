@@ -39,7 +39,7 @@ func TestAuthenticatorPersistsPendingPairingAndRejectsReplay(t *testing.T) {
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -60,9 +60,9 @@ func TestAuthenticatorPersistsPendingPairingAndRejectsReplay(t *testing.T) {
 		t.Fatal("pending public key does not match signer")
 	}
 	if pending.Node.ProtocolVersion != ProtocolV1 ||
-		pending.Node.Executor != "" ||
-		pending.Node.PolicyRevision != "" {
-		t.Fatalf("legacy pending node = %#v", pending.Node)
+		pending.Node.Executor != "local" ||
+		pending.Node.PolicyRevision != "policy-1" {
+		t.Fatalf("pending node = %#v", pending.Node)
 	}
 	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrChallengeUnknown) {
 		t.Fatalf("replayed Admit() error = %v", err)
@@ -203,7 +203,7 @@ func TestAuthenticatorRejectsEnrollmentAuthorityFromNonAndroidIdentity(t *testin
 		"linux",
 		"amd64",
 		CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestAuthenticatorRejectsEd25519IdentityClaimingAndroidPlatform(t *testing.T
 		"android",
 		"arm64-v8a",
 		CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +308,7 @@ func TestFileRegistryRejectsMissingKeyAlgorithm(t *testing.T) {
 	}
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
-		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, ExecutionProfile{},
+		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -426,7 +426,7 @@ func TestAuthenticatorConsumesInvalidProofChallenge(t *testing.T) {
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -470,7 +470,7 @@ func TestAuthenticatorExpiresAndBoundsChallenges(t *testing.T) {
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -616,7 +616,7 @@ func admitTestIdentityResult(
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		return AdmissionResult{}, err

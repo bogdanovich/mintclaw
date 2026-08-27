@@ -835,7 +835,9 @@ func newTestNodeTerminalSource(
 	handler := &fakeGatewayTerminalHandler{
 		fakeNodeAdmissionHandler: &fakeNodeAdmissionHandler{},
 		registration: nodes.Registration{
-			Snapshot: nodes.Snapshot{ID: nodeID, State: nodes.StateConnected},
+			Snapshot: nodes.Snapshot{
+				ID: nodeID, State: nodes.StateConnected, Executor: "local", PolicyRevision: "policy-1",
+			},
 		},
 		approval: nodes.CommandApproval{
 			Descriptor: nodes.CommandDescriptor{

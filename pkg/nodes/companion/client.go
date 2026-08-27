@@ -57,16 +57,6 @@ type connectedWorkers struct {
 	events   sync.WaitGroup
 }
 
-func NewClient(
-	cfg Config,
-	identity Identity,
-	clientVersion string,
-	catalog nodes.CapabilityCatalog,
-	logger *slog.Logger,
-) (*Client, error) {
-	return newClient(cfg, identity, clientVersion, catalog, nil, logger)
-}
-
 func NewClientWithRuntime(
 	cfg Config,
 	identity Identity,
@@ -80,7 +70,50 @@ func NewClientWithRuntime(
 	if runtime.nodeID != identity.ID {
 		return nil, errors.New("node command runtime identity does not match client identity")
 	}
-	return newClient(cfg, identity, clientVersion, runtime.Catalog(), runtime, logger)
+	if cfg.minReconnectDelay <= 0 || cfg.maxReconnectDelay < cfg.minReconnectDelay ||
+		cfg.pendingRetryDelay <= 0 {
+		return nil, errors.New("normalized node configuration is required")
+	}
+	if len(identity.PrivateKey) != ed25519.PrivateKeySize || identity.ID == "" {
+		return nil, errors.New("valid node identity is required")
+	}
+	derivedIdentity, err := identityFromPrivateKey(identity.PrivateKey)
+	if err != nil || derivedIdentity.ID != identity.ID {
+		return nil, errors.New("node identity ID does not match its private key")
+	}
+	if clientVersion == "" || len(clientVersion) > nodes.MaxClientVersionLength {
+		return nil, errors.New("valid node client version is required")
+	}
+	catalog := runtime.Catalog()
+	if catalogErr := catalog.Validate(); catalogErr != nil {
+		return nil, catalogErr
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	tlsConfig, err := buildTLSConfig(cfg.TLS)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{
+		config: cfg,
+		identity: Identity{
+			ID:         identity.ID,
+			PrivateKey: append(ed25519.PrivateKey(nil), identity.PrivateKey...),
+		},
+		clientVersion: clientVersion,
+		catalog:       cloneCatalog(catalog),
+		runtime:       runtime,
+		logger:        logger,
+		stableWindow:  defaultStableSessionWindow,
+		invokeSlots:   make(chan struct{}, maxConcurrentInvocations),
+		attachments:   make(map[string]*TerminalAttachment),
+		dialer: websocket.Dialer{
+			HandshakeTimeout: DefaultHandshakeTimeout,
+			TLSClientConfig:  tlsConfig,
+			Proxy:            http.ProxyFromEnvironment,
+		},
+	}, nil
 }
 
 func NewClientWithRuntimeAndTransferHandler(
@@ -100,59 +133,6 @@ func NewClientWithRuntimeAndTransferHandler(
 	}
 	client.transferHandler = handler
 	return client, nil
-}
-
-func newClient(
-	cfg Config,
-	identity Identity,
-	clientVersion string,
-	catalog nodes.CapabilityCatalog,
-	commandRuntime *Runtime,
-	logger *slog.Logger,
-) (*Client, error) {
-	if cfg.minReconnectDelay <= 0 || cfg.maxReconnectDelay < cfg.minReconnectDelay ||
-		cfg.pendingRetryDelay <= 0 {
-		return nil, errors.New("normalized node configuration is required")
-	}
-	if len(identity.PrivateKey) != ed25519.PrivateKeySize || identity.ID == "" {
-		return nil, errors.New("valid node identity is required")
-	}
-	derivedIdentity, err := identityFromPrivateKey(identity.PrivateKey)
-	if err != nil || derivedIdentity.ID != identity.ID {
-		return nil, errors.New("node identity ID does not match its private key")
-	}
-	if clientVersion == "" || len(clientVersion) > nodes.MaxClientVersionLength {
-		return nil, errors.New("valid node client version is required")
-	}
-	if catalogErr := catalog.Validate(); catalogErr != nil {
-		return nil, catalogErr
-	}
-	if logger == nil {
-		logger = slog.Default()
-	}
-	tlsConfig, err := buildTLSConfig(cfg.TLS)
-	if err != nil {
-		return nil, err
-	}
-	return &Client{
-		config: cfg,
-		identity: Identity{
-			ID:         identity.ID,
-			PrivateKey: append(ed25519.PrivateKey(nil), identity.PrivateKey...),
-		},
-		clientVersion: clientVersion,
-		catalog:       cloneCatalog(catalog),
-		runtime:       commandRuntime,
-		logger:        logger,
-		stableWindow:  defaultStableSessionWindow,
-		invokeSlots:   make(chan struct{}, maxConcurrentInvocations),
-		attachments:   make(map[string]*TerminalAttachment),
-		dialer: websocket.Dialer{
-			HandshakeTimeout: DefaultHandshakeTimeout,
-			TLSClientConfig:  tlsConfig,
-			Proxy:            http.ProxyFromEnvironment,
-		},
-	}, nil
 }
 
 func cloneCatalog(catalog nodes.CapabilityCatalog) nodes.CapabilityCatalog {
@@ -417,10 +397,6 @@ func (client *Client) identityProof(challenge nodes.Challenge) (nodes.IdentityPr
 	if challenge.MinProtocol > nodes.ProtocolV1 || challenge.MaxProtocol < nodes.ProtocolV1 {
 		return nodes.IdentityProof{}, ErrIncompatibleGateway
 	}
-	profile := nodes.ExecutionProfile{}
-	if client.runtime != nil {
-		profile = client.runtime.ExecutionProfile()
-	}
 	return nodes.NewIdentityProof(
 		client.identity.PrivateKey,
 		challenge.Nonce,
@@ -430,7 +406,7 @@ func (client *Client) identityProof(challenge nodes.Challenge) (nodes.IdentityPr
 		runtime.GOOS,
 		runtime.GOARCH,
 		client.catalog,
-		profile,
+		client.runtime.ExecutionProfile(),
 	)
 }
 

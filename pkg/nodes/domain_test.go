@@ -466,14 +466,21 @@ func TestCapabilityCatalogRejectsInvalidDescriptors(t *testing.T) {
 
 func TestSnapshotValidation(t *testing.T) {
 	snapshot := Snapshot{
-		ID:      ID("node_ed25519-example"),
-		Aliases: []Alias{"build-box"},
-		State:   StateConnected,
-		Catalog: CapabilityCatalog{},
+		ID:             ID("node_ed25519-example"),
+		Aliases:        []Alias{"build-box"},
+		State:          StateConnected,
+		Catalog:        CapabilityCatalog{},
+		Executor:       "local",
+		PolicyRevision: "policy-1",
 	}
 	if err := snapshot.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
+	snapshot.Executor = ""
+	if err := snapshot.Validate(); !errors.Is(err, ErrInvalidInvocation) {
+		t.Fatalf("missing execution profile error = %v", err)
+	}
+	snapshot.Executor = "local"
 
 	snapshot.Aliases = append(snapshot.Aliases, "build-box")
 	if err := snapshot.Validate(); !errors.Is(err, ErrInvalidNode) {
@@ -490,10 +497,12 @@ func TestSnapshotValidatesCatalogHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := Snapshot{
-		ID:          ID("node_example"),
-		State:       StateConnected,
-		Catalog:     catalog,
-		CatalogHash: hash,
+		ID:             ID("node_example"),
+		State:          StateConnected,
+		Catalog:        catalog,
+		CatalogHash:    hash,
+		Executor:       "local",
+		PolicyRevision: "policy-1",
 	}
 	if err := snapshot.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)

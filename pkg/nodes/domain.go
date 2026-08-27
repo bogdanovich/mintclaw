@@ -762,8 +762,8 @@ type Snapshot struct {
 	SoftwareVersion  string            `json:"software_version,omitempty"`
 	CatalogHash      string            `json:"catalog_hash,omitempty"`
 	Catalog          CapabilityCatalog `json:"catalog,omitempty"`
-	Executor         string            `json:"executor,omitempty"`
-	PolicyRevision   string            `json:"policy_revision,omitempty"`
+	Executor         string            `json:"executor"`
+	PolicyRevision   string            `json:"policy_revision"`
 	LastSeenAt       int64             `json:"last_seen_at,omitempty"`
 	DisconnectReason string            `json:"disconnect_reason,omitempty"`
 }
@@ -794,7 +794,7 @@ func (snapshot Snapshot) Validate() error {
 	if err := (ExecutionProfile{
 		Executor:       snapshot.Executor,
 		PolicyRevision: snapshot.PolicyRevision,
-	}).ValidateOptional(); err != nil {
+	}).Validate(); err != nil {
 		return err
 	}
 	if snapshot.CatalogHash == "" {

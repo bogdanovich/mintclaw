@@ -18,6 +18,10 @@ import (
 	"testing"
 )
 
+func currentTestExecutionProfile() ExecutionProfile {
+	return ExecutionProfile{Executor: "local", PolicyRevision: "policy-1"}
+}
+
 func TestIdentityProofRoundTripAndTamperDetection(t *testing.T) {
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -26,7 +30,7 @@ func TestIdentityProofRoundTripAndTamperDetection(t *testing.T) {
 	proof, err := NewIdentityProof(
 		privateKey, "challenge", ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -80,18 +84,24 @@ func TestIdentityProofRejectsIncompleteExecutionProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewIdentityProof(
-		privateKey,
-		"challenge",
-		ProtocolV1,
-		ProtocolV1,
-		"v0.1.0",
-		"linux",
-		"amd64",
-		CapabilityCatalog{},
-		ExecutionProfile{Executor: "local"},
-	); !errors.Is(err, ErrInvalidInvocation) {
-		t.Fatalf("incomplete execution profile error = %v", err)
+	for _, profile := range []ExecutionProfile{
+		{},
+		{Executor: "local"},
+		{PolicyRevision: "policy-1"},
+	} {
+		if _, proofErr := NewIdentityProof(
+			privateKey,
+			"challenge",
+			ProtocolV1,
+			ProtocolV1,
+			"v0.1.0",
+			"linux",
+			"amd64",
+			CapabilityCatalog{},
+			profile,
+		); !errors.Is(proofErr, ErrInvalidInvocation) {
+			t.Fatalf("incomplete execution profile %#v error = %v", profile, proofErr)
+		}
 	}
 }
 
@@ -111,7 +121,7 @@ func TestIdentityProofRejectsGatewayOnlyServiceApprovalState(t *testing.T) {
 		"linux",
 		"amd64",
 		CapabilityCatalog{Commands: []CommandDescriptor{descriptor}},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("gateway-only companion approval state error = %v", err)
 	}
@@ -151,7 +161,7 @@ func TestIdentityProofRejectsCatalogHashMismatch(t *testing.T) {
 	proof, err := NewIdentityProof(
 		privateKey, "challenge", ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +179,7 @@ func TestExplicitEd25519AlgorithmIsTranscriptBound(t *testing.T) {
 	}
 	proof, err := NewIdentityProof(
 		privateKey, "challenge", ProtocolV1, ProtocolV1,
-		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, ExecutionProfile{},
+		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +207,7 @@ func TestIdentityProofRejectsMissingKeyAlgorithm(t *testing.T) {
 	}
 	proof, err := NewIdentityProof(
 		privateKey, "challenge", ProtocolV1, ProtocolV1,
-		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, ExecutionProfile{},
+		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -380,6 +390,7 @@ func newTestP256IdentityProof(t *testing.T, privateKey *ecdsa.PrivateKey, nonce 
 		KeyAlgorithm: KeyAlgorithmECDSAP256SHA256, MinProtocol: ProtocolV1, MaxProtocol: ProtocolV1,
 		ClientVersion: "android-test", Platform: "android", Architecture: "arm64-v8a",
 		RequestedRole: "companion", CatalogHash: catalogHash, Catalog: catalog,
+		Executor: "local", PolicyRevision: "policy-1",
 	}
 	signTestP256IdentityProof(t, privateKey, &proof)
 	return proof

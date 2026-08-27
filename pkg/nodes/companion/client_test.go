@@ -1058,11 +1058,11 @@ func TestClientRejectsWrongCertificatePin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := NewClient(
+	client, err := NewClientWithRuntime(
 		cfg,
 		identity,
 		"test",
-		nodes.CapabilityCatalog{},
+		testCommandRuntime(t, identity.ID),
 		slog.New(slog.DiscardHandler),
 	)
 	if err != nil {
@@ -1140,6 +1140,20 @@ func testIdentity(t *testing.T) Identity {
 	return identity
 }
 
+func testCommandRuntime(t *testing.T, nodeID nodes.ID) *Runtime {
+	t.Helper()
+	commandRuntime, err := NewRuntime(
+		nodeID,
+		"test",
+		testRuntimePolicy([]string{"node.info.v1"}),
+		newMemoryInvocationLedger(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return commandRuntime
+}
+
 func testClientForServer(
 	t *testing.T,
 	server *httptest.Server,
@@ -1157,11 +1171,11 @@ func testClientForServer(
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := NewClient(
+	client, err := NewClientWithRuntime(
 		cfg,
 		identity,
 		"test",
-		nodes.CapabilityCatalog{},
+		testCommandRuntime(t, identity.ID),
 		slog.New(slog.DiscardHandler),
 	)
 	if err != nil {

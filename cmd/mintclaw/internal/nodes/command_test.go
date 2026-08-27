@@ -203,6 +203,8 @@ func writePendingPairing(t *testing.T, workspace string, timestamp int64) nodepk
 			ProtocolVersion: nodepkg.ProtocolV1,
 			CatalogHash:     catalogHash,
 			Catalog:         catalog,
+			Executor:        "local",
+			PolicyRevision:  "policy-1",
 			LastSeenAt:      timestamp,
 		},
 		PublicKey:     publicKey,
