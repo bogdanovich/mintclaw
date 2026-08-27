@@ -226,7 +226,7 @@ func containsString(values []string, want string) bool {
 }
 
 func TestNewEngineRejectsInvalidAbsoluteBudgets(t *testing.T) {
-	_, err := NewEngine(Config{DBPath: t.TempDir() + "/test.db", HistoryMaxTokens: -1}, nil)
+	_, err := NewEngine(t.Context(), Config{DBPath: t.TempDir() + "/test.db", HistoryMaxTokens: -1}, nil)
 	if err == nil || !strings.Contains(err.Error(), "historyMaxTokens") {
 		t.Fatalf("expected invalid history budget error, got %v", err)
 	}

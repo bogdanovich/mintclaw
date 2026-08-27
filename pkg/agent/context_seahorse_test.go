@@ -376,7 +376,7 @@ func TestSeahorseToProviderMessagesWithToolCalls(t *testing.T) {
 }
 
 func TestSeahorseAssemblePreservesActiveToolTurnAcrossSanitization(t *testing.T) {
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/seahorse.db",
 	}, nil)
 	if err != nil {
@@ -444,7 +444,7 @@ func TestSeahorseAssemblePreservesActiveToolTurnAcrossSanitization(t *testing.T)
 }
 
 func TestSeahorseAssemblePreservesTimestampForAdjacentMediaClassification(t *testing.T) {
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/seahorse.db",
 	}, nil)
 	if err != nil {
@@ -572,7 +572,7 @@ func TestProviderToCompleteFn(t *testing.T) {
 func TestSeahorseIgnoreHeartbeat(t *testing.T) {
 	// Verify that "heartbeat" sessions are ignored by default
 	// This tests the hardcoded ignore pattern from spec lines 1326-1328
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/test.db",
 	}, nil)
 	if err != nil {
@@ -609,7 +609,7 @@ func TestProviderToCompleteFnError(t *testing.T) {
 
 func TestSeahorseAdapterAssembleSubtractsMaxTokens(t *testing.T) {
 	// Create a real seahorse engine with temp DB
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/test.db",
 	}, nil)
 	if err != nil {
@@ -665,7 +665,7 @@ func TestSeahorseAdapterAssembleSubtractsMaxTokens(t *testing.T) {
 }
 
 func TestSeahorseAdapterReportsAbsoluteBudgetPressureBelowContextWindow(t *testing.T) {
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath:           t.TempDir() + "/test.db",
 		HistoryMaxTokens: 160,
 		SummaryMaxTokens: 200,
@@ -710,7 +710,7 @@ func TestSeahorseAdapterReportsAbsoluteBudgetPressureBelowContextWindow(t *testi
 }
 
 func TestSeahorseAdapterFailsClosedWhenMandatoryPromptCannotFit(t *testing.T) {
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath:           t.TempDir() + "/test.db",
 		HistoryMaxTokens: 100,
 	}, nil)
@@ -734,7 +734,7 @@ func TestSeahorseCompactRetryUsesCompactUntilUnder(t *testing.T) {
 	// Track which engine method was called
 	var compactCalled, compactUntilCalled bool
 
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/test.db",
 	}, nil)
 	if err != nil {
@@ -789,7 +789,7 @@ func TestSeahorseCompactRetryUsesCompactUntilUnder(t *testing.T) {
 }
 
 func TestSeahorseCompactProactiveDoesNotForceCompactUntilUnder(t *testing.T) {
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/test.db",
 	}, func(ctx context.Context, prompt string, opts seahorse.CompleteOptions) (string, error) {
 		return "compact summary", nil
@@ -1149,7 +1149,11 @@ func TestSeahorseCompactEventBackfillsOwnership(t *testing.T) {
 }
 
 func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
-	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")}, nil)
+	engine, err := seahorse.NewEngine(
+		t.Context(),
+		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")},
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1197,6 +1201,7 @@ func TestSeahorseCompactTerminalPrecedesNextSessionStart(t *testing.T) {
 	releaseProvider := make(chan struct{})
 	var providerCalls atomic.Int32
 	engine, err := seahorse.NewEngine(
+		t.Context(),
 		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")},
 		func(ctx context.Context, _ string, _ seahorse.CompleteOptions) (string, error) {
 			if providerCalls.Add(1) == 1 {
@@ -1279,7 +1284,11 @@ func TestSeahorseCompactTerminalPrecedesNextSessionStart(t *testing.T) {
 }
 
 func TestSeahorseCompactTerminalPanicReleasesSessionLock(t *testing.T) {
-	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")}, nil)
+	engine, err := seahorse.NewEngine(
+		t.Context(),
+		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")},
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1371,7 +1380,7 @@ func TestSeahorseCompactProgressEventPreservesCorrelation(t *testing.T) {
 func TestSeahorseCompactPreservesPartialProgressOnFailure(t *testing.T) {
 	var calls atomic.Int32
 	injected := errors.New("injected later compaction failure")
-	engine, err := seahorse.NewEngine(
+	engine, err := seahorse.NewEngine(t.Context(),
 		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")},
 		func(context.Context, string, seahorse.CompleteOptions) (string, error) {
 			if calls.Add(1) == 1 {
@@ -1433,7 +1442,7 @@ func TestSeahorseCompactPreservesPartialProgressOnFailure(t *testing.T) {
 func TestSeahorseRoutineCompactPreservesPartialProgressOnFailure(t *testing.T) {
 	var calls atomic.Int32
 	injected := errors.New("injected condensed failure")
-	engine, err := seahorse.NewEngine(
+	engine, err := seahorse.NewEngine(t.Context(),
 		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")},
 		func(context.Context, string, seahorse.CompleteOptions) (string, error) {
 			if calls.Add(1) == 1 {
@@ -1606,7 +1615,7 @@ func TestSeahorseRealLoopNoDuplicateMessages(t *testing.T) {
 // conversation history at different points in time.
 func TestSeahorseAssembleReturnsAllSummaries(t *testing.T) {
 	// Create a real seahorse engine with temp DB
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/test.db",
 	}, nil)
 	if err != nil {
@@ -1794,7 +1803,7 @@ func TestSeahorseToProviderMessagesRebuildsContentFromParts(t *testing.T) {
 }
 
 func TestSeahorseAssembleSummaryNotInMessages(t *testing.T) {
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{
 		DBPath: t.TempDir() + "/test.db",
 	}, nil)
 	if err != nil {

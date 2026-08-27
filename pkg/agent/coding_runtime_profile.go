@@ -46,7 +46,7 @@ func (defaultCodingRuntimeStoreFactory) NewSeahorseEngine(
 	config seahorse.Config,
 	complete seahorse.CompleteFn,
 ) (*seahorse.Engine, error) {
-	return seahorse.NewEngineContext(ctx, config, complete)
+	return seahorse.NewEngine(ctx, config, complete)
 }
 
 // CodingRuntimeBinding binds one configured runtime agent to a coding thread.
