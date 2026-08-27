@@ -942,6 +942,7 @@ func TestPlaywrightWorkerCapturesExactlyOneBoundedDownload(t *testing.T) {
 		!strings.Contains(code, `event.networkId === state.boundRequestID`) ||
 		!strings.Contains(code, `event.frameId === state.mainFrameID`) ||
 		!strings.Contains(code, `event.initiator.type === "other"`) ||
+		!strings.Contains(code, `element.removeAttribute("download")`) ||
 		!strings.Contains(code, `state.attachmentCount++`) ||
 		!strings.Contains(code, `const encodeUTF8Base64 = value =>`) ||
 		!strings.Contains(code, `state.status = "claiming"`) ||
@@ -2401,7 +2402,7 @@ fetch("/diagnostic-long/%s").catch(() => {});
 <label>Race name <input id="race-name" aria-label="Race name"></label>
 <label>State <select aria-label="State"><option value="CA">California</option><option value="NY">New York</option></select></label>
 <button type="submit">Save</button><button type="button" onclick="prompt('Type DELETE'); alert('Saved')">Prompt</button>
-</form><output></output><a href="/download">Download fixture</a>
+</form><output></output><a href="/download" download="bounded.txt">Download fixture</a>
 <a href="/oversize-download">Oversize fixture</a>
 <a href="/redirect-download">Redirect fixture</a>
 <a href="/script-download" onclick="event.preventDefault(); fetch(this.href)">Script fixture</a>
