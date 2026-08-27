@@ -2,8 +2,8 @@
 
 Status: active; implementation is merged through P1 and X3.60, the live
 version 4 profile and explicit-identity conversions are complete, and three
-companions run the node-identity bridge. The remaining `vpn` rollout, browser
-companion driver repair, full backup, strict removal deployment and rollback,
+companions run the node-identity bridge. The remaining `vpn` rollout, obsolete
+record and policy cleanup, full backup, strict removal deployment and rollback,
 and Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
@@ -265,14 +265,14 @@ after that bounded local operation:
   dependency order; both services returned active with zero restarts, empty
   warning/error journals, and `p3-canary` reconnected on `71ad3e53`;
 - `ab-local-test` advertises the complete current eight-command browser
-  catalogue, so historical catalogue admission is no longer needed. Functional
-  companion verification is still incomplete: its canary opened a session and
-  then failed observation with `driver_unavailable`. Four later canaries that
-  failed session open with the same code targeted the local gateway, not the
-  companion. After deployment of current main `55a656df`, a fresh gateway-local
-  canary successfully opened, observed, navigated, and captured twice before
-  suspending at an approval boundary; that proves local driver recovery but
-  does not satisfy the companion gate;
+  catalogue, so historical catalogue admission is no longer needed. After
+  deployment of current main `55a656df`, trace
+  `trace-turn-325ced9441a30ff7be34004e` targeted `companion`, opened ready,
+  observed, navigated successfully, remained ready, and closed cleanly. The
+  trace is schema-valid, complete, and untruncated. Because `ab-local-test` is
+  the only connected companion advertising browser commands, this satisfies
+  the functional companion gate. The separately tested gateway-local driver
+  also opened, observed, navigated, and captured successfully;
 - the converted configs retain seven inert deny entries: the browser agent
   names four removed task tools, and three media agents deny `exec` even though
   it is not in their discovered catalogue. These current-data leftovers must be
@@ -314,7 +314,7 @@ separation and standards alignment.
 
 | Debt | Classification | Current evidence | Owner and removal gate |
 | --- | --- | --- | --- |
-| Previous and older browser catalogue schemas | Temporary first-party wire adapter | The sole connected browser companion advertises the current catalogue, and PR #901 deletes the historical generators; its functional canary still fails observation with `driver_unavailable`, although the separately deployed gateway-local driver is healthy | Architecture simplification owner; repair and verify the companion browser path, then merge and deploy PR #901 in R1 |
+| Previous and older browser catalogue schemas | Temporary first-party wire adapter | The sole connected browser companion advertises the current catalogue and has completed a functional open, observe, navigate, status, and close canary; the gateway-local driver is also healthy, and PR #901 deletes the historical generators | Architecture simplification owner; merge and deploy PR #901 after the remaining R1 fleet and backup gates |
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
 
@@ -1309,8 +1309,8 @@ Scope:
 Current gate snapshot from the 2026-08-26/27 re-audit:
 
 1. capacity is satisfied, but the same-time full backup has not been created;
-2. current browser catalogue advertisement and the gateway-local driver are
-   proven, but a functional companion streamed-snapshot canary remains blocked;
+2. current browser catalogue advertisement plus functional companion and
+   gateway-local canaries are proven;
 3. three connected companions run the bridge; connected `vpn` remains old;
 4. all persisted identities are explicit, while `vpn` still omits the field on
    the wire and the pending/revoked records need a deliberate decision;

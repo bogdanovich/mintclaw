@@ -98,6 +98,14 @@ binaries, active profiles, or registry records. A separate stopped preflight
 had already changed the latter data; the current roadmap records that evidence
 and keeps its remaining actions distinct from this local rollout.
 
+A later passive trace audit also closed the browser-specific companion gate.
+Trace `trace-turn-325ced9441a30ff7be34004e` is schema-valid, complete, and
+untruncated. It targeted `companion`, opened ready, observed, navigated
+successfully, remained ready at status, and closed cleanly. The registry had
+one connected browser-capable companion, `ab-local-test`, on the PR #899 bridge
+with the current browser catalogue. This evidence does not broaden the local
+rollout authority or mutate that remote companion.
+
 ## Remaining R1 Gate
 
 This rollout still does not permit PR #901 or the strict removal release to
@@ -109,9 +117,6 @@ and `AGENTS.md` data cutover. The remaining gates are now narrower:
   or deliberately retired;
 - the older pending Darwin and revoked Linux records need an explicit retention
   or removal decision;
-- the Darwin companion browser path must pass a functional streamed-snapshot
-  canary; catalogue advertisement and the separate gateway-local driver are
-  already current;
 - seven inert tool-policy denies must be removed from the converted configs;
 - a same-time full backup of effective binaries and all durable state must be
   created; and
