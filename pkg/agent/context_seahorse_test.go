@@ -1278,6 +1278,51 @@ func TestSeahorseCompactTerminalPrecedesNextSessionStart(t *testing.T) {
 	}
 }
 
+func TestSeahorseCompactTerminalPanicReleasesSessionLock(t *testing.T) {
+	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(t.TempDir(), "context.db")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	runtimeBus := runtimeevents.NewBus()
+	t.Cleanup(func() { _ = runtimeBus.Close() })
+	subscription, _, err := runtimeBus.Channel().Filter(func(event runtimeevents.Event) bool {
+		if event.Kind == runtimeevents.KindAgentContextCompressEnd {
+			panic("injected terminal filter panic")
+		}
+		return false
+	}).SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "terminal-panic", Buffer: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = subscription.Close() })
+	manager := newSingleRuntimeTestManager(engine, nil)
+	manager.al = &AgentLoop{runtimeEvents: runtimeBus}
+	const sessionKey = "terminal-panic"
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = manager.Compact(t.Context(), &CompactRequest{
+			SessionKey: sessionKey, Reason: ContextCompressReasonManual,
+		})
+	}()
+	if recovered == nil {
+		t.Fatal("terminal lifecycle filter did not panic")
+	}
+
+	lockReleased := make(chan struct{})
+	go func() {
+		unlock := manager.lockSession(manager.defaultAgentID + ":" + sessionKey)
+		unlock()
+		close(lockReleased)
+	}()
+	select {
+	case <-lockReleased:
+	case <-time.After(time.Second):
+		t.Fatal("terminal lifecycle panic leaked the session lock")
+	}
+}
+
 func assertCompactLifecyclePair(
 	t *testing.T,
 	events <-chan runtimeevents.Event,

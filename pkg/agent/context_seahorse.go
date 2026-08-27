@@ -333,6 +333,9 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	started := false
 	var unlock func()
 	defer func() {
+		if unlock != nil {
+			defer unlock()
+		}
 		if !started {
 			m.emitCompactLifecycleEvent(req, lifecycle)
 		}
@@ -342,9 +345,6 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		lifecycle.Status = status
 		lifecycle.Duration = time.Since(startedAt)
 		m.emitCompactLifecycleEvent(req, lifecycle)
-		if unlock != nil {
-			unlock()
-		}
 	}()
 	runtime, runtimeErr := m.runtimeFor(req.Agent)
 	if runtimeErr != nil {
