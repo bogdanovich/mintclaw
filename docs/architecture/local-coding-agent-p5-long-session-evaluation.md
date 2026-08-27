@@ -10,10 +10,12 @@ projection without turning the gate into one timing-sensitive mega-test.
 
 ## Deterministic scenario
 
-`TestCodingLongSessionCompactionContinuity` builds a 64-turn coding history in
-the canonical per-session JSONL store. Every turn includes bounded pasted-log
-pressure and a media reference. A deterministic Seahorse completion fixture
-always returns the same coding continuation record, including:
+`TestCodingLongSessionCompactionContinuity` builds a 32-turn, 64-message coding
+history in the canonical per-session JSONL store. Historical turns include
+bounded pasted-log pressure, while the marker-free protected tail carries a
+media reference. A deterministic Seahorse completion fixture validates that
+each source prompt contains the required facts before returning the same coding
+continuation record, including:
 
 - the active parser-migration objective and done criteria;
 - `parser.go`, `parser_test.go`, and `docs/parser.md` as changed paths;
@@ -64,9 +66,9 @@ wall-clock duration. A representative local run on 2026-08-27 recorded:
 
 - 66 canonical messages;
 - summary depth 2;
-- first compaction from 143,232 to 5,292 tokens;
-- rebuild compaction from 143,529 to 5,589 tokens; and
-- 29 ms reported compaction duration, with roughly 8 seconds for the complete
+- first compaction from 107,112 to 6,976 tokens;
+- rebuild compaction from 107,409 to 7,273 tokens; and
+- 25 ms reported compaction duration, with roughly 8 seconds for the complete
   test including store construction and two rebuild paths.
 
 Token counts and structural invariants are asserted. Durations are diagnostic
