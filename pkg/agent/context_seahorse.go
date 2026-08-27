@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -45,6 +44,7 @@ type seahorseAgentRuntime struct {
 	workspace                string
 	agentID                  string
 	reconciliationGeneration int
+	rebuildCorruptDatabase   func(context.Context, error) error
 }
 
 const seahorseReconciliationGeneration = 2
@@ -121,7 +121,7 @@ func newSeahorseAgentRuntime(
 	}
 	engine, err := storeFactory.NewSeahorseEngine(constructionCtx, seahorseConfig, complete)
 	if err != nil && al.codingProfile != nil && seahorse.IsCorruptDatabaseError(err) {
-		if resetErr := resetCodingDerivedDatabase(seahorseConfig.DBPath); resetErr != nil {
+		if resetErr := seahorse.ResetCorruptDatabase(seahorseConfig.DBPath, err); resetErr != nil {
 			return nil, errors.Join(
 				fmt.Errorf("open corrupt derived context store: %w", err),
 				resetErr,
@@ -139,7 +139,7 @@ func newSeahorseAgentRuntime(
 	if engine == nil {
 		return nil, fmt.Errorf("create engine: coding store factory returned a nil Seahorse engine")
 	}
-	return &seahorseAgentRuntime{
+	runtime := &seahorseAgentRuntime{
 		engine:    engine,
 		sessions:  agent.Sessions,
 		workspace: agent.Workspace,
@@ -147,16 +147,23 @@ func newSeahorseAgentRuntime(
 		reconciliationGeneration: seahorseConfig.SummaryPolicy.ReconciliationGeneration(
 			seahorseReconciliationGeneration,
 		),
-	}, nil
-}
-
-func resetCodingDerivedDatabase(dbPath string) error {
-	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove corrupt coding context file %q: %w", path, err)
+	}
+	if al.codingProfile != nil {
+		runtime.rebuildCorruptDatabase = func(ctx context.Context, cause error) error {
+			return runtime.engine.RebuildCorruptDatabaseContext(
+				ctx,
+				cause,
+				func(
+					factoryCtx context.Context,
+					config seahorse.Config,
+					completeFn seahorse.CompleteFn,
+				) (*seahorse.Engine, error) {
+					return storeFactory.NewSeahorseEngine(factoryCtx, config, completeFn)
+				},
+			)
 		}
 	}
-	return nil
+	return runtime, nil
 }
 
 func seahorseAgentDBPath(agent *AgentInstance, defaultAgentID string) string {
@@ -692,6 +699,27 @@ func (m *seahorseContextManager) prepareCodingSession(
 	}
 	unlock := m.lockSession(runtime.agentID + ":" + sessionKey)
 	defer unlock()
+	revision, err := m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+	if err == nil || runtime.rebuildCorruptDatabase == nil || !seahorse.IsCorruptDatabaseError(err) {
+		return revision, err
+	}
+	if rebuildErr := runtime.rebuildCorruptDatabase(ctx, err); rebuildErr != nil {
+		return memory.HistoryRevision{}, errors.Join(
+			fmt.Errorf("read corrupt derived context store: %w", err),
+			rebuildErr,
+		)
+	}
+	logger.WarnCF("seahorse", "rebuilding corrupt coding context store after reconciliation read", map[string]any{
+		"agent_id": runtime.agentID,
+	})
+	return m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+}
+
+func (m *seahorseContextManager) prepareCodingSessionOnce(
+	ctx context.Context,
+	runtime *seahorseAgentRuntime,
+	sessionKey string,
+) (memory.HistoryRevision, error) {
 	if err := m.ensureConversationProvenance(ctx, runtime, sessionKey); err != nil {
 		return memory.HistoryRevision{}, err
 	}
