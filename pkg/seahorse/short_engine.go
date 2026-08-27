@@ -357,6 +357,14 @@ func (e *Engine) Close() error {
 	return nil
 }
 
+// VerifyIntegrity checks every SQLite b-tree before a derived engine is published.
+func (e *Engine) VerifyIntegrity(ctx context.Context) error {
+	if e == nil || e.store == nil {
+		return fmt.Errorf("verify engine integrity: engine is unavailable")
+	}
+	return e.store.verifyIntegrity(ctx)
+}
+
 // GetRetrieval returns the retrieval engine for tool implementations.
 func (e *Engine) GetRetrieval() *RetrievalEngine {
 	return e.retrieval

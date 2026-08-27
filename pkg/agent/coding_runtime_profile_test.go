@@ -1509,7 +1509,7 @@ func TestNewCodingAgentLoopRebuildsCorruptionBeforePublishingRetrievalTools(t *t
 	corruptSQLiteTableRootPage(
 		t,
 		filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db"),
-		"reconciliation_state",
+		"messages",
 	)
 
 	factory := &delayedCorruptionCodingRuntimeStoreFactory{}

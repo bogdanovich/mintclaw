@@ -746,7 +746,7 @@ func (m *seahorseContextManager) prepareCodingSession(
 	}
 	unlock := m.lockSession(runtime.agentID + ":" + sessionKey)
 	defer unlock()
-	_, err = m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+	err = m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
 	if err == nil || runtime.rebuildStoreFactory == nil || !seahorse.IsCorruptDatabaseError(err) {
 		return err
 	}
@@ -759,8 +759,7 @@ func (m *seahorseContextManager) prepareCodingSession(
 	logger.WarnCF("seahorse", "rebuilding corrupt coding context store after reconciliation read", map[string]any{
 		"agent_id": runtime.agentID,
 	})
-	_, err = m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
-	return err
+	return m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
 }
 
 func (r *seahorseAgentRuntime) replaceCorruptEngine(ctx context.Context, cause error) error {
@@ -806,11 +805,14 @@ func (m *seahorseContextManager) prepareCodingSessionOnce(
 	ctx context.Context,
 	runtime *seahorseAgentRuntime,
 	sessionKey string,
-) (memory.HistoryRevision, error) {
+) error {
 	if err := m.ensureConversationProvenance(ctx, runtime, sessionKey); err != nil {
-		return memory.HistoryRevision{}, err
+		return err
 	}
-	return m.ensureReconciledRuntime(ctx, runtime, sessionKey)
+	if _, err := m.ensureReconciledRuntime(ctx, runtime, sessionKey); err != nil {
+		return err
+	}
+	return runtime.engine.VerifyIntegrity(ctx)
 }
 
 func (m *seahorseContextManager) ensureReconciledRuntime(
