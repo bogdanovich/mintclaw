@@ -193,6 +193,7 @@ type ContextCompressLifecyclePayload struct {
 	TranscriptRevision  uint64
 	TranscriptCount     int
 	Reason              ContextCompressReason
+	Background          bool
 	Status              ContextCompressLifecycleStatus
 	TokensSaved         int
 	TokensBefore        int

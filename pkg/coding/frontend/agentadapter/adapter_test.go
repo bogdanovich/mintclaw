@@ -261,10 +261,11 @@ func TestAdapterBackgroundCompactionPreservesCompletedTurnState(t *testing.T) {
 	}
 	publish(runtimeevents.KindAgentTurnEnd, "turn-1", agent.TurnEndPayload{Status: agent.TurnEndStatusCompleted})
 	publish(runtimeevents.KindAgentContextCompressStart, "", agent.ContextCompressLifecyclePayload{
-		Reason: agent.ContextCompressReasonSummarize, Status: agent.ContextCompressLifecycleStarted,
+		Reason: agent.ContextCompressReasonSummarize, Background: true,
+		Status: agent.ContextCompressLifecycleStarted,
 	})
 	publish(runtimeevents.KindAgentContextCompressEnd, "", agent.ContextCompressLifecyclePayload{
-		Reason: agent.ContextCompressReasonSummarize,
+		Reason: agent.ContextCompressReasonSummarize, Background: true,
 		Status: agent.ContextCompressLifecycleCompleted, TokensSaved: 500,
 	})
 
@@ -325,12 +326,32 @@ func TestAdapterProjectsCorrelatedForegroundCompactionFailure(t *testing.T) {
 	}
 }
 
-func TestBackgroundCompactionClassification(t *testing.T) {
-	if !backgroundCompaction("turn-1", agent.ContextCompressReasonProactive) ||
-		!backgroundCompaction("turn-1", agent.ContextCompressReasonSummarize) ||
-		backgroundCompaction("turn-1", agent.ContextCompressReasonRetry) ||
-		backgroundCompaction("", agent.ContextCompressReasonManual) {
-		t.Fatal("compaction trigger ownership was classified incorrectly")
+func TestAdapterUsesOwnerSuppliedCompactionMode(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := Adapter{projector: projector}
+	payload := agent.ContextCompressLifecyclePayload{
+		Reason: agent.ContextCompressReasonSummarize, Background: false,
+	}
+	adapter.projectCompaction("", payload, frontend.CompactionRunning)
+	started, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Activity != frontend.ActivityCompacting || started.LastCompaction == nil ||
+		started.LastCompaction.Background {
+		t.Fatalf("foreground summarize start = %+v", started)
+	}
+	adapter.projectCompaction("", payload, frontend.CompactionCompleted)
+	completed, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Activity != frontend.ActivityIdle || completed.LastCompaction == nil ||
+		completed.LastCompaction.Status != frontend.CompactionCompleted || completed.LastCompaction.Background {
+		t.Fatalf("foreground summarize completion = %+v", completed)
 	}
 }
 

@@ -79,6 +79,7 @@ func (r *backgroundCompactionRunner) scheduleBackgroundCompaction(
 				Workspace:  agent.Workspace,
 				Reason:     reason,
 				Budget:     budget,
+				Background: true,
 			},
 		); err != nil {
 			logger.WarnCF("agent", "Background context compaction failed", map[string]any{

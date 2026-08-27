@@ -94,8 +94,12 @@ func (f *fakeController) Compact(ctx context.Context) error {
 	if f.compactErr != nil {
 		return f.compactErr
 	}
-	f.CompactionStarted("", "manual", false)
-	f.CompactionCompleted("", "manual", 256, false, false)
+	f.CompactionUpdate(frontend.CompactionState{
+		Reason: "manual", Status: frontend.CompactionRunning,
+	})
+	f.CompactionUpdate(frontend.CompactionState{
+		Reason: "manual", Status: frontend.CompactionCompleted, TokensSaved: 256,
+	})
 	return nil
 }
 

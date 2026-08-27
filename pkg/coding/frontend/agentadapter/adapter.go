@@ -239,7 +239,7 @@ func (a *Adapter) projectCompaction(
 		LeafSummaries:       payload.LeafSummaries,
 		CondensedSummaries:  payload.CondensedSummaries,
 		Duration:            payload.Duration,
-		Background:          backgroundCompaction(turnID, payload.Reason),
+		Background:          payload.Background,
 	})
 }
 
@@ -312,14 +312,6 @@ func normalizeID(value string) string {
 		return value
 	}
 	return "current"
-}
-
-func backgroundCompaction(turnID string, reason agent.ContextCompressReason) bool {
-	if reason == agent.ContextCompressReasonManual {
-		return false
-	}
-	return strings.TrimSpace(turnID) == "" || reason == agent.ContextCompressReasonProactive ||
-		reason == agent.ContextCompressReasonSummarize
 }
 
 func (a *Adapter) projectTurnEnd(turnID string, value any) {
