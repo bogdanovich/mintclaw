@@ -79,7 +79,7 @@ func TestLoggerWithComponent(t *testing.T) {
 			case tt.fields == nil && tt.component != "":
 				InfoC(tt.component, tt.message)
 			case tt.fields != nil:
-				InfoF(tt.message, tt.fields)
+				InfoCF(tt.component, tt.message, tt.fields)
 			default:
 				Info(tt.message)
 			}
@@ -162,7 +162,7 @@ func TestLoggerHelperFunctions(t *testing.T) {
 	Error("This should log")
 
 	InfoC("test", "Component message")
-	InfoF("Fields message", map[string]any{"key": "value"})
+	InfoCF("", "Fields message", map[string]any{"key": "value"})
 	Infof("test from %v", "Infof")
 
 	WarnC("test", "Warning with component")

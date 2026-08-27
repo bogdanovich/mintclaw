@@ -462,10 +462,6 @@ func (c *Config) ValidateRequestUserInputConfig() error {
 	return nil
 }
 
-func (c *Config) SecurityCopyFrom(path string) error {
-	return loadSecurityConfig(c, securityPath(path))
-}
-
 // SecurityCopyForReplacement preserves security fields while replacing the
 // public config. Security entries for removed registries are admitted only
 // while the existing overlay is decoded and are not copied into the result.

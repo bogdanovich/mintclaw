@@ -220,7 +220,7 @@ func TestPublishInbound_WithSpoolWritesAndAckRemovesEntry(t *testing.T) {
 	}
 }
 
-func TestReplayInboundSpool_ReplaysUnackedMessage(t *testing.T) {
+func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 	dir := t.TempDir()
 	first := NewMessageBus()
 	spool, err := NewInboundSpool(dir)
@@ -253,12 +253,15 @@ func TestReplayInboundSpool_ReplaysUnackedMessage(t *testing.T) {
 		t.Fatalf("NewInboundSpool(second) failed: %v", err)
 	}
 	second.SetInboundSpool(secondSpool)
-	replayed, err := second.ReplayInboundSpool(context.Background())
+	pending, err := second.PendingInboundSpool(context.Background())
 	if err != nil {
-		t.Fatalf("ReplayInboundSpool failed: %v", err)
+		t.Fatalf("PendingInboundSpool failed: %v", err)
 	}
-	if replayed != 1 {
-		t.Fatalf("replayed = %d, want 1", replayed)
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1", len(pending))
+	}
+	if err := second.ReplayInboundMessages(context.Background(), pending); err != nil {
+		t.Fatalf("ReplayInboundMessages failed: %v", err)
 	}
 	got := <-second.InboundChan()
 	if got.SpoolID != published.SpoolID {

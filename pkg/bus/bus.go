@@ -273,21 +273,6 @@ func (mb *MessageBus) ReleaseInbound(_ context.Context, msg InboundMessage, caus
 	return nil
 }
 
-func (mb *MessageBus) ReplayInboundSpool(ctx context.Context) (int, error) {
-	spool := mb.getInboundSpool()
-	if spool == nil {
-		return 0, nil
-	}
-	msgs, err := spool.Pending(ctx, 0)
-	if err != nil {
-		return 0, err
-	}
-	if err := mb.ReplayInboundMessages(ctx, msgs); err != nil {
-		return 0, err
-	}
-	return len(msgs), nil
-}
-
 // ReplayInboundMessages republishes a previously captured durable inbound
 // snapshot. Callers that need to start ingress before replaying should capture
 // the snapshot first, then use this method to avoid replaying newer messages.
