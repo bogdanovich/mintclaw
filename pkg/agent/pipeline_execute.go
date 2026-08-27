@@ -1711,6 +1711,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				Agent:      ts.agent,
 				SessionKey: ts.sessionKey,
 				Workspace:  ts.workspace,
+				TraceScope: ts.scope.traceScope(),
 				Reason:     ContextCompressReasonSummarize,
 				Budget:     ts.agent.ContextWindow,
 				Background: false,

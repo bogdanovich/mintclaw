@@ -90,7 +90,7 @@ func compactionTrigger(reason string) string {
 	case "proactive_budget":
 		return "context pressure"
 	case "summarize":
-		return "background summarization"
+		return "session summarization"
 	case "":
 		return "unknown"
 	default:

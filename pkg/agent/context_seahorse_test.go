@@ -1162,13 +1162,28 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 	t.Cleanup(func() { _ = runtimeBus.Close() })
 	subscription, events, err := runtimeBus.Channel().
 		OfKind(runtimeevents.KindAgentContextCompressStart, runtimeevents.KindAgentContextCompressEnd).
-		SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "compression-lifecycle", Buffer: 6})
+		SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "compression-lifecycle", Buffer: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = subscription.Close() })
 	manager := newSingleRuntimeTestManager(engine, nil)
 	manager.al = &AgentLoop{runtimeEvents: runtimeBus}
+
+	if err = manager.Compact(t.Context(), &CompactRequest{
+		SessionKey: "synchronous-summarize", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+		Reason: ContextCompressReasonSummarize, Background: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertCompactLifecyclePair(
+		t,
+		events,
+		ContextCompressLifecycleNoProgress,
+		ContextCompressReasonSummarize,
+		false,
+		"turn-1",
+	)
 
 	if err = manager.Compact(t.Context(), &CompactRequest{
 		SessionKey: "empty", Reason: ContextCompressReasonProactive, Background: true,
@@ -1181,6 +1196,7 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 		ContextCompressLifecycleNoProgress,
 		ContextCompressReasonProactive,
 		true,
+		"",
 	)
 
 	err = manager.Compact(t.Context(), &CompactRequest{
@@ -1189,7 +1205,7 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing runtime compaction unexpectedly succeeded")
 	}
-	assertCompactLifecyclePair(t, events, ContextCompressLifecycleFailed, ContextCompressReasonRetry, false)
+	assertCompactLifecyclePair(t, events, ContextCompressLifecycleFailed, ContextCompressReasonRetry, false, "")
 
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -1199,7 +1215,14 @@ func TestSeahorseCompactLifecyclePairsNoopAndFailure(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled compaction error = %v, want context.Canceled", err)
 	}
-	assertCompactLifecyclePair(t, events, ContextCompressLifecycleInterrupted, ContextCompressReasonManual, false)
+	assertCompactLifecyclePair(
+		t,
+		events,
+		ContextCompressLifecycleInterrupted,
+		ContextCompressReasonManual,
+		false,
+		"",
+	)
 }
 
 func TestSeahorseCompactTerminalPrecedesNextSessionStart(t *testing.T) {
@@ -1344,6 +1367,7 @@ func assertCompactLifecyclePair(
 	wantEnd ContextCompressLifecycleStatus,
 	wantReason ContextCompressReason,
 	wantBackground bool,
+	wantTurnID string,
 ) {
 	t.Helper()
 	started := receiveRuntimeEvent(t, events)
@@ -1354,7 +1378,8 @@ func assertCompactLifecyclePair(
 		ended.Kind != runtimeevents.KindAgentContextCompressEnd || !startOK || !endOK ||
 		startPayload.Status != ContextCompressLifecycleStarted || endPayload.Status != wantEnd ||
 		startPayload.Reason != wantReason || endPayload.Reason != wantReason ||
-		startPayload.Background != wantBackground || endPayload.Background != wantBackground {
+		startPayload.Background != wantBackground || endPayload.Background != wantBackground ||
+		started.Scope.TurnID != wantTurnID || ended.Scope.TurnID != wantTurnID {
 		t.Fatalf("compaction lifecycle = start:%+v end:%+v", started, ended)
 	}
 	if startPayload.AttemptID == "" || startPayload.AttemptID != endPayload.AttemptID {

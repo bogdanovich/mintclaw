@@ -155,6 +155,17 @@ func TestCompactionSurfacesDistinguishModeAndReportMetrics(t *testing.T) {
 	if got := compactionContinuation(compaction); !strings.HasPrefix(got, "work can continue") {
 		t.Fatalf("background failure continuation = %q", got)
 	}
+
+	compaction.Status = frontend.CompactionRunning
+	compaction.Reason = "summarize"
+	compaction.Background = false
+	if got := compactionFooter(compaction); got != "blocking compaction running (session summarization)" {
+		t.Fatalf("foreground summarize footer = %q", got)
+	}
+	panel = strings.Join(compactionStatusLines(compaction), "\n")
+	if !strings.Contains(panel, "compaction trigger: session summarization") {
+		t.Fatalf("foreground summarize panel = %q", panel)
+	}
 }
 
 func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.T) {
