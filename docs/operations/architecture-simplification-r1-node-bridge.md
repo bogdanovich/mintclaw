@@ -88,8 +88,10 @@ the helper was started before the node, and the pair was reverified.
 
 Both units returned active with zero restarts and successful service results.
 The node reconnected as `p3-canary` on `71ad3e53` with explicit Ed25519, and
-the post-start warning/error journal was empty. P5a remained active on the same
-verified node digest.
+the initial post-start warning/error journal was empty. A subsequent
+current-main gateway restart closed the P3 WebSocket once with an expected
+EOF; the unchanged node process reconnected 15 seconds later and retained zero
+service restarts. P5a remained active on the same verified node digest.
 
 This reverification did not authorize or mutate remote companions, gateway
 binaries, active profiles, or registry records. A separate stopped preflight
@@ -107,8 +109,9 @@ and `AGENTS.md` data cutover. The remaining gates are now narrower:
   or deliberately retired;
 - the older pending Darwin and revoked Linux records need an explicit retention
   or removal decision;
-- the remote Darwin browser driver must pass a functional streamed-snapshot
-  canary; catalogue advertisement alone is already current;
+- the Darwin companion browser path must pass a functional streamed-snapshot
+  canary; catalogue advertisement and the separate gateway-local driver are
+  already current;
 - seven inert tool-policy denies must be removed from the converted configs;
 - a same-time full backup of effective binaries and all durable state must be
   created; and
