@@ -1553,6 +1553,9 @@ Done when:
 
 Dependencies: P5.4, P5.5
 
+Implementation evidence:
+[`local-coding-agent-p5-long-session-evaluation.md`](local-coding-agent-p5-long-session-evaluation.md)
+
 Scope:
 
 - Build a synthetic repository and multi-turn coding transcript large enough
@@ -1573,6 +1576,9 @@ Done when:
 The coding agent can sustain a long thread, compact in the background, recover
 from emergency overflow, restart from files, and continue with both historical
 intent and current repository state. This is the minimum beta gate.
+
+Completed by the [P5 exit record](local-coding-agent-p5-exit.md). P6 and later
+roadmap work remains outside this beta continuity gate.
 
 ### P6 — Coding UX completion
 
