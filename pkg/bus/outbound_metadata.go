@@ -37,8 +37,8 @@ const (
 	OutboundInteractionControlsRemove = "remove"
 )
 
-// OutboundMetadata is the typed form of the cross-package outbound metadata
-// stored in InboundContext.Raw for wire/backward compatibility.
+// OutboundMetadata is the typed view of cross-package delivery metadata stored
+// in the current InboundContext.Raw bus envelope.
 type OutboundMetadata struct {
 	MessageKind            string
 	ToolCalls              string

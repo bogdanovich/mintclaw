@@ -43,7 +43,7 @@ type toolFeedbackAnimationState struct {
 }
 
 // ToolFeedbackAnimatorConfig controls how often editable progress messages are
-// updated. Zero values preserve the legacy behavior: animation edits every
+// updated. Zero values select the package defaults: animation edits every
 // three seconds and no minimum interval between content edits.
 type ToolFeedbackAnimatorConfig struct {
 	AnimationInterval time.Duration
