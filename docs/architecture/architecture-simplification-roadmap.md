@@ -1,9 +1,9 @@
 # Architecture Simplification Roadmap
 
 Status: active; the original implementation sequence is merged through P1 and
-X3.60, the pre-Z1 source cleanup is merged through PR #921, C2 is merged through
+X3.61, the pre-Z1 source cleanup is merged through PR #921, C2 is merged through
 PR #929, and the live version 4 profile and explicit-identity conversions are
-complete. The remaining X3.61 health ownership cleanup, `vpn` rollout, obsolete
+complete. The remaining X3.62-X3.64 source cleanup, `vpn` rollout, obsolete
 record and policy cleanup, full backup, strict removal deployment and rollback,
 and Z1 remain open.
 
@@ -160,8 +160,10 @@ reset criteria.
 | Coding resume recovery and C2 | #908, #924-#927, and #929 | Merged; JSONL-authoritative recovery remains current, and its construction, checkpoint, and derived-engine lifecycle now have direct owners |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
-| X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
-| X3.61 | Not yet applicable | Planned; remove duplicate health listener lifecycle and unused readiness-check state before Z1 |
+| X3.1-X3.61 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896, and #933 | Merged |
+| X3.62 | Not yet applicable | Planned; delete production-unused public APIs and test-only constructor facades without removing current extension or injection seams |
+| X3.63 | Not yet applicable | Planned; make compaction execution mode owner-supplied and remove downstream inference plus test-only projector facades |
+| X3.64 | Not yet applicable | Planned; make subagent, spawn, and delegate construction complete and immutable instead of setter-assembled |
 | P1 | #881 | Merged; all five live configs and 20 personal workspaces now use the current contract, while final cleanup and deployment evidence remain in R1 |
 | R1 node-identity bridge | #899 | Merged and deployed to `p5a-canary`, `p3-canary`, and `ab-local-test`; the P3 node is currently stopped, while `vpn` and the strict adapter-removal release remain open |
 | Pre-Z1 strict audit | #911, #914, #916, and #919-#921 merged; #901 remains live-gated | Dead shutdown state, historical approval and benchmark inference, stale current-path terminology, provider-contract ambiguity, and implicit TTS model selection are removed; strict node removal still needs a final refresh and review |
@@ -173,7 +175,7 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 39-42 to #859-#862; 43 to #864; 44 to #866; 45 to #868; 46 to #872;
 47 to #878; 48 to #880; 49 to #885; 50 to #886; 51 to #887; 52 to #888;
 53 to #889; 54 to #890; 55 to #891; 56 to #892; 57 to #893; 58 to #894;
-59 to #895; and 60 to #896.
+59 to #895; 60 to #896; and 61 to #933.
 
 The 2026-08-24 read-only deployed audit established these rollout facts at
 that time:
@@ -337,7 +339,9 @@ separation and standards alignment.
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
 | Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its current head is green but still needs final-base refresh and exact-head review | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
-| Health HTTP lifecycle and readiness checks | Current duplicate ownership, not a compatibility adapter | Production registers health handlers on the channel manager's shared HTTP server; no production caller starts the private `health.Server` listener or registers a dynamic readiness check | X3.61; make health handler-only and keep the shared gateway server as the sole listener owner before Z1 |
+| Production-unused public API and constructor facades | Current callable-surface debt, not compatibility | A production-only reference audit found methods with no caller plus public constructors used only to hide current dependencies from tests; the actual extension, provider-injection, test-harness, and console-restoration seams have real consumers | X3.62; delete the unused surface and make package-local tests call the same current constructors through private helpers |
+| Compaction execution mode | Current duplicate semantic inference, not compatibility | The compaction scheduler knows whether an attempt is background work, but the coding adapter currently reconstructs that fact from reason and turn identity; one synchronous summarize path is therefore presentation-ambiguous | X3.63; carry the owner-supplied mode on the current lifecycle event and delete the adapter heuristic |
+| Subagent, spawn, and delegate construction | Current two-phase construction, not compatibility | Production sets the task registry, child runner, model defaults, allow-list policy, objective policy, and self identity once immediately after construction; no live path replaces them | X3.64; require the dependencies at construction, make them immutable, and retain the real `SubTurnSpawner` package boundary |
 
 C2 is closed. PR #924 moved durable checkpoint ownership to the coding
 composition root; PRs #925-#927 made recovery reads and constructors explicitly
@@ -423,15 +427,25 @@ time. The later pre-Z1 source and live-state audit corrected that conclusion:
   unpublished engine before retrieval registration. C2 is complete without
   weakening fail-closed resume, typed corruption checks, or no-replay tool
   outcomes;
-- the earlier Git-tracked zero-caller scan after PR #896 otherwise still found
-  no further caller-free production facade; the remaining low-reference
-  exports are active entry points, documented extension contracts, or
-  deliberate test and integration seams;
-- the post-C2 final source audit found one exception to that earlier result:
-  `health.Server` still owns an unused private HTTP server lifecycle and a
-  test-only readiness-check registry even though production serves its handlers
-  through the channel manager's shared gateway listener. X3.61 removes both
-  secondary owners without changing the health, ready, or reload routes;
+- the earlier Git-tracked zero-caller scan after PR #896 counted test references
+  as sufficient evidence for a public API. The corrected production-only scan
+  retains active entry points, `NamedHook`, clock and provider injection,
+  test-harness helpers, and console restoration, but assigns X3.62 the methods
+  with no caller and constructor facades whose only callers are package tests;
+- PR #933 made `health.Server` handler-only. The channel manager's shared
+  gateway server is now the sole HTTP listener and shutdown owner, and the
+  unused readiness-check registry is gone without changing the health, ready,
+  or reload routes;
+- a focused re-audit of recent coding PRs found that the frontend compaction
+  status type is a justified presentation projection and that the synchronous
+  checkpoint bus tap keeps durable metadata with the coding composition root.
+  X3.63 is narrower: the background scheduler must emit the execution mode it
+  already owns instead of making the adapter infer it, and three superseded
+  projector convenience methods used only by tests can be deleted;
+- subagent, spawn, and delegate dependencies are currently installed through a
+  construction-time setter sequence and then never replaced. X3.64 makes that
+  current contract immutable while retaining `SubTurnSpawner` as the real
+  tool-to-agent package seam;
 - task deliverable normalization constructs the current canonical report at
   the registry owner for both new mutations and loaded snapshots; it does not
   select a historical report implementation, but R1 must still inventory the
@@ -1319,6 +1333,27 @@ Implementation sequence:
     registry. Accept only the reload token at construction, register the three
     current routes on an explicit mux, and keep the channel manager's shared
     gateway HTTP server as the sole listener and shutdown owner.
+62. Delete production-unused public APIs and test-only constructor facades.
+    Remove `Config.SecurityCopyFrom`, `Registry.FindWaitingBySession`,
+    `ProcessSession.SetStatus`, `ProcessSession.SetExitCode`,
+    `MessageBus.ReplayInboundSpool`, and `logger.InfoF`. Collapse the heartbeat,
+    OpenAI TTS, coding TUI, Web fetch, and exec test conveniences onto the
+    context-, state-, option-, proxy-, and config-aware constructors used by
+    production, give those constructors the canonical names, and use private
+    test helpers where concise defaults improve fixtures. Retain deliberate
+    extension, injection, test-harness, logger-console, and third-party
+    interface seams.
+63. Make compaction execution mode one owner-supplied fact. The background
+    scheduler marks its requests, the lifecycle payload carries that value,
+    and the coding adapter projects it directly. Delete reason/turn-based mode
+    inference and the three production-unused `Projector` compaction facades;
+    keep the distinct agent lifecycle and frontend presentation status types.
+64. Make subagent, spawn, and delegate construction complete. Require the
+    current task registry, child runner, LLM defaults, allow-list policy,
+    objective policy, and self identity at their constructors, remove the
+    setter sequence and immutable-field mutex, and reject missing required
+    dependencies before tool publication. Keep `SubTurnSpawner` because it is
+    the real package-cycle and substitution boundary.
 
 Exit criteria:
 
@@ -1387,7 +1422,7 @@ Implemented shape:
 
 ### R1 — Execute the coordinated first-party compatibility reset
 
-Depends on: P1 and X3.46-X3.60
+Depends on: P1 and X3.46-X3.64
 
 Deployment requires explicit user authorization.
 
