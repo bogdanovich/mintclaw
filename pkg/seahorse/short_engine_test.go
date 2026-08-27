@@ -12,13 +12,13 @@ import (
 	"time"
 )
 
-func TestNewEngineContextHonorsCanceledSetup(t *testing.T) {
+func TestNewEngineHonorsCanceledSetup(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	dbPath := filepath.Join(t.TempDir(), "must-not-exist.db")
-	engine, err := NewEngineContext(ctx, Config{DBPath: dbPath}, nil)
+	engine, err := NewEngine(ctx, Config{DBPath: dbPath}, nil)
 	if !errors.Is(err, context.Canceled) || engine != nil {
-		t.Fatalf("NewEngineContext() = engine %v error %v, want canceled", engine, err)
+		t.Fatalf("NewEngine() = engine %v error %v, want canceled", engine, err)
 	}
 	if _, statErr := os.Stat(dbPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("canceled setup created database: %v", statErr)
@@ -173,7 +173,7 @@ func TestNewEngine(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "short.db")
 
-	eng, err := NewEngine(Config{DBPath: dbPath}, nil)
+	eng, err := NewEngine(t.Context(), Config{DBPath: dbPath}, nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestNewEngineWithPatterns(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "short.db")
 
-	eng, err := NewEngine(Config{
+	eng, err := NewEngine(t.Context(), Config{
 		DBPath:                   dbPath,
 		IgnoreSessionPatterns:    []string{"cron:**"},
 		StatelessSessionPatterns: []string{"agent:*:sub:**"},
@@ -1463,7 +1463,7 @@ func TestAssemblerSummaryRoleNotUser(t *testing.T) {
 func newTestEngineForConcurrency(t *testing.T) *Engine {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "race_test.db")
-	eng, err := NewEngine(Config{DBPath: dbPath}, nil)
+	eng, err := NewEngine(t.Context(), Config{DBPath: dbPath}, nil)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}

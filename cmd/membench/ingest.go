@@ -24,7 +24,7 @@ func IngestSeahorse(ctx context.Context, samples []LocomoSample, dbPath string) 
 		return "", nil
 	}
 
-	engine, err := seahorse.NewEngine(seahorse.Config{
+	engine, err := seahorse.NewEngine(ctx, seahorse.Config{
 		DBPath: dbPath,
 	}, noopFn)
 	if err != nil {

@@ -228,13 +228,8 @@ func (r *RetrievalEngine) Store() *Store {
 	return r.store
 }
 
-// NewEngine creates a new short-term memory engine.
-func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
-	return NewEngineContext(context.Background(), config, completeFn)
-}
-
-// NewEngineContext creates an engine while bounding SQLite setup and schema work.
-func NewEngineContext(ctx context.Context, config Config, completeFn CompleteFn) (*Engine, error) {
+// NewEngine creates an engine while bounding SQLite setup and schema work with ctx.
+func NewEngine(ctx context.Context, config Config, completeFn CompleteFn) (*Engine, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("create engine: context is required")
 	}
