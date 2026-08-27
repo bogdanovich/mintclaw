@@ -120,6 +120,43 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 	}
 }
 
+func TestCompactionSurfacesDistinguishModeAndReportMetrics(t *testing.T) {
+	compaction := &frontend.CompactionState{
+		Reason: "llm_retry", Status: frontend.CompactionCompleted,
+		TokensBefore: 2400, TokensAfter: 900, TokensSaved: 1500, TokenCountsObserved: true,
+		SummariesCreated: 3, LeafSummaries: 2, CondensedSummaries: 1, Duration: 1500 * time.Millisecond,
+	}
+	footer := compactionFooter(compaction)
+	for _, want := range []string{"blocking", "2.4k→900", "1.5k saved"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("compaction footer omits %q: %q", want, footer)
+		}
+	}
+	panel := strings.Join(compactionStatusLines(compaction), "\n")
+	for _, want := range []string{
+		"last compaction: completed (blocking)",
+		"compaction trigger: context overflow retry",
+		"compaction context: 2.4k → 900 tokens",
+		"compaction summaries: 3 total (2 leaf, 1 condensed)",
+		"compaction duration: 1.5s",
+		"compaction continuation: work can continue",
+		"use /new for a focused thread",
+	} {
+		if !strings.Contains(panel, want) {
+			t.Fatalf("compaction panel omits %q: %q", want, panel)
+		}
+	}
+
+	compaction.Status = frontend.CompactionFailed
+	compaction.Background = true
+	if got := compactionFooter(compaction); got != "background compaction failed; work can continue" {
+		t.Fatalf("background failure footer = %q", got)
+	}
+	if got := compactionContinuation(compaction); !strings.HasPrefix(got, "work can continue") {
+		t.Fatalf("background failure continuation = %q", got)
+	}
+}
+
 func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {

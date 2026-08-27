@@ -1531,6 +1531,9 @@ Done when:
 
 Dependencies: P4.3, P5.3
 
+Implementation evidence:
+[`local-coding-agent-p5-compaction-experience.md`](local-coding-agent-p5-compaction-experience.md)
+
 Scope:
 
 - Show background and blocking compaction distinctly.

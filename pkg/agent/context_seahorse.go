@@ -329,7 +329,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		lifecycle.ThreadID = req.Agent.CodingLayout.ThreadID()
 	}
 	status := ContextCompressLifecycleFailed
-	tokensSaved := 0
+	startedAt := time.Now()
 	started := false
 	defer func() {
 		if !started {
@@ -339,7 +339,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 			status = ContextCompressLifecycleInterrupted
 		}
 		lifecycle.Status = status
-		lifecycle.TokensSaved = tokensSaved
+		lifecycle.Duration = time.Since(startedAt)
 		m.emitCompactLifecycleEvent(req, lifecycle)
 	}()
 	runtime, runtimeErr := m.runtimeFor(req.Agent)
@@ -371,11 +371,10 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		(req.Reason == ContextCompressReasonProactive && runtime.engine.AbsoluteBudgetsEnabled())) &&
 		req.Budget > 0 {
 		result, compactErr := runtime.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
+		applyCompactResultToLifecycle(&lifecycle, result, time.Since(startedAt))
 		if compactResultHasProgress(result) {
 			lifecycle.Status = ContextCompressLifecycleProgress
-			lifecycle.TokensSaved = result.TokensSaved
 			m.emitCompactLifecycleEvent(req, lifecycle)
-			tokensSaved = result.TokensSaved
 			m.emitCompactEvent(req, result)
 		}
 		if compactErr == nil {
@@ -393,11 +392,10 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 			req.Reason == ContextCompressReasonManual,
 		Budget: &req.Budget,
 	})
+	applyCompactResultToLifecycle(&lifecycle, result, time.Since(startedAt))
 	if compactResultHasProgress(result) {
 		lifecycle.Status = ContextCompressLifecycleProgress
-		lifecycle.TokensSaved = result.TokensSaved
 		m.emitCompactLifecycleEvent(req, lifecycle)
-		tokensSaved = result.TokensSaved
 		m.emitCompactEvent(req, result)
 	}
 	if err == nil {
@@ -408,6 +406,24 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		}
 	}
 	return err
+}
+
+func applyCompactResultToLifecycle(
+	lifecycle *ContextCompressLifecyclePayload,
+	result *seahorse.CompactResult,
+	duration time.Duration,
+) {
+	if lifecycle == nil || result == nil {
+		return
+	}
+	lifecycle.TokensSaved = result.TokensSaved
+	lifecycle.TokensBefore = result.TokensBefore
+	lifecycle.TokensAfter = result.TokensAfter
+	lifecycle.TokenCountsObserved = result.TokenCountsObserved
+	lifecycle.SummariesCreated = len(result.SummariesCreated)
+	lifecycle.LeafSummaries = result.LeafSummaries
+	lifecycle.CondensedSummaries = result.CondensedSummaries
+	lifecycle.Duration = duration
 }
 
 func compactResultHasProgress(result *seahorse.CompactResult) bool {

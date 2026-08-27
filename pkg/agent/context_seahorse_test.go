@@ -1289,6 +1289,11 @@ func TestSeahorseCompactPreservesPartialProgressOnFailure(t *testing.T) {
 		progress.Kind != runtimeevents.KindAgentContextCompressProgress ||
 		ended.Kind != runtimeevents.KindAgentContextCompressEnd ||
 		progressPayload.TokensSaved <= 0 || endPayload.TokensSaved != progressPayload.TokensSaved ||
+		!progressPayload.TokenCountsObserved || progressPayload.TokensBefore <= progressPayload.TokensAfter ||
+		progressPayload.SummariesCreated == 0 || progressPayload.Duration <= 0 ||
+		endPayload.TokensBefore != progressPayload.TokensBefore ||
+		endPayload.TokensAfter != progressPayload.TokensAfter ||
+		endPayload.SummariesCreated != progressPayload.SummariesCreated || endPayload.Duration <= 0 ||
 		endPayload.Status != ContextCompressLifecycleFailed {
 		t.Fatalf("partial progress lifecycle = start:%+v progress:%+v end:%+v", started, progress, ended)
 	}

@@ -19,10 +19,13 @@ type CompactInput struct {
 
 // CompactResult describes what was compacted.
 type CompactResult struct {
-	SummariesCreated   []string `json:"summariesCreated"`
-	TokensSaved        int      `json:"tokensSaved"`
-	LeafSummaries      int      `json:"leafSummaries"`
-	CondensedSummaries int      `json:"condensedSummaries"`
+	SummariesCreated    []string `json:"summariesCreated"`
+	TokensSaved         int      `json:"tokensSaved"`
+	TokensBefore        int      `json:"tokensBefore"`
+	TokensAfter         int      `json:"tokensAfter"`
+	TokenCountsObserved bool     `json:"tokenCountsObserved"`
+	LeafSummaries       int      `json:"leafSummaries"`
+	CondensedSummaries  int      `json:"condensedSummaries"`
 }
 
 type condensedRun struct {
@@ -43,6 +46,8 @@ func (e *CompactionEngine) NeedsCompaction(ctx context.Context, convID int64, co
 // Compact runs leaf compaction (sync) and optionally condensed compaction.
 func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input CompactInput) (*CompactResult, error) {
 	result := &CompactResult{}
+	e.observeCompactionStart(ctx, convID, result)
+	defer e.observeCompactionEnd(ctx, convID, result)
 
 	// Phase 1: leaf compaction (synchronous, every turn)
 	summaryID, err := e.compactLeaf(ctx, convID, false)
@@ -126,6 +131,8 @@ func (e *CompactionEngine) runCondensedSynchronous(ctx context.Context, convID i
 // CompactUntilUnder aggressively compacts until context is under budget.
 func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, budget int) (*CompactResult, error) {
 	result := &CompactResult{}
+	e.observeCompactionStart(ctx, convID, result)
+	defer e.observeCompactionEnd(ctx, convID, result)
 	prevTokens := 0
 	initialTokens := -1
 	logger.InfoCF("seahorse", "compact_until_under: start", map[string]any{"conv_id": convID, "budget": budget})
@@ -251,6 +258,30 @@ func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, 
 		)
 	}
 	return result, nil
+}
+
+func (e *CompactionEngine) observeCompactionStart(ctx context.Context, convID int64, result *CompactResult) {
+	tokens, err := e.store.GetContextTokenCount(ctx, convID)
+	if err != nil {
+		return
+	}
+	result.TokensBefore = tokens
+	result.TokenCountsObserved = true
+}
+
+func (e *CompactionEngine) observeCompactionEnd(ctx context.Context, convID int64, result *CompactResult) {
+	if result == nil || !result.TokenCountsObserved {
+		return
+	}
+	observationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 250*time.Millisecond)
+	defer cancel()
+	tokens, err := e.store.GetContextTokenCount(observationCtx, convID)
+	if err != nil {
+		result.TokenCountsObserved = false
+		return
+	}
+	result.TokensAfter = tokens
+	result.TokensSaved = max(0, result.TokensBefore-result.TokensAfter)
 }
 
 func (e *CompactionEngine) summaryPrefixMaxTokens(totalBudget int) int {

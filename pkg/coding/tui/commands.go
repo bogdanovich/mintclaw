@@ -215,13 +215,69 @@ func statusPanelContent(snapshot frontend.ThreadSnapshot) string {
 		)
 	}
 	if compaction := snapshot.LastCompaction; compaction != nil {
-		lines = append(lines, fmt.Sprintf(
-			"last compaction: %s, %d tokens saved",
-			boundedSingleLine(string(compaction.Status), 128),
-			compaction.TokensSaved,
-		))
+		lines = append(lines, compactionStatusLines(compaction)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func compactionStatusLines(compaction *frontend.CompactionState) []string {
+	lines := []string{
+		fmt.Sprintf(
+			"last compaction: %s (%s)",
+			boundedSingleLine(string(compaction.Status), 128),
+			compactionMode(compaction),
+		),
+		"compaction trigger: " + compactionTrigger(compaction.Reason),
+	}
+	if compaction.TokenCountsObserved {
+		lines = append(lines, fmt.Sprintf(
+			"compaction context: %s → %s tokens",
+			formatTokenCount(compaction.TokensBefore),
+			formatTokenCount(compaction.TokensAfter),
+		))
+	} else {
+		lines = append(lines, "compaction context: unavailable")
+	}
+	lines = append(
+		lines,
+		"compaction tokens saved: "+formatTokenCount(compaction.TokensSaved),
+		fmt.Sprintf(
+			"compaction summaries: %d total (%d leaf, %d condensed)",
+			compaction.SummariesCreated,
+			compaction.LeafSummaries,
+			compaction.CondensedSummaries,
+		),
+	)
+	if compaction.Duration > 0 {
+		lines = append(lines, "compaction duration: "+formatToolDuration(compaction.Duration))
+	} else if compaction.Status == frontend.CompactionRunning || compaction.Status == frontend.CompactionProgress {
+		lines = append(lines, "compaction duration: in progress")
+	} else {
+		lines = append(lines, "compaction duration: unavailable")
+	}
+	lines = append(
+		lines,
+		"compaction continuation: "+compactionContinuation(compaction),
+		"compaction guidance: after repeated compactions or a changed objective, use /new for a focused thread",
+	)
+	return lines
+}
+
+func compactionContinuation(compaction *frontend.CompactionState) string {
+	switch compaction.Status {
+	case frontend.CompactionRunning, frontend.CompactionProgress:
+		if compaction.Background {
+			return "composer remains available while compaction runs"
+		}
+		return "the current turn is waiting for compaction"
+	case frontend.CompactionFailed, frontend.CompactionInterrupted:
+		if compaction.Background {
+			return "work can continue; retry compaction later if context pressure remains"
+		}
+		return "the current turn may stop; retry /compact or start a focused thread"
+	default:
+		return "work can continue"
+	}
 }
 
 func diffPanelContent(snapshot frontend.ThreadSnapshot) string {

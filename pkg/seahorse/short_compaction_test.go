@@ -140,6 +140,10 @@ func TestCompactLeaf(t *testing.T) {
 	if result.LeafSummaries == 0 {
 		t.Error("expected at least 1 leaf summary")
 	}
+	if !result.TokenCountsObserved || result.TokensBefore < result.TokensAfter ||
+		result.TokensSaved != result.TokensBefore-result.TokensAfter {
+		t.Fatalf("compaction token metrics = %+v", result)
+	}
 
 	// Context should now contain a summary item
 	items, _ := s.GetContextItems(ctx, convID)
@@ -495,6 +499,10 @@ func TestCompactUntilUnder(t *testing.T) {
 
 	if result == nil {
 		t.Fatal("expected non-nil result")
+	}
+	if !result.TokenCountsObserved || result.TokensBefore < result.TokensAfter ||
+		result.TokensSaved != result.TokensBefore-result.TokensAfter {
+		t.Fatalf("compaction token metrics = %+v", result)
 	}
 }
 

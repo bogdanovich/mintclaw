@@ -64,7 +64,9 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	})
 	publish(runtimeevents.KindAgentContextCompressEnd, agent.ContextCompressLifecyclePayload{
 		AttemptID: "attempt-1", ThreadID: "thread-1", TranscriptRevision: 9, TranscriptCount: 14,
-		Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleCompleted, TokensSaved: 400,
+		Reason: agent.ContextCompressReasonRetry, Status: agent.ContextCompressLifecycleCompleted,
+		TokensSaved: 400, TokensBefore: 1800, TokensAfter: 1400, TokenCountsObserved: true,
+		SummariesCreated: 3, LeafSummaries: 2, CondensedSummaries: 1, Duration: 1500 * time.Millisecond,
 	})
 	publish(runtimeevents.KindAgentTurnEnd, agent.TurnEndPayload{
 		Status:             agent.TurnEndStatusCompleted,
@@ -98,6 +100,13 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 		snapshot.LastCompaction.ThreadID != "thread-1" || snapshot.LastCompaction.TranscriptRevision != 9 ||
 		snapshot.LastCompaction.TranscriptCount != 14 {
 		t.Fatalf("compaction correlation = %+v", snapshot.LastCompaction)
+	}
+	if !snapshot.LastCompaction.TokenCountsObserved || snapshot.LastCompaction.TokensBefore != 1800 ||
+		snapshot.LastCompaction.TokensAfter != 1400 || snapshot.LastCompaction.TokensSaved != 400 ||
+		snapshot.LastCompaction.SummariesCreated != 3 || snapshot.LastCompaction.LeafSummaries != 2 ||
+		snapshot.LastCompaction.CondensedSummaries != 1 ||
+		snapshot.LastCompaction.Duration != 1500*time.Millisecond {
+		t.Fatalf("compaction metrics = %+v", snapshot.LastCompaction)
 	}
 	if strings.Contains(snapshot.Tools[0].Arguments, "secret command") ||
 		snapshot.Tools[0].Arguments != "fields: command, timeout" {
