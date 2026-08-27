@@ -1,10 +1,11 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through P1 and X3.60, the live
-version 4 profile and explicit-identity conversions are complete, and three
-companions run the node-identity bridge. The remaining `vpn` rollout, obsolete
-record and policy cleanup, full backup, strict removal deployment and rollback,
-and Z1 remain open
+Status: active; the original implementation sequence is merged through P1 and
+X3.60, the pre-Z1 source cleanup is merged through PR #921, and the live version
+4 profile and explicit-identity conversions are complete. PR #908 added a
+current coding-resume recovery path whose composition cleanup is registered as
+C2. The remaining C2 packets, `vpn` rollout, obsolete record and policy cleanup,
+full backup, strict removal deployment and rollback, and Z1 remain open
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -156,12 +157,13 @@ reset criteria.
 | A1 | #800 and #801, completed by X3.30-X3.42 | Merged |
 | A2 | #808, #809, and #863 | Merged |
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
+| Coding resume recovery | #908 | Merged; recovery behavior is current, while C2 owns the newly identified composition debt |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
 | X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
 | P1 | #881 | Merged; all five live configs and 20 personal workspaces now use the current contract, while final cleanup and deployment evidence remain in R1 |
 | R1 node-identity bridge | #899 | Merged and deployed to `p5a-canary`, `p3-canary`, and `ab-local-test`; the P3 node is currently stopped, while `vpn` and the strict adapter-removal release remain open |
-| Pre-Z1 strict audit | #911, #914, and #916 merged; #901 remains live-gated | Dead Seahorse shutdown state, the historical approval ordinal reservation, and old benchmark result-count inference are removed; optional node execution-profile admission is included in the reviewed strict R1 release |
+| Pre-Z1 strict audit | #911, #914, #916, and #919-#921 merged; #901 remains live-gated | Dead shutdown state, historical approval and benchmark inference, stale current-path terminology, provider-contract ambiguity, and implicit TTS model selection are removed; strict node removal still needs a final refresh and review |
 | Z1 | Not yet applicable | Open |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
@@ -295,15 +297,14 @@ after that bounded local operation:
   binary and roughly 6 GiB active durable state. A later 207 MiB current-main
   deployment backup contains binaries, units, launchers, and service-state
   markers only, so it does not satisfy that gate either; and
-- strict removal PR #901 is refreshed at `5c6a493a`: in addition to the
+- strict removal PR #901 is refreshed at `f7defbb2`: in addition to the
   browser-catalogue and empty-algorithm reset, it now requires the current
   authenticated execution profile and deletes the unused runtime-less
-  companion constructor. All nine checks pass on this exact head, and the
-  fresh exact-head review found no independent high-confidence issue. It
-  remains intentionally unmerged until the live R1 gates below are satisfied.
-  Main has since gained the browser receipt correction and the pre-Z1
-  benchmark cleanup, so the branch must be refreshed and revalidated before
-  merge even though a synthetic combined-tree merge remains conflict-free.
+  companion constructor. All nine checks pass on this exact head, but its last
+  clean review covers `5c6a493a`, not the rebased head. It remains intentionally
+  unmerged until the live R1 gates below are satisfied. Main has since gained
+  coding resume recovery and PRs #918-#921, so the branch must receive one final
+  refresh, exact-head validation, and review before merge.
 
 ### Re-audit corrections
 
@@ -333,8 +334,9 @@ separation and standards alignment.
 | --- | --- | --- | --- |
 | Previous and older browser catalogue schemas | Temporary first-party wire adapter | The sole connected browser companion advertises the current catalogue and has completed a functional open, observe, navigate, status, and close canary; the gateway-local driver is also healthy, and PR #901 deletes the historical generators | Architecture simplification owner; merge and deploy PR #901 after the remaining R1 fleet and backup gates |
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
-| Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its exact-head checks and review are complete | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
+| Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its current head is green but still needs final-base refresh and exact-head review | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
+| Coding resume recovery composition | Current feature with duplicate composition and lifecycle ownership, not a compatibility adapter | PR #908 correctly makes JSONL authoritative and derived SQLite rebuildable, but carries a construction context inside an immutable profile, exposes paired context and background constructors, routes a durable checkpoint observer through the frontend adapter with a variadic parameter, and rebuilds by copying replacement internals into an already-published engine | C2; keep recovery behavior while making context, checkpoint persistence, and derived-store replacement direct single-owner dependencies before Z1 |
 
 The current implementation also has one non-blocking observability follow-up,
 not a compatibility adapter: an exact deny rule can be reported as an unknown
@@ -398,6 +400,20 @@ time. The later pre-Z1 source and live-state audit corrected that conclusion:
   count explicitly, including a legitimate zero when every answer is invalid;
   the deliberately historical full-transcript comparison baseline remains a
   benchmark mode rather than a product input reader;
+- PR #919 renamed the sole current prompt renderer and final-delivery path
+  instead of letting `legacy` terminology imply a second implementation;
+- PR #920 removed false provider-conversion terminology and documented the
+  current explicit `provider` plus provider-native `model` contract;
+- PR #921 removed TTS's order-dependent scan for the first API-backed model ID
+  containing `tts`. `voice.tts_model_name` is now the sole selector, and the
+  selected enabled entry must have explicit provider and model fields. A
+  read-only deployed audit found no profile relying on the removed path;
+- the post-merge review of PR #908 preserved its justified recovery behavior
+  but found new composition debt: context is carried through a profile rather
+  than a construction boundary, the frontend adapter participates in durable
+  checkpoint observation, and corrupt derived-store replacement mutates a
+  published engine. C2 owns this cleanup without weakening fail-closed resume,
+  typed corruption checks, or no-replay tool outcomes;
 - the earlier Git-tracked zero-caller scan after PR #896 otherwise still found
   no further caller-free production facade; the remaining low-reference
   exports are active entry points, documented extension contracts, or
@@ -910,6 +926,50 @@ Downstream P4 integration rules:
 - in-app commands consume the subscribed current view and the typed controller
   sink instead of recreating command-specific mirrors or a delta protocol.
 
+### C2 — Simplify coding resume recovery composition
+
+Depends on: C1 and merged PR #908
+
+PR #908 added justified recovery behavior: canonical JSONL can rebuild missing
+or corrupt derived Seahorse state, resume fails closed until reconciliation,
+and completed compactions checkpoint their canonical source revision. C2 keeps
+those semantics while removing the composition machinery introduced around
+them.
+
+Implementation sequence:
+
+1. Keep durable compaction checkpoint observation in the coding composition
+   root, not in `pkg/coding/frontend/agentadapter`. Remove the adapter's
+   variadic observer parameter so it returns to presentation-only projection.
+2. Make the recovery deadline an explicit construction dependency. Use one
+   current context-aware coding-loop and Seahorse-engine constructor, stop
+   storing a context in `CodingRuntimeProfile`, and thread the same context
+   through canonical history reads instead of optional interface fallbacks.
+3. Rebuild corrupt derived state before engine and retrieval references become
+   visible. Let the coding recovery owner replace the engine/store as one unit,
+   then delete the exported replacement factory and field-by-field mutation of
+   an already-published `seahorse.Engine`.
+
+Tests:
+
+- resume reconciliation and cursor inspection share one deadline;
+- typed `SQLITE_CORRUPT` and `SQLITE_NOTADB` remain the only destructive reset
+  authorization;
+- frontend projection failure or absence cannot suppress a durable compaction
+  checkpoint;
+- a rebuilt engine publishes retrieval tools only after successful complete
+  reconciliation; and
+- interrupted and unknown tools remain visible without replay.
+
+Exit criteria:
+
+- `CodingRuntimeProfile` contains layouts and admitted store construction only,
+  never request-scoped context;
+- presentation adapters perform no durable writes or durability callbacks;
+- one context-aware constructor exists for each coding recovery owner; and
+- derived-store rebuild replaces one owned unit without copying private engine
+  internals across instances.
+
 ### X1 — Require the current configuration only
 
 Scope:
@@ -1350,9 +1410,10 @@ Current gate snapshot from the 2026-08-26/27 re-audit:
    retention decisions;
 5. the version 4 and `AGENTS.md` cutover is complete, with seven inert policy
    entries left to delete;
-6. PR #901 implements the strict removal; all nine checks and fresh review pass
-   on exact head `5c6a493a`, while the now-advanced base requires a refresh and
-   exact-head validation before merge; and
+6. PR #901 implements the strict removal; all nine checks pass on head
+   `f7defbb2`, while its last clean review covers the earlier `5c6a493a` head
+   and the now-advanced base requires a final refresh, validation, and review;
+   and
 7. removal deployment and rollback have not started.
 
 Exit criteria:
