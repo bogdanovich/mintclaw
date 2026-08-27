@@ -34,7 +34,10 @@ type advancingRevisionSessionStore struct {
 	calls int
 }
 
-func (s *advancingRevisionSessionStore) GetHistoryRevision(string) (memory.HistoryRevision, error) {
+func (s *advancingRevisionSessionStore) GetHistoryRevision(
+	context.Context,
+	string,
+) (memory.HistoryRevision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -56,24 +59,36 @@ func (s *advancingRevisionSessionStore) GetHistory(string) []providers.Message {
 	return history
 }
 
-func (s *advancingRevisionSessionStore) GetHistoryWithError(key string) ([]providers.Message, error) {
-	return s.GetHistory(key), nil
+func (s *advancingRevisionSessionStore) ReadTurnHistory(
+	context.Context,
+	string,
+) ([]providers.Message, error) {
+	return s.GetHistory(""), nil
 }
 
 func (s *staticHistorySessionStore) GetHistory(string) []providers.Message {
 	return append([]providers.Message(nil), s.history...)
 }
 
-func (s *staticHistorySessionStore) GetHistoryWithError(string) ([]providers.Message, error) {
+func (s *staticHistorySessionStore) ReadTurnHistory(context.Context, string) ([]providers.Message, error) {
 	return s.GetHistory(""), nil
 }
 
-func (s *staticHistorySessionStore) GetHistoryRevision(string) (memory.HistoryRevision, error) {
+func (s *staticHistorySessionStore) GetHistoryRevision(
+	context.Context,
+	string,
+) (memory.HistoryRevision, error) {
 	return s.revision, nil
 }
 
 func (s *clearFailingSessionStore) ClearSession(context.Context, string) error {
 	return s.err
+}
+
+func TestCanonicalHistoryContainsHandlesMissingStore(t *testing.T) {
+	if canonicalHistoryContains(t.Context(), nil, "missing", providers.Message{}) {
+		t.Fatal("missing canonical store reported a matching message")
+	}
 }
 
 func newReconciliationTestManager(t *testing.T) (*seahorseContextManager, *memory.JSONLStore) {

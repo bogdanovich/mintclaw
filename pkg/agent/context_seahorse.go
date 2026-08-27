@@ -505,7 +505,7 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 		return err
 	}
 	if req.CanonicalWriteErr != nil {
-		if canonicalHistoryContains(runtime.sessions, req.SessionKey, req.Message) {
+		if canonicalHistoryContains(ctx, runtime.sessions, req.SessionKey, req.Message) {
 			_, err := m.ensureReconciledRuntime(ctx, runtime, req.SessionKey)
 			return err
 		}
@@ -521,7 +521,7 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 		_, ingestErr := runtime.engine.Ingest(ctx, req.SessionKey, []seahorse.Message{msg})
 		return ingestErr
 	}
-	revision, err := historyRevision(store, req.SessionKey)
+	revision, err := historyRevision(ctx, store, req.SessionKey)
 	if err != nil {
 		return fmt.Errorf("seahorse ingest revision: %w", err)
 	}
@@ -567,12 +567,16 @@ func (m *seahorseContextManager) ensureConversationProvenance(
 	return nil
 }
 
-func canonicalHistoryContains(store session.SessionStore, key string, target providers.Message) bool {
-	reader, ok := store.(session.ErrorAwareHistoryReader)
-	if !ok {
+func canonicalHistoryContains(
+	ctx context.Context,
+	store session.SessionStore,
+	key string,
+	target providers.Message,
+) bool {
+	if store == nil {
 		return false
 	}
-	history, err := reader.GetHistoryWithError(key)
+	history, err := store.ReadTurnHistory(ctx, key)
 	if err != nil {
 		return false
 	}
@@ -609,7 +613,7 @@ func (m *seahorseContextManager) Clear(
 		return err
 	}
 	if sessions != nil {
-		revision, err := historyRevision(sessions, sessionKey)
+		revision, err := historyRevision(ctx, sessions, sessionKey)
 		if err != nil {
 			return err
 		}
@@ -624,7 +628,7 @@ func (m *seahorseContextManager) reconcile(
 	sessionKey string,
 	forceDerivedRebuild bool,
 ) (memory.HistoryRevision, error) {
-	history, revision, err := canonicalHistoryAtStableRevision(runtime.sessions, sessionKey)
+	history, revision, err := canonicalHistoryAtStableRevision(ctx, runtime.sessions, sessionKey)
 	if err != nil {
 		return memory.HistoryRevision{}, err
 	}
@@ -644,19 +648,20 @@ func (m *seahorseContextManager) reconcile(
 }
 
 func canonicalHistoryAtStableRevision(
+	ctx context.Context,
 	store session.SessionStore,
 	key string,
 ) ([]providers.Message, memory.HistoryRevision, error) {
 	for range 3 {
-		before, err := historyRevision(store, key)
+		before, err := historyRevision(ctx, store, key)
 		if err != nil {
 			return nil, memory.HistoryRevision{}, err
 		}
-		history, err := canonicalHistory(store, key)
+		history, err := store.ReadTurnHistory(ctx, key)
 		if err != nil {
 			return nil, memory.HistoryRevision{}, err
 		}
-		after, err := historyRevision(store, key)
+		after, err := historyRevision(ctx, store, key)
 		if err != nil {
 			return nil, memory.HistoryRevision{}, err
 		}
@@ -665,13 +670,6 @@ func canonicalHistoryAtStableRevision(
 		}
 	}
 	return nil, memory.HistoryRevision{}, fmt.Errorf("canonical history changed during reconciliation")
-}
-
-func canonicalHistory(store session.SessionStore, key string) ([]providers.Message, error) {
-	if reader, ok := store.(session.ErrorAwareHistoryReader); ok {
-		return reader.GetHistoryWithError(key)
-	}
-	return store.GetHistory(key), nil
 }
 
 func (m *seahorseContextManager) ensureReconciled(
@@ -734,7 +732,7 @@ func (m *seahorseContextManager) ensureReconciledRuntime(
 	if runtime.sessions == nil {
 		return memory.HistoryRevision{}, nil
 	}
-	revision, err := historyRevision(runtime.sessions, sessionKey)
+	revision, err := historyRevision(ctx, runtime.sessions, sessionKey)
 	if err != nil {
 		return memory.HistoryRevision{}, fmt.Errorf("seahorse history revision: %w", err)
 	}
@@ -786,12 +784,16 @@ func (m *seahorseContextManager) setReconciliationState(
 	})
 }
 
-func historyRevision(store session.SessionStore, key string) (memory.HistoryRevision, error) {
+func historyRevision(
+	ctx context.Context,
+	store session.SessionStore,
+	key string,
+) (memory.HistoryRevision, error) {
 	provider, ok := store.(session.HistoryRevisionProvider)
 	if !ok {
 		return memory.HistoryRevision{}, fmt.Errorf("session store does not expose history revisions")
 	}
-	return provider.GetHistoryRevision(key)
+	return provider.GetHistoryRevision(ctx, key)
 }
 
 func (m *seahorseContextManager) lockSession(key string) func() {
