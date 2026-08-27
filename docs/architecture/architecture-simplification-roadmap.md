@@ -3,8 +3,9 @@
 Status: active; the original implementation sequence is merged through P1 and
 X3.60, the pre-Z1 source cleanup is merged through PR #921, C2 is merged through
 PR #929, and the live version 4 profile and explicit-identity conversions are
-complete. The remaining `vpn` rollout, obsolete record and policy cleanup, full
-backup, strict removal deployment and rollback, and Z1 remain open.
+complete. The remaining X3.61 health ownership cleanup, `vpn` rollout, obsolete
+record and policy cleanup, full backup, strict removal deployment and rollback,
+and Z1 remain open.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -160,6 +161,7 @@ reset criteria.
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
 | X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
+| X3.61 | Not yet applicable | Planned; remove duplicate health listener lifecycle and unused readiness-check state before Z1 |
 | P1 | #881 | Merged; all five live configs and 20 personal workspaces now use the current contract, while final cleanup and deployment evidence remain in R1 |
 | R1 node-identity bridge | #899 | Merged and deployed to `p5a-canary`, `p3-canary`, and `ab-local-test`; the P3 node is currently stopped, while `vpn` and the strict adapter-removal release remain open |
 | Pre-Z1 strict audit | #911, #914, #916, and #919-#921 merged; #901 remains live-gated | Dead shutdown state, historical approval and benchmark inference, stale current-path terminology, provider-contract ambiguity, and implicit TTS model selection are removed; strict node removal still needs a final refresh and review |
@@ -335,6 +337,7 @@ separation and standards alignment.
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
 | Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its current head is green but still needs final-base refresh and exact-head review | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
+| Health HTTP lifecycle and readiness checks | Current duplicate ownership, not a compatibility adapter | Production registers health handlers on the channel manager's shared HTTP server; no production caller starts the private `health.Server` listener or registers a dynamic readiness check | X3.61; make health handler-only and keep the shared gateway server as the sole listener owner before Z1 |
 
 C2 is closed. PR #924 moved durable checkpoint ownership to the coding
 composition root; PRs #925-#927 made recovery reads and constructors explicitly
@@ -424,6 +427,11 @@ time. The later pre-Z1 source and live-state audit corrected that conclusion:
   no further caller-free production facade; the remaining low-reference
   exports are active entry points, documented extension contracts, or
   deliberate test and integration seams;
+- the post-C2 final source audit found one exception to that earlier result:
+  `health.Server` still owns an unused private HTTP server lifecycle and a
+  test-only readiness-check registry even though production serves its handlers
+  through the channel manager's shared gateway listener. X3.61 removes both
+  secondary owners without changing the health, ready, or reload routes;
 - task deliverable normalization constructs the current canonical report at
   the registry owner for both new mutations and loaded snapshots; it does not
   select a historical report implementation, but R1 must still inventory the
@@ -1306,6 +1314,11 @@ Implementation sequence:
     selectors. Retain documented channel-registry discovery, the console
     restoration test seam, active loopback helpers, and third-party logger
     interface methods.
+61. Make the health package handler-only. Delete its unused private
+    `http.Server`, direct start and stop methods, and test-only readiness-check
+    registry. Accept only the reload token at construction, register the three
+    current routes on an explicit mux, and keep the channel manager's shared
+    gateway HTTP server as the sole listener and shutdown owner.
 
 Exit criteria:
 
