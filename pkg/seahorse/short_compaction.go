@@ -40,14 +40,6 @@ func (e *CompactionEngine) NeedsCompaction(ctx context.Context, convID int64, co
 	return tokens >= threshold, nil
 }
 
-// Close cancels the legacy shutdown context. Compact now joins condensed work
-// before returning, so callers own its complete lifetime.
-func (e *CompactionEngine) Close() {
-	if e.shutdownCancel != nil {
-		e.shutdownCancel()
-	}
-}
-
 // Compact runs leaf compaction (sync) and optionally condensed compaction.
 func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input CompactInput) (*CompactResult, error) {
 	result := &CompactResult{}

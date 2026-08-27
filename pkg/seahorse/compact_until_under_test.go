@@ -40,8 +40,7 @@ func TestCompactUntilUnderIterationCap(t *testing.T) {
 		return "Summary that doesn't reduce tokens much.", nil
 	}
 
-	ce, cancel := newTestCompactionEngineWithStore(s, mockComplete)
-	defer cancel()
+	ce := newTestCompactionEngineWithStore(s, mockComplete)
 
 	// Use budget=1 so tokens can never reach budget
 	// (each message is 100 tokens, so 40 messages = 4000 tokens, budget 1 is unreachable)

@@ -100,12 +100,10 @@ type Engine struct {
 
 // CompactionEngine handles LLM-based summarization (defined in short_compaction.go).
 type CompactionEngine struct {
-	store          *Store
-	config         Config
-	complete       CompleteFn
-	condensing     sync.Map // map[int64]*condensedRun — dedup and join condensed work
-	shutdownCtx    context.Context
-	shutdownCancel context.CancelFunc
+	store      *Store
+	config     Config
+	complete   CompleteFn
+	condensing sync.Map // map[int64]*condensedRun — dedup and join condensed work
 }
 
 // Assembler handles budget-aware context assembly (defined in short_assembler.go).
@@ -314,10 +312,6 @@ func (e *Engine) Ingest(ctx context.Context, sessionKey string, messages []Messa
 
 // Close releases resources.
 func (e *Engine) Close() error {
-	// Signal compaction goroutines to stop
-	if e.compaction != nil {
-		e.compaction.Close()
-	}
 	if e.store != nil && e.store.db != nil {
 		return e.store.db.Close()
 	}
@@ -381,13 +375,10 @@ func (e *Engine) initCompactionOnce() {
 		e.compactionMu.Lock()
 		defer e.compactionMu.Unlock()
 		if e.compaction == nil {
-			shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 			e.compaction = &CompactionEngine{
-				store:          e.store,
-				config:         e.config,
-				complete:       e.complete,
-				shutdownCtx:    shutdownCtx,
-				shutdownCancel: shutdownCancel,
+				store:    e.store,
+				config:   e.config,
+				complete: e.complete,
 			}
 		}
 	}
