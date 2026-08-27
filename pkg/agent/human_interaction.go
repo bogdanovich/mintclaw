@@ -15,10 +15,6 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-const (
-	interactionMessageKind = "human_interaction"
-)
-
 type humanInteractionRuntime struct {
 	al          *AgentLoop
 	coordinator *interactionCoordinator
@@ -413,7 +409,7 @@ func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 		SpaceType: record.Route.SpaceType,
 	}
 	metadata := bus.OutboundMetadata{
-		MessageKind:        interactionMessageKind,
+		MessageKind:        bus.OutboundMessageKindInteraction,
 		InteractionID:      record.ID,
 		InteractionShortID: record.ShortID,
 	}

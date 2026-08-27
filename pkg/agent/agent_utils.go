@@ -4,7 +4,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -115,7 +114,7 @@ func markFinalOutbound(msg *bus.OutboundMessage) {
 type outboundTurnMessageOptions struct {
 	kind      string
 	modelName string
-	toolCalls json.RawMessage
+	toolCalls []bus.OutboundToolCall
 }
 
 func outboundMessageForTurnWithOptions(

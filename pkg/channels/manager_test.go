@@ -2,7 +2,6 @@ package channels
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -4986,9 +4985,13 @@ func TestSendWithRetry_ToolCallsPlaceholderDeleteAndFallsThroughToSend(t *testin
 		ChatID:  "123",
 		Metadata: bus.OutboundMetadata{
 			MessageKind: bus.OutboundMessageKindToolCalls,
-			ToolCalls: json.RawMessage(
-				`[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{}"},"extra_content":{"tool_feedback_explanation":"Looking up config"}}]`,
-			),
+			ToolCalls: []bus.OutboundToolCall{{
+				ID: "call_1", Type: "function",
+				Function: &bus.OutboundToolCallFunction{Name: "read_file", Arguments: "{}"},
+				ExtraContent: &bus.OutboundToolCallExtraContent{
+					ToolFeedbackExplanation: "Looking up config",
+				},
+			}},
 		},
 		Context: bus.InboundContext{
 			Channel: "test",

@@ -1,8 +1,6 @@
 package outbox
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -83,11 +81,12 @@ func TestStorePersistsTypedOutboundMetadata(t *testing.T) {
 	identity := testIdentity()
 	intent, err := NewMessageIntent("/agents/main", identity, bus.OutboundMessage{
 		Metadata: bus.OutboundMetadata{
-			MessageKind:        " final_reply ",
-			OutboundKind:       " final ",
-			ToolCalls:          json.RawMessage(` [{"id":"call-1"}] `),
-			InteractionShortID: " short-1 ",
-		}.WithInteractionChoices([]string{" Yes ", "No"}),
+			MessageKind:  " tool_calls ",
+			OutboundKind: " interim ",
+			ToolCalls: []bus.OutboundToolCall{{
+				ID: " call-1 ", Function: &bus.OutboundToolCallFunction{Name: " read_file "},
+			}},
+		},
 		Content: "response",
 	}, time.Now())
 	if err != nil {
@@ -102,13 +101,10 @@ func TestStorePersistsTypedOutboundMetadata(t *testing.T) {
 		t.Fatalf("Get() error = %v", err)
 	}
 	metadata := loaded.Message.Metadata
-	var compactToolCalls bytes.Buffer
-	if err := json.Compact(&compactToolCalls, metadata.ToolCalls); err != nil {
-		t.Fatalf("compact loaded tool calls: %v", err)
-	}
-	if loaded.Version != 3 || metadata.MessageKind != bus.OutboundMessageKindFinalReply ||
-		metadata.OutboundKind != bus.OutboundKindFinal || compactToolCalls.String() != `[{"id":"call-1"}]` ||
-		metadata.InteractionShortID != "short-1" || len(metadata.Choices) != 2 || metadata.Choices[0] != "Yes" {
+	if loaded.Version != 3 || metadata.MessageKind != bus.OutboundMessageKindToolCalls ||
+		metadata.OutboundKind != bus.OutboundKindInterim || len(metadata.ToolCalls) != 1 ||
+		metadata.ToolCalls[0].ID != "call-1" || metadata.ToolCalls[0].Function == nil ||
+		metadata.ToolCalls[0].Function.Name != "read_file" {
 		t.Fatalf("loaded typed metadata = %#v in version %d", metadata, loaded.Version)
 	}
 }
@@ -127,10 +123,27 @@ func TestStoreRejectsPreviousRecordVersionAndInvalidCurrentMetadata(t *testing.T
 		t.Fatalf("Get(previous) error = %v", err)
 	}
 
-	invalid := newTestIntent(t, "invalid", 1)
-	invalid.Message.Metadata.ToolCalls = json.RawMessage("{")
-	if _, err := store.Create(invalid); err == nil || !strings.Contains(err.Error(), "valid JSON") {
-		t.Fatalf("Create(invalid metadata) error = %v", err)
+	for name, metadata := range map[string]bus.OutboundMetadata{
+		"empty tool calls": {
+			MessageKind: bus.OutboundMessageKindToolCalls,
+		},
+		"empty tool call": {
+			MessageKind: bus.OutboundMessageKindToolCalls,
+			ToolCalls:   []bus.OutboundToolCall{{}},
+		},
+		"prompt without short ID": {
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+			InteractionID:       "interaction-1",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := newTestIntent(t, name, 1)
+			invalid.Message.Metadata = metadata
+			if _, err := store.Create(invalid); err == nil {
+				t.Fatalf("Create(%s metadata) succeeded", name)
+			}
+		})
 	}
 }
 

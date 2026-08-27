@@ -9628,9 +9628,10 @@ func TestRun_MintClawPublishesAssistantContentDuringToolCallsWithoutFinalDuplica
 	if outputs[1].Metadata.MessageKind != bus.OutboundMessageKindToolCalls {
 		t.Fatalf("second outbound = %+v, want tool_calls message", outputs[1])
 	}
-	if !strings.Contains(string(outputs[1].Metadata.ToolCalls), "tool_limit_test_tool") {
+	if len(outputs[1].Metadata.ToolCalls) != 1 || outputs[1].Metadata.ToolCalls[0].Function == nil ||
+		outputs[1].Metadata.ToolCalls[0].Function.Name != "tool_limit_test_tool" {
 		t.Fatalf(
-			"second outbound tool_calls = %q, want tool name",
+			"second outbound tool_calls = %#v, want tool name",
 			outputs[1].Metadata.ToolCalls,
 		)
 	}
@@ -9768,9 +9769,10 @@ func TestRun_MintClawToolFeedbackSuppressesDuplicateInterimAssistantContent(t *t
 	if outputs[0].Content != "" {
 		t.Fatalf("first outbound content = %q, want empty tool_calls content", outputs[0].Content)
 	}
-	if !strings.Contains(string(outputs[0].Metadata.ToolCalls), "tool_limit_test_tool") {
+	if len(outputs[0].Metadata.ToolCalls) != 1 || outputs[0].Metadata.ToolCalls[0].Function == nil ||
+		outputs[0].Metadata.ToolCalls[0].Function.Name != "tool_limit_test_tool" {
 		t.Fatalf(
-			"first outbound tool_calls = %q, want tool name",
+			"first outbound tool_calls = %#v, want tool name",
 			outputs[0].Metadata.ToolCalls,
 		)
 	}

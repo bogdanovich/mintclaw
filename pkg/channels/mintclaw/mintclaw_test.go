@@ -2,7 +2,6 @@ package mintclaw
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -303,9 +302,12 @@ func TestSend_ToolCallsMessageIncludesModelName(t *testing.T) {
 		Metadata: bus.OutboundMetadata{
 			MessageKind: bus.OutboundMessageKindToolCalls,
 			ModelName:   "gpt-5.4",
-			ToolCalls: json.RawMessage(
-				`[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]`,
-			),
+			ToolCalls: []bus.OutboundToolCall{{
+				ID: "call_1", Type: "function",
+				Function: &bus.OutboundToolCallFunction{
+					Name: "read_file", Arguments: `{"path":"README.md"}`,
+				},
+			}},
 		},
 		Context: bus.InboundContext{
 			Channel: "mintclaw",

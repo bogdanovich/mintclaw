@@ -2,14 +2,12 @@ package mintclaw
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
-	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
 // mintclawConn represents a single WebSocket connection.
@@ -272,15 +270,9 @@ func setOutboundControlPayload(payload map[string]any, metadata bus.OutboundMeta
 	}
 }
 
-func mintclawToolCallsPayload(msg bus.OutboundMessage) ([]utils.VisibleToolCall, bool) {
-	raw := msg.Metadata.ToolCalls
-	if len(raw) == 0 {
+func mintclawToolCallsPayload(msg bus.OutboundMessage) ([]bus.OutboundToolCall, bool) {
+	if len(msg.Metadata.ToolCalls) == 0 {
 		return nil, false
 	}
-
-	var toolCalls []utils.VisibleToolCall
-	if err := json.Unmarshal(raw, &toolCalls); err != nil || len(toolCalls) == 0 {
-		return nil, false
-	}
-	return toolCalls, true
+	return msg.Metadata.ToolCalls, true
 }

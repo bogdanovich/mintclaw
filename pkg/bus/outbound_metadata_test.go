@@ -8,26 +8,26 @@ import (
 
 func TestNormalizeOutboundMetadataCanonicalizesCurrentContract(t *testing.T) {
 	metadata := NormalizeOutboundMetadata(OutboundMetadata{
-		MessageKind:        " final_reply ",
-		ToolCalls:          json.RawMessage(` [{"id":"call-1"}] `),
-		OutboundKind:       " final ",
-		ModelName:          " fallback-model ",
-		DefaultModelName:   " primary-model ",
-		UsageInputTokens:   -1,
-		UsageOutputTokens:  4500,
-		UsageTotalTokens:   4500,
-		InteractionID:      " interaction-1 ",
-		InteractionShortID: " short-1 ",
-		RequestID:          " request-1 ",
-		Choices:            []string{" Yes ", "No"},
+		MessageKind: " tool_calls ",
+		ToolCalls: []OutboundToolCall{{
+			ID: " call-1 ", Function: &OutboundToolCallFunction{Name: " read_file "},
+		}},
+		OutboundKind:      " final ",
+		ModelName:         " fallback-model ",
+		DefaultModelName:  " primary-model ",
+		UsageInputTokens:  -1,
+		UsageOutputTokens: 4500,
+		UsageTotalTokens:  4500,
+		RequestID:         " request-1 ",
 	})
 
-	if metadata.MessageKind != OutboundMessageKindFinalReply || string(metadata.ToolCalls) != `[{"id":"call-1"}]` ||
+	if metadata.MessageKind != OutboundMessageKindToolCalls ||
+		len(metadata.ToolCalls) != 1 || metadata.ToolCalls[0].ID != "call-1" ||
+		metadata.ToolCalls[0].Function == nil || metadata.ToolCalls[0].Function.Name != "read_file" ||
 		metadata.OutboundKind != OutboundKindFinal || metadata.ModelName != "fallback-model" ||
 		metadata.DefaultModelName != "primary-model" || metadata.UsageInputTokens != 0 ||
 		metadata.UsageOutputTokens != 4500 || metadata.UsageTotalTokens != 4500 ||
-		metadata.InteractionID != "interaction-1" || metadata.InteractionShortID != "short-1" ||
-		metadata.RequestID != "request-1" || len(metadata.Choices) != 2 || metadata.Choices[0] != "Yes" {
+		metadata.RequestID != "request-1" {
 		t.Fatalf("normalized metadata = %#v", metadata)
 	}
 	if err := ValidateOutboundMetadata(metadata); err != nil {
@@ -44,8 +44,45 @@ func TestValidateOutboundMetadataRejectsNoncanonicalValues(t *testing.T) {
 		"negative usage": {
 			UsageInputTokens: -1,
 		},
-		"invalid tool calls": {ToolCalls: json.RawMessage("{")},
-		"invalid choices":    {Choices: []string{"Yes", ""}},
+		"invalid choices":          {Choices: []string{"Yes", ""}},
+		"unsupported message kind": {MessageKind: "legacy"},
+		"unsupported outbound kind": {
+			OutboundKind: "legacy",
+		},
+		"unsupported interaction kind": {
+			InteractionKind: "legacy",
+		},
+		"unsupported interaction controls": {
+			InteractionControls: "legacy",
+		},
+		"tool calls without kind": {
+			ToolCalls: []OutboundToolCall{{Function: &OutboundToolCallFunction{Name: "read_file"}}},
+		},
+		"tool calls kind without calls": {
+			MessageKind: OutboundMessageKindToolCalls,
+		},
+		"empty tool call": {
+			MessageKind: OutboundMessageKindToolCalls,
+			ToolCalls:   []OutboundToolCall{{}},
+		},
+		"noncanonical tool call": {
+			MessageKind: OutboundMessageKindToolCalls,
+			ToolCalls: []OutboundToolCall{{
+				Function: &OutboundToolCallFunction{Name: " read_file "},
+			}},
+		},
+		"prompt without kind": {
+			InteractionControls: OutboundInteractionControlsPrompt,
+			InteractionID:       "interaction-1",
+			InteractionShortID:  "short-1",
+		},
+		"prompt without identity": {
+			InteractionKind:     OutboundInteractionApproval,
+			InteractionControls: OutboundInteractionControlsPrompt,
+		},
+		"choices outside question prompt": {
+			Choices: []string{"Yes", "No"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := ValidateOutboundMetadata(metadata); err == nil {
@@ -74,6 +111,8 @@ func TestOutboundMetadataInteractionControls(t *testing.T) {
 	approval := OutboundMetadata{
 		InteractionKind:     OutboundInteractionApproval,
 		InteractionControls: OutboundInteractionControlsPrompt,
+		InteractionID:       "approval-1",
+		InteractionShortID:  "short-1",
 	}
 	if !approval.IsApprovalPrompt() || approval.RemovesInteractionControls() || !approval.BypassesPlaceholderEdit() {
 		t.Fatalf("approval prompt metadata = %#v", approval)
@@ -82,6 +121,8 @@ func TestOutboundMetadataInteractionControls(t *testing.T) {
 	question := OutboundMetadata{
 		InteractionKind:     OutboundInteractionQuestion,
 		InteractionControls: OutboundInteractionControlsPrompt,
+		InteractionID:       "question-1",
+		InteractionShortID:  "short-2",
 	}.WithInteractionChoices([]string{"Yes", "No"})
 	if !question.IsQuestionPrompt() || question.IsApprovalPrompt() || len(question.InteractionChoices()) != 2 {
 		t.Fatalf("question prompt metadata = %#v", question)
@@ -93,6 +134,11 @@ func TestOutboundMetadataInteractionControls(t *testing.T) {
 	}
 	if removal.IsQuestionPrompt() || !removal.RemovesInteractionControls() {
 		t.Fatalf("question removal metadata = %#v", removal)
+	}
+	for _, metadata := range []OutboundMetadata{approval, question, removal} {
+		if err := ValidateOutboundMetadata(metadata); err != nil {
+			t.Fatalf("ValidateOutboundMetadata(%#v) error = %v", metadata, err)
+		}
 	}
 }
 

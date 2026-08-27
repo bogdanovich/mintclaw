@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
-	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
 func sessionsTestDir(t *testing.T, configPath string) string {
@@ -88,7 +88,7 @@ func assertVisibleToolCallMessage(
 	t *testing.T,
 	msg sessionChatMessage,
 	toolName string,
-) utils.VisibleToolCall {
+) bus.OutboundToolCall {
 	t.Helper()
 
 	if msg.Role != "assistant" || msg.Kind != "tool_calls" {
