@@ -4,7 +4,7 @@ This package handles speech synthesis for MintClaw.
 
 If you are new to TTS setup, the simplest workflow is:
 
-1. Add a TTS-capable entry to `model_list`.
+1. Add an enabled TTS-capable entry to `model_list` with explicit `provider` and `model` fields.
 2. Point `voice.tts_model_name` at that entry.
 3. Put the API key in `.security.yml`.
 
@@ -45,7 +45,9 @@ This is the recommended and supported configuration pattern.
   "model_list": [
     {
       "model_name": "openai-tts",
-      "model": "openai/tts-1"
+      "provider": "openai",
+      "model": "tts-1",
+      "enabled": true
     }
   ]
 }
@@ -72,7 +74,9 @@ model_list:
   "model_list": [
     {
       "model_name": "mimo-tts",
-      "model": "mimo/mimo-v2-tts"
+      "provider": "mimo",
+      "model": "mimo-v2-tts",
+      "enabled": true
     }
   ]
 }
@@ -107,6 +111,7 @@ voice name and works best with `response_format: "mp3"`.
       "model_name": "mai-voice-2",
       "provider": "openrouter",
       "model": "microsoft/mai-voice-2",
+      "enabled": true,
       "api_base": "https://openrouter.ai/api/v1",
       "extra_body": {
         "voice": "en-US-Harper:MAI-Voice-2",
@@ -139,20 +144,18 @@ These defaults can now be overridden per model through `model_list[].extra_body`
 
 That means:
 
-- `openai/tts-1` works naturally.
+- `provider: openai` with `model: tts-1` works naturally.
 - Other OpenAI-compatible providers can work if they accept the same request format.
 - Provider-specific TTS models may need their own `voice` and `response_format` values.
 - If a provider rejects `response_format`, MintClaw retries once without that field.
 
 ## How MintClaw Chooses a TTS Provider
 
-`DetectTTS` resolves TTS in this order:
+`DetectTTS` resolves TTS through one explicit path:
 
-1. **Preferred path**: resolve `voice.tts_model_name` against `model_list`.
-2. If a matching model entry exists and has an API key, MintClaw creates an OpenAI-compatible TTS provider using that model's settings.
-3. **Fallback path**: if `voice.tts_model_name` is not set or cannot be resolved, MintClaw scans `model_list` for the first entry whose model string contains `tts` and has an API key.
-
-Fallback scanning exists for compatibility. New configs should set `voice.tts_model_name` explicitly.
+1. Resolve `voice.tts_model_name` against enabled entries in `model_list`.
+2. If a matching entry exists and has an API key, MintClaw creates the TTS provider using that entry's settings.
+3. If the selection is missing, disabled, invalid, or lacks an API key, TTS remains disabled.
 
 ## Notes About API Base Handling
 
@@ -160,7 +163,7 @@ MintClaw normalizes the configured base URL for TTS:
 
 - For OpenAI, a base like `https://api.openai.com` or `https://api.openai.com/v1` becomes `https://api.openai.com/v1/audio/speech`.
 - For other OpenAI-compatible providers, MintClaw preserves the configured base path and ensures it ends with `/audio/speech`.
-- If `api_base` is omitted, MintClaw uses the provider default base when the model prefix is known.
+- If `api_base` is omitted, MintClaw uses the configured provider's default base when available.
 
 ## Common Mistakes
 
@@ -175,6 +178,7 @@ MintClaw normalizes the configured base URL for TTS:
 Before testing `send_tts`, make sure:
 
 - `voice.tts_model_name` matches a `model_list[].model_name`.
+- The selected model entry has explicit `provider` and `model` fields and `enabled: true`.
 - The matching `.security.yml` entry contains a valid API key.
 - The chosen provider supports an OpenAI-compatible speech synthesis endpoint.
 - Your selected model is actually a TTS-capable model.

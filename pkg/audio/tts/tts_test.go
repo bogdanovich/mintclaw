@@ -278,19 +278,72 @@ func TestDetectTTS_UsesOpenAIExtraBodyVoiceAndResponseFormat(t *testing.T) {
 	}
 }
 
-func TestDetectTTS_IgnoresDisabledFallbackModel(t *testing.T) {
+func TestDetectTTS_RequiresExplicitModelSelection(t *testing.T) {
 	t.Parallel()
 
 	provider := DetectTTS(&config.Config{ModelList: []*config.ModelConfig{{
-		ModelName: "disabled-tts",
+		ModelName: "available-tts",
 		Provider:  "openai",
 		Model:     "tts-1",
 		APIKeys:   config.SimpleSecureStrings("sk-openai"),
-		Enabled:   false,
+		Enabled:   true,
 	}}})
 
 	if provider != nil {
-		t.Fatalf("DetectTTS() type = %T, want nil for disabled model", provider)
+		t.Fatalf("DetectTTS() type = %T, want nil without voice.tts_model_name", provider)
+	}
+}
+
+func TestDetectTTS_DoesNotFallBackFromInvalidSelection(t *testing.T) {
+	t.Parallel()
+
+	provider := DetectTTS(&config.Config{
+		Voice: config.VoiceConfig{TTSModelName: "missing-tts"},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "available-tts",
+			Provider:  "openai",
+			Model:     "tts-1",
+			APIKeys:   config.SimpleSecureStrings("sk-openai"),
+			Enabled:   true,
+		}},
+	})
+
+	if provider != nil {
+		t.Fatalf("DetectTTS() type = %T, want nil for invalid voice.tts_model_name", provider)
+	}
+}
+
+func TestDetectTTS_RequiresExplicitProviderAndModel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+	}{
+		{name: "provider", model: "openai/tts-1"},
+		{name: "model", provider: "openai"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			provider := DetectTTS(&config.Config{
+				Voice: config.VoiceConfig{TTSModelName: "selected-tts"},
+				ModelList: []*config.ModelConfig{{
+					ModelName: "selected-tts",
+					Provider:  test.provider,
+					Model:     test.model,
+					APIKeys:   config.SimpleSecureStrings("sk-openai"),
+					Enabled:   true,
+				}},
+			})
+
+			if provider != nil {
+				t.Fatalf("DetectTTS() type = %T, want nil without explicit %s", provider, test.name)
+			}
+		})
 	}
 }
 
