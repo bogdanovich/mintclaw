@@ -44,6 +44,7 @@ type seahorseAgentRuntime struct {
 	workspace                string
 	agentID                  string
 	reconciliationGeneration int
+	rebuildCorruptDatabase   func(context.Context, error) error
 }
 
 const seahorseReconciliationGeneration = 2
@@ -110,17 +111,35 @@ func newSeahorseAgentRuntime(
 			return nil, fmt.Errorf("custom dbPath is not supported with a coding profile")
 		}
 	}
-	engine, err := storeFactory.NewSeahorseEngine(
-		seahorseConfig,
-		providerToCompleteFn(agent.Provider, agent.Model),
-	)
+	complete := providerToCompleteFn(agent.Provider, agent.Model)
+	constructionCtx := context.Background()
+	if al.codingProfile != nil {
+		constructionCtx = al.codingProfile.constructionCtx
+	}
+	if constructionCtx == nil {
+		constructionCtx = context.Background()
+	}
+	engine, err := storeFactory.NewSeahorseEngine(constructionCtx, seahorseConfig, complete)
+	if err != nil && al.codingProfile != nil && seahorse.IsCorruptDatabaseError(err) {
+		if resetErr := seahorse.ResetCorruptDatabase(seahorseConfig.DBPath, err); resetErr != nil {
+			return nil, errors.Join(
+				fmt.Errorf("open corrupt derived context store: %w", err),
+				resetErr,
+			)
+		}
+		logger.WarnCF("seahorse", "rebuilding corrupt coding context store from canonical history", map[string]any{
+			"db_path": seahorseConfig.DBPath,
+			"error":   err.Error(),
+		})
+		engine, err = storeFactory.NewSeahorseEngine(constructionCtx, seahorseConfig, complete)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create engine: %w", err)
 	}
 	if engine == nil {
 		return nil, fmt.Errorf("create engine: coding store factory returned a nil Seahorse engine")
 	}
-	return &seahorseAgentRuntime{
+	runtime := &seahorseAgentRuntime{
 		engine:    engine,
 		sessions:  agent.Sessions,
 		workspace: agent.Workspace,
@@ -128,7 +147,23 @@ func newSeahorseAgentRuntime(
 		reconciliationGeneration: seahorseConfig.SummaryPolicy.ReconciliationGeneration(
 			seahorseReconciliationGeneration,
 		),
-	}, nil
+	}
+	if al.codingProfile != nil {
+		runtime.rebuildCorruptDatabase = func(ctx context.Context, cause error) error {
+			return runtime.engine.RebuildCorruptDatabaseContext(
+				ctx,
+				cause,
+				func(
+					factoryCtx context.Context,
+					config seahorse.Config,
+					completeFn seahorse.CompleteFn,
+				) (*seahorse.Engine, error) {
+					return storeFactory.NewSeahorseEngine(factoryCtx, config, completeFn)
+				},
+			)
+		}
+	}
+	return runtime, nil
 }
 
 func seahorseAgentDBPath(agent *AgentInstance, defaultAgentID string) string {
@@ -651,6 +686,44 @@ func (m *seahorseContextManager) ensureReconciled(
 	runtime.sessions = store
 	_, err = m.ensureReconciledRuntime(ctx, runtime, sessionKey)
 	return err
+}
+
+func (m *seahorseContextManager) prepareCodingSession(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+) (memory.HistoryRevision, error) {
+	runtime, err := m.runtimeFor(agent)
+	if err != nil {
+		return memory.HistoryRevision{}, err
+	}
+	unlock := m.lockSession(runtime.agentID + ":" + sessionKey)
+	defer unlock()
+	revision, err := m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+	if err == nil || runtime.rebuildCorruptDatabase == nil || !seahorse.IsCorruptDatabaseError(err) {
+		return revision, err
+	}
+	if rebuildErr := runtime.rebuildCorruptDatabase(ctx, err); rebuildErr != nil {
+		return memory.HistoryRevision{}, errors.Join(
+			fmt.Errorf("read corrupt derived context store: %w", err),
+			rebuildErr,
+		)
+	}
+	logger.WarnCF("seahorse", "rebuilding corrupt coding context store after reconciliation read", map[string]any{
+		"agent_id": runtime.agentID,
+	})
+	return m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+}
+
+func (m *seahorseContextManager) prepareCodingSessionOnce(
+	ctx context.Context,
+	runtime *seahorseAgentRuntime,
+	sessionKey string,
+) (memory.HistoryRevision, error) {
+	if err := m.ensureConversationProvenance(ctx, runtime, sessionKey); err != nil {
+		return memory.HistoryRevision{}, err
+	}
+	return m.ensureReconciledRuntime(ctx, runtime, sessionKey)
 }
 
 func (m *seahorseContextManager) ensureReconciledRuntime(

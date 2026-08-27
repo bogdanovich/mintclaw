@@ -163,6 +163,25 @@ func NewCodingAgentLoop(
 	profile CodingRuntimeProfile,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
+	return NewCodingAgentLoopContext(context.Background(), cfg, msgBus, provider, profile, opts...)
+}
+
+// NewCodingAgentLoopContext bounds coding-only construction and startup repair.
+func NewCodingAgentLoopContext(
+	ctx context.Context,
+	cfg *config.Config,
+	msgBus *bus.MessageBus,
+	provider providers.LLMProvider,
+	profile CodingRuntimeProfile,
+	opts ...AgentLoopOption,
+) (*AgentLoop, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("coding runtime construction context is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	profile = profile.withConstructionContext(ctx)
 	contextManagerName := contextManagerConfigName(cfg)
 	if contextManagerName != "none" && contextManagerName != "seahorse" {
 		return nil, fmt.Errorf(
@@ -174,7 +193,10 @@ func NewCodingAgentLoop(
 	if err != nil {
 		return nil, err
 	}
-	opts = append([]AgentLoopOption{withCodingRuntimeProfile(profile), WithIsolatedToolBootstrap()}, opts...)
+	opts = append([]AgentLoopOption{
+		withCodingRuntimeProfile(profile),
+		WithIsolatedToolBootstrap(),
+	}, opts...)
 	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
 	if al.runtimeInitErr != nil {
 		err := al.runtimeInitErr
@@ -186,7 +208,7 @@ func NewCodingAgentLoop(
 		al.Close()
 		return nil, err
 	}
-	if err := al.repairCodingToolLifecycles(context.Background()); err != nil {
+	if err := al.repairCodingToolLifecycles(ctx); err != nil {
 		al.Close()
 		return nil, fmt.Errorf("repair coding tool lifecycle: %w", err)
 	}

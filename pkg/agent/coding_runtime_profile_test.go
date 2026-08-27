@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -18,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 var errInjectedRuntimeStore = errors.New("injected runtime store failure")
@@ -80,6 +83,19 @@ type trackingCodingRuntimeStoreFactory struct {
 	engines         []*seahorse.Engine
 }
 
+type deadlineCodingRuntimeStoreFactory struct {
+	defaultCodingRuntimeStoreFactory
+}
+
+func (f deadlineCodingRuntimeStoreFactory) NewSeahorseEngine(
+	ctx context.Context,
+	_ seahorse.Config,
+	_ seahorse.CompleteFn,
+) (*seahorse.Engine, error) {
+	<-ctx.Done()
+	return nil, context.Cause(ctx)
+}
+
 func TestNewCodingRuntimeProfileWithStoreFactoryRejectsTypedNil(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
@@ -124,6 +140,7 @@ func (f *trackingCodingRuntimeStoreFactory) NewSessionStore(layout CodingRuntime
 }
 
 func (f *trackingCodingRuntimeStoreFactory) NewSeahorseEngine(
+	ctx context.Context,
 	config seahorse.Config,
 	complete seahorse.CompleteFn,
 ) (*seahorse.Engine, error) {
@@ -136,11 +153,25 @@ func (f *trackingCodingRuntimeStoreFactory) NewSeahorseEngine(
 	if f.nilSeahorse {
 		return nil, nil
 	}
-	engine, err := f.delegate.NewSeahorseEngine(config, complete)
+	engine, err := f.delegate.NewSeahorseEngine(ctx, config, complete)
 	if err == nil {
 		f.engines = append(f.engines, engine)
 	}
 	return engine, err
+}
+
+type delayedCorruptionCodingRuntimeStoreFactory struct {
+	defaultCodingRuntimeStoreFactory
+	seahorseCalls int
+}
+
+func (f *delayedCorruptionCodingRuntimeStoreFactory) NewSeahorseEngine(
+	ctx context.Context,
+	config seahorse.Config,
+	complete seahorse.CompleteFn,
+) (*seahorse.Engine, error) {
+	f.seahorseCalls++
+	return f.defaultCodingRuntimeStoreFactory.NewSeahorseEngine(ctx, config, complete)
 }
 
 type countingStatefulProvider struct {
@@ -1335,6 +1366,239 @@ func TestNewCodingAgentLoopRoutesCodingSeahorseToStateRoot(t *testing.T) {
 	legacyDB := filepath.Join(executionRoot, "sessions", "seahorse.db")
 	if _, statErr := os.Stat(legacyDB); !os.IsNotExist(statErr) {
 		t.Fatalf("unexpected execution-root Seahorse DB: %v", statErr)
+	}
+}
+
+func TestNewCodingAgentLoopRebuildsMissingOrCorruptSeahorseFromCanonicalHistory(t *testing.T) {
+	if seahorse.IsCorruptDatabaseError(errors.New("database corruption reported by an injected factory")) {
+		t.Fatal("untyped error text authorized derived database replacement")
+	}
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewCodingRuntimeLayout(
+		"thread-corrupt-context",
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := initRuntimeSessionStore(layout.StatePaths().SessionsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionKey := "coding:thread-corrupt-context"
+	if err := sessions.ReplaceTurnHistory(t.Context(), sessionKey, []providers.Message{
+		{Role: "user", Content: "canonical objective survives"},
+	}); err != nil {
+		_ = sessions.Close()
+		t.Fatal(err)
+	}
+	if err := sessions.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db")
+	openAndAssert := func(stage string) {
+		t.Helper()
+		loop, openErr := NewCodingAgentLoop(config.DefaultConfig(), bus.NewMessageBus(), &mockProvider{}, profile)
+		if openErr != nil {
+			t.Fatalf("%s NewCodingAgentLoop() error = %v", stage, openErr)
+		}
+		instance := loop.GetRegistry().GetDefaultAgent()
+		assembled, assembleErr := loop.contextManager.Assemble(t.Context(), &AssembleRequest{
+			Agent: instance, SessionKey: sessionKey, Budget: 16_000, MaxTokens: 256,
+		})
+		if assembleErr != nil {
+			loop.Close()
+			t.Fatalf("%s Assemble() error = %v", stage, assembleErr)
+		}
+		if len(assembled.History) != 1 || assembled.History[0].Content != "canonical objective survives" {
+			loop.Close()
+			t.Fatalf("%s rebuilt history = %#v", stage, assembled.History)
+		}
+		loop.Close()
+	}
+
+	openAndAssert("initial")
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	openAndAssert("missing")
+	if err := os.WriteFile(dbPath, []byte("not a sqlite database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	openAndAssert("corrupt")
+}
+
+func TestPrepareCodingSessionRebuildsCorruptionDiscoveredDuringReconciliation(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewCodingRuntimeLayout(
+		"thread-delayed-corruption",
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := initRuntimeSessionStore(layout.StatePaths().SessionsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionKey := "coding:thread-delayed-corruption"
+	if err := sessions.ReplaceTurnHistory(t.Context(), sessionKey, []providers.Message{
+		{Role: "user", Content: "canonical recovery objective"},
+	}); err != nil {
+		_ = sessions.Close()
+		t.Fatal(err)
+	}
+	scope := &session.SessionScope{
+		Version: session.ScopeVersion, AgentID: "main", RouteScopeKey: "coding:thread-delayed-corruption",
+	}
+	metadataStore, ok := sessions.(session.MetadataAwareSessionStore)
+	if !ok {
+		_ = sessions.Close()
+		t.Fatal("coding session store does not expose metadata")
+	}
+	metadataStore.EnsureSessionMetadata(sessionKey, scope)
+	if err := sessions.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cleanProfile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanLoop, err := NewCodingAgentLoop(config.DefaultConfig(), bus.NewMessageBus(), &mockProvider{}, cleanProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanLoop.Close()
+	corruptSQLiteTableRootPage(
+		t,
+		filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db"),
+		"reconciliation_state",
+	)
+
+	factory := &delayedCorruptionCodingRuntimeStoreFactory{}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(
+		factory,
+		CodingRuntimeBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loop, err := NewCodingAgentLoop(config.DefaultConfig(), bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(loop.Close)
+	if _, err := loop.PrepareCodingSession(t.Context(), sessionKey); err != nil {
+		t.Fatalf("PrepareCodingSession() error = %v", err)
+	}
+	if factory.seahorseCalls != 2 {
+		t.Fatalf("Seahorse engine opens = %d, want corrupt open plus one rebuild", factory.seahorseCalls)
+	}
+	instance := loop.GetRegistry().GetDefaultAgent()
+	assembled, err := loop.contextManager.Assemble(t.Context(), &AssembleRequest{
+		Agent: instance, SessionKey: sessionKey, Budget: 16_000, MaxTokens: 256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(assembled.History) != 1 || assembled.History[0].Content != "canonical recovery objective" {
+		t.Fatalf("rebuilt history = %#v", assembled.History)
+	}
+	grep, ok := instance.Tools.Get("short_grep")
+	if !ok {
+		t.Fatal("recovered runtime has no short_grep tool")
+	}
+	toolCtx := toolshared.WithToolSessionContext(t.Context(), instance.ID, sessionKey, scope)
+	result := grep.Execute(toolCtx, map[string]any{
+		"pattern": "canonical recovery objective", "retrieval_scope": "conversation",
+	})
+	if result.IsError || !strings.Contains(result.ContentForLLM(), "canonical recovery objective") {
+		t.Fatalf("short_grep after database rebuild = %#v", result)
+	}
+}
+
+func corruptSQLiteTableRootPage(t *testing.T, dbPath, table string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pageSize int64
+	if err := db.QueryRowContext(t.Context(), "PRAGMA page_size").Scan(&pageSize); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	var rootPage int64
+	if err := db.QueryRowContext(
+		t.Context(),
+		"SELECT rootpage FROM sqlite_master WHERE type = 'table' AND name = ?",
+		table,
+	).Scan(&rootPage); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(dbPath, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close corrupted SQLite fixture: %v", err)
+		}
+	}()
+	if _, err := file.WriteAt(make([]byte, pageSize), (rootPage-1)*pageSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Sync(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNewCodingAgentLoopContextBoundsDerivedStoreConstruction(t *testing.T) {
+	root := t.TempDir()
+	layout, err := NewCodingRuntimeLayout(
+		"thread-deadline",
+		filepath.Join(root, "project"),
+		filepath.Join(root, "state"),
+		[]string{filepath.Join(root, "project")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(
+		deadlineCodingRuntimeStoreFactory{},
+		CodingRuntimeBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	loop, err := NewCodingAgentLoopContext(
+		ctx,
+		config.DefaultConfig(),
+		bus.NewMessageBus(),
+		&mockProvider{},
+		profile,
+	)
+	if loop != nil || !errors.Is(err, context.DeadlineExceeded) {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewCodingAgentLoopContext() = loop %T error %v, want deadline", loop, err)
 	}
 }
 

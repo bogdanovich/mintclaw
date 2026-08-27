@@ -3,6 +3,7 @@ package seahorse
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +12,8 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	modernsqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	toolpolicy "github.com/bogdanovich/mintclaw/pkg/tools/policy"
@@ -118,6 +120,104 @@ type RetrievalEngine struct {
 	config Config
 }
 
+// EngineFactory opens one Engine using the caller's admitted storage boundary.
+type EngineFactory func(context.Context, Config, CompleteFn) (*Engine, error)
+
+// IsCorruptDatabaseError reports only typed SQLite corruption/not-a-database results.
+func IsCorruptDatabaseError(err error) bool {
+	var sqliteErr *modernsqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	primaryCode := sqliteErr.Code() & 0xff
+	return primaryCode == sqlite3.SQLITE_CORRUPT || primaryCode == sqlite3.SQLITE_NOTADB
+}
+
+// ResetCorruptDatabase removes only the admitted SQLite database and its
+// sidecars, and only when the caller supplies a typed corruption diagnostic.
+func ResetCorruptDatabase(dbPath string, cause error) error {
+	if !IsCorruptDatabaseError(cause) {
+		return fmt.Errorf("reset corrupt database: typed SQLite corruption is required: %w", cause)
+	}
+	if strings.TrimSpace(dbPath) == "" {
+		return fmt.Errorf("reset corrupt database: database path is required")
+	}
+	return removeDatabaseFiles(dbPath)
+}
+
+// RebuildCorruptDatabaseContext replaces a corrupt disposable database while
+// preserving this Engine and its retrieval identity. The caller must hold
+// exclusive lifecycle ownership; recovery is intended for startup before any
+// turn or retrieval tool can run. The replacement factory is consumed through
+// the same admitted storage boundary that constructed the original engine.
+func (e *Engine) RebuildCorruptDatabaseContext(
+	ctx context.Context,
+	cause error,
+	factory EngineFactory,
+) error {
+	if e == nil {
+		return fmt.Errorf("rebuild corrupt database: engine is required")
+	}
+	if !IsCorruptDatabaseError(cause) {
+		return fmt.Errorf("rebuild corrupt database: typed SQLite corruption is required: %w", cause)
+	}
+	if ctx == nil {
+		return fmt.Errorf("rebuild corrupt database: context is required")
+	}
+	if factory == nil {
+		return fmt.Errorf("rebuild corrupt database: engine factory is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if err := e.Close(); err != nil {
+		return fmt.Errorf("close corrupt database: %w", err)
+	}
+	if err := ResetCorruptDatabase(e.config.DBPath, cause); err != nil {
+		return err
+	}
+	replacement, err := factory(ctx, e.config, e.complete)
+	if err != nil {
+		return fmt.Errorf("reopen rebuilt database: %w", err)
+	}
+	if replacement == nil {
+		return fmt.Errorf("reopen rebuilt database: factory returned a nil engine")
+	}
+	if replacement == e {
+		return fmt.Errorf("reopen rebuilt database: factory returned the closed engine")
+	}
+	if replacement.retrieval == nil {
+		_ = replacement.Close()
+		return fmt.Errorf("reopen rebuilt database: factory returned an engine without retrieval")
+	}
+
+	retrieval := e.retrieval
+	if retrieval == nil {
+		retrieval = replacement.retrieval
+	} else {
+		retrieval.store = replacement.retrieval.store
+		retrieval.config = replacement.retrieval.config
+	}
+	e.store = replacement.store
+	e.compaction = replacement.compaction
+	e.assembler = replacement.assembler
+	e.retrieval = retrieval
+	e.config = replacement.config
+	e.complete = replacement.complete
+	e.ignorePatterns = replacement.ignorePatterns
+	e.statelessPatterns = replacement.statelessPatterns
+	return nil
+}
+
+func removeDatabaseFiles(dbPath string) error {
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove corrupt database file %q: %w", path, err)
+		}
+	}
+	return nil
+}
+
 // AbsoluteBudgetsEnabled reports whether separate context budgets are configured.
 func (e *Engine) AbsoluteBudgetsEnabled() bool {
 	return e != nil && e.config.absoluteBudgetsEnabled()
@@ -130,6 +230,17 @@ func (r *RetrievalEngine) Store() *Store {
 
 // NewEngine creates a new short-term memory engine.
 func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
+	return NewEngineContext(context.Background(), config, completeFn)
+}
+
+// NewEngineContext creates an engine while bounding SQLite setup and schema work.
+func NewEngineContext(ctx context.Context, config Config, completeFn CompleteFn) (*Engine, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("create engine: context is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	if err := config.validateBudgets(); err != nil {
 		return nil, fmt.Errorf("invalid context budget config: %w", err)
 	}
@@ -155,20 +266,20 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	}
 
 	// Configure SQLite for concurrent access
-	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
+	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
+	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set busy_timeout: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA synchronous = NORMAL;"); err != nil {
+	if _, err := db.ExecContext(ctx, "PRAGMA synchronous = NORMAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set synchronous: %w", err)
 	}
 
-	if err := runSchema(db); err != nil {
+	if err := runSchemaContext(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("schema: %w", err)
 	}

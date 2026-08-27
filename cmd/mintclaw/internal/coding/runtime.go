@@ -88,7 +88,7 @@ func (r nativeCodingTurnRunner) Run(
 	ctx context.Context,
 	request codingTurnRequest,
 ) (codingTurnOutcome, error) {
-	runtime, err := openNativeCodingRuntime(r, request, nil)
+	runtime, err := openNativeCodingRuntime(r, request, nil, nil)
 	if err != nil {
 		return codingTurnOutcome{}, err
 	}
@@ -111,11 +111,20 @@ type nativeCodingRuntime struct {
 	closeErr        error
 }
 
+const codingResumeRecoveryTimeout = 30 * time.Second
+
 func openNativeCodingRuntime(
 	r nativeCodingTurnRunner,
 	request codingTurnRequest,
 	projector *frontend.Projector,
+	compactionObserver func(agent.ContextCompressLifecyclePayload),
 ) (*nativeCodingRuntime, error) {
+	constructionCtx := context.Background()
+	cancelConstruction := func() {}
+	if projector != nil {
+		constructionCtx, cancelConstruction = context.WithTimeout(constructionCtx, codingResumeRecoveryTimeout)
+	}
+	defer cancelConstruction()
 	layout, err := runtimeLayoutFor(request.Store, request.Metadata)
 	if err != nil {
 		return nil, err
@@ -140,7 +149,12 @@ func openNativeCodingRuntime(
 	baseEventBus := runtimeevents.NewBus()
 	var eventBus runtimeevents.Bus = baseEventBus
 	if projector != nil {
-		eventBus, err = agentadapter.WrapBus(baseEventBus, projector, request.Metadata.SessionKey)
+		eventBus, err = agentadapter.WrapBus(
+			baseEventBus,
+			projector,
+			request.Metadata.SessionKey,
+			compactionObserver,
+		)
 		if err != nil {
 			messageBus.Close()
 			_ = baseEventBus.Close()
@@ -148,7 +162,8 @@ func openNativeCodingRuntime(
 		}
 		messageBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, request.Metadata.SessionKey))
 	}
-	loop, err := agent.NewCodingAgentLoop(
+	loop, err := agent.NewCodingAgentLoopContext(
+		constructionCtx,
 		runtimeCfg,
 		messageBus,
 		provider,
@@ -182,8 +197,17 @@ func openNativeCodingRuntime(
 		streaming:       projector != nil,
 	}
 	if projector != nil {
+		_, recoveryErr := loop.PrepareCodingSession(constructionCtx, request.Metadata.SessionKey)
+		if recoveryErr != nil {
+			_ = runtime.Close()
+			return nil, fmt.Errorf(
+				"coding runtime: reconcile canonical context within %s: %w",
+				codingResumeRecoveryTimeout,
+				recoveryErr,
+			)
+		}
 		runtime.historyCursor, err = codingHistoryCursor(
-			context.Background(),
+			constructionCtx,
 			runtime.sessions,
 			request.Metadata.SessionKey,
 		)
@@ -294,13 +318,107 @@ func (r *nativeCodingRuntime) Close() error {
 	return r.closeErr
 }
 
+type codingMetadataState struct {
+	mu       sync.Mutex
+	metadata thread.Metadata
+	store    *thread.Store
+	now      func() time.Time
+	save     func(thread.Metadata) error
+	err      error
+}
+
+func newCodingMetadataState(
+	store *thread.Store,
+	metadata thread.Metadata,
+	now func() time.Time,
+) *codingMetadataState {
+	if now == nil {
+		now = time.Now
+	}
+	return &codingMetadataState{store: store, metadata: metadata, now: now}
+}
+
+func (s *codingMetadataState) update(
+	mutate func(*thread.Metadata),
+) (thread.Metadata, error) {
+	if s == nil {
+		return thread.Metadata{}, fmt.Errorf("coding metadata state is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	candidate := s.metadata
+	mutate(&candidate)
+	save := s.save
+	if save == nil && s.store != nil {
+		save = s.store.Save
+	}
+	if save == nil {
+		return s.metadata, fmt.Errorf("coding metadata store is unavailable")
+	}
+	saveErr := save(candidate)
+	if saveErr == nil {
+		s.metadata = candidate
+		return s.metadata, nil
+	}
+	if !fileutil.IsCommittedWriteError(saveErr) {
+		return s.metadata, saveErr
+	}
+	s.metadata = candidate
+	s.err = errors.Join(s.err, saveErr)
+	return s.metadata, nil
+}
+
+func (s *codingMetadataState) observeCompaction(payload agent.ContextCompressLifecyclePayload) {
+	if s == nil || payload.Status != agent.ContextCompressLifecycleCompleted || payload.TranscriptRevision == 0 {
+		return
+	}
+	completedAt := s.now().UTC()
+	_, checkpointErr := s.update(func(metadata *thread.Metadata) {
+		if completedAt.Before(metadata.CreatedAt) {
+			completedAt = metadata.CreatedAt
+		}
+		metadata.Compaction = &thread.Compaction{
+			At:       completedAt,
+			Revision: payload.TranscriptRevision,
+		}
+		if metadata.UpdatedAt.Before(completedAt) {
+			metadata.UpdatedAt = completedAt
+		}
+	})
+	if checkpointErr != nil {
+		s.mu.Lock()
+		s.err = errors.Join(s.err, checkpointErr)
+		s.mu.Unlock()
+	}
+}
+
+func (s *codingMetadataState) recordTurn(
+	preview string,
+	model string,
+	provider string,
+) (thread.Metadata, error) {
+	return s.update(func(metadata *thread.Metadata) {
+		metadata.Preview = preview
+		metadata.Model = model
+		metadata.Provider = provider
+		metadata.UpdatedAt = s.now().UTC()
+	})
+}
+
+func (s *codingMetadataState) accumulatedError() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
 type nativeControllerRuntime struct {
 	*nativeCodingRuntime
-	store     *thread.Store
-	lease     *thread.Lease
-	projector *frontend.Projector
-	now       func() time.Time
-	save      func(thread.Metadata) error
+	lease         *thread.Lease
+	projector     *frontend.Projector
+	metadataState *codingMetadataState
 }
 
 var (
@@ -396,6 +514,21 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 			entries = append(entries, entry(frontend.EntryAssistant, "assistant", message.Content))
 		}
 		return entries
+	case "tool":
+		switch message.ToolResultStatus {
+		case providers.ToolResultStatusInterrupted:
+			return []frontend.TranscriptEntry{
+				entry(frontend.EntryTool, "tool-interrupted", "[interrupted] Prior tool execution was not run again."),
+			}
+		case providers.ToolResultStatusUnknown, providers.ToolResultStatusUnresolved:
+			return []frontend.TranscriptEntry{
+				entry(
+					frontend.EntryTool,
+					"tool-unknown",
+					"[unknown] Prior tool outcome is unknown; inspect current state before retrying.",
+				),
+			}
+		}
 	}
 	return nil
 }
@@ -428,26 +561,17 @@ func (r *nativeControllerRuntime) persistTurnOutcome(
 	if displayErr != nil {
 		return errors.Join(turnErr, displayErr)
 	}
-	candidate := r.metadata
-	candidate.Preview = preview
-	candidate.Model = r.model
-	candidate.Provider = r.provider
-	candidate.UpdatedAt = r.now().UTC()
-	save := r.save
-	if save == nil {
-		save = r.store.Save
-	}
-	saveErr := save(candidate)
-	if saveErr != nil && !fileutil.IsCommittedWriteError(saveErr) {
-		return errors.Join(turnErr, saveErr)
-	}
-	r.metadata = candidate
+	candidate, saveErr := r.metadataState.recordTurn(preview, r.model, r.provider)
 	projectionErr := agentadapter.ProjectThreadMetadata(r.projector, candidate)
 	return errors.Join(turnErr, saveErr, projectionErr)
 }
 
 func (r *nativeControllerRuntime) Close() error {
-	return errors.Join(r.nativeCodingRuntime.Close(), r.lease.Release())
+	return errors.Join(
+		r.nativeCodingRuntime.Close(),
+		r.lease.Release(),
+		r.metadataState.accumulatedError(),
+	)
 }
 
 func newNativeCodingControllerWithDependencies(
@@ -471,17 +595,21 @@ func newNativeCodingControllerWithDependencies(
 	if projectionErr := agentadapter.ProjectThreadMetadata(projector, request.Metadata); projectionErr != nil {
 		return nil, projectionErr
 	}
-	native, err := openNativeCodingRuntime(dependencies, request, projector)
+	metadataState := newCodingMetadataState(request.Store, request.Metadata, now)
+	native, err := openNativeCodingRuntime(
+		dependencies,
+		request,
+		projector,
+		metadataState.observeCompaction,
+	)
 	if err != nil {
 		return nil, err
 	}
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: native,
-		store:               request.Store,
 		lease:               request.Lease,
 		projector:           projector,
-		now:                 now,
-		save:                request.Store.Save,
+		metadataState:       metadataState,
 	}
 	result, err := controller.New(projector, runtime)
 	if err != nil {

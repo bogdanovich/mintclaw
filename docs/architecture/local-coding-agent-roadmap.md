@@ -1509,6 +1509,9 @@ Done when:
 
 Dependencies: P2.5, P5.2, P5.3
 
+Implementation evidence:
+[`local-coding-agent-p5-resume-recovery.md`](local-coding-agent-p5-resume-recovery.md)
+
 Scope:
 
 - Reconcile coding Seahorse state against canonical thread revisions on open.

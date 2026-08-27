@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,15 +20,20 @@ import (
 // CodingRuntimeProfile is the immutable set of coding-thread layouts admitted
 // before registry construction.
 type CodingRuntimeProfile struct {
-	agentLayouts map[string]CodingRuntimeLayout
-	storeFactory CodingRuntimeStoreFactory
+	agentLayouts    map[string]CodingRuntimeLayout
+	storeFactory    CodingRuntimeStoreFactory
+	constructionCtx context.Context
 }
 
 // CodingRuntimeStoreFactory opens the canonical and derived stores owned by a
 // resolved coding layout. Implementations open only layout-derived paths.
 type CodingRuntimeStoreFactory interface {
 	NewSessionStore(layout CodingRuntimeLayout) (session.SessionStore, error)
-	NewSeahorseEngine(config seahorse.Config, complete seahorse.CompleteFn) (*seahorse.Engine, error)
+	NewSeahorseEngine(
+		context.Context,
+		seahorse.Config,
+		seahorse.CompleteFn,
+	) (*seahorse.Engine, error)
 }
 
 type defaultCodingRuntimeStoreFactory struct{}
@@ -37,10 +43,11 @@ func (defaultCodingRuntimeStoreFactory) NewSessionStore(layout CodingRuntimeLayo
 }
 
 func (defaultCodingRuntimeStoreFactory) NewSeahorseEngine(
+	ctx context.Context,
 	config seahorse.Config,
 	complete seahorse.CompleteFn,
 ) (*seahorse.Engine, error) {
-	return seahorse.NewEngine(config, complete)
+	return seahorse.NewEngineContext(ctx, config, complete)
 }
 
 // CodingRuntimeBinding binds one configured runtime agent to a coding thread.
@@ -66,8 +73,9 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: store factory is required")
 	}
 	profile := CodingRuntimeProfile{
-		agentLayouts: make(map[string]CodingRuntimeLayout, len(bindings)),
-		storeFactory: storeFactory,
+		agentLayouts:    make(map[string]CodingRuntimeLayout, len(bindings)),
+		storeFactory:    storeFactory,
+		constructionCtx: context.Background(),
 	}
 	threadAgents := make(map[string]string, len(bindings))
 	for index, binding := range bindings {
@@ -168,6 +176,13 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		}
 	}
 	return profile, nil
+}
+
+func (p CodingRuntimeProfile) withConstructionContext(ctx context.Context) CodingRuntimeProfile {
+	if ctx != nil {
+		p.constructionCtx = ctx
+	}
+	return p
 }
 
 func runtimeDependencyIsNil(dependency any) bool {
