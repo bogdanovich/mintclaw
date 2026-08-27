@@ -309,6 +309,39 @@ after that bounded local operation:
   coding resume recovery and PRs #918-#921, so the branch must receive one final
   refresh, exact-head validation, and review before merge.
 
+The 2026-08-27 post-X3.64 read-only gate audit further established:
+
+- all expected services are active except the deliberately stopped P3 node,
+  the last ten minutes of service journals have no error entries, and no old
+  product process is running. The gateways, Web launcher, and local P5a node
+  still execute `8418b021`, and the installed CLI has the same revision;
+  merged main is now `fffaa005` through PR #938;
+- the six node records remain explicit Ed25519. `p5a-canary` and
+  `ab-local-test` are connected on `8418b021`, `p3-canary` remains stopped on
+  bridge build `71ad3e53` while its matching service helper stays active, and
+  connected `vpn` remains on pre-bridge `03b08be2` with no managed-update
+  command in its advertised catalogue. The old pending Darwin and revoked
+  Linux records remain unchanged;
+- all five configs load as version 4, still define 21 agent entries over 20
+  distinct workspace roots, and every root has `AGENTS.md` with no root
+  `AGENT.md`. One ignored root `IDENTITY.md` remains in the spouse workspace;
+  current production source has no reader for it, but R1 must preserve it in
+  the full backup, reconcile any unique prose into the current profile or
+  prose files, and remove the ignored file rather than silently discarding its
+  content or restoring a second reader;
+- the seven inert policy entries are exactly the main browser's four removed
+  task-tool denies plus the main, family, and spouse media agents' `exec`
+  denies. Other deny rules remain current policy and are not cleanup targets;
+- the filesystem has 80 GiB free and the five active profile trees occupy
+  6,480,493,890 bytes. The three recent 207 MiB deployment backups still cover
+  binaries, units, scripts, and service-state markers rather than the complete
+  active durable state, so the same-time full-backup gate remains open; and
+- PR #901 is still at `f7defbb2` on base `4b875d41`; all nine recorded checks
+  are green, but its clean review covers `5c6a493a` and its current head has
+  only an eyes reaction. A read-only merge simulation against current main is
+  conflict-free, but the branch still requires a real final refresh,
+  validation, exact-head review, and new merge approval after the live gates.
+
 ### Re-audit corrections
 
 The original keyword inventory was useful for discovery but too broad as an
@@ -338,7 +371,7 @@ separation and standards alignment.
 | Previous and older browser catalogue schemas | Temporary first-party wire adapter | The sole connected browser companion advertises the current catalogue and has completed a functional open, observe, navigate, status, and close canary; the gateway-local driver is also healthy, and PR #901 deletes the historical generators | Architecture simplification owner; merge and deploy PR #901 after the remaining R1 fleet and backup gates |
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
 | Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its current head is green but still needs final-base refresh and exact-head review | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
-| Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
+| Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries and one ignored root `IDENTITY.md` remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, preserve any unique ignored-file prose in the current contract and remove that file, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
 
 C2 is closed. PR #924 moved durable checkpoint ownership to the coding
 composition root; PRs #925-#927 made recovery reads and constructors explicitly
@@ -1445,11 +1478,14 @@ Scope:
    remove it, and verify every connected companion sends `key_algorithm`;
 5. perform the P1 cutover for all 21 configured agent entries and 20 distinct
    personal workspaces, resolve the one pre-existing `AGENTS.md` collision
-   explicitly, and validate every active profile before restart;
+   explicitly, reconcile unique prose from ignored root personal-profile files
+   into the current contract before removing them, and validate every active
+   profile before restart;
 6. delete previous and older browser schema generators, empty-algorithm
    normalization, optional execution-profile admission, runtime-less companion
-   construction, expired wire aliases, and their old fixtures in one removal
-   release; and
+   construction, expired wire aliases, and production fixtures that keep those
+   paths callable in one removal release. Retain test-only exact old-contract
+   fixtures that prove the strict runtime rejects them; and
 7. deploy and verify the removal release, then exercise rollback using the
    matching binary and same-time state backup.
 
@@ -1465,10 +1501,12 @@ Current gate snapshot from the 2026-08-26/27 re-audit:
    omits it, and the stopped P3 plus pending/revoked records need deliberate
    retention decisions;
 5. the version 4 and `AGENTS.md` cutover is complete, with seven inert policy
-   entries left to delete;
+   entries left to delete and one ignored root `IDENTITY.md` requiring an
+   explicit content reconciliation and removal after backup;
 6. PR #901 implements the strict removal; all nine checks pass on head
    `f7defbb2`, while its last clean review covers the earlier `5c6a493a` head
-   and the now-advanced base requires a final refresh, validation, and review;
+   and current main at `fffaa005` requires a final refresh, validation, review,
+   and new merge approval; a read-only merge simulation is conflict-free;
    and
 7. removal deployment and rollback have not started.
 
