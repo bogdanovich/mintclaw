@@ -1577,6 +1577,9 @@ The coding agent can sustain a long thread, compact in the background, recover
 from emergency overflow, restart from files, and continue with both historical
 intent and current repository state. This is the minimum beta gate.
 
+Completed by the [P5 exit record](local-coding-agent-p5-exit.md). P6 and later
+roadmap work remains outside this beta continuity gate.
+
 ### P6 — Coding UX completion
 
 Goal: fill the high-value gaps after the native TUI and continuity model are
