@@ -188,13 +188,20 @@ const (
 // ContextCompressLifecyclePayload pairs every attempted compaction without
 // carrying raw errors or summarized content into frontend observations.
 type ContextCompressLifecyclePayload struct {
-	AttemptID          string
-	ThreadID           string
-	TranscriptRevision uint64
-	TranscriptCount    int
-	Reason             ContextCompressReason
-	Status             ContextCompressLifecycleStatus
-	TokensSaved        int
+	AttemptID           string
+	ThreadID            string
+	TranscriptRevision  uint64
+	TranscriptCount     int
+	Reason              ContextCompressReason
+	Status              ContextCompressLifecycleStatus
+	TokensSaved         int
+	TokensBefore        int
+	TokensAfter         int
+	TokenCountsObserved bool
+	SummariesCreated    int
+	LeafSummaries       int
+	CondensedSummaries  int
+	Duration            time.Duration
 }
 
 type ContextSnapshotPayload struct {

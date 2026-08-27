@@ -180,6 +180,34 @@ func TestComposerSubmitsMultilineUnicodeAndNavigatesHistory(t *testing.T) {
 	}
 }
 
+func TestComposerRemainsUsableDuringBackgroundCompaction(t *testing.T) {
+	controller := newController(t)
+	controller.CompactionUpdate(frontend.CompactionState{
+		Reason: "proactive_budget", Status: frontend.CompactionRunning, Background: true,
+	})
+	model, err := NewModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.snapshot.Activity != frontend.ActivityIdle {
+		t.Fatalf("background compaction changed activity to %q", model.snapshot.Activity)
+	}
+	model.composer.SetValue("continue while context is compacted")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("background compaction blocked composer submission")
+	}
+	message, ok := command().(SubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit command message = %T", message)
+	}
+	updateModel(t, model, message)
+	if got := controller.submittedPrompts(); !slices.Equal(got, []string{"continue while context is compacted"}) {
+		t.Fatalf("submitted prompts = %#v", got)
+	}
+}
+
 func TestComposerKeepsLargePastedDraftWhenSubmissionFails(t *testing.T) {
 	controller := newController(t)
 	controller.submitErr = errors.New("admission rejected")

@@ -22,6 +22,9 @@ func (m *Model) statusLine() string {
 	case strings.TrimSpace(m.workspaceNotice) != "":
 		segments = append(segments, m.workspaceNotice)
 	}
+	if compaction := compactionFooter(state.LastCompaction); compaction != "" {
+		segments = append(segments, compaction)
+	}
 	details := []string{
 		"project " + projectStatus(state.Metadata.ProjectRoot),
 		"branch " + branchStatus(state.Workspace),
@@ -33,6 +36,66 @@ func (m *Model) statusLine() string {
 		segments = append(segments, "Ctrl+R refresh")
 	}
 	return prioritizedStatusLine(m.width, activity, segments)
+}
+
+func compactionFooter(compaction *frontend.CompactionState) string {
+	if compaction == nil {
+		return ""
+	}
+	mode := compactionMode(compaction)
+	switch compaction.Status {
+	case frontend.CompactionRunning, frontend.CompactionProgress:
+		return mode + " compaction " + string(compaction.Status) + " (" + compactionTrigger(compaction.Reason) + ")"
+	case frontend.CompactionCompleted:
+		if compaction.TokenCountsObserved {
+			return fmt.Sprintf(
+				"%s compacted %s→%s · %s saved",
+				mode,
+				formatTokenCount(compaction.TokensBefore),
+				formatTokenCount(compaction.TokensAfter),
+				formatTokenCount(compaction.TokensSaved),
+			)
+		}
+		return fmt.Sprintf("%s compaction completed · %s saved", mode, formatTokenCount(compaction.TokensSaved))
+	case frontend.CompactionNoProgress:
+		return mode + " compaction made no progress; work can continue"
+	case frontend.CompactionFailed:
+		if compaction.Background {
+			return "background compaction failed; work can continue"
+		}
+		return "blocking compaction failed; current turn may stop"
+	case frontend.CompactionInterrupted:
+		if compaction.Background {
+			return "background compaction interrupted; work can continue"
+		}
+		return "blocking compaction interrupted; current turn may stop"
+	default:
+		return mode + " compaction " + boundedSingleLine(string(compaction.Status), 128)
+	}
+}
+
+func compactionMode(compaction *frontend.CompactionState) string {
+	if compaction != nil && compaction.Background {
+		return "background"
+	}
+	return "blocking"
+}
+
+func compactionTrigger(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "manual":
+		return "manual request"
+	case "llm_retry":
+		return "context overflow retry"
+	case "proactive_budget":
+		return "context pressure"
+	case "summarize":
+		return "background summarization"
+	case "":
+		return "unknown"
+	default:
+		return boundedSingleLine(reason, 128)
+	}
 }
 
 func prioritizedStatusLine(width int, activity string, optional []string) string {

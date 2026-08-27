@@ -224,15 +224,22 @@ func (a *Adapter) projectCompaction(
 	status frontend.CompactionStatus,
 ) {
 	a.projector.CompactionUpdate(frontend.CompactionState{
-		TurnID:             turnID,
-		AttemptID:          safeToken(payload.AttemptID),
-		ThreadID:           safeToken(payload.ThreadID),
-		TranscriptRevision: payload.TranscriptRevision,
-		TranscriptCount:    payload.TranscriptCount,
-		Reason:             safeToken(string(payload.Reason)),
-		Status:             status,
-		TokensSaved:        payload.TokensSaved,
-		Background:         backgroundCompaction(turnID, payload.Reason),
+		TurnID:              turnID,
+		AttemptID:           safeToken(payload.AttemptID),
+		ThreadID:            safeToken(payload.ThreadID),
+		TranscriptRevision:  payload.TranscriptRevision,
+		TranscriptCount:     payload.TranscriptCount,
+		Reason:              safeToken(string(payload.Reason)),
+		Status:              status,
+		TokensSaved:         payload.TokensSaved,
+		TokensBefore:        payload.TokensBefore,
+		TokensAfter:         payload.TokensAfter,
+		TokenCountsObserved: payload.TokenCountsObserved,
+		SummariesCreated:    payload.SummariesCreated,
+		LeafSummaries:       payload.LeafSummaries,
+		CondensedSummaries:  payload.CondensedSummaries,
+		Duration:            payload.Duration,
+		Background:          backgroundCompaction(turnID, payload.Reason),
 	})
 }
 

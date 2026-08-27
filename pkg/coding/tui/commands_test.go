@@ -213,7 +213,9 @@ func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	}
 	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
 	enterPanelCommand(t, model, "/status")
-	if !strings.Contains(model.View(), "last compaction: completed, 256 tokens saved") {
+	if !strings.Contains(model.View(), "last compaction: completed (blocking)") ||
+		!strings.Contains(model.View(), "compaction tokens saved: 256") ||
+		!strings.Contains(model.View(), "compaction continuation: work can continue") {
 		t.Fatalf("compact did not converge through current view: %q", model.View())
 	}
 
