@@ -6,7 +6,10 @@ Work derived from [`browser-capability.md`](browser-capability.md). B0, B1, N1,
 N2, B2, and the admitted B3/node P7 companion vertical slice are merged,
 deployed, and live-validated. The B3 authority and scope are recorded in
 [Browser Capability B3 And Node P7 Admission](browser-capability-b3-p7-admission.md).
-The first BF1 shared-action slice is admitted in
+The selected six-phase BF1/BF2 continuation is complete; final production
+evidence is recorded in
+[Browser Functional Parity Phase 6 And Global Completion Evidence](../operations/browser-functional-parity-phase6-evidence.md).
+The first BF1 shared-action slice was admitted in
 [Browser Capability BF1 Scroll Parity Admission](browser-capability-bf1-scroll-admission.md).
 The next selected slice is admitted in
 [Browser Capability BF1 Click Parity Admission](browser-capability-bf1-click-admission.md).
@@ -14,13 +17,15 @@ The typed keyboard and option-selection slice is admitted in
 [Browser Capability BF1 Press And Select Parity Admission](browser-capability-bf1-press-select-admission.md).
 The tabs, frames, and popups slice is admitted in
 [Browser Capability BF1 Tabs, Frames, And Popups Admission](browser-capability-bf1-contexts-admission.md).
-The selected six-phase continuation is governed by
+The completed six-phase continuation is governed by
 [Browser Functional Parity Execution Goal](browser-functional-parity-execution-goal.md).
 B2 completion evidence is recorded in
 [Browser Capability B2 Deployment Evidence](../operations/browser-capability-b2-deployment-evidence.md).
-All other later slices remain proposals until an operator selects one and a separate
-admission fixes its exact scope, authority, completion evidence, and stop
-conditions.
+BF3 privileged Playwright execution remains a separate opt-in proposal. BF4
+managed runtime distribution remains deferred until measured evidence meets an
+admission trigger. All other later slices remain proposals until an operator
+selects one and a separate admission fixes its exact scope, authority,
+completion evidence, and stop conditions.
 
 The roadmap is ordered by immediate risk reduction, operator value, and
 security dependencies rather than calendar dates. Browser milestone labels use
@@ -677,7 +682,7 @@ The browser specialist can perform the ordinary interactions needed by real
 listing, messaging, search, booking, and purchasing workflows through the same
 first-party contract on gateway and companion targets.
 
-#### Proposed scope
+#### Shipped scope
 
 - complete companion parity for `navigate`, `click`, `fill`, `select`,
   `press`, `scroll`, and `dialog`;
@@ -703,25 +708,25 @@ Gateway and companion sessions can use the browser features required to
 complete and diagnose real workflows without returning large or sensitive raw
 driver output to the model.
 
-#### Proposed scope
+#### Shipped Phase 6 scope and explicit deferrals
 
 - complete screenshot, upload, and bounded download parity over the existing
   artifact contracts;
-- add page and element screenshots, PDF capture where supported, Playwright
-  traces, HAR, and optional video as retained artifact references;
+- add page and element screenshots as retained artifact references;
 - add bounded, redacted console errors, failed-request summaries, download
   metadata, and page-crash diagnostics;
 - bound semantic snapshots at their source and define truncation, chunking,
   backpressure, and timeout budgets for production WSS delivery so that a
   successfully completed action is not quarantined solely because its page
   snapshot is large;
-- add operator-configured viewport, device emulation, locale, timezone,
-  geolocation, clipboard, and browser permissions without accepting hidden
-  policy values from model arguments;
 - expose capability and limit differences through `browser_targets` before a
   session starts; and
 - prove digest, size, ownership, expiry, cleanup, and cross-session isolation
   for every new artifact type.
+
+PDF, Playwright trace, HAR, video, viewport and device emulation, locale,
+timezone, geolocation, clipboard, and browser permissions were explicitly
+deferred by the Phase 6 admission and are not part of the shipped BF2 slice.
 
 Raw response bodies, cookies, storage state, credentials, profile paths, CDP
 endpoints, and unbounded console or network streams remain unavailable to the
@@ -820,19 +825,16 @@ driver may evolve independently:
 This evolution belongs to the B5 driver seam unless BF4 evidence shows that a
 driver-protocol change is required to make managed distribution viable.
 
-### Suggested delivery sequence
+### Delivery status and next choices
 
-1. Admit BF1 in small vertical slices, beginning with companion parity for the
-   existing first-party actions before adding new action kinds.
-2. Deliver BF2 artifact and diagnostic features through existing P2/B2
-   contracts, one artifact class at a time.
-3. Validate a real dry-run listing or form workflow that uses tabs or frames,
-   form interaction, screenshot evidence, and upload or download on each
-   placement.
-4. Admit BF3 only after ordinary parity is sufficient to distinguish a true
-   escape-hatch need from a missing typed action.
-5. Leave BF4 deferred until measured deployment evidence satisfies one of its
-   admission triggers.
+1. BF1 ordinary interaction and document parity is complete.
+2. The admitted BF2 screenshot, transfer, diagnostic, and large-snapshot slice
+   is complete on gateway and companion placements.
+3. BF3 may be admitted only for a demonstrated privileged escape-hatch need;
+   common browser behavior should continue to become typed first-party
+   actions.
+4. BF4 remains deferred until measured deployment evidence satisfies one of
+   its admission triggers.
 
 ### Completion evidence
 
