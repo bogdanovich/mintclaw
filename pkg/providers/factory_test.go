@@ -8,6 +8,16 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
+func TestCreateProviderRequiresCurrentModelList(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelList = nil
+
+	_, _, err := CreateProvider(cfg)
+	if err == nil || err.Error() != "no models configured: add an entry to model_list" {
+		t.Fatalf("CreateProvider() error = %v", err)
+	}
+}
+
 func TestCreateProviderReturnsHTTPProviderForOpenRouter(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = "test-openrouter"

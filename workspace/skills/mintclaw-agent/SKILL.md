@@ -630,14 +630,15 @@ MintClaw is model-centric. The key fields are:
 
 - `agents.defaults.model_name`
 - `model_list`
-- optional `provider`
-- runtime `model`
+- required `provider` on every model entry
+- required provider-native `model` on every model entry
 
 Important behavior:
 
 - `agents.defaults.model_name` must match a `model_name` entry in `model_list`.
-- If `provider` is set, MintClaw sends `model` to that provider unchanged.
-- If `provider` is omitted, legacy `provider/model` parsing is still supported.
+- MintClaw sends `model` to the configured `provider` unchanged.
+- A provider-native model ID may contain slashes; MintClaw does not split it to
+  infer a provider.
 
 ### Sessions and Routing
 
