@@ -2148,15 +2148,6 @@ func TestProjectedInteractionCallbackPersistsFinalReplyTarget(t *testing.T) {
 }
 
 func TestParentOnlyTaskApprovalDeliversOnlyParentResult(t *testing.T) {
-	testParentOnlyTaskApprovalDelivery(t, false)
-}
-
-func TestParentOnlyTaskApprovalRecoversAfterLegacyAcknowledgement(t *testing.T) {
-	testParentOnlyTaskApprovalDelivery(t, true)
-}
-
-func testParentOnlyTaskApprovalDelivery(t *testing.T, seedLegacyAcknowledgement bool) {
-	t.Helper()
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
@@ -2212,30 +2203,6 @@ func testParentOnlyTaskApprovalDelivery(t *testing.T, seedLegacyAcknowledgement 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if seedLegacyAcknowledgement {
-		legacyCtx := al.withInteractionFinalTransaction(t.Context(), registry, workspace, record)
-		if err := al.deliverInteractionControlsRemoved(
-			legacyCtx,
-			workspace,
-			record,
-			bus.InboundContext{
-				Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", MessageID: "recovery-message",
-			},
-		); err != nil {
-			t.Fatal(err)
-		}
-		if err := outboundTransactionFromContext(legacyCtx).awaitDelivered(legacyCtx); err != nil {
-			t.Fatal(err)
-		}
-		select {
-		case acknowledgement := <-manager.sent:
-			if acknowledgement.Content != "Response recorded." {
-				t.Fatalf("legacy approval acknowledgement = %#v", acknowledgement)
-			}
-		case <-time.After(time.Second):
-			t.Fatal("legacy approval acknowledgement was not delivered")
-		}
-	}
 	if err := al.deliverInteractionFinal(
 		t.Context(), registry, workspace, record,
 		bus.InboundContext{
@@ -2270,16 +2237,12 @@ func testParentOnlyTaskApprovalDelivery(t *testing.T, seedLegacyAcknowledgement 
 		t.Fatalf("parent-only approval task = %#v", task)
 	}
 	resolved, _ := registry.Get(record.ID)
-	wantDeliveryIDs := 1
-	if seedLegacyAcknowledgement {
-		wantDeliveryIDs = 2
-	}
-	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) != wantDeliveryIDs {
+	if resolved.Status != interactions.StatusResolved || len(resolved.FinalDeliveryIDs) != 1 {
 		t.Fatalf("parent-only approval interaction = %#v", resolved)
 	}
 	for _, deliveryID := range resolved.FinalDeliveryIDs {
 		intent, err := coordinator.Get(deliveryID)
-		if err != nil || intent.Status != outbox.StatusDelivered {
+		if err != nil || intent.Status != outbox.StatusDelivered || intent.Identity.Ordinal != 0 {
 			t.Fatalf("approval delivery %q = (%+v, %v)", deliveryID, intent, err)
 		}
 	}
