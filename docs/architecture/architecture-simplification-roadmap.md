@@ -161,7 +161,7 @@ reset criteria.
 | X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
 | P1 | #881 | Merged; all five live configs and 20 personal workspaces now use the current contract, while final cleanup and deployment evidence remain in R1 |
 | R1 node-identity bridge | #899 | Merged and deployed to `p5a-canary`, `p3-canary`, and `ab-local-test`; `vpn` and the strict adapter-removal release remain open |
-| Pre-Z1 strict audit | #911 merged; #901 and one interaction-delivery cleanup remain open | Dead Seahorse shutdown state is removed; optional node execution profiles and one historical outbox ordinal reservation were identified after the earlier source-only audit |
+| Pre-Z1 strict audit | #911 and #914 merged; #901 remains live-gated | Dead Seahorse shutdown state and the historical approval ordinal reservation are removed; optional node execution-profile admission is included in the reviewed strict R1 release |
 | Z1 | Not yet applicable | Open |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
@@ -287,10 +287,9 @@ after that bounded local operation:
 - strict removal PR #901 is refreshed at `5c6a493a`: in addition to the
   browser-catalogue and empty-algorithm reset, it now requires the current
   authenticated execution profile and deletes the unused runtime-less
-  companion constructor. All nine checks pass on this exact head; a fresh
-  review is in progress because the earlier clean review and rocket predate
-  the added scope. It remains intentionally unmerged until both that review
-  and the live R1 gates below are satisfied.
+  companion constructor. All nine checks pass on this exact head, and the
+  fresh exact-head review found no independent high-confidence issue. It
+  remains intentionally unmerged until the live R1 gates below are satisfied.
 
 ### Re-audit corrections
 
@@ -320,8 +319,7 @@ separation and standards alignment.
 | --- | --- | --- | --- |
 | Previous and older browser catalogue schemas | Temporary first-party wire adapter | The sole connected browser companion advertises the current catalogue and has completed a functional open, observe, navigate, status, and close canary; the gateway-local driver is also healthy, and PR #901 deletes the historical generators | Architecture simplification owner; merge and deploy PR #901 after the remaining R1 fleet and backup gates |
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
-| Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema | Architecture simplification owner; complete fresh review, then merge and deploy PR #901 at the coordinated R1 reset |
-| Parent-only Telegram approval ordinal reservation | Temporary persisted-delivery identity adapter | One branch and its sole `reserveOrdinal` helper skip ordinal zero because a recently removed version wrote a standalone acknowledgement there. The live interaction registry has 21 terminal records and no active interaction delivery intent, so no deployed recovery still needs the skipped identity | Architecture simplification owner; remove the reservation, helper, and legacy-acknowledgement fixture in the next focused agent/outbox packet before Z1 |
+| Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its exact-head checks and review are complete | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
 
 The current implementation also has one non-blocking observability follow-up,
@@ -377,10 +375,10 @@ time. The later pre-Z1 source and live-state audit corrected that conclusion:
   per-conversation join map and caller cancellation remain current ownership;
 - PR #901 now also removes the optional execution-profile validator and the
   unused runtime-less companion constructor identified above;
-- the parent-only Telegram approval ordinal reservation is the only newly
-  identified historical persisted-delivery adapter still in production. Its
-  bounded removal gate is registered above rather than treating every current
-  outbox recovery path as compatibility debt;
+- PR #914 removed the parent-only Telegram approval ordinal reservation, its
+  sole `reserveOrdinal` helper, and the historical acknowledgement fixture.
+  Current parent-only approvals now use ordinal zero, while question-control
+  cleanup and normal durable outbox recovery remain unchanged;
 - the earlier Git-tracked zero-caller scan after PR #896 otherwise still found
   no further caller-free production facade; the remaining low-reference
   exports are active entry points, documented extension contracts, or
@@ -1330,8 +1328,8 @@ Current gate snapshot from the 2026-08-26/27 re-audit:
    the wire and the pending/revoked records need a deliberate decision;
 5. the version 4 and `AGENTS.md` cutover is complete, with seven inert policy
    entries left to delete;
-6. PR #901 implements the strict removal, all nine checks pass on `5c6a493a`,
-   and fresh review of the expanded exact head remains in progress; and
+6. PR #901 implements the strict removal; all nine checks and fresh review pass
+   on exact head `5c6a493a`; and
 7. removal deployment and rollback have not started.
 
 Exit criteria:
