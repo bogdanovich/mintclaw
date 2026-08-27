@@ -297,7 +297,7 @@ func formatToolDiscoveryRule(useBM25, useRegex bool) string {
 }
 
 func (cb *ContextBuilder) BuildSystemPrompt() string {
-	return renderPromptPartsLegacy(cb.BuildSystemPromptParts())
+	return renderPromptParts(cb.BuildSystemPromptParts())
 }
 
 func (cb *ContextBuilder) BuildSystemPromptParts() []PromptPart {
@@ -527,7 +527,7 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 	}
 	if cb.codingPrompt {
 		parts := cb.buildSystemPromptPartsForProfile(systemPromptBuildOptions{})
-		staticPrompt := renderPromptPartsLegacy(parts)
+		staticPrompt := renderPromptParts(parts)
 		return staticPrompt, []providers.ContentBlock{promptContentBlock(PromptPart{
 			ID:      "kernel.coding_static",
 			Layer:   PromptLayerKernel,
@@ -560,7 +560,7 @@ func (cb *ContextBuilder) buildSystemPromptForRequest(
 		AllowedSkills:       req.AllowedSkills,
 		AllowedTools:        req.AllowedTools,
 	})
-	staticPrompt := renderPromptPartsLegacy(parts)
+	staticPrompt := renderPromptParts(parts)
 	blocks := make([]providers.ContentBlock, 0, len(parts))
 	for _, part := range parts {
 		if strings.TrimSpace(part.Content) == "" {
