@@ -112,8 +112,15 @@ func newSeahorseAgentRuntime(
 		}
 	}
 	complete := providerToCompleteFn(agent.Provider, agent.Model)
-	engine, err := storeFactory.NewSeahorseEngine(seahorseConfig, complete)
-	if err != nil && al.codingProfile != nil && isCorruptSQLiteError(err) {
+	constructionCtx := context.Background()
+	if al.codingProfile != nil {
+		constructionCtx = al.codingProfile.constructionCtx
+	}
+	if constructionCtx == nil {
+		constructionCtx = context.Background()
+	}
+	engine, err := storeFactory.NewSeahorseEngine(constructionCtx, seahorseConfig, complete)
+	if err != nil && al.codingProfile != nil && seahorse.IsCorruptDatabaseError(err) {
 		if resetErr := resetCodingDerivedDatabase(seahorseConfig.DBPath); resetErr != nil {
 			return nil, errors.Join(
 				fmt.Errorf("open corrupt derived context store: %w", err),
@@ -124,7 +131,7 @@ func newSeahorseAgentRuntime(
 			"db_path": seahorseConfig.DBPath,
 			"error":   err.Error(),
 		})
-		engine, err = storeFactory.NewSeahorseEngine(seahorseConfig, complete)
+		engine, err = storeFactory.NewSeahorseEngine(constructionCtx, seahorseConfig, complete)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create engine: %w", err)
@@ -141,24 +148,6 @@ func newSeahorseAgentRuntime(
 			seahorseReconciliationGeneration,
 		),
 	}, nil
-}
-
-func isCorruptSQLiteError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	for _, marker := range []string{
-		"file is not a database",
-		"database disk image is malformed",
-		"database is malformed",
-		"database corruption",
-	} {
-		if strings.Contains(message, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func resetCodingDerivedDatabase(dbPath string) error {

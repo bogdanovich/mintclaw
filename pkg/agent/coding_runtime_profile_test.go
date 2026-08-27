@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -80,6 +81,19 @@ type trackingCodingRuntimeStoreFactory struct {
 	engines         []*seahorse.Engine
 }
 
+type deadlineCodingRuntimeStoreFactory struct {
+	defaultCodingRuntimeStoreFactory
+}
+
+func (f deadlineCodingRuntimeStoreFactory) NewSeahorseEngine(
+	ctx context.Context,
+	_ seahorse.Config,
+	_ seahorse.CompleteFn,
+) (*seahorse.Engine, error) {
+	<-ctx.Done()
+	return nil, context.Cause(ctx)
+}
+
 func TestNewCodingRuntimeProfileWithStoreFactoryRejectsTypedNil(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
@@ -124,6 +138,7 @@ func (f *trackingCodingRuntimeStoreFactory) NewSessionStore(layout CodingRuntime
 }
 
 func (f *trackingCodingRuntimeStoreFactory) NewSeahorseEngine(
+	ctx context.Context,
 	config seahorse.Config,
 	complete seahorse.CompleteFn,
 ) (*seahorse.Engine, error) {
@@ -136,7 +151,7 @@ func (f *trackingCodingRuntimeStoreFactory) NewSeahorseEngine(
 	if f.nilSeahorse {
 		return nil, nil
 	}
-	engine, err := f.delegate.NewSeahorseEngine(config, complete)
+	engine, err := f.delegate.NewSeahorseEngine(ctx, config, complete)
 	if err == nil {
 		f.engines = append(f.engines, engine)
 	}
@@ -1339,6 +1354,9 @@ func TestNewCodingAgentLoopRoutesCodingSeahorseToStateRoot(t *testing.T) {
 }
 
 func TestNewCodingAgentLoopRebuildsMissingOrCorruptSeahorseFromCanonicalHistory(t *testing.T) {
+	if seahorse.IsCorruptDatabaseError(errors.New("database corruption reported by an injected factory")) {
+		t.Fatal("untyped error text authorized derived database replacement")
+	}
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
 	layout, err := NewCodingRuntimeLayout(
@@ -1399,6 +1417,41 @@ func TestNewCodingAgentLoopRebuildsMissingOrCorruptSeahorseFromCanonicalHistory(
 		t.Fatal(err)
 	}
 	openAndAssert("corrupt")
+}
+
+func TestNewCodingAgentLoopContextBoundsDerivedStoreConstruction(t *testing.T) {
+	root := t.TempDir()
+	layout, err := NewCodingRuntimeLayout(
+		"thread-deadline",
+		filepath.Join(root, "project"),
+		filepath.Join(root, "state"),
+		[]string{filepath.Join(root, "project")},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(
+		deadlineCodingRuntimeStoreFactory{},
+		CodingRuntimeBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	loop, err := NewCodingAgentLoopContext(
+		ctx,
+		config.DefaultConfig(),
+		bus.NewMessageBus(),
+		&mockProvider{},
+		profile,
+	)
+	if loop != nil || !errors.Is(err, context.DeadlineExceeded) {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewCodingAgentLoopContext() = loop %T error %v, want deadline", loop, err)
+	}
 }
 
 func TestCodingRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing.T) {

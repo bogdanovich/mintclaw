@@ -1,6 +1,7 @@
 package seahorse
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -27,8 +28,12 @@ const (
 
 // runSchema creates the current database schema. It is safe to run repeatedly.
 func runSchema(db *sql.DB) error {
+	return runSchemaContext(context.Background(), db)
+}
+
+func runSchemaContext(ctx context.Context, db *sql.DB) error {
 	// Check FTS5 support before creating tables
-	if err := checkFTS5Support(db); err != nil {
+	if err := checkFTS5SupportContext(ctx, db); err != nil {
 		return fmt.Errorf("FTS5 check: %w", err)
 	}
 
@@ -159,12 +164,13 @@ func runSchema(db *sql.DB) error {
 	}
 
 	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
+		if _, err := db.ExecContext(ctx, s); err != nil {
 			return err
 		}
 	}
 
-	if _, err := db.Exec(
+	if _, err := db.ExecContext(
+		ctx,
 		`CREATE INDEX IF NOT EXISTS idx_conversations_route_scope
 		 ON conversations(agent_id, route_scope_key)`,
 	); err != nil {
@@ -175,32 +181,32 @@ func runSchema(db *sql.DB) error {
 
 // checkFTS5Support verifies that SQLite has FTS5 with trigram tokenizer enabled.
 // This is required for full-text search with CJK (Chinese, Japanese, Korean) support.
-func checkFTS5Support(db *sql.DB) error {
+func checkFTS5SupportContext(ctx context.Context, db *sql.DB) error {
 	// Check if FTS5 is compiled in
 	var fts5Enabled int
-	err := db.QueryRow(`SELECT sqlite_compileoption_used('ENABLE_FTS5')`).Scan(&fts5Enabled)
+	err := db.QueryRowContext(ctx, `SELECT sqlite_compileoption_used('ENABLE_FTS5')`).Scan(&fts5Enabled)
 	if err != nil {
 		// sqlite_compileoption_used might not exist in older SQLite
 		// Try a different approach: create a test FTS5 table
-		_, testErr := db.Exec(sqlCheckFTS5Available)
+		_, testErr := db.ExecContext(ctx, sqlCheckFTS5Available)
 		if testErr != nil {
 			return fmt.Errorf("SQLite FTS5 not available: %w (required for full-text search)", testErr)
 		}
-		_, _ = db.Exec(sqlDropFTS5Check)
+		_, _ = db.ExecContext(ctx, sqlDropFTS5Check)
 	} else if fts5Enabled == 0 {
 		return fmt.Errorf("SQLite was compiled without FTS5 support (required for full-text search)")
 	}
 
 	// Check if trigram tokenizer is available by trying to create a test table
 	// Not all SQLite builds include the trigram tokenizer
-	_, err = db.Exec(sqlCheckTrigramAvailable)
+	_, err = db.ExecContext(ctx, sqlCheckTrigramAvailable)
 	if err != nil {
 		logger.WarnCF("seahorse", "SQLite trigram tokenizer not available, CJK search may be limited",
 			map[string]any{"error": err.Error()})
 		// Trigram is not strictly required, just better for CJK
 		// Don't return error, just log warning
 	} else {
-		_, _ = db.Exec(sqlDropTrigramCheck)
+		_, _ = db.ExecContext(ctx, sqlDropTrigramCheck)
 	}
 
 	return nil

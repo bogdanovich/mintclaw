@@ -496,6 +496,15 @@ func TestCodingDirectTurnOptionsEnableBackgroundCompactionForPersistentRuntime(t
 	}
 }
 
+func TestCodingHistoryCursorHonorsRecoveryContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := codingHistoryCursor(ctx, session.NewMemoryStore(), "coding:thread")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("codingHistoryCursor() error = %v, want canceled", err)
+	}
+}
+
 func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
@@ -547,8 +556,8 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	metadataState.save = func(thread.Metadata) error {
 		return &fileutil.CommittedWriteError{Err: committedCause}
 	}
-	if err := runtime.persistTurnOutcome("committed preview", outcome, nil); !errors.Is(err, committedCause) {
-		t.Fatalf("committed persistTurnOutcome() error = %v, want %v", err, committedCause)
+	if err := runtime.persistTurnOutcome("committed preview", outcome, nil); err != nil {
+		t.Fatalf("committed persistTurnOutcome() error = %v, want deferred warning", err)
 	}
 	snapshot, err = projector.Snapshot(t.Context())
 	if err != nil {
@@ -560,6 +569,9 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 			metadataState.metadata.Preview,
 			snapshot.Metadata.Preview,
 		)
+	}
+	if !errors.Is(metadataState.accumulatedError(), committedCause) {
+		t.Fatalf("deferred metadata warning = %v, want %v", metadataState.accumulatedError(), committedCause)
 	}
 }
 

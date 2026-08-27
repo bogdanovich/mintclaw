@@ -119,6 +119,12 @@ func openNativeCodingRuntime(
 	projector *frontend.Projector,
 	compactionObserver func(agent.ContextCompressLifecyclePayload),
 ) (*nativeCodingRuntime, error) {
+	constructionCtx := context.Background()
+	cancelConstruction := func() {}
+	if projector != nil {
+		constructionCtx, cancelConstruction = context.WithTimeout(constructionCtx, codingResumeRecoveryTimeout)
+	}
+	defer cancelConstruction()
 	layout, err := runtimeLayoutFor(request.Store, request.Metadata)
 	if err != nil {
 		return nil, err
@@ -156,7 +162,8 @@ func openNativeCodingRuntime(
 		}
 		messageBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, request.Metadata.SessionKey))
 	}
-	loop, err := agent.NewCodingAgentLoop(
+	loop, err := agent.NewCodingAgentLoopContext(
+		constructionCtx,
 		runtimeCfg,
 		messageBus,
 		provider,
@@ -190,9 +197,7 @@ func openNativeCodingRuntime(
 		streaming:       projector != nil,
 	}
 	if projector != nil {
-		recoveryCtx, cancelRecovery := context.WithTimeout(context.Background(), codingResumeRecoveryTimeout)
-		_, recoveryErr := loop.PrepareCodingSession(recoveryCtx, request.Metadata.SessionKey)
-		cancelRecovery()
+		_, recoveryErr := loop.PrepareCodingSession(constructionCtx, request.Metadata.SessionKey)
 		if recoveryErr != nil {
 			_ = runtime.Close()
 			return nil, fmt.Errorf(
@@ -202,7 +207,7 @@ func openNativeCodingRuntime(
 			)
 		}
 		runtime.historyCursor, err = codingHistoryCursor(
-			context.Background(),
+			constructionCtx,
 			runtime.sessions,
 			request.Metadata.SessionKey,
 		)
@@ -351,10 +356,16 @@ func (s *codingMetadataState) update(
 		return s.metadata, fmt.Errorf("coding metadata store is unavailable")
 	}
 	saveErr := save(candidate)
-	if saveErr == nil || fileutil.IsCommittedWriteError(saveErr) {
+	if saveErr == nil {
 		s.metadata = candidate
+		return s.metadata, nil
 	}
-	return s.metadata, saveErr
+	if !fileutil.IsCommittedWriteError(saveErr) {
+		return s.metadata, saveErr
+	}
+	s.metadata = candidate
+	s.err = errors.Join(s.err, saveErr)
+	return s.metadata, nil
 }
 
 func (s *codingMetadataState) observeCompaction(payload agent.ContextCompressLifecyclePayload) {

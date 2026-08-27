@@ -2,6 +2,7 @@ package seahorse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,19 @@ import (
 	"testing"
 	"time"
 )
+
+func TestNewEngineContextHonorsCanceledSetup(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	dbPath := filepath.Join(t.TempDir(), "must-not-exist.db")
+	engine, err := NewEngineContext(ctx, Config{DBPath: dbPath}, nil)
+	if !errors.Is(err, context.Canceled) || engine != nil {
+		t.Fatalf("NewEngineContext() = engine %v error %v, want canceled", engine, err)
+	}
+	if _, statErr := os.Stat(dbPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("canceled setup created database: %v", statErr)
+	}
+}
 
 // helper: open a test engine with in-memory DB
 func newTestEngine(t *testing.T) *Engine {

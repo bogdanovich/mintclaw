@@ -3,6 +3,7 @@ package seahorse
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +12,8 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	modernsqlite "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	toolpolicy "github.com/bogdanovich/mintclaw/pkg/tools/policy"
@@ -118,6 +120,16 @@ type RetrievalEngine struct {
 	config Config
 }
 
+// IsCorruptDatabaseError reports only typed SQLite corruption/not-a-database results.
+func IsCorruptDatabaseError(err error) bool {
+	var sqliteErr *modernsqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	primaryCode := sqliteErr.Code() & 0xff
+	return primaryCode == sqlite3.SQLITE_CORRUPT || primaryCode == sqlite3.SQLITE_NOTADB
+}
+
 // AbsoluteBudgetsEnabled reports whether separate context budgets are configured.
 func (e *Engine) AbsoluteBudgetsEnabled() bool {
 	return e != nil && e.config.absoluteBudgetsEnabled()
@@ -130,6 +142,17 @@ func (r *RetrievalEngine) Store() *Store {
 
 // NewEngine creates a new short-term memory engine.
 func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
+	return NewEngineContext(context.Background(), config, completeFn)
+}
+
+// NewEngineContext creates an engine while bounding SQLite setup and schema work.
+func NewEngineContext(ctx context.Context, config Config, completeFn CompleteFn) (*Engine, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("create engine: context is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	if err := config.validateBudgets(); err != nil {
 		return nil, fmt.Errorf("invalid context budget config: %w", err)
 	}
@@ -155,20 +178,20 @@ func NewEngine(config Config, completeFn CompleteFn) (*Engine, error) {
 	}
 
 	// Configure SQLite for concurrent access
-	if _, err := db.Exec("PRAGMA journal_mode = WAL;"); err != nil {
+	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000;"); err != nil {
+	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set busy_timeout: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA synchronous = NORMAL;"); err != nil {
+	if _, err := db.ExecContext(ctx, "PRAGMA synchronous = NORMAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set synchronous: %w", err)
 	}
 
-	if err := runSchema(db); err != nil {
+	if err := runSchemaContext(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("schema: %w", err)
 	}
