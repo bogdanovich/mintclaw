@@ -38,6 +38,7 @@ var codingRuntimeToolNames = []string{
 
 type trackedRuntimeSessionStore struct {
 	session.SessionStore
+	session.HistoryRevisionProvider
 	closeCount int
 }
 
@@ -134,7 +135,10 @@ func (f *trackingCodingRuntimeStoreFactory) NewSessionStore(layout CodingRuntime
 	if err != nil {
 		return nil, err
 	}
-	tracked := &trackedRuntimeSessionStore{SessionStore: store}
+	tracked := &trackedRuntimeSessionStore{
+		SessionStore:            store,
+		HistoryRevisionProvider: store.(session.HistoryRevisionProvider),
+	}
 	f.sessions = append(f.sessions, tracked)
 	return tracked, nil
 }
@@ -163,6 +167,8 @@ func (f *trackingCodingRuntimeStoreFactory) NewSeahorseEngine(
 type delayedCorruptionCodingRuntimeStoreFactory struct {
 	defaultCodingRuntimeStoreFactory
 	seahorseCalls int
+	failAt        int
+	engines       []*seahorse.Engine
 }
 
 func (f *delayedCorruptionCodingRuntimeStoreFactory) NewSeahorseEngine(
@@ -171,7 +177,14 @@ func (f *delayedCorruptionCodingRuntimeStoreFactory) NewSeahorseEngine(
 	complete seahorse.CompleteFn,
 ) (*seahorse.Engine, error) {
 	f.seahorseCalls++
-	return f.defaultCodingRuntimeStoreFactory.NewSeahorseEngine(ctx, config, complete)
+	if f.seahorseCalls == f.failAt {
+		return nil, errInjectedRuntimeStore
+	}
+	engine, err := f.defaultCodingRuntimeStoreFactory.NewSeahorseEngine(ctx, config, complete)
+	if err == nil {
+		f.engines = append(f.engines, engine)
+	}
+	return engine, err
 }
 
 type countingStatefulProvider struct {
@@ -1443,7 +1456,7 @@ func TestNewCodingAgentLoopRebuildsMissingOrCorruptSeahorseFromCanonicalHistory(
 	openAndAssert("corrupt")
 }
 
-func TestPrepareCodingSessionRebuildsCorruptionDiscoveredDuringReconciliation(t *testing.T) {
+func TestNewCodingAgentLoopRebuildsCorruptionBeforePublishingRetrievalTools(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
 	layout, err := NewCodingRuntimeLayout(
@@ -1512,11 +1525,16 @@ func TestPrepareCodingSessionRebuildsCorruptionDiscoveredDuringReconciliation(t 
 		t.Fatal(err)
 	}
 	t.Cleanup(loop.Close)
-	if _, err := loop.PrepareCodingSession(t.Context(), sessionKey); err != nil {
-		t.Fatalf("PrepareCodingSession() error = %v", err)
-	}
 	if factory.seahorseCalls != 2 {
 		t.Fatalf("Seahorse engine opens = %d, want corrupt open plus one rebuild", factory.seahorseCalls)
+	}
+	manager, ok := loop.contextManager.(*seahorseContextManager)
+	if !ok {
+		t.Fatalf("coding context manager = %T, want Seahorse", loop.contextManager)
+	}
+	runtime := singleTestRuntime(manager)
+	if len(factory.engines) != 2 || runtime.engine != factory.engines[1] || runtime.engine == factory.engines[0] {
+		t.Fatalf("coding recovery did not publish the replacement engine as one owned unit")
 	}
 	instance := loop.GetRegistry().GetDefaultAgent()
 	assembled, err := loop.contextManager.Assemble(t.Context(), &AssembleRequest{
@@ -1538,6 +1556,91 @@ func TestPrepareCodingSessionRebuildsCorruptionDiscoveredDuringReconciliation(t 
 	})
 	if result.IsError || !strings.Contains(result.ContentForLLM(), "canonical recovery objective") {
 		t.Fatalf("short_grep after database rebuild = %#v", result)
+	}
+}
+
+func TestNewCodingAgentLoopDoesNotPublishRetrievalToolsWhenRebuildFails(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewCodingRuntimeLayout(
+		"thread-failed-rebuild",
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionKey := "coding:thread-failed-rebuild"
+	sessions, err := initRuntimeSessionStore(layout.StatePaths().SessionsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.ReplaceTurnHistory(t.Context(), sessionKey, []providers.Message{{
+		Role: "user", Content: "canonical recovery objective",
+	}}); err != nil {
+		_ = sessions.Close()
+		t.Fatal(err)
+	}
+	if err := sessions.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cleanProfile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanLoop, err := NewCodingAgentLoop(
+		t.Context(),
+		config.DefaultConfig(),
+		bus.NewMessageBus(),
+		&mockProvider{},
+		cleanProfile,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanLoop.Close()
+	corruptSQLiteTableRootPage(
+		t,
+		filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db"),
+		"reconciliation_state",
+	)
+
+	factory := &delayedCorruptionCodingRuntimeStoreFactory{failAt: 2}
+	profile, err := NewCodingRuntimeProfileWithStoreFactory(
+		factory,
+		CodingRuntimeBinding{AgentID: "main", Layout: layout},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var capturedRegistry *AgentRegistry
+	loop, err := NewCodingAgentLoop(
+		t.Context(),
+		config.DefaultConfig(),
+		bus.NewMessageBus(),
+		&mockProvider{},
+		profile,
+		func(al *AgentLoop) { capturedRegistry = al.registry },
+	)
+	if !errors.Is(err, errInjectedRuntimeStore) {
+		if loop != nil {
+			loop.Close()
+		}
+		t.Fatalf("NewCodingAgentLoop() error = %v, want injected rebuild failure", err)
+	}
+	if loop != nil {
+		t.Fatalf("NewCodingAgentLoop() loop = %T, want nil", loop)
+	}
+	if factory.seahorseCalls != 2 {
+		t.Fatalf("Seahorse engine opens = %d, want corrupt open plus failed rebuild", factory.seahorseCalls)
+	}
+	if capturedRegistry == nil || capturedRegistry.GetDefaultAgent() == nil {
+		t.Fatal("construction did not expose the captured test registry")
+	}
+	tools := capturedRegistry.GetDefaultAgent().Tools
+	if tools.HasRegistered("short_grep") || tools.HasRegistered("short_expand") {
+		t.Fatalf("failed rebuild published retrieval tools: %v", tools.List())
 	}
 }
 

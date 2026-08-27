@@ -44,7 +44,9 @@ type seahorseAgentRuntime struct {
 	workspace                string
 	agentID                  string
 	reconciliationGeneration int
-	rebuildCorruptDatabase   func(context.Context, error) error
+	config                   seahorse.Config
+	complete                 seahorse.CompleteFn
+	rebuildStoreFactory      CodingRuntimeStoreFactory
 }
 
 const seahorseReconciliationGeneration = 2
@@ -90,9 +92,9 @@ func newSeahorseContextManager(
 			return nil, fmt.Errorf("seahorse: create runtime for agent %q: %w", agentID, err)
 		}
 		mgr.runtimes[agentID] = runtime
-		retrieval := runtime.engine.GetRetrieval()
-		registerToolIfAllowed(agent, seahorse.NewGrepTool(retrieval))
-		registerToolIfAllowed(agent, seahorse.NewExpandTool(retrieval))
+		if !al.usesCodingProfile() {
+			registerSeahorseRetrievalTools(agent, runtime)
+		}
 	}
 	if len(mgr.runtimes) == 0 {
 		return nil, fmt.Errorf("seahorse: no agents available")
@@ -116,8 +118,10 @@ func newSeahorseAgentRuntime(
 		return nil, fmt.Errorf("custom dbPath is not supported with multiple agents")
 	}
 	storeFactory := CodingRuntimeStoreFactory(defaultCodingRuntimeStoreFactory{})
+	var rebuildStoreFactory CodingRuntimeStoreFactory
 	if al.codingProfile != nil {
 		storeFactory = al.codingProfile.storeFactory
+		rebuildStoreFactory = storeFactory
 		seahorseConfig.SummaryPolicy = seahorse.SummaryPolicyCodingV1
 		if seahorseConfig.DBPath != dbPath {
 			return nil, fmt.Errorf("custom dbPath is not supported with a coding profile")
@@ -144,31 +148,50 @@ func newSeahorseAgentRuntime(
 	if engine == nil {
 		return nil, fmt.Errorf("create engine: coding store factory returned a nil Seahorse engine")
 	}
+	if engine.GetRetrieval() == nil {
+		_ = engine.Close()
+		return nil, fmt.Errorf("create engine: coding store factory returned an engine without retrieval")
+	}
 	runtime := &seahorseAgentRuntime{
-		engine:    engine,
-		sessions:  agent.Sessions,
-		workspace: agent.Workspace,
-		agentID:   agent.ID,
+		engine:              engine,
+		sessions:            agent.Sessions,
+		workspace:           agent.Workspace,
+		agentID:             agent.ID,
+		config:              seahorseConfig,
+		complete:            complete,
+		rebuildStoreFactory: rebuildStoreFactory,
 		reconciliationGeneration: seahorseConfig.SummaryPolicy.ReconciliationGeneration(
 			seahorseReconciliationGeneration,
 		),
 	}
-	if al.codingProfile != nil {
-		runtime.rebuildCorruptDatabase = func(ctx context.Context, cause error) error {
-			return runtime.engine.RebuildCorruptDatabaseContext(
-				ctx,
-				cause,
-				func(
-					factoryCtx context.Context,
-					config seahorse.Config,
-					completeFn seahorse.CompleteFn,
-				) (*seahorse.Engine, error) {
-					return storeFactory.NewSeahorseEngine(factoryCtx, config, completeFn)
-				},
-			)
-		}
-	}
 	return runtime, nil
+}
+
+func registerSeahorseRetrievalTools(
+	agent *AgentInstance,
+	runtime *seahorseAgentRuntime,
+) {
+	retrieval := runtime.engine.GetRetrieval()
+	registerToolIfAllowed(agent, seahorse.NewGrepTool(retrieval))
+	registerToolIfAllowed(agent, seahorse.NewExpandTool(retrieval))
+}
+
+func (m *seahorseContextManager) publishCodingRetrievalTools() error {
+	for _, agentID := range m.al.registry.ListAgentIDs() {
+		agent, ok := m.al.registry.GetAgent(agentID)
+		if !ok || agent == nil {
+			continue
+		}
+		runtime, err := m.runtimeFor(agent)
+		if err != nil {
+			return err
+		}
+		if runtime.engine == nil || runtime.engine.GetRetrieval() == nil {
+			return fmt.Errorf("seahorse: coding runtime for agent %q has no retrieval engine", agentID)
+		}
+		registerSeahorseRetrievalTools(agent, runtime)
+	}
+	return nil
 }
 
 func seahorseAgentDBPath(agent *AgentInstance, defaultAgentID string) string {
@@ -507,7 +530,9 @@ func (m *seahorseContextManager) Close() error {
 	m.closeOnce.Do(func() {
 		closeErrors := make([]error, 0, len(m.runtimes))
 		for _, runtime := range m.runtimes {
-			closeErrors = append(closeErrors, runtime.engine.Close())
+			if runtime.engine != nil {
+				closeErrors = append(closeErrors, runtime.engine.Close())
+			}
 		}
 		m.closeErr = errors.Join(closeErrors...)
 	})
@@ -714,19 +739,19 @@ func (m *seahorseContextManager) prepareCodingSession(
 	ctx context.Context,
 	agent *AgentInstance,
 	sessionKey string,
-) (memory.HistoryRevision, error) {
+) error {
 	runtime, err := m.runtimeFor(agent)
 	if err != nil {
-		return memory.HistoryRevision{}, err
+		return err
 	}
 	unlock := m.lockSession(runtime.agentID + ":" + sessionKey)
 	defer unlock()
-	revision, err := m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
-	if err == nil || runtime.rebuildCorruptDatabase == nil || !seahorse.IsCorruptDatabaseError(err) {
-		return revision, err
+	_, err = m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+	if err == nil || runtime.rebuildStoreFactory == nil || !seahorse.IsCorruptDatabaseError(err) {
+		return err
 	}
-	if rebuildErr := runtime.rebuildCorruptDatabase(ctx, err); rebuildErr != nil {
-		return memory.HistoryRevision{}, errors.Join(
+	if rebuildErr := runtime.replaceCorruptEngine(ctx, err); rebuildErr != nil {
+		return errors.Join(
 			fmt.Errorf("read corrupt derived context store: %w", err),
 			rebuildErr,
 		)
@@ -734,7 +759,47 @@ func (m *seahorseContextManager) prepareCodingSession(
 	logger.WarnCF("seahorse", "rebuilding corrupt coding context store after reconciliation read", map[string]any{
 		"agent_id": runtime.agentID,
 	})
-	return m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+	_, err = m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+	return err
+}
+
+func (r *seahorseAgentRuntime) replaceCorruptEngine(ctx context.Context, cause error) error {
+	if !seahorse.IsCorruptDatabaseError(cause) {
+		return fmt.Errorf("rebuild corrupt database: typed SQLite corruption is required: %w", cause)
+	}
+	if ctx == nil {
+		return fmt.Errorf("rebuild corrupt database: context is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if r.engine == nil || r.rebuildStoreFactory == nil {
+		return fmt.Errorf("rebuild corrupt database: coding runtime owner is unavailable")
+	}
+	closed := r.engine
+	if err := closed.Close(); err != nil {
+		return fmt.Errorf("close corrupt database: %w", err)
+	}
+	r.engine = nil
+	if err := seahorse.ResetCorruptDatabase(r.config.DBPath, cause); err != nil {
+		return err
+	}
+	replacement, err := r.rebuildStoreFactory.NewSeahorseEngine(ctx, r.config, r.complete)
+	if err != nil {
+		return fmt.Errorf("reopen rebuilt database: %w", err)
+	}
+	if replacement == nil {
+		return fmt.Errorf("reopen rebuilt database: coding store factory returned a nil engine")
+	}
+	if replacement == closed {
+		return fmt.Errorf("reopen rebuilt database: coding store factory returned the closed engine")
+	}
+	if replacement.GetRetrieval() == nil {
+		_ = replacement.Close()
+		return fmt.Errorf("reopen rebuilt database: coding store factory returned an engine without retrieval")
+	}
+	r.engine = replacement
+	return nil
 }
 
 func (m *seahorseContextManager) prepareCodingSessionOnce(

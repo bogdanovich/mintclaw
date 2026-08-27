@@ -118,14 +118,6 @@ func newAgentLoopWithRegistry(
 	if !al.isolatedToolBootstrap {
 		registerSharedTools(al, cfg, msgBus, registry, provider)
 	}
-	if al.usesCodingProfile() {
-		for _, agentID := range registry.ListAgentIDs() {
-			if instance, ok := registry.GetAgent(agentID); ok && instance != nil {
-				instance.Tools.Seal()
-				instance.admitTrustedToolRegistry()
-			}
-		}
-	}
 	al.turns.replaceRunner(newTurnRunner(al, cfg))
 
 	return al
@@ -201,7 +193,21 @@ func NewCodingAgentLoop(
 		al.Close()
 		return nil, fmt.Errorf("repair coding tool lifecycle: %w", err)
 	}
+	if err := al.prepareCodingContext(ctx); err != nil {
+		al.Close()
+		return nil, fmt.Errorf("prepare coding context: %w", err)
+	}
+	al.sealCodingTools()
 	return al, nil
+}
+
+func (al *AgentLoop) sealCodingTools() {
+	for _, agentID := range al.registry.ListAgentIDs() {
+		if instance, ok := al.registry.GetAgent(agentID); ok && instance != nil {
+			instance.Tools.Seal()
+			instance.admitTrustedToolRegistry()
+		}
+	}
 }
 
 func registerSharedTools(

@@ -4,31 +4,32 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"github.com/bogdanovich/mintclaw/pkg/memory"
 )
 
-// PrepareCodingSession reconciles disposable context state with the canonical
-// thread before a resumed frontend accepts another turn.
-func (al *AgentLoop) PrepareCodingSession(
-	ctx context.Context,
-	sessionKey string,
-) (memory.HistoryRevision, error) {
-	if al == nil || al.contextManager == nil {
-		return memory.HistoryRevision{}, fmt.Errorf("coding context manager is unavailable")
-	}
-	sessionKey = strings.TrimSpace(sessionKey)
-	agent, _, err := al.codingRuntimeTargetForSession(sessionKey)
-	if err != nil {
-		return memory.HistoryRevision{}, err
-	}
-	reconciler, ok := al.contextManager.(interface {
-		prepareCodingSession(context.Context, *AgentInstance, string) (memory.HistoryRevision, error)
-	})
+type codingContextPreparer interface {
+	prepareCodingSession(context.Context, *AgentInstance, string) error
+	publishCodingRetrievalTools() error
+}
+
+func (al *AgentLoop) prepareCodingContext(ctx context.Context) error {
+	reconciler, ok := al.contextManager.(codingContextPreparer)
 	if !ok {
-		return memory.HistoryRevision{}, fmt.Errorf("coding context manager cannot reconcile durable history")
+		return nil
 	}
-	return reconciler.prepareCodingSession(ctx, agent, sessionKey)
+	for _, agentID := range al.registry.ListAgentIDs() {
+		agent, found := al.registry.GetAgent(agentID)
+		if !found || agent == nil {
+			continue
+		}
+		layout, found := al.codingProfile.AgentLayout(agentID)
+		if !found {
+			return fmt.Errorf("coding context has no admitted layout for agent %q", agentID)
+		}
+		if err := reconciler.prepareCodingSession(ctx, agent, "coding:"+layout.ThreadID()); err != nil {
+			return err
+		}
+	}
+	return reconciler.publishCodingRetrievalTools()
 }
 
 // CompactCodingSession performs explicit foreground compaction for the one
