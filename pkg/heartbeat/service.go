@@ -48,19 +48,9 @@ type HeartbeatService struct {
 	doneChan  chan struct{}
 }
 
-// NewHeartbeatService creates a new heartbeat service
-func NewHeartbeatService(workspace string, intervalMinutes int, enabled bool) *HeartbeatService {
-	return NewHeartbeatServiceWithState(
-		workspace,
-		intervalMinutes,
-		enabled,
-		state.NewManager(workspace),
-	)
-}
-
-// NewHeartbeatServiceWithState creates a heartbeat service that shares the
+// NewHeartbeatService creates a heartbeat service that shares the
 // runtime-owned current state manager with other gateway services.
-func NewHeartbeatServiceWithState(
+func NewHeartbeatService(
 	workspace string,
 	intervalMinutes int,
 	enabled bool,

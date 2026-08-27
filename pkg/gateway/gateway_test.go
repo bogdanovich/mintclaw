@@ -21,6 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/heartbeat"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/state"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -590,6 +591,7 @@ func TestConfigReloadPreflightRejectsBeforeQuiesce(t *testing.T) {
 				current.WorkspacePath(),
 				current.Heartbeat.Interval,
 				true,
+				state.NewManager(current.WorkspacePath()),
 			)
 			if err := heartbeatService.Start(); err != nil {
 				t.Fatalf("HeartbeatService.Start() error = %v", err)

@@ -70,7 +70,7 @@ func NewCronTool(
 	var execTool *ExecTool
 	if execEnabled {
 		var err error
-		execTool, err = NewExecToolWithConfig(workspace, restrict, cfg)
+		execTool, err = NewExecTool(workspace, restrict, cfg)
 		if err != nil {
 			return nil, fmt.Errorf("unable to configure exec tool: %w", err)
 		}
