@@ -39,44 +39,28 @@ func newTestCompactionEngine(t *testing.T) (*CompactionEngine, *Store, int64) {
 	s := &Store{db: db}
 	ctx := context.Background()
 	conv, _ := s.GetOrCreateConversation(ctx, "test:compact")
-	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	ce := &CompactionEngine{
-		store:          s,
-		config:         Config{},
-		complete:       mockCompleteFn,
-		shutdownCtx:    shutdownCtx,
-		shutdownCancel: shutdownCancel,
+		store:    s,
+		config:   Config{},
+		complete: mockCompleteFn,
 	}
 	convID := conv.ConversationID
-	// Ensure async goroutines are stopped before database is closed.
-	// Register cleanup here (after openTestDB) so it runs BEFORE openTestDB's db.Close().
+	// Keep direct background compaction tests from outliving the test database.
 	t.Cleanup(func() {
-		shutdownCancel()
-		// Wait for async condensed goroutine to finish (poll condensing map)
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			if _, exists := ce.condensing.Load(convID); !exists {
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+		waitForCondensed(ce, convID, 2*time.Second)
 	})
 	return ce, s, conv.ConversationID
 }
 
 // newTestCompactionEngineWithStore creates a CompactionEngine with existing store.
-// Note: Caller is responsible for calling shutdownCancel when test ends.
 func newTestCompactionEngineWithStore(
 	s *Store, complete CompleteFn,
-) (ce *CompactionEngine, shutdownCancel context.CancelFunc) {
-	shutdownCtx, cancel := context.WithCancel(context.Background())
+) *CompactionEngine {
 	return &CompactionEngine{
-		store:          s,
-		config:         Config{},
-		complete:       complete,
-		shutdownCtx:    shutdownCtx,
-		shutdownCancel: cancel,
-	}, cancel
+		store:    s,
+		config:   Config{},
+		complete: complete,
+	}
 }
 
 // mockCompleteFn returns a simple summary for testing
@@ -414,11 +398,7 @@ func TestCompactCondensedDoesNotOrphanSummaryWhenCandidatesRemovedConcurrently(t
 		return "Condensed summary.", nil
 	}
 
-	ce, cancel := newTestCompactionEngineWithStore(s, slowComplete)
-	t.Cleanup(func() {
-		cancel()
-		time.Sleep(100 * time.Millisecond)
-	})
+	ce := newTestCompactionEngineWithStore(s, slowComplete)
 
 	// Run compactCondensed in background
 	type compactResult struct {
@@ -936,7 +916,7 @@ func TestGenerateLeafSummaryEscalationToAggressive(t *testing.T) {
 	}
 
 	s := openTestStore(t)
-	ce, _ := newTestCompactionEngineWithStore(s, escalateComplete)
+	ce := newTestCompactionEngineWithStore(s, escalateComplete)
 
 	msgs := []Message{
 		{Role: "user", Content: "hello world", TokenCount: 10},
@@ -983,7 +963,7 @@ func TestGenerateLeafSummaryEscalatesWhenLevel1MissesTarget(t *testing.T) {
 	}
 
 	s := openTestStore(t)
-	ce, _ := newTestCompactionEngineWithStore(s, escalateComplete)
+	ce := newTestCompactionEngineWithStore(s, escalateComplete)
 
 	msgs := []Message{
 		{Role: "user", Content: "hello world", TokenCount: 500},
@@ -1013,7 +993,7 @@ func TestGenerateLeafSummaryAcceptsContentAtTargetBoundary(t *testing.T) {
 	}
 
 	s := openTestStore(t)
-	ce, _ := newTestCompactionEngineWithStore(s, complete)
+	ce := newTestCompactionEngineWithStore(s, complete)
 
 	msgs := []Message{
 		{Role: "user", Content: "hello world", TokenCount: 286},
@@ -1039,7 +1019,7 @@ func TestGenerateLeafSummaryEscalationToTruncation(t *testing.T) {
 	}
 
 	s := openTestStore(t)
-	ce, _ := newTestCompactionEngineWithStore(s, emptyComplete)
+	ce := newTestCompactionEngineWithStore(s, emptyComplete)
 
 	msgs := []Message{
 		{Role: "user", Content: "hello world from test", TokenCount: 10},
@@ -1084,7 +1064,7 @@ func TestGenerateCondensedSummaryEscalation(t *testing.T) {
 	}
 
 	s := openTestStore(t)
-	ce, _ := newTestCompactionEngineWithStore(s, emptyComplete)
+	ce := newTestCompactionEngineWithStore(s, emptyComplete)
 
 	summaries := []Summary{
 		{SummaryID: "sum_a", Content: "first summary text", TokenCount: 50},
@@ -1107,7 +1087,7 @@ func TestGenerateCondensedSummaryHardCapsOversizedOutput(t *testing.T) {
 	}
 
 	s := openTestStore(t)
-	ce, _ := newTestCompactionEngineWithStore(s, oversizedComplete)
+	ce := newTestCompactionEngineWithStore(s, oversizedComplete)
 
 	content, err := ce.generateCondensedSummary(context.Background(), []Summary{
 		{SummaryID: "sum_a", Content: "source summary", TokenCount: 1000},
@@ -1141,11 +1121,7 @@ func TestCompactWaitsForCondensed(t *testing.T) {
 	conv, _ := s.GetOrCreateConversation(ctx, "test:async")
 	convID := conv.ConversationID
 
-	ce, cancel := newTestCompactionEngineWithStore(s, slowComplete)
-	t.Cleanup(func() {
-		cancel()
-		time.Sleep(100 * time.Millisecond)
-	})
+	ce := newTestCompactionEngineWithStore(s, slowComplete)
 
 	// Create enough leaf summaries for condensation + fresh tail
 	for i := 0; i < CondensedMinFanout; i++ {
@@ -1213,9 +1189,8 @@ func TestCompactJoinedDedup(t *testing.T) {
 	conv, _ := s.GetOrCreateConversation(ctx, "test:dedup")
 	convID := conv.ConversationID
 
-	ce, cancel := newTestCompactionEngineWithStore(s, slowComplete)
+	ce := newTestCompactionEngineWithStore(s, slowComplete)
 	t.Cleanup(func() {
-		cancel()
 		waitForCondensed(ce, convID, 2*time.Second)
 	})
 
