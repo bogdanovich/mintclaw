@@ -4,7 +4,32 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 )
+
+// PrepareCodingSession reconciles disposable context state with the canonical
+// thread before a resumed frontend accepts another turn.
+func (al *AgentLoop) PrepareCodingSession(
+	ctx context.Context,
+	sessionKey string,
+) (memory.HistoryRevision, error) {
+	if al == nil || al.contextManager == nil {
+		return memory.HistoryRevision{}, fmt.Errorf("coding context manager is unavailable")
+	}
+	sessionKey = strings.TrimSpace(sessionKey)
+	agent, _, err := al.codingRuntimeTargetForSession(sessionKey)
+	if err != nil {
+		return memory.HistoryRevision{}, err
+	}
+	reconciler, ok := al.contextManager.(interface {
+		prepareCodingSession(context.Context, *AgentInstance, string) (memory.HistoryRevision, error)
+	})
+	if !ok {
+		return memory.HistoryRevision{}, fmt.Errorf("coding context manager cannot reconcile durable history")
+	}
+	return reconciler.prepareCodingSession(ctx, agent, sessionKey)
+}
 
 // CompactCodingSession performs explicit foreground compaction for the one
 // coding owner admitted by sessionKey. An active turn must finish or be

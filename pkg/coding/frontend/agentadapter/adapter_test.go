@@ -22,7 +22,15 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventBus := runtimeevents.NewBus()
-	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	var observedCompactions []agent.ContextCompressLifecyclePayload
+	wrapped, err := WrapBus(
+		eventBus,
+		projector,
+		"thread-1",
+		func(payload agent.ContextCompressLifecyclePayload) {
+			observedCompactions = append(observedCompactions, payload)
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +106,10 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 		snapshot.LastCompaction.ThreadID != "thread-1" || snapshot.LastCompaction.TranscriptRevision != 9 ||
 		snapshot.LastCompaction.TranscriptCount != 14 {
 		t.Fatalf("compaction correlation = %+v", snapshot.LastCompaction)
+	}
+	if len(observedCompactions) != 3 ||
+		observedCompactions[len(observedCompactions)-1].Status != agent.ContextCompressLifecycleCompleted {
+		t.Fatalf("compaction observations = %+v", observedCompactions)
 	}
 	if strings.Contains(snapshot.Tools[0].Arguments, "secret command") ||
 		snapshot.Tools[0].Arguments != "fields: command, timeout" {

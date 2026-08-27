@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
@@ -464,9 +465,8 @@ func TestNativeControllerDoesNotReusePriorOutcomeAfterPreTurnFailure(t *testing.
 				return nil, injected
 			},
 		},
-		store:     store,
-		projector: projector,
-		now:       time.Now,
+		projector:     projector,
+		metadataState: newCodingMetadataState(store, metadata, time.Now),
 	}
 	if err := runtime.persistTurnOutcome("first stored prompt", codingTurnOutcome{
 		Model: metadata.Model, Provider: metadata.Provider, PromptStored: true,
@@ -515,13 +515,18 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	injected := errors.New("injected pre-commit save failure")
+	metadataState := newCodingMetadataState(
+		nil,
+		metadata,
+		func() time.Time { return metadata.UpdatedAt.Add(time.Minute) },
+	)
+	metadataState.save = func(thread.Metadata) error { return injected }
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: &nativeCodingRuntime{
 			metadata: metadata, model: metadata.Model, provider: metadata.Provider,
 		},
-		projector: projector,
-		now:       func() time.Time { return metadata.UpdatedAt.Add(time.Minute) },
-		save:      func(thread.Metadata) error { return injected },
+		projector:     projector,
+		metadataState: metadataState,
 	}
 	outcome := codingTurnOutcome{Model: metadata.Model, Provider: metadata.Provider, PromptStored: true}
 	if err := runtime.persistTurnOutcome("unstored preview", outcome, nil); !errors.Is(err, injected) {
@@ -531,15 +536,15 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.metadata.Preview != metadata.Preview || snapshot.Metadata.Preview != metadata.Preview {
+	if metadataState.metadata.Preview != metadata.Preview || snapshot.Metadata.Preview != metadata.Preview {
 		t.Fatalf(
 			"failed save leaked metadata: runtime=%q snapshot=%q",
-			runtime.metadata.Preview,
+			metadataState.metadata.Preview,
 			snapshot.Metadata.Preview,
 		)
 	}
 	committedCause := errors.New("injected post-rename sync failure")
-	runtime.save = func(thread.Metadata) error {
+	metadataState.save = func(thread.Metadata) error {
 		return &fileutil.CommittedWriteError{Err: committedCause}
 	}
 	if err := runtime.persistTurnOutcome("committed preview", outcome, nil); !errors.Is(err, committedCause) {
@@ -549,10 +554,10 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.metadata.Preview != "committed preview" || snapshot.Metadata.Preview != "committed preview" {
+	if metadataState.metadata.Preview != "committed preview" || snapshot.Metadata.Preview != "committed preview" {
 		t.Fatalf(
 			"committed metadata was not retained: runtime=%q snapshot=%q",
-			runtime.metadata.Preview,
+			metadataState.metadata.Preview,
 			snapshot.Metadata.Preview,
 		)
 	}
@@ -613,6 +618,96 @@ func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing
 	_, err = runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
 	if !errors.Is(err, frontend.ErrTranscriptHistoryChanged) {
 		t.Fatalf("replacement page error = %v", err)
+	}
+}
+
+func TestCodingMetadataStatePersistsOnlyCompletedCompactionCheckpoint(t *testing.T) {
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "compact safely", createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	completedAt := createdAt.Add(time.Minute)
+	state := newCodingMetadataState(store, metadata, func() time.Time { return completedAt })
+	state.observeCompaction(agent.ContextCompressLifecyclePayload{
+		Status: agent.ContextCompressLifecycleNoProgress, TranscriptRevision: 6,
+	})
+	unchanged, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Compaction != nil {
+		t.Fatalf("no-progress checkpoint = %+v, want nil", unchanged.Compaction)
+	}
+	state.observeCompaction(agent.ContextCompressLifecyclePayload{
+		Status: agent.ContextCompressLifecycleCompleted, TranscriptRevision: 7,
+	})
+	persisted, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Compaction == nil || persisted.Compaction.Revision != 7 ||
+		!persisted.Compaction.At.Equal(completedAt) || !persisted.UpdatedAt.Equal(completedAt) {
+		t.Fatalf("completed checkpoint = %+v updated=%s", persisted.Compaction, persisted.UpdatedAt)
+	}
+}
+
+func TestCodingMetadataStateKeepsCompactionDerivedWhenMetadataWriteFails(t *testing.T) {
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "compact safely", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected metadata checkpoint failure")
+	state := newCodingMetadataState(nil, metadata, time.Now)
+	state.save = func(thread.Metadata) error { return injected }
+	state.observeCompaction(agent.ContextCompressLifecyclePayload{
+		Status: agent.ContextCompressLifecycleCompleted, TranscriptRevision: 9,
+	})
+	if !errors.Is(state.accumulatedError(), injected) {
+		t.Fatalf("checkpoint error = %v, want %v", state.accumulatedError(), injected)
+	}
+	if state.metadata.Compaction != nil {
+		t.Fatalf("failed metadata write became authoritative: %+v", state.metadata.Compaction)
+	}
+}
+
+func TestHydratedTranscriptEntriesShowRecoveredToolUncertaintyWithoutOutput(t *testing.T) {
+	for _, test := range []struct {
+		status providers.ToolResultStatus
+		want   string
+	}{
+		{status: providers.ToolResultStatusInterrupted, want: "[interrupted]"},
+		{status: providers.ToolResultStatusUnknown, want: "[unknown]"},
+		{status: providers.ToolResultStatusUnresolved, want: "[unknown]"},
+	} {
+		entries := hydratedTranscriptEntries(4, providers.Message{
+			Role:             "tool",
+			Content:          "SECRET TOOL OUTPUT",
+			ToolCallID:       "private-call-id",
+			ToolResultStatus: test.status,
+		})
+		if len(entries) != 1 || entries[0].Kind != frontend.EntryTool ||
+			!strings.Contains(entries[0].Text, test.want) {
+			t.Fatalf("status %q entries = %+v", test.status, entries)
+		}
+		if strings.Contains(entries[0].Text, "SECRET") || strings.Contains(entries[0].Text, "private-call-id") {
+			t.Fatalf("recovery entry leaked canonical tool data: %+v", entries[0])
+		}
 	}
 }
 

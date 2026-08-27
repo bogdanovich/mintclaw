@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -110,10 +111,21 @@ func newSeahorseAgentRuntime(
 			return nil, fmt.Errorf("custom dbPath is not supported with a coding profile")
 		}
 	}
-	engine, err := storeFactory.NewSeahorseEngine(
-		seahorseConfig,
-		providerToCompleteFn(agent.Provider, agent.Model),
-	)
+	complete := providerToCompleteFn(agent.Provider, agent.Model)
+	engine, err := storeFactory.NewSeahorseEngine(seahorseConfig, complete)
+	if err != nil && al.codingProfile != nil && isCorruptSQLiteError(err) {
+		if resetErr := resetCodingDerivedDatabase(seahorseConfig.DBPath); resetErr != nil {
+			return nil, errors.Join(
+				fmt.Errorf("open corrupt derived context store: %w", err),
+				resetErr,
+			)
+		}
+		logger.WarnCF("seahorse", "rebuilding corrupt coding context store from canonical history", map[string]any{
+			"db_path": seahorseConfig.DBPath,
+			"error":   err.Error(),
+		})
+		engine, err = storeFactory.NewSeahorseEngine(seahorseConfig, complete)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create engine: %w", err)
 	}
@@ -129,6 +141,33 @@ func newSeahorseAgentRuntime(
 			seahorseReconciliationGeneration,
 		),
 	}, nil
+}
+
+func isCorruptSQLiteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"file is not a database",
+		"database disk image is malformed",
+		"database is malformed",
+		"database corruption",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func resetCodingDerivedDatabase(dbPath string) error {
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove corrupt coding context file %q: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func seahorseAgentDBPath(agent *AgentInstance, defaultAgentID string) string {
@@ -651,6 +690,23 @@ func (m *seahorseContextManager) ensureReconciled(
 	runtime.sessions = store
 	_, err = m.ensureReconciledRuntime(ctx, runtime, sessionKey)
 	return err
+}
+
+func (m *seahorseContextManager) prepareCodingSession(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+) (memory.HistoryRevision, error) {
+	runtime, err := m.runtimeFor(agent)
+	if err != nil {
+		return memory.HistoryRevision{}, err
+	}
+	unlock := m.lockSession(runtime.agentID + ":" + sessionKey)
+	defer unlock()
+	if err := m.ensureConversationProvenance(ctx, runtime, sessionKey); err != nil {
+		return memory.HistoryRevision{}, err
+	}
+	return m.ensureReconciledRuntime(ctx, runtime, sessionKey)
 }
 
 func (m *seahorseContextManager) ensureReconciledRuntime(

@@ -1338,6 +1338,69 @@ func TestNewCodingAgentLoopRoutesCodingSeahorseToStateRoot(t *testing.T) {
 	}
 }
 
+func TestNewCodingAgentLoopRebuildsMissingOrCorruptSeahorseFromCanonicalHistory(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	layout, err := NewCodingRuntimeLayout(
+		"thread-corrupt-context",
+		executionRoot,
+		filepath.Join(root, "state"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := initRuntimeSessionStore(layout.StatePaths().SessionsRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionKey := "coding:thread-corrupt-context"
+	if err := sessions.ReplaceTurnHistory(t.Context(), sessionKey, []providers.Message{
+		{Role: "user", Content: "canonical objective survives"},
+	}); err != nil {
+		_ = sessions.Close()
+		t.Fatal(err)
+	}
+	if err := sessions.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db")
+	openAndAssert := func(stage string) {
+		t.Helper()
+		loop, openErr := NewCodingAgentLoop(config.DefaultConfig(), bus.NewMessageBus(), &mockProvider{}, profile)
+		if openErr != nil {
+			t.Fatalf("%s NewCodingAgentLoop() error = %v", stage, openErr)
+		}
+		instance := loop.GetRegistry().GetDefaultAgent()
+		assembled, assembleErr := loop.contextManager.Assemble(t.Context(), &AssembleRequest{
+			Agent: instance, SessionKey: sessionKey, Budget: 16_000, MaxTokens: 256,
+		})
+		if assembleErr != nil {
+			loop.Close()
+			t.Fatalf("%s Assemble() error = %v", stage, assembleErr)
+		}
+		if len(assembled.History) != 1 || assembled.History[0].Content != "canonical objective survives" {
+			loop.Close()
+			t.Fatalf("%s rebuilt history = %#v", stage, assembled.History)
+		}
+		loop.Close()
+	}
+
+	openAndAssert("initial")
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatal(err)
+	}
+	openAndAssert("missing")
+	if err := os.WriteFile(dbPath, []byte("not a sqlite database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	openAndAssert("corrupt")
+}
+
 func TestCodingRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing.T) {
 	root := t.TempDir()
 	bindings := make([]CodingRuntimeBinding, 0, 2)
