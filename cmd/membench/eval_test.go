@@ -142,6 +142,30 @@ func TestAggregateMetricsAllSentinel(t *testing.T) {
 	}
 }
 
+func TestComputeModeAggPreservesAllInvalidF1(t *testing.T) {
+	qa := []QAResult{
+		{Category: 1, TokenF1: -1.0, HitRate: 0.5},
+		{Category: 1, TokenF1: -1.0, HitRate: 0.3},
+	}
+	results := []EvalResult{{
+		Mode:      "test",
+		SampleID:  "all-invalid",
+		QAResults: qa,
+		Agg:       aggregateMetrics(qa),
+	}}
+
+	got := computeModeAgg(results)
+	if got.ValidF1Count != 0 {
+		t.Errorf("ValidF1Count = %d, want 0", got.ValidF1Count)
+	}
+	if got.OverallF1 != 0 {
+		t.Errorf("OverallF1 = %.6f, want 0", got.OverallF1)
+	}
+	if got.ByCategory[1].ValidF1Count != 0 {
+		t.Errorf("ByCategory[1].ValidF1Count = %d, want 0", got.ByCategory[1].ValidF1Count)
+	}
+}
+
 func TestComputeModeAggSentinelWeighting(t *testing.T) {
 	results := []EvalResult{
 		{
