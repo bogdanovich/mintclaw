@@ -6,16 +6,24 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
+	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-func TestSubagentManager_SetLLMOptions_AppliesToChildRunner(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	manager.SetLLMOptions(2048, 0.6)
+func TestSubagentManager_AppliesLLMDefaultsToChildRunner(t *testing.T) {
 	spawner := &mockSpawner{}
-	manager.SetSpawner(spawner)
+	manager, err := NewSubagentManager(SubagentManagerConfig{
+		DefaultModel: "test-model",
+		MaxTokens:    2048,
+		Temperature:  0.6,
+		Spawner:      spawner,
+		TaskRegistry: taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir())),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	result := NewSubagentTool(manager).Execute(context.Background(), map[string]any{"task": "inspect"})
+	result := newTestSubagentTool(t, manager).Execute(context.Background(), map[string]any{"task": "inspect"})
 	if result == nil || result.IsError {
 		t.Fatalf("subagent result = %#v", result)
 	}
@@ -25,10 +33,19 @@ func TestSubagentManager_SetLLMOptions_AppliesToChildRunner(t *testing.T) {
 	}
 }
 
+func newTestSubagentTool(t *testing.T, manager *SubagentManager) *SubagentTool {
+	t.Helper()
+	tool, err := NewSubagentTool(manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tool
+}
+
 // TestSubagentTool_Name verifies tool name
 func TestSubagentTool_Name(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSubagentTool(manager)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSubagentTool(t, manager)
 
 	if tool.Name() != "subagent" {
 		t.Errorf("Expected name 'subagent', got '%s'", tool.Name())
@@ -37,8 +54,8 @@ func TestSubagentTool_Name(t *testing.T) {
 
 // TestSubagentTool_Description verifies tool description
 func TestSubagentTool_Description(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSubagentTool(manager)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSubagentTool(t, manager)
 
 	desc := tool.Description()
 	if desc == "" {
@@ -51,8 +68,8 @@ func TestSubagentTool_Description(t *testing.T) {
 
 // TestSubagentTool_Parameters verifies tool parameters schema
 func TestSubagentTool_Parameters(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSubagentTool(manager)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSubagentTool(t, manager)
 
 	params := tool.Parameters()
 	if params == nil {
@@ -100,9 +117,8 @@ func TestSubagentTool_Parameters(t *testing.T) {
 
 // TestSubagentTool_Execute_Success tests successful execution
 func TestSubagentTool_Execute_Success(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSubagentTool(manager)
-	manager.SetSpawner(&mockSpawner{})
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSubagentTool(t, manager)
 
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-123")
 	args := map[string]any{
@@ -153,14 +169,13 @@ func TestSubagentTool_Execute_Success(t *testing.T) {
 }
 
 func TestSubagentToolPreservesStructuredSpawnResult(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSubagentTool(manager)
 	want := (&toolshared.ToolResult{ForLLM: "verified", ForUser: "verified"}).
 		WithWriteAudit(toolshared.WriteAuditEntry{Target: "https://example.com", Success: true}).
 		WithDeliverable(&taskresult.Deliverable{ObjectiveOutcome: &taskresult.Outcome{
 			Status: taskresult.OutcomePartial, MissingItems: []string{"second item"},
 		}})
-	manager.SetSpawner(&delegateMockSpawner{result: want})
+	manager := newTestSubagentManager(t, "test-model", t.TempDir(), &delegateMockSpawner{result: want})
+	tool := newTestSubagentTool(t, manager)
 
 	got := tool.Execute(context.Background(), map[string]any{"task": "publish items"})
 	if got != want || len(got.WriteAudit) != 1 || got.Deliverable == nil ||
@@ -172,9 +187,8 @@ func TestSubagentToolPreservesStructuredSpawnResult(t *testing.T) {
 
 // TestSubagentTool_Execute_NoLabel tests execution without label
 func TestSubagentTool_Execute_NoLabel(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSubagentTool(manager)
-	manager.SetSpawner(&mockSpawner{})
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSubagentTool(t, manager)
 
 	ctx := context.Background()
 	args := map[string]any{
@@ -195,8 +209,8 @@ func TestSubagentTool_Execute_NoLabel(t *testing.T) {
 
 // TestSubagentTool_Execute_MissingTask tests error handling for missing task
 func TestSubagentTool_Execute_MissingTask(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSubagentTool(manager)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSubagentTool(t, manager)
 
 	ctx := context.Background()
 	args := map[string]any{
@@ -221,40 +235,41 @@ func TestSubagentTool_Execute_MissingTask(t *testing.T) {
 	}
 }
 
-// TestSubagentTool_Execute_NilManager tests error handling for nil manager
-func TestSubagentTool_Execute_NilManager(t *testing.T) {
-	tool := NewSubagentTool(nil)
-
-	ctx := context.Background()
-	args := map[string]any{
-		"task": "test task",
-	}
-
-	result := tool.Execute(ctx, args)
-
-	// Should return error
-	if !result.IsError {
-		t.Error("Expected error for nil manager")
-	}
-
-	if !strings.Contains(result.ForLLM, "Subagent manager not configured") {
-		t.Errorf("Error message should mention manager not configured, got: %s", result.ForLLM)
+func TestNewSubagentTool_RequiresManager(t *testing.T) {
+	tool, err := NewSubagentTool(nil)
+	if tool != nil || err == nil || !strings.Contains(err.Error(), "manager is required") {
+		t.Fatalf("NewSubagentTool(nil) = (%#v, %v)", tool, err)
 	}
 }
 
-func TestSubagentTool_Execute_RequiresChildRunner(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	result := NewSubagentTool(manager).Execute(context.Background(), map[string]any{"task": "test task"})
-	if result == nil || !result.IsError || !strings.Contains(result.ForLLM, "child runner is unavailable") {
-		t.Fatalf("subagent without child runner = %#v", result)
+func TestNewSubagentManager_RequiresDependencies(t *testing.T) {
+	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
+	tests := []struct {
+		name   string
+		config SubagentManagerConfig
+		want   string
+	}{
+		{name: "child runner", config: SubagentManagerConfig{
+			DefaultModel: "test-model", TaskRegistry: registry,
+		}, want: "child runner is required"},
+		{name: "task registry", config: SubagentManagerConfig{
+			DefaultModel: "test-model", Spawner: &mockSpawner{},
+		}, want: "task registry is required"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manager, err := NewSubagentManager(test.config)
+			if manager != nil || err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("NewSubagentManager() = (%#v, %v), want %q", manager, err, test.want)
+			}
+		})
 	}
 }
 
 // TestSubagentTool_Execute_ContextPassing verifies context is properly used
 func TestSubagentTool_Execute_ContextPassing(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSubagentTool(manager)
-	manager.SetSpawner(&mockSpawner{})
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSubagentTool(t, manager)
 
 	channel := "test-channel"
 	chatID := "test-chat"
@@ -277,9 +292,8 @@ func TestSubagentTool_Execute_ContextPassing(t *testing.T) {
 // TestSubagentTool_ForUserTruncation verifies long content is truncated for user
 func TestSubagentTool_ForUserTruncation(t *testing.T) {
 	// Create a mock provider that returns very long content
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSubagentTool(manager)
-	manager.SetSpawner(&mockSpawner{})
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSubagentTool(t, manager)
 
 	ctx := context.Background()
 

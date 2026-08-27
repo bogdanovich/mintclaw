@@ -36,9 +36,30 @@ func (m *mockSpawner) SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*too
 	}, nil
 }
 
+func newTestSpawnTool(
+	t *testing.T,
+	manager *SubagentManager,
+	objectivePolicies ...func(targetAgentID string) bool,
+) *SpawnTool {
+	t.Helper()
+	requiresObjectiveChecklist := func(string) bool { return false }
+	if len(objectivePolicies) > 0 {
+		requiresObjectiveChecklist = objectivePolicies[0]
+	}
+	tool, err := NewSpawnTool(SpawnToolConfig{
+		Manager:                    manager,
+		AllowTarget:                func(string) bool { return true },
+		RequiresObjectiveChecklist: requiresObjectiveChecklist,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tool
+}
+
 func TestSpawnTool_Execute_EmptyTask(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSpawnTool(manager)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSpawnTool(t, manager)
 
 	ctx := context.Background()
 
@@ -70,10 +91,9 @@ func TestSpawnTool_Execute_EmptyTask(t *testing.T) {
 }
 
 func TestSpawnTool_Execute_ValidTask(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{done: make(chan struct{})}
-	manager.SetSpawner(spawner)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir(), spawner)
+	tool := newTestSpawnTool(t, manager)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -134,11 +154,9 @@ func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 }
 
 func TestSpawnTool_BrowserObjectivePreflightRejectsBeforeAsyncStart(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{done: make(chan struct{})}
-	manager.SetSpawner(spawner)
-	tool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
+	manager := newTestSubagentManager(t, "test-model", t.TempDir(), spawner)
+	tool := newTestSpawnTool(t, manager, func(targetAgentID string) bool {
 		return targetAgentID == "browser"
 	})
 
@@ -165,37 +183,39 @@ func TestSpawnTool_BrowserObjectivePreflightRejectsBeforeAsyncStart(t *testing.T
 	}
 }
 
-func TestSpawnTool_Execute_NilManager(t *testing.T) {
-	tool := NewSpawnTool(nil)
-
-	ctx := context.Background()
-	args := map[string]any{"task": "test task"}
-
-	result := tool.Execute(ctx, args)
-	if !result.IsError {
-		t.Error("Expected error for nil manager")
+func TestNewSpawnTool_RequiresManagerAndPolicies(t *testing.T) {
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	allowTarget := func(string) bool { return true }
+	objectivePolicy := func(string) bool { return false }
+	tests := []struct {
+		name   string
+		config SpawnToolConfig
+		want   string
+	}{
+		{name: "manager", config: SpawnToolConfig{
+			AllowTarget: allowTarget, RequiresObjectiveChecklist: objectivePolicy,
+		}, want: "manager is required"},
+		{name: "allow-list", config: SpawnToolConfig{
+			Manager: manager, RequiresObjectiveChecklist: objectivePolicy,
+		}, want: "allow-list policy is required"},
+		{name: "objective", config: SpawnToolConfig{
+			Manager: manager, AllowTarget: allowTarget,
+		}, want: "objective policy is required"},
 	}
-	if !strings.Contains(result.ForLLM, "Subagent manager not configured") {
-		t.Errorf("Error message should mention manager not configured, got: %s", result.ForLLM)
-	}
-}
-
-func TestSpawnTool_Execute_RequiresChildRunner(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	result := NewSpawnTool(manager).Execute(context.Background(), map[string]any{"task": "test task"})
-	if result == nil || !result.IsError || !strings.Contains(result.ForLLM, "child runner is unavailable") {
-		t.Fatalf("spawn without child runner = %#v", result)
-	}
-	if records := manager.taskRegistry.List(); len(records) != 0 {
-		t.Fatalf("unavailable child runner admitted tasks: %#v", records)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tool, err := NewSpawnTool(test.config)
+			if tool != nil || err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("NewSpawnTool() = (%#v, %v), want %q", tool, err, test.want)
+			}
+		})
 	}
 }
 
 func TestSpawnTool_TaskStatusSeesSpawnedTask(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	spawnTool := NewSpawnTool(manager)
 	spawner := &mockSpawner{done: make(chan struct{})}
-	manager.SetSpawner(spawner)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir(), spawner)
+	spawnTool := newTestSpawnTool(t, manager)
 	statusTool := NewTaskStatusTool(manager.taskRegistry, nil)
 
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
@@ -252,10 +272,9 @@ func TestSpawnTool_TaskStatusSeesSpawnedTask(t *testing.T) {
 }
 
 func TestSpawnTool_ExecuteAsync_MarksCallbackResultUserOnly(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{}
-	manager.SetSpawner(spawner)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir(), spawner)
+	tool := newTestSpawnTool(t, manager)
 
 	done := make(chan *toolshared.ToolResult, 1)
 	result := tool.ExecuteAsync(context.Background(), map[string]any{
@@ -285,10 +304,9 @@ func TestSpawnTool_ExecuteAsync_MarksCallbackResultUserOnly(t *testing.T) {
 }
 
 func TestSpawnTool_PropagatesDurableTaskIDToSubTurn(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{}
-	manager.SetSpawner(spawner)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir(), spawner)
+	tool := newTestSpawnTool(t, manager)
 	completed := make(chan struct{})
 
 	result := tool.ExecuteAsync(context.Background(), map[string]any{
@@ -315,10 +333,9 @@ func TestSpawnTool_PropagatesDurableTaskIDToSubTurn(t *testing.T) {
 }
 
 func TestSpawnTool_ExecuteAsync_RespectsExplicitDeliveryMode(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSpawnTool(manager)
 	spawner := &mockSpawner{}
-	manager.SetSpawner(spawner)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir(), spawner)
+	tool := newTestSpawnTool(t, manager)
 
 	done := make(chan *toolshared.ToolResult, 1)
 	result := tool.ExecuteAsync(context.Background(), map[string]any{
@@ -346,8 +363,8 @@ func TestSpawnTool_ExecuteAsync_RespectsExplicitDeliveryMode(t *testing.T) {
 }
 
 func TestSpawnTool_Execute_InvalidDeliveryMode(t *testing.T) {
-	manager := NewSubagentManager("test-model", t.TempDir())
-	tool := NewSpawnTool(manager)
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	tool := newTestSpawnTool(t, manager)
 
 	tests := []map[string]any{
 		{"task": "test", "delivery_mode": 123},

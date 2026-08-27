@@ -35,15 +35,39 @@ func (m *delegateMockSpawner) SpawnSubTurn(_ context.Context, cfg SubTurnConfig)
 	}, nil
 }
 
+func newTestDelegateTool(t *testing.T, config DelegateToolConfig) *DelegateTool {
+	t.Helper()
+	if config.Spawner == nil {
+		config.Spawner = &delegateMockSpawner{}
+	}
+	if config.AllowTarget == nil {
+		config.AllowTarget = func(string) bool { return true }
+	}
+	if config.RequiresObjectiveChecklist == nil {
+		config.RequiresObjectiveChecklist = func(string) bool { return false }
+	}
+	if config.SelfAgentID == "" {
+		config.SelfAgentID = "main"
+	}
+	if config.TaskRegistry == nil {
+		config.TaskRegistry = taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
+	}
+	tool, err := NewDelegateTool(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tool
+}
+
 func TestDelegateTool_Name(t *testing.T) {
-	tool := NewDelegateTool()
+	tool := newTestDelegateTool(t, DelegateToolConfig{})
 	if tool.Name() != "delegate" {
 		t.Errorf("Name() = %q, want %q", tool.Name(), "delegate")
 	}
 }
 
 func TestDelegateTool_Parameters(t *testing.T) {
-	tool := NewDelegateTool()
+	tool := newTestDelegateTool(t, DelegateToolConfig{})
 	params := tool.Parameters()
 
 	props, ok := params["properties"].(map[string]any)
@@ -70,10 +94,11 @@ func TestDelegateTool_Parameters(t *testing.T) {
 
 func TestDelegateTool_BrowserObjectivePreflightRejectsBeforeSpawning(t *testing.T) {
 	spawner := &delegateMockSpawner{}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
-	tool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
-		return targetAgentID == "browser"
+	tool := newTestDelegateTool(t, DelegateToolConfig{
+		Spawner: spawner,
+		RequiresObjectiveChecklist: func(targetAgentID string) bool {
+			return targetAgentID == "browser"
+		},
 	})
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -94,8 +119,7 @@ func TestDelegateTool_BrowserObjectivePreflightRejectsBeforeSpawning(t *testing.
 
 func TestDelegateTool_Execute_Success(t *testing.T) {
 	spawner := &delegateMockSpawner{}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "researcher",
@@ -131,8 +155,7 @@ func TestDelegateTool_Execute_PreservesDurableChildSuspension(t *testing.T) {
 	spawner := &delegateMockSpawner{result: &toolshared.ToolResult{
 		Control: toolshared.ToolControl{TaskSuspended: true},
 	}}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "specialist",
@@ -156,8 +179,7 @@ func TestDelegateTool_Execute_PreservesDurableChildSuspension(t *testing.T) {
 
 func TestDelegateTool_Execute_PassesTimeoutSeconds(t *testing.T) {
 	spawner := &delegateMockSpawner{}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id":        "researcher",
@@ -176,9 +198,7 @@ func TestDelegateTool_Execute_PassesTimeoutSeconds(t *testing.T) {
 func TestDelegateTool_Execute_RecordsTaskRegistry(t *testing.T) {
 	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
 	spawner := &delegateMockSpawner{}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
-	tool.SetTaskRegistry(registry)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner, TaskRegistry: registry})
 
 	ctx := toolshared.WithToolContext(context.Background(), "telegram", "chat-1")
 	ctx = toolshared.WithToolTopicID(ctx, "topic-1")
@@ -244,9 +264,7 @@ func TestDelegateTool_Execute_RecordsDeliverable(t *testing.T) {
 			},
 		}),
 	}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
-	tool.SetTaskRegistry(registry)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner, TaskRegistry: registry})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "media",
@@ -278,9 +296,7 @@ func TestDelegateTool_Execute_RecordsBlockedObjectiveAsFailed(t *testing.T) {
 			MissingItems: []string{"Craigslist verification"},
 		}},
 	})}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
-	tool.SetTaskRegistry(registry)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner, TaskRegistry: registry})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "browser",
@@ -323,9 +339,7 @@ func TestDelegateTool_Execute_RecordsExplicitDeliverableReport(t *testing.T) {
 			},
 		}),
 	}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
-	tool.SetTaskRegistry(registry)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner, TaskRegistry: registry})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "reviewer",
@@ -371,9 +385,7 @@ func TestDelegateTool_Execute_RecordsExplicitDeliverableArtifact(t *testing.T) {
 			},
 		}),
 	}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
-	tool.SetTaskRegistry(registry)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner, TaskRegistry: registry})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "media",
@@ -420,8 +432,7 @@ func TestDelegateTool_Execute_EmptyAgentID(t *testing.T) {
 		{"wrong type", map[string]any{"agent_id": 123, "task": "test"}},
 	}
 
-	tool := NewDelegateTool()
-	tool.SetSpawner(&delegateMockSpawner{})
+	tool := newTestDelegateTool(t, DelegateToolConfig{})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -446,8 +457,7 @@ func TestDelegateTool_Execute_EmptyTask(t *testing.T) {
 		{"whitespace only", map[string]any{"agent_id": "a", "task": "\t\n"}},
 	}
 
-	tool := NewDelegateTool()
-	tool.SetSpawner(&delegateMockSpawner{})
+	tool := newTestDelegateTool(t, DelegateToolConfig{})
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -463,10 +473,10 @@ func TestDelegateTool_Execute_EmptyTask(t *testing.T) {
 }
 
 func TestDelegateTool_Execute_PermissionDenied(t *testing.T) {
-	tool := NewDelegateTool()
-	tool.SetSpawner(&delegateMockSpawner{})
-	tool.SetAllowlistChecker(func(targetAgentID string) bool {
-		return targetAgentID == "allowed-agent"
+	tool := newTestDelegateTool(t, DelegateToolConfig{
+		AllowTarget: func(targetAgentID string) bool {
+			return targetAgentID == "allowed-agent"
+		},
 	})
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -483,10 +493,10 @@ func TestDelegateTool_Execute_PermissionDenied(t *testing.T) {
 }
 
 func TestDelegateTool_Execute_PermissionAllowed(t *testing.T) {
-	tool := NewDelegateTool()
-	tool.SetSpawner(&delegateMockSpawner{})
-	tool.SetAllowlistChecker(func(targetAgentID string) bool {
-		return targetAgentID == "allowed-agent"
+	tool := newTestDelegateTool(t, DelegateToolConfig{
+		AllowTarget: func(targetAgentID string) bool {
+			return targetAgentID == "allowed-agent"
+		},
 	})
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -499,19 +509,44 @@ func TestDelegateTool_Execute_PermissionAllowed(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_Execute_NoSpawner(t *testing.T) {
-	tool := NewDelegateTool()
-
-	result := tool.Execute(context.Background(), map[string]any{
-		"agent_id": "a",
-		"task":     "test",
-	})
-
-	if !result.IsError {
-		t.Error("expected error when spawner is nil")
+func TestNewDelegateTool_RequiresDependencies(t *testing.T) {
+	registry := taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir()))
+	spawner := &delegateMockSpawner{}
+	allowTarget := func(string) bool { return true }
+	objectivePolicy := func(string) bool { return false }
+	tests := []struct {
+		name   string
+		config DelegateToolConfig
+		want   string
+	}{
+		{name: "child runner", config: DelegateToolConfig{
+			AllowTarget: allowTarget, RequiresObjectiveChecklist: objectivePolicy,
+			SelfAgentID: "main", TaskRegistry: registry,
+		}, want: "child runner is required"},
+		{name: "task registry", config: DelegateToolConfig{
+			Spawner: spawner, AllowTarget: allowTarget,
+			RequiresObjectiveChecklist: objectivePolicy, SelfAgentID: "main",
+		}, want: "task registry is required"},
+		{name: "allow-list", config: DelegateToolConfig{
+			Spawner: spawner, RequiresObjectiveChecklist: objectivePolicy,
+			SelfAgentID: "main", TaskRegistry: registry,
+		}, want: "allow-list policy is required"},
+		{name: "objective", config: DelegateToolConfig{
+			Spawner: spawner, AllowTarget: allowTarget,
+			SelfAgentID: "main", TaskRegistry: registry,
+		}, want: "objective policy is required"},
+		{name: "self identity", config: DelegateToolConfig{
+			Spawner: spawner, AllowTarget: allowTarget,
+			RequiresObjectiveChecklist: objectivePolicy, TaskRegistry: registry,
+		}, want: "self agent ID is required"},
 	}
-	if !strings.Contains(result.ForLLM, "not configured") {
-		t.Errorf("error should mention not configured, got: %s", result.ForLLM)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tool, err := NewDelegateTool(test.config)
+			if tool != nil || err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("NewDelegateTool() = (%#v, %v), want %q", tool, err, test.want)
+			}
+		})
 	}
 }
 
@@ -519,8 +554,7 @@ func TestDelegateTool_Execute_SpawnerError(t *testing.T) {
 	spawner := &delegateMockSpawner{
 		err: fmt.Errorf("context deadline exceeded"),
 	}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "researcher",
@@ -538,10 +572,8 @@ func TestDelegateTool_Execute_SpawnerError(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_Execute_NoAllowlistCheck(t *testing.T) {
-	// When no allowlist checker is set, all agents are allowed
-	tool := NewDelegateTool()
-	tool.SetSpawner(&delegateMockSpawner{})
+func TestDelegateTool_Execute_AllowAllPolicy(t *testing.T) {
+	tool := newTestDelegateTool(t, DelegateToolConfig{AllowTarget: func(string) bool { return true }})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "any-agent",
@@ -549,14 +581,13 @@ func TestDelegateTool_Execute_NoAllowlistCheck(t *testing.T) {
 	})
 
 	if result.IsError {
-		t.Errorf("expected success without allowlist, got error: %s", result.ForLLM)
+		t.Errorf("expected success from allow-all policy, got error: %s", result.ForLLM)
 	}
 }
 
 func TestDelegateTool_Execute_UserOnlyMarksHandled(t *testing.T) {
 	spawner := &delegateMockSpawner{}
-	tool := NewDelegateTool()
-	tool.SetSpawner(spawner)
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id":      "media",
@@ -579,8 +610,7 @@ func TestDelegateTool_Execute_UserOnlyMarksHandled(t *testing.T) {
 }
 
 func TestDelegateTool_Execute_InvalidDeliveryMode(t *testing.T) {
-	tool := NewDelegateTool()
-	tool.SetSpawner(&delegateMockSpawner{})
+	tool := newTestDelegateTool(t, DelegateToolConfig{})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id":      "media",
@@ -597,8 +627,7 @@ func TestDelegateTool_Execute_InvalidDeliveryMode(t *testing.T) {
 }
 
 func TestDelegateTool_Execute_NilResult(t *testing.T) {
-	tool := NewDelegateTool()
-	tool.SetSpawner(&nilResultSpawner{})
+	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: &nilResultSpawner{}})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "researcher",
@@ -614,9 +643,7 @@ func TestDelegateTool_Execute_NilResult(t *testing.T) {
 }
 
 func TestDelegateTool_Execute_SelfDelegation(t *testing.T) {
-	tool := NewDelegateTool()
-	tool.SetSpawner(&delegateMockSpawner{})
-	tool.SetSelfAgentID("alpha")
+	tool := newTestDelegateTool(t, DelegateToolConfig{SelfAgentID: "alpha"})
 
 	result := tool.Execute(context.Background(), map[string]any{
 		"agent_id": "alpha",
@@ -632,9 +659,7 @@ func TestDelegateTool_Execute_SelfDelegation(t *testing.T) {
 }
 
 func TestDelegateTool_Execute_SelfDelegation_Normalized(t *testing.T) {
-	tool := NewDelegateTool()
-	tool.SetSpawner(&delegateMockSpawner{})
-	tool.SetSelfAgentID("alpha") // stored normalized
+	tool := newTestDelegateTool(t, DelegateToolConfig{SelfAgentID: " Alpha "})
 
 	// Case-insensitive and whitespace variants should still be caught
 	variants := []string{"ALPHA", " Alpha ", "  alpha  "}

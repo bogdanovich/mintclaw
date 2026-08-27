@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -14,11 +15,30 @@ type SpawnTool struct {
 	requiresObjectiveChecklist func(targetAgentID string) bool
 }
 
+type SpawnToolConfig struct {
+	Manager                    *SubagentManager
+	AllowTarget                func(targetAgentID string) bool
+	RequiresObjectiveChecklist func(targetAgentID string) bool
+}
+
 // Compile-time check: SpawnTool implements AsyncExecutor.
 var _ toolshared.AsyncExecutor = (*SpawnTool)(nil)
 
-func NewSpawnTool(manager *SubagentManager) *SpawnTool {
-	return &SpawnTool{manager: manager}
+func NewSpawnTool(config SpawnToolConfig) (*SpawnTool, error) {
+	if config.Manager == nil {
+		return nil, errors.New("spawn subagent manager is required")
+	}
+	if config.AllowTarget == nil {
+		return nil, errors.New("spawn allow-list policy is required")
+	}
+	if config.RequiresObjectiveChecklist == nil {
+		return nil, errors.New("spawn objective policy is required")
+	}
+	return &SpawnTool{
+		manager:                    config.Manager,
+		allowlistCheck:             config.AllowTarget,
+		requiresObjectiveChecklist: config.RequiresObjectiveChecklist,
+	}, nil
 }
 
 func (t *SpawnTool) Name() string {
@@ -59,18 +79,6 @@ func (t *SpawnTool) Parameters() map[string]any {
 		"properties": props,
 		"required":   []string{"task"},
 	}
-}
-
-func (t *SpawnTool) SetAllowlistChecker(check func(targetAgentID string) bool) {
-	t.allowlistCheck = check
-}
-
-// SetObjectiveChecklistRequirement configures the target-aware preflight used
-// to keep browser-capable tasks in the parent turn when their verification
-// contract is missing. This lets the caller repair the tool call instead of
-// delivering a terminal failure from an already-started background task.
-func (t *SpawnTool) SetObjectiveChecklistRequirement(check func(targetAgentID string) bool) {
-	t.requiresObjectiveChecklist = check
 }
 
 func (t *SpawnTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
@@ -116,12 +124,10 @@ func (t *SpawnTool) execute(
 	}
 
 	// Check allowlist if targeting a specific agent
-	if targetAgentID != "" && t.allowlistCheck != nil {
-		if !t.allowlistCheck(targetAgentID) {
-			return toolshared.ErrorResult(fmt.Sprintf("not allowed to spawn agent '%s'", targetAgentID))
-		}
+	if targetAgentID != "" && !t.allowlistCheck(targetAgentID) {
+		return toolshared.ErrorResult(fmt.Sprintf("not allowed to spawn agent '%s'", targetAgentID))
 	}
-	if t.requiresObjectiveChecklist != nil && t.requiresObjectiveChecklist(targetAgentID) && len(objectiveItems) == 0 {
+	if t.requiresObjectiveChecklist(targetAgentID) && len(objectiveItems) == 0 {
 		return toolshared.ErrorResult(
 			"objective_items is required when spawning a browser-capable agent; " +
 				"retry spawn with every requested result or external action declared",
@@ -130,35 +136,30 @@ func (t *SpawnTool) execute(
 
 	// Route through SubagentManager so admission and completion share the
 	// canonical task registry.
-	if t.manager != nil {
-		wrappedCallback := cb
-		if cb != nil {
-			wrappedCallback = func(cbCtx context.Context, res *toolshared.ToolResult) {
-				if res != nil {
-					res.WithAsyncDelivery(deliveryMode)
-				}
-				cb(cbCtx, res)
+	wrappedCallback := cb
+	if cb != nil {
+		wrappedCallback = func(cbCtx context.Context, res *toolshared.ToolResult) {
+			if res != nil {
+				res.WithAsyncDelivery(deliveryMode)
 			}
+			cb(cbCtx, res)
 		}
-		ack, err := t.manager.Spawn(
-			ctx,
-			task,
-			label,
-			strings.TrimSpace(agentID),
-			toolshared.ToolChannel(ctx),
-			toolshared.ToolChatID(ctx),
-			deliveryMode,
-			wrappedCallback,
-			objectiveItems,
-		)
-		if err != nil {
-			return toolshared.ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
-		}
-		return toolshared.AsyncResult(ack)
 	}
-
-	// Fallback: manager not configured
-	return toolshared.ErrorResult("Subagent manager not configured")
+	ack, err := t.manager.Spawn(
+		ctx,
+		task,
+		label,
+		strings.TrimSpace(agentID),
+		toolshared.ToolChannel(ctx),
+		toolshared.ToolChatID(ctx),
+		deliveryMode,
+		wrappedCallback,
+		objectiveItems,
+	)
+	if err != nil {
+		return toolshared.ErrorResult(fmt.Sprintf("Spawn failed: %v", err)).WithError(err)
+	}
+	return toolshared.AsyncResult(ack)
 }
 
 func parseSpawnDeliveryMode(raw any) (toolshared.AsyncDeliveryMode, error) {

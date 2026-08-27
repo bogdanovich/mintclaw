@@ -1,11 +1,10 @@
 # Architecture Simplification Roadmap
 
 Status: active; the original implementation sequence is merged through P1 and
-X3.63, the pre-Z1 source cleanup is merged through PR #921, C2 is merged through
+X3.64, the pre-Z1 source cleanup is merged through PR #921, C2 is merged through
 PR #929, and the live version 4 profile and explicit-identity conversions are
-complete. The remaining X3.64 source cleanup, `vpn` rollout, obsolete record and
-policy cleanup, full backup, strict removal deployment and rollback, and Z1 remain
-open.
+complete. The remaining `vpn` rollout, obsolete record and policy cleanup, full
+backup, strict removal deployment and rollback, and Z1 remain open.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -163,7 +162,7 @@ reset criteria.
 | X3.1-X3.61 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896, and #933 | Merged |
 | X3.62 | #935 and #936 | Merged; production-unused public APIs and test-only constructor facades are gone, while current extension and injection seams remain |
 | X3.63 | #937 | Merged; compaction execution mode is owner-supplied, and downstream inference plus test-only projector facades are gone |
-| X3.64 | Not yet applicable | Planned; make subagent, spawn, and delegate construction complete and immutable instead of setter-assembled |
+| X3.64 | #938 | Merged; subagent, spawn, and delegate dependencies are complete and immutable at construction, while `SubTurnSpawner` remains the package seam |
 | P1 | #881 | Merged; all five live configs and 20 personal workspaces now use the current contract, while final cleanup and deployment evidence remain in R1 |
 | R1 node-identity bridge | #899 | Merged and deployed to `p5a-canary`, `p3-canary`, and `ab-local-test`; the P3 node is currently stopped, while `vpn` and the strict adapter-removal release remain open |
 | Pre-Z1 strict audit | #911, #914, #916, and #919-#921 merged; #901 remains live-gated | Dead shutdown state, historical approval and benchmark inference, stale current-path terminology, provider-contract ambiguity, and implicit TTS model selection are removed; strict node removal still needs a final refresh and review |
@@ -175,7 +174,8 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 39-42 to #859-#862; 43 to #864; 44 to #866; 45 to #868; 46 to #872;
 47 to #878; 48 to #880; 49 to #885; 50 to #886; 51 to #887; 52 to #888;
 53 to #889; 54 to #890; 55 to #891; 56 to #892; 57 to #893; 58 to #894;
-59 to #895; 60 to #896; 61 to #933; 62 to #935 and #936; and 63 to #937.
+59 to #895; 60 to #896; 61 to #933; 62 to #935 and #936; 63 to #937; and 64 to
+#938.
 
 The 2026-08-24 read-only deployed audit established these rollout facts at
 that time:
@@ -339,7 +339,6 @@ separation and standards alignment.
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
 | Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its current head is green but still needs final-base refresh and exact-head review | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
-| Subagent, spawn, and delegate construction | Current two-phase construction, not compatibility | Production sets the task registry, child runner, model defaults, allow-list policy, objective policy, and self identity once immediately after construction; no live path replaces them | X3.64; require the dependencies at construction, make them immutable, and retain the real `SubTurnSpawner` package boundary |
 
 C2 is closed. PR #924 moved durable checkpoint ownership to the coding
 composition root; PRs #925-#927 made recovery reads and constructors explicitly
@@ -442,10 +441,11 @@ time. The later pre-Z1 source and live-state audit corrected that conclusion:
   PR #937 made the background scheduler emit the execution mode it already
   owns, projected that fact directly, and deleted the adapter heuristic plus
   three superseded projector convenience methods used only by tests;
-- subagent, spawn, and delegate dependencies are currently installed through a
-  construction-time setter sequence and then never replaced. X3.64 makes that
-  current contract immutable while retaining `SubTurnSpawner` as the real
-  tool-to-agent package seam;
+- PR #938 made subagent, spawn, and delegate dependencies complete and
+  immutable at construction. Missing task registries, child runners,
+  allow-list and objective policies, or self identity now prevent tool
+  publication, while `SubTurnSpawner` remains the real tool-to-agent package
+  seam;
 - task deliverable normalization constructs the current canonical report at
   the registry owner for both new mutations and loaded snapshots; it does not
   select a historical report implementation, but R1 must still inventory the
