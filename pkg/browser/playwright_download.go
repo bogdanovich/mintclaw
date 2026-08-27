@@ -111,6 +111,14 @@ func playwrightCaptureDownloadCode(target string, maximumBytes int64) string {
   });
   await cdp.send("Network.enable");
   await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", requestStage: "Response" }] });
+  // Playwright treats an anchor's download hint as a native download before
+  // the response boundary can claim it. Native downloads stay disabled; the
+  // response must still prove that it is an attachment below.
+  await locator.evaluate(element => {
+    if (element instanceof HTMLAnchorElement && element.hasAttribute("download")) {
+      element.removeAttribute("download");
+    }
+  });
   let clickFinished = false;
   let clickFinishedAt = 0;
   let clickFailed = false;
