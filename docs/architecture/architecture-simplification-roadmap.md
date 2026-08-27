@@ -160,8 +160,8 @@ reset criteria.
 | X2 | #803 and #807 | Merged |
 | X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
 | P1 | #881 | Merged; all five live configs and 20 personal workspaces now use the current contract, while final cleanup and deployment evidence remain in R1 |
-| R1 node-identity bridge | #899 | Merged and deployed to `p5a-canary`, `p3-canary`, and `ab-local-test`; `vpn` and the strict adapter-removal release remain open |
-| Pre-Z1 strict audit | #911 and #914 merged; #901 remains live-gated | Dead Seahorse shutdown state and the historical approval ordinal reservation are removed; optional node execution-profile admission is included in the reviewed strict R1 release |
+| R1 node-identity bridge | #899 | Merged and deployed to `p5a-canary`, `p3-canary`, and `ab-local-test`; the P3 node is currently stopped, while `vpn` and the strict adapter-removal release remain open |
+| Pre-Z1 strict audit | #911, #914, and #916 merged; #901 remains live-gated | Dead Seahorse shutdown state, the historical approval ordinal reservation, and old benchmark result-count inference are removed; optional node execution-profile admission is included in the reviewed strict R1 release |
 | Z1 | Not yet applicable | Open |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
@@ -250,6 +250,11 @@ companion upgrades and is recorded in
 The 2026-08-26/27 live R1 re-audit supersedes the rollout facts that changed
 after that bounded local operation:
 
+- all five gateways and the Web launcher now execute merged main `8418b021`,
+  which includes the reviewed browser unknown-effect receipt correction in PR
+  #913. `p5a-canary` and `ab-local-test` also report `8418b021`; this source
+  re-audit found no historical browser schema, alternate runtime owner, or
+  compatibility adapter introduced by that correction;
 - a separate stopped preflight converted all five active configs to version 4,
   all 21 configured agent entries, and all 20 distinct personal workspaces.
   Every workspace now has root `AGENTS.md`, and none retains root `AGENT.md`;
@@ -257,17 +262,23 @@ after that bounded local operation:
   explicit Ed25519 without changing their node identifiers. The registry still
   contains four connected records, one older pending-pairing record, and one
   older revoked record;
-- `p5a-canary`, `p3-canary`, and the Darwin browser companion
-  `ab-local-test` now run the exact PR #899 bridge build `71ad3e53` and send
-  explicit Ed25519. The connected Linux `vpn` companion still runs
-  pre-bridge `03b08be2` and has no advertised managed-update command;
+- `p5a-canary` and the Darwin browser companion `ab-local-test` now run
+  `8418b021`, which contains the PR #899 bridge, and send explicit Ed25519.
+  `p3-canary` last ran and was verified on the exact bridge build `71ad3e53`.
+  The Linux `vpn` companion still runs pre-bridge `03b08be2` and has no
+  advertised managed-update command;
 - a later host operation stopped the P3 node/helper pair. The original local
   rollout authority was used to restart the same verified bridge artifacts in
   dependency order; both services returned active with zero restarts, empty
   warning/error journals, and `p3-canary` reconnected on `71ad3e53`;
+- a subsequent current-main deployment stopped the system P3 node cleanly and
+  did not restart it. Its privileged helper remains active, no companion node
+  process is running, and the registry snapshot still carries the last bridge
+  version and an aging connected state. Restarting or retiring that canary now
+  requires a deliberate live-operation decision;
 - `ab-local-test` advertises the complete current eight-command browser
-  catalogue, so historical catalogue admission is no longer needed. After
-  deployment of current main `55a656df`, trace
+  catalogue, so historical catalogue admission is no longer needed. On the
+  earlier `55a656df` deployment, trace
   `trace-turn-325ced9441a30ff7be34004e` targeted `companion`, opened ready,
   observed, navigated successfully, remained ready, and closed cleanly. The
   trace is schema-valid, complete, and untruncated. Because `ab-local-test` is
@@ -290,6 +301,9 @@ after that bounded local operation:
   companion constructor. All nine checks pass on this exact head, and the
   fresh exact-head review found no independent high-confidence issue. It
   remains intentionally unmerged until the live R1 gates below are satisfied.
+  Main has since gained the browser receipt correction and the pre-Z1
+  benchmark cleanup, so the branch must be refreshed and revalidated before
+  merge even though a synthetic combined-tree merge remains conflict-free.
 
 ### Re-audit corrections
 
@@ -379,6 +393,11 @@ time. The later pre-Z1 source and live-state audit corrected that conclusion:
   sole `reserveOrdinal` helper, and the historical acknowledgement fixture.
   Current parent-only approvals now use ordinal zero, while question-control
   cleanup and normal durable outbox recovery remain unchanged;
+- PR #916 removed the benchmark reporter's inference of missing
+  `validF1Count` values from older evaluation JSON. Current writers persist the
+  count explicitly, including a legitimate zero when every answer is invalid;
+  the deliberately historical full-transcript comparison baseline remains a
+  benchmark mode rather than a product input reader;
 - the earlier Git-tracked zero-caller scan after PR #896 otherwise still found
   no further caller-free production facade; the remaining low-reference
   exports are active entry points, documented extension contracts, or
@@ -1323,13 +1342,17 @@ Current gate snapshot from the 2026-08-26/27 re-audit:
 1. capacity is satisfied, but the same-time full backup has not been created;
 2. current browser catalogue advertisement plus functional companion and
    gateway-local canaries are proven;
-3. three connected companions run the bridge; connected `vpn` remains old;
-4. all persisted identities are explicit, while `vpn` still omits the field on
-   the wire and the pending/revoked records need a deliberate decision;
+3. `p5a-canary` and `ab-local-test` run bridge-or-newer builds; `p3-canary` is
+   bridge-capable but currently stopped, and connected `vpn` remains old;
+4. all persisted identities are explicit. `p5a-canary` and `ab-local-test`
+   send the field, `p3-canary` did so at its last verified start, `vpn` still
+   omits it, and the stopped P3 plus pending/revoked records need deliberate
+   retention decisions;
 5. the version 4 and `AGENTS.md` cutover is complete, with seven inert policy
    entries left to delete;
 6. PR #901 implements the strict removal; all nine checks and fresh review pass
-   on exact head `5c6a493a`; and
+   on exact head `5c6a493a`, while the now-advanced base requires a refresh and
+   exact-head validation before merge; and
 7. removal deployment and rollback have not started.
 
 Exit criteria:
