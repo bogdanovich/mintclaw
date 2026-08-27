@@ -281,10 +281,8 @@ func Run(debug bool, homePath, configPath string, allowEmptyStartup bool) (runEr
 		return err
 	}
 	startupCleanup.commit()
-	// All services (channels + shared HTTP server) are up; mark the health
-	// server ready so GET /ready reports "ready". The health endpoints are
-	// mounted on the shared gateway mux, so Health.Server.Start() (which would
-	// otherwise set this) is never called — we flip the flag explicitly here.
+	// All services, including the shared HTTP server that owns the health
+	// routes, are up; mark GET /ready as ready.
 	runningServices.HealthServer.SetReady(true)
 	reportGatewayHandoffStatus(ctx, cfg, msgBus)
 	publishGatewayEvent(agentLoop, runtimeevents.KindGatewayReady, startedAt, nil)
@@ -1091,7 +1089,7 @@ func setupAndStartServicesWithHooks(
 	}
 
 	runningServices.authToken = authToken
-	runningServices.HealthServer = health.NewServer(listenResult.ProbeHost, cfg.Gateway.Port, authToken)
+	runningServices.HealthServer = health.NewServer(authToken)
 
 	var listenAddr string
 	if len(listenResult.Listeners) > 0 {

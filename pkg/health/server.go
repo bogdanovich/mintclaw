@@ -1,115 +1,40 @@
 package health
 
 import (
-	"context"
 	"crypto/subtle"
 	"encoding/json"
-	"maps"
-	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 )
 
 type Server struct {
-	server     *http.Server
 	mu         sync.RWMutex
 	ready      bool
-	checks     map[string]Check
 	startTime  time.Time
 	reloadFunc func() error
 	authToken  string // optional bearer token for protected endpoints
 }
 
-type Check struct {
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	Message   string    `json:"message,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
 type StatusResponse struct {
-	Status string           `json:"status"`
-	Uptime string           `json:"uptime"`
-	PID    int              `json:"pid,omitempty"`
-	Checks map[string]Check `json:"checks,omitempty"`
+	Status string `json:"status"`
+	Uptime string `json:"uptime"`
+	PID    int    `json:"pid,omitempty"`
 }
 
-func NewServer(host string, port int, token string) *Server {
-	mux := http.NewServeMux()
-	s := &Server{
+func NewServer(token string) *Server {
+	return &Server{
 		ready:     false,
-		checks:    make(map[string]Check),
 		startTime: time.Now(),
 		authToken: token,
 	}
-
-	mux.HandleFunc("/health", s.healthHandler)
-	mux.HandleFunc("/ready", s.readyHandler)
-	mux.HandleFunc("/reload", s.reloadHandler)
-
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	s.server = &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
-	}
-
-	return s
-}
-
-func (s *Server) Start() error {
-	s.mu.Lock()
-	s.ready = true
-	s.mu.Unlock()
-	return s.server.ListenAndServe()
-}
-
-func (s *Server) StartContext(ctx context.Context) error {
-	s.mu.Lock()
-	s.ready = true
-	s.mu.Unlock()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- s.server.ListenAndServe()
-	}()
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		return s.server.Shutdown(context.Background())
-	}
-}
-
-func (s *Server) Stop(ctx context.Context) error {
-	s.mu.Lock()
-	s.ready = false
-	s.mu.Unlock()
-	return s.server.Shutdown(ctx)
 }
 
 func (s *Server) SetReady(ready bool) {
 	s.mu.Lock()
 	s.ready = ready
 	s.mu.Unlock()
-}
-
-func (s *Server) RegisterCheck(name string, checkFn func() (bool, string)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	status, msg := checkFn()
-	s.checks[name] = Check{
-		Name:      name,
-		Status:    statusString(status),
-		Message:   msg,
-		Timestamp: time.Now(),
-	}
 }
 
 // SetReloadFunc sets the callback function for config reload.
@@ -184,28 +109,14 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.RLock()
 	ready := s.ready
-	checks := make(map[string]Check)
-	maps.Copy(checks, s.checks)
 	s.mu.RUnlock()
 
 	if !ready {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(StatusResponse{
 			Status: "not ready",
-			Checks: checks,
 		})
 		return
-	}
-
-	for _, check := range checks {
-		if check.Status == "fail" {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(StatusResponse{
-				Status: "not ready",
-				Checks: checks,
-			})
-			return
-		}
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -213,31 +124,19 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(StatusResponse{
 		Status: "ready",
 		Uptime: uptime.String(),
-		Checks: checks,
 	})
 }
 
-// HandlerMux is the interface for registering HTTP handlers, used by
-// RegisterOnMux so that callers can pass any mux implementation
-// (e.g. *http.ServeMux or a custom dynamic mux).
+// HandlerMux is the shared HTTP registration boundary used by the gateway.
 type HandlerMux interface {
-	Handle(pattern string, handler http.Handler)
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
 }
 
 // RegisterOnMux registers /health, /ready and /reload handlers onto the given mux.
-// This allows the health endpoints to be served by a shared HTTP server.
 func (s *Server) RegisterOnMux(mux HandlerMux) {
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
 	mux.HandleFunc("/reload", s.reloadHandler)
-}
-
-func statusString(ok bool) string {
-	if ok {
-		return "ok"
-	}
-	return "fail"
 }
 
 // extractBearerToken returns the token from an "Authorization: Bearer <t>" header,
