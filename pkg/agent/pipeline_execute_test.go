@@ -102,6 +102,7 @@ func TestSyncToolDeliveryMarksOnlyMediaInConfirmedOutbound(t *testing.T) {
 		*toolshared.ToolResult,
 		string,
 		[]runtimeevents.TraceScope,
+		bus.OutboundMetadata,
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 		return nil, toolResultDeliveryDirect, nil
 	}}
@@ -176,6 +177,7 @@ func TestImmediateDeliverySettlesJournaledDeliverable(t *testing.T) {
 				got *toolshared.ToolResult,
 				_ string,
 				_ []runtimeevents.TraceScope,
+				_ bus.OutboundMetadata,
 			) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 				if err := commitToolResultOutbound(deliveryCtx, got); err != nil {
 					return nil, toolResultDeliveryNone, err
@@ -244,6 +246,7 @@ func TestImmediateDeliveryJournalFailurePreventsPublication(t *testing.T) {
 		got *toolshared.ToolResult,
 		_ string,
 		_ []runtimeevents.TraceScope,
+		_ bus.OutboundMetadata,
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 		if err := commitToolResultOutbound(deliveryCtx, got); err != nil {
 			return nil, toolResultDeliveryNone, err
@@ -1074,6 +1077,7 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 		got *toolshared.ToolResult,
 		_ string,
 		_ []runtimeevents.TraceScope,
+		_ bus.OutboundMetadata,
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 		deliveryCalls++
 		journaled := store.GetHistory(ts.sessionKey)

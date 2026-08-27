@@ -34,6 +34,7 @@ const (
 	PayloadKeyOutbound           = "outbound_kind"
 	PayloadKeyInteractionID      = "interaction_id"
 	PayloadKeyInteractionShortID = "interaction_short_id"
+	PayloadKeyRequestID          = "request_id"
 
 	MessageKindThought    = "thought"
 	MessageKindToolCalls  = "tool_calls"

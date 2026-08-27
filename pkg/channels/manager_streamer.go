@@ -102,15 +102,15 @@ func (s responseFooterStreamState) decorate(content string) string {
 	}
 	msg := bus.OutboundMessage{
 		Content: content,
+		Metadata: bus.OutboundMetadata{
+			OutboundKind:      bus.OutboundKindFinal,
+			ModelName:         s.modelName,
+			DefaultModelName:  s.defaultModelName,
+			UsageInputTokens:  s.inputTokens,
+			UsageOutputTokens: s.outputTokens,
+			UsageTotalTokens:  s.inputTokens + s.outputTokens,
+		},
 	}
-	bus.OutboundMetadata{
-		OutboundKind:      bus.OutboundKindFinal,
-		ModelName:         s.modelName,
-		DefaultModelName:  s.defaultModelName,
-		UsageInputTokens:  s.inputTokens,
-		UsageOutputTokens: s.outputTokens,
-		UsageTotalTokens:  s.inputTokens + s.outputTokens,
-	}.ApplyToContext(&msg.Context)
 	footer := outboundResponseFooter(msg)
 	if footer == "" {
 		return content

@@ -19,7 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
-const recordVersion = 2
+const recordVersion = 3
 
 // MaxDeliveryAttempts bounds recoverable delivery attempts for one logical
 // outbound intent. Retry ownership belongs to the outbox rather than to the
@@ -534,12 +534,18 @@ func validateIntent(intent Intent) error {
 		if err := validateMessageRoute(intent.Identity, *intent.Message); err != nil {
 			return err
 		}
+		if err := bus.ValidateOutboundMetadata(intent.Message.Metadata); err != nil {
+			return fmt.Errorf("invalid outbox message metadata: %w", err)
+		}
 	case KindMedia:
 		if intent.Media == nil || intent.Message != nil || intent.Media.DeliveryID != intent.ID {
 			return errors.New("outbox media payload does not match its identity")
 		}
 		if err := validateMediaRoute(intent.Identity, *intent.Media); err != nil {
 			return err
+		}
+		if err := bus.ValidateOutboundMetadata(intent.Media.Metadata); err != nil {
+			return fmt.Errorf("invalid outbox media metadata: %w", err)
 		}
 	}
 	return nil

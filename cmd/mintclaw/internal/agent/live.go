@@ -18,7 +18,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
-	"github.com/bogdanovich/mintclaw/pkg/bus"
 	channelmintclaw "github.com/bogdanovich/mintclaw/pkg/channels/mintclaw"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -202,7 +201,7 @@ func runLive(parent context.Context, options liveOptions) (result liveResult, er
 		if incoming.Type != channelmintclaw.TypeMessageCreate && incoming.Type != channelmintclaw.TypeMessageUpdate {
 			continue
 		}
-		requestID, _ := incoming.Payload[bus.OutboundMetadataKeyRequestID].(string)
+		requestID, _ := incoming.Payload[channelmintclaw.PayloadKeyRequestID].(string)
 		if strings.TrimSpace(requestID) != result.RequestID {
 			continue
 		}

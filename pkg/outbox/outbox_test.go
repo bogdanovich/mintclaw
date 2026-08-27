@@ -1,9 +1,12 @@
 package outbox
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +75,62 @@ func TestStorePersistsDeliveryLifecycle(t *testing.T) {
 	}
 	if loaded.Status != StatusDelivered || loaded.Attempts != 1 {
 		t.Fatalf("Get() reopened = status %q attempts %d", loaded.Status, loaded.Attempts)
+	}
+}
+
+func TestStorePersistsTypedOutboundMetadata(t *testing.T) {
+	store := openTestStore(t)
+	identity := testIdentity()
+	intent, err := NewMessageIntent("/agents/main", identity, bus.OutboundMessage{
+		Metadata: bus.OutboundMetadata{
+			MessageKind:        " final_reply ",
+			OutboundKind:       " final ",
+			ToolCalls:          json.RawMessage(` [{"id":"call-1"}] `),
+			InteractionShortID: " short-1 ",
+		}.WithInteractionChoices([]string{" Yes ", "No"}),
+		Content: "response",
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("NewMessageIntent() error = %v", err)
+	}
+	created, err := store.Create(intent)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	loaded, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	metadata := loaded.Message.Metadata
+	var compactToolCalls bytes.Buffer
+	if err := json.Compact(&compactToolCalls, metadata.ToolCalls); err != nil {
+		t.Fatalf("compact loaded tool calls: %v", err)
+	}
+	if loaded.Version != 3 || metadata.MessageKind != bus.OutboundMessageKindFinalReply ||
+		metadata.OutboundKind != bus.OutboundKindFinal || compactToolCalls.String() != `[{"id":"call-1"}]` ||
+		metadata.InteractionShortID != "short-1" || len(metadata.Choices) != 2 || metadata.Choices[0] != "Yes" {
+		t.Fatalf("loaded typed metadata = %#v in version %d", metadata, loaded.Version)
+	}
+}
+
+func TestStoreRejectsPreviousRecordVersionAndInvalidCurrentMetadata(t *testing.T) {
+	store := openTestStore(t)
+	previous := newTestIntent(t, "previous", 0)
+	previous.Version = recordVersion - 1
+	if err := store.write(previous); err != nil {
+		t.Fatalf("write previous record: %v", err)
+	}
+	if _, err := store.Get(
+		previous.ID,
+	); err == nil ||
+		!strings.Contains(err.Error(), "unsupported outbox record version 2") {
+		t.Fatalf("Get(previous) error = %v", err)
+	}
+
+	invalid := newTestIntent(t, "invalid", 1)
+	invalid.Message.Metadata.ToolCalls = json.RawMessage("{")
+	if _, err := store.Create(invalid); err == nil || !strings.Contains(err.Error(), "valid JSON") {
+		t.Fatalf("Create(invalid metadata) error = %v", err)
 	}
 }
 

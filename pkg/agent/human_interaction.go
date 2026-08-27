@@ -17,8 +17,6 @@ import (
 
 const (
 	interactionMessageKind = "human_interaction"
-	interactionIDMetadata  = bus.OutboundMetadataKeyInteractionID
-	interactionShortIDMeta = bus.OutboundMetadataKeyInteractionShortID
 )
 
 type humanInteractionRuntime struct {
@@ -413,12 +411,11 @@ func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 		TopicID:   record.Route.TopicID,
 		SpaceID:   record.Route.SpaceID,
 		SpaceType: record.Route.SpaceType,
-		Raw: map[string]string{
-			metadataKeyMessageKind: interactionMessageKind,
-			interactionIDMetadata:  record.ID,
-			interactionShortIDMeta: record.ShortID,
-			"delivery_key":         interactionDeliveryKey(record.ID, "prompt"),
-		},
+	}
+	metadata := bus.OutboundMetadata{
+		MessageKind:        interactionMessageKind,
+		InteractionID:      record.ID,
+		InteractionShortID: record.ShortID,
 	}
 	replyToMessageID := ""
 	requestID := ""
@@ -426,17 +423,17 @@ func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 		requestID = strings.TrimSpace(record.Origin.ExecutionContext.MessageID)
 	}
 	if requestID != "" {
-		outboundContext.Raw[bus.OutboundMetadataKeyRequestID] = requestID
+		metadata.RequestID = requestID
 	}
 	if strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
 		replyToMessageID = requestID
 	}
 	switch record.Kind {
 	case interactions.KindApproval:
-		bus.OutboundMetadata{
+		metadata = metadata.Merge(bus.OutboundMetadata{
 			InteractionKind:     bus.OutboundInteractionApproval,
 			InteractionControls: bus.OutboundInteractionControlsPrompt,
-		}.ApplyToContext(&outboundContext)
+		})
 	case interactions.KindQuestion:
 		choices := []string(nil)
 		if len(record.Questions) == 1 {
@@ -445,17 +442,17 @@ func interactionPromptMessage(record interactions.Record) bus.OutboundMessage {
 				choices = append(choices, option.Label)
 			}
 		}
-		metadata := bus.OutboundMetadata{
+		metadata = metadata.Merge(bus.OutboundMetadata{
 			InteractionKind:     bus.OutboundInteractionQuestion,
 			InteractionControls: bus.OutboundInteractionControlsPrompt,
-		}
+		})
 		metadata = metadata.WithInteractionChoices(choices)
-		metadata.ApplyToContext(&outboundContext)
 	}
 	return bus.OutboundMessage{
 		Channel:          record.Route.Channel,
 		ChatID:           record.Route.ChatID,
 		Context:          outboundContext,
+		Metadata:         metadata,
 		AgentID:          record.Route.AgentID,
 		SessionKey:       record.Route.SessionKey,
 		ReplyToMessageID: replyToMessageID,

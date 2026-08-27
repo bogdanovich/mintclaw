@@ -98,7 +98,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 				"channel":          name,
 				"chat_id":          chatID,
 				"placeholder_id":   entry.id,
-				"message_kind":     bus.OutboundMetadataFromMessage(msg).MessageKind,
+				"message_kind":     msg.Metadata.MessageKind,
 				"is_tool_feedback": isToolFeedback,
 				"bypass":           outboundMessageBypassesPlaceholderEdit(msg),
 			})

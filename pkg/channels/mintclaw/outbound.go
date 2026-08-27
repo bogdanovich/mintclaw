@@ -35,10 +35,10 @@ func (c *MintClawChannel) sendText(ctx context.Context, msg bus.OutboundMessage)
 		"message_id":      msgID,
 	}
 	setOutboundIdentityPayload(payload, msg)
-	if modelName := strings.TrimSpace(msg.Context.Raw[PayloadKeyModelName]); modelName != "" {
+	if modelName := strings.TrimSpace(msg.Metadata.ModelName); modelName != "" {
 		payload[PayloadKeyModelName] = modelName
 	}
-	metadata := bus.OutboundMetadataFromMessage(msg)
+	metadata := msg.Metadata
 	switch {
 	case isThought:
 		payload[PayloadKeyKind] = MessageKindThought

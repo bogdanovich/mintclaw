@@ -52,11 +52,11 @@ var allowedInlineImageMIMETypes = map[string]struct{}{
 }
 
 func outboundMessageIsThought(msg bus.OutboundMessage) bool {
-	return bus.OutboundMetadataFromMessage(msg).IsThought()
+	return msg.Metadata.IsThought()
 }
 
 func outboundMessageIsToolCalls(msg bus.OutboundMessage) bool {
-	return bus.OutboundMetadataFromMessage(msg).IsToolCalls()
+	return msg.Metadata.IsToolCalls()
 }
 
 func (pc *mintclawConn) write(ctx context.Context, writeFn func() error) error {

@@ -265,7 +265,7 @@ func TestDeliverAsyncToolCompletion_UserOnlyUpdatesDelivered(t *testing.T) {
 	if outbound.Context.TopicID != "topic-1" {
 		t.Fatalf("TopicID = %q, want topic-1", outbound.Context.TopicID)
 	}
-	metadata := bus.OutboundMetadataFromMessage(outbound)
+	metadata := outbound.Metadata
 	if metadata.OutboundKind != bus.OutboundKindFinal ||
 		metadata.MessageKind != bus.OutboundMessageKindFinalReply {
 		t.Fatalf("outbound metadata = %+v, want final/final_reply", metadata)
@@ -388,7 +388,7 @@ func TestDeliverAsyncToolCompletion_UserAndParentDeliversBothOnce(t *testing.T) 
 	userOutbound := waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
 		return msg.Content == "user visible"
 	})
-	if metadata := bus.OutboundMetadataFromMessage(userOutbound); metadata.OutboundKind == bus.OutboundKindFinal {
+	if metadata := userOutbound.Metadata; metadata.OutboundKind == bus.OutboundKindFinal {
 		t.Fatalf("user_and_parent outbound metadata = %+v, must not be terminal", metadata)
 	}
 	waitForOutboundMessage(t, msgBus.OutboundChan(), 2*time.Second, func(msg bus.OutboundMessage) bool {
@@ -496,7 +496,7 @@ func TestDeliverAsyncToolCompletion_SkipsDuplicateMediaAfterReload(t *testing.T)
 	if len(media.Parts) != 1 || media.Parts[0].Ref != "media://video-1" {
 		t.Fatalf("media parts = %+v, want media://video-1", media.Parts)
 	}
-	metadata := bus.OutboundMetadataFromContext(media.Context)
+	metadata := media.Metadata
 	if metadata.OutboundKind != bus.OutboundKindFinal ||
 		metadata.MessageKind != bus.OutboundMessageKindFinalReply {
 		t.Fatalf("media outbound metadata = %+v, want final/final_reply", metadata)
@@ -801,7 +801,7 @@ func TestDeliverAsyncToolCompletion_ErrorDeliveryUpdatesTaskStatus(t *testing.T)
 			return msg.Content == "user error"
 		},
 	)
-	metadata := bus.OutboundMetadataFromMessage(errorOutbound)
+	metadata := errorOutbound.Metadata
 	if metadata.OutboundKind != bus.OutboundKindFinal ||
 		metadata.MessageKind != bus.OutboundMessageKindFinalReply {
 		t.Fatalf("error outbound metadata = %+v, want final/final_reply", metadata)
