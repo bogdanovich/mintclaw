@@ -353,6 +353,48 @@ The 2026-08-27 post-X3.64 read-only gate audit further established:
   `1b02363e` is conflict-free, but the branch still requires a real final refresh,
   validation, exact-head review, and new merge approval after the live gates.
 
+The 2026-08-27 post-X3.66 read-only gate audit supersedes the mutable facts in
+that snapshot:
+
+- merged main is `72d07542` through PR #943, while the five gateways, Web
+  launcher, installed CLI, and local P5a companion still run the previously
+  deployed `8418b021` release. All expected user services are active, the
+  deliberately stopped system P3 node is the only inactive product service,
+  its matching helper remains active, the last ten minutes contain no service
+  errors, and no old product process is running;
+- the six retained node records still name Ed25519, an executor, and a policy
+  revision. `p5a-canary` and `ab-local-test` are connected on `8418b021`, the
+  stopped `p3-canary` record retains bridge build `71ad3e53`, connected `vpn`
+  remains on pre-bridge `03b08be2` without a managed-update command, and the
+  old pending Darwin and revoked Linux records remain unchanged;
+- all five configs decode as version 4 and still define 21 agent entries over
+  20 workspace roots. Every root has `AGENTS.md`, none has root `AGENT.md`, the
+  single ignored root `IDENTITY.md` remains 301 bytes, and the same seven inert
+  deny entries remain. `doctor` reports no load or schema errors; its exit-2
+  results are independent policy and security findings;
+- the filesystem has 83,558,346,752 bytes free and the five active profile
+  trees occupy 6,482,271,509 bytes. No backup newer than the partial 2026-08-26
+  deployment backups exists, so the same-time full-state backup gate remains
+  open;
+- all 811 outbox version 2 records remain terminal with the same status split.
+  Retention pruning leaves 249 terminal tasks and 1,196 valid
+  `task_event.v2` events with no missing generation or invalid sequence. The
+  interaction inventory remains 28 terminal records and 236 valid
+  `interaction_event.v1` events; and
+- PR #901 remains at `f7defbb2` on base `4b875d41` with nine historical green
+  checks. Its last clean review still names `5c6a493a`, the current head still
+  has only an eyes reaction, and a corrected read-only merge simulation of the
+  exact head against `72d07542` is conflict-free. It still requires a real
+  final refresh, validation, exact-head review, and new merge approval after
+  the live gates.
+
+The local deployed-operations helper also needs a pre-R1 path correction: its
+topology and status script still probe `/home/server/src/mintclaw/default`,
+which no longer exists, while the actual source checkout and gateway build are
+under `/home/server/src/mintclaw`. The health fields above were verified from
+the real units, processes, registry, and state files rather than treating the
+helper's empty source SHA as valid evidence.
+
 ### Re-audit corrections
 
 The original keyword inventory was useful for discovery but too broad as an
@@ -383,7 +425,6 @@ separation and standards alignment.
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
 | Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its current head is green but still needs final-base refresh and exact-head review | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries and one ignored root `IDENTITY.md` remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, preserve any unique ignored-file prose in the current contract and remove that file, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
-| Outbound metadata stored in `InboundContext.Raw` | Duplicate representation and misplaced ownership, not version compatibility | A typed view still parses and writes string keys in the inbound context across 23 production files. All 811 deployed outbox records that persist this shape are terminal, so no live delivery requires translation | Z1 after R1; under a stopped-state backup, archive terminal outbox history, advance the sole current outbox contract, put metadata directly on outbound text and media messages, and delete raw metadata readers, writers, constants, and integer parsing without adding a version 2 reader |
 
 C2 is closed. PR #924 moved durable checkpoint ownership to the coding
 composition root; PRs #925-#927 made recovery reads and constructors explicitly
@@ -1538,7 +1579,7 @@ Current gate snapshot from the 2026-08-26/27 re-audit:
    explicit content reconciliation and removal after backup;
 6. PR #901 implements the strict removal; all nine checks pass on head
    `f7defbb2`, while its last clean review covers the earlier `5c6a493a` head
-   and current main at `1b02363e` requires a final refresh, validation, review,
+   and current main at `72d07542` requires a final refresh, validation, review,
    and new merge approval; a read-only merge simulation is conflict-free;
    and
 7. removal deployment and rollback have not started.
