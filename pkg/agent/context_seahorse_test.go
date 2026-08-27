@@ -945,7 +945,7 @@ func TestSeahorseContextManagerIsolatesAgentRuntimes(t *testing.T) {
 		t.Fatalf("support DB path = %q", supportDBPath)
 	}
 	al := &AgentLoop{cfg: cfg, registry: registry}
-	managerValue, managerErr := newSeahorseContextManager(nil, al)
+	managerValue, managerErr := newSeahorseContextManager(t.Context(), nil, al)
 	if managerErr != nil {
 		t.Fatal(managerErr)
 	}

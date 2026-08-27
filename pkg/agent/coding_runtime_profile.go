@@ -20,9 +20,8 @@ import (
 // CodingRuntimeProfile is the immutable set of coding-thread layouts admitted
 // before registry construction.
 type CodingRuntimeProfile struct {
-	agentLayouts    map[string]CodingRuntimeLayout
-	storeFactory    CodingRuntimeStoreFactory
-	constructionCtx context.Context
+	agentLayouts map[string]CodingRuntimeLayout
+	storeFactory CodingRuntimeStoreFactory
 }
 
 // CodingRuntimeStoreFactory opens the canonical and derived stores owned by a
@@ -73,9 +72,8 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		return CodingRuntimeProfile{}, fmt.Errorf("coding runtime profile: store factory is required")
 	}
 	profile := CodingRuntimeProfile{
-		agentLayouts:    make(map[string]CodingRuntimeLayout, len(bindings)),
-		storeFactory:    storeFactory,
-		constructionCtx: context.Background(),
+		agentLayouts: make(map[string]CodingRuntimeLayout, len(bindings)),
+		storeFactory: storeFactory,
 	}
 	threadAgents := make(map[string]string, len(bindings))
 	for index, binding := range bindings {
@@ -176,13 +174,6 @@ func NewCodingRuntimeProfileWithStoreFactory(
 		}
 	}
 	return profile, nil
-}
-
-func (p CodingRuntimeProfile) withConstructionContext(ctx context.Context) CodingRuntimeProfile {
-	if ctx != nil {
-		p.constructionCtx = ctx
-	}
-	return p
 }
 
 func runtimeDependencyIsNil(dependency any) bool {

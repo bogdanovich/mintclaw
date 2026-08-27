@@ -31,10 +31,11 @@ func NewAgentLoop(
 	opts ...AgentLoopOption,
 ) *AgentLoop {
 	registry := NewAgentRegistry(cfg, provider)
-	return newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	return newAgentLoopWithRegistry(context.Background(), cfg, msgBus, provider, registry, opts...)
 }
 
 func newAgentLoopWithRegistry(
+	ctx context.Context,
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
@@ -111,7 +112,7 @@ func newAgentLoopWithRegistry(
 	}
 	al.hooks = NewHookManager(al.runtimeEvents.Channel())
 	configureHookManagerFromConfig(al.hooks, cfg)
-	al.contextManager, al.contextManagerInitErr = al.resolveContextManager()
+	al.contextManager, al.contextManagerInitErr = al.resolveContextManager(ctx)
 
 	// Register shared tools to all agents (now that al is created)
 	if !al.isolatedToolBootstrap {
@@ -141,7 +142,7 @@ func NewAgentLoopChecked(
 	if err != nil {
 		return nil, err
 	}
-	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	al := newAgentLoopWithRegistry(context.Background(), cfg, msgBus, provider, registry, opts...)
 	if al.runtimeInitErr != nil {
 		err := al.runtimeInitErr
 		al.Close()
@@ -154,20 +155,9 @@ func NewAgentLoopChecked(
 	return al, nil
 }
 
-// NewCodingAgentLoop applies a resolved coding-thread profile before registry
-// and agent construction.
+// NewCodingAgentLoop applies a resolved coding-thread profile while bounding
+// construction and startup repair with ctx.
 func NewCodingAgentLoop(
-	cfg *config.Config,
-	msgBus *bus.MessageBus,
-	provider providers.LLMProvider,
-	profile CodingRuntimeProfile,
-	opts ...AgentLoopOption,
-) (*AgentLoop, error) {
-	return NewCodingAgentLoopContext(context.Background(), cfg, msgBus, provider, profile, opts...)
-}
-
-// NewCodingAgentLoopContext bounds coding-only construction and startup repair.
-func NewCodingAgentLoopContext(
 	ctx context.Context,
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
@@ -181,7 +171,6 @@ func NewCodingAgentLoopContext(
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	profile = profile.withConstructionContext(ctx)
 	contextManagerName := contextManagerConfigName(cfg)
 	if contextManagerName != "none" && contextManagerName != "seahorse" {
 		return nil, fmt.Errorf(
@@ -197,7 +186,7 @@ func NewCodingAgentLoopContext(
 		withCodingRuntimeProfile(profile),
 		WithIsolatedToolBootstrap(),
 	}, opts...)
-	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	al := newAgentLoopWithRegistry(ctx, cfg, msgBus, provider, registry, opts...)
 	if al.runtimeInitErr != nil {
 		err := al.runtimeInitErr
 		al.Close()

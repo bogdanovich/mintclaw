@@ -327,6 +327,7 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 		},
 	}
 	loop, err := NewCodingAgentLoop(
+		t.Context(),
 		cfg,
 		bus.NewMessageBus(),
 		&mockProvider{},
@@ -462,7 +463,7 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	}
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Name: "Configured Persona", Default: true}}
 	provider := &promptCapturingProvider{}
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), provider, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), provider, profile)
 	if err != nil {
 		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
@@ -615,7 +616,7 @@ func TestCodingDirectResolvesEachAdmittedThread(t *testing.T) {
 		{ID: "main", Default: true},
 		{ID: "support"},
 	}
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
 		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
@@ -820,7 +821,7 @@ func TestNewCodingAgentLoopRejectsUnusableStatePaths(t *testing.T) {
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.ContextManager = "none"
 
-			loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 			if err == nil {
 				if loop != nil {
 					loop.Close()
@@ -862,6 +863,7 @@ func TestNewCodingAgentLoopPreflightsAllBindings(t *testing.T) {
 	}
 
 	loop, err := NewCodingAgentLoop(
+		t.Context(),
 		cfg,
 		bus.NewMessageBus(),
 		&mockProvider{},
@@ -929,7 +931,7 @@ func TestNewCodingAgentLoopPreflightsLaterStateBeforeConstruction(t *testing.T) 
 		{ID: "support"},
 	}
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil {
 		if loop != nil {
 			loop.Close()
@@ -991,7 +993,7 @@ func TestNewCodingAgentLoopRevalidatesPhysicalStateIsolation(t *testing.T) {
 		{ID: "support"},
 	}
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil {
 		if loop != nil {
 			loop.Close()
@@ -1065,7 +1067,7 @@ func TestNewCodingAgentLoopRejectsDerivedStateSymlinks(t *testing.T) {
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.ContextManager = "none"
 
-			loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 			if err == nil {
 				if loop != nil {
 					loop.Close()
@@ -1115,7 +1117,7 @@ func TestNewCodingAgentLoopRejectsSeahorseDatabaseSymlink(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil {
 		if loop != nil {
 			loop.Close()
@@ -1187,7 +1189,7 @@ func TestNewCodingAgentLoopRejectsInvalidOperationalLeaves(t *testing.T) {
 			}
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.ContextManager = "none"
-			loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 			if err == nil {
 				if loop != nil {
 					loop.Close()
@@ -1251,7 +1253,7 @@ func TestNewCodingAgentLoopChecksLaterStateCreatability(t *testing.T) {
 		{ID: "support"},
 	}
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil {
 		if loop != nil {
 			loop.Close()
@@ -1310,7 +1312,7 @@ func TestNewCodingAgentLoopDoesNotConvertJSONSessions(t *testing.T) {
 		{ID: "support"},
 	}
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
 		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
@@ -1345,7 +1347,7 @@ func TestNewCodingAgentLoopRoutesCodingSeahorseToStateRoot(t *testing.T) {
 		t.Fatalf("default context manager = %q, want seahorse", contextManagerConfigName(cfg))
 	}
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
 		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
@@ -1405,7 +1407,13 @@ func TestNewCodingAgentLoopRebuildsMissingOrCorruptSeahorseFromCanonicalHistory(
 	dbPath := filepath.Join(layout.StatePaths().ContextRoot, "seahorse.db")
 	openAndAssert := func(stage string) {
 		t.Helper()
-		loop, openErr := NewCodingAgentLoop(config.DefaultConfig(), bus.NewMessageBus(), &mockProvider{}, profile)
+		loop, openErr := NewCodingAgentLoop(
+			t.Context(),
+			config.DefaultConfig(),
+			bus.NewMessageBus(),
+			&mockProvider{},
+			profile,
+		)
 		if openErr != nil {
 			t.Fatalf("%s NewCodingAgentLoop() error = %v", stage, openErr)
 		}
@@ -1474,7 +1482,13 @@ func TestPrepareCodingSessionRebuildsCorruptionDiscoveredDuringReconciliation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanLoop, err := NewCodingAgentLoop(config.DefaultConfig(), bus.NewMessageBus(), &mockProvider{}, cleanProfile)
+	cleanLoop, err := NewCodingAgentLoop(
+		t.Context(),
+		config.DefaultConfig(),
+		bus.NewMessageBus(),
+		&mockProvider{},
+		cleanProfile,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1493,7 +1507,7 @@ func TestPrepareCodingSessionRebuildsCorruptionDiscoveredDuringReconciliation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	loop, err := NewCodingAgentLoop(config.DefaultConfig(), bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), config.DefaultConfig(), bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1567,7 +1581,7 @@ func corruptSQLiteTableRootPage(t *testing.T, dbPath, table string) {
 	}
 }
 
-func TestNewCodingAgentLoopContextBoundsDerivedStoreConstruction(t *testing.T) {
+func TestNewCodingAgentLoopBoundsDerivedStoreConstruction(t *testing.T) {
 	root := t.TempDir()
 	layout, err := NewCodingRuntimeLayout(
 		"thread-deadline",
@@ -1587,7 +1601,7 @@ func TestNewCodingAgentLoopContextBoundsDerivedStoreConstruction(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
-	loop, err := NewCodingAgentLoopContext(
+	loop, err := NewCodingAgentLoop(
 		ctx,
 		config.DefaultConfig(),
 		bus.NewMessageBus(),
@@ -1598,7 +1612,7 @@ func TestNewCodingAgentLoopContextBoundsDerivedStoreConstruction(t *testing.T) {
 		if loop != nil {
 			loop.Close()
 		}
-		t.Fatalf("NewCodingAgentLoopContext() = loop %T error %v, want deadline", loop, err)
+		t.Fatalf("NewCodingAgentLoop() = loop %T error %v, want deadline", loop, err)
 	}
 }
 
@@ -1637,7 +1651,7 @@ func TestCodingRuntimeProfileSeparatesSeahorseDatabasesByCodingThread(t *testing
 		{ID: "support"},
 	}
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
 		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
@@ -1698,7 +1712,7 @@ func TestCodingRuntimeProfileStoreConstructionRollsBackEarlierSessions(t *testin
 		{ID: "support"},
 	}
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if !errors.Is(err, errInjectedRuntimeStore) {
 		if loop != nil {
 			loop.Close()
@@ -1755,7 +1769,7 @@ func TestCodingRuntimeProfileRejectsNilSessionStoreProducts(t *testing.T) {
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.ContextManager = "none"
 
-			loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+			loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 			if err == nil || !strings.Contains(err.Error(), "nil session store") {
 				if loop != nil {
 					loop.Close()
@@ -1791,7 +1805,7 @@ func TestCodingRuntimeProfileContextConstructionFailureClosesCanonicalStore(t *t
 	}
 	cfg := config.DefaultConfig()
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if !errors.Is(err, errInjectedRuntimeStore) {
 		if loop != nil {
 			loop.Close()
@@ -1832,7 +1846,7 @@ func TestCodingRuntimeProfileNilSeahorseEngineClosesCanonicalStore(t *testing.T)
 	}
 	cfg := config.DefaultConfig()
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil || !strings.Contains(err.Error(), "nil Seahorse engine") {
 		if loop != nil {
 			loop.Close()
@@ -1874,7 +1888,7 @@ func TestCodingRuntimeProfileLaterContextFailureClosesPartialManager(t *testing.
 		{ID: "support"},
 	}
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if !errors.Is(err, errInjectedRuntimeStore) {
 		if loop != nil {
 			loop.Close()
@@ -1927,7 +1941,7 @@ func TestCodingRuntimeProfileRejectsCustomSeahorsePathAndRollsBack(t *testing.T)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManagerConfig = []byte(`{"dbPath":"/tmp/not-owner-scoped.db"}`)
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil || !strings.Contains(err.Error(), "custom dbPath") {
 		if loop != nil {
 			loop.Close()
@@ -1966,7 +1980,7 @@ func TestCodingRuntimeProfileRejectsUnsupportedContextManagerBeforeStores(t *tes
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "custom"
 
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err == nil || !strings.Contains(err.Error(), "no thread-scoped storage contract") {
 		if loop != nil {
 			loop.Close()
@@ -2007,7 +2021,7 @@ func TestCodingRuntimeProfileRejectsHotReloadWithoutMutation(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
 		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
@@ -2059,7 +2073,7 @@ func TestCodingRuntimeProfileKeepsMCPIsolatedWhenReloadRejected(t *testing.T) {
 	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
 		"must-not-start": {Enabled: true, Command: filepath.Join(root, "missing-mcp-server")},
 	}
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
 		t.Fatalf("NewCodingAgentLoop() error = %v", err)
 	}
@@ -2106,6 +2120,7 @@ func TestCodingRuntimeProfileIsolatedSkillsKeepExternalMemory(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
 	loop, err := NewCodingAgentLoop(
+		t.Context(),
 		cfg,
 		bus.NewMessageBus(),
 		&mockProvider{},

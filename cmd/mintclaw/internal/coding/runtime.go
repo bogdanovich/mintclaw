@@ -204,7 +204,7 @@ func openNativeCodingRuntime(
 			observe:    compactionObserver,
 		}
 	}
-	loop, err := agent.NewCodingAgentLoopContext(
+	loop, err := agent.NewCodingAgentLoop(
 		constructionCtx,
 		runtimeCfg,
 		messageBus,

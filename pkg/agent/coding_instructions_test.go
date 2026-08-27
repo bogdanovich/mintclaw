@@ -534,7 +534,7 @@ func TestCodingExecDefaultsToInvocationCWD(t *testing.T) {
 	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +636,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 	cfg.Agents.Defaults.Provider = "test-provider"
 	cfg.Agents.Defaults.ModelName = "coding-instruction-model"
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), provider, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), provider, profile)
 	if err != nil {
 		t.Fatal(err)
 	}

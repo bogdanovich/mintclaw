@@ -34,7 +34,7 @@ func TestRegisterContextManager_Success(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(_ context.Context, cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
 		return &noopContextManager{}, nil
 	}
 	if err := RegisterContextManager("test_cm", factory); err != nil {
@@ -54,9 +54,12 @@ func TestRegisterContextManager_EmptyName(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	err := RegisterContextManager("", func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
-		return &noopContextManager{}, nil
-	})
+	err := RegisterContextManager(
+		"",
+		func(_ context.Context, cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+			return &noopContextManager{}, nil
+		},
+	)
 	if err == nil {
 		t.Fatal("expected error for empty name")
 	}
@@ -82,7 +85,7 @@ func TestRegisterContextManager_Duplicate(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(_ context.Context, cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
 		return &noopContextManager{}, nil
 	}
 	if err := RegisterContextManager("dup_cm", factory); err != nil {
@@ -115,7 +118,7 @@ func TestResolveContextManager_Default(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	factory := func(_ json.RawMessage, _ *AgentLoop) (ContextManager, error) {
+	factory := func(_ context.Context, _ json.RawMessage, _ *AgentLoop) (ContextManager, error) {
 		return &noopContextManager{}, nil
 	}
 	if err := RegisterContextManager("seahorse", factory); err != nil {
@@ -197,7 +200,7 @@ func TestResolveContextManager_RegisteredFactory(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(_ context.Context, cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
 		return &noopContextManager{}, nil
 	}
 	if err := RegisterContextManager("custom_cm", factory); err != nil {
@@ -222,11 +225,37 @@ func TestResolveContextManager_RegisteredFactory(t *testing.T) {
 	}
 }
 
+func TestResolveContextManagerPropagatesConstructionContext(t *testing.T) {
+	cleanup := resetCMRegistry()
+	defer cleanup()
+
+	type constructionContextKey struct{}
+	ctx := context.WithValue(t.Context(), constructionContextKey{}, "current")
+	received := ""
+	factory := func(factoryCtx context.Context, _ json.RawMessage, _ *AgentLoop) (ContextManager, error) {
+		received, _ = factoryCtx.Value(constructionContextKey{}).(string)
+		return &noopContextManager{}, nil
+	}
+	if err := RegisterContextManager("custom_cm", factory); err != nil {
+		t.Fatalf("register failed: %v", err)
+	}
+	al := &AgentLoop{cfg: &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+		ContextManager: "custom_cm",
+	}}}}
+
+	if _, err := al.resolveContextManager(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if received != "current" {
+		t.Fatalf("factory construction context value = %q, want current", received)
+	}
+}
+
 func TestResolveContextManager_FactoryError(t *testing.T) {
 	cleanup := resetCMRegistry()
 	defer cleanup()
 
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(_ context.Context, cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
 		return nil, os.ErrPermission
 	}
 	if err := RegisterContextManager("broken_cm", factory); err != nil {
@@ -335,7 +364,7 @@ func TestAgentLoop_UsesCustomContextManager(t *testing.T) {
 	defer cleanup()
 
 	mock := &trackingContextManager{}
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(_ context.Context, cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
 		return mock, nil
 	}
 	if err := RegisterContextManager("tracking_cm", factory); err != nil {
@@ -401,7 +430,7 @@ func TestIngestCalledDuringTurn(t *testing.T) {
 	defer cleanup()
 
 	mock := &trackingContextManager{}
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(_ context.Context, cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
 		return mock, nil
 	}
 	if err := RegisterContextManager("ingest_track_cm", factory); err != nil {
@@ -453,7 +482,7 @@ func TestClearCommandRoutedAgentCallsContextManagerClear(t *testing.T) {
 	defer cleanup()
 
 	mock := &trackingContextManager{}
-	factory := func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
+	factory := func(_ context.Context, cfg json.RawMessage, al *AgentLoop) (ContextManager, error) {
 		return mock, nil
 	}
 	if err := RegisterContextManager("clear_track_cm", factory); err != nil {
