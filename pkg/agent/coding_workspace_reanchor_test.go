@@ -202,7 +202,7 @@ func TestCodingProviderRetryRefreshesWorkspaceSnapshot(t *testing.T) {
 	cfg.Agents.Defaults.ModelName = "coding-workspace-model"
 	cfg.Agents.Defaults.MaxLLMRetries = 1
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), provider, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), provider, profile)
 	if err != nil {
 		t.Fatal(err)
 	}

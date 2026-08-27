@@ -104,7 +104,7 @@ func TestAdd(t *testing.T) {
 
 	_, profile := newCodingToolTestProfile(t, project, stateRoot)
 	cfg := codingToolTestConfig()
-	loop, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), provider, profile)
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), provider, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestAdd(t *testing.T) {
 		Response: llmscenario.TextResponse("resume observed"),
 	})
 	_, resumeProfile := newCodingToolTestProfile(t, project, stateRoot)
-	resumed, err := NewCodingAgentLoop(cfg, bus.NewMessageBus(), resumeProvider, resumeProfile)
+	resumed, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), resumeProvider, resumeProfile)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,13 +3,18 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
 
 // newSeahorseContextManager is unavailable on platforms where modernc sqlite/libc
 // currently has no stable build path for this project.
-func newSeahorseContextManager(_ json.RawMessage, _ *AgentLoop) (ContextManager, error) {
+func newSeahorseContextManager(
+	_ context.Context,
+	_ json.RawMessage,
+	_ *AgentLoop,
+) (ContextManager, error) {
 	return nil, fmt.Errorf("seahorse context manager is unavailable on this platform")
 }
 

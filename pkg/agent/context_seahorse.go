@@ -50,7 +50,17 @@ type seahorseAgentRuntime struct {
 const seahorseReconciliationGeneration = 2
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
-func newSeahorseContextManager(rawConfig json.RawMessage, al *AgentLoop) (ContextManager, error) {
+func newSeahorseContextManager(
+	ctx context.Context,
+	rawConfig json.RawMessage,
+	al *AgentLoop,
+) (ContextManager, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("seahorse: construction context is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	if al == nil {
 		return nil, fmt.Errorf("seahorse: AgentLoop is required")
 	}
@@ -69,6 +79,7 @@ func newSeahorseContextManager(rawConfig json.RawMessage, al *AgentLoop) (Contex
 			continue
 		}
 		runtime, err := newSeahorseAgentRuntime(
+			ctx,
 			rawConfig,
 			al,
 			agent,
@@ -91,6 +102,7 @@ func newSeahorseContextManager(rawConfig json.RawMessage, al *AgentLoop) (Contex
 }
 
 func newSeahorseAgentRuntime(
+	ctx context.Context,
 	rawConfig json.RawMessage,
 	al *AgentLoop,
 	agent *AgentInstance,
@@ -112,14 +124,7 @@ func newSeahorseAgentRuntime(
 		}
 	}
 	complete := providerToCompleteFn(agent.Provider, agent.Model)
-	constructionCtx := context.Background()
-	if al.codingProfile != nil {
-		constructionCtx = al.codingProfile.constructionCtx
-	}
-	if constructionCtx == nil {
-		constructionCtx = context.Background()
-	}
-	engine, err := storeFactory.NewSeahorseEngine(constructionCtx, seahorseConfig, complete)
+	engine, err := storeFactory.NewSeahorseEngine(ctx, seahorseConfig, complete)
 	if err != nil && al.codingProfile != nil && seahorse.IsCorruptDatabaseError(err) {
 		if resetErr := seahorse.ResetCorruptDatabase(seahorseConfig.DBPath, err); resetErr != nil {
 			return nil, errors.Join(
@@ -131,7 +136,7 @@ func newSeahorseAgentRuntime(
 			"db_path": seahorseConfig.DBPath,
 			"error":   err.Error(),
 		})
-		engine, err = storeFactory.NewSeahorseEngine(constructionCtx, seahorseConfig, complete)
+		engine, err = storeFactory.NewSeahorseEngine(ctx, seahorseConfig, complete)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("create engine: %w", err)

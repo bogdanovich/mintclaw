@@ -99,10 +99,14 @@ type IngestRequest struct {
 	CanonicalWriteErr error             // non-nil when canonical persistence failed
 }
 
-// ContextManagerFactory constructs a ContextManager from config.
+// ContextManagerFactory constructs a ContextManager from config within ctx.
 // al provides access to the AgentLoop's runtime resources (provider, model, workspace, etc.)
 // cfg is the raw JSON configuration from config.json (may be nil).
-type ContextManagerFactory func(cfg json.RawMessage, al *AgentLoop) (ContextManager, error)
+type ContextManagerFactory func(
+	ctx context.Context,
+	cfg json.RawMessage,
+	al *AgentLoop,
+) (ContextManager, error)
 
 var (
 	cmRegistryMu sync.RWMutex

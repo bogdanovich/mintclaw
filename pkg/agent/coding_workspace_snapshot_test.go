@@ -104,6 +104,7 @@ func TestCodingWorkspaceSnapshotRefreshesPromptAndEmitsFrontendObservation(t *te
 	cfg.Agents.Defaults.ModelName = "coding-workspace-model"
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
 	loop, err := NewCodingAgentLoop(
+		t.Context(),
 		cfg,
 		bus.NewMessageBus(),
 		provider,

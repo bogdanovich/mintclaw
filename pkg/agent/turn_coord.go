@@ -160,7 +160,7 @@ func (r *turnRunner) run(
 	return result, err
 }
 
-func (al *AgentLoop) resolveContextManager() (ContextManager, error) {
+func (al *AgentLoop) resolveContextManager(ctx context.Context) (ContextManager, error) {
 	name := contextManagerConfigName(al.cfg)
 	if name == "none" {
 		return &noneContextManager{}, nil
@@ -170,7 +170,7 @@ func (al *AgentLoop) resolveContextManager() (ContextManager, error) {
 		err := fmt.Errorf("unknown context manager %q", name)
 		return &failedContextManager{err: err}, err
 	}
-	cm, err := factory(al.cfg.Agents.Defaults.ContextManagerConfig, al)
+	cm, err := factory(ctx, al.cfg.Agents.Defaults.ContextManagerConfig, al)
 	if err != nil {
 		wrapped := fmt.Errorf("create context manager %q: %w", name, err)
 		return &failedContextManager{err: wrapped}, wrapped
