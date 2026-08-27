@@ -2,6 +2,7 @@ package seahorse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -161,6 +162,32 @@ func TestCompactLeaf(t *testing.T) {
 	// Some messages should have been replaced
 	if len(result.SummariesCreated) == 0 {
 		t.Error("expected at least 1 summary created")
+	}
+}
+
+func TestCompactLeafFailurePreservesTokenObservations(t *testing.T) {
+	ce, store, convID := newTestCompactionEngine(t)
+	injected := errors.New("injected leaf failure")
+	ce.complete = func(context.Context, string, CompleteOptions) (string, error) {
+		return "", injected
+	}
+	for i := 0; i < FreshTailCount+LeafMinFanout; i++ {
+		message, err := store.AddMessage(t.Context(), convID, "user", "message content", 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = store.AppendContextMessage(t.Context(), convID, message.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := ce.Compact(t.Context(), convID, CompactInput{})
+	if !errors.Is(err, injected) {
+		t.Fatalf("Compact() error = %v, want %v", err, injected)
+	}
+	if result == nil || !result.TokenCountsObserved || result.TokensBefore != result.TokensAfter ||
+		result.TokensSaved != 0 {
+		t.Fatalf("failed leaf compaction metrics = %+v", result)
 	}
 }
 
@@ -499,6 +526,9 @@ func TestCompactUntilUnder(t *testing.T) {
 
 	if result == nil {
 		t.Fatal("expected non-nil result")
+	}
+	if result.CondensedSummaries == 0 || len(result.SummariesCreated) != result.CondensedSummaries {
+		t.Fatalf("condensed compaction metrics = %+v", result)
 	}
 	if !result.TokenCountsObserved || result.TokensBefore < result.TokensAfter ||
 		result.TokensSaved != result.TokensBefore-result.TokensAfter {
@@ -1164,6 +1194,9 @@ func TestCompactWaitsForCondensed(t *testing.T) {
 	}
 	if result == nil {
 		t.Fatal("expected non-nil result")
+	}
+	if result.CondensedSummaries == 0 || len(result.SummariesCreated) != result.CondensedSummaries {
+		t.Fatalf("condensed compaction metrics = %+v", result)
 	}
 
 	if elapsed < 400*time.Millisecond {

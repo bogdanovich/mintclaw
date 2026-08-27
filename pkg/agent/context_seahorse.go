@@ -331,6 +331,7 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 	status := ContextCompressLifecycleFailed
 	startedAt := time.Now()
 	started := false
+	var unlock func()
 	defer func() {
 		if !started {
 			m.emitCompactLifecycleEvent(req, lifecycle)
@@ -341,13 +342,15 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		lifecycle.Status = status
 		lifecycle.Duration = time.Since(startedAt)
 		m.emitCompactLifecycleEvent(req, lifecycle)
+		if unlock != nil {
+			unlock()
+		}
 	}()
 	runtime, runtimeErr := m.runtimeFor(req.Agent)
 	if runtimeErr != nil {
 		return runtimeErr
 	}
-	unlock := m.lockSession(runtime.agentID + ":" + req.SessionKey)
-	defer unlock()
+	unlock = m.lockSession(runtime.agentID + ":" + req.SessionKey)
 	if err := m.ensureConversationProvenance(ctx, runtime, req.SessionKey); err != nil {
 		return err
 	}
