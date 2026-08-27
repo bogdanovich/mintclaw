@@ -247,11 +247,14 @@ func (s *JSONLStore) finishHistoryMutation(key string, meta *SessionMeta) error 
 	return s.writeMeta(key, *meta)
 }
 
-func (s *JSONLStore) reconcileDirtyHistory(key string, meta *SessionMeta) error {
+func (s *JSONLStore) reconcileDirtyHistory(ctx context.Context, key string, meta *SessionMeta) error {
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
 	if !meta.HistoryDirty {
 		return nil
 	}
-	jsonlExists, err := repairDirtyJSONL(s.jsonlPath(key))
+	jsonlExists, err := repairDirtyJSONL(ctx, s.jsonlPath(key))
 	if err != nil {
 		return err
 	}
@@ -260,13 +263,16 @@ func (s *JSONLStore) reconcileDirtyHistory(key string, meta *SessionMeta) error 
 			return fmt.Errorf("memory: sync recovered jsonl directory: %w", syncErr)
 		}
 	}
-	rawCount, _, err := scanRetainedMessageLines(s.jsonlPath(key))
+	if contextErr := contextCause(ctx); contextErr != nil {
+		return contextErr
+	}
+	rawCount, _, err := scanRetainedMessageLines(ctx, s.jsonlPath(key))
 	if err != nil {
 		return err
 	}
 	targetReached := false
 	if meta.HistoryTargetDigest != "" && jsonlExists {
-		digest, digestErr := digestFile(s.jsonlPath(key))
+		digest, digestErr := digestFile(ctx, s.jsonlPath(key))
 		if digestErr != nil {
 			return digestErr
 		}
@@ -281,13 +287,19 @@ func (s *JSONLStore) reconcileDirtyHistory(key string, meta *SessionMeta) error 
 			meta.Skip = rawCount
 		}
 	}
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
 	if err := s.finishHistoryMutation(key, meta); err != nil {
 		return fmt.Errorf("memory: finish dirty history recovery: %w", err)
 	}
 	return nil
 }
 
-func digestFile(path string) (string, error) {
+func digestFile(ctx context.Context, path string) (string, error) {
+	if err := contextCause(ctx); err != nil {
+		return "", err
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("memory: open jsonl for digest: %w", err)
@@ -295,13 +307,32 @@ func digestFile(path string) (string, error) {
 	defer func() { _ = file.Close() }()
 
 	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", fmt.Errorf("memory: digest jsonl: %w", err)
+	buffer := make([]byte, 64*1024)
+	for {
+		if err := contextCause(ctx); err != nil {
+			return "", err
+		}
+		read, readErr := file.Read(buffer)
+		if read > 0 {
+			_, _ = hash.Write(buffer[:read])
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return "", fmt.Errorf("memory: digest jsonl: %w", readErr)
+		}
+	}
+	if err := contextCause(ctx); err != nil {
+		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func repairDirtyJSONL(path string) (bool, error) {
+func repairDirtyJSONL(ctx context.Context, path string) (bool, error) {
+	if err := contextCause(ctx); err != nil {
+		return false, err
+	}
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -315,6 +346,10 @@ func repairDirtyJSONL(path string) (bool, error) {
 		return true, fmt.Errorf("memory: stat jsonl for tail recovery: %w", err)
 	}
 	size := info.Size()
+	if err := contextCause(ctx); err != nil {
+		_ = file.Close()
+		return true, err
+	}
 	if size == 0 {
 		return true, syncAndCloseRecoveredJSONL(file)
 	}
@@ -322,6 +357,10 @@ func repairDirtyJSONL(path string) (bool, error) {
 	if _, err := file.ReadAt(last[:], size-1); err != nil {
 		_ = file.Close()
 		return true, fmt.Errorf("memory: inspect jsonl tail: %w", err)
+	}
+	if err := contextCause(ctx); err != nil {
+		_ = file.Close()
+		return true, err
 	}
 	if last[0] == '\n' {
 		return true, syncAndCloseRecoveredJSONL(file)
@@ -331,6 +370,10 @@ func repairDirtyJSONL(path string) (bool, error) {
 	buffer := make([]byte, recoveryChunkSize)
 	truncateAt := int64(0)
 	for end := size; end > 0; {
+		if err := contextCause(ctx); err != nil {
+			_ = file.Close()
+			return true, err
+		}
 		start := max(int64(0), end-int64(len(buffer)))
 		chunk := buffer[:end-start]
 		read, readErr := file.ReadAt(chunk, start)
@@ -343,6 +386,10 @@ func repairDirtyJSONL(path string) (bool, error) {
 			break
 		}
 		end = start
+	}
+	if err := contextCause(ctx); err != nil {
+		_ = file.Close()
+		return true, err
 	}
 	if err := file.Truncate(truncateAt); err != nil {
 		_ = file.Close()
@@ -388,18 +435,24 @@ func (s *JSONLStore) GetSessionMeta(_ context.Context, sessionKey string) (Sessi
 // per-session lock used by writers, so callers never observe an in-process
 // mutation halfway through.
 func (s *JSONLStore) GetHistoryRevision(
-	_ context.Context,
+	ctx context.Context,
 	sessionKey string,
 ) (HistoryRevision, error) {
+	if err := contextCause(ctx); err != nil {
+		return HistoryRevision{}, err
+	}
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
+	if err := contextCause(ctx); err != nil {
+		return HistoryRevision{}, err
+	}
 
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
 		return HistoryRevision{}, err
 	}
-	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+	if recoveryErr := s.reconcileDirtyHistory(ctx, sessionKey, &meta); recoveryErr != nil {
 		return HistoryRevision{}, recoveryErr
 	}
 	var size, modTimeNS int64
@@ -408,6 +461,9 @@ func (s *JSONLStore) GetHistoryRevision(
 		size = info.Size()
 		modTimeNS = info.ModTime().UnixNano()
 	} else if !os.IsNotExist(err) {
+		return HistoryRevision{}, err
+	}
+	if err := contextCause(ctx); err != nil {
 		return HistoryRevision{}, err
 	}
 	return HistoryRevision{
@@ -476,7 +532,10 @@ func (s *JSONLStore) ClearSessionClientIDs(ctx context.Context, sessionKey strin
 // the first `skip` lines without unmarshaling them. This avoids the
 // cost of json.Unmarshal on logically truncated messages.
 // Malformed trailing lines (e.g. from a crash) are silently skipped.
-func readMessages(path string, skip int) ([]providers.Message, error) {
+func readMessages(ctx context.Context, path string, skip int) ([]providers.Message, error) {
+	if err := contextCause(ctx); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return []providers.Message{}, nil
@@ -493,6 +552,9 @@ func readMessages(path string, skip int) ([]providers.Message, error) {
 
 	lineNum := 0
 	for scanner.Scan() {
+		if err := contextCause(ctx); err != nil {
+			return nil, err
+		}
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
@@ -519,6 +581,9 @@ func readMessages(path string, skip int) ([]providers.Message, error) {
 	if scanner.Err() != nil {
 		return nil, fmt.Errorf("memory: scan jsonl: %w", scanner.Err())
 	}
+	if err := contextCause(ctx); err != nil {
+		return nil, err
+	}
 
 	if msgs == nil {
 		msgs = []providers.Message{}
@@ -530,7 +595,10 @@ func readMessages(path string, skip int) ([]providers.Message, error) {
 // lines plus the raw line numbers that survive readMessages filtering.
 // TruncateHistory uses this to compute keepLast against retained messages
 // while preserving the raw-line skip offset stored in metadata.
-func scanRetainedMessageLines(path string) (int, []int, error) {
+func scanRetainedMessageLines(ctx context.Context, path string) (int, []int, error) {
+	if err := contextCause(ctx); err != nil {
+		return 0, nil, err
+	}
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
 		return 0, []int{}, nil
@@ -545,6 +613,9 @@ func scanRetainedMessageLines(path string) (int, []int, error) {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 	for scanner.Scan() {
+		if err := contextCause(ctx); err != nil {
+			return 0, nil, err
+		}
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
@@ -561,6 +632,9 @@ func scanRetainedMessageLines(path string) (int, []int, error) {
 		retained = append(retained, rawCount)
 	}
 	if err := scanner.Err(); err != nil {
+		return 0, nil, err
+	}
+	if err := contextCause(ctx); err != nil {
 		return 0, nil, err
 	}
 	return rawCount, retained, nil
@@ -602,7 +676,7 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 	if err != nil {
 		return err
 	}
-	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+	if recoveryErr := s.reconcileDirtyHistory(ctx, sessionKey, &meta); recoveryErr != nil {
 		return recoveryErr
 	}
 	if meta.Count == 0 && meta.CreatedAt.IsZero() {
@@ -698,11 +772,17 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 }
 
 func (s *JSONLStore) GetHistory(
-	_ context.Context, sessionKey string,
+	ctx context.Context, sessionKey string,
 ) ([]providers.Message, error) {
+	if err := contextCause(ctx); err != nil {
+		return nil, err
+	}
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
+	if err := contextCause(ctx); err != nil {
+		return nil, err
+	}
 
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
@@ -711,7 +791,7 @@ func (s *JSONLStore) GetHistory(
 
 	// Pass meta.Skip so readMessages skips those lines without
 	// unmarshaling them — avoids wasted CPU on truncated messages.
-	msgs, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
+	msgs, err := readMessages(ctx, s.jsonlPath(sessionKey), meta.Skip)
 	if err != nil {
 		return nil, err
 	}
@@ -743,7 +823,7 @@ func (s *JSONLStore) GetHistoryPage(
 	if err != nil {
 		return HistoryPage{}, err
 	}
-	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+	if recoveryErr := s.reconcileDirtyHistory(ctx, sessionKey, &meta); recoveryErr != nil {
 		return HistoryPage{}, recoveryErr
 	}
 	path := s.jsonlPath(sessionKey)
@@ -895,21 +975,27 @@ func (s *JSONLStore) SetSummary(
 }
 
 func (s *JSONLStore) TruncateHistory(
-	_ context.Context, sessionKey string, keepLast int,
+	ctx context.Context, sessionKey string, keepLast int,
 ) error {
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
 
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
 		return err
 	}
-	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+	if recoveryErr := s.reconcileDirtyHistory(ctx, sessionKey, &meta); recoveryErr != nil {
 		return recoveryErr
 	}
 
-	rawCount, retainedRawLines, scanErr := scanRetainedMessageLines(s.jsonlPath(sessionKey))
+	rawCount, retainedRawLines, scanErr := scanRetainedMessageLines(ctx, s.jsonlPath(sessionKey))
 	if scanErr != nil {
 		return scanErr
 	}
@@ -958,7 +1044,7 @@ func (s *JSONLStore) SetHistory(
 	if err != nil {
 		return err
 	}
-	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+	if recoveryErr := s.reconcileDirtyHistory(ctx, sessionKey, &meta); recoveryErr != nil {
 		return recoveryErr
 	}
 	return s.setHistoryLocked(sessionKey, history, &meta)
@@ -987,10 +1073,10 @@ func (s *JSONLStore) MutateHistory(
 	if err != nil {
 		return false, err
 	}
-	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+	if recoveryErr := s.reconcileDirtyHistory(ctx, sessionKey, &meta); recoveryErr != nil {
 		return false, recoveryErr
 	}
-	history, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
+	history, err := readMessages(ctx, s.jsonlPath(sessionKey), meta.Skip)
 	if err != nil {
 		return false, err
 	}
@@ -1053,17 +1139,23 @@ func (s *JSONLStore) setHistoryLocked(
 // It is safe to call at any time; if there is nothing to compact
 // (skip == 0) the method returns immediately.
 func (s *JSONLStore) Compact(
-	_ context.Context, sessionKey string,
+	ctx context.Context, sessionKey string,
 ) error {
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
+	if err := contextCause(ctx); err != nil {
+		return err
+	}
 
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
 		return err
 	}
-	if recoveryErr := s.reconcileDirtyHistory(sessionKey, &meta); recoveryErr != nil {
+	if recoveryErr := s.reconcileDirtyHistory(ctx, sessionKey, &meta); recoveryErr != nil {
 		return recoveryErr
 	}
 	if meta.Skip == 0 {
@@ -1072,7 +1164,7 @@ func (s *JSONLStore) Compact(
 
 	// Read only the active messages, skipping truncated lines
 	// without unmarshaling them.
-	active, err := readMessages(s.jsonlPath(sessionKey), meta.Skip)
+	active, err := readMessages(ctx, s.jsonlPath(sessionKey), meta.Skip)
 	if err != nil {
 		return err
 	}

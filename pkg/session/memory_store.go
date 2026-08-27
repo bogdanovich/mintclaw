@@ -47,9 +47,18 @@ func (s *MemoryStore) sessionLocked(key string) *memorySession {
 	return stored
 }
 
-func (s *MemoryStore) GetHistoryRevision(key string) (memory.HistoryRevision, error) {
+func (s *MemoryStore) GetHistoryRevision(
+	ctx context.Context,
+	key string,
+) (memory.HistoryRevision, error) {
+	if err := contextCause(ctx); err != nil {
+		return memory.HistoryRevision{}, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := contextCause(ctx); err != nil {
+		return memory.HistoryRevision{}, err
+	}
 	stored := s.sessions[key]
 	if stored == nil {
 		return memory.HistoryRevision{}, nil
@@ -204,10 +213,6 @@ func (s *MemoryStore) replaceTurnSnapshot(
 func (s *MemoryStore) GetHistory(key string) []providers.Message {
 	history, _ := s.ReadTurnHistory(context.Background(), key)
 	return history
-}
-
-func (s *MemoryStore) GetHistoryWithError(key string) ([]providers.Message, error) {
-	return s.ReadTurnHistory(context.Background(), key)
 }
 
 func (s *MemoryStore) ReadTurnHistory(ctx context.Context, sessionKey string) ([]providers.Message, error) {

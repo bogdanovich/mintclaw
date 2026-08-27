@@ -112,13 +112,13 @@ func TestMemoryStoreReplacementAndClear(t *testing.T) {
 func TestMemoryStoreRevisionAndListing(t *testing.T) {
 	store := NewMemoryStore()
 	store.SetHistory("second", []providers.Message{{Role: "user", Content: "first"}})
-	first, err := store.GetHistoryRevision("second")
+	first, err := store.GetHistoryRevision(t.Context(), "second")
 	if err != nil {
 		t.Fatal(err)
 	}
 	store.SetHistory("second", []providers.Message{{Role: "user", Content: "second"}})
 	store.SetSummary("first", "summary")
-	second, err := store.GetHistoryRevision("second")
+	second, err := store.GetHistoryRevision(t.Context(), "second")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,5 +127,15 @@ func TestMemoryStoreRevisionAndListing(t *testing.T) {
 	}
 	if keys := store.ListSessions(); !slices.Equal(keys, []string{"first", "second"}) {
 		t.Fatalf("ListSessions() = %v", keys)
+	}
+}
+
+func TestMemoryStoreRevisionHonorsCanceledContext(t *testing.T) {
+	store := NewMemoryStore()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := store.GetHistoryRevision(ctx, "canceled"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetHistoryRevision() error = %v, want %v", err, context.Canceled)
 	}
 }

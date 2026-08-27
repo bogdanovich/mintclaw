@@ -81,10 +81,11 @@ func contextCause(ctx context.Context) error {
 	return context.Cause(ctx)
 }
 
-// HistoryRevisionProvider exposes a cheap identity for the canonical history.
-// Context caches use it to avoid rereading unchanged histories at startup.
+// HistoryRevisionProvider exposes a context-aware identity for canonical
+// history stores used by reconciliation. Ephemeral session stores do not need
+// to implement this capability.
 type HistoryRevisionProvider interface {
-	GetHistoryRevision(sessionKey string) (memory.HistoryRevision, error)
+	GetHistoryRevision(ctx context.Context, sessionKey string) (memory.HistoryRevision, error)
 }
 
 // TurnHistoryPageReader is the optional bounded read side used by transcript
@@ -95,10 +96,4 @@ type TurnHistoryPageReader interface {
 		sessionKey string,
 		request memory.HistoryPageRequest,
 	) (memory.HistoryPage, error)
-}
-
-// ErrorAwareHistoryReader allows recovery paths to distinguish a failed write
-// from a write that became durable before reporting an error.
-type ErrorAwareHistoryReader interface {
-	GetHistoryWithError(sessionKey string) ([]providers.Message, error)
 }

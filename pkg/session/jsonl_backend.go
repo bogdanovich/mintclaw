@@ -165,9 +165,6 @@ func (b *JSONLBackend) ReadTurnHistory(ctx context.Context, sessionKey string) (
 	if err := contextCause(ctx); err != nil {
 		return nil, err
 	}
-	if err := contextCause(ctx); err != nil {
-		return nil, err
-	}
 	return b.store.GetHistory(ctx, sessionKey)
 }
 
@@ -234,16 +231,12 @@ func (b *JSONLBackend) ClearSession(ctx context.Context, sessionKey string) erro
 }
 
 func (b *JSONLBackend) GetHistory(key string) []providers.Message {
-	msgs, err := b.GetHistoryWithError(key)
+	msgs, err := b.ReadTurnHistory(context.Background(), key)
 	if err != nil {
 		log.Printf("session: get history: %v", err)
 		return []providers.Message{}
 	}
 	return msgs
-}
-
-func (b *JSONLBackend) GetHistoryWithError(key string) ([]providers.Message, error) {
-	return b.ReadTurnHistory(context.Background(), key)
 }
 
 func (b *JSONLBackend) GetSummary(key string) string {
@@ -291,6 +284,12 @@ func (b *JSONLBackend) ListSessions() []string {
 }
 
 // GetHistoryRevision returns the canonical history identity.
-func (b *JSONLBackend) GetHistoryRevision(sessionKey string) (memory.HistoryRevision, error) {
-	return b.store.GetHistoryRevision(context.Background(), sessionKey)
+func (b *JSONLBackend) GetHistoryRevision(
+	ctx context.Context,
+	sessionKey string,
+) (memory.HistoryRevision, error) {
+	if err := contextCause(ctx); err != nil {
+		return memory.HistoryRevision{}, err
+	}
+	return b.store.GetHistoryRevision(ctx, sessionKey)
 }
