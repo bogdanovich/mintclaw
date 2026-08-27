@@ -2,6 +2,9 @@
 
 ## Status And Goal
 
+Status: complete. Phase 6 and global production evidence are recorded in
+[Browser Functional Parity Phase 6 And Global Completion Evidence](../operations/browser-functional-parity-phase6-evidence.md).
+
 This document is the governing execution goal for completing the next six
 browser-capability phases after shared scroll parity. It is intentionally
 larger than one pull request. Each phase must be admitted, implemented,
@@ -26,10 +29,10 @@ tool surface.
 | 3. Tabs, frames, and popups | Complete | [BF1 contexts admission](browser-capability-bf1-contexts-admission.md) and merged cross-placement implementation |
 | 4. Protected fill parity | Complete | [BF1 protected fill admission](browser-capability-bf1-protected-fill-admission.md) and merged protected-value implementation |
 | 5. Remaining ordinary interactions | Complete | [Phase 5 deployment evidence](../operations/browser-functional-parity-phase5-evidence.md) |
-| 6. BF2 media, transfer, diagnostics, and snapshot delivery | Active | Current-state audit and focused admission are next |
+| 6. BF2 media, transfer, diagnostics, and snapshot delivery | Complete | [Phase 6 and global completion evidence](../operations/browser-functional-parity-phase6-evidence.md) |
 
-The overall goal remains active until Phase 6 and the global completion
-criteria are satisfied.
+The overall goal is complete. The execution rules and acceptance criteria
+below remain the authoritative record of what was shipped.
 
 ## Execution Rules
 

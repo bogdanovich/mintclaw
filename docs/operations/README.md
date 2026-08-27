@@ -35,6 +35,10 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Browser Functional Parity Phase 5 deployment evidence](browser-functional-parity-phase5-evidence.md):
   merged ordinary-interaction slices, live gateway and companion file-chooser
   proof, specialist-boundary restoration, cleanup, health, and rollback.
+- [Browser Functional Parity Phase 6 and global completion evidence](browser-functional-parity-phase6-evidence.md):
+  merged BF2 slices, exact gateway and companion deployment, screenshot,
+  upload, download, diagnostics, large-snapshot, receipt, privacy, cleanup,
+  health, and rollback proof closing the six-phase goal.
 - [Browser current-contract cutover](browser-current-contract-cutover.md):
   pre-deployment state audit, current browser authority evidence, opaque
   no-replay tombstone boundary, rollout, and rollback.
