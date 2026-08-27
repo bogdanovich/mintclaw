@@ -2,8 +2,8 @@
 
 Date: 2026-08-25 PDT / 2026-08-26 UTC
 
-Status: local bridge rollout complete; fleet-wide R1 reset not yet authorized
-or complete
+Status: local bridge rollout complete and reverified after a later service
+stop; fleet-wide R1 reset not yet authorized or complete
 
 ## Scope And Authority
 
@@ -78,19 +78,42 @@ The temporary 626 MiB build worktree was unregistered and removed after its
 read-only Go module cache permissions were normalized. Free space returned to
 6.9 GiB.
 
+## Post-Rollout Reverification
+
+A later host operation stopped the static P3 node and service-helper units
+cleanly at the same time as other deployment preparation. It did not replace
+their installed files. Under the original explicit restart and verification
+authority, the retained artifacts were checked against the rollout digests,
+the helper was started before the node, and the pair was reverified.
+
+Both units returned active with zero restarts and successful service results.
+The node reconnected as `p3-canary` on `71ad3e53` with explicit Ed25519, and
+the initial post-start warning/error journal was empty. A subsequent
+current-main gateway restart closed the P3 WebSocket once with an expected
+EOF; the unchanged node process reconnected 15 seconds later and retained zero
+service restarts. P5a remained active on the same verified node digest.
+
+This reverification did not authorize or mutate remote companions, gateway
+binaries, active profiles, or registry records. A separate stopped preflight
+had already changed the latter data; the current roadmap records that evidence
+and keeps its remaining actions distinct from this local rollout.
+
 ## Remaining R1 Gate
 
-This rollout does not permit PR #901 or the strict removal release to merge or
-deploy yet. The current registry still contains:
+This rollout still does not permit PR #901 or the strict removal release to
+merge or deploy. The later preflight converted all six records to explicit
+Ed25519, upgraded `ab-local-test` to the bridge, and completed the version 4
+and `AGENTS.md` data cutover. The remaining gates are now narrower:
 
-- connected Darwin `ab-local-test` on pre-bridge `4ecd74c3`;
-- connected Linux `vpn` on pre-bridge `03b08be2`;
-- one older pending Darwin record;
-- one older revoked Linux record; and
-- six total records whose persisted `key_algorithm` is omitted.
-
-R1 must upgrade or deliberately retire the remaining connected companions,
-convert every retained identity to explicit Ed25519 or remove it deliberately,
-perform the stopped version 4 profile and personal-prose cutover, delete the
-registered browser and identity adapters, deploy the matching removal release,
-and exercise its same-time rollback before Z1 can begin.
+- connected Linux `vpn` still runs pre-bridge `03b08be2` and must be upgraded
+  or deliberately retired;
+- the older pending Darwin and revoked Linux records need an explicit retention
+  or removal decision;
+- the Darwin companion browser path must pass a functional streamed-snapshot
+  canary; catalogue advertisement and the separate gateway-local driver are
+  already current;
+- seven inert tool-policy denies must be removed from the converted configs;
+- a same-time full backup of effective binaries and all durable state must be
+  created; and
+- PR #901 must then merge, deploy, verify, and exercise rollback before Z1 can
+  begin.
