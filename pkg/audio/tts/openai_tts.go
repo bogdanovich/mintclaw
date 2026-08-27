@@ -89,7 +89,7 @@ func NewOpenAITTSProvider(
 			u.Path = path
 			apiBase = u.String()
 		} else {
-			// Fallback to the previous string-based behavior if parsing fails.
+			// Construct the endpoint directly when the configured base is not a valid URL.
 			if apiBase == "https://api.openai.com/v1" {
 				apiBase = "https://api.openai.com/v1/audio/speech"
 			} else if !strings.HasSuffix(apiBase, "/audio/speech") {

@@ -97,13 +97,13 @@ func (c *TelegramChannel) editMessageText(
 					"error":   err.Error(),
 				},
 			)
-			legacyEditMsg := tu.EditMessageText(tu.ID(cid), mid, parseContent(content, useMarkdownV2))
+			textEditMsg := tu.EditMessageText(tu.ID(cid), mid, parseContent(content, useMarkdownV2))
 			if useMarkdownV2 {
-				legacyEditMsg.WithParseMode(telego.ModeMarkdownV2)
+				textEditMsg.WithParseMode(telego.ModeMarkdownV2)
 			} else {
-				legacyEditMsg.WithParseMode(telego.ModeHTML)
+				textEditMsg.WithParseMode(telego.ModeHTML)
 			}
-			_, err = c.bot.EditMessageText(ctx, legacyEditMsg)
+			_, err = c.bot.EditMessageText(ctx, textEditMsg)
 			if err != nil && shouldFallbackToPlainText(err) {
 				logFormattingFallback(err, useMarkdownV2)
 				_, err = c.bot.EditMessageText(

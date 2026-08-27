@@ -49,7 +49,7 @@ func NewApiClient(baseURL, token string, proxy string) (*ApiClient, error) {
 			transport.Proxy = http.ProxyURL(proxyURL)
 			client.Transport = transport
 		} else {
-			// Fallback: preserve previous behavior if DefaultTransport is not the expected type
+			// Use a proxy-only transport when the process default cannot be cloned.
 			client.Transport = &http.Transport{
 				Proxy: http.ProxyURL(proxyURL),
 			}
