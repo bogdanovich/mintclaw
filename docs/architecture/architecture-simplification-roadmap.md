@@ -1,8 +1,8 @@
 # Architecture Simplification Roadmap
 
 Status: active; the original implementation sequence is merged through P1 and
-X3.65, X3.66 is open as PR #942, the earlier pre-Z1 source cleanup is merged
-through PR #940, C2 is merged through PR #929, and the live version 4 profile
+X3.66, including PR #942, the earlier pre-Z1 source cleanup is merged through
+PR #940, C2 is merged through PR #929, and the live version 4 profile
 and explicit-identity conversions are complete. The remaining `vpn` rollout,
 obsolete record and policy cleanup, full backup, strict removal deployment and
 rollback, and Z1 remain open.
@@ -165,7 +165,7 @@ reset criteria.
 | X3.63 | #937 | Merged; compaction execution mode is owner-supplied, and downstream inference plus test-only projector facades are gone |
 | X3.64 | #938 | Merged; subagent, spawn, and delegate dependencies are complete and immutable at construction, while `SubTurnSpawner` remains the package seam |
 | X3.65 | #940 | Merged; current defaults, resilience paths, provider error refinement, and standard platform behavior no longer use compatibility-shaped internal terminology |
-| X3.66 | #942 | Open; outbound messages directly own typed delivery metadata, async delivery no longer smuggles it through cloned inbound state, and outbox version 3 is the sole persisted contract |
+| X3.66 | #942 | Merged; outbound messages directly own typed delivery metadata, async delivery no longer smuggles it through cloned inbound state, and outbox version 3 is the sole persisted contract |
 | P1 | #881 | Merged; all five live configs and 20 personal workspaces now use the current contract, while final cleanup and deployment evidence remain in R1 |
 | R1 node-identity bridge | #899 | Merged and deployed to `p5a-canary`, `p3-canary`, and `ab-local-test`; the P3 node is currently stopped, while `vpn` and the strict adapter-removal release remain open |
 | Pre-Z1 strict audit | #911, #914, #916, #919-#921, and #940 merged; #901 remains live-gated | Dead shutdown state, historical approval and benchmark inference, stale current-path and compatibility terminology, provider-contract ambiguity, and implicit TTS model selection are removed; strict node removal still needs a final refresh and review |
@@ -440,12 +440,14 @@ strict `legacy` context-manager rejection, or the benchmark baseline.
 
 PR #942 resolves the raw outbound-metadata design debt. `OutboundMessage` and
 `OutboundMediaMessage` directly own `OutboundMetadata`; tool calls and
-interaction choices have typed JSON representations; async user delivery
-passes metadata explicitly instead of cloning a turn only to mutate its inbound
-context; and the dead interaction `delivery_key` copy is gone. Outbox version 3
-persists that direct contract and strictly rejects version 2 rather than adding
-a dual reader. R1 must archive the terminal live version 2 inventory under the
-stopped-state backup before installing this release.
+interaction choices use bus-owned typed contracts; async user delivery passes
+metadata explicitly instead of cloning a turn only to mutate its inbound
+context; and the dead interaction `delivery_key` copy is gone. Supported
+metadata values and their cross-field requirements are validated before outbox
+persistence and replay. Outbox version 3 persists that direct contract and
+strictly rejects version 2 rather than adding a dual reader. R1 must archive the
+terminal live version 2 inventory under the stopped-state backup before
+installing this release.
 
 The 2026-08-25 source-only pre-R1 audit found no additional adapter at that
 time. The later pre-Z1 source and live-state audit corrected that conclusion:
