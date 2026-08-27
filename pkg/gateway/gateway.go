@@ -884,7 +884,7 @@ func restartPreflightOptions(agentLoop *agent.AgentLoop, runningServices *servic
 func snapshotGatewayInboundSpool(ctx context.Context, msgBus *bus.MessageBus) []bus.InboundMessage {
 	pending, err := msgBus.PendingInboundSpool(ctx)
 	if err != nil {
-		logger.WarnCF("gateway", "Failed to replay inbound spool",
+		logger.WarnCF("gateway", "Failed to inspect inbound spool",
 			map[string]any{"error": err.Error()})
 		return nil
 	}

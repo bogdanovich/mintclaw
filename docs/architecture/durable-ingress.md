@@ -22,10 +22,13 @@ bus.
 5. The agent loop processes or accepts the message.
 6. The agent loop calls `AckInbound`, which removes the spool entry.
 
-On gateway startup, `ReplayInboundSpool` republishes unacked pending or processing
-entries into the bus before normal channel traffic continues. This covers the
-common failure case where the process exits after a normalized inbound message
-has entered MintClaw but before the agent has processed it.
+On gateway startup, `PendingInboundSpool` captures the unacked pending and
+processing entries before channel ingress starts. `ReplayInboundMessages` then
+republishes that exact snapshot after the agent loop is ready. Capturing first
+prevents a message that arrives during startup from being selected again by the
+same replay. This covers the common failure case where the process exits after
+a normalized inbound message has entered MintClaw but before the agent has
+processed it.
 
 ## File States
 

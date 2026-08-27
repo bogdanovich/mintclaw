@@ -66,18 +66,6 @@ func (r *Registry) NonterminalTaskIDs() map[string]struct{} {
 	return ids
 }
 
-func (r *Registry) FindWaitingBySession(sessionKey string) []Record {
-	sessionKey = strings.TrimSpace(sessionKey)
-	all := r.List()
-	out := make([]Record, 0, 1)
-	for _, rec := range all {
-		if rec.Status == StatusWaiting && rec.Route.SessionKey == sessionKey {
-			out = append(out, rec)
-		}
-	}
-	return out
-}
-
 func (r *Registry) FindWaitingByRoute(route Route) []Record {
 	route = normalizeRoute(route)
 	all := r.List()

@@ -381,10 +381,6 @@ func InfoC(component string, message string) {
 	logMessage(INFO, component, message, nil)
 }
 
-func InfoF(message string, fields map[string]any) {
-	logMessage(INFO, "", message, fields)
-}
-
 func Infof(message string, ss ...any) {
 	logMessage(INFO, "", fmt.Sprintf(message, ss...), nil)
 }
