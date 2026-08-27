@@ -266,7 +266,7 @@ func TestCodingCompactorTimeoutProducesOneTerminalInterruption(t *testing.T) {
 		runtimeevents.KindAgentContextCompressStart,
 		runtimeevents.KindAgentContextCompressEnd,
 	).
-		SubscribeChan(ctx, runtimeevents.SubscribeOptions{Name: "compactor-timeout", Buffer: 2})
+		SubscribeChan(ctx, runtimeevents.SubscribeOptions{Name: "compactor-timeout", Buffer: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,6 +309,9 @@ func TestCodingCompactorTimeoutProducesOneTerminalInterruption(t *testing.T) {
 	case duplicate := <-events:
 		t.Fatalf("compactor timeout emitted duplicate lifecycle event: %+v", duplicate)
 	default:
+	}
+	if stats := subscription.Stats(); stats.Received != 2 || stats.Dropped != 0 {
+		t.Fatalf("compactor timeout subscription stats = %+v, want received 2 and dropped 0", stats)
 	}
 }
 
