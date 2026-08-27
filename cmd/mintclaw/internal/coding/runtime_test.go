@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -672,6 +673,42 @@ func TestCodingMetadataStatePersistsOnlyCompletedCompactionCheckpoint(t *testing
 	if persisted.Compaction == nil || persisted.Compaction.Revision != 7 ||
 		!persisted.Compaction.At.Equal(completedAt) || !persisted.UpdatedAt.Equal(completedAt) {
 		t.Fatalf("completed checkpoint = %+v updated=%s", persisted.Compaction, persisted.UpdatedAt)
+	}
+}
+
+func TestCodingCheckpointBusObservesMatchingTerminalCompaction(t *testing.T) {
+	t.Parallel()
+
+	var observed []agent.ContextCompressLifecyclePayload
+	checkpointBus := &codingCheckpointBus{
+		Bus:        runtimeevents.NewBus(),
+		sessionKey: "coding:thread",
+		observe: func(payload agent.ContextCompressLifecyclePayload) {
+			observed = append(observed, payload)
+		},
+	}
+	t.Cleanup(func() { _ = checkpointBus.Close() })
+
+	publish := func(kind runtimeevents.Kind, component, sessionKey string) {
+		t.Helper()
+		checkpointBus.PublishNonBlocking(runtimeevents.Event{
+			Kind:   kind,
+			Source: runtimeevents.Source{Component: component},
+			Scope:  runtimeevents.Scope{SessionKey: sessionKey},
+			Payload: agent.ContextCompressLifecyclePayload{
+				Status:             agent.ContextCompressLifecycleCompleted,
+				TranscriptRevision: 7,
+			},
+		})
+	}
+
+	publish(runtimeevents.KindAgentContextCompressProgress, "agent", "coding:thread")
+	publish(runtimeevents.KindAgentContextCompressEnd, "agent", "coding:other")
+	publish(runtimeevents.KindAgentContextCompressEnd, "gateway", "coding:thread")
+	publish(runtimeevents.KindAgentContextCompressEnd, "agent", "coding:thread")
+
+	if len(observed) != 1 || observed[0].TranscriptRevision != 7 {
+		t.Fatalf("observed compactions = %+v, want one matching terminal payload", observed)
 	}
 }
 

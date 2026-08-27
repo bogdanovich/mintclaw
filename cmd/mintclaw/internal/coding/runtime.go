@@ -111,6 +111,42 @@ type nativeCodingRuntime struct {
 	closeErr        error
 }
 
+// codingCheckpointBus keeps durable coding-thread metadata observation in the
+// coding composition root. Presentation adapters remain pure projections of
+// the same lifecycle event.
+type codingCheckpointBus struct {
+	runtimeevents.Bus
+	sessionKey string
+	observe    func(agent.ContextCompressLifecyclePayload)
+}
+
+var _ runtimeevents.Bus = (*codingCheckpointBus)(nil)
+
+func (b *codingCheckpointBus) Publish(
+	ctx context.Context,
+	event runtimeevents.Event,
+) runtimeevents.PublishResult {
+	b.observeEvent(event)
+	return b.Bus.Publish(ctx, event)
+}
+
+func (b *codingCheckpointBus) PublishNonBlocking(event runtimeevents.Event) runtimeevents.PublishResult {
+	b.observeEvent(event)
+	return b.Bus.PublishNonBlocking(event)
+}
+
+func (b *codingCheckpointBus) observeEvent(event runtimeevents.Event) {
+	if b == nil || b.observe == nil || event.Kind != runtimeevents.KindAgentContextCompressEnd ||
+		event.Source.Component != "agent" ||
+		(b.sessionKey != "" && event.Scope.SessionKey != b.sessionKey) {
+		return
+	}
+	payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
+	if ok {
+		b.observe(payload)
+	}
+}
+
 const codingResumeRecoveryTimeout = 30 * time.Second
 
 func openNativeCodingRuntime(
@@ -153,7 +189,6 @@ func openNativeCodingRuntime(
 			baseEventBus,
 			projector,
 			request.Metadata.SessionKey,
-			compactionObserver,
 		)
 		if err != nil {
 			messageBus.Close()
@@ -161,6 +196,13 @@ func openNativeCodingRuntime(
 			return nil, err
 		}
 		messageBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, request.Metadata.SessionKey))
+	}
+	if compactionObserver != nil {
+		eventBus = &codingCheckpointBus{
+			Bus:        eventBus,
+			sessionKey: request.Metadata.SessionKey,
+			observe:    compactionObserver,
+		}
 	}
 	loop, err := agent.NewCodingAgentLoopContext(
 		constructionCtx,
