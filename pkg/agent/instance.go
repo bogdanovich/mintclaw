@@ -490,7 +490,7 @@ func initCoreAgentTools(workspace string, cfg *config.Config, initCfg agentToolI
 				initCfg.allowRead,
 			)
 		} else {
-			execTool, err = tools.NewExecToolWithConfig(workspace, initCfg.restrict, cfg, initCfg.allowRead)
+			execTool, err = tools.NewExecTool(workspace, initCfg.restrict, cfg, initCfg.allowRead)
 		}
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",

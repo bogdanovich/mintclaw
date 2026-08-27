@@ -14,7 +14,7 @@ import (
 
 func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 		},
 		DiffStatAvailable: true,
 	})
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestCommandPanelsEscapeStructuredSnapshotFields(t *testing.T) {
 
 func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestSlashMutationBlocksLaterSubmissionUntilAdmissionCompletes(t *testing.T)
 	controller.compactStart = make(chan struct{})
 	compactRelease := make(chan struct{})
 	controller.compactWait = compactRelease
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +346,7 @@ func TestUnsupportedTypedCommandsAreActionable(t *testing.T) {
 	controller := newController(t)
 	controller.renameErr = frontend.ErrCommandUnsupported
 	controller.newThreadErr = frontend.ErrCommandUnsupported
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -136,11 +136,7 @@ var (
 	}
 )
 
-func NewExecTool(workingDir string, restrict bool, allowPaths ...[]*regexp.Regexp) (*ExecTool, error) {
-	return NewExecToolWithConfig(workingDir, restrict, nil, allowPaths...)
-}
-
-func NewExecToolWithConfig(
+func NewExecTool(
 	workingDir string,
 	restrict bool,
 	cfg *config.Config,

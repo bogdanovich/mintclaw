@@ -32,7 +32,7 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 	})
 	projector.ToolCompleted("turn-1", "interrupted", "exec", "", 1500*time.Millisecond, true, nil)
 	projector.ToolOutput("turn-1", "unknown", "orphan output")
-	model, err := NewModel(&fakeController{Projector: projector})
+	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Output != "" {
 		t.Fatalf("ordinary tool projection = %+v", snapshot.Tools)
 	}
-	model, err := NewModel(&fakeController{Projector: projector})
+	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 		},
 		DiffStatAvailable: true,
 	}
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
 		},
 	})
 	projector.TurnStarted("turn-1", "work")
-	model, err := NewModel(&fakeController{Projector: projector})
+	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}

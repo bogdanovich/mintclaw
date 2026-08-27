@@ -279,7 +279,7 @@ func registerSharedTools(
 			}
 		}
 		if cfg.Tools.IsToolEnabled("web_fetch") {
-			fetchTool, err := integrationtools.NewWebFetchToolWithProxy(
+			fetchTool, err := integrationtools.NewWebFetchTool(
 				50000,
 				cfg.Tools.Web.Proxy,
 				cfg.Tools.Web.Format,

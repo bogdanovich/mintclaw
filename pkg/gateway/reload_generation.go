@@ -108,7 +108,7 @@ func prepareReloadGeneration(
 		return nil, err
 	}
 
-	next.HeartbeatService = heartbeat.NewHeartbeatServiceWithState(
+	next.HeartbeatService = heartbeat.NewHeartbeatService(
 		cfg.WorkspacePath(),
 		cfg.Heartbeat.Interval,
 		cfg.Heartbeat.Enabled,

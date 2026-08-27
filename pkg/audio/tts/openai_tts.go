@@ -49,11 +49,7 @@ func (e *openAITTSAPIError) Error() string {
 	return fmt.Sprintf("API error (status %d): %s", e.statusCode, e.body)
 }
 
-func NewOpenAITTSProvider(apiKey string, apiBase string, proxyURL string, model string) *OpenAITTSProvider {
-	return NewOpenAITTSProviderWithOptions(apiKey, apiBase, proxyURL, model, OpenAITTSOptions{})
-}
-
-func NewOpenAITTSProviderWithOptions(
+func NewOpenAITTSProvider(
 	apiKey string,
 	apiBase string,
 	proxyURL string,
