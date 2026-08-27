@@ -16,9 +16,8 @@ import (
 )
 
 type Adapter struct {
-	projector         *frontend.Projector
-	sessionKey        string
-	compactionObserve func(agent.ContextCompressLifecyclePayload)
+	projector  *frontend.Projector
+	sessionKey string
 }
 
 // ProjectThreadMetadata maps the durable catalog descriptor into the bounded
@@ -47,7 +46,6 @@ func WrapBus(
 	delegate runtimeevents.Bus,
 	projector *frontend.Projector,
 	sessionKey string,
-	compactionObservers ...func(agent.ContextCompressLifecyclePayload),
 ) (runtimeevents.Bus, error) {
 	if delegate == nil {
 		return nil, fmt.Errorf("coding frontend runtime event bus is required")
@@ -55,19 +53,11 @@ func WrapBus(
 	if projector == nil {
 		return nil, fmt.Errorf("coding frontend projector is required")
 	}
-	if len(compactionObservers) > 1 {
-		return nil, fmt.Errorf("coding frontend accepts at most one compaction observer")
-	}
-	var compactionObserver func(agent.ContextCompressLifecyclePayload)
-	if len(compactionObservers) == 1 {
-		compactionObserver = compactionObservers[0]
-	}
 	return &projectingBus{
 		delegate: delegate,
 		adapter: &Adapter{
-			projector:         projector,
-			sessionKey:        strings.TrimSpace(sessionKey),
-			compactionObserve: compactionObserver,
+			projector:  projector,
+			sessionKey: strings.TrimSpace(sessionKey),
 		},
 	}, nil
 }
@@ -244,9 +234,6 @@ func (a *Adapter) projectCompaction(
 		TokensSaved:        payload.TokensSaved,
 		Background:         backgroundCompaction(turnID, payload.Reason),
 	})
-	if a.compactionObserve != nil {
-		a.compactionObserve(payload)
-	}
 }
 
 func projectWriteAudit(audit []toolshared.WriteAuditEntry) []frontend.WriteAudit {
