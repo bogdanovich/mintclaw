@@ -239,15 +239,6 @@ func openNativeCodingRuntime(
 		streaming:       projector != nil,
 	}
 	if projector != nil {
-		_, recoveryErr := loop.PrepareCodingSession(constructionCtx, request.Metadata.SessionKey)
-		if recoveryErr != nil {
-			_ = runtime.Close()
-			return nil, fmt.Errorf(
-				"coding runtime: reconcile canonical context within %s: %w",
-				codingResumeRecoveryTimeout,
-				recoveryErr,
-			)
-		}
 		runtime.historyCursor, err = codingHistoryCursor(
 			constructionCtx,
 			runtime.sessions,
