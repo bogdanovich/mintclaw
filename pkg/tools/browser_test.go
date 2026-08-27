@@ -1795,6 +1795,40 @@ func TestBrowserActDeclaredNavigationHasNoApprovalOrExternalActionReceipt(t *tes
 	}
 }
 
+func TestBrowserActRecordsSucceededUnknownEffectReceipt(t *testing.T) {
+	preparation := browser.Preparation{
+		Action: browser.PreparedAction{
+			ID: "prepared_upload", TabID: "tab_primary", CurrentOrigin: "https://example.com",
+			Action: browser.Action{Kind: browser.ActionFileChooser, Ref: "upload"},
+			Effect: browser.EffectUnknown,
+		},
+		RequiresApproval: true,
+	}
+	source := &fakeBrowserToolSource{
+		available: true, prepare: preparation,
+		execute: browser.Invocation{
+			ID: "invocation_upload", SessionID: "browser_session_1",
+			Effect: browser.EffectUnknown, State: browser.InvocationSucceeded,
+		},
+	}
+	result := NewBrowserActTool(browserToolTestConfig(), source).Execute(
+		toolshared.WithToolApprovalContinuation(browserToolTestContext(), true),
+		map[string]any{
+			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+			"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+			"action": map[string]any{
+				"kind": "file_chooser", "ref": "upload",
+				"artifact_ref": "transfer-artifact://fixture",
+			},
+		},
+	)
+	if result.IsError || len(result.WriteAudit) != 1 ||
+		result.WriteAudit[0].Metadata["invocation_id"] != "invocation_upload" ||
+		result.WriteAudit[0].Metadata["effect"] != "unknown" {
+		t.Fatalf("unknown-effect receipt = %#v", result)
+	}
+}
+
 func TestBrowserActRequiresDeclaredEffectOnlyForClicks(t *testing.T) {
 	source := &fakeBrowserToolSource{available: true}
 	tool := NewBrowserActTool(browserToolTestConfig(), source)

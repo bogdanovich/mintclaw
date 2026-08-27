@@ -1613,7 +1613,7 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 				invocation,
 				errors.Is(err, browser.ErrSnapshotInvalidation),
 			)
-			attachBrowserExternalCommitAudit(result, invocation, preparation, tool.Name())
+			attachBrowserExternalActionAudit(result, invocation, preparation, tool.Name())
 			return result
 		}
 		return browserActionToolError(err)
@@ -1654,7 +1654,7 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 		}
 	}
 	toolResult := tool.runtime.result(result)
-	attachBrowserExternalCommitAudit(toolResult, invocation, preparation, tool.Name())
+	attachBrowserExternalActionAudit(toolResult, invocation, preparation, tool.Name())
 	if invocation.Download == nil || !invocation.Download.Deliver {
 		return toolResult
 	}
@@ -1685,20 +1685,20 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 	}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 }
 
-func attachBrowserExternalCommitAudit(
+func attachBrowserExternalActionAudit(
 	result *toolshared.ToolResult,
 	invocation browser.Invocation,
 	preparation browser.Preparation,
 	toolName string,
 ) {
 	if result == nil || invocation.State != browser.InvocationSucceeded ||
-		invocation.Effect != browser.EffectExternalCommit {
+		(invocation.Effect != browser.EffectExternalCommit && invocation.Effect != browser.EffectUnknown) {
 		return
 	}
 	result.WithWriteAudit(toolshared.WriteAuditEntry{
 		Kind: "external_action", Target: preparation.Action.CurrentOrigin,
 		Action: string(preparation.Action.Action.Kind), Tool: toolName,
-		Summary: "browser external action committed",
+		Summary: "browser external action completed",
 		Metadata: map[string]string{
 			"invocation_id": invocation.ID, "browser_session_id": invocation.SessionID,
 			"effect": string(invocation.Effect), "element_role": preparation.Action.ElementRole,

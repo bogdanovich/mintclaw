@@ -103,7 +103,9 @@ func browserObjectiveOutcomeInstruction(task string, checklist []runtimeObjectiv
 		"navigation, or local_edit for non-committing UI steps; use external_commit only immediately before an " +
 		"important external state change; use unknown only when the workflow impact is genuinely unclear. " +
 		"Do not infer click effect from the element role or HTTP method. " +
-		"When an external_action requires human approval, call browser_act with external_commit during this turn; " +
+		"When an external_action requires human approval, call browser_act during this turn with the effect required " +
+		"by the trusted browser contract: external_commit for a known important external state change, or unknown only " +
+		"when its impact is genuinely unclear; " +
 		"the runtime suspends before execution and preserves the continuation. Never replace that tool call with a " +
 		"prose approval question, a textual awaiting_approval status, or a completed result, and do not close the " +
 		"browser session while the runtime is suspended. " +
@@ -186,7 +188,7 @@ func validateObjectiveOutcome(
 	receipts := make(map[string]taskresult.Receipt)
 	for _, audit := range audits {
 		if !audit.Success || audit.Kind != "external_action" || audit.Tool != "browser_act" ||
-			strings.TrimSpace(audit.Metadata["effect"]) != "external_commit" {
+			!isBrowserExternalActionReceiptEffect(audit.Metadata["effect"]) {
 			continue
 		}
 		id := strings.TrimSpace(audit.Metadata["invocation_id"])
@@ -387,6 +389,15 @@ func validateObjectiveOutcome(
 		outcome.Explanation = ""
 	}
 	return outcome
+}
+
+func isBrowserExternalActionReceiptEffect(effect string) bool {
+	switch strings.TrimSpace(effect) {
+	case "external_commit", "unknown":
+		return true
+	default:
+		return false
+	}
 }
 
 func blockedObjectiveOutcome(reason string) *taskresult.Outcome {
