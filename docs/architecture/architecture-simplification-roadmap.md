@@ -1,11 +1,10 @@
 # Architecture Simplification Roadmap
 
 Status: active; the original implementation sequence is merged through P1 and
-X3.60, the pre-Z1 source cleanup is merged through PR #921, and the live version
-4 profile and explicit-identity conversions are complete. PR #908 added a
-current coding-resume recovery path whose composition cleanup is registered as
-C2. The remaining C2 packets, `vpn` rollout, obsolete record and policy cleanup,
-full backup, strict removal deployment and rollback, and Z1 remain open
+X3.60, the pre-Z1 source cleanup is merged through PR #921, C2 is merged through
+PR #929, and the live version 4 profile and explicit-identity conversions are
+complete. The remaining `vpn` rollout, obsolete record and policy cleanup, full
+backup, strict removal deployment and rollback, and Z1 remain open.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -157,7 +156,7 @@ reset criteria.
 | A1 | #800 and #801, completed by X3.30-X3.42 | Merged |
 | A2 | #808, #809, and #863 | Merged |
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
-| Coding resume recovery | #908 | Merged; recovery behavior is current, while C2 owns the newly identified composition debt |
+| Coding resume recovery and C2 | #908, #924-#927, and #929 | Merged; JSONL-authoritative recovery remains current, and its construction, checkpoint, and derived-engine lifecycle now have direct owners |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
 | X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
@@ -336,7 +335,13 @@ separation and standards alignment.
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
 | Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its current head is green but still needs final-base refresh and exact-head review | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
-| Coding resume recovery composition | Current feature with duplicate composition and lifecycle ownership, not a compatibility adapter | PR #908 correctly makes JSONL authoritative and derived SQLite rebuildable, but carries a construction context inside an immutable profile, exposes paired context and background constructors, routes a durable checkpoint observer through the frontend adapter with a variadic parameter, and rebuilds by copying replacement internals into an already-published engine | C2; keep recovery behavior while making context, checkpoint persistence, and derived-store replacement direct single-owner dependencies before Z1 |
+
+C2 is closed. PR #924 moved durable checkpoint ownership to the coding
+composition root; PRs #925-#927 made recovery reads and constructors explicitly
+context-aware; and PR #929 made the coding runtime replace derived state as one
+owned engine while delaying retrieval publication until reconciliation and
+integrity verification succeed. The JSONL-authoritative recovery semantics from
+PR #908 remain current product behavior rather than compatibility debt.
 
 The current implementation also has one non-blocking observability follow-up,
 not a compatibility adapter: an exact deny rule can be reported as an unknown
@@ -409,11 +414,12 @@ time. The later pre-Z1 source and live-state audit corrected that conclusion:
   selected enabled entry must have explicit provider and model fields. A
   read-only deployed audit found no profile relying on the removed path;
 - the post-merge review of PR #908 preserved its justified recovery behavior
-  but found new composition debt: context is carried through a profile rather
-  than a construction boundary, the frontend adapter participates in durable
-  checkpoint observation, and corrupt derived-store replacement mutates a
-  published engine. C2 owns this cleanup without weakening fail-closed resume,
-  typed corruption checks, or no-replay tool outcomes;
+  but found new composition debt. PR #924 removed durable checkpoint ownership
+  from the frontend adapter; PRs #925-#927 removed optional and background
+  recovery-context paths; and PR #929 replaced corrupt derived state as one
+  unpublished engine before retrieval registration. C2 is complete without
+  weakening fail-closed resume, typed corruption checks, or no-replay tool
+  outcomes;
 - the earlier Git-tracked zero-caller scan after PR #896 otherwise still found
   no further caller-free production facade; the remaining low-reference
   exports are active entry points, documented extension contracts, or
@@ -930,6 +936,8 @@ Downstream P4 integration rules:
 
 Depends on: C1 and merged PR #908
 
+Status: complete through PRs #924-#927 and #929
+
 PR #908 added justified recovery behavior: canonical JSONL can rebuild missing
 or corrupt derived Seahorse state, resume fails closed until reconciliation,
 and completed compactions checkpoint their canonical source revision. C2 keeps
@@ -938,17 +946,17 @@ them.
 
 Implementation sequence:
 
-1. Keep durable compaction checkpoint observation in the coding composition
-   root, not in `pkg/coding/frontend/agentadapter`. Remove the adapter's
-   variadic observer parameter so it returns to presentation-only projection.
-2. Make the recovery deadline an explicit construction dependency. Use one
-   current context-aware coding-loop and Seahorse-engine constructor, stop
-   storing a context in `CodingRuntimeProfile`, and thread the same context
-   through canonical history reads instead of optional interface fallbacks.
-3. Rebuild corrupt derived state before engine and retrieval references become
-   visible. Let the coding recovery owner replace the engine/store as one unit,
-   then delete the exported replacement factory and field-by-field mutation of
-   an already-published `seahorse.Engine`.
+1. PR #924 kept durable compaction checkpoint observation in the coding
+   composition root, removed it from `pkg/coding/frontend/agentadapter`, and
+   returned the adapter to presentation-only projection.
+2. PRs #925-#927 made the recovery deadline an explicit construction
+   dependency, retained one current context-aware constructor for each recovery
+   owner, removed context from `CodingRuntimeProfile`, and threaded it through
+   canonical history reads.
+3. PR #929 rebuilt corrupt derived state before engine and retrieval references
+   become visible, made the coding recovery owner replace the engine/store as
+   one unit, and deleted the exported replacement factory and field-by-field
+   mutation of an already-published `seahorse.Engine`.
 
 Tests:
 
