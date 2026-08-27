@@ -2100,16 +2100,10 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 	}
 	deliveryCtx := al.withInteractionFinalTransaction(ctx, registry, workspace, record)
 	if mode == toolshared.AsyncDeliveryParentOnly &&
+		record.Kind == interactions.KindQuestion &&
 		strings.EqualFold(strings.TrimSpace(record.Route.Channel), "telegram") {
-		switch record.Kind {
-		case interactions.KindQuestion:
-			if err := al.deliverInteractionControlsRemoved(deliveryCtx, workspace, record, inbound); err != nil {
-				return err
-			}
-		case interactions.KindApproval:
-			// Older versions used ordinal zero for a standalone acknowledgement. Keep the
-			// parent completion at ordinal one so recovery cannot reuse that legacy payload.
-			outboundTransactionFromContext(deliveryCtx).reserveOrdinal()
+		if err := al.deliverInteractionControlsRemoved(deliveryCtx, workspace, record, inbound); err != nil {
+			return err
 		}
 	}
 	result := (&toolshared.ToolResult{
