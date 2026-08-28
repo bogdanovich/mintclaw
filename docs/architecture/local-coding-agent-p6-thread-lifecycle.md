@@ -37,10 +37,22 @@ so lifecycle changes have no separate cache to invalidate.
 
 ## Boundaries reserved for later packets
 
-Deletion may target only an enumerated set of files under the external
-MintClaw coding state root. Its confirmation must name those artifacts, refuse
-an active lease, and use platform trash where available. It must never derive a
-deletion target from a project root or transcript content.
+Deletion is exposed as `mintclaw threads delete <thread-id>`. Without
+`--confirm`, it produces a bounded plan naming the exact external thread root
+and each recognized MintClaw-owned top-level artifact. Unknown entries and
+symbolic links fail closed. Confirmation must repeat the exact thread ID and
+the command must run from the owning project.
+
+After confirmation, the command acquires the thread lease, rebuilds the plan,
+and atomically renames the complete thread root into `coding/trash/threads` on
+the same filesystem. The active catalog loses the thread immediately while
+the complete directory remains recoverable at the reported trash path. The
+move does not walk artifact contents. Its source and destination derive only
+from the canonical external store plus a validated UUID; project root and
+transcript content never participate in a deletion target. On Windows the
+lock handle permits delete sharing while the byte-range lock remains the
+exclusive writer authority, allowing the directory move without opening a
+post-release race.
 
 Forking copies bounded conversational state into a newly allocated thread with
 its own session key, directory, lease, and future writer. Fork metadata records

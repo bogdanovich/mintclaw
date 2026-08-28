@@ -141,6 +141,65 @@ func TestResumeArchivedViewIsExplicitAndReversible(t *testing.T) {
 	}
 }
 
+func TestThreadsDeleteRequiresExactPlanConfirmation(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	createdOutput := executeCommand(t, newCodeCommand(deps), "delete safely", "--json")
+	var created commandResult
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatal(err)
+	}
+	var planned deleteThreadOutput
+	if err := json.Unmarshal(
+		executeCommand(t, newThreadsCommand(deps), "delete", created.ThreadID, "--json"),
+		&planned,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if planned.Action != "planned" || planned.Plan.ThreadID != created.ThreadID || planned.Trash != nil ||
+		len(planned.Plan.OwnedPaths) == 0 {
+		t.Fatalf("delete plan = %+v", planned)
+	}
+	if _, err := executeCommandError(
+		newThreadsCommand(deps), "delete", created.ThreadID, "--confirm", "wrong",
+	); err == nil || !strings.Contains(err.Error(), "exactly match") {
+		t.Fatalf("wrong confirmation error = %v", err)
+	}
+	now = now.Add(time.Minute)
+	var deleted deleteThreadOutput
+	if err := json.Unmarshal(executeCommand(
+		t,
+		newThreadsCommand(deps),
+		"delete",
+		created.ThreadID,
+		"--confirm",
+		created.ThreadID,
+		"--json",
+	), &deleted); err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Action != "trashed" || deleted.Trash == nil || deleted.Trash.ThreadID != created.ThreadID ||
+		!deleted.Trash.At.Equal(now) {
+		t.Fatalf("deleted output = %+v", deleted)
+	}
+	if _, err := os.Stat(deleted.Trash.Path); err != nil {
+		t.Fatalf("recoverable trash path: %v", err)
+	}
+	var listed listResult
+	if err := json.Unmarshal(executeCommand(t, newResumeCommand(deps), "--json"), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Threads) != 0 {
+		t.Fatalf("deleted thread remained active: %+v", listed.Threads)
+	}
+	entries, err := os.ReadDir(projectRoot)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("delete touched project: entries=%v err=%v", entries, err)
+	}
+}
+
 type interactiveLeaseController struct {
 	*frontend.Projector
 	lease *thread.Lease
