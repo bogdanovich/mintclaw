@@ -49,7 +49,7 @@ func (al *AgentLoop) buildInboundMessageTurn(
 	ctx context.Context,
 	msg bus.InboundMessage,
 ) (inboundMessageTurn, error) {
-	if msg.Channel == "system" {
+	if msg.Context.Channel == "system" {
 		msg = al.prepareInboundMessageForAgent(ctx, msg)
 		return inboundMessageTurn{Message: msg}, nil
 	}

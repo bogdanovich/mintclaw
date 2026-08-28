@@ -7620,7 +7620,7 @@ func TestDeferredInteractionIngressQueuesWithoutChangingHistory(t *testing.T) {
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "existing"})
 	target := &inboundDispatchTarget{Agent: agent, SessionKey: sessionKey}
 	msg := bus.InboundMessage{
-		Content: "unrelated turn", SenderID: "user-2", SpoolID: "spool-2",
+		Content: "unrelated turn", SpoolID: "spool-2",
 		Context: bus.InboundContext{
 			Channel: "telegram", ChatID: "chat-1", SenderID: "user-2", MessageID: "message-2",
 		},

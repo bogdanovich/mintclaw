@@ -985,12 +985,15 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "discord",
-		SenderID: "discord:123",
-		Sender: bus.SenderInfo{
+		Context: bus.InboundContext{
+			Channel:  "discord",
+			SenderID: "discord:123",
+
+			ChatID: "group-1",
+		}, Sender: bus.SenderInfo{
 			DisplayName: "Alice",
 		},
-		ChatID:  "group-1",
+
 		Content: "hello",
 	}))
 	if err != nil {
@@ -1031,9 +1034,10 @@ func TestProcessMessage_DoesNotPassImplicitThinkingOffToCapableProvider(t *testi
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel: "mintclaw",
-		ChatID:  "chat-1",
-		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "mintclaw",
+			ChatID:  "chat-1",
+		}, Content: "hello",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1070,9 +1074,10 @@ func TestProcessMessage_PassesExplicitThinkingOffToCapableProvider(t *testing.T)
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel: "mintclaw",
-		ChatID:  "chat-1",
-		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "mintclaw",
+			ChatID:  "chat-1",
+		}, Content: "hello",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1106,9 +1111,10 @@ func TestProcessMessage_PassesExplicitThinkingOffToProviderWithoutThinkingCapabi
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel: "mintclaw",
-		ChatID:  "chat-1",
-		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "mintclaw",
+			ChatID:  "chat-1",
+		}, Content: "hello",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1144,9 +1150,10 @@ func TestProcessMessagePassesDeepSeekThinkingLevelToCapableProvider(t *testing.T
 	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel: "mintclaw",
-		ChatID:  "chat-1",
-		Content: "hello",
+		Context: bus.InboundContext{
+			Channel: "mintclaw",
+			ChatID:  "chat-1",
+		}, Content: "hello",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1241,10 +1248,11 @@ func TestProcessMessage_BeforeLLMModelRewriteReevaluatesThinkingOff(t *testing.T
 	}
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "mintclaw",
-		SenderID: "user1",
-		ChatID:   "mintclaw:test-session",
-		Content:  "hello",
+		Context: bus.InboundContext{
+			Channel:  "mintclaw",
+			SenderID: "user1",
+			ChatID:   "mintclaw:test-session",
+		}, Content: "hello",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1300,10 +1308,11 @@ func TestProcessMessage_BeforeLLMModelRewriteDoesNotLeakThinkingOff(t *testing.T
 	}
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "mintclaw",
-		SenderID: "user1",
-		ChatID:   "mintclaw:test-session",
-		Content:  "hello",
+		Context: bus.InboundContext{
+			Channel:  "mintclaw",
+			SenderID: "user1",
+			ChatID:   "mintclaw:test-session",
+		}, Content: "hello",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1365,10 +1374,11 @@ func TestProcessMessage_BeforeLLMModelRewriteComparesConfiguredNames(t *testing.
 	}
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "mintclaw",
-		SenderID: "user1",
-		ChatID:   "mintclaw:model-name-collision",
-		Content:  "hello",
+		Context: bus.InboundContext{
+			Channel:  "mintclaw",
+			SenderID: "user1",
+			ChatID:   "mintclaw:model-name-collision",
+		}, Content: "hello",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1499,10 +1509,11 @@ func TestProcessMessage_BtwCommandSuppressesReasoningWhenThinkingOff(t *testing.
 	}
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain privately",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/btw explain privately",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1562,10 +1573,11 @@ func TestProcessMessage_BtwHookModelRewriteReevaluatesThinkingOff(t *testing.T) 
 	}
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain privately",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/btw explain privately",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1625,10 +1637,11 @@ func TestProcessMessage_BtwHookModelRewriteDoesNotLeakThinkingOff(t *testing.T) 
 	}
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain privately",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/btw explain privately",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1741,10 +1754,11 @@ func TestProcessMessage_BtwFallbackDoesNotInheritPrimaryThinkingOff(t *testing.T
 	}
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain fallback reasoning",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/btw explain fallback reasoning",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1786,10 +1800,11 @@ func TestProcessMessage_UseCommandLoadsRequestedSkill(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/use shell explain how to list files",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/use shell explain how to list files",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1842,10 +1857,11 @@ func TestProcessMessage_BtwCommandRunsWithoutPersistingHistory(t *testing.T) {
 	}
 
 	msg := bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain side effects",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/btw explain side effects",
 	}
 	route, _, err := al.resolveMessageRoute(msg)
 	if err != nil {
@@ -1922,12 +1938,15 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 	useTestSideQuestionProvider(al, provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "discord",
-		SenderID: "discord:123",
-		Sender: bus.SenderInfo{
+		Context: bus.InboundContext{
+			Channel:  "discord",
+			SenderID: "discord:123",
+
+			ChatID: "group-1",
+		}, Sender: bus.SenderInfo{
 			DisplayName: "Alice",
 		},
-		ChatID:  "group-1",
+
 		Content: "/btw describe this image",
 		Media:   []string{"media://image-1"},
 	}))
@@ -1999,11 +2018,12 @@ func TestProcessMessage_BtwCommandUsesIsolatedProvider(t *testing.T) {
 
 	// Process a /btw command
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:    "telegram",
-		SenderID:   "telegram:123",
-		ChatID:     "chat-1",
-		SessionKey: mainSessionKey,
-		Content:    "/btw explain isolation",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, SessionKey: mainSessionKey,
+		Content: "/btw explain isolation",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -2057,11 +2077,12 @@ func TestProcessMessage_BtwCommandRetriesWithoutMediaOnVisionUnsupported(t *test
 	useTestSideQuestionProvider(al, provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw describe this image",
-		Media:    []string{"data:image/png;base64,abc123"},
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/btw describe this image",
+		Media: []string{"data:image/png;base64,abc123"},
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -2101,10 +2122,11 @@ func TestProcessMessage_BtwCommandUsesProviderFactoryModel(t *testing.T) {
 	useTestSideQuestionProvider(al, provider)
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain load balancing",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/btw explain load balancing",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -2151,10 +2173,11 @@ func TestProcessMessage_BtwCommandHookModelBypassesFallbackCandidates(t *testing
 	}
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/btw explain hook routing",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/btw explain hook routing",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -2253,10 +2276,11 @@ func TestHandleCommand_UseCommandRejectsUnknownSkill(t *testing.T) {
 
 	opts := turnSpec{}
 	reply, handled := al.handleCommand(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/use missing explain how to list files",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/use missing explain how to list files",
 	}, effectiveModelBinding{
 		WorkspaceAgent: agent,
 		Execution:      effectiveExecutionStateForAgent(agent),
@@ -2298,10 +2322,11 @@ func TestProcessMessage_UseCommandArmsSkillForNextMessage(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "/use shell",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "/use shell",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() arm error = %v", err)
@@ -2311,10 +2336,11 @@ func TestProcessMessage_UseCommandArmsSkillForNextMessage(t *testing.T) {
 	}
 
 	response, err = al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "telegram:123",
-		ChatID:   "chat-1",
-		Content:  "explain how to list files",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "telegram:123",
+			ChatID:   "chat-1",
+		}, Content: "explain how to list files",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() follow-up error = %v", err)
@@ -2743,11 +2769,12 @@ func TestProcessMessage_MediaToolHandledSkipsFollowUpLLMAndFinalText(t *testing.
 	})
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:    "telegram",
-		ChatID:     "chat1",
-		SenderID:   "user1",
-		SessionKey: "session-1",
-		Content:    "take a screenshot of the screen and send it to me",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat1",
+			SenderID: "user1",
+		}, SessionKey: "session-1",
+		Content: "take a screenshot of the screen and send it to me",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -2799,20 +2826,22 @@ func TestProcessMessage_MediaToolHandledSkipsFollowUpLLMAndFinalText(t *testing.
 		t.Fatal("expected default agent")
 	}
 	route, _, err := al.resolveMessageRoute(testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat1",
-		SenderID: "user1",
-		Content:  "take a screenshot of the screen and send it to me",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat1",
+			SenderID: "user1",
+		}, Content: "take a screenshot of the screen and send it to me",
 	}))
 	if err != nil {
 		t.Fatalf("resolveMessageRoute() error = %v", err)
 	}
 	sessionKey := resolveScopeKey(
 		al.allocateRouteSession(route, testInboundMessage(bus.InboundMessage{
-			Channel:  "telegram",
-			ChatID:   "chat1",
-			SenderID: "user1",
-			Content:  "take a screenshot of the screen and send it to me",
+			Context: bus.InboundContext{
+				Channel:  "telegram",
+				ChatID:   "chat1",
+				SenderID: "user1",
+			}, Content: "take a screenshot of the screen and send it to me",
 		})).SessionKey,
 		"",
 	)
@@ -2868,10 +2897,11 @@ func TestProcessMessage_HandledMediaDismissesToolFeedbackWithoutFinalText(t *tes
 	})
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat1",
-		SenderID: "user1",
-		Content:  "take a screenshot of the screen and send it to me",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat1",
+			SenderID: "user1",
+		}, Content: "take a screenshot of the screen and send it to me",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -2981,10 +3011,11 @@ func TestProcessMessage_HandledDeliverableArtifactsUsesDeliverableTextAsCaption(
 	})
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat1",
-		SenderID: "user1",
-		Content:  "save the reel and translate the recipe",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat1",
+			SenderID: "user1",
+		}, Content: "save the reel and translate the recipe",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -3477,10 +3508,11 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 	})
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat1",
-		SenderID: "user1",
-		Content:  "take a screenshot of the screen and send it to me",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat1",
+			SenderID: "user1",
+		}, Content: "take a screenshot of the screen and send it to me",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -3800,10 +3832,11 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	})
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		ChatID:   "chat1",
-		SenderID: "user1",
-		Content:  "take a screenshot of the screen and send it to me",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat1",
+			SenderID: "user1",
+		}, Content: "take a screenshot of the screen and send it to me",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -5124,27 +5157,8 @@ func (h testHelper) executeAndGetResponse(
 }
 
 func testInboundMessage(msg bus.InboundMessage) bus.InboundMessage {
-	if msg.Context.Channel == "" &&
-		msg.Context.Account == "" &&
-		msg.Context.ChatID == "" &&
-		msg.Context.ChatType == "" &&
-		msg.Context.TopicID == "" &&
-		msg.Context.SpaceID == "" &&
-		msg.Context.SpaceType == "" &&
-		msg.Context.SenderID == "" &&
-		msg.Context.MessageID == "" &&
-		!msg.Context.Mentioned &&
-		msg.Context.ReplyToMessageID == "" &&
-		msg.Context.ReplyToSenderID == "" &&
-		len(msg.Context.ReplyHandles) == 0 &&
-		len(msg.Context.Raw) == 0 {
-		msg.Context = bus.InboundContext{
-			Channel:   msg.Channel,
-			ChatID:    msg.ChatID,
-			ChatType:  "direct",
-			SenderID:  msg.SenderID,
-			MessageID: msg.MessageID,
-		}
+	if msg.Context.ChatType == "" {
+		msg.Context.ChatType = "direct"
 	}
 	return bus.NormalizeInboundMessage(msg)
 }
@@ -5494,20 +5508,22 @@ func TestProcessMessage_RemovedSwitchCommandDoesNotAffectShowModel(t *testing.T)
 	helper := testHelper{al: al}
 
 	switchResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "/switch model to deepseek",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "/switch model to deepseek",
 	})
 	if switchResp != "Unknown command: /switch. Use /help to see available commands." {
 		t.Fatalf("unexpected /switch reply: %q", switchResp)
 	}
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "/show model",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "/show model",
 	})
 	if !strings.Contains(showResp, "Current Model: local (Provider: openai)") {
 		t.Fatalf("unexpected /show model reply after removed /switch: %q", showResp)
@@ -5551,10 +5567,11 @@ func TestProcessMessage_UnknownSlashCommandDoesNotCallLLM(t *testing.T) {
 	helper := testHelper{al: al}
 
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "/unknown gpt-5.4",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "/unknown gpt-5.4",
 	})
 	if resp != "Unknown command: /unknown. Use /help to see available commands." {
 		t.Fatalf("unexpected reply: %q", resp)
@@ -6826,10 +6843,11 @@ func TestProcessMessage_ModelRoutingUsesLightProvider(t *testing.T) {
 	helper := testHelper{al: al}
 
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "hi",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "hi",
 	})
 	if resp != "light reply" {
 		t.Fatalf("response = %q, want %q", resp, "light reply")
@@ -6909,10 +6927,11 @@ func TestProcessMessage_FallbackUsesPerCandidateProvider(t *testing.T) {
 	helper := testHelper{al: al}
 
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "hi",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "hi",
 	})
 
 	if resp != "fallback reply" {
@@ -7057,11 +7076,12 @@ func TestProcessMessage_FallbackUsesNestedCandidateVisionOverrides(t *testing.T)
 	helper := testHelper{al: al}
 
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "what is this?",
-		Media:    []string{"data:image/png;base64,abc123"},
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "what is this?",
+		Media: []string{"data:image/png;base64,abc123"},
 	})
 
 	if resp != "beet" {
@@ -7177,10 +7197,11 @@ func TestProcessMessage_FallbackReceivesExplicitThinkingOff(t *testing.T) {
 	helper := testHelper{al: al}
 
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "hi",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "hi",
 	})
 
 	if resp != "fallback reply" {
@@ -7278,10 +7299,11 @@ func TestProcessMessage_PrimaryThinkingOffDoesNotLeakToFallback(t *testing.T) {
 	helper := testHelper{al: al}
 
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "hi",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "hi",
 	})
 	if resp != "fallback reply" {
 		t.Fatalf("response = %q, want fallback reply", resp)
@@ -7383,10 +7405,11 @@ func TestProcessMessage_FallbackThinkingOffUsesCandidateIdentity(t *testing.T) {
 	helper := testHelper{al: al}
 
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "hi",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "hi",
 	})
 	if resp != "fallback reply" {
 		t.Fatalf("response = %q, want fallback reply", resp)
@@ -7458,10 +7481,11 @@ func TestProcessMessage_FallbackUsesActiveProviderWhenCandidateNotRegistered(t *
 
 	helper := testHelper{al: al}
 	resp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "hi",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "hi",
 	})
 
 	if resp != "active provider reply" {
@@ -7502,10 +7526,11 @@ func TestToolResult_SilentToolDoesNotSendUserMessage(t *testing.T) {
 	// ReadFileTool returns SilentResult, which should not send user message
 	ctx := context.Background()
 	msg := bus.InboundMessage{
-		Channel:    "test",
-		SenderID:   "user1",
-		ChatID:     "chat1",
-		Content:    "read test.txt",
+		Context: bus.InboundContext{
+			Channel:  "test",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "read test.txt",
 		SessionKey: "test-session",
 	}
 
@@ -7544,10 +7569,11 @@ func TestToolResult_UserFacingToolDoesSendMessage(t *testing.T) {
 	// ExecTool returns UserResult, which should send user message
 	ctx := context.Background()
 	msg := bus.InboundMessage{
-		Channel:    "test",
-		SenderID:   "user1",
-		ChatID:     "chat1",
-		Content:    "run hello",
+		Context: bus.InboundContext{
+			Channel:  "test",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "run hello",
 		SessionKey: "test-session",
 	}
 
@@ -8269,9 +8295,11 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	})
 	history := defaultAgent.Sessions.GetHistory(
 		al.allocateRouteSession(route, testInboundMessage(bus.InboundMessage{
-			Channel:  "test",
-			SenderID: "cron",
-			ChatID:   "chat1",
+			Context: bus.InboundContext{
+				Channel:  "test",
+				SenderID: "cron",
+				ChatID:   "chat1",
+			},
 		})).SessionKey,
 	)
 	if len(history) != 4 {
@@ -8532,10 +8560,11 @@ func TestProcessMessage_PublishesReasoningContentToReasoningChannel(t *testing.T
 	al.SetChannelManager(chManager)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "hello",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "hello",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -8584,10 +8613,11 @@ func TestProcessMessage_MintClawPublishesReasoningAsThoughtMessage(t *testing.T)
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "mintclaw",
-		SenderID: "user1",
-		ChatID:   "mintclaw:test-session",
-		Content:  "hello",
+		Context: bus.InboundContext{
+			Channel:  "mintclaw",
+			SenderID: "user1",
+			ChatID:   "mintclaw:test-session",
+		}, Content: "hello",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -8749,10 +8779,11 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user-1",
-		ChatID:   "chat-1",
-		Content:  "check tool feedback",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user-1",
+			ChatID:   "chat-1",
+		}, Content: "check tool feedback",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -8836,10 +8867,11 @@ func TestProcessMessage_PersistsReasoningContentInSessionHistory(t *testing.T) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "mintclaw",
-		SenderID: "user1",
-		ChatID:   "mintclaw:test-session",
-		Content:  "hello",
+		Context: bus.InboundContext{
+			Channel:  "mintclaw",
+			SenderID: "user1",
+			ChatID:   "mintclaw:test-session",
+		}, Content: "hello",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -8892,10 +8924,11 @@ func TestProcessMessage_PersistsReasoningToolResponseAsSingleAssistantRecord(t *
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user1",
-		ChatID:   "chat1",
-		Content:  "hello",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user1",
+			ChatID:   "chat1",
+		}, Content: "hello",
 	})
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -9047,10 +9080,11 @@ func TestProcessMessage_DoesNotLeakReasoningContentInToolFeedback(t *testing.T) 
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user-1",
-		ChatID:   "chat-1",
-		Content:  "check reasoning fallback",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user-1",
+			ChatID:   "chat-1",
+		}, Content: "check reasoning fallback",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -9128,10 +9162,11 @@ func assertToolFeedbackNotPublishedWhenDisabled(t *testing.T, channel string) {
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  channel,
-		SenderID: "user-1",
-		ChatID:   "chat-1",
-		Content:  "check tool feedback",
+		Context: bus.InboundContext{
+			Channel:  channel,
+			SenderID: "user-1",
+			ChatID:   "chat-1",
+		}, Content: "check tool feedback",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -9172,10 +9207,11 @@ func TestProcessMessage_MessageToolPublishesOutboundWithTurnMetadata(t *testing.
 	al := NewAgentLoop(cfg, msgBus, provider)
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "telegram",
-		SenderID: "user-1",
-		ChatID:   "chat-1",
-		Content:  "send a direct message",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			SenderID: "user-1",
+			ChatID:   "chat-1",
+		}, Content: "send a direct message",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -9599,10 +9635,11 @@ func TestRun_MintClawPublishesAssistantContentDuringToolCallsWithoutFinalDuplica
 	}()
 
 	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{
-		Channel:  "mintclaw",
-		SenderID: "user-1",
-		ChatID:   "session-1",
-		Content:  "run with tools",
+		Context: bus.InboundContext{
+			Channel:  "mintclaw",
+			SenderID: "user-1",
+			ChatID:   "session-1",
+		}, Content: "run with tools",
 	}); err != nil {
 		t.Fatalf("PublishInbound() error = %v", err)
 	}
@@ -9744,10 +9781,11 @@ func TestRun_MintClawToolFeedbackSuppressesDuplicateInterimAssistantContent(t *t
 	}()
 
 	if err := msgBus.PublishInbound(context.Background(), bus.InboundMessage{
-		Channel:  "mintclaw",
-		SenderID: "user-1",
-		ChatID:   "session-1",
-		Content:  "run with tools",
+		Context: bus.InboundContext{
+			Channel:  "mintclaw",
+			SenderID: "user-1",
+			ChatID:   "session-1",
+		}, Content: "run with tools",
 	}); err != nil {
 		t.Fatalf("PublishInbound() error = %v", err)
 	}
@@ -10572,11 +10610,12 @@ func TestProcessMessage_ContextOverflowRecovery(t *testing.T) {
 	}
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:    "test",
-		ChatID:     "chat1",
-		SenderID:   "user1",
-		SessionKey: "test-session",
-		Content:    "trigger recovery",
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			SenderID: "user1",
+		}, SessionKey: "test-session",
+		Content: "trigger recovery",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -10637,11 +10676,12 @@ func TestProcessMessage_ContextOverflowRecoveryPreservesMediaBoundary(t *testing
 		t.Fatal(err)
 	}
 	message := testInboundMessage(bus.InboundMessage{
-		Channel:    "test",
-		ChatID:     "overflow-media-boundary",
-		SessionKey: sessionKey,
-		Content:    "[image]",
-		Media:      []string{currentRef},
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "overflow-media-boundary",
+		}, SessionKey: sessionKey,
+		Content: "[image]",
+		Media:   []string{currentRef},
 	})
 	setTestContextManager(al, &staticContextManager{response: &AssembleResponse{History: []providers.Message{
 		{Role: "user", Content: "[image]", Media: []string{historicalRef}},
@@ -10758,9 +10798,10 @@ func TestProcessMessage_NoneContextOverflowPreservesActiveToolTurn(t *testing.T)
 	al.RegisterTool(&mockCustomTool{})
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel: "test",
-		ChatID:  "chat1",
-		Content: "use the tool",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "chat1",
+		}, Content: "use the tool",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -10804,10 +10845,11 @@ func TestProcessMessage_ContextOverflowRetryPreservesLiveProtectedToolResult(t *
 	}
 
 	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
-		Channel:    "test",
-		ChatID:     "protected-overflow",
-		SessionKey: sessionKey,
-		Content:    "fill and verify protected input",
+		Context: bus.InboundContext{
+			Channel: "test",
+			ChatID:  "protected-overflow",
+		}, SessionKey: sessionKey,
+		Content: "fill and verify protected input",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -10884,10 +10926,11 @@ func TestProcessMessage_ContextOverflow_AnthropicStyle(t *testing.T) {
 	}
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
-		Channel:  "test",
-		ChatID:   "chat1",
-		SenderID: "user1",
-		Content:  "hello",
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "chat1",
+			SenderID: "user1",
+		}, Content: "hello",
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -10995,10 +11038,8 @@ func TestParallelMessageProcessing_DifferentSessionsProcessedConcurrently(t *tes
 				ChatType: "direct",
 				SenderID: session,
 			},
-			Channel:  "telegram",
-			ChatID:   fmt.Sprintf("chat%d", i),
-			SenderID: session,
-			Content:  fmt.Sprintf("Hello from %s", session),
+
+			Content: fmt.Sprintf("Hello from %s", session),
 		}
 		if err := msgBus.PublishInbound(context.Background(), msg); err != nil {
 			t.Fatalf("PublishInbound failed: %v", err)
@@ -11111,10 +11152,8 @@ func TestParallelMessageProcessing_SameSessionProcessedSequentially(t *testing.T
 				ChatType: "direct",
 				SenderID: "user1",
 			},
-			Channel:  "telegram",
-			SenderID: "user1",
-			ChatID:   "chat1",
-			Content:  fmt.Sprintf("Message %d", i+1),
+
+			Content: fmt.Sprintf("Message %d", i+1),
 		}
 		if err := msgBus.PublishInbound(context.Background(), msg); err != nil {
 			t.Fatalf("PublishInbound failed: %v", err)

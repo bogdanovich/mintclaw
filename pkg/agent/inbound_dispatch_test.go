@@ -230,8 +230,12 @@ func TestBuildInboundMessageTurn_PreparesInboundMessage(t *testing.T) {
 	}
 	defer turn.Cleanup()
 
-	if turn.Message.Channel != "telegram" || turn.Message.ChatID != "chat-1" {
-		t.Fatalf("prepared mirrors = (%q,%q), want (telegram,chat-1)", turn.Message.Channel, turn.Message.ChatID)
+	if turn.Message.Context.Channel != "telegram" || turn.Message.Context.ChatID != "chat-1" {
+		t.Fatalf(
+			"prepared context = (%q,%q), want (telegram,chat-1)",
+			turn.Message.Context.Channel,
+			turn.Message.Context.ChatID,
+		)
 	}
 	if turn.Options.Dispatch.Channel() != "telegram" || turn.Options.Dispatch.ChatID() != "chat-1" {
 		t.Fatalf(

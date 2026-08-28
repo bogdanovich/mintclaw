@@ -54,12 +54,6 @@ type InboundMessage struct {
 	MediaScope string         `json:"media_scope,omitempty"` // media lifecycle scope
 	SessionKey string         `json:"session_key"`
 	SpoolID    string         `json:"spool_id,omitempty"` // durable ingress spool entry ID, when enabled
-
-	// Convenience mirrors derived from Context for runtime consumers.
-	Channel   string `json:"channel"`
-	SenderID  string `json:"sender_id"`
-	ChatID    string `json:"chat_id"`
-	MessageID string `json:"message_id,omitempty"` // platform message ID
 }
 
 // ObservedMessage is passive chat context. It is persisted for future context
@@ -72,12 +66,6 @@ type ObservedMessage struct {
 	MediaScope string         `json:"media_scope,omitempty"`
 	SessionKey string         `json:"session_key,omitempty"`
 	Reason     string         `json:"reason,omitempty"`
-
-	// Convenience mirrors derived from Context for runtime consumers.
-	Channel   string `json:"channel"`
-	SenderID  string `json:"sender_id"`
-	ChatID    string `json:"chat_id"`
-	MessageID string `json:"message_id,omitempty"`
 }
 
 // OutboundScope captures the structured session scope associated with an

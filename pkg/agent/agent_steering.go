@@ -19,14 +19,14 @@ import (
 
 func (al *AgentLoop) processMessageSync(ctx context.Context, msg bus.InboundMessage) finalResponseAdmission {
 	if al.channelManager != nil {
-		defer al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
+		defer al.channelManager.InvokeTypingStop(msg.Context.Channel, msg.Context.ChatID)
 	}
 
 	_, routedAgent, _ := al.resolveMessageRoute(msg)
 	workspace, agentID := "", ""
-	channel, chatID, sessionKey := msg.Channel, msg.ChatID, msg.SessionKey
+	channel, chatID, sessionKey := msg.Context.Channel, msg.Context.ChatID, msg.SessionKey
 	inboundCtx := &msg.Context
-	if msg.Channel == "system" {
+	if msg.Context.Channel == "system" {
 		origin := systemMessageOrigin(msg)
 		channel, chatID = origin.Channel, origin.ChatID
 		inboundCtx = &origin
@@ -80,8 +80,8 @@ func (s *inboundSpool) ack(ctx context.Context, msg bus.InboundMessage) error {
 		logger.WarnCF("agent", "Failed to ack inbound spool entry",
 			map[string]any{
 				"spool_id":    msg.SpoolID,
-				"channel":     msg.Channel,
-				"chat_id":     msg.ChatID,
+				"channel":     msg.Context.Channel,
+				"chat_id":     msg.Context.ChatID,
 				"session_key": msg.SessionKey,
 				"error":       err.Error(),
 			})
@@ -102,8 +102,8 @@ func (s *inboundSpool) release(
 		logger.WarnCF("agent", "Failed to release inbound spool entry",
 			map[string]any{
 				"spool_id":    msg.SpoolID,
-				"channel":     msg.Channel,
-				"chat_id":     msg.ChatID,
+				"channel":     msg.Context.Channel,
+				"chat_id":     msg.Context.ChatID,
 				"session_key": msg.SessionKey,
 				"error":       err.Error(),
 			})
@@ -116,8 +116,8 @@ func (al *AgentLoop) runInboundTurnWithSteering(
 ) finalResponseAdmission {
 	target := &continuationTarget{
 		SessionKey: turn.SessionKey,
-		Channel:    turn.Message.Channel,
-		ChatID:     turn.Message.ChatID,
+		Channel:    turn.Message.Context.Channel,
+		ChatID:     turn.Message.Context.ChatID,
 	}
 	turn.Options.FinalDeliveryObservation = &target.finalDeliveryObservation
 	if turn.Agent != nil {
@@ -147,8 +147,8 @@ func (al *AgentLoop) runTurnAndDrainSteering(
 			ctx,
 			target.Workspace,
 			target.AgentID,
-			initialMsg.Channel,
-			initialMsg.ChatID,
+			initialMsg.Context.Channel,
+			initialMsg.Context.ChatID,
 			initialMsg.SessionKey,
 			err,
 			finalResponseAlwaysPublish,
@@ -430,7 +430,7 @@ func joinSteeringResponses(responses []string) string {
 }
 
 func (al *AgentLoop) resolveSteeringTarget(msg bus.InboundMessage) (*inboundDispatchTarget, bool) {
-	if msg.Channel == "system" {
+	if msg.Context.Channel == "system" {
 		return nil, false
 	}
 

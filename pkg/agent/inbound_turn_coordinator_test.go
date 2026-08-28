@@ -330,12 +330,13 @@ func TestInteractionNoticeReleasesInboundAfterAckFailure(t *testing.T) {
 	setTestMessageBus(al, trackingBus)
 	agent := al.registry.GetDefaultAgent()
 	msg := bus.InboundMessage{
-		Context:  bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
-		SpoolID:  "spool-interaction-ack",
-		Channel:  "telegram",
-		ChatID:   "chat-1",
-		Content:  "/answer wrong answer",
-		SenderID: "user-1",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat-1",
+			SenderID: "user-1",
+		},
+		SpoolID: "spool-interaction-ack",
+		Content: "/answer wrong answer",
 	}
 	newInboundTurnCoordinator(al).consumeExplicitInteractionAnswer(
 		t.Context(),
@@ -785,11 +786,8 @@ func TestProcessMessageSyncDurablyPublishesSystemCompletionOnOriginRoute(t *test
 			ChatType: "direct",
 			SenderID: "subagent:worker",
 		},
-		Content:  "Task 'worker' completed.\n\nResult:\nfinished",
-		SpoolID:  "spool-system-completion",
-		Channel:  "system",
-		ChatID:   "telegram:chat-1",
-		SenderID: "subagent:worker",
+		Content: "Task 'worker' completed.\n\nResult:\nfinished",
+		SpoolID: "spool-system-completion",
 	}
 
 	admission := al.processMessageSync(withOutboundTransaction(t.Context(), msg.SpoolID), msg)
@@ -828,11 +826,8 @@ func TestProcessMessageSyncPreservesSystemOriginContextOnSynthesisError(t *testi
 			ReplyToMessageID: "reply-1",
 			SenderID:         "subagent:worker",
 		},
-		Content:  "Task failed",
-		SpoolID:  "spool-system-error",
-		Channel:  "system",
-		ChatID:   "telegram:chat-1",
-		SenderID: "subagent:worker",
+		Content: "Task failed",
+		SpoolID: "spool-system-error",
 	}
 
 	admission := al.processMessageSync(withOutboundTransaction(t.Context(), msg.SpoolID), msg)
@@ -867,8 +862,6 @@ func TestProcessMessageSyncKeepsCancellationRetryable(t *testing.T) {
 		},
 		Content: "Task canceled",
 		SpoolID: "spool-system-canceled",
-		Channel: "system",
-		ChatID:  "telegram:chat-1",
 	}
 
 	ctx := withOutboundTransaction(t.Context(), msg.SpoolID)
@@ -1099,7 +1092,7 @@ func TestInboundTurnCoordinatorReleasesActiveTurnSteeringAfterAggregateRejection
 		al,
 		msg,
 		"spool-steering",
-		msg.SenderID,
+		msg.Context.SenderID,
 	)
 
 	coordinator.runWorker(t.Context(), msg, target, claim)
@@ -1245,11 +1238,13 @@ func TestInboundTurnCoordinatorSettlesHandledNoOutputIndependently(t *testing.T)
 
 func finalResponseAdmissionInboundMessage(spoolID string) bus.InboundMessage {
 	return testInboundMessage(bus.InboundMessage{
-		SpoolID:  spoolID,
-		Channel:  "telegram",
-		ChatID:   "chat-1",
-		SenderID: "user-1",
-		Content:  "hello",
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat-1",
+			SenderID: "user-1",
+		},
+		SpoolID: spoolID,
+		Content: "hello",
 	})
 }
 

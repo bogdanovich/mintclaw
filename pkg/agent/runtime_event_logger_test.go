@@ -407,10 +407,11 @@ func TestReloadProviderAndConfigWaitsForInFlightRequestsBeforeClosingOldProvider
 	defer al.Close()
 
 	msg := testInboundMessage(bus.InboundMessage{
-		Channel:  "test",
-		ChatID:   "reload-chat",
-		SenderID: "user-1",
-		Content:  "hold request open",
+		Context: bus.InboundContext{
+			Channel:  "test",
+			ChatID:   "reload-chat",
+			SenderID: "user-1",
+		}, Content: "hold request open",
 	})
 
 	reqDone := make(chan error, 1)

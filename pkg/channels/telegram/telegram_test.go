@@ -3047,7 +3047,7 @@ func TestHandleMessage_ForumTopic_SetsMetadata(t *testing.T) {
 
 	// ChatID includes the thread ID for forum topics so outbound
 	// delivery resolves the correct topic without relying solely on TopicID fallback.
-	assert.Equal(t, "-1001234567890/42", inbound.ChatID)
+	assert.Equal(t, "-1001234567890/42", inbound.Context.ChatID)
 	assert.Equal(t, "group", inbound.Context.ChatType)
 	assert.Equal(t, "42", inbound.Context.TopicID)
 }
@@ -3123,7 +3123,7 @@ func TestHandleMessage_NoForum_NoThreadMetadata(t *testing.T) {
 	require.True(t, ok)
 
 	// Plain chatID without thread suffix
-	assert.Equal(t, "-100999", inbound.ChatID)
+	assert.Equal(t, "-100999", inbound.Context.ChatID)
 
 	assert.Equal(t, "group", inbound.Context.ChatType)
 	assert.Empty(t, inbound.Context.TopicID)
@@ -3161,7 +3161,7 @@ func TestHandleMessage_ReplyThread_NonForum_NoIsolation(t *testing.T) {
 	require.True(t, ok)
 
 	// chatID should NOT include thread suffix for non-forum groups
-	assert.Equal(t, "-100999", inbound.ChatID)
+	assert.Equal(t, "-100999", inbound.Context.ChatID)
 
 	assert.Equal(t, "group", inbound.Context.ChatType)
 	assert.Empty(t, inbound.Context.TopicID)
@@ -3396,7 +3396,7 @@ func TestHandleMessage_ApprovalButtonReplyPassesGroupAndTopicMentionOnly(t *test
 			case <-time.After(time.Second):
 				t.Fatal("approval button reply was filtered")
 			}
-			assert.Equal(t, test.wantChat, inbound.ChatID)
+			assert.Equal(t, test.wantChat, inbound.Context.ChatID)
 			assert.False(t, inbound.Context.Mentioned)
 			assert.Equal(t, bus.InboundInteractionChoiceAllowOnce,
 				inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])

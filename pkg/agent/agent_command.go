@@ -49,9 +49,9 @@ func (al *AgentLoop) handleCommand(
 
 	var commandReply string
 	result := executor.Execute(ctx, commands.Request{
-		Channel:  msg.Channel,
-		ChatID:   msg.ChatID,
-		SenderID: msg.SenderID,
+		Channel:  msg.Context.Channel,
+		ChatID:   msg.Context.ChatID,
+		SenderID: msg.Context.SenderID,
 		Text:     msg.Content,
 		Reply: func(text string) error {
 			commandReply = text

@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"slices"
@@ -38,9 +39,6 @@ func TestPublishConsume(t *testing.T) {
 	}
 	if got.Content != "hello" {
 		t.Fatalf("expected content 'hello', got %q", got.Content)
-	}
-	if got.Channel != "test" {
-		t.Fatalf("expected channel 'test', got %q", got.Channel)
 	}
 	if got.Context.Channel != "test" {
 		t.Fatalf("expected context channel 'test', got %q", got.Context.Channel)
@@ -108,77 +106,52 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 	}
 }
 
-func TestPublishInbound_MirrorsContextIntoConvenienceFields(t *testing.T) {
-	mb := NewMessageBus()
-	defer mb.Close()
-
-	msg := InboundMessage{
-		Context: InboundContext{
-			Channel:          "telegram",
-			Account:          "bot-a",
-			ChatID:           "-1001",
-			ChatType:         "group",
-			TopicID:          "42",
-			SpaceID:          "guild-9",
-			SpaceType:        "guild",
-			SenderID:         "user-1",
-			MessageID:        "777",
-			Mentioned:        true,
-			ReplyToMessageID: "666",
+func TestInboundPayloadJSONOwnsAddressingInContext(t *testing.T) {
+	tests := map[string]any{
+		"turn": InboundMessage{
+			Context: InboundContext{
+				Channel:   "telegram",
+				ChatID:    "chat-1",
+				SenderID:  "user-1",
+				MessageID: "message-1",
+			},
 		},
-		Content: "hi",
+		"observed": ObservedMessage{
+			Context: InboundContext{
+				Channel:   "telegram",
+				ChatID:    "chat-1",
+				SenderID:  "user-1",
+				MessageID: "message-1",
+			},
+		},
 	}
 
-	if err := mb.PublishInbound(context.Background(), msg); err != nil {
-		t.Fatalf("PublishInbound failed: %v", err)
-	}
-
-	got := <-mb.InboundChan()
-	if got.Channel != "telegram" {
-		t.Fatalf("expected legacy channel telegram, got %q", got.Channel)
-	}
-	if got.ChatID != "-1001" {
-		t.Fatalf("expected legacy chat ID -1001, got %q", got.ChatID)
-	}
-	if got.SenderID != "user-1" {
-		t.Fatalf("expected legacy sender ID user-1, got %q", got.SenderID)
-	}
-	if got.MessageID != "777" {
-		t.Fatalf("expected legacy message ID 777, got %q", got.MessageID)
-	}
-	if got.Context.Account != "bot-a" || got.Context.SpaceID != "guild-9" || got.Context.TopicID != "42" {
-		t.Fatalf("unexpected normalized context: %+v", got.Context)
-	}
-}
-
-func TestPublishInbound_BackfillsContextFromLegacyFields(t *testing.T) {
-	mb := NewMessageBus()
-	defer mb.Close()
-
-	msg := InboundMessage{
-		Channel:   "mintclaw",
-		ChatID:    "session-1",
-		SenderID:  "user-1",
-		MessageID: "msg-1",
-		Content:   "hello",
-	}
-
-	if err := mb.PublishInbound(context.Background(), msg); err != nil {
-		t.Fatalf("PublishInbound failed: %v", err)
-	}
-
-	got := <-mb.InboundChan()
-	if got.Context.Channel != "mintclaw" {
-		t.Fatalf("expected context channel mintclaw, got %q", got.Context.Channel)
-	}
-	if got.Context.ChatID != "session-1" {
-		t.Fatalf("expected context chat ID session-1, got %q", got.Context.ChatID)
-	}
-	if got.Context.SenderID != "user-1" {
-		t.Fatalf("expected context sender ID user-1, got %q", got.Context.SenderID)
-	}
-	if got.Context.MessageID != "msg-1" {
-		t.Fatalf("expected context message ID msg-1, got %q", got.Context.MessageID)
+	for name, payload := range tests {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal() error = %v", err)
+			}
+			var decoded map[string]any
+			if err = json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			for _, field := range []string{"channel", "chat_id", "sender_id", "message_id"} {
+				if _, ok := decoded[field]; ok {
+					t.Fatalf("payload contains duplicate top-level %q: %s", field, encoded)
+				}
+			}
+			contextPayload, ok := decoded["context"].(map[string]any)
+			if !ok {
+				t.Fatalf("context payload = %#v", decoded["context"])
+			}
+			if contextPayload["channel"] != "telegram" ||
+				contextPayload["chat_id"] != "chat-1" ||
+				contextPayload["sender_id"] != "user-1" ||
+				contextPayload["message_id"] != "message-1" {
+				t.Fatalf("unexpected context payload: %#v", contextPayload)
+			}
+		})
 	}
 }
 

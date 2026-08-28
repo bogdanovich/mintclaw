@@ -313,8 +313,8 @@ func TestAgentCheckSilencePublishesInboundAndCleansUp(t *testing.T) {
 
 	select {
 	case msg := <-mb.InboundChan():
-		if msg.Channel != "slack" {
-			t.Fatalf("unexpected inbound channel: %q", msg.Channel)
+		if msg.Context.Channel != "slack" {
+			t.Fatalf("unexpected inbound channel: %q", msg.Context.Channel)
 		}
 		if !strings.Contains(msg.Content, "hello there") {
 			t.Fatalf("unexpected inbound content: %q", msg.Content)
