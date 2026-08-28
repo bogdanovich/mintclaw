@@ -735,8 +735,8 @@ func TestPublishResponseAlwaysPublishMarksFinalReplyAfterMessageTool(t *testing.
 		if outbound.Content != "final reply" {
 			t.Fatalf("outbound content = %q, want final reply", outbound.Content)
 		}
-		if got := strings.TrimSpace(outbound.Context.Raw[metadataKeyMessageKind]); got != messageKindFinalReply {
-			t.Fatalf("message kind = %q, want %q", got, messageKindFinalReply)
+		if got := strings.TrimSpace(outbound.Metadata.MessageKind); got != bus.OutboundMessageKindFinalReply {
+			t.Fatalf("message kind = %q, want %q", got, bus.OutboundMessageKindFinalReply)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected final reply outbound")
@@ -794,11 +794,11 @@ func TestPublishResponseIfNeeded_MarksFinalOutbound(t *testing.T) {
 		if outbound.Content != "final reply" {
 			t.Fatalf("outbound content = %q, want final reply", outbound.Content)
 		}
-		if outbound.Context.Raw[metadataKeyOutboundKind] != outboundKindFinal {
+		if outbound.Metadata.OutboundKind != bus.OutboundKindFinal {
 			t.Fatalf(
 				"outbound kind = %q, want %q",
-				outbound.Context.Raw[metadataKeyOutboundKind],
-				outboundKindFinal,
+				outbound.Metadata.OutboundKind,
+				bus.OutboundKindFinal,
 			)
 		}
 		if outbound.SessionKey != "session-1" {
@@ -849,22 +849,22 @@ func TestDeliverFinalTurnResult_AttachesResponseFooterMetadata(t *testing.T) {
 		if outbound.Context.MessageID != "live-request-1" {
 			t.Fatalf("final outbound request message ID = %q, want live-request-1", outbound.Context.MessageID)
 		}
-		raw := outbound.Context.Raw
-		if raw[metadataKeyOutboundKind] != outboundKindFinal {
-			t.Fatalf("outbound kind = %q, want %q", raw[metadataKeyOutboundKind], outboundKindFinal)
+		metadata := outbound.Metadata
+		if metadata.OutboundKind != bus.OutboundKindFinal {
+			t.Fatalf("outbound kind = %q, want %q", metadata.OutboundKind, bus.OutboundKindFinal)
 		}
-		if raw[metadataKeyModelName] != "fallback-model" {
-			t.Fatalf("model metadata = %q, want fallback-model", raw[metadataKeyModelName])
+		if metadata.ModelName != "fallback-model" {
+			t.Fatalf("model metadata = %q, want fallback-model", metadata.ModelName)
 		}
-		if raw[metadataKeyDefaultModel] != "primary-model" {
-			t.Fatalf("default model metadata = %q, want primary-model", raw[metadataKeyDefaultModel])
+		if metadata.DefaultModelName != "primary-model" {
+			t.Fatalf("default model metadata = %q, want primary-model", metadata.DefaultModelName)
 		}
-		if raw[metadataKeyUsageInput] != "123" || raw[metadataKeyUsageOutput] != "45" ||
-			raw[metadataKeyUsageTotal] != "168" {
-			t.Fatalf("usage metadata = (%q,%q,%q), want (123,45,168)",
-				raw[metadataKeyUsageInput],
-				raw[metadataKeyUsageOutput],
-				raw[metadataKeyUsageTotal],
+		if metadata.UsageInputTokens != 123 || metadata.UsageOutputTokens != 45 ||
+			metadata.UsageTotalTokens != 168 {
+			t.Fatalf("usage metadata = (%d,%d,%d), want (123,45,168)",
+				metadata.UsageInputTokens,
+				metadata.UsageOutputTokens,
+				metadata.UsageTotalTokens,
 			)
 		}
 	case <-time.After(time.Second):
@@ -928,7 +928,7 @@ func TestDeliverFinalTurnResult_DirectTelegramDeliveryIncludesResponseFooter(t *
 	if got := messages[0].Content; got != want {
 		t.Fatalf("sent content = %q, want %q", got, want)
 	}
-	if got := bus.OutboundMetadataFromMessage(messages[0]).OutboundKind; got != bus.OutboundKindFinal {
+	if got := messages[0].Metadata.OutboundKind; got != bus.OutboundKindFinal {
 		t.Fatalf("sent outbound kind = %q, want %q", got, bus.OutboundKindFinal)
 	}
 }
@@ -950,11 +950,11 @@ func TestPublishMintClawReasoningIncludesSessionKey(t *testing.T) {
 		if outbound.SessionKey != "session-1" {
 			t.Fatalf("outbound session key = %q, want session-1", outbound.SessionKey)
 		}
-		if outbound.Context.Raw[metadataKeyMessageKind] != messageKindThought {
+		if outbound.Metadata.MessageKind != bus.OutboundMessageKindThought {
 			t.Fatalf(
 				"message kind = %q, want %q",
-				outbound.Context.Raw[metadataKeyMessageKind],
-				messageKindThought,
+				outbound.Metadata.MessageKind,
+				bus.OutboundMessageKindThought,
 			)
 		}
 	case <-time.After(time.Second):
@@ -2899,11 +2899,11 @@ func TestProcessMessage_HandledMediaDismissesToolFeedbackWithoutFinalText(t *tes
 	}
 	select {
 	case outbound := <-msgBus.OutboundChan():
-		if got := strings.TrimSpace(outbound.Context.Raw[metadataKeyMessageKind]); got != messageKindToolFeedback {
+		if got := strings.TrimSpace(outbound.Metadata.MessageKind); got != bus.OutboundMessageKindToolFeedback {
 			t.Fatalf(
 				"first outbound kind = %q, want %q; outbound=%+v",
 				got,
-				messageKindToolFeedback,
+				bus.OutboundMessageKindToolFeedback,
 				outbound,
 			)
 		}
@@ -3121,6 +3121,7 @@ func TestDeliverFinalTurnTextQueuesFallbackAfterTurnCancellation(t *testing.T) {
 		agent,
 		turnSpec{Dispatch: DispatchRequest{SessionKey: "fallback-session"}},
 		bus.InboundContext{Channel: "telegram", ChatID: "chat1", SenderID: "user1"},
+		bus.OutboundMetadata{},
 		agent.ID,
 		"fallback-session",
 		nil,
@@ -3262,13 +3263,13 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 				WithOutboundDelivery(toolshared.OutboundDelivery{Text: "checking services"}).
 				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			if _, outcome, err := al.deliverToolResultToUserWithScopes(
-				t.Context(), ts, result, "message", scopeCase.scopes,
+				t.Context(), ts, result, "message", scopeCase.scopes, bus.OutboundMetadata{},
 			); err != nil || outcome != toolResultDeliveryQueued {
 				t.Fatalf("delivery = (%v, %v)", outcome, err)
 			}
 			select {
 			case outbound := <-msgBus.OutboundChan():
-				if metadata := bus.OutboundMetadataFromMessage(outbound); !metadata.IsInterim() {
+				if metadata := outbound.Metadata; !metadata.IsInterim() {
 					t.Fatalf("outbound metadata = %#v, want interim", metadata)
 				}
 				if outbound.TraceSettlement ||
@@ -3288,13 +3289,13 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 				}}}).
 				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			if _, outcome, err := al.deliverToolResultToUserWithScopes(
-				t.Context(), ts, result, "image_generation", scopeCase.scopes,
+				t.Context(), ts, result, "image_generation", scopeCase.scopes, bus.OutboundMetadata{},
 			); err != nil || outcome != toolResultDeliveryQueued {
 				t.Fatalf("delivery = (%v, %v)", outcome, err)
 			}
 			select {
 			case outbound := <-msgBus.OutboundMediaChan():
-				metadata := bus.OutboundMetadataFromContext(outbound.Context)
+				metadata := outbound.Metadata
 				if !metadata.IsInterim() {
 					t.Fatalf("outbound metadata = %#v, want interim", metadata)
 				}
@@ -3313,13 +3314,13 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 				WithOutboundDelivery(toolshared.OutboundDelivery{Text: "still working"}).
 				WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
 			if _, outcome, err := al.deliverToolResultToUserWithScopes(
-				t.Context(), ts, result, "message", scopeCase.scopes,
+				t.Context(), ts, result, "message", scopeCase.scopes, bus.OutboundMetadata{},
 			); err != nil || outcome != toolResultDeliveryQueued {
 				t.Fatalf("delivery = (%v, %v)", outcome, err)
 			}
 			select {
 			case outbound := <-msgBus.OutboundChan():
-				metadata := bus.OutboundMetadataFromMessage(outbound)
+				metadata := outbound.Metadata
 				if !metadata.IsInterim() || metadata.IsFinal() {
 					t.Fatalf("outbound metadata = %#v, want interim", metadata)
 				}
@@ -3356,7 +3357,7 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 	}
 	waitForSentMessages(t, channel, 1)
 	sent := channel.messagesSnapshot()[0]
-	metadata := bus.OutboundMetadataFromMessage(sent)
+	metadata := sent.Metadata
 	if !metadata.IsFinal() || metadata.IsInterim() {
 		t.Fatalf("channel-manager outbound metadata = %#v, want final", metadata)
 	}
@@ -5802,7 +5803,7 @@ func TestProcessMessage_ModelOverrideDecoratesDirectChannelResponse(t *testing.T
 	if len(messages) != 2 {
 		t.Fatalf("sent messages = %d, want 2", len(messages))
 	}
-	metadata := bus.OutboundMetadataFromMessage(messages[1])
+	metadata := messages[1].Metadata
 	if metadata.OutboundKind != bus.OutboundKindFinal ||
 		metadata.ModelName != "override-alias" ||
 		metadata.DefaultModelName != "workspace-default" ||
@@ -5896,7 +5897,7 @@ func TestContinuationTarget_MetadataTracksOnlyRetainedResponses(t *testing.T) {
 		UsageOutputTokens: 10,
 		UsageTotalTokens:  110,
 	})
-	if target.responseMetadata != want {
+	if !reflect.DeepEqual(target.responseMetadata, want) {
 		t.Fatalf("retained metadata = %+v, want %+v", target.responseMetadata, want)
 	}
 }
@@ -8617,11 +8618,11 @@ func TestProcessMessage_MintClawPublishesReasoningAsThoughtMessage(t *testing.T)
 			thoughtMsg.ChatID,
 		)
 	}
-	if thoughtMsg.Context.Raw[metadataKeyMessageKind] != messageKindThought {
+	if thoughtMsg.Metadata.MessageKind != bus.OutboundMessageKindThought {
 		t.Fatalf(
 			"thought metadata kind = %q, want %q",
-			thoughtMsg.Context.Raw[metadataKeyMessageKind],
-			messageKindThought,
+			thoughtMsg.Metadata.MessageKind,
+			bus.OutboundMessageKindThought,
 		)
 	}
 }
@@ -9262,8 +9263,8 @@ func TestRunAgentLoop_FinalResponseAfterMessageToolUsesNewReply(t *testing.T) {
 			outbounds[1].Content,
 		)
 	}
-	if got := strings.TrimSpace(outbounds[1].Context.Raw[metadataKeyMessageKind]); got != messageKindFinalReply {
-		t.Fatalf("final response message kind = %q, want %q", got, messageKindFinalReply)
+	if got := strings.TrimSpace(outbounds[1].Metadata.MessageKind); got != bus.OutboundMessageKindFinalReply {
+		t.Fatalf("final response message kind = %q, want %q", got, bus.OutboundMessageKindFinalReply)
 	}
 }
 
@@ -9377,8 +9378,8 @@ func TestRunAgentLoop_MessageToolMediaDeliveryBlocksBeforeFinalResponse(t *testi
 	if outbound.Content != "final answer after media" {
 		t.Fatalf("final outbound content = %q, want final answer after media", outbound.Content)
 	}
-	if got := strings.TrimSpace(outbound.Context.Raw[metadataKeyMessageKind]); got != messageKindFinalReply {
-		t.Fatalf("final response message kind = %q, want %q", got, messageKindFinalReply)
+	if got := strings.TrimSpace(outbound.Metadata.MessageKind); got != bus.OutboundMessageKindFinalReply {
+		t.Fatalf("final response message kind = %q, want %q", got, bus.OutboundMessageKindFinalReply)
 	}
 }
 
@@ -9624,13 +9625,14 @@ func TestRun_MintClawPublishesAssistantContentDuringToolCallsWithoutFinalDuplica
 			"intermediate model text",
 		)
 	}
-	if outputs[1].Context.Raw[metadataKeyMessageKind] != messageKindToolCalls {
+	if outputs[1].Metadata.MessageKind != bus.OutboundMessageKindToolCalls {
 		t.Fatalf("second outbound = %+v, want tool_calls message", outputs[1])
 	}
-	if !strings.Contains(outputs[1].Context.Raw[metadataKeyToolCalls], "tool_limit_test_tool") {
+	if len(outputs[1].Metadata.ToolCalls) != 1 || outputs[1].Metadata.ToolCalls[0].Function == nil ||
+		outputs[1].Metadata.ToolCalls[0].Function.Name != "tool_limit_test_tool" {
 		t.Fatalf(
-			"second outbound tool_calls = %q, want tool name",
-			outputs[1].Context.Raw[metadataKeyToolCalls],
+			"second outbound tool_calls = %#v, want tool name",
+			outputs[1].Metadata.ToolCalls,
 		)
 	}
 	if outputs[2].Content != "final model text" {
@@ -9761,16 +9763,17 @@ func TestRun_MintClawToolFeedbackSuppressesDuplicateInterimAssistantContent(t *t
 		}
 	}
 
-	if outputs[0].Context.Raw[metadataKeyMessageKind] != messageKindToolCalls {
+	if outputs[0].Metadata.MessageKind != bus.OutboundMessageKindToolCalls {
 		t.Fatalf("first outbound = %+v, want tool_calls message", outputs[0])
 	}
 	if outputs[0].Content != "" {
 		t.Fatalf("first outbound content = %q, want empty tool_calls content", outputs[0].Content)
 	}
-	if !strings.Contains(outputs[0].Context.Raw[metadataKeyToolCalls], "tool_limit_test_tool") {
+	if len(outputs[0].Metadata.ToolCalls) != 1 || outputs[0].Metadata.ToolCalls[0].Function == nil ||
+		outputs[0].Metadata.ToolCalls[0].Function.Name != "tool_limit_test_tool" {
 		t.Fatalf(
-			"first outbound tool_calls = %q, want tool name",
-			outputs[0].Context.Raw[metadataKeyToolCalls],
+			"first outbound tool_calls = %#v, want tool name",
+			outputs[0].Metadata.ToolCalls,
 		)
 	}
 	if outputs[1].Content != "final model text" {

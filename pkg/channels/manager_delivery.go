@@ -752,7 +752,7 @@ func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
 			&msg.Context,
 			msg.SessionKey,
 			msg.TraceScopes,
-			bus.OutboundMetadataFromContext(msg.Context).IsInterim(),
+			msg.Metadata.IsInterim(),
 		)
 		defer func() {
 			m.completeToolFeedbackTerminals(ctx, terminals, terminalSucceeded)

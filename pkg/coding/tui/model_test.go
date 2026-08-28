@@ -17,6 +17,10 @@ import (
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
+func newTestModel(controller frontend.Controller) (*Model, error) {
+	return NewModel(context.Background(), controller)
+}
+
 type fakeController struct {
 	*frontend.Projector
 	interrupts   atomic.Int32
@@ -90,8 +94,12 @@ func (f *fakeController) Compact(ctx context.Context) error {
 	if f.compactErr != nil {
 		return f.compactErr
 	}
-	f.CompactionStarted("", "manual", false)
-	f.CompactionCompleted("", "manual", 256, false, false)
+	f.CompactionUpdate(frontend.CompactionState{
+		Reason: "manual", Status: frontend.CompactionRunning,
+	})
+	f.CompactionUpdate(frontend.CompactionState{
+		Reason: "manual", Status: frontend.CompactionCompleted, TokensSaved: 256,
+	})
 	return nil
 }
 
@@ -115,7 +123,7 @@ func (f *fakeController) Close(context.Context) error {
 
 func TestModelHandlesResizeAndMultilineBracketedPaste(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +143,7 @@ func TestModelHandlesResizeAndMultilineBracketedPaste(t *testing.T) {
 
 func TestComposerSubmitsMultilineUnicodeAndNavigatesHistory(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,10 +188,38 @@ func TestComposerSubmitsMultilineUnicodeAndNavigatesHistory(t *testing.T) {
 	}
 }
 
+func TestComposerRemainsUsableDuringBackgroundCompaction(t *testing.T) {
+	controller := newController(t)
+	controller.CompactionUpdate(frontend.CompactionState{
+		Reason: "proactive_budget", Status: frontend.CompactionRunning, Background: true,
+	})
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.snapshot.Activity != frontend.ActivityIdle {
+		t.Fatalf("background compaction changed activity to %q", model.snapshot.Activity)
+	}
+	model.composer.SetValue("continue while context is compacted")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("background compaction blocked composer submission")
+	}
+	message, ok := command().(SubmitResultMsg)
+	if !ok {
+		t.Fatalf("submit command message = %T", message)
+	}
+	updateModel(t, model, message)
+	if got := controller.submittedPrompts(); !slices.Equal(got, []string{"continue while context is compacted"}) {
+		t.Fatalf("submitted prompts = %#v", got)
+	}
+}
+
 func TestComposerKeepsLargePastedDraftWhenSubmissionFails(t *testing.T) {
 	controller := newController(t)
 	controller.submitErr = errors.New("admission rejected")
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +243,7 @@ func TestComposerKeepsLargePastedDraftWhenSubmissionFails(t *testing.T) {
 
 func TestComposerUnicodeCursorStaysWithinNarrowCellBounds(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +361,7 @@ func assertTranscriptViewIDs(t *testing.T, display []transcriptViewEntry, want [
 
 func TestUnsupportedOrChangedHistoryDisablesPagingWithoutFrontendError(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +380,7 @@ func TestUnsupportedOrChangedHistoryDisablesPagingWithoutFrontendError(t *testin
 func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
 	controller := newController(t)
 	controller.TurnStarted("turn-1", "fix it")
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +413,7 @@ func TestModelUsesGracefulThenHardCancellation(t *testing.T) {
 
 func TestModelQuitsBeforeControllerCleanupWhileIdle(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +433,7 @@ func TestModelQuitsBeforeControllerCleanupWhileIdle(t *testing.T) {
 
 func TestModelInterruptsAdmittedInitialTurnBeforeFirstView(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +457,7 @@ func TestModelInterruptsAdmittedInitialTurnBeforeFirstView(t *testing.T) {
 
 func TestSubscriptionReconcilesInitialTurnCompletedBeforeInit(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +488,7 @@ func TestSubscriptionReconcilesInitialTurnCompletedBeforeInit(t *testing.T) {
 
 func TestModelConsumesLatestCoalescedView(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +504,7 @@ func TestModelConsumesLatestCoalescedView(t *testing.T) {
 
 func TestViewUpdateDoesNotClearCommandError(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,7 +528,7 @@ func TestStreamingPreservesManualScrollAndFollowsBottom(t *testing.T) {
 		projector.TurnStarted(turnID, strings.Repeat(fmt.Sprintf("question-%d ", i), 3))
 		projector.AssistantAccumulated(turnID, strings.Repeat("answer ", 5), true)
 	}
-	model, err := NewModel(&fakeController{Projector: projector})
+	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +560,7 @@ func TestSnapshotUpdatePreservesComposerAndReferencedScrollAnchor(t *testing.T) 
 		projector.TurnStarted(turnID, strings.Repeat("question ", 4))
 		projector.AssistantAccumulated(turnID, strings.Repeat("answer ", 4), true)
 	}
-	model, err := NewModel(&fakeController{Projector: projector})
+	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +599,7 @@ func (p *pagedController) TranscriptPage(
 func TestTranscriptHydrationPagesRemainBoundedAndPreserveLiveEntries(t *testing.T) {
 	controller := newController(t)
 	paged := &pagedController{fakeController: controller}
-	model, err := NewModel(paged)
+	model, err := newTestModel(paged)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +671,7 @@ func TestModelKeepsLongBoundedHistoryUsableAtNarrowSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, err := NewModel(&fakeController{Projector: projector})
+	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -651,7 +687,7 @@ func TestModelKeepsLongBoundedHistoryUsableAtNarrowSize(t *testing.T) {
 
 func TestModelUsesActualTinyTerminalDimensions(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -667,7 +703,7 @@ func TestModelUsesActualTinyTerminalDimensions(t *testing.T) {
 
 func TestNextSnapshotCommandUsesExistingSubscription(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +721,7 @@ func TestNextSnapshotCommandUsesExistingSubscription(t *testing.T) {
 
 func TestModelTracksTerminalFocusWithoutChangingComposer(t *testing.T) {
 	controller := newController(t)
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}

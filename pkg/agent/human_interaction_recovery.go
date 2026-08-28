@@ -114,10 +114,10 @@ func (al *AgentLoop) syncInteractionControls(workspace string, record interactio
 	if record.Kind == interactions.KindApproval {
 		interactionKind = bus.OutboundInteractionApproval
 	}
-	bus.OutboundMetadata{
+	message.Metadata = message.Metadata.Merge(bus.OutboundMetadata{
 		InteractionKind:     interactionKind,
 		InteractionControls: controls,
-	}.ApplyToContext(&message.Context)
+	})
 	if err := syncer.SyncInteractionControls(message); err != nil {
 		logger.WarnCF("agent", "Failed to sync human interaction controls", map[string]any{
 			"workspace":      workspace,

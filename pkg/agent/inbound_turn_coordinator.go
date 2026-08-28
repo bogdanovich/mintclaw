@@ -53,10 +53,10 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 		if strings.EqualFold(strings.TrimSpace(msg.Context.Channel), "telegram") {
 			msg.Context.ReplyToMessageID = strings.TrimSpace(msg.Context.MessageID)
 		}
-		bus.OutboundMetadata{
+		metadata := bus.OutboundMetadata{
 			InteractionKind:     string(cancellation.Kind),
 			InteractionControls: bus.OutboundInteractionControlsRemove,
-		}.ApplyToContext(&msg.Context)
+		}
 		admission := al.publishStopReply(
 			ctx,
 			msg,
@@ -64,6 +64,7 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 			target.Agent.ID,
 			commands.StopResult{Stopped: cancellation.Canceled},
 			nil,
+			metadata,
 		)
 		_ = al.settleInboundAdmission(ctx, msg, admission)
 		return

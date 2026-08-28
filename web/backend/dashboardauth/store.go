@@ -34,7 +34,7 @@ func New(dir string) (*Store, error) {
 	return s, nil
 }
 
-// Open opens (or creates) the SQLite database at path and migrates the schema.
+// Open opens (or creates) the SQLite database at path and ensures the current table exists.
 func Open(path string) (*Store, error) {
 	db, err := sql.Open(sqliteDriver, path)
 	if err != nil {

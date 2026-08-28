@@ -40,7 +40,7 @@ func TestProviderErrorContract(t *testing.T) {
 			wantKind: providererrors.KindRateLimit,
 		},
 		{
-			name: "context compatibility fallback", status: http.StatusBadRequest,
+			name: "context message refinement", status: http.StatusBadRequest,
 			errorType: "invalid_request_error", message: "prompt is too long for this context window",
 			wantKind: providererrors.KindContextOverflow,
 		},

@@ -8,17 +8,19 @@ import (
 )
 
 type lifecycleCompactionManager struct {
-	started  chan struct{}
-	finished chan struct{}
-	calls    atomic.Int32
+	started    chan struct{}
+	finished   chan struct{}
+	calls      atomic.Int32
+	background atomic.Bool
 }
 
 func (m *lifecycleCompactionManager) Assemble(context.Context, *AssembleRequest) (*AssembleResponse, error) {
 	return &AssembleResponse{}, nil
 }
 
-func (m *lifecycleCompactionManager) Compact(ctx context.Context, _ *CompactRequest) error {
+func (m *lifecycleCompactionManager) Compact(ctx context.Context, req *CompactRequest) error {
 	m.calls.Add(1)
+	m.background.Store(req != nil && req.Background)
 	select {
 	case m.started <- struct{}{}:
 	default:
@@ -55,6 +57,9 @@ func TestBackgroundCompactionRunnerDeduplicatesCodingThread(t *testing.T) {
 	case <-manager.started:
 	case <-time.After(time.Second):
 		t.Fatal("first compaction did not start")
+	}
+	if !manager.background.Load() {
+		t.Fatal("background compaction request did not carry its execution mode")
 	}
 	runner.scheduleBackgroundCompaction(agent, "session-b", ContextCompressReasonSummarize, 100, "turn")
 	if manager.calls.Load() != 1 {

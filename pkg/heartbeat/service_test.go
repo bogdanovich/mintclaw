@@ -13,10 +13,14 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-func TestNewHeartbeatServiceWithStateUsesRuntimeManager(t *testing.T) {
+func newTestHeartbeatService(workspace string, intervalMinutes int, enabled bool) *HeartbeatService {
+	return NewHeartbeatService(workspace, intervalMinutes, enabled, state.NewManager(workspace))
+}
+
+func TestNewHeartbeatServiceUsesRuntimeManager(t *testing.T) {
 	workspace := t.TempDir()
 	manager := state.NewManager(workspace)
-	service := NewHeartbeatServiceWithState(workspace, 30, false, manager)
+	service := NewHeartbeatService(workspace, 30, false, manager)
 	if service.state != manager {
 		t.Fatal("heartbeat service did not retain the runtime-owned state manager")
 	}
@@ -29,7 +33,7 @@ func TestExecuteHeartbeat_Async(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := newTestHeartbeatService(tmpDir, 30, true)
 	hs.stopChan = make(chan struct{}) // Enable for testing
 
 	asyncCalled := false
@@ -96,7 +100,7 @@ func TestExecuteHeartbeat_ResultLogging(t *testing.T) {
 			}
 			defer os.RemoveAll(tmpDir)
 
-			hs := NewHeartbeatService(tmpDir, 30, true)
+			hs := newTestHeartbeatService(tmpDir, 30, true)
 			hs.stopChan = make(chan struct{}) // Enable for testing
 
 			hs.SetHandler(func(prompt, channel, chatID string) *toolshared.ToolResult {
@@ -127,7 +131,7 @@ func TestHeartbeatService_StartStop(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 1, true)
+	hs := newTestHeartbeatService(tmpDir, 1, true)
 
 	err = hs.Start()
 	if err != nil {
@@ -146,7 +150,7 @@ func TestHeartbeatServiceStopAndDrainWaitsForActiveHandler(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmpDir, "HEARTBEAT.md"), []byte("Test task"), 0o600); err != nil {
 		t.Fatalf("write heartbeat task: %v", err)
 	}
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := newTestHeartbeatService(tmpDir, 30, true)
 	hs.interval = time.Millisecond
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -185,7 +189,7 @@ func TestHeartbeatService_Disabled(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 1, false)
+	hs := newTestHeartbeatService(tmpDir, 1, false)
 
 	if hs.enabled != false {
 		t.Error("Expected service to be disabled")
@@ -202,7 +206,7 @@ func TestExecuteHeartbeat_NilResult(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := newTestHeartbeatService(tmpDir, 30, true)
 	hs.stopChan = make(chan struct{}) // Enable for testing
 
 	hs.SetHandler(func(prompt, channel, chatID string) *toolshared.ToolResult {
@@ -226,7 +230,7 @@ func TestLogPath(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := newTestHeartbeatService(tmpDir, 30, true)
 
 	// Write a log entry
 	hs.logf("INFO", "Test log entry")
@@ -246,7 +250,7 @@ func TestHeartbeatFilePath(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := newTestHeartbeatService(tmpDir, 30, true)
 
 	// Trigger default template creation
 	hs.buildPrompt()
@@ -265,7 +269,7 @@ func TestBuildPrompt_DefaultTemplateStaysIdle(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := newTestHeartbeatService(tmpDir, 30, true)
 	hs.createDefaultHeartbeatTemplate()
 
 	if prompt := hs.buildPrompt(); prompt != "" {
@@ -280,7 +284,7 @@ func TestBuildPrompt_UserTasksAfterMarkerProducePrompt(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	hs := NewHeartbeatService(tmpDir, 30, true)
+	hs := newTestHeartbeatService(tmpDir, 30, true)
 	hs.createDefaultHeartbeatTemplate()
 
 	path := filepath.Join(tmpDir, "HEARTBEAT.md")

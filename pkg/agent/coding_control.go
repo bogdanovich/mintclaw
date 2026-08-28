@@ -6,6 +6,32 @@ import (
 	"strings"
 )
 
+type codingContextPreparer interface {
+	prepareCodingSession(context.Context, *AgentInstance, string) error
+	publishCodingRetrievalTools() error
+}
+
+func (al *AgentLoop) prepareCodingContext(ctx context.Context) error {
+	reconciler, ok := al.contextManager.(codingContextPreparer)
+	if !ok {
+		return nil
+	}
+	for _, agentID := range al.registry.ListAgentIDs() {
+		agent, found := al.registry.GetAgent(agentID)
+		if !found || agent == nil {
+			continue
+		}
+		layout, found := al.codingProfile.AgentLayout(agentID)
+		if !found {
+			return fmt.Errorf("coding context has no admitted layout for agent %q", agentID)
+		}
+		if err := reconciler.prepareCodingSession(ctx, agent, "coding:"+layout.ThreadID()); err != nil {
+			return err
+		}
+	}
+	return reconciler.publishCodingRetrievalTools()
+}
+
 // CompactCodingSession performs explicit foreground compaction for the one
 // coding owner admitted by sessionKey. An active turn must finish or be
 // interrupted first so history mutation remains single-writer.
@@ -36,5 +62,6 @@ func (al *AgentLoop) CompactCodingSession(ctx context.Context, sessionKey string
 		Workspace:  agent.Workspace,
 		Reason:     ContextCompressReasonManual,
 		Budget:     budget,
+		Background: false,
 	})
 }

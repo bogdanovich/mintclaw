@@ -1477,16 +1477,16 @@ func TestHumanInteractionRuntimePersistsAndQueuesPromptBeforeWaiting(t *testing.
 			!strings.Contains(outbound.Content, "`/answer "+record.ShortID+" …`") ||
 			strings.Contains(outbound.Content, "Input needed") ||
 			strings.Contains(outbound.Content, "Reply with your answer") ||
-			outbound.Context.Raw[interactionIDMetadata] != record.ID ||
-			outbound.Context.Raw["delivery_key"] != interactionDeliveryKey(record.ID, "prompt") ||
+			outbound.Metadata.InteractionID != record.ID ||
+			outbound.Metadata.InteractionShortID != record.ShortID ||
 			outbound.Context.Account != "primary" || outbound.Context.TopicID != "1771" ||
 			outbound.ReplyToMessageID != "question-origin" ||
-			outbound.Context.Raw[bus.OutboundMetadataKeyRequestID] != "question-origin" ||
+			outbound.Metadata.RequestID != "question-origin" ||
 			!strings.Contains(outbound.Content, "`/stop`") ||
-			bus.OutboundMetadataFromMessage(outbound).IsApprovalPrompt() {
+			outbound.Metadata.IsApprovalPrompt() {
 			t.Fatalf("outbound prompt = %#v", outbound)
 		}
-		metadata := bus.OutboundMetadataFromMessage(outbound)
+		metadata := outbound.Metadata
 		if !metadata.IsQuestionPrompt() ||
 			!reflect.DeepEqual(metadata.InteractionChoices(), []string{"Canary", "All"}) {
 			t.Fatalf("question prompt metadata = %#v", metadata)
@@ -1599,8 +1599,8 @@ func TestNonTelegramApprovalPromptCarriesGenericControlsWithoutReplyThread(t *te
 	}
 	prompt := <-manager.sent
 	if prompt.ReplyToMessageID != "" ||
-		prompt.Context.Raw[bus.OutboundMetadataKeyRequestID] != "origin-message" ||
-		!bus.OutboundMetadataFromMessage(prompt).IsApprovalPrompt() {
+		prompt.Metadata.RequestID != "origin-message" ||
+		!prompt.Metadata.IsApprovalPrompt() {
 		t.Fatalf("non-Telegram approval prompt = %#v", prompt)
 	}
 }
@@ -1911,7 +1911,7 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	}
 	select {
 	case acknowledgement := <-manager.sent:
-		metadata := bus.OutboundMetadataFromMessage(acknowledgement)
+		metadata := acknowledgement.Metadata
 		if acknowledgement.Content == "raw child final" ||
 			acknowledgement.ReplyToMessageID != "question-answer" ||
 			!metadata.RemovesInteractionControls() ||
@@ -1957,7 +1957,7 @@ func TestTaskInteractionFinalHonorsParentOnlyDelivery(t *testing.T) {
 	}
 	select {
 	case outbound := <-manager.sent:
-		metadata := bus.OutboundMetadataFromMessage(outbound)
+		metadata := outbound.Metadata
 		if strings.TrimSpace(outbound.Content) == "" || outbound.Content == "raw child final" ||
 			metadata.OutboundKind != bus.OutboundKindFinal ||
 			metadata.MessageKind != bus.OutboundMessageKindFinalReply {
@@ -2215,7 +2215,7 @@ func TestParentOnlyTaskApprovalDeliversOnlyParentResult(t *testing.T) {
 
 	select {
 	case outbound := <-manager.sent:
-		metadata := bus.OutboundMetadataFromMessage(outbound)
+		metadata := outbound.Metadata
 		if strings.TrimSpace(outbound.Content) == "" ||
 			outbound.Content == "raw child final" ||
 			outbound.Content == "Response recorded." ||
@@ -2326,7 +2326,7 @@ func TestTaskInteractionFinalCarriesResumeScopeToUserDelivery(t *testing.T) {
 			outbound.TraceScopes[0] != traceScope {
 			t.Fatalf("task user delivery = %#v", outbound)
 		}
-		metadata := bus.OutboundMetadataFromMessage(outbound)
+		metadata := outbound.Metadata
 		if metadata.OutboundKind != bus.OutboundKindFinal ||
 			metadata.MessageKind != bus.OutboundMessageKindFinalReply {
 			t.Fatalf("task user delivery metadata = %#v", metadata)
@@ -3657,10 +3657,10 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 					strings.Contains(prompt.Content, "Approval needed") ||
 					strings.Contains(prompt.Content, "secret-value") ||
 					prompt.ReplyToMessageID != "origin-message" ||
-					prompt.Context.Raw[bus.OutboundMetadataKeyRequestID] != "origin-message" ||
+					prompt.Metadata.RequestID != "origin-message" ||
 					len(prompt.TraceScopes) != 1 ||
 					prompt.TraceScopes[0] != runtimeevents.NewTraceScope(agent.Workspace, record.Origin.TurnID) ||
-					!bus.OutboundMetadataFromMessage(prompt).IsApprovalPrompt() {
+					!prompt.Metadata.IsApprovalPrompt() {
 					t.Fatalf("approval prompt = %#v", prompt)
 				}
 			case <-time.After(time.Second):
@@ -3733,7 +3733,7 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 			}
 			select {
 			case final := <-manager.sent:
-				metadata := bus.OutboundMetadataFromMessage(final)
+				metadata := final.Metadata
 				if final.Content != "approval flow finished" || !metadata.IsFinalReply() || !metadata.IsFinal() ||
 					!metadata.RemovesInteractionControls() ||
 					final.ReplyToMessageID != "approval-answer" {
@@ -5155,7 +5155,7 @@ func TestClaimedAnswerIsNotReleasedAfterResumeFailure(t *testing.T) {
 	}
 	select {
 	case synced := <-manager.synced:
-		if !bus.OutboundMetadataFromMessage(synced).RemovesInteractionControls() {
+		if !synced.Metadata.RemovesInteractionControls() {
 			t.Fatalf("claimed answer control sync = %#v", synced)
 		}
 	case <-time.After(time.Second):
@@ -7125,7 +7125,7 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 	}
 	select {
 	case synced := <-manager.synced:
-		if !bus.OutboundMetadataFromMessage(synced).RemovesInteractionControls() {
+		if !synced.Metadata.RemovesInteractionControls() {
 			t.Fatalf("canceled question control sync = %#v", synced)
 		}
 	case <-time.After(time.Second):
@@ -7186,7 +7186,7 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 		if outbound.Content != want {
 			t.Fatalf("stop reply = %q, want %q", outbound.Content, want)
 		}
-		metadata := bus.OutboundMetadataFromMessage(outbound)
+		metadata := outbound.Metadata
 		if !metadata.RemovesInteractionControls() ||
 			metadata.InteractionKind != bus.OutboundInteractionQuestion {
 			t.Fatalf("stop reply metadata = %#v", metadata)
@@ -7553,7 +7553,7 @@ func TestRecoveryRestoresWaitingQuestionControlsWithoutRepublishingPrompt(t *tes
 	}
 	select {
 	case synced := <-manager.synced:
-		metadata := bus.OutboundMetadataFromMessage(synced)
+		metadata := synced.Metadata
 		if synced.Channel != "telegram" || synced.Context.SenderID != "user-1" ||
 			!metadata.IsQuestionPrompt() || !reflect.DeepEqual(
 			metadata.InteractionChoices(),
@@ -7598,7 +7598,7 @@ func TestRecoveryRestoresWaitingApprovalControlsWithoutRepublishingPrompt(t *tes
 	}
 	select {
 	case synced := <-manager.synced:
-		metadata := bus.OutboundMetadataFromMessage(synced)
+		metadata := synced.Metadata
 		if synced.Channel != "telegram" || synced.Context.SenderID != "user-1" ||
 			!metadata.IsApprovalPrompt() {
 			t.Fatalf("synced approval controls = %#v", synced)
@@ -8236,7 +8236,7 @@ func TestHandledAttachmentQuestionFinalRemovesTelegramControls(t *testing.T) {
 	}
 	select {
 	case acknowledgement := <-manager.sent:
-		metadata := bus.OutboundMetadataFromMessage(acknowledgement)
+		metadata := acknowledgement.Metadata
 		if acknowledgement.Content != "Response recorded." ||
 			acknowledgement.ReplyToMessageID != "answer-message" ||
 			!metadata.RemovesInteractionControls() {

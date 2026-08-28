@@ -24,20 +24,17 @@ type ttsAudioMetaProvider interface {
 }
 
 func providerFromModelConfig(mc *config.ModelConfig) TTSProvider {
-	if mc == nil || mc.APIKey() == "" {
+	if mc == nil || mc.APIKey() == "" || strings.TrimSpace(mc.Provider) == "" || strings.TrimSpace(mc.Model) == "" {
 		return nil
 	}
 
 	protocol, modelID := providers.ExtractProtocol(mc)
-	if modelID == "" {
-		modelID = strings.TrimSpace(mc.Model)
-	}
 
 	switch protocol {
 	case "mimo":
 		return NewMimoTTSProvider(mc.APIKey(), providers.ResolveAPIBase(mc), modelID, mc.Proxy)
 	default:
-		return NewOpenAITTSProviderWithOptions(
+		return NewOpenAITTSProvider(
 			mc.APIKey(),
 			providers.ResolveAPIBase(mc),
 			mc.Proxy,
@@ -67,22 +64,17 @@ func DetectTTS(cfg *config.Config) TTSProvider {
 		return nil
 	}
 
-	if modelName := strings.TrimSpace(cfg.Voice.TTSModelName); modelName != "" {
-		if mc, err := cfg.GetModelConfig(modelName); err == nil {
-			if provider := providerFromModelConfig(mc); provider != nil {
-				return provider
-			}
-		}
+	modelName := strings.TrimSpace(cfg.Voice.TTSModelName)
+	if modelName == "" {
+		return nil
 	}
 
-	for _, mc := range cfg.ModelList {
-		if mc.Enabled && strings.Contains(strings.ToLower(mc.Model), "tts") && mc.APIKey() != "" {
-			if provider := providerFromModelConfig(mc); provider != nil {
-				return provider
-			}
-		}
+	mc, err := cfg.GetModelConfig(modelName)
+	if err != nil {
+		return nil
 	}
-	return nil
+
+	return providerFromModelConfig(mc)
 }
 
 // SynthesizeAndStore synthesizes text to speech and registers it in the media store, returning the media reference.

@@ -32,7 +32,7 @@ func (tf *toolFeedbackPublisher) publishSubTurnAdmissionWait(
 	_ = tf.bus.PublishOutbound(fbCtx, outboundMessageForTurnWithOptions(
 		ts,
 		feedback,
-		outboundTurnMessageOptions{kind: messageKindToolFeedback},
+		outboundTurnMessageOptions{kind: bus.OutboundMessageKindToolFeedback},
 	))
 	fbCancel()
 }
@@ -86,7 +86,7 @@ func (tf *toolFeedbackPublisher) publishToolFeedbackForCall(
 	_ = tf.bus.PublishOutbound(fbCtx, outboundMessageForTurnWithOptions(
 		ts,
 		feedbackMsg,
-		outboundTurnMessageOptions{kind: messageKindToolFeedback},
+		outboundTurnMessageOptions{kind: bus.OutboundMessageKindToolFeedback},
 	))
 	fbCancel()
 }

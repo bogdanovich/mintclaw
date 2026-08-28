@@ -144,7 +144,7 @@ func (tool *RemoteWorkspaceTool) Execute(
 func (tool *RemoteWorkspaceTool) routeArguments(
 	args map[string]any,
 ) (string, map[string]any, bool, error) {
-	if _, legacySelector := args["workspace"]; legacySelector {
+	if _, removedSelector := args["workspace"]; removedSelector {
 		return "", nil, false, ErrRemoteWorkspaceUnavailable
 	}
 	raw, exists := args[remoteWorkspaceArgument]

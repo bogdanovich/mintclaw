@@ -31,10 +31,11 @@ func NewAgentLoop(
 	opts ...AgentLoopOption,
 ) *AgentLoop {
 	registry := NewAgentRegistry(cfg, provider)
-	return newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	return newAgentLoopWithRegistry(context.Background(), cfg, msgBus, provider, registry, opts...)
 }
 
 func newAgentLoopWithRegistry(
+	ctx context.Context,
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
@@ -111,19 +112,11 @@ func newAgentLoopWithRegistry(
 	}
 	al.hooks = NewHookManager(al.runtimeEvents.Channel())
 	configureHookManagerFromConfig(al.hooks, cfg)
-	al.contextManager, al.contextManagerInitErr = al.resolveContextManager()
+	al.contextManager, al.contextManagerInitErr = al.resolveContextManager(ctx)
 
 	// Register shared tools to all agents (now that al is created)
 	if !al.isolatedToolBootstrap {
 		registerSharedTools(al, cfg, msgBus, registry, provider)
-	}
-	if al.usesCodingProfile() {
-		for _, agentID := range registry.ListAgentIDs() {
-			if instance, ok := registry.GetAgent(agentID); ok && instance != nil {
-				instance.Tools.Seal()
-				instance.admitTrustedToolRegistry()
-			}
-		}
 	}
 	al.turns.replaceRunner(newTurnRunner(al, cfg))
 
@@ -141,7 +134,7 @@ func NewAgentLoopChecked(
 	if err != nil {
 		return nil, err
 	}
-	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	al := newAgentLoopWithRegistry(context.Background(), cfg, msgBus, provider, registry, opts...)
 	if al.runtimeInitErr != nil {
 		err := al.runtimeInitErr
 		al.Close()
@@ -154,15 +147,22 @@ func NewAgentLoopChecked(
 	return al, nil
 }
 
-// NewCodingAgentLoop applies a resolved coding-thread profile before registry
-// and agent construction.
+// NewCodingAgentLoop applies a resolved coding-thread profile while bounding
+// construction and startup repair with ctx.
 func NewCodingAgentLoop(
+	ctx context.Context,
 	cfg *config.Config,
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
 	profile CodingRuntimeProfile,
 	opts ...AgentLoopOption,
 ) (*AgentLoop, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("coding runtime construction context is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	contextManagerName := contextManagerConfigName(cfg)
 	if contextManagerName != "none" && contextManagerName != "seahorse" {
 		return nil, fmt.Errorf(
@@ -174,8 +174,11 @@ func NewCodingAgentLoop(
 	if err != nil {
 		return nil, err
 	}
-	opts = append([]AgentLoopOption{withCodingRuntimeProfile(profile), WithIsolatedToolBootstrap()}, opts...)
-	al := newAgentLoopWithRegistry(cfg, msgBus, provider, registry, opts...)
+	opts = append([]AgentLoopOption{
+		withCodingRuntimeProfile(profile),
+		WithIsolatedToolBootstrap(),
+	}, opts...)
+	al := newAgentLoopWithRegistry(ctx, cfg, msgBus, provider, registry, opts...)
 	if al.runtimeInitErr != nil {
 		err := al.runtimeInitErr
 		al.Close()
@@ -186,11 +189,25 @@ func NewCodingAgentLoop(
 		al.Close()
 		return nil, err
 	}
-	if err := al.repairCodingToolLifecycles(context.Background()); err != nil {
+	if err := al.repairCodingToolLifecycles(ctx); err != nil {
 		al.Close()
 		return nil, fmt.Errorf("repair coding tool lifecycle: %w", err)
 	}
+	if err := al.prepareCodingContext(ctx); err != nil {
+		al.Close()
+		return nil, fmt.Errorf("prepare coding context: %w", err)
+	}
+	al.sealCodingTools()
 	return al, nil
+}
+
+func (al *AgentLoop) sealCodingTools() {
+	for _, agentID := range al.registry.ListAgentIDs() {
+		if instance, ok := al.registry.GetAgent(agentID); ok && instance != nil {
+			instance.Tools.Seal()
+			instance.admitTrustedToolRegistry()
+		}
+	}
 }
 
 func registerSharedTools(
@@ -262,7 +279,7 @@ func registerSharedTools(
 			}
 		}
 		if cfg.Tools.IsToolEnabled("web_fetch") {
-			fetchTool, err := integrationtools.NewWebFetchToolWithProxy(
+			fetchTool, err := integrationtools.NewWebFetchTool(
 				50000,
 				cfg.Tools.Web.Proxy,
 				cfg.Tools.Web.Format,
@@ -385,30 +402,55 @@ func registerSharedTools(
 			}
 		}
 
+		currentAgentID := agentID
+		canTargetAgent := func(targetAgentID string) bool {
+			return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+		}
+		targetRequiresObjectiveChecklist := func(targetAgentID string) bool {
+			if targetAgentID == "" {
+				targetAgentID = currentAgentID
+			}
+			target, found := registry.GetAgent(targetAgentID)
+			return found && target.Tools != nil && target.Tools.HasRegistered("browser_act")
+		}
+
 		spawnEnabled := cfg.Tools.IsToolEnabled("spawn")
 		subagentEnabled := cfg.Tools.IsToolEnabled("subagent")
 		if spawnEnabled && subagentEnabled {
-			subagentManager := tools.NewSubagentManagerWithRegistry(
-				agent.Model,
-				taskRegistry,
-			)
-			subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
-			subagentManager.SetSpawner(NewSubTurnSpawner(al))
-			spawnTool := tools.NewSpawnTool(subagentManager)
-			currentAgentID := agentID
-			spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {
-				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+			subagentManager, managerErr := tools.NewSubagentManager(tools.SubagentManagerConfig{
+				DefaultModel: agent.Model,
+				MaxTokens:    agent.MaxTokens,
+				Temperature:  agent.Temperature,
+				Spawner:      NewSubTurnSpawner(al),
+				TaskRegistry: taskRegistry,
 			})
-			spawnTool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
-				if targetAgentID == "" {
-					targetAgentID = currentAgentID
+			if managerErr != nil {
+				logger.ErrorCF("agent", "Failed to initialize subagent manager", map[string]any{
+					"agent_id": agentID,
+					"error":    managerErr.Error(),
+				})
+			} else {
+				spawnTool, spawnErr := tools.NewSpawnTool(tools.SpawnToolConfig{
+					Manager:                    subagentManager,
+					AllowTarget:                canTargetAgent,
+					RequiresObjectiveChecklist: targetRequiresObjectiveChecklist,
+				})
+				subagentTool, subagentErr := tools.NewSubagentTool(subagentManager)
+				if spawnErr != nil {
+					logger.ErrorCF("agent", "Failed to initialize subagent tools", map[string]any{
+						"agent_id": agentID,
+						"error":    spawnErr.Error(),
+					})
+				} else if subagentErr != nil {
+					logger.ErrorCF("agent", "Failed to initialize subagent tools", map[string]any{
+						"agent_id": agentID,
+						"error":    subagentErr.Error(),
+					})
+				} else {
+					registerToolIfAllowed(agent, spawnTool)
+					registerToolIfAllowed(agent, subagentTool)
 				}
-				target, ok := registry.GetAgent(targetAgentID)
-				return ok && target.Tools != nil && target.Tools.HasRegistered("browser_act")
-			})
-
-			registerToolIfAllowed(agent, spawnTool)
-			registerToolIfAllowed(agent, tools.NewSubagentTool(subagentManager))
+			}
 		} else if spawnEnabled {
 			logger.WarnCF("agent", "spawn tool requires subagent to be enabled", nil)
 		}
@@ -422,19 +464,21 @@ func registerSharedTools(
 		// mechanism directly (not SubagentManager) and is independent of the
 		// subagent tool.
 		if len(registry.ListAgentIDs()) > 1 {
-			delegateTool := tools.NewDelegateTool()
-			delegateTool.SetSpawner(NewSubTurnSpawner(al))
-			delegateTool.SetTaskRegistry(taskRegistry)
-			currentAgentID := agentID
-			delegateTool.SetSelfAgentID(currentAgentID)
-			delegateTool.SetAllowlistChecker(func(targetAgentID string) bool {
-				return registry.CanSpawnSubagent(currentAgentID, targetAgentID)
+			delegateTool, delegateErr := tools.NewDelegateTool(tools.DelegateToolConfig{
+				Spawner:                    NewSubTurnSpawner(al),
+				AllowTarget:                canTargetAgent,
+				RequiresObjectiveChecklist: targetRequiresObjectiveChecklist,
+				SelfAgentID:                currentAgentID,
+				TaskRegistry:               taskRegistry,
 			})
-			delegateTool.SetObjectiveChecklistRequirement(func(targetAgentID string) bool {
-				target, ok := registry.GetAgent(targetAgentID)
-				return ok && target.Tools != nil && target.Tools.HasRegistered("browser_act")
-			})
-			registerToolIfAllowed(agent, delegateTool)
+			if delegateErr != nil {
+				logger.ErrorCF("agent", "Failed to initialize delegate tool", map[string]any{
+					"agent_id": agentID,
+					"error":    delegateErr.Error(),
+				})
+			} else {
+				registerToolIfAllowed(agent, delegateTool)
+			}
 		}
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.ToolPolicy, agent.Tools)
 	}

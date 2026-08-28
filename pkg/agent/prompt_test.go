@@ -78,7 +78,7 @@ func TestPromptRegistry_CollectRejectsContributorWithUnregisteredOutputSource(t 
 	}
 }
 
-func TestRenderPromptPartsLegacy_UsesLayerAndSlotOrder(t *testing.T) {
+func TestRenderPromptPartsUsesLayerAndSlotOrder(t *testing.T) {
 	parts := []PromptPart{
 		{
 			ID:      "context.runtime",
@@ -110,10 +110,10 @@ func TestRenderPromptPartsLegacy_UsesLayerAndSlotOrder(t *testing.T) {
 		},
 	}
 
-	got := renderPromptPartsLegacy(parts)
+	got := renderPromptParts(parts)
 	want := strings.Join([]string{"kernel", "workspace", "skill", "runtime"}, "\n\n---\n\n")
 	if got != want {
-		t.Fatalf("renderPromptPartsLegacy() = %q, want %q", got, want)
+		t.Fatalf("renderPromptParts() = %q, want %q", got, want)
 	}
 }
 

@@ -115,6 +115,7 @@ type OutboundMessage struct {
 	Channel          string                     `json:"channel"`
 	ChatID           string                     `json:"chat_id"`
 	Context          InboundContext             `json:"context"`
+	Metadata         OutboundMetadata           `json:"metadata,omitzero"`
 	AgentID          string                     `json:"agent_id,omitempty"`
 	SessionKey       string                     `json:"session_key,omitempty"`
 	TraceScopes      []runtimeevents.TraceScope `json:"trace_scopes,omitempty"`
@@ -159,6 +160,7 @@ type OutboundMediaMessage struct {
 	Channel         string                     `json:"channel"`
 	ChatID          string                     `json:"chat_id"`
 	Context         InboundContext             `json:"context"`
+	Metadata        OutboundMetadata           `json:"metadata,omitzero"`
 	AgentID         string                     `json:"agent_id,omitempty"`
 	SessionKey      string                     `json:"session_key,omitempty"`
 	TraceScopes     []runtimeevents.TraceScope `json:"trace_scopes,omitempty"`

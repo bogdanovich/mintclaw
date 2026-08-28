@@ -418,7 +418,7 @@ Voice and audio messages from supported channels can be transcribed automaticall
 
 Recommended setup:
 
-1. add an ASR-capable model entry to `model_list`
+1. add an enabled ASR-capable model entry to `model_list` with explicit `provider` and `model` fields
 2. set `voice.model_name` to that entry's `model_name`
 3. store the matching API key in `.security.yml`
 4. optionally set `voice.echo_transcription` if you want the transcript echoed back in chat
@@ -430,7 +430,9 @@ Example:
   "model_list": [
     {
       "model_name": "voice-groq",
-      "model": "groq/whisper-large-v3-turbo"
+      "provider": "groq",
+      "model": "whisper-large-v3-turbo",
+      "enabled": true
     }
   ],
   "voice": {
@@ -449,12 +451,13 @@ model_list:
 
 ### Common ASR Routes
 
-| Route | Example model | Notes |
-| --- | --- | --- |
-| Groq Whisper | `groq/whisper-large-v3-turbo` | Fast OpenAI-compatible Whisper transcription and a common default choice |
-| OpenAI Whisper | `openai/whisper-1` | Standard Whisper transcription through the OpenAI-compatible audio endpoint |
-| ElevenLabs Scribe | `provider: elevenlabs`, `model: scribe_v1` | Uses MintClaw's dedicated ElevenLabs transcription path |
-| Audio-capable chat models | `gemini/gemini-2.5-flash`, `openai/gpt-4o-audio-preview` | Multimodal audio transcription path; some model combinations are still evolving |
+| Route | Provider | Model | Notes |
+| --- | --- | --- | --- |
+| Groq Whisper | `groq` | `whisper-large-v3-turbo` | Fast OpenAI-compatible Whisper transcription and a common default choice |
+| OpenAI Whisper | `openai` | `whisper-1` | Standard Whisper transcription through the OpenAI-compatible audio endpoint |
+| ElevenLabs Scribe | `elevenlabs` | `scribe_v1` | Uses MintClaw's dedicated ElevenLabs transcription path |
+| Gemini audio model | `gemini` | `gemini-2.5-flash` | Multimodal audio transcription path; some model combinations are still evolving |
+| OpenAI audio model | `openai` | `gpt-4o-audio-preview` | Multimodal audio transcription path; some model combinations are still evolving |
 
 Detection behavior that matters:
 
@@ -470,7 +473,7 @@ Outbound speech is driven by `voice.tts_model_name` and exposed through `send_tt
 
 Recommended setup:
 
-1. add a TTS-capable model entry to `model_list`
+1. add an enabled TTS-capable model entry to `model_list` with explicit `provider` and `model` fields
 2. set `voice.tts_model_name` to that entry's `model_name`
 3. store the API key in `.security.yml`
 4. if the provider needs model-specific TTS fields, add them under `model_list[].extra_body`
@@ -483,7 +486,9 @@ Example:
   "model_list": [
     {
       "model_name": "openai-tts",
-      "model": "openai/tts-1"
+      "provider": "openai",
+      "model": "tts-1",
+      "enabled": true
     }
   ],
   "voice": {
@@ -508,6 +513,7 @@ Example with OpenRouter MAI Voice 2:
       "model_name": "mai-voice-2",
       "provider": "openrouter",
       "model": "microsoft/mai-voice-2",
+      "enabled": true,
       "api_base": "https://openrouter.ai/api/v1",
       "extra_body": {
         "voice": "en-US-Harper:MAI-Voice-2",
@@ -530,15 +536,14 @@ model_list:
 
 ### Current TTS Provider Paths
 
-| Provider path | Example model | Notes |
-| --- | --- | --- |
-| OpenAI-compatible speech | `openai/tts-1` | Best-supported path; MintClaw sends an OpenAI-style `/audio/speech` request |
-| Xiaomi MiMo | `mimo/mimo-v2-tts` | Dedicated MiMo TTS provider path with MP3 output |
+| Provider path | Provider | Model | Notes |
+| --- | --- | --- | --- |
+| OpenAI-compatible speech | `openai` | `tts-1` | Best-supported path; MintClaw sends an OpenAI-style `/audio/speech` request |
+| Xiaomi MiMo | `mimo` | `mimo-v2-tts` | Dedicated MiMo TTS provider path with MP3 output |
 
 Operational notes:
 
-- the preferred selection path is `voice.tts_model_name`
-- if that is missing, MintClaw can still scan `model_list` for the first API-backed model whose ID contains `tts`
+- `voice.tts_model_name` must select an enabled, API-backed entry in `model_list`; missing or invalid selection disables TTS
 - the current OpenAI-style TTS request defaults to `voice: alloy` and `response_format: opus`
 - you can override `voice` and `response_format` for a specific TTS model through `model_list[].extra_body`
 - if a provider rejects `response_format`, MintClaw retries once without that field
@@ -630,14 +635,15 @@ MintClaw is model-centric. The key fields are:
 
 - `agents.defaults.model_name`
 - `model_list`
-- optional `provider`
-- runtime `model`
+- required `provider` on every model entry
+- required provider-native `model` on every model entry
 
 Important behavior:
 
 - `agents.defaults.model_name` must match a `model_name` entry in `model_list`.
-- If `provider` is set, MintClaw sends `model` to that provider unchanged.
-- If `provider` is omitted, legacy `provider/model` parsing is still supported.
+- MintClaw sends `model` to the configured `provider` unchanged.
+- A provider-native model ID may contain slashes; MintClaw does not split it to
+  infer a provider.
 
 ### Sessions and Routing
 

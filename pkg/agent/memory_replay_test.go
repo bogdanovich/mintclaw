@@ -235,7 +235,11 @@ type recallReplay struct {
 
 func replayRecallIsolation(t *testing.T) recallReplay {
 	t.Helper()
-	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: filepath.Join(t.TempDir(), "seahorse.db")}, nil)
+	engine, err := seahorse.NewEngine(
+		t.Context(),
+		seahorse.Config{DBPath: filepath.Join(t.TempDir(), "seahorse.db")},
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

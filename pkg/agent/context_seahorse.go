@@ -44,12 +44,25 @@ type seahorseAgentRuntime struct {
 	workspace                string
 	agentID                  string
 	reconciliationGeneration int
+	config                   seahorse.Config
+	complete                 seahorse.CompleteFn
+	rebuildStoreFactory      CodingRuntimeStoreFactory
 }
 
 const seahorseReconciliationGeneration = 2
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
-func newSeahorseContextManager(rawConfig json.RawMessage, al *AgentLoop) (ContextManager, error) {
+func newSeahorseContextManager(
+	ctx context.Context,
+	rawConfig json.RawMessage,
+	al *AgentLoop,
+) (ContextManager, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("seahorse: construction context is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	if al == nil {
 		return nil, fmt.Errorf("seahorse: AgentLoop is required")
 	}
@@ -68,6 +81,7 @@ func newSeahorseContextManager(rawConfig json.RawMessage, al *AgentLoop) (Contex
 			continue
 		}
 		runtime, err := newSeahorseAgentRuntime(
+			ctx,
 			rawConfig,
 			al,
 			agent,
@@ -78,9 +92,9 @@ func newSeahorseContextManager(rawConfig json.RawMessage, al *AgentLoop) (Contex
 			return nil, fmt.Errorf("seahorse: create runtime for agent %q: %w", agentID, err)
 		}
 		mgr.runtimes[agentID] = runtime
-		retrieval := runtime.engine.GetRetrieval()
-		registerToolIfAllowed(agent, seahorse.NewGrepTool(retrieval))
-		registerToolIfAllowed(agent, seahorse.NewExpandTool(retrieval))
+		if !al.usesCodingProfile() {
+			registerSeahorseRetrievalTools(agent, runtime)
+		}
 	}
 	if len(mgr.runtimes) == 0 {
 		return nil, fmt.Errorf("seahorse: no agents available")
@@ -90,6 +104,7 @@ func newSeahorseContextManager(rawConfig json.RawMessage, al *AgentLoop) (Contex
 }
 
 func newSeahorseAgentRuntime(
+	ctx context.Context,
 	rawConfig json.RawMessage,
 	al *AgentLoop,
 	agent *AgentInstance,
@@ -103,32 +118,80 @@ func newSeahorseAgentRuntime(
 		return nil, fmt.Errorf("custom dbPath is not supported with multiple agents")
 	}
 	storeFactory := CodingRuntimeStoreFactory(defaultCodingRuntimeStoreFactory{})
+	var rebuildStoreFactory CodingRuntimeStoreFactory
 	if al.codingProfile != nil {
 		storeFactory = al.codingProfile.storeFactory
+		rebuildStoreFactory = storeFactory
 		seahorseConfig.SummaryPolicy = seahorse.SummaryPolicyCodingV1
 		if seahorseConfig.DBPath != dbPath {
 			return nil, fmt.Errorf("custom dbPath is not supported with a coding profile")
 		}
 	}
-	engine, err := storeFactory.NewSeahorseEngine(
-		seahorseConfig,
-		providerToCompleteFn(agent.Provider, agent.Model),
-	)
+	complete := providerToCompleteFn(agent.Provider, agent.Model)
+	engine, err := storeFactory.NewSeahorseEngine(ctx, seahorseConfig, complete)
+	if err != nil && al.codingProfile != nil && seahorse.IsCorruptDatabaseError(err) {
+		if resetErr := seahorse.ResetCorruptDatabase(seahorseConfig.DBPath, err); resetErr != nil {
+			return nil, errors.Join(
+				fmt.Errorf("open corrupt derived context store: %w", err),
+				resetErr,
+			)
+		}
+		logger.WarnCF("seahorse", "rebuilding corrupt coding context store from canonical history", map[string]any{
+			"db_path": seahorseConfig.DBPath,
+			"error":   err.Error(),
+		})
+		engine, err = storeFactory.NewSeahorseEngine(ctx, seahorseConfig, complete)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create engine: %w", err)
 	}
 	if engine == nil {
 		return nil, fmt.Errorf("create engine: coding store factory returned a nil Seahorse engine")
 	}
-	return &seahorseAgentRuntime{
-		engine:    engine,
-		sessions:  agent.Sessions,
-		workspace: agent.Workspace,
-		agentID:   agent.ID,
+	if engine.GetRetrieval() == nil {
+		_ = engine.Close()
+		return nil, fmt.Errorf("create engine: coding store factory returned an engine without retrieval")
+	}
+	runtime := &seahorseAgentRuntime{
+		engine:              engine,
+		sessions:            agent.Sessions,
+		workspace:           agent.Workspace,
+		agentID:             agent.ID,
+		config:              seahorseConfig,
+		complete:            complete,
+		rebuildStoreFactory: rebuildStoreFactory,
 		reconciliationGeneration: seahorseConfig.SummaryPolicy.ReconciliationGeneration(
 			seahorseReconciliationGeneration,
 		),
-	}, nil
+	}
+	return runtime, nil
+}
+
+func registerSeahorseRetrievalTools(
+	agent *AgentInstance,
+	runtime *seahorseAgentRuntime,
+) {
+	retrieval := runtime.engine.GetRetrieval()
+	registerToolIfAllowed(agent, seahorse.NewGrepTool(retrieval))
+	registerToolIfAllowed(agent, seahorse.NewExpandTool(retrieval))
+}
+
+func (m *seahorseContextManager) publishCodingRetrievalTools() error {
+	for _, agentID := range m.al.registry.ListAgentIDs() {
+		agent, ok := m.al.registry.GetAgent(agentID)
+		if !ok || agent == nil {
+			continue
+		}
+		runtime, err := m.runtimeFor(agent)
+		if err != nil {
+			return err
+		}
+		if runtime.engine == nil || runtime.engine.GetRetrieval() == nil {
+			return fmt.Errorf("seahorse: coding runtime for agent %q has no retrieval engine", agentID)
+		}
+		registerSeahorseRetrievalTools(agent, runtime)
+	}
+	return nil
 }
 
 func seahorseAgentDBPath(agent *AgentInstance, defaultAgentID string) string {
@@ -286,17 +349,22 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		return nil
 	}
 	lifecycle := ContextCompressLifecyclePayload{
-		AttemptID: uuid.NewString(),
-		Reason:    req.Reason,
-		Status:    ContextCompressLifecycleStarted,
+		AttemptID:  uuid.NewString(),
+		Reason:     req.Reason,
+		Background: req.Background,
+		Status:     ContextCompressLifecycleStarted,
 	}
 	if req.Agent != nil {
 		lifecycle.ThreadID = req.Agent.CodingLayout.ThreadID()
 	}
 	status := ContextCompressLifecycleFailed
-	tokensSaved := 0
+	startedAt := time.Now()
 	started := false
+	var unlock func()
 	defer func() {
+		if unlock != nil {
+			defer unlock()
+		}
 		if !started {
 			m.emitCompactLifecycleEvent(req, lifecycle)
 		}
@@ -304,15 +372,14 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 			status = ContextCompressLifecycleInterrupted
 		}
 		lifecycle.Status = status
-		lifecycle.TokensSaved = tokensSaved
+		lifecycle.Duration = time.Since(startedAt)
 		m.emitCompactLifecycleEvent(req, lifecycle)
 	}()
 	runtime, runtimeErr := m.runtimeFor(req.Agent)
 	if runtimeErr != nil {
 		return runtimeErr
 	}
-	unlock := m.lockSession(runtime.agentID + ":" + req.SessionKey)
-	defer unlock()
+	unlock = m.lockSession(runtime.agentID + ":" + req.SessionKey)
 	if err := m.ensureConversationProvenance(ctx, runtime, req.SessionKey); err != nil {
 		return err
 	}
@@ -336,11 +403,10 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		(req.Reason == ContextCompressReasonProactive && runtime.engine.AbsoluteBudgetsEnabled())) &&
 		req.Budget > 0 {
 		result, compactErr := runtime.engine.CompactUntilUnder(ctx, req.SessionKey, req.Budget)
+		applyCompactResultToLifecycle(&lifecycle, result, time.Since(startedAt))
 		if compactResultHasProgress(result) {
 			lifecycle.Status = ContextCompressLifecycleProgress
-			lifecycle.TokensSaved = result.TokensSaved
 			m.emitCompactLifecycleEvent(req, lifecycle)
-			tokensSaved = result.TokensSaved
 			m.emitCompactEvent(req, result)
 		}
 		if compactErr == nil {
@@ -358,11 +424,10 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 			req.Reason == ContextCompressReasonManual,
 		Budget: &req.Budget,
 	})
+	applyCompactResultToLifecycle(&lifecycle, result, time.Since(startedAt))
 	if compactResultHasProgress(result) {
 		lifecycle.Status = ContextCompressLifecycleProgress
-		lifecycle.TokensSaved = result.TokensSaved
 		m.emitCompactLifecycleEvent(req, lifecycle)
-		tokensSaved = result.TokensSaved
 		m.emitCompactEvent(req, result)
 	}
 	if err == nil {
@@ -373,6 +438,24 @@ func (m *seahorseContextManager) Compact(ctx context.Context, req *CompactReques
 		}
 	}
 	return err
+}
+
+func applyCompactResultToLifecycle(
+	lifecycle *ContextCompressLifecyclePayload,
+	result *seahorse.CompactResult,
+	duration time.Duration,
+) {
+	if lifecycle == nil || result == nil {
+		return
+	}
+	lifecycle.TokensSaved = result.TokensSaved
+	lifecycle.TokensBefore = result.TokensBefore
+	lifecycle.TokensAfter = result.TokensAfter
+	lifecycle.TokenCountsObserved = result.TokenCountsObserved
+	lifecycle.SummariesCreated = len(result.SummariesCreated)
+	lifecycle.LeafSummaries = result.LeafSummaries
+	lifecycle.CondensedSummaries = result.CondensedSummaries
+	lifecycle.Duration = duration
 }
 
 func compactResultHasProgress(result *seahorse.CompactResult) bool {
@@ -448,7 +531,9 @@ func (m *seahorseContextManager) Close() error {
 	m.closeOnce.Do(func() {
 		closeErrors := make([]error, 0, len(m.runtimes))
 		for _, runtime := range m.runtimes {
-			closeErrors = append(closeErrors, runtime.engine.Close())
+			if runtime.engine != nil {
+				closeErrors = append(closeErrors, runtime.engine.Close())
+			}
 		}
 		m.closeErr = errors.Join(closeErrors...)
 	})
@@ -470,7 +555,7 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 		return err
 	}
 	if req.CanonicalWriteErr != nil {
-		if canonicalHistoryContains(runtime.sessions, req.SessionKey, req.Message) {
+		if canonicalHistoryContains(ctx, runtime.sessions, req.SessionKey, req.Message) {
 			_, err := m.ensureReconciledRuntime(ctx, runtime, req.SessionKey)
 			return err
 		}
@@ -486,7 +571,7 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 		_, ingestErr := runtime.engine.Ingest(ctx, req.SessionKey, []seahorse.Message{msg})
 		return ingestErr
 	}
-	revision, err := historyRevision(store, req.SessionKey)
+	revision, err := historyRevision(ctx, store, req.SessionKey)
 	if err != nil {
 		return fmt.Errorf("seahorse ingest revision: %w", err)
 	}
@@ -532,12 +617,16 @@ func (m *seahorseContextManager) ensureConversationProvenance(
 	return nil
 }
 
-func canonicalHistoryContains(store session.SessionStore, key string, target providers.Message) bool {
-	reader, ok := store.(session.ErrorAwareHistoryReader)
-	if !ok {
+func canonicalHistoryContains(
+	ctx context.Context,
+	store session.SessionStore,
+	key string,
+	target providers.Message,
+) bool {
+	if store == nil {
 		return false
 	}
-	history, err := reader.GetHistoryWithError(key)
+	history, err := store.ReadTurnHistory(ctx, key)
 	if err != nil {
 		return false
 	}
@@ -574,7 +663,7 @@ func (m *seahorseContextManager) Clear(
 		return err
 	}
 	if sessions != nil {
-		revision, err := historyRevision(sessions, sessionKey)
+		revision, err := historyRevision(ctx, sessions, sessionKey)
 		if err != nil {
 			return err
 		}
@@ -589,7 +678,7 @@ func (m *seahorseContextManager) reconcile(
 	sessionKey string,
 	forceDerivedRebuild bool,
 ) (memory.HistoryRevision, error) {
-	history, revision, err := canonicalHistoryAtStableRevision(runtime.sessions, sessionKey)
+	history, revision, err := canonicalHistoryAtStableRevision(ctx, runtime.sessions, sessionKey)
 	if err != nil {
 		return memory.HistoryRevision{}, err
 	}
@@ -609,19 +698,20 @@ func (m *seahorseContextManager) reconcile(
 }
 
 func canonicalHistoryAtStableRevision(
+	ctx context.Context,
 	store session.SessionStore,
 	key string,
 ) ([]providers.Message, memory.HistoryRevision, error) {
 	for range 3 {
-		before, err := historyRevision(store, key)
+		before, err := historyRevision(ctx, store, key)
 		if err != nil {
 			return nil, memory.HistoryRevision{}, err
 		}
-		history, err := canonicalHistory(store, key)
+		history, err := store.ReadTurnHistory(ctx, key)
 		if err != nil {
 			return nil, memory.HistoryRevision{}, err
 		}
-		after, err := historyRevision(store, key)
+		after, err := historyRevision(ctx, store, key)
 		if err != nil {
 			return nil, memory.HistoryRevision{}, err
 		}
@@ -630,13 +720,6 @@ func canonicalHistoryAtStableRevision(
 		}
 	}
 	return nil, memory.HistoryRevision{}, fmt.Errorf("canonical history changed during reconciliation")
-}
-
-func canonicalHistory(store session.SessionStore, key string) ([]providers.Message, error) {
-	if reader, ok := store.(session.ErrorAwareHistoryReader); ok {
-		return reader.GetHistoryWithError(key)
-	}
-	return store.GetHistory(key), nil
 }
 
 func (m *seahorseContextManager) ensureReconciled(
@@ -653,6 +736,86 @@ func (m *seahorseContextManager) ensureReconciled(
 	return err
 }
 
+func (m *seahorseContextManager) prepareCodingSession(
+	ctx context.Context,
+	agent *AgentInstance,
+	sessionKey string,
+) error {
+	runtime, err := m.runtimeFor(agent)
+	if err != nil {
+		return err
+	}
+	unlock := m.lockSession(runtime.agentID + ":" + sessionKey)
+	defer unlock()
+	err = m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+	if err == nil || runtime.rebuildStoreFactory == nil || !seahorse.IsCorruptDatabaseError(err) {
+		return err
+	}
+	if rebuildErr := runtime.replaceCorruptEngine(ctx, err); rebuildErr != nil {
+		return errors.Join(
+			fmt.Errorf("read corrupt derived context store: %w", err),
+			rebuildErr,
+		)
+	}
+	logger.WarnCF("seahorse", "rebuilding corrupt coding context store after reconciliation read", map[string]any{
+		"agent_id": runtime.agentID,
+	})
+	return m.prepareCodingSessionOnce(ctx, runtime, sessionKey)
+}
+
+func (r *seahorseAgentRuntime) replaceCorruptEngine(ctx context.Context, cause error) error {
+	if !seahorse.IsCorruptDatabaseError(cause) {
+		return fmt.Errorf("rebuild corrupt database: typed SQLite corruption is required: %w", cause)
+	}
+	if ctx == nil {
+		return fmt.Errorf("rebuild corrupt database: context is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if r.engine == nil || r.rebuildStoreFactory == nil {
+		return fmt.Errorf("rebuild corrupt database: coding runtime owner is unavailable")
+	}
+	closed := r.engine
+	if err := closed.Close(); err != nil {
+		return fmt.Errorf("close corrupt database: %w", err)
+	}
+	r.engine = nil
+	if err := seahorse.ResetCorruptDatabase(r.config.DBPath, cause); err != nil {
+		return err
+	}
+	replacement, err := r.rebuildStoreFactory.NewSeahorseEngine(ctx, r.config, r.complete)
+	if err != nil {
+		return fmt.Errorf("reopen rebuilt database: %w", err)
+	}
+	if replacement == nil {
+		return fmt.Errorf("reopen rebuilt database: coding store factory returned a nil engine")
+	}
+	if replacement == closed {
+		return fmt.Errorf("reopen rebuilt database: coding store factory returned the closed engine")
+	}
+	if replacement.GetRetrieval() == nil {
+		_ = replacement.Close()
+		return fmt.Errorf("reopen rebuilt database: coding store factory returned an engine without retrieval")
+	}
+	r.engine = replacement
+	return nil
+}
+
+func (m *seahorseContextManager) prepareCodingSessionOnce(
+	ctx context.Context,
+	runtime *seahorseAgentRuntime,
+	sessionKey string,
+) error {
+	if err := m.ensureConversationProvenance(ctx, runtime, sessionKey); err != nil {
+		return err
+	}
+	if _, err := m.ensureReconciledRuntime(ctx, runtime, sessionKey); err != nil {
+		return err
+	}
+	return runtime.engine.VerifyIntegrity(ctx)
+}
+
 func (m *seahorseContextManager) ensureReconciledRuntime(
 	ctx context.Context,
 	runtime *seahorseAgentRuntime,
@@ -661,7 +824,7 @@ func (m *seahorseContextManager) ensureReconciledRuntime(
 	if runtime.sessions == nil {
 		return memory.HistoryRevision{}, nil
 	}
-	revision, err := historyRevision(runtime.sessions, sessionKey)
+	revision, err := historyRevision(ctx, runtime.sessions, sessionKey)
 	if err != nil {
 		return memory.HistoryRevision{}, fmt.Errorf("seahorse history revision: %w", err)
 	}
@@ -713,12 +876,16 @@ func (m *seahorseContextManager) setReconciliationState(
 	})
 }
 
-func historyRevision(store session.SessionStore, key string) (memory.HistoryRevision, error) {
+func historyRevision(
+	ctx context.Context,
+	store session.SessionStore,
+	key string,
+) (memory.HistoryRevision, error) {
 	provider, ok := store.(session.HistoryRevisionProvider)
 	if !ok {
 		return memory.HistoryRevision{}, fmt.Errorf("session store does not expose history revisions")
 	}
-	return provider.GetHistoryRevision(key)
+	return provider.GetHistoryRevision(ctx, key)
 }
 
 func (m *seahorseContextManager) lockSession(key string) func() {

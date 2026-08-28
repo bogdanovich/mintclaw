@@ -99,13 +99,9 @@ type Model struct {
 
 var _ tea.Model = (*Model)(nil)
 
-func NewModel(controller frontend.Controller) (*Model, error) {
-	return NewModelWithContext(context.Background(), controller)
-}
-
-// NewModelWithContext constructs a terminal model whose background frontend
-// watches stop with the application context.
-func NewModelWithContext(
+// NewModel constructs a terminal model whose background frontend watches stop
+// with the application context.
+func NewModel(
 	ctx context.Context,
 	controller frontend.Controller,
 ) (*Model, error) {

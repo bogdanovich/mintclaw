@@ -161,15 +161,22 @@ const (
 )
 
 type CompactionState struct {
-	TurnID             string           `json:"turn_id,omitempty"`
-	AttemptID          string           `json:"attempt_id,omitempty"`
-	ThreadID           string           `json:"thread_id,omitempty"`
-	TranscriptRevision uint64           `json:"transcript_revision,omitempty"`
-	TranscriptCount    int              `json:"transcript_count,omitempty"`
-	Reason             string           `json:"reason,omitempty"`
-	Status             CompactionStatus `json:"status"`
-	TokensSaved        int              `json:"tokens_saved,omitempty"`
-	Background         bool             `json:"background,omitempty"`
+	TurnID              string           `json:"turn_id,omitempty"`
+	AttemptID           string           `json:"attempt_id,omitempty"`
+	ThreadID            string           `json:"thread_id,omitempty"`
+	TranscriptRevision  uint64           `json:"transcript_revision,omitempty"`
+	TranscriptCount     int              `json:"transcript_count,omitempty"`
+	Reason              string           `json:"reason,omitempty"`
+	Status              CompactionStatus `json:"status"`
+	TokensSaved         int              `json:"tokens_saved,omitempty"`
+	TokensBefore        int              `json:"tokens_before,omitempty"`
+	TokensAfter         int              `json:"tokens_after,omitempty"`
+	TokenCountsObserved bool             `json:"token_counts_observed,omitempty"`
+	SummariesCreated    int              `json:"summaries_created,omitempty"`
+	LeafSummaries       int              `json:"leaf_summaries,omitempty"`
+	CondensedSummaries  int              `json:"condensed_summaries,omitempty"`
+	Duration            time.Duration    `json:"duration,omitempty"`
+	Background          bool             `json:"background,omitempty"`
 }
 
 // ThreadSnapshot is the authoritative, bounded in-process presentation view.

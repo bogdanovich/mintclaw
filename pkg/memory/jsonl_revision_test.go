@@ -167,6 +167,19 @@ func TestJSONLHistoryRevisionTracksLogicalMutations(t *testing.T) {
 	}
 }
 
+func TestJSONLHistoryRevisionHonorsCanceledContext(t *testing.T) {
+	store, storeErr := NewJSONLStore(t.TempDir())
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := store.GetHistoryRevision(ctx, "canceled"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetHistoryRevision() error = %v, want %v", err, context.Canceled)
+	}
+}
+
 func TestJSONLHistoryRevisionRepairsDirtyMetadata(t *testing.T) {
 	store, storeErr := NewJSONLStore(t.TempDir())
 	if storeErr != nil {
@@ -215,7 +228,7 @@ func TestJSONLHistoryRevisionRestoresMetadataAfterInterruptedCompact(t *testing.
 	interrupted.HistoryHasPrevious = true
 	interrupted.HistoryPreviousCount = previous.Count
 	interrupted.HistoryPreviousSkip = previous.Skip
-	active, err := readMessages(store.jsonlPath(key), previous.Skip)
+	active, err := readMessages(t.Context(), store.jsonlPath(key), previous.Skip)
 	if err != nil {
 		t.Fatal(err)
 	}

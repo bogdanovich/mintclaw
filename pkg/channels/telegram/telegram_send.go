@@ -94,8 +94,8 @@ type sendChunkParams struct {
 }
 
 func telegramInteractionReplyMarkup(msg bus.OutboundMessage) telego.ReplyMarkup {
-	metadata := bus.OutboundMetadataFromMessage(msg)
-	shortID := strings.TrimSpace(msg.Context.Raw[bus.OutboundMetadataKeyInteractionShortID])
+	metadata := msg.Metadata
+	shortID := strings.TrimSpace(metadata.InteractionShortID)
 	if (metadata.IsApprovalPrompt() || metadata.IsQuestionPrompt()) && shortID == "" {
 		return nil
 	}
@@ -272,7 +272,7 @@ func (c *TelegramChannel) sendTextChunkQueue(
 
 func (c *TelegramChannel) richMessagesEnabled(useMarkdownV2 bool) bool {
 	// Rich messages use Telegram's rich HTML input. If a channel explicitly
-	// requests the legacy MarkdownV2 projector, keep that behavior unchanged.
+	// requests the MarkdownV2 projector, keep that configured behavior unchanged.
 	return c.tgCfg != nil && c.tgCfg.RichMessages.Enabled && !useMarkdownV2
 }
 
@@ -355,7 +355,7 @@ func (c *TelegramChannel) sendRichChunk(
 	return strconv.Itoa(pMsg.MessageID), nil
 }
 
-// sendChunk sends a single message through Telegram's legacy text endpoint.
+// sendChunk sends a single message through Telegram's standard text endpoint.
 // Rich-message sends bypass this method except when Telegram rejects rich input.
 func (c *TelegramChannel) sendChunk(
 	ctx context.Context,

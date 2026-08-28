@@ -32,7 +32,7 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 	})
 	projector.ToolCompleted("turn-1", "interrupted", "exec", "", 1500*time.Millisecond, true, nil)
 	projector.ToolOutput("turn-1", "unknown", "orphan output")
-	model, err := NewModel(&fakeController{Projector: projector})
+	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Output != "" {
 		t.Fatalf("ordinary tool projection = %+v", snapshot.Tools)
 	}
-	model, err := NewModel(&fakeController{Projector: projector})
+	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +117,54 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
 	if model.expandedToolID != "" || strings.Contains(renderedModelTranscript(model, 80), "SECRET-PATH") {
 		t.Fatalf("ordinary tool card expanded without bounded presentation output: %+v", model)
+	}
+}
+
+func TestCompactionSurfacesDistinguishModeAndReportMetrics(t *testing.T) {
+	compaction := &frontend.CompactionState{
+		Reason: "llm_retry", Status: frontend.CompactionCompleted,
+		TokensBefore: 2400, TokensAfter: 900, TokensSaved: 1500, TokenCountsObserved: true,
+		SummariesCreated: 3, LeafSummaries: 2, CondensedSummaries: 1, Duration: 1500 * time.Millisecond,
+	}
+	footer := compactionFooter(compaction)
+	for _, want := range []string{"blocking", "2.4k→900", "1.5k saved"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("compaction footer omits %q: %q", want, footer)
+		}
+	}
+	panel := strings.Join(compactionStatusLines(compaction), "\n")
+	for _, want := range []string{
+		"last compaction: completed (blocking)",
+		"compaction trigger: context overflow retry",
+		"compaction context: 2.4k → 900 tokens",
+		"compaction summaries: 3 total (2 leaf, 1 condensed)",
+		"compaction duration: 1.5s",
+		"compaction continuation: work can continue",
+		"use /new for a focused thread",
+	} {
+		if !strings.Contains(panel, want) {
+			t.Fatalf("compaction panel omits %q: %q", want, panel)
+		}
+	}
+
+	compaction.Status = frontend.CompactionFailed
+	compaction.Background = true
+	if got := compactionFooter(compaction); got != "background compaction failed; work can continue" {
+		t.Fatalf("background failure footer = %q", got)
+	}
+	if got := compactionContinuation(compaction); !strings.HasPrefix(got, "work can continue") {
+		t.Fatalf("background failure continuation = %q", got)
+	}
+
+	compaction.Status = frontend.CompactionRunning
+	compaction.Reason = "summarize"
+	compaction.Background = false
+	if got := compactionFooter(compaction); got != "blocking compaction running (session summarization)" {
+		t.Fatalf("foreground summarize footer = %q", got)
+	}
+	panel = strings.Join(compactionStatusLines(compaction), "\n")
+	if !strings.Contains(panel, "compaction trigger: session summarization") {
+		t.Fatalf("foreground summarize panel = %q", panel)
 	}
 }
 
@@ -151,7 +199,7 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 		},
 		DiffStatAvailable: true,
 	}
-	model, err := NewModel(controller)
+	model, err := newTestModel(controller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +262,7 @@ func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
 		},
 	})
 	projector.TurnStarted("turn-1", "work")
-	model, err := NewModel(&fakeController{Projector: projector})
+	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
 		t.Fatal(err)
 	}

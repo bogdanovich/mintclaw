@@ -1,31 +1,17 @@
 package bus
 
 import (
-	"encoding/json"
-	"strconv"
+	"errors"
+	"reflect"
 	"strings"
 )
 
 const (
-	OutboundMetadataKeyMessageKind        = "message_kind"
-	OutboundMetadataKeyToolCalls          = "tool_calls"
-	OutboundMetadataKeyOutboundKind       = "outbound_kind"
-	OutboundMetadataKeyModelName          = "model_name"
-	OutboundMetadataKeyDefaultModel       = "default_model_name"
-	OutboundMetadataKeyUsageInput         = "usage_input_tokens"
-	OutboundMetadataKeyUsageOutput        = "usage_output_tokens"
-	OutboundMetadataKeyUsageTotal         = "usage_total_tokens"
-	OutboundMetadataKeyInteraction        = "interaction_kind"
-	OutboundMetadataKeyControls           = "interaction_controls"
-	OutboundMetadataKeyChoices            = "interaction_choices"
-	OutboundMetadataKeyInteractionID      = "interaction_id"
-	OutboundMetadataKeyInteractionShortID = "interaction_short_id"
-	OutboundMetadataKeyRequestID          = "request_id"
-
 	OutboundMessageKindThought      = "thought"
 	OutboundMessageKindToolFeedback = "tool_feedback"
 	OutboundMessageKindToolCalls    = "tool_calls"
 	OutboundMessageKindFinalReply   = "final_reply"
+	OutboundMessageKindInteraction  = "human_interaction"
 
 	OutboundKindFinal   = "final"
 	OutboundKindInterim = "interim"
@@ -37,104 +23,212 @@ const (
 	OutboundInteractionControlsRemove = "remove"
 )
 
-// OutboundMetadata is the typed form of the cross-package outbound metadata
-// stored in InboundContext.Raw for wire/backward compatibility.
+// OutboundMetadata owns the delivery semantics attached to an outbound bus
+// message. InboundContext remains limited to inbound addressing and transport
+// facts.
 type OutboundMetadata struct {
-	MessageKind            string
-	ToolCalls              string
-	OutboundKind           string
-	ModelName              string
-	DefaultModelName       string
-	UsageInputTokens       int
-	UsageOutputTokens      int
-	UsageTotalTokens       int
-	InteractionKind        string
-	InteractionControls    string
-	InteractionChoicesJSON string
+	MessageKind         string             `json:"message_kind,omitempty"`
+	ToolCalls           []OutboundToolCall `json:"tool_calls,omitempty"`
+	OutboundKind        string             `json:"outbound_kind,omitempty"`
+	ModelName           string             `json:"model_name,omitempty"`
+	DefaultModelName    string             `json:"default_model_name,omitempty"`
+	UsageInputTokens    int                `json:"usage_input_tokens,omitempty"`
+	UsageOutputTokens   int                `json:"usage_output_tokens,omitempty"`
+	UsageTotalTokens    int                `json:"usage_total_tokens,omitempty"`
+	InteractionKind     string             `json:"interaction_kind,omitempty"`
+	InteractionControls string             `json:"interaction_controls,omitempty"`
+	Choices             []string           `json:"interaction_choices,omitempty"`
+	InteractionID       string             `json:"interaction_id,omitempty"`
+	InteractionShortID  string             `json:"interaction_short_id,omitempty"`
+	RequestID           string             `json:"request_id,omitempty"`
 }
 
-func OutboundMetadataFromMessage(msg OutboundMessage) OutboundMetadata {
-	return OutboundMetadataFromRaw(msg.Context.Raw)
+// OutboundToolCall is the current first-party display contract for a tool call.
+type OutboundToolCall struct {
+	ID           string                        `json:"id,omitempty"`
+	Type         string                        `json:"type,omitempty"`
+	Function     *OutboundToolCallFunction     `json:"function,omitempty"`
+	ExtraContent *OutboundToolCallExtraContent `json:"extra_content,omitempty"`
 }
 
-func OutboundMetadataFromContext(ctx InboundContext) OutboundMetadata {
-	return OutboundMetadataFromRaw(ctx.Raw)
+type OutboundToolCallFunction struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
-func OutboundMetadataFromRaw(raw map[string]string) OutboundMetadata {
-	if len(raw) == 0 {
-		return OutboundMetadata{}
+type OutboundToolCallExtraContent struct {
+	ToolFeedbackExplanation string `json:"tool_feedback_explanation,omitempty"`
+}
+
+func (m OutboundMetadata) IsZero() bool {
+	return m.MessageKind == "" && len(m.ToolCalls) == 0 && m.OutboundKind == "" && m.ModelName == "" &&
+		m.DefaultModelName == "" && m.UsageInputTokens == 0 && m.UsageOutputTokens == 0 &&
+		m.UsageTotalTokens == 0 && m.InteractionKind == "" && m.InteractionControls == "" &&
+		len(m.Choices) == 0 && m.InteractionID == "" && m.InteractionShortID == "" && m.RequestID == ""
+}
+
+// NormalizeOutboundMetadata returns one canonical representation for runtime
+// construction and durable persistence.
+func NormalizeOutboundMetadata(m OutboundMetadata) OutboundMetadata {
+	m.MessageKind = strings.TrimSpace(m.MessageKind)
+	m.ToolCalls = normalizeOutboundToolCalls(m.ToolCalls)
+	m.OutboundKind = strings.TrimSpace(m.OutboundKind)
+	m.ModelName = strings.TrimSpace(m.ModelName)
+	m.DefaultModelName = strings.TrimSpace(m.DefaultModelName)
+	m.InteractionKind = strings.TrimSpace(m.InteractionKind)
+	m.InteractionControls = strings.TrimSpace(m.InteractionControls)
+	m.InteractionID = strings.TrimSpace(m.InteractionID)
+	m.InteractionShortID = strings.TrimSpace(m.InteractionShortID)
+	m.RequestID = strings.TrimSpace(m.RequestID)
+	if m.UsageInputTokens < 0 {
+		m.UsageInputTokens = 0
 	}
-	return OutboundMetadata{
-		MessageKind:            strings.TrimSpace(raw[OutboundMetadataKeyMessageKind]),
-		ToolCalls:              strings.TrimSpace(raw[OutboundMetadataKeyToolCalls]),
-		OutboundKind:           strings.TrimSpace(raw[OutboundMetadataKeyOutboundKind]),
-		ModelName:              strings.TrimSpace(raw[OutboundMetadataKeyModelName]),
-		DefaultModelName:       strings.TrimSpace(raw[OutboundMetadataKeyDefaultModel]),
-		UsageInputTokens:       parseOutboundMetadataInt(raw[OutboundMetadataKeyUsageInput]),
-		UsageOutputTokens:      parseOutboundMetadataInt(raw[OutboundMetadataKeyUsageOutput]),
-		UsageTotalTokens:       parseOutboundMetadataInt(raw[OutboundMetadataKeyUsageTotal]),
-		InteractionKind:        strings.TrimSpace(raw[OutboundMetadataKeyInteraction]),
-		InteractionControls:    strings.TrimSpace(raw[OutboundMetadataKeyControls]),
-		InteractionChoicesJSON: normalizeOutboundInteractionChoices(raw[OutboundMetadataKeyChoices]),
+	if m.UsageOutputTokens < 0 {
+		m.UsageOutputTokens = 0
+	}
+	if m.UsageTotalTokens < 0 {
+		m.UsageTotalTokens = 0
+	}
+	m.Choices = normalizeOutboundInteractionChoices(m.Choices)
+	return m
+}
+
+// ValidateOutboundMetadata rejects non-canonical persisted metadata. Producers
+// normalize before enqueueing; readers accept only the current contract.
+func ValidateOutboundMetadata(m OutboundMetadata) error {
+	normalized := NormalizeOutboundMetadata(m)
+	if m.MessageKind != normalized.MessageKind || !reflect.DeepEqual(m.ToolCalls, normalized.ToolCalls) ||
+		m.OutboundKind != normalized.OutboundKind || m.ModelName != normalized.ModelName ||
+		m.DefaultModelName != normalized.DefaultModelName || m.UsageInputTokens != normalized.UsageInputTokens ||
+		m.UsageOutputTokens != normalized.UsageOutputTokens || m.UsageTotalTokens != normalized.UsageTotalTokens ||
+		m.InteractionKind != normalized.InteractionKind ||
+		m.InteractionControls != normalized.InteractionControls || m.InteractionID != normalized.InteractionID ||
+		m.InteractionShortID != normalized.InteractionShortID || m.RequestID != normalized.RequestID ||
+		!equalOutboundInteractionChoices(m.Choices, normalized.Choices) {
+		return errors.New("outbound metadata is not canonical")
+	}
+	if !validOutboundMessageKind(m.MessageKind) {
+		return errors.New("unsupported outbound message kind")
+	}
+	if !validOutboundKind(m.OutboundKind) {
+		return errors.New("unsupported outbound kind")
+	}
+	if !validOutboundInteractionKind(m.InteractionKind) {
+		return errors.New("unsupported outbound interaction kind")
+	}
+	if !validOutboundInteractionControls(m.InteractionControls) {
+		return errors.New("unsupported outbound interaction controls")
+	}
+	if err := validateOutboundToolCalls(m); err != nil {
+		return err
+	}
+	if m.InteractionControls != "" && m.InteractionKind == "" {
+		return errors.New("outbound interaction controls require an interaction kind")
+	}
+	if m.InteractionControls == OutboundInteractionControlsPrompt &&
+		(m.InteractionID == "" || m.InteractionShortID == "") {
+		return errors.New("outbound interaction prompt requires interaction ID and short ID")
+	}
+	if len(m.Choices) > 0 &&
+		(m.InteractionKind != OutboundInteractionQuestion ||
+			m.InteractionControls != OutboundInteractionControlsPrompt) {
+		return errors.New("outbound interaction choices require a question prompt")
+	}
+	return nil
+}
+
+func validOutboundMessageKind(kind string) bool {
+	switch kind {
+	case "", OutboundMessageKindThought, OutboundMessageKindToolFeedback, OutboundMessageKindToolCalls,
+		OutboundMessageKindFinalReply, OutboundMessageKindInteraction:
+		return true
+	default:
+		return false
 	}
 }
 
-func (m OutboundMetadata) ApplyToContext(ctx *InboundContext) {
-	if ctx == nil {
-		return
+func validOutboundKind(kind string) bool {
+	return kind == "" || kind == OutboundKindFinal || kind == OutboundKindInterim
+}
+
+func validOutboundInteractionKind(kind string) bool {
+	return kind == "" || kind == OutboundInteractionApproval || kind == OutboundInteractionQuestion
+}
+
+func validOutboundInteractionControls(controls string) bool {
+	return controls == "" || controls == OutboundInteractionControlsPrompt ||
+		controls == OutboundInteractionControlsRemove
+}
+
+func validateOutboundToolCalls(m OutboundMetadata) error {
+	if m.MessageKind != OutboundMessageKindToolCalls {
+		if len(m.ToolCalls) > 0 {
+			return errors.New("outbound tool calls require the tool_calls message kind")
+		}
+		return nil
 	}
-	rawCount := len(ctx.Raw)
-	if strings.TrimSpace(m.MessageKind) != "" {
-		rawCount++
+	if len(m.ToolCalls) == 0 {
+		return errors.New("outbound tool_calls message requires a non-empty tool call array")
 	}
-	if strings.TrimSpace(m.ToolCalls) != "" {
-		rawCount++
+	for _, call := range m.ToolCalls {
+		if call.Function != nil &&
+			(strings.TrimSpace(call.Function.Name) != "" || strings.TrimSpace(call.Function.Arguments) != "") {
+			continue
+		}
+		if call.ExtraContent != nil && strings.TrimSpace(call.ExtraContent.ToolFeedbackExplanation) != "" {
+			continue
+		}
+		return errors.New("outbound tool_calls message contains an empty tool call")
 	}
-	if strings.TrimSpace(m.OutboundKind) != "" {
-		rawCount++
+	return nil
+}
+
+// Merge applies non-zero delivery semantics from update to m.
+func (m OutboundMetadata) Merge(update OutboundMetadata) OutboundMetadata {
+	update = NormalizeOutboundMetadata(update)
+	if update.MessageKind != "" {
+		m.MessageKind = update.MessageKind
 	}
-	if strings.TrimSpace(m.ModelName) != "" {
-		rawCount++
+	if len(update.ToolCalls) > 0 {
+		m.ToolCalls = normalizeOutboundToolCalls(update.ToolCalls)
 	}
-	if strings.TrimSpace(m.DefaultModelName) != "" {
-		rawCount++
+	if update.OutboundKind != "" {
+		m.OutboundKind = update.OutboundKind
 	}
-	if m.UsageInputTokens > 0 {
-		rawCount++
+	if update.ModelName != "" {
+		m.ModelName = update.ModelName
 	}
-	if m.UsageOutputTokens > 0 {
-		rawCount++
+	if update.DefaultModelName != "" {
+		m.DefaultModelName = update.DefaultModelName
 	}
-	if m.UsageTotalTokens > 0 {
-		rawCount++
+	if update.UsageInputTokens > 0 {
+		m.UsageInputTokens = update.UsageInputTokens
 	}
-	if strings.TrimSpace(m.InteractionKind) != "" {
-		rawCount++
+	if update.UsageOutputTokens > 0 {
+		m.UsageOutputTokens = update.UsageOutputTokens
 	}
-	if strings.TrimSpace(m.InteractionControls) != "" {
-		rawCount++
+	if update.UsageTotalTokens > 0 {
+		m.UsageTotalTokens = update.UsageTotalTokens
 	}
-	if m.InteractionChoicesJSON != "" {
-		rawCount++
+	if update.InteractionKind != "" {
+		m.InteractionKind = update.InteractionKind
 	}
-	if rawCount == 0 {
-		return
+	if update.InteractionControls != "" {
+		m.InteractionControls = update.InteractionControls
 	}
-	if ctx.Raw == nil {
-		ctx.Raw = make(map[string]string, rawCount)
+	if len(update.Choices) > 0 {
+		m.Choices = append([]string(nil), update.Choices...)
 	}
-	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyMessageKind, m.MessageKind)
-	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyToolCalls, m.ToolCalls)
-	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyOutboundKind, m.OutboundKind)
-	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyModelName, m.ModelName)
-	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyDefaultModel, m.DefaultModelName)
-	setOutboundMetadataInt(ctx.Raw, OutboundMetadataKeyUsageInput, m.UsageInputTokens)
-	setOutboundMetadataInt(ctx.Raw, OutboundMetadataKeyUsageOutput, m.UsageOutputTokens)
-	setOutboundMetadataInt(ctx.Raw, OutboundMetadataKeyUsageTotal, m.UsageTotalTokens)
-	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyInteraction, m.InteractionKind)
-	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyControls, m.InteractionControls)
-	setOutboundMetadataString(ctx.Raw, OutboundMetadataKeyChoices, m.InteractionChoicesJSON)
+	if update.InteractionID != "" {
+		m.InteractionID = update.InteractionID
+	}
+	if update.InteractionShortID != "" {
+		m.InteractionShortID = update.InteractionShortID
+	}
+	if update.RequestID != "" {
+		m.RequestID = update.RequestID
+	}
+	return NormalizeOutboundMetadata(m)
 }
 
 func (m OutboundMetadata) IsToolFeedback() bool {
@@ -186,74 +280,61 @@ func (m OutboundMetadata) RemovesInteractionControls() bool {
 }
 
 func (m OutboundMetadata) WithInteractionChoices(choices []string) OutboundMetadata {
-	m.InteractionChoicesJSON = encodeOutboundInteractionChoices(choices)
+	m.Choices = normalizeOutboundInteractionChoices(choices)
 	return m
 }
 
 func (m OutboundMetadata) InteractionChoices() []string {
-	return parseOutboundInteractionChoices(m.InteractionChoicesJSON)
+	return append([]string(nil), m.Choices...)
 }
 
-func encodeOutboundInteractionChoices(choices []string) string {
+func normalizeOutboundInteractionChoices(choices []string) []string {
 	if len(choices) == 0 || len(choices) > 3 {
-		return ""
+		return nil
 	}
 	normalized := make([]string, 0, len(choices))
 	for _, choice := range choices {
 		choice = strings.TrimSpace(choice)
 		if choice == "" || len([]rune(choice)) > 64 {
-			return ""
+			return nil
 		}
 		normalized = append(normalized, choice)
 	}
-	encoded, err := json.Marshal(normalized)
-	if err != nil {
-		return ""
-	}
-	return string(encoded)
+	return normalized
 }
 
-func normalizeOutboundInteractionChoices(encoded string) string {
-	return encodeOutboundInteractionChoices(parseOutboundInteractionChoices(encoded))
-}
-
-func parseOutboundInteractionChoices(encoded string) []string {
-	if strings.TrimSpace(encoded) == "" {
-		return nil
+func equalOutboundInteractionChoices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
 	}
-	var choices []string
-	if err := json.Unmarshal([]byte(encoded), &choices); err != nil || len(choices) == 0 || len(choices) > 3 {
-		return nil
-	}
-	for index, choice := range choices {
-		choice = strings.TrimSpace(choice)
-		if choice == "" || len([]rune(choice)) > 64 {
-			return nil
+	for index := range left {
+		if left[index] != right[index] {
+			return false
 		}
-		choices[index] = choice
 	}
-	return choices
+	return true
 }
 
-func parseOutboundMetadataInt(raw string) int {
-	value, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || value < 0 {
-		return 0
+func normalizeOutboundToolCalls(calls []OutboundToolCall) []OutboundToolCall {
+	if len(calls) == 0 {
+		return nil
 	}
-	return value
-}
-
-func setOutboundMetadataString(raw map[string]string, key, value string) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return
+	normalized := make([]OutboundToolCall, len(calls))
+	for index, call := range calls {
+		call.ID = strings.TrimSpace(call.ID)
+		call.Type = strings.TrimSpace(call.Type)
+		if call.Function != nil {
+			function := *call.Function
+			function.Name = strings.TrimSpace(function.Name)
+			function.Arguments = strings.TrimSpace(function.Arguments)
+			call.Function = &function
+		}
+		if call.ExtraContent != nil {
+			extra := *call.ExtraContent
+			extra.ToolFeedbackExplanation = strings.TrimSpace(extra.ToolFeedbackExplanation)
+			call.ExtraContent = &extra
+		}
+		normalized[index] = call
 	}
-	raw[key] = value
-}
-
-func setOutboundMetadataInt(raw map[string]string, key string, value int) {
-	if value <= 0 {
-		return
-	}
-	raw[key] = strconv.Itoa(value)
+	return normalized
 }

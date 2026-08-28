@@ -1,10 +1,11 @@
 # Architecture Simplification Roadmap
 
-Status: active; implementation is merged through P1 and X3.60, the live
-version 4 profile and explicit-identity conversions are complete, and three
-companions run the node-identity bridge. The remaining `vpn` rollout, obsolete
-record and policy cleanup, full backup, strict removal deployment and rollback,
-and Z1 remain open
+Status: active; the original implementation sequence is merged through P1 and
+X3.66, including PR #942, the earlier pre-Z1 source cleanup is merged through
+PR #940, C2 is merged through PR #929, and the live version 4 profile
+and explicit-identity conversions are complete. The remaining `vpn` rollout,
+obsolete record and policy cleanup, full backup, strict removal deployment and
+rollback, and Z1 remain open.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -156,12 +157,18 @@ reset criteria.
 | A1 | #800 and #801, completed by X3.30-X3.42 | Merged |
 | A2 | #808, #809, and #863 | Merged |
 | C1 | #802; later coding work #836, #838, and #840 preserved the admitted boundary | Merged |
+| Coding resume recovery and C2 | #908, #924-#927, and #929 | Merged; JSONL-authoritative recovery remains current, and its construction, checkpoint, and derived-engine lifecycle now have direct owners |
 | X1 | #797, completed across the current-contract X3 packets | Merged; deployed config inspection passed |
 | X2 | #803 and #807 | Merged |
-| X3.1-X3.60 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896 | Merged |
+| X3.1-X3.61 | #810-#816, #818-#823, #826-#835, #837, #839, #843, #845-#846, #848-#856, #858-#862, #864, #866, #868, #872, #878, #880, #885-#896, and #933 | Merged |
+| X3.62 | #935 and #936 | Merged; production-unused public APIs and test-only constructor facades are gone, while current extension and injection seams remain |
+| X3.63 | #937 | Merged; compaction execution mode is owner-supplied, and downstream inference plus test-only projector facades are gone |
+| X3.64 | #938 | Merged; subagent, spawn, and delegate dependencies are complete and immutable at construction, while `SubTurnSpawner` remains the package seam |
+| X3.65 | #940 | Merged; current defaults, resilience paths, provider error refinement, and standard platform behavior no longer use compatibility-shaped internal terminology |
+| X3.66 | #942 | Merged; outbound messages directly own typed delivery metadata, async delivery no longer smuggles it through cloned inbound state, and outbox version 3 is the sole persisted contract |
 | P1 | #881 | Merged; all five live configs and 20 personal workspaces now use the current contract, while final cleanup and deployment evidence remain in R1 |
 | R1 node-identity bridge | #899 | Merged and deployed to `p5a-canary`, `p3-canary`, and `ab-local-test`; the P3 node is currently stopped, while `vpn` and the strict adapter-removal release remain open |
-| Pre-Z1 strict audit | #911, #914, and #916 merged; #901 remains live-gated | Dead Seahorse shutdown state, the historical approval ordinal reservation, and old benchmark result-count inference are removed; optional node execution-profile admission is included in the reviewed strict R1 release |
+| Pre-Z1 strict audit | #911, #914, #916, #919-#921, and #940 merged; #901 remains live-gated | Dead shutdown state, historical approval and benchmark inference, stale current-path and compatibility terminology, provider-contract ambiguity, and implicit TTS model selection are removed; strict node removal still needs a final refresh and review |
 | Z1 | Not yet applicable | Open |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
@@ -170,7 +177,8 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 39-42 to #859-#862; 43 to #864; 44 to #866; 45 to #868; 46 to #872;
 47 to #878; 48 to #880; 49 to #885; 50 to #886; 51 to #887; 52 to #888;
 53 to #889; 54 to #890; 55 to #891; 56 to #892; 57 to #893; 58 to #894;
-59 to #895; and 60 to #896.
+59 to #895; 60 to #896; 61 to #933; 62 to #935 and #936; 63 to #937; 64 to
+#938; and 65 to #940.
 
 The 2026-08-24 read-only deployed audit established these rollout facts at
 that time:
@@ -295,15 +303,97 @@ after that bounded local operation:
   binary and roughly 6 GiB active durable state. A later 207 MiB current-main
   deployment backup contains binaries, units, launchers, and service-state
   markers only, so it does not satisfy that gate either; and
-- strict removal PR #901 is refreshed at `5c6a493a`: in addition to the
+- strict removal PR #901 is refreshed at `f7defbb2`: in addition to the
   browser-catalogue and empty-algorithm reset, it now requires the current
   authenticated execution profile and deletes the unused runtime-less
-  companion constructor. All nine checks pass on this exact head, and the
-  fresh exact-head review found no independent high-confidence issue. It
-  remains intentionally unmerged until the live R1 gates below are satisfied.
-  Main has since gained the browser receipt correction and the pre-Z1
-  benchmark cleanup, so the branch must be refreshed and revalidated before
-  merge even though a synthetic combined-tree merge remains conflict-free.
+  companion constructor. All nine checks pass on this exact head, but its last
+  clean review covers `5c6a493a`, not the rebased head. It remains intentionally
+  unmerged until the live R1 gates below are satisfied. Main has since gained
+  coding resume recovery and PRs #918-#921, so the branch must receive one final
+  refresh, exact-head validation, and review before merge.
+
+The 2026-08-27 post-X3.64 read-only gate audit further established:
+
+- all expected services are active except the deliberately stopped P3 node,
+  the last ten minutes of service journals have no error entries, and no old
+  product process is running. The gateways, Web launcher, and local P5a node
+  still execute `8418b021`, and the installed CLI has the same revision;
+  merged main is now `1b02363e` through PR #940;
+- the six node records remain explicit Ed25519. `p5a-canary` and
+  `ab-local-test` are connected on `8418b021`, `p3-canary` remains stopped on
+  bridge build `71ad3e53` while its matching service helper stays active, and
+  connected `vpn` remains on pre-bridge `03b08be2` with no managed-update
+  command in its advertised catalogue. The old pending Darwin and revoked
+  Linux records remain unchanged;
+- all five configs load as version 4, still define 21 agent entries over 20
+  distinct workspace roots, and every root has `AGENTS.md` with no root
+  `AGENT.md`. One ignored root `IDENTITY.md` remains in the spouse workspace;
+  current production source has no reader for it, but R1 must preserve it in
+  the full backup, reconcile any unique prose into the current profile or
+  prose files, and remove the ignored file rather than silently discarding its
+  content or restoring a second reader;
+- the seven inert policy entries are exactly the main browser's four removed
+  task-tool denies plus the main, family, and spouse media agents' `exec`
+  denies. Other deny rules remain current policy and are not cleanup targets;
+- the filesystem has 80 GiB free and the five active profile trees occupy
+  6,480,493,890 bytes. The three recent 207 MiB deployment backups still cover
+  binaries, units, scripts, and service-state markers rather than the complete
+  active durable state, so the same-time full-backup gate remains open; and
+- all 811 retained outbox version 2 records are terminal: 777 delivered, 31
+  definitely failed, two abandoned, and one ambiguous. There are no pending or
+  interrupted deliveries. The three deployed task registries contain 250
+  terminal tasks and 1,200 current `task_event.v2` events with no missing
+  generation or invalid sequence, and the sole interaction registry contains
+  28 terminal records plus 236 current `interaction_event.v1` events. The R1
+  reset therefore has no live task, interaction, or outbound delivery to carry
+  across the stopped-state boundary; and
+- PR #901 is still at `f7defbb2` on base `4b875d41`; all nine recorded checks
+  are green, but its clean review covers `5c6a493a` and its current head has
+  only an eyes reaction. A read-only merge simulation against current main at
+  `1b02363e` is conflict-free, but the branch still requires a real final refresh,
+  validation, exact-head review, and new merge approval after the live gates.
+
+The 2026-08-27 post-X3.66 read-only gate audit supersedes the mutable facts in
+that snapshot:
+
+- merged main is `72d07542` through PR #943, while the five gateways, Web
+  launcher, installed CLI, and local P5a companion still run the previously
+  deployed `8418b021` release. All expected user services are active, the
+  deliberately stopped system P3 node is the only inactive product service,
+  its matching helper remains active, the last ten minutes contain no service
+  errors, and no old product process is running;
+- the six retained node records still name Ed25519, an executor, and a policy
+  revision. `p5a-canary` and `ab-local-test` are connected on `8418b021`, the
+  stopped `p3-canary` record retains bridge build `71ad3e53`, connected `vpn`
+  remains on pre-bridge `03b08be2` without a managed-update command, and the
+  old pending Darwin and revoked Linux records remain unchanged;
+- all five configs decode as version 4 and still define 21 agent entries over
+  20 workspace roots. Every root has `AGENTS.md`, none has root `AGENT.md`, the
+  single ignored root `IDENTITY.md` remains 301 bytes, and the same seven inert
+  deny entries remain. `doctor` reports no load or schema errors; its exit-2
+  results are independent policy and security findings;
+- the filesystem has 83,558,346,752 bytes free and the five active profile
+  trees occupy 6,482,271,509 bytes. No backup newer than the partial 2026-08-26
+  deployment backups exists, so the same-time full-state backup gate remains
+  open;
+- all 811 outbox version 2 records remain terminal with the same status split.
+  Retention pruning leaves 249 terminal tasks and 1,196 valid
+  `task_event.v2` events with no missing generation or invalid sequence. The
+  interaction inventory remains 28 terminal records and 236 valid
+  `interaction_event.v1` events; and
+- PR #901 remains at `f7defbb2` on base `4b875d41` with nine historical green
+  checks. Its last clean review still names `5c6a493a`, the current head still
+  has only an eyes reaction, and a corrected read-only merge simulation of the
+  exact head against `72d07542` is conflict-free. It still requires a real
+  final refresh, validation, exact-head review, and new merge approval after
+  the live gates.
+
+The local deployed-operations helper also needs a pre-R1 path correction: its
+topology and status script still probe `/home/server/src/mintclaw/default`,
+which no longer exists, while the actual source checkout and gateway build are
+under `/home/server/src/mintclaw`. The health fields above were verified from
+the real units, processes, registry, and state files rather than treating the
+helper's empty source SHA as valid evidence.
 
 ### Re-audit corrections
 
@@ -333,8 +423,15 @@ separation and standards alignment.
 | --- | --- | --- | --- |
 | Previous and older browser catalogue schemas | Temporary first-party wire adapter | The sole connected browser companion advertises the current catalogue and has completed a functional open, observe, navigate, status, and close canary; the gateway-local driver is also healthy, and PR #901 deletes the historical generators | Architecture simplification owner; merge and deploy PR #901 after the remaining R1 fleet and backup gates |
 | Empty node `key_algorithm` | Temporary first-party wire adapter; persisted conversion complete | All six retained records explicitly name Ed25519, and `p5a-canary`, `p3-canary`, and `ab-local-test` run the bridge. Connected `vpn` remains pre-bridge, while the older pending and revoked records need a deliberate retention decision | Architecture simplification owner; upgrade or retire `vpn`, decide the two obsolete records, then merge and deploy PR #901 in R1 |
-| Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its exact-head checks and review are complete | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
-| Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
+| Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter; persisted conversion complete | Production constructs companions with a command runtime, no production caller uses the discovery-only constructor, and all six retained records already carry an explicit executor and policy revision. PR #901 makes both fields mandatory in proofs, snapshots, and the published schema; its current head is green but still needs final-base refresh and exact-head review | Architecture simplification owner; merge and deploy PR #901 at the coordinated R1 reset after the remaining live gates |
+| Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover; data conversion complete | All five configs are version 4 and all 20 workspaces use root `AGENTS.md`; seven inert deny entries and one ignored root `IDENTITY.md` remain, and the required full backup and removal binary are not deployed | Architecture simplification owner; delete the inert policy entries, preserve any unique ignored-file prose in the current contract and remove that file, take the full stopped-state backup, then deploy and roll back the strict release in R1 |
+
+C2 is closed. PR #924 moved durable checkpoint ownership to the coding
+composition root; PRs #925-#927 made recovery reads and constructors explicitly
+context-aware; and PR #929 made the coding runtime replace derived state as one
+owned engine while delaying retrieval publication until reconciliation and
+integrity verification succeed. The JSONL-authoritative recovery semantics from
+PR #908 remain current product behavior rather than compatibility debt.
 
 The current implementation also has one non-blocking observability follow-up,
 not a compatibility adapter: an exact deny rule can be reported as an unknown
@@ -376,9 +473,22 @@ callers and the private provider type used only by that facade. The explicit
 `LoadOpenClawConfig` to `ConvertToMintClaw` path remains the sole typed import
 contract and continues to read channel, provider, and agent fields directly.
 
-Other matches remain candidates, not automatic deletions. The final audit must
-prove whether raw outbound metadata, benchmark baselines, and stale `Legacy`
-names express required current semantics or obsolete compatibility.
+PR #940 renamed compatibility-shaped internal variables, helpers, comments,
+and one test description according to their current semantics. It did not
+remove provider failover, standard platform fallback behavior, the external
+Kagi response-shape adapter, Bedrock's documented upstream deprecation, the
+strict `legacy` context-manager rejection, or the benchmark baseline.
+
+PR #942 resolves the raw outbound-metadata design debt. `OutboundMessage` and
+`OutboundMediaMessage` directly own `OutboundMetadata`; tool calls and
+interaction choices use bus-owned typed contracts; async user delivery passes
+metadata explicitly instead of cloning a turn only to mutate its inbound
+context; and the dead interaction `delivery_key` copy is gone. Supported
+metadata values and their cross-field requirements are validated before outbox
+persistence and replay. Outbox version 3 persists that direct contract and
+strictly rejects version 2 rather than adding a dual reader. R1 must archive the
+terminal live version 2 inventory under the stopped-state backup before
+installing this release.
 
 The 2026-08-25 source-only pre-R1 audit found no additional adapter at that
 time. The later pre-Z1 source and live-state audit corrected that conclusion:
@@ -398,10 +508,43 @@ time. The later pre-Z1 source and live-state audit corrected that conclusion:
   count explicitly, including a legitimate zero when every answer is invalid;
   the deliberately historical full-transcript comparison baseline remains a
   benchmark mode rather than a product input reader;
-- the earlier Git-tracked zero-caller scan after PR #896 otherwise still found
-  no further caller-free production facade; the remaining low-reference
-  exports are active entry points, documented extension contracts, or
-  deliberate test and integration seams;
+- PR #919 renamed the sole current prompt renderer and final-delivery path
+  instead of letting `legacy` terminology imply a second implementation;
+- PR #920 removed false provider-conversion terminology and documented the
+  current explicit `provider` plus provider-native `model` contract;
+- PR #921 removed TTS's order-dependent scan for the first API-backed model ID
+  containing `tts`. `voice.tts_model_name` is now the sole selector, and the
+  selected enabled entry must have explicit provider and model fields. A
+  read-only deployed audit found no profile relying on the removed path;
+- the post-merge review of PR #908 preserved its justified recovery behavior
+  but found new composition debt. PR #924 removed durable checkpoint ownership
+  from the frontend adapter; PRs #925-#927 removed optional and background
+  recovery-context paths; and PR #929 replaced corrupt derived state as one
+  unpublished engine before retrieval registration. C2 is complete without
+  weakening fail-closed resume, typed corruption checks, or no-replay tool
+  outcomes;
+- the earlier Git-tracked zero-caller scan after PR #896 counted test references
+  as sufficient evidence for a public API. The corrected production-only scan
+  retained active entry points, `NamedHook`, clock and provider injection,
+  test-harness helpers, and console restoration. PR #935 deleted the methods
+  with no production caller, and PR #936 made the dependency-aware heartbeat,
+  TTS, coding TUI, Web fetch, and exec constructors canonical while moving
+  concise test defaults behind private helpers;
+- PR #933 made `health.Server` handler-only. The channel manager's shared
+  gateway server is now the sole HTTP listener and shutdown owner, and the
+  unused readiness-check registry is gone without changing the health, ready,
+  or reload routes;
+- a focused re-audit of recent coding PRs found that the frontend compaction
+  status type is a justified presentation projection and that the synchronous
+  checkpoint bus tap keeps durable metadata with the coding composition root.
+  PR #937 made the background scheduler emit the execution mode it already
+  owns, projected that fact directly, and deleted the adapter heuristic plus
+  three superseded projector convenience methods used only by tests;
+- PR #938 made subagent, spawn, and delegate dependencies complete and
+  immutable at construction. Missing task registries, child runners,
+  allow-list and objective policies, or self identity now prevent tool
+  publication, while `SubTurnSpawner` remains the real tool-to-agent package
+  seam;
 - task deliverable normalization constructs the current canonical report at
   the registry owner for both new mutations and loaded snapshots; it does not
   select a historical report implementation, but R1 must still inventory the
@@ -910,6 +1053,52 @@ Downstream P4 integration rules:
 - in-app commands consume the subscribed current view and the typed controller
   sink instead of recreating command-specific mirrors or a delta protocol.
 
+### C2 — Simplify coding resume recovery composition
+
+Depends on: C1 and merged PR #908
+
+Status: complete through PRs #924-#927 and #929
+
+PR #908 added justified recovery behavior: canonical JSONL can rebuild missing
+or corrupt derived Seahorse state, resume fails closed until reconciliation,
+and completed compactions checkpoint their canonical source revision. C2 keeps
+those semantics while removing the composition machinery introduced around
+them.
+
+Implementation sequence:
+
+1. PR #924 kept durable compaction checkpoint observation in the coding
+   composition root, removed it from `pkg/coding/frontend/agentadapter`, and
+   returned the adapter to presentation-only projection.
+2. PRs #925-#927 made the recovery deadline an explicit construction
+   dependency, retained one current context-aware constructor for each recovery
+   owner, removed context from `CodingRuntimeProfile`, and threaded it through
+   canonical history reads.
+3. PR #929 rebuilt corrupt derived state before engine and retrieval references
+   become visible, made the coding recovery owner replace the engine/store as
+   one unit, and deleted the exported replacement factory and field-by-field
+   mutation of an already-published `seahorse.Engine`.
+
+Tests:
+
+- resume reconciliation and cursor inspection share one deadline;
+- typed `SQLITE_CORRUPT` and `SQLITE_NOTADB` remain the only destructive reset
+  authorization;
+- frontend projection failure or absence cannot suppress a durable compaction
+  checkpoint;
+- a rebuilt engine publishes retrieval tools only after successful complete
+  reconciliation; and
+- interrupted and unknown tools remain visible without replay.
+
+Exit criteria:
+
+- `CodingRuntimeProfile` contains layouts and admitted store construction only,
+  never request-scoped context;
+- presentation adapters perform no durable writes or durability callbacks;
+- one context-aware constructor exists for each coding recovery owner; and
+- derived-store rebuild replaces one owned unit without copying private engine
+  internals across instances.
+
 ### X1 — Require the current configuration only
 
 Scope:
@@ -1238,6 +1427,38 @@ Implementation sequence:
     selectors. Retain documented channel-registry discovery, the console
     restoration test seam, active loopback helpers, and third-party logger
     interface methods.
+61. Make the health package handler-only. Delete its unused private
+    `http.Server`, direct start and stop methods, and test-only readiness-check
+    registry. Accept only the reload token at construction, register the three
+    current routes on an explicit mux, and keep the channel manager's shared
+    gateway HTTP server as the sole listener and shutdown owner.
+62. Delete production-unused public APIs and test-only constructor facades.
+    Remove `Config.SecurityCopyFrom`, `Registry.FindWaitingBySession`,
+    `ProcessSession.SetStatus`, `ProcessSession.SetExitCode`,
+    `MessageBus.ReplayInboundSpool`, and `logger.InfoF`. Collapse the heartbeat,
+    OpenAI TTS, coding TUI, Web fetch, and exec test conveniences onto the
+    context-, state-, option-, proxy-, and config-aware constructors used by
+    production, give those constructors the canonical names, and use private
+    test helpers where concise defaults improve fixtures. Retain deliberate
+    extension, injection, test-harness, logger-console, and third-party
+    interface seams.
+63. Make compaction execution mode one owner-supplied fact. The background
+    scheduler marks its requests, the lifecycle payload carries that value,
+    and the coding adapter projects it directly. Delete reason/turn-based mode
+    inference and the three production-unused `Projector` compaction facades;
+    keep the distinct agent lifecycle and frontend presentation status types.
+64. Make subagent, spawn, and delegate construction complete. Require the
+    current task registry, child runner, LLM defaults, allow-list policy,
+    objective policy, and self identity at their constructors, remove the
+    setter sequence and immutable-field mutex, and reject missing required
+    dependencies before tool publication. Keep `SubTurnSpawner` because it is
+    the real package-cycle and substitution boundary.
+65. Remove compatibility-shaped terminology from current internal behavior.
+    Name package defaults, numeric IPv4 handling, Telegram text delivery,
+    provider error refinement, and rejected removed arguments by their actual
+    semantics. Keep external API adapters, provider failover, strict rejection
+    messages, and development benchmarks classified rather than deleting them
+    by keyword.
 
 Exit criteria:
 
@@ -1306,7 +1527,7 @@ Implemented shape:
 
 ### R1 — Execute the coordinated first-party compatibility reset
 
-Depends on: P1 and X3.46-X3.60
+Depends on: P1 and X3.46-X3.66
 
 Deployment requires explicit user authorization.
 
@@ -1329,17 +1550,22 @@ Scope:
    remove it, and verify every connected companion sends `key_algorithm`;
 5. perform the P1 cutover for all 21 configured agent entries and 20 distinct
    personal workspaces, resolve the one pre-existing `AGENTS.md` collision
-   explicitly, and validate every active profile before restart;
+   explicitly, reconcile unique prose from ignored root personal-profile files
+   into the current contract before removing them, and validate every active
+   profile before restart;
 6. delete previous and older browser schema generators, empty-algorithm
    normalization, optional execution-profile admission, runtime-less companion
-   construction, expired wire aliases, and their old fixtures in one removal
-   release; and
+   construction, expired wire aliases, and production fixtures that keep those
+   paths callable in one removal release. Retain test-only exact old-contract
+   fixtures that prove the strict runtime rejects them; and
 7. deploy and verify the removal release, then exercise rollback using the
    matching binary and same-time state backup.
 
 Current gate snapshot from the 2026-08-26/27 re-audit:
 
 1. capacity is satisfied, but the same-time full backup has not been created;
+   the audited outbox, task registries, and interaction registry are current
+   and quiescent;
 2. current browser catalogue advertisement plus functional companion and
    gateway-local canaries are proven;
 3. `p5a-canary` and `ab-local-test` run bridge-or-newer builds; `p3-canary` is
@@ -1349,10 +1575,13 @@ Current gate snapshot from the 2026-08-26/27 re-audit:
    omits it, and the stopped P3 plus pending/revoked records need deliberate
    retention decisions;
 5. the version 4 and `AGENTS.md` cutover is complete, with seven inert policy
-   entries left to delete;
-6. PR #901 implements the strict removal; all nine checks and fresh review pass
-   on exact head `5c6a493a`, while the now-advanced base requires a refresh and
-   exact-head validation before merge; and
+   entries left to delete and one ignored root `IDENTITY.md` requiring an
+   explicit content reconciliation and removal after backup;
+6. PR #901 implements the strict removal; all nine checks pass on head
+   `f7defbb2`, while its last clean review covers the earlier `5c6a493a` head
+   and current main at `72d07542` requires a final refresh, validation, review,
+   and new merge approval; a read-only merge simulation is conflict-free;
+   and
 7. removal deployment and rollback have not started.
 
 Exit criteria:

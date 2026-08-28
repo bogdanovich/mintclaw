@@ -49,11 +49,7 @@ func (e *openAITTSAPIError) Error() string {
 	return fmt.Sprintf("API error (status %d): %s", e.statusCode, e.body)
 }
 
-func NewOpenAITTSProvider(apiKey string, apiBase string, proxyURL string, model string) *OpenAITTSProvider {
-	return NewOpenAITTSProviderWithOptions(apiKey, apiBase, proxyURL, model, OpenAITTSOptions{})
-}
-
-func NewOpenAITTSProviderWithOptions(
+func NewOpenAITTSProvider(
 	apiKey string,
 	apiBase string,
 	proxyURL string,
@@ -93,7 +89,7 @@ func NewOpenAITTSProviderWithOptions(
 			u.Path = path
 			apiBase = u.String()
 		} else {
-			// Fallback to the previous string-based behavior if parsing fails.
+			// Construct the endpoint directly when the configured base is not a valid URL.
 			if apiBase == "https://api.openai.com/v1" {
 				apiBase = "https://api.openai.com/v1/audio/speech"
 			} else if !strings.HasSuffix(apiBase, "/audio/speech") {

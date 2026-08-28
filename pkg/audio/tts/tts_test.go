@@ -14,6 +14,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
+func newTestOpenAITTSProvider(apiKey, apiBase, proxyURL, model string) *OpenAITTSProvider {
+	return NewOpenAITTSProvider(apiKey, apiBase, proxyURL, model, OpenAITTSOptions{})
+}
+
 func TestNewOpenAITTSProvider_APIBaseNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -52,7 +56,7 @@ func TestNewOpenAITTSProvider_APIBaseNormalization(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			provider := NewOpenAITTSProvider("key", tc.input, "", "")
+			provider := newTestOpenAITTSProvider("key", tc.input, "", "")
 			if provider.apiBase != tc.expect {
 				t.Fatalf("apiBase mismatch: got %q, want %q", provider.apiBase, tc.expect)
 			}
@@ -82,7 +86,7 @@ func TestOpenAITTSProvider_SynthesizeSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewOpenAITTSProvider("k123", server.URL, "", "")
+	provider := newTestOpenAITTSProvider("k123", server.URL, "", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize failed: %v", err)
@@ -122,7 +126,7 @@ func TestOpenAITTSProvider_SynthesizeNon200(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewOpenAITTSProvider("k123", server.URL, "", "")
+	provider := newTestOpenAITTSProvider("k123", server.URL, "", "")
 	_, err := provider.Synthesize(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error")
@@ -154,7 +158,7 @@ func TestOpenAITTSProvider_SynthesizeRetriesWithoutResponseFormat(t *testing.T) 
 	}))
 	defer server.Close()
 
-	provider := NewOpenAITTSProvider("k123", server.URL, "", "x-ai/grok-voice-tts-1.0")
+	provider := newTestOpenAITTSProvider("k123", server.URL, "", "x-ai/grok-voice-tts-1.0")
 	stream, err := provider.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize failed: %v", err)
@@ -194,7 +198,7 @@ func TestOpenAITTSProvider_SynthesizeRetriesWithoutResponseFormat(t *testing.T) 
 func TestNewOpenAITTSProvider_UsesConfiguredModel(t *testing.T) {
 	t.Parallel()
 
-	provider := NewOpenAITTSProvider("key", "https://api.xiaomimimo.com/v1", "", "mimo-v2-tts")
+	provider := newTestOpenAITTSProvider("key", "https://api.xiaomimimo.com/v1", "", "mimo-v2-tts")
 	if provider.model != "mimo-v2-tts" {
 		t.Fatalf("model mismatch: got %q, want %q", provider.model, "mimo-v2-tts")
 	}
@@ -206,7 +210,7 @@ func TestNewOpenAITTSProvider_UsesConfiguredModel(t *testing.T) {
 func TestNewOpenAITTSProvider_UsesConfiguredVoiceAndResponseFormat(t *testing.T) {
 	t.Parallel()
 
-	provider := NewOpenAITTSProviderWithOptions(
+	provider := NewOpenAITTSProvider(
 		"key",
 		"https://openrouter.ai/api/v1",
 		"",
@@ -278,19 +282,72 @@ func TestDetectTTS_UsesOpenAIExtraBodyVoiceAndResponseFormat(t *testing.T) {
 	}
 }
 
-func TestDetectTTS_IgnoresDisabledFallbackModel(t *testing.T) {
+func TestDetectTTS_RequiresExplicitModelSelection(t *testing.T) {
 	t.Parallel()
 
 	provider := DetectTTS(&config.Config{ModelList: []*config.ModelConfig{{
-		ModelName: "disabled-tts",
+		ModelName: "available-tts",
 		Provider:  "openai",
 		Model:     "tts-1",
 		APIKeys:   config.SimpleSecureStrings("sk-openai"),
-		Enabled:   false,
+		Enabled:   true,
 	}}})
 
 	if provider != nil {
-		t.Fatalf("DetectTTS() type = %T, want nil for disabled model", provider)
+		t.Fatalf("DetectTTS() type = %T, want nil without voice.tts_model_name", provider)
+	}
+}
+
+func TestDetectTTS_DoesNotFallBackFromInvalidSelection(t *testing.T) {
+	t.Parallel()
+
+	provider := DetectTTS(&config.Config{
+		Voice: config.VoiceConfig{TTSModelName: "missing-tts"},
+		ModelList: []*config.ModelConfig{{
+			ModelName: "available-tts",
+			Provider:  "openai",
+			Model:     "tts-1",
+			APIKeys:   config.SimpleSecureStrings("sk-openai"),
+			Enabled:   true,
+		}},
+	})
+
+	if provider != nil {
+		t.Fatalf("DetectTTS() type = %T, want nil for invalid voice.tts_model_name", provider)
+	}
+}
+
+func TestDetectTTS_RequiresExplicitProviderAndModel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+	}{
+		{name: "provider", model: "openai/tts-1"},
+		{name: "model", provider: "openai"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			provider := DetectTTS(&config.Config{
+				Voice: config.VoiceConfig{TTSModelName: "selected-tts"},
+				ModelList: []*config.ModelConfig{{
+					ModelName: "selected-tts",
+					Provider:  test.provider,
+					Model:     test.model,
+					APIKeys:   config.SimpleSecureStrings("sk-openai"),
+					Enabled:   true,
+				}},
+			})
+
+			if provider != nil {
+				t.Fatalf("DetectTTS() type = %T, want nil without explicit %s", provider, test.name)
+			}
+		})
 	}
 }
 
@@ -390,7 +447,7 @@ func TestSynthesizeAndStore_UsesStreamProvidedAudioMetadata(t *testing.T) {
 	defer server.Close()
 
 	store := media.NewFileMediaStore()
-	provider := NewOpenAITTSProvider("k123", server.URL, "", "x-ai/grok-voice-tts-1.0")
+	provider := newTestOpenAITTSProvider("k123", server.URL, "", "x-ai/grok-voice-tts-1.0")
 	ref, err := SynthesizeAndStore(
 		context.Background(),
 		provider,

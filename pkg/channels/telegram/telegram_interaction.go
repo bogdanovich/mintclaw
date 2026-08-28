@@ -28,7 +28,7 @@ type telegramInteractionReply struct {
 }
 
 func (c *TelegramChannel) updateInteractionControls(msg bus.OutboundMessage, chatID int64, threadID int) {
-	metadata := bus.OutboundMetadataFromMessage(msg)
+	metadata := msg.Metadata
 	if !metadata.IsQuestionPrompt() && !metadata.IsApprovalPrompt() &&
 		!metadata.RemovesInteractionControls() {
 		return
@@ -49,7 +49,7 @@ func (c *TelegramChannel) updateInteractionControls(msg bus.OutboundMessage, cha
 		c.interactionControls = make(map[telegramInteractionControlKey]telegramInteractionControls)
 	}
 	c.interactionControls[key] = telegramInteractionControls{
-		shortID: strings.TrimSpace(msg.Context.Raw[bus.OutboundMetadataKeyInteractionShortID]),
+		shortID: strings.TrimSpace(metadata.InteractionShortID),
 		kind:    metadata.InteractionKind,
 		choices: metadata.InteractionChoices(),
 	}

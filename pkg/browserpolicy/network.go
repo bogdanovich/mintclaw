@@ -94,14 +94,14 @@ func normalizeOrigin(raw string, publicOnly bool) (string, error) {
 			return "", errors.New("origin IP is outside the public network policy")
 		}
 		lowerHost = address.String()
-	} else if legacyIP, recognized := parseIPv4(lowerHost); recognized {
+	} else if numericIP, recognized := parseIPv4(lowerHost); recognized {
 		if !publicOnly {
 			return "", errors.New("origin host is an ambiguous numeric IPv4 address")
 		}
-		if !IsPublicIP(legacyIP) {
+		if !IsPublicIP(numericIP) {
 			return "", errors.New("origin IP is outside the public network policy")
 		}
-		lowerHost = legacyIP.String()
+		lowerHost = numericIP.String()
 	} else {
 		if ipv4Candidate(lowerHost) {
 			return "", errors.New("origin host is an invalid numeric IPv4 address")

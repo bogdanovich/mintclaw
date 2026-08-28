@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
@@ -18,6 +19,7 @@ type syncToolResultDelivery struct {
 		result *toolshared.ToolResult,
 		toolName string,
 		traceScopes []runtimeevents.TraceScope,
+		metadata bus.OutboundMetadata,
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error)
 }
 
@@ -77,7 +79,7 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 		if d == nil || d.deliverToUser == nil {
 			return nil, toolshared.ErrorResult("tool result delivery is not initialized")
 		}
-		_, outcome, err := d.deliverToUser(ctx, ts, result, toolName, nil)
+		_, outcome, err := d.deliverToUser(ctx, ts, result, toolName, nil, bus.OutboundMetadata{})
 		if err != nil {
 			return nil, wrapToolDeliveryError(result, fmt.Sprintf("failed to deliver attachment: %v", err), err)
 		}
@@ -90,7 +92,9 @@ func (d *syncToolResultDelivery) applySyncToolResultDelivery(
 		if d == nil || d.deliverToUser == nil {
 			return nil, toolshared.ErrorResult("tool result delivery is not initialized")
 		}
-		attachments, outcome, err := d.deliverToUser(ctx, ts, result, toolName, nil)
+		attachments, outcome, err := d.deliverToUser(
+			ctx, ts, result, toolName, nil, bus.OutboundMetadata{},
+		)
 		if err != nil {
 			return nil, wrapToolDeliveryError(result, fmt.Sprintf("failed to deliver attachment: %v", err), err)
 		}

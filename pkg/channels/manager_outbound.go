@@ -19,30 +19,30 @@ func outboundMessageChatID(msg bus.OutboundMessage) string {
 }
 
 func outboundMessageIsToolFeedback(msg bus.OutboundMessage) bool {
-	return bus.OutboundMetadataFromMessage(msg).IsToolFeedback()
+	return msg.Metadata.IsToolFeedback()
 }
 
 func outboundMessageIsToolCalls(msg bus.OutboundMessage) bool {
-	return bus.OutboundMetadataFromMessage(msg).IsToolCalls()
+	return msg.Metadata.IsToolCalls()
 }
 
 func outboundMessageHasAuxiliaryKind(msg bus.OutboundMessage) bool {
-	return bus.OutboundMetadataFromMessage(msg).HasAuxiliaryKind()
+	return msg.Metadata.HasAuxiliaryKind()
 }
 
 func outboundMessageIsFinal(msg bus.OutboundMessage) bool {
-	return bus.OutboundMetadataFromMessage(msg).IsFinal()
+	return msg.Metadata.IsFinal()
 }
 
 func outboundMessageBypassesPlaceholderEdit(msg bus.OutboundMessage) bool {
-	return bus.OutboundMetadataFromMessage(msg).BypassesPlaceholderEdit()
+	return msg.Metadata.BypassesPlaceholderEdit()
 }
 
 func outboundMessageEditPayload(msg bus.OutboundMessage, content string) map[string]any {
 	payload := map[string]any{
 		"content": content,
 	}
-	metadata := bus.OutboundMetadataFromMessage(msg)
+	metadata := msg.Metadata
 	if modelName := metadata.ModelName; modelName != "" {
 		payload["model_name"] = modelName
 	}
@@ -85,7 +85,7 @@ func appendOutboundResponseFooter(content, footer, channel string) string {
 
 func outboundResponseFooter(msg bus.OutboundMessage) string {
 	var parts []string
-	metadata := bus.OutboundMetadataFromMessage(msg)
+	metadata := msg.Metadata
 	modelName := metadata.ModelName
 	defaultModelName := metadata.DefaultModelName
 	if modelName != "" && defaultModelName != "" && modelName != defaultModelName {

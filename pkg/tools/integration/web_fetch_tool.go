@@ -27,26 +27,11 @@ type WebFetchTool struct {
 	whitelist       *utils.PrivateHostWhitelist
 }
 
-func NewWebFetchTool(maxChars int, format string, fetchLimitBytes int64) (*WebFetchTool, error) {
-	// createHTTPClient cannot fail with an empty proxy string.
-	return NewWebFetchToolWithConfig(maxChars, "", format, fetchLimitBytes, nil)
-}
-
 // allowPrivateWebFetchHosts controls whether loopback/private hosts are allowed.
 // This is false in normal runtime to reduce SSRF exposure, and tests can override it temporarily.
 var allowPrivateWebFetchHosts atomic.Bool
 
-func NewWebFetchToolWithProxy(
-	maxChars int,
-	proxy string,
-	format string,
-	fetchLimitBytes int64,
-	privateHostWhitelist []string,
-) (*WebFetchTool, error) {
-	return NewWebFetchToolWithConfig(maxChars, proxy, format, fetchLimitBytes, privateHostWhitelist)
-}
-
-func NewWebFetchToolWithConfig(
+func NewWebFetchTool(
 	maxChars int,
 	proxy string,
 	format string,

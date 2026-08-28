@@ -5,34 +5,19 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
-
-type VisibleToolCall struct {
-	ID           string                       `json:"id,omitempty"`
-	Type         string                       `json:"type,omitempty"`
-	Function     *VisibleToolCallFunction     `json:"function,omitempty"`
-	ExtraContent *VisibleToolCallExtraContent `json:"extra_content,omitempty"`
-}
-
-type VisibleToolCallFunction struct {
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-}
-
-type VisibleToolCallExtraContent struct {
-	ToolFeedbackExplanation string `json:"tool_feedback_explanation,omitempty"`
-}
 
 func BuildVisibleToolCalls(
 	toolCalls []providers.ToolCall,
 	maxArgsLen int,
-) []VisibleToolCall {
+) []bus.OutboundToolCall {
 	if len(toolCalls) == 0 {
 		return nil
 	}
 
-	visible := make([]VisibleToolCall, 0, len(toolCalls))
+	visible := make([]bus.OutboundToolCall, 0, len(toolCalls))
 	for _, tc := range toolCalls {
 		name, _ := VisibleToolCallNameAndArguments(tc)
 		argsPreview := VisibleToolCallArgumentsPreview(tc, maxArgsLen)
@@ -44,7 +29,7 @@ func BuildVisibleToolCalls(
 			continue
 		}
 
-		visibleCall := VisibleToolCall{
+		visibleCall := bus.OutboundToolCall{
 			ID:   strings.TrimSpace(tc.ID),
 			Type: strings.TrimSpace(tc.Type),
 		}
@@ -52,13 +37,13 @@ func BuildVisibleToolCalls(
 			visibleCall.Type = "function"
 		}
 		if name != "" || argsPreview != "" {
-			visibleCall.Function = &VisibleToolCallFunction{
+			visibleCall.Function = &bus.OutboundToolCallFunction{
 				Name:      name,
 				Arguments: argsPreview,
 			}
 		}
 		if explanation != "" {
-			visibleCall.ExtraContent = &VisibleToolCallExtraContent{
+			visibleCall.ExtraContent = &bus.OutboundToolCallExtraContent{
 				ToolFeedbackExplanation: explanation,
 			}
 		}

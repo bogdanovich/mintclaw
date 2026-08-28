@@ -19,15 +19,19 @@ type CompactInput struct {
 
 // CompactResult describes what was compacted.
 type CompactResult struct {
-	SummariesCreated   []string `json:"summariesCreated"`
-	TokensSaved        int      `json:"tokensSaved"`
-	LeafSummaries      int      `json:"leafSummaries"`
-	CondensedSummaries int      `json:"condensedSummaries"`
+	SummariesCreated    []string `json:"summariesCreated"`
+	TokensSaved         int      `json:"tokensSaved"`
+	TokensBefore        int      `json:"tokensBefore"`
+	TokensAfter         int      `json:"tokensAfter"`
+	TokenCountsObserved bool     `json:"tokenCountsObserved"`
+	LeafSummaries       int      `json:"leafSummaries"`
+	CondensedSummaries  int      `json:"condensedSummaries"`
 }
 
 type condensedRun struct {
-	done chan struct{}
-	err  error
+	done       chan struct{}
+	summaryIDs []string
+	err        error
 }
 
 // NeedsCompaction returns true if context tokens >= ContextThreshold × contextWindow.
@@ -43,11 +47,13 @@ func (e *CompactionEngine) NeedsCompaction(ctx context.Context, convID int64, co
 // Compact runs leaf compaction (sync) and optionally condensed compaction.
 func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input CompactInput) (*CompactResult, error) {
 	result := &CompactResult{}
+	e.observeCompactionStart(ctx, convID, result)
+	defer e.observeCompactionEnd(ctx, convID, result)
 
 	// Phase 1: leaf compaction (synchronous, every turn)
 	summaryID, err := e.compactLeaf(ctx, convID, false)
 	if err != nil {
-		return nil, fmt.Errorf("compact leaf: %w", err)
+		return result, fmt.Errorf("compact leaf: %w", err)
 	}
 	if summaryID != nil {
 		result.SummariesCreated = append(result.SummariesCreated, *summaryID)
@@ -86,7 +92,10 @@ func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input Comp
 		})
 	}
 	if shouldCondense {
-		if err := e.runCondensedSynchronous(ctx, convID); err != nil {
+		condensedIDs, err := e.runCondensedSynchronous(ctx, convID)
+		result.SummariesCreated = append(result.SummariesCreated, condensedIDs...)
+		result.CondensedSummaries += len(condensedIDs)
+		if err != nil {
 			tokensAfter, _ := e.store.GetContextTokenCount(context.WithoutCancel(ctx), convID)
 			if tokensAfter < tokensBefore {
 				result.TokensSaved = tokensBefore - tokensAfter
@@ -103,29 +112,31 @@ func (e *CompactionEngine) Compact(ctx context.Context, convID int64, input Comp
 	return result, nil
 }
 
-func (e *CompactionEngine) runCondensedSynchronous(ctx context.Context, convID int64) error {
+func (e *CompactionEngine) runCondensedSynchronous(ctx context.Context, convID int64) ([]string, error) {
 	run := &condensedRun{done: make(chan struct{})}
 	actual, loaded := e.condensing.LoadOrStore(convID, run)
 	if loaded {
 		running := actual.(*condensedRun)
 		select {
 		case <-running.done:
-			return running.err
+			return append([]string(nil), running.summaryIDs...), running.err
 		case <-ctx.Done():
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
 	}
 	defer func() {
 		close(run.done)
 		e.condensing.Delete(convID)
 	}()
-	run.err = e.runCondensedLoop(ctx, convID)
-	return run.err
+	run.summaryIDs, run.err = e.runCondensedLoop(ctx, convID)
+	return append([]string(nil), run.summaryIDs...), run.err
 }
 
 // CompactUntilUnder aggressively compacts until context is under budget.
 func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, budget int) (*CompactResult, error) {
 	result := &CompactResult{}
+	e.observeCompactionStart(ctx, convID, result)
+	defer e.observeCompactionEnd(ctx, convID, result)
 	prevTokens := 0
 	initialTokens := -1
 	logger.InfoCF("seahorse", "compact_until_under: start", map[string]any{"conv_id": convID, "budget": budget})
@@ -251,6 +262,30 @@ func (e *CompactionEngine) CompactUntilUnder(ctx context.Context, convID int64, 
 		)
 	}
 	return result, nil
+}
+
+func (e *CompactionEngine) observeCompactionStart(ctx context.Context, convID int64, result *CompactResult) {
+	tokens, err := e.store.GetContextTokenCount(ctx, convID)
+	if err != nil {
+		return
+	}
+	result.TokensBefore = tokens
+	result.TokenCountsObserved = true
+}
+
+func (e *CompactionEngine) observeCompactionEnd(ctx context.Context, convID int64, result *CompactResult) {
+	if result == nil || !result.TokenCountsObserved {
+		return
+	}
+	observationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 250*time.Millisecond)
+	defer cancel()
+	tokens, err := e.store.GetContextTokenCount(observationCtx, convID)
+	if err != nil {
+		result.TokenCountsObserved = false
+		return
+	}
+	result.TokensAfter = tokens
+	result.TokensSaved = max(0, result.TokensBefore-result.TokensAfter)
 }
 
 func (e *CompactionEngine) summaryPrefixMaxTokens(totalBudget int) int {
@@ -875,31 +910,33 @@ func (e *CompactionEngine) generateCondensedSummary(ctx context.Context, summari
 // b) No candidate found (nothing to condense), OR
 // c) tokensAfter >= tokensBefore (no progress this iteration), OR
 // d) tokensAfter >= previousTokens (no improvement over last iteration)
-func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) error {
+func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) ([]string, error) {
+	var summaryIDs []string
 	var prevTokens int
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return summaryIDs, ctx.Err()
 		default:
 		}
 
 		tokensBefore, err := e.store.GetContextTokenCount(ctx, convID)
 		if err != nil {
 			logger.ErrorCF("seahorse", "condensed: get tokens", map[string]any{"error": err.Error()})
-			return fmt.Errorf("condensed get tokens: %w", err)
+			return summaryIDs, fmt.Errorf("condensed get tokens: %w", err)
 		}
 
 		condensedID, err := e.compactCondensed(ctx, convID)
 		if err != nil {
 			logger.ErrorCF("seahorse", "condensed: compact", map[string]any{"error": err.Error()})
-			return fmt.Errorf("condensed compact: %w", err)
+			return summaryIDs, fmt.Errorf("condensed compact: %w", err)
 		}
 		if condensedID == nil {
 			// No candidate found
 			logger.DebugCF("seahorse", "condensed: no candidate", map[string]any{"conv_id": convID})
-			return nil
+			return summaryIDs, nil
 		}
+		summaryIDs = append(summaryIDs, *condensedID)
 
 		tokensAfter, _ := e.store.GetContextTokenCount(ctx, convID)
 
@@ -910,7 +947,7 @@ func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) e
 				"condensed: no progress",
 				map[string]any{"conv_id": convID, "tokens_before": tokensBefore, "tokens_after": tokensAfter},
 			)
-			return nil
+			return summaryIDs, nil
 		}
 		if tokensAfter >= prevTokens && prevTokens > 0 {
 			// No improvement over last iteration
@@ -919,7 +956,7 @@ func (e *CompactionEngine) runCondensedLoop(ctx context.Context, convID int64) e
 				"condensed: no improvement",
 				map[string]any{"conv_id": convID, "tokens": tokensAfter},
 			)
-			return nil
+			return summaryIDs, nil
 		}
 
 		prevTokens = tokensAfter

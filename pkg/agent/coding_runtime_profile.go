@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,7 +28,11 @@ type CodingRuntimeProfile struct {
 // resolved coding layout. Implementations open only layout-derived paths.
 type CodingRuntimeStoreFactory interface {
 	NewSessionStore(layout CodingRuntimeLayout) (session.SessionStore, error)
-	NewSeahorseEngine(config seahorse.Config, complete seahorse.CompleteFn) (*seahorse.Engine, error)
+	NewSeahorseEngine(
+		context.Context,
+		seahorse.Config,
+		seahorse.CompleteFn,
+	) (*seahorse.Engine, error)
 }
 
 type defaultCodingRuntimeStoreFactory struct{}
@@ -37,10 +42,11 @@ func (defaultCodingRuntimeStoreFactory) NewSessionStore(layout CodingRuntimeLayo
 }
 
 func (defaultCodingRuntimeStoreFactory) NewSeahorseEngine(
+	ctx context.Context,
 	config seahorse.Config,
 	complete seahorse.CompleteFn,
 ) (*seahorse.Engine, error) {
-	return seahorse.NewEngine(config, complete)
+	return seahorse.NewEngine(ctx, config, complete)
 }
 
 // CodingRuntimeBinding binds one configured runtime agent to a coding thread.

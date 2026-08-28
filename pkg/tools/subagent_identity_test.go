@@ -13,13 +13,40 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-func NewSubagentManager(
+func newTestSubagentManager(
+	t *testing.T,
 	defaultModel, workspace string,
+	spawners ...SubTurnSpawner,
 ) *SubagentManager {
-	return NewSubagentManagerWithRegistry(
+	t.Helper()
+	spawner := SubTurnSpawner(&mockSpawner{})
+	if len(spawners) > 0 {
+		spawner = spawners[0]
+	}
+	return newTestSubagentManagerWithRegistry(
+		t,
 		defaultModel,
 		taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(workspace)),
+		spawner,
 	)
+}
+
+func newTestSubagentManagerWithRegistry(
+	t *testing.T,
+	defaultModel string,
+	registry *taskregistry.Registry,
+	spawner SubTurnSpawner,
+) *SubagentManager {
+	t.Helper()
+	manager, err := NewSubagentManager(SubagentManagerConfig{
+		DefaultModel: defaultModel,
+		Spawner:      spawner,
+		TaskRegistry: registry,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manager
 }
 
 func TestSubagentManagersSharingRegistryAllocateDistinctTaskIDs(t *testing.T) {
@@ -27,10 +54,8 @@ func TestSubagentManagersSharingRegistryAllocateDistinctTaskIDs(t *testing.T) {
 	registry := taskregistry.NewRegistry(
 		taskregistry.WorkspaceStorePath(workspace),
 	)
-	first := NewSubagentManagerWithRegistry("model", registry)
-	second := NewSubagentManagerWithRegistry("model", registry)
-	first.SetSpawner(&mockSpawner{})
-	second.SetSpawner(&mockSpawner{})
+	first := newTestSubagentManagerWithRegistry(t, "model", registry, &mockSpawner{})
+	second := newTestSubagentManagerWithRegistry(t, "model", registry, &mockSpawner{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -78,8 +103,7 @@ func TestSubagentSpawnFailsBeforeLaunchWhenTaskCreateFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := taskregistry.NewRegistry(filepath.Join(blocked, "tasks.json"))
-	manager := NewSubagentManagerWithRegistry("model", registry)
-	manager.SetSpawner(&mockSpawner{})
+	manager := newTestSubagentManagerWithRegistry(t, "model", registry, &mockSpawner{})
 
 	_, err := manager.Spawn(
 		context.Background(),
@@ -101,7 +125,7 @@ func TestSubagentSpawnFailsBeforeLaunchWhenTaskCreateFails(t *testing.T) {
 
 func TestSubagentStatusUpdatePreservesDurableGeneration(t *testing.T) {
 	registry := taskregistry.NewRegistry(filepath.Join(t.TempDir(), "tasks.json"))
-	manager := NewSubagentManagerWithRegistry("model", registry)
+	manager := newTestSubagentManagerWithRegistry(t, "model", registry, &mockSpawner{})
 	now := time.Now().UnixMilli()
 	task := taskregistry.Record{
 		TaskID: "subagent-" + strings.Repeat("a", 36), Runtime: taskregistry.RuntimeSubagent,
@@ -140,7 +164,7 @@ func TestSubagentStatusUpdatePreservesDurableGeneration(t *testing.T) {
 
 func TestSubagentResultPersistsTerminalStateAndPayloadTogether(t *testing.T) {
 	registry := taskregistry.NewRegistry(filepath.Join(t.TempDir(), "tasks.json"))
-	manager := NewSubagentManagerWithRegistry("model", registry)
+	manager := newTestSubagentManagerWithRegistry(t, "model", registry, &mockSpawner{})
 	now := time.Now().UnixMilli()
 	task := taskregistry.Record{
 		TaskID: "subagent-" + strings.Repeat("b", 36), Runtime: taskregistry.RuntimeSubagent,

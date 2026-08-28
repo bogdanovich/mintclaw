@@ -18,14 +18,14 @@ func normalizeAnthropicError(err error) error {
 		status, header := anthropicHTTPMetadata(apiErr)
 		raw := []byte(apiErr.RawJSON())
 		normalized := providererrors.FromHTTPResponse(status, header, raw, err)
-		applyAnthropicContextCompatibilityFallback(normalized, raw)
+		refineAnthropicContextError(normalized, raw)
 		return normalized
 	}
 	if normalized, ok := providererrors.FromTransportError(err); ok {
 		return normalized
 	}
 	// The SDK can surface local decode/stream failures without typed metadata.
-	// Keep this compatibility path explicit for downstream legacy classification.
+	// Preserve the original cause for the shared error classifier.
 	return fmt.Errorf("claude API call: %w", err)
 }
 
@@ -55,7 +55,7 @@ func normalizeAnthropicCredentialError(err error) error {
 	}
 }
 
-func applyAnthropicContextCompatibilityFallback(normalized *providererrors.ProviderError, raw []byte) {
+func refineAnthropicContextError(normalized *providererrors.ProviderError, raw []byte) {
 	if normalized == nil || normalized.Kind != providererrors.KindInvalidRequest {
 		return
 	}

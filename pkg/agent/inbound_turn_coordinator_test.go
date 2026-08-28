@@ -1418,7 +1418,7 @@ func TestInboundTurnCoordinatorHandlesSubagentsBeforeSessionClaim(t *testing.T) 
 			if !strings.Contains(outbound.Content, tt.wantReply) {
 				t.Fatalf("/subagents reply = %q, want substring %q", outbound.Content, tt.wantReply)
 			}
-			metadata := bus.OutboundMetadataFromMessage(outbound)
+			metadata := outbound.Metadata
 			if metadata.IsInterim() != tt.wantInterim || metadata.IsFinal() == tt.wantInterim {
 				t.Fatalf(
 					"/subagents outbound metadata = %#v, want interim=%v",
@@ -1475,7 +1475,7 @@ func TestInboundTurnCoordinatorActiveSubagentsDoesNotFinalizeToolFeedback(t *tes
 		msg := outboundMessageForTurnWithOptions(
 			activeTurn,
 			content,
-			outboundTurnMessageOptions{kind: messageKindToolFeedback},
+			outboundTurnMessageOptions{kind: bus.OutboundMessageKindToolFeedback},
 		)
 		if err := al.bus.PublishOutbound(t.Context(), msg); err != nil {
 			t.Fatalf("PublishOutbound(%q) error = %v", content, err)
@@ -1492,7 +1492,7 @@ func TestInboundTurnCoordinatorActiveSubagentsDoesNotFinalizeToolFeedback(t *tes
 	})
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
 	inspection := receiveCoordinatorFeedbackChannelMessage(t, channel, "turn-active")
-	metadata := bus.OutboundMetadataFromMessage(inspection)
+	metadata := inspection.Metadata
 	if !metadata.IsInterim() || metadata.IsFinal() {
 		t.Fatalf("active /subagents metadata = %#v, want interim", metadata)
 	}

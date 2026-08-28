@@ -2576,12 +2576,22 @@ func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testin
 	objectiveArgs := []any{map[string]any{"item": "inspect listings", "kind": "result"}}
 
 	t.Run("spawn", func(t *testing.T) {
-		manager := tools.NewSubagentManagerWithRegistry(
-			"test-model",
-			taskregistry.NewRegistry(filepath.Join(t.TempDir(), "tasks.jsonl")),
-		)
-		spawnTool := tools.NewSpawnTool(manager)
-		manager.SetSpawner(NewSubTurnSpawner(al))
+		manager, err := tools.NewSubagentManager(tools.SubagentManagerConfig{
+			DefaultModel: "test-model",
+			Spawner:      NewSubTurnSpawner(al),
+			TaskRegistry: taskregistry.NewRegistry(filepath.Join(t.TempDir(), "tasks.jsonl")),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		spawnTool, err := tools.NewSpawnTool(tools.SpawnToolConfig{
+			Manager:                    manager,
+			AllowTarget:                func(string) bool { return true },
+			RequiresObjectiveChecklist: func(string) bool { return false },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		completed := make(chan *toolshared.ToolResult, 1)
 		result := spawnTool.ExecuteAsync(ctx, map[string]any{
 			"agent_id":        "beta",
@@ -2602,8 +2612,16 @@ func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testin
 	})
 
 	t.Run("delegate", func(t *testing.T) {
-		delegateTool := tools.NewDelegateTool()
-		delegateTool.SetSpawner(NewSubTurnSpawner(al))
+		delegateTool, err := tools.NewDelegateTool(tools.DelegateToolConfig{
+			Spawner:                    NewSubTurnSpawner(al),
+			AllowTarget:                func(string) bool { return true },
+			RequiresObjectiveChecklist: func(string) bool { return false },
+			SelfAgentID:                "alpha",
+			TaskRegistry:               taskregistry.NewRegistry(filepath.Join(t.TempDir(), "tasks.jsonl")),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 		result := delegateTool.Execute(ctx, map[string]any{
 			"agent_id":        "beta",
 			"task":            "inspect listings",

@@ -40,9 +40,7 @@ func statusCmd() {
 	}
 
 	if configOK {
-		// MintClaw moved to a model-centric configuration (model_list). Status should
-		// not depend on a legacy cfg.Providers field (which may not exist under some
-		// build tags). We infer provider availability from model_list entries.
+		// Infer provider availability from the current model_list entries.
 		hasProtocolKey := func(protocol string) bool {
 			want := providers.NormalizeProvider(protocol)
 			for _, m := range cfg.ModelList {

@@ -270,15 +270,12 @@ func (al *AgentLoop) publishResponseWithMetadataAndScopes(
 
 	msg.TraceSettlement = len(msg.TraceScopes) > 0
 	if policy == finalResponseAlwaysPublish && messageToolSentToSameChat {
-		if msg.Context.Raw == nil {
-			msg.Context.Raw = make(map[string]string, 1)
-		}
-		msg.Context.Raw[metadataKeyMessageKind] = messageKindFinalReply
+		msg.Metadata.MessageKind = bus.OutboundMessageKindFinalReply
 	}
 	if sessionKey != "" {
 		msg.ContextUsage = computeContextUsage(agent, sessionKey)
 	}
-	metadata.ApplyToContext(&msg.Context)
+	msg.Metadata = msg.Metadata.Merge(metadata)
 	if !metadata.IsInterim() {
 		markFinalOutbound(&msg)
 	}
@@ -324,23 +321,17 @@ func (al *AgentLoop) deliverFinalTurnResult(
 		opts.Dispatch.ChatID(),
 		opts.Dispatch.ReplyToMessageID(),
 	)
-	if result.preferNewOutboundReply || agentMessageToolSentToTurnTarget(agent, sessionKey, opts.Dispatch) {
-		outboundCtx = outboundContextWithMessageKind(
-			opts.Dispatch.InboundContext,
-			opts.Dispatch.Channel(),
-			opts.Dispatch.ChatID(),
-			opts.Dispatch.ReplyToMessageID(),
-			messageKindFinalReply,
-		)
-	}
-	bus.OutboundMetadata{
+	metadata := bus.OutboundMetadata{
 		OutboundKind:      bus.OutboundKindFinal,
 		ModelName:         result.modelName,
 		DefaultModelName:  result.defaultModelName,
 		UsageInputTokens:  result.usageInputTokens,
 		UsageOutputTokens: result.usageOutputTokens,
 		UsageTotalTokens:  result.usageTotalTokens,
-	}.ApplyToContext(&outboundCtx)
+	}
+	if result.preferNewOutboundReply || agentMessageToolSentToTurnTarget(agent, sessionKey, opts.Dispatch) {
+		metadata.MessageKind = bus.OutboundMessageKindFinalReply
+	}
 
 	if result.deliverable != nil && len(mediaArtifactRefs(result.deliverable.Artifacts)) > 0 {
 		ts := &turnState{
@@ -374,7 +365,7 @@ func (al *AgentLoop) deliverFinalTurnResult(
 		return
 	}
 	al.deliverFinalTurnText(
-		ctx, traceScope, agent, opts, outboundCtx, agentID, sessionKey, scope, result.finalContent,
+		ctx, traceScope, agent, opts, outboundCtx, metadata, agentID, sessionKey, scope, result.finalContent,
 	)
 }
 
@@ -400,12 +391,14 @@ func (al *AgentLoop) deliverFinalTurnText(
 	agent *AgentInstance,
 	opts turnSpec,
 	outboundCtx bus.InboundContext,
+	metadata bus.OutboundMetadata,
 	agentID, sessionKey string,
 	scope *bus.OutboundScope,
 	content string,
 ) {
 	msg := bus.OutboundMessage{
 		Context:      outboundCtx,
+		Metadata:     metadata,
 		AgentID:      agentID,
 		SessionKey:   sessionKey,
 		Scope:        scope,
@@ -469,7 +462,7 @@ func (al *AgentLoop) deliverToolResultToUser(
 	result *toolshared.ToolResult,
 	toolName string,
 ) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
-	return al.deliverToolResultToUserWithScopes(ctx, ts, result, toolName, nil)
+	return al.deliverToolResultToUserWithScopes(ctx, ts, result, toolName, nil, bus.OutboundMetadata{})
 }
 
 func (al *AgentLoop) deliverToolResultToUserWithScopes(
@@ -478,6 +471,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	result *toolshared.ToolResult,
 	toolName string,
 	traceScopes []runtimeevents.TraceScope,
+	metadata bus.OutboundMetadata,
 ) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 	if al == nil || ts == nil || result == nil {
 		return nil, toolResultDeliveryNone, nil
@@ -496,7 +490,9 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	al.ensureFinalHandledOutbound(ts, result)
 
 	if result.Delivery.Outbound != nil {
-		return al.deliverExplicitToolOutbound(ctx, ts, result, toolName, traceScopes, traceSettlement)
+		return al.deliverExplicitToolOutbound(
+			ctx, ts, result, toolName, traceScopes, traceSettlement, metadata,
+		)
 	}
 
 	mediaRefs := toolResultMediaRefs(result)
@@ -512,12 +508,13 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 				ts.chatID,
 				ts.opts.Dispatch.ReplyToMessageID(),
 			),
+			Metadata:   metadata,
 			AgentID:    ts.agent.ID,
 			SessionKey: ts.sessionKey,
 			Scope:      outboundScopeFromSessionScope(ts.opts.Dispatch.SessionScope),
 			Parts:      parts,
 		}
-		applyToolResultOutboundMetadata(result, &outboundMedia.Context)
+		applyToolResultOutboundMetadata(result, &outboundMedia.Metadata)
 		if err := bus.SetOutboundMediaTraceScopes(&outboundMedia, traceScopes); err != nil {
 			return nil, toolResultDeliveryNone, err
 		}
@@ -558,8 +555,9 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 			if result.Delivery.IsFinalHandled() {
 				// Queued implicit media is not the final turn output: sync delivery
 				// gives ownership back to the model when no direct media route exists.
-				bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim}.
-					ApplyToContext(&outboundMedia.Context)
+				outboundMedia.Metadata = outboundMedia.Metadata.Merge(
+					bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim},
+				)
 			}
 			receipt, err := al.publishTransactionMediaReceiptAtBoundary(
 				ctx,
@@ -593,11 +591,11 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	if al.bus == nil {
 		return nil, toolResultDeliveryNone, nil
 	}
-	outbound, err := outboundMessageForTraceSettlement(ts, text, traceScopes)
+	outbound, err := outboundMessageForTraceSettlement(ts, text, traceScopes, metadata)
 	if err != nil {
 		return nil, toolResultDeliveryNone, err
 	}
-	applyToolResultOutboundMetadata(result, &outbound.Context)
+	applyToolResultOutboundMetadata(result, &outbound.Metadata)
 	outbound.TraceSettlement = traceSettlement
 	receipt, err := al.publishTransactionMessageReceiptAtBoundary(
 		ctx,
@@ -655,6 +653,7 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 	toolName string,
 	traceScopes []runtimeevents.TraceScope,
 	traceSettlement bool,
+	metadata bus.OutboundMetadata,
 ) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 	out := result.Delivery.Outbound
 	if out == nil {
@@ -683,13 +682,14 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 			Channel:    channel,
 			ChatID:     chatID,
 			Context:    outboundCtx,
+			Metadata:   metadata,
 			AgentID:    agentID,
 			SessionKey: ts.sessionKey,
 			Scope:      outboundScopeFromSessionScope(ts.opts.Dispatch.SessionScope),
 			Parts:      append([]bus.MediaPart(nil), out.Media...),
 			Recovery:   out.Recovery,
 		}
-		applyToolResultOutboundMetadata(result, &outboundMedia.Context)
+		applyToolResultOutboundMetadata(result, &outboundMedia.Metadata)
 		if err := bus.SetOutboundMediaTraceScopes(&outboundMedia, traceScopes); err != nil {
 			return nil, toolResultDeliveryNone, err
 		}
@@ -766,13 +766,14 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		Channel:          channel,
 		ChatID:           chatID,
 		Context:          outboundCtx,
+		Metadata:         metadata,
 		AgentID:          agentID,
 		SessionKey:       ts.sessionKey,
 		Scope:            outboundScopeFromSessionScope(ts.opts.Dispatch.SessionScope),
 		Content:          out.Text,
 		ReplyToMessageID: replyToMessageID,
 	}
-	applyToolResultOutboundMetadata(result, &outboundMessage.Context)
+	applyToolResultOutboundMetadata(result, &outboundMessage.Metadata)
 	if err := bus.SetOutboundTraceScopes(&outboundMessage, traceScopes); err != nil {
 		return nil, toolResultDeliveryNone, err
 	}
@@ -960,8 +961,8 @@ func setConfirmedToolDeliveryText(result *toolshared.ToolResult, mediaCount int)
 	result.ForLLM = "Message confirmed delivered to the user."
 }
 
-func applyToolResultOutboundMetadata(result *toolshared.ToolResult, outboundCtx *bus.InboundContext) {
-	if result == nil {
+func applyToolResultOutboundMetadata(result *toolshared.ToolResult, metadata *bus.OutboundMetadata) {
+	if result == nil || metadata == nil {
 		return
 	}
 	kind := ""
@@ -972,7 +973,7 @@ func applyToolResultOutboundMetadata(result *toolshared.ToolResult, outboundCtx 
 		kind = bus.OutboundKindInterim
 	}
 	if kind != "" {
-		bus.OutboundMetadata{OutboundKind: kind}.ApplyToContext(outboundCtx)
+		*metadata = metadata.Merge(bus.OutboundMetadata{OutboundKind: kind})
 	}
 }
 

@@ -148,7 +148,7 @@ func TestRetrievalScopeDefaultsToConversationMaximum(t *testing.T) {
 }
 
 func TestNewEngineRejectsInvalidMaxRetrievalScope(t *testing.T) {
-	_, err := NewEngine(Config{
+	_, err := NewEngine(t.Context(), Config{
 		DBPath:            t.TempDir() + "/seahorse.db",
 		MaxRetrievalScope: "global",
 	}, nil)

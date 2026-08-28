@@ -86,7 +86,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	frontendCtx, cancelFrontend := context.WithCancel(ctx)
 	defer cancelFrontend()
 
-	model, err := NewModelWithContext(frontendCtx, controller)
+	model, err := NewModel(frontendCtx, controller)
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)
 	}

@@ -37,7 +37,7 @@ func (al *AgentLoop) tryHandleStopCommand(
 		}
 	}
 
-	return true, al.publishStopReply(ctx, msg, scope, agentID, result, err)
+	return true, al.publishStopReply(ctx, msg, scope, agentID, result, err, bus.OutboundMetadata{})
 }
 
 func (al *AgentLoop) publishStopReply(
@@ -47,6 +47,7 @@ func (al *AgentLoop) publishStopReply(
 	agentID string,
 	result commands.StopResult,
 	stopErr error,
+	metadata bus.OutboundMetadata,
 ) finalResponseAdmission {
 	reply := commands.FormatStopReply(result)
 	if stopErr != nil {
@@ -57,7 +58,7 @@ func (al *AgentLoop) publishStopReply(
 		al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
 	}
 	al.resetMessageToolRound(scope, agentID)
-	return al.publishResponseWithContextIfNeeded(
+	return al.publishResponseWithMetadataAndScopes(
 		ctx,
 		scope.workspace,
 		agentID,
@@ -67,6 +68,8 @@ func (al *AgentLoop) publishStopReply(
 		reply,
 		&msg.Context,
 		finalResponseSuppressIfMessageToolSent,
+		metadata,
+		nil,
 	)
 }
 

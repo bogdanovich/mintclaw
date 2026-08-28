@@ -2,14 +2,12 @@ package mintclaw
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
-	"github.com/bogdanovich/mintclaw/pkg/utils"
 )
 
 // mintclawConn represents a single WebSocket connection.
@@ -208,7 +206,7 @@ func setOutboundIdentityPayload(payload map[string]any, msg bus.OutboundMessage)
 	if strings.TrimSpace(msg.SessionKey) != "" {
 		payload[PayloadKeySessionKey] = strings.TrimSpace(msg.SessionKey)
 	}
-	requestID := strings.TrimSpace(msg.Context.Raw[bus.OutboundMetadataKeyRequestID])
+	requestID := strings.TrimSpace(msg.Metadata.RequestID)
 	if requestID == "" {
 		requestID = strings.TrimSpace(msg.Context.MessageID)
 	}
@@ -219,15 +217,15 @@ func setOutboundIdentityPayload(payload map[string]any, msg bus.OutboundMessage)
 		requestID = strings.TrimSpace(msg.Context.ReplyToMessageID)
 	}
 	if requestID != "" {
-		payload["request_id"] = requestID
+		payload[PayloadKeyRequestID] = requestID
 	}
 	if len(msg.TraceScopes) > 0 {
 		payload[PayloadKeyTraceScopes] = msg.TraceScopes
 	}
-	if interactionID := strings.TrimSpace(msg.Context.Raw[PayloadKeyInteractionID]); interactionID != "" {
+	if interactionID := strings.TrimSpace(msg.Metadata.InteractionID); interactionID != "" {
 		payload[PayloadKeyInteractionID] = interactionID
 	}
-	if shortID := strings.TrimSpace(msg.Context.Raw[PayloadKeyInteractionShortID]); shortID != "" {
+	if shortID := strings.TrimSpace(msg.Metadata.InteractionShortID); shortID != "" {
 		payload[PayloadKeyInteractionShortID] = shortID
 	}
 }
@@ -253,7 +251,7 @@ func setStreamingAgentPayload(payload map[string]any, agentID string) {
 
 func setStreamingRequestPayload(payload map[string]any, requestID string) {
 	if strings.TrimSpace(requestID) != "" {
-		payload[bus.OutboundMetadataKeyRequestID] = strings.TrimSpace(requestID)
+		payload[PayloadKeyRequestID] = strings.TrimSpace(requestID)
 	}
 }
 
@@ -272,15 +270,9 @@ func setOutboundControlPayload(payload map[string]any, metadata bus.OutboundMeta
 	}
 }
 
-func mintclawToolCallsPayload(msg bus.OutboundMessage) ([]utils.VisibleToolCall, bool) {
-	raw := strings.TrimSpace(msg.Context.Raw[PayloadKeyToolCalls])
-	if raw == "" {
+func mintclawToolCallsPayload(msg bus.OutboundMessage) ([]bus.OutboundToolCall, bool) {
+	if len(msg.Metadata.ToolCalls) == 0 {
 		return nil, false
 	}
-
-	var toolCalls []utils.VisibleToolCall
-	if err := json.Unmarshal([]byte(raw), &toolCalls); err != nil || len(toolCalls) == 0 {
-		return nil, false
-	}
-	return toolCalls, true
+	return msg.Metadata.ToolCalls, true
 }

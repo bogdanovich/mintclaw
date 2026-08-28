@@ -1467,10 +1467,12 @@ func TestUnregisterChannel_RetiresToolFeedbackBeforeReplacement(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "working",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 	if _, _, _, err := sendWithRetryTuple(m, context.Background(), "test", owner.Worker(), feedback); err != nil {
@@ -3012,10 +3014,12 @@ func TestSendWithRetry_ToolFeedbackLifecycleOwnedByManager(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "Working...\n- tool: exec",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 	ids, sent, _, err := sendWithRetryTuple(m, context.Background(), "test", w, feedback)
@@ -3067,10 +3071,12 @@ func TestSendWithRetry_ToolFeedbackPreservesDeliveryResult(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "Working...\n- tool: exec",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 
@@ -3129,10 +3135,12 @@ func TestSendWithRetry_ToolFeedbackDeliversKnownRemainder(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "Working...\n- tool: exec",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 
@@ -3172,10 +3180,12 @@ func TestSendWithRetry_FinalSendsBeforeProgressDelete(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "Working...",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, context.Background(), "test", w, feedback); err != nil || !sent {
@@ -3185,10 +3195,12 @@ func TestSendWithRetry_FinalSendsBeforeProgressDelete(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "done",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindFinalReply,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "final_reply"},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, context.Background(), "test", w, final); err != nil || !sent {
@@ -3215,10 +3227,12 @@ func TestSendWithRetry_FailedFinalKeepsProgressEditable(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "Working...",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 	if _, _, _, err := sendWithRetryTuple(m, context.Background(), "test", w, feedback); err != nil {
@@ -3231,10 +3245,12 @@ func TestSendWithRetry_FailedFinalKeepsProgressEditable(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "done",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindFinalReply,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "final_reply"},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, context.Background(), "test", w, final); err == nil || sent {
@@ -3269,9 +3285,9 @@ func TestLogicalSplitFailureKeepsProgressEditable(t *testing.T) {
 			feedback := testOutboundMessage(bus.OutboundMessage{
 				Channel: "test", ChatID: "chat-1", Content: "work",
 				TraceScopes: []runtimeevents.TraceScope{traceScope},
+				Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 				Context: bus.InboundContext{
 					Channel: "test", ChatID: "chat-1",
-					Raw: map[string]string{"message_kind": "tool_feedback"},
 				},
 			})
 			if _, sent, _, err := sendWithRetryTuple(m,
@@ -3285,9 +3301,12 @@ func TestLogicalSplitFailureKeepsProgressEditable(t *testing.T) {
 			final := testOutboundMessage(bus.OutboundMessage{
 				Channel: "test", ChatID: "chat-1", Content: "hello world",
 				TraceScopes: []runtimeevents.TraceScope{traceScope},
+				Metadata: bus.OutboundMetadata{
+					MessageKind:  bus.OutboundMessageKindFinalReply,
+					OutboundKind: bus.OutboundKindFinal,
+				},
 				Context: bus.InboundContext{
 					Channel: "test", ChatID: "chat-1",
-					Raw: map[string]string{"message_kind": "final_reply", "outbound_kind": "final"},
 				},
 			})
 			if mode == "synchronous" {
@@ -3329,10 +3348,12 @@ func TestSendWithRetry_UneditableToolFeedbackSendsReplacement(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "first",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 	if _, _, _, err := sendWithRetryTuple(m, context.Background(), "test", w, feedback); err != nil {
@@ -3346,10 +3367,12 @@ func TestSendWithRetry_UneditableToolFeedbackSendsReplacement(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "done",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindFinalReply,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "chat-1",
-			Raw:     map[string]string{"message_kind": "final_reply"},
 		},
 	})
 	if _, _, _, err := sendWithRetryTuple(m, context.Background(), "test", w, final); err != nil {
@@ -3388,11 +3411,11 @@ func TestSendMediaWithRetry_BlocksSameTurnLateFeedback(t *testing.T) {
 		ChatID:      "chat-1",
 		Content:     "Working...",
 		TraceScopes: []runtimeevents.TraceScope{turnOneScope},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel:   "test",
 			ChatID:    "chat-1",
 			MessageID: "turn-1",
-			Raw:       map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 	ids, sent, _, err := sendWithRetryTuple(m, context.Background(), "test", w, feedback)
@@ -3429,9 +3452,9 @@ func TestInterimOutboundAllowsLaterSameTurnFeedback(t *testing.T) {
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "chat-1", SessionKey: "session-1", Content: "checking",
 		TraceScopes: []runtimeevents.TraceScope{traceScope},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "chat-1",
-			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
@@ -3441,9 +3464,9 @@ func TestInterimOutboundAllowsLaterSameTurnFeedback(t *testing.T) {
 	interim := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "chat-1", SessionKey: "session-1", Content: "checking services",
 		TraceScopes: []runtimeevents.TraceScope{traceScope},
+		Metadata:    bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "chat-1",
-			Raw: map[string]string{bus.OutboundMetadataKeyOutboundKind: bus.OutboundKindInterim},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, interim); err != nil || !sent {
@@ -3476,19 +3499,19 @@ func TestInterimMediaAllowsLaterSameTurnFeedback(t *testing.T) {
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "chat-1", SessionKey: "session-1", Content: "creating image",
 		TraceScopes: []runtimeevents.TraceScope{traceScope},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "chat-1",
-			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
 		t.Fatalf("initial feedback = (%v, %v)", sent, err)
 	}
 
-	mediaContext := bus.InboundContext{Channel: "test", ChatID: "chat-1", MessageID: "turn-1"}
-	bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim}.ApplyToContext(&mediaContext)
 	interim := testOutboundMediaMessage(bus.OutboundMediaMessage{
-		Channel: "test", ChatID: "chat-1", SessionKey: "session-1", Context: mediaContext,
+		Channel: "test", ChatID: "chat-1", SessionKey: "session-1",
+		Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1", MessageID: "turn-1"},
+		Metadata:    bus.OutboundMetadata{OutboundKind: bus.OutboundKindInterim},
 		TraceScopes: []runtimeevents.TraceScope{traceScope},
 	})
 	if _, err := sendMediaWithRetryTuple(m, t.Context(), "test", w, interim); err != nil {
@@ -3515,9 +3538,9 @@ func TestToolFeedbackLifecycle_IsolatedByTurnScope(t *testing.T) {
 		return testOutboundMessage(bus.OutboundMessage{
 			Channel: "test", ChatID: "chat-1", Content: content,
 			TraceScopes: []runtimeevents.TraceScope{scope},
+			Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 			Context: bus.InboundContext{
 				Channel: "test", ChatID: "chat-1",
-				Raw: map[string]string{"message_kind": "tool_feedback"},
 			},
 		})
 	}
@@ -3564,9 +3587,9 @@ func TestDismissToolFeedback_MissingIdentityDoesNotGuessScopedTarget(t *testing.
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "chat-1", Content: "working",
 		TraceScopes: []runtimeevents.TraceScope{traceScope},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "chat-1",
-			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
@@ -3608,9 +3631,9 @@ func TestDismissToolFeedback_PreservesSessionAndTurnIdentity(t *testing.T) {
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "chat-1", SessionKey: "session-1", Content: "working",
 		TraceScopes: []runtimeevents.TraceScope{traceScope},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "chat-1",
-			Raw: map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 	if _, _, _, err := sendWithRetryTuple(m, context.Background(), "test", w, feedback); err != nil {
@@ -3645,9 +3668,9 @@ func TestToolFeedbackCarrierPausesAcrossApprovalAndResumesInPlace(t *testing.T) 
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working",
 		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "chat-1",
-			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
@@ -3663,10 +3686,10 @@ func TestToolFeedbackCarrierPausesAcrossApprovalAndResumesInPlace(t *testing.T) 
 		TraceScopes: []runtimeevents.TraceScope{turnOne},
 		Context:     bus.InboundContext{Channel: "test", ChatID: "chat-1"},
 	})
-	bus.OutboundMetadata{
+	approval.Metadata = bus.OutboundMetadata{
 		InteractionKind:     bus.OutboundInteractionApproval,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
-	}.ApplyToContext(&approval.Context)
+	}
 	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, approval); err != nil || !sent {
 		t.Fatalf("approval prompt = (%v, %v)", sent, err)
 	}
@@ -3740,9 +3763,9 @@ func TestDismissToolFeedback_StableSessionWithoutTraceRetainsGenerationTombstone
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working",
 		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "chat-1",
-			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
@@ -3777,9 +3800,9 @@ func TestAbsorbedFinalTerminalizesItsFeedbackGeneration(t *testing.T) {
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working A",
 		TraceScopes: []runtimeevents.TraceScope{turnA},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "chat-1",
-			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
@@ -3823,9 +3846,9 @@ func TestFinalOutboundTerminalizesAllCorrelatedToolFeedbackGenerations(t *testin
 	feedback := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "chat-1", SessionKey: "task-session", Content: "working",
 		TraceScopes: []runtimeevents.TraceScope{turnOne},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "chat-1",
-			Raw: map[string]string{bus.OutboundMetadataKeyMessageKind: bus.OutboundMessageKindToolFeedback},
 		},
 	})
 	if _, sent, _, err := sendWithRetryTuple(m, t.Context(), "test", w, feedback); err != nil || !sent {
@@ -3880,9 +3903,9 @@ func TestDismissToolFeedback_StableSessionSpansTurnScopes(t *testing.T) {
 					TraceScopes: []runtimeevents.TraceScope{
 						runtimeevents.NewTraceScope("/workspace/main", turnID),
 					},
+					Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 					Context: bus.InboundContext{
 						Channel: "test", ChatID: "chat-1",
-						Raw: map[string]string{"message_kind": "tool_feedback"},
 					},
 				})
 				if _, _, _, err := sendWithRetryTuple(m,
@@ -3943,9 +3966,9 @@ func TestToolFeedbackTerminal_StableSessionSpansTurnScopes(t *testing.T) {
 					TraceScopes: []runtimeevents.TraceScope{
 						runtimeevents.NewTraceScope("/workspace/main", turnID),
 					},
+					Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 					Context: bus.InboundContext{
 						Channel: "test", ChatID: "chat-1",
-						Raw: map[string]string{"message_kind": "tool_feedback"},
 					},
 				})
 				if _, _, _, err := sendWithRetryTuple(m,
@@ -3956,9 +3979,9 @@ func TestToolFeedbackTerminal_StableSessionSpansTurnScopes(t *testing.T) {
 			}
 			final := testOutboundMessage(bus.OutboundMessage{
 				Channel: "test", ChatID: "chat-1", SessionKey: "session-1", Content: "done",
+				Metadata: bus.OutboundMetadata{OutboundKind: bus.OutboundKindFinal},
 				Context: bus.InboundContext{
 					Channel: "test", ChatID: "chat-1",
-					Raw: map[string]string{"outbound_kind": "final"},
 				},
 			})
 			if _, _, _, err := sendWithRetryTuple(m,
@@ -4004,9 +4027,12 @@ func TestGetStreamer_FinalizedStateIsTurnScoped(t *testing.T) {
 		return testOutboundMessage(bus.OutboundMessage{
 			Channel: "test", ChatID: "chat-1", SessionKey: "session-1", Content: content,
 			TraceScopes: []runtimeevents.TraceScope{scope},
+			Metadata: bus.OutboundMetadata{
+				MessageKind:  bus.OutboundMessageKindFinalReply,
+				OutboundKind: bus.OutboundKindFinal,
+			},
 			Context: bus.InboundContext{
 				Channel: "test", ChatID: "chat-1",
-				Raw: map[string]string{"message_kind": "final_reply", "outbound_kind": "final"},
 			},
 		})
 	}
@@ -4050,9 +4076,9 @@ func TestGetStreamer_UnscopedFallbackMatchesSingleScopedStreamWithoutSession(t *
 	message := func(kind, content string) bus.OutboundMessage {
 		return testOutboundMessage(bus.OutboundMessage{
 			Channel: "test", ChatID: "chat-1", Content: content,
+			Metadata: bus.OutboundMetadata{MessageKind: kind},
 			Context: bus.InboundContext{
 				Channel: "test", ChatID: "chat-1",
-				Raw: map[string]string{"message_kind": kind},
 			},
 		})
 	}
@@ -4062,7 +4088,7 @@ func TestGetStreamer_UnscopedFallbackMatchesSingleScopedStreamWithoutSession(t *
 		t.Fatalf("pre-final auxiliary = (%v, %v, %v), want suppressed", ids, sent, err)
 	}
 	final := message("final_reply", "queued duplicate")
-	final.Context.Raw["outbound_kind"] = "final"
+	final.Metadata.OutboundKind = bus.OutboundKindFinal
 	if ids, sent, _, err := sendWithRetryTuple(m, context.Background(), "test", w, final); err != nil ||
 		!sent || len(ids) != 0 {
 		t.Fatalf("unscoped final = (%v, %v, %v), want suppressed", ids, sent, err)
@@ -4149,11 +4175,13 @@ func TestSendMediaWithRetry_FailureReleasesSameTurnFeedback(t *testing.T) {
 		Channel: "test",
 		ChatID:  "chat-1",
 		Content: "Working...",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel:   "test",
 			ChatID:    "chat-1",
 			MessageID: "turn-1",
-			Raw:       map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 	ids, sent, _, err := sendWithRetryTuple(m, context.Background(), "test", w, feedback)
@@ -4189,11 +4217,11 @@ func TestGetStreamer_FinalizeBlocksLateFeedbackUntilQueuedFinal(t *testing.T) {
 		SessionKey:  "session-1",
 		Content:     "stale feedback",
 		TraceScopes: []runtimeevents.TraceScope{traceScope},
+		Metadata:    bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel:   "test",
 			ChatID:    "chat-1",
 			MessageID: "turn-1",
-			Raw:       map[string]string{"message_kind": "tool_feedback"},
 		},
 	})
 	ids, sent, _, err := sendWithRetryTuple(m, context.Background(), "test", w, feedback)
@@ -4206,14 +4234,14 @@ func TestGetStreamer_FinalizeBlocksLateFeedbackUntilQueuedFinal(t *testing.T) {
 		SessionKey:  "session-1",
 		Content:     "done",
 		TraceScopes: []runtimeevents.TraceScope{traceScope},
+		Metadata: bus.OutboundMetadata{
+			MessageKind:  bus.OutboundMessageKindFinalReply,
+			OutboundKind: bus.OutboundKindFinal,
+		},
 		Context: bus.InboundContext{
 			Channel:   "test",
 			ChatID:    "chat-1",
 			MessageID: "turn-1",
-			Raw: map[string]string{
-				"message_kind":  "final_reply",
-				"outbound_kind": "final",
-			},
 		},
 	})
 	_, sent, _, err = sendWithRetryTuple(m, context.Background(), "test", w, final)
@@ -4300,15 +4328,15 @@ func TestPreSend_ApprovalPromptBypassesPlaceholderEdit(t *testing.T) {
 	m.RecordPlaceholder("test", "123", "456")
 	msg := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test", ChatID: "123", Content: "approve protected action",
+		Metadata: bus.OutboundMetadata{
+			RequestID:           "request-1",
+			InteractionKind:     bus.OutboundInteractionApproval,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+		},
 		Context: bus.InboundContext{
 			Channel: "test", ChatID: "123", MessageID: "request-1",
-			Raw: map[string]string{bus.OutboundMetadataKeyRequestID: "request-1"},
 		},
 	})
-	bus.OutboundMetadata{
-		InteractionKind:     bus.OutboundInteractionApproval,
-		InteractionControls: bus.OutboundInteractionControlsPrompt,
-	}.ApplyToContext(&msg.Context)
 
 	messageIDs, handled := m.preSend(context.Background(), "test", msg, ch)
 	if handled || len(messageIDs) != 0 || editCalled {
@@ -4342,12 +4370,12 @@ func TestPreSend_ToolFeedbackBypassesPlaceholderEdit(t *testing.T) {
 		Channel: "test",
 		ChatID:  "123",
 		Content: "hello",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 	_, handled := m.preSend(context.Background(), "test", msg, ch)
@@ -4388,13 +4416,13 @@ func TestPreSend_ToolFeedbackBypassesPlaceholderEditWithResolvedChannel(t *testi
 		Channel: "test",
 		ChatID:  "-100123",
 		Content: "hello",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "-100123",
 			TopicID: "42",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 	_, handled := m.preSend(context.Background(), "test", msg, ch)
@@ -4433,13 +4461,13 @@ func TestPreSend_ToolFeedbackBypassesPlaceholderEditWithSession(t *testing.T) {
 		ChatID:     "-100123",
 		SessionKey: "subturn-9",
 		Content:    "hello",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "-100123",
 			TopicID: "42",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 	_, handled := m.preSend(context.Background(), "test", msg, ch)
@@ -4483,12 +4511,12 @@ func TestPreSend_ToolFeedbackDefersContentPreparationToCoordinator(t *testing.T)
 		Channel: "test",
 		ChatID:  "123",
 		Content: rawContent,
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 
@@ -4578,12 +4606,12 @@ func TestPreSend_ToolFeedbackDeletesPlaceholderAndSkipsEdit(t *testing.T) {
 		Channel: "test",
 		ChatID:  "123",
 		Content: "hello",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolFeedback,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 
@@ -4623,12 +4651,12 @@ func TestPreSend_ThoughtPlaceholderDeleteAndSkipsEdit(t *testing.T) {
 		Channel: "test",
 		ChatID:  "123",
 		Content: "thinking trace",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindThought,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "thought",
-			},
 		},
 	})
 
@@ -4668,12 +4696,12 @@ func TestPreSend_FinalReplyDeletesPlaceholderWithoutAdapterLifecycle(t *testing.
 		Channel: "test",
 		ChatID:  "123",
 		Content: "final aggregated reply",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindFinalReply,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "final_reply",
-			},
 		},
 	})
 
@@ -4702,7 +4730,7 @@ func TestSendWithRetry_FinalReplyBypassesToolFeedbackFinalization(t *testing.T) 
 					if msg.Content != "final aggregated reply" {
 						t.Fatalf("sent content = %q, want final aggregated reply", msg.Content)
 					}
-					if got := msg.Context.Raw["message_kind"]; got != "final_reply" {
+					if got := msg.Metadata.MessageKind; got != bus.OutboundMessageKindFinalReply {
 						t.Fatalf("message_kind = %q, want final_reply", got)
 					}
 					return nil
@@ -4730,12 +4758,12 @@ func TestSendWithRetry_FinalReplyBypassesToolFeedbackFinalization(t *testing.T) 
 		Channel: "test",
 		ChatID:  "123",
 		Content: "final aggregated reply",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindFinalReply,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "final_reply",
-			},
 		},
 	})
 
@@ -4775,17 +4803,17 @@ func TestDecorateOutboundResponseFooter(t *testing.T) {
 		Channel: "test",
 		ChatID:  "123",
 		Content: "final reply",
+		Metadata: bus.OutboundMetadata{
+			OutboundKind:      bus.OutboundKindFinal,
+			ModelName:         "fallback-model",
+			DefaultModelName:  "primary-model",
+			UsageInputTokens:  10252,
+			UsageOutputTokens: 4500,
+			UsageTotalTokens:  14752,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"outbound_kind":       "final",
-				"model_name":          "fallback-model",
-				"default_model_name":  "primary-model",
-				"usage_input_tokens":  "10252",
-				"usage_output_tokens": "4500",
-				"usage_total_tokens":  "14752",
-			},
 		},
 	})
 
@@ -4810,14 +4838,14 @@ func TestDecorateOutboundResponseFooterDisabled(t *testing.T) {
 		Channel: "test",
 		ChatID:  "123",
 		Content: "final reply",
+		Metadata: bus.OutboundMetadata{
+			OutboundKind:     bus.OutboundKindFinal,
+			ModelName:        "fallback-model",
+			DefaultModelName: "primary-model",
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"outbound_kind":      "final",
-				"model_name":         "fallback-model",
-				"default_model_name": "primary-model",
-			},
 		},
 	})
 
@@ -4897,16 +4925,16 @@ func TestSendMessageWithRetryPolicy_AppliesResponseFooterBeforeSend(t *testing.T
 		Channel: "test",
 		ChatID:  "123",
 		Content: "final reply",
+		Metadata: bus.OutboundMetadata{
+			OutboundKind:      bus.OutboundKindFinal,
+			ModelName:         "primary-model",
+			DefaultModelName:  "primary-model",
+			UsageInputTokens:  10,
+			UsageOutputTokens: 3,
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"outbound_kind":       "final",
-				"model_name":          "primary-model",
-				"default_model_name":  "primary-model",
-				"usage_input_tokens":  "10",
-				"usage_output_tokens": "3",
-			},
 		},
 	})
 
@@ -4929,7 +4957,7 @@ func TestSendWithRetry_ToolCallsPlaceholderDeleteAndFallsThroughToSend(t *testin
 		mockMessageEditor: mockMessageEditor{
 			mockChannel: mockChannel{
 				sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
-					if got := msg.Context.Raw["message_kind"]; got != "tool_calls" {
+					if got := msg.Metadata.MessageKind; got != bus.OutboundMessageKindToolCalls {
 						t.Fatalf("expected tool_calls message kind, got %q", got)
 					}
 					if msg.Content != "" {
@@ -4955,13 +4983,19 @@ func TestSendWithRetry_ToolCallsPlaceholderDeleteAndFallsThroughToSend(t *testin
 	msg := testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
 		ChatID:  "123",
+		Metadata: bus.OutboundMetadata{
+			MessageKind: bus.OutboundMessageKindToolCalls,
+			ToolCalls: []bus.OutboundToolCall{{
+				ID: "call_1", Type: "function",
+				Function: &bus.OutboundToolCallFunction{Name: "read_file", Arguments: "{}"},
+				ExtraContent: &bus.OutboundToolCallExtraContent{
+					ToolFeedbackExplanation: "Looking up config",
+				},
+			}},
+		},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "tool_calls",
-				"tool_calls":   `[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{}"},"extra_content":{"tool_feedback_explanation":"Looking up config"}}]`,
-			},
 		},
 	})
 
@@ -5027,15 +5061,13 @@ func TestPreSend_StaleToolFeedbackDoesNotConsumeStreamActiveMarker(t *testing.T)
 	}
 
 	toolFeedback := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: "🔧 `read_file`\nReading config",
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  "🔧 `read_file`\nReading config",
+		Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 
@@ -5057,15 +5089,13 @@ func TestPreSend_StaleToolFeedbackDoesNotConsumeStreamActiveMarker(t *testing.T)
 	}
 
 	finalMsg := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: "final streamed reply",
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  "final streamed reply",
+		Metadata: bus.OutboundMetadata{OutboundKind: bus.OutboundKindFinal},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"outbound_kind": "final",
-			},
 		},
 	})
 
@@ -5102,15 +5132,13 @@ func TestPreSend_StaleThoughtDoesNotConsumeStreamActiveMarker(t *testing.T) {
 	}
 
 	thought := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: "late reasoning",
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  "late reasoning",
+		Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindThought},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "thought",
-			},
 		},
 	})
 
@@ -5132,15 +5160,13 @@ func TestPreSend_StaleThoughtDoesNotConsumeStreamActiveMarker(t *testing.T) {
 	}
 
 	finalMsg := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: "final streamed reply",
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  "final streamed reply",
+		Metadata: bus.OutboundMetadata{OutboundKind: bus.OutboundKindFinal},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"outbound_kind": "final",
-			},
 		},
 	})
 
@@ -5159,15 +5185,13 @@ func TestPreSend_StaleThoughtDoesNotConsumeStreamActiveMarker(t *testing.T) {
 	}
 
 	lateThought := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: "later reasoning",
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  "later reasoning",
+		Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindThought},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "thought",
-			},
 		},
 	})
 	msgIDs, handled = m.preSend(context.Background(), "test", lateThought, ch)
@@ -5223,15 +5247,13 @@ func TestPreSend_StreamActiveDoesNotConsumeEarlierVisibleMessage(t *testing.T) {
 	}
 
 	finalMsg := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: "final streamed reply",
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  "final streamed reply",
+		Metadata: bus.OutboundMetadata{OutboundKind: bus.OutboundKindFinal},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"outbound_kind": "final",
-			},
 		},
 	})
 	_, handled = m.preSend(context.Background(), "test", finalMsg, ch)
@@ -5263,12 +5285,10 @@ func TestPreSend_StreamActiveDoesNotConsumeOtherSessionFinal(t *testing.T) {
 		ChatID:     "123",
 		SessionKey: "session-other",
 		Content:    "other session final",
+		Metadata:   bus.OutboundMetadata{OutboundKind: bus.OutboundKindFinal},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"outbound_kind": "final",
-			},
 		},
 	})
 
@@ -5360,15 +5380,13 @@ func TestPreSendMedia_DoesNotUseLegacySessionCleanup(t *testing.T) {
 
 func TestSplitOutboundMessageContent_ToolFeedbackTruncatesInsteadOfSplitting(t *testing.T) {
 	msg := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: "\U0001f527 `read_file`\nRead README.md first to confirm the current project structure before editing the config example.",
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  "\U0001f527 `read_file`\nRead README.md first to confirm the current project structure before editing the config example.",
+		Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 
@@ -5384,15 +5402,13 @@ func TestSplitOutboundMessageContent_ToolFeedbackTruncatesInsteadOfSplitting(t *
 
 func TestSplitOutboundMessageContent_ToolFeedbackReservesAnimationFrame(t *testing.T) {
 	msg := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: "🔧 `read_file`\n1234567890",
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  "🔧 `read_file`\n1234567890",
+		Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 
@@ -5532,15 +5548,13 @@ func TestGetStreamer_FinalizeCleansPlaceholderImmediately(t *testing.T) {
 	}
 
 	lateThought := testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: "late reasoning",
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  "late reasoning",
+		Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindThought},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "thought",
-			},
 		},
 	})
 	msgIDs, handled := m.preSend(context.Background(), "test", lateThought, ch)
@@ -6239,15 +6253,13 @@ func TestRunWorker_ToolFeedbackSkipsMarkerSplitting(t *testing.T) {
 
 	content := "🔧 `read_file`\nRead current config first.<|[SPLIT]|>Then update the example."
 	w.queue <- testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
-		ChatID:  "123",
-		Content: content,
+		Channel:  "test",
+		ChatID:   "123",
+		Content:  content,
+		Metadata: bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindToolFeedback},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"message_kind": "tool_feedback",
-			},
 		},
 	})
 
@@ -6304,12 +6316,10 @@ func TestRunWorker_FinalizedStreamSuppressesMarkerSplitBeforeSending(t *testing.
 		ChatID:     "123",
 		SessionKey: "session-1",
 		Content:    "streamed full reply<|[SPLIT]|>duplicate chunk",
+		Metadata:   bus.OutboundMetadata{OutboundKind: bus.OutboundKindFinal},
 		Context: bus.InboundContext{
 			Channel: "test",
 			ChatID:  "123",
-			Raw: map[string]string{
-				"outbound_kind": "final",
-			},
 		},
 	})
 

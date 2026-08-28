@@ -4,7 +4,7 @@
 
 如果你是第一次配置 TTS，可以参照下面这个流程：
 
-1. 在 `model_list` 里添加一个支持 TTS 的模型。
+1. 在 `model_list` 里添加一个已启用且显式设置 `provider` 和 `model` 的 TTS 模型。
 2. 用 `voice.tts_model_name` 指向这个模型。
 3. 在 `.security.yml` 里配置对应的 API Key。
 
@@ -43,7 +43,9 @@ MintClaw 不会把 TTS 的 API Key 放在 `voice` 配置里。
   "model_list": [
     {
       "model_name": "openai-tts",
-      "model": "openai/tts-1"
+      "provider": "openai",
+      "model": "tts-1",
+      "enabled": true
     }
   ]
 }
@@ -70,7 +72,9 @@ model_list:
   "model_list": [
     {
       "model_name": "mimo-tts",
-      "model": "mimo/mimo-v2-tts"
+      "provider": "mimo",
+      "model": "mimo-v2-tts",
+      "enabled": true
     }
   ]
 }
@@ -98,19 +102,17 @@ model_list:
 
 这意味着：
 
-- `openai/tts-1` 可以自然工作。
+- `provider: openai` 与 `model: tts-1` 的组合可以直接工作。
 - 其他 OpenAI 兼容 provider 也可能可用，前提是它们接受相同的请求格式。
-- MintClaw 目前还没有对用户暴露一个配置项来修改 TTS voice，当前固定为 `alloy`。
+- 可以通过所选模型的 `model_list[].extra_body` 覆盖 `voice` 和 `response_format`。
 
 ## MintClaw 如何选择 TTS Provider
 
-`DetectTTS` 会按下面顺序选择 TTS：
+`DetectTTS` 只通过一条显式路径选择 TTS：
 
-1. **首选路径**：根据 `voice.tts_model_name` 在 `model_list` 中找到对应模型。
-2. 如果找到了匹配条目，并且它有 API Key，MintClaw 就会使用这个模型条目的配置创建一个 OpenAI 兼容的 TTS provider。
-3. **回退路径**：如果没有设置 `voice.tts_model_name`，或者该名字无法解析，MintClaw 会扫描 `model_list`，选中第一个模型字符串里包含 `tts` 且带有 API Key 的条目。
-
-回退扫描只是为了兼容旧行为。新配置建议始终显式设置 `voice.tts_model_name`。
+1. 根据 `voice.tts_model_name` 在已启用的 `model_list` 条目中找到对应模型。
+2. 如果匹配条目存在并且有 API Key，MintClaw 使用该条目的配置创建 TTS provider。
+3. 如果选择缺失、已禁用、无效或者没有 API Key，TTS 保持禁用。
 
 ## 关于 API Base 的处理方式
 
@@ -118,7 +120,7 @@ MintClaw 会对 TTS 的 `api_base` 做规范化处理：
 
 - 对 OpenAI 来说，像 `https://api.openai.com` 或 `https://api.openai.com/v1` 这样的地址，会自动变成 `https://api.openai.com/v1/audio/speech`。
 - 对其他 OpenAI 兼容 provider，MintClaw 会尽量保留你提供的基础路径，只确保它最终以 `/audio/speech` 结尾。
-- 如果没有设置 `api_base`，并且模型前缀是已知 provider，MintClaw 会自动使用该 provider 的默认地址。
+- 如果没有设置 `api_base`，MintClaw 会在可用时使用显式配置的 provider 默认地址。
 
 ## 常见错误
 
@@ -132,6 +134,7 @@ MintClaw 会对 TTS 的 `api_base` 做规范化处理：
 在测试 `send_tts` 之前，请确认：
 
 - `voice.tts_model_name` 能正确匹配某个 `model_list[].model_name`。
+- 所选模型条目显式设置了 `provider` 和 `model`，并且设置了 `enabled: true`。
 - `.security.yml` 中对应条目已经配置了有效 API Key。
 - 你所选的 provider 支持 OpenAI 兼容的语音合成接口。
 - 你选择的模型本身确实支持 TTS。

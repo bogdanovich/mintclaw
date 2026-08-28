@@ -34,7 +34,10 @@ type advancingRevisionSessionStore struct {
 	calls int
 }
 
-func (s *advancingRevisionSessionStore) GetHistoryRevision(string) (memory.HistoryRevision, error) {
+func (s *advancingRevisionSessionStore) GetHistoryRevision(
+	context.Context,
+	string,
+) (memory.HistoryRevision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
@@ -56,24 +59,36 @@ func (s *advancingRevisionSessionStore) GetHistory(string) []providers.Message {
 	return history
 }
 
-func (s *advancingRevisionSessionStore) GetHistoryWithError(key string) ([]providers.Message, error) {
-	return s.GetHistory(key), nil
+func (s *advancingRevisionSessionStore) ReadTurnHistory(
+	context.Context,
+	string,
+) ([]providers.Message, error) {
+	return s.GetHistory(""), nil
 }
 
 func (s *staticHistorySessionStore) GetHistory(string) []providers.Message {
 	return append([]providers.Message(nil), s.history...)
 }
 
-func (s *staticHistorySessionStore) GetHistoryWithError(string) ([]providers.Message, error) {
+func (s *staticHistorySessionStore) ReadTurnHistory(context.Context, string) ([]providers.Message, error) {
 	return s.GetHistory(""), nil
 }
 
-func (s *staticHistorySessionStore) GetHistoryRevision(string) (memory.HistoryRevision, error) {
+func (s *staticHistorySessionStore) GetHistoryRevision(
+	context.Context,
+	string,
+) (memory.HistoryRevision, error) {
 	return s.revision, nil
 }
 
 func (s *clearFailingSessionStore) ClearSession(context.Context, string) error {
 	return s.err
+}
+
+func TestCanonicalHistoryContainsHandlesMissingStore(t *testing.T) {
+	if canonicalHistoryContains(t.Context(), nil, "missing", providers.Message{}) {
+		t.Fatal("missing canonical store reported a matching message")
+	}
 }
 
 func newReconciliationTestManager(t *testing.T) (*seahorseContextManager, *memory.JSONLStore) {
@@ -83,7 +98,7 @@ func newReconciliationTestManager(t *testing.T) (*seahorseContextManager, *memor
 	if storeErr != nil {
 		t.Fatal(storeErr)
 	}
-	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +127,7 @@ func TestSeahorseReconciliationCleanRevisionSkipsDeepComparison(t *testing.T) {
 
 func TestSeahorseCompactCorrelatesStableReconciledRevision(t *testing.T) {
 	key := "stable-revision"
-	engine, err := seahorse.NewEngine(seahorse.Config{DBPath: t.TempDir() + "/seahorse.db"}, nil)
+	engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{DBPath: t.TempDir() + "/seahorse.db"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +184,7 @@ func TestSeahorseReconciliationDoesNotTurnUnknownTimeIntoRecencyEvidence(t *test
 			ctx := t.Context()
 			now := time.Date(2026, 8, 25, 8, 0, 0, 0, time.UTC)
 			key := "unknown-time-" + test.name
-			engine, err := seahorse.NewEngine(seahorse.Config{DBPath: t.TempDir() + "/seahorse.db"}, nil)
+			engine, err := seahorse.NewEngine(t.Context(), seahorse.Config{DBPath: t.TempDir() + "/seahorse.db"}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -296,7 +311,7 @@ func TestSeahorseReconciliationCleanRestartUsesDurableWatermark(t *testing.T) {
 	if err := canonical.AddMessage(ctx, key, "user", "persisted"); err != nil {
 		t.Fatal(err)
 	}
-	engine1, engineErr := seahorse.NewEngine(seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
+	engine1, engineErr := seahorse.NewEngine(t.Context(), seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
 	if engineErr != nil {
 		t.Fatal(engineErr)
 	}
@@ -307,7 +322,7 @@ func TestSeahorseReconciliationCleanRestartUsesDurableWatermark(t *testing.T) {
 	if err := engine1.Close(); err != nil {
 		t.Fatal(err)
 	}
-	engine2, reopenErr := seahorse.NewEngine(seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
+	engine2, reopenErr := seahorse.NewEngine(t.Context(), seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
 	if reopenErr != nil {
 		t.Fatal(reopenErr)
 	}
@@ -629,10 +644,10 @@ func BenchmarkSeahorseCleanRevisionCheck(b *testing.B) {
 	dir := b.TempDir()
 	canonical, _ := memory.NewJSONLStore(dir + "/sessions")
 	backend := session.NewJSONLBackend(canonical)
-	engine, _ := seahorse.NewEngine(seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
+	ctx := b.Context()
+	engine, _ := seahorse.NewEngine(ctx, seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
 	defer func() { _ = engine.Close() }()
 	mgr := newSingleRuntimeTestManager(engine, backend)
-	ctx := context.Background()
 	_ = canonical.AddMessage(ctx, "bench", "user", "hello")
 	_ = mgr.ensureReconciled(ctx, "bench", backend)
 	b.ResetTimer()
@@ -647,10 +662,10 @@ func BenchmarkSeahorseForcedReconciliation100Messages(b *testing.B) {
 	dir := b.TempDir()
 	canonical, _ := memory.NewJSONLStore(dir + "/sessions")
 	backend := session.NewJSONLBackend(canonical)
-	engine, _ := seahorse.NewEngine(seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
+	ctx := b.Context()
+	engine, _ := seahorse.NewEngine(ctx, seahorse.Config{DBPath: dir + "/seahorse.db"}, nil)
 	defer func() { _ = engine.Close() }()
 	mgr := newSingleRuntimeTestManager(engine, backend)
-	ctx := context.Background()
 	for i := 0; i < 100; i++ {
 		_ = canonical.AddMessage(ctx, "bench-full", "user", fmt.Sprintf("message-%d", i))
 	}

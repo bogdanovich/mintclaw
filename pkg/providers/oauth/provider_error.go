@@ -28,7 +28,7 @@ func normalizeCodexError(err error) error {
 		return normalized
 	}
 	// Streaming protocol and local parse errors have no typed SDK metadata.
-	// Keep this compatibility path explicit for downstream legacy classification.
+	// Preserve the original cause for the shared error classifier.
 	return fmt.Errorf("codex API call: %w", err)
 }
 

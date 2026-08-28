@@ -359,6 +359,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 				TraceScope: ts.scope.traceScope(),
 				Reason:     ContextCompressReasonRetry,
 				Budget:     compactBudget,
+				Background: false,
 			}); compactErr != nil {
 				logger.WarnCF("agent", "Context overflow compact failed", map[string]any{
 					"session_key": ts.sessionKey,

@@ -8,7 +8,7 @@ import (
 )
 
 // FromTransportError normalizes concrete transport and context failures. It
-// returns false when an adapter must use its explicit compatibility fallback.
+// returns false when an adapter must preserve the original error for further classification.
 func FromTransportError(err error) (*ProviderError, bool) {
 	if err == nil {
 		return nil, false

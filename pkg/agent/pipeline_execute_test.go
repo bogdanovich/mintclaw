@@ -102,6 +102,7 @@ func TestSyncToolDeliveryMarksOnlyMediaInConfirmedOutbound(t *testing.T) {
 		*toolshared.ToolResult,
 		string,
 		[]runtimeevents.TraceScope,
+		bus.OutboundMetadata,
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 		return nil, toolResultDeliveryDirect, nil
 	}}
@@ -176,6 +177,7 @@ func TestImmediateDeliverySettlesJournaledDeliverable(t *testing.T) {
 				got *toolshared.ToolResult,
 				_ string,
 				_ []runtimeevents.TraceScope,
+				_ bus.OutboundMetadata,
 			) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 				if err := commitToolResultOutbound(deliveryCtx, got); err != nil {
 					return nil, toolResultDeliveryNone, err
@@ -244,6 +246,7 @@ func TestImmediateDeliveryJournalFailurePreventsPublication(t *testing.T) {
 		got *toolshared.ToolResult,
 		_ string,
 		_ []runtimeevents.TraceScope,
+		_ bus.OutboundMetadata,
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 		if err := commitToolResultOutbound(deliveryCtx, got); err != nil {
 			return nil, toolResultDeliveryNone, err
@@ -691,6 +694,49 @@ func TestToolExecutionEndEventCarriesVerifiedWriteAudit(t *testing.T) {
 	t.Fatal("missing tool execution end event")
 }
 
+func TestHandledToolSynchronousSummarizeCarriesTurnScope(t *testing.T) {
+	manager := &trackingContextManager{}
+	store := session.NewMemoryStore()
+	agent := &AgentInstance{
+		ID: "main", Workspace: "/repo", ContextWindow: 4_096, Sessions: store,
+	}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "turn-1", sessionKey: "session-1",
+		session: store, workspace: agent.Workspace,
+		scope: turnEventScope{
+			workspace: agent.Workspace, turnID: "turn-1",
+		},
+		opts: turnSpec{
+			EnableSummary: true, Dispatch: DispatchRequest{SessionKey: "session-1"},
+		},
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	llm := newLLMIterationState(1)
+	llm.toolResponseDisposition = toolResponseHandled
+	runner := &toolLoopRunner{
+		p:       &Pipeline{Context: PipelineContextServices{Runtime: manager}},
+		turnCtx: t.Context(),
+		ts:      ts,
+		exec:    exec,
+		llm:     llm,
+	}
+
+	outcome := runner.completeToolBatch(t.Context())
+	if outcome.Control != ToolControlBreak {
+		t.Fatalf("handled tool outcome = %+v", outcome)
+	}
+	manager.mu.Lock()
+	compact := manager.lastCompact
+	manager.mu.Unlock()
+	if manager.compactCalls.Load() != 1 || compact == nil {
+		t.Fatalf("summary compaction = calls:%d request:%+v", manager.compactCalls.Load(), compact)
+	}
+	if compact.Reason != ContextCompressReasonSummarize || compact.Background ||
+		compact.TraceScope.TurnID != ts.turnID || compact.TraceScope.Workspace != agent.Workspace {
+		t.Fatalf("synchronous summarize request = %+v", compact)
+	}
+}
+
 func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	tool := &fixedToolResultTool{name: "stage-tool", result: toolshared.NewToolResult("stage result")}
@@ -1031,6 +1077,7 @@ func TestPipelineProtectedImmediateArtifactIsModelVisibleAndStaysOutOfProviderHi
 		got *toolshared.ToolResult,
 		_ string,
 		_ []runtimeevents.TraceScope,
+		_ bus.OutboundMetadata,
 	) ([]providers.Attachment, toolResultDeliveryOutcome, error) {
 		deliveryCalls++
 		journaled := store.GetHistory(ts.sessionKey)

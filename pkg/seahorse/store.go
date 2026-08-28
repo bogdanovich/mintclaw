@@ -15,6 +15,110 @@ type Store struct {
 	db *sql.DB
 }
 
+func (s *Store) verifyIntegrity(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("verify store integrity: database is unavailable")
+	}
+	if ctx == nil {
+		return fmt.Errorf("verify store integrity: context is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	rows, err := s.db.QueryContext(ctx, "PRAGMA quick_check(1)")
+	if err != nil {
+		return fmt.Errorf("verify store integrity: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	found := false
+	quickCheckFailed := false
+	for rows.Next() {
+		found = true
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			return fmt.Errorf("verify store integrity result: %w", err)
+		}
+		if result != "ok" {
+			quickCheckFailed = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("verify store integrity: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("verify store integrity: SQLite quick check returned no result")
+	}
+	if quickCheckFailed {
+		if err := s.verifyTablesReadable(ctx); err != nil {
+			return fmt.Errorf("verify store integrity: %w", err)
+		}
+		return fmt.Errorf("verify store integrity: SQLite quick check failed")
+	}
+	return nil
+}
+
+func (s *Store) verifyTablesReadable(ctx context.Context) error {
+	// quick_check reports corruption as result text. Probe one row from each
+	// current table so reset remains authorized only by a typed SQLite error.
+	names, err := s.derivedTableNames(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if err := s.verifyTableReadable(ctx, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) derivedTableNames(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
+func (s *Store) verifyTableReadable(ctx context.Context, name string) error {
+	identifier := `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+	rows, err := s.db.QueryContext(ctx, "SELECT * FROM "+identifier+" LIMIT 1")
+	if err != nil {
+		return fmt.Errorf("read derived table %q: %w", name, err)
+	}
+	defer func() { _ = rows.Close() }()
+	columns, err := rows.Columns()
+	if err != nil {
+		return fmt.Errorf("inspect derived table %q: %w", name, err)
+	}
+	values := make([]sql.RawBytes, len(columns))
+	destinations := make([]any, len(columns))
+	for index := range values {
+		destinations[index] = &values[index]
+	}
+	for rows.Next() {
+		if err := rows.Scan(destinations...); err != nil {
+			return fmt.Errorf("read derived table %q: %w", name, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read derived table %q: %w", name, err)
+	}
+	return nil
+}
+
 // ReconciliationState records which canonical history revision has been
 // incorporated into Seahorse for a session.
 type ReconciliationState struct {
