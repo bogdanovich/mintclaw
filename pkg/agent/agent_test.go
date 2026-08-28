@@ -130,15 +130,13 @@ func newBlockingMediaChannel() *blockingMediaChannel {
 }
 
 type recordingChannelManager struct {
-	dismissed          []string
-	dismissedSessions  []string
-	dismissedScopes    [][]runtimeevents.TraceScope
-	dismissedTargets   []bus.OutboundMessage
-	pausedTargets      []bus.OutboundMessage
-	sentMessages       []bus.OutboundMessage
-	sentMedia          []bus.OutboundMediaMessage
-	definiteTextSends  int
-	definiteMediaSends int
+	dismissed         []string
+	dismissedSessions []string
+	dismissedScopes   [][]runtimeevents.TraceScope
+	dismissedTargets  []bus.OutboundMessage
+	pausedTargets     []bus.OutboundMessage
+	sentMessages      []bus.OutboundMessage
+	sentMedia         []bus.OutboundMediaMessage
 }
 
 type definitelyRejectedChannelManager struct {
@@ -174,28 +172,10 @@ func (m *recordingChannelManager) SendMessageProvisional(
 	return m.SendMessage(ctx, msg)
 }
 
-func (m *recordingChannelManager) SendMessageDefiniteRetryOnly(
-	ctx context.Context,
-	msg bus.OutboundMessage,
-) error {
-	m.definiteTextSends++
-	m.sentMessages = append(m.sentMessages, msg)
-	return nil
-}
-
 func (m *recordingChannelManager) SendMedia(
 	ctx context.Context,
 	msg bus.OutboundMediaMessage,
 ) error {
-	m.sentMedia = append(m.sentMedia, msg)
-	return nil
-}
-
-func (m *recordingChannelManager) SendMediaDefiniteRetryOnly(
-	ctx context.Context,
-	msg bus.OutboundMediaMessage,
-) error {
-	m.definiteMediaSends++
 	m.sentMedia = append(m.sentMedia, msg)
 	return nil
 }

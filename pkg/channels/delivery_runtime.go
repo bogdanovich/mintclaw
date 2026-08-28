@@ -15,7 +15,7 @@ type deliveryRuntimeHost interface {
 	deliverySplitOnMarker() bool
 	decorateOutboundResponseFooter(msg bus.OutboundMessage) bus.OutboundMessage
 	finalizedStreamActiveForMessage(channelName string, msg bus.OutboundMessage) bool
-	beginDurableOutbound(deliveryID string) (bool, error)
+	beginDurableOutbound(deliveryID string) error
 	persistDurableOutbound(deliveryID string, outcome OutboundDeliveryOutcome) error
 	persistDurableRejection(deliveryID string, cause error) error
 	publishChannelEvent(

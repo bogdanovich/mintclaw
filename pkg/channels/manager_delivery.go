@@ -233,8 +233,7 @@ func (r *DeliveryRuntime) deliverQueuedMessage(
 		chunks = splitOutboundMessageContent(msg, maxLen)
 	}
 
-	durable, err := m.beginDurableOutbound(msg.DeliveryID)
-	if err != nil {
+	if err := m.beginDurableOutbound(msg.DeliveryID); err != nil {
 		m.publishOutboundFailed(name, msg, err, false)
 		return
 	}
@@ -244,9 +243,7 @@ func (r *DeliveryRuntime) deliverQueuedMessage(
 	for _, chunk := range chunks {
 		chunkMsg := msg
 		chunkMsg.Content = chunk
-		result := r.sendWithRetryPolicy(
-			ctx, name, w, chunkMsg, !durable, publishNoOutcome,
-		)
+		result := r.sendWithRetryPolicy(ctx, name, w, chunkMsg, publishNoOutcome)
 		if !result.Delivered() {
 			delivered = false
 			outcome := durableOutcome(result, messageIDs)
@@ -331,8 +328,8 @@ func splitOutboundMessageContent(msg bus.OutboundMessage, maxLen int) []string {
 // sendWithRetry sends a message through the channel with rate limiting and
 // retry logic. It classifies errors to determine the retry strategy:
 //   - ErrNotRunning / ErrSendFailed: permanent, no retry
-//   - ErrRateLimit: fixed delay retry
-//   - ErrTemporary / unknown: exponential backoff retry
+//   - ErrRateLimit / rejected transient: bounded retry
+//   - ambiguous temporary / unknown: no retry
 func (r *DeliveryRuntime) sendWithRetry(
 	ctx context.Context,
 	name string,
@@ -341,9 +338,7 @@ func (r *DeliveryRuntime) sendWithRetry(
 ) DeliveryResult[bus.OutboundMessage] {
 	m := r.host
 	terminals := m.beginOutboundToolFeedbackTerminals(name, w.ch, msg)
-	result := r.sendWithRetryPolicy(
-		ctx, name, w, msg, true, publishDefinitiveOutcome,
-	)
+	result := r.sendWithRetryPolicy(ctx, name, w, msg, publishDefinitiveOutcome)
 	m.completeToolFeedbackTerminals(ctx, terminals, result.Delivered())
 	return result
 }
@@ -353,7 +348,6 @@ func (r *DeliveryRuntime) sendWithRetryPolicy(
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMessage,
-	retryAmbiguous bool,
 	outcome outcomePublication,
 ) DeliveryResult[bus.OutboundMessage] {
 	m := r.host
@@ -396,7 +390,6 @@ func (r *DeliveryRuntime) sendWithRetryPolicy(
 		[]bus.OutboundMessage{msg},
 		DeliveryRetryPolicy{
 			MaxRetries:     maxRetries,
-			RetryAmbiguous: retryAmbiguous,
 			RateLimitDelay: rateLimitDelay,
 			BaseBackoff:    baseBackoff,
 			MaxBackoff:     maxBackoff,
@@ -634,14 +627,11 @@ func (r *DeliveryRuntime) deliverQueuedMedia(
 	msg bus.OutboundMediaMessage,
 ) {
 	m := r.host
-	durable, err := m.beginDurableOutbound(msg.DeliveryID)
-	if err != nil {
+	if err := m.beginDurableOutbound(msg.DeliveryID); err != nil {
 		m.publishOutboundMediaFailed(name, msg, err)
 		return
 	}
-	result := r.sendMediaWithRetryPolicy(
-		ctx, name, w, msg, publishNoOutcome, !durable,
-	)
+	result := r.sendMediaWithRetryPolicy(ctx, name, w, msg, publishNoOutcome)
 	outcome := durableOutcome(result, nil)
 	if persistErr := m.persistDurableOutbound(msg.DeliveryID, outcome); persistErr != nil {
 		result.Err = errors.Join(result.Err, persistErr)
@@ -682,9 +672,7 @@ func (r *DeliveryRuntime) sendMediaWithRetry(
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 ) DeliveryResult[bus.OutboundMediaMessage] {
-	return r.sendMediaWithRetryPolicy(
-		ctx, name, w, msg, publishDefinitiveOutcome, true,
-	)
+	return r.sendMediaWithRetryPolicy(ctx, name, w, msg, publishDefinitiveOutcome)
 }
 
 func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
@@ -693,7 +681,6 @@ func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 	outcome outcomePublication,
-	retryAmbiguous bool,
 ) DeliveryResult[bus.OutboundMediaMessage] {
 	m := r.host
 	ms, ok := w.ch.(MediaSender)
@@ -755,7 +742,6 @@ func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
 		[]bus.OutboundMediaMessage{msg},
 		DeliveryRetryPolicy{
 			MaxRetries:     maxRetries,
-			RetryAmbiguous: retryAmbiguous,
 			RateLimitDelay: rateLimitDelay,
 			BaseBackoff:    baseBackoff,
 			MaxBackoff:     maxBackoff,

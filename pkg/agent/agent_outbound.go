@@ -522,9 +522,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 		if !hasOutboundTransaction(ctx) && al.channelManager != nil && ts.channel != "" &&
 			!constants.IsInternalChannel(ts.channel) {
 			sendMedia := al.channelManager.SendMedia
-			if isFinalHandledDelivery(result) {
-				sendMedia = al.channelManager.SendMediaDefiniteRetryOnly
-			} else if toolName == "final_turn" {
+			if toolName == "final_turn" && !isFinalHandledDelivery(result) {
 				provisional, ok := al.channelManager.(agentinterfaces.ProvisionalChannelSender)
 				if !ok {
 					if al.bus != nil {
@@ -699,11 +697,7 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 		if (!hasOutboundTransaction(ctx) || syncWithoutReceipt) &&
 			al.channelManager != nil && channel != "" &&
 			!constants.IsInternalChannel(channel) {
-			sendMedia := al.channelManager.SendMedia
-			if isFinalHandledDelivery(result) {
-				sendMedia = al.channelManager.SendMediaDefiniteRetryOnly
-			}
-			if err := sendMedia(ctx, outboundMedia); err != nil {
+			if err := al.channelManager.SendMedia(ctx, outboundMedia); err != nil {
 				logger.WarnCF("agent", "Failed to deliver explicit tool media",
 					map[string]any{
 						"agent_id": agentID,
@@ -783,11 +777,7 @@ func (al *AgentLoop) deliverExplicitToolOutbound(
 	if (!hasOutboundTransaction(ctx) || syncWithoutReceipt) &&
 		al.channelManager != nil && channel != "" &&
 		!constants.IsInternalChannel(channel) {
-		sendMessage := al.channelManager.SendMessage
-		if isFinalHandledDelivery(result) {
-			sendMessage = al.channelManager.SendMessageDefiniteRetryOnly
-		}
-		if err := sendMessage(ctx, outboundMessage); err != nil {
+		if err := al.channelManager.SendMessage(ctx, outboundMessage); err != nil {
 			return nil, toolResultDeliveryNone,
 				classifySynchronousFinalHandledDeliveryError(result, err)
 		}

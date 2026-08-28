@@ -2705,7 +2705,7 @@ func TestBeginStream_FinalizeChunksLegacyContentOverLimitAfterFooter(t *testing.
 	assert.Equal(t, finalContent, delivered.String())
 }
 
-func TestBeginStream_FinalizeRetriesUnsentLegacyChunkAfterPartialFailure(t *testing.T) {
+func TestBeginStream_FinalizeDoesNotRetryAmbiguousChunkAfterPartialDelivery(t *testing.T) {
 	callCount := 0
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
@@ -2728,22 +2728,9 @@ func TestBeginStream_FinalizeRetriesUnsentLegacyChunkAfterPartialFailure(t *test
 	footer := "\n\nmodel: fallback"
 	finalContent := visibleContent + footer
 	require.Greater(t, len([]rune(finalContent)), telegramTextLimit)
-	require.NoError(t, streamer.Finalize(context.Background(), finalContent))
-
-	require.Len(t, caller.calls, 3)
-	var delivered strings.Builder
-	for idx, call := range caller.calls {
-		if idx == 1 {
-			continue
-		}
-		var params struct {
-			Text string `json:"text"`
-		}
-		require.NoError(t, json.Unmarshal(call.Data.BodyRaw, &params))
-		assert.LessOrEqual(t, len([]rune(params.Text)), telegramTextLimit)
-		delivered.WriteString(params.Text)
-	}
-	assert.Equal(t, finalContent, delivered.String())
+	err = streamer.Finalize(context.Background(), finalContent)
+	require.ErrorContains(t, err, "second chunk failed")
+	require.Len(t, caller.calls, 2)
 }
 
 func TestBeginStream_FinalizeHonorsRetryAfterForUnsentLegacyChunk(t *testing.T) {

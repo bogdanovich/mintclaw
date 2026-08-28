@@ -161,7 +161,6 @@ func deliveryFailureWasRejected(err error) bool {
 // DeliveryRetryPolicy controls the shared transport retry coordinator.
 type DeliveryRetryPolicy struct {
 	MaxRetries     int
-	RetryAmbiguous bool
 	RateLimitDelay time.Duration
 	BaseBackoff    time.Duration
 	MaxBackoff     time.Duration
@@ -259,7 +258,7 @@ func DeliverWithRetry[T any](
 			}
 			pending = cloneDeliveryPayload(result.Remaining)
 		}
-		if !deliveryResultMayRetry(result, policy) || attempt == maxRetries {
+		if !deliveryResultMayRetry(result) || attempt == maxRetries {
 			break
 		}
 		if err := waitForDeliveryRetry(ctx, result, policy, attempt); err != nil {
@@ -306,7 +305,7 @@ func combineDeliveryAcceptance(left, right DeliveryAcceptance) DeliveryAcceptanc
 	return DeliveryRejected
 }
 
-func deliveryResultMayRetry[T any](result DeliveryResult[T], policy DeliveryRetryPolicy) bool {
+func deliveryResultMayRetry[T any](result DeliveryResult[T]) bool {
 	if result.Err == nil || errors.Is(result.Err, ErrNotRunning) || errors.Is(result.Err, ErrSendFailed) {
 		return false
 	}
@@ -316,7 +315,10 @@ func deliveryResultMayRetry[T any](result DeliveryResult[T], policy DeliveryRetr
 	if result.UnresolvedPartial && len(result.Remaining) > 0 {
 		return true
 	}
-	return !result.Ambiguous() || policy.RetryAmbiguous
+	if len(result.Remaining) > 0 {
+		return result.Acceptance == DeliveryRejected
+	}
+	return result.DefinitelyNotSent()
 }
 
 func waitForDeliveryRetry[T any](

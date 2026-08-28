@@ -44,10 +44,9 @@ not own a second copy of manager delivery, retry, or lifecycle state.
 - Outbound adapters return `DeliveryResult` with confirmed platform IDs and an
   explicit complete, partial, or failed outcome. A failed operation is marked
   rejected only when the adapter knows it happened before remote acceptance.
-  Durable delivery and definite-retry-only paths do not retry ambiguous remote
-  acceptance. Current non-durable, provisional, and queued messages without a
-  delivery ID still permit ambiguous retries; treat that exception as removal
-  debt, not as precedent for new entry paths.
+  Every delivery path retries only a rejected payload or an explicitly known
+  unsent remainder. Unknown remote acceptance is terminal so retries cannot
+  duplicate a message that the transport may already have accepted.
 - Messages admitted to the durable outbox and dispatched through the queued
   message-bus workers participate in its persistence contract. Their delivery
   state is persisted before completion events are published. A direct

@@ -203,8 +203,7 @@ func (s *telegramStreamer) finalizeTextChunks(
 		ctx,
 		[]string{content},
 		channels.DeliveryRetryPolicy{
-			MaxRetries:     2,
-			RetryAmbiguous: true,
+			MaxRetries: 2,
 		},
 		func(ctx context.Context, pending []string) channels.DeliveryResult[string] {
 			return s.channel.sendTextChunkQueue(ctx, pending, baseParams, useRich, false)
