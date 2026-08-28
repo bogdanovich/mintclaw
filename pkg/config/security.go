@@ -148,7 +148,7 @@ func validateChannelSecuritySettings(node *yaml.Node, current *Config, label str
 			}
 		}
 		normalized[name] = map[string]any{
-			"type":     effectiveChannelType(name, existing.Type),
+			"type":     existing.Type,
 			"settings": channel["settings"],
 		}
 	}

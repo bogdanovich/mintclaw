@@ -1022,7 +1022,8 @@ func TestLoadConfigRejectsRemovedDeltaChatMailboxSettings(t *testing.T) {
 	for _, field := range []string{"password", "imap_server", "imap_port", "smtp_server", "smtp_port"} {
 		t.Run(field, func(t *testing.T) {
 			raw := fmt.Sprintf(
-				`{"version":%d,"channel_list":{"deltachat":{"settings":{"email":"bot@example.org",%q:null}}}}`,
+				`{"version":%d,"channel_list":{"deltachat":{"type":"deltachat",`+
+					`"settings":{"email":"bot@example.org",%q:null}}}}`,
 				CurrentVersion,
 				field,
 			)
@@ -1044,7 +1045,8 @@ func TestLoadConfigRejectsRemovedDeltaChatPasswordFromSecurityOverlay(t *testing
 	directory := t.TempDir()
 	configPath := filepath.Join(directory, "config.json")
 	raw := fmt.Sprintf(
-		`{"version":%d,"channel_list":{"deltachat":{"settings":{"email":"bot@example.org"}}}}`,
+		`{"version":%d,"channel_list":{"deltachat":{"type":"deltachat",`+
+			`"settings":{"email":"bot@example.org"}}}}`,
 		CurrentVersion,
 	)
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
@@ -1067,7 +1069,8 @@ func TestLoadConfigRejectsSecurityOverlayChannelTypeOverride(t *testing.T) {
 	directory := t.TempDir()
 	configPath := filepath.Join(directory, "config.json")
 	raw := fmt.Sprintf(
-		`{"version":%d,"channel_list":{"deltachat":{"settings":{"email":"bot@example.org"}}}}`,
+		`{"version":%d,"channel_list":{"deltachat":{"type":"deltachat",`+
+			`"settings":{"email":"bot@example.org"}}}}`,
 		CurrentVersion,
 	)
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
@@ -1831,7 +1834,7 @@ func TestLoadConfig_RejectsUnknownChannelSettingsWithoutRewriting(t *testing.T) 
 		channelName string
 		channelType string
 	}{
-		{name: "standard_name", channelName: ChannelTelegram},
+		{name: "standard_name", channelName: ChannelTelegram, channelType: ChannelTelegram},
 		{name: "aliased_instance", channelName: "telegram_alerts", channelType: ChannelTelegram},
 	}
 	for _, test := range tests {

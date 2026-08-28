@@ -713,13 +713,6 @@ func isValidChannelType(channelType string) bool {
 	return ok
 }
 
-func effectiveChannelType(name, channelType string) string {
-	if channelType != "" {
-		return channelType
-	}
-	return name
-}
-
 // InitChannelList validates and initializes all channels in the ChannelsConfig.
 // It performs three steps:
 //  1. Validates that each channel has a non-empty Type

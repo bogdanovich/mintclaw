@@ -488,8 +488,7 @@ func (c *Config) SecurityCopyForReplacement(path string, current *Config) error 
 		}
 		for name, durable := range current.Channels {
 			replacement := c.Channels.Get(name)
-			if durable != nil && replacement != nil &&
-				effectiveChannelType(name, durable.Type) == effectiveChannelType(name, replacement.Type) {
+			if durable != nil && replacement != nil && durable.Type == replacement.Type {
 				matchingChannels[name] = struct{}{}
 			}
 		}
@@ -520,7 +519,6 @@ func marshalReplacementChannelSecurity(channels ChannelsConfig) (*yaml.Node, err
 			continue
 		}
 		copy := *channel
-		copy.Type = effectiveChannelType(name, copy.Type)
 		typedChannels[name] = &copy
 	}
 	var node yaml.Node

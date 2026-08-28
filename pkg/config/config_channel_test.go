@@ -29,6 +29,13 @@ type testDiscordConfig struct {
 	ApiKeys     SecureStrings `json:"api_keys,omitzero" yaml:"api_keys,omitempty"`
 }
 
+func TestDefaultChannelsDeclareExplicitTypes(t *testing.T) {
+	for name, channel := range defaultChannels() {
+		require.NotNil(t, channel, "default channel %q", name)
+		assert.Equal(t, name, channel.Type, "default channel %q type", name)
+	}
+}
+
 // ═══════════════════════════════════════════════════
 //  RawNode JSON/YAML round-trip
 // ═══════════════════════════════════════════════════
