@@ -86,7 +86,7 @@ export async function getModels(): Promise<ModelsListResponse> {
 }
 
 export async function addModel(
-  model: Partial<ModelInfo>,
+  model: Omit<Partial<ModelInfo>, "enabled"> & Pick<ModelInfo, "enabled">,
 ): Promise<ModelActionResponse> {
   return request<ModelActionResponse>("/api/models", {
     method: "POST",

@@ -136,6 +136,7 @@ export function CatalogDialog({
           model_name: model.id,
           provider: entry.provider || undefined,
           model: model.id,
+          enabled: true,
           api_base: entry.api_base || undefined,
         })
       }
@@ -301,8 +302,7 @@ export function CatalogDialog({
                       </div>
                       {entrySelected.size > 0 && (
                         <div className="mt-2 space-y-2">
-                          {providerDef?.requiresApiKey !==
-                            false && (
+                          {providerDef?.requiresApiKey !== false && (
                             <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-2 text-xs text-yellow-700 dark:text-yellow-400">
                               {t("models.catalog.needApiKey")}
                             </div>
