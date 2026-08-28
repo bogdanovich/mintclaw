@@ -24,6 +24,8 @@ const (
 	codingInstructionMarkerSuffix      = " -->"
 )
 
+// AGENTS.md is the canonical project instruction file. CLAUDE.md is an
+// intentional external instruction-file alias at the lowest priority.
 var codingInstructionFilenames = []string{
 	"AGENTS.override.md",
 	"AGENTS.md",

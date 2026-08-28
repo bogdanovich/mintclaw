@@ -1,4 +1,5 @@
-// this file is for compatible with 3rd party loggers, should not be called in MintClaw project
+// This adapter serves packages that require a printf-style logger. MintClaw
+// code should use the structured package-level logging functions instead.
 
 package logger
 
@@ -74,9 +75,9 @@ func (b *Logger) Fatalf(format string, v ...any) {
 }
 
 // Log logs a message at a given level with caller information
-// the func name must be this because 3rd party loggers expect this
+// The method name and signature are defined by the external logger contract.
 // msgL: message level (DEBUG, INFO, WARN, ERROR, FATAL)
-// caller: unused parameter reserved for compatibility
+// caller: part of the external signature; unused by this adapter
 // format: format string
 // a: format arguments
 //

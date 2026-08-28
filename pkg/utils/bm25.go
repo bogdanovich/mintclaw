@@ -170,9 +170,9 @@ func (e *BM25Engine[T]) Search(query string, topK int) []BM25Result[T] {
 	return out
 }
 
-// bm25ScoredDesc orders scored documents by descending score, treating NaN as
-// a tie with every value (matching the historical `>` comparator) so that NaN
-// scores never leapfrog finite ones.
+// bm25ScoredDesc orders comparable scores in descending order. It returns a
+// tie when neither score compares greater or less, including pairs containing
+// NaN.
 func bm25ScoredDesc(a, b bm25ScoredDoc) int {
 	switch {
 	case a.score > b.score:

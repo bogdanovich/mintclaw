@@ -21,7 +21,7 @@ func TestBuildAgentRuntimeConfigUsesConfiguredModelContextWindow(t *testing.T) {
 	}
 }
 
-func TestResolvePrimaryProviderForAgent_ReportsInjectedCompatibilityFallback(t *testing.T) {
+func TestResolvePrimaryProviderForAgentReportsInjectedProviderFallback(t *testing.T) {
 	fallback := &mockProvider{}
 	cfg := &config.Config{ModelList: config.SecureModelList{{
 		ModelName: "configured", Provider: "openai", Model: "configured-model", Enabled: true,
@@ -42,11 +42,11 @@ func TestResolvePrimaryProviderForAgent_ReportsInjectedCompatibilityFallback(t *
 		t.Fatalf("selected = %+v, want configured row", selected)
 	}
 	if exact {
-		t.Fatal("exact = true, want compatibility fallback provenance")
+		t.Fatal("exact = true, want injected provider provenance")
 	}
 }
 
-func TestInjectedCompatibilityProviderPreservesExactPrimaryMetadata(t *testing.T) {
+func TestInjectedProviderPreservesExactPrimaryMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	defaults := config.AgentDefaults{Workspace: workspace, ModelName: "compat-duplicate"}
 	cfg := &config.Config{
@@ -84,7 +84,7 @@ func TestInjectedCompatibilityProviderPreservesExactPrimaryMetadata(t *testing.T
 	}
 	candidate := agent.Candidates[0]
 	if candidate.ConfigOrdinal != 2 || candidate.ProviderConfigOrdinal != 0 {
-		t.Fatalf("candidate = %+v, want row-2 metadata with compatibility provider", candidate)
+		t.Fatalf("candidate = %+v, want row-2 metadata with injected provider", candidate)
 	}
 	metadata := resolveActiveModelConfig(cfg, workspace, agent.Candidates, candidate.Model)
 	if metadata == nil || !metadata.Streaming.Enabled {

@@ -25,9 +25,11 @@ exists, `CLAUDE.md` is ignored. An unreadable or unsafe higher-priority file is
 reported and still shadows the lower-priority names; MintClaw does not silently
 bypass it.
 
-`CLAUDE.md` is an intentional MintClaw compatibility fallback. Stock Codex
-does not load it by default; Codex users can configure additional fallback
-filenames through `project_doc_fallback_filenames`. See the official
+`AGENTS.md` is MintClaw's canonical project instruction filename and Codex's
+native format. `CLAUDE.md` is an intentional external instruction-file alias
+admitted at lower priority; it is not a historical MintClaw runtime contract.
+Stock Codex does not load it by default, but Codex users can add filenames through
+`project_doc_fallback_filenames`. See the official
 [Codex `AGENTS.md` documentation](https://learn.chatgpt.com/docs/agent-configuration/agents-md).
 
 ## Root And Scope Precedence
