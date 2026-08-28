@@ -133,7 +133,7 @@ func resolveDeleteProjectBoundaries(ctx context.Context, project ProjectIdentity
 	if project.Kind != ProjectKindGitWorktree || project.GitDir != "" {
 		return project, nil
 	}
-	current, err := ResolveProject(ctx, project.InvocationCWD)
+	current, err := ResolveProject(ctx, project.ProjectRoot)
 	if err != nil {
 		return ProjectIdentity{}, fmt.Errorf("coding thread delete: resolve legacy Git directory: %w", err)
 	}

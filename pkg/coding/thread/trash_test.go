@@ -106,7 +106,11 @@ func TestLegacyGitDescriptorWithoutGitDirRemainsReadableAndResolvesDeleteBoundar
 	root := t.TempDir()
 	repository := filepath.Join(root, "repository")
 	runGit(t, root, "init", repository)
-	project, err := ResolveProject(t.Context(), repository)
+	invocationCWD := filepath.Join(repository, "nested", "removed-later")
+	if err := os.MkdirAll(invocationCWD, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project, err := ResolveProject(t.Context(), invocationCWD)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +131,9 @@ func TestLegacyGitDescriptorWithoutGitDirRemainsReadableAndResolvesDeleteBoundar
 	}
 	metadata.Project.GitDir = ""
 	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(repository, "nested")); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := store.Load(metadata.ThreadID)
