@@ -312,7 +312,7 @@ func (m *Manager) finalizedStreamActiveForMessage(channelName string, msg bus.Ou
 	if strings.TrimSpace(channelName) == "" || strings.TrimSpace(chatID) == "" {
 		return false
 	}
-	_, active := m.streamCoordinator().activeKey(
+	_, active := m.stream.activeKey(
 		channelName, chatID, msg.SessionKey, primaryTraceScope(msg.TraceScopes),
 	)
 	return active

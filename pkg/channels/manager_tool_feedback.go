@@ -31,7 +31,7 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.StopTyping {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if entry, loaded := m.streamCoordinator().takeTyping(name + ":" + cleanupChatID); loaded {
+			if entry, loaded := m.stream.takeTyping(name + ":" + cleanupChatID); loaded {
 				entry.stop()
 			}
 		}
@@ -39,7 +39,7 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.UndoReaction {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if entry, loaded := m.streamCoordinator().takeReaction(name + ":" + cleanupChatID); loaded {
+			if entry, loaded := m.stream.takeReaction(name + ":" + cleanupChatID); loaded {
 				entry.undo()
 			}
 		}
@@ -50,7 +50,7 @@ func (m *Manager) cleanupDeliveryState(
 			streamKey := streamSuppressionKey(
 				name, cleanupChatID, opts.SessionKey, primaryTraceScope(opts.TraceScopes),
 			)
-			m.streamCoordinator().clear(streamKey)
+			m.stream.clear(streamKey)
 		}
 	}
 
@@ -62,8 +62,7 @@ func (m *Manager) cleanupDeliveryState(
 
 	if opts.DeletePlaceholder {
 		for _, cleanupChatID := range cleanupChatIDs {
-			if entry, loaded := m.streamCoordinator().
-				takePlaceholder(name + ":" + cleanupChatID); loaded &&
+			if entry, loaded := m.stream.takePlaceholder(name + ":" + cleanupChatID); loaded &&
 				entry.id != "" {
 				if deleter, ok := ch.(MessageDeleter); ok {
 					_ = deleter.DeleteMessage(ctx, cleanupChatID, entry.id)
@@ -156,13 +155,13 @@ func (m *Manager) beginToolFeedbackTerminals(
 	traceScopes []runtimeevents.TraceScope,
 	transient bool,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.streamCoordinator().hasToolFeedback() {
+	if m == nil || !m.stream.hasToolFeedback() {
 		return nil
 	}
 	keys, scoped := toolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	return m.streamCoordinator().beginToolFeedbackTerminals(
+	return m.stream.beginToolFeedbackTerminals(
 		keys,
 		scoped,
 		strings.TrimSpace(sessionKey) != "",
@@ -176,7 +175,7 @@ func (m *Manager) completeToolFeedbackTerminals(
 	terminals []*toolFeedbackTerminal,
 	success bool,
 ) {
-	m.streamCoordinator().completeToolFeedbackTerminals(ctx, terminals, success)
+	m.stream.completeToolFeedbackTerminals(ctx, terminals, success)
 }
 
 func (m *Manager) beginOutboundToolFeedbackTerminals(
@@ -184,7 +183,7 @@ func (m *Manager) beginOutboundToolFeedbackTerminals(
 	ch Channel,
 	msg bus.OutboundMessage,
 ) []*toolFeedbackTerminal {
-	if m == nil || !m.streamCoordinator().hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
+	if m == nil || !m.stream.hasToolFeedback() || outboundMessageIsToolFeedback(msg) ||
 		!OutboundMessageDismissesTrackedToolFeedback(msg) {
 		return nil
 	}
@@ -215,7 +214,7 @@ func (m *Manager) deliverToolFeedback(
 	)
 	content := prepareToolFeedbackMessageContent(ch, msg.Content)
 	operations := toolFeedbackOperationsFor(ch)
-	coordinated, err := m.streamCoordinator().deliverToolFeedback(
+	coordinated, err := m.stream.deliverToolFeedback(
 		ctx,
 		key,
 		toolFeedbackGeneration(primaryTraceScope(msg.TraceScopes)),
@@ -286,7 +285,7 @@ func toolFeedbackGenerations(traceScopes []runtimeevents.TraceScope) []string {
 
 // DismissToolFeedback clears tracked progress for one outbound identity.
 func (m *Manager) DismissToolFeedback(ctx context.Context, target bus.OutboundMessage) {
-	if m == nil || !m.streamCoordinator().hasToolFeedback() {
+	if m == nil || !m.stream.hasToolFeedback() {
 		return
 	}
 	channelName := outboundMessageChannel(target)
@@ -308,7 +307,7 @@ func (m *Manager) DismissToolFeedback(ctx context.Context, target bus.OutboundMe
 // PauseToolFeedback stops animation while retaining the editable progress
 // carrier for a later turn in the same logical session.
 func (m *Manager) PauseToolFeedback(ctx context.Context, target bus.OutboundMessage) {
-	if m == nil || !m.streamCoordinator().hasToolFeedback() {
+	if m == nil || !m.stream.hasToolFeedback() {
 		return
 	}
 	channelName := outboundMessageChannel(target)
@@ -324,7 +323,7 @@ func (m *Manager) PauseToolFeedback(ctx context.Context, target bus.OutboundMess
 		target.SessionKey,
 		target.TraceScopes,
 	)
-	m.streamCoordinator().pauseToolFeedback(ctx, keys, scoped)
+	m.stream.pauseToolFeedback(ctx, keys, scoped)
 }
 
 func (m *Manager) dismissToolFeedbackTargets(
@@ -339,7 +338,7 @@ func (m *Manager) dismissToolFeedbackTargets(
 	keys, scoped := toolFeedbackTargets(
 		channelName, ch, chatID, outboundCtx, sessionKey, traceScopes,
 	)
-	m.streamCoordinator().dismissToolFeedback(ctx, keys, scoped || strings.TrimSpace(sessionKey) != "")
+	m.stream.dismissToolFeedback(ctx, keys, scoped || strings.TrimSpace(sessionKey) != "")
 }
 
 func prepareToolFeedbackMessageContent(ch Channel, content string) string {
@@ -359,7 +358,7 @@ func prepareToolFeedbackMessageContent(ch Channel, content string) string {
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordPlaceholder(channel, chatID, placeholderID string) {
 	key := channel + ":" + chatID
-	m.streamCoordinator().storePlaceholder(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
+	m.stream.storePlaceholder(key, placeholderEntry{id: placeholderID, createdAt: time.Now()})
 }
 
 // SendPlaceholder sends a "Thinking…" placeholder for the given channel/chatID
@@ -386,7 +385,7 @@ func (m *Manager) SendPlaceholder(ctx context.Context, channel, chatID string) b
 func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 	key := channel + ":" + chatID
 	entry := typingEntry{stop: stop, createdAt: time.Now()}
-	if previous, loaded := m.streamCoordinator().swapTyping(key, entry); loaded && previous.stop != nil {
+	if previous, loaded := m.stream.swapTyping(key, entry); loaded && previous.stop != nil {
 		previous.stop()
 	}
 }
@@ -397,7 +396,7 @@ func (m *Manager) RecordTypingStop(channel, chatID string, stop func()) {
 // regardless of whether an outbound message is published.
 func (m *Manager) InvokeTypingStop(channel, chatID string) {
 	key := channel + ":" + chatID
-	if entry, loaded := m.streamCoordinator().takeTyping(key); loaded {
+	if entry, loaded := m.stream.takeTyping(key); loaded {
 		entry.stop()
 	}
 }
@@ -406,5 +405,5 @@ func (m *Manager) InvokeTypingStop(channel, chatID string) {
 // Implements PlaceholderRecorder.
 func (m *Manager) RecordReactionUndo(channel, chatID string, undo func()) {
 	key := channel + ":" + chatID
-	m.streamCoordinator().storeReaction(key, reactionEntry{undo: undo, createdAt: time.Now()})
+	m.stream.storeReaction(key, reactionEntry{undo: undo, createdAt: time.Now()})
 }

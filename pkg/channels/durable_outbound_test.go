@@ -119,7 +119,7 @@ func TestDurableQueuedMessagePersistsTypedChannelOutcome(t *testing.T) {
 			channel := &durableTextChannel{messageIDs: tt.messageIDs, err: tt.err}
 			manager := newTestManager()
 			manager.outboundOutbox = coordinator
-			manager.deliveryRuntime().deliverQueuedMessage(t.Context(), "test", &channelWorker{
+			manager.delivery.deliverQueuedMessage(t.Context(), "test", &channelWorker{
 				ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 			}, msg)
 
@@ -221,7 +221,7 @@ func TestDurableQueuedMediaPersistsPartialDeliveryAsAmbiguous(t *testing.T) {
 	}
 	manager := newTestManager()
 	manager.outboundOutbox = coordinator
-	manager.deliveryRuntime().deliverQueuedMedia(t.Context(), "test", &channelWorker{
+	manager.delivery.deliverQueuedMedia(t.Context(), "test", &channelWorker{
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, msg)
 
@@ -247,7 +247,7 @@ func TestDurableQueuedMessageDoesNotCallAdapterWhenAttemptCannotPersist(t *testi
 	channel := &durableTextChannel{}
 	manager := newTestManager()
 	manager.outboundOutbox = coordinator
-	manager.deliveryRuntime().deliverQueuedMessage(t.Context(), "test", &channelWorker{
+	manager.delivery.deliverQueuedMessage(t.Context(), "test", &channelWorker{
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, msg)
 	if channel.sends != 0 {
@@ -258,7 +258,7 @@ func TestDurableQueuedMessageDoesNotCallAdapterWhenAttemptCannotPersist(t *testi
 func TestDurableQueuedMessageFailsClosedWithoutCoordinator(t *testing.T) {
 	channel := &durableTextChannel{}
 	manager := newTestManager()
-	manager.deliveryRuntime().deliverQueuedMessage(t.Context(), "test", &channelWorker{
+	manager.delivery.deliverQueuedMessage(t.Context(), "test", &channelWorker{
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, testOutboundMessage(bus.OutboundMessage{
 		Channel:    "test",
@@ -274,7 +274,7 @@ func TestDurableQueuedMessageFailsClosedWithoutCoordinator(t *testing.T) {
 func TestDurableQueuedMediaFailsClosedWithoutCoordinator(t *testing.T) {
 	channel := &durableMediaChannel{}
 	manager := newTestManager()
-	manager.deliveryRuntime().deliverQueuedMedia(t.Context(), "test", &channelWorker{
+	manager.delivery.deliverQueuedMedia(t.Context(), "test", &channelWorker{
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, testOutboundMediaMessage(bus.OutboundMediaMessage{
 		Channel:    "test",
@@ -290,7 +290,7 @@ func TestDurableQueuedMediaFailsClosedWithoutCoordinator(t *testing.T) {
 func TestQueuedMessageWithoutDeliveryIDUsesCurrentDelivery(t *testing.T) {
 	channel := &durableTextChannel{messageIDs: []string{"platform-current-1"}}
 	manager := newTestManager()
-	manager.deliveryRuntime().deliverQueuedMessage(t.Context(), "test", &channelWorker{
+	manager.delivery.deliverQueuedMessage(t.Context(), "test", &channelWorker{
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, testOutboundMessage(bus.OutboundMessage{
 		Channel: "test",
@@ -317,7 +317,7 @@ func TestDurableOutcomePersistenceFailureLeavesAttemptForReconciliation(t *testi
 	}}
 	manager := newTestManager()
 	manager.outboundOutbox = coordinator
-	manager.deliveryRuntime().deliverQueuedMessage(t.Context(), "test", &channelWorker{
+	manager.delivery.deliverQueuedMessage(t.Context(), "test", &channelWorker{
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, msg)
 	if channel.sends != 1 {
@@ -368,7 +368,7 @@ func TestDurableQueuedMessagePersistsChannelRetryAfter(t *testing.T) {
 	manager := newTestManager()
 	manager.outboundOutbox = coordinator
 	before := time.Now().UTC().Add(20 * time.Second)
-	manager.deliveryRuntime().deliverQueuedMessage(ctx, "test", &channelWorker{
+	manager.delivery.deliverQueuedMessage(ctx, "test", &channelWorker{
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, msg)
 
@@ -400,7 +400,7 @@ func TestDurableQueuedMediaPersistsChannelRetryAfter(t *testing.T) {
 	manager := newTestManager()
 	manager.outboundOutbox = coordinator
 	before := time.Now().UTC().Add(20 * time.Second)
-	manager.deliveryRuntime().deliverQueuedMedia(ctx, "test", &channelWorker{
+	manager.delivery.deliverQueuedMedia(ctx, "test", &channelWorker{
 		ch: channel, limiter: rate.NewLimiter(rate.Inf, 1),
 	}, msg)
 
@@ -426,13 +426,13 @@ func TestCancellationDrainPersistsDurableDispatchRejections(t *testing.T) {
 	messageQueue := make(chan bus.OutboundMessage, 1)
 	messageQueue <- message
 	close(messageQueue)
-	manager.deliveryRuntime().failPendingOutbound("test", messageQueue, cause)
+	manager.delivery.failPendingOutbound("test", messageQueue, cause)
 
 	mediaMessage := admitDurableTestMedia(t, coordinator, "source-canceled-media")
 	mediaQueue := make(chan bus.OutboundMediaMessage, 1)
 	mediaQueue <- mediaMessage
 	close(mediaQueue)
-	manager.deliveryRuntime().failPendingOutboundMedia("test", mediaQueue, cause)
+	manager.delivery.failPendingOutboundMedia("test", mediaQueue, cause)
 
 	for _, deliveryID := range []string{message.DeliveryID, mediaMessage.DeliveryID} {
 		intent, err := coordinator.Get(deliveryID)

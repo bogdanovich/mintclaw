@@ -6,7 +6,7 @@ import (
 )
 
 func TestDeliveryRuntimeInstallAndSnapshot(t *testing.T) {
-	runtime := newDeliveryRuntime()
+	runtime := newDeliveryRuntime(nil)
 	owner := newDeliveryOwner("test", &mockChannel{}, "test")
 
 	runtime.install(owner)
@@ -24,7 +24,7 @@ func TestDeliveryRuntimeInstallAndSnapshot(t *testing.T) {
 }
 
 func TestDeliveryRuntimeDoesNotInventMissingOwner(t *testing.T) {
-	runtime := newDeliveryRuntime()
+	runtime := newDeliveryRuntime(nil)
 
 	if owner := runtime.owner("missing"); owner != nil {
 		t.Fatalf("owner() = %+v, want nil", owner)
@@ -32,7 +32,7 @@ func TestDeliveryRuntimeDoesNotInventMissingOwner(t *testing.T) {
 }
 
 func TestDeliveryRuntimeRejectsIncompleteOwner(t *testing.T) {
-	runtime := newDeliveryRuntime()
+	runtime := newDeliveryRuntime(nil)
 
 	runtime.install(&deliveryOwner{name: "missing-worker"})
 	runtime.install(&deliveryOwner{worker: &channelWorker{}})
@@ -43,7 +43,7 @@ func TestDeliveryRuntimeRejectsIncompleteOwner(t *testing.T) {
 }
 
 func TestDeliveryRuntimeConditionalRemovePreservesReplacement(t *testing.T) {
-	runtime := newDeliveryRuntime()
+	runtime := newDeliveryRuntime(nil)
 	oldOwner := newDeliveryOwner("test", &mockChannel{}, "test")
 	newOwner := newDeliveryOwner("test", &mockChannel{}, "test")
 	runtime.install(newOwner)
@@ -61,7 +61,7 @@ func TestDeliveryRuntimeConditionalRemovePreservesReplacement(t *testing.T) {
 }
 
 func TestDeliveryRuntimeDispatcherLifecycle(t *testing.T) {
-	runtime := newDeliveryRuntime()
+	runtime := newDeliveryRuntime(nil)
 	first := runtime.startDispatcher(context.Background())
 	second := runtime.startDispatcher(context.Background())
 

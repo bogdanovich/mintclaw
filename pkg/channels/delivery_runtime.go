@@ -71,19 +71,10 @@ type DeliveryRuntime struct {
 	host           deliveryRuntimeHost
 }
 
-func (r *DeliveryRuntime) bindHost(host deliveryRuntimeHost) {
-	r.host = host
-}
-
-func newDeliveryRuntime() *DeliveryRuntime {
+func newDeliveryRuntime(host deliveryRuntimeHost) *DeliveryRuntime {
 	return &DeliveryRuntime{
 		owners: make(map[string]*deliveryOwner),
-	}
-}
-
-func (r *DeliveryRuntime) ensureInitialized() {
-	if r.owners == nil {
-		r.owners = make(map[string]*deliveryOwner)
+		host:   host,
 	}
 }
 
@@ -93,7 +84,6 @@ func (r *DeliveryRuntime) install(owner *deliveryOwner) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ensureInitialized()
 	r.owners[owner.name] = owner
 }
 
