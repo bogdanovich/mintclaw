@@ -67,7 +67,7 @@ func ResolveAPIBase(cfg *config.ModelConfig) string {
 // CreateProviderFromConfig creates a provider based on the ModelConfig.
 // It uses ExtractProtocol to determine which provider to create.
 // Supported protocol families include OpenAI-compatible prefixes (e.g., openai, openrouter, groq),
-// Azure OpenAI, Amazon Bedrock, Anthropic (including messages), and various CLI/compatibility shims.
+// Azure OpenAI, Amazon Bedrock, Anthropic (including messages), CLI transports, and provider-specific adapters.
 // See the switch on protocol in this function for the authoritative list.
 // Returns the provider, the effective model ID from ExtractProtocol, and any error.
 func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, error) {

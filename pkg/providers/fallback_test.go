@@ -70,7 +70,7 @@ func TestFallback_SecondCandidateSuccess(t *testing.T) {
 	}
 }
 
-func TestFallbackObservedReportsFailuresAndSuccessWithoutChangingAttempts(t *testing.T) {
+func TestFallbackObservedReportsEveryCandidateAndRetainsResultAttempts(t *testing.T) {
 	fc := NewFallbackChain(NewCooldownTracker(), nil)
 	candidates := []FallbackCandidate{
 		{Provider: "openai", Model: "primary", IdentityKey: "primary-id"},
@@ -94,7 +94,7 @@ func TestFallbackObservedReportsFailuresAndSuccessWithoutChangingAttempts(t *tes
 		t.Fatalf("ExecuteCandidateObserved: %v", err)
 	}
 	if len(result.Attempts) != 1 {
-		t.Fatalf("compatibility attempts = %d, want 1", len(result.Attempts))
+		t.Fatalf("result attempts = %d, want 1", len(result.Attempts))
 	}
 	if len(observations) != 2 || observations[0].Succeeded || !observations[1].Succeeded {
 		t.Fatalf("observations = %#v", observations)

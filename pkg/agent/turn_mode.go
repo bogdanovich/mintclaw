@@ -1,8 +1,8 @@
 package agent
 
 // turnMode selects one admitted execution contract. The constructor owns the
-// fixed behavior for each entrypoint so callers do not rebuild boolean
-// combinations from historical defaults.
+// fixed behavior for each entrypoint so callers do not rebuild scattered
+// boolean combinations.
 type turnMode uint8
 
 const (

@@ -373,7 +373,7 @@ func DecodeToolCallArguments(raw json.RawMessage, name string) map[string]any {
 // --- HTTP response helpers ---
 
 // HTTPError captures structured details for non-OK provider HTTP responses.
-// Error preserves the previous user/log-facing text format for compatibility.
+// Error returns the shared user/log-facing format for provider HTTP failures.
 type HTTPError struct {
 	StatusCode  int
 	BodyPreview string

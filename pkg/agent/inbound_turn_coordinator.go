@@ -30,7 +30,7 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 	target, ok := al.resolveSteeringTarget(msg)
 	if !ok {
 		// Non-routable message (e.g. system) stays synchronous so it preserves
-		// the historical ordering guarantee and does not enter session steering.
+		// the required ordering and does not enter session steering.
 		admission := al.processMessageSync(ctx, msg)
 		_ = al.settleInboundAdmission(ctx, msg, admission)
 		return

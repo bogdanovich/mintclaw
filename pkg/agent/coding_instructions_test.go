@@ -54,7 +54,7 @@ func TestCodingInstructionsSelectOneFilePerDirectoryAndOrderByScope(t *testing.T
 	rendered := renderCodingInstructionBundle(bundle, false)
 	for _, forbidden := range []string{"root claude must not merge", "nested agents must not merge", "nested claude"} {
 		if strings.Contains(rendered, forbidden) {
-			t.Fatalf("same-directory fallback was merged (%q):\n%s", forbidden, rendered)
+			t.Fatalf("lower-priority same-directory instruction was merged (%q):\n%s", forbidden, rendered)
 		}
 	}
 	wantCWD, err := filepath.EvalSymlinks(cwd)
@@ -66,14 +66,14 @@ func TestCodingInstructionsSelectOneFilePerDirectoryAndOrderByScope(t *testing.T
 	}
 }
 
-func TestCodingInstructionsUseClaudeOnlyAsFallback(t *testing.T) {
+func TestCodingInstructionsUseClaudeOnlyAsExternalAlias(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
 	nested := filepath.Join(project, "nested")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeCodingInstructionTestFile(t, filepath.Join(project, "CLAUDE.md"), "root claude fallback")
+	writeCodingInstructionTestFile(t, filepath.Join(project, "CLAUDE.md"), "root claude alias")
 	writeCodingInstructionTestFile(t, filepath.Join(nested, "AGENTS.md"), "nested agents")
 	writeCodingInstructionTestFile(t, filepath.Join(nested, "CLAUDE.md"), "nested claude must not merge")
 
@@ -86,7 +86,7 @@ func TestCodingInstructionsUseClaudeOnlyAsFallback(t *testing.T) {
 	bundle := loader.initial()
 	if len(bundle.Documents) != 2 || bundle.Documents[0].Label != "CLAUDE.md" ||
 		bundle.Documents[1].Label != "AGENTS.md" {
-		t.Fatalf("fallback selection = %#v", bundle.Documents)
+		t.Fatalf("alias selection = %#v", bundle.Documents)
 	}
 	if strings.Contains(renderCodingInstructionBundle(bundle, false), "nested claude must not merge") {
 		t.Fatal("CLAUDE.md merged despite same-directory AGENTS.md")
@@ -377,7 +377,7 @@ func TestCodingPromptRefreshesGlobalRepositoryAndCWDInstructions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeCodingInstructionTestFile(t, filepath.Join(global, "CLAUDE.md"), "global fallback")
+	writeCodingInstructionTestFile(t, filepath.Join(global, "CLAUDE.md"), "global external alias")
 	writeCodingInstructionTestFile(t, filepath.Join(project, "AGENTS.md"), "repository rules")
 	nestedPath := filepath.Join(cwd, "AGENTS.override.md")
 	writeCodingInstructionTestFile(t, nestedPath, "cwd override v1")
@@ -400,7 +400,7 @@ func TestCodingPromptRefreshesGlobalRepositoryAndCWDInstructions(t *testing.T) {
 		t.Fatalf("prompt shape = %#v", first)
 	}
 	system := first[0].Content
-	globalIndex := strings.Index(system, "global fallback")
+	globalIndex := strings.Index(system, "global external alias")
 	rootIndex := strings.Index(system, "repository rules")
 	nestedIndex := strings.Index(system, "cwd override v1")
 	if globalIndex < 0 || rootIndex <= globalIndex || nestedIndex <= rootIndex {
@@ -564,7 +564,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 		t.Fatal(err)
 	}
 	writeCodingInstructionTestFile(t, filepath.Join(project, "AGENTS.md"), "root rules")
-	writeCodingInstructionTestFile(t, filepath.Join(nested, "CLAUDE.md"), "nested fallback rules")
+	writeCodingInstructionTestFile(t, filepath.Join(nested, "CLAUDE.md"), "nested external alias rules")
 	canonicalNested, err := filepath.EvalSymlinks(nested)
 	if err != nil {
 		t.Fatal(err)
@@ -578,7 +578,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 			Name: "request nested write",
 			Assert: func(call llmscenario.ProviderCall) error {
 				if len(call.Messages) == 0 || !strings.Contains(call.Messages[0].Content, "root rules") ||
-					strings.Contains(call.Messages[0].Content, "nested fallback rules") {
+					strings.Contains(call.Messages[0].Content, "nested external alias rules") {
 					return fmt.Errorf("initial instructions = %#v", call.Messages)
 				}
 				return nil
@@ -593,7 +593,7 @@ func TestCodingInstructionBarrierDefersWriteUntilModelReviewsNestedScope(t *test
 		llmscenario.ProviderStep{
 			Name: "review nested instructions before retry",
 			Assert: func(call llmscenario.ProviderCall) error {
-				if err := llmscenario.RequireLastMessage("tool", "nested fallback rules")(call); err != nil {
+				if err := llmscenario.RequireLastMessage("tool", "nested external alias rules")(call); err != nil {
 					return err
 				}
 				if _, err := os.Stat(target); err == nil {

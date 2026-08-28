@@ -181,7 +181,7 @@ func (fc *FallbackChain) ExecuteCandidate(
 }
 
 // ExecuteCandidateObserved reports every skipped, failed, and successful
-// candidate without changing the compatibility Attempts projection.
+// candidate while FallbackResult.Attempts retains failed and skipped attempts.
 func (fc *FallbackChain) ExecuteCandidateObserved(
 	ctx context.Context,
 	candidates []FallbackCandidate,

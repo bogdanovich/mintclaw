@@ -510,9 +510,8 @@ func dispatchLoop[M any](
 
 			channel := getChannel(msg)
 
-			// Internal traffic has no external delivery owner. Preserve the
-			// historical silent skip unless this message explicitly promises a
-			// terminal delivery outcome.
+			// Internal traffic has no external delivery owner. Ignore it unless
+			// this message explicitly promises a terminal delivery outcome.
 			if constants.IsInternalChannel(channel) {
 				if requiresOutcome(msg) {
 					reject(msg, fmt.Errorf("internal channel %s has no external delivery owner", channel))
