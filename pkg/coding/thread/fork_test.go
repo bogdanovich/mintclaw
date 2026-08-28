@@ -106,30 +106,42 @@ func TestForkThreadAtHistoricalTurnPublishesIndependentRestartableHistory(t *tes
 	}
 }
 
-func TestForkThreadLatestSupportsLegacyRootMarkersAndRejectsBounds(t *testing.T) {
+func TestForkThreadRejectsUnmarkedRootTurns(t *testing.T) {
 	store, source := newLeaseTestThread(t)
-	legacy := []providers.Message{
+	unmarked := []providers.Message{
 		{Role: "user", Content: "first"},
 		{Role: "assistant", Content: "one"},
 		{Role: "user", ToolCallID: "tool-result", Content: "not a root"},
 		{Role: "user", Content: "second"},
 		{Role: "assistant", Content: "two"},
 	}
-	writeForkTestHistory(t, store, source, legacy)
+	writeForkTestHistory(t, store, source, unmarked)
 	lease, err := store.AcquireLease(source.ThreadID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = lease.Release() })
-	child, result, err := store.ForkThread(t.Context(), lease, ForkOptions{
+	if _, _, err := store.ForkThread(t.Context(), lease, ForkOptions{
 		TargetThreadID: NewThreadID(), Project: source.Project, At: time.Now(),
-	})
+	}); err == nil || !strings.Contains(err.Error(), "source has no stable user turns") {
+		t.Fatalf("unmarked root error = %v", err)
+	}
+}
+
+func TestForkThreadRejectsTurnBounds(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	history := []providers.Message{
+		{Role: "user", Content: "first", RootTurnStart: true},
+		{Role: "assistant", Content: "one"},
+		{Role: "user", Content: "second", RootTurnStart: true},
+		{Role: "assistant", Content: "two"},
+	}
+	writeForkTestHistory(t, store, source, history)
+	lease, err := store.AcquireLease(source.ThreadID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.SourceTurn != 2 || result.CopiedMessages != len(legacy) || child.Fork.SourceMessageIndex != 3 {
-		t.Fatalf("latest legacy fork = %+v metadata=%+v", result, child.Fork)
-	}
+	t.Cleanup(func() { _ = lease.Release() })
 	if _, _, err := store.ForkThread(t.Context(), lease, ForkOptions{
 		TargetThreadID: NewThreadID(), Project: source.Project, AtTurn: 3, At: time.Now(),
 	}); err == nil || !strings.Contains(err.Error(), "exceeds 2 available") {
@@ -360,17 +372,17 @@ func TestForkThreadRejectsHardLinkedSourceTranscriptFile(t *testing.T) {
 	}
 }
 
-func TestForkRootIndexesSupportsLegacyPrefixBeforeMarkedTurns(t *testing.T) {
+func TestForkRootIndexesUsesOnlyExplicitRootMarkers(t *testing.T) {
 	history := []providers.Message{
-		{Role: "user", Content: "legacy root"},
-		{Role: "assistant", Content: "legacy answer"},
+		{Role: "user", Content: "unmarked user message"},
+		{Role: "assistant", Content: "answer"},
 		{Role: "user", Content: "marked root", RootTurnStart: true},
 		{Role: "user", Content: "in-turn user-shaped message"},
 		{Role: "assistant", Content: "marked answer"},
 	}
 	indexes := forkRootIndexes(history)
-	if len(indexes) != 2 || indexes[0] != 0 || indexes[1] != 2 {
-		t.Fatalf("mixed root indexes = %v", indexes)
+	if len(indexes) != 1 || indexes[0] != 2 {
+		t.Fatalf("explicit root indexes = %v", indexes)
 	}
 }
 

@@ -49,7 +49,8 @@ func TestAppendUserMessageRequiresLiveMatchingLeaseAndSurvivesRestart(t *testing
 	if err != nil {
 		t.Fatalf("ReadTurnHistory() error = %v", err)
 	}
-	if len(history) != 1 || history[0].Role != "user" || history[0].Content != "first prompt\nwith detail" {
+	if len(history) != 1 || history[0].Role != "user" || history[0].Content != "first prompt\nwith detail" ||
+		!history[0].RootTurnStart {
 		t.Fatalf("restarted history = %#v", history)
 	}
 }
