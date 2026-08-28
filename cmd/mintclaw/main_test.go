@@ -52,6 +52,7 @@ func TestNewMintClawCommand(t *testing.T) {
 		"resume",
 		"skills",
 		"status",
+		"threads",
 		"update",
 		"version",
 	}
