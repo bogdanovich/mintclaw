@@ -111,7 +111,7 @@ func (s *Store) AppendUserMessage(
 		appendErr := backend.AppendTurnMessage(
 			ctx,
 			metadata.SessionKey,
-			providers.Message{Role: "user", Content: content},
+			providers.Message{Role: "user", Content: content, RootTurnStart: true},
 		)
 		closeErr := backend.Close()
 		return classifyPromptAppend(metadata.ThreadID, appendErr, closeErr)

@@ -373,29 +373,13 @@ func selectForkPrefix(
 }
 
 func forkRootIndexes(history []providers.Message) []int {
-	marked := make([]int, 0)
-	legacy := make([]int, 0)
+	roots := make([]int, 0)
 	for index, message := range history {
-		if message.Role != "user" || message.ToolCallID != "" {
-			continue
-		}
-		legacy = append(legacy, index)
-		if message.RootTurnStart {
-			marked = append(marked, index)
+		if message.Role == "user" && message.ToolCallID == "" && message.RootTurnStart {
+			roots = append(roots, index)
 		}
 	}
-	if len(marked) == 0 {
-		return legacy
-	}
-	transition := marked[0]
-	roots := make([]int, 0, len(legacy)+len(marked))
-	for _, index := range legacy {
-		if index >= transition {
-			break
-		}
-		roots = append(roots, index)
-	}
-	return append(roots, marked...)
+	return roots
 }
 
 func (s *Store) publishFork(
