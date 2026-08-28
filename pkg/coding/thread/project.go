@@ -51,8 +51,9 @@ func (p ProjectIdentity) Validate() error {
 			return fmt.Errorf("non-Git project contains Git metadata")
 		}
 	case ProjectKindGitWorktree:
-		if p.GitWorktreeRoot == "" || p.GitCommonDir == "" || p.ProjectRoot != p.GitWorktreeRoot {
-			return fmt.Errorf("git project requires matching worktree root and common directory")
+		if p.GitWorktreeRoot == "" || p.GitDir == "" || p.GitCommonDir == "" ||
+			p.ProjectRoot != p.GitWorktreeRoot {
+			return fmt.Errorf("git project requires matching worktree root, Git directory, and common directory")
 		}
 	default:
 		return fmt.Errorf("unsupported kind %q", p.Kind)

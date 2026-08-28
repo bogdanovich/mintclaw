@@ -94,6 +94,7 @@ For a Git worktree it records:
 
 - canonical invocation cwd;
 - canonical worktree root;
+- canonical Git directory;
 - canonical Git common directory;
 - safely classified, credential-stripped `origin`, when configured;
 - branch, empty when detached; and
@@ -116,12 +117,6 @@ Git worktree has its own key and worktree-private `git_dir` even though it share
 `git_common_dir` with the main worktree. Branch, HEAD, and remote changes do not
 change the project key;
 they are restart/resume observations, not project ownership.
-
-Descriptors written before `git_dir` was added remain readable with that field
-empty. Destructive lifecycle operations must resolve the current canonical Git
-directory from the stable project root and verify the stored project key and
-common directory before acting;
-ordinary metadata reads never mutate the legacy descriptor.
 
 Symlink aliases resolve to the same key. Moving a directory changes its key.
 This path-based behavior is deliberate: filesystem paths are execution

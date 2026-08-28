@@ -384,3 +384,50 @@ func TestStoreRejectsCredentialBearingGitOriginOnSaveAndLoad(t *testing.T) {
 		t.Fatalf("Load(credential origin) error = %v", err)
 	}
 }
+
+func TestGitProjectWithoutGitDirIsRejectedOnCreateSaveAndLoad(t *testing.T) {
+	projectRoot := t.TempDir()
+	project := ProjectIdentity{
+		Kind:            ProjectKindGitWorktree,
+		ProjectRoot:     projectRoot,
+		InvocationCWD:   projectRoot,
+		GitWorktreeRoot: projectRoot,
+		GitDir:          projectRoot,
+		GitCommonDir:    projectRoot,
+	}
+	project.ProjectKey = projectKey(project.Kind, project.ProjectRoot)
+	metadata, err := NewMetadata(uuid.NewString(), project, "request", time.Now())
+	if err != nil {
+		t.Fatalf("NewMetadata(valid) error = %v", err)
+	}
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatalf("Save(valid) error = %v", err)
+	}
+
+	metadata.Project.GitDir = ""
+	if _, err := NewMetadata(uuid.NewString(), metadata.Project, "request", time.Now()); err == nil ||
+		!strings.Contains(err.Error(), "Git directory") {
+		t.Fatalf("NewMetadata(missing GitDir) error = %v", err)
+	}
+	if err := store.Save(metadata); err == nil || !strings.Contains(err.Error(), "Git directory") {
+		t.Fatalf("Save(missing GitDir) error = %v", err)
+	}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	path, err := store.metadataPath(metadata.ThreadID)
+	if err != nil {
+		t.Fatalf("metadataPath() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := store.Load(metadata.ThreadID); err == nil || !strings.Contains(err.Error(), "Git directory") {
+		t.Fatalf("Load(missing GitDir) error = %v", err)
+	}
+}
