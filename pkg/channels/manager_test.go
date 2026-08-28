@@ -7377,6 +7377,65 @@ func TestSendMessage_WithSplitting(t *testing.T) {
 	}
 }
 
+func TestSendMessage_WithSplittingDrainsTailAfterAmbiguousChunk(t *testing.T) {
+	m := newTestManager()
+
+	var received []string
+	ch := &mockChannelWithLength{
+		mockChannel: mockChannel{
+			sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+				received = append(received, msg.Content)
+				if len(received) == 2 {
+					return fmt.Errorf("second chunk acceptance unknown: %w", ErrTemporary)
+				}
+				return nil
+			},
+		},
+		maxLen: 1,
+	}
+
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	m.lifecycle.storeChannel("test", ch)
+	installTestDeliveryWorker(m, "test", w)
+
+	err := m.SendMessage(context.Background(), testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "123", Content: "abc",
+	}))
+	if err == nil || DeliveryDefinitelyNotSent(err) {
+		t.Fatalf("SendMessage() error = %v, want sticky ambiguous delivery", err)
+	}
+	if !slices.Equal(received, []string{"a", "b", "c"}) {
+		t.Fatalf("attempted chunks = %v, want ambiguous middle chunk once and untouched tail once", received)
+	}
+}
+
+func TestDeliverQueuedMessageDrainsTailAfterAmbiguousChunk(t *testing.T) {
+	m := newTestManager()
+
+	var received []string
+	ch := &mockChannelWithLength{
+		mockChannel: mockChannel{
+			sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+				received = append(received, msg.Content)
+				if len(received) == 2 {
+					return fmt.Errorf("second queued chunk acceptance unknown: %w", ErrTemporary)
+				}
+				return nil
+			},
+		},
+		maxLen: 1,
+	}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+
+	m.delivery.deliverQueuedMessage(t.Context(), "test", w, testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "123", Content: "abc",
+	}))
+
+	if !slices.Equal(received, []string{"a", "b", "c"}) {
+		t.Fatalf("attempted chunks = %v, want ambiguous middle chunk once and untouched tail once", received)
+	}
+}
+
 func TestSendMedia_ContextOnlyUsesContextAddressing(t *testing.T) {
 	m := newTestManager()
 

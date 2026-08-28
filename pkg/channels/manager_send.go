@@ -71,27 +71,18 @@ func (r *DeliveryRuntime) sendMessageWithRetryPolicy(
 		maxLen = mlp.MaxMessageLength()
 	}
 	if chunks := splitOutboundMessageContent(msg, maxLen); len(chunks) > 1 {
-		deliveredChunks := 0
-		var messageIDs []string
-		for _, chunk := range chunks {
-			chunkMsg := msg
-			chunkMsg.Content = chunk
-			result := r.sendWithRetryPolicy(ctx, channelName, w, chunkMsg, publishNoOutcome)
-			if !result.Delivered() {
-				logicalAmbiguous := result.MayHaveDelivered() || deliveredChunks > 0
-				if outcome.failure(logicalAmbiguous) {
-					m.publishOutboundFailed(channelName, msg, result.Err, false)
-				}
-				return newDeliveryError(
-					fmt.Errorf("channel %s failed to deliver message: %w", channelName, result.Err),
-					logicalAmbiguous,
-				)
+		result := r.sendTextChunksWithRetry(ctx, channelName, w, msg, chunks)
+		if !result.Delivered() {
+			if outcome.failure(result.MayHaveDelivered()) {
+				m.publishOutboundFailed(channelName, msg, result.Err, false)
 			}
-			messageIDs = append(messageIDs, result.MessageIDs...)
-			deliveredChunks++
+			return newDeliveryError(
+				fmt.Errorf("channel %s failed to deliver message: %w", channelName, result.Err),
+				result.MayHaveDelivered(),
+			)
 		}
 		if outcome.success() {
-			m.publishOutboundSent(channelName, msg, messageIDs)
+			m.publishOutboundSent(channelName, msg, result.MessageIDs)
 		}
 		terminalSucceeded = true
 	} else {
