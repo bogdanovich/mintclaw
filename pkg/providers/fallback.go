@@ -34,7 +34,8 @@ func (c FallbackCandidate) StableKey() string {
 	return ModelKey(c.Provider, c.Model)
 }
 
-// FallbackResult contains the successful response and metadata about all attempts.
+// FallbackResult contains the successful response and any failed or skipped
+// attempts recorded before it.
 type FallbackResult struct {
 	Response    *LLMResponse
 	Provider    string
