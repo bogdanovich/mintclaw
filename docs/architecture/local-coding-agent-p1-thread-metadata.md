@@ -117,6 +117,11 @@ Git worktree has its own key and worktree-private `git_dir` even though it share
 change the project key;
 they are restart/resume observations, not project ownership.
 
+Descriptors written before `git_dir` was added remain readable with that field
+empty. Destructive lifecycle operations must resolve the current canonical Git
+directory and verify the stored project key and common directory before acting;
+ordinary metadata reads never mutate the legacy descriptor.
+
 Symlink aliases resolve to the same key. Moving a directory changes its key.
 This path-based behavior is deliberate: filesystem paths are execution
 authority, and remote URL or common-directory resemblance is insufficient to

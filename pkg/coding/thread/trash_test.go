@@ -63,11 +63,11 @@ func TestTrashThreadMovesOnlyRecognizedExternalState(t *testing.T) {
 		plan.ProjectRoot != project.ProjectRoot {
 		t.Fatalf("delete plan = %+v, want paths %v", plan, wantPaths)
 	}
-	if _, err := store.TrashThread(lease, "wrong", time.Now()); err == nil {
+	if _, err := store.TrashThread(t.Context(), lease, "wrong", time.Now()); err == nil {
 		t.Fatal("TrashThread() accepted the wrong confirmation")
 	}
 	trashedAt := time.Date(2026, time.August, 28, 12, 0, 0, 0, time.UTC)
-	result, err := store.TrashThread(lease, metadata.ThreadID, trashedAt)
+	result, err := store.TrashThread(t.Context(), lease, metadata.ThreadID, trashedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +98,60 @@ func TestTrashThreadMovesOnlyRecognizedExternalState(t *testing.T) {
 	}
 	if _, err := store.AcquireLease(metadata.ThreadID); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("post-trash AcquireLease() error = %v", err)
+	}
+}
+
+func TestLegacyGitDescriptorWithoutGitDirRemainsReadableAndResolvesDeleteBoundary(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	repository := filepath.Join(root, "repository")
+	runGit(t, root, "init", repository)
+	project, err := ResolveProject(t.Context(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantGitDir := project.GitDir
+	legacyProject := project
+	legacyProject.GitDir = ""
+	if _, err := NewMetadata(NewThreadID(), legacyProject, "new invalid Git thread", time.Now()); err == nil ||
+		!strings.Contains(err.Error(), "canonical Git directory") {
+		t.Fatalf("NewMetadata(missing GitDir) error = %v", err)
+	}
+	store, err := NewStore(filepath.Join(root, "external", "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewMetadata(NewThreadID(), project, "legacy Git thread", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Project.GitDir = ""
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatalf("Load(legacy Git descriptor) error = %v", err)
+	}
+	if loaded.Project.GitDir != "" {
+		t.Fatalf("legacy GitDir = %q, want empty", loaded.Project.GitDir)
+	}
+	resolved, err := resolveDeleteProjectBoundaries(t.Context(), loaded.Project)
+	if err != nil {
+		t.Fatalf("resolveDeleteProjectBoundaries() error = %v", err)
+	}
+	if resolved.GitDir != wantGitDir {
+		t.Fatalf("resolved GitDir = %q, want %q", resolved.GitDir, wantGitDir)
+	}
+	if _, err := store.PlanDeleteContext(t.Context(), metadata.ThreadID); err != nil {
+		t.Fatalf("PlanDeleteContext(legacy Git descriptor) error = %v", err)
+	}
+
+	mismatch := loaded.Project
+	mismatch.GitCommonDir = filepath.Join(root, "different-common-dir")
+	if _, err := resolveDeleteProjectBoundaries(t.Context(), mismatch); err == nil ||
+		!strings.Contains(err.Error(), "no longer matches") {
+		t.Fatalf("mismatched legacy Git identity error = %v", err)
 	}
 }
 
@@ -287,7 +341,8 @@ func TestTrashThreadRejectsSymlinkedTrashHierarchy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = lease.Release() }()
-	if result, err := store.TrashThread(lease, metadata.ThreadID, time.Now()); err == nil || result.Path != "" ||
+	if result, err := store.TrashThread(t.Context(), lease, metadata.ThreadID, time.Now()); err == nil ||
+		result.Path != "" ||
 		!strings.Contains(err.Error(), "not a direct directory") {
 		t.Fatalf("TrashThread() result = %+v, error = %v", result, err)
 	}
