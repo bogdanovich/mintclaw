@@ -1226,6 +1226,54 @@ func ValidateJSONLHistory(history []providers.Message) error {
 	return err
 }
 
+// JSONLSnapshot is a complete clean canonical session prepared for durable
+// publication by a caller that owns an anchored directory writer.
+type JSONLSnapshot struct {
+	JSONLFile    string
+	MetadataFile string
+	JSONL        []byte
+	Metadata     []byte
+}
+
+// BuildJSONLSnapshot normalizes and encodes a new canonical session without
+// touching the filesystem. The resulting files are independently readable by
+// NewJSONLStore after they are published together.
+func BuildJSONLSnapshot(
+	sessionKey string,
+	history []providers.Message,
+	now time.Time,
+) (JSONLSnapshot, error) {
+	if strings.TrimSpace(sessionKey) == "" {
+		return JSONLSnapshot{}, fmt.Errorf("memory: snapshot session key is required")
+	}
+	if now.IsZero() {
+		return JSONLSnapshot{}, fmt.Errorf("memory: snapshot timestamp is required")
+	}
+	history = messageutil.FilterInvalidHistoryMessages(append([]providers.Message(nil), history...))
+	for index := range history {
+		if history[index].CreatedAt == nil {
+			history[index].CreatedAt = &now
+		}
+	}
+	records, err := encodeJSONL(history)
+	if err != nil {
+		return JSONLSnapshot{}, err
+	}
+	meta := SessionMeta{
+		Key: sessionKey, Count: len(history), CreatedAt: now, UpdatedAt: now,
+		HistoryRevision: 1,
+	}
+	metadata, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return JSONLSnapshot{}, fmt.Errorf("memory: encode snapshot metadata: %w", err)
+	}
+	stem := sanitizeKey(sessionKey)
+	return JSONLSnapshot{
+		JSONLFile: stem + ".jsonl", MetadataFile: stem + ".meta.json",
+		JSONL: records, Metadata: metadata,
+	}, nil
+}
+
 func digestJSONL(data []byte) string {
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])

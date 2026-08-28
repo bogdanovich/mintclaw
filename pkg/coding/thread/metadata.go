@@ -277,6 +277,8 @@ type Store struct {
 	durableRoot  string
 	mkdirDurable func(string, string, os.FileMode) error
 	writeAtomic  func(string, []byte, os.FileMode) error
+	writeRoot    func(*os.Root, string, []byte, os.FileMode) error
+	syncDir      func(string) error
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.
@@ -298,6 +300,8 @@ func NewStore(root string) (*Store, error) {
 		durableRoot:  durableRoot,
 		mkdirDurable: fileutil.MkdirAllDurable,
 		writeAtomic:  fileutil.WriteFileAtomic,
+		writeRoot:    writeRootFileAtomic,
+		syncDir:      fileutil.SyncDirectory,
 	}, nil
 }
 

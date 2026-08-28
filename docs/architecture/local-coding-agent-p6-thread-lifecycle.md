@@ -91,6 +91,12 @@ canonical JSONL writer rejects any normalized record its bounded reader could
 not later resume, and fork performs the same exact validation before allocating
 the child target.
 
+After the target lease is acquired, its directory is pinned and all session and
+descriptor writes are performed relative to that anchored handle. Renaming or
+replacing the active target path therefore cannot redirect preparation writes;
+final catalog verification still proves that the active path names the held
+lease before publication is reported.
+
 Both human and JSON results state that the fork uses the current live
 filesystem and provide `mintclaw resume <child-id>`. Historical conversation is
 context, never a claim that project files were rolled back.

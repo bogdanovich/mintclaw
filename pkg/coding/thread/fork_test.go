@@ -394,15 +394,15 @@ func TestForkThreadPublishesMetadataLastAndClassifiesCommittedSave(t *testing.T)
 			t.Cleanup(func() { _ = lease.Release() })
 			targetID := NewThreadID()
 			injected := errors.New("injected metadata write failure")
-			originalWrite := store.writeAtomic
-			store.writeAtomic = func(path string, data []byte, mode os.FileMode) error {
-				if !strings.Contains(path, targetID) {
-					return originalWrite(path, data, mode)
+			originalWrite := store.writeRoot
+			store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+				if name != metadataFileName {
+					return originalWrite(root, name, data, mode)
 				}
 				if !test.committed {
 					return injected
 				}
-				if err := originalWrite(path, data, mode); err != nil {
+				if err := originalWrite(root, name, data, mode); err != nil {
 					return err
 				}
 				return &fileutil.CommittedWriteError{Err: injected}
@@ -445,12 +445,14 @@ func TestForkThreadDoesNotClassifyCommittedProvisionAsPublished(t *testing.T) {
 	t.Cleanup(func() { _ = lease.Release() })
 	targetID := NewThreadID()
 	injected := errors.New("injected provision sync failure")
-	originalMkdir := store.mkdirDurable
-	store.mkdirDurable = func(root, relative string, mode os.FileMode) error {
-		if root == store.durableRoot && strings.HasSuffix(relative, targetID) {
+	originalSync := store.syncDir
+	injectedOnce := false
+	store.syncDir = func(path string) error {
+		if path == filepath.Join(store.root, "threads") && !injectedOnce {
+			injectedOnce = true
 			return &fileutil.CommittedWriteError{Err: injected}
 		}
-		return originalMkdir(root, relative, mode)
+		return originalSync(path)
 	}
 	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
 		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
@@ -484,12 +486,12 @@ func TestForkThreadDoesNotPublishThroughReplacedTargetRoot(t *testing.T) {
 	}
 	movedRoot := targetRoot + "-moved"
 	injected := errors.New("injected post-save durability warning")
-	originalWrite := store.writeAtomic
-	store.writeAtomic = func(path string, data []byte, mode os.FileMode) error {
-		if !strings.Contains(path, targetID) {
-			return originalWrite(path, data, mode)
+	originalWrite := store.writeRoot
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if name != metadataFileName {
+			return originalWrite(root, name, data, mode)
 		}
-		if err := originalWrite(path, data, mode); err != nil {
+		if err := originalWrite(root, name, data, mode); err != nil {
 			return err
 		}
 		if err := os.Rename(targetRoot, movedRoot); err != nil {
@@ -531,12 +533,12 @@ func TestForkThreadDoesNotDeleteReplacementTargetDirectory(t *testing.T) {
 	}
 	movedRoot := targetRoot + "-moved"
 	marker := filepath.Join(targetRoot, "unrelated-marker")
-	originalWrite := store.writeAtomic
-	store.writeAtomic = func(path string, data []byte, mode os.FileMode) error {
-		if !strings.Contains(path, targetID) {
-			return originalWrite(path, data, mode)
+	originalWrite := store.writeRoot
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if name != metadataFileName {
+			return originalWrite(root, name, data, mode)
 		}
-		if err := originalWrite(path, data, mode); err != nil {
+		if err := originalWrite(root, name, data, mode); err != nil {
 			return err
 		}
 		if err := os.Rename(targetRoot, movedRoot); err != nil {
@@ -561,6 +563,57 @@ func TestForkThreadDoesNotDeleteReplacementTargetDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(movedRoot, metadataFileName)); err != nil {
 		t.Fatalf("fixture did not preserve moved original: %v", err)
+	}
+}
+
+func TestForkThreadWritesThroughPinnedTargetAfterPathReplacement(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedRoot := targetRoot + "-moved"
+	marker := filepath.Join(targetRoot, "unrelated-marker")
+	originalWrite := store.writeRoot
+	replaced := false
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if !replaced && strings.HasSuffix(name, ".jsonl") {
+			replaced = true
+			if err := os.Rename(targetRoot, movedRoot); err != nil {
+				return err
+			}
+			if err := os.Mkdir(targetRoot, 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+				return err
+			}
+		}
+		return originalWrite(root, name, data, mode)
+	}
+	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if forkErr == nil || IsCommittedForkError(forkErr) {
+		t.Fatalf("pre-write replacement classification = %v", forkErr)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "keep" {
+		t.Fatalf("replacement marker = %q / %v", data, err)
+	}
+	if _, err := store.Load(targetID); err == nil {
+		t.Fatal("replacement became a catalog-visible child")
+	}
+	if _, err := os.Stat(filepath.Join(movedRoot, metadataFileName)); err != nil {
+		t.Fatalf("pinned original did not receive child metadata: %v", err)
 	}
 }
 

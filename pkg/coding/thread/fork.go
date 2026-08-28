@@ -17,7 +17,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/providers/messageutil"
-	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 const (
@@ -114,9 +113,6 @@ func (s *Store) ForkThread(
 				prefix[index].CreatedAt = &forkCreatedAt
 			}
 		}
-		if validationErr := memory.ValidateJSONLHistory(prefix); validationErr != nil {
-			return fmt.Errorf("coding thread fork: validate child transcript: %w", validationErr)
-		}
 		child, err = NewMetadata(
 			options.TargetThreadID,
 			options.Project,
@@ -133,6 +129,10 @@ func (s *Store) ForkThread(
 		if validationErr := child.Validate(); validationErr != nil {
 			return validationErr
 		}
+		snapshot, snapshotErr := memory.BuildJSONLSnapshot(child.SessionKey, prefix, forkCreatedAt)
+		if snapshotErr != nil {
+			return fmt.Errorf("coding thread fork: prepare child transcript: %w", snapshotErr)
+		}
 		result = ForkResult{
 			SourceThreadID: source.ThreadID,
 			ThreadID:       child.ThreadID, SessionKey: child.SessionKey,
@@ -143,7 +143,7 @@ func (s *Store) ForkThread(
 		if err != nil {
 			return err
 		}
-		return s.publishFork(ctx, child, prefix, result)
+		return s.publishFork(ctx, child, snapshot, result)
 	})
 	return child, result, err
 }
@@ -401,11 +401,15 @@ func forkRootIndexes(history []providers.Message) []int {
 func (s *Store) publishFork(
 	ctx context.Context,
 	child Metadata,
-	history []providers.Message,
+	snapshot memory.JSONLSnapshot,
 	result ForkResult,
 ) error {
-	if err := s.provisionForkTarget(result.StateRoot); err != nil {
+	metadataData, err := encodeForkMetadata(child)
+	if err != nil {
 		return err
+	}
+	if provisionErr := s.provisionForkTarget(result.StateRoot); provisionErr != nil {
+		return provisionErr
 	}
 	targetLease, err := s.AcquireLease(child.ThreadID)
 	if err != nil {
@@ -414,21 +418,49 @@ func (s *Store) publishFork(
 			err,
 		)
 	}
-	sessionsRoot := filepath.Join(result.StateRoot, "sessions")
-	if mkdirErr := s.mkdirDurable(result.StateRoot, "sessions", 0o700); mkdirErr != nil {
-		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, mkdirErr)
-	}
-	canonical, err := memory.NewJSONLStore(sessionsRoot)
+	targetRoot, err := os.OpenRoot(result.StateRoot)
 	if err != nil {
 		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, err)
 	}
-	backend := session.NewJSONLBackend(canonical)
-	writeErr := backend.ReplaceTurnHistory(ctx, child.SessionKey, history)
-	closeErr := backend.Close()
-	if err := errors.Join(writeErr, closeErr); err != nil {
-		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, err)
+	var sessionsRoot *os.Root
+	abort := func(operationErr error) error {
+		if sessionsRoot != nil {
+			operationErr = errors.Join(operationErr, sessionsRoot.Close())
+			sessionsRoot = nil
+		}
+		operationErr = errors.Join(operationErr, targetRoot.Close())
+		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, operationErr)
 	}
-	saveErr := s.Save(child)
+	if identityErr := validateExistingForkLeaseRoot(targetRoot, targetLease); identityErr != nil {
+		return abort(fmt.Errorf("coding thread fork: pin target root: %w", identityErr))
+	}
+	if mkdirErr := targetRoot.Mkdir("sessions", 0o700); mkdirErr != nil {
+		return abort(fmt.Errorf("coding thread fork: create pinned sessions directory: %w", mkdirErr))
+	}
+	if syncErr := syncRootDirectory(targetRoot); syncErr != nil {
+		return abort(&fileutil.CommittedWriteError{Err: fmt.Errorf("sync pinned target root: %w", syncErr)})
+	}
+	sessionsRoot, err = targetRoot.OpenRoot("sessions")
+	if err != nil {
+		return abort(fmt.Errorf("coding thread fork: pin sessions directory: %w", err))
+	}
+	if writeErr := s.writeRoot(sessionsRoot, snapshot.JSONLFile, snapshot.JSONL, 0o600); writeErr != nil {
+		return abort(fmt.Errorf("coding thread fork: write pinned transcript: %w", writeErr))
+	}
+	if writeErr := s.writeRoot(sessionsRoot, snapshot.MetadataFile, snapshot.Metadata, 0o600); writeErr != nil {
+		return abort(fmt.Errorf("coding thread fork: write pinned transcript metadata: %w", writeErr))
+	}
+	if closeErr := sessionsRoot.Close(); closeErr != nil {
+		sessionsRoot = nil
+		return abort(fmt.Errorf("coding thread fork: close pinned sessions directory: %w", closeErr))
+	}
+	sessionsRoot = nil
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return abort(contextErr)
+	}
+	saveErr := s.writeRoot(targetRoot, metadataFileName, metadataData, 0o600)
+	closeErr := targetRoot.Close()
+	saveErr = errors.Join(saveErr, closeErr)
 	verifyErr := s.verifyPublishedFork(targetLease, child)
 	published := verifyErr == nil
 	if !published {
@@ -442,6 +474,78 @@ func (s *Store) publishFork(
 		return &CommittedForkError{Result: result, Err: err}
 	}
 	return nil
+}
+
+func encodeForkMetadata(child Metadata) ([]byte, error) {
+	if err := child.Validate(); err != nil {
+		return nil, err
+	}
+	data, err := json.MarshalIndent(child, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("coding thread fork: encode child metadata: %w", err)
+	}
+	data = append(data, '\n')
+	if len(data) > MaxMetadataBytes {
+		return nil, fmt.Errorf("coding thread fork: child metadata exceeds %d bytes", MaxMetadataBytes)
+	}
+	return data, nil
+}
+
+func writeRootFileAtomic(root *os.Root, name string, data []byte, mode os.FileMode) error {
+	if root == nil || !filepath.IsLocal(name) {
+		return fmt.Errorf("coding thread fork: pinned root and local file name are required")
+	}
+	temporary := ".tmp-" + NewThreadID()
+	file, err := root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = file.Close()
+			_ = root.Remove(temporary)
+		}
+	}()
+	written, err := file.Write(data)
+	if err == nil && written != len(data) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		return err
+	}
+	if err := file.Chmod(mode); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := root.Rename(temporary, name); err != nil {
+		return err
+	}
+	cleanup = false
+	if err := syncRootDirectory(root); err != nil {
+		return &fileutil.CommittedWriteError{Err: err}
+	}
+	return nil
+}
+
+func syncRootDirectory(root *os.Root) error {
+	directory, err := root.OpenFile(".", os.O_RDWR, 0)
+	if err != nil {
+		directory, err = root.Open(".")
+	}
+	if err != nil {
+		return err
+	}
+	if err := directory.Sync(); err != nil {
+		_ = directory.Close()
+		return err
+	}
+	return directory.Close()
 }
 
 // quarantineUnpublishedFork removes a failed preparation from the active
@@ -578,11 +682,11 @@ func (s *Store) provisionForkTarget(targetRoot string) error {
 		}
 		return fmt.Errorf("coding thread fork: reserve target thread: %w", err)
 	}
-	if err := fileutil.SyncDirectory(threadsRoot); err != nil {
+	if err := s.syncDir(threadsRoot); err != nil {
 		return errors.Join(
 			fmt.Errorf("coding thread fork: sync target reservation: %w", err),
 			os.Remove(targetRoot),
-			fileutil.SyncDirectory(threadsRoot),
+			s.syncDir(threadsRoot),
 		)
 	}
 	return nil
