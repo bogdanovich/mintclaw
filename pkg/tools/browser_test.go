@@ -708,7 +708,7 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 	}
 	if target := properties["target"].(map[string]any)["description"].(string); !strings.Contains(
 		target,
-		"gateway or companion",
+		"browser_targets.default_target",
 	) {
 		t.Fatalf("target description = %q", target)
 	}
@@ -770,7 +770,7 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	}
 	var result browserTargetResult
 	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), nil), &result)
-	if len(result.Targets) != 1 || result.Targets[0].Target != "gateway" ||
+	if result.DefaultTarget != "gateway" || len(result.Targets) != 1 || result.Targets[0].Target != "gateway" ||
 		result.Targets[0].Status != "ready" || len(result.Targets[0].Profiles) != 1 ||
 		result.Targets[0].Profiles[0].NetworkMode != config.BrowserNetworkExactOrigins ||
 		!result.Targets[0].Profiles[0].DryRun || result.Targets[0].Profiles[0].AllowApprovedActions ||
@@ -797,6 +797,28 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	denied := tool.Execute(other, nil)
 	if denied == nil || !denied.IsError || !strings.Contains(denied.ContentForLLM(), `"code":"not_granted"`) {
 		t.Fatalf("ungranted result = %#v", denied)
+	}
+}
+
+func TestBrowserTargetsReportsAndOrdersExplicitDefaultBeforeAlphabeticalTargets(t *testing.T) {
+	cfg := browserToolTestConfig()
+	cfg.Tools.Browser.Targets["companion"] = config.BrowserTargetConfig{
+		Enabled: true,
+		Profiles: map[string]config.BrowserProfileConfig{
+			"managed": {Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true},
+		},
+	}
+	cfg.Tools.Browser.DefaultTarget = "gateway"
+
+	var result browserTargetResult
+	decodeBrowserToolResult(
+		t, NewBrowserTargetsTool(cfg, &fakeBrowserToolSource{available: true}).Execute(
+			browserToolTestContext(), nil,
+		), &result,
+	)
+	if result.DefaultTarget != "gateway" || len(result.Targets) != 2 ||
+		result.Targets[0].Target != "gateway" || result.Targets[1].Target != "companion" {
+		t.Fatalf("browser targets = %#v", result)
 	}
 }
 

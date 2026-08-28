@@ -209,6 +209,7 @@ defaults below are fixed:
     "browser": {
       "enabled": false,
       "agents": ["browser"],
+      "default_target": "gateway",
       "targets": {
         "gateway": {
           "enabled": false,
@@ -232,6 +233,9 @@ defaults below are fixed:
 Rules:
 
 - omitted `tools.browser`, target, or profile enablement grants no authority;
+- `default_target` may name an enabled target with an enabled profile; when
+  omitted, `gateway` is preferred when enabled, a sole enabled target is
+  inferred, and multiple non-gateway targets remain explicitly ambiguous;
 - aliases are bounded opaque names and never expand to model-visible paths;
 - `driver_server` must resolve to a configured local stdio MCP server template
   with an exclusive lock; the browser worker, not the generic MCP manager,
@@ -273,6 +277,7 @@ targets and profiles effective for the authenticated agent:
 
 ```json
 {
+  "default_target": "gateway",
   "targets": [{
     "target": "gateway",
     "status": "ready",
@@ -282,6 +287,10 @@ targets and profiles effective for the authenticated agent:
   }]
 }
 ```
+
+When the task does not name a target, the specialist uses `default_target`.
+The target array has deterministic presentation order but conveys no implicit
+preference.
 
 Status is one of `ready`, `busy`, `degraded`, or `unavailable`. Reasons use a
 small safe vocabulary such as `disabled`, `not_granted`, `profile_busy`,
