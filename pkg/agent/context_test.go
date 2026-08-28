@@ -24,6 +24,13 @@ func toolResult(id string) providers.Message {
 	return providers.Message{Role: "tool", Content: "result", ToolCallID: id}
 }
 
+func TestNewContextBuilderConstructsRequiredDependencies(t *testing.T) {
+	builder := NewContextBuilder(t.TempDir())
+	if builder.memory == nil || builder.skillsLoader == nil || builder.promptRegistry == nil {
+		t.Fatal("NewContextBuilder() did not construct all required dependencies")
+	}
+}
+
 func TestSanitizeHistoryForProvider_EmptyHistory(t *testing.T) {
 	result := sanitizeHistoryForProvider(nil)
 	if len(result) != 0 {
