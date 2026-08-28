@@ -300,7 +300,7 @@ func decodePinnedForkHistory(
 	var history []providers.Message
 	rawCount := 0
 	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 0, 64*1024), int(MaxForkTranscriptBytes))
+	scanner.Buffer(make([]byte, 0, 64*1024), memory.MaxJSONLRecordBytes)
 	for scanner.Scan() {
 		if err := context.Cause(ctx); err != nil {
 			return nil, 0, err
@@ -422,16 +422,10 @@ func (s *Store) publishFork(
 		return cleanup(errors.Join(err, targetLease.Release()))
 	}
 	saveErr := s.Save(child)
-	published := saveErr == nil
-	if saveErr != nil {
-		loaded, verifyErr := s.Load(child.ThreadID)
-		published = verifyErr == nil && reflect.DeepEqual(loaded, child)
-		if !published {
-			if verifyErr == nil {
-				verifyErr = fmt.Errorf("published metadata does not match the fork child")
-			}
-			saveErr = errors.Join(saveErr, verifyErr)
-		}
+	verifyErr := s.verifyPublishedFork(targetLease, child)
+	published := verifyErr == nil
+	if !published {
+		saveErr = errors.Join(saveErr, verifyErr)
 	}
 	releaseErr := targetLease.Release()
 	if !published {
@@ -441,6 +435,37 @@ func (s *Store) publishFork(
 		return &CommittedForkError{Result: result, Err: err}
 	}
 	return nil
+}
+
+func (s *Store) verifyPublishedFork(targetLease *Lease, child Metadata) error {
+	return targetLease.withActive(s.root, child.ThreadID, func() error {
+		storeRoot, err := openCatalogRoot(s.root)
+		if err != nil {
+			return fmt.Errorf("coding thread fork: verify store root: %w", err)
+		}
+		defer func() { _ = storeRoot.Close() }()
+		threadsRoot, err := openCatalogChildDirectory(storeRoot, "threads")
+		if err != nil {
+			return fmt.Errorf("coding thread fork: verify threads root: %w", err)
+		}
+		defer func() { _ = threadsRoot.Close() }()
+		threadRoot, err := openCatalogChildDirectory(threadsRoot, child.ThreadID)
+		if err != nil {
+			return fmt.Errorf("coding thread fork: verify target root: %w", err)
+		}
+		defer func() { _ = threadRoot.Close() }()
+		if validationErr := validateForkLeaseRoot(threadRoot, targetLease); validationErr != nil {
+			return validationErr
+		}
+		loaded, err := loadCatalogMetadataFromDirectory(threadRoot, child.ThreadID, openCatalogMetadataFile)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(loaded, child) {
+			return fmt.Errorf("coding thread fork: published metadata does not match the child")
+		}
+		return nil
+	})
 }
 
 func (s *Store) provisionForkTarget(targetRoot string) error {

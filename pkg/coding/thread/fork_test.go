@@ -148,6 +148,32 @@ func TestForkThreadLatestSupportsLegacyRootMarkersAndRejectsBounds(t *testing.T)
 	}
 }
 
+func TestForkThreadRejectsRecordAboveCanonicalReaderLimitBeforeProvision(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: strings.Repeat("x", memory.MaxJSONLRecordBytes), RootTurnStart: true,
+	}})
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if forkErr == nil || !strings.Contains(forkErr.Error(), "token too long") {
+		t.Fatalf("oversized JSONL record error = %v", forkErr)
+	}
+	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
+		t.Fatalf("oversized record allocated target: %v", err)
+	}
+}
+
 func TestForkThreadRejectsBusySourceAndTargetCollision(t *testing.T) {
 	store, source := newLeaseTestThread(t)
 	writeForkTestHistory(t, store, source, []providers.Message{{
@@ -385,6 +411,53 @@ func TestForkThreadDoesNotClassifyCommittedProvisionAsPublished(t *testing.T) {
 	}
 	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
 		t.Fatalf("unpublished provision target remains: %v", err)
+	}
+}
+
+func TestForkThreadDoesNotPublishThroughReplacedTargetRoot(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedRoot := targetRoot + "-moved"
+	injected := errors.New("injected post-save durability warning")
+	originalWrite := store.writeAtomic
+	store.writeAtomic = func(path string, data []byte, mode os.FileMode) error {
+		if !strings.Contains(path, targetID) {
+			return originalWrite(path, data, mode)
+		}
+		if err := originalWrite(path, data, mode); err != nil {
+			return err
+		}
+		if err := os.Rename(targetRoot, movedRoot); err != nil {
+			return err
+		}
+		if err := os.Symlink(movedRoot, targetRoot); err != nil {
+			return err
+		}
+		return &fileutil.CommittedWriteError{Err: injected}
+	}
+	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if forkErr == nil || IsCommittedForkError(forkErr) {
+		t.Fatalf("replaced target classification = %v", forkErr)
+	}
+	if _, err := os.Lstat(targetRoot); !os.IsNotExist(err) {
+		t.Fatalf("replacement remains at active target: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(movedRoot, metadataFileName)); err != nil {
+		t.Fatalf("fixture did not preserve moved original: %v", err)
 	}
 }
 

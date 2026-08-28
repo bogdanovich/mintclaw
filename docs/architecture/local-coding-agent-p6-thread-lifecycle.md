@@ -64,16 +64,19 @@ without markers remains readable, while unmarked user-shaped messages after the
 first canonical marker are not treated as roots.
 
 The source lease must be idle and remains held while its canonical transcript
-is read. One fork admits at most 4,096 visible messages and a 32 MiB source JSONL
-file; larger transcripts fail before a target is allocated. The selected root
-message gets a stable SHA-256 prefix identity. Metadata records that identity,
-the source transcript revision, source index/turn, copied count, and source
-thread ancestry.
+is read. One fork admits at most 4,096 visible messages, a 32 MiB source JSONL
+file, and the canonical memory reader's 10 MiB per-record limit; larger inputs
+fail before a target is allocated. The selected root message gets a stable
+SHA-256 prefix identity. Metadata records that identity, the source transcript
+revision, source index/turn, copied count, and source thread ancestry.
 
 The source thread, sessions directory, metadata, and JSONL are opened through
 anchored no-follow handles and remain pinned for the complete read. Forking is
 read-only: an unfinished dirty-history transaction fails closed for normal
 runtime recovery instead of being repaired by this administrative command.
+Publication is verified through the anchored target directory and its held
+lease identity, so replacing the target path cannot classify another directory
+as the committed fork.
 
 The child gets a fresh UUID, session key, external directory, lease, current
 project snapshot, and future writer. It inherits only model/provider selection

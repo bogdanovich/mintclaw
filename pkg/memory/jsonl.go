@@ -32,11 +32,11 @@ const (
 	// the lifetime of the process — important for a long-running daemon.
 	numLockShards = 64
 
-	// maxLineSize is the maximum size of a single JSON line in a .jsonl
+	// MaxJSONLRecordBytes is the maximum size of a single JSON line in a .jsonl
 	// file. Tool results (read_file, web search, etc.) can be large, so
 	// we set a generous limit. The scanner starts at 64 KB and grows
 	// only as needed up to this cap.
-	maxLineSize = 10 * 1024 * 1024 // 10 MB
+	MaxJSONLRecordBytes = 10 * 1024 * 1024 // 10 MB
 
 	maxHistoryPageMessages = 256
 )
@@ -548,7 +548,7 @@ func readMessages(ctx context.Context, path string, skip int) ([]providers.Messa
 	var msgs []providers.Message
 	scanner := bufio.NewScanner(f)
 	// Allow large lines for tool results (read_file, web search, etc.).
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLRecordBytes)
 
 	lineNum := 0
 	for scanner.Scan() {
@@ -611,7 +611,7 @@ func scanRetainedMessageLines(ctx context.Context, path string) (int, []int, err
 	rawCount := 0
 	retained := make([]int, 0)
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLRecordBytes)
 	for scanner.Scan() {
 		if err := contextCause(ctx); err != nil {
 			return 0, nil, err
@@ -899,7 +899,7 @@ func scanVisibleHistory(
 	visibleIndex := 0
 	digest := newHistoryCursorDigest()
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLRecordBytes)
 	for scanner.Scan() {
 		if err := contextCause(ctx); err != nil {
 			return 0, HistoryCursor{}, err
