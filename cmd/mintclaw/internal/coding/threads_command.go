@@ -22,8 +22,87 @@ func newThreadsCommand(deps dependencies) *cobra.Command {
 		Use:   "threads",
 		Short: "Manage durable coding threads",
 	}
-	cmd.AddCommand(newDeleteThreadCommand(deps))
+	cmd.AddCommand(newDeleteThreadCommand(deps), newForkThreadCommand(deps))
 	return cmd
+}
+
+func newForkThreadCommand(deps dependencies) *cobra.Command {
+	deps = completeDependencies(deps)
+	var atTurn int
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "fork <thread-id>",
+		Short: "Fork bounded conversation history into an independent coding thread",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runForkThread(cmd.Context(), cmd.OutOrStdout(), deps, args[0], atTurn, jsonOutput)
+		},
+	}
+	cmd.Flags().IntVar(&atTurn, "at-turn", 0, "Fork through this one-based user turn (default latest)")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON")
+	return cmd
+}
+
+type forkThreadOutput struct {
+	Action        string            `json:"action"`
+	Fork          thread.ForkResult `json:"fork"`
+	Metadata      thread.Metadata   `json:"metadata"`
+	ResumeCommand string            `json:"resume_command"`
+	Notice        string            `json:"notice"`
+}
+
+func runForkThread(
+	ctx context.Context,
+	out io.Writer,
+	deps dependencies,
+	sourceThreadID string,
+	atTurn int,
+	jsonOutput bool,
+) (resultErr error) {
+	sourceThreadID = strings.TrimSpace(sourceThreadID)
+	project, store, err := resolveEnvironment(ctx, deps)
+	if err != nil {
+		return err
+	}
+	sourceLease, err := store.AcquireLease(sourceThreadID)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, sourceLease.Release()) }()
+	child, forked, forkErr := store.ForkThread(ctx, sourceLease, thread.ForkOptions{
+		TargetThreadID: deps.newThreadID(),
+		Project:        project,
+		AtTurn:         atTurn,
+		At:             deps.now(),
+	})
+	if forkErr != nil && !thread.IsCommittedForkError(forkErr) {
+		return forkErr
+	}
+	result := forkThreadOutput{
+		Action:        "forked",
+		Fork:          forked,
+		Metadata:      child,
+		ResumeCommand: "mintclaw resume " + child.ThreadID,
+		Notice:        "Conversation history was copied; the fork uses the current live filesystem and did not roll files back.",
+	}
+	return errors.Join(forkErr, renderForkThread(out, result, jsonOutput))
+}
+
+func renderForkThread(out io.Writer, result forkThreadOutput, jsonOutput bool) error {
+	if jsonOutput {
+		return writeJSON(out, result)
+	}
+	_, err := fmt.Fprintf(
+		out,
+		"Forked coding thread %s from %s through user turn %d (%d messages).\n"+
+			"The fork uses the current live filesystem; no project files were rolled back.\nResume with: %s\n",
+		result.Fork.ThreadID,
+		result.Fork.SourceThreadID,
+		result.Fork.SourceTurn,
+		result.Fork.CopiedMessages,
+		result.ResumeCommand,
+	)
+	return err
 }
 
 func newDeleteThreadCommand(deps dependencies) *cobra.Command {

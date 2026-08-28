@@ -35,7 +35,7 @@ the controller boundary and update the current projection after persistence.
 The next catalog or picker refresh observes the atomic metadata file directly,
 so lifecycle changes have no separate cache to invalidate.
 
-## Boundaries reserved for later packets
+## Delete contract
 
 Deletion is exposed as `mintclaw threads delete <thread-id>`. Without
 `--confirm`, it produces a bounded plan naming the exact external thread root
@@ -54,11 +54,32 @@ lock handle permits delete sharing while the byte-range lock remains the
 exclusive writer authority, allowing the directory move without opening a
 post-release race.
 
-Forking copies bounded conversational state into a newly allocated thread with
-its own session key, directory, lease, and future writer. Fork metadata records
-the source thread, source transcript revision, and source message identity. A
-historical conversational fork always starts against the live filesystem; it
-must not claim or imply workspace rollback.
+## Conversational fork contract
+
+`mintclaw threads fork <thread-id>` copies conversation through the latest
+stable root user turn. `--at-turn N` selects a one-based historical root turn
+and includes that turn's messages up to, but not including, the next root turn.
+Canonical `root_turn_start` markers define boundaries. A bounded legacy prefix
+without markers remains readable, while unmarked user-shaped messages after the
+first canonical marker are not treated as roots.
+
+The source lease must be idle and remains held while its canonical transcript
+is read. One fork admits at most 4,096 visible messages and a 32 MiB source JSONL
+file; larger transcripts fail before a target is allocated. The selected root
+message gets a stable SHA-256 prefix identity. Metadata records that identity,
+the source transcript revision, source index/turn, copied count, and source
+thread ancestry.
+
+The child gets a fresh UUID, session key, external directory, lease, current
+project snapshot, and future writer. It inherits only model/provider selection
+and the selected canonical message prefix. Seahorse state, compaction state,
+runtime artifacts, diagnostics, and workspace files are not copied; they are
+rebuilt independently as needed. Metadata is published last, after the child
+JSONL is durable, so incomplete preparation is absent from the catalog.
+
+Both human and JSON results state that the fork uses the current live
+filesystem and provide `mintclaw resume <child-id>`. Historical conversation is
+context, never a claim that project files were rolled back.
 
 ## First-packet done criteria
 

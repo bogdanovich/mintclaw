@@ -275,6 +275,32 @@ func TestMetadataRejectsPathAndIdentitySubstitution(t *testing.T) {
 	}
 }
 
+func TestMetadataValidatesForkProvenance(t *testing.T) {
+	project, err := ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewMetadata(uuid.NewString(), project, "fork", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Fork = &ForkPoint{
+		SourceRevision: 1, SourceMessageID: strings.Repeat("a", 64),
+		SourceMessageIndex: 0, SourceTurn: 1, CopiedMessages: 1,
+	}
+	if err := metadata.Validate(); err == nil || !strings.Contains(err.Error(), "parent") {
+		t.Fatalf("fork without parent error = %v", err)
+	}
+	metadata.ParentThread = uuid.NewString()
+	if err := metadata.Validate(); err != nil {
+		t.Fatalf("valid fork metadata error = %v", err)
+	}
+	metadata.Fork.SourceMessageID = "not-a-digest"
+	if err := metadata.Validate(); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("invalid source identity error = %v", err)
+	}
+}
+
 func TestLoadRejectsUnknownAndOversizedMetadata(t *testing.T) {
 	project, err := ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
