@@ -37,10 +37,13 @@ func TestFileRegistryPersistsPendingPairingSecurely(t *testing.T) {
 			SoftwareVersion:  "v0.1.0",
 			CatalogHash:      emptyCatalogHash(t),
 			Catalog:          CapabilityCatalog{},
+			Executor:         "local",
+			PolicyRevision:   "policy-1",
 			LastSeenAt:       1000,
 			DisconnectReason: "",
 		},
 		PublicKey:     publicKey,
+		KeyAlgorithm:  KeyAlgorithmEd25519,
 		RequestedRole: "companion",
 		RequestedAt:   1000,
 	}
@@ -137,7 +140,10 @@ func TestFileRegistryRejectsNonCurrentBrowserSchema(t *testing.T) {
 	pairing.Node.Catalog = catalog
 	pairing.Node.CatalogHash = catalogHash
 	document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
-		string(pairing.Node.ID): {Snapshot: pairing.Node},
+		string(pairing.Node.ID): {
+			Snapshot: pairing.Node, PublicKey: pairing.PublicKey, KeyAlgorithm: pairing.KeyAlgorithm,
+			RequestedRole: pairing.RequestedRole, RequestedAt: pairing.RequestedAt,
+		},
 	}}
 	encoded, err := json.Marshal(document)
 	if err != nil {
@@ -210,96 +216,6 @@ func TestFileRegistryRejectsApprovedNodeWithStoredBrowserSchemaDrift(t *testing.
 
 	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
 		t.Fatalf("NewFileRegistry() error = %v, want ErrInvalidCapability", err)
-	}
-}
-
-func TestFileRegistryLoadsApprovedPreviousBrowserSchemaGeneration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "registry.json")
-	registry, err := NewFileRegistry(path, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pairing := testPendingPairing(t, 1)
-	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	commands := make([]string, 0, len(descriptors))
-	for index := range descriptors {
-		descriptors[index].InputSchema = previousBrowserCommandInputSchema(
-			descriptors[index].Name,
-			descriptors[index].BrowserProfiles,
-		)
-		descriptors[index].OutputSchema = previousBrowserCommandOutputSchema(
-			descriptors[index].Name,
-			descriptors[index].BrowserProfiles,
-		)
-		commands = append(commands, descriptors[index].Name)
-	}
-	pairing.Node.Catalog = CapabilityCatalog{Commands: descriptors}
-	pairing.Node.CatalogHash, err = pairing.Node.Catalog.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = registry.UpsertPending(pairing); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = registry.Approve(pairing.Node.ID, PairingApproval{
-		Aliases: []Alias{"browser-node"}, AllowedCommands: commands, At: 2,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	reloaded, err := NewFileRegistry(path, 4)
-	if err != nil {
-		t.Fatalf("reload previous browser catalog: %v", err)
-	}
-	registration, exists, err := reloaded.Registration(pairing.Node.ID)
-	if err != nil || !exists || registration.Snapshot.CatalogHash != pairing.Node.CatalogHash {
-		t.Fatalf("reloaded registration = %#v, exists %v, error %v", registration, exists, err)
-	}
-}
-
-func TestFileRegistryLoadsApprovedPreviousStreamedBrowserSchemaGeneration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "registry.json")
-	registry, err := NewFileRegistry(path, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pairing := testPendingPairing(t, 1)
-	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	commands := make([]string, 0, len(descriptors))
-	for index := range descriptors {
-		descriptors[index].OutputSchema = previousStreamedBrowserCommandOutputSchema(
-			descriptors[index].Name,
-			descriptors[index].BrowserProfiles,
-		)
-		commands = append(commands, descriptors[index].Name)
-	}
-	pairing.Node.Catalog = CapabilityCatalog{Commands: descriptors}
-	pairing.Node.CatalogHash, err = pairing.Node.Catalog.Hash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = registry.UpsertPending(pairing); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = registry.Approve(pairing.Node.ID, PairingApproval{
-		Aliases: []Alias{"browser-node"}, AllowedCommands: commands, At: 2,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	reloaded, err := NewFileRegistry(path, 4)
-	if err != nil {
-		t.Fatalf("reload previous streamed browser catalog: %v", err)
-	}
-	registration, exists, err := reloaded.Registration(pairing.Node.ID)
-	if err != nil || !exists || registration.Snapshot.CatalogHash != pairing.Node.CatalogHash {
-		t.Fatalf("reloaded registration = %#v, exists %v, error %v", registration, exists, err)
 	}
 }
 
@@ -865,9 +781,12 @@ func testPendingPairing(t *testing.T, timestamp int64) PendingPairing {
 			ProtocolVersion: ProtocolV1,
 			CatalogHash:     emptyCatalogHash(t),
 			Catalog:         CapabilityCatalog{},
+			Executor:        "local",
+			PolicyRevision:  "policy-1",
 			LastSeenAt:      timestamp,
 		},
 		PublicKey:     publicKey,
+		KeyAlgorithm:  KeyAlgorithmEd25519,
 		RequestedRole: "companion",
 		RequestedAt:   timestamp,
 	}

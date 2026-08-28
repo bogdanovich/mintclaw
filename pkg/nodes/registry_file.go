@@ -26,7 +26,7 @@ func RegistryPath(workspacePath string) string {
 type registryRecord struct {
 	Snapshot            Snapshot     `json:"snapshot"`
 	PublicKey           []byte       `json:"public_key,omitempty"`
-	KeyAlgorithm        KeyAlgorithm `json:"key_algorithm,omitempty"`
+	KeyAlgorithm        KeyAlgorithm `json:"key_algorithm"`
 	RequestedRole       string       `json:"requested_role,omitempty"`
 	RequestedAt         int64        `json:"requested_at,omitempty"`
 	AllowedCommands     []string     `json:"allowed_commands,omitempty"`
@@ -210,10 +210,11 @@ func (registry *FileRegistry) UpsertPending(pairing PendingPairing) error {
 	if len(pairing.Node.Aliases) != 0 || strings.TrimSpace(pairing.Node.DisplayName) != "" {
 		return fmt.Errorf("%w: pending node contains operator metadata", ErrInvalidNode)
 	}
-	algorithm, err := pairing.KeyAlgorithm.normalized()
-	if err != nil || pairing.RequestedRole != "companion" || pairing.RequestedAt <= 0 {
+	if err := pairing.KeyAlgorithm.validate(); err != nil ||
+		pairing.RequestedRole != "companion" || pairing.RequestedAt <= 0 {
 		return fmt.Errorf("%w: malformed pending pairing", ErrInvalidNode)
 	}
+	algorithm := pairing.KeyAlgorithm
 	derivedID, err := DeriveIDForAlgorithm(algorithm, pairing.PublicKey)
 	if err != nil || derivedID != pairing.Node.ID {
 		return fmt.Errorf("%w: pending node id does not match public key", ErrInvalidNode)
@@ -227,8 +228,8 @@ func (registry *FileRegistry) UpsertPending(pairing PendingPairing) error {
 	defer release()
 	existing, exists := registry.records[string(pairing.Node.ID)]
 	if exists && len(existing.PublicKey) > 0 {
-		existingAlgorithm, normalizeErr := existing.KeyAlgorithm.normalized()
-		if normalizeErr != nil || existingAlgorithm != algorithm ||
+		validateErr := existing.KeyAlgorithm.validate()
+		if validateErr != nil || existing.KeyAlgorithm != algorithm ||
 			!bytes.Equal(existing.PublicKey, pairing.PublicKey) {
 			return fmt.Errorf("%w: node public key changed", ErrInvalidNode)
 		}
@@ -269,7 +270,7 @@ func (registry *FileRegistry) Pending(id ID) (PendingPairing, bool, error) {
 	return PendingPairing{
 		Node:          cloneSnapshot(record.Snapshot),
 		PublicKey:     append([]byte(nil), record.PublicKey...),
-		KeyAlgorithm:  normalizedKeyAlgorithm(record.KeyAlgorithm),
+		KeyAlgorithm:  record.KeyAlgorithm,
 		RequestedRole: record.RequestedRole,
 		RequestedAt:   record.RequestedAt,
 	}, true, nil
@@ -575,13 +576,6 @@ func (registry *FileRegistry) load() error {
 			(record.RequestedRole != "companion" || record.RequestedAt <= 0) {
 			return fmt.Errorf("validate pending node registry record %q: missing pairing identity", id)
 		}
-		if record.Snapshot.State == StatePendingPairing {
-			algorithm, normalizeErr := record.KeyAlgorithm.normalized()
-			derivedID, deriveErr := DeriveIDForAlgorithm(algorithm, record.PublicKey)
-			if normalizeErr != nil || deriveErr != nil || derivedID != record.Snapshot.ID {
-				return fmt.Errorf("validate pending node registry record %q: identity mismatch", id)
-			}
-		}
 		if err := validateRegistrationRecord(record); err != nil {
 			return fmt.Errorf("validate node registry record %q: %w", id, err)
 		}
@@ -634,15 +628,14 @@ func validateRegistrationRecord(record registryRecord) error {
 	if record.ApprovedAt < 0 || record.RevokedAt < 0 {
 		return fmt.Errorf("%w: negative lifecycle timestamp", ErrInvalidNode)
 	}
+	if err := record.KeyAlgorithm.validate(); err != nil {
+		return fmt.Errorf("%w: node has unsupported identity", ErrInvalidNode)
+	}
+	derivedID, err := DeriveIDForAlgorithm(record.KeyAlgorithm, record.PublicKey)
+	if err != nil || derivedID != record.Snapshot.ID {
+		return fmt.Errorf("%w: node is missing identity", ErrInvalidNode)
+	}
 	if record.ApprovedAt > 0 {
-		algorithm, err := record.KeyAlgorithm.normalized()
-		if err != nil {
-			return fmt.Errorf("%w: paired node has unsupported identity", ErrInvalidNode)
-		}
-		derivedID, err := DeriveIDForAlgorithm(algorithm, record.PublicKey)
-		if err != nil || derivedID != record.Snapshot.ID {
-			return fmt.Errorf("%w: paired node is missing identity", ErrInvalidNode)
-		}
 		if err := validateApprovedCommands(record.AllowedCommands); err != nil {
 			return err
 		}
@@ -688,7 +681,7 @@ func cloneRegistration(record registryRecord) Registration {
 	return Registration{
 		Snapshot:            cloneSnapshot(record.Snapshot),
 		PublicKey:           append([]byte(nil), record.PublicKey...),
-		KeyAlgorithm:        normalizedKeyAlgorithm(record.KeyAlgorithm),
+		KeyAlgorithm:        record.KeyAlgorithm,
 		RequestedRole:       record.RequestedRole,
 		RequestedAt:         record.RequestedAt,
 		AllowedCommands:     append([]string(nil), record.AllowedCommands...),
@@ -696,14 +689,6 @@ func cloneRegistration(record registryRecord) Registration {
 		ApprovedAt:          record.ApprovedAt,
 		RevokedAt:           record.RevokedAt,
 	}
-}
-
-func normalizedKeyAlgorithm(algorithm KeyAlgorithm) KeyAlgorithm {
-	normalized, err := algorithm.normalized()
-	if err != nil {
-		return algorithm
-	}
-	return normalized
 }
 
 func validateRegistryNamespace(records map[string]registryRecord) error {

@@ -39,7 +39,7 @@ func TestAuthenticatorPersistsPendingPairingAndRejectsReplay(t *testing.T) {
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -60,9 +60,9 @@ func TestAuthenticatorPersistsPendingPairingAndRejectsReplay(t *testing.T) {
 		t.Fatal("pending public key does not match signer")
 	}
 	if pending.Node.ProtocolVersion != ProtocolV1 ||
-		pending.Node.Executor != "" ||
-		pending.Node.PolicyRevision != "" {
-		t.Fatalf("legacy pending node = %#v", pending.Node)
+		pending.Node.Executor != "local" ||
+		pending.Node.PolicyRevision != "policy-1" {
+		t.Fatalf("pending node = %#v", pending.Node)
 	}
 	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrChallengeUnknown) {
 		t.Fatalf("replayed Admit() error = %v", err)
@@ -203,7 +203,7 @@ func TestAuthenticatorRejectsEnrollmentAuthorityFromNonAndroidIdentity(t *testin
 		"linux",
 		"amd64",
 		CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -249,7 +249,7 @@ func TestAuthenticatorRejectsEd25519IdentityClaimingAndroidPlatform(t *testing.T
 		"android",
 		"arm64-v8a",
 		CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -288,7 +288,7 @@ func attachTestEnrollmentOffer(
 	)
 }
 
-func TestAuthenticatorReconnectsLegacyRegistryWithoutKeyAlgorithm(t *testing.T) {
+func TestFileRegistryRejectsMissingKeyAlgorithm(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	registry, err := NewFileRegistry(path, 4)
 	if err != nil {
@@ -308,7 +308,7 @@ func TestAuthenticatorReconnectsLegacyRegistryWithoutKeyAlgorithm(t *testing.T) 
 	}
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
-		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, ExecutionProfile{},
+		"v0.1.0", "linux", "amd64", CapabilityCatalog{}, currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -318,7 +318,7 @@ func TestAuthenticatorReconnectsLegacyRegistryWithoutKeyAlgorithm(t *testing.T) 
 	}
 	if _, err := registry.Approve(
 		proof.NodeID,
-		PairingApproval{Aliases: []Alias{"legacy"}, At: time.Now().Unix()},
+		PairingApproval{Aliases: []Alias{"test-node"}, At: time.Now().Unix()},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -342,31 +342,8 @@ func TestAuthenticatorReconnectsLegacyRegistryWithoutKeyAlgorithm(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	legacyRegistry, err := NewFileRegistry(path, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyAuthenticator, err := NewAuthenticator(legacyRegistry, AdmissionConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	challenge, err = legacyAuthenticator.IssueChallenge()
-	if err != nil {
-		t.Fatal(err)
-	}
-	proof, err = NewIdentityProof(
-		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
-		"v0.1.1", "linux", "amd64", CapabilityCatalog{}, ExecutionProfile{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	admission, err := legacyAuthenticator.Authenticate(proof)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if admission.Result.State != StateConnected {
-		t.Fatalf("legacy reconnect state = %q", admission.Result.State)
+	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidNode) {
+		t.Fatalf("NewFileRegistry() error = %v, want ErrInvalidNode", err)
 	}
 }
 
@@ -449,7 +426,7 @@ func TestAuthenticatorConsumesInvalidProofChallenge(t *testing.T) {
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -493,7 +470,7 @@ func TestAuthenticatorExpiresAndBoundsChallenges(t *testing.T) {
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -639,7 +616,7 @@ func admitTestIdentityResult(
 	proof, err := NewIdentityProof(
 		privateKey, challenge.Nonce, ProtocolV1, ProtocolV1,
 		"v0.1.0", "linux", "amd64", CapabilityCatalog{},
-		ExecutionProfile{},
+		currentTestExecutionProfile(),
 	)
 	if err != nil {
 		return AdmissionResult{}, err

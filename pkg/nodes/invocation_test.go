@@ -575,10 +575,12 @@ func TestRegistrationApprovedCommandIntersectsCatalogAndApproval(t *testing.T) {
 	}
 	registration := Registration{
 		Snapshot: Snapshot{
-			ID:          ID("node_test"),
-			State:       StateConnected,
-			CatalogHash: catalogHash,
-			Catalog:     catalog,
+			ID:             ID("node_test"),
+			State:          StateConnected,
+			CatalogHash:    catalogHash,
+			Catalog:        catalog,
+			Executor:       "local",
+			PolicyRevision: "policy-1",
 		},
 		AllowedCommands:     []string{descriptor.Name},
 		ApprovedCatalogHash: catalogHash,

@@ -427,9 +427,6 @@ func (runtime *Runtime) Catalog() nodes.CapabilityCatalog {
 }
 
 func (runtime *Runtime) ExecutionProfile() nodes.ExecutionProfile {
-	if runtime == nil {
-		return nodes.ExecutionProfile{}
-	}
 	return nodes.ExecutionProfile{
 		Executor:       LocalExecutor,
 		PolicyRevision: runtime.policy.Revision,

@@ -767,11 +767,14 @@ func newRealNodePreparationFixture(t *testing.T) *realNodePreparationFixture {
 		SoftwareVersion: "v0.1.0",
 		CatalogHash:     catalogHash,
 		Catalog:         catalog,
+		Executor:        "local",
+		PolicyRevision:  "policy-1",
 		LastSeenAt:      1,
 	}
 	if err := registry.UpsertPending(nodes.PendingPairing{
 		Node:          snapshot,
 		PublicKey:     publicKey,
+		KeyAlgorithm:  nodes.KeyAlgorithmEd25519,
 		RequestedRole: "companion",
 		RequestedAt:   1,
 	}); err != nil {

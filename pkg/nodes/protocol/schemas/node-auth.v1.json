@@ -43,7 +43,6 @@
       "allOf": [
         {
           "if": {
-            "required": ["key_algorithm"],
             "properties": {"key_algorithm": {"const": "ecdsa-p256-sha256"}}
           },
           "then": {"properties": {"public_key": {"pattern": "^[A-Za-z0-9_-]{87}$"}}},
@@ -51,15 +50,14 @@
         }
       ],
       "dependentRequired": {
-        "executor": ["policy_revision"],
-        "policy_revision": ["executor"],
         "enrollment_offer_id": ["enrollment_proof"],
         "enrollment_proof": ["enrollment_offer_id"]
       },
       "required": [
-        "nonce", "node_id", "public_key", "signature", "min_protocol",
+        "nonce", "node_id", "public_key", "key_algorithm", "signature", "min_protocol",
         "max_protocol", "client_version", "platform", "architecture",
-        "requested_role", "catalog_hash", "catalog"
+        "requested_role", "catalog_hash", "catalog", "executor",
+        "policy_revision"
       ],
       "properties": {
         "nonce": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},

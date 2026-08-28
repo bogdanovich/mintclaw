@@ -34,7 +34,7 @@ type Challenge struct {
 type PendingPairing struct {
 	Node          Snapshot     `json:"node"`
 	PublicKey     []byte       `json:"public_key"`
-	KeyAlgorithm  KeyAlgorithm `json:"key_algorithm,omitempty"`
+	KeyAlgorithm  KeyAlgorithm `json:"key_algorithm"`
 	RequestedRole string       `json:"requested_role"`
 	RequestedAt   int64        `json:"requested_at"`
 }
@@ -200,8 +200,7 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 	if proof.EnrollmentOfferID != "" || proof.EnrollmentProof != "" {
 		return Admission{}, ErrEnrollmentOfferInvalid
 	}
-	registrationAlgorithm, err := registration.KeyAlgorithm.normalized()
-	if err != nil || registrationAlgorithm != publicKey.Algorithm ||
+	if err := registration.KeyAlgorithm.validate(); err != nil || registration.KeyAlgorithm != publicKey.Algorithm ||
 		!bytes.Equal(registration.PublicKey, publicKey.Bytes) {
 		return Admission{}, fmt.Errorf("%w: node public key changed", ErrInvalidNode)
 	}

@@ -28,19 +28,15 @@ const (
 
 var ErrInvalidIdentityProof = errors.New("invalid node identity proof")
 
-// KeyAlgorithm is the bounded node-authentication signing algorithm. An empty
-// value is accepted only as the wire/storage representation of legacy Ed25519
-// identities.
+// KeyAlgorithm is the bounded node-authentication signing algorithm.
 type KeyAlgorithm string
 
-func (algorithm KeyAlgorithm) normalized() (KeyAlgorithm, error) {
+func (algorithm KeyAlgorithm) validate() error {
 	switch algorithm {
-	case "", KeyAlgorithmEd25519:
-		return KeyAlgorithmEd25519, nil
-	case KeyAlgorithmECDSAP256SHA256:
-		return KeyAlgorithmECDSAP256SHA256, nil
+	case KeyAlgorithmEd25519, KeyAlgorithmECDSAP256SHA256:
+		return nil
 	default:
-		return "", fmt.Errorf("%w: unsupported key algorithm", ErrInvalidIdentityProof)
+		return fmt.Errorf("%w: unsupported key algorithm", ErrInvalidIdentityProof)
 	}
 }
 
@@ -54,7 +50,7 @@ type IdentityProof struct {
 	Nonce             string            `json:"nonce"`
 	NodeID            ID                `json:"node_id"`
 	PublicKey         string            `json:"public_key"`
-	KeyAlgorithm      KeyAlgorithm      `json:"key_algorithm,omitempty"`
+	KeyAlgorithm      KeyAlgorithm      `json:"key_algorithm"`
 	EnrollmentOfferID string            `json:"enrollment_offer_id,omitempty"`
 	EnrollmentProof   string            `json:"enrollment_proof,omitempty"`
 	Signature         string            `json:"signature"`
@@ -66,15 +62,15 @@ type IdentityProof struct {
 	RequestedRole     string            `json:"requested_role"`
 	CatalogHash       string            `json:"catalog_hash"`
 	Catalog           CapabilityCatalog `json:"catalog"`
-	Executor          string            `json:"executor,omitempty"`
-	PolicyRevision    string            `json:"policy_revision,omitempty"`
+	Executor          string            `json:"executor"`
+	PolicyRevision    string            `json:"policy_revision"`
 }
 
 type identityTranscript struct {
 	Nonce             string       `json:"nonce"`
 	NodeID            ID           `json:"node_id"`
 	PublicKey         string       `json:"public_key"`
-	KeyAlgorithm      KeyAlgorithm `json:"key_algorithm,omitempty"`
+	KeyAlgorithm      KeyAlgorithm `json:"key_algorithm"`
 	EnrollmentOfferID string       `json:"enrollment_offer_id,omitempty"`
 	MinProtocol       int          `json:"min_protocol"`
 	MaxProtocol       int          `json:"max_protocol"`
@@ -97,13 +93,12 @@ func DeriveID(publicKey ed25519.PublicKey) (ID, error) {
 }
 
 // DeriveIDForAlgorithm derives an ID from a canonical public-key encoding.
-// Legacy Ed25519 derivation intentionally remains byte-for-byte unchanged.
+// Ed25519 IDs retain their established byte representation.
 func DeriveIDForAlgorithm(algorithm KeyAlgorithm, publicKey []byte) (ID, error) {
-	normalized, err := algorithm.normalized()
-	if err != nil {
+	if err := algorithm.validate(); err != nil {
 		return "", err
 	}
-	if normalized == KeyAlgorithmEd25519 {
+	if algorithm == KeyAlgorithmEd25519 {
 		return DeriveID(ed25519.PublicKey(publicKey))
 	}
 	if _, err := parseP256PublicKey(publicKey); err != nil {
@@ -111,7 +106,7 @@ func DeriveIDForAlgorithm(algorithm KeyAlgorithm, publicKey []byte) (ID, error) 
 	}
 	hash := sha256.New()
 	_, _ = hash.Write([]byte("mintclaw-node-id-v1\x00"))
-	_, _ = hash.Write([]byte(normalized))
+	_, _ = hash.Write([]byte(algorithm))
 	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write(publicKey)
 	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(hash.Sum(nil))
@@ -129,7 +124,7 @@ func NewIdentityProof(
 	if len(privateKey) != ed25519.PrivateKeySize {
 		return IdentityProof{}, fmt.Errorf("%w: malformed private key", ErrInvalidIdentityProof)
 	}
-	if err := profile.ValidateOptional(); err != nil {
+	if err := profile.Validate(); err != nil {
 		return IdentityProof{}, err
 	}
 	if err := validateCompanionCatalog(catalog); err != nil {
@@ -176,10 +171,10 @@ func (proof IdentityProof) VerifyIdentity() (IdentityPublicKey, error) {
 	if err := proof.validateClaims(); err != nil {
 		return IdentityPublicKey{}, err
 	}
-	algorithm, err := proof.KeyAlgorithm.normalized()
-	if err != nil {
+	if err := proof.KeyAlgorithm.validate(); err != nil {
 		return IdentityPublicKey{}, err
 	}
+	algorithm := proof.KeyAlgorithm
 	publicKey, err := base64.RawURLEncoding.Strict().DecodeString(proof.PublicKey)
 	if err != nil {
 		return IdentityPublicKey{}, fmt.Errorf("%w: malformed public key", ErrInvalidIdentityProof)
@@ -275,7 +270,7 @@ func (proof IdentityProof) validateClaims() error {
 	if err := (ExecutionProfile{
 		Executor:       proof.Executor,
 		PolicyRevision: proof.PolicyRevision,
-	}).ValidateOptional(); err != nil {
+	}).Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidIdentityProof, err)
 	}
 	return nil
@@ -296,21 +291,16 @@ func validateCompanionCatalog(catalog CapabilityCatalog) error {
 }
 
 func (proof IdentityProof) transcript() ([]byte, error) {
-	algorithm, err := proof.KeyAlgorithm.normalized()
-	if err != nil {
+	if err := proof.KeyAlgorithm.validate(); err != nil {
 		return nil, err
 	}
-	prefix := "mintclaw-node-auth-v1\x00"
-	transcriptAlgorithm := KeyAlgorithm("")
-	if proof.KeyAlgorithm != "" {
-		prefix = "mintclaw-node-auth-v1:" + string(algorithm) + "\x00"
-		transcriptAlgorithm = algorithm
-	}
+	algorithm := proof.KeyAlgorithm
+	prefix := "mintclaw-node-auth-v1:" + string(algorithm) + "\x00"
 	data, err := json.Marshal(identityTranscript{
 		Nonce:             proof.Nonce,
 		NodeID:            proof.NodeID,
 		PublicKey:         proof.PublicKey,
-		KeyAlgorithm:      transcriptAlgorithm,
+		KeyAlgorithm:      algorithm,
 		EnrollmentOfferID: proof.EnrollmentOfferID,
 		MinProtocol:       proof.MinProtocol,
 		MaxProtocol:       proof.MaxProtocol,

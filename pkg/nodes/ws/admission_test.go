@@ -458,11 +458,14 @@ func testInvocationAdmission(
 		SoftwareVersion: "v0.1.0",
 		CatalogHash:     catalogHash,
 		Catalog:         catalog,
+		Executor:        "local",
+		PolicyRevision:  "policy-1",
 		LastSeenAt:      1,
 	}
 	if upsertErr := registry.UpsertPending(nodes.PendingPairing{
 		Node:          snapshot,
 		PublicKey:     publicKey,
+		KeyAlgorithm:  nodes.KeyAlgorithmEd25519,
 		RequestedRole: "companion",
 		RequestedAt:   1,
 	}); upsertErr != nil {
@@ -543,7 +546,7 @@ func TestAdmissionPersistsSignedIdentityOverWSS(t *testing.T) {
 	proof, err := nodes.NewIdentityProof(
 		privateKey, challenge.Nonce, nodes.ProtocolV1, nodes.ProtocolV1,
 		"v0.1.0", "linux", "amd64", nodes.CapabilityCatalog{},
-		nodes.ExecutionProfile{},
+		nodes.ExecutionProfile{Executor: "local", PolicyRevision: "policy-1"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -817,7 +820,7 @@ func authenticateTestConnection(
 	proof, err := nodes.NewIdentityProof(
 		privateKey, challenge.Nonce, nodes.ProtocolV1, nodes.ProtocolV1,
 		"v0.1.0", "linux", "amd64", nodes.CapabilityCatalog{},
-		nodes.ExecutionProfile{},
+		nodes.ExecutionProfile{Executor: "local", PolicyRevision: "policy-1"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -883,6 +886,7 @@ func androidEnrollmentProof(
 		MinProtocol: nodes.ProtocolV1, MaxProtocol: nodes.ProtocolV1,
 		ClientVersion: "android-wss-test", Platform: "android", Architecture: "arm64-v8a",
 		RequestedRole: "companion", CatalogHash: catalogHash, Catalog: catalog,
+		Executor: "local", PolicyRevision: "policy-1",
 	}
 	transcript := androidIdentityTranscript(t, proof)
 	digest := sha256.Sum256(transcript)
@@ -917,7 +921,7 @@ func androidIdentityTranscript(t *testing.T, proof nodes.IdentityProof) []byte {
 		Nonce             string             `json:"nonce"`
 		NodeID            nodes.ID           `json:"node_id"`
 		PublicKey         string             `json:"public_key"`
-		KeyAlgorithm      nodes.KeyAlgorithm `json:"key_algorithm,omitempty"`
+		KeyAlgorithm      nodes.KeyAlgorithm `json:"key_algorithm"`
 		EnrollmentOfferID string             `json:"enrollment_offer_id,omitempty"`
 		MinProtocol       int                `json:"min_protocol"`
 		MaxProtocol       int                `json:"max_protocol"`
