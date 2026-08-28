@@ -82,6 +82,7 @@ func TestMachineJSONRequested(t *testing.T) {
 		{name: "live agent json", args: []string{"agent", "live", "--json"}, want: true},
 		{name: "coding json", args: []string{"code", "fix it", "--json"}, want: true},
 		{name: "resume json", args: []string{"resume", "--json"}, want: true},
+		{name: "threads json", args: []string{"threads", "delete", "id", "--json"}, want: true},
 		{name: "other json command", args: []string{"status", "--json"}, want: false},
 		{name: "explicit false", args: []string{"doctor", "--json=false"}, want: false},
 	}

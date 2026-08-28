@@ -175,7 +175,148 @@ func TestDeletePlanRejectsSymlinkedThreadRoot(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	if _, err := store.PlanDelete(metadata.ThreadID); err == nil ||
-		!strings.Contains(err.Error(), "direct directory") {
+		!strings.Contains(err.Error(), "direct thread root") {
 		t.Fatalf("symlinked root error = %v", err)
+	}
+}
+
+func TestDeletePlanRejectsProjectOrGitDirectoryNestedUnderThread(t *testing.T) {
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, "project")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project, err := ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Metadata, string)
+		want   string
+	}{
+		{
+			name: "project root",
+			mutate: func(metadata *Metadata, nested string) {
+				metadata.Project = ProjectIdentity{
+					Kind: ProjectKindDirectory, ProjectRoot: nested, InvocationCWD: nested,
+				}
+				metadata.Project.ProjectKey = projectKey(ProjectKindDirectory, nested)
+			},
+			want: "project root",
+		},
+		{
+			name: "git common directory",
+			mutate: func(metadata *Metadata, nested string) {
+				metadata.Project.Kind = ProjectKindGitWorktree
+				metadata.Project.GitWorktreeRoot = metadata.Project.ProjectRoot
+				metadata.Project.GitCommonDir = nested
+				metadata.Project.ProjectKey = projectKey(ProjectKindGitWorktree, metadata.Project.ProjectRoot)
+			},
+			want: "Git common directory",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			metadata, metadataErr := NewMetadata(NewThreadID(), project, "safe", time.Now())
+			if metadataErr != nil {
+				t.Fatal(metadataErr)
+			}
+			if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+				t.Fatal(err)
+			}
+			threadRoot, _ := store.ThreadRoot(metadata.ThreadID)
+			nested := filepath.Join(threadRoot, "sessions", "nested-project")
+			if err := os.MkdirAll(nested, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&metadata, nested)
+			if err := store.Save(metadata); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.PlanDelete(metadata.ThreadID); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("PlanDelete() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestTrashThreadRejectsSymlinkedTrashHierarchy(t *testing.T) {
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, "project")
+	outside := filepath.Join(projectRoot, "injected-trash")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project, err := ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewMetadata(NewThreadID(), project, "safe", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(store.Root(), "trash")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lease.Release() }()
+	if result, err := store.TrashThread(lease, metadata.ThreadID, time.Now()); err == nil || result.Path != "" ||
+		!strings.Contains(err.Error(), "not a direct directory") {
+		t.Fatalf("TrashThread() result = %+v, error = %v", result, err)
+	}
+	if _, err := store.Load(metadata.ThreadID); err != nil {
+		t.Fatalf("active thread changed: %v", err)
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("outside trash changed: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestDeletePlanRejectsHardLinkedMetadata(t *testing.T) {
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, "project")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project, err := ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewMetadata(NewThreadID(), project, "safe", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	threadRoot, _ := store.ThreadRoot(metadata.ThreadID)
+	if err := os.Link(
+		filepath.Join(threadRoot, metadataFileName),
+		filepath.Join(root, "metadata-hardlink"),
+	); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	if _, err := store.PlanDelete(metadata.ThreadID); err == nil || !strings.Contains(err.Error(), "singly linked") {
+		t.Fatalf("PlanDelete() error = %v", err)
 	}
 }

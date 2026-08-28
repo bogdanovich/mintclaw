@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
-	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 // NewThreadsCommand creates explicit administrative coding-thread operations.
@@ -101,7 +100,7 @@ func runDeleteThread(
 }
 
 func finishDeleteThread(out io.Writer, result deleteThreadOutput, jsonOutput bool, moveErr error) error {
-	if moveErr != nil && !fileutil.IsCommittedWriteError(moveErr) {
+	if moveErr != nil && !thread.IsCommittedTrashError(moveErr) {
 		return moveErr
 	}
 	return errors.Join(moveErr, renderDeleteThread(out, result, jsonOutput))

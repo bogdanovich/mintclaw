@@ -208,7 +208,7 @@ func TestDeleteRendersRecoveryPathAfterCommittedDurabilityWarning(t *testing.T) 
 		Path:     filepath.Join(t.TempDir(), "recoverable-thread"),
 		At:       time.Now(),
 	}
-	warning := &fileutil.CommittedWriteError{Err: errors.New("directory sync failed")}
+	warning := &thread.CommittedTrashError{Result: trash, Err: errors.New("directory sync failed")}
 	var output bytes.Buffer
 
 	err := finishDeleteThread(
@@ -218,7 +218,7 @@ func TestDeleteRendersRecoveryPathAfterCommittedDurabilityWarning(t *testing.T) 
 		warning,
 	)
 
-	if !fileutil.IsCommittedWriteError(err) || !strings.Contains(output.String(), trash.Path) {
+	if !thread.IsCommittedTrashError(err) || !strings.Contains(output.String(), trash.Path) {
 		t.Fatalf("error = %v, output = %q", err, output.String())
 	}
 
@@ -232,6 +232,18 @@ func TestDeleteRendersRecoveryPathAfterCommittedDurabilityWarning(t *testing.T) 
 	)
 	if !errors.Is(err, ordinary) || output.Len() != 0 {
 		t.Fatalf("ordinary error = %v, output = %q", err, output.String())
+	}
+
+	output.Reset()
+	preMoveCommitted := &fileutil.CommittedWriteError{Err: errors.New("trash directory sync failed")}
+	err = finishDeleteThread(
+		&output,
+		deleteThreadOutput{Action: "trashed", Trash: &thread.TrashResult{}},
+		false,
+		preMoveCommitted,
+	)
+	if !errors.Is(err, preMoveCommitted) || output.Len() != 0 {
+		t.Fatalf("pre-move committed error = %v, output = %q", err, output.String())
 	}
 }
 
