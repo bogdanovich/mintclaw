@@ -269,6 +269,43 @@ func (s *Store) openLeaseFile(threadID string) (*os.File, error) {
 	return file, nil
 }
 
+func openPinnedThreadLeaseFile(root *os.Root, activePath string) (*os.File, error) {
+	if root == nil {
+		return nil, fmt.Errorf("coding thread lease: pinned thread directory is required")
+	}
+	pinned, openErr := root.Open(".")
+	if openErr != nil {
+		return nil, openErr
+	}
+	pinnedInfo, pinnedErr := pinned.Stat()
+	closeErr := pinned.Close()
+	if err := errors.Join(pinnedErr, closeErr); err != nil {
+		return nil, err
+	}
+	active, err := openCatalogRoot(activePath)
+	if err != nil {
+		return nil, err
+	}
+	activeInfo, statErr := active.stat()
+	if err := statErr; err != nil {
+		_ = active.Close()
+		return nil, err
+	}
+	if !os.SameFile(pinnedInfo, activeInfo) {
+		_ = active.Close()
+		return nil, fmt.Errorf("coding thread lease: active target changed while pinning lease creation")
+	}
+	file, openErr := openThreadLeaseFile(active)
+	closeErr = active.Close()
+	if err := errors.Join(openErr, closeErr); err != nil {
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil, err
+	}
+	return file, nil
+}
+
 func (o LeaseOwner) validate() error {
 	if o.SchemaVersion != LeaseSchemaVersion {
 		return fmt.Errorf("coding thread lease: unsupported owner schema %d", o.SchemaVersion)

@@ -412,7 +412,7 @@ func (s *Store) publishFork(
 	if provisionErr != nil {
 		return provisionErr
 	}
-	targetLease, err := s.acquireForkTargetLease(targetRoot, child.ThreadID)
+	targetLease, err := s.acquireForkTargetLease(targetRoot, result.StateRoot, child.ThreadID)
 	if err != nil {
 		closeErr := errors.Join(targetRoot.Close(), threadsRoot.Close())
 		return fmt.Errorf(
@@ -807,12 +807,12 @@ func cleanupForkReservation(threadsRoot, targetRoot *os.Root, threadID string) e
 	return syncRootDirectory(threadsRoot)
 }
 
-func (s *Store) acquireForkTargetLease(root *os.Root, threadID string) (*Lease, error) {
+func (s *Store) acquireForkTargetLease(root *os.Root, targetPath, threadID string) (*Lease, error) {
 	owner := newLeaseOwner()
 	if err := owner.validate(); err != nil {
 		return nil, err
 	}
-	file, err := root.OpenFile(leaseFileName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	file, err := openPinnedThreadLeaseFile(root, targetPath)
 	if err != nil {
 		return nil, err
 	}
