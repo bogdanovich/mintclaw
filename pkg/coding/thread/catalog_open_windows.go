@@ -74,6 +74,10 @@ func (d *catalogDirectory) readDir(count int) ([]os.DirEntry, error) {
 	return d.file.ReadDir(count)
 }
 
+func (d *catalogDirectory) stat() (os.FileInfo, error) {
+	return d.file.Stat()
+}
+
 func (d *catalogDirectory) Close() error {
 	if d == nil || d.file == nil {
 		return nil
@@ -82,9 +86,16 @@ func (d *catalogDirectory) Close() error {
 }
 
 func openCatalogMetadataFile(root *catalogDirectory) (*os.File, error) {
+	return openCatalogFile(root, metadataFileName)
+}
+
+func openCatalogFile(root *catalogDirectory, name string) (*os.File, error) {
+	if root == nil || root.file == nil || !filepath.IsLocal(name) {
+		return nil, fmt.Errorf("catalog directory and local file name are required")
+	}
 	handle, err := openWindowsCatalogChild(
 		windows.Handle(root.file.Fd()),
-		metadataFileName,
+		name,
 		windows.FILE_GENERIC_READ,
 		windows.FILE_NON_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT|windows.FILE_OPEN_REPARSE_POINT,
 	)
@@ -99,12 +110,12 @@ func openCatalogMetadataFile(root *catalogDirectory) (*os.File, error) {
 	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 ||
 		info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
 		_ = windows.CloseHandle(handle)
-		return nil, fmt.Errorf("catalog metadata handle is a reparse point or directory")
+		return nil, fmt.Errorf("catalog file handle is a reparse point or directory")
 	}
-	file := os.NewFile(uintptr(handle), filepath.Join(root.file.Name(), metadataFileName))
+	file := os.NewFile(uintptr(handle), filepath.Join(root.file.Name(), name))
 	if file == nil {
 		_ = windows.CloseHandle(handle)
-		return nil, fmt.Errorf("create catalog metadata handle")
+		return nil, fmt.Errorf("create catalog file handle")
 	}
 	return file, nil
 }

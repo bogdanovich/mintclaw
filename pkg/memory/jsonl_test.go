@@ -59,6 +59,56 @@ func TestJSONLStoreTurnJournalFaultStagesFailClosed(t *testing.T) {
 	}
 }
 
+func TestJSONLStoreRejectsUnreadableEncodedRecordsBeforeMutation(t *testing.T) {
+	message := providers.Message{Role: "user"}
+	base, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message.Content = strings.Repeat("x", MaxJSONLRecordBytes-len(base)-1)
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw)+1 > MaxJSONLRecordBytes {
+		t.Fatalf("unnormalized fixture exceeds reader limit: %d", len(raw)+1)
+	}
+
+	tests := []struct {
+		name string
+		run  func(*JSONLStore) error
+	}{
+		{
+			name: "append",
+			run: func(store *JSONLStore) error {
+				return store.AddFullMessage(t.Context(), "bounded", message)
+			},
+		},
+		{
+			name: "replace",
+			run: func(store *JSONLStore) error {
+				return store.SetHistory(t.Context(), "bounded", []providers.Message{message})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newTestStore(t)
+			err := test.run(store)
+			if err == nil || !strings.Contains(err.Error(), "JSONL record limit") {
+				t.Fatalf("oversized encoded record error = %v", err)
+			}
+			meta, metaErr := store.GetSessionMeta(t.Context(), "bounded")
+			if metaErr != nil || meta.HistoryDirty || meta.Count != 0 || meta.HistoryRevision != 0 {
+				t.Fatalf("metadata changed before rejection: %+v / %v", meta, metaErr)
+			}
+			if _, statErr := os.Stat(store.jsonlPath("bounded")); !os.IsNotExist(statErr) {
+				t.Fatalf("JSONL created before rejection: %v", statErr)
+			}
+		})
+	}
+}
+
 func TestJSONLStoreReadsBoundedHistoryPagesAcrossLogicalTruncation(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()

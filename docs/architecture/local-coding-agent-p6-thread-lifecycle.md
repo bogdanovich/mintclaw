@@ -35,7 +35,7 @@ the controller boundary and update the current projection after persistence.
 The next catalog or picker refresh observes the atomic metadata file directly,
 so lifecycle changes have no separate cache to invalidate.
 
-## Boundaries reserved for later packets
+## Delete contract
 
 Deletion is exposed as `mintclaw threads delete <thread-id>`. Without
 `--confirm`, it produces a bounded plan naming the exact external thread root
@@ -54,11 +54,52 @@ lock handle permits delete sharing while the byte-range lock remains the
 exclusive writer authority, allowing the directory move without opening a
 post-release race.
 
-Forking copies bounded conversational state into a newly allocated thread with
-its own session key, directory, lease, and future writer. Fork metadata records
-the source thread, source transcript revision, and source message identity. A
-historical conversational fork always starts against the live filesystem; it
-must not claim or imply workspace rollback.
+## Conversational fork contract
+
+`mintclaw threads fork <thread-id>` copies conversation through the latest
+stable root user turn. `--at-turn N` selects a one-based historical root turn
+and includes that turn's messages up to, but not including, the next root turn.
+Canonical `root_turn_start` markers define boundaries. A bounded legacy prefix
+without markers remains readable, while unmarked user-shaped messages after the
+first canonical marker are not treated as roots.
+
+The source lease must be idle and remains held while its canonical transcript
+is read. One fork admits at most 4,096 visible messages, a 32 MiB source JSONL
+file, and the canonical memory reader's 10 MiB per-record limit; larger inputs
+fail before a target is allocated. The selected root message gets a stable
+SHA-256 prefix identity. Metadata records that identity, the source transcript
+revision, source index/turn, copied count, and source thread ancestry.
+
+The source thread, sessions directory, metadata, and JSONL are opened through
+anchored no-follow handles and remain pinned for the complete read. Forking is
+read-only: an unfinished dirty-history transaction fails closed for normal
+runtime recovery instead of being repaired by this administrative command.
+Publication is verified through the anchored target directory and its held
+lease identity, so replacing the target path cannot classify another directory
+as the committed fork. Unpublished preparation is atomically moved into a
+recoverable internal quarantine only after its held lease identity is confirmed;
+a replacement entry is restored and never recursively deleted.
+
+The child gets a fresh UUID, session key, external directory, lease, current
+project snapshot, and future writer. It inherits only model/provider selection
+and the selected canonical message prefix. Seahorse state, compaction state,
+runtime artifacts, diagnostics, and workspace files are not copied; they are
+rebuilt independently as needed. Metadata is published last, after the child
+JSONL is durable, and committed status requires reading back the exact child
+descriptor, so incomplete preparation is absent from the catalog. The
+canonical JSONL writer rejects any normalized record its bounded reader could
+not later resume, and fork performs the same exact validation before allocating
+the child target.
+
+After the target lease is acquired, its directory is pinned and all session and
+descriptor writes are performed relative to that anchored handle. Renaming or
+replacing the active target path therefore cannot redirect preparation writes;
+final catalog verification still proves that the active path names the held
+lease before publication is reported.
+
+Both human and JSON results state that the fork uses the current live
+filesystem and provide `mintclaw resume <child-id>`. Historical conversation is
+context, never a claim that project files were rolled back.
 
 ## First-packet done criteria
 

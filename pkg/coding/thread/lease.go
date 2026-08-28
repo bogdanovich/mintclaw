@@ -140,6 +140,10 @@ func (l *Lease) withActive(storeRoot string, threadID string, operation func() e
 
 // AcquireLease takes a non-blocking writer lease on an existing coding thread.
 func (s *Store) AcquireLease(threadID string) (*Lease, error) {
+	return s.acquireLease(threadID, newLeaseOwner())
+}
+
+func newLeaseOwner() LeaseOwner {
 	owner := LeaseOwner{
 		SchemaVersion: LeaseSchemaVersion,
 		PID:           os.Getpid(),
@@ -148,7 +152,7 @@ func (s *Store) AcquireLease(threadID string) (*Lease, error) {
 	if hostname, err := os.Hostname(); err == nil {
 		owner.Hostname = strings.TrimSpace(hostname)
 	}
-	return s.acquireLease(threadID, owner)
+	return owner
 }
 
 // InspectLease probes the authoritative lock without writing an owner record.
@@ -261,6 +265,43 @@ func (s *Store) openLeaseFile(threadID string) (*os.File, error) {
 			_ = file.Close()
 		}
 		return nil, errors.Join(openErr, closeErr)
+	}
+	return file, nil
+}
+
+func openPinnedThreadLeaseFile(root *os.Root, activePath string) (*os.File, error) {
+	if root == nil {
+		return nil, fmt.Errorf("coding thread lease: pinned thread directory is required")
+	}
+	pinned, openErr := root.Open(".")
+	if openErr != nil {
+		return nil, openErr
+	}
+	pinnedInfo, pinnedErr := pinned.Stat()
+	closeErr := pinned.Close()
+	if err := errors.Join(pinnedErr, closeErr); err != nil {
+		return nil, err
+	}
+	active, err := openCatalogRoot(activePath)
+	if err != nil {
+		return nil, err
+	}
+	activeInfo, statErr := active.stat()
+	if err := statErr; err != nil {
+		_ = active.Close()
+		return nil, err
+	}
+	if !os.SameFile(pinnedInfo, activeInfo) {
+		_ = active.Close()
+		return nil, fmt.Errorf("coding thread lease: active target changed while pinning lease creation")
+	}
+	file, openErr := openThreadLeaseFile(active)
+	closeErr = active.Close()
+	if err := errors.Join(openErr, closeErr); err != nil {
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil, err
 	}
 	return file, nil
 }

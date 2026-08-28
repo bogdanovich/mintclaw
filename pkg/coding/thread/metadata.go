@@ -44,6 +44,17 @@ type Compaction struct {
 	Revision uint64    `json:"revision"`
 }
 
+// ForkPoint identifies the stable source message and canonical transcript
+// revision used to create a conversational child thread. ParentThread owns the
+// source thread ID so there is only one source-of-truth field for ancestry.
+type ForkPoint struct {
+	SourceRevision     uint64 `json:"source_revision"`
+	SourceMessageID    string `json:"source_message_id"`
+	SourceMessageIndex int    `json:"source_message_index"`
+	SourceTurn         int    `json:"source_turn"`
+	CopiedMessages     int    `json:"copied_messages"`
+}
+
 // Metadata is the versioned, transcript-independent coding-thread descriptor.
 // It is intentionally small enough to support catalog reads without loading
 // canonical JSONL history.
@@ -60,6 +71,7 @@ type Metadata struct {
 	Model         string          `json:"model,omitempty"`
 	Provider      string          `json:"provider,omitempty"`
 	ParentThread  string          `json:"parent_thread_id,omitempty"`
+	Fork          *ForkPoint      `json:"fork,omitempty"`
 	Compaction    *Compaction     `json:"last_compaction,omitempty"`
 }
 
@@ -158,6 +170,21 @@ func (m Metadata) Validate() error {
 			return fmt.Errorf("coding thread: parent thread ID must be a distinct canonical UUID")
 		}
 	}
+	if m.Fork != nil {
+		if m.ParentThread == "" {
+			return fmt.Errorf("coding thread: fork requires a parent thread ID")
+		}
+		if m.Fork.SourceRevision == 0 {
+			return fmt.Errorf("coding thread: fork requires a source transcript revision")
+		}
+		if len(m.Fork.SourceMessageID) != 64 || !isHex(m.Fork.SourceMessageID) {
+			return fmt.Errorf("coding thread: fork source message ID must be a SHA-256 digest")
+		}
+		if m.Fork.SourceMessageIndex < 0 || m.Fork.SourceTurn <= 0 ||
+			m.Fork.CopiedMessages <= m.Fork.SourceMessageIndex {
+			return fmt.Errorf("coding thread: fork source boundary is invalid")
+		}
+	}
 	if m.Compaction != nil {
 		if m.Compaction.At.IsZero() || m.Compaction.Revision == 0 {
 			return fmt.Errorf("coding thread: compaction requires timestamp and revision")
@@ -250,6 +277,9 @@ type Store struct {
 	durableRoot  string
 	mkdirDurable func(string, string, os.FileMode) error
 	writeAtomic  func(string, []byte, os.FileMode) error
+	writeRoot    func(*os.Root, string, []byte, os.FileMode) error
+	syncRoot     func(*os.Root) error
+	syncDir      func(string) error
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.
@@ -271,6 +301,9 @@ func NewStore(root string) (*Store, error) {
 		durableRoot:  durableRoot,
 		mkdirDurable: fileutil.MkdirAllDurable,
 		writeAtomic:  fileutil.WriteFileAtomic,
+		writeRoot:    writeRootFileAtomic,
+		syncRoot:     syncRootDirectory,
+		syncDir:      fileutil.SyncDirectory,
 	}, nil
 }
 

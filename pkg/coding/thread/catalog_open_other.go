@@ -45,6 +45,10 @@ func (d *catalogDirectory) readDir(count int) ([]os.DirEntry, error) {
 	return d.reader.ReadDir(count)
 }
 
+func (d *catalogDirectory) stat() (os.FileInfo, error) {
+	return d.reader.Stat()
+}
+
 func (d *catalogDirectory) Close() error {
 	if d == nil {
 		return nil
@@ -58,5 +62,12 @@ func (d *catalogDirectory) Close() error {
 }
 
 func openCatalogMetadataFile(root *catalogDirectory) (*os.File, error) {
-	return root.root.OpenFile(metadataFileName, os.O_RDONLY, 0)
+	return openCatalogFile(root, metadataFileName)
+}
+
+func openCatalogFile(root *catalogDirectory, name string) (*os.File, error) {
+	if root == nil || root.root == nil || !filepath.IsLocal(name) {
+		return nil, fmt.Errorf("catalog directory and local file name are required")
+	}
+	return root.root.OpenFile(name, os.O_RDONLY, 0)
 }

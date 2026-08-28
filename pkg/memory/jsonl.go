@@ -32,11 +32,11 @@ const (
 	// the lifetime of the process — important for a long-running daemon.
 	numLockShards = 64
 
-	// maxLineSize is the maximum size of a single JSON line in a .jsonl
+	// MaxJSONLRecordBytes is the maximum size of a single JSON line in a .jsonl
 	// file. Tool results (read_file, web search, etc.) can be large, so
 	// we set a generous limit. The scanner starts at 64 KB and grows
 	// only as needed up to this cap.
-	maxLineSize = 10 * 1024 * 1024 // 10 MB
+	MaxJSONLRecordBytes = 10 * 1024 * 1024 // 10 MB
 
 	maxHistoryPageMessages = 256
 )
@@ -548,7 +548,7 @@ func readMessages(ctx context.Context, path string, skip int) ([]providers.Messa
 	var msgs []providers.Message
 	scanner := bufio.NewScanner(f)
 	// Allow large lines for tool results (read_file, web search, etc.).
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLRecordBytes)
 
 	lineNum := 0
 	for scanner.Scan() {
@@ -611,7 +611,7 @@ func scanRetainedMessageLines(ctx context.Context, path string) (int, []int, err
 	rawCount := 0
 	retained := make([]int, 0)
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLRecordBytes)
 	for scanner.Scan() {
 		if err := contextCause(ctx); err != nil {
 			return 0, nil, err
@@ -683,23 +683,19 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 		meta.CreatedAt = now
 	}
 	meta.UpdatedAt = now
+	if msg.CreatedAt == nil {
+		msg.CreatedAt = &now
+	}
+	line, err := encodeJSONLMessage(0, msg)
+	if err != nil {
+		return err
+	}
 	if faultErr := s.injectJournalFault(jsonlJournalStageFlush); faultErr != nil {
 		return fmt.Errorf("memory: flush journal metadata: %w", faultErr)
 	}
 	if mutationErr := s.beginHistoryMutation(sessionKey, &meta, true); mutationErr != nil {
 		return mutationErr
 	}
-
-	if msg.CreatedAt == nil {
-		msg.CreatedAt = &now
-	}
-
-	// Append the message as a single JSON line.
-	line, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("memory: marshal message: %w", err)
-	}
-	line = append(line, '\n')
 
 	jsonlPath := s.jsonlPath(sessionKey)
 	f, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -899,7 +895,7 @@ func scanVisibleHistory(
 	visibleIndex := 0
 	digest := newHistoryCursorDigest()
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLRecordBytes)
 	for scanner.Scan() {
 		if err := contextCause(ctx); err != nil {
 			return 0, HistoryCursor{}, err
@@ -1198,14 +1194,84 @@ func encodeJSONL(msgs []providers.Message) ([]byte, error) {
 
 	var buf bytes.Buffer
 	for i, msg := range msgs {
-		line, err := json.Marshal(msg)
+		line, err := encodeJSONLMessage(i, msg)
 		if err != nil {
-			return nil, fmt.Errorf("memory: marshal message %d: %w", i, err)
+			return nil, err
 		}
 		buf.Write(line)
-		buf.WriteByte('\n')
 	}
 	return buf.Bytes(), nil
+}
+
+func encodeJSONLMessage(index int, msg providers.Message) ([]byte, error) {
+	line, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("memory: marshal message %d: %w", index, err)
+	}
+	line = append(line, '\n')
+	if len(line) > MaxJSONLRecordBytes {
+		return nil, fmt.Errorf(
+			"memory: encoded message %d exceeds %d-byte JSONL record limit",
+			index,
+			MaxJSONLRecordBytes,
+		)
+	}
+	return line, nil
+}
+
+// ValidateJSONLHistory confirms that the canonical writer can encode every
+// message into a record that the canonical reader can scan.
+func ValidateJSONLHistory(history []providers.Message) error {
+	_, err := encodeJSONL(history)
+	return err
+}
+
+// JSONLSnapshot is a complete clean canonical session prepared for durable
+// publication by a caller that owns an anchored directory writer.
+type JSONLSnapshot struct {
+	JSONLFile    string
+	MetadataFile string
+	JSONL        []byte
+	Metadata     []byte
+}
+
+// BuildJSONLSnapshot normalizes and encodes a new canonical session without
+// touching the filesystem. The resulting files are independently readable by
+// NewJSONLStore after they are published together.
+func BuildJSONLSnapshot(
+	sessionKey string,
+	history []providers.Message,
+	now time.Time,
+) (JSONLSnapshot, error) {
+	if strings.TrimSpace(sessionKey) == "" {
+		return JSONLSnapshot{}, fmt.Errorf("memory: snapshot session key is required")
+	}
+	if now.IsZero() {
+		return JSONLSnapshot{}, fmt.Errorf("memory: snapshot timestamp is required")
+	}
+	history = messageutil.FilterInvalidHistoryMessages(append([]providers.Message(nil), history...))
+	for index := range history {
+		if history[index].CreatedAt == nil {
+			history[index].CreatedAt = &now
+		}
+	}
+	records, err := encodeJSONL(history)
+	if err != nil {
+		return JSONLSnapshot{}, err
+	}
+	meta := SessionMeta{
+		Key: sessionKey, Count: len(history), CreatedAt: now, UpdatedAt: now,
+		HistoryRevision: 1,
+	}
+	metadata, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return JSONLSnapshot{}, fmt.Errorf("memory: encode snapshot metadata: %w", err)
+	}
+	stem := sanitizeKey(sessionKey)
+	return JSONLSnapshot{
+		JSONLFile: stem + ".jsonl", MetadataFile: stem + ".meta.json",
+		JSONL: records, Metadata: metadata,
+	}, nil
 }
 
 func digestJSONL(data []byte) string {

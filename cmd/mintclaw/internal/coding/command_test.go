@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -219,6 +220,79 @@ func TestThreadsDeleteRejectsChangedProjectIdentityAtSameRoot(t *testing.T) {
 	}
 }
 
+func TestThreadsForkHistoricalConversationUsesLiveFilesystemAndIndependentWriter(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	sentinel := filepath.Join(projectRoot, "live.txt")
+	if err := os.WriteFile(sentinel, []byte("live workspace\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 28, 11, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	createdOutput := executeCommand(t, newCodeCommand(deps), "first request", "--model", "gpt-fork", "--json")
+	var created commandResult
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	executeCommand(t, newResumeCommand(deps), created.ThreadID, "--prompt", "second request", "--json")
+
+	childID := thread.NewThreadID()
+	deps.newThreadID = func() string { return childID }
+	now = now.Add(time.Minute)
+	forkOutput := executeCommand(
+		t,
+		newThreadsCommand(deps),
+		"fork",
+		created.ThreadID,
+		"--at-turn",
+		"1",
+		"--json",
+	)
+	var forked forkThreadOutput
+	if err := json.Unmarshal(forkOutput, &forked); err != nil {
+		t.Fatalf("decode fork result: %v\n%s", err, forkOutput)
+	}
+	if forked.Action != "forked" || forked.Fork.ThreadID != childID || forked.Fork.SourceTurn != 1 ||
+		forked.Fork.CopiedMessages != 1 || !forked.Fork.LiveFilesystem ||
+		forked.Metadata.ParentThread != created.ThreadID || forked.Metadata.Fork == nil ||
+		forked.ResumeCommand != "mintclaw resume "+childID || !strings.Contains(forked.Notice, "live filesystem") {
+		t.Fatalf("fork result = %+v", forked)
+	}
+	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "live workspace\n" {
+		t.Fatalf("fork changed live project file: %q / %v", data, err)
+	}
+	if got := readHistory(t, forked.Fork.StateRoot, forked.Fork.SessionKey); !reflect.DeepEqual(
+		got,
+		[]string{"first request"},
+	) {
+		t.Fatalf("historical child history = %#v", got)
+	}
+
+	now = now.Add(time.Minute)
+	executeCommand(t, newResumeCommand(deps), childID, "--prompt", "child only", "--json")
+	if got := readHistory(t, created.StateRoot, created.SessionKey); !reflect.DeepEqual(
+		got,
+		[]string{"first request", "second request"},
+	) {
+		t.Fatalf("source history changed = %#v", got)
+	}
+	if got := readHistory(t, forked.Fork.StateRoot, forked.Fork.SessionKey); !reflect.DeepEqual(
+		got,
+		[]string{"first request", "child only"},
+	) {
+		t.Fatalf("child history = %#v", got)
+	}
+
+	deps.newThreadID = thread.NewThreadID
+	plain := executeCommand(t, newThreadsCommand(deps), "fork", created.ThreadID)
+	if !strings.Contains(string(plain), "current live filesystem") ||
+		!strings.Contains(string(plain), "no project files were rolled back") ||
+		!strings.Contains(string(plain), "mintclaw resume ") {
+		t.Fatalf("plain fork output = %q", plain)
+	}
+}
+
 func TestDeleteRendersRecoveryPathAfterCommittedDurabilityWarning(t *testing.T) {
 	trash := thread.TrashResult{
 		ThreadID: thread.NewThreadID(),
@@ -262,6 +336,37 @@ func TestDeleteRendersRecoveryPathAfterCommittedDurabilityWarning(t *testing.T) 
 	)
 	if !errors.Is(err, preMoveCommitted) || output.Len() != 0 {
 		t.Fatalf("pre-move committed error = %v, output = %q", err, output.String())
+	}
+}
+
+func TestForkCompletionPreservesCommittedClassificationForDeferredFailures(t *testing.T) {
+	result := thread.ForkResult{ThreadID: thread.NewThreadID()}
+	for _, test := range []struct {
+		name       string
+		forkErr    error
+		renderErr  error
+		releaseErr error
+	}{
+		{name: "render", renderErr: errors.New("render failed")},
+		{name: "release", releaseErr: errors.New("release failed")},
+		{
+			name: "already committed",
+			forkErr: &thread.CommittedForkError{
+				Result: result,
+				Err:    errors.New("durability warning"),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := classifyForkCompletion(result, test.forkErr, test.renderErr, test.releaseErr)
+			var committed *thread.CommittedForkError
+			if !errors.As(err, &committed) || committed.Result.ThreadID != result.ThreadID {
+				t.Fatalf("classification = %v", err)
+			}
+		})
+	}
+	if err := classifyForkCompletion(result, nil, nil, nil); err != nil {
+		t.Fatalf("successful completion error = %v", err)
 	}
 }
 
