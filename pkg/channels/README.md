@@ -49,8 +49,11 @@ not own a second copy of manager delivery, retry, or lifecycle state.
   acceptance. Current non-durable, provisional, and queued messages without a
   delivery ID still permit ambiguous retries; treat that exception as removal
   debt, not as precedent for new entry paths.
-- Messages carrying a delivery ID participate in the durable outbox contract.
-  Delivery state is persisted before completion events are published.
+- Messages admitted to the durable outbox and dispatched through the queued
+  message-bus workers participate in its persistence contract. Their delivery
+  state is persisted before completion events are published. A direct
+  `Manager.Send*` call does not acquire durable ownership merely because its
+  payload carries a delivery ID.
 - Runtime events are observational. They must not become a second source of
   lifecycle or delivery truth.
 - New work targets the current internal bus and persisted-state shapes. Bounded
