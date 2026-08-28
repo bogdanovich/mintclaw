@@ -408,19 +408,17 @@ func (s *Store) publishFork(
 	if err != nil {
 		return err
 	}
-	if provisionErr := s.provisionForkTarget(result.StateRoot); provisionErr != nil {
+	threadsRoot, targetRoot, provisionErr := s.provisionForkTarget(child.ThreadID)
+	if provisionErr != nil {
 		return provisionErr
 	}
-	targetLease, err := s.AcquireLease(child.ThreadID)
+	targetLease, err := s.acquireForkTargetLease(targetRoot, child.ThreadID)
 	if err != nil {
+		closeErr := errors.Join(targetRoot.Close(), threadsRoot.Close())
 		return fmt.Errorf(
-			"coding thread fork: acquire target lease; reservation left in place because its identity is unconfirmed: %w",
-			err,
+			"coding thread fork: acquire pinned target lease; reservation left in place: %w",
+			errors.Join(err, closeErr),
 		)
-	}
-	targetRoot, err := os.OpenRoot(result.StateRoot)
-	if err != nil {
-		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, err)
 	}
 	var sessionsRoot *os.Root
 	abort := func(operationErr error) error {
@@ -428,7 +426,7 @@ func (s *Store) publishFork(
 			operationErr = errors.Join(operationErr, sessionsRoot.Close())
 			sessionsRoot = nil
 		}
-		operationErr = errors.Join(operationErr, targetRoot.Close())
+		operationErr = errors.Join(operationErr, targetRoot.Close(), threadsRoot.Close())
 		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, operationErr)
 	}
 	if identityErr := validateExistingForkLeaseRoot(targetRoot, targetLease); identityErr != nil {
@@ -437,7 +435,7 @@ func (s *Store) publishFork(
 	if mkdirErr := targetRoot.Mkdir("sessions", 0o700); mkdirErr != nil {
 		return abort(fmt.Errorf("coding thread fork: create pinned sessions directory: %w", mkdirErr))
 	}
-	if syncErr := syncRootDirectory(targetRoot); syncErr != nil {
+	if syncErr := s.syncRoot(targetRoot); syncErr != nil {
 		return abort(&fileutil.CommittedWriteError{Err: fmt.Errorf("sync pinned target root: %w", syncErr)})
 	}
 	sessionsRoot, err = targetRoot.OpenRoot("sessions")
@@ -450,22 +448,18 @@ func (s *Store) publishFork(
 	if writeErr := s.writeRoot(sessionsRoot, snapshot.MetadataFile, snapshot.Metadata, 0o600); writeErr != nil {
 		return abort(fmt.Errorf("coding thread fork: write pinned transcript metadata: %w", writeErr))
 	}
-	if closeErr := sessionsRoot.Close(); closeErr != nil {
-		sessionsRoot = nil
-		return abort(fmt.Errorf("coding thread fork: close pinned sessions directory: %w", closeErr))
-	}
-	sessionsRoot = nil
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return abort(contextErr)
 	}
 	saveErr := s.writeRoot(targetRoot, metadataFileName, metadataData, 0o600)
-	closeErr := targetRoot.Close()
-	saveErr = errors.Join(saveErr, closeErr)
-	verifyErr := s.verifyPublishedFork(targetLease, child)
+	verifyErr := s.verifyPublishedFork(ctx, targetLease, child, snapshot, sessionsRoot)
 	published := verifyErr == nil
 	if !published {
 		saveErr = errors.Join(saveErr, verifyErr)
 	}
+	closeErr := errors.Join(sessionsRoot.Close(), targetRoot.Close(), threadsRoot.Close())
+	sessionsRoot = nil
+	saveErr = errors.Join(saveErr, closeErr)
 	if !published {
 		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, saveErr)
 	}
@@ -633,7 +627,13 @@ func validateExistingForkLeaseRoot(root *os.Root, lease *Lease) error {
 	return nil
 }
 
-func (s *Store) verifyPublishedFork(targetLease *Lease, child Metadata) error {
+func (s *Store) verifyPublishedFork(
+	ctx context.Context,
+	targetLease *Lease,
+	child Metadata,
+	snapshot memory.JSONLSnapshot,
+	pinnedSessions *os.Root,
+) error {
 	return targetLease.withActive(s.root, child.ThreadID, func() error {
 		storeRoot, err := openCatalogRoot(s.root)
 		if err != nil {
@@ -660,34 +660,170 @@ func (s *Store) verifyPublishedFork(targetLease *Lease, child Metadata) error {
 		if !reflect.DeepEqual(loaded, child) {
 			return fmt.Errorf("coding thread fork: published metadata does not match the child")
 		}
-		return nil
+		activeSessions, err := openCatalogChildDirectory(threadRoot, "sessions")
+		if err != nil {
+			return fmt.Errorf("coding thread fork: verify active sessions root: %w", err)
+		}
+		defer func() { _ = activeSessions.Close() }()
+		activeInfo, err := activeSessions.stat()
+		if err != nil {
+			return fmt.Errorf("coding thread fork: stat active sessions root: %w", err)
+		}
+		pinnedDirectory, err := pinnedSessions.Open(".")
+		if err != nil {
+			return fmt.Errorf("coding thread fork: stat pinned sessions root: %w", err)
+		}
+		pinnedInfo, statErr := pinnedDirectory.Stat()
+		closeErr := pinnedDirectory.Close()
+		if err := errors.Join(statErr, closeErr); err != nil {
+			return fmt.Errorf("coding thread fork: stat pinned sessions root: %w", err)
+		}
+		if !os.SameFile(activeInfo, pinnedInfo) {
+			return fmt.Errorf("coding thread fork: active sessions root was replaced")
+		}
+		if err := verifyForkSnapshotFile(ctx, activeSessions, snapshot.JSONLFile, snapshot.JSONL); err != nil {
+			return err
+		}
+		return verifyForkSnapshotFile(ctx, activeSessions, snapshot.MetadataFile, snapshot.Metadata)
 	})
 }
 
-func (s *Store) provisionForkTarget(targetRoot string) error {
-	threadsRoot := filepath.Join(s.root, "threads")
-	relativeThreads, err := filepath.Rel(s.durableRoot, threadsRoot)
+func verifyForkSnapshotFile(ctx context.Context, root *catalogDirectory, name string, expected []byte) error {
+	file, err := openCatalogFile(root, name)
 	if err != nil {
-		return fmt.Errorf("coding thread fork: resolve threads root: %w", err)
+		return fmt.Errorf("coding thread fork: verify snapshot file %q: %w", name, err)
 	}
-	if !filepath.IsLocal(relativeThreads) {
-		return fmt.Errorf("coding thread fork: threads root escapes durable store")
+	data, _, readErr := readPinnedForkFile(ctx, file)
+	closeErr := file.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return fmt.Errorf("coding thread fork: verify snapshot file %q: %w", name, err)
 	}
-	if err := s.mkdirDurable(s.durableRoot, relativeThreads, 0o700); err != nil {
-		return fmt.Errorf("coding thread fork: create threads root: %w", err)
-	}
-	if err := os.Mkdir(targetRoot, 0o700); err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("coding thread fork: target thread already exists")
-		}
-		return fmt.Errorf("coding thread fork: reserve target thread: %w", err)
-	}
-	if err := s.syncDir(threadsRoot); err != nil {
-		return errors.Join(
-			fmt.Errorf("coding thread fork: sync target reservation: %w", err),
-			os.Remove(targetRoot),
-			s.syncDir(threadsRoot),
-		)
+	if !bytes.Equal(data, expected) {
+		return fmt.Errorf("coding thread fork: published snapshot file %q does not match", name)
 	}
 	return nil
+}
+
+func (s *Store) provisionForkTarget(threadID string) (*os.Root, *os.Root, error) {
+	threadsRoot := filepath.Join(s.root, "threads")
+	relativeThreads, resolveErr := filepath.Rel(s.durableRoot, threadsRoot)
+	if resolveErr != nil {
+		return nil, nil, fmt.Errorf("coding thread fork: resolve threads root: %w", resolveErr)
+	}
+	if !filepath.IsLocal(relativeThreads) {
+		return nil, nil, fmt.Errorf("coding thread fork: threads root escapes durable store")
+	}
+	if err := s.mkdirDurable(s.durableRoot, relativeThreads, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("coding thread fork: create threads root: %w", err)
+	}
+	pinnedThreads, pinErr := openPinnedCatalogRoot(threadsRoot)
+	if pinErr != nil {
+		return nil, nil, fmt.Errorf("coding thread fork: pin threads root: %w", pinErr)
+	}
+	if err := pinnedThreads.Mkdir(threadID, 0o700); err != nil {
+		_ = pinnedThreads.Close()
+		if os.IsExist(err) {
+			return nil, nil, fmt.Errorf("coding thread fork: target thread already exists")
+		}
+		return nil, nil, fmt.Errorf("coding thread fork: reserve target thread: %w", err)
+	}
+	targetRoot, err := pinnedThreads.OpenRoot(threadID)
+	if err != nil {
+		_ = pinnedThreads.Close()
+		return nil, nil, fmt.Errorf("coding thread fork: pin target reservation: %w", err)
+	}
+	if err := s.syncRoot(pinnedThreads); err != nil {
+		cleanupErr := cleanupForkReservation(pinnedThreads, targetRoot, threadID)
+		return nil, nil, errors.Join(
+			fmt.Errorf("coding thread fork: sync target reservation: %w", err),
+			cleanupErr,
+			targetRoot.Close(),
+			pinnedThreads.Close(),
+		)
+	}
+	return pinnedThreads, targetRoot, nil
+}
+
+func openPinnedCatalogRoot(path string) (*os.Root, error) {
+	catalogRoot, err := openCatalogRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = catalogRoot.Close() }()
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return nil, err
+	}
+	pinned, err := root.Open(".")
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	pinnedInfo, pinnedErr := pinned.Stat()
+	catalogInfo, catalogErr := catalogRoot.stat()
+	closeErr := pinned.Close()
+	if err := errors.Join(pinnedErr, catalogErr, closeErr); err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	if !os.SameFile(pinnedInfo, catalogInfo) {
+		_ = root.Close()
+		return nil, fmt.Errorf("active catalog root changed while pinning")
+	}
+	return root, nil
+}
+
+func cleanupForkReservation(threadsRoot, targetRoot *os.Root, threadID string) error {
+	quarantineName := ".fork-reservation-" + NewThreadID()
+	if err := threadsRoot.Rename(threadID, quarantineName); err != nil {
+		return err
+	}
+	restore := true
+	defer func() {
+		if restore {
+			_ = threadsRoot.Rename(quarantineName, threadID)
+		}
+	}()
+	active, err := threadsRoot.Lstat(quarantineName)
+	if err != nil {
+		return err
+	}
+	pinned, err := targetRoot.Open(".")
+	if err != nil {
+		return err
+	}
+	pinnedInfo, statErr := pinned.Stat()
+	closeErr := pinned.Close()
+	if err := errors.Join(statErr, closeErr); err != nil {
+		return err
+	}
+	if active.Mode()&os.ModeSymlink != 0 || !os.SameFile(active, pinnedInfo) {
+		return fmt.Errorf("coding thread fork: target reservation identity changed")
+	}
+	if err := threadsRoot.Remove(quarantineName); err != nil {
+		return err
+	}
+	restore = false
+	return syncRootDirectory(threadsRoot)
+}
+
+func (s *Store) acquireForkTargetLease(root *os.Root, threadID string) (*Lease, error) {
+	owner := newLeaseOwner()
+	if err := owner.validate(); err != nil {
+		return nil, err
+	}
+	file, err := root.OpenFile(leaseFileName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := tryAcquireThreadLeaseFile(file); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := writeLeaseOwner(file, owner); err != nil {
+		_ = releaseThreadLeaseFile(file)
+		_ = file.Close()
+		return nil, err
+	}
+	return &Lease{storeRoot: s.root, threadID: threadID, owner: owner, file: file}, nil
 }

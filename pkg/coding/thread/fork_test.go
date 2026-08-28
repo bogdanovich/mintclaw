@@ -445,14 +445,14 @@ func TestForkThreadDoesNotClassifyCommittedProvisionAsPublished(t *testing.T) {
 	t.Cleanup(func() { _ = lease.Release() })
 	targetID := NewThreadID()
 	injected := errors.New("injected provision sync failure")
-	originalSync := store.syncDir
+	originalSync := store.syncRoot
 	injectedOnce := false
-	store.syncDir = func(path string) error {
-		if path == filepath.Join(store.root, "threads") && !injectedOnce {
+	store.syncRoot = func(root *os.Root) error {
+		if !injectedOnce {
 			injectedOnce = true
 			return &fileutil.CommittedWriteError{Err: injected}
 		}
-		return originalSync(path)
+		return originalSync(root)
 	}
 	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
 		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
@@ -466,6 +466,46 @@ func TestForkThreadDoesNotClassifyCommittedProvisionAsPublished(t *testing.T) {
 	}
 	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
 		t.Fatalf("unpublished provision target remains: %v", err)
+	}
+}
+
+func TestForkThreadDoesNotReserveThroughReplacedThreadsRoot(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	threadsPath := filepath.Join(store.root, "threads")
+	movedThreads := filepath.Join(store.root, "threads-moved")
+	externalThreads := t.TempDir()
+	originalMkdir := store.mkdirDurable
+	replaced := false
+	store.mkdirDurable = func(root, name string, mode os.FileMode) error {
+		if err := originalMkdir(root, name, mode); err != nil {
+			return err
+		}
+		if replaced {
+			return nil
+		}
+		replaced = true
+		if err := os.Rename(threadsPath, movedThreads); err != nil {
+			return err
+		}
+		return os.Symlink(externalThreads, threadsPath)
+	}
+	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if forkErr == nil || IsCommittedForkError(forkErr) {
+		t.Fatalf("replaced threads root classification = %v", forkErr)
+	}
+	if _, err := os.Stat(filepath.Join(externalThreads, targetID)); !os.IsNotExist(err) {
+		t.Fatalf("target was reserved outside the store: %v", err)
 	}
 }
 
@@ -614,6 +654,49 @@ func TestForkThreadWritesThroughPinnedTargetAfterPathReplacement(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(movedRoot, metadataFileName)); err != nil {
 		t.Fatalf("pinned original did not receive child metadata: %v", err)
+	}
+}
+
+func TestForkThreadDoesNotPublishAfterSessionsReplacement(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalWrite := store.writeRoot
+	replaced := false
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if name == metadataFileName && !replaced {
+			replaced = true
+			if err := os.Rename(
+				filepath.Join(targetRoot, "sessions"),
+				filepath.Join(targetRoot, "sessions-moved"),
+			); err != nil {
+				return err
+			}
+			if err := os.Mkdir(filepath.Join(targetRoot, "sessions"), 0o700); err != nil {
+				return err
+			}
+		}
+		return originalWrite(root, name, data, mode)
+	}
+	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if forkErr == nil || IsCommittedForkError(forkErr) {
+		t.Fatalf("replaced sessions classification = %v", forkErr)
+	}
+	if _, err := store.Load(targetID); err == nil {
+		t.Fatal("sessions replacement became a catalog-visible child")
 	}
 }
 

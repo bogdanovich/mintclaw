@@ -74,6 +74,10 @@ func (d *catalogDirectory) readDir(count int) ([]os.DirEntry, error) {
 	return d.file.ReadDir(count)
 }
 
+func (d *catalogDirectory) stat() (os.FileInfo, error) {
+	return d.file.Stat()
+}
+
 func (d *catalogDirectory) Close() error {
 	if d == nil || d.file == nil {
 		return nil

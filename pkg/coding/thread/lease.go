@@ -140,6 +140,10 @@ func (l *Lease) withActive(storeRoot string, threadID string, operation func() e
 
 // AcquireLease takes a non-blocking writer lease on an existing coding thread.
 func (s *Store) AcquireLease(threadID string) (*Lease, error) {
+	return s.acquireLease(threadID, newLeaseOwner())
+}
+
+func newLeaseOwner() LeaseOwner {
 	owner := LeaseOwner{
 		SchemaVersion: LeaseSchemaVersion,
 		PID:           os.Getpid(),
@@ -148,7 +152,7 @@ func (s *Store) AcquireLease(threadID string) (*Lease, error) {
 	if hostname, err := os.Hostname(); err == nil {
 		owner.Hostname = strings.TrimSpace(hostname)
 	}
-	return s.acquireLease(threadID, owner)
+	return owner
 }
 
 // InspectLease probes the authoritative lock without writing an owner record.
