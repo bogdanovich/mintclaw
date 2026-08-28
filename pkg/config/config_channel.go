@@ -3,9 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -357,9 +355,8 @@ func (b *Channel) GetDecoded() (any, error) {
 	return b.extend, nil
 }
 
-// UnmarshalYAML implements yaml.Unmarshaler for Channel.
-// Merges the YAML node into the existing Channel.
-// Supports both nested format (settings: {...}) and flat format (token: xxx).
+// UnmarshalYAML implements yaml.Unmarshaler for Channel and merges a nested
+// settings node into the existing Channel.
 func (b *Channel) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind == 0 {
 		return nil
@@ -753,8 +750,9 @@ func initializeChannelList(channels ChannelsConfig, applyRuntimeOverrides, prese
 		}
 		// Ensure channel name is set from the map key
 		bc.SetName(name)
-		// Infer Type from map key if not explicitly set.
-		bc.Type = effectiveChannelType(name, bc.Type)
+		if bc.Type == "" {
+			return fmt.Errorf("channel %q type is required", name)
+		}
 		if !isValidChannelType(bc.Type) {
 			return fmt.Errorf("channel %q has unknown type %q", name, bc.Type)
 		}
@@ -770,7 +768,6 @@ func initializeChannelList(channels ChannelsConfig, applyRuntimeOverrides, prese
 			if applyRuntimeOverrides {
 				// Channel environment overrides are intentionally non-fatal.
 				_ = env.Parse(target)
-				applyTelegramStreamingEnvCompat(target)
 			}
 			if err := validateChannelStreamingConfig(name, target); err != nil {
 				return err
@@ -784,29 +781,6 @@ func initializeChannelList(channels ChannelsConfig, applyRuntimeOverrides, prese
 	}
 
 	return nil
-}
-
-func applyTelegramStreamingEnvCompat(target any) {
-	settings, ok := target.(*TelegramSettings)
-	if !ok || settings == nil {
-		return
-	}
-
-	if raw, ok := os.LookupEnv("MINTCLAW_CHANNELS_TELEGRAM_STREAMING_ENABLED"); ok {
-		if value, err := strconv.ParseBool(raw); err == nil {
-			settings.Streaming.Enabled = value
-		}
-	}
-	if raw, ok := os.LookupEnv("MINTCLAW_CHANNELS_TELEGRAM_STREAMING_THROTTLE_SECONDS"); ok {
-		if value, err := strconv.Atoi(raw); err == nil {
-			settings.Streaming.ThrottleSeconds = value
-		}
-	}
-	if raw, ok := os.LookupEnv("MINTCLAW_CHANNELS_TELEGRAM_STREAMING_MIN_GROWTH_CHARS"); ok {
-		if value, err := strconv.Atoi(raw); err == nil {
-			settings.Streaming.MinGrowthChars = value
-		}
-	}
 }
 
 func validateChannelStreamingConfig(channelName string, target any) error {

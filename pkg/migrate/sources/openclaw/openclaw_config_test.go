@@ -647,12 +647,18 @@ func TestToStandardConfig(t *testing.T) {
 	if !stdCfg.Channels["telegram"].Enabled {
 		t.Error("telegram should be enabled")
 	}
+	if stdCfg.Channels["telegram"].Type != config.ChannelTelegram {
+		t.Errorf("telegram type = %q, want %q", stdCfg.Channels["telegram"].Type, config.ChannelTelegram)
+	}
 	decoded, err := stdCfg.Channels["telegram"].GetDecoded()
 	if err != nil {
 		t.Fatalf("GetDecoded() error = %v", err)
 	}
-	if tCfg, ok := decoded.(*config.TelegramSettings); ok &&
-		tCfg.Token.String() != "test-token" {
+	tCfg, ok := decoded.(*config.TelegramSettings)
+	if !ok {
+		t.Fatalf("telegram settings type = %T, want *config.TelegramSettings", decoded)
+	}
+	if tCfg.Token.String() != "test-token" {
 		t.Errorf("expected token 'test-token', got '%s'", tCfg.Token.String())
 	}
 

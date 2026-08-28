@@ -361,7 +361,7 @@ func TestSecurityCopyForReplacementBindsChannelSecretsToDurableType(t *testing.T
 	}
 }
 
-func TestSecurityCopyForReplacementPreservesSecretForInferredType(t *testing.T) {
+func TestSecurityCopyForReplacementPreservesSecretForExplicitType(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	baseline := DefaultConfig()
 	baseline.Channels[ChannelTelegram] = testReplacementChannel(
@@ -390,6 +390,7 @@ func TestSecurityCopyForReplacementPreservesSecretForInferredType(t *testing.T) 
 			replacement := DefaultConfig()
 			replacement.Channels[ChannelTelegram] = &Channel{
 				Enabled:  true,
+				Type:     ChannelTelegram,
 				Settings: []byte(test.settings),
 			}
 			if err = replacement.SecurityCopyForReplacement(path, current.Config); err != nil {
