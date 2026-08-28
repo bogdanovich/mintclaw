@@ -280,6 +280,32 @@ func telegramMediaFailure(
 	)
 }
 
+func telegramMediaResultFrom[T any](
+	messageIDs []string,
+	remainder *bus.OutboundMediaMessage,
+	source channels.DeliveryResult[T],
+) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	var pending []bus.OutboundMediaMessage
+	if remainder != nil && len(remainder.Parts) > 0 {
+		pending = []bus.OutboundMediaMessage{*remainder}
+	}
+	status := source.Status
+	if !source.Delivered() && len(messageIDs) > 0 {
+		status = channels.DeliveryPartial
+	}
+	return channels.DeliveryResult[bus.OutboundMediaMessage]{
+		MessageIDs:        append([]string(nil), messageIDs...),
+		Status:            status,
+		Acceptance:        source.Acceptance,
+		Remaining:         pending,
+		UnresolvedPartial: source.UnresolvedPartial,
+		RetryAfter:        source.RetryAfter,
+		RetryAt:           source.RetryAt,
+		Attempts:          source.Attempts,
+		Err:               source.Err,
+	}
+}
+
 func telegramMediaRewindFailure(
 	messageIDs []string,
 	msg bus.OutboundMediaMessage,
@@ -297,7 +323,16 @@ func telegramMediaPartsFailure(
 	partIndex int,
 	err error,
 ) channels.DeliveryResult[bus.OutboundMediaMessage] {
+	result := telegramMediaFailure(messageIDs, nil, err)
+	if result.Ambiguous() {
+		partIndex++
+	}
+	if partIndex >= len(msg.Parts) {
+		return result
+	}
 	remainder := msg
 	remainder.Parts = append([]bus.MediaPart(nil), msg.Parts[partIndex:]...)
-	return telegramMediaFailure(messageIDs, &remainder, err)
+	result.Remaining = []bus.OutboundMediaMessage{remainder}
+	result.UnresolvedPartial = result.Ambiguous()
+	return result
 }

@@ -142,12 +142,11 @@ completion events:
 - failure known to precede remote acceptance becomes `definitely_failed`;
 - partial delivery or unknown acceptance becomes `ambiguous`.
 
-Only known remainders from definitely rejected operations are retried for a
-durable delivery. Legacy messages without a delivery ID retain their existing
-ambiguous-retry policy. Telegram carries typed text and media outcomes,
-including partial groups, long-caption tails, rate-limit deadlines, and
-definitive API 4xx rejection. Other adapters continue through the conservative
-legacy projection until they implement the typed interfaces.
+Every path retries only a definitely rejected operation or an explicitly known
+unsent remainder. Unknown remote acceptance is terminal. Telegram carries
+typed text and media outcomes, including partial groups, long-caption tails,
+rate-limit deadlines, and definitive API 4xx rejection. Other adapters use the
+same conservative projection until they implement the typed interfaces.
 
 Media-only final responses participate in durable ownership and outcome
 persistence but do not receive a text footer.

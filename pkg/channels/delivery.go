@@ -117,6 +117,8 @@ func FailedDelivery[T any](
 
 // DeliverSequentially applies a single-payload transport operation to the
 // current pending queue while preserving confirmed IDs and retryable remainder.
+// When the current payload has unknown acceptance, it is excluded from that
+// remainder while later untouched payloads remain safe to deliver.
 func DeliverSequentially[T any](
 	ctx context.Context,
 	pending []T,
@@ -131,14 +133,16 @@ func DeliverSequentially[T any](
 		ids, err := deliver(ctx, payload)
 		messageIDs = append(messageIDs, ids...)
 		if err != nil {
-			var remaining []T
-			if len(ids) == 0 {
-				remaining = pending[index:]
-			} else if index+1 < len(pending) {
-				remaining = pending[index+1:]
+			result := FailedDelivery[T](messageIDs, nil, 0, err)
+			untouched := pending[index+1:]
+			if result.Ambiguous() || len(ids) > 0 {
+				if len(untouched) > 0 {
+					result.Remaining = cloneDeliveryPayload(untouched)
+					result.UnresolvedPartial = true
+				}
+			} else {
+				result.Remaining = cloneDeliveryPayload(pending[index:])
 			}
-			result := FailedDelivery(messageIDs, remaining, 0, err)
-			result.UnresolvedPartial = len(ids) > 0 && len(remaining) > 0
 			return result
 		}
 	}
@@ -161,7 +165,6 @@ func deliveryFailureWasRejected(err error) bool {
 // DeliveryRetryPolicy controls the shared transport retry coordinator.
 type DeliveryRetryPolicy struct {
 	MaxRetries     int
-	RetryAmbiguous bool
 	RateLimitDelay time.Duration
 	BaseBackoff    time.Duration
 	MaxBackoff     time.Duration
@@ -259,7 +262,7 @@ func DeliverWithRetry[T any](
 			}
 			pending = cloneDeliveryPayload(result.Remaining)
 		}
-		if !deliveryResultMayRetry(result, policy) || attempt == maxRetries {
+		if !deliveryResultMayRetry(result) || attempt == maxRetries {
 			break
 		}
 		if err := waitForDeliveryRetry(ctx, result, policy, attempt); err != nil {
@@ -306,7 +309,7 @@ func combineDeliveryAcceptance(left, right DeliveryAcceptance) DeliveryAcceptanc
 	return DeliveryRejected
 }
 
-func deliveryResultMayRetry[T any](result DeliveryResult[T], policy DeliveryRetryPolicy) bool {
+func deliveryResultMayRetry[T any](result DeliveryResult[T]) bool {
 	if result.Err == nil || errors.Is(result.Err, ErrNotRunning) || errors.Is(result.Err, ErrSendFailed) {
 		return false
 	}
@@ -316,7 +319,10 @@ func deliveryResultMayRetry[T any](result DeliveryResult[T], policy DeliveryRetr
 	if result.UnresolvedPartial && len(result.Remaining) > 0 {
 		return true
 	}
-	return !result.Ambiguous() || policy.RetryAmbiguous
+	if len(result.Remaining) > 0 {
+		return result.Acceptance == DeliveryRejected
+	}
+	return result.DefinitelyNotSent()
 }
 
 func waitForDeliveryRetry[T any](

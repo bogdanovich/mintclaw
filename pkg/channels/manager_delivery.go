@@ -233,44 +233,132 @@ func (r *DeliveryRuntime) deliverQueuedMessage(
 		chunks = splitOutboundMessageContent(msg, maxLen)
 	}
 
-	durable, err := m.beginDurableOutbound(msg.DeliveryID)
-	if err != nil {
+	if err := m.beginDurableOutbound(msg.DeliveryID); err != nil {
 		m.publishOutboundFailed(name, msg, err, false)
 		return
 	}
 	terminals := m.beginOutboundToolFeedbackTerminals(name, w.ch, msg)
-	var messageIDs []string
-	delivered := true
-	for _, chunk := range chunks {
-		chunkMsg := msg
-		chunkMsg.Content = chunk
-		result := r.sendWithRetryPolicy(
-			ctx, name, w, chunkMsg, !durable, publishNoOutcome,
-		)
-		if !result.Delivered() {
-			delivered = false
-			outcome := durableOutcome(result, messageIDs)
-			if persistErr := m.persistDurableOutbound(msg.DeliveryID, outcome); persistErr != nil {
-				result.Err = errors.Join(result.Err, persistErr)
-			}
-			m.publishOutboundFailed(name, msg, result.Err, false)
-			break
+	result := r.sendTextChunksWithRetry(ctx, name, w, msg, chunks)
+	m.completeToolFeedbackTerminals(ctx, terminals, result.Delivered())
+	if !result.Delivered() {
+		outcome := durableOutcome(result, nil)
+		if persistErr := m.persistDurableOutbound(msg.DeliveryID, outcome); persistErr != nil {
+			result.Err = errors.Join(result.Err, persistErr)
 		}
-		messageIDs = append(messageIDs, result.MessageIDs...)
-	}
-	m.completeToolFeedbackTerminals(ctx, terminals, delivered)
-	if !delivered {
+		m.publishOutboundFailed(name, msg, result.Err, false)
 		return
 	}
 	outcome := OutboundDeliveryOutcome{
 		Status:             OutboundDeliveryDelivered,
-		PlatformMessageIDs: messageIDs,
+		PlatformMessageIDs: result.MessageIDs,
 	}
 	if err := m.persistDurableOutbound(msg.DeliveryID, outcome); err != nil {
 		m.publishOutboundFailed(name, msg, err, false)
 		return
 	}
-	m.publishOutboundSent(name, msg, messageIDs)
+	m.publishOutboundSent(name, msg, result.MessageIDs)
+}
+
+func (r *DeliveryRuntime) sendTextChunksWithRetry(
+	ctx context.Context,
+	name string,
+	w *channelWorker,
+	msg bus.OutboundMessage,
+	chunks []string,
+) DeliveryResult[bus.OutboundMessage] {
+	if len(chunks) == 0 {
+		return RejectedDelivery[bus.OutboundMessage](errors.New("outbound text chunks are empty"))
+	}
+
+	var confirmedIDs []string
+	confirmedChunks := 0
+	totalAttempts := 0
+	var unresolved *DeliveryResult[bus.OutboundMessage]
+	for index, chunk := range chunks {
+		chunkMsg := msg
+		chunkMsg.Content = chunk
+		result := r.sendWithRetryPolicy(ctx, name, w, chunkMsg, publishNoOutcome)
+		confirmedIDs = append(confirmedIDs, result.MessageIDs...)
+		totalAttempts += max(result.Attempts, 1)
+		if result.Delivered() {
+			confirmedChunks++
+			continue
+		}
+
+		if result.Remaining != nil || !result.MayHaveDelivered() {
+			if result.Remaining == nil && result.DefinitelyNotSent() {
+				result.Remaining = []bus.OutboundMessage{chunkMsg}
+			}
+			result.Remaining = append(
+				result.Remaining,
+				outboundMessagesForTextChunks(msg, chunks[index+1:])...,
+			)
+			if unresolved != nil {
+				result = combineTextChunkFailures(*unresolved, result)
+			}
+			return finalizeTextChunkSequence(result, confirmedIDs, confirmedChunks, totalAttempts)
+		}
+		if unresolved == nil {
+			copyResult := result
+			unresolved = &copyResult
+		} else {
+			combined := combineTextChunkFailures(*unresolved, result)
+			unresolved = &combined
+		}
+		if index == len(chunks)-1 {
+			break
+		}
+		unresolved.UnresolvedPartial = true
+	}
+
+	if unresolved != nil {
+		return finalizeTextChunkSequence(*unresolved, confirmedIDs, confirmedChunks, totalAttempts)
+	}
+	result := SuccessfulDelivery[bus.OutboundMessage](confirmedIDs)
+	result.Attempts = totalAttempts
+	return result
+}
+
+func finalizeTextChunkSequence(
+	result DeliveryResult[bus.OutboundMessage],
+	confirmedIDs []string,
+	confirmedChunks int,
+	totalAttempts int,
+) DeliveryResult[bus.OutboundMessage] {
+	result.MessageIDs = append([]string(nil), confirmedIDs...)
+	result.Remaining = append([]bus.OutboundMessage(nil), result.Remaining...)
+	result.Attempts = max(totalAttempts, 1)
+	if confirmedChunks > 0 || len(confirmedIDs) > 0 {
+		result.Status = DeliveryPartial
+	} else {
+		result.Status = DeliveryFailed
+	}
+	return result
+}
+
+func combineTextChunkFailures(
+	left DeliveryResult[bus.OutboundMessage],
+	right DeliveryResult[bus.OutboundMessage],
+) DeliveryResult[bus.OutboundMessage] {
+	left.Acceptance = combineDeliveryAcceptance(left.Acceptance, right.Acceptance)
+	left.Remaining = append([]bus.OutboundMessage(nil), right.Remaining...)
+	left.UnresolvedPartial = left.UnresolvedPartial || right.UnresolvedPartial
+	left.Err = errors.Join(left.Err, right.Err)
+	if !right.RetryAt.IsZero() || right.RetryAfter > 0 {
+		left.RetryAfter = right.RetryAfter
+		left.RetryAt = right.RetryAt
+	}
+	return left
+}
+
+func outboundMessagesForTextChunks(msg bus.OutboundMessage, chunks []string) []bus.OutboundMessage {
+	messages := make([]bus.OutboundMessage, 0, len(chunks))
+	for _, chunk := range chunks {
+		chunkMsg := msg
+		chunkMsg.Content = chunk
+		messages = append(messages, chunkMsg)
+	}
+	return messages
 }
 
 func (r *DeliveryRuntime) failPendingOutbound(
@@ -331,8 +419,8 @@ func splitOutboundMessageContent(msg bus.OutboundMessage, maxLen int) []string {
 // sendWithRetry sends a message through the channel with rate limiting and
 // retry logic. It classifies errors to determine the retry strategy:
 //   - ErrNotRunning / ErrSendFailed: permanent, no retry
-//   - ErrRateLimit: fixed delay retry
-//   - ErrTemporary / unknown: exponential backoff retry
+//   - ErrRateLimit / rejected transient: bounded retry
+//   - ambiguous temporary / unknown: no retry
 func (r *DeliveryRuntime) sendWithRetry(
 	ctx context.Context,
 	name string,
@@ -341,9 +429,7 @@ func (r *DeliveryRuntime) sendWithRetry(
 ) DeliveryResult[bus.OutboundMessage] {
 	m := r.host
 	terminals := m.beginOutboundToolFeedbackTerminals(name, w.ch, msg)
-	result := r.sendWithRetryPolicy(
-		ctx, name, w, msg, true, publishDefinitiveOutcome,
-	)
+	result := r.sendWithRetryPolicy(ctx, name, w, msg, publishDefinitiveOutcome)
 	m.completeToolFeedbackTerminals(ctx, terminals, result.Delivered())
 	return result
 }
@@ -353,7 +439,6 @@ func (r *DeliveryRuntime) sendWithRetryPolicy(
 	name string,
 	w *channelWorker,
 	msg bus.OutboundMessage,
-	retryAmbiguous bool,
 	outcome outcomePublication,
 ) DeliveryResult[bus.OutboundMessage] {
 	m := r.host
@@ -396,7 +481,6 @@ func (r *DeliveryRuntime) sendWithRetryPolicy(
 		[]bus.OutboundMessage{msg},
 		DeliveryRetryPolicy{
 			MaxRetries:     maxRetries,
-			RetryAmbiguous: retryAmbiguous,
 			RateLimitDelay: rateLimitDelay,
 			BaseBackoff:    baseBackoff,
 			MaxBackoff:     maxBackoff,
@@ -634,14 +718,11 @@ func (r *DeliveryRuntime) deliverQueuedMedia(
 	msg bus.OutboundMediaMessage,
 ) {
 	m := r.host
-	durable, err := m.beginDurableOutbound(msg.DeliveryID)
-	if err != nil {
+	if err := m.beginDurableOutbound(msg.DeliveryID); err != nil {
 		m.publishOutboundMediaFailed(name, msg, err)
 		return
 	}
-	result := r.sendMediaWithRetryPolicy(
-		ctx, name, w, msg, publishNoOutcome, !durable,
-	)
+	result := r.sendMediaWithRetryPolicy(ctx, name, w, msg, publishNoOutcome)
 	outcome := durableOutcome(result, nil)
 	if persistErr := m.persistDurableOutbound(msg.DeliveryID, outcome); persistErr != nil {
 		result.Err = errors.Join(result.Err, persistErr)
@@ -682,9 +763,7 @@ func (r *DeliveryRuntime) sendMediaWithRetry(
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 ) DeliveryResult[bus.OutboundMediaMessage] {
-	return r.sendMediaWithRetryPolicy(
-		ctx, name, w, msg, publishDefinitiveOutcome, true,
-	)
+	return r.sendMediaWithRetryPolicy(ctx, name, w, msg, publishDefinitiveOutcome)
 }
 
 func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
@@ -693,7 +772,6 @@ func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
 	w *channelWorker,
 	msg bus.OutboundMediaMessage,
 	outcome outcomePublication,
-	retryAmbiguous bool,
 ) DeliveryResult[bus.OutboundMediaMessage] {
 	m := r.host
 	ms, ok := w.ch.(MediaSender)
@@ -755,7 +833,6 @@ func (r *DeliveryRuntime) sendMediaWithRetryPolicy(
 		[]bus.OutboundMediaMessage{msg},
 		DeliveryRetryPolicy{
 			MaxRetries:     maxRetries,
-			RetryAmbiguous: retryAmbiguous,
 			RateLimitDelay: rateLimitDelay,
 			BaseBackoff:    baseBackoff,
 			MaxBackoff:     maxBackoff,

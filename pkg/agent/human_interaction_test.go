@@ -608,13 +608,6 @@ func (m *interactionChannelManager) SupportsDurableDeliveryReceipts() bool {
 	return m != nil && m.outbox != nil
 }
 
-func (m *interactionChannelManager) SendMessageDefiniteRetryOnly(
-	ctx context.Context,
-	msg bus.OutboundMessage,
-) error {
-	return m.SendMessage(ctx, msg)
-}
-
 func attachInteractionOutbox(
 	t *testing.T,
 	al *AgentLoop,

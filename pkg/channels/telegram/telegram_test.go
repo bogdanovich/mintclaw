@@ -953,25 +953,29 @@ func TestDeliverMediaPreservesPartialGroupOutcomeAndRetryAfter(t *testing.T) {
 	}
 }
 
-func TestDeliverMediaPreservesKnownRemainderForAmbiguousGroupFailure(t *testing.T) {
+func TestDeliverMediaDrainsUntouchedGroupsAfterAmbiguousGroupFailure(t *testing.T) {
 	constructor := &multipartRecordingConstructor{}
 	callIndex := 0
 	caller := &stubCaller{
 		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
 			callIndex++
-			if callIndex == 1 {
+			switch callIndex {
+			case 1:
 				return successMediaGroupResponse(t, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10), nil
+			case 2:
+				return nil, &ta.Error{ErrorCode: http.StatusInternalServerError, Description: "server error"}
+			default:
+				return successMediaGroupResponse(t, 21, 22, 23, 24, 25), nil
 			}
-			return nil, &ta.Error{ErrorCode: http.StatusInternalServerError, Description: "server error"}
 		},
 	}
 	ch := newTestChannelWithConstructor(t, caller, constructor)
 	store := media.NewFileMediaStore()
 	ch.SetMediaStore(store)
 
-	parts := make([]bus.MediaPart, 0, 11)
+	parts := make([]bus.MediaPart, 0, 25)
 	tmpDir := t.TempDir()
-	for index := 0; index < 11; index++ {
+	for index := 0; index < 25; index++ {
 		path := filepath.Join(tmpDir, "image-"+strconv.Itoa(index)+".png")
 		require.NoError(t, os.WriteFile(path, []byte("image"), 0o644))
 		ref, err := store.Store(
@@ -982,16 +986,77 @@ func TestDeliverMediaPreservesKnownRemainderForAmbiguousGroupFailure(t *testing.
 		require.NoError(t, err)
 		parts = append(parts, bus.MediaPart{Type: "image", Ref: ref})
 	}
-	result := ch.DeliverMedia(t.Context(), []bus.OutboundMediaMessage{{
-		ChatID: "12345",
-		Parts:  parts,
-	}})
+	result := channels.DeliverWithRetry(
+		t.Context(),
+		[]bus.OutboundMediaMessage{{ChatID: "12345", Parts: parts}},
+		channels.DeliveryRetryPolicy{MaxRetries: 1},
+		ch.DeliverMedia,
+		nil,
+	)
 
 	if result.Acceptance != channels.DeliveryAcceptanceUnknown || !errors.Is(result.Err, channels.ErrTemporary) {
 		t.Fatalf("typed Telegram media outcome = %+v", result)
 	}
-	if len(result.MessageIDs) != 10 || len(result.Remaining) != 1 || len(result.Remaining[0].Parts) != 1 {
+	if len(result.MessageIDs) != 15 || result.Remaining != nil || !result.UnresolvedPartial {
 		t.Fatalf("typed Telegram ambiguous progress = %+v", result)
+	}
+	require.Len(t, constructor.calls, 3)
+	wantGroupSizes := []int{10, 10, 5}
+	for index, call := range constructor.calls {
+		var payload []map[string]any
+		require.NoError(t, json.Unmarshal([]byte(call.Parameters["media"]), &payload))
+		assert.Len(t, payload, wantGroupSizes[index])
+	}
+}
+
+func TestDeliverMediaDrainsUntouchedPartsAfterAmbiguousPartFailure(t *testing.T) {
+	constructor := &multipartRecordingConstructor{}
+	callIndex := 0
+	caller := &stubCaller{
+		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+			callIndex++
+			if callIndex == 2 {
+				return nil, &ta.Error{ErrorCode: http.StatusInternalServerError, Description: "server error"}
+			}
+			return successResponseWithMessageID(t, callIndex), nil
+		},
+	}
+	ch := newTestChannelWithConstructor(t, caller, constructor)
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+
+	parts := make([]bus.MediaPart, 0, 3)
+	for index := 1; index <= 3; index++ {
+		path := filepath.Join(t.TempDir(), "video-"+strconv.Itoa(index)+".mp4")
+		require.NoError(t, os.WriteFile(path, []byte(strings.Repeat("x", index)), 0o644))
+		ref, err := store.Store(
+			path,
+			media.MediaMeta{Filename: filepath.Base(path), ContentType: "video/mp4"},
+			"scope-ambiguous-parts",
+		)
+		require.NoError(t, err)
+		parts = append(parts, bus.MediaPart{Type: "video", Ref: ref})
+	}
+
+	result := channels.DeliverWithRetry(
+		t.Context(),
+		[]bus.OutboundMediaMessage{{ChatID: "12345", Parts: parts}},
+		channels.DeliveryRetryPolicy{MaxRetries: 1},
+		ch.DeliverMedia,
+		nil,
+	)
+
+	if result.Acceptance != channels.DeliveryAcceptanceUnknown || !errors.Is(result.Err, channels.ErrTemporary) ||
+		len(result.MessageIDs) != 2 || result.Remaining != nil || !result.UnresolvedPartial {
+		t.Fatalf("typed Telegram individual media outcome = %+v", result)
+	}
+	require.Len(t, constructor.calls, 3)
+	for index, call := range constructor.calls {
+		totalBytes := 0
+		for _, size := range call.FileSizes {
+			totalBytes += size
+		}
+		assert.Equal(t, index+1, totalBytes, "ambiguous media part was retried")
 	}
 }
 
@@ -2705,7 +2770,7 @@ func TestBeginStream_FinalizeChunksLegacyContentOverLimitAfterFooter(t *testing.
 	assert.Equal(t, finalContent, delivered.String())
 }
 
-func TestBeginStream_FinalizeRetriesUnsentLegacyChunkAfterPartialFailure(t *testing.T) {
+func TestBeginStream_FinalizeDrainsTailWithoutRetryingAmbiguousChunk(t *testing.T) {
 	callCount := 0
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
@@ -2724,26 +2789,40 @@ func TestBeginStream_FinalizeRetriesUnsentLegacyChunkAfterPartialFailure(t *test
 	streamer, err := ch.BeginStream(context.Background(), "12345")
 	require.NoError(t, err)
 
-	visibleContent := strings.Repeat("a", telegramTextLimit-4)
-	footer := "\n\nmodel: fallback"
-	finalContent := visibleContent + footer
-	require.Greater(t, len([]rune(finalContent)), telegramTextLimit)
-	require.NoError(t, streamer.Finalize(context.Background(), finalContent))
-
+	finalContent := strings.Repeat("a", telegramTextLimit*2)
+	err = streamer.Finalize(context.Background(), finalContent)
+	require.ErrorContains(t, err, "second chunk failed")
 	require.Len(t, caller.calls, 3)
-	var delivered strings.Builder
-	for idx, call := range caller.calls {
-		if idx == 1 {
-			continue
-		}
+
+	attempted := make([]string, 0, len(caller.calls))
+	for _, call := range caller.calls {
 		var params struct {
 			Text string `json:"text"`
 		}
 		require.NoError(t, json.Unmarshal(call.Data.BodyRaw, &params))
-		assert.LessOrEqual(t, len([]rune(params.Text)), telegramTextLimit)
-		delivered.WriteString(params.Text)
+		attempted = append(attempted, params.Text)
 	}
-	assert.Equal(t, finalContent, delivered.String())
+	assert.NotEqual(t, attempted[1], attempted[2], "ambiguous second chunk was retried")
+	assert.Less(t, len([]rune(attempted[2])), len([]rune(attempted[1])), "known-unsent tail was not attempted")
+}
+
+func TestBeginStream_AmbiguousFinalizePreservesDeliveryClassification(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+			return nil, &ta.Error{ErrorCode: http.StatusInternalServerError, Description: "server error"}
+		},
+	}
+	ch := newTestChannel(t, caller)
+	ch.tgCfg.Streaming.Enabled = true
+
+	streamer, err := ch.BeginStream(context.Background(), "12345")
+	require.NoError(t, err)
+	err = streamer.Finalize(context.Background(), "final")
+	require.Error(t, err)
+	var deliveryErr *channels.DeliveryError
+	require.ErrorAs(t, err, &deliveryErr)
+	assert.False(t, channels.DeliveryDefinitelyNotSent(err))
+	require.Len(t, caller.calls, 1)
 }
 
 func TestBeginStream_FinalizeHonorsRetryAfterForUnsentLegacyChunk(t *testing.T) {

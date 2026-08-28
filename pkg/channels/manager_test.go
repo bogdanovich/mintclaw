@@ -33,6 +33,18 @@ type mockChannel struct {
 	lastPlaceholderID string
 }
 
+type deliveryResultTextChannel struct {
+	mockChannel
+	deliver func(context.Context, []bus.OutboundMessage) DeliveryResult[bus.OutboundMessage]
+}
+
+func (c *deliveryResultTextChannel) DeliverText(
+	ctx context.Context,
+	pending []bus.OutboundMessage,
+) DeliveryResult[bus.OutboundMessage] {
+	return c.deliver(ctx, pending)
+}
+
 type countingListener struct {
 	accepts      atomic.Int32
 	secondAccept chan struct{}
@@ -2315,16 +2327,16 @@ func TestRetryCancellationPublishesTerminalFailure(t *testing.T) {
 	}
 }
 
-func TestSendWithRetry_TemporaryThenSuccess(t *testing.T) {
+func TestSendWithRetry_RejectedTemporaryThenSuccess(t *testing.T) {
 	m := newTestManager()
 	var callCount int
-	ch := &mockChannel{
-		sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+	ch := &deliveryResultTextChannel{
+		deliver: func(_ context.Context, _ []bus.OutboundMessage) DeliveryResult[bus.OutboundMessage] {
 			callCount++
 			if callCount <= 2 {
-				return fmt.Errorf("network error: %w", ErrTemporary)
+				return RejectedDelivery[bus.OutboundMessage](fmt.Errorf("network error: %w", ErrTemporary))
 			}
-			return nil
+			return SuccessfulDelivery[bus.OutboundMessage]([]string{"message-1"})
 		},
 	}
 	w := &channelWorker{
@@ -2428,10 +2440,10 @@ func TestSendWithRetry_RateLimitRetry(t *testing.T) {
 func TestSendWithRetry_MaxRetriesExhausted(t *testing.T) {
 	m := newTestManager()
 	var callCount int
-	ch := &mockChannel{
-		sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+	ch := &deliveryResultTextChannel{
+		deliver: func(_ context.Context, _ []bus.OutboundMessage) DeliveryResult[bus.OutboundMessage] {
 			callCount++
-			return fmt.Errorf("timeout: %w", ErrTemporary)
+			return RejectedDelivery[bus.OutboundMessage](fmt.Errorf("timeout: %w", ErrTemporary))
 		},
 	}
 	w := &channelWorker{
@@ -2616,7 +2628,7 @@ func TestSendMedia_DeletesPlaceholderBeforeSending(t *testing.T) {
 	}
 }
 
-func TestSendWithRetry_UnknownError(t *testing.T) {
+func TestSendWithRetry_UnknownErrorIsNotRetried(t *testing.T) {
 	m := newTestManager()
 	var callCount int
 	ch := &mockChannel{
@@ -2636,12 +2648,12 @@ func TestSendWithRetry_UnknownError(t *testing.T) {
 	ctx := context.Background()
 	msg := testOutboundMessage(bus.OutboundMessage{Channel: "test", ChatID: "1", Content: "hello"})
 
-	if _, _, _, err := sendWithRetryTuple(m, ctx, "test", w, msg); err != nil {
-		t.Fatal(err)
+	if _, _, _, err := sendWithRetryTuple(m, ctx, "test", w, msg); err == nil {
+		t.Fatal("unknown delivery outcome unexpectedly succeeded after retry")
 	}
 
-	if callCount != 2 {
-		t.Fatalf("expected 2 Send calls (unknown error treated as temporary), got %d", callCount)
+	if callCount != 1 {
+		t.Fatalf("Send calls = %d, want 1 after unknown delivery outcome", callCount)
 	}
 }
 
@@ -2882,11 +2894,11 @@ func TestSendWithRetry_ExponentialBackoff(t *testing.T) {
 
 	var callTimes []time.Time
 	var callCount atomic.Int32
-	ch := &mockChannel{
-		sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
+	ch := &deliveryResultTextChannel{
+		deliver: func(_ context.Context, _ []bus.OutboundMessage) DeliveryResult[bus.OutboundMessage] {
 			callTimes = append(callTimes, time.Now())
 			callCount.Add(1)
-			return fmt.Errorf("timeout: %w", ErrTemporary)
+			return RejectedDelivery[bus.OutboundMessage](fmt.Errorf("timeout: %w", ErrTemporary))
 		},
 	}
 	w := &channelWorker{
@@ -3094,7 +3106,6 @@ func TestSendWithRetry_ToolFeedbackPreservesDeliveryResult(t *testing.T) {
 		"test",
 		w,
 		feedback,
-		true,
 		publishDefinitiveOutcome,
 	)
 	if ch.deliveries != 1 {
@@ -3158,7 +3169,6 @@ func TestSendWithRetry_ToolFeedbackDeliversKnownRemainder(t *testing.T) {
 		"test",
 		w,
 		feedback,
-		true,
 		publishDefinitiveOutcome,
 	)
 	if !result.Delivered() {
@@ -7118,7 +7128,7 @@ func TestSendMessage_NoWorker(t *testing.T) {
 	}
 }
 
-func TestSendMessage_WithRetry(t *testing.T) {
+func TestSendMessageStopsAfterAmbiguousFailure(t *testing.T) {
 	m := newTestManager()
 
 	var callCount int
@@ -7146,33 +7156,6 @@ func TestSendMessage_WithRetry(t *testing.T) {
 	})
 
 	err := m.SendMessage(context.Background(), msg)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if callCount != 2 {
-		t.Fatalf("expected 2 Send calls (1 failure + 1 success), got %d", callCount)
-	}
-}
-
-func TestSendMessageDefiniteRetryOnlyStopsAfterAmbiguousFailure(t *testing.T) {
-	m := newTestManager()
-	callCount := 0
-	ch := &mockChannel{
-		sendFn: func(_ context.Context, _ bus.OutboundMessage) error {
-			callCount++
-			if callCount == 1 {
-				return fmt.Errorf("timeout after acceptance is unknown: %w", ErrTemporary)
-			}
-			return nil
-		},
-	}
-	m.lifecycle.storeChannel("test", ch)
-	installTestDeliveryWorker(m, "test", &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)})
-
-	err := m.SendMessageDefiniteRetryOnly(context.Background(), testOutboundMessage(bus.OutboundMessage{
-		Channel: "test", ChatID: "123", Content: "do not duplicate",
-	}))
 	if err == nil {
 		t.Fatal("ambiguous delivery unexpectedly succeeded after retry")
 	}
@@ -7184,7 +7167,7 @@ func TestSendMessageDefiniteRetryOnlyStopsAfterAmbiguousFailure(t *testing.T) {
 	}
 }
 
-func TestSendMediaDefiniteRetryOnlyStopsAfterAmbiguousFailure(t *testing.T) {
+func TestSendMediaStopsAfterAmbiguousFailure(t *testing.T) {
 	m := newTestManager()
 	callCount := 0
 	ch := &mockMediaChannel{sendMediaFn: func(
@@ -7200,7 +7183,7 @@ func TestSendMediaDefiniteRetryOnlyStopsAfterAmbiguousFailure(t *testing.T) {
 	m.lifecycle.storeChannel("test", ch)
 	installTestDeliveryWorker(m, "test", &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)})
 
-	err := m.SendMediaDefiniteRetryOnly(context.Background(), testOutboundMediaMessage(bus.OutboundMediaMessage{
+	err := m.SendMedia(context.Background(), testOutboundMediaMessage(bus.OutboundMediaMessage{
 		Channel: "test", ChatID: "123", Parts: []bus.MediaPart{{Type: "video", Ref: "media://one"}},
 	}))
 	if err == nil {
@@ -7214,7 +7197,7 @@ func TestSendMediaDefiniteRetryOnlyStopsAfterAmbiguousFailure(t *testing.T) {
 	}
 }
 
-func TestSendMessagePreservesAmbiguityBeforeDefiniteRejection(t *testing.T) {
+func TestSendMessageDoesNotRetryAmbiguousFailure(t *testing.T) {
 	m := newTestManager()
 	callCount := 0
 	ch := &mockChannel{
@@ -7235,8 +7218,8 @@ func TestSendMessagePreservesAmbiguityBeforeDefiniteRejection(t *testing.T) {
 	if err == nil || DeliveryDefinitelyNotSent(err) {
 		t.Fatalf("SendMessage() error = %v, want sticky ambiguous delivery", err)
 	}
-	if callCount != 2 {
-		t.Fatalf("Send calls = %d, want 2", callCount)
+	if callCount != 1 {
+		t.Fatalf("Send calls = %d, want 1", callCount)
 	}
 }
 
@@ -7391,6 +7374,65 @@ func TestSendMessage_WithSplitting(t *testing.T) {
 
 	if len(received) < 2 {
 		t.Fatalf("expected message to be split into at least 2 chunks, got %d", len(received))
+	}
+}
+
+func TestSendMessage_WithSplittingDrainsTailAfterAmbiguousChunk(t *testing.T) {
+	m := newTestManager()
+
+	var received []string
+	ch := &mockChannelWithLength{
+		mockChannel: mockChannel{
+			sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+				received = append(received, msg.Content)
+				if len(received) == 2 {
+					return fmt.Errorf("second chunk acceptance unknown: %w", ErrTemporary)
+				}
+				return nil
+			},
+		},
+		maxLen: 1,
+	}
+
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	m.lifecycle.storeChannel("test", ch)
+	installTestDeliveryWorker(m, "test", w)
+
+	err := m.SendMessage(context.Background(), testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "123", Content: "abc",
+	}))
+	if err == nil || DeliveryDefinitelyNotSent(err) {
+		t.Fatalf("SendMessage() error = %v, want sticky ambiguous delivery", err)
+	}
+	if !slices.Equal(received, []string{"a", "b", "c"}) {
+		t.Fatalf("attempted chunks = %v, want ambiguous middle chunk once and untouched tail once", received)
+	}
+}
+
+func TestDeliverQueuedMessageDrainsTailAfterAmbiguousChunk(t *testing.T) {
+	m := newTestManager()
+
+	var received []string
+	ch := &mockChannelWithLength{
+		mockChannel: mockChannel{
+			sendFn: func(_ context.Context, msg bus.OutboundMessage) error {
+				received = append(received, msg.Content)
+				if len(received) == 2 {
+					return fmt.Errorf("second queued chunk acceptance unknown: %w", ErrTemporary)
+				}
+				return nil
+			},
+		},
+		maxLen: 1,
+	}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+
+	m.delivery.deliverQueuedMessage(t.Context(), "test", w, testOutboundMessage(bus.OutboundMessage{
+		Channel: "test", ChatID: "123", Content: "abc",
+	}))
+
+	if !slices.Equal(received, []string{"a", "b", "c"}) {
+		t.Fatalf("attempted chunks = %v, want ambiguous middle chunk once and untouched tail once", received)
 	}
 }
 

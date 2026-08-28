@@ -13,30 +13,19 @@ import (
 // delivered (or all retries are exhausted), which preserves ordering when
 // a subsequent operation depends on the message having been sent.
 func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) error {
-	return m.delivery.sendMessageWithRetryPolicy(ctx, msg, true, publishDefinitiveOutcome)
+	return m.delivery.sendMessageWithRetryPolicy(ctx, msg, publishDefinitiveOutcome)
 }
 
 // SendMessageProvisional suppresses a definitely-not-sent failure outcome so
 // the caller can try a fallback. Success and ambiguous failure remain terminal.
 // Callers must check DeliveryDefinitelyNotSent before attempting the fallback.
 func (m *Manager) SendMessageProvisional(ctx context.Context, msg bus.OutboundMessage) error {
-	return m.delivery.sendMessageWithRetryPolicy(ctx, msg, true, publishSuccessOnly)
-}
-
-// SendMessageDefiniteRetryOnly retries only channel rejections known to occur
-// before remote acceptance. It is intended for durable callers that must
-// preserve an ambiguous-delivery outcome rather than risk a duplicate send.
-func (m *Manager) SendMessageDefiniteRetryOnly(
-	ctx context.Context,
-	msg bus.OutboundMessage,
-) error {
-	return m.delivery.sendMessageWithRetryPolicy(ctx, msg, false, publishDefinitiveOutcome)
+	return m.delivery.sendMessageWithRetryPolicy(ctx, msg, publishSuccessOnly)
 }
 
 func (r *DeliveryRuntime) sendMessageWithRetryPolicy(
 	ctx context.Context,
 	msg bus.OutboundMessage,
-	retryAmbiguous bool,
 	outcome outcomePublication,
 ) error {
 	m := r.host
@@ -82,38 +71,25 @@ func (r *DeliveryRuntime) sendMessageWithRetryPolicy(
 		maxLen = mlp.MaxMessageLength()
 	}
 	if chunks := splitOutboundMessageContent(msg, maxLen); len(chunks) > 1 {
-		deliveredChunks := 0
-		var messageIDs []string
-		for _, chunk := range chunks {
-			chunkMsg := msg
-			chunkMsg.Content = chunk
-			result := r.sendWithRetryPolicy(
-				ctx, channelName, w, chunkMsg, retryAmbiguous, publishNoOutcome,
-			)
-			if !result.Delivered() {
-				logicalAmbiguous := result.MayHaveDelivered() || deliveredChunks > 0
-				if outcome.failure(logicalAmbiguous) {
-					m.publishOutboundFailed(channelName, msg, result.Err, false)
-				}
-				return newDeliveryError(
-					fmt.Errorf("channel %s failed to deliver message: %w", channelName, result.Err),
-					logicalAmbiguous,
-				)
+		result := r.sendTextChunksWithRetry(ctx, channelName, w, msg, chunks)
+		if !result.Delivered() {
+			if outcome.failure(result.MayHaveDelivered()) {
+				m.publishOutboundFailed(channelName, msg, result.Err, false)
 			}
-			messageIDs = append(messageIDs, result.MessageIDs...)
-			deliveredChunks++
+			return newDeliveryError(
+				fmt.Errorf("channel %s failed to deliver message: %w", channelName, result.Err),
+				result.MayHaveDelivered(),
+			)
 		}
 		if outcome.success() {
-			m.publishOutboundSent(channelName, msg, messageIDs)
+			m.publishOutboundSent(channelName, msg, result.MessageIDs)
 		}
 		terminalSucceeded = true
 	} else {
 		if len(chunks) == 1 {
 			msg.Content = chunks[0]
 		}
-		result := r.sendWithRetryPolicy(
-			ctx, channelName, w, msg, retryAmbiguous, outcome,
-		)
+		result := r.sendWithRetryPolicy(ctx, channelName, w, msg, outcome)
 		if !result.Delivered() {
 			return newDeliveryError(
 				fmt.Errorf("channel %s failed to deliver message: %w", channelName, result.Err),
@@ -146,19 +122,7 @@ func (m *Manager) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) e
 	if err := m.PreflightMedia(ctx, msg); err != nil {
 		return newDeliveryError(err, false)
 	}
-	return m.delivery.sendMedia(ctx, msg, publishDefinitiveOutcome, true)
-}
-
-// SendMediaDefiniteRetryOnly retries only channel rejections known to occur
-// before remote acceptance.
-func (m *Manager) SendMediaDefiniteRetryOnly(
-	ctx context.Context,
-	msg bus.OutboundMediaMessage,
-) error {
-	if err := m.PreflightMedia(ctx, msg); err != nil {
-		return newDeliveryError(err, false)
-	}
-	return m.delivery.sendMedia(ctx, msg, publishDefinitiveOutcome, false)
+	return m.delivery.sendMedia(ctx, msg, publishDefinitiveOutcome)
 }
 
 // SendMediaProvisional suppresses a definitely-not-sent failure outcome so the
@@ -168,7 +132,7 @@ func (m *Manager) SendMediaProvisional(ctx context.Context, msg bus.OutboundMedi
 	if err := m.PreflightMedia(ctx, msg); err != nil {
 		return newDeliveryError(err, false)
 	}
-	return m.delivery.sendMedia(ctx, msg, publishSuccessOnly, true)
+	return m.delivery.sendMedia(ctx, msg, publishSuccessOnly)
 }
 
 // PreflightMedia applies deterministic channel-owned media constraints before
@@ -194,7 +158,6 @@ func (r *DeliveryRuntime) sendMedia(
 	ctx context.Context,
 	msg bus.OutboundMediaMessage,
 	outcome outcomePublication,
-	retryAmbiguous bool,
 ) error {
 	m := r.host
 	var err error
@@ -228,7 +191,7 @@ func (r *DeliveryRuntime) sendMedia(
 		)
 	}
 
-	result := r.sendMediaWithRetryPolicy(ctx, channelName, w, msg, outcome, retryAmbiguous)
+	result := r.sendMediaWithRetryPolicy(ctx, channelName, w, msg, outcome)
 	if !result.Delivered() {
 		return newDeliveryError(result.Err, result.MayHaveDelivered())
 	}

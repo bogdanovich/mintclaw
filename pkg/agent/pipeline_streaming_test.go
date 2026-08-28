@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -779,7 +780,9 @@ func TestConfiguredStreamingFinalFlushFailureAfterVisibleOutputReturnsErrorWitho
 
 func TestConfiguredStreamingFinalFlushFailureBeforeVisibleOutputPublishesFallback(t *testing.T) {
 	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
-	streamer := &failingFinalizeStreamer{err: errors.New("final failed")}
+	streamer := &failingFinalizeStreamer{
+		err: channels.DefiniteNotSentDeliveryError(errors.New("final failed")),
+	}
 	msgBus := bus.NewMessageBus()
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{
@@ -810,9 +813,43 @@ func TestConfiguredStreamingFinalFlushFailureBeforeVisibleOutputPublishesFallbac
 	}
 }
 
+func TestConfiguredStreamingAmbiguousFinalFlushBeforeVisibleOutputDoesNotPublishFallback(t *testing.T) {
+	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
+	streamer := &failingFinalizeStreamer{
+		err: channels.AmbiguousDeliveryError(errors.New("final acceptance unknown")),
+	}
+	msgBus := bus.NewMessageBus()
+	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
+	provider := &configuredStreamingProvider{
+		streamPlan: []configuredStreamingCall{{
+			response: &providers.LLMResponse{Content: "stream response"},
+		}},
+	}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	_, err := al.runAgentLoop(
+		context.Background(),
+		al.GetRegistry().GetDefaultAgent(),
+		configuredStreamingTurnSpec("mintclaw"),
+	)
+	if err == nil {
+		t.Fatal("expected ambiguous final flush to return an error")
+	}
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("unexpected fallback outbound after ambiguous final flush: %#v", outbound)
+	default:
+	}
+	if streamer.canceled != 0 {
+		t.Fatalf("streamer canceled = %d, want 0 after ambiguous final flush", streamer.canceled)
+	}
+}
+
 func TestConfiguredStreamingFinalFlushFailureBeforeVisibleOutputKeepsNormalOutbound(t *testing.T) {
 	cfg := newConfiguredStreamingTestConfig(t, true, true, nil)
-	streamer := &failingFinalizeStreamer{err: errors.New("final failed")}
+	streamer := &failingFinalizeStreamer{
+		err: channels.DefiniteNotSentDeliveryError(errors.New("final failed")),
+	}
 	msgBus := bus.NewMessageBus()
 	msgBus.SetStreamDelegate(configuredStreamingDelegate{streamer: streamer})
 	provider := &configuredStreamingProvider{

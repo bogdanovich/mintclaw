@@ -158,9 +158,9 @@ func (p *Pipeline) Finalize(
 
 	contextUsage := computeContextUsage(ts.agent, ts.sessionKey)
 	streamErr := finalization.stream.finalize(turnCtx, ts, finalization.content, contextUsage)
-	// If streaming never became visible, publish through the non-streaming bus path
-	// so the final answer is still delivered outside normal SendResponse.
-	if ((streamErr != nil && !isConfiguredStreamingVisibleError(streamErr)) || finalization.stream.fallback) &&
+	// Publish through the non-streaming path only after an explicitly definite
+	// pre-acceptance failure, or when the provider already selected Chat fallback.
+	if ((streamErr != nil && !isConfiguredStreamingTerminalError(streamErr)) || finalization.stream.fallback) &&
 		!finalization.delivery.sendResponse && finalization.delivery.allowInterimMintClawPublish &&
 		finalization.content != "" {
 		msg := outboundMessageForTurnWithOptions(ts, finalization.content, outboundTurnMessageOptions{
@@ -170,7 +170,7 @@ func (p *Pipeline) Finalize(
 		markFinalOutbound(&msg)
 		_ = p.bus.PublishOutbound(turnCtx, msg)
 	}
-	if streamErr != nil && isConfiguredStreamingVisibleError(streamErr) {
+	if streamErr != nil && isConfiguredStreamingTerminalError(streamErr) {
 		ts.setPhase(TurnPhaseCompleted)
 		result := finalization.result(true)
 		result.status = TurnEndStatusError

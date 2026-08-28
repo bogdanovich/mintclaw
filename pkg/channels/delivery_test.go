@@ -107,7 +107,7 @@ func TestDeliverWithRetryDrainsUntouchedTailWithoutResolvingPartialItem(t *testi
 	result := DeliverWithRetry(
 		t.Context(),
 		[]string{"first", "second"},
-		DeliveryRetryPolicy{MaxRetries: 1, RetryAmbiguous: false},
+		DeliveryRetryPolicy{MaxRetries: 1},
 		func(ctx context.Context, pending []string) DeliveryResult[string] {
 			attempts = append(attempts, cloneDeliveryPayload(pending))
 			return DeliverSequentially(ctx, pending, func(_ context.Context, payload string) ([]string, error) {
@@ -139,6 +139,45 @@ func TestDeliverWithRetryDrainsUntouchedTailWithoutResolvingPartialItem(t *testi
 	}
 }
 
+func TestDeliverWithRetrySkipsAmbiguousPayloadAndDrainsUntouchedTail(t *testing.T) {
+	t.Parallel()
+
+	var attempts [][]string
+	var delivered []string
+	result := DeliverWithRetry(
+		t.Context(),
+		[]string{"first", "ambiguous", "third"},
+		DeliveryRetryPolicy{MaxRetries: 1},
+		func(ctx context.Context, pending []string) DeliveryResult[string] {
+			attempts = append(attempts, cloneDeliveryPayload(pending))
+			return DeliverSequentially(ctx, pending, func(_ context.Context, payload string) ([]string, error) {
+				delivered = append(delivered, payload)
+				if payload == "ambiguous" {
+					return nil, ErrTemporary
+				}
+				return []string{"id-" + payload}, nil
+			})
+		},
+		nil,
+	)
+
+	if result.Delivered() || result.Status != DeliveryPartial || !result.UnresolvedPartial || !result.Ambiguous() {
+		t.Fatalf("result = %#v, want sticky ambiguous partial delivery", result)
+	}
+	if !errors.Is(result.Err, ErrTemporary) {
+		t.Fatalf("error = %v, want original ambiguous failure", result.Err)
+	}
+	if !slices.Equal(result.MessageIDs, []string{"id-first", "id-third"}) {
+		t.Fatalf("message IDs = %v, want confirmed first and third IDs", result.MessageIDs)
+	}
+	if len(attempts) != 2 || !slices.Equal(attempts[1], []string{"third"}) {
+		t.Fatalf("attempt payloads = %v, want only untouched tail on retry", attempts)
+	}
+	if !slices.Equal(delivered, []string{"first", "ambiguous", "third"}) {
+		t.Fatalf("delivered payloads = %v, want ambiguous payload attempted exactly once", delivered)
+	}
+}
+
 func TestDeliverSequentiallyRejectsEmptyPayload(t *testing.T) {
 	t.Parallel()
 
@@ -159,7 +198,7 @@ func TestDeliverWithRetryResumesKnownRemainder(t *testing.T) {
 	result := DeliverWithRetry(
 		t.Context(),
 		[]string{"first", "second"},
-		DeliveryRetryPolicy{MaxRetries: 1, RetryAmbiguous: true},
+		DeliveryRetryPolicy{MaxRetries: 1},
 		func(_ context.Context, pending []string) DeliveryResult[string] {
 			attempts = append(attempts, append([]string(nil), pending...))
 			if len(attempts) == 1 {
@@ -167,7 +206,7 @@ func TestDeliverWithRetryResumesKnownRemainder(t *testing.T) {
 					[]string{"id-1"},
 					[]string{"second"},
 					0,
-					errors.New("second chunk failed"),
+					ErrRateLimit,
 				)
 			}
 			return SuccessfulDelivery[string]([]string{"id-2"})
@@ -193,7 +232,7 @@ func TestDeliverWithRetryStopsOnPartialResultWithoutRemainder(t *testing.T) {
 	result := DeliverWithRetry(
 		t.Context(),
 		[]string{"payload"},
-		DeliveryRetryPolicy{MaxRetries: 3, RetryAmbiguous: true},
+		DeliveryRetryPolicy{MaxRetries: 3},
 		func(_ context.Context, _ []string) DeliveryResult[string] {
 			calls++
 			return FailedDelivery[string](
@@ -214,53 +253,37 @@ func TestDeliverWithRetryStopsOnPartialResultWithoutRemainder(t *testing.T) {
 	}
 }
 
-func TestDeliverWithRetryHonorsAmbiguousPolicy(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		name           string
-		retryAmbiguous bool
-		wantCalls      int
-	}{
-		{name: "disabled", retryAmbiguous: false, wantCalls: 1},
-		{name: "enabled", retryAmbiguous: true, wantCalls: 2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			calls := 0
-			result := DeliverWithRetry(
-				t.Context(),
-				[]string{"payload"},
-				DeliveryRetryPolicy{MaxRetries: 1, RetryAmbiguous: tc.retryAmbiguous},
-				func(_ context.Context, _ []string) DeliveryResult[string] {
-					calls++
-					if calls == 1 {
-						return FailedDelivery[string](nil, nil, 0, errors.New("transport timeout"))
-					}
-					return SuccessfulDelivery[string]([]string{"id-1"})
-				},
-				nil,
-			)
-
-			if calls != tc.wantCalls {
-				t.Fatalf("delivery calls = %d, want %d", calls, tc.wantCalls)
-			}
-			if tc.retryAmbiguous != result.Delivered() {
-				t.Fatalf("delivered = %v, want %v", result.Delivered(), tc.retryAmbiguous)
-			}
-		})
-	}
-}
-
-func TestDeliverWithRetryPreservesAmbiguityBeforeDefiniteRejection(t *testing.T) {
+func TestDeliverWithRetryStopsOnAmbiguousFailure(t *testing.T) {
 	t.Parallel()
 
 	calls := 0
 	result := DeliverWithRetry(
 		t.Context(),
 		[]string{"payload"},
-		DeliveryRetryPolicy{MaxRetries: 1, RetryAmbiguous: true},
+		DeliveryRetryPolicy{MaxRetries: 1},
+		func(_ context.Context, _ []string) DeliveryResult[string] {
+			calls++
+			return FailedDelivery[string](nil, nil, 0, errors.New("transport timeout"))
+		},
+		nil,
+	)
+
+	if calls != 1 {
+		t.Fatalf("delivery calls = %d, want 1", calls)
+	}
+	if result.Delivered() || !result.Ambiguous() {
+		t.Fatalf("result = %#v, want terminal ambiguous failure", result)
+	}
+}
+
+func TestDeliverWithRetryDoesNotReachLaterDefiniteRejection(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	result := DeliverWithRetry(
+		t.Context(),
+		[]string{"payload"},
+		DeliveryRetryPolicy{MaxRetries: 1},
 		func(_ context.Context, _ []string) DeliveryResult[string] {
 			calls++
 			if calls == 1 {
@@ -271,8 +294,8 @@ func TestDeliverWithRetryPreservesAmbiguityBeforeDefiniteRejection(t *testing.T)
 		nil,
 	)
 
-	if calls != 2 {
-		t.Fatalf("delivery calls = %d, want 2", calls)
+	if calls != 1 {
+		t.Fatalf("delivery calls = %d, want 1", calls)
 	}
 	if !result.Ambiguous() || result.DefinitelyNotSent() {
 		t.Fatalf("result = %#v, want sticky ambiguous failure", result)
@@ -289,7 +312,7 @@ func TestDeliverWithRetryHonorsRetryAfterAndCancellation(t *testing.T) {
 		resultCh <- DeliverWithRetry(
 			ctx,
 			[]string{"payload"},
-			DeliveryRetryPolicy{MaxRetries: 1, RetryAmbiguous: true},
+			DeliveryRetryPolicy{MaxRetries: 1},
 			func(_ context.Context, _ []string) DeliveryResult[string] {
 				close(attempted)
 				return FailedDelivery[string](nil, nil, time.Hour, ErrRateLimit)

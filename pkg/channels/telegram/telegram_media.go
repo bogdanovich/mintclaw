@@ -70,8 +70,14 @@ func (c *TelegramChannel) DeliverMedia(
 			continue
 		}
 		result.MessageIDs = confirmedIDs
+		untouched := pending[index+1:]
 		if result.Remaining != nil {
-			result.Remaining = append(result.Remaining, pending[index+1:]...)
+			result.Remaining = append(result.Remaining, untouched...)
+		} else if (result.Ambiguous() || result.UnresolvedPartial) && len(untouched) > 0 {
+			result.Remaining = append([]bus.OutboundMediaMessage(nil), untouched...)
+		}
+		if (result.Ambiguous() || result.UnresolvedPartial) && len(untouched) > 0 {
+			result.UnresolvedPartial = true
 		}
 		return result
 	}
@@ -108,27 +114,32 @@ func (c *TelegramChannel) sendMediaAttempt(
 			if len(remainder.Parts) > 0 && len(leadingResult.Remaining) > 0 {
 				remainder.Parts[0].Caption = strings.Join(leadingResult.Remaining, "\n")
 			}
-			return telegramMediaFailure(leadingResult.MessageIDs, &remainder, leadingResult.Err)
+			leadingResult.UnresolvedPartial = leadingResult.UnresolvedPartial ||
+				(leadingResult.Ambiguous() && len(remainder.Parts) > 0)
+			return telegramMediaResultFrom(leadingResult.MessageIDs, &remainder, leadingResult)
 		}
 		messageIDs = append(messageIDs, leadingResult.MessageIDs...)
 		msg = channels.ClearMediaCaptions(msg)
 	}
 
 	if len(msg.Parts) > 1 && telegramCanSendMediaGroup(msg.Parts) {
-		groupIDs, remainingParts, err := c.sendImageMediaGroups(ctx, chatID, threadID, store, msg.Parts)
-		if err != nil {
+		groupResult := c.sendImageMediaGroups(ctx, chatID, threadID, store, msg.Parts)
+		if !groupResult.Delivered() {
 			logger.ErrorCF("telegram", "Failed to send media group", map[string]any{
 				"count": len(msg.Parts),
-				"error": err.Error(),
+				"error": groupResult.Err.Error(),
 			})
-			messageIDs = append(messageIDs, groupIDs...)
-			wrapped := wrapTelegramSendError("telegram send media group", err)
-			remainder := msg
-			remainder.Parts = append([]bus.MediaPart(nil), remainingParts...)
-			return telegramMediaFailure(messageIDs, &remainder, wrapped)
+			messageIDs = append(messageIDs, groupResult.MessageIDs...)
+			var remainder *bus.OutboundMediaMessage
+			if groupResult.Remaining != nil {
+				remainingMessage := msg
+				remainingMessage.Parts = append([]bus.MediaPart(nil), groupResult.Remaining...)
+				remainder = &remainingMessage
+			}
+			return telegramMediaResultFrom(messageIDs, remainder, groupResult)
 		}
-		if len(groupIDs) > 0 {
-			messageIDs = append(messageIDs, groupIDs...)
+		if len(groupResult.MessageIDs) > 0 {
+			messageIDs = append(messageIDs, groupResult.MessageIDs...)
 			return channels.SuccessfulDelivery[bus.OutboundMediaMessage](messageIDs)
 		}
 	}
@@ -366,7 +377,7 @@ func (c *TelegramChannel) sendImageMediaGroups(
 	threadID int,
 	store media.MediaStore,
 	parts []bus.MediaPart,
-) ([]string, []bus.MediaPart, error) {
+) channels.DeliveryResult[bus.MediaPart] {
 	const maxGroupSize = 10
 
 	messageIDs := make([]string, 0, len(parts))
@@ -377,11 +388,24 @@ func (c *TelegramChannel) sendImageMediaGroups(
 		}
 		groupIDs, err := c.sendSingleImageMediaGroup(ctx, chatID, threadID, store, parts[start:end])
 		if err != nil {
-			return messageIDs, append([]bus.MediaPart(nil), parts[start:]...), err
+			wrapped := wrapTelegramSendError("telegram send media group", err)
+			result := channels.FailedDelivery[bus.MediaPart](
+				messageIDs,
+				nil,
+				telegramRetryDelayFor(wrapped),
+				wrapped,
+			)
+			if result.Ambiguous() {
+				result.Remaining = append([]bus.MediaPart(nil), parts[end:]...)
+				result.UnresolvedPartial = len(result.Remaining) > 0
+			} else {
+				result.Remaining = append([]bus.MediaPart(nil), parts[start:]...)
+			}
+			return result
 		}
 		messageIDs = append(messageIDs, groupIDs...)
 	}
-	return messageIDs, nil, nil
+	return channels.SuccessfulDelivery[bus.MediaPart](messageIDs)
 }
 
 func (c *TelegramChannel) sendSingleImageMediaGroup(

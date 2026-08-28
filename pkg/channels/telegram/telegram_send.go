@@ -72,14 +72,15 @@ func (c *TelegramChannel) DeliverText(
 		}
 	}
 	return channels.DeliveryResult[bus.OutboundMessage]{
-		MessageIDs: append([]string(nil), result.MessageIDs...),
-		Status:     result.Status,
-		Acceptance: result.Acceptance,
-		Remaining:  remaining,
-		RetryAfter: result.RetryAfter,
-		RetryAt:    result.RetryAt,
-		Attempts:   result.Attempts,
-		Err:        result.Err,
+		MessageIDs:        append([]string(nil), result.MessageIDs...),
+		Status:            result.Status,
+		Acceptance:        result.Acceptance,
+		Remaining:         remaining,
+		UnresolvedPartial: result.UnresolvedPartial,
+		RetryAfter:        result.RetryAfter,
+		RetryAt:           result.RetryAt,
+		Attempts:          result.Attempts,
+		Err:               result.Err,
 	}
 }
 
@@ -173,12 +174,7 @@ func (c *TelegramChannel) sendTextChunkQueue(
 					replyMarkup:   baseParams.replyMarkup,
 				})
 				if err != nil {
-					return channels.FailedDelivery(
-						messageIDs,
-						append([]string{chunk}, queue...),
-						telegramRetryDelayFor(err),
-						err,
-					)
+					return failedTextChunkDelivery(messageIDs, chunk, queue, err)
 				}
 				messageIDs = append(messageIDs, msgID)
 				baseParams.replyToID = ""
@@ -231,12 +227,7 @@ func (c *TelegramChannel) sendTextChunkQueue(
 			if useRich && errors.Is(err, errTelegramMessageTooLong) {
 				runeChunk := []rune(chunk)
 				if len(runeChunk) <= 1 {
-					return channels.FailedDelivery(
-						messageIDs,
-						append([]string{chunk}, queue...),
-						telegramRetryDelayFor(err),
-						err,
-					)
+					return failedTextChunkDelivery(messageIDs, chunk, queue, err)
 				}
 				smallerLen := len(runeChunk) / 2
 				subChunks := channels.SplitMessage(chunk, smallerLen)
@@ -255,12 +246,7 @@ func (c *TelegramChannel) sendTextChunkQueue(
 				queue = append(nonEmpty, queue...)
 				continue
 			}
-			return channels.FailedDelivery(
-				messageIDs,
-				append([]string{chunk}, queue...),
-				telegramRetryDelayFor(err),
-				err,
-			)
+			return failedTextChunkDelivery(messageIDs, chunk, queue, err)
 		}
 		messageIDs = append(messageIDs, msgID)
 		// Only the first chunk should be a reply; subsequent chunks are normal messages.
@@ -268,6 +254,22 @@ func (c *TelegramChannel) sendTextChunkQueue(
 		baseParams.replyMarkup = nil
 	}
 	return channels.SuccessfulDelivery[string](messageIDs)
+}
+
+func failedTextChunkDelivery(
+	messageIDs []string,
+	chunk string,
+	untouched []string,
+	err error,
+) channels.DeliveryResult[string] {
+	result := channels.FailedDelivery[string](messageIDs, nil, telegramRetryDelayFor(err), err)
+	if result.Ambiguous() {
+		result.Remaining = append([]string(nil), untouched...)
+		result.UnresolvedPartial = len(untouched) > 0
+		return result
+	}
+	result.Remaining = append([]string{chunk}, untouched...)
+	return result
 }
 
 func (c *TelegramChannel) richMessagesEnabled(useMarkdownV2 bool) bool {

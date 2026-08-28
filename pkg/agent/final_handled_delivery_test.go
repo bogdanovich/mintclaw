@@ -466,8 +466,7 @@ func TestReceiptlessFinalHandledTextUsesSynchronousConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("deliverToolResultToUser() error = %v", err)
 	}
-	if outcome != toolResultDeliveryDirect || manager.definiteTextSends != 1 ||
-		len(manager.sentMessages) != 1 {
+	if outcome != toolResultDeliveryDirect || len(manager.sentMessages) != 1 {
 		t.Fatalf("outcome = %v, manager = %#v", outcome, manager)
 	}
 	if result.Delivery.Outbound == nil || !result.Delivery.IsFinalHandled() ||
@@ -476,7 +475,7 @@ func TestReceiptlessFinalHandledTextUsesSynchronousConfirmation(t *testing.T) {
 	}
 }
 
-func TestImmediateContinueKeepsNormalSynchronousRetryPolicy(t *testing.T) {
+func TestImmediateContinueUsesSynchronousDelivery(t *testing.T) {
 	for _, media := range []bool{false, true} {
 		t.Run(fmt.Sprintf("media_%t", media), func(t *testing.T) {
 			manager := &recordingChannelManager{}
@@ -501,9 +500,6 @@ func TestImmediateContinueKeepsNormalSynchronousRetryPolicy(t *testing.T) {
 			_, outcome, err := al.deliverToolResultToUser(t.Context(), ts, result, "progress")
 			if err != nil || outcome != toolResultDeliveryDirect {
 				t.Fatalf("outcome = %v, error = %v", outcome, err)
-			}
-			if manager.definiteTextSends != 0 || manager.definiteMediaSends != 0 {
-				t.Fatalf("immediate delivery used final-only retry policy: %#v", manager)
 			}
 			if media && len(manager.sentMedia) != 1 {
 				t.Fatalf("sent media = %#v", manager.sentMedia)

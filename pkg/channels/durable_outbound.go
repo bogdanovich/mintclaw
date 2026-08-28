@@ -45,18 +45,18 @@ func (m *Manager) persistDurableRejection(deliveryID string, cause error) error 
 	return cause
 }
 
-func (m *Manager) beginDurableOutbound(deliveryID string) (bool, error) {
+func (m *Manager) beginDurableOutbound(deliveryID string) error {
 	deliveryID = strings.TrimSpace(deliveryID)
 	if deliveryID == "" {
-		return false, nil
+		return nil
 	}
 	if m == nil || m.outboundOutbox == nil {
-		return true, fmt.Errorf("durable delivery %q is unavailable", deliveryID)
+		return fmt.Errorf("durable delivery %q is unavailable", deliveryID)
 	}
 	if err := m.outboundOutbox.BeginAttempt(deliveryID); err != nil {
-		return true, fmt.Errorf("begin durable delivery %q: %w", deliveryID, err)
+		return fmt.Errorf("begin durable delivery %q: %w", deliveryID, err)
 	}
-	return true, nil
+	return nil
 }
 
 func (m *Manager) persistDurableOutbound(deliveryID string, outcome OutboundDeliveryOutcome) error {
