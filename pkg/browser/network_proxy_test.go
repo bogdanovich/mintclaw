@@ -20,6 +20,12 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
+func TestBrowserNetworkPolicyRejectsMissingMode(t *testing.T) {
+	if _, err := newBrowserNetworkPolicy(config.BrowserProfileConfig{}, nil, nil); !errors.Is(err, ErrDenied) {
+		t.Fatalf("newBrowserNetworkPolicy(missing mode) error = %v, want %v", err, ErrDenied)
+	}
+}
+
 func TestBrowserNetworkPolicyPinsValidatedPublicAddress(t *testing.T) {
 	lookupCalls := 0
 	policy, err := newBrowserNetworkPolicy(
@@ -94,6 +100,7 @@ func TestBrowserNetworkPolicyDeniesUnlistedAndNonPublicDestinations(t *testing.T
 		{
 			name: "unlisted exact origin",
 			profile: config.BrowserProfileConfig{
+				NetworkMode:    config.BrowserNetworkExactOrigins,
 				AllowedOrigins: []string{"https://allowed.example"},
 			},
 			authority: "other.example",
@@ -427,7 +434,10 @@ func TestBrowserNetworkProxyEnforcesExactOriginRedirect(t *testing.T) {
 	allowedOrigin := "http://allowed.test:" + fixtureURL.Port()
 	var dials atomic.Int64
 	proxy, err := startBrowserNetworkProxy(
-		config.BrowserProfileConfig{AllowedOrigins: []string{allowedOrigin}},
+		config.BrowserProfileConfig{
+			NetworkMode:    config.BrowserNetworkExactOrigins,
+			AllowedOrigins: []string{allowedOrigin},
+		},
 		func(context.Context, string, string) ([]net.IP, error) {
 			return []net.IP{net.ParseIP("8.8.8.8")}, nil
 		},

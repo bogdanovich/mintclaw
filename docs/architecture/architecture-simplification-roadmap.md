@@ -1540,8 +1540,9 @@ Scope:
    invocation state; do not assume that the file currently present at a
    configured executable path matches a process running a deleted inode;
 2. treat the PR #865 browser bridge cycle as satisfied for the sole connected
-   browser-capable companion and verify that it remains on the current
-   streamed-snapshot contract;
+   browser-capable companion, verify that it remains on the current
+   streamed-snapshot contract, and require every enabled gateway and companion
+   browser profile to declare `network_mode` before installing a strict binary;
 3. stage the merged PR #899 node-identity bridge release, which makes Ed25519
    companions send explicit `key_algorithm` while the gateway still accepts
    the omitted form, then upgrade or deliberately retire every older connected
@@ -1567,7 +1568,9 @@ Current gate snapshot from the 2026-08-26/27 re-audit:
    the audited outbox, task registries, and interaction registry are current
    and quiescent;
 2. current browser catalogue advertisement plus functional companion and
-   gateway-local canaries are proven;
+   gateway-local canaries are proven. Every active gateway browser profile
+   declares `network_mode`; the sole browser-capable companion advertises an
+   explicit mode, but its local config still requires cutover-time audit;
 3. `p5a-canary` and `ab-local-test` run bridge-or-newer builds; `p3-canary` is
    bridge-capable but currently stopped, and connected `vpn` remains old;
 4. all persisted identities are explicit. `p5a-canary` and `ab-local-test`
@@ -1588,6 +1591,7 @@ Exit criteria:
 
 - every registered first-party peer uses the current protocol major and current
   authority-bearing capabilities;
+- every enabled gateway and companion browser profile declares `network_mode`;
 - no production code reconstructs an older browser catalogue;
 - every persisted and wire node identity names its key algorithm;
 - no pre-reset personal-profile reader remains; and

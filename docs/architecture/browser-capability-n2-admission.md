@@ -8,7 +8,7 @@ dependency-ordered change in this document.
 N2 adds one explicit, high-risk operator-selected network mode to the existing
 B1 managed browser profile:
 
-- `exact_origins` remains the default and admits only configured origins;
+- `exact_origins` remains the narrowest mode and admits only configured origins;
 - `public_web` admits arbitrary public HTTP and HTTPS destinations while
   rejecting non-public addresses; and
 - `any_http` admits any syntactically valid HTTP or HTTPS destination,
@@ -66,7 +66,7 @@ The existing profile accepts the additional enum value:
 
 Rules:
 
-- an omitted `network_mode` continues to mean `exact_origins`;
+- every enabled profile must explicitly select `network_mode`;
 - `exact_origins` requires at least one normalized `allowed_origins` entry;
 - `public_web` and `any_http` require `allowed_origins` to be empty;
 - every other value is rejected;

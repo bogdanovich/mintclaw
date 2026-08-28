@@ -207,7 +207,9 @@ func normalizeBrowserProfile(
 	if err = profile.Limits.Validate(); err != nil {
 		return BrowserProfilePolicy{}, fmt.Errorf("validate limits: %w", err)
 	}
-	profile.NetworkMode = effectiveBrowserNetworkMode(profile.NetworkMode)
+	if profile.NetworkMode == "" {
+		return BrowserProfilePolicy{}, errors.New("network_mode is required")
+	}
 	if profile.NetworkMode != nodes.BrowserNetworkExactOrigins &&
 		profile.NetworkMode != nodes.BrowserNetworkPublicWeb &&
 		profile.NetworkMode != nodes.BrowserNetworkAnyHTTP {
@@ -518,13 +520,6 @@ func browserProfileDescriptor(alias string, profile BrowserProfilePolicy) nodes.
 		Actions: actions,
 		Limits:  profile.Limits,
 	}
-}
-
-func effectiveBrowserNetworkMode(mode string) string {
-	if mode == "" {
-		return nodes.BrowserNetworkExactOrigins
-	}
-	return mode
 }
 
 func browserProfileDescriptors(

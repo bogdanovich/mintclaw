@@ -8,7 +8,7 @@ dependency-ordered change in this document.
 N1 adds one operator-selected network mode to the existing B1 managed browser
 profile:
 
-- `exact_origins` remains the default and admits only configured origins; and
+- `exact_origins` remains the narrowest mode and admits only configured origins; and
 - `public_web` admits arbitrary public HTTP and HTTPS destinations.
 
 N1 does not admit private, loopback, link-local, multicast, unspecified, or
@@ -69,7 +69,7 @@ The existing profile gains one bounded field:
 
 Rules:
 
-- an omitted `network_mode` means `exact_origins` for backward compatibility;
+- every enabled profile must explicitly select `network_mode`;
 - `exact_origins` requires at least one normalized `allowed_origins` entry;
 - `public_web` requires `allowed_origins` to be empty, avoiding an ambiguous
   intersection or union of policies;

@@ -286,27 +286,21 @@ func TestBrowserConfigAcceptsExplicitAnyHTTPWithoutExactOrigins(t *testing.T) {
 	}
 }
 
-func TestBrowserPolicyRevisionCanonicalizesDefaultNetworkMode(t *testing.T) {
+func TestBrowserPolicyRevisionIncludesExplicitNetworkMode(t *testing.T) {
 	cfg := browserConfigFixture(t)
-	omitted, err := cfg.Tools.Browser.PolicyRevision()
+	exactOrigins, err := cfg.Tools.Browser.PolicyRevision()
 	if err != nil {
-		t.Fatalf("PolicyRevision() omitted error = %v", err)
+		t.Fatalf("PolicyRevision() exact_origins error = %v", err)
 	}
 	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
 	profile := target.Profiles[BrowserDefaultProfile]
-	profile.NetworkMode = BrowserNetworkExactOrigins
+	profile.NetworkMode = BrowserNetworkPublicWeb
+	profile.AllowedOrigins = nil
 	target.Profiles[BrowserDefaultProfile] = profile
 	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
-	explicit, err := cfg.Tools.Browser.PolicyRevision()
-	if err != nil || omitted != explicit {
-		t.Fatalf("PolicyRevision() omitted = %q, explicit = %q, error = %v", omitted, explicit, err)
-	}
-	original := browserConfigFixture(t).Tools.Browser
-	if _, err = original.PolicyRevision(); err != nil {
-		t.Fatal(err)
-	}
-	if got := original.Targets[BrowserDefaultTarget].Profiles[BrowserDefaultProfile].NetworkMode; got != "" {
-		t.Fatalf("PolicyRevision() mutated network mode to %q", got)
+	publicWeb, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil || exactOrigins == publicWeb {
+		t.Fatalf("PolicyRevision() exact_origins = %q, public_web = %q, error = %v", exactOrigins, publicWeb, err)
 	}
 }
 
@@ -424,6 +418,17 @@ func TestBrowserConfigRejectsAuthorityExpansion(t *testing.T) {
 			wantErr: "requires exactly one of dry_run or allow_approved_actions",
 		},
 		{
+			name: "missing network mode",
+			mutate: func(cfg *Config) {
+				target := cfg.Tools.Browser.Targets["gateway"]
+				profile := target.Profiles["managed"]
+				profile.NetworkMode = ""
+				target.Profiles["managed"] = profile
+				cfg.Tools.Browser.Targets["gateway"] = target
+			},
+			wantErr: "requires network_mode",
+		},
+		{
 			name: "unsupported network mode",
 			mutate: func(cfg *Config) {
 				target := cfg.Tools.Browser.Targets["gateway"]
@@ -461,7 +466,8 @@ func TestBrowserConfigRejectsAuthorityExpansion(t *testing.T) {
 			mutate: func(cfg *Config) {
 				target := cfg.Tools.Browser.Targets["gateway"]
 				target.Profiles["other"] = BrowserProfileConfig{
-					Enabled: true, Mode: BrowserProfileManaged, AllowedOrigins: []string{"https://example.com"},
+					Enabled: true, Mode: BrowserProfileManaged,
+					NetworkMode: BrowserNetworkExactOrigins, AllowedOrigins: []string{"https://example.com"},
 				}
 				cfg.Tools.Browser.Targets["gateway"] = target
 			},
@@ -752,6 +758,7 @@ func browserConfigFixture(t *testing.T) *Config {
 					"managed": {
 						Enabled:        true,
 						Mode:           BrowserProfileManaged,
+						NetworkMode:    BrowserNetworkExactOrigins,
 						DryRun:         true,
 						AllowedOrigins: []string{"https://example.com"},
 					},

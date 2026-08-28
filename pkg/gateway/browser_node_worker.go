@@ -1877,7 +1877,7 @@ func browserProfileIntersects(
 	requested := browserNodeLimits(limits)
 	return remote.DryRun == local.DryRun &&
 		remote.AllowApprovedActions == local.AllowApprovedActions &&
-		remote.NetworkMode == local.EffectiveNetworkMode() &&
+		remote.NetworkMode == local.NetworkMode &&
 		slices.Contains(remote.Actions, "navigate") &&
 		requested.Sessions <= remote.Limits.Sessions && requested.Tabs <= remote.Limits.Tabs &&
 		requested.SessionSeconds <= remote.Limits.SessionSeconds &&
