@@ -23,22 +23,17 @@ type VKChannel struct {
 	*channels.BaseChannel
 	vk     *api.VK
 	lp     *longpoll.LongPoll
-	bc     *config.Channel
+	config *config.VKSettings
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func NewVKChannel(bc *config.Channel, bus *bus.MessageBus) (*VKChannel, error) {
-	var vkCfg config.VKSettings
-	if err := bc.Decode(&vkCfg); err != nil {
-		return nil, err
-	}
-
-	vk := api.NewVK(vkCfg.Token.String())
+func NewVKChannel(bc *config.Channel, cfg *config.VKSettings, bus *bus.MessageBus) (*VKChannel, error) {
+	vk := api.NewVK(cfg.Token.String())
 
 	base := channels.NewBaseChannel(
 		bc.Name(),
-		&vkCfg,
+		cfg,
 		bus,
 		bc.AllowFrom,
 		channels.WithMaxMessageLength(4000),
@@ -49,16 +44,8 @@ func NewVKChannel(bc *config.Channel, bus *bus.MessageBus) (*VKChannel, error) {
 	return &VKChannel{
 		BaseChannel: base,
 		vk:          vk,
-		bc:          bc,
+		config:      cfg,
 	}, nil
-}
-
-func (c *VKChannel) getVKCfg() *config.VKSettings {
-	var v config.VKSettings
-	if err := c.bc.Decode(&v); err != nil {
-		return nil
-	}
-	return &v
 }
 
 func (c *VKChannel) Start(ctx context.Context) error {
@@ -66,7 +53,7 @@ func (c *VKChannel) Start(ctx context.Context) error {
 
 	c.ctx, c.cancel = context.WithCancel(ctx)
 
-	groupID := c.getVKCfg().GroupID
+	groupID := c.config.GroupID
 	if groupID == 0 {
 		c.cancel()
 		return fmt.Errorf("group_id is required for VK bot")
@@ -154,7 +141,6 @@ func (c *VKChannel) handleMessage(msg object.MessagesMessage) {
 		return
 	}
 
-	groupTrigger := c.bc.GroupTrigger
 	isGroupChat := peerID != fromID
 
 	if isGroupChat {
@@ -167,7 +153,6 @@ func (c *VKChannel) handleMessage(msg object.MessagesMessage) {
 			return
 		}
 		text = cleaned
-		_ = groupTrigger
 	}
 
 	chatType := "direct"

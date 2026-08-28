@@ -32,7 +32,7 @@ func (l *ChannelLifecycle) initChannel(host channelLifecycleHost, typeName, chan
 		"channel": channelName,
 		"type":    typeName,
 	})
-	ch, err := f(channelName, typeName, l.config, host.lifecycleBus())
+	ch, err := f(channelName, l.config, host.lifecycleBus())
 	if err != nil {
 		logger.ErrorCF("channels", "Failed to initialize channel", map[string]any{
 			"channel": channelName,

@@ -578,7 +578,7 @@ func TestReload_ChangedInactiveChannelIsRecreated(t *testing.T) {
 			return nil
 		},
 	}
-	RegisterFactory(channelType, func(string, string, *config.Config, *bus.MessageBus) (Channel, error) {
+	RegisterFactory(channelType, func(string, *config.Config, *bus.MessageBus) (Channel, error) {
 		return recreated, nil
 	})
 
@@ -635,7 +635,7 @@ func TestReload_ChangedInactiveChannelIsRecreated(t *testing.T) {
 func TestReload_ChangedInactiveChannelPreservedWhenReplacementInitFails(t *testing.T) {
 	const channelType = "reload-inactive-fail-test"
 
-	RegisterFactory(channelType, func(string, string, *config.Config, *bus.MessageBus) (Channel, error) {
+	RegisterFactory(channelType, func(string, *config.Config, *bus.MessageBus) (Channel, error) {
 		return nil, errors.New("replacement init failed")
 	})
 

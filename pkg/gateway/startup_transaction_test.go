@@ -203,7 +203,7 @@ func TestServiceStartupRollbackReturnsChannelStopFailure(t *testing.T) {
 	stopErr := errors.New("channel stop failed")
 	channels.RegisterFactory(
 		channelType,
-		func(string, string, *config.Config, *bus.MessageBus) (channels.Channel, error) {
+		func(string, *config.Config, *bus.MessageBus) (channels.Channel, error) {
 			return &failingStopStartupChannel{stopErr: stopErr}, nil
 		},
 	)
