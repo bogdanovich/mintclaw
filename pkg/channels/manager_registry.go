@@ -76,9 +76,6 @@ func (l *ChannelLifecycle) reload(
 	for name, hash := range desiredHashes {
 		list[name] = hash
 	}
-	if l.restartRequired == nil {
-		l.restartRequired = make(map[string]string)
-	}
 	added, removed := compareChannels(l.channelHashes, list)
 	inactiveChanged := make(map[string]Channel)
 	changed, added, removed := splitChangedChannels(added, removed)

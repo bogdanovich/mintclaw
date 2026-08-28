@@ -130,9 +130,6 @@ func (o *deliveryOwner) beginEnqueue() (<-chan struct{}, bool) {
 	if o.closed {
 		return nil, false
 	}
-	if o.closedCh == nil {
-		o.closedCh = make(chan struct{})
-	}
 	o.enqueueWG.Add(1)
 	o.inflightEnqueues++
 	return o.closedCh, true
@@ -162,18 +159,10 @@ func (o *deliveryOwner) closeAdmission() {
 	if o.closed {
 		closeDone := o.closeDone
 		o.mu.Unlock()
-		if closeDone != nil {
-			<-closeDone
-		}
+		<-closeDone
 		return
 	}
 	o.closed = true
-	if o.closedCh == nil {
-		o.closedCh = make(chan struct{})
-	}
-	if o.closeDone == nil {
-		o.closeDone = make(chan struct{})
-	}
 	closeDone := o.closeDone
 	close(o.closedCh)
 	o.mu.Unlock()
