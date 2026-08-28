@@ -774,7 +774,7 @@ func (c *inboundTurnCoordinator) runInteractionWorker(
 	defer claim.releaseIfOwned()
 	defer c.recoverWorkerPanic(claim.scope.sessionKey, msg)
 	if c.al.channelManager != nil {
-		defer c.al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
+		defer c.al.channelManager.InvokeTypingStop(msg.Context.Channel, msg.Context.ChatID)
 	}
 
 	ownership, admission, processErr := c.al.processInteractionInbound(ctx, msg, target)
@@ -804,8 +804,8 @@ func (c *inboundTurnCoordinator) runInteractionWorker(
 	claim.releaseSessionIfOwned()
 	if err := c.al.drainDeferredInteractionIngress(ctx, target.Agent.Workspace, interactions.Route{
 		SessionKey: target.SessionKey,
-		Channel:    msg.Channel,
-		ChatID:     msg.ChatID,
+		Channel:    msg.Context.Channel,
+		ChatID:     msg.Context.ChatID,
 	}, msg.Context); err != nil {
 		logger.WarnCF("agent", "Failed to continue messages deferred by human interaction", map[string]any{
 			"session_key": target.SessionKey,
@@ -1064,7 +1064,7 @@ func (al *AgentLoop) enqueueInteractionContinuationInboundForScope(
 	return al.enqueueSteeringMessageWithSender(
 		scope,
 		agentID,
-		msg.SenderID,
+		msg.Context.SenderID,
 		providers.Message{
 			Role:           "user",
 			Content:        msg.Content,
@@ -1308,8 +1308,8 @@ func (al *AgentLoop) publishInteractionNoticeAdmission(
 		ctx,
 		workspace,
 		agentID,
-		msg.Channel,
-		msg.ChatID,
+		msg.Context.Channel,
+		msg.Context.ChatID,
 		sessionKey,
 		content,
 		&msg.Context,

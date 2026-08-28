@@ -40,7 +40,13 @@ func (al *AgentLoop) transcribeAudioInMessage(ctx context.Context, msg bus.Inbou
 		return msg, false
 	}
 
-	al.sendTranscriptionFeedback(ctx, msg.Channel, msg.ChatID, msg.MessageID, transcriptions)
+	al.sendTranscriptionFeedback(
+		ctx,
+		msg.Context.Channel,
+		msg.Context.ChatID,
+		msg.Context.MessageID,
+		transcriptions,
+	)
 
 	// Replace audio annotations sequentially with transcriptions.
 	idx := 0

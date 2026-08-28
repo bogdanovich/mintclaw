@@ -31,11 +31,10 @@ not own a second copy of manager delivery, retry, or lifecycle state.
   selects both the settings decoder and channel factory. New code must consume
   that validated type instead of inferring it from the instance name.
 - Adapters normalize inbound platform updates into `bus.InboundMessage` or
-  `bus.ObservedMessage`. `bus.InboundContext` is authoritative for new routing
-  and session code. Current payloads still expose convenience address mirrors,
-  and their normalizers backfill context from those fields; do not add another
-  alias or reader while that temporary compatibility debt awaits a coordinated
-  contract reset.
+  `bus.ObservedMessage`. Their `bus.InboundContext` is the sole owner of channel,
+  chat, sender, and message identity. Runtime consumers read that context
+  directly; inbound payloads do not expose top-level address mirrors or rebuild
+  missing context from a historical shape.
 - `MessageBus.PublishInbound` is the common durable-ingress boundary when the
   gateway spool is enabled. Adapters do not implement independent normalized
   ingress spools.

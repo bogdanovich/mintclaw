@@ -78,11 +78,11 @@ func TestOnChatBotMessageReceived_GroupMentionOnlyUsesIsInAtListAndStripsMention
 	}
 
 	inbound := mustReceiveInbound(t, msgBus)
-	if inbound.Channel != "dingtalk_ops" {
-		t.Fatalf("channel=%q", inbound.Channel)
+	if inbound.Context.Channel != "dingtalk_ops" {
+		t.Fatalf("channel=%q", inbound.Context.Channel)
 	}
-	if inbound.ChatID != "group-abc" {
-		t.Fatalf("chat_id=%q", inbound.ChatID)
+	if inbound.Context.ChatID != "group-abc" {
+		t.Fatalf("chat_id=%q", inbound.Context.ChatID)
 	}
 	if inbound.Context.ChatType != "group" {
 		t.Fatalf("chat_type=%q", inbound.Context.ChatType)
@@ -109,14 +109,14 @@ func TestOnChatBotMessageReceived_DirectFallbackSenderIDUsesConversationID(t *te
 	}
 
 	inbound := mustReceiveInbound(t, msgBus)
-	if inbound.ChatID != "conv-direct-42" {
-		t.Fatalf("chat_id=%q", inbound.ChatID)
+	if inbound.Context.ChatID != "conv-direct-42" {
+		t.Fatalf("chat_id=%q", inbound.Context.ChatID)
 	}
 	if inbound.Context.ChatType != "direct" {
 		t.Fatalf("chat_type=%q", inbound.Context.ChatType)
 	}
-	if inbound.SenderID != "openid-user-42" {
-		t.Fatalf("sender_id=%q", inbound.SenderID)
+	if inbound.Context.SenderID != "openid-user-42" {
+		t.Fatalf("sender_id=%q", inbound.Context.SenderID)
 	}
 	if inbound.Sender.CanonicalID != "dingtalk:openid-user-42" {
 		t.Fatalf("sender canonical_id=%q", inbound.Sender.CanonicalID)

@@ -44,11 +44,11 @@ func TestDispatchIncoming_UsesActualChatIDAndStoresReqIDRoute(t *testing.T) {
 
 	select {
 	case inbound := <-messageBus.InboundChan():
-		if inbound.ChatID != "chat-1" {
-			t.Fatalf("inbound ChatID = %q, want chat-1", inbound.ChatID)
+		if inbound.Context.ChatID != "chat-1" {
+			t.Fatalf("inbound ChatID = %q, want chat-1", inbound.Context.ChatID)
 		}
-		if inbound.MessageID != "msg-1" {
-			t.Fatalf("inbound MessageID = %q, want msg-1", inbound.MessageID)
+		if inbound.Context.MessageID != "msg-1" {
+			t.Fatalf("inbound MessageID = %q, want msg-1", inbound.Context.MessageID)
 		}
 		if inbound.Context.ChatType != "direct" {
 			t.Fatalf("inbound Context.ChatType = %q, want direct", inbound.Context.ChatType)

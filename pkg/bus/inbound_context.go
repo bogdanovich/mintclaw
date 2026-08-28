@@ -2,57 +2,14 @@ package bus
 
 import "strings"
 
-// NormalizeInboundMessage ensures the inbound context is normalized and keeps
-// convenience mirrors in sync for runtime consumers.
+// NormalizeInboundMessage normalizes the canonical inbound context.
 func NormalizeInboundMessage(msg InboundMessage) InboundMessage {
-	if msg.Context.Channel == "" {
-		msg.Context.Channel = msg.Channel
-	}
-	if msg.Context.ChatID == "" {
-		msg.Context.ChatID = msg.ChatID
-	}
-	if msg.Context.SenderID == "" {
-		msg.Context.SenderID = msg.SenderID
-	}
-	if msg.Context.MessageID == "" {
-		msg.Context.MessageID = msg.MessageID
-	}
 	msg.Context = normalizeInboundContext(msg.Context)
-	msg.Channel = msg.Context.Channel
-	msg.SenderID = msg.Context.SenderID
-	msg.ChatID = msg.Context.ChatID
-	if msg.MessageID == "" {
-		msg.MessageID = msg.Context.MessageID
-	}
-	if msg.Context.MessageID == "" {
-		msg.Context.MessageID = msg.MessageID
-	}
 	return msg
 }
 
 func NormalizeObservedMessage(msg ObservedMessage) ObservedMessage {
-	if msg.Context.Channel == "" {
-		msg.Context.Channel = msg.Channel
-	}
-	if msg.Context.ChatID == "" {
-		msg.Context.ChatID = msg.ChatID
-	}
-	if msg.Context.SenderID == "" {
-		msg.Context.SenderID = msg.SenderID
-	}
-	if msg.Context.MessageID == "" {
-		msg.Context.MessageID = msg.MessageID
-	}
 	msg.Context = normalizeInboundContext(msg.Context)
-	msg.Channel = msg.Context.Channel
-	msg.SenderID = msg.Context.SenderID
-	msg.ChatID = msg.Context.ChatID
-	if msg.MessageID == "" {
-		msg.MessageID = msg.Context.MessageID
-	}
-	if msg.Context.MessageID == "" {
-		msg.Context.MessageID = msg.MessageID
-	}
 	msg.Reason = strings.TrimSpace(msg.Reason)
 	return msg
 }

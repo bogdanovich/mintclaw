@@ -295,8 +295,8 @@ func (c *BaseChannel) HandleMessageWithContext(
 			}
 		}
 		// Reaction
-		if rc, ok := c.owner.(ReactionCapable); ok && msg.MessageID != "" {
-			if undo, err := rc.ReactToMessage(ctx, deliveryChatID, msg.MessageID); err == nil {
+		if rc, ok := c.owner.(ReactionCapable); ok && msg.Context.MessageID != "" {
+			if undo, err := rc.ReactToMessage(ctx, deliveryChatID, msg.Context.MessageID); err == nil {
 				c.placeholderRecorder.RecordReactionUndo(c.name, deliveryChatID, undo)
 			}
 		}

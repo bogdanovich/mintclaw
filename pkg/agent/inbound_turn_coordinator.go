@@ -121,7 +121,7 @@ func (c *inboundTurnCoordinator) handleScopedInspectionCommand(
 	}
 
 	if al.channelManager != nil {
-		defer al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
+		defer al.channelManager.InvokeTypingStop(msg.Context.Channel, msg.Context.ChatID)
 	}
 	metadata := bus.OutboundMetadata{}
 	if al.turns.activeTurnState(newRuntimeSessionScope(target.Agent.Workspace, target.SessionKey)) != nil {
@@ -131,8 +131,8 @@ func (c *inboundTurnCoordinator) handleScopedInspectionCommand(
 		ctx,
 		target.Agent.Workspace,
 		target.Agent.ID,
-		msg.Channel,
-		msg.ChatID,
+		msg.Context.Channel,
+		msg.Context.ChatID,
 		target.SessionKey,
 		response,
 		&msg.Context,
@@ -163,7 +163,7 @@ func (c *inboundTurnCoordinator) enqueueDeferredInteractionInbound(
 	return c.al.enqueueSteeringMessageWithSender(
 		target.runtimeSessionScope(),
 		target.Agent.ID,
-		msg.SenderID,
+		msg.Context.SenderID,
 		providers.Message{
 			Role:           "user",
 			Content:        msg.Content,
@@ -200,17 +200,22 @@ func (c *inboundTurnCoordinator) handleBusySession(
 	}
 
 	msg = al.prepareInboundMessageForAgent(ctx, msg)
-	if err := al.enqueueSteeringMessageWithSender(scope, target.Agent.ID, msg.SenderID, providers.Message{
-		Role:           "user",
-		Content:        msg.Content,
-		Media:          append([]string(nil), msg.Media...),
-		InboundSpoolID: msg.SpoolID,
-	}); err != nil {
+	if err := al.enqueueSteeringMessageWithSender(
+		scope,
+		target.Agent.ID,
+		msg.Context.SenderID,
+		providers.Message{
+			Role:           "user",
+			Content:        msg.Content,
+			Media:          append([]string(nil), msg.Media...),
+			InboundSpoolID: msg.SpoolID,
+		},
+	); err != nil {
 		logger.WarnCF("agent", "Failed to enqueue steering message",
 			map[string]any{
 				"error":       err.Error(),
-				"channel":     msg.Channel,
-				"chat_id":     msg.ChatID,
+				"channel":     msg.Context.Channel,
+				"chat_id":     msg.Context.ChatID,
 				"session_key": scope.sessionKey,
 			})
 		al.turns.inbound.release(ctx, msg, err)
@@ -274,7 +279,7 @@ func (c *inboundTurnCoordinator) runWorker(
 	defer c.recoverWorkerPanic(claim.scope.sessionKey, msg)
 
 	if al.channelManager != nil {
-		defer al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
+		defer al.channelManager.InvokeTypingStop(msg.Context.Channel, msg.Context.ChatID)
 	}
 
 	if al.turns.takePendingStop(claim.scope) {
@@ -328,8 +333,8 @@ func (c *inboundTurnCoordinator) handlePendingStop(
 
 	target := &continuationTarget{
 		SessionKey: claim.scope.sessionKey,
-		Channel:    msg.Channel,
-		ChatID:     msg.ChatID,
+		Channel:    msg.Context.Channel,
+		ChatID:     msg.Context.ChatID,
 		Workspace:  claim.scope.workspace,
 	}
 	if dispatchTarget != nil && dispatchTarget.Agent != nil {
@@ -341,8 +346,8 @@ func (c *inboundTurnCoordinator) handlePendingStop(
 			ctx,
 			target.Workspace,
 			target.AgentID,
-			msg.Channel,
-			msg.ChatID,
+			msg.Context.Channel,
+			msg.Context.ChatID,
 			claim.scope.sessionKey,
 			continueErr,
 			finalResponseAlwaysPublish,
@@ -386,8 +391,8 @@ func (c *inboundTurnCoordinator) recoverWorkerPanic(sessionKey string, msg bus.I
 		logger.ErrorCF("agent", "Worker goroutine panicked",
 			map[string]any{
 				"session_key": sessionKey,
-				"channel":     msg.Channel,
-				"chat_id":     msg.ChatID,
+				"channel":     msg.Context.Channel,
+				"chat_id":     msg.Context.ChatID,
 				"panic":       fmt.Sprintf("%v", r),
 			})
 	}

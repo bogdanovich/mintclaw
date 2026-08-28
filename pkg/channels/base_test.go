@@ -297,11 +297,11 @@ func TestHandleInboundContext_PublishesNormalizedContext(t *testing.T) {
 			}
 
 			msg := <-msgBus.InboundChan()
-			if msg.ChatID != tt.wantChat {
-				t.Fatalf("ChatID = %q, want %q", msg.ChatID, tt.wantChat)
+			if msg.Context.ChatID != tt.wantChat {
+				t.Fatalf("ChatID = %q, want %q", msg.Context.ChatID, tt.wantChat)
 			}
-			if msg.SenderID != tt.wantSender {
-				t.Fatalf("SenderID = %q, want %q", msg.SenderID, tt.wantSender)
+			if msg.Context.SenderID != tt.wantSender {
+				t.Fatalf("SenderID = %q, want %q", msg.Context.SenderID, tt.wantSender)
 			}
 			if msg.Context.ChatType != tt.inbound.ChatType {
 				t.Fatalf("ChatType = %q, want %q", msg.Context.ChatType, tt.inbound.ChatType)

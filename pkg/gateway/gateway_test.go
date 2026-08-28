@@ -837,15 +837,12 @@ func TestReplayGatewayInboundSnapshotReplaysCapturedMessages(t *testing.T) {
 	msgBus.SetInboundSpool(spool)
 	ctx := context.Background()
 	original := bus.InboundMessage{
-		Channel: "telegram",
-		ChatID:  "chat-1",
 		Context: bus.InboundContext{
 			Channel:  "telegram",
 			ChatID:   "chat-1",
 			SenderID: "user-1",
 		},
-		SenderID: "user-1",
-		Content:  "pending restart message",
+		Content: "pending restart message",
 	}
 	if _, err = spool.Prepare(ctx, original); err != nil {
 		t.Fatalf("Prepare() error = %v", err)
@@ -876,8 +873,6 @@ func TestReplayGatewayInboundSnapshotDoesNotReplayMessagesAddedAfterSnapshot(t *
 	msgBus.SetInboundSpool(spool)
 	ctx := context.Background()
 	first := bus.InboundMessage{
-		Channel: "telegram",
-		ChatID:  "chat-1",
 		Context: bus.InboundContext{
 			Channel: "telegram",
 			ChatID:  "chat-1",

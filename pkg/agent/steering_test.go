@@ -111,8 +111,8 @@ func TestRunTurnAndDrainSteeringPendingDeliveryPublishesNothingAndDoesNotDrain(t
 	}
 	target := &continuationTarget{
 		SessionKey: initial.SessionKey,
-		Channel:    initial.Channel,
-		ChatID:     initial.ChatID,
+		Channel:    initial.Context.Channel,
+		ChatID:     initial.Context.ChatID,
 		AgentID:    agent.ID,
 		Workspace:  agent.Workspace,
 	}
@@ -168,8 +168,8 @@ func TestRunTurnAndDrainSteeringPendingContinuationSuppressesAggregate(t *testin
 	}
 	target := &continuationTarget{
 		SessionKey: initial.SessionKey,
-		Channel:    initial.Channel,
-		ChatID:     initial.ChatID,
+		Channel:    initial.Context.Channel,
+		ChatID:     initial.Context.ChatID,
 		AgentID:    agent.ID,
 		Workspace:  agent.Workspace,
 	}

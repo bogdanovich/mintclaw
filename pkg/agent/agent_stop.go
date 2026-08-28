@@ -55,15 +55,15 @@ func (al *AgentLoop) publishStopReply(
 	}
 
 	if al.channelManager != nil {
-		al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
+		al.channelManager.InvokeTypingStop(msg.Context.Channel, msg.Context.ChatID)
 	}
 	al.resetMessageToolRound(scope, agentID)
 	return al.publishResponseWithMetadataAndScopes(
 		ctx,
 		scope.workspace,
 		agentID,
-		msg.Channel,
-		msg.ChatID,
+		msg.Context.Channel,
+		msg.Context.ChatID,
 		scope.sessionKey,
 		reply,
 		&msg.Context,

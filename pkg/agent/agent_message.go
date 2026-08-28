@@ -292,7 +292,7 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 	// For audio messages the placeholder was deferred by the channel.
 	// Now that transcription (and optional feedback) is done, send it.
 	if hadAudio && al.channelManager != nil {
-		al.channelManager.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
+		al.channelManager.SendPlaceholder(ctx, msg.Context.Channel, msg.Context.ChatID)
 	}
 
 	return msg
@@ -322,17 +322,22 @@ func (al *AgentLoop) processInboundMessageTurn(
 	}
 	logger.InfoCF(
 		"agent",
-		fmt.Sprintf("Processing message from %s:%s: %s", msg.Channel, msg.SenderID, logContent),
+		fmt.Sprintf(
+			"Processing message from %s:%s: %s",
+			msg.Context.Channel,
+			msg.Context.SenderID,
+			logContent,
+		),
 		map[string]any{
-			"channel":     msg.Channel,
-			"chat_id":     msg.ChatID,
-			"sender_id":   msg.SenderID,
+			"channel":     msg.Context.Channel,
+			"chat_id":     msg.Context.ChatID,
+			"sender_id":   msg.Context.SenderID,
 			"session_key": msg.SessionKey,
 		},
 	)
 
 	// Route system messages to processSystemMessage
-	if msg.Channel == "system" {
+	if msg.Context.Channel == "system" {
 		return al.processSystemMessage(ctx, msg)
 	}
 
@@ -413,8 +418,8 @@ func (al *AgentLoop) observeMessage(ctx context.Context, msg bus.ObservedMessage
 	route, agent, routeErr := al.resolveMessageRoute(inbound)
 	if routeErr != nil {
 		logger.WarnCF("agent", "Failed to route observed message", map[string]any{
-			"channel": msg.Channel,
-			"chat_id": msg.ChatID,
+			"channel": msg.Context.Channel,
+			"chat_id": msg.Context.ChatID,
 			"error":   routeErr.Error(),
 		})
 		return
@@ -424,8 +429,8 @@ func (al *AgentLoop) observeMessage(ctx context.Context, msg bus.ObservedMessage
 	allocation, routeErr = al.applySessionLifecycle(allocation, route.SessionPolicy.Lifecycle)
 	if routeErr != nil {
 		logger.WarnCF("agent", "Failed to apply session lifecycle for observed message", map[string]any{
-			"channel": msg.Channel,
-			"chat_id": msg.ChatID,
+			"channel": msg.Context.Channel,
+			"chat_id": msg.Context.ChatID,
 			"error":   routeErr.Error(),
 		})
 		return
@@ -470,8 +475,8 @@ func (al *AgentLoop) observeMessage(ctx context.Context, msg bus.ObservedMessage
 	logger.DebugCF("agent", "Observed passive message", map[string]any{
 		"agent_id":    agent.ID,
 		"session_key": sessionKey,
-		"channel":     msg.Channel,
-		"chat_id":     msg.ChatID,
+		"channel":     msg.Context.Channel,
+		"chat_id":     msg.Context.ChatID,
 		"reason":      msg.Reason,
 	})
 }
@@ -486,7 +491,7 @@ func formatObservedMessageContent(msg bus.ObservedMessage) string {
 		author = strings.TrimSpace(msg.Sender.Username)
 	}
 	if author == "" {
-		author = strings.TrimSpace(msg.SenderID)
+		author = strings.TrimSpace(msg.Context.SenderID)
 	}
 	content := strings.TrimSpace(msg.Content)
 	return fmt.Sprintf("[observed group message from %s; no reply requested; reason: %s]\n%s", author, reason, content)
@@ -520,17 +525,17 @@ func (al *AgentLoop) processSystemMessage(
 	ctx context.Context,
 	msg bus.InboundMessage,
 ) (string, error) {
-	if msg.Channel != "system" {
+	if msg.Context.Channel != "system" {
 		return "", fmt.Errorf(
 			"processSystemMessage called with non-system message channel: %s",
-			msg.Channel,
+			msg.Context.Channel,
 		)
 	}
 
 	logger.InfoCF("agent", "Processing system message",
 		map[string]any{
-			"sender_id": msg.SenderID,
-			"chat_id":   msg.ChatID,
+			"sender_id": msg.Context.SenderID,
+			"chat_id":   msg.Context.ChatID,
 		})
 
 	origin := systemMessageOrigin(msg)
@@ -546,7 +551,7 @@ func (al *AgentLoop) processSystemMessage(
 	if constants.IsInternalChannel(origin.Channel) {
 		logger.InfoCF("agent", "Subagent completed (internal channel)",
 			map[string]any{
-				"sender_id":   msg.SenderID,
+				"sender_id":   msg.Context.SenderID,
 				"content_len": len(content),
 				"channel":     origin.Channel,
 			})
@@ -563,7 +568,7 @@ func (al *AgentLoop) processSystemMessage(
 	sessionKey := session.BuildMainSessionKey(agent.ID)
 	dispatch := DispatchRequest{
 		SessionKey:  sessionKey,
-		UserMessage: fmt.Sprintf("[System: %s] %s", msg.SenderID, msg.Content),
+		UserMessage: fmt.Sprintf("[System: %s] %s", msg.Context.SenderID, msg.Content),
 	}
 	if origin.Channel != "" || origin.ChatID != "" {
 		dispatch.InboundContext = &origin
@@ -575,16 +580,16 @@ func (al *AgentLoop) processSystemMessage(
 func systemMessageOrigin(msg bus.InboundMessage) bus.InboundContext {
 	origin := bus.InboundContext{
 		Channel:          "cli",
-		ChatID:           msg.ChatID,
+		ChatID:           msg.Context.ChatID,
 		ChatType:         "direct",
 		TopicID:          strings.TrimSpace(msg.Context.TopicID),
-		SenderID:         msg.SenderID,
+		SenderID:         msg.Context.SenderID,
 		MessageID:        strings.TrimSpace(msg.Context.MessageID),
 		ReplyToMessageID: strings.TrimSpace(msg.Context.ReplyToMessageID),
 	}
-	if idx := strings.Index(msg.ChatID, ":"); idx > 0 {
-		origin.Channel = msg.ChatID[:idx]
-		origin.ChatID = msg.ChatID[idx+1:]
+	if idx := strings.Index(msg.Context.ChatID, ":"); idx > 0 {
+		origin.Channel = msg.Context.ChatID[:idx]
+		origin.ChatID = msg.Context.ChatID[idx+1:]
 	}
 	return origin
 }

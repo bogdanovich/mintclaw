@@ -39,8 +39,8 @@ func TestHandleMessage_DoesNotConsumeGenericCommandsLocally(t *testing.T) {
 	if !ok {
 		t.Fatal("expected inbound message to be forwarded")
 	}
-	if inbound.Channel != "telegram" {
-		t.Fatalf("channel=%q", inbound.Channel)
+	if inbound.Context.Channel != "telegram" {
+		t.Fatalf("channel=%q", inbound.Context.Channel)
 	}
 	if inbound.Content != "/new" {
 		t.Fatalf("content=%q", inbound.Content)
