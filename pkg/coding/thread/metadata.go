@@ -177,7 +177,7 @@ func (m Metadata) Rename(title string, now time.Time) (Metadata, error) {
 		return Metadata{}, fmt.Errorf("coding thread: rename timestamp is required")
 	}
 	m.Title = title
-	m.UpdatedAt = maxMetadataTime(m.CreatedAt, now.UTC())
+	m.UpdatedAt = maxMetadataTime(m.UpdatedAt, now.UTC())
 	if err := m.Validate(); err != nil {
 		return Metadata{}, err
 	}
@@ -194,7 +194,7 @@ func (m Metadata) SetArchived(archived bool, now time.Time) (Metadata, error) {
 	if archived {
 		m.Status = StatusArchived
 	}
-	m.UpdatedAt = maxMetadataTime(m.CreatedAt, now.UTC())
+	m.UpdatedAt = maxMetadataTime(m.UpdatedAt, now.UTC())
 	if err := m.Validate(); err != nil {
 		return Metadata{}, err
 	}

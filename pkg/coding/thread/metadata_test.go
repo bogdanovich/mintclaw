@@ -101,6 +101,13 @@ func TestMetadataRenameAndArchiveLifecycle(t *testing.T) {
 	if _, err := metadata.SetArchived(true, time.Time{}); err == nil {
 		t.Fatal("SetArchived() accepted a zero timestamp")
 	}
+	clockRegressed, err := active.Rename("monotonic", created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !clockRegressed.UpdatedAt.Equal(active.UpdatedAt) {
+		t.Fatalf("clock regression moved updated_at backwards: %v", clockRegressed.UpdatedAt)
+	}
 }
 
 func TestProvisionThreadDoesNotPublishMetadata(t *testing.T) {
