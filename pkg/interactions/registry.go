@@ -18,7 +18,7 @@ type Options struct {
 
 type Snapshot struct {
 	SchemaVersion  string   `json:"schema_version"`
-	CommitSequence uint64   `json:"commit_sequence,omitempty"`
+	CommitSequence uint64   `json:"commit_sequence"`
 	Records        []Record `json:"records"`
 	Events         []Event  `json:"events,omitempty"`
 }

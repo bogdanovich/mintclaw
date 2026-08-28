@@ -201,7 +201,7 @@ type Record struct {
 type Event struct {
 	SchemaVersion  string    `json:"schema_version"`
 	EventID        string    `json:"event_id"`
-	CommitSequence uint64    `json:"commit_sequence,omitempty"`
+	CommitSequence uint64    `json:"commit_sequence"`
 	InteractionID  string    `json:"interaction_id"`
 	Type           EventType `json:"type"`
 	From           Status    `json:"from,omitempty"`
