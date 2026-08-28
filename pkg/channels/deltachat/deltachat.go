@@ -201,7 +201,7 @@ func NewDeltaChatChannel(
 	}
 	dataDir := resolveDataDir(cfg.DataDir, bc.Name())
 
-	base := channels.NewBaseChannel(config.ChannelDeltaChat, cfg, messageBus, bc.AllowFrom,
+	base := channels.NewBaseChannel(bc.Name(), cfg, messageBus, bc.AllowFrom,
 		channels.WithMaxMessageLength(0), // email has no practical length limit
 		channels.WithGroupTrigger(bc.GroupTrigger),
 		channels.WithReasoningChannelID(bc.ReasoningChannelID),

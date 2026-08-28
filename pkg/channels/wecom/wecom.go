@@ -117,7 +117,7 @@ func NewChannel(bc *config.Channel, cfg *config.WeComSettings, messageBus *bus.M
 	}
 
 	base := channels.NewBaseChannel(
-		"wecom",
+		bc.Name(),
 		cfg,
 		messageBus,
 		bc.AllowFrom,
@@ -136,8 +136,6 @@ func NewChannel(bc *config.Channel, cfg *config.WeComSettings, messageBus *bus.M
 	ch.SetOwner(ch)
 	return ch, nil
 }
-
-func (c *WeComChannel) Name() string { return "wecom" }
 
 func (c *WeComChannel) Start(ctx context.Context) error {
 	logger.InfoC("wecom", "Starting WeCom channel...")

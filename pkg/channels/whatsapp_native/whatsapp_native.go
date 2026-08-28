@@ -65,12 +65,11 @@ type WhatsAppNativeChannel struct {
 // storePath is the directory for the SQLite session store (e.g. workspace/whatsapp).
 func NewWhatsAppNativeChannel(
 	bc *config.Channel,
-	name string,
 	cfg *config.WhatsAppSettings,
 	bus *bus.MessageBus,
 	storePath string,
 ) (channels.Channel, error) {
-	base := channels.NewBaseChannel(name, cfg, bus, bc.AllowFrom, channels.WithMaxMessageLength(65536))
+	base := channels.NewBaseChannel(bc.Name(), cfg, bus, bc.AllowFrom, channels.WithMaxMessageLength(65536))
 	if storePath == "" {
 		storePath = "whatsapp"
 	}

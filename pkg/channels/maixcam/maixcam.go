@@ -38,7 +38,7 @@ func NewMaixCamChannel(
 	bus *bus.MessageBus,
 ) (*MaixCamChannel, error) {
 	base := channels.NewBaseChannel(
-		"maixcam",
+		bc.Name(),
 		cfg,
 		bus,
 		bc.AllowFrom,

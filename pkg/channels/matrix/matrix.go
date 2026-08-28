@@ -86,7 +86,7 @@ func NewMatrixChannel(
 	}
 
 	base := channels.NewBaseChannel(
-		"matrix",
+		bc.Name(),
 		cfg,
 		messageBus,
 		bc.AllowFrom,

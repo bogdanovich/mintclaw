@@ -30,6 +30,7 @@ func TestNewIRCChannel(t *testing.T) {
 
 	t.Run("valid config", func(t *testing.T) {
 		bc := &config.Channel{Type: config.ChannelIRC, Enabled: true}
+		bc.SetName("irc_ops")
 		cfg := &config.IRCSettings{
 			Server:   "irc.example.com:6667",
 			Nick:     "testbot",
@@ -39,8 +40,8 @@ func TestNewIRCChannel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if ch.Name() != "irc" {
-			t.Errorf("Name() = %q, want %q", ch.Name(), "irc")
+		if ch.Name() != "irc_ops" {
+			t.Errorf("Name() = %q, want %q", ch.Name(), "irc_ops")
 		}
 		if ch.IsRunning() {
 			t.Error("new channel should not be running")

@@ -34,7 +34,7 @@ func NewWhatsAppChannel(
 	bus *bus.MessageBus,
 ) (*WhatsAppChannel, error) {
 	base := channels.NewBaseChannel(
-		"whatsapp",
+		bc.Name(),
 		cfg,
 		bus,
 		bc.AllowFrom,

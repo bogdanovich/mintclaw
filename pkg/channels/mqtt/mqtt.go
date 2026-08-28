@@ -44,7 +44,7 @@ func NewMQTTChannel(bc *config.Channel, cfg *config.MQTTSettings, b *bus.Message
 		return nil, fmt.Errorf("mqtt agent_id is required")
 	}
 
-	base := channels.NewBaseChannel("mqtt", cfg, b, bc.AllowFrom,
+	base := channels.NewBaseChannel(bc.Name(), cfg, b, bc.AllowFrom,
 		channels.WithGroupTrigger(bc.GroupTrigger),
 		channels.WithReasoningChannelID(bc.ReasoningChannelID),
 	)

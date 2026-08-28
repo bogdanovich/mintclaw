@@ -18,14 +18,7 @@ func init() {
 			if err := bc.Decode(settings); err != nil {
 				return nil, err
 			}
-			ch, err := NewDeltaChatChannel(bc, settings, b)
-			if err != nil {
-				return nil, err
-			}
-			if channelName != config.ChannelDeltaChat {
-				ch.SetName(channelName)
-			}
-			return ch, nil
+			return NewDeltaChatChannel(bc, settings, b)
 		},
 	)
 }

@@ -88,7 +88,7 @@ func NewTeamsWebhookChannel(
 	}
 
 	base := channels.NewBaseChannel(
-		"teams_webhook",
+		bc.Name(),
 		cfg,
 		bus,
 		[]string{

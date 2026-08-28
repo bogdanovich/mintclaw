@@ -208,12 +208,13 @@ func TestNewSlackChannel(t *testing.T) {
 		cfg.BotToken = *config.NewSecureString("xoxb-test")
 		cfg.AppToken = *config.NewSecureString("xapp-test")
 		bc := &config.Channel{Type: "slack", Enabled: true, AllowFrom: []string{"U123"}}
+		bc.SetName("slack_ops")
 		ch, err := NewSlackChannel(bc, cfg, msgBus)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if ch.Name() != "slack" {
-			t.Errorf("Name() = %q, want %q", ch.Name(), "slack")
+		if ch.Name() != "slack_ops" {
+			t.Errorf("Name() = %q, want %q", ch.Name(), "slack_ops")
 		}
 		if ch.IsRunning() {
 			t.Error("new channel should not be running")

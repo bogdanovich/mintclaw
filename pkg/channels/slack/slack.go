@@ -68,7 +68,7 @@ func NewSlackChannel(
 
 	socketClient := socketmode.New(api)
 
-	base := channels.NewBaseChannel("slack", cfg, messageBus, bc.AllowFrom,
+	base := channels.NewBaseChannel(bc.Name(), cfg, messageBus, bc.AllowFrom,
 		channels.WithMaxMessageLength(40000),
 		channels.WithGroupTrigger(bc.GroupTrigger),
 		channels.WithReasoningChannelID(bc.ReasoningChannelID),

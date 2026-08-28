@@ -14,13 +14,11 @@ import (
 // Build with: go build -tags whatsapp_native ./cmd/...
 func NewWhatsAppNativeChannel(
 	bc *config.Channel,
-	name string,
 	cfg *config.WhatsAppSettings,
 	bus *bus.MessageBus,
 	storePath string,
 ) (channels.Channel, error) {
 	_ = bc
-	_ = name
 	_ = cfg
 	_ = bus
 	_ = storePath

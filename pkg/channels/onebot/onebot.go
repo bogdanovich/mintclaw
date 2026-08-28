@@ -102,7 +102,7 @@ func NewOneBotChannel(
 	cfg *config.OneBotSettings,
 	messageBus *bus.MessageBus,
 ) (*OneBotChannel, error) {
-	base := channels.NewBaseChannel("onebot", cfg, messageBus, bc.AllowFrom,
+	base := channels.NewBaseChannel(bc.Name(), cfg, messageBus, bc.AllowFrom,
 		channels.WithGroupTrigger(bc.GroupTrigger),
 		channels.WithReasoningChannelID(bc.ReasoningChannelID),
 	)

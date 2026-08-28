@@ -14,7 +14,7 @@ func init() {
 			if bc == nil {
 				return nil, channels.ErrSendFailed
 			}
-			return NewVKChannel(channelName, bc, b)
+			return NewVKChannel(bc, b)
 		},
 	)
 }
