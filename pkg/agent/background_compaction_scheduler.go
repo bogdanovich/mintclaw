@@ -34,10 +34,7 @@ func (r *backgroundCompactionRunner) scheduleBackgroundCompaction(
 	if contextManager == nil || agent == nil || sessionKey == "" {
 		return
 	}
-	key := agent.ID + ":" + sessionKey
-	if threadID := agent.CodingLayout.ThreadID(); threadID != "" {
-		key = "coding:" + threadID
-	}
+	key := backgroundCompactionKey(agent, sessionKey)
 	if _, loaded := r.running.LoadOrStore(key, struct{}{}); loaded {
 		logger.DebugCF("agent", "Background context compaction already running", map[string]any{
 			"agent_id":     agent.ID,
@@ -100,6 +97,21 @@ func (r *backgroundCompactionRunner) scheduleBackgroundCompaction(
 			"duration_ms":  time.Since(startedAt).Milliseconds(),
 		})
 	}()
+}
+
+func backgroundCompactionKey(agent *AgentInstance, sessionKey string) string {
+	if threadID := agent.CodingLayout.ThreadID(); threadID != "" {
+		return "coding:" + threadID
+	}
+	return agent.ID + ":" + sessionKey
+}
+
+func (r *backgroundCompactionRunner) codingThreadActive(threadID string) bool {
+	if r == nil || threadID == "" {
+		return false
+	}
+	_, active := r.running.Load("coding:" + threadID)
+	return active
 }
 
 // Close cancels all derived background compaction and waits for workers to

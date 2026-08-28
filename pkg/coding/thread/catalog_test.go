@@ -137,6 +137,46 @@ func TestCatalogFreshStoreIsEmpty(t *testing.T) {
 	}
 }
 
+func TestCatalogSeparatesActiveAndArchivedThreads(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := catalogFixtureProject(t, t.TempDir())
+	active := catalogFixtureMetadata(t, project, "active", time.Now())
+	archived := catalogFixtureMetadata(t, project, "archived", time.Now().Add(time.Minute))
+	archived.Status = StatusArchived
+	for _, metadata := range []Metadata{active, archived} {
+		if err := store.Save(metadata); err != nil {
+			t.Fatal(err)
+		}
+	}
+	activePage, err := NewCatalog(store, CatalogOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotActive, err := activePage.Query(t.Context(), CatalogQuery{ProjectKey: project.ProjectKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotArchived, err := activePage.Query(
+		t.Context(), CatalogQuery{ProjectKey: project.ProjectKey, Archived: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catalogTitles(gotActive.Threads); !reflect.DeepEqual(got, []string{"active"}) {
+		t.Fatalf("active titles = %v", got)
+	}
+	if got := catalogTitles(gotArchived.Threads); !reflect.DeepEqual(got, []string{"archived"}) {
+		t.Fatalf("archived titles = %v", got)
+	}
+	exact, err := activePage.Query(t.Context(), CatalogQuery{ThreadID: archived.ThreadID})
+	if err != nil || len(exact.Threads) != 1 || exact.Threads[0].Status != StatusArchived {
+		t.Fatalf("exact archived lookup = %+v, %v", exact, err)
+	}
+}
+
 func TestCatalogExactIDRejectsInRootSymlinkedPathComponents(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(filepath.Join(root, "coding"))

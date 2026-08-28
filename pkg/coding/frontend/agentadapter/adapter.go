@@ -33,6 +33,7 @@ func ProjectThreadMetadata(projector *frontend.Projector, metadata thread.Metada
 		CWD:         metadata.Project.InvocationCWD,
 		Model:       metadata.Model,
 		Provider:    metadata.Provider,
+		Archived:    metadata.Status == thread.StatusArchived,
 		UpdatedAt:   metadata.UpdatedAt,
 	})
 	return nil

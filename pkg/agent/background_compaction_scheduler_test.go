@@ -61,12 +61,18 @@ func TestBackgroundCompactionRunnerDeduplicatesCodingThread(t *testing.T) {
 	if !manager.background.Load() {
 		t.Fatal("background compaction request did not carry its execution mode")
 	}
+	if !runner.codingThreadActive("thread-1") {
+		t.Fatal("running coding compaction was not observable")
+	}
 	runner.scheduleBackgroundCompaction(agent, "session-b", ContextCompressReasonSummarize, 100, "turn")
 	if manager.calls.Load() != 1 {
 		t.Fatalf("compaction calls = %d, want one per coding thread", manager.calls.Load())
 	}
 	if err := runner.Close(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	if runner.codingThreadActive("thread-1") {
+		t.Fatal("closed coding compaction remained observable")
 	}
 }
 

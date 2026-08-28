@@ -166,6 +166,48 @@ func (m Metadata) Validate() error {
 	return nil
 }
 
+// Rename returns a validated copy with a user-selected title and updated
+// lifecycle timestamp. The caller remains responsible for one atomic Save.
+func (m Metadata) Rename(title string, now time.Time) (Metadata, error) {
+	title = strings.TrimSpace(title)
+	if err := validateDisplay("title", title, titleMaxBytes); err != nil {
+		return Metadata{}, err
+	}
+	if now.IsZero() {
+		return Metadata{}, fmt.Errorf("coding thread: rename timestamp is required")
+	}
+	m.Title = title
+	m.UpdatedAt = maxMetadataTime(m.UpdatedAt, now.UTC())
+	if err := m.Validate(); err != nil {
+		return Metadata{}, err
+	}
+	return m, nil
+}
+
+// SetArchived returns a validated copy in the requested catalog lifecycle
+// state. Archiving never moves or removes any thread-owned file.
+func (m Metadata) SetArchived(archived bool, now time.Time) (Metadata, error) {
+	if now.IsZero() {
+		return Metadata{}, fmt.Errorf("coding thread: lifecycle timestamp is required")
+	}
+	m.Status = StatusActive
+	if archived {
+		m.Status = StatusArchived
+	}
+	m.UpdatedAt = maxMetadataTime(m.UpdatedAt, now.UTC())
+	if err := m.Validate(); err != nil {
+		return Metadata{}, err
+	}
+	return m, nil
+}
+
+func maxMetadataTime(minimum, candidate time.Time) time.Time {
+	if candidate.Before(minimum) {
+		return minimum
+	}
+	return candidate
+}
+
 func validateDisplay(name, value string, maxBytes int) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("coding thread: %s is required", name)

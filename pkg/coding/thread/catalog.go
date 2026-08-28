@@ -90,6 +90,7 @@ type CatalogQuery struct {
 	ThreadID   string
 	ProjectKey string
 	All        bool
+	Archived   bool
 	Last       bool
 	Search     string
 	Offset     int
@@ -125,7 +126,8 @@ func (c *Catalog) Query(ctx context.Context, query CatalogQuery) (CatalogPage, e
 		return CatalogPage{}, err
 	}
 	if query.ThreadID != "" {
-		if query.ProjectKey != "" || query.All || query.Last || query.Search != "" || query.Offset != 0 ||
+		if query.ProjectKey != "" || query.All || query.Archived || query.Last || query.Search != "" ||
+			query.Offset != 0 ||
 			query.Limit != 0 {
 			return CatalogPage{}, fmt.Errorf("coding thread catalog: exact ID cannot be combined with list options")
 		}
@@ -256,7 +258,8 @@ func (c *Catalog) scan(
 				page.addSkipped(c.options.SkipReportLimit, threadID, "metadata_unreadable_or_invalid")
 				continue
 			}
-			if (query.All || metadata.Project.ProjectKey == query.ProjectKey) &&
+			if metadata.Status == catalogQueryStatus(query) &&
+				(query.All || metadata.Project.ProjectKey == query.ProjectKey) &&
 				metadataMatchesSearch(metadata, query.Search) {
 				page.Matched++
 				if len(retained) < retain {
@@ -275,6 +278,13 @@ func (c *Catalog) scan(
 			return CatalogPage{}, nil, fmt.Errorf("coding thread catalog: read threads root: %w", readErr)
 		}
 	}
+}
+
+func catalogQueryStatus(query CatalogQuery) Status {
+	if query.Archived {
+		return StatusArchived
+	}
+	return StatusActive
 }
 
 func metadataMatchesSearch(metadata Metadata, search string) bool {

@@ -374,31 +374,10 @@ func newCodingMetadataState(
 func (s *codingMetadataState) update(
 	mutate func(*thread.Metadata),
 ) (thread.Metadata, error) {
-	if s == nil {
-		return thread.Metadata{}, fmt.Errorf("coding metadata state is unavailable")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	candidate := s.metadata
-	mutate(&candidate)
-	save := s.save
-	if save == nil && s.store != nil {
-		save = s.store.Save
-	}
-	if save == nil {
-		return s.metadata, fmt.Errorf("coding metadata store is unavailable")
-	}
-	saveErr := save(candidate)
-	if saveErr == nil {
-		s.metadata = candidate
-		return s.metadata, nil
-	}
-	if !fileutil.IsCommittedWriteError(saveErr) {
-		return s.metadata, saveErr
-	}
-	s.metadata = candidate
-	s.err = errors.Join(s.err, saveErr)
-	return s.metadata, nil
+	return s.replace(func(metadata thread.Metadata) (thread.Metadata, error) {
+		mutate(&metadata)
+		return metadata, nil
+	})
 }
 
 func (s *codingMetadataState) observeCompaction(payload agent.ContextCompressLifecyclePayload) {
@@ -438,6 +417,47 @@ func (s *codingMetadataState) recordTurn(
 	})
 }
 
+func (s *codingMetadataState) rename(title string) (thread.Metadata, error) {
+	return s.replace(func(metadata thread.Metadata) (thread.Metadata, error) {
+		return metadata.Rename(title, s.now())
+	})
+}
+
+func (s *codingMetadataState) setArchived(archived bool) (thread.Metadata, error) {
+	return s.replace(func(metadata thread.Metadata) (thread.Metadata, error) {
+		return metadata.SetArchived(archived, s.now())
+	})
+}
+
+func (s *codingMetadataState) replace(
+	mutate func(thread.Metadata) (thread.Metadata, error),
+) (thread.Metadata, error) {
+	if s == nil {
+		return thread.Metadata{}, fmt.Errorf("coding metadata state is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	candidate, err := mutate(s.metadata)
+	if err != nil {
+		return s.metadata, err
+	}
+	save := s.save
+	if save == nil && s.store != nil {
+		save = s.store.Save
+	}
+	if save == nil {
+		return s.metadata, fmt.Errorf("coding metadata store is unavailable")
+	}
+	if err = save(candidate); err != nil {
+		if !fileutil.IsCommittedWriteError(err) {
+			return s.metadata, err
+		}
+		s.err = errors.Join(s.err, err)
+	}
+	s.metadata = candidate
+	return s.metadata, nil
+}
+
 func (s *codingMetadataState) accumulatedError() error {
 	if s == nil {
 		return nil
@@ -455,12 +475,34 @@ type nativeControllerRuntime struct {
 }
 
 var (
-	_ controller.Runtime          = (*nativeControllerRuntime)(nil)
-	_ frontend.TranscriptPager    = (*nativeControllerRuntime)(nil)
-	_ frontend.WorkspaceRefresher = (*nativeControllerRuntime)(nil)
+	_ controller.Runtime                    = (*nativeControllerRuntime)(nil)
+	_ frontend.TranscriptPager              = (*nativeControllerRuntime)(nil)
+	_ frontend.WorkspaceRefresher           = (*nativeControllerRuntime)(nil)
+	_ frontend.ThreadLifecycle              = (*nativeControllerRuntime)(nil)
+	_ frontend.BackgroundCompactionObserver = (*nativeControllerRuntime)(nil)
 )
 
 const hydratedTranscriptTextBytes = 32 << 10
+
+func (r *nativeControllerRuntime) BackgroundCompactionActive() bool {
+	return r.loop != nil && r.loop.CodingBackgroundCompactionActive(r.metadata.ThreadID)
+}
+
+func (r *nativeControllerRuntime) Rename(_ context.Context, title string) error {
+	candidate, err := r.metadataState.rename(title)
+	if err != nil {
+		return err
+	}
+	return agentadapter.ProjectThreadMetadata(r.projector, candidate)
+}
+
+func (r *nativeControllerRuntime) SetArchived(_ context.Context, archived bool) error {
+	candidate, err := r.metadataState.setArchived(archived)
+	if err != nil {
+		return err
+	}
+	return agentadapter.ProjectThreadMetadata(r.projector, candidate)
+}
 
 func (r *nativeControllerRuntime) RefreshWorkspace(ctx context.Context) error {
 	if r.loop == nil || r.projector == nil {

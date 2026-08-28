@@ -35,6 +35,8 @@ type fakeController struct {
 	refreshState *codingworkspace.Snapshot
 	compacts     atomic.Int32
 	renames      atomic.Int32
+	archives     atomic.Int32
+	archived     atomic.Bool
 	newThreads   atomic.Int32
 	compactErr   error
 	compactStart chan struct{}
@@ -109,6 +111,12 @@ func (f *fakeController) Rename(_ context.Context, title string) error {
 	f.renameTitles = append(f.renameTitles, title)
 	f.mu.Unlock()
 	return f.renameErr
+}
+
+func (f *fakeController) SetArchived(_ context.Context, archived bool) error {
+	f.archives.Add(1)
+	f.archived.Store(archived)
+	return nil
 }
 
 func (f *fakeController) NewThread(context.Context) error {

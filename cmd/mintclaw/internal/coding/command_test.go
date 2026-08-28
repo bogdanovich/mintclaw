@@ -97,18 +97,63 @@ func TestCodeAndResumePersistOutsideProjectAcrossCommands(t *testing.T) {
 	}
 }
 
+func TestResumeArchivedViewIsExplicitAndReversible(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 27, 10, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	createdOutput := executeCommand(t, newCodeCommand(deps), "archive this", "--json")
+	var created commandResult
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.Load(created.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err = metadata.SetArchived(true, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	var active, archived listResult
+	if err := json.Unmarshal(executeCommand(t, newResumeCommand(deps), "--json"), &active); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(
+		executeCommand(t, newResumeCommand(deps), "--archived", "--json"),
+		&archived,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(active.Threads) != 0 || len(archived.Threads) != 1 ||
+		archived.Threads[0].ThreadID != created.ThreadID {
+		t.Fatalf("active = %+v archived = %+v", active, archived)
+	}
+	if _, err := executeCommandError(newResumeCommand(deps), created.ThreadID, "--archived"); err == nil {
+		t.Fatal("explicit thread ID accepted redundant --archived")
+	}
+}
+
 type interactiveLeaseController struct {
 	*frontend.Projector
 	lease *thread.Lease
 }
 
-func (*interactiveLeaseController) Submit(context.Context, string) error { return nil }
-func (*interactiveLeaseController) Interrupt(context.Context) error      { return nil }
-func (*interactiveLeaseController) HardCancel(context.Context) error     { return nil }
-func (*interactiveLeaseController) Compact(context.Context) error        { return nil }
-func (*interactiveLeaseController) Rename(context.Context, string) error { return nil }
-func (*interactiveLeaseController) NewThread(context.Context) error      { return nil }
-func (c *interactiveLeaseController) Close(context.Context) error        { return c.lease.Release() }
+func (*interactiveLeaseController) Submit(context.Context, string) error    { return nil }
+func (*interactiveLeaseController) Interrupt(context.Context) error         { return nil }
+func (*interactiveLeaseController) HardCancel(context.Context) error        { return nil }
+func (*interactiveLeaseController) Compact(context.Context) error           { return nil }
+func (*interactiveLeaseController) Rename(context.Context, string) error    { return nil }
+func (*interactiveLeaseController) SetArchived(context.Context, bool) error { return nil }
+func (*interactiveLeaseController) NewThread(context.Context) error         { return nil }
+func (c *interactiveLeaseController) Close(context.Context) error           { return c.lease.Release() }
 
 func TestCodeUsesInteractiveShellOnlyForCapableTerminal(t *testing.T) {
 	home := t.TempDir()

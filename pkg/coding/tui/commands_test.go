@@ -227,6 +227,14 @@ func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	if controller.renames.Load() != 1 || len(renames) != 1 || renames[0] != "Parser cleanup" {
 		t.Fatalf("rename calls=%d titles=%v", controller.renames.Load(), renames)
 	}
+	model = updateModel(t, model, runTypedSlashCommand(t, model, "/archive"))
+	if controller.archives.Load() != 1 || !controller.archived.Load() {
+		t.Fatalf("archive calls=%d archived=%t", controller.archives.Load(), controller.archived.Load())
+	}
+	model = updateModel(t, model, runTypedSlashCommand(t, model, "/unarchive"))
+	if controller.archives.Load() != 2 || controller.archived.Load() {
+		t.Fatalf("unarchive calls=%d archived=%t", controller.archives.Load(), controller.archived.Load())
+	}
 	result = runTypedSlashCommand(t, model, "/new")
 	model = updateModel(t, model, result)
 	if controller.newThreads.Load() != 1 {

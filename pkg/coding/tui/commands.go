@@ -99,6 +99,19 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		return true, typedCommandCmd(m.ctx, "rename", func(ctx context.Context) error {
 			return m.controller.Rename(ctx, command.args)
 		})
+	case "/archive", "/unarchive":
+		if !noArgs() {
+			return true, nil
+		}
+		operation := strings.TrimPrefix(command.name, "/")
+		archived := command.name == "/archive"
+		m.commandPanel = commandPanelNone
+		m.err = nil
+		m.clearCommandDraft()
+		m.pendingSlashCommand = operation
+		return true, typedCommandCmd(m.ctx, operation, func(ctx context.Context) error {
+			return m.controller.SetArchived(ctx, archived)
+		})
 	case "/new":
 		if !noArgs() {
 			return true, nil
@@ -135,7 +148,9 @@ func slashCommandError(operation string, err error) error {
 		case "new":
 			return errors.New("new thread is unavailable in this screen; use /exit, then mintclaw code <prompt>")
 		case "rename":
-			return errors.New("thread rename is not implemented yet; the current title is unchanged")
+			return errors.New("thread rename is unavailable; the current title is unchanged")
+		case "archive", "unarchive":
+			return fmt.Errorf("thread %s is unavailable; lifecycle state is unchanged", operation)
 		}
 	}
 	return fmt.Errorf("%s command: %w", operation, err)
@@ -168,6 +183,8 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"/diff              show the current bounded repository change summary",
 			"/compact           start real context compaction when idle",
 			"/rename <title>    request a thread title change",
+			"/archive           hide this thread from the active catalog",
+			"/unarchive         return this thread to the active catalog",
 			"/new               request a new coding thread",
 			"/exit              close the controller and exit",
 			"",
@@ -197,6 +214,7 @@ func statusPanelContent(snapshot frontend.ThreadSnapshot) string {
 		"Current coding thread status",
 		"thread: " + boundedSingleLine(snapshot.ThreadID, 256),
 		"title: " + fallbackStatusValue(snapshot.Metadata.Title),
+		"lifecycle: " + threadLifecycleStatus(snapshot.Metadata.Archived),
 		"activity: " + boundedSingleLine(activityStatus(snapshot), 512),
 		"project: " + fallbackStatusValue(snapshot.Metadata.ProjectRoot),
 		"cwd: " + fallbackStatusValue(snapshot.Metadata.CWD),
@@ -218,6 +236,13 @@ func statusPanelContent(snapshot frontend.ThreadSnapshot) string {
 		lines = append(lines, compactionStatusLines(compaction)...)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func threadLifecycleStatus(archived bool) string {
+	if archived {
+		return "archived"
+	}
+	return "active"
 }
 
 func compactionStatusLines(compaction *frontend.CompactionState) []string {

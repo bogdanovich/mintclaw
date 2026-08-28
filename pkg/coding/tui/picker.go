@@ -27,6 +27,7 @@ type PickerOptions struct {
 	Output          io.Writer
 	AlternateScreen bool
 	AllProjects     bool
+	Archived        bool
 	Environment     []string
 	NoColor         bool
 	Now             func() time.Time
@@ -55,6 +56,7 @@ func RunPicker(
 	}
 	query := codingpicker.Query{
 		AllProjects: options.AllProjects,
+		Archived:    options.Archived,
 		Limit:       DefaultPickerPageSize,
 	}
 	pageCtx, cancelPage := context.WithTimeout(ctx, pickerPageTimeout)
@@ -213,6 +215,11 @@ func (m *pickerModel) updateKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 		query.AllProjects = !query.AllProjects
 		query.Offset = 0
 		return m, m.load(query)
+	case "z", "Z":
+		query := m.query
+		query.Archived = !query.Archived
+		query.Offset = 0
+		return m, m.load(query)
 	case "r", "R":
 		query := m.query
 		query.Offset = 0
@@ -319,10 +326,13 @@ func (m *pickerModel) View() string {
 		lines = append(lines, clipLine(warning, m.width))
 	}
 
-	footer := "↑/↓ select · PgUp/PgDn page · / search · A scope · Enter resume · Q cancel"
+	footer := "↑/↓ select · / search · A scope · Z archive · Enter resume · Q cancel"
 	available := max(1, m.height-len(lines)-1)
 	if len(m.page.Items) == 0 {
 		empty := "No coding threads found. Start one with mintclaw code <prompt>."
+		if m.query.Archived {
+			empty = "No archived coding threads found. Press Z to show active threads."
+		}
 		if m.query.Search != "" {
 			empty = "No coding threads match the current search. Press / to change it."
 		}
@@ -345,6 +355,11 @@ func (m *pickerModel) header() string {
 		scope = "all projects"
 	}
 	parts := []string{"MintClaw resume", "scope " + scope}
+	if m.query.Archived {
+		parts = append(parts, "archived")
+	} else {
+		parts = append(parts, "active")
+	}
 	if m.query.Search != "" {
 		parts = append(parts, "search "+fmt.Sprintf("%q", m.query.Search))
 	}
