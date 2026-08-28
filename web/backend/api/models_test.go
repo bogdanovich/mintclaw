@@ -105,18 +105,29 @@ func TestHandleAddModelRejectsDanglingFallback(t *testing.T) {
 	}
 }
 
-func TestHandleAddModelSupportsPreviousClientAndExplicitEnabledValue(t *testing.T) {
+func TestHandleAddModelRequiresExplicitEnabledValue(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
-	previousClient := addModelAndLoadLatest(t, configPath, `{
-		"model_name":"previous-client",
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models", bytes.NewBufferString(`{
+		"model_name":"missing-enabled",
 		"provider":"openai",
 		"model":"gpt-5.4-mini",
 		"api_key":"test-key"
-	}`)
-	if !previousClient.Enabled {
-		t.Fatal("model without enabled field should be active at the previous-client API boundary")
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "enabled is required") {
+		t.Fatalf("body = %q, want required enabled error", rec.Body.String())
 	}
 
 	disabled := addModelAndLoadLatest(t, configPath, `{
@@ -181,7 +192,7 @@ func TestHandleUpdateModelPreservesOmittedEnabledValue(t *testing.T) {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 	if !updated.ModelList[0].Enabled {
-		t.Fatal("enabled = false, want preserved true when previous client omits field")
+		t.Fatal("enabled = false, want the omitted partial-update field preserved")
 	}
 }
 
@@ -1046,6 +1057,7 @@ func TestHandleAddModel_PersistsAPIKey(t *testing.T) {
 		"model_name":"new-model",
 		"provider":"openai",
 		"model":"gpt-4o-mini",
+		"enabled":true,
 		"api_key":"sk-new-model-key"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -1085,6 +1097,7 @@ func TestHandleAddModel_PersistsProvider(t *testing.T) {
 		"model_name":"nvidia-glm",
 		"provider":"nvidia",
 		"model":"z-ai/glm-5.1",
+		"enabled":true,
 		"api_key":"nv-key"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -1164,7 +1177,8 @@ func TestHandleAddModel_RejectsUnsupportedProvider(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/models", bytes.NewBufferString(`{
 		"model_name":"bad-provider",
 		"provider":"not-supported",
-		"model":"gpt-4o-mini"
+		"model":"gpt-4o-mini",
+		"enabled":true
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
@@ -1189,7 +1203,8 @@ func TestHandleAddModel_AllowsBedrockProvider(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/models", bytes.NewBufferString(`{
 		"model_name":"bedrock-claude",
 		"provider":"bedrock",
-		"model":"us.anthropic.claude-sonnet-4-20250514-v1:0"
+		"model":"us.anthropic.claude-sonnet-4-20250514-v1:0",
+		"enabled":true
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
@@ -1236,6 +1251,7 @@ func TestHandleAddModel_DoesNotRewriteCanonicalElevenLabsASRConfig(t *testing.T)
 		"model_name":"new-model",
 		"provider":"openai",
 		"model":"gpt-4o-mini",
+		"enabled":true,
 		"api_key":"sk-new-model-key"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -1278,7 +1294,8 @@ func TestHandleAddModel_RejectsMissingCLIProviderCommand(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/models", bytes.NewBufferString(`{
 		"model_name":"claude-cli-model",
 		"provider":"claude-cli",
-		"model":"claude-cli"
+		"model":"claude-cli",
+		"enabled":true
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)
@@ -1298,7 +1315,8 @@ func TestHandleAddModel_DefaultsAntigravityToOAuth(t *testing.T) {
 	added := addModelAndLoadLatest(t, configPath, `{
 		"model_name":"gemini-flash",
 		"provider":"antigravity",
-		"model":"gemini-3-flash"
+		"model":"gemini-3-flash",
+		"enabled":true
 	}`)
 	if got := added.AuthMethod; got != "oauth" {
 		t.Fatalf("auth_method = %q, want %q", got, "oauth")
@@ -1313,6 +1331,7 @@ func TestHandleAddModel_NormalizesMixedCaseAuthMethod(t *testing.T) {
 		"model_name":"openai-oauth",
 		"provider":"openai",
 		"model":"gpt-5.4",
+		"enabled":true,
 		"auth_method":"OAuth"
 	}`)
 	if got := added.AuthMethod; got != "oauth" {
@@ -1333,6 +1352,7 @@ func TestHandleAddModel_PreservesExplicitProviderPrefixedModel(t *testing.T) {
 		"model_name":"openai-gpt",
 		"provider":"openai",
 		"model":"openai/gpt-4o-mini",
+		"enabled":true,
 		"api_key":"sk-openai"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -1368,6 +1388,7 @@ func TestHandleAddModel_PersistsCustomHeaders(t *testing.T) {
 		"model_name":"new-model-headers",
 		"provider":"openai",
 		"model":"gpt-4o-mini",
+		"enabled":true,
 		"custom_headers":{"X-Source":"coding-plan","X-Agent":"openclaw"}
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -1410,6 +1431,7 @@ func TestHandleAddModel_PersistsToolSchemaTransform(t *testing.T) {
 		"model_name":"new-model-transform",
 		"provider":"openai",
 		"model":"gpt-4o-mini",
+		"enabled":true,
 		"tool_schema_transform":"simple"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -1914,7 +1936,8 @@ func TestHandleAddModel_RejectsUnsupportedElevenLabsModelID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/models", bytes.NewBufferString(`{
 		"model_name":"elevenlabs-asr",
 		"provider":"elevenlabs",
-		"model":"scribe_v2"
+		"model":"scribe_v2",
+		"enabled":true
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(rec, req)

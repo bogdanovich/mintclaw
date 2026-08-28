@@ -232,7 +232,8 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 
 	type custom struct {
 		config.ModelConfig
-		APIKey string `json:"api_key"`
+		APIKey  string `json:"api_key"`
+		Enabled *bool  `json:"enabled"`
 	}
 
 	var mc custom
@@ -240,16 +241,11 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
 		return
 	}
-	var rawFields map[string]json.RawMessage
-	if err = json.Unmarshal(body, &rawFields); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+	if mc.Enabled == nil {
+		http.Error(w, "Validation error: enabled is required", http.StatusBadRequest)
 		return
 	}
-	// The immediately previous Web client omitted enabled when creating models.
-	// Keep that one-release boundary behavior while persisted config remains strict.
-	if _, ok := rawFields["enabled"]; !ok {
-		mc.Enabled = true
-	}
+	mc.ModelConfig.Enabled = *mc.Enabled
 
 	normalizeIncomingModelConfig(&mc.ModelConfig)
 
