@@ -8,7 +8,7 @@ and lifecycle contracts. It is a navigation and extension guide for the code on
 
 ```text
 platform update -> channel adapter -> bus.MessageBus -> agent runtime
-agent result     -> bus.MessageBus -> DeliveryRuntime -> channel adapter -> platform
+agent/tool result -> Manager.Send* or bus.MessageBus -> DeliveryRuntime -> channel adapter -> platform
 ```
 
 `Manager` composes three owners instead of keeping parallel maps for the same
@@ -31,8 +31,11 @@ not own a second copy of manager delivery, retry, or lifecycle state.
   selects both the settings decoder and channel factory. New code must consume
   that validated type instead of inferring it from the instance name.
 - Adapters normalize inbound platform updates into `bus.InboundMessage` or
-  `bus.ObservedMessage`. `bus.InboundContext` is the routing and session source
-  of truth.
+  `bus.ObservedMessage`. `bus.InboundContext` is authoritative for new routing
+  and session code. Current payloads still expose convenience address mirrors,
+  and their normalizers backfill context from those fields; do not add another
+  alias or reader while that temporary compatibility debt awaits a coordinated
+  contract reset.
 - `MessageBus.PublishInbound` is the common durable-ingress boundary when the
   gateway spool is enabled. Adapters do not implement independent normalized
   ingress spools.
@@ -41,15 +44,19 @@ not own a second copy of manager delivery, retry, or lifecycle state.
   command menus use optional capability interfaces only when supported.
 - Outbound adapters return `DeliveryResult` with confirmed platform IDs and an
   explicit complete, partial, or failed outcome. A failed operation is marked
-  rejected only when the adapter knows it happened before remote acceptance;
-  uncertain acceptance is ambiguous and must not be blindly retried.
+  rejected only when the adapter knows it happened before remote acceptance.
+  Durable delivery and definite-retry-only paths do not retry ambiguous remote
+  acceptance. Current non-durable, provisional, and queued messages without a
+  delivery ID still permit ambiguous retries; treat that exception as removal
+  debt, not as precedent for new entry paths.
 - Messages carrying a delivery ID participate in the durable outbox contract.
   Delivery state is persisted before completion events are published.
 - Runtime events are observational. They must not become a second source of
   lifecycle or delivery truth.
-- The package has one current internal bus and persisted-state shape. Bounded
-  additive compatibility belongs at a first-party wire boundary, not in
-  channel-manager maps, alternate metadata keys, or historical readers.
+- New work targets the current internal bus and persisted-state shapes. Bounded
+  additive compatibility belongs at a first-party wire boundary; do not add
+  channel-manager compatibility maps, alternate metadata keys, or historical
+  readers.
 
 ## Where to look
 
@@ -105,9 +112,10 @@ not in this package guide.
    the config example and platform guide when users need new settings.
 
 Keep transport reconnects inside the adapter unless a demonstrated failure
-mode cannot be modeled there. Same-name configuration replacement is currently
-restart-required; do not add a generic supervisor or hot-swap layer without a
-concrete requirement and tests for ordering, admission, drain, and handler
+mode cannot be modeled there. Changing an active same-name channel is currently
+restart-required; a changed channel without an active delivery worker may be
+recreated in process. Do not add a generic supervisor or hot-swap layer without
+a concrete requirement and tests for ordering, admission, drain, and handler
 availability.
 
 ## Validation
