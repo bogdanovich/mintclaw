@@ -139,6 +139,45 @@ func TestDeliverWithRetryDrainsUntouchedTailWithoutResolvingPartialItem(t *testi
 	}
 }
 
+func TestDeliverWithRetrySkipsAmbiguousPayloadAndDrainsUntouchedTail(t *testing.T) {
+	t.Parallel()
+
+	var attempts [][]string
+	var delivered []string
+	result := DeliverWithRetry(
+		t.Context(),
+		[]string{"first", "ambiguous", "third"},
+		DeliveryRetryPolicy{MaxRetries: 1},
+		func(ctx context.Context, pending []string) DeliveryResult[string] {
+			attempts = append(attempts, cloneDeliveryPayload(pending))
+			return DeliverSequentially(ctx, pending, func(_ context.Context, payload string) ([]string, error) {
+				delivered = append(delivered, payload)
+				if payload == "ambiguous" {
+					return nil, ErrTemporary
+				}
+				return []string{"id-" + payload}, nil
+			})
+		},
+		nil,
+	)
+
+	if result.Delivered() || result.Status != DeliveryPartial || !result.UnresolvedPartial || !result.Ambiguous() {
+		t.Fatalf("result = %#v, want sticky ambiguous partial delivery", result)
+	}
+	if !errors.Is(result.Err, ErrTemporary) {
+		t.Fatalf("error = %v, want original ambiguous failure", result.Err)
+	}
+	if !slices.Equal(result.MessageIDs, []string{"id-first", "id-third"}) {
+		t.Fatalf("message IDs = %v, want confirmed first and third IDs", result.MessageIDs)
+	}
+	if len(attempts) != 2 || !slices.Equal(attempts[1], []string{"third"}) {
+		t.Fatalf("attempt payloads = %v, want only untouched tail on retry", attempts)
+	}
+	if !slices.Equal(delivered, []string{"first", "ambiguous", "third"}) {
+		t.Fatalf("delivered payloads = %v, want ambiguous payload attempted exactly once", delivered)
+	}
+}
+
 func TestDeliverSequentiallyRejectsEmptyPayload(t *testing.T) {
 	t.Parallel()
 
