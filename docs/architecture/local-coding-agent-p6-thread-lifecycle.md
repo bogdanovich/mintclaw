@@ -76,7 +76,9 @@ read-only: an unfinished dirty-history transaction fails closed for normal
 runtime recovery instead of being repaired by this administrative command.
 Publication is verified through the anchored target directory and its held
 lease identity, so replacing the target path cannot classify another directory
-as the committed fork.
+as the committed fork. Unpublished preparation is atomically moved into a
+recoverable internal quarantine only after its held lease identity is confirmed;
+a replacement entry is restored and never recursively deleted.
 
 The child gets a fresh UUID, session key, external directory, lease, current
 project snapshot, and future writer. It inherits only model/provider selection
@@ -84,7 +86,10 @@ and the selected canonical message prefix. Seahorse state, compaction state,
 runtime artifacts, diagnostics, and workspace files are not copied; they are
 rebuilt independently as needed. Metadata is published last, after the child
 JSONL is durable, and committed status requires reading back the exact child
-descriptor, so incomplete preparation is absent from the catalog.
+descriptor, so incomplete preparation is absent from the catalog. The
+canonical JSONL writer rejects any normalized record its bounded reader could
+not later resume, and fork performs the same exact validation before allocating
+the child target.
 
 Both human and JSON results state that the fork uses the current live
 filesystem and provide `mintclaw resume <child-id>`. Historical conversation is

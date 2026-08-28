@@ -683,23 +683,19 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 		meta.CreatedAt = now
 	}
 	meta.UpdatedAt = now
+	if msg.CreatedAt == nil {
+		msg.CreatedAt = &now
+	}
+	line, err := encodeJSONLMessage(0, msg)
+	if err != nil {
+		return err
+	}
 	if faultErr := s.injectJournalFault(jsonlJournalStageFlush); faultErr != nil {
 		return fmt.Errorf("memory: flush journal metadata: %w", faultErr)
 	}
 	if mutationErr := s.beginHistoryMutation(sessionKey, &meta, true); mutationErr != nil {
 		return mutationErr
 	}
-
-	if msg.CreatedAt == nil {
-		msg.CreatedAt = &now
-	}
-
-	// Append the message as a single JSON line.
-	line, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("memory: marshal message: %w", err)
-	}
-	line = append(line, '\n')
 
 	jsonlPath := s.jsonlPath(sessionKey)
 	f, err := os.OpenFile(jsonlPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -1198,14 +1194,36 @@ func encodeJSONL(msgs []providers.Message) ([]byte, error) {
 
 	var buf bytes.Buffer
 	for i, msg := range msgs {
-		line, err := json.Marshal(msg)
+		line, err := encodeJSONLMessage(i, msg)
 		if err != nil {
-			return nil, fmt.Errorf("memory: marshal message %d: %w", i, err)
+			return nil, err
 		}
 		buf.Write(line)
-		buf.WriteByte('\n')
 	}
 	return buf.Bytes(), nil
+}
+
+func encodeJSONLMessage(index int, msg providers.Message) ([]byte, error) {
+	line, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("memory: marshal message %d: %w", index, err)
+	}
+	line = append(line, '\n')
+	if len(line) > MaxJSONLRecordBytes {
+		return nil, fmt.Errorf(
+			"memory: encoded message %d exceeds %d-byte JSONL record limit",
+			index,
+			MaxJSONLRecordBytes,
+		)
+	}
+	return line, nil
+}
+
+// ValidateJSONLHistory confirms that the canonical writer can encode every
+// message into a record that the canonical reader can scan.
+func ValidateJSONLHistory(history []providers.Message) error {
+	_, err := encodeJSONL(history)
+	return err
 }
 
 func digestJSONL(data []byte) string {

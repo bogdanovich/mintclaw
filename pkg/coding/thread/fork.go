@@ -108,6 +108,15 @@ func (s *Store) ForkThread(
 		if err != nil {
 			return err
 		}
+		forkCreatedAt := options.At.UTC()
+		for index := range prefix {
+			if prefix[index].CreatedAt == nil {
+				prefix[index].CreatedAt = &forkCreatedAt
+			}
+		}
+		if validationErr := memory.ValidateJSONLHistory(prefix); validationErr != nil {
+			return fmt.Errorf("coding thread fork: validate child transcript: %w", validationErr)
+		}
 		child, err = NewMetadata(
 			options.TargetThreadID,
 			options.Project,
@@ -398,28 +407,26 @@ func (s *Store) publishFork(
 	if err := s.provisionForkTarget(result.StateRoot); err != nil {
 		return err
 	}
-	cleanup := func(operationErr error) error {
-		removeErr := os.RemoveAll(result.StateRoot)
-		syncErr := fileutil.SyncDirectory(filepath.Join(s.root, "threads"))
-		return errors.Join(operationErr, removeErr, syncErr)
-	}
 	targetLease, err := s.AcquireLease(child.ThreadID)
 	if err != nil {
-		return cleanup(err)
+		return fmt.Errorf(
+			"coding thread fork: acquire target lease; reservation left in place because its identity is unconfirmed: %w",
+			err,
+		)
 	}
 	sessionsRoot := filepath.Join(result.StateRoot, "sessions")
 	if mkdirErr := s.mkdirDurable(result.StateRoot, "sessions", 0o700); mkdirErr != nil {
-		return cleanup(errors.Join(mkdirErr, targetLease.Release()))
+		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, mkdirErr)
 	}
 	canonical, err := memory.NewJSONLStore(sessionsRoot)
 	if err != nil {
-		return cleanup(errors.Join(err, targetLease.Release()))
+		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, err)
 	}
 	backend := session.NewJSONLBackend(canonical)
 	writeErr := backend.ReplaceTurnHistory(ctx, child.SessionKey, history)
 	closeErr := backend.Close()
 	if err := errors.Join(writeErr, closeErr); err != nil {
-		return cleanup(errors.Join(err, targetLease.Release()))
+		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, err)
 	}
 	saveErr := s.Save(child)
 	verifyErr := s.verifyPublishedFork(targetLease, child)
@@ -427,12 +434,97 @@ func (s *Store) publishFork(
 	if !published {
 		saveErr = errors.Join(saveErr, verifyErr)
 	}
-	releaseErr := targetLease.Release()
 	if !published {
-		return cleanup(errors.Join(saveErr, releaseErr))
+		return s.quarantineUnpublishedFork(targetLease, child.ThreadID, saveErr)
 	}
+	releaseErr := targetLease.Release()
 	if err := errors.Join(saveErr, releaseErr); err != nil {
 		return &CommittedForkError{Result: result, Err: err}
+	}
+	return nil
+}
+
+// quarantineUnpublishedFork removes a failed preparation from the active
+// catalog without recursively deleting through a replaceable pathname. The
+// moved entry is kept recoverable only when it still contains the held lease;
+// a replacement is restored and never deleted.
+func (s *Store) quarantineUnpublishedFork(lease *Lease, threadID string, operationErr error) error {
+	root, err := os.OpenRoot(s.root)
+	if err != nil {
+		return errors.Join(
+			operationErr,
+			fmt.Errorf("coding thread fork: anchor cleanup root: %w", err),
+			lease.Release(),
+		)
+	}
+	defer func() { _ = root.Close() }()
+	if err := ensureDirectTrashDirectory(root, "trash"); err != nil {
+		return errors.Join(operationErr, err, lease.Release())
+	}
+	quarantineDir := filepath.Join("trash", "fork-preparations")
+	if err := ensureDirectTrashDirectory(root, quarantineDir); err != nil {
+		return errors.Join(operationErr, err, lease.Release())
+	}
+	quarantineID := threadID + "-" + NewThreadID()
+	activeName := filepath.Join("threads", threadID)
+	quarantineName := filepath.Join(quarantineDir, quarantineID)
+	if err := root.Rename(activeName, quarantineName); err != nil {
+		return errors.Join(
+			operationErr,
+			fmt.Errorf("coding thread fork: quarantine unpublished target: %w", err),
+			lease.Release(),
+		)
+	}
+	identityErr := validateQuarantinedForkLease(root, quarantineName, lease)
+	if identityErr != nil {
+		restoreErr := root.Rename(quarantineName, activeName)
+		syncErr := errors.Join(
+			fileutil.SyncDirectory(filepath.Join(s.root, "threads")),
+			fileutil.SyncDirectory(filepath.Join(s.root, quarantineDir)),
+		)
+		return errors.Join(
+			operationErr,
+			fmt.Errorf("coding thread fork: cleanup target identity changed: %w", identityErr),
+			restoreErr,
+			syncErr,
+			lease.Release(),
+		)
+	}
+	syncErr := errors.Join(
+		fileutil.SyncDirectory(filepath.Join(s.root, "threads")),
+		fileutil.SyncDirectory(filepath.Join(s.root, quarantineDir)),
+	)
+	return errors.Join(operationErr, syncErr, lease.Release())
+}
+
+func validateQuarantinedForkLease(root *os.Root, name string, lease *Lease) error {
+	targetRoot, err := root.OpenRoot(name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = targetRoot.Close() }()
+	return validateExistingForkLeaseRoot(targetRoot, lease)
+}
+
+func validateExistingForkLeaseRoot(root *os.Root, lease *Lease) error {
+	pinnedLease, err := root.OpenFile(leaseFileName, os.O_RDONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = pinnedLease.Close() }()
+	pinnedInfo, err := pinnedLease.Stat()
+	if err != nil {
+		return err
+	}
+	if validationErr := validateCatalogMetadataFile(pinnedLease, pinnedInfo); validationErr != nil {
+		return validationErr
+	}
+	leaseInfo, err := lease.file.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(pinnedInfo, leaseInfo) {
+		return fmt.Errorf("held lease no longer identifies the quarantined target")
 	}
 	return nil
 }

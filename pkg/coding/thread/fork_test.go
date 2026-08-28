@@ -150,9 +150,14 @@ func TestForkThreadLatestSupportsLegacyRootMarkersAndRejectsBounds(t *testing.T)
 
 func TestForkThreadRejectsRecordAboveCanonicalReaderLimitBeforeProvision(t *testing.T) {
 	store, source := newLeaseTestThread(t)
-	writeForkTestHistory(t, store, source, []providers.Message{{
+	writeForkTestHistory(t, store, source, []providers.Message{{Role: "user", Content: "seed", RootTurnStart: true}})
+	oversized, err := json.Marshal(providers.Message{
 		Role: "user", Content: strings.Repeat("x", memory.MaxJSONLRecordBytes), RootTurnStart: true,
-	}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceForkTestJSONL(t, store, source, append(oversized, '\n'))
 	lease, err := store.AcquireLease(source.ThreadID)
 	if err != nil {
 		t.Fatal(err)
@@ -171,6 +176,54 @@ func TestForkThreadRejectsRecordAboveCanonicalReaderLimitBeforeProvision(t *test
 	}
 	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
 		t.Fatalf("oversized record allocated target: %v", err)
+	}
+}
+
+func TestForkThreadRejectsRecordExpandedByCanonicalWriterBeforeProvision(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{Role: "user", Content: "seed", RootTurnStart: true}})
+	message := providers.Message{Role: "user", RootTurnStart: true}
+	base, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message.Content = strings.Repeat("x", memory.MaxJSONLRecordBytes-len(base)-1)
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw)+1 > memory.MaxJSONLRecordBytes {
+		t.Fatalf("source fixture exceeds canonical reader limit: %d", len(raw)+1)
+	}
+	normalized := message
+	createdAt := time.Now()
+	normalized.CreatedAt = &createdAt
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded)+1 <= memory.MaxJSONLRecordBytes {
+		t.Fatalf("normalized fixture does not exceed writer limit: %d", len(encoded)+1)
+	}
+	replaceForkTestJSONL(t, store, source, append(raw, '\n'))
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if forkErr == nil || !strings.Contains(forkErr.Error(), "JSONL record limit") {
+		t.Fatalf("expanded JSONL record error = %v", forkErr)
+	}
+	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
+		t.Fatalf("expanded record allocated target: %v", err)
 	}
 }
 
@@ -453,8 +506,58 @@ func TestForkThreadDoesNotPublishThroughReplacedTargetRoot(t *testing.T) {
 	if forkErr == nil || IsCommittedForkError(forkErr) {
 		t.Fatalf("replaced target classification = %v", forkErr)
 	}
-	if _, err := os.Lstat(targetRoot); !os.IsNotExist(err) {
-		t.Fatalf("replacement remains at active target: %v", err)
+	if info, err := os.Lstat(targetRoot); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("replacement symlink was not preserved: %v / %v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(movedRoot, metadataFileName)); err != nil {
+		t.Fatalf("fixture did not preserve moved original: %v", err)
+	}
+}
+
+func TestForkThreadDoesNotDeleteReplacementTargetDirectory(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedRoot := targetRoot + "-moved"
+	marker := filepath.Join(targetRoot, "unrelated-marker")
+	originalWrite := store.writeAtomic
+	store.writeAtomic = func(path string, data []byte, mode os.FileMode) error {
+		if !strings.Contains(path, targetID) {
+			return originalWrite(path, data, mode)
+		}
+		if err := originalWrite(path, data, mode); err != nil {
+			return err
+		}
+		if err := os.Rename(targetRoot, movedRoot); err != nil {
+			return err
+		}
+		if err := os.Mkdir(targetRoot, 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+			return err
+		}
+		return &fileutil.CommittedWriteError{Err: errors.New("injected post-save durability warning")}
+	}
+	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if forkErr == nil || IsCommittedForkError(forkErr) {
+		t.Fatalf("replacement directory classification = %v", forkErr)
+	}
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "keep" {
+		t.Fatalf("replacement marker = %q / %v", data, err)
 	}
 	if _, err := os.Stat(filepath.Join(movedRoot, metadataFileName)); err != nil {
 		t.Fatalf("fixture did not preserve moved original: %v", err)
@@ -548,6 +651,18 @@ func writeForkTestHistory(
 		t.Fatal(err)
 	}
 	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func replaceForkTestJSONL(t testing.TB, store *Store, metadata Metadata, data []byte) {
+	t.Helper()
+	root, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "sessions", strings.ReplaceAll(metadata.SessionKey, ":", "_")+".jsonl")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
