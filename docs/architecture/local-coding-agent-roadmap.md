@@ -438,6 +438,7 @@ project {
   project_root
   invocation_cwd
   git_worktree_root
+  git_dir
   git_common_dir
   git_origin
   git_branch

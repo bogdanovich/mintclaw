@@ -211,10 +211,22 @@ func TestDeletePlanRejectsProjectOrGitDirectoryNestedUnderThread(t *testing.T) {
 			want: "project root",
 		},
 		{
+			name: "Git directory",
+			mutate: func(metadata *Metadata, nested string) {
+				metadata.Project.Kind = ProjectKindGitWorktree
+				metadata.Project.GitWorktreeRoot = metadata.Project.ProjectRoot
+				metadata.Project.GitDir = nested
+				metadata.Project.GitCommonDir = metadata.Project.ProjectRoot
+				metadata.Project.ProjectKey = projectKey(ProjectKindGitWorktree, metadata.Project.ProjectRoot)
+			},
+			want: "Git directory",
+		},
+		{
 			name: "git common directory",
 			mutate: func(metadata *Metadata, nested string) {
 				metadata.Project.Kind = ProjectKindGitWorktree
 				metadata.Project.GitWorktreeRoot = metadata.Project.ProjectRoot
+				metadata.Project.GitDir = metadata.Project.ProjectRoot
 				metadata.Project.GitCommonDir = nested
 				metadata.Project.ProjectKey = projectKey(ProjectKindGitWorktree, metadata.Project.ProjectRoot)
 			},

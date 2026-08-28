@@ -34,6 +34,7 @@ type ProjectIdentity struct {
 	ProjectRoot     string      `json:"project_root"`
 	InvocationCWD   string      `json:"invocation_cwd"`
 	GitWorktreeRoot string      `json:"git_worktree_root,omitempty"`
+	GitDir          string      `json:"git_dir,omitempty"`
 	GitCommonDir    string      `json:"git_common_dir,omitempty"`
 	GitOrigin       string      `json:"git_origin,omitempty"`
 	GitBranch       string      `json:"git_branch,omitempty"`
@@ -45,13 +46,14 @@ type ProjectIdentity struct {
 func (p ProjectIdentity) Validate() error {
 	switch p.Kind {
 	case ProjectKindDirectory:
-		if p.GitWorktreeRoot != "" || p.GitCommonDir != "" || p.GitOrigin != "" ||
+		if p.GitWorktreeRoot != "" || p.GitDir != "" || p.GitCommonDir != "" || p.GitOrigin != "" ||
 			p.GitBranch != "" || p.GitHead != "" {
 			return fmt.Errorf("non-Git project contains Git metadata")
 		}
 	case ProjectKindGitWorktree:
-		if p.GitWorktreeRoot == "" || p.GitCommonDir == "" || p.ProjectRoot != p.GitWorktreeRoot {
-			return fmt.Errorf("git project requires matching worktree root and common directory")
+		if p.GitWorktreeRoot == "" || p.GitDir == "" || p.GitCommonDir == "" ||
+			p.ProjectRoot != p.GitWorktreeRoot {
+			return fmt.Errorf("git project requires matching worktree root, Git directory, and common directory")
 		}
 	default:
 		return fmt.Errorf("unsupported kind %q", p.Kind)
@@ -71,6 +73,9 @@ func (p ProjectIdentity) Validate() error {
 	}
 	if p.GitCommonDir != "" && !filepath.IsAbs(p.GitCommonDir) {
 		return fmt.Errorf("git common directory must be absolute")
+	}
+	if p.GitDir != "" && !filepath.IsAbs(p.GitDir) {
+		return fmt.Errorf("git directory must be absolute")
 	}
 	if p.GitOrigin != strings.TrimSpace(p.GitOrigin) || !utf8.ValidString(p.GitOrigin) ||
 		len(p.GitOrigin) > gitOriginMaxBytes {
@@ -128,6 +133,14 @@ func ResolveProject(ctx context.Context, cwd string) (ProjectIdentity, error) {
 	if err != nil {
 		return ProjectIdentity{}, fmt.Errorf("resolve Git common directory: %w", err)
 	}
+	gitDir, err := gitRequired(ctx, canonicalCWD, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return ProjectIdentity{}, err
+	}
+	gitDir, err = canonicalExistingDirectory(resolveGitPath(canonicalCWD, gitDir))
+	if err != nil {
+		return ProjectIdentity{}, fmt.Errorf("resolve Git directory: %w", err)
+	}
 	origin, err := gitOptional(ctx, canonicalCWD, 1, "config", "--get", "remote.origin.url")
 	if err != nil {
 		return ProjectIdentity{}, err
@@ -146,6 +159,7 @@ func ResolveProject(ctx context.Context, cwd string) (ProjectIdentity, error) {
 		ProjectRoot:     worktreeRoot,
 		InvocationCWD:   canonicalCWD,
 		GitWorktreeRoot: worktreeRoot,
+		GitDir:          gitDir,
 		GitCommonDir:    commonDir,
 		GitOrigin:       sanitizeGitRemote(origin),
 		GitBranch:       branch,

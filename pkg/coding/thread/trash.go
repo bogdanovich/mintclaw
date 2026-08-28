@@ -124,6 +124,7 @@ func validateDeleteProjectBoundaries(threadRoot string, project ProjectIdentity)
 		path string
 	}{
 		{name: "project root", path: project.ProjectRoot},
+		{name: "Git directory", path: project.GitDir},
 		{name: "Git common directory", path: project.GitCommonDir},
 	}
 	for _, candidate := range paths {

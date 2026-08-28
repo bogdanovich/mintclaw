@@ -54,7 +54,7 @@ func TestResolveProjectWithoutGitTreatsDirectoryAsNonGit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveProject() error = %v", err)
 	}
-	if identity.Kind != ProjectKindDirectory || identity.GitCommonDir != "" {
+	if identity.Kind != ProjectKindDirectory || identity.GitDir != "" || identity.GitCommonDir != "" {
 		t.Fatalf("identity without Git = %#v", identity)
 	}
 }
@@ -160,6 +160,9 @@ func TestResolveProjectGitWorktreeObservations(t *testing.T) {
 	if identity.GitCommonDir != filepath.Join(canonicalRepository, ".git") {
 		t.Fatalf("common dir = %q", identity.GitCommonDir)
 	}
+	if identity.GitDir != identity.GitCommonDir {
+		t.Fatalf("main worktree Git dir = %q, want common dir %q", identity.GitDir, identity.GitCommonDir)
+	}
 }
 
 func TestSeparateGitWorktreesAreSeparateProjects(t *testing.T) {
@@ -192,6 +195,16 @@ func TestSeparateGitWorktreesAreSeparateProjects(t *testing.T) {
 		t.Fatalf(
 			"linked worktrees do not share common dir: %q / %q",
 			mainIdentity.GitCommonDir,
+			worktreeIdentity.GitCommonDir,
+		)
+	}
+	if worktreeIdentity.GitDir == worktreeIdentity.GitCommonDir {
+		t.Fatalf("linked worktree Git dir unexpectedly equals common dir %q", worktreeIdentity.GitDir)
+	}
+	if !strings.HasPrefix(worktreeIdentity.GitDir, worktreeIdentity.GitCommonDir+string(filepath.Separator)) {
+		t.Fatalf(
+			"linked worktree Git dir %q is not below common dir %q",
+			worktreeIdentity.GitDir,
 			worktreeIdentity.GitCommonDir,
 		)
 	}

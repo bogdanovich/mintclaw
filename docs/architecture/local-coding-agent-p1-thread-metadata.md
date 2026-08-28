@@ -112,8 +112,9 @@ existing on-disk descriptors cannot bypass resolution-time redaction.
 
 The `project_key` is a typed SHA-256 digest of the canonical project root. The
 type separates a plain directory from a Git worktree at the same path. A linked
-Git worktree has its own key even though it shares `git_common_dir` with the
-main worktree. Branch, HEAD, and remote changes do not change the project key;
+Git worktree has its own key and worktree-private `git_dir` even though it shares
+`git_common_dir` with the main worktree. Branch, HEAD, and remote changes do not
+change the project key;
 they are restart/resume observations, not project ownership.
 
 Symlink aliases resolve to the same key. Moving a directory changes its key.
