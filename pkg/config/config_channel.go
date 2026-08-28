@@ -682,11 +682,12 @@ var channelSettingsFactory = map[string]any{
 }
 
 // RegisterChannelSettings registers a settings struct prototype for a custom
-// channel type. External packages (out-of-tree channels registered via
-// channels.RegisterFactory) call this from an init() so their channel type
-// passes config validation (isValidChannelType) and its settings block decodes
-// into the right struct (newChannelSettings). The prototype must be a struct
-// value, e.g. RegisterChannelSettings("my_channel", MyChannelSettings{}).
+// channel type. External packages call this from an init() so their channel
+// type passes config validation (isValidChannelType) and its settings block
+// decodes into the right struct (newChannelSettings). They then register a
+// typed channel factory, or a raw factory when construction needs the full
+// config. The prototype must be a struct value, e.g.
+// RegisterChannelSettings("my_channel", MyChannelSettings{}).
 func RegisterChannelSettings(channelType string, prototype any) {
 	channelSettingsMu.Lock()
 	defer channelSettingsMu.Unlock()

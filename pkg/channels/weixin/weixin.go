@@ -36,21 +36,7 @@ type WeixinChannel struct {
 }
 
 func init() {
-	channels.RegisterFactory(
-		config.ChannelWeixin,
-		func(channelName, channelType string, cfg *config.Config, bus *bus.MessageBus) (channels.Channel, error) {
-			bc := cfg.Channels[channelName]
-			decoded, err := bc.GetDecoded()
-			if err != nil {
-				return nil, err
-			}
-			weixinCfg, ok := decoded.(*config.WeixinSettings)
-			if !ok {
-				return nil, channels.ErrSendFailed
-			}
-			return NewWeixinChannel(bc, weixinCfg, bus)
-		},
-	)
+	channels.RegisterTypedFactory(config.ChannelWeixin, NewWeixinChannel)
 }
 
 // NewWeixinChannel creates a new WeixinChannel from config.

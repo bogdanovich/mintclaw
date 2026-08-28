@@ -8,11 +8,9 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
-// ChannelFactory is a constructor function that creates a Channel from config and message bus.
-// Each channel subpackage registers one or more factories via init().
-// channelName is the config map key for this channel instance (may differ from the channel type).
-// channelType is the channel type string used to look up the Channel config.
-type ChannelFactory func(channelName, channelType string, cfg *config.Config, bus *bus.MessageBus) (Channel, error)
+// ChannelFactory constructs the configured channel instance named by its
+// channel_list map key. Each channel subpackage registers its factories in init.
+type ChannelFactory func(channelName string, cfg *config.Config, bus *bus.MessageBus) (Channel, error)
 
 var (
 	factoriesMu sync.RWMutex
@@ -26,22 +24,19 @@ func RegisterFactory(name string, f ChannelFactory) {
 	factories[name] = f
 }
 
-// RegisterSafeFactory is a convenience wrapper that handles GetDecoded() error checking
-// and type assertion, reducing boilerplate in channel init() functions.
+// RegisterTypedFactory registers a factory whose settings were decoded by the
+// config boundary. Adapters with additional construction inputs use RegisterFactory.
 //
 // Usage:
 //
 //	func init() {
-//	    channels.RegisterSafeFactory(config.ChannelTelegram,
-//	        func(bc *config.Channel, c *config.TelegramSettings, b *bus.MessageBus) (channels.Channel, error) {
-//	            return NewTelegramChannel(bc, c, b)
-//	        })
+//	    channels.RegisterTypedFactory(config.ChannelTelegram, NewTelegramChannel)
 //	}
-func RegisterSafeFactory[S any](
+func RegisterTypedFactory[S any, C Channel](
 	channelType string,
-	ctor func(bc *config.Channel, settings *S, bus *bus.MessageBus) (Channel, error),
+	ctor func(bc *config.Channel, settings *S, bus *bus.MessageBus) (C, error),
 ) {
-	RegisterFactory(channelType, func(channelName, _ string, cfg *config.Config, b *bus.MessageBus) (Channel, error) {
+	RegisterFactory(channelType, func(channelName string, cfg *config.Config, b *bus.MessageBus) (Channel, error) {
 		bc := cfg.Channels[channelName]
 		if bc == nil {
 			return nil, fmt.Errorf("channel %q: config not found", channelName)
@@ -54,7 +49,11 @@ func RegisterSafeFactory[S any](
 		if !ok {
 			return nil, fmt.Errorf("channel %q: expected %T settings, got %T", channelName, (*S)(nil), decoded)
 		}
-		return ctor(bc, settings, b)
+		channel, err := ctor(bc, settings, b)
+		if err != nil {
+			return nil, err
+		}
+		return channel, nil
 	})
 }
 

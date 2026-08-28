@@ -1,7 +1,6 @@
 package vk
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -9,25 +8,23 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
-func makeVKTestBaseChannel(vkCfg config.VKSettings) *config.Channel {
-	settings, _ := json.Marshal(vkCfg)
+func makeVKTestBaseChannel(vkCfg config.VKSettings) (*config.Channel, *config.VKSettings) {
 	bc := &config.Channel{
-		Enabled:  true,
-		Type:     config.ChannelVK,
-		Settings: settings,
+		Enabled: true,
+		Type:    config.ChannelVK,
 	}
 	bc.SetName(config.ChannelVK)
-	return bc
+	return bc, &vkCfg
 }
 
 func TestNewVKChannel(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 
 	t.Run("missing group_id", func(t *testing.T) {
-		bc := makeVKTestBaseChannel(config.VKSettings{
+		bc, cfg := makeVKTestBaseChannel(config.VKSettings{
 			Token: *config.NewSecureString("test_token"),
 		})
-		ch, err := NewVKChannel(bc, msgBus)
+		ch, err := NewVKChannel(bc, cfg, msgBus)
 		if err != nil {
 			t.Fatalf("unexpected error during creation: %v", err)
 		}
@@ -40,12 +37,12 @@ func TestNewVKChannel(t *testing.T) {
 	})
 
 	t.Run("valid config with group_id", func(t *testing.T) {
-		bc := makeVKTestBaseChannel(config.VKSettings{
+		bc, cfg := makeVKTestBaseChannel(config.VKSettings{
 			Token:   *config.NewSecureString("test_token"),
 			GroupID: 123456789,
 		})
 		bc.SetName("vk_support")
-		ch, err := NewVKChannel(bc, msgBus)
+		ch, err := NewVKChannel(bc, cfg, msgBus)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -62,15 +59,13 @@ func TestNewVKChannel(t *testing.T) {
 			Token:   *config.NewSecureString("test_token"),
 			GroupID: 123456789,
 		}
-		settings, _ := json.Marshal(vkCfg)
 		bc := &config.Channel{
 			Enabled:   true,
 			Type:      "vk",
 			AllowFrom: []string{"123456789"},
-			Settings:  settings,
 		}
 		bc.SetName(config.ChannelVK)
-		ch, err := NewVKChannel(bc, msgBus)
+		ch, err := NewVKChannel(bc, &vkCfg, msgBus)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -87,7 +82,6 @@ func TestNewVKChannel(t *testing.T) {
 			Token:   *config.NewSecureString("test_token"),
 			GroupID: 123456789,
 		}
-		settings, _ := json.Marshal(vkCfg)
 		bc := &config.Channel{
 			Enabled: true,
 			Type:    "vk",
@@ -95,10 +89,9 @@ func TestNewVKChannel(t *testing.T) {
 				MentionOnly: false,
 				Prefixes:    []string{"/bot", "!bot"},
 			},
-			Settings: settings,
 		}
 		bc.SetName(config.ChannelVK)
-		ch, err := NewVKChannel(bc, msgBus)
+		ch, err := NewVKChannel(bc, &vkCfg, msgBus)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -110,11 +103,11 @@ func TestNewVKChannel(t *testing.T) {
 
 func TestVKChannel_MaxMessageLength(t *testing.T) {
 	msgBus := bus.NewMessageBus()
-	bc := makeVKTestBaseChannel(config.VKSettings{
+	bc, cfg := makeVKTestBaseChannel(config.VKSettings{
 		Token:   *config.NewSecureString("test_token"),
 		GroupID: 123456789,
 	})
-	ch, err := NewVKChannel(bc, msgBus)
+	ch, err := NewVKChannel(bc, cfg, msgBus)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -238,11 +231,11 @@ func TestVKChannel_ProcessAttachments(t *testing.T) {
 
 func TestVKChannel_VoiceCapabilities(t *testing.T) {
 	msgBus := bus.NewMessageBus()
-	bc := makeVKTestBaseChannel(config.VKSettings{
+	bc, cfg := makeVKTestBaseChannel(config.VKSettings{
 		Token:   *config.NewSecureString("test_token"),
 		GroupID: 123456789,
 	})
-	ch, err := NewVKChannel(bc, msgBus)
+	ch, err := NewVKChannel(bc, cfg, msgBus)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

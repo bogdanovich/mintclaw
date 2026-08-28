@@ -107,7 +107,7 @@ not in this package guide.
    Keep deterministic media constraints in `MediaPreflighter`; it must not make
    remote writes.
 6. Register the factory in the adapter's `init.go`, preferably with
-   `RegisterSafeFactory`. Add the first-party blank import to `pkg/gateway` so
+   `RegisterTypedFactory`. Add the first-party blank import to `pkg/gateway` so
    the factory is registered in the gateway build. Platform-specific build
    constraints may require a separate gateway file.
 7. Add focused adapter tests for normalization, allow-list/group behavior,
