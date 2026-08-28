@@ -193,7 +193,7 @@ func newContextBuilderWithMemoryStoreAndSkills(
 }
 
 func (cb *ContextBuilder) RegisterPromptSource(desc PromptSourceDescriptor) error {
-	err := cb.promptRegistryOrDefault().RegisterSource(desc)
+	err := cb.promptRegistry.RegisterSource(desc)
 	if err == nil {
 		cb.InvalidateCache()
 	}
@@ -201,28 +201,17 @@ func (cb *ContextBuilder) RegisterPromptSource(desc PromptSourceDescriptor) erro
 }
 
 func (cb *ContextBuilder) RegisterPromptContributor(contributor PromptContributor) error {
-	err := cb.promptRegistryOrDefault().RegisterContributor(contributor)
+	err := cb.promptRegistry.RegisterContributor(contributor)
 	if err == nil {
 		cb.InvalidateCache()
 	}
 	return err
 }
 
-func (cb *ContextBuilder) promptRegistryOrDefault() *PromptRegistry {
-	if cb.promptRegistry == nil {
-		cb.promptRegistry = NewPromptRegistry()
-	}
-	return cb.promptRegistry
-}
-
 func (cb *ContextBuilder) getIdentity(includeToolUseRule bool) string {
 	workspacePath, _ := filepath.Abs(filepath.Join(cb.workspace))
-	memoryDir := filepath.Join(workspacePath, "memory")
-	memoryFile := filepath.Join(memoryDir, "MEMORY.md")
-	if cb.memory != nil {
-		memoryDir, _ = filepath.Abs(cb.memory.memoryDir)
-		memoryFile, _ = filepath.Abs(cb.memory.memoryFile)
-	}
+	memoryDir, _ := filepath.Abs(cb.memory.memoryDir)
+	memoryFile, _ := filepath.Abs(cb.memory.memoryFile)
 	workspaceTmp := workspaceutil.TempDir(workspacePath)
 	version := config.FormatVersion()
 	rules := []string{}
@@ -363,7 +352,7 @@ type systemPromptBuildOptions struct {
 }
 
 func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) []PromptPart {
-	stack := NewPromptStack(cb.promptRegistryOrDefault())
+	stack := NewPromptStack(cb.promptRegistry)
 	add := func(part PromptPart) {
 		if err := stack.Add(part); err != nil {
 			logger.WarnCF("agent", "Skipping invalid prompt part", map[string]any{
@@ -659,9 +648,6 @@ func (cb *ContextBuilder) formatCodingRuntimeContext(codingContext CodingPromptC
 }
 
 func (cb *ContextBuilder) buildSkillsSummary(allowed []string) string {
-	if cb.skillsLoader == nil {
-		return ""
-	}
 	if len(allowed) == 0 {
 		return cb.skillsLoader.BuildSkillsSummary()
 	}
@@ -726,7 +712,7 @@ func (cb *ContextBuilder) EstimateSystemTokens(summary string, activeSkills []st
 		totalChars += 7 // separator \n\n---\n\n
 	}
 
-	if contributedParts, err := cb.promptRegistryOrDefault().Collect(context.Background(), PromptBuildRequest{
+	if contributedParts, err := cb.promptRegistry.Collect(context.Background(), PromptBuildRequest{
 		Summary:      summary,
 		ActiveSkills: append([]string(nil), activeSkills...),
 	}); err == nil {
@@ -777,15 +763,7 @@ func (cb *ContextBuilder) sourcePaths() []string {
 // skillRoots returns all skill root directories that can affect
 // BuildSkillsSummary output (workspace/global/builtin).
 func (cb *ContextBuilder) skillRoots() []string {
-	if cb.skillsLoader == nil {
-		return []string{filepath.Join(cb.workspace, "skills")}
-	}
-
-	roots := cb.skillsLoader.SkillRoots()
-	if len(roots) == 0 {
-		return []string{filepath.Join(cb.workspace, "skills")}
-	}
-	return roots
+	return cb.skillsLoader.SkillRoots()
 }
 
 // cacheBaseline holds the file existence snapshot and the latest observed
@@ -1113,7 +1091,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 		promptParts = append(promptParts, cb.buildActiveSkillsPromptParts(activeSkills)...)
 	}
 	if !req.SuppressDefaultSystemPrompt && personalPrompt {
-		if contributedParts, err := cb.promptRegistryOrDefault().Collect(context.Background(), req); err != nil {
+		if contributedParts, err := cb.promptRegistry.Collect(context.Background(), req); err != nil {
 			logger.WarnCF("agent", "Prompt contributor collection failed", map[string]any{
 				"error": err.Error(),
 			})
@@ -1127,7 +1105,7 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 			if strings.TrimSpace(overlay.Content) == "" {
 				continue
 			}
-			if err := cb.promptRegistryOrDefault().ValidatePart(overlay); err != nil {
+			if err := cb.promptRegistry.ValidatePart(overlay); err != nil {
 				logger.WarnCF("agent", "Skipping invalid prompt overlay", map[string]any{
 					"id":     overlay.ID,
 					"layer":  overlay.Layer,
@@ -1559,7 +1537,7 @@ The following skills are active for this request. Follow them when relevant.
 }
 
 func (cb *ContextBuilder) ResolveActiveSkillsForContext(skillNames []string) []string {
-	if cb.skillsLoader == nil || len(skillNames) == 0 {
+	if len(skillNames) == 0 {
 		return nil
 	}
 
@@ -1603,10 +1581,6 @@ func (cb *ContextBuilder) buildActiveSkillsPromptParts(skillNames []string) []Pr
 }
 
 func (cb *ContextBuilder) ListSkillNames() []string {
-	if cb.skillsLoader == nil {
-		return nil
-	}
-
 	allSkills := cb.skillsLoader.ListSkills()
 	names := make([]string, 0, len(allSkills))
 	for _, skill := range allSkills {
@@ -1617,7 +1591,7 @@ func (cb *ContextBuilder) ListSkillNames() []string {
 
 func (cb *ContextBuilder) ResolveSkillName(name string) (string, bool) {
 	name = strings.TrimSpace(name)
-	if name == "" || cb.skillsLoader == nil {
+	if name == "" {
 		return "", false
 	}
 
