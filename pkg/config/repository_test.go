@@ -410,6 +410,37 @@ func TestSecurityCopyForReplacementPreservesSecretForExplicitType(t *testing.T) 
 	}
 }
 
+func TestSecurityCopyForReplacementDoesNotInferMissingChannelType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	baseline := DefaultConfig()
+	baseline.Channels[ChannelTelegram] = testReplacementChannel(
+		t,
+		ChannelTelegram,
+		`{"token":"telegram-secret"}`,
+	)
+	repository := NewRepository(path)
+	if _, err := repository.Save(baseline); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	current, err := repository.ReadDurable()
+	if err != nil {
+		t.Fatalf("ReadDurable() error = %v", err)
+	}
+
+	replacement := DefaultConfig()
+	replacement.Channels[ChannelTelegram] = &Channel{Enabled: true, Settings: []byte(`{}`)}
+	if err = replacement.SecurityCopyForReplacement(path, current.Config); err != nil {
+		t.Fatalf("SecurityCopyForReplacement() error = %v", err)
+	}
+	if replacement.Channels[ChannelTelegram].Type != "" {
+		t.Fatalf("replacement type = %q, want empty", replacement.Channels[ChannelTelegram].Type)
+	}
+	if err = InitChannelList(replacement.Channels); err == nil ||
+		err.Error() != `channel "telegram" type is required` {
+		t.Fatalf("InitChannelList() error = %v, want explicit-type error", err)
+	}
+}
+
 func testReplacementChannel(t *testing.T, channelType string, settings string) *Channel {
 	t.Helper()
 	channel := &Channel{Enabled: true, Type: channelType, Settings: []byte(settings)}
