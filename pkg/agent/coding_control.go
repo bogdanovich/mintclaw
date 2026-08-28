@@ -65,3 +65,12 @@ func (al *AgentLoop) CompactCodingSession(ctx context.Context, sessionKey string
 		Background: false,
 	})
 }
+
+// CodingBackgroundCompactionActive reports whether routine compaction still
+// owns the thread after its foreground turn has completed.
+func (al *AgentLoop) CodingBackgroundCompactionActive(threadID string) bool {
+	if al == nil || al.compactionRunner == nil {
+		return false
+	}
+	return al.compactionRunner.codingThreadActive(threadID)
+}

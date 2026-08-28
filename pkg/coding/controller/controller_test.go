@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,9 +37,12 @@ type workspaceRefreshRuntime struct {
 
 type lifecycleRuntime struct {
 	*blockingRuntime
-	renamed  string
-	archived bool
+	renamed              string
+	archived             bool
+	backgroundCompacting atomic.Bool
 }
+
+func (r *lifecycleRuntime) BackgroundCompactionActive() bool { return r.backgroundCompacting.Load() }
 
 func (r *lifecycleRuntime) Rename(_ context.Context, title string) error {
 	r.renamed = title
@@ -322,6 +326,26 @@ func TestLifecycleCommandsDelegateOnlyWhileIdle(t *testing.T) {
 	<-runtime.runStarted
 	if err := controller.SetArchived(t.Context(), false); !errors.Is(err, ErrTurnActive) {
 		t.Fatalf("active SetArchived() error = %v", err)
+	}
+	runtime.backgroundCompacting.Store(true)
+	close(runtime.runRelease)
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := controller.SetArchived(t.Context(), false)
+		if errors.Is(err, ErrCompactionActive) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("post-turn background SetArchived() error = %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	runtime.backgroundCompacting.Store(false)
+	if err := controller.SetArchived(t.Context(), false); err != nil {
+		t.Fatalf("SetArchived() after background compaction = %v", err)
+	}
+	if runtime.archived {
+		t.Fatal("unarchive did not reach lifecycle runtime")
 	}
 	if err := controller.Close(t.Context()); err != nil {
 		t.Fatal(err)

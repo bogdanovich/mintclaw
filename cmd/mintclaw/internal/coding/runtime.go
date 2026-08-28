@@ -475,13 +475,18 @@ type nativeControllerRuntime struct {
 }
 
 var (
-	_ controller.Runtime          = (*nativeControllerRuntime)(nil)
-	_ frontend.TranscriptPager    = (*nativeControllerRuntime)(nil)
-	_ frontend.WorkspaceRefresher = (*nativeControllerRuntime)(nil)
-	_ frontend.ThreadLifecycle    = (*nativeControllerRuntime)(nil)
+	_ controller.Runtime                    = (*nativeControllerRuntime)(nil)
+	_ frontend.TranscriptPager              = (*nativeControllerRuntime)(nil)
+	_ frontend.WorkspaceRefresher           = (*nativeControllerRuntime)(nil)
+	_ frontend.ThreadLifecycle              = (*nativeControllerRuntime)(nil)
+	_ frontend.BackgroundCompactionObserver = (*nativeControllerRuntime)(nil)
 )
 
 const hydratedTranscriptTextBytes = 32 << 10
+
+func (r *nativeControllerRuntime) BackgroundCompactionActive() bool {
+	return r.loop != nil && r.loop.CodingBackgroundCompactionActive(r.metadata.ThreadID)
+}
 
 func (r *nativeControllerRuntime) Rename(_ context.Context, title string) error {
 	candidate, err := r.metadataState.rename(title)

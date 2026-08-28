@@ -320,6 +320,11 @@ func (c *Controller) coordinate() {
 				case compacting:
 					request.reply <- ErrCompactionActive
 				default:
+					if observer, ok := c.runtime.(frontend.BackgroundCompactionObserver); ok &&
+						observer.BackgroundCompactionActive() {
+						request.reply <- ErrCompactionActive
+						continue
+					}
 					lifecycle, ok := c.runtime.(frontend.ThreadLifecycle)
 					if !ok {
 						request.reply <- ErrUnsupported

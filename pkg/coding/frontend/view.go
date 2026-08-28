@@ -228,6 +228,12 @@ type ThreadLifecycle interface {
 	SetArchived(context.Context, bool) error
 }
 
+// BackgroundCompactionObserver closes the admission gap after a foreground
+// turn returns while its routine compaction worker still owns thread context.
+type BackgroundCompactionObserver interface {
+	BackgroundCompactionActive() bool
+}
+
 type Controller interface {
 	ViewSource
 	CommandSink
