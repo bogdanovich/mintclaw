@@ -105,13 +105,6 @@ type BrowserProfileConfig struct {
 	SensitiveFields      []string `json:"sensitive_fields,omitempty"       yaml:"-"`
 }
 
-func (profile BrowserProfileConfig) EffectiveNetworkMode() string {
-	if profile.NetworkMode == "" {
-		return BrowserNetworkExactOrigins
-	}
-	return profile.NetworkMode
-}
-
 type BrowserLimitsConfig struct {
 	Sessions        int `json:"sessions,omitempty"          yaml:"-"`
 	Tabs            int `json:"tabs,omitempty"              yaml:"-"`
@@ -154,7 +147,6 @@ func (cfg BrowserToolsConfig) PolicyRevision() (string, error) {
 	for targetName, target := range cfg.Targets {
 		profiles := make(map[string]BrowserProfileConfig, len(target.Profiles))
 		for profileName, profile := range target.Profiles {
-			profile.NetworkMode = profile.EffectiveNetworkMode()
 			profile.SensitiveFields, _ = browserpolicy.NormalizeSensitiveFieldTerms(profile.SensitiveFields)
 			profiles[profileName] = profile
 		}
@@ -326,9 +318,12 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	if profile.Mode != "" && profile.Mode != BrowserProfileManaged {
 		return fmt.Errorf("browser profile %q supports only mode %q", name, BrowserProfileManaged)
 	}
-	networkMode := profile.EffectiveNetworkMode()
+	networkMode := profile.NetworkMode
+	if profile.Enabled && networkMode == "" {
+		return fmt.Errorf("enabled browser profile %q requires network_mode", name)
+	}
 	if networkMode != BrowserNetworkExactOrigins && networkMode != BrowserNetworkPublicWeb &&
-		networkMode != BrowserNetworkAnyHTTP {
+		networkMode != BrowserNetworkAnyHTTP && networkMode != "" {
 		return fmt.Errorf("browser profile %q has unsupported network_mode %q", name, profile.NetworkMode)
 	}
 	if len(profile.AllowedOrigins) > BrowserMaxConfiguredOrigins {

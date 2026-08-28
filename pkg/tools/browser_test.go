@@ -560,6 +560,7 @@ func browserToolTestConfig() *config.Config {
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
 						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
+						NetworkMode:    config.BrowserNetworkExactOrigins,
 						AllowedOrigins: []string{"https://example.com"},
 					},
 				},
@@ -805,7 +806,10 @@ func TestBrowserTargetsReportsAndOrdersExplicitDefaultBeforeAlphabeticalTargets(
 	cfg.Tools.Browser.Targets["companion"] = config.BrowserTargetConfig{
 		Enabled: true,
 		Profiles: map[string]config.BrowserProfileConfig{
-			"managed": {Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true},
+			"managed": {
+				Enabled: true, Mode: config.BrowserProfileManaged,
+				NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: true,
+			},
 		},
 	}
 	cfg.Tools.Browser.DefaultTarget = "gateway"

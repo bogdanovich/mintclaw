@@ -1293,6 +1293,7 @@ func admittedBrowserConfig() *config.Config {
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
 						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
+						NetworkMode:    config.BrowserNetworkExactOrigins,
 						AllowedOrigins: []string{"https://example.com"},
 					},
 				},

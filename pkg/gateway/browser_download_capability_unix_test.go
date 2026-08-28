@@ -23,7 +23,10 @@ func TestCompanionDownloadDoesNotRequireGatewayPlaywrightDownloadSupport(t *test
 				Enabled: true, Placement: config.BrowserPlacementNode, NodeTarget: "personal-node",
 				Driver: config.BrowserDriverPlaywrightMCP,
 				Profiles: map[string]config.BrowserProfileConfig{
-					"managed": {Enabled: true, Mode: config.BrowserProfileManaged},
+					"managed": {
+						Enabled: true, Mode: config.BrowserProfileManaged,
+						NetworkMode: config.BrowserNetworkAnyHTTP,
+					},
 				},
 			},
 		},

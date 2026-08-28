@@ -1635,11 +1635,11 @@ func (broker *Broker) originAllowed(session Session, origin string) bool {
 	if !ok {
 		return false
 	}
-	if profile.EffectiveNetworkMode() == config.BrowserNetworkPublicWeb {
+	if profile.NetworkMode == config.BrowserNetworkPublicWeb {
 		normalized, err := config.NormalizeBrowserOrigin(origin)
 		return err == nil && normalized == origin
 	}
-	if profile.EffectiveNetworkMode() == config.BrowserNetworkAnyHTTP {
+	if profile.NetworkMode == config.BrowserNetworkAnyHTTP {
 		normalized, err := config.NormalizeBrowserHTTPOrigin(origin)
 		return err == nil && normalized == origin
 	}
@@ -1664,7 +1664,7 @@ func (broker *Broker) originNetworkAllowed(ctx context.Context, session Session,
 	if !ok {
 		return false
 	}
-	anyHTTP := profile.EffectiveNetworkMode() == config.BrowserNetworkAnyHTTP
+	anyHTTP := profile.NetworkMode == config.BrowserNetworkAnyHTTP
 	normalized, err := config.NormalizeBrowserOrigin(origin)
 	if anyHTTP {
 		normalized, err = config.NormalizeBrowserHTTPOrigin(origin)

@@ -79,7 +79,7 @@ func newBrowserNetworkPolicy(
 	lookupIP browserProxyLookup,
 	dial browserProxyDial,
 ) (*browserNetworkPolicy, error) {
-	mode := profile.EffectiveNetworkMode()
+	mode := profile.NetworkMode
 	if mode != config.BrowserNetworkExactOrigins && mode != config.BrowserNetworkPublicWeb &&
 		mode != config.BrowserNetworkAnyHTTP {
 		return nil, ErrDenied

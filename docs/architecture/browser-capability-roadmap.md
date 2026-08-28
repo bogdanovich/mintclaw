@@ -368,7 +368,7 @@ fix.
 
 | Order | Working mode | Reachability | Required behavior |
 | --- | --- | --- | --- |
-| N0 | `exact_origins` | Only explicitly configured HTTP or HTTPS origins | Keep the deployed default. Check every navigation and redirect hop; deny an unlisted redirect origin. |
+| N0 | `exact_origins` | Only explicitly configured HTTP or HTTPS origins | Keep the deployed baseline. Check every navigation and redirect hop; deny an unlisted redirect origin. |
 | N1 | `public_web` | Any public HTTP or HTTPS destination | Admit ordinary public-web navigation and redirects without per-site entries. Resolve and revalidate every hop, and deny loopback, private, link-local, multicast, unspecified, and cloud-metadata destinations, including DNS-rebinding transitions. |
 | N2 | `any_http` | Any syntactically valid HTTP or HTTPS destination, including loopback, private, link-local, and metadata endpoints | Require an explicit high-risk operator setting. Preserve URL normalization, bounded navigation, audit, profile policy, dry-run, effect classification, and approval rules; broaden only network destination admission. |
 

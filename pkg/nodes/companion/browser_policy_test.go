@@ -319,6 +319,13 @@ func TestConfigRejectsUnsafeCompanionBrowserProfiles(t *testing.T) {
 			want: "outside profile_directory",
 		},
 		{
+			name: "missing network mode",
+			mutate: func(profile *BrowserProfilePolicy, _ string) {
+				profile.NetworkMode = ""
+			},
+			want: "network_mode is required",
+		},
+		{
 			name: "private exact origin",
 			mutate: func(profile *BrowserProfilePolicy, _ string) {
 				profile.NetworkMode = nodes.BrowserNetworkExactOrigins

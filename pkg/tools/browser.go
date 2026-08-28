@@ -341,7 +341,7 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			}
 			profiles = append(profiles, browserProfileView{
 				Profile: profileName, Status: status, Reason: reason,
-				NetworkMode: profile.EffectiveNetworkMode(), DryRun: profile.DryRun,
+				NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
 				AllowApprovedActions: profile.AllowApprovedActions,
 				Readiness:            readiness,
 			})

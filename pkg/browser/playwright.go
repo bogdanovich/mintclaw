@@ -362,7 +362,7 @@ func newPlaywrightManagedHostFactory(
 		host.ProfileConfig.DryRun == host.ProfileConfig.AllowApprovedActions {
 		return nil, ErrDenied
 	}
-	networkMode := host.ProfileConfig.EffectiveNetworkMode()
+	networkMode := host.ProfileConfig.NetworkMode
 	if networkMode != config.BrowserNetworkExactOrigins &&
 		networkMode != config.BrowserNetworkPublicWeb &&
 		networkMode != config.BrowserNetworkAnyHTTP {
@@ -521,11 +521,11 @@ func playwrightServerWithNetworkPolicy(
 		}
 		origins = append(origins, origin)
 	}
-	if profile.EffectiveNetworkMode() == config.BrowserNetworkExactOrigins && len(origins) == 0 {
+	if profile.NetworkMode == config.BrowserNetworkExactOrigins && len(origins) == 0 {
 		return config.MCPServerConfig{}, errors.New("browser driver requires allowed origins")
 	}
-	if (profile.EffectiveNetworkMode() == config.BrowserNetworkPublicWeb ||
-		profile.EffectiveNetworkMode() == config.BrowserNetworkAnyHTTP) && len(origins) != 0 {
+	if (profile.NetworkMode == config.BrowserNetworkPublicWeb ||
+		profile.NetworkMode == config.BrowserNetworkAnyHTTP) && len(origins) != 0 {
 		return config.MCPServerConfig{}, errors.New("non-exact browser driver cannot use allowed origins")
 	}
 	sort.Strings(origins)
@@ -551,7 +551,7 @@ func playwrightServerWithNetworkPolicy(
 		"--proxy-server", proxyURL,
 		"--proxy-bypass", "<-loopback>",
 	)
-	if profile.EffectiveNetworkMode() == config.BrowserNetworkExactOrigins {
+	if profile.NetworkMode == config.BrowserNetworkExactOrigins {
 		server.Args = append(server.Args, "--allowed-origins", allowedOrigins)
 	}
 	return server, nil
