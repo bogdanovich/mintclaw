@@ -2806,6 +2806,25 @@ func TestBeginStream_FinalizeDrainsTailWithoutRetryingAmbiguousChunk(t *testing.
 	assert.Less(t, len([]rune(attempted[2])), len([]rune(attempted[1])), "known-unsent tail was not attempted")
 }
 
+func TestBeginStream_AmbiguousFinalizePreservesDeliveryClassification(t *testing.T) {
+	caller := &stubCaller{
+		callFn: func(context.Context, string, *ta.RequestData) (*ta.Response, error) {
+			return nil, &ta.Error{ErrorCode: http.StatusInternalServerError, Description: "server error"}
+		},
+	}
+	ch := newTestChannel(t, caller)
+	ch.tgCfg.Streaming.Enabled = true
+
+	streamer, err := ch.BeginStream(context.Background(), "12345")
+	require.NoError(t, err)
+	err = streamer.Finalize(context.Background(), "final")
+	require.Error(t, err)
+	var deliveryErr *channels.DeliveryError
+	require.ErrorAs(t, err, &deliveryErr)
+	assert.False(t, channels.DeliveryDefinitelyNotSent(err))
+	require.Len(t, caller.calls, 1)
+}
+
 func TestBeginStream_FinalizeHonorsRetryAfterForUnsentLegacyChunk(t *testing.T) {
 	callCount := 0
 	caller := &stubCaller{

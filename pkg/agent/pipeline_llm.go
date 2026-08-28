@@ -213,7 +213,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			_ = ts.requestHardAbort()
 			return completeLLMStage(LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}), nil
 		}
-		if isConfiguredStreamingVisibleError(err) {
+		if isConfiguredStreamingTerminalError(err) {
 			break
 		}
 

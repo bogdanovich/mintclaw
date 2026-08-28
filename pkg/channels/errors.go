@@ -51,6 +51,12 @@ func newDeliveryError(cause error, ambiguous bool) error {
 	return &DeliveryError{cause: cause, ambiguous: ambiguous}
 }
 
+// AmbiguousDeliveryError marks an error produced after a remote channel may
+// have accepted some or all of the message.
+func AmbiguousDeliveryError(cause error) error {
+	return newDeliveryError(cause, true)
+}
+
 // DefiniteNotSentDeliveryError marks an error produced before a remote channel
 // may have accepted any part of the message.
 func DefiniteNotSentDeliveryError(cause error) error {

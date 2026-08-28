@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -125,7 +126,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			}
 			if publisher.Published() {
 				logger.WarnCF("agent", "Streaming update failed after visible output", logFields)
-				return nil, true, configuredStreamingVisibleError{err: updateErr}
+				return nil, true, configuredStreamingTerminalError{err: updateErr}
 			}
 			logger.WarnCF(
 				"agent",
@@ -171,7 +172,7 @@ func (p *Pipeline) tryConfiguredStreamingLLM(
 			}
 			return fallbackResponse, true, err
 		}
-		return nil, true, configuredStreamingVisibleError{err: streamErr}
+		return nil, true, configuredStreamingTerminalError{err: streamErr}
 	}
 
 	if response != nil {
@@ -208,24 +209,24 @@ func logConfiguredStreamingSummary(
 	logger.DebugCF("agent", "configured streaming completed", fields)
 }
 
-type configuredStreamingVisibleError struct {
+type configuredStreamingTerminalError struct {
 	err error
 }
 
-func (e configuredStreamingVisibleError) Error() string {
+func (e configuredStreamingTerminalError) Error() string {
 	if e.err == nil {
-		return "configured streaming failed after visible output"
+		return "configured streaming reached a terminal delivery state"
 	}
 	return e.err.Error()
 }
 
-func (e configuredStreamingVisibleError) Unwrap() error {
+func (e configuredStreamingTerminalError) Unwrap() error {
 	return e.err
 }
 
-func isConfiguredStreamingVisibleError(err error) bool {
-	var visibleErr configuredStreamingVisibleError
-	return errors.As(err, &visibleErr)
+func isConfiguredStreamingTerminalError(err error) bool {
+	var terminalErr configuredStreamingTerminalError
+	return errors.As(err, &terminalErr)
 }
 
 func (s *finalizationStream) finalize(
@@ -241,14 +242,14 @@ func (s *finalizationStream) finalize(
 	s.publisher = nil
 	visibleBeforeFinalize := publisher.Published()
 	if err := publisher.Finalize(ctx, content, contextUsage); err != nil {
-		if visibleBeforeFinalize {
-			logger.WarnCF("agent", "stream final flush failed after visible output", map[string]any{
+		if visibleBeforeFinalize || !channels.DeliveryDefinitelyNotSent(err) {
+			logger.WarnCF("agent", "stream final flush may have reached the channel", map[string]any{
 				"agent_id": ts.agent.ID,
 				"channel":  ts.channel,
 				"model":    s.modelName,
 				"error":    err.Error(),
 			})
-			return configuredStreamingVisibleError{err: err}
+			return configuredStreamingTerminalError{err: err}
 		}
 		publisher.Cancel(ctx)
 		logger.WarnCF("agent", "stream final flush failed", map[string]any{
