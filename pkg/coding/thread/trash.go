@@ -43,6 +43,7 @@ type DeletePlan struct {
 	Title       string   `json:"title"`
 	ThreadRoot  string   `json:"thread_root"`
 	OwnedPaths  []string `json:"owned_paths"`
+	ProjectKey  string   `json:"project_key"`
 	ProjectRoot string   `json:"project_root"`
 }
 
@@ -113,7 +114,7 @@ func (s *Store) PlanDelete(threadID string) (DeletePlan, error) {
 	sort.Strings(paths)
 	return DeletePlan{
 		ThreadID: threadID, Title: metadata.Title, ThreadRoot: threadRoot,
-		OwnedPaths: paths, ProjectRoot: metadata.Project.ProjectRoot,
+		OwnedPaths: paths, ProjectKey: metadata.Project.ProjectKey, ProjectRoot: metadata.Project.ProjectRoot,
 	}, nil
 }
 

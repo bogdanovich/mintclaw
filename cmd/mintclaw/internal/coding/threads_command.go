@@ -68,7 +68,7 @@ func runDeleteThread(
 	if err != nil {
 		return err
 	}
-	if plan.ProjectRoot != project.ProjectRoot {
+	if plan.ProjectKey != project.ProjectKey {
 		return fmt.Errorf("coding thread delete: thread belongs to project %q", plan.ProjectRoot)
 	}
 	if confirmation == "" {
@@ -87,7 +87,7 @@ func runDeleteThread(
 	if err != nil {
 		return err
 	}
-	if confirmed.ProjectRoot != project.ProjectRoot {
+	if confirmed.ProjectKey != project.ProjectKey {
 		return fmt.Errorf("coding thread delete: project changed before confirmation")
 	}
 	trashed, err := store.TrashThread(lease, confirmation, deps.now())

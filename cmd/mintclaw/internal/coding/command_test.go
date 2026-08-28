@@ -160,7 +160,7 @@ func TestThreadsDeleteRequiresExactPlanConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if planned.Action != "planned" || planned.Plan.ThreadID != created.ThreadID || planned.Trash != nil ||
-		len(planned.Plan.OwnedPaths) == 0 {
+		planned.Plan.ProjectKey == "" || len(planned.Plan.OwnedPaths) == 0 {
 		t.Fatalf("delete plan = %+v", planned)
 	}
 	if _, err := executeCommandError(
@@ -198,6 +198,24 @@ func TestThreadsDeleteRequiresExactPlanConfirmation(t *testing.T) {
 	entries, err := os.ReadDir(projectRoot)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("delete touched project: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestThreadsDeleteRejectsChangedProjectIdentityAtSameRoot(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	createdOutput := executeCommand(t, newCodeCommand(deps), "keep project scope", "--json")
+	var created commandResult
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatal(err)
+	}
+	runPickerGit(t, projectRoot, "init")
+	if _, err := executeCommandError(
+		newThreadsCommand(deps), "delete", created.ThreadID, "--json",
+	); err == nil || !strings.Contains(err.Error(), "belongs to project") {
+		t.Fatalf("changed project identity error = %v", err)
 	}
 }
 

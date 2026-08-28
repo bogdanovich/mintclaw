@@ -208,12 +208,41 @@ func (s *Store) acquireLease(threadID string, owner LeaseOwner) (*Lease, error) 
 		_ = file.Close()
 		return nil, fmt.Errorf("coding thread lease: lock %q: %w", threadID, err)
 	}
+	if err := s.validateAcquiredLeasePath(threadID, file); err != nil {
+		_ = releaseThreadLeaseFile(file)
+		_ = file.Close()
+		return nil, fmt.Errorf("coding thread lease: revalidate locked path %q: %w", threadID, err)
+	}
 	if err := writeLeaseOwner(file, owner); err != nil {
 		_ = releaseThreadLeaseFile(file)
 		_ = file.Close()
 		return nil, fmt.Errorf("coding thread lease: record owner for %q: %w", threadID, err)
 	}
 	return &Lease{storeRoot: s.root, threadID: threadID, owner: owner, file: file}, nil
+}
+
+// validateAcquiredLeasePath closes the open-before-lock race. A contender may
+// open the lock file, pause, and acquire that stale handle after another owner
+// moves the thread to trash. Writer authority is granted only when a fresh
+// anchored open still identifies the locked active-path file.
+func (s *Store) validateAcquiredLeasePath(threadID string, locked *os.File) error {
+	current, err := s.openLeaseFile(threadID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = current.Close() }()
+	lockedInfo, err := locked.Stat()
+	if err != nil {
+		return err
+	}
+	currentInfo, err := current.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(lockedInfo, currentInfo) {
+		return fmt.Errorf("locked file no longer identifies the active thread path")
+	}
+	return nil
 }
 
 func (s *Store) openLeaseFile(threadID string) (*os.File, error) {

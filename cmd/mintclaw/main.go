@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -110,8 +111,13 @@ func machineJSONRequested(args []string) bool {
 		switch arg {
 		case "doctor", "nodes", "agent", "code", "resume", "threads":
 			hasJSONCommand = true
-		case "--json", "--json=true", "--json=1":
+		case "--json":
 			hasJSON = true
+		default:
+			if value, ok := strings.CutPrefix(arg, "--json="); ok {
+				parsed, err := strconv.ParseBool(value)
+				hasJSON = hasJSON || err == nil && parsed
+			}
 		}
 	}
 	return hasJSONCommand && hasJSON
