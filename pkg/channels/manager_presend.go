@@ -15,7 +15,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	key := name + ":" + chatID
 	traceScope := primaryTraceScope(msg.TraceScopes)
 	streamKey := streamSuppressionKey(name, chatID, msg.SessionKey, traceScope)
-	activeStreamKey, streamActive := m.streamCoordinator().activeKey(name, chatID, msg.SessionKey, traceScope)
+	activeStreamKey, streamActive := m.stream.activeKey(name, chatID, msg.SessionKey, traceScope)
 
 	m.cleanupDeliveryState(ctx, name, chatID, &msg.Context, ch, deliveryCleanupOptions{
 		StopTyping:   true,
@@ -37,7 +37,7 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 		if streamActive {
 			return nil, true
 		}
-		if m.streamCoordinator().tombstoneActiveForMessage(
+		if m.stream.tombstoneActiveForMessage(
 			name, chatID, msg.SessionKey, traceScope,
 			time.Now(),
 		) {
@@ -49,10 +49,10 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	// outbound. Earlier queued visible messages must still be delivered.
 	if isFinalMessage {
 		if streamActive {
-			if !m.streamCoordinator().consumeActive(activeStreamKey) {
+			if !m.stream.consumeActive(activeStreamKey) {
 				streamActive = false
 			} else {
-				if entry, loaded := m.streamCoordinator().takePlaceholder(key); loaded && entry.id != "" {
+				if entry, loaded := m.stream.takePlaceholder(key); loaded && entry.id != "" {
 					// Prefer deleting the placeholder (cleaner UX than editing to same content)
 					if deleter, ok := ch.(MessageDeleter); ok {
 						_ = deleter.DeleteMessage(ctx, chatID, entry.id) // best effort
@@ -69,11 +69,11 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 						}
 					}
 				}
-				if m.streamCoordinator().hasToolFeedback() {
+				if m.stream.hasToolFeedback() {
 					keys, _ := toolFeedbackTargets(
 						name, ch, chatID, &msg.Context, msg.SessionKey, msg.TraceScopes,
 					)
-					m.streamCoordinator().releaseToolFeedbackTerminals(keys)
+					m.stream.releaseToolFeedbackTerminals(keys)
 				}
 				return nil, true
 			}
@@ -83,16 +83,16 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	if streamActive {
 		return nil, false
 	}
-	if m.streamCoordinator().activeForChat(name, chatID) {
+	if m.stream.activeForChat(name, chatID) {
 		return nil, false
 	}
 
 	if !isAuxiliaryMessage {
-		m.streamCoordinator().clearTombstone(streamKey)
+		m.stream.clearTombstone(streamKey)
 	}
 
 	// 5. Try editing placeholder
-	if entry, loaded := m.streamCoordinator().takePlaceholder(key); loaded && entry.id != "" {
+	if entry, loaded := m.stream.takePlaceholder(key); loaded && entry.id != "" {
 		logger.InfoCF("channels", "Evaluating placeholder edit bypass",
 			map[string]any{
 				"channel":          name,

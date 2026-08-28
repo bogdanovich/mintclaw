@@ -198,7 +198,7 @@ func (m *Manager) UnregisterHTTPHandler(pattern string) {
 }
 
 func (m *Manager) StartAll(ctx context.Context) error {
-	return m.lifecycle.startAll(ctx, m, m.deliveryRuntime(), m.streamCoordinator())
+	return m.lifecycle.startAll(ctx, m, m.delivery, m.stream)
 }
 
 func (l *ChannelLifecycle) startAll(
@@ -365,7 +365,7 @@ func (l *ChannelLifecycle) startAll(
 }
 
 func (m *Manager) StopAll(ctx context.Context) error {
-	return m.lifecycle.stopAll(ctx, m, m.deliveryRuntime(), m.streamCoordinator())
+	return m.lifecycle.stopAll(ctx, m, m.delivery, m.stream)
 }
 
 func (l *ChannelLifecycle) stopAll(

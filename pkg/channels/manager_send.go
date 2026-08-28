@@ -13,14 +13,14 @@ import (
 // delivered (or all retries are exhausted), which preserves ordering when
 // a subsequent operation depends on the message having been sent.
 func (m *Manager) SendMessage(ctx context.Context, msg bus.OutboundMessage) error {
-	return m.deliveryRuntime().sendMessageWithRetryPolicy(ctx, msg, true, publishDefinitiveOutcome)
+	return m.delivery.sendMessageWithRetryPolicy(ctx, msg, true, publishDefinitiveOutcome)
 }
 
 // SendMessageProvisional suppresses a definitely-not-sent failure outcome so
 // the caller can try a fallback. Success and ambiguous failure remain terminal.
 // Callers must check DeliveryDefinitelyNotSent before attempting the fallback.
 func (m *Manager) SendMessageProvisional(ctx context.Context, msg bus.OutboundMessage) error {
-	return m.deliveryRuntime().sendMessageWithRetryPolicy(ctx, msg, true, publishSuccessOnly)
+	return m.delivery.sendMessageWithRetryPolicy(ctx, msg, true, publishSuccessOnly)
 }
 
 // SendMessageDefiniteRetryOnly retries only channel rejections known to occur
@@ -30,7 +30,7 @@ func (m *Manager) SendMessageDefiniteRetryOnly(
 	ctx context.Context,
 	msg bus.OutboundMessage,
 ) error {
-	return m.deliveryRuntime().sendMessageWithRetryPolicy(ctx, msg, false, publishDefinitiveOutcome)
+	return m.delivery.sendMessageWithRetryPolicy(ctx, msg, false, publishDefinitiveOutcome)
 }
 
 func (r *DeliveryRuntime) sendMessageWithRetryPolicy(
@@ -146,7 +146,7 @@ func (m *Manager) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) e
 	if err := m.PreflightMedia(ctx, msg); err != nil {
 		return newDeliveryError(err, false)
 	}
-	return m.deliveryRuntime().sendMedia(ctx, msg, publishDefinitiveOutcome, true)
+	return m.delivery.sendMedia(ctx, msg, publishDefinitiveOutcome, true)
 }
 
 // SendMediaDefiniteRetryOnly retries only channel rejections known to occur
@@ -158,7 +158,7 @@ func (m *Manager) SendMediaDefiniteRetryOnly(
 	if err := m.PreflightMedia(ctx, msg); err != nil {
 		return newDeliveryError(err, false)
 	}
-	return m.deliveryRuntime().sendMedia(ctx, msg, publishDefinitiveOutcome, false)
+	return m.delivery.sendMedia(ctx, msg, publishDefinitiveOutcome, false)
 }
 
 // SendMediaProvisional suppresses a definitely-not-sent failure outcome so the
@@ -168,7 +168,7 @@ func (m *Manager) SendMediaProvisional(ctx context.Context, msg bus.OutboundMedi
 	if err := m.PreflightMedia(ctx, msg); err != nil {
 		return newDeliveryError(err, false)
 	}
-	return m.deliveryRuntime().sendMedia(ctx, msg, publishSuccessOnly, true)
+	return m.delivery.sendMedia(ctx, msg, publishSuccessOnly, true)
 }
 
 // PreflightMedia applies deterministic channel-owned media constraints before

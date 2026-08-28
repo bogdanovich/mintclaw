@@ -44,7 +44,7 @@ func (m *Manager) GetEnabledChannels() []string {
 // Reload updates the config reference without restarting channels.
 // This is used when channel config hasn't changed but other parts of the config have.
 func (m *Manager) Reload(ctx context.Context, cfg *config.Config) error {
-	return m.lifecycle.reload(ctx, cfg, m, m.deliveryRuntime(), m.streamCoordinator())
+	return m.lifecycle.reload(ctx, cfg, m, m.delivery, m.stream)
 }
 
 func (l *ChannelLifecycle) reload(
@@ -75,9 +75,6 @@ func (l *ChannelLifecycle) reload(
 	list := make(map[string]string, len(desiredHashes))
 	for name, hash := range desiredHashes {
 		list[name] = hash
-	}
-	if l.restartRequired == nil {
-		l.restartRequired = make(map[string]string)
 	}
 	added, removed := compareChannels(l.channelHashes, list)
 	inactiveChanged := make(map[string]Channel)
@@ -260,7 +257,7 @@ func (l *ChannelLifecycle) registerChannelDuringTransition(
 }
 
 func (m *Manager) UnregisterChannel(name string) {
-	m.lifecycle.unregisterChannel(m, m.deliveryRuntime(), m.streamCoordinator(), name)
+	m.lifecycle.unregisterChannel(m, m.delivery, m.stream, name)
 }
 
 func (l *ChannelLifecycle) unregisterChannel(

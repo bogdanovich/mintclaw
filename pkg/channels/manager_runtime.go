@@ -17,12 +17,11 @@ func NewManager(
 	m := &Manager{
 		bus:       messageBus,
 		lifecycle: newChannelLifecycle(cfg, store),
-		delivery:  newDeliveryRuntime(),
 		stream:    newStreamCoordinator(),
 	}
-	m.delivery.bindHost(m)
+	m.delivery = newDeliveryRuntime(m)
 	if cfg != nil {
-		m.streamCoordinator().initializeToolFeedback(
+		m.stream.initializeToolFeedback(
 			ToolFeedbackAnimatorConfig{
 				AnimationInterval: cfg.Agents.Defaults.GetToolFeedbackAnimationInterval(),
 				MinEditInterval:   cfg.Agents.Defaults.GetToolFeedbackEditMinInterval(),
@@ -49,23 +48,6 @@ func NewManager(
 	return m, nil
 }
 
-func (m *Manager) deliveryRuntime() *DeliveryRuntime {
-	if m.delivery == nil {
-		m.delivery = newDeliveryRuntime()
-	}
-	if m.delivery.host == nil {
-		m.delivery.bindHost(m)
-	}
-	return m.delivery
-}
-
-func (m *Manager) streamCoordinator() *StreamCoordinator {
-	if m.stream == nil {
-		m.stream = newStreamCoordinator()
-	}
-	return m.stream
-}
-
 func (m *Manager) deliveryChannel(name string) (Channel, bool) {
 	return m.lifecycle.channel(name)
 }
@@ -83,7 +65,7 @@ func (m *Manager) deliverySplitOnMarker() bool {
 }
 
 func (m *Manager) deliveryToolFeedbackEnabled() bool {
-	return m.streamCoordinator().hasToolFeedback()
+	return m.stream.hasToolFeedback()
 }
 
 func (m *Manager) lifecycleBus() *bus.MessageBus {

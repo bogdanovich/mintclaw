@@ -17,7 +17,7 @@ func (m *Manager) GetStreamer(
 	channelName, chatID, sessionKey, requestID string,
 	traceScope runtimeevents.TraceScope,
 ) (bus.Streamer, bool) {
-	return m.streamCoordinator().getStreamer(
+	return m.stream.getStreamer(
 		ctx, m, channelName, chatID, sessionKey, requestID, traceScope,
 	)
 }
