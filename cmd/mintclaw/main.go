@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,10 +109,15 @@ func machineJSONRequested(args []string) bool {
 	hasJSON := false
 	for _, arg := range args {
 		switch arg {
-		case "doctor", "nodes", "agent", "code", "resume":
+		case "doctor", "nodes", "agent", "code", "resume", "threads":
 			hasJSONCommand = true
-		case "--json", "--json=true", "--json=1":
+		case "--json":
 			hasJSON = true
+		default:
+			if value, ok := strings.CutPrefix(arg, "--json="); ok {
+				parsed, err := strconv.ParseBool(value)
+				hasJSON = hasJSON || err == nil && parsed
+			}
 		}
 	}
 	return hasJSONCommand && hasJSON
@@ -163,6 +169,7 @@ mintclaw --no-color status`,
 		configcmd.NewConfigCommand(),
 		coding.NewCodeCommand(),
 		coding.NewResumeCommand(),
+		coding.NewThreadsCommand(),
 		onboard.NewOnboardCommand(),
 		agent.NewAgentCommand(),
 		auth.NewAuthCommand(),

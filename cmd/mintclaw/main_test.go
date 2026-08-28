@@ -52,6 +52,7 @@ func TestNewMintClawCommand(t *testing.T) {
 		"resume",
 		"skills",
 		"status",
+		"threads",
 		"update",
 		"version",
 	}
@@ -76,13 +77,17 @@ func TestMachineJSONRequested(t *testing.T) {
 		{name: "doctor json", args: []string{"doctor", "--json"}, want: true},
 		{name: "global flag first", args: []string{"--no-color", "doctor", "--json=true"}, want: true},
 		{name: "json numeric true", args: []string{"doctor", "--json=1"}, want: true},
+		{name: "json short true", args: []string{"threads", "delete", "id", "--json=t"}, want: true},
+		{name: "json uppercase true", args: []string{"threads", "delete", "id", "--json=TRUE"}, want: true},
 		{name: "human doctor", args: []string{"doctor"}, want: false},
 		{name: "nodes json", args: []string{"nodes", "list", "--json"}, want: true},
 		{name: "live agent json", args: []string{"agent", "live", "--json"}, want: true},
 		{name: "coding json", args: []string{"code", "fix it", "--json"}, want: true},
 		{name: "resume json", args: []string{"resume", "--json"}, want: true},
+		{name: "threads json", args: []string{"threads", "delete", "id", "--json"}, want: true},
 		{name: "other json command", args: []string{"status", "--json"}, want: false},
 		{name: "explicit false", args: []string{"doctor", "--json=false"}, want: false},
+		{name: "invalid bool", args: []string{"threads", "delete", "id", "--json=yes"}, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

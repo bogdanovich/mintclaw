@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -138,6 +139,129 @@ func TestResumeArchivedViewIsExplicitAndReversible(t *testing.T) {
 	}
 	if _, err := executeCommandError(newResumeCommand(deps), created.ThreadID, "--archived"); err == nil {
 		t.Fatal("explicit thread ID accepted redundant --archived")
+	}
+}
+
+func TestThreadsDeleteRequiresExactPlanConfirmation(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	createdOutput := executeCommand(t, newCodeCommand(deps), "delete safely", "--json")
+	var created commandResult
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatal(err)
+	}
+	var planned deleteThreadOutput
+	if err := json.Unmarshal(
+		executeCommand(t, newThreadsCommand(deps), "delete", created.ThreadID, "--json"),
+		&planned,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if planned.Action != "planned" || planned.Plan.ThreadID != created.ThreadID || planned.Trash != nil ||
+		planned.Plan.ProjectKey == "" || len(planned.Plan.OwnedPaths) == 0 {
+		t.Fatalf("delete plan = %+v", planned)
+	}
+	if _, err := executeCommandError(
+		newThreadsCommand(deps), "delete", created.ThreadID, "--confirm", "wrong",
+	); err == nil || !strings.Contains(err.Error(), "exactly match") {
+		t.Fatalf("wrong confirmation error = %v", err)
+	}
+	now = now.Add(time.Minute)
+	var deleted deleteThreadOutput
+	if err := json.Unmarshal(executeCommand(
+		t,
+		newThreadsCommand(deps),
+		"delete",
+		created.ThreadID,
+		"--confirm",
+		created.ThreadID,
+		"--json",
+	), &deleted); err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Action != "trashed" || deleted.Trash == nil || deleted.Trash.ThreadID != created.ThreadID ||
+		!deleted.Trash.At.Equal(now) {
+		t.Fatalf("deleted output = %+v", deleted)
+	}
+	if _, err := os.Stat(deleted.Trash.Path); err != nil {
+		t.Fatalf("recoverable trash path: %v", err)
+	}
+	var listed listResult
+	if err := json.Unmarshal(executeCommand(t, newResumeCommand(deps), "--json"), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Threads) != 0 {
+		t.Fatalf("deleted thread remained active: %+v", listed.Threads)
+	}
+	entries, err := os.ReadDir(projectRoot)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("delete touched project: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestThreadsDeleteRejectsChangedProjectIdentityAtSameRoot(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	createdOutput := executeCommand(t, newCodeCommand(deps), "keep project scope", "--json")
+	var created commandResult
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatal(err)
+	}
+	runPickerGit(t, projectRoot, "init")
+	if _, err := executeCommandError(
+		newThreadsCommand(deps), "delete", created.ThreadID, "--json",
+	); err == nil || !strings.Contains(err.Error(), "belongs to project") {
+		t.Fatalf("changed project identity error = %v", err)
+	}
+}
+
+func TestDeleteRendersRecoveryPathAfterCommittedDurabilityWarning(t *testing.T) {
+	trash := thread.TrashResult{
+		ThreadID: thread.NewThreadID(),
+		TrashID:  "trash-id",
+		Path:     filepath.Join(t.TempDir(), "recoverable-thread"),
+		At:       time.Now(),
+	}
+	warning := &thread.CommittedTrashError{Result: trash, Err: errors.New("directory sync failed")}
+	var output bytes.Buffer
+
+	err := finishDeleteThread(
+		&output,
+		deleteThreadOutput{Action: "trashed", Trash: &trash},
+		false,
+		warning,
+	)
+
+	if !thread.IsCommittedTrashError(err) || !strings.Contains(output.String(), trash.Path) {
+		t.Fatalf("error = %v, output = %q", err, output.String())
+	}
+
+	output.Reset()
+	ordinary := errors.New("rename failed")
+	err = finishDeleteThread(
+		&output,
+		deleteThreadOutput{Action: "trashed", Trash: &trash},
+		false,
+		ordinary,
+	)
+	if !errors.Is(err, ordinary) || output.Len() != 0 {
+		t.Fatalf("ordinary error = %v, output = %q", err, output.String())
+	}
+
+	output.Reset()
+	preMoveCommitted := &fileutil.CommittedWriteError{Err: errors.New("trash directory sync failed")}
+	err = finishDeleteThread(
+		&output,
+		deleteThreadOutput{Action: "trashed", Trash: &thread.TrashResult{}},
+		false,
+		preMoveCommitted,
+	)
+	if !errors.Is(err, preMoveCommitted) || output.Len() != 0 {
+		t.Fatalf("pre-move committed error = %v, output = %q", err, output.String())
 	}
 }
 

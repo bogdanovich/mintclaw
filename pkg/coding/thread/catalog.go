@@ -377,6 +377,14 @@ func loadCatalogMetadataWithOpeners(
 		return Metadata{}, fmt.Errorf("coding thread catalog: open thread %q: %w", threadID, err)
 	}
 	defer func() { _ = threadRoot.Close() }()
+	return loadCatalogMetadataFromDirectory(threadRoot, threadID, metadataOpener)
+}
+
+func loadCatalogMetadataFromDirectory(
+	threadRoot *catalogDirectory,
+	threadID string,
+	metadataOpener catalogMetadataOpener,
+) (Metadata, error) {
 	file, err := metadataOpener(threadRoot)
 	if err != nil {
 		return Metadata{}, fmt.Errorf("coding thread catalog: open thread %q metadata: %w", threadID, err)
@@ -386,9 +394,9 @@ func loadCatalogMetadataWithOpeners(
 		_ = file.Close()
 		return Metadata{}, fmt.Errorf("coding thread catalog: inspect open thread %q metadata: %w", threadID, err)
 	}
-	if !openedInfo.Mode().IsRegular() {
+	if err := validateCatalogMetadataFile(file, openedInfo); err != nil {
 		_ = file.Close()
-		return Metadata{}, fmt.Errorf("coding thread catalog: open thread %q metadata is not a regular file", threadID)
+		return Metadata{}, fmt.Errorf("coding thread catalog: open thread %q metadata: %w", threadID, err)
 	}
 	return loadMetadataFile(threadID, file)
 }

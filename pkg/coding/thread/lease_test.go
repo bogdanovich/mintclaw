@@ -219,6 +219,29 @@ func TestThreadLeaseRejectsMissingThreadAndInvalidOwner(t *testing.T) {
 	}
 }
 
+func TestLockedLeasePathRevalidationRejectsMovedOrRecreatedThread(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	stale, err := store.openLeaseFile(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stale.Close() }()
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(threadRoot, threadRoot+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.validateAcquiredLeasePath(metadata.ThreadID, stale); err == nil ||
+		!strings.Contains(err.Error(), "no longer identifies") {
+		t.Fatalf("validateAcquiredLeasePath() error = %v", err)
+	}
+}
+
 func TestStoreValidateLeaseRequiresActiveExactOwner(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	lease, err := store.AcquireLease(metadata.ThreadID)

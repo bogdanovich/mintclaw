@@ -22,7 +22,7 @@ func openThreadLeaseFile(root *catalogDirectory) (*os.File, error) {
 		windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.READ_CONTROL|
 			windows.WRITE_DAC|windows.WRITE_OWNER,
 		windows.FILE_OPEN_IF,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		windows.FILE_NON_DIRECTORY_FILE|windows.FILE_SYNCHRONOUS_IO_NONALERT|windows.FILE_OPEN_REPARSE_POINT,
 	)
 	if err != nil {

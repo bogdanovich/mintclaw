@@ -321,6 +321,7 @@ func TestStoreRejectsCredentialBearingGitOriginOnSaveAndLoad(t *testing.T) {
 		ProjectRoot:     projectRoot,
 		InvocationCWD:   projectRoot,
 		GitWorktreeRoot: projectRoot,
+		GitDir:          projectRoot,
 		GitCommonDir:    projectRoot,
 		GitOrigin:       "https://example.com/owner/repo.git",
 	}
