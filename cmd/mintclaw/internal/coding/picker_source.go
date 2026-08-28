@@ -61,10 +61,11 @@ func (s *pickerCatalogSource) Page(
 		return codingpicker.Page{}, fmt.Errorf("coding resume picker source is unavailable")
 	}
 	catalogQuery := thread.CatalogQuery{
-		All:    query.AllProjects,
-		Search: query.Search,
-		Offset: query.Offset,
-		Limit:  query.Limit,
+		All:      query.AllProjects,
+		Archived: query.Archived,
+		Search:   query.Search,
+		Offset:   query.Offset,
+		Limit:    query.Limit,
 	}
 	if !query.AllProjects {
 		catalogQuery.ProjectKey = s.currentProject.ProjectKey

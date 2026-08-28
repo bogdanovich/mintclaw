@@ -74,6 +74,7 @@ type ThreadMetadata struct {
 	CWD         string    `json:"cwd,omitempty"`
 	Model       string    `json:"model,omitempty"`
 	Provider    string    `json:"provider,omitempty"`
+	Archived    bool      `json:"archived,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 }
 
@@ -215,8 +216,16 @@ type CommandSink interface {
 	HardCancel(context.Context) error
 	Compact(context.Context) error
 	Rename(context.Context, string) error
+	SetArchived(context.Context, bool) error
 	NewThread(context.Context) error
 	Close(context.Context) error
+}
+
+// ThreadLifecycle is an optional runtime capability for atomic metadata-only
+// lifecycle changes. Implementations must not move or delete project files.
+type ThreadLifecycle interface {
+	Rename(context.Context, string) error
+	SetArchived(context.Context, bool) error
 }
 
 type Controller interface {

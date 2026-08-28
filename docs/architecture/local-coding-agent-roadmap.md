@@ -1589,6 +1589,8 @@ stable.
 
 Dependencies: P4.4, P5.4
 
+Implementation contract: [P6.1 thread lifecycle](local-coding-agent-p6-thread-lifecycle.md).
+
 Scope:
 
 - Add explicit lifecycle operations with atomic metadata updates.

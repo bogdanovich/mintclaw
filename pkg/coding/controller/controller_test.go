@@ -34,6 +34,22 @@ type workspaceRefreshRuntime struct {
 	refreshErr error
 }
 
+type lifecycleRuntime struct {
+	*blockingRuntime
+	renamed  string
+	archived bool
+}
+
+func (r *lifecycleRuntime) Rename(_ context.Context, title string) error {
+	r.renamed = title
+	return nil
+}
+
+func (r *lifecycleRuntime) SetArchived(_ context.Context, archived bool) error {
+	r.archived = archived
+	return nil
+}
+
 type cancelCauseRuntime struct {
 	*blockingRuntime
 	joinedError error
@@ -284,6 +300,30 @@ func TestUnsupportedCommandsAreExplicit(t *testing.T) {
 		t.Fatalf("Interrupt() error = %v, want %v", err, ErrNoActiveTurn)
 	}
 	if err := controller.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLifecycleCommandsDelegateOnlyWhileIdle(t *testing.T) {
+	runtime := &lifecycleRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	if err := controller.Rename(t.Context(), "new title"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.SetArchived(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.renamed != "new title" || !runtime.archived {
+		t.Fatalf("lifecycle runtime = rename %q archived %t", runtime.renamed, runtime.archived)
+	}
+	if err := controller.Submit(t.Context(), "work"); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.runStarted
+	if err := controller.SetArchived(t.Context(), false); !errors.Is(err, ErrTurnActive) {
+		t.Fatalf("active SetArchived() error = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }

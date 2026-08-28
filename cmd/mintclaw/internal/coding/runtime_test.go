@@ -576,6 +576,58 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	}
 }
 
+func TestNativeControllerLifecyclePersistsAndProjectsAtomically(t *testing.T) {
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC)
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "initial title", created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	projector, err := frontend.NewProjector(metadata.ThreadID, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agentadapter.ProjectThreadMetadata(projector, metadata); err != nil {
+		t.Fatal(err)
+	}
+	now := created.Add(time.Minute)
+	state := newCodingMetadataState(store, metadata, func() time.Time { return now })
+	runtime := &nativeControllerRuntime{
+		nativeCodingRuntime: &nativeCodingRuntime{metadata: metadata},
+		projector:           projector,
+		metadataState:       state,
+	}
+	if err := runtime.Rename(t.Context(), "renamed thread"); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := runtime.SetArchived(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Title != "renamed thread" || stored.Status != thread.StatusArchived ||
+		snapshot.Metadata.Title != stored.Title || !snapshot.Metadata.Archived {
+		t.Fatalf("stored = %+v snapshot = %+v", stored, snapshot.Metadata)
+	}
+}
+
 func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing.T) {
 	sessions := session.NewMemoryStore()
 	sessions.AddFullMessage("coding:thread", providers.Message{Role: "user", Content: "inspect 界"})

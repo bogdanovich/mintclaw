@@ -220,6 +220,7 @@ func NewResumeCommand() *cobra.Command {
 func newResumeCommand(deps dependencies) *cobra.Command {
 	deps = completeDependencies(deps)
 	var all bool
+	var archived bool
 	var last bool
 	var model string
 	var prompt string
@@ -238,6 +239,7 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 			options := resumeOptions{
 				threadID:  threadID,
 				all:       all,
+				archived:  archived,
 				last:      last,
 				model:     model,
 				prompt:    prompt,
@@ -257,6 +259,7 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "List threads from every project")
+	cmd.Flags().BoolVar(&archived, "archived", false, "List or select archived threads instead of active threads")
 	cmd.Flags().BoolVar(&last, "last", false, "Resume the most recently updated matching thread")
 	cmd.Flags().StringVar(&model, "model", "", "Replace the persisted model override")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Append a prompt while resuming the selected thread")
@@ -313,6 +316,7 @@ func runNew(
 type resumeOptions struct {
 	threadID  string
 	all       bool
+	archived  bool
 	last      bool
 	model     string
 	prompt    string
@@ -326,8 +330,8 @@ func validateResumeOptions(options resumeOptions) error {
 	if options.threadID != "" && options.last {
 		return fmt.Errorf("resume: thread ID and --last are mutually exclusive")
 	}
-	if options.threadID != "" && options.all {
-		return fmt.Errorf("resume: explicit thread ID cannot be combined with --all; change to its project first")
+	if options.threadID != "" && (options.all || options.archived) {
+		return fmt.Errorf("resume: explicit thread ID cannot be combined with --all or --archived")
 	}
 	if options.threadID == "" && !options.last && (options.model != "" || options.promptSet) {
 		return fmt.Errorf("resume: --model and --prompt require a thread ID or --last")
@@ -360,7 +364,7 @@ func runResumeInteractive(
 	}
 	threadID := options.threadID
 	if threadID == "" && options.last {
-		threadID, err = selectLastResumeThread(ctx, store, project, options.all)
+		threadID, err = selectLastResumeThread(ctx, store, project, options.all, options.archived)
 		if err != nil {
 			return err
 		}
@@ -375,6 +379,7 @@ func runResumeInteractive(
 			Output:          out,
 			AlternateScreen: true,
 			AllProjects:     options.all,
+			Archived:        options.archived,
 			Environment:     os.Environ(),
 			NoColor:         noColor,
 			Now:             deps.now,
@@ -420,12 +425,13 @@ func selectLastResumeThread(
 	store *thread.Store,
 	project thread.ProjectIdentity,
 	all bool,
+	archived bool,
 ) (string, error) {
 	catalog, err := thread.NewCatalog(store, thread.CatalogOptions{})
 	if err != nil {
 		return "", err
 	}
-	query := thread.CatalogQuery{All: all, Last: true}
+	query := thread.CatalogQuery{All: all, Archived: archived, Last: true}
 	if !all {
 		query.ProjectKey = project.ProjectKey
 	}
@@ -463,6 +469,7 @@ func runResume(
 	query := thread.CatalogQuery{
 		ThreadID: options.threadID,
 		All:      options.all,
+		Archived: options.archived,
 		Last:     options.last,
 		Offset:   options.offset,
 		Limit:    options.limit,

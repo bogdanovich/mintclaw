@@ -146,6 +146,10 @@ func TestPickerSearchPagingScopeAndStrictUnavailableSelection(t *testing.T) {
 	}
 
 	model = newPickerModel(t.Context(), source, query, initial, time.Now)
+	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	if latest := source.latestQuery(t); !latest.Archived || latest.Offset != 0 {
+		t.Fatalf("archived query = %+v", latest)
+	}
 	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 	if latest := source.latestQuery(t); !latest.AllProjects || latest.Offset != 0 {
 		t.Fatalf("all-project query = %+v", latest)

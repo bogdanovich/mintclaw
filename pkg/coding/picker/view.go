@@ -23,6 +23,7 @@ const (
 // discovery beyond the current canonical project.
 type Query struct {
 	AllProjects bool
+	Archived    bool
 	Search      string
 	Offset      int
 	Limit       int

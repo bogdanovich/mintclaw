@@ -65,6 +65,44 @@ func TestMetadataAtomicRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMetadataRenameAndArchiveLifecycle(t *testing.T) {
+	project, err := ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC)
+	metadata, err := NewMetadata(NewThreadID(), project, "initial title", created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := metadata.Rename("  focused parser work  ", created.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Title != "focused parser work" || !renamed.UpdatedAt.Equal(created.Add(time.Minute)) ||
+		metadata.Title != "initial title" {
+		t.Fatalf("rename result = %+v; original = %+v", renamed, metadata)
+	}
+	archived, err := renamed.SetArchived(true, created.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := archived.SetArchived(false, created.Add(3*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.Status != StatusArchived || active.Status != StatusActive ||
+		!active.UpdatedAt.Equal(created.Add(3*time.Minute)) {
+		t.Fatalf("lifecycle results = archived %+v active %+v", archived, active)
+	}
+	if _, err := metadata.Rename("   ", created); err == nil {
+		t.Fatal("Rename() accepted an empty title")
+	}
+	if _, err := metadata.SetArchived(true, time.Time{}); err == nil {
+		t.Fatal("SetArchived() accepted a zero timestamp")
+	}
+}
+
 func TestProvisionThreadDoesNotPublishMetadata(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "coding"))
 	if err != nil {

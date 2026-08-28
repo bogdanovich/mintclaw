@@ -40,6 +40,8 @@ const (
 	commandHardCancel
 	commandCompact
 	commandRename
+	commandArchive
+	commandUnarchive
 	commandNewThread
 	commandRefreshWorkspace
 	commandClose
@@ -139,6 +141,14 @@ func (c *Controller) Compact(ctx context.Context) error {
 
 func (c *Controller) Rename(ctx context.Context, title string) error {
 	return c.send(ctx, commandRename, title)
+}
+
+func (c *Controller) SetArchived(ctx context.Context, archived bool) error {
+	kind := commandUnarchive
+	if archived {
+		kind = commandArchive
+	}
+	return c.send(ctx, kind, "")
 }
 
 func (c *Controller) NewThread(ctx context.Context) error {
@@ -303,7 +313,25 @@ func (c *Controller) coordinate() {
 					go c.run(operationCtx, operationCompaction, "", nil)
 					request.reply <- nil
 				}
-			case commandRename, commandNewThread:
+			case commandRename, commandArchive, commandUnarchive:
+				switch {
+				case active:
+					request.reply <- ErrTurnActive
+				case compacting:
+					request.reply <- ErrCompactionActive
+				default:
+					lifecycle, ok := c.runtime.(frontend.ThreadLifecycle)
+					if !ok {
+						request.reply <- ErrUnsupported
+						continue
+					}
+					if request.kind == commandRename {
+						request.reply <- lifecycle.Rename(request.ctx, request.content)
+					} else {
+						request.reply <- lifecycle.SetArchived(request.ctx, request.kind == commandArchive)
+					}
+				}
+			case commandNewThread:
 				request.reply <- ErrUnsupported
 			case commandRefreshWorkspace:
 				switch {
