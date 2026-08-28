@@ -286,7 +286,7 @@ func (c *DiscordChannel) receiveVoice(vc *discordgo.VoiceConnection, guildID str
 				SessionID:  sessionID,
 				SpeakerID:  userID,
 				ChatID:     chatID,
-				Channel:    "discord",
+				Channel:    c.Name(),
 				Sequence:   sequence,
 				Timestamp:  p.Timestamp,
 				SampleRate: 48000,

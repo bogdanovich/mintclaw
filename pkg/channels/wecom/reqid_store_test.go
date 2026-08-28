@@ -27,6 +27,24 @@ func TestDefaultReqIDStorePathHonorsHomeOverride(t *testing.T) {
 	}
 }
 
+func TestReqIDStorePathSeparatesConfiguredInstances(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+
+	canonical := reqIDStorePath(config.ChannelWeCom)
+	if want := filepath.Join(home, "wecom", "reqid-store.json"); canonical != want {
+		t.Fatalf("canonical reqIDStorePath() = %q, want %q", canonical, want)
+	}
+	first := reqIDStorePath("wecom_support")
+	second := reqIDStorePath("wecom_alerts")
+	if first == canonical || second == canonical || first == second {
+		t.Fatalf("instance store paths are not distinct: canonical=%q first=%q second=%q", canonical, first, second)
+	}
+	if filepath.Dir(first) != filepath.Join(home, "wecom") || filepath.Dir(second) != filepath.Join(home, "wecom") {
+		t.Fatalf("instance store paths escaped the WeCom state directory: first=%q second=%q", first, second)
+	}
+}
+
 func TestReqIDStorePersistsRoutes(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "reqids.json")
 	store := newReqIDStore(storePath)

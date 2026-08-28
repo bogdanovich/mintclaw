@@ -27,7 +27,8 @@ func toChannelHashes(cfg *config.Config) map[string]string {
 		if enabled, ok := value["enabled"].(bool); !ok || !enabled {
 			continue
 		}
-		hiddenValues(key, value, ch.Get(key))
+		channel := ch.Get(key)
+		hiddenValues(channel.Type, value, channel)
 		valueBytes, err := json.Marshal(value)
 		if err != nil {
 			log.Printf("[manager_channel] failed to marshal channel %s config: %v", key, err)
@@ -40,12 +41,12 @@ func toChannelHashes(cfg *config.Config) map[string]string {
 	return result
 }
 
-func hiddenValues(key string, value map[string]any, ch *config.Channel) {
+func hiddenValues(channelType string, value map[string]any, ch *config.Channel) {
 	v, err := ch.GetDecoded()
 	if err != nil {
 		return
 	}
-	switch key {
+	switch channelType {
 	case "mintclaw":
 		if settings, ok := v.(*config.MintClawSettings); ok {
 			value["token"] = settings.Token.String()

@@ -705,6 +705,9 @@ func TestNewChannelUsesConfiguredInstanceName(t *testing.T) {
 	if got := ch.Name(); got != "wecom_support" {
 		t.Fatalf("Name() = %q, want %q", got, "wecom_support")
 	}
+	if got, want := ch.routes.path, reqIDStorePath("wecom_support"); got != want {
+		t.Fatalf("route store path = %q, want %q", got, want)
+	}
 }
 
 func wecomTestJPEGData(t *testing.T) []byte {

@@ -1,8 +1,10 @@
 package wecom
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -38,6 +40,14 @@ func newReqIDStore(path string) *reqIDStore {
 
 func defaultReqIDStorePath() string {
 	return filepath.Join(config.GetHome(), "wecom", "reqid-store.json")
+}
+
+func reqIDStorePath(instanceName string) string {
+	if instanceName == config.ChannelWeCom {
+		return defaultReqIDStorePath()
+	}
+	digest := sha256.Sum256([]byte(instanceName))
+	return filepath.Join(config.GetHome(), "wecom", fmt.Sprintf("reqid-store-%x.json", digest[:]))
 }
 
 func (s *reqIDStore) Put(chatID, reqID string, chatType uint32, ttl time.Duration) error {
