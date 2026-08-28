@@ -19,14 +19,7 @@ func init() {
 			if !ok {
 				return nil, channels.ErrSendFailed
 			}
-			ch, err := NewMintClawChannel(bc, c, b)
-			if err != nil {
-				return nil, err
-			}
-			if channelName != config.ChannelMintClaw {
-				ch.SetName(channelName)
-			}
-			return ch, nil
+			return NewMintClawChannel(bc, c, b)
 		},
 	)
 	channels.RegisterFactory(
@@ -41,14 +34,7 @@ func init() {
 			if !ok {
 				return nil, channels.ErrSendFailed
 			}
-			ch, err := NewMintClawClientChannel(bc, c, b)
-			if err != nil {
-				return nil, err
-			}
-			if channelName != config.ChannelMintClawClient {
-				ch.SetName(channelName)
-			}
-			return ch, nil
+			return NewMintClawClientChannel(bc, c, b)
 		},
 	)
 }

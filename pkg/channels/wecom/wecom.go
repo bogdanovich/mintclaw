@@ -117,7 +117,7 @@ func NewChannel(bc *config.Channel, cfg *config.WeComSettings, messageBus *bus.M
 	}
 
 	base := channels.NewBaseChannel(
-		"wecom",
+		bc.Name(),
 		cfg,
 		messageBus,
 		bc.AllowFrom,
@@ -130,14 +130,12 @@ func NewChannel(bc *config.Channel, cfg *config.WeComSettings, messageBus *bus.M
 		pending:     make(map[string]chan wecomEnvelope),
 		turns:       make(map[string][]wecomTurn),
 		recent:      newRecentMessageSet(wecomRecentMessageMax),
-		routes:      newReqIDStore(""),
+		routes:      newReqIDStore(reqIDStorePath(bc.Name())),
 		mediaClient: &http.Client{Timeout: wecomMediaTimeout},
 	}
 	ch.SetOwner(ch)
 	return ch, nil
 }
-
-func (c *WeComChannel) Name() string { return "wecom" }
 
 func (c *WeComChannel) Start(ctx context.Context) error {
 	logger.InfoC("wecom", "Starting WeCom channel...")

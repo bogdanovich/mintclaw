@@ -22,14 +22,7 @@ func init() {
 			if !ok {
 				return nil, channels.ErrSendFailed
 			}
-			ch, err := NewIRCChannel(bc, c, b)
-			if err != nil {
-				return nil, err
-			}
-			if channelName != config.ChannelIRC {
-				ch.SetName(channelName)
-			}
-			return ch, nil
+			return NewIRCChannel(bc, c, b)
 		},
 	)
 }

@@ -77,7 +77,7 @@ type QQChannel struct {
 }
 
 func NewQQChannel(bc *config.Channel, cfg *config.QQSettings, messageBus *bus.MessageBus) (*QQChannel, error) {
-	base := channels.NewBaseChannel("qq", cfg, messageBus, bc.AllowFrom,
+	base := channels.NewBaseChannel(bc.Name(), cfg, messageBus, bc.AllowFrom,
 		channels.WithMaxMessageLength(cfg.MaxMessageLength),
 		channels.WithGroupTrigger(bc.GroupTrigger),
 		channels.WithReasoningChannelID(bc.ReasoningChannelID),

@@ -11,11 +11,13 @@ import (
 
 func makeVKTestBaseChannel(vkCfg config.VKSettings) *config.Channel {
 	settings, _ := json.Marshal(vkCfg)
-	return &config.Channel{
+	bc := &config.Channel{
 		Enabled:  true,
 		Type:     config.ChannelVK,
 		Settings: settings,
 	}
+	bc.SetName(config.ChannelVK)
+	return bc
 }
 
 func TestNewVKChannel(t *testing.T) {
@@ -25,7 +27,7 @@ func TestNewVKChannel(t *testing.T) {
 		bc := makeVKTestBaseChannel(config.VKSettings{
 			Token: *config.NewSecureString("test_token"),
 		})
-		ch, err := NewVKChannel("vk", bc, msgBus)
+		ch, err := NewVKChannel(bc, msgBus)
 		if err != nil {
 			t.Fatalf("unexpected error during creation: %v", err)
 		}
@@ -42,12 +44,13 @@ func TestNewVKChannel(t *testing.T) {
 			Token:   *config.NewSecureString("test_token"),
 			GroupID: 123456789,
 		})
-		ch, err := NewVKChannel("vk", bc, msgBus)
+		bc.SetName("vk_support")
+		ch, err := NewVKChannel(bc, msgBus)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if ch.Name() != "vk" {
-			t.Errorf("Name() = %q, want %q", ch.Name(), "vk")
+		if ch.Name() != "vk_support" {
+			t.Errorf("Name() = %q, want %q", ch.Name(), "vk_support")
 		}
 		if ch.IsRunning() {
 			t.Error("new channel should not be running")
@@ -66,7 +69,8 @@ func TestNewVKChannel(t *testing.T) {
 			AllowFrom: []string{"123456789"},
 			Settings:  settings,
 		}
-		ch, err := NewVKChannel("vk", bc, msgBus)
+		bc.SetName(config.ChannelVK)
+		ch, err := NewVKChannel(bc, msgBus)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -93,7 +97,8 @@ func TestNewVKChannel(t *testing.T) {
 			},
 			Settings: settings,
 		}
-		ch, err := NewVKChannel("vk", bc, msgBus)
+		bc.SetName(config.ChannelVK)
+		ch, err := NewVKChannel(bc, msgBus)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -109,7 +114,7 @@ func TestVKChannel_MaxMessageLength(t *testing.T) {
 		Token:   *config.NewSecureString("test_token"),
 		GroupID: 123456789,
 	})
-	ch, err := NewVKChannel("vk", bc, msgBus)
+	ch, err := NewVKChannel(bc, msgBus)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,7 +242,7 @@ func TestVKChannel_VoiceCapabilities(t *testing.T) {
 		Token:   *config.NewSecureString("test_token"),
 		GroupID: 123456789,
 	})
-	ch, err := NewVKChannel("vk", bc, msgBus)
+	ch, err := NewVKChannel(bc, msgBus)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

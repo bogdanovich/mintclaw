@@ -488,17 +488,23 @@ func TestReloadPreservesDispatcherOwnership(t *testing.T) {
 	}
 }
 
-func TestReload_ChangedExistingChannelRequiresRestart(t *testing.T) {
-	oldCfg := config.DefaultConfig()
-	oldCfg.Channels["test"] = &config.Channel{
-		Enabled:  true,
-		Settings: config.RawNode(`{"enabled":true,"key":"old-value"}`),
+func TestReload_AliasedSecretChangeRequiresRestart(t *testing.T) {
+	const channelName = "discord_ops"
+	newConfig := func(token string) *config.Config {
+		t.Helper()
+		cfg := config.DefaultConfig()
+		cfg.Channels[channelName] = &config.Channel{
+			Enabled:  true,
+			Type:     config.ChannelDiscord,
+			Settings: config.RawNode(fmt.Sprintf(`{"token":%q}`, token)),
+		}
+		if err := config.InitChannelList(cfg.Channels); err != nil {
+			t.Fatalf("InitChannelList() error = %v", err)
+		}
+		return cfg
 	}
-	newCfg := config.DefaultConfig()
-	newCfg.Channels["test"] = &config.Channel{
-		Enabled:  true,
-		Settings: config.RawNode(`{"enabled":true,"key":"new-value"}`),
-	}
+	oldCfg := newConfig("old-token")
+	newCfg := newConfig("new-token")
 
 	var stopCalls int
 	ch := &mockChannel{
@@ -511,11 +517,11 @@ func TestReload_ChangedExistingChannelRequiresRestart(t *testing.T) {
 
 	m := newTestManager()
 	m.lifecycle.config = oldCfg
-	m.lifecycle.storeChannel("test", ch)
-	installTestDeliveryWorker(m, "test", newChannelWorker("test", ch, "test"))
+	m.lifecycle.storeChannel(channelName, ch)
+	installTestDeliveryWorker(m, channelName, newChannelWorker(channelName, ch, config.ChannelDiscord))
 	m.lifecycle.setInitialHashes(toChannelHashes(oldCfg))
-	oldHash := m.lifecycle.channelHash("test")
-	newHash := toChannelHashes(newCfg)["test"]
+	oldHash := m.lifecycle.channelHash(channelName)
+	newHash := toChannelHashes(newCfg)[channelName]
 	if oldHash == newHash {
 		t.Fatal("test setup expected channel hash to change")
 	}
@@ -527,23 +533,23 @@ func TestReload_ChangedExistingChannelRequiresRestart(t *testing.T) {
 	if stopCalls != 0 {
 		t.Fatalf("changed channel was stopped during reload, calls = %d", stopCalls)
 	}
-	if got, _ := m.lifecycle.channel("test"); got != ch {
+	if got, _ := m.lifecycle.channel(channelName); got != ch {
 		t.Fatal("changed channel instance was replaced during reload")
 	}
-	if got := m.delivery.owner("test").Worker().ch; got != ch {
+	if got := m.delivery.owner(channelName).Worker().ch; got != ch {
 		t.Fatal("changed channel worker was replaced during reload")
 	}
-	if got := m.lifecycle.channelHash("test"); got != oldHash {
+	if got := m.lifecycle.channelHash(channelName); got != oldHash {
 		t.Fatalf("active channel hash = %q, want old active hash %q", got, oldHash)
 	}
 
-	status := m.GetStatus()["test"].(map[string]any)
+	status := m.GetStatus()[channelName].(map[string]any)
 	if got, _ := status["restart_required"].(bool); !got {
 		t.Fatalf("restart_required status = %v, want true", status["restart_required"])
 	}
 
 	if err := m.SendMessage(t.Context(), testOutboundMessage(bus.OutboundMessage{
-		Channel: "test",
+		Channel: channelName,
 		ChatID:  "chat-1",
 		Content: "still routed",
 	})); err != nil {
@@ -556,7 +562,7 @@ func TestReload_ChangedExistingChannelRequiresRestart(t *testing.T) {
 	if err := m.Reload(t.Context(), oldCfg); err != nil {
 		t.Fatalf("Reload(oldCfg) error = %v", err)
 	}
-	status = m.GetStatus()["test"].(map[string]any)
+	status = m.GetStatus()[channelName].(map[string]any)
 	if _, ok := status["restart_required"]; ok {
 		t.Fatalf("restart_required was not cleared after config returned to active hash: %#v", status)
 	}

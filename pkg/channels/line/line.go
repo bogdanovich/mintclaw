@@ -70,7 +70,7 @@ func NewLINEChannel(
 	}
 
 	base := channels.NewBaseChannel(
-		"line", cfg, messageBus, bc.AllowFrom,
+		bc.Name(), cfg, messageBus, bc.AllowFrom,
 		channels.WithMaxMessageLength(5000),
 		channels.WithGroupTrigger(bc.GroupTrigger),
 		channels.WithReasoningChannelID(bc.ReasoningChannelID),

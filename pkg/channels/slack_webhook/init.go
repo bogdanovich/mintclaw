@@ -19,14 +19,7 @@ func init() {
 			if !ok {
 				return nil, channels.ErrSendFailed
 			}
-			ch, err := NewSlackWebhookChannel(bc, c, b)
-			if err != nil {
-				return nil, err
-			}
-			if channelName != config.ChannelSlackWebHook {
-				ch.SetName(channelName)
-			}
-			return ch, nil
+			return NewSlackWebhookChannel(bc, c, b)
 		},
 	)
 }

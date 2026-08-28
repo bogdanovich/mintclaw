@@ -43,6 +43,7 @@ func TestNewDeltaChatChannel(t *testing.T) {
 
 	t.Run("bootstrap server marker", func(t *testing.T) {
 		bc := &config.Channel{Type: config.ChannelDeltaChat, Enabled: true}
+		bc.SetName(config.ChannelDeltaChat)
 		cfg := &config.DeltaChatSettings{Email: "@mehl.cloud", RPCServerPath: fakeServer}
 		if _, err := NewDeltaChatChannel(bc, cfg, msgBus); err != nil {
 			t.Fatalf("unexpected error for bootstrap marker: %v", err)
@@ -51,6 +52,7 @@ func TestNewDeltaChatChannel(t *testing.T) {
 
 	t.Run("existing account reference", func(t *testing.T) {
 		bc := &config.Channel{Type: config.ChannelDeltaChat, Enabled: true}
+		bc.SetName(config.ChannelDeltaChat)
 		cfg := &config.DeltaChatSettings{Email: "bot@example.org", RPCServerPath: fakeServer}
 		if _, err := NewDeltaChatChannel(bc, cfg, msgBus); err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -70,6 +72,7 @@ func TestNewDeltaChatChannel(t *testing.T) {
 
 	t.Run("valid config", func(t *testing.T) {
 		bc := &config.Channel{Type: config.ChannelDeltaChat, Enabled: true}
+		bc.SetName("email_archive")
 		cfg := &config.DeltaChatSettings{
 			Email:         "bot@example.org",
 			RPCServerPath: fakeServer,
@@ -79,8 +82,8 @@ func TestNewDeltaChatChannel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if ch.Name() != config.ChannelDeltaChat {
-			t.Errorf("Name() = %q, want %q", ch.Name(), config.ChannelDeltaChat)
+		if ch.Name() != "email_archive" {
+			t.Errorf("Name() = %q, want %q", ch.Name(), "email_archive")
 		}
 		if ch.IsRunning() {
 			t.Error("new channel should not be running")
@@ -507,6 +510,7 @@ func newTestChannelWithBus(t *testing.T, msgBus *bus.MessageBus, configure func(
 		t.Fatal(err)
 	}
 	bc := &config.Channel{Type: config.ChannelDeltaChat, Enabled: true}
+	bc.SetName(config.ChannelDeltaChat)
 	if configure != nil {
 		configure(bc)
 	}

@@ -32,6 +32,7 @@ func TestNewTeamsWebhookChannel(t *testing.T) {
 
 	// Test missing webhooks
 	bc := &config.Channel{Type: config.ChannelTeamsWebHook, Enabled: true}
+	bc.SetName("teams_alerts")
 	cfg := config.TeamsWebhookSettings{
 		Webhooks: nil,
 	}
@@ -89,8 +90,8 @@ func TestNewTeamsWebhookChannel(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if ch.Name() != "teams_webhook" {
-		t.Errorf("expected name 'teams_webhook', got %q", ch.Name())
+	if ch.Name() != "teams_alerts" {
+		t.Errorf("expected name 'teams_alerts', got %q", ch.Name())
 	}
 }
 

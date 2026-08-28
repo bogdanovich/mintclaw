@@ -33,6 +33,9 @@ func newTestDingTalkChannel(
 			AllowFrom: []string{"*"},
 		}
 	}
+	if bc.Name() == "" {
+		bc.SetName(config.ChannelDingTalk)
+	}
 	ch, err := NewDingTalkChannel(bc, &cfg, msgBus)
 	if err != nil {
 		t.Fatalf("new channel: %v", err)
@@ -58,6 +61,7 @@ func TestOnChatBotMessageReceived_GroupMentionOnlyUsesIsInAtListAndStripsMention
 		AllowFrom:    []string{"*"},
 		GroupTrigger: config.GroupTriggerConfig{MentionOnly: true},
 	}
+	bc.SetName("dingtalk_ops")
 	ch, msgBus := newTestDingTalkChannel(t, config.DingTalkSettings{}, bc)
 
 	_, err := ch.onChatBotMessageReceived(context.Background(), &chatbot.BotCallbackDataModel{
@@ -74,7 +78,7 @@ func TestOnChatBotMessageReceived_GroupMentionOnlyUsesIsInAtListAndStripsMention
 	}
 
 	inbound := mustReceiveInbound(t, msgBus)
-	if inbound.Channel != "dingtalk" {
+	if inbound.Channel != "dingtalk_ops" {
 		t.Fatalf("channel=%q", inbound.Channel)
 	}
 	if inbound.ChatID != "group-abc" {

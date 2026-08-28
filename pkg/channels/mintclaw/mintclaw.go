@@ -42,7 +42,7 @@ func NewMintClawChannel(
 		return nil, fmt.Errorf("mintclaw token is required")
 	}
 
-	base := channels.NewBaseChannel("mintclaw", cfg, messageBus, bc.AllowFrom)
+	base := channels.NewBaseChannel(bc.Name(), cfg, messageBus, bc.AllowFrom)
 
 	allowOrigins := cfg.AllowOrigins
 	checkOrigin := func(r *http.Request) bool {

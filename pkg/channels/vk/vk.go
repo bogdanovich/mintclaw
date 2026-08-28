@@ -21,15 +21,14 @@ import (
 
 type VKChannel struct {
 	*channels.BaseChannel
-	vk          *api.VK
-	lp          *longpoll.LongPoll
-	channelName string
-	bc          *config.Channel
-	ctx         context.Context
-	cancel      context.CancelFunc
+	vk     *api.VK
+	lp     *longpoll.LongPoll
+	bc     *config.Channel
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
-func NewVKChannel(channelName string, bc *config.Channel, bus *bus.MessageBus) (*VKChannel, error) {
+func NewVKChannel(bc *config.Channel, bus *bus.MessageBus) (*VKChannel, error) {
 	var vkCfg config.VKSettings
 	if err := bc.Decode(&vkCfg); err != nil {
 		return nil, err
@@ -38,7 +37,7 @@ func NewVKChannel(channelName string, bc *config.Channel, bus *bus.MessageBus) (
 	vk := api.NewVK(vkCfg.Token.String())
 
 	base := channels.NewBaseChannel(
-		channelName,
+		bc.Name(),
 		&vkCfg,
 		bus,
 		bc.AllowFrom,
@@ -50,7 +49,6 @@ func NewVKChannel(channelName string, bc *config.Channel, bus *bus.MessageBus) (
 	return &VKChannel{
 		BaseChannel: base,
 		vk:          vk,
-		channelName: channelName,
 		bc:          bc,
 	}, nil
 }

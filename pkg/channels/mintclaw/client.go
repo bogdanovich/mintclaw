@@ -39,7 +39,7 @@ func NewMintClawClientChannel(
 		return nil, fmt.Errorf("mintclaw_client url is required")
 	}
 
-	base := channels.NewBaseChannel("mintclaw_client", cfg, messageBus, bc.AllowFrom)
+	base := channels.NewBaseChannel(bc.Name(), cfg, messageBus, bc.AllowFrom)
 
 	return &MintClawClientChannel{
 		BaseChannel: base,

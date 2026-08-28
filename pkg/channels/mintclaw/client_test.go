@@ -38,14 +38,15 @@ func TestNewMintClawClientChannel_OK(t *testing.T) {
 		Enabled:   true,
 		AllowFrom: []string{"mintclaw-remote"},
 	}
+	bc.SetName("remote_companion")
 	ch, err := NewMintClawClientChannel(bc, &config.MintClawClientSettings{
 		URL: "ws://localhost:9999/ws",
 	}, bus.NewMessageBus())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ch.Name() != "mintclaw_client" {
-		t.Fatalf("name = %q, want mintclaw_client", ch.Name())
+	if ch.Name() != "remote_companion" {
+		t.Fatalf("name = %q, want remote_companion", ch.Name())
 	}
 }
 

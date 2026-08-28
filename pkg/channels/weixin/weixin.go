@@ -48,14 +48,7 @@ func init() {
 			if !ok {
 				return nil, channels.ErrSendFailed
 			}
-			ch, err := NewWeixinChannel(bc, weixinCfg, bus)
-			if err != nil {
-				return nil, err
-			}
-			if channelName != config.ChannelWeixin {
-				ch.SetName(channelName)
-			}
-			return ch, nil
+			return NewWeixinChannel(bc, weixinCfg, bus)
 		},
 	)
 }

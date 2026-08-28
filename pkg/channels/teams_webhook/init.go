@@ -19,14 +19,7 @@ func init() {
 			if !ok {
 				return nil, channels.ErrSendFailed
 			}
-			ch, err := NewTeamsWebhookChannel(bc, c, b)
-			if err != nil {
-				return nil, err
-			}
-			if channelName != config.ChannelTeamsWebHook {
-				ch.SetName(channelName)
-			}
-			return ch, nil
+			return NewTeamsWebhookChannel(bc, c, b)
 		},
 	)
 }

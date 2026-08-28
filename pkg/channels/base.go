@@ -83,7 +83,7 @@ type BaseChannel struct {
 	config              any
 	bus                 *bus.MessageBus
 	running             atomic.Bool
-	name                string
+	name                string // canonical channel_list instance name
 	allowList           []string
 	maxMessageLength    int
 	groupTrigger        config.GroupTriggerConfig
@@ -93,6 +93,8 @@ type BaseChannel struct {
 	reasoningChannelID  string
 }
 
+// NewBaseChannel constructs shared adapter state for one immutable channel
+// instance name. Config-backed adapters pass config.Channel.Name(), not Type.
 func NewBaseChannel(
 	name string,
 	channelConfig any,
@@ -218,12 +220,6 @@ func shouldRespondInGroup(gt config.GroupTriggerConfig, isMentioned bool, conten
 
 func (c *BaseChannel) Name() string {
 	return c.name
-}
-
-// SetName updates the channel name. Used by the manager after channel creation
-// to ensure the name matches the config key (which may differ from the type).
-func (c *BaseChannel) SetName(name string) {
-	c.name = name
 }
 
 func (c *BaseChannel) ReasoningChannelID() string {

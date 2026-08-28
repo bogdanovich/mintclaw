@@ -682,6 +682,7 @@ func newTestWeComChannelWithAllowFrom(
 		Enabled:   true,
 		AllowFrom: allowFrom,
 	}
+	bc.SetName(config.ChannelWeCom)
 	ch, err := NewChannel(bc, cfg, messageBus)
 	if err != nil {
 		t.Fatalf("NewChannel() error = %v", err)
@@ -689,6 +690,24 @@ func newTestWeComChannelWithAllowFrom(
 	ch.ctx = context.Background()
 	ch.routes = newReqIDStore(filepath.Join(t.TempDir(), "reqids.json"))
 	return ch
+}
+
+func TestNewChannelUsesConfiguredInstanceName(t *testing.T) {
+	cfg := &config.WeComSettings{BotID: "bot-1"}
+	cfg.SetSecret("secret-1")
+	bc := &config.Channel{Type: config.ChannelWeCom, Enabled: true}
+	bc.SetName("wecom_support")
+
+	ch, err := NewChannel(bc, cfg, bus.NewMessageBus())
+	if err != nil {
+		t.Fatalf("NewChannel() error = %v", err)
+	}
+	if got := ch.Name(); got != "wecom_support" {
+		t.Fatalf("Name() = %q, want %q", got, "wecom_support")
+	}
+	if got, want := ch.routes.path, reqIDStorePath("wecom_support"); got != want {
+		t.Fatalf("route store path = %q, want %q", got, want)
+	}
 }
 
 func wecomTestJPEGData(t *testing.T) []byte {

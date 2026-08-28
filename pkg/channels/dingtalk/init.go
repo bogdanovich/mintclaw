@@ -19,14 +19,7 @@ func init() {
 			if !ok {
 				return nil, channels.ErrSendFailed
 			}
-			ch, err := NewDingTalkChannel(bc, c, b)
-			if err != nil {
-				return nil, err
-			}
-			if channelName != config.ChannelDingTalk {
-				ch.SetName(channelName)
-			}
-			return ch, nil
+			return NewDingTalkChannel(bc, c, b)
 		},
 	)
 }

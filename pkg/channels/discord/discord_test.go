@@ -351,3 +351,43 @@ func TestSend_NonToolFeedbackStartsTTS(t *testing.T) {
 		t.Fatal("expected TTS to start")
 	}
 }
+
+func TestReceiveVoiceUsesConfiguredInstanceName(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	ch := &DiscordChannel{
+		BaseChannel: channels.NewBaseChannel("discord_ops", nil, messageBus, []string{"user-1"}),
+		bus:         messageBus,
+		ctx:         ctx,
+		voiceSSRC:   make(map[string]map[uint32]string),
+	}
+	ch.setVoiceUserID("guild-1", 42, "user-1")
+	voice := &discordgo.VoiceConnection{
+		Cond:     sync.NewCond(&sync.Mutex{}),
+		OpusRecv: make(chan *discordgo.Packet, 1),
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ch.receiveVoice(voice, "guild-1", "chat-1")
+	}()
+
+	voice.OpusRecv <- &discordgo.Packet{SSRC: 42, Timestamp: 100, Opus: []byte{1, 2, 3}}
+	select {
+	case chunk := <-messageBus.AudioChunksChan():
+		if chunk.Channel != "discord_ops" {
+			t.Fatalf("audio chunk channel = %q, want %q", chunk.Channel, "discord_ops")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected voice audio chunk")
+	}
+
+	close(voice.OpusRecv)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("receiveVoice did not stop after input closed")
+	}
+}

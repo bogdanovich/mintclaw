@@ -58,7 +58,7 @@ func NewSlackWebhookChannel(
 	}
 
 	base := channels.NewBaseChannel(
-		"slack_webhook",
+		bc.Name(),
 		cfg,
 		bus,
 		[]string{"*"},
