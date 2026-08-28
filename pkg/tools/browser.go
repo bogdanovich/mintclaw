@@ -202,7 +202,8 @@ func (tool *BrowserActTool) ToolEnabledForAgent(agentID string) bool {
 
 func (*BrowserTargetsTool) Name() string { return "browser_targets" }
 func (*BrowserTargetsTool) Description() string {
-	return "List browser targets and managed profiles granted to this agent without starting a browser."
+	return "List browser targets and managed profiles granted to this agent without starting a browser. " +
+		"When the task does not name a target, use default_target when present; never infer preference from array order."
 }
 
 func (*BrowserTargetsTool) Parameters() map[string]any {
@@ -216,7 +217,8 @@ func (*BrowserTargetsTool) ToolLoopSemantics() loopguard.Semantics {
 }
 
 type browserTargetResult struct {
-	Targets []browserTargetView `json:"targets"`
+	DefaultTarget string              `json:"default_target,omitempty"`
+	Targets       []browserTargetView `json:"targets"`
 }
 
 type browserTargetView struct {
@@ -289,7 +291,15 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			targetNames = append(targetNames, name)
 		}
 	}
-	sort.Strings(targetNames)
+	defaultTarget := tool.runtime.config.EffectiveDefaultTarget()
+	sort.Slice(targetNames, func(i, j int) bool {
+		leftDefault := targetNames[i] == defaultTarget
+		rightDefault := targetNames[j] == defaultTarget
+		if leftDefault != rightDefault {
+			return leftDefault
+		}
+		return targetNames[i] < targetNames[j]
+	})
 	views := make([]browserTargetView, 0, len(targetNames))
 	for _, name := range targetNames {
 		target := tool.runtime.config.Targets[name]
@@ -403,7 +413,7 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			},
 		})
 	}
-	return tool.runtime.result(browserTargetResult{Targets: views})
+	return tool.runtime.result(browserTargetResult{DefaultTarget: defaultTarget, Targets: views})
 }
 
 func readinessRank(status string) int {
@@ -426,8 +436,9 @@ func readinessRank(status string) int {
 func (*BrowserSessionTool) Name() string { return "browser_session" }
 func (*BrowserSessionTool) Description() string {
 	return "Open, inspect, or close one broker-owned browser session. " +
-		"For open, target is the browser target name from browser_targets (for example gateway or companion), " +
-		"and profile is the profile name nested under that target (for example managed)."
+		"For open, target is the browser target name from browser_targets; when the task does not name one, " +
+		"use browser_targets.default_target and never infer preference from target array order. " +
+		"For open, profile is the profile name nested under that target (for example managed)."
 }
 
 func (*BrowserSessionTool) Parameters() map[string]any {
@@ -439,7 +450,7 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 			},
 			"target": map[string]any{
 				"type":        "string",
-				"description": "For open only: exact browser target name returned by browser_targets, such as gateway or companion.",
+				"description": "For open only: exact target returned by browser_targets. When the task does not name one, copy browser_targets.default_target; do not infer preference from array order.",
 			},
 			"profile": map[string]any{
 				"type":        "string",

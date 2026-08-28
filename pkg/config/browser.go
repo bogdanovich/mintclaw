@@ -49,10 +49,34 @@ const BrowserToolResultEnvelopeBytes = 64 * 1024
 var browserAliasPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 type BrowserToolsConfig struct {
-	Enabled bool                           `json:"enabled"           yaml:"-"`
-	Agents  []string                       `json:"agents,omitempty"  yaml:"-"`
-	Targets map[string]BrowserTargetConfig `json:"targets,omitempty" yaml:"-"`
-	Limits  BrowserLimitsConfig            `json:"limits,omitempty"  yaml:"-"`
+	Enabled       bool                           `json:"enabled"                  yaml:"-"`
+	Agents        []string                       `json:"agents,omitempty"         yaml:"-"`
+	DefaultTarget string                         `json:"default_target,omitempty" yaml:"-"`
+	Targets       map[string]BrowserTargetConfig `json:"targets,omitempty"        yaml:"-"`
+	Limits        BrowserLimitsConfig            `json:"limits,omitempty"         yaml:"-"`
+}
+
+// EffectiveDefaultTarget returns the configured target preference without
+// deriving preference from map or presentation order. Existing single-target
+// and canonical gateway configurations retain their previous behavior.
+func (cfg BrowserToolsConfig) EffectiveDefaultTarget() string {
+	if cfg.DefaultTarget != "" {
+		return cfg.DefaultTarget
+	}
+	if target, ok := cfg.Targets[BrowserDefaultTarget]; ok && target.Enabled {
+		return BrowserDefaultTarget
+	}
+	only := ""
+	for name, target := range cfg.Targets {
+		if !target.Enabled {
+			continue
+		}
+		if only != "" {
+			return ""
+		}
+		only = name
+	}
+	return only
 }
 
 type BrowserTargetConfig struct {
@@ -179,6 +203,20 @@ func (cfg *Config) ValidateBrowserConfig() error {
 	for targetName, target := range browser.Targets {
 		if err := cfg.validateBrowserTarget(targetName, target); err != nil {
 			return err
+		}
+	}
+	if browser.DefaultTarget != "" {
+		if !browserAliasPattern.MatchString(browser.DefaultTarget) {
+			return fmt.Errorf("invalid tools.browser.default_target %q", browser.DefaultTarget)
+		}
+		target, ok := browser.Targets[browser.DefaultTarget]
+		if !ok || !target.Enabled || !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{
+			browser.DefaultTarget: target,
+		}) {
+			return fmt.Errorf(
+				"tools.browser.default_target %q must reference an enabled target with an enabled profile",
+				browser.DefaultTarget,
+			)
 		}
 	}
 	if browser.Enabled && len(browser.Agents) == 0 {

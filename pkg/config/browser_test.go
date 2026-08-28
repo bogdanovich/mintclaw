@@ -32,6 +32,55 @@ func TestBrowserConfigAcceptsAdmittedB1Shape(t *testing.T) {
 	if err != nil || len(revision) != 64 {
 		t.Fatalf("PolicyRevision() = %q, %v", revision, err)
 	}
+	if got := cfg.Tools.Browser.EffectiveDefaultTarget(); got != BrowserDefaultTarget {
+		t.Fatalf("EffectiveDefaultTarget() = %q, want %q", got, BrowserDefaultTarget)
+	}
+}
+
+func TestBrowserConfigAcceptsExplicitEnabledDefaultTarget(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	cfg.Nodes.Enabled = true
+	cfg.Execution.Targets = map[string]ExecutionTarget{
+		"ab-local-test": {Type: "node", Node: "darwin-companion"},
+	}
+	cfg.Tools.Browser.Targets["companion"] = BrowserTargetConfig{
+		Enabled: true, Placement: BrowserPlacementNode, NodeTarget: "ab-local-test",
+		Profiles: map[string]BrowserProfileConfig{
+			BrowserDefaultProfile: {
+				Enabled: true, Mode: BrowserProfileManaged,
+				NetworkMode: BrowserNetworkAnyHTTP, DryRun: true,
+			},
+		},
+	}
+	cfg.Tools.Browser.DefaultTarget = "companion"
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() explicit default error = %v", err)
+	}
+	if got := cfg.Tools.Browser.EffectiveDefaultTarget(); got != "companion" {
+		t.Fatalf("EffectiveDefaultTarget() = %q, want companion", got)
+	}
+}
+
+func TestBrowserConfigRejectsUnavailableDefaultTarget(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	cfg.Tools.Browser.DefaultTarget = "companion"
+	if err := cfg.ValidateBrowserConfig(); err == nil || !strings.Contains(err.Error(), "enabled target") {
+		t.Fatalf("ValidateBrowserConfig() error = %v, want unavailable default target", err)
+	}
+}
+
+func TestBrowserConfigInfersOnlyEnabledTarget(t *testing.T) {
+	cfg := BrowserToolsConfig{Targets: map[string]BrowserTargetConfig{
+		"remote":   {Enabled: true},
+		"disabled": {},
+	}}
+	if got := cfg.EffectiveDefaultTarget(); got != "remote" {
+		t.Fatalf("EffectiveDefaultTarget() = %q, want remote", got)
+	}
+	cfg.Targets["second"] = BrowserTargetConfig{Enabled: true}
+	if got := cfg.EffectiveDefaultTarget(); got != "" {
+		t.Fatalf("EffectiveDefaultTarget() = %q, want ambiguous empty target", got)
+	}
 }
 
 func TestBrowserConfigAcceptsExplicitApprovedActionMode(t *testing.T) {
