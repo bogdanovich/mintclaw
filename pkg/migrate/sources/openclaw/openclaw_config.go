@@ -940,7 +940,7 @@ func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
 			"proxy":   c.Telegram.Proxy,
 		}
 		if c.Telegram.Token != "" {
-			m["token"] = config.NewSecureString(c.Telegram.Token)
+			m["token"] = c.Telegram.Token
 		}
 		return m
 	}())
@@ -951,13 +951,13 @@ func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
 			"app_id":  c.Feishu.AppID,
 		}
 		if c.Feishu.AppSecret != "" {
-			m["app_secret"] = config.NewSecureString(c.Feishu.AppSecret)
+			m["app_secret"] = c.Feishu.AppSecret
 		}
 		if c.Feishu.EncryptKey != "" {
-			m["encrypt_key"] = config.NewSecureString(c.Feishu.EncryptKey)
+			m["encrypt_key"] = c.Feishu.EncryptKey
 		}
 		if c.Feishu.VerificationToken != "" {
-			m["verification_token"] = config.NewSecureString(c.Feishu.VerificationToken)
+			m["verification_token"] = c.Feishu.VerificationToken
 		}
 		return m
 	}())
@@ -968,7 +968,7 @@ func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
 			"mention_only": c.Discord.MentionOnly,
 		}
 		if c.Discord.Token != "" {
-			m["token"] = config.NewSecureString(c.Discord.Token)
+			m["token"] = c.Discord.Token
 		}
 		return m
 	}())
@@ -985,7 +985,7 @@ func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
 			"app_id":  c.QQ.AppID,
 		}
 		if c.QQ.AppSecret != "" {
-			m["app_secret"] = config.NewSecureString(c.QQ.AppSecret)
+			m["app_secret"] = c.QQ.AppSecret
 		}
 		return m
 	}())
@@ -996,7 +996,7 @@ func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
 			"client_id": c.DingTalk.ClientID,
 		}
 		if c.DingTalk.ClientSecret != "" {
-			m["client_secret"] = config.NewSecureString(c.DingTalk.ClientSecret)
+			m["client_secret"] = c.DingTalk.ClientSecret
 		}
 		return m
 	}())
@@ -1006,10 +1006,10 @@ func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
 			"enabled": c.Slack.Enabled,
 		}
 		if c.Slack.BotToken != "" {
-			m["bot_token"] = config.NewSecureString(c.Slack.BotToken)
+			m["bot_token"] = c.Slack.BotToken
 		}
 		if c.Slack.AppToken != "" {
-			m["app_token"] = config.NewSecureString(c.Slack.AppToken)
+			m["app_token"] = c.Slack.AppToken
 		}
 		return m
 	}())
@@ -1023,7 +1023,7 @@ func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
 			"join_on_invite": true,
 		}
 		if c.Matrix.AccessToken != "" {
-			m["access_token"] = config.NewSecureString(c.Matrix.AccessToken)
+			m["access_token"] = c.Matrix.AccessToken
 		}
 		return m
 	}())
@@ -1036,10 +1036,10 @@ func (c ChannelsConfig) ToStandardChannels() config.ChannelsConfig {
 			"webhook_path": c.LINE.WebhookPath,
 		}
 		if c.LINE.ChannelSecret != "" {
-			m["channel_secret"] = config.NewSecureString(c.LINE.ChannelSecret)
+			m["channel_secret"] = c.LINE.ChannelSecret
 		}
 		if c.LINE.ChannelAccessToken != "" {
-			m["channel_access_token"] = config.NewSecureString(c.LINE.ChannelAccessToken)
+			m["channel_access_token"] = c.LINE.ChannelAccessToken
 		}
 		return m
 	}())
@@ -1075,6 +1075,7 @@ func setChannel(channels config.ChannelsConfig, name string, cfg any) {
 	if err := json.Unmarshal(nestedData, bc); err != nil {
 		return
 	}
+	bc.Type = name
 	channels[name] = bc
 }
 

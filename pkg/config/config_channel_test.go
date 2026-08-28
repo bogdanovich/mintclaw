@@ -225,44 +225,16 @@ func TestMintClawStreamingConfig_Defaults(t *testing.T) {
 	assert.Equal(t, 0, got.MinGrowthChars)
 }
 
-func TestInitChannelList_TelegramStreamingEnvCompatibility(t *testing.T) {
-	t.Setenv("MINTCLAW_CHANNELS_TELEGRAM_STREAMING_ENABLED", "true")
-	t.Setenv("MINTCLAW_CHANNELS_TELEGRAM_STREAMING_THROTTLE_SECONDS", "3")
-	t.Setenv("MINTCLAW_CHANNELS_TELEGRAM_STREAMING_MIN_GROWTH_CHARS", "120")
-
+func TestInitChannelList_RequiresExplicitChannelType(t *testing.T) {
 	channels := ChannelsConfig{
 		"telegram": {
-			Type:     ChannelTelegram,
 			Enabled:  true,
 			Settings: RawNode(`{"token":"telegram-token"}`),
 		},
-		"mintclaw": {
-			Type:     ChannelMintClaw,
-			Enabled:  true,
-			Settings: RawNode(`{"token":"mintclaw-token"}`),
-		},
-	}
-	if err := InitChannelList(channels); err != nil {
-		t.Fatalf("InitChannelList() error = %v", err)
 	}
 
-	tgDecoded, err := channels["telegram"].GetDecoded()
-	if err != nil {
-		t.Fatalf("telegram GetDecoded() error = %v", err)
-	}
-	tgCfg := tgDecoded.(*TelegramSettings)
-	assert.True(t, tgCfg.Streaming.Enabled)
-	assert.Equal(t, 3, tgCfg.Streaming.ThrottleSeconds)
-	assert.Equal(t, 120, tgCfg.Streaming.MinGrowthChars)
-
-	mintclawDecoded, err := channels["mintclaw"].GetDecoded()
-	if err != nil {
-		t.Fatalf("mintclaw GetDecoded() error = %v", err)
-	}
-	mintclawCfg := mintclawDecoded.(*MintClawSettings)
-	assert.False(t, mintclawCfg.Streaming.Enabled)
-	assert.Equal(t, 0, mintclawCfg.Streaming.ThrottleSeconds)
-	assert.Equal(t, 0, mintclawCfg.Streaming.MinGrowthChars)
+	err := InitChannelList(channels)
+	assert.EqualError(t, err, `channel "telegram" type is required`)
 }
 
 func TestInitChannelList_TelegramTopicFilterEnv(t *testing.T) {

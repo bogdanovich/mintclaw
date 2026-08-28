@@ -1302,8 +1302,6 @@ Opt-in example:
 | `channel_list.<name>.settings.streaming.min_growth_chars` | int | MintClaw default after enabling: `1` | Minimum character growth before sending an intermediate update; final content is always flushed |
 | `model_list[].streaming.enabled` | bool | `false` | Allows this model entry to try provider streaming requests |
 
-Legacy Telegram environment variables remain compatible: `MINTCLAW_CHANNELS_TELEGRAM_STREAMING_ENABLED`, `MINTCLAW_CHANNELS_TELEGRAM_STREAMING_THROTTLE_SECONDS`, and `MINTCLAW_CHANNELS_TELEGRAM_STREAMING_MIN_GROWTH_CHARS`. They only apply to Telegram settings and do not enable or modify MintClaw `settings.streaming`.
-
 Telegram topic ownership filters can also be set through environment overrides:
 `MINTCLAW_CHANNELS_TELEGRAM_ALLOWED_TOPIC_IDS` and
 `MINTCLAW_CHANNELS_TELEGRAM_IGNORED_TOPIC_IDS`. Use comma-separated topic IDs
