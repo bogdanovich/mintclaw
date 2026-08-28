@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -197,6 +198,40 @@ func TestThreadsDeleteRequiresExactPlanConfirmation(t *testing.T) {
 	entries, err := os.ReadDir(projectRoot)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("delete touched project: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestDeleteRendersRecoveryPathAfterCommittedDurabilityWarning(t *testing.T) {
+	trash := thread.TrashResult{
+		ThreadID: thread.NewThreadID(),
+		TrashID:  "trash-id",
+		Path:     filepath.Join(t.TempDir(), "recoverable-thread"),
+		At:       time.Now(),
+	}
+	warning := &fileutil.CommittedWriteError{Err: errors.New("directory sync failed")}
+	var output bytes.Buffer
+
+	err := finishDeleteThread(
+		&output,
+		deleteThreadOutput{Action: "trashed", Trash: &trash},
+		false,
+		warning,
+	)
+
+	if !fileutil.IsCommittedWriteError(err) || !strings.Contains(output.String(), trash.Path) {
+		t.Fatalf("error = %v, output = %q", err, output.String())
+	}
+
+	output.Reset()
+	ordinary := errors.New("rename failed")
+	err = finishDeleteThread(
+		&output,
+		deleteThreadOutput{Action: "trashed", Trash: &trash},
+		false,
+		ordinary,
+	)
+	if !errors.Is(err, ordinary) || output.Len() != 0 {
+		t.Fatalf("ordinary error = %v, output = %q", err, output.String())
 	}
 }
 
