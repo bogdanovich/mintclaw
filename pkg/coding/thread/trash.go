@@ -1,7 +1,6 @@
 package thread
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -59,12 +58,6 @@ type TrashResult struct {
 // PlanDelete enumerates only recognized MintClaw-owned top-level artifacts.
 // Unknown entries fail closed instead of being treated as disposable.
 func (s *Store) PlanDelete(threadID string) (DeletePlan, error) {
-	return s.PlanDeleteContext(context.Background(), threadID)
-}
-
-// PlanDeleteContext builds a recoverable deletion plan while allowing legacy
-// Git descriptors to resolve their worktree-private Git directory safely.
-func (s *Store) PlanDeleteContext(ctx context.Context, threadID string) (DeletePlan, error) {
 	if s == nil {
 		return DeletePlan{}, fmt.Errorf("coding thread store is nil")
 	}
@@ -95,11 +88,7 @@ func (s *Store) PlanDeleteContext(ctx context.Context, threadID string) (DeleteP
 	if err != nil {
 		return DeletePlan{}, err
 	}
-	project, err := resolveDeleteProjectBoundaries(ctx, metadata.Project)
-	if err != nil {
-		return DeletePlan{}, err
-	}
-	if boundaryErr := validateDeleteProjectBoundaries(threadRoot, project); boundaryErr != nil {
+	if boundaryErr := validateDeleteProjectBoundaries(threadRoot, metadata.Project); boundaryErr != nil {
 		return DeletePlan{}, boundaryErr
 	}
 	entries, err := directThreadRoot.readDir(maxDeletePlanEntries + 1)
@@ -127,21 +116,6 @@ func (s *Store) PlanDeleteContext(ctx context.Context, threadID string) (DeleteP
 		ThreadID: threadID, Title: metadata.Title, ThreadRoot: threadRoot,
 		OwnedPaths: paths, ProjectKey: metadata.Project.ProjectKey, ProjectRoot: metadata.Project.ProjectRoot,
 	}, nil
-}
-
-func resolveDeleteProjectBoundaries(ctx context.Context, project ProjectIdentity) (ProjectIdentity, error) {
-	if project.Kind != ProjectKindGitWorktree || project.GitDir != "" {
-		return project, nil
-	}
-	current, err := ResolveProject(ctx, project.ProjectRoot)
-	if err != nil {
-		return ProjectIdentity{}, fmt.Errorf("coding thread delete: resolve legacy Git directory: %w", err)
-	}
-	if current.ProjectKey != project.ProjectKey || current.GitCommonDir != project.GitCommonDir {
-		return ProjectIdentity{}, fmt.Errorf("coding thread delete: legacy Git identity no longer matches the project")
-	}
-	project.GitDir = current.GitDir
-	return project, nil
 }
 
 func validateDeleteProjectBoundaries(threadRoot string, project ProjectIdentity) error {
@@ -180,7 +154,6 @@ func ownedThreadEntry(name string) bool {
 // TrashThread atomically removes a thread from the active catalog by moving
 // its complete external state root into MintClaw's same-filesystem trash.
 func (s *Store) TrashThread(
-	ctx context.Context,
 	lease *Lease,
 	confirmation string,
 	now time.Time,
@@ -197,7 +170,7 @@ func (s *Store) TrashThread(
 	}
 	var result TrashResult
 	err := lease.withActive(s.root, threadID, func() error {
-		if _, planErr := s.PlanDeleteContext(ctx, threadID); planErr != nil {
+		if _, planErr := s.PlanDelete(threadID); planErr != nil {
 			return planErr
 		}
 		root, rootErr := os.OpenRoot(s.root)

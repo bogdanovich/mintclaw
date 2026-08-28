@@ -83,9 +83,6 @@ func NewMetadata(
 	firstRequest string,
 	now time.Time,
 ) (Metadata, error) {
-	if project.Kind == ProjectKindGitWorktree && project.GitDir == "" {
-		return Metadata{}, fmt.Errorf("coding thread: new Git project requires a canonical Git directory")
-	}
 	title, preview, err := DisplayFromRequest(firstRequest)
 	if err != nil {
 		return Metadata{}, err

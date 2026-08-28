@@ -157,7 +157,7 @@ func runDeleteThread(
 	if err != nil {
 		return err
 	}
-	plan, err := store.PlanDeleteContext(ctx, threadID)
+	plan, err := store.PlanDelete(threadID)
 	if err != nil {
 		return err
 	}
@@ -176,14 +176,14 @@ func runDeleteThread(
 	}
 	defer func() { resultErr = errors.Join(resultErr, lease.Release()) }()
 	// Revalidate the complete plan after acquiring writer ownership.
-	confirmed, err := store.PlanDeleteContext(ctx, threadID)
+	confirmed, err := store.PlanDelete(threadID)
 	if err != nil {
 		return err
 	}
 	if confirmed.ProjectKey != project.ProjectKey {
 		return fmt.Errorf("coding thread delete: project changed before confirmation")
 	}
-	trashed, err := store.TrashThread(ctx, lease, confirmation, deps.now())
+	trashed, err := store.TrashThread(lease, confirmation, deps.now())
 	return finishDeleteThread(
 		out,
 		deleteThreadOutput{Action: "trashed", Plan: confirmed, Trash: &trashed},
