@@ -2,10 +2,10 @@
 
 Date: 2026-08-25 PDT / 2026-08-26 UTC
 
-Status: local bridge rollout complete and reverified after a later service
-stop; fleet-wide R1 reset not yet authorized or complete
+Status: local bridge rollout complete; the later explicitly authorized
+fleet-wide R1 reset, strict deployment, and rollback exercise are also complete
 
-## Scope And Authority
+## Initial Scope And Authority
 
 The operator authorized backing up, installing, restarting, and verifying the
 PR #899 bridge on the local `p5a-canary` and `p3-canary` companion services.
@@ -106,19 +106,45 @@ one connected browser-capable companion, `ab-local-test`, on the PR #899 bridge
 with the current browser catalogue. This evidence does not broaden the local
 rollout authority or mutate that remote companion.
 
-## Remaining R1 Gate
+## Fleet-Wide R1 Completion
 
-This rollout still does not permit PR #901 or the strict removal release to
-merge or deploy. The later preflight converted all six records to explicit
-Ed25519, upgraded `ab-local-test` to the bridge, and completed the version 4
-and `AGENTS.md` data cutover. The remaining gates are now narrower:
+The operator later explicitly authorized the full R1 backup, cleanup, strict
+deployment, verification, rollback exercise, `vpn` upgrade, P3 retirement, and
+removal of obsolete pending and revoked identities. That broader operation is
+separate from the bounded local rollout above and completed on 2026-08-28.
 
-- connected Linux `vpn` still runs pre-bridge `03b08be2` and must be upgraded
-  or deliberately retired;
-- the older pending Darwin and revoked Linux records need an explicit retention
-  or removal decision;
-- seven inert tool-policy denies must be removed from the converted configs;
-- a same-time full backup of effective binaries and all durable state must be
-  created; and
-- PR #901 must then merge, deploy, verify, and exercise rollback before Z1 can
-  begin.
+The checksum-verifiable full backup is retained at:
+
+```text
+/home/server/mintclaw-r1-backup-20260828T053340Z
+```
+
+It includes the complete `.mintclaw` snapshot, host configuration and binaries,
+effective process executable images, strict release artifacts, retired outbox
+state, rollback state, service metadata, and SHA-256 manifests. A later
+read-only verification passed the archive, effective-binary, retired-outbox,
+rollback-state, and strict-release manifests.
+
+The final fleet-wide result was:
+
+- `vpn` upgraded to bridge-or-newer revision `0df185dc`;
+- P3 deliberately stopped and retired, with the obsolete pending and revoked
+  identities removed;
+- exactly three retained connected nodes: `p5a-canary`, `ab-local-test`, and
+  `vpn`, each with explicit Ed25519, executor, and policy revision;
+- all five configurations on version 4, all 20 personal workspace roots on
+  standard `AGENTS.md`, no root `AGENT.md` or `IDENTITY.md`, and the seven
+  inert deny entries removed;
+- PR #901 merged as `049e337f` and strict revision `827e0f70` deployed and
+  verified across the gateway, P5a node, launcher, and expected services;
+- 822 terminal version 2 outbox records checksum-recorded and retired at
+  shutdown, followed by five additional terminal version 2 records separately
+  checksum-recorded and retired before strict startup; and
+- rollback exercised with the exact previous release against quarantined
+  current state, followed by restoration of the version 3 state and strict
+  binaries. Diagnostic trace `trace-turn-69eb624d37fb9d807837d947` completed
+  untruncated after restoration.
+
+No bridge or strict-removal gate remains. Later source changes after
+`827e0f70` require an ordinary separately authorized deployment; they do not
+reopen R1.
