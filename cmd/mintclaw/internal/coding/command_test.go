@@ -339,6 +339,37 @@ func TestDeleteRendersRecoveryPathAfterCommittedDurabilityWarning(t *testing.T) 
 	}
 }
 
+func TestForkCompletionPreservesCommittedClassificationForDeferredFailures(t *testing.T) {
+	result := thread.ForkResult{ThreadID: thread.NewThreadID()}
+	for _, test := range []struct {
+		name       string
+		forkErr    error
+		renderErr  error
+		releaseErr error
+	}{
+		{name: "render", renderErr: errors.New("render failed")},
+		{name: "release", releaseErr: errors.New("release failed")},
+		{
+			name: "already committed",
+			forkErr: &thread.CommittedForkError{
+				Result: result,
+				Err:    errors.New("durability warning"),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := classifyForkCompletion(result, test.forkErr, test.renderErr, test.releaseErr)
+			var committed *thread.CommittedForkError
+			if !errors.As(err, &committed) || committed.Result.ThreadID != result.ThreadID {
+				t.Fatalf("classification = %v", err)
+			}
+		})
+	}
+	if err := classifyForkCompletion(result, nil, nil, nil); err != nil {
+		t.Fatalf("successful completion error = %v", err)
+	}
+}
+
 type interactiveLeaseController struct {
 	*frontend.Projector
 	lease *thread.Lease

@@ -70,12 +70,18 @@ message gets a stable SHA-256 prefix identity. Metadata records that identity,
 the source transcript revision, source index/turn, copied count, and source
 thread ancestry.
 
+The source thread, sessions directory, metadata, and JSONL are opened through
+anchored no-follow handles and remain pinned for the complete read. Forking is
+read-only: an unfinished dirty-history transaction fails closed for normal
+runtime recovery instead of being repaired by this administrative command.
+
 The child gets a fresh UUID, session key, external directory, lease, current
 project snapshot, and future writer. It inherits only model/provider selection
 and the selected canonical message prefix. Seahorse state, compaction state,
 runtime artifacts, diagnostics, and workspace files are not copied; they are
 rebuilt independently as needed. Metadata is published last, after the child
-JSONL is durable, so incomplete preparation is absent from the catalog.
+JSONL is durable, and committed status requires reading back the exact child
+descriptor, so incomplete preparation is absent from the catalog.
 
 Both human and JSON results state that the fork uses the current live
 filesystem and provide `mintclaw resume <child-id>`. Historical conversation is

@@ -1,6 +1,8 @@
 package thread
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -194,7 +196,7 @@ func TestForkThreadRejectsLinkedSourceSessionsAndDifferentProject(t *testing.T) 
 	targetID := NewThreadID()
 	if _, _, err := store.ForkThread(t.Context(), lease, ForkOptions{
 		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
-	}); err == nil || !strings.Contains(err.Error(), "not a direct directory") {
+	}); err == nil || !strings.Contains(err.Error(), "open sessions") {
 		t.Fatalf("linked sessions error = %v", err)
 	}
 	targetRoot, err := store.ThreadRoot(targetID)
@@ -204,6 +206,12 @@ func TestForkThreadRejectsLinkedSourceSessionsAndDifferentProject(t *testing.T) 
 	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
 		t.Fatalf("linked source allocated target: %v", err)
 	}
+	if err := os.Remove(filepath.Join(threadRoot, "sessions")); err != nil {
+		t.Fatal(err)
+	}
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
 
 	other, err := ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
@@ -218,19 +226,19 @@ func TestForkThreadRejectsLinkedSourceSessionsAndDifferentProject(t *testing.T) 
 
 func TestForkThreadRejectsLinkedSourceTranscriptFile(t *testing.T) {
 	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
 	threadRoot, err := store.ThreadRoot(source.ThreadID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sessionsRoot := filepath.Join(threadRoot, "sessions")
-	if err := os.Mkdir(sessionsRoot, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	outside := filepath.Join(t.TempDir(), "outside.jsonl")
-	if err := os.WriteFile(outside, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	transcript := filepath.Join(sessionsRoot, "coding_"+source.ThreadID+".jsonl")
+	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	if err := os.Rename(transcript, outside); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(outside, transcript); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
@@ -241,27 +249,24 @@ func TestForkThreadRejectsLinkedSourceTranscriptFile(t *testing.T) {
 	t.Cleanup(func() { _ = lease.Release() })
 	if _, _, err := store.ForkThread(t.Context(), lease, ForkOptions{
 		TargetThreadID: NewThreadID(), Project: source.Project, At: time.Now(),
-	}); err == nil || !strings.Contains(err.Error(), "linked or non-regular") {
+	}); err == nil || !strings.Contains(err.Error(), "pin transcript JSONL") {
 		t.Fatalf("linked transcript error = %v", err)
 	}
 }
 
 func TestForkThreadRejectsHardLinkedSourceTranscriptFile(t *testing.T) {
 	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
 	threadRoot, err := store.ThreadRoot(source.ThreadID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sessionsRoot := filepath.Join(threadRoot, "sessions")
-	if err := os.Mkdir(sessionsRoot, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	outside := filepath.Join(t.TempDir(), "outside.jsonl")
-	if err := os.WriteFile(outside, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	transcript := filepath.Join(sessionsRoot, "coding_"+source.ThreadID+".jsonl")
-	if err := os.Link(outside, transcript); err != nil {
+	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	if err := os.Link(transcript, outside); err != nil {
 		t.Skipf("hard links unavailable: %v", err)
 	}
 	lease, err := store.AcquireLease(source.ThreadID)
@@ -346,6 +351,107 @@ func TestForkThreadPublishesMetadataLastAndClassifiesCommittedSave(t *testing.T)
 				t.Fatalf("pre-commit target remains: %v", err)
 			}
 		})
+	}
+}
+
+func TestForkThreadDoesNotClassifyCommittedProvisionAsPublished(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	injected := errors.New("injected provision sync failure")
+	originalMkdir := store.mkdirDurable
+	store.mkdirDurable = func(root, relative string, mode os.FileMode) error {
+		if root == store.durableRoot && strings.HasSuffix(relative, targetID) {
+			return &fileutil.CommittedWriteError{Err: injected}
+		}
+		return originalMkdir(root, relative, mode)
+	}
+	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if !errors.Is(forkErr, injected) || IsCommittedForkError(forkErr) {
+		t.Fatalf("provision failure classification = %v", forkErr)
+	}
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
+		t.Fatalf("unpublished provision target remains: %v", err)
+	}
+}
+
+func TestForkThreadRejectsDirtyPinnedHistoryWithoutRecoveringIt(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
+	threadRoot, err := store.ThreadRoot(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaPath := filepath.Join(threadRoot, "sessions", "coding_"+source.ThreadID+".meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta memory.SessionMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatal(err)
+	}
+	meta.HistoryDirty = true
+	dirtyData, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, dirtyData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	if _, _, err := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: NewThreadID(), Project: source.Project, At: time.Now(),
+	}); err == nil || !strings.Contains(err.Error(), "unfinished history mutation") {
+		t.Fatalf("dirty history error = %v", err)
+	}
+	after, err := os.ReadFile(metaPath)
+	if err != nil || !bytes.Equal(after, dirtyData) {
+		t.Fatalf("fork mutated dirty metadata: equal=%t error=%v", bytes.Equal(after, dirtyData), err)
+	}
+}
+
+func TestReadPinnedForkFileSurvivesPathReplacement(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "source.jsonl")
+	want := []byte("pinned\n")
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	moved := filepath.Join(root, "moved.jsonl")
+	if err := os.Rename(path, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replacement\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := readPinnedForkFile(t.Context(), file)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("pinned read = %q / %v", got, err)
 	}
 }
 

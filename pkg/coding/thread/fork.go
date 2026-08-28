@@ -1,16 +1,22 @@
 package thread
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/providers/messageutil"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
@@ -94,14 +100,7 @@ func (s *Store) ForkThread(
 	var child Metadata
 	var result ForkResult
 	err := sourceLease.withActive(s.root, sourceThreadID, func() error {
-		source, err := s.loadDirectMetadata(sourceThreadID)
-		if err != nil {
-			return err
-		}
-		if source.Project.ProjectKey != options.Project.ProjectKey {
-			return fmt.Errorf("coding thread fork: source belongs to project %q", source.Project.ProjectRoot)
-		}
-		history, revision, err := s.readForkHistory(ctx, source)
+		source, history, revision, err := s.readForkSource(ctx, sourceLease, options.Project.ProjectKey)
 		if err != nil {
 			return err
 		}
@@ -140,121 +139,192 @@ func (s *Store) ForkThread(
 	return child, result, err
 }
 
-func (s *Store) loadDirectMetadata(threadID string) (Metadata, error) {
+func (s *Store) readForkSource(
+	ctx context.Context,
+	lease *Lease,
+	projectKey string,
+) (Metadata, []providers.Message, memory.HistoryRevision, error) {
+	threadID := lease.ThreadID()
 	storeRoot, err := openCatalogRoot(s.root)
 	if err != nil {
-		return Metadata{}, fmt.Errorf("coding thread: open store root: %w", err)
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: open store root: %w", err)
 	}
 	defer func() { _ = storeRoot.Close() }()
 	threadsRoot, err := openCatalogChildDirectory(storeRoot, "threads")
 	if err != nil {
-		return Metadata{}, fmt.Errorf("coding thread: open threads root: %w", err)
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: open threads root: %w", err)
 	}
 	defer func() { _ = threadsRoot.Close() }()
-	directThreadRoot, err := openCatalogChildDirectory(threadsRoot, threadID)
+	threadRoot, err := openCatalogChildDirectory(threadsRoot, threadID)
 	if err != nil {
-		return Metadata{}, fmt.Errorf("coding thread: open direct thread root: %w", err)
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: open thread root: %w", err)
 	}
-	defer func() { _ = directThreadRoot.Close() }()
-	return loadCatalogMetadataFromDirectory(
-		directThreadRoot,
-		threadID,
-		openCatalogMetadataFile,
-	)
-}
-
-func (s *Store) readForkHistory(
-	ctx context.Context,
-	source Metadata,
-) ([]providers.Message, memory.HistoryRevision, error) {
-	threadRoot, err := s.ThreadRoot(source.ThreadID)
+	defer func() { _ = threadRoot.Close() }()
+	if leaseErr := validateForkLeaseRoot(threadRoot, lease); leaseErr != nil {
+		return Metadata{}, nil, memory.HistoryRevision{}, leaseErr
+	}
+	metadata, err := loadCatalogMetadataFromDirectory(threadRoot, threadID, openCatalogMetadataFile)
 	if err != nil {
-		return nil, memory.HistoryRevision{}, err
+		return Metadata{}, nil, memory.HistoryRevision{}, err
 	}
-	sessionsRoot := filepath.Join(threadRoot, "sessions")
-	info, err := os.Lstat(sessionsRoot)
-	if err != nil {
-		return nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: inspect source sessions: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return nil, memory.HistoryRevision{}, fmt.Errorf(
-			"coding thread fork: source sessions is not a direct directory",
+	if metadata.Project.ProjectKey != projectKey {
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+			"coding thread fork: source belongs to project %q",
+			metadata.Project.ProjectRoot,
 		)
 	}
-	sessionStem := "coding_" + source.ThreadID
-	for _, name := range []string{sessionStem + ".jsonl", sessionStem + ".meta.json"} {
-		if validationErr := validateForkTranscriptFile(filepath.Join(sessionsRoot, name)); validationErr != nil {
-			return nil, memory.HistoryRevision{}, validationErr
-		}
-	}
-	canonical, err := memory.NewJSONLStore(sessionsRoot)
+	sessionsRoot, err := openCatalogChildDirectory(threadRoot, "sessions")
 	if err != nil {
-		return nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: open source transcript: %w", err)
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: open sessions: %w", err)
 	}
-	backend := session.NewJSONLBackend(canonical)
-	revision, revisionErr := backend.GetHistoryRevision(ctx, source.SessionKey)
-	if revisionErr != nil {
-		_ = backend.Close()
-		return nil, memory.HistoryRevision{}, fmt.Errorf(
-			"coding thread fork: inspect source transcript: %w",
-			revisionErr,
+	defer func() { _ = sessionsRoot.Close() }()
+	sessionStem := "coding_" + metadata.ThreadID
+	metaFile, err := openCatalogFile(sessionsRoot, sessionStem+".meta.json")
+	if err != nil {
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+			"coding thread fork: pin transcript metadata: %w",
+			err,
 		)
 	}
-	visible := revision.Count - revision.Skip
-	if visible < 0 || visible > MaxForkMessages || revision.FileSize > MaxForkTranscriptBytes {
-		_ = backend.Close()
-		return nil, memory.HistoryRevision{}, fmt.Errorf(
-			"coding thread fork: source transcript exceeds %d messages or %d bytes",
+	jsonlFile, err := openCatalogFile(sessionsRoot, sessionStem+".jsonl")
+	if err != nil {
+		_ = metaFile.Close()
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+			"coding thread fork: pin transcript JSONL: %w",
+			err,
+		)
+	}
+	metaData, _, metaErr := readPinnedForkFile(ctx, metaFile)
+	jsonlData, jsonlInfo, jsonlErr := readPinnedForkFile(ctx, jsonlFile)
+	closeErr := errors.Join(jsonlFile.Close(), metaFile.Close())
+	if readErr := errors.Join(metaErr, jsonlErr, closeErr); readErr != nil {
+		return Metadata{}, nil, memory.HistoryRevision{}, readErr
+	}
+	var sessionMeta memory.SessionMeta
+	if decodeErr := json.Unmarshal(metaData, &sessionMeta); decodeErr != nil {
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+			"coding thread fork: decode transcript metadata: %w",
+			decodeErr,
+		)
+	}
+	if sessionMeta.Key != "" && sessionMeta.Key != metadata.SessionKey {
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: source session key mismatch")
+	}
+	if sessionMeta.HistoryDirty {
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+			"coding thread fork: source transcript has an unfinished history mutation",
+		)
+	}
+	visible := sessionMeta.Count - sessionMeta.Skip
+	if sessionMeta.Count < 0 || sessionMeta.Skip < 0 || visible < 0 || visible > MaxForkMessages {
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+			"coding thread fork: source transcript exceeds %d visible messages",
 			MaxForkMessages,
-			MaxForkTranscriptBytes,
 		)
 	}
-	history, readErr := backend.ReadTurnHistory(ctx, source.SessionKey)
-	after, afterErr := backend.GetHistoryRevision(ctx, source.SessionKey)
-	closeErr := backend.Close()
-	if err := errors.Join(readErr, afterErr, closeErr); err != nil {
-		return nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: read source transcript: %w", err)
+	history, rawCount, err := decodePinnedForkHistory(ctx, jsonlData, sessionMeta.Skip)
+	if err != nil {
+		return Metadata{}, nil, memory.HistoryRevision{}, err
 	}
-	if revision != after || len(history) != visible {
-		return nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: source transcript changed while reading")
+	if rawCount != sessionMeta.Count || len(history) != visible {
+		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+			"coding thread fork: pinned transcript does not match its metadata",
+		)
 	}
-	return history, revision, nil
+	revision := memory.HistoryRevision{
+		Revision:  sessionMeta.HistoryRevision,
+		Count:     sessionMeta.Count,
+		Skip:      sessionMeta.Skip,
+		FileSize:  jsonlInfo.Size(),
+		ModTimeNS: jsonlInfo.ModTime().UnixNano(),
+	}
+	return metadata, history, revision, nil
 }
 
-func validateForkTranscriptFile(path string) error {
-	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
+func validateForkLeaseRoot(root *catalogDirectory, lease *Lease) error {
+	pinnedLease, err := openThreadLeaseFile(root)
 	if err != nil {
-		return fmt.Errorf("coding thread fork: inspect source transcript file: %w", err)
+		return fmt.Errorf("coding thread fork: pin source lease path: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("coding thread fork: source transcript contains a linked or non-regular file")
-	}
-	file, err := os.Open(path)
+	defer func() { _ = pinnedLease.Close() }()
+	pinnedInfo, err := pinnedLease.Stat()
 	if err != nil {
-		return fmt.Errorf("coding thread fork: open source transcript file: %w", err)
+		return err
 	}
-	directInfo, statErr := file.Stat()
-	if statErr != nil {
-		return fmt.Errorf(
-			"coding thread fork: inspect opened source transcript file: %w",
-			errors.Join(statErr, file.Close()),
-		)
+	leaseInfo, err := lease.file.Stat()
+	if err != nil {
+		return err
 	}
-	validateErr := validateCatalogMetadataFile(file, directInfo)
-	closeErr := file.Close()
-	if err := errors.Join(statErr, validateErr, closeErr); err != nil {
-		return fmt.Errorf("coding thread fork: source transcript file is unsafe: %w", err)
-	}
-	if directInfo.Size() > MaxForkTranscriptBytes {
-		return fmt.Errorf(
-			"coding thread fork: source transcript file exceeds %d bytes",
-			MaxForkTranscriptBytes,
-		)
+	if !os.SameFile(pinnedInfo, leaseInfo) {
+		return fmt.Errorf("coding thread fork: source lease no longer identifies the active thread root")
 	}
 	return nil
+}
+
+func readPinnedForkFile(ctx context.Context, file *os.File) ([]byte, os.FileInfo, error) {
+	before, err := file.Stat()
+	if err != nil {
+		return nil, nil, fmt.Errorf("coding thread fork: stat pinned source file: %w", err)
+	}
+	if validationErr := validateCatalogMetadataFile(file, before); validationErr != nil {
+		return nil, nil, fmt.Errorf("coding thread fork: pinned source file is unsafe: %w", validationErr)
+	}
+	if before.Size() > MaxForkTranscriptBytes {
+		return nil, nil, fmt.Errorf("coding thread fork: pinned source file exceeds %d bytes", MaxForkTranscriptBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, MaxForkTranscriptBytes+1))
+	if err != nil {
+		return nil, nil, fmt.Errorf("coding thread fork: read pinned source file: %w", err)
+	}
+	if len(data) > int(MaxForkTranscriptBytes) {
+		return nil, nil, fmt.Errorf("coding thread fork: pinned source file exceeds %d bytes", MaxForkTranscriptBytes)
+	}
+	if contextErr := context.Cause(ctx); contextErr != nil {
+		return nil, nil, contextErr
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return nil, nil, fmt.Errorf("coding thread fork: restat pinned source file: %w", err)
+	}
+	if before.Size() != after.Size() || before.ModTime() != after.ModTime() {
+		return nil, nil, fmt.Errorf("coding thread fork: pinned source file changed while reading")
+	}
+	return data, before, nil
+}
+
+func decodePinnedForkHistory(
+	ctx context.Context,
+	data []byte,
+	skip int,
+) ([]providers.Message, int, error) {
+	var history []providers.Message
+	rawCount := 0
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 64*1024), int(MaxForkTranscriptBytes))
+	for scanner.Scan() {
+		if err := context.Cause(ctx); err != nil {
+			return nil, 0, err
+		}
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		rawCount++
+		if rawCount <= skip {
+			continue
+		}
+		var message providers.Message
+		if err := json.Unmarshal(line, &message); err != nil {
+			return nil, 0, fmt.Errorf("coding thread fork: decode JSONL line %d: %w", rawCount, err)
+		}
+		if !messageutil.IsTransientAssistantThoughtMessage(message) {
+			history = append(history, message)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, 0, fmt.Errorf("coding thread fork: scan pinned JSONL: %w", err)
+	}
+	return history, rawCount, nil
 }
 
 func selectForkPrefix(
@@ -352,7 +422,17 @@ func (s *Store) publishFork(
 		return cleanup(errors.Join(err, targetLease.Release()))
 	}
 	saveErr := s.Save(child)
-	published := saveErr == nil || fileutil.IsCommittedWriteError(saveErr)
+	published := saveErr == nil
+	if saveErr != nil {
+		loaded, verifyErr := s.Load(child.ThreadID)
+		published = verifyErr == nil && reflect.DeepEqual(loaded, child)
+		if !published {
+			if verifyErr == nil {
+				verifyErr = fmt.Errorf("published metadata does not match the fork child")
+			}
+			saveErr = errors.Join(saveErr, verifyErr)
+		}
+	}
 	releaseErr := targetLease.Release()
 	if !published {
 		return cleanup(errors.Join(saveErr, releaseErr))

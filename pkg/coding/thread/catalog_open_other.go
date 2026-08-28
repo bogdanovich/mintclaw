@@ -58,5 +58,12 @@ func (d *catalogDirectory) Close() error {
 }
 
 func openCatalogMetadataFile(root *catalogDirectory) (*os.File, error) {
-	return root.root.OpenFile(metadataFileName, os.O_RDONLY, 0)
+	return openCatalogFile(root, metadataFileName)
+}
+
+func openCatalogFile(root *catalogDirectory, name string) (*os.File, error) {
+	if root == nil || root.root == nil || !filepath.IsLocal(name) {
+		return nil, fmt.Errorf("catalog directory and local file name are required")
+	}
+	return root.root.OpenFile(name, os.O_RDONLY, 0)
 }

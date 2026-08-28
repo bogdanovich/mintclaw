@@ -58,7 +58,7 @@ func runForkThread(
 	sourceThreadID string,
 	atTurn int,
 	jsonOutput bool,
-) (resultErr error) {
+) error {
 	sourceThreadID = strings.TrimSpace(sourceThreadID)
 	project, store, err := resolveEnvironment(ctx, deps)
 	if err != nil {
@@ -68,7 +68,6 @@ func runForkThread(
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, sourceLease.Release()) }()
 	child, forked, forkErr := store.ForkThread(ctx, sourceLease, thread.ForkOptions{
 		TargetThreadID: deps.newThreadID(),
 		Project:        project,
@@ -76,7 +75,7 @@ func runForkThread(
 		At:             deps.now(),
 	})
 	if forkErr != nil && !thread.IsCommittedForkError(forkErr) {
-		return forkErr
+		return errors.Join(forkErr, sourceLease.Release())
 	}
 	result := forkThreadOutput{
 		Action:        "forked",
@@ -85,7 +84,22 @@ func runForkThread(
 		ResumeCommand: "mintclaw resume " + child.ThreadID,
 		Notice:        "Conversation history was copied; the fork uses the current live filesystem and did not roll files back.",
 	}
-	return errors.Join(forkErr, renderForkThread(out, result, jsonOutput))
+	renderErr := renderForkThread(out, result, jsonOutput)
+	releaseErr := sourceLease.Release()
+	return classifyForkCompletion(forked, forkErr, renderErr, releaseErr)
+}
+
+func classifyForkCompletion(
+	result thread.ForkResult,
+	forkErr error,
+	renderErr error,
+	releaseErr error,
+) error {
+	finalErr := errors.Join(forkErr, renderErr, releaseErr)
+	if finalErr == nil {
+		return nil
+	}
+	return &thread.CommittedForkError{Result: result, Err: finalErr}
 }
 
 func renderForkThread(out io.Writer, result forkThreadOutput, jsonOutput bool) error {
