@@ -24,7 +24,7 @@ type testClock struct {
 
 func TestValidateSnapshotIsReadOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "interactions.json")
-	content := []byte(`{"schema_version":"interaction_snapshot.v1","records":[]}`)
+	content := []byte(`{"schema_version":"interaction_snapshot.v1","commit_sequence":0,"records":[]}`)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +40,76 @@ func TestValidateSnapshotIsReadOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
 		t.Fatalf("ValidateSnapshot() created a lock file: %v", err)
+	}
+}
+
+func TestValidateSnapshotRequiresCurrentCommitSequences(t *testing.T) {
+	t.Run("snapshot", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "interactions.json")
+		content := []byte(`{"schema_version":"interaction_snapshot.v1","records":[]}`)
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateSnapshot(path); err == nil || !strings.Contains(err.Error(), "missing commit_sequence") {
+			t.Fatalf("ValidateSnapshot() error = %v, want missing commit_sequence", err)
+		}
+	})
+
+	t.Run("event", func(t *testing.T) {
+		registry, clock, path := newTestRegistry(t)
+		if _, err := registry.Create(validCreate(
+			clock,
+			"interaction_01010101aaaaaaaa",
+			"session-1",
+		)); err != nil {
+			t.Fatal(err)
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document map[string]any
+		if err = json.Unmarshal(data, &document); err != nil {
+			t.Fatal(err)
+		}
+		events, ok := document["events"].([]any)
+		if !ok || len(events) != 1 {
+			t.Fatalf("events = %#v, want one event", document["events"])
+		}
+		event, ok := events[0].(map[string]any)
+		if !ok {
+			t.Fatalf("event = %#v, want object", events[0])
+		}
+		delete(event, "commit_sequence")
+		data, err = json.Marshal(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err = ValidateSnapshot(path); err == nil || !strings.Contains(err.Error(), "commit sequence") {
+			t.Fatalf("ValidateSnapshot() error = %v, want invalid commit sequence", err)
+		}
+	})
+}
+
+func TestValidateSnapshotRejectsUnknownAndTrailingData(t *testing.T) {
+	tests := map[string]string{
+		"unknown field":  `{"schema_version":"interaction_snapshot.v1","commit_sequence":0,"records":[],"legacy":true}`,
+		"trailing value": `{"schema_version":"interaction_snapshot.v1","commit_sequence":0,"records":[]} {}`,
+	}
+	for name, content := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "interactions.json")
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateSnapshot(path); err == nil {
+				t.Fatal("ValidateSnapshot() error = nil, want strict current-contract rejection")
+			}
+		})
 	}
 }
 

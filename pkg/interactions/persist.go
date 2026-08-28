@@ -1,9 +1,11 @@
 package interactions
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,8 +51,8 @@ func (r *Registry) load() error {
 	if err != nil {
 		return err
 	}
-	var snapshot Snapshot
-	if err := json.Unmarshal(data, &snapshot); err != nil {
+	snapshot, err := decodeSnapshot(data)
+	if err != nil {
 		return err
 	}
 	if snapshot.SchemaVersion != SnapshotSchemaVersion {
@@ -112,23 +114,48 @@ func (r *Registry) load() error {
 		}
 		eventSeen[event.InteractionID] = true
 		eventSequences[event.InteractionID] = event.Sequence
-		if event.CommitSequence == 0 {
-			event.CommitSequence = commitSequence + 1
-		}
 		if event.CommitSequence <= commitSequence {
 			return fmt.Errorf("invalid interaction commit sequence %q", event.EventID)
 		}
 		commitSequence = event.CommitSequence
 		r.events = append(r.events, event)
 	}
-	if snapshot.CommitSequence != 0 && snapshot.CommitSequence < commitSequence {
+	if snapshot.CommitSequence < commitSequence {
 		return fmt.Errorf("invalid interaction snapshot commit sequence")
 	}
 	r.commitSequence = snapshot.CommitSequence
-	if r.commitSequence == 0 {
-		r.commitSequence = commitSequence
-	}
 	return nil
+}
+
+func decodeSnapshot(data []byte) (Snapshot, error) {
+	type snapshotDocument struct {
+		SchemaVersion  string   `json:"schema_version"`
+		CommitSequence *uint64  `json:"commit_sequence"`
+		Records        []Record `json:"records"`
+		Events         []Event  `json:"events,omitempty"`
+	}
+
+	var document snapshotDocument
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&document); err != nil {
+		return Snapshot{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return Snapshot{}, fmt.Errorf("interaction snapshot contains a trailing JSON value")
+		}
+		return Snapshot{}, fmt.Errorf("interaction snapshot contains trailing data: %w", err)
+	}
+	if document.CommitSequence == nil {
+		return Snapshot{}, fmt.Errorf("interaction snapshot is missing commit_sequence")
+	}
+	return Snapshot{
+		SchemaVersion:  document.SchemaVersion,
+		CommitSequence: *document.CommitSequence,
+		Records:        document.Records,
+		Events:         document.Events,
+	}, nil
 }
 
 func (r *Registry) saveLocked() error {
