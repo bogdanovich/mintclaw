@@ -1611,6 +1611,9 @@ Done when:
   message.
 - Delete confirmation identifies only MintClaw-owned files.
 
+Completed by the [P6.1 exit record](local-coding-agent-p6-1-exit.md). P6.2 and
+later roadmap packets remain uncompleted.
+
 #### P6.2 — Historical thread search
 
 Dependencies: P5.4

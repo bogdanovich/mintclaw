@@ -74,11 +74,15 @@ The source thread, sessions directory, metadata, and JSONL are opened through
 anchored no-follow handles and remain pinned for the complete read. Forking is
 read-only: an unfinished dirty-history transaction fails closed for normal
 runtime recovery instead of being repaired by this administrative command.
-Publication is verified through the anchored target directory and its held
-lease identity, so replacing the target path cannot classify another directory
-as the committed fork. Unpublished preparation is atomically moved into a
-recoverable internal quarantine only after its held lease identity is confirmed;
-a replacement entry is restored and never recursively deleted.
+The active `threads` namespace is pinned and identity-checked before target UUID
+reservation. The target directory and lease are created relative to those
+anchored handles; platform lease creation retains Unix regular-file/link checks
+and immediate Windows owner-only ACL hardening. Publication verifies the active
+target directory, held lease, exact descriptor, sessions-directory identity,
+and both snapshot files, so replacing a namespace cannot classify incomplete or
+unrelated state as the committed fork. Unpublished preparation is atomically
+moved into a recoverable internal quarantine only after its held lease identity
+is confirmed; a replacement entry is restored and never recursively deleted.
 
 The child gets a fresh UUID, session key, external directory, lease, current
 project snapshot, and future writer. It inherits only model/provider selection
@@ -91,23 +95,40 @@ canonical JSONL writer rejects any normalized record its bounded reader could
 not later resume, and fork performs the same exact validation before allocating
 the child target.
 
-After the target lease is acquired, its directory is pinned and all session and
-descriptor writes are performed relative to that anchored handle. Renaming or
-replacing the active target path therefore cannot redirect preparation writes;
-final catalog verification still proves that the active path names the held
-lease before publication is reported.
+All session and descriptor writes are performed relative to the pinned target
+and sessions handles. Renaming or replacing an active path therefore cannot
+redirect preparation writes; final catalog verification proves that the active
+path names the held lease and exact independently resumable transcript before
+publication is reported.
 
 Both human and JSON results state that the fork uses the current live
 filesystem and provide `mintclaw resume <child-id>`. Historical conversation is
 context, never a claim that project files were rolled back.
 
-## First-packet done criteria
+## P6.1 done criteria
+
+All three packets are complete:
 
 - invalid titles and lifecycle timestamps cannot be persisted;
 - rename/archive/unarchive are rejected during an active turn or compaction;
 - persistence and the live projection converge after a successful operation;
-- active and archived catalog/picker views change on the next read;
-- exact-ID resume remains possible for an archived thread;
-- focused tests cover metadata validation, catalog separation, controller
-  serialization, native persistence/projection, TUI commands, and picker
-  toggling.
+- active and archived catalog/picker views change on the next read, while
+  exact-ID resume remains possible for an archived thread;
+- delete preview and confirmation identify one validated UUID and only
+  MintClaw-owned artifacts under the external coding store;
+- confirmed deletion holds the writer lease and moves the complete thread root
+  into recoverable same-store trash without walking or deleting project files;
+- a fork copies one bounded stable conversational prefix into a fresh UUID,
+  session, writer, and ancestry record while leaving both future histories
+  independent;
+- historical fork output explicitly identifies the current live filesystem and
+  never claims that project files were rewound;
+- source reads, target reservation, lease creation, snapshot writes, final
+  publication verification, and failed-preparation quarantine preserve their
+  anchored filesystem identities across replacement races; and
+- focused, race, tagged, platform compilation, catalog/controller/TUI, restart,
+  recoverability, record-limit, and adversarial namespace tests cover the
+  lifecycle contracts.
+
+Merged implementation and validation evidence is recorded in the
+[P6.1 exit record](local-coding-agent-p6-1-exit.md).
