@@ -4,10 +4,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 
@@ -529,12 +527,6 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			return LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}, nil
 		}
 	}
-	for _, call := range llm.response.ToolCalls {
-		if err := validateProtectedBrowserCallRepresentations(call); err != nil {
-			return LLMCallOutcome{}, fmt.Errorf("validate protected browser tool call: %w", err)
-		}
-	}
-
 	// Save finishReason and usage on the active turn state. Use ts directly
 	// (the authoritative turn state for this call) rather than relying on a
 	// context lookup: the raw ctx passed to CallLLM is not seeded with turn
@@ -739,41 +731,25 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	}
 	for _, projection := range projections {
 		tc := projection.call
-		argumentsJSON, marshalErr := json.Marshal(projection.arguments)
-		if marshalErr != nil {
-			return LLMCallOutcome{}, fmt.Errorf("encode assistant tool-call intent: %w", marshalErr)
-		}
 		toolFeedbackExplanation := toolFeedbackExplanationForToolCall(
 			llm.response,
 			tc,
 			exec.messages,
 		)
-		extraContent := cloneDurableToolExtraContent(tc.ExtraContent)
 		if projection.protected {
 			toolFeedbackExplanation = ""
-			extraContent = nil
-		}
-		if strings.TrimSpace(toolFeedbackExplanation) != "" {
-			if extraContent == nil {
-				extraContent = &providers.ExtraContent{}
-			}
-			extraContent.ToolFeedbackExplanation = toolFeedbackExplanation
 		}
 		thoughtSignature := ""
-		if tc.Function != nil && !projection.protected {
-			thoughtSignature = tc.Function.ThoughtSignature
+		if !projection.protected {
+			thoughtSignature = tc.ThoughtSignature
 		}
 		assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
-			ID:   tc.ID,
-			Type: "function",
-			Name: tc.Name,
-			Function: &providers.FunctionCall{
-				Name:             tc.Name,
-				Arguments:        string(argumentsJSON),
-				ThoughtSignature: thoughtSignature,
-			},
-			ExtraContent:     extraContent,
-			ThoughtSignature: thoughtSignature,
+			ID:                      tc.ID,
+			Type:                    "function",
+			Name:                    tc.Name,
+			Arguments:               cloneStringAnyMap(projection.arguments),
+			ThoughtSignature:        thoughtSignature,
+			ToolFeedbackExplanation: toolFeedbackExplanation,
 		})
 	}
 	exec.messages = append(exec.messages, assistantMsg)
@@ -804,43 +780,6 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	}
 
 	return LLMCallOutcome{Control: ControlToolLoop}, nil
-}
-
-func validateProtectedBrowserCallRepresentations(call providers.ToolCall) error {
-	functionName, serialized := "", ""
-	if call.Function != nil {
-		functionName = call.Function.Name
-		serialized = call.Function.Arguments
-	}
-	if call.Name != "browser_act" && functionName != "browser_act" {
-		return nil
-	}
-	if call.Name != "" && functionName != "" && call.Name != functionName {
-		return errors.New("conflicting browser tool names")
-	}
-	if serialized == "" {
-		return nil
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(serialized), &decoded); err != nil || decoded == nil {
-		return errors.New("malformed serialized browser arguments")
-	}
-	if len(call.Arguments) > 0 && !reflect.DeepEqual(call.Arguments, decoded) {
-		return errors.New("conflicting browser argument representations")
-	}
-	return nil
-}
-
-func cloneDurableToolExtraContent(extra *providers.ExtraContent) *providers.ExtraContent {
-	if extra == nil {
-		return nil
-	}
-	cloned := *extra
-	if extra.Google != nil {
-		google := *extra.Google
-		cloned.Google = &google
-	}
-	return &cloned
 }
 
 func validateDurableToolCallIDs(calls []providers.ToolCall) error {

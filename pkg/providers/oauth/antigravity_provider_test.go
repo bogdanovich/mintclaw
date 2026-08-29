@@ -2,6 +2,7 @@ package oauthprovider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -51,18 +52,16 @@ func TestAntigravityProviderNormalizesHTTPError(t *testing.T) {
 	}
 }
 
-func TestBuildRequestUsesFunctionFieldsWhenToolCallNameMissing(t *testing.T) {
+func TestBuildRequestUsesCanonicalToolCall(t *testing.T) {
 	p := &AntigravityProvider{}
 
 	messages := []Message{
 		{
 			Role: "assistant",
 			ToolCalls: []ToolCall{{
-				ID: "call_read_file_123",
-				Function: &FunctionCall{
-					Name:      "read_file",
-					Arguments: `{"path":"README.md"}`,
-				},
+				ID:        "call_read_file_123",
+				Name:      "read_file",
+				Arguments: map[string]any{"path": "README.md"},
 			}},
 		},
 		{
@@ -94,6 +93,22 @@ func TestBuildRequestUsesFunctionFieldsWhenToolCallNameMissing(t *testing.T) {
 	}
 	if toolPart.FunctionResponse.Name != "read_file" {
 		t.Fatalf("expected functionResponse name read_file, got %q", toolPart.FunctionResponse.Name)
+	}
+}
+
+func TestBuildRequestSerializesZeroArgumentToolCallAsObject(t *testing.T) {
+	p := &AntigravityProvider{}
+	req := p.buildRequest([]Message{{
+		Role:      "assistant",
+		ToolCalls: []ToolCall{{ID: "call_zero", Name: "zero_argument_tool"}},
+	}}, nil, "", nil)
+
+	encoded, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"args":{}`) || strings.Contains(string(encoded), `"args":null`) {
+		t.Fatalf("zero-argument request = %s", encoded)
 	}
 }
 

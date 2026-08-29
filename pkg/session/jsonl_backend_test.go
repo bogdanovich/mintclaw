@@ -183,7 +183,7 @@ func TestJSONLBackend_AddFullMessage(t *testing.T) {
 		Role:    "assistant",
 		Content: "done",
 		ToolCalls: []providers.ToolCall{
-			{ID: "tc1", Function: &providers.FunctionCall{Name: "read_file", Arguments: `{"path":"x"}`}},
+			{ID: "tc1", Name: "read_file", Arguments: map[string]any{"path": "x"}},
 		},
 	}
 	b.AddFullMessage("s1", msg)

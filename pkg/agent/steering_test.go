@@ -1230,20 +1230,14 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 				ID:   "call_1",
 				Type: "function",
 				Name: "tool_one",
-				Function: &providers.FunctionCall{
-					Name:      "tool_one",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 			{
 				ID:   "call_2",
 				Type: "function",
 				Name: "tool_two",
-				Function: &providers.FunctionCall{
-					Name:      "tool_two",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 		},
@@ -2658,20 +2652,14 @@ func TestAgentLoop_InterruptGracefulSession_UsesTerminalNoToolCall(t *testing.T)
 				ID:   "call_1",
 				Type: "function",
 				Name: "tool_one",
-				Function: &providers.FunctionCall{
-					Name:      "tool_one",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 			{
 				ID:   "call_2",
 				Type: "function",
 				Name: "tool_two",
-				Function: &providers.FunctionCall{
-					Name:      "tool_two",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 		},
@@ -2833,10 +2821,7 @@ func TestAgentLoop_HardAbort_AfterToolStartPreservesTerminalResult(t *testing.T)
 				ID:   "call_1",
 				Type: "function",
 				Name: "cancel_tool",
-				Function: &providers.FunctionCall{
-					Name:      "cancel_tool",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 		},
@@ -2980,10 +2965,7 @@ func TestAgentLoop_StopCommand_AbortsActiveTurnAndClearsQueuedSteering(t *testin
 				ID:   "call_1",
 				Type: "function",
 				Name: "cancel_tool",
-				Function: &providers.FunctionCall{
-					Name:      "cancel_tool",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 		},
@@ -3159,20 +3141,14 @@ func TestAgentLoop_SteeringPreservesBatchAndReachesNextModelIteration(t *testing
 				ID:   "call_1",
 				Type: "function",
 				Name: "slow_tool",
-				Function: &providers.FunctionCall{
-					Name:      "slow_tool",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 			{
 				ID:   "call_2",
 				Type: "function",
 				Name: "skipped_tool",
-				Function: &providers.FunctionCall{
-					Name:      "skipped_tool",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 		},

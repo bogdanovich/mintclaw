@@ -4460,13 +4460,13 @@ func TestResponseReasoningContent_FallsBackWhenReasoningIsWhitespace(t *testing.
 
 func TestToolFeedbackExplanationFromResponse_UsesExplicitToolCallExtraContent(t *testing.T) {
 	response := &providers.LLMResponse{
-		ToolCalls: []providers.ToolCall{{
-			ID:   "call_1",
-			Name: "read_file",
-			ExtraContent: &providers.ExtraContent{
+		ToolCalls: []providers.ToolCall{
+			{
+				ID:                      "call_1",
+				Name:                    "read_file",
 				ToolFeedbackExplanation: "Read README.md first to confirm the current project structure.",
 			},
-		}},
+		},
 	}
 	messages := []providers.Message{
 		{Role: "user", Content: "check file"},
@@ -4489,17 +4489,11 @@ func TestToolFeedbackExplanationForToolCall_PrefersToolSpecificExtraContent(t *t
 		ToolCalls: []providers.ToolCall{
 			{
 				ID:   "call_1",
-				Name: "read_file",
-				ExtraContent: &providers.ExtraContent{
-					ToolFeedbackExplanation: "Read README.md first.",
-				},
+				Name: "read_file", ToolFeedbackExplanation: "Read README.md first.",
 			},
 			{
 				ID:   "call_2",
-				Name: "apply_patch",
-				ExtraContent: &providers.ExtraContent{
-					ToolFeedbackExplanation: "Update config example after reading it.",
-				},
+				Name: "apply_patch", ToolFeedbackExplanation: "Update config example after reading it.",
 			},
 		},
 	}
@@ -4529,10 +4523,7 @@ func TestToolFeedbackExplanationForToolCall_DoesNotReuseAnotherToolCallExplanati
 			},
 			{
 				ID:   "call_2",
-				Name: "apply_patch",
-				ExtraContent: &providers.ExtraContent{
-					ToolFeedbackExplanation: "Update config example after reading it.",
-				},
+				Name: "apply_patch", ToolFeedbackExplanation: "Update config example after reading it.",
 			},
 		},
 	}
@@ -4595,10 +4586,7 @@ func TestToolFeedbackExplanationForToolCall_DoesNotTruncateLongExplanation(t *te
 	response := &providers.LLMResponse{
 		ToolCalls: []providers.ToolCall{{
 			ID:   "call_1",
-			Name: "read_file",
-			ExtraContent: &providers.ExtraContent{
-				ToolFeedbackExplanation: explanation,
-			},
+			Name: "read_file", ToolFeedbackExplanation: explanation,
 		}},
 	}
 
@@ -4672,10 +4660,7 @@ func (m *mintclawDistinctToolCallContentProvider) Chat(
 				ID:        "call_tool_limit_test",
 				Type:      "function",
 				Name:      "tool_limit_test_tool",
-				Arguments: map[string]any{"value": "x"},
-				ExtraContent: &providers.ExtraContent{
-					ToolFeedbackExplanation: "Read the file before replying.",
-				},
+				Arguments: map[string]any{"value": "x"}, ToolFeedbackExplanation: "Read the file before replying.",
 			}},
 		}, nil
 	}

@@ -939,20 +939,8 @@ func cloneProviderToolCalls(calls []providers.ToolCall) []providers.ToolCall {
 	cloned := make([]providers.ToolCall, len(calls))
 	for i, call := range calls {
 		cloned[i] = call
-		if call.Function != nil {
-			fn := *call.Function
-			cloned[i].Function = &fn
-		}
 		if call.Arguments != nil {
 			cloned[i].Arguments = cloneStringAnyMap(call.Arguments)
-		}
-		if call.ExtraContent != nil {
-			extra := *call.ExtraContent
-			if call.ExtraContent.Google != nil {
-				google := *call.ExtraContent.Google
-				extra.Google = &google
-			}
-			cloned[i].ExtraContent = &extra
 		}
 	}
 	return cloned

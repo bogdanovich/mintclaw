@@ -9,10 +9,6 @@ import (
 func TestEstimateMessageTokens(t *testing.T) {
 	t.Parallel()
 
-	funcDef := func(name, arguments string) *providers.FunctionCall {
-		return &providers.FunctionCall{Name: name, Arguments: arguments}
-	}
-
 	tests := []struct {
 		name string
 		msg  providers.Message
@@ -59,7 +55,7 @@ func TestEstimateMessageTokens(t *testing.T) {
 			msg: providers.Message{
 				Content: "use the tool",
 				ToolCalls: []providers.ToolCall{
-					{ID: "id1", Type: "function", Function: funcDef("search", `{"q":"x"}`)},
+					{ID: "id1", Type: "function", Name: "search", Arguments: map[string]any{"q": "x"}},
 				},
 			},
 			want: 20,

@@ -113,38 +113,16 @@ func TestDiagnosticMessagesPreviewKeepsLatestWhenOriginIsOversized(t *testing.T)
 	}
 }
 
-func TestDiagnosticToolCallsFailClosedForSerializedArguments(t *testing.T) {
+func TestDiagnosticToolCallsRedactSensitiveCanonicalArguments(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Diagnostics.TraceCapture.Enabled = true
 	cfg.Diagnostics.TraceCapture.ContentMode = "redacted_content"
-
-	tests := []struct {
-		name        string
-		arguments   string
-		placeholder string
-	}{
-		{
-			name: "malformed", arguments: `{"password":"hunter2"`,
-			placeholder: "malformed serialized arguments",
-		},
-		{
-			name:        "oversized",
-			arguments:   `{"password":"` + strings.Repeat("hunter2", 1024) + `"}`,
-			placeholder: "oversized serialized arguments",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := diagnosticToolCallsPreview(cfg, []providers.ToolCall{{
-				ID: "call-1",
-				Function: &providers.FunctionCall{
-					Name: "shell", Arguments: test.arguments,
-				},
-			}})
-			if !strings.Contains(got, test.placeholder) || strings.Contains(got, "hunter2") {
-				t.Fatalf("tool call preview = %q", got)
-			}
-		})
+	got := diagnosticToolCallsPreview(cfg, []providers.ToolCall{{
+		ID: "call-1", Name: "shell",
+		Arguments: map[string]any{"password": strings.Repeat("hunter2", 1024)},
+	}})
+	if !strings.Contains(got, "[REDACTED]") || strings.Contains(got, "hunter2") {
+		t.Fatalf("tool call preview = %q", got)
 	}
 }
 
@@ -168,24 +146,13 @@ func TestDiagnosticBrowserFillArgumentsAreAlwaysRedacted(t *testing.T) {
 	}
 }
 
-func TestDiagnosticBrowserMalformedOrConflictingArgumentsAreRedacted(t *testing.T) {
-	tests := []providers.ToolCall{
-		{
-			ID: "call-malformed", Name: "browser_act",
-			Arguments: map[string]any{"action": map[string]any{"ref": "ref_1", "value": "canary"}},
-		},
-		{
-			ID: "call-conflict", Name: "browser_act",
-			Arguments: map[string]any{"action": map[string]any{"kind": "navigate", "url": "https://example.com"}},
-			Function: &providers.FunctionCall{
-				Name: "browser_act", Arguments: `{"action":{"kind":"fill","ref":"ref_1","value":"canary"}}`,
-			},
-		},
+func TestDiagnosticBrowserMalformedArgumentsAreRedacted(t *testing.T) {
+	call := providers.ToolCall{
+		ID: "call-malformed", Name: "browser_act",
+		Arguments: map[string]any{"action": map[string]any{"ref": "ref_1", "value": "canary"}},
 	}
-	for _, call := range tests {
-		if !diagnosticBrowserFillCall(call) {
-			t.Fatalf("malformed browser call was not classified sensitive: %#v", call)
-		}
+	if !diagnosticBrowserFillCall(call) {
+		t.Fatalf("malformed browser call was not classified sensitive: %#v", call)
 	}
 }
 
@@ -304,10 +271,7 @@ func TestFormatMessagesForLogRedactsNodeFileHistory(t *testing.T) {
 			Role: "assistant", Content: "write " + secretPath,
 			ToolCalls: []providers.ToolCall{{
 				ID: "call-file", Name: "nodes_upload",
-				Function: &providers.FunctionCall{
-					Name:      "nodes_upload",
-					Arguments: `{"destination":"` + secretPath + `","artifact_ref":"` + mediaRef + `"}`,
-				},
+				Arguments: map[string]any{"destination": secretPath, "artifact_ref": mediaRef},
 			}},
 		},
 		{Role: "tool", ToolCallID: "call-file", Content: transferRef + " " + secretPath},
@@ -332,13 +296,15 @@ func TestHumanInteractionAnswersAreRedactedFromLogsAndTraces(t *testing.T) {
 	messages := []providers.Message{
 		{
 			Role: "assistant",
-			ToolCalls: []providers.ToolCall{{
-				ID: "call-question", Name: "request_user_input",
-				Function: &providers.FunctionCall{
-					Name:      "request_user_input",
-					Arguments: `{"questions":[{"id":"approval","question":"Reveal private approval?"}]}`,
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:   "call-question",
+					Name: "request_user_input",
+					Arguments: map[string]any{
+						"questions": []any{map[string]any{"id": "approval", "question": "Reveal private approval?"}},
+					},
 				},
-			}},
+			},
 		},
 		{
 			Role:       "tool",
@@ -352,9 +318,7 @@ func TestHumanInteractionAnswersAreRedactedFromLogsAndTraces(t *testing.T) {
 			ReasoningContent: "Use " + answer + " in the next tool call",
 			ToolCalls: []providers.ToolCall{{
 				ID: "call-question", Name: "read_file",
-				Function: &providers.FunctionCall{
-					Name: "read_file", Arguments: `{"path":"` + answer + `"}`,
-				},
+				Arguments: map[string]any{"path": answer},
 			}},
 		},
 		{Role: "tool", ToolCallID: "call-question", Content: "public-result"},
@@ -406,13 +370,19 @@ func TestProtectedBrowserFillResultIsRedactedFromLogsAndTraces(t *testing.T) {
 	messages := []providers.Message{
 		{
 			Role: "assistant",
-			ToolCalls: []providers.ToolCall{{
-				ID: "fill-call", Name: "browser_act",
-				Function: &providers.FunctionCall{
-					Name:      "browser_act",
-					Arguments: `{"browser_session_id":"session","tab_id":"tab","snapshot_id":"snapshot","snapshot_generation":1,"action":{"kind":"fill","ref":"ref-1","value":"*"}}`,
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:   "fill-call",
+					Name: "browser_act",
+					Arguments: map[string]any{
+						"snapshot_id":         "snapshot",
+						"snapshot_generation": 1,
+						"action":              map[string]any{"ref": "ref-1", "value": "*", "kind": "fill"},
+						"browser_session_id":  "session",
+						"tab_id":              "tab",
+					},
 				},
-			}},
+			},
 		},
 		{Role: "tool", ToolCallID: "fill-call", Content: `{"observation":{"snapshot":"textbox: [` + canary + `]"}}`},
 	}
@@ -435,11 +405,7 @@ func TestBrowserObservationResultIsRedactedFromLogsAndTraces(t *testing.T) {
 		{
 			Role: "assistant",
 			ToolCalls: []providers.ToolCall{{
-				ID: "observe-call", Name: "browser_observe",
-				Function: &providers.FunctionCall{
-					Name:      "browser_observe",
-					Arguments: `{"browser_session_id":"session"}`,
-				},
+				ID: "observe-call", Name: "browser_observe", Arguments: map[string]any{"browser_session_id": "session"},
 			}},
 		},
 		{Role: "tool", ToolCallID: "observe-call", Content: `{"snapshot":"textbox: [` + canary + `]"}`},
@@ -462,12 +428,13 @@ func TestBrowserDiagnosticsResultIsProtectedAcrossDiagnosticProjections(t *testi
 		return []providers.Message{
 			{
 				Role: "assistant",
-				ToolCalls: []providers.ToolCall{{
-					ID: "diagnostics-call", Name: "browser_diagnostics",
-					Function: &providers.FunctionCall{
-						Name: "browser_diagnostics", Arguments: `{"browser_session_id":"session"}`,
+				ToolCalls: []providers.ToolCall{
+					{
+						ID:        "diagnostics-call",
+						Name:      "browser_diagnostics",
+						Arguments: map[string]any{"browser_session_id": "session"},
 					},
-				}},
+				},
 			},
 			{
 				Role:       "tool",
@@ -575,21 +542,18 @@ func TestPendingProtectedToolCallIDReuseFailsClosed(t *testing.T) {
 	messages := []providers.Message{
 		{
 			Role: "assistant",
-			ToolCalls: []providers.ToolCall{{
-				ID: "reused-pending-call", Name: "browser_act",
-				Function: &providers.FunctionCall{
+			ToolCalls: []providers.ToolCall{
+				{
+					ID:        "reused-pending-call",
 					Name:      "browser_act",
-					Arguments: `{"action":{"kind":"fill","ref":"ref-1","value":"*"}}`,
+					Arguments: map[string]any{"action": map[string]any{"ref": "ref-1", "value": "*", "kind": "fill"}},
 				},
-			}},
+			},
 		},
 		{
 			Role: "assistant",
 			ToolCalls: []providers.ToolCall{{
-				ID: "reused-pending-call", Name: "read_file",
-				Function: &providers.FunctionCall{
-					Name: "read_file", Arguments: `{"path":"public.txt"}`,
-				},
+				ID: "reused-pending-call", Name: "read_file", Arguments: map[string]any{"path": "public.txt"},
 			}},
 		},
 		{Role: "tool", ToolCallID: "reused-pending-call", Content: canary},
@@ -612,13 +576,15 @@ func TestDiagnosticPromptHashProjectsProtectedResultsWithoutMutatingLiveMessages
 		return []providers.Message{
 			{
 				Role: "assistant",
-				ToolCalls: []providers.ToolCall{{
-					ID: "fill-hash-call", Name: "browser_act",
-					Function: &providers.FunctionCall{
-						Name:      "browser_act",
-						Arguments: `{"action":{"kind":"fill","ref":"ref-1","value":"*"}}`,
+				ToolCalls: []providers.ToolCall{
+					{
+						ID:   "fill-hash-call",
+						Name: "browser_act",
+						Arguments: map[string]any{
+							"action": map[string]any{"kind": "fill", "ref": "ref-1", "value": "*"},
+						},
 					},
-				}},
+				},
 			},
 			{
 				Role: "tool", ToolCallID: "fill-hash-call", Content: "textbox: [" + value + "]",
@@ -732,9 +698,7 @@ func TestDiagnosticLLMResponseRedactsFollowUpToolArguments(t *testing.T) {
 		Reasoning: "Use the private decision in the next tool call",
 		ToolCalls: []providers.ToolCall{{
 			ID: "call-read", Name: "read_file",
-			Function: &providers.FunctionCall{
-				Name: "read_file", Arguments: `{"path":"` + answer + `"}`,
-			},
+			Arguments: map[string]any{"path": answer},
 		}},
 	}
 

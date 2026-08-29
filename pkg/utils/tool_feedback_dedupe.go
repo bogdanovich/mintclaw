@@ -23,10 +23,7 @@ func ToolCallExplanationDuplicatesContent(content string, toolCalls []providers.
 	}
 
 	for _, tc := range toolCalls {
-		if tc.ExtraContent == nil {
-			continue
-		}
-		explanation := normalizeToolFeedbackComparisonText(tc.ExtraContent.ToolFeedbackExplanation)
+		explanation := normalizeToolFeedbackComparisonText(tc.ToolFeedbackExplanation)
 		if explanation == "" {
 			continue
 		}

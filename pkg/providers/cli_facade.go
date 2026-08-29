@@ -36,5 +36,8 @@ func CreateCodexCliTokenSource() func() (string, string, error) {
 }
 
 func NormalizeToolCall(tc ToolCall) ToolCall {
-	return cliprovider.NormalizeToolCall(tc)
+	if tc.Arguments == nil {
+		tc.Arguments = map[string]any{}
+	}
+	return tc
 }

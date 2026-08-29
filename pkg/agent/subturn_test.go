@@ -208,20 +208,12 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 			Arguments: map[string]any{"questions": []any{map[string]any{
 				"id": "mode", "question": "Which deployment mode?",
 			}}},
-			Function: &providers.FunctionCall{
-				Name:      "request_user_input",
-				Arguments: `{"questions":[{"id":"mode","question":"Which deployment mode?"}]}`,
-			},
 		}}},
 		{ToolCalls: []providers.ToolCall{{
 			ID: "call-task-confirm", Name: "request_user_input",
 			Arguments: map[string]any{"questions": []any{map[string]any{
 				"id": "confirm", "question": "Proceed now?",
 			}}},
-			Function: &providers.FunctionCall{
-				Name:      "request_user_input",
-				Arguments: `{"questions":[{"id":"confirm","question":"Proceed now?"}]}`,
-			},
 		}}},
 		{Content: "deployed", FinishReason: "stop"},
 	}}
@@ -379,9 +371,6 @@ func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 		{ToolCalls: []providers.ToolCall{{
 			ID: "call-task-approval", Name: "browser_act",
 			Arguments: map[string]any{"target": "production"},
-			Function: &providers.FunctionCall{
-				Name: "browser_act", Arguments: `{"target":"production"}`,
-			},
 		}}},
 		{Content: "approved task completed\n" + objectiveOutcomeStart +
 			`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
@@ -583,9 +572,6 @@ func TestCrossAgentDurableApprovalPreservesChildSessionProvenance(t *testing.T) 
 		{ToolCalls: []providers.ToolCall{{
 			ID: "call-child-approval", Name: "approval_scope_recording",
 			Arguments: map[string]any{"target": "companion"},
-			Function: &providers.FunctionCall{
-				Name: "approval_scope_recording", Arguments: `{"target":"companion"}`,
-			},
 		}}},
 		{Content: "cross-agent approval completed", FinishReason: "stop"},
 	}}
@@ -2378,10 +2364,6 @@ func (p *subturnToolThenFinalProvider) Chat(
 					ID:        "call_media",
 					Name:      "subturn_media_tool",
 					Arguments: map[string]any{},
-					Function: &providers.FunctionCall{
-						Name:      "subturn_media_tool",
-						Arguments: "{}",
-					},
 				},
 			},
 		}, nil

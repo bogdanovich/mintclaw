@@ -252,23 +252,22 @@ func (p *GeminiProvider) buildRequestBody(
 				content.Parts = append(content.Parts, geminiPart{Text: msg.Content})
 			}
 			for _, tc := range msg.ToolCalls {
-				toolName, toolArgs, thoughtSignature := common.NormalizeStoredToolCall(tc)
-				if toolName == "" {
+				if tc.Name == "" {
 					continue
 				}
 				if tc.ID != "" {
-					toolCallNames[tc.ID] = toolName
+					toolCallNames[tc.ID] = tc.Name
 				}
 				part := geminiPart{
 					FunctionCall: &geminiFunctionCall{
-						Name: toolName,
-						Args: toolArgs,
+						Name: tc.Name,
+						Args: tc.Arguments,
 						ID:   tc.ID,
 					},
 				}
-				if thoughtSignature != "" {
-					part.ThoughtSignature = thoughtSignature
-					part.ThoughtSignatureSnake = thoughtSignature
+				if tc.ThoughtSignature != "" {
+					part.ThoughtSignature = tc.ThoughtSignature
+					part.ThoughtSignatureSnake = tc.ThoughtSignature
 				}
 				content.Parts = append(content.Parts, part)
 			}
@@ -634,7 +633,6 @@ func buildGeminiToolCall(part geminiPart) ToolCall {
 	if args == nil {
 		args = make(map[string]any)
 	}
-	argsJSON, _ := json.Marshal(args)
 	thoughtSignature := extractPartThoughtSignature(part.ThoughtSignature, part.ThoughtSignatureSnake)
 
 	toolCall := ToolCall{
@@ -642,17 +640,6 @@ func buildGeminiToolCall(part geminiPart) ToolCall {
 		Name:             part.FunctionCall.Name,
 		Arguments:        args,
 		ThoughtSignature: thoughtSignature,
-		Function: &FunctionCall{
-			Name:             part.FunctionCall.Name,
-			Arguments:        string(argsJSON),
-			ThoughtSignature: thoughtSignature,
-		},
-	}
-
-	if thoughtSignature != "" {
-		toolCall.ExtraContent = &ExtraContent{
-			Google: &GoogleExtra{ThoughtSignature: thoughtSignature},
-		}
 	}
 	if strings.TrimSpace(toolCall.ID) == "" {
 		toolCall.ID = fmt.Sprintf("call_%s_%d", toolCall.Name, time.Now().UnixNano())

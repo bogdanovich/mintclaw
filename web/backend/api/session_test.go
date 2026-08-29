@@ -103,6 +103,21 @@ func assertVisibleToolCallMessage(
 	return msg.ToolCalls[0]
 }
 
+func testProviderToolCall(t *testing.T, id, name, arguments, explanation string) providers.ToolCall {
+	t.Helper()
+	decoded := map[string]any{}
+	if err := json.Unmarshal([]byte(arguments), &decoded); err != nil {
+		t.Fatalf("Unmarshal(tool call arguments) error = %v", err)
+	}
+	return providers.ToolCall{
+		ID:                      id,
+		Type:                    "function",
+		Name:                    name,
+		Arguments:               decoded,
+		ToolFeedbackExplanation: explanation,
+	}
+}
+
 func TestHandleListSessions_JSONLStorage(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
@@ -908,28 +923,18 @@ func TestHandleGetSession_ReconstructsRefreshMatrixForThoughtAndToolSummary(t *t
 		{
 			Role:             "assistant",
 			ReasoningContent: "tool thought",
-			ToolCalls: []providers.ToolCall{{
-				ID:   "call_read_file",
-				Type: "function",
-				Function: &providers.FunctionCall{
-					Name:      "read_file",
-					Arguments: `{"path":"README.md"}`,
-				},
-			}},
+			ToolCalls: []providers.ToolCall{
+				testProviderToolCall(t, "call_read_file", "read_file", `{"path":"README.md"}`, ""),
+			},
 		},
 		{Role: "tool", ToolCallID: "call_read_file", Content: "file result"},
 		{Role: "user", Content: "turn3"},
 		{
 			Role:    "assistant",
 			Content: "tool visible only",
-			ToolCalls: []providers.ToolCall{{
-				ID:   "call_list_dir",
-				Type: "function",
-				Function: &providers.FunctionCall{
-					Name:      "list_dir",
-					Arguments: `{"path":"."}`,
-				},
-			}},
+			ToolCalls: []providers.ToolCall{
+				testProviderToolCall(t, "call_list_dir", "list_dir", `{"path":"."}`, ""),
+			},
 		},
 		{Role: "tool", ToolCallID: "call_list_dir", Content: "dir result"},
 		{Role: "user", Content: "turn4"},
@@ -937,14 +942,9 @@ func TestHandleGetSession_ReconstructsRefreshMatrixForThoughtAndToolSummary(t *t
 			Role:             "assistant",
 			Content:          "tool visible and thought",
 			ReasoningContent: "tool mixed thought",
-			ToolCalls: []providers.ToolCall{{
-				ID:   "call_exec",
-				Type: "function",
-				Function: &providers.FunctionCall{
-					Name:      "exec",
-					Arguments: `{"command":"pwd"}`,
-				},
-			}},
+			ToolCalls: []providers.ToolCall{
+				testProviderToolCall(t, "call_exec", "exec", `{"command":"pwd"}`, ""),
+			},
 		},
 		{Role: "tool", ToolCallID: "call_exec", Content: "pwd result"},
 	} {
@@ -1017,14 +1017,7 @@ func TestHandleGetSession_ReconstructsVisibleMessageToolOutputWithoutDuplicateSu
 			Content:   "",
 			ModelName: "gpt-5.4-mini",
 			ToolCalls: []providers.ToolCall{
-				{
-					ID:   "call_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "message",
-						Arguments: `{"content":"visible tool output"}`,
-					},
-				},
+				testProviderToolCall(t, "call_1", "message", `{"content":"visible tool output"}`, ""),
 			},
 		},
 		{Role: "tool", Content: "Message sent to mintclaw:mintclaw:detail-message-tool", ToolCallID: "call_1"},
@@ -1087,14 +1080,7 @@ func TestHandleGetSession_PreservesFinalAssistantReplyAfterMessageToolOutput(t *
 		{
 			Role: "assistant",
 			ToolCalls: []providers.ToolCall{
-				{
-					ID:   "call_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "message",
-						Arguments: `{"content":"visible tool output"}`,
-					},
-				},
+				testProviderToolCall(t, "call_1", "message", `{"content":"visible tool output"}`, ""),
 			},
 		},
 		{Role: "tool", Content: "Message sent to mintclaw:mintclaw:detail-message-tool-final-reply", ToolCallID: "call_1"},
@@ -1154,14 +1140,7 @@ func TestHandleListSessions_MessageCountUsesVisibleTranscript(t *testing.T) {
 		{
 			Role: "assistant",
 			ToolCalls: []providers.ToolCall{
-				{
-					ID:   "call_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "message",
-						Arguments: `{"content":"visible tool output"}`,
-					},
-				},
+				testProviderToolCall(t, "call_1", "message", `{"content":"visible tool output"}`, ""),
 			},
 		},
 		{Role: "tool", Content: "Message sent to mintclaw:mintclaw:list-visible-count", ToolCallID: "call_1"},
@@ -1213,17 +1192,9 @@ func TestHandleListSessions_DeduplicatesAssistantToolCallContentFromVisibleTrans
 			Role:    "assistant",
 			Content: "Read the file before replying.",
 			ToolCalls: []providers.ToolCall{
-				{
-					ID:   "call_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "read_file",
-						Arguments: `{"path":"README.md"}`,
-					},
-					ExtraContent: &providers.ExtraContent{
-						ToolFeedbackExplanation: "Read the file before replying.",
-					},
-				},
+				testProviderToolCall(
+					t, "call_1", "read_file", `{"path":"README.md"}`, "Read the file before replying.",
+				),
 			},
 		},
 		{Role: "tool", Content: "raw read_file result", ToolCallID: "call_1"},
@@ -1274,17 +1245,13 @@ func TestHandleGetSession_DoesNotDuplicateAssistantToolCallContent(t *testing.T)
 			Role:    "assistant",
 			Content: "Read the file before replying.",
 			ToolCalls: []providers.ToolCall{
-				{
-					ID:   "call_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "read_file",
-						Arguments: `{"path":"README.md","start_line":1,"end_line":10}`,
-					},
-					ExtraContent: &providers.ExtraContent{
-						ToolFeedbackExplanation: "Read the file before replying.",
-					},
-				},
+				testProviderToolCall(
+					t,
+					"call_1",
+					"read_file",
+					`{"path":"README.md","start_line":1,"end_line":10}`,
+					"Read the file before replying.",
+				),
 			},
 		},
 		{Role: "tool", Content: "raw read_file result", ToolCallID: "call_1"},
@@ -1342,17 +1309,13 @@ func TestHandleGetSession_PreservesDistinctAssistantToolCallContent(t *testing.T
 			Role:    "assistant",
 			Content: "I will summarize the findings after reading the file.",
 			ToolCalls: []providers.ToolCall{
-				{
-					ID:   "call_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "read_file",
-						Arguments: `{"path":"README.md","start_line":1,"end_line":10}`,
-					},
-					ExtraContent: &providers.ExtraContent{
-						ToolFeedbackExplanation: "Read the file before replying.",
-					},
-				},
+				testProviderToolCall(
+					t,
+					"call_1",
+					"read_file",
+					`{"path":"README.md","start_line":1,"end_line":10}`,
+					"Read the file before replying.",
+				),
 			},
 		},
 	} {
@@ -1407,17 +1370,9 @@ func TestHandleGetSession_ExposesMediaAsAttachmentWhenAssistantToolCallContentDu
 			Content: "Reviewing the generated screenshot.",
 			Media:   []string{"data:image/png;base64,abc123"},
 			ToolCalls: []providers.ToolCall{
-				{
-					ID:   "call_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "view_image",
-						Arguments: `{"path":"artifact.png"}`,
-					},
-					ExtraContent: &providers.ExtraContent{
-						ToolFeedbackExplanation: "Reviewing the generated screenshot.",
-					},
-				},
+				testProviderToolCall(
+					t, "call_1", "view_image", `{"path":"artifact.png"}`, "Reviewing the generated screenshot.",
+				),
 			},
 		},
 	} {
@@ -1484,17 +1439,9 @@ func TestHandleGetSession_PreservesAttachmentsWhenAssistantToolCallContentDuplic
 				ContentType: "text/plain",
 			}},
 			ToolCalls: []providers.ToolCall{
-				{
-					ID:   "call_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "read_file",
-						Arguments: `{"path":"report.txt"}`,
-					},
-					ExtraContent: &providers.ExtraContent{
-						ToolFeedbackExplanation: "Reviewing the generated report.",
-					},
-				},
+				testProviderToolCall(
+					t, "call_1", "read_file", `{"path":"report.txt"}`, "Reviewing the generated report.",
+				),
 			},
 		},
 	} {
@@ -1572,17 +1519,9 @@ func TestHandleGetSession_UsesConfiguredToolFeedbackMaxArgsLength(t *testing.T) 
 	}
 	err = store.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role: "assistant",
-		ToolCalls: []providers.ToolCall{{
-			ID:   "call_1",
-			Type: "function",
-			Function: &providers.FunctionCall{
-				Name:      "read_file",
-				Arguments: argsJSON,
-			},
-			ExtraContent: &providers.ExtraContent{
-				ToolFeedbackExplanation: explanation,
-			},
-		}},
+		ToolCalls: []providers.ToolCall{
+			testProviderToolCall(t, "call_1", "read_file", argsJSON, explanation),
+		},
 	})
 	if err != nil {
 		t.Fatalf("AddFullMessage(assistant) error = %v", err)
@@ -1611,9 +1550,10 @@ func TestHandleGetSession_UsesConfiguredToolFeedbackMaxArgsLength(t *testing.T) 
 		t.Fatalf("len(resp.Messages) = %d, want at least 2", len(resp.Messages))
 	}
 
-	wantArgsPreview := visibleAssistantToolArgsPreview(providers.ToolCall{
-		Function: &providers.FunctionCall{Arguments: argsJSON},
-	}, 20)
+	wantArgsPreview := visibleAssistantToolArgsPreview(
+		testProviderToolCall(t, "call_1", "read_file", argsJSON, ""),
+		20,
+	)
 	toolCall := assertVisibleToolCallMessage(t, resp.Messages[1], "read_file")
 	if toolCall.ExtraContent == nil || toolCall.ExtraContent.ToolFeedbackExplanation != explanation {
 		t.Fatalf("tool call = %#v, want full explanation %q", toolCall, explanation)
@@ -1654,14 +1594,9 @@ func TestHandleGetSession_UsesToolArgumentsWhenExplanationMissing(t *testing.T) 
 	}
 	if err := store.AddFullMessage(context.Background(), sessionKey, providers.Message{
 		Role: "assistant",
-		ToolCalls: []providers.ToolCall{{
-			ID:   "call_1",
-			Type: "function",
-			Function: &providers.FunctionCall{
-				Name:      "read_file",
-				Arguments: argsJSON,
-			},
-		}},
+		ToolCalls: []providers.ToolCall{
+			testProviderToolCall(t, "call_1", "read_file", argsJSON, ""),
+		},
 	}); err != nil {
 		t.Fatalf("AddFullMessage(assistant) error = %v", err)
 	}
@@ -1688,9 +1623,10 @@ func TestHandleGetSession_UsesToolArgumentsWhenExplanationMissing(t *testing.T) 
 		t.Fatalf("len(resp.Messages) = %d, want at least 2", len(resp.Messages))
 	}
 
-	wantPreview := visibleAssistantToolArgsPreview(providers.ToolCall{
-		Function: &providers.FunctionCall{Arguments: argsJSON},
-	}, 20)
+	wantPreview := visibleAssistantToolArgsPreview(
+		testProviderToolCall(t, "call_1", "read_file", argsJSON, ""),
+		20,
+	)
 	toolCall := assertVisibleToolCallMessage(t, resp.Messages[1], "read_file")
 	if toolCall.Function == nil || toolCall.Function.Arguments != wantPreview {
 		t.Fatalf("tool call = %#v, want args preview %q", toolCall, wantPreview)

@@ -45,8 +45,7 @@ func TestFinalTurnRenderCarriesProtectedDiagnostics(t *testing.T) {
 	exec.sawSteering = true
 	exec.messages = []providers.Message{
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{
-			ID: "diagnostics-call", Name: "browser_diagnostics",
-			Function: &providers.FunctionCall{Name: "browser_diagnostics"},
+			ID: "diagnostics-call", Name: "browser_diagnostics", Arguments: map[string]any{},
 		}}},
 		{Role: "tool", ToolCallID: "diagnostics-call", Content: canary},
 	}

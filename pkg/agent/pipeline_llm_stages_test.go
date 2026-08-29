@@ -193,8 +193,7 @@ func TestBrowserDiagnosticsFollowUpMarksTerminalOutcomeProtected(t *testing.T) {
 	llm := newLLMIterationState(1)
 	llm.callMessages = []providers.Message{
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{
-			ID: "diagnostics-call", Name: "browser_diagnostics",
-			Function: &providers.FunctionCall{Name: "browser_diagnostics"},
+			ID: "diagnostics-call", Name: "browser_diagnostics", Arguments: map[string]any{},
 		}}},
 		{Role: "tool", ToolCallID: "diagnostics-call", Content: canary},
 	}
@@ -232,8 +231,7 @@ func TestBrowserDiagnosticsTaintSurvivesHookDuplicatedRootMarker(t *testing.T) {
 	}
 	exec.messages = append(exec.messages,
 		providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{{
-			ID: "diagnostics-call", Name: "browser_diagnostics",
-			Function: &providers.FunctionCall{Name: "browser_diagnostics"},
+			ID: "diagnostics-call", Name: "browser_diagnostics", Arguments: map[string]any{},
 		}}},
 		providers.Message{Role: "tool", ToolCallID: "diagnostics-call", Content: canary},
 	)
@@ -279,15 +277,17 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		Content:          "ephemeral-browser-fill-canary",
 		ReasoningContent: "reasoning repeats ephemeral-browser-fill-canary",
-		ToolCalls: []providers.ToolCall{{
-			ID: "call-protected", Name: "protected_test",
-			Arguments: map[string]any{"value": secret},
-			Function:  &providers.FunctionCall{ThoughtSignature: secret},
-			ExtraContent: &providers.ExtraContent{
-				Google:                  &providers.GoogleExtra{ThoughtSignature: secret},
+		ToolCalls: []providers.ToolCall{
+			{
+				ID:   "call-protected",
+				Name: "protected_test",
+				Arguments: map[string]any{
+					"value": secret,
+				},
+				ThoughtSignature:        secret,
 				ToolFeedbackExplanation: "explanation repeats " + secret,
 			},
-		}},
+		},
 	}}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
@@ -320,12 +320,12 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 		t.Fatalf("execution value = %#v", got)
 	}
 	call := exec.messages[len(exec.messages)-1].ToolCalls[0]
-	if call.Function == nil || call.Function.Arguments != `{"value":"*"}` {
+	if call.Arguments["value"] != "*" {
 		t.Fatalf("durable tool call = %#v", call)
 	}
 	message := exec.messages[len(exec.messages)-1]
-	if message.Content != "" || message.ReasoningContent != "" || call.ExtraContent != nil ||
-		call.Function.ThoughtSignature != "" || call.ThoughtSignature != "" {
+	if message.Content != "" || message.ReasoningContent != "" || call.ToolFeedbackExplanation != "" ||
+		call.ThoughtSignature != "" {
 		t.Fatalf("protected sibling response fields were retained: %#v", message)
 	}
 	history, err := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
@@ -416,80 +416,5 @@ func TestLLMNormalizationAllowsResultOnlyProtectedCallsInBatch(t *testing.T) {
 	}
 	if got := exec.messages[len(exec.messages)-1].Content; got != "safe assistant envelope" {
 		t.Fatalf("assistant envelope = %q", got)
-	}
-}
-
-func TestLLMNormalizationRejectsConflictingBrowserRepresentationsBeforePersistence(t *testing.T) {
-	secret := "conflicting-browser-fill-canary"
-	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
-		Content: secret,
-		ToolCalls: []providers.ToolCall{{
-			ID: "call-conflicting-browser", Name: "read_file",
-			Arguments: map[string]any{
-				"action": map[string]any{"kind": "select", "ref": "ref_1", "value": "CA"},
-			},
-			Function: &providers.FunctionCall{
-				Name:      "browser_act",
-				Arguments: `{"action":{"kind":"fill","ref":"ref_1","value":"` + secret + `"}}`,
-			},
-		}},
-	}}}
-	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
-	defer cleanup()
-	diagnosticSub, diagnosticCh, err := al.RuntimeEvents().OfKind(
-		runtimeevents.KindAgentLLMResponse,
-	).SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{Name: "protected-conflict", Buffer: 1})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if closeErr := diagnosticSub.Close(); closeErr != nil {
-			t.Errorf("close diagnostic subscription: %v", closeErr)
-		}
-	}()
-
-	pipeline := newTestPipeline(al)
-	contextCapture := &trackingContextManager{}
-	pipeline.Context.Runtime = contextCapture
-	opts := makeTestTurnSpec("conflicting-browser-session")
-	opts.Dispatch.UserMessage = ""
-	ts := newTurnState(agent, opts, turnEventScope{
-		turnID: "conflicting-browser-turn", context: newTurnContext(nil, nil, nil),
-	})
-	exec, err := pipeline.SetupTurn(t.Context(), ts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	baselineMessages := len(exec.messages)
-	baselineHistory, err := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
-	if err != nil {
-		t.Fatal(err)
-	}
-	llm := newLLMIterationState(1)
-	if stage, prepareErr := pipeline.prepareLLMRequest(t.Context(), ts, exec, llm); prepareErr != nil ||
-		stage.disposition == llmStageComplete {
-		t.Fatalf("prepare = %+v, %v", stage, prepareErr)
-	}
-	if stage, invokeErr := pipeline.invokeLLMWithRetry(t.Context(), t.Context(), ts, exec, llm); invokeErr != nil ||
-		stage.disposition == llmStageComplete {
-		t.Fatalf("invoke = %+v, %v", stage, invokeErr)
-	}
-	if _, err = pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm); err == nil {
-		t.Fatal("conflicting browser argument representations were accepted")
-	}
-	select {
-	case event := <-diagnosticCh:
-		encoded, _ := json.Marshal(event)
-		t.Fatalf("conflicting protected call emitted an LLM response diagnostic: %s", encoded)
-	default:
-	}
-	history, marshalErr := json.Marshal(agent.Sessions.GetHistory(ts.sessionKey))
-	contextCapture.mu.Lock()
-	ingested := contextCapture.lastIngest
-	contextCapture.mu.Unlock()
-	if marshalErr != nil || len(exec.messages) != baselineMessages || !bytes.Equal(history, baselineHistory) ||
-		bytes.Contains(history, []byte(secret)) || ingested != nil {
-		t.Fatalf("conflicting browser call persisted: messages=%d baseline=%d history=%s ingest=%#v error=%v",
-			len(exec.messages), baselineMessages, history, ingested, marshalErr)
 	}
 }

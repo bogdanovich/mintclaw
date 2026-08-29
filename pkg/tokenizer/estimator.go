@@ -35,14 +35,10 @@ func EstimateMessageTokens(msg providers.Message) int {
 	chars += utf8.RuneCountInString(msg.ReasoningContent)
 
 	for _, tc := range msg.ToolCalls {
-		chars += len(tc.ID) + len(tc.Type)
-		if tc.Function != nil {
-			// Count function name + arguments (the wire format for most providers).
-			// tc.Name mirrors tc.Function.Name — count only once to avoid double-counting.
-			chars += len(tc.Function.Name) + len(tc.Function.Arguments)
-		} else {
-			// Fallback: some provider formats use top-level Name without Function.
-			chars += len(tc.Name)
+		chars += len(tc.ID) + len(tc.Type) + len(tc.Name)
+		if tc.Arguments != nil {
+			encoded, _ := json.Marshal(tc.Arguments)
+			chars += len(encoded)
 		}
 	}
 

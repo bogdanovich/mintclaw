@@ -17,7 +17,6 @@ import (
 
 type (
 	ToolCall               = protocoltypes.ToolCall
-	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
 	UsageInfo              = protocoltypes.UsageInfo
 	Message                = protocoltypes.Message
@@ -183,27 +182,15 @@ func buildParams(
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
 				for _, tc := range msg.ToolCalls {
-					// Resolve tool name: prefer tc.Name, fallback to tc.Function.Name
-					// (tc.Name/tc.Arguments are json:"-" and may be empty when
-					// history is reloaded from the session store)
-					toolName := tc.Name
-					if toolName == "" && tc.Function != nil {
-						toolName = tc.Function.Name
-					}
 					// Skip tool calls with empty names to avoid API errors
-					if toolName == "" {
+					if tc.Name == "" {
 						continue
 					}
 					args := tc.Arguments
-					if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
-						if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-							args = map[string]any{}
-						}
-					}
 					if args == nil {
 						args = map[string]any{}
 					}
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, toolName))
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, tc.Name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {

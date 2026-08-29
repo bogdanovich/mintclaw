@@ -302,10 +302,6 @@ func TestParseResponseBody(t *testing.T) {
 						Arguments: map[string]any{
 							"location": "Tokyo",
 						},
-						Function: &FunctionCall{
-							Name:      "get_weather",
-							Arguments: `{"location":"Tokyo"}`,
-						},
 					},
 				},
 				FinishReason: "tool_calls",
@@ -651,14 +647,7 @@ func TestBuildRequestBody_UserToolResultsMerged(t *testing.T) {
 	}
 }
 
-// TestBuildRequestBody_ToolCallFunctionFallback verifies that tool calls whose
-// runtime-only fields were lost in a JSON round-trip through the session store
-// (ToolCall.Name/Arguments are json:"-"; only ToolCall.Function survives) fall
-// back to Function.Name / Function.Arguments, so the tool_use block is still
-// emitted and its tool_result pair stays intact. Without the fallback the
-// tool_use is skipped and the orphaned tool_result 400s at the API
-// ("unexpected tool_use_id found in tool_result blocks").
-func TestBuildRequestBody_ToolCallFunctionFallback(t *testing.T) {
+func TestBuildRequestBodyCanonicalToolCall(t *testing.T) {
 	tests := []struct {
 		name         string
 		toolCall     ToolCall
@@ -667,18 +656,7 @@ func TestBuildRequestBody_ToolCallFunctionFallback(t *testing.T) {
 		wantInput    map[string]any
 	}{
 		{
-			name: "deserialized history shape falls back to Function fields",
-			toolCall: ToolCall{
-				ID:        "toolu-fallback-1",
-				Name:      "",
-				Arguments: nil,
-				Function:  &FunctionCall{Name: "x", Arguments: `{"a":1}`},
-			},
-			wantToolName: "x",
-			wantInput:    map[string]any{"a": float64(1)},
-		},
-		{
-			name: "runtime shape with Name set and Function nil still works",
+			name: "canonical tool call is emitted",
 			toolCall: ToolCall{
 				ID:        "toolu-runtime-1",
 				Name:      "y",
@@ -688,11 +666,10 @@ func TestBuildRequestBody_ToolCallFunctionFallback(t *testing.T) {
 			wantInput:    map[string]any{"b": 2},
 		},
 		{
-			name: "both Name and Function.Name empty is skipped",
+			name: "empty name is skipped",
 			toolCall: ToolCall{
-				ID:       "toolu-empty-1",
-				Name:     "",
-				Function: &FunctionCall{Name: "", Arguments: `{"c":3}`},
+				ID:        "toolu-empty-1",
+				Arguments: map[string]any{"c": 3},
 			},
 			wantSkipped: true,
 		},

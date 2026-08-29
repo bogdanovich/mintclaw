@@ -211,10 +211,6 @@ func codexToolCallFromOutputItem(item responses.ResponseOutputItemUnion) (ToolCa
 		ID:        id,
 		Name:      call.Name,
 		Arguments: args,
-		Function: &FunctionCall{
-			Name:      call.Name,
-			Arguments: call.Arguments,
-		},
 	}, true
 }
 

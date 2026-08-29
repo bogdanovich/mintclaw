@@ -21,10 +21,7 @@ func BuildVisibleToolCalls(
 	for _, tc := range toolCalls {
 		name, _ := VisibleToolCallNameAndArguments(tc)
 		argsPreview := VisibleToolCallArgumentsPreview(tc, maxArgsLen)
-		explanation := ""
-		if tc.ExtraContent != nil {
-			explanation = strings.TrimSpace(tc.ExtraContent.ToolFeedbackExplanation)
-		}
+		explanation := strings.TrimSpace(tc.ToolFeedbackExplanation)
 		if name == "" && explanation == "" && argsPreview == "" {
 			continue
 		}
@@ -60,13 +57,7 @@ func BuildVisibleToolCalls(
 func VisibleToolCallNameAndArguments(tc providers.ToolCall) (string, string) {
 	name := strings.TrimSpace(tc.Name)
 	argsJSON := ""
-	if tc.Function != nil {
-		if name == "" {
-			name = strings.TrimSpace(tc.Function.Name)
-		}
-		argsJSON = strings.TrimSpace(tc.Function.Arguments)
-	}
-	if argsJSON == "" && len(tc.Arguments) > 0 {
+	if len(tc.Arguments) > 0 {
 		if encodedArgs, err := json.Marshal(tc.Arguments); err == nil {
 			argsJSON = string(encodedArgs)
 		}

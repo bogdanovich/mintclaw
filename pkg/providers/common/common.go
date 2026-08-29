@@ -26,14 +26,11 @@ import (
 // Re-export protocol types used across providers.
 type (
 	ToolCall               = protocoltypes.ToolCall
-	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
 	UsageInfo              = protocoltypes.UsageInfo
 	Message                = protocoltypes.Message
 	ToolDefinition         = protocoltypes.ToolDefinition
 	ToolFunctionDefinition = protocoltypes.ToolFunctionDefinition
-	ExtraContent           = protocoltypes.ExtraContent
-	GoogleExtra            = protocoltypes.GoogleExtra
 	ReasoningDetail        = protocoltypes.ReasoningDetail
 )
 
@@ -169,24 +166,7 @@ func serializeToolCalls(toolCalls []ToolCall) []openaiToolCall {
 			Type: tc.Type,
 		}
 
-		if tc.Function != nil {
-			thoughtSignature := tc.Function.ThoughtSignature
-			if thoughtSignature == "" {
-				thoughtSignature = tc.ThoughtSignature
-			}
-			if thoughtSignature == "" && tc.ExtraContent != nil && tc.ExtraContent.Google != nil {
-				thoughtSignature = tc.ExtraContent.Google.ThoughtSignature
-			}
-			wireCall.Function = &openaiFunctionCall{
-				Name:             tc.Function.Name,
-				Arguments:        tc.Function.Arguments,
-				ThoughtSignature: thoughtSignature,
-			}
-		} else if tc.Name != "" || len(tc.Arguments) > 0 || tc.ThoughtSignature != "" {
-			thoughtSignature := tc.ThoughtSignature
-			if thoughtSignature == "" && tc.ExtraContent != nil && tc.ExtraContent.Google != nil {
-				thoughtSignature = tc.ExtraContent.Google.ThoughtSignature
-			}
+		if tc.Name != "" || len(tc.Arguments) > 0 || tc.ThoughtSignature != "" {
 			argsJSON := "{}"
 			if len(tc.Arguments) > 0 {
 				if encoded, err := json.Marshal(tc.Arguments); err == nil {
@@ -196,7 +176,7 @@ func serializeToolCalls(toolCalls []ToolCall) []openaiToolCall {
 			wireCall.Function = &openaiFunctionCall{
 				Name:             tc.Name,
 				Arguments:        argsJSON,
-				ThoughtSignature: thoughtSignature,
+				ThoughtSignature: tc.ThoughtSignature,
 			}
 		}
 
@@ -289,28 +269,17 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 			arguments = DecodeToolCallArguments(tc.Function.Arguments, name)
 		}
 
-		toolCall := ToolCall{
-			ID:               tc.ID,
-			Name:             name,
-			Arguments:        arguments,
-			ThoughtSignature: thoughtSignature,
+		toolFeedbackExplanation := ""
+		if tc.ExtraContent != nil {
+			toolFeedbackExplanation = tc.ExtraContent.ToolFeedbackExplanation
 		}
-
-		if thoughtSignature != "" || tc.ExtraContent != nil {
-			extraContent := &ExtraContent{
-				ToolFeedbackExplanation: "",
-			}
-			if tc.ExtraContent != nil {
-				extraContent.ToolFeedbackExplanation = tc.ExtraContent.ToolFeedbackExplanation
-			}
-			if thoughtSignature != "" {
-				extraContent.Google = &GoogleExtra{
-					ThoughtSignature: thoughtSignature,
-				}
-			}
-			if extraContent.Google != nil || strings.TrimSpace(extraContent.ToolFeedbackExplanation) != "" {
-				toolCall.ExtraContent = extraContent
-			}
+		toolCall := ToolCall{
+			ID:                      tc.ID,
+			Type:                    tc.Type,
+			Name:                    name,
+			Arguments:               arguments,
+			ThoughtSignature:        thoughtSignature,
+			ToolFeedbackExplanation: toolFeedbackExplanation,
 		}
 
 		toolCalls = append(toolCalls, toolCall)

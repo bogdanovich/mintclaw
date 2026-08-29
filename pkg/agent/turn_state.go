@@ -1072,14 +1072,7 @@ func normalizeMessageForComparison(msg providers.Message) providers.Message {
 	} else {
 		msg.ToolCalls = append([]providers.ToolCall(nil), msg.ToolCalls...)
 		for i := range msg.ToolCalls {
-			msg.ToolCalls[i].Name = ""
-			msg.ToolCalls[i].Arguments = nil
 			msg.ToolCalls[i].ThoughtSignature = ""
-			if msg.ToolCalls[i].Function != nil {
-				fn := *msg.ToolCalls[i].Function
-				fn.ThoughtSignature = ""
-				msg.ToolCalls[i].Function = &fn
-			}
 		}
 	}
 

@@ -8,17 +8,20 @@ import (
 
 func TestBuildVisibleToolCalls_DoesNotTruncateExplanation(t *testing.T) {
 	explanation := "Read README.md first to confirm the current project structure before editing the config example."
-	toolCalls := []providers.ToolCall{{
-		ID:   "call_1",
-		Type: "function",
-		Function: &providers.FunctionCall{
-			Name:      "read_file",
-			Arguments: `{"path":"README.md","start_line":1,"end_line":10,"extra":"abcdefghijklmnopqrstuvwxyz"}`,
-		},
-		ExtraContent: &providers.ExtraContent{
+	toolCalls := []providers.ToolCall{
+		{
+			ID:   "call_1",
+			Type: "function",
+			Name: "read_file",
+			Arguments: map[string]any{
+				"path":       "README.md",
+				"start_line": 1,
+				"end_line":   10,
+				"extra":      "abcdefghijklmnopqrstuvwxyz",
+			},
 			ToolFeedbackExplanation: explanation,
 		},
-	}}
+	}
 
 	visible := BuildVisibleToolCalls(toolCalls, 20)
 	if len(visible) != 1 {

@@ -120,8 +120,8 @@ func TestGeminiProvider_ChatSeparatesThoughtAndToolCall(t *testing.T) {
 	if resp.ToolCalls[0].ThoughtSignature != "sig-1" {
 		t.Fatalf("ToolCall ThoughtSignature = %q, want %q", resp.ToolCalls[0].ThoughtSignature, "sig-1")
 	}
-	if resp.ToolCalls[0].Function == nil || !strings.Contains(resp.ToolCalls[0].Function.Arguments, `"q":"hi"`) {
-		t.Fatalf("ToolCall Function arguments = %#v, want q=hi", resp.ToolCalls[0].Function)
+	if resp.ToolCalls[0].Arguments["q"] != "hi" {
+		t.Fatalf("ToolCall arguments = %#v, want q=hi", resp.ToolCalls[0].Arguments)
 	}
 
 	generationConfig, ok := capturedBody["generationConfig"].(map[string]any)
@@ -485,14 +485,10 @@ func TestGeminiProvider_BuildRequestBody_SetsBothThoughtSignatureFormats(t *test
 		[]Message{{
 			Role: "assistant",
 			ToolCalls: []ToolCall{{
-				ID:        "call_1",
-				Name:      "search",
-				Arguments: map[string]any{"q": "hello"},
-				Function: &FunctionCall{
-					Name:             "search",
-					Arguments:        `{"q":"hello"}`,
-					ThoughtSignature: "sig-1",
-				},
+				ID:               "call_1",
+				Name:             "search",
+				Arguments:        map[string]any{"q": "hello"},
+				ThoughtSignature: "sig-1",
 			}},
 		}},
 		nil,

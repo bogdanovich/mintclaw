@@ -108,9 +108,6 @@ func buildToolCallNameIndex(messages []providers.Message) map[string]string {
 				continue
 			}
 			toolName := strings.TrimSpace(call.Name)
-			if toolName == "" && call.Function != nil {
-				toolName = strings.TrimSpace(call.Function.Name)
-			}
 			if toolName == "" {
 				continue
 			}

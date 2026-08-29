@@ -23,7 +23,6 @@ import (
 
 type (
 	ToolCall               = protocoltypes.ToolCall
-	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
 	UsageInfo              = protocoltypes.UsageInfo
 	Message                = protocoltypes.Message
@@ -217,25 +216,11 @@ func buildRequestBody(
 
 			// Add tool_use blocks
 			for _, tc := range msg.ToolCalls {
-				// Resolve tool name: prefer tc.Name, fallback to tc.Function.Name
-				// (tc.Name/tc.Arguments are json:"-" and may be empty when
-				// history is reloaded from the session store)
-				toolName := tc.Name
-				if toolName == "" && tc.Function != nil {
-					toolName = tc.Function.Name
-				}
-				if strings.TrimSpace(toolName) == "" {
+				if strings.TrimSpace(tc.Name) == "" {
 					continue
 				}
 
-				// Resolve arguments: prefer tc.Arguments, fallback to parsing
-				// tc.Function.Arguments
 				input := tc.Arguments
-				if input == nil && tc.Function != nil && tc.Function.Arguments != "" {
-					if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
-						input = map[string]any{}
-					}
-				}
 				// Handle nil Arguments (GLM-4 may return null input)
 				if input == nil {
 					input = map[string]any{}
@@ -244,7 +229,7 @@ func buildRequestBody(
 				toolUse := map[string]any{
 					"type":  "tool_use",
 					"id":    tc.ID,
-					"name":  toolName,
+					"name":  tc.Name,
 					"input": input,
 				}
 				content = append(content, toolUse)
@@ -322,15 +307,10 @@ func parseResponseBody(body []byte) (*LLMResponse, error) {
 		case "text":
 			content.WriteString(block.Text)
 		case "tool_use":
-			argsJSON, _ := json.Marshal(block.Input)
 			toolCalls = append(toolCalls, ToolCall{
 				ID:        block.ID,
 				Name:      block.Name,
 				Arguments: block.Input,
-				Function: &FunctionCall{
-					Name:      block.Name,
-					Arguments: string(argsJSON),
-				},
 			})
 		}
 	}

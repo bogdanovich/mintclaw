@@ -328,29 +328,6 @@ func TestBuildAssistantContent_NilArguments(t *testing.T) {
 	assert.NotNil(t, toolUse.Value.Input)
 }
 
-func TestBuildAssistantContent_FunctionFallback(t *testing.T) {
-	// When Name/Arguments are empty (json:"-"), should fallback to Function fields
-	msg := Message{
-		ToolCalls: []protocoltypes.ToolCall{
-			{
-				ID:   "1",
-				Name: "", // empty, should fallback to Function.Name
-				Function: &protocoltypes.FunctionCall{
-					Name:      "fallback_tool",
-					Arguments: `{"key":"value"}`,
-				},
-			},
-		},
-	}
-
-	content := buildAssistantContent(msg)
-
-	assert.Len(t, content, 1)
-	toolUse, ok := content[0].(*types.ContentBlockMemberToolUse)
-	require.True(t, ok)
-	assert.Equal(t, "fallback_tool", aws.ToString(toolUse.Value.Name))
-}
-
 func TestParseResponse_TextOnly(t *testing.T) {
 	output := &bedrockruntime.ConverseOutput{
 		Output: &types.ConverseOutputMemberMessage{
@@ -455,10 +432,6 @@ func TestParseResponse_WithToolCalls(t *testing.T) {
 	assert.Equal(t, "call_weather_123", tc.ID)
 	assert.Equal(t, "get_weather", tc.Name)
 
-	// Verify Function fields are also populated
-	require.NotNil(t, tc.Function)
-	assert.Equal(t, "get_weather", tc.Function.Name)
-
 	// Verify Arguments is not nil (content may vary due to SDK limitations in tests)
 	assert.NotNil(t, tc.Arguments)
 
@@ -504,14 +477,10 @@ func TestParseResponse_MultipleToolCalls(t *testing.T) {
 	assert.Equal(t, "call_1", resp.ToolCalls[0].ID)
 	assert.Equal(t, "tool_a", resp.ToolCalls[0].Name)
 	assert.NotNil(t, resp.ToolCalls[0].Arguments)
-	assert.NotNil(t, resp.ToolCalls[0].Function)
-	assert.Equal(t, "tool_a", resp.ToolCalls[0].Function.Name)
 
 	assert.Equal(t, "call_2", resp.ToolCalls[1].ID)
 	assert.Equal(t, "tool_b", resp.ToolCalls[1].Name)
 	assert.NotNil(t, resp.ToolCalls[1].Arguments)
-	assert.NotNil(t, resp.ToolCalls[1].Function)
-	assert.Equal(t, "tool_b", resp.ToolCalls[1].Function.Name)
 }
 
 func TestParseResponse_ToolCallWithNilInput(t *testing.T) {
@@ -722,9 +691,6 @@ func TestParseStreamResponse_ToolCall(t *testing.T) {
 	assert.Equal(t, "call_1", resp.ToolCalls[0].ID)
 	assert.Equal(t, "search", resp.ToolCalls[0].Name)
 	assert.Equal(t, map[string]any{"q": "test"}, resp.ToolCalls[0].Arguments)
-	require.NotNil(t, resp.ToolCalls[0].Function)
-	assert.Equal(t, "search", resp.ToolCalls[0].Function.Name)
-	assert.Equal(t, `{"q":"test"}`, resp.ToolCalls[0].Function.Arguments)
 }
 
 func TestParseStreamResponse_TextAndToolCall(t *testing.T) {
@@ -850,7 +816,6 @@ func TestParseStreamResponse_InvalidToolJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resp.ToolCalls, 1)
 	assert.Equal(t, map[string]any{"raw": `{not valid json`}, resp.ToolCalls[0].Arguments)
-	assert.JSONEq(t, `{"raw":"{not valid json"}`, resp.ToolCalls[0].Function.Arguments)
 }
 
 func TestParseStreamResponse_DefaultFinishReason(t *testing.T) {
