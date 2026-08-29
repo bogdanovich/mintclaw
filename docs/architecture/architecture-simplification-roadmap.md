@@ -194,6 +194,7 @@ reset criteria.
 | X3.87 | #975 | Merged; session metadata uses one exact current decoder across store, fork, and Web readers, and successful canonical writes are validated against it before persistence |
 | X3.88 | #976 | Merged; bounded history, coding fork, and Web reuse the canonical persisted-message and exact scope decoders instead of decoding those documents independently |
 | Z1 source | #964-#976; final source `e60b8e26` | Passed after correcting the premature #973 proof; every persisted session document now has one reader owner, every surviving discovery match is classified, and no production historical reader, dual writer, deprecated callable facade, or version-selected runtime remains |
+| Z1 converter preparation | Current PR | In progress; a temporary copy-only external command inventories all configured session roots, emits disjoint retained/archive trees and a checksum manifest, strictly validates every retained record, and is registered for deletion after closeout |
 | Z1 deployed closeout | Read-only audit on deployed `827e0f70` | Open; archive non-current sessions, convert the retained current cohort, install a reviewed source release, verify, and exercise rollback under fresh authority |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
@@ -501,7 +502,7 @@ The exact deployed session cutover cohort is:
 | --- | ---: | ---: |
 | Metadata documents | 742 | 2,828 |
 | Paired JSONL histories | 596 | 636 |
-| Metadata bytes | 598,743 | 2,007,528 |
+| Metadata bytes | 598,744 | 2,007,528 |
 | JSONL bytes | 15,684,051 | 105,055,282 |
 | Removed `aliases` members | 329 | 2,367 |
 | Old nested tool calls | 3,728 | 16,455 |
@@ -516,6 +517,20 @@ are valid; no unknown scope field or orphan JSONL file was found. Runtime
 selection is nevertheless intentionally narrower than storage validity:
 historical key families, scope v1, and missing scopes are archived rather than
 translated, even when their generic metadata envelope is otherwise valid.
+
+The 2026-08-29 copy-only `scripts/sessioncutover` rehearsal then loaded the
+same five current configs and deduplicated the same 20 session roots. Its
+source-stability re-read passed across all 4,802 emitted files. It retained
+742 metadata documents and 596 histories, archived 2,828 metadata documents
+and 636 histories byte-for-byte, removed 329 `aliases` members, flattened
+3,728 nested tool calls plus two equal Google-signature cases, and validated
+all 9,538 retained messages with the current runtime decoder. Independent
+output inspection found zero retained aliases, zero nested tool calls, zero
+duplicate source paths, and zero archive digest mismatches. Retained metadata
+was 598,744 bytes, one byte above the earlier #975 point-in-time inventory;
+all cohort counts and history byte counts were unchanged. The services remain
+live, so the authorized stopped-state pass must take a new authoritative
+snapshot rather than treating this rehearsal output as deployable state.
 
 No production state was changed during this audit. Before a source release at
 or after `e60b8e26` is installed, a newly authorized stopped-state operation
@@ -559,12 +574,15 @@ separation and standards alignment.
 | Non-current session identities and scopes | Coordinated persisted-state archive, not a runtime adapter | The deployed corpus has 2,828 non-current metadata documents and 636 paired histories; #972 prevents these records from entering current runtime maintenance | Open for Z1 deployed closeout |
 | Removed session metadata `aliases` | Coordinated current-state conversion | The retained cohort has 329 members to delete deterministically; #968 intentionally has no reader that ignores the removed field | Open for Z1 deployed closeout |
 | Nested persisted tool calls | Coordinated current-state conversion | The retained cohort has 3,728 calls plus two Google-specific metadata cases to flatten; #971 intentionally has no dual reader or dual write | Open for Z1 deployed closeout |
+| `scripts/sessioncutover` | Temporary external deployment tool, not a runtime adapter | The copy-only command accepts only the audited old shape, validates its retained output with the exact current decoders, checks source stability and per-file SHA-256, and is not linked into startup | Open; delete after the Z1 deployment, rollback exercise, and evidence capture succeed |
 
 No registered R1 compatibility adapter remains open, and the final source Z1
 audit found no new source adapter. The three open rows are deployed-data gates
 created by intentionally strict post-R1 readers. They are resolved outside the
 running product under a stopped-state backup; they do not justify reintroducing
-a reader, normalizer, or migration hook into startup.
+a reader, normalizer, or migration hook into startup. The fourth open row is
+the explicitly temporary external command that performs that operation; its
+deletion is part of the same closeout rather than deferred product debt.
 
 C2 is closed. PR #924 moved durable checkpoint ownership to the coding
 composition root; PRs #925-#927 made recovery reads and constructors explicitly
@@ -1901,7 +1919,9 @@ and must execute in this order:
    histories without translating them into current identities;
 4. on only the retained 742 current metadata documents and 596 histories,
    remove the 329 `aliases` members and flatten the 3,728 nested tool calls plus
-   two Google-specific metadata cases using a one-time external converter;
+   two Google-specific metadata cases using the copy-only
+   `scripts/sessioncutover` command; require a new output path and do not offer
+   an in-place mode;
 5. prove the archive and converted trees are complete and disjoint, then run
    the strict metadata, scope, JSONL, task, interaction, config, outbox, node,
    and browser validators against the entire candidate state;
@@ -1912,8 +1932,8 @@ and must execute in this order:
 7. exercise rollback with the exact R1 binary and its matching pre-cutover
    state, never with converted state that the old binary does not own; and
 8. restore the selected release, repeat the canaries, retain manifests and the
-   archive, and delete any temporary converter from the operational staging
-   area after evidence capture.
+   archive, and delete `scripts/sessioncutover` plus any operational staging
+   copy after evidence capture.
 
 Until that operation is authorized and passes, the roadmap remains active even
 though source Z1 is complete. Production stays on the already verified
