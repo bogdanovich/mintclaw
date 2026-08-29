@@ -712,12 +712,6 @@ func TestParseClaudeCliResponse_WithToolCalls(t *testing.T) {
 	if tc.Name != "get_weather" {
 		t.Errorf("Name = %q, want %q", tc.Name, "get_weather")
 	}
-	if tc.Function == nil {
-		t.Fatal("Function is nil")
-	}
-	if tc.Function.Name != "get_weather" {
-		t.Errorf("Function.Name = %q, want %q", tc.Function.Name, "get_weather")
-	}
 	if tc.Arguments["location"] != "Tokyo" {
 		t.Errorf("Arguments[location] = %v, want Tokyo", tc.Arguments["location"])
 	}
@@ -828,10 +822,6 @@ func TestExtractToolCalls_ToolCallArgumentsParsing(t *testing.T) {
 	}
 	if got[0].Arguments["name"] != "test" {
 		t.Errorf("Arguments[name] = %v, want test", got[0].Arguments["name"])
-	}
-	// Verify raw arguments string is preserved in FunctionCall
-	if got[0].Function.Arguments == "" {
-		t.Error("Function.Arguments should contain raw JSON string")
 	}
 }
 

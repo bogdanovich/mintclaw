@@ -198,9 +198,5 @@ func repairDanglingToolLifecycles(
 }
 
 func toolLifecycleCallName(call providers.ToolCall) string {
-	name := strings.TrimSpace(call.Name)
-	if call.Function != nil && strings.TrimSpace(call.Function.Name) != "" {
-		name = strings.TrimSpace(call.Function.Name)
-	}
-	return boundedLifecycleText(name, maxToolExecutionNameBytes)
+	return boundedLifecycleText(strings.TrimSpace(call.Name), maxToolExecutionNameBytes)
 }

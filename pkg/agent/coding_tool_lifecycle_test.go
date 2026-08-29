@@ -55,9 +55,9 @@ func TestRepairDanglingToolLifecyclesNeverClaimsSuccessOrReplays(t *testing.T) {
 		{
 			Role: "assistant",
 			ToolCalls: []providers.ToolCall{
-				{ID: "before-start", Function: &providers.FunctionCall{Name: "write_file"}},
-				{ID: "after-start", Function: &providers.FunctionCall{Name: "write_file"}},
-				{ID: "finished", Function: &providers.FunctionCall{Name: "write_file"}},
+				{ID: "before-start", Name: "write_file", Arguments: map[string]any{}},
+				{ID: "after-start", Name: "write_file", Arguments: map[string]any{}},
+				{ID: "finished", Name: "write_file", Arguments: map[string]any{}},
 			},
 			ToolExecutions: []providers.ToolExecution{startedMarker},
 		},
@@ -353,7 +353,7 @@ func codingToolIntent(callID, toolName string, executions []providers.ToolExecut
 	return providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: callID, Function: &providers.FunctionCall{Name: toolName},
+			ID: callID, Name: toolName, Arguments: map[string]any{},
 		}},
 		ToolExecutions: executions,
 	}

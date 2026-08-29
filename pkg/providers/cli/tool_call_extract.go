@@ -46,10 +46,6 @@ func extractToolCallsFromText(text string) []ToolCall {
 			Type:      tc.Type,
 			Name:      tc.Function.Name,
 			Arguments: args,
-			Function: &FunctionCall{
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-			},
 		})
 	}
 

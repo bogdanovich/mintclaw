@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -25,11 +24,7 @@ func msgAssistantTC(toolIDs ...string) providers.Message {
 		tcs[i] = providers.ToolCall{
 			ID:   id,
 			Type: "function",
-			Name: "tool_" + id,
-			Function: &providers.FunctionCall{
-				Name:      "tool_" + id,
-				Arguments: `{"key":"value"}`,
-			},
+			Name: "tool_" + id, Arguments: map[string]any{"key": "value"},
 		}
 	}
 	return providers.Message{Role: "assistant", ToolCalls: tcs}
@@ -434,11 +429,7 @@ func TestEstimateMessageTokens_ToolCallsContribute(t *testing.T) {
 			{
 				ID:   "call_1",
 				Type: "function",
-				Name: "web_search",
-				Function: &providers.FunctionCall{
-					Name:      "web_search",
-					Arguments: `{"query":"mintclaw agent framework","max_results":5}`,
-				},
+				Name: "web_search", Arguments: map[string]any{"query": "mintclaw agent framework", "max_results": 5},
 			},
 		},
 	}
@@ -465,18 +456,14 @@ func TestEstimateMessageTokens_MultibyteContent(t *testing.T) {
 
 func TestEstimateMessageTokens_LargeArguments(t *testing.T) {
 	// Simulate a tool call with large JSON arguments.
-	largeArgs := fmt.Sprintf(`{"content":"%s"}`, strings.Repeat("x", 5000))
 	msg := providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{
 			{
-				ID:   "call_large",
-				Type: "function",
-				Name: "write_file",
-				Function: &providers.FunctionCall{
-					Name:      "write_file",
-					Arguments: largeArgs,
-				},
+				ID:        "call_large",
+				Type:      "function",
+				Name:      "write_file",
+				Arguments: map[string]any{"content": strings.Repeat("x", 5000)},
 			},
 		},
 	}
@@ -761,11 +748,7 @@ func TestEstimateMessageTokens_WithReasoningAndMedia(t *testing.T) {
 			{
 				ID:   "call_1",
 				Type: "function",
-				Name: "analyze",
-				Function: &providers.FunctionCall{
-					Name:      "analyze",
-					Arguments: `{"data":"sample","depth":3}`,
-				},
+				Name: "analyze", Arguments: map[string]any{"depth": 3, "data": "sample"},
 			},
 		},
 	}
@@ -804,11 +787,10 @@ func TestIsOverContextBudget_RealisticSession(t *testing.T) {
 			Content: "I'll use tool X",
 			ToolCalls: []providers.ToolCall{
 				{
-					ID: "tc1", Type: "function", Name: "tool_x",
-					Function: &providers.FunctionCall{
-						Name:      "tool_x",
-						Arguments: `{"query":"test","verbose":true}`,
-					},
+					ID:        "tc1",
+					Type:      "function",
+					Name:      "tool_x",
+					Arguments: map[string]any{"verbose": true, "query": "test"},
 				},
 			},
 		},

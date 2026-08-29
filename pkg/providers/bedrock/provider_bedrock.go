@@ -34,7 +34,6 @@ import (
 
 type (
 	ToolCall               = protocoltypes.ToolCall
-	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
 	StreamChunk            = protocoltypes.StreamChunk
 	UsageInfo              = protocoltypes.UsageInfo
@@ -377,18 +376,10 @@ func parseStreamResponse(
 							args = map[string]any{"raw": argsStr}
 						}
 					}
-					funcArgs := argsStr
-					if argsJSON, marshalErr := json.Marshal(args); marshalErr == nil {
-						funcArgs = string(argsJSON)
-					}
 					toolCalls = append(toolCalls, ToolCall{
 						ID:        tool.id,
 						Name:      tool.name,
 						Arguments: args,
-						Function: &FunctionCall{
-							Name:      tool.name,
-							Arguments: funcArgs,
-						},
 					})
 					delete(activeTools, idx)
 				}
@@ -643,24 +634,11 @@ func buildAssistantContent(msg Message) []types.ContentBlock {
 			continue
 		}
 
-		// Resolve tool name: prefer tc.Name, fallback to tc.Function.Name
-		// (tc.Name/tc.Arguments are json:"-" and may be empty when from JSON)
-		toolName := tc.Name
-		if toolName == "" && tc.Function != nil {
-			toolName = tc.Function.Name
-		}
-		if strings.TrimSpace(toolName) == "" {
+		if strings.TrimSpace(tc.Name) == "" {
 			continue
 		}
 
-		// Resolve arguments: prefer tc.Arguments, fallback to parsing tc.Function.Arguments
 		args := tc.Arguments
-		if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-				log.Printf("bedrock: failed to parse Function.Arguments for tool %q: %v", toolName, err)
-				args = map[string]any{}
-			}
-		}
 		if args == nil {
 			args = map[string]any{}
 		}
@@ -671,7 +649,7 @@ func buildAssistantContent(msg Message) []types.ContentBlock {
 		content = append(content, &types.ContentBlockMemberToolUse{
 			Value: types.ToolUseBlock{
 				ToolUseId: aws.String(tc.ID),
-				Name:      aws.String(toolName),
+				Name:      aws.String(tc.Name),
 				Input:     inputDoc,
 			},
 		})
@@ -750,25 +728,10 @@ func parseResponse(output *bedrockruntime.ConverseOutput) (*LLMResponse, error) 
 						}
 					}
 
-					// Serialize arguments to JSON string for FunctionCall
-					argsJSON, err := json.Marshal(args)
-					if err != nil {
-						log.Printf("bedrock: failed to marshal tool arguments for tool %q (id %q): %v",
-							aws.ToString(b.Value.Name),
-							aws.ToString(b.Value.ToolUseId),
-							err,
-						)
-						argsJSON = []byte("{}")
-					}
-
 					toolCalls = append(toolCalls, ToolCall{
 						ID:        aws.ToString(b.Value.ToolUseId),
 						Name:      aws.ToString(b.Value.Name),
 						Arguments: args,
-						Function: &FunctionCall{
-							Name:      aws.ToString(b.Value.Name),
-							Arguments: string(argsJSON),
-						},
 					})
 				}
 			}

@@ -162,24 +162,17 @@ func TestSerializeMessages_StripsSystemParts(t *testing.T) {
 	}
 }
 
-func TestSerializeMessages_StripsInternalToolCallExtraContent(t *testing.T) {
+func TestSerializeMessagesStripsInternalToolFeedback(t *testing.T) {
 	messages := []Message{
 		{
 			Role: "assistant",
 			ToolCalls: []ToolCall{{
-				ID:   "call_1",
-				Type: "function",
-				Function: &FunctionCall{
-					Name:             "read_file",
-					Arguments:        `{"path":"README.md"}`,
-					ThoughtSignature: "sig-1",
-				},
-				ExtraContent: &ExtraContent{
-					Google: &GoogleExtra{
-						ThoughtSignature: "sig-ignored-here",
-					},
-					ToolFeedbackExplanation: "Read README.md first.",
-				},
+				ID:                      "call_1",
+				Type:                    "function",
+				Name:                    "read_file",
+				Arguments:               map[string]any{"path": "README.md"},
+				ThoughtSignature:        "sig-1",
+				ToolFeedbackExplanation: "Read README.md first.",
 			}},
 		},
 	}
@@ -191,8 +184,8 @@ func TestSerializeMessages_StripsInternalToolCallExtraContent(t *testing.T) {
 		t.Fatalf("json.Marshal() error = %v", err)
 	}
 	payload := string(data)
-	if strings.Contains(payload, "extra_content") {
-		t.Fatalf("serialized payload should not include internal extra_content: %s", payload)
+	if strings.Contains(payload, "tool_feedback_explanation") {
+		t.Fatalf("serialized payload should not include internal tool feedback: %s", payload)
 	}
 	if !strings.Contains(payload, "thought_signature") {
 		t.Fatalf("serialized payload should preserve function thought_signature: %s", payload)
@@ -206,11 +199,9 @@ func TestSerializeMessages_PreservesTopLevelThoughtSignature(t *testing.T) {
 			ToolCalls: []ToolCall{{
 				ID:               "call_1",
 				Type:             "function",
+				Name:             "read_file",
+				Arguments:        map[string]any{"path": "README.md"},
 				ThoughtSignature: "sig-1",
-				Function: &FunctionCall{
-					Name:      "read_file",
-					Arguments: `{"path":"README.md"}`,
-				},
 			}},
 		},
 	}
@@ -224,39 +215,6 @@ func TestSerializeMessages_PreservesTopLevelThoughtSignature(t *testing.T) {
 	payload := string(data)
 	if !strings.Contains(payload, `"thought_signature":"sig-1"`) {
 		t.Fatalf("serialized payload should preserve top-level thought signature: %s", payload)
-	}
-}
-
-func TestSerializeMessages_PreservesGoogleExtraThoughtSignature(t *testing.T) {
-	messages := []Message{
-		{
-			Role: "assistant",
-			ToolCalls: []ToolCall{{
-				ID:   "call_1",
-				Type: "function",
-				Function: &FunctionCall{
-					Name:      "read_file",
-					Arguments: `{"path":"README.md"}`,
-				},
-				ExtraContent: &ExtraContent{
-					Google: &GoogleExtra{ThoughtSignature: "sig-1"},
-				},
-			}},
-		},
-	}
-
-	result := SerializeMessages(messages)
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	payload := string(data)
-	if strings.Contains(payload, "extra_content") {
-		t.Fatalf("serialized payload should not include extra_content: %s", payload)
-	}
-	if !strings.Contains(payload, `"thought_signature":"sig-1"`) {
-		t.Fatalf("serialized payload should preserve google thought signature: %s", payload)
 	}
 }
 
@@ -341,13 +299,10 @@ func TestParseResponse_WithToolFeedbackExplanationExtraContent(t *testing.T) {
 	if len(out.ToolCalls) != 1 {
 		t.Fatalf("len(ToolCalls) = %d, want 1", len(out.ToolCalls))
 	}
-	if out.ToolCalls[0].ExtraContent == nil {
-		t.Fatal("ExtraContent is nil")
-	}
-	if out.ToolCalls[0].ExtraContent.ToolFeedbackExplanation != "Check the current config before editing." {
+	if out.ToolCalls[0].ToolFeedbackExplanation != "Check the current config before editing." {
 		t.Fatalf(
 			"ToolFeedbackExplanation = %q, want %q",
-			out.ToolCalls[0].ExtraContent.ToolFeedbackExplanation,
+			out.ToolCalls[0].ToolFeedbackExplanation,
 			"Check the current config before editing.",
 		)
 	}
@@ -768,13 +723,6 @@ func TestParseResponse_WithThoughtSignature(t *testing.T) {
 	if out.ToolCalls[0].ThoughtSignature != "sig123" {
 		t.Errorf("ThoughtSignature = %q, want %q", out.ToolCalls[0].ThoughtSignature, "sig123")
 	}
-	if out.ToolCalls[0].ExtraContent == nil || out.ToolCalls[0].ExtraContent.Google == nil {
-		t.Fatal("ExtraContent.Google is nil")
-	}
-	if out.ToolCalls[0].ExtraContent.Google.ThoughtSignature != "sig123" {
-		t.Errorf("ExtraContent.Google.ThoughtSignature = %q, want %q",
-			out.ToolCalls[0].ExtraContent.Google.ThoughtSignature, "sig123")
-	}
 }
 
 func TestParseResponse_WithFunctionThoughtSignature(t *testing.T) {
@@ -788,15 +736,5 @@ func TestParseResponse_WithFunctionThoughtSignature(t *testing.T) {
 	}
 	if out.ToolCalls[0].ThoughtSignature != "sig456" {
 		t.Fatalf("ThoughtSignature = %q, want %q", out.ToolCalls[0].ThoughtSignature, "sig456")
-	}
-	if out.ToolCalls[0].ExtraContent == nil || out.ToolCalls[0].ExtraContent.Google == nil {
-		t.Fatal("ExtraContent.Google is nil")
-	}
-	if out.ToolCalls[0].ExtraContent.Google.ThoughtSignature != "sig456" {
-		t.Fatalf(
-			"ExtraContent.Google.ThoughtSignature = %q, want %q",
-			out.ToolCalls[0].ExtraContent.Google.ThoughtSignature,
-			"sig456",
-		)
 	}
 }

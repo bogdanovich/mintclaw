@@ -68,11 +68,7 @@ func TestMatchingTurnMessageTail_IgnoresInternalRuntimeFields(t *testing.T) {
 			ToolCalls: []providers.ToolCall{
 				{
 					ID:   "call_1",
-					Type: "function",
-					Function: &providers.FunctionCall{
-						Name:      "read_file",
-						Arguments: `{"path":"/tmp/test"}`,
-					},
+					Type: "function", Name: "read_file", Arguments: map[string]any{"path": "/tmp/test"},
 				},
 			},
 		},
@@ -89,11 +85,6 @@ func TestMatchingTurnMessageTail_IgnoresInternalRuntimeFields(t *testing.T) {
 					Name:             "read_file",
 					Arguments:        map[string]any{"path": "/tmp/test"},
 					ThoughtSignature: "internal-signature",
-					Function: &providers.FunctionCall{
-						Name:             "read_file",
-						Arguments:        `{"path":"/tmp/test"}`,
-						ThoughtSignature: "internal-signature",
-					},
 				},
 			},
 		},

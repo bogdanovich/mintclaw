@@ -1370,8 +1370,7 @@ func prepareWaitingControlInteraction(
 	agent.Sessions.AddFullMessage(target.SessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: origin.ToolCallID, Name: origin.ToolName,
-			Function: &providers.FunctionCall{Name: origin.ToolName, Arguments: `{}`},
+			ID: origin.ToolCallID, Name: origin.ToolName, Arguments: map[string]any{},
 		}},
 	})
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
@@ -1407,8 +1406,7 @@ func prepareWaitingControlInteractionWithContinuation(
 	continuationAgent.Sessions.AddFullMessage(continuationKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: origin.ToolCallID, Name: origin.ToolName,
-			Function: &providers.FunctionCall{Name: origin.ToolName, Arguments: `{}`},
+			ID: origin.ToolCallID, Name: origin.ToolName, Arguments: map[string]any{},
 		}},
 	})
 	registry := al.interactionRegistryForWorkspace(ownerAgent.Workspace)
@@ -2646,8 +2644,7 @@ func TestRecoveryDoesNotResendPromptAfterAmbiguousCrashWindow(t *testing.T) {
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-question", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -3279,8 +3276,7 @@ func TestMalformedMultilineAnswerCanRetryAndResumeExactlyOnce(t *testing.T) {
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-multiline-question", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-multiline-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -3593,9 +3589,6 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 				{ToolCalls: []providers.ToolCall{{
 					ID: "call-protected", Name: "approval_counting",
 					Arguments: map[string]any{"token": "secret-value"},
-					Function: &providers.FunctionCall{
-						Name: "approval_counting", Arguments: `{"token":"secret-value"}`,
-					},
 				}}},
 				{Content: "approval flow finished", FinishReason: "stop"},
 			}}
@@ -3678,7 +3671,6 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 						call := &history[messageIndex].ToolCalls[callIndex]
 						if call.ID == "call-protected" {
 							call.Arguments = map[string]any{"token": "changed-after-approval"}
-							call.Function.Arguments = `{"token":"changed-after-approval"}`
 						}
 					}
 				}
@@ -3753,8 +3745,7 @@ func TestDurableHumanApprovalAllowsOrDeniesOriginalToolCall(t *testing.T) {
 func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{
-			ID: "call-blocking-protected", Name: "approval_blocking",
-			Function: &providers.FunctionCall{Name: "approval_blocking", Arguments: `{}`},
+			ID: "call-blocking-protected", Name: "approval_blocking", Arguments: map[string]any{},
 		}}},
 		{Content: "SHOULD_NOT_BE_DELIVERED", FinishReason: "stop"},
 	}}
@@ -3871,8 +3862,7 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 func TestStopCancellationAfterApprovedToolExecutionPersistsTerminalResult(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{
-			ID: "call-immediate-protected", Name: "approval_immediate",
-			Function: &providers.FunctionCall{Name: "approval_immediate", Arguments: `{}`},
+			ID: "call-immediate-protected", Name: "approval_immediate", Arguments: map[string]any{},
 		}}},
 		{Content: "SHOULD_NOT_BE_DELIVERED", FinishReason: "stop"},
 	}}
@@ -4008,9 +3998,6 @@ func TestDurableHumanApprovalBindsTrustedPreparedArguments(t *testing.T) {
 			ID:        "call-prepared",
 			Name:      "approval_binding",
 			Arguments: map[string]any{"mutable": "model-value"},
-			Function: &providers.FunctionCall{
-				Name: "approval_binding", Arguments: `{"mutable":"model-value"}`,
-			},
 		}}},
 		{Content: "approval flow finished", FinishReason: "stop"},
 	}}
@@ -4097,11 +4084,9 @@ func TestDurableHumanApprovalBindsTrustedPreparedArguments(t *testing.T) {
 
 func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) {
 	toolCall := func(id, operation string) providers.ToolCall {
-		arguments := fmt.Sprintf(`{"operation":%q}`, operation)
 		return providers.ToolCall{
 			ID: id, Name: "browser_handoff_continuation",
 			Arguments: map[string]any{"operation": operation},
-			Function:  &providers.FunctionCall{Name: "browser_handoff_continuation", Arguments: arguments},
 		}
 	}
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
@@ -4172,9 +4157,6 @@ func TestDurableHumanApprovalDoesNotPrepareAfterPolicyRevocation(t *testing.T) {
 		{ToolCalls: []providers.ToolCall{{
 			ID: "call-revoked", Name: "approval_binding",
 			Arguments: map[string]any{"mutable": "model-value"},
-			Function: &providers.FunctionCall{
-				Name: "approval_binding", Arguments: `{"mutable":"model-value"}`,
-			},
 		}}},
 		{Content: "approval denied", FinishReason: "stop"},
 	}}
@@ -4235,9 +4217,6 @@ func TestHumanApprovalNeverRendersGenericArguments(t *testing.T) {
 		{ToolCalls: []providers.ToolCall{{
 			ID: "call-opaque", Name: "approval_counting",
 			Arguments: map[string]any{"source": "-----BEGIN PRIVATE KEY-----\nsecret"},
-			Function: &providers.FunctionCall{
-				Name: "approval_counting", Arguments: `{"source":"-----BEGIN PRIVATE KEY-----\\nsecret"}`,
-			},
 		}}},
 		{Content: "approval flow finished", FinishReason: "stop"},
 	}}
@@ -4313,9 +4292,6 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 			agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 				Role: "assistant", ToolCalls: []providers.ToolCall{{
 					ID: "call-approval-recovery", Name: tool.Name(), Arguments: args,
-					Function: &providers.FunctionCall{
-						Name: tool.Name(), Arguments: `{"token":"recovery-secret"}`,
-					},
 				}},
 			})
 			argumentHash, err := interactions.HashArguments(agent.Workspace, args)
@@ -4394,9 +4370,6 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		{ToolCalls: []providers.ToolCall{{
 			ID: "call-context", Name: "approval_context",
 			Arguments: map[string]any{"target": "production"},
-			Function: &providers.FunctionCall{
-				Name: "approval_context", Arguments: `{"target":"production"}`,
-			},
 		}}},
 		{Content: "context approval finished", FinishReason: "stop"},
 	}}
@@ -4498,8 +4471,7 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 func TestApprovedToolHardAbortCleansOriginalExecution(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-hard-abort", Name: "approval_counting",
-			Function: &providers.FunctionCall{Name: "approval_counting", Arguments: `{}`},
+			ID: "call-hard-abort", Name: "approval_counting", Arguments: map[string]any{},
 		}},
 	}}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
@@ -4570,8 +4542,7 @@ func TestApprovedToolHardAbortCleansOriginalExecution(t *testing.T) {
 func TestApprovedToolDescendantSuspensionDominatesHardAbort(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-suspend-hard-abort", Name: "approval_suspend_hard_abort",
-			Function: &providers.FunctionCall{Name: "approval_suspend_hard_abort", Arguments: `{}`},
+			ID: "call-suspend-hard-abort", Name: "approval_suspend_hard_abort", Arguments: map[string]any{},
 		}},
 	}}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
@@ -4638,8 +4609,7 @@ func TestApprovedToolDescendantSuspensionDominatesHardAbort(t *testing.T) {
 func TestApprovedToolHardAbortCleansWhenJournalFails(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-hard-abort-journal", Name: "approval_hard_abort",
-			Function: &providers.FunctionCall{Name: "approval_hard_abort", Arguments: `{}`},
+			ID: "call-hard-abort-journal", Name: "approval_hard_abort", Arguments: map[string]any{},
 		}},
 	}}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
@@ -4771,8 +4741,7 @@ func TestApprovedExternalReceiptSurvivesToolResultJournalFailure(t *testing.T) {
 
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{
-			ID: "call-journal-receipt", Name: "browser_act",
-			Function: &providers.FunctionCall{Name: "browser_act", Arguments: `{}`},
+			ID: "call-journal-receipt", Name: "browser_act", Arguments: map[string]any{},
 		}}},
 		{Content: "Recovered committed action", FinishReason: "stop"},
 	}}
@@ -4879,9 +4848,6 @@ func TestExpiredAllowOnceNeverExecutesProtectedTool(t *testing.T) {
 			agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 				Role: "assistant", ToolCalls: []providers.ToolCall{{
 					ID: "call-expired", Name: tool.Name(), Arguments: args,
-					Function: &providers.FunctionCall{
-						Name: tool.Name(), Arguments: `{"target":"production"}`,
-					},
 				}},
 			})
 			argumentHash, err := interactions.HashArguments(agent.Workspace, args)
@@ -4990,8 +4956,7 @@ func TestInteractionIngressOnlyClaimsAuthorizedAnswers(t *testing.T) {
 	agent.Sessions.AddFullMessage(request.Route.SessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: request.Origin.ToolCallID, Name: request.Origin.ToolName,
-			Function: &providers.FunctionCall{Name: request.Origin.ToolName, Arguments: `{}`},
+			ID: request.Origin.ToolCallID, Name: request.Origin.ToolName, Arguments: map[string]any{},
 		}},
 	})
 	registry := al.interactionRegistryForWorkspace(workspace)
@@ -5247,8 +5212,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 	agent.Sessions.AddFullMessage(continuationSession, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-pending-click", Name: "browser_act",
-			Function: &providers.FunctionCall{Name: "browser_act", Arguments: `{}`},
+			ID: "call-pending-click", Name: "browser_act", Arguments: map[string]any{},
 		}},
 	})
 	inbound := bus.InboundContext{
@@ -5351,8 +5315,7 @@ func TestConcurrentExplicitInteractionAnswersNeverBecomeSteering(t *testing.T) {
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-concurrent-answer", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-concurrent-answer", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -5832,8 +5795,7 @@ func TestTaskInteractionConcurrentExplicitAnswersStartOneContinuation(t *testing
 	agent.Sessions.AddFullMessage(continuationSessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-task-concurrent-answer", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-task-concurrent-answer", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -5939,8 +5901,7 @@ func TestReloadWhileWaitingResumesAgainstPersistedSession(t *testing.T) {
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-reload-question", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-reload-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -5999,8 +5960,7 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-question", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -6518,8 +6478,7 @@ func TestLateResumingSteeringHandsOffToOwnerExactlyOnce(t *testing.T) {
 	agent.Sessions.AddFullMessage(continuationKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: origin.ToolCallID, Name: origin.ToolName,
-			Function: &providers.FunctionCall{Name: origin.ToolName, Arguments: `{}`},
+			ID: origin.ToolCallID, Name: origin.ToolName, Arguments: map[string]any{},
 		}},
 	})
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
@@ -7474,8 +7433,7 @@ func TestRecoveryCompletesDurableStopCancellation(t *testing.T) {
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-question", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -7646,8 +7604,7 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-question", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	registry := al.interactionRegistryForWorkspace(workspace)
@@ -7717,8 +7674,7 @@ func TestInteractionWorkerReleasesSessionBeforeDrainingDeferredIngress(t *testin
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-drain-question", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-drain-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)
@@ -7807,8 +7763,7 @@ func TestRecoverHumanInteractionsResumesDurableClaimAfterRestartWindow(t *testin
 	agent.Sessions.AddFullMessage(sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "call-question", Name: "request_user_input",
-			Function: &providers.FunctionCall{Name: "request_user_input", Arguments: `{}`},
+			ID: "call-question", Name: "request_user_input", Arguments: map[string]any{},
 		}},
 	})
 	request := testToolSuspensionRequest(agent.Workspace)

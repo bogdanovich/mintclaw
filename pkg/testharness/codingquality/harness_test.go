@@ -6,21 +6,19 @@ import (
 )
 
 func TestCodingQualityGate(t *testing.T) {
-	for _, family := range []ToolCallFamily{ObjectArguments, FunctionJSON} {
-		for _, scale := range []FixtureScale{SmallFixture, LargeFixture} {
-			t.Run(string(family)+"/"+string(scale), func(t *testing.T) {
-				report, err := Evaluate(t.Context(), t.TempDir(), t.TempDir(), family, scale)
-				if err != nil {
-					t.Fatal(err)
-				}
-				encoded, err := json.Marshal(report)
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Logf("coding quality metrics: %s", encoded)
-				assertPassingReport(t, report)
-			})
-		}
+	for _, scale := range []FixtureScale{SmallFixture, LargeFixture} {
+		t.Run(string(scale), func(t *testing.T) {
+			report, err := Evaluate(t.Context(), t.TempDir(), t.TempDir(), scale)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("coding quality metrics: %s", encoded)
+			assertPassingReport(t, report)
+		})
 	}
 }
 

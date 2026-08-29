@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -165,10 +166,7 @@ func toolFeedbackExplanationFromResponse(
 
 func toolFeedbackExplanationFromToolCalls(toolCalls []providers.ToolCall) string {
 	for _, tc := range toolCalls {
-		if tc.ExtraContent == nil {
-			continue
-		}
-		if explanation := strings.TrimSpace(tc.ExtraContent.ToolFeedbackExplanation); explanation != "" {
+		if explanation := strings.TrimSpace(tc.ToolFeedbackExplanation); explanation != "" {
 			return explanation
 		}
 	}
@@ -180,10 +178,8 @@ func toolFeedbackExplanationForToolCall(
 	toolCall providers.ToolCall,
 	messages []providers.Message,
 ) string {
-	if toolCall.ExtraContent != nil {
-		if explanation := strings.TrimSpace(toolCall.ExtraContent.ToolFeedbackExplanation); explanation != "" {
-			return explanation
-		}
+	if explanation := strings.TrimSpace(toolCall.ToolFeedbackExplanation); explanation != "" {
+		return explanation
 	}
 	return toolFeedbackExplanationFromMessages(messages)
 }
@@ -436,13 +432,12 @@ func formatMessagesForLog(messages []providers.Message) string {
 			sb.WriteString("  ToolCalls:\n")
 			for _, tc := range msg.ToolCalls {
 				fmt.Fprintf(&sb, "    - ID: %s, Type: %s, Name: %s\n", tc.ID, tc.Type, tc.Name)
-				if tc.Function != nil {
-					arguments := utils.Truncate(tc.Function.Arguments, 200)
-					if sensitive || !diagnosticToolPreviewAllowed(tc.Function.Name) {
-						arguments = "[REDACTED]"
-					}
-					fmt.Fprintf(&sb, "      Arguments: %s\n", arguments)
+				argumentsJSON, _ := json.Marshal(tc.Arguments)
+				arguments := utils.Truncate(string(argumentsJSON), 200)
+				if sensitive || !diagnosticToolPreviewAllowed(tc.Name) {
+					arguments = "[REDACTED]"
 				}
+				fmt.Fprintf(&sb, "      Arguments: %s\n", arguments)
 			}
 		}
 		if msg.Content != "" {

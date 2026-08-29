@@ -9,9 +9,7 @@ import (
 func TestToolCallExplanationDuplicatesContent(t *testing.T) {
 	t.Run("exact duplicate", func(t *testing.T) {
 		toolCalls := []providers.ToolCall{{
-			ExtraContent: &providers.ExtraContent{
-				ToolFeedbackExplanation: "Read the file before replying.",
-			},
+			ToolFeedbackExplanation: "Read the file before replying.",
 		}}
 
 		if !ToolCallExplanationDuplicatesContent("Read the file before replying.", toolCalls) {
@@ -21,9 +19,7 @@ func TestToolCallExplanationDuplicatesContent(t *testing.T) {
 
 	t.Run("whitespace normalized duplicate", func(t *testing.T) {
 		toolCalls := []providers.ToolCall{{
-			ExtraContent: &providers.ExtraContent{
-				ToolFeedbackExplanation: "Read   the file\nbefore replying.",
-			},
+			ToolFeedbackExplanation: "Read   the file\nbefore replying.",
 		}}
 
 		if !ToolCallExplanationDuplicatesContent("  Read the file before replying.  ", toolCalls) {
@@ -33,9 +29,7 @@ func TestToolCallExplanationDuplicatesContent(t *testing.T) {
 
 	t.Run("distinct content", func(t *testing.T) {
 		toolCalls := []providers.ToolCall{{
-			ExtraContent: &providers.ExtraContent{
-				ToolFeedbackExplanation: "Read the file before replying.",
-			},
+			ToolFeedbackExplanation: "Read the file before replying.",
 		}}
 
 		if ToolCallExplanationDuplicatesContent(

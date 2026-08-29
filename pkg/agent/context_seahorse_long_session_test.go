@@ -145,8 +145,7 @@ func TestCodingLongSessionCompactionContinuity(t *testing.T) {
 	appendMessage(manager, sessionKey, providers.Message{
 		Role: "assistant",
 		ToolCalls: []providers.ToolCall{{
-			ID: "apply-once", Type: "function",
-			Function: &providers.FunctionCall{Name: "apply_patch", Arguments: `{"path":"parser.go"}`},
+			ID: "apply-once", Type: "function", Name: "apply_patch", Arguments: map[string]any{"path": "parser.go"},
 		}},
 	})
 	appendMessage(manager, sessionKey, providers.Message{

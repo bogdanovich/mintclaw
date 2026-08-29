@@ -598,12 +598,10 @@ func TestAddFullMessage_WithToolCalls(t *testing.T) {
 		Content: "Let me search that.",
 		ToolCalls: []providers.ToolCall{
 			{
-				ID:   "call_abc",
-				Type: "function",
-				Function: &providers.FunctionCall{
-					Name:      "web_search",
-					Arguments: `{"q":"golang jsonl"}`,
-				},
+				ID:        "call_abc",
+				Type:      "function",
+				Name:      "web_search",
+				Arguments: map[string]any{"q": "golang jsonl"},
 			},
 		},
 	}
@@ -627,8 +625,46 @@ func TestAddFullMessage_WithToolCalls(t *testing.T) {
 	if tc.ID != "call_abc" {
 		t.Errorf("tool call ID = %q", tc.ID)
 	}
-	if tc.Function == nil || tc.Function.Name != "web_search" {
-		t.Errorf("tool call function = %+v", tc.Function)
+	if tc.Name != "web_search" {
+		t.Errorf("tool call = %+v", tc)
+	}
+}
+
+func TestJSONLToolCallsUseOnlyTheCurrentFlatSchema(t *testing.T) {
+	message := providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-current", Type: "function", Name: "read_file",
+			Arguments:        map[string]any{"path": "notes.txt"},
+			ThoughtSignature: "signature", ToolFeedbackExplanation: "feedback",
+		}},
+	}
+	line, err := encodeJSONLMessage(0, message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encoded map[string]any
+	if err = json.Unmarshal(line, &encoded); err != nil {
+		t.Fatal(err)
+	}
+	toolCalls := encoded["tool_calls"].([]any)
+	call := toolCalls[0].(map[string]any)
+	if call["name"] != "read_file" || call["thought_signature"] != "signature" ||
+		call["tool_feedback_explanation"] != "feedback" {
+		t.Fatalf("flat tool call = %#v", call)
+	}
+	if _, ok := call["arguments"].(map[string]any); !ok {
+		t.Fatalf("arguments are not an object: %#v", call["arguments"])
+	}
+	if _, legacy := call["function"]; legacy {
+		t.Fatalf("legacy nested function was written: %#v", call)
+	}
+
+	legacy := []byte(
+		`{"role":"assistant","content":"","tool_calls":[{"id":"call-old","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"notes.txt\\"}"}}]}`,
+	)
+	if _, err = decodeJSONLMessage(legacy); err == nil {
+		t.Fatal("legacy nested tool call was accepted")
 	}
 }
 

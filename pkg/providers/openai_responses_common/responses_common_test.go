@@ -163,26 +163,6 @@ func TestResolveToolCall_FromNameAndArguments(t *testing.T) {
 	}
 }
 
-func TestResolveToolCall_FromFunctionField(t *testing.T) {
-	tc := protocoltypes.ToolCall{
-		ID: "call_1",
-		Function: &protocoltypes.FunctionCall{
-			Name:      "read_file",
-			Arguments: `{"path":"README.md"}`,
-		},
-	}
-	name, args, ok := ResolveToolCall(tc)
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
-	if name != "read_file" {
-		t.Errorf("name = %q, want %q", name, "read_file")
-	}
-	if args != `{"path":"README.md"}` {
-		t.Errorf("args = %q, want %q", args, `{"path":"README.md"}`)
-	}
-}
-
 func TestResolveToolCall_EmptyName(t *testing.T) {
 	tc := protocoltypes.ToolCall{}
 	_, _, ok := ResolveToolCall(tc)

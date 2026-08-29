@@ -112,19 +112,17 @@ func TestBuildCodexParams_ToolCallConversation(t *testing.T) {
 	}
 }
 
-func TestBuildCodexParams_ToolCallFunctionFallback(t *testing.T) {
+func TestBuildCodexParamsCanonicalToolCall(t *testing.T) {
 	messages := []Message{
 		{Role: "user", Content: "Read a file"},
 		{
 			Role: "assistant",
 			ToolCalls: []ToolCall{
 				{
-					ID:   "call_1",
-					Type: "function",
-					Function: &FunctionCall{
-						Name:      "read_file",
-						Arguments: `{"path":"README.md"}`,
-					},
+					ID:        "call_1",
+					Type:      "function",
+					Name:      "read_file",
+					Arguments: map[string]any{"path": "README.md"},
 				},
 			},
 		},

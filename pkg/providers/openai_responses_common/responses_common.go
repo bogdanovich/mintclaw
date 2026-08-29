@@ -238,9 +238,6 @@ func BuildMultipartContent(text string, media []string) responses.ResponseInputM
 // Returns ok=false if the tool call has no name or if arguments fail to marshal.
 func ResolveToolCall(tc protocoltypes.ToolCall) (name string, arguments string, ok bool) {
 	name = tc.Name
-	if name == "" && tc.Function != nil {
-		name = tc.Function.Name
-	}
 	if name == "" {
 		return "", "", false
 	}
@@ -251,10 +248,6 @@ func ResolveToolCall(tc protocoltypes.ToolCall) (name string, arguments string, 
 			return "", "", false
 		}
 		return name, string(argsJSON), true
-	}
-
-	if tc.Function != nil && tc.Function.Arguments != "" {
-		return name, tc.Function.Arguments, true
 	}
 
 	return name, "{}", true

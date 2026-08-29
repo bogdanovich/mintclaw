@@ -1,6 +1,7 @@
 package seahorse
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -147,13 +148,15 @@ func EstimateMessageTokens(msg Message) int {
 	for _, part := range msg.Parts {
 		switch part.Type {
 		case "tool_use":
+			arguments := map[string]any{}
+			if err := json.Unmarshal([]byte(part.Arguments), &arguments); err != nil {
+				arguments["raw"] = part.Arguments
+			}
 			pm.ToolCalls = append(pm.ToolCalls, providers.ToolCall{
-				ID:   part.ToolCallID,
-				Type: "function",
-				Function: &providers.FunctionCall{
-					Name:      part.Name,
-					Arguments: part.Arguments,
-				},
+				ID:        part.ToolCallID,
+				Type:      "function",
+				Name:      part.Name,
+				Arguments: arguments,
 			})
 		case "tool_result":
 			pm.ToolCallID = part.ToolCallID

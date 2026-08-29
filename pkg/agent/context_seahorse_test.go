@@ -155,11 +155,7 @@ func TestProviderToSeahorseMessageWithToolCalls(t *testing.T) {
 		Content: "",
 		ToolCalls: []protocoltypes.ToolCall{
 			{
-				ID: "tc_1",
-				Function: &protocoltypes.FunctionCall{
-					Name:      "read_file",
-					Arguments: `{"path":"/tmp/test"}`,
-				},
+				ID: "tc_1", Name: "read_file", Arguments: map[string]any{"path": "/tmp/test"},
 			},
 		},
 	}
@@ -365,8 +361,8 @@ func TestSeahorseToProviderMessagesWithToolCalls(t *testing.T) {
 	if len(result[0].ToolCalls) != 1 {
 		t.Fatalf("ToolCalls = %d, want 1", len(result[0].ToolCalls))
 	}
-	if result[0].ToolCalls[0].Function.Name != "read_file" {
-		t.Errorf("ToolCall name = %q, want read_file", result[0].ToolCalls[0].Function.Name)
+	if result[0].ToolCalls[0].Name != "read_file" {
+		t.Errorf("ToolCall name = %q, want read_file", result[0].ToolCalls[0].Name)
 	}
 	// GLM API and other OpenAI-compatible APIs require Type: "function"
 	if result[0].ToolCalls[0].Type != "function" {
@@ -1763,11 +1759,7 @@ func TestProviderToSeahorseMessageTokenCountIncludesAllFields(t *testing.T) {
 		Content: "This is a simple response with some text content.",
 		ToolCalls: []protocoltypes.ToolCall{
 			{
-				ID: "tc_123",
-				Function: &protocoltypes.FunctionCall{
-					Name:      "read_file",
-					Arguments: `{"path":"/home/user/document.txt"}`,
-				},
+				ID: "tc_123", Name: "read_file", Arguments: map[string]any{"path": "/home/user/document.txt"},
 			},
 		},
 	}

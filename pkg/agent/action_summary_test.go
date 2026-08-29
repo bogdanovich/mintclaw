@@ -118,17 +118,11 @@ func TestBuildFinalTurnRenderMessagesSuppressesUnverifiedWriteToolResults(t *tes
 				ToolCalls: []providers.ToolCall{
 					{
 						ID:   "call-1",
-						Name: "cron",
-						Function: &providers.FunctionCall{
-							Name: "cron",
-						},
+						Name: "cron", Arguments: map[string]any{},
 					},
 					{
 						ID:   "call-2",
-						Name: "write_file",
-						Function: &providers.FunctionCall{
-							Name: "write_file",
-						},
+						Name: "write_file", Arguments: map[string]any{},
 					},
 				},
 			},

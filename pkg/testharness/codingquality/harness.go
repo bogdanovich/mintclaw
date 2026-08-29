@@ -1,10 +1,9 @@
-// Package codingquality exercises MintClaw's real coding tools through the
-// provider-neutral tool-call shapes used by deterministic quality scenarios.
+// Package codingquality exercises MintClaw's real coding tools through
+// deterministic quality scenarios.
 package codingquality
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -22,42 +20,37 @@ import (
 
 const SchemaVersion = "mintclaw.coding-quality.v1"
 
-type ToolCallFamily string
-
 type FixtureScale string
 
 const (
-	ObjectArguments ToolCallFamily = "object_arguments"
-	FunctionJSON    ToolCallFamily = "function_json"
-	SmallFixture    FixtureScale   = "small"
-	LargeFixture    FixtureScale   = "large"
+	SmallFixture FixtureScale = "small"
+	LargeFixture FixtureScale = "large"
 )
 
 type Report struct {
-	SchemaVersion            string         `json:"schema_version"`
-	Family                   ToolCallFamily `json:"family"`
-	Fixture                  FixtureScale   `json:"fixture"`
-	FixtureFiles             int            `json:"fixture_files"`
-	FirstAttemptEditCorrect  bool           `json:"first_attempt_edit_correct"`
-	PatchWriteAuditVerified  bool           `json:"patch_write_audit_verified"`
-	StalePatchRejected       bool           `json:"stale_patch_rejected"`
-	SearchExpectedFiles      int            `json:"search_expected_files"`
-	SearchUnexpectedFiles    int            `json:"search_unexpected_files"`
-	SearchExactFiles         bool           `json:"search_exact_files"`
-	SearchOutputBytes        int            `json:"search_output_bytes"`
-	SearchEstimatedTokens    int            `json:"search_estimated_tokens"`
-	LongReadBounded          bool           `json:"long_read_bounded"`
-	UnicodeRoundTrip         bool           `json:"unicode_round_trip"`
-	AwkwardPathRoundTrip     bool           `json:"awkward_path_round_trip"`
-	IgnoredGeneratedExcluded bool           `json:"ignored_generated_excluded"`
-	BinaryContentExcluded    bool           `json:"binary_content_excluded"`
-	RenameVisible            bool           `json:"rename_visible"`
-	DeletedReadActionable    bool           `json:"deleted_read_actionable"`
-	CommandOutputBytes       int            `json:"command_output_bytes"`
-	CommandEstimatedTokens   int            `json:"command_estimated_tokens"`
-	CommandArtifactRetained  bool           `json:"command_artifact_retained"`
-	CancellationClassified   bool           `json:"cancellation_classified"`
-	RecoverySucceeded        bool           `json:"recovery_succeeded"`
+	SchemaVersion            string       `json:"schema_version"`
+	Fixture                  FixtureScale `json:"fixture"`
+	FixtureFiles             int          `json:"fixture_files"`
+	FirstAttemptEditCorrect  bool         `json:"first_attempt_edit_correct"`
+	PatchWriteAuditVerified  bool         `json:"patch_write_audit_verified"`
+	StalePatchRejected       bool         `json:"stale_patch_rejected"`
+	SearchExpectedFiles      int          `json:"search_expected_files"`
+	SearchUnexpectedFiles    int          `json:"search_unexpected_files"`
+	SearchExactFiles         bool         `json:"search_exact_files"`
+	SearchOutputBytes        int          `json:"search_output_bytes"`
+	SearchEstimatedTokens    int          `json:"search_estimated_tokens"`
+	LongReadBounded          bool         `json:"long_read_bounded"`
+	UnicodeRoundTrip         bool         `json:"unicode_round_trip"`
+	AwkwardPathRoundTrip     bool         `json:"awkward_path_round_trip"`
+	IgnoredGeneratedExcluded bool         `json:"ignored_generated_excluded"`
+	BinaryContentExcluded    bool         `json:"binary_content_excluded"`
+	RenameVisible            bool         `json:"rename_visible"`
+	DeletedReadActionable    bool         `json:"deleted_read_actionable"`
+	CommandOutputBytes       int          `json:"command_output_bytes"`
+	CommandEstimatedTokens   int          `json:"command_estimated_tokens"`
+	CommandArtifactRetained  bool         `json:"command_artifact_retained"`
+	CancellationClassified   bool         `json:"cancellation_classified"`
+	RecoverySucceeded        bool         `json:"recovery_succeeded"`
 }
 
 type toolSet struct {
@@ -66,12 +59,11 @@ type toolSet struct {
 }
 
 // Evaluate builds a representative repository fixture beneath root and
-// returns bounded, deterministic quality measurements for one tool-call family.
+// returns bounded, deterministic quality measurements.
 func Evaluate(
 	ctx context.Context,
 	root string,
 	scratch string,
-	family ToolCallFamily,
 	scale FixtureScale,
 ) (Report, error) {
 	fixtureFiles, err := buildFixture(root, scale)
@@ -84,21 +76,13 @@ func Evaluate(
 	}
 	defer func() { _ = set.exec.Close() }()
 
-	report := Report{SchemaVersion: SchemaVersion, Family: family, Fixture: scale, FixtureFiles: fixtureFiles}
+	report := Report{SchemaVersion: SchemaVersion, Fixture: scale, FixtureFiles: fixtureFiles}
 	execute := func(name string, args map[string]any) (*toolshared.ToolResult, error) {
-		call, encodeErr := encodeCall(family, name, args)
-		if encodeErr != nil {
-			return nil, encodeErr
-		}
-		decodedName, decodedArgs, decodeErr := decodeCall(call)
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		tool := set.items[decodedName]
+		tool := set.items[name]
 		if tool == nil {
-			return nil, fmt.Errorf("coding quality: tool %q is not registered", decodedName)
+			return nil, fmt.Errorf("coding quality: tool %q is not registered", name)
 		}
-		return tool.Execute(toolshared.WithToolContext(ctx, "coding", "quality-fixture"), decodedArgs), nil
+		return tool.Execute(toolshared.WithToolContext(ctx, "coding", "quality-fixture"), cloneArgs(args)), nil
 	}
 
 	patchResult, err := execute("apply_patch", map[string]any{"input": firstAttemptPatch})
@@ -259,29 +243,6 @@ func newToolSet(root, scratch string) (toolSet, error) {
 		set.items[tool.Name()] = tool
 	}
 	return set, nil
-}
-
-func encodeCall(family ToolCallFamily, name string, args map[string]any) (providers.ToolCall, error) {
-	switch family {
-	case ObjectArguments:
-		return providers.ToolCall{Name: name, Arguments: cloneArgs(args)}, nil
-	case FunctionJSON:
-		encoded, err := json.Marshal(args)
-		if err != nil {
-			return providers.ToolCall{}, err
-		}
-		return providers.ToolCall{Function: &providers.FunctionCall{Name: name, Arguments: string(encoded)}}, nil
-	default:
-		return providers.ToolCall{}, fmt.Errorf("coding quality: unsupported tool-call family %q", family)
-	}
-}
-
-func decodeCall(call providers.ToolCall) (string, map[string]any, error) {
-	normalized := providers.NormalizeToolCall(call)
-	if strings.TrimSpace(normalized.Name) == "" {
-		return "", nil, fmt.Errorf("coding quality: function call name is required")
-	}
-	return normalized.Name, cloneArgs(normalized.Arguments), nil
 }
 
 func buildFixture(root string, scale FixtureScale) (int, error) {

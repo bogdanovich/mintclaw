@@ -244,8 +244,7 @@ func (p *AntigravityProvider) buildRequest(
 				content.Parts = append(content.Parts, antigravityPart{Text: msg.Content})
 			}
 			for _, tc := range msg.ToolCalls {
-				toolName, toolArgs, thoughtSignature := common.NormalizeStoredToolCall(tc)
-				if toolName == "" {
+				if tc.Name == "" {
 					logger.WarnCF(
 						"provider.antigravity",
 						"Skipping tool call with empty name in history",
@@ -256,14 +255,14 @@ func (p *AntigravityProvider) buildRequest(
 					continue
 				}
 				if tc.ID != "" {
-					toolCallNames[tc.ID] = toolName
+					toolCallNames[tc.ID] = tc.Name
 				}
 				content.Parts = append(content.Parts, antigravityPart{
-					ThoughtSignature:      thoughtSignature,
-					ThoughtSignatureSnake: thoughtSignature,
+					ThoughtSignature:      tc.ThoughtSignature,
+					ThoughtSignatureSnake: tc.ThoughtSignature,
 					FunctionCall: &antigravityFunctionCall{
-						Name: toolName,
-						Args: toolArgs,
+						Name: tc.Name,
+						Args: tc.Arguments,
 					},
 				})
 			}
@@ -383,19 +382,14 @@ func (p *AntigravityProvider) parseSSEResponse(body string) (*LLMResponse, error
 					}
 				}
 				if part.FunctionCall != nil {
-					argumentsJSON, _ := json.Marshal(part.FunctionCall.Args)
 					toolCalls = append(toolCalls, ToolCall{
 						ID:        fmt.Sprintf("call_%s_%d", part.FunctionCall.Name, time.Now().UnixNano()),
 						Name:      part.FunctionCall.Name,
 						Arguments: part.FunctionCall.Args,
-						Function: &FunctionCall{
-							Name:      part.FunctionCall.Name,
-							Arguments: string(argumentsJSON),
-							ThoughtSignature: extractPartThoughtSignature(
-								part.ThoughtSignature,
-								part.ThoughtSignatureSnake,
-							),
-						},
+						ThoughtSignature: extractPartThoughtSignature(
+							part.ThoughtSignature,
+							part.ThoughtSignatureSnake,
+						),
 					})
 				}
 			}

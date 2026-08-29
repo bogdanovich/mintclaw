@@ -51,18 +51,16 @@ func TestAntigravityProviderNormalizesHTTPError(t *testing.T) {
 	}
 }
 
-func TestBuildRequestUsesFunctionFieldsWhenToolCallNameMissing(t *testing.T) {
+func TestBuildRequestUsesCanonicalToolCall(t *testing.T) {
 	p := &AntigravityProvider{}
 
 	messages := []Message{
 		{
 			Role: "assistant",
 			ToolCalls: []ToolCall{{
-				ID: "call_read_file_123",
-				Function: &FunctionCall{
-					Name:      "read_file",
-					Arguments: `{"path":"README.md"}`,
-				},
+				ID:        "call_read_file_123",
+				Name:      "read_file",
+				Arguments: map[string]any{"path": "README.md"},
 			}},
 		},
 		{

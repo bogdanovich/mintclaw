@@ -942,19 +942,15 @@ func providerToSeahorseMessage(msg protocoltypes.Message) seahorse.Message {
 
 	// Convert ToolCalls → MessageParts
 	for _, tc := range msg.ToolCalls {
-		name := tc.Name
 		arguments := ""
-		if tc.Function != nil {
-			name = tc.Function.Name
-			arguments = tc.Function.Arguments
-		} else if len(tc.Arguments) > 0 {
+		if len(tc.Arguments) > 0 {
 			if encoded, err := json.Marshal(tc.Arguments); err == nil {
 				arguments = string(encoded)
 			}
 		}
 		part := seahorse.MessagePart{
 			Type:       "tool_use",
-			Name:       name,
+			Name:       tc.Name,
 			Arguments:  arguments,
 			ToolCallID: tc.ID,
 		}
@@ -1011,13 +1007,13 @@ func seahorseToProviderMessages(result *seahorse.AssembleResult) []protocoltypes
 		// Reconstruct ToolCalls from parts
 		for _, part := range msg.Parts {
 			if part.Type == "tool_use" {
+				arguments := map[string]any{}
+				_ = json.Unmarshal([]byte(part.Arguments), &arguments)
 				pm.ToolCalls = append(pm.ToolCalls, protocoltypes.ToolCall{
-					ID:   part.ToolCallID,
-					Type: "function", // Required by OpenAI-compatible APIs (GLM, etc.)
-					Function: &protocoltypes.FunctionCall{
-						Name:      part.Name,
-						Arguments: part.Arguments,
-					},
+					ID:        part.ToolCallID,
+					Type:      "function", // Required by OpenAI-compatible APIs (GLM, etc.)
+					Name:      part.Name,
+					Arguments: arguments,
 				})
 			}
 			if part.Type == "tool_result" {

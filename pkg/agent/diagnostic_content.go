@@ -1,8 +1,6 @@
 package agent
 
 import (
-	"encoding/json"
-	"reflect"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
@@ -23,7 +21,6 @@ const (
 	diagnosticToolResultBytes           = 8 * 1024
 	diagnosticErrorBytes                = 2 * 1024
 	diagnosticSteeringBytes             = 4 * 1024
-	diagnosticSerializedArgsBytes       = 4 * 1024
 	fallbackDiagnosticMetadataBytes     = 240
 	maxDiagnosticMessages               = 64
 	maxDiagnosticToolCalls              = 64
@@ -184,9 +181,6 @@ func diagnosticContentContainsArtifactReference(content string) bool {
 func diagnosticToolCallsContainSensitiveEvidence(calls []providers.ToolCall) bool {
 	for _, call := range calls {
 		name := call.Name
-		if name == "" && call.Function != nil {
-			name = call.Function.Name
-		}
 		if !diagnosticToolPreviewAllowed(name) {
 			return true
 		}
@@ -198,22 +192,10 @@ func diagnosticToolCallsContainSensitiveEvidence(calls []providers.ToolCall) boo
 }
 
 func diagnosticBrowserFillCall(call providers.ToolCall) bool {
-	representations := make([]map[string]any, 0, 2)
-	if len(call.Arguments) > 0 {
-		representations = append(representations, call.Arguments)
-	}
-	if call.Function != nil && call.Function.Arguments != "" {
-		var decoded map[string]any
-		if json.Unmarshal([]byte(call.Function.Arguments), &decoded) != nil {
-			return true
-		}
-		representations = append(representations, decoded)
-	}
-	if len(representations) == 0 ||
-		(len(representations) == 2 && !reflect.DeepEqual(representations[0], representations[1])) {
+	if len(call.Arguments) == 0 {
 		return true
 	}
-	action, ok := representations[0]["action"].(map[string]any)
+	action, ok := call.Arguments["action"].(map[string]any)
 	if !ok {
 		return true
 	}
@@ -316,14 +298,6 @@ func diagnosticToolCallFromProvider(call providers.ToolCall, forceRedaction bool
 	if len(call.Arguments) > 0 {
 		arguments = call.Arguments
 	}
-	if call.Function != nil {
-		if name == "" {
-			name = call.Function.Name
-		}
-		if arguments == nil && call.Function.Arguments != "" {
-			arguments = diagnosticSerializedArguments(call.Function.Arguments)
-		}
-	}
 	item := map[string]any{}
 	addDiagnosticValue(item, "id", call.ID)
 	addDiagnosticValue(item, "name", name)
@@ -377,9 +351,6 @@ func diagnosticMessageClassifications(messages []providers.Message) []diagnostic
 		batchCalls := make(map[string]diagnosticCallClassification, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {
 			name := call.Name
-			if name == "" && call.Function != nil {
-				name = call.Function.Name
-			}
 			if call.ID == "" {
 				continue
 			}
@@ -399,17 +370,6 @@ func diagnosticMessageClassifications(messages []providers.Message) []diagnostic
 		}
 	}
 	return result
-}
-
-func diagnosticSerializedArguments(value string) any {
-	if len(value) > diagnosticSerializedArgsBytes {
-		return "[UNSUPPORTED: oversized serialized arguments]"
-	}
-	var decoded any
-	if json.Unmarshal([]byte(value), &decoded) != nil {
-		return "[UNSUPPORTED: malformed serialized arguments]"
-	}
-	return decoded
 }
 
 func addDiagnosticValue[T comparable](item map[string]any, key string, value T) {

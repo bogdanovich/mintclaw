@@ -8,7 +8,6 @@ import (
 
 type (
 	ToolCall               = protocoltypes.ToolCall
-	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
 	UsageInfo              = protocoltypes.UsageInfo
 	Message                = protocoltypes.Message

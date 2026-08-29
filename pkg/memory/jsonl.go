@@ -575,7 +575,7 @@ func (s *JSONLStore) ClearSessionClientIDs(ctx context.Context, sessionKey strin
 // readMessages reads valid JSON lines from a .jsonl file, skipping
 // the first `skip` lines without unmarshaling them. This avoids the
 // cost of json.Unmarshal on logically truncated messages.
-// Malformed trailing lines (e.g. from a crash) are silently skipped.
+// Malformed or non-current lines are logged and skipped.
 func readMessages(ctx context.Context, path string, skip int) ([]providers.Message, error) {
 	if err := contextCause(ctx); err != nil {
 		return nil, err
@@ -607,13 +607,12 @@ func readMessages(ctx context.Context, path string, skip int) ([]providers.Messa
 		if lineNum <= skip {
 			continue
 		}
-		var msg providers.Message
-		if err := json.Unmarshal(line, &msg); err != nil {
+		msg, err := decodeJSONLMessage(line)
+		if err != nil {
 			// Corrupt line — likely a partial write from a crash.
-			// Log so operators know data was skipped, but don't
-			// fail the entire read; this is the standard JSONL
-			// recovery pattern.
-			log.Printf("memory: skipping corrupt line %d in %s: %v",
+			// A non-current schema is handled the same way so it cannot
+			// silently decode into an incomplete runtime message.
+			log.Printf("memory: skipping invalid line %d in %s: %v",
 				lineNum, filepath.Base(path), err)
 			continue
 		}
@@ -666,8 +665,8 @@ func scanRetainedMessageLines(ctx context.Context, path string) (int, []int, err
 		}
 		rawCount++
 
-		var msg providers.Message
-		if err := json.Unmarshal(line, &msg); err != nil {
+		msg, err := decodeJSONLMessage(line)
+		if err != nil {
 			continue
 		}
 		if messageutil.IsTransientAssistantThoughtMessage(msg) {
@@ -1261,6 +1260,22 @@ func encodeJSONLMessage(index int, msg providers.Message) ([]byte, error) {
 		)
 	}
 	return line, nil
+}
+
+func decodeJSONLMessage(line []byte) (providers.Message, error) {
+	var msg providers.Message
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&msg); err != nil {
+		return providers.Message{}, err
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return providers.Message{}, errors.New("trailing JSON value")
+		}
+		return providers.Message{}, fmt.Errorf("trailing data: %w", err)
+	}
+	return msg, nil
 }
 
 // ValidateJSONLHistory confirms that the canonical writer can encode every

@@ -471,20 +471,14 @@ func TestAgentLoop_EmitsSteeringAfterCompletedToolBatch(t *testing.T) {
 				ID:   "call_1",
 				Type: "function",
 				Name: "tool_one",
-				Function: &providers.FunctionCall{
-					Name:      "tool_one",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 			{
 				ID:   "call_2",
 				Type: "function",
 				Name: "tool_two",
-				Function: &providers.FunctionCall{
-					Name:      "tool_two",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 		},
@@ -688,10 +682,7 @@ func TestAgentLoop_EmitsFollowUpQueuedEvent(t *testing.T) {
 				ID:   "call_async_1",
 				Type: "function",
 				Name: "async_followup",
-				Function: &providers.FunctionCall{
-					Name:      "async_followup",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 		},
@@ -984,10 +975,7 @@ func TestAgentLoop_AsyncToolUserOnly_DoesNotEmitFollowUpQueued(t *testing.T) {
 				ID:   "call_async_1",
 				Type: "function",
 				Name: "async_followup_user_only",
-				Function: &providers.FunctionCall{
-					Name:      "async_followup_user_only",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 		},
@@ -1066,10 +1054,7 @@ func TestAgentLoop_EmitsAsyncCompletionEvent(t *testing.T) {
 				ID:   "call_async_1",
 				Type: "function",
 				Name: "async_completion_event",
-				Function: &providers.FunctionCall{
-					Name:      "async_completion_event",
-					Arguments: "{}",
-				},
+
 				Arguments: map[string]any{},
 			},
 		},
