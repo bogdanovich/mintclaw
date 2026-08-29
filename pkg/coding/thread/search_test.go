@@ -257,6 +257,125 @@ func TestHistoricalSearchDoesNotRecoverDirtyHistory(t *testing.T) {
 	}
 }
 
+func TestHistoricalSearchRejectsNonCanonicalJSONLRecord(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := catalogFixtureProject(t, filepath.Join(root, "project"))
+	metadata := catalogFixtureMetadata(t, project, "Clean title", time.Now().UTC())
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	writeForkTestHistory(t, store, metadata, []providers.Message{{
+		Role: "user", Content: "seed", RootTurnStart: true,
+	}})
+	replaceForkTestJSONL(
+		t,
+		store,
+		metadata,
+		[]byte(`{"role":"user","content":"needle","root_turn_start":true,"legacy":true}`+"\n"),
+	)
+	searcher, err := NewHistoricalSearcher(store, HistoricalSearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := searcher.Query(t.Context(), HistoricalSearchQuery{
+		ProjectKey: project.ProjectKey, Text: "needle", Limit: 20,
+	})
+	if err != nil || len(page.Matches) != 0 || page.SkippedTotal != 1 {
+		t.Fatalf("non-canonical transcript search = %+v, %v", page, err)
+	}
+}
+
+func TestHistoricalSearchRejectsAtomicallyReplacedTranscriptPath(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := catalogFixtureProject(t, filepath.Join(root, "project"))
+	metadata := catalogFixtureMetadata(t, project, "Clean title", time.Now().UTC())
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	writeForkTestHistory(t, store, metadata, []providers.Message{{
+		Role: "user", Content: "stale needle", RootTurnStart: true,
+	}})
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonlPath := filepath.Join(threadRoot, "sessions", "coding_"+metadata.ThreadID+".jsonl")
+	replacement, err := json.Marshal(providers.Message{
+		Role: "user", Content: "replacement content", RootTurnStart: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	searcher, err := NewHistoricalSearcher(store, HistoricalSearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	searcher.afterTranscriptRead = func() {
+		temporary := jsonlPath + ".replacement"
+		if writeErr := os.WriteFile(temporary, append(replacement, '\n'), 0o600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if renameErr := os.Rename(temporary, jsonlPath); renameErr != nil {
+			t.Fatal(renameErr)
+		}
+	}
+	page, err := searcher.Query(t.Context(), HistoricalSearchQuery{
+		ProjectKey: project.ProjectKey, Text: "needle", Limit: 20,
+	})
+	if err != nil || len(page.Matches) != 0 || page.SkippedTotal != 1 {
+		t.Fatalf("replaced transcript search = %+v, %v", page, err)
+	}
+}
+
+func TestHistoricalSearchPropagatesCancellationDuringTranscriptRead(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := catalogFixtureProject(t, filepath.Join(root, "project"))
+	metadata := catalogFixtureMetadata(t, project, "Clean title", time.Now().UTC())
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	writeForkTestHistory(t, store, metadata, []providers.Message{{
+		Role: "user", Content: "ordinary content", RootTurnStart: true,
+	}})
+	searcher, err := NewHistoricalSearcher(store, HistoricalSearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	searcher.afterTranscriptRead = cancel
+	_, err = searcher.Query(ctx, HistoricalSearchQuery{
+		ProjectKey: project.ProjectKey, Text: "needle", Limit: 20,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled transcript search error = %v", err)
+	}
+}
+
+func TestHistoricalSnippetIncludesEllipsesWithinByteLimit(t *testing.T) {
+	for _, limit := range []int{1, 5, 6, 7, 32, DefaultHistoricalSearchSnippetBytes} {
+		snippet := historicalSnippet(
+			strings.Repeat("prefix ", 100)+"needle"+strings.Repeat(" suffix", 100),
+			"needle",
+			limit,
+		)
+		if len(snippet) > limit || strings.ToValidUTF8(snippet, "") != snippet {
+			t.Fatalf("snippet limit %d produced %d bytes: %q", limit, len(snippet), snippet)
+		}
+	}
+}
+
 func TestHistoricalSearchRejectsLinkedTranscriptAndCancellation(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(filepath.Join(root, "coding"))

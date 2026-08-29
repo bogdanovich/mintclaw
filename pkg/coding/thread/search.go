@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +15,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/memory"
-	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/providers/messageutil"
 )
 
@@ -122,8 +120,9 @@ type HistoricalSearchPage struct {
 // HistoricalSearcher searches metadata and stable canonical transcript
 // snapshots without acquiring a writer lease or invoking history recovery.
 type HistoricalSearcher struct {
-	catalog *Catalog
-	options HistoricalSearchOptions
+	catalog             *Catalog
+	options             HistoricalSearchOptions
+	afterTranscriptRead func()
 }
 
 func NewHistoricalSearcher(store *Store, options HistoricalSearchOptions) (*HistoricalSearcher, error) {
@@ -193,6 +192,9 @@ func (s *HistoricalSearcher) Query(
 			page.ContentScanTruncated = true
 		}
 		if searchErr != nil {
+			if errors.Is(searchErr, context.Canceled) || errors.Is(searchErr, context.DeadlineExceeded) {
+				return HistoricalSearchPage{}, searchErr
+			}
 			if !errors.Is(searchErr, fs.ErrNotExist) {
 				page.addSkipped(
 					s.catalog.options.SkipReportLimit,
@@ -330,13 +332,25 @@ func (s *HistoricalSearcher) searchTranscript(
 		needed > remainingBytes {
 		return nil, 0, true, nil
 	}
-	metaData, _, err := readPinnedSearchFile(ctx, metaFile, metaInfo.Size())
+	metaData, pinnedMetaInfo, err := readPinnedSearchFile(ctx, metaFile, metaInfo.Size())
 	if err != nil {
 		return nil, needed, false, err
 	}
-	jsonlData, _, err := readPinnedSearchFile(ctx, jsonlFile, jsonlInfo.Size())
+	jsonlData, pinnedJSONLInfo, err := readPinnedSearchFile(ctx, jsonlFile, jsonlInfo.Size())
 	if err != nil {
 		return nil, needed, false, err
+	}
+	if s.afterTranscriptRead != nil {
+		s.afterTranscriptRead()
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, needed, false, contextErr
+	}
+	if verifyErr := verifyPinnedSearchFile(sessionsRoot, stem+".meta.json", pinnedMetaInfo); verifyErr != nil {
+		return nil, needed, false, verifyErr
+	}
+	if verifyErr := verifyPinnedSearchFile(sessionsRoot, stem+".jsonl", pinnedJSONLInfo); verifyErr != nil {
+		return nil, needed, false, verifyErr
 	}
 	bytesRead := int64(len(metaData) + len(jsonlData))
 	if bytesRead > remainingBytes {
@@ -383,10 +397,26 @@ func readPinnedSearchFile(ctx context.Context, file *os.File, expectedSize int64
 	if before.Size() != expectedSize {
 		return nil, nil, fmt.Errorf("coding thread search: pinned file size changed before reading")
 	}
-	data, err := io.ReadAll(io.LimitReader(file, expectedSize+1))
-	if err != nil {
-		return nil, nil, err
+	var output bytes.Buffer
+	output.Grow(int(expectedSize))
+	reader := io.LimitReader(file, expectedSize+1)
+	buffer := make([]byte, 64*1024)
+	for {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, nil, contextErr
+		}
+		read, readErr := reader.Read(buffer)
+		if read > 0 {
+			_, _ = output.Write(buffer[:read])
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, nil, readErr
+		}
 	}
+	data := output.Bytes()
 	if int64(len(data)) != expectedSize {
 		return nil, nil, fmt.Errorf("coding thread search: pinned file size changed while reading")
 	}
@@ -401,6 +431,25 @@ func readPinnedSearchFile(ctx context.Context, file *os.File, expectedSize int64
 		return nil, nil, fmt.Errorf("coding thread search: pinned file changed while reading")
 	}
 	return data, before, nil
+}
+
+func verifyPinnedSearchFile(root *catalogDirectory, name string, pinnedInfo os.FileInfo) error {
+	active, err := openCatalogFile(root, name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = active.Close() }()
+	activeInfo, err := active.Stat()
+	if err != nil {
+		return err
+	}
+	if err := validateCatalogMetadataFile(active, activeInfo); err != nil {
+		return err
+	}
+	if !os.SameFile(activeInfo, pinnedInfo) {
+		return fmt.Errorf("coding thread search: active transcript file was replaced")
+	}
+	return nil
 }
 
 func searchHistoricalJSONL(
@@ -428,8 +477,8 @@ func searchHistoricalJSONL(
 		if rawCount <= skip {
 			continue
 		}
-		var message providers.Message
-		if err := json.Unmarshal(line, &message); err != nil {
+		message, err := memory.DecodeJSONLMessage(line)
+		if err != nil {
 			return nil, 0, 0, fmt.Errorf("coding thread search: decode JSONL line %d: %w", rawCount, err)
 		}
 		if messageutil.IsTransientAssistantThoughtMessage(message) {
@@ -487,24 +536,58 @@ func historicalSnippet(value, query string, limit int) string {
 	if len(value) <= limit {
 		return value
 	}
+	const ellipsis = "…"
+	if limit <= 2*len(ellipsis) {
+		return truncateHistoricalUTF8(value, limit)
+	}
 	index := strings.Index(strings.ToLower(value), strings.ToLower(query))
 	if index < 0 || index > len(value) {
-		return truncateUTF8(value, limit)
+		return truncateHistoricalUTF8(value, limit)
 	}
 	start := max(0, index-limit/3)
-	end := min(len(value), start+limit)
 	for start < len(value) && !utf8.RuneStart(value[start]) {
 		start++
+	}
+	payloadLimit := limit
+	if start > 0 {
+		payloadLimit -= len(ellipsis)
+	}
+	end := min(len(value), start+payloadLimit)
+	if end < len(value) {
+		payloadLimit -= len(ellipsis)
+		end = min(len(value), start+payloadLimit)
 	}
 	for end > start && end < len(value) && !utf8.RuneStart(value[end]) {
 		end--
 	}
 	snippet := value[start:end]
 	if start > 0 {
-		snippet = "…" + snippet
+		snippet = ellipsis + snippet
 	}
 	if end < len(value) {
-		snippet += "…"
+		snippet += ellipsis
 	}
 	return snippet
+}
+
+func truncateHistoricalUTF8(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	if limit <= 0 {
+		return ""
+	}
+	const ellipsis = "…"
+	if limit < len(ellipsis) {
+		end := min(len(value), limit)
+		for end > 0 && end < len(value) && !utf8.RuneStart(value[end]) {
+			end--
+		}
+		return value[:end]
+	}
+	end := min(len(value), limit-len(ellipsis))
+	for end > 0 && end < len(value) && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return strings.TrimSpace(value[:end]) + ellipsis
 }
