@@ -279,7 +279,7 @@ func TestSeahorseContextManagerPersistsTrustedConversationProvenance(t *testing.
 	metadataStore := singleTestRuntime(mgr).sessions.(session.MetadataAwareSessionStore)
 	metadataStore.EnsureSessionMetadata(key, &session.SessionScope{
 		Version:       session.ScopeVersion,
-		AgentID:       "nutrition",
+		AgentID:       "Nutrition",
 		RouteScopeKey: "telegram:account:chat:topic",
 	})
 
@@ -296,6 +296,18 @@ func TestSeahorseContextManagerPersistsTrustedConversationProvenance(t *testing.
 	if conversation == nil || conversation.RouteScopeKey != "telegram:account:chat:topic" ||
 		conversation.AgentID != "nutrition" {
 		t.Fatalf("conversation provenance = %#v", conversation)
+	}
+
+	metadataStore.EnsureSessionMetadata(key, &session.SessionScope{
+		Version:       session.ScopeVersion,
+		AgentID:       "nutrition",
+		RouteScopeKey: "telegram:account:chat:topic",
+	})
+	if err := mgr.Ingest(ctx, &IngestRequest{
+		SessionKey: key,
+		Message:    providers.Message{Role: "assistant", Content: "logged"},
+	}); err != nil {
+		t.Fatalf("canonical owner follow-up ingest error = %v", err)
 	}
 }
 

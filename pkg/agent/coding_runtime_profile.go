@@ -233,7 +233,7 @@ func (al *AgentLoop) codingRuntimeTargetForSession(
 	}
 	sessionKey = strings.TrimSpace(sessionKey)
 	for agentID, layout := range al.codingProfile.agentLayouts {
-		if "coding:"+layout.ThreadID() != sessionKey {
+		if layout.SessionKey() != sessionKey {
 			continue
 		}
 		agent, ok := al.GetRegistry().GetAgent(agentID)

@@ -131,7 +131,7 @@ func newCodingContextBuilder(layout CodingRuntimeLayout) (*ContextBuilder, error
 		ProjectRoot:      layout.ExecutionRoot(),
 		WorkingDirectory: builder.codingInstructions.workingDirectory(),
 		ThreadID:         layout.ThreadID(),
-		SessionKey:       "coding:" + layout.ThreadID(),
+		SessionKey:       layout.SessionKey(),
 		TrustMode:        CodingTrustModeYolo,
 	}
 	return builder, nil

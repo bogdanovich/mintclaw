@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	codingthread "github.com/bogdanovich/mintclaw/pkg/coding/thread"
 )
 
 // CodingRuntimeLayout separates coding-thread execution, instruction, and
@@ -86,6 +88,15 @@ func NewCodingRuntimeLayout(
 // ThreadID returns the stable coding thread that owns this runtime.
 func (l CodingRuntimeLayout) ThreadID() string {
 	return l.threadID
+}
+
+// SessionKey returns the canonical transcript identity for this admitted thread.
+func (l CodingRuntimeLayout) SessionKey() string {
+	return codingRuntimeSessionKey(l.threadID)
+}
+
+func codingRuntimeSessionKey(threadID string) string {
+	return codingthread.SessionKey(threadID)
 }
 
 // ExecutionRoot returns the cwd/project authority for tools and subprocesses.

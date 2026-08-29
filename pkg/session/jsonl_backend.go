@@ -1,14 +1,18 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
 // JSONLBackend adapts a memory.Store into the SessionStore interface.
@@ -20,11 +24,46 @@ type JSONLBackend struct {
 
 const maxTurnHistoryPageMessages = 256
 
+type sessionScopeJSONValueKind uint8
+
+const (
+	sessionScopeJSONString sessionScopeJSONValueKind = iota
+	sessionScopeJSONNumber
+	sessionScopeJSONNullableStringArray
+	sessionScopeJSONNullableStringMap
+	sessionScopeJSONNullableEpoch
+)
+
+var sessionScopeJSONFields = map[string]sessionScopeJSONValueKind{
+	"version":           sessionScopeJSONNumber,
+	"agent_id":          sessionScopeJSONString,
+	"channel":           sessionScopeJSONString,
+	"account":           sessionScopeJSONString,
+	"dimensions":        sessionScopeJSONNullableStringArray,
+	"values":            sessionScopeJSONNullableStringMap,
+	"route_scope_key":   sessionScopeJSONString,
+	"client_session_id": sessionScopeJSONString,
+	"epoch":             sessionScopeJSONNullableEpoch,
+}
+
+var sessionEpochJSONFields = map[string]sessionScopeJSONValueKind{
+	"strategy": sessionScopeJSONString,
+	"id":       sessionScopeJSONString,
+	"start":    sessionScopeJSONString,
+}
+
 // MetadataAwareSessionStore exposes structured session metadata operations.
 type MetadataAwareSessionStore interface {
 	EnsureSessionMetadata(sessionKey string, scope *SessionScope)
 	GetSessionScope(sessionKey string) *SessionScope
 	ClearSessionClientIDs(sessionKey string) error
+}
+
+// CurrentAgentSessionEnumerator lists current persisted sessions owned by one
+// agent. Keeping this capability separate avoids changing unrelated metadata
+// behavior for alternate SessionStore implementations.
+type CurrentAgentSessionEnumerator interface {
+	ListCurrentAgentSessions(agentID string) []string
 }
 
 // NewJSONLBackend wraps a memory.Store for use as a SessionStore.
@@ -63,15 +102,176 @@ func (b *JSONLBackend) GetSessionScope(sessionKey string) *SessionScope {
 	if len(meta.Scope) == 0 {
 		return nil
 	}
-	var scope SessionScope
-	if err := json.Unmarshal(meta.Scope, &scope); err != nil {
+	scope, err := decodeCurrentSessionScope(meta.Scope)
+	if err != nil {
 		log.Printf("session: decode session scope: %v", err)
 		return nil
 	}
-	if scope.Version != ScopeVersion {
-		return nil
+	return scope
+}
+
+func decodeCurrentSessionScope(data json.RawMessage) (*SessionScope, error) {
+	if err := validateSessionScopeJSON(data); err != nil {
+		return nil, err
 	}
-	return CloneScope(&scope)
+	var scope SessionScope
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&scope); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("session scope contains a trailing JSON value")
+		}
+		return nil, fmt.Errorf("session scope contains trailing data: %w", err)
+	}
+	if scope.Version != ScopeVersion {
+		return nil, fmt.Errorf("unsupported session scope version %d", scope.Version)
+	}
+	if strings.TrimSpace(scope.AgentID) != "" {
+		scope.AgentID = routing.NormalizeAgentID(scope.AgentID)
+	}
+	return CloneScope(&scope), nil
+}
+
+func validateSessionScopeJSON(data json.RawMessage) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok || delimiter != '{' {
+		return errors.New("session scope must be a JSON object")
+	}
+	if err := validateSessionScopeObject(decoder, "scope", sessionScopeJSONFields); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("session scope contains a trailing JSON value")
+		}
+		return fmt.Errorf("session scope contains trailing data: %w", err)
+	}
+	return nil
+}
+
+func validateSessionScopeObject(
+	decoder *json.Decoder,
+	path string,
+	allowedFields map[string]sessionScopeJSONValueKind,
+) error {
+	seen := make(map[string]struct{})
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("session scope object %s has a non-string field name", path)
+		}
+		fieldPath := path + "." + key
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("session scope contains duplicate field %s", fieldPath)
+		}
+		seen[key] = struct{}{}
+		kind, allowed := allowedFields[key]
+		if !allowed {
+			return fmt.Errorf("session scope contains unknown field %s", fieldPath)
+		}
+		if err := validateSessionScopeValue(decoder, fieldPath, kind); err != nil {
+			return err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateSessionScopeValue(
+	decoder *json.Decoder,
+	path string,
+	kind sessionScopeJSONValueKind,
+) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token == nil {
+		switch kind {
+		case sessionScopeJSONNullableStringArray, sessionScopeJSONNullableStringMap, sessionScopeJSONNullableEpoch:
+			return nil
+		default:
+			return fmt.Errorf("session scope contains null at %s", path)
+		}
+	}
+	switch kind {
+	case sessionScopeJSONString:
+		if _, ok := token.(string); !ok {
+			return fmt.Errorf("session scope expects a string at %s", path)
+		}
+		return nil
+	case sessionScopeJSONNumber:
+		if _, ok := token.(json.Number); !ok {
+			return fmt.Errorf("session scope expects a number at %s", path)
+		}
+		return nil
+	case sessionScopeJSONNullableStringArray:
+		if token != json.Delim('[') {
+			return fmt.Errorf("session scope expects an array at %s", path)
+		}
+		for index := 0; decoder.More(); index++ {
+			if err := validateSessionScopeValue(
+				decoder,
+				fmt.Sprintf("%s[%d]", path, index),
+				sessionScopeJSONString,
+			); err != nil {
+				return err
+			}
+		}
+		_, err := decoder.Token()
+		return err
+	case sessionScopeJSONNullableStringMap:
+		if token != json.Delim('{') {
+			return fmt.Errorf("session scope expects an object at %s", path)
+		}
+		return validateSessionScopeStringMap(decoder, path)
+	case sessionScopeJSONNullableEpoch:
+		if token != json.Delim('{') {
+			return fmt.Errorf("session scope expects an object at %s", path)
+		}
+		return validateSessionScopeObject(decoder, path, sessionEpochJSONFields)
+	default:
+		return fmt.Errorf("session scope contains unsupported value at %s", path)
+	}
+}
+
+func validateSessionScopeStringMap(decoder *json.Decoder, path string) error {
+	seen := make(map[string]struct{})
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("session scope object %s has a non-string field name", path)
+		}
+		fieldPath := path + "." + key
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("session scope contains duplicate field %s", fieldPath)
+		}
+		seen[key] = struct{}{}
+		if err := validateSessionScopeValue(decoder, fieldPath, sessionScopeJSONString); err != nil {
+			return err
+		}
+	}
+	_, err := decoder.Token()
+	return err
 }
 
 // ClearSessionClientIDs removes accumulated frontend mappings without
@@ -278,7 +478,43 @@ func (b *JSONLBackend) Close() error {
 	return b.store.Close()
 }
 
-// ListSessions returns all known session keys.
+// ListCurrentAgentSessions returns persisted sessions owned by agentID with
+// the current key and structured-scope contract. Historical, malformed, and
+// differently owned metadata remains untouched but cannot enter recovery or
+// background reconciliation.
+func (b *JSONLBackend) ListCurrentAgentSessions(agentID string) []string {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil
+	}
+	agentID = routing.NormalizeAgentID(agentID)
+
+	keys := b.store.ListSessions()
+	current := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if !IsOpaqueSessionKey(key) {
+			continue
+		}
+		meta, err := b.store.GetSessionMeta(context.Background(), key)
+		if err != nil || len(meta.Scope) == 0 {
+			continue
+		}
+		scope, decodeErr := decodeCurrentSessionScope(meta.Scope)
+		if decodeErr != nil {
+			continue
+		}
+		scopeAgentID := strings.TrimSpace(scope.AgentID)
+		if scopeAgentID == "" || routing.NormalizeAgentID(scopeAgentID) != agentID {
+			continue
+		}
+		current = append(current, key)
+	}
+	return current
+}
+
+// ListSessions returns every history owned by this store. Coding runtimes use
+// a separate current identity contract and select their admitted thread at the
+// agent composition boundary.
 func (b *JSONLBackend) ListSessions() []string {
 	return b.store.ListSessions()
 }

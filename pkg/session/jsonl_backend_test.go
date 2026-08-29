@@ -20,6 +20,16 @@ type snapshotFailingStore struct {
 	summaryErr error
 }
 
+type metadataCapabilityStub struct{}
+
+func (*metadataCapabilityStub) EnsureSessionMetadata(string, *session.SessionScope) {}
+
+func (*metadataCapabilityStub) GetSessionScope(string) *session.SessionScope { return nil }
+
+func (*metadataCapabilityStub) ClearSessionClientIDs(string) error { return nil }
+
+var _ session.MetadataAwareSessionStore = (*metadataCapabilityStub)(nil)
+
 func (s *snapshotFailingStore) SetHistory(
 	ctx context.Context,
 	sessionKey string,
@@ -400,6 +410,230 @@ func TestJSONLBackendRejectsRemovedScopeVersion(t *testing.T) {
 	backend := session.NewJSONLBackend(store)
 	if scope := backend.GetSessionScope(key); scope != nil {
 		t.Fatalf("GetSessionScope() = %#v, want removed version rejected", scope)
+	}
+}
+
+func TestJSONLBackendListsOnlyOwnedCurrentScopedSessions(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	backend := session.NewJSONLBackend(store)
+
+	currentKey := session.BuildOpaqueSessionKey("current-enumerated-session")
+	backend.EnsureSessionMetadata(currentKey, &session.SessionScope{
+		Version: session.ScopeVersion,
+		AgentID: "Main",
+		Channel: "mintclaw",
+	})
+	otherKey := session.BuildOpaqueSessionKey("other-current-enumerated-session")
+	backend.EnsureSessionMetadata(otherKey, &session.SessionScope{
+		Version: session.ScopeVersion,
+		AgentID: "support",
+		Channel: "mintclaw",
+	})
+
+	removedScopeKey := session.BuildOpaqueSessionKey("removed-enumerated-session")
+	removedScope, err := json.Marshal(session.SessionScope{
+		Version: session.ScopeVersion - 1,
+		AgentID: "main",
+		Channel: "mintclaw",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.UpsertSessionMeta(t.Context(), removedScopeKey, removedScope, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	currentScope, err := json.Marshal(session.SessionScope{
+		Version: session.ScopeVersion,
+		AgentID: "main",
+		Channel: "mintclaw",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.UpsertSessionMeta(t.Context(), "task:removed-key", currentScope, ""); err != nil {
+		t.Fatal(err)
+	}
+	missingScopeKey := session.BuildOpaqueSessionKey("missing-enumerated-scope")
+	if err = store.AddFullMessage(
+		t.Context(),
+		missingScopeKey,
+		providers.Message{Role: "user", Content: "missing scope"},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := backend.ListCurrentAgentSessions("main")
+	if len(keys) != 1 || keys[0] != currentKey {
+		t.Fatalf("ListCurrentAgentSessions() = %v, want only %q", keys, currentKey)
+	}
+	if scope := backend.GetSessionScope(currentKey); scope == nil || scope.AgentID != "main" {
+		t.Fatalf("GetSessionScope() = %#v, want canonical owner main", scope)
+	}
+	persisted, err := store.GetSessionMeta(t.Context(), currentKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persistedScope session.SessionScope
+	if err = json.Unmarshal(persisted.Scope, &persistedScope); err != nil {
+		t.Fatal(err)
+	}
+	if persistedScope.AgentID != "Main" {
+		t.Fatalf("persisted owner = %q, want original Main unchanged", persistedScope.AgentID)
+	}
+}
+
+func TestJSONLBackendRejectsUnknownCurrentScopeFields(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	key := session.BuildOpaqueSessionKey("unknown-scope-field")
+	rawScope := json.RawMessage(`{"version":2,"agent_id":"main","channel":"mintclaw","removed":true}`)
+	if err = store.UpsertSessionMeta(t.Context(), key, rawScope, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := session.NewJSONLBackend(store)
+	if scope := backend.GetSessionScope(key); scope != nil {
+		t.Fatalf("GetSessionScope() = %#v, want unknown field rejected", scope)
+	}
+	if keys := backend.ListCurrentAgentSessions("main"); len(keys) != 0 {
+		t.Fatalf("ListCurrentAgentSessions() = %v, want unknown field omitted", keys)
+	}
+}
+
+func TestJSONLBackendRejectsAmbiguousCurrentScopeFields(t *testing.T) {
+	tests := map[string]string{
+		"duplicate version": `{"version":1,"version":2,"agent_id":"main","channel":"mintclaw"}`,
+		"duplicate owner":   `{"version":2,"agent_id":"other","agent_id":"main","channel":"mintclaw"}`,
+		"case variant":      `{"Version":2,"agent_id":"main","channel":"mintclaw"}`,
+		"nested duplicate": `{
+			"version":2,
+			"agent_id":"main",
+			"channel":"mintclaw",
+			"epoch":{"strategy":"daily","strategy":"manual","id":"one","start":"2026-08-29T00:00:00Z"}
+		}`,
+		"nested case variant": `{
+			"version":2,
+			"agent_id":"main",
+			"channel":"mintclaw",
+			"epoch":{"Strategy":"daily","id":"one","start":"2026-08-29T00:00:00Z"}
+		}`,
+		"duplicate value dimension": `{
+			"version":2,
+			"agent_id":"main",
+			"channel":"mintclaw",
+			"values":{"chat":"one","chat":"two"}
+		}`,
+	}
+
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			store, err := memory.NewJSONLStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			key := session.BuildOpaqueSessionKey("ambiguous-scope-" + name)
+			if err = store.UpsertSessionMeta(t.Context(), key, json.RawMessage(raw), ""); err != nil {
+				t.Fatal(err)
+			}
+
+			backend := session.NewJSONLBackend(store)
+			if scope := backend.GetSessionScope(key); scope != nil {
+				t.Fatalf("GetSessionScope() = %#v, want ambiguous fields rejected", scope)
+			}
+			if keys := backend.ListCurrentAgentSessions("main"); len(keys) != 0 {
+				t.Fatalf("ListCurrentAgentSessions() = %v, want ambiguous scope omitted", keys)
+			}
+		})
+	}
+}
+
+func TestJSONLBackendRejectsNullCurrentScopeValues(t *testing.T) {
+	tests := map[string]string{
+		"version":           `{"version":null,"agent_id":"main","channel":"mintclaw"}`,
+		"owner":             `{"version":2,"agent_id":null,"channel":"mintclaw"}`,
+		"channel":           `{"version":2,"agent_id":"main","channel":null}`,
+		"account":           `{"version":2,"agent_id":"main","channel":"mintclaw","account":null}`,
+		"dimension":         `{"version":2,"agent_id":"main","channel":"mintclaw","dimensions":[null]}`,
+		"value":             `{"version":2,"agent_id":"main","channel":"mintclaw","values":{"chat":null}}`,
+		"route scope key":   `{"version":2,"agent_id":"main","channel":"mintclaw","route_scope_key":null}`,
+		"client session id": `{"version":2,"agent_id":"main","channel":"mintclaw","client_session_id":null}`,
+		"epoch strategy": `{
+			"version":2,
+			"agent_id":"main",
+			"channel":"mintclaw",
+			"epoch":{"strategy":null,"id":"one","start":"2026-08-29T00:00:00Z"}
+		}`,
+		"epoch id": `{
+			"version":2,
+			"agent_id":"main",
+			"channel":"mintclaw",
+			"epoch":{"strategy":"daily","id":null,"start":"2026-08-29T00:00:00Z"}
+		}`,
+		"epoch start": `{
+			"version":2,
+			"agent_id":"main",
+			"channel":"mintclaw",
+			"epoch":{"strategy":"daily","id":"one","start":null}
+		}`,
+	}
+
+	for name, raw := range tests {
+		t.Run(name, func(t *testing.T) {
+			store, err := memory.NewJSONLStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			key := session.BuildOpaqueSessionKey("null-scope-" + name)
+			if err = store.UpsertSessionMeta(t.Context(), key, json.RawMessage(raw), ""); err != nil {
+				t.Fatal(err)
+			}
+
+			backend := session.NewJSONLBackend(store)
+			if scope := backend.GetSessionScope(key); scope != nil {
+				t.Fatalf("GetSessionScope() = %#v, want null value rejected", scope)
+			}
+			if keys := backend.ListCurrentAgentSessions("main"); len(keys) != 0 {
+				t.Fatalf("ListCurrentAgentSessions() = %v, want null scope omitted", keys)
+			}
+		})
+	}
+}
+
+func TestJSONLBackendAcceptsNullableCurrentScopeContainers(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	key := session.BuildOpaqueSessionKey("nullable-scope-containers")
+	rawScope := json.RawMessage(`{
+		"version":2,
+		"agent_id":"main",
+		"channel":"mintclaw",
+		"dimensions":null,
+		"values":null,
+		"epoch":null
+	}`)
+	if err = store.UpsertSessionMeta(t.Context(), key, rawScope, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := session.NewJSONLBackend(store)
+	if scope := backend.GetSessionScope(key); scope == nil || scope.AgentID != "main" {
+		t.Fatalf("GetSessionScope() = %#v, want current scope", scope)
+	}
+	if keys := backend.ListCurrentAgentSessions("main"); len(keys) != 1 || keys[0] != key {
+		t.Fatalf("ListCurrentAgentSessions() = %v, want %q", keys, key)
 	}
 }
 

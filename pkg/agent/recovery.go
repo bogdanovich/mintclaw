@@ -31,7 +31,7 @@ func (al *AgentLoop) RecoverUnansweredSessions(ctx context.Context) int {
 		if !ok || agent == nil || agent.Sessions == nil {
 			continue
 		}
-		sessionKeys := agent.Sessions.ListSessions()
+		sessionKeys := currentRuntimeSessionKeys(agent, agent.Sessions)
 		sort.Strings(sessionKeys)
 		for _, sessionKey := range sessionKeys {
 			if ctx.Err() != nil {
