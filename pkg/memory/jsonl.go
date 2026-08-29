@@ -190,8 +190,11 @@ func sanitizeKey(key string) string {
 }
 
 // readMeta loads the metadata file for a session.
-// Returns a zero-value sessionMeta if the file does not exist.
+// Returns fresh current metadata if the file does not exist.
 func (s *JSONLStore) readMeta(key string) (SessionMeta, error) {
+	if strings.TrimSpace(key) == "" {
+		return SessionMeta{}, errors.New("memory: validate meta: session key is required")
+	}
 	data, err := os.ReadFile(s.metaPath(key))
 	if os.IsNotExist(err) {
 		return SessionMeta{Key: key}, nil
@@ -199,22 +202,63 @@ func (s *JSONLStore) readMeta(key string) (SessionMeta, error) {
 	if err != nil {
 		return SessionMeta{}, fmt.Errorf("memory: read meta: %w", err)
 	}
-	var meta SessionMeta
-	err = json.Unmarshal(data, &meta)
+	meta, err := decodeSessionMeta(data)
 	if err != nil {
 		return SessionMeta{}, fmt.Errorf("memory: decode meta: %w", err)
 	}
-	if meta.Key == "" {
-		meta.Key = key
+	if err := validateSessionMeta(key, meta); err != nil {
+		return SessionMeta{}, fmt.Errorf("memory: validate meta: %w", err)
 	}
 	return meta, nil
+}
+
+func decodeSessionMeta(data []byte) (SessionMeta, error) {
+	var meta SessionMeta
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&meta); err != nil {
+		return SessionMeta{}, err
+	}
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return SessionMeta{}, errors.New("trailing JSON value")
+		}
+		return SessionMeta{}, fmt.Errorf("trailing data: %w", err)
+	}
+	return meta, nil
+}
+
+func validateSessionMeta(key string, meta SessionMeta) error {
+	if strings.TrimSpace(key) == "" {
+		return errors.New("session key is required")
+	}
+	if meta.Key != key {
+		return fmt.Errorf("session key %q does not match requested key %q", meta.Key, key)
+	}
+	if meta.Count < 0 {
+		return fmt.Errorf("message count must not be negative: %d", meta.Count)
+	}
+	if meta.Skip < 0 || meta.Skip > meta.Count {
+		return fmt.Errorf("skip %d is outside message count %d", meta.Skip, meta.Count)
+	}
+	if meta.HistoryPreviousCount < 0 {
+		return fmt.Errorf("previous message count must not be negative: %d", meta.HistoryPreviousCount)
+	}
+	if meta.HistoryPreviousSkip < 0 || meta.HistoryPreviousSkip > meta.HistoryPreviousCount {
+		return fmt.Errorf(
+			"previous skip %d is outside previous message count %d",
+			meta.HistoryPreviousSkip,
+			meta.HistoryPreviousCount,
+		)
+	}
+	return nil
 }
 
 // writeMeta atomically writes the metadata file using the project's
 // standard WriteFileAtomic (temp + fsync + rename).
 func (s *JSONLStore) writeMeta(key string, meta SessionMeta) error {
-	if strings.TrimSpace(meta.Key) == "" {
-		meta.Key = key
+	if err := validateSessionMeta(key, meta); err != nil {
+		return fmt.Errorf("memory: validate meta: %w", err)
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
@@ -1301,13 +1345,14 @@ func (s *JSONLStore) ListSessions() []string {
 		if err != nil {
 			continue
 		}
-		var meta SessionMeta
-		if err := json.Unmarshal(data, &meta); err != nil {
+		meta, err := decodeSessionMeta(data)
+		if err != nil || validateSessionMeta(meta.Key, meta) != nil {
 			continue
 		}
-		if meta.Key != "" {
-			keys = append(keys, meta.Key)
+		if entry.Name() != sanitizeKey(meta.Key)+".meta.json" {
+			continue
 		}
+		keys = append(keys, meta.Key)
 	}
 	return keys
 }
