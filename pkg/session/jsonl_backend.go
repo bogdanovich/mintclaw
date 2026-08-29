@@ -312,9 +312,6 @@ func (b *JSONLBackend) AppendTurnMessage(
 	if err := contextCause(ctx); err != nil {
 		return err
 	}
-	if err := contextCause(ctx); err != nil {
-		return err
-	}
 	return b.store.AddFullMessage(ctx, sessionKey, msg)
 }
 
@@ -341,9 +338,6 @@ func (b *JSONLBackend) ReplaceTurnHistory(
 	sessionKey string,
 	history []providers.Message,
 ) error {
-	if err := contextCause(ctx); err != nil {
-		return err
-	}
 	if err := contextCause(ctx); err != nil {
 		return err
 	}

@@ -888,37 +888,12 @@ type ephemeralSessionStore struct {
 	summary string
 }
 
-func newEphemeralSession(initial []providers.Message) ephemeralSessionStoreIface {
+func newEphemeralSession(initial []providers.Message) session.SessionStore {
 	s := &ephemeralSessionStore{}
 	if len(initial) > 0 {
 		s.history = append(s.history, initial...)
 	}
 	return s
-}
-
-// ephemeralSessionStoreIface is satisfied by *ephemeralSessionStore.
-// Declared so newEphemeralSession can return a typed interface.
-type ephemeralSessionStoreIface interface {
-	AppendTurnMessage(ctx context.Context, sessionKey string, msg providers.Message) error
-	ReadTurnHistory(ctx context.Context, sessionKey string) ([]providers.Message, error)
-	ReplaceTurnHistory(ctx context.Context, sessionKey string, history []providers.Message) error
-	MutateTurnHistory(
-		ctx context.Context,
-		sessionKey string,
-		mutate func([]providers.Message) ([]providers.Message, bool, error),
-	) (bool, error)
-	ClearSession(ctx context.Context, sessionKey string) error
-	RestoreTurnSnapshot(ctx context.Context, sessionKey string, history []providers.Message, summary string) error
-	AddMessage(sessionKey, role, content string)
-	AddFullMessage(sessionKey string, msg providers.Message)
-	GetHistory(key string) []providers.Message
-	GetSummary(key string) string
-	SetSummary(key, summary string)
-	SetHistory(key string, history []providers.Message)
-	TruncateHistory(key string, keepLast int)
-	Save(key string) error
-	ListSessions() []string
-	Close() error
 }
 
 func (e *ephemeralSessionStore) AddMessage(_, role, content string) {
