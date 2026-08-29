@@ -138,8 +138,8 @@ func (h *Handler) readSessionMessages(path string, skip int) ([]providers.Messag
 			continue
 		}
 
-		var msg providers.Message
-		if err := json.Unmarshal(line, &msg); err != nil {
+		msg, err := memory.DecodeJSONLMessage(line)
+		if err != nil {
 			continue
 		}
 		if messageutil.IsTransientAssistantThoughtMessage(msg) {
@@ -207,14 +207,11 @@ func sessionRefsFromMeta(meta memory.SessionMeta) []mintclawJSONLSessionRef {
 	if len(meta.Scope) == 0 || !session.IsOpaqueSessionKey(meta.Key) {
 		return nil
 	}
-	var scope session.SessionScope
-	if err := json.Unmarshal(meta.Scope, &scope); err != nil {
+	scope, err := session.DecodeCurrentSessionScope(meta.Scope)
+	if err != nil {
 		return nil
 	}
-	if scope.Version != session.ScopeVersion {
-		return nil
-	}
-	ids := extractMintClawSessionIDs(meta, scope)
+	ids := extractMintClawSessionIDs(meta, *scope)
 	refs := make([]mintclawJSONLSessionRef, 0, len(ids))
 	for i := len(ids) - 1; i >= 0; i-- {
 		refs = append(refs, mintclawJSONLSessionRef{

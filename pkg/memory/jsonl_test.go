@@ -303,6 +303,47 @@ func TestJSONLStoreReadsBoundedHistoryPagesAcrossLogicalTruncation(t *testing.T)
 	}
 }
 
+func TestJSONLStoreHistoryPagesUseCanonicalMessageDecoder(t *testing.T) {
+	store := newTestStore(t)
+	const sessionKey = "current-page-records"
+	if err := store.AddMessage(t.Context(), sessionKey, "user", "current"); err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.ReadFile(store.jsonlPath(sessionKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(
+		`{"role":"assistant","content":"","tool_calls":[{"id":"old","type":"function","function":{"name":"read_file","arguments":"{}"}}]}` + "\n",
+	)
+	if err := os.WriteFile(store.jsonlPath(sessionKey), append(legacy, current...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.readMeta(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.Count = 2
+	if err := store.writeMeta(sessionKey, meta); err != nil {
+		t.Fatal(err)
+	}
+
+	history, err := store.GetHistory(t.Context(), sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.GetHistoryPage(t.Context(), sessionKey, HistoryPageRequest{Before: -1, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Content != "current" {
+		t.Fatalf("GetHistory() = %+v, want only current record", history)
+	}
+	if page.Total != 1 || len(page.Messages) != 1 || page.Messages[0].Content != "current" {
+		t.Fatalf("GetHistoryPage() = %+v, want same canonical record", page)
+	}
+}
+
 func TestJSONLStoreHistoryPageValidatesBoundAndContext(t *testing.T) {
 	store := newTestStore(t)
 	if _, err := store.GetHistoryPage(t.Context(), "paged", HistoryPageRequest{Limit: 0}); err == nil {
@@ -731,7 +772,7 @@ func TestJSONLToolCallsUseOnlyTheCurrentFlatSchema(t *testing.T) {
 	legacy := []byte(
 		`{"role":"assistant","content":"","tool_calls":[{"id":"call-old","type":"function","function":{"name":"read_file","arguments":"{\\"path\\":\\"notes.txt\\"}"}}]}`,
 	)
-	if _, err = decodeJSONLMessage(legacy); err == nil {
+	if _, err = DecodeJSONLMessage(legacy); err == nil {
 		t.Fatal("legacy nested tool call was accepted")
 	}
 }

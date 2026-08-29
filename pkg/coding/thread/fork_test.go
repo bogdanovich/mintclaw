@@ -191,6 +191,36 @@ func TestForkThreadRejectsRecordAboveCanonicalReaderLimitBeforeProvision(t *test
 	}
 }
 
+func TestForkThreadRejectsNonCurrentJSONLRecordBeforeProvision(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "seed", RootTurnStart: true,
+	}})
+	legacy := []byte(
+		`{"role":"user","content":"seed","root_turn_start":true,"tool_calls":[{"id":"old","type":"function","function":{"name":"read_file","arguments":"{}"}}]}` + "\n",
+	)
+	replaceForkTestJSONL(t, store, source, legacy)
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, forkErr := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if forkErr == nil || !strings.Contains(forkErr.Error(), `unknown field "function"`) {
+		t.Fatalf("non-current JSONL record error = %v", forkErr)
+	}
+	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
+		t.Fatalf("non-current JSONL record allocated target: %v", err)
+	}
+}
+
 func TestForkThreadRejectsRecordExpandedByCanonicalWriterBeforeProvision(t *testing.T) {
 	store, source := newLeaseTestThread(t)
 	writeForkTestHistory(t, store, source, []providers.Message{{Role: "user", Content: "seed", RootTurnStart: true}})

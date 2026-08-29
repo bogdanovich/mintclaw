@@ -713,7 +713,7 @@ func readMessages(ctx context.Context, path string, skip int) ([]providers.Messa
 		if lineNum <= skip {
 			continue
 		}
-		msg, err := decodeJSONLMessage(line)
+		msg, err := DecodeJSONLMessage(line)
 		if err != nil {
 			// Corrupt line — likely a partial write from a crash.
 			// A non-current schema is handled the same way so it cannot
@@ -771,7 +771,7 @@ func scanRetainedMessageLines(ctx context.Context, path string) (int, []int, err
 		}
 		rawCount++
 
-		msg, err := decodeJSONLMessage(line)
+		msg, err := DecodeJSONLMessage(line)
 		if err != nil {
 			continue
 		}
@@ -1057,12 +1057,8 @@ func scanVisibleHistory(
 		if rawIndex <= skip {
 			continue
 		}
-		var message providers.Message
-		if err := json.Unmarshal(
-			line,
-			&message,
-		); err != nil ||
-			messageutil.IsTransientAssistantThoughtMessage(message) {
+		message, err := DecodeJSONLMessage(line)
+		if err != nil || messageutil.IsTransientAssistantThoughtMessage(message) {
 			continue
 		}
 		if visibleIndex < cursorTotal {
@@ -1368,7 +1364,9 @@ func encodeJSONLMessage(index int, msg providers.Message) ([]byte, error) {
 	return line, nil
 }
 
-func decodeJSONLMessage(line []byte) (providers.Message, error) {
+// DecodeJSONLMessage decodes one record written by the current canonical
+// session journal writer.
+func DecodeJSONLMessage(line []byte) (providers.Message, error) {
 	var msg providers.Message
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.DisallowUnknownFields()
