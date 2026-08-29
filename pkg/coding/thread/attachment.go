@@ -420,17 +420,20 @@ func (s *Store) loadAttachmentManifest(threadID string) (attachmentManifestFile,
 		return attachmentManifestFile{}, err
 	}
 	empty := attachmentManifestFile{Version: AttachmentManifestVersion, ThreadID: threadID, Entries: []Attachment{}}
-	threadRoot, err := s.ThreadRoot(threadID)
+	threadRoot, err := openAttachmentThreadDirectory(s.root, threadID)
 	if err != nil {
 		return attachmentManifestFile{}, err
 	}
-	root, err := openCatalogRoot(threadRoot)
+	defer func() { _ = threadRoot.Close() }()
+	openedThreadInfo, err := threadRoot.stat()
 	if err != nil {
 		return attachmentManifestFile{}, err
 	}
-	defer func() { _ = root.Close() }()
-	attachments, err := openCatalogChildDirectory(root, attachmentDirectory)
+	attachments, err := openCatalogChildDirectory(threadRoot, attachmentDirectory)
 	if errors.Is(err, os.ErrNotExist) {
+		if validationErr := validateAttachmentThreadPath(s.root, threadID, openedThreadInfo); validationErr != nil {
+			return attachmentManifestFile{}, validationErr
+		}
 		return empty, nil
 	}
 	if err != nil {
@@ -439,6 +442,9 @@ func (s *Store) loadAttachmentManifest(threadID string) (attachmentManifestFile,
 	defer func() { _ = attachments.Close() }()
 	file, err := openCatalogFile(attachments, attachmentManifest)
 	if errors.Is(err, os.ErrNotExist) {
+		if validationErr := validateAttachmentThreadPath(s.root, threadID, openedThreadInfo); validationErr != nil {
+			return attachmentManifestFile{}, validationErr
+		}
 		return empty, nil
 	}
 	if err != nil {
@@ -497,7 +503,44 @@ func (s *Store) loadAttachmentManifest(threadID string) (attachmentManifestFile,
 	if err := validateAttachmentManifest(threadID, manifest); err != nil {
 		return attachmentManifestFile{}, err
 	}
+	if validationErr := validateAttachmentThreadPath(s.root, threadID, openedThreadInfo); validationErr != nil {
+		return attachmentManifestFile{}, validationErr
+	}
 	return manifest, nil
+}
+
+func openAttachmentThreadDirectory(rootPath, threadID string) (*catalogDirectory, error) {
+	root, err := openCatalogRoot(rootPath)
+	if err != nil {
+		return nil, fmt.Errorf("coding attachment manifest: anchor store root: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+	threads, err := openCatalogChildDirectory(root, "threads")
+	if err != nil {
+		return nil, fmt.Errorf("coding attachment manifest: open threads directory: %w", err)
+	}
+	defer func() { _ = threads.Close() }()
+	threadRoot, err := openCatalogChildDirectory(threads, threadID)
+	if err != nil {
+		return nil, fmt.Errorf("coding attachment manifest: open thread %q: %w", threadID, err)
+	}
+	return threadRoot, nil
+}
+
+func validateAttachmentThreadPath(rootPath, threadID string, opened os.FileInfo) error {
+	current, err := openAttachmentThreadDirectory(rootPath, threadID)
+	if err != nil {
+		return fmt.Errorf("coding attachment manifest: revalidate thread path: %w", err)
+	}
+	defer func() { _ = current.Close() }()
+	currentInfo, err := current.stat()
+	if err != nil {
+		return fmt.Errorf("coding attachment manifest: revalidate thread path: %w", err)
+	}
+	if !os.SameFile(opened, currentInfo) {
+		return fmt.Errorf("coding attachment manifest: thread path changed while reading")
+	}
+	return nil
 }
 
 func (s *Store) saveAttachmentManifest(threadID string, manifest attachmentManifestFile) error {

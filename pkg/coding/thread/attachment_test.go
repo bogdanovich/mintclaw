@@ -261,6 +261,31 @@ func TestAttachmentManifestFailsClosedWithoutRepair(t *testing.T) {
 	}
 }
 
+func TestAttachmentManifestRejectsReplacedThreadsDirectory(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("attachment"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	threads := filepath.Join(store.Root(), "threads")
+	moved := filepath.Join(store.Root(), "threads-owned")
+	if err := os.Rename(threads, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(moved, threads); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := store.ListAttachments(metadata.ThreadID); err == nil {
+		t.Fatal("ListAttachments() followed a replaced threads directory")
+	}
+}
+
 func acquireAttachmentTestLease(t *testing.T, store *Store, threadID string) *Lease {
 	t.Helper()
 	lease, err := store.AcquireLease(threadID)
