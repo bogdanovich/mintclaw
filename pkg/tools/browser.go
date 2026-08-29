@@ -1634,6 +1634,9 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 		}
 		return browserActionToolError(err)
 	}
+	if invocation.State == browser.InvocationFailed && invocation.SafeFailure == "navigation_failed" {
+		return browserNavigationFailureResult(invocation)
+	}
 	result := browserActionResult{
 		InvocationID: invocation.ID, Effect: invocation.Effect,
 		State: invocation.State, Reason: invocation.SafeFailure,

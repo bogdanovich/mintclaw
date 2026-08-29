@@ -969,7 +969,8 @@ func playwrightNavigationCheckedActionCode(
     await page.goto(` + jsonString(normalizedURL) + `);
   } catch (error) {
     const message = String(error && error.message ? error.message : error);
-    if (message.includes("net::ERR_TOO_MANY_REDIRECTS")) {
+    const firstLine = message.split(/\r?\n/, 1)[0];
+    if (/^page\.goto: net::ERR_TOO_MANY_REDIRECTS(?: at .+)?$/.test(firstLine)) {
       return "MINTCLAW_NAV_ACT_V1|navigation_failed";
     }
     throw error;

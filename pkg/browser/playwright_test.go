@@ -329,7 +329,8 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 	}
 	if !navigateOK || client.calls[2].tool != "browser_run_code_unsafe" ||
 		!strings.Contains(navigateCode, `await page.goto("https://example.com/path?q=one\u0026two=three")`) ||
-		!strings.Contains(navigateCode, `message.includes("net::ERR_TOO_MANY_REDIRECTS")`) ||
+		!strings.Contains(navigateCode, `const firstLine = message.split(/\r?\n/, 1)[0]`) ||
+		!strings.Contains(navigateCode, `/^page\.goto: net::ERR_TOO_MANY_REDIRECTS(?: at .+)?$/`) ||
 		!strings.Contains(navigateCode, `return "MINTCLAW_NAV_ACT_V1|navigation_failed"`) ||
 		!strings.Contains(navigateCode, `throw error`) {
 		t.Fatalf("conditional navigate call = %#v", client.calls[2])
@@ -337,6 +338,24 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 	if !pressOK || client.calls[3].tool != "browser_run_code_unsafe" ||
 		!strings.Contains(pressCode, `page.keyboard.press("Tab")`) {
 		t.Fatalf("conditional press call = %#v", client.calls[3])
+	}
+}
+
+func TestPlaywrightCheckedNavigationDoesNotMatchRedirectTokenInURLOrCallLog(t *testing.T) {
+	code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
+		frameID: "frame-1", loaderID: "loader-1", generation: 7,
+	}, DriverAction{
+		Kind: DriverNavigate,
+		URL:  "https://example.com/net::ERR_TOO_MANY_REDIRECTS",
+	}, config.BrowserLimitsConfig{}.Effective(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(code, `await page.goto("https://example.com/net::ERR_TOO_MANY_REDIRECTS")`) ||
+		!strings.Contains(code, `const firstLine = message.split(/\r?\n/, 1)[0]`) ||
+		!strings.Contains(code, `/^page\.goto: net::ERR_TOO_MANY_REDIRECTS(?: at .+)?$/`) ||
+		strings.Contains(code, `message.includes("net::ERR_TOO_MANY_REDIRECTS")`) {
+		t.Fatalf("navigation classifier is not anchored to the browser error line: %s", code)
 	}
 }
 

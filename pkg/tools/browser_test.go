@@ -1953,6 +1953,28 @@ func TestBrowserActReportsRecoverableNavigationFailure(t *testing.T) {
 		t.Fatalf("navigation payload = %#v", payload)
 	}
 
+	// Durable replay returns the terminal invocation without an execution error.
+	// It must retain the exact same recovery contract as the first delivery.
+	source.executeErr = nil
+	replayed := NewBrowserActTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{
+			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+			"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+			"action": map[string]any{"kind": "navigate", "url": "https://example.com/redirect-loop"},
+		},
+	)
+	if replayed == nil || !replayed.IsError {
+		t.Fatalf("replayed navigation result = %#v, want safe error", replayed)
+	}
+	var replayedPayload map[string]any
+	if err := json.Unmarshal([]byte(replayed.ContentForLLM()), &replayedPayload); err != nil {
+		t.Fatalf("decode replayed navigation result: %v; content = %q", err, replayed.ContentForLLM())
+	}
+	if !reflect.DeepEqual(replayedPayload, payload) {
+		t.Fatalf("replayed navigation payload = %#v, want %#v", replayedPayload, payload)
+	}
+
 	source.executeErr = errors.Join(browser.ErrNavigationFailed, browser.ErrSnapshotInvalidation)
 	result = NewBrowserActTool(browserToolTestConfig(), source).Execute(
 		browserToolTestContext(),
