@@ -905,7 +905,8 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 		return nil
 	}
 	if err = parsePlaywrightNavigationDispatch(text); err != nil &&
-		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) {
+		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) &&
+		!errors.Is(err, ErrNavigationFailed) {
 		worker.lost = true
 	}
 	return err
@@ -959,7 +960,21 @@ func playwrightNavigationCheckedActionCode(
 		if !ok || normalizedURL == "" {
 			return "", fmt.Errorf("%w: normalized navigation URL is unavailable", ErrInvalid)
 		}
-		dispatch = "await page.goto(" + jsonString(normalizedURL) + ");"
+		// A redirect loop is a deterministic response from the remote site, not
+		// evidence that the driver process was lost. Only classify this narrow,
+		// known browser error as recoverable; timeouts, closed targets, transport
+		// failures, and unrecognized rejections must retain the existing unknown-
+		// outcome quarantine behavior.
+		dispatch = `try {
+    await page.goto(` + jsonString(normalizedURL) + `);
+  } catch (error) {
+    const message = String(error && error.message ? error.message : error);
+    const firstLine = message.split(/\r?\n/, 1)[0];
+    if (/^page\.goto: net::ERR_TOO_MANY_REDIRECTS(?: at .+)?$/.test(firstLine)) {
+      return "MINTCLAW_NAV_ACT_V1|navigation_failed";
+    }
+    throw error;
+  }`
 	case "browser_click":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").click({ button: \"left\", noWaitAfter: true });"
@@ -1183,6 +1198,8 @@ func parsePlaywrightNavigationDispatch(text string) error {
 		return ErrStale
 	case playwrightNavigationCheckedActionMarker + "|denied":
 		return ErrDenied
+	case playwrightNavigationCheckedActionMarker + "|navigation_failed":
+		return ErrNavigationFailed
 	default:
 		return ErrDriverIncompatible
 	}

@@ -328,12 +328,57 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 		t.Fatalf("conditional select call = %#v", client.calls[1])
 	}
 	if !navigateOK || client.calls[2].tool != "browser_run_code_unsafe" ||
-		!strings.Contains(navigateCode, `await page.goto("https://example.com/path?q=one\u0026two=three")`) {
+		!strings.Contains(navigateCode, `await page.goto("https://example.com/path?q=one\u0026two=three")`) ||
+		!strings.Contains(navigateCode, `const firstLine = message.split(/\r?\n/, 1)[0]`) ||
+		!strings.Contains(navigateCode, `/^page\.goto: net::ERR_TOO_MANY_REDIRECTS(?: at .+)?$/`) ||
+		!strings.Contains(navigateCode, `return "MINTCLAW_NAV_ACT_V1|navigation_failed"`) ||
+		!strings.Contains(navigateCode, `throw error`) {
 		t.Fatalf("conditional navigate call = %#v", client.calls[2])
 	}
 	if !pressOK || client.calls[3].tool != "browser_run_code_unsafe" ||
 		!strings.Contains(pressCode, `page.keyboard.press("Tab")`) {
 		t.Fatalf("conditional press call = %#v", client.calls[3])
+	}
+}
+
+func TestPlaywrightCheckedNavigationDoesNotMatchRedirectTokenInURLOrCallLog(t *testing.T) {
+	code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
+		frameID: "frame-1", loaderID: "loader-1", generation: 7,
+	}, DriverAction{
+		Kind: DriverNavigate,
+		URL:  "https://example.com/net::ERR_TOO_MANY_REDIRECTS",
+	}, config.BrowserLimitsConfig{}.Effective(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(code, `await page.goto("https://example.com/net::ERR_TOO_MANY_REDIRECTS")`) ||
+		!strings.Contains(code, `const firstLine = message.split(/\r?\n/, 1)[0]`) ||
+		!strings.Contains(code, `/^page\.goto: net::ERR_TOO_MANY_REDIRECTS(?: at .+)?$/`) ||
+		strings.Contains(code, `message.includes("net::ERR_TOO_MANY_REDIRECTS")`) {
+		t.Fatalf("navigation classifier is not anchored to the browser error line: %s", code)
+	}
+}
+
+func TestPlaywrightWorkerKeepsSessionAfterCheckedNavigationFailure(t *testing.T) {
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|navigation_failed\""),
+		},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	token, err := worker.NavigationIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverNavigate, URL: "https://example.com/redirect-loop",
+	})
+	if !errors.Is(err, ErrNavigationFailed) {
+		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want navigation failure", err)
+	}
+	if worker.lost {
+		t.Fatal("deterministic navigation failure retired worker")
 	}
 }
 

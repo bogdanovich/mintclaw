@@ -1619,6 +1619,11 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 		ctx, owner, preparation.Action.ID, approval,
 	)
 	if err != nil {
+		if errors.Is(err, browser.ErrNavigationFailed) &&
+			!errors.Is(err, browser.ErrSnapshotInvalidation) &&
+			invocation.State == browser.InvocationFailed {
+			return browserNavigationFailureResult(invocation)
+		}
 		if errors.Is(err, browser.ErrSnapshotInvalidation) || invocation.AcceptedAt != 0 {
 			result := browserPostActionStateError(
 				invocation,
@@ -1628,6 +1633,9 @@ func (tool *BrowserActTool) Execute(ctx context.Context, args map[string]any) *t
 			return result
 		}
 		return browserActionToolError(err)
+	}
+	if invocation.State == browser.InvocationFailed && invocation.SafeFailure == "navigation_failed" {
+		return browserNavigationFailureResult(invocation)
 	}
 	result := browserActionResult{
 		InvocationID: invocation.ID, Effect: invocation.Effect,
@@ -1733,6 +1741,21 @@ func browserPostActionStateError(invocation browser.Invocation, quarantined bool
 		"reason":         reason,
 		"outcome_reason": invocation.SafeFailure,
 		"failure_class":  invocationFailureClass(invocation),
+	})
+	return toolshared.ErrorResult(string(encoded))
+}
+
+func browserNavigationFailureResult(invocation browser.Invocation) *toolshared.ToolResult {
+	encoded, _ := json.Marshal(map[string]any{
+		"status":             "failed",
+		"code":               "navigation_failed",
+		"message":            "The page navigation failed, but the browser session remains available.",
+		"action":             "observe_again_or_choose_alternate_url",
+		"invocation_id":      invocation.ID,
+		"browser_session_id": invocation.SessionID,
+		"effect":             invocation.Effect,
+		"state":              invocation.State,
+		"reason":             invocation.SafeFailure,
 	})
 	return toolshared.ErrorResult(string(encoded))
 }
