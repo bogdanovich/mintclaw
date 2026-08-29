@@ -33,10 +33,78 @@ func TestJSONLStoreRequiresCurrentSessionMetadata(t *testing.T) {
 	}{
 		{name: "null document", raw: `null`},
 		{name: "missing key", raw: `{"summary":"","skip":0,"count":0}`},
-		{name: "mismatched key", raw: `{"key":"other","summary":"","skip":0,"count":0}`},
-		{name: "removed aliases", raw: `{"key":"turn","summary":"","skip":0,"count":0,"aliases":[]}`},
-		{name: "negative count", raw: `{"key":"turn","summary":"","skip":0,"count":-1}`},
-		{name: "skip beyond count", raw: `{"key":"turn","summary":"","skip":2,"count":1}`},
+		{name: "missing summary", raw: `{
+  "key":"turn","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "missing created timestamp", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,"updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "mismatched key", raw: `{
+  "key":"other","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "removed aliases", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z","aliases":[]
+}`},
+		{name: "duplicate count", raw: `{
+  "key":"turn","summary":"","skip":0,"count":1,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "case variant", raw: `{
+  "key":"turn","summary":"","skip":0,"Count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "null summary", raw: `{
+  "key":"turn","summary":null,"skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "null count", raw: `{
+  "key":"turn","summary":"","skip":0,"count":null,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "null timestamp", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":null,"updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "null scope", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z","scope":null
+}`},
+		{name: "null client sessions", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "client_session_ids":null
+}`},
+		{name: "null client session", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "client_session_ids":[null]
+}`},
+		{name: "null history revision", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "history_revision":null
+}`},
+		{name: "null history flag", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "history_dirty":null
+}`},
+		{name: "null history digest", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "history_target_digest":null
+}`},
+		{name: "negative count", raw: `{
+  "key":"turn","summary":"","skip":0,"count":-1,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "skip beyond count", raw: `{
+  "key":"turn","summary":"","skip":2,"count":1,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
 		{name: "trailing value", raw: valid + ` {}`},
 	}
 	for _, tt := range tests {
