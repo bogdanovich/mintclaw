@@ -30,6 +30,7 @@ type actionTestWorker struct {
 	actions                []DriverAction
 	onExecute              func(DriverAction)
 	navigationID           string
+	navigationCheckedCalls int
 	catalogCalls           int
 	beforeNavCheck         func()
 	authorizeErr           error
@@ -150,6 +151,7 @@ func (worker *actionTestWorker) ExecuteAfterNavigationCheck(
 	expected string,
 	action DriverAction,
 ) error {
+	worker.navigationCheckedCalls++
 	if worker.beforeNavCheck != nil {
 		worker.beforeNavCheck()
 	}
@@ -1453,7 +1455,7 @@ func TestBrokerNavigationFailureInvalidatesSnapshotWithoutQuarantiningSession(t 
 	worker.executeErr = ErrNavigationFailed
 	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
 	if !errors.Is(err, ErrNavigationFailed) || invocation.State != InvocationFailed ||
-		invocation.SafeFailure != "navigation_failed" {
+		invocation.SafeFailure != "navigation_failed" || worker.navigationCheckedCalls != 1 {
 		t.Fatalf("ExecuteAction() = %+v, %v, want failed navigation", invocation, err)
 	}
 	stored, err := store.GetSession(t.Context(), session.ID)

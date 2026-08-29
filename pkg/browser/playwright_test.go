@@ -328,9 +328,14 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 		t.Fatalf("conditional select call = %#v", client.calls[1])
 	}
 	if !navigateOK || client.calls[2].tool != "browser_run_code_unsafe" ||
-		!strings.Contains(navigateCode, `await page.goto("https://example.com/path?q=one\u0026two=three")`) ||
-		!strings.Contains(navigateCode, `const firstLine = message.split(/\r?\n/, 1)[0]`) ||
-		!strings.Contains(navigateCode, `/^page\.goto: net::ERR_TOO_MANY_REDIRECTS(?: at .+)?$/`) ||
+		!strings.Contains(
+			navigateCode,
+			`state.cdp.send("Page.navigate", { url: "https://example.com/path?q=one\u0026two=three" })`,
+		) ||
+		!strings.Contains(navigateCode, `const previousURL = page.url()`) ||
+		!strings.Contains(navigateCode, `state.cdp.send("Page.navigate", { url: previousURL })`) ||
+		!strings.Contains(navigateCode, `await page.title()`) ||
+		!strings.Contains(navigateCode, `page.url() === previousURL`) ||
 		!strings.Contains(navigateCode, `return "MINTCLAW_NAV_ACT_V1|navigation_failed"`) ||
 		!strings.Contains(navigateCode, `throw error`) {
 		t.Fatalf("conditional navigate call = %#v", client.calls[2])
@@ -341,7 +346,7 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 	}
 }
 
-func TestPlaywrightCheckedNavigationDoesNotMatchRedirectTokenInURLOrCallLog(t *testing.T) {
+func TestPlaywrightCheckedNavigationRecoveryIsFailureAgnostic(t *testing.T) {
 	code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
 		frameID: "frame-1", loaderID: "loader-1", generation: 7,
 	}, DriverAction{
@@ -351,11 +356,15 @@ func TestPlaywrightCheckedNavigationDoesNotMatchRedirectTokenInURLOrCallLog(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(code, `await page.goto("https://example.com/net::ERR_TOO_MANY_REDIRECTS")`) ||
-		!strings.Contains(code, `const firstLine = message.split(/\r?\n/, 1)[0]`) ||
-		!strings.Contains(code, `/^page\.goto: net::ERR_TOO_MANY_REDIRECTS(?: at .+)?$/`) ||
-		strings.Contains(code, `message.includes("net::ERR_TOO_MANY_REDIRECTS")`) {
-		t.Fatalf("navigation classifier is not anchored to the browser error line: %s", code)
+	if !strings.Contains(
+		code,
+		`state.cdp.send("Page.navigate", { url: "https://example.com/net::ERR_TOO_MANY_REDIRECTS" })`,
+	) ||
+		!strings.Contains(code, `const previousURL = page.url()`) ||
+		!strings.Contains(code, `state.cdp.send("Page.navigate", { url: previousURL })`) ||
+		strings.Contains(code, `message.includes(`) ||
+		strings.Contains(code, `ERR_TOO_MANY_REDIRECTS(?:`) {
+		t.Fatalf("navigation recovery depends on a particular driver error: %s", code)
 	}
 }
 
@@ -382,7 +391,7 @@ func TestPlaywrightWorkerKeepsSessionAfterCheckedNavigationFailure(t *testing.T)
 	}
 }
 
-func TestPlaywrightWorkerClassifiesStructuredRedirectLoopErrorEnvelope(t *testing.T) {
+func TestPlaywrightWorkerDoesNotRecoverUnverifiedDriverErrorEnvelope(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {
 			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
@@ -402,11 +411,8 @@ func TestPlaywrightWorkerClassifiesStructuredRedirectLoopErrorEnvelope(t *testin
 	err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
 		Kind: DriverNavigate, URL: "https://www.example.com/redirect-loop",
 	})
-	if !errors.Is(err, ErrNavigationFailed) {
-		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want navigation failure", err)
-	}
-	if worker.lost {
-		t.Fatal("structured redirect-loop rejection retired worker")
+	if !errors.Is(err, ErrDriverRejected) || errors.Is(err, ErrNavigationFailed) {
+		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want unverified driver rejection", err)
 	}
 }
 
@@ -2426,6 +2432,10 @@ func TestPlaywrightWorkerRealBrowserFixture(t *testing.T) {
 	var privateProbeRequests atomic.Int64
 	var privateProbeURL string
 	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/redirect-loop" {
+			http.Redirect(writer, request, "/redirect-loop", http.StatusFound)
+			return
+		}
 		if strings.HasPrefix(request.URL.Path, "/diagnostic-long/") {
 			http.Error(writer, "long diagnostic path", http.StatusServiceUnavailable)
 			return
@@ -3035,6 +3045,25 @@ Done</div><output id="drag-result"></output>
 			privateProbeRequests.Load(),
 			worker.networkProxy.Denials(),
 		)
+	}
+	if err = worker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixtureOrigin}); err != nil {
+		t.Fatalf("recovery fixture navigate error = %v", err)
+	}
+	if _, err = worker.Observe(ctx); err != nil {
+		t.Fatalf("recovery fixture Observe() error = %v", err)
+	}
+	stableNavigation, err := worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatalf("stable NavigationIdentity() error = %v", err)
+	}
+	if err = worker.ExecuteAfterNavigationCheck(ctx, stableNavigation, DriverAction{
+		Kind: DriverNavigate, URL: fixtureOrigin + "/redirect-loop",
+	}); !errors.Is(err, ErrNavigationFailed) {
+		t.Fatalf("recoverable navigation error = %v, want ErrNavigationFailed", err)
+	}
+	recovered, err := worker.Observe(ctx)
+	if err != nil || recovered.URL != fixtureOrigin+"/" || recovered.Title != "MintClaw Fixture" || worker.lost {
+		t.Fatalf("recovered observation = %+v, %v; lost = %t", recovered, err, worker.lost)
 	}
 	if err = worker.Close(ctx); err != nil {
 		t.Fatalf("Close() error = %v", err)

@@ -1277,8 +1277,8 @@ func resolveDragBindings(
 
 func navigationCheckedAction(kind ActionKind) bool {
 	switch kind {
-	case ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionDrag, ActionPress,
-		ActionScroll:
+	case ActionNavigate, ActionClick, ActionFill, ActionSelect, ActionCheck, ActionUncheck, ActionHover, ActionDrag,
+		ActionPress, ActionScroll:
 		return true
 	default:
 		return false
