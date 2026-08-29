@@ -18,10 +18,13 @@ The external coding state root owns two distinct layers:
     attachments/manifest.json        thread-owned references and presentation data
 ```
 
-Copied attachments publish bytes by SHA-256 before atomically publishing their
-thread manifest entry. Their manifest records no source path. External mode
-stores a canonical absolute caller-owned path plus its admitted size and digest;
-MintClaw never claims or deletes that file.
+Every admission publishes a verified immutable snapshot by SHA-256 before
+atomically publishing its thread manifest entry. Copied manifests record no
+source path. External mode additionally stores a canonical absolute
+caller-owned path plus its admitted size and digest; the source must still be
+available and unchanged whenever selected, and MintClaw never claims or deletes
+that file. Consumers receive the immutable snapshot path only after the
+external availability check, so they never reopen the verified caller path.
 
 A `media://coding-attachment/<uuid>` reference is meaningful only through the
 manifest of its owning thread. Knowing another thread's reference does not

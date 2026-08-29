@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 func TestCopiedAttachmentSurvivesRestartWithoutSourcePathDisclosure(t *testing.T) {
@@ -140,11 +142,18 @@ func TestExternalAttachmentReportsChangedMissingAndSymlinkedPaths(t *testing.T) 
 	if attachment.SourcePath != canonicalSource {
 		t.Fatalf("external path = %q, want %q", attachment.SourcePath, canonicalSource)
 	}
-	if _, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref); err != nil {
+	resolved, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if resolved == canonicalSource {
+		t.Fatal("external resolution returned the caller-owned path")
 	}
 	if err := os.WriteFile(source, []byte("changed!"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(resolved); err != nil || string(data) != "original" {
+		t.Fatalf("immutable external snapshot = %q, %v", data, err)
 	}
 	if _, _, err := store.ResolveAttachment(
 		t.Context(),
@@ -231,6 +240,157 @@ func TestAttachmentAdmissionRejectsUnsafeOrOversizedInput(t *testing.T) {
 		Path: oversized, Mode: AttachmentModeCopy, At: time.Now(),
 	}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled admission error = %v", err)
+	}
+}
+
+func TestAttachmentAdmissionPreservesWhitespaceInSourcePath(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	directory := t.TempDir()
+	plain := filepath.Join(directory, "report")
+	spaced := filepath.Join(directory, "report ")
+	if err := os.WriteFile(plain, []byte("wrong"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(spaced, []byte("right"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: spaced, Mode: AttachmentModeCopy, Filename: "report.txt", At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(resolved); err != nil || string(data) != "right" {
+		t.Fatalf("resolved whitespace path content = %q, %v", data, err)
+	}
+}
+
+func TestResolveAttachmentPreservesContextCancellation(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := store.ResolveAttachment(
+		canceled,
+		metadata.ThreadID,
+		attachment.Ref,
+	); !errors.Is(err, context.Canceled) ||
+		IsAttachmentUnavailable(err) {
+		t.Fatalf("canceled resolve error = %v", err)
+	}
+}
+
+func TestAttachmentAdmissionReturnsCommittedReference(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected post-rename sync failure")
+	writeRoot := store.writeRoot
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if err := writeRoot(root, name, data, mode); err != nil {
+			return err
+		}
+		if name == attachmentManifest {
+			return &fileutil.CommittedWriteError{Err: injected}
+		}
+		return nil
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+	})
+	if attachment.Ref == "" || !IsCommittedAttachmentError(err) || !errors.Is(err, injected) {
+		t.Fatalf("committed admission = %+v, %v", attachment, err)
+	}
+	entries, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil || len(entries) != 1 || entries[0].Ref != attachment.Ref {
+		t.Fatalf("committed manifest = %+v, %v", entries, listErr)
+	}
+}
+
+func TestAttachmentAdmissionReportsCommittedDirectoryCreation(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected directory sync failure")
+	store.syncRoot = func(*os.Root) error { return injected }
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+	})
+	if attachment.Ref != "" || !fileutil.IsCommittedWriteError(err) ||
+		IsCommittedAttachmentError(err) || !errors.Is(err, injected) {
+		t.Fatalf("directory creation admission = %+v, %v", attachment, err)
+	}
+	entries, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil || len(entries) != 0 {
+		t.Fatalf("manifest changed after directory sync failure = %+v, %v", entries, listErr)
+	}
+}
+
+func TestAttachmentAdmissionDoesNotPublishIntoReplacedThread(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedRoot := threadRoot + "-moved"
+	replaced := false
+	syncRoot := store.syncRoot
+	store.syncRoot = func(root *os.Root) error {
+		if !replaced {
+			replaced = true
+			if err := os.Rename(threadRoot, movedRoot); err != nil {
+				return err
+			}
+			if err := os.Mkdir(threadRoot, 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(
+				filepath.Join(threadRoot, leaseFileName),
+				[]byte("replacement\n"),
+				0o600,
+			); err != nil {
+				return err
+			}
+		}
+		return syncRoot(root)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+	})
+	if err == nil || attachment.Ref != "" {
+		t.Fatalf("replaced-thread admission = %+v, %v", attachment, err)
+	}
+	for _, root := range []string{threadRoot, movedRoot} {
+		manifest := filepath.Join(root, attachmentDirectory, attachmentManifest)
+		if _, statErr := os.Stat(manifest); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("manifest published under %q: %v", root, statErr)
+		}
 	}
 }
 
