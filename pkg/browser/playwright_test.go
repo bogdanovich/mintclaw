@@ -288,6 +288,7 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 		},
 	}}
 	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	seedPlaywrightConfirmedPage(t, worker)
 	token, err := worker.NavigationIdentity(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -362,10 +363,28 @@ func TestPlaywrightCheckedNavigationRecoveryIsFailureAgnostic(t *testing.T) {
 	) ||
 		!strings.Contains(code, `const previousURL = page.url()`) ||
 		!strings.Contains(code, `state.cdp.send("Page.navigate", { url: previousURL })`) ||
+		!strings.Contains(code, `if (navigation.isDownload)`) ||
 		strings.Contains(code, `message.includes(`) ||
 		strings.Contains(code, `ERR_TOO_MANY_REDIRECTS(?:`) {
 		t.Fatalf("navigation recovery depends on a particular driver error: %s", code)
 	}
+}
+
+const playwrightConfirmedPage = "### Page\n- Page URL: https://example.com/\n" +
+	"- Page Title: Fixture\n### Snapshot\n```yaml\n- heading \"Fixture\"\n```"
+
+func seedPlaywrightConfirmedPage(t *testing.T, worker *playwrightWorker) {
+	t.Helper()
+	observation, err := parsePlaywrightObservation(
+		playwrightConfirmedPage,
+		worker.limits.SnapshotBytes,
+		worker.limits.SnapshotRefs,
+		worker.limits.ToolResultBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.lastObservation = observation
 }
 
 func TestPlaywrightWorkerKeepsSessionAfterCheckedNavigationFailure(t *testing.T) {
@@ -374,8 +393,10 @@ func TestPlaywrightWorkerKeepsSessionAfterCheckedNavigationFailure(t *testing.T)
 			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
 			playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|navigation_failed\""),
 		},
+		"browser_snapshot": {playwrightTextResult(playwrightConfirmedPage)},
 	}}
 	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	seedPlaywrightConfirmedPage(t, worker)
 	token, err := worker.NavigationIdentity(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -391,7 +412,92 @@ func TestPlaywrightWorkerKeepsSessionAfterCheckedNavigationFailure(t *testing.T)
 	}
 }
 
-func TestPlaywrightWorkerDoesNotRecoverUnverifiedDriverErrorEnvelope(t *testing.T) {
+func TestPlaywrightWorkerNavigationFailureRequiresConfirmedRollbackState(t *testing.T) {
+	tests := []struct {
+		name          string
+		recoveredPage string
+		proxyDenied   bool
+		wantErr       error
+	}{
+		{name: "matching", recoveredPage: playwrightConfirmedPage, wantErr: ErrNavigationFailed},
+		{
+			name: "changed", wantErr: ErrDriverRejected,
+			recoveredPage: strings.Replace(playwrightConfirmedPage, "Fixture", "Changed", 2),
+		},
+		{name: "denied_matching", recoveredPage: playwrightConfirmedPage, proxyDenied: true, wantErr: ErrDenied},
+		{
+			name: "denied_changed", proxyDenied: true, wantErr: ErrDriverRejected,
+			recoveredPage: strings.Replace(playwrightConfirmedPage, "Fixture", "Changed", 2),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proxy := &browserNetworkProxy{}
+			client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+				"browser_run_code_unsafe": {
+					playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
+					playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|navigation_failed\""),
+				},
+				"browser_snapshot": {playwrightTextResult(test.recoveredPage)},
+			}}
+			worker := &playwrightWorker{
+				client: client, networkProxy: proxy, limits: config.BrowserLimitsConfig{}.Effective(),
+			}
+			seedPlaywrightConfirmedPage(t, worker)
+			token, err := worker.NavigationIdentity(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.proxyDenied {
+				client.onCall = func(tool string) {
+					if tool == "browser_run_code_unsafe" {
+						proxy.denials.Add(1)
+					}
+				}
+			}
+			err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+				Kind: DriverNavigate, URL: "https://example.com/failure",
+			})
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want %v", err, test.wantErr)
+			}
+			if errors.Is(test.wantErr, ErrDriverRejected) && errors.Is(err, ErrDenied) {
+				t.Fatalf("unverified rollback error = %v, must not be policy denial", err)
+			}
+		})
+	}
+}
+
+func TestPlaywrightWorkerDoesNotTreatUnverifiedNavigationDenialAsSafe(t *testing.T) {
+	proxy := &browserNetworkProxy{}
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|ok\""),
+		},
+	}}
+	worker := &playwrightWorker{
+		client: client, networkProxy: proxy, limits: config.BrowserLimitsConfig{}.Effective(),
+	}
+	seedPlaywrightConfirmedPage(t, worker)
+	token, err := worker.NavigationIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.onCall = func(tool string) {
+		if tool == "browser_run_code_unsafe" {
+			proxy.denials.Add(1)
+		}
+	}
+	err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverNavigate, URL: "https://example.com/denied",
+	})
+	if !errors.Is(err, ErrDriverRejected) || errors.Is(err, ErrDenied) {
+		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want unknown-producing rejection", err)
+	}
+}
+
+func TestPlaywrightWorkerRecoversRejectedNavigationAfterStateProof(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {
 			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
@@ -402,8 +508,10 @@ func TestPlaywrightWorkerDoesNotRecoverUnverifiedDriverErrorEnvelope(t *testing.
 					"https://www.example.com/redirect-loop\nCall log:\n"}},
 			},
 		},
+		"browser_snapshot": {playwrightTextResult(playwrightConfirmedPage)},
 	}}
 	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	seedPlaywrightConfirmedPage(t, worker)
 	token, err := worker.NavigationIdentity(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -411,12 +519,12 @@ func TestPlaywrightWorkerDoesNotRecoverUnverifiedDriverErrorEnvelope(t *testing.
 	err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
 		Kind: DriverNavigate, URL: "https://www.example.com/redirect-loop",
 	})
-	if !errors.Is(err, ErrDriverRejected) || errors.Is(err, ErrNavigationFailed) {
-		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want unverified driver rejection", err)
+	if !errors.Is(err, ErrNavigationFailed) {
+		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want verified navigation failure", err)
 	}
 }
 
-func TestPlaywrightWorkerDoesNotClassifyRedirectTokenOnlyInRejectedCallLog(t *testing.T) {
+func TestPlaywrightWorkerDoesNotRecoverRejectedNavigationWithChangedPageState(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {
 			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
@@ -427,8 +535,12 @@ func TestPlaywrightWorkerDoesNotClassifyRedirectTokenOnlyInRejectedCallLog(t *te
 					"  - navigating to \\\"https://example.com/net::ERR_TOO_MANY_REDIRECTS\\\"\n"}},
 			},
 		},
+		"browser_snapshot": {
+			playwrightTextResult(strings.Replace(playwrightConfirmedPage, "Fixture", "Changed", 2)),
+		},
 	}}
 	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	seedPlaywrightConfirmedPage(t, worker)
 	token, err := worker.NavigationIdentity(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -437,7 +549,7 @@ func TestPlaywrightWorkerDoesNotClassifyRedirectTokenOnlyInRejectedCallLog(t *te
 		Kind: DriverNavigate, URL: "https://example.com/net::ERR_TOO_MANY_REDIRECTS",
 	})
 	if !errors.Is(err, ErrDriverRejected) || errors.Is(err, ErrNavigationFailed) {
-		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want ordinary driver rejection", err)
+		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want unverified driver rejection", err)
 	}
 }
 
@@ -3057,11 +3169,24 @@ Done</div><output id="drag-result"></output>
 		t.Fatalf("stable NavigationIdentity() error = %v", err)
 	}
 	if err = worker.ExecuteAfterNavigationCheck(ctx, stableNavigation, DriverAction{
+		Kind: DriverNavigate, URL: fixtureOrigin + "/download",
+	}); !errors.Is(err, ErrNavigationFailed) {
+		t.Fatalf("download navigation error = %v, want ErrNavigationFailed", err)
+	}
+	recovered, err := worker.Observe(ctx)
+	if err != nil || recovered.URL != fixtureOrigin+"/" || recovered.Title != "MintClaw Fixture" || worker.lost {
+		t.Fatalf("download recovery observation = %+v, %v; lost = %t", recovered, err, worker.lost)
+	}
+	stableNavigation, err = worker.NavigationIdentity(ctx)
+	if err != nil {
+		t.Fatalf("post-download NavigationIdentity() error = %v", err)
+	}
+	if err = worker.ExecuteAfterNavigationCheck(ctx, stableNavigation, DriverAction{
 		Kind: DriverNavigate, URL: fixtureOrigin + "/redirect-loop",
 	}); !errors.Is(err, ErrNavigationFailed) {
 		t.Fatalf("recoverable navigation error = %v, want ErrNavigationFailed", err)
 	}
-	recovered, err := worker.Observe(ctx)
+	recovered, err = worker.Observe(ctx)
 	if err != nil || recovered.URL != fixtureOrigin+"/" || recovered.Title != "MintClaw Fixture" || worker.lost {
 		t.Fatalf("recovered observation = %+v, %v; lost = %t", recovered, err, worker.lost)
 	}

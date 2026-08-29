@@ -893,8 +893,33 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if err != nil {
 		return err
 	}
+	confirmedPageStateHash := ""
+	if action.Kind == DriverNavigate {
+		if worker.lastObservation.Origin == "" {
+			return ErrDriverIncompatible
+		}
+		confirmedPageStateHash, err = browserPageStateHash(worker.lastObservation)
+		if err != nil || confirmedPageStateHash == "" {
+			return ErrDriverIncompatible
+		}
+	}
 	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
 	if err != nil {
+		if action.Kind == DriverNavigate && errors.Is(err, ErrDriverRejected) {
+			if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
+				return verifyErr
+			}
+			return ErrNavigationFailed
+		}
+		if action.Kind == DriverNavigate && errors.Is(err, ErrDenied) {
+			if errors.Is(parsePlaywrightNavigationDispatch(text), ErrNavigationFailed) {
+				if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
+					return verifyErr
+				}
+				return ErrDenied
+			}
+			return ErrDriverRejected
+		}
 		return err
 	}
 	// Playwright MCP reports a modal state instead of the callback result when
@@ -904,12 +929,31 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if worker.pendingDialog != nil {
 		return nil
 	}
-	if err = parsePlaywrightNavigationDispatch(text); err != nil &&
+	err = parsePlaywrightNavigationDispatch(text)
+	if errors.Is(err, ErrNavigationFailed) {
+		if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
+			return verifyErr
+		}
+		return ErrNavigationFailed
+	}
+	if err != nil &&
 		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) &&
 		!errors.Is(err, ErrNavigationFailed) {
 		worker.lost = true
 	}
 	return err
+}
+
+func (worker *playwrightWorker) verifyNavigationRollbackLocked(ctx context.Context, confirmedHash string) error {
+	recovered, err := worker.observeLocked(ctx)
+	if err != nil {
+		return errors.Join(ErrDriverRejected, err)
+	}
+	recoveredHash, err := browserPageStateHash(recovered)
+	if err != nil || confirmedHash == "" || recoveredHash != confirmedHash {
+		return errors.Join(ErrDriverRejected, err)
+	}
+	return nil
 }
 
 func (worker *playwrightWorker) AuthorizeFill(
@@ -969,6 +1013,7 @@ func playwrightNavigationCheckedActionCode(
 		dispatch = `const previousURL = page.url();
   try {
     const navigation = await state.cdp.send("Page.navigate", { url: ` + jsonString(normalizedURL) + ` });
+    if (navigation.isDownload) return "MINTCLAW_NAV_ACT_V1|navigation_failed";
     if (navigation.errorText) throw new Error("navigation failed");
     await page.waitForLoadState("load");
   } catch (error) {
@@ -1675,9 +1720,7 @@ func (worker *playwrightWorker) callAndConsume(
 	// unrelated denied background request to either read-only observation.
 	passiveRead := tool == "browser_snapshot" ||
 		(tool == "browser_run_code_unsafe" && arguments["code"] == playwrightContextProbeCode)
-	if !passiveRead && worker.networkProxy.Denials() > denialsBefore {
-		return "", ErrDenied
-	}
+	proxyDenied := !passiveRead && worker.networkProxy.Denials() > denialsBefore
 	if err != nil || result == nil {
 		worker.lost = true
 		return "", ErrWorkerUnavailable
@@ -1708,6 +1751,15 @@ func (worker *playwrightWorker) callAndConsume(
 		return "", errors.Join(driverErr, ErrDriverIncompatible)
 	}
 	worker.pendingDialog = dialog
+	if driverErr != nil {
+		return text, driverErr
+	}
+	if proxyDenied {
+		if dialog != nil {
+			return text, ErrDriverRejected
+		}
+		return text, ErrDenied
+	}
 	return text, driverErr
 }
 
