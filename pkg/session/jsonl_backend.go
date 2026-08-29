@@ -98,6 +98,9 @@ func decodeCurrentSessionScope(data json.RawMessage) (*SessionScope, error) {
 	if scope.Version != ScopeVersion {
 		return nil, fmt.Errorf("unsupported session scope version %d", scope.Version)
 	}
+	if strings.TrimSpace(scope.AgentID) != "" {
+		scope.AgentID = routing.NormalizeAgentID(scope.AgentID)
+	}
 	return CloneScope(&scope), nil
 }
 

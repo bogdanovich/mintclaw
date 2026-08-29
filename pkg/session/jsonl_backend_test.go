@@ -471,6 +471,20 @@ func TestJSONLBackendListsOnlyOwnedCurrentScopedSessions(t *testing.T) {
 	if len(keys) != 1 || keys[0] != currentKey {
 		t.Fatalf("ListCurrentAgentSessions() = %v, want only %q", keys, currentKey)
 	}
+	if scope := backend.GetSessionScope(currentKey); scope == nil || scope.AgentID != "main" {
+		t.Fatalf("GetSessionScope() = %#v, want canonical owner main", scope)
+	}
+	persisted, err := store.GetSessionMeta(t.Context(), currentKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persistedScope session.SessionScope
+	if err = json.Unmarshal(persisted.Scope, &persistedScope); err != nil {
+		t.Fatal(err)
+	}
+	if persistedScope.AgentID != "Main" {
+		t.Fatalf("persisted owner = %q, want original Main unchanged", persistedScope.AgentID)
+	}
 }
 
 func TestJSONLBackendRejectsUnknownCurrentScopeFields(t *testing.T) {
