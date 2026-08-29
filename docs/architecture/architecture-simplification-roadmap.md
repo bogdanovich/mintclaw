@@ -194,7 +194,7 @@ reset criteria.
 | X3.87 | #975 | Merged; session metadata uses one exact current decoder across store, fork, and Web readers, and successful canonical writes are validated against it before persistence |
 | X3.88 | #976 | Merged; bounded history, coding fork, and Web reuse the canonical persisted-message and exact scope decoders instead of decoding those documents independently |
 | Z1 source | #964-#976; final source `e60b8e26` | Passed after correcting the premature #973 proof; every persisted session document now has one reader owner, every surviving discovery match is classified, and no production historical reader, dual writer, deprecated callable facade, or version-selected runtime remains |
-| Z1 converter preparation | Current PR | In progress; a temporary copy-only external command inventories all configured session roots, emits disjoint retained/archive trees and a checksum manifest, strictly validates every retained record, and is registered for deletion after closeout |
+| Z1 converter preparation | #978 | In review; a temporary copy-only external command inventories all configured session roots, emits disjoint retained/archive trees and a checksum manifest, strictly validates every retained record, and is registered for deletion after closeout |
 | Z1 deployed closeout | Read-only audit on deployed `827e0f70` | Open; archive non-current sessions, convert the retained current cohort, install a reviewed source release, verify, and exercise rollback under fresh authority |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
