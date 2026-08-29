@@ -12,7 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
-func TestCopiedAttachmentSurvivesRestartWithoutSourcePathDisclosure(t *testing.T) {
+func TestAttachmentSurvivesSourceChangesAndRestartWithoutPathDisclosure(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
 	secretDirectory := filepath.Join(t.TempDir(), "private-location")
@@ -25,13 +25,23 @@ func TestCopiedAttachmentSurvivesRestartWithoutSourcePathDisclosure(t *testing.T
 	}
 
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: source, At: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if attachment.SourcePath != "" || attachment.Filename != "report.txt" || attachment.Size != 15 {
+	if attachment.Filename != "report.txt" || attachment.Size != 15 {
 		t.Fatalf("attachment = %+v", attachment)
+	}
+	if err := os.WriteFile(source, []byte("later source content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, readErr := os.ReadFile(resolved); readErr != nil || string(data) != "bounded report\n" {
+		t.Fatalf("resolved changed-source content = %q, %v", data, readErr)
 	}
 	if err := os.Remove(source); err != nil {
 		t.Fatal(err)
@@ -60,11 +70,11 @@ func TestCopiedAttachmentSurvivesRestartWithoutSourcePathDisclosure(t *testing.T
 		t.Fatal(err)
 	}
 	if strings.Contains(string(manifest), secretDirectory) {
-		t.Fatalf("copied manifest disclosed source directory: %s", manifest)
+		t.Fatalf("attachment manifest disclosed source directory: %s", manifest)
 	}
 }
 
-func TestCopiedAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T) {
+func TestAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T) {
 	store, first := newLeaseTestThread(t)
 	second, err := NewMetadata(NewThreadID(), first.Project, "second thread", time.Now())
 	if err != nil {
@@ -79,20 +89,20 @@ func TestCopiedAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T
 	}
 	firstLease := acquireAttachmentTestLease(t, store, first.ThreadID)
 	firstAttachment, err := store.AdmitAttachment(t.Context(), firstLease, first, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: source, At: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	repeated, err := store.AdmitAttachment(t.Context(), firstLease, first, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now().Add(time.Minute),
+		Path: source, At: time.Now().Add(time.Minute),
 	})
 	if err != nil || repeated.Ref != firstAttachment.Ref {
 		t.Fatalf("repeated admission = %+v, %v", repeated, err)
 	}
 	secondLease := acquireAttachmentTestLease(t, store, second.ThreadID)
 	secondAttachment, err := store.AdmitAttachment(t.Context(), secondLease, second, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: source, At: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -122,68 +132,6 @@ func TestCopiedAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T
 	}
 }
 
-func TestExternalAttachmentReportsChangedMissingAndSymlinkedPaths(t *testing.T) {
-	store, metadata := newLeaseTestThread(t)
-	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
-	source := filepath.Join(t.TempDir(), "external.txt")
-	if err := os.WriteFile(source, []byte("original"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, Mode: AttachmentModeExternal, At: time.Now(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	canonicalSource, err := filepath.EvalSymlinks(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if attachment.SourcePath != canonicalSource {
-		t.Fatalf("external path = %q, want %q", attachment.SourcePath, canonicalSource)
-	}
-	resolved, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved == canonicalSource {
-		t.Fatal("external resolution returned the caller-owned path")
-	}
-	if err := os.WriteFile(source, []byte("changed!"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := os.ReadFile(resolved); err != nil || string(data) != "original" {
-		t.Fatalf("immutable external snapshot = %q, %v", data, err)
-	}
-	if _, _, err := store.ResolveAttachment(
-		t.Context(),
-		metadata.ThreadID,
-		attachment.Ref,
-	); !IsAttachmentUnavailable(
-		err,
-	) {
-		t.Fatalf("changed external error = %v", err)
-	}
-	if err := os.Remove(source); err != nil {
-		t.Fatal(err)
-	}
-	replacement := filepath.Join(t.TempDir(), "replacement.txt")
-	if err := os.WriteFile(replacement, []byte("original"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(replacement, source); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	if _, _, err := store.ResolveAttachment(
-		t.Context(),
-		metadata.ThreadID,
-		attachment.Ref,
-	); !IsAttachmentUnavailable(err) ||
-		!strings.Contains(err.Error(), "symbolic link") {
-		t.Fatalf("symlinked external error = %v", err)
-	}
-}
-
 func TestAttachmentReferenceIsThreadScoped(t *testing.T) {
 	store, first := newLeaseTestThread(t)
 	second, err := NewMetadata(NewThreadID(), first.Project, "second thread", time.Now())
@@ -199,7 +147,7 @@ func TestAttachmentReferenceIsThreadScoped(t *testing.T) {
 	}
 	lease := acquireAttachmentTestLease(t, store, first.ThreadID)
 	attachment, err := store.AdmitAttachment(t.Context(), lease, first, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: source, At: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -230,14 +178,14 @@ func TestAttachmentAdmissionRejectsUnsafeOrOversizedInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: oversized, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: oversized, At: time.Now(),
 	}); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("oversized admission error = %v", err)
 	}
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := store.AdmitAttachment(canceled, lease, metadata, AttachmentInput{
-		Path: oversized, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: oversized, At: time.Now(),
 	}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled admission error = %v", err)
 	}
@@ -256,7 +204,7 @@ func TestAttachmentAdmissionPreservesWhitespaceInSourcePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: spaced, Mode: AttachmentModeCopy, Filename: "report.txt", At: time.Now(),
+		Path: spaced, Filename: "report.txt", At: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +226,7 @@ func TestResolveAttachmentPreservesContextCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: source, At: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -314,7 +262,7 @@ func TestAttachmentAdmissionReturnsCommittedReference(t *testing.T) {
 		return nil
 	}
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: source, At: time.Now(),
 	})
 	if attachment.Ref == "" || !IsCommittedAttachmentError(err) || !errors.Is(err, injected) {
 		t.Fatalf("committed admission = %+v, %v", attachment, err)
@@ -335,7 +283,7 @@ func TestAttachmentAdmissionReportsCommittedDirectoryCreation(t *testing.T) {
 	injected := errors.New("injected directory sync failure")
 	store.syncRoot = func(*os.Root) error { return injected }
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: source, At: time.Now(),
 	})
 	if attachment.Ref != "" || !fileutil.IsCommittedWriteError(err) ||
 		IsCommittedAttachmentError(err) || !errors.Is(err, injected) {
@@ -381,7 +329,7 @@ func TestAttachmentAdmissionDoesNotPublishIntoReplacedThread(t *testing.T) {
 		return syncRoot(root)
 	}
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: source, At: time.Now(),
 	})
 	if err == nil || attachment.Ref != "" {
 		t.Fatalf("replaced-thread admission = %+v, %v", attachment, err)
@@ -429,7 +377,7 @@ func TestAttachmentManifestRejectsReplacedThreadsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, Mode: AttachmentModeCopy, At: time.Now(),
+		Path: source, At: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}

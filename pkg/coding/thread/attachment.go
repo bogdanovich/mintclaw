@@ -35,35 +35,22 @@ const (
 	attachmentRefPrefix = "media://coding-attachment/"
 )
 
-// AttachmentMode defines whether MintClaw owns an immutable copy or retains
-// a verified reference to a caller-owned external path.
-type AttachmentMode string
-
-const (
-	AttachmentModeCopy     AttachmentMode = "copy"
-	AttachmentModeExternal AttachmentMode = "external"
-)
-
 // AttachmentInput describes one local file admitted under a thread writer.
 type AttachmentInput struct {
 	Path        string
-	Mode        AttachmentMode
 	Filename    string
 	ContentType string
 	At          time.Time
 }
 
 // Attachment is the durable, bounded descriptor stored in a thread manifest.
-// SourcePath is retained only for caller-owned external references.
 type Attachment struct {
-	Ref         string         `json:"ref"`
-	Mode        AttachmentMode `json:"mode"`
-	Filename    string         `json:"filename"`
-	ContentType string         `json:"content_type"`
-	Size        int64          `json:"size"`
-	SHA256      string         `json:"sha256"`
-	SourcePath  string         `json:"source_path,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
+	Ref         string    `json:"ref"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	Size        int64     `json:"size"`
+	SHA256      string    `json:"sha256"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type attachmentManifestFile struct {
@@ -110,8 +97,8 @@ func IsAttachmentUnavailable(err error) bool {
 	return errors.As(err, &unavailable)
 }
 
-// AdmitAttachment verifies one stable regular file, publishes copied content
-// by digest when requested, and commits the thread-local descriptor last.
+// AdmitAttachment verifies one stable regular file, publishes an immutable
+// copy by digest, and commits the thread-local descriptor last.
 func (s *Store) AdmitAttachment(
 	ctx context.Context,
 	lease *Lease,
@@ -161,14 +148,8 @@ func (s *Store) AdmitAttachment(
 			return loadErr
 		}
 		candidate := Attachment{
-			Mode: input.Mode, Filename: filename, ContentType: contentType,
+			Filename: filename, ContentType: contentType,
 			Size: size, SHA256: digest, CreatedAt: input.At.UTC(),
-		}
-		if input.Mode == AttachmentModeExternal {
-			if !utf8.ValidString(canonicalPath) {
-				return fmt.Errorf("coding attachment admission: external path must be valid UTF-8")
-			}
-			candidate.SourcePath = canonicalPath
 		}
 		if existing, found := equivalentAttachment(manifest.Entries, candidate); found {
 			admitted = existing
@@ -211,8 +192,7 @@ func (s *Store) AdmitAttachment(
 	return admitted, nil
 }
 
-// ListAttachments loads one validated manifest without resolving external
-// paths or reading blob payloads.
+// ListAttachments loads one validated manifest without reading blob payloads.
 func (s *Store) ListAttachments(threadID string) ([]Attachment, error) {
 	if s == nil {
 		return nil, fmt.Errorf("coding attachment store is nil")
@@ -245,20 +225,7 @@ func (s *Store) ResolveAttachment(
 	if !found {
 		return "", Attachment{}, &AttachmentUnavailableError{Ref: ref, Reason: "reference is not owned by thread"}
 	}
-	path := entry.SourcePath
-	if entry.Mode == AttachmentModeExternal {
-		_, _, digest, size, readErr := readAttachmentSource(ctx, path, MaxAttachmentBytes, false)
-		if readErr != nil {
-			if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
-				return "", entry, readErr
-			}
-			return "", entry, &AttachmentUnavailableError{Ref: ref, Reason: readErr.Error()}
-		}
-		if digest != entry.SHA256 || size != entry.Size {
-			return "", entry, &AttachmentUnavailableError{Ref: ref, Reason: "content identity changed"}
-		}
-	}
-	path = s.attachmentBlobPath(entry.SHA256)
+	path := s.attachmentBlobPath(entry.SHA256)
 	_, _, digest, size, readErr := readAttachmentSource(ctx, path, MaxAttachmentBytes, false)
 	if readErr != nil {
 		if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
@@ -277,12 +244,6 @@ func validateAttachmentInput(input AttachmentInput) (AttachmentInput, error) {
 	input.ContentType = strings.TrimSpace(input.ContentType)
 	if input.Path == "" {
 		return AttachmentInput{}, fmt.Errorf("coding attachment admission: path is required")
-	}
-	if input.Mode == "" {
-		input.Mode = AttachmentModeCopy
-	}
-	if input.Mode != AttachmentModeCopy && input.Mode != AttachmentModeExternal {
-		return AttachmentInput{}, fmt.Errorf("coding attachment admission: mode must be copy or external")
 	}
 	if input.At.IsZero() {
 		return AttachmentInput{}, fmt.Errorf("coding attachment admission: timestamp is required")
@@ -781,23 +742,12 @@ func validateAttachment(entry Attachment) error {
 	if err != nil || parsedRef.String() != refID {
 		return fmt.Errorf("coding attachment reference is invalid")
 	}
-	if entry.Mode != AttachmentModeCopy && entry.Mode != AttachmentModeExternal {
-		return fmt.Errorf("coding attachment mode is invalid")
-	}
 	if err := validateAttachmentPresentation(entry.Filename, entry.ContentType); err != nil {
 		return err
 	}
 	if entry.Size < 0 || entry.Size > MaxAttachmentBytes || len(entry.SHA256) != sha256.Size*2 ||
 		strings.ToLower(entry.SHA256) != entry.SHA256 || !isHex(entry.SHA256) || entry.CreatedAt.IsZero() {
 		return fmt.Errorf("coding attachment identity is invalid")
-	}
-	if entry.Mode == AttachmentModeCopy && entry.SourcePath != "" {
-		return fmt.Errorf("coding copied attachment retains a source path")
-	}
-	if entry.Mode == AttachmentModeExternal &&
-		(!utf8.ValidString(entry.SourcePath) || !filepath.IsAbs(entry.SourcePath) ||
-			filepath.Clean(entry.SourcePath) != entry.SourcePath) {
-		return fmt.Errorf("coding external attachment path is invalid")
 	}
 	return nil
 }
@@ -820,9 +770,8 @@ func requireAttachmentDirectories(root *os.Root, names ...string) error {
 
 func equivalentAttachment(entries []Attachment, candidate Attachment) (Attachment, bool) {
 	for _, entry := range entries {
-		if entry.Mode == candidate.Mode && entry.Filename == candidate.Filename &&
-			entry.ContentType == candidate.ContentType && entry.Size == candidate.Size &&
-			entry.SHA256 == candidate.SHA256 && entry.SourcePath == candidate.SourcePath {
+		if entry.Filename == candidate.Filename && entry.ContentType == candidate.ContentType &&
+			entry.Size == candidate.Size && entry.SHA256 == candidate.SHA256 {
 			return entry, true
 		}
 	}

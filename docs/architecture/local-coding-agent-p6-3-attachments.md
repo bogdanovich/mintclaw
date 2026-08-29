@@ -19,12 +19,10 @@ The external coding state root owns two distinct layers:
 ```
 
 Every admission publishes a verified immutable snapshot by SHA-256 before
-atomically publishing its thread manifest entry. Copied manifests record no
-source path. External mode additionally stores a canonical absolute
-caller-owned path plus its admitted size and digest; the source must still be
-available and unchanged whenever selected, and MintClaw never claims or deletes
-that file. Consumers receive the immutable snapshot path only after the
-external availability check, so they never reopen the verified caller path.
+atomically publishing its thread manifest entry. Manifests never record the
+caller-owned source path. After admission, changing, moving, or deleting the
+source does not affect the attachment; consumers resolve only the immutable
+MintClaw-owned snapshot.
 
 A `media://coding-attachment/<uuid>` reference is meaningful only through the
 manifest of its owning thread. Knowing another thread's reference does not
@@ -39,17 +37,17 @@ do not repair or rewrite it.
 
 ## Deduplication, deletion, and garbage collection
 
-Identical copied bytes share one blob across threads. Trashing a thread moves
+Identical bytes share one blob across threads. Trashing a thread moves
 its manifest as recoverable MintClaw-owned state but never removes shared blob
 bytes. A later garbage collector must mark references from both active and
 recoverable-trash manifests before sweeping. It must fail closed on corrupt,
-unreadable, or concurrently changing manifests and must never traverse external
-paths. Until that collector lands, unreferenced blobs are retained.
+unreadable, or concurrently changing manifests. Until that collector lands,
+unreferenced blobs are retained.
 
 Forking must create a new thread manifest containing only references reachable
-from the copied transcript boundary. Copied blobs remain shared; external paths
-retain their explicit availability semantics. Fork and garbage-collection
-lifecycle integration belongs to a later P6.3 PR built on this storage layer.
+from the copied transcript boundary. Blobs remain shared. Fork and
+garbage-collection lifecycle integration belongs to a later P6.3 PR built on
+this storage layer.
 
 ## Prompt and runtime boundary
 
