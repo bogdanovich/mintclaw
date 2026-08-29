@@ -1,11 +1,12 @@
 # Architecture Simplification Roadmap
 
 Status: active; the implementation sequence is merged through P1, C2, and
-X3.77. The explicitly authorized R1 compatibility reset, full backup, strict
-removal deployment, and rollback exercise are complete on deployed revision
-`827e0f70`. Later source simplifications through PR #963 are merged but are not
-part of that deployed R1 release. The final Z1 audit and any separately
-authorized update from the verified R1 release to later `main` remain open.
+X3.86. The source-side Z1 audit passes on `main` at `9ad623a1` through PR #973.
+The explicitly authorized R1 compatibility reset, full backup, strict removal
+deployment, and rollback exercise remain complete on deployed revision
+`827e0f70`. The post-R1 session archive and current-session conversion needed
+before deploying the stricter source contracts, plus installation and rollback
+verification of that release, remain open and require fresh explicit authority.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -19,8 +20,9 @@ first-party wire compatibility; remove historical readers and schema
 generators, deprecated aliases, implicit old-state inference, duplicate
 ownership, and service-locator layers. Preserve legitimate failover, product
 aliases, and external protocols. Keep the completed R1 reset and rollback
-evidence closed, finish the semantic Z1 audit against current `main`, and treat
-any later production update as a separate explicitly authorized deployment.
+evidence closed, preserve the completed semantic source audit at `9ad623a1`,
+and finish the separately authorized stopped-state session cutover, deployment,
+and rollback verification without adding a steady-state compatibility reader.
 
 ## Decision
 
@@ -179,7 +181,17 @@ reset criteria.
 | X3.75 | #961 | Merged; browser profiles require an explicit network mode |
 | X3.76 | #962 | Merged; `InboundContext` is the sole owner of inbound message identity and relation metadata |
 | X3.77 | #963 | Merged; outbound retries are limited to definite rejection or a known untouched remainder, while ambiguous acceptance is preserved |
-| Z1 | R1 exit evidence complete | Ready; final source and deployed-state classification audit remains open |
+| X3.78 | #965 | Merged; coding forks require writer-owned root-turn markers and no longer infer historical roots from message shape |
+| X3.79 | #966 | Merged; interaction snapshots require explicit current commit sequences and no longer synthesize ordering on read |
+| X3.80 | #967 | Merged; task snapshots are validated symmetrically on read and write instead of repaired or partially skipped |
+| X3.81 | #968 | Merged; session metadata has one strict identity-bearing shape and no filename-derived key fallback |
+| X3.82 | #969 | Merged; persisted agent model selection uses the object contract only, without string/object dual serialization |
+| X3.83 | #970 | Merged; the unused second model/tool protocol family in `pkg/tools/shared` is gone |
+| X3.84 | #971 | Merged; internal and persisted tool calls use one flat contract, with nested external shapes isolated to provider adapters |
+| X3.85 | #972 | Merged; runtime maintenance enumerates only the exact coding thread or owner-matched opaque scope-v2 sessions |
+| X3.86 | #973 | Merged; the duplicated ephemeral session-store interface and repeated context checks are gone |
+| Z1 source | #964-#973; final source `9ad623a1` | Passed; every surviving discovery match is classified and no production historical reader, dual writer, deprecated callable facade, or version-selected runtime remains |
+| Z1 deployed closeout | Read-only audit on deployed `827e0f70` | Open; archive non-current sessions, convert the retained current cohort, install a reviewed source release, verify, and exercise rollback under fresh authority |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 14 to #826; 15 to #827; 16-23 to #828-#835; 24 to #837; 25 to #839;
@@ -190,7 +202,10 @@ The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 59 to #895; 60 to #896; 61 to #933; 62 to #935 and #936; 63 to #937; 64 to
 #938; 65 to #940; 66 to #942; 67 to #948-#950; 68 to #951; 69 to #953; 70 to
 #954; 71 to #955 and #956; 72 to #957; 73 to #959; 74 to #960; 75 to #961;
-76 to #962; and 77 to #963.
+76 to #962; 77 to #963; 78 to #965; 79 to #966; 80 to #967; 81 to #968; 82 to
+#969; 83 to #970; 84 to #971; 85 to #972; and 86 to #973. PR #964 records the
+completed R1 evidence and opens the final source-audit sequence; it is not a
+code packet.
 
 The 2026-08-24 read-only deployed audit established these rollout facts at
 that time:
@@ -441,9 +456,68 @@ The completed 2026-08-28 R1 operation supersedes every mutable gate above:
   quarantined. The current state and strict binaries were restored, and
   completed untruncated diagnostic trace
   `trace-turn-69eb624d37fb9d807837d947` records the post-rollback smoke; and
-- later architecture packets #948-#963 are merged on `main` but are newer than
-  the deployed R1 release. Updating production to those packets is a normal,
-  separately authorized deployment and is not an unfinished R1 gate.
+- later architecture packets #948-#973 are merged on `main` but are newer than
+  the deployed R1 release. R1 remains complete; deploying the strict session
+  contracts in #968, #971, and #972 requires the separate stopped-state
+  closeout recorded below.
+
+The 2026-08-29 final Z1 read-only audit supersedes the mutable deployed
+inventory above without reopening the completed R1 reset:
+
+- source `main` is `9ad623a1` through PR #973, while the installed gateway,
+  CLI, and node still report `v0.1.0-p8a.2-928-g827e0f70`. All five gateway
+  services and `mintclaw-node-p5a-canary` are active with zero restarts since
+  the verified R1 start on 2026-08-28;
+- all five configs are version 4. Their 21 agent entries use object-shaped
+  model selections, the 20 distinct active personal roots all contain root
+  `AGENTS.md`, and none contains root `AGENT.md` or `IDENTITY.md`;
+- the current validators pass all deployed task and interaction snapshots.
+  The three task stores contain 249 terminal tasks and 1,113 valid
+  `task_event.v2` events with no active task. The interaction store contains
+  19 terminal records and 153 valid events at commit sequence 4,801, with no
+  active interaction;
+- the outbox contains ten version 3 records, all delivered. The node registry
+  contains exactly the three current connected identities (`p5a-canary`,
+  `ab-local-test`, and `vpn`) with explicit Ed25519, executor, and policy
+  revision fields; there is no P3 or pending identity. The two enabled gateway
+  browser profiles explicitly use `any_http`, and all eight retained node
+  browser profiles satisfy the current contract;
+- service journals since the R1 start contain no recovery, reconciliation,
+  panic, or fatal incident attributable to the architecture reset; and
+- no deployed coding thread store exists under the active profile trees. The
+  remaining deployment gate is therefore the normal-session corpus, not an
+  unenumerated coding history.
+
+The exact deployed session cutover cohort is:
+
+| Cohort | Retain and convert: current opaque scope v2 | Archive: non-current identity or scope |
+| --- | ---: | ---: |
+| Metadata documents | 742 | 2,828 |
+| Paired JSONL histories | 596 | 636 |
+| Metadata bytes | 598,743 | 2,007,528 |
+| JSONL bytes | 15,684,051 | 105,055,282 |
+| Removed `aliases` members | 329 | 2,367 |
+| Old nested tool calls | 3,728 | 16,455 |
+| Google-specific old tool metadata cases | 2 | 118 |
+
+The full inventory contains 3,570 metadata documents: 834 opaque keys, 2,219
+`agent:*` keys, and 517 `task:*` keys. Scope classification found 742 opaque
+scope-v2 records, 91 opaque scope-v1 records, 677 agent scope-v2 records,
+1,542 agent scope-v1 records, 148 task scope-v2 records, one task scope-v1
+record, and 369 records with no scope. Key, count, skip, and filename bounds
+are valid; no unknown scope field or orphan JSONL file was found. Runtime
+selection is nevertheless intentionally narrower than storage validity:
+historical key families, scope v1, and missing scopes are archived rather than
+translated, even when their generic metadata envelope is otherwise valid.
+
+No production state was changed during this audit. Before a source release at
+or after `9ad623a1` is installed, a newly authorized stopped-state operation
+must back up the exact R1 binaries and full state, archive the non-current
+cohort, remove `aliases` and flatten tool calls only in the retained cohort,
+strictly validate the complete result, install mutually compatible first-party
+binaries, restart and run canaries, and exercise rollback with the matching
+pre-cutover state. The archive is evidence and recovery material; the new
+runtime does not read it.
 
 ### Re-audit corrections
 
@@ -475,11 +549,15 @@ separation and standards alignment.
 | Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | All retained identities and connected peers explicitly carry Ed25519; #901 deleted omitted-algorithm admission | Closed in R1 |
 | Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter | Every retained record carries the authenticated execution profile; #901 made it mandatory and deleted runtime-less construction | Closed in R1 |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover | All profiles use version 4 and standard `AGENTS.md`; the ignored files and inert policy entries are gone, and strict deployment plus rollback passed | Closed in R1 |
+| Non-current session identities and scopes | Coordinated persisted-state archive, not a runtime adapter | The deployed corpus has 2,828 non-current metadata documents and 636 paired histories; #972 prevents these records from entering current runtime maintenance | Open for Z1 deployed closeout |
+| Removed session metadata `aliases` | Coordinated current-state conversion | The retained cohort has 329 members to delete deterministically; #968 intentionally has no reader that ignores the removed field | Open for Z1 deployed closeout |
+| Nested persisted tool calls | Coordinated current-state conversion | The retained cohort has 3,728 calls plus two Google-specific metadata cases to flatten; #971 intentionally has no dual reader or dual write | Open for Z1 deployed closeout |
 
-No registered R1 compatibility adapter remains open. Z1 may still discover a
-new source-level simplification candidate; any such finding must be classified
-by semantics and assigned its own bounded packet rather than reopening a
-closed historical reader.
+No registered R1 compatibility adapter remains open, and the final source Z1
+audit found no new source adapter. The three open rows are deployed-data gates
+created by intentionally strict post-R1 readers. They are resolved outside the
+running product under a stopped-state backup; they do not justify reintroducing
+a reader, normalizer, or migration hook into startup.
 
 C2 is closed. PR #924 moved durable checkpoint ownership to the coding
 composition root; PRs #925-#927 made recovery reads and constructors explicitly
@@ -541,7 +619,7 @@ metadata explicitly instead of cloning a turn only to mutate its inbound
 context; and the dead interaction `delivery_key` copy is gone. Supported
 metadata values and their cross-field requirements are validated before outbox
 persistence and replay. Outbox version 3 persists that direct contract and
-strictly rejects version 2 rather than adding a dual reader. R1 must archive the
+strictly rejects version 2 rather than adding a dual reader. R1 archived the
 terminal live version 2 inventory under the stopped-state backup before
 installing this release.
 
@@ -600,15 +678,14 @@ time. The later pre-Z1 source and live-state audit corrected that conclusion:
   allow-list and objective policies, or self identity now prevent tool
   publication, while `SubTurnSpawner` remains the real tool-to-agent package
   seam;
-- task deliverable normalization constructs the current canonical report at
-  the registry owner for both new mutations and loaded snapshots; it does not
-  select a historical report implementation, but R1 must still inventory the
-  deployed task registry before rollout rather than assuming its shape; and
+- PR #967 replaced task deliverable normalization on load with one validator
+  shared by current reads and writes. The final deployed audit passes all
+  retained task snapshots without repair; and
 - the other production keyword matches are benchmark baselines, external
   provider or platform protocols, provider failover and current defaults, or
-  strict rejection of removed inputs. A few current helper names and comments
-  still use `legacy` descriptively; Z1 must rename that stale terminology or
-  justify it without preserving an alternate path.
+  strict rejection of removed inputs. PRs #965-#973 removed the remaining
+  historical inference and duplicate-contract findings, and the final Z1
+  table below records why each surviving discovery family remains.
 
 ## Canonical Contract And Bounded Compatibility Rules
 
@@ -1546,6 +1623,29 @@ Implementation sequence:
     untouched remainder. Preserve ambiguous acceptance as terminal uncertainty
     so generic chunks, Telegram media, and streaming finalization cannot replay
     a possibly visible effect.
+78. Make coding root turns explicit in every current transcript writer. Remove
+    fork-time inference from unmarked user-shaped messages.
+79. Require interaction snapshots and events to persist their commit sequence.
+    Remove reader-side ordering synthesis and snapshot fallbacks.
+80. Validate the sole current task snapshot on both read and write. Reject
+    incomplete terminal state, reports, identities, and event ordering instead
+    of repairing or partially loading them.
+81. Require session metadata to carry its exact key and current fields. Remove
+    filename-derived identity and make direct reads and enumeration share one
+    strict decoder.
+82. Persist agent model selection only as the object contract containing the
+    primary model and ordered fallbacks. Remove string/object dual serialization.
+83. Delete the unreferenced model and tool-call protocol mirror from
+    `pkg/tools/shared`; keep `pkg/providers/protocoltypes` as the sole owner.
+84. Flatten the canonical internal and persisted tool call. Convert nested
+    functions and serialized arguments once at external provider boundaries,
+    and remove internal normalizers, precedence rules, and dual-shape tests.
+85. Enumerate active runtime sessions at the composition boundary. Normal
+    agents receive only owner-matched opaque scope-v2 identities, and coding
+    runtimes receive only their exact admitted thread.
+86. Remove the local copy of `SessionStore` used by ephemeral sub-turns and the
+    repeated JSONL context checks. Compile directly against the canonical
+    interface and validate each boundary once.
 
 Exit criteria:
 
@@ -1730,6 +1830,83 @@ No surviving match may:
 The final report records deleted production lines, removed types and entrypoints,
 the remaining current external integrations, full test and lint results, and
 deployed cutover evidence.
+
+Source result: **passed** at `9ad623a1` on 2026-08-29.
+
+- PRs #965-#973 closed the final source findings: inferred coding roots,
+  synthesized interaction ordering, task repair on load, session identity
+  reconstruction, model-config dual serialization, a second protocol type
+  family, dual-shape tool calls, historical runtime-session enumeration, and a
+  duplicated session-store interface;
+- compared with post-#963 source `7944edc7`, the final packet sequence changed
+  52 production Go files with 758 additions and 821 deletions, a net removal
+  of 63 lines. It removed the eight unused `pkg/tools/shared` protocol types,
+  the nested internal tool-call types and normalizers, both custom
+  `AgentModelConfig` JSON methods, the local 18-method ephemeral session-store
+  interface, and the historical reader/inference branches named above;
+- the additional test surface is deliberate rejection and current-writer
+  coverage, not old-format fixtures that keep a reader callable. Every code PR
+  in #965-#973 passed the repository's nine CI jobs, focused package tests,
+  required race or integration tests, formatting, lint, exact-head review, and
+  merge-head protection; and
+- no production background recovery, Seahorse reconciliation, or coding repair
+  path bypasses the current runtime-session selector. The generic storage
+  enumeration remains only where the backend legitimately stores both normal
+  and coding histories.
+
+Surviving discovery matches are classified as follows:
+
+| Match family | Classification and reason retained |
+| --- | --- |
+| Kagi legacy array response | Current external upstream response shape at the Kagi adapter |
+| OpenAI-compatible, OneBot, browser, remote-workspace, OS, and architecture compatibility | Current external or platform contract, not a MintClaw historical implementation |
+| OpenClaw migration command | Explicit import product boundary; it does not run during normal startup |
+| `legacy` memory benchmark | Development comparison baseline whose historical behavior is the measurement target |
+| `legacy` context-manager value | Strict rejection of a removed configuration input |
+| Bedrock deprecated temperature and Cobra deprecated help rendering | Upstream provider behavior and generic CLI presentation, not a callable MintClaw compatibility API |
+| Model, node, service, release, CLI, and workspace aliases | Current user- or operator-visible product identity |
+| Provider failover, retry delay, SPA routing, non-seekable streams, and delivery fallbacks | Current resilience or platform behavior with one owner; ambiguous external effects remain terminal |
+| `ensureMessageCreatedAt` and canonical timestamp helpers | Current write and mutation invariants, not inference while loading historical state |
+| Provider identifier compatibility sanitation | Current provider-boundary name constraints, not a persisted-state reader |
+| Old browser/node fixtures in tests | Exact rejection evidence for the strict current runtime; no production old-path implementation remains |
+
+No surviving match reads historical persisted state, writes two
+representations, selects an implementation by old version, silently maps a
+removed field into current authority, or keeps a deprecated MintClaw entrypoint
+callable. Product aliases, external protocols, and genuine failover therefore
+remain without weakening the simplification rule.
+
+Deployed closeout result: **open** only for the source release newer than the
+verified R1 deployment. The operation is deliberately separate from source Z1
+and must execute in this order:
+
+1. obtain fresh explicit authority for backup, stopped-state mutation,
+   installation, restart, verification, and rollback;
+2. resolve and checksum the exact running R1 binaries, units, configuration,
+   and complete durable state before stopping every writer of the shared
+   session contracts;
+3. archive the audited 2,828 non-current metadata documents and 636 paired
+   histories without translating them into current identities;
+4. on only the retained 742 current metadata documents and 596 histories,
+   remove the 329 `aliases` members and flatten the 3,728 nested tool calls plus
+   two Google-specific metadata cases using a one-time external converter;
+5. prove the archive and converted trees are complete and disjoint, then run
+   the strict metadata, scope, JSONL, task, interaction, config, outbox, node,
+   and browser validators against the entire candidate state;
+6. install one reviewed release at or after `9ad623a1` across mutually
+   compatible first-party components, restart in dependency order, and verify
+   health, service journals, recovery, Seahorse reconciliation, message/tool
+   execution, browser operation, node connectivity, and an untruncated trace;
+7. exercise rollback with the exact R1 binary and its matching pre-cutover
+   state, never with converted state that the old binary does not own; and
+8. restore the selected release, repeat the canaries, retain manifests and the
+   archive, and delete any temporary converter from the operational staging
+   area after evidence capture.
+
+Until that operation is authorized and passes, the roadmap remains active even
+though source Z1 is complete. Production stays on the already verified
+`827e0f70` release; no steady-state compatibility code is added to make the
+new source read the old corpus.
 
 ## Validation For Every Code Packet
 
