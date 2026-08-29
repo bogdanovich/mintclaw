@@ -1611,8 +1611,8 @@ Done when:
   message.
 - Delete confirmation identifies only MintClaw-owned files.
 
-Completed by the [P6.1 exit record](local-coding-agent-p6-1-exit.md). P6.2 and
-later roadmap packets remain uncompleted.
+Completed by the [P6.1 exit record](local-coding-agent-p6-1-exit.md). P6.2 is
+completed below; P6.3 and later roadmap packets remain uncompleted.
 
 #### P6.2 — Historical thread search
 
@@ -1632,6 +1632,9 @@ Done when:
 - Search cannot leak another project without an explicit all-project action.
 - Results identify source thread and time.
 - Output is bounded and cancellable.
+
+Completed by the [P6.2 exit record](local-coding-agent-p6-2-exit.md). P6.3 and
+later roadmap packets remain uncompleted.
 
 #### P6.3 — Rich input and attachments
 
