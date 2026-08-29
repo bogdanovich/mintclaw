@@ -905,7 +905,8 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 		return nil
 	}
 	if err = parsePlaywrightNavigationDispatch(text); err != nil &&
-		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) {
+		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) &&
+		!errors.Is(err, ErrNavigationFailed) {
 		worker.lost = true
 	}
 	return err
@@ -959,7 +960,15 @@ func playwrightNavigationCheckedActionCode(
 		if !ok || normalizedURL == "" {
 			return "", fmt.Errorf("%w: normalized navigation URL is unavailable", ErrInvalid)
 		}
-		dispatch = "await page.goto(" + jsonString(normalizedURL) + ");"
+		// A navigation error such as a redirect loop is a deterministic local
+		// failure, not evidence that the driver process was lost. Return a
+		// bounded marker so the broker can invalidate snapshot authority while
+		// preserving the session for observation or an alternate route.
+		dispatch = `try {
+    await page.goto(` + jsonString(normalizedURL) + `);
+  } catch {
+    return "MINTCLAW_NAV_ACT_V1|navigation_failed";
+  }`
 	case "browser_click":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").click({ button: \"left\", noWaitAfter: true });"
@@ -1183,6 +1192,8 @@ func parsePlaywrightNavigationDispatch(text string) error {
 		return ErrStale
 	case playwrightNavigationCheckedActionMarker + "|denied":
 		return ErrDenied
+	case playwrightNavigationCheckedActionMarker + "|navigation_failed":
+		return ErrNavigationFailed
 	default:
 		return ErrDriverIncompatible
 	}

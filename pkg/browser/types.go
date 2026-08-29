@@ -37,6 +37,7 @@ var (
 	ErrDenied               = errors.New("browser authority denied")
 	ErrDriverIncompatible   = errors.New("browser driver is incompatible")
 	ErrDriverRejected       = errors.New("browser driver rejected the operation")
+	ErrNavigationFailed     = errors.New("browser navigation failed")
 	ErrInvalid              = browseraction.ErrInvalid
 	ErrNotFound             = errors.New("browser state not found")
 	ErrApprovalRequired     = errors.New("browser action requires approval")

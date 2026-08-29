@@ -1917,6 +1917,57 @@ func TestBrowserActReportsSafeUnknownOutcomeClass(t *testing.T) {
 	}
 }
 
+func TestBrowserActReportsRecoverableNavigationFailure(t *testing.T) {
+	preparation := browser.Preparation{Action: browser.PreparedAction{
+		ID: "prepared_navigation", TabID: "tab_primary", CurrentOrigin: "https://example.com",
+		Action: browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/redirect-loop"},
+		Effect: browser.EffectNavigation,
+	}}
+	source := &fakeBrowserToolSource{
+		available: true,
+		prepare:   preparation,
+		execute: browser.Invocation{
+			ID: "invocation_navigation", SessionID: "browser_session_1", Effect: browser.EffectNavigation,
+			State: browser.InvocationFailed, SafeFailure: "navigation_failed", AcceptedAt: 1,
+		},
+		executeErr: browser.ErrNavigationFailed,
+	}
+	result := NewBrowserActTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{
+			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+			"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+			"action": map[string]any{"kind": "navigate", "url": "https://example.com/redirect-loop"},
+		},
+	)
+	if result == nil || !result.IsError {
+		t.Fatalf("navigation result = %#v, want safe error", result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result.ContentForLLM()), &payload); err != nil {
+		t.Fatalf("decode navigation result: %v; content = %q", err, result.ContentForLLM())
+	}
+	if payload["code"] != "navigation_failed" || payload["action"] != "observe_again_or_choose_alternate_url" ||
+		payload["browser_session_id"] != "browser_session_1" ||
+		payload["state"] != string(browser.InvocationFailed) || payload["reason"] != "navigation_failed" {
+		t.Fatalf("navigation payload = %#v", payload)
+	}
+
+	source.executeErr = errors.Join(browser.ErrNavigationFailed, browser.ErrSnapshotInvalidation)
+	result = NewBrowserActTool(browserToolTestConfig(), source).Execute(
+		browserToolTestContext(),
+		map[string]any{
+			"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+			"snapshot_id": "snapshot_1", "snapshot_generation": 3,
+			"action": map[string]any{"kind": "navigate", "url": "https://example.com/redirect-loop"},
+		},
+	)
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"code":"post_action_state_unavailable"`) {
+		t.Fatalf("navigation invalidation result = %#v", result)
+	}
+}
+
 func TestBrowserActDeliversRetainedDownloadWithRecovery(t *testing.T) {
 	recovery := &browser.ScreenshotRecovery{
 		WorkspaceID: "workspace", AgentID: "agent", ActorID: "actor", RouteID: "route",

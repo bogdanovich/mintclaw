@@ -1419,6 +1419,39 @@ func TestBrokerBlankSnapshotAuthorizesOnlyAllowedNavigation(t *testing.T) {
 	}
 }
 
+func TestBrokerNavigationFailureInvalidatesSnapshotWithoutQuarantiningSession(t *testing.T) {
+	store := NewMemoryStore()
+	broker, worker, session := openActionTestBroker(t, store)
+	owner := testOwner()
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_navigation_failed", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionNavigate, URL: "https://example.com/redirect-loop"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.executeErr = ErrNavigationFailed
+	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
+	if !errors.Is(err, ErrNavigationFailed) || invocation.State != InvocationFailed ||
+		invocation.SafeFailure != "navigation_failed" {
+		t.Fatalf("ExecuteAction() = %+v, %v, want failed navigation", invocation, err)
+	}
+	stored, err := store.GetSession(t.Context(), session.ID)
+	if err != nil || stored.State != SessionReady || stored.SafeFailure != "" ||
+		stored.SnapshotID != "" || stored.SnapshotOrigin != "" || worker.closed != 0 {
+		t.Fatalf("session after failed navigation = %+v, %v; worker = %+v", stored, err, worker)
+	}
+	fresh, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil || fresh.SnapshotID == "" || fresh.SnapshotGeneration != observed.SnapshotGeneration+1 {
+		t.Fatalf("Observe() after failed navigation = %+v, %v", fresh, err)
+	}
+}
+
 func TestBrokerRejectsNonEmptyBlankDriverObservation(t *testing.T) {
 	dialog := &DialogObservation{Type: "alert", Message: "unexpected"}
 	tests := []struct {

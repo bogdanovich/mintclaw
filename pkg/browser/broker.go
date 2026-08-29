@@ -1522,6 +1522,16 @@ func (broker *Broker) executePreparedLocked(
 			)
 			return failed, errors.Join(ErrStale, failErr)
 		}
+		if executionContextErr == nil && errors.Is(executeErr, ErrNavigationFailed) {
+			failed, failErr := broker.completeInvocationLocked(
+				completionCtx,
+				invocation,
+				InvocationFailed,
+				nil,
+				"navigation_failed",
+			)
+			return failed, errors.Join(ErrNavigationFailed, failErr)
+		}
 		completed, completeErr := broker.completeInvocationLocked(
 			completionCtx,
 			invocation,
