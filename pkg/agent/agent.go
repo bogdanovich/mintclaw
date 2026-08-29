@@ -30,6 +30,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 	"github.com/bogdanovich/mintclaw/pkg/utils"
+	workspaceutil "github.com/bogdanovich/mintclaw/pkg/workspace"
 )
 
 type AgentLoop struct {
@@ -359,7 +360,7 @@ func configuredDefaultAgentWorkspace(cfg *config.Config) string {
 	if configured := configuredDefaultAgent(cfg); configured != nil {
 		agentCfg = *configured
 	}
-	return normalizeRuntimeWorkspace(resolveAgentWorkspace(&agentCfg, &cfg.Agents.Defaults))
+	return normalizeRuntimeWorkspace(workspaceutil.ResolveAgentPath(&agentCfg, &cfg.Agents.Defaults))
 }
 
 // ReloadProviderAndConfig atomically swaps the provider and config with proper synchronization.
