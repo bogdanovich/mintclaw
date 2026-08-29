@@ -3,6 +3,7 @@ package tasks
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -76,6 +77,242 @@ func TestValidateSnapshotIsReadOnly(t *testing.T) {
 	}
 	if string(got) != string(content) {
 		t.Fatalf("ValidateSnapshot() rewrote snapshot: %q", got)
+	}
+}
+
+func TestValidateSnapshotRejectsMissingTerminalAndReportFields(t *testing.T) {
+	tests := map[string]struct {
+		mutate func(*Record)
+		want   string
+	}{
+		"ended at": {
+			mutate: func(rec *Record) { rec.EndedAt = 0 },
+			want:   "ended_at",
+		},
+		"cleanup after": {
+			mutate: func(rec *Record) { rec.CleanupAfter = 0 },
+			want:   "cleanup_after",
+		},
+		"report": {
+			mutate: func(rec *Record) { rec.Deliverable.Report = nil },
+			want:   "deliverable is missing report",
+		},
+		"report schema": {
+			mutate: func(rec *Record) { rec.Deliverable.Report.SchemaVersion = "" },
+			want:   "deliverable report has schema",
+		},
+		"report id": {
+			mutate: func(rec *Record) { rec.Deliverable.Report.ReportID = "" },
+			want:   "report_id",
+		},
+		"content hash": {
+			mutate: func(rec *Record) { rec.Deliverable.Report.ContentHash = "" },
+			want:   "content_hash",
+		},
+		"blank report id": {
+			mutate: func(rec *Record) { rec.Deliverable.Report.ReportID = " \t" },
+			want:   "report_id",
+		},
+		"blank content hash": {
+			mutate: func(rec *Record) { rec.Deliverable.Report.ContentHash = " \t" },
+			want:   "content_hash",
+		},
+		"generated at": {
+			mutate: func(rec *Record) { rec.Deliverable.Report.GeneratedAt = 0 },
+			want:   "generated_at",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			store := filepath.Join(t.TempDir(), "task_registry.json")
+			registry := NewRegistry(store)
+			if err := registry.Upsert(Record{
+				TaskID: "terminal-task", Task: "produce output", Status: StatusSucceeded,
+				Deliverable: &taskresult.Deliverable{Text: "done"},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var snapshot Snapshot
+			if err = json.Unmarshal(data, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&snapshot.Tasks[0])
+			data, err = json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(store, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err = ValidateSnapshot(store); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("ValidateSnapshot() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRegistryNormalizesWhitespaceOnlyReportIdentities(t *testing.T) {
+	registry := NewRegistry(filepath.Join(t.TempDir(), "task_registry.json"))
+	if err := registry.Upsert(Record{
+		TaskID: "task-1", Task: "produce output", Status: StatusSucceeded,
+		Deliverable: &taskresult.Deliverable{Text: "done", Report: &taskresult.Report{
+			SchemaVersion: taskresult.ReportSchemaV1,
+			ReportID:      " \t",
+			ContentHash:   " \n",
+			GeneratedAt:   time.Now().UnixMilli(),
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record, ok := registry.Get("task-1")
+	if !ok || record.Deliverable == nil || record.Deliverable.Report == nil {
+		t.Fatalf("stored task = %#v", record)
+	}
+	report := record.Deliverable.Report
+	if strings.TrimSpace(report.ContentHash) == "" || report.ReportID != "deliverable:"+report.ContentHash {
+		t.Fatalf("normalized report identity = %#v", report)
+	}
+}
+
+func TestRegistryRejectsUnsupportedReportBeforePersisting(t *testing.T) {
+	registry := NewRegistry(filepath.Join(t.TempDir(), "task_registry.json"))
+	err := registry.Upsert(Record{
+		TaskID: "task-1", Task: "produce output", Status: StatusSucceeded,
+		Deliverable: &taskresult.Deliverable{Report: &taskresult.Report{
+			SchemaVersion: "deliverable_report.v2",
+			ReportID:      "report-1",
+			ContentHash:   "hash-1",
+			GeneratedAt:   time.Now().UnixMilli(),
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "deliverable report has schema") {
+		t.Fatalf("Upsert() error = %v, want unsupported report schema", err)
+	}
+	if _, ok := registry.Get("task-1"); ok {
+		t.Fatal("invalid task remained in memory after rejected persistence")
+	}
+}
+
+func TestValidateSnapshotRejectsInvalidDeliveryStatus(t *testing.T) {
+	for name, mutate := range map[string]func(*Snapshot){
+		"missing record delivery status": func(snapshot *Snapshot) {
+			snapshot.Tasks[0].DeliveryStatus = ""
+		},
+		"unknown record delivery status": func(snapshot *Snapshot) {
+			snapshot.Tasks[0].DeliveryStatus = DeliveryStatus("unknown")
+		},
+		"unknown event delivery status": func(snapshot *Snapshot) {
+			snapshot.Events[0].DeliveryStatus = DeliveryStatus("unknown")
+		},
+		"missing event delivery status": func(snapshot *Snapshot) {
+			snapshot.Events[0].DeliveryStatus = ""
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := filepath.Join(t.TempDir(), "task_registry.json")
+			registry := NewRegistry(store)
+			if err := registry.Upsert(Record{TaskID: "task-1", Task: "test"}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var snapshot Snapshot
+			if err = json.Unmarshal(data, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			mutate(&snapshot)
+			if err = validateSnapshot(snapshot); err == nil || !strings.Contains(err.Error(), "delivery_status") {
+				t.Fatalf("validateSnapshot() error = %v, want delivery_status error", err)
+			}
+		})
+	}
+}
+
+func TestValidateSnapshotRejectsInvalidClosedEnums(t *testing.T) {
+	tests := map[string]struct {
+		mutate func(*Snapshot)
+		want   string
+	}{
+		"record runtime": {
+			mutate: func(snapshot *Snapshot) { snapshot.Tasks[0].Runtime = Runtime("unknown") },
+			want:   "runtime",
+		},
+		"notify policy": {
+			mutate: func(snapshot *Snapshot) { snapshot.Tasks[0].NotifyPolicy = NotifyPolicy("unknown") },
+			want:   "notify_policy",
+		},
+		"event runtime": {
+			mutate: func(snapshot *Snapshot) { snapshot.Events[0].Runtime = Runtime("unknown") },
+			want:   "runtime",
+		},
+		"event type": {
+			mutate: func(snapshot *Snapshot) { snapshot.Events[0].Type = EventType("unknown") },
+			want:   "type",
+		},
+		"event status": {
+			mutate: func(snapshot *Snapshot) { snapshot.Events[0].Status = Status("unknown") },
+			want:   "status",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			store := filepath.Join(t.TempDir(), "task_registry.json")
+			registry := NewRegistry(store)
+			if err := registry.Upsert(Record{TaskID: "task-1", Task: "test"}); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var snapshot Snapshot
+			if err = json.Unmarshal(data, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&snapshot)
+			if err = validateSnapshot(snapshot); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateSnapshot() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRegistryAllowsOutcomeOnlyDeliverableWithoutReport(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "task_registry.json")
+	registry := NewRegistry(store)
+	if err := registry.Upsert(Record{
+		TaskID: "task-1", Task: "verify outcome", Status: StatusSucceeded,
+		Deliverable: &taskresult.Deliverable{ObjectiveOutcome: &taskresult.Outcome{
+			Status: taskresult.OutcomeSucceeded,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := NewRegistry(store)
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatal(err)
+	}
+	record, ok := reloaded.Get("task-1")
+	if !ok || record.Deliverable == nil || record.Deliverable.ObjectiveOutcome == nil ||
+		record.Deliverable.Report != nil {
+		t.Fatalf("outcome-only deliverable = %#v", record.Deliverable)
+	}
+}
+
+func TestRegistryRejectsUnknownSnapshotFields(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "task_registry.json")
+	content := []byte(`{"tasks":[],"legacy_tasks":[]}`)
+	if err := os.WriteFile(store, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateSnapshot(store); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("ValidateSnapshot() error = %v, want unknown field", err)
 	}
 }
 
@@ -325,11 +562,54 @@ func TestRegistryRejectsSnapshotsWithoutGenerationIdentity(t *testing.T) {
 	}
 }
 
+func TestRegistryRejectsInvalidRetainedGenerationSequences(t *testing.T) {
+	tests := map[string]struct {
+		sequences    []int64
+		lastEventSeq int64
+	}{
+		"duplicate":  {sequences: []int64{1, 1}, lastEventSeq: 1},
+		"decreasing": {sequences: []int64{2, 1}, lastEventSeq: 1},
+		"gap":        {sequences: []int64{1, 3}, lastEventSeq: 3},
+		"stale tail": {sequences: []int64{1, 2}, lastEventSeq: 3},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			events := make([]TaskEvent, 0, len(test.sequences))
+			for index, sequence := range test.sequences {
+				events = append(events, TaskEvent{
+					EventID:        fmt.Sprintf("event-%d", index),
+					SchemaVersion:  TaskEventSchemaVersion,
+					TaskID:         "task-1",
+					GenerationID:   "generation-1",
+					Runtime:        RuntimeTool,
+					Type:           EventTaskUpdated,
+					Status:         StatusRunning,
+					DeliveryStatus: DeliveryPending,
+					Seq:            sequence,
+					EmittedAt:      int64(index + 1),
+				})
+			}
+			err := validateSnapshot(Snapshot{
+				Tasks: []Record{{
+					TaskID: "task-1", GenerationID: "generation-1", LastEventSeq: test.lastEventSeq,
+					Runtime: RuntimeTool, Status: StatusRunning, DeliveryStatus: DeliveryPending,
+					NotifyPolicy: NotifyDoneOnly,
+				}},
+				Events: events,
+			})
+			if err == nil || !strings.Contains(err.Error(), "sequence") {
+				t.Fatalf("validateSnapshot() error = %v, want sequence error", err)
+			}
+		})
+	}
+}
+
 func TestRegistryRejectsRemovedWaitingForInputStatus(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "task_registry.json")
 	data, err := json.Marshal(Snapshot{Tasks: []Record{{
 		TaskID: "old-waiting", GenerationID: "generation-old", LastEventSeq: 1,
-		Status: Status("waiting_for_input"),
+		Runtime: RuntimeTool, Status: Status("waiting_for_input"), DeliveryStatus: DeliveryPending,
+		NotifyPolicy: NotifyDoneOnly,
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -367,6 +647,35 @@ func TestRegistryRejectsTrailingSnapshotData(t *testing.T) {
 			}
 			if string(after) != string(data) {
 				t.Fatal("trailing-data registry was overwritten")
+			}
+		})
+	}
+}
+
+func TestRegistryRejectsMissingTasksArray(t *testing.T) {
+	for name, data := range map[string][]byte{
+		"null document": []byte(`null`),
+		"empty object":  []byte(`{}`),
+		"null tasks":    []byte(`{"tasks":null}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := filepath.Join(t.TempDir(), "task_registry.json")
+			if err := os.WriteFile(store, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			registry := NewRegistry(store)
+			if err := registry.LastLoadError(); err == nil || !strings.Contains(err.Error(), "tasks array") {
+				t.Fatalf("LastLoadError = %v, want missing tasks array", err)
+			}
+			if err := registry.Upsert(Record{TaskID: "must-not-overwrite", Task: "test"}); err == nil {
+				t.Fatal("invalid registry accepted mutation")
+			}
+			after, err := os.ReadFile(store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(data) {
+				t.Fatal("invalid registry was overwritten")
 			}
 		})
 	}
@@ -938,7 +1247,7 @@ func TestRegistryPrunesExpiredTerminalTasks(t *testing.T) {
 	}
 }
 
-func TestRegistryRemovedTraceMetadataCannotProtectTaskState(t *testing.T) {
+func TestRegistryRejectsRemovedTraceMetadata(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "state", "task_registry.json")
 	registry := NewRegistryWithOptions(store, Options{TerminalRetention: time.Hour})
 	if err := registry.Upsert(Record{
@@ -975,17 +1284,24 @@ func TestRegistryRemovedTraceMetadataCannotProtectTaskState(t *testing.T) {
 	}
 
 	reloaded := NewRegistryWithOptions(store, Options{TerminalRetention: time.Hour})
-	if err := reloaded.LastLoadError(); err != nil {
-		t.Fatalf("LastLoadError() = %v", err)
+	if err := reloaded.LastLoadError(); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("LastLoadError() = %v, want unknown field", err)
 	}
-	if _, ok := reloaded.Get("reusable"); ok {
-		t.Fatal("removed diagnostic metadata protected an expired task")
+	if records := reloaded.List(); len(records) != 0 {
+		t.Fatalf("invalid snapshot published records: %#v", records)
 	}
 	if err := reloaded.Upsert(Record{
 		TaskID: "reusable", Runtime: RuntimeSubagent, Task: "new generation",
 		Status: StatusRunning, DeliveryStatus: DeliveryPending,
-	}); err != nil {
-		t.Fatalf("reusing task ID after pruning: %v", err)
+	}); err == nil || !strings.Contains(err.Error(), "read-only after load failure") {
+		t.Fatalf("Upsert() error = %v, want read-only load failure", err)
+	}
+	after, err := os.ReadFile(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(data) {
+		t.Fatal("snapshot with removed trace metadata was rewritten")
 	}
 }
 
@@ -1133,15 +1449,19 @@ func TestRegistryPrunesEventsBelowMaxRecordLimit(t *testing.T) {
 	}
 }
 
-func TestRegistryPrunesOrphanEventsWhenSnapshotHasNoTasks(t *testing.T) {
+func TestRegistryRejectsOrphanEventsWithoutRewriting(t *testing.T) {
 	store := filepath.Join(t.TempDir(), "state", "task_registry.json")
-	snapshot := Snapshot{Events: []TaskEvent{{
-		EventID:       "event-orphan",
-		SchemaVersion: TaskEventSchemaVersion,
-		TaskID:        "deleted-task",
-		GenerationID:  "generation-orphan",
-		Type:          EventTaskUpdated,
-		EmittedAt:     time.Now().UnixMilli(),
+	snapshot := Snapshot{Tasks: []Record{}, Events: []TaskEvent{{
+		EventID:        "event-orphan",
+		SchemaVersion:  TaskEventSchemaVersion,
+		TaskID:         "deleted-task",
+		GenerationID:   "generation-orphan",
+		Runtime:        RuntimeTool,
+		Type:           EventTaskUpdated,
+		Status:         StatusRunning,
+		DeliveryStatus: DeliveryPending,
+		Seq:            1,
+		EmittedAt:      time.Now().UnixMilli(),
 	}}}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
@@ -1155,19 +1475,18 @@ func TestRegistryPrunesOrphanEventsWhenSnapshotHasNoTasks(t *testing.T) {
 	}
 
 	reloaded := NewRegistry(store)
-	if events := reloaded.ListEvents(""); len(events) != 0 {
-		t.Fatalf("orphan events = %#v, want none", events)
+	if err = reloaded.LastLoadError(); err == nil || !strings.Contains(err.Error(), "missing task") {
+		t.Fatalf("LastLoadError = %v, want missing-task error", err)
 	}
-	data, err = os.ReadFile(store)
+	if err = reloaded.Upsert(Record{TaskID: "must-not-overwrite", Task: "test"}); err == nil {
+		t.Fatal("orphan-event registry accepted mutation")
+	}
+	after, err := os.ReadFile(store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot = Snapshot{}
-	if err := json.Unmarshal(data, &snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if len(snapshot.Events) != 0 {
-		t.Fatalf("persisted orphan events = %#v, want none", snapshot.Events)
+	if string(after) != string(data) {
+		t.Fatal("orphan-event registry was rewritten")
 	}
 }
 

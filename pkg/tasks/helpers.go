@@ -49,10 +49,10 @@ func normalizeDeliverable(payload *taskresult.Deliverable, generatedAt int64) *t
 		if report.GeneratedAt == 0 {
 			report.GeneratedAt = generatedAt
 		}
-		if report.ContentHash == "" {
+		if strings.TrimSpace(report.ContentHash) == "" {
 			report.ContentHash = deliverableContentHash(out)
 		}
-		if report.ReportID == "" {
+		if strings.TrimSpace(report.ReportID) == "" {
 			report.ReportID = "deliverable:" + report.ContentHash
 		}
 		out.Report = report

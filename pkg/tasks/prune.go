@@ -212,6 +212,10 @@ func isFinalDeliveryStatus(status DeliveryStatus) bool {
 	}
 }
 
+func validDeliveryStatus(status DeliveryStatus) bool {
+	return status == DeliveryPending || isFinalDeliveryStatus(status)
+}
+
 func recordReferenceAt(rec Record) int64 {
 	for _, value := range []int64{rec.EndedAt, rec.LastEventAt, rec.StartedAt, rec.CreatedAt} {
 		if value > 0 {
