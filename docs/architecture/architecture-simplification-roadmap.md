@@ -496,13 +496,13 @@ inventory above without reopening the completed R1 reset:
   remaining deployment gate is therefore the normal-session corpus, not an
   unenumerated coding history.
 
-The exact deployed session cutover cohort is:
+The #975 point-in-time deployed session cutover cohort was:
 
 | Cohort | Retain and convert: current opaque scope v2 | Archive: non-current identity or scope |
 | --- | ---: | ---: |
 | Metadata documents | 742 | 2,828 |
 | Paired JSONL histories | 596 | 636 |
-| Metadata bytes | 598,744 | 2,007,528 |
+| Metadata bytes | 598,743 | 2,007,528 |
 | JSONL bytes | 15,684,051 | 105,055,282 |
 | Removed `aliases` members | 329 | 2,367 |
 | Old nested tool calls | 3,728 | 16,455 |
@@ -531,6 +531,16 @@ was 598,744 bytes, one byte above the earlier #975 point-in-time inventory;
 all cohort counts and history byte counts were unchanged. The services remain
 live, so the authorized stopped-state pass must take a new authoritative
 snapshot rather than treating this rehearsal output as deployable state.
+
+The exact-head #978 rehearsal later in the same live period completed
+successfully after two additional empty current metadata documents appeared:
+744 retained metadata documents, the same 596 retained histories, 2,828
+archived metadata documents, 636 archived histories, and 4,804 emitted files.
+All transformation and history totals were unchanged, and the independent
+zero-alias, zero-nested-call, archive-digest, disjointness, and file-coverage
+checks still passed. This live drift is expected and is not a converter error:
+cohort counts are evidence, not hard-coded acceptance rules. The stopped-state
+manifest, after the source-stability check passes, is the cutover authority.
 
 No production state was changed during this audit. Before a source release at
 or after `e60b8e26` is installed, a newly authorized stopped-state operation
