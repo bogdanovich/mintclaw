@@ -102,7 +102,7 @@ func (b *JSONLBackend) GetSessionScope(sessionKey string) *SessionScope {
 	if len(meta.Scope) == 0 {
 		return nil
 	}
-	scope, err := decodeCurrentSessionScope(meta.Scope)
+	scope, err := DecodeCurrentSessionScope(meta.Scope)
 	if err != nil {
 		log.Printf("session: decode session scope: %v", err)
 		return nil
@@ -110,7 +110,9 @@ func (b *JSONLBackend) GetSessionScope(sessionKey string) *SessionScope {
 	return scope
 }
 
-func decodeCurrentSessionScope(data json.RawMessage) (*SessionScope, error) {
+// DecodeCurrentSessionScope decodes the exact current persisted scope
+// contract shared by routing and administrative readers.
+func DecodeCurrentSessionScope(data json.RawMessage) (*SessionScope, error) {
 	if err := validateSessionScopeJSON(data); err != nil {
 		return nil, err
 	}
@@ -493,7 +495,7 @@ func (b *JSONLBackend) ListCurrentAgentSessions(agentID string) []string {
 		if err != nil || len(meta.Scope) == 0 {
 			continue
 		}
-		scope, decodeErr := decodeCurrentSessionScope(meta.Scope)
+		scope, decodeErr := DecodeCurrentSessionScope(meta.Scope)
 		if decodeErr != nil {
 			continue
 		}

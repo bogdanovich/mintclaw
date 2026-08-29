@@ -322,8 +322,8 @@ func decodePinnedForkHistory(
 		if rawCount <= skip {
 			continue
 		}
-		var message providers.Message
-		if err := json.Unmarshal(line, &message); err != nil {
+		message, err := memory.DecodeJSONLMessage(line)
+		if err != nil {
 			return nil, 0, fmt.Errorf("coding thread fork: decode JSONL line %d: %w", rawCount, err)
 		}
 		if !messageutil.IsTransientAssistantThoughtMessage(message) {

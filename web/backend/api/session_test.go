@@ -85,6 +85,47 @@ func setMintClawTestSessionUpdatedAt(
 	}
 }
 
+func TestReadSessionMessagesUsesCanonicalDecoder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	data := []byte(strings.Join([]string{
+		`{"role":"assistant","content":"","tool_calls":[{"id":"old","type":"function","function":{"name":"read_file","arguments":"{}"}}]}`,
+		`{"role":"user","content":"current"}`,
+	}, "\n") + "\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := (&Handler{}).readSessionMessages(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].Role != "user" || messages[0].Content != "current" {
+		t.Fatalf("readSessionMessages() = %+v, want only current record", messages)
+	}
+}
+
+func TestSessionRefsFromMetaUsesCanonicalScopeDecoder(t *testing.T) {
+	key := session.BuildOpaqueSessionKey("scope-reader")
+	base := memory.SessionMeta{
+		Key:              key,
+		ClientSessionIDs: []string{"browser-1"},
+		UpdatedAt:        time.Now(),
+	}
+	base.Scope = json.RawMessage(
+		`{"version":2,"agent_id":"main","channel":"mintclaw","client_session_id":"browser-1"}`,
+	)
+	if refs := sessionRefsFromMeta(base); len(refs) != 1 || refs[0].ID != "browser-1" || refs[0].Key != key {
+		t.Fatalf("current scope refs = %+v", refs)
+	}
+
+	base.Scope = json.RawMessage(
+		`{"version":1,"version":2,"agent_id":"main","channel":"mintclaw","client_session_id":"browser-1"}`,
+	)
+	if refs := sessionRefsFromMeta(base); len(refs) != 0 {
+		t.Fatalf("ambiguous scope refs = %+v, want none", refs)
+	}
+}
+
 func assertVisibleToolCallMessage(
 	t *testing.T,
 	msg sessionChatMessage,
