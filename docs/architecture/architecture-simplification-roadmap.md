@@ -542,6 +542,24 @@ checks still passed. This live drift is expected and is not a converter error:
 cohort counts are evidence, not hard-coded acceptance rules. The stopped-state
 manifest, after the source-stability check passes, is the cutover authority.
 
+The subsequent archive-framing audit found one scope-v1 archive whose metadata
+records 1,297 messages while its JSONL contains 1,299 correctly framed, valid
+JSON records. Because this cohort is never read by the new runtime, guessing
+which two records to discard or rewriting its historical metadata would add an
+unsafe repair policy. The converter therefore rejects every retained count
+mismatch and every missing positive-count history, but preserves archived
+histories byte-for-byte and records each archived metadata/physical count
+divergence explicitly in the manifest and command result. The full stopped-state
+backup remains the rollback authority.
+
+The review-fix rehearsal completed over the full live corpus with 745 retained
+metadata documents, 596 retained histories, 2,828 archived metadata documents,
+636 archived histories, and 4,805 emitted files. It reported exactly the one
+known archived count divergence above. The retained aliases, nested tool-call,
+archive-digest, source-path disjointness, and file-coverage checks all remained
+at zero failures. This remains rehearsal evidence only; writers were not
+stopped and production state was not changed.
+
 No production state was changed during this audit. Before a source release at
 or after `e60b8e26` is installed, a newly authorized stopped-state operation
 must back up the exact R1 binaries and full state, archive the non-current

@@ -54,11 +54,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	_, err = fmt.Fprintf(
 		stdout,
-		"prepared %d current metadata documents and %d histories; archived %d metadata documents and %d histories; manifest: %s\n",
+		"prepared %d current metadata documents and %d histories; archived %d metadata documents and %d histories; archived count mismatches: %d; manifest: %s\n",
 		manifest.Totals.Retained.Metadata,
 		manifest.Totals.Retained.Histories,
 		manifest.Totals.Archived.Metadata,
 		manifest.Totals.Archived.Histories,
+		len(manifest.ArchivedHistoryCountMismatches),
 		manifestPath(outputRoot),
 	)
 	return err

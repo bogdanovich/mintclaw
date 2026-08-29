@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	workspaceutil "github.com/bogdanovich/mintclaw/pkg/workspace"
 )
 
 const cutoverManifestVersion = 1
@@ -88,12 +89,19 @@ type cutoverTotals struct {
 	MessagesValidated    int          `json:"messages_validated"`
 }
 
+type archivedHistoryCountMismatch struct {
+	Path           string `json:"path"`
+	MetadataCount  int    `json:"metadata_count"`
+	FramedMessages int    `json:"framed_messages"`
+}
+
 type cutoverManifest struct {
-	Version     int            `json:"version"`
-	Configs     []fileDigest   `json:"configs"`
-	SessionDirs []string       `json:"session_dirs"`
-	Totals      cutoverTotals  `json:"totals"`
-	Files       []manifestFile `json:"files"`
+	Version                        int                            `json:"version"`
+	Configs                        []fileDigest                   `json:"configs"`
+	SessionDirs                    []string                       `json:"session_dirs"`
+	Totals                         cutoverTotals                  `json:"totals"`
+	ArchivedHistoryCountMismatches []archivedHistoryCountMismatch `json:"archived_history_count_mismatches,omitempty"`
+	Files                          []manifestFile                 `json:"files"`
 }
 
 type metadataInspection struct {
@@ -255,10 +263,7 @@ func inventoryConfigs(options convertOptions) (cutoverManifest, []string, error)
 		}
 		manifest.Configs = append(manifest.Configs, digestRecord(relConfig, data))
 		for index, agent := range cfg.Agents.List {
-			workspace := strings.TrimSpace(agent.Workspace)
-			if workspace == "" {
-				workspace = strings.TrimSpace(cfg.Agents.Defaults.Workspace)
-			}
+			workspace := workspaceutil.ResolveAgentPath(&agent, &cfg.Agents.Defaults)
 			if !filepath.IsAbs(workspace) {
 				return cutoverManifest{}, nil, fmt.Errorf(
 					"config %q agent %d workspace %q is not absolute",
@@ -386,9 +391,10 @@ func convertSessionDir(sourceRoot, stageRoot, sessionDir string, manifest *cutov
 
 		historyPath, hasHistory := histories[stem]
 		if !hasHistory {
-			if inspection.retained && inspection.meta.Count != 0 {
+			if inspection.meta.Count != 0 {
 				return fmt.Errorf(
-					"retained metadata %q counts %d messages but has no history",
+					"%s metadata %q counts %d messages but has no history",
+					cohort,
 					metaPath,
 					inspection.meta.Count,
 				)
@@ -400,28 +406,50 @@ func convertSessionDir(sourceRoot, stageRoot, sessionDir string, manifest *cutov
 			return fmt.Errorf("read history %q: %w", historyPath, readHistoryErr)
 		}
 		historyOutput := historyData
+		var historyMessages int
 		if inspection.retained {
 			converted, convertErr := convertHistory(historyData)
 			if convertErr != nil {
 				return fmt.Errorf("convert history %q: %w", historyPath, convertErr)
 			}
-			if converted.messages != inspection.meta.Count {
-				return fmt.Errorf(
-					"retained history %q has %d messages; metadata records %d",
-					historyPath,
-					converted.messages,
-					inspection.meta.Count,
-				)
-			}
 			historyOutput = converted.output
+			historyMessages = converted.messages
 			manifest.Totals.Retained.Histories++
 			manifest.Totals.Retained.HistoryBytes += int64(len(historyData))
 			manifest.Totals.ToolCallsFlattened += converted.toolCalls
 			manifest.Totals.GoogleCasesFlattened += converted.googleCases
 			manifest.Totals.MessagesValidated += converted.messages
 		} else {
+			framedMessages, framingErr := scanHistoryRecords(historyData, nil)
+			if framingErr != nil {
+				return fmt.Errorf("inspect archived history %q: %w", historyPath, framingErr)
+			}
+			historyMessages = framedMessages
 			manifest.Totals.Archived.Histories++
 			manifest.Totals.Archived.HistoryBytes += int64(len(historyData))
+		}
+		if historyMessages != inspection.meta.Count && inspection.retained {
+			return fmt.Errorf(
+				"%s history %q has %d messages; metadata records %d",
+				cohort,
+				historyPath,
+				historyMessages,
+				inspection.meta.Count,
+			)
+		}
+		if historyMessages != inspection.meta.Count {
+			rel, relativeErr := relativeWithin(sourceRoot, historyPath)
+			if relativeErr != nil {
+				return relativeErr
+			}
+			manifest.ArchivedHistoryCountMismatches = append(
+				manifest.ArchivedHistoryCountMismatches,
+				archivedHistoryCountMismatch{
+					Path:           filepath.ToSlash(rel),
+					MetadataCount:  inspection.meta.Count,
+					FramedMessages: historyMessages,
+				},
+			)
 		}
 		if emitErr := emitFile(
 			sourceRoot,
@@ -464,6 +492,10 @@ func inspectMetadata(data []byte, filename string) (metadataInspection, error) {
 	if filename != sanitizeSessionKey(meta.Key)+".meta.json" {
 		return metadataInspection{}, fmt.Errorf("metadata.key %q does not match its filename", meta.Key)
 	}
+	if meta.HistoryDirty || meta.HistoryHasPrevious || meta.HistoryPreviousCount != 0 ||
+		meta.HistoryPreviousSkip != 0 || meta.HistoryTargetDigest != "" {
+		return metadataInspection{}, errors.New("metadata contains unfinished history mutation state")
+	}
 
 	scopeVersion, hasScopeVersion, inspectScopeErr := inspectScopeVersion(meta.Scope)
 	if inspectScopeErr != nil {
@@ -476,7 +508,7 @@ func inspectMetadata(data []byte, filename string) (metadataInspection, error) {
 	}
 	retained := session.IsOpaqueSessionKey(meta.Key) && hasScopeVersion && scopeVersion == session.ScopeVersion
 	if !retained {
-		return metadataInspection{}, nil
+		return metadataInspection{meta: meta}, nil
 	}
 
 	output := data
@@ -488,10 +520,6 @@ func inspectMetadata(data []byte, filename string) (metadataInspection, error) {
 		if _, validateErr := memory.DecodeSessionMeta(output); validateErr != nil {
 			return metadataInspection{}, fmt.Errorf("validate encoded current metadata: %w", validateErr)
 		}
-	}
-	if meta.HistoryDirty || meta.HistoryHasPrevious || meta.HistoryPreviousCount != 0 ||
-		meta.HistoryPreviousSkip != 0 || meta.HistoryTargetDigest != "" {
-		return metadataInspection{}, errors.New("retained metadata contains unfinished history mutation state")
 	}
 	return metadataInspection{
 		meta:           meta,
@@ -522,37 +550,50 @@ func inspectScopeVersion(raw json.RawMessage) (int, bool, error) {
 
 func convertHistory(data []byte) (historyConversion, error) {
 	conversion := historyConversion{}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 64*1024), memory.MaxJSONLRecordBytes)
-	for scanner.Scan() {
-		line := append([]byte(nil), scanner.Bytes()...)
-		if len(line) == 0 {
-			return historyConversion{}, fmt.Errorf("message %d is blank", conversion.messages+1)
-		}
+	messages, scanErr := scanHistoryRecords(data, func(_ int, line []byte) error {
 		converted, toolCalls, googleCases, convertErr := convertMessage(line)
 		if convertErr != nil {
-			return historyConversion{}, fmt.Errorf("message %d: %w", conversion.messages+1, convertErr)
+			return convertErr
 		}
 		if len(converted) > memory.MaxJSONLRecordBytes {
-			return historyConversion{}, fmt.Errorf(
-				"message %d exceeds %d-byte record limit after conversion",
-				conversion.messages+1,
-				memory.MaxJSONLRecordBytes,
-			)
+			return fmt.Errorf("converted record exceeds %d-byte limit", memory.MaxJSONLRecordBytes)
 		}
 		conversion.output = append(conversion.output, converted...)
 		conversion.output = append(conversion.output, '\n')
-		conversion.messages++
 		conversion.toolCalls += toolCalls
 		conversion.googleCases += googleCases
+		return nil
+	})
+	if scanErr != nil {
+		return historyConversion{}, scanErr
+	}
+	conversion.messages = messages
+	return conversion, nil
+}
+
+func scanHistoryRecords(data []byte, visit func(index int, line []byte) error) (int, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 64*1024), memory.MaxJSONLRecordBytes)
+	messages := 0
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			return 0, fmt.Errorf("message %d is blank", messages+1)
+		}
+		if visit != nil {
+			if visitErr := visit(messages+1, line); visitErr != nil {
+				return 0, fmt.Errorf("message %d: %w", messages+1, visitErr)
+			}
+		}
+		messages++
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
-		return historyConversion{}, fmt.Errorf("scan JSONL: %w", scanErr)
+		return 0, fmt.Errorf("scan JSONL: %w", scanErr)
 	}
 	if len(data) > 0 && !bytes.HasSuffix(data, []byte{'\n'}) {
-		return historyConversion{}, errors.New("history is missing its final newline")
+		return 0, errors.New("history is missing its final newline")
 	}
-	return conversion, nil
+	return messages, nil
 }
 
 func convertMessage(line []byte) ([]byte, int, int, error) {
@@ -858,6 +899,7 @@ func validateManifest(sourceRoot, stageRoot string, sessionDirs []string, manife
 		}
 	}
 	seen := make(map[string]struct{}, len(manifest.Files))
+	archivedHistories := make(map[string]struct{}, manifest.Totals.Archived.Histories)
 	for _, file := range manifest.Files {
 		identity := file.Cohort + "/" + file.Path
 		if _, duplicate := seen[file.Path]; duplicate {
@@ -881,6 +923,22 @@ func validateManifest(sourceRoot, stageRoot string, sessionDirs []string, manife
 		if file.Cohort == cohortArchived && file.SourceSHA256 != file.OutputSHA256 {
 			return fmt.Errorf("archive output %q is not an exact copy", identity)
 		}
+		if file.Cohort == cohortArchived && file.Kind == fileHistory {
+			archivedHistories[file.Path] = struct{}{}
+		}
+	}
+	mismatchPaths := make(map[string]struct{}, len(manifest.ArchivedHistoryCountMismatches))
+	for _, mismatch := range manifest.ArchivedHistoryCountMismatches {
+		if mismatch.MetadataCount == mismatch.FramedMessages {
+			return fmt.Errorf("archived count mismatch %q records equal counts", mismatch.Path)
+		}
+		if _, ok := archivedHistories[mismatch.Path]; !ok {
+			return fmt.Errorf("archived count mismatch %q does not name an archived history", mismatch.Path)
+		}
+		if _, duplicate := mismatchPaths[mismatch.Path]; duplicate {
+			return fmt.Errorf("manifest contains duplicate archived count mismatch %q", mismatch.Path)
+		}
+		mismatchPaths[mismatch.Path] = struct{}{}
 	}
 	metadataTotal := manifest.Totals.Retained.Metadata + manifest.Totals.Archived.Metadata
 	historyTotal := manifest.Totals.Retained.Histories + manifest.Totals.Archived.Histories

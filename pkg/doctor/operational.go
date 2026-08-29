@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
-	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/tasks"
+	workspaceutil "github.com/bogdanovich/mintclaw/pkg/workspace"
 )
 
 const (
@@ -92,30 +92,20 @@ func normalizeOperationalThresholds(opts Options) operationalThresholds {
 func configuredWorkspaces(cfg *config.Config) []string {
 	seen := map[string]struct{}{}
 	normalize := func(value string) string {
-		value = expandWorkspaceHome(strings.TrimSpace(value))
+		value = strings.TrimSpace(value)
 		value = filepath.Clean(value)
 		if value == "" || value == "." {
 			return ""
 		}
 		return value
 	}
-	defaultWorkspace := normalize(cfg.WorkspacePath())
+	defaultWorkspace := normalize(workspaceutil.ResolveAgentPath(nil, &cfg.Agents.Defaults))
 	if defaultWorkspace != "" {
 		seen[defaultWorkspace] = struct{}{}
 	}
 	others := make([]string, 0, len(cfg.Agents.List))
 	for _, agent := range cfg.Agents.List {
-		var workspace string
-		if strings.TrimSpace(agent.Workspace) != "" {
-			workspace = normalize(agent.Workspace)
-		} else if !agent.Default && routing.NormalizeAgentID(agent.ID) != "" &&
-			routing.NormalizeAgentID(agent.ID) != "main" {
-			workspace = normalize(
-				filepath.Join(defaultWorkspace, "..", "workspace-"+routing.NormalizeAgentID(agent.ID)),
-			)
-		} else {
-			workspace = defaultWorkspace
-		}
+		workspace := normalize(workspaceutil.ResolveAgentPath(&agent, &cfg.Agents.Defaults))
 		if workspace == "" {
 			continue
 		}
@@ -131,20 +121,6 @@ func configuredWorkspaces(cfg *config.Config) []string {
 	}
 	result = append(result, others...)
 	return result
-}
-
-func expandWorkspaceHome(path string) string {
-	if path == "" || path[0] != '~' {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if len(path) > 1 && path[1] == '/' {
-		return filepath.Join(home, path[2:])
-	}
-	return home
 }
 
 func auditTaskState(workspace, label string, thresholds operationalThresholds) []Finding {

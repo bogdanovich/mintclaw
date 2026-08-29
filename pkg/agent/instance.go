@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
-	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
@@ -23,6 +22,7 @@ import (
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
+	workspaceutil "github.com/bogdanovich/mintclaw/pkg/workspace"
 )
 
 // AgentInstance represents a fully configured agent with its own workspace,
@@ -215,7 +215,7 @@ func newAgentInstance(
 		isolation.Configure(cfg)
 	}
 
-	workspace := resolveAgentWorkspace(agentCfg, defaults)
+	workspace := workspaceutil.ResolveAgentPath(agentCfg, defaults)
 	if layout != nil {
 		if err := layout.Validate(); err != nil {
 			return nil, fmt.Errorf("construct agent: invalid coding layout: %w", err)
@@ -796,21 +796,6 @@ func resolvePrimaryProviderForAgent(
 	}
 	providerOwnership.trackCreated(resolvedProvider)
 	return resolvedProvider, &selection, true
-}
-
-// resolveAgentWorkspace determines the workspace directory for an agent.
-func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
-	if agentCfg != nil && strings.TrimSpace(agentCfg.Workspace) != "" {
-		return fileutil.ExpandHome(strings.TrimSpace(agentCfg.Workspace))
-	}
-	// Use the configured default workspace (respects MINTCLAW_HOME)
-	if agentCfg == nil || agentCfg.Default || agentCfg.ID == "" ||
-		routing.NormalizeAgentID(agentCfg.ID) == "main" {
-		return fileutil.ExpandHome(defaults.Workspace)
-	}
-	// For named agents without explicit workspace, use default workspace with agent ID suffix
-	id := routing.NormalizeAgentID(agentCfg.ID)
-	return filepath.Join(fileutil.ExpandHome(defaults.Workspace), "..", "workspace-"+id)
 }
 
 // resolveAgentModel resolves the primary model for an agent.

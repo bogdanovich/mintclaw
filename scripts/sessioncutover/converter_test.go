@@ -135,6 +135,54 @@ func TestConvertSessionsSeparatesAndValidatesCorpus(t *testing.T) {
 	}
 }
 
+func TestConvertSessionsUsesRuntimeWorkspaceResolution(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	defaultWorkspace := filepath.Join(root, "workspace")
+	namedWorkspace := filepath.Join(root, "workspace-coding")
+	for _, path := range []string{defaultWorkspace, namedWorkspace} {
+		if err := os.MkdirAll(filepath.Join(path, "sessions"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = "~/workspace"
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "main", Default: true},
+		{ID: "Coding"},
+	}
+	configPath := writeTestConfigValue(t, root, cfg)
+	for index, workspace := range []string{defaultWorkspace, namedWorkspace} {
+		key := session.BuildOpaqueSessionKey("workspace-resolution-" + string(rune('a'+index)))
+		writeTestFile(
+			t,
+			filepath.Join(workspace, "sessions", sanitizeSessionKey(key)+".meta.json"),
+			testMetadata(t, key, testCurrentScope(), 0, false),
+		)
+	}
+
+	manifest, err := convertSessions(convertOptions{
+		SourceRoot:  root,
+		OutputRoot:  filepath.Join(root, "candidate"),
+		ConfigPaths: []string{configPath},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"workspace-coding/sessions", "workspace/sessions"}
+	if len(manifest.SessionDirs) != len(want) {
+		t.Fatalf("session dirs = %v, want %v", manifest.SessionDirs, want)
+	}
+	for index := range want {
+		if manifest.SessionDirs[index] != want[index] {
+			t.Fatalf("session dirs = %v, want %v", manifest.SessionDirs, want)
+		}
+	}
+	if manifest.Totals.Retained.Metadata != 2 {
+		t.Fatalf("retained metadata = %d, want 2", manifest.Totals.Retained.Metadata)
+	}
+}
+
 func TestConvertMessageRejectsAmbiguousOldToolCalls(t *testing.T) {
 	current := []byte(
 		`{"role":"assistant","content":"","tool_calls":[` +
@@ -201,6 +249,61 @@ func TestConvertSessionsRejectsRetainedCountMismatch(t *testing.T) {
 	}
 }
 
+func TestConvertSessionsRecordsArchivedCountMismatch(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	sessions := filepath.Join(workspace, "sessions")
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := writeTestConfig(t, root, workspace)
+	key := "agent:main:old"
+	metaPath := filepath.Join(sessions, sanitizeSessionKey(key)+".meta.json")
+	historyPath := filepath.Join(sessions, sanitizeSessionKey(key)+".jsonl")
+	writeTestFile(t, metaPath, testMetadata(t, key, json.RawMessage(`{"version":1}`), 1, false))
+	options := convertOptions{
+		SourceRoot:  root,
+		OutputRoot:  filepath.Join(root, "candidate"),
+		ConfigPaths: []string{configPath},
+	}
+	if _, err := convertSessions(options); err == nil ||
+		!strings.Contains(err.Error(), "archived metadata") || !strings.Contains(err.Error(), "has no history") {
+		t.Fatalf("missing archived history error = %v", err)
+	}
+	history := []byte("not-json\nalso-not-json\n")
+	writeTestFile(t, historyPath, history)
+	manifest, err := convertSessions(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.ArchivedHistoryCountMismatches) != 1 {
+		t.Fatalf("archived count mismatches = %+v", manifest.ArchivedHistoryCountMismatches)
+	}
+	mismatch := manifest.ArchivedHistoryCountMismatches[0]
+	relHistory, err := filepath.Rel(root, historyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mismatch.Path != filepath.ToSlash(relHistory) || mismatch.MetadataCount != 1 || mismatch.FramedMessages != 2 {
+		t.Fatalf("archived count mismatch = %+v", mismatch)
+	}
+	var persisted cutoverManifest
+	if err := json.Unmarshal(
+		readTestFile(t, filepath.Join(options.OutputRoot, "manifest.json")),
+		&persisted,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.ArchivedHistoryCountMismatches) != 1 ||
+		persisted.ArchivedHistoryCountMismatches[0] != mismatch {
+		t.Fatalf("persisted archived count mismatches = %+v", persisted.ArchivedHistoryCountMismatches)
+	}
+	archived := readTestFile(t, filepath.Join(options.OutputRoot, cohortArchived, relHistory))
+	if !bytes.Equal(archived, history) {
+		t.Fatal("archived count-mismatched history is not an exact copy")
+	}
+}
+
 func TestConvertHistoryRejectsNonCanonicalFraming(t *testing.T) {
 	if _, err := convertHistory([]byte("{\"role\":\"user\",\"content\":\"hello\"}")); err == nil {
 		t.Fatal("expected missing final newline error")
@@ -240,6 +343,23 @@ func TestInspectMetadataRejectsUnknownAndDuplicateFields(t *testing.T) {
 	if _, err := inspectMetadata(dirty, sanitizeSessionKey(key)+".meta.json"); err == nil ||
 		!strings.Contains(err.Error(), "unfinished history mutation") {
 		t.Fatalf("dirty metadata error = %v", err)
+	}
+
+	archivedKey := "agent:main:old"
+	archived := testMetadata(t, archivedKey, json.RawMessage(`{"version":1}`), 0, false)
+	if err := json.Unmarshal(archived, &object); err != nil {
+		t.Fatal(err)
+	}
+	object["history_dirty"] = json.RawMessage("true")
+	archivedDirty, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectMetadata(
+		archivedDirty,
+		sanitizeSessionKey(archivedKey)+".meta.json",
+	); err == nil || !strings.Contains(err.Error(), "unfinished history mutation") {
+		t.Fatalf("archived dirty metadata error = %v", err)
 	}
 }
 
@@ -290,6 +410,11 @@ func writeTestConfig(t *testing.T, root, workspace string) string {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Agents.List = []config.AgentConfig{{ID: "main", Default: true}}
+	return writeTestConfigValue(t, root, cfg)
+}
+
+func writeTestConfigValue(t *testing.T, root string, cfg *config.Config) string {
+	t.Helper()
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		t.Fatal(err)

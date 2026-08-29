@@ -18,11 +18,14 @@ paired `*.jsonl` files in `sessions/`:
   current decoder before the output is published.
 
 The converter rejects orphan histories, filename/key mismatches, unknown or
-duplicate metadata fields, unfinished history mutations, count mismatches,
-non-canonical JSONL framing, malformed old tool calls, ambiguous signatures,
-source changes during the pass, symbolic-link inputs, and output overlap. It
-does not infer identities, upgrade scope versions, repair messages, or
-translate archived state.
+duplicate metadata fields, unfinished history mutations, retained count
+mismatches, missing positive-count histories, non-canonical JSONL framing,
+malformed old tool calls, ambiguous signatures, source changes during the pass,
+symbolic-link inputs, and output overlap. Archived histories are framing-checked
+without decoding their historical payloads. Any archived metadata/physical
+count divergence is preserved byte-for-byte and recorded explicitly in the
+manifest. The converter does not infer identities, upgrade scope versions,
+repair messages, or translate archived state.
 
 Run it only with an explicit source root, a new output path, and every active
 profile configuration:
@@ -36,11 +39,11 @@ go run ./scripts/sessioncutover \
 ```
 
 Repeat `--config` for all active profiles. `manifest.json` records config
-digests, the deduplicated session directories, cohort totals, and source and
-output SHA-256 for every emitted session file. Files unrelated to the normal
-session metadata/JSONL pair, including Seahorse databases and manual backup
-directories, remain outside this tool and are covered by the full deployment
-backup.
+digests, the deduplicated session directories, cohort totals, archived count
+divergences, and source and output SHA-256 for every emitted session file. Files
+unrelated to the normal session metadata/JSONL pair, including Seahorse
+databases and manual backup directories, remain outside this tool and are
+covered by the full deployment backup.
 
 A live copy-only run is useful as a rehearsal, but only a pass made after all
 writers stop is eligible for deployment. The converter and its tests must be
