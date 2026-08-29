@@ -65,6 +65,32 @@ type SessionMeta struct {
 	HistoryTargetDigest  string `json:"history_target_digest,omitempty"`
 }
 
+var sessionMetaJSONFields = map[string]struct{}{
+	"key":                    {},
+	"summary":                {},
+	"skip":                   {},
+	"count":                  {},
+	"created_at":             {},
+	"updated_at":             {},
+	"scope":                  {},
+	"client_session_ids":     {},
+	"history_revision":       {},
+	"history_dirty":          {},
+	"history_has_previous":   {},
+	"history_previous_count": {},
+	"history_previous_skip":  {},
+	"history_target_digest":  {},
+}
+
+var requiredSessionMetaJSONFields = [...]string{
+	"key",
+	"summary",
+	"skip",
+	"count",
+	"created_at",
+	"updated_at",
+}
+
 // JSONLStore implements Store using append-only JSONL files.
 //
 // Each session is stored as two files:
@@ -202,7 +228,7 @@ func (s *JSONLStore) readMeta(key string) (SessionMeta, error) {
 	if err != nil {
 		return SessionMeta{}, fmt.Errorf("memory: read meta: %w", err)
 	}
-	meta, err := decodeSessionMeta(data)
+	meta, err := DecodeSessionMeta(data)
 	if err != nil {
 		return SessionMeta{}, fmt.Errorf("memory: decode meta: %w", err)
 	}
@@ -212,20 +238,97 @@ func (s *JSONLStore) readMeta(key string) (SessionMeta, error) {
 	return meta, nil
 }
 
-func decodeSessionMeta(data []byte) (SessionMeta, error) {
-	var meta SessionMeta
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&meta); err != nil {
+// DecodeSessionMeta decodes one document written by the current metadata
+// writer and rejects incomplete, ambiguous, or semantically invalid input.
+func DecodeSessionMeta(data []byte) (SessionMeta, error) {
+	if err := validateSessionMetaJSON(data); err != nil {
 		return SessionMeta{}, err
 	}
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return SessionMeta{}, errors.New("trailing JSON value")
-		}
-		return SessionMeta{}, fmt.Errorf("trailing data: %w", err)
+	var meta SessionMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return SessionMeta{}, err
+	}
+	if err := validateSessionMeta(meta.Key, meta); err != nil {
+		return SessionMeta{}, err
 	}
 	return meta, nil
+}
+
+func validateSessionMetaJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('{') {
+		return errors.New("session metadata must be a JSON object")
+	}
+
+	seen := make(map[string]struct{}, len(sessionMetaJSONFields))
+	for decoder.More() {
+		keyToken, tokenErr := decoder.Token()
+		if tokenErr != nil {
+			return tokenErr
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return errors.New("session metadata has a non-string field name")
+		}
+		if _, allowed := sessionMetaJSONFields[key]; !allowed {
+			return fmt.Errorf("session metadata contains unknown field %q", key)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("session metadata contains duplicate field %q", key)
+		}
+		seen[key] = struct{}{}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+		value = bytes.TrimSpace(value)
+		if bytes.Equal(value, []byte("null")) {
+			return fmt.Errorf("session metadata contains null at metadata.%s", key)
+		}
+		switch key {
+		case "client_session_ids":
+			if err := validateSessionMetaStringArray(value); err != nil {
+				return err
+			}
+		case "scope":
+			var object map[string]json.RawMessage
+			if err := json.Unmarshal(value, &object); err != nil || object == nil {
+				return errors.New("session metadata scope must be a JSON object")
+			}
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	for _, field := range requiredSessionMetaJSONFields {
+		if _, present := seen[field]; !present {
+			return fmt.Errorf("session metadata is missing required field %q", field)
+		}
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("trailing JSON value")
+		}
+		return fmt.Errorf("trailing data: %w", err)
+	}
+	return nil
+}
+
+func validateSessionMetaStringArray(raw json.RawMessage) error {
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+		return errors.New("session metadata client_session_ids must be an array")
+	}
+	for index, value := range values {
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("session metadata contains null at metadata.client_session_ids[%d]", index)
+		}
+	}
+	return nil
 }
 
 func validateSessionMeta(key string, meta SessionMeta) error {
@@ -263,6 +366,9 @@ func (s *JSONLStore) writeMeta(key string, meta SessionMeta) error {
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("memory: encode meta: %w", err)
+	}
+	if _, err := DecodeSessionMeta(data); err != nil {
+		return fmt.Errorf("memory: validate encoded meta: %w", err)
 	}
 	return fileutil.WriteFileAtomic(s.metaPath(key), data, 0o644)
 }
@@ -1360,8 +1466,8 @@ func (s *JSONLStore) ListSessions() []string {
 		if err != nil {
 			continue
 		}
-		meta, err := decodeSessionMeta(data)
-		if err != nil || validateSessionMeta(meta.Key, meta) != nil {
+		meta, err := DecodeSessionMeta(data)
+		if err != nil {
 			continue
 		}
 		if entry.Name() != sanitizeKey(meta.Key)+".meta.json" {

@@ -33,10 +33,78 @@ func TestJSONLStoreRequiresCurrentSessionMetadata(t *testing.T) {
 	}{
 		{name: "null document", raw: `null`},
 		{name: "missing key", raw: `{"summary":"","skip":0,"count":0}`},
-		{name: "mismatched key", raw: `{"key":"other","summary":"","skip":0,"count":0}`},
-		{name: "removed aliases", raw: `{"key":"turn","summary":"","skip":0,"count":0,"aliases":[]}`},
-		{name: "negative count", raw: `{"key":"turn","summary":"","skip":0,"count":-1}`},
-		{name: "skip beyond count", raw: `{"key":"turn","summary":"","skip":2,"count":1}`},
+		{name: "missing summary", raw: `{
+  "key":"turn","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "missing created timestamp", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,"updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "mismatched key", raw: `{
+  "key":"other","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "removed aliases", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z","aliases":[]
+}`},
+		{name: "duplicate count", raw: `{
+  "key":"turn","summary":"","skip":0,"count":1,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "case variant", raw: `{
+  "key":"turn","summary":"","skip":0,"Count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "null summary", raw: `{
+  "key":"turn","summary":null,"skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "null count", raw: `{
+  "key":"turn","summary":"","skip":0,"count":null,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "null timestamp", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":null,"updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "null scope", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z","scope":null
+}`},
+		{name: "null client sessions", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "client_session_ids":null
+}`},
+		{name: "null client session", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "client_session_ids":[null]
+}`},
+		{name: "null history revision", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "history_revision":null
+}`},
+		{name: "null history flag", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "history_dirty":null
+}`},
+		{name: "null history digest", raw: `{
+  "key":"turn","summary":"","skip":0,"count":0,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z",
+  "history_target_digest":null
+}`},
+		{name: "negative count", raw: `{
+  "key":"turn","summary":"","skip":0,"count":-1,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
+		{name: "skip beyond count", raw: `{
+  "key":"turn","summary":"","skip":2,"count":1,
+  "created_at":"2026-08-28T12:00:00Z","updated_at":"2026-08-28T12:00:00Z"
+}`},
 		{name: "trailing value", raw: valid + ` {}`},
 	}
 	for _, tt := range tests {
@@ -893,6 +961,67 @@ func TestSessionMetaScopePersists(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotScope, wantScope) {
 		t.Fatalf("meta.Scope = %#v, want %#v", gotScope, wantScope)
+	}
+}
+
+func TestUpsertSessionMetaRejectsNonCurrentScopeWithoutMutation(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		name := "new"
+		if existing {
+			name = "existing"
+		}
+		t.Run(name, func(t *testing.T) {
+			store := newTestStore(t)
+			const sessionKey = "canonical"
+			metaPath := store.metaPath(sessionKey)
+			var before []byte
+			if existing {
+				if err := store.UpsertSessionMeta(
+					t.Context(),
+					sessionKey,
+					json.RawMessage(`{"version":2,"agent_id":"main"}`),
+					"browser-1",
+				); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				before, err = os.ReadFile(metaPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			err := store.UpsertSessionMeta(
+				t.Context(),
+				sessionKey,
+				json.RawMessage("null"),
+				"browser-2",
+			)
+			if err == nil || !strings.Contains(err.Error(), "null at metadata.scope") {
+				t.Fatalf("UpsertSessionMeta(null scope) error = %v", err)
+			}
+			if !existing {
+				if _, err := os.Stat(metaPath); !os.IsNotExist(err) {
+					t.Fatalf("invalid new metadata was persisted: %v", err)
+				}
+				return
+			}
+
+			after, err := os.ReadFile(metaPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatalf("invalid update replaced existing metadata:\n%s", after)
+			}
+			meta, err := store.GetSessionMeta(t.Context(), sessionKey)
+			if err != nil {
+				t.Fatalf("GetSessionMeta() after rejected update: %v", err)
+			}
+			if len(meta.ClientSessionIDs) != 1 || meta.ClientSessionIDs[0] != "browser-1" {
+				t.Fatalf("ClientSessionIDs = %v, want unchanged browser-1", meta.ClientSessionIDs)
+			}
+		})
 	}
 }
 

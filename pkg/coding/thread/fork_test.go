@@ -754,6 +754,53 @@ func TestForkThreadRejectsDirtyPinnedHistoryWithoutRecoveringIt(t *testing.T) {
 	}
 }
 
+func TestForkThreadRejectsNonCurrentPinnedMetadataBeforeProvision(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
+	threadRoot, err := store.ThreadRoot(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaPath := filepath.Join(threadRoot, "sessions", "coding_"+source.ThreadID+".meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	delete(document, "created_at")
+	nonCurrentData, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, nonCurrentData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	if _, _, err := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	}); err == nil || !strings.Contains(err.Error(), `missing required field "created_at"`) {
+		t.Fatalf("non-current metadata error = %v", err)
+	}
+	if _, err := store.Load(targetID); err == nil {
+		t.Fatal("non-current source metadata provisioned a child thread")
+	}
+	after, err := os.ReadFile(metaPath)
+	if err != nil || !bytes.Equal(after, nonCurrentData) {
+		t.Fatalf("fork mutated non-current metadata: equal=%t error=%v", bytes.Equal(after, nonCurrentData), err)
+	}
+}
+
 func TestReadPinnedForkFileSurvivesPathReplacement(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "source.jsonl")

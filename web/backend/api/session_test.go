@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -1869,6 +1870,86 @@ func TestHandleDeleteSession_JSONLStorage(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("expected %s to be removed, stat err = %v", path, err)
 		}
+	}
+}
+
+func TestSessionHandlersRejectNonCurrentMetadata(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	dir := sessionsTestDir(t, configPath)
+	store, err := memory.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore() error = %v", err)
+	}
+
+	const sessionID = "non-current-meta"
+	sessionKey := newMintClawTestSession(t, store, sessionID)
+	if err := store.AddFullMessage(t.Context(), sessionKey, providers.Message{
+		Role: "user", Content: "must remain hidden",
+	}); err != nil {
+		t.Fatalf("AddFullMessage() error = %v", err)
+	}
+	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
+	metaPath := base + ".meta.json"
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("ReadFile(meta) error = %v", err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatalf("Unmarshal(meta) error = %v", err)
+	}
+	delete(document, "created_at")
+	nonCurrentData, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("Marshal(non-current meta) error = %v", err)
+	}
+	if err := os.WriteFile(metaPath, nonCurrentData, 0o644); err != nil {
+		t.Fatalf("WriteFile(non-current meta) error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/api/sessions", nil))
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body=%s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	var items []sessionListItem
+	if err := json.Unmarshal(listRec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("Unmarshal(list) error = %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("len(items) = %d, want 0", len(items))
+	}
+
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, "/api/sessions/"+sessionID, nil))
+	if getRec.Code != http.StatusNotFound {
+		t.Fatalf("get status = %d, want %d, body=%s", getRec.Code, http.StatusNotFound, getRec.Body.String())
+	}
+
+	deleteRec := httptest.NewRecorder()
+	mux.ServeHTTP(deleteRec, httptest.NewRequest(http.MethodDelete, "/api/sessions/"+sessionID, nil))
+	if deleteRec.Code != http.StatusNotFound {
+		t.Fatalf(
+			"delete status = %d, want %d, body=%s",
+			deleteRec.Code,
+			http.StatusNotFound,
+			deleteRec.Body.String(),
+		)
+	}
+	for _, path := range []string{base + ".jsonl", metaPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("non-current session file %q was removed: %v", path, err)
+		}
+	}
+	after, err := os.ReadFile(metaPath)
+	if err != nil || !bytes.Equal(after, nonCurrentData) {
+		t.Fatalf("handlers mutated non-current metadata: equal=%t error=%v", bytes.Equal(after, nonCurrentData), err)
 	}
 }
 
