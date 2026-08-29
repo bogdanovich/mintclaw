@@ -46,8 +46,10 @@ func TestResumePickerAndExplicitSelectionOpenResumedInteractiveController(t *tes
 		args          []string
 		pickerRuns    int
 		initialPrompt string
+		search        string
 	}{
 		{name: "picker", pickerRuns: 1},
+		{name: "historical search picker", args: []string{"--search", "parser"}, pickerRuns: 1, search: "parser"},
 		{name: "explicit with prompt", args: []string{created.ThreadID, "--prompt", "continue work"}, initialPrompt: "continue work"},
 		{name: "last", args: []string{"--last"}},
 	} {
@@ -69,7 +71,7 @@ func TestResumePickerAndExplicitSelectionOpenResumedInteractiveController(t *tes
 				options tui.PickerOptions,
 			) (tui.PickerSelection, error) {
 				pickerRuns++
-				if !options.AlternateScreen || options.AllProjects {
+				if !options.AlternateScreen || options.AllProjects || options.Search != testCase.search {
 					t.Fatalf("picker options = %+v", options)
 				}
 				return tui.PickerSelection{ThreadID: created.ThreadID}, nil

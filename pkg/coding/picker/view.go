@@ -36,6 +36,10 @@ type Item struct {
 	ThreadID        string
 	Title           string
 	Preview         string
+	MatchKind       string
+	MatchSnippet    string
+	MatchedAt       time.Time
+	MatchedMessage  int
 	UpdatedAt       time.Time
 	ProjectRoot     string
 	InvocationCWD   string
@@ -54,13 +58,16 @@ type Item struct {
 // Page carries bounded catalog diagnostics without exposing raw
 // corrupt-entry content.
 type Page struct {
-	Items         []Item
-	SkippedTotal  int
-	Scanned       int
-	Matched       int
-	ScanTruncated bool
-	HasMore       bool
-	NextOffset    int
+	Items                 []Item
+	SkippedTotal          int
+	Scanned               int
+	Matched               int
+	ScanTruncated         bool
+	HasMore               bool
+	NextOffset            int
+	ContentThreadsScanned int
+	ContentBytesScanned   int64
+	ContentScanTruncated  bool
 }
 
 // Source keeps terminal code independent of the durable thread catalog,

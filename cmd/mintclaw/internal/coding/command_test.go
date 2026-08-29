@@ -21,6 +21,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
@@ -140,6 +141,103 @@ func TestResumeArchivedViewIsExplicitAndReversible(t *testing.T) {
 	}
 	if _, err := executeCommandError(newResumeCommand(deps), created.ThreadID, "--archived"); err == nil {
 		t.Fatal("explicit thread ID accepted redundant --archived")
+	}
+}
+
+func TestResumeHistoricalSearchIsProjectPrivateAndExplicitlyExpandable(t *testing.T) {
+	home := t.TempDir()
+	currentProject := t.TempDir()
+	foreignProject := t.TempDir()
+	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
+	currentDeps := testDependencies(home, currentProject, &now)
+	foreignDeps := testDependencies(home, foreignProject, &now)
+	var current, foreign commandResult
+	if err := json.Unmarshal(
+		executeCommand(t, newCodeCommand(currentDeps), "neutral current title", "--json"),
+		&current,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(
+		executeCommand(t, newCodeCommand(foreignDeps), "neutral foreign title", "--json"),
+		&foreign,
+	); err != nil {
+		t.Fatal(err)
+	}
+	matchedAt := now.Add(time.Minute)
+	appendHistoryMessage(t, current.StateRoot, current.SessionKey, providers.Message{
+		Role: "assistant", Content: "current transcript-only-needle", CreatedAt: &matchedAt,
+	})
+	appendHistoryMessage(t, foreign.StateRoot, foreign.SessionKey, providers.Message{
+		Role: "assistant", Content: "foreign transcript-only-needle", CreatedAt: &matchedAt,
+	})
+	var scoped listResult
+	if err := json.Unmarshal(executeCommand(
+		t,
+		newResumeCommand(currentDeps),
+		"--search",
+		"transcript-only-needle",
+		"--json",
+	), &scoped); err != nil {
+		t.Fatal(err)
+	}
+	if scoped.AllProjects || scoped.Search != "transcript-only-needle" || len(scoped.SearchMatches) != 1 ||
+		scoped.SearchMatches[0].Metadata.ThreadID != current.ThreadID ||
+		scoped.SearchMatches[0].Kind != thread.HistoricalMatchTranscript ||
+		!scoped.SearchMatches[0].MatchedAt.Equal(matchedAt) {
+		t.Fatalf("scoped historical search = %+v", scoped)
+	}
+	var all listResult
+	if err := json.Unmarshal(executeCommand(
+		t,
+		newResumeCommand(currentDeps),
+		"--search",
+		"transcript-only-needle",
+		"--all",
+		"--json",
+	), &all); err != nil {
+		t.Fatal(err)
+	}
+	if !all.AllProjects || len(all.SearchMatches) != 2 {
+		t.Fatalf("all-project historical search = %+v", all)
+	}
+	human := string(executeCommand(
+		t,
+		newResumeCommand(currentDeps),
+		"--search",
+		"transcript-only-needle",
+	))
+	if !strings.Contains(human, current.ThreadID) || !strings.Contains(human, matchedAt.Format(time.RFC3339Nano)) ||
+		!strings.Contains(human, "transcript:message-2") ||
+		!strings.Contains(human, "current transcript-only-needle") || strings.Contains(human, foreign.ThreadID) {
+		t.Fatalf("human scoped search = %q", human)
+	}
+	metadataHuman := string(executeCommand(t, newResumeCommand(currentDeps), "--search", "neutral current"))
+	if !strings.Contains(metadataHuman, "metadata:title") {
+		t.Fatalf("human metadata search omitted source identity: %q", metadataHuman)
+	}
+	metaPath := filepath.Join(
+		current.StateRoot,
+		"sessions",
+		strings.ReplaceAll(current.SessionKey, ":", "_")+".meta.json",
+	)
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatal(err)
+	}
+	incomplete := string(executeCommand(t, newResumeCommand(currentDeps), "--search", "not-present"))
+	if !strings.Contains(incomplete, "No coding threads match") ||
+		!strings.Contains(incomplete, "Search coverage was incomplete or bounded") {
+		t.Fatalf("incomplete human search omitted coverage warning: %q", incomplete)
+	}
+	for _, args := range [][]string{
+		{"--search", ""},
+		{current.ThreadID, "--search", "needle"},
+		{"--last", "--search", "needle"},
+		{"--search", "needle", "--prompt", "mutate"},
+	} {
+		if _, err := executeCommandError(newResumeCommand(currentDeps), args...); err == nil {
+			t.Fatalf("invalid search options accepted: %v", args)
+		}
 	}
 }
 
@@ -1075,4 +1173,20 @@ func readHistory(t *testing.T, stateRoot, sessionKey string) []string {
 		result[index] = history[index].Content
 	}
 	return result
+}
+
+func appendHistoryMessage(t *testing.T, stateRoot, sessionKey string, message providers.Message) {
+	t.Helper()
+	canonical, err := memory.NewJSONLStore(filepath.Join(stateRoot, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := session.NewJSONLBackend(canonical)
+	if err := backend.AppendTurnMessage(t.Context(), sessionKey, message); err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
 }

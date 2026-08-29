@@ -6,11 +6,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	codingpicker "github.com/bogdanovich/mintclaw/pkg/coding/picker"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 func TestPickerCatalogSourceScopesSearchPagesAndMapsEdgeStates(t *testing.T) {
@@ -25,6 +29,11 @@ func TestPickerCatalogSourceScopesSearchPagesAndMapsEdgeStates(t *testing.T) {
 	first := pickerFixtureThread(t, store, current, "Parser newest", base.Add(3*time.Minute))
 	second := pickerFixtureThread(t, store, current, "Parser older", base.Add(2*time.Minute))
 	foreign := pickerFixtureThread(t, store, other, "Foreign parser", base.Add(time.Minute))
+	transcript := pickerFixtureThread(t, store, current, "Neutral work", base.Add(4*time.Minute))
+	matchedAt := base.Add(-time.Hour)
+	writePickerHistory(t, store, transcript, []providers.Message{{
+		Role: "assistant", Content: "a transcript-only-needle appears here", CreatedAt: &matchedAt,
+	}})
 	threadsRoot := filepath.Join(store.Root(), "threads")
 	if err := os.MkdirAll(filepath.Join(threadsRoot, "corrupt-entry"), 0o700); err != nil {
 		t.Fatal(err)
@@ -33,9 +42,14 @@ func TestPickerCatalogSourceScopesSearchPagesAndMapsEdgeStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	searcher, err := thread.NewHistoricalSearcher(store, thread.HistoricalSearchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	source := &pickerCatalogSource{
 		store:          store,
 		catalog:        catalog,
+		searcher:       searcher,
 		currentProject: current,
 		observeProject: func(_ context.Context, project thread.ProjectIdentity) pickerProjectObservation {
 			if project.ProjectKey == other.ProjectKey {
@@ -77,6 +91,16 @@ func TestPickerCatalogSourceScopesSearchPagesAndMapsEdgeStates(t *testing.T) {
 	if len(all.Items) != 1 || all.Items[0].ThreadID != foreign.ThreadID || all.Items[0].CurrentProject ||
 		all.Items[0].Location != codingpicker.LocationMissing {
 		t.Fatalf("all-project picker page = %+v", all)
+	}
+	historical, err := source.Page(t.Context(), codingpicker.Query{Search: "transcript-only-needle", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(historical.Items) != 1 || historical.Items[0].ThreadID != transcript.ThreadID ||
+		historical.Items[0].MatchKind != string(thread.HistoricalMatchTranscript) ||
+		!historical.Items[0].MatchedAt.Equal(matchedAt) || historical.Items[0].MatchedMessage != 1 ||
+		!strings.Contains(historical.Items[0].MatchSnippet, "transcript-only-needle") {
+		t.Fatalf("historical picker page = %+v", historical)
 	}
 }
 
@@ -203,6 +227,31 @@ func pickerFixtureThread(
 		t.Fatal(err)
 	}
 	return metadata
+}
+
+func writePickerHistory(
+	t *testing.T,
+	store *thread.Store,
+	metadata thread.Metadata,
+	history []providers.Message,
+) {
+	t.Helper()
+	root, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := memory.NewJSONLStore(filepath.Join(root, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := session.NewJSONLBackend(canonical)
+	if err := backend.ReplaceTurnHistory(t.Context(), metadata.SessionKey, history); err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPickerProjectStaleRequiresCompleteAvailableObservation(t *testing.T) {

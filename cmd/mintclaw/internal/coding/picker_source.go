@@ -20,6 +20,7 @@ const (
 type pickerCatalogSource struct {
 	store          *thread.Store
 	catalog        *thread.Catalog
+	searcher       *thread.HistoricalSearcher
 	currentProject thread.ProjectIdentity
 	observeProject func(context.Context, thread.ProjectIdentity) pickerProjectObservation
 	inspectLease   func(string) (thread.LeaseInspection, error)
@@ -43,9 +44,14 @@ func newPickerCatalogSource(
 	if err != nil {
 		return nil, err
 	}
+	searcher, err := thread.NewHistoricalSearcher(store, thread.HistoricalSearchOptions{})
+	if err != nil {
+		return nil, err
+	}
 	source := &pickerCatalogSource{
 		store:          store,
 		catalog:        catalog,
+		searcher:       searcher,
 		currentProject: currentProject,
 		observeProject: observePickerProject,
 	}
@@ -57,27 +63,17 @@ func (s *pickerCatalogSource) Page(
 	ctx context.Context,
 	query codingpicker.Query,
 ) (codingpicker.Page, error) {
-	if s == nil || s.store == nil || s.catalog == nil {
+	if s == nil || s.store == nil || s.catalog == nil || s.searcher == nil {
 		return codingpicker.Page{}, fmt.Errorf("coding resume picker source is unavailable")
 	}
-	catalogQuery := thread.CatalogQuery{
-		All:      query.AllProjects,
-		Archived: query.Archived,
-		Search:   query.Search,
-		Offset:   query.Offset,
-		Limit:    query.Limit,
-	}
-	if !query.AllProjects {
-		catalogQuery.ProjectKey = s.currentProject.ProjectKey
-	}
-	page, err := s.catalog.Query(ctx, catalogQuery)
+	metadataPage, matches, page, err := s.queryPage(ctx, query)
 	if err != nil {
 		return codingpicker.Page{}, err
 	}
-	items := make([]codingpicker.Item, len(page.Threads))
+	items := make([]codingpicker.Item, len(metadataPage))
 	groups := make(map[string][]int)
 	projects := make(map[string]thread.ProjectIdentity)
-	for index, metadata := range page.Threads {
+	for index, metadata := range metadataPage {
 		items[index] = codingpicker.Item{
 			ThreadID:       metadata.ThreadID,
 			Title:          metadata.Title,
@@ -88,6 +84,12 @@ func (s *pickerCatalogSource) Page(
 			Branch:         pickerPersistedBranch(metadata.Project),
 			CurrentProject: metadata.Project.ProjectKey == s.currentProject.ProjectKey,
 			Location:       codingpicker.LocationUnknown,
+		}
+		if len(matches) > index {
+			items[index].MatchKind = string(matches[index].Kind)
+			items[index].MatchSnippet = matches[index].Snippet
+			items[index].MatchedAt = matches[index].MatchedAt
+			items[index].MatchedMessage = matches[index].Message
 		}
 		key := metadata.Project.ProjectKey + "\x00" + metadata.Project.InvocationCWD
 		groups[key] = append(groups[key], index)
@@ -101,7 +103,7 @@ func (s *pickerCatalogSource) Page(
 	for key, indices := range groups {
 		observation := observations[key]
 		for _, index := range indices {
-			metadata := page.Threads[index]
+			metadata := metadataPage[index]
 			items[index].Location = observation.location
 			items[index].RepositoryKnown = observation.repositoryKnown
 			items[index].Dirty = observation.dirty
@@ -125,13 +127,72 @@ func (s *pickerCatalogSource) Page(
 		}
 	}
 	return codingpicker.Page{
-		Items:         items,
-		SkippedTotal:  page.SkippedTotal,
-		Scanned:       page.Scanned,
-		Matched:       page.Matched,
-		ScanTruncated: page.ScanTruncated,
-		HasMore:       page.HasMore,
-		NextOffset:    page.NextOffset,
+		Items:                 items,
+		SkippedTotal:          page.SkippedTotal,
+		Scanned:               page.Scanned,
+		Matched:               page.Matched,
+		ScanTruncated:         page.ScanTruncated,
+		HasMore:               page.HasMore,
+		NextOffset:            page.NextOffset,
+		ContentThreadsScanned: page.ContentThreadsScanned,
+		ContentBytesScanned:   page.ContentBytesScanned,
+		ContentScanTruncated:  page.ContentScanTruncated,
+	}, nil
+}
+
+type pickerSourcePage struct {
+	SkippedTotal          int
+	Scanned               int
+	Matched               int
+	ScanTruncated         bool
+	HasMore               bool
+	NextOffset            int
+	ContentThreadsScanned int
+	ContentBytesScanned   int64
+	ContentScanTruncated  bool
+}
+
+func (s *pickerCatalogSource) queryPage(
+	ctx context.Context,
+	query codingpicker.Query,
+) ([]thread.Metadata, []thread.HistoricalSearchMatch, pickerSourcePage, error) {
+	if query.Search != "" {
+		searchQuery := thread.HistoricalSearchQuery{
+			All: query.AllProjects, Archived: query.Archived, Text: query.Search,
+			Offset: query.Offset, Limit: query.Limit,
+		}
+		if !query.AllProjects {
+			searchQuery.ProjectKey = s.currentProject.ProjectKey
+		}
+		page, err := s.searcher.Query(ctx, searchQuery)
+		if err != nil {
+			return nil, nil, pickerSourcePage{}, err
+		}
+		metadata := make([]thread.Metadata, len(page.Matches))
+		for index := range page.Matches {
+			metadata[index] = page.Matches[index].Metadata
+		}
+		return metadata, page.Matches, pickerSourcePage{
+			SkippedTotal: page.SkippedTotal, Scanned: page.Scanned, Matched: page.Matched,
+			ScanTruncated: page.ScanTruncated, HasMore: page.HasMore, NextOffset: page.NextOffset,
+			ContentThreadsScanned: page.ContentThreadsScanned,
+			ContentBytesScanned:   page.ContentBytesScanned,
+			ContentScanTruncated:  page.ContentScanTruncated,
+		}, nil
+	}
+	catalogQuery := thread.CatalogQuery{
+		All: query.AllProjects, Archived: query.Archived, Offset: query.Offset, Limit: query.Limit,
+	}
+	if !query.AllProjects {
+		catalogQuery.ProjectKey = s.currentProject.ProjectKey
+	}
+	page, err := s.catalog.Query(ctx, catalogQuery)
+	if err != nil {
+		return nil, nil, pickerSourcePage{}, err
+	}
+	return page.Threads, nil, pickerSourcePage{
+		SkippedTotal: page.SkippedTotal, Scanned: page.Scanned, Matched: page.Matched,
+		ScanTruncated: page.ScanTruncated, HasMore: page.HasMore, NextOffset: page.NextOffset,
 	}, nil
 }
 

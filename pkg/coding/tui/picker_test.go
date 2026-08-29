@@ -95,6 +95,13 @@ func TestPickerRendersBoundedAccessibleThreadAndCatalogueStates(t *testing.T) {
 			t.Fatalf("picker view omits %q: %q", want, view)
 		}
 	}
+	model.query.Search = "parser"
+	if warning := model.catalogWarning(); !strings.Contains(
+		warning,
+		"search candidates with missing or invalid state",
+	) {
+		t.Fatalf("search warning = %q", warning)
+	}
 	model.width = 40
 	for _, line := range strings.Split(model.View(), "\n") {
 		if pickerLineWidth(line) > 40 {
@@ -165,6 +172,44 @@ func TestPickerSearchPagingScopeAndStrictUnavailableSelection(t *testing.T) {
 	_, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyPgDown})
 	if latest := source.latestQuery(t); latest.Offset != 2 {
 		t.Fatalf("next-page query = %+v", latest)
+	}
+}
+
+func TestPickerExpandsBoundedHistoricalMatch(t *testing.T) {
+	matchedAt := time.Date(2026, time.August, 29, 12, 30, 0, 0, time.UTC)
+	item := codingpicker.Item{
+		ThreadID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Title: "Historical result", Preview: "preview",
+		ProjectRoot: "/work/current", InvocationCWD: "/work/current", CurrentProject: true,
+		Location: codingpicker.LocationAvailable, MatchKind: "transcript",
+		MatchSnippet: "user: investigate the historical parser regression and preserve the exact failure evidence",
+		MatchedAt:    matchedAt, MatchedMessage: 7,
+	}
+	model := newPickerModel(
+		t.Context(),
+		&fakePickerSource{},
+		codingpicker.Query{Search: "parser", Limit: 20},
+		codingpicker.Page{Items: []codingpicker.Item{item}, Matched: 1, ContentScanTruncated: true},
+		time.Now,
+	)
+	model.width = 54
+	model.height = 16
+	view := model.View()
+	for _, want := range []string{
+		"historical parser regression", "match transcript", "transcript search truncated", "E match",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("collapsed historical picker omits %q: %q", want, view)
+		}
+	}
+	model, _ = updatePicker(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	if !model.expanded || !strings.Contains(model.View(), "match in aaaaaaaa · transcript · message 7") ||
+		!strings.Contains(model.View(), "exact failure evidence") {
+		t.Fatalf("expanded historical picker = %q", model.View())
+	}
+	for _, line := range strings.Split(model.View(), "\n") {
+		if pickerLineWidth(line) > model.width {
+			t.Fatalf("expanded line exceeds width %d: %q", model.width, line)
+		}
 	}
 }
 

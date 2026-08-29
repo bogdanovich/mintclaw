@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,6 +29,7 @@ type PickerOptions struct {
 	AlternateScreen bool
 	AllProjects     bool
 	Archived        bool
+	Search          string
 	Environment     []string
 	NoColor         bool
 	Now             func() time.Time
@@ -57,6 +59,7 @@ func RunPicker(
 	query := codingpicker.Query{
 		AllProjects: options.AllProjects,
 		Archived:    options.Archived,
+		Search:      strings.TrimSpace(options.Search),
 		Limit:       DefaultPickerPageSize,
 	}
 	pageCtx, cancelPage := context.WithTimeout(ctx, pickerPageTimeout)
@@ -121,6 +124,7 @@ type pickerModel struct {
 	now               func() time.Time
 	requestGeneration uint64
 	loadCancel        context.CancelFunc
+	expanded          bool
 }
 
 type pickerPageMsg struct {
@@ -167,6 +171,7 @@ func (m *pickerModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.page = message.page
 			m.pageQuery = message.query
 			m.selected = 0
+			m.expanded = false
 			m.notice = ""
 		}
 		return m, nil
@@ -227,10 +232,17 @@ func (m *pickerModel) updateKeys(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.selected > 0 {
 			m.selected--
+			m.expanded = false
 		}
 	case "down", "j":
 		if m.selected+1 < len(m.page.Items) {
 			m.selected++
+			m.expanded = false
+		}
+	case "e", "E":
+		if len(m.page.Items) > 0 && m.selected < len(m.page.Items) &&
+			m.page.Items[m.selected].MatchSnippet != "" {
+			m.expanded = !m.expanded
 		}
 	case "pgup", "left", "h", "p":
 		if m.canPage() && m.query.Offset > 0 {
@@ -325,8 +337,11 @@ func (m *pickerModel) View() string {
 	} else if warning := m.catalogWarning(); warning != "" {
 		lines = append(lines, clipLine(warning, m.width))
 	}
+	if m.expanded && len(m.page.Items) > 0 && m.selected < len(m.page.Items) {
+		lines = append(lines, m.expandedMatchLines(m.page.Items[m.selected])...)
+	}
 
-	footer := "↑/↓ select · / search · A scope · Z archive · Enter resume · Q cancel"
+	footer := "↑/↓ select · / search · A scope · Z archive · E match · Enter resume · Q cancel"
 	available := max(1, m.height-len(lines)-1)
 	if len(m.page.Items) == 0 {
 		empty := "No coding threads found. Start one with mintclaw code <prompt>."
@@ -382,10 +397,17 @@ func (m *pickerModel) header() string {
 func (m *pickerModel) catalogWarning() string {
 	warnings := make([]string, 0, 2)
 	if m.page.SkippedTotal > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d corrupt catalog entries skipped", m.page.SkippedTotal))
+		label := "corrupt catalog entries"
+		if m.query.Search != "" {
+			label = "search candidates with missing or invalid state"
+		}
+		warnings = append(warnings, fmt.Sprintf("%d %s skipped", m.page.SkippedTotal, label))
 	}
 	if m.page.ScanTruncated {
 		warnings = append(warnings, "catalog scan truncated; narrow scope or search")
+	}
+	if m.page.ContentScanTruncated {
+		warnings = append(warnings, "transcript search truncated; narrow scope or query")
 	}
 	return strings.Join(warnings, " · ")
 }
@@ -410,7 +432,11 @@ func (m *pickerModel) visibleItemLines(available int) []string {
 			formatPickerAge(m.now(), item.UpdatedAt),
 			shortPickerID(item.ThreadID),
 		), m.width))
-		lines = append(lines, clipLine("  "+item.Preview, m.width))
+		preview := item.Preview
+		if item.MatchSnippet != "" {
+			preview = item.MatchSnippet
+		}
+		lines = append(lines, clipLine("  "+preview, m.width))
 		lines = append(lines, clipLine("  "+pickerItemState(item), m.width))
 	}
 	return lines
@@ -442,12 +468,68 @@ func pickerItemState(item codingpicker.Item) string {
 	if item.StateIncomplete && item.Location != codingpicker.LocationUnknown {
 		states = append(states, "[state incomplete]")
 	}
+	if item.MatchKind != "" {
+		matched := "match " + item.MatchKind
+		if !item.MatchedAt.IsZero() {
+			matched += " at " + item.MatchedAt.Local().Format(time.RFC3339)
+		}
+		if item.MatchedMessage > 0 {
+			matched += fmt.Sprintf(" message %d", item.MatchedMessage)
+		}
+		states = append(states, matched)
+	}
 	branch := item.Branch
 	if branch == "" {
 		branch = "unknown"
 	}
 	states = append(states, "branch "+branch, item.InvocationCWD)
 	return strings.Join(states, " · ")
+}
+
+func (m *pickerModel) expandedMatchLines(item codingpicker.Item) []string {
+	header := fmt.Sprintf("match in %s", shortPickerID(item.ThreadID))
+	if item.MatchKind != "" {
+		header += " · " + item.MatchKind
+	}
+	if item.MatchedMessage > 0 {
+		header += fmt.Sprintf(" · message %d", item.MatchedMessage)
+	}
+	lines := []string{clipLine(header, m.width)}
+	if !item.MatchedAt.IsZero() {
+		lines = append(lines, clipLine("matched at "+item.MatchedAt.Local().Format(time.RFC3339), m.width))
+	}
+	remaining := strings.TrimSpace(item.MatchSnippet)
+	for range 3 {
+		if remaining == "" {
+			break
+		}
+		line, rest := splitPickerDetail(remaining, max(1, m.width-2))
+		lines = append(lines, clipLine("  "+line, m.width))
+		remaining = rest
+	}
+	return lines
+}
+
+func splitPickerDetail(value string, width int) (string, string) {
+	if pickerLineWidth(value) <= width {
+		return value, ""
+	}
+	runes := []rune(value)
+	end := 0
+	for end < len(runes) && pickerLineWidth(string(runes[:end+1])) <= width {
+		end++
+	}
+	if end == 0 {
+		end = 1
+	}
+	cut := end
+	for cut > 0 && !unicode.IsSpace(runes[cut-1]) {
+		cut--
+	}
+	if cut == 0 {
+		cut = end
+	}
+	return strings.TrimSpace(string(runes[:cut])), strings.TrimSpace(string(runes[cut:]))
 }
 
 func formatPickerAge(now, updated time.Time) string {
