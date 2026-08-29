@@ -905,20 +905,24 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	}
 	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
 	if err != nil {
-		if action.Kind == DriverNavigate && errors.Is(err, ErrDriverRejected) {
-			if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
-				return verifyErr
-			}
-			return ErrNavigationFailed
+		if worker.lost {
+			return err
 		}
 		if action.Kind == DriverNavigate && errors.Is(err, ErrDenied) {
-			if errors.Is(parsePlaywrightNavigationDispatch(text), ErrNavigationFailed) {
+			if errors.Is(err, ErrDriverRejected) ||
+				errors.Is(parsePlaywrightNavigationDispatch(text), ErrNavigationFailed) {
 				if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
 					return verifyErr
 				}
 				return ErrDenied
 			}
 			return ErrDriverRejected
+		}
+		if action.Kind == DriverNavigate && errors.Is(err, ErrDriverRejected) {
+			if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
+				return verifyErr
+			}
+			return ErrNavigationFailed
 		}
 		return err
 	}
@@ -945,6 +949,9 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 }
 
 func (worker *playwrightWorker) verifyNavigationRollbackLocked(ctx context.Context, confirmedHash string) error {
+	if worker.lost {
+		return errors.Join(ErrDriverRejected, ErrWorkerUnavailable)
+	}
 	recovered, err := worker.observeLocked(ctx)
 	if err != nil {
 		return errors.Join(ErrDriverRejected, err)
@@ -1752,6 +1759,9 @@ func (worker *playwrightWorker) callAndConsume(
 	}
 	worker.pendingDialog = dialog
 	if driverErr != nil {
+		if proxyDenied {
+			return text, errors.Join(driverErr, ErrDenied)
+		}
 		return text, driverErr
 	}
 	if proxyDenied {

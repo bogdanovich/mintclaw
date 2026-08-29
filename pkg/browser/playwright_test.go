@@ -497,6 +497,86 @@ func TestPlaywrightWorkerDoesNotTreatUnverifiedNavigationDenialAsSafe(t *testing
 	}
 }
 
+func TestPlaywrightWorkerPreservesSimultaneousNavigationDenialAfterStateProof(t *testing.T) {
+	proxy := &browserNetworkProxy{}
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
+			{
+				IsError: true,
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "### Error\nError: navigation denied"}},
+			},
+		},
+		"browser_snapshot": {playwrightTextResult(playwrightConfirmedPage)},
+	}}
+	worker := &playwrightWorker{
+		client: client, networkProxy: proxy, limits: config.BrowserLimitsConfig{}.Effective(),
+	}
+	seedPlaywrightConfirmedPage(t, worker)
+	token, err := worker.NavigationIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.onCall = func(tool string) {
+		if tool == "browser_run_code_unsafe" {
+			proxy.denials.Add(1)
+		}
+	}
+	err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverNavigate, URL: "https://example.com/denied",
+	})
+	if !errors.Is(err, ErrDenied) {
+		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want verified policy denial", err)
+	}
+}
+
+func TestPlaywrightWorkerDoesNotRecoverAfterDispatchRetiresWorker(t *testing.T) {
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
+			{
+				IsError: true,
+				Content: []sdkmcp.Content{
+					&sdkmcp.TextContent{Text: strings.Repeat("x", playwrightDriverResponseBytes+1)},
+				},
+			},
+		},
+		"browser_snapshot": {playwrightTextResult(playwrightConfirmedPage)},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	seedPlaywrightConfirmedPage(t, worker)
+	token, err := worker.NavigationIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverNavigate, URL: "https://example.com/malformed",
+	})
+	if !worker.lost || errors.Is(err, ErrNavigationFailed) || len(client.calls) != 2 {
+		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, lost = %t, calls = %d", err, worker.lost, len(client.calls))
+	}
+}
+
+func TestPlaywrightWorkerPreservesSimultaneousNonNavigationDenial(t *testing.T) {
+	proxy := &browserNetworkProxy{}
+	client := &fakePlaywrightClient{
+		callResults: map[string]*sdkmcp.CallToolResult{
+			"browser_click": {
+				IsError: true,
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "### Error\nError: click rejected"}},
+			},
+		},
+		onCall: func(string) { proxy.denials.Add(1) },
+	}
+	worker := &playwrightWorker{
+		client: client, networkProxy: proxy, limits: config.BrowserLimitsConfig{}.Effective(),
+	}
+	err := worker.Execute(t.Context(), DriverAction{Kind: DriverClick, Target: "e1", Element: "Continue"})
+	if !errors.Is(err, ErrDenied) || !errors.Is(err, ErrDriverRejected) {
+		t.Fatalf("Execute() error = %v, want denial and driver rejection", err)
+	}
+}
+
 func TestPlaywrightWorkerRecoversRejectedNavigationAfterStateProof(t *testing.T) {
 	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": {
