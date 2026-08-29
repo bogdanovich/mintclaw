@@ -20,6 +20,16 @@ type snapshotFailingStore struct {
 	summaryErr error
 }
 
+type metadataCapabilityStub struct{}
+
+func (*metadataCapabilityStub) EnsureSessionMetadata(string, *session.SessionScope) {}
+
+func (*metadataCapabilityStub) GetSessionScope(string) *session.SessionScope { return nil }
+
+func (*metadataCapabilityStub) ClearSessionClientIDs(string) error { return nil }
+
+var _ session.MetadataAwareSessionStore = (*metadataCapabilityStub)(nil)
+
 func (s *snapshotFailingStore) SetHistory(
 	ctx context.Context,
 	sessionKey string,
@@ -403,7 +413,7 @@ func TestJSONLBackendRejectsRemovedScopeVersion(t *testing.T) {
 	}
 }
 
-func TestJSONLBackendListsOnlyCurrentScopedSessions(t *testing.T) {
+func TestJSONLBackendListsOnlyOwnedCurrentScopedSessions(t *testing.T) {
 	store, err := memory.NewJSONLStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -414,7 +424,13 @@ func TestJSONLBackendListsOnlyCurrentScopedSessions(t *testing.T) {
 	currentKey := session.BuildOpaqueSessionKey("current-enumerated-session")
 	backend.EnsureSessionMetadata(currentKey, &session.SessionScope{
 		Version: session.ScopeVersion,
-		AgentID: "main",
+		AgentID: "Main",
+		Channel: "mintclaw",
+	})
+	otherKey := session.BuildOpaqueSessionKey("other-current-enumerated-session")
+	backend.EnsureSessionMetadata(otherKey, &session.SessionScope{
+		Version: session.ScopeVersion,
+		AgentID: "support",
 		Channel: "mintclaw",
 	})
 
@@ -451,9 +467,9 @@ func TestJSONLBackendListsOnlyCurrentScopedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keys := backend.ListCurrentSessions()
+	keys := backend.ListCurrentAgentSessions("main")
 	if len(keys) != 1 || keys[0] != currentKey {
-		t.Fatalf("ListCurrentSessions() = %v, want only %q", keys, currentKey)
+		t.Fatalf("ListCurrentAgentSessions() = %v, want only %q", keys, currentKey)
 	}
 }
 
@@ -473,8 +489,8 @@ func TestJSONLBackendRejectsUnknownCurrentScopeFields(t *testing.T) {
 	if scope := backend.GetSessionScope(key); scope != nil {
 		t.Fatalf("GetSessionScope() = %#v, want unknown field rejected", scope)
 	}
-	if keys := backend.ListCurrentSessions(); len(keys) != 0 {
-		t.Fatalf("ListCurrentSessions() = %v, want unknown field omitted", keys)
+	if keys := backend.ListCurrentAgentSessions("main"); len(keys) != 0 {
+		t.Fatalf("ListCurrentAgentSessions() = %v, want unknown field omitted", keys)
 	}
 }
 

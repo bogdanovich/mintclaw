@@ -17,9 +17,9 @@ func currentRuntimeSessionKeys(instance *AgentInstance, store session.SessionSto
 		}
 		return nil
 	}
-	metadata, ok := store.(session.MetadataAwareSessionStore)
+	enumerator, ok := store.(session.CurrentAgentSessionEnumerator)
 	if !ok {
 		return nil
 	}
-	return metadata.ListCurrentSessions()
+	return enumerator.ListCurrentAgentSessions(instance.ID)
 }

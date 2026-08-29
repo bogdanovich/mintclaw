@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/routing"
 )
 
 // JSONLBackend adapts a memory.Store into the SessionStore interface.
@@ -28,7 +29,13 @@ type MetadataAwareSessionStore interface {
 	EnsureSessionMetadata(sessionKey string, scope *SessionScope)
 	GetSessionScope(sessionKey string) *SessionScope
 	ClearSessionClientIDs(sessionKey string) error
-	ListCurrentSessions() []string
+}
+
+// CurrentAgentSessionEnumerator lists current persisted sessions owned by one
+// agent. Keeping this capability separate avoids changing unrelated metadata
+// behavior for alternate SessionStore implementations.
+type CurrentAgentSessionEnumerator interface {
+	ListCurrentAgentSessions(agentID string) []string
 }
 
 // NewJSONLBackend wraps a memory.Store for use as a SessionStore.
@@ -298,10 +305,17 @@ func (b *JSONLBackend) Close() error {
 	return b.store.Close()
 }
 
-// ListCurrentSessions returns persisted agent sessions with the current key
-// and structured-scope contract. Historical and malformed metadata remains
-// untouched but cannot enter recovery or background reconciliation.
-func (b *JSONLBackend) ListCurrentSessions() []string {
+// ListCurrentAgentSessions returns persisted sessions owned by agentID with
+// the current key and structured-scope contract. Historical, malformed, and
+// differently owned metadata remains untouched but cannot enter recovery or
+// background reconciliation.
+func (b *JSONLBackend) ListCurrentAgentSessions(agentID string) []string {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil
+	}
+	agentID = routing.NormalizeAgentID(agentID)
+
 	keys := b.store.ListSessions()
 	current := make([]string, 0, len(keys))
 	for _, key := range keys {
@@ -312,7 +326,12 @@ func (b *JSONLBackend) ListCurrentSessions() []string {
 		if err != nil || len(meta.Scope) == 0 {
 			continue
 		}
-		if _, err = decodeCurrentSessionScope(meta.Scope); err != nil {
+		scope, decodeErr := decodeCurrentSessionScope(meta.Scope)
+		if decodeErr != nil {
+			continue
+		}
+		scopeAgentID := strings.TrimSpace(scope.AgentID)
+		if scopeAgentID == "" || routing.NormalizeAgentID(scopeAgentID) != agentID {
 			continue
 		}
 		current = append(current, key)
