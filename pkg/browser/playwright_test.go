@@ -382,6 +382,59 @@ func TestPlaywrightWorkerKeepsSessionAfterCheckedNavigationFailure(t *testing.T)
 	}
 }
 
+func TestPlaywrightWorkerClassifiesStructuredRedirectLoopErrorEnvelope(t *testing.T) {
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
+			{
+				IsError: true,
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "### Error\n" +
+					"Error: page.goto: net::ERR_TOO_MANY_REDIRECTS at " +
+					"https://www.example.com/redirect-loop\nCall log:\n"}},
+			},
+		},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	token, err := worker.NavigationIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverNavigate, URL: "https://www.example.com/redirect-loop",
+	})
+	if !errors.Is(err, ErrNavigationFailed) {
+		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want navigation failure", err)
+	}
+	if worker.lost {
+		t.Fatal("structured redirect-loop rejection retired worker")
+	}
+}
+
+func TestPlaywrightWorkerDoesNotClassifyRedirectTokenOnlyInRejectedCallLog(t *testing.T) {
+	client := &fakePlaywrightClient{callQueues: map[string][]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": {
+			playwrightTextResult("### Result\n\"MINTCLAW_NAV_V1|ok|frame-1|loader-1|7\""),
+			{
+				IsError: true,
+				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "### Error\n" +
+					"Error: page.goto: Timeout 30000ms exceeded.\nCall log:\n" +
+					"  - navigating to \\\"https://example.com/net::ERR_TOO_MANY_REDIRECTS\\\"\n"}},
+			},
+		},
+	}}
+	worker := &playwrightWorker{client: client, limits: config.BrowserLimitsConfig{}.Effective()}
+	token, err := worker.NavigationIdentity(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = worker.ExecuteAfterNavigationCheck(t.Context(), token, DriverAction{
+		Kind: DriverNavigate, URL: "https://example.com/net::ERR_TOO_MANY_REDIRECTS",
+	})
+	if !errors.Is(err, ErrDriverRejected) || errors.Is(err, ErrNavigationFailed) {
+		t.Fatalf("ExecuteAfterNavigationCheck() error = %v, want ordinary driver rejection", err)
+	}
+}
+
 func TestPlaywrightWorkerHandlesPendingDialogAfterNavigationCheck(t *testing.T) {
 	const token = "verified-navigation-token"
 	client := &fakePlaywrightClient{}

@@ -895,6 +895,10 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	}
 	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
 	if err != nil {
+		if action.Kind == DriverNavigate && errors.Is(err, ErrDriverRejected) &&
+			playwrightRedirectLoopRejection(text) {
+			return ErrNavigationFailed
+		}
 		return err
 	}
 	// Playwright MCP reports a modal state instead of the callback result when
@@ -910,6 +914,24 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 		worker.lost = true
 	}
 	return err
+}
+
+func playwrightRedirectLoopRejection(text string) bool {
+	if strings.Count(text, "### Error") != 1 {
+		return false
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) < 2 || strings.TrimSpace(lines[0]) != "### Error" {
+		return false
+	}
+	const prefix = "Error: page.goto: net::ERR_TOO_MANY_REDIRECTS at "
+	line := strings.TrimSpace(lines[1])
+	if !strings.HasPrefix(line, prefix) {
+		return false
+	}
+	target, err := url.Parse(strings.TrimPrefix(line, prefix))
+	return err == nil && (target.Scheme == "http" || target.Scheme == "https") && target.Host != "" &&
+		target.User == nil
 }
 
 func (worker *playwrightWorker) AuthorizeFill(
