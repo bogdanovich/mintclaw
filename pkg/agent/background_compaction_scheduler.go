@@ -101,7 +101,7 @@ func (r *backgroundCompactionRunner) scheduleBackgroundCompaction(
 
 func backgroundCompactionKey(agent *AgentInstance, sessionKey string) string {
 	if threadID := agent.CodingLayout.ThreadID(); threadID != "" {
-		return "coding:" + threadID
+		return agent.CodingLayout.SessionKey()
 	}
 	return agent.ID + ":" + sessionKey
 }
@@ -110,7 +110,7 @@ func (r *backgroundCompactionRunner) codingThreadActive(threadID string) bool {
 	if r == nil || threadID == "" {
 		return false
 	}
-	_, active := r.running.Load("coding:" + threadID)
+	_, active := r.running.Load(codingRuntimeSessionKey(threadID))
 	return active
 }
 

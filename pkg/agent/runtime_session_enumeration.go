@@ -11,7 +11,7 @@ func currentRuntimeSessionKeys(instance *AgentInstance, store session.SessionSto
 		return nil
 	}
 	if threadID := instance.CodingLayout.ThreadID(); threadID != "" {
-		current := "coding:" + threadID
+		current := instance.CodingLayout.SessionKey()
 		if slices.Contains(store.ListSessions(), current) {
 			return []string{current}
 		}

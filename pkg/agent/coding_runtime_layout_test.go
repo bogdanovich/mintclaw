@@ -32,6 +32,9 @@ func TestCodingRuntimeLayoutStatePathOwnership(t *testing.T) {
 	if layout.ThreadID() != "thread-main" {
 		t.Fatalf("ThreadID() = %q", layout.ThreadID())
 	}
+	if layout.SessionKey() != "coding:thread-main" {
+		t.Fatalf("SessionKey() = %q", layout.SessionKey())
+	}
 	if layout.ExecutionRoot() != wantWorkspace || layout.StateRoot() != wantStateRoot {
 		t.Fatalf("roots = execution %q, state %q", layout.ExecutionRoot(), layout.StateRoot())
 	}

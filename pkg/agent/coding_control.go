@@ -25,7 +25,7 @@ func (al *AgentLoop) prepareCodingContext(ctx context.Context) error {
 		if !found {
 			return fmt.Errorf("coding context has no admitted layout for agent %q", agentID)
 		}
-		if err := reconciler.prepareCodingSession(ctx, agent, "coding:"+layout.ThreadID()); err != nil {
+		if err := reconciler.prepareCodingSession(ctx, agent, layout.SessionKey()); err != nil {
 			return err
 		}
 	}
