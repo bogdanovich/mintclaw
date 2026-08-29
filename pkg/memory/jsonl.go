@@ -228,7 +228,7 @@ func (s *JSONLStore) readMeta(key string) (SessionMeta, error) {
 	if err != nil {
 		return SessionMeta{}, fmt.Errorf("memory: read meta: %w", err)
 	}
-	meta, err := decodeSessionMeta(data)
+	meta, err := DecodeSessionMeta(data)
 	if err != nil {
 		return SessionMeta{}, fmt.Errorf("memory: decode meta: %w", err)
 	}
@@ -238,12 +238,17 @@ func (s *JSONLStore) readMeta(key string) (SessionMeta, error) {
 	return meta, nil
 }
 
-func decodeSessionMeta(data []byte) (SessionMeta, error) {
+// DecodeSessionMeta decodes one document written by the current metadata
+// writer and rejects incomplete, ambiguous, or semantically invalid input.
+func DecodeSessionMeta(data []byte) (SessionMeta, error) {
 	if err := validateSessionMetaJSON(data); err != nil {
 		return SessionMeta{}, err
 	}
 	var meta SessionMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
+		return SessionMeta{}, err
+	}
+	if err := validateSessionMeta(meta.Key, meta); err != nil {
 		return SessionMeta{}, err
 	}
 	return meta, nil
@@ -1458,8 +1463,8 @@ func (s *JSONLStore) ListSessions() []string {
 		if err != nil {
 			continue
 		}
-		meta, err := decodeSessionMeta(data)
-		if err != nil || validateSessionMeta(meta.Key, meta) != nil {
+		meta, err := DecodeSessionMeta(data)
+		if err != nil {
 			continue
 		}
 		if entry.Name() != sanitizeKey(meta.Key)+".meta.json" {

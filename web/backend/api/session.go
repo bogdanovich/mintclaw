@@ -90,19 +90,16 @@ func sanitizeSessionKey(key string) string {
 
 func (h *Handler) readSessionMeta(path, sessionKey string) (memory.SessionMeta, error) {
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return memory.SessionMeta{Key: sessionKey}, nil
-	}
 	if err != nil {
 		return memory.SessionMeta{}, err
 	}
 
-	var meta memory.SessionMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
+	meta, err := memory.DecodeSessionMeta(data)
+	if err != nil {
 		return memory.SessionMeta{}, err
 	}
-	if meta.Key == "" {
-		meta.Key = sessionKey
+	if sessionKey != "" && meta.Key != sessionKey {
+		return memory.SessionMeta{}, errors.New("session metadata key does not match requested key")
 	}
 	return meta, nil
 }
@@ -262,6 +259,9 @@ func (h *Handler) findMintClawJSONLSessions(dir string) ([]mintclawJSONLSessionR
 		metaPath := filepath.Join(dir, name)
 		meta, err := h.readSessionMeta(metaPath, "")
 		if err != nil {
+			continue
+		}
+		if name != sanitizeSessionKey(meta.Key)+".meta.json" {
 			continue
 		}
 		refs := sessionRefsFromMeta(meta)

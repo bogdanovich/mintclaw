@@ -209,14 +209,14 @@ func (s *Store) readForkSource(
 	if readErr := errors.Join(metaErr, jsonlErr, closeErr); readErr != nil {
 		return Metadata{}, nil, memory.HistoryRevision{}, readErr
 	}
-	var sessionMeta memory.SessionMeta
-	if decodeErr := json.Unmarshal(metaData, &sessionMeta); decodeErr != nil {
+	sessionMeta, decodeErr := memory.DecodeSessionMeta(metaData)
+	if decodeErr != nil {
 		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
 			"coding thread fork: decode transcript metadata: %w",
 			decodeErr,
 		)
 	}
-	if sessionMeta.Key != "" && sessionMeta.Key != metadata.SessionKey {
+	if sessionMeta.Key != metadata.SessionKey {
 		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: source session key mismatch")
 	}
 	if sessionMeta.HistoryDirty {
