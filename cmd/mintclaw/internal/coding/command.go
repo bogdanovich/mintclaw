@@ -75,16 +75,21 @@ type commandResult struct {
 }
 
 type listResult struct {
-	ProjectRoot  string                `json:"project_root,omitempty"`
-	AllProjects  bool                  `json:"all_projects"`
-	Threads      []thread.Metadata     `json:"threads"`
-	Skipped      []thread.SkippedEntry `json:"skipped,omitempty"`
-	SkippedTotal int                   `json:"skipped_total,omitempty"`
-	Scanned      int                   `json:"scanned"`
-	Matched      int                   `json:"matched"`
-	Truncated    bool                  `json:"scan_truncated"`
-	HasMore      bool                  `json:"has_more"`
-	NextOffset   int                   `json:"next_offset,omitempty"`
+	ProjectRoot           string                         `json:"project_root,omitempty"`
+	AllProjects           bool                           `json:"all_projects"`
+	Threads               []thread.Metadata              `json:"threads"`
+	Skipped               []thread.SkippedEntry          `json:"skipped,omitempty"`
+	SkippedTotal          int                            `json:"skipped_total,omitempty"`
+	Scanned               int                            `json:"scanned"`
+	Matched               int                            `json:"matched"`
+	Truncated             bool                           `json:"scan_truncated"`
+	HasMore               bool                           `json:"has_more"`
+	NextOffset            int                            `json:"next_offset,omitempty"`
+	Search                string                         `json:"search,omitempty"`
+	SearchMatches         []thread.HistoricalSearchMatch `json:"search_matches,omitempty"`
+	ContentThreadsScanned int                            `json:"content_threads_scanned,omitempty"`
+	ContentBytesScanned   int64                          `json:"content_bytes_scanned,omitempty"`
+	ContentScanTruncated  bool                           `json:"content_scan_truncated,omitempty"`
 }
 
 // NewCodeCommand creates a durable coding thread from the first prompt.
@@ -227,6 +232,7 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 	var jsonOutput bool
 	var offset int
 	var limit int
+	var search string
 	cmd := &cobra.Command{
 		Use:   "resume [thread-id]",
 		Short: "List or resume project coding threads",
@@ -247,6 +253,8 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 				json:      jsonOutput,
 				offset:    offset,
 				limit:     limit,
+				search:    search,
+				searchSet: cmd.Flags().Changed("search"),
 			}
 			noColor, _ := cmd.Flags().GetBool("no-color")
 			capabilities := deps.terminal(cmd.InOrStdin(), cmd.OutOrStdout(), noColor)
@@ -266,6 +274,7 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON")
 	cmd.Flags().IntVar(&offset, "offset", 0, "List offset within the bounded result set")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Maximum threads to list on this page")
+	cmd.Flags().StringVar(&search, "search", "", "Search title, preview, and bounded transcript history")
 	return cmd
 }
 
@@ -324,11 +333,22 @@ type resumeOptions struct {
 	json      bool
 	offset    int
 	limit     int
+	search    string
+	searchSet bool
 }
 
 func validateResumeOptions(options resumeOptions) error {
 	if options.threadID != "" && options.last {
 		return fmt.Errorf("resume: thread ID and --last are mutually exclusive")
+	}
+	if options.searchSet && strings.TrimSpace(options.search) == "" {
+		return fmt.Errorf("resume: --search requires a non-empty query")
+	}
+	if options.searchSet && (options.threadID != "" || options.last) {
+		return fmt.Errorf("resume: --search cannot be combined with a thread ID or --last")
+	}
+	if options.searchSet && (options.model != "" || options.promptSet) {
+		return fmt.Errorf("resume: --search is discovery-only and cannot append a prompt or replace the model")
 	}
 	if options.threadID != "" && (options.all || options.archived) {
 		return fmt.Errorf("resume: explicit thread ID cannot be combined with --all or --archived")
@@ -380,6 +400,7 @@ func runResumeInteractive(
 			AlternateScreen: true,
 			AllProjects:     options.all,
 			Archived:        options.archived,
+			Search:          options.search,
 			Environment:     os.Environ(),
 			NoColor:         noColor,
 			Now:             deps.now,
@@ -461,6 +482,24 @@ func runResume(
 	project, store, resolveErr := resolveEnvironment(ctx, deps)
 	if resolveErr != nil {
 		return resolveErr
+	}
+	if options.searchSet {
+		searcher, searchErr := thread.NewHistoricalSearcher(store, thread.HistoricalSearchOptions{})
+		if searchErr != nil {
+			return searchErr
+		}
+		query := thread.HistoricalSearchQuery{
+			All: options.all, Archived: options.archived, Text: strings.TrimSpace(options.search),
+			Offset: options.offset, Limit: options.limit,
+		}
+		if !options.all {
+			query.ProjectKey = project.ProjectKey
+		}
+		page, searchErr := searcher.Query(ctx, query)
+		if searchErr != nil {
+			return searchErr
+		}
+		return renderSearchList(out, project, page, options)
 	}
 	catalog, catalogErr := thread.NewCatalog(store, thread.CatalogOptions{})
 	if catalogErr != nil {
@@ -860,6 +899,63 @@ func renderList(
 		); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func renderSearchList(
+	out io.Writer,
+	project thread.ProjectIdentity,
+	page thread.HistoricalSearchPage,
+	options resumeOptions,
+) error {
+	result := listResult{
+		AllProjects: options.all, Threads: []thread.Metadata{}, Search: strings.TrimSpace(options.search),
+		SearchMatches: append([]thread.HistoricalSearchMatch(nil), page.Matches...),
+		Skipped:       page.Skipped, SkippedTotal: page.SkippedTotal,
+		Scanned: page.Scanned, Matched: page.Matched, Truncated: page.ScanTruncated,
+		HasMore: page.HasMore, NextOffset: page.NextOffset,
+		ContentThreadsScanned: page.ContentThreadsScanned,
+		ContentBytesScanned:   page.ContentBytesScanned,
+		ContentScanTruncated:  page.ContentScanTruncated,
+	}
+	if !options.all {
+		result.ProjectRoot = project.ProjectRoot
+	}
+	if options.json {
+		return writeJSON(out, result)
+	}
+	if len(page.Matches) == 0 {
+		if _, err := fmt.Fprintf(out, "No coding threads match %q.\n", strings.TrimSpace(options.search)); err != nil {
+			return err
+		}
+	} else {
+		for _, match := range page.Matches {
+			if _, err := fmt.Fprintf(
+				out,
+				"%s\t%s\t%q\t%s\t%q\n",
+				match.Metadata.ThreadID,
+				match.MatchedAt.Format(time.RFC3339),
+				match.Metadata.Project.ProjectRoot,
+				match.Kind,
+				match.Snippet,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	if page.HasMore {
+		if _, err := fmt.Fprintf(
+			out,
+			"More matches available; continue with --offset %d.\n",
+			page.NextOffset,
+		); err != nil {
+			return err
+		}
+	}
+	if page.ScanTruncated || page.ContentScanTruncated {
+		_, err := fmt.Fprintln(out, "Search coverage was bounded; narrow the project or query for fuller results.")
+		return err
 	}
 	return nil
 }

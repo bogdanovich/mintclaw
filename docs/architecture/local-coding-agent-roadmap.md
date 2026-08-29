@@ -1618,6 +1618,8 @@ later roadmap packets remain uncompleted.
 
 Dependencies: P5.4
 
+Implementation contract: [P6.2 historical search](local-coding-agent-p6-2-search.md).
+
 Scope:
 
 - Search thread title/preview and bounded transcript or Seahorse content.
