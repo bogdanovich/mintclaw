@@ -397,7 +397,11 @@ func (m *pickerModel) header() string {
 func (m *pickerModel) catalogWarning() string {
 	warnings := make([]string, 0, 2)
 	if m.page.SkippedTotal > 0 {
-		warnings = append(warnings, fmt.Sprintf("%d corrupt catalog entries skipped", m.page.SkippedTotal))
+		label := "corrupt catalog entries"
+		if m.query.Search != "" {
+			label = "search candidates with missing or invalid state"
+		}
+		warnings = append(warnings, fmt.Sprintf("%d %s skipped", m.page.SkippedTotal, label))
 	}
 	if m.page.ScanTruncated {
 		warnings = append(warnings, "catalog scan truncated; narrow scope or search")

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"sort"
 	"strings"
@@ -195,13 +194,11 @@ func (s *HistoricalSearcher) Query(
 			if errors.Is(searchErr, context.Canceled) || errors.Is(searchErr, context.DeadlineExceeded) {
 				return HistoricalSearchPage{}, searchErr
 			}
-			if !errors.Is(searchErr, fs.ErrNotExist) {
-				page.addSkipped(
-					s.catalog.options.SkipReportLimit,
-					metadata.ThreadID,
-					"transcript_unreadable_or_unstable",
-				)
-			}
+			page.addSkipped(
+				s.catalog.options.SkipReportLimit,
+				metadata.ThreadID,
+				"transcript_missing_unreadable_or_unstable",
+			)
 			continue
 		}
 		if match != nil {
@@ -533,6 +530,7 @@ func containsHistoricalText(value, query string) bool {
 
 func historicalSnippet(value, query string, limit int) string {
 	value = strings.Join(strings.Fields(value), " ")
+	query = strings.Join(strings.Fields(query), " ")
 	if len(value) <= limit {
 		return value
 	}

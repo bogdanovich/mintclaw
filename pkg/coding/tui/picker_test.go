@@ -95,6 +95,13 @@ func TestPickerRendersBoundedAccessibleThreadAndCatalogueStates(t *testing.T) {
 			t.Fatalf("picker view omits %q: %q", want, view)
 		}
 	}
+	model.query.Search = "parser"
+	if warning := model.catalogWarning(); !strings.Contains(
+		warning,
+		"search candidates with missing or invalid state",
+	) {
+		t.Fatalf("search warning = %q", warning)
+	}
 	model.width = 40
 	for _, line := range strings.Split(model.View(), "\n") {
 		if pickerLineWidth(line) > 40 {

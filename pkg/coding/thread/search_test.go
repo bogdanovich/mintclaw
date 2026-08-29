@@ -374,6 +374,14 @@ func TestHistoricalSnippetIncludesEllipsesWithinByteLimit(t *testing.T) {
 			t.Fatalf("snippet limit %d produced %d bytes: %q", limit, len(snippet), snippet)
 		}
 	}
+	late := historicalSnippet(
+		strings.Repeat("prefix ", 100)+"needle  here"+strings.Repeat(" suffix", 100),
+		"needle  here",
+		64,
+	)
+	if !strings.Contains(late, "needle here") {
+		t.Fatalf("normalized late-match snippet omitted match: %q", late)
+	}
 }
 
 func TestHistoricalSearchRejectsLinkedTranscriptAndCancellation(t *testing.T) {

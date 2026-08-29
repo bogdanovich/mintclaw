@@ -931,13 +931,17 @@ func renderSearchList(
 		}
 	} else {
 		for _, match := range page.Matches {
+			source := "metadata:" + string(match.Kind)
+			if match.Kind == thread.HistoricalMatchTranscript {
+				source = fmt.Sprintf("transcript:message-%d", match.Message)
+			}
 			if _, err := fmt.Fprintf(
 				out,
 				"%s\t%s\t%q\t%s\t%q\n",
 				match.Metadata.ThreadID,
-				match.MatchedAt.Format(time.RFC3339),
+				match.MatchedAt.Format(time.RFC3339Nano),
 				match.Metadata.Project.ProjectRoot,
-				match.Kind,
+				source,
 				match.Snippet,
 			); err != nil {
 				return err
@@ -953,8 +957,11 @@ func renderSearchList(
 			return err
 		}
 	}
-	if page.ScanTruncated || page.ContentScanTruncated {
-		_, err := fmt.Fprintln(out, "Search coverage was bounded; narrow the project or query for fuller results.")
+	if page.ScanTruncated || page.ContentScanTruncated || page.SkippedTotal > 0 {
+		_, err := fmt.Fprintln(
+			out,
+			"Search coverage was incomplete or bounded; narrow the query and inspect JSON diagnostics.",
+		)
 		return err
 	}
 	return nil

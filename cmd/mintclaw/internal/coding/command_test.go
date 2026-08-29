@@ -207,9 +207,27 @@ func TestResumeHistoricalSearchIsProjectPrivateAndExplicitlyExpandable(t *testin
 		"--search",
 		"transcript-only-needle",
 	))
-	if !strings.Contains(human, current.ThreadID) || !strings.Contains(human, matchedAt.Format(time.RFC3339)) ||
+	if !strings.Contains(human, current.ThreadID) || !strings.Contains(human, matchedAt.Format(time.RFC3339Nano)) ||
+		!strings.Contains(human, "transcript:message-2") ||
 		!strings.Contains(human, "current transcript-only-needle") || strings.Contains(human, foreign.ThreadID) {
 		t.Fatalf("human scoped search = %q", human)
+	}
+	metadataHuman := string(executeCommand(t, newResumeCommand(currentDeps), "--search", "neutral current"))
+	if !strings.Contains(metadataHuman, "metadata:title") {
+		t.Fatalf("human metadata search omitted source identity: %q", metadataHuman)
+	}
+	metaPath := filepath.Join(
+		current.StateRoot,
+		"sessions",
+		strings.ReplaceAll(current.SessionKey, ":", "_")+".meta.json",
+	)
+	if err := os.Remove(metaPath); err != nil {
+		t.Fatal(err)
+	}
+	incomplete := string(executeCommand(t, newResumeCommand(currentDeps), "--search", "not-present"))
+	if !strings.Contains(incomplete, "No coding threads match") ||
+		!strings.Contains(incomplete, "Search coverage was incomplete or bounded") {
+		t.Fatalf("incomplete human search omitted coverage warning: %q", incomplete)
 	}
 	for _, args := range [][]string{
 		{"--search", ""},
