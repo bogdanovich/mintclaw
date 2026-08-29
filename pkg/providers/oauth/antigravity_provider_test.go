@@ -2,6 +2,7 @@ package oauthprovider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -92,6 +93,22 @@ func TestBuildRequestUsesCanonicalToolCall(t *testing.T) {
 	}
 	if toolPart.FunctionResponse.Name != "read_file" {
 		t.Fatalf("expected functionResponse name read_file, got %q", toolPart.FunctionResponse.Name)
+	}
+}
+
+func TestBuildRequestSerializesZeroArgumentToolCallAsObject(t *testing.T) {
+	p := &AntigravityProvider{}
+	req := p.buildRequest([]Message{{
+		Role:      "assistant",
+		ToolCalls: []ToolCall{{ID: "call_zero", Name: "zero_argument_tool"}},
+	}}, nil, "", nil)
+
+	encoded, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"args":{}`) || strings.Contains(string(encoded), `"args":null`) {
+		t.Fatalf("zero-argument request = %s", encoded)
 	}
 }
 

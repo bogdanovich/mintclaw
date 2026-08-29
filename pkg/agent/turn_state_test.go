@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -91,6 +92,32 @@ func TestMatchingTurnMessageTail_IgnoresInternalRuntimeFields(t *testing.T) {
 	}
 	persisted[0].RootTurnStart = true
 
+	if got := matchingTurnMessageTail(history, persisted); got != 2 {
+		t.Fatalf("matchingTurnMessageTail() = %d, want 2", got)
+	}
+}
+
+func TestMatchingTurnMessageTail_PreservesEmptyArgumentsAcrossJSONRoundTrip(t *testing.T) {
+	callMessage := providers.Message{
+		Role: "assistant",
+		ToolCalls: []providers.ToolCall{{
+			ID: "call_zero", Type: "function", Name: "zero_argument_tool", Arguments: map[string]any{},
+		}},
+	}
+	encoded, err := json.Marshal(callMessage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persistedCall providers.Message
+	if err = json.Unmarshal(encoded, &persistedCall); err != nil {
+		t.Fatal(err)
+	}
+	if persistedCall.ToolCalls[0].Arguments == nil {
+		t.Fatalf("empty arguments were omitted during JSON round-trip: %s", encoded)
+	}
+
+	history := []providers.Message{{Role: "user", Content: "question"}, callMessage}
+	persisted := []providers.Message{userPromptMessage("question", nil), persistedCall}
 	if got := matchingTurnMessageTail(history, persisted); got != 2 {
 		t.Fatalf("matchingTurnMessageTail() = %d, want 2", got)
 	}

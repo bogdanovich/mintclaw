@@ -10,7 +10,7 @@ type ToolCall struct {
 	ID                      string         `json:"id"`
 	Type                    string         `json:"type,omitempty"`
 	Name                    string         `json:"name"`
-	Arguments               map[string]any `json:"arguments,omitempty"`
+	Arguments               map[string]any `json:"arguments"`
 	ThoughtSignature        string         `json:"thought_signature,omitempty"`
 	ToolFeedbackExplanation string         `json:"tool_feedback_explanation,omitempty"`
 }

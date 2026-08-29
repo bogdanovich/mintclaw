@@ -257,12 +257,16 @@ func (p *AntigravityProvider) buildRequest(
 				if tc.ID != "" {
 					toolCallNames[tc.ID] = tc.Name
 				}
+				arguments := tc.Arguments
+				if arguments == nil {
+					arguments = map[string]any{}
+				}
 				content.Parts = append(content.Parts, antigravityPart{
 					ThoughtSignature:      tc.ThoughtSignature,
 					ThoughtSignatureSnake: tc.ThoughtSignature,
 					FunctionCall: &antigravityFunctionCall{
 						Name: tc.Name,
-						Args: tc.Arguments,
+						Args: arguments,
 					},
 				})
 			}
