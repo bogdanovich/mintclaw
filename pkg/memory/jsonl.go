@@ -367,6 +367,9 @@ func (s *JSONLStore) writeMeta(key string, meta SessionMeta) error {
 	if err != nil {
 		return fmt.Errorf("memory: encode meta: %w", err)
 	}
+	if _, err := DecodeSessionMeta(data); err != nil {
+		return fmt.Errorf("memory: validate encoded meta: %w", err)
+	}
 	return fileutil.WriteFileAtomic(s.metaPath(key), data, 0o644)
 }
 

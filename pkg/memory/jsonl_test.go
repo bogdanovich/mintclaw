@@ -964,6 +964,67 @@ func TestSessionMetaScopePersists(t *testing.T) {
 	}
 }
 
+func TestUpsertSessionMetaRejectsNonCurrentScopeWithoutMutation(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		name := "new"
+		if existing {
+			name = "existing"
+		}
+		t.Run(name, func(t *testing.T) {
+			store := newTestStore(t)
+			const sessionKey = "canonical"
+			metaPath := store.metaPath(sessionKey)
+			var before []byte
+			if existing {
+				if err := store.UpsertSessionMeta(
+					t.Context(),
+					sessionKey,
+					json.RawMessage(`{"version":2,"agent_id":"main"}`),
+					"browser-1",
+				); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				before, err = os.ReadFile(metaPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			err := store.UpsertSessionMeta(
+				t.Context(),
+				sessionKey,
+				json.RawMessage("null"),
+				"browser-2",
+			)
+			if err == nil || !strings.Contains(err.Error(), "null at metadata.scope") {
+				t.Fatalf("UpsertSessionMeta(null scope) error = %v", err)
+			}
+			if !existing {
+				if _, err := os.Stat(metaPath); !os.IsNotExist(err) {
+					t.Fatalf("invalid new metadata was persisted: %v", err)
+				}
+				return
+			}
+
+			after, err := os.ReadFile(metaPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatalf("invalid update replaced existing metadata:\n%s", after)
+			}
+			meta, err := store.GetSessionMeta(t.Context(), sessionKey)
+			if err != nil {
+				t.Fatalf("GetSessionMeta() after rejected update: %v", err)
+			}
+			if len(meta.ClientSessionIDs) != 1 || meta.ClientSessionIDs[0] != "browser-1" {
+				t.Fatalf("ClientSessionIDs = %v, want unchanged browser-1", meta.ClientSessionIDs)
+			}
+		})
+	}
+}
+
 func TestClearSessionClientIDsPreservesCurrentScope(t *testing.T) {
 	store := newTestStore(t)
 	ctx := t.Context()
