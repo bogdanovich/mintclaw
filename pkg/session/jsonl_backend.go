@@ -24,6 +24,24 @@ type JSONLBackend struct {
 
 const maxTurnHistoryPageMessages = 256
 
+var sessionScopeJSONFields = map[string]struct{}{
+	"version":           {},
+	"agent_id":          {},
+	"channel":           {},
+	"account":           {},
+	"dimensions":        {},
+	"values":            {},
+	"route_scope_key":   {},
+	"client_session_id": {},
+	"epoch":             {},
+}
+
+var sessionEpochJSONFields = map[string]struct{}{
+	"strategy": {},
+	"id":       {},
+	"start":    {},
+}
+
 // MetadataAwareSessionStore exposes structured session metadata operations.
 type MetadataAwareSessionStore interface {
 	EnsureSessionMetadata(sessionKey string, scope *SessionScope)
@@ -83,6 +101,9 @@ func (b *JSONLBackend) GetSessionScope(sessionKey string) *SessionScope {
 }
 
 func decodeCurrentSessionScope(data json.RawMessage) (*SessionScope, error) {
+	if err := validateSessionScopeJSON(data); err != nil {
+		return nil, err
+	}
 	var scope SessionScope
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -102,6 +123,96 @@ func decodeCurrentSessionScope(data json.RawMessage) (*SessionScope, error) {
 		scope.AgentID = routing.NormalizeAgentID(scope.AgentID)
 	}
 	return CloneScope(&scope), nil
+}
+
+func validateSessionScopeJSON(data json.RawMessage) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok || delimiter != '{' {
+		return errors.New("session scope must be a JSON object")
+	}
+	if err := validateSessionScopeObject(decoder, "scope", sessionScopeJSONFields); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("session scope contains a trailing JSON value")
+		}
+		return fmt.Errorf("session scope contains trailing data: %w", err)
+	}
+	return nil
+}
+
+func validateSessionScopeObject(
+	decoder *json.Decoder,
+	path string,
+	allowedFields map[string]struct{},
+) error {
+	seen := make(map[string]struct{})
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("session scope object %s has a non-string field name", path)
+		}
+		fieldPath := path + "." + key
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("session scope contains duplicate field %s", fieldPath)
+		}
+		seen[key] = struct{}{}
+		if allowedFields != nil {
+			if _, allowed := allowedFields[key]; !allowed {
+				return fmt.Errorf("session scope contains unknown field %s", fieldPath)
+			}
+		}
+		var childFields map[string]struct{}
+		if path == "scope" && key == "epoch" {
+			childFields = sessionEpochJSONFields
+		}
+		if err := validateSessionScopeValue(decoder, fieldPath, childFields); err != nil {
+			return err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateSessionScopeValue(
+	decoder *json.Decoder,
+	path string,
+	objectFields map[string]struct{},
+) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		return validateSessionScopeObject(decoder, path, objectFields)
+	case '[':
+		for index := 0; decoder.More(); index++ {
+			if err := validateSessionScopeValue(decoder, fmt.Sprintf("%s[%d]", path, index), nil); err != nil {
+				return err
+			}
+		}
+		_, err := decoder.Token()
+		return err
+	default:
+		return fmt.Errorf("session scope contains unexpected delimiter %q at %s", delimiter, path)
+	}
 }
 
 // ClearSessionClientIDs removes accumulated frontend mappings without
