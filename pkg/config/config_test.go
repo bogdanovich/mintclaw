@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -33,16 +34,10 @@ func mustSetupSSHKey(t *testing.T) {
 	t.Setenv("MINTCLAW_SSH_KEY_PATH", keyPath)
 }
 
-func TestAgentModelConfig_UnmarshalString(t *testing.T) {
+func TestAgentModelConfig_RejectsString(t *testing.T) {
 	var m AgentModelConfig
-	if err := json.Unmarshal([]byte(`"gpt-4"`), &m); err != nil {
-		t.Fatalf("unmarshal string: %v", err)
-	}
-	if m.Primary != "gpt-4" {
-		t.Errorf("Primary = %q, want 'gpt-4'", m.Primary)
-	}
-	if m.Fallbacks != nil {
-		t.Errorf("Fallbacks = %v, want nil", m.Fallbacks)
+	if err := json.Unmarshal([]byte(`"gpt-4"`), &m); err == nil {
+		t.Fatal("unmarshal accepted string model config")
 	}
 }
 
@@ -63,14 +58,14 @@ func TestAgentModelConfig_UnmarshalObject(t *testing.T) {
 	}
 }
 
-func TestAgentModelConfig_MarshalString(t *testing.T) {
+func TestAgentModelConfig_MarshalObjectWithoutFallbacks(t *testing.T) {
 	m := AgentModelConfig{Primary: "gpt-4"}
 	data, err := json.Marshal(m)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if string(data) != `"gpt-4"` {
-		t.Errorf("marshal = %s, want '\"gpt-4\"'", string(data))
+	if string(data) != `{"primary":"gpt-4"}` {
+		t.Errorf("marshal = %s, want object", string(data))
 	}
 }
 
@@ -87,12 +82,40 @@ func TestAgentModelConfig_MarshalObject(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsStringAgentModelWithoutRewriting(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	before := []byte(`{
+  "version": 4,
+  "agents": {
+    "defaults": {"model_name": "primary"},
+    "list": [{"id": "main", "default": true, "model": "primary"}]
+  },
+  "model_list": [
+    {"model_name": "primary", "provider": "openai", "model": "gpt-5.4", "enabled": true}
+  ]
+}`)
+	if err := os.WriteFile(configPath, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := LoadConfig(configPath); err == nil {
+		t.Fatal("LoadConfig() accepted string agent model")
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("LoadConfig() rewrote rejected config:\n%s", after)
+	}
+}
+
 func TestAgentConfig_FullParse(t *testing.T) {
 	jsonData := `{
 		"agents": {
 			"defaults": {
 				"workspace": "~/.mintclaw/workspace",
-				"model": "glm-4.7",
+				"model_name": "glm-4.7",
 				"max_tokens": 8192,
 				"max_tool_iterations": 20
 			},
@@ -101,7 +124,7 @@ func TestAgentConfig_FullParse(t *testing.T) {
 					"id": "sales",
 					"default": true,
 					"name": "Sales Bot",
-					"model": "gpt-4",
+					"model": {"primary": "gpt-4"},
 					"max_parallel_turns": 1
 				},
 			{

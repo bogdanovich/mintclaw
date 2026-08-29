@@ -16,43 +16,10 @@ type AgentsConfig struct {
 	Dispatch *DispatchConfig `json:"dispatch,omitempty"`
 }
 
-// AgentModelConfig supports both string and structured model config.
-// String format: "gpt-4" (just primary, no fallbacks)
-// Object format: {"primary": "gpt-4", "fallbacks": ["claude-haiku"]}
+// AgentModelConfig selects a primary model and optional ordered fallbacks.
 type AgentModelConfig struct {
 	Primary   string   `json:"primary,omitempty"`
 	Fallbacks []string `json:"fallbacks,omitempty"`
-}
-
-func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err == nil {
-		m.Primary = s
-		m.Fallbacks = nil
-		return nil
-	}
-	type raw struct {
-		Primary   string   `json:"primary"`
-		Fallbacks []string `json:"fallbacks"`
-	}
-	var r raw
-	if err := json.Unmarshal(data, &r); err != nil {
-		return err
-	}
-	m.Primary = r.Primary
-	m.Fallbacks = r.Fallbacks
-	return nil
-}
-
-func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
-	if len(m.Fallbacks) == 0 && m.Primary != "" {
-		return json.Marshal(m.Primary)
-	}
-	type raw struct {
-		Primary   string   `json:"primary,omitempty"`
-		Fallbacks []string `json:"fallbacks,omitempty"`
-	}
-	return json.Marshal(raw(m))
 }
 
 type AgentConfig struct {

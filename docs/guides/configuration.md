@@ -655,7 +655,7 @@ prose only; Markdown fields never change runtime authority.
         "id": "research",
         "name": "Research Agent",
         "description": "Specialist for web research and evidence synthesis.",
-        "model": "research-model",
+        "model": {"primary": "research-model"},
         "skills": ["deep-research"],
         "tool_policy": {
           "default": "deny",
@@ -671,6 +671,9 @@ prose only; Markdown fields never change runtime authority.
   }
 }
 ```
+
+`model` is always an object. Set `primary` to a configured `model_name` and
+optionally add an ordered `fallbacks` array.
 
 Each policy has one explicit default:
 
