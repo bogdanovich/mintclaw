@@ -329,7 +329,9 @@ func TestPlaywrightWorkerChecksExpectedNavigationIdentityBeforeDispatch(t *testi
 	}
 	if !navigateOK || client.calls[2].tool != "browser_run_code_unsafe" ||
 		!strings.Contains(navigateCode, `await page.goto("https://example.com/path?q=one\u0026two=three")`) ||
-		!strings.Contains(navigateCode, `return "MINTCLAW_NAV_ACT_V1|navigation_failed"`) {
+		!strings.Contains(navigateCode, `message.includes("net::ERR_TOO_MANY_REDIRECTS")`) ||
+		!strings.Contains(navigateCode, `return "MINTCLAW_NAV_ACT_V1|navigation_failed"`) ||
+		!strings.Contains(navigateCode, `throw error`) {
 		t.Fatalf("conditional navigate call = %#v", client.calls[2])
 	}
 	if !pressOK || client.calls[3].tool != "browser_run_code_unsafe" ||

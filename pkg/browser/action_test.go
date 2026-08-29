@@ -311,6 +311,21 @@ type failOnceStagedAcceptanceStore struct {
 	failures int
 }
 
+type failNavigationCompletionStore struct {
+	*MemoryStore
+}
+
+func (store *failNavigationCompletionStore) UpdateInvocation(
+	ctx context.Context,
+	expected uint64,
+	next Invocation,
+) error {
+	if next.State == InvocationFailed && next.SafeFailure == "navigation_failed" {
+		return ErrStale
+	}
+	return store.MemoryStore.UpdateInvocation(ctx, expected, next)
+}
+
 func (store *failOnceStagedAcceptanceStore) UpdateInvocation(
 	ctx context.Context,
 	expected uint64,
@@ -1449,6 +1464,34 @@ func TestBrokerNavigationFailureInvalidatesSnapshotWithoutQuarantiningSession(t 
 	fresh, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
 	if err != nil || fresh.SnapshotID == "" || fresh.SnapshotGeneration != observed.SnapshotGeneration+1 {
 		t.Fatalf("Observe() after failed navigation = %+v, %v", fresh, err)
+	}
+}
+
+func TestBrokerNavigationFailureRequiresDurableTerminalStateForRecovery(t *testing.T) {
+	store := &failNavigationCompletionStore{MemoryStore: NewMemoryStore()}
+	broker, worker, session := openActionTestBroker(t, store)
+	owner := testOwner()
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_navigation_persist_failed", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action: Action{Kind: ActionNavigate, URL: "https://example.com/redirect-loop"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.executeErr = ErrNavigationFailed
+	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
+	if !errors.Is(err, ErrStale) || errors.Is(err, ErrNavigationFailed) ||
+		invocation.State != InvocationFailed || invocation.SafeFailure != "navigation_failed" {
+		t.Fatalf("ExecuteAction() = %+v, %v, want persistence error without recovery sentinel", invocation, err)
+	}
+	stored, err := store.GetInvocation(t.Context(), invocation.ID)
+	if err != nil || stored.State != InvocationAccepted {
+		t.Fatalf("stored invocation = %+v, %v, want accepted state", stored, err)
 	}
 }
 

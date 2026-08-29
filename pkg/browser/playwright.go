@@ -960,14 +960,19 @@ func playwrightNavigationCheckedActionCode(
 		if !ok || normalizedURL == "" {
 			return "", fmt.Errorf("%w: normalized navigation URL is unavailable", ErrInvalid)
 		}
-		// A navigation error such as a redirect loop is a deterministic local
-		// failure, not evidence that the driver process was lost. Return a
-		// bounded marker so the broker can invalidate snapshot authority while
-		// preserving the session for observation or an alternate route.
+		// A redirect loop is a deterministic response from the remote site, not
+		// evidence that the driver process was lost. Only classify this narrow,
+		// known browser error as recoverable; timeouts, closed targets, transport
+		// failures, and unrecognized rejections must retain the existing unknown-
+		// outcome quarantine behavior.
 		dispatch = `try {
     await page.goto(` + jsonString(normalizedURL) + `);
-  } catch {
-    return "MINTCLAW_NAV_ACT_V1|navigation_failed";
+  } catch (error) {
+    const message = String(error && error.message ? error.message : error);
+    if (message.includes("net::ERR_TOO_MANY_REDIRECTS")) {
+      return "MINTCLAW_NAV_ACT_V1|navigation_failed";
+    }
+    throw error;
   }`
 	case "browser_click":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
