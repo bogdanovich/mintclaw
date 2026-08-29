@@ -1640,6 +1640,8 @@ later roadmap packets remain uncompleted.
 
 Dependencies: P4.2
 
+Implementation contract: [P6.3 rich input and attachments](local-coding-agent-p6-3-attachments.md).
+
 Scope:
 
 - Add file references, pasted logs, and supported image attachments without
