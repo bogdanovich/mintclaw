@@ -1,9 +1,12 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 
@@ -25,6 +28,7 @@ type MetadataAwareSessionStore interface {
 	EnsureSessionMetadata(sessionKey string, scope *SessionScope)
 	GetSessionScope(sessionKey string) *SessionScope
 	ClearSessionClientIDs(sessionKey string) error
+	ListCurrentSessions() []string
 }
 
 // NewJSONLBackend wraps a memory.Store for use as a SessionStore.
@@ -63,15 +67,31 @@ func (b *JSONLBackend) GetSessionScope(sessionKey string) *SessionScope {
 	if len(meta.Scope) == 0 {
 		return nil
 	}
-	var scope SessionScope
-	if err := json.Unmarshal(meta.Scope, &scope); err != nil {
+	scope, err := decodeCurrentSessionScope(meta.Scope)
+	if err != nil {
 		log.Printf("session: decode session scope: %v", err)
 		return nil
 	}
-	if scope.Version != ScopeVersion {
-		return nil
+	return scope
+}
+
+func decodeCurrentSessionScope(data json.RawMessage) (*SessionScope, error) {
+	var scope SessionScope
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&scope); err != nil {
+		return nil, err
 	}
-	return CloneScope(&scope)
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("session scope contains a trailing JSON value")
+		}
+		return nil, fmt.Errorf("session scope contains trailing data: %w", err)
+	}
+	if scope.Version != ScopeVersion {
+		return nil, fmt.Errorf("unsupported session scope version %d", scope.Version)
+	}
+	return CloneScope(&scope), nil
 }
 
 // ClearSessionClientIDs removes accumulated frontend mappings without
@@ -278,7 +298,31 @@ func (b *JSONLBackend) Close() error {
 	return b.store.Close()
 }
 
-// ListSessions returns all known session keys.
+// ListCurrentSessions returns persisted agent sessions with the current key
+// and structured-scope contract. Historical and malformed metadata remains
+// untouched but cannot enter recovery or background reconciliation.
+func (b *JSONLBackend) ListCurrentSessions() []string {
+	keys := b.store.ListSessions()
+	current := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if !IsOpaqueSessionKey(key) {
+			continue
+		}
+		meta, err := b.store.GetSessionMeta(context.Background(), key)
+		if err != nil || len(meta.Scope) == 0 {
+			continue
+		}
+		if _, err = decodeCurrentSessionScope(meta.Scope); err != nil {
+			continue
+		}
+		current = append(current, key)
+	}
+	return current
+}
+
+// ListSessions returns every history owned by this store. Coding runtimes use
+// a separate current identity contract and select their admitted thread at the
+// agent composition boundary.
 func (b *JSONLBackend) ListSessions() []string {
 	return b.store.ListSessions()
 }

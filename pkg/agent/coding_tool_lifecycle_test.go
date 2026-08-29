@@ -117,75 +117,66 @@ func TestRepairDanglingToolLifecyclesScopesReusedIDsToToolBlock(t *testing.T) {
 }
 
 func TestCodingStartupRepairsCrashFixturesWithoutReplayingMutation(t *testing.T) {
-	project := t.TempDir()
-	stateRoot := t.TempDir()
-	layout, profile := newCodingToolTestProfile(t, project, stateRoot)
-	store, err := initRuntimeSessionStore(layout.StatePaths().SessionsRoot)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name       string
+		tool       string
+		started    bool
+		wantStatus providers.ToolResultStatus
+	}{
+		{name: "before-start", tool: "write_file", wantStatus: providers.ToolResultStatusInterrupted},
+		{name: "after-start", tool: "write_file", started: true, wantStatus: providers.ToolResultStatusUnknown},
+		{name: "during-mutation", tool: "write_file", started: true, wantStatus: providers.ToolResultStatusUnknown},
+		{name: "before-result-persistence", tool: "exec", started: true, wantStatus: providers.ToolResultStatusUnknown},
 	}
-	mutationPath := filepath.Join(project, "mutation.txt")
-	if err := os.WriteFile(mutationPath, []byte("one mutation\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	startedMarker := newToolExecutionMarker(
-		"during-mutation",
-		"write_file",
-		time.Now(),
-	)
-	fixtures := map[string][]providers.Message{
-		"before-start": {
-			{Role: "user", Content: "write"},
-			codingToolIntent("before-start", "write_file", nil),
-		},
-		"after-start": {
-			{Role: "user", Content: "write"},
-			codingToolIntent("after-start", "write_file", []providers.ToolExecution{
-				mustToolExecutionMarker(t, "after-start", "write_file"),
-			}),
-		},
-		"during-mutation": {
-			{Role: "user", Content: "write"},
-			codingToolIntent("during-mutation", "write_file", []providers.ToolExecution{startedMarker}),
-		},
-		"before-result-persistence": {
-			{Role: "user", Content: "exec"},
-			codingToolIntent("before-result-persistence", "exec", []providers.ToolExecution{
-				mustToolExecutionMarker(t, "before-result-persistence", "exec"),
-			}),
-		},
-	}
-	for sessionKey, fixture := range fixtures {
-		if err := store.ReplaceTurnHistory(context.Background(), sessionKey, fixture); err != nil {
-			_ = store.Close()
-			t.Fatal(err)
-		}
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			project := t.TempDir()
+			stateRoot := t.TempDir()
+			layout, profile := newCodingToolTestProfile(t, project, stateRoot)
+			store, err := initRuntimeSessionStore(layout.StatePaths().SessionsRoot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutationPath := filepath.Join(project, "mutation.txt")
+			if err = os.WriteFile(mutationPath, []byte("one mutation\n"), 0o600); err != nil {
+				_ = store.Close()
+				t.Fatal(err)
+			}
+			var executions []providers.ToolExecution
+			if test.started {
+				executions = []providers.ToolExecution{mustToolExecutionMarker(t, test.name, test.tool)}
+			}
+			fixture := []providers.Message{
+				{Role: "user", Content: "run tool"},
+				codingToolIntent(test.name, test.tool, executions),
+			}
+			sessionKey := "coding:" + layout.ThreadID()
+			if err = store.ReplaceTurnHistory(t.Context(), sessionKey, fixture); err != nil {
+				_ = store.Close()
+				t.Fatal(err)
+			}
+			if err = store.Close(); err != nil {
+				t.Fatal(err)
+			}
 
-	loop, err := NewCodingAgentLoop(
-		t.Context(),
-		codingToolTestConfig(), bus.NewMessageBus(), &mockProvider{}, profile,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer loop.Close()
-	canonical := loop.GetRegistry().GetDefaultAgent().Sessions
-	assertRecoveredToolStatus(
-		t, canonical.GetHistory("before-start"), "before-start", providers.ToolResultStatusInterrupted,
-	)
-	for _, sessionKey := range []string{"after-start", "during-mutation", "before-result-persistence"} {
-		assertRecoveredToolStatus(t, canonical.GetHistory(sessionKey), sessionKey, providers.ToolResultStatusUnknown)
-	}
-	content, err := os.ReadFile(mutationPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(content) != "one mutation\n" {
-		t.Fatalf("startup replayed or changed the mutation: %q", content)
+			loop, err := NewCodingAgentLoop(
+				t.Context(),
+				codingToolTestConfig(), bus.NewMessageBus(), &mockProvider{}, profile,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer loop.Close()
+			canonical := loop.GetRegistry().GetDefaultAgent().Sessions
+			assertRecoveredToolStatus(t, canonical.GetHistory(sessionKey), test.name, test.wantStatus)
+			content, err := os.ReadFile(mutationPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(content) != "one mutation\n" {
+				t.Fatalf("startup replayed or changed the mutation: %q", content)
+			}
+		})
 	}
 }
 

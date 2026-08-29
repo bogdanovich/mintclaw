@@ -2,11 +2,13 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -228,6 +230,59 @@ func TestAgentLoopRecoverUnansweredSessionsSkipsUnackedInboundSpool(t *testing.T
 	select {
 	case outbound := <-msgBus.OutboundChan():
 		t.Fatalf("unexpected outbound recovery response: %+v", outbound)
+	default:
+	}
+}
+
+func TestAgentLoopRecoverUnansweredSessionsIgnoresHistoricalSessionContracts(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := memory.NewJSONLStore(filepath.Join(workspace, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	historicalScope, err := json.Marshal(session.SessionScope{
+		Version: session.ScopeVersion - 1,
+		AgentID: "main",
+		Channel: "telegram",
+	})
+	if err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		"agent:main:historical",
+		session.BuildOpaqueSessionKey("historical-scope-version"),
+	} {
+		if err = store.UpsertSessionMeta(t.Context(), key, historicalScope, ""); err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+		if err = store.AddFullMessage(
+			t.Context(),
+			key,
+			providers.Message{Role: "user", Content: "must remain archival"},
+		); err != nil {
+			_ = store.Close()
+			t.Fatal(err)
+		}
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
+		Workspace: workspace, ModelName: "test-model", MaxTokens: 4096, MaxToolIterations: 10,
+	}}}
+	msgBus := bus.NewMessageBus()
+	defer msgBus.Close()
+	loop := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: "must not run"})
+	defer loop.Close()
+	if got := loop.RecoverUnansweredSessions(t.Context()); got != 0 {
+		t.Fatalf("RecoverUnansweredSessions() = %d, want historical sessions ignored", got)
+	}
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		t.Fatalf("unexpected recovery delivery for historical session: %+v", outbound)
 	default:
 	}
 }

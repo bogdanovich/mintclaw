@@ -116,7 +116,7 @@ func (al *AgentLoop) repairCodingToolLifecycles(ctx context.Context) error {
 		if !ok || instance == nil || instance.Sessions == nil {
 			continue
 		}
-		sessionKeys := instance.Sessions.ListSessions()
+		sessionKeys := currentRuntimeSessionKeys(instance, instance.Sessions)
 		sort.Strings(sessionKeys)
 		for _, sessionKey := range sessionKeys {
 			if err := ctx.Err(); err != nil {

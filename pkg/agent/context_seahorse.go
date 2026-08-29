@@ -915,7 +915,7 @@ func (m *seahorseContextManager) StartBackgroundReconciliation(ctx context.Conte
 				})
 				continue
 			}
-			for _, key := range runtime.sessions.ListSessions() {
+			for _, key := range currentRuntimeSessionKeys(agent, runtime.sessions) {
 				unlock := m.lockSession(runtime.agentID + ":" + key)
 				_, err = m.ensureReconciledRuntime(ctx, runtime, key)
 				unlock()

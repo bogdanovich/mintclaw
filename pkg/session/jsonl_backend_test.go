@@ -403,6 +403,81 @@ func TestJSONLBackendRejectsRemovedScopeVersion(t *testing.T) {
 	}
 }
 
+func TestJSONLBackendListsOnlyCurrentScopedSessions(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	backend := session.NewJSONLBackend(store)
+
+	currentKey := session.BuildOpaqueSessionKey("current-enumerated-session")
+	backend.EnsureSessionMetadata(currentKey, &session.SessionScope{
+		Version: session.ScopeVersion,
+		AgentID: "main",
+		Channel: "mintclaw",
+	})
+
+	removedScopeKey := session.BuildOpaqueSessionKey("removed-enumerated-session")
+	removedScope, err := json.Marshal(session.SessionScope{
+		Version: session.ScopeVersion - 1,
+		AgentID: "main",
+		Channel: "mintclaw",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.UpsertSessionMeta(t.Context(), removedScopeKey, removedScope, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	currentScope, err := json.Marshal(session.SessionScope{
+		Version: session.ScopeVersion,
+		AgentID: "main",
+		Channel: "mintclaw",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.UpsertSessionMeta(t.Context(), "task:removed-key", currentScope, ""); err != nil {
+		t.Fatal(err)
+	}
+	missingScopeKey := session.BuildOpaqueSessionKey("missing-enumerated-scope")
+	if err = store.AddFullMessage(
+		t.Context(),
+		missingScopeKey,
+		providers.Message{Role: "user", Content: "missing scope"},
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := backend.ListCurrentSessions()
+	if len(keys) != 1 || keys[0] != currentKey {
+		t.Fatalf("ListCurrentSessions() = %v, want only %q", keys, currentKey)
+	}
+}
+
+func TestJSONLBackendRejectsUnknownCurrentScopeFields(t *testing.T) {
+	store, err := memory.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	key := session.BuildOpaqueSessionKey("unknown-scope-field")
+	rawScope := json.RawMessage(`{"version":2,"agent_id":"main","channel":"mintclaw","removed":true}`)
+	if err = store.UpsertSessionMeta(t.Context(), key, rawScope, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := session.NewJSONLBackend(store)
+	if scope := backend.GetSessionScope(key); scope != nil {
+		t.Fatalf("GetSessionScope() = %#v, want unknown field rejected", scope)
+	}
+	if keys := backend.ListCurrentSessions(); len(keys) != 0 {
+		t.Fatalf("ListCurrentSessions() = %v, want unknown field omitted", keys)
+	}
+}
+
 func TestJSONLBackendClearsAccumulatedClientSessionIDs(t *testing.T) {
 	store, err := memory.NewJSONLStore(t.TempDir())
 	if err != nil {
