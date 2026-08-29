@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,85 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
+
+func TestJSONLStoreRequiresCurrentSessionMetadata(t *testing.T) {
+	valid := `{
+  "key": "turn",
+  "summary": "",
+  "skip": 0,
+  "count": 0,
+  "created_at": "2026-08-28T12:00:00Z",
+  "updated_at": "2026-08-28T12:00:00Z"
+}`
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "null document", raw: `null`},
+		{name: "missing key", raw: `{"summary":"","skip":0,"count":0}`},
+		{name: "mismatched key", raw: `{"key":"other","summary":"","skip":0,"count":0}`},
+		{name: "removed aliases", raw: `{"key":"turn","summary":"","skip":0,"count":0,"aliases":[]}`},
+		{name: "negative count", raw: `{"key":"turn","summary":"","skip":0,"count":-1}`},
+		{name: "skip beyond count", raw: `{"key":"turn","summary":"","skip":2,"count":1}`},
+		{name: "trailing value", raw: valid + ` {}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestStore(t)
+			before := []byte(tt.raw)
+			if err := os.WriteFile(store.metaPath("turn"), before, 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := store.readMeta("turn"); err == nil {
+				t.Fatal("readMeta() accepted invalid metadata")
+			}
+			if sessions := store.ListSessions(); len(sessions) != 0 {
+				t.Fatalf("ListSessions() published invalid metadata: %v", sessions)
+			}
+			if err := store.SetSummary(t.Context(), "turn", "must not replace invalid state"); err == nil {
+				t.Fatal("SetSummary() accepted invalid metadata")
+			}
+			after, err := os.ReadFile(store.metaPath("turn"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatalf("invalid metadata was rewritten:\n%s", after)
+			}
+		})
+	}
+
+	store := newTestStore(t)
+	if err := os.WriteFile(store.metaPath("turn"), []byte(valid), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.readMeta("turn")
+	if err != nil {
+		t.Fatalf("readMeta(current contract): %v", err)
+	}
+	if meta.Key != "turn" || meta.Count != 0 || meta.Skip != 0 {
+		t.Fatalf("readMeta(current contract) = %+v", meta)
+	}
+	if sessions := store.ListSessions(); !slices.Equal(sessions, []string{"turn"}) {
+		t.Fatalf("ListSessions() = %v, want current session", sessions)
+	}
+}
+
+func TestJSONLStoreWriteMetaRequiresExactSessionKey(t *testing.T) {
+	store := newTestStore(t)
+	if _, err := store.readMeta(""); err == nil {
+		t.Fatal("readMeta() accepted an empty session key without a metadata file")
+	}
+	for _, meta := range []SessionMeta{{}, {Key: "other"}} {
+		if err := store.writeMeta("turn", meta); err == nil {
+			t.Fatalf("writeMeta(%+v) accepted invalid session key", meta)
+		}
+	}
+	if _, err := os.Stat(store.metaPath("turn")); !os.IsNotExist(err) {
+		t.Fatalf("invalid write created metadata: %v", err)
+	}
+}
 
 func TestJSONLStoreTurnJournalFaultStagesFailClosed(t *testing.T) {
 	stages := []jsonlJournalWriteStage{
