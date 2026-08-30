@@ -702,6 +702,9 @@ func TestBrowserSessionSchemaDistinguishesTargetAndProfile(t *testing.T) {
 	for _, want := range []string{
 		"target is the browser target name from browser_targets",
 		"profile is the profile name nested under that target",
+		"same visible local browser window",
+		"call resume on the same session",
+		"observe fresh state",
 	} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("browser_session description %q does not contain %q", description, want)
@@ -979,6 +982,12 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	}
 	if err := interactions.ValidateSuspensionRequest(*handoff.Control.Suspension); err != nil {
 		t.Fatalf("handoff suspension is invalid: %v", err)
+	}
+	question := handoff.Control.Suspension.Questions[0].Question
+	for _, want := range []string{"signing in", "reply to release control", "same session"} {
+		if !strings.Contains(question, want) {
+			t.Fatalf("handoff question %q does not contain %q", question, want)
+		}
 	}
 	var handoffView browserSessionView
 	decodeBrowserToolResult(t, handoff, &handoffView)
@@ -1947,9 +1956,12 @@ func TestBrowserActReportsRecoverableNavigationFailure(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.ContentForLLM()), &payload); err != nil {
 		t.Fatalf("decode navigation result: %v; content = %q", err, result.ContentForLLM())
 	}
-	if payload["code"] != "navigation_failed" || payload["action"] != "observe_again_or_choose_alternate_url" ||
+	if payload["code"] != "navigation_failed" ||
+		payload["action"] != "observe_same_session_then_check_site_origin_for_authentication" ||
 		payload["browser_session_id"] != "browser_session_1" ||
-		payload["state"] != string(browser.InvocationFailed) || payload["reason"] != "navigation_failed" {
+		payload["state"] != string(browser.InvocationFailed) || payload["reason"] != "navigation_failed" ||
+		payload["session_preserved"] != true ||
+		!strings.Contains(payload["message"].(string), "does not prove whether the user is signed in") {
 		t.Fatalf("navigation payload = %#v", payload)
 	}
 
