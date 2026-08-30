@@ -1640,12 +1640,14 @@ later roadmap packets remain uncompleted.
 
 Dependencies: P4.2
 
+Implementation contract: [P6.3 rich input and attachments](local-coding-agent-p6-3-attachments.md).
+
 Scope:
 
 - Add file references, pasted logs, and supported image attachments without
   embedding historical base64 in every future prompt.
-- Store copied durable attachments in a content-addressed MintClaw blob area,
-  while recording explicit availability for external path references.
+- Store durable attachments in a content-addressed MintClaw blob area without
+  retaining or rechecking their caller-owned source paths.
 - Define ownership, deduplication, retention, redaction, and garbage collection
   for blobs shared by multiple threads.
 - Define missing attachment behavior after restart.
