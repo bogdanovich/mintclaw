@@ -453,6 +453,63 @@ func TestAttachmentAdmissionReturnsCommittedReference(t *testing.T) {
 	}
 }
 
+func TestAttachmentReadmissionReplaysCommittedManifestDurability(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	committedFailure := errors.New("injected committed manifest sync failure")
+	writeRoot := store.writeRoot
+	failManifestOnce := true
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if err := writeRoot(root, name, data, mode); err != nil {
+			return err
+		}
+		if name == attachmentManifest && failManifestOnce {
+			failManifestOnce = false
+			return &fileutil.CommittedWriteError{Err: committedFailure}
+		}
+		return nil
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if attachment.Ref == "" || !IsCommittedAttachmentError(err) || !errors.Is(err, committedFailure) {
+		t.Fatalf("committed admission = %+v, %v", attachment, err)
+	}
+
+	durabilityFailure := errors.New("injected retry manifest sync failure")
+	attachmentsRoot := filepath.Clean(filepath.Join(
+		store.Root(),
+		"threads",
+		metadata.ThreadID,
+		attachmentDirectory,
+	))
+	syncRoot := store.syncRoot
+	store.syncRoot = func(root *os.Root) error {
+		if filepath.Clean(root.Name()) == attachmentsRoot {
+			return durabilityFailure
+		}
+		return syncRoot(root)
+	}
+	repeated, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now().Add(time.Minute),
+	})
+	if repeated.Ref != "" || !errors.Is(err, durabilityFailure) {
+		t.Fatalf("readmission without manifest durability = %+v, %v", repeated, err)
+	}
+
+	store.syncRoot = syncRoot
+	repeated, err = store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now().Add(2 * time.Minute),
+	})
+	if err != nil || repeated.Ref != attachment.Ref {
+		t.Fatalf("durable readmission = %+v, %v", repeated, err)
+	}
+}
+
 func TestAttachmentAdmissionReportsCommittedDirectoryCreation(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
