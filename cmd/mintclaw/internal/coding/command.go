@@ -579,15 +579,17 @@ func resumeSelectedThread(
 	threadID string,
 	options resumeOptions,
 ) (result commandResult, resultErr error) {
+	updatedTitle := ""
 	updatedPreview := ""
 	if options.promptSet {
 		if err := thread.ValidatePrompt(options.prompt); err != nil {
 			return commandResult{}, err
 		}
-		_, preview, displayErr := thread.DisplayFromRequest(options.prompt)
+		title, preview, displayErr := thread.DisplayFromRequest(options.prompt)
 		if displayErr != nil {
 			return commandResult{}, displayErr
 		}
+		updatedTitle = title
 		updatedPreview = preview
 	}
 	metadata, lease, err := prepareResumedThread(ctx, store, project, deps, threadID, options, options.promptSet)
@@ -607,6 +609,10 @@ func resumeSelectedThread(
 		})
 		promptStored = outcome.PromptStored
 		if promptStored {
+			if metadata.PendingFirstPrompt {
+				metadata.Title = updatedTitle
+				metadata.PendingFirstPrompt = false
+			}
 			metadata.Preview = updatedPreview
 		}
 		if outcome.Model != "" {

@@ -605,6 +605,45 @@ func TestCodeWithoutPromptRejectsPlainAndJSONModes(t *testing.T) {
 	}
 }
 
+func TestResumePromptPromotesPendingThreadMetadata(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 29, 17, 30, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewPendingMetadata(thread.NewThreadID(), project, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+
+	executeCommand(
+		t,
+		newResumeCommand(deps),
+		metadata.ThreadID,
+		"--prompt",
+		"Inspect repository carefully",
+		"--json",
+	)
+	persisted, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.PendingFirstPrompt || persisted.Title != "Inspect repository carefully" ||
+		persisted.Preview != "Inspect repository carefully" {
+		t.Fatalf("resumed pending metadata = %+v", persisted)
+	}
+}
+
 func TestResumeSelectorsAndProjectMismatchAreExplicit(t *testing.T) {
 	home := t.TempDir()
 	firstProject := t.TempDir()
