@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -548,16 +550,165 @@ func TestCodingDirectTurnOptionsEnableBackgroundCompactionForPersistentRuntime(t
 	}
 }
 
-func TestNativeControllerRuntimeRejectsUnadmittedAttachments(t *testing.T) {
-	runtime := &nativeControllerRuntime{}
-	err := runtime.RunTurn(
-		t.Context(),
-		frontend.TurnInput{Attachments: []frontend.TurnAttachment{{Path: "/tmp/screenshot.png"}}},
-		func() { t.Fatal("unadmitted attachment reported the turn ready") },
-	)
-	if err == nil || !strings.Contains(err.Error(), "attachments are not admitted") {
-		t.Fatalf("RunTurn() error = %v, want fail-closed attachment rejection", err)
+func TestNativeRuntimeAdmitsAttachmentAndStoresExactReference(t *testing.T) {
+	store, lease, metadata := newRuntimeAttachmentThread(t)
+	sessions := session.NewMemoryStore()
+	source := filepath.Join(t.TempDir(), "screen[1].png")
+	if err := os.WriteFile(source, []byte("verified image bytes"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	runtime := &nativeCodingRuntime{
+		store:           store,
+		lease:           lease,
+		metadata:        metadata,
+		sessions:        sessions,
+		readTurnHistory: defaultRuntimeHistoryReader,
+		now: func() time.Time {
+			return time.Date(2026, time.August, 29, 22, 0, 0, 0, time.UTC)
+		},
+		processDirect: func(
+			ctx context.Context,
+			input agent.DirectTurnInput,
+			sessionKey, _, _ string,
+			_ agent.DirectTurnOptions,
+		) (string, error) {
+			if err := sessions.AppendTurnMessage(ctx, sessionKey, providers.Message{
+				Role: "user", Content: input.Content, Media: input.Media, RootTurnStart: true,
+			}); err != nil {
+				return "", err
+			}
+			return "inspected", nil
+		},
+	}
+	outcome, err := runtime.runTurn(t.Context(), frontend.TurnInput{
+		Text: "What is wrong here?",
+		Attachments: []frontend.TurnAttachment{{
+			Path: source, Filename: "screen[1].png", ContentType: "image/png",
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.PromptStored || outcome.Response != "inspected" {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	history, err := sessions.ReadTurnHistory(t.Context(), metadata.SessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Content != "[image: screen‹1›.png]\nWhat is wrong here?" ||
+		len(history[0].Media) != 1 || !thread.IsAttachmentRef(history[0].Media[0]) {
+		t.Fatalf("stored history = %+v", history)
+	}
+	attachments, err := store.ListAttachments(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attachments) != 1 || attachments[0].Ref != history[0].Media[0] {
+		t.Fatalf("manifest = %+v, history = %+v", attachments, history)
+	}
+}
+
+func TestNativeRuntimeRollsBackAttachmentWhenPromptWasNotStored(t *testing.T) {
+	store, lease, metadata := newRuntimeAttachmentThread(t)
+	sessions := session.NewMemoryStore()
+	source := filepath.Join(t.TempDir(), "build.log")
+	if err := os.WriteFile(source, []byte("compiler output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected processor failure")
+	runtime := &nativeCodingRuntime{
+		store: store, lease: lease, metadata: metadata, sessions: sessions,
+		readTurnHistory: defaultRuntimeHistoryReader,
+		processDirect: func(
+			context.Context,
+			agent.DirectTurnInput,
+			string,
+			string,
+			string,
+			agent.DirectTurnOptions,
+		) (string, error) {
+			return "", injected
+		},
+	}
+	outcome, err := runtime.runTurn(t.Context(), frontend.TurnInput{
+		Attachments: []frontend.TurnAttachment{{Path: source, ContentType: "text/plain"}},
+	}, nil)
+	if !errors.Is(err, injected) || outcome.PromptStored {
+		t.Fatalf("runTurn() outcome = %+v, error = %v", outcome, err)
+	}
+	var indeterminate *thread.IndeterminatePromptError
+	if !errors.As(err, &indeterminate) {
+		t.Fatalf("runTurn() error = %v, want indeterminate prompt classification", err)
+	}
+	attachments, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(attachments) != 0 {
+		t.Fatalf("rolled-back manifest = %+v, want no references", attachments)
+	}
+}
+
+func TestNativeRuntimeRollsBackAttachmentWhenCanonicalPromptExceedsBound(t *testing.T) {
+	store, lease, metadata := newRuntimeAttachmentThread(t)
+	source := filepath.Join(t.TempDir(), "build.log")
+	if err := os.WriteFile(source, []byte("compiler output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &nativeCodingRuntime{store: store, lease: lease, metadata: metadata}
+	_, attachments, err := runtime.admitTurnInput(t.Context(), frontend.TurnInput{
+		Text: strings.Repeat("x", thread.MaxPromptBytes),
+		Attachments: []frontend.TurnAttachment{{
+			Path: source, ContentType: "text/plain",
+		}},
+	})
+	if err == nil || len(attachments) != 0 {
+		t.Fatalf("admitTurnInput() attachments = %+v, error = %v", attachments, err)
+	}
+	entries, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("oversized canonical prompt left refs = %+v", entries)
+	}
+}
+
+func newRuntimeAttachmentThread(t *testing.T) (*thread.Store, *thread.Lease, thread.Metadata) {
+	t.Helper()
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "attachments", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	return store, lease, metadata
+}
+
+func defaultRuntimeHistoryReader(
+	ctx context.Context,
+	store session.SessionStore,
+	sessionKey string,
+) ([]providers.Message, error) {
+	return store.ReadTurnHistory(ctx, sessionKey)
 }
 
 func TestCodingHistoryCursorHonorsRecoveryContext(t *testing.T) {

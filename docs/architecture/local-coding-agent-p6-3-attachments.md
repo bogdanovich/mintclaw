@@ -56,13 +56,25 @@ this storage layer.
 
 ## Prompt and runtime boundary
 
-Admission alone does not add historical bytes to model input. A later P6.3 PR
-will convert selected file, pasted-log, and supported-image inputs into the
-canonical user message, inject a thread-bound resolver into the coding runtime,
-and account for every selected attachment in prompt limits. Historical media is
-resolved only when selected or contextually required. Missing media becomes a
-bounded diagnostic message and does not corrupt or truncate canonical history.
+The coding runtime admits one structured turn batch before dispatch and stores
+only its canonical placeholders and thread-owned references in JSONL. Image
+inputs use `[image: filename]`; other files and pasted logs use
+`[file: filename]`. Caller paths never enter canonical history. Prompt text and
+the generated placeholder content remain inside the canonical 1 MiB UTF-8
+bound.
 
-The TUI, CLI flags, canonical-message integration, provider representation,
-fork reachability, retention/GC command, and final roadmap exit record are
-therefore intentionally outside this foundation PR.
+The agent media boundary resolves a current attachment only through the
+selected thread manifest, verifies its immutable bytes, and materializes it in
+a random process-private directory for provider adaptation. Closing the coding
+runtime removes that temporary view. Another thread's reference, a missing
+blob, or a replaced temporary hierarchy fails closed. If history proves that a
+turn was not stored after admission, the runtime atomically removes exactly the
+new references without deleting shared blobs. If post-turn history cannot be
+read, it conservatively retains them because the prompt may have committed.
+
+This checkpoint does not yet define historical selection or complete media
+token accounting. Until those land, the existing generic media adapter may
+resolve historical references to path tags while building a later request.
+The CLI flags, Codex-like TUI presentation, historical selection, fork
+reachability, retention/GC command, and final roadmap exit record remain later
+P6.3 work.
