@@ -13,7 +13,7 @@ import (
 
 type blockingRuntime struct {
 	mu             sync.Mutex
-	runStarted     chan string
+	runStarted     chan frontend.TurnInput
 	runRelease     chan struct{}
 	compactStarted chan struct{}
 	compactRelease chan struct{}
@@ -59,8 +59,8 @@ type cancelCauseRuntime struct {
 	joinedError error
 }
 
-func (r *cancelCauseRuntime) RunTurn(ctx context.Context, prompt string, ready func()) error {
-	r.runStarted <- prompt
+func (r *cancelCauseRuntime) RunTurn(ctx context.Context, input frontend.TurnInput, ready func()) error {
+	r.runStarted <- input
 	ready()
 	<-ctx.Done()
 	return errors.Join(context.Cause(ctx), r.joinedError)
@@ -80,15 +80,15 @@ func (r *pagedRuntime) TranscriptPage(
 
 func newBlockingRuntime() *blockingRuntime {
 	return &blockingRuntime{
-		runStarted:     make(chan string, 1),
+		runStarted:     make(chan frontend.TurnInput, 1),
 		runRelease:     make(chan struct{}),
 		compactStarted: make(chan struct{}, 1),
 		compactRelease: make(chan struct{}),
 	}
 }
 
-func (r *blockingRuntime) RunTurn(ctx context.Context, prompt string, ready func()) error {
-	r.runStarted <- prompt
+func (r *blockingRuntime) RunTurn(ctx context.Context, input frontend.TurnInput, ready func()) error {
+	r.runStarted <- input
 	ready()
 	select {
 	case <-r.runRelease:
@@ -147,22 +147,22 @@ func TestSubmitRunsOutsideCoordinatorAndRejectsSecondPrompt(t *testing.T) {
 	runtime := newBlockingRuntime()
 	controller := newTestController(t, runtime)
 	ctx := context.Background()
-	if err := controller.Submit(ctx, "first"); err != nil {
+	if err := controller.Submit(ctx, frontend.TurnInput{Text: "first"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.Interrupt(ctx); err != nil {
 		t.Fatalf("immediate Interrupt() error = %v", err)
 	}
-	if err := controller.Submit(ctx, "second"); !errors.Is(err, ErrTurnActive) {
+	if err := controller.Submit(ctx, frontend.TurnInput{Text: "second"}); !errors.Is(err, ErrTurnActive) {
 		t.Fatalf("second Submit() error = %v, want %v", err, ErrTurnActive)
 	}
 	if err := controller.HardCancel(ctx); err != nil {
 		t.Fatalf("immediate HardCancel() error = %v", err)
 	}
 	select {
-	case prompt := <-runtime.runStarted:
-		if prompt != "first" {
-			t.Fatalf("prompt = %q, want first", prompt)
+	case input := <-runtime.runStarted:
+		if input.Text != "first" {
+			t.Fatalf("input = %#v, want first", input)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("turn did not start")
@@ -182,11 +182,67 @@ func TestSubmitRunsOutsideCoordinatorAndRejectsSecondPrompt(t *testing.T) {
 	}
 }
 
+func TestSubmitClonesStructuredInputBeforeAsyncRuntime(t *testing.T) {
+	runtime := newBlockingRuntime()
+	controller := newTestController(t, runtime)
+	attachments := []frontend.TurnAttachment{{
+		Path:        "/tmp/screenshot.png",
+		Filename:    "screenshot.png",
+		ContentType: "image/png",
+	}}
+	input := frontend.TurnInput{Text: "inspect this", Attachments: attachments}
+	if err := controller.Submit(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	attachments[0].Path = "/tmp/replaced.png"
+	input.Attachments[0].Filename = "replaced.png"
+	received := <-runtime.runStarted
+	if received.Attachments[0].Path != "/tmp/screenshot.png" ||
+		received.Attachments[0].Filename != "screenshot.png" {
+		t.Fatalf("runtime input changed with caller slice: %#v", received)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSubmitValidatesStructuredInputBounds(t *testing.T) {
+	controller := newTestController(t, newBlockingRuntime())
+	tooMany := make([]frontend.TurnAttachment, frontend.MaxTurnAttachments+1)
+	for index := range tooMany {
+		tooMany[index].Path = "/tmp/file"
+	}
+	for _, test := range []struct {
+		name  string
+		input frontend.TurnInput
+	}{
+		{name: "empty", input: frontend.TurnInput{}},
+		{name: "missing path", input: frontend.TurnInput{Attachments: []frontend.TurnAttachment{{}}}},
+		{name: "too many attachments", input: frontend.TurnInput{Attachments: tooMany}},
+		{
+			name: "invalid metadata",
+			input: frontend.TurnInput{Attachments: []frontend.TurnAttachment{{
+				Path:     "/tmp/file",
+				Filename: string([]byte{0xff}),
+			}}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := controller.Submit(t.Context(), test.input); err == nil {
+				t.Fatal("Submit() accepted invalid structured input")
+			}
+		})
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHardCancelCauseIsNotProjectedAsTurnFailure(t *testing.T) {
 	runtime := &cancelCauseRuntime{blockingRuntime: newBlockingRuntime()}
 	controller := newTestController(t, runtime)
 	ctx := context.Background()
-	if err := controller.Submit(ctx, "first"); err != nil {
+	if err := controller.Submit(ctx, frontend.TurnInput{Text: "first"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.HardCancel(ctx); err != nil {
@@ -213,7 +269,7 @@ func TestHardCancelDoesNotHideJoinedTurnFailure(t *testing.T) {
 	}
 	controller := newTestController(t, runtime)
 	ctx := context.Background()
-	if err := controller.Submit(ctx, "first"); err != nil {
+	if err := controller.Submit(ctx, frontend.TurnInput{Text: "first"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.HardCancel(ctx); err != nil {
@@ -246,7 +302,7 @@ func TestCompactionIsAsynchronousAndSerialized(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("compaction did not start")
 	}
-	if err := controller.Submit(ctx, "held"); !errors.Is(err, ErrCompactionActive) {
+	if err := controller.Submit(ctx, frontend.TurnInput{Text: "held"}); !errors.Is(err, ErrCompactionActive) {
 		t.Fatalf("Submit() during compaction error = %v, want %v", err, ErrCompactionActive)
 	}
 	if err := controller.Compact(ctx); !errors.Is(err, ErrCompactionActive) {
@@ -255,7 +311,7 @@ func TestCompactionIsAsynchronousAndSerialized(t *testing.T) {
 	close(runtime.compactRelease)
 	deadline := time.Now().Add(time.Second)
 	for {
-		err := controller.Submit(ctx, "after")
+		err := controller.Submit(ctx, frontend.TurnInput{Text: "after"})
 		if err == nil {
 			break
 		}
@@ -273,7 +329,7 @@ func TestCompactionIsAsynchronousAndSerialized(t *testing.T) {
 func TestCloseCancelsActiveTurnAndIsIdempotent(t *testing.T) {
 	runtime := newBlockingRuntime()
 	controller := newTestController(t, runtime)
-	if err := controller.Submit(context.Background(), "work"); err != nil {
+	if err := controller.Submit(context.Background(), frontend.TurnInput{Text: "work"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.Close(context.Background()); err != nil {
@@ -320,7 +376,7 @@ func TestLifecycleCommandsDelegateOnlyWhileIdle(t *testing.T) {
 	if runtime.renamed != "new title" || !runtime.archived {
 		t.Fatalf("lifecycle runtime = rename %q archived %t", runtime.renamed, runtime.archived)
 	}
-	if err := controller.Submit(t.Context(), "work"); err != nil {
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "work"}); err != nil {
 		t.Fatal(err)
 	}
 	<-runtime.runStarted
@@ -391,7 +447,7 @@ func TestWorkspaceRefreshIsSerializedAndOptional(t *testing.T) {
 	if runtime.refreshes != 1 {
 		t.Fatalf("refresh calls = %d", runtime.refreshes)
 	}
-	if err := controller.Submit(t.Context(), "work"); err != nil {
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "work"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.RefreshWorkspace(t.Context()); !errors.Is(err, ErrTurnActive) {

@@ -69,11 +69,11 @@ type fakeController struct {
 	renameTitles []string
 }
 
-func (f *fakeController) Submit(_ context.Context, prompt string) error {
+func (f *fakeController) Submit(_ context.Context, input frontend.TurnInput) error {
 	f.submits.Add(1)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.prompts = append(f.prompts, prompt)
+	f.prompts = append(f.prompts, input.Text)
 	return f.submitErr
 }
 

@@ -207,11 +207,36 @@ type ViewSource interface {
 	Subscribe(context.Context) (ThreadSnapshot, <-chan ThreadSnapshot, error)
 }
 
+const MaxTurnAttachments = 32
+
+// TurnAttachment is one caller-owned file proposed for admission with a turn.
+// Path is ephemeral input: runtimes must copy and replace it with a durable,
+// thread-owned reference before persisting or dispatching the turn.
+type TurnAttachment struct {
+	Path        string `json:"-"`
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+}
+
+// TurnInput is the structured command accepted from every coding frontend.
+// A turn may contain text, attachments, or both.
+type TurnInput struct {
+	Text        string           `json:"text,omitempty"`
+	Attachments []TurnAttachment `json:"attachments,omitempty"`
+}
+
+// Clone prevents mutable frontend slices from crossing the asynchronous
+// controller/runtime boundary.
+func (input TurnInput) Clone() TurnInput {
+	input.Attachments = append([]TurnAttachment(nil), input.Attachments...)
+	return input
+}
+
 // CommandSink is the write side of the frontend controller boundary. Runtime
 // implementations own turn and persistence semantics; a TUI never calls agent
 // internals directly.
 type CommandSink interface {
-	Submit(context.Context, string) error
+	Submit(context.Context, TurnInput) error
 	Interrupt(context.Context) error
 	HardCancel(context.Context) error
 	Compact(context.Context) error

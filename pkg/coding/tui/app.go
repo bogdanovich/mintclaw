@@ -92,7 +92,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		return fmt.Errorf("coding TUI model: %w", err)
 	}
 	if strings.TrimSpace(options.InitialPrompt) != "" {
-		if err := controller.Submit(ctx, options.InitialPrompt); err != nil {
+		if err := controller.Submit(ctx, frontend.TurnInput{Text: options.InitialPrompt}); err != nil {
 			return fmt.Errorf("coding TUI submit initial prompt: %w", err)
 		}
 		model.admitInitialTurn()

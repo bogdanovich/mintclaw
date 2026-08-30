@@ -713,7 +713,7 @@ func submitCmd(
 		return SubmitResultMsg{
 			Prompt:        prompt,
 			HistoryPrompt: historyPrompt,
-			Err:           controller.Submit(ctx, prompt),
+			Err:           controller.Submit(ctx, frontend.TurnInput{Text: prompt}),
 		}
 	}
 }
