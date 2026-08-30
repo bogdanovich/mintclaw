@@ -793,19 +793,16 @@ func (v *attachmentStoreView) confirmDurableEquivalent(candidate Attachment) (At
 		return Attachment{}, fmt.Errorf("coding attachment manifest: reopen directory for durability: %w", err)
 	}
 	defer func() { _ = hierarchy.Close() }()
+	if syncErr := v.store.syncRoot(hierarchy.Leaf()); syncErr != nil {
+		return Attachment{}, fmt.Errorf("coding attachment manifest: sync existing directory: %w", syncErr)
+	}
 	manifest, err := v.loadManifestFromHierarchy(hierarchy)
 	if err != nil {
 		return Attachment{}, err
 	}
 	existing, found := equivalentAttachment(manifest.Entries, candidate)
 	if !found {
-		return Attachment{}, fmt.Errorf("coding attachment manifest changed before durability confirmation")
-	}
-	if syncErr := v.store.syncRoot(hierarchy.Leaf()); syncErr != nil {
-		return Attachment{}, fmt.Errorf("coding attachment manifest: sync existing directory: %w", syncErr)
-	}
-	if err := v.validateHierarchy(hierarchy); err != nil {
-		return Attachment{}, fmt.Errorf("coding attachment manifest: revalidate synced hierarchy: %w", err)
+		return Attachment{}, fmt.Errorf("coding attachment manifest changed during durability confirmation")
 	}
 	return existing, nil
 }

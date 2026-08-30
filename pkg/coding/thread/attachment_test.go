@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -507,6 +508,55 @@ func TestAttachmentReadmissionReplaysCommittedManifestDurability(t *testing.T) {
 	})
 	if err != nil || repeated.Ref != attachment.Ref {
 		t.Fatalf("durable readmission = %+v, %v", repeated, err)
+	}
+}
+
+func TestAttachmentReadmissionRejectsManifestReplacedDuringDurabilitySync(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := json.MarshalIndent(attachmentManifestFile{
+		Version: AttachmentManifestVersion, ThreadID: metadata.ThreadID, Entries: []Attachment{},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement = append(replacement, '\n')
+	manifestPath := attachmentTestManifestPath(t, store, metadata.ThreadID)
+	attachmentsRoot := filepath.Dir(manifestPath)
+	replaced := false
+	syncRoot := store.syncRoot
+	store.syncRoot = func(root *os.Root) error {
+		if err := syncRoot(root); err != nil {
+			return err
+		}
+		if replaced || filepath.Clean(root.Name()) != attachmentsRoot {
+			return nil
+		}
+		replaced = true
+		temporary := filepath.Join(attachmentsRoot, ".replacement-manifest.json")
+		if err := os.WriteFile(temporary, replacement, 0o600); err != nil {
+			return err
+		}
+		return os.Rename(temporary, manifestPath)
+	}
+	repeated, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now().Add(time.Minute),
+	})
+	if !replaced || repeated.Ref != "" || err == nil || !strings.Contains(err.Error(), "manifest changed") {
+		t.Fatalf("readmission across manifest replacement = %+v, %v; replaced=%t", repeated, err, replaced)
+	}
+	entries, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil || len(entries) != 0 {
+		t.Fatalf("replacement manifest = %+v, %v", entries, listErr)
 	}
 }
 
