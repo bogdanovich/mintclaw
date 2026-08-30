@@ -800,12 +800,8 @@ func TestAttachmentGarbageCollectionDoesNotRecoverLiveQuarantine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacedName := attachmentMaintenanceDirectory + "-live-quarantine"
-	if err := root.Rename(attachmentMaintenanceDirectory, replacedName); err != nil {
-		_ = root.Close()
-		t.Fatal(err)
-	}
-	if err := root.Mkdir(attachmentMaintenanceDirectory, 0o700); err != nil {
+	maintenanceLock := filepath.Join(attachmentMaintenanceDirectory, leaseFileName)
+	if err := root.Rename(maintenanceLock, maintenanceLock+"-live-quarantine"); err != nil {
 		_ = root.Close()
 		t.Fatal(err)
 	}
