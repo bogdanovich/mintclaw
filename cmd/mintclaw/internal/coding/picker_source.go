@@ -244,12 +244,17 @@ func observePickerProject(ctx context.Context, persisted thread.ProjectIdentity)
 	observation.currentBranch = inspection.Current.GitBranch
 	observation.currentHead = inspection.Current.GitHead
 	observation.branch = pickerPersistedBranch(*inspection.Current)
-	snapshot := codingworkspace.Capture(ctx, persisted.ProjectRoot, persisted.InvocationCWD, codingworkspace.Limits{
-		ChangedPaths: 1,
-		CommandBytes: 64 << 10,
-		PromptBytes:  1,
-		Timeout:      750 * time.Millisecond,
-	})
+	repository := codingworkspace.NewRepository(
+		persisted.ProjectRoot,
+		persisted.InvocationCWD,
+		codingworkspace.Limits{
+			ChangedPaths: 1,
+			CommandBytes: 64 << 10,
+			PromptBytes:  1,
+			Timeout:      750 * time.Millisecond,
+		},
+	)
+	snapshot := repository.Status(ctx).Snapshot
 	observation.repositoryKnown = snapshot.Git.Available && snapshot.Git.StatusAvailable
 	observation.dirty = observation.repositoryKnown && snapshot.Git.Dirty
 	observation.stateIncomplete = ctx.Err() != nil || snapshot.Warning != "" ||

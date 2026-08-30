@@ -23,13 +23,27 @@ const (
 	defaultCommandBytes     = 512 << 10
 	defaultPromptBytes      = 24 << 10
 	defaultCommandTimeout   = 5 * time.Second
+	defaultDiffFiles        = 64
+	defaultDiffHunks        = 256
+	defaultDiffLines        = 4000
+	defaultDiffLineBytes    = 8 << 10
+	defaultDiffBytes        = 512 << 10
+	defaultUntrackedBytes   = 128 << 10
+	defaultConcurrentOps    = 2
 )
 
 type Limits struct {
-	ChangedPaths int
-	CommandBytes int
-	PromptBytes  int
-	Timeout      time.Duration
+	ChangedPaths         int
+	CommandBytes         int
+	PromptBytes          int
+	Timeout              time.Duration
+	DiffFiles            int
+	DiffHunks            int
+	DiffLines            int
+	DiffLineBytes        int
+	DiffBytes            int
+	UntrackedBytes       int
+	ConcurrentOperations int
 }
 
 func (limits Limits) normalized() Limits {
@@ -44,6 +58,27 @@ func (limits Limits) normalized() Limits {
 	}
 	if limits.Timeout <= 0 {
 		limits.Timeout = defaultCommandTimeout
+	}
+	if limits.DiffFiles <= 0 {
+		limits.DiffFiles = defaultDiffFiles
+	}
+	if limits.DiffHunks <= 0 {
+		limits.DiffHunks = defaultDiffHunks
+	}
+	if limits.DiffLines <= 0 {
+		limits.DiffLines = defaultDiffLines
+	}
+	if limits.DiffLineBytes <= 0 {
+		limits.DiffLineBytes = defaultDiffLineBytes
+	}
+	if limits.DiffBytes <= 0 {
+		limits.DiffBytes = defaultDiffBytes
+	}
+	if limits.UntrackedBytes <= 0 {
+		limits.UntrackedBytes = defaultUntrackedBytes
+	}
+	if limits.ConcurrentOperations <= 0 {
+		limits.ConcurrentOperations = defaultConcurrentOps
 	}
 	return limits
 }
@@ -131,9 +166,8 @@ func (snapshot Snapshot) Identity() string {
 }
 
 type Observer struct {
-	projectRoot string
-	cwd         string
-	limits      Limits
+	limits     Limits
+	repository *Repository
 
 	mu          sync.Mutex
 	initialized bool
@@ -143,9 +177,8 @@ type Observer struct {
 
 func NewObserver(projectRoot, cwd string, limits Limits) *Observer {
 	return &Observer{
-		projectRoot: filepath.Clean(projectRoot),
-		cwd:         filepath.Clean(cwd),
-		limits:      limits.normalized(),
+		limits:     limits.normalized(),
+		repository: NewRepository(projectRoot, cwd, limits),
 	}
 }
 
@@ -153,7 +186,7 @@ func (observer *Observer) Refresh(ctx context.Context) Snapshot {
 	if observer == nil {
 		return Snapshot{}
 	}
-	snapshot := Capture(ctx, observer.projectRoot, observer.cwd, observer.limits)
+	snapshot := observer.repository.Status(ctx).Snapshot
 	observer.mu.Lock()
 	observer.current = snapshot
 	observer.initialized = true
@@ -197,6 +230,9 @@ func (observer *Observer) PendingUpdate(ctx context.Context) (Snapshot, bool) {
 	return cloneSnapshot(snapshot), true
 }
 
+// Capture performs a compatibility one-shot repository status observation.
+// Long-lived coding surfaces should share a Repository so concurrency and
+// future evidence operations remain behind one passive boundary.
 func Capture(ctx context.Context, projectRoot, cwd string, limits Limits) Snapshot {
 	limits = limits.normalized()
 	snapshot := Snapshot{
