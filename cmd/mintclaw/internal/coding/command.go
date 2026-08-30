@@ -99,7 +99,6 @@ func NewCodeCommand() *cobra.Command {
 
 func newCodeCommand(deps dependencies) *cobra.Command {
 	deps = completeDependencies(deps)
-	const emptyThreadTitle = "New coding thread"
 	var model string
 	var jsonOutput bool
 	cmd := &cobra.Command{
@@ -114,17 +113,12 @@ func newCodeCommand(deps dependencies) *cobra.Command {
 			noColor, _ := cmd.Flags().GetBool("no-color")
 			capabilities := deps.terminal(cmd.InOrStdin(), cmd.OutOrStdout(), noColor)
 			if !jsonOutput && capabilities.Interactive {
-				metadataPrompt := prompt
-				if strings.TrimSpace(metadataPrompt) == "" {
-					metadataPrompt = emptyThreadTitle
-				}
 				return runNewInteractive(
 					cmd.Context(),
 					cmd.InOrStdin(),
 					cmd.OutOrStdout(),
 					deps,
 					prompt,
-					metadataPrompt,
 					model,
 					noColor,
 				)
@@ -167,11 +161,16 @@ func runNewInteractive(
 	out io.Writer,
 	deps dependencies,
 	prompt string,
-	metadataPrompt string,
 	model string,
 	noColor bool,
 ) error {
-	_, store, metadata, lease, err := prepareNewThread(ctx, deps, metadataPrompt, model)
+	_, store, metadata, lease, err := prepareNewThread(
+		ctx,
+		deps,
+		prompt,
+		model,
+		strings.TrimSpace(prompt) == "",
+	)
 	if err != nil {
 		return err
 	}
@@ -197,15 +196,22 @@ func prepareNewThread(
 	deps dependencies,
 	prompt string,
 	model string,
+	pendingFirstPrompt bool,
 ) (thread.ProjectIdentity, *thread.Store, thread.Metadata, *thread.Lease, error) {
 	project, store, resolveErr := resolveEnvironment(ctx, deps)
 	if resolveErr != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, resolveErr
 	}
-	if err := thread.ValidatePrompt(prompt); err != nil {
-		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
+	var metadata thread.Metadata
+	var metadataErr error
+	if pendingFirstPrompt {
+		metadata, metadataErr = thread.NewPendingMetadata(deps.newThreadID(), project, deps.now())
+	} else {
+		if err := thread.ValidatePrompt(prompt); err != nil {
+			return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
+		}
+		metadata, metadataErr = thread.NewMetadata(deps.newThreadID(), project, prompt, deps.now())
 	}
-	metadata, metadataErr := thread.NewMetadata(deps.newThreadID(), project, prompt, deps.now())
 	if metadataErr != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, metadataErr
 	}
@@ -303,7 +309,7 @@ func runNew(
 	model string,
 	jsonOutput bool,
 ) error {
-	_, store, metadata, lease, err := prepareNewThread(ctx, deps, prompt, model)
+	_, store, metadata, lease, err := prepareNewThread(ctx, deps, prompt, model, false)
 	if err != nil {
 		return err
 	}

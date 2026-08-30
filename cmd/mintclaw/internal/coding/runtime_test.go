@@ -60,6 +60,50 @@ func (p *blockingCodingProvider) Capabilities() providers.ProviderCapabilities {
 	}
 }
 
+func TestPendingThreadTitlePromotesOnceUnlessRenamed(t *testing.T) {
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Date(2026, time.August, 29, 17, 0, 0, 0, time.UTC)
+	newState := func() *codingMetadataState {
+		metadata, metadataErr := thread.NewPendingMetadata(thread.NewThreadID(), project, created)
+		if metadataErr != nil {
+			t.Fatal(metadataErr)
+		}
+		state := newCodingMetadataState(nil, metadata, func() time.Time {
+			return created.Add(time.Minute)
+		})
+		state.save = func(thread.Metadata) error { return nil }
+		return state
+	}
+
+	promoted, err := newState().recordTurn("Inspect repository", "Inspect repository carefully", "model", "provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promoted.PendingFirstPrompt || promoted.Title != "Inspect repository" ||
+		promoted.Preview != "Inspect repository carefully" {
+		t.Fatalf("promoted metadata = %+v", promoted)
+	}
+
+	renamedState := newState()
+	renamed, err := renamedState.rename("Keep this title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.PendingFirstPrompt {
+		t.Fatalf("renamed metadata remained pending = %+v", renamed)
+	}
+	afterTurn, err := renamedState.recordTurn("Ignored generated title", "First prompt", "model", "provider")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterTurn.Title != "Keep this title" || afterTurn.Preview != "First prompt" {
+		t.Fatalf("renamed first turn metadata = %+v", afterTurn)
+	}
+}
+
 func TestCodingRuntimeConfigIsolatesAgentContextAndSelection(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ContextManager = "none"

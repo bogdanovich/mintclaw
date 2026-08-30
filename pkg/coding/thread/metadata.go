@@ -28,6 +28,10 @@ const (
 	titleMaxBytes     = 80
 	previewMaxBytes   = 240
 	selectionMaxBytes = 256
+
+	// PendingThreadTitle is the temporary catalog title for an interactive
+	// thread created before its first prompt is accepted.
+	PendingThreadTitle = "New coding thread"
 )
 
 // Status is the durable lifecycle state of a coding thread.
@@ -73,6 +77,9 @@ type Metadata struct {
 	ParentThread  string          `json:"parent_thread_id,omitempty"`
 	Fork          *ForkPoint      `json:"fork,omitempty"`
 	Compaction    *Compaction     `json:"last_compaction,omitempty"`
+	// PendingFirstPrompt keeps the temporary title replaceable after restart.
+	// A successful first prompt or an explicit rename clears it.
+	PendingFirstPrompt bool `json:"pending_first_prompt,omitempty"`
 }
 
 // NewMetadata creates a validated descriptor from the first accepted user
@@ -98,6 +105,25 @@ func NewMetadata(
 		Status:        StatusActive,
 		Project:       project,
 	}
+	if err := metadata.Validate(); err != nil {
+		return Metadata{}, err
+	}
+	return metadata, nil
+}
+
+// NewPendingMetadata creates a durable interactive thread that has not yet
+// accepted a user prompt. Its temporary display is replaced by the first
+// successfully stored prompt unless the user renames it first.
+func NewPendingMetadata(
+	threadID string,
+	project ProjectIdentity,
+	now time.Time,
+) (Metadata, error) {
+	metadata, err := NewMetadata(threadID, project, PendingThreadTitle, now)
+	if err != nil {
+		return Metadata{}, err
+	}
+	metadata.PendingFirstPrompt = true
 	if err := metadata.Validate(); err != nil {
 		return Metadata{}, err
 	}
@@ -146,6 +172,9 @@ func (m Metadata) Validate() error {
 	}
 	if err := validateDisplay("preview", m.Preview, previewMaxBytes); err != nil {
 		return err
+	}
+	if m.PendingFirstPrompt && (m.Title != PendingThreadTitle || m.Preview != PendingThreadTitle) {
+		return fmt.Errorf("coding thread: pending first prompt requires the temporary display")
 	}
 	switch m.Status {
 	case StatusActive, StatusArchived:
@@ -204,6 +233,7 @@ func (m Metadata) Rename(title string, now time.Time) (Metadata, error) {
 		return Metadata{}, fmt.Errorf("coding thread: rename timestamp is required")
 	}
 	m.Title = title
+	m.PendingFirstPrompt = false
 	m.UpdatedAt = maxMetadataTime(m.UpdatedAt, now.UTC())
 	if err := m.Validate(); err != nil {
 		return Metadata{}, err

@@ -110,6 +110,29 @@ func TestMetadataRenameAndArchiveLifecycle(t *testing.T) {
 	}
 }
 
+func TestPendingMetadataPersistsAndRenameClaimsTitle(t *testing.T) {
+	project, err := ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Date(2026, time.August, 29, 17, 0, 0, 0, time.UTC)
+	metadata, err := NewPendingMetadata(NewThreadID(), project, created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metadata.PendingFirstPrompt || metadata.Title != PendingThreadTitle ||
+		metadata.Preview != PendingThreadTitle {
+		t.Fatalf("pending metadata = %+v", metadata)
+	}
+	renamed, err := metadata.Rename("Investigate parser", created.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.PendingFirstPrompt || renamed.Title != "Investigate parser" {
+		t.Fatalf("renamed pending metadata = %+v", renamed)
+	}
+}
+
 func TestProvisionThreadDoesNotPublishMetadata(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "coding"))
 	if err != nil {

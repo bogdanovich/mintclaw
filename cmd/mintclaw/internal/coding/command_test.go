@@ -571,7 +571,8 @@ func TestCodeWithoutPromptOpensInteractiveComposer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata.Title != "New coding thread" || metadata.Preview != "New coding thread" {
+	if metadata.Title != thread.PendingThreadTitle || metadata.Preview != thread.PendingThreadTitle ||
+		!metadata.PendingFirstPrompt {
 		t.Fatalf("empty-start metadata = %+v", metadata)
 	}
 }
