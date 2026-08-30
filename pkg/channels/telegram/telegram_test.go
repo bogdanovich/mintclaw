@@ -3969,6 +3969,41 @@ func TestHandleInteractionCallbackAcknowledgesAndClearsInactiveControl(t *testin
 	}
 }
 
+func TestHandleInteractionCallbackPreservesControlsOwnedByAnotherGroupSender(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15", "16"})
+	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
+		{chatID: -100123, threadID: 1771, senderID: "15"}: {
+			shortID: "owner123", kind: bus.OutboundInteractionApproval,
+		},
+	}
+	message := &telego.Message{
+		MessageID: 72, MessageThreadID: 1771,
+		Chat: telego.Chat{ID: -100123, Type: "supergroup", IsForum: true},
+	}
+
+	require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+		ID: "callback-other-sender", From: telego.User{ID: 16}, Message: message,
+		Data: "mc:i:owner123:allow",
+	}))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(t, "16", inbound.Context.SenderID)
+		assert.Equal(t, "owner123", inbound.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+	case <-time.After(time.Second):
+		t.Fatal("other-sender callback was not durably published")
+	}
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
+	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "owner123"))
+}
+
 func TestSyncInteractionControlsClearsExactPromptWithoutRemovingNewerProjection(t *testing.T) {
 	caller := &stubCaller{callFn: func(
 		_ context.Context, _ string, _ *ta.RequestData,

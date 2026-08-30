@@ -156,6 +156,11 @@ func (c *TelegramChannel) settleInteractionCallbackUI(
 	if uiCtx.Err() != nil {
 		return
 	}
+	if c.interactionControlsOwnedByDifferentSender(
+		message.Chat.ID, message.MessageThreadID, senderID, shortID,
+	) {
+		return
+	}
 	if err := c.removeInteractionReplyMarkup(uiCtx, message.Chat.ID, message.MessageID); err != nil {
 		logger.WarnCF("telegram", "Failed to remove interaction callback controls", map[string]any{
 			"callback_query_id": callbackQueryID, "error": err.Error(),
