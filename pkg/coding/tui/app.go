@@ -91,6 +91,9 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)
 	}
+	defer func() {
+		resultErr = errors.Join(resultErr, model.closeRichInput())
+	}()
 	if strings.TrimSpace(options.InitialInput.Text) != "" || len(options.InitialInput.Attachments) > 0 {
 		if err := controller.Submit(ctx, options.InitialInput); err != nil {
 			return fmt.Errorf("coding TUI submit initial input: %w", err)

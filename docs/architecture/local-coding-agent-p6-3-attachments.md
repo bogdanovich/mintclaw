@@ -87,6 +87,27 @@ mintclaw resume <thread-id> --prompt "compare this run" --attach latest.log
 `--attach` order is preserved and an attachment-only turn is valid. On an
 interactive command, the initial structured input crosses the same controller
 boundary as a composer submission. On a plain or JSON command, it crosses the
-same native runtime boundary directly. The Codex-like TUI presentation,
-historical selection, fork reachability, retention/GC command, and final
+same native runtime boundary directly. The composer checkpoint below builds on
+that shared input contract.
+
+## Interactive composer checkpoint
+
+The interactive composer keeps rich payloads separate from their compact
+display labels. A paste longer than 1,000 Unicode characters is written to a
+process-private `0600` temporary text file and displayed as
+`[Pasted Content N chars]`. Pasting a quoted, shell-escaped, or `file://` path
+to a PNG, JPEG, GIF, or WebP image displays `[Image #N]`; `/attach <paths…>`
+atomically adds one or more local regular files and displays file labels.
+Submitting a label sends the corresponding structured `TurnAttachment`; the
+label itself is not mistaken for canonical prompt text.
+
+Removing a label also drops its pending payload. Failed runtime admission
+keeps both the draft and payload for retry. Successful admission deletes only
+composer-owned paste files after the runtime has copied them, and exiting the
+TUI cleans up remaining composer-owned files. Caller-owned files are never
+removed. Rich turns are not placed in the in-process text-only recall ring, so
+history navigation cannot replay a detached label as if it still carried an
+attachment.
+
+Historical selection, fork reachability, retention/GC command, and the final
 roadmap exit record remain later P6.3 work.

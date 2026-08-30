@@ -51,9 +51,8 @@ type CommandResultMsg struct {
 // SubmitResultMsg completes one composer submission without discarding a
 // draft when controller admission fails.
 type SubmitResultMsg struct {
-	Prompt        string
-	HistoryPrompt string
-	Err           error
+	Submission composerSubmission
+	Err        error
 }
 
 // TranscriptPageMsg delivers optional canonical transcript hydration.
@@ -96,6 +95,10 @@ type Model struct {
 	refreshingWorkspace bool
 	workspaceNotice     string
 	commandPanel        commandPanel
+	composerAttachments []composerAttachment
+	pasteDirectory      string
+	nextPasteNumber     int
+	nextImageNumber     int
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -256,7 +259,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
-		m.rememberPrompt(message.HistoryPrompt)
+		if message.Submission.rememberDraft {
+			m.rememberPrompt(message.Submission.draft)
+		}
+		m.clearSubmittedAttachments()
 		m.composer.Reset()
 		m.historyIndex = -1
 		m.historyDraft = ""
@@ -286,6 +292,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	commands = append(commands, command)
 	m.composer, command = m.composer.Update(message)
 	commands = append(commands, command)
+	m.pruneDetachedAttachments()
 	return m, tea.Batch(commands...)
 }
 
@@ -435,6 +442,17 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	if m.submitting {
 		return true, nil
 	}
+	if message.Paste {
+		handled, err := m.handleRichPaste(string(message.Runes))
+		if err != nil {
+			m.err = err
+			return true, nil
+		}
+		if handled {
+			m.err = nil
+			return true, textarea.Blink
+		}
+	}
 	switch message.String() {
 	case "esc":
 		if m.commandPanel != commandPanelNone {
@@ -473,22 +491,31 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		draft := m.composer.Value()
-		if strings.TrimSpace(draft) == "" {
+		m.pruneDetachedAttachments()
+		if strings.TrimSpace(draft) == "" && len(m.composerAttachments) == 0 {
 			m.err = errors.New("enter a coding prompt; use Ctrl+J for a new line")
 			return true, nil
 		}
 		if handled, command := m.handleSlashCommand(draft); handled {
 			return true, command
 		}
-		prompt := unescapeSlashPrompt(draft)
+		submission := m.prepareSubmission(draft)
 		m.submitting = true
 		m.err = nil
 		m.admitInitialTurn()
-		return true, submitCmd(m.ctx, m.controller, prompt, draft)
+		return true, submitCmd(m.ctx, m.controller, submission)
 	case "alt+up":
+		if len(m.composerAttachments) > 0 {
+			m.err = errors.New("history navigation is unavailable while attachments are pending")
+			return true, nil
+		}
 		m.navigateHistory(-1)
 		return true, textarea.Blink
 	case "alt+down":
+		if len(m.composerAttachments) > 0 {
+			m.err = errors.New("history navigation is unavailable while attachments are pending")
+			return true, nil
+		}
 		m.navigateHistory(1)
 		return true, textarea.Blink
 	case "alt+end":
@@ -699,21 +726,18 @@ func typedCommandCmd(
 func submitCmd(
 	ctx context.Context,
 	controller frontend.Controller,
-	prompt string,
-	historyPrompt string,
+	submission composerSubmission,
 ) tea.Cmd {
 	return func() tea.Msg {
 		if controller == nil {
 			return SubmitResultMsg{
-				Prompt:        prompt,
-				HistoryPrompt: historyPrompt,
-				Err:           errors.New("coding controller is unavailable"),
+				Submission: submission,
+				Err:        errors.New("coding controller is unavailable"),
 			}
 		}
 		return SubmitResultMsg{
-			Prompt:        prompt,
-			HistoryPrompt: historyPrompt,
-			Err:           controller.Submit(ctx, frontend.TurnInput{Text: prompt}),
+			Submission: submission,
+			Err:        controller.Submit(ctx, submission.input),
 		}
 	}
 }
