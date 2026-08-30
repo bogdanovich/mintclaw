@@ -108,7 +108,8 @@ func resolveMediaRefs(
 		resolved := make([]string, 0, len(m.Media))
 		var pathTags []string
 		unresolvedRefs := 0
-		attachUserImages := m.Role == "user" && idx >= start && isImageOnlyMessage(m.Content)
+		currentUserMessage := m.Role == "user" && idx >= start
+		imageOnlyMessage := currentUserMessage && isImageOnlyMessage(m.Content)
 
 		for _, ref := range m.Media {
 			if !strings.HasPrefix(ref, "media://") {
@@ -152,7 +153,13 @@ func resolveMediaRefs(
 			mime := detectMIME(localPath, meta)
 			pathTags = append(pathTags, buildPathTag(mime, localPath))
 
-			if attachUserImages && strings.HasPrefix(mime, "image/") {
+			attachCurrentImage := imageOnlyMessage
+			if currentUserMessage && !attachCurrentImage {
+				if policy, ok := store.(media.CurrentImageAttachmentPolicy); ok {
+					attachCurrentImage = policy.ShouldAttachCurrentImage(ref, meta)
+				}
+			}
+			if attachCurrentImage && strings.HasPrefix(mime, "image/") {
 				dataURL := encodeImageToDataURL(localPath, mime, info, maxSize)
 				if dataURL != "" {
 					resolved = append(resolved, dataURL)

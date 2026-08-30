@@ -25,3 +25,16 @@ func TestDetectSupportedImageContentTypeUsesCanonicalSignatures(t *testing.T) {
 		})
 	}
 }
+
+func TestIsSupportedImageContentTypeAcceptsOnlyCanonicalProviderImages(t *testing.T) {
+	for _, contentType := range []string{"image/png", "image/jpeg", "image/gif", "image/webp"} {
+		if !IsSupportedImageContentType(contentType) {
+			t.Fatalf("IsSupportedImageContentType(%q) = false", contentType)
+		}
+	}
+	for _, contentType := range []string{"image/svg+xml", "image/png; charset=binary", "application/octet-stream", ""} {
+		if IsSupportedImageContentType(contentType) {
+			t.Fatalf("IsSupportedImageContentType(%q) = true", contentType)
+		}
+	}
+}

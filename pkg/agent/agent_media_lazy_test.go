@@ -14,17 +14,58 @@ import (
 
 type lazyHistoricalMediaStore struct {
 	media.MediaStore
-	lazy     map[string]bool
-	resolved map[string]int
+	lazy          map[string]bool
+	attachCurrent map[string]bool
+	resolved      map[string]int
 }
 
 func (s *lazyHistoricalMediaStore) ShouldResolveHistorical(ref string) bool {
 	return !s.lazy[ref]
 }
 
+func (s *lazyHistoricalMediaStore) ShouldAttachCurrentImage(ref string, _ media.MediaMeta) bool {
+	return s.attachCurrent[ref]
+}
+
 func (s *lazyHistoricalMediaStore) ResolveWithMeta(ref string) (string, media.MediaMeta, error) {
 	s.resolved[ref]++
 	return s.MediaStore.ResolveWithMeta(ref)
+}
+
+func TestResolveMediaRefsAttachesOptedInCurrentImageWithText(t *testing.T) {
+	delegate := media.NewFileMediaStore()
+	store := &lazyHistoricalMediaStore{
+		MediaStore:    delegate,
+		attachCurrent: make(map[string]bool),
+		resolved:      make(map[string]int),
+	}
+	pngPath := filepath.Join(t.TempDir(), "current-with-text.png")
+	png := []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02,
+		0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde,
+	}
+	if err := os.WriteFile(pngPath, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(pngPath, media.MediaMeta{ContentType: "image/png"}, "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.attachCurrent[ref] = true
+	result := resolveMediaRefs([]providers.Message{{
+		Role: "user", Content: "[image: current-with-text.png]\nInspect this screenshot.", Media: []string{ref},
+	}}, store, config.DefaultMaxMediaSize, 0)
+	if store.resolved[ref] != 1 || len(result) != 1 || len(result[0].Media) != 1 ||
+		!strings.HasPrefix(result[0].Media[0], "data:image/png;base64,") {
+		t.Fatalf("opted-in current image = calls %d messages %+v", store.resolved[ref], result)
+	}
+	withoutMedia := result[0]
+	withoutMedia.Media = nil
+	if tokenizer.EstimateMessageTokens(result[0]) <= tokenizer.EstimateMessageTokens(withoutMedia) {
+		t.Fatal("opted-in current image was omitted from prompt accounting")
+	}
 }
 
 func TestResolveMediaRefsKeepsHistoryLazyAndAccountsForSelectedToolImage(t *testing.T) {
