@@ -9,9 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
 	"unicode/utf8"
-
-	"go.mau.fi/util/shlex"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -115,7 +114,7 @@ func (m *Model) uniquePlaceholder(base string) string {
 		return base
 	}
 	for suffix := 2; ; suffix++ {
-		candidate := fmt.Sprintf("%s #%d", base, suffix)
+		candidate := fmt.Sprintf("[%s #%d]", strings.TrimSuffix(strings.TrimPrefix(base, "["), "]"), suffix)
 		if !strings.Contains(draft, candidate) {
 			return candidate
 		}
@@ -234,16 +233,7 @@ func normalizeAttachmentPaths(value string) ([]string, error) {
 	if value == "" {
 		return nil, errors.New("attachment path is required")
 	}
-	unquoted := value
-	if strings.HasPrefix(value, "\"") && strings.HasSuffix(value, "\"") && len(value) >= 2 {
-		unquoted = value[1 : len(value)-1]
-	} else if strings.HasPrefix(value, "'") && strings.HasSuffix(value, "'") && len(value) >= 2 {
-		unquoted = value[1 : len(value)-1]
-	}
-	if isWindowsPath(unquoted) {
-		return []string{filepath.Clean(unquoted)}, nil
-	}
-	parts, err := shlex.Split(value)
+	parts, err := splitAttachmentArguments(value)
 	if err != nil {
 		return nil, fmt.Errorf("parse attachment path: %w", err)
 	}
@@ -255,6 +245,68 @@ func normalizeAttachmentPaths(value string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	return parts, nil
+}
+
+// splitAttachmentArguments keeps Windows drive and UNC separators literal
+// while accepting shell-style quotes and escaped whitespace on every platform.
+func splitAttachmentArguments(value string) ([]string, error) {
+	runes := []rune(value)
+	parts := make([]string, 0, 1)
+	var token strings.Builder
+	var quote rune
+	started := false
+	flush := func() error {
+		if !started {
+			return nil
+		}
+		if token.Len() == 0 {
+			return errors.New("attachment path is empty")
+		}
+		parts = append(parts, token.String())
+		token.Reset()
+		started = false
+		return nil
+	}
+	for index := 0; index < len(runes); index++ {
+		current := runes[index]
+		if quote != 0 {
+			if current == quote {
+				quote = 0
+				continue
+			}
+			if quote == '"' && current == '\\' && index+1 < len(runes) && runes[index+1] == '"' {
+				token.WriteRune(runes[index+1])
+				index++
+				continue
+			}
+			token.WriteRune(current)
+			continue
+		}
+		switch {
+		case current == '"' || current == '\'':
+			quote = current
+			started = true
+		case unicode.IsSpace(current):
+			if err := flush(); err != nil {
+				return nil, err
+			}
+		case current == '\\' && index+1 < len(runes) &&
+			(unicode.IsSpace(runes[index+1]) || runes[index+1] == '"' || runes[index+1] == '\''):
+			token.WriteRune(runes[index+1])
+			started = true
+			index++
+		default:
+			token.WriteRune(current)
+			started = true
+		}
+	}
+	if quote != 0 {
+		return nil, errors.New("unterminated quoted attachment path")
+	}
+	if err := flush(); err != nil {
+		return nil, err
 	}
 	return parts, nil
 }
@@ -274,14 +326,6 @@ func normalizeAttachmentToken(value string) (string, error) {
 		return filepath.Clean(path), nil
 	}
 	return filepath.Clean(value), nil
-}
-
-func isWindowsPath(value string) bool {
-	if strings.HasPrefix(value, `\\`) {
-		return true
-	}
-	return len(value) >= 3 && ((value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= 'a' && value[0] <= 'z')) &&
-		value[1] == ':' && (value[2] == '\\' || value[2] == '/')
 }
 
 func pastedImagePath(value string) (string, string, bool) {

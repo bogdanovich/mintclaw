@@ -505,9 +505,17 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.admitInitialTurn()
 		return true, submitCmd(m.ctx, m.controller, submission)
 	case "alt+up":
+		if len(m.composerAttachments) > 0 {
+			m.err = errors.New("history navigation is unavailable while attachments are pending")
+			return true, nil
+		}
 		m.navigateHistory(-1)
 		return true, textarea.Blink
 	case "alt+down":
+		if len(m.composerAttachments) > 0 {
+			m.err = errors.New("history navigation is unavailable while attachments are pending")
+			return true, nil
+		}
 		m.navigateHistory(1)
 		return true, textarea.Blink
 	case "alt+end":

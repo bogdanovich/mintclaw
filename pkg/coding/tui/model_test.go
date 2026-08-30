@@ -353,6 +353,33 @@ func TestComposerRemovingPlaceholderDropsOwnedPaste(t *testing.T) {
 	}
 }
 
+func TestComposerHistoryNavigationCannotDetachPendingAttachment(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.composerHistory = []string{"older text prompt"}
+	path := filepath.Join(t.TempDir(), "pending.log")
+	if err = os.WriteFile(path, []byte("pending"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = model.addComposerAttachment(path, "", "text/plain", false, false); err != nil {
+		t.Fatal(err)
+	}
+	draft := model.ComposerValue()
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp, Alt: true})
+	if model.ComposerValue() != draft || len(model.composerAttachments) != 1 ||
+		model.composerAttachments[0].input.Path != path || model.historyIndex != -1 || model.err == nil {
+		t.Fatalf(
+			"history changed rich draft: draft=%q attachments=%+v index=%d err=%v",
+			model.ComposerValue(),
+			model.composerAttachments,
+			model.historyIndex,
+			model.err,
+		)
+	}
+}
+
 func TestComposerPastedImagePathBecomesStructuredAttachment(t *testing.T) {
 	controller := newController(t)
 	model, err := newTestModel(controller)

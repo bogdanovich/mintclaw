@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -40,6 +41,63 @@ func TestNormalizeAttachmentPath(t *testing.T) {
 	}
 	if _, err := normalizeAttachmentPath("file://remote/share/image.png"); err == nil {
 		t.Fatal("remote file URL was accepted")
+	}
+}
+
+func TestNormalizeAttachmentPathsKeepsQuotedWindowsBatchesSeparate(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{
+			name:  "drives",
+			value: `"C:\one.png" "D:\two.png"`,
+			want:  []string{`C:\one.png`, `D:\two.png`},
+		},
+		{
+			name:  "UNC shares",
+			value: `"\\server\one\a.png" "\\server\two\b.png"`,
+			want:  []string{`\\server\one\a.png`, `\\server\two\b.png`},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := normalizeAttachmentPaths(test.value)
+			if err != nil || !slices.Equal(got, test.want) {
+				t.Fatalf("normalizeAttachmentPaths(%q) = %#v, %v; want %#v", test.value, got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestDuplicateComposerLabelsDoNotRetainRemovedPayload(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := filepath.Join(t.TempDir(), "report.log")
+	second := filepath.Join(t.TempDir(), "report.log")
+	for _, path := range []string{first, second} {
+		if err = os.WriteFile(path, []byte(path), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err = model.addComposerAttachment(path, "", "text/plain", false, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := model.ComposerValue(); got != "[File: report.log][File: report.log #2]" {
+		t.Fatalf("duplicate labels = %q", got)
+	}
+	model.composer.SetValue("[File: report.log #2]")
+	model.pruneDetachedAttachments()
+	if len(model.composerAttachments) != 1 || model.composerAttachments[0].input.Path != second {
+		t.Fatalf("retained attachments = %+v", model.composerAttachments)
+	}
+	submission := model.prepareSubmission(model.ComposerValue())
+	if submission.input.Text != "" || len(submission.input.Attachments) != 1 ||
+		submission.input.Attachments[0].Path != second {
+		t.Fatalf("duplicate-label submission = %+v", submission.input)
 	}
 }
 
