@@ -100,6 +100,13 @@ type CommittedAttachmentsError struct {
 	Err         error
 }
 
+// CommittedAttachmentRemovalError reports a manifest removal whose rename
+// committed even though post-rename durability was uncertain.
+type CommittedAttachmentRemovalError struct {
+	Refs []string
+	Err  error
+}
+
 // committedAttachmentManifestError distinguishes a manifest rename from a
 // directory-creation durability warning that did not publish the manifest.
 type committedAttachmentManifestError struct {
@@ -137,6 +144,23 @@ func (e *CommittedAttachmentsError) Unwrap() error { return e.Err }
 // admission failure that did not update the canonical manifest.
 func IsCommittedAttachmentsError(err error) bool {
 	var committed *CommittedAttachmentsError
+	return errors.As(err, &committed)
+}
+
+func (e *CommittedAttachmentRemovalError) Error() string {
+	return fmt.Sprintf(
+		"coding attachment removal of %d references committed with uncertain durability: %v",
+		len(e.Refs),
+		e.Err,
+	)
+}
+
+func (e *CommittedAttachmentRemovalError) Unwrap() error { return e.Err }
+
+// IsCommittedAttachmentRemovalError distinguishes a published manifest
+// removal from a failure that preserved the prior manifest.
+func IsCommittedAttachmentRemovalError(err error) bool {
+	var committed *CommittedAttachmentRemovalError
 	return errors.As(err, &committed)
 }
 
@@ -322,6 +346,86 @@ func addAttachmentAdmissionBytes(total, size int64) (int64, error) {
 	return total + size, nil
 }
 
+// RemoveAttachmentRefs atomically removes an exact set of thread-owned refs.
+// It never deletes shared blob bytes. Callers use this only to compensate an
+// admitted batch after canonical history proves that its turn was not stored.
+func (s *Store) RemoveAttachmentRefs(
+	ctx context.Context,
+	lease *Lease,
+	metadata Metadata,
+	refs []string,
+) error {
+	if s == nil {
+		return fmt.Errorf("coding attachment store is nil")
+	}
+	if ctx == nil {
+		return fmt.Errorf("coding attachment removal: context is required")
+	}
+	if err := metadata.Validate(); err != nil {
+		return err
+	}
+	if len(refs) == 0 || len(refs) > MaxAttachmentAdmissionCount {
+		return fmt.Errorf(
+			"coding attachment removal: batch must contain between 1 and %d references",
+			MaxAttachmentAdmissionCount,
+		)
+	}
+	wanted := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if !isAttachmentRef(ref) {
+			return fmt.Errorf("coding attachment removal: reference is invalid")
+		}
+		if _, exists := wanted[ref]; exists {
+			return fmt.Errorf("coding attachment removal: duplicate reference")
+		}
+		wanted[ref] = struct{}{}
+	}
+	return lease.withActive(s.root, metadata.ThreadID, func() error {
+		view, err := s.openAttachmentStoreView(metadata.ThreadID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = view.Close() }()
+		if validationErr := view.validateWriter(lease); validationErr != nil {
+			return fmt.Errorf("coding attachment removal: validate writer view: %w", validationErr)
+		}
+		manifest, err := view.loadManifest()
+		if err != nil {
+			return err
+		}
+		remaining := make([]Attachment, 0, len(manifest.Entries))
+		found := make(map[string]struct{}, len(refs))
+		for _, attachment := range manifest.Entries {
+			if _, remove := wanted[attachment.Ref]; remove {
+				found[attachment.Ref] = struct{}{}
+				continue
+			}
+			remaining = append(remaining, attachment)
+		}
+		if len(found) != len(wanted) {
+			return fmt.Errorf("coding attachment removal: reference is not owned by thread")
+		}
+		manifest.Entries = remaining
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := view.validateWriter(lease); err != nil {
+			return fmt.Errorf("coding attachment removal: revalidate writer before manifest publish: %w", err)
+		}
+		saveErr := view.saveManifest(manifest)
+		var committedManifest *committedAttachmentManifestError
+		if saveErr == nil || errors.As(saveErr, &committedManifest) {
+			if err := view.validateWriter(lease); err != nil {
+				return fmt.Errorf("coding attachment removal: revalidate writer after manifest publish: %w", err)
+			}
+		}
+		if committedManifest != nil {
+			return &CommittedAttachmentRemovalError{Refs: append([]string(nil), refs...), Err: saveErr}
+		}
+		return saveErr
+	})
+}
+
 // ListAttachments loads one validated manifest without reading blob payloads.
 func (s *Store) ListAttachments(threadID string) ([]Attachment, error) {
 	if s == nil {
@@ -346,6 +450,42 @@ func (s *Store) ResolveAttachment(
 	threadID string,
 	ref string,
 ) ([]byte, Attachment, error) {
+	return s.resolveAttachment(ctx, threadID, ref, func(view *attachmentStoreView) error {
+		return view.validateActive()
+	})
+}
+
+// ResolveAttachmentWithLease resolves verified bytes only while lease still
+// identifies the active thread directory and lock file. Coding runtimes use
+// this variant so path replacement cannot redirect an already-open session.
+func (s *Store) ResolveAttachmentWithLease(
+	ctx context.Context,
+	lease *Lease,
+	threadID string,
+	ref string,
+) (data []byte, attachment Attachment, resultErr error) {
+	if s == nil {
+		return nil, Attachment{}, fmt.Errorf("coding attachment store is nil")
+	}
+	resultErr = lease.withActive(s.root, threadID, func() error {
+		var resolveErr error
+		data, attachment, resolveErr = s.resolveAttachment(
+			ctx,
+			threadID,
+			ref,
+			func(view *attachmentStoreView) error { return view.validateWriter(lease) },
+		)
+		return resolveErr
+	})
+	return data, attachment, resultErr
+}
+
+func (s *Store) resolveAttachment(
+	ctx context.Context,
+	threadID string,
+	ref string,
+	validateView func(*attachmentStoreView) error,
+) ([]byte, Attachment, error) {
 	if s == nil {
 		return nil, Attachment{}, fmt.Errorf("coding attachment store is nil")
 	}
@@ -363,12 +503,24 @@ func (s *Store) ResolveAttachment(
 		return nil, Attachment{}, err
 	}
 	defer func() { _ = view.Close() }()
+	if validationErr := validateView(view); validationErr != nil {
+		return nil, Attachment{}, fmt.Errorf(
+			"coding attachment resolve: validate thread view: %w",
+			validationErr,
+		)
+	}
 	manifest, err := view.loadManifest()
 	if contextErr := ctx.Err(); contextErr != nil {
 		return nil, Attachment{}, contextErr
 	}
 	if err != nil {
 		return nil, Attachment{}, err
+	}
+	if validationErr := validateView(view); validationErr != nil {
+		return nil, Attachment{}, fmt.Errorf(
+			"coding attachment resolve: revalidate thread after manifest read: %w",
+			validationErr,
+		)
 	}
 	entry, found := attachmentByRef(manifest.Entries, ref)
 	if contextErr := ctx.Err(); contextErr != nil {
@@ -380,6 +532,12 @@ func (s *Store) ResolveAttachment(
 	data, readErr := view.readBlob(ctx, entry.SHA256, entry.Size)
 	if contextErr := ctx.Err(); contextErr != nil {
 		return nil, entry, contextErr
+	}
+	if validationErr := validateView(view); validationErr != nil {
+		return nil, entry, fmt.Errorf(
+			"coding attachment resolve: revalidate thread after blob read: %w",
+			validationErr,
+		)
 	}
 	if readErr != nil {
 		return nil, entry, &AttachmentUnavailableError{Ref: ref, Reason: readErr.Error()}
@@ -406,6 +564,16 @@ func validateAttachmentInput(input AttachmentInput) (AttachmentInput, error) {
 			strings.ContainsAny(input.ContentType, "\r\n\x00")) {
 		return AttachmentInput{}, fmt.Errorf("coding attachment admission: content type is invalid")
 	}
+	if input.ContentType != "" {
+		mediaType, parameters, err := mime.ParseMediaType(input.ContentType)
+		if err != nil {
+			return AttachmentInput{}, fmt.Errorf("coding attachment admission: content type is invalid")
+		}
+		input.ContentType = mime.FormatMediaType(mediaType, parameters)
+		if input.ContentType == "" || len(input.ContentType) > MaxAttachmentContentType {
+			return AttachmentInput{}, fmt.Errorf("coding attachment admission: content type is invalid")
+		}
+	}
 	return input, nil
 }
 
@@ -417,6 +585,10 @@ func validateAttachmentPresentation(filename, contentType string) error {
 	}
 	if contentType == "" || !utf8.ValidString(contentType) || len(contentType) > MaxAttachmentContentType ||
 		strings.ContainsAny(contentType, "\r\n\x00") {
+		return fmt.Errorf("coding attachment admission: content type is invalid")
+	}
+	mediaType, parameters, err := mime.ParseMediaType(contentType)
+	if err != nil || mime.FormatMediaType(mediaType, parameters) != contentType {
 		return fmt.Errorf("coding attachment admission: content type is invalid")
 	}
 	return nil
@@ -1041,12 +1213,7 @@ func validateAttachmentManifest(threadID string, manifest attachmentManifestFile
 }
 
 func validateAttachment(entry Attachment) error {
-	refID := strings.TrimPrefix(entry.Ref, attachmentRefPrefix)
-	if refID == entry.Ref {
-		return fmt.Errorf("coding attachment reference is invalid")
-	}
-	parsedRef, err := uuid.Parse(refID)
-	if err != nil || parsedRef.String() != refID {
+	if !isAttachmentRef(entry.Ref) {
 		return fmt.Errorf("coding attachment reference is invalid")
 	}
 	if err := validateAttachmentPresentation(entry.Filename, entry.ContentType); err != nil {
@@ -1057,6 +1224,21 @@ func validateAttachment(entry Attachment) error {
 		return fmt.Errorf("coding attachment identity is invalid")
 	}
 	return nil
+}
+
+func isAttachmentRef(ref string) bool {
+	refID := strings.TrimPrefix(ref, attachmentRefPrefix)
+	if refID == ref {
+		return false
+	}
+	parsedRef, err := uuid.Parse(refID)
+	return err == nil && parsedRef.String() == refID
+}
+
+// IsAttachmentRef reports whether ref has the exact durable coding attachment
+// syntax. Ownership is still established only by resolving it in a thread.
+func IsAttachmentRef(ref string) bool {
+	return isAttachmentRef(ref)
 }
 
 func attachmentByRef(entries []Attachment, ref string) (Attachment, bool) {

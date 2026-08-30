@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -92,7 +94,7 @@ func (r nativeCodingTurnRunner) Run(
 	if err != nil {
 		return codingTurnOutcome{}, err
 	}
-	outcome, turnErr := runtime.runTurn(ctx, request.Prompt, nil)
+	outcome, turnErr := runtime.runTurn(ctx, frontend.TurnInput{Text: request.Prompt}, nil)
 	return outcome, errors.Join(turnErr, runtime.Close())
 }
 
@@ -106,9 +108,21 @@ type nativeCodingRuntime struct {
 	model           string
 	provider        string
 	streaming       bool
-	historyCursor   memory.HistoryCursor
-	closeOnce       sync.Once
-	closeErr        error
+	store           *thread.Store
+	lease           *thread.Lease
+	attachmentMedia *codingAttachmentMediaStore
+	now             func() time.Time
+	processDirect   func(
+		context.Context,
+		agent.DirectTurnInput,
+		string,
+		string,
+		string,
+		agent.DirectTurnOptions,
+	) (string, error)
+	historyCursor memory.HistoryCursor
+	closeOnce     sync.Once
+	closeErr      error
 }
 
 // codingCheckpointBus keeps durable coding-thread metadata observation in the
@@ -217,6 +231,14 @@ func openNativeCodingRuntime(
 		_ = baseEventBus.Close()
 		return nil, fmt.Errorf("coding runtime: initialize agent: %w", err)
 	}
+	attachmentMedia, err := newCodingAttachmentMediaStore(request.Store, request.Lease, request.Metadata.ThreadID)
+	if err != nil {
+		_ = loop.CloseContext(context.Background())
+		messageBus.Close()
+		_ = baseEventBus.Close()
+		return nil, fmt.Errorf("coding runtime: initialize attachment media: %w", err)
+	}
+	loop.SetMediaStore(attachmentMedia)
 	readTurnHistory := r.readTurnHistory
 	if readTurnHistory == nil {
 		readTurnHistory = func(
@@ -237,6 +259,11 @@ func openNativeCodingRuntime(
 		model:           modelName,
 		provider:        providerName,
 		streaming:       projector != nil,
+		store:           request.Store,
+		lease:           request.Lease,
+		attachmentMedia: attachmentMedia,
+		now:             time.Now,
+		processDirect:   loop.ProcessDirectInputWithOptions,
 	}
 	if projector != nil {
 		runtime.historyCursor, err = codingHistoryCursor(
@@ -270,7 +297,7 @@ func codingHistoryCursor(
 
 func (r *nativeCodingRuntime) runTurn(
 	ctx context.Context,
-	prompt string,
+	input frontend.TurnInput,
 	onReady func(),
 ) (codingTurnOutcome, error) {
 	baseOutcome := codingTurnOutcome{Model: r.model, Provider: r.provider}
@@ -278,9 +305,20 @@ func (r *nativeCodingRuntime) runTurn(
 	if err != nil {
 		return baseOutcome, fmt.Errorf("coding runtime: read history before turn: %w", err)
 	}
-	response, turnErr := r.loop.ProcessDirectWithOptions(
+	processDirect := r.processDirect
+	if processDirect == nil && r.loop != nil {
+		processDirect = r.loop.ProcessDirectInputWithOptions
+	}
+	if processDirect == nil {
+		return baseOutcome, fmt.Errorf("coding runtime: direct processor is unavailable")
+	}
+	directInput, attachments, admissionErr := r.admitTurnInput(ctx, input)
+	if admissionErr != nil && !thread.IsCommittedAttachmentsError(admissionErr) {
+		return baseOutcome, admissionErr
+	}
+	response, turnErr := processDirect(
 		ctx,
-		prompt,
+		directInput,
 		r.metadata.SessionKey,
 		"coding",
 		r.metadata.ThreadID,
@@ -291,7 +329,7 @@ func (r *nativeCodingRuntime) runTurn(
 		r.sessions,
 		r.metadata.SessionKey,
 	)
-	promptStored := historyErr == nil && acceptedPromptAfter(after, len(beforeHistory), prompt)
+	promptStored := historyErr == nil && acceptedPromptAfter(after, len(beforeHistory), directInput)
 	outcome := codingTurnOutcome{
 		Model:        r.model,
 		Provider:     r.provider,
@@ -303,24 +341,127 @@ func (r *nativeCodingRuntime) runTurn(
 		return outcome, &thread.IndeterminatePromptError{
 			ThreadID: r.metadata.ThreadID,
 			Err: errors.Join(
+				admissionErr,
 				turnErr,
 				fmt.Errorf("coding runtime: confirm history after turn: %w", historyErr),
 			),
 		}
 	}
+	var rollbackErr error
+	if !promptStored && len(attachments) > 0 {
+		refs := make([]string, len(attachments))
+		for index, attachment := range attachments {
+			refs[index] = attachment.Ref
+		}
+		rollbackErr = r.store.RemoveAttachmentRefs(
+			context.WithoutCancel(ctx),
+			r.lease,
+			r.metadata,
+			refs,
+		)
+	}
 	if hardCanceled && !promptStored {
-		return outcome, turnErr
+		return outcome, errors.Join(admissionErr, turnErr, rollbackErr)
 	}
 	if !promptStored {
 		return outcome, &thread.IndeterminatePromptError{
 			ThreadID: r.metadata.ThreadID,
 			Err: errors.Join(
+				admissionErr,
 				turnErr,
+				rollbackErr,
 				fmt.Errorf("coding runtime: confirmed history does not contain the admitted prompt"),
 			),
 		}
 	}
-	return outcome, turnErr
+	return outcome, errors.Join(admissionErr, turnErr)
+}
+
+func (r *nativeCodingRuntime) admitTurnInput(
+	ctx context.Context,
+	input frontend.TurnInput,
+) (agent.DirectTurnInput, []thread.Attachment, error) {
+	if len(input.Attachments) == 0 {
+		if err := thread.ValidatePrompt(input.Text); err != nil {
+			return agent.DirectTurnInput{}, nil, err
+		}
+		return agent.DirectTurnInput{Content: input.Text}, nil, nil
+	}
+	if r.store == nil || r.lease == nil {
+		return agent.DirectTurnInput{}, nil, fmt.Errorf("coding runtime: attachment admission is unavailable")
+	}
+	if !utf8.ValidString(input.Text) || len(input.Text) > thread.MaxPromptBytes {
+		return agent.DirectTurnInput{}, nil, fmt.Errorf(
+			"coding runtime: attachment prompt must be valid UTF-8 within %d bytes",
+			thread.MaxPromptBytes,
+		)
+	}
+	now := time.Now
+	if r.now != nil {
+		now = r.now
+	}
+	inputs := make([]thread.AttachmentInput, len(input.Attachments))
+	for index, attachment := range input.Attachments {
+		inputs[index] = thread.AttachmentInput{
+			Path:        attachment.Path,
+			Filename:    attachment.Filename,
+			ContentType: attachment.ContentType,
+			At:          now(),
+		}
+	}
+	attachments, err := r.store.AdmitAttachments(ctx, r.lease, r.metadata, inputs)
+	if err != nil && !thread.IsCommittedAttachmentsError(err) {
+		return agent.DirectTurnInput{}, nil, err
+	}
+	mediaRefs := make([]string, len(attachments))
+	for index, attachment := range attachments {
+		mediaRefs[index] = attachment.Ref
+	}
+	content := canonicalAttachmentTurnContent(input.Text, attachments)
+	if validationErr := thread.ValidatePrompt(content); validationErr != nil {
+		removalErr := r.store.RemoveAttachmentRefs(
+			context.WithoutCancel(ctx),
+			r.lease,
+			r.metadata,
+			mediaRefs,
+		)
+		return agent.DirectTurnInput{}, nil, errors.Join(err, validationErr, removalErr)
+	}
+	return agent.DirectTurnInput{
+		Content: content,
+		Media:   mediaRefs,
+	}, attachments, err
+}
+
+func canonicalAttachmentTurnContent(text string, attachments []thread.Attachment) string {
+	parts := make([]string, 0, len(attachments)+1)
+	for _, attachment := range attachments {
+		kind := "file"
+		if strings.HasPrefix(strings.ToLower(attachment.ContentType), "image/") {
+			kind = "image"
+		}
+		filename := strings.NewReplacer("[", "‹", "]", "›").Replace(attachment.Filename)
+		parts = append(parts, fmt.Sprintf("[%s: %s]", kind, filename))
+	}
+	if strings.TrimSpace(text) != "" {
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func turnDisplayContent(input frontend.TurnInput) string {
+	if strings.TrimSpace(input.Text) != "" {
+		return input.Text
+	}
+	attachments := make([]thread.Attachment, len(input.Attachments))
+	for index, attachment := range input.Attachments {
+		filename := strings.TrimSpace(attachment.Filename)
+		if filename == "" {
+			filename = filepath.Base(attachment.Path)
+		}
+		attachments[index] = thread.Attachment{Filename: filename, ContentType: attachment.ContentType}
+	}
+	return canonicalAttachmentTurnContent("", attachments)
 }
 
 func codingDirectTurnOptions(streaming bool, onReady func()) agent.DirectTurnOptions {
@@ -345,7 +486,11 @@ func (r *nativeCodingRuntime) Compact(ctx context.Context) error {
 
 func (r *nativeCodingRuntime) Close() error {
 	r.closeOnce.Do(func() {
-		r.closeErr = errors.Join(r.loop.CloseContext(context.Background()), r.eventBus.Close())
+		r.closeErr = errors.Join(
+			r.loop.CloseContext(context.Background()),
+			r.attachmentMedia.Close(),
+			r.eventBus.Close(),
+		)
 		r.messageBus.Close()
 	})
 	return r.closeErr
@@ -629,11 +774,8 @@ func (r *nativeControllerRuntime) RunTurn(
 	input frontend.TurnInput,
 	onReady func(),
 ) error {
-	if len(input.Attachments) != 0 {
-		return fmt.Errorf("coding runtime: structured attachments are not admitted by this runtime")
-	}
-	outcome, turnErr := r.runTurn(ctx, input.Text, onReady)
-	return r.persistTurnOutcome(input.Text, outcome, turnErr)
+	outcome, turnErr := r.runTurn(ctx, input, onReady)
+	return r.persistTurnOutcome(turnDisplayContent(input), outcome, turnErr)
 }
 
 func (r *nativeControllerRuntime) persistTurnOutcome(
@@ -818,12 +960,12 @@ func cloneModelConfig(model *config.ModelConfig) *config.ModelConfig {
 	return &cloned
 }
 
-func acceptedPromptAfter(history []providers.Message, before int, prompt string) bool {
+func acceptedPromptAfter(history []providers.Message, before int, input agent.DirectTurnInput) bool {
 	if before < 0 || before > len(history) {
 		before = 0
 	}
 	for _, message := range history[before:] {
-		if message.Role == "user" && message.Content == prompt {
+		if message.Role == "user" && message.Content == input.Content && slices.Equal(message.Media, input.Media) {
 			return true
 		}
 	}

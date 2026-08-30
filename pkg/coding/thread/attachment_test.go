@@ -168,6 +168,130 @@ func TestAttachmentBatchBoundsAggregateBytesWithoutOverflow(t *testing.T) {
 	}
 }
 
+func TestAttachmentRemovalDropsExactRefsWithoutDeletingBlobs(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	sourceRoot := t.TempDir()
+	paths := []string{
+		filepath.Join(sourceRoot, "keep.txt"),
+		filepath.Join(sourceRoot, "remove-one.txt"),
+		filepath.Join(sourceRoot, "remove-two.txt"),
+	}
+	for _, path := range paths {
+		if err := os.WriteFile(path, []byte("shared"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attachments, err := store.AdmitAttachments(t.Context(), lease, metadata, []AttachmentInput{
+		{Path: paths[0], At: time.Now()},
+		{Path: paths[1], At: time.Now()},
+		{Path: paths[2], At: time.Now()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobPath := attachmentTestBlobPath(store, attachments[0])
+	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{
+		attachments[1].Ref,
+		attachments[2].Ref,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.ListAttachments(metadata.ThreadID)
+	if err != nil || len(entries) != 1 || entries[0].Ref != attachments[0].Ref {
+		t.Fatalf("remaining manifest = %+v, %v", entries, err)
+	}
+	if _, err := os.Stat(blobPath); err != nil {
+		t.Fatalf("shared blob removed with refs: %v", err)
+	}
+	if _, _, err := store.ResolveAttachment(
+		t.Context(), metadata.ThreadID, attachments[1].Ref,
+	); !IsAttachmentUnavailable(err) {
+		t.Fatalf("removed ref resolution error = %v", err)
+	}
+	data, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachments[0].Ref)
+	if err != nil || string(data) != "shared" {
+		t.Fatalf("remaining ref = %q, %v", data, err)
+	}
+}
+
+func TestAttachmentAdmissionNormalizesSuppliedMediaType(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "screen.png")
+	if err := os.WriteFile(source, []byte("image fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, ContentType: "Image/PNG; CHARSET=UTF-8", At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attachment.ContentType != "image/png; charset=UTF-8" {
+		t.Fatalf("normalized content type = %q", attachment.ContentType)
+	}
+}
+
+func TestAttachmentLeaseBoundResolveRejectsReplacedThread(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "private.txt")
+	if err := os.WriteFile(source, []byte("owned bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedRoot := threadRoot + "-moved"
+	if err := os.Rename(threadRoot, movedRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(threadRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(threadRoot, leaseFileName), []byte("replacement\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ResolveAttachmentWithLease(
+		t.Context(), lease, metadata.ThreadID, attachment.Ref,
+	); err == nil || !strings.Contains(err.Error(), "held lease") {
+		t.Fatalf("lease-bound replaced-thread resolution error = %v", err)
+	}
+}
+
+func TestAttachmentRemovalRejectsUnknownRefWithoutChangingManifest(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "keep.txt")
+	if err := os.WriteFile(source, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := attachmentRefPrefix + NewThreadID()
+	if err := store.RemoveAttachmentRefs(
+		t.Context(), lease, metadata, []string{unknown},
+	); err == nil {
+		t.Fatal("RemoveAttachmentRefs() accepted an unknown reference")
+	}
+	entries, err := store.ListAttachments(metadata.ThreadID)
+	if err != nil || len(entries) != 1 || entries[0].Ref != attachment.Ref {
+		t.Fatalf("manifest changed after unknown removal = %+v, %v", entries, err)
+	}
+}
+
 func TestAttachmentSharesBlobAndSurvivesOtherThreadDeletion(t *testing.T) {
 	store, first := newLeaseTestThread(t)
 	second, err := NewMetadata(NewThreadID(), first.Project, "second thread", time.Now())
