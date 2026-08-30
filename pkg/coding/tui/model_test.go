@@ -52,6 +52,7 @@ type fakeController struct {
 	submits      atomic.Int32
 	mu           sync.Mutex
 	prompts      []string
+	inputs       []frontend.TurnInput
 	submitErr    error
 	refreshes    atomic.Int32
 	refreshErr   error
@@ -74,7 +75,18 @@ func (f *fakeController) Submit(_ context.Context, input frontend.TurnInput) err
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prompts = append(f.prompts, input.Text)
+	f.inputs = append(f.inputs, input.Clone())
 	return f.submitErr
+}
+
+func (f *fakeController) submittedInputs() []frontend.TurnInput {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inputs := make([]frontend.TurnInput, len(f.inputs))
+	for index := range f.inputs {
+		inputs[index] = f.inputs[index].Clone()
+	}
+	return inputs
 }
 
 func (f *fakeController) submittedPrompts() []string {

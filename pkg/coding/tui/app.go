@@ -53,7 +53,7 @@ func DetectTerminalCapabilities(input, output *os.File, noColor bool) TerminalCa
 type Options struct {
 	Input           io.Reader
 	Output          io.Writer
-	InitialPrompt   string
+	InitialInput    frontend.TurnInput
 	AlternateScreen bool
 	ReportFocus     bool
 	NoColor         bool
@@ -91,9 +91,9 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)
 	}
-	if strings.TrimSpace(options.InitialPrompt) != "" {
-		if err := controller.Submit(ctx, frontend.TurnInput{Text: options.InitialPrompt}); err != nil {
-			return fmt.Errorf("coding TUI submit initial prompt: %w", err)
+	if strings.TrimSpace(options.InitialInput.Text) != "" || len(options.InitialInput.Attachments) > 0 {
+		if err := controller.Submit(ctx, options.InitialInput); err != nil {
+			return fmt.Errorf("coding TUI submit initial input: %w", err)
 		}
 		model.admitInitialTurn()
 	}

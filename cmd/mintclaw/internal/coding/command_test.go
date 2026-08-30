@@ -504,15 +504,18 @@ func TestCodeUsesInteractiveShellOnlyForCapableTerminal(t *testing.T) {
 		return &interactiveLeaseController{Projector: projector, lease: candidate.Lease}, nil
 	}
 	runs := 0
+	attachmentPath := filepath.Join(project, "screenshot.png")
 	deps.runTUI = func(ctx context.Context, controller frontend.Controller, options tui.Options) error {
 		runs++
-		if options.InitialPrompt != "fix the terminal" || !options.AlternateScreen || !options.ReportFocus {
+		if options.InitialInput.Text != "fix the terminal" || len(options.InitialInput.Attachments) != 1 ||
+			options.InitialInput.Attachments[0].Path != attachmentPath ||
+			!options.AlternateScreen || !options.ReportFocus {
 			t.Fatalf("TUI options = %+v", options)
 		}
 		return controller.Close(ctx)
 	}
 
-	executeCommand(t, newCodeCommand(deps), "fix", "the", "terminal")
+	executeCommand(t, newCodeCommand(deps), "fix", "the", "terminal", "--attach", attachmentPath)
 	if runs != 1 || request.Metadata.ThreadID == "" {
 		t.Fatalf("TUI runs=%d request=%+v", runs, request)
 	}
@@ -553,7 +556,8 @@ func TestCodeWithoutPromptOpensInteractiveComposer(t *testing.T) {
 	runs := 0
 	deps.runTUI = func(ctx context.Context, controller frontend.Controller, options tui.Options) error {
 		runs++
-		if options.InitialPrompt != "" || !options.AlternateScreen || !options.ReportFocus {
+		if options.InitialInput.Text != "" || len(options.InitialInput.Attachments) != 0 ||
+			!options.AlternateScreen || !options.ReportFocus {
 			t.Fatalf("TUI options = %+v", options)
 		}
 		return controller.Close(ctx)
@@ -598,10 +602,91 @@ func TestCodeWithoutPromptRejectsPlainAndJSONModes(t *testing.T) {
 				}
 			}
 			_, err := executeCommandError(newCodeCommand(caseDeps), testCase.args...)
-			if err == nil || !strings.Contains(err.Error(), "prompt is required outside the interactive terminal UI") {
+			if err == nil || !strings.Contains(err.Error(), "prompt or --attach is required") {
 				t.Fatalf("empty code error = %v", err)
 			}
 		})
+	}
+}
+
+func TestCodeAttachFlagsCreateStructuredAttachmentOnlyTurn(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 29, 22, 30, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	first := filepath.Join(project, "build.log")
+	second := filepath.Join(project, "screen.png")
+	var received frontend.TurnInput
+	deps.turnRunner = codingTurnRunnerFunc(func(
+		ctx context.Context,
+		request codingTurnRequest,
+	) (codingTurnOutcome, error) {
+		received = request.Input.Clone()
+		err := request.Store.AppendUserMessage(
+			ctx,
+			request.Lease,
+			request.Metadata,
+			turnDisplayContent(request.Input),
+		)
+		return codingTurnOutcome{PromptStored: appendOutcomeAllowsMetadataSave(err)}, err
+	})
+
+	var created commandResult
+	if err := json.Unmarshal(executeCommand(
+		t,
+		newCodeCommand(deps),
+		"--attach",
+		first,
+		"--attach",
+		second,
+		"--json",
+	), &created); err != nil {
+		t.Fatal(err)
+	}
+	if received.Text != "" || len(received.Attachments) != 2 ||
+		received.Attachments[0].Path != first || received.Attachments[1].Path != second {
+		t.Fatalf("structured input = %+v", received)
+	}
+	if !created.PromptStored {
+		t.Fatalf("created result = %+v", created)
+	}
+}
+
+func TestResumeAttachFlagBuildsOneStructuredTurn(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 29, 22, 35, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	var created commandResult
+	if err := json.Unmarshal(executeCommand(t, newCodeCommand(deps), "initial", "--json"), &created); err != nil {
+		t.Fatal(err)
+	}
+	attachmentPath := filepath.Join(project, "failure.log")
+	var received frontend.TurnInput
+	deps.turnRunner = codingTurnRunnerFunc(func(
+		ctx context.Context,
+		request codingTurnRequest,
+	) (codingTurnOutcome, error) {
+		received = request.Input.Clone()
+		err := request.Store.AppendUserMessage(
+			ctx,
+			request.Lease,
+			request.Metadata,
+			turnDisplayContent(request.Input),
+		)
+		return codingTurnOutcome{PromptStored: appendOutcomeAllowsMetadataSave(err)}, err
+	})
+	executeCommand(
+		t,
+		newResumeCommand(deps),
+		created.ThreadID,
+		"--attach",
+		attachmentPath,
+		"--json",
+	)
+	if received.Text != "" || len(received.Attachments) != 1 ||
+		received.Attachments[0].Path != attachmentPath {
+		t.Fatalf("structured resumed input = %+v", received)
 	}
 }
 
@@ -903,7 +988,7 @@ func TestCodePersistsDefaultSelectionBeforePromptAdmission(t *testing.T) {
 		if persisted.Model != "default-coding" || persisted.Provider != "default-provider" {
 			t.Fatalf("pre-admission selection = model %q provider %q", persisted.Model, persisted.Provider)
 		}
-		err = request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Prompt)
+		err = request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Input.Text)
 		return codingTurnOutcome{
 			Model:        request.Metadata.Model,
 			Provider:     request.Metadata.Provider,
@@ -959,7 +1044,7 @@ func TestResumePersistsMissingSelectionBeforePromptAdmission(t *testing.T) {
 		if persisted.Model != "recovered-default" || persisted.Provider != "recovered-provider" {
 			t.Fatalf("legacy pre-admission selection = model %q provider %q", persisted.Model, persisted.Provider)
 		}
-		appendErr := request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Prompt)
+		appendErr := request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Input.Text)
 		return codingTurnOutcome{
 			Model:        request.Metadata.Model,
 			Provider:     request.Metadata.Provider,
@@ -1155,7 +1240,14 @@ func TestCommittedPromptStateSurvivesOutputFailure(t *testing.T) {
 		threadID := uuid.NewString()
 		deps.newThreadID = func() string { return threadID }
 		outputErr := errors.New("injected output failure")
-		err := runNew(t.Context(), failingWriter{err: outputErr}, deps, "committed code prompt", "", true)
+		err := runNew(
+			t.Context(),
+			failingWriter{err: outputErr},
+			deps,
+			frontend.TurnInput{Text: "committed code prompt"},
+			"",
+			true,
+		)
 		if !errors.Is(err, outputErr) || !thread.IsCommittedPromptError(err) ||
 			!strings.Contains(err.Error(), "do not blindly retry") {
 			t.Fatalf("runNew(output failure) error = %v", err)
@@ -1230,7 +1322,7 @@ func testDependencies(home, cwd string, now *time.Time) dependencies {
 			ctx context.Context,
 			request codingTurnRequest,
 		) (codingTurnOutcome, error) {
-			err := request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Prompt)
+			err := request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Input.Text)
 			return codingTurnOutcome{
 				Model:        request.Metadata.Model,
 				Provider:     request.Metadata.Provider,
