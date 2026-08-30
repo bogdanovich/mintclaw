@@ -434,7 +434,16 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		)
 		return true
 	}
-	c.consumeExplicitInteractionAnswer(ctx, msg, target, classification)
+	if classification.Disposition == explicitInteractionAnswerDuplicate {
+		c.consumeExplicitInteractionAnswer(ctx, msg, target, classification)
+		return true
+	}
+	logExplicitInteractionAnswerDisposition(classification.Record, msg, classification.Disposition)
+	_ = c.al.settleInboundAdmission(
+		ctx,
+		msg,
+		finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+	)
 	return true
 }
 
