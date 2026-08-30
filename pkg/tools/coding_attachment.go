@@ -1,13 +1,21 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/h2non/filetype"
+	_ "golang.org/x/image/webp"
 
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -177,15 +185,15 @@ func (t *CodingAttachmentTool) open(
 	if err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("open coding attachment: %v", err))
 	}
-	if strings.HasPrefix(reference.ContentType, "image/") {
+	if imageContentType, ok := verifiedAttachmentImageContentType(data); ok {
 		return &toolshared.ToolResult{
 			ForLLM: fmt.Sprintf(
 				"Opened thread image %q (%s, %d bytes). Analyze the attached image.",
 				reference.Filename,
-				reference.ContentType,
+				imageContentType,
 				reference.Size,
 			),
-			Media: []string{reference.Ref},
+			ContextMedia: []string{reference.Ref},
 		}
 	}
 	if !utf8.Valid(data) {
@@ -235,6 +243,22 @@ func (t *CodingAttachmentTool) open(
 		return toolshared.ErrorResult(fmt.Sprintf("encode coding attachment content: %v", err))
 	}
 	return toolshared.SilentResult(string(encoded))
+}
+
+func verifiedAttachmentImageContentType(data []byte) (string, bool) {
+	kind, err := filetype.Match(data)
+	if err != nil {
+		return "", false
+	}
+	switch kind.MIME.Value {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+	default:
+		return "", false
+	}
+	if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
+		return "", false
+	}
+	return kind.MIME.Value, true
 }
 
 func boundedIntegerArg(args map[string]any, key string, defaultValue, minimum, maximum int) (int, error) {

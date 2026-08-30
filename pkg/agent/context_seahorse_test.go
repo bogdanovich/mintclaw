@@ -14,6 +14,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
@@ -245,6 +246,70 @@ func TestProviderToSeahorseMessageWithMedia(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected media part in converted message")
+	}
+}
+
+type lazyHistoricalMediaPolicy struct{}
+
+func (lazyHistoricalMediaPolicy) ShouldResolveHistorical(ref string) bool {
+	return !strings.HasPrefix(ref, "media://coding/")
+}
+
+func TestProviderToSeahorseMessageOmitsLazyHistoricalMediaFromDerivedBudget(t *testing.T) {
+	msg := protocoltypes.Message{
+		Role: "user", Content: "old turn",
+		Media: []string{"https://example.com/retained.png"},
+	}
+	for index := range 32 {
+		msg.Media = append(msg.Media, fmt.Sprintf("media://coding/thread/image-%d", index))
+	}
+	result := providerToSeahorseMessageWithPolicy(msg, lazyHistoricalMediaPolicy{})
+	if len(msg.Media) != 33 {
+		t.Fatalf("canonical input was mutated: %#v", msg.Media)
+	}
+	mediaParts := make([]string, 0, len(result.Parts))
+	for _, part := range result.Parts {
+		if part.Type == "media" {
+			mediaParts = append(mediaParts, part.MediaURI)
+		}
+	}
+	if len(mediaParts) != 1 || mediaParts[0] != "https://example.com/retained.png" {
+		t.Fatalf("derived media parts = %#v", mediaParts)
+	}
+	want := providerToSeahorseMessageWithPolicy(protocoltypes.Message{
+		Role: "user", Content: "old turn", Media: []string{"https://example.com/retained.png"},
+	}, nil).TokenCount
+	if result.TokenCount != want {
+		t.Fatalf("derived token count = %d, want %d", result.TokenCount, want)
+	}
+}
+
+func TestSeahorseRuntimeUsesMediaPolicyInjectedBeforeContextInitialization(t *testing.T) {
+	const lazyRef = "media://coding/thread/image"
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	store := &lazyHistoricalMediaStore{
+		MediaStore: media.NewFileMediaStore(),
+		lazy:       map[string]bool{lazyRef: true},
+		resolved:   make(map[string]int),
+	}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, WithMediaStore(store))
+	t.Cleanup(al.Close)
+	manager, ok := al.contextManager.(*seahorseContextManager)
+	if !ok {
+		t.Fatalf("context manager = %T, want Seahorse", al.contextManager)
+	}
+	runtime, err := manager.runtimeFor(al.registry.GetDefaultAgent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := runtime.providerToSeahorseMessage(protocoltypes.Message{
+		Role: "user", Content: "old turn", Media: []string{lazyRef},
+	})
+	for _, part := range result.Parts {
+		if part.Type == "media" {
+			t.Fatalf("pre-context media policy was not applied: %#v", result.Parts)
+		}
 	}
 }
 

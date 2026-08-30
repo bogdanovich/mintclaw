@@ -18,6 +18,7 @@ import (
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/providers/protocoltypes"
@@ -44,12 +45,13 @@ type seahorseAgentRuntime struct {
 	workspace                string
 	agentID                  string
 	reconciliationGeneration int
+	historicalMediaPolicy    func() media.HistoricalResolutionPolicy
 	config                   seahorse.Config
 	complete                 seahorse.CompleteFn
 	rebuildStoreFactory      CodingRuntimeStoreFactory
 }
 
-const seahorseReconciliationGeneration = 2
+const seahorseReconciliationGeneration = 3
 
 // newSeahorseContextManager creates a seahorse-backed ContextManager.
 func newSeahorseContextManager(
@@ -153,13 +155,14 @@ func newSeahorseAgentRuntime(
 		return nil, fmt.Errorf("create engine: coding store factory returned an engine without retrieval")
 	}
 	runtime := &seahorseAgentRuntime{
-		engine:              engine,
-		sessions:            agent.Sessions,
-		workspace:           agent.Workspace,
-		agentID:             agent.ID,
-		config:              seahorseConfig,
-		complete:            complete,
-		rebuildStoreFactory: rebuildStoreFactory,
+		engine:                engine,
+		sessions:              agent.Sessions,
+		workspace:             agent.Workspace,
+		agentID:               agent.ID,
+		config:                seahorseConfig,
+		complete:              complete,
+		rebuildStoreFactory:   rebuildStoreFactory,
+		historicalMediaPolicy: al.historicalMediaResolutionPolicy,
 		reconciliationGeneration: seahorseConfig.SummaryPolicy.ReconciliationGeneration(
 			seahorseReconciliationGeneration,
 		),
@@ -561,13 +564,13 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 		}
 		logger.WarnCF("seahorse", "canonical history write failed; ingesting live message without watermark",
 			map[string]any{"session": req.SessionKey, "error": req.CanonicalWriteErr.Error()})
-		msg := providerToSeahorseMessage(req.Message)
+		msg := runtime.providerToSeahorseMessage(req.Message)
 		_, ingestErr := runtime.engine.Ingest(ctx, req.SessionKey, []seahorse.Message{msg})
 		return ingestErr
 	}
 	store := runtime.sessions
 	if store == nil {
-		msg := providerToSeahorseMessage(req.Message)
+		msg := runtime.providerToSeahorseMessage(req.Message)
 		_, ingestErr := runtime.engine.Ingest(ctx, req.SessionKey, []seahorse.Message{msg})
 		return ingestErr
 	}
@@ -582,7 +585,7 @@ func (m *seahorseContextManager) Ingest(ctx context.Context, req *IngestRequest)
 	if state != nil && !revision.Dirty && state.SchemaGeneration == runtime.reconciliationGeneration &&
 		state.SourceRevision+1 == revision.Revision && state.SourceCount+1 == revision.Count &&
 		state.SourceSkip == revision.Skip {
-		msg := providerToSeahorseMessage(req.Message)
+		msg := runtime.providerToSeahorseMessage(req.Message)
 		if _, ingestErr := runtime.engine.Ingest(ctx, req.SessionKey, []seahorse.Message{msg}); ingestErr != nil {
 			return ingestErr
 		}
@@ -684,7 +687,7 @@ func (m *seahorseContextManager) reconcile(
 	}
 	msgs := make([]seahorse.Message, len(history))
 	for i, h := range history {
-		msgs[i] = providerToSeahorseMessage(h)
+		msgs[i] = runtime.providerToSeahorseMessage(h)
 	}
 	if forceDerivedRebuild {
 		if err := runtime.engine.ClearSession(ctx, sessionKey); err != nil {
@@ -931,13 +934,40 @@ func (m *seahorseContextManager) StartBackgroundReconciliation(ctx context.Conte
 
 // providerToSeahorseMessage converts a providers.Message to a seahorse.Message.
 func providerToSeahorseMessage(msg protocoltypes.Message) seahorse.Message {
+	return providerToSeahorseMessageWithPolicy(msg, nil)
+}
+
+func (runtime *seahorseAgentRuntime) providerToSeahorseMessage(msg protocoltypes.Message) seahorse.Message {
+	if runtime == nil {
+		return providerToSeahorseMessage(msg)
+	}
+	var policy media.HistoricalResolutionPolicy
+	if runtime.historicalMediaPolicy != nil {
+		policy = runtime.historicalMediaPolicy()
+	}
+	return providerToSeahorseMessageWithPolicy(msg, policy)
+}
+
+func providerToSeahorseMessageWithPolicy(
+	msg protocoltypes.Message,
+	policy media.HistoricalResolutionPolicy,
+) seahorse.Message {
+	indexed := msg
+	if policy != nil && len(msg.Media) > 0 {
+		indexed.Media = make([]string, 0, len(msg.Media))
+		for _, mediaURI := range msg.Media {
+			if policy.ShouldResolveHistorical(mediaURI) {
+				indexed.Media = append(indexed.Media, mediaURI)
+			}
+		}
+	}
 	result := seahorse.Message{
-		Role:             msg.Role,
-		Content:          msg.Content,
-		ModelName:        msg.ModelName,
-		ReasoningContent: msg.ReasoningContent,
-		TokenCount:       tokenizer.EstimateMessageTokens(msg),
-		CreatedAt:        normalizeSeahorseMessageCreatedAt(msg.CreatedAt),
+		Role:             indexed.Role,
+		Content:          indexed.Content,
+		ModelName:        indexed.ModelName,
+		ReasoningContent: indexed.ReasoningContent,
+		TokenCount:       tokenizer.EstimateMessageTokens(indexed),
+		CreatedAt:        normalizeSeahorseMessageCreatedAt(indexed.CreatedAt),
 	}
 
 	// Convert ToolCalls → MessageParts
@@ -969,7 +999,7 @@ func providerToSeahorseMessage(msg protocoltypes.Message) seahorse.Message {
 	}
 
 	// Convert media attachments
-	for _, mediaURI := range msg.Media {
+	for _, mediaURI := range indexed.Media {
 		part := seahorse.MessagePart{
 			Type:     "media",
 			MediaURI: mediaURI,

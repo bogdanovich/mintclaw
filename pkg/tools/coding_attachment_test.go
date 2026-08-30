@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -52,6 +53,12 @@ func (s *fakeReferenceCatalogStore) ReadReference(
 
 func newFakeReferenceCatalogStore() *fakeReferenceCatalogStore {
 	now := time.Date(2026, 8, 30, 7, 0, 0, 0, time.UTC)
+	imageData, err := base64.StdEncoding.DecodeString(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+	)
+	if err != nil {
+		panic(err)
+	}
 	return &fakeReferenceCatalogStore{
 		references: []media.Reference{
 			{Ref: "media://old", Filename: "old.log", ContentType: "text/plain", Size: 3, CreatedAt: now},
@@ -59,7 +66,7 @@ func newFakeReferenceCatalogStore() *fakeReferenceCatalogStore {
 				Ref:         "media://image",
 				Filename:    "screen.png",
 				ContentType: "image/png",
-				Size:        4,
+				Size:        int64(len(imageData)),
 				CreatedAt:   now.Add(time.Minute),
 			},
 			{
@@ -72,7 +79,7 @@ func newFakeReferenceCatalogStore() *fakeReferenceCatalogStore {
 		},
 		data: map[string][]byte{
 			"media://old":   []byte("old"),
-			"media://image": {0x89, 'P', 'N', 'G'},
+			"media://image": imageData,
 			"media://new":   []byte("αβγ"),
 		},
 	}
@@ -105,8 +112,23 @@ func TestCodingAttachmentToolOpensImageAsCurrentMedia(t *testing.T) {
 	tool := NewCodingAttachmentTool()
 	tool.SetMediaStore(newFakeReferenceCatalogStore())
 	result := tool.Execute(t.Context(), map[string]any{"action": "open", "ref": "media://image"})
-	if result.IsError || len(result.Media) != 1 || result.Media[0] != "media://image" {
+	if result.IsError || len(result.ContextMedia) != 1 || result.ContextMedia[0] != "media://image" ||
+		len(result.Media) != 0 || result.Deliverable != nil {
 		t.Fatalf("image result = %+v", result)
+	}
+}
+
+func TestCodingAttachmentToolVerifiesImageBytesInsteadOfMetadata(t *testing.T) {
+	store := newFakeReferenceCatalogStore()
+	store.references = append(store.references, media.Reference{
+		Ref: "media://fake-image", Filename: "fake.png", ContentType: "image/png", Size: 8,
+	})
+	store.data["media://fake-image"] = []byte{0x89, 'P', 'N', 'G', 0xff, 0xfe, 0xfd, 0xfc}
+	tool := NewCodingAttachmentTool()
+	tool.SetMediaStore(store)
+	result := tool.Execute(t.Context(), map[string]any{"action": "open", "ref": "media://fake-image"})
+	if !result.IsError || len(result.ContextMedia) != 0 || len(result.Media) != 0 {
+		t.Fatalf("mislabeled image result = %+v", result)
 	}
 }
 

@@ -2,11 +2,20 @@ package agent
 
 import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/state"
 )
 
 // AgentLoopOption configures an AgentLoop at construction time.
 type AgentLoopOption func(*AgentLoop)
+
+// WithMediaStore injects the media store before context initialization. Call
+// SetMediaStore after construction when registered tools must also receive it.
+func WithMediaStore(store media.MediaStore) AgentLoopOption {
+	return func(al *AgentLoop) {
+		al.mediaStore = store
+	}
+}
 
 // WithRuntimeEvents injects the runtime event bus used for new observation APIs.
 //

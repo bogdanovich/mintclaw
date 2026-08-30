@@ -599,6 +599,9 @@ func (runner *toolLoopRunner) admitToolCall(
 				if len(hookResult.Media) > 0 && !hookResult.Delivery.IsFinalHandled() {
 					toolResultMedia = append(toolResultMedia, hookResult.Media...)
 				}
+				if len(hookResult.ContextMedia) > 0 && !hookResult.Delivery.IsFinalHandled() {
+					toolResultMedia = append(toolResultMedia, hookResult.ContextMedia...)
+				}
 				if !hookResult.Delivery.IsFinalHandled() && !hookResult.Delivery.IsImmediate() {
 					attachMediaArtifacts(hookResult, p.Context.MediaResolver)
 				}
@@ -651,8 +654,11 @@ func (runner *toolLoopRunner) admitToolCall(
 						Deliverable:      taskresult.CloneDeliverable(hookResult.Deliverable),
 					}
 					durableContent = durableToolResultContent(contentForLLM, protectedResult)
-					durableToolResultMsg := toolResultMsg
-					durableToolResultMsg.Content = durableContent
+					durableToolResultMsg := durableToolResultJournalMessage(
+						toolResultMsg,
+						hookResult,
+						durableContent,
+					)
 					if protectedResult {
 						durableToolResultMsg.Media = nil
 						durableToolResultMsg.Deliverable = nil
@@ -1447,8 +1453,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 		toolResultMsg.Content = contentForLLM
 		durableContent = durableToolResultContent(contentForLLM, protectedResult)
-		durableToolResultMsg := toolResultMsg
-		durableToolResultMsg.Content = durableContent
+		durableToolResultMsg := durableToolResultJournalMessage(toolResultMsg, toolResult, durableContent)
 		if protectedResult {
 			durableToolResultMsg.Media = nil
 			durableToolResultMsg.Deliverable = nil
@@ -1860,8 +1865,11 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 		result,
 		r.p.filterToolContentForLLM(result.ContentForLLM()),
 	)
-	durableMsg := msg
-	durableMsg.Content = durableToolResultContent(msg.Content, protectedResult)
+	durableMsg := durableToolResultJournalMessage(
+		msg,
+		result,
+		durableToolResultContent(msg.Content, protectedResult),
+	)
 	if protectedResult {
 		durableMsg.Media = nil
 		durableMsg.Deliverable = nil
@@ -1895,7 +1903,24 @@ func buildToolResultJournalMessage(
 	if len(result.Media) > 0 && !result.Delivery.IsFinalHandled() {
 		message.Media = append(message.Media, result.Media...)
 	}
+	if len(result.ContextMedia) > 0 && !result.Delivery.IsFinalHandled() {
+		message.Media = append(message.Media, result.ContextMedia...)
+	}
 	return message
+}
+
+func durableToolResultJournalMessage(
+	live providers.Message,
+	result *toolshared.ToolResult,
+	content string,
+) providers.Message {
+	durable := live
+	durable.Content = content
+	durable.Media = nil
+	if result != nil && len(result.Media) > 0 && !result.Delivery.IsFinalHandled() {
+		durable.Media = append(durable.Media, result.Media...)
+	}
+	return durable
 }
 
 func pendingFinalHandledToolResultMessages(
@@ -1989,8 +2014,7 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 		content,
 	)
 	durableContent := durableToolResultContent(content, protectedResult)
-	settledDurableMsg := settledMsg
-	settledDurableMsg.Content = durableContent
+	settledDurableMsg := durableToolResultJournalMessage(settledMsg, settledResult, durableContent)
 	if protectedResult {
 		settledDurableMsg.Media = nil
 		settledDurableMsg.Deliverable = nil
