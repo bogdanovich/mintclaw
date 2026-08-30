@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -73,6 +74,97 @@ func TestAttachmentSurvivesSourceChangesAndRestartWithoutPathDisclosure(t *testi
 	}
 	if strings.Contains(string(manifest), secretDirectory) {
 		t.Fatalf("attachment manifest disclosed source directory: %s", manifest)
+	}
+}
+
+func TestAttachmentBatchCommitsAllReferencesAtomically(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	sourceRoot := t.TempDir()
+	firstPath := filepath.Join(sourceRoot, "first.log")
+	secondPath := filepath.Join(sourceRoot, "second.log")
+	if err := os.WriteFile(firstPath, []byte("shared bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondPath, []byte("shared bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	attachments, err := store.AdmitAttachments(t.Context(), lease, metadata, []AttachmentInput{
+		{Path: firstPath, At: now},
+		{Path: secondPath, At: now.Add(time.Second)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attachments) != 2 || attachments[0].Ref == attachments[1].Ref ||
+		attachments[0].SHA256 != attachments[1].SHA256 {
+		t.Fatalf("batch attachments = %+v", attachments)
+	}
+	entries, err := store.ListAttachments(metadata.ThreadID)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("manifest entries = %+v, %v", entries, err)
+	}
+	for _, attachment := range attachments {
+		data, _, resolveErr := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+		if resolveErr != nil || string(data) != "shared bytes" {
+			t.Fatalf("resolve %q = %q, %v", attachment.Ref, data, resolveErr)
+		}
+	}
+}
+
+func TestAttachmentBatchDoesNotPublishPartialManifest(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	validPath := filepath.Join(t.TempDir(), "valid.log")
+	if err := os.WriteFile(validPath, []byte("valid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: validPath, At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachments, err := store.AdmitAttachments(t.Context(), lease, metadata, []AttachmentInput{
+		{Path: validPath, At: time.Now()},
+		{Path: filepath.Join(t.TempDir(), "missing.log"), At: time.Now()},
+	})
+	if err == nil || len(attachments) != 0 {
+		t.Fatalf("partial batch = %+v, %v", attachments, err)
+	}
+	entries, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil || len(entries) != 1 || entries[0].Ref != baseline.Ref {
+		t.Fatalf("manifest changed after partial batch = %+v, %v", entries, listErr)
+	}
+}
+
+func TestAttachmentBatchRejectsUnboundedCountBeforeReading(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	inputs := make([]AttachmentInput, MaxAttachmentAdmissionCount+1)
+	for index := range inputs {
+		inputs[index] = AttachmentInput{Path: "/missing", At: time.Now()}
+	}
+	attachments, err := store.AdmitAttachments(t.Context(), lease, metadata, inputs)
+	if err == nil || len(attachments) != 0 || !strings.Contains(err.Error(), "batch must contain") {
+		t.Fatalf("unbounded batch = %+v, %v", attachments, err)
+	}
+}
+
+func TestAttachmentBatchBoundsAggregateBytesWithoutOverflow(t *testing.T) {
+	total, err := addAttachmentAdmissionBytes(MaxAttachmentAdmissionBytes-1, 1)
+	if err != nil || total != MaxAttachmentAdmissionBytes {
+		t.Fatalf("exact aggregate bound = %d, %v", total, err)
+	}
+	for _, values := range [][2]int64{
+		{MaxAttachmentAdmissionBytes, 1},
+		{MaxAttachmentAdmissionBytes + 1, 0},
+		{0, -1},
+	} {
+		if _, err := addAttachmentAdmissionBytes(values[0], values[1]); err == nil {
+			t.Fatalf("aggregate bytes %v accepted", values)
+		}
 	}
 }
 
@@ -467,6 +559,40 @@ func TestAttachmentAdmissionReturnsCommittedReference(t *testing.T) {
 	}
 	entries, listErr := store.ListAttachments(metadata.ThreadID)
 	if listErr != nil || len(entries) != 1 || entries[0].Ref != attachment.Ref {
+		t.Fatalf("committed manifest = %+v, %v", entries, listErr)
+	}
+}
+
+func TestAttachmentBatchReturnsEveryCommittedReference(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	sourceRoot := t.TempDir()
+	paths := []string{filepath.Join(sourceRoot, "first.txt"), filepath.Join(sourceRoot, "second.txt")}
+	for index, path := range paths {
+		if err := os.WriteFile(path, []byte(fmt.Sprintf("content-%d", index)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	injected := errors.New("injected post-rename sync failure")
+	writeRoot := store.writeRoot
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if err := writeRoot(root, name, data, mode); err != nil {
+			return err
+		}
+		if name == attachmentManifest {
+			return &fileutil.CommittedWriteError{Err: injected}
+		}
+		return nil
+	}
+	attachments, err := store.AdmitAttachments(t.Context(), lease, metadata, []AttachmentInput{
+		{Path: paths[0], At: time.Now()},
+		{Path: paths[1], At: time.Now()},
+	})
+	if len(attachments) != 2 || !IsCommittedAttachmentsError(err) || !errors.Is(err, injected) {
+		t.Fatalf("committed batch = %+v, %v", attachments, err)
+	}
+	entries, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil || len(entries) != 2 {
 		t.Fatalf("committed manifest = %+v, %v", entries, listErr)
 	}
 }

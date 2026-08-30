@@ -29,13 +29,15 @@ manifest of its owning thread. Knowing another thread's reference does not
 grant access to its blob. Blob filenames are content identities, not authority
 tokens.
 
-The admission layer is bounded to 32 MiB per file, 1,024 manifest entries per
-thread, and a 1 MiB manifest. Inputs must be stable singly linked regular files.
-Resolution reads through pinned direct store directories and returns verified
-bytes rather than a pathname that a consumer must reopen. It rechecks type,
-directory and file identity, size, and digest. Missing, replaced, changed, or
-corrupt state fails closed and is reported as unavailable; readers do not
-repair or rewrite it.
+The admission layer is bounded to 32 MiB per file, 32 files and 64 MiB per
+atomic turn batch, 1,024 manifest entries per thread, and a 1 MiB manifest.
+Inputs must be stable singly linked regular files. A batch verifies every
+source before publishing one manifest update, so a failed later input cannot
+strand a partial set of thread-owned references. Resolution reads through
+pinned direct store directories and returns verified bytes rather than a
+pathname that a consumer must reopen. It rechecks type, directory and file
+identity, size, and digest. Missing, replaced, changed, or corrupt state fails
+closed and is reported as unavailable; readers do not repair or rewrite it.
 
 ## Content deduplication, deletion, and garbage collection
 

@@ -23,12 +23,14 @@ import (
 )
 
 const (
-	AttachmentManifestVersion        = 1
-	MaxAttachmentBytes         int64 = 32 << 20
-	MaxThreadAttachments             = 1024
-	MaxAttachmentManifestBytes       = 1 << 20
-	MaxAttachmentFilenameBytes       = 255
-	MaxAttachmentContentType         = 127
+	AttachmentManifestVersion         = 1
+	MaxAttachmentBytes          int64 = 32 << 20
+	MaxThreadAttachments              = 1024
+	MaxAttachmentManifestBytes        = 1 << 20
+	MaxAttachmentFilenameBytes        = 255
+	MaxAttachmentContentType          = 127
+	MaxAttachmentAdmissionCount       = 32
+	MaxAttachmentAdmissionBytes int64 = 64 << 20
 
 	attachmentDirectory = "attachments"
 	attachmentManifest  = "manifest.json"
@@ -91,6 +93,13 @@ type CommittedAttachmentError struct {
 	Err        error
 }
 
+// CommittedAttachmentsError reports an atomic batch whose references reached
+// the canonical manifest even though post-rename durability was uncertain.
+type CommittedAttachmentsError struct {
+	Attachments []Attachment
+	Err         error
+}
+
 // committedAttachmentManifestError distinguishes a manifest rename from a
 // directory-creation durability warning that did not publish the manifest.
 type committedAttachmentManifestError struct {
@@ -114,6 +123,23 @@ func IsCommittedAttachmentError(err error) bool {
 	return errors.As(err, &committed)
 }
 
+func (e *CommittedAttachmentsError) Error() string {
+	return fmt.Sprintf(
+		"coding attachment batch of %d committed with uncertain durability: %v",
+		len(e.Attachments),
+		e.Err,
+	)
+}
+
+func (e *CommittedAttachmentsError) Unwrap() error { return e.Err }
+
+// IsCommittedAttachmentsError distinguishes a published batch from an
+// admission failure that did not update the canonical manifest.
+func IsCommittedAttachmentsError(err error) bool {
+	var committed *CommittedAttachmentsError
+	return errors.As(err, &committed)
+}
+
 func (e *AttachmentUnavailableError) Error() string {
 	return fmt.Sprintf("coding attachment %q is unavailable: %s", e.Ref, e.Reason)
 }
@@ -133,38 +159,61 @@ func (s *Store) AdmitAttachment(
 	metadata Metadata,
 	input AttachmentInput,
 ) (Attachment, error) {
+	attachments, err := s.AdmitAttachments(ctx, lease, metadata, []AttachmentInput{input})
+	if len(attachments) == 0 {
+		return Attachment{}, err
+	}
+	attachment := attachments[0]
+	var committed *CommittedAttachmentsError
+	if errors.As(err, &committed) {
+		return attachment, &CommittedAttachmentError{Attachment: attachment, Err: committed.Err}
+	}
+	return attachment, err
+}
+
+type preparedAttachment struct {
+	attachment Attachment
+	data       []byte
+}
+
+// AdmitAttachments verifies a bounded batch before publishing one atomic
+// manifest update. Blob publication may leave unreachable content after a
+// failure, but never a partial set of thread-owned references.
+func (s *Store) AdmitAttachments(
+	ctx context.Context,
+	lease *Lease,
+	metadata Metadata,
+	inputs []AttachmentInput,
+) ([]Attachment, error) {
 	if s == nil {
-		return Attachment{}, fmt.Errorf("coding attachment store is nil")
+		return nil, fmt.Errorf("coding attachment store is nil")
 	}
 	if ctx == nil {
-		return Attachment{}, fmt.Errorf("coding attachment admission: context is required")
+		return nil, fmt.Errorf("coding attachment admission: context is required")
 	}
 	if err := metadata.Validate(); err != nil {
-		return Attachment{}, err
+		return nil, err
 	}
-	input, err := validateAttachmentInput(input)
-	if err != nil {
-		return Attachment{}, err
+	if len(inputs) == 0 || len(inputs) > MaxAttachmentAdmissionCount {
+		return nil, fmt.Errorf(
+			"coding attachment admission: batch must contain between 1 and %d attachments",
+			MaxAttachmentAdmissionCount,
+		)
 	}
-	var admitted Attachment
-	err = lease.withActive(s.root, metadata.ThreadID, func() error {
-		data, canonicalPath, digest, size, readErr := readAttachmentSource(ctx, input.Path, MaxAttachmentBytes)
-		if readErr != nil {
-			return fmt.Errorf("coding attachment admission: %w", readErr)
+	validated := make([]AttachmentInput, len(inputs))
+	for index, input := range inputs {
+		var err error
+		validated[index], err = validateAttachmentInput(input)
+		if err != nil {
+			return nil, fmt.Errorf("coding attachment admission: input %d: %w", index+1, err)
 		}
-		filename := input.Filename
-		if filename == "" {
-			filename = filepath.Base(canonicalPath)
-		}
-		contentType := input.ContentType
-		if contentType == "" {
-			contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
-		}
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
-		if validationErr := validateAttachmentPresentation(filename, contentType); validationErr != nil {
-			return validationErr
+	}
+
+	var admitted []Attachment
+	err := lease.withActive(s.root, metadata.ThreadID, func() error {
+		prepared, prepareErr := prepareAttachmentBatch(ctx, validated)
+		if prepareErr != nil {
+			return prepareErr
 		}
 		view, openErr := s.openAttachmentStoreView(metadata.ThreadID)
 		if openErr != nil {
@@ -178,47 +227,99 @@ func (s *Store) AdmitAttachment(
 		if loadErr != nil {
 			return loadErr
 		}
-		candidate := Attachment{
-			Filename: filename, ContentType: contentType,
-			Size: size, SHA256: digest, CreatedAt: input.At.UTC(),
-		}
-		if len(manifest.Entries) >= MaxThreadAttachments {
+		if len(prepared) > MaxThreadAttachments-len(manifest.Entries) {
 			return fmt.Errorf("coding attachment admission: thread exceeds %d attachments", MaxThreadAttachments)
 		}
-		if publishErr := view.publishBlob(ctx, digest, data); publishErr != nil {
-			return publishErr
+		for _, candidate := range prepared {
+			if publishErr := view.publishBlob(ctx, candidate.attachment.SHA256, candidate.data); publishErr != nil {
+				return publishErr
+			}
+			if identityErr := view.validateWriter(lease); identityErr != nil {
+				return fmt.Errorf("coding attachment: revalidate writer after blob publication: %w", identityErr)
+			}
 		}
-		if identityErr := view.validateWriter(lease); identityErr != nil {
-			return fmt.Errorf("coding attachment: revalidate writer after blob publication: %w", identityErr)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
 		}
-		candidate.Ref = attachmentRefPrefix + uuid.NewString()
-		manifest.Entries = append(manifest.Entries, candidate)
-		admitted = candidate
+		admitted = make([]Attachment, len(prepared))
+		for index := range prepared {
+			prepared[index].attachment.Ref = attachmentRefPrefix + uuid.NewString()
+			admitted[index] = prepared[index].attachment
+		}
+		manifest.Entries = append(manifest.Entries, admitted...)
 		if identityErr := view.validateWriter(lease); identityErr != nil {
-			admitted = Attachment{}
+			admitted = nil
 			return fmt.Errorf("coding attachment: revalidate active thread before manifest publish: %w", identityErr)
 		}
 		saveErr := view.saveManifest(manifest)
 		var committedManifest *committedAttachmentManifestError
 		if saveErr == nil || errors.As(saveErr, &committedManifest) {
 			if identityErr := view.validateWriter(lease); identityErr != nil {
-				admitted = Attachment{}
+				admitted = nil
 				return fmt.Errorf("coding attachment: revalidate active thread after manifest publish: %w", identityErr)
 			}
 		}
 		if saveErr != nil {
 			if committedManifest != nil {
-				return &CommittedAttachmentError{Attachment: candidate, Err: saveErr}
+				return &CommittedAttachmentsError{
+					Attachments: append([]Attachment(nil), admitted...),
+					Err:         saveErr,
+				}
 			}
-			admitted = Attachment{}
+			admitted = nil
 			return saveErr
 		}
 		return nil
 	})
-	if err != nil {
-		return admitted, err
+	return admitted, err
+}
+
+func prepareAttachmentBatch(ctx context.Context, inputs []AttachmentInput) ([]preparedAttachment, error) {
+	prepared := make([]preparedAttachment, 0, len(inputs))
+	var total int64
+	for index, input := range inputs {
+		data, canonicalPath, digest, size, err := readAttachmentSource(ctx, input.Path, MaxAttachmentBytes)
+		if err != nil {
+			return nil, fmt.Errorf("coding attachment admission: read input %d: %w", index+1, err)
+		}
+		total, err = addAttachmentAdmissionBytes(total, size)
+		if err != nil {
+			return nil, err
+		}
+		filename := input.Filename
+		if filename == "" {
+			filename = filepath.Base(canonicalPath)
+		}
+		contentType := input.ContentType
+		if contentType == "" {
+			contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
+		}
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		if err := validateAttachmentPresentation(filename, contentType); err != nil {
+			return nil, fmt.Errorf("coding attachment admission: input %d: %w", index+1, err)
+		}
+		prepared = append(prepared, preparedAttachment{
+			attachment: Attachment{
+				Filename: filename, ContentType: contentType,
+				Size: size, SHA256: digest, CreatedAt: input.At.UTC(),
+			},
+			data: data,
+		})
 	}
-	return admitted, nil
+	return prepared, nil
+}
+
+func addAttachmentAdmissionBytes(total, size int64) (int64, error) {
+	if total < 0 || size < 0 || total > MaxAttachmentAdmissionBytes ||
+		size > MaxAttachmentAdmissionBytes-total {
+		return 0, fmt.Errorf(
+			"coding attachment admission: batch exceeds %d bytes",
+			MaxAttachmentAdmissionBytes,
+		)
+	}
+	return total + size, nil
 }
 
 // ListAttachments loads one validated manifest without reading blob payloads.
