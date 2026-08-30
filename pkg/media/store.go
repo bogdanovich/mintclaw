@@ -64,6 +64,13 @@ type HistoricalResolutionPolicy interface {
 	ShouldResolveHistorical(ref string) bool
 }
 
+// CurrentImageAttachmentPolicy lets an authority-scoped store opt current
+// user images into provider vision even when the same message also contains
+// text. Generic channel media keeps the conservative image-only default.
+type CurrentImageAttachmentPolicy interface {
+	ShouldAttachCurrentImage(ref string) bool
+}
+
 // MediaOwner is a durable, non-reversible ownership projection for
 // authority-sensitive media consumers.
 type MediaOwner struct {

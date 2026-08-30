@@ -110,11 +110,13 @@ read, it conservatively retains them because the prompt may have committed.
 Historical coding-attachment references remain in canonical JSONL, but the
 provider-bound history adapter does not resolve or materialize them on later
 turns. Generic channel media keeps its existing eager behavior. Current-turn
-attachments are still verified and resolved normally, including an old image
-explicitly selected by the attachment tool. Selected image media therefore
-crosses the normal provider-media boundary and contributes the existing media
-cost to prompt token accounting; selected UTF-8 text contributes its actual
-bounded content.
+attachments are still verified and resolved normally. The coding media store
+explicitly opts a current supported image into provider vision even when its
+user turn also contains text; generic channel media retains its conservative
+image-only default. An old image explicitly selected by the attachment tool
+also crosses the normal provider-media boundary. Current and selected image
+media therefore contribute the existing media cost to prompt token accounting;
+selected UTF-8 text contributes its actual bounded content.
 
 The coding-only `coding_attachment` tool exposes a thread-authorized metadata
 catalog without paths or blob reads. `list` returns bounded, newest-first
@@ -125,6 +127,13 @@ This lets a user ask to inspect a screenshot or log from an earlier turn,
 including after compaction, without replaying every historical attachment in
 every prompt. Missing, corrupt, foreign-thread, or non-UTF-8 content produces a
 tool error and leaves canonical history and attachment state unchanged.
+
+After process restart, the manifest remains the only authority for resolving a
+canonical attachment reference. Historical references stay lazy until
+selected. If a selected blob is missing or invalid, the tool returns an
+explicit unavailable diagnostic to the model; the canonical turn remains
+readable and the thread can continue with later turns rather than failing
+resume.
 
 The plain and interactive command seams accept repeatable local file inputs:
 
@@ -167,5 +176,5 @@ in-process text-only recall ring, and text-history navigation is disabled while
 a rich payload is pending, so history cannot replay a detached label as if it
 still carried an attachment.
 
-Restart and missing-state closeout plus the final roadmap exit record remain
-later P6.3 work.
+Restart and missing-state behavior is covered by the native multi-process
+coding scenario; the final roadmap exit record remains later P6.3 work.

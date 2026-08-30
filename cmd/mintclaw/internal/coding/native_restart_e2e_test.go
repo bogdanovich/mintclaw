@@ -2,6 +2,7 @@ package coding
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bogdanovich/mintclaw/pkg/agent"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -23,6 +25,215 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 )
+
+func TestNativeCodingAttachmentsRemainLazySelectableAndDiagnosableAcrossRestart(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 30, 20, 0, 0, 0, time.UTC)
+	threadID := uuid.NewString()
+	png, err := base64.StdEncoding.DecodeString(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDirectory := filepath.Join(t.TempDir(), "caller-private")
+	if err := os.Mkdir(sourceDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	imagePath := filepath.Join(sourceDirectory, "failure.png")
+	if err := os.WriteFile(imagePath, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	initialProvider := llmscenario.NewScriptedProvider("fixture-model-id", llmscenario.ProviderStep{
+		Name: "receive current coding image with text",
+		Assert: func(call llmscenario.ProviderCall) error {
+			current, ok := lastProviderMessageWithRole(call.Messages, "user")
+			if !ok || !strings.Contains(current.Content, "[image:") ||
+				!strings.Contains(current.Content, "inspect this screenshot") {
+				return fmt.Errorf("current attachment message = %+v", current)
+			}
+			if !messageHasMediaPrefix(current, "data:image/png;base64,") {
+				return fmt.Errorf("current coding image was not attached for vision: %+v", current)
+			}
+			if providerMessagesContain(call.Messages, sourceDirectory) {
+				return fmt.Errorf("provider messages disclosed caller path %q", sourceDirectory)
+			}
+			withoutMedia := current
+			withoutMedia.Media = nil
+			if agent.EstimateMessageTokens(current) <= agent.EstimateMessageTokens(withoutMedia) {
+				return errors.New("current image was omitted from prompt-size accounting")
+			}
+			return nil
+		},
+		Response: llmscenario.TextResponse("recorded the attached screenshot"),
+	})
+	providersInOrder := []providers.LLMProvider{initialProvider}
+	runner := nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return nativeCodingFixtureConfig(), nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			if len(providersInOrder) == 0 {
+				return nil, "", errors.New("unexpected provider construction")
+			}
+			provider := providersInOrder[0]
+			providersInOrder = providersInOrder[1:]
+			return provider, "fixture-model-id", nil
+		},
+	}
+	deps := testDependencies(home, project, &now)
+	deps.newThreadID = func() string { return threadID }
+	deps.turnRunner = runner
+	created := string(executeCommand(
+		t,
+		newCodeCommand(deps),
+		"inspect this screenshot",
+		"--attach",
+		imagePath,
+	))
+	if !strings.Contains(created, "recorded the attached screenshot") {
+		t.Fatalf("initial attachment output = %q", created)
+	}
+	if err := initialProvider.AssertExhausted(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachments, err := store.ListAttachments(threadID)
+	if err != nil || len(attachments) != 1 {
+		t.Fatalf("durable attachments = %+v, %v", attachments, err)
+	}
+	attachment := attachments[0]
+	if attachment.Filename != "failure.png" || attachment.ContentType != "image/png" {
+		t.Fatalf("durable attachment metadata = %+v", attachment)
+	}
+
+	selectProvider := llmscenario.NewScriptedProvider(
+		"fixture-model-id",
+		llmscenario.ProviderStep{
+			Name: "resume without eager historical image",
+			Assert: func(call llmscenario.ProviderCall) error {
+				if err := llmscenario.RequireToolDefinition("coding_attachment")(call); err != nil {
+					return err
+				}
+				if providerMessagesHaveMediaPrefix(call.Messages, "data:image/") {
+					return errors.New("historical coding image was eagerly replayed after restart")
+				}
+				if !providerMessagesContain(call.Messages, "recorded the attached screenshot") {
+					return errors.New("restart lost the canonical attachment turn")
+				}
+				return nil
+			},
+			Response: llmscenario.ToolCallResponse(
+				"I will find the earlier screenshot.",
+				llmscenario.ToolCall("list-image", "coding_attachment", map[string]any{
+					"action": "list", "query": "failure.png",
+				}),
+			),
+		},
+		llmscenario.ProviderStep{
+			Name:   "select exact historical image",
+			Assert: llmscenario.RequireLastMessage("tool", attachment.Ref),
+			Response: llmscenario.ToolCallResponse(
+				"I found it; I will open the exact thread-owned reference.",
+				llmscenario.ToolCall("open-image", "coding_attachment", map[string]any{
+					"action": "open", "ref": attachment.Ref,
+				}),
+			),
+		},
+		llmscenario.ProviderStep{
+			Name: "receive only the selected historical image",
+			Assert: func(call llmscenario.ProviderCall) error {
+				selected, ok := lastProviderMessageWithMediaPrefix(call.Messages, "data:image/png;base64,")
+				if !ok {
+					return fmt.Errorf(
+						"selected historical image was not attached: %s",
+						describeProviderMessages(call.Messages),
+					)
+				}
+				withoutMedia := selected
+				withoutMedia.Media = nil
+				if agent.EstimateMessageTokens(selected) <= agent.EstimateMessageTokens(withoutMedia) {
+					return errors.New("selected historical image was omitted from prompt-size accounting")
+				}
+				return nil
+			},
+			Response: llmscenario.TextResponse("reopened and inspected the historical screenshot"),
+		},
+	)
+	providersInOrder = append(providersInOrder, selectProvider)
+	now = now.Add(time.Hour)
+	selected := string(executeCommand(
+		t,
+		newResumeCommand(deps),
+		threadID,
+		"--prompt",
+		"please inspect the earlier screenshot again",
+	))
+	if !strings.Contains(selected, "reopened and inspected the historical screenshot") {
+		t.Fatalf("selected attachment output = %q", selected)
+	}
+	if err := selectProvider.AssertExhausted(); err != nil {
+		t.Fatal(err)
+	}
+
+	blobPath := filepath.Join(store.Root(), "blobs", "sha256", attachment.SHA256[:2], attachment.SHA256)
+	if err := os.Remove(blobPath); err != nil {
+		t.Fatal(err)
+	}
+	missingProvider := llmscenario.NewScriptedProvider(
+		"fixture-model-id",
+		llmscenario.ProviderStep{
+			Name: "resume remains usable with missing historical bytes",
+			Assert: func(call llmscenario.ProviderCall) error {
+				if providerMessagesHaveMediaPrefix(call.Messages, "data:image/") {
+					return errors.New("selected image leaked durably into later restart history")
+				}
+				return nil
+			},
+			Response: llmscenario.ToolCallResponse(
+				"I will reopen the exact earlier reference.",
+				llmscenario.ToolCall("open-missing-image", "coding_attachment", map[string]any{
+					"action": "open", "ref": attachment.Ref,
+				}),
+			),
+		},
+		llmscenario.ProviderStep{
+			Name: "receive explicit missing attachment diagnostic",
+			Assert: func(call llmscenario.ProviderCall) error {
+				if err := llmscenario.RequireLastMessage("tool", "unavailable")(call); err != nil {
+					return err
+				}
+				if providerMessagesHaveMediaPrefix(call.Messages, "data:image/") {
+					return errors.New("missing attachment produced image bytes")
+				}
+				return nil
+			},
+			Response: llmscenario.TextResponse("the earlier screenshot is unavailable, but the thread remains usable"),
+		},
+	)
+	providersInOrder = append(providersInOrder, missingProvider)
+	now = now.Add(time.Hour)
+	missing := string(executeCommand(
+		t,
+		newResumeCommand(deps),
+		threadID,
+		"--prompt",
+		"try that exact screenshot once more",
+	))
+	if !strings.Contains(missing, "unavailable, but the thread remains usable") {
+		t.Fatalf("missing attachment output = %q", missing)
+	}
+	if err := missingProvider.AssertExhausted(); err != nil {
+		t.Fatal(err)
+	}
+	if len(providersInOrder) != 0 {
+		t.Fatalf("provider constructions remaining = %d", len(providersInOrder))
+	}
+}
 
 func TestNativeCodingCommandEditsAndResumesAcrossProcessBoundary(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
@@ -449,6 +660,41 @@ func providerMessagesContain(messages []providers.Message, value string) bool {
 		}
 	}
 	return false
+}
+
+func lastProviderMessageWithRole(messages []providers.Message, role string) (providers.Message, bool) {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role == role {
+			return messages[index], true
+		}
+	}
+	return providers.Message{}, false
+}
+
+func messageHasMediaPrefix(message providers.Message, prefix string) bool {
+	for _, value := range message.Media {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func providerMessagesHaveMediaPrefix(messages []providers.Message, prefix string) bool {
+	_, ok := lastProviderMessageWithMediaPrefix(messages, prefix)
+	return ok
+}
+
+func lastProviderMessageWithMediaPrefix(
+	messages []providers.Message,
+	prefix string,
+) (providers.Message, bool) {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messageHasMediaPrefix(messages[index], prefix) {
+			return messages[index], true
+		}
+	}
+	return providers.Message{}, false
 }
 
 func describeProviderMessages(messages []providers.Message) string {

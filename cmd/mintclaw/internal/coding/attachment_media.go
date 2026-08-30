@@ -49,7 +49,12 @@ type codingAttachmentMediaStore struct {
 	closed        bool
 }
 
-var _ media.MediaStore = (*codingAttachmentMediaStore)(nil)
+var (
+	_ media.MediaStore                   = (*codingAttachmentMediaStore)(nil)
+	_ media.HistoricalResolutionPolicy   = (*codingAttachmentMediaStore)(nil)
+	_ media.CurrentImageAttachmentPolicy = (*codingAttachmentMediaStore)(nil)
+	_ media.ReferenceCatalog             = (*codingAttachmentMediaStore)(nil)
+)
 
 func newCodingAttachmentMediaStore(
 	store *thread.Store,
@@ -156,6 +161,10 @@ func (s *codingAttachmentMediaStore) Resolve(ref string) (string, error) {
 
 func (s *codingAttachmentMediaStore) ShouldResolveHistorical(ref string) bool {
 	return !thread.IsAttachmentRef(ref)
+}
+
+func (s *codingAttachmentMediaStore) ShouldAttachCurrentImage(ref string) bool {
+	return thread.IsAttachmentRef(ref)
 }
 
 func (s *codingAttachmentMediaStore) ListReferences(ctx context.Context) ([]media.Reference, error) {
