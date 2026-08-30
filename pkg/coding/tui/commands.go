@@ -226,7 +226,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"/exit              close the controller and exit",
 			"",
 			"Keyboard",
-			"Enter submit · Ctrl+J newline · Ctrl+C interrupt/exit",
+			"Enter submit · Ctrl+J newline · Ctrl+V paste clipboard image · Ctrl+C interrupt/exit",
 			"PgUp history · Alt+End latest · Ctrl+R refresh repository",
 			"Alt+J/Alt+K select tool · Ctrl+O expand tool · Esc close panel",
 			"Start a prompt with // when its text must begin with a slash.",

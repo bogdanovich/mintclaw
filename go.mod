@@ -49,6 +49,7 @@ require (
 	github.com/tencent-connect/botgo v0.2.1
 	go.mau.fi/util v0.9.11
 	go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4
+	golang.design/x/clipboard v0.9.0
 	golang.org/x/image v0.45.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.45.0
@@ -92,6 +93,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
@@ -131,7 +133,10 @@ require (
 	go.opentelemetry.io/otel/metric v1.35.0 // indirect
 	go.opentelemetry.io/otel/trace v1.35.0 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.6 // indirect
+	golang.design/x/x11 v0.2.0 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
+	golang.org/x/exp/shiny v0.0.0-20250606033433-dcc06ee1d476 // indirect
+	golang.org/x/mobile v0.0.0-20250606033058-a2a15c67f36f // indirect
 	golang.org/x/text v0.41.0 // indirect
 	modernc.org/cc/v4 v4.29.2 // indirect
 	modernc.org/gc/v3 v3.1.5 // indirect

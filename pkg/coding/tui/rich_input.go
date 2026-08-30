@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"image/png"
 	"mime"
 	"net/url"
 	"os"
@@ -19,6 +21,8 @@ const (
 	largePasteRuneThreshold = 1_000
 	maxPastedContentBytes   = 32 << 20
 	maxPastedBatchBytes     = 64 << 20
+	maxPastedImageDimension = 16384
+	maxPastedImagePixels    = 40_000_000
 )
 
 type composerAttachment struct {
@@ -72,6 +76,60 @@ func (m *Model) handleRichPaste(message string) (bool, error) {
 	})
 	m.composer.InsertString(placeholder)
 	return true, nil
+}
+
+func (m *Model) addClipboardImage(data []byte) error {
+	if len(data) == 0 {
+		return errors.New("system clipboard does not contain an image")
+	}
+	if len(data) > maxPastedContentBytes {
+		return fmt.Errorf("clipboard image exceeds %d MiB", maxPastedContentBytes>>20)
+	}
+	if len(m.composerAttachments) >= frontend.MaxTurnAttachments {
+		return fmt.Errorf("a turn supports at most %d attachments", frontend.MaxTurnAttachments)
+	}
+	if m.ownedAttachmentBytes()+int64(len(data)) > maxPastedBatchBytes {
+		return fmt.Errorf("pasted content in one draft exceeds %d MiB", maxPastedBatchBytes>>20)
+	}
+	config, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("clipboard image is not a valid PNG: %w", err)
+	}
+	if !validPastedImageDimensions(config.Width, config.Height) {
+		return fmt.Errorf("clipboard image dimensions %dx%d exceed the supported bound", config.Width, config.Height)
+	}
+	decoded, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("clipboard image is not a valid PNG: %w", err)
+	}
+	if bounds := decoded.Bounds(); !validPastedImageDimensions(bounds.Dx(), bounds.Dy()) {
+		return fmt.Errorf(
+			"clipboard image dimensions %dx%d exceed the supported bound",
+			bounds.Dx(),
+			bounds.Dy(),
+		)
+	}
+	directory, err := m.ensurePasteDirectory()
+	if err != nil {
+		return err
+	}
+	filename := fmt.Sprintf("pasted-image-%d.png", m.nextImageNumber+1)
+	path := filepath.Join(directory, filename)
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("store clipboard image: %w", err)
+	}
+	if err = m.addComposerAttachment(path, filename, "image/png", true, true); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
+func validPastedImageDimensions(width, height int) bool {
+	if width <= 0 || height <= 0 || width > maxPastedImageDimension || height > maxPastedImageDimension {
+		return false
+	}
+	return int64(width)*int64(height) <= maxPastedImagePixels
 }
 
 func (m *Model) addComposerAttachment(path, displayName, contentType string, owned, image bool) error {

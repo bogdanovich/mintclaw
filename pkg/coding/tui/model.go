@@ -67,6 +67,12 @@ type WorkspaceRefreshMsg struct {
 	Err error
 }
 
+// ClipboardImageMsg completes one asynchronous system-clipboard image read.
+type ClipboardImageMsg struct {
+	Data []byte
+	Err  error
+}
+
 // Model is the bounded terminal view of one frontend controller. It never owns
 // an agent runtime or canonical transcript state.
 type Model struct {
@@ -99,6 +105,8 @@ type Model struct {
 	pasteDirectory      string
 	nextPasteNumber     int
 	nextImageNumber     int
+	readClipboardImage  clipboardImageReader
+	clipboardPasteBusy  bool
 }
 
 var _ tea.Model = (*Model)(nil)
@@ -133,15 +141,16 @@ func NewModel(
 	composer.SetHeight(composerHeight)
 	composer.Focus()
 	return &Model{
-		controller:   controller,
-		ctx:          ctx,
-		snapshot:     snapshot,
-		viewport:     viewport.New(80, 18),
-		composer:     composer,
-		width:        80,
-		height:       24,
-		focused:      true,
-		historyIndex: -1,
+		controller:         controller,
+		ctx:                ctx,
+		snapshot:           snapshot,
+		viewport:           viewport.New(80, 18),
+		composer:           composer,
+		width:              80,
+		height:             24,
+		focused:            true,
+		historyIndex:       -1,
+		readClipboardImage: readSystemClipboardImage,
 	}, nil
 }
 
@@ -234,6 +243,18 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.workspaceNotice = "repository refreshed"
 		return m, nil
+	case ClipboardImageMsg:
+		m.clipboardPasteBusy = false
+		if message.Err != nil {
+			m.err = message.Err
+			return m, nil
+		}
+		if err := m.addClipboardImage(message.Data); err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.err = nil
+		return m, textarea.Blink
 	case SubscriptionErrorMsg:
 		if message.Err != nil && !errors.Is(message.Err, context.Canceled) {
 			m.err = message.Err
@@ -298,6 +319,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) View() string {
 	status := m.statusLine()
+	if m.clipboardPasteBusy {
+		status = "reading clipboard image…"
+	}
 	if m.submitting {
 		status = "submitting prompt…"
 	}
@@ -440,6 +464,18 @@ func (m *Model) refreshViewport() {
 
 func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	if m.submitting {
+		return true, nil
+	}
+	if message.Type == tea.KeyCtrlV {
+		if m.clipboardPasteBusy {
+			return true, nil
+		}
+		m.clipboardPasteBusy = true
+		m.err = nil
+		return true, clipboardImageCmd(m.ctx, m.readClipboardImage)
+	}
+	if m.clipboardPasteBusy && message.Type == tea.KeyEnter {
+		m.err = errors.New("wait for the clipboard image to finish loading")
 		return true, nil
 	}
 	if message.Paste {
