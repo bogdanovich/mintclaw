@@ -59,6 +59,24 @@ type attachmentManifestFile struct {
 	Entries  []Attachment `json:"entries"`
 }
 
+type attachmentStoreView struct {
+	store    *Store
+	root     *os.Root
+	threads  *os.Root
+	thread   *os.Root
+	threadID string
+}
+
+type pinnedAttachmentDirectory struct {
+	parent *os.Root
+	name   string
+	root   *os.Root
+}
+
+type pinnedAttachmentHierarchy struct {
+	directories []pinnedAttachmentDirectory
+}
+
 // AttachmentUnavailableError reports a durable reference whose bytes are no
 // longer present with the identity admitted by the thread.
 type AttachmentUnavailableError struct {
@@ -130,12 +148,7 @@ func (s *Store) AdmitAttachment(
 	}
 	var admitted Attachment
 	err = lease.withActive(s.root, metadata.ThreadID, func() error {
-		data, canonicalPath, digest, size, readErr := readAttachmentSource(
-			ctx,
-			input.Path,
-			MaxAttachmentBytes,
-			true,
-		)
+		data, canonicalPath, digest, size, readErr := readAttachmentSource(ctx, input.Path, MaxAttachmentBytes)
 		if readErr != nil {
 			return fmt.Errorf("coding attachment admission: %w", readErr)
 		}
@@ -153,12 +166,15 @@ func (s *Store) AdmitAttachment(
 		if validationErr := validateAttachmentPresentation(filename, contentType); validationErr != nil {
 			return validationErr
 		}
-		storeRoot, threadRoot, pinErr := s.openPinnedAttachmentRoots(lease, metadata.ThreadID)
-		if pinErr != nil {
-			return fmt.Errorf("coding attachment: pin active thread: %w", pinErr)
+		view, openErr := s.openAttachmentStoreView(metadata.ThreadID)
+		if openErr != nil {
+			return openErr
 		}
-		defer func() { _ = errors.Join(threadRoot.Close(), storeRoot.Close()) }()
-		manifest, loadErr := s.loadPinnedAttachmentManifest(threadRoot, metadata.ThreadID)
+		defer func() { _ = view.Close() }()
+		if identityErr := view.validateWriter(lease); identityErr != nil {
+			return fmt.Errorf("coding attachment: validate writer view: %w", identityErr)
+		}
+		manifest, loadErr := view.loadManifest()
 		if loadErr != nil {
 			return loadErr
 		}
@@ -166,53 +182,31 @@ func (s *Store) AdmitAttachment(
 			Filename: filename, ContentType: contentType,
 			Size: size, SHA256: digest, CreatedAt: input.At.UTC(),
 		}
-		if publishErr := s.publishAttachmentBlob(ctx, storeRoot, digest, data); publishErr != nil {
+		existing, found := equivalentAttachment(manifest.Entries, candidate)
+		if !found && len(manifest.Entries) >= MaxThreadAttachments {
+			return fmt.Errorf("coding attachment admission: thread exceeds %d attachments", MaxThreadAttachments)
+		}
+		if publishErr := view.publishBlob(ctx, digest, data); publishErr != nil {
 			return publishErr
 		}
-		if identityErr := s.validatePinnedAttachmentView(
-			storeRoot,
-			threadRoot,
-			metadata.ThreadID,
-		); identityErr != nil {
-			return identityErr
+		if identityErr := view.validateWriter(lease); identityErr != nil {
+			return fmt.Errorf("coding attachment: revalidate writer after blob publication: %w", identityErr)
 		}
-		if existing, found := equivalentAttachment(manifest.Entries, candidate); found {
-			if identityErr := s.validatePinnedAttachmentWriter(
-				metadata.ThreadID,
-				lease,
-				threadRoot,
-			); identityErr != nil {
-				return fmt.Errorf("coding attachment: revalidate active thread before deduplication: %w", identityErr)
-			}
+		if found {
 			admitted = existing
 			return nil
-		}
-		if len(manifest.Entries) >= MaxThreadAttachments {
-			return fmt.Errorf("coding attachment admission: thread exceeds %d attachments", MaxThreadAttachments)
 		}
 		candidate.Ref = attachmentRefPrefix + uuid.NewString()
 		manifest.Entries = append(manifest.Entries, candidate)
 		admitted = candidate
-		if identityErr := s.validatePinnedAttachmentWriter(metadata.ThreadID, lease, threadRoot); identityErr != nil {
+		if identityErr := view.validateWriter(lease); identityErr != nil {
 			admitted = Attachment{}
 			return fmt.Errorf("coding attachment: revalidate active thread before manifest publish: %w", identityErr)
 		}
-		saveErr := s.saveAttachmentManifest(threadRoot, metadata.ThreadID, manifest)
+		saveErr := view.saveManifest(manifest)
 		var committedManifest *committedAttachmentManifestError
 		if saveErr == nil || errors.As(saveErr, &committedManifest) {
-			if identityErr := s.validatePinnedAttachmentView(
-				storeRoot,
-				threadRoot,
-				metadata.ThreadID,
-			); identityErr != nil {
-				admitted = Attachment{}
-				return fmt.Errorf("coding attachment: revalidate active view after manifest publish: %w", identityErr)
-			}
-			if identityErr := s.validatePinnedAttachmentWriter(
-				metadata.ThreadID,
-				lease,
-				threadRoot,
-			); identityErr != nil {
+			if identityErr := view.validateWriter(lease); identityErr != nil {
 				admitted = Attachment{}
 				return fmt.Errorf("coding attachment: revalidate active thread after manifest publish: %w", identityErr)
 			}
@@ -237,7 +231,12 @@ func (s *Store) ListAttachments(threadID string) ([]Attachment, error) {
 	if s == nil {
 		return nil, fmt.Errorf("coding attachment store is nil")
 	}
-	manifest, err := s.loadAttachmentManifest(threadID)
+	view, err := s.openAttachmentStoreView(threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = view.Close() }()
+	manifest, err := view.loadManifest()
 	if err != nil {
 		return nil, err
 	}
@@ -260,104 +259,36 @@ func (s *Store) ResolveAttachment(
 	if err := ctx.Err(); err != nil {
 		return nil, Attachment{}, err
 	}
-	if err := validateThreadID(threadID); err != nil {
-		return nil, Attachment{}, err
-	}
-	storeRoot, threadRoot, err := s.openAttachmentRoots(threadID)
-	if err != nil {
-		return nil, Attachment{}, err
-	}
-	defer func() { _ = errors.Join(threadRoot.Close(), storeRoot.Close()) }()
-	manifest, err := s.loadPinnedAttachmentManifest(threadRoot, threadID)
+	view, err := s.openAttachmentStoreView(threadID)
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, Attachment{}, contextErr
 		}
 		return nil, Attachment{}, err
 	}
-	if err := ctx.Err(); err != nil {
+	defer func() { _ = view.Close() }()
+	manifest, err := view.loadManifest()
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, Attachment{}, contextErr
+	}
+	if err != nil {
 		return nil, Attachment{}, err
 	}
 	entry, found := attachmentByRef(manifest.Entries, ref)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, Attachment{}, contextErr
+	}
 	if !found {
-		if err := ctx.Err(); err != nil {
-			return nil, Attachment{}, err
-		}
 		return nil, Attachment{}, &AttachmentUnavailableError{Ref: ref, Reason: "reference is not owned by thread"}
 	}
-	data, readErr := readPinnedAttachmentBlob(ctx, storeRoot, entry)
+	data, readErr := view.readBlob(ctx, entry.SHA256, entry.Size)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return nil, entry, contextErr
+	}
 	if readErr != nil {
-		if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
-			return nil, entry, readErr
-		}
 		return nil, entry, &AttachmentUnavailableError{Ref: ref, Reason: readErr.Error()}
 	}
-	if err := s.validatePinnedAttachmentView(storeRoot, threadRoot, threadID); err != nil {
-		return nil, entry, &AttachmentUnavailableError{Ref: ref, Reason: err.Error()}
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, entry, err
-	}
 	return data, entry, nil
-}
-
-func readPinnedAttachmentBlob(
-	ctx context.Context,
-	storeRoot *os.Root,
-	entry Attachment,
-) ([]byte, error) {
-	blobs, err := openDirectAttachmentDirectory(storeRoot, "blobs")
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = blobs.Close() }()
-	shaRoot, err := openDirectAttachmentDirectory(blobs, "sha256")
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = shaRoot.Close() }()
-	shardName := entry.SHA256[:2]
-	shard, err := openDirectAttachmentDirectory(shaRoot, shardName)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = shard.Close() }()
-	data, digest, size, err := readAttachmentRootFile(ctx, shard, entry.SHA256, MaxAttachmentBytes)
-	if err != nil {
-		return nil, err
-	}
-	if digest != entry.SHA256 || size != entry.Size {
-		return nil, fmt.Errorf("content identity changed")
-	}
-	for _, check := range []struct {
-		parent *os.Root
-		name   string
-		pinned *os.Root
-	}{
-		{parent: shaRoot, name: shardName, pinned: shard},
-		{parent: blobs, name: "sha256", pinned: shaRoot},
-		{parent: storeRoot, name: "blobs", pinned: blobs},
-	} {
-		if err := validatePinnedAttachmentDirectory(check.parent, check.name, check.pinned); err != nil {
-			return nil, err
-		}
-	}
-	return data, nil
-}
-
-func openDirectAttachmentDirectory(parent *os.Root, name string) (*os.Root, error) {
-	info, err := parent.Lstat(name)
-	if err != nil {
-		return nil, err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return nil, fmt.Errorf("coding attachment: directory %q is not direct", name)
-	}
-	root, err := parent.OpenRoot(name)
-	if err != nil {
-		return nil, err
-	}
-	return root, nil
 }
 
 func validateAttachmentInput(input AttachmentInput) (AttachmentInput, error) {
@@ -399,7 +330,6 @@ func readAttachmentSource(
 	ctx context.Context,
 	path string,
 	maxBytes int64,
-	resolveInitialSymlink bool,
 ) ([]byte, string, string, int64, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, "", "", 0, err
@@ -409,21 +339,11 @@ func readAttachmentSource(
 		return nil, "", "", 0, err
 	}
 	canonical := filepath.Clean(absolute)
-	if resolveInitialSymlink {
-		canonical, err = filepath.EvalSymlinks(canonical)
-		if err != nil {
-			return nil, "", "", 0, err
-		}
-		canonical = filepath.Clean(canonical)
-	} else {
-		entry, lstatErr := os.Lstat(canonical)
-		if lstatErr != nil {
-			return nil, "", "", 0, lstatErr
-		}
-		if entry.Mode()&os.ModeSymlink != 0 {
-			return nil, "", "", 0, fmt.Errorf("source path became a symbolic link")
-		}
+	canonical, err = filepath.EvalSymlinks(canonical)
+	if err != nil {
+		return nil, "", "", 0, err
 	}
+	canonical = filepath.Clean(canonical)
 	file, err := os.Open(canonical)
 	if err != nil {
 		return nil, "", "", 0, err
@@ -524,199 +444,314 @@ func readAttachmentRootFile(
 	return data, digest, size, nil
 }
 
-func (s *Store) publishAttachmentBlob(
-	ctx context.Context,
-	root *os.Root,
-	digest string,
-	data []byte,
-) error {
-	if len(digest) != sha256.Size*2 || strings.ToLower(digest) != digest || !isHex(digest) {
-		return fmt.Errorf("coding attachment blob: digest is invalid")
+func (s *Store) openAttachmentStoreView(threadID string) (*attachmentStoreView, error) {
+	if err := validateThreadID(threadID); err != nil {
+		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	relativeDirectory := filepath.Join("blobs", "sha256", digest[:2])
-	if directoryErr := s.ensureAttachmentDirectories(
-		root,
-		"blobs",
-		filepath.Join("blobs", "sha256"),
-		relativeDirectory,
-	); directoryErr != nil {
-		return directoryErr
-	}
-	shard, err := root.OpenRoot(relativeDirectory)
+	root, err := openPinnedCatalogRoot(s.root)
 	if err != nil {
-		return fmt.Errorf("coding attachment blob: open digest directory: %w", err)
+		return nil, fmt.Errorf("coding attachment: pin store root: %w", err)
 	}
-	defer func() { _ = shard.Close() }()
-	if _, statErr := shard.Lstat(digest); statErr == nil {
-		_, actual, size, readErr := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
-		if readErr != nil || actual != digest || size != int64(len(data)) {
-			return fmt.Errorf("coding attachment blob: existing digest path is invalid")
-		}
-		if syncErr := s.syncRoot(shard); syncErr != nil {
-			return fmt.Errorf("coding attachment blob: sync existing digest directory: %w", syncErr)
-		}
-		return validatePinnedAttachmentDirectory(root, relativeDirectory, shard)
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return statErr
+	threads, err := openPinnedAttachmentChild(root, "threads")
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("coding attachment: pin threads directory: %w", err)
 	}
-	if writeErr := s.writeRoot(shard, digest, data, 0o600); writeErr != nil {
-		return fmt.Errorf("coding attachment blob: publish: %w", writeErr)
+	thread, err := openPinnedAttachmentChild(threads, threadID)
+	if err != nil {
+		_ = errors.Join(threads.Close(), root.Close())
+		return nil, fmt.Errorf("coding attachment: pin thread %q: %w", threadID, err)
 	}
-	_, actual, size, err := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
-	if err != nil || actual != digest || size != int64(len(data)) {
-		return fmt.Errorf("coding attachment blob: published content could not be verified: %w", err)
+	view := &attachmentStoreView{store: s, root: root, threads: threads, thread: thread, threadID: threadID}
+	if err := view.validateActive(); err != nil {
+		return nil, errors.Join(err, view.Close())
 	}
-	return validatePinnedAttachmentDirectory(root, relativeDirectory, shard)
+	return view, nil
 }
 
-func (s *Store) ensureAttachmentDirectories(root *os.Root, names ...string) error {
+func openPinnedAttachmentChild(parent *os.Root, name string) (*os.Root, error) {
+	if parent == nil || !filepath.IsLocal(name) {
+		return nil, fmt.Errorf("coding attachment: pinned parent and local child name are required")
+	}
+	info, err := parent.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("coding attachment: directory %q is not direct", name)
+	}
+	child, err := parent.OpenRoot(name)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePinnedAttachmentDirectory(parent, name, child); err != nil {
+		return nil, errors.Join(err, child.Close())
+	}
+	return child, nil
+}
+
+func (s *Store) openAttachmentHierarchy(
+	parent *os.Root,
+	durable bool,
+	names ...string,
+) (*pinnedAttachmentHierarchy, error) {
+	hierarchy := &pinnedAttachmentHierarchy{}
+	current := parent
 	for _, name := range names {
-		if !filepath.IsLocal(name) {
-			return fmt.Errorf("coding attachment directory is invalid")
+		if !filepath.IsLocal(name) || name == "." {
+			return nil, errors.Join(fmt.Errorf("coding attachment directory name is invalid"), hierarchy.Close())
 		}
-		info, err := root.Lstat(name)
-		if errors.Is(err, os.ErrNotExist) {
-			if mkdirErr := root.Mkdir(name, 0o700); mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
-				return fmt.Errorf("coding attachment: create directory %q: %w", name, mkdirErr)
+		info, err := current.Lstat(name)
+		created := false
+		if durable && errors.Is(err, os.ErrNotExist) {
+			mkdirErr := current.Mkdir(name, 0o700)
+			if mkdirErr != nil && !errors.Is(mkdirErr, os.ErrExist) {
+				return nil, errors.Join(
+					fmt.Errorf("coding attachment: create directory %q: %w", name, mkdirErr),
+					hierarchy.Close(),
+				)
 			}
-			info, err = root.Lstat(name)
+			created = mkdirErr == nil
+			info, err = current.Lstat(name)
 		}
 		if err != nil {
-			return fmt.Errorf("coding attachment: inspect directory %q: %w", name, err)
+			return nil, errors.Join(
+				fmt.Errorf("coding attachment: inspect directory %q: %w", name, err),
+				hierarchy.Close(),
+			)
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return fmt.Errorf("coding attachment: directory %q is not direct", name)
+			return nil, errors.Join(
+				fmt.Errorf("coding attachment: directory %q is not direct", name),
+				hierarchy.Close(),
+			)
 		}
-		if err := root.Chmod(name, 0o700); err != nil {
-			return fmt.Errorf("coding attachment: secure directory %q: %w", name, err)
+		if durable {
+			if chmodErr := current.Chmod(name, 0o700); chmodErr != nil {
+				return nil, errors.Join(
+					fmt.Errorf("coding attachment: secure directory %q: %w", name, chmodErr),
+					hierarchy.Close(),
+				)
+			}
+			if syncErr := s.syncRoot(current); syncErr != nil {
+				durabilityErr := fmt.Errorf("coding attachment: sync directory %q parent: %w", name, syncErr)
+				if created {
+					durabilityErr = &fileutil.CommittedWriteError{Err: durabilityErr}
+				}
+				return nil, errors.Join(durabilityErr, hierarchy.Close())
+			}
 		}
-		if syncErr := s.syncAttachmentDirectoryParent(root, name); syncErr != nil {
-			return &fileutil.CommittedWriteError{Err: fmt.Errorf(
-				"coding attachment: sync required directory %q: %w",
-				name,
-				syncErr,
-			)}
+		child, err := current.OpenRoot(name)
+		if err != nil {
+			return nil, errors.Join(
+				fmt.Errorf("coding attachment: open directory %q: %w", name, err),
+				hierarchy.Close(),
+			)
+		}
+		if err := validatePinnedAttachmentDirectory(current, name, child); err != nil {
+			return nil, errors.Join(err, child.Close(), hierarchy.Close())
+		}
+		hierarchy.directories = append(hierarchy.directories, pinnedAttachmentDirectory{
+			parent: current,
+			name:   name,
+			root:   child,
+		})
+		current = child
+	}
+	return hierarchy, nil
+}
+
+func (h *pinnedAttachmentHierarchy) Leaf() *os.Root {
+	if h == nil || len(h.directories) == 0 {
+		return nil
+	}
+	return h.directories[len(h.directories)-1].root
+}
+
+func (h *pinnedAttachmentHierarchy) validate() error {
+	if h == nil {
+		return fmt.Errorf("coding attachment hierarchy is required")
+	}
+	for _, directory := range h.directories {
+		if err := validatePinnedAttachmentDirectory(directory.parent, directory.name, directory.root); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) syncAttachmentDirectoryParent(root *os.Root, name string) error {
-	parentName := filepath.Dir(name)
-	if parentName == "." {
-		return s.syncRoot(root)
+func (h *pinnedAttachmentHierarchy) Close() error {
+	if h == nil {
+		return nil
 	}
-	parent, err := root.OpenRoot(parentName)
+	var closeErr error
+	for index := len(h.directories) - 1; index >= 0; index-- {
+		closeErr = errors.Join(closeErr, h.directories[index].root.Close())
+	}
+	return closeErr
+}
+
+func (v *attachmentStoreView) Close() error {
+	if v == nil {
+		return nil
+	}
+	return errors.Join(v.thread.Close(), v.threads.Close(), v.root.Close())
+}
+
+func (v *attachmentStoreView) validateActive() error {
+	if v == nil || v.store == nil {
+		return fmt.Errorf("coding attachment store view is required")
+	}
+	if err := validatePinnedAttachmentRoot(v.store.root, v.root); err != nil {
+		return err
+	}
+	if err := validatePinnedAttachmentDirectory(v.root, "threads", v.threads); err != nil {
+		return err
+	}
+	return validatePinnedAttachmentDirectory(v.threads, v.threadID, v.thread)
+}
+
+func validatePinnedAttachmentRoot(path string, pinned *os.Root) error {
+	pinnedInfo, err := pinned.Stat(".")
+	if err != nil {
+		return fmt.Errorf("coding attachment: inspect pinned store root: %w", err)
+	}
+	active, err := openCatalogRoot(path)
+	if err != nil {
+		return fmt.Errorf("coding attachment: reopen active store root: %w", err)
+	}
+	defer func() { _ = active.Close() }()
+	activeInfo, err := active.stat()
+	if err != nil {
+		return fmt.Errorf("coding attachment: inspect active store root: %w", err)
+	}
+	if !os.SameFile(pinnedInfo, activeInfo) {
+		return fmt.Errorf("coding attachment: store root changed during operation")
+	}
+	return nil
+}
+
+func (v *attachmentStoreView) validateHierarchy(hierarchy *pinnedAttachmentHierarchy) error {
+	if err := hierarchy.validate(); err != nil {
+		return err
+	}
+	return v.validateActive()
+}
+
+func (v *attachmentStoreView) validateWriter(lease *Lease) error {
+	if err := v.validateActive(); err != nil {
+		return err
+	}
+	return validatePinnedAttachmentLease(v.thread, lease)
+}
+
+func (v *attachmentStoreView) publishBlob(ctx context.Context, digest string, data []byte) error {
+	if err := validateAttachmentDigest(digest); err != nil {
+		return fmt.Errorf("coding attachment blob: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	hierarchy, err := v.store.openAttachmentHierarchy(v.root, true, "blobs", "sha256", digest[:2])
 	if err != nil {
 		return err
 	}
-	defer func() { _ = parent.Close() }()
-	return s.syncRoot(parent)
+	defer func() { _ = hierarchy.Close() }()
+	shard := hierarchy.Leaf()
+	existing := false
+	if _, statErr := shard.Lstat(digest); statErr == nil {
+		existing = true
+		_, actual, size, readErr := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
+		if readErr != nil || actual != digest || size != int64(len(data)) {
+			return fmt.Errorf("coding attachment blob: existing digest path is invalid")
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("coding attachment blob: inspect digest path: %w", statErr)
+	} else {
+		if writeErr := v.store.writeRoot(shard, digest, data, 0o600); writeErr != nil {
+			return fmt.Errorf("coding attachment blob: publish: %w", writeErr)
+		}
+		_, actual, size, readErr := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
+		if readErr != nil || actual != digest || size != int64(len(data)) {
+			return fmt.Errorf("coding attachment blob: published content could not be verified: %w", readErr)
+		}
+	}
+	if existing {
+		if syncErr := v.store.syncRoot(shard); syncErr != nil {
+			return fmt.Errorf("coding attachment blob: sync existing digest directory: %w", syncErr)
+		}
+	}
+	if err := v.validateHierarchy(hierarchy); err != nil {
+		return fmt.Errorf("coding attachment blob: revalidate hierarchy: %w", err)
+	}
+	return nil
 }
 
-func (s *Store) loadAttachmentManifest(threadID string) (attachmentManifestFile, error) {
-	if err := validateThreadID(threadID); err != nil {
-		return attachmentManifestFile{}, err
+func (v *attachmentStoreView) readBlob(ctx context.Context, digest string, expectedSize int64) ([]byte, error) {
+	if err := validateAttachmentDigest(digest); err != nil {
+		return nil, fmt.Errorf("coding attachment blob: %w", err)
 	}
-	storeRoot, threadRoot, err := s.openAttachmentRoots(threadID)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	hierarchy, err := v.store.openAttachmentHierarchy(v.root, false, "blobs", "sha256", digest[:2])
 	if err != nil {
-		return attachmentManifestFile{}, err
+		return nil, err
 	}
-	defer func() { _ = errors.Join(threadRoot.Close(), storeRoot.Close()) }()
-	manifest, err := s.loadPinnedAttachmentManifest(threadRoot, threadID)
+	defer func() { _ = hierarchy.Close() }()
+	data, actual, size, err := readAttachmentRootFile(ctx, hierarchy.Leaf(), digest, MaxAttachmentBytes)
 	if err != nil {
-		return attachmentManifestFile{}, err
+		return nil, err
 	}
-	if err := s.validatePinnedAttachmentView(storeRoot, threadRoot, threadID); err != nil {
-		return attachmentManifestFile{}, err
+	if actual != digest || size != expectedSize {
+		return nil, fmt.Errorf("content identity changed")
 	}
-	return manifest, nil
+	if err := v.validateHierarchy(hierarchy); err != nil {
+		return nil, fmt.Errorf("coding attachment blob: revalidate hierarchy: %w", err)
+	}
+	return data, nil
 }
 
-func (s *Store) loadPinnedAttachmentManifest(
-	threadRoot *os.Root,
-	threadID string,
-) (attachmentManifestFile, error) {
-	empty := attachmentManifestFile{Version: AttachmentManifestVersion, ThreadID: threadID, Entries: []Attachment{}}
-	info, err := threadRoot.Lstat(attachmentDirectory)
+func validateAttachmentDigest(digest string) error {
+	if len(digest) != sha256.Size*2 || strings.ToLower(digest) != digest || !isHex(digest) {
+		return fmt.Errorf("digest is invalid")
+	}
+	return nil
+}
+
+func (v *attachmentStoreView) loadManifest() (attachmentManifestFile, error) {
+	empty := attachmentManifestFile{
+		Version: AttachmentManifestVersion, ThreadID: v.threadID, Entries: []Attachment{},
+	}
+	hierarchy, err := v.store.openAttachmentHierarchy(v.thread, false, attachmentDirectory)
 	if errors.Is(err, os.ErrNotExist) {
-		return empty, nil
-	}
-	if err != nil {
-		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest: inspect directory: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest: directory is not direct")
-	}
-	attachments, err := threadRoot.OpenRoot(attachmentDirectory)
-	if err != nil {
-		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest: open directory: %w", err)
-	}
-	defer func() { _ = attachments.Close() }()
-	file, err := attachments.OpenFile(attachmentManifest, os.O_RDONLY, 0)
-	if errors.Is(err, os.ErrNotExist) {
-		if identityErr := validatePinnedAttachmentDirectory(
-			threadRoot,
-			attachmentDirectory,
-			attachments,
-		); identityErr != nil {
-			return attachmentManifestFile{}, identityErr
+		if validationErr := v.validateActive(); validationErr != nil {
+			return attachmentManifestFile{}, validationErr
 		}
 		return empty, nil
 	}
 	if err != nil {
-		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest: open: %w", err)
+		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest: open directory: %w", err)
 	}
-	defer func() { _ = file.Close() }()
-	fileInfo, err := file.Stat()
+	defer func() { _ = hierarchy.Close() }()
+	return v.loadManifestFromHierarchy(hierarchy)
+}
+
+func (v *attachmentStoreView) loadManifestFromHierarchy(
+	hierarchy *pinnedAttachmentHierarchy,
+) (attachmentManifestFile, error) {
+	empty := attachmentManifestFile{
+		Version: AttachmentManifestVersion, ThreadID: v.threadID, Entries: []Attachment{},
+	}
+	data, err := readAttachmentManifestData(hierarchy.Leaf())
+	if errors.Is(err, os.ErrNotExist) {
+		if validationErr := v.validateHierarchy(hierarchy); validationErr != nil {
+			return attachmentManifestFile{}, validationErr
+		}
+		return empty, nil
+	}
 	if err != nil {
 		return attachmentManifestFile{}, err
-	}
-	if validationErr := validateCatalogMetadataFile(file, fileInfo); validationErr != nil {
-		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest: unsafe file: %w", validationErr)
-	}
-	if fileInfo.Size() < 0 || fileInfo.Size() > MaxAttachmentManifestBytes {
-		return attachmentManifestFile{}, fmt.Errorf(
-			"coding attachment manifest exceeds %d bytes",
-			MaxAttachmentManifestBytes,
-		)
-	}
-	data, err := io.ReadAll(io.LimitReader(file, MaxAttachmentManifestBytes+1))
-	if err != nil {
-		return attachmentManifestFile{}, err
-	}
-	if s.attachmentManifestRead != nil {
-		s.attachmentManifestRead()
-	}
-	after, err := file.Stat()
-	if err != nil {
-		return attachmentManifestFile{}, err
-	}
-	current, err := attachments.OpenFile(attachmentManifest, os.O_RDONLY, 0)
-	if err != nil {
-		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest: revalidate: %w", err)
-	}
-	currentInfo, currentErr := current.Stat()
-	closeErr := current.Close()
-	if currentErr != nil || closeErr != nil {
-		return attachmentManifestFile{}, fmt.Errorf(
-			"coding attachment manifest: revalidate: %w",
-			errors.Join(currentErr, closeErr),
-		)
-	}
-	if !os.SameFile(fileInfo, after) || !os.SameFile(fileInfo, currentInfo) || fileInfo.Size() != after.Size() ||
-		fileInfo.ModTime() != after.ModTime() {
-		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest changed while reading")
-	}
-	if identityErr := validatePinnedAttachmentDirectory(
-		threadRoot,
-		attachmentDirectory,
-		attachments,
-	); identityErr != nil {
-		return attachmentManifestFile{}, identityErr
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -727,62 +762,104 @@ func (s *Store) loadPinnedAttachmentManifest(
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest: trailing data")
 	}
-	if err := validateAttachmentManifest(threadID, manifest); err != nil {
+	if err := validateAttachmentManifest(v.threadID, manifest); err != nil {
 		return attachmentManifestFile{}, err
 	}
-	if identityErr := validatePinnedAttachmentDirectory(
-		threadRoot,
-		attachmentDirectory,
-		attachments,
-	); identityErr != nil {
-		return attachmentManifestFile{}, identityErr
+	if err := v.validateHierarchy(hierarchy); err != nil {
+		return attachmentManifestFile{}, fmt.Errorf("coding attachment manifest: revalidate hierarchy: %w", err)
 	}
 	return manifest, nil
 }
 
-func (s *Store) openPinnedAttachmentRoots(lease *Lease, threadID string) (*os.Root, *os.Root, error) {
-	storeRoot, threadRoot, err := s.openAttachmentRoots(threadID)
+func readAttachmentManifestData(root *os.Root) ([]byte, error) {
+	entry, err := root.Lstat(attachmentManifest)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if err := validatePinnedAttachmentLease(threadRoot, lease); err != nil {
-		_ = errors.Join(threadRoot.Close(), storeRoot.Close())
-		return nil, nil, err
+	if entry.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("coding attachment manifest is a symbolic link")
 	}
-	return storeRoot, threadRoot, nil
+	file, err := root.OpenFile(attachmentManifest, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(entry, info) {
+		return nil, fmt.Errorf("coding attachment manifest changed while opening")
+	}
+	if validationErr := validateCatalogMetadataFile(file, info); validationErr != nil {
+		return nil, fmt.Errorf("coding attachment manifest: unsafe file: %w", validationErr)
+	}
+	if info.Size() < 0 || info.Size() > MaxAttachmentManifestBytes {
+		return nil, fmt.Errorf("coding attachment manifest exceeds %d bytes", MaxAttachmentManifestBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(file, MaxAttachmentManifestBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	current, err := root.Lstat(attachmentManifest)
+	if err != nil {
+		return nil, err
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !os.SameFile(entry, after) || !os.SameFile(entry, current) ||
+		info.Size() != after.Size() || info.ModTime() != after.ModTime() {
+		return nil, fmt.Errorf("coding attachment manifest changed while reading")
+	}
+	return data, nil
 }
 
-func (s *Store) openAttachmentRoots(threadID string) (*os.Root, *os.Root, error) {
-	storeRoot, err := os.OpenRoot(s.root)
+func (v *attachmentStoreView) saveManifest(manifest attachmentManifestFile) error {
+	if err := validateAttachmentManifest(v.threadID, manifest); err != nil {
+		return err
+	}
+	sort.Slice(manifest.Entries, func(left, right int) bool {
+		return manifest.Entries[left].Ref < manifest.Entries[right].Ref
+	})
+	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return nil, nil, fmt.Errorf("coding attachment: anchor store root: %w", err)
+		return err
 	}
-	closeStore := true
-	defer func() {
-		if closeStore {
-			_ = storeRoot.Close()
-		}
-	}()
-	if directoryErr := requireAttachmentDirectories(storeRoot, "threads"); directoryErr != nil {
-		return nil, nil, directoryErr
+	data = append(data, '\n')
+	if len(data) > MaxAttachmentManifestBytes {
+		return fmt.Errorf("coding attachment manifest exceeds %d bytes", MaxAttachmentManifestBytes)
 	}
-	threadsRoot, err := storeRoot.OpenRoot("threads")
+	hierarchy, err := v.store.openAttachmentHierarchy(v.thread, true, attachmentDirectory)
 	if err != nil {
-		return nil, nil, fmt.Errorf("coding attachment: pin threads directory: %w", err)
+		return err
 	}
-	defer func() { _ = threadsRoot.Close() }()
-	if directoryErr := requireAttachmentDirectories(threadsRoot, threadID); directoryErr != nil {
-		return nil, nil, directoryErr
+	defer func() { _ = hierarchy.Close() }()
+	writeErr := v.store.writeRoot(hierarchy.Leaf(), attachmentManifest, data, 0o600)
+	if writeErr != nil && !fileutil.IsCommittedWriteError(writeErr) {
+		return fmt.Errorf("coding attachment manifest: save: %w", writeErr)
 	}
-	threadRoot, err := threadsRoot.OpenRoot(threadID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("coding attachment: pin thread directory: %w", err)
+	if err := v.validateHierarchy(hierarchy); err != nil {
+		return fmt.Errorf("coding attachment manifest: revalidate hierarchy: %w", err)
 	}
-	closeStore = false
-	return storeRoot, threadRoot, nil
+	if writeErr != nil {
+		return &committedAttachmentManifestError{Err: fmt.Errorf(
+			"coding attachment manifest: save: %w",
+			writeErr,
+		)}
+	}
+	return nil
 }
 
 func validatePinnedAttachmentLease(threadRoot *os.Root, lease *Lease) error {
+	entry, err := threadRoot.Lstat(leaseFileName)
+	if err != nil {
+		return fmt.Errorf("coding attachment: inspect pinned lease file: %w", err)
+	}
+	if entry.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("coding attachment: pinned lease file is a symbolic link")
+	}
 	pinnedLease, err := threadRoot.OpenFile(leaseFileName, os.O_RDONLY, 0)
 	if err != nil {
 		return fmt.Errorf("coding attachment: pin lease file: %w", err)
@@ -795,59 +872,15 @@ func validatePinnedAttachmentLease(threadRoot *os.Root, lease *Lease) error {
 	if validationErr := validateCatalogMetadataFile(pinnedLease, pinnedInfo); validationErr != nil {
 		return fmt.Errorf("coding attachment: pinned lease file is unsafe: %w", validationErr)
 	}
+	if !os.SameFile(entry, pinnedInfo) {
+		return fmt.Errorf("coding attachment: pinned lease file changed while opening")
+	}
 	leaseInfo, err := lease.file.Stat()
 	if err != nil {
 		return err
 	}
 	if !os.SameFile(pinnedInfo, leaseInfo) {
 		return fmt.Errorf("coding attachment: held lease no longer identifies pinned thread")
-	}
-	return nil
-}
-
-func (s *Store) validatePinnedAttachmentWriter(threadID string, lease *Lease, threadRoot *os.Root) error {
-	if err := s.validateAcquiredLeasePath(threadID, lease.file); err != nil {
-		return err
-	}
-	return validatePinnedAttachmentLease(threadRoot, lease)
-}
-
-func (s *Store) validatePinnedAttachmentView(storeRoot, threadRoot *os.Root, threadID string) error {
-	activeStore, err := os.OpenRoot(s.root)
-	if err != nil {
-		return fmt.Errorf("coding attachment: reopen active store root: %w", err)
-	}
-	defer func() { _ = activeStore.Close() }()
-	if identityErr := compareAttachmentRoots(storeRoot, activeStore); identityErr != nil {
-		return fmt.Errorf("coding attachment: active store root changed: %w", identityErr)
-	}
-	threadsRoot, err := activeStore.OpenRoot("threads")
-	if err != nil {
-		return fmt.Errorf("coding attachment: reopen active threads root: %w", err)
-	}
-	defer func() { _ = threadsRoot.Close() }()
-	activeThread, err := threadsRoot.OpenRoot(threadID)
-	if err != nil {
-		return fmt.Errorf("coding attachment: reopen active thread root: %w", err)
-	}
-	defer func() { _ = activeThread.Close() }()
-	if identityErr := compareAttachmentRoots(threadRoot, activeThread); identityErr != nil {
-		return fmt.Errorf("coding attachment: active thread root changed: %w", identityErr)
-	}
-	return nil
-}
-
-func compareAttachmentRoots(left, right *os.Root) error {
-	leftInfo, err := left.Stat(".")
-	if err != nil {
-		return err
-	}
-	rightInfo, err := right.Stat(".")
-	if err != nil {
-		return err
-	}
-	if !os.SameFile(leftInfo, rightInfo) {
-		return fmt.Errorf("directory identity changed")
 	}
 	return nil
 }
@@ -873,51 +906,13 @@ func validatePinnedAttachmentDirectory(parent *os.Root, name string, pinned *os.
 	if err != nil {
 		return fmt.Errorf("coding attachment: inspect current directory %q: %w", name, err)
 	}
-	if !os.SameFile(pinnedInfo, currentInfo) {
-		return fmt.Errorf("coding attachment: directory %q changed during publication", name)
-	}
-	return nil
-}
-
-func (s *Store) saveAttachmentManifest(
-	threadRoot *os.Root,
-	threadID string,
-	manifest attachmentManifestFile,
-) error {
-	if err := validateAttachmentManifest(threadID, manifest); err != nil {
-		return err
-	}
-	sort.Slice(manifest.Entries, func(left, right int) bool {
-		return manifest.Entries[left].Ref < manifest.Entries[right].Ref
-	})
-	data, err := json.MarshalIndent(manifest, "", "  ")
+	activePathInfo, err := parent.Lstat(name)
 	if err != nil {
-		return err
+		return fmt.Errorf("coding attachment: recheck current directory %q: %w", name, err)
 	}
-	data = append(data, '\n')
-	if len(data) > MaxAttachmentManifestBytes {
-		return fmt.Errorf("coding attachment manifest exceeds %d bytes", MaxAttachmentManifestBytes)
-	}
-	if directoryErr := s.ensureAttachmentDirectories(threadRoot, attachmentDirectory); directoryErr != nil {
-		return directoryErr
-	}
-	directory, err := threadRoot.OpenRoot(attachmentDirectory)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = directory.Close() }()
-	writeErr := s.writeRoot(directory, attachmentManifest, data, 0o600)
-	if writeErr != nil && !fileutil.IsCommittedWriteError(writeErr) {
-		return fmt.Errorf("coding attachment manifest: save: %w", writeErr)
-	}
-	if err := validatePinnedAttachmentDirectory(threadRoot, attachmentDirectory, directory); err != nil {
-		return fmt.Errorf("coding attachment manifest: revalidate published directory: %w", err)
-	}
-	if writeErr != nil {
-		return &committedAttachmentManifestError{Err: fmt.Errorf(
-			"coding attachment manifest: save: %w",
-			writeErr,
-		)}
+	if activePathInfo.Mode()&os.ModeSymlink != 0 || !activePathInfo.IsDir() ||
+		!os.SameFile(activePathInfo, currentInfo) || !os.SameFile(pinnedInfo, currentInfo) {
+		return fmt.Errorf("coding attachment: directory %q changed during operation", name)
 	}
 	return nil
 }
@@ -955,22 +950,6 @@ func validateAttachment(entry Attachment) error {
 	if entry.Size < 0 || entry.Size > MaxAttachmentBytes || len(entry.SHA256) != sha256.Size*2 ||
 		strings.ToLower(entry.SHA256) != entry.SHA256 || !isHex(entry.SHA256) || entry.CreatedAt.IsZero() {
 		return fmt.Errorf("coding attachment identity is invalid")
-	}
-	return nil
-}
-
-func requireAttachmentDirectories(root *os.Root, names ...string) error {
-	for _, name := range names {
-		if !filepath.IsLocal(name) {
-			return fmt.Errorf("coding attachment directory is invalid")
-		}
-		info, err := root.Lstat(name)
-		if err != nil {
-			return fmt.Errorf("coding attachment: inspect directory %q: %w", name, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return fmt.Errorf("coding attachment: directory %q is not direct", name)
-		}
 	}
 	return nil
 }

@@ -22,8 +22,7 @@ Every admission publishes a verified immutable snapshot by SHA-256 before
 atomically publishing its thread manifest entry. Manifests never record the
 caller-owned source path. After admission, changing, moving, or deleting the
 source does not affect the attachment; consumers resolve only the immutable
-MintClaw-owned snapshot. Resolution returns verified bytes from direct pinned
-store roots, never a pathname that a consumer must reopen.
+MintClaw-owned snapshot.
 
 A `media://coding-attachment/<uuid>` reference is meaningful only through the
 manifest of its owning thread. Knowing another thread's reference does not
@@ -32,9 +31,11 @@ tokens.
 
 The admission layer is bounded to 32 MiB per file, 1,024 manifest entries per
 thread, and a 1 MiB manifest. Inputs must be stable singly linked regular files.
-Resolution rechecks direct directory identity, file identity, size, and digest. Missing, replaced,
-changed, or corrupt state fails closed and is reported as unavailable; readers
-do not repair or rewrite it.
+Resolution reads through pinned direct store directories and returns verified
+bytes rather than a pathname that a consumer must reopen. It rechecks type,
+directory and file identity, size, and digest. Missing, replaced, changed, or
+corrupt state fails closed and is reported as unavailable; readers do not
+repair or rewrite it.
 
 ## Deduplication, deletion, and garbage collection
 

@@ -1,6 +1,7 @@
 package thread
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -116,14 +117,8 @@ func TestAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(firstData) != string(secondData) || firstAttachment.Ref == secondAttachment.Ref {
-		t.Fatalf(
-			"data/refs = %q %q / %q %q",
-			firstData,
-			secondData,
-			firstAttachment.Ref,
-			secondAttachment.Ref,
-		)
+	if !bytes.Equal(firstData, secondData) || firstAttachment.Ref == secondAttachment.Ref {
+		t.Fatalf("data/refs = %q %q / %q %q", firstData, secondData, firstAttachment.Ref, secondAttachment.Ref)
 	}
 	if err := secondLease.Release(); err != nil {
 		t.Fatal(err)
@@ -179,50 +174,12 @@ func TestAttachmentDeduplicationRejectsReplacedThread(t *testing.T) {
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
 		Path: source, At: time.Now(),
 	})
-	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "active thread") {
+	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "held lease") {
 		t.Fatalf("replacement deduplication = %+v, %v", attachment, err)
 	}
 }
 
-func TestAttachmentDeduplicationRepublishesMissingBlobAndRejectsCorruption(t *testing.T) {
-	store, metadata := newLeaseTestThread(t)
-	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
-	content := []byte("content")
-	source := filepath.Join(t.TempDir(), "attachment.txt")
-	if err := os.WriteFile(source, content, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	blob := attachmentTestBlobPath(store, attachment.SHA256)
-	if err := os.Remove(blob); err != nil {
-		t.Fatal(err)
-	}
-	repeated, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now().Add(time.Minute),
-	})
-	if err != nil || repeated.Ref != attachment.Ref {
-		t.Fatalf("missing-blob readmission = %+v, %v", repeated, err)
-	}
-	resolved, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
-	if err != nil || string(resolved) != string(content) {
-		t.Fatalf("repaired blob = %q, %v", resolved, err)
-	}
-	if err := os.WriteFile(blob, []byte("corrupt"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if admitted, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now().Add(2 * time.Minute),
-	}); err == nil || admitted.Ref != "" {
-		t.Fatalf("corrupt-blob readmission = %+v, %v", admitted, err)
-	}
-}
-
-func TestAttachmentDeduplicationRepeatsDurabilityBarriers(t *testing.T) {
+func TestAttachmentReadmissionRepairsMissingBlobAndRejectsCorruption(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
 	source := filepath.Join(t.TempDir(), "attachment.txt")
@@ -235,19 +192,78 @@ func TestAttachmentDeduplicationRepeatsDurabilityBarriers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	injected := errors.New("injected retry durability failure")
-	store.syncRoot = func(*os.Root) error { return injected }
-	if admitted, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now().Add(time.Minute),
-	}); err == nil || admitted.Ref != "" || !errors.Is(err, injected) {
-		t.Fatalf("unsynced deduplication retry = %+v, %v", admitted, err)
+	blobPath := attachmentTestBlobPath(store, attachment)
+	if err := os.Remove(blobPath); err != nil {
+		t.Fatal(err)
 	}
-	store.syncRoot = syncRootDirectory
-	repeated, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+	repaired, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now().Add(time.Minute),
+	})
+	if err != nil || repaired.Ref != attachment.Ref {
+		t.Fatalf("missing-blob readmission = %+v, %v", repaired, err)
+	}
+	data, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+	if err != nil || string(data) != "content" {
+		t.Fatalf("repaired blob = %q, %v", data, err)
+	}
+	if err := os.WriteFile(blobPath, []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rejected, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
 		Path: source, At: time.Now().Add(2 * time.Minute),
 	})
-	if err != nil || repeated.Ref != attachment.Ref {
-		t.Fatalf("durable deduplication retry = %+v, %v", repeated, err)
+	if err == nil || rejected.Ref != "" || !strings.Contains(err.Error(), "existing digest path is invalid") {
+		t.Fatalf("corrupt-blob readmission = %+v, %v", rejected, err)
+	}
+}
+
+func TestAttachmentReadmissionRequiresExistingBlobDurabilityBarriers(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		target func(*Store, Attachment) string
+	}{
+		{
+			name: "directory parent",
+			target: func(store *Store, _ Attachment) string {
+				return filepath.Join(store.Root(), "blobs")
+			},
+		},
+		{
+			name: "blob shard",
+			target: func(store *Store, attachment Attachment) string {
+				return filepath.Dir(attachmentTestBlobPath(store, attachment))
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store, metadata := newLeaseTestThread(t)
+			lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+			source := filepath.Join(t.TempDir(), "attachment.txt")
+			if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+				Path: source, At: time.Now(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Clean(testCase.target(store, attachment))
+			injected := errors.New("injected existing-blob sync failure")
+			syncRoot := store.syncRoot
+			store.syncRoot = func(root *os.Root) error {
+				if filepath.Clean(root.Name()) == target {
+					return injected
+				}
+				return syncRoot(root)
+			}
+			repeated, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+				Path: source, At: time.Now().Add(time.Minute),
+			})
+			if repeated.Ref != "" || !errors.Is(err, injected) {
+				t.Fatalf("readmission without durability barrier = %+v, %v", repeated, err)
+			}
+		})
 	}
 }
 
@@ -364,34 +380,46 @@ func TestResolveAttachmentPreservesContextCancellation(t *testing.T) {
 
 func TestResolveAttachmentCancellationPrecedesLookupAndManifestErrors(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
-	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
-	if _, _, err := store.ResolveAttachment(
-		canceled,
-		metadata.ThreadID,
-		attachmentRefPrefix+"00000000-0000-4000-8000-000000000001",
-	); !errors.Is(err, context.Canceled) || IsAttachmentUnavailable(err) {
-		t.Fatalf("canceled unknown-reference resolve error = %v", err)
-	}
-	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(threadRoot, attachmentDirectory), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(threadRoot, attachmentDirectory, attachmentManifest),
-		[]byte("corrupt"),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.ResolveAttachment(canceled, metadata.ThreadID, "unknown"); !errors.Is(
-		err,
-		context.Canceled,
-	) {
-		t.Fatalf("canceled corrupt-manifest resolve error = %v", err)
+	for _, testCase := range []struct {
+		name  string
+		setup func(*testing.T)
+	}{
+		{name: "unknown reference", setup: func(*testing.T) {}},
+		{
+			name: "corrupt manifest",
+			setup: func(t *testing.T) {
+				threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				directory := filepath.Join(threadRoot, attachmentDirectory)
+				if err := os.Mkdir(directory, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(
+					filepath.Join(directory, attachmentManifest),
+					[]byte("not-json\n"),
+					0o600,
+				); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			testCase.setup(t)
+			canceled, cancel := context.WithCancel(t.Context())
+			cancel()
+			data, attachment, err := store.ResolveAttachment(
+				canceled,
+				metadata.ThreadID,
+				attachmentRefPrefix+NewThreadID(),
+			)
+			if len(data) != 0 || attachment.Ref != "" || !errors.Is(err, context.Canceled) ||
+				IsAttachmentUnavailable(err) {
+				t.Fatalf("canceled resolution = %q, %+v, %v", data, attachment, err)
+			}
+		})
 	}
 }
 
@@ -532,12 +560,49 @@ func TestAttachmentAdmissionRejectsDetachedBlobDirectory(t *testing.T) {
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
 		Path: source, At: time.Now(),
 	})
-	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "changed during publication") {
+	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "changed during operation") {
 		t.Fatalf("detached blob admission = %+v, %v", attachment, err)
 	}
 	entries, listErr := store.ListAttachments(metadata.ThreadID)
 	if listErr != nil || len(entries) != 0 {
 		t.Fatalf("manifest changed after detached blob publication = %+v, %v", entries, listErr)
+	}
+}
+
+func TestAttachmentAdmissionRejectsSymlinkedBlobHierarchyDuringOpen(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blobs := filepath.Join(store.Root(), "blobs")
+	moved := filepath.Join(store.Root(), "blobs-owned")
+	replaced := false
+	syncRoot := store.syncRoot
+	store.syncRoot = func(root *os.Root) error {
+		if err := syncRoot(root); err != nil {
+			return err
+		}
+		if !replaced && filepath.Clean(root.Name()) == filepath.Join(blobs, "sha256") {
+			replaced = true
+			if err := os.Rename(blobs, moved); err != nil {
+				return err
+			}
+			if err := os.Symlink(filepath.Base(moved), blobs); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+		}
+		return nil
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if !replaced {
+		t.Fatal("blob hierarchy was not replaced")
+	}
+	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "not direct") {
+		t.Fatalf("symlinked blob hierarchy admission = %+v, %v", attachment, err)
 	}
 }
 
@@ -570,7 +635,7 @@ func TestAttachmentAdmissionRejectsDetachedManifestDirectory(t *testing.T) {
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
 		Path: source, At: time.Now(),
 	})
-	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "changed during publication") {
+	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "changed during operation") {
 		t.Fatalf("detached manifest admission = %+v, %v", attachment, err)
 	}
 	entries, listErr := store.ListAttachments(metadata.ThreadID)
@@ -610,7 +675,7 @@ func TestAttachmentAdmissionRejectsThreadDetachedAfterManifestWrite(t *testing.T
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
 		Path: source, At: time.Now(),
 	})
-	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "active thread") {
+	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "changed during operation") {
 		t.Fatalf("detached thread admission = %+v, %v", attachment, err)
 	}
 	entries, listErr := store.ListAttachments(metadata.ThreadID)
@@ -619,73 +684,88 @@ func TestAttachmentAdmissionRejectsThreadDetachedAfterManifestWrite(t *testing.T
 	}
 }
 
-func TestResolveAttachmentRejectsSymlinkedBlobHierarchy(t *testing.T) {
-	store, metadata := newLeaseTestThread(t)
-	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
-	source := filepath.Join(t.TempDir(), "attachment.txt")
-	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	blobs := filepath.Join(store.Root(), "blobs")
-	moved := filepath.Join(store.Root(), "blobs-owned")
-	if err := os.Rename(blobs, moved); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(moved, blobs); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	data, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
-	if err == nil || data != nil || !IsAttachmentUnavailable(err) {
-		t.Fatalf("symlinked blob hierarchy resolve = %q, %v", data, err)
+func TestResolveAttachmentRejectsReplacedBlobHierarchy(t *testing.T) {
+	for _, component := range []string{"blobs", filepath.Join("blobs", "sha256")} {
+		t.Run(component, func(t *testing.T) {
+			store, metadata := newLeaseTestThread(t)
+			lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+			source := filepath.Join(t.TempDir(), "attachment.txt")
+			if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+				Path: source, At: time.Now(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			active := filepath.Join(store.Root(), component)
+			moved := active + "-moved"
+			if err := os.Rename(active, moved); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(moved, active); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+			data, loaded, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+			if len(data) != 0 || loaded.Ref != attachment.Ref || !IsAttachmentUnavailable(err) ||
+				!strings.Contains(err.Error(), "not direct") {
+				t.Fatalf("replaced blob hierarchy resolution = %q, %+v, %v", data, loaded, err)
+			}
+		})
 	}
 }
 
-func TestAttachmentManifestRejectsDetachedDirectoryDuringRead(t *testing.T) {
-	store, metadata := newLeaseTestThread(t)
-	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
-	source := filepath.Join(t.TempDir(), "attachment.txt")
-	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	attachments := filepath.Join(threadRoot, attachmentDirectory)
-	moved := attachments + "-reading"
-	manifest, err := os.ReadFile(filepath.Join(attachments, attachmentManifest))
-	if err != nil {
-		t.Fatal(err)
-	}
-	replaced := false
-	store.attachmentManifestRead = func() {
-		if replaced {
-			return
+func TestPinnedManifestReadRejectsDetachedAttachmentsDirectory(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		name := "present manifest"
+		if missing {
+			name = "missing manifest"
 		}
-		replaced = true
-		if err := os.Rename(attachments, moved); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(attachments, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(attachments, attachmentManifest), manifest, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if entries, err := store.ListAttachments(metadata.ThreadID); err == nil || entries != nil || !replaced {
-		t.Fatalf("detached manifest read = %+v, %v; replaced=%t", entries, err, replaced)
+		t.Run(name, func(t *testing.T) {
+			store, metadata := newLeaseTestThread(t)
+			lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+			source := filepath.Join(t.TempDir(), "attachment.txt")
+			if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+				Path: source, At: time.Now(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			view, err := store.openAttachmentStoreView(metadata.ThreadID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = view.Close() }()
+			hierarchy, err := store.openAttachmentHierarchy(view.thread, false, attachmentDirectory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = hierarchy.Close() }()
+			threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			attachmentsRoot := filepath.Join(threadRoot, attachmentDirectory)
+			if missing {
+				if err := os.Remove(filepath.Join(attachmentsRoot, attachmentManifest)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			moved := attachmentsRoot + "-moved"
+			if err := os.Rename(attachmentsRoot, moved); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(attachmentsRoot, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := view.loadManifestFromHierarchy(hierarchy)
+			if err == nil || len(manifest.Entries) != 0 || !strings.Contains(err.Error(), "changed during operation") {
+				t.Fatalf("detached manifest read = %+v, %v", manifest, err)
+			}
+		})
 	}
 }
 
@@ -760,6 +840,6 @@ func attachmentTestManifestPath(t *testing.T, store *Store, threadID string) str
 	return filepath.Join(threadRoot, attachmentDirectory, attachmentManifest)
 }
 
-func attachmentTestBlobPath(store *Store, digest string) string {
-	return filepath.Join(store.Root(), "blobs", "sha256", digest[:2], digest)
+func attachmentTestBlobPath(store *Store, attachment Attachment) string {
+	return filepath.Join(store.Root(), "blobs", "sha256", attachment.SHA256[:2], attachment.SHA256)
 }

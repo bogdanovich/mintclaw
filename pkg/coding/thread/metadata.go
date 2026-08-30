@@ -300,14 +300,13 @@ func truncateUTF8(value string, maxBytes int) string {
 // Store atomically persists direct-addressable thread metadata below one
 // external coding state root.
 type Store struct {
-	root                   string
-	durableRoot            string
-	mkdirDurable           func(string, string, os.FileMode) error
-	writeAtomic            func(string, []byte, os.FileMode) error
-	writeRoot              func(*os.Root, string, []byte, os.FileMode) error
-	syncRoot               func(*os.Root) error
-	syncDir                func(string) error
-	attachmentManifestRead func()
+	root         string
+	durableRoot  string
+	mkdirDurable func(string, string, os.FileMode) error
+	writeAtomic  func(string, []byte, os.FileMode) error
+	writeRoot    func(*os.Root, string, []byte, os.FileMode) error
+	syncRoot     func(*os.Root) error
+	syncDir      func(string) error
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.
