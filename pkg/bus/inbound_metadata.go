@@ -8,6 +8,12 @@ const InboundMetadataKeyInteractionChoice = "interaction_choice"
 // a reply to an interaction prompt without any quoted-message decoration.
 const InboundMetadataKeyInteractionResponse = "interaction_response"
 
+// InboundMetadataKeyInteractionResponseCandidate carries reply text that the
+// channel cannot authenticate as an interaction response on its own. The
+// agent may promote it only after matching the replied-to platform message ID
+// against a durable interaction prompt receipt.
+const InboundMetadataKeyInteractionResponseCandidate = "interaction_response_candidate"
+
 // InboundMetadataKeyInteractionShortID binds a channel-projected response to
 // the exact interaction prompt that produced its controls.
 const InboundMetadataKeyInteractionShortID = "interaction_short_id"

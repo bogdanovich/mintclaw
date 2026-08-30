@@ -356,6 +356,9 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	if interactionReply.response != "" {
 		metadata[bus.InboundMetadataKeyInteractionResponse] = interactionReply.response
 	}
+	if interactionReply.responseCandidate != "" {
+		metadata[bus.InboundMetadataKeyInteractionResponseCandidate] = interactionReply.responseCandidate
+	}
 	if interactionReply.shortID != "" {
 		metadata[bus.InboundMetadataKeyInteractionShortID] = interactionReply.shortID
 	}

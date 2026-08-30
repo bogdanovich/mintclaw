@@ -26,9 +26,10 @@ type telegramInteractionControls struct {
 }
 
 type telegramInteractionReply struct {
-	choice   string
-	response string
-	shortID  string
+	choice            string
+	response          string
+	responseCandidate string
+	shortID           string
 }
 
 func (c *TelegramChannel) updateInteractionControls(
@@ -159,7 +160,7 @@ func (c *TelegramChannel) telegramInteractionReplyMetadata(
 		}
 	default:
 		if shortID == "" {
-			return telegramInteractionReply{}
+			return telegramInteractionReply{responseCandidate: strings.TrimSpace(content)}
 		}
 		return telegramInteractionReply{response: strings.TrimSpace(content), shortID: shortID}
 	}

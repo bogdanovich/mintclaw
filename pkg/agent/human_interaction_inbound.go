@@ -413,6 +413,7 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 	}
 	classification := c.al.classifyProjectedInteractionAnswer(msg, target, shortID)
 	if classification.Disposition == explicitInteractionAnswerActive {
+		msg = promoteProjectedInteractionResponseCandidate(msg)
 		msg = resolveProjectedInteractionOption(classification.Record, msg)
 	}
 	responseError := strings.TrimSpace(
@@ -435,8 +436,9 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		c.handleInteractionInbound(ctx, msg, target)
 		return true
 	}
-	if shortID != "" && (classification.Disposition == explicitInteractionAnswerRetry ||
-		classification.Disposition == explicitInteractionAnswerUnavailable) {
+	if (shortID != "" || projectedInteractionPromptMessageID(msg) != "") &&
+		(classification.Disposition == explicitInteractionAnswerRetry ||
+			classification.Disposition == explicitInteractionAnswerUnavailable) {
 		logExplicitInteractionAnswerDisposition(classification.Record, msg, classification.Disposition)
 		c.al.turns.inbound.release(
 			context.Background(),
@@ -444,6 +446,10 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 			fmt.Errorf("interaction answer identity is waiting for durable admission"),
 		)
 		return true
+	}
+	if projectedInteractionIsUnverifiedCandidate(msg) && classification.Record.ID == "" &&
+		classification.Disposition == explicitInteractionAnswerWrongID {
+		return false
 	}
 	if classification.Disposition == explicitInteractionAnswerDuplicate {
 		c.al.syncInteractionControls(
@@ -469,11 +475,44 @@ func projectedInteractionAnswer(msg bus.InboundMessage) (string, bool) {
 	}
 	choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
 	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	if response == "" {
+		response = strings.TrimSpace(
+			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+		)
+	}
 	responseError := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError])
 	if choice == "" && response == "" && responseError == "" {
 		return "", false
 	}
 	return strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID]), true
+}
+
+func promoteProjectedInteractionResponseCandidate(msg bus.InboundMessage) bus.InboundMessage {
+	if len(msg.Context.Raw) == 0 ||
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) != "" {
+		return msg
+	}
+	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate])
+	if response == "" {
+		return msg
+	}
+	raw := make(map[string]string, len(msg.Context.Raw))
+	for key, value := range msg.Context.Raw {
+		raw[key] = value
+	}
+	delete(raw, bus.InboundMetadataKeyInteractionResponseCandidate)
+	raw[bus.InboundMetadataKeyInteractionResponse] = response
+	msg.Context.Raw = raw
+	msg.Content = response
+	return msg
+}
+
+func projectedInteractionIsUnverifiedCandidate(msg bus.InboundMessage) bool {
+	return len(msg.Context.Raw) != 0 &&
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice]) == "" &&
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) == "" &&
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError]) == "" &&
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate]) != ""
 }
 
 func projectedInteractionPromptMessageID(msg bus.InboundMessage) string {
@@ -521,7 +560,7 @@ func (al *AgentLoop) classifyProjectedInteractionAnswer(
 	target *inboundDispatchTarget,
 	shortID string,
 ) explicitInteractionAnswer {
-	if al == nil || target == nil || target.Agent == nil || shortID == "" {
+	if al == nil || target == nil || target.Agent == nil {
 		return explicitInteractionAnswer{Disposition: explicitInteractionAnswerUnavailable}
 	}
 	registry := al.interactionRegistryForWorkspace(target.Agent.Workspace)
@@ -532,7 +571,7 @@ func (al *AgentLoop) classifyProjectedInteractionAnswer(
 	var unauthorizedMatch interactions.Record
 	var pendingMatch interactions.Record
 	for _, record := range registry.List() {
-		if !strings.EqualFold(shortID, record.ShortID) {
+		if shortID != "" && !strings.EqualFold(shortID, record.ShortID) {
 			continue
 		}
 		promptIdentity := al.projectedInteractionPromptIdentity(record, responseMessageID)
@@ -579,6 +618,18 @@ func (al *AgentLoop) classifyProjectedInteractionAnswer(
 	if unauthorizedMatch.ID != "" {
 		return explicitInteractionAnswer{
 			Record: unauthorizedMatch, Disposition: explicitInteractionAnswerUnauthorized,
+		}
+	}
+	if shortID == "" {
+		if record, ok := activeInteractionForSession(registry, target.SessionKey); ok {
+			if !interactionRouteAuthorizes(record.Route, target, msg.Context) {
+				return explicitInteractionAnswer{
+					Record: record, Disposition: explicitInteractionAnswerUnauthorized,
+				}
+			}
+			return explicitInteractionAnswer{
+				Record: record, Disposition: explicitInteractionAnswerWrongID,
+			}
 		}
 	}
 	return explicitInteractionAnswer{Disposition: explicitInteractionAnswerWrongID}

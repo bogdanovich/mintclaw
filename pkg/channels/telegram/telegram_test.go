@@ -2322,6 +2322,74 @@ func TestSend_ExpansionHeavyInteractionKeepsMultiQuestionFooterAtomic(t *testing
 	assert.True(t, ch.interactionControlsMatchPrompt(12345, 0, "15", shortID, messageIDs[0]))
 }
 
+func TestDeliverText_PartialInteractionRetryDoesNotCreateSecondPrompt(t *testing.T) {
+	shortID := "abc12345"
+	footer := "`/answer " + shortID + " value`\n`/stop`"
+	body := strings.Repeat("**&** ", 640)
+	content := body + "\n\n" + footer
+	failedFooter := false
+	nextMessageID := 100
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, data *ta.RequestData,
+	) (*ta.Response, error) {
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(data.BodyRaw, &payload))
+		text, _ := payload["text"].(string)
+		if strings.Contains(text, "/answer "+shortID) && !failedFooter {
+			failedFooter = true
+			return nil, &ta.Error{
+				ErrorCode:   http.StatusTooManyRequests,
+				Description: "Too Many Requests",
+				Parameters:  &ta.ResponseParameters{RetryAfter: 1},
+			}
+		}
+		nextMessageID++
+		return successResponseWithMessageID(t, nextMessageID), nil
+	}}
+	ch := newTestChannel(t, caller)
+	message := bus.OutboundMessage{
+		ChatID: "12345", Content: content, ReplyToMessageID: "88",
+		Context: bus.InboundContext{SenderID: "15"},
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+			InteractionShortID:  shortID,
+			Choices:             []string{"generate"},
+		},
+	}
+
+	result := ch.DeliverText(t.Context(), []bus.OutboundMessage{message})
+	require.Error(t, result.Err)
+	require.NotEmpty(t, result.MessageIDs)
+	require.Len(t, result.Remaining, 1)
+	assert.Empty(t, result.Remaining[0].ReplyToMessageID)
+	assert.Empty(t, result.Remaining[0].Metadata.InteractionControls)
+	assert.Empty(t, result.Remaining[0].Metadata.Choices)
+	assert.Nil(t, telegramInteractionReplyMarkup(result.Remaining[0]))
+	assert.True(t, ch.interactionControlsMatchPrompt(
+		12345,
+		0,
+		"15",
+		shortID,
+		result.MessageIDs[0],
+	))
+
+	retryResult := ch.DeliverText(t.Context(), result.Remaining)
+	require.NoError(t, retryResult.Err)
+	require.NotEmpty(t, retryResult.MessageIDs)
+	var retryPayload map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[len(caller.calls)-1].Data.BodyRaw, &retryPayload))
+	assert.NotContains(t, retryPayload, "reply_markup")
+	assert.NotContains(t, retryPayload, "reply_parameters")
+	assert.True(t, ch.interactionControlsMatchPrompt(
+		12345,
+		0,
+		"15",
+		shortID,
+		result.MessageIDs[0],
+	))
+}
+
 func TestSend_RichFallbackSplitsAgainstLegacyHTMLPayload(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
@@ -3892,6 +3960,23 @@ func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
 		"15",
 	)
 	assert.Empty(t, response)
+}
+
+func TestTelegramInteractionResponseProjectsFooterlessPromptChunk(t *testing.T) {
+	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	reply := ch.telegramInteractionReplyMetadata(&telego.Message{
+		Text: "  generate it yourself  ", Chat: telego.Chat{ID: 999},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101,
+			Text:      "Which value?",
+			From:      &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}, "  generate it yourself  ", "15")
+
+	assert.Empty(t, reply.choice)
+	assert.Empty(t, reply.response)
+	assert.Equal(t, "generate it yourself", reply.responseCandidate)
+	assert.Empty(t, reply.shortID)
 }
 
 func TestTelegramInteractionResponseProjectsPromptIdentityWithoutLocalControls(t *testing.T) {

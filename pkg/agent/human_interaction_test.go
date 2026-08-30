@@ -6231,6 +6231,70 @@ func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
 	}
 }
 
+func TestProjectedAnswerMatchesEveryDeliveredTelegramPromptChunk(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-split-reply-identity"
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	promptMessageIDs := []string{"9100", "9101", "9102"}
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		al.outboundCoordinator(),
+		agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		promptMessageIDs,
+	)
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+
+	for index, promptMessageID := range promptMessageIDs {
+		t.Run(promptMessageID, func(t *testing.T) {
+			reply := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
+			reply.Context.MessageID = fmt.Sprintf("reply-%d", index)
+			reply.Context.ReplyToMessageID = promptMessageID
+			reply.Context.Raw = map[string]string{
+				bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+			}
+			shortID := ""
+			if index == len(promptMessageIDs)-1 {
+				shortID = record.ShortID
+				reply.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = shortID
+			}
+
+			classification := al.classifyProjectedInteractionAnswer(reply, target, shortID)
+			if classification.Disposition != explicitInteractionAnswerActive ||
+				classification.Record.ID != record.ID {
+				t.Fatalf("prompt chunk %s classification = %#v", promptMessageID, classification)
+			}
+		})
+	}
+
+	wrongPrompt := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
+	wrongPrompt.Context.MessageID = "reply-unrelated"
+	wrongPrompt.Context.ReplyToMessageID = "9199"
+	wrongPrompt.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+	}
+	classification := al.classifyProjectedInteractionAnswer(wrongPrompt, target, "")
+	if classification.Disposition != explicitInteractionAnswerWrongID || classification.Record.ID != record.ID {
+		t.Fatalf("unrelated prompt classification = %#v", classification)
+	}
+}
+
 func TestProjectedMultiQuestionReplyRequiresDurablePromptIdentity(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()

@@ -59,7 +59,7 @@ func (c *TelegramChannel) DeliverText(
 		useMarkdownV2: useMarkdownV2,
 		replyMarkup:   replyMarkup,
 	}, c.richMessagesEnabled(useMarkdownV2) && !isToolFeedback && replyMarkup == nil, isToolFeedback)
-	if result.Delivered() {
+	if len(result.MessageIDs) > 0 {
 		c.updateInteractionControls(msg, chatID, threadID, firstTelegramMessageID(result.MessageIDs))
 	}
 	var remaining []bus.OutboundMessage
@@ -68,6 +68,11 @@ func (c *TelegramChannel) DeliverText(
 		for _, content := range result.Remaining {
 			pending := msg
 			pending.Content = content
+			if len(result.MessageIDs) > 0 {
+				pending.ReplyToMessageID = ""
+				pending.Metadata.InteractionControls = ""
+				pending.Metadata.Choices = nil
+			}
 			remaining = append(remaining, pending)
 		}
 	}
