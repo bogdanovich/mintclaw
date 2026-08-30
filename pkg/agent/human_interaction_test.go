@@ -4561,6 +4561,22 @@ func TestTerminalInteractionNoticeUsesDurableOutcome(t *testing.T) {
 			},
 			want: "failed before it could complete",
 		},
+		{
+			name: "failed status preserves pre-execution timeout",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Status: interactions.StatusFailed,
+				Outcome: interactions.OutcomeTimedOut,
+			},
+			want: "expired before execution",
+		},
+		{
+			name: "failed status preserves delivery uncertainty",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Status: interactions.StatusFailed,
+				Outcome: interactions.OutcomeDeliveryUnknown, ApprovalConsumedAt: 1,
+			},
+			want: "unknown delivery outcome",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -757,9 +757,6 @@ func terminalInteractionNotice(record interactions.Record) string {
 	if record.Status == interactions.StatusCancelled {
 		return "This interaction was already canceled."
 	}
-	if record.Status == interactions.StatusFailed {
-		return "This interaction failed before it could complete."
-	}
 	switch record.Outcome {
 	case interactions.OutcomeTimedOut:
 		if record.Kind == interactions.KindApproval && record.ApprovalConsumedAt == 0 {
@@ -774,6 +771,9 @@ func terminalInteractionNotice(record interactions.Record) string {
 	case interactions.OutcomeDeliveryUnknown:
 		return "This interaction already ended with an unknown delivery outcome and was not retried."
 	default:
+		if record.Status == interactions.StatusFailed {
+			return "This interaction failed before it could complete."
+		}
 		return "An answer has already been accepted for this interaction."
 	}
 }
