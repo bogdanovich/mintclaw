@@ -372,7 +372,10 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 		refreshed.Workspace.CWD != project.InvocationCWD {
 		t.Fatalf("refreshed workspace = %+v", refreshed.Workspace)
 	}
-	if err := frontendController.Submit(t.Context(), "inspect the project"); err != nil {
+	if err := frontendController.Submit(
+		t.Context(),
+		frontend.TurnInput{Text: "inspect the project"},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := frontendController.Interrupt(t.Context()); err != nil {
@@ -403,7 +406,7 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	}
 	if err := frontendController.Submit(
 		t.Context(),
-		"must remain in composer",
+		frontend.TurnInput{Text: "must remain in composer"},
 	); !errors.Is(
 		err,
 		controller.ErrTurnActive,
@@ -518,7 +521,11 @@ func TestNativeControllerDoesNotReusePriorOutcomeAfterPreTurnFailure(t *testing.
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.RunTurn(t.Context(), "second unstored prompt", func() {}); !errors.Is(err, injected) {
+	if err := runtime.RunTurn(
+		t.Context(),
+		frontend.TurnInput{Text: "second unstored prompt"},
+		func() {},
+	); !errors.Is(err, injected) {
 		t.Fatalf("second RunTurn() error = %v, want %v", err, injected)
 	}
 	persisted, err := store.Load(metadata.ThreadID)
@@ -538,6 +545,18 @@ func TestCodingDirectTurnOptionsEnableBackgroundCompactionForPersistentRuntime(t
 	shortLived := codingDirectTurnOptions(false, nil)
 	if !shortLived.SuppressBackgroundCompaction || shortLived.EnableStreaming {
 		t.Fatalf("short-lived coding options = %+v", shortLived)
+	}
+}
+
+func TestNativeControllerRuntimeRejectsUnadmittedAttachments(t *testing.T) {
+	runtime := &nativeControllerRuntime{}
+	err := runtime.RunTurn(
+		t.Context(),
+		frontend.TurnInput{Attachments: []frontend.TurnAttachment{{Path: "/tmp/screenshot.png"}}},
+		func() { t.Fatal("unadmitted attachment reported the turn ready") },
+	)
+	if err == nil || !strings.Contains(err.Error(), "attachments are not admitted") {
+		t.Fatalf("RunTurn() error = %v, want fail-closed attachment rejection", err)
 	}
 }
 

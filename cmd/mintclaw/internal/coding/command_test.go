@@ -473,14 +473,14 @@ type interactiveLeaseController struct {
 	lease *thread.Lease
 }
 
-func (*interactiveLeaseController) Submit(context.Context, string) error    { return nil }
-func (*interactiveLeaseController) Interrupt(context.Context) error         { return nil }
-func (*interactiveLeaseController) HardCancel(context.Context) error        { return nil }
-func (*interactiveLeaseController) Compact(context.Context) error           { return nil }
-func (*interactiveLeaseController) Rename(context.Context, string) error    { return nil }
-func (*interactiveLeaseController) SetArchived(context.Context, bool) error { return nil }
-func (*interactiveLeaseController) NewThread(context.Context) error         { return nil }
-func (c *interactiveLeaseController) Close(context.Context) error           { return c.lease.Release() }
+func (*interactiveLeaseController) Submit(context.Context, frontend.TurnInput) error { return nil }
+func (*interactiveLeaseController) Interrupt(context.Context) error                  { return nil }
+func (*interactiveLeaseController) HardCancel(context.Context) error                 { return nil }
+func (*interactiveLeaseController) Compact(context.Context) error                    { return nil }
+func (*interactiveLeaseController) Rename(context.Context, string) error             { return nil }
+func (*interactiveLeaseController) SetArchived(context.Context, bool) error          { return nil }
+func (*interactiveLeaseController) NewThread(context.Context) error                  { return nil }
+func (c *interactiveLeaseController) Close(context.Context) error                    { return c.lease.Release() }
 
 func TestCodeUsesInteractiveShellOnlyForCapableTerminal(t *testing.T) {
 	home := t.TempDir()

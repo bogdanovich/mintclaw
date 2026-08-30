@@ -624,9 +624,16 @@ func boundHydratedTranscriptText(value string) (string, bool) {
 	return value, true
 }
 
-func (r *nativeControllerRuntime) RunTurn(ctx context.Context, prompt string, onReady func()) error {
-	outcome, turnErr := r.runTurn(ctx, prompt, onReady)
-	return r.persistTurnOutcome(prompt, outcome, turnErr)
+func (r *nativeControllerRuntime) RunTurn(
+	ctx context.Context,
+	input frontend.TurnInput,
+	onReady func(),
+) error {
+	if len(input.Attachments) != 0 {
+		return fmt.Errorf("coding runtime: structured attachments are not admitted by this runtime")
+	}
+	outcome, turnErr := r.runTurn(ctx, input.Text, onReady)
+	return r.persistTurnOutcome(input.Text, outcome, turnErr)
 }
 
 func (r *nativeControllerRuntime) persistTurnOutcome(

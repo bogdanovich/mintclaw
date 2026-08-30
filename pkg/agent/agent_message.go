@@ -30,6 +30,18 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	return al.ProcessDirectWithOptions(ctx, content, sessionKey, channel, chatID, DirectTurnOptions{})
 }
 
+// DirectTurnInput is structured input for callers that already own durable
+// media references. Media is copied before it crosses into the agent loop.
+type DirectTurnInput struct {
+	Content string
+	Media   []string
+}
+
+func (input DirectTurnInput) clone() DirectTurnInput {
+	input.Media = append([]string(nil), input.Media...)
+	return input
+}
+
 // DirectTurnOptions controls persistence for a directly invoked agent turn.
 type DirectTurnOptions struct {
 	// Stateless prevents the turn from loading or saving conversation history.
@@ -52,10 +64,29 @@ func (al *AgentLoop) ProcessDirectWithOptions(
 	content, sessionKey, channel, chatID string,
 	opts DirectTurnOptions,
 ) (string, error) {
+	return al.ProcessDirectInputWithOptions(
+		ctx,
+		DirectTurnInput{Content: content},
+		sessionKey,
+		channel,
+		chatID,
+		opts,
+	)
+}
+
+// ProcessDirectInputWithOptions processes structured direct input with
+// explicit persistence semantics.
+func (al *AgentLoop) ProcessDirectInputWithOptions(
+	ctx context.Context,
+	input DirectTurnInput,
+	sessionKey, channel, chatID string,
+	opts DirectTurnOptions,
+) (string, error) {
+	input = input.clone()
 	if al.usesCodingProfile() {
-		return al.processCodingDirect(ctx, content, sessionKey, opts)
+		return al.processCodingDirect(ctx, input, sessionKey, opts)
 	}
-	return al.processDirectWithChannel(ctx, content, sessionKey, channel, chatID, false, opts)
+	return al.processDirectInputWithChannel(ctx, input, sessionKey, channel, chatID, false, opts)
 }
 
 // processCodingDirect bypasses personal routing and session allocation. The
@@ -64,7 +95,8 @@ func (al *AgentLoop) ProcessDirectWithOptions(
 // create a different personal-style session.
 func (al *AgentLoop) processCodingDirect(
 	ctx context.Context,
-	content, sessionKey string,
+	input DirectTurnInput,
+	sessionKey string,
 	directOpts DirectTurnOptions,
 ) (string, error) {
 	if err := al.ensureHooksInitialized(ctx); err != nil {
@@ -114,7 +146,8 @@ func (al *AgentLoop) processCodingDirect(
 		SessionKey:      wantSessionKey,
 		InboundContext:  inboundContext,
 		RouteResult:     route,
-		UserMessage:     content,
+		UserMessage:     input.Content,
+		Media:           append([]string(nil), input.Media...),
 	}
 	opts := newTurnSpec(turnModeCoding, dispatch, modelBinding)
 	opts.CodingContext = codingContext
@@ -127,7 +160,8 @@ func (al *AgentLoop) processCodingDirect(
 	turn := inboundMessageTurn{
 		Message: bus.InboundMessage{
 			Context:    *inboundContext,
-			Content:    content,
+			Content:    input.Content,
+			Media:      append([]string(nil), input.Media...),
 			SessionKey: wantSessionKey,
 		},
 		Agent:        agent,
@@ -165,9 +199,10 @@ func (al *AgentLoop) ProcessScheduledWithIdentity(
 	})
 }
 
-func (al *AgentLoop) processDirectWithChannel(
+func (al *AgentLoop) processDirectInputWithChannel(
 	ctx context.Context,
-	content, sessionKey, channel, chatID string,
+	input DirectTurnInput,
+	sessionKey, channel, chatID string,
 	scheduled bool,
 	directOpts DirectTurnOptions,
 ) (string, error) {
@@ -185,7 +220,8 @@ func (al *AgentLoop) processDirectWithChannel(
 			ChatType: "direct",
 			SenderID: "cron",
 		},
-		Content:    content,
+		Content:    input.Content,
+		Media:      append([]string(nil), input.Media...),
 		SessionKey: sessionKey,
 	}
 	if scheduled {

@@ -594,6 +594,28 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	if sessions := agent.Sessions.ListSessions(); !slices.Equal(sessions, []string{sessionKey}) {
 		t.Fatalf("coding sessions = %v, want only %q", sessions, sessionKey)
 	}
+	mediaRef := "https://example.com/diagram.png"
+	if _, err := loop.ProcessDirectInputWithOptions(
+		t.Context(),
+		DirectTurnInput{Content: "inspect the diagram", Media: []string{mediaRef}},
+		sessionKey,
+		"coding",
+		layout.ThreadID(),
+		DirectTurnOptions{},
+	); err != nil {
+		t.Fatalf("ProcessDirectInputWithOptions() error = %v", err)
+	}
+	providerMessages = provider.Messages()
+	lastProviderMessage := providerMessages[len(providerMessages)-1]
+	if lastProviderMessage.Content != "inspect the diagram" ||
+		!slices.Equal(lastProviderMessage.Media, []string{mediaRef}) {
+		t.Fatalf("structured provider message = %#v", lastProviderMessage)
+	}
+	history := agent.Sessions.GetHistory(sessionKey)
+	if len(history) != 4 || history[2].Content != "inspect the diagram" ||
+		!slices.Equal(history[2].Media, []string{mediaRef}) {
+		t.Fatalf("structured coding history = %#v", history)
+	}
 }
 
 func TestCodingDirectResolvesEachAdmittedThread(t *testing.T) {

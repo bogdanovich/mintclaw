@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
@@ -25,7 +27,7 @@ var (
 // Compact may block; the controller always invokes them outside its mutation
 // coordinator. The control methods must target only this runtime's thread.
 type Runtime interface {
-	RunTurn(context.Context, string, func()) error
+	RunTurn(context.Context, frontend.TurnInput, func()) error
 	Interrupt(context.Context) error
 	HardCancel(context.Context) error
 	Compact(context.Context) error
@@ -51,6 +53,7 @@ type command struct {
 	kind    commandKind
 	ctx     context.Context
 	content string
+	input   frontend.TurnInput
 	reply   chan error
 }
 
@@ -120,11 +123,35 @@ func (c *Controller) TranscriptPage(
 	return pager.TranscriptPage(ctx, request)
 }
 
-func (c *Controller) Submit(ctx context.Context, prompt string) error {
-	if err := thread.ValidatePrompt(prompt); err != nil {
+func (c *Controller) Submit(ctx context.Context, input frontend.TurnInput) error {
+	if err := validateTurnInput(input); err != nil {
 		return err
 	}
-	return c.send(ctx, commandSubmit, prompt)
+	return c.sendInput(ctx, commandSubmit, "", input.Clone())
+}
+
+func validateTurnInput(input frontend.TurnInput) error {
+	if len(input.Attachments) == 0 {
+		return thread.ValidatePrompt(input.Text)
+	}
+	if len(input.Attachments) > frontend.MaxTurnAttachments {
+		return fmt.Errorf("coding turn: at most %d attachments are allowed", frontend.MaxTurnAttachments)
+	}
+	if !utf8.ValidString(input.Text) || len(input.Text) > thread.MaxPromptBytes {
+		return fmt.Errorf("coding thread transcript: prompt must be valid UTF-8 within %d bytes", thread.MaxPromptBytes)
+	}
+	for index, attachment := range input.Attachments {
+		if attachment.Path == "" {
+			return fmt.Errorf("coding turn: attachment %d path is required", index+1)
+		}
+		if !utf8.ValidString(attachment.Filename) || !utf8.ValidString(attachment.ContentType) {
+			return fmt.Errorf("coding turn: attachment %d metadata must be valid UTF-8", index+1)
+		}
+		if strings.ContainsRune(attachment.Filename, '\x00') || strings.ContainsRune(attachment.ContentType, '\x00') {
+			return fmt.Errorf("coding turn: attachment %d metadata contains NUL", index+1)
+		}
+	}
+	return nil
 }
 
 func (c *Controller) Interrupt(ctx context.Context) error {
@@ -166,11 +193,20 @@ func (c *Controller) Close(ctx context.Context) error {
 }
 
 func (c *Controller) send(ctx context.Context, kind commandKind, content string) error {
+	return c.sendInput(ctx, kind, content, frontend.TurnInput{})
+}
+
+func (c *Controller) sendInput(
+	ctx context.Context,
+	kind commandKind,
+	content string,
+	input frontend.TurnInput,
+) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	reply := make(chan error, 1)
-	request := command{kind: kind, ctx: ctx, content: content, reply: reply}
+	request := command{kind: kind, ctx: ctx, content: content, input: input, reply: reply}
 	select {
 	case c.commands <- request:
 	case <-c.done:
@@ -265,7 +301,7 @@ func (c *Controller) coordinate() {
 					operationCancel = cancel
 					ready := make(chan struct{})
 					var readyOnce sync.Once
-					go c.run(operationCtx, operationTurn, request.content, func() {
+					go c.run(operationCtx, operationTurn, request.input, func() {
 						readyOnce.Do(func() { close(ready) })
 					})
 					select {
@@ -310,7 +346,7 @@ func (c *Controller) coordinate() {
 					compacting = true
 					operationCtx, cancel := context.WithCancelCause(rootCtx)
 					operationCancel = cancel
-					go c.run(operationCtx, operationCompaction, "", nil)
+					go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil)
 					request.reply <- nil
 				}
 			case commandRename, commandArchive, commandUnarchive:
@@ -376,10 +412,10 @@ func (c *Controller) coordinate() {
 	}
 }
 
-func (c *Controller) run(ctx context.Context, kind operationKind, prompt string, ready func()) {
+func (c *Controller) run(ctx context.Context, kind operationKind, input frontend.TurnInput, ready func()) {
 	var err error
 	if kind == operationTurn {
-		err = c.runtime.RunTurn(ctx, prompt, ready)
+		err = c.runtime.RunTurn(ctx, input, ready)
 	} else {
 		err = c.runtime.Compact(ctx)
 	}
