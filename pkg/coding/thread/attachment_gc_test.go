@@ -478,6 +478,99 @@ func TestAttachmentGarbageCollectionEnforcesAuthorityBudgetsBeforeExpansion(t *t
 	}
 }
 
+func TestAttachmentGarbageCollectionRevalidatesAuthorityAfterCandidateHash(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := admitGCTestAttachment(t, store, lease, metadata, "orphan.txt", "orphan", now)
+	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{orphan.Ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	path := attachmentTestBlobPath(store, orphan)
+	old := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	hashed := make(chan struct{})
+	resume := make(chan struct{})
+	resumed := false
+	t.Cleanup(func() {
+		if !resumed {
+			close(resume)
+		}
+	})
+	store.beforeAttachmentGCDelete = func() {
+		close(hashed)
+		<-resume
+	}
+	type collection struct {
+		result AttachmentGCResult
+		err    error
+	}
+	completed := make(chan collection, 1)
+	go func() {
+		result, collectErr := store.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+			Before: now.Add(-24 * time.Hour), Delete: true,
+		})
+		completed <- collection{result: result, err: collectErr}
+	}()
+	select {
+	case <-hashed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("garbage collector did not reach the pre-delete barrier")
+	}
+	root, err := os.OpenRoot(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacedName := attachmentMaintenanceDirectory + "-replaced"
+	if err := root.Rename(attachmentMaintenanceDirectory, replacedName); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Mkdir(attachmentMaintenanceDirectory, 0o700); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacementStore, err := NewStore(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementLease, err := replacementStore.acquireAttachmentMaintenanceLease()
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(resume)
+	resumed = true
+	var outcome collection
+	select {
+	case outcome = <-completed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("garbage collector did not leave the pre-delete barrier")
+	}
+	if err := replacementLease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if outcome.err == nil || outcome.result.DeletedBlobs != 0 ||
+		IsCommittedAttachmentGCError(outcome.err) ||
+		!strings.Contains(outcome.err.Error(), "lock directory") {
+		t.Fatalf("maintenance-replacement sweep = %+v, %v", outcome.result, outcome.err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("candidate removed after maintenance replacement: %v", err)
+	}
+}
+
 func admitGCTestAttachment(
 	t *testing.T,
 	store *Store,

@@ -514,6 +514,32 @@ func (s *Store) sweepAttachmentGarbage(
 				fmt.Errorf("coding attachment garbage collection: candidate changed before deletion"),
 			)
 		}
+		if s.beforeAttachmentGCDelete != nil {
+			s.beforeAttachmentGCDelete()
+		}
+		if validationErr := session.validate(s.root); validationErr != nil {
+			return classifyAttachmentGCSweep(result, validationErr)
+		}
+		if validationErr := validatePinnedAttachmentDirectory(root, "blobs", blobs); validationErr != nil {
+			return classifyAttachmentGCSweep(result, validationErr)
+		}
+		if validationErr := validatePinnedAttachmentDirectory(blobs, "sha256", shaRoot); validationErr != nil {
+			return classifyAttachmentGCSweep(result, validationErr)
+		}
+		if validationErr := validatePinnedAttachmentDirectory(
+			shaRoot,
+			shardName,
+			shard,
+		); validationErr != nil {
+			return classifyAttachmentGCSweep(result, validationErr)
+		}
+		if validationErr := validateAttachmentGCCandidateIdentity(
+			shard,
+			candidate.SHA256,
+			info,
+		); validationErr != nil {
+			return classifyAttachmentGCSweep(result, validationErr)
+		}
 		if err := shard.Remove(candidate.SHA256); err != nil {
 			return classifyAttachmentGCSweep(result, err)
 		}
@@ -541,6 +567,19 @@ func (s *Store) sweepAttachmentGarbage(
 		return classifyAttachmentGCSweep(result, err)
 	}
 	return result, nil
+}
+
+func validateAttachmentGCCandidateIdentity(root *os.Root, name string, pinned os.FileInfo) error {
+	current, err := root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	if current.Mode()&os.ModeSymlink != 0 || !current.Mode().IsRegular() ||
+		!os.SameFile(pinned, current) || pinned.Size() != current.Size() ||
+		pinned.ModTime() != current.ModTime() {
+		return fmt.Errorf("coding attachment garbage collection: candidate changed before deletion")
+	}
+	return nil
 }
 
 func classifyAttachmentGCSweep(result AttachmentGCResult, err error) (AttachmentGCResult, error) {
