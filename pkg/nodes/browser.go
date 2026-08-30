@@ -24,6 +24,7 @@ var (
 	ErrBrowserHostBusy                = errors.New("companion browser profile is busy")
 	ErrBrowserHostNotFound            = errors.New("companion browser session not found")
 	ErrBrowserHostStale               = errors.New("companion browser state is stale")
+	ErrBrowserHostNavigationFailed    = errors.New("companion browser navigation failed")
 	ErrBrowserHostLost                = errors.New("companion browser session is lost")
 	ErrBrowserHostArtifactUnavailable = errors.New("companion browser artifact is unavailable")
 )

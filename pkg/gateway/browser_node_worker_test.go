@@ -47,6 +47,7 @@ type browserNodeTestHandler struct {
 	dynamicContextCatalog    bool
 	rotateElementRefs        bool
 	closeFailureCode         string
+	actFailureCode           string
 }
 
 type browserNodeRecordingFactory struct {
@@ -223,6 +224,22 @@ func (handler *browserNodeTestHandler) Invoke(
 			input.Action.Value = ephemeral.Value
 		}
 		handler.actInputs = append(handler.actInputs, input)
+		if handler.actFailureCode != "" {
+			now := time.Now().UnixNano()
+			handler.invocations[plan.InvocationID] = nodes.InvocationRecord{
+				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
+				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
+				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
+				AcceptedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				Failure: &nodes.InvocationFailure{
+					Code: handler.actFailureCode, Message: "browser navigation failed",
+				},
+			}
+			return nil, true, nodes.NewInvocationDispatchError(
+				handler.actFailureCode,
+				errors.New("private companion browser failure"),
+			)
+		}
 		if input.Action.Kind == "navigate" {
 			handler.currentURL, handler.currentOrigin = "https://example.com/", "https://example.com"
 		}
@@ -749,6 +766,60 @@ func TestNodeBrowserWorkerFreshObservationInvalidatesOlderActionCache(t *testing
 	handler.mu.Unlock()
 	if len(observeInputs) != 2 || observeInputs[1].SnapshotGeneration != 4 {
 		t.Fatalf("post-context observe inputs = %#v, want fresh remote generation 4", observeInputs)
+	}
+}
+
+func TestNodeBrowserWorkerPreservesVerifiedNavigationFailure(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_session_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	if _, err = worker.Observe(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	handler.mu.Lock()
+	handler.actFailureCode = nodes.InvocationDispatchBrowserNavigationFailed
+	handler.mu.Unlock()
+	request := browser.WorkerPreparedAction{
+		InvocationID: "invocation_navigation_failed",
+		Action:       browser.Action{Kind: browser.ActionNavigate, URL: "https://blocked.example/"},
+		Prepared: browser.PreparedAction{
+			Action: browser.Action{Kind: browser.ActionNavigate},
+			Effect: browser.EffectNavigation, CurrentOrigin: "about:blank",
+			ActionHash: strings.Repeat("a", 64),
+		},
+		DriverAction: browser.DriverAction{Kind: browser.DriverNavigate, URL: "https://blocked.example/"},
+	}
+	if err = worker.ExecutePrepared(t.Context(), request); !errors.Is(err, browser.ErrNavigationFailed) {
+		t.Fatalf("ExecutePrepared() error = %v, want navigation failed", err)
+	}
+	if err = worker.ExecutePrepared(t.Context(), request); !errors.Is(err, browser.ErrNavigationFailed) {
+		t.Fatalf("replayed ExecutePrepared() error = %v, want navigation failed", err)
+	}
+	status, statusErr := worker.Status(t.Context())
+	observation, observeErr := worker.Observe(t.Context())
+	handler.mu.Lock()
+	actCalls := len(handler.actInputs)
+	handler.mu.Unlock()
+	if statusErr != nil || status != browser.WorkerReady || observeErr != nil ||
+		observation.URL != "about:blank" || actCalls != 1 {
+		t.Fatalf(
+			"preserved worker status = %q, %v; observation = %#v, %v; actions = %d",
+			status, statusErr, observation, observeErr, actCalls,
+		)
 	}
 }
 

@@ -1091,6 +1091,39 @@ func TestRuntimeMarksAmbiguousOrInvalidBrowserActionUnknownWithoutReplay(t *test
 	}
 }
 
+func TestRuntimeRecordsVerifiedBrowserNavigationFailureWithoutReplay(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.navigateError = nodes.ErrBrowserHostNavigationFailed
+	runtime := newBrowserRuntimeFixture(t, host)
+	input, err := json.Marshal(nodes.BrowserActInput{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+		ActionInvocationID: "browser_action_navigation_failed_1",
+		Action:             browser.Action{Kind: browser.ActionNavigate, URL: "https://example.com/"},
+		Effect:             "navigation", CurrentOrigin: "about:blank",
+		PreparedActionHash:    strings.Repeat("b", 64),
+		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := testRuntimePlan(t, runtime, nodes.BrowserCommandAct, input)
+	if _, err = runtime.Invoke(t.Context(), plan); !errors.Is(err, nodes.ErrBrowserHostNavigationFailed) {
+		t.Fatalf("Invoke() error = %v, want verified navigation failure", err)
+	}
+	record, found := runtime.ledger.(*InvocationLedger).Get(plan.InvocationID)
+	if !found || record.State != nodes.InvocationFailed || record.Failure == nil ||
+		record.Failure.Code != nodes.InvocationDispatchBrowserNavigationFailed || host.navigated != 1 {
+		t.Fatalf("record = %#v, found %v, navigate calls %d", record, found, host.navigated)
+	}
+	if _, err = runtime.Invoke(t.Context(), plan); err == nil || host.navigated != 1 {
+		t.Fatalf("replay error = %v, navigate calls = %d", err, host.navigated)
+	}
+	failure, ok := boundedInvocationFailure(err)
+	if !ok || failure.Code != nodes.InvocationDispatchBrowserNavigationFailed {
+		t.Fatalf("replayed failure = %#v, classified = %v", failure, ok)
+	}
+}
+
 func TestRuntimeMarksAmbiguousBrowserContextMutationUnknownWithoutReplay(t *testing.T) {
 	host := browserRuntimeHostFixture()
 	host.contextError = nodes.ErrBrowserHostLost

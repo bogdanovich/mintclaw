@@ -77,6 +77,18 @@ func TestInvocationCommandFailurePreservesBrowserSessionNotFound(t *testing.T) {
 	}
 }
 
+func TestInvocationCommandFailurePreservesBrowserNavigationFailed(t *testing.T) {
+	err := newCommandFailure(
+		nodes.InvocationDispatchBrowserNavigationFailed,
+		"browser navigation failed",
+		nodes.ErrBrowserHostNavigationFailed,
+	)
+	code, message := invocationCommandFailure(err)
+	if code != nodes.InvocationDispatchBrowserNavigationFailed || message != "browser navigation failed" {
+		t.Fatalf("invocationCommandFailure() = %q, %q", code, message)
+	}
+}
+
 func TestClientAuthenticatesPinnedWSSIdentity(t *testing.T) {
 	registry, handler := testGatewayAdmission(t)
 	server := httptest.NewTLSServer(handler)

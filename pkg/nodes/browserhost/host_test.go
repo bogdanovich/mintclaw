@@ -2034,6 +2034,54 @@ func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.
 	}
 }
 
+func TestBrowserHostPreservesReadySessionAfterVerifiedNavigationFailure(t *testing.T) {
+	stable := browserworker.DriverObservation{
+		URL: "about:blank", Origin: "about:blank", Snapshot: "stable page",
+	}
+	worker := &fakeBrowserHostWorker{
+		executeErr: browserworker.ErrNavigationFailed,
+		observations: []browserworker.DriverObservation{
+			stable, stable, stable,
+		},
+	}
+	host := newTestBrowserHost(t, &fakeBrowserHostFactory{worker: worker})
+	if _, err := host.Open(t.Context(), browserHostOpenFixture()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
+	request := browserHostNavigateFixture()
+	request.SnapshotGeneration = 1
+	if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostNavigationFailed) {
+		t.Fatalf("Navigate() error = %v, want verified navigation failure", err)
+	}
+	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
+		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil || status.State != "ready" || status.Reason != "" || status.Recovery != "" {
+		t.Fatalf("preserved Status() = %#v, %v", status, err)
+	}
+	observed, err := host.Observe(t.Context(), BrowserHostObserveRequest{
+		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 2,
+		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil || observed.SnapshotGeneration != 2 || observed.Snapshot != stable.Snapshot {
+		t.Fatalf("post-failure Observe() = %#v, %v", observed, err)
+	}
+	if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) || len(worker.actions) != 1 {
+		t.Fatalf("replayed Navigate() error = %v, actions = %d", err, len(worker.actions))
+	}
+	session := host.sessions[request.SessionID]
+	session.mu.Lock()
+	reservedHash := session.actionInvocations[request.ActionInvocationID]
+	session.mu.Unlock()
+	if reservedHash != request.PreparedActionHash {
+		t.Fatalf("reserved invocation hash = %q", reservedHash)
+	}
+}
+
 func TestBrowserHostRejectsChangedOriginBeforeActionAcceptance(t *testing.T) {
 	worker := &fakeBrowserHostWorker{observations: []browserworker.DriverObservation{
 		{URL: "about:blank", Origin: "about:blank"},
