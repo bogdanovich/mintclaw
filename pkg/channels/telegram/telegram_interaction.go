@@ -32,6 +32,17 @@ type telegramInteractionReply struct {
 	shortID           string
 }
 
+func (r telegramInteractionReply) withNormalizedResponse(content string) telegramInteractionReply {
+	content = strings.TrimSpace(content)
+	if r.response != "" {
+		r.response = content
+	}
+	if r.responseCandidate != "" {
+		r.responseCandidate = content
+	}
+	return r
+}
+
 func (c *TelegramChannel) updateInteractionControls(
 	msg bus.OutboundMessage,
 	chatID int64,

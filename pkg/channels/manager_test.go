@@ -3064,6 +3064,53 @@ func TestSendWithRetry_ToolFeedbackLifecycleOwnedByManager(t *testing.T) {
 	}
 }
 
+func TestSendTextChunksWithRetryProjectsInteractionControlsOnlyOnce(t *testing.T) {
+	m := newTestManager()
+	ch := &resultToolFeedbackTestChannel{
+		toolFeedbackTestChannel: &toolFeedbackTestChannel{},
+		results: []DeliveryResult[bus.OutboundMessage]{
+			SuccessfulDelivery[bus.OutboundMessage]([]string{"message-1"}),
+			SuccessfulDelivery[bus.OutboundMessage]([]string{"message-2"}),
+		},
+	}
+	w := &channelWorker{ch: ch, limiter: rate.NewLimiter(rate.Inf, 1)}
+	msg := testOutboundMessage(bus.OutboundMessage{
+		Channel: "telegram", ChatID: "chat-1", ReplyToMessageID: "parent-1",
+		Content: strings.Repeat("x", 4500),
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+			InteractionID:       "question-1",
+			InteractionShortID:  "short-1",
+			Choices:             []string{"Yes", "No"},
+		},
+	})
+	chunks := splitOutboundMessageContent(msg, 4000)
+	if len(chunks) != 2 {
+		t.Fatalf("chunks = %d, want 2", len(chunks))
+	}
+
+	result := m.delivery.sendTextChunksWithRetry(t.Context(), "telegram", w, msg, chunks)
+	if !result.Delivered() || !slices.Equal(result.MessageIDs, []string{"message-1", "message-2"}) {
+		t.Fatalf("delivery result = %#v", result)
+	}
+	if len(ch.deliveryPayloads) != 2 {
+		t.Fatalf("delivery payloads = %d, want 2", len(ch.deliveryPayloads))
+	}
+	first := ch.deliveryPayloads[0][0]
+	second := ch.deliveryPayloads[1][0]
+	if !first.Metadata.IsQuestionPrompt() || first.ReplyToMessageID != "parent-1" {
+		t.Fatalf("first chunk lost prompt projection: %#v", first)
+	}
+	if second.Metadata.InteractionControls != "" || len(second.Metadata.Choices) != 0 ||
+		second.ReplyToMessageID != "" {
+		t.Fatalf("second chunk retained prompt projection: %#v", second)
+	}
+	if second.Metadata.InteractionID != "question-1" || second.Metadata.InteractionShortID != "short-1" {
+		t.Fatalf("second chunk lost durable identity: %#v", second.Metadata)
+	}
+}
+
 func TestSendWithRetry_ToolFeedbackPreservesDeliveryResult(t *testing.T) {
 	m := newTestManager()
 	enableTestToolFeedbackCoordinator(t, m, false)

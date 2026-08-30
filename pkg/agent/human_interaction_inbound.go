@@ -757,6 +757,9 @@ func terminalInteractionNotice(record interactions.Record) string {
 	if record.Status == interactions.StatusCancelled {
 		return "This interaction was already canceled."
 	}
+	if record.Status == interactions.StatusFailed {
+		return "This interaction failed before it could complete."
+	}
 	switch record.Outcome {
 	case interactions.OutcomeTimedOut:
 		if record.Kind == interactions.KindApproval && record.ApprovalConsumedAt == 0 {

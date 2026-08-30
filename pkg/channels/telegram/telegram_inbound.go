@@ -298,6 +298,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		}
 		if isMentioned {
 			content = c.stripBotMention(message, content)
+			interactionReply = interactionReply.withNormalizedResponse(content)
 		}
 		directedToBot := isMentioned || interactionDirected
 		respond, cleaned := c.ShouldRespondInGroupForTopic(directedToBot, content, topicID)

@@ -2390,6 +2390,41 @@ func TestDeliverText_PartialInteractionRetryDoesNotCreateSecondPrompt(t *testing
 	))
 }
 
+func TestDeliverText_AmbiguousInteractionAttemptStripsControlsFromUntouchedTail(t *testing.T) {
+	shortID := "abc12345"
+	caller := &stubCaller{callFn: func(
+		context.Context,
+		string,
+		*ta.RequestData,
+	) (*ta.Response, error) {
+		return nil, errors.New("connection reset")
+	}}
+	ch := newTestChannel(t, caller)
+	message := bus.OutboundMessage{
+		ChatID: "12345", ReplyToMessageID: "88",
+		Content: strings.Repeat("x", telegramTextLimit*2) + "\n\n`/answer " + shortID + " value`\n`/stop`",
+		Context: bus.InboundContext{SenderID: "15"},
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+			InteractionShortID:  shortID,
+			Choices:             []string{"generate"},
+		},
+	}
+
+	result := ch.DeliverText(t.Context(), []bus.OutboundMessage{message})
+	require.Error(t, result.Err)
+	assert.Equal(t, channels.DeliveryAcceptanceUnknown, result.Acceptance)
+	assert.Empty(t, result.MessageIDs)
+	require.NotEmpty(t, result.Remaining)
+	for _, remaining := range result.Remaining {
+		assert.Empty(t, remaining.ReplyToMessageID)
+		assert.Empty(t, remaining.Metadata.InteractionControls)
+		assert.Empty(t, remaining.Metadata.Choices)
+		assert.Nil(t, telegramInteractionReplyMarkup(remaining))
+	}
+}
+
 func TestSend_RichFallbackSplitsAgainstLegacyHTMLPayload(t *testing.T) {
 	caller := &stubCaller{
 		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
@@ -3722,6 +3757,51 @@ func TestHandleMessage_FooterlessBotReplyReachesDurableGroupValidation(t *testin
 		)
 	case <-time.After(time.Second):
 		t.Fatal("footerless bot reply was filtered before durable validation")
+	}
+}
+
+func TestHandleMessage_FooterlessReplyNormalizesOwnBotMentionOnly(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel(
+			"telegram",
+			nil,
+			messageBus,
+			[]string{"15"},
+			channels.WithGroupTrigger(config.GroupTriggerConfig{MentionOnly: true}),
+		),
+		bot: newTestTelegramBot(t, "mintclaw_bot"), ctx: context.Background(),
+		chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
+	}
+	text := "@mintclaw_bot @alice allow once"
+	msg := &telego.Message{
+		Text: text, MessageID: 24,
+		Entities: []telego.MessageEntity{
+			{Type: telego.EntityTypeMention, Offset: 0, Length: len("@mintclaw_bot")},
+			{
+				Type:   telego.EntityTypeMention,
+				Offset: len("@mintclaw_bot "),
+				Length: len("@alice"),
+			},
+		},
+		Chat: telego.Chat{ID: -100123, Type: "supergroup"},
+		From: &telego.User{ID: 15, FirstName: "Eve"},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101, Text: "Approve this operation?",
+			From: &telego.User{ID: 1, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}
+
+	require.NoError(t, ch.handleMessage(context.Background(), msg))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(
+			t,
+			"@alice allow once",
+			inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+		)
+	case <-time.After(time.Second):
+		t.Fatal("mentioned footerless reply was filtered")
 	}
 }
 

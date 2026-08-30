@@ -64,14 +64,13 @@ func (c *TelegramChannel) DeliverText(
 	}
 	var remaining []bus.OutboundMessage
 	if result.Remaining != nil {
+		stripPromptProjection := len(result.MessageIDs) > 0 || result.MayHaveDelivered()
 		remaining = make([]bus.OutboundMessage, 0, len(result.Remaining))
 		for _, content := range result.Remaining {
 			pending := msg
 			pending.Content = content
-			if len(result.MessageIDs) > 0 {
-				pending.ReplyToMessageID = ""
-				pending.Metadata.InteractionControls = ""
-				pending.Metadata.Choices = nil
+			if stripPromptProjection {
+				pending = pending.WithoutInteractionPromptProjection()
 			}
 			remaining = append(remaining, pending)
 		}

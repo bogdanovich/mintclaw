@@ -4553,6 +4553,14 @@ func TestTerminalInteractionNoticeUsesDurableOutcome(t *testing.T) {
 			},
 			want: "already canceled",
 		},
+		{
+			name: "failed status",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Status: interactions.StatusFailed,
+				FailureCode: "agent_unavailable",
+			},
+			want: "failed before it could complete",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -4643,6 +4651,86 @@ func TestExpiredProjectedApprovalPublishesDurableStatus(t *testing.T) {
 	stored, _ := registry.Get(record.ID)
 	if stored.Outcome != interactions.OutcomeTimedOut || stored.ApprovalConsumedAt != 0 {
 		t.Fatalf("expired projected approval was mutated: %#v", stored)
+	}
+}
+
+func TestFailedProjectedApprovalPublishesDurableStatus(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Prompt.Kind = interactions.KindApproval
+	request.Origin.ToolName = "browser_act"
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: request.Route.Channel, ChatID: request.Route.ChatID, SenderID: request.Route.SenderID,
+	}
+	argumentHash, err := interactions.HashArguments(agent.Workspace, map[string]any{"action": "delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Origin.ArgumentHash = argumentHash
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		ApprovalAction: "Delete an external resource", ExpiresAt: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		al.outboundCoordinator(),
+		agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		[]string{"7717"},
+	)
+	record, err = registry.Fail(record.ID, record.Revision, "agent_unavailable", "agent stopped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	answer := bus.InboundMessage{
+		Content: "Allow once", SpoolID: "spool-failed-projected-approval",
+		Context: inboundContextForInteraction(request.Route),
+	}
+	answer.Context.MessageID = "failed-projected-answer"
+	answer.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
+		bus.InboundMetadataKeyInteractionResponse:          "Allow once",
+		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
+		bus.InboundMetadataKeyInteractionResponseMessageID: "7717",
+	}
+
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), answer, target) {
+		t.Fatal("failed projected approval escaped interaction protocol routing")
+	}
+	select {
+	case synced := <-manager.synced:
+		if !synced.Metadata.RemovesInteractionControls() || synced.ReplyToMessageID != "7717" {
+			t.Fatalf("failed approval control sync = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("failed projected approval did not retry terminal control cleanup")
+	}
+	select {
+	case notice := <-manager.sent:
+		if !strings.Contains(notice.Content, "failed before it could complete") {
+			t.Fatalf("failed approval notice = %#v", notice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("failed projected approval did not publish durable status")
+	}
+	stored, _ := registry.Get(record.ID)
+	if stored.Status != interactions.StatusFailed || stored.FailureCode != "agent_unavailable" ||
+		stored.Answer != nil {
+		t.Fatalf("failed projected approval was mutated: %#v", stored)
 	}
 }
 
