@@ -279,6 +279,17 @@ func (m OutboundMetadata) RemovesInteractionControls() bool {
 		strings.EqualFold(m.InteractionControls, OutboundInteractionControlsRemove)
 }
 
+// WithoutInteractionPromptProjection returns a copy suitable for every chunk
+// after the first possibly accepted chunk in one outbound prompt sequence.
+// Durable interaction identity remains attached, but transport UI ownership
+// and reply targeting must never be cloned onto a later chunk.
+func (m OutboundMessage) WithoutInteractionPromptProjection() OutboundMessage {
+	m.ReplyToMessageID = ""
+	m.Metadata.InteractionControls = ""
+	m.Metadata.Choices = nil
+	return m
+}
+
 func (m OutboundMetadata) WithInteractionChoices(choices []string) OutboundMetadata {
 	m.Choices = normalizeOutboundInteractionChoices(choices)
 	return m

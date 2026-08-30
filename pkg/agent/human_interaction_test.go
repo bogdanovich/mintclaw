@@ -705,6 +705,22 @@ func seedTestInteractionPromptOutcome(
 	retryAfter ...time.Time,
 ) outbox.Intent {
 	t.Helper()
+	return seedTestInteractionPromptOutcomeWithMessages(
+		t, coordinator, workspace, record, status, attempts, nil, retryAfter...,
+	)
+}
+
+func seedTestInteractionPromptOutcomeWithMessages(
+	t *testing.T,
+	coordinator *outbox.Coordinator,
+	workspace string,
+	record interactions.Record,
+	status outbox.Status,
+	attempts int,
+	platformMessageIDs []string,
+	retryAfter ...time.Time,
+) outbox.Intent {
+	t.Helper()
 	message := interactionPromptMessage(record)
 	message.Content = renderInteractionPrompt(record)
 	for attempt := range attempts {
@@ -725,7 +741,10 @@ func seedTestInteractionPromptOutcome(
 		if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
 			t.Fatal(err)
 		}
-		outcome := outbox.Outcome{Error: "test delivery outcome"}
+		outcome := outbox.Outcome{
+			PlatformMessageIDs: append([]string(nil), platformMessageIDs...),
+			Error:              "test delivery outcome",
+		}
 		if len(retryAfter) > 0 && attempt == attempts-1 {
 			outcome.RetryAfter = retryAfter[0]
 		}
@@ -734,7 +753,9 @@ func seedTestInteractionPromptOutcome(
 		} else if status == outbox.StatusAmbiguous {
 			err = coordinator.MarkAmbiguous(admission.Intent.ID, outcome)
 		} else {
-			err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{})
+			err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{
+				PlatformMessageIDs: append([]string(nil), platformMessageIDs...),
+			})
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -745,6 +766,74 @@ func seedTestInteractionPromptOutcome(
 		t.Fatal(err)
 	}
 	return intent
+}
+
+func TestSyncInteractionControlsUsesDeliveredPromptMessageID(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.SetChannelManager(manager)
+	coordinator := openTestInteractionOutbox(t, al)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	argumentHash, err := interactions.HashArguments(agent.Workspace, map[string]any{"target": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindApproval,
+		Route: interactions.Route{
+			AgentID: agent.ID, SessionKey: "session-prompt-id", RouteSessionKey: "route-prompt-id",
+			Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-prompt-id", ToolCallID: "call-prompt-id", ToolName: "protected_tool",
+			ArgumentHash: argumentHash,
+			ExecutionContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", MessageID: "origin-1",
+			},
+		},
+		PromptSummary: "Run protected action", ApprovalAction: "Run protected action",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	admission, err := coordinator.AdmitMessage(
+		agent.Workspace,
+		interactionPromptDeliveryIdentity(record),
+		message,
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = (%#v, %v)", admission, err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{
+		PlatformMessageIDs: []string{"7716"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	al.syncInteractionControls(agent.Workspace, record, bus.OutboundInteractionControlsRemove)
+	select {
+	case synced := <-manager.synced:
+		if synced.ReplyToMessageID != "7716" || synced.Metadata.InteractionShortID != record.ShortID ||
+			!synced.Metadata.RemovesInteractionControls() {
+			t.Fatalf("synced interaction controls = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("interaction controls were not synchronized")
+	}
 }
 
 func testInteractionFinalIdentity(record interactions.Record) outbox.Identity {
@@ -2658,7 +2747,15 @@ func TestRecoveryDoesNotResendPromptAfterAmbiguousCrashWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	record = bindTestInteractionPrompt(t, registry, record)
-	seedTestInteractionPromptOutcome(t, coordinator, agent.Workspace, record, outbox.StatusAmbiguous, 1)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		coordinator,
+		agent.Workspace,
+		record,
+		outbox.StatusAmbiguous,
+		1,
+		[]string{"", "7716"},
+	)
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
@@ -2667,6 +2764,14 @@ func TestRecoveryDoesNotResendPromptAfterAmbiguousCrashWindow(t *testing.T) {
 	if record.Status != interactions.StatusResolved ||
 		record.Outcome != interactions.OutcomeDeliveryUnknown {
 		t.Fatalf("record after ambiguous prompt recovery = %#v", record)
+	}
+	select {
+	case synced := <-manager.synced:
+		if synced.ReplyToMessageID != "7716" || !synced.Metadata.RemovesInteractionControls() {
+			t.Fatalf("ambiguous prompt control cleanup = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ambiguous prompt recovery did not clear its confirmed Telegram controls")
 	}
 	select {
 	case outbound := <-manager.sent:
@@ -4321,6 +4426,15 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 				t.Fatal(err)
 			}
 			record = markTestInteractionWaiting(t, registry, record)
+			seedTestInteractionPromptOutcomeWithMessages(
+				t,
+				al.outboundCoordinator(),
+				agent.Workspace,
+				record,
+				outbox.StatusDelivered,
+				1,
+				[]string{"7716"},
+			)
 			if test.consume {
 				record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
 					Text: "allow_once", MessageID: "answer-recovery", ReceivedAt: time.Now().UnixMilli(),
@@ -4348,7 +4462,8 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 				t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
 			}
 			resolved, _ := registry.Get(record.ID)
-			if resolved.Status != interactions.StatusResolved || tool.executions != 0 {
+			if resolved.Status != interactions.StatusResolved || resolved.Outcome != test.wantOutcome ||
+				tool.executions != 0 {
 				t.Fatalf("recovered approval = %#v, executions=%d", resolved, tool.executions)
 			}
 			_, resultIndex := interactionToolPairIndexes(
@@ -4361,7 +4476,277 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 			if !strings.Contains(result.Content, string(test.wantOutcome)) {
 				t.Fatalf("recovery tool result = %q", result.Content)
 			}
+			if test.wantOutcome == interactions.OutcomeTimedOut &&
+				!strings.Contains(result.Content, "The protected tool was not executed") {
+				t.Fatalf("timed-out approval result = %q", result.Content)
+			}
+			if test.consume {
+				for len(manager.sent) > 0 {
+					<-manager.sent
+				}
+				target := &inboundDispatchTarget{
+					Agent: agent, SessionKey: sessionKey,
+					Allocation: session.Allocation{RouteScopeKey: record.Route.RouteSessionKey},
+				}
+				repeated := bus.InboundMessage{
+					Content: "Allow once", SpoolID: "spool-repeated-unknown-approval",
+					Context: inboundContextForInteraction(record.Route),
+				}
+				repeated.Context.MessageID = "repeated-unknown-approval"
+				repeated.Context.Raw = map[string]string{
+					bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
+					bus.InboundMetadataKeyInteractionResponse:          "Allow once",
+					bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
+					bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+				}
+				if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(
+					t.Context(), repeated, target,
+				) {
+					t.Fatal("repeated unknown approval escaped interaction routing")
+				}
+				select {
+				case notice := <-manager.sent:
+					if !strings.Contains(notice.Content, "unknown delivery outcome") ||
+						!strings.Contains(notice.Content, "was not retried") {
+						t.Fatalf("repeated unknown approval notice = %#v", notice)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("repeated unknown approval did not publish its durable outcome")
+				}
+			}
 		})
+	}
+}
+
+func TestTerminalInteractionNoticeUsesDurableOutcome(t *testing.T) {
+	tests := []struct {
+		name   string
+		record interactions.Record
+		want   string
+	}{
+		{
+			name: "approval expired before execution",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Outcome: interactions.OutcomeTimedOut,
+			},
+			want: "expired before execution",
+		},
+		{
+			name: "approval consumed before unknown result",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Outcome: interactions.OutcomeDeliveryUnknown,
+				ApprovalConsumedAt: 1,
+			},
+			want: "unknown delivery outcome",
+		},
+		{
+			name: "denied",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Outcome: interactions.OutcomeDenied,
+			},
+			want: "already denied",
+		},
+		{
+			name: "canceled status",
+			record: interactions.Record{
+				Kind: interactions.KindQuestion, Status: interactions.StatusCancelled,
+			},
+			want: "already canceled",
+		},
+		{
+			name: "failed status",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Status: interactions.StatusFailed,
+				FailureCode: "agent_unavailable",
+			},
+			want: "failed before it could complete",
+		},
+		{
+			name: "failed status preserves pre-execution timeout",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Status: interactions.StatusFailed,
+				Outcome: interactions.OutcomeTimedOut,
+			},
+			want: "expired before execution",
+		},
+		{
+			name: "failed status preserves delivery uncertainty",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Status: interactions.StatusFailed,
+				Outcome: interactions.OutcomeDeliveryUnknown, ApprovalConsumedAt: 1,
+			},
+			want: "unknown delivery outcome",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := terminalInteractionNotice(test.record); !strings.Contains(got, test.want) {
+				t.Fatalf("terminalInteractionNotice() = %q, want substring %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestExpiredProjectedApprovalPublishesDurableStatus(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	setTestMessageBus(al, tracker)
+
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Prompt.Kind = interactions.KindApproval
+	request.Origin.ToolName = "browser_act"
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: request.Route.Channel, ChatID: request.Route.ChatID, SenderID: request.Route.SenderID,
+	}
+	argumentHash, err := interactions.HashArguments(agent.Workspace, map[string]any{"action": "delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Origin.ArgumentHash = argumentHash
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		ApprovalAction: "Delete an external resource", ExpiresAt: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		al.outboundCoordinator(),
+		agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		[]string{"7716"},
+	)
+	claimed, err := registry.ClaimOverdue(time.Now().Add(2 * time.Minute))
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimOverdue() = (%#v, %v)", claimed, err)
+	}
+	record = claimed[0]
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	answer := bus.InboundMessage{
+		Content: "Allow once", SpoolID: "spool-expired-projected-approval",
+		Context: inboundContextForInteraction(request.Route),
+	}
+	answer.Context.MessageID = "expired-projected-answer"
+	answer.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
+		bus.InboundMetadataKeyInteractionResponse:          "Allow once",
+		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
+		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	}
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), answer, target) {
+		t.Fatal("expired projected approval escaped interaction protocol routing")
+	}
+	select {
+	case synced := <-manager.synced:
+		if !synced.Metadata.RemovesInteractionControls() || synced.ReplyToMessageID != "7716" {
+			t.Fatalf("expired approval control sync = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired projected approval did not retry terminal control cleanup")
+	}
+	select {
+	case notice := <-manager.sent:
+		if !strings.Contains(notice.Content, "expired before execution") ||
+			!strings.Contains(notice.Content, "was not executed") {
+			t.Fatalf("expired approval notice = %#v", notice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired projected approval did not publish durable status")
+	}
+	stored, _ := registry.Get(record.ID)
+	if stored.Outcome != interactions.OutcomeTimedOut || stored.ApprovalConsumedAt != 0 {
+		t.Fatalf("expired projected approval was mutated: %#v", stored)
+	}
+}
+
+func TestFailedProjectedApprovalPublishesDurableStatus(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Prompt.Kind = interactions.KindApproval
+	request.Origin.ToolName = "browser_act"
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: request.Route.Channel, ChatID: request.Route.ChatID, SenderID: request.Route.SenderID,
+	}
+	argumentHash, err := interactions.HashArguments(agent.Workspace, map[string]any{"action": "delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Origin.ArgumentHash = argumentHash
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		ApprovalAction: "Delete an external resource", ExpiresAt: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		al.outboundCoordinator(),
+		agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		[]string{"7717"},
+	)
+	record, err = registry.Fail(record.ID, record.Revision, "agent_unavailable", "agent stopped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	answer := bus.InboundMessage{
+		Content: "Allow once", SpoolID: "spool-failed-projected-approval",
+		Context: inboundContextForInteraction(request.Route),
+	}
+	answer.Context.MessageID = "failed-projected-answer"
+	answer.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
+		bus.InboundMetadataKeyInteractionResponse:          "Allow once",
+		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
+		bus.InboundMetadataKeyInteractionResponseMessageID: "7717",
+	}
+
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), answer, target) {
+		t.Fatal("failed projected approval escaped interaction protocol routing")
+	}
+	select {
+	case synced := <-manager.synced:
+		if !synced.Metadata.RemovesInteractionControls() || synced.ReplyToMessageID != "7717" {
+			t.Fatalf("failed approval control sync = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("failed projected approval did not retry terminal control cleanup")
+	}
+	select {
+	case notice := <-manager.sent:
+		if !strings.Contains(notice.Content, "failed before it could complete") {
+			t.Fatalf("failed approval notice = %#v", notice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("failed projected approval did not publish durable status")
+	}
+	stored, _ := registry.Get(record.ID)
+	if stored.Status != interactions.StatusFailed || stored.FailureCode != "agent_unavailable" ||
+		stored.Answer != nil {
+		t.Fatalf("failed projected approval was mutated: %#v", stored)
 	}
 }
 
@@ -4916,6 +5301,12 @@ func TestExpiredAllowOnceNeverExecutesProtectedTool(t *testing.T) {
 				resolved.Status != interactions.StatusResolved ||
 				resolved.Outcome != interactions.OutcomeTimedOut {
 				t.Fatalf("expired approval = %#v, executions=%d", resolved, tool.executions)
+			}
+			history := agent.Sessions.GetHistory(sessionKey)
+			_, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+			if resultIndex < 0 ||
+				!strings.Contains(strings.ToLower(history[resultIndex].Content), "protected tool was not executed") {
+				t.Fatalf("expired approval tool result = %#v", history)
 			}
 		})
 	}
@@ -5513,6 +5904,7 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 			defer cleanup()
+			installInteractionChannelManager(t, al, newInteractionChannelManager())
 			tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
 			setTestMessageBus(al, tracker)
 			sessionKey := "session-answer-admission-contention-" + test.name
@@ -5527,6 +5919,17 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 				t.Fatal(err)
 			}
 			record = bindTestInteractionPrompt(t, registry, record)
+			if test.projected {
+				seedTestInteractionPromptOutcomeWithMessages(
+					t,
+					al.outboundCoordinator(),
+					agent.Workspace,
+					record,
+					outbox.StatusDelivered,
+					1,
+					[]string{"7716"},
+				)
+			}
 			if test.markWaiting {
 				record, _ = registry.MarkWaiting(record.ID, record.Revision)
 			}
@@ -5551,9 +5954,10 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 			if test.projected {
 				contender.Content = "Allow once"
 				contender.Context.Raw = map[string]string{
-					bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
-					bus.InboundMetadataKeyInteractionResponse: "Allow once",
-					bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+					bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
+					bus.InboundMetadataKeyInteractionResponse:          "Allow once",
+					bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
+					bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
 				}
 				if test.unresolved {
 					delete(contender.Context.Raw, bus.InboundMetadataKeyInteractionChoice)
@@ -5692,6 +6096,448 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 	case outbound := <-tracker.OutboundChan():
 		t.Fatalf("retained replay produced a notice: %#v", outbound)
 	default:
+	}
+}
+
+func TestProjectedAnswerMatchesDurablePromptAcrossRetainedShortIDCollision(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-prompt-identity-collision"
+
+	create := func(id, toolCallID, platformMessageID string) interactions.Record {
+		record, err := registry.Create(interactions.CreateRequest{
+			ID: id, Kind: request.Prompt.Kind, Route: request.Route,
+			Origin: interactions.Origin{
+				TurnID: request.Origin.TurnID, ToolCallID: toolCallID,
+				ToolName: request.Origin.ToolName,
+			},
+			Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record = markTestInteractionWaiting(t, registry, record)
+		seedTestInteractionPromptOutcomeWithMessages(
+			t,
+			al.outboundCoordinator(),
+			agent.Workspace,
+			record,
+			outbox.StatusDelivered,
+			1,
+			[]string{platformMessageID},
+		)
+		return record
+	}
+
+	first := create("interaction_deadbeef11111111", "call-prompt-old", "100")
+	first, err := registry.ClaimAnswer(first.ID, first.Revision, interactions.Answer{
+		Text: "old", Values: map[string]string{"deploy_mode": "old"}, MessageID: "old-answer",
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err = registry.MarkResuming(first.ID, first.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = registry.Resolve(first.ID, first.Revision); err != nil {
+		t.Fatal(err)
+	}
+	second := create("interaction_deadbeef22222222", "call-prompt-new", "200")
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	callback := func(messageID string) bus.InboundMessage {
+		msg := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
+		msg.Context.MessageID = "callback-" + messageID
+		msg.Context.Raw = map[string]string{
+			bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
+			bus.InboundMetadataKeyInteractionResponse:          "Allow once",
+			bus.InboundMetadataKeyInteractionShortID:           second.ShortID,
+			bus.InboundMetadataKeyInteractionResponseMessageID: messageID,
+		}
+		return msg
+	}
+
+	classification := al.classifyProjectedInteractionAnswer(callback("200"), target, second.ShortID)
+	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != second.ID {
+		t.Fatalf("new prompt classification = %#v", classification)
+	}
+	classification = al.classifyProjectedInteractionAnswer(callback("100"), target, second.ShortID)
+	if classification.Disposition != explicitInteractionAnswerDuplicate || classification.Record.ID != first.ID {
+		t.Fatalf("retained old prompt classification = %#v", classification)
+	}
+	if err = registry.Prune(time.Now().Add(8 * 24 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	classification = al.classifyProjectedInteractionAnswer(callback("100"), target, second.ShortID)
+	if classification.Disposition == explicitInteractionAnswerActive {
+		t.Fatalf("pruned old prompt authorized the new interaction: %#v", classification)
+	}
+	classification = al.classifyProjectedInteractionAnswer(callback("200"), target, second.ShortID)
+	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != second.ID {
+		t.Fatalf("new prompt after old record pruning = %#v", classification)
+	}
+}
+
+func TestProjectedAnswerRetriesUntilPromptReceiptIsDurable(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	coordinator := installInteractionChannelManager(t, al, newInteractionChannelManager())
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-prompt-receipt-race"
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	admission, err := coordinator.AdmitMessage(
+		agent.Workspace,
+		interactionPromptDeliveryIdentity(record),
+		message,
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = (%#v, %v)", admission, err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	callback := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
+	callback.Context.MessageID = "callback-fast"
+	callback.Content = "Interaction option 1"
+	callback.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionOptionIndex:       "0",
+		bus.InboundMetadataKeyInteractionResponseError:     "unresolved callback option",
+		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
+		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	}
+
+	classification := al.classifyProjectedInteractionAnswer(callback, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerRetry || classification.Record.ID != record.ID {
+		t.Fatalf("attempting prompt classification = %#v", classification)
+	}
+	if err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{
+		PlatformMessageIDs: []string{"7716"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classification = al.classifyProjectedInteractionAnswer(callback, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != record.ID {
+		t.Fatalf("delivered prompt replay classification = %#v", classification)
+	}
+	callback = resolveProjectedInteractionOption(classification.Record, callback)
+	if callback.Context.Raw[bus.InboundMetadataKeyInteractionResponseError] != "" ||
+		callback.Context.Raw[bus.InboundMetadataKeyInteractionResponse] != "Canary" ||
+		callback.Content != "Canary" {
+		t.Fatalf("replayed option callback = %#v", callback)
+	}
+}
+
+func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-ordinary-reply-identity"
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		al.outboundCoordinator(),
+		agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		[]string{"7716"},
+	)
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	reply := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
+	reply.Context.MessageID = "reply-1"
+	reply.Context.ReplyToMessageID = "7716"
+	reply.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	}
+
+	classification := al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != record.ID {
+		t.Fatalf("ordinary Telegram reply classification = %#v", classification)
+	}
+
+	wrongPrompt := reply
+	wrongPrompt.SpoolID = "spool-ordinary-reply-wrong-prompt"
+	wrongPrompt.Context.MessageID = "reply-old-prompt"
+	wrongPrompt.Context.ReplyToMessageID = "7715"
+	classification = al.classifyProjectedInteractionAnswer(wrongPrompt, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerWrongID {
+		t.Fatalf("old Telegram prompt classification = %#v", classification)
+	}
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), wrongPrompt, target) {
+		t.Fatal("old Telegram prompt reply escaped interaction protocol routing")
+	}
+	select {
+	case synced := <-manager.synced:
+		t.Fatalf("wrong prompt identity triggered control sync: %#v", synced)
+	default:
+	}
+
+	unauthorized := reply
+	unauthorized.SpoolID = "spool-ordinary-reply-unauthorized"
+	unauthorized.Context.MessageID = "reply-unauthorized"
+	unauthorized.Context.SenderID = "other-sender"
+	classification = al.classifyProjectedInteractionAnswer(unauthorized, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerUnauthorized {
+		t.Fatalf("unauthorized Telegram reply classification = %#v", classification)
+	}
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), unauthorized, target) {
+		t.Fatal("unauthorized Telegram reply escaped interaction protocol routing")
+	}
+	select {
+	case synced := <-manager.synced:
+		t.Fatalf("unauthorized prompt reply triggered control sync: %#v", synced)
+	default:
+	}
+}
+
+func TestProjectedAnswerMatchesEveryDeliveredTelegramPromptChunk(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-split-reply-identity"
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	promptMessageIDs := []string{"9100", "9101", "9102"}
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		al.outboundCoordinator(),
+		agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		promptMessageIDs,
+	)
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+
+	for index, promptMessageID := range promptMessageIDs {
+		t.Run(promptMessageID, func(t *testing.T) {
+			reply := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
+			reply.Context.MessageID = fmt.Sprintf("reply-%d", index)
+			reply.Context.ReplyToMessageID = promptMessageID
+			reply.Context.Raw = map[string]string{
+				bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+			}
+			shortID := ""
+			if index == len(promptMessageIDs)-1 {
+				shortID = record.ShortID
+				reply.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = shortID
+			}
+
+			classification := al.classifyProjectedInteractionAnswer(reply, target, shortID)
+			if classification.Disposition != explicitInteractionAnswerActive ||
+				classification.Record.ID != record.ID {
+				t.Fatalf("prompt chunk %s classification = %#v", promptMessageID, classification)
+			}
+		})
+	}
+
+	wrongPrompt := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
+	wrongPrompt.Context.MessageID = "reply-unrelated"
+	wrongPrompt.Context.ReplyToMessageID = "9199"
+	wrongPrompt.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+	}
+	classification := al.classifyProjectedInteractionAnswer(wrongPrompt, target, "")
+	if classification.Disposition != explicitInteractionAnswerWrongID || classification.Record.ID != record.ID {
+		t.Fatalf("unrelated prompt classification = %#v", classification)
+	}
+}
+
+func TestUnmatchedFooterlessGroupCandidateFailsClosed(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: "session-unmatched-group-candidate",
+		Allocation: session.Allocation{RouteScopeKey: "session-unmatched-group-candidate"},
+	}
+	msg := bus.InboundMessage{Context: bus.InboundContext{
+		Channel: "telegram", ChatID: "group-1", ChatType: "group",
+		SenderID: "user-1", MessageID: "reply-1", ReplyToMessageID: "unrelated-bot-message",
+		Raw: map[string]string{
+			"is_group": "true",
+			bus.InboundMetadataKeyInteractionResponseCandidate: "historical follow-up",
+		},
+	}}
+
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), msg, target) {
+		t.Fatal("unmatched group candidate escaped fail-closed interaction routing")
+	}
+}
+
+func TestProjectedMultiQuestionReplyRequiresDurablePromptIdentity(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-multi-reply-identity"
+	questions := append([]interactions.Question(nil), request.Prompt.Questions...)
+	questions = append(questions, interactions.Question{ID: "test_mode", Question: "Which mode?"})
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		al.outboundCoordinator(),
+		agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		[]string{"8800"},
+	)
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	reply := bus.InboundMessage{Content: "test_region: eu\ntest_mode: safe"}
+	reply.Context = inboundContextForInteraction(request.Route)
+	reply.Context.MessageID = "multi-reply"
+	reply.Context.ReplyToMessageID = "8800"
+	reply.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionResponse: reply.Content,
+		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	}
+
+	classification := al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != record.ID {
+		t.Fatalf("confirmed multi-question prompt classification = %#v", classification)
+	}
+	reply.Context.ReplyToMessageID = "8799"
+	classification = al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerWrongID {
+		t.Fatalf("other multi-question prompt classification = %#v", classification)
+	}
+}
+
+func TestStaleCancelCallbackCannotCancelNewerShortIDCollision(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	coordinator := installInteractionChannelManager(t, al, manager)
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	setTestMessageBus(al, tracker)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-stale-cancel-collision"
+
+	create := func(id, toolCallID, platformMessageID string) interactions.Record {
+		record, err := registry.Create(interactions.CreateRequest{
+			ID: id, Kind: request.Prompt.Kind, Route: request.Route,
+			Origin: interactions.Origin{
+				TurnID: request.Origin.TurnID, ToolCallID: toolCallID,
+				ToolName: request.Origin.ToolName,
+			},
+			Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record = markTestInteractionWaiting(t, registry, record)
+		seedTestInteractionPromptOutcomeWithMessages(
+			t,
+			coordinator,
+			agent.Workspace,
+			record,
+			outbox.StatusDelivered,
+			1,
+			[]string{platformMessageID},
+		)
+		return record
+	}
+
+	old := create("interaction_deadbeef11111111", "call-stale-cancel", "100")
+	if _, err := registry.Cancel(old.ID, old.Revision, "test_cancel"); err != nil {
+		t.Fatal(err)
+	}
+	current := create("interaction_deadbeef22222222", "call-current-cancel", "200")
+	callback := bus.InboundMessage{
+		Content: bus.InboundInteractionCancelLabel, SpoolID: "spool-stale-cancel",
+		Context: inboundContextForInteraction(request.Route),
+	}
+	callback.Context.MessageID = "callback-stale-cancel"
+	callback.Context.ReplyToMessageID = "100"
+	callback.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceCancel,
+		bus.InboundMetadataKeyInteractionShortID:           old.ShortID,
+		bus.InboundMetadataKeyInteractionResponseMessageID: "100",
+	}
+
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), callback)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		acked, _ := tracker.counts()
+		if acked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stale Cancel callback was not settled")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	current, _ = registry.Get(current.ID)
+	if current.Status != interactions.StatusWaiting || current.Answer != nil {
+		t.Fatalf("stale Cancel mutated newer interaction: %#v", current)
 	}
 }
 
@@ -7053,7 +7899,7 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	coordinator := installInteractionChannelManager(t, al, manager)
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    "Cancel turn",
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:question-cancel"),
@@ -7066,6 +7912,10 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 	})
 	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
 	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
+	msg.Context.ReplyToMessageID = "7716"
+	seedTestInteractionPromptOutcomeWithMessages(
+		t, coordinator, agent.Workspace, record, outbox.StatusDelivered, 1, []string{"7716"},
+	)
 
 	result, err := al.cancelInteractionForControlMessage(t.Context(), msg, target)
 	if err != nil {
@@ -7115,6 +7965,7 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 	provider := &sequenceProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	coordinator := openTestInteractionOutbox(t, al)
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    bus.InboundInteractionCancelLabel,
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:interaction-stop"),
@@ -7128,6 +7979,10 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 	})
 	record, _ := prepareWaitingControlInteraction(t, al, agent, msg, "")
 	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
+	msg.Context.ReplyToMessageID = "7716"
+	seedTestInteractionPromptOutcomeWithMessages(
+		t, coordinator, agent.Workspace, record, outbox.StatusDelivered, 1, []string{"7716"},
+	)
 
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
 

@@ -59,15 +59,19 @@ func (c *TelegramChannel) DeliverText(
 		useMarkdownV2: useMarkdownV2,
 		replyMarkup:   replyMarkup,
 	}, c.richMessagesEnabled(useMarkdownV2) && !isToolFeedback && replyMarkup == nil, isToolFeedback)
-	if result.Delivered() {
-		c.updateInteractionControls(msg, chatID, threadID)
+	if len(result.MessageIDs) > 0 {
+		c.updateInteractionControls(msg, chatID, threadID, firstTelegramMessageID(result.MessageIDs))
 	}
 	var remaining []bus.OutboundMessage
 	if result.Remaining != nil {
+		stripPromptProjection := len(result.MessageIDs) > 0 || result.MayHaveDelivered()
 		remaining = make([]bus.OutboundMessage, 0, len(result.Remaining))
 		for _, content := range result.Remaining {
 			pending := msg
 			pending.Content = content
+			if stripPromptProjection {
+				pending = pending.WithoutInteractionPromptProjection()
+			}
 			remaining = append(remaining, pending)
 		}
 	}
@@ -82,6 +86,15 @@ func (c *TelegramChannel) DeliverText(
 		Attempts:          result.Attempts,
 		Err:               result.Err,
 	}
+}
+
+func firstTelegramMessageID(messageIDs []string) string {
+	for _, messageID := range messageIDs {
+		if messageID = strings.TrimSpace(messageID); messageID != "" {
+			return messageID
+		}
+	}
+	return ""
 }
 
 type sendChunkParams struct {
@@ -152,6 +165,15 @@ func (c *TelegramChannel) sendTextChunkQueue(
 					queue = append([]string{fittedChunk}, queue...)
 					continue
 				}
+			}
+			if body, footer, ok := splitTelegramInteractionFooter(chunk); ok &&
+				len([]rune(telegramTextLimitPayload(
+					footer,
+					baseParams.useMarkdownV2,
+					useRich,
+				))) <= telegramTextLimit {
+				queue = append([]string{body, footer}, queue...)
+				continue
 			}
 
 			runeChunk := []rune(chunk)
@@ -225,6 +247,10 @@ func (c *TelegramChannel) sendTextChunkQueue(
 		}
 		if err != nil {
 			if useRich && errors.Is(err, errTelegramMessageTooLong) {
+				if body, footer, ok := splitTelegramInteractionFooter(chunk); ok {
+					queue = append([]string{body, footer}, queue...)
+					continue
+				}
 				runeChunk := []rune(chunk)
 				if len(runeChunk) <= 1 {
 					return failedTextChunkDelivery(messageIDs, chunk, queue, err)

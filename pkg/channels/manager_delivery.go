@@ -277,6 +277,9 @@ func (r *DeliveryRuntime) sendTextChunksWithRetry(
 	for index, chunk := range chunks {
 		chunkMsg := msg
 		chunkMsg.Content = chunk
+		if index > 0 {
+			chunkMsg = chunkMsg.WithoutInteractionPromptProjection()
+		}
 		result := r.sendWithRetryPolicy(ctx, name, w, chunkMsg, publishNoOutcome)
 		confirmedIDs = append(confirmedIDs, result.MessageIDs...)
 		totalAttempts += max(result.Attempts, 1)
@@ -291,7 +294,10 @@ func (r *DeliveryRuntime) sendTextChunksWithRetry(
 			}
 			result.Remaining = append(
 				result.Remaining,
-				outboundMessagesForTextChunks(msg, chunks[index+1:])...,
+				outboundMessagesForTextChunks(
+					msg.WithoutInteractionPromptProjection(),
+					chunks[index+1:],
+				)...,
 			)
 			if unresolved != nil {
 				result = combineTextChunkFailures(*unresolved, result)

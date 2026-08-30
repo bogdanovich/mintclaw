@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -133,6 +134,13 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 		return result, nil
 	}
 	if projectedShortID != "" && !strings.EqualFold(projectedShortID, record.ShortID) {
+		return result, nil
+	}
+	if projectedChoice == bus.InboundInteractionChoiceCancel &&
+		al.projectedInteractionPromptIdentity(
+			record,
+			projectedInteractionPromptMessageID(msg),
+		) != projectedInteractionPromptMatch {
 		return result, nil
 	}
 	result.Matched = true
@@ -404,6 +412,10 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		return false
 	}
 	classification := c.al.classifyProjectedInteractionAnswer(msg, target, shortID)
+	if classification.Disposition == explicitInteractionAnswerActive {
+		msg = promoteProjectedInteractionResponseCandidate(msg)
+		msg = resolveProjectedInteractionOption(classification.Record, msg)
+	}
 	responseError := strings.TrimSpace(
 		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError],
 	)
@@ -424,14 +436,41 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		c.handleInteractionInbound(ctx, msg, target)
 		return true
 	}
-	if shortID != "" && (classification.Disposition == explicitInteractionAnswerRetry ||
-		classification.Disposition == explicitInteractionAnswerUnavailable) {
+	if (shortID != "" || projectedInteractionPromptMessageID(msg) != "") &&
+		(classification.Disposition == explicitInteractionAnswerRetry ||
+			classification.Disposition == explicitInteractionAnswerUnavailable) {
 		logExplicitInteractionAnswerDisposition(classification.Record, msg, classification.Disposition)
 		c.al.turns.inbound.release(
 			context.Background(),
 			msg,
 			fmt.Errorf("interaction answer identity is waiting for durable admission"),
 		)
+		return true
+	}
+	if projectedInteractionIsUnverifiedCandidate(msg) && classification.Record.ID == "" &&
+		classification.Disposition == explicitInteractionAnswerWrongID {
+		if strings.EqualFold(strings.TrimSpace(msg.Context.Raw["is_group"]), "true") {
+			logExplicitInteractionAnswerDisposition(
+				classification.Record,
+				msg,
+				classification.Disposition,
+			)
+			_ = c.al.settleInboundAdmission(
+				ctx,
+				msg,
+				finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+			)
+			return true
+		}
+		return false
+	}
+	if classification.Disposition == explicitInteractionAnswerDuplicate {
+		c.al.syncInteractionControls(
+			target.Agent.Workspace,
+			classification.Record,
+			bus.OutboundInteractionControlsRemove,
+		)
+		c.consumeExplicitInteractionAnswer(ctx, msg, target, classification)
 		return true
 	}
 	logExplicitInteractionAnswerDisposition(classification.Record, msg, classification.Disposition)
@@ -449,6 +488,11 @@ func projectedInteractionAnswer(msg bus.InboundMessage) (string, bool) {
 	}
 	choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
 	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	if response == "" {
+		response = strings.TrimSpace(
+			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+		)
+	}
 	responseError := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError])
 	if choice == "" && response == "" && responseError == "" {
 		return "", false
@@ -456,25 +500,107 @@ func projectedInteractionAnswer(msg bus.InboundMessage) (string, bool) {
 	return strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID]), true
 }
 
+func promoteProjectedInteractionResponseCandidate(msg bus.InboundMessage) bus.InboundMessage {
+	if len(msg.Context.Raw) == 0 ||
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) != "" {
+		return msg
+	}
+	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate])
+	if response == "" {
+		return msg
+	}
+	raw := make(map[string]string, len(msg.Context.Raw))
+	for key, value := range msg.Context.Raw {
+		raw[key] = value
+	}
+	delete(raw, bus.InboundMetadataKeyInteractionResponseCandidate)
+	raw[bus.InboundMetadataKeyInteractionResponse] = response
+	msg.Context.Raw = raw
+	msg.Content = response
+	return msg
+}
+
+func projectedInteractionIsUnverifiedCandidate(msg bus.InboundMessage) bool {
+	return len(msg.Context.Raw) != 0 &&
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice]) == "" &&
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) == "" &&
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError]) == "" &&
+		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate]) != ""
+}
+
+func projectedInteractionPromptMessageID(msg bus.InboundMessage) string {
+	if len(msg.Context.Raw) != 0 {
+		if messageID := strings.TrimSpace(
+			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
+		); messageID != "" {
+			return messageID
+		}
+	}
+	return strings.TrimSpace(msg.Context.ReplyToMessageID)
+}
+
+func resolveProjectedInteractionOption(
+	record interactions.Record,
+	msg bus.InboundMessage,
+) bus.InboundMessage {
+	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError]) == "" ||
+		record.Kind != interactions.KindQuestion || len(record.Questions) != 1 {
+		return msg
+	}
+	index, err := strconv.Atoi(strings.TrimSpace(
+		msg.Context.Raw[bus.InboundMetadataKeyInteractionOptionIndex],
+	))
+	if err != nil || index < 0 || index >= len(record.Questions[0].Options) {
+		return msg
+	}
+	response := strings.TrimSpace(record.Questions[0].Options[index].Label)
+	if response == "" {
+		return msg
+	}
+	raw := make(map[string]string, len(msg.Context.Raw))
+	for key, value := range msg.Context.Raw {
+		raw[key] = value
+	}
+	delete(raw, bus.InboundMetadataKeyInteractionResponseError)
+	raw[bus.InboundMetadataKeyInteractionResponse] = response
+	msg.Context.Raw = raw
+	msg.Content = response
+	return msg
+}
+
 func (al *AgentLoop) classifyProjectedInteractionAnswer(
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
 	shortID string,
 ) explicitInteractionAnswer {
-	if al == nil || target == nil || target.Agent == nil || shortID == "" {
+	if al == nil || target == nil || target.Agent == nil {
 		return explicitInteractionAnswer{Disposition: explicitInteractionAnswerUnavailable}
 	}
 	registry := al.interactionRegistryForWorkspace(target.Agent.Workspace)
 	if registry == nil || registry.LastLoadError() != nil {
 		return explicitInteractionAnswer{Disposition: explicitInteractionAnswerUnavailable}
 	}
+	responseMessageID := projectedInteractionPromptMessageID(msg)
 	var unauthorizedMatch interactions.Record
+	var pendingMatch interactions.Record
 	for _, record := range registry.List() {
-		if !strings.EqualFold(shortID, record.ShortID) {
+		if shortID != "" && !strings.EqualFold(shortID, record.ShortID) {
+			continue
+		}
+		promptIdentity := al.projectedInteractionPromptIdentity(record, responseMessageID)
+		if promptIdentity == projectedInteractionPromptMismatch {
 			continue
 		}
 		if !interactionRouteAuthorizes(record.Route, target, msg.Context) {
-			unauthorizedMatch = record
+			if promptIdentity == projectedInteractionPromptMatch {
+				unauthorizedMatch = record
+			}
+			continue
+		}
+		if promptIdentity == projectedInteractionPromptPending {
+			if record.Status == interactions.StatusCreated {
+				pendingMatch = record
+			}
 			continue
 		}
 		if interactionInboundReplaysAnswer(record, msg.Context) {
@@ -497,9 +623,26 @@ func (al *AgentLoop) classifyProjectedInteractionAnswer(
 			}
 		}
 	}
+	if pendingMatch.ID != "" {
+		return explicitInteractionAnswer{
+			Record: pendingMatch, Disposition: explicitInteractionAnswerRetry,
+		}
+	}
 	if unauthorizedMatch.ID != "" {
 		return explicitInteractionAnswer{
 			Record: unauthorizedMatch, Disposition: explicitInteractionAnswerUnauthorized,
+		}
+	}
+	if shortID == "" {
+		if record, ok := activeInteractionForSession(registry, target.SessionKey); ok {
+			if !interactionRouteAuthorizes(record.Route, target, msg.Context) {
+				return explicitInteractionAnswer{
+					Record: record, Disposition: explicitInteractionAnswerUnauthorized,
+				}
+			}
+			return explicitInteractionAnswer{
+				Record: record, Disposition: explicitInteractionAnswerWrongID,
+			}
 		}
 	}
 	return explicitInteractionAnswer{Disposition: explicitInteractionAnswerWrongID}
@@ -593,7 +736,7 @@ func (c *inboundTurnCoordinator) consumeExplicitInteractionAnswer(
 	notice := "No matching pending interaction is accepting that answer."
 	switch disposition {
 	case explicitInteractionAnswerDuplicate:
-		notice = "An answer has already been accepted for this interaction."
+		notice = terminalInteractionNotice(record)
 	case explicitInteractionAnswerWrongID:
 		if record.ShortID != "" {
 			notice = fmt.Sprintf("I could not accept that answer: use `/answer %s <answer>`", record.ShortID)
@@ -608,6 +751,31 @@ func (c *inboundTurnCoordinator) consumeExplicitInteractionAnswer(
 		msg,
 		c.al.publishInteractionNoticeAdmission(ctx, msg, sessionKey, notice),
 	)
+}
+
+func terminalInteractionNotice(record interactions.Record) string {
+	if record.Status == interactions.StatusCancelled {
+		return "This interaction was already canceled."
+	}
+	switch record.Outcome {
+	case interactions.OutcomeTimedOut:
+		if record.Kind == interactions.KindApproval && record.ApprovalConsumedAt == 0 {
+			return "This approval expired before execution. The protected tool was not executed. " +
+				"Request the action again if it is still needed."
+		}
+		return "This interaction expired before the suspended operation could continue."
+	case interactions.OutcomeDenied:
+		return "This interaction was already denied."
+	case interactions.OutcomeCanceled:
+		return "This interaction was already canceled."
+	case interactions.OutcomeDeliveryUnknown:
+		return "This interaction already ended with an unknown delivery outcome and was not retried."
+	default:
+		if record.Status == interactions.StatusFailed {
+			return "This interaction failed before it could complete."
+		}
+		return "An answer has already been accepted for this interaction."
+	}
 }
 
 func logExplicitInteractionAnswerDisposition(
@@ -1581,6 +1749,12 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 					outcome = interactions.OutcomeAllowed
 					text = "The approved external action completed before restart. Verified runtime receipt IDs: " +
 						strings.Join(receiptIDs, ", ") + "."
+				} else {
+					var markErr error
+					resuming, markErr = registry.MarkApprovalDeliveryUnknown(resuming.ID, resuming.Revision)
+					if markErr != nil {
+						return markErr
+					}
 				}
 				if err := al.persistInteractionToolResult(
 					ctx,
@@ -2290,6 +2464,12 @@ func (al *AgentLoop) ensureInteractionToolResult(
 	}
 	if record.Answer.Superseded {
 		payload.Text = "The pending action was superseded by new user guidance and was not executed."
+	} else if record.Outcome == interactions.OutcomeTimedOut {
+		if record.Kind == interactions.KindApproval && record.ApprovalConsumedAt == 0 {
+			payload.Text = "Approval expired before execution. The protected tool was not executed."
+		} else {
+			payload.Text = "Human input expired before the suspended operation could continue."
+		}
 	}
 	return al.persistInteractionToolResult(ctx, agent, record, payload)
 }

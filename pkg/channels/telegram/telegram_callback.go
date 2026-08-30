@@ -86,6 +86,7 @@ func (c *TelegramChannel) handleInteractionCallback(
 		message.Chat.ID,
 		message.MessageThreadID,
 		platformID,
+		message.MessageID,
 		callback,
 	)
 	metadata := map[string]string{
@@ -100,6 +101,9 @@ func (c *TelegramChannel) handleInteractionCallback(
 	}
 	if response != "" {
 		metadata[bus.InboundMetadataKeyInteractionResponse] = response
+	}
+	if callback.action == "option" {
+		metadata[bus.InboundMetadataKeyInteractionOptionIndex] = strconv.Itoa(callback.index)
 	}
 	if !resolved {
 		metadata[bus.InboundMetadataKeyInteractionResponseError] = "unresolved callback option"
@@ -120,9 +124,6 @@ func (c *TelegramChannel) handleInteractionCallback(
 	if message.MessageThreadID != 0 {
 		inbound.TopicID = strconv.Itoa(message.MessageThreadID)
 	}
-	controlsMatched := c.interactionControlsMatch(
-		message.Chat.ID, message.MessageThreadID, platformID, callback.shortID,
-	)
 	c.chatIDsMu.Lock()
 	c.chatIDs[platformID] = message.Chat.ID
 	c.chatIDsMu.Unlock()
@@ -130,7 +131,7 @@ func (c *TelegramChannel) handleInteractionCallback(
 		return err
 	}
 	c.settleInteractionCallbackUI(
-		ctx, message, query.ID, platformID, callback.shortID, controlsMatched,
+		ctx, message, query.ID, platformID, callback.shortID,
 	)
 	return nil
 }
@@ -141,7 +142,6 @@ func (c *TelegramChannel) settleInteractionCallbackUI(
 	callbackQueryID string,
 	senderID string,
 	shortID string,
-	controlsMatched bool,
 ) {
 	timeout := c.interactionUITimeout
 	if timeout <= 0 {
@@ -151,31 +151,40 @@ func (c *TelegramChannel) settleInteractionCallbackUI(
 	defer cancel()
 	if err := c.bot.AnswerCallbackQuery(uiCtx, &telego.AnswerCallbackQueryParams{
 		CallbackQueryID: callbackQueryID,
+		Text:            telegramInteractionCallbackAcknowledgement(),
 	}); err != nil {
 		logger.WarnCF("telegram", "Failed to acknowledge interaction callback", map[string]any{
 			"callback_query_id": callbackQueryID, "error": err.Error(),
 		})
 	}
-	if !controlsMatched || uiCtx.Err() != nil {
+	if uiCtx.Err() != nil {
 		return
 	}
-	_, err := c.bot.EditMessageReplyMarkup(uiCtx, &telego.EditMessageReplyMarkupParams{
-		ChatID: telego.ChatID{ID: message.Chat.ID}, MessageID: message.MessageID,
-		ReplyMarkup: &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}},
-	})
-	if err != nil && !strings.Contains(err.Error(), "message is not modified") {
+	if !c.interactionControlsMatchPrompt(
+		message.Chat.ID, message.MessageThreadID, senderID, shortID, strconv.Itoa(message.MessageID),
+	) {
+		return
+	}
+	if err := c.removeInteractionReplyMarkup(uiCtx, message.Chat.ID, message.MessageID); err != nil {
 		logger.WarnCF("telegram", "Failed to remove interaction callback controls", map[string]any{
 			"callback_query_id": callbackQueryID, "error": err.Error(),
 		})
 		return
 	}
-	c.removeInteractionControls(message.Chat.ID, message.MessageThreadID, senderID, shortID)
+	c.removeInteractionControls(
+		message.Chat.ID, message.MessageThreadID, senderID, shortID, strconv.Itoa(message.MessageID),
+	)
+}
+
+func telegramInteractionCallbackAcknowledgement() string {
+	return "Response received."
 }
 
 func (c *TelegramChannel) resolveInteractionCallback(
 	chatID int64,
 	threadID int,
 	senderID string,
+	promptMessageID int,
 	callback telegramInteractionCallbackData,
 ) (content, choice, response string, resolved bool) {
 	switch callback.action {
@@ -191,6 +200,7 @@ func (c *TelegramChannel) resolveInteractionCallback(
 		controls, active := c.interactionControls[key]
 		c.interactionControlsMu.RUnlock()
 		if active && controls.shortID == callback.shortID &&
+			controls.promptMessageID == strconv.Itoa(promptMessageID) &&
 			callback.index >= 0 && callback.index < len(controls.choices) {
 			response = controls.choices[callback.index]
 			return response, "", response, true

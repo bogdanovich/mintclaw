@@ -142,6 +142,34 @@ func TestOutboundMetadataInteractionControls(t *testing.T) {
 	}
 }
 
+func TestOutboundMessageWithoutInteractionPromptProjection(t *testing.T) {
+	original := OutboundMessage{
+		ReplyToMessageID: "prompt-parent",
+		Metadata: OutboundMetadata{
+			InteractionKind:     OutboundInteractionQuestion,
+			InteractionControls: OutboundInteractionControlsPrompt,
+			InteractionID:       "question-1",
+			InteractionShortID:  "short-1",
+			Choices:             []string{"Yes", "No"},
+		},
+	}
+
+	projected := original.WithoutInteractionPromptProjection()
+	if projected.ReplyToMessageID != "" || projected.Metadata.InteractionControls != "" ||
+		len(projected.Metadata.Choices) != 0 {
+		t.Fatalf("projection-free message = %#v", projected)
+	}
+	if projected.Metadata.InteractionKind != original.Metadata.InteractionKind ||
+		projected.Metadata.InteractionID != original.Metadata.InteractionID ||
+		projected.Metadata.InteractionShortID != original.Metadata.InteractionShortID {
+		t.Fatalf("durable identity was removed: %#v", projected.Metadata)
+	}
+	if original.ReplyToMessageID == "" || original.Metadata.InteractionControls == "" ||
+		len(original.Metadata.Choices) != 2 {
+		t.Fatalf("original message was mutated: %#v", original)
+	}
+}
+
 func TestOutboundMessageJSONOmitsZeroMetadata(t *testing.T) {
 	encoded, err := json.Marshal(OutboundMessage{Content: "hello"})
 	if err != nil {

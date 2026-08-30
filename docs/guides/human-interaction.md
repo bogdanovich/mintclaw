@@ -22,9 +22,10 @@ restarts.
 }
 ```
 
-The default wait is one hour. A model may request a timeout from 60 seconds up
-to the configured maximum of 24 hours. Terminal interaction records are retained
-for seven days by default and then become eligible for pruning.
+The default wait is one hour. A model or trusted approval hook may request a
+timeout from 60 seconds up to the configured maximum of 24 hours. Terminal
+interaction records are retained for seven days by default and then become
+eligible for pruning.
 
 Set `enabled` to `false` to prevent new model-requested questions. Existing
 records remain available for recovery, timeout, cancellation, and retention
@@ -62,7 +63,7 @@ Which environment should be used?
 The short interaction ID, option layout, and `/answer` syntax are runtime-owned
 machine structure. A normal message reply remains sufficient.
 
-On Telegram, each predefined option appears as a one-time reply-keyboard
+On Telegram, each predefined option appears as a one-time inline-keyboard
 button, followed by `⛔ Cancel turn`. The message composer remains available, so
 you can always type any free-text answer, such as `generate it yourself`, even
 when the model supplied options. Replying to the prompt strips Telegram's
@@ -126,6 +127,24 @@ Direct `allow_once` and `deny` replies also work. The runtime binds approval to
 the tool call and canonical argument hash, checks expiry, revalidates current
 policy, and consumes the grant before execution. The model cannot create its
 own approval authority or select the approving user.
+
+For channel buttons, admission also matches the callback to the confirmed
+platform message ID of the durable prompt. Short IDs and the channel's
+in-memory control projection are never sufficient to grant authority. A
+callback received while that delivery receipt is still settling remains
+retryable; its option index is resolved against the durable prompt only after
+the exact platform message ID is confirmed. Ordinary Telegram replies use the
+replied-to prompt message ID for the same identity check.
+
+An approval that expires before its one-time grant is consumed is definitively
+not executed. Telegram removes the original inline controls when the
+interaction becomes terminal. A button press is acknowledged immediately with
+a neutral callback receipt; the agent then reports the exact status from the
+durable interaction record. A late or repeated press cannot resume the agent or
+execute the protected tool. If the action is still wanted, request it again so
+the runtime can prepare fresh authority and issue a new approval. Do not
+blindly retry an action whose approval was already consumed and whose execution
+result is unknown.
 
 ## Restart and Delivery Semantics
 

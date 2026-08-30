@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1523,7 +1524,8 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	metadata = metadata.WithInteractionChoices([]string{"Generate it", "Enter manually"})
 
 	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
-		ChatID: "12345", Metadata: metadata, Content: "Choose an input method",
+		ChatID: "12345", Context: bus.InboundContext{SenderID: "15"},
+		Metadata: metadata, Content: "Choose an input method",
 	})
 	require.NoError(t, err)
 	require.Len(t, caller.calls, 1)
@@ -1538,6 +1540,15 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	assert.Equal(t, "mc:i:abc12345:option:1", keyboard[1].([]any)[0].(map[string]any)["callback_data"])
 	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[2].([]any)[0].(map[string]any)["text"])
 	assert.Equal(t, "mc:i:abc12345:cancel", keyboard[2].([]any)[0].(map[string]any)["callback_data"])
+	_, _, response, resolved := ch.resolveInteractionCallback(
+		12345,
+		0,
+		"15",
+		1,
+		telegramInteractionCallbackData{shortID: "abc12345", action: "option", index: 0},
+	)
+	assert.True(t, resolved)
+	assert.Equal(t, "Generate it", response)
 }
 
 func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
@@ -2249,6 +2260,169 @@ func TestSend_MarkdownShortButHTMLEscapingWouldBeLong_SplitsLegacyHTML(t *testin
 
 	assert.NoError(t, err)
 	assert.Len(t, caller.calls, 2)
+}
+
+func TestSend_ExpansionHeavyInteractionKeepsMultiQuestionFooterAtomic(t *testing.T) {
+	callIndex := 100
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		callIndex++
+		return successResponseWithMessageID(t, callIndex), nil
+	}}
+	ch := newTestChannel(t, caller)
+	shortID := "abc12345"
+	questionIDs := []string{
+		strings.Repeat("a", 64),
+		strings.Repeat("b", 64),
+		strings.Repeat("c", 64),
+	}
+	footer := "`/answer " + shortID + "`"
+	for _, questionID := range questionIDs {
+		footer += "\n`" + questionID + ": …`"
+	}
+	bodyBudget := 3900 - len([]rune(footer)) - 2
+	body := strings.Repeat("**&** ", bodyBudget/6)
+	content := body + "\n\n" + footer
+	require.LessOrEqual(t, len([]rune(content)), 4000)
+	require.Greater(t, len([]rune(parseContent(content, false))), telegramTextLimit)
+
+	messageIDs, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
+		ChatID: "12345", Content: content,
+		Context: bus.InboundContext{SenderID: "15"},
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+			InteractionShortID:  shortID,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, messageIDs, len(caller.calls))
+	require.GreaterOrEqual(t, len(caller.calls), 2)
+	footerChunks := 0
+	for _, call := range caller.calls {
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(call.Data.BodyRaw, &payload))
+		text, ok := payload["text"].(string)
+		require.True(t, ok)
+		assert.LessOrEqual(t, len([]rune(text)), telegramTextLimit)
+		if !strings.Contains(text, "/answer "+shortID) {
+			continue
+		}
+		footerChunks++
+		for _, questionID := range questionIDs {
+			assert.Contains(t, text, questionID+": …")
+		}
+		plainFooter := strings.ReplaceAll(text, "<code>", "")
+		plainFooter = strings.ReplaceAll(plainFooter, "</code>", "")
+		plainFooter = html.UnescapeString(plainFooter)
+		assert.Equal(t, shortID, telegramInteractionShortID(&telego.Message{Text: plainFooter}))
+	}
+	assert.Equal(t, 1, footerChunks)
+	assert.True(t, ch.interactionControlsMatchPrompt(12345, 0, "15", shortID, messageIDs[0]))
+}
+
+func TestDeliverText_PartialInteractionRetryDoesNotCreateSecondPrompt(t *testing.T) {
+	shortID := "abc12345"
+	footer := "`/answer " + shortID + " value`\n`/stop`"
+	body := strings.Repeat("**&** ", 640)
+	content := body + "\n\n" + footer
+	failedFooter := false
+	nextMessageID := 100
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, data *ta.RequestData,
+	) (*ta.Response, error) {
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(data.BodyRaw, &payload))
+		text, _ := payload["text"].(string)
+		if strings.Contains(text, "/answer "+shortID) && !failedFooter {
+			failedFooter = true
+			return nil, &ta.Error{
+				ErrorCode:   http.StatusTooManyRequests,
+				Description: "Too Many Requests",
+				Parameters:  &ta.ResponseParameters{RetryAfter: 1},
+			}
+		}
+		nextMessageID++
+		return successResponseWithMessageID(t, nextMessageID), nil
+	}}
+	ch := newTestChannel(t, caller)
+	message := bus.OutboundMessage{
+		ChatID: "12345", Content: content, ReplyToMessageID: "88",
+		Context: bus.InboundContext{SenderID: "15"},
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+			InteractionShortID:  shortID,
+			Choices:             []string{"generate"},
+		},
+	}
+
+	result := ch.DeliverText(t.Context(), []bus.OutboundMessage{message})
+	require.Error(t, result.Err)
+	require.NotEmpty(t, result.MessageIDs)
+	require.Len(t, result.Remaining, 1)
+	assert.Empty(t, result.Remaining[0].ReplyToMessageID)
+	assert.Empty(t, result.Remaining[0].Metadata.InteractionControls)
+	assert.Empty(t, result.Remaining[0].Metadata.Choices)
+	assert.Nil(t, telegramInteractionReplyMarkup(result.Remaining[0]))
+	assert.True(t, ch.interactionControlsMatchPrompt(
+		12345,
+		0,
+		"15",
+		shortID,
+		result.MessageIDs[0],
+	))
+
+	retryResult := ch.DeliverText(t.Context(), result.Remaining)
+	require.NoError(t, retryResult.Err)
+	require.NotEmpty(t, retryResult.MessageIDs)
+	var retryPayload map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[len(caller.calls)-1].Data.BodyRaw, &retryPayload))
+	assert.NotContains(t, retryPayload, "reply_markup")
+	assert.NotContains(t, retryPayload, "reply_parameters")
+	assert.True(t, ch.interactionControlsMatchPrompt(
+		12345,
+		0,
+		"15",
+		shortID,
+		result.MessageIDs[0],
+	))
+}
+
+func TestDeliverText_AmbiguousInteractionAttemptStripsControlsFromUntouchedTail(t *testing.T) {
+	shortID := "abc12345"
+	caller := &stubCaller{callFn: func(
+		context.Context,
+		string,
+		*ta.RequestData,
+	) (*ta.Response, error) {
+		return nil, errors.New("connection reset")
+	}}
+	ch := newTestChannel(t, caller)
+	message := bus.OutboundMessage{
+		ChatID: "12345", ReplyToMessageID: "88",
+		Content: strings.Repeat("x", telegramTextLimit*2) + "\n\n`/answer " + shortID + " value`\n`/stop`",
+		Context: bus.InboundContext{SenderID: "15"},
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+			InteractionShortID:  shortID,
+			Choices:             []string{"generate"},
+		},
+	}
+
+	result := ch.DeliverText(t.Context(), []bus.OutboundMessage{message})
+	require.Error(t, result.Err)
+	assert.Equal(t, channels.DeliveryAcceptanceUnknown, result.Acceptance)
+	assert.Empty(t, result.MessageIDs)
+	require.NotEmpty(t, result.Remaining)
+	for _, remaining := range result.Remaining {
+		assert.Empty(t, remaining.ReplyToMessageID)
+		assert.Empty(t, remaining.Metadata.InteractionControls)
+		assert.Empty(t, remaining.Metadata.Choices)
+		assert.Nil(t, telegramInteractionReplyMarkup(remaining))
+	}
 }
 
 func TestSend_RichFallbackSplitsAgainstLegacyHTMLPayload(t *testing.T) {
@@ -3546,7 +3720,7 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_StaleBotReplyDoesNotBypassGroupMentionOnly(t *testing.T) {
+func TestHandleMessage_FooterlessBotReplyReachesDurableGroupValidation(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	ch := &TelegramChannel{
 		BaseChannel: channels.NewBaseChannel(
@@ -3560,7 +3734,10 @@ func TestHandleMessage_StaleBotReplyDoesNotBypassGroupMentionOnly(t *testing.T) 
 		chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
 	}
 	msg := &telego.Message{
-		Text: "historical follow-up", MessageID: 23,
+		Text: "@alice historical follow-up", MessageID: 23,
+		Entities: []telego.MessageEntity{{
+			Type: telego.EntityTypeMention, Offset: 0, Length: len("@alice"),
+		}},
 		Chat: telego.Chat{ID: -100123, Type: "supergroup"},
 		From: &telego.User{ID: 15, FirstName: "Eve"},
 		ReplyToMessage: &telego.Message{
@@ -3572,8 +3749,59 @@ func TestHandleMessage_StaleBotReplyDoesNotBypassGroupMentionOnly(t *testing.T) 
 	require.NoError(t, ch.handleMessage(context.Background(), msg))
 	select {
 	case inbound := <-messageBus.InboundChan():
-		t.Fatalf("stale bot reply bypassed mention gate: %#v", inbound)
-	default:
+		assert.False(t, inbound.Context.Mentioned)
+		assert.Equal(
+			t,
+			"@alice historical follow-up",
+			inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+		)
+	case <-time.After(time.Second):
+		t.Fatal("footerless bot reply was filtered before durable validation")
+	}
+}
+
+func TestHandleMessage_FooterlessReplyNormalizesOwnBotMentionOnly(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel(
+			"telegram",
+			nil,
+			messageBus,
+			[]string{"15"},
+			channels.WithGroupTrigger(config.GroupTriggerConfig{MentionOnly: true}),
+		),
+		bot: newTestTelegramBot(t, "mintclaw_bot"), ctx: context.Background(),
+		chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
+	}
+	text := "@mintclaw_bot @alice allow once"
+	msg := &telego.Message{
+		Text: text, MessageID: 24,
+		Entities: []telego.MessageEntity{
+			{Type: telego.EntityTypeMention, Offset: 0, Length: len("@mintclaw_bot")},
+			{
+				Type:   telego.EntityTypeMention,
+				Offset: len("@mintclaw_bot "),
+				Length: len("@alice"),
+			},
+		},
+		Chat: telego.Chat{ID: -100123, Type: "supergroup"},
+		From: &telego.User{ID: 15, FirstName: "Eve"},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101, Text: "Approve this operation?",
+			From: &telego.User{ID: 1, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}
+
+	require.NoError(t, ch.handleMessage(context.Background(), msg))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(
+			t,
+			"@alice allow once",
+			inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+		)
+	case <-time.After(time.Second):
+		t.Fatal("mentioned footerless reply was filtered")
 	}
 }
 
@@ -3644,7 +3872,7 @@ func TestInteractionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *t
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
 	}.WithInteractionChoices([]string{"Generate it"})
-	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: metadata}, -100123, 1771)
+	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: metadata}, -100123, 1771, "71")
 	message := &telego.Message{
 		Text: "Generate it", Chat: telego.Chat{ID: -100123}, MessageThreadID: 1771,
 	}
@@ -3657,7 +3885,7 @@ func TestInteractionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *t
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsRemove,
 	}
-	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: removeMetadata}, -100123, 1771)
+	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: removeMetadata}, -100123, 1771, "71")
 	_, response = ch.telegramInteractionMetadata(message, message.Text, "15")
 	assert.Empty(t, response)
 }
@@ -3823,6 +4051,57 @@ func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
 	assert.Empty(t, response)
 }
 
+func TestTelegramInteractionResponseProjectsFooterlessPromptChunk(t *testing.T) {
+	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	reply := ch.telegramInteractionReplyMetadata(&telego.Message{
+		Text: "  generate it yourself  ", Chat: telego.Chat{ID: 999},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101,
+			Text:      "Which value?",
+			From:      &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}, "  generate it yourself  ", "15")
+
+	assert.Empty(t, reply.choice)
+	assert.Empty(t, reply.response)
+	assert.Equal(t, "generate it yourself", reply.responseCandidate)
+	assert.Empty(t, reply.shortID)
+}
+
+func TestTelegramInteractionResponseProjectsPromptIdentityWithoutLocalControls(t *testing.T) {
+	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	reply := ch.telegramInteractionReplyMetadata(&telego.Message{
+		Text: "  generate it yourself  ", Chat: telego.Chat{ID: 999},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101,
+			Text: "Which value?\n`/answer stale999 value`\n\n" +
+				"`/answer abc12345 …`\n`/stop`",
+			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}, "  generate it yourself  ", "15")
+
+	assert.Empty(t, reply.choice)
+	assert.Equal(t, "generate it yourself", reply.response)
+	assert.Equal(t, "abc12345", reply.shortID)
+}
+
+func TestTelegramMultiQuestionResponseProjectsPromptIdentityWithoutLocalControls(t *testing.T) {
+	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	reply := ch.telegramInteractionReplyMetadata(&telego.Message{
+		Text: "region: eu\nmode: safe", Chat: telego.Chat{ID: 999},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101,
+			Text: "1. `region`\nWhich region?\n\n2. `mode`\nWhich mode?\n\n" +
+				"`/answer multi123`\n`region: …`\n`mode: …`",
+			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}, "region: eu\nmode: safe", "15")
+
+	assert.Empty(t, reply.choice)
+	assert.Equal(t, "region: eu\nmode: safe", reply.response)
+	assert.Equal(t, "multi123", reply.shortID)
+}
+
 func TestTelegramInteractionReplyMetadataCarriesPromptIdentity(t *testing.T) {
 	ch := &TelegramChannel{
 		selfID: 42, selfName: "mintclaw_bot",
@@ -3866,7 +4145,8 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 			ch.interactionControls[telegramInteractionControlKey{
 				chatID: -100123, threadID: 1771, senderID: "15",
 			}] = telegramInteractionControls{
-				shortID: "newer567", kind: bus.OutboundInteractionApproval,
+				shortID: "abc12345", promptMessageID: "73", kind: bus.OutboundInteractionQuestion,
+				choices: []string{"Use the newer prompt"},
 			}
 			ch.interactionControlsMu.Unlock()
 		}
@@ -3876,7 +4156,7 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
 	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
 		{chatID: -100123, threadID: 1771, senderID: "15"}: {
-			shortID: "abc12345", kind: bus.OutboundInteractionQuestion,
+			shortID: "abc12345", promptMessageID: "72", kind: bus.OutboundInteractionQuestion,
 			choices: []string{"Generate it"},
 		},
 	}
@@ -3897,12 +4177,23 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	)
 	assert.Equal(t, "abc12345", published.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
 	assert.Equal(t, "Generate it", published.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	assert.Equal(t, "0", published.Context.Raw[bus.InboundMetadataKeyInteractionOptionIndex])
 	assert.Equal(t, "1771", published.Context.TopicID)
-	require.Len(t, caller.calls, 2)
+	require.Len(t, caller.calls, 1)
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
-	assert.Contains(t, caller.calls[1].URL, "editMessageReplyMarkup")
-	assert.False(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
-	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "newer567"))
+	var answer map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &answer))
+	assert.Equal(t, "Response received.", answer["text"])
+	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
+	_, _, response, resolved := ch.resolveInteractionCallback(
+		-100123,
+		1771,
+		"15",
+		73,
+		telegramInteractionCallbackData{shortID: "abc12345", action: "option", index: 0},
+	)
+	assert.True(t, resolved)
+	assert.Equal(t, "Use the newer prompt", response)
 }
 
 func TestHandleInteractionCallbackBoundsUIAfterInboundPublish(t *testing.T) {
@@ -3932,12 +4223,173 @@ func TestHandleInteractionCallbackBoundsUIAfterInboundPublish(t *testing.T) {
 	}
 }
 
+func TestHandleInteractionCallbackPreservesUnknownControlsUntilDurableSync(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
+	message := &telego.Message{MessageID: 72, Chat: telego.Chat{ID: 12345, Type: "private"}}
+
+	for _, callbackID := range []string{"stale-1", "stale-2"} {
+		require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+			ID: callbackID, From: telego.User{ID: 15}, Message: message,
+			Data: "mc:i:expired1:allow",
+		}))
+		select {
+		case inbound := <-messageBus.InboundChan():
+			assert.Equal(t, callbackID, inbound.Context.MessageID)
+		case <-time.After(time.Second):
+			t.Fatal("inactive callback was not durably published")
+		}
+	}
+
+	require.Len(t, caller.calls, 2)
+	for index := range caller.calls {
+		assert.Contains(t, caller.calls[index].URL, "answerCallbackQuery")
+		var answer map[string]any
+		require.NoError(t, json.Unmarshal(caller.calls[index].Data.BodyRaw, &answer))
+		assert.Equal(t, "Response received.", answer["text"])
+	}
+}
+
+func TestHandleInteractionCallbackClearsExactOwnerControls(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
+	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
+		{chatID: 12345, senderID: "15"}: {
+			shortID: "active12", promptMessageID: "72", kind: bus.OutboundInteractionApproval,
+		},
+	}
+	message := &telego.Message{MessageID: 72, Chat: telego.Chat{ID: 12345, Type: "private"}}
+
+	require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+		ID: "callback-owner", From: telego.User{ID: 15}, Message: message,
+		Data: "mc:i:active12:allow",
+	}))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(t, "callback-owner", inbound.Context.MessageID)
+	case <-time.After(time.Second):
+		t.Fatal("owner callback was not durably published")
+	}
+	require.Len(t, caller.calls, 2)
+	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
+	assert.Contains(t, caller.calls[1].URL, "editMessageReplyMarkup")
+	assert.False(t, ch.interactionControlsMatch(12345, 0, "15", "active12"))
+}
+
+func TestHandleInteractionCallbackPreservesControlsOwnedByAnotherGroupSender(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15", "16"})
+	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
+		{chatID: -100123, threadID: 1771, senderID: "15"}: {
+			shortID: "owner123", promptMessageID: "72", kind: bus.OutboundInteractionApproval,
+		},
+	}
+	message := &telego.Message{
+		MessageID: 72, MessageThreadID: 1771,
+		Chat: telego.Chat{ID: -100123, Type: "supergroup", IsForum: true},
+	}
+
+	require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+		ID: "callback-other-sender", From: telego.User{ID: 16}, Message: message,
+		Data: "mc:i:owner123:allow",
+	}))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(t, "16", inbound.Context.SenderID)
+		assert.Equal(t, "owner123", inbound.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+	case <-time.After(time.Second):
+		t.Fatal("other-sender callback was not durably published")
+	}
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
+	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "owner123"))
+}
+
+func TestHandleInteractionCallbackWithEmptyProjectionDoesNotRemoveGroupControls(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15", "16"})
+	message := &telego.Message{
+		MessageID: 72, MessageThreadID: 1771,
+		Chat: telego.Chat{ID: -100123, Type: "supergroup", IsForum: true},
+	}
+
+	require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+		ID: "callback-empty-projection", From: telego.User{ID: 16}, Message: message,
+		Data: "mc:i:owner123:allow",
+	}))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(t, "16", inbound.Context.SenderID)
+		assert.Equal(t, "owner123", inbound.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+	case <-time.After(time.Second):
+		t.Fatal("callback with empty projection was not durably published")
+	}
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
+}
+
+func TestSyncInteractionControlsClearsExactPromptWithoutRemovingNewerProjection(t *testing.T) {
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
+		{chatID: 12345, senderID: "15"}: {
+			shortID: "newer567", promptMessageID: "73", kind: bus.OutboundInteractionApproval,
+		},
+	}
+
+	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
+		Channel: "telegram", ChatID: "12345", ReplyToMessageID: "72",
+		Context: bus.InboundContext{SenderID: "15"},
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionApproval,
+			InteractionControls: bus.OutboundInteractionControlsRemove,
+			InteractionShortID:  "expired1",
+		},
+	}))
+
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "editMessageReplyMarkup")
+	var edit map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &edit))
+	assert.Equal(t, float64(72), edit["message_id"])
+	assert.True(t, ch.interactionControlsMatch(12345, 0, "15", "newer567"))
+}
+
 func TestResolveInteractionCallbackDoesNotInventMissingOption(t *testing.T) {
 	ch := &TelegramChannel{}
 	_, _, response, resolved := ch.resolveInteractionCallback(
 		-100123,
 		1771,
 		"15",
+		71,
 		telegramInteractionCallbackData{shortID: "abc12345", action: "option", index: 0},
 	)
 	assert.False(t, resolved)

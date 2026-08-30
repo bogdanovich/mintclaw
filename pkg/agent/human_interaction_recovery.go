@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,6 +119,7 @@ func (al *AgentLoop) syncInteractionControls(workspace string, record interactio
 		InteractionKind:     interactionKind,
 		InteractionControls: controls,
 	})
+	message.ReplyToMessageID = al.interactionPromptPlatformMessageID(record)
 	if err := syncer.SyncInteractionControls(message); err != nil {
 		logger.WarnCF("agent", "Failed to sync human interaction controls", map[string]any{
 			"workspace":      workspace,
@@ -127,6 +129,70 @@ func (al *AgentLoop) syncInteractionControls(workspace string, record interactio
 			"error":          err.Error(),
 		})
 	}
+}
+
+func (al *AgentLoop) interactionPromptPlatformMessageID(record interactions.Record) string {
+	messageIDs := al.interactionPromptPlatformMessageIDs(record)
+	if len(messageIDs) == 0 {
+		return ""
+	}
+	return messageIDs[0]
+}
+
+func (al *AgentLoop) interactionPromptPlatformMessageIDs(record interactions.Record) []string {
+	if al == nil || strings.TrimSpace(record.PromptDeliveryID) == "" {
+		return nil
+	}
+	coordinator := al.outboundCoordinator()
+	if coordinator == nil {
+		return nil
+	}
+	intent, err := coordinator.Get(record.PromptDeliveryID)
+	if err != nil || (intent.Status != outbox.StatusDelivered && intent.Status != outbox.StatusAmbiguous) {
+		return nil
+	}
+	messageIDs := make([]string, 0, len(intent.PlatformMessageIDs))
+	for _, messageID := range intent.PlatformMessageIDs {
+		if messageID = strings.TrimSpace(messageID); messageID != "" {
+			messageIDs = append(messageIDs, messageID)
+		}
+	}
+	return messageIDs
+}
+
+type projectedInteractionPromptIdentity uint8
+
+const (
+	projectedInteractionPromptMismatch projectedInteractionPromptIdentity = iota
+	projectedInteractionPromptPending
+	projectedInteractionPromptMatch
+)
+
+func (al *AgentLoop) projectedInteractionPromptIdentity(
+	record interactions.Record,
+	messageID string,
+) projectedInteractionPromptIdentity {
+	messageID = strings.TrimSpace(messageID)
+	if al == nil || messageID == "" || strings.TrimSpace(record.PromptDeliveryID) == "" {
+		return projectedInteractionPromptMismatch
+	}
+	coordinator := al.outboundCoordinator()
+	if coordinator == nil {
+		return projectedInteractionPromptMismatch
+	}
+	intent, err := coordinator.Get(record.PromptDeliveryID)
+	if err != nil {
+		return projectedInteractionPromptMismatch
+	}
+	switch intent.Status {
+	case outbox.StatusPending, outbox.StatusAttempting:
+		return projectedInteractionPromptPending
+	case outbox.StatusDelivered, outbox.StatusAmbiguous:
+		if slices.Contains(intent.PlatformMessageIDs, messageID) {
+			return projectedInteractionPromptMatch
+		}
+	}
+	return projectedInteractionPromptMismatch
 }
 
 func (al *AgentLoop) recoverPromptDeliveryExhaustion(

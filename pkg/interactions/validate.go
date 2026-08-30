@@ -104,7 +104,7 @@ func validateStoredRecord(rec Record) error {
 		return fmt.Errorf("invalid terminal interaction %q", rec.ID)
 	}
 	if rec.ApprovalConsumedAt != 0 && (rec.Kind != KindApproval ||
-		rec.Outcome != OutcomeAllowed || rec.Status == StatusCreated ||
+		(rec.Outcome != OutcomeAllowed && rec.Outcome != OutcomeDeliveryUnknown) || rec.Status == StatusCreated ||
 		rec.Status == StatusWaiting || rec.Status == StatusClaimed) {
 		return fmt.Errorf("invalid consumed approval %q", rec.ID)
 	}

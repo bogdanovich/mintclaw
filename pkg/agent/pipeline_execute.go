@@ -982,7 +982,11 @@ func (runner *toolLoopRunner) approveToolCall(
 				}
 			}
 			if consumeErr != nil {
-				approval = ApprovalDecision{Reason: "one-time human approval was rejected: " + consumeErr.Error()}
+				reason := "one-time human approval was rejected: " + consumeErr.Error()
+				if errors.Is(consumeErr, interactions.ErrApprovalExpired) {
+					reason = "approval expired before execution; the protected tool was not executed"
+				}
+				approval = ApprovalDecision{Reason: reason}
 			} else {
 				ts.opts.ApprovalGrant = nil
 				approval = ApprovalDecision{Approved: true}
