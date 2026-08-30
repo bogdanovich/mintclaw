@@ -113,16 +113,24 @@ process-private `0600` temporary text file and displayed as
 `[Pasted Content N chars]`. Pasting a quoted, shell-escaped, or `file://` path
 to a PNG, JPEG, GIF, or WebP image displays `[Image #N]`; `/attach <paths…>`
 atomically adds one or more local regular files and displays file labels.
-Submitting a label sends the corresponding structured `TurnAttachment`; the
-label itself is not mistaken for canonical prompt text.
+`Ctrl+V` or `Ctrl+Alt+V` explicitly reads a raw PNG representation advertised
+by the local system clipboard and creates the same `[Image #N]` payload without
+treating a normal terminal text paste as an image. It deliberately does not ask
+the clipboard backend to decode or transcode native DIB/TIFF images before
+MintClaw can enforce its bounds. Clipboard access is asynchronous; unavailable,
+non-PNG, oversized, or invalid clipboards fail without changing the draft, and
+Enter waits for an in-flight image read. Submitting a label sends the
+corresponding structured `TurnAttachment`; the label itself is not mistaken for
+canonical prompt text.
 
 Removing a label also drops its pending payload. Failed runtime admission
 keeps both the draft and payload for retry. Successful admission deletes only
-composer-owned paste files after the runtime has copied them, and exiting the
-TUI cleans up remaining composer-owned files. Caller-owned files are never
-removed. Rich turns are not placed in the in-process text-only recall ring, so
-history navigation cannot replay a detached label as if it still carried an
-attachment.
+composer-owned paste and clipboard-image files after the runtime has copied
+them, and exiting the TUI cleans up remaining composer-owned files.
+Caller-owned files are never removed. Rich turns are not placed in the
+in-process text-only recall ring, and text-history navigation is disabled while
+a rich payload is pending, so history cannot replay a detached label as if it
+still carried an attachment.
 
 Fork reachability, retention/GC command, restart and missing-state closeout,
 and the final roadmap exit record remain later P6.3 work.

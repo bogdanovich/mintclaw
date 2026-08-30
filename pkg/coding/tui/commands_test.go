@@ -30,7 +30,7 @@ func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 	}
 	for _, want := range []string{
 		"MintClaw coding commands", "/compact", "/attach <paths…>", "/rename <title>", "/new", "/exit",
-		"Ctrl+J newline", "Ctrl+R refresh repository", "Esc close panel",
+		"Ctrl+J newline", "Ctrl+V paste clipboard image", "Ctrl+R refresh repository", "Esc close panel",
 	} {
 		if !strings.Contains(model.View(), want) {
 			t.Fatalf("help omits %q: %q", want, model.View())

@@ -1,9 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -407,6 +411,203 @@ func TestComposerPastedImagePathBecomesStructuredAttachment(t *testing.T) {
 	if _, err = os.Stat(path); err != nil {
 		t.Fatalf("caller-owned image was removed: %v", err)
 	}
+}
+
+func TestComposerCtrlVPastesClipboardImageAsOwnedAttachment(t *testing.T) {
+	controller := newController(t)
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageBytes := testClipboardPNG(t)
+	model.readClipboardImage = func(context.Context) ([]byte, error) {
+		return append([]byte(nil), imageBytes...), nil
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	model = updated.(*Model)
+	if command == nil || !model.clipboardPasteBusy || !strings.Contains(model.View(), "reading clipboard image") {
+		t.Fatalf(
+			"clipboard read did not start: command=%v busy=%t view=%q",
+			command,
+			model.clipboardPasteBusy,
+			model.View(),
+		)
+	}
+	updated, blocked := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if blocked != nil || !model.clipboardPasteBusy || model.err == nil {
+		t.Fatalf(
+			"submission was not blocked during clipboard read: command=%v busy=%t err=%v",
+			blocked,
+			model.clipboardPasteBusy,
+			model.err,
+		)
+	}
+	rawMessage := command()
+	message, ok := rawMessage.(ClipboardImageMsg)
+	if !ok {
+		t.Fatalf("clipboard command message = %T", rawMessage)
+	}
+	model = updateModel(t, model, message)
+	if model.clipboardPasteBusy || model.err != nil || model.ComposerValue() != "[Image #1]" ||
+		len(model.composerAttachments) != 1 {
+		t.Fatalf(
+			"clipboard result: busy=%t err=%v draft=%q attachments=%+v",
+			model.clipboardPasteBusy,
+			model.err,
+			model.ComposerValue(),
+			model.composerAttachments,
+		)
+	}
+	attachment := model.composerAttachments[0]
+	if !attachment.owned || attachment.input.Filename != "pasted-image-1.png" ||
+		attachment.input.ContentType != "image/png" {
+		t.Fatalf("clipboard attachment = %+v", attachment)
+	}
+	stored, err := os.ReadFile(attachment.input.Path)
+	if err != nil || !bytes.Equal(stored, imageBytes) {
+		t.Fatalf("stored clipboard image bytes=%d err=%v", len(stored), err)
+	}
+	info, err := os.Stat(attachment.input.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("clipboard image permissions=%v", info.Mode().Perm())
+	}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	_ = updateModel(t, model, command())
+	inputs := controller.submittedInputs()
+	if len(inputs) != 1 || len(inputs[0].Attachments) != 1 ||
+		inputs[0].Attachments[0].ContentType != "image/png" {
+		t.Fatalf("submitted clipboard input = %+v", inputs)
+	}
+	if _, err = os.Stat(attachment.input.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("submitted clipboard temporary file remains: %v", err)
+	}
+}
+
+func TestComposerCtrlVReportsClipboardAndImageValidationErrorsWithoutMutation(t *testing.T) {
+	truncatedPNG := testClipboardPNG(t)[:33]
+	tests := []struct {
+		name string
+		read func(context.Context) ([]byte, error)
+	}{
+		{name: "clipboard unavailable", read: func(context.Context) ([]byte, error) {
+			return nil, errors.New("clipboard unavailable")
+		}},
+		{name: "invalid PNG", read: func(context.Context) ([]byte, error) {
+			return []byte("not a PNG"), nil
+		}},
+		{name: "truncated PNG body", read: func(context.Context) ([]byte, error) {
+			return append([]byte(nil), truncatedPNG...), nil
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model, err := newTestModel(newController(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			model.composer.SetValue("keep draft")
+			model.readClipboardImage = test.read
+			updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+			model = updated.(*Model)
+			model = updateModel(t, model, command())
+			if model.clipboardPasteBusy || model.err == nil || model.ComposerValue() != "keep draft" ||
+				len(model.composerAttachments) != 0 || model.pasteDirectory != "" {
+				t.Fatalf(
+					"failed clipboard read mutated composer: busy=%t err=%v draft=%q attachments=%+v dir=%q",
+					model.clipboardPasteBusy,
+					model.err,
+					model.ComposerValue(),
+					model.composerAttachments,
+					model.pasteDirectory,
+				)
+			}
+		})
+	}
+}
+
+func TestComposerCtrlVRemovesPartialFileAfterWriteFailure(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageBytes := testClipboardPNG(t)
+	model.readClipboardImage = func(context.Context) ([]byte, error) {
+		return append([]byte(nil), imageBytes...), nil
+	}
+	injected := errors.New("injected partial write")
+	var partialPath string
+	model.writePasteFile = func(path string, data []byte, mode os.FileMode) error {
+		partialPath = path
+		if err := os.WriteFile(path, data[:len(data)/2], mode); err != nil {
+			t.Fatal(err)
+		}
+		return injected
+	}
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	model = updated.(*Model)
+	model = updateModel(t, model, command())
+	if !errors.Is(model.err, injected) || model.ComposerValue() != "" || len(model.composerAttachments) != 0 {
+		t.Fatalf(
+			"partial write result: err=%v draft=%q attachments=%+v",
+			model.err,
+			model.ComposerValue(),
+			model.composerAttachments,
+		)
+	}
+	if _, err := os.Stat(partialPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial clipboard image remains: %v", err)
+	}
+	directory := model.pasteDirectory
+	if err := model.closeRichInput(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("private clipboard directory remains after close: %v", err)
+	}
+}
+
+func TestComposerCtrlVPreservesLiteralImageLabelOnSubmission(t *testing.T) {
+	controller := newController(t)
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const literal = "keep literal [Image #1] text"
+	model.composer.SetValue(literal)
+	model.readClipboardImage = func(context.Context) ([]byte, error) {
+		return testClipboardPNG(t), nil
+	}
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	model = updated.(*Model)
+	model = updateModel(t, model, command())
+	if !strings.Contains(model.ComposerValue(), "[Image #2]") {
+		t.Fatalf("collision-safe clipboard draft = %q", model.ComposerValue())
+	}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	_ = updateModel(t, model, command())
+	inputs := controller.submittedInputs()
+	if len(inputs) != 1 || inputs[0].Text != literal || len(inputs[0].Attachments) != 1 {
+		t.Fatalf("submitted collision-safe input = %+v", inputs)
+	}
+}
+
+func testClipboardPNG(t *testing.T) []byte {
+	t.Helper()
+	value := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	value.Set(0, 0, color.RGBA{R: 0xff, A: 0xff})
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, value); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
 }
 
 func TestComposerUnicodeCursorStaysWithinNarrowCellBounds(t *testing.T) {

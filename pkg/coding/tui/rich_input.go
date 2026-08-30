@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"image/png"
 	"mime"
 	"net/url"
 	"os"
@@ -19,12 +21,20 @@ const (
 	largePasteRuneThreshold = 1_000
 	maxPastedContentBytes   = 32 << 20
 	maxPastedBatchBytes     = 64 << 20
+	maxPastedImageDimension = 16384
+	maxPastedImagePixels    = 40_000_000
 )
 
 type composerAttachment struct {
 	placeholder string
 	input       frontend.TurnAttachment
 	owned       bool
+}
+
+type pasteFileWriter func(string, []byte, os.FileMode) error
+
+func writePrivatePasteFile(path string, data []byte, mode os.FileMode) error {
+	return os.WriteFile(path, data, mode)
 }
 
 type composerSubmission struct {
@@ -74,6 +84,66 @@ func (m *Model) handleRichPaste(message string) (bool, error) {
 	return true, nil
 }
 
+func (m *Model) addClipboardImage(data []byte) error {
+	if len(data) == 0 {
+		return errors.New("system clipboard does not contain an image")
+	}
+	if len(data) > maxPastedContentBytes {
+		return fmt.Errorf("clipboard image exceeds %d MiB", maxPastedContentBytes>>20)
+	}
+	if len(m.composerAttachments) >= frontend.MaxTurnAttachments {
+		return fmt.Errorf("a turn supports at most %d attachments", frontend.MaxTurnAttachments)
+	}
+	if m.ownedAttachmentBytes()+int64(len(data)) > maxPastedBatchBytes {
+		return fmt.Errorf("pasted content in one draft exceeds %d MiB", maxPastedBatchBytes>>20)
+	}
+	config, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("clipboard image is not a valid PNG: %w", err)
+	}
+	if !validPastedImageDimensions(config.Width, config.Height) {
+		return fmt.Errorf("clipboard image dimensions %dx%d exceed the supported bound", config.Width, config.Height)
+	}
+	decoded, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("clipboard image is not a valid PNG: %w", err)
+	}
+	if bounds := decoded.Bounds(); !validPastedImageDimensions(bounds.Dx(), bounds.Dy()) {
+		return fmt.Errorf(
+			"clipboard image dimensions %dx%d exceed the supported bound",
+			bounds.Dx(),
+			bounds.Dy(),
+		)
+	}
+	directory, err := m.ensurePasteDirectory()
+	if err != nil {
+		return err
+	}
+	filename := fmt.Sprintf("pasted-image-%d.png", m.nextImageNumber+1)
+	path := filepath.Join(directory, filename)
+	if err = m.writePasteFile(path, data, 0o600); err != nil {
+		cleanupErr := os.Remove(path)
+		if cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			cleanupErr = fmt.Errorf("remove partial clipboard image: %w", cleanupErr)
+		} else {
+			cleanupErr = nil
+		}
+		return errors.Join(fmt.Errorf("store clipboard image: %w", err), cleanupErr)
+	}
+	if err = m.addComposerAttachment(path, filename, "image/png", true, true); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
+func validPastedImageDimensions(width, height int) bool {
+	if width <= 0 || height <= 0 || width > maxPastedImageDimension || height > maxPastedImageDimension {
+		return false
+	}
+	return int64(width)*int64(height) <= maxPastedImagePixels
+}
+
 func (m *Model) addComposerAttachment(path, displayName, contentType string, owned, image bool) error {
 	if len(m.composerAttachments) >= frontend.MaxTurnAttachments {
 		return fmt.Errorf("a turn supports at most %d attachments", frontend.MaxTurnAttachments)
@@ -90,8 +160,7 @@ func (m *Model) addComposerAttachment(path, displayName, contentType string, own
 	}
 	var placeholder string
 	if image {
-		m.nextImageNumber++
-		placeholder = fmt.Sprintf("[Image #%d]", m.nextImageNumber)
+		placeholder = m.nextImagePlaceholder()
 	} else {
 		placeholder = m.uniquePlaceholder(fmt.Sprintf("[File: %s]", displayName))
 	}
@@ -106,6 +175,17 @@ func (m *Model) addComposerAttachment(path, displayName, contentType string, own
 	})
 	m.composer.InsertString(placeholder)
 	return nil
+}
+
+func (m *Model) nextImagePlaceholder() string {
+	draft := m.composer.Value()
+	for {
+		m.nextImageNumber++
+		candidate := fmt.Sprintf("[Image #%d]", m.nextImageNumber)
+		if !strings.Contains(draft, candidate) {
+			return candidate
+		}
+	}
 }
 
 func (m *Model) uniquePlaceholder(base string) string {
@@ -186,7 +266,7 @@ func (m *Model) clearSubmittedAttachments() {
 	}
 	m.composerAttachments = nil
 	if m.pasteDirectory != "" {
-		if err := os.Remove(m.pasteDirectory); err == nil || errors.Is(err, os.ErrNotExist) {
+		if err := os.RemoveAll(m.pasteDirectory); err == nil || errors.Is(err, os.ErrNotExist) {
 			m.pasteDirectory = ""
 		}
 	}
@@ -211,7 +291,7 @@ func (m *Model) closeRichInput() error {
 	for _, attachment := range attachments {
 		m.removeComposerAttachment(attachment)
 	}
-	if err := os.Remove(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.RemoveAll(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove private paste directory: %w", err)
 	}
 	return nil
