@@ -1666,6 +1666,8 @@ later roadmap packets remain uncompleted.
 
 Dependencies: P2.3, P4.3
 
+Implementation contract: [P6.4 Git review and change summaries](local-coding-agent-p6-4-review.md).
+
 Scope:
 
 - Add explicit status, diff, and review actions.
