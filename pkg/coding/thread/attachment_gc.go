@@ -839,6 +839,9 @@ func (s *Store) restoreAttachmentGCQuarantine(
 			return validationErr
 		}
 	}
+	if syncErr := s.syncRoot(shard); syncErr != nil {
+		return fmt.Errorf("sync restored canonical blob before quarantine cleanup: %w", syncErr)
+	}
 	if identityErr := validateAttachmentGCCandidateIdentity(shard, quarantineName, quarantined); identityErr != nil {
 		return identityErr
 	}

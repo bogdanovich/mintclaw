@@ -673,6 +673,89 @@ func TestAttachmentGarbageCollectionRecoversInterruptedQuarantineAfterRestart(t 
 	}
 }
 
+func TestAttachmentGarbageCollectionSyncsRecoveryBeforeQuarantineRemoval(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment := admitGCTestAttachment(t, store, lease, metadata, "sync.txt", "sync payload", now)
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shardRoot := filepath.Join("blobs", "sha256", attachment.SHA256[:2])
+	quarantineName := attachmentGCQuarantineName(attachment.SHA256)
+	if err := root.Link(
+		filepath.Join(shardRoot, attachment.SHA256),
+		filepath.Join(shardRoot, quarantineName),
+	); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Remove(filepath.Join(shardRoot, attachment.SHA256)); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, err := NewStore(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected recovery sync failure")
+	syncRoot := restarted.syncRoot
+	restarted.syncRoot = func(root *os.Root) error {
+		if filepath.Base(root.Name()) != attachment.SHA256[:2] {
+			return syncRoot(root)
+		}
+		canonical, canonicalErr := root.Lstat(attachment.SHA256)
+		quarantined, quarantineErr := root.Lstat(quarantineName)
+		if canonicalErr != nil || quarantineErr != nil || !os.SameFile(canonical, quarantined) {
+			t.Fatalf(
+				"pre-cleanup recovery identities = canonical %v quarantine %v same %v",
+				canonicalErr,
+				quarantineErr,
+				canonicalErr == nil && quarantineErr == nil && os.SameFile(canonical, quarantined),
+			)
+		}
+		return injected
+	}
+	result, err := restarted.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+		Before: now.Add(-24 * time.Hour),
+	})
+	if !errors.Is(err, injected) || result.DeletedBlobs != 0 || IsCommittedAttachmentGCError(err) {
+		t.Fatalf("failed recovery sync = %+v, %v", result, err)
+	}
+	canonicalPath := filepath.Join(store.Root(), shardRoot, attachment.SHA256)
+	quarantinePath := filepath.Join(store.Root(), shardRoot, quarantineName)
+	canonical, canonicalErr := os.Lstat(canonicalPath)
+	quarantined, quarantineErr := os.Lstat(quarantinePath)
+	if canonicalErr != nil || quarantineErr != nil || !os.SameFile(canonical, quarantined) {
+		t.Fatalf("failed recovery did not retain both identities: %v, %v", canonicalErr, quarantineErr)
+	}
+
+	restarted.syncRoot = syncRoot
+	if _, err := restarted.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+		Before: now.Add(-24 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, _, err := restarted.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+	if err != nil || string(data) != "sync payload" {
+		t.Fatalf("attachment after recovery retry = %q, %v", data, err)
+	}
+	if _, err := os.Stat(quarantinePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("quarantine remains after recovery retry: %v", err)
+	}
+}
+
 func admitGCTestAttachment(
 	t *testing.T,
 	store *Store,
