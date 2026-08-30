@@ -73,6 +73,16 @@ type CommittedAttachmentError struct {
 	Err        error
 }
 
+// committedAttachmentManifestError distinguishes a manifest rename from a
+// directory-creation durability warning that did not publish the manifest.
+type committedAttachmentManifestError struct {
+	Err error
+}
+
+func (e *committedAttachmentManifestError) Error() string { return e.Err.Error() }
+
+func (e *committedAttachmentManifestError) Unwrap() error { return e.Err }
+
 func (e *CommittedAttachmentError) Error() string {
 	return fmt.Sprintf("coding attachment %q committed with uncertain durability: %v", e.Attachment.Ref, e.Err)
 }
@@ -152,6 +162,9 @@ func (s *Store) AdmitAttachment(
 			Size: size, SHA256: digest, CreatedAt: input.At.UTC(),
 		}
 		if existing, found := equivalentAttachment(manifest.Entries, candidate); found {
+			if identityErr := s.validateAcquiredLeasePath(metadata.ThreadID, lease.file); identityErr != nil {
+				return fmt.Errorf("coding attachment: revalidate active thread before deduplication: %w", identityErr)
+			}
 			admitted = existing
 			return nil
 		}
@@ -169,16 +182,24 @@ func (s *Store) AdmitAttachment(
 		candidate.Ref = attachmentRefPrefix + uuid.NewString()
 		manifest.Entries = append(manifest.Entries, candidate)
 		admitted = candidate
-		if identityErr := s.validateAcquiredLeasePath(metadata.ThreadID, lease.file); identityErr != nil {
+		if identityErr := s.validatePinnedAttachmentWriter(metadata.ThreadID, lease, threadRoot); identityErr != nil {
 			admitted = Attachment{}
 			return fmt.Errorf("coding attachment: revalidate active thread before manifest publish: %w", identityErr)
 		}
-		if identityErr := validatePinnedAttachmentLease(threadRoot, lease); identityErr != nil {
-			admitted = Attachment{}
-			return identityErr
+		saveErr := s.saveAttachmentManifest(threadRoot, metadata.ThreadID, manifest)
+		var committedManifest *committedAttachmentManifestError
+		if saveErr == nil || errors.As(saveErr, &committedManifest) {
+			if identityErr := s.validatePinnedAttachmentWriter(
+				metadata.ThreadID,
+				lease,
+				threadRoot,
+			); identityErr != nil {
+				admitted = Attachment{}
+				return fmt.Errorf("coding attachment: revalidate active thread after manifest publish: %w", identityErr)
+			}
 		}
-		if saveErr := s.saveAttachmentManifest(threadRoot, metadata.ThreadID, manifest); saveErr != nil {
-			if fileutil.IsCommittedWriteError(saveErr) {
+		if saveErr != nil {
+			if committedManifest != nil {
 				return &CommittedAttachmentError{Attachment: candidate, Err: saveErr}
 			}
 			admitted = Attachment{}
@@ -434,7 +455,7 @@ func (s *Store) publishAttachmentBlob(
 		if readErr != nil || actual != digest || size != int64(len(data)) {
 			return fmt.Errorf("coding attachment blob: existing digest path is invalid")
 		}
-		return nil
+		return validatePinnedAttachmentDirectory(root, relativeDirectory, shard)
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return statErr
 	}
@@ -445,7 +466,7 @@ func (s *Store) publishAttachmentBlob(
 	if err != nil || actual != digest || size != int64(len(data)) {
 		return fmt.Errorf("coding attachment blob: published content could not be verified: %w", err)
 	}
-	return nil
+	return validatePinnedAttachmentDirectory(root, relativeDirectory, shard)
 }
 
 func (s *Store) ensureAttachmentDirectories(root *os.Root, names ...string) error {
@@ -682,6 +703,40 @@ func validatePinnedAttachmentLease(threadRoot *os.Root, lease *Lease) error {
 	return nil
 }
 
+func (s *Store) validatePinnedAttachmentWriter(threadID string, lease *Lease, threadRoot *os.Root) error {
+	if err := s.validateAcquiredLeasePath(threadID, lease.file); err != nil {
+		return err
+	}
+	return validatePinnedAttachmentLease(threadRoot, lease)
+}
+
+func validatePinnedAttachmentDirectory(parent *os.Root, name string, pinned *os.Root) error {
+	pinnedInfo, err := pinned.Stat(".")
+	if err != nil {
+		return fmt.Errorf("coding attachment: inspect pinned directory %q: %w", name, err)
+	}
+	pathInfo, err := parent.Lstat(name)
+	if err != nil {
+		return fmt.Errorf("coding attachment: inspect current directory %q: %w", name, err)
+	}
+	if pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.IsDir() {
+		return fmt.Errorf("coding attachment: directory %q is not direct", name)
+	}
+	current, err := parent.OpenRoot(name)
+	if err != nil {
+		return fmt.Errorf("coding attachment: reopen directory %q: %w", name, err)
+	}
+	defer func() { _ = current.Close() }()
+	currentInfo, err := current.Stat(".")
+	if err != nil {
+		return fmt.Errorf("coding attachment: inspect current directory %q: %w", name, err)
+	}
+	if !os.SameFile(pinnedInfo, currentInfo) {
+		return fmt.Errorf("coding attachment: directory %q changed during publication", name)
+	}
+	return nil
+}
+
 func (s *Store) saveAttachmentManifest(
 	threadRoot *os.Root,
 	threadID string,
@@ -709,8 +764,18 @@ func (s *Store) saveAttachmentManifest(
 		return err
 	}
 	defer func() { _ = directory.Close() }()
-	if err := s.writeRoot(directory, attachmentManifest, data, 0o600); err != nil {
-		return fmt.Errorf("coding attachment manifest: save: %w", err)
+	writeErr := s.writeRoot(directory, attachmentManifest, data, 0o600)
+	if writeErr != nil && !fileutil.IsCommittedWriteError(writeErr) {
+		return fmt.Errorf("coding attachment manifest: save: %w", writeErr)
+	}
+	if err := validatePinnedAttachmentDirectory(threadRoot, attachmentDirectory, directory); err != nil {
+		return fmt.Errorf("coding attachment manifest: revalidate published directory: %w", err)
+	}
+	if writeErr != nil {
+		return &committedAttachmentManifestError{Err: fmt.Errorf(
+			"coding attachment manifest: save: %w",
+			writeErr,
+		)}
 	}
 	return nil
 }

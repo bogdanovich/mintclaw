@@ -2,6 +2,8 @@ package thread
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -129,6 +131,51 @@ func TestAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T) {
 	}
 	if _, _, err := store.ResolveAttachment(t.Context(), second.ThreadID, secondAttachment.Ref); err != nil {
 		t.Fatalf("shared blob disappeared after first thread deletion: %v", err)
+	}
+}
+
+func TestAttachmentDeduplicationRejectsReplacedThread(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(attachmentTestManifestPath(t, store, metadata.ThreadID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedRoot := threadRoot + "-moved"
+	if err := os.Rename(threadRoot, movedRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(threadRoot, attachmentDirectory), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(threadRoot, leaseFileName), []byte("replacement\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(threadRoot, attachmentDirectory, attachmentManifest),
+		manifest,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "active thread") {
+		t.Fatalf("replacement deduplication = %+v, %v", attachment, err)
 	}
 }
 
@@ -281,7 +328,17 @@ func TestAttachmentAdmissionReportsCommittedDirectoryCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	injected := errors.New("injected directory sync failure")
-	store.syncRoot = func(*os.Root) error { return injected }
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncRoot := store.syncRoot
+	store.syncRoot = func(root *os.Root) error {
+		if filepath.Clean(root.Name()) == threadRoot {
+			return injected
+		}
+		return syncRoot(root)
+	}
 	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
 		Path: source, At: time.Now(),
 	})
@@ -339,6 +396,121 @@ func TestAttachmentAdmissionDoesNotPublishIntoReplacedThread(t *testing.T) {
 		if _, statErr := os.Stat(manifest); !errors.Is(statErr, os.ErrNotExist) {
 			t.Fatalf("manifest published under %q: %v", root, statErr)
 		}
+	}
+}
+
+func TestAttachmentAdmissionRejectsDetachedBlobDirectory(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	content := []byte("content")
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(content)
+	digest := hex.EncodeToString(sum[:])
+	shardRoot := filepath.Join(store.Root(), "blobs", "sha256", digest[:2])
+	movedRoot := shardRoot + "-moved"
+	writeRoot := store.writeRoot
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if err := writeRoot(root, name, data, mode); err != nil {
+			return err
+		}
+		if name != digest {
+			return nil
+		}
+		if err := os.Rename(shardRoot, movedRoot); err != nil {
+			return err
+		}
+		return os.Mkdir(shardRoot, 0o700)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "changed during publication") {
+		t.Fatalf("detached blob admission = %+v, %v", attachment, err)
+	}
+	entries, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil || len(entries) != 0 {
+		t.Fatalf("manifest changed after detached blob publication = %+v, %v", entries, listErr)
+	}
+}
+
+func TestAttachmentAdmissionRejectsDetachedManifestDirectory(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachmentsRoot := filepath.Join(threadRoot, attachmentDirectory)
+	movedRoot := attachmentsRoot + "-moved"
+	writeRoot := store.writeRoot
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if err := writeRoot(root, name, data, mode); err != nil {
+			return err
+		}
+		if name != attachmentManifest {
+			return nil
+		}
+		if err := os.Rename(attachmentsRoot, movedRoot); err != nil {
+			return err
+		}
+		return os.Mkdir(attachmentsRoot, 0o700)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "changed during publication") {
+		t.Fatalf("detached manifest admission = %+v, %v", attachment, err)
+	}
+	entries, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil || len(entries) != 0 {
+		t.Fatalf("active manifest changed after detached publication = %+v, %v", entries, listErr)
+	}
+}
+
+func TestAttachmentAdmissionRejectsThreadDetachedAfterManifestWrite(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	movedRoot := threadRoot + "-moved"
+	writeRoot := store.writeRoot
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if err := writeRoot(root, name, data, mode); err != nil {
+			return err
+		}
+		if name != attachmentManifest {
+			return nil
+		}
+		if err := os.Rename(threadRoot, movedRoot); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Join(threadRoot, attachmentDirectory), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(threadRoot, leaseFileName), []byte("replacement\n"), 0o600)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "active thread") {
+		t.Fatalf("detached thread admission = %+v, %v", attachment, err)
+	}
+	entries, listErr := store.ListAttachments(metadata.ThreadID)
+	if listErr != nil || len(entries) != 0 {
+		t.Fatalf("active manifest changed after detached thread publication = %+v, %v", entries, listErr)
 	}
 }
 
