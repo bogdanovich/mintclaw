@@ -192,6 +192,9 @@ func (s *Store) TrashThread(
 			}
 			operationErr = errors.Join(operationErr, releaseErr)
 		}()
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return maintenanceErr
+		}
 		if _, planErr := s.PlanDelete(threadID); planErr != nil {
 			return planErr
 		}
@@ -216,6 +219,9 @@ func (s *Store) TrashThread(
 		at := now.UTC()
 		trashID := fmt.Sprintf("%s-%s-%s", threadID, at.Format("20060102T150405.000000000Z"), uuid.NewString())
 		destination := filepath.Join(trashRoot, trashID)
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return maintenanceErr
+		}
 		if err := root.Rename(
 			filepath.Join("threads", threadID),
 			filepath.Join("trash", "threads", trashID),
@@ -223,6 +229,9 @@ func (s *Store) TrashThread(
 			return fmt.Errorf("coding thread delete: move to trash: %w", err)
 		}
 		result = TrashResult{ThreadID: threadID, TrashID: trashID, Path: destination, At: at}
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return &CommittedTrashError{Result: result, Err: maintenanceErr}
+		}
 		if err := errors.Join(
 			fileutil.SyncDirectory(filepath.Join(s.root, "threads")),
 			fileutil.SyncDirectory(trashRoot),

@@ -309,6 +309,7 @@ type Store struct {
 	syncDir      func(string) error
 
 	afterAttachmentGCCommitValidation func()
+	afterAttachmentBlobPublication    func()
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.

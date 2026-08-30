@@ -121,6 +121,9 @@ func (s *Store) ForkThread(
 			}
 			operationErr = errors.Join(operationErr, releaseErr)
 		}()
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return maintenanceErr
+		}
 		source, history, revision, sourceAttachments, err := s.readForkSource(
 			ctx,
 			sourceLease,
@@ -173,7 +176,18 @@ func (s *Store) ForkThread(
 		if err != nil {
 			return err
 		}
-		return s.publishFork(ctx, child, snapshot, childAttachments, result)
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return maintenanceErr
+		}
+		publishErr := s.publishFork(ctx, child, snapshot, childAttachments, result)
+		maintenanceValidationErr := maintenance.Validate()
+		if maintenanceValidationErr == nil {
+			return publishErr
+		}
+		if publishErr == nil || IsCommittedForkError(publishErr) {
+			return &CommittedForkError{Result: result, Err: errors.Join(publishErr, maintenanceValidationErr)}
+		}
+		return errors.Join(publishErr, maintenanceValidationErr)
 	})
 	return child, result, err
 }

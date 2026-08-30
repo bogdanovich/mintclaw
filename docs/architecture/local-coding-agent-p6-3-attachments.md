@@ -47,16 +47,24 @@ manifest as recoverable MintClaw-owned state but never removes shared blob
 bytes. `mintclaw threads gc` performs a store-wide dry-run by default with a
 24-hour retention window. Deletion requires the exact
 `--confirm delete-unreferenced-blobs` phrase and repeats the complete scan under
-one cross-process attachment-maintenance lock.
+one cross-process attachment-maintenance lock. The retention cutoff cannot be
+in the future.
 
 The collector marks active manifests, recoverable thread trash, and quarantined
 fork preparations before considering a blob. Admission, fork publication, and
 active-to-trash moves share the narrow maintenance lock, closing the
 blob-before-manifest and directory-move races without blocking ordinary coding
-turns or attachment reads. Manifest and blob scans are bounded and pinned;
-corrupt, unreadable, unknown, over-limit, replaced, or concurrently changing
-state fails closed before deletion. A partial deletion or directory-sync
-failure is reported as a committed GC outcome with exact deleted counts.
+turns or attachment reads. The lease retains pinned store, lock-directory, and
+lock-file identities for its lifetime; producers validate that authority around
+blob, manifest, fork, and trash commits. Admission atomically republishes even
+verified deduplicated bytes before committing the manifest, refreshing their
+inode and retention identity so a stale collector cannot detach the newly
+referenced content. Manifest and blob scans are bounded and pinned. Once blob
+storage exists, the active `threads/` authority is required; trash authorities
+remain optional. Corrupt, unreadable, unknown, over-limit, missing, replaced,
+or concurrently changing state fails closed before deletion. A partial deletion
+or directory-sync failure is reported as a committed GC outcome with exact
+deleted counts.
 
 Deletion is identity-bound rather than a final name-based unlink. The collector
 creates a unique same-shard hard-link quarantine for the verified candidate,

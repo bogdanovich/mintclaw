@@ -143,22 +143,10 @@ func (s *Store) acquireAttachmentGCSession() (*attachmentGCSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	fail := func(operationErr error) (*attachmentGCSession, error) {
-		return nil, errors.Join(operationErr, maintenance.Release())
-	}
-	root, err := openPinnedCatalogRoot(s.root)
-	if err != nil {
-		return fail(fmt.Errorf("coding attachment garbage collection: pin store root: %w", err))
-	}
-	maintenanceRoot, err := openPinnedAttachmentChild(root, attachmentMaintenanceDirectory)
-	if err != nil {
-		return fail(errors.Join(
-			fmt.Errorf("coding attachment garbage collection: pin maintenance root: %w", err),
-			root.Close(),
-		))
-	}
 	session := &attachmentGCSession{
-		root: root, maintenanceRoot: maintenanceRoot, maintenance: maintenance,
+		root:            maintenance.root,
+		maintenanceRoot: maintenance.directory,
+		maintenance:     maintenance,
 	}
 	if err := session.validate(s.root); err != nil {
 		return nil, errors.Join(err, session.Close())
@@ -170,12 +158,10 @@ func (s *attachmentGCSession) validate(storeRoot string) error {
 	if s == nil || s.root == nil || s.maintenanceRoot == nil || s.maintenance == nil {
 		return fmt.Errorf("coding attachment garbage collection: session is incomplete")
 	}
-	if err := validateAttachmentMaintenanceFile(
-		storeRoot,
-		s.root,
-		s.maintenanceRoot,
-		s.maintenance.file,
-	); err != nil {
+	if s.maintenance.storeRoot != storeRoot {
+		return fmt.Errorf("coding attachment garbage collection: maintenance store identity changed")
+	}
+	if err := s.maintenance.Validate(); err != nil {
 		return fmt.Errorf("coding attachment garbage collection: validate maintenance authority: %w", err)
 	}
 	return nil
@@ -185,7 +171,7 @@ func (s *attachmentGCSession) Close() error {
 	if s == nil {
 		return nil
 	}
-	return errors.Join(s.maintenanceRoot.Close(), s.root.Close(), s.maintenance.Release())
+	return s.maintenance.Release()
 }
 
 func resolveAttachmentGCOptions(options AttachmentGCOptions) (AttachmentGCOptions, error) {
@@ -193,6 +179,11 @@ func resolveAttachmentGCOptions(options AttachmentGCOptions) (AttachmentGCOption
 		return AttachmentGCOptions{}, fmt.Errorf("coding attachment garbage collection: retention cutoff is required")
 	}
 	options.Before = options.Before.UTC()
+	if options.Before.After(time.Now().UTC()) {
+		return AttachmentGCOptions{}, fmt.Errorf(
+			"coding attachment garbage collection: retention cutoff cannot be future",
+		)
+	}
 	if options.BlobLimit == 0 {
 		options.BlobLimit = DefaultAttachmentGCBlobLimit
 	}
@@ -211,9 +202,13 @@ func (s *Store) markAttachmentGarbage(
 	ctx context.Context,
 	root *os.Root,
 ) (map[string]struct{}, int, error) {
+	requireActive, err := attachmentGCBlobStoreExists(root)
+	if err != nil {
+		return nil, 0, err
+	}
 	marked := make(map[string]struct{})
 	count := 0
-	for _, tree := range [][]string{
+	for index, tree := range [][]string{
 		{"threads"},
 		{"trash", "threads"},
 		{"trash", "fork-preparations"},
@@ -223,6 +218,7 @@ func (s *Store) markAttachmentGarbage(
 			s,
 			root,
 			tree,
+			index == 0 && requireActive,
 			attachmentGCManifestLimit-count,
 			attachmentGCMarkedBlobLimit,
 			marked,
@@ -243,6 +239,7 @@ func scanAttachmentManifestTree(
 	store *Store,
 	storeRoot *os.Root,
 	components []string,
+	required bool,
 	manifestLimit int,
 	markedBlobLimit int,
 	marked map[string]struct{},
@@ -257,6 +254,12 @@ func scanAttachmentManifestTree(
 	for _, component := range components {
 		child, err := openPinnedAttachmentChild(current, component)
 		if errors.Is(err, os.ErrNotExist) {
+			if required {
+				return 0, fmt.Errorf(
+					"coding attachment garbage collection: required manifest authority %q is missing",
+					filepath.Join(components...),
+				)
+			}
 			return 0, nil
 		}
 		if err != nil {
@@ -323,6 +326,26 @@ func scanAttachmentManifestTree(
 		}
 	}
 	return count, nil
+}
+
+func attachmentGCBlobStoreExists(root *os.Root) (bool, error) {
+	blobs, exists, err := openOptionalPinnedAttachmentChild(root, "blobs")
+	if err != nil || !exists {
+		return false, err
+	}
+	defer func() { _ = blobs.Close() }()
+	shaRoot, exists, err := openOptionalPinnedAttachmentChild(blobs, "sha256")
+	if err != nil || !exists {
+		return false, err
+	}
+	defer func() { _ = shaRoot.Close() }()
+	if err := validatePinnedAttachmentDirectory(blobs, "sha256", shaRoot); err != nil {
+		return false, err
+	}
+	if err := validatePinnedAttachmentDirectory(root, "blobs", blobs); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func loadAttachmentGCManifest(

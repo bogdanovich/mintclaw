@@ -202,6 +202,16 @@ func TestAttachmentGarbageCollectionDeleteIsNoOpWithoutBlobStore(t *testing.T) {
 	}
 }
 
+func TestAttachmentGarbageCollectionRejectsFutureCutoff(t *testing.T) {
+	store, _ := newLeaseTestThread(t)
+	result, err := store.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+		Before: time.Now().Add(time.Hour), Delete: true,
+	})
+	if err == nil || result.DeletedBlobs != 0 || !strings.Contains(err.Error(), "cannot be future") {
+		t.Fatalf("future-cutoff sweep = %+v, %v", result, err)
+	}
+}
+
 func TestAttachmentGarbageCollectionHonorsRetentionAndFailsClosedOnCorruptManifest(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	now := time.Now().UTC()
@@ -323,6 +333,40 @@ func TestAttachmentGarbageCollectionRejectsUnknownBlobEntriesWithoutDeletion(t *
 	}
 	if _, err := os.Stat(attachmentTestBlobPath(store, orphan)); err != nil {
 		t.Fatalf("orphan removed after unknown entry: %v", err)
+	}
+}
+
+func TestAttachmentGarbageCollectionRejectsMissingActiveAuthority(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment := admitGCTestAttachment(t, store, lease, metadata, "active.txt", "active payload", now)
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	path := attachmentTestBlobPath(store, attachment)
+	old := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(
+		filepath.Join(store.Root(), "threads"),
+		filepath.Join(store.Root(), "threads-moved"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+		Before: now.Add(-24 * time.Hour), Delete: true,
+	})
+	if err == nil || result.DeletedBlobs != 0 || IsCommittedAttachmentGCError(err) ||
+		!strings.Contains(err.Error(), "required manifest authority") {
+		t.Fatalf("missing-active-authority sweep = %+v, %v", result, err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("blob removed with missing active authority: %v", err)
 	}
 }
 
@@ -482,13 +526,13 @@ func TestAttachmentGarbageCollectionEnforcesAuthorityBudgetsBeforeExpansion(t *t
 	t.Cleanup(func() { _ = session.Close() })
 	marked := make(map[string]struct{})
 	count, err := scanAttachmentManifestTree(
-		t.Context(), store, session.root, []string{"threads"}, 0, attachmentGCMarkedBlobLimit, marked,
+		t.Context(), store, session.root, []string{"threads"}, false, 0, attachmentGCMarkedBlobLimit, marked,
 	)
 	if err == nil || count != 0 || len(marked) != 0 || !strings.Contains(err.Error(), "exceeds 0 entries") {
 		t.Fatalf("zero manifest budget = count %d marked %d err %v", count, len(marked), err)
 	}
 	count, err = scanAttachmentManifestTree(
-		t.Context(), store, session.root, []string{"threads"}, 1, 0, marked,
+		t.Context(), store, session.root, []string{"threads"}, false, 1, 0, marked,
 	)
 	if err == nil || count != 1 || len(marked) != 0 || !strings.Contains(err.Error(), "referenced blobs exceed 0") {
 		t.Fatalf("zero digest budget = count %d marked %d err %v", count, len(marked), err)
@@ -599,7 +643,8 @@ func TestAttachmentGarbageCollectionRevalidatesAuthorityAfterCandidateHash(t *te
 	}
 	if outcome.err == nil || outcome.result.DeletedBlobs != 0 ||
 		IsCommittedAttachmentGCError(outcome.err) ||
-		!strings.Contains(outcome.err.Error(), "lock directory") {
+		(!strings.Contains(outcome.err.Error(), "lock directory") &&
+			!strings.Contains(outcome.err.Error(), "detached candidate changed identity")) {
 		t.Fatalf("maintenance-replacement sweep = %+v, %v", outcome.result, outcome.err)
 	}
 	if _, err := os.Stat(path); err != nil {

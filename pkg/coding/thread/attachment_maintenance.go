@@ -14,9 +14,19 @@ const attachmentMaintenanceDirectory = "attachment-maintenance"
 // blob-to-manifest edge with garbage collection and active-to-trash moves.
 // Per-thread leases remain the authority for thread mutation.
 type attachmentMaintenanceLease struct {
-	file *os.File
-	once sync.Once
-	err  error
+	storeRoot string
+	root      *os.Root
+	directory *os.Root
+	file      *os.File
+	once      sync.Once
+	err       error
+}
+
+func (l *attachmentMaintenanceLease) Validate() error {
+	if l == nil || l.root == nil || l.directory == nil || l.file == nil {
+		return fmt.Errorf("coding attachment maintenance: lease is incomplete")
+	}
+	return validateAttachmentMaintenanceFile(l.storeRoot, l.root, l.directory, l.file)
 }
 
 func (l *attachmentMaintenanceLease) Release() error {
@@ -24,7 +34,12 @@ func (l *attachmentMaintenanceLease) Release() error {
 		return nil
 	}
 	l.once.Do(func() {
-		l.err = errors.Join(releaseThreadLeaseFile(l.file), l.file.Close())
+		l.err = errors.Join(
+			releaseThreadLeaseFile(l.file),
+			l.file.Close(),
+			l.directory.Close(),
+			l.root.Close(),
+		)
 	})
 	return l.err
 }
@@ -37,18 +52,31 @@ func (s *Store) acquireAttachmentMaintenanceLease() (*attachmentMaintenanceLease
 	if err != nil {
 		return nil, fmt.Errorf("coding attachment maintenance: pin store root: %w", err)
 	}
-	defer func() { _ = root.Close() }()
+	keepPinned := false
+	var pinned *os.Root
+	var file *os.File
+	defer func() {
+		if keepPinned {
+			return
+		}
+		if file != nil {
+			_ = file.Close()
+		}
+		if pinned != nil {
+			_ = pinned.Close()
+		}
+		_ = root.Close()
+	}()
 	if prepareErr := ensureDirectTrashDirectory(root, attachmentMaintenanceDirectory); prepareErr != nil {
 		return nil, fmt.Errorf("coding attachment maintenance: prepare lock directory: %w", prepareErr)
 	}
-	if syncErr := syncRootDirectory(root); syncErr != nil {
+	if syncErr := s.syncDir(s.root); syncErr != nil {
 		return nil, fmt.Errorf("coding attachment maintenance: sync lock directory: %w", syncErr)
 	}
-	pinned, err := root.OpenRoot(attachmentMaintenanceDirectory)
+	pinned, err = root.OpenRoot(attachmentMaintenanceDirectory)
 	if err != nil {
 		return nil, fmt.Errorf("coding attachment maintenance: pin lock directory: %w", err)
 	}
-	defer func() { _ = pinned.Close() }()
 	if validationErr := validatePinnedAttachmentDirectory(
 		root,
 		attachmentMaintenanceDirectory,
@@ -60,20 +88,16 @@ func (s *Store) acquireAttachmentMaintenanceLease() (*attachmentMaintenanceLease
 	if err != nil {
 		return nil, fmt.Errorf("coding attachment maintenance: open lock directory: %w", err)
 	}
-	file, openErr := openThreadLeaseFile(directory)
+	var openErr error
+	file, openErr = openThreadLeaseFile(directory)
 	closeErr := directory.Close()
 	if err := errors.Join(openErr, closeErr); err != nil {
-		if file != nil {
-			_ = file.Close()
-		}
 		return nil, fmt.Errorf("coding attachment maintenance: open lock file: %w", err)
 	}
 	if err := validateAttachmentMaintenanceFile(s.root, root, pinned, file); err != nil {
-		_ = file.Close()
 		return nil, err
 	}
 	if err := tryAcquireThreadLeaseFile(file); err != nil {
-		_ = file.Close()
 		if errors.Is(err, ErrLeaseBusy) {
 			return nil, fmt.Errorf("coding attachment maintenance is busy: %w", ErrLeaseBusy)
 		}
@@ -81,15 +105,24 @@ func (s *Store) acquireAttachmentMaintenanceLease() (*attachmentMaintenanceLease
 	}
 	if err := validateAttachmentMaintenanceFile(s.root, root, pinned, file); err != nil {
 		_ = releaseThreadLeaseFile(file)
-		_ = file.Close()
 		return nil, err
 	}
 	if err := writeLeaseOwner(file, newLeaseOwner()); err != nil {
 		_ = releaseThreadLeaseFile(file)
-		_ = file.Close()
 		return nil, fmt.Errorf("coding attachment maintenance: record owner: %w", err)
 	}
-	return &attachmentMaintenanceLease{file: file}, nil
+	lease := &attachmentMaintenanceLease{
+		storeRoot: s.root,
+		root:      root,
+		directory: pinned,
+		file:      file,
+	}
+	if err := lease.Validate(); err != nil {
+		_ = releaseThreadLeaseFile(file)
+		return nil, err
+	}
+	keepPinned = true
+	return lease, nil
 }
 
 func validateAttachmentMaintenanceFile(

@@ -253,6 +253,9 @@ func (s *Store) AdmitAttachments(
 			}
 			operationErr = errors.Join(operationErr, releaseErr)
 		}()
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return maintenanceErr
+		}
 		prepared, prepareErr := prepareAttachmentBatch(ctx, validated)
 		if prepareErr != nil {
 			return prepareErr
@@ -273,8 +276,17 @@ func (s *Store) AdmitAttachments(
 			return fmt.Errorf("coding attachment admission: thread exceeds %d attachments", MaxThreadAttachments)
 		}
 		for _, candidate := range prepared {
+			if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+				return maintenanceErr
+			}
 			if publishErr := view.publishBlob(ctx, candidate.attachment.SHA256, candidate.data); publishErr != nil {
 				return publishErr
+			}
+			if s.afterAttachmentBlobPublication != nil {
+				s.afterAttachmentBlobPublication()
+			}
+			if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+				return maintenanceErr
 			}
 			if identityErr := view.validateWriter(lease); identityErr != nil {
 				return fmt.Errorf("coding attachment: revalidate writer after blob publication: %w", identityErr)
@@ -293,9 +305,19 @@ func (s *Store) AdmitAttachments(
 			admitted = nil
 			return fmt.Errorf("coding attachment: revalidate active thread before manifest publish: %w", identityErr)
 		}
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			admitted = nil
+			return maintenanceErr
+		}
 		saveErr := view.saveManifest(manifest)
 		var committedManifest *committedAttachmentManifestError
 		if saveErr == nil || errors.As(saveErr, &committedManifest) {
+			if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+				return &CommittedAttachmentsError{
+					Attachments: append([]Attachment(nil), admitted...),
+					Err:         errors.Join(saveErr, maintenanceErr),
+				}
+			}
 			if identityErr := view.validateWriter(lease); identityErr != nil {
 				admitted = nil
 				return fmt.Errorf("coding attachment: revalidate active thread after manifest publish: %w", identityErr)
@@ -1007,28 +1029,27 @@ func (v *attachmentStoreView) publishBlob(ctx context.Context, digest string, da
 	}
 	defer func() { _ = hierarchy.Close() }()
 	shard := hierarchy.Leaf()
-	existing := false
 	if _, statErr := shard.Lstat(digest); statErr == nil {
-		existing = true
 		_, actual, size, readErr := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
 		if readErr != nil || actual != digest || size != int64(len(data)) {
 			return fmt.Errorf("coding attachment blob: existing digest path is invalid")
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("coding attachment blob: inspect digest path: %w", statErr)
-	} else {
-		if writeErr := v.store.writeRoot(shard, digest, data, 0o600); writeErr != nil {
-			return fmt.Errorf("coding attachment blob: publish: %w", writeErr)
-		}
-		_, actual, size, readErr := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
-		if readErr != nil || actual != digest || size != int64(len(data)) {
-			return fmt.Errorf("coding attachment blob: published content could not be verified: %w", readErr)
-		}
 	}
-	if existing {
-		if syncErr := v.store.syncRoot(shard); syncErr != nil {
-			return fmt.Errorf("coding attachment blob: sync existing digest directory: %w", syncErr)
-		}
+	// Republish even identical existing bytes. The atomic inode replacement
+	// refreshes retention identity, so a collector which lost maintenance
+	// authority cannot delete an old deduplicated blob between this publication
+	// and the manifest commit.
+	if writeErr := v.store.writeRoot(shard, digest, data, 0o600); writeErr != nil {
+		return fmt.Errorf("coding attachment blob: publish: %w", writeErr)
+	}
+	if syncErr := v.store.syncRoot(shard); syncErr != nil {
+		return fmt.Errorf("coding attachment blob: sync digest directory: %w", syncErr)
+	}
+	_, actual, size, readErr := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
+	if readErr != nil || actual != digest || size != int64(len(data)) {
+		return fmt.Errorf("coding attachment blob: published content could not be verified: %w", readErr)
 	}
 	if err := v.validateHierarchy(hierarchy); err != nil {
 		return fmt.Errorf("coding attachment blob: revalidate hierarchy: %w", err)
