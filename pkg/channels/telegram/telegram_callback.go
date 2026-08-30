@@ -160,7 +160,7 @@ func (c *TelegramChannel) settleInteractionCallbackUI(
 	if uiCtx.Err() != nil {
 		return
 	}
-	if c.interactionControlsOwnedByDifferentSender(
+	if !c.interactionControlsMatchPrompt(
 		message.Chat.ID, message.MessageThreadID, senderID, shortID, strconv.Itoa(message.MessageID),
 	) {
 		return

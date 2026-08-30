@@ -3910,12 +3910,11 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	assert.Equal(t, "Generate it", published.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
 	assert.Equal(t, "0", published.Context.Raw[bus.InboundMetadataKeyInteractionOptionIndex])
 	assert.Equal(t, "1771", published.Context.TopicID)
-	require.Len(t, caller.calls, 2)
+	require.Len(t, caller.calls, 1)
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
 	var answer map[string]any
 	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &answer))
 	assert.Equal(t, "Response received.", answer["text"])
-	assert.Contains(t, caller.calls[1].URL, "editMessageReplyMarkup")
 	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
 	_, _, response, resolved := ch.resolveInteractionCallback(
 		-100123,
@@ -3955,7 +3954,7 @@ func TestHandleInteractionCallbackBoundsUIAfterInboundPublish(t *testing.T) {
 	}
 }
 
-func TestHandleInteractionCallbackAcknowledgesAndClearsInactiveControl(t *testing.T) {
+func TestHandleInteractionCallbackPreservesUnknownControlsUntilDurableSync(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	caller := &stubCaller{callFn: func(
 		_ context.Context, _ string, _ *ta.RequestData,
@@ -3979,14 +3978,45 @@ func TestHandleInteractionCallbackAcknowledgesAndClearsInactiveControl(t *testin
 		}
 	}
 
-	require.Len(t, caller.calls, 4)
-	for index := 0; index < len(caller.calls); index += 2 {
+	require.Len(t, caller.calls, 2)
+	for index := range caller.calls {
 		assert.Contains(t, caller.calls[index].URL, "answerCallbackQuery")
 		var answer map[string]any
 		require.NoError(t, json.Unmarshal(caller.calls[index].Data.BodyRaw, &answer))
 		assert.Equal(t, "Response received.", answer["text"])
-		assert.Contains(t, caller.calls[index+1].URL, "editMessageReplyMarkup")
 	}
+}
+
+func TestHandleInteractionCallbackClearsExactOwnerControls(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
+	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
+		{chatID: 12345, senderID: "15"}: {
+			shortID: "active12", promptMessageID: "72", kind: bus.OutboundInteractionApproval,
+		},
+	}
+	message := &telego.Message{MessageID: 72, Chat: telego.Chat{ID: 12345, Type: "private"}}
+
+	require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+		ID: "callback-owner", From: telego.User{ID: 15}, Message: message,
+		Data: "mc:i:active12:allow",
+	}))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(t, "callback-owner", inbound.Context.MessageID)
+	case <-time.After(time.Second):
+		t.Fatal("owner callback was not durably published")
+	}
+	require.Len(t, caller.calls, 2)
+	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
+	assert.Contains(t, caller.calls[1].URL, "editMessageReplyMarkup")
+	assert.False(t, ch.interactionControlsMatch(12345, 0, "15", "active12"))
 }
 
 func TestHandleInteractionCallbackPreservesControlsOwnedByAnotherGroupSender(t *testing.T) {
@@ -4022,6 +4052,35 @@ func TestHandleInteractionCallbackPreservesControlsOwnedByAnotherGroupSender(t *
 	require.Len(t, caller.calls, 1)
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
 	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "owner123"))
+}
+
+func TestHandleInteractionCallbackWithEmptyProjectionDoesNotRemoveGroupControls(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15", "16"})
+	message := &telego.Message{
+		MessageID: 72, MessageThreadID: 1771,
+		Chat: telego.Chat{ID: -100123, Type: "supergroup", IsForum: true},
+	}
+
+	require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+		ID: "callback-empty-projection", From: telego.User{ID: 16}, Message: message,
+		Data: "mc:i:owner123:allow",
+	}))
+	select {
+	case inbound := <-messageBus.InboundChan():
+		assert.Equal(t, "16", inbound.Context.SenderID)
+		assert.Equal(t, "owner123", inbound.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+	case <-time.After(time.Second):
+		t.Fatal("callback with empty projection was not durably published")
+	}
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
 }
 
 func TestSyncInteractionControlsClearsExactPromptWithoutRemovingNewerProjection(t *testing.T) {

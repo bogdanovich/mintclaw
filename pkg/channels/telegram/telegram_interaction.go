@@ -220,7 +220,7 @@ func (c *TelegramChannel) interactionControlsMatch(
 	return active && shortID != "" && controls.shortID == shortID
 }
 
-func (c *TelegramChannel) interactionControlsOwnedByDifferentSender(
+func (c *TelegramChannel) interactionControlsMatchPrompt(
 	chatID int64,
 	threadID int,
 	senderID string,
@@ -233,15 +233,13 @@ func (c *TelegramChannel) interactionControlsOwnedByDifferentSender(
 	if shortID == "" || promptMessageID == "" {
 		return false
 	}
+	key := telegramInteractionControlKey{
+		chatID: chatID, threadID: threadID, senderID: senderID,
+	}
 	c.interactionControlsMu.RLock()
 	defer c.interactionControlsMu.RUnlock()
-	for key, controls := range c.interactionControls {
-		if key.chatID == chatID && key.threadID == threadID && key.senderID != senderID &&
-			controls.shortID == shortID && controls.promptMessageID == promptMessageID {
-			return true
-		}
-	}
-	return false
+	controls, active := c.interactionControls[key]
+	return active && controls.shortID == shortID && controls.promptMessageID == promptMessageID
 }
 
 func (c *TelegramChannel) removeInteractionControls(
