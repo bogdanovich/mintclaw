@@ -194,9 +194,26 @@ func telegramInteractionShortID(reply *telego.Message) string {
 		previous[0] != "/answer" || last[0] != "/answer" ||
 		previous[2] != "allow_once" || last[2] != "deny" ||
 		!strings.EqualFold(previous[1], last[1]) {
-		return ""
+		return telegramMultiQuestionFooterShortID(lines)
 	}
 	return previous[1]
+}
+
+func telegramMultiQuestionFooterShortID(lines []string) string {
+	templates := 0
+	for index := len(lines) - 1; index >= 0; index-- {
+		fields := telegramInteractionFooterFields(lines[index])
+		if len(fields) == 2 && fields[1] == "…" &&
+			strings.TrimSuffix(fields[0], ":") != "" && strings.HasSuffix(fields[0], ":") {
+			templates++
+			continue
+		}
+		if templates >= 2 && len(fields) == 2 && fields[0] == "/answer" {
+			return fields[1]
+		}
+		return ""
+	}
+	return ""
 }
 
 func telegramInteractionFooterFields(line string) []string {

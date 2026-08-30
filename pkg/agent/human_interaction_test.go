@@ -6231,6 +6231,56 @@ func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
 	}
 }
 
+func TestProjectedMultiQuestionReplyRequiresDurablePromptIdentity(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-multi-reply-identity"
+	questions := append([]interactions.Question(nil), request.Prompt.Questions...)
+	questions = append(questions, interactions.Question{ID: "test_mode", Question: "Which mode?"})
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		al.outboundCoordinator(),
+		agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		[]string{"8800"},
+	)
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	reply := bus.InboundMessage{Content: "test_region: eu\ntest_mode: safe"}
+	reply.Context = inboundContextForInteraction(request.Route)
+	reply.Context.MessageID = "multi-reply"
+	reply.Context.ReplyToMessageID = "8800"
+	reply.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionResponse: reply.Content,
+		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	}
+
+	classification := al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != record.ID {
+		t.Fatalf("confirmed multi-question prompt classification = %#v", classification)
+	}
+	reply.Context.ReplyToMessageID = "8799"
+	classification = al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerWrongID {
+		t.Fatalf("other multi-question prompt classification = %#v", classification)
+	}
+}
+
 func TestStaleCancelCallbackCannotCancelNewerShortIDCollision(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()

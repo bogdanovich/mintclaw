@@ -3850,6 +3850,23 @@ func TestTelegramInteractionResponseProjectsPromptIdentityWithoutLocalControls(t
 	assert.Equal(t, "abc12345", reply.shortID)
 }
 
+func TestTelegramMultiQuestionResponseProjectsPromptIdentityWithoutLocalControls(t *testing.T) {
+	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	reply := ch.telegramInteractionReplyMetadata(&telego.Message{
+		Text: "region: eu\nmode: safe", Chat: telego.Chat{ID: 999},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101,
+			Text: "1. `region`\nWhich region?\n\n2. `mode`\nWhich mode?\n\n" +
+				"`/answer multi123`\n`region: …`\n`mode: …`",
+			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}, "region: eu\nmode: safe", "15")
+
+	assert.Empty(t, reply.choice)
+	assert.Equal(t, "region: eu\nmode: safe", reply.response)
+	assert.Equal(t, "multi123", reply.shortID)
+}
+
 func TestTelegramInteractionReplyMetadataCarriesPromptIdentity(t *testing.T) {
 	ch := &TelegramChannel{
 		selfID: 42, selfName: "mintclaw_bot",
