@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -9,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
@@ -18,11 +16,11 @@ func TestNewMintClawCommand(t *testing.T) {
 
 	require.NotNil(t, cmd)
 
-	short := fmt.Sprintf("%s MintClaw — personal AI assistant", internal.Logo)
 	longHas := strings.Contains(cmd.Long, config.FormatVersion())
 
 	assert.Equal(t, "mintclaw", cmd.Use)
-	assert.Equal(t, short, cmd.Short)
+	assert.Equal(t, "MintClaw — personal AI assistant", cmd.Short)
+	assert.NotContains(t, cmd.Long, "🦞")
 	assert.True(t, longHas)
 
 	assert.True(t, cmd.HasSubCommands())
@@ -33,7 +31,7 @@ func TestNewMintClawCommand(t *testing.T) {
 	assert.Nil(t, cmd.Run)
 	assert.Nil(t, cmd.RunE)
 
-	assert.NotNil(t, cmd.PersistentPreRun)
+	assert.Nil(t, cmd.PersistentPreRun)
 	assert.Nil(t, cmd.PersistentPostRun)
 
 	allowedCommands := []string{

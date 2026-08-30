@@ -3,7 +3,6 @@ package version
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/cliui"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
@@ -23,5 +22,5 @@ func NewVersionCommand() *cobra.Command {
 
 func printVersion() {
 	build, goVer := config.FormatBuildInfo()
-	cliui.PrintVersion(internal.Logo, "mintclaw "+config.FormatVersion(), build, goVer)
+	cliui.PrintVersion("mintclaw "+config.FormatVersion(), build, goVer)
 }

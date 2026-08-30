@@ -56,6 +56,7 @@ func RunPicker(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	configureColorProfile(options.NoColor, options.Environment)
 	query := codingpicker.Query{
 		AllProjects: options.AllProjects,
 		Archived:    options.Archived,

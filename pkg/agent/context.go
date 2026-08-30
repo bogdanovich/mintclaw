@@ -241,9 +241,9 @@ func (cb *ContextBuilder) getIdentity(includeToolUseRule bool) string {
 	}
 
 	return fmt.Sprintf(
-		`# mintclaw 🦞 (%s)
+		`# MintClaw (%s)
 
-You are mintclaw, a helpful AI assistant.
+You are MintClaw, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: %s

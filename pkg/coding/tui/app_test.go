@@ -9,6 +9,8 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -64,6 +66,32 @@ func TestRunClosesControllerAfterProgramFailure(t *testing.T) {
 	}
 	if controller.closes.Load() != 1 {
 		t.Fatalf("closes = %d", controller.closes.Load())
+	}
+}
+
+func TestRunNoColorDisablesComposerANSI(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	controller := newController(t)
+	rendered := ""
+	err := Run(t.Context(), controller, Options{
+		NoColor: true,
+		newProgram: func(model tea.Model, _ ...tea.ProgramOption) program {
+			codingModel, ok := model.(*Model)
+			if !ok {
+				t.Fatalf("model = %T", model)
+			}
+			rendered = codingModel.composer.FocusedStyle.Text.Render("visible")
+			return fakeProgram{model: model}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered != "visible" {
+		t.Fatalf("--no-color rendered ANSI styling: %q", rendered)
 	}
 }
 

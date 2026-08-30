@@ -78,7 +78,7 @@ func onboard(encrypt bool) {
 	workspace := cfg.WorkspacePath()
 	createWorkspaceTemplates(workspace)
 
-	cliui.PrintOnboardComplete(internal.Logo, encrypt, configPath)
+	cliui.PrintOnboardComplete(encrypt, configPath)
 }
 
 func prepareOnboardConfig(
