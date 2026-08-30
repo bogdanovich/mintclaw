@@ -434,12 +434,7 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		)
 		return true
 	}
-	logExplicitInteractionAnswerDisposition(classification.Record, msg, classification.Disposition)
-	_ = c.al.settleInboundAdmission(
-		ctx,
-		msg,
-		finalResponseAdmission{status: finalResponseAdmissionNotRequired},
-	)
+	c.consumeExplicitInteractionAnswer(ctx, msg, target, classification)
 	return true
 }
 
@@ -593,7 +588,7 @@ func (c *inboundTurnCoordinator) consumeExplicitInteractionAnswer(
 	notice := "No matching pending interaction is accepting that answer."
 	switch disposition {
 	case explicitInteractionAnswerDuplicate:
-		notice = "An answer has already been accepted for this interaction."
+		notice = terminalInteractionNotice(record)
 	case explicitInteractionAnswerWrongID:
 		if record.ShortID != "" {
 			notice = fmt.Sprintf("I could not accept that answer: use `/answer %s <answer>`", record.ShortID)
@@ -608,6 +603,25 @@ func (c *inboundTurnCoordinator) consumeExplicitInteractionAnswer(
 		msg,
 		c.al.publishInteractionNoticeAdmission(ctx, msg, sessionKey, notice),
 	)
+}
+
+func terminalInteractionNotice(record interactions.Record) string {
+	switch record.Outcome {
+	case interactions.OutcomeTimedOut:
+		if record.Kind == interactions.KindApproval && record.ApprovalConsumedAt == 0 {
+			return "This approval expired before execution. The protected tool was not executed. " +
+				"Request the action again if it is still needed."
+		}
+		return "This interaction expired before the suspended operation could continue."
+	case interactions.OutcomeDenied:
+		return "This interaction was already denied."
+	case interactions.OutcomeCanceled:
+		return "This interaction was already canceled."
+	case interactions.OutcomeDeliveryUnknown:
+		return "This interaction already ended with an unknown delivery outcome and was not retried."
+	default:
+		return "An answer has already been accepted for this interaction."
+	}
 }
 
 func logExplicitInteractionAnswerDisposition(

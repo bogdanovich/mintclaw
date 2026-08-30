@@ -705,6 +705,22 @@ func seedTestInteractionPromptOutcome(
 	retryAfter ...time.Time,
 ) outbox.Intent {
 	t.Helper()
+	return seedTestInteractionPromptOutcomeWithMessages(
+		t, coordinator, workspace, record, status, attempts, nil, retryAfter...,
+	)
+}
+
+func seedTestInteractionPromptOutcomeWithMessages(
+	t *testing.T,
+	coordinator *outbox.Coordinator,
+	workspace string,
+	record interactions.Record,
+	status outbox.Status,
+	attempts int,
+	platformMessageIDs []string,
+	retryAfter ...time.Time,
+) outbox.Intent {
+	t.Helper()
 	message := interactionPromptMessage(record)
 	message.Content = renderInteractionPrompt(record)
 	for attempt := range attempts {
@@ -725,7 +741,10 @@ func seedTestInteractionPromptOutcome(
 		if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
 			t.Fatal(err)
 		}
-		outcome := outbox.Outcome{Error: "test delivery outcome"}
+		outcome := outbox.Outcome{
+			PlatformMessageIDs: append([]string(nil), platformMessageIDs...),
+			Error:              "test delivery outcome",
+		}
 		if len(retryAfter) > 0 && attempt == attempts-1 {
 			outcome.RetryAfter = retryAfter[0]
 		}
@@ -734,7 +753,9 @@ func seedTestInteractionPromptOutcome(
 		} else if status == outbox.StatusAmbiguous {
 			err = coordinator.MarkAmbiguous(admission.Intent.ID, outcome)
 		} else {
-			err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{})
+			err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{
+				PlatformMessageIDs: append([]string(nil), platformMessageIDs...),
+			})
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -2726,7 +2747,15 @@ func TestRecoveryDoesNotResendPromptAfterAmbiguousCrashWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	record = bindTestInteractionPrompt(t, registry, record)
-	seedTestInteractionPromptOutcome(t, coordinator, agent.Workspace, record, outbox.StatusAmbiguous, 1)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		coordinator,
+		agent.Workspace,
+		record,
+		outbox.StatusAmbiguous,
+		1,
+		[]string{"", "7716"},
+	)
 
 	if recovered := al.RecoverHumanInteractions(t.Context()); recovered != 1 {
 		t.Fatalf("RecoverHumanInteractions() = %d, want 1", recovered)
@@ -2735,6 +2764,14 @@ func TestRecoveryDoesNotResendPromptAfterAmbiguousCrashWindow(t *testing.T) {
 	if record.Status != interactions.StatusResolved ||
 		record.Outcome != interactions.OutcomeDeliveryUnknown {
 		t.Fatalf("record after ambiguous prompt recovery = %#v", record)
+	}
+	select {
+	case synced := <-manager.synced:
+		if synced.ReplyToMessageID != "7716" || !synced.Metadata.RemovesInteractionControls() {
+			t.Fatalf("ambiguous prompt control cleanup = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ambiguous prompt recovery did not clear its confirmed Telegram controls")
 	}
 	select {
 	case outbound := <-manager.sent:
@@ -4434,6 +4471,109 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 				t.Fatalf("timed-out approval result = %q", result.Content)
 			}
 		})
+	}
+}
+
+func TestTerminalInteractionNoticeUsesDurableOutcome(t *testing.T) {
+	tests := []struct {
+		name   string
+		record interactions.Record
+		want   string
+	}{
+		{
+			name: "approval expired before execution",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Outcome: interactions.OutcomeTimedOut,
+			},
+			want: "expired before execution",
+		},
+		{
+			name: "approval consumed before unknown result",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Outcome: interactions.OutcomeDeliveryUnknown,
+				ApprovalConsumedAt: 1,
+			},
+			want: "unknown delivery outcome",
+		},
+		{
+			name: "denied",
+			record: interactions.Record{
+				Kind: interactions.KindApproval, Outcome: interactions.OutcomeDenied,
+			},
+			want: "already denied",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := terminalInteractionNotice(test.record); !strings.Contains(got, test.want) {
+				t.Fatalf("terminalInteractionNotice() = %q, want substring %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestExpiredProjectedApprovalPublishesDurableStatus(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	setTestMessageBus(al, tracker)
+
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Prompt.Kind = interactions.KindApproval
+	request.Origin.ToolName = "browser_act"
+	request.Origin.ExecutionContext = &bus.InboundContext{
+		Channel: request.Route.Channel, ChatID: request.Route.ChatID, SenderID: request.Route.SenderID,
+	}
+	argumentHash, err := interactions.HashArguments(agent.Workspace, map[string]any{"action": "delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Origin.ArgumentHash = argumentHash
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		ApprovalAction: "Delete an external resource", ExpiresAt: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	markTestInteractionWaiting(t, registry, record)
+	claimed, err := registry.ClaimOverdue(time.Now().Add(2 * time.Minute))
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimOverdue() = (%#v, %v)", claimed, err)
+	}
+	record = claimed[0]
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	answer := bus.InboundMessage{
+		Content: "Allow once", SpoolID: "spool-expired-projected-approval",
+		Context: inboundContextForInteraction(request.Route),
+	}
+	answer.Context.MessageID = "expired-projected-answer"
+	answer.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
+		bus.InboundMetadataKeyInteractionResponse: "Allow once",
+		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	}
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), answer, target) {
+		t.Fatal("expired projected approval escaped interaction protocol routing")
+	}
+	select {
+	case notice := <-manager.sent:
+		if !strings.Contains(notice.Content, "expired before execution") ||
+			!strings.Contains(notice.Content, "was not executed") {
+			t.Fatalf("expired approval notice = %#v", notice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired projected approval did not publish durable status")
+	}
+	stored, _ := registry.Get(record.ID)
+	if stored.Outcome != interactions.OutcomeTimedOut || stored.ApprovalConsumedAt != 0 {
+		t.Fatalf("expired projected approval was mutated: %#v", stored)
 	}
 }
 

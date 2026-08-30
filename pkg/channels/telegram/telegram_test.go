@@ -3900,6 +3900,9 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	assert.Equal(t, "1771", published.Context.TopicID)
 	require.Len(t, caller.calls, 2)
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
+	var answer map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &answer))
+	assert.Equal(t, "Response received.", answer["text"])
 	assert.Contains(t, caller.calls[1].URL, "editMessageReplyMarkup")
 	assert.False(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
 	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "newer567"))
@@ -3961,7 +3964,7 @@ func TestHandleInteractionCallbackAcknowledgesAndClearsInactiveControl(t *testin
 		assert.Contains(t, caller.calls[index].URL, "answerCallbackQuery")
 		var answer map[string]any
 		require.NoError(t, json.Unmarshal(caller.calls[index].Data.BodyRaw, &answer))
-		assert.Contains(t, answer["text"], "no longer active")
+		assert.Equal(t, "Response received.", answer["text"])
 		assert.Contains(t, caller.calls[index+1].URL, "editMessageReplyMarkup")
 	}
 }

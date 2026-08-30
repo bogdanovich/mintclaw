@@ -141,10 +141,15 @@ func (al *AgentLoop) interactionPromptPlatformMessageID(record interactions.Reco
 		return ""
 	}
 	intent, err := coordinator.Get(record.PromptDeliveryID)
-	if err != nil || intent.Status != outbox.StatusDelivered || len(intent.PlatformMessageIDs) == 0 {
+	if err != nil || (intent.Status != outbox.StatusDelivered && intent.Status != outbox.StatusAmbiguous) {
 		return ""
 	}
-	return strings.TrimSpace(intent.PlatformMessageIDs[0])
+	for _, messageID := range intent.PlatformMessageIDs {
+		if messageID = strings.TrimSpace(messageID); messageID != "" {
+			return messageID
+		}
+	}
+	return ""
 }
 
 func (al *AgentLoop) recoverPromptDeliveryExhaustion(
