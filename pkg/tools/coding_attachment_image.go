@@ -9,10 +9,10 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
-	"strings"
 
-	"github.com/h2non/filetype"
 	_ "golang.org/x/image/webp"
+
+	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
 const (
@@ -36,16 +36,16 @@ type attachmentImageInspection struct {
 }
 
 func inspectAttachmentImage(data []byte) attachmentImageInspection {
-	kind, err := filetype.Match(data)
-	if err != nil || !strings.HasPrefix(kind.MIME.Value, "image/") {
+	contentType := media.DetectSupportedImageContentType(data)
+	if contentType == "" {
 		return attachmentImageInspection{kind: attachmentNotImage}
 	}
 	inspection := attachmentImageInspection{
 		kind:        attachmentImageInvalid,
-		contentType: kind.MIME.Value,
+		contentType: contentType,
 	}
 	var expectedFormat string
-	switch kind.MIME.Value {
+	switch contentType {
 	case "image/png":
 		expectedFormat = "png"
 	case "image/jpeg":

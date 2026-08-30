@@ -216,6 +216,7 @@ func (s *codingAttachmentMediaStore) ResolveWithMeta(ref string) (string, media.
 	if err != nil {
 		return "", media.MediaMeta{}, err
 	}
+	verifiedImageContentType := media.DetectSupportedImageContentType(data)
 	if cached, ok := s.materialized[ref]; ok {
 		if validationErr := s.validateMaterialized(cached, attachment); validationErr != nil {
 			return "", media.MediaMeta{}, validationErr
@@ -255,6 +256,9 @@ func (s *codingAttachmentMediaStore) ResolveWithMeta(ref string) (string, media.
 		ContentType:   attachment.ContentType,
 		Source:        "coding-attachment",
 		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}
+	if verifiedImageContentType != "" {
+		meta.ContentType = verifiedImageContentType
 	}
 	cached.meta = meta
 	s.materialized[ref] = cached

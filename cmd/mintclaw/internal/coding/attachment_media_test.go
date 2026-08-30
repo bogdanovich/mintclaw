@@ -1,6 +1,7 @@
 package coding
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,65 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
+
+func TestCodingAttachmentMediaUsesVerifiedImageMIME(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	project, err := thread.ResolveProject(t.Context(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "image MIME", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	png, err := base64.StdEncoding.DecodeString(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolver, err := newCodingAttachmentMediaStore(store, lease, metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = resolver.Close() })
+	for index, declaredType := range []string{"application/octet-stream", "image/jpeg"} {
+		path := filepath.Join(t.TempDir(), "image.png")
+		content := append(append([]byte(nil), png...), byte(index))
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, thread.AttachmentInput{
+			Path: path, Filename: "image.png", ContentType: declaredType, At: time.Now().Add(time.Duration(index)),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, resolvedMeta, err := resolver.ResolveWithMeta(attachment.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolvedMeta.ContentType != "image/png" {
+			t.Fatalf("declared %q resolved as %q, want verified image/png", declaredType, resolvedMeta.ContentType)
+		}
+	}
+}
 
 func TestCodingAttachmentMediaMaterializesVerifiedThreadOwnedBytes(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())

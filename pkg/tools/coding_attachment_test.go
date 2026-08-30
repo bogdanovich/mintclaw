@@ -167,6 +167,32 @@ func TestCodingAttachmentToolRejectsTruncatedUTF8GIFAsImage(t *testing.T) {
 	}
 }
 
+func TestCodingAttachmentToolOpensImageLikeUTF8AsText(t *testing.T) {
+	tests := []string{"GIF report: no image", "12345678WEBP report"}
+	for index, content := range tests {
+		store := newFakeReferenceCatalogStore()
+		ref := fmt.Sprintf("media://image-like-text-%d", index)
+		store.references = append(store.references, media.Reference{
+			Ref: ref, Filename: "report.txt", ContentType: "text/plain", Size: int64(len(content)),
+		})
+		store.data[ref] = []byte(content)
+		tool := NewCodingAttachmentTool()
+		tool.SetMediaStore(store)
+
+		result := tool.Execute(t.Context(), map[string]any{"action": "open", "ref": ref})
+		if result.IsError || len(result.ContextMedia) != 0 {
+			t.Fatalf("image-like text %q result = %+v", content, result)
+		}
+		var response codingAttachmentReadResponse
+		if err := json.Unmarshal([]byte(result.ForLLM), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Content != content {
+			t.Fatalf("image-like text content = %q, want %q", response.Content, content)
+		}
+	}
+}
+
 type threadReferenceCatalogStore struct {
 	store    *thread.Store
 	threadID string
