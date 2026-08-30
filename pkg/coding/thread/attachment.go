@@ -234,7 +234,28 @@ func (s *Store) AdmitAttachments(
 	}
 
 	var admitted []Attachment
-	err := lease.withActive(s.root, metadata.ThreadID, func() error {
+	err := lease.withActive(s.root, metadata.ThreadID, func() (operationErr error) {
+		maintenance, maintenanceErr := s.acquireAttachmentMaintenanceLease()
+		if maintenanceErr != nil {
+			return maintenanceErr
+		}
+		defer func() {
+			releaseErr := maintenance.Release()
+			if releaseErr == nil {
+				return
+			}
+			if operationErr == nil && len(admitted) > 0 {
+				operationErr = &CommittedAttachmentsError{
+					Attachments: append([]Attachment(nil), admitted...),
+					Err:         fmt.Errorf("release attachment maintenance lock: %w", releaseErr),
+				}
+				return
+			}
+			operationErr = errors.Join(operationErr, releaseErr)
+		}()
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return maintenanceErr
+		}
 		prepared, prepareErr := prepareAttachmentBatch(ctx, validated)
 		if prepareErr != nil {
 			return prepareErr
@@ -254,9 +275,48 @@ func (s *Store) AdmitAttachments(
 		if len(prepared) > MaxThreadAttachments-len(manifest.Entries) {
 			return fmt.Errorf("coding attachment admission: thread exceeds %d attachments", MaxThreadAttachments)
 		}
+		planned := make([]Attachment, len(prepared))
+		for index := range prepared {
+			prepared[index].attachment.Ref = attachmentRefPrefix + uuid.NewString()
+			planned[index] = prepared[index].attachment
+		}
+		manifest.Entries = append(manifest.Entries, planned...)
+		inflight, inflightErr := view.beginAttachmentInflight(prepared)
+		if inflightErr != nil {
+			return inflightErr
+		}
+		manifestCommitted := false
+		preserveInflight := false
+		defer func() {
+			if preserveInflight {
+				return
+			}
+			cleanupErr := inflight.Remove()
+			if cleanupErr == nil {
+				return
+			}
+			cleanupErr = fmt.Errorf("remove attachment in-flight authority: %w", cleanupErr)
+			if manifestCommitted {
+				operationErr = &CommittedAttachmentsError{
+					Attachments: append([]Attachment(nil), admitted...),
+					Err:         errors.Join(operationErr, cleanupErr),
+				}
+				return
+			}
+			operationErr = errors.Join(operationErr, cleanupErr)
+		}()
 		for _, candidate := range prepared {
+			if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+				return maintenanceErr
+			}
 			if publishErr := view.publishBlob(ctx, candidate.attachment.SHA256, candidate.data); publishErr != nil {
 				return publishErr
+			}
+			if s.afterAttachmentBlobPublication != nil {
+				s.afterAttachmentBlobPublication()
+			}
+			if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+				return maintenanceErr
 			}
 			if identityErr := view.validateWriter(lease); identityErr != nil {
 				return fmt.Errorf("coding attachment: revalidate writer after blob publication: %w", identityErr)
@@ -265,19 +325,27 @@ func (s *Store) AdmitAttachments(
 		if contextErr := ctx.Err(); contextErr != nil {
 			return contextErr
 		}
-		admitted = make([]Attachment, len(prepared))
-		for index := range prepared {
-			prepared[index].attachment.Ref = attachmentRefPrefix + uuid.NewString()
-			admitted[index] = prepared[index].attachment
-		}
-		manifest.Entries = append(manifest.Entries, admitted...)
 		if identityErr := view.validateWriter(lease); identityErr != nil {
-			admitted = nil
 			return fmt.Errorf("coding attachment: revalidate active thread before manifest publish: %w", identityErr)
+		}
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return maintenanceErr
+		}
+		if s.afterAttachmentManifestValidation != nil {
+			s.afterAttachmentManifestValidation()
 		}
 		saveErr := view.saveManifest(manifest)
 		var committedManifest *committedAttachmentManifestError
 		if saveErr == nil || errors.As(saveErr, &committedManifest) {
+			manifestCommitted = true
+			admitted = append([]Attachment(nil), planned...)
+			if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+				preserveInflight = true
+				return &CommittedAttachmentsError{
+					Attachments: append([]Attachment(nil), admitted...),
+					Err:         errors.Join(saveErr, maintenanceErr),
+				}
+			}
 			if identityErr := view.validateWriter(lease); identityErr != nil {
 				admitted = nil
 				return fmt.Errorf("coding attachment: revalidate active thread after manifest publish: %w", identityErr)
@@ -290,7 +358,6 @@ func (s *Store) AdmitAttachments(
 					Err:         saveErr,
 				}
 			}
-			admitted = nil
 			return saveErr
 		}
 		return nil

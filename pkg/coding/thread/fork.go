@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"time"
 
@@ -99,7 +100,31 @@ func (s *Store) ForkThread(
 
 	var child Metadata
 	var result ForkResult
-	err := sourceLease.withActive(s.root, sourceThreadID, func() error {
+	err := sourceLease.withActive(s.root, sourceThreadID, func() (operationErr error) {
+		maintenance, maintenanceErr := s.acquireAttachmentMaintenanceLease()
+		if maintenanceErr != nil {
+			return maintenanceErr
+		}
+		defer func() {
+			releaseErr := maintenance.Release()
+			if releaseErr == nil {
+				return
+			}
+			if operationErr == nil || IsCommittedForkError(operationErr) {
+				operationErr = &CommittedForkError{
+					Result: result,
+					Err: errors.Join(
+						operationErr,
+						fmt.Errorf("release attachment maintenance lock: %w", releaseErr),
+					),
+				}
+				return
+			}
+			operationErr = errors.Join(operationErr, releaseErr)
+		}()
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return maintenanceErr
+		}
 		source, history, revision, sourceAttachments, err := s.readForkSource(
 			ctx,
 			sourceLease,
@@ -152,7 +177,18 @@ func (s *Store) ForkThread(
 		if err != nil {
 			return err
 		}
-		return s.publishFork(ctx, child, snapshot, childAttachments, result)
+		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+			return maintenanceErr
+		}
+		publishErr := s.publishFork(ctx, child, snapshot, childAttachments, result)
+		maintenanceValidationErr := maintenance.Validate()
+		if maintenanceValidationErr == nil {
+			return publishErr
+		}
+		if publishErr == nil || IsCommittedForkError(publishErr) {
+			return &CommittedForkError{Result: result, Err: errors.Join(publishErr, maintenanceValidationErr)}
+		}
+		return errors.Join(publishErr, maintenanceValidationErr)
 	})
 	return child, result, err
 }
@@ -600,6 +636,9 @@ func writeRootFileAtomic(root *os.Root, name string, data []byte, mode os.FileMo
 }
 
 func syncRootDirectory(root *os.Root) error {
+	if runtime.GOOS == "windows" {
+		return fileutil.SyncDirectory(root.Name())
+	}
 	directory, err := root.OpenFile(".", os.O_RDWR, 0)
 	if err != nil {
 		directory, err = root.Open(".")

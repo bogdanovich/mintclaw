@@ -44,10 +44,40 @@ closed and is reported as unavailable; readers do not repair or rewrite it.
 Identical bytes share one blob across imports and threads, while every explicit
 admission receives a new thread-owned reference. Trashing a thread moves its
 manifest as recoverable MintClaw-owned state but never removes shared blob
-bytes. A later garbage collector must mark references from both active and
-recoverable-trash manifests before sweeping. It must fail closed on corrupt,
-unreadable, or concurrently changing manifests. Until that collector lands,
-unreferenced blobs are retained.
+bytes. `mintclaw threads gc` performs a store-wide dry-run by default with a
+24-hour retention window. Deletion requires the exact
+`--confirm delete-unreferenced-blobs` phrase and repeats the complete scan under
+one cross-process attachment-maintenance lock. The retention cutoff cannot be
+in the future.
+
+The collector marks active manifests, recoverable thread trash, and quarantined
+fork preparations before considering a blob. Admission, fork publication, and
+active-to-trash moves share the narrow maintenance lock, closing the
+blob-before-manifest and directory-move races without blocking ordinary coding
+turns or attachment reads. The lease retains pinned store, lock-directory, and
+lock-file identities for its lifetime; producers validate that authority around
+blob, manifest, fork, and trash commits. Before publishing a blob, admission
+durably publishes a bounded per-digest in-flight marker tied to its thread
+writer. It removes that marker only after the canonical manifest commits under
+the same maintenance authority. A collector marks live markers, reconciles
+crash-stale markers under non-blocking thread authority, and rechecks the exact
+digest after identity-bound detach. Manifest, marker, and blob scans are bounded
+and pinned. Once blob storage exists, the active `threads/` authority is
+required; trash authorities remain optional. Corrupt, unreadable, unknown,
+over-limit, missing, replaced, or concurrently changing state fails closed
+before deletion. A partial deletion or directory-sync failure is reported as a
+committed GC outcome with exact deleted counts.
+
+Deletion is identity-bound rather than a final name-based unlink. The collector
+creates a unique same-shard hard-link quarantine for the verified candidate,
+holds an exclusive OS lock on that blob inode from before quarantine
+publication through cleanup or rollback, durably detaches its digest name,
+then revalidates lifecycle authority and removes only that pinned identity. If
+authority changed, it restores or reconciles the canonical digest before
+returning an uncommitted error. A later dry-run or delete pass first acquires
+the same inode-bound lock before recovering an interrupted `.gc-…` shard entry.
+A live owner therefore makes replacement-authority recovery fail closed, while
+a crash releases the lock so recovery cannot strand referenced bytes.
 
 Forking reads the source transcript and manifest under the same thread lease,
 then publishes a child manifest containing only references reachable from the
@@ -55,8 +85,9 @@ copied transcript boundary. A durable reference present in the selected
 history but absent from the source manifest fails closed before the child is
 published. Child and source manifests retain independent authority while their
 immutable blobs remain shared; deleting the source therefore does not break a
-forked attachment. Garbage-collection lifecycle integration remains later
-P6.3 work built on this storage layer.
+forked attachment. The store-wide collector treats both manifests as
+independent authorities and retains their shared digest until neither active
+nor recoverable state references it.
 
 ## Prompt and runtime boundary
 
@@ -136,5 +167,5 @@ in-process text-only recall ring, and text-history navigation is disabled while
 a rich payload is pending, so history cannot replay a detached label as if it
 still carried an attachment.
 
-Retention/GC command, restart and missing-state closeout, and the final roadmap
-exit record remain later P6.3 work.
+Restart and missing-state closeout plus the final roadmap exit record remain
+later P6.3 work.
