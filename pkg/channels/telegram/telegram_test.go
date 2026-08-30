@@ -1523,7 +1523,8 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	metadata = metadata.WithInteractionChoices([]string{"Generate it", "Enter manually"})
 
 	_, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
-		ChatID: "12345", Metadata: metadata, Content: "Choose an input method",
+		ChatID: "12345", Context: bus.InboundContext{SenderID: "15"},
+		Metadata: metadata, Content: "Choose an input method",
 	})
 	require.NoError(t, err)
 	require.Len(t, caller.calls, 1)
@@ -1538,6 +1539,15 @@ func TestSend_QuestionPromptUsesChoicesAndCancelKeyboard(t *testing.T) {
 	assert.Equal(t, "mc:i:abc12345:option:1", keyboard[1].([]any)[0].(map[string]any)["callback_data"])
 	assert.Equal(t, bus.InboundInteractionCancelLabel, keyboard[2].([]any)[0].(map[string]any)["text"])
 	assert.Equal(t, "mc:i:abc12345:cancel", keyboard[2].([]any)[0].(map[string]any)["callback_data"])
+	_, _, response, resolved := ch.resolveInteractionCallback(
+		12345,
+		0,
+		"15",
+		1,
+		telegramInteractionCallbackData{shortID: "abc12345", action: "option", index: 0},
+	)
+	assert.True(t, resolved)
+	assert.Equal(t, "Generate it", response)
 }
 
 func TestSend_FreeTextQuestionPromptStillOffersCancel(t *testing.T) {
@@ -3644,7 +3654,7 @@ func TestInteractionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *t
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsPrompt,
 	}.WithInteractionChoices([]string{"Generate it"})
-	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: metadata}, -100123, 1771)
+	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: metadata}, -100123, 1771, "71")
 	message := &telego.Message{
 		Text: "Generate it", Chat: telego.Chat{ID: -100123}, MessageThreadID: 1771,
 	}
@@ -3657,7 +3667,7 @@ func TestInteractionControlTrackingRequiresMatchingSenderAndClearsOnRemoval(t *t
 		InteractionKind:     bus.OutboundInteractionQuestion,
 		InteractionControls: bus.OutboundInteractionControlsRemove,
 	}
-	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: removeMetadata}, -100123, 1771)
+	ch.updateInteractionControls(bus.OutboundMessage{Context: ctx, Metadata: removeMetadata}, -100123, 1771, "71")
 	_, response = ch.telegramInteractionMetadata(message, message.Text, "15")
 	assert.Empty(t, response)
 }
@@ -3866,7 +3876,8 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 			ch.interactionControls[telegramInteractionControlKey{
 				chatID: -100123, threadID: 1771, senderID: "15",
 			}] = telegramInteractionControls{
-				shortID: "newer567", kind: bus.OutboundInteractionApproval,
+				shortID: "abc12345", promptMessageID: "73", kind: bus.OutboundInteractionQuestion,
+				choices: []string{"Use the newer prompt"},
 			}
 			ch.interactionControlsMu.Unlock()
 		}
@@ -3876,7 +3887,7 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
 	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
 		{chatID: -100123, threadID: 1771, senderID: "15"}: {
-			shortID: "abc12345", kind: bus.OutboundInteractionQuestion,
+			shortID: "abc12345", promptMessageID: "72", kind: bus.OutboundInteractionQuestion,
 			choices: []string{"Generate it"},
 		},
 	}
@@ -3904,8 +3915,16 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &answer))
 	assert.Equal(t, "Response received.", answer["text"])
 	assert.Contains(t, caller.calls[1].URL, "editMessageReplyMarkup")
-	assert.False(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
-	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "newer567"))
+	assert.True(t, ch.interactionControlsMatch(-100123, 1771, "15", "abc12345"))
+	_, _, response, resolved := ch.resolveInteractionCallback(
+		-100123,
+		1771,
+		"15",
+		73,
+		telegramInteractionCallbackData{shortID: "abc12345", action: "option", index: 0},
+	)
+	assert.True(t, resolved)
+	assert.Equal(t, "Use the newer prompt", response)
 }
 
 func TestHandleInteractionCallbackBoundsUIAfterInboundPublish(t *testing.T) {
@@ -3980,7 +3999,7 @@ func TestHandleInteractionCallbackPreservesControlsOwnedByAnotherGroupSender(t *
 	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15", "16"})
 	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
 		{chatID: -100123, threadID: 1771, senderID: "15"}: {
-			shortID: "owner123", kind: bus.OutboundInteractionApproval,
+			shortID: "owner123", promptMessageID: "72", kind: bus.OutboundInteractionApproval,
 		},
 	}
 	message := &telego.Message{
@@ -4013,7 +4032,7 @@ func TestSyncInteractionControlsClearsExactPromptWithoutRemovingNewerProjection(
 	ch := newTestChannel(t, caller)
 	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
 		{chatID: 12345, senderID: "15"}: {
-			shortID: "newer567", kind: bus.OutboundInteractionApproval,
+			shortID: "newer567", promptMessageID: "73", kind: bus.OutboundInteractionApproval,
 		},
 	}
 
@@ -4041,6 +4060,7 @@ func TestResolveInteractionCallbackDoesNotInventMissingOption(t *testing.T) {
 		-100123,
 		1771,
 		"15",
+		71,
 		telegramInteractionCallbackData{shortID: "abc12345", action: "option", index: 0},
 	)
 	assert.False(t, resolved)

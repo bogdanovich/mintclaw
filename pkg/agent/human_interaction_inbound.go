@@ -476,15 +476,25 @@ func (al *AgentLoop) classifyProjectedInteractionAnswer(
 		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
 	)
 	var unauthorizedMatch interactions.Record
+	var pendingMatch interactions.Record
 	for _, record := range registry.List() {
 		if !strings.EqualFold(shortID, record.ShortID) {
 			continue
 		}
-		if !al.projectedInteractionPromptMatches(record, responseMessageID) {
+		promptIdentity := al.projectedInteractionPromptIdentity(record, responseMessageID)
+		if promptIdentity == projectedInteractionPromptMismatch {
 			continue
 		}
 		if !interactionRouteAuthorizes(record.Route, target, msg.Context) {
-			unauthorizedMatch = record
+			if promptIdentity == projectedInteractionPromptMatch {
+				unauthorizedMatch = record
+			}
+			continue
+		}
+		if promptIdentity == projectedInteractionPromptPending {
+			if record.Status == interactions.StatusCreated {
+				pendingMatch = record
+			}
 			continue
 		}
 		if interactionInboundReplaysAnswer(record, msg.Context) {
@@ -505,6 +515,11 @@ func (al *AgentLoop) classifyProjectedInteractionAnswer(
 			return explicitInteractionAnswer{
 				Record: record, Disposition: explicitInteractionAnswerDuplicate,
 			}
+		}
+	}
+	if pendingMatch.ID != "" {
+		return explicitInteractionAnswer{
+			Record: pendingMatch, Disposition: explicitInteractionAnswerRetry,
 		}
 	}
 	if unauthorizedMatch.ID != "" {

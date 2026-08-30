@@ -19,9 +19,10 @@ type telegramInteractionControlKey struct {
 }
 
 type telegramInteractionControls struct {
-	shortID string
-	kind    string
-	choices []string
+	shortID         string
+	promptMessageID string
+	kind            string
+	choices         []string
 }
 
 type telegramInteractionReply struct {
@@ -30,7 +31,12 @@ type telegramInteractionReply struct {
 	shortID  string
 }
 
-func (c *TelegramChannel) updateInteractionControls(msg bus.OutboundMessage, chatID int64, threadID int) {
+func (c *TelegramChannel) updateInteractionControls(
+	msg bus.OutboundMessage,
+	chatID int64,
+	threadID int,
+	promptMessageID string,
+) {
 	metadata := msg.Metadata
 	if !metadata.IsQuestionPrompt() && !metadata.IsApprovalPrompt() &&
 		!metadata.RemovesInteractionControls() {
@@ -47,7 +53,8 @@ func (c *TelegramChannel) updateInteractionControls(msg bus.OutboundMessage, cha
 	if metadata.RemovesInteractionControls() {
 		shortID := strings.TrimSpace(metadata.InteractionShortID)
 		if controls, active := c.interactionControls[key]; active &&
-			(shortID == "" || controls.shortID == shortID) {
+			(shortID == "" || controls.shortID == shortID) &&
+			(promptMessageID == "" || controls.promptMessageID == promptMessageID) {
 			delete(c.interactionControls, key)
 		}
 		return
@@ -56,9 +63,10 @@ func (c *TelegramChannel) updateInteractionControls(msg bus.OutboundMessage, cha
 		c.interactionControls = make(map[telegramInteractionControlKey]telegramInteractionControls)
 	}
 	c.interactionControls[key] = telegramInteractionControls{
-		shortID: strings.TrimSpace(metadata.InteractionShortID),
-		kind:    metadata.InteractionKind,
-		choices: metadata.InteractionChoices(),
+		shortID:         strings.TrimSpace(metadata.InteractionShortID),
+		promptMessageID: strings.TrimSpace(promptMessageID),
+		kind:            metadata.InteractionKind,
+		choices:         metadata.InteractionChoices(),
 	}
 }
 
@@ -70,7 +78,7 @@ func (c *TelegramChannel) SyncInteractionControls(msg bus.OutboundMessage) error
 	if err != nil {
 		return err
 	}
-	c.updateInteractionControls(msg, chatID, threadID)
+	c.updateInteractionControls(msg, chatID, threadID, strings.TrimSpace(msg.ReplyToMessageID))
 	if msg.Metadata.RemovesInteractionControls() && strings.TrimSpace(msg.ReplyToMessageID) != "" {
 		messageID, parseErr := strconv.Atoi(strings.TrimSpace(msg.ReplyToMessageID))
 		if parseErr != nil || messageID <= 0 {
@@ -217,17 +225,19 @@ func (c *TelegramChannel) interactionControlsOwnedByDifferentSender(
 	threadID int,
 	senderID string,
 	shortID string,
+	promptMessageID string,
 ) bool {
 	senderID = strings.TrimSpace(senderID)
 	shortID = strings.TrimSpace(shortID)
-	if shortID == "" {
+	promptMessageID = strings.TrimSpace(promptMessageID)
+	if shortID == "" || promptMessageID == "" {
 		return false
 	}
 	c.interactionControlsMu.RLock()
 	defer c.interactionControlsMu.RUnlock()
 	for key, controls := range c.interactionControls {
 		if key.chatID == chatID && key.threadID == threadID && key.senderID != senderID &&
-			controls.shortID == shortID {
+			controls.shortID == shortID && controls.promptMessageID == promptMessageID {
 			return true
 		}
 	}
@@ -239,12 +249,14 @@ func (c *TelegramChannel) removeInteractionControls(
 	threadID int,
 	senderID string,
 	shortID string,
+	promptMessageID string,
 ) {
 	key := telegramInteractionControlKey{
 		chatID: chatID, threadID: threadID, senderID: strings.TrimSpace(senderID),
 	}
 	c.interactionControlsMu.Lock()
-	if controls, active := c.interactionControls[key]; active && controls.shortID == shortID {
+	if controls, active := c.interactionControls[key]; active && controls.shortID == shortID &&
+		controls.promptMessageID == strings.TrimSpace(promptMessageID) {
 		delete(c.interactionControls, key)
 	}
 	c.interactionControlsMu.Unlock()

@@ -6066,6 +6066,72 @@ func TestProjectedAnswerMatchesDurablePromptAcrossRetainedShortIDCollision(t *te
 	}
 }
 
+func TestProjectedAnswerRetriesUntilPromptReceiptIsDurable(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	coordinator := installInteractionChannelManager(t, al, newInteractionChannelManager())
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-prompt-receipt-race"
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	admission, err := coordinator.AdmitMessage(
+		agent.Workspace,
+		interactionPromptDeliveryIdentity(record),
+		message,
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = (%#v, %v)", admission, err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	callback := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
+	callback.Context.MessageID = "callback-fast"
+	callback.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
+		bus.InboundMetadataKeyInteractionResponse:          "Allow once",
+		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
+		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	}
+
+	classification := al.classifyProjectedInteractionAnswer(callback, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerRetry || classification.Record.ID != record.ID {
+		t.Fatalf("attempting prompt classification = %#v", classification)
+	}
+	if err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{
+		PlatformMessageIDs: []string{"7716"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkWaiting(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	classification = al.classifyProjectedInteractionAnswer(callback, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != record.ID {
+		t.Fatalf("delivered prompt replay classification = %#v", classification)
+	}
+}
+
 func TestReloadedClaimedInteractionRejectsLosingProjectedAnswer(t *testing.T) {
 	provider := &sequenceProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)

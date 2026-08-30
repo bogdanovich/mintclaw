@@ -119,9 +119,7 @@ func (al *AgentLoop) syncInteractionControls(workspace string, record interactio
 		InteractionKind:     interactionKind,
 		InteractionControls: controls,
 	})
-	if controls == bus.OutboundInteractionControlsRemove {
-		message.ReplyToMessageID = al.interactionPromptPlatformMessageID(record)
-	}
+	message.ReplyToMessageID = al.interactionPromptPlatformMessageID(record)
 	if err := syncer.SyncInteractionControls(message); err != nil {
 		logger.WarnCF("agent", "Failed to sync human interaction controls", map[string]any{
 			"workspace":      workspace,
@@ -162,12 +160,39 @@ func (al *AgentLoop) interactionPromptPlatformMessageIDs(record interactions.Rec
 	return messageIDs
 }
 
-func (al *AgentLoop) projectedInteractionPromptMatches(record interactions.Record, messageID string) bool {
+type projectedInteractionPromptIdentity uint8
+
+const (
+	projectedInteractionPromptMismatch projectedInteractionPromptIdentity = iota
+	projectedInteractionPromptPending
+	projectedInteractionPromptMatch
+)
+
+func (al *AgentLoop) projectedInteractionPromptIdentity(
+	record interactions.Record,
+	messageID string,
+) projectedInteractionPromptIdentity {
 	messageID = strings.TrimSpace(messageID)
-	if messageID == "" {
-		return false
+	if al == nil || messageID == "" || strings.TrimSpace(record.PromptDeliveryID) == "" {
+		return projectedInteractionPromptMismatch
 	}
-	return slices.Contains(al.interactionPromptPlatformMessageIDs(record), messageID)
+	coordinator := al.outboundCoordinator()
+	if coordinator == nil {
+		return projectedInteractionPromptMismatch
+	}
+	intent, err := coordinator.Get(record.PromptDeliveryID)
+	if err != nil {
+		return projectedInteractionPromptMismatch
+	}
+	switch intent.Status {
+	case outbox.StatusPending, outbox.StatusAttempting:
+		return projectedInteractionPromptPending
+	case outbox.StatusDelivered, outbox.StatusAmbiguous:
+		if slices.Contains(intent.PlatformMessageIDs, messageID) {
+			return projectedInteractionPromptMatch
+		}
+	}
+	return projectedInteractionPromptMismatch
 }
 
 func (al *AgentLoop) recoverPromptDeliveryExhaustion(

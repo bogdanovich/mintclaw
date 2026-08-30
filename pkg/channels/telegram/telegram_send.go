@@ -60,7 +60,7 @@ func (c *TelegramChannel) DeliverText(
 		replyMarkup:   replyMarkup,
 	}, c.richMessagesEnabled(useMarkdownV2) && !isToolFeedback && replyMarkup == nil, isToolFeedback)
 	if result.Delivered() {
-		c.updateInteractionControls(msg, chatID, threadID)
+		c.updateInteractionControls(msg, chatID, threadID, firstTelegramMessageID(result.MessageIDs))
 	}
 	var remaining []bus.OutboundMessage
 	if result.Remaining != nil {
@@ -82,6 +82,15 @@ func (c *TelegramChannel) DeliverText(
 		Attempts:          result.Attempts,
 		Err:               result.Err,
 	}
+}
+
+func firstTelegramMessageID(messageIDs []string) string {
+	for _, messageID := range messageIDs {
+		if messageID = strings.TrimSpace(messageID); messageID != "" {
+			return messageID
+		}
+	}
+	return ""
 }
 
 type sendChunkParams struct {

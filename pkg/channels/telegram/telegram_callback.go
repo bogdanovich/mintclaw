@@ -86,6 +86,7 @@ func (c *TelegramChannel) handleInteractionCallback(
 		message.Chat.ID,
 		message.MessageThreadID,
 		platformID,
+		message.MessageID,
 		callback,
 	)
 	metadata := map[string]string{
@@ -157,7 +158,7 @@ func (c *TelegramChannel) settleInteractionCallbackUI(
 		return
 	}
 	if c.interactionControlsOwnedByDifferentSender(
-		message.Chat.ID, message.MessageThreadID, senderID, shortID,
+		message.Chat.ID, message.MessageThreadID, senderID, shortID, strconv.Itoa(message.MessageID),
 	) {
 		return
 	}
@@ -167,7 +168,9 @@ func (c *TelegramChannel) settleInteractionCallbackUI(
 		})
 		return
 	}
-	c.removeInteractionControls(message.Chat.ID, message.MessageThreadID, senderID, shortID)
+	c.removeInteractionControls(
+		message.Chat.ID, message.MessageThreadID, senderID, shortID, strconv.Itoa(message.MessageID),
+	)
 }
 
 func telegramInteractionCallbackAcknowledgement() string {
@@ -178,6 +181,7 @@ func (c *TelegramChannel) resolveInteractionCallback(
 	chatID int64,
 	threadID int,
 	senderID string,
+	promptMessageID int,
 	callback telegramInteractionCallbackData,
 ) (content, choice, response string, resolved bool) {
 	switch callback.action {
@@ -193,6 +197,7 @@ func (c *TelegramChannel) resolveInteractionCallback(
 		controls, active := c.interactionControls[key]
 		c.interactionControlsMu.RUnlock()
 		if active && controls.shortID == callback.shortID &&
+			controls.promptMessageID == strconv.Itoa(promptMessageID) &&
 			callback.index >= 0 && callback.index < len(controls.choices) {
 			response = controls.choices[callback.index]
 			return response, "", response, true
