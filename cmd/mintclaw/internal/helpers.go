@@ -4,12 +4,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bogdanovich/mintclaw/pkg"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
-
-const Logo = pkg.Logo
 
 // GetMintClawHome returns the mintclaw home directory.
 // Priority: $MINTCLAW_HOME > ~/.mintclaw

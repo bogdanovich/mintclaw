@@ -644,7 +644,7 @@ func TestPlaywrightSelectContextMapsAtomicGuardRejectionToStale(t *testing.T) {
 func TestPlaywrightContextCatalogTruncatesUnicodeLabelsSafely(t *testing.T) {
 	raw := playwrightRawContextCatalog{Generation: 2, Selected: "p1", Pages: []playwrightRawPage{{
 		Token: "p1", Index: 0, Generation: 1, URL: initialBlankOrigin,
-		Title: strings.Repeat("🦞", MaxContextLabelBytes), Frames: []playwrightRawFrame{{
+		Title: strings.Repeat("界", MaxContextLabelBytes), Frames: []playwrightRawFrame{{
 			Token: "f1", Generation: 1, URL: initialBlankOrigin, Label: strings.Repeat("界", MaxContextLabelBytes),
 		}},
 	}}}

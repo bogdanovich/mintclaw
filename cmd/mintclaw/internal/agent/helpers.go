@@ -91,21 +91,20 @@ func agentCmd(message, sessionKey, model string, debug, stateless bool) error {
 		if err != nil {
 			return fmt.Errorf("error processing message: %w", err)
 		}
-		fmt.Printf("\n%s %s\n", internal.Logo, response)
+		fmt.Printf("\nMintClaw: %s\n", response)
 		return nil
 	}
 
-	fmt.Printf("%s Interactive mode (Ctrl+C to exit)\n\n", internal.Logo)
+	fmt.Println("MintClaw interactive mode (Ctrl+C to exit)")
+	fmt.Println()
 	interactiveMode(agentLoop, sessionKey, stateless)
 
 	return nil
 }
 
 func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string, stateless bool) {
-	prompt := fmt.Sprintf("%s You: ", internal.Logo)
-
 	rl, err := readline.NewEx(&readline.Config{
-		Prompt:          prompt,
+		Prompt:          "You: ",
 		HistoryFile:     filepath.Join(os.TempDir(), ".mintclaw_history"),
 		HistoryLimit:    100,
 		InterruptPrompt: "^C",
@@ -154,14 +153,14 @@ func interactiveMode(agentLoop *agent.AgentLoop, sessionKey string, stateless bo
 			continue
 		}
 
-		fmt.Printf("\n%s %s\n\n", internal.Logo, response)
+		fmt.Printf("\nMintClaw: %s\n\n", response)
 	}
 }
 
 func simpleInteractiveMode(agentLoop *agent.AgentLoop, sessionKey string, stateless bool) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Printf("%s You: ", internal.Logo)
+		fmt.Print("You: ")
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -196,6 +195,6 @@ func simpleInteractiveMode(agentLoop *agent.AgentLoop, sessionKey string, statel
 			continue
 		}
 
-		fmt.Printf("\n%s %s\n\n", internal.Logo, response)
+		fmt.Printf("\nMintClaw: %s\n\n", response)
 	}
 }

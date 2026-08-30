@@ -297,30 +297,23 @@ This connects to the named server and prints:
   and header names
 - every tool the server exposes, with its name, description, and parameters (name, type, required/optional, description)
 
-On wide terminals the output is a styled box matching the `mcp list` look. On narrow terminals or non-TTY stdout, plain text is printed instead.
+The output is stable plain text in both interactive terminals and scripts.
 
-Example output (wide terminal):
+Example output:
 
 ```
-╭──────────────────────────────────────────────────────────╮
-│ ⬡  filesystem                                            │
-│                                                          │
-│ Type        stdio                                        │
-│ Target      npx -y @modelcontextprotocol/server-fs /tmp  │
-│ Enabled     yes                                          │
-│ Deferred    no                                           │
-│ Exclusive lock  no                                       │
-│                                                          │
-│ Tools (3)                                                │
-│                                                          │
-│   read_file  [1/3]                                       │
-│   Read the complete contents of a file from the disk     │
-│                                                          │
-│     path  <string>  required                             │
-│       Path to the file to read                           │
-│ ──────────────────────────────────────────────────────── │
-│   ...                                                    │
-╰──────────────────────────────────────────────────────────╯
+Server: filesystem
+Type:   stdio
+Target: npx -y @modelcontextprotocol/server-fs /tmp
+Enabled: yes
+Deferred: no
+Exclusive lock: no
+
+Tools (3):
+  read_file
+    Read the complete contents of a file from the disk
+    - path (string, required): Path to the file to read
+  ...
 ```
 
 Flags:

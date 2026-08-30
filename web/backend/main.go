@@ -630,8 +630,6 @@ func main() {
 	if enableConsole || debug {
 		consoleHosts := launcherConsoleHosts(hostInput, effectivePublic)
 
-		fmt.Print(utils.Banner)
-		fmt.Println()
 		if needsInitialSetup {
 			if *noBrowser {
 				fmt.Println("  First-time setup: open /launcher-setup to create the dashboard password.")

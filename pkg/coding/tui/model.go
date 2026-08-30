@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
@@ -119,6 +120,7 @@ func NewModel(
 		return nil, errors.New("coding frontend snapshot has no thread ID")
 	}
 	composer := textarea.New()
+	configureComposerStyles(&composer)
 	composer.ShowLineNumbers = false
 	composer.Placeholder = "Describe the coding task…"
 	composer.KeyMap.InsertNewline = key.NewBinding(
@@ -138,6 +140,29 @@ func NewModel(
 		focused:      true,
 		historyIndex: -1,
 	}, nil
+}
+
+func configureComposerStyles(composer *textarea.Model) {
+	text := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
+		Light: "#1F2328",
+		Dark:  "#F0F3F6",
+	})
+	placeholder := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
+		Light: "#656D76",
+		Dark:  "#8C959F",
+	})
+
+	// bubbles/textarea defaults the focused cursor line to a forced white or
+	// black background. Inherit the terminal background so entered text remains
+	// readable with light, dark, and custom terminal themes.
+	composer.FocusedStyle.CursorLine = text
+	composer.FocusedStyle.Text = text
+	composer.FocusedStyle.Placeholder = placeholder
+	composer.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
+	composer.BlurredStyle.CursorLine = text
+	composer.BlurredStyle.Text = text
+	composer.BlurredStyle.Placeholder = placeholder
+	composer.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
 }
 
 func (m *Model) Init() tea.Cmd {

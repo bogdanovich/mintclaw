@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
@@ -19,6 +20,28 @@ import (
 
 func newTestModel(controller frontend.Controller) (*Model, error) {
 	return NewModel(context.Background(), controller)
+}
+
+func TestComposerInheritsTerminalBackground(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	styles := []struct {
+		name  string
+		style lipgloss.Style
+	}{
+		{name: "focused cursor line", style: model.composer.FocusedStyle.CursorLine},
+		{name: "focused text", style: model.composer.FocusedStyle.Text},
+		{name: "blurred cursor line", style: model.composer.BlurredStyle.CursorLine},
+		{name: "blurred text", style: model.composer.BlurredStyle.Text},
+	}
+	for _, tc := range styles {
+		if background := tc.style.GetBackground(); background != (lipgloss.NoColor{}) {
+			t.Errorf("%s forces background color %v", tc.name, background)
+		}
+	}
 }
 
 type fakeController struct {

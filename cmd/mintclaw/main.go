@@ -17,7 +17,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/agent"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/auth"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/cliui"
@@ -83,27 +82,8 @@ func initTermuxSSL() {
 	}
 }
 
-func syncCliUIColor(root *cobra.Command) {
-	no, _ := root.PersistentFlags().GetBool("no-color")
-	cliui.Init(no || os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb")
-}
-
-// earlyColorDisabled matches lipgloss/banner behavior from env and argv before Cobra parses flags.
-func earlyColorDisabled() bool {
-	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
-		return true
-	}
-	for i := 1; i < len(os.Args); i++ {
-		arg := os.Args[i]
-		if arg == "--no-color" || arg == "--no-color=true" || arg == "--no-color=1" {
-			return true
-		}
-	}
-	return false
-}
-
 // machineJSONRequested reports whether argv selects machine-readable output.
-// The banner must be suppressed so stdout remains valid JSON.
+// Console logging must be suppressed so stdout remains valid JSON.
 func machineJSONRequested(args []string) bool {
 	hasJSONCommand := false
 	hasJSON := false
@@ -136,10 +116,10 @@ func codingFrontendRequested(args []string) bool {
 }
 
 func NewMintClawCommand() *cobra.Command {
-	short := fmt.Sprintf("%s MintClaw — personal AI assistant", internal.Logo)
-	long := fmt.Sprintf(`%s MintClaw is a lightweight personal AI assistant.
+	short := "MintClaw — personal AI assistant"
+	long := fmt.Sprintf(`MintClaw is a lightweight personal AI assistant.
 
-Version: %s`, internal.Logo, config.FormatVersion())
+Version: %s`, config.FormatVersion())
 
 	cmd := &cobra.Command{
 		Use:   "mintclaw",
@@ -149,19 +129,15 @@ Version: %s`, internal.Logo, config.FormatVersion())
 mintclaw onboard
 mintclaw --no-color status`,
 		SilenceErrors: true,
-		// Avoid plain UsageString() on stderr/stdout when a command fails; cliui
-		// renders matching panels on stderr instead.
+		// Avoid dumping usage for runtime errors. Flag and usage errors receive a
+		// compact command hint from cliui instead.
 		SilenceUsage: true,
-		PersistentPreRun: func(c *cobra.Command, _ []string) {
-			syncCliUIColor(c.Root())
-		},
 	}
 
 	cmd.PersistentFlags().BoolVar(&rootNoColor, "no-color", false,
-		"Disable colors (boxed layout unchanged)")
+		"Disable colors")
 
 	cmd.SetHelpFunc(func(c *cobra.Command, _ []string) {
-		syncCliUIColor(c.Root())
 		fmt.Fprint(c.OutOrStdout(), cliui.RenderCommandHelp(c))
 	})
 
@@ -189,63 +165,20 @@ mintclaw --no-color status`,
 	return cmd
 }
 
-const (
-	colorBlue = "\033[1;38;2;62;93;185m"
-	colorRed  = "\033[1;38;2;213;70;70m"
-	banner    = "\r\n" +
-		colorBlue + "███╗   ███╗██╗███╗   ██╗████████╗" + colorRed + " ██████╗██╗      █████╗ ██╗    ██╗\n" +
-		colorBlue + "████╗ ████║██║████╗  ██║╚══██╔══╝" + colorRed + "██╔════╝██║     ██╔══██╗██║    ██║\n" +
-		colorBlue + "██╔████╔██║██║██╔██╗ ██║   ██║   " + colorRed + "██║     ██║     ███████║██║ █╗ ██║\n" +
-		colorBlue + "██║╚██╔╝██║██║██║╚██╗██║   ██║   " + colorRed + "██║     ██║     ██╔══██║██║███╗██║\n" +
-		colorBlue + "██║ ╚═╝ ██║██║██║ ╚████║   ██║   " + colorRed + "╚██████╗███████╗██║  ██║╚███╔███╔╝\n" +
-		colorBlue + "╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝   ╚═╝   " + colorRed + " ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝\n " +
-		"\033[0m\r\n"
-	plainBanner = "\r\n" +
-		"███╗   ███╗██╗███╗   ██╗████████╗ ██████╗██╗      █████╗ ██╗    ██╗\n" +
-		"████╗ ████║██║████╗  ██║╚══██╔══╝██╔════╝██║     ██╔══██╗██║    ██║\n" +
-		"██╔████╔██║██║██╔██╗ ██║   ██║   ██║     ██║     ███████║██║ █╗ ██║\n" +
-		"██║╚██╔╝██║██║██║╚██╗██║   ██║   ██║     ██║     ██╔══██║██║███╗██║\n" +
-		"██║ ╚═╝ ██║██║██║ ╚████║   ██║   ╚██████╗███████╗██║  ██║╚███╔███╔╝\n" +
-		"╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝\n " +
-		"\r\n"
-)
-
 func main() {
 	// Initialize Termux SSL certificate detection before anything else
 	initTermuxSSL()
-
-	cliui.Init(earlyColorDisabled())
 
 	machineJSON := machineJSONRequested(os.Args[1:])
 	quietStartup := machineJSON || codingFrontendRequested(os.Args[1:])
 	if quietStartup {
 		logger.DisableConsole()
-	} else {
-		if earlyColorDisabled() {
-			fmt.Print(plainBanner)
-		} else {
-			fmt.Printf("%s", banner)
-		}
 	}
 
 	tzEnv := os.Getenv("TZ")
 	if tzEnv != "" {
-		if !quietStartup {
-			fmt.Println("TZ environment:", tzEnv)
-		}
-		zoneinfoEnv := os.Getenv("ZONEINFO")
-		if !quietStartup {
-			fmt.Println("ZONEINFO environment:", zoneinfoEnv)
-		}
 		loc, err := time.LoadLocation(tzEnv)
-		if err != nil {
-			if !quietStartup {
-				fmt.Println("Error loading time zone:", err)
-			}
-		} else {
-			if !quietStartup {
-				fmt.Println("Time zone loaded successfully:", loc)
-			}
+		if err == nil {
 			time.Local = loc //nolint:gosmopolitan // We intentionally set local timezone from TZ env
 		}
 	}
@@ -257,7 +190,6 @@ func main() {
 		if errors.As(err, &doctorExit) {
 			os.Exit(doctorExit.Code)
 		}
-		syncCliUIColor(cmd)
 		fmt.Fprint(os.Stderr, cliui.FormatCLIError(err.Error(), last))
 		os.Exit(1)
 	}

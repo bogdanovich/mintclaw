@@ -40,7 +40,7 @@ func TestGetSystemVersionUsesMintClawBinaryInfo(t *testing.T) {
 
 	findMintClawBinaryForInfo = func() string { return "mintclaw" }
 	runMintClawVersionOutput = func(_ context.Context, _ string) (string, error) {
-		return "🦞 mintclaw v1.2.3 (git: deadbeef)\n  Build: 2026-03-27T12:34:56Z\n  Go: go1.25.8\n", nil
+		return "mintclaw v1.2.3 (git: deadbeef)\nBuild: 2026-03-27T12:34:56Z\nGo: go1.25.8\n", nil
 	}
 
 	h := NewHandler("")
@@ -124,7 +124,7 @@ func TestGetSystemVersionFallsBackToLauncherInfoWhenCommandFails(t *testing.T) {
 func TestParseMintClawVersionOutput(t *testing.T) {
 	setupVersionTestIsolation(t)
 
-	raw := "\u001b[1;31m████\u001b[0m\n🦞 mintclaw 18ec263 (git: 18ec2631)\n  Build: 2026-03-27T10:43:34+0000\n  Go: go1.25.8\n"
+	raw := "mintclaw 18ec263 (git: 18ec2631)\nBuild: 2026-03-27T10:43:34+0000\nGo: go1.25.8\n"
 	got, ok := parseMintClawVersionOutput(raw)
 	if !ok {
 		t.Fatal("parseMintClawVersionOutput() should parse valid output")

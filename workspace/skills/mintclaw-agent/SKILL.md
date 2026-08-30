@@ -1,7 +1,6 @@
 ---
 name: mintclaw-agent
 description: "Configure, extend, debug, or contribute to MintClaw itself. Use when the task is about MintClaw CLI commands, config.json, gateway, auth, models, skills, MCP servers, cron, routing, sessions, built-in slash commands, or repository internals. Use MintClaw-native workflows, terminology, paths, and configuration."
-metadata: {"nanobot":{"emoji":"🦞"}}
 ---
 
 # MintClaw Agent
