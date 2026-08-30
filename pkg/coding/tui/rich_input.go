@@ -31,6 +31,12 @@ type composerAttachment struct {
 	owned       bool
 }
 
+type pasteFileWriter func(string, []byte, os.FileMode) error
+
+func writePrivatePasteFile(path string, data []byte, mode os.FileMode) error {
+	return os.WriteFile(path, data, mode)
+}
+
 type composerSubmission struct {
 	input         frontend.TurnInput
 	draft         string
@@ -115,8 +121,14 @@ func (m *Model) addClipboardImage(data []byte) error {
 	}
 	filename := fmt.Sprintf("pasted-image-%d.png", m.nextImageNumber+1)
 	path := filepath.Join(directory, filename)
-	if err = os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("store clipboard image: %w", err)
+	if err = m.writePasteFile(path, data, 0o600); err != nil {
+		cleanupErr := os.Remove(path)
+		if cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			cleanupErr = fmt.Errorf("remove partial clipboard image: %w", cleanupErr)
+		} else {
+			cleanupErr = nil
+		}
+		return errors.Join(fmt.Errorf("store clipboard image: %w", err), cleanupErr)
 	}
 	if err = m.addComposerAttachment(path, filename, "image/png", true, true); err != nil {
 		_ = os.Remove(path)
@@ -244,7 +256,7 @@ func (m *Model) clearSubmittedAttachments() {
 	}
 	m.composerAttachments = nil
 	if m.pasteDirectory != "" {
-		if err := os.Remove(m.pasteDirectory); err == nil || errors.Is(err, os.ErrNotExist) {
+		if err := os.RemoveAll(m.pasteDirectory); err == nil || errors.Is(err, os.ErrNotExist) {
 			m.pasteDirectory = ""
 		}
 	}
@@ -269,7 +281,7 @@ func (m *Model) closeRichInput() error {
 	for _, attachment := range attachments {
 		m.removeComposerAttachment(attachment)
 	}
-	if err := os.Remove(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.RemoveAll(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove private paste directory: %w", err)
 	}
 	return nil

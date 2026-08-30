@@ -113,12 +113,15 @@ process-private `0600` temporary text file and displayed as
 `[Pasted Content N chars]`. Pasting a quoted, shell-escaped, or `file://` path
 to a PNG, JPEG, GIF, or WebP image displays `[Image #N]`; `/attach <paths…>`
 atomically adds one or more local regular files and displays file labels.
-`Ctrl+V` or `Ctrl+Alt+V` explicitly reads PNG image data from the local system
-clipboard and creates the same `[Image #N]` payload without treating a normal
-terminal text paste as an image. Clipboard access is asynchronous, unavailable
-or non-image clipboards fail without changing the draft, and Enter waits for
-an in-flight image read. Submitting a label sends the corresponding structured
-`TurnAttachment`; the label itself is not mistaken for canonical prompt text.
+`Ctrl+V` or `Ctrl+Alt+V` explicitly reads a raw PNG representation advertised
+by the local system clipboard and creates the same `[Image #N]` payload without
+treating a normal terminal text paste as an image. It deliberately does not ask
+the clipboard backend to decode or transcode native DIB/TIFF images before
+MintClaw can enforce its bounds. Clipboard access is asynchronous; unavailable,
+non-PNG, oversized, or invalid clipboards fail without changing the draft, and
+Enter waits for an in-flight image read. Submitting a label sends the
+corresponding structured `TurnAttachment`; the label itself is not mistaken for
+canonical prompt text.
 
 Removing a label also drops its pending payload. Failed runtime admission
 keeps both the draft and payload for retry. Successful admission deletes only

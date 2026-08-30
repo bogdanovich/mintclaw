@@ -106,6 +106,7 @@ type Model struct {
 	nextPasteNumber     int
 	nextImageNumber     int
 	readClipboardImage  clipboardImageReader
+	writePasteFile      pasteFileWriter
 	clipboardPasteBusy  bool
 }
 
@@ -151,6 +152,7 @@ func NewModel(
 		focused:            true,
 		historyIndex:       -1,
 		readClipboardImage: readSystemClipboardImage,
+		writePasteFile:     writePrivatePasteFile,
 	}, nil
 }
 

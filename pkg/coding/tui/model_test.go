@@ -530,6 +530,48 @@ func TestComposerCtrlVReportsClipboardAndImageValidationErrorsWithoutMutation(t 
 	}
 }
 
+func TestComposerCtrlVRemovesPartialFileAfterWriteFailure(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageBytes := testClipboardPNG(t)
+	model.readClipboardImage = func(context.Context) ([]byte, error) {
+		return append([]byte(nil), imageBytes...), nil
+	}
+	injected := errors.New("injected partial write")
+	var partialPath string
+	model.writePasteFile = func(path string, data []byte, mode os.FileMode) error {
+		partialPath = path
+		if err := os.WriteFile(path, data[:len(data)/2], mode); err != nil {
+			t.Fatal(err)
+		}
+		return injected
+	}
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	model = updated.(*Model)
+	model = updateModel(t, model, command())
+	if !errors.Is(model.err, injected) || model.ComposerValue() != "" || len(model.composerAttachments) != 0 {
+		t.Fatalf(
+			"partial write result: err=%v draft=%q attachments=%+v",
+			model.err,
+			model.ComposerValue(),
+			model.composerAttachments,
+		)
+	}
+	if _, err := os.Stat(partialPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial clipboard image remains: %v", err)
+	}
+	directory := model.pasteDirectory
+	if err := model.closeRichInput(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("private clipboard directory remains after close: %v", err)
+	}
+}
+
 func testClipboardPNG(t *testing.T) []byte {
 	t.Helper()
 	value := image.NewRGBA(image.Rect(0, 0, 2, 2))

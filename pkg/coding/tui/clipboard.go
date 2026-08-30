@@ -15,6 +15,7 @@ type clipboardImageReader func(context.Context) ([]byte, error)
 var (
 	clipboardInitOnce sync.Once
 	errClipboardInit  error
+	clipboardPNG      = clipboard.Register("image/png")
 )
 
 func readSystemClipboardImage(ctx context.Context) ([]byte, error) {
@@ -24,15 +25,18 @@ func readSystemClipboardImage(ctx context.Context) ([]byte, error) {
 	if errClipboardInit != nil {
 		return nil, fmt.Errorf("initialize system clipboard: %w", errClipboardInit)
 	}
-	data, err := clipboard.Read(ctx, clipboard.FmtImage)
+	// Read the raw PNG representation only. FmtImage may ask native backends to
+	// decode DIB/TIFF pixels and transcode them before MintClaw can enforce its
+	// byte and dimension limits.
+	data, err := clipboard.Read(ctx, clipboardPNG)
 	if err != nil {
 		if errors.Is(err, clipboard.ErrNoData) {
-			return nil, errors.New("system clipboard does not contain an image")
+			return nil, errors.New("system clipboard does not contain a PNG image")
 		}
-		return nil, fmt.Errorf("read system clipboard image: %w", err)
+		return nil, fmt.Errorf("read system clipboard PNG image: %w", err)
 	}
 	if len(data) == 0 {
-		return nil, errors.New("system clipboard does not contain an image")
+		return nil, errors.New("system clipboard does not contain a PNG image")
 	}
 	return data, nil
 }
