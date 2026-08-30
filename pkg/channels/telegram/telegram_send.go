@@ -162,6 +162,15 @@ func (c *TelegramChannel) sendTextChunkQueue(
 					continue
 				}
 			}
+			if body, footer, ok := splitTelegramInteractionFooter(chunk); ok &&
+				len([]rune(telegramTextLimitPayload(
+					footer,
+					baseParams.useMarkdownV2,
+					useRich,
+				))) <= telegramTextLimit {
+				queue = append([]string{body, footer}, queue...)
+				continue
+			}
 
 			runeChunk := []rune(chunk)
 			ratio := float64(len(runeChunk)) / float64(len([]rune(payload)))
@@ -234,6 +243,10 @@ func (c *TelegramChannel) sendTextChunkQueue(
 		}
 		if err != nil {
 			if useRich && errors.Is(err, errTelegramMessageTooLong) {
+				if body, footer, ok := splitTelegramInteractionFooter(chunk); ok {
+					queue = append([]string{body, footer}, queue...)
+					continue
+				}
 				runeChunk := []rune(chunk)
 				if len(runeChunk) <= 1 {
 					return failedTextChunkDelivery(messageIDs, chunk, queue, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -2259,6 +2260,66 @@ func TestSend_MarkdownShortButHTMLEscapingWouldBeLong_SplitsLegacyHTML(t *testin
 
 	assert.NoError(t, err)
 	assert.Len(t, caller.calls, 2)
+}
+
+func TestSend_ExpansionHeavyInteractionKeepsMultiQuestionFooterAtomic(t *testing.T) {
+	callIndex := 100
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		callIndex++
+		return successResponseWithMessageID(t, callIndex), nil
+	}}
+	ch := newTestChannel(t, caller)
+	shortID := "abc12345"
+	questionIDs := []string{
+		strings.Repeat("a", 64),
+		strings.Repeat("b", 64),
+		strings.Repeat("c", 64),
+	}
+	footer := "`/answer " + shortID + "`"
+	for _, questionID := range questionIDs {
+		footer += "\n`" + questionID + ": …`"
+	}
+	bodyBudget := 3900 - len([]rune(footer)) - 2
+	body := strings.Repeat("**&** ", bodyBudget/6)
+	content := body + "\n\n" + footer
+	require.LessOrEqual(t, len([]rune(content)), 4000)
+	require.Greater(t, len([]rune(parseContent(content, false))), telegramTextLimit)
+
+	messageIDs, err := ch.deliverTextForTest(t.Context(), bus.OutboundMessage{
+		ChatID: "12345", Content: content,
+		Context: bus.InboundContext{SenderID: "15"},
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionQuestion,
+			InteractionControls: bus.OutboundInteractionControlsPrompt,
+			InteractionShortID:  shortID,
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, messageIDs, len(caller.calls))
+	require.GreaterOrEqual(t, len(caller.calls), 2)
+	footerChunks := 0
+	for _, call := range caller.calls {
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(call.Data.BodyRaw, &payload))
+		text, ok := payload["text"].(string)
+		require.True(t, ok)
+		assert.LessOrEqual(t, len([]rune(text)), telegramTextLimit)
+		if !strings.Contains(text, "/answer "+shortID) {
+			continue
+		}
+		footerChunks++
+		for _, questionID := range questionIDs {
+			assert.Contains(t, text, questionID+": …")
+		}
+		plainFooter := strings.ReplaceAll(text, "<code>", "")
+		plainFooter = strings.ReplaceAll(plainFooter, "</code>", "")
+		plainFooter = html.UnescapeString(plainFooter)
+		assert.Equal(t, shortID, telegramInteractionShortID(&telego.Message{Text: plainFooter}))
+	}
+	assert.Equal(t, 1, footerChunks)
+	assert.True(t, ch.interactionControlsMatchPrompt(12345, 0, "15", shortID, messageIDs[0]))
 }
 
 func TestSend_RichFallbackSplitsAgainstLegacyHTMLPayload(t *testing.T) {

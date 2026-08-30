@@ -178,30 +178,48 @@ func telegramInteractionShortID(reply *telego.Message) string {
 	if reply == nil {
 		return ""
 	}
-	lines := strings.Split(strings.TrimSpace(reply.Text), "\n")
-	if len(lines) < 2 {
-		return ""
-	}
-	last := telegramInteractionFooterFields(lines[len(lines)-1])
-	previous := telegramInteractionFooterFields(lines[len(lines)-2])
-	if len(last) == 1 && last[0] == "/stop" {
-		if len(previous) >= 2 && previous[0] == "/answer" {
-			return previous[1]
-		}
-		return ""
-	}
-	if len(previous) != 3 || len(last) != 3 ||
-		previous[0] != "/answer" || last[0] != "/answer" ||
-		previous[2] != "allow_once" || last[2] != "deny" ||
-		!strings.EqualFold(previous[1], last[1]) {
-		return telegramMultiQuestionFooterShortID(lines)
-	}
-	return previous[1]
+	shortID, _, _ := locateTelegramInteractionFooter(strings.Split(reply.Text, "\n"))
+	return shortID
 }
 
-func telegramMultiQuestionFooterShortID(lines []string) string {
+func splitTelegramInteractionFooter(text string) (string, string, bool) {
+	lines := strings.Split(text, "\n")
+	_, start, ok := locateTelegramInteractionFooter(lines)
+	if !ok || start <= 0 {
+		return "", "", false
+	}
+	body := strings.TrimRight(strings.Join(lines[:start], "\n"), "\n")
+	footer := strings.TrimSpace(strings.Join(lines[start:], "\n"))
+	if body == "" || footer == "" {
+		return "", "", false
+	}
+	return body, footer, true
+}
+
+func locateTelegramInteractionFooter(lines []string) (string, int, bool) {
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	if end < 2 {
+		return "", 0, false
+	}
+	last := telegramInteractionFooterFields(lines[end-1])
+	previous := telegramInteractionFooterFields(lines[end-2])
+	if len(last) == 1 && last[0] == "/stop" {
+		if len(previous) >= 2 && previous[0] == "/answer" {
+			return previous[1], end - 2, true
+		}
+		return "", 0, false
+	}
+	if len(previous) == 3 && len(last) == 3 &&
+		previous[0] == "/answer" && last[0] == "/answer" &&
+		previous[2] == "allow_once" && last[2] == "deny" &&
+		strings.EqualFold(previous[1], last[1]) {
+		return previous[1], end - 2, true
+	}
 	templates := 0
-	for index := len(lines) - 1; index >= 0; index-- {
+	for index := end - 1; index >= 0; index-- {
 		fields := telegramInteractionFooterFields(lines[index])
 		if len(fields) == 2 && fields[1] == "…" &&
 			strings.TrimSuffix(fields[0], ":") != "" && strings.HasSuffix(fields[0], ":") {
@@ -209,11 +227,11 @@ func telegramMultiQuestionFooterShortID(lines []string) string {
 			continue
 		}
 		if templates >= 2 && len(fields) == 2 && fields[0] == "/answer" {
-			return fields[1]
+			return fields[1], index, true
 		}
-		return ""
+		return "", 0, false
 	}
-	return ""
+	return "", 0, false
 }
 
 func telegramInteractionFooterFields(line string) []string {
