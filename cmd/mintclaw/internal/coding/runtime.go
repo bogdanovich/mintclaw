@@ -405,11 +405,16 @@ func (s *codingMetadataState) observeCompaction(payload agent.ContextCompressLif
 }
 
 func (s *codingMetadataState) recordTurn(
+	title string,
 	preview string,
 	model string,
 	provider string,
 ) (thread.Metadata, error) {
 	return s.update(func(metadata *thread.Metadata) {
+		if metadata.PendingFirstPrompt {
+			metadata.Title = title
+			metadata.PendingFirstPrompt = false
+		}
 		metadata.Preview = preview
 		metadata.Model = model
 		metadata.Provider = provider
@@ -632,11 +637,11 @@ func (r *nativeControllerRuntime) persistTurnOutcome(
 	if !outcome.PromptStored {
 		return turnErr
 	}
-	_, preview, displayErr := thread.DisplayFromRequest(prompt)
+	title, preview, displayErr := thread.DisplayFromRequest(prompt)
 	if displayErr != nil {
 		return errors.Join(turnErr, displayErr)
 	}
-	candidate, saveErr := r.metadataState.recordTurn(preview, r.model, r.provider)
+	candidate, saveErr := r.metadataState.recordTurn(title, preview, r.model, r.provider)
 	projectionErr := agentadapter.ProjectThreadMetadata(r.projector, candidate)
 	return errors.Join(turnErr, saveErr, projectionErr)
 }

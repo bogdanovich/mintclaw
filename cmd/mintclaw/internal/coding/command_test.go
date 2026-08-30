@@ -529,6 +529,121 @@ func TestCodeUsesInteractiveShellOnlyForCapableTerminal(t *testing.T) {
 	}
 }
 
+func TestCodeWithoutPromptOpensInteractiveComposer(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 29, 17, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	deps.terminal = func(io.Reader, io.Writer, bool) tui.TerminalCapabilities {
+		return tui.TerminalCapabilities{Interactive: true, Color: true}
+	}
+	var request codingTurnRequest
+	deps.newController = func(candidate codingTurnRequest, resumed bool) (frontend.Controller, error) {
+		if resumed {
+			t.Fatal("new coding thread was marked resumed")
+		}
+		request = candidate
+		projector, err := frontend.NewProjector(candidate.Metadata.ThreadID, frontend.ProjectionLimits{})
+		if err != nil {
+			return nil, err
+		}
+		projector.Open(false)
+		return &interactiveLeaseController{Projector: projector, lease: candidate.Lease}, nil
+	}
+	runs := 0
+	deps.runTUI = func(ctx context.Context, controller frontend.Controller, options tui.Options) error {
+		runs++
+		if options.InitialPrompt != "" || !options.AlternateScreen || !options.ReportFocus {
+			t.Fatalf("TUI options = %+v", options)
+		}
+		return controller.Close(ctx)
+	}
+
+	executeCommand(t, newCodeCommand(deps))
+	if runs != 1 || request.Metadata.ThreadID == "" || request.Metadata.Title != "New coding thread" {
+		t.Fatalf("TUI runs=%d request=%+v", runs, request)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := store.Load(request.Metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Title != thread.PendingThreadTitle || metadata.Preview != thread.PendingThreadTitle ||
+		!metadata.PendingFirstPrompt {
+		t.Fatalf("empty-start metadata = %+v", metadata)
+	}
+}
+
+func TestCodeWithoutPromptRejectsPlainAndJSONModes(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.August, 29, 17, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	for _, testCase := range []struct {
+		name        string
+		args        []string
+		interactive bool
+	}{
+		{name: "plain"},
+		{name: "json", args: []string{"--json"}, interactive: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			caseDeps := deps
+			if testCase.interactive {
+				caseDeps.terminal = func(io.Reader, io.Writer, bool) tui.TerminalCapabilities {
+					return tui.TerminalCapabilities{Interactive: true, Color: true}
+				}
+			}
+			_, err := executeCommandError(newCodeCommand(caseDeps), testCase.args...)
+			if err == nil || !strings.Contains(err.Error(), "prompt is required outside the interactive terminal UI") {
+				t.Fatalf("empty code error = %v", err)
+			}
+		})
+	}
+}
+
+func TestResumePromptPromotesPendingThreadMetadata(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 29, 17, 30, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewPendingMetadata(thread.NewThreadID(), project, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+
+	executeCommand(
+		t,
+		newResumeCommand(deps),
+		metadata.ThreadID,
+		"--prompt",
+		"Inspect repository carefully",
+		"--json",
+	)
+	persisted, err := store.Load(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.PendingFirstPrompt || persisted.Title != "Inspect repository carefully" ||
+		persisted.Preview != "Inspect repository carefully" {
+		t.Fatalf("resumed pending metadata = %+v", persisted)
+	}
+}
+
 func TestResumeSelectorsAndProjectMismatchAreExplicit(t *testing.T) {
 	home := t.TempDir()
 	firstProject := t.TempDir()

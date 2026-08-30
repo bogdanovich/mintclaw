@@ -102,19 +102,29 @@ func newCodeCommand(deps dependencies) *cobra.Command {
 	var model string
 	var jsonOutput bool
 	cmd := &cobra.Command{
-		Use:   "code <prompt>",
+		Use:   "code [prompt]",
 		Short: "Create an interactive project coding thread",
 		Long: "Create a durable coding thread for the current project and run its first prompt in the MintClaw " +
-			"terminal UI. Redirected and JSON output use the plain renderer.",
-		Args: cobra.MinimumNArgs(1),
+			"terminal UI. The prompt is optional for an interactive terminal. Redirected and JSON output use the " +
+			"plain renderer and require a prompt.",
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prompt := strings.Join(args, " ")
 			noColor, _ := cmd.Flags().GetBool("no-color")
 			capabilities := deps.terminal(cmd.InOrStdin(), cmd.OutOrStdout(), noColor)
 			if !jsonOutput && capabilities.Interactive {
 				return runNewInteractive(
-					cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), deps, prompt, model, noColor,
+					cmd.Context(),
+					cmd.InOrStdin(),
+					cmd.OutOrStdout(),
+					deps,
+					prompt,
+					model,
+					noColor,
 				)
+			}
+			if strings.TrimSpace(prompt) == "" {
+				return fmt.Errorf("coding prompt is required outside the interactive terminal UI")
 			}
 			return runNew(cmd.Context(), cmd.OutOrStdout(), deps, prompt, model, jsonOutput)
 		},
@@ -154,7 +164,13 @@ func runNewInteractive(
 	model string,
 	noColor bool,
 ) error {
-	_, store, metadata, lease, err := prepareNewThread(ctx, deps, prompt, model)
+	_, store, metadata, lease, err := prepareNewThread(
+		ctx,
+		deps,
+		prompt,
+		model,
+		strings.TrimSpace(prompt) == "",
+	)
 	if err != nil {
 		return err
 	}
@@ -180,15 +196,22 @@ func prepareNewThread(
 	deps dependencies,
 	prompt string,
 	model string,
+	pendingFirstPrompt bool,
 ) (thread.ProjectIdentity, *thread.Store, thread.Metadata, *thread.Lease, error) {
 	project, store, resolveErr := resolveEnvironment(ctx, deps)
 	if resolveErr != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, resolveErr
 	}
-	if err := thread.ValidatePrompt(prompt); err != nil {
-		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
+	var metadata thread.Metadata
+	var metadataErr error
+	if pendingFirstPrompt {
+		metadata, metadataErr = thread.NewPendingMetadata(deps.newThreadID(), project, deps.now())
+	} else {
+		if err := thread.ValidatePrompt(prompt); err != nil {
+			return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, err
+		}
+		metadata, metadataErr = thread.NewMetadata(deps.newThreadID(), project, prompt, deps.now())
 	}
-	metadata, metadataErr := thread.NewMetadata(deps.newThreadID(), project, prompt, deps.now())
 	if metadataErr != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, metadataErr
 	}
@@ -286,7 +309,7 @@ func runNew(
 	model string,
 	jsonOutput bool,
 ) error {
-	_, store, metadata, lease, err := prepareNewThread(ctx, deps, prompt, model)
+	_, store, metadata, lease, err := prepareNewThread(ctx, deps, prompt, model, false)
 	if err != nil {
 		return err
 	}
@@ -556,15 +579,17 @@ func resumeSelectedThread(
 	threadID string,
 	options resumeOptions,
 ) (result commandResult, resultErr error) {
+	updatedTitle := ""
 	updatedPreview := ""
 	if options.promptSet {
 		if err := thread.ValidatePrompt(options.prompt); err != nil {
 			return commandResult{}, err
 		}
-		_, preview, displayErr := thread.DisplayFromRequest(options.prompt)
+		title, preview, displayErr := thread.DisplayFromRequest(options.prompt)
 		if displayErr != nil {
 			return commandResult{}, displayErr
 		}
+		updatedTitle = title
 		updatedPreview = preview
 	}
 	metadata, lease, err := prepareResumedThread(ctx, store, project, deps, threadID, options, options.promptSet)
@@ -584,6 +609,10 @@ func resumeSelectedThread(
 		})
 		promptStored = outcome.PromptStored
 		if promptStored {
+			if metadata.PendingFirstPrompt {
+				metadata.Title = updatedTitle
+				metadata.PendingFirstPrompt = false
+			}
 			metadata.Preview = updatedPreview
 		}
 		if outcome.Model != "" {
