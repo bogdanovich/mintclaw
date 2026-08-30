@@ -318,6 +318,97 @@ func TestThreadsDeleteRejectsChangedProjectIdentityAtSameRoot(t *testing.T) {
 	}
 }
 
+func TestThreadsGCPlansThenRequiresExactStoreWideConfirmation(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "gc fixture", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "orphan.txt")
+	if err := os.WriteFile(source, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, thread.AttachmentInput{
+		Path: source, At: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{attachment.Ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	blobPath := filepath.Join(store.Root(), "blobs", "sha256", attachment.SHA256[:2], attachment.SHA256)
+	old := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(blobPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	var planned gcThreadsOutput
+	if err := json.Unmarshal(executeCommand(
+		t,
+		newThreadsCommand(deps),
+		"gc",
+		"--older-than",
+		"24h",
+		"--json",
+	), &planned); err != nil {
+		t.Fatal(err)
+	}
+	if planned.Action != "planned" || len(planned.Result.Candidates) != 1 ||
+		planned.Result.DeletedBlobs != 0 || !strings.Contains(planned.Notice, "every project") {
+		t.Fatalf("GC plan = %+v", planned)
+	}
+	if _, err := os.Stat(blobPath); err != nil {
+		t.Fatalf("plan deleted blob: %v", err)
+	}
+	if _, err := executeCommandError(
+		newThreadsCommand(deps), "gc", "--confirm", "wrong",
+	); err == nil || !strings.Contains(err.Error(), "exactly match") {
+		t.Fatalf("wrong GC confirmation error = %v", err)
+	}
+	var collected gcThreadsOutput
+	if err := json.Unmarshal(executeCommand(
+		t,
+		newThreadsCommand(deps),
+		"gc",
+		"--older-than",
+		"24h",
+		"--confirm",
+		attachmentGCConfirmation,
+		"--json",
+	), &collected); err != nil {
+		t.Fatal(err)
+	}
+	if collected.Action != "collected" || collected.Result.DeletedBlobs != 1 ||
+		collected.Result.DeletedBytes != attachment.Size {
+		t.Fatalf("GC result = %+v", collected)
+	}
+	if _, err := os.Stat(blobPath); !os.IsNotExist(err) {
+		t.Fatalf("confirmed GC retained blob: %v", err)
+	}
+}
+
 func TestThreadsForkHistoricalConversationUsesLiveFilesystemAndIndependentWriter(t *testing.T) {
 	home := t.TempDir()
 	projectRoot := t.TempDir()

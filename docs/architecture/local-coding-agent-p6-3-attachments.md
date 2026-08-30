@@ -44,10 +44,19 @@ closed and is reported as unavailable; readers do not repair or rewrite it.
 Identical bytes share one blob across imports and threads, while every explicit
 admission receives a new thread-owned reference. Trashing a thread moves its
 manifest as recoverable MintClaw-owned state but never removes shared blob
-bytes. A later garbage collector must mark references from both active and
-recoverable-trash manifests before sweeping. It must fail closed on corrupt,
-unreadable, or concurrently changing manifests. Until that collector lands,
-unreferenced blobs are retained.
+bytes. `mintclaw threads gc` performs a store-wide dry-run by default with a
+24-hour retention window. Deletion requires the exact
+`--confirm delete-unreferenced-blobs` phrase and repeats the complete scan under
+one cross-process attachment-maintenance lock.
+
+The collector marks active manifests, recoverable thread trash, and quarantined
+fork preparations before considering a blob. Admission, fork publication, and
+active-to-trash moves share the narrow maintenance lock, closing the
+blob-before-manifest and directory-move races without blocking ordinary coding
+turns or attachment reads. Manifest and blob scans are bounded and pinned;
+corrupt, unreadable, unknown, over-limit, replaced, or concurrently changing
+state fails closed before deletion. A partial deletion or directory-sync
+failure is reported as a committed GC outcome with exact deleted counts.
 
 Forking reads the source transcript and manifest under the same thread lease,
 then publishes a child manifest containing only references reachable from the
@@ -55,8 +64,9 @@ copied transcript boundary. A durable reference present in the selected
 history but absent from the source manifest fails closed before the child is
 published. Child and source manifests retain independent authority while their
 immutable blobs remain shared; deleting the source therefore does not break a
-forked attachment. Garbage-collection lifecycle integration remains later
-P6.3 work built on this storage layer.
+forked attachment. The store-wide collector treats both manifests as
+independent authorities and retains their shared digest until neither active
+nor recoverable state references it.
 
 ## Prompt and runtime boundary
 
@@ -136,5 +146,5 @@ in-process text-only recall ring, and text-history navigation is disabled while
 a rich payload is pending, so history cannot replay a detached label as if it
 still carried an attachment.
 
-Retention/GC command, restart and missing-state closeout, and the final roadmap
-exit record remain later P6.3 work.
+Restart and missing-state closeout plus the final roadmap exit record remain
+later P6.3 work.

@@ -99,7 +99,28 @@ func (s *Store) ForkThread(
 
 	var child Metadata
 	var result ForkResult
-	err := sourceLease.withActive(s.root, sourceThreadID, func() error {
+	err := sourceLease.withActive(s.root, sourceThreadID, func() (operationErr error) {
+		maintenance, maintenanceErr := s.acquireAttachmentMaintenanceLease()
+		if maintenanceErr != nil {
+			return maintenanceErr
+		}
+		defer func() {
+			releaseErr := maintenance.Release()
+			if releaseErr == nil {
+				return
+			}
+			if operationErr == nil || IsCommittedForkError(operationErr) {
+				operationErr = &CommittedForkError{
+					Result: result,
+					Err: errors.Join(
+						operationErr,
+						fmt.Errorf("release attachment maintenance lock: %w", releaseErr),
+					),
+				}
+				return
+			}
+			operationErr = errors.Join(operationErr, releaseErr)
+		}()
 		source, history, revision, sourceAttachments, err := s.readForkSource(
 			ctx,
 			sourceLease,

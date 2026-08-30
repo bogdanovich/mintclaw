@@ -170,7 +170,28 @@ func (s *Store) TrashThread(
 		return TrashResult{}, fmt.Errorf("coding thread delete: timestamp is required")
 	}
 	var result TrashResult
-	err := lease.withActive(s.root, threadID, func() error {
+	err := lease.withActive(s.root, threadID, func() (operationErr error) {
+		maintenance, maintenanceErr := s.acquireAttachmentMaintenanceLease()
+		if maintenanceErr != nil {
+			return maintenanceErr
+		}
+		defer func() {
+			releaseErr := maintenance.Release()
+			if releaseErr == nil {
+				return
+			}
+			if result.TrashID != "" {
+				operationErr = &CommittedTrashError{
+					Result: result,
+					Err: errors.Join(
+						operationErr,
+						fmt.Errorf("release attachment maintenance lock: %w", releaseErr),
+					),
+				}
+				return
+			}
+			operationErr = errors.Join(operationErr, releaseErr)
+		}()
 		if _, planErr := s.PlanDelete(threadID); planErr != nil {
 			return planErr
 		}

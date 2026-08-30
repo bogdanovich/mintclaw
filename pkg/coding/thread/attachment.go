@@ -234,7 +234,25 @@ func (s *Store) AdmitAttachments(
 	}
 
 	var admitted []Attachment
-	err := lease.withActive(s.root, metadata.ThreadID, func() error {
+	err := lease.withActive(s.root, metadata.ThreadID, func() (operationErr error) {
+		maintenance, maintenanceErr := s.acquireAttachmentMaintenanceLease()
+		if maintenanceErr != nil {
+			return maintenanceErr
+		}
+		defer func() {
+			releaseErr := maintenance.Release()
+			if releaseErr == nil {
+				return
+			}
+			if operationErr == nil && len(admitted) > 0 {
+				operationErr = &CommittedAttachmentsError{
+					Attachments: append([]Attachment(nil), admitted...),
+					Err:         fmt.Errorf("release attachment maintenance lock: %w", releaseErr),
+				}
+				return
+			}
+			operationErr = errors.Join(operationErr, releaseErr)
+		}()
 		prepared, prepareErr := prepareAttachmentBatch(ctx, validated)
 		if prepareErr != nil {
 			return prepareErr

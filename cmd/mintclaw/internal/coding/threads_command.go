@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -22,8 +23,119 @@ func newThreadsCommand(deps dependencies) *cobra.Command {
 		Use:   "threads",
 		Short: "Manage durable coding threads",
 	}
-	cmd.AddCommand(newDeleteThreadCommand(deps), newForkThreadCommand(deps))
+	cmd.AddCommand(newDeleteThreadCommand(deps), newForkThreadCommand(deps), newGCThreadsCommand(deps))
 	return cmd
+}
+
+const attachmentGCConfirmation = "delete-unreferenced-blobs"
+
+func newGCThreadsCommand(deps dependencies) *cobra.Command {
+	deps = completeDependencies(deps)
+	var olderThan time.Duration
+	var confirmation string
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "gc",
+		Short: "Plan or collect old unreferenced coding attachment blobs",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runGCThreads(
+				cmd.Context(),
+				cmd.OutOrStdout(),
+				deps,
+				olderThan,
+				confirmation,
+				jsonOutput,
+			)
+		},
+	}
+	cmd.Flags().DurationVar(&olderThan, "older-than", 24*time.Hour, "Retain unreferenced blobs newer than this age")
+	cmd.Flags().StringVar(
+		&confirmation,
+		"confirm",
+		"",
+		"Delete after rescanning by passing "+attachmentGCConfirmation,
+	)
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON")
+	return cmd
+}
+
+type gcThreadsOutput struct {
+	Action string                    `json:"action"`
+	Result thread.AttachmentGCResult `json:"result"`
+	Notice string                    `json:"notice"`
+}
+
+func runGCThreads(
+	ctx context.Context,
+	out io.Writer,
+	deps dependencies,
+	olderThan time.Duration,
+	confirmation string,
+	jsonOutput bool,
+) error {
+	if olderThan <= 0 {
+		return fmt.Errorf("coding attachment garbage collection: --older-than must be positive")
+	}
+	confirmation = strings.TrimSpace(confirmation)
+	if confirmation != "" && confirmation != attachmentGCConfirmation {
+		return fmt.Errorf(
+			"coding attachment garbage collection: --confirm must exactly match %q",
+			attachmentGCConfirmation,
+		)
+	}
+	_, store, err := resolveEnvironment(ctx, deps)
+	if err != nil {
+		return err
+	}
+	deleting := confirmation == attachmentGCConfirmation
+	result, collectErr := store.CollectAttachmentGarbage(ctx, thread.AttachmentGCOptions{
+		Before: deps.now().Add(-olderThan),
+		Delete: deleting,
+	})
+	action := "planned"
+	if deleting {
+		action = "collected"
+	}
+	output := gcThreadsOutput{
+		Action: action,
+		Result: result,
+		Notice: "The scan covers every project plus recoverable thread trash in this MintClaw coding store.",
+	}
+	renderErr := renderGCThreads(out, output, jsonOutput)
+	return errors.Join(collectErr, renderErr)
+}
+
+func renderGCThreads(out io.Writer, result gcThreadsOutput, jsonOutput bool) error {
+	if jsonOutput {
+		return writeJSON(out, result)
+	}
+	if _, err := fmt.Fprintf(
+		out,
+		"Coding attachment GC %s (store-wide; cutoff %s).\n"+
+			"Scanned %d manifests and %d blobs; %d blobs remain referenced.\n"+
+			"Candidates: %d blobs, %d bytes. Deleted: %d blobs, %d bytes.\n",
+		result.Action,
+		result.Result.Before.Format(time.RFC3339),
+		result.Result.ScannedManifests,
+		result.Result.ScannedBlobs,
+		result.Result.ReferencedBlobs,
+		len(result.Result.Candidates),
+		result.Result.CandidateBytes,
+		result.Result.DeletedBlobs,
+		result.Result.DeletedBytes,
+	); err != nil {
+		return err
+	}
+	if result.Action == "planned" && len(result.Result.Candidates) > 0 {
+		_, err := fmt.Fprintf(
+			out,
+			"Rescan and delete with: mintclaw threads gc --confirm %s\n",
+			attachmentGCConfirmation,
+		)
+		return err
+	}
+	return nil
 }
 
 func newForkThreadCommand(deps dependencies) *cobra.Command {
