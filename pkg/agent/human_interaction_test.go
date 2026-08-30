@@ -925,8 +925,7 @@ func TestInteractionPromptRecoveryHonorsRetryDeadline(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
-	coordinator := openTestInteractionOutbox(t, al)
+	coordinator := installInteractionChannelManager(t, al, manager)
 	workspace := agent.Workspace
 	request := testToolSuspensionRequest(workspace)
 	registry := al.interactionRegistryForWorkspace(workspace)
