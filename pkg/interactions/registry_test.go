@@ -1671,6 +1671,10 @@ func TestRegistryConsumesApprovalExactlyOnceAndMatchesCall(t *testing.T) {
 	); err == nil {
 		t.Fatal("approval was consumed twice")
 	}
+	record, err = registry.MarkApprovalDeliveryUnknown(record.ID, record.Revision)
+	if err != nil || record.Outcome != OutcomeDeliveryUnknown || record.ApprovalConsumedAt == 0 {
+		t.Fatalf("MarkApprovalDeliveryUnknown() = (%#v, %v)", record, err)
+	}
 	record, err = registry.BeginCancellation(record.ID, record.Revision, "operator_stop")
 	if err != nil {
 		t.Fatal(err)
@@ -1681,6 +1685,8 @@ func TestRegistryConsumesApprovalExactlyOnceAndMatchesCall(t *testing.T) {
 	}
 	if reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now}); reloaded.LastLoadError() != nil {
 		t.Fatalf("reload consumed canceled approval: %v", reloaded.LastLoadError())
+	} else if stored, ok := reloaded.Get(record.ID); !ok || stored.Outcome != OutcomeDeliveryUnknown {
+		t.Fatalf("reloaded unknown consumed approval = %#v, found=%v", stored, ok)
 	}
 }
 

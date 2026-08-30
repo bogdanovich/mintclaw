@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -133,23 +134,40 @@ func (al *AgentLoop) syncInteractionControls(workspace string, record interactio
 }
 
 func (al *AgentLoop) interactionPromptPlatformMessageID(record interactions.Record) string {
-	if al == nil || strings.TrimSpace(record.PromptDeliveryID) == "" {
+	messageIDs := al.interactionPromptPlatformMessageIDs(record)
+	if len(messageIDs) == 0 {
 		return ""
+	}
+	return messageIDs[0]
+}
+
+func (al *AgentLoop) interactionPromptPlatformMessageIDs(record interactions.Record) []string {
+	if al == nil || strings.TrimSpace(record.PromptDeliveryID) == "" {
+		return nil
 	}
 	coordinator := al.outboundCoordinator()
 	if coordinator == nil {
-		return ""
+		return nil
 	}
 	intent, err := coordinator.Get(record.PromptDeliveryID)
 	if err != nil || (intent.Status != outbox.StatusDelivered && intent.Status != outbox.StatusAmbiguous) {
-		return ""
+		return nil
 	}
+	messageIDs := make([]string, 0, len(intent.PlatformMessageIDs))
 	for _, messageID := range intent.PlatformMessageIDs {
 		if messageID = strings.TrimSpace(messageID); messageID != "" {
-			return messageID
+			messageIDs = append(messageIDs, messageID)
 		}
 	}
-	return ""
+	return messageIDs
+}
+
+func (al *AgentLoop) projectedInteractionPromptMatches(record interactions.Record, messageID string) bool {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return false
+	}
+	return slices.Contains(al.interactionPromptPlatformMessageIDs(record), messageID)
 }
 
 func (al *AgentLoop) recoverPromptDeliveryExhaustion(

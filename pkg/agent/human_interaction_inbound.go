@@ -472,9 +472,15 @@ func (al *AgentLoop) classifyProjectedInteractionAnswer(
 	if registry == nil || registry.LastLoadError() != nil {
 		return explicitInteractionAnswer{Disposition: explicitInteractionAnswerUnavailable}
 	}
+	responseMessageID := strings.TrimSpace(
+		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
+	)
 	var unauthorizedMatch interactions.Record
 	for _, record := range registry.List() {
 		if !strings.EqualFold(shortID, record.ShortID) {
+			continue
+		}
+		if !al.projectedInteractionPromptMatches(record, responseMessageID) {
 			continue
 		}
 		if !interactionRouteAuthorizes(record.Route, target, msg.Context) {
@@ -1604,6 +1610,12 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 					outcome = interactions.OutcomeAllowed
 					text = "The approved external action completed before restart. Verified runtime receipt IDs: " +
 						strings.Join(receiptIDs, ", ") + "."
+				} else {
+					var markErr error
+					resuming, markErr = registry.MarkApprovalDeliveryUnknown(resuming.ID, resuming.Revision)
+					if markErr != nil {
+						return markErr
+					}
 				}
 				if err := al.persistInteractionToolResult(
 					ctx,

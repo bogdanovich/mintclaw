@@ -128,13 +128,19 @@ the tool call and canonical argument hash, checks expiry, revalidates current
 policy, and consumes the grant before execution. The model cannot create its
 own approval authority or select the approving user.
 
+For channel buttons, admission also matches the callback to the confirmed
+platform message ID of the durable prompt. Short IDs and the channel's
+in-memory control projection are never sufficient to grant authority.
+
 An approval that expires before its one-time grant is consumed is definitively
 not executed. Telegram removes the original inline controls when the
-interaction becomes terminal. A late or repeated button press is acknowledged
-as inactive and cannot resume the agent or execute the protected tool. If the
-action is still wanted, request it again so the runtime can prepare fresh
-authority and issue a new approval. Do not blindly retry an action whose
-approval was already consumed and whose execution result is unknown.
+interaction becomes terminal. A button press is acknowledged immediately with
+a neutral callback receipt; the agent then reports the exact status from the
+durable interaction record. A late or repeated press cannot resume the agent or
+execute the protected tool. If the action is still wanted, request it again so
+the runtime can prepare fresh authority and issue a new approval. Do not
+blindly retry an action whose approval was already consumed and whose execution
+result is unknown.
 
 ## Restart and Delivery Semantics
 

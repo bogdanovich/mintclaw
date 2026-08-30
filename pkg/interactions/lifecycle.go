@@ -385,6 +385,27 @@ func (r *Registry) ConsumeApproval(
 	return record, nil
 }
 
+// MarkApprovalDeliveryUnknown persists the fail-closed outcome used when a
+// one-time approval was consumed before restart but execution cannot be
+// confirmed. Recovery may then safely finish without retrying the tool.
+func (r *Registry) MarkApprovalDeliveryUnknown(id string, expectedRevision int64) (Record, error) {
+	return r.update(
+		id,
+		expectedRevision,
+		func(rec *Record, _ int64) (EventType, string, *bool, error) {
+			if rec.Kind != KindApproval || rec.Status != StatusResuming ||
+				rec.Outcome != OutcomeAllowed || rec.ApprovalConsumedAt == 0 {
+				return "", "", nil, fmt.Errorf(
+					"%w: approval execution outcome is not unknown",
+					ErrInvalidTransition,
+				)
+			}
+			rec.Outcome = OutcomeDeliveryUnknown
+			return EventRecoveryObserved, "approval_execution_unknown", nil, nil
+		},
+	)
+}
+
 func (r *Registry) BeginCancellation(
 	id string,
 	expectedRevision int64,
