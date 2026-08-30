@@ -6295,6 +6295,27 @@ func TestProjectedAnswerMatchesEveryDeliveredTelegramPromptChunk(t *testing.T) {
 	}
 }
 
+func TestUnmatchedFooterlessGroupCandidateFailsClosed(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: "session-unmatched-group-candidate",
+		Allocation: session.Allocation{RouteScopeKey: "session-unmatched-group-candidate"},
+	}
+	msg := bus.InboundMessage{Context: bus.InboundContext{
+		Channel: "telegram", ChatID: "group-1", ChatType: "group",
+		SenderID: "user-1", MessageID: "reply-1", ReplyToMessageID: "unrelated-bot-message",
+		Raw: map[string]string{
+			"is_group": "true",
+			bus.InboundMetadataKeyInteractionResponseCandidate: "historical follow-up",
+		},
+	}}
+
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), msg, target) {
+		t.Fatal("unmatched group candidate escaped fail-closed interaction routing")
+	}
+}
+
 func TestProjectedMultiQuestionReplyRequiresDurablePromptIdentity(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()

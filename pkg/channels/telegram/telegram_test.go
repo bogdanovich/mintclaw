@@ -3685,7 +3685,7 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 	}
 }
 
-func TestHandleMessage_StaleBotReplyDoesNotBypassGroupMentionOnly(t *testing.T) {
+func TestHandleMessage_FooterlessBotReplyReachesDurableGroupValidation(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	ch := &TelegramChannel{
 		BaseChannel: channels.NewBaseChannel(
@@ -3711,8 +3711,14 @@ func TestHandleMessage_StaleBotReplyDoesNotBypassGroupMentionOnly(t *testing.T) 
 	require.NoError(t, ch.handleMessage(context.Background(), msg))
 	select {
 	case inbound := <-messageBus.InboundChan():
-		t.Fatalf("stale bot reply bypassed mention gate: %#v", inbound)
-	default:
+		assert.False(t, inbound.Context.Mentioned)
+		assert.Equal(
+			t,
+			"historical follow-up",
+			inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+		)
+	case <-time.After(time.Second):
+		t.Fatal("footerless bot reply was filtered before durable validation")
 	}
 }
 

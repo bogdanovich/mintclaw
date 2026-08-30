@@ -449,6 +449,19 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 	}
 	if projectedInteractionIsUnverifiedCandidate(msg) && classification.Record.ID == "" &&
 		classification.Disposition == explicitInteractionAnswerWrongID {
+		if strings.EqualFold(strings.TrimSpace(msg.Context.Raw["is_group"]), "true") {
+			logExplicitInteractionAnswerDisposition(
+				classification.Record,
+				msg,
+				classification.Disposition,
+			)
+			_ = c.al.settleInboundAdmission(
+				ctx,
+				msg,
+				finalResponseAdmission{status: finalResponseAdmissionNotRequired},
+			)
+			return true
+		}
 		return false
 	}
 	if classification.Disposition == explicitInteractionAnswerDuplicate {
