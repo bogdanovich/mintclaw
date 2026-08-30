@@ -1,7 +1,6 @@
 # P6.3 rich input and attachment contract
 
-Status: implementation contract; P6.3 remains open until the roadmap exit
-record is merged.
+Status: complete. See the [P6.3 exit record](local-coding-agent-p6-3-exit.md).
 
 This contract keeps rich coding input durable without replaying file or image
 bytes in every later model request. It also keeps attachment authority inside
@@ -177,4 +176,4 @@ a rich payload is pending, so history cannot replay a detached label as if it
 still carried an attachment.
 
 Restart and missing-state behavior is covered by the native multi-process
-coding scenario; the final roadmap exit record remains later P6.3 work.
+coding scenario and recorded in the P6.3 exit evidence.

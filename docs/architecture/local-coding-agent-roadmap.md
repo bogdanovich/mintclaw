@@ -1659,6 +1659,9 @@ Done when:
 - Prompt-size accounting includes selected media.
 - Deleting one thread cannot remove a blob still referenced by another thread.
 
+Completed by the [P6.3 exit record](local-coding-agent-p6-3-exit.md). P6.4 and
+later roadmap packets remain uncompleted.
+
 #### P6.4 — Git review and change summaries
 
 Dependencies: P2.3, P4.3
