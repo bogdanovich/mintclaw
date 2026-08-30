@@ -3699,7 +3699,10 @@ func TestHandleMessage_FooterlessBotReplyReachesDurableGroupValidation(t *testin
 		chatIDs: make(map[string]int64), selfID: 1, selfName: "mintclaw_bot",
 	}
 	msg := &telego.Message{
-		Text: "historical follow-up", MessageID: 23,
+		Text: "@alice historical follow-up", MessageID: 23,
+		Entities: []telego.MessageEntity{{
+			Type: telego.EntityTypeMention, Offset: 0, Length: len("@alice"),
+		}},
 		Chat: telego.Chat{ID: -100123, Type: "supergroup"},
 		From: &telego.User{ID: 15, FirstName: "Eve"},
 		ReplyToMessage: &telego.Message{
@@ -3714,7 +3717,7 @@ func TestHandleMessage_FooterlessBotReplyReachesDurableGroupValidation(t *testin
 		assert.False(t, inbound.Context.Mentioned)
 		assert.Equal(
 			t,
-			"historical follow-up",
+			"@alice historical follow-up",
 			inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
 		)
 	case <-time.After(time.Second):

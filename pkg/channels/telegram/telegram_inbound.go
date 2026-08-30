@@ -232,6 +232,8 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	}
 	mediaGroupMetadata := telegramMediaGroupMetadata(messages)
 	interactionReply := c.telegramInteractionReplyMetadata(message, content, platformID)
+	interactionDirected := interactionReply.choice != "" || interactionReply.response != "" ||
+		interactionReply.responseCandidate != ""
 
 	// In group chats, apply unified group trigger filtering
 	isMentioned := false
@@ -241,7 +243,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		if message.Chat.IsForum && message.MessageThreadID != 0 {
 			topicID = fmt.Sprintf("%d", message.MessageThreadID)
 		}
-		if !isMentioned && c.IgnoreNonBotMentionsForTopic(topicID, true) &&
+		if !isMentioned && !interactionDirected && c.IgnoreNonBotMentionsForTopic(topicID, true) &&
 			c.hasNonBotMention(message) {
 			c.observeSuppressedTelegramMessage(
 				ctx,
@@ -297,8 +299,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		if isMentioned {
 			content = c.stripBotMention(message, content)
 		}
-		directedToBot := isMentioned || interactionReply.choice != "" || interactionReply.response != "" ||
-			interactionReply.responseCandidate != ""
+		directedToBot := isMentioned || interactionDirected
 		respond, cleaned := c.ShouldRespondInGroupForTopic(directedToBot, content, topicID)
 		if !respond {
 			return nil
