@@ -99,22 +99,38 @@ func NewCodeCommand() *cobra.Command {
 
 func newCodeCommand(deps dependencies) *cobra.Command {
 	deps = completeDependencies(deps)
+	const emptyThreadTitle = "New coding thread"
 	var model string
 	var jsonOutput bool
 	cmd := &cobra.Command{
-		Use:   "code <prompt>",
+		Use:   "code [prompt]",
 		Short: "Create an interactive project coding thread",
 		Long: "Create a durable coding thread for the current project and run its first prompt in the MintClaw " +
-			"terminal UI. Redirected and JSON output use the plain renderer.",
-		Args: cobra.MinimumNArgs(1),
+			"terminal UI. The prompt is optional for an interactive terminal. Redirected and JSON output use the " +
+			"plain renderer and require a prompt.",
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prompt := strings.Join(args, " ")
 			noColor, _ := cmd.Flags().GetBool("no-color")
 			capabilities := deps.terminal(cmd.InOrStdin(), cmd.OutOrStdout(), noColor)
 			if !jsonOutput && capabilities.Interactive {
+				metadataPrompt := prompt
+				if strings.TrimSpace(metadataPrompt) == "" {
+					metadataPrompt = emptyThreadTitle
+				}
 				return runNewInteractive(
-					cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), deps, prompt, model, noColor,
+					cmd.Context(),
+					cmd.InOrStdin(),
+					cmd.OutOrStdout(),
+					deps,
+					prompt,
+					metadataPrompt,
+					model,
+					noColor,
 				)
+			}
+			if strings.TrimSpace(prompt) == "" {
+				return fmt.Errorf("coding prompt is required outside the interactive terminal UI")
 			}
 			return runNew(cmd.Context(), cmd.OutOrStdout(), deps, prompt, model, jsonOutput)
 		},
@@ -151,10 +167,11 @@ func runNewInteractive(
 	out io.Writer,
 	deps dependencies,
 	prompt string,
+	metadataPrompt string,
 	model string,
 	noColor bool,
 ) error {
-	_, store, metadata, lease, err := prepareNewThread(ctx, deps, prompt, model)
+	_, store, metadata, lease, err := prepareNewThread(ctx, deps, metadataPrompt, model)
 	if err != nil {
 		return err
 	}
