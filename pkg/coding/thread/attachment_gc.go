@@ -783,11 +783,11 @@ func acquireAttachmentGCQuarantineOwnership(
 	closeOnError := func(operationErr error) (*attachmentGCQuarantineOwnership, error) {
 		return nil, errors.Join(operationErr, file.Close())
 	}
-	if lockErr := tryAcquireThreadLeaseFile(file); lockErr != nil {
+	if lockErr := tryAcquireAttachmentGCQuarantineFile(file); lockErr != nil {
 		return closeOnError(fmt.Errorf("coding attachment garbage-collection quarantine is busy: %w", lockErr))
 	}
 	releaseOnError := func(operationErr error) (*attachmentGCQuarantineOwnership, error) {
-		return nil, errors.Join(operationErr, releaseThreadLeaseFile(file), file.Close())
+		return nil, errors.Join(operationErr, releaseAttachmentGCQuarantineFile(file), file.Close())
 	}
 	info, err := validateAttachmentGCOpenedBlob(
 		ctx,
@@ -810,7 +810,7 @@ func (o *attachmentGCQuarantineOwnership) Release() error {
 	}
 	file := o.file
 	o.file = nil
-	return errors.Join(releaseThreadLeaseFile(file), file.Close())
+	return errors.Join(releaseAttachmentGCQuarantineFile(file), file.Close())
 }
 
 func validateAttachmentGCCommitAuthority(
