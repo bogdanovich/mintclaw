@@ -37,10 +37,11 @@ directory and file identity, size, and digest. Missing, replaced, changed, or
 corrupt state fails closed and is reported as unavailable; readers do not
 repair or rewrite it.
 
-## Deduplication, deletion, and garbage collection
+## Content deduplication, deletion, and garbage collection
 
-Identical bytes share one blob across threads. Trashing a thread moves
-its manifest as recoverable MintClaw-owned state but never removes shared blob
+Identical bytes share one blob across imports and threads, while every explicit
+admission receives a new thread-owned reference. Trashing a thread moves its
+manifest as recoverable MintClaw-owned state but never removes shared blob
 bytes. A later garbage collector must mark references from both active and
 recoverable-trash manifests before sweeping. It must fail closed on corrupt,
 unreadable, or concurrently changing manifests. Until that collector lands,

@@ -182,8 +182,7 @@ func (s *Store) AdmitAttachment(
 			Filename: filename, ContentType: contentType,
 			Size: size, SHA256: digest, CreatedAt: input.At.UTC(),
 		}
-		_, found := equivalentAttachment(manifest.Entries, candidate)
-		if !found && len(manifest.Entries) >= MaxThreadAttachments {
+		if len(manifest.Entries) >= MaxThreadAttachments {
 			return fmt.Errorf("coding attachment admission: thread exceeds %d attachments", MaxThreadAttachments)
 		}
 		if publishErr := view.publishBlob(ctx, digest, data); publishErr != nil {
@@ -191,17 +190,6 @@ func (s *Store) AdmitAttachment(
 		}
 		if identityErr := view.validateWriter(lease); identityErr != nil {
 			return fmt.Errorf("coding attachment: revalidate writer after blob publication: %w", identityErr)
-		}
-		if found {
-			durable, durabilityErr := view.confirmDurableEquivalent(candidate)
-			if durabilityErr != nil {
-				return durabilityErr
-			}
-			if identityErr := view.validateWriter(lease); identityErr != nil {
-				return fmt.Errorf("coding attachment: revalidate writer after manifest sync: %w", identityErr)
-			}
-			admitted = durable
-			return nil
 		}
 		candidate.Ref = attachmentRefPrefix + uuid.NewString()
 		manifest.Entries = append(manifest.Entries, candidate)
@@ -787,26 +775,6 @@ func (v *attachmentStoreView) loadManifestFromHierarchy(
 	return manifest, nil
 }
 
-func (v *attachmentStoreView) confirmDurableEquivalent(candidate Attachment) (Attachment, error) {
-	hierarchy, err := v.store.openAttachmentHierarchy(v.thread, false, attachmentDirectory)
-	if err != nil {
-		return Attachment{}, fmt.Errorf("coding attachment manifest: reopen directory for durability: %w", err)
-	}
-	defer func() { _ = hierarchy.Close() }()
-	if syncErr := v.store.syncRoot(hierarchy.Leaf()); syncErr != nil {
-		return Attachment{}, fmt.Errorf("coding attachment manifest: sync existing directory: %w", syncErr)
-	}
-	manifest, err := v.loadManifestFromHierarchy(hierarchy)
-	if err != nil {
-		return Attachment{}, err
-	}
-	existing, found := equivalentAttachment(manifest.Entries, candidate)
-	if !found {
-		return Attachment{}, fmt.Errorf("coding attachment manifest changed during durability confirmation")
-	}
-	return existing, nil
-}
-
 func readAttachmentManifestData(root *os.Root) ([]byte, error) {
 	entry, err := root.Lstat(attachmentManifest)
 	if err != nil {
@@ -988,16 +956,6 @@ func validateAttachment(entry Attachment) error {
 		return fmt.Errorf("coding attachment identity is invalid")
 	}
 	return nil
-}
-
-func equivalentAttachment(entries []Attachment, candidate Attachment) (Attachment, bool) {
-	for _, entry := range entries {
-		if entry.Filename == candidate.Filename && entry.ContentType == candidate.ContentType &&
-			entry.Size == candidate.Size && entry.SHA256 == candidate.SHA256 {
-			return entry, true
-		}
-	}
-	return Attachment{}, false
 }
 
 func attachmentByRef(entries []Attachment, ref string) (Attachment, bool) {

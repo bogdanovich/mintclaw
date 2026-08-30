@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -77,7 +76,7 @@ func TestAttachmentSurvivesSourceChangesAndRestartWithoutPathDisclosure(t *testi
 	}
 }
 
-func TestAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T) {
+func TestAttachmentSharesBlobAndSurvivesOtherThreadDeletion(t *testing.T) {
 	store, first := newLeaseTestThread(t)
 	second, err := NewMetadata(NewThreadID(), first.Project, "second thread", time.Now())
 	if err != nil {
@@ -100,7 +99,8 @@ func TestAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T) {
 	repeated, err := store.AdmitAttachment(t.Context(), firstLease, first, AttachmentInput{
 		Path: source, At: time.Now().Add(time.Minute),
 	})
-	if err != nil || repeated.Ref != firstAttachment.Ref {
+	if err != nil || repeated.Ref == "" || repeated.Ref == firstAttachment.Ref ||
+		repeated.SHA256 != firstAttachment.SHA256 {
 		t.Fatalf("repeated admission = %+v, %v", repeated, err)
 	}
 	secondLease := acquireAttachmentTestLease(t, store, second.ThreadID)
@@ -114,12 +114,25 @@ func TestAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	repeatedData, _, err := store.ResolveAttachment(t.Context(), first.ThreadID, repeated.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
 	secondData, _, err := store.ResolveAttachment(t.Context(), second.ThreadID, secondAttachment.Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(firstData, secondData) || firstAttachment.Ref == secondAttachment.Ref {
-		t.Fatalf("data/refs = %q %q / %q %q", firstData, secondData, firstAttachment.Ref, secondAttachment.Ref)
+	if !bytes.Equal(firstData, repeatedData) || !bytes.Equal(firstData, secondData) ||
+		firstAttachment.Ref == secondAttachment.Ref || repeated.Ref == secondAttachment.Ref {
+		t.Fatalf(
+			"data/refs = %q %q %q / %q %q %q",
+			firstData,
+			repeatedData,
+			secondData,
+			firstAttachment.Ref,
+			repeated.Ref,
+			secondAttachment.Ref,
+		)
 	}
 	if err := secondLease.Release(); err != nil {
 		t.Fatal(err)
@@ -135,7 +148,7 @@ func TestAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T) {
 	}
 }
 
-func TestAttachmentDeduplicationRejectsReplacedThread(t *testing.T) {
+func TestAttachmentAdmissionRejectsReplacedThread(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
 	source := filepath.Join(t.TempDir(), "attachment.txt")
@@ -176,7 +189,7 @@ func TestAttachmentDeduplicationRejectsReplacedThread(t *testing.T) {
 		Path: source, At: time.Now(),
 	})
 	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "held lease") {
-		t.Fatalf("replacement deduplication = %+v, %v", attachment, err)
+		t.Fatalf("replacement admission = %+v, %v", attachment, err)
 	}
 }
 
@@ -200,12 +213,16 @@ func TestAttachmentReadmissionRepairsMissingBlobAndRejectsCorruption(t *testing.
 	repaired, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
 		Path: source, At: time.Now().Add(time.Minute),
 	})
-	if err != nil || repaired.Ref != attachment.Ref {
+	if err != nil || repaired.Ref == "" || repaired.Ref == attachment.Ref || repaired.SHA256 != attachment.SHA256 {
 		t.Fatalf("missing-blob readmission = %+v, %v", repaired, err)
 	}
 	data, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
 	if err != nil || string(data) != "content" {
 		t.Fatalf("repaired blob = %q, %v", data, err)
+	}
+	repairedData, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, repaired.Ref)
+	if err != nil || string(repairedData) != "content" {
+		t.Fatalf("new reference to repaired blob = %q, %v", repairedData, err)
 	}
 	if err := os.WriteFile(blobPath, []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)
@@ -218,7 +235,7 @@ func TestAttachmentReadmissionRepairsMissingBlobAndRejectsCorruption(t *testing.
 	}
 }
 
-func TestAttachmentReadmissionRequiresExistingBlobDurabilityBarriers(t *testing.T) {
+func TestAttachmentAdmissionRequiresExistingBlobDurabilityBarriers(t *testing.T) {
 	for _, testCase := range []struct {
 		name   string
 		target func(*Store, Attachment) string
@@ -451,112 +468,6 @@ func TestAttachmentAdmissionReturnsCommittedReference(t *testing.T) {
 	entries, listErr := store.ListAttachments(metadata.ThreadID)
 	if listErr != nil || len(entries) != 1 || entries[0].Ref != attachment.Ref {
 		t.Fatalf("committed manifest = %+v, %v", entries, listErr)
-	}
-}
-
-func TestAttachmentReadmissionReplaysCommittedManifestDurability(t *testing.T) {
-	store, metadata := newLeaseTestThread(t)
-	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
-	source := filepath.Join(t.TempDir(), "attachment.txt")
-	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	committedFailure := errors.New("injected committed manifest sync failure")
-	writeRoot := store.writeRoot
-	failManifestOnce := true
-	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
-		if err := writeRoot(root, name, data, mode); err != nil {
-			return err
-		}
-		if name == attachmentManifest && failManifestOnce {
-			failManifestOnce = false
-			return &fileutil.CommittedWriteError{Err: committedFailure}
-		}
-		return nil
-	}
-	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now(),
-	})
-	if attachment.Ref == "" || !IsCommittedAttachmentError(err) || !errors.Is(err, committedFailure) {
-		t.Fatalf("committed admission = %+v, %v", attachment, err)
-	}
-
-	durabilityFailure := errors.New("injected retry manifest sync failure")
-	attachmentsRoot := filepath.Clean(filepath.Join(
-		store.Root(),
-		"threads",
-		metadata.ThreadID,
-		attachmentDirectory,
-	))
-	syncRoot := store.syncRoot
-	store.syncRoot = func(root *os.Root) error {
-		if filepath.Clean(root.Name()) == attachmentsRoot {
-			return durabilityFailure
-		}
-		return syncRoot(root)
-	}
-	repeated, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now().Add(time.Minute),
-	})
-	if repeated.Ref != "" || !errors.Is(err, durabilityFailure) {
-		t.Fatalf("readmission without manifest durability = %+v, %v", repeated, err)
-	}
-
-	store.syncRoot = syncRoot
-	repeated, err = store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now().Add(2 * time.Minute),
-	})
-	if err != nil || repeated.Ref != attachment.Ref {
-		t.Fatalf("durable readmission = %+v, %v", repeated, err)
-	}
-}
-
-func TestAttachmentReadmissionRejectsManifestReplacedDuringDurabilitySync(t *testing.T) {
-	store, metadata := newLeaseTestThread(t)
-	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
-	source := filepath.Join(t.TempDir(), "attachment.txt")
-	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now(),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	replacement, err := json.MarshalIndent(attachmentManifestFile{
-		Version: AttachmentManifestVersion, ThreadID: metadata.ThreadID, Entries: []Attachment{},
-	}, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacement = append(replacement, '\n')
-	manifestPath := attachmentTestManifestPath(t, store, metadata.ThreadID)
-	attachmentsRoot := filepath.Dir(manifestPath)
-	replaced := false
-	syncRoot := store.syncRoot
-	store.syncRoot = func(root *os.Root) error {
-		if err := syncRoot(root); err != nil {
-			return err
-		}
-		if replaced || filepath.Clean(root.Name()) != attachmentsRoot {
-			return nil
-		}
-		replaced = true
-		temporary := filepath.Join(attachmentsRoot, ".replacement-manifest.json")
-		if err := os.WriteFile(temporary, replacement, 0o600); err != nil {
-			return err
-		}
-		return os.Rename(temporary, manifestPath)
-	}
-	repeated, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
-		Path: source, At: time.Now().Add(time.Minute),
-	})
-	if !replaced || repeated.Ref != "" || err == nil || !strings.Contains(err.Error(), "manifest changed") {
-		t.Fatalf("readmission across manifest replacement = %+v, %v; replaced=%t", repeated, err, replaced)
-	}
-	entries, listErr := store.ListAttachments(metadata.ThreadID)
-	if listErr != nil || len(entries) != 0 {
-		t.Fatalf("replacement manifest = %+v, %v", entries, listErr)
 	}
 }
 
