@@ -309,6 +309,175 @@ func TestAttachmentGarbageCollectionRejectsUnknownBlobEntriesWithoutDeletion(t *
 	}
 }
 
+func TestAttachmentGarbageCollectionRejectsCorruptBlobWithoutDeletion(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := admitGCTestAttachment(t, store, lease, metadata, "orphan.txt", "orphan", now)
+	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{orphan.Ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	path := attachmentTestBlobPath(store, orphan)
+	if err := os.WriteFile(path, []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+		Before: now.Add(-24 * time.Hour), Delete: true,
+	})
+	if err == nil || result.DeletedBlobs != 0 || IsCommittedAttachmentGCError(err) ||
+		!strings.Contains(err.Error(), "content identity changed") {
+		t.Fatalf("corrupt-blob sweep = %+v, %v", result, err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("corrupt blob removed: %v", err)
+	}
+}
+
+func TestAttachmentGarbageCollectionRehashesCandidateBeforeDeletion(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := admitGCTestAttachment(t, store, lease, metadata, "orphan.txt", "orphan", now)
+	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{orphan.Ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	path := attachmentTestBlobPath(store, orphan)
+	old := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.acquireAttachmentGCSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	marked, _, err := store.markAttachmentGarbage(t.Context(), session.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := store.planAttachmentGarbage(t.Context(), session.root, AttachmentGCOptions{
+		Before: now.Add(-24 * time.Hour), BlobLimit: 10, CandidateLimit: 10,
+	}, marked)
+	if err != nil || len(plan.Candidates) != 1 {
+		t.Fatalf("replacement plan = %+v, %v", plan, err)
+	}
+	if err := os.WriteFile(path, []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, plan.Candidates[0].ModifiedAt, plan.Candidates[0].ModifiedAt); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.sweepAttachmentGarbage(t.Context(), session, plan)
+	if err == nil || result.DeletedBlobs != 0 || IsCommittedAttachmentGCError(err) ||
+		!strings.Contains(err.Error(), "content identity changed") {
+		t.Fatalf("replaced-candidate sweep = %+v, %v", result, err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("replaced candidate removed: %v", err)
+	}
+}
+
+func TestAttachmentGarbageCollectionBindsSweepToMarkedStoreRoot(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphan := admitGCTestAttachment(t, store, lease, metadata, "orphan.txt", "orphan", now)
+	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{orphan.Ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	path := attachmentTestBlobPath(store, orphan)
+	old := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.acquireAttachmentGCSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	marked, _, err := store.markAttachmentGarbage(t.Context(), session.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := store.planAttachmentGarbage(t.Context(), session.root, AttachmentGCOptions{
+		Before: now.Add(-24 * time.Hour), BlobLimit: 10, CandidateLimit: 10,
+	}, marked)
+	if err != nil || len(plan.Candidates) != 1 {
+		t.Fatalf("root-replacement plan = %+v, %v", plan, err)
+	}
+	movedRoot := store.Root() + "-replaced"
+	if err := os.Rename(store.Root(), movedRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store.Root(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.sweepAttachmentGarbage(t.Context(), session, plan)
+	if err == nil || result.DeletedBlobs != 0 || IsCommittedAttachmentGCError(err) ||
+		!strings.Contains(err.Error(), "store root changed") {
+		t.Fatalf("root-replacement sweep = %+v, %v", result, err)
+	}
+	relative, err := filepath.Rel(store.Root(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(movedRoot, relative)); err != nil {
+		t.Fatalf("detached-store candidate removed: %v", err)
+	}
+}
+
+func TestAttachmentGarbageCollectionEnforcesAuthorityBudgetsBeforeExpansion(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = admitGCTestAttachment(t, store, lease, metadata, "bounded.txt", "bounded", time.Now().UTC())
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.acquireAttachmentGCSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	marked := make(map[string]struct{})
+	count, err := scanAttachmentManifestTree(
+		t.Context(), store, session.root, []string{"threads"}, 0, attachmentGCMarkedBlobLimit, marked,
+	)
+	if err == nil || count != 0 || len(marked) != 0 || !strings.Contains(err.Error(), "exceeds 0 entries") {
+		t.Fatalf("zero manifest budget = count %d marked %d err %v", count, len(marked), err)
+	}
+	count, err = scanAttachmentManifestTree(
+		t.Context(), store, session.root, []string{"threads"}, 1, 0, marked,
+	)
+	if err == nil || count != 1 || len(marked) != 0 || !strings.Contains(err.Error(), "referenced blobs exceed 0") {
+		t.Fatalf("zero digest budget = count %d marked %d err %v", count, len(marked), err)
+	}
+}
+
 func admitGCTestAttachment(
 	t *testing.T,
 	store *Store,

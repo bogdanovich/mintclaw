@@ -387,6 +387,11 @@ func TestThreadsGCPlansThenRequiresExactStoreWideConfirmation(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "exactly match") {
 		t.Fatalf("wrong GC confirmation error = %v", err)
 	}
+	if _, err := executeCommandError(
+		newThreadsCommand(deps), "gc", "--confirm", " "+attachmentGCConfirmation+" ",
+	); err == nil || !strings.Contains(err.Error(), "exactly match") {
+		t.Fatalf("whitespace GC confirmation error = %v", err)
+	}
 	var collected gcThreadsOutput
 	if err := json.Unmarshal(executeCommand(
 		t,

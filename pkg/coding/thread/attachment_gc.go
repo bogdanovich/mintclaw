@@ -3,6 +3,8 @@ package thread
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ const (
 	DefaultAttachmentGCBlobLimit      = 100_000
 	DefaultAttachmentGCCandidateLimit = 10_000
 	attachmentGCManifestLimit         = 30_000
+	attachmentGCMarkedBlobLimit       = DefaultAttachmentGCBlobLimit
 )
 
 // AttachmentGCOptions bounds one mark-and-sweep pass. Before is an explicit
@@ -91,36 +94,92 @@ func (s *Store) CollectAttachmentGarbage(
 	if contextErr := ctx.Err(); contextErr != nil {
 		return AttachmentGCResult{}, contextErr
 	}
-	maintenance, err := s.acquireAttachmentMaintenanceLease()
+	session, err := s.acquireAttachmentGCSession()
 	if err != nil {
 		return AttachmentGCResult{}, err
 	}
 	defer func() {
-		releaseErr := maintenance.Release()
-		if releaseErr == nil {
+		closeErr := session.Close()
+		if closeErr == nil {
 			return
 		}
 		if result.DeletedBlobs > 0 {
 			resultErr = &CommittedAttachmentGCError{
 				Result: result,
-				Err:    errors.Join(resultErr, fmt.Errorf("release maintenance lock: %w", releaseErr)),
+				Err:    errors.Join(resultErr, fmt.Errorf("close garbage-collection session: %w", closeErr)),
 			}
 			return
 		}
-		resultErr = errors.Join(resultErr, releaseErr)
+		resultErr = errors.Join(resultErr, closeErr)
 	}()
 
-	marked, scannedManifests, err := s.markAttachmentGarbage(ctx)
+	marked, scannedManifests, err := s.markAttachmentGarbage(ctx, session.root)
 	if err != nil {
 		return AttachmentGCResult{}, err
 	}
-	result, err = s.planAttachmentGarbage(ctx, resolved, marked)
+	result, err = s.planAttachmentGarbage(ctx, session.root, resolved, marked)
 	result.ScannedManifests = scannedManifests
 	result.ReferencedBlobs = len(marked)
 	if err != nil || !resolved.Delete || len(result.Candidates) == 0 {
 		return result, err
 	}
-	return s.sweepAttachmentGarbage(ctx, result)
+	return s.sweepAttachmentGarbage(ctx, session, result)
+}
+
+type attachmentGCSession struct {
+	root            *os.Root
+	maintenanceRoot *os.Root
+	maintenance     *attachmentMaintenanceLease
+}
+
+func (s *Store) acquireAttachmentGCSession() (*attachmentGCSession, error) {
+	maintenance, err := s.acquireAttachmentMaintenanceLease()
+	if err != nil {
+		return nil, err
+	}
+	fail := func(operationErr error) (*attachmentGCSession, error) {
+		return nil, errors.Join(operationErr, maintenance.Release())
+	}
+	root, err := openPinnedCatalogRoot(s.root)
+	if err != nil {
+		return fail(fmt.Errorf("coding attachment garbage collection: pin store root: %w", err))
+	}
+	maintenanceRoot, err := openPinnedAttachmentChild(root, attachmentMaintenanceDirectory)
+	if err != nil {
+		return fail(errors.Join(
+			fmt.Errorf("coding attachment garbage collection: pin maintenance root: %w", err),
+			root.Close(),
+		))
+	}
+	session := &attachmentGCSession{
+		root: root, maintenanceRoot: maintenanceRoot, maintenance: maintenance,
+	}
+	if err := session.validate(s.root); err != nil {
+		return nil, errors.Join(err, session.Close())
+	}
+	return session, nil
+}
+
+func (s *attachmentGCSession) validate(storeRoot string) error {
+	if s == nil || s.root == nil || s.maintenanceRoot == nil || s.maintenance == nil {
+		return fmt.Errorf("coding attachment garbage collection: session is incomplete")
+	}
+	if err := validateAttachmentMaintenanceFile(
+		storeRoot,
+		s.root,
+		s.maintenanceRoot,
+		s.maintenance.file,
+	); err != nil {
+		return fmt.Errorf("coding attachment garbage collection: validate maintenance authority: %w", err)
+	}
+	return nil
+}
+
+func (s *attachmentGCSession) Close() error {
+	if s == nil {
+		return nil
+	}
+	return errors.Join(s.maintenanceRoot.Close(), s.root.Close(), s.maintenance.Release())
 }
 
 func resolveAttachmentGCOptions(options AttachmentGCOptions) (AttachmentGCOptions, error) {
@@ -142,12 +201,10 @@ func resolveAttachmentGCOptions(options AttachmentGCOptions) (AttachmentGCOption
 	return options, nil
 }
 
-func (s *Store) markAttachmentGarbage(ctx context.Context) (map[string]struct{}, int, error) {
-	root, err := openPinnedCatalogRoot(s.root)
-	if err != nil {
-		return nil, 0, fmt.Errorf("coding attachment garbage collection: pin store root: %w", err)
-	}
-	defer func() { _ = root.Close() }()
+func (s *Store) markAttachmentGarbage(
+	ctx context.Context,
+	root *os.Root,
+) (map[string]struct{}, int, error) {
 	marked := make(map[string]struct{})
 	count := 0
 	for _, tree := range [][]string{
@@ -155,16 +212,18 @@ func (s *Store) markAttachmentGarbage(ctx context.Context) (map[string]struct{},
 		{"trash", "threads"},
 		{"trash", "fork-preparations"},
 	} {
-		treeCount, scanErr := scanAttachmentManifestTree(ctx, s, root, tree, marked)
+		treeCount, scanErr := scanAttachmentManifestTree(
+			ctx,
+			s,
+			root,
+			tree,
+			attachmentGCManifestLimit-count,
+			attachmentGCMarkedBlobLimit,
+			marked,
+		)
 		count += treeCount
 		if scanErr != nil {
 			return nil, count, scanErr
-		}
-		if count > attachmentGCManifestLimit {
-			return nil, count, fmt.Errorf(
-				"coding attachment garbage collection: manifest scan exceeds %d entries",
-				attachmentGCManifestLimit,
-			)
 		}
 	}
 	if err := validatePinnedAttachmentRoot(s.root, root); err != nil {
@@ -178,6 +237,8 @@ func scanAttachmentManifestTree(
 	store *Store,
 	storeRoot *os.Root,
 	components []string,
+	manifestLimit int,
+	markedBlobLimit int,
 	marked map[string]struct{},
 ) (int, error) {
 	current := storeRoot
@@ -202,7 +263,7 @@ func scanAttachmentManifestTree(
 		opened = append(opened, child)
 		current = child
 	}
-	entries, err := readBoundedRootEntries(current, attachmentGCManifestLimit)
+	entries, err := readBoundedRootEntries(current, manifestLimit)
 	if err != nil {
 		return 0, fmt.Errorf("coding attachment garbage collection: list manifest tree: %w", err)
 	}
@@ -237,6 +298,12 @@ func scanAttachmentManifestTree(
 			return count, fmt.Errorf("coding attachment garbage collection: active manifest owner mismatch")
 		}
 		for _, attachment := range manifest.Entries {
+			if _, exists := marked[attachment.SHA256]; !exists && len(marked) >= markedBlobLimit {
+				return count, fmt.Errorf(
+					"coding attachment garbage collection: referenced blobs exceed %d entries",
+					markedBlobLimit,
+				)
+			}
 			marked[attachment.SHA256] = struct{}{}
 		}
 	}
@@ -308,15 +375,11 @@ func loadAttachmentGCManifest(
 
 func (s *Store) planAttachmentGarbage(
 	ctx context.Context,
+	root *os.Root,
 	options AttachmentGCOptions,
 	marked map[string]struct{},
 ) (AttachmentGCResult, error) {
 	result := AttachmentGCResult{Before: options.Before, Candidates: []AttachmentGCCandidate{}}
-	root, err := openPinnedCatalogRoot(s.root)
-	if err != nil {
-		return result, fmt.Errorf("coding attachment garbage collection: pin blob root: %w", err)
-	}
-	defer func() { _ = root.Close() }()
 	blobs, exists, err := openOptionalPinnedAttachmentChild(root, "blobs")
 	if err != nil || !exists {
 		return result, err
@@ -356,7 +419,7 @@ func (s *Store) planAttachmentGarbage(
 				_ = shardRoot.Close()
 				return result, fmt.Errorf("coding attachment garbage collection: invalid blob entry %q", digest)
 			}
-			info, err := validateAttachmentGCBlob(shardRoot, digest)
+			info, err := validateAttachmentGCBlob(ctx, shardRoot, digest)
 			if err != nil {
 				_ = shardRoot.Close()
 				return result, err
@@ -391,6 +454,9 @@ func (s *Store) planAttachmentGarbage(
 	if err := validatePinnedAttachmentDirectory(root, "blobs", blobs); err != nil {
 		return result, fmt.Errorf("coding attachment garbage collection: blob root changed: %w", err)
 	}
+	if err := validatePinnedAttachmentRoot(s.root, root); err != nil {
+		return result, fmt.Errorf("coding attachment garbage collection: store root changed: %w", err)
+	}
 	sort.Slice(result.Candidates, func(left, right int) bool {
 		return result.Candidates[left].SHA256 < result.Candidates[right].SHA256
 	})
@@ -399,13 +465,13 @@ func (s *Store) planAttachmentGarbage(
 
 func (s *Store) sweepAttachmentGarbage(
 	ctx context.Context,
+	session *attachmentGCSession,
 	result AttachmentGCResult,
 ) (AttachmentGCResult, error) {
-	root, err := openPinnedCatalogRoot(s.root)
-	if err != nil {
+	if err := session.validate(s.root); err != nil {
 		return result, err
 	}
-	defer func() { _ = root.Close() }()
+	root := session.root
 	blobs, exists, err := openOptionalPinnedAttachmentChild(root, "blobs")
 	if err != nil || !exists {
 		return classifyAttachmentGCSweep(result, errors.Join(err, os.ErrNotExist))
@@ -426,6 +492,9 @@ func (s *Store) sweepAttachmentGarbage(
 		if contextErr := ctx.Err(); contextErr != nil {
 			return classifyAttachmentGCSweep(result, contextErr)
 		}
+		if validationErr := session.validate(s.root); validationErr != nil {
+			return classifyAttachmentGCSweep(result, validationErr)
+		}
 		shardName := candidate.SHA256[:2]
 		shard := touched[shardName]
 		if shard == nil {
@@ -435,7 +504,7 @@ func (s *Store) sweepAttachmentGarbage(
 			}
 			touched[shardName] = shard
 		}
-		info, err := validateAttachmentGCBlob(shard, candidate.SHA256)
+		info, err := validateAttachmentGCBlob(ctx, shard, candidate.SHA256)
 		if err != nil {
 			return classifyAttachmentGCSweep(result, err)
 		}
@@ -466,6 +535,9 @@ func (s *Store) sweepAttachmentGarbage(
 		return classifyAttachmentGCSweep(result, err)
 	}
 	if err := validatePinnedAttachmentDirectory(root, "blobs", blobs); err != nil {
+		return classifyAttachmentGCSweep(result, err)
+	}
+	if err := session.validate(s.root); err != nil {
 		return classifyAttachmentGCSweep(result, err)
 	}
 	return result, nil
@@ -521,7 +593,7 @@ func readBoundedRootEntries(root *os.Root, limit int) ([]os.DirEntry, error) {
 	return entries, nil
 }
 
-func validateAttachmentGCBlob(root *os.Root, name string) (os.FileInfo, error) {
+func validateAttachmentGCBlob(ctx context.Context, root *os.Root, name string) (os.FileInfo, error) {
 	entry, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
@@ -552,12 +624,40 @@ func validateAttachmentGCBlob(root *os.Root, name string) (os.FileInfo, error) {
 			MaxAttachmentBytes,
 		)
 	}
+	hash := sha256.New()
+	reader := io.LimitReader(file, MaxAttachmentBytes+1)
+	buffer := make([]byte, 64*1024)
+	var size int64
+	for {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		count, readErr := reader.Read(buffer)
+		if count > 0 {
+			size += int64(count)
+			_, _ = hash.Write(buffer[:count])
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	if size != info.Size() || hex.EncodeToString(hash.Sum(nil)) != name {
+		return nil, fmt.Errorf("coding attachment garbage collection: blob %q content identity changed", name)
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
 	current, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
 	}
-	if !os.SameFile(entry, info) || !os.SameFile(entry, current) || entry.Size() != info.Size() ||
-		entry.ModTime() != info.ModTime() {
+	if !os.SameFile(entry, info) || !os.SameFile(entry, after) || !os.SameFile(entry, current) ||
+		entry.Size() != info.Size() || info.Size() != after.Size() || entry.ModTime() != info.ModTime() ||
+		info.ModTime() != after.ModTime() {
 		return nil, fmt.Errorf("coding attachment garbage collection: blob %q changed while opening", name)
 	}
 	return info, nil

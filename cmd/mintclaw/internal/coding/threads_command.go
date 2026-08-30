@@ -77,7 +77,6 @@ func runGCThreads(
 	if olderThan <= 0 {
 		return fmt.Errorf("coding attachment garbage collection: --older-than must be positive")
 	}
-	confirmation = strings.TrimSpace(confirmation)
 	if confirmation != "" && confirmation != attachmentGCConfirmation {
 		return fmt.Errorf(
 			"coding attachment garbage collection: --confirm must exactly match %q",
