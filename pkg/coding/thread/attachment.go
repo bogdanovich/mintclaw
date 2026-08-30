@@ -460,28 +460,41 @@ func (s *Store) ListAttachmentsWithLease(
 		return nil, err
 	}
 	resultErr = lease.withActive(s.root, threadID, func() error {
-		view, err := s.openAttachmentStoreView(threadID)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = view.Close() }()
-		if err = view.validateWriter(lease); err != nil {
-			return fmt.Errorf("coding attachment list: validate thread view: %w", err)
-		}
-		manifest, err := view.loadManifest()
-		if err != nil {
-			return err
-		}
-		if err = ctx.Err(); err != nil {
-			return err
-		}
-		if err = view.validateWriter(lease); err != nil {
-			return fmt.Errorf("coding attachment list: revalidate thread view: %w", err)
-		}
-		attachments = append([]Attachment(nil), manifest.Entries...)
-		return nil
+		var err error
+		attachments, err = s.listAttachmentsWithActiveLease(ctx, lease, threadID)
+		return err
 	})
 	return attachments, resultErr
+}
+
+// listAttachmentsWithActiveLease is the lock-free half of
+// ListAttachmentsWithLease. Callers must already hold lease.withActive so a
+// multi-file operation can pin one transcript and attachment snapshot without
+// recursively acquiring the lease mutex.
+func (s *Store) listAttachmentsWithActiveLease(
+	ctx context.Context,
+	lease *Lease,
+	threadID string,
+) ([]Attachment, error) {
+	view, err := s.openAttachmentStoreView(threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = view.Close() }()
+	if err = view.validateWriter(lease); err != nil {
+		return nil, fmt.Errorf("coding attachment list: validate thread view: %w", err)
+	}
+	manifest, err := view.loadManifest()
+	if err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err = view.validateWriter(lease); err != nil {
+		return nil, fmt.Errorf("coding attachment list: revalidate thread view: %w", err)
+	}
+	return append([]Attachment(nil), manifest.Entries...), nil
 }
 
 // ResolveAttachment returns verified immutable bytes for a reference owned by
@@ -1135,19 +1148,9 @@ func readAttachmentManifestData(root *os.Root) ([]byte, error) {
 }
 
 func (v *attachmentStoreView) saveManifest(manifest attachmentManifestFile) error {
-	if err := validateAttachmentManifest(v.threadID, manifest); err != nil {
-		return err
-	}
-	sort.Slice(manifest.Entries, func(left, right int) bool {
-		return manifest.Entries[left].Ref < manifest.Entries[right].Ref
-	})
-	data, err := json.MarshalIndent(manifest, "", "  ")
+	data, err := encodeAttachmentManifest(v.threadID, manifest)
 	if err != nil {
 		return err
-	}
-	data = append(data, '\n')
-	if len(data) > MaxAttachmentManifestBytes {
-		return fmt.Errorf("coding attachment manifest exceeds %d bytes", MaxAttachmentManifestBytes)
 	}
 	hierarchy, err := v.store.openAttachmentHierarchy(v.thread, true, attachmentDirectory)
 	if err != nil {
@@ -1168,6 +1171,25 @@ func (v *attachmentStoreView) saveManifest(manifest attachmentManifestFile) erro
 		)}
 	}
 	return nil
+}
+
+func encodeAttachmentManifest(threadID string, manifest attachmentManifestFile) ([]byte, error) {
+	if err := validateAttachmentManifest(threadID, manifest); err != nil {
+		return nil, err
+	}
+	manifest.Entries = append([]Attachment(nil), manifest.Entries...)
+	sort.Slice(manifest.Entries, func(left, right int) bool {
+		return manifest.Entries[left].Ref < manifest.Entries[right].Ref
+	})
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	data = append(data, '\n')
+	if len(data) > MaxAttachmentManifestBytes {
+		return nil, fmt.Errorf("coding attachment manifest exceeds %d bytes", MaxAttachmentManifestBytes)
+	}
+	return data, nil
 }
 
 func validatePinnedAttachmentLease(threadRoot *os.Root, lease *Lease) error {

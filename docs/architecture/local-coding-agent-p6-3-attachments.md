@@ -49,10 +49,14 @@ recoverable-trash manifests before sweeping. It must fail closed on corrupt,
 unreadable, or concurrently changing manifests. Until that collector lands,
 unreferenced blobs are retained.
 
-Forking must create a new thread manifest containing only references reachable
-from the copied transcript boundary. Blobs remain shared. Fork and
-garbage-collection lifecycle integration belongs to a later P6.3 PR built on
-this storage layer.
+Forking reads the source transcript and manifest under the same thread lease,
+then publishes a child manifest containing only references reachable from the
+copied transcript boundary. A durable reference present in the selected
+history but absent from the source manifest fails closed before the child is
+published. Child and source manifests retain independent authority while their
+immutable blobs remain shared; deleting the source therefore does not break a
+forked attachment. Garbage-collection lifecycle integration remains later
+P6.3 work built on this storage layer.
 
 ## Prompt and runtime boundary
 
@@ -132,5 +136,5 @@ in-process text-only recall ring, and text-history navigation is disabled while
 a rich payload is pending, so history cannot replay a detached label as if it
 still carried an attachment.
 
-Fork reachability, retention/GC command, restart and missing-state closeout,
-and the final roadmap exit record remain later P6.3 work.
+Retention/GC command, restart and missing-state closeout, and the final roadmap
+exit record remain later P6.3 work.

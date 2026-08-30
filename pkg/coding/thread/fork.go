@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
@@ -99,11 +100,19 @@ func (s *Store) ForkThread(
 	var child Metadata
 	var result ForkResult
 	err := sourceLease.withActive(s.root, sourceThreadID, func() error {
-		source, history, revision, err := s.readForkSource(ctx, sourceLease, options.Project.ProjectKey)
+		source, history, revision, sourceAttachments, err := s.readForkSource(
+			ctx,
+			sourceLease,
+			options.Project.ProjectKey,
+		)
 		if err != nil {
 			return err
 		}
 		prefix, point, err := selectForkPrefix(history, revision, options.AtTurn)
+		if err != nil {
+			return err
+		}
+		childAttachments, err := selectForkAttachments(prefix, sourceAttachments)
 		if err != nil {
 			return err
 		}
@@ -143,7 +152,7 @@ func (s *Store) ForkThread(
 		if err != nil {
 			return err
 		}
-		return s.publishFork(ctx, child, snapshot, result)
+		return s.publishFork(ctx, child, snapshot, childAttachments, result)
 	})
 	return child, result, err
 }
@@ -152,45 +161,57 @@ func (s *Store) readForkSource(
 	ctx context.Context,
 	lease *Lease,
 	projectKey string,
-) (Metadata, []providers.Message, memory.HistoryRevision, error) {
+) (Metadata, []providers.Message, memory.HistoryRevision, []Attachment, error) {
 	threadID := lease.ThreadID()
 	storeRoot, err := openCatalogRoot(s.root)
 	if err != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: open store root: %w", err)
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
+			"coding thread fork: open store root: %w",
+			err,
+		)
 	}
 	defer func() { _ = storeRoot.Close() }()
 	threadsRoot, err := openCatalogChildDirectory(storeRoot, "threads")
 	if err != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: open threads root: %w", err)
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
+			"coding thread fork: open threads root: %w",
+			err,
+		)
 	}
 	defer func() { _ = threadsRoot.Close() }()
 	threadRoot, err := openCatalogChildDirectory(threadsRoot, threadID)
 	if err != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: open thread root: %w", err)
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
+			"coding thread fork: open thread root: %w",
+			err,
+		)
 	}
 	defer func() { _ = threadRoot.Close() }()
 	if leaseErr := validateForkLeaseRoot(threadRoot, lease); leaseErr != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, leaseErr
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, leaseErr
 	}
 	metadata, err := loadCatalogMetadataFromDirectory(threadRoot, threadID, openCatalogMetadataFile)
 	if err != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, err
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, err
 	}
 	if metadata.Project.ProjectKey != projectKey {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
 			"coding thread fork: source belongs to project %q",
 			metadata.Project.ProjectRoot,
 		)
 	}
 	sessionsRoot, err := openCatalogChildDirectory(threadRoot, "sessions")
 	if err != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: open sessions: %w", err)
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
+			"coding thread fork: open sessions: %w",
+			err,
+		)
 	}
 	defer func() { _ = sessionsRoot.Close() }()
 	sessionStem := "coding_" + metadata.ThreadID
 	metaFile, err := openCatalogFile(sessionsRoot, sessionStem+".meta.json")
 	if err != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
 			"coding thread fork: pin transcript metadata: %w",
 			err,
 		)
@@ -198,7 +219,7 @@ func (s *Store) readForkSource(
 	jsonlFile, err := openCatalogFile(sessionsRoot, sessionStem+".jsonl")
 	if err != nil {
 		_ = metaFile.Close()
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
 			"coding thread fork: pin transcript JSONL: %w",
 			err,
 		)
@@ -207,36 +228,38 @@ func (s *Store) readForkSource(
 	jsonlData, jsonlInfo, jsonlErr := readPinnedForkFile(ctx, jsonlFile)
 	closeErr := errors.Join(jsonlFile.Close(), metaFile.Close())
 	if readErr := errors.Join(metaErr, jsonlErr, closeErr); readErr != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, readErr
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, readErr
 	}
 	sessionMeta, decodeErr := memory.DecodeSessionMeta(metaData)
 	if decodeErr != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
 			"coding thread fork: decode transcript metadata: %w",
 			decodeErr,
 		)
 	}
 	if sessionMeta.Key != metadata.SessionKey {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf("coding thread fork: source session key mismatch")
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
+			"coding thread fork: source session key mismatch",
+		)
 	}
 	if sessionMeta.HistoryDirty {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
 			"coding thread fork: source transcript has an unfinished history mutation",
 		)
 	}
 	visible := sessionMeta.Count - sessionMeta.Skip
 	if sessionMeta.Count < 0 || sessionMeta.Skip < 0 || visible < 0 || visible > MaxForkMessages {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
 			"coding thread fork: source transcript exceeds %d visible messages",
 			MaxForkMessages,
 		)
 	}
 	history, rawCount, err := decodePinnedForkHistory(ctx, jsonlData, sessionMeta.Skip)
 	if err != nil {
-		return Metadata{}, nil, memory.HistoryRevision{}, err
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, err
 	}
 	if rawCount != sessionMeta.Count || len(history) != visible {
-		return Metadata{}, nil, memory.HistoryRevision{}, fmt.Errorf(
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
 			"coding thread fork: pinned transcript does not match its metadata",
 		)
 	}
@@ -247,7 +270,14 @@ func (s *Store) readForkSource(
 		FileSize:  jsonlInfo.Size(),
 		ModTimeNS: jsonlInfo.ModTime().UnixNano(),
 	}
-	return metadata, history, revision, nil
+	attachments, err := s.listAttachmentsWithActiveLease(ctx, lease, threadID)
+	if err != nil {
+		return Metadata{}, nil, memory.HistoryRevision{}, nil, fmt.Errorf(
+			"coding thread fork: read source attachments: %w",
+			err,
+		)
+	}
+	return metadata, history, revision, attachments, nil
 }
 
 func validateForkLeaseRoot(root *catalogDirectory, lease *Lease) error {
@@ -372,6 +402,46 @@ func selectForkPrefix(
 	}, nil
 }
 
+func selectForkAttachments(history []providers.Message, source []Attachment) ([]Attachment, error) {
+	owned := make(map[string]Attachment, len(source))
+	for _, attachment := range source {
+		owned[attachment.Ref] = attachment
+	}
+	reachable := make(map[string]struct{})
+	selectRef := func(ref string) error {
+		if !isAttachmentRef(ref) {
+			return nil
+		}
+		if _, exists := owned[ref]; !exists {
+			return fmt.Errorf(
+				"coding thread fork: transcript attachment %q is not owned by source thread",
+				ref,
+			)
+		}
+		reachable[ref] = struct{}{}
+		return nil
+	}
+	for _, message := range history {
+		for _, ref := range message.Media {
+			if err := selectRef(ref); err != nil {
+				return nil, err
+			}
+		}
+		for _, attachment := range message.Attachments {
+			if err := selectRef(attachment.Ref); err != nil {
+				return nil, err
+			}
+		}
+	}
+	selected := make([]Attachment, 0, len(reachable))
+	for _, attachment := range source {
+		if _, exists := reachable[attachment.Ref]; exists {
+			selected = append(selected, attachment)
+		}
+	}
+	return selected, nil
+}
+
 func forkRootIndexes(history []providers.Message) []int {
 	roots := make([]int, 0)
 	for index, message := range history {
@@ -386,6 +456,7 @@ func (s *Store) publishFork(
 	ctx context.Context,
 	child Metadata,
 	snapshot memory.JSONLSnapshot,
+	attachments []Attachment,
 	result ForkResult,
 ) error {
 	metadataData, err := encodeForkMetadata(child)
@@ -432,11 +503,28 @@ func (s *Store) publishFork(
 	if writeErr := s.writeRoot(sessionsRoot, snapshot.MetadataFile, snapshot.Metadata, 0o600); writeErr != nil {
 		return abort(fmt.Errorf("coding thread fork: write pinned transcript metadata: %w", writeErr))
 	}
+	if len(attachments) > 0 {
+		manifestData, encodeErr := encodeAttachmentManifest(child.ThreadID, attachmentManifestFile{
+			Version: AttachmentManifestVersion, ThreadID: child.ThreadID, Entries: attachments,
+		})
+		if encodeErr != nil {
+			return abort(fmt.Errorf("coding thread fork: encode child attachments: %w", encodeErr))
+		}
+		attachmentRoots, openErr := s.openAttachmentHierarchy(targetRoot, true, attachmentDirectory)
+		if openErr != nil {
+			return abort(fmt.Errorf("coding thread fork: create child attachments: %w", openErr))
+		}
+		writeErr := s.writeRoot(attachmentRoots.Leaf(), attachmentManifest, manifestData, 0o600)
+		closeAttachmentErr := attachmentRoots.Close()
+		if err := errors.Join(writeErr, closeAttachmentErr); err != nil {
+			return abort(fmt.Errorf("coding thread fork: write child attachments: %w", err))
+		}
+	}
 	if contextErr := context.Cause(ctx); contextErr != nil {
 		return abort(contextErr)
 	}
 	saveErr := s.writeRoot(targetRoot, metadataFileName, metadataData, 0o600)
-	verifyErr := s.verifyPublishedFork(ctx, targetLease, child, snapshot, sessionsRoot)
+	verifyErr := s.verifyPublishedFork(ctx, targetLease, child, snapshot, attachments, sessionsRoot)
 	published := verifyErr == nil
 	if !published {
 		saveErr = errors.Join(saveErr, verifyErr)
@@ -616,6 +704,7 @@ func (s *Store) verifyPublishedFork(
 	targetLease *Lease,
 	child Metadata,
 	snapshot memory.JSONLSnapshot,
+	attachments []Attachment,
 	pinnedSessions *os.Root,
 ) error {
 	return targetLease.withActive(s.root, child.ThreadID, func() error {
@@ -643,6 +732,13 @@ func (s *Store) verifyPublishedFork(
 		}
 		if !reflect.DeepEqual(loaded, child) {
 			return fmt.Errorf("coding thread fork: published metadata does not match the child")
+		}
+		loadedAttachments, err := s.listAttachmentsWithActiveLease(ctx, targetLease, child.ThreadID)
+		if err != nil {
+			return fmt.Errorf("coding thread fork: verify child attachments: %w", err)
+		}
+		if !slices.Equal(loadedAttachments, attachments) {
+			return fmt.Errorf("coding thread fork: published attachments do not match the child")
 		}
 		activeSessions, err := openCatalogChildDirectory(threadRoot, "sessions")
 		if err != nil {
