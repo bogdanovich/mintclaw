@@ -178,19 +178,29 @@ func telegramInteractionShortID(reply *telego.Message) string {
 	if reply == nil {
 		return ""
 	}
-	var shortID string
-	for _, line := range strings.Split(reply.Text, "\n") {
-		fields := strings.Fields(strings.Trim(strings.TrimSpace(line), "`"))
-		if len(fields) < 2 || fields[0] != "/answer" {
-			continue
-		}
-		candidate := fields[1]
-		if shortID != "" && !strings.EqualFold(shortID, candidate) {
-			return ""
-		}
-		shortID = candidate
+	lines := strings.Split(strings.TrimSpace(reply.Text), "\n")
+	if len(lines) < 2 {
+		return ""
 	}
-	return shortID
+	last := telegramInteractionFooterFields(lines[len(lines)-1])
+	previous := telegramInteractionFooterFields(lines[len(lines)-2])
+	if len(last) == 1 && last[0] == "/stop" {
+		if len(previous) >= 2 && previous[0] == "/answer" {
+			return previous[1]
+		}
+		return ""
+	}
+	if len(previous) != 3 || len(last) != 3 ||
+		previous[0] != "/answer" || last[0] != "/answer" ||
+		previous[2] != "allow_once" || last[2] != "deny" ||
+		!strings.EqualFold(previous[1], last[1]) {
+		return ""
+	}
+	return previous[1]
+}
+
+func telegramInteractionFooterFields(line string) []string {
+	return strings.Fields(strings.Trim(strings.TrimSpace(line), "`"))
 }
 
 func (c *TelegramChannel) activeInteractionControls(

@@ -3839,8 +3839,9 @@ func TestTelegramInteractionResponseProjectsPromptIdentityWithoutLocalControls(t
 		Text: "  generate it yourself  ", Chat: telego.Chat{ID: 999},
 		ReplyToMessage: &telego.Message{
 			MessageID: 101,
-			Text:      "Which value?\n\n`/answer abc12345 …`\n`/stop`",
-			From:      &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+			Text: "Which value?\n`/answer stale999 value`\n\n" +
+				"`/answer abc12345 …`\n`/stop`",
+			From: &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
 		},
 	}, "  generate it yourself  ", "15")
 
