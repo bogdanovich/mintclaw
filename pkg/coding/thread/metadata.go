@@ -308,7 +308,7 @@ type Store struct {
 	syncRoot     func(*os.Root) error
 	syncDir      func(string) error
 
-	beforeAttachmentGCDelete func()
+	afterAttachmentGCCommitValidation func()
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.

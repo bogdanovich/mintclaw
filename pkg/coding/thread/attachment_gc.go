@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
@@ -23,6 +25,7 @@ const (
 	DefaultAttachmentGCCandidateLimit = 10_000
 	attachmentGCManifestLimit         = 30_000
 	attachmentGCMarkedBlobLimit       = DefaultAttachmentGCBlobLimit
+	attachmentGCQuarantinePrefix      = ".gc-"
 )
 
 // AttachmentGCOptions bounds one mark-and-sweep pass. Before is an explicit
@@ -113,6 +116,9 @@ func (s *Store) CollectAttachmentGarbage(
 		resultErr = errors.Join(resultErr, closeErr)
 	}()
 
+	if recoveryErr := s.recoverAttachmentGCQuarantine(ctx, session); recoveryErr != nil {
+		return AttachmentGCResult{}, recoveryErr
+	}
 	marked, scannedManifests, err := s.markAttachmentGarbage(ctx, session.root)
 	if err != nil {
 		return AttachmentGCResult{}, err
@@ -419,7 +425,7 @@ func (s *Store) planAttachmentGarbage(
 				_ = shardRoot.Close()
 				return result, fmt.Errorf("coding attachment garbage collection: invalid blob entry %q", digest)
 			}
-			info, err := validateAttachmentGCBlob(ctx, shardRoot, digest)
+			info, err := validateAttachmentGCBlob(ctx, shardRoot, digest, digest)
 			if err != nil {
 				_ = shardRoot.Close()
 				return result, err
@@ -504,57 +510,26 @@ func (s *Store) sweepAttachmentGarbage(
 			}
 			touched[shardName] = shard
 		}
-		info, err := validateAttachmentGCBlob(ctx, shard, candidate.SHA256)
-		if err != nil {
-			return classifyAttachmentGCSweep(result, err)
-		}
-		if info.Size() != candidate.Size || !info.ModTime().UTC().Equal(candidate.ModifiedAt) {
-			return classifyAttachmentGCSweep(
-				result,
-				fmt.Errorf("coding attachment garbage collection: candidate changed before deletion"),
-			)
-		}
-		if s.beforeAttachmentGCDelete != nil {
-			s.beforeAttachmentGCDelete()
-		}
-		if validationErr := session.validate(s.root); validationErr != nil {
-			return classifyAttachmentGCSweep(result, validationErr)
-		}
-		if validationErr := validatePinnedAttachmentDirectory(root, "blobs", blobs); validationErr != nil {
-			return classifyAttachmentGCSweep(result, validationErr)
-		}
-		if validationErr := validatePinnedAttachmentDirectory(blobs, "sha256", shaRoot); validationErr != nil {
-			return classifyAttachmentGCSweep(result, validationErr)
-		}
-		if validationErr := validatePinnedAttachmentDirectory(
+		deleted, deleteErr := s.deleteAttachmentGCCandidate(
+			ctx,
+			session,
+			blobs,
 			shaRoot,
 			shardName,
 			shard,
-		); validationErr != nil {
-			return classifyAttachmentGCSweep(result, validationErr)
+			candidate,
+		)
+		if deleted {
+			result.DeletedBlobs++
+			result.DeletedBytes += candidate.Size
 		}
-		if validationErr := validateAttachmentGCCandidateIdentity(
-			shard,
-			candidate.SHA256,
-			info,
-		); validationErr != nil {
-			return classifyAttachmentGCSweep(result, validationErr)
+		if deleteErr != nil {
+			return classifyAttachmentGCSweep(result, deleteErr)
 		}
-		if err := shard.Remove(candidate.SHA256); err != nil {
-			return classifyAttachmentGCSweep(result, err)
-		}
-		result.DeletedBlobs++
-		result.DeletedBytes += candidate.Size
 	}
 	for name, shard := range touched {
 		if err := validatePinnedAttachmentDirectory(shaRoot, name, shard); err != nil {
 			return classifyAttachmentGCSweep(result, err)
-		}
-		if err := s.syncRoot(shard); err != nil {
-			return classifyAttachmentGCSweep(
-				result,
-				&fileutil.CommittedWriteError{Err: fmt.Errorf("sync blob deletion: %w", err)},
-			)
 		}
 	}
 	if err := validatePinnedAttachmentDirectory(blobs, "sha256", shaRoot); err != nil {
@@ -567,6 +542,314 @@ func (s *Store) sweepAttachmentGarbage(
 		return classifyAttachmentGCSweep(result, err)
 	}
 	return result, nil
+}
+
+func (s *Store) deleteAttachmentGCCandidate(
+	ctx context.Context,
+	session *attachmentGCSession,
+	blobs *os.Root,
+	shaRoot *os.Root,
+	shardName string,
+	shard *os.Root,
+	candidate AttachmentGCCandidate,
+) (bool, error) {
+	info, err := validateAttachmentGCBlob(ctx, shard, candidate.SHA256, candidate.SHA256)
+	if err != nil {
+		return false, err
+	}
+	if info.Size() != candidate.Size || !info.ModTime().UTC().Equal(candidate.ModifiedAt) {
+		return false, fmt.Errorf("coding attachment garbage collection: candidate changed before deletion")
+	}
+	if authorityErr := validateAttachmentGCCommitAuthority(
+		s,
+		session,
+		blobs,
+		shaRoot,
+		shardName,
+		shard,
+		candidate.SHA256,
+		info,
+	); authorityErr != nil {
+		return false, authorityErr
+	}
+	if s.afterAttachmentGCCommitValidation != nil {
+		s.afterAttachmentGCCommitValidation()
+	}
+	quarantineName := attachmentGCQuarantineName(candidate.SHA256)
+	if linkErr := shard.Link(candidate.SHA256, quarantineName); linkErr != nil {
+		return false, linkErr
+	}
+	quarantined, err := validateAttachmentGCLinkedBlob(ctx, shard, quarantineName, candidate.SHA256)
+	validationErr := err
+	if validationErr == nil && !os.SameFile(info, quarantined) {
+		validationErr = fmt.Errorf("coding attachment garbage collection: detached candidate changed identity")
+	}
+	if validationErr != nil {
+		restoreErr := s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
+		return false, errors.Join(
+			fmt.Errorf("coding attachment garbage collection: validate detached candidate: %w", validationErr),
+			restoreErr,
+		)
+	}
+	if err := s.syncRoot(shard); err != nil {
+		restoreErr := s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
+		return false, errors.Join(fmt.Errorf("sync detached candidate: %w", err), restoreErr)
+	}
+	if err := validateAttachmentGCCandidateIdentity(shard, candidate.SHA256, info); err != nil {
+		restoreErr := s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
+		return false, errors.Join(err, restoreErr)
+	}
+	if err := shard.Remove(candidate.SHA256); err != nil {
+		restoreErr := s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
+		return false, errors.Join(err, restoreErr)
+	}
+	if err := s.syncRoot(shard); err != nil {
+		restoreErr := s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
+		return false, errors.Join(fmt.Errorf("sync detached candidate: %w", err), restoreErr)
+	}
+	if _, err := validateAttachmentGCBlob(ctx, shard, quarantineName, candidate.SHA256); err != nil {
+		restoreErr := s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
+		return false, errors.Join(err, restoreErr)
+	}
+	if err := session.validate(s.root); err != nil {
+		restoreErr := s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
+		return false, errors.Join(err, restoreErr)
+	}
+	if err := shard.Remove(quarantineName); err != nil {
+		restoreErr := s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
+		return false, errors.Join(err, restoreErr)
+	}
+	if err := s.syncRoot(shard); err != nil {
+		return true, &fileutil.CommittedWriteError{Err: fmt.Errorf("sync quarantined blob deletion: %w", err)}
+	}
+	return true, nil
+}
+
+func validateAttachmentGCCommitAuthority(
+	store *Store,
+	session *attachmentGCSession,
+	blobs *os.Root,
+	shaRoot *os.Root,
+	shardName string,
+	shard *os.Root,
+	digest string,
+	info os.FileInfo,
+) error {
+	if err := session.validate(store.root); err != nil {
+		return err
+	}
+	if err := validatePinnedAttachmentDirectory(session.root, "blobs", blobs); err != nil {
+		return err
+	}
+	if err := validatePinnedAttachmentDirectory(blobs, "sha256", shaRoot); err != nil {
+		return err
+	}
+	if err := validatePinnedAttachmentDirectory(shaRoot, shardName, shard); err != nil {
+		return err
+	}
+	return validateAttachmentGCCandidateIdentity(shard, digest, info)
+}
+
+func attachmentGCQuarantineName(digest string) string {
+	return attachmentGCQuarantinePrefix + digest + "-" + uuid.NewString()
+}
+
+func parseAttachmentGCQuarantineName(name string) (string, error) {
+	if len(name) != len(attachmentGCQuarantinePrefix)+sha256.Size*2+1+36 ||
+		!strings.HasPrefix(name, attachmentGCQuarantinePrefix) {
+		return "", fmt.Errorf("coding attachment garbage collection: invalid quarantine entry %q", name)
+	}
+	digestStart := len(attachmentGCQuarantinePrefix)
+	digestEnd := digestStart + sha256.Size*2
+	digest := name[digestStart:digestEnd]
+	if validateAttachmentDigest(digest) != nil || name[digestEnd] != '-' {
+		return "", fmt.Errorf("coding attachment garbage collection: invalid quarantine entry %q", name)
+	}
+	idText := name[digestEnd+1:]
+	id, err := uuid.Parse(idText)
+	if err != nil || id.String() != idText {
+		return "", fmt.Errorf("coding attachment garbage collection: invalid quarantine entry %q", name)
+	}
+	return digest, nil
+}
+
+func (s *Store) recoverAttachmentGCQuarantine(ctx context.Context, session *attachmentGCSession) error {
+	blobs, exists, err := openOptionalPinnedAttachmentChild(session.root, "blobs")
+	if err != nil || !exists {
+		return err
+	}
+	defer func() { _ = blobs.Close() }()
+	shaRoot, exists, err := openOptionalPinnedAttachmentChild(blobs, "sha256")
+	if err != nil || !exists {
+		return err
+	}
+	defer func() { _ = shaRoot.Close() }()
+	shardEntries, err := readBoundedRootEntries(shaRoot, 256)
+	if err != nil {
+		return fmt.Errorf("coding attachment garbage collection: list recovery shards: %w", err)
+	}
+	quarantineCount := 0
+	totalEntries := 0
+	for _, shardEntry := range shardEntries {
+		shardName := shardEntry.Name()
+		if len(shardName) != 2 || !isHex(shardName) || strings.ToLower(shardName) != shardName {
+			return fmt.Errorf("coding attachment garbage collection: invalid blob shard %q", shardName)
+		}
+		shard, err := openPinnedAttachmentChild(shaRoot, shardName)
+		if err != nil {
+			return err
+		}
+		remaining := DefaultAttachmentGCBlobLimit + DefaultAttachmentGCCandidateLimit - totalEntries
+		entries, readErr := readBoundedRootEntries(shard, remaining)
+		if readErr != nil {
+			_ = shard.Close()
+			return fmt.Errorf("coding attachment garbage collection: list recovery shard: %w", readErr)
+		}
+		totalEntries += len(entries)
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Name(), attachmentGCQuarantinePrefix) {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				_ = shard.Close()
+				return err
+			}
+			quarantineCount++
+			if quarantineCount > DefaultAttachmentGCCandidateLimit {
+				_ = shard.Close()
+				return fmt.Errorf(
+					"coding attachment garbage collection: recovery quarantine exceeds %d entries",
+					DefaultAttachmentGCCandidateLimit,
+				)
+			}
+			digest, parseErr := parseAttachmentGCQuarantineName(entry.Name())
+			if parseErr != nil || digest[:2] != shardName {
+				_ = shard.Close()
+				return errors.Join(
+					parseErr,
+					fmt.Errorf("coding attachment garbage collection: quarantine shard mismatch"),
+				)
+			}
+			if err := session.validate(s.root); err != nil {
+				_ = shard.Close()
+				return err
+			}
+			if err := s.restoreAttachmentGCQuarantine(
+				ctx,
+				shard,
+				digest,
+				entry.Name(),
+			); err != nil {
+				_ = shard.Close()
+				return fmt.Errorf("coding attachment garbage collection: recover detached blob: %w", err)
+			}
+		}
+		if err := validatePinnedAttachmentDirectory(shaRoot, shardName, shard); err != nil {
+			_ = shard.Close()
+			return err
+		}
+		if err := shard.Close(); err != nil {
+			return err
+		}
+	}
+	if err := validatePinnedAttachmentDirectory(blobs, "sha256", shaRoot); err != nil {
+		return err
+	}
+	if err := validatePinnedAttachmentDirectory(session.root, "blobs", blobs); err != nil {
+		return err
+	}
+	return session.validate(s.root)
+}
+
+func (s *Store) restoreAttachmentGCQuarantine(
+	ctx context.Context,
+	shard *os.Root,
+	digest string,
+	quarantineName string,
+) error {
+	quarantined, err := validateAttachmentGCLinkedBlob(ctx, shard, quarantineName, digest)
+	if err != nil {
+		return err
+	}
+	canonical, canonicalErr := shard.Lstat(digest)
+	linked := false
+	if errors.Is(canonicalErr, os.ErrNotExist) {
+		linkErr := shard.Link(quarantineName, digest)
+		if linkErr == nil {
+			linked = true
+			canonical, canonicalErr = shard.Lstat(digest)
+		} else if errors.Is(linkErr, os.ErrExist) {
+			canonical, canonicalErr = shard.Lstat(digest)
+		} else {
+			return linkErr
+		}
+	}
+	if canonicalErr != nil {
+		return canonicalErr
+	}
+	if canonical.Mode()&os.ModeSymlink != 0 || !canonical.Mode().IsRegular() {
+		return fmt.Errorf("coding attachment garbage collection: recovery target is not a direct regular file")
+	}
+	sameFile := os.SameFile(quarantined, canonical)
+	if linked && !sameFile {
+		return fmt.Errorf("coding attachment garbage collection: recovery link changed identity")
+	}
+	if !sameFile {
+		if _, validationErr := validateAttachmentGCBlob(ctx, shard, digest, digest); validationErr != nil {
+			return validationErr
+		}
+	}
+	if identityErr := validateAttachmentGCCandidateIdentity(shard, quarantineName, quarantined); identityErr != nil {
+		return identityErr
+	}
+	if removeErr := shard.Remove(quarantineName); removeErr != nil {
+		return removeErr
+	}
+	if syncErr := s.syncRoot(shard); syncErr != nil {
+		return syncErr
+	}
+	_, err = validateAttachmentGCBlob(ctx, shard, digest, digest)
+	return err
 }
 
 func validateAttachmentGCCandidateIdentity(root *os.Root, name string, pinned os.FileInfo) error {
@@ -632,7 +915,31 @@ func readBoundedRootEntries(root *os.Root, limit int) ([]os.DirEntry, error) {
 	return entries, nil
 }
 
-func validateAttachmentGCBlob(ctx context.Context, root *os.Root, name string) (os.FileInfo, error) {
+func validateAttachmentGCBlob(
+	ctx context.Context,
+	root *os.Root,
+	name string,
+	expectedDigest string,
+) (os.FileInfo, error) {
+	return validateAttachmentGCBlobLinks(ctx, root, name, expectedDigest, false)
+}
+
+func validateAttachmentGCLinkedBlob(
+	ctx context.Context,
+	root *os.Root,
+	name string,
+	expectedDigest string,
+) (os.FileInfo, error) {
+	return validateAttachmentGCBlobLinks(ctx, root, name, expectedDigest, true)
+}
+
+func validateAttachmentGCBlobLinks(
+	ctx context.Context,
+	root *os.Root,
+	name string,
+	expectedDigest string,
+	allowMultipleLinks bool,
+) (os.FileInfo, error) {
 	entry, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
@@ -649,7 +956,13 @@ func validateAttachmentGCBlob(ctx context.Context, root *os.Root, name string) (
 	if err != nil {
 		return nil, err
 	}
-	if validationErr := validateCatalogMetadataFile(file, info); validationErr != nil {
+	var validationErr error
+	if allowMultipleLinks {
+		validationErr = validateAttachmentGCLinkedMetadataFile(file, info)
+	} else {
+		validationErr = validateCatalogMetadataFile(file, info)
+	}
+	if validationErr != nil {
 		return nil, fmt.Errorf(
 			"coding attachment garbage collection: unsafe blob %q: %w",
 			name,
@@ -683,7 +996,7 @@ func validateAttachmentGCBlob(ctx context.Context, root *os.Root, name string) (
 			return nil, readErr
 		}
 	}
-	if size != info.Size() || hex.EncodeToString(hash.Sum(nil)) != name {
+	if size != info.Size() || hex.EncodeToString(hash.Sum(nil)) != expectedDigest {
 		return nil, fmt.Errorf("coding attachment garbage collection: blob %q content identity changed", name)
 	}
 	after, err := file.Stat()

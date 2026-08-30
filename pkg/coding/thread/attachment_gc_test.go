@@ -255,7 +255,14 @@ func TestAttachmentGarbageCollectionClassifiesDeletionDurabilityFailure(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	orphan := admitGCTestAttachment(t, store, lease, metadata, "orphan.txt", "orphan", now)
+	source := filepath.Join(t.TempDir(), "orphan.txt")
+	if err := os.WriteFile(source, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{Path: source, At: now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{orphan.Ref}); err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +274,17 @@ func TestAttachmentGarbageCollectionClassifiesDeletionDurabilityFailure(t *testi
 		t.Fatal(err)
 	}
 	injected := errors.New("injected shard sync failure")
-	store.syncRoot = func(*os.Root) error { return injected }
+	syncRoot := store.syncRoot
+	shardSyncs := 0
+	store.syncRoot = func(root *os.Root) error {
+		if filepath.Base(root.Name()) == orphan.SHA256[:2] {
+			shardSyncs++
+			if shardSyncs == 3 {
+				return injected
+			}
+		}
+		return syncRoot(root)
+	}
 	result, err := store.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
 		Before: now.Add(-24 * time.Hour), Delete: true,
 	})
@@ -485,7 +502,14 @@ func TestAttachmentGarbageCollectionRevalidatesAuthorityAfterCandidateHash(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	orphan := admitGCTestAttachment(t, store, lease, metadata, "orphan.txt", "orphan", now)
+	source := filepath.Join(t.TempDir(), "orphan.txt")
+	if err := os.WriteFile(source, []byte("orphan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{Path: source, At: now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{orphan.Ref}); err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +530,7 @@ func TestAttachmentGarbageCollectionRevalidatesAuthorityAfterCandidateHash(t *te
 			close(resume)
 		}
 	})
-	store.beforeAttachmentGCDelete = func() {
+	store.afterAttachmentGCCommitValidation = func() {
 		close(hashed)
 		<-resume
 	}
@@ -546,8 +570,23 @@ func TestAttachmentGarbageCollectionRevalidatesAuthorityAfterCandidateHash(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacementLease, err := replacementStore.acquireAttachmentMaintenanceLease()
+	replacementLease, err := replacementStore.AcquireLease(metadata.ThreadID)
 	if err != nil {
+		t.Fatal(err)
+	}
+	replacementAttachment, err := replacementStore.AdmitAttachment(
+		t.Context(),
+		replacementLease,
+		metadata,
+		AttachmentInput{Path: source, At: now.Add(time.Minute)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacementAttachment.SHA256 != orphan.SHA256 || replacementAttachment.Ref == orphan.Ref {
+		t.Fatalf("replacement attachment = %+v, original = %+v", replacementAttachment, orphan)
+	}
+	if err := replacementLease.Release(); err != nil {
 		t.Fatal(err)
 	}
 	close(resume)
@@ -558,9 +597,6 @@ func TestAttachmentGarbageCollectionRevalidatesAuthorityAfterCandidateHash(t *te
 	case <-time.After(10 * time.Second):
 		t.Fatal("garbage collector did not leave the pre-delete barrier")
 	}
-	if err := replacementLease.Release(); err != nil {
-		t.Fatal(err)
-	}
 	if outcome.err == nil || outcome.result.DeletedBlobs != 0 ||
 		IsCommittedAttachmentGCError(outcome.err) ||
 		!strings.Contains(outcome.err.Error(), "lock directory") {
@@ -568,6 +604,72 @@ func TestAttachmentGarbageCollectionRevalidatesAuthorityAfterCandidateHash(t *te
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("candidate removed after maintenance replacement: %v", err)
+	}
+	data, _, err := replacementStore.ResolveAttachment(
+		t.Context(), metadata.ThreadID, replacementAttachment.Ref,
+	)
+	if err != nil || string(data) != "orphan" {
+		t.Fatalf("replacement reference after sweep = %q, %v", data, err)
+	}
+}
+
+func TestAttachmentGarbageCollectionRecoversInterruptedQuarantineAfterRestart(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachment := admitGCTestAttachment(t, store, lease, metadata, "restart.txt", "restart payload", now)
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shardRoot := filepath.Join("blobs", "sha256", attachment.SHA256[:2])
+	quarantineName := attachmentGCQuarantineName(attachment.SHA256)
+	if err := root.Link(
+		filepath.Join(shardRoot, attachment.SHA256),
+		filepath.Join(shardRoot, quarantineName),
+	); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Remove(filepath.Join(shardRoot, attachment.SHA256)); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ResolveAttachment(
+		t.Context(),
+		metadata.ThreadID,
+		attachment.Ref,
+	); !IsAttachmentUnavailable(
+		err,
+	) {
+		t.Fatalf("detached attachment resolution error = %v", err)
+	}
+
+	restarted, err := NewStore(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := restarted.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+		Before: now.Add(-24 * time.Hour),
+	})
+	if err != nil || len(result.Candidates) != 0 || result.DeletedBlobs != 0 {
+		t.Fatalf("restart recovery result = %+v, %v", result, err)
+	}
+	data, _, err := restarted.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+	if err != nil || string(data) != "restart payload" {
+		t.Fatalf("recovered attachment = %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Root(), shardRoot, quarantineName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("recovered quarantine entry remains: %v", err)
 	}
 }
 

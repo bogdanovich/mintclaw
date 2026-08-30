@@ -58,6 +58,14 @@ corrupt, unreadable, unknown, over-limit, replaced, or concurrently changing
 state fails closed before deletion. A partial deletion or directory-sync
 failure is reported as a committed GC outcome with exact deleted counts.
 
+Deletion is identity-bound rather than a final name-based unlink. The collector
+creates a unique same-shard hard-link quarantine for the verified candidate,
+durably detaches its digest name, then revalidates lifecycle authority and
+removes only that pinned identity. If authority changed, it restores or
+reconciles the canonical digest before returning an uncommitted error. A later
+dry-run or delete pass first recovers any interrupted `.gc-…` shard entry, so a
+crash between detach and cleanup cannot strand referenced bytes.
+
 Forking reads the source transcript and manifest under the same thread lease,
 then publishes a child manifest containing only references reachable from the
 copied transcript boundary. A durable reference present in the selected
