@@ -42,8 +42,8 @@ func TestAttachmentSurvivesSourceChangesAndRestartWithoutPathDisclosure(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data, readErr := os.ReadFile(resolved); readErr != nil || string(data) != "bounded report\n" {
-		t.Fatalf("resolved changed-source content = %q, %v", data, readErr)
+	if string(resolved) != "bounded report\n" {
+		t.Fatalf("resolved changed-source content = %q", resolved)
 	}
 	if err := os.Remove(source); err != nil {
 		t.Fatal(err)
@@ -63,9 +63,8 @@ func TestAttachmentSurvivesSourceChangesAndRestartWithoutPathDisclosure(t *testi
 	if loaded != attachment {
 		t.Fatalf("loaded attachment = %+v, want %+v", loaded, attachment)
 	}
-	data, err := os.ReadFile(resolved)
-	if err != nil || string(data) != "bounded report\n" {
-		t.Fatalf("resolved content = %q, %v", data, err)
+	if string(resolved) != "bounded report\n" {
+		t.Fatalf("resolved content = %q", resolved)
 	}
 	manifest, err := os.ReadFile(attachmentTestManifestPath(t, store, metadata.ThreadID))
 	if err != nil {
@@ -109,16 +108,22 @@ func TestAttachmentDeduplicatesAndSurvivesOtherThreadDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstPath, _, err := store.ResolveAttachment(t.Context(), first.ThreadID, firstAttachment.Ref)
+	firstData, _, err := store.ResolveAttachment(t.Context(), first.ThreadID, firstAttachment.Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondPath, _, err := store.ResolveAttachment(t.Context(), second.ThreadID, secondAttachment.Ref)
+	secondData, _, err := store.ResolveAttachment(t.Context(), second.ThreadID, secondAttachment.Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstPath != secondPath || firstAttachment.Ref == secondAttachment.Ref {
-		t.Fatalf("paths/refs = %q %q / %q %q", firstPath, secondPath, firstAttachment.Ref, secondAttachment.Ref)
+	if string(firstData) != string(secondData) || firstAttachment.Ref == secondAttachment.Ref {
+		t.Fatalf(
+			"data/refs = %q %q / %q %q",
+			firstData,
+			secondData,
+			firstAttachment.Ref,
+			secondAttachment.Ref,
+		)
 	}
 	if err := secondLease.Release(); err != nil {
 		t.Fatal(err)
@@ -176,6 +181,73 @@ func TestAttachmentDeduplicationRejectsReplacedThread(t *testing.T) {
 	})
 	if err == nil || attachment.Ref != "" || !strings.Contains(err.Error(), "active thread") {
 		t.Fatalf("replacement deduplication = %+v, %v", attachment, err)
+	}
+}
+
+func TestAttachmentDeduplicationRepublishesMissingBlobAndRejectsCorruption(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	content := []byte("content")
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := attachmentTestBlobPath(store, attachment.SHA256)
+	if err := os.Remove(blob); err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now().Add(time.Minute),
+	})
+	if err != nil || repeated.Ref != attachment.Ref {
+		t.Fatalf("missing-blob readmission = %+v, %v", repeated, err)
+	}
+	resolved, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+	if err != nil || string(resolved) != string(content) {
+		t.Fatalf("repaired blob = %q, %v", resolved, err)
+	}
+	if err := os.WriteFile(blob, []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if admitted, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now().Add(2 * time.Minute),
+	}); err == nil || admitted.Ref != "" {
+		t.Fatalf("corrupt-blob readmission = %+v, %v", admitted, err)
+	}
+}
+
+func TestAttachmentDeduplicationRepeatsDurabilityBarriers(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected retry durability failure")
+	store.syncRoot = func(*os.Root) error { return injected }
+	if admitted, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now().Add(time.Minute),
+	}); err == nil || admitted.Ref != "" || !errors.Is(err, injected) {
+		t.Fatalf("unsynced deduplication retry = %+v, %v", admitted, err)
+	}
+	store.syncRoot = syncRootDirectory
+	repeated, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now().Add(2 * time.Minute),
+	})
+	if err != nil || repeated.Ref != attachment.Ref {
+		t.Fatalf("durable deduplication retry = %+v, %v", repeated, err)
 	}
 }
 
@@ -260,8 +332,8 @@ func TestAttachmentAdmissionPreservesWhitespaceInSourcePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data, err := os.ReadFile(resolved); err != nil || string(data) != "right" {
-		t.Fatalf("resolved whitespace path content = %q, %v", data, err)
+	if string(resolved) != "right" {
+		t.Fatalf("resolved whitespace path content = %q", resolved)
 	}
 }
 
@@ -287,6 +359,39 @@ func TestResolveAttachmentPreservesContextCancellation(t *testing.T) {
 	); !errors.Is(err, context.Canceled) ||
 		IsAttachmentUnavailable(err) {
 		t.Fatalf("canceled resolve error = %v", err)
+	}
+}
+
+func TestResolveAttachmentCancellationPrecedesLookupAndManifestErrors(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := store.ResolveAttachment(
+		canceled,
+		metadata.ThreadID,
+		attachmentRefPrefix+"00000000-0000-4000-8000-000000000001",
+	); !errors.Is(err, context.Canceled) || IsAttachmentUnavailable(err) {
+		t.Fatalf("canceled unknown-reference resolve error = %v", err)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(threadRoot, attachmentDirectory), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(threadRoot, attachmentDirectory, attachmentManifest),
+		[]byte("corrupt"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ResolveAttachment(canceled, metadata.ThreadID, "unknown"); !errors.Is(
+		err,
+		context.Canceled,
+	) {
+		t.Fatalf("canceled corrupt-manifest resolve error = %v", err)
 	}
 }
 
@@ -514,6 +619,76 @@ func TestAttachmentAdmissionRejectsThreadDetachedAfterManifestWrite(t *testing.T
 	}
 }
 
+func TestResolveAttachmentRejectsSymlinkedBlobHierarchy(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobs := filepath.Join(store.Root(), "blobs")
+	moved := filepath.Join(store.Root(), "blobs-owned")
+	if err := os.Rename(blobs, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(moved, blobs); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	data, _, err := store.ResolveAttachment(t.Context(), metadata.ThreadID, attachment.Ref)
+	if err == nil || data != nil || !IsAttachmentUnavailable(err) {
+		t.Fatalf("symlinked blob hierarchy resolve = %q, %v", data, err)
+	}
+}
+
+func TestAttachmentManifestRejectsDetachedDirectoryDuringRead(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "attachment.txt")
+	if err := os.WriteFile(source, []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachments := filepath.Join(threadRoot, attachmentDirectory)
+	moved := attachments + "-reading"
+	manifest, err := os.ReadFile(filepath.Join(attachments, attachmentManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaced := false
+	store.attachmentManifestRead = func() {
+		if replaced {
+			return
+		}
+		replaced = true
+		if err := os.Rename(attachments, moved); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(attachments, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(attachments, attachmentManifest), manifest, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if entries, err := store.ListAttachments(metadata.ThreadID); err == nil || entries != nil || !replaced {
+		t.Fatalf("detached manifest read = %+v, %v; replaced=%t", entries, err, replaced)
+	}
+}
+
 func TestAttachmentManifestFailsClosedWithoutRepair(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
@@ -583,4 +758,8 @@ func attachmentTestManifestPath(t *testing.T, store *Store, threadID string) str
 		t.Fatal(err)
 	}
 	return filepath.Join(threadRoot, attachmentDirectory, attachmentManifest)
+}
+
+func attachmentTestBlobPath(store *Store, digest string) string {
+	return filepath.Join(store.Root(), "blobs", "sha256", digest[:2], digest)
 }
