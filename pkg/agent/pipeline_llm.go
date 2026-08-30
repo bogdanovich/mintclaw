@@ -671,6 +671,18 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			FinalContentProtected: sensitiveDiagnosticResponse,
 		}, nil
 	}
+	if exec.objectiveRepairActive {
+		cancelConfiguredStreamingLLM(turnCtx, llm)
+		logger.WarnCF("agent", "Ignored tool calls during objective finalization repair", map[string]any{
+			"agent_id":   ts.agent.ID,
+			"iteration":  iteration,
+			"tool_calls": len(llm.response.ToolCalls),
+		})
+		return LLMCallOutcome{
+			Control: ControlBreak, FinalContent: llm.response.Content,
+			FinalContentProtected: sensitiveDiagnosticResponse,
+		}, nil
+	}
 	cancelConfiguredStreamingLLM(turnCtx, llm)
 
 	// Tool-call path: normalize and prepare for tool execution

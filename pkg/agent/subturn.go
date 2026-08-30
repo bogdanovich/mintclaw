@@ -559,10 +559,13 @@ func spawnSubTurn(
 			removeDurableInteractionTools(agent.Tools)
 		}
 	}
-	requireObjectiveOutcome := agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
+	hasBrowserObjectiveReceipts := agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
 	objectiveChecklist := normalizeObjectiveChecklist(cfg.ObjectiveItems)
+	requireObjectiveOutcome := hasBrowserObjectiveReceipts || len(cfg.ObjectiveItems) > 0
 	if requireObjectiveOutcome && len(objectiveChecklist) == 0 {
-		outcome := blockedObjectiveOutcome("a valid declared objective checklist is required before browser execution")
+		outcome := blockedObjectiveOutcome(
+			"a valid declared objective checklist is required before delegated execution",
+		)
 		projection := objectiveOutcomeUserContent("", outcome)
 		return (&toolshared.ToolResult{ForLLM: projection, ForUser: projection}).
 			WithDeliverable(&taskresult.Deliverable{
@@ -575,7 +578,7 @@ func spawnSubTurn(
 	}
 	childTask := cfg.TaskPrompt
 	if requireObjectiveOutcome {
-		childTask = browserObjectiveOutcomeInstruction(childTask, objectiveChecklist)
+		childTask = objectiveOutcomeInstruction(childTask, objectiveChecklist, hasBrowserObjectiveReceipts)
 	}
 
 	// Create turnSpec for the child turn

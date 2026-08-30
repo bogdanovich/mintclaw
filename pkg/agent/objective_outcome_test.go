@@ -87,7 +87,8 @@ func TestObjectiveOutcomeCarriesBoundedReportedBlocker(t *testing.T) {
 
 func TestObjectiveOutcomeRequiresResultForSuccess(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Inspection complete."}}],` +
 		`"missing_items":[],"explanation":"stale blocker"}` + objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "inspected", Kind: "result"}})
 	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
@@ -100,7 +101,8 @@ func TestObjectiveOutcomeRequiresResultForSuccess(t *testing.T) {
 
 func TestObjectiveOutcomePreservesSuccessfulTerminalResult(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Inspection complete: https://example.com/item/42; ID: 42"}}],` +
 		`"missing_items":[],"result":"Inspection complete: https://example.com/item/42; ID: 42"}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "inspect item", Kind: "result"}})
@@ -108,6 +110,86 @@ func TestObjectiveOutcomePreservesSuccessfulTerminalResult(t *testing.T) {
 	if outcome.Status != taskresult.OutcomeSucceeded || outcome.Explanation != "" ||
 		clean != "Inspection complete: https://example.com/item/42; ID: 42" {
 		t.Fatalf("successful terminal result = %q, outcome = %#v", clean, outcome)
+	}
+}
+
+func TestObjectiveOutcomeCarriesAcceptedRecordsIntoStandaloneResult(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"records","records":[` +
+		`{"title":"Desk","price":"$40","status":"Active"},` +
+		`{"title":"Lamp","price":"$15","status":"Active"}]}}],` +
+		`"missing_items":[],"result":"Found two active listings."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "return active listings", Kind: "result",
+		Acceptance: &taskresult.ObjectiveAcceptance{
+			OutputKind: "records", RequiredFields: []string{"title", "price", "status"}, MinItems: 2,
+		},
+	}})
+	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || len(outcome.CompletedItems) != 1 ||
+		outcome.CompletedItems[0].Output == nil || len(outcome.CompletedItems[0].Output.Records) != 2 ||
+		!strings.Contains(clean, "title: Desk") || !strings.Contains(clean, "price: $15") {
+		t.Fatalf("clean = %q; outcome = %#v", clean, outcome)
+	}
+}
+
+func TestObjectiveOutcomeRejectsRecordsMissingAcceptedField(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"records","records":[{"title":"Desk","status":"Active"}]}}],` +
+		`"missing_items":[],"result":"Found one listing."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "return active listings", Kind: "result",
+		Acceptance: &taskresult.ObjectiveAcceptance{
+			OutputKind: "records", RequiredFields: []string{"title", "price", "status"},
+		},
+	}})
+	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		len(outcome.MissingItems) != 1 || !strings.Contains(outcome.MissingItems[0], "required field") {
+		t.Fatalf("missing record field was accepted: %#v", outcome)
+	}
+}
+
+func TestObjectiveOutcomeRejectsTruncatedOutputWithoutSilentTerminalTruncation(t *testing.T) {
+	longText := strings.Repeat("result-data-", 400)
+	complete := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":` + strconv.Quote(longText) + `}}],` +
+		`"missing_items":[],"result":` + strconv.Quote(longText) + `}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "return report", Kind: "result"}})
+	clean, outcome := extractObjectiveOutcome(complete, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || clean != longText || len([]rune(clean)) <= 2048 {
+		t.Fatalf("large terminal result was changed: len=%d outcome=%#v", len([]rune(clean)), outcome)
+	}
+
+	truncated := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"partial","truncated":true}}],` +
+		`"missing_items":[],"result":"partial"}` + objectiveOutcomeEnd
+	_, outcome = extractObjectiveOutcome(truncated, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeBlocked ||
+		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "truncated") {
+		t.Fatalf("truncated output was accepted: %#v", outcome)
+	}
+}
+
+func TestObjectiveOutcomeRepairTargetsOnlyStructurallyInvalidSuccess(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "return listings", Kind: "result"}})
+	invalidSuccess := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"Three listings are shown above."}` + objectiveOutcomeEnd
+	instruction, repair := objectiveOutcomeRepairInstruction(invalidSuccess, nil, checklist)
+	if !repair || !strings.Contains(instruction, "model-only repair") ||
+		!strings.Contains(instruction, "standalone objective output was required") {
+		t.Fatalf("invalid success repair = (%q, %v)", instruction, repair)
+	}
+	partial := objectiveOutcomeStart +
+		`{"status":"partial","completed_items":[],"missing_items":["objective_1"],` +
+		`"explanation":"the page was unavailable"}` + objectiveOutcomeEnd
+	if instruction, repair = objectiveOutcomeRepairInstruction(partial, nil, checklist); repair || instruction != "" {
+		t.Fatalf("producer partial incorrectly scheduled repair = (%q, %v)", instruction, repair)
 	}
 }
 
@@ -296,7 +378,8 @@ func TestExtractObjectiveOutcomeRejectsNonBrowserExternalReceipt(t *testing.T) {
 
 func TestExtractObjectiveOutcomeUsesRuntimeClassification(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Account inspected."}}],` +
 		`"missing_items":[],"result":"Account updated."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
@@ -320,7 +403,8 @@ func TestExtractObjectiveOutcomeRequiresBrowserChildReport(t *testing.T) {
 
 func TestExtractObjectiveOutcomeAcceptsReadResultWithoutWriteReceipt(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Account inspected."}}],` +
 		`"missing_items":[],"result":"Account inspection complete."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
@@ -334,7 +418,8 @@ func TestExtractObjectiveOutcomeAcceptsReadResultWithoutWriteReceipt(t *testing.
 func TestExtractObjectiveOutcomeIgnoresNavigationInvocationIDForReadResult(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
-		`"receipt_ids":["inv-navigation"]}],"missing_items":[],"result":"Account inspection complete."}` +
+		`"receipt_ids":["inv-navigation"],"output":{"kind":"text","text":"Account inspected."}}],` +
+		`"missing_items":[],"result":"Account inspection complete."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
 	_, outcome := extractObjectiveOutcome(content, nil, true, checklist)
@@ -346,7 +431,8 @@ func TestExtractObjectiveOutcomeIgnoresNavigationInvocationIDForReadResult(t *te
 
 func TestExtractObjectiveOutcomeRejectsUnclaimedExternalActionForReadResult(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Account inspected."}}],` +
 		`"missing_items":[],"result":"Account inspection complete."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
@@ -510,7 +596,8 @@ func TestExtractObjectiveOutcomePrioritizesOrphanReceiptAtMissingLimit(t *testin
 
 func TestExtractObjectiveOutcomeNeverUpgradesProducerReportedPartial(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Account inspected."}}],` +
 		`"missing_items":[],"explanation":"producer reported incomplete execution"}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{Item: "account inspected", Kind: "result"}})
@@ -523,7 +610,8 @@ func TestExtractObjectiveOutcomeNeverUpgradesProducerReportedPartial(t *testing.
 
 func TestExtractObjectiveOutcomeRejectsOmittedRequestedItem(t *testing.T) {
 	content := objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Active postings inspected."}}],` +
 		`"missing_items":[],"result":"Active postings inspected."}` +
 		objectiveOutcomeEnd
 	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{

@@ -42,7 +42,8 @@ func (p *Pipeline) runPreparedTurnLoop(
 
 	for {
 		graceful, _ := ts.gracefulInterruptRequested()
-		canRun := ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || graceful
+		canRun := ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || graceful ||
+			exec.objectiveRepairPending
 		if !canRun && !p.continueWithPendingSubTurnResults(ts, exec) {
 			break
 		}
@@ -55,6 +56,10 @@ func (p *Pipeline) runPreparedTurnLoop(
 		iteration := ts.currentIteration() + 1
 		ts.setIteration(iteration)
 		ts.setPhase(TurnPhaseRunning)
+		if exec.objectiveRepairPending {
+			exec.objectiveRepairPending = false
+			exec.objectiveRepairActive = true
+		}
 
 		pendingMessages := append([]providers.Message(nil), exec.pendingMessages...)
 		if len(pendingMessages) > 0 {
@@ -185,6 +190,10 @@ func (p *Pipeline) runPreparedTurnLoop(
 				continue
 			}
 			finalContent = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, finalContent)
+			if p.scheduleObjectiveOutcomeRepair(turnCtx, ts, exec, llm, finalContent) {
+				messages = exec.messages
+				continue
+			}
 			result, finalizeErr := p.finalizeTurn(
 				turnCtx,
 				ts,
@@ -246,6 +255,10 @@ func (p *Pipeline) runPreparedTurnLoop(
 					messages = exec.messages
 					continue
 				}
+				if p.scheduleObjectiveOutcomeRepair(turnCtx, ts, exec, llm, finalContent) {
+					messages = exec.messages
+					continue
+				}
 				result, finalizeErr := p.finalizeTurn(turnCtx, ts, exec, llm, turnStatus, finalContent)
 				if finalizeErr != nil {
 					turnStatus = TurnEndStatusError
@@ -298,6 +311,10 @@ func (p *Pipeline) runPreparedTurnLoop(
 					continue
 				}
 				finalContent = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, finalContent)
+				if p.scheduleObjectiveOutcomeRepair(turnCtx, ts, exec, llm, finalContent) {
+					messages = exec.messages
+					continue
+				}
 				result, finalizeErr := p.finalizeTurn(
 					turnCtx,
 					ts,
@@ -328,6 +345,9 @@ func (p *Pipeline) runPreparedTurnLoop(
 		}
 	}
 	finalContent = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, finalContent)
+	if p.scheduleObjectiveOutcomeRepair(turnCtx, ts, exec, llm, finalContent) {
+		return p.runPreparedTurnLoop(ctx, turnCtx, ts, exec)
+	}
 
 	// Check hard abort before finalizing (may have been set during tool execution)
 	if ts.hardAbortRequested() {
@@ -341,6 +361,39 @@ func (p *Pipeline) runPreparedTurnLoop(
 		turnStatus = TurnEndStatusError
 	}
 	return result, turnStatus, err
+}
+
+func (p *Pipeline) scheduleObjectiveOutcomeRepair(
+	turnCtx context.Context,
+	ts *turnState,
+	exec *turnExecution,
+	llm *LLMIterationState,
+	terminal terminalContent,
+) bool {
+	if exec == nil || exec.objectiveRepairAttempted || len(ts.opts.ObjectiveChecklist) == 0 ||
+		strings.TrimSpace(terminal.content) == "" {
+		return false
+	}
+	instruction, repair := objectiveOutcomeRepairInstruction(
+		terminal.content,
+		exec.writeAudit,
+		ts.opts.ObjectiveChecklist,
+	)
+	if !repair {
+		return false
+	}
+	cancelConfiguredStreamingLLM(turnCtx, llm)
+	exec.objectiveRepairAttempted = true
+	exec.objectiveRepairPending = true
+	exec.messages = append(exec.messages,
+		providers.Message{Role: "assistant", Content: terminal.content},
+		providers.Message{Role: "user", Content: instruction},
+	)
+	logger.WarnCF("agent", "Scheduled objective finalization repair", map[string]any{
+		"agent_id":  ts.agent.ID,
+		"iteration": ts.currentIteration(),
+	})
+	return true
 }
 
 func (p *Pipeline) continueWithPendingSubTurnResults(

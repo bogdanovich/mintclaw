@@ -59,6 +59,43 @@ func newTestDelegateTool(t *testing.T, config DelegateToolConfig) *DelegateTool 
 	return tool
 }
 
+func TestParseObjectiveItemsCarriesStructuredAcceptance(t *testing.T) {
+	items, err := parseObjectiveItems([]any{map[string]any{
+		"item": "return listings", "kind": "result",
+		"acceptance": map[string]any{
+			"output_kind": "records", "required_fields": []any{"title", "price", "status"},
+			"min_items": float64(3),
+		},
+	}})
+	if err != nil || len(items) != 1 || items[0].Acceptance == nil ||
+		items[0].Acceptance.OutputKind != "records" || items[0].Acceptance.MinItems != 3 ||
+		len(items[0].Acceptance.RequiredFields) != 3 {
+		t.Fatalf("parseObjectiveItems() = (%#v, %v)", items, err)
+	}
+}
+
+func TestParseObjectiveItemsRejectsInvalidAcceptance(t *testing.T) {
+	tests := []map[string]any{
+		{
+			"item": "publish", "kind": "external_action",
+			"acceptance": map[string]any{"output_kind": "text"},
+		},
+		{
+			"item": "report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "text", "required_fields": []any{"title"}},
+		},
+		{
+			"item": "report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "records", "min_items": float64(1.5)},
+		},
+	}
+	for _, objective := range tests {
+		if items, err := parseObjectiveItems([]any{objective}); err == nil {
+			t.Fatalf("invalid acceptance was parsed: %#v", items)
+		}
+	}
+}
+
 func TestDelegateTool_Name(t *testing.T) {
 	tool := newTestDelegateTool(t, DelegateToolConfig{})
 	if tool.Name() != "delegate" {

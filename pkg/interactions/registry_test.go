@@ -277,6 +277,11 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	request := validCreate(clock, "interaction_receipt111111", "session-receipt")
 	request.Origin.ObjectiveChecklist = []ObjectiveChecklistItem{{
 		ID: "objective_1", Item: "publish microwave", Kind: "external_action",
+	}, {
+		ID: "objective_2", Item: "return listing", Kind: "result",
+		Acceptance: &taskresult.ObjectiveAcceptance{
+			OutputKind: "records", RequiredFields: []string{"title", "price"}, MinItems: 1,
+		},
 	}}
 	record, err := registry.Create(request)
 	if err != nil {
@@ -292,14 +297,18 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
 	got, ok := reloaded.Get(record.ID)
 	if !ok || len(got.OutcomeReceipts) != 1 || got.OutcomeReceipts[0].ID != "inv-1" ||
-		len(got.Origin.ObjectiveChecklist) != 1 || got.Origin.ObjectiveChecklist[0].ID != "objective_1" {
+		len(got.Origin.ObjectiveChecklist) != 2 || got.Origin.ObjectiveChecklist[0].ID != "objective_1" ||
+		got.Origin.ObjectiveChecklist[1].Acceptance == nil ||
+		got.Origin.ObjectiveChecklist[1].Acceptance.RequiredFields[1] != "price" {
 		t.Fatalf("reloaded receipts = %#v, found=%v", got.OutcomeReceipts, ok)
 	}
 	got.OutcomeReceipts[0].Metadata["invocation_id"] = "mutated"
 	got.Origin.ObjectiveChecklist[0].Item = "mutated"
+	got.Origin.ObjectiveChecklist[1].Acceptance.RequiredFields[1] = "mutated"
 	again, _ := reloaded.Get(record.ID)
 	if again.OutcomeReceipts[0].Metadata["invocation_id"] != "inv-1" ||
-		again.Origin.ObjectiveChecklist[0].Item != "publish microwave" {
+		again.Origin.ObjectiveChecklist[0].Item != "publish microwave" ||
+		again.Origin.ObjectiveChecklist[1].Acceptance.RequiredFields[1] != "price" {
 		t.Fatal("outcome evidence escaped record cloning")
 	}
 }

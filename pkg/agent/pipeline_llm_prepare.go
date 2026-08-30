@@ -43,6 +43,10 @@ func (p *Pipeline) prepareLLMRequest(
 	llm.gracefulTerminal, _ = ts.gracefulInterruptRequested()
 	llm.providerToolDefs = filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
 	llm.useNativeSearch = p.nativeSearchEnabled(ts.profile, exec.model.activeProvider)
+	if exec.objectiveRepairActive {
+		llm.providerToolDefs = nil
+		llm.useNativeSearch = false
+	}
 	if llm.useNativeSearch {
 		filtered := make([]providers.ToolDefinition, 0, len(llm.providerToolDefs))
 		for _, toolDefinition := range llm.providerToolDefs {
@@ -122,6 +126,11 @@ func (p *Pipeline) prepareLLMRequest(
 			_ = ts.requestHardAbort()
 			return completeLLMStage(LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}), nil
 		}
+	}
+	if exec.objectiveRepairActive {
+		llm.providerToolDefs = nil
+		llm.useNativeSearch = false
+		delete(llm.llmOpts, "native_search")
 	}
 	llm.protectedDiagnosticContext = llm.protectedDiagnosticContext ||
 		diagnosticCurrentTurnContainsSensitiveEvidence(llm.callMessages)
