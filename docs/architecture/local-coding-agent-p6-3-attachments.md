@@ -70,11 +70,14 @@ committed GC outcome with exact deleted counts.
 
 Deletion is identity-bound rather than a final name-based unlink. The collector
 creates a unique same-shard hard-link quarantine for the verified candidate,
-durably detaches its digest name, then revalidates lifecycle authority and
-removes only that pinned identity. If authority changed, it restores or
-reconciles the canonical digest before returning an uncommitted error. A later
-dry-run or delete pass first recovers any interrupted `.gc-…` shard entry, so a
-crash between detach and cleanup cannot strand referenced bytes.
+holds an exclusive OS lock on that blob inode from before quarantine
+publication through cleanup or rollback, durably detaches its digest name,
+then revalidates lifecycle authority and removes only that pinned identity. If
+authority changed, it restores or reconciles the canonical digest before
+returning an uncommitted error. A later dry-run or delete pass first acquires
+the same inode-bound lock before recovering an interrupted `.gc-…` shard entry.
+A live owner therefore makes replacement-authority recovery fail closed, while
+a crash releases the lock so recovery cannot strand referenced bytes.
 
 Forking reads the source transcript and manifest under the same thread lease,
 then publishes a child manifest containing only references reachable from the

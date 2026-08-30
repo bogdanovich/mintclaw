@@ -739,6 +739,135 @@ func TestAttachmentGarbageCollectionRechecksInflightAfterDetach(t *testing.T) {
 	}
 }
 
+func TestAttachmentGarbageCollectionDoesNotRecoverLiveQuarantine(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "live-quarantine.txt")
+	if err := os.WriteFile(source, []byte("live quarantine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{Path: source, At: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{orphan.Ref}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(attachmentTestBlobPath(store, orphan), old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	quarantinePublished := make(chan struct{})
+	resume := make(chan struct{})
+	resumed := false
+	t.Cleanup(func() {
+		if !resumed {
+			close(resume)
+		}
+	})
+	store.afterAttachmentGCQuarantinePublish = func() {
+		close(quarantinePublished)
+		<-resume
+	}
+	type collection struct {
+		result AttachmentGCResult
+		err    error
+	}
+	completed := make(chan collection, 1)
+	go func() {
+		result, collectErr := store.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+			Before: now.Add(-24 * time.Hour), Delete: true,
+		})
+		completed <- collection{result: result, err: collectErr}
+	}()
+	select {
+	case <-quarantinePublished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("garbage collector did not publish its quarantine")
+	}
+
+	root, err := os.OpenRoot(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacedName := attachmentMaintenanceDirectory + "-live-quarantine"
+	if err := root.Rename(attachmentMaintenanceDirectory, replacedName); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Mkdir(attachmentMaintenanceDirectory, 0o700); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacementStore, err := NewStore(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryResult, recoveryErr := replacementStore.CollectAttachmentGarbage(
+		t.Context(),
+		AttachmentGCOptions{Before: now.Add(-24 * time.Hour), Delete: true},
+	)
+	if !errors.Is(recoveryErr, ErrLeaseBusy) || recoveryResult.DeletedBlobs != 0 ||
+		IsCommittedAttachmentGCError(recoveryErr) {
+		t.Fatalf("live-quarantine recovery = %+v, %v", recoveryResult, recoveryErr)
+	}
+
+	replacementLease, err := replacementStore.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	referenced, err := replacementStore.AdmitAttachment(
+		t.Context(),
+		replacementLease,
+		metadata,
+		AttachmentInput{Path: source, At: now.Add(time.Minute)},
+	)
+	if err != nil {
+		_ = replacementLease.Release()
+		t.Fatal(err)
+	}
+	if err := replacementLease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	close(resume)
+	resumed = true
+
+	var outcome collection
+	select {
+	case outcome = <-completed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("original collector did not leave the quarantine barrier")
+	}
+	if outcome.err == nil || outcome.result.DeletedBlobs != 0 || IsCommittedAttachmentGCError(outcome.err) {
+		t.Fatalf("stale-owner sweep = %+v, %v", outcome.result, outcome.err)
+	}
+	data, _, err := replacementStore.ResolveAttachment(t.Context(), metadata.ThreadID, referenced.Ref)
+	if err != nil || string(data) != "live quarantine" {
+		t.Fatalf("same-digest reference after stale sweep = %q, %v", data, err)
+	}
+	shardPath := filepath.Dir(attachmentTestBlobPath(store, orphan))
+	entries, err := os.ReadDir(shardPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), attachmentGCQuarantinePrefix) {
+			t.Fatalf("quarantine remains after stale-owner rollback: %q", entry.Name())
+		}
+	}
+}
+
 func TestAttachmentGarbageCollectionRecoversInterruptedQuarantineAfterRestart(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	now := time.Now().UTC()

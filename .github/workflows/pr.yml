@@ -211,4 +211,4 @@ jobs:
       - name: Run Windows platform tests
         run: |
           go test -tags goolm,stdjson ./pkg/browser ./pkg/fileutil
-          go test -tags goolm,stdjson -run '^(TestThreadLease|TestWindowsThreadLease|TestAttachment(Maintenance|Inflight))' ./pkg/coding/thread
+          go test -tags goolm,stdjson -run '^(TestThreadLease|TestWindowsThreadLease|TestAttachment(Maintenance|Inflight|GarbageCollectionDoesNotRecoverLiveQuarantine))' ./pkg/coding/thread

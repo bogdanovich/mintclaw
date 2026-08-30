@@ -597,11 +597,30 @@ func (s *Store) deleteAttachmentGCCandidate(
 	shardName string,
 	shard *os.Root,
 	candidate AttachmentGCCandidate,
-) (bool, error) {
-	info, blobErr := validateAttachmentGCBlob(ctx, shard, candidate.SHA256, candidate.SHA256)
+) (deleted bool, resultErr error) {
+	owner, blobErr := acquireAttachmentGCQuarantineOwnership(
+		ctx,
+		shard,
+		candidate.SHA256,
+		candidate.SHA256,
+		false,
+	)
 	if blobErr != nil {
 		return false, blobErr
 	}
+	defer func() {
+		closeErr := owner.Release()
+		if closeErr == nil {
+			return
+		}
+		wrapped := fmt.Errorf("release coding attachment garbage-collection ownership: %w", closeErr)
+		if deleted {
+			resultErr = &fileutil.CommittedWriteError{Err: errors.Join(resultErr, wrapped)}
+			return
+		}
+		resultErr = errors.Join(resultErr, wrapped)
+	}()
+	info := owner.info
 	if info.Size() != candidate.Size || !info.ModTime().UTC().Equal(candidate.ModifiedAt) {
 		return false, fmt.Errorf("coding attachment garbage collection: candidate changed before deletion")
 	}
@@ -677,6 +696,9 @@ func (s *Store) deleteAttachmentGCCandidate(
 		)
 		return false, errors.Join(fmt.Errorf("sync detached candidate: %w", err), restoreErr)
 	}
+	if s.afterAttachmentGCQuarantinePublish != nil {
+		s.afterAttachmentGCQuarantinePublish()
+	}
 	if _, err := validateAttachmentGCBlob(ctx, shard, quarantineName, candidate.SHA256); err != nil {
 		restoreErr := s.restoreAttachmentGCQuarantine(
 			ctx,
@@ -726,6 +748,66 @@ func (s *Store) deleteAttachmentGCCandidate(
 		return true, &fileutil.CommittedWriteError{Err: fmt.Errorf("sync quarantined blob deletion: %w", err)}
 	}
 	return true, nil
+}
+
+// attachmentGCQuarantineOwnership binds a live collector to the blob inode it
+// may publish under a .gc-* name. The OS releases the lock if the process
+// exits, allowing a later collector to distinguish crash residue from live
+// quarantine without trusting a pathname or process identifier.
+type attachmentGCQuarantineOwnership struct {
+	file *os.File
+	info os.FileInfo
+}
+
+func acquireAttachmentGCQuarantineOwnership(
+	ctx context.Context,
+	root *os.Root,
+	name string,
+	expectedDigest string,
+	allowMultipleLinks bool,
+) (*attachmentGCQuarantineOwnership, error) {
+	entry, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Mode()&os.ModeSymlink != 0 || !entry.Mode().IsRegular() {
+		return nil, fmt.Errorf("coding attachment garbage collection: blob %q is not a direct regular file", name)
+	}
+	file, err := root.OpenFile(name, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	closeOnError := func(operationErr error) (*attachmentGCQuarantineOwnership, error) {
+		return nil, errors.Join(operationErr, file.Close())
+	}
+	if lockErr := tryAcquireThreadLeaseFile(file); lockErr != nil {
+		return closeOnError(fmt.Errorf("coding attachment garbage-collection quarantine is busy: %w", lockErr))
+	}
+	releaseOnError := func(operationErr error) (*attachmentGCQuarantineOwnership, error) {
+		return nil, errors.Join(operationErr, releaseThreadLeaseFile(file), file.Close())
+	}
+	info, err := validateAttachmentGCOpenedBlob(
+		ctx,
+		root,
+		name,
+		expectedDigest,
+		allowMultipleLinks,
+		entry,
+		file,
+	)
+	if err != nil {
+		return releaseOnError(err)
+	}
+	return &attachmentGCQuarantineOwnership{file: file, info: info}, nil
+}
+
+func (o *attachmentGCQuarantineOwnership) Release() error {
+	if o == nil || o.file == nil {
+		return nil
+	}
+	file := o.file
+	o.file = nil
+	return errors.Join(releaseThreadLeaseFile(file), file.Close())
 }
 
 func validateAttachmentGCCommitAuthority(
@@ -837,14 +919,39 @@ func (s *Store) recoverAttachmentGCQuarantine(ctx context.Context, session *atta
 				_ = shard.Close()
 				return err
 			}
+			owner, ownershipErr := acquireAttachmentGCQuarantineOwnership(
+				ctx,
+				shard,
+				entry.Name(),
+				digest,
+				true,
+			)
+			if ownershipErr != nil {
+				_ = shard.Close()
+				return fmt.Errorf(
+					"coding attachment garbage collection: claim recovery quarantine: %w",
+					ownershipErr,
+				)
+			}
 			if err := s.restoreAttachmentGCQuarantine(
 				ctx,
 				shard,
 				digest,
 				entry.Name(),
 			); err != nil {
+				releaseErr := owner.Release()
 				_ = shard.Close()
-				return fmt.Errorf("coding attachment garbage collection: recover detached blob: %w", err)
+				return fmt.Errorf(
+					"coding attachment garbage collection: recover detached blob: %w",
+					errors.Join(err, releaseErr),
+				)
+			}
+			if releaseErr := owner.Release(); releaseErr != nil {
+				_ = shard.Close()
+				return fmt.Errorf(
+					"coding attachment garbage collection: release recovery quarantine: %w",
+					releaseErr,
+				)
 			}
 		}
 		if err := validatePinnedAttachmentDirectory(shaRoot, shardName, shard); err != nil {
@@ -1018,6 +1125,26 @@ func validateAttachmentGCBlobLinks(
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
+	return validateAttachmentGCOpenedBlob(
+		ctx,
+		root,
+		name,
+		expectedDigest,
+		allowMultipleLinks,
+		entry,
+		file,
+	)
+}
+
+func validateAttachmentGCOpenedBlob(
+	ctx context.Context,
+	root *os.Root,
+	name string,
+	expectedDigest string,
+	allowMultipleLinks bool,
+	entry os.FileInfo,
+	file *os.File,
+) (os.FileInfo, error) {
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
