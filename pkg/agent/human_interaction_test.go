@@ -4624,6 +4624,14 @@ func TestExpiredProjectedApprovalPublishesDurableStatus(t *testing.T) {
 		t.Fatal("expired projected approval escaped interaction protocol routing")
 	}
 	select {
+	case synced := <-manager.synced:
+		if !synced.Metadata.RemovesInteractionControls() || synced.ReplyToMessageID != "7716" {
+			t.Fatalf("expired approval control sync = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired projected approval did not retry terminal control cleanup")
+	}
+	select {
 	case notice := <-manager.sent:
 		if !strings.Contains(notice.Content, "expired before execution") ||
 			!strings.Contains(notice.Content, "was not executed") {
@@ -6149,7 +6157,8 @@ func TestProjectedAnswerRetriesUntilPromptReceiptIsDurable(t *testing.T) {
 func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
-	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, al, manager)
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	request := testToolSuspensionRequest(agent.Workspace)
 	request.Route.SessionKey = "session-ordinary-reply-identity"
@@ -6185,6 +6194,40 @@ func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
 	classification := al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
 	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != record.ID {
 		t.Fatalf("ordinary Telegram reply classification = %#v", classification)
+	}
+
+	wrongPrompt := reply
+	wrongPrompt.SpoolID = "spool-ordinary-reply-wrong-prompt"
+	wrongPrompt.Context.MessageID = "reply-old-prompt"
+	wrongPrompt.Context.ReplyToMessageID = "7715"
+	classification = al.classifyProjectedInteractionAnswer(wrongPrompt, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerWrongID {
+		t.Fatalf("old Telegram prompt classification = %#v", classification)
+	}
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), wrongPrompt, target) {
+		t.Fatal("old Telegram prompt reply escaped interaction protocol routing")
+	}
+	select {
+	case synced := <-manager.synced:
+		t.Fatalf("wrong prompt identity triggered control sync: %#v", synced)
+	default:
+	}
+
+	unauthorized := reply
+	unauthorized.SpoolID = "spool-ordinary-reply-unauthorized"
+	unauthorized.Context.MessageID = "reply-unauthorized"
+	unauthorized.Context.SenderID = "other-sender"
+	classification = al.classifyProjectedInteractionAnswer(unauthorized, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerUnauthorized {
+		t.Fatalf("unauthorized Telegram reply classification = %#v", classification)
+	}
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), unauthorized, target) {
+		t.Fatal("unauthorized Telegram reply escaped interaction protocol routing")
+	}
+	select {
+	case synced := <-manager.synced:
+		t.Fatalf("unauthorized prompt reply triggered control sync: %#v", synced)
+	default:
 	}
 }
 

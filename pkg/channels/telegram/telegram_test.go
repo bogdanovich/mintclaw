@@ -3833,6 +3833,22 @@ func TestTelegramInteractionResponseUsesCleanReplyTextFromOwnBot(t *testing.T) {
 	assert.Empty(t, response)
 }
 
+func TestTelegramInteractionResponseProjectsPromptIdentityWithoutLocalControls(t *testing.T) {
+	ch := &TelegramChannel{selfID: 42, selfName: "mintclaw_bot"}
+	reply := ch.telegramInteractionReplyMetadata(&telego.Message{
+		Text: "  generate it yourself  ", Chat: telego.Chat{ID: 999},
+		ReplyToMessage: &telego.Message{
+			MessageID: 101,
+			Text:      "Which value?\n\n`/answer abc12345 …`\n`/stop`",
+			From:      &telego.User{ID: 42, IsBot: true, Username: "mintclaw_bot"},
+		},
+	}, "  generate it yourself  ", "15")
+
+	assert.Empty(t, reply.choice)
+	assert.Equal(t, "generate it yourself", reply.response)
+	assert.Equal(t, "abc12345", reply.shortID)
+}
+
 func TestTelegramInteractionReplyMetadataCarriesPromptIdentity(t *testing.T) {
 	ch := &TelegramChannel{
 		selfID: 42, selfName: "mintclaw_bot",

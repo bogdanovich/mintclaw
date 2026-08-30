@@ -446,6 +446,11 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		return true
 	}
 	if classification.Disposition == explicitInteractionAnswerDuplicate {
+		c.al.syncInteractionControls(
+			target.Agent.Workspace,
+			classification.Record,
+			bus.OutboundInteractionControlsRemove,
+		)
 		c.consumeExplicitInteractionAnswer(ctx, msg, target, classification)
 		return true
 	}

@@ -126,13 +126,14 @@ func (c *TelegramChannel) telegramInteractionReplyMetadata(
 	}
 	shortID := telegramInteractionShortID(message.ReplyToMessage)
 	controls, controlsActive := c.activeInteractionControls(message, senderID)
+	repliesToOwnBot := message.ReplyToMessage != nil && c.isOwnBotUser(message.ReplyToMessage.From)
 	if controlsActive && controls.kind == bus.OutboundInteractionQuestion {
 		if message.Text == bus.InboundInteractionCancelLabel {
 			return telegramInteractionReply{
 				choice: bus.InboundInteractionChoiceCancel, shortID: shortID,
 			}
 		}
-		if message.ReplyToMessage != nil && c.isOwnBotUser(message.ReplyToMessage.From) {
+		if repliesToOwnBot {
 			return telegramInteractionReply{response: strings.TrimSpace(content), shortID: shortID}
 		}
 		response := strings.TrimSpace(message.Text)
@@ -144,7 +145,7 @@ func (c *TelegramChannel) telegramInteractionReplyMetadata(
 		}
 		return telegramInteractionReply{}
 	}
-	if message.ReplyToMessage == nil || !c.isOwnBotUser(message.ReplyToMessage.From) {
+	if !repliesToOwnBot {
 		return telegramInteractionReply{}
 	}
 	switch message.Text {
@@ -157,7 +158,10 @@ func (c *TelegramChannel) telegramInteractionReplyMetadata(
 			choice: bus.InboundInteractionChoiceDeny, response: strings.TrimSpace(content), shortID: shortID,
 		}
 	default:
-		return telegramInteractionReply{}
+		if shortID == "" {
+			return telegramInteractionReply{}
+		}
+		return telegramInteractionReply{response: strings.TrimSpace(content), shortID: shortID}
 	}
 }
 
