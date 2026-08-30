@@ -151,6 +151,22 @@ func TestCodingAttachmentToolRejectsTruncatedImageBody(t *testing.T) {
 	}
 }
 
+func TestCodingAttachmentToolRejectsTruncatedUTF8GIFAsImage(t *testing.T) {
+	store := newFakeReferenceCatalogStore()
+	truncated := []byte{'G', 'I', 'F', '8', '9', 'a', 1, 0, 1, 0, 0, 0, 0}
+	store.references = append(store.references, media.Reference{
+		Ref: "media://truncated-gif", Filename: "truncated.gif", ContentType: "image/gif", Size: int64(len(truncated)),
+	})
+	store.data["media://truncated-gif"] = truncated
+	tool := NewCodingAttachmentTool()
+	tool.SetMediaStore(store)
+
+	result := tool.Execute(t.Context(), map[string]any{"action": "open", "ref": "media://truncated-gif"})
+	if !result.IsError || len(result.ContextMedia) != 0 || len(result.Media) != 0 {
+		t.Fatalf("truncated UTF-8 GIF result = %+v", result)
+	}
+}
+
 type threadReferenceCatalogStore struct {
 	store    *thread.Store
 	threadID string

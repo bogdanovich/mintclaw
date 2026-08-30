@@ -1,34 +1,23 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"image"
-	"image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/h2non/filetype"
-	_ "golang.org/x/image/webp"
 
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 const (
-	defaultAttachmentListLimit  = 50
-	maxAttachmentListLimit      = 100
-	defaultAttachmentReadBytes  = 32 << 10
-	maxAttachmentReadBytes      = 64 << 10
-	maxAttachmentImageDimension = 16384
-	maxAttachmentImagePixels    = 40_000_000
-	maxAttachmentGIFFrames      = 256
+	defaultAttachmentListLimit = 50
+	maxAttachmentListLimit     = 100
+	defaultAttachmentReadBytes = 32 << 10
+	maxAttachmentReadBytes     = 64 << 10
 )
 
 // CodingAttachmentTool selects durable coding-thread attachments without
@@ -193,12 +182,21 @@ func (t *CodingAttachmentTool) open(
 	if err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("open coding attachment: %v", err))
 	}
-	if imageContentType, ok := verifiedAttachmentImageContentType(data); ok {
+	imageInspection := inspectAttachmentImage(data)
+	if imageInspection.kind == attachmentImageInvalid {
+		return toolshared.ErrorResult(fmt.Sprintf(
+			"attachment %q contains an invalid %s image: %v",
+			reference.Filename,
+			imageInspection.contentType,
+			imageInspection.err,
+		))
+	}
+	if imageInspection.kind == attachmentImageValid {
 		return &toolshared.ToolResult{
 			ForLLM: fmt.Sprintf(
 				"Opened thread image %q (%s, %d bytes). Analyze the attached image.",
 				reference.Filename,
-				imageContentType,
+				imageInspection.contentType,
 				reference.Size,
 			),
 			ContextMedia: []string{reference.Ref},
@@ -251,56 +249,6 @@ func (t *CodingAttachmentTool) open(
 		return toolshared.ErrorResult(fmt.Sprintf("encode coding attachment content: %v", err))
 	}
 	return toolshared.SilentResult(string(encoded))
-}
-
-func verifiedAttachmentImageContentType(data []byte) (string, bool) {
-	kind, err := filetype.Match(data)
-	if err != nil {
-		return "", false
-	}
-	switch kind.MIME.Value {
-	case "image/png", "image/jpeg", "image/gif", "image/webp":
-	default:
-		return "", false
-	}
-	config, _, err := image.DecodeConfig(bytes.NewReader(data))
-	if err != nil || !validAttachmentImageDimensions(config.Width, config.Height) {
-		return "", false
-	}
-	if kind.MIME.Value == "image/gif" {
-		decoded, decodeErr := gif.DecodeAll(bytes.NewReader(data))
-		if decodeErr != nil || len(decoded.Image) == 0 || len(decoded.Image) > maxAttachmentGIFFrames {
-			return "", false
-		}
-		var totalPixels uint64
-		for _, frame := range decoded.Image {
-			bounds := frame.Bounds()
-			if !validAttachmentImageDimensions(bounds.Dx(), bounds.Dy()) {
-				return "", false
-			}
-			totalPixels += uint64(bounds.Dx()) * uint64(bounds.Dy())
-			if totalPixels > maxAttachmentImagePixels {
-				return "", false
-			}
-		}
-		return kind.MIME.Value, true
-	}
-	decoded, _, decodeErr := image.Decode(bytes.NewReader(data))
-	if decodeErr != nil {
-		return "", false
-	}
-	bounds := decoded.Bounds()
-	if !validAttachmentImageDimensions(bounds.Dx(), bounds.Dy()) {
-		return "", false
-	}
-	return kind.MIME.Value, true
-}
-
-func validAttachmentImageDimensions(width, height int) bool {
-	if width <= 0 || height <= 0 || width > maxAttachmentImageDimension || height > maxAttachmentImageDimension {
-		return false
-	}
-	return uint64(width)*uint64(height) <= maxAttachmentImagePixels
 }
 
 func boundedIntegerArg(args map[string]any, key string, defaultValue, minimum, maximum int) (int, error) {
