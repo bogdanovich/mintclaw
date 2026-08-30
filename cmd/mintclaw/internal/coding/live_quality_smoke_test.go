@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
 
 // TestCodingQualityLiveSmoke is an opt-in check that the deterministic tool
@@ -50,7 +52,9 @@ func TestCodingQualityLiveSmoke(t *testing.T) {
 		ctx,
 		io.Discard,
 		deps,
-		"Create live-smoke.txt containing exactly MINTCLAW_CODING_LIVE_OK followed by one newline, then read it back.",
+		frontend.TurnInput{
+			Text: "Create live-smoke.txt containing exactly MINTCLAW_CODING_LIVE_OK followed by one newline, then read it back.",
+		},
 		model,
 		false,
 	)

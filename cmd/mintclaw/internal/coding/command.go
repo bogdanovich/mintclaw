@@ -101,15 +101,17 @@ func newCodeCommand(deps dependencies) *cobra.Command {
 	deps = completeDependencies(deps)
 	var model string
 	var jsonOutput bool
+	var attachmentPaths []string
 	cmd := &cobra.Command{
 		Use:   "code [prompt]",
 		Short: "Create an interactive project coding thread",
 		Long: "Create a durable coding thread for the current project and run its first prompt in the MintClaw " +
-			"terminal UI. The prompt is optional for an interactive terminal. Redirected and JSON output use the " +
-			"plain renderer and require a prompt.",
+			"terminal UI. The prompt is optional for an interactive terminal or when at least one file is attached. " +
+			"Redirected and JSON output use the plain renderer and require a prompt or attachment.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prompt := strings.Join(args, " ")
+			input := turnInputFromPaths(prompt, attachmentPaths)
 			noColor, _ := cmd.Flags().GetBool("no-color")
 			capabilities := deps.terminal(cmd.InOrStdin(), cmd.OutOrStdout(), noColor)
 			if !jsonOutput && capabilities.Interactive {
@@ -118,18 +120,24 @@ func newCodeCommand(deps dependencies) *cobra.Command {
 					cmd.InOrStdin(),
 					cmd.OutOrStdout(),
 					deps,
-					prompt,
+					input,
 					model,
 					noColor,
 				)
 			}
-			if strings.TrimSpace(prompt) == "" {
-				return fmt.Errorf("coding prompt is required outside the interactive terminal UI")
+			if strings.TrimSpace(prompt) == "" && len(input.Attachments) == 0 {
+				return fmt.Errorf("coding prompt or --attach is required outside the interactive terminal UI")
 			}
-			return runNew(cmd.Context(), cmd.OutOrStdout(), deps, prompt, model, jsonOutput)
+			return runNew(cmd.Context(), cmd.OutOrStdout(), deps, input, model, jsonOutput)
 		},
 	}
 	cmd.Flags().StringVar(&model, "model", "", "Persist a model override for this thread")
+	cmd.Flags().StringArrayVar(
+		&attachmentPaths,
+		"attach",
+		nil,
+		"Attach a local file to the first turn (repeatable)",
+	)
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON")
 	return cmd
 }
@@ -160,16 +168,16 @@ func runNewInteractive(
 	in io.Reader,
 	out io.Writer,
 	deps dependencies,
-	prompt string,
+	input frontend.TurnInput,
 	model string,
 	noColor bool,
 ) error {
 	_, store, metadata, lease, err := prepareNewThread(
 		ctx,
 		deps,
-		prompt,
+		turnDisplayContent(input),
 		model,
-		strings.TrimSpace(prompt) == "",
+		strings.TrimSpace(input.Text) == "" && len(input.Attachments) == 0,
 	)
 	if err != nil {
 		return err
@@ -183,7 +191,7 @@ func runNewInteractive(
 	return deps.runTUI(ctx, frontendController, tui.Options{
 		Input:           in,
 		Output:          out,
-		InitialPrompt:   prompt,
+		InitialInput:    input,
 		AlternateScreen: true,
 		ReportFocus:     true,
 		NoColor:         noColor,
@@ -240,6 +248,14 @@ func prepareNewThread(
 	return project, store, metadata, lease, nil
 }
 
+func turnInputFromPaths(text string, paths []string) frontend.TurnInput {
+	attachments := make([]frontend.TurnAttachment, len(paths))
+	for index, path := range paths {
+		attachments[index] = frontend.TurnAttachment{Path: path}
+	}
+	return frontend.TurnInput{Text: text, Attachments: attachments}
+}
+
 // NewResumeCommand creates the top-level coding-thread discovery and resume command.
 func NewResumeCommand() *cobra.Command {
 	return newResumeCommand(defaultDependencies())
@@ -252,6 +268,7 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 	var last bool
 	var model string
 	var prompt string
+	var attachmentPaths []string
 	var jsonOutput bool
 	var offset int
 	var limit int
@@ -266,18 +283,19 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 				threadID = args[0]
 			}
 			options := resumeOptions{
-				threadID:  threadID,
-				all:       all,
-				archived:  archived,
-				last:      last,
-				model:     model,
-				prompt:    prompt,
-				promptSet: cmd.Flags().Changed("prompt"),
-				json:      jsonOutput,
-				offset:    offset,
-				limit:     limit,
-				search:    search,
-				searchSet: cmd.Flags().Changed("search"),
+				threadID:    threadID,
+				all:         all,
+				archived:    archived,
+				last:        last,
+				model:       model,
+				prompt:      prompt,
+				promptSet:   cmd.Flags().Changed("prompt"),
+				attachments: append([]string(nil), attachmentPaths...),
+				json:        jsonOutput,
+				offset:      offset,
+				limit:       limit,
+				search:      search,
+				searchSet:   cmd.Flags().Changed("search"),
 			}
 			noColor, _ := cmd.Flags().GetBool("no-color")
 			capabilities := deps.terminal(cmd.InOrStdin(), cmd.OutOrStdout(), noColor)
@@ -294,6 +312,12 @@ func newResumeCommand(deps dependencies) *cobra.Command {
 	cmd.Flags().BoolVar(&last, "last", false, "Resume the most recently updated matching thread")
 	cmd.Flags().StringVar(&model, "model", "", "Replace the persisted model override")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Append a prompt while resuming the selected thread")
+	cmd.Flags().StringArrayVar(
+		&attachmentPaths,
+		"attach",
+		nil,
+		"Attach a local file to the resumed turn (repeatable)",
+	)
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON")
 	cmd.Flags().IntVar(&offset, "offset", 0, "List offset within the bounded result set")
 	cmd.Flags().IntVar(&limit, "limit", 0, "Maximum threads to list on this page")
@@ -305,16 +329,17 @@ func runNew(
 	ctx context.Context,
 	out io.Writer,
 	deps dependencies,
-	prompt string,
+	input frontend.TurnInput,
 	model string,
 	jsonOutput bool,
 ) error {
-	_, store, metadata, lease, err := prepareNewThread(ctx, deps, prompt, model, false)
+	display := turnDisplayContent(input)
+	_, store, metadata, lease, err := prepareNewThread(ctx, deps, display, model, false)
 	if err != nil {
 		return err
 	}
 	outcome, turnErr := deps.turnRunner.Run(ctx, codingTurnRequest{
-		Store: store, Lease: lease, Metadata: metadata, Prompt: prompt,
+		Store: store, Lease: lease, Metadata: metadata, Input: input,
 	})
 	if outcome.Model != "" {
 		metadata.Model = outcome.Model
@@ -346,21 +371,23 @@ func runNew(
 }
 
 type resumeOptions struct {
-	threadID  string
-	all       bool
-	archived  bool
-	last      bool
-	model     string
-	prompt    string
-	promptSet bool
-	json      bool
-	offset    int
-	limit     int
-	search    string
-	searchSet bool
+	threadID    string
+	all         bool
+	archived    bool
+	last        bool
+	model       string
+	prompt      string
+	promptSet   bool
+	attachments []string
+	json        bool
+	offset      int
+	limit       int
+	search      string
+	searchSet   bool
 }
 
 func validateResumeOptions(options resumeOptions) error {
+	turnRequested := options.promptSet || len(options.attachments) > 0
 	if options.threadID != "" && options.last {
 		return fmt.Errorf("resume: thread ID and --last are mutually exclusive")
 	}
@@ -370,14 +397,16 @@ func validateResumeOptions(options resumeOptions) error {
 	if options.searchSet && (options.threadID != "" || options.last) {
 		return fmt.Errorf("resume: --search cannot be combined with a thread ID or --last")
 	}
-	if options.searchSet && (options.model != "" || options.promptSet) {
-		return fmt.Errorf("resume: --search is discovery-only and cannot append a prompt or replace the model")
+	if options.searchSet && (options.model != "" || turnRequested) {
+		return fmt.Errorf(
+			"resume: --search is discovery-only and cannot append a prompt, attach files, or replace the model",
+		)
 	}
 	if options.threadID != "" && (options.all || options.archived) {
 		return fmt.Errorf("resume: explicit thread ID cannot be combined with --all or --archived")
 	}
-	if options.threadID == "" && !options.last && (options.model != "" || options.promptSet) {
-		return fmt.Errorf("resume: --model and --prompt require a thread ID or --last")
+	if options.threadID == "" && !options.last && (options.model != "" || turnRequested) {
+		return fmt.Errorf("resume: --model, --prompt, and --attach require a thread ID or --last")
 	}
 	if (options.threadID != "" || options.last) && (options.offset != 0 || options.limit != 0) {
 		return fmt.Errorf("resume: --offset and --limit are list-only options")
@@ -396,7 +425,8 @@ func runResumeInteractive(
 	if err := validateResumeOptions(options); err != nil {
 		return err
 	}
-	if options.promptSet {
+	turnRequested := options.promptSet || len(options.attachments) > 0
+	if options.promptSet && len(options.attachments) == 0 {
 		if err := thread.ValidatePrompt(options.prompt); err != nil {
 			return err
 		}
@@ -449,14 +479,14 @@ func runResumeInteractive(
 	if err != nil {
 		return errors.Join(err, lease.Release())
 	}
-	initialPrompt := ""
-	if options.promptSet {
-		initialPrompt = options.prompt
+	initialInput := frontend.TurnInput{}
+	if turnRequested {
+		initialInput = turnInputFromPaths(options.prompt, options.attachments)
 	}
 	return deps.runTUI(ctx, frontendController, tui.Options{
 		Input:           in,
 		Output:          out,
-		InitialPrompt:   initialPrompt,
+		InitialInput:    initialInput,
 		AlternateScreen: true,
 		ReportFocus:     true,
 		NoColor:         noColor,
@@ -579,20 +609,23 @@ func resumeSelectedThread(
 	threadID string,
 	options resumeOptions,
 ) (result commandResult, resultErr error) {
+	turnRequested := options.promptSet || len(options.attachments) > 0
 	updatedTitle := ""
 	updatedPreview := ""
-	if options.promptSet {
-		if err := thread.ValidatePrompt(options.prompt); err != nil {
+	input := turnInputFromPaths(options.prompt, options.attachments)
+	if turnRequested {
+		display := turnDisplayContent(input)
+		if err := thread.ValidatePrompt(display); err != nil {
 			return commandResult{}, err
 		}
-		title, preview, displayErr := thread.DisplayFromRequest(options.prompt)
+		title, preview, displayErr := thread.DisplayFromRequest(display)
 		if displayErr != nil {
 			return commandResult{}, displayErr
 		}
 		updatedTitle = title
 		updatedPreview = preview
 	}
-	metadata, lease, err := prepareResumedThread(ctx, store, project, deps, threadID, options, options.promptSet)
+	metadata, lease, err := prepareResumedThread(ctx, store, project, deps, threadID, options, turnRequested)
 	if err != nil {
 		return commandResult{}, err
 	}
@@ -603,9 +636,9 @@ func resumeSelectedThread(
 	}()
 	var outcome codingTurnOutcome
 	var turnErr error
-	if options.promptSet {
+	if turnRequested {
 		outcome, turnErr = deps.turnRunner.Run(ctx, codingTurnRequest{
-			Store: store, Lease: lease, Metadata: metadata, Prompt: options.prompt,
+			Store: store, Lease: lease, Metadata: metadata, Input: input,
 		})
 		promptStored = outcome.PromptStored
 		if promptStored {

@@ -95,7 +95,8 @@ func TestResumePickerAndExplicitSelectionOpenResumedInteractiveController(t *tes
 			tuiRuns := 0
 			deps.runTUI = func(ctx context.Context, controller frontend.Controller, options tui.Options) error {
 				tuiRuns++
-				if options.InitialPrompt != testCase.initialPrompt || !options.AlternateScreen || !options.ReportFocus {
+				if options.InitialInput.Text != testCase.initialPrompt ||
+					!options.AlternateScreen || !options.ReportFocus {
 					t.Fatalf("resume TUI options = %+v", options)
 				}
 				return controller.Close(ctx)

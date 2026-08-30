@@ -30,8 +30,13 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 	output := &bytes.Buffer{}
 
 	err := Run(t.Context(), controller, Options{
-		Output:          output,
-		InitialPrompt:   "fix it",
+		Output: output,
+		InitialInput: frontend.TurnInput{
+			Text: "fix it",
+			Attachments: []frontend.TurnAttachment{{
+				Path: "/tmp/screenshot.png", ContentType: "image/png",
+			}},
+		},
 		AlternateScreen: true,
 		newProgram: func(model tea.Model, _ ...tea.ProgramOption) program {
 			rendered, ok := model.(*Model)
@@ -46,6 +51,11 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 	}
 	if controller.submits.Load() != 1 || controller.closes.Load() != 1 {
 		t.Fatalf("submits=%d closes=%d", controller.submits.Load(), controller.closes.Load())
+	}
+	inputs := controller.submittedInputs()
+	if len(inputs) != 1 || len(inputs[0].Attachments) != 1 ||
+		inputs[0].Attachments[0].Path != "/tmp/screenshot.png" {
+		t.Fatalf("initial structured inputs = %+v", inputs)
 	}
 	if !strings.Contains(output.String(), "thread-1") || len(output.String()) > finalAnswerBytes+200 {
 		t.Fatalf("final summary is missing or unbounded: bytes=%d", output.Len())

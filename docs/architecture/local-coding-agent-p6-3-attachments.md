@@ -75,6 +75,18 @@ read, it conservatively retains them because the prompt may have committed.
 This checkpoint does not yet define historical selection or complete media
 token accounting. Until those land, the existing generic media adapter may
 resolve historical references to path tags while building a later request.
-The CLI flags, Codex-like TUI presentation, historical selection, fork
-reachability, retention/GC command, and final roadmap exit record remain later
-P6.3 work.
+
+The plain and interactive command seams accept repeatable local file inputs:
+
+```text
+mintclaw code "inspect this failure" --attach build.log --attach screenshot.png
+mintclaw code --attach build.log --json
+mintclaw resume <thread-id> --prompt "compare this run" --attach latest.log
+```
+
+`--attach` order is preserved and an attachment-only turn is valid. On an
+interactive command, the initial structured input crosses the same controller
+boundary as a composer submission. On a plain or JSON command, it crosses the
+same native runtime boundary directly. The Codex-like TUI presentation,
+historical selection, fork reachability, retention/GC command, and final
+roadmap exit record remain later P6.3 work.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mime"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -30,7 +31,7 @@ type codingTurnRequest struct {
 	Store    *thread.Store
 	Lease    *thread.Lease
 	Metadata thread.Metadata
-	Prompt   string
+	Input    frontend.TurnInput
 }
 
 type codingTurnOutcome struct {
@@ -94,7 +95,7 @@ func (r nativeCodingTurnRunner) Run(
 	if err != nil {
 		return codingTurnOutcome{}, err
 	}
-	outcome, turnErr := runtime.runTurn(ctx, frontend.TurnInput{Text: request.Prompt}, nil)
+	outcome, turnErr := runtime.runTurn(ctx, request.Input, nil)
 	return outcome, errors.Join(turnErr, runtime.Close())
 }
 
@@ -459,7 +460,11 @@ func turnDisplayContent(input frontend.TurnInput) string {
 		if filename == "" {
 			filename = filepath.Base(attachment.Path)
 		}
-		attachments[index] = thread.Attachment{Filename: filename, ContentType: attachment.ContentType}
+		contentType := attachment.ContentType
+		if contentType == "" {
+			contentType = mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
+		}
+		attachments[index] = thread.Attachment{Filename: filename, ContentType: contentType}
 	}
 	return canonicalAttachmentTurnContent("", attachments)
 }
