@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	_ "image/gif"
+	"image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 	"math"
@@ -22,10 +22,13 @@ import (
 )
 
 const (
-	defaultAttachmentListLimit = 50
-	maxAttachmentListLimit     = 100
-	defaultAttachmentReadBytes = 32 << 10
-	maxAttachmentReadBytes     = 64 << 10
+	defaultAttachmentListLimit  = 50
+	maxAttachmentListLimit      = 100
+	defaultAttachmentReadBytes  = 32 << 10
+	maxAttachmentReadBytes      = 64 << 10
+	maxAttachmentImageDimension = 16384
+	maxAttachmentImagePixels    = 40_000_000
+	maxAttachmentGIFFrames      = 256
 )
 
 // CodingAttachmentTool selects durable coding-thread attachments without
@@ -131,7 +134,12 @@ func (t *CodingAttachmentTool) list(
 		return toolshared.ErrorResult(fmt.Sprintf("list coding attachments: %v", err))
 	}
 	references = append([]media.Reference(nil), references...)
-	slices.Reverse(references)
+	slices.SortFunc(references, func(left, right media.Reference) int {
+		if order := right.CreatedAt.Compare(left.CreatedAt); order != 0 {
+			return order
+		}
+		return strings.Compare(left.Ref, right.Ref)
+	})
 	if query != "" {
 		needle := strings.ToLower(query)
 		filtered := references[:0]
@@ -255,10 +263,44 @@ func verifiedAttachmentImageContentType(data []byte) (string, bool) {
 	default:
 		return "", false
 	}
-	if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || !validAttachmentImageDimensions(config.Width, config.Height) {
+		return "", false
+	}
+	if kind.MIME.Value == "image/gif" {
+		decoded, decodeErr := gif.DecodeAll(bytes.NewReader(data))
+		if decodeErr != nil || len(decoded.Image) == 0 || len(decoded.Image) > maxAttachmentGIFFrames {
+			return "", false
+		}
+		var totalPixels uint64
+		for _, frame := range decoded.Image {
+			bounds := frame.Bounds()
+			if !validAttachmentImageDimensions(bounds.Dx(), bounds.Dy()) {
+				return "", false
+			}
+			totalPixels += uint64(bounds.Dx()) * uint64(bounds.Dy())
+			if totalPixels > maxAttachmentImagePixels {
+				return "", false
+			}
+		}
+		return kind.MIME.Value, true
+	}
+	decoded, _, decodeErr := image.Decode(bytes.NewReader(data))
+	if decodeErr != nil {
+		return "", false
+	}
+	bounds := decoded.Bounds()
+	if !validAttachmentImageDimensions(bounds.Dx(), bounds.Dy()) {
 		return "", false
 	}
 	return kind.MIME.Value, true
+}
+
+func validAttachmentImageDimensions(width, height int) bool {
+	if width <= 0 || height <= 0 || width > maxAttachmentImageDimension || height > maxAttachmentImageDimension {
+		return false
+	}
+	return uint64(width)*uint64(height) <= maxAttachmentImagePixels
 }
 
 func boundedIntegerArg(args map[string]any, key string, defaultValue, minimum, maximum int) (int, error) {
