@@ -102,6 +102,9 @@ func (c *TelegramChannel) handleInteractionCallback(
 	if response != "" {
 		metadata[bus.InboundMetadataKeyInteractionResponse] = response
 	}
+	if callback.action == "option" {
+		metadata[bus.InboundMetadataKeyInteractionOptionIndex] = strconv.Itoa(callback.index)
+	}
 	if !resolved {
 		metadata[bus.InboundMetadataKeyInteractionResponseError] = "unresolved callback option"
 	}

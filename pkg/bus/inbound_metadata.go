@@ -16,6 +16,10 @@ const InboundMetadataKeyInteractionShortID = "interaction_short_id"
 // interaction response that could not be resolved to a valid answer.
 const InboundMetadataKeyInteractionResponseError = "interaction_response_error"
 
+// InboundMetadataKeyInteractionOptionIndex preserves a channel-validated
+// option callback until the durable prompt receipt can resolve its label.
+const InboundMetadataKeyInteractionOptionIndex = "interaction_option_index"
+
 // InboundMetadataKeyInteractionResponseMessageID carries the channel message
 // that a final interaction response can safely reply to when the inbound event
 // itself is not a message, such as a Telegram callback query.

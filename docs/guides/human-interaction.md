@@ -130,7 +130,11 @@ own approval authority or select the approving user.
 
 For channel buttons, admission also matches the callback to the confirmed
 platform message ID of the durable prompt. Short IDs and the channel's
-in-memory control projection are never sufficient to grant authority.
+in-memory control projection are never sufficient to grant authority. A
+callback received while that delivery receipt is still settling remains
+retryable; its option index is resolved against the durable prompt only after
+the exact platform message ID is confirmed. Ordinary Telegram replies use the
+replied-to prompt message ID for the same identity check.
 
 An approval that expires before its one-time grant is consumed is definitively
 not executed. Telegram removes the original inline controls when the

@@ -3908,6 +3908,7 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	)
 	assert.Equal(t, "abc12345", published.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
 	assert.Equal(t, "Generate it", published.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	assert.Equal(t, "0", published.Context.Raw[bus.InboundMetadataKeyInteractionOptionIndex])
 	assert.Equal(t, "1771", published.Context.TopicID)
 	require.Len(t, caller.calls, 2)
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")

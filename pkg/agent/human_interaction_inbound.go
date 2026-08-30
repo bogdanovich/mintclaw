@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -133,6 +134,13 @@ func (al *AgentLoop) cancelInteractionForControlMessage(
 		return result, nil
 	}
 	if projectedShortID != "" && !strings.EqualFold(projectedShortID, record.ShortID) {
+		return result, nil
+	}
+	if projectedChoice == bus.InboundInteractionChoiceCancel &&
+		al.projectedInteractionPromptIdentity(
+			record,
+			projectedInteractionPromptMessageID(msg),
+		) != projectedInteractionPromptMatch {
 		return result, nil
 	}
 	result.Matched = true
@@ -404,6 +412,9 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		return false
 	}
 	classification := c.al.classifyProjectedInteractionAnswer(msg, target, shortID)
+	if classification.Disposition == explicitInteractionAnswerActive {
+		msg = resolveProjectedInteractionOption(classification.Record, msg)
+	}
 	responseError := strings.TrimSpace(
 		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError],
 	)
@@ -460,6 +471,46 @@ func projectedInteractionAnswer(msg bus.InboundMessage) (string, bool) {
 	return strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID]), true
 }
 
+func projectedInteractionPromptMessageID(msg bus.InboundMessage) string {
+	if len(msg.Context.Raw) != 0 {
+		if messageID := strings.TrimSpace(
+			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
+		); messageID != "" {
+			return messageID
+		}
+	}
+	return strings.TrimSpace(msg.Context.ReplyToMessageID)
+}
+
+func resolveProjectedInteractionOption(
+	record interactions.Record,
+	msg bus.InboundMessage,
+) bus.InboundMessage {
+	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError]) == "" ||
+		record.Kind != interactions.KindQuestion || len(record.Questions) != 1 {
+		return msg
+	}
+	index, err := strconv.Atoi(strings.TrimSpace(
+		msg.Context.Raw[bus.InboundMetadataKeyInteractionOptionIndex],
+	))
+	if err != nil || index < 0 || index >= len(record.Questions[0].Options) {
+		return msg
+	}
+	response := strings.TrimSpace(record.Questions[0].Options[index].Label)
+	if response == "" {
+		return msg
+	}
+	raw := make(map[string]string, len(msg.Context.Raw))
+	for key, value := range msg.Context.Raw {
+		raw[key] = value
+	}
+	delete(raw, bus.InboundMetadataKeyInteractionResponseError)
+	raw[bus.InboundMetadataKeyInteractionResponse] = response
+	msg.Context.Raw = raw
+	msg.Content = response
+	return msg
+}
+
 func (al *AgentLoop) classifyProjectedInteractionAnswer(
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
@@ -472,9 +523,7 @@ func (al *AgentLoop) classifyProjectedInteractionAnswer(
 	if registry == nil || registry.LastLoadError() != nil {
 		return explicitInteractionAnswer{Disposition: explicitInteractionAnswerUnavailable}
 	}
-	responseMessageID := strings.TrimSpace(
-		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
-	)
+	responseMessageID := projectedInteractionPromptMessageID(msg)
 	var unauthorizedMatch interactions.Record
 	var pendingMatch interactions.Record
 	for _, record := range registry.List() {
@@ -636,6 +685,9 @@ func (c *inboundTurnCoordinator) consumeExplicitInteractionAnswer(
 }
 
 func terminalInteractionNotice(record interactions.Record) string {
+	if record.Status == interactions.StatusCancelled {
+		return "This interaction was already canceled."
+	}
 	switch record.Outcome {
 	case interactions.OutcomeTimedOut:
 		if record.Kind == interactions.KindApproval && record.ApprovalConsumedAt == 0 {

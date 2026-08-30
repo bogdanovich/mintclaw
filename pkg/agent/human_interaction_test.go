@@ -925,7 +925,8 @@ func TestInteractionPromptRecoveryHonorsRetryDeadline(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	coordinator := installInteractionChannelManager(t, al, manager)
+	al.channelManager = manager
+	coordinator := openTestInteractionOutbox(t, al)
 	workspace := agent.Workspace
 	request := testToolSuspensionRequest(workspace)
 	registry := al.interactionRegistryForWorkspace(workspace)
@@ -4546,6 +4547,13 @@ func TestTerminalInteractionNoticeUsesDurableOutcome(t *testing.T) {
 			},
 			want: "already denied",
 		},
+		{
+			name: "canceled status",
+			record: interactions.Record{
+				Kind: interactions.KindQuestion, Status: interactions.StatusCancelled,
+			},
+			want: "already canceled",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -6106,9 +6114,10 @@ func TestProjectedAnswerRetriesUntilPromptReceiptIsDurable(t *testing.T) {
 	}
 	callback := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 	callback.Context.MessageID = "callback-fast"
+	callback.Content = "Interaction option 1"
 	callback.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse:          "Allow once",
+		bus.InboundMetadataKeyInteractionOptionIndex:       "0",
+		bus.InboundMetadataKeyInteractionResponseError:     "unresolved callback option",
 		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
 		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
 	}
@@ -6129,6 +6138,125 @@ func TestProjectedAnswerRetriesUntilPromptReceiptIsDurable(t *testing.T) {
 	classification = al.classifyProjectedInteractionAnswer(callback, target, record.ShortID)
 	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != record.ID {
 		t.Fatalf("delivered prompt replay classification = %#v", classification)
+	}
+	callback = resolveProjectedInteractionOption(classification.Record, callback)
+	if callback.Context.Raw[bus.InboundMetadataKeyInteractionResponseError] != "" ||
+		callback.Context.Raw[bus.InboundMetadataKeyInteractionResponse] != "Canary" ||
+		callback.Content != "Canary" {
+		t.Fatalf("replayed option callback = %#v", callback)
+	}
+}
+
+func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-ordinary-reply-identity"
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: request.Prompt.Kind, Route: request.Route, Origin: request.Origin,
+		Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	seedTestInteractionPromptOutcomeWithMessages(
+		t,
+		al.outboundCoordinator(),
+		agent.Workspace,
+		record,
+		outbox.StatusDelivered,
+		1,
+		[]string{"7716"},
+	)
+	target := &inboundDispatchTarget{
+		Agent: agent, SessionKey: request.Route.SessionKey,
+		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
+	}
+	reply := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
+	reply.Context.MessageID = "reply-1"
+	reply.Context.ReplyToMessageID = "7716"
+	reply.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	}
+
+	classification := al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
+	if classification.Disposition != explicitInteractionAnswerActive || classification.Record.ID != record.ID {
+		t.Fatalf("ordinary Telegram reply classification = %#v", classification)
+	}
+}
+
+func TestStaleCancelCallbackCannotCancelNewerShortIDCollision(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	coordinator := installInteractionChannelManager(t, al, manager)
+	tracker := &interactionOwnershipBus{MessageBus: al.bus.(*bus.MessageBus)}
+	setTestMessageBus(al, tracker)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	request := testToolSuspensionRequest(agent.Workspace)
+	request.Route.SessionKey = "session-stale-cancel-collision"
+
+	create := func(id, toolCallID, platformMessageID string) interactions.Record {
+		record, err := registry.Create(interactions.CreateRequest{
+			ID: id, Kind: request.Prompt.Kind, Route: request.Route,
+			Origin: interactions.Origin{
+				TurnID: request.Origin.TurnID, ToolCallID: toolCallID,
+				ToolName: request.Origin.ToolName,
+			},
+			Questions: request.Prompt.Questions, ExpiresAt: time.Now().Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record = markTestInteractionWaiting(t, registry, record)
+		seedTestInteractionPromptOutcomeWithMessages(
+			t,
+			coordinator,
+			agent.Workspace,
+			record,
+			outbox.StatusDelivered,
+			1,
+			[]string{platformMessageID},
+		)
+		return record
+	}
+
+	old := create("interaction_deadbeef11111111", "call-stale-cancel", "100")
+	if _, err := registry.Cancel(old.ID, old.Revision, "test_cancel"); err != nil {
+		t.Fatal(err)
+	}
+	current := create("interaction_deadbeef22222222", "call-current-cancel", "200")
+	callback := bus.InboundMessage{
+		Content: bus.InboundInteractionCancelLabel, SpoolID: "spool-stale-cancel",
+		Context: inboundContextForInteraction(request.Route),
+	}
+	callback.Context.MessageID = "callback-stale-cancel"
+	callback.Context.ReplyToMessageID = "100"
+	callback.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceCancel,
+		bus.InboundMetadataKeyInteractionShortID:           old.ShortID,
+		bus.InboundMetadataKeyInteractionResponseMessageID: "100",
+	}
+
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), callback)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		acked, _ := tracker.counts()
+		if acked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stale Cancel callback was not settled")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	current, _ = registry.Get(current.ID)
+	if current.Status != interactions.StatusWaiting || current.Answer != nil {
+		t.Fatalf("stale Cancel mutated newer interaction: %#v", current)
 	}
 }
 
@@ -7490,7 +7618,7 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	manager := newInteractionChannelManager()
-	al.channelManager = manager
+	coordinator := installInteractionChannelManager(t, al, manager)
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    "Cancel turn",
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:question-cancel"),
@@ -7503,6 +7631,10 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 	})
 	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
 	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
+	msg.Context.ReplyToMessageID = "7716"
+	seedTestInteractionPromptOutcomeWithMessages(
+		t, coordinator, agent.Workspace, record, outbox.StatusDelivered, 1, []string{"7716"},
+	)
 
 	result, err := al.cancelInteractionForControlMessage(t.Context(), msg, target)
 	if err != nil {
@@ -7552,6 +7684,7 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 	provider := &sequenceProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	coordinator := openTestInteractionOutbox(t, al)
 	msg := testInboundMessage(bus.InboundMessage{
 		Content:    bus.InboundInteractionCancelLabel,
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:interaction-stop"),
@@ -7565,6 +7698,10 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 	})
 	record, _ := prepareWaitingControlInteraction(t, al, agent, msg, "")
 	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
+	msg.Context.ReplyToMessageID = "7716"
+	seedTestInteractionPromptOutcomeWithMessages(
+		t, coordinator, agent.Workspace, record, outbox.StatusDelivered, 1, []string{"7716"},
+	)
 
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
 
