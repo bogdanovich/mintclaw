@@ -435,10 +435,13 @@ func readinessRank(status string) int {
 
 func (*BrowserSessionTool) Name() string { return "browser_session" }
 func (*BrowserSessionTool) Description() string {
-	return "Open, inspect, or close one broker-owned browser session. " +
+	return "Open, inspect, close, hand off, or resume one broker-owned browser session. " +
 		"For open, target is the browser target name from browser_targets; when the task does not name one, " +
 		"use browser_targets.default_target and never infer preference from target array order. " +
-		"For open, profile is the profile name nested under that target (for example managed)."
+		"For open, profile is the profile name nested under that target (for example managed). " +
+		"Handoff pauses agent control and gives the user the same visible local browser window for sign-in, " +
+		"2FA, CAPTCHA, or another manual step; keep the session open. After the user replies, call resume on " +
+		"the same session, then observe fresh state before continuing automation."
 }
 
 func (*BrowserSessionTool) Parameters() map[string]any {
@@ -458,7 +461,7 @@ func (*BrowserSessionTool) Parameters() map[string]any {
 			},
 			"browser_session_id": map[string]any{
 				"type":        "string",
-				"description": "For status, close, handoff, and resume only: broker-issued browser session ID.",
+				"description": "For status, close, handoff, and resume only: broker-issued browser session ID. Handoff and resume preserve the same live browser and managed profile.",
 			},
 		},
 		"required": []string{"operation"}, "additionalProperties": false,
@@ -536,7 +539,7 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 		if !ok || len(args) != 2 {
 			return browserErrorResult(
 				"invalid_request",
-				"Status and close require exactly browser_session_id.",
+				"Status, close, handoff, and resume require exactly browser_session_id.",
 				"correct_arguments",
 			)
 		}
@@ -563,10 +566,13 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	if operation == "handoff" && result != nil && !result.IsError {
 		result.Control.Suspension = &interactions.SuspensionRequest{
 			Kind: interactions.KindQuestion,
-			Questions: []interactions.Question{{
-				ID: "release_browser", Header: "Browser control",
-				Question: "Use the visible local browser window. When you are finished, reply to release control.",
-			}},
+			Questions: []interactions.Question{
+				{
+					ID:       "release_browser",
+					Header:   "Browser control",
+					Question: "Use the visible local browser window to complete the manual step, such as signing in or 2FA. When you are finished, reply to release control so automation can resume in this same session.",
+				},
+			},
 			PromptSummary: "Browser automation is paused for exclusive local human control.",
 			Timeout:       time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
 		}
@@ -1749,8 +1755,9 @@ func browserNavigationFailureResult(invocation browser.Invocation) *toolshared.T
 	encoded, _ := json.Marshal(map[string]any{
 		"status":             "failed",
 		"code":               "navigation_failed",
-		"message":            "The page navigation failed, but the browser session remains available.",
-		"action":             "observe_again_or_choose_alternate_url",
+		"message":            "The requested page navigation failed, but the same browser session remains available. A protected deep link or authentication redirect may be the cause; this result alone does not prove whether the user is signed in.",
+		"action":             "observe_same_session_then_check_site_origin_for_authentication",
+		"session_preserved":  true,
 		"invocation_id":      invocation.ID,
 		"browser_session_id": invocation.SessionID,
 		"effect":             invocation.Effect,

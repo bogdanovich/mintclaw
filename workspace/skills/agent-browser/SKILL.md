@@ -1,129 +1,68 @@
 ---
 name: agent-browser
-description: "Browser automation via agent-browser CLI. Use when the user needs to navigate websites, fill forms, click buttons, take screenshots, extract data, or test web apps."
-metadata: {"nanobot":{"emoji":"🌐","requires":{"bins":["agent-browser"]},"install":[{"id":"npm","kind":"npm","package":"agent-browser","global":true,"bins":["agent-browser"],"label":"Install agent-browser (npm)"}]}}
+description: "Browser automation through MintClaw's first-party broker tools. Use for navigation, forms, authenticated pages, screenshots, downloads, uploads, and resumable human-assisted browser workflows."
 ---
 
 # Agent Browser
 
-CLI browser automation via Chrome/Chromium CDP. Install: `npm i -g agent-browser && agent-browser install`.
+Use the first-party `browser_targets`, `browser_session`, `browser_observe`, and
+`browser_act` tools. Do not search for or call raw Playwright MCP tools and do
+not invoke an external `agent-browser` CLI. The broker owns the Playwright
+driver, persistent profile, policy, and lifecycle for both gateway and
+companion targets.
 
-**Before using this skill**, verify the tool is available by running `which agent-browser`. If the command is not found, tell the user that browser automation requires the `agent-browser` CLI and Chromium, which are only available in the heavy container image. Do not attempt to install it at runtime.
+## Core workflow
 
-## Core Workflow
+1. Call `browser_targets` and select the requested target, or its
+   `default_target` when the user did not name one.
+2. Open the target's managed profile with `browser_session`.
+3. Observe before acting. Copy the session, tab, snapshot, and context authority
+   exactly from the fresh observation.
+4. Act through `browser_act`, then observe again after each major page change.
+5. Close the session at a terminal state unless it is suspended for approval or
+   human control, or the user explicitly asked to keep it open.
 
-1. `agent-browser open <url>` — navigate
-2. `agent-browser snapshot -i` — get interactive elements with refs (`@e1`, `@e2`, ...)
-3. Interact using refs — `click @e1`, `fill @e2 "text"`
-4. Re-snapshot after any navigation or DOM change — refs are invalidated
+Never infer a target from array order. Treat reported `dry_run`, approval
+policy, and advertised features as authoritative. Do not bypass a missing
+feature with raw MCP or arbitrary page code.
 
-```bash
-agent-browser open https://example.com/form
-agent-browser snapshot -i
-# @e1 [input] "Email", @e2 [input] "Password", @e3 [button] "Submit"
-agent-browser fill @e1 "user@example.com"
-agent-browser fill @e2 "secret"
-agent-browser click @e3
-agent-browser wait --load networkidle
-agent-browser snapshot -i
-```
+## Authentication recovery
 
-Chain commands with `&&` when you don't need intermediate output:
-```bash
-agent-browser open https://example.com && agent-browser wait --load networkidle && agent-browser snapshot -i
-```
+A `navigation_failed` result keeps the browser session alive. It is not proof
+that the site is down or that the user is logged out.
 
-## Commands
+For a failed read-only navigation to a protected deep link:
 
-```bash
-# Navigation
-agent-browser open <url>
-agent-browser close
+1. Check `browser_session` status and keep using the same session.
+2. Observe the current page. If it is blank or does not explain the failure,
+   navigate once to the site's origin, such as `https://example.com/`, and
+   observe again. Do not repeat the failed deep link first.
+3. If the fresh observation shows sign-in, sign-up, an authentication challenge,
+   or another clear logged-out state, report `authentication_required` rather
+   than a generic navigation error.
+4. When `browser_targets` advertises both `headed_view` and `handoff`, call
+   `browser_session` with `operation=handoff`. Tell the user to complete sign-in,
+   2FA, CAPTCHA, or the required manual step in the visible local window. Do not
+   close the session while waiting.
+5. After the user replies, call `browser_session` with `operation=resume` on the
+   same session. Observe fresh state, verify that authentication succeeded, and
+   retry the original read-only navigation once with fresh authority.
+6. If handoff is unavailable, clearly say that authentication is required and
+   name the target/profile that must be logged in. Then close the session before
+   returning unless the user asked to preserve it.
 
-# Snapshot
-agent-browser snapshot -i                # Interactive elements with refs
-agent-browser snapshot -s "#selector"    # Scope to CSS selector
+Do not invent an authentication requirement without observing evidence. Do not
+use origin recovery to retry an accepted or outcome-unknown external commit.
 
-# Interaction (use @refs from snapshot)
-agent-browser click @e1
-agent-browser fill @e2 "text"            # Clear + type
-agent-browser type @e2 "text"            # Type without clearing
-agent-browser select @e1 "option"
-agent-browser check @e1
-agent-browser press Enter
-agent-browser scroll down 500
+## Stale snapshots
 
-# Get info
-agent-browser get text @e1
-agent-browser get url
-agent-browser get title
-
-# Wait
-agent-browser wait @e1                   # Wait for element
-agent-browser wait --load networkidle    # Wait for network idle
-agent-browser wait --url "**/dashboard"  # Wait for URL pattern
-agent-browser wait --text "Welcome"      # Wait for text
-agent-browser wait 2000                  # Wait ms
-
-# Capture
-agent-browser screenshot                 # Screenshot to temp dir
-agent-browser screenshot --full          # Full page
-agent-browser screenshot --annotate      # With numbered element labels ([N] -> @eN)
-agent-browser pdf output.pdf
-
-# Semantic locators (when refs unavailable)
-agent-browser find text "Sign In" click
-agent-browser find label "Email" fill "user@test.com"
-agent-browser find role button click --name "Submit"
-```
-
-## Authentication
-
-```bash
-# Option 1: Import from user's running Chrome
-agent-browser --auto-connect state save ./auth.json
-agent-browser --state ./auth.json open https://app.example.com
-
-# Option 2: Persistent profile
-agent-browser --profile ~/.myapp open https://app.example.com/login
-# ... login once, all future runs are authenticated
-
-# Option 3: Session name (auto-save/restore)
-agent-browser --session-name myapp open https://app.example.com/login
-# ... login, close, next run state is restored
-
-# Option 4: State file
-agent-browser state save auth.json
-agent-browser state load auth.json
-```
-
-## Iframes
-
-Iframe content is inlined in snapshots. Interact with iframe refs directly — no frame switch needed.
-
-## Parallel Sessions
-
-```bash
-agent-browser --session s1 open https://site-a.com
-agent-browser --session s2 open https://site-b.com
-agent-browser session list
-```
-
-## JavaScript Eval
-
-```bash
-agent-browser eval 'document.title'
-
-# Complex JS — use --stdin to avoid shell quoting issues
-agent-browser eval --stdin <<'EVALEOF'
-JSON.stringify(Array.from(document.querySelectorAll("a")).map(a => a.href))
-EVALEOF
-```
+On a pre-execution `stale_snapshot`, observe the same session and tab again,
+reacquire semantic references, and retry the intended action once. Never retry
+an accepted or outcome-unknown external commit.
 
 ## Cleanup
 
-Always close sessions when done:
-```bash
-agent-browser close
-agent-browser --session s1 close
-```
+Before returning `completed`, `blocked`, or `failed`, close every session opened
+by the workflow. Keep it open only during an active approval or human handoff,
+or when the user explicitly requests preservation. If status or close fails,
+return the original outcome plus a precise `cleanup_required` error.
