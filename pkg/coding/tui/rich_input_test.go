@@ -71,6 +71,15 @@ func TestNormalizeAttachmentPathsKeepsQuotedWindowsBatchesSeparate(t *testing.T)
 	}
 }
 
+func TestNormalizeAttachmentPathDecodesPOSIXMetacharacterEscapes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report(final).png")
+	escaped := strings.NewReplacer("(", `\(`, ")", `\)`).Replace(path)
+	got, err := normalizeAttachmentPath(escaped)
+	if err != nil || got != path {
+		t.Fatalf("normalizeAttachmentPath(%q) = %q, %v; want %q", escaped, got, err, path)
+	}
+}
+
 func TestDuplicateComposerLabelsDoNotRetainRemovedPayload(t *testing.T) {
 	model, err := newTestModel(newController(t))
 	if err != nil {

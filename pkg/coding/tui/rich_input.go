@@ -292,11 +292,14 @@ func splitAttachmentArguments(value string) ([]string, error) {
 			if err := flush(); err != nil {
 				return nil, err
 			}
-		case current == '\\' && index+1 < len(runes) &&
-			(unicode.IsSpace(runes[index+1]) || runes[index+1] == '"' || runes[index+1] == '\''):
-			token.WriteRune(runes[index+1])
+		case current == '\\' && index+1 < len(runes):
+			if preserveAttachmentBackslash(token.String(), runes[index+1]) {
+				token.WriteRune(current)
+			} else {
+				token.WriteRune(runes[index+1])
+				index++
+			}
 			started = true
-			index++
 		default:
 			token.WriteRune(current)
 			started = true
@@ -309,6 +312,17 @@ func splitAttachmentArguments(value string) ([]string, error) {
 		return nil, err
 	}
 	return parts, nil
+}
+
+func preserveAttachmentBackslash(prefix string, next rune) bool {
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	if len(prefix) >= 2 && prefix[1] == ':' &&
+		((prefix[0] >= 'A' && prefix[0] <= 'Z') || (prefix[0] >= 'a' && prefix[0] <= 'z')) {
+		return true
+	}
+	return strings.HasPrefix(prefix, `\`) || (prefix == "" && next == '\\')
 }
 
 func normalizeAttachmentToken(value string) (string, error) {
