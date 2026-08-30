@@ -72,9 +72,24 @@ turn was not stored after admission, the runtime atomically removes exactly the
 new references without deleting shared blobs. If post-turn history cannot be
 read, it conservatively retains them because the prompt may have committed.
 
-This checkpoint does not yet define historical selection or complete media
-token accounting. Until those land, the existing generic media adapter may
-resolve historical references to path tags while building a later request.
+Historical coding-attachment references remain in canonical JSONL, but the
+provider-bound history adapter does not resolve or materialize them on later
+turns. Generic channel media keeps its existing eager behavior. Current-turn
+attachments are still verified and resolved normally, including an old image
+explicitly selected by the attachment tool. Selected image media therefore
+crosses the normal provider-media boundary and contributes the existing media
+cost to prompt token accounting; selected UTF-8 text contributes its actual
+bounded content.
+
+The coding-only `coding_attachment` tool exposes a thread-authorized metadata
+catalog without paths or blob reads. `list` returns bounded, newest-first
+metadata and an optional filename filter. `open` accepts only an exact
+reference returned by that catalog: images become current tool-result media,
+while UTF-8 files return at most 64 KiB per page on valid character boundaries.
+This lets a user ask to inspect a screenshot or log from an earlier turn,
+including after compaction, without replaying every historical attachment in
+every prompt. Missing, corrupt, foreign-thread, or non-UTF-8 content produces a
+tool error and leaves canonical history and attachment state unchanged.
 
 The plain and interactive command seams accept repeatable local file inputs:
 
@@ -109,5 +124,5 @@ removed. Rich turns are not placed in the in-process text-only recall ring, so
 history navigation cannot replay a detached label as if it still carried an
 attachment.
 
-Historical selection, fork reachability, retention/GC command, and the final
-roadmap exit record remain later P6.3 work.
+Fork reachability, retention/GC command, restart and missing-state closeout,
+and the final roadmap exit record remain later P6.3 work.

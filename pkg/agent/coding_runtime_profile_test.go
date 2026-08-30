@@ -28,6 +28,7 @@ var errInjectedRuntimeStore = errors.New("injected runtime store failure")
 var codingRuntimeToolNames = []string{
 	"append_file",
 	"apply_patch",
+	"coding_attachment",
 	"exec",
 	"list_dir",
 	"read_file",

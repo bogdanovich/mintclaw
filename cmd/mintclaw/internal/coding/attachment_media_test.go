@@ -55,6 +55,21 @@ func TestCodingAttachmentMediaMaterializesVerifiedThreadOwnedBytes(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	references, err := resolver.ListReferences(t.Context())
+	if err != nil || len(references) != 1 || references[0].Ref != attachment.Ref ||
+		references[0].Filename != "build.log" || references[0].Size != int64(len("verified output")) {
+		t.Fatalf("attachment catalog = %+v, %v", references, err)
+	}
+	verified, reference, err := resolver.ReadReference(t.Context(), attachment.Ref)
+	if err != nil || string(verified) != "verified output" || reference.Ref != attachment.Ref {
+		t.Fatalf("catalog read = %q, %+v, %v", verified, reference, err)
+	}
+	if len(resolver.materialized) != 0 {
+		t.Fatalf("catalog read materialized paths: %+v", resolver.materialized)
+	}
+	if resolver.ShouldResolveHistorical(attachment.Ref) {
+		t.Fatal("coding attachment opted into eager historical resolution")
+	}
 	privatePath := resolver.privatePath
 	path, meta, err := resolver.ResolveWithMeta(attachment.Ref)
 	if err != nil {
@@ -159,5 +174,8 @@ func TestCodingAttachmentMediaRejectsAnotherThreadReference(t *testing.T) {
 	defer func() { _ = resolver.Close() }()
 	if _, _, err := resolver.ResolveWithMeta(attachment.Ref); !thread.IsAttachmentUnavailable(err) {
 		t.Fatalf("cross-thread resolution error = %v", err)
+	}
+	if _, _, err := resolver.ReadReference(t.Context(), attachment.Ref); !thread.IsAttachmentUnavailable(err) {
+		t.Fatalf("cross-thread catalog read error = %v", err)
 	}
 }

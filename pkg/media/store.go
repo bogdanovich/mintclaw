@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -37,6 +38,30 @@ type MediaMeta struct {
 	ContentType   string
 	Source        string        // "telegram", "discord", "tool:image-gen", etc.
 	CleanupPolicy CleanupPolicy // defaults to CleanupPolicyDeleteOnCleanup
+}
+
+// Reference describes one durable media object without exposing its backing
+// path. Catalog implementations must scope every reference to the authority of
+// the injected store.
+type Reference struct {
+	Ref         string    `json:"ref"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	Size        int64     `json:"size"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// ReferenceCatalog is an optional, authority-scoped read side for durable
+// media that can be selected on demand instead of materialized with history.
+type ReferenceCatalog interface {
+	ListReferences(context.Context) ([]Reference, error)
+	ReadReference(context.Context, string) ([]byte, Reference, error)
+}
+
+// HistoricalResolutionPolicy lets a store keep durable historical refs lazy.
+// Current-turn refs are always resolved independently of this policy.
+type HistoricalResolutionPolicy interface {
+	ShouldResolveHistorical(ref string) bool
 }
 
 // MediaOwner is a durable, non-reversible ownership projection for

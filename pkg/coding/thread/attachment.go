@@ -443,6 +443,47 @@ func (s *Store) ListAttachments(threadID string) ([]Attachment, error) {
 	return append([]Attachment(nil), manifest.Entries...), nil
 }
 
+// ListAttachmentsWithLease returns metadata only while lease still identifies
+// the active thread writer. It does not read or materialize blob bytes.
+func (s *Store) ListAttachmentsWithLease(
+	ctx context.Context,
+	lease *Lease,
+	threadID string,
+) (attachments []Attachment, resultErr error) {
+	if s == nil {
+		return nil, fmt.Errorf("coding attachment store is nil")
+	}
+	if ctx == nil {
+		return nil, fmt.Errorf("coding attachment list: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	resultErr = lease.withActive(s.root, threadID, func() error {
+		view, err := s.openAttachmentStoreView(threadID)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = view.Close() }()
+		if err = view.validateWriter(lease); err != nil {
+			return fmt.Errorf("coding attachment list: validate thread view: %w", err)
+		}
+		manifest, err := view.loadManifest()
+		if err != nil {
+			return err
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if err = view.validateWriter(lease); err != nil {
+			return fmt.Errorf("coding attachment list: revalidate thread view: %w", err)
+		}
+		attachments = append([]Attachment(nil), manifest.Entries...)
+		return nil
+	})
+	return attachments, resultErr
+}
+
 // ResolveAttachment returns verified immutable bytes for a reference owned by
 // the selected thread. It never repairs, rewrites, or removes manifest state.
 func (s *Store) ResolveAttachment(
