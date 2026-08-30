@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -259,7 +262,7 @@ func TestComposerRemainsUsableDuringBackgroundCompaction(t *testing.T) {
 	}
 }
 
-func TestComposerKeepsLargePastedDraftWhenSubmissionFails(t *testing.T) {
+func TestComposerSpoolsLargePasteAndKeepsItWhenSubmissionFails(t *testing.T) {
 	controller := newController(t)
 	controller.submitErr = errors.New("admission rejected")
 	model, err := newTestModel(controller)
@@ -268,19 +271,114 @@ func TestComposerKeepsLargePastedDraftWhenSubmissionFails(t *testing.T) {
 	}
 	draft := strings.Repeat("λ界👩🏽‍💻", 4_000) + "\nlast line"
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(draft), Paste: true})
+	placeholder := fmt.Sprintf("[Pasted Content %d chars]", utf8.RuneCountInString(draft))
+	if model.ComposerValue() != placeholder || len(model.composerAttachments) != 1 {
+		t.Fatalf("rich paste composer=%q attachments=%d", model.ComposerValue(), len(model.composerAttachments))
+	}
+	attachment := model.composerAttachments[0]
+	if attachment.input.ContentType != "text/plain; charset=utf-8" || !attachment.owned {
+		t.Fatalf("rich paste attachment = %+v", attachment)
+	}
+	info, statErr := os.Stat(attachment.input.Path)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("paste permissions=%v", info.Mode().Perm())
+	}
+	info, statErr = os.Stat(filepath.Dir(attachment.input.Path))
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("paste directory permissions=%v", info.Mode().Perm())
+	}
+	stored, err := os.ReadFile(attachment.input.Path)
+	if err != nil || string(stored) != draft {
+		t.Fatalf("spooled paste bytes=%d err=%v", len(stored), err)
+	}
 	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(*Model)
 	message := command()
 	model = updateModel(t, model, message)
-	if model.ComposerValue() != draft || model.err == nil || model.submitting || model.initialTurnPending {
+	if model.ComposerValue() != placeholder || model.err == nil || model.submitting || model.initialTurnPending {
 		t.Fatalf(
-			"failed submit state: draft bytes=%d want=%d err=%v submitting=%v pending=%v",
-			len(model.ComposerValue()),
-			len(draft),
+			"failed submit state: draft=%q err=%v submitting=%v pending=%v",
+			model.ComposerValue(),
 			model.err,
 			model.submitting,
 			model.initialTurnPending,
 		)
+	}
+	if _, err = os.Stat(attachment.input.Path); err != nil {
+		t.Fatalf("failed submission removed paste: %v", err)
+	}
+	inputs := controller.submittedInputs()
+	if len(inputs) != 1 || inputs[0].Text != "" || len(inputs[0].Attachments) != 1 ||
+		inputs[0].Attachments[0].Path != attachment.input.Path {
+		t.Fatalf("submitted rich input = %+v", inputs)
+	}
+
+	controller.submitErr = nil
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	_ = updateModel(t, model, command())
+	if model.ComposerValue() != "" || len(model.composerAttachments) != 0 {
+		t.Fatalf(
+			"successful retry retained draft=%q attachments=%d",
+			model.ComposerValue(),
+			len(model.composerAttachments),
+		)
+	}
+	if _, err = os.Stat(attachment.input.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful submission retained paste: %v", err)
+	}
+}
+
+func TestComposerRemovingPlaceholderDropsOwnedPaste(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	paste := strings.Repeat("x", largePasteRuneThreshold+1)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(paste), Paste: true})
+	path := model.composerAttachments[0].input.Path
+	model.composer.SetValue("")
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("replacement")})
+	if len(model.composerAttachments) != 0 {
+		t.Fatalf("detached attachments = %+v", model.composerAttachments)
+	}
+	if _, err = os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("detached paste still exists: %v", err)
+	}
+}
+
+func TestComposerPastedImagePathBecomesStructuredAttachment(t *testing.T) {
+	controller := newController(t)
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "screen shot.png")
+	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0, 'I', 'H', 'D', 'R'}
+	if err = os.WriteFile(path, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pasted := fmt.Sprintf("%q", path)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasted), Paste: true})
+	if model.ComposerValue() != "[Image #1]" {
+		t.Fatalf("image placeholder = %q", model.ComposerValue())
+	}
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	_ = updateModel(t, model, command())
+	inputs := controller.submittedInputs()
+	if len(inputs) != 1 || inputs[0].Text != "" || len(inputs[0].Attachments) != 1 ||
+		inputs[0].Attachments[0].Path != path || inputs[0].Attachments[0].ContentType != "image/png" {
+		t.Fatalf("submitted image input = %+v", inputs)
+	}
+	if _, err = os.Stat(path); err != nil {
+		t.Fatalf("caller-owned image was removed: %v", err)
 	}
 }
 

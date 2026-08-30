@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
@@ -70,6 +71,41 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 	}
 
 	switch command.name {
+	case "/attach":
+		if command.args == "" {
+			m.err = errors.New("/attach requires a local file path")
+			return true, nil
+		}
+		paths, err := normalizeAttachmentPaths(command.args)
+		if err != nil {
+			m.err = err
+			return true, nil
+		}
+		if len(m.composerAttachments)+len(paths) > frontend.MaxTurnAttachments {
+			m.err = fmt.Errorf("a turn supports at most %d attachments", frontend.MaxTurnAttachments)
+			return true, nil
+		}
+		originalDraft := m.composer.Value()
+		originalAttachments := append([]composerAttachment(nil), m.composerAttachments...)
+		originalPasteNumber := m.nextPasteNumber
+		originalImageNumber := m.nextImageNumber
+		m.clearCommandDraft()
+		for index, path := range paths {
+			if index > 0 {
+				m.composer.InsertString("\n")
+			}
+			contentType, image := supportedImageContentType(path)
+			if err = m.addComposerAttachment(path, "", contentType, false, image); err != nil {
+				m.composerAttachments = originalAttachments
+				m.nextPasteNumber = originalPasteNumber
+				m.nextImageNumber = originalImageNumber
+				m.composer.SetValue(originalDraft)
+				m.err = err
+				return true, nil
+			}
+		}
+		m.err = nil
+		return true, textarea.Blink
 	case "/help", "/?":
 		return show(commandPanelHelp)
 	case "/status":
@@ -181,6 +217,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"/status            show live thread and workspace status",
 			"/model             show the current model and provider",
 			"/diff              show the current bounded repository change summary",
+			"/attach <paths…>   attach local files to the draft",
 			"/compact           start real context compaction when idle",
 			"/rename <title>    request a thread title change",
 			"/archive           hide this thread from the active catalog",

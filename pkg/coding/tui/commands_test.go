@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +29,7 @@ func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 		t.Fatalf("help transition = panel=%v draft=%q command=%v", model.commandPanel, model.ComposerValue(), command)
 	}
 	for _, want := range []string{
-		"MintClaw coding commands", "/compact", "/rename <title>", "/new", "/exit",
+		"MintClaw coding commands", "/compact", "/attach <paths…>", "/rename <title>", "/new", "/exit",
 		"Ctrl+J newline", "Ctrl+R refresh repository", "Esc close panel",
 	} {
 		if !strings.Contains(model.View(), want) {
@@ -71,6 +73,66 @@ func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 	if command != nil || model.ComposerValue() != "/status unexpected" || model.err == nil ||
 		!strings.Contains(model.err.Error(), "does not accept arguments") {
 		t.Fatalf("malformed status state: draft=%q err=%v command=%v", model.ComposerValue(), model.err, command)
+	}
+}
+
+func TestSlashAttachAddsFileWithoutSubmittingCommandText(t *testing.T) {
+	controller := newController(t)
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "trace output.log")
+	if err = os.WriteFile(path, []byte("failure details"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secondPath := filepath.Join(t.TempDir(), "screenshot.txt")
+	if err = os.WriteFile(secondPath, []byte("not actually an image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	model.composer.SetValue(
+		"/attach " + strings.ReplaceAll(path, " ", "\\ ") + " " + strings.ReplaceAll(secondPath, " ", "\\ "),
+	)
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("attach did not return a cursor command")
+	}
+	if model.ComposerValue() != "[File: trace output.log]\n[File: screenshot.txt]" ||
+		len(model.composerAttachments) != 2 {
+		t.Fatalf("attach draft=%q attachments=%+v", model.ComposerValue(), model.composerAttachments)
+	}
+	model.composer.InsertString(" inspect this")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	_ = updateModel(t, model, command())
+	inputs := controller.submittedInputs()
+	if len(inputs) != 1 || inputs[0].Text != "inspect this" || len(inputs[0].Attachments) != 2 ||
+		inputs[0].Attachments[0].Path != path || inputs[0].Attachments[1].Path != secondPath {
+		t.Fatalf("attached turn = %+v", inputs)
+	}
+}
+
+func TestSlashAttachBatchFailureKeepsCommandDraftAndAddsNothing(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := filepath.Join(t.TempDir(), "valid.log")
+	if err = os.WriteFile(valid, []byte("valid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	draft := "/attach " + valid + " " + filepath.Join(t.TempDir(), "missing.log")
+	model.composer.SetValue(draft)
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.err == nil || model.ComposerValue() != draft || len(model.composerAttachments) != 0 {
+		t.Fatalf(
+			"failed batch state: err=%v draft=%q attachments=%+v",
+			model.err,
+			model.ComposerValue(),
+			model.composerAttachments,
+		)
 	}
 }
 
