@@ -36,6 +36,27 @@ type protectedLoopGuardTool struct {
 
 type protectedResultProjectionTool struct{}
 
+func TestToolResultJournalKeepsContextMediaLiveOnly(t *testing.T) {
+	result := &toolshared.ToolResult{
+		ForLLM:       "analyze the selected image",
+		ContextMedia: []string{"media://coding/thread/image"},
+	}
+	attachMediaArtifacts(result, nil)
+	if result.Deliverable != nil || strings.Contains(result.ForLLM, toolshared.ArtifactPathsLLMNote) {
+		t.Fatalf("context-only media was promoted to a deliverable: %#v", result)
+	}
+	live := buildToolResultJournalMessage(
+		&Pipeline{}, &turnState{}, "call-image", "coding_attachment", result, result.ForLLM,
+	)
+	durable := durableToolResultJournalMessage(live, result, live.Content)
+	if len(live.Media) != 1 || live.Media[0] != result.ContextMedia[0] {
+		t.Fatalf("live message media = %#v", live.Media)
+	}
+	if len(durable.Media) != 0 || durable.Deliverable != nil {
+		t.Fatalf("durable message exposed context-only media: %#v", durable)
+	}
+}
+
 func TestToolResultJournalPreservesDeliverableForInteractionRecovery(t *testing.T) {
 	result := (&toolshared.ToolResult{ForLLM: "tool result"}).WithDeliverable(&taskresult.Deliverable{
 		Text:      "tool-owned result",

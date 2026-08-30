@@ -154,6 +154,55 @@ func (s *codingAttachmentMediaStore) Resolve(ref string) (string, error) {
 	return path, err
 }
 
+func (s *codingAttachmentMediaStore) ShouldResolveHistorical(ref string) bool {
+	return !thread.IsAttachmentRef(ref)
+}
+
+func (s *codingAttachmentMediaStore) ListReferences(ctx context.Context) ([]media.Reference, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, fmt.Errorf("coding attachment media store is closed")
+	}
+	attachments, err := s.store.ListAttachmentsWithLease(ctx, s.lease, s.threadID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]media.Reference, len(attachments))
+	for index, attachment := range attachments {
+		result[index] = media.Reference{
+			Ref:         attachment.Ref,
+			Filename:    attachment.Filename,
+			ContentType: attachment.ContentType,
+			Size:        attachment.Size,
+			CreatedAt:   attachment.CreatedAt,
+		}
+	}
+	return result, nil
+}
+
+func (s *codingAttachmentMediaStore) ReadReference(
+	ctx context.Context,
+	ref string,
+) ([]byte, media.Reference, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, media.Reference{}, fmt.Errorf("coding attachment media store is closed")
+	}
+	data, attachment, err := s.store.ResolveAttachmentWithLease(ctx, s.lease, s.threadID, ref)
+	if err != nil {
+		return nil, media.Reference{}, err
+	}
+	return data, media.Reference{
+		Ref:         attachment.Ref,
+		Filename:    attachment.Filename,
+		ContentType: attachment.ContentType,
+		Size:        attachment.Size,
+		CreatedAt:   attachment.CreatedAt,
+	}, nil
+}
+
 func (s *codingAttachmentMediaStore) ResolveWithMeta(ref string) (string, media.MediaMeta, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -167,6 +216,7 @@ func (s *codingAttachmentMediaStore) ResolveWithMeta(ref string) (string, media.
 	if err != nil {
 		return "", media.MediaMeta{}, err
 	}
+	verifiedImageContentType := media.DetectSupportedImageContentType(data)
 	if cached, ok := s.materialized[ref]; ok {
 		if validationErr := s.validateMaterialized(cached, attachment); validationErr != nil {
 			return "", media.MediaMeta{}, validationErr
@@ -206,6 +256,9 @@ func (s *codingAttachmentMediaStore) ResolveWithMeta(ref string) (string, media.
 		ContentType:   attachment.ContentType,
 		Source:        "coding-attachment",
 		CleanupPolicy: media.CleanupPolicyForgetOnly,
+	}
+	if verifiedImageContentType != "" {
+		meta.ContentType = verifiedImageContentType
 	}
 	cached.meta = meta
 	s.materialized[ref] = cached

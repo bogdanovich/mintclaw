@@ -219,6 +219,12 @@ func openNativeCodingRuntime(
 			observe:    compactionObserver,
 		}
 	}
+	attachmentMedia, err := newCodingAttachmentMediaStore(request.Store, request.Lease, request.Metadata.ThreadID)
+	if err != nil {
+		messageBus.Close()
+		_ = baseEventBus.Close()
+		return nil, fmt.Errorf("coding runtime: initialize attachment media: %w", err)
+	}
 	loop, err := agent.NewCodingAgentLoop(
 		constructionCtx,
 		runtimeCfg,
@@ -226,18 +232,13 @@ func openNativeCodingRuntime(
 		provider,
 		profile,
 		agent.WithRuntimeEvents(eventBus),
+		agent.WithMediaStore(attachmentMedia),
 	)
 	if err != nil {
+		_ = attachmentMedia.Close()
 		messageBus.Close()
 		_ = baseEventBus.Close()
 		return nil, fmt.Errorf("coding runtime: initialize agent: %w", err)
-	}
-	attachmentMedia, err := newCodingAttachmentMediaStore(request.Store, request.Lease, request.Metadata.ThreadID)
-	if err != nil {
-		_ = loop.CloseContext(context.Background())
-		messageBus.Close()
-		_ = baseEventBus.Close()
-		return nil, fmt.Errorf("coding runtime: initialize attachment media: %w", err)
 	}
 	loop.SetMediaStore(attachmentMedia)
 	readTurnHistory := r.readTurnHistory

@@ -56,6 +56,11 @@ type ToolResult struct {
 	// When non-empty, the agent will publish these as OutboundMediaMessage.
 	Media []string `json:"media,omitempty"`
 
+	// ContextMedia contains media refs exposed only to the current model turn.
+	// Unlike Media, these refs are neither promoted to deliverable artifacts nor
+	// persisted in canonical tool-result history.
+	ContextMedia []string `json:"-"`
+
 	// Deliverable describes the actual artifact/result produced by the tool,
 	// independent from LLM context or user-facing phrasing.
 	Deliverable *taskresult.Deliverable `json:"deliverable,omitempty"`

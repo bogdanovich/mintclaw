@@ -409,6 +409,32 @@ func TestAttachmentAdmissionRejectsReplacedThread(t *testing.T) {
 	}
 }
 
+func TestListAttachmentsWithLeaseReturnsMetadataAndRejectsReleasedWriter(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)
+	source := filepath.Join(t.TempDir(), "catalog.log")
+	if err := os.WriteFile(source, []byte("catalog contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+		Path: source, At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attachments, err := store.ListAttachmentsWithLease(t.Context(), lease, metadata.ThreadID)
+	if err != nil || len(attachments) != 1 || attachments[0] != admitted {
+		t.Fatalf("lease-bound list = %+v, %v", attachments, err)
+	}
+	if err = lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ListAttachmentsWithLease(t.Context(), lease, metadata.ThreadID); err == nil ||
+		!strings.Contains(err.Error(), "released") {
+		t.Fatalf("released lease list error = %v", err)
+	}
+}
+
 func TestAttachmentReadmissionRepairsMissingBlobAndRejectsCorruption(t *testing.T) {
 	store, metadata := newLeaseTestThread(t)
 	lease := acquireAttachmentTestLease(t, store, metadata.ThreadID)

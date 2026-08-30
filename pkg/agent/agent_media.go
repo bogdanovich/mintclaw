@@ -65,8 +65,9 @@ func promptCurrentTurnStart(
 // break the tool-results-must-immediately-follow-assistant constraint that
 // LLM APIs enforce.
 // Only tool messages from the current turn may emit the synthetic user
-// follow-up; historical tool results stay as plain path-tagged history.
-// Non-image files always get path tags regardless of role.
+// follow-up. Historical refs otherwise keep generic path-tag behavior unless
+// the injected store explicitly keeps its durable refs lazy. Current-turn
+// non-image files always get path tags regardless of role.
 // Returns a new slice; original messages are not mutated.
 func resolveMediaRefs(
 	messages []providers.Message,
@@ -116,6 +117,12 @@ func resolveMediaRefs(
 			}
 			if providerAttachmentHasRef(m.Attachments, ref) {
 				continue
+			}
+			if idx < start {
+				if policy, ok := store.(media.HistoricalResolutionPolicy); ok &&
+					!policy.ShouldResolveHistorical(ref) {
+					continue
+				}
 			}
 
 			localPath, meta, err := store.ResolveWithMeta(ref)

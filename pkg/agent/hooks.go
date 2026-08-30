@@ -996,6 +996,9 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 	if len(result.Media) > 0 {
 		cloned.Media = append([]string(nil), result.Media...)
 	}
+	if len(result.ContextMedia) > 0 {
+		cloned.ContextMedia = append([]string(nil), result.ContextMedia...)
+	}
 	if len(result.WriteAudit) > 0 {
 		cloned.WriteAudit = make([]toolshared.WriteAuditEntry, len(result.WriteAudit))
 		for i, entry := range result.WriteAudit {
