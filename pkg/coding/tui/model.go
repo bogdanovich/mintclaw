@@ -134,7 +134,7 @@ func NewModel(
 	composer := textarea.New()
 	configureComposerStyles(&composer)
 	composer.ShowLineNumbers = false
-	composer.Placeholder = "Describe the coding task…"
+	composer.Placeholder = "Ask MintClaw to do anything…"
 	composer.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j", "shift+enter"),
 		key.WithHelp("ctrl+j", "new line"),

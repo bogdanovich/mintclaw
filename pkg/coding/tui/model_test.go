@@ -56,6 +56,18 @@ func TestComposerInheritsTerminalColors(t *testing.T) {
 	}
 }
 
+func TestComposerInvitesAnyTask(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const want = "Ask MintClaw to do anything…"
+	if model.composer.Placeholder != want {
+		t.Fatalf("composer placeholder = %q, want %q", model.composer.Placeholder, want)
+	}
+}
+
 type fakeController struct {
 	*frontend.Projector
 	interrupts   atomic.Int32
