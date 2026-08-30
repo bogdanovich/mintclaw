@@ -414,6 +414,30 @@ func TestThreadsGCPlansThenRequiresExactStoreWideConfirmation(t *testing.T) {
 	}
 }
 
+func TestThreadsGCIsEmptyBeforeCodingStoreExists(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	storeRoot := filepath.Join(home, "coding")
+	for _, args := range [][]string{
+		{"gc", "--json"},
+		{"gc", "--confirm", attachmentGCConfirmation, "--json"},
+	} {
+		var output gcThreadsOutput
+		if err := json.Unmarshal(executeCommand(t, newThreadsCommand(deps), args...), &output); err != nil {
+			t.Fatal(err)
+		}
+		if output.Result.ScannedManifests != 0 || output.Result.ScannedBlobs != 0 ||
+			output.Result.DeletedBlobs != 0 || output.Result.Candidates == nil {
+			t.Fatalf("uncreated-store command %v = %+v", args, output)
+		}
+		if _, err := os.Stat(storeRoot); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("uncreated-store command %v materialized state: %v", args, err)
+		}
+	}
+}
+
 func TestThreadsForkHistoricalConversationUsesLiveFilesystemAndIndependentWriter(t *testing.T) {
 	home := t.TempDir()
 	projectRoot := t.TempDir()

@@ -97,6 +97,15 @@ func (s *Store) CollectAttachmentGarbage(
 	if contextErr := ctx.Err(); contextErr != nil {
 		return AttachmentGCResult{}, contextErr
 	}
+	empty := AttachmentGCResult{Before: resolved.Before, Candidates: []AttachmentGCCandidate{}}
+	if _, statErr := os.Lstat(s.root); errors.Is(statErr, os.ErrNotExist) {
+		return empty, nil
+	} else if statErr != nil {
+		return AttachmentGCResult{}, fmt.Errorf(
+			"coding attachment garbage collection: inspect store root: %w",
+			statErr,
+		)
+	}
 	session, err := s.acquireAttachmentGCSession()
 	if err != nil {
 		return AttachmentGCResult{}, err
@@ -119,7 +128,7 @@ func (s *Store) CollectAttachmentGarbage(
 	if recoveryErr := s.recoverAttachmentGCQuarantine(ctx, session); recoveryErr != nil {
 		return AttachmentGCResult{}, recoveryErr
 	}
-	marked, scannedManifests, err := s.markAttachmentGarbage(ctx, session.root)
+	marked, scannedManifests, err := s.markAttachmentGarbage(ctx, session.root, resolved.Delete)
 	if err != nil {
 		return AttachmentGCResult{}, err
 	}
@@ -201,6 +210,7 @@ func resolveAttachmentGCOptions(options AttachmentGCOptions) (AttachmentGCOption
 func (s *Store) markAttachmentGarbage(
 	ctx context.Context,
 	root *os.Root,
+	recoverInflight bool,
 ) (map[string]struct{}, int, error) {
 	requireActive, err := attachmentGCBlobStoreExists(root)
 	if err != nil {
@@ -227,6 +237,18 @@ func (s *Store) markAttachmentGarbage(
 		if scanErr != nil {
 			return nil, count, scanErr
 		}
+	}
+	inflightCount, err := s.scanAttachmentInflight(
+		ctx,
+		root,
+		recoverInflight,
+		attachmentGCManifestLimit-count,
+		attachmentGCMarkedBlobLimit,
+		marked,
+	)
+	count += inflightCount
+	if err != nil {
+		return nil, count, err
 	}
 	if err := validatePinnedAttachmentRoot(s.root, root); err != nil {
 		return nil, count, fmt.Errorf("coding attachment garbage collection: revalidate store root: %w", err)
@@ -576,9 +598,9 @@ func (s *Store) deleteAttachmentGCCandidate(
 	shard *os.Root,
 	candidate AttachmentGCCandidate,
 ) (bool, error) {
-	info, err := validateAttachmentGCBlob(ctx, shard, candidate.SHA256, candidate.SHA256)
-	if err != nil {
-		return false, err
+	info, blobErr := validateAttachmentGCBlob(ctx, shard, candidate.SHA256, candidate.SHA256)
+	if blobErr != nil {
+		return false, blobErr
 	}
 	if info.Size() != candidate.Size || !info.ModTime().UTC().Equal(candidate.ModifiedAt) {
 		return false, fmt.Errorf("coding attachment garbage collection: candidate changed before deletion")
@@ -602,8 +624,8 @@ func (s *Store) deleteAttachmentGCCandidate(
 	if linkErr := shard.Link(candidate.SHA256, quarantineName); linkErr != nil {
 		return false, linkErr
 	}
-	quarantined, err := validateAttachmentGCLinkedBlob(ctx, shard, quarantineName, candidate.SHA256)
-	validationErr := err
+	quarantined, quarantineErr := validateAttachmentGCLinkedBlob(ctx, shard, quarantineName, candidate.SHA256)
+	validationErr := quarantineErr
 	if validationErr == nil && !os.SameFile(info, quarantined) {
 		validationErr = fmt.Errorf("coding attachment garbage collection: detached candidate changed identity")
 	}
@@ -663,6 +685,24 @@ func (s *Store) deleteAttachmentGCCandidate(
 			quarantineName,
 		)
 		return false, errors.Join(err, restoreErr)
+	}
+	inflight, inflightErr := s.attachmentInflightDigestPresent(ctx, session.root, candidate.SHA256)
+	if inflightErr != nil {
+		restoreErr := s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
+		return false, errors.Join(inflightErr, restoreErr)
+	}
+	if inflight {
+		return false, s.restoreAttachmentGCQuarantine(
+			ctx,
+			shard,
+			candidate.SHA256,
+			quarantineName,
+		)
 	}
 	if err := session.validate(s.root); err != nil {
 		restoreErr := s.restoreAttachmentGCQuarantine(

@@ -310,6 +310,7 @@ type Store struct {
 
 	afterAttachmentGCCommitValidation func()
 	afterAttachmentBlobPublication    func()
+	afterAttachmentManifestValidation func()
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.

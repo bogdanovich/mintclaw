@@ -202,6 +202,27 @@ func TestAttachmentGarbageCollectionDeleteIsNoOpWithoutBlobStore(t *testing.T) {
 	}
 }
 
+func TestAttachmentGarbageCollectionIsNoOpForUncreatedStore(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "uncreated", "coding")
+	store, err := NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().Add(-24 * time.Hour).UTC()
+	for _, deleteBlobs := range []bool{false, true} {
+		result, collectErr := store.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+			Before: before, Delete: deleteBlobs,
+		})
+		if collectErr != nil || !result.Before.Equal(before) || result.Candidates == nil ||
+			result.ScannedManifests != 0 || result.ScannedBlobs != 0 || result.DeletedBlobs != 0 {
+			t.Fatalf("uncreated store delete=%t result = %+v, %v", deleteBlobs, result, collectErr)
+		}
+		if _, statErr := os.Stat(root); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("uncreated store was materialized: %v", statErr)
+		}
+	}
+}
+
 func TestAttachmentGarbageCollectionRejectsFutureCutoff(t *testing.T) {
 	store, _ := newLeaseTestThread(t)
 	result, err := store.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
@@ -428,7 +449,7 @@ func TestAttachmentGarbageCollectionRehashesCandidateBeforeDeletion(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
-	marked, _, err := store.markAttachmentGarbage(t.Context(), session.root)
+	marked, _, err := store.markAttachmentGarbage(t.Context(), session.root, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +499,7 @@ func TestAttachmentGarbageCollectionBindsSweepToMarkedStoreRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
-	marked, _, err := store.markAttachmentGarbage(t.Context(), session.root)
+	marked, _, err := store.markAttachmentGarbage(t.Context(), session.root, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,6 +676,66 @@ func TestAttachmentGarbageCollectionRevalidatesAuthorityAfterCandidateHash(t *te
 	)
 	if err != nil || string(data) != "orphan" {
 		t.Fatalf("replacement reference after sweep = %q, %v", data, err)
+	}
+}
+
+func TestAttachmentGarbageCollectionRechecksInflightAfterDetach(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "late-reference.txt")
+	if err := os.WriteFile(source, []byte("late reference"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orphan, err := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{Path: source, At: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveAttachmentRefs(t.Context(), lease, metadata, []string{orphan.Ref}); err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(attachmentTestBlobPath(store, orphan), old, old); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.acquireAttachmentGCSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	marked, _, err := store.markAttachmentGarbage(t.Context(), session.root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := store.planAttachmentGarbage(t.Context(), session.root, AttachmentGCOptions{
+		Before: now.Add(-24 * time.Hour), BlobLimit: 10, CandidateLimit: 10,
+	}, marked)
+	if err != nil || len(plan.Candidates) != 1 {
+		t.Fatalf("late in-flight plan = %+v, %v", plan, err)
+	}
+	view, err := store.openAttachmentStoreView(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := view.beginAttachmentInflight([]preparedAttachment{{attachment: orphan}})
+	if err != nil {
+		_ = view.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = batch.Remove()
+		_ = view.Close()
+		_ = lease.Release()
+	})
+	result, err := store.sweepAttachmentGarbage(t.Context(), session, plan)
+	if err != nil || result.DeletedBlobs != 0 {
+		t.Fatalf("late in-flight sweep = %+v, %v", result, err)
+	}
+	if _, err := os.Stat(attachmentTestBlobPath(store, orphan)); err != nil {
+		t.Fatalf("late in-flight blob removed: %v", err)
 	}
 }
 

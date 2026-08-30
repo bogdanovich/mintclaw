@@ -56,15 +56,17 @@ active-to-trash moves share the narrow maintenance lock, closing the
 blob-before-manifest and directory-move races without blocking ordinary coding
 turns or attachment reads. The lease retains pinned store, lock-directory, and
 lock-file identities for its lifetime; producers validate that authority around
-blob, manifest, fork, and trash commits. Admission atomically republishes even
-verified deduplicated bytes before committing the manifest, refreshing their
-inode and retention identity so a stale collector cannot detach the newly
-referenced content. Manifest and blob scans are bounded and pinned. Once blob
-storage exists, the active `threads/` authority is required; trash authorities
-remain optional. Corrupt, unreadable, unknown, over-limit, missing, replaced,
-or concurrently changing state fails closed before deletion. A partial deletion
-or directory-sync failure is reported as a committed GC outcome with exact
-deleted counts.
+blob, manifest, fork, and trash commits. Before publishing a blob, admission
+durably publishes a bounded per-digest in-flight marker tied to its thread
+writer. It removes that marker only after the canonical manifest commits under
+the same maintenance authority. A collector marks live markers, reconciles
+crash-stale markers under non-blocking thread authority, and rechecks the exact
+digest after identity-bound detach. Manifest, marker, and blob scans are bounded
+and pinned. Once blob storage exists, the active `threads/` authority is
+required; trash authorities remain optional. Corrupt, unreadable, unknown,
+over-limit, missing, replaced, or concurrently changing state fails closed
+before deletion. A partial deletion or directory-sync failure is reported as a
+committed GC outcome with exact deleted counts.
 
 Deletion is identity-bound rather than a final name-based unlink. The collector
 creates a unique same-shard hard-link quarantine for the verified candidate,

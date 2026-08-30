@@ -275,6 +275,36 @@ func (s *Store) AdmitAttachments(
 		if len(prepared) > MaxThreadAttachments-len(manifest.Entries) {
 			return fmt.Errorf("coding attachment admission: thread exceeds %d attachments", MaxThreadAttachments)
 		}
+		planned := make([]Attachment, len(prepared))
+		for index := range prepared {
+			prepared[index].attachment.Ref = attachmentRefPrefix + uuid.NewString()
+			planned[index] = prepared[index].attachment
+		}
+		manifest.Entries = append(manifest.Entries, planned...)
+		inflight, inflightErr := view.beginAttachmentInflight(prepared)
+		if inflightErr != nil {
+			return inflightErr
+		}
+		manifestCommitted := false
+		preserveInflight := false
+		defer func() {
+			if preserveInflight {
+				return
+			}
+			cleanupErr := inflight.Remove()
+			if cleanupErr == nil {
+				return
+			}
+			cleanupErr = fmt.Errorf("remove attachment in-flight authority: %w", cleanupErr)
+			if manifestCommitted {
+				operationErr = &CommittedAttachmentsError{
+					Attachments: append([]Attachment(nil), admitted...),
+					Err:         errors.Join(operationErr, cleanupErr),
+				}
+				return
+			}
+			operationErr = errors.Join(operationErr, cleanupErr)
+		}()
 		for _, candidate := range prepared {
 			if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
 				return maintenanceErr
@@ -295,24 +325,22 @@ func (s *Store) AdmitAttachments(
 		if contextErr := ctx.Err(); contextErr != nil {
 			return contextErr
 		}
-		admitted = make([]Attachment, len(prepared))
-		for index := range prepared {
-			prepared[index].attachment.Ref = attachmentRefPrefix + uuid.NewString()
-			admitted[index] = prepared[index].attachment
-		}
-		manifest.Entries = append(manifest.Entries, admitted...)
 		if identityErr := view.validateWriter(lease); identityErr != nil {
-			admitted = nil
 			return fmt.Errorf("coding attachment: revalidate active thread before manifest publish: %w", identityErr)
 		}
 		if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
-			admitted = nil
 			return maintenanceErr
+		}
+		if s.afterAttachmentManifestValidation != nil {
+			s.afterAttachmentManifestValidation()
 		}
 		saveErr := view.saveManifest(manifest)
 		var committedManifest *committedAttachmentManifestError
 		if saveErr == nil || errors.As(saveErr, &committedManifest) {
+			manifestCommitted = true
+			admitted = append([]Attachment(nil), planned...)
 			if maintenanceErr := maintenance.Validate(); maintenanceErr != nil {
+				preserveInflight = true
 				return &CommittedAttachmentsError{
 					Attachments: append([]Attachment(nil), admitted...),
 					Err:         errors.Join(saveErr, maintenanceErr),
@@ -330,7 +358,6 @@ func (s *Store) AdmitAttachments(
 					Err:         saveErr,
 				}
 			}
-			admitted = nil
 			return saveErr
 		}
 		return nil
@@ -1029,27 +1056,28 @@ func (v *attachmentStoreView) publishBlob(ctx context.Context, digest string, da
 	}
 	defer func() { _ = hierarchy.Close() }()
 	shard := hierarchy.Leaf()
+	existing := false
 	if _, statErr := shard.Lstat(digest); statErr == nil {
+		existing = true
 		_, actual, size, readErr := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
 		if readErr != nil || actual != digest || size != int64(len(data)) {
 			return fmt.Errorf("coding attachment blob: existing digest path is invalid")
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("coding attachment blob: inspect digest path: %w", statErr)
+	} else {
+		if writeErr := v.store.writeRoot(shard, digest, data, 0o600); writeErr != nil {
+			return fmt.Errorf("coding attachment blob: publish: %w", writeErr)
+		}
+		_, actual, size, readErr := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
+		if readErr != nil || actual != digest || size != int64(len(data)) {
+			return fmt.Errorf("coding attachment blob: published content could not be verified: %w", readErr)
+		}
 	}
-	// Republish even identical existing bytes. The atomic inode replacement
-	// refreshes retention identity, so a collector which lost maintenance
-	// authority cannot delete an old deduplicated blob between this publication
-	// and the manifest commit.
-	if writeErr := v.store.writeRoot(shard, digest, data, 0o600); writeErr != nil {
-		return fmt.Errorf("coding attachment blob: publish: %w", writeErr)
-	}
-	if syncErr := v.store.syncRoot(shard); syncErr != nil {
-		return fmt.Errorf("coding attachment blob: sync digest directory: %w", syncErr)
-	}
-	_, actual, size, readErr := readAttachmentRootFile(ctx, shard, digest, MaxAttachmentBytes)
-	if readErr != nil || actual != digest || size != int64(len(data)) {
-		return fmt.Errorf("coding attachment blob: published content could not be verified: %w", readErr)
+	if existing {
+		if syncErr := v.store.syncRoot(shard); syncErr != nil {
+			return fmt.Errorf("coding attachment blob: sync existing digest directory: %w", syncErr)
+		}
 	}
 	if err := v.validateHierarchy(hierarchy); err != nil {
 		return fmt.Errorf("coding attachment blob: revalidate hierarchy: %w", err)

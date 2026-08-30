@@ -166,7 +166,7 @@ func TestAttachmentAdmissionRejectsCommitAfterMaintenanceAuthorityReplacement(t 
 	collected, err := replacement.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
 		Before: time.Now().Add(-time.Hour), Delete: true,
 	})
-	if err != nil || collected.DeletedBlobs != 1 {
+	if err != nil || collected.DeletedBlobs != 0 || collected.ReferencedBlobs != 1 {
 		t.Fatalf("replacement-authority sweep = %+v, %v", collected, err)
 	}
 	close(resume)
@@ -184,5 +184,121 @@ func TestAttachmentAdmissionRejectsCommitAfterMaintenanceAuthorityReplacement(t 
 	entries, err := replacement.ListAttachments(metadata.ThreadID)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("replaced-authority manifest = %+v, %v", entries, err)
+	}
+	collected, err = replacement.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+		Before: time.Now().Add(-time.Hour), Delete: true,
+	})
+	if err != nil || collected.DeletedBlobs != 1 {
+		t.Fatalf("post-abort orphan sweep = %+v, %v", collected, err)
+	}
+}
+
+func TestAttachmentAdmissionKeepsInflightAuthorityThroughManifestCommit(t *testing.T) {
+	store, metadata := newLeaseTestThread(t)
+	now := time.Now().UTC()
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(t.TempDir(), "commit-fence.txt")
+	content := []byte("commit fence payload")
+	if err := os.WriteFile(source, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(content)
+	digest := hex.EncodeToString(sum[:])
+	validated := make(chan struct{})
+	resume := make(chan struct{})
+	resumed := false
+	t.Cleanup(func() {
+		if !resumed {
+			close(resume)
+		}
+		_ = lease.Release()
+	})
+	store.afterAttachmentManifestValidation = func() {
+		close(validated)
+		<-resume
+	}
+	type admission struct {
+		attachment Attachment
+		err        error
+	}
+	completed := make(chan admission, 1)
+	go func() {
+		attachment, admitErr := store.AdmitAttachment(t.Context(), lease, metadata, AttachmentInput{
+			Path: source, At: now,
+		})
+		completed <- admission{attachment: attachment, err: admitErr}
+	}()
+	select {
+	case <-validated:
+	case <-time.After(10 * time.Second):
+		t.Fatal("attachment admission did not reach the final manifest validation")
+	}
+	blobPath := filepath.Join(store.Root(), "blobs", "sha256", digest[:2], digest)
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(blobPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Rename(attachmentMaintenanceDirectory, attachmentMaintenanceDirectory+"-commit-old"); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Mkdir(attachmentMaintenanceDirectory, 0o700); err != nil {
+		_ = root.Close()
+		t.Fatal(err)
+	}
+	if err := root.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := NewStore(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	collected, err := replacement.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+		Before: time.Now().Add(-time.Hour), Delete: true,
+	})
+	if err != nil || collected.DeletedBlobs != 0 || collected.ReferencedBlobs != 1 {
+		t.Fatalf("pre-manifest replacement sweep = %+v, %v", collected, err)
+	}
+	close(resume)
+	resumed = true
+	var outcome admission
+	select {
+	case outcome = <-completed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("attachment admission did not leave the manifest barrier")
+	}
+	if outcome.attachment.SHA256 != digest || !IsCommittedAttachmentError(outcome.err) ||
+		!strings.Contains(outcome.err.Error(), "lock directory") {
+		t.Fatalf("replacement-authority commit = %+v, %v", outcome.attachment, outcome.err)
+	}
+	data, _, err := replacement.ResolveAttachment(t.Context(), metadata.ThreadID, outcome.attachment.Ref)
+	if err != nil || string(data) != string(content) {
+		t.Fatalf("committed attachment after replacement GC = %q, %v", data, err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	collected, err = replacement.CollectAttachmentGarbage(t.Context(), AttachmentGCOptions{
+		Before: time.Now().Add(-time.Hour), Delete: true,
+	})
+	if err != nil || collected.DeletedBlobs != 0 || collected.ReferencedBlobs != 1 {
+		t.Fatalf("committed marker reconciliation = %+v, %v", collected, err)
+	}
+	markerRoot := filepath.Join(
+		store.Root(),
+		attachmentInflightDirectory,
+		attachmentInflightSHA256Directory,
+		digest[:2],
+		digest,
+	)
+	if _, err := os.Stat(markerRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reconciled in-flight marker directory remains: %v", err)
 	}
 }
