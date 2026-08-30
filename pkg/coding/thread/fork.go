@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"time"
 
@@ -635,6 +636,9 @@ func writeRootFileAtomic(root *os.Root, name string, data []byte, mode os.FileMo
 }
 
 func syncRootDirectory(root *os.Root) error {
+	if runtime.GOOS == "windows" {
+		return fileutil.SyncDirectory(root.Name())
+	}
 	directory, err := root.OpenFile(".", os.O_RDWR, 0)
 	if err != nil {
 		directory, err = root.Open(".")
