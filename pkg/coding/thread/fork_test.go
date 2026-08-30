@@ -106,6 +106,180 @@ func TestForkThreadAtHistoricalTurnPublishesIndependentRestartableHistory(t *tes
 	}
 }
 
+func TestForkThreadCopiesOnlyReachableAttachmentsAndSharesBlobs(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPath := filepath.Join(t.TempDir(), "first.txt")
+	secondPath := filepath.Join(t.TempDir(), "second.txt")
+	if err := os.WriteFile(firstPath, []byte("first payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondPath, []byte("second payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachments, err := store.AdmitAttachments(t.Context(), lease, source, []AttachmentInput{
+		{Path: firstPath, At: time.Now()},
+		{Path: secondPath, At: time.Now().Add(time.Second)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeForkTestHistory(t, store, source, []providers.Message{
+		{Role: "user", Content: "inspect first", Media: []string{attachments[0].Ref}, RootTurnStart: true},
+		{Role: "assistant", Content: "first result"},
+		{Role: "user", Content: "inspect second", Media: []string{attachments[1].Ref}, RootTurnStart: true},
+		{Role: "assistant", Content: "second result"},
+	})
+
+	child, _, err := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: NewThreadID(), Project: source.Project, AtTurn: 1, At: time.Now().Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childAttachments, err := store.ListAttachments(child.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(childAttachments) != 1 || childAttachments[0] != attachments[0] {
+		t.Fatalf("child attachments = %+v, want only %+v", childAttachments, attachments[0])
+	}
+	data, loaded, err := store.ResolveAttachment(t.Context(), child.ThreadID, attachments[0].Ref)
+	if err != nil || string(data) != "first payload" || loaded != attachments[0] {
+		t.Fatalf("child attachment = %q, %+v, %v", data, loaded, err)
+	}
+	if _, _, err := store.ResolveAttachment(t.Context(), child.ThreadID, attachments[1].Ref); err == nil ||
+		!IsAttachmentUnavailable(err) {
+		t.Fatalf("unreachable attachment resolution error = %v", err)
+	}
+
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	lease, err = store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.TrashThread(lease, source.ThreadID, time.Now().Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+	data, _, err = store.ResolveAttachment(t.Context(), child.ThreadID, attachments[0].Ref)
+	if err != nil || string(data) != "first payload" {
+		t.Fatalf("shared blob after source trash = %q, %v", data, err)
+	}
+
+	restarted, err := NewStore(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _, err = restarted.ResolveAttachment(t.Context(), child.ThreadID, attachments[0].Ref)
+	if err != nil || string(data) != "first payload" {
+		t.Fatalf("restarted child attachment = %q, %v", data, err)
+	}
+}
+
+func TestForkThreadRejectsTranscriptAttachmentNotOwnedBySource(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	unknownRef := attachmentRefPrefix + NewThreadID()
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "missing attachment", Media: []string{unknownRef}, RootTurnStart: true,
+	}})
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	targetID := NewThreadID()
+	if _, _, err := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	}); err == nil || !strings.Contains(err.Error(), "is not owned by source thread") {
+		t.Fatalf("unowned transcript attachment error = %v", err)
+	}
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
+		t.Fatalf("target provisioned after unowned attachment: %v", err)
+	}
+}
+
+func TestSelectForkAttachmentsIncludesStructuredAttachmentRefs(t *testing.T) {
+	owned := Attachment{Ref: attachmentRefPrefix + NewThreadID()}
+	selected, err := selectForkAttachments([]providers.Message{{
+		Role: "assistant", Attachments: []providers.Attachment{{Ref: owned.Ref}},
+	}}, []Attachment{owned})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0] != owned {
+		t.Fatalf("selected structured attachments = %+v, want %+v", selected, owned)
+	}
+
+	unknown := attachmentRefPrefix + NewThreadID()
+	if _, err := selectForkAttachments([]providers.Message{{
+		Role: "assistant", Attachments: []providers.Attachment{{Ref: unknown}},
+	}}, []Attachment{owned}); err == nil || !strings.Contains(err.Error(), "is not owned by source thread") {
+		t.Fatalf("unowned structured attachment error = %v", err)
+	}
+}
+
+func TestForkThreadPublishesAttachmentManifestBeforeMetadata(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	lease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	path := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(path, []byte("evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := store.AdmitAttachment(t.Context(), lease, source, AttachmentInput{
+		Path: path, At: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "inspect", Media: []string{attachment.Ref}, RootTurnStart: true,
+	}})
+	targetID := NewThreadID()
+	injected := errors.New("injected manifest write failure")
+	metadataWritten := false
+	originalWrite := store.writeRoot
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if name == attachmentManifest {
+			return injected
+		}
+		if name == metadataFileName {
+			metadataWritten = true
+		}
+		return originalWrite(root, name, data, mode)
+	}
+	if _, _, err := store.ForkThread(t.Context(), lease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now().Add(time.Second),
+	}); !errors.Is(err, injected) || IsCommittedForkError(err) {
+		t.Fatalf("manifest failure classification = %v", err)
+	}
+	if metadataWritten {
+		t.Fatal("child metadata was written after attachment manifest failure")
+	}
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(targetRoot); !os.IsNotExist(err) {
+		t.Fatalf("failed attachment fork remains active: %v", err)
+	}
+}
+
 func TestForkThreadRejectsUnmarkedRootTurns(t *testing.T) {
 	store, source := newLeaseTestThread(t)
 	unmarked := []providers.Message{
