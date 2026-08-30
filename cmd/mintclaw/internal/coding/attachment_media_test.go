@@ -68,6 +68,41 @@ func TestCodingAttachmentMediaUsesVerifiedImageMIME(t *testing.T) {
 		if resolvedMeta.ContentType != "image/png" {
 			t.Fatalf("declared %q resolved as %q, want verified image/png", declaredType, resolvedMeta.ContentType)
 		}
+		if !resolver.ShouldAttachCurrentImage(attachment.Ref, resolvedMeta) {
+			t.Fatalf("verified image declared as %q was not eligible for provider vision", declaredType)
+		}
+	}
+
+	unsupported := []struct {
+		filename     string
+		declaredType string
+		content      []byte
+	}{
+		{filename: "diagram.svg", declaredType: "image/svg+xml", content: []byte("<svg></svg>")},
+		{filename: "corrupt.png", declaredType: "image/png", content: []byte("not actually a PNG")},
+	}
+	for index, test := range unsupported {
+		path := filepath.Join(t.TempDir(), test.filename)
+		if err := os.WriteFile(path, test.content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		attachment, err := store.AdmitAttachment(t.Context(), lease, metadata, thread.AttachmentInput{
+			Path: path, Filename: test.filename, ContentType: test.declaredType,
+			At: time.Now().Add(time.Hour + time.Duration(index)),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, resolvedMeta, err := resolver.ResolveWithMeta(attachment.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolvedMeta.ContentType != "application/octet-stream" {
+			t.Fatalf("unsupported %q resolved as %q", test.filename, resolvedMeta.ContentType)
+		}
+		if resolver.ShouldAttachCurrentImage(attachment.Ref, resolvedMeta) {
+			t.Fatalf("unsupported %q was eligible for provider vision", test.filename)
+		}
 	}
 }
 

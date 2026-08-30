@@ -23,7 +23,7 @@ func (s *lazyHistoricalMediaStore) ShouldResolveHistorical(ref string) bool {
 	return !s.lazy[ref]
 }
 
-func (s *lazyHistoricalMediaStore) ShouldAttachCurrentImage(ref string) bool {
+func (s *lazyHistoricalMediaStore) ShouldAttachCurrentImage(ref string, _ media.MediaMeta) bool {
 	return s.attachCurrent[ref]
 }
 

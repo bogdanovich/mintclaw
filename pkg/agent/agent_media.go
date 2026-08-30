@@ -156,7 +156,7 @@ func resolveMediaRefs(
 			attachCurrentImage := imageOnlyMessage
 			if currentUserMessage && !attachCurrentImage {
 				if policy, ok := store.(media.CurrentImageAttachmentPolicy); ok {
-					attachCurrentImage = policy.ShouldAttachCurrentImage(ref)
+					attachCurrentImage = policy.ShouldAttachCurrentImage(ref, meta)
 				}
 			}
 			if attachCurrentImage && strings.HasPrefix(mime, "image/") {

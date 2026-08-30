@@ -68,7 +68,7 @@ type HistoricalResolutionPolicy interface {
 // user images into provider vision even when the same message also contains
 // text. Generic channel media keeps the conservative image-only default.
 type CurrentImageAttachmentPolicy interface {
-	ShouldAttachCurrentImage(ref string) bool
+	ShouldAttachCurrentImage(ref string, meta MediaMeta) bool
 }
 
 // MediaOwner is a durable, non-reversible ownership projection for

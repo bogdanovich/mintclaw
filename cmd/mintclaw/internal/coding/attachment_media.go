@@ -163,8 +163,8 @@ func (s *codingAttachmentMediaStore) ShouldResolveHistorical(ref string) bool {
 	return !thread.IsAttachmentRef(ref)
 }
 
-func (s *codingAttachmentMediaStore) ShouldAttachCurrentImage(ref string) bool {
-	return thread.IsAttachmentRef(ref)
+func (s *codingAttachmentMediaStore) ShouldAttachCurrentImage(ref string, meta media.MediaMeta) bool {
+	return thread.IsAttachmentRef(ref) && media.IsSupportedImageContentType(meta.ContentType)
 }
 
 func (s *codingAttachmentMediaStore) ListReferences(ctx context.Context) ([]media.Reference, error) {
@@ -260,9 +260,13 @@ func (s *codingAttachmentMediaStore) ResolveWithMeta(ref string) (string, media.
 		_ = s.privateRoot.Remove(name)
 		return "", media.MediaMeta{}, err
 	}
+	contentType := attachment.ContentType
+	if strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		contentType = "application/octet-stream"
+	}
 	meta := media.MediaMeta{
 		Filename:      attachment.Filename,
-		ContentType:   attachment.ContentType,
+		ContentType:   contentType,
 		Source:        "coding-attachment",
 		CleanupPolicy: media.CleanupPolicyForgetOnly,
 	}

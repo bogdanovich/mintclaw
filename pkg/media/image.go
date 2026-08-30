@@ -19,3 +19,14 @@ func DetectSupportedImageContentType(data []byte) string {
 		return ""
 	}
 }
+
+// IsSupportedImageContentType reports whether contentType is one of the
+// canonical provider-image types recognized from bytes above.
+func IsSupportedImageContentType(contentType string) bool {
+	switch contentType {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
+}

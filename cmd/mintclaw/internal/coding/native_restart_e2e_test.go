@@ -235,6 +235,79 @@ func TestNativeCodingAttachmentsRemainLazySelectableAndDiagnosableAcrossRestart(
 	}
 }
 
+func TestNativeCodingCaptionedUnsupportedImagesStayOutOfProviderVision(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		content  []byte
+	}{
+		{
+			name:     "SVG",
+			filename: "diagram.svg",
+			content:  []byte(`<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>`),
+		},
+		{
+			name:     "corrupt PNG",
+			filename: "corrupt.png",
+			content:  []byte("not actually a PNG"),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			project := t.TempDir()
+			now := time.Date(2026, time.August, 30, 21, 0, 0, 0, time.UTC)
+			sourceDirectory := filepath.Join(t.TempDir(), "caller-private")
+			if err := os.Mkdir(sourceDirectory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			imagePath := filepath.Join(sourceDirectory, test.filename)
+			if err := os.WriteFile(imagePath, test.content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			provider := llmscenario.NewScriptedProvider("fixture-model-id", llmscenario.ProviderStep{
+				Name: "receive caption without unsupported vision media",
+				Assert: func(call llmscenario.ProviderCall) error {
+					current, ok := lastProviderMessageWithRole(call.Messages, "user")
+					if !ok || !strings.Contains(current.Content, "inspect this attachment") {
+						return fmt.Errorf("current attachment message = %+v", current)
+					}
+					if providerMessagesHaveMediaPrefix(call.Messages, "data:image/") {
+						return fmt.Errorf("unsupported %s reached provider vision", test.name)
+					}
+					if providerMessagesContain(call.Messages, sourceDirectory) {
+						return fmt.Errorf("provider messages disclosed caller path %q", sourceDirectory)
+					}
+					return nil
+				},
+				Response: llmscenario.TextResponse("handled without unsupported vision media"),
+			})
+			runner := nativeCodingTurnRunner{
+				loadConfig: func() (*config.Config, error) { return nativeCodingFixtureConfig(), nil },
+				createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+					return provider, "fixture-model-id", nil
+				},
+			}
+			deps := testDependencies(home, project, &now)
+			deps.turnRunner = runner
+			output := string(executeCommand(
+				t,
+				newCodeCommand(deps),
+				"inspect this attachment",
+				"--attach",
+				imagePath,
+			))
+			if !strings.Contains(output, "handled without unsupported vision media") {
+				t.Fatalf("unsupported attachment output = %q", output)
+			}
+			if err := provider.AssertExhausted(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestNativeCodingCommandEditsAndResumesAcrossProcessBoundary(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is unavailable")
