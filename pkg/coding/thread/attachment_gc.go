@@ -773,7 +773,10 @@ func acquireAttachmentGCQuarantineOwnership(
 	if entry.Mode()&os.ModeSymlink != 0 || !entry.Mode().IsRegular() {
 		return nil, fmt.Errorf("coding attachment garbage collection: blob %q is not a direct regular file", name)
 	}
-	file, err := root.OpenFile(name, os.O_RDONLY, 0)
+	// Windows requires a write-capable handle for an exclusive LockFileEx
+	// claim. Blob admission creates owner-only writable files; this handle is
+	// used only for the lock and verified reads, never for content mutation.
+	file, err := root.OpenFile(name, os.O_RDWR, 0)
 	if err != nil {
 		return nil, err
 	}

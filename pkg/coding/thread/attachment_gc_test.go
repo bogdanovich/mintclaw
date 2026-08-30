@@ -790,6 +790,8 @@ func TestAttachmentGarbageCollectionDoesNotRecoverLiveQuarantine(t *testing.T) {
 	}()
 	select {
 	case <-quarantinePublished:
+	case outcome := <-completed:
+		t.Fatalf("garbage collector stopped before publishing quarantine: %+v, %v", outcome.result, outcome.err)
 	case <-time.After(10 * time.Second):
 		t.Fatal("garbage collector did not publish its quarantine")
 	}
