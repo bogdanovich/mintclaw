@@ -747,6 +747,74 @@ func seedTestInteractionPromptOutcome(
 	return intent
 }
 
+func TestSyncInteractionControlsUsesDeliveredPromptMessageID(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	manager := newInteractionChannelManager()
+	al.SetChannelManager(manager)
+	coordinator := openTestInteractionOutbox(t, al)
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	argumentHash, err := interactions.HashArguments(agent.Workspace, map[string]any{"target": "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindApproval,
+		Route: interactions.Route{
+			AgentID: agent.ID, SessionKey: "session-prompt-id", RouteSessionKey: "route-prompt-id",
+			Channel: "telegram", ChatID: "chat-1", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-prompt-id", ToolCallID: "call-prompt-id", ToolName: "protected_tool",
+			ArgumentHash: argumentHash,
+			ExecutionContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", SenderID: "user-1", MessageID: "origin-1",
+			},
+		},
+		PromptSummary: "Run protected action", ApprovalAction: "Run protected action",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = bindTestInteractionPrompt(t, registry, record)
+	message := interactionPromptMessage(record)
+	message.Content = renderInteractionPrompt(record)
+	admission, err := coordinator.AdmitMessage(
+		agent.Workspace,
+		interactionPromptDeliveryIdentity(record),
+		message,
+	)
+	if err != nil || !admission.Dispatch {
+		t.Fatalf("AdmitMessage() = (%#v, %v)", admission, err)
+	}
+	if err = coordinator.PrepareAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.CommitAdmission(admission.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.BeginAttempt(admission.Intent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = coordinator.MarkDelivered(admission.Intent.ID, outbox.Outcome{
+		PlatformMessageIDs: []string{"7716"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	al.syncInteractionControls(agent.Workspace, record, bus.OutboundInteractionControlsRemove)
+	select {
+	case synced := <-manager.synced:
+		if synced.ReplyToMessageID != "7716" || synced.Metadata.InteractionShortID != record.ShortID ||
+			!synced.Metadata.RemovesInteractionControls() {
+			t.Fatalf("synced interaction controls = %#v", synced)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("interaction controls were not synchronized")
+	}
+}
+
 func testInteractionFinalIdentity(record interactions.Record) outbox.Identity {
 	return outbox.Identity{
 		SourceID:   interactionDeliveryKey(record.ID, "final"),
@@ -4361,6 +4429,10 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 			if !strings.Contains(result.Content, string(test.wantOutcome)) {
 				t.Fatalf("recovery tool result = %q", result.Content)
 			}
+			if test.wantOutcome == interactions.OutcomeTimedOut &&
+				!strings.Contains(result.Content, "The protected tool was not executed") {
+				t.Fatalf("timed-out approval result = %q", result.Content)
+			}
 		})
 	}
 }
@@ -4916,6 +4988,12 @@ func TestExpiredAllowOnceNeverExecutesProtectedTool(t *testing.T) {
 				resolved.Status != interactions.StatusResolved ||
 				resolved.Outcome != interactions.OutcomeTimedOut {
 				t.Fatalf("expired approval = %#v, executions=%d", resolved, tool.executions)
+			}
+			history := agent.Sessions.GetHistory(sessionKey)
+			_, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
+			if resultIndex < 0 ||
+				!strings.Contains(strings.ToLower(history[resultIndex].Content), "protected tool was not executed") {
+				t.Fatalf("expired approval tool result = %#v", history)
 			}
 		})
 	}

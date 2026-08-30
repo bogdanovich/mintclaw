@@ -2290,6 +2290,12 @@ func (al *AgentLoop) ensureInteractionToolResult(
 	}
 	if record.Answer.Superseded {
 		payload.Text = "The pending action was superseded by new user guidance and was not executed."
+	} else if record.Outcome == interactions.OutcomeTimedOut {
+		if record.Kind == interactions.KindApproval && record.ApprovalConsumedAt == 0 {
+			payload.Text = "Approval expired before execution. The protected tool was not executed."
+		} else {
+			payload.Text = "Human input expired before the suspended operation could continue."
+		}
 	}
 	return al.persistInteractionToolResult(ctx, agent, record, payload)
 }

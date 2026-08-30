@@ -151,25 +151,29 @@ func (c *TelegramChannel) settleInteractionCallbackUI(
 	defer cancel()
 	if err := c.bot.AnswerCallbackQuery(uiCtx, &telego.AnswerCallbackQueryParams{
 		CallbackQueryID: callbackQueryID,
+		Text:            telegramInteractionCallbackAcknowledgement(controlsMatched),
 	}); err != nil {
 		logger.WarnCF("telegram", "Failed to acknowledge interaction callback", map[string]any{
 			"callback_query_id": callbackQueryID, "error": err.Error(),
 		})
 	}
-	if !controlsMatched || uiCtx.Err() != nil {
+	if uiCtx.Err() != nil {
 		return
 	}
-	_, err := c.bot.EditMessageReplyMarkup(uiCtx, &telego.EditMessageReplyMarkupParams{
-		ChatID: telego.ChatID{ID: message.Chat.ID}, MessageID: message.MessageID,
-		ReplyMarkup: &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}},
-	})
-	if err != nil && !strings.Contains(err.Error(), "message is not modified") {
+	if err := c.removeInteractionReplyMarkup(uiCtx, message.Chat.ID, message.MessageID); err != nil {
 		logger.WarnCF("telegram", "Failed to remove interaction callback controls", map[string]any{
 			"callback_query_id": callbackQueryID, "error": err.Error(),
 		})
 		return
 	}
 	c.removeInteractionControls(message.Chat.ID, message.MessageThreadID, senderID, shortID)
+}
+
+func telegramInteractionCallbackAcknowledgement(controlsMatched bool) string {
+	if controlsMatched {
+		return ""
+	}
+	return "This interaction is no longer active. Request a new approval if the action is still needed."
 }
 
 func (c *TelegramChannel) resolveInteractionCallback(

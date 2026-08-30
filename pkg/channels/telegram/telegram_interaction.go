@@ -1,7 +1,10 @@
 package telegram
 
 import (
+	"context"
+	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/mymmrac/telego"
@@ -42,7 +45,11 @@ func (c *TelegramChannel) updateInteractionControls(msg bus.OutboundMessage, cha
 	c.interactionControlsMu.Lock()
 	defer c.interactionControlsMu.Unlock()
 	if metadata.RemovesInteractionControls() {
-		delete(c.interactionControls, key)
+		shortID := strings.TrimSpace(metadata.InteractionShortID)
+		if controls, active := c.interactionControls[key]; active &&
+			(shortID == "" || controls.shortID == shortID) {
+			delete(c.interactionControls, key)
+		}
 		return
 	}
 	if c.interactionControls == nil {
@@ -55,14 +62,49 @@ func (c *TelegramChannel) updateInteractionControls(msg bus.OutboundMessage, cha
 	}
 }
 
-// SyncInteractionControls projects durable interaction routing state without
-// delivering a Telegram message.
+// SyncInteractionControls projects durable interaction routing state. Terminal
+// sync may edit the original prompt to remove its inline controls, but it does
+// not deliver a new Telegram message.
 func (c *TelegramChannel) SyncInteractionControls(msg bus.OutboundMessage) error {
 	chatID, threadID, err := resolveTelegramOutboundTarget(msg.ChatID, &msg.Context)
 	if err != nil {
 		return err
 	}
 	c.updateInteractionControls(msg, chatID, threadID)
+	if msg.Metadata.RemovesInteractionControls() && strings.TrimSpace(msg.ReplyToMessageID) != "" {
+		messageID, parseErr := strconv.Atoi(strings.TrimSpace(msg.ReplyToMessageID))
+		if parseErr != nil || messageID <= 0 {
+			return fmt.Errorf("invalid interaction prompt message ID %q", msg.ReplyToMessageID)
+		}
+		return c.removeInteractionReplyMarkup(c.ctx, chatID, messageID)
+	}
+	return nil
+}
+
+func (c *TelegramChannel) removeInteractionReplyMarkup(ctx context.Context, chatID int64, messageID int) error {
+	if c == nil || c.bot == nil {
+		return nil
+	}
+	timeout := c.interactionUITimeout
+	if timeout <= 0 {
+		timeout = defaultTelegramInteractionUITimeout
+	}
+	baseCtx := ctx
+	if baseCtx == nil {
+		baseCtx = c.ctx
+	}
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	uiCtx, cancel := context.WithTimeout(baseCtx, timeout)
+	defer cancel()
+	_, err := c.bot.EditMessageReplyMarkup(uiCtx, &telego.EditMessageReplyMarkupParams{
+		ChatID: telego.ChatID{ID: chatID}, MessageID: messageID,
+		ReplyMarkup: &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}},
+	})
+	if err != nil && !strings.Contains(err.Error(), "message is not modified") {
+		return err
+	}
 	return nil
 }
 

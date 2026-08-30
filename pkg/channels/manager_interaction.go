@@ -11,7 +11,8 @@ type interactionControlSyncer interface {
 }
 
 // SyncInteractionControls projects durable interaction control state into a
-// channel without sending another message.
+// channel. A channel may edit the original prompt to settle remote controls,
+// but it does not send a new conversation message.
 func (m *Manager) SyncInteractionControls(msg bus.OutboundMessage) error {
 	channel, ok := m.GetChannel(msg.Channel)
 	if !ok {

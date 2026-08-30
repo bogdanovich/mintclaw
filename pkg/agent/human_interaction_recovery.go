@@ -118,6 +118,9 @@ func (al *AgentLoop) syncInteractionControls(workspace string, record interactio
 		InteractionKind:     interactionKind,
 		InteractionControls: controls,
 	})
+	if controls == bus.OutboundInteractionControlsRemove {
+		message.ReplyToMessageID = al.interactionPromptPlatformMessageID(record)
+	}
 	if err := syncer.SyncInteractionControls(message); err != nil {
 		logger.WarnCF("agent", "Failed to sync human interaction controls", map[string]any{
 			"workspace":      workspace,
@@ -127,6 +130,21 @@ func (al *AgentLoop) syncInteractionControls(workspace string, record interactio
 			"error":          err.Error(),
 		})
 	}
+}
+
+func (al *AgentLoop) interactionPromptPlatformMessageID(record interactions.Record) string {
+	if al == nil || strings.TrimSpace(record.PromptDeliveryID) == "" {
+		return ""
+	}
+	coordinator := al.outboundCoordinator()
+	if coordinator == nil {
+		return ""
+	}
+	intent, err := coordinator.Get(record.PromptDeliveryID)
+	if err != nil || intent.Status != outbox.StatusDelivered || len(intent.PlatformMessageIDs) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(intent.PlatformMessageIDs[0])
 }
 
 func (al *AgentLoop) recoverPromptDeliveryExhaustion(

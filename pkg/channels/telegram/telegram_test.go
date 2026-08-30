@@ -3932,6 +3932,71 @@ func TestHandleInteractionCallbackBoundsUIAfterInboundPublish(t *testing.T) {
 	}
 }
 
+func TestHandleInteractionCallbackAcknowledgesAndClearsInactiveControl(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.BaseChannel = channels.NewBaseChannel("telegram", nil, messageBus, []string{"15"})
+	message := &telego.Message{MessageID: 72, Chat: telego.Chat{ID: 12345, Type: "private"}}
+
+	for _, callbackID := range []string{"stale-1", "stale-2"} {
+		require.NoError(t, ch.handleInteractionCallback(t.Context(), telego.CallbackQuery{
+			ID: callbackID, From: telego.User{ID: 15}, Message: message,
+			Data: "mc:i:expired1:allow",
+		}))
+		select {
+		case inbound := <-messageBus.InboundChan():
+			assert.Equal(t, callbackID, inbound.Context.MessageID)
+		case <-time.After(time.Second):
+			t.Fatal("inactive callback was not durably published")
+		}
+	}
+
+	require.Len(t, caller.calls, 4)
+	for index := 0; index < len(caller.calls); index += 2 {
+		assert.Contains(t, caller.calls[index].URL, "answerCallbackQuery")
+		var answer map[string]any
+		require.NoError(t, json.Unmarshal(caller.calls[index].Data.BodyRaw, &answer))
+		assert.Contains(t, answer["text"], "no longer active")
+		assert.Contains(t, caller.calls[index+1].URL, "editMessageReplyMarkup")
+	}
+}
+
+func TestSyncInteractionControlsClearsExactPromptWithoutRemovingNewerProjection(t *testing.T) {
+	caller := &stubCaller{callFn: func(
+		_ context.Context, _ string, _ *ta.RequestData,
+	) (*ta.Response, error) {
+		return successResponse(t), nil
+	}}
+	ch := newTestChannel(t, caller)
+	ch.interactionControls = map[telegramInteractionControlKey]telegramInteractionControls{
+		{chatID: 12345, senderID: "15"}: {
+			shortID: "newer567", kind: bus.OutboundInteractionApproval,
+		},
+	}
+
+	require.NoError(t, ch.SyncInteractionControls(bus.OutboundMessage{
+		Channel: "telegram", ChatID: "12345", ReplyToMessageID: "72",
+		Context: bus.InboundContext{SenderID: "15"},
+		Metadata: bus.OutboundMetadata{
+			InteractionKind:     bus.OutboundInteractionApproval,
+			InteractionControls: bus.OutboundInteractionControlsRemove,
+			InteractionShortID:  "expired1",
+		},
+	}))
+
+	require.Len(t, caller.calls, 1)
+	assert.Contains(t, caller.calls[0].URL, "editMessageReplyMarkup")
+	var edit map[string]any
+	require.NoError(t, json.Unmarshal(caller.calls[0].Data.BodyRaw, &edit))
+	assert.Equal(t, float64(72), edit["message_id"])
+	assert.True(t, ch.interactionControlsMatch(12345, 0, "15", "newer567"))
+}
+
 func TestResolveInteractionCallbackDoesNotInventMissingOption(t *testing.T) {
 	ch := &TelegramChannel{}
 	_, _, response, resolved := ch.resolveInteractionCallback(
