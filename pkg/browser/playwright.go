@@ -893,10 +893,35 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if err != nil {
 		return err
 	}
+	confirmedPageStateHash := ""
+	if action.Kind == DriverNavigate {
+		if worker.lastObservation.Origin == "" {
+			return ErrDriverIncompatible
+		}
+		confirmedPageStateHash, err = browserPageStateHash(worker.lastObservation)
+		if err != nil || confirmedPageStateHash == "" {
+			return ErrDriverIncompatible
+		}
+	}
 	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
 	if err != nil {
-		if action.Kind == DriverNavigate && errors.Is(err, ErrDriverRejected) &&
-			playwrightRedirectLoopRejection(text) {
+		if worker.lost {
+			return err
+		}
+		if action.Kind == DriverNavigate && errors.Is(err, ErrDenied) {
+			if errors.Is(err, ErrDriverRejected) ||
+				errors.Is(parsePlaywrightNavigationDispatch(text), ErrNavigationFailed) {
+				if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
+					return verifyErr
+				}
+				return ErrDenied
+			}
+			return ErrDriverRejected
+		}
+		if action.Kind == DriverNavigate && errors.Is(err, ErrDriverRejected) {
+			if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
+				return verifyErr
+			}
 			return ErrNavigationFailed
 		}
 		return err
@@ -908,7 +933,14 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if worker.pendingDialog != nil {
 		return nil
 	}
-	if err = parsePlaywrightNavigationDispatch(text); err != nil &&
+	err = parsePlaywrightNavigationDispatch(text)
+	if errors.Is(err, ErrNavigationFailed) {
+		if verifyErr := worker.verifyNavigationRollbackLocked(ctx, confirmedPageStateHash); verifyErr != nil {
+			return verifyErr
+		}
+		return ErrNavigationFailed
+	}
+	if err != nil &&
 		!errors.Is(err, ErrStale) && !errors.Is(err, ErrDenied) &&
 		!errors.Is(err, ErrNavigationFailed) {
 		worker.lost = true
@@ -916,22 +948,19 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	return err
 }
 
-func playwrightRedirectLoopRejection(text string) bool {
-	if strings.Count(text, "### Error") != 1 {
-		return false
+func (worker *playwrightWorker) verifyNavigationRollbackLocked(ctx context.Context, confirmedHash string) error {
+	if worker.lost {
+		return errors.Join(ErrDriverRejected, ErrWorkerUnavailable)
 	}
-	lines := strings.Split(text, "\n")
-	if len(lines) < 2 || strings.TrimSpace(lines[0]) != "### Error" {
-		return false
+	recovered, err := worker.observeLocked(ctx)
+	if err != nil {
+		return errors.Join(ErrDriverRejected, err)
 	}
-	const prefix = "Error: page.goto: net::ERR_TOO_MANY_REDIRECTS at "
-	line := strings.TrimSpace(lines[1])
-	if !strings.HasPrefix(line, prefix) {
-		return false
+	recoveredHash, err := browserPageStateHash(recovered)
+	if err != nil || confirmedHash == "" || recoveredHash != confirmedHash {
+		return errors.Join(ErrDriverRejected, err)
 	}
-	target, err := url.Parse(strings.TrimPrefix(line, prefix))
-	return err == nil && (target.Scheme == "http" || target.Scheme == "https") && target.Host != "" &&
-		target.User == nil
+	return nil
 }
 
 func (worker *playwrightWorker) AuthorizeFill(
@@ -982,19 +1011,28 @@ func playwrightNavigationCheckedActionCode(
 		if !ok || normalizedURL == "" {
 			return "", fmt.Errorf("%w: normalized navigation URL is unavailable", ErrInvalid)
 		}
-		// A redirect loop is a deterministic response from the remote site, not
-		// evidence that the driver process was lost. Only classify this narrow,
-		// known browser error as recoverable; timeouts, closed targets, transport
-		// failures, and unrecognized rejections must retain the existing unknown-
-		// outcome quarantine behavior.
-		dispatch = `try {
-    await page.goto(` + jsonString(normalizedURL) + `);
+		// Treat navigation as a small transaction. A failed navigation can leave
+		// Chromium on an internal error document which is intentionally rejected
+		// by the observation boundary. Restore the last confirmed page before
+		// reporting a recoverable navigation failure; if restoration cannot be
+		// proved, rethrow so the broker retains its conservative unknown-outcome
+		// quarantine behavior.
+		dispatch = `const previousURL = page.url();
+  try {
+    const navigation = await state.cdp.send("Page.navigate", { url: ` + jsonString(normalizedURL) + ` });
+    if (navigation.isDownload) return "MINTCLAW_NAV_ACT_V1|navigation_failed";
+    if (navigation.errorText) throw new Error("navigation failed");
+    await page.waitForLoadState("load");
   } catch (error) {
-    const message = String(error && error.message ? error.message : error);
-    const firstLine = message.split(/\r?\n/, 1)[0];
-    if (/^page\.goto: net::ERR_TOO_MANY_REDIRECTS(?: at .+)?$/.test(firstLine)) {
-      return "MINTCLAW_NAV_ACT_V1|navigation_failed";
-    }
+    try {
+      const rollback = await state.cdp.send("Page.navigate", { url: previousURL });
+      if (rollback.errorText) throw new Error("navigation rollback failed");
+      await page.waitForLoadState("load");
+      await page.title();
+      if (!page.isClosed() && page.url() === previousURL) {
+        return "MINTCLAW_NAV_ACT_V1|navigation_failed";
+      }
+    } catch (_) {}
     throw error;
   }`
 	case "browser_click":
@@ -1689,9 +1727,7 @@ func (worker *playwrightWorker) callAndConsume(
 	// unrelated denied background request to either read-only observation.
 	passiveRead := tool == "browser_snapshot" ||
 		(tool == "browser_run_code_unsafe" && arguments["code"] == playwrightContextProbeCode)
-	if !passiveRead && worker.networkProxy.Denials() > denialsBefore {
-		return "", ErrDenied
-	}
+	proxyDenied := !passiveRead && worker.networkProxy.Denials() > denialsBefore
 	if err != nil || result == nil {
 		worker.lost = true
 		return "", ErrWorkerUnavailable
@@ -1722,6 +1758,18 @@ func (worker *playwrightWorker) callAndConsume(
 		return "", errors.Join(driverErr, ErrDriverIncompatible)
 	}
 	worker.pendingDialog = dialog
+	if driverErr != nil {
+		if proxyDenied {
+			return text, errors.Join(driverErr, ErrDenied)
+		}
+		return text, driverErr
+	}
+	if proxyDenied {
+		if dialog != nil {
+			return text, ErrDriverRejected
+		}
+		return text, ErrDenied
+	}
 	return text, driverErr
 }
 

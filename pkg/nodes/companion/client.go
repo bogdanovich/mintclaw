@@ -1002,6 +1002,8 @@ func invocationCommandFailure(err error) (string, string) {
 			return nodes.InvocationDispatchFileNotFound, "workspace file was not found"
 		case nodes.InvocationDispatchBrowserSessionNotFound:
 			return nodes.InvocationDispatchBrowserSessionNotFound, "browser session was not found"
+		case nodes.InvocationDispatchBrowserNavigationFailed:
+			return nodes.InvocationDispatchBrowserNavigationFailed, "browser navigation failed"
 		}
 	}
 	switch {

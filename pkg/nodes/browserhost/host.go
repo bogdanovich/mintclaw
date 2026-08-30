@@ -31,12 +31,13 @@ const (
 )
 
 var (
-	ErrBrowserHostDenied   = nodes.ErrBrowserHostDenied
-	ErrBrowserHostBusy     = nodes.ErrBrowserHostBusy
-	ErrBrowserHostNotFound = nodes.ErrBrowserHostNotFound
-	ErrBrowserHostStale    = nodes.ErrBrowserHostStale
-	ErrBrowserHostLost     = nodes.ErrBrowserHostLost
-	browserHostIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	ErrBrowserHostDenied           = nodes.ErrBrowserHostDenied
+	ErrBrowserHostBusy             = nodes.ErrBrowserHostBusy
+	ErrBrowserHostNotFound         = nodes.ErrBrowserHostNotFound
+	ErrBrowserHostStale            = nodes.ErrBrowserHostStale
+	ErrBrowserHostNavigationFailed = nodes.ErrBrowserHostNavigationFailed
+	ErrBrowserHostLost             = nodes.ErrBrowserHostLost
+	browserHostIDPattern           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
 type (
@@ -1383,6 +1384,9 @@ func (host *BrowserHost) executeAction(
 			if errors.Is(executeErr, browserworker.ErrDenied) {
 				delete(session.actionInvocations, request.ActionInvocationID)
 				return BrowserHostObservation{}, ErrBrowserHostDenied
+			}
+			if errors.Is(executeErr, browserworker.ErrNavigationFailed) {
+				return BrowserHostObservation{}, ErrBrowserHostNavigationFailed
 			}
 			host.quarantineActionLocked(session)
 			return BrowserHostObservation{}, ErrBrowserHostLost

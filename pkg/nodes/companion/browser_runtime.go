@@ -470,6 +470,12 @@ func browserCommandFailure(err error) error {
 		return newCommandFailure("SESSION_NOT_FOUND", "browser session was not found", err)
 	case errors.Is(err, nodes.ErrBrowserHostStale):
 		return newCommandFailure("STALE_BROWSER_STATE", "browser state is stale", err)
+	case errors.Is(err, nodes.ErrBrowserHostNavigationFailed):
+		return newCommandFailure(
+			nodes.InvocationDispatchBrowserNavigationFailed,
+			"browser navigation failed",
+			err,
+		)
 	case errors.Is(err, nodes.ErrBrowserHostLost):
 		return newCommandFailure("SESSION_LOST", "browser session is lost", err)
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

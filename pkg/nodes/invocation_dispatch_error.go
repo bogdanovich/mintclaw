@@ -3,17 +3,18 @@ package nodes
 import "errors"
 
 const (
-	InvocationDispatchCommandDenied          = "COMMAND_DENIED"
-	InvocationDispatchCommandUnavailable     = "COMMAND_UNAVAILABLE"
-	InvocationDispatchExecutionFailed        = "EXECUTION_FAILED"
-	InvocationDispatchFileNotFound           = "FILE_NOT_FOUND"
-	InvocationDispatchBrowserSessionNotFound = "SESSION_NOT_FOUND"
-	InvocationDispatchIdempotencyConflict    = "IDEMPOTENCY_CONFLICT"
-	InvocationDispatchInvalidPlan            = "INVALID_PLAN"
-	InvocationDispatchNodeBusy               = "NODE_BUSY"
-	InvocationDispatchCanceled               = "INVOCATION_CANCELED"
-	InvocationDispatchUnknown                = "INVOCATION_UNKNOWN"
-	InvocationDispatchRejected               = "DISPATCH_REJECTED"
+	InvocationDispatchCommandDenied           = "COMMAND_DENIED"
+	InvocationDispatchCommandUnavailable      = "COMMAND_UNAVAILABLE"
+	InvocationDispatchExecutionFailed         = "EXECUTION_FAILED"
+	InvocationDispatchFileNotFound            = "FILE_NOT_FOUND"
+	InvocationDispatchBrowserSessionNotFound  = "SESSION_NOT_FOUND"
+	InvocationDispatchBrowserNavigationFailed = "NAVIGATION_FAILED"
+	InvocationDispatchIdempotencyConflict     = "IDEMPOTENCY_CONFLICT"
+	InvocationDispatchInvalidPlan             = "INVALID_PLAN"
+	InvocationDispatchNodeBusy                = "NODE_BUSY"
+	InvocationDispatchCanceled                = "INVOCATION_CANCELED"
+	InvocationDispatchUnknown                 = "INVOCATION_UNKNOWN"
+	InvocationDispatchRejected                = "DISPATCH_REJECTED"
 )
 
 // InvocationDispatchError carries a bounded companion response classification
@@ -51,6 +52,7 @@ func normalizeInvocationDispatchErrorCode(code string) string {
 		InvocationDispatchExecutionFailed,
 		InvocationDispatchFileNotFound,
 		InvocationDispatchBrowserSessionNotFound,
+		InvocationDispatchBrowserNavigationFailed,
 		InvocationDispatchIdempotencyConflict,
 		InvocationDispatchInvalidPlan,
 		InvocationDispatchNodeBusy,
