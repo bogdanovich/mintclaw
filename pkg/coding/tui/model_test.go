@@ -572,6 +572,33 @@ func TestComposerCtrlVRemovesPartialFileAfterWriteFailure(t *testing.T) {
 	}
 }
 
+func TestComposerCtrlVPreservesLiteralImageLabelOnSubmission(t *testing.T) {
+	controller := newController(t)
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const literal = "keep literal [Image #1] text"
+	model.composer.SetValue(literal)
+	model.readClipboardImage = func(context.Context) ([]byte, error) {
+		return testClipboardPNG(t), nil
+	}
+
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	model = updated.(*Model)
+	model = updateModel(t, model, command())
+	if !strings.Contains(model.ComposerValue(), "[Image #2]") {
+		t.Fatalf("collision-safe clipboard draft = %q", model.ComposerValue())
+	}
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	_ = updateModel(t, model, command())
+	inputs := controller.submittedInputs()
+	if len(inputs) != 1 || inputs[0].Text != literal || len(inputs[0].Attachments) != 1 {
+		t.Fatalf("submitted collision-safe input = %+v", inputs)
+	}
+}
+
 func testClipboardPNG(t *testing.T) []byte {
 	t.Helper()
 	value := image.NewRGBA(image.Rect(0, 0, 2, 2))

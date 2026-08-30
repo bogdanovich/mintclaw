@@ -160,8 +160,7 @@ func (m *Model) addComposerAttachment(path, displayName, contentType string, own
 	}
 	var placeholder string
 	if image {
-		m.nextImageNumber++
-		placeholder = fmt.Sprintf("[Image #%d]", m.nextImageNumber)
+		placeholder = m.nextImagePlaceholder()
 	} else {
 		placeholder = m.uniquePlaceholder(fmt.Sprintf("[File: %s]", displayName))
 	}
@@ -176,6 +175,17 @@ func (m *Model) addComposerAttachment(path, displayName, contentType string, own
 	})
 	m.composer.InsertString(placeholder)
 	return nil
+}
+
+func (m *Model) nextImagePlaceholder() string {
+	draft := m.composer.Value()
+	for {
+		m.nextImageNumber++
+		candidate := fmt.Sprintf("[Image #%d]", m.nextImageNumber)
+		if !strings.Contains(draft, candidate) {
+			return candidate
+		}
+	}
 }
 
 func (m *Model) uniquePlaceholder(base string) string {
