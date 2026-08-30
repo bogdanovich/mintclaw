@@ -157,26 +157,19 @@ func NewModel(
 }
 
 func configureComposerStyles(composer *textarea.Model) {
-	text := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-		Light: "#1F2328",
-		Dark:  "#F0F3F6",
-	})
-	placeholder := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-		Light: "#656D76",
-		Dark:  "#8C959F",
-	})
+	terminalDefault := lipgloss.NewStyle()
 
 	// bubbles/textarea defaults the focused cursor line to a forced white or
-	// black background. Inherit the terminal background so entered text remains
-	// readable with light, dark, and custom terminal themes.
-	composer.FocusedStyle.CursorLine = text
-	composer.FocusedStyle.Text = text
-	composer.FocusedStyle.Placeholder = placeholder
-	composer.FocusedStyle.EndOfBuffer = lipgloss.NewStyle()
-	composer.BlurredStyle.CursorLine = text
-	composer.BlurredStyle.Text = text
-	composer.BlurredStyle.Placeholder = placeholder
-	composer.BlurredStyle.EndOfBuffer = lipgloss.NewStyle()
+	// black background. Do not guess the terminal theme for the foreground,
+	// either: inherit both colors so contrast follows the user's terminal.
+	composer.FocusedStyle.CursorLine = terminalDefault
+	composer.FocusedStyle.Text = terminalDefault
+	composer.FocusedStyle.Placeholder = terminalDefault
+	composer.FocusedStyle.EndOfBuffer = terminalDefault
+	composer.BlurredStyle.CursorLine = terminalDefault
+	composer.BlurredStyle.Text = terminalDefault
+	composer.BlurredStyle.Placeholder = terminalDefault
+	composer.BlurredStyle.EndOfBuffer = terminalDefault
 }
 
 func (m *Model) Init() tea.Cmd {

@@ -29,7 +29,7 @@ func newTestModel(controller frontend.Controller) (*Model, error) {
 	return NewModel(context.Background(), controller)
 }
 
-func TestComposerInheritsTerminalBackground(t *testing.T) {
+func TestComposerInheritsTerminalColors(t *testing.T) {
 	model, err := newTestModel(newController(t))
 	if err != nil {
 		t.Fatal(err)
@@ -41,10 +41,15 @@ func TestComposerInheritsTerminalBackground(t *testing.T) {
 	}{
 		{name: "focused cursor line", style: model.composer.FocusedStyle.CursorLine},
 		{name: "focused text", style: model.composer.FocusedStyle.Text},
+		{name: "focused placeholder", style: model.composer.FocusedStyle.Placeholder},
 		{name: "blurred cursor line", style: model.composer.BlurredStyle.CursorLine},
 		{name: "blurred text", style: model.composer.BlurredStyle.Text},
+		{name: "blurred placeholder", style: model.composer.BlurredStyle.Placeholder},
 	}
 	for _, tc := range styles {
+		if foreground := tc.style.GetForeground(); foreground != (lipgloss.NoColor{}) {
+			t.Errorf("%s forces foreground color %v", tc.name, foreground)
+		}
 		if background := tc.style.GetBackground(); background != (lipgloss.NoColor{}) {
 			t.Errorf("%s forces background color %v", tc.name, background)
 		}
