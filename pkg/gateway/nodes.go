@@ -49,6 +49,7 @@ type nodeAdmissionHandler interface {
 }
 
 type nodeAdmissionRuntime struct {
+	handlerMu           sync.RWMutex
 	registryMu          sync.RWMutex
 	routes              nodeAdmissionRoutes
 	registry            *nodes.FileRegistry
@@ -102,7 +103,8 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	}
 
 	registryPath := nodes.RegistryPath(cfg.WorkspacePath())
-	if runtime.handler != nil && (!runtime.mounted || registryPath != runtime.registryPath) {
+	currentHandler := runtime.currentAdmissionHandler()
+	if currentHandler != nil && (!runtime.mounted || registryPath != runtime.registryPath) {
 		ctx, cancel := context.WithTimeout(context.Background(), nodeAdmissionDrainTimeout)
 		closeErr := runtime.Close(ctx)
 		cancel()
@@ -144,8 +146,8 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 		err = runtime.routes.ReplaceHTTPHandler(nodews.Path, handler)
 		if err == nil {
 			err = runtime.routes.ReplaceHTTPHandler(nodeEnrollmentOperatorPath, enrollmentHandler)
-			if err != nil && runtime.handler != nil {
-				rollbackErr := runtime.routes.ReplaceHTTPHandler(nodews.Path, runtime.handler)
+			if err != nil && currentHandler != nil {
+				rollbackErr := runtime.routes.ReplaceHTTPHandler(nodews.Path, currentHandler)
 				err = errors.Join(err, rollbackErr)
 			}
 		}
@@ -165,7 +167,7 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	runtime.registry = registry
 	runtime.sessions = sessions
 	runtime.registryPath = registryPath
-	runtime.handler = handler
+	runtime.setAdmissionHandler(handler)
 	runtime.enrollmentHandler = enrollmentHandler
 	runtime.enrollmentOffers = offers
 	runtime.generation++
@@ -385,13 +387,14 @@ func (runtime *nodeAdmissionRuntime) invocationHandlerSnapshot(
 ) (nodeAdmissionHandler, error) {
 	runtime.registryMu.RLock()
 	defer runtime.registryMu.RUnlock()
+	handler := runtime.currentAdmissionHandler()
 	if !runtime.mounted ||
-		runtime.handler == nil ||
+		handler == nil ||
 		runtime.registryPath != expectedRegistryPath ||
 		runtime.generation != expectedGeneration {
 		return nil, errNodeDiscoveryAuthorityUnavailable
 	}
-	return runtime.handler, nil
+	return handler, nil
 }
 
 func (runtime *nodeAdmissionRuntime) terminalHandlerSnapshot(
@@ -489,31 +492,21 @@ func (runtime *nodeAdmissionRuntime) withInvocationHandler(
 ) error {
 	runtime.registryMu.RLock()
 	defer runtime.registryMu.RUnlock()
+	handler := runtime.currentAdmissionHandler()
 	if !runtime.mounted ||
-		runtime.handler == nil ||
+		handler == nil ||
 		runtime.registryPath != expectedRegistryPath ||
 		runtime.generation != expectedGeneration {
 		return errNodeDiscoveryAuthorityUnavailable
 	}
-	return fn(runtime.handler)
+	return fn(handler)
 }
 
 func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
-	// A generation lease may be waiting on remote node I/O. End the handler's
-	// sessions before taking the write lock so shutdown can release that lease
-	// instead of waiting behind the work it owns and must cancel.
-	if err := waitForNodeAdmissionStateLock(ctx, runtime.registryMu.TryRLock); err != nil {
-		return fmt.Errorf("snapshot node admission shutdown state: %w", err)
-	}
-	wasMounted := runtime.mounted
-	handler := runtime.handler
-	offers := runtime.enrollmentOffers
-	runtime.registryMu.RUnlock()
-	if wasMounted {
-		runtime.routes.UnregisterHTTPHandler(nodews.Path)
-		runtime.routes.UnregisterHTTPHandler(nodeEnrollmentOperatorPath)
-	}
-	offers.Invalidate()
+	// A generation lease and a queued state writer can wait on each other while
+	// the leased operation owns node-session work. Session closure therefore has
+	// its own pointer synchronization and runs before any registry state lock.
+	handler := runtime.currentAdmissionHandler()
 	var closeErr error
 	if handler != nil {
 		closeErr = handler.Close(ctx)
@@ -522,6 +515,8 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	if err := waitForNodeAdmissionStateLock(ctx, runtime.registryMu.TryLock); err != nil {
 		return errors.Join(closeErr, fmt.Errorf("finalize node admission shutdown: %w", err))
 	}
+	wasMounted := runtime.mounted
+	offers := runtime.enrollmentOffers
 	terminalStore := runtime.terminalStore
 	transferSpool := runtime.transferSpool
 	invocationStore := runtime.invocationStore
@@ -532,6 +527,11 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	runtime.terminalMounted = false
 	runtime.terminalHub = nil
 	runtime.registryMu.Unlock()
+	if wasMounted {
+		runtime.routes.UnregisterHTTPHandler(nodews.Path)
+		runtime.routes.UnregisterHTTPHandler(nodeEnrollmentOperatorPath)
+	}
+	offers.Invalidate()
 	if terminalMounted {
 		runtime.routes.UnregisterHTTPHandler(nodeTerminalOperatorPath)
 	}
@@ -562,7 +562,9 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	if closeErr != nil || terminalErr != nil || transferErr != nil || invocationErr != nil {
 		return errors.Join(closeErr, terminalErr, transferErr, invocationErr)
 	}
-	runtime.registryMu.Lock()
+	if err := waitForNodeAdmissionStateLock(ctx, runtime.registryMu.TryLock); err != nil {
+		return fmt.Errorf("release node admission shutdown state: %w", err)
+	}
 	runtime.registry = nil
 	runtime.sessions = nil
 	runtime.terminalStore = nil
@@ -572,11 +574,23 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	runtime.invocationStore = nil
 	runtime.invocationStorePath = ""
 	runtime.registryPath = ""
-	runtime.handler = nil
+	runtime.setAdmissionHandler(nil)
 	runtime.enrollmentHandler = nil
 	runtime.enrollmentOffers = nil
 	runtime.registryMu.Unlock()
 	return nil
+}
+
+func (runtime *nodeAdmissionRuntime) currentAdmissionHandler() nodeAdmissionHandler {
+	runtime.handlerMu.RLock()
+	defer runtime.handlerMu.RUnlock()
+	return runtime.handler
+}
+
+func (runtime *nodeAdmissionRuntime) setAdmissionHandler(handler nodeAdmissionHandler) {
+	runtime.handlerMu.Lock()
+	runtime.handler = handler
+	runtime.handlerMu.Unlock()
 }
 
 func waitForNodeAdmissionStateLock(ctx context.Context, tryLock func() bool) error {

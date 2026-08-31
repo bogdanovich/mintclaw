@@ -27,6 +27,7 @@ type fakeNodeAdmissionRoutes struct {
 	enrollmentRegisterCount   int
 	enrollmentReplaceCount    int
 	enrollmentUnregisterCount int
+	unregisterHook            func(string)
 }
 
 type closeErrorNodeAdmissionHandler struct {
@@ -262,6 +263,82 @@ func TestNodeAdmissionCloseEndsSessionsBeforeWaitingForGenerationLease(t *testin
 	}
 }
 
+func TestNodeAdmissionCloseEndsSessionsBeforeQueuedStateWriter(t *testing.T) {
+	routes := &fakeNodeAdmissionRoutes{}
+	handler := &leaseReleasingNodeAdmissionHandler{
+		fakeNodeAdmissionHandler: &fakeNodeAdmissionHandler{},
+		closed:                   make(chan struct{}),
+	}
+	runtime := &nodeAdmissionRuntime{
+		routes:           routes,
+		handler:          handler,
+		registryPath:     "registry.json",
+		enrollmentOffers: nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{}),
+		generation:       1,
+		mounted:          true,
+	}
+
+	leaseStarted := make(chan struct{})
+	releaseLease := make(chan struct{})
+	leaseDone := make(chan error, 1)
+	go func() {
+		leaseDone <- runtime.withInvocationHandler(
+			runtime.registryPath,
+			runtime.generation,
+			func(nodeAdmissionHandler) error {
+				close(leaseStarted)
+				select {
+				case <-handler.closed:
+				case <-releaseLease:
+				}
+				return nil
+			},
+		)
+	}()
+	<-leaseStarted
+
+	writerStarted := make(chan struct{})
+	writerDone := make(chan struct{})
+	go func() {
+		close(writerStarted)
+		runtime.registryMu.Lock()
+		runtime.registryMu.Unlock() //nolint:staticcheck // empty critical section proves queued writer ordering
+		close(writerDone)
+	}()
+	<-writerStarted
+	writerQueued := false
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if runtime.registryMu.TryRLock() {
+			runtime.registryMu.RUnlock()
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		writerQueued = true
+		break
+	}
+	if !writerQueued {
+		close(releaseLease)
+		<-leaseDone
+		<-writerDone
+		t.Fatal("state writer did not queue behind the generation lease")
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := runtime.Close(ctx); err != nil {
+		close(releaseLease)
+		<-leaseDone
+		<-writerDone
+		t.Fatalf("Close() error = %v", err)
+	}
+	close(releaseLease)
+	if err := <-leaseDone; err != nil {
+		t.Fatalf("leased operation error = %v", err)
+	}
+	<-writerDone
+}
+
 func TestNodeAdmissionCloseBoundsGenerationLeaseWait(t *testing.T) {
 	routes := &fakeNodeAdmissionRoutes{}
 	runtime := &nodeAdmissionRuntime{
@@ -333,6 +410,59 @@ func TestNodeAdmissionCloseBoundsInitialStateWait(t *testing.T) {
 	runtime.registryMu.Unlock()
 	if err := runtime.Close(t.Context()); err != nil {
 		t.Fatalf("retry Close() error = %v", err)
+	}
+}
+
+func TestNodeAdmissionCloseBoundsFinalStateRelease(t *testing.T) {
+	writerAcquired := make(chan struct{})
+	releaseWriter := make(chan struct{})
+	var queueWriter sync.Once
+	runtime := &nodeAdmissionRuntime{
+		handler:          &fakeNodeAdmissionHandler{},
+		registryPath:     "registry.json",
+		enrollmentOffers: nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{}),
+		generation:       1,
+		mounted:          true,
+	}
+	routes := &fakeNodeAdmissionRoutes{unregisterHook: func(path string) {
+		if path != nodews.Path {
+			return
+		}
+		queueWriter.Do(func() {
+			go func() {
+				runtime.registryMu.Lock()
+				close(writerAcquired)
+				<-releaseWriter
+				runtime.registryMu.Unlock()
+			}()
+			<-writerAcquired
+		})
+	}}
+	runtime.routes = routes
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	startedAt := time.Now()
+	err := runtime.Close(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		close(releaseWriter)
+		t.Fatalf("Close() error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
+		close(releaseWriter)
+		t.Fatalf("Close() exceeded its bounded final state release: %s", elapsed)
+	}
+	if runtime.handler == nil || runtime.registryPath == "" {
+		close(releaseWriter)
+		t.Fatal("bounded final state release discarded references required for a retry")
+	}
+
+	close(releaseWriter)
+	if err := runtime.Close(t.Context()); err != nil {
+		t.Fatalf("retry Close() error = %v", err)
+	}
+	if runtime.handler != nil || runtime.registryPath != "" {
+		t.Fatal("successful close retry retained node admission references")
 	}
 }
 
@@ -631,10 +761,16 @@ func (routes *fakeNodeAdmissionRoutes) UnregisterHTTPHandler(path string) {
 	if path == nodeEnrollmentOperatorPath {
 		routes.enrollmentHandler = nil
 		routes.enrollmentUnregisterCount++
+		if routes.unregisterHook != nil {
+			routes.unregisterHook(path)
+		}
 		return
 	}
 	routes.handler = nil
 	routes.unregisterCount++
+	if routes.unregisterHook != nil {
+		routes.unregisterHook(path)
+	}
 }
 
 func TestNodeAdmissionRuntimeReconcilesConfigLifecycle(t *testing.T) {
