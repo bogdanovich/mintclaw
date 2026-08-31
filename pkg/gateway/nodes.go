@@ -20,7 +20,10 @@ import (
 
 const nodeAdmissionDrainTimeout = 5 * time.Second
 
-var errNodeDiscoveryAuthorityUnavailable = errors.New("node discovery authority unavailable")
+var (
+	errNodeDiscoveryAuthorityUnavailable = errors.New("node discovery authority unavailable")
+	errNodeAdmissionShutdownStateChanged = errors.New("node admission shutdown state changed during resource drain")
+)
 
 type nodeAdmissionRoutes interface {
 	RegisterHTTPHandler(string, http.Handler) error
@@ -49,6 +52,7 @@ type nodeAdmissionHandler interface {
 }
 
 type nodeAdmissionRuntime struct {
+	handlerMu           sync.RWMutex
 	registryMu          sync.RWMutex
 	routes              nodeAdmissionRoutes
 	registry            *nodes.FileRegistry
@@ -67,6 +71,7 @@ type nodeAdmissionRuntime struct {
 	terminalMounted     bool
 	generation          uint64
 	mounted             bool
+	stopped             bool
 }
 
 type nodeDiscoverySource struct {
@@ -98,11 +103,12 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	if cfg == nil || !cfg.Nodes.Enabled {
 		ctx, cancel := context.WithTimeout(context.Background(), nodeAdmissionDrainTimeout)
 		defer cancel()
-		return runtime.Close(ctx)
+		return runtime.deactivate(ctx)
 	}
 
 	registryPath := nodes.RegistryPath(cfg.WorkspacePath())
-	if runtime.handler != nil && (!runtime.mounted || registryPath != runtime.registryPath) {
+	currentHandler := runtime.currentAdmissionHandler()
+	if currentHandler != nil && (!runtime.mounted || registryPath != runtime.registryPath) {
 		ctx, cancel := context.WithTimeout(context.Background(), nodeAdmissionDrainTimeout)
 		closeErr := runtime.Close(ctx)
 		cancel()
@@ -144,8 +150,8 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 		err = runtime.routes.ReplaceHTTPHandler(nodews.Path, handler)
 		if err == nil {
 			err = runtime.routes.ReplaceHTTPHandler(nodeEnrollmentOperatorPath, enrollmentHandler)
-			if err != nil && runtime.handler != nil {
-				rollbackErr := runtime.routes.ReplaceHTTPHandler(nodews.Path, runtime.handler)
+			if err != nil && currentHandler != nil {
+				rollbackErr := runtime.routes.ReplaceHTTPHandler(nodews.Path, currentHandler)
 				err = errors.Join(err, rollbackErr)
 			}
 		}
@@ -165,11 +171,12 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	runtime.registry = registry
 	runtime.sessions = sessions
 	runtime.registryPath = registryPath
-	runtime.handler = handler
+	runtime.setAdmissionHandler(handler)
 	runtime.enrollmentHandler = enrollmentHandler
 	runtime.enrollmentOffers = offers
 	runtime.generation++
 	runtime.mounted = true
+	runtime.stopped = false
 	runtime.registryMu.Unlock()
 	oldOffers.Invalidate()
 	logger.InfoCF("nodes", "Node admission enabled", map[string]any{
@@ -295,7 +302,10 @@ func (runtime *nodeAdmissionRuntime) gatewayTerminalStore(
 	maxRecords int,
 	maxBytes int,
 ) (*nodes.GatewayTerminalStore, error) {
-	runtime.registryMu.Lock()
+	generation := runtime.invocationGeneration()
+	if err := runtime.lockCurrentAdmissionState(generation); err != nil {
+		return nil, err
+	}
 	defer runtime.registryMu.Unlock()
 	if runtime.terminalStore != nil && runtime.terminalStorePath == path {
 		return runtime.terminalStore, nil
@@ -314,27 +324,30 @@ func (runtime *nodeAdmissionRuntime) existingGatewayTerminalStore(
 	maxRecords int,
 	maxBytes int,
 ) (*nodes.GatewayTerminalStore, bool, error) {
-	runtime.registryMu.Lock()
-	defer runtime.registryMu.Unlock()
+	runtime.registryMu.RLock()
 	if runtime.terminalStore != nil && runtime.terminalStorePath == path {
-		if err := runtime.terminalStore.ReconcileShutdown(); err != nil {
+		store := runtime.terminalStore
+		runtime.registryMu.RUnlock()
+		if err := store.ReconcileShutdown(); err != nil {
 			return nil, true, err
 		}
-		return runtime.terminalStore, true, nil
+		return store, true, nil
 	}
+	runtime.registryMu.RUnlock()
 	store, found, err := nodes.OpenExistingGatewayTerminalStore(path, maxRecords, maxBytes)
 	if err != nil || !found {
 		return nil, found, err
 	}
-	runtime.terminalStore = store
-	runtime.terminalStorePath = path
 	return store, true, nil
 }
 
 func (runtime *nodeAdmissionRuntime) gatewayTransferSpool(
 	path string,
 ) (*nodes.GatewayTransferSpool, error) {
-	runtime.registryMu.Lock()
+	generation := runtime.invocationGeneration()
+	if err := runtime.lockCurrentRuntimeState(generation); err != nil {
+		return nil, err
+	}
 	defer runtime.registryMu.Unlock()
 	if runtime.transferSpool != nil && runtime.transferSpoolPath == path {
 		return runtime.transferSpool, nil
@@ -359,7 +372,10 @@ func (runtime *nodeAdmissionRuntime) gatewayTransferSpool(
 func (runtime *nodeAdmissionRuntime) gatewayInvocationStore(
 	path string,
 ) (*nodes.GatewayInvocationStore, error) {
-	runtime.registryMu.Lock()
+	generation := runtime.invocationGeneration()
+	if err := runtime.lockCurrentAdmissionState(generation); err != nil {
+		return nil, err
+	}
 	defer runtime.registryMu.Unlock()
 	if runtime.invocationStore != nil && runtime.invocationStorePath == path {
 		return runtime.invocationStore, nil
@@ -385,13 +401,14 @@ func (runtime *nodeAdmissionRuntime) invocationHandlerSnapshot(
 ) (nodeAdmissionHandler, error) {
 	runtime.registryMu.RLock()
 	defer runtime.registryMu.RUnlock()
+	handler := runtime.currentAdmissionHandler()
 	if !runtime.mounted ||
-		runtime.handler == nil ||
+		handler == nil ||
 		runtime.registryPath != expectedRegistryPath ||
 		runtime.generation != expectedGeneration {
 		return nil, errNodeDiscoveryAuthorityUnavailable
 	}
-	return runtime.handler, nil
+	return handler, nil
 }
 
 func (runtime *nodeAdmissionRuntime) terminalHandlerSnapshot(
@@ -489,46 +506,63 @@ func (runtime *nodeAdmissionRuntime) withInvocationHandler(
 ) error {
 	runtime.registryMu.RLock()
 	defer runtime.registryMu.RUnlock()
+	handler := runtime.currentAdmissionHandler()
 	if !runtime.mounted ||
-		runtime.handler == nil ||
+		handler == nil ||
 		runtime.registryPath != expectedRegistryPath ||
 		runtime.generation != expectedGeneration {
 		return errNodeDiscoveryAuthorityUnavailable
 	}
-	return fn(runtime.handler)
+	return fn(handler)
 }
 
 func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
-	runtime.registryMu.Lock()
+	return runtime.close(ctx, true)
+}
+
+func (runtime *nodeAdmissionRuntime) deactivate(ctx context.Context) error {
+	return runtime.close(ctx, false)
+}
+
+func (runtime *nodeAdmissionRuntime) close(ctx context.Context, stopRuntime bool) error {
+	// A generation lease and a queued state writer can wait on each other while
+	// the leased operation owns node-session work. Session closure therefore has
+	// its own pointer synchronization and runs before any registry state lock.
+	handler := runtime.currentAdmissionHandler()
+	var closeErr error
+	if handler != nil {
+		closeErr = handler.Close(ctx)
+	}
+
+	if err := waitForNodeAdmissionStateLock(ctx, runtime.registryMu.TryLock); err != nil {
+		return errors.Join(closeErr, fmt.Errorf("finalize node admission shutdown: %w", err))
+	}
 	wasMounted := runtime.mounted
-	handler := runtime.handler
 	offers := runtime.enrollmentOffers
 	terminalStore := runtime.terminalStore
 	transferSpool := runtime.transferSpool
 	invocationStore := runtime.invocationStore
 	runtime.mounted = false
+	if stopRuntime {
+		runtime.stopped = true
+	}
 	runtime.generation++
+	shutdownGeneration := runtime.generation
+	terminalMounted := runtime.terminalMounted
+	terminalHub := runtime.terminalHub
+	runtime.terminalMounted = false
+	runtime.terminalHub = nil
 	runtime.registryMu.Unlock()
 	if wasMounted {
 		runtime.routes.UnregisterHTTPHandler(nodews.Path)
 		runtime.routes.UnregisterHTTPHandler(nodeEnrollmentOperatorPath)
 	}
 	offers.Invalidate()
-	runtime.registryMu.Lock()
-	terminalMounted := runtime.terminalMounted
-	terminalHub := runtime.terminalHub
-	runtime.terminalMounted = false
-	runtime.terminalHub = nil
-	runtime.registryMu.Unlock()
 	if terminalMounted {
 		runtime.routes.UnregisterHTTPHandler(nodeTerminalOperatorPath)
 	}
 	if terminalHub != nil {
 		terminalHub.shutdown()
-	}
-	var closeErr error
-	if handler != nil {
-		closeErr = handler.Close(ctx)
 	}
 	var invocationErr error
 	if invocationStore != nil {
@@ -536,8 +570,14 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 			invocationErr = fmt.Errorf("close gateway invocation store: %w", err)
 		}
 	}
+	var transferErr error
+	if stopRuntime && transferSpool != nil {
+		if err := transferSpool.Close(); err != nil {
+			transferErr = fmt.Errorf("close gateway transfer spool: %w", err)
+		}
+	}
 	if errors.Is(closeErr, nodews.ErrSessionDrainIncomplete) {
-		return errors.Join(closeErr, invocationErr)
+		return errors.Join(closeErr, invocationErr, transferErr)
 	}
 	var terminalErr error
 	if terminalStore != nil {
@@ -545,28 +585,86 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 			terminalErr = fmt.Errorf("reconcile gateway terminals after node drain: %w", err)
 		}
 	}
-	var transferErr error
-	if transferSpool != nil {
-		if err := transferSpool.Close(); err != nil {
-			transferErr = fmt.Errorf("close gateway transfer spool: %w", err)
-		}
-	}
 	if closeErr != nil || terminalErr != nil || transferErr != nil || invocationErr != nil {
 		return errors.Join(closeErr, terminalErr, transferErr, invocationErr)
 	}
-	runtime.registryMu.Lock()
+	if err := waitForNodeAdmissionStateLock(ctx, runtime.registryMu.TryLock); err != nil {
+		return fmt.Errorf("release node admission shutdown state: %w", err)
+	}
+	if runtime.mounted || runtime.generation != shutdownGeneration ||
+		runtime.terminalMounted || runtime.terminalHub != nil || stopRuntime && !runtime.stopped {
+		runtime.registryMu.Unlock()
+		return errNodeAdmissionShutdownStateChanged
+	}
 	runtime.registry = nil
 	runtime.sessions = nil
 	runtime.terminalStore = nil
 	runtime.terminalStorePath = ""
-	runtime.transferSpool = nil
-	runtime.transferSpoolPath = ""
+	if stopRuntime {
+		runtime.transferSpool = nil
+		runtime.transferSpoolPath = ""
+	}
 	runtime.invocationStore = nil
 	runtime.invocationStorePath = ""
 	runtime.registryPath = ""
-	runtime.handler = nil
+	runtime.setAdmissionHandler(nil)
 	runtime.enrollmentHandler = nil
 	runtime.enrollmentOffers = nil
 	runtime.registryMu.Unlock()
+	return nil
+}
+
+func (runtime *nodeAdmissionRuntime) currentAdmissionHandler() nodeAdmissionHandler {
+	runtime.handlerMu.RLock()
+	defer runtime.handlerMu.RUnlock()
+	return runtime.handler
+}
+
+func (runtime *nodeAdmissionRuntime) setAdmissionHandler(handler nodeAdmissionHandler) {
+	runtime.handlerMu.Lock()
+	runtime.handler = handler
+	runtime.handlerMu.Unlock()
+}
+
+// lockCurrentAdmissionState turns the mounted generation into a commit
+// barrier for lazily opened runtime resources. A caller that observed an older
+// generation, or that queued behind shutdown, cannot publish into the closed
+// state. The registry lock remains held on success.
+func (runtime *nodeAdmissionRuntime) lockCurrentAdmissionState(expectedGeneration uint64) error {
+	if err := runtime.lockCurrentRuntimeState(expectedGeneration); err != nil {
+		return err
+	}
+	if !runtime.mounted {
+		runtime.registryMu.Unlock()
+		return errNodeDiscoveryAuthorityUnavailable
+	}
+	return nil
+}
+
+// lockCurrentRuntimeState guards resources shared with gateway-local features
+// that remain available while node admission is disabled. The registry lock
+// remains held on success.
+func (runtime *nodeAdmissionRuntime) lockCurrentRuntimeState(expectedGeneration uint64) error {
+	runtime.registryMu.Lock()
+	if runtime.stopped || runtime.generation != expectedGeneration {
+		runtime.registryMu.Unlock()
+		return errNodeDiscoveryAuthorityUnavailable
+	}
+	return nil
+}
+
+func waitForNodeAdmissionStateLock(ctx context.Context, tryLock func() bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for !tryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 	return nil
 }
