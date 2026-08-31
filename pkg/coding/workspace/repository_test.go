@@ -52,6 +52,46 @@ func TestRepositoryDiffCurrentReturnsStructuredTrackedAndUntrackedChanges(t *tes
 	}
 }
 
+func TestRepositoryDiffPreservesCachedDeletionAndSamePathUntrackedFile(t *testing.T) {
+	root := initGitRepository(t)
+	runGitTest(t, root, "rm", "--cached", "tracked.txt")
+
+	result := NewRepository(root, root, Limits{}).Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent})
+	deleted := requireDiffFileStatus(t, result, "tracked.txt", "D")
+	untracked := requireDiffFileStatus(t, result, "tracked.txt", "??")
+	if deleted.Deletions != 1 || untracked.Additions != 1 ||
+		!hasDiffLine(untracked, "addition", 1, "initial") {
+		t.Fatalf("same-path tracked/untracked evidence = %#v", result)
+	}
+}
+
+func TestRepositoryDiffUnbornMatchesCurrentWorktree(t *testing.T) {
+	root := t.TempDir()
+	runGitTest(t, root, "init", "-b", "main")
+	runGitTest(t, root, "config", "user.name", "Fixture")
+	runGitTest(t, root, "config", "user.email", "fixture@example.com")
+	if err := os.WriteFile(filepath.Join(root, "edited.txt"), []byte("staged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "deleted.txt"), []byte("deleted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "add", "edited.txt", "deleted.txt")
+	if err := os.WriteFile(filepath.Join(root, "edited.txt"), []byte("edited\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	result := NewRepository(root, root, Limits{}).Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent})
+	file := requireDiffFileStatus(t, result, "edited.txt", "A")
+	if result.UnavailableReason != "" || len(result.Files) != 1 || file.Additions != 1 || file.Deletions != 0 ||
+		!hasDiffLine(file, "addition", 1, "edited") {
+		t.Fatalf("Diff(unborn current worktree) = %#v", result)
+	}
+}
+
 func TestRepositoryDiffSupportsLocalBaseAndCommitTargets(t *testing.T) {
 	root := initGitRepository(t)
 	base := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))
@@ -396,6 +436,17 @@ func requireDiffFile(t *testing.T, result DiffResult, path string) DiffFile {
 		}
 	}
 	t.Fatalf("diff file %q not found in %#v", path, result)
+	return DiffFile{}
+}
+
+func requireDiffFileStatus(t *testing.T, result DiffResult, path, status string) DiffFile {
+	t.Helper()
+	for _, file := range result.Files {
+		if file.Path == path && file.Status == status {
+			return file
+		}
+	}
+	t.Fatalf("diff file %q with status %q not found in %#v", path, status, result)
 	return DiffFile{}
 }
 

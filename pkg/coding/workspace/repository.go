@@ -394,6 +394,9 @@ func (repository *Repository) diffPaths(
 	spec diffSpec,
 	filters []string,
 ) ([]ChangedPath, bool, string) {
+	if spec.kind == DiffTargetCurrent && spec.unborn {
+		return repository.unbornWorktreePaths(ctx, snapshot, filters)
+	}
 	args := []string{
 		"diff", "--name-status", "-z", "--find-renames", "--no-ext-diff", "--no-textconv",
 		"--ignore-submodules=dirty",
@@ -413,25 +416,6 @@ func (repository *Repository) diffPaths(
 	paths := parseNameStatus(output.stdout)
 	truncated := output.truncated
 	warning := ""
-	if spec.kind == DiffTargetCurrent && spec.unborn {
-		stagedArgs := []string{
-			"diff", "--cached", "--name-status", "-z", "--find-renames", "--no-ext-diff", "--no-textconv",
-			"--ignore-submodules=dirty",
-		}
-		staged, stagedErr := runGitWithConfig(
-			ctx,
-			snapshot.ProjectRoot,
-			repository.limits.CommandBytes,
-			filters,
-			stagedArgs...,
-		)
-		truncated = truncated || staged.truncated
-		if stagedErr != nil {
-			warning = boundedWarning("could not enumerate staged paths on unborn branch", stagedErr, staged.stderr)
-		} else {
-			paths = append(paths, parseNameStatus(staged.stdout)...)
-		}
-	}
 	if spec.kind == DiffTargetCurrent || spec.kind == DiffTargetBase {
 		untracked, untrackedErr := runGitWithConfig(
 			ctx,
@@ -457,11 +441,45 @@ func (repository *Repository) diffPaths(
 	return uniqueChangedPaths(paths), truncated, warning
 }
 
+func (repository *Repository) unbornWorktreePaths(
+	ctx context.Context,
+	snapshot Snapshot,
+	filters []string,
+) ([]ChangedPath, bool, string) {
+	status, err := runGitWithConfig(
+		ctx,
+		snapshot.ProjectRoot,
+		repository.limits.CommandBytes,
+		filters,
+		"status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=dirty",
+	)
+	if err != nil {
+		return nil, status.truncated, boundedWarning(
+			"could not enumerate current paths on unborn branch",
+			err,
+			status.stderr,
+		)
+	}
+	paths := parseStatus(status.stdout)
+	current := make([]ChangedPath, 0, len(paths))
+	for _, path := range paths {
+		if path.Status == "??" {
+			current = append(current, path)
+			continue
+		}
+		if len(path.Status) >= 2 && path.Status[1] == 'D' {
+			continue
+		}
+		current = append(current, ChangedPath{Path: path.Path, Status: "A"})
+	}
+	return uniqueChangedPaths(current), status.truncated, ""
+}
+
 func uniqueChangedPaths(paths []ChangedPath) []ChangedPath {
 	seen := make(map[string]struct{}, len(paths))
 	result := make([]ChangedPath, 0, len(paths))
 	for _, path := range paths {
-		key := path.OriginalPath + "\x00" + path.Path
+		key := path.Status + "\x00" + path.OriginalPath + "\x00" + path.Path
 		if _, exists := seen[key]; exists {
 			continue
 		}
