@@ -17,7 +17,7 @@ import (
 const (
 	repositoryDirectory        = "repository"
 	repositoryBaselineFileName = "baseline.json"
-	MaxRepositoryBaselineBytes = 256 << 10
+	MaxRepositoryBaselineBytes = workspace.RepositoryBaselineMaxBytes
 )
 
 var ErrRepositoryBaselineExists = errors.New("coding thread repository baseline already exists")

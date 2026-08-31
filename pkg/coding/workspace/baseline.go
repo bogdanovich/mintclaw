@@ -14,7 +14,10 @@ import (
 	"unicode/utf8"
 )
 
-const RepositoryBaselineSchemaV1 = "mintclaw.repository_baseline.v1"
+const (
+	RepositoryBaselineSchemaV1 = "mintclaw.repository_baseline.v1"
+	RepositoryBaselineMaxBytes = 256 << 10
+)
 
 type BaselineOrigin string
 
@@ -116,6 +119,15 @@ func (repository *Repository) CaptureBaseline(
 		baseline.UnavailableReason = "Git status is unavailable"
 	}
 	for _, changed := range snapshot.ChangedPaths {
+		if !baselinePathRepresentable(changed) {
+			baseline.PathsComplete = false
+			baseline.Truncated = true
+			baseline.Warning = joinWarning(
+				baseline.Warning,
+				"some changed paths could not be represented in baseline evidence",
+			)
+			continue
+		}
 		baseline.Paths = append(baseline.Paths, captureBaselinePath(snapshot.Git.TopLevel, changed, repository.limits))
 	}
 	var indexFilters []string
@@ -181,6 +193,7 @@ func (repository *Repository) CaptureBaseline(
 		baseline.Truncated = true
 		baseline.Warning = joinWarning(baseline.Warning, "repository baseline capture: "+err.Error())
 	}
+	boundBaselinePaths(&baseline)
 	baseline.BaselineID = baselineDigest(baseline)
 	return baseline, baseline.Validate()
 }
@@ -242,6 +255,31 @@ func captureBaselinePath(root string, changed ChangedPath, limits Limits) Baseli
 	return path
 }
 
+func baselinePathRepresentable(changed ChangedPath) bool {
+	if changed.Path == "" || len(changed.Path) > 4096 || !utf8.ValidString(changed.Path) ||
+		!filepath.IsLocal(changed.Path) || strings.ContainsRune(changed.Path, 0) {
+		return false
+	}
+	if changed.OriginalPath != "" &&
+		(len(changed.OriginalPath) > 4096 || !utf8.ValidString(changed.OriginalPath) ||
+			!filepath.IsLocal(changed.OriginalPath) || strings.ContainsRune(changed.OriginalPath, 0)) {
+		return false
+	}
+	return changed.Status != "" && len(changed.Status) <= 16 && !strings.ContainsAny(changed.Status, "\x00\r\n")
+}
+
+func boundBaselinePaths(baseline *RepositoryBaseline) {
+	if baseline == nil || baselineEncodedSize(*baseline) <= RepositoryBaselineMaxBytes {
+		return
+	}
+	baseline.PathsComplete = false
+	baseline.Truncated = true
+	baseline.Warning = joinWarning(baseline.Warning, "changed-path baseline evidence exceeded its byte limit")
+	for len(baseline.Paths) > 0 && baselineEncodedSize(*baseline) > RepositoryBaselineMaxBytes {
+		baseline.Paths = baseline.Paths[:len(baseline.Paths)-1]
+	}
+}
+
 func validateBaselineRequest(request BaselineRequest) error {
 	if strings.TrimSpace(request.ProjectKey) == "" || request.ProjectKey != strings.TrimSpace(request.ProjectKey) ||
 		len(request.ProjectKey) > 256 || !utf8.ValidString(request.ProjectKey) {
@@ -274,6 +312,9 @@ func (baseline RepositoryBaseline) Validate() error {
 	}
 	if len(baseline.BaselineID) != 64 || baseline.BaselineID != baselineDigest(baseline) {
 		return fmt.Errorf("repository baseline: baseline ID does not match evidence")
+	}
+	if baselineEncodedSize(baseline) > RepositoryBaselineMaxBytes {
+		return fmt.Errorf("repository baseline: encoded evidence exceeds %d bytes", RepositoryBaselineMaxBytes)
 	}
 	if baseline.RepositoryAvailable {
 		if !filepath.IsAbs(baseline.TopLevel) || !filepath.IsAbs(baseline.CommonDir) ||
@@ -341,6 +382,14 @@ func baselineDigest(baseline RepositoryBaseline) string {
 	data, _ := json.Marshal(baseline)
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
+}
+
+func baselineEncodedSize(baseline RepositoryBaseline) int {
+	if baseline.BaselineID == "" {
+		baseline.BaselineID = strings.Repeat("0", 64)
+	}
+	data, _ := json.MarshalIndent(baseline, "", "  ")
+	return len(data) + 1
 }
 
 func isHexDigest(value string) bool {

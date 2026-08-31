@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,6 +36,43 @@ func TestRepositoryBaselineCapturesBoundedFingerprintsWithoutContents(t *testing
 	}
 	if bytes.Contains(encoded, []byte("changed secret")) {
 		t.Fatalf("baseline persisted file content: %s", encoded)
+	}
+}
+
+func TestRepositoryBaselineOmitsUnrepresentableGitPaths(t *testing.T) {
+	root := initGitRepository(t)
+	path := filepath.Join(root, string([]byte{'b', 'a', 'd', 0xff}))
+	if err := os.WriteFile(path, []byte("content\n"), 0o600); err != nil {
+		t.Skipf("filesystem does not support non-UTF-8 paths: %v", err)
+	}
+	baseline, err := NewRepository(root, root, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
+		ProjectKey: "project-key", Origin: BaselineOriginNew, CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline.PathsComplete || !baseline.Truncated || len(baseline.Paths) != 0 || baseline.BaselineID == "" {
+		t.Fatalf("baseline = %#v", baseline)
+	}
+}
+
+func TestRepositoryBaselineBoundsAggregateEncodedPaths(t *testing.T) {
+	baseline := testBaseline(t, BaselineOriginNew, "/repo", "head")
+	baseline.Paths = nil
+	for index := range 128 {
+		baseline.Paths = append(baseline.Paths, BaselinePath{
+			Path: fmt.Sprintf("%03d-%s", index, strings.Repeat("p", 4000)), Status: "??",
+			Fingerprint: sha256Hex(fmt.Sprintf("path-%d", index)), EvidenceComplete: true,
+		})
+	}
+	boundBaselinePaths(&baseline)
+	baseline.BaselineID = baselineDigest(baseline)
+	if err := baseline.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if baseline.PathsComplete || !baseline.Truncated || len(baseline.Paths) >= 128 ||
+		baselineEncodedSize(baseline) > RepositoryBaselineMaxBytes {
+		t.Fatalf("bounded baseline paths=%d size=%d: %#v", len(baseline.Paths), baselineEncodedSize(baseline), baseline)
 	}
 }
 
