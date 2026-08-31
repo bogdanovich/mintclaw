@@ -238,6 +238,67 @@ func TestAlternatingStreamWritersKeepOneVersionPerOwner(t *testing.T) {
 	}
 }
 
+func TestFinalizePromotesReasoningShadowedByActiveStream(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	delegate := NewStreamDelegate(projector, "thread-1")
+	traceScope := runtimeevents.NewTraceScope("/repo", "turn-1")
+	first, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
+	if !ok {
+		t.Fatal("first stream was rejected")
+	}
+	second, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
+	if !ok {
+		t.Fatal("second stream was rejected")
+	}
+	firstReasoning := first.(bus.ReasoningStreamer)
+	secondReasoning := second.(bus.ReasoningStreamer)
+	if err := firstReasoning.UpdateReasoning(t.Context(), "R1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := secondReasoning.UpdateReasoning(t.Context(), "R2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Finalize(t.Context(), "A1"); err != nil {
+		t.Fatal(err)
+	}
+	second.Cancel(t.Context())
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Kind != EntryReasoning ||
+		snapshot.Entries[0].Text != "R1" || snapshot.Entries[1].Kind != EntryAssistant ||
+		snapshot.Entries[1].Text != "A1" || !snapshot.Entries[1].Complete {
+		t.Fatalf("finalized shadowed reasoning = %+v", snapshot)
+	}
+}
+
+func TestFinalizeCannotPromoteEntrySupersededByCommittedWriter(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("stream was rejected")
+	}
+	if err := streamer.Update(t.Context(), "provisional"); err != nil {
+		t.Fatal(err)
+	}
+	projector.AssistantAccumulated("turn-1", "committed", true)
+	if err := streamer.Finalize(t.Context(), "committed"); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "committed" ||
+		!snapshot.Entries[0].Complete {
+		t.Fatalf("finalize replaced newer committed writer = %+v", snapshot)
+	}
+}
+
 func TestOverlappingStreamCancellationRestoresCommittedBoundedWindow(t *testing.T) {
 	for _, order := range []string{"first_then_second", "second_then_first"} {
 		t.Run(order, func(t *testing.T) {

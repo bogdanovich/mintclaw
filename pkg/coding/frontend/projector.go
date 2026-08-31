@@ -235,9 +235,8 @@ func (p *Projector) commitStreamLocked(owner uint64) {
 	}
 	committed := make([]PresentationItem, 0, len(p.entryVersions))
 	for _, head := range p.entryVersions {
-		if survivor := latestSurvivingEntryVersion(head); survivor != nil && survivor.owner == owner &&
-			survivor.present {
-			committed = append(committed, clonePresentationItem(survivor.item))
+		if version := finalizedEntryVersion(head, owner); version != nil && version.present {
+			committed = append(committed, clonePresentationItem(version.item))
 		}
 	}
 	delete(p.activeStreamOwners, owner)
@@ -251,6 +250,24 @@ func (p *Projector) commitStreamLocked(owner uint64) {
 	p.recordRollbackCommittedMessages(committed, "")
 	p.rebuildStreamMessageProjection(&p.state, "")
 	p.compactEntryVersionsIfIdle()
+}
+
+// finalizedEntryVersion returns the newest live version owned by the stream
+// unless a newer committed version already superseded it. A provisional owner
+// may shadow the version in the current view but cannot prevent its commit.
+func finalizedEntryVersion(head *entryVersion, owner uint64) *entryVersion {
+	for version := head; version != nil; version = version.previous {
+		if version.canceled {
+			continue
+		}
+		if version.owner == owner {
+			return version
+		}
+		if version.owner == 0 {
+			return nil
+		}
+	}
+	return nil
 }
 
 func (p *Projector) compactEntryVersionsIfIdle() {
