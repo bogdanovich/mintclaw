@@ -1,0 +1,84 @@
+[
+  {
+    "name": "command_activity",
+    "width": 120,
+    "theme": "dark",
+    "color_level": "truecolor",
+    "compact_golden": "• assistant_commentary completed\n\n• command_group completed\n\n• background_terminal active\n\n• turn_separator completed\n\n• final_answer completed",
+    "events": [
+      {"id": "commentary-1", "kind": "assistant_commentary", "lifecycle": "completed"},
+      {"id": "commands-1", "kind": "command_group", "lifecycle": "completed"},
+      {"id": "background-1", "kind": "background_terminal", "lifecycle": "active"},
+      {"id": "separator-1", "kind": "turn_separator", "lifecycle": "completed"},
+      {"id": "final-1", "kind": "final_answer", "lifecycle": "completed"}
+    ]
+  },
+  {
+    "name": "status_card",
+    "width": 80,
+    "theme": "dark",
+    "color_level": "ansi256",
+    "compact_golden": "• status_card completed",
+    "events": [
+      {"id": "status-1", "kind": "status_card", "lifecycle": "completed"}
+    ]
+  },
+  {
+    "name": "working_and_failure",
+    "width": 80,
+    "theme": "dark",
+    "color_level": "truecolor",
+    "compact_golden": "• assistant_commentary completed\n\n• command_group failed\n\n• working_status active",
+    "events": [
+      {"id": "commentary-1", "kind": "assistant_commentary", "lifecycle": "completed"},
+      {"id": "command-1", "kind": "command_group", "lifecycle": "failed"},
+      {"id": "working-1", "kind": "working_status", "lifecycle": "active"}
+    ]
+  },
+  {
+    "name": "elapsed_working",
+    "width": 40,
+    "theme": "light",
+    "color_level": "ansi16",
+    "compact_golden": "• working_status active",
+    "events": [
+      {"id": "working-1", "kind": "working_status", "lifecycle": "active"}
+    ]
+  },
+  {
+    "name": "commentary_compaction_and_diff",
+    "width": 120,
+    "theme": "light",
+    "color_level": "truecolor",
+    "compact_golden": "• assistant_commentary completed\n\n• exploration_group completed\n\n• compaction_marker completed\n\n• command_group completed\n\n• file_change completed",
+    "events": [
+      {"id": "commentary-1", "kind": "assistant_commentary", "lifecycle": "completed"},
+      {"id": "exploration-1", "kind": "exploration_group", "lifecycle": "completed"},
+      {"id": "compaction-1", "kind": "compaction_marker", "lifecycle": "completed"},
+      {"id": "commands-1", "kind": "command_group", "lifecycle": "completed"},
+      {"id": "files-1", "kind": "file_change", "lifecycle": "completed"}
+    ]
+  },
+  {
+    "name": "plan_pending",
+    "width": 80,
+    "theme": "dark",
+    "color_level": "ansi256",
+    "compact_golden": "• plan_update completed",
+    "events": [
+      {"id": "plan-1", "kind": "plan_update", "lifecycle": "completed"}
+    ]
+  },
+  {
+    "name": "plan_progress",
+    "width": 40,
+    "theme": "light",
+    "color_level": "none",
+    "compact_golden": "• plan_update completed\n\n• command_group completed\n\n• plan_update completed",
+    "events": [
+      {"id": "plan-1", "kind": "plan_update", "lifecycle": "completed"},
+      {"id": "commands-1", "kind": "command_group", "lifecycle": "completed"},
+      {"id": "plan-2", "kind": "plan_update", "lifecycle": "completed"}
+    ]
+  }
+]
