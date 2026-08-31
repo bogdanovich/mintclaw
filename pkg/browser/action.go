@@ -1359,7 +1359,12 @@ func requestedClickEffect(declared Effect, role string) Effect {
 }
 
 func tracksBrowserProgress(prepared PreparedAction) bool {
-	return prepared.Effect == EffectNavigation || preparedRequiresApproval(prepared)
+	switch prepared.Effect {
+	case EffectNavigation, EffectExternalCommit, EffectUnknown:
+		return true
+	default:
+		return preparedRequiresApproval(prepared)
+	}
 }
 
 func preparedRequiresApproval(prepared PreparedAction) bool {

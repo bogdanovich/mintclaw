@@ -455,6 +455,68 @@ func TestBrokerBlocksThirdEquivalentApprovedActionOnUnchangedPage(t *testing.T) 
 	}
 }
 
+func TestBrokerBlocksThirdEquivalentAutonomousCommitOnUnchangedPage(t *testing.T) {
+	for _, approvalMode := range []string{
+		config.BrowserApprovalNone,
+		config.BrowserApprovalModelRequested,
+	} {
+		t.Run(approvalMode, func(t *testing.T) {
+			store := NewMemoryStore()
+			root := admittedBrowserConfig()
+			target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+			profile := target.Profiles[config.BrowserDefaultProfile]
+			profile.DryRun = false
+			profile.AllowApprovedActions = true
+			profile.CapabilityMode = config.BrowserCapabilityFullAccess
+			profile.ApprovalMode = approvalMode
+			target.Profiles[config.BrowserDefaultProfile] = profile
+			root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+			owner := testOwner()
+			button := DriverElement{Target: "save", Role: "button", Name: "Save"}
+			worker.observation = driverObservationFixture(button)
+			worker.resolveElement = button
+			worker.resolveOrigin = worker.observation.Origin
+
+			for attempt := 1; attempt <= 2; attempt++ {
+				observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+					Owner: owner, RequestID: fmt.Sprintf("request_autonomous_commit_%d", attempt),
+					SessionID: session.ID, TabID: session.TabID,
+					SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+					Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+					DeclaredEffect: EffectExternalCommit,
+				})
+				if err != nil || prepared.RequiresApproval {
+					t.Fatalf("PrepareAction(attempt %d) = %+v, %v", attempt, prepared, err)
+				}
+				invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
+				if err != nil || invocation.State != InvocationSucceeded {
+					t.Fatalf("ExecuteAction(attempt %d) = %+v, %v", attempt, invocation, err)
+				}
+			}
+
+			observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+				Owner: owner, RequestID: "request_autonomous_commit_3",
+				SessionID: session.ID, TabID: session.TabID,
+				SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+				Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+				DeclaredEffect: EffectExternalCommit,
+			})
+			if !errors.Is(err, ErrNoProgress) || len(worker.actions) != 2 {
+				t.Fatalf("third autonomous commit preparation error = %v; actions = %+v", err, worker.actions)
+			}
+		})
+	}
+}
+
 func TestBrokerHonorsDeclaredClickNavigationWithoutApproval(t *testing.T) {
 	broker, worker, session := openActionTestBroker(t, NewMemoryStore())
 	owner := testOwner()
