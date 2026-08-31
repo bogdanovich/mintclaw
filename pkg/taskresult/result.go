@@ -42,9 +42,42 @@ type Outcome struct {
 }
 
 type Item struct {
-	Item     string    `json:"item"`
-	Kind     string    `json:"kind,omitempty"`
-	Receipts []Receipt `json:"receipts,omitempty"`
+	Item     string           `json:"item"`
+	Kind     string           `json:"kind,omitempty"`
+	Receipts []Receipt        `json:"receipts,omitempty"`
+	Output   *ObjectiveOutput `json:"output,omitempty"`
+}
+
+// ObjectiveAcceptance describes the machine-checkable shape a caller expects
+// from a read-only result objective. An omitted acceptance accepts any
+// non-empty standalone output.
+type ObjectiveAcceptance struct {
+	OutputKind     string   `json:"output_kind,omitempty"`
+	RequiredFields []string `json:"required_fields,omitempty"`
+	MinItems       int      `json:"min_items,omitempty"`
+}
+
+// CloneObjectiveAcceptance returns a detached copy safe for runtime handoff.
+func CloneObjectiveAcceptance(input *ObjectiveAcceptance) *ObjectiveAcceptance {
+	if input == nil {
+		return nil
+	}
+	return &ObjectiveAcceptance{
+		OutputKind:     input.OutputKind,
+		RequiredFields: append([]string(nil), input.RequiredFields...),
+		MinItems:       input.MinItems,
+	}
+}
+
+// ObjectiveOutput is the standalone payload produced for one result
+// objective. Records intentionally use string fields so the runtime can render
+// and transport them without depending on task-specific schemas.
+type ObjectiveOutput struct {
+	Kind         string              `json:"kind"`
+	Text         string              `json:"text,omitempty"`
+	Records      []map[string]string `json:"records,omitempty"`
+	ArtifactRefs []string            `json:"artifact_refs,omitempty"`
+	Truncated    bool                `json:"truncated,omitempty"`
 }
 
 // Receipt is durable, non-sensitive evidence that an external action reached
@@ -112,12 +145,33 @@ func CloneOutcome(input *Outcome) *Outcome {
 		Explanation:  input.Explanation,
 	}
 	for _, item := range input.CompletedItems {
-		cloned := Item{Item: item.Item, Kind: item.Kind}
+		cloned := Item{Item: item.Item, Kind: item.Kind, Output: CloneObjectiveOutput(item.Output)}
 		for _, receipt := range item.Receipts {
 			receipt.Metadata = cloneStringMap(receipt.Metadata)
 			cloned.Receipts = append(cloned.Receipts, receipt)
 		}
 		out.CompletedItems = append(out.CompletedItems, cloned)
+	}
+	return out
+}
+
+// CloneObjectiveOutput returns a detached copy safe for storage or concurrent use.
+func CloneObjectiveOutput(input *ObjectiveOutput) *ObjectiveOutput {
+	if input == nil {
+		return nil
+	}
+	out := &ObjectiveOutput{
+		Kind:         input.Kind,
+		Text:         input.Text,
+		ArtifactRefs: append([]string(nil), input.ArtifactRefs...),
+		Truncated:    input.Truncated,
+	}
+	for _, record := range input.Records {
+		cloned := make(map[string]string, len(record))
+		for key, value := range record {
+			cloned[key] = value
+		}
+		out.Records = append(out.Records, cloned)
 	}
 	return out
 }

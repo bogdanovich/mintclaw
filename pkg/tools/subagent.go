@@ -143,6 +143,21 @@ func objectiveItemsParameter() map[string]any {
 			"properties": map[string]any{
 				"item": map[string]any{"type": "string"},
 				"kind": map[string]any{"type": "string", "enum": []string{"result", "external_action"}},
+				"acceptance": map[string]any{
+					"type":                 "object",
+					"description":          "Optional machine-checkable shape for a result objective. Use records with required_fields for requested lists or tables, text for prose, and artifact for stable output references.",
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"output_kind": map[string]any{
+							"type": "string", "enum": []string{"text", "records", "artifact"},
+						},
+						"required_fields": map[string]any{
+							"type": "array", "items": map[string]any{"type": "string"},
+						},
+						"min_items": map[string]any{"type": "integer"},
+					},
+					"required": []string{"output_kind"},
+				},
 			},
 			"required": []string{"item", "kind"},
 		},
@@ -172,9 +187,81 @@ func parseObjectiveItems(raw any) ([]toolshared.ObjectiveSpec, error) {
 		if item == "" || (kind != "result" && kind != "external_action") {
 			return nil, fmt.Errorf("objective_items[%d] requires item and kind result|external_action", index)
 		}
-		items = append(items, toolshared.ObjectiveSpec{Item: item, Kind: kind})
+		acceptance, err := parseObjectiveAcceptance(entry["acceptance"], kind)
+		if err != nil {
+			return nil, fmt.Errorf("objective_items[%d] acceptance: %w", index, err)
+		}
+		items = append(items, toolshared.ObjectiveSpec{Item: item, Kind: kind, Acceptance: acceptance})
 	}
 	return items, nil
+}
+
+func parseObjectiveAcceptance(raw any, objectiveKind string) (*taskresult.ObjectiveAcceptance, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	if objectiveKind != "result" {
+		return nil, errors.New("is only valid for result objectives")
+	}
+	value, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("must be an object")
+	}
+	for key := range value {
+		switch key {
+		case "output_kind", "required_fields", "min_items":
+		default:
+			return nil, fmt.Errorf("contains unknown field %q", key)
+		}
+	}
+	outputKind, _ := value["output_kind"].(string)
+	outputKind = strings.TrimSpace(outputKind)
+	if outputKind != "text" && outputKind != "records" && outputKind != "artifact" {
+		return nil, errors.New("requires output_kind text|records|artifact")
+	}
+	acceptance := &taskresult.ObjectiveAcceptance{OutputKind: outputKind}
+	if rawMin, found := value["min_items"]; found {
+		minItems, ok := numericInt(rawMin)
+		if !ok || minItems < 0 || minItems > 1024 {
+			return nil, errors.New("min_items must be an integer between 0 and 1024")
+		}
+		acceptance.MinItems = minItems
+	}
+	if rawFields, found := value["required_fields"]; found {
+		fields, ok := rawFields.([]any)
+		if !ok || len(fields) > 32 {
+			return nil, errors.New("required_fields must be an array of at most 32 strings")
+		}
+		seen := make(map[string]struct{}, len(fields))
+		for _, rawField := range fields {
+			field, ok := rawField.(string)
+			field = strings.TrimSpace(field)
+			if !ok || field == "" || len([]rune(field)) > 64 {
+				return nil, errors.New("required_fields must contain non-empty strings up to 64 characters")
+			}
+			if _, duplicate := seen[field]; duplicate {
+				continue
+			}
+			seen[field] = struct{}{}
+			acceptance.RequiredFields = append(acceptance.RequiredFields, field)
+		}
+	}
+	if (len(acceptance.RequiredFields) > 0 || acceptance.MinItems > 0) && outputKind != "records" {
+		return nil, errors.New("required_fields and min_items require output_kind records")
+	}
+	return acceptance, nil
+}
+
+func numericInt(raw any) (int, bool) {
+	switch value := raw.(type) {
+	case int:
+		return value, true
+	case float64:
+		converted := int(value)
+		return converted, value == float64(converted)
+	default:
+		return 0, false
+	}
 }
 
 func (sm *SubagentManager) runTask(

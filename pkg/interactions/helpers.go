@@ -70,8 +70,15 @@ func normalizeOrigin(origin Origin) Origin {
 		origin.ObjectiveChecklist[index].ID = strings.TrimSpace(origin.ObjectiveChecklist[index].ID)
 		origin.ObjectiveChecklist[index].Item = strings.TrimSpace(origin.ObjectiveChecklist[index].Item)
 		origin.ObjectiveChecklist[index].Kind = strings.TrimSpace(origin.ObjectiveChecklist[index].Kind)
+		origin.ObjectiveChecklist[index].Acceptance = cloneObjectiveAcceptance(
+			origin.ObjectiveChecklist[index].Acceptance,
+		)
 	}
 	return origin
+}
+
+func cloneObjectiveAcceptance(input *taskresult.ObjectiveAcceptance) *taskresult.ObjectiveAcceptance {
+	return taskresult.CloneObjectiveAcceptance(input)
 }
 
 func routesEqual(left, right Route) bool {
@@ -87,6 +94,11 @@ func routesEqual(left, right Route) bool {
 
 func cloneRecord(rec Record) Record {
 	rec.Origin.ObjectiveChecklist = append([]ObjectiveChecklistItem(nil), rec.Origin.ObjectiveChecklist...)
+	for index := range rec.Origin.ObjectiveChecklist {
+		rec.Origin.ObjectiveChecklist[index].Acceptance = cloneObjectiveAcceptance(
+			rec.Origin.ObjectiveChecklist[index].Acceptance,
+		)
+	}
 	rec.Origin.ExecutionContext = cloneExecutionContext(rec.Origin.ExecutionContext)
 	rec.Questions = cloneQuestions(rec.Questions)
 	rec.FinalDeliveryIDs = append([]string(nil), rec.FinalDeliveryIDs...)

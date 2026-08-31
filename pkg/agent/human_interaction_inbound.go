@@ -1791,7 +1791,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 		record.Origin.ToolCallID,
 	); ok {
 		cleanContent, objectiveOutcome := extractResumedObjectiveOutcome(
-			finalContent, interactionOutcomeAudits(resuming), resuming, agent,
+			finalContent, interactionOutcomeAudits(resuming), resuming,
 		)
 		al.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
 		_, finalizeErr := al.finalizeResumedInteraction(
@@ -1857,7 +1857,7 @@ func (al *AgentLoop) resumeClaimedInteractionOwned(
 	audits := interactionOutcomeAudits(resuming)
 	audits = appendTurnWriteAudit(audits, "", resumedTurn.writeAudit)
 	finalContent, objectiveOutcome := extractResumedObjectiveOutcome(
-		finalContent, audits, resuming, agent,
+		finalContent, audits, resuming,
 	)
 	al.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
 	var traceScopes []runtimeevents.TraceScope
@@ -1977,10 +1977,8 @@ func extractResumedObjectiveOutcome(
 	content string,
 	audits []toolshared.WriteAuditEntry,
 	record interactions.Record,
-	agent *AgentInstance,
 ) (string, *taskresult.Outcome) {
-	required := strings.TrimSpace(record.Origin.TaskID) != "" && agent != nil &&
-		agent.Tools != nil && agent.Tools.HasRegistered("browser_act")
+	required := strings.TrimSpace(record.Origin.TaskID) != "" && len(record.Origin.ObjectiveChecklist) > 0
 	return extractObjectiveOutcome(
 		content, audits, required, runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
 	)

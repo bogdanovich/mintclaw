@@ -392,6 +392,10 @@ func (p *Pipeline) invokeLLMWithRetry(
 			if len(protectedTurnTail) == 0 {
 				protectedTurnTail = assembledTurnTail
 			}
+			localTailIndex := min(exec.objectiveRepairTailIndex, len(protectedTurnTail))
+			fullProtectedTail := append([]providers.Message(nil), protectedTurnTail[:localTailIndex]...)
+			fullProtectedTail = append(fullProtectedTail, exec.objectiveRepairMessages...)
+			fullProtectedTail = append(fullProtectedTail, protectedTurnTail[localTailIndex:]...)
 			exec.history = append(
 				append([]providers.Message(nil), stableHistory...),
 				protectedTurnTail...,
@@ -399,7 +403,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			buildMessages := func(trimmedHistory []providers.Message) []providers.Message {
 				fullHistory := append(
 					append([]providers.Message(nil), trimmedHistory...),
-					protectedTurnTail...)
+					fullProtectedTail...)
 				rebuilt := p.buildTurnMessagesWithProtectedTurnBoundary(
 					ts,
 					fullHistory,
@@ -407,9 +411,9 @@ func (p *Pipeline) invokeLLMWithRetry(
 					"",
 					nil,
 					contextualSkills,
-					len(protectedTurnTail),
+					len(fullProtectedTail),
 				)
-				activeTailCount := matchingTurnMessageTail(rebuilt, protectedTurnTail)
+				activeTailCount := matchingTurnMessageTail(rebuilt, fullProtectedTail)
 				return resolveMediaRefs(
 					rebuilt,
 					p.Context.MediaResolver,
@@ -645,19 +649,21 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			false,
 			false,
 		)
-		if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(
-			steerMsgs,
-		) > 0 {
-			exec.markSteeringObserved()
-			cancelConfiguredStreamingLLM(turnCtx, llm)
-			logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
-				map[string]any{
-					"agent_id":       ts.agent.ID,
-					"iteration":      iteration,
-					"steering_count": len(steerMsgs),
-				})
-			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
-			return LLMCallOutcome{Control: ControlContinue}, nil
+		if !exec.objectiveRepairActive {
+			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(
+				steerMsgs,
+			) > 0 {
+				exec.markSteeringObserved()
+				cancelConfiguredStreamingLLM(turnCtx, llm)
+				logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
+					map[string]any{
+						"agent_id":       ts.agent.ID,
+						"iteration":      iteration,
+						"steering_count": len(steerMsgs),
+					})
+				exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+				return LLMCallOutcome{Control: ControlContinue}, nil
+			}
 		}
 
 		logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
@@ -668,6 +674,18 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			})
 		return LLMCallOutcome{
 			Control: ControlBreak, FinalContent: responseContent,
+			FinalContentProtected: sensitiveDiagnosticResponse,
+		}, nil
+	}
+	if exec.objectiveRepairActive {
+		cancelConfiguredStreamingLLM(turnCtx, llm)
+		logger.WarnCF("agent", "Ignored tool calls during objective finalization repair", map[string]any{
+			"agent_id":   ts.agent.ID,
+			"iteration":  iteration,
+			"tool_calls": len(llm.response.ToolCalls),
+		})
+		return LLMCallOutcome{
+			Control: ControlBreak, FinalContent: llm.response.Content,
 			FinalContentProtected: sensitiveDiagnosticResponse,
 		}, nil
 	}

@@ -463,7 +463,8 @@ type outcomeBrowserApprovalTool struct {
 func TestBrowserChildUserOnlyUsesVerifiedPartialContent(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
 		Content: "Both items were published.\n" + objectiveOutcomeStart +
-			`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+			`{"status":"partial","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+			`"output":{"kind":"text","text":"Yakima published."}}],` +
 			`"missing_items":["objective_2"],"explanation":"the second item was not published"}` +
 			objectiveOutcomeEnd,
 		FinishReason: "stop",
@@ -2380,6 +2381,428 @@ type subturnToolCaptureProvider struct {
 	toolDefs []providers.ToolDefinition
 }
 
+type objectiveRepairCaptureProvider struct {
+	mu        sync.Mutex
+	responses []*providers.LLMResponse
+	toolDefs  [][]providers.ToolDefinition
+	messages  [][]providers.Message
+	calls     int
+	onCall    func(int)
+}
+
+func (p *objectiveRepairCaptureProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+	model string,
+	options map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	p.toolDefs = append(p.toolDefs, append([]providers.ToolDefinition(nil), toolDefs...))
+	p.messages = append(p.messages, append([]providers.Message(nil), messages...))
+	if len(p.responses) == 0 {
+		p.mu.Unlock()
+		return nil, errors.New("unexpected objective repair provider call")
+	}
+	response := p.responses[0]
+	p.responses = p.responses[1:]
+	p.calls++
+	call := p.calls
+	onCall := p.onCall
+	p.mu.Unlock()
+	if onCall != nil {
+		onCall(call)
+	}
+	return response, nil
+}
+
+func (p *objectiveRepairCaptureProvider) GetDefaultModel() string {
+	return "objective-repair-capture-model"
+}
+
+func (p *objectiveRepairCaptureProvider) toolDefinitionCounts() []int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	counts := make([]int, len(p.toolDefs))
+	for index := range p.toolDefs {
+		counts[index] = len(p.toolDefs[index])
+	}
+	return counts
+}
+
+func (p *objectiveRepairCaptureProvider) messagesForCall(index int) []providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if index < 0 || index >= len(p.messages) {
+		return nil
+	}
+	return append([]providers.Message(nil), p.messages[index]...)
+}
+
+func TestSpawnSubTurnRepairsIncompleteResultWithoutTools(t *testing.T) {
+	invalid := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"Three active cards are listed above."}` + objectiveOutcomeEnd
+	repaired := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"records","records":[` +
+		`{"title":"Desk","price":"$40","status":"Active"},` +
+		`{"title":"Lamp","price":"$15","status":"Active"},` +
+		`{"title":"Chair","price":"$20","status":"Active"}]}}],` +
+		`"missing_items":[],"result":"Found three active listings."}` + objectiveOutcomeEnd
+	provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{
+		{Content: invalid, FinishReason: "stop"},
+		{Content: repaired, FinishReason: "stop"},
+	}}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	parent := &turnState{
+		ctx: context.Background(), turnID: "parent-objective-repair",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{}, agent: alphaAgent,
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair"}},
+	}
+	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", TaskPrompt: "return the active listings",
+		ObjectiveItems: []toolshared.ObjectiveSpec{{
+			Item: "return each active listing", Kind: "result",
+			Acceptance: &taskresult.ObjectiveAcceptance{
+				OutputKind: "records", RequiredFields: []string{"title", "price", "status"}, MinItems: 3,
+			},
+		}},
+	})
+	if err != nil || result == nil || result.Deliverable == nil ||
+		result.Deliverable.ObjectiveOutcome == nil ||
+		result.Deliverable.ObjectiveOutcome.Status != taskresult.OutcomeSucceeded ||
+		len(result.Deliverable.ObjectiveOutcome.CompletedItems) != 1 ||
+		result.Deliverable.ObjectiveOutcome.CompletedItems[0].Output == nil ||
+		len(result.Deliverable.ObjectiveOutcome.CompletedItems[0].Output.Records) != 3 ||
+		!strings.Contains(result.ForLLM, "title: Desk") || !strings.Contains(result.ForLLM, "price: $15") {
+		t.Fatalf("repaired subturn result = (%#v, %v)", result, err)
+	}
+	if counts := provider.toolDefinitionCounts(); len(counts) != 2 || counts[0] == 0 || counts[1] != 0 {
+		t.Fatalf("provider tool counts = %v, want initial tools then model-only repair", counts)
+	}
+}
+
+func TestSpawnSubTurnFailsClosedAfterOneIncompleteRepair(t *testing.T) {
+	invalid := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The requested records are listed above."}` + objectiveOutcomeEnd
+	provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{
+		{Content: invalid, FinishReason: "stop"},
+		{Content: invalid, FinishReason: "stop"},
+	}}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	parent := &turnState{
+		ctx: context.Background(), turnID: "parent-objective-repair-fail-closed",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{}, agent: alphaAgent,
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-fail-closed"}},
+	}
+	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", TaskPrompt: "return records",
+		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "return records", Kind: "result"}},
+	})
+	if err != nil || result == nil || result.Deliverable == nil ||
+		result.Deliverable.ObjectiveOutcome == nil ||
+		result.Deliverable.ObjectiveOutcome.Status == taskresult.OutcomeSucceeded ||
+		!strings.Contains(result.ForLLM, "standalone objective output was required") {
+		t.Fatalf("incomplete repair did not fail closed = (%#v, %v)", result, err)
+	}
+	if counts := provider.toolDefinitionCounts(); len(counts) != 2 || counts[1] != 0 {
+		t.Fatalf("repair was not bounded and tool-less: %v", counts)
+	}
+}
+
+func TestSpawnSubTurnRepairCannotRepeatBrowserAction(t *testing.T) {
+	invalid := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The requested records are listed above."}` + objectiveOutcomeEnd
+	provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{
+		{Content: invalid, FinishReason: "stop"},
+		{
+			Content: invalid,
+			ToolCalls: []providers.ToolCall{{
+				ID: "repair-repeat", Name: "browser_act", Arguments: map[string]any{"target": "production"},
+			}},
+		},
+	}}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	betaAgent, _ := al.registry.GetAgent("beta")
+	tool := &outcomeBrowserApprovalTool{}
+	betaAgent.Tools.Register(tool)
+	parent := &turnState{
+		ctx: context.Background(), turnID: "parent-objective-repair-no-tools",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{}, agent: alphaAgent,
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-no-tools"}},
+	}
+	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", TaskPrompt: "return records",
+		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "return records", Kind: "result"}},
+	})
+	if err != nil || result == nil || result.Deliverable == nil ||
+		result.Deliverable.ObjectiveOutcome == nil ||
+		result.Deliverable.ObjectiveOutcome.Status == taskresult.OutcomeSucceeded || tool.executions != 0 {
+		t.Fatalf("repair tool call was executed: result=%#v err=%v executions=%d", result, err, tool.executions)
+	}
+	if counts := provider.toolDefinitionCounts(); len(counts) != 2 || counts[1] != 0 {
+		t.Fatalf("repair provider received tools: %v", counts)
+	}
+}
+
+func TestSpawnSubTurnRepairRestoresToolsForLateSteering(t *testing.T) {
+	invalid := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The requested records are listed above."}` + objectiveOutcomeEnd
+	repaired := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Desk — $40"}}],` +
+		`"missing_items":[],"result":"Desk — $40"}` + objectiveOutcomeEnd
+	provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{
+		{Content: invalid, FinishReason: "stop"},
+		{ReasoningContent: repaired, FinishReason: "stop"},
+		{Content: repaired, FinishReason: "stop"},
+	}}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	provider.onCall = func(call int) {
+		if call != 2 {
+			return
+		}
+		al.turns.activeTurnStates.Range(func(key, value any) bool {
+			state, ok := value.(*turnState)
+			scope, scopeOK := key.(runtimeSessionScope)
+			if !ok || !scopeOK || state.agent == nil || state.agent.ID != "beta" {
+				return true
+			}
+			if err := al.steering.pushScopeWithSender(
+				scope,
+				providers.Message{Role: "user", Content: "Also state the price explicitly."},
+				"test-user",
+			); err != nil {
+				t.Errorf("push late steering: %v", err)
+			}
+			return false
+		})
+	}
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	parent := &turnState{
+		ctx: context.Background(), turnID: "parent-objective-repair-steering",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{}, agent: alphaAgent,
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-steering"}},
+	}
+	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", TaskPrompt: "return the listing",
+		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "return listing", Kind: "result"}},
+	})
+	if err != nil || result == nil || !strings.Contains(result.ForLLM, "Desk — $40") {
+		t.Fatalf("late-steering result = (%#v, %v)", result, err)
+	}
+	if counts := provider.toolDefinitionCounts(); len(counts) != 3 || counts[0] == 0 || counts[1] != 0 ||
+		counts[2] == 0 {
+		t.Fatalf("provider tool counts = %v, want tools, model-only repair, restored tools", counts)
+	}
+	if !messageContentPresent(provider.messagesForCall(2), "Desk — $40") {
+		t.Fatalf("late-steering call lost normalized reasoning repair: %#v", provider.messagesForCall(2))
+	}
+}
+
+type repairAbortHook struct {
+	mu         sync.Mutex
+	beforeCall int
+	afterCall  int
+	after      bool
+}
+
+func (h *repairAbortHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.beforeCall++
+	if !h.after && h.beforeCall == 2 {
+		return req, HookDecision{Action: HookActionAbortTurn}, nil
+	}
+	return req, HookDecision{}, nil
+}
+
+func (h *repairAbortHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.afterCall++
+	if h.after && h.afterCall == 2 {
+		return resp, HookDecision{Action: HookActionAbortTurn}, nil
+	}
+	return resp, HookDecision{}, nil
+}
+
+func TestSpawnSubTurnRepairDispatchesAbortBeforeDeferredWork(t *testing.T) {
+	invalid := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The requested records are listed above."}` + objectiveOutcomeEnd
+	repaired := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Desk — $40"}}],` +
+		`"missing_items":[],"result":"Desk — $40"}` + objectiveOutcomeEnd
+	for _, after := range []bool{false, true} {
+		name := "before_llm"
+		expectedProviderCalls := 1
+		if after {
+			name = "after_llm_with_late_steering"
+			expectedProviderCalls = 2
+		}
+		t.Run(name, func(t *testing.T) {
+			provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{
+				{Content: invalid, FinishReason: "stop"},
+				{Content: repaired, FinishReason: "stop"},
+			}}
+			al, cleanup := newMultiAgentLoop(t, provider)
+			defer cleanup()
+			if err := al.MountHook(NamedHook("repair-abort", &repairAbortHook{after: after})); err != nil {
+				t.Fatal(err)
+			}
+			if after {
+				provider.onCall = func(call int) {
+					if call != 2 {
+						return
+					}
+					al.turns.activeTurnStates.Range(func(key, value any) bool {
+						state, ok := value.(*turnState)
+						scope, scopeOK := key.(runtimeSessionScope)
+						if !ok || !scopeOK || state.agent == nil || state.agent.ID != "beta" {
+							return true
+						}
+						if err := al.steering.pushScopeWithSender(
+							scope,
+							providers.Message{Role: "user", Content: "late abort-bound steering"},
+							"test-user",
+						); err != nil {
+							t.Errorf("push late steering: %v", err)
+						}
+						return false
+					})
+				}
+			}
+			alphaAgent, _ := al.registry.GetAgent("alpha")
+			parent := &turnState{
+				ctx: context.Background(), turnID: "parent-objective-repair-abort",
+				pendingResults: make(chan *toolshared.ToolResult, 4),
+				concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+				session:        &ephemeralSessionStore{}, agent: alphaAgent,
+				opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-abort"}},
+			}
+			result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+				TargetAgentID: "beta", TaskPrompt: "return listing",
+				ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "return listing", Kind: "result"}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "hook requested turn abort") || result == nil {
+				t.Fatalf("repair abort result = (%#v, %v)", result, err)
+			}
+			if counts := provider.toolDefinitionCounts(); len(counts) != expectedProviderCalls {
+				t.Fatalf("provider calls after repair abort = %v", counts)
+			}
+		})
+	}
+}
+
+type objectiveRepairOverflowProvider struct {
+	mu            sync.Mutex
+	calls         int
+	invalid       string
+	repaired      string
+	retryMessages []providers.Message
+}
+
+func (p *objectiveRepairOverflowProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	switch p.calls {
+	case 1:
+		return &providers.LLMResponse{Content: p.invalid, FinishReason: "stop"}, nil
+	case 2:
+		return nil, errors.New("context_window_exceeded")
+	default:
+		p.retryMessages = append([]providers.Message(nil), messages...)
+		return &providers.LLMResponse{Content: p.repaired, FinishReason: "stop"}, nil
+	}
+}
+
+func (*objectiveRepairOverflowProvider) GetDefaultModel() string {
+	return "objective-repair-overflow-model"
+}
+
+func TestSpawnSubTurnRepairSurvivesContextOverflowCompaction(t *testing.T) {
+	invalid := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"COMPACTION_INVALID_CANDIDATE"}` + objectiveOutcomeEnd
+	repaired := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"COMPLETE_STANDALONE_OUTPUT"}}],` +
+		`"missing_items":[],"result":"COMPLETE_STANDALONE_OUTPUT"}` + objectiveOutcomeEnd
+	provider := &objectiveRepairOverflowProvider{invalid: invalid, repaired: repaired}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	alphaAgent, _ := al.registry.GetAgent("alpha")
+	const taskID = "objective-repair-overflow"
+	if err := al.taskRegistryForWorkspace(alphaAgent.Workspace).Upsert(taskregistry.Record{
+		TaskID: taskID, Runtime: taskregistry.RuntimeSubagent, TaskKind: "spawn",
+		Task: "return standalone text", Status: taskregistry.StatusRunning,
+		DeliveryStatus: taskregistry.DeliveryPending,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	parent := &turnState{
+		ctx: context.Background(), turnID: "parent-objective-repair-overflow",
+		pendingResults: make(chan *toolshared.ToolResult, 4),
+		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{}, agent: alphaAgent,
+		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-overflow"}},
+	}
+	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+		TargetAgentID: "beta", TaskPrompt: "return standalone text", TaskID: taskID,
+		ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "return standalone text", Kind: "result"}},
+	})
+	if err != nil || result == nil || !strings.Contains(result.ForLLM, "COMPLETE_STANDALONE_OUTPUT") {
+		t.Fatalf("overflow repair result = (%#v, %v)", result, err)
+	}
+	provider.mu.Lock()
+	retryMessages := append([]providers.Message(nil), provider.retryMessages...)
+	provider.mu.Unlock()
+	if !messageContentPresent(retryMessages, "COMPACTION_INVALID_CANDIDATE") ||
+		!messageContentPresent(retryMessages, "standalone objective output") {
+		t.Fatalf("context retry lost local repair exchange: %#v", retryMessages)
+	}
+	taskIndex := messageContentIndex(retryMessages, "return standalone text")
+	invalidIndex := messageContentIndex(retryMessages, "COMPACTION_INVALID_CANDIDATE")
+	instructionIndex := messageContentIndex(retryMessages, "standalone objective output")
+	if taskIndex < 0 || invalidIndex <= taskIndex || instructionIndex <= invalidIndex {
+		t.Fatalf("context retry reordered local repair exchange: %#v", retryMessages)
+	}
+}
+
 func (p *subturnToolCaptureProvider) Chat(
 	ctx context.Context,
 	messages []providers.Message,
@@ -2390,7 +2813,17 @@ func (p *subturnToolCaptureProvider) Chat(
 	p.mu.Lock()
 	p.toolDefs = append([]providers.ToolDefinition(nil), toolDefs...)
 	p.mu.Unlock()
-	return &providers.LLMResponse{Content: "child done"}, nil
+	content := "child done"
+	for _, message := range messages {
+		if strings.Contains(message.Content, "Runtime outcome contract (required)") {
+			content = objectiveOutcomeStart +
+				`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+				`"receipt_ids":[],"output":{"kind":"text","text":"child done"}}],` +
+				`"missing_items":[],"result":"child done"}` + objectiveOutcomeEnd
+			break
+		}
+	}
+	return &providers.LLMResponse{Content: content}, nil
 }
 
 func (p *subturnToolCaptureProvider) GetDefaultModel() string {
@@ -2532,7 +2965,8 @@ func TestSpawnSubTurnBrowserRemovesDirectDeliveryToolsForUserOnly(t *testing.T) 
 
 func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testing.T) {
 	const outcome = "inspected\n" + objectiveOutcomeStart +
-		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"inspected"}}],` +
 		`"missing_items":[],"result":"inspected"}` + objectiveOutcomeEnd
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{Content: outcome, FinishReason: "stop"},

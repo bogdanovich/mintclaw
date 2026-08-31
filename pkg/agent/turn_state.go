@@ -165,12 +165,17 @@ type turnExecution struct {
 	summary         string
 
 	// Turn output
-	deliverable            *taskresult.Deliverable
-	actionLog              []TurnActionRecord
-	writeAudit             []toolshared.WriteAuditEntry
-	finalRenderToolCalls   map[string]finalRenderToolCallState
-	sawSteering            bool
-	sawAdditionalUserInput bool
+	deliverable              *taskresult.Deliverable
+	actionLog                []TurnActionRecord
+	writeAudit               []toolshared.WriteAuditEntry
+	finalRenderToolCalls     map[string]finalRenderToolCallState
+	sawSteering              bool
+	sawAdditionalUserInput   bool
+	objectiveRepairAttempted bool
+	objectiveRepairPending   bool
+	objectiveRepairActive    bool
+	objectiveRepairMessages  []providers.Message
+	objectiveRepairTailIndex int
 
 	loopGuard *loopguard.Controller
 

@@ -3632,6 +3632,27 @@ func TestApprovalPromptIncludesOnlyUnambiguousExternalObjective(t *testing.T) {
 	}
 }
 
+func TestExtractResumedObjectiveOutcomeEnforcesPersistedAcceptance(t *testing.T) {
+	record := interactions.Record{Origin: interactions.Origin{
+		TaskID: "delegate-resume",
+		ObjectiveChecklist: []interactions.ObjectiveChecklistItem{{
+			ID: "objective_1", Item: "return listings", Kind: "result",
+			Acceptance: &taskresult.ObjectiveAcceptance{
+				OutputKind: "records", RequiredFields: []string{"title", "price"}, MinItems: 1,
+			},
+		}},
+	}}
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"records","records":[{"title":"Desk"}]}}],` +
+		`"missing_items":[],"result":"Found one listing."}` + objectiveOutcomeEnd
+	_, outcome := extractResumedObjectiveOutcome(content, nil, record)
+	if outcome == nil || outcome.Status == taskresult.OutcomeSucceeded ||
+		!strings.Contains(strings.Join(outcome.MissingItems, "\n"), "required field") {
+		t.Fatalf("resumed outcome ignored persisted acceptance: %#v", outcome)
+	}
+}
+
 func TestApprovalAnswerOutcomeIsChannelIndependent(t *testing.T) {
 	for _, channel := range []string{"telegram", "slack"} {
 		for _, test := range []struct {

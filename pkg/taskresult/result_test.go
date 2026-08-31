@@ -82,6 +82,10 @@ func TestCloneDeliverableDetachesNestedState(t *testing.T) {
 		},
 		ObjectiveOutcome: &Outcome{CompletedItems: []Item{{
 			Receipts: []Receipt{{Metadata: map[string]string{"effect": "external_commit"}}},
+			Output: &ObjectiveOutput{
+				Kind: "records", Records: []map[string]string{{"title": "Desk"}},
+				ArtifactRefs: []string{"file:/tmp/report.json"},
+			},
 		}}},
 	}
 	cloned := CloneDeliverable(original)
@@ -90,11 +94,15 @@ func TestCloneDeliverableDetachesNestedState(t *testing.T) {
 	cloned.Report.Claims[0].SourceRefs[0] = "mutated"
 	cloned.Report.Claims[0].Metadata["key"] = "mutated"
 	cloned.ObjectiveOutcome.CompletedItems[0].Receipts[0].Metadata["effect"] = "mutated"
+	cloned.ObjectiveOutcome.CompletedItems[0].Output.Records[0]["title"] = "mutated"
+	cloned.ObjectiveOutcome.CompletedItems[0].Output.ArtifactRefs[0] = "mutated"
 
 	if original.Metadata["producer"] != "browser" ||
 		original.Report.Claims[0].SourceRefs[0] != "source" ||
 		original.Report.Claims[0].Metadata["key"] != "value" ||
-		original.ObjectiveOutcome.CompletedItems[0].Receipts[0].Metadata["effect"] != "external_commit" {
+		original.ObjectiveOutcome.CompletedItems[0].Receipts[0].Metadata["effect"] != "external_commit" ||
+		original.ObjectiveOutcome.CompletedItems[0].Output.Records[0]["title"] != "Desk" ||
+		original.ObjectiveOutcome.CompletedItems[0].Output.ArtifactRefs[0] != "file:/tmp/report.json" {
 		t.Fatalf("clone aliased original state: %#v", original)
 	}
 }

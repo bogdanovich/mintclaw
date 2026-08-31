@@ -59,6 +59,47 @@ func newTestDelegateTool(t *testing.T, config DelegateToolConfig) *DelegateTool 
 	return tool
 }
 
+func TestParseObjectiveItemsCarriesStructuredAcceptance(t *testing.T) {
+	items, err := parseObjectiveItems([]any{map[string]any{
+		"item": "return listings", "kind": "result",
+		"acceptance": map[string]any{
+			"output_kind": "records", "required_fields": []any{"title", "price", "status"},
+			"min_items": float64(3),
+		},
+	}})
+	if err != nil || len(items) != 1 || items[0].Acceptance == nil ||
+		items[0].Acceptance.OutputKind != "records" || items[0].Acceptance.MinItems != 3 ||
+		len(items[0].Acceptance.RequiredFields) != 3 {
+		t.Fatalf("parseObjectiveItems() = (%#v, %v)", items, err)
+	}
+}
+
+func TestParseObjectiveItemsRejectsInvalidAcceptance(t *testing.T) {
+	tests := []map[string]any{
+		{
+			"item": "publish", "kind": "external_action",
+			"acceptance": map[string]any{"output_kind": "text"},
+		},
+		{
+			"item": "report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "text", "required_fields": []any{"title"}},
+		},
+		{
+			"item": "report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "records", "min_items": float64(1.5)},
+		},
+		{
+			"item": "report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "records", "min_item": float64(3)},
+		},
+	}
+	for _, objective := range tests {
+		if items, err := parseObjectiveItems([]any{objective}); err == nil {
+			t.Fatalf("invalid acceptance was parsed: %#v", items)
+		}
+	}
+}
+
 func TestDelegateTool_Name(t *testing.T) {
 	tool := newTestDelegateTool(t, DelegateToolConfig{})
 	if tool.Name() != "delegate" {
@@ -73,6 +114,13 @@ func TestDelegateTool_Parameters(t *testing.T) {
 	props, ok := params["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("properties should be a map")
+	}
+	objectiveItems := props["objective_items"].(map[string]any)
+	itemSchema := objectiveItems["items"].(map[string]any)
+	itemProperties := itemSchema["properties"].(map[string]any)
+	acceptance := itemProperties["acceptance"].(map[string]any)
+	if additional, ok := acceptance["additionalProperties"].(bool); !ok || additional {
+		t.Fatalf("acceptance additionalProperties = %#v, want false", acceptance["additionalProperties"])
 	}
 	_, hasAgentID := props["agent_id"]
 	if !hasAgentID {
