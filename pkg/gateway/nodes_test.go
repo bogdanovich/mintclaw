@@ -710,7 +710,7 @@ func TestNodeAdmissionRuntimeOwnsOneInvocationStoreAndClosesIt(t *testing.T) {
 	}
 }
 
-func TestNodeAdmissionRuntimeClosesInvocationStoreWhenSessionDrainIsIncomplete(t *testing.T) {
+func TestNodeAdmissionRuntimeClosesStoresWhenSessionDrainIsIncomplete(t *testing.T) {
 	runtime := newMountedTestNodeAdmissionRuntime()
 	runtime.handler = &closeErrorNodeAdmissionHandler{
 		fakeNodeAdmissionHandler: &fakeNodeAdmissionHandler{},
@@ -718,6 +718,11 @@ func TestNodeAdmissionRuntimeClosesInvocationStoreWhenSessionDrainIsIncomplete(t
 	}
 	path := nodes.GatewayInvocationStorePath(t.TempDir())
 	store, err := runtime.gatewayInvocationStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spoolPath := nodes.GatewayTransferSpoolPath(t.TempDir())
+	spool, err := runtime.gatewayTransferSpool(spoolPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,6 +734,12 @@ func TestNodeAdmissionRuntimeClosesInvocationStoreWhenSessionDrainIsIncomplete(t
 	}
 	if _, _, err = store.Lookup(nodes.GatewayInvocationPrincipal{}, "inv_closed"); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("drain-timeout invocation store lookup error = %v", err)
+	}
+	if runtime.transferSpool != spool || runtime.transferSpoolPath != spoolPath {
+		t.Fatal("incomplete drain discarded transfer spool retry authority")
+	}
+	if _, err = spool.Cleanup(); !errors.Is(err, nodes.ErrTransferSpoolClosed) {
+		t.Fatalf("drain-timeout transfer spool cleanup error = %v, want closed", err)
 	}
 }
 

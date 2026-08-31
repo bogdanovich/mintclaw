@@ -570,19 +570,19 @@ func (runtime *nodeAdmissionRuntime) close(ctx context.Context, stopRuntime bool
 			invocationErr = fmt.Errorf("close gateway invocation store: %w", err)
 		}
 	}
+	var transferErr error
+	if stopRuntime && transferSpool != nil {
+		if err := transferSpool.Close(); err != nil {
+			transferErr = fmt.Errorf("close gateway transfer spool: %w", err)
+		}
+	}
 	if errors.Is(closeErr, nodews.ErrSessionDrainIncomplete) {
-		return errors.Join(closeErr, invocationErr)
+		return errors.Join(closeErr, invocationErr, transferErr)
 	}
 	var terminalErr error
 	if terminalStore != nil {
 		if err := terminalStore.ReconcileShutdown(); err != nil {
 			terminalErr = fmt.Errorf("reconcile gateway terminals after node drain: %w", err)
-		}
-	}
-	var transferErr error
-	if stopRuntime && transferSpool != nil {
-		if err := transferSpool.Close(); err != nil {
-			transferErr = fmt.Errorf("close gateway transfer spool: %w", err)
 		}
 	}
 	if closeErr != nil || terminalErr != nil || transferErr != nil || invocationErr != nil {
