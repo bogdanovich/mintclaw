@@ -276,6 +276,24 @@ func TestRepositoryDiffRejectsCommitWithUnavailableShallowParent(t *testing.T) {
 	}
 }
 
+func TestRepositoryDiffAcceptsCommitWithLargeMessageAfterCompleteHeader(t *testing.T) {
+	root := initGitRepository(t)
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "commit", "-am", strings.Repeat("message", 1024))
+	commit := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))
+
+	result := NewRepository(root, root, Limits{CommandBytes: 512}).Diff(
+		t.Context(),
+		DiffTarget{Kind: DiffTargetCommit, Ref: commit},
+	)
+	file := requireDiffFile(t, result, "tracked.txt")
+	if result.UnavailableReason != "" || !hasDiffLine(file, "addition", 1, "changed") {
+		t.Fatalf("Diff(large commit message) = %#v", result)
+	}
+}
+
 func TestParsePatchFileMarksSubmoduleMetadata(t *testing.T) {
 	budget := diffBudget{bytes: 4096, hunks: 4, lines: 20}
 	file := parsePatchFile(DiffFile{Path: "nested"}, []byte(

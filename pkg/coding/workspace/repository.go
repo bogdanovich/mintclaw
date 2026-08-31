@@ -322,14 +322,15 @@ func (repository *Repository) commitParents(
 	if err != nil {
 		return nil, boundedWarning("could not inspect raw commit header", err, raw.stderr)
 	}
-	if raw.truncated {
+	headerEnd := bytes.Index(raw.stdout, []byte("\n\n"))
+	if headerEnd < 0 && raw.truncated {
 		return nil, "raw commit header exceeded the command byte limit"
 	}
+	if headerEnd < 0 {
+		return nil, "raw commit object has no header terminator"
+	}
 	var parents []string
-	for _, line := range strings.Split(string(raw.stdout), "\n") {
-		if line == "" {
-			break
-		}
+	for _, line := range strings.Split(string(raw.stdout[:headerEnd]), "\n") {
 		if parent, found := strings.CutPrefix(line, "parent "); found {
 			parent = strings.TrimSpace(parent)
 			if parent == "" || strings.ContainsAny(parent, "\x00\r\n ") {
