@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -251,6 +252,27 @@ func TestRepositoryDiffRejectsAmbiguousMergeCommit(t *testing.T) {
 	)
 	if !strings.Contains(result.UnavailableReason, "merge commit diff is ambiguous") || len(result.Files) != 0 {
 		t.Fatalf("Diff(merge commit) = %#v", result)
+	}
+}
+
+func TestRepositoryDiffRejectsCommitWithUnavailableShallowParent(t *testing.T) {
+	source := initGitRepository(t)
+	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("initial\nsecond\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, source, "commit", "-am", "second")
+	shallow := filepath.Join(t.TempDir(), "shallow")
+	remoteURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(source)}).String()
+	runGitTest(t, t.TempDir(), "clone", "--depth=1", remoteURL, shallow)
+	commit := strings.TrimSpace(runGitTestOutput(t, shallow, "rev-parse", "HEAD"))
+
+	result := NewRepository(shallow, shallow, Limits{}).Diff(
+		t.Context(),
+		DiffTarget{Kind: DiffTargetCommit, Ref: commit},
+	)
+	if !strings.Contains(result.UnavailableReason, "commit parent is not available locally") ||
+		len(result.Files) != 0 {
+		t.Fatalf("Diff(shallow commit) = %#v", result)
 	}
 }
 

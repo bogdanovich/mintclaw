@@ -280,24 +280,65 @@ func (repository *Repository) resolveDiffSpec(
 		if reason != "" {
 			return spec, reason
 		}
-		parents, parentErr := runGitWithConfig(
-			ctx,
-			snapshot.ProjectRoot,
-			repository.limits.CommandBytes,
-			filters,
-			"rev-list", "--parents", "-n", "1", resolved,
-		)
-		if parentErr != nil {
-			return spec, boundedWarning("could not inspect commit parents", parentErr, parents.stderr)
+		parents, parentReason := repository.commitParents(ctx, snapshot.ProjectRoot, resolved, filters)
+		if parentReason != "" {
+			return spec, parentReason
 		}
-		if len(strings.Fields(string(parents.stdout))) > 2 {
+		if len(parents) > 1 {
 			return spec, "merge commit diff is ambiguous; select a local base or one parent explicitly"
+		}
+		if len(parents) == 1 {
+			_, parentErr := runGitWithConfig(
+				ctx,
+				snapshot.ProjectRoot,
+				repository.limits.CommandBytes,
+				filters,
+				"cat-file", "-e", parents[0]+"^{commit}",
+			)
+			if parentErr != nil {
+				return spec, "commit parent is not available locally at a shallow or partial-clone boundary"
+			}
 		}
 		spec.resolvedRevision = resolved
 		return spec, ""
 	default:
 		return spec, fmt.Sprintf("unsupported diff target %q", target.Kind)
 	}
+}
+
+func (repository *Repository) commitParents(
+	ctx context.Context,
+	root string,
+	commit string,
+	filters []string,
+) ([]string, string) {
+	raw, err := runGitWithConfig(
+		ctx,
+		root,
+		repository.limits.CommandBytes,
+		filters,
+		"cat-file", "commit", commit,
+	)
+	if err != nil {
+		return nil, boundedWarning("could not inspect raw commit header", err, raw.stderr)
+	}
+	if raw.truncated {
+		return nil, "raw commit header exceeded the command byte limit"
+	}
+	var parents []string
+	for _, line := range strings.Split(string(raw.stdout), "\n") {
+		if line == "" {
+			break
+		}
+		if parent, found := strings.CutPrefix(line, "parent "); found {
+			parent = strings.TrimSpace(parent)
+			if parent == "" || strings.ContainsAny(parent, "\x00\r\n ") {
+				return nil, "raw commit header contains an invalid parent"
+			}
+			parents = append(parents, parent)
+		}
+	}
+	return parents, ""
 }
 
 func (repository *Repository) resolveCommit(
