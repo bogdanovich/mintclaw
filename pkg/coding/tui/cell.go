@@ -147,8 +147,10 @@ func legacyTranscriptRevision(entry transcriptViewEntry) uint64 {
 	_, _ = hash.Write([]byte(entry.label))
 	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write([]byte(entry.text))
+	truncationState := byte(0)
 	if entry.truncated {
-		_, _ = hash.Write([]byte{1})
+		truncationState = 1
 	}
+	_, _ = hash.Write([]byte{truncationState})
 	return hash.Sum64()
 }

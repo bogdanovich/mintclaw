@@ -137,6 +137,15 @@ func TestLegacyTranscriptCellIdentityRevisionAndModes(t *testing.T) {
 	if updated.Identity().Revision == identity.Revision {
 		t.Fatal("changed legacy content did not advance its structural revision")
 	}
+	controlSuffix := newLegacyTranscriptCell(transcriptViewEntry{
+		id: entry.id, label: entry.label, text: "hello\x01",
+	})
+	truncatedWithoutSuffix := newLegacyTranscriptCell(transcriptViewEntry{
+		id: entry.id, label: entry.label, text: "hello", truncated: true,
+	})
+	if controlSuffix.Identity().Revision == truncatedWithoutSuffix.Identity().Revision {
+		t.Fatal("truncation state collided with a trailing control byte")
+	}
 	for _, mode := range []cellRenderMode{cellRenderCompact, cellRenderFull, cellRenderPlain} {
 		document := cell.Render(cellRenderContext{Width: 20}, mode)
 		if !document.Truncated || document.plainText() != "MintClaw\n  hello\n  […truncated]" {
