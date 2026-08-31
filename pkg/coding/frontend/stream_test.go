@@ -51,6 +51,10 @@ func TestStreamCoalescesFinalStateAndKeepsUnicodeValid(t *testing.T) {
 		!snapshot.Entries[0].Complete || !utf8.ValidString(snapshot.Entries[0].Text) {
 		t.Fatalf("coalesced stream snapshot = %+v", snapshot)
 	}
+	if len(snapshot.Items) != 1 || snapshot.Items[0].Revision != 3 ||
+		snapshot.Items[0].Lifecycle != PresentationCompleted || snapshot.Items[0].Message == nil {
+		t.Fatalf("coalesced presentation item = %+v", snapshot.Items)
+	}
 }
 
 func TestSlowStreamSubscriberConvergesToLatestView(t *testing.T) {

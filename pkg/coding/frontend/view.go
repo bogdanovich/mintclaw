@@ -65,6 +65,33 @@ type TranscriptEntry struct {
 	Truncated bool      `json:"truncated,omitempty"`
 }
 
+// PresentationKind identifies the semantic renderer selected for one ordered
+// frontend item. It deliberately describes content rather than terminal
+// styling.
+type PresentationKind string
+
+const (
+	PresentationUserMessage      PresentationKind = "user_message"
+	PresentationAssistantMessage PresentationKind = "assistant_message"
+	PresentationReasoning        PresentationKind = "reasoning"
+	PresentationToolMessage      PresentationKind = "tool_message"
+	PresentationToolCall         PresentationKind = "tool_call"
+	PresentationWarning          PresentationKind = "warning"
+	PresentationError            PresentationKind = "error"
+)
+
+// PresentationLifecycle is the renderer-neutral lifecycle of one item.
+type PresentationLifecycle string
+
+const (
+	PresentationActive      PresentationLifecycle = "active"
+	PresentationCompleted   PresentationLifecycle = "completed"
+	PresentationFailed      PresentationLifecycle = "failed"
+	PresentationInterrupted PresentationLifecycle = "interrupted"
+	PresentationSuspended   PresentationLifecycle = "suspended"
+	PresentationUnknown     PresentationLifecycle = "unknown"
+)
+
 // ThreadMetadata is the bounded display metadata needed by a frontend. It
 // deliberately excludes catalog and storage implementation details.
 type ThreadMetadata struct {
@@ -136,6 +163,24 @@ type CommandState struct {
 	TimedOut   bool          `json:"timed_out,omitempty"`
 }
 
+// PresentationItem is the authoritative ordered unit consumed by coding
+// frontends. Exactly one typed payload is present. Sequence and ID are stable;
+// Revision advances only when renderer-visible state changes.
+type PresentationItem struct {
+	ID          string                `json:"id"`
+	TurnID      string                `json:"turn_id"`
+	Sequence    uint64                `json:"sequence"`
+	Revision    uint64                `json:"revision"`
+	Kind        PresentationKind      `json:"kind"`
+	Lifecycle   PresentationLifecycle `json:"lifecycle"`
+	CreatedAt   time.Time             `json:"created_at"`
+	StartedAt   time.Time             `json:"started_at"`
+	CompletedAt *time.Time            `json:"completed_at,omitempty"`
+	Duration    time.Duration         `json:"duration,omitempty"`
+	Message     *TranscriptEntry      `json:"message,omitempty"`
+	Tool        *ToolState            `json:"tool,omitempty"`
+}
+
 // ChangedFile is derived only from a successful file-kind WriteAudit.
 type ChangedFile struct {
 	Path   string `json:"path"`
@@ -184,10 +229,13 @@ type CompactionState struct {
 // It is not the canonical coding transcript and may omit old entries and large
 // output.
 type ThreadSnapshot struct {
-	ThreadID        string                    `json:"thread_id"`
-	Metadata        ThreadMetadata            `json:"metadata,omitempty"`
-	Activity        Activity                  `json:"activity"`
-	LastTurn        *LastTurnOutcome          `json:"last_turn,omitempty"`
+	ThreadID string             `json:"thread_id"`
+	Metadata ThreadMetadata     `json:"metadata,omitempty"`
+	Activity Activity           `json:"activity"`
+	LastTurn *LastTurnOutcome   `json:"last_turn,omitempty"`
+	Items    []PresentationItem `json:"items,omitempty"`
+	// Entries and Tools are compatibility projections derived from Items while
+	// the existing TUI migrates to semantic cells.
 	Entries         []TranscriptEntry         `json:"entries,omitempty"`
 	Tools           []ToolState               `json:"tools,omitempty"`
 	ChangedFiles    []ChangedFile             `json:"changed_files,omitempty"`

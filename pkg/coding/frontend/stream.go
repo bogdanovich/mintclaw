@@ -114,7 +114,7 @@ func (s *projectedStream) project(ctx context.Context, update func() streamOwned
 	if s.owned == nil {
 		s.owned = make(streamOwnedEntries)
 	}
-	s.owned[owned.entry.ID] = owned
+	s.owned[owned.item.ID] = owned
 	return nil
 }
 
