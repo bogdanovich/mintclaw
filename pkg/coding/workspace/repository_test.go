@@ -127,6 +127,52 @@ func TestRepositoryDiffUnbornExcludesAbsentSparseCheckoutPathsBeforeBudget(t *te
 	}
 }
 
+func TestRepositoryDiffUnbornExcludesPathBlockedBySparseCheckoutSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation commonly requires additional Windows privileges")
+	}
+	root := t.TempDir()
+	runGitTest(t, root, "init", "-b", "main")
+	runGitTest(t, root, "config", "user.name", "Fixture")
+	runGitTest(t, root, "config", "user.email", "fixture@example.com")
+	for _, name := range []string{"included/keep.txt", "excluded/hidden.txt"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGitTest(t, root, "add", "included", "excluded")
+	runGitTest(t, root, "update-index", "--skip-worktree", "excluded/hidden.txt")
+	if err := os.RemoveAll(filepath.Join(root, "excluded")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "excluded")); err != nil {
+		t.Fatal(err)
+	}
+
+	status := runGitTestOutput(t, root, "status", "--porcelain=v1", "--untracked-files=all")
+	if !strings.Contains(status, "A  excluded/hidden.txt") || !strings.Contains(status, "?? excluded") {
+		t.Fatalf("fixture did not retain sparse index child behind an untracked symlink:\n%s", status)
+	}
+	result := NewRepository(root, root, Limits{DiffFiles: 2}).Diff(
+		t.Context(),
+		DiffTarget{Kind: DiffTargetCurrent},
+	)
+	symlink := requireDiffFileStatus(t, result, "excluded", "??")
+	included := requireDiffFile(t, result, "included/keep.txt")
+	if result.UnavailableReason != "" || len(result.Files) != 2 || !symlink.Symlink ||
+		included.Additions != 1 {
+		t.Fatalf("Diff(unborn sparse symlink worktree) = %#v", result)
+	}
+	for _, file := range result.Files {
+		if file.Path == "excluded/hidden.txt" {
+			t.Fatalf("blocked sparse child consumed evidence budget: %#v", result)
+		}
+	}
+}
+
 func TestRepositoryDiffSupportsLocalBaseAndCommitTargets(t *testing.T) {
 	root := initGitRepository(t)
 	base := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))

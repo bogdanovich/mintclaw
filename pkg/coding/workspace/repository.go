@@ -642,10 +642,13 @@ func readPassiveRegularFile(root, relative string, limit int) ([]byte, os.FileIn
 		return nil, inspection.info, false, inspection.reason
 	}
 	if !inspection.exists {
+		if inspection.symlink {
+			return nil, inspection.info, false, "symlink content is not followed"
+		}
 		return nil, nil, false, "untracked path is unavailable"
 	}
 	info := inspection.info
-	if info.Mode()&os.ModeSymlink != 0 {
+	if inspection.symlink {
 		return nil, info, false, "symlink content is not followed"
 	}
 	if !info.Mode().IsRegular() {
@@ -671,10 +674,11 @@ func readPassiveRegularFile(root, relative string, limit int) ([]byte, os.FileIn
 }
 
 type passivePathInspection struct {
-	clean  string
-	info   os.FileInfo
-	exists bool
-	reason string
+	clean   string
+	info    os.FileInfo
+	exists  bool
+	symlink bool
+	reason  string
 }
 
 func inspectPassivePath(rootHandle *os.Root, relative string) passivePathInspection {
@@ -694,7 +698,9 @@ func inspectPassivePath(rootHandle *os.Root, relative string) passivePathInspect
 			return passivePathInspection{clean: clean, reason: "path could not be inspected safely"}
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return passivePathInspection{clean: clean, info: info, exists: true}
+			return passivePathInspection{
+				clean: clean, info: info, exists: index == len(components)-1, symlink: true,
+			}
 		}
 		if index == len(components)-1 {
 			return passivePathInspection{clean: clean, info: info, exists: true}
