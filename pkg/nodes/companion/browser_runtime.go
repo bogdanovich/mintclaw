@@ -309,6 +309,7 @@ func (handler *browserCommandHandler) executeAct(
 		SnapshotGeneration: input.SnapshotGeneration,
 		ActionInvocationID: input.ActionInvocationID, Action: input.Action,
 		Effect: input.Effect, CurrentOrigin: input.CurrentOrigin,
+		Confirmation:          input.Confirmation,
 		PreparedActionHash:    input.PreparedActionHash,
 		BrowserPolicyRevision: input.BrowserPolicyRevision, ProfileRevision: input.ProfileRevision,
 		ExpectedRole: input.ExpectedRole, ExpectedName: input.ExpectedName,

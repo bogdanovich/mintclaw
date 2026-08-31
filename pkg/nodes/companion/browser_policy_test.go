@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
@@ -17,6 +18,8 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	requireBrowserProfileIdentitySupport(t)
 	baseDir := t.TempDir()
 	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.CapabilityMode = browserpolicy.CapabilityFullAccess
+	profile.ApprovalMode = browserpolicy.ApprovalModelRequested
 	profile.SensitiveFields = []string{"  Display   Name  "}
 	originalAgents := append([]string(nil), profile.AllowedAgents...)
 	originalActions := append([]string(nil), profile.AllowedActions...)
@@ -35,6 +38,8 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 		!filepath.IsAbs(ready.ProfileDirectory) || !filepath.IsAbs(ready.LockFile) ||
 		strings.Join(ready.AllowedAgents, ",") != "browser,marketplace" ||
 		strings.Join(ready.AllowedActions, ",") != "check,click,download,file_chooser,hover,navigate,uncheck" ||
+		ready.CapabilityMode != browserpolicy.CapabilityFullAccess ||
+		ready.ApprovalMode != browserpolicy.ApprovalModelRequested ||
 		strings.Join(ready.SensitiveFields, ",") != "display name" {
 		t.Fatalf("normalized browser profile = %#v", ready)
 	}
@@ -46,6 +51,10 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	descriptors, err := browserProfileDescriptors(cfg.BrowserProfiles)
 	if err != nil || len(descriptors) != 1 {
 		t.Fatalf("browserProfileDescriptors() = %#v, %v", descriptors, err)
+	}
+	if descriptors[0].CapabilityMode != browserpolicy.CapabilityFullAccess ||
+		descriptors[0].ApprovalMode != browserpolicy.ApprovalModelRequested {
+		t.Fatalf("browser descriptor modes = %#v", descriptors[0])
 	}
 	encoded, err := json.Marshal(descriptors)
 	if err != nil {

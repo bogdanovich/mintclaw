@@ -201,15 +201,22 @@
           "driver": {"const": "playwright_mcp"},
           "mode": {"const": "managed"},
           "network_mode": {"enum": ["exact_origins", "public_web", "any_http"]},
+          "capability_mode": {"enum": ["full_access", "legacy_strict"]},
+          "approval_mode": {"enum": ["none", "model_requested", "always_commit"]},
           "dry_run": {"type": "boolean"},
           "allow_approved_actions": {"type": "boolean"},
           "headed": {"type": "boolean"},
           "actions": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 6,
+            "maxItems": 16,
             "uniqueItems": true,
-            "items": {"enum": ["click", "download", "navigate", "press", "scroll", "select"]}
+            "items": {
+              "enum": [
+                "check", "click", "dialog", "download", "drag", "file_chooser", "fill",
+                "hover", "navigate", "press", "scroll", "select", "uncheck", "upload"
+              ]
+            }
           },
           "limits": {
             "type": "object",

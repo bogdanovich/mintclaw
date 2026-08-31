@@ -220,6 +220,8 @@ type BrowserProfileDescriptor struct {
 	Driver               string        `json:"driver"`
 	Mode                 string        `json:"mode"`
 	NetworkMode          string        `json:"network_mode"`
+	CapabilityMode       string        `json:"capability_mode,omitempty"`
+	ApprovalMode         string        `json:"approval_mode,omitempty"`
 	DryRun               bool          `json:"dry_run"`
 	AllowApprovedActions bool          `json:"allow_approved_actions,omitempty"`
 	Headed               bool          `json:"headed"`
@@ -393,6 +395,7 @@ type BrowserActInput struct {
 	ActionInvocationID      string               `json:"action_invocation_id"`
 	Action                  browseraction.Action `json:"action"`
 	Effect                  string               `json:"effect"`
+	Confirmation            string               `json:"confirmation,omitempty"`
 	CurrentOrigin           string               `json:"current_origin"`
 	PreparedActionHash      string               `json:"prepared_action_hash"`
 	BrowserPolicyRevision   string               `json:"browser_policy_revision"`
@@ -438,6 +441,7 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		ActionInvocationID      string               `json:"action_invocation_id"`
 		Action                  browseraction.Action `json:"action"`
 		Effect                  string               `json:"effect"`
+		Confirmation            string               `json:"confirmation,omitempty"`
 		CurrentOrigin           string               `json:"current_origin"`
 		PreparedActionHash      string               `json:"prepared_action_hash"`
 		BrowserPolicyRevision   string               `json:"browser_policy_revision"`
@@ -485,7 +489,7 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 	*input = BrowserActInput{
 		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
 		ActionInvocationID: value.ActionInvocationID, Action: value.Action,
-		Effect: value.Effect, CurrentOrigin: value.CurrentOrigin,
+		Effect: value.Effect, Confirmation: value.Confirmation, CurrentOrigin: value.CurrentOrigin,
 		PreparedActionHash:    value.PreparedActionHash,
 		BrowserPolicyRevision: value.BrowserPolicyRevision,
 		ProfileRevision:       value.ProfileRevision,
@@ -582,6 +586,10 @@ func BrowserClickRequiresApproval(effect string) bool {
 	return effect == "external_commit" || effect == "unknown"
 }
 
+func BrowserActionRequiresApproval(approvalMode, effect, confirmation string) bool {
+	return browserpolicy.RequiresApproval(approvalMode, effect, confirmation)
+}
+
 func BrowserCheckRoleAllowed(kind, role string) bool {
 	if role == "checkbox" || role == "switch" {
 		return true
@@ -600,6 +608,10 @@ func BrowserFillFieldAllowed(role, name string) bool {
 // operator-designated sensitive identity fragments.
 func BrowserFillFieldAllowedWithPolicy(role, name string, sensitiveTerms []string) bool {
 	return browserpolicy.OrdinaryFillField(role, name, sensitiveTerms)
+}
+
+func BrowserFillFieldAllowedForMode(capabilityMode, role, name string, sensitiveTerms []string) bool {
+	return browserpolicy.FillFieldAllowed(capabilityMode, role, name, sensitiveTerms)
 }
 
 // BrowserPressKeyValid admits only document-scoped keys that cannot express
@@ -1320,6 +1332,7 @@ type BrowserHostActRequest struct {
 	ActionInvocationID      string
 	Action                  browseraction.Action
 	Effect                  string
+	Confirmation            string
 	CurrentOrigin           string
 	PreparedActionHash      string
 	BrowserPolicyRevision   string
@@ -1364,6 +1377,10 @@ func (profile BrowserProfileDescriptor) Validate() error {
 		profile.Driver != BrowserDriverPlaywrightMCP || profile.Mode != BrowserProfileManaged ||
 		(profile.NetworkMode != BrowserNetworkExactOrigins &&
 			profile.NetworkMode != BrowserNetworkPublicWeb && profile.NetworkMode != BrowserNetworkAnyHTTP) ||
+		!browserpolicy.CapabilityModeValid(profile.CapabilityMode) ||
+		browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode) == browserpolicy.CapabilityRestricted ||
+		!browserpolicy.ApprovalModeValid(profile.ApprovalMode) ||
+		browserpolicy.EffectiveApprovalMode(profile.ApprovalMode) == browserpolicy.ApprovalPolicy ||
 		profile.DryRun == profile.AllowApprovedActions || len(profile.Actions) == 0 ||
 		len(profile.Actions) > MaxBrowserActions || !sort.StringsAreSorted(profile.Actions) {
 		return fmt.Errorf("%w: malformed browser profile descriptor", ErrInvalidCapability)
@@ -1461,6 +1478,7 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 		!validSHA256Digest(input.PreparedActionHash) || !validSHA256Digest(input.BrowserPolicyRevision) ||
 		!slices.Contains(profile.Actions, string(input.Action.Kind)) ||
 		input.Action.Validate(MaxBrowserTextInputBytes) != nil || input.Action.Value != "" ||
+		!browserpolicy.ConfirmationValid(input.Confirmation) ||
 		len(input.ExpectedRole) > 128 || len(input.ExpectedName) > 4096 ||
 		len(input.DestinationExpectedRole) > 128 || len(input.DestinationExpectedName) > 4096 {
 		return invalidBrowserActInput()
@@ -1483,49 +1501,54 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 	valid := false
 	switch kind {
 	case browseraction.ActionNavigate:
-		valid = input.Effect == "navigation" && input.ApprovalDigest == ""
+		valid = input.Effect == "navigation"
 	case browseraction.ActionScroll:
-		valid = input.Effect == "read" && input.ApprovalDigest == ""
+		valid = input.Effect == "read"
 	case browseraction.ActionClick:
-		valid = input.ExpectedRole != "" && BrowserClickEffectValid(input.Effect) &&
-			((BrowserClickRequiresApproval(input.Effect) && BrowserApprovalDigestMatches(input)) ||
-				(!BrowserClickRequiresApproval(input.Effect) && input.ApprovalDigest == ""))
+		valid = input.ExpectedRole != "" && BrowserClickEffectValid(input.Effect)
 	case browseraction.ActionFill:
-		valid = input.Effect == "local_edit" && BrowserFillFieldAllowed(input.ExpectedRole, input.ExpectedName) &&
-			validBrowserProtectedInput(input, false) && input.ApprovalDigest == ""
+		valid = input.Effect == "local_edit" && BrowserFillFieldAllowedForMode(
+			profile.CapabilityMode,
+			input.ExpectedRole,
+			input.ExpectedName,
+			nil,
+		) && validBrowserProtectedInput(input, false)
 	case browseraction.ActionSelect:
 		valid = input.Effect == "local_edit" && input.ExpectedRole == "combobox" &&
-			validBrowserProtectedInput(input, false) && input.ApprovalDigest == ""
+			validBrowserProtectedInput(input, false)
 	case browseraction.ActionPress:
-		valid = input.Effect == "unknown" && BrowserApprovalDigestMatches(input)
+		valid = input.Effect == "unknown"
 	case browseraction.ActionDialog:
 		valid = validBrowserDialogActInput(input)
 	case browseraction.ActionCheck, browseraction.ActionUncheck:
 		valid = input.Effect == "local_edit" &&
-			BrowserCheckRoleAllowed(string(kind), input.ExpectedRole) && input.ApprovalDigest == ""
+			BrowserCheckRoleAllowed(string(kind), input.ExpectedRole)
 	case browseraction.ActionHover:
-		valid = input.Effect == "read" && input.ExpectedRole != "" && input.ApprovalDigest == ""
+		valid = input.Effect == "read" && input.ExpectedRole != ""
 	case browseraction.ActionDrag:
-		valid = input.Effect == "unknown" && input.ExpectedRole != "" && input.DestinationExpectedRole != "" &&
-			BrowserApprovalDigestMatches(input)
+		valid = input.Effect == "unknown" && input.ExpectedRole != "" && input.DestinationExpectedRole != ""
 	case browseraction.ActionFileChooser:
 		valid = input.Effect == "local_edit" && input.ExpectedRole == "button" &&
 			validSHA256Digest(input.ArtifactSHA256) && input.ArtifactBytes > 0 &&
 			input.ArtifactBytes <= int64(profile.Limits.UploadBytes) && input.ArtifactFilename != "" &&
 			len(input.ArtifactFilename) <= 255 && input.ArtifactContentType != "" &&
-			len(input.ArtifactContentType) <= 255 && input.ApprovalDigest == ""
+			len(input.ArtifactContentType) <= 255
 	case browseraction.ActionUpload:
 		valid = input.Effect == "unknown" && input.ExpectedRole == "button" &&
 			validSHA256Digest(input.ArtifactSHA256) && input.ArtifactBytes > 0 &&
 			input.ArtifactBytes <= int64(profile.Limits.UploadBytes) && input.ArtifactFilename != "" &&
 			len(input.ArtifactFilename) <= 255 && input.ArtifactContentType != "" &&
-			len(input.ArtifactContentType) <= 255 && BrowserApprovalDigestMatches(input)
+			len(input.ArtifactContentType) <= 255
 	case browseraction.ActionDownload:
 		valid = BrowserClickEffectValid(input.Effect) && input.ExpectedRole != "" &&
 			input.WorkspaceID != "" && input.RouteID != "" &&
-			input.BrowserTarget != "" && BrowserApprovalDigestMatches(input)
+			input.BrowserTarget != ""
 	}
 	if !valid {
+		return invalidBrowserActInput()
+	}
+	requiresApproval := BrowserActionRequiresApproval(profile.ApprovalMode, input.Effect, input.Confirmation)
+	if requiresApproval != BrowserApprovalDigestMatches(input) || (!requiresApproval && input.ApprovalDigest != "") {
 		return invalidBrowserActInput()
 	}
 	return nil
@@ -1572,9 +1595,9 @@ func validBrowserDialogActInput(input BrowserActInput) bool {
 	}
 	if input.Action.Decision == "dismiss" {
 		return input.Effect == "read" && !input.Action.PromptProvided && input.InputDigest == "" &&
-			input.InputBytes == 0 && input.ApprovalDigest == ""
+			input.InputBytes == 0
 	}
-	if input.Effect != "external_commit" || !BrowserApprovalDigestMatches(input) {
+	if input.Effect != "external_commit" {
 		return false
 	}
 	if input.Action.PromptProvided {
@@ -1695,6 +1718,7 @@ func browserCommandInputSchema(
 		add("effect", map[string]any{
 			"enum": []string{"download", "external_commit", "local_edit", "navigation", "read", "unknown"},
 		})
+		properties["confirmation"] = map[string]any{"enum": []string{browserpolicy.ConfirmationRequest}}
 		add("current_origin", map[string]any{
 			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
 		})

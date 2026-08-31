@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
@@ -721,6 +722,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		SessionID: worker.sessionID, TabID: worker.tabID,
 		SnapshotGeneration: generation, ActionInvocationID: request.InvocationID,
 		Action: action, Effect: effect, CurrentOrigin: request.Prepared.CurrentOrigin,
+		Confirmation:          request.Prepared.Confirmation,
 		PreparedActionHash:    request.Prepared.ActionHash,
 		BrowserPolicyRevision: worker.factory.policyRevision,
 		ProfileRevision:       worker.profileRevision,
@@ -768,10 +770,11 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			}
 		}
 	}
-	if action.Kind == "drag" || action.Kind == "press" ||
-		(action.Kind == "click" && nodes.BrowserClickRequiresApproval(input.Effect)) ||
-		action.Kind == "upload" ||
-		(action.Kind == "dialog" && action.Decision == "accept") {
+	if nodes.BrowserActionRequiresApproval(
+		request.Prepared.ApprovalMode,
+		input.Effect,
+		input.Confirmation,
+	) {
 		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
 		if err != nil {
 			return browser.ErrDenied
@@ -875,16 +878,23 @@ func (worker *nodeBrowserWorker) DownloadPrepared(
 		SessionID: worker.sessionID, TabID: worker.tabID, SnapshotGeneration: generation,
 		ActionInvocationID: request.InvocationID,
 		Action:             browser.Action{Kind: browser.ActionDownload, Ref: request.DriverAction.Target},
-		Effect:             string(request.Prepared.Effect), CurrentOrigin: request.Prepared.CurrentOrigin,
+		Effect:             string(request.Prepared.Effect), Confirmation: request.Prepared.Confirmation,
+		CurrentOrigin:         request.Prepared.CurrentOrigin,
 		PreparedActionHash:    request.Prepared.ActionHash,
 		BrowserPolicyRevision: worker.factory.policyRevision, ProfileRevision: worker.profileRevision,
 		ExpectedRole: request.Prepared.ElementRole, ExpectedName: request.Prepared.ElementName,
 		WorkspaceID: artifactOwner.WorkspaceID, RouteID: artifactOwner.RouteID,
 		BrowserTarget: worker.browserTarget,
 	}
-	input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
-	if err != nil {
-		return browser.DriverDownload{}, browser.ErrDenied
+	if nodes.BrowserActionRequiresApproval(
+		request.Prepared.ApprovalMode,
+		input.Effect,
+		input.Confirmation,
+	) {
+		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
+		if err != nil {
+			return browser.DriverDownload{}, browser.ErrDenied
+		}
 	}
 	var result nodes.BrowserActResult
 	if err = worker.invoke(ctx, descriptor, "act_"+request.InvocationID, input, &result); err != nil {
@@ -1893,6 +1903,8 @@ func browserProfileIntersects(
 	return remote.DryRun == local.DryRun &&
 		remote.AllowApprovedActions == local.AllowApprovedActions &&
 		remote.NetworkMode == local.NetworkMode &&
+		browserpolicy.EffectiveCapabilityMode(remote.CapabilityMode) == local.EffectiveCapabilityMode() &&
+		browserpolicy.EffectiveApprovalMode(remote.ApprovalMode) == local.EffectiveApprovalMode() &&
 		slices.Contains(remote.Actions, "navigate") &&
 		requested.Sessions <= remote.Limits.Sessions && requested.Tabs <= remote.Limits.Tabs &&
 		requested.SessionSeconds <= remote.Limits.SessionSeconds &&
@@ -1912,7 +1924,11 @@ func browserProfileIntersects(
 func browserProfilesEqual(left, right nodes.BrowserProfileDescriptor) bool {
 	return left.Alias == right.Alias && left.Revision == right.Revision &&
 		left.Driver == right.Driver && left.Mode == right.Mode &&
-		left.NetworkMode == right.NetworkMode && left.DryRun == right.DryRun &&
+		left.NetworkMode == right.NetworkMode &&
+		browserpolicy.EffectiveCapabilityMode(left.CapabilityMode) ==
+			browserpolicy.EffectiveCapabilityMode(right.CapabilityMode) &&
+		browserpolicy.EffectiveApprovalMode(left.ApprovalMode) ==
+			browserpolicy.EffectiveApprovalMode(right.ApprovalMode) && left.DryRun == right.DryRun &&
 		left.AllowApprovedActions == right.AllowApprovedActions &&
 		left.Headed == right.Headed && slices.Equal(left.Actions, right.Actions) &&
 		left.Limits == right.Limits

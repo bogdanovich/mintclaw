@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
 type contextBrokerTestWorker struct {
@@ -309,6 +311,43 @@ func TestContextBrokerListOpenSelectCloseLifecycle(t *testing.T) {
 	if err != nil || closed.Catalog.SelectedTabID != "tab_primary" || len(closed.Catalog.Tabs) != 1 ||
 		len(worker.closes) != 1 {
 		t.Fatalf("ExecuteContext(close) = %#v, %v; closes = %#v", closed, err, worker.closes)
+	}
+}
+
+func TestContextBrokerModelRequestedConfirmationIsExplicit(t *testing.T) {
+	broker, _, _, session := openContextBrokerTest(t, false)
+	target := broker.config.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.ApprovalMode = config.BrowserApprovalModelRequested
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	broker.config.Targets[config.BrowserDefaultTarget] = target
+
+	openedPreparation, err := broker.PrepareContext(t.Context(), ContextRequest{
+		Owner: testOwner(), RequestID: "request_open_for_confirmation", SessionID: session.ID,
+		Operation: ContextOpen,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := broker.ExecuteContext(t.Context(), openedPreparation, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ContextRequest{
+		Owner: testOwner(), RequestID: "request_close_without_confirmation", SessionID: session.ID,
+		Operation: ContextClose, ContextCatalogID: opened.Catalog.ID,
+		ContextGeneration: opened.Catalog.Generation, TabID: "tab_secondary",
+	}
+	autonomous, err := broker.PrepareContext(t.Context(), base)
+	if err != nil || autonomous.RequiresApproval {
+		t.Fatalf("PrepareContext(autonomous) = %#v, %v", autonomous, err)
+	}
+	base.RequestID = "request_close_with_confirmation"
+	base.Confirmation = "request"
+	confirmed, err := broker.PrepareContext(t.Context(), base)
+	if err != nil || !confirmed.RequiresApproval ||
+		confirmed.Request.ApprovalMode != config.BrowserApprovalModelRequested {
+		t.Fatalf("PrepareContext(confirmed) = %#v, %v", confirmed, err)
 	}
 }
 

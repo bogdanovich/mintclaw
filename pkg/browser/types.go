@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
@@ -500,6 +501,9 @@ type PreparedAction struct {
 	DialogMessageDigest        string `json:"dialog_message_digest,omitempty"`
 	DialogMessageBytes         int    `json:"dialog_message_bytes,omitempty"`
 	Effect                     Effect `json:"effect"`
+	CapabilityMode             string `json:"capability_mode,omitempty"`
+	ApprovalMode               string `json:"approval_mode,omitempty"`
+	Confirmation               string `json:"confirmation,omitempty"`
 	DryRun                     bool   `json:"dry_run"`
 	PolicyRevision             string `json:"policy_revision"`
 	CatalogRevision            string `json:"catalog_revision"`
@@ -519,6 +523,9 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		len(prepared.DestinationOrigin) > MaxURLBytes || len(prepared.ElementRole) > 64 ||
 		len(prepared.ElementName) > MaxElementNameBytes || len(prepared.DestinationElementRole) > 64 ||
 		len(prepared.DestinationElementName) > MaxElementNameBytes || !prepared.Effect.Valid() ||
+		!browserpolicy.CapabilityModeValid(prepared.CapabilityMode) ||
+		!browserpolicy.ApprovalModeValid(prepared.ApprovalMode) ||
+		!browserpolicy.ConfirmationValid(prepared.Confirmation) ||
 		prepared.DialogMessageBytes < 0 || prepared.DialogMessageBytes > MaxDialogMessageBytes ||
 		!validIdentifier(prepared.PolicyRevision) || !validDigest(prepared.CatalogRevision) ||
 		!validDigest(prepared.ActionHash) ||
@@ -577,8 +584,12 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		if prepared.Action.Kind == ActionSelect && prepared.ElementRole != "combobox" {
 			return fmt.Errorf("%w: malformed prepared selection", ErrInvalid)
 		}
-		if prepared.Action.Kind == ActionFill &&
-			!ordinaryFillElement(prepared.ElementRole, prepared.ElementName) {
+		if prepared.Action.Kind == ActionFill && !browserpolicy.FillFieldAllowed(
+			prepared.CapabilityMode,
+			prepared.ElementRole,
+			prepared.ElementName,
+			nil,
+		) {
 			return fmt.Errorf("%w: protected fill field is unavailable", ErrDenied)
 		}
 	case ActionClick:

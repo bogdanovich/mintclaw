@@ -19,6 +19,7 @@ import (
 	"time"
 
 	browserworker "github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
@@ -138,6 +139,7 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 				ProfileConfig: config.BrowserProfileConfig{
 					Enabled: true, Mode: config.BrowserProfileManaged,
 					NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
+					CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
 					AllowApprovedActions: profile.AllowApprovedActions,
 					AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
 					SensitiveFields:      append([]string(nil), profile.SensitiveFields...),
@@ -739,7 +741,7 @@ func (host *BrowserHost) navigate(
 		request.Action.Ref != "" || request.Action.Target != "" || request.Action.Value != "" ||
 		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		request.ExpectedRole != "" || request.ExpectedName != "" || request.ApprovalDigest != "" {
+		request.ExpectedRole != "" || request.ExpectedName != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "navigate", browserworker.DriverAction{
@@ -759,10 +761,7 @@ func (host *BrowserHost) click(
 		request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.ExpectedRole == "" || len(request.ExpectedRole) > 128 || len(request.ExpectedName) > 4096 ||
 		!nodes.BrowserClickEffectValid(request.Effect) ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		(nodes.BrowserClickRequiresApproval(request.Effect) &&
-			!nodes.BrowserApprovalDigestMatches(browserHostActInput(request))) ||
-		(!nodes.BrowserClickRequiresApproval(request.Effect) && request.ApprovalDigest != "") {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "click", browserworker.DriverAction{
@@ -782,8 +781,7 @@ func (host *BrowserHost) selectOption(
 		request.Action.URL != "" || request.Action.Target != "" || request.Action.Key != "" ||
 		request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.ExpectedRole != "combobox" || len(request.ExpectedName) > 4096 ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		request.ApprovalDigest != "" {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "select", browserworker.DriverAction{
@@ -804,8 +802,7 @@ func (host *BrowserHost) checkState(
 		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" ||
 		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
 		!nodes.BrowserCheckRoleAllowed(string(action), request.ExpectedRole) || len(request.ExpectedName) > 4096 ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		request.ApprovalDigest != "" {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, string(action), browserworker.DriverAction{Kind: driverKind})
@@ -822,8 +819,7 @@ func (host *BrowserHost) hover(
 		request.Action.URL != "" || request.Action.Target != "" || request.Action.Value != "" ||
 		request.Action.Key != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.ExpectedRole == "" || len(request.ExpectedRole) > 128 || len(request.ExpectedName) > 4096 ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		request.ApprovalDigest != "" {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "hover", browserworker.DriverAction{Kind: browserworker.DriverHover})
@@ -844,8 +840,7 @@ func (host *BrowserHost) drag(
 		request.ExpectedRole == "" || len(request.ExpectedRole) > 128 || len(request.ExpectedName) > 4096 ||
 		request.DestinationExpectedRole == "" || len(request.DestinationExpectedRole) > 128 ||
 		len(request.DestinationExpectedName) > 4096 ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "drag", browserworker.DriverAction{Kind: browserworker.DriverDrag})
@@ -866,8 +861,7 @@ func (host *BrowserHost) fileChooser(
 		request.ArtifactBytes > nodes.MaxBrowserUploadBytes || request.ArtifactFilename == "" ||
 		request.ArtifactFilename != filepath.Base(request.ArtifactFilename) || len(request.ArtifactFilename) > 255 ||
 		request.ArtifactContentType == "" || len(request.ArtifactContentType) > 255 ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		request.ApprovalDigest != "" {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	artifact, ok := host.takeBrowserArtifact(request)
@@ -897,8 +891,7 @@ func (host *BrowserHost) Upload(
 		request.ArtifactBytes > nodes.MaxBrowserUploadBytes || request.ArtifactFilename == "" ||
 		request.ArtifactFilename != filepath.Base(request.ArtifactFilename) || len(request.ArtifactFilename) > 255 ||
 		request.ArtifactContentType == "" || len(request.ArtifactContentType) > 255 ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	artifact, ok := host.takeBrowserArtifact(request)
@@ -925,8 +918,7 @@ func (host *BrowserHost) Download(
 		len(request.ExpectedName) > 4096 || !nodes.BrowserClickEffectValid(request.Effect) ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
 		!browserHostIdentifier(request.WorkspaceID) || !browserHostIdentifier(request.RouteID) ||
-		!browserHostIdentifier(request.BrowserTarget) ||
-		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		!browserHostIdentifier(request.BrowserTarget) {
 		return nodes.BrowserOutputDescriptor{}, ErrBrowserHostDenied
 	}
 	var download browserworker.DriverDownload
@@ -979,9 +971,7 @@ func (host *BrowserHost) fill(
 		request.Action.Value == "" || len(request.Action.Value) > nodes.MaxBrowserTextInputBytes ||
 		request.Action.URL != "" || request.Action.Target != "" || request.Action.Key != "" ||
 		request.Action.Direction != "" || request.Action.Amount != 0 ||
-		!nodes.BrowserFillFieldAllowed(request.ExpectedRole, request.ExpectedName) ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		request.ApprovalDigest != "" {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "fill", browserworker.DriverAction{
@@ -1000,8 +990,7 @@ func (host *BrowserHost) press(
 		!nodes.BrowserPressKeyValid(request.Action.Key) || request.Action.URL != "" || request.Action.Ref != "" ||
 		request.Action.Value != "" || request.Action.Direction != "" || request.Action.Amount != 0 ||
 		request.ExpectedRole != "" || request.ExpectedName != "" ||
-		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "press", browserworker.DriverAction{
@@ -1022,7 +1011,7 @@ func (host *BrowserHost) scroll(
 		request.Action.URL != "" || request.Action.Ref != "" || request.Action.Target != "" ||
 		request.Action.Value != "" || request.Action.Key != "" ||
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
-		request.ExpectedRole != "" || request.ExpectedName != "" || request.ApprovalDigest != "" {
+		request.ExpectedRole != "" || request.ExpectedName != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "scroll", browserworker.DriverAction{
@@ -1049,7 +1038,7 @@ func (host *BrowserHost) dialog(
 		request.CurrentOrigin == "" || len(request.CurrentOrigin) > nodes.MaxBrowserURLBytes ||
 		(request.Action.Decision == "dismiss" &&
 			(request.Effect != "read" || request.Action.PromptProvided || request.Action.Value != "" ||
-				request.InputDigest != "" || request.InputBytes != 0 || request.ApprovalDigest != "")) ||
+				request.InputDigest != "" || request.InputBytes != 0)) ||
 		(request.Action.Decision == "accept" &&
 			(request.Effect != "external_commit" ||
 				(request.Action.PromptProvided && request.DialogType != "prompt") ||
@@ -1058,8 +1047,7 @@ func (host *BrowserHost) dialog(
 				(request.Action.PromptProvided &&
 					(request.InputBytes != len(request.Action.Value) ||
 						!nodes.BrowserInputDigestMatches(request.InputDigest, request.Action.Value))) ||
-				(!request.Action.PromptProvided && (request.InputDigest != "" || request.InputBytes != 0)) ||
-				!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)))) {
+				(!request.Action.PromptProvided && (request.InputDigest != "" || request.InputBytes != 0)))) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	return host.executeAction(ctx, request, "dialog", browserworker.DriverAction{
@@ -1213,20 +1201,32 @@ func (host *BrowserHost) executeAction(
 		!slices.Contains(session.profile.AllowedActions, action) {
 		return BrowserHostObservation{}, ErrBrowserHostStale
 	}
+	if !browserpolicy.ConfirmationValid(request.Confirmation) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
 	if action == "fill" && (len(request.Action.Value) > session.limits.TextInputBytes ||
-		!nodes.BrowserFillFieldAllowedWithPolicy(
+		!nodes.BrowserFillFieldAllowedForMode(
+			session.profile.CapabilityMode,
 			request.ExpectedRole,
 			request.ExpectedName,
 			session.profile.SensitiveFields,
 		)) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
-	requiresApproval := (action == "click" && nodes.BrowserClickRequiresApproval(request.Effect)) ||
-		action == "download" || action == "drag" || action == "upload" || action == "press" ||
-		(action == "dialog" && request.Action.Decision == "accept")
+	requiresApproval := nodes.BrowserActionRequiresApproval(
+		session.profile.ApprovalMode,
+		request.Effect,
+		request.Confirmation,
+	)
 	dryRunDownload := action == "download" && request.Effect == "unknown" && session.profile.DryRun
-	if requiresApproval && (!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) ||
-		(!dryRunDownload && (session.profile.DryRun || !session.profile.AllowApprovedActions))) {
+	if requiresApproval && !nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	if !requiresApproval && request.ApprovalDigest != "" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
+	if session.profile.DryRun && !dryRunDownload &&
+		(request.Effect == "external_commit" || request.Effect == "unknown") {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	var boundElement browserworker.DriverElement
@@ -1490,7 +1490,7 @@ func browserHostActInput(request BrowserHostActRequest) nodes.BrowserActInput {
 		SessionID: request.SessionID, TabID: request.TabID,
 		SnapshotGeneration: request.SnapshotGeneration,
 		ActionInvocationID: request.ActionInvocationID, Action: action,
-		Effect: request.Effect, CurrentOrigin: request.CurrentOrigin,
+		Effect: request.Effect, Confirmation: request.Confirmation, CurrentOrigin: request.CurrentOrigin,
 		PreparedActionHash:    request.PreparedActionHash,
 		BrowserPolicyRevision: request.BrowserPolicyRevision,
 		ProfileRevision:       request.ProfileRevision,

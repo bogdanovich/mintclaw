@@ -19,6 +19,11 @@ The tabs, frames, and popups slice is admitted in
 [Browser Capability BF1 Tabs, Frames, And Popups Admission](browser-capability-bf1-contexts-admission.md).
 The completed six-phase continuation is governed by
 [Browser Functional Parity Execution Goal](browser-functional-parity-execution-goal.md).
+The selected browser-policy follow-up is governed by
+[Browser Capability And Approval Modes](browser-policy-modes.md): P0 restores
+an explicit full-access profile and decouples confirmation from effect
+classification, then P1 adds the opt-in declarative restricted policy and
+operator process hook.
 B2 completion evidence is recorded in
 [Browser Capability B2 Deployment Evidence](../operations/browser-capability-b2-deployment-evidence.md).
 BF3 privileged Playwright execution remains a separate opt-in proposal. BF4
@@ -699,6 +704,22 @@ first-party contract on gateway and companion targets.
 BF1 should prefer semantic accessibility and DOM references with Playwright
 actionability and auto-waiting. Coordinate input remains a separate browser or
 computer fallback and does not silently replace a failed semantic action.
+
+#### Browser-policy follow-up
+
+The typed action surface is complete, but its original protected-fill and
+commit-approval defaults are too restrictive for an owner-operated automation
+profile. The two-PR follow-up in
+[Browser Capability And Approval Modes](browser-policy-modes.md) keeps the
+typed first-party tools and durable authority model while separating three
+questions that must not be conflated: whether an action is supported, what
+effect it reports, and whether it pauses for confirmation.
+
+1. P0 adds `full_access`, `legacy_strict`, `none`, `model_requested`, and
+   `always_commit`, with gateway/companion parity and explicit model-requested
+   confirmation.
+2. P1 adds ordered restricted-policy rules and an operator-owned process hook
+   with fail-closed execution and revision-bound decisions.
 
 ### BF2: Media, transfer, diagnostics, and environment parity
 

@@ -54,6 +54,8 @@ type BrowserProfilePolicy struct {
 	LockFile               string              `json:"lock_file,omitempty"`
 	Mode                   string              `json:"mode,omitempty"`
 	NetworkMode            string              `json:"network_mode,omitempty"`
+	CapabilityMode         string              `json:"capability_mode,omitempty"`
+	ApprovalMode           string              `json:"approval_mode,omitempty"`
 	AllowedOrigins         []string            `json:"allowed_origins,omitempty"`
 	SensitiveFields        []string            `json:"sensitive_fields,omitempty"`
 	DryRun                 bool                `json:"dry_run"`
@@ -115,6 +117,7 @@ func browserProfilePolicyEmpty(profile BrowserProfilePolicy) bool {
 		profile.DriverExecutable == "" && profile.DriverExecutableSHA256 == "" &&
 		len(profile.DriverArguments) == 0 && profile.ProfileDirectory == "" &&
 		profile.LockFile == "" && profile.Mode == "" && profile.NetworkMode == "" &&
+		profile.CapabilityMode == "" && profile.ApprovalMode == "" &&
 		len(profile.AllowedOrigins) == 0 && len(profile.SensitiveFields) == 0 &&
 		!profile.DryRun && !profile.AllowApprovedActions &&
 		len(profile.AllowedActions) == 0 && !profile.Headed &&
@@ -202,6 +205,15 @@ func normalizeBrowserProfile(
 		return BrowserProfilePolicy{}, errors.New(
 			"profile requires managed mode and exactly one of dry_run or allow_approved_actions",
 		)
+	}
+	profile.CapabilityMode = browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode)
+	if !browserpolicy.CapabilityModeValid(profile.CapabilityMode) ||
+		profile.CapabilityMode == browserpolicy.CapabilityRestricted {
+		return BrowserProfilePolicy{}, errors.New("capability_mode is unsupported")
+	}
+	profile.ApprovalMode = browserpolicy.EffectiveApprovalMode(profile.ApprovalMode)
+	if !browserpolicy.ApprovalModeValid(profile.ApprovalMode) || profile.ApprovalMode == browserpolicy.ApprovalPolicy {
+		return BrowserProfilePolicy{}, errors.New("approval_mode is unsupported")
 	}
 	profile.Limits = profile.Limits.Effective()
 	if err = profile.Limits.Validate(); err != nil {
@@ -515,6 +527,7 @@ func browserProfileDescriptor(alias string, profile BrowserProfilePolicy) nodes.
 	return nodes.BrowserProfileDescriptor{
 		Alias: alias, Revision: profile.Revision, Driver: profile.Driver,
 		Mode: profile.Mode, NetworkMode: profile.NetworkMode,
+		CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
 		DryRun: profile.DryRun, AllowApprovedActions: profile.AllowApprovedActions,
 		Headed:  profile.Headed,
 		Actions: actions,
