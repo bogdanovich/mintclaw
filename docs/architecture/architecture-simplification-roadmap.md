@@ -5,8 +5,9 @@ X3.88. The corrected source-side Z1 audit passes at `e60b8e26` through PR
 #976. The explicitly authorized R1 compatibility reset and the 2026-08-30 Z1
 stopped-state session cutover, matched rollback, reapply, and observation are
 complete. This closeout deletes the temporary copy-only converter from #978.
-Three runtime ownership findings exposed by the exercise remain registered as
-focused follow-up packets before the final program completion audit.
+O1 shutdown ownership is merged through #1007 and deployed on `7e52c1dd`.
+The O2 and O3 runtime ownership findings remain registered as focused
+follow-up packets before the final program completion audit.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -197,6 +198,7 @@ reset criteria.
 | Z1 source | #964-#976; final source `e60b8e26` | Passed after correcting the premature #973 proof; every persisted session document now has one reader owner, every surviving discovery match is classified, and no production historical reader, dual writer, deprecated callable facade, or version-selected runtime remains |
 | Z1 converter preparation | #978 | Merged; a temporary copy-only external command inventories all configured session roots, emits disjoint retained/archive trees and a checksum manifest, strictly validates every retained record, and is registered for deletion after closeout |
 | Z1 deployed closeout | Authorized operation on `edd8759b`; this closeout | Complete; 20 session roots were converted from a stopped-state snapshot, the retained current cohort was atomically installed, exact matched rollback and reapply passed, canaries and observation passed, and the temporary converter is deleted |
+| O1 shutdown ownership | #1007 | Complete and deployed on `7e52c1dd`; five loaded VPN terminal stops completed in 1.99-4.51 seconds with no stop timeout or `SIGKILL`, and every remote child was gone after restart |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 14 to #826; 15 to #827; 16-23 to #828-#835; 24 to #837; 25 to #839;
@@ -648,9 +650,13 @@ refactor:
 
 | Packet | Finding | Required simplification and exit gate | Status |
 | --- | --- | --- | --- |
-| O1 | `mintclaw-main.service` exceeded its 30-second stop budget and was killed on all five stops observed in the cutover and observation window | Give gateway shutdown one bounded lifecycle owner; repeated loaded stops must exit cleanly without `SIGKILL`, abandoned child processes, or session corruption | Open |
+| O1 | `mintclaw-main.service` exceeded its 30-second stop budget and was killed on all five stops observed in the cutover and observation window | Give gateway shutdown one bounded lifecycle owner; repeated loaded stops must exit cleanly without `SIGKILL`, abandoned child processes, or session corruption | Complete; #1007 deployed on `7e52c1dd`, with five loaded stops, five clean starts, no timeout or `SIGKILL`, and no surviving terminal child |
 | O2 | Seahorse reconciliation/provenance writes and live ingest can collide with `SQLITE_BUSY`; the warning recurred after final reapply | Give provenance mutation one concurrency and retry contract; startup reconciliation and live turns must complete without a database-lock failure | Open |
 | O3 | A live-agent error was delivered through the gateway outbox, but the CLI kept waiting until its outer timeout | Make success and error finals share one terminal-delivery owner; the client must return promptly after either final and never wait for a second terminator | Open |
+
+The full O1 build, recovery, rollout, five-cycle loaded shutdown evidence,
+smokes, trace, and cleanup record is in the
+[O1 shutdown deployment evidence](../operations/architecture-simplification-o1-shutdown.md).
 
 Diagnostic evidence also showed that `root_turn_id` alone is not globally
 unique across restarts. Trace selection for these packets must therefore bind
@@ -1999,13 +2005,13 @@ metadata documents, 649 histories, 10,400 valid messages, and zero archived
 documents, aliases, nested calls, or Google cases to transform. All expected
 services were active, no unit had failed, no legacy product process existed,
 and the ten-minute error journal was empty. The verified targeted archive and
-manifests remain in the compact recovery set; five rollback-observed trees and
+manifests remain in the compact recovery set; 15 rollback-observed trees and
 the operational staging and preflight copies were pruned. Full commands,
 digests, canaries, rollback evidence, and retained artifacts are recorded in
 the [Z1 session cutover evidence](../operations/architecture-simplification-z1-session-cutover.md).
 
 The compatibility-reset objective is therefore complete without adding a
-steady-state old-state reader. The roadmap remains active only for O1-O3 and
+steady-state old-state reader. The roadmap remains active only for O2-O3 and
 the final requirement-by-requirement audit after those focused packets.
 
 ## Validation For Every Code Packet
