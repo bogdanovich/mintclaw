@@ -1802,6 +1802,18 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 	}
 }
 
+func TestBrowserActDescriptionExplainsModeDependentApproval(t *testing.T) {
+	description := (&BrowserActTool{}).Description()
+	for _, required := range []string{"effect is audit and recovery metadata", "approval_mode", "model_requested", "confirmation=request"} {
+		if !strings.Contains(description, required) {
+			t.Fatalf("browser_act description is missing %q: %s", required, description)
+		}
+	}
+	if strings.Contains(description, "external_commit or unknown suspends") {
+		t.Fatalf("browser_act description retains effect-driven approval promise: %s", description)
+	}
+}
+
 func TestBrowserActDeclaredNavigationHasNoApprovalOrExternalActionReceipt(t *testing.T) {
 	preparation := browser.Preparation{Action: browser.PreparedAction{
 		ID: "prepared_navigation", TabID: "tab_primary", CurrentOrigin: "https://example.com",

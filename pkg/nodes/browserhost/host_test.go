@@ -1476,6 +1476,32 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		}
 	})
 
+	t.Run("dry run accepts explicitly confirmed local edit", func(t *testing.T) {
+		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
+		host, worker, initial := newFixture(t, element)
+		session := host.sessions["browser_session_1"]
+		session.profile.DryRun = true
+		session.profile.AllowApprovedActions = false
+		session.profile.ApprovalMode = "model_requested"
+		request := BrowserHostActRequest{
+			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+			ActionInvocationID: "browser_fill_confirmed_dry_run",
+			Action: browserworker.Action{
+				Kind: "fill", Ref: initial.Elements[0].Ref, Value: "Ada",
+			},
+			Effect: "local_edit", Confirmation: "request", CurrentOrigin: "https://example.com",
+			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
+			InputDigest: nodes.BrowserInputDigest("Ada"), InputBytes: len("Ada"),
+			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		}
+		request.ApprovalDigest, _ = nodes.BrowserApprovalDigest(browserHostActInput(request))
+		result, err := host.Act(t.Context(), request)
+		if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 {
+			t.Fatalf("Act(confirmed dry-run fill) = %#v, %v; actions=%#v", result, err, worker.actions)
+		}
+	})
+
 	t.Run("deny fill above profile text limit", func(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
 		host, worker, initial := newFixture(t, element)

@@ -1400,7 +1400,9 @@ func (tool *BrowserCaptureTool) result(
 func (*BrowserActTool) Name() string { return "browser_act" }
 func (*BrowserActTool) Description() string {
 	return "Prepare and execute exactly one fresh-reference browser action. For every click, declare its workflow effect: " +
-		"read, navigation, or local_edit executes without human approval; external_commit or unknown suspends for durable approval. " +
+		"effect is audit and recovery metadata; it does not by itself grant authority or determine confirmation. " +
+		"Read the effective approval_mode from browser_targets: none never pauses, model_requested pauses only when " +
+		"confirmation=request, and always_commit pauses external_commit or unknown actions plus explicit requests. " +
 		"For non-click actions, omit effect; a redundant value is ignored because the broker derives the fixed effect. " +
 		"Classify from the user request and runtime objective checklist, not from the element role or HTTP method. " +
 		"Use external_commit immediately before an important external state change such as publishing, submitting an order, " +

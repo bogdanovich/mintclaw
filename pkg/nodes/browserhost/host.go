@@ -1219,8 +1219,7 @@ func (host *BrowserHost) executeAction(
 		request.Confirmation,
 	)
 	dryRunDownload := action == "download" && request.Effect == "unknown" && session.profile.DryRun
-	if requiresApproval && (!nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) ||
-		(!dryRunDownload && (session.profile.DryRun || !session.profile.AllowApprovedActions))) {
+	if requiresApproval && !nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	if !requiresApproval && request.ApprovalDigest != "" {
