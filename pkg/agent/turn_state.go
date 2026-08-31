@@ -174,6 +174,8 @@ type turnExecution struct {
 	objectiveRepairAttempted bool
 	objectiveRepairPending   bool
 	objectiveRepairActive    bool
+	objectiveRepairMessages  []providers.Message
+	objectiveRepairTailIndex int
 
 	loopGuard *loopguard.Controller
 

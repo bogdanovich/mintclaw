@@ -144,8 +144,9 @@ func objectiveItemsParameter() map[string]any {
 				"item": map[string]any{"type": "string"},
 				"kind": map[string]any{"type": "string", "enum": []string{"result", "external_action"}},
 				"acceptance": map[string]any{
-					"type":        "object",
-					"description": "Optional machine-checkable shape for a result objective. Use records with required_fields for requested lists or tables, text for prose, and artifact for stable output references.",
+					"type":                 "object",
+					"description":          "Optional machine-checkable shape for a result objective. Use records with required_fields for requested lists or tables, text for prose, and artifact for stable output references.",
+					"additionalProperties": false,
 					"properties": map[string]any{
 						"output_kind": map[string]any{
 							"type": "string", "enum": []string{"text", "records", "artifact"},
@@ -205,6 +206,13 @@ func parseObjectiveAcceptance(raw any, objectiveKind string) (*taskresult.Object
 	value, ok := raw.(map[string]any)
 	if !ok {
 		return nil, errors.New("must be an object")
+	}
+	for key := range value {
+		switch key {
+		case "output_kind", "required_fields", "min_items":
+		default:
+			return nil, fmt.Errorf("contains unknown field %q", key)
+		}
 	}
 	outputKind, _ := value["output_kind"].(string)
 	outputKind = strings.TrimSpace(outputKind)

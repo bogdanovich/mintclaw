@@ -60,13 +60,17 @@ func (p *Pipeline) runPreparedTurnLoop(
 			exec.objectiveRepairPending = false
 			exec.objectiveRepairActive = true
 		}
+		repairIteration := exec.objectiveRepairActive
 
-		pendingMessages := append([]providers.Message(nil), exec.pendingMessages...)
+		var pendingMessages []providers.Message
+		if !repairIteration {
+			pendingMessages = append([]providers.Message(nil), exec.pendingMessages...)
+		}
 		if len(pendingMessages) > 0 {
 			exec.markSteeringObserved()
 			exec.pendingMessages = nil
 		}
-		if iteration == 1 && !ts.opts.mode.skipsInitialSteeringPoll() {
+		if !repairIteration && iteration == 1 && !ts.opts.mode.skipsInitialSteeringPoll() {
 			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 				exec.markSteeringObserved()
 				pendingMessages = append(pendingMessages, steerMsgs...)
@@ -99,7 +103,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 		}
 
 		// Poll for pending SubTurn results.
-		if ts.pendingResults != nil {
+		if !repairIteration && ts.pendingResults != nil {
 			if result, ok := ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
 				content := p.filterPendingResultForLLM(result.ForLLM)
 				msg := subTurnResultPromptMessage(content)
@@ -161,12 +165,36 @@ func (p *Pipeline) runPreparedTurnLoop(
 		ts.setPhase(TurnPhaseRunning)
 		llm = newLLMIterationState(iteration)
 		llmOutcome, callErr := p.CallLLM(ctx, turnCtx, ts, exec, llm)
+		if repairIteration {
+			exec.objectiveRepairActive = false
+		}
 		if callErr != nil {
 			turnStatus = TurnEndStatusError
 			return turnResult{}, turnStatus, callErr
 		}
 		messages = exec.messages
 		finalContent = llmOutcome.terminalCandidate(finalContent)
+		if repairIteration {
+			if repaired := strings.TrimSpace(llm.response.Content); repaired != "" {
+				repairedMessage := providers.Message{Role: "assistant", Content: llm.response.Content}
+				exec.messages = append(exec.messages, repairedMessage)
+				exec.objectiveRepairMessages = append(exec.objectiveRepairMessages, repairedMessage)
+				messages = exec.messages
+			}
+			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
+				exec.markSteeringObserved()
+				exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+			}
+			if ts.pendingResults != nil {
+				if result, ok := ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
+					content := p.filterPendingResultForLLM(result.ForLLM)
+					exec.pendingMessages = append(exec.pendingMessages, subTurnResultPromptMessage(content))
+				}
+			}
+			if len(exec.pendingMessages) > 0 {
+				continue
+			}
+		}
 
 		switch llmOutcome.Control {
 		case ControlContinue:
@@ -385,10 +413,12 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 	cancelConfiguredStreamingLLM(turnCtx, llm)
 	exec.objectiveRepairAttempted = true
 	exec.objectiveRepairPending = true
-	exec.messages = append(exec.messages,
-		providers.Message{Role: "assistant", Content: terminal.content},
-		providers.Message{Role: "user", Content: instruction},
-	)
+	exec.objectiveRepairTailIndex = len(ts.liveTurnMessagesSnapshot())
+	exec.objectiveRepairMessages = []providers.Message{
+		{Role: "assistant", Content: terminal.content},
+		{Role: "user", Content: instruction},
+	}
+	exec.messages = append(exec.messages, exec.objectiveRepairMessages...)
 	logger.WarnCF("agent", "Scheduled objective finalization repair", map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": ts.currentIteration(),

@@ -88,6 +88,10 @@ func TestParseObjectiveItemsRejectsInvalidAcceptance(t *testing.T) {
 			"item": "report", "kind": "result",
 			"acceptance": map[string]any{"output_kind": "records", "min_items": float64(1.5)},
 		},
+		{
+			"item": "report", "kind": "result",
+			"acceptance": map[string]any{"output_kind": "records", "min_item": float64(3)},
+		},
 	}
 	for _, objective := range tests {
 		if items, err := parseObjectiveItems([]any{objective}); err == nil {
@@ -110,6 +114,13 @@ func TestDelegateTool_Parameters(t *testing.T) {
 	props, ok := params["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("properties should be a map")
+	}
+	objectiveItems := props["objective_items"].(map[string]any)
+	itemSchema := objectiveItems["items"].(map[string]any)
+	itemProperties := itemSchema["properties"].(map[string]any)
+	acceptance := itemProperties["acceptance"].(map[string]any)
+	if additional, ok := acceptance["additionalProperties"].(bool); !ok || additional {
+		t.Fatalf("acceptance additionalProperties = %#v, want false", acceptance["additionalProperties"])
 	}
 	_, hasAgentID := props["agent_id"]
 	if !hasAgentID {
