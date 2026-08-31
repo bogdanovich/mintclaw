@@ -143,8 +143,8 @@ Trace lookup also required time, profile, and session correlation because a
 trace instance and records whether it completed and was truncated.
 
 After the observation window, the final manifest was copied into the retained
-recovery set. Five rollback-observed trees, the converter staging tree, and the
-preflight copy were deleted after confirming no process held them. Free space
-increased from 132 GiB to 133 GiB. The verified targeted session archive is
+recovery set. Fifteen rollback-observed trees, the converter staging tree, and
+the preflight copy were deleted after confirming no process held them. Free
+space increased from 132 GiB to 133 GiB. The verified targeted session archive is
 retained as the rollback artifact; the temporary converter source and tests
 are deleted by this closeout.
