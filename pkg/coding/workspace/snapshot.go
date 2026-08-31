@@ -613,7 +613,13 @@ func sanitizedGitEnvironment() []string {
 		}
 		environment = append(environment, entry)
 	}
-	return append(environment, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0")
+	return append(
+		environment,
+		"LC_ALL=C",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_NO_LAZY_FETCH=1",
+		"GIT_LITERAL_PATHSPECS=1",
+	)
 }
 
 func parseStatus(data []byte) []ChangedPath {

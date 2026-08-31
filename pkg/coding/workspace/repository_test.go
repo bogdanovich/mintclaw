@@ -166,6 +166,94 @@ func TestRepositoryDiffDisablesConfiguredGitHelpers(t *testing.T) {
 	}
 }
 
+func TestRepositoryDiffDisablesLazyFetchForMissingPromisorObject(t *testing.T) {
+	root := initGitRepository(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGitTest(t, root, "clone", "--bare", root, remote)
+	blob := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD:tracked.txt"))
+	objectPath := filepath.Join(root, ".git", "objects", blob[:2], blob[2:])
+	if err := os.Remove(objectPath); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "config", "extensions.partialClone", "origin")
+	runGitTest(t, root, "config", "remote.origin.promisor", "true")
+	runGitTest(t, root, "config", "remote.origin.partialclonefilter", "blob:none")
+	runGitTest(t, root, "config", "remote.origin.url", remote)
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := NewRepository(root, root, Limits{}).Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent})
+	if result.Warning == "" && result.UnavailableReason == "" {
+		t.Fatalf("missing promisor object was not surfaced: %#v", result)
+	}
+	command := exec.Command("git", "-C", root, "cat-file", "-e", blob)
+	command.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_OPTIONAL_LOCKS=0")
+	if err := command.Run(); err == nil {
+		t.Fatal("passive evidence lazily fetched the missing promisor object")
+	}
+}
+
+func TestRepositoryDiffTreatsGitDerivedPathAsLiteral(t *testing.T) {
+	root := initGitRepository(t)
+	const name = ":(exclude)"
+	if err := os.WriteFile(filepath.Join(root, name), []byte("before\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "--literal-pathspecs", "add", "--", name)
+	runGitTest(t, root, "commit", "-m", "add pathspec-like filename")
+	if err := os.WriteFile(filepath.Join(root, name), []byte("after\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := NewRepository(root, root, Limits{}).Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent})
+	file := requireDiffFile(t, result, name)
+	if file.Additions != 1 || file.Deletions != 1 || !hasDiffLine(file, "addition", 1, "after") {
+		t.Fatalf("literal pathspec diff = %#v", file)
+	}
+}
+
+func TestRepositoryDiffPreservesRenameAcrossTargets(t *testing.T) {
+	root := initGitRepository(t)
+	base := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))
+	if err := os.Rename(filepath.Join(root, "tracked.txt"), filepath.Join(root, "renamed.txt")); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "add", "-A")
+	repository := NewRepository(root, root, Limits{})
+	assertRenameDiff(t, repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent}))
+	runGitTest(t, root, "commit", "-m", "rename tracked file")
+	commit := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))
+	assertRenameDiff(t, repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetBase, Ref: base}))
+	assertRenameDiff(t, repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetCommit, Ref: commit}))
+}
+
+func TestRepositoryDiffRejectsAmbiguousMergeCommit(t *testing.T) {
+	root := initGitRepository(t)
+	runGitTest(t, root, "switch", "-c", "feature")
+	if err := os.WriteFile(filepath.Join(root, "feature.txt"), []byte("feature\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "add", "feature.txt")
+	runGitTest(t, root, "commit", "-m", "feature")
+	runGitTest(t, root, "switch", "main")
+	if err := os.WriteFile(filepath.Join(root, "main.txt"), []byte("main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "add", "main.txt")
+	runGitTest(t, root, "commit", "-m", "main")
+	runGitTest(t, root, "merge", "--no-ff", "feature", "-m", "merge feature")
+	mergeCommit := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))
+
+	result := NewRepository(root, root, Limits{}).Diff(
+		t.Context(),
+		DiffTarget{Kind: DiffTargetCommit, Ref: mergeCommit},
+	)
+	if !strings.Contains(result.UnavailableReason, "merge commit diff is ambiguous") || len(result.Files) != 0 {
+		t.Fatalf("Diff(merge commit) = %#v", result)
+	}
+}
+
 func TestParsePatchFileMarksSubmoduleMetadata(t *testing.T) {
 	budget := diffBudget{bytes: 4096, hunks: 4, lines: 20}
 	file := parsePatchFile(DiffFile{Path: "nested"}, []byte(
@@ -215,6 +303,15 @@ func hasDiffLine(file DiffFile, kind string, line int, text string) bool {
 		}
 	}
 	return false
+}
+
+func assertRenameDiff(t *testing.T, result DiffResult) {
+	t.Helper()
+	file := requireDiffFile(t, result, "renamed.txt")
+	if !strings.HasPrefix(file.Status, "R") || file.OriginalPath != "tracked.txt" ||
+		file.Additions != 0 || file.Deletions != 0 {
+		t.Fatalf("rename diff = %#v in %#v", file, result)
+	}
 }
 
 func runGitTestOutput(t *testing.T, root string, args ...string) string {

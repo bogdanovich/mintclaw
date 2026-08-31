@@ -280,6 +280,19 @@ func (repository *Repository) resolveDiffSpec(
 		if reason != "" {
 			return spec, reason
 		}
+		parents, parentErr := runGitWithConfig(
+			ctx,
+			snapshot.ProjectRoot,
+			repository.limits.CommandBytes,
+			filters,
+			"rev-list", "--parents", "-n", "1", resolved,
+		)
+		if parentErr != nil {
+			return spec, boundedWarning("could not inspect commit parents", parentErr, parents.stderr)
+		}
+		if len(strings.Fields(string(parents.stdout))) > 2 {
+			return spec, "merge commit diff is ambiguous; select a local base or one parent explicitly"
+		}
 		spec.resolvedRevision = resolved
 		return spec, ""
 	default:
@@ -469,7 +482,11 @@ func (repository *Repository) diffFile(
 			"--ignore-submodules=dirty", "--find-renames", "--unified=3", spec.resolvedRevision,
 		}
 	}
-	args = append(args, "--", changed.Path)
+	args = append(args, "--")
+	if changed.OriginalPath != "" {
+		args = append(args, changed.OriginalPath)
+	}
+	args = append(args, changed.Path)
 	limit := min(repository.limits.CommandBytes, budget.bytes)
 	output, err := runGitWithConfig(ctx, snapshot.ProjectRoot, limit, filters, args...)
 	if err != nil {
