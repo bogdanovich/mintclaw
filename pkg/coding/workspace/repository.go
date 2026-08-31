@@ -243,7 +243,20 @@ type diffSpec struct {
 	kind             DiffTargetKind
 	resolvedRevision string
 	mergeBase        string
+	fromRevision     string
+	toRevision       string
+	rootCommit       bool
 	unborn           bool
+}
+
+func (spec diffSpec) appendRevisions(args []string) []string {
+	if spec.fromRevision != "" {
+		args = append(args, spec.fromRevision)
+	}
+	if spec.toRevision != "" {
+		args = append(args, spec.toRevision)
+	}
+	return args
 }
 
 func (repository *Repository) resolveDiffSpec(
@@ -255,6 +268,12 @@ func (repository *Repository) resolveDiffSpec(
 	spec := diffSpec{kind: target.Kind, unborn: snapshot.Git.Unborn}
 	switch target.Kind {
 	case DiffTargetCurrent:
+		if !snapshot.Git.Unborn {
+			if snapshot.Git.Head == "" {
+				return spec, "current comparison requires a resolved HEAD"
+			}
+			spec.fromRevision = snapshot.Git.Head
+		}
 		return spec, ""
 	case DiffTargetBase:
 		if snapshot.Git.Head == "" {
@@ -274,6 +293,7 @@ func (repository *Repository) resolveDiffSpec(
 		if spec.mergeBase == "" {
 			return spec, "local base has no merge base with HEAD"
 		}
+		spec.fromRevision = spec.mergeBase
 		return spec, ""
 	case DiffTargetCommit:
 		resolved, reason := repository.resolveCommit(ctx, snapshot.ProjectRoot, target.Ref, filters)
@@ -298,8 +318,12 @@ func (repository *Repository) resolveDiffSpec(
 			if parentErr != nil {
 				return spec, "commit parent is not available locally at a shallow or partial-clone boundary"
 			}
+			spec.fromRevision = parents[0]
+		} else {
+			spec.rootCommit = true
 		}
 		spec.resolvedRevision = resolved
+		spec.toRevision = resolved
 		return spec, ""
 	default:
 		return spec, fmt.Sprintf("unsupported diff target %q", target.Kind)
@@ -374,18 +398,13 @@ func (repository *Repository) diffPaths(
 		"diff", "--name-status", "-z", "--find-renames", "--no-ext-diff", "--no-textconv",
 		"--ignore-submodules=dirty",
 	}
-	switch spec.kind {
-	case DiffTargetCurrent:
-		if !spec.unborn {
-			args = append(args, "HEAD")
-		}
-	case DiffTargetBase:
-		args = append(args, spec.mergeBase)
-	default:
+	if spec.rootCommit {
 		args = []string{
 			"diff-tree", "--root", "--no-commit-id", "-r", "-z", "--name-status", "--find-renames",
 			spec.resolvedRevision,
 		}
+	} else {
+		args = spec.appendRevisions(args)
 	}
 	output, err := runGitWithConfig(ctx, snapshot.ProjectRoot, repository.limits.CommandBytes, filters, args...)
 	if err != nil {
@@ -513,16 +532,13 @@ func (repository *Repository) diffFile(
 		"diff", "--patch", "--no-color", "--no-ext-diff", "--no-textconv",
 		"--ignore-submodules=dirty", "--find-renames", "--unified=3",
 	}
-	switch spec.kind {
-	case DiffTargetCurrent:
-		args = append(args, "HEAD")
-	case DiffTargetBase:
-		args = append(args, spec.mergeBase)
-	default:
+	if spec.rootCommit {
 		args = []string{
 			"show", "--format=", "--patch", "--no-color", "--no-ext-diff", "--no-textconv",
 			"--ignore-submodules=dirty", "--find-renames", "--unified=3", spec.resolvedRevision,
 		}
+	} else {
+		args = spec.appendRevisions(args)
 	}
 	args = append(args, "--")
 	if changed.OriginalPath != "" {

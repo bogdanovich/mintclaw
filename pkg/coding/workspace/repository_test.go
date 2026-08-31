@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"net/url"
 	"os"
@@ -83,6 +84,20 @@ func TestRepositoryDiffSupportsLocalBaseAndCommitTargets(t *testing.T) {
 	if commitResult.ResolvedRevision != commit || commitResult.MergeBase != "" ||
 		commitResult.UnavailableReason != "" || commitResult.Additions != 1 || len(commitResult.Files) != 1 {
 		t.Fatalf("Diff(commit) = %#v", commitResult)
+	}
+}
+
+func TestRepositoryDiffUsesRootModeForTrueRootCommit(t *testing.T) {
+	root := initGitRepository(t)
+	commit := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))
+
+	result := NewRepository(root, root, Limits{}).Diff(
+		t.Context(),
+		DiffTarget{Kind: DiffTargetCommit, Ref: commit},
+	)
+	file := requireDiffFile(t, result, "tracked.txt")
+	if result.UnavailableReason != "" || len(result.Files) != 1 || file.Additions != 1 || file.Deletions != 0 {
+		t.Fatalf("Diff(root commit) = %#v", result)
 	}
 }
 
@@ -273,6 +288,60 @@ func TestRepositoryDiffRejectsCommitWithUnavailableShallowParent(t *testing.T) {
 	if !strings.Contains(result.UnavailableReason, "commit parent is not available locally") ||
 		len(result.Files) != 0 {
 		t.Fatalf("Diff(shallow commit) = %#v", result)
+	}
+}
+
+func TestRepositoryDiffUsesExplicitParentAtShallowBoundary(t *testing.T) {
+	source := initGitRepository(t)
+	if err := os.WriteFile(filepath.Join(source, "stable.txt"), []byte("stable\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, source, "add", "stable.txt")
+	runGitTest(t, source, "commit", "-m", "add stable parent content")
+	parent := strings.TrimSpace(runGitTestOutput(t, source, "rev-parse", "HEAD"))
+	runGitTest(t, source, "branch", "parent-boundary", parent)
+	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("target\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, source, "commit", "-am", "target")
+
+	shallow := filepath.Join(t.TempDir(), "shallow")
+	remoteURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(source)}).String()
+	runGitTest(t, t.TempDir(), "clone", "--depth=1", remoteURL, shallow)
+	target := strings.TrimSpace(runGitTestOutput(t, shallow, "rev-parse", "HEAD"))
+	runGitTest(
+		t,
+		shallow,
+		"fetch",
+		"--depth=1",
+		"origin",
+		"parent-boundary:refs/remotes/origin/parent-boundary",
+	)
+	if !strings.Contains(runGitTestOutput(t, shallow, "cat-file", "-p", target), "parent "+parent) {
+		t.Fatal("target raw header does not retain its parent")
+	}
+	shallowPath := filepath.Join(shallow, ".git", "shallow")
+	shallowBefore, err := os.ReadFile(shallowPath)
+	if err != nil || !strings.Contains(string(shallowBefore), target) {
+		t.Fatalf("target shallow marker unavailable: %q, %v", shallowBefore, err)
+	}
+
+	result := NewRepository(shallow, shallow, Limits{}).Diff(
+		t.Context(),
+		DiffTarget{Kind: DiffTargetCommit, Ref: target},
+	)
+	if result.UnavailableReason != "" || len(result.Files) != 1 ||
+		result.Files[0].Path != "tracked.txt" || requireDiffFile(t, result, "tracked.txt").Additions != 1 {
+		t.Fatalf("Diff(shallow boundary with local parent) = %#v", result)
+	}
+	shallowAfter, err := os.ReadFile(shallowPath)
+	if err != nil || !bytes.Equal(shallowAfter, shallowBefore) {
+		t.Fatalf(
+			"passive commit diff changed shallow state: before %q, after %q, error %v",
+			shallowBefore,
+			shallowAfter,
+			err,
+		)
 	}
 }
 
