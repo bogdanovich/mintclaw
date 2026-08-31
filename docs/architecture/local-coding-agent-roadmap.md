@@ -1586,6 +1586,13 @@ roadmap work remains outside this beta continuity gate.
 Goal: fill the high-value gaps after the native TUI and continuity model are
 stable.
 
+The dedicated [Codex-like coding TUI roadmap](local-coding-agent-codex-tui-roadmap.md)
+defines the ordered presentation protocol, active-cell model, commentary,
+plans, command grouping, diffs, live status, and terminal-quality work needed
+to evolve the completed P4 shell into a polished coding interface. Its `TUI.*`
+packets supplement this phase and deliberately depend on P6.4 for typed Git
+evidence rather than duplicating that contract.
+
 #### P6.1 — Thread rename, archive, delete, and fork
 
 Dependencies: P4.4, P5.4
