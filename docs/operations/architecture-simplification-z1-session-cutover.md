@@ -127,7 +127,7 @@ The session compatibility reset passed, but the exercise exposed three
 separate runtime ownership defects:
 
 1. `mintclaw-main.service` exceeded its 30-second stop budget and systemd sent
-   `SIGKILL` during all three controlled stops.
+   `SIGKILL` during all five stops observed in the cutover and observation window.
 2. Seahorse provenance mutation collided with another SQLite writer and
    returned `SQLITE_BUSY`, including one recurrence after final reapply.
 3. The live-agent client did not terminate after the gateway delivered an

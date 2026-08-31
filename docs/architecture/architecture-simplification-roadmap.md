@@ -648,7 +648,7 @@ refactor:
 
 | Packet | Finding | Required simplification and exit gate | Status |
 | --- | --- | --- | --- |
-| O1 | `mintclaw-main.service` exceeded its 30-second stop budget and was killed on each of three controlled stops | Give gateway shutdown one bounded lifecycle owner; repeated loaded stops must exit cleanly without `SIGKILL`, abandoned child processes, or session corruption | Open |
+| O1 | `mintclaw-main.service` exceeded its 30-second stop budget and was killed on all five stops observed in the cutover and observation window | Give gateway shutdown one bounded lifecycle owner; repeated loaded stops must exit cleanly without `SIGKILL`, abandoned child processes, or session corruption | Open |
 | O2 | Seahorse reconciliation/provenance writes and live ingest can collide with `SQLITE_BUSY`; the warning recurred after final reapply | Give provenance mutation one concurrency and retry contract; startup reconciliation and live turns must complete without a database-lock failure | Open |
 | O3 | A live-agent error was delivered through the gateway outbox, but the CLI kept waiting until its outer timeout | Make success and error finals share one terminal-delivery owner; the client must return promptly after either final and never wait for a second terminator | Open |
 
