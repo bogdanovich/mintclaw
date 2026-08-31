@@ -499,22 +499,34 @@ func (runtime *nodeAdmissionRuntime) withInvocationHandler(
 }
 
 func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
-	runtime.registryMu.Lock()
+	// A generation lease may be waiting on remote node I/O. End the handler's
+	// sessions before taking the write lock so shutdown can release that lease
+	// instead of waiting behind the work it owns and must cancel.
+	if err := waitForNodeAdmissionStateLock(ctx, runtime.registryMu.TryRLock); err != nil {
+		return fmt.Errorf("snapshot node admission shutdown state: %w", err)
+	}
 	wasMounted := runtime.mounted
 	handler := runtime.handler
 	offers := runtime.enrollmentOffers
-	terminalStore := runtime.terminalStore
-	transferSpool := runtime.transferSpool
-	invocationStore := runtime.invocationStore
-	runtime.mounted = false
-	runtime.generation++
-	runtime.registryMu.Unlock()
+	runtime.registryMu.RUnlock()
 	if wasMounted {
 		runtime.routes.UnregisterHTTPHandler(nodews.Path)
 		runtime.routes.UnregisterHTTPHandler(nodeEnrollmentOperatorPath)
 	}
 	offers.Invalidate()
-	runtime.registryMu.Lock()
+	var closeErr error
+	if handler != nil {
+		closeErr = handler.Close(ctx)
+	}
+
+	if err := waitForNodeAdmissionStateLock(ctx, runtime.registryMu.TryLock); err != nil {
+		return errors.Join(closeErr, fmt.Errorf("finalize node admission shutdown: %w", err))
+	}
+	terminalStore := runtime.terminalStore
+	transferSpool := runtime.transferSpool
+	invocationStore := runtime.invocationStore
+	runtime.mounted = false
+	runtime.generation++
 	terminalMounted := runtime.terminalMounted
 	terminalHub := runtime.terminalHub
 	runtime.terminalMounted = false
@@ -525,10 +537,6 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	}
 	if terminalHub != nil {
 		terminalHub.shutdown()
-	}
-	var closeErr error
-	if handler != nil {
-		closeErr = handler.Close(ctx)
 	}
 	var invocationErr error
 	if invocationStore != nil {
@@ -568,5 +576,21 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	runtime.enrollmentHandler = nil
 	runtime.enrollmentOffers = nil
 	runtime.registryMu.Unlock()
+	return nil
+}
+
+func waitForNodeAdmissionStateLock(ctx context.Context, tryLock func() bool) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for !tryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 	return nil
 }

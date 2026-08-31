@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,6 +36,19 @@ type closeErrorNodeAdmissionHandler struct {
 
 func (handler *closeErrorNodeAdmissionHandler) Close(context.Context) error {
 	return handler.err
+}
+
+type leaseReleasingNodeAdmissionHandler struct {
+	*fakeNodeAdmissionHandler
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func (handler *leaseReleasingNodeAdmissionHandler) Close(context.Context) error {
+	handler.closeOnce.Do(func() {
+		close(handler.closed)
+	})
+	return nil
 }
 
 func TestNodeAdmissionWorkspaceChangeFailsClosed(t *testing.T) {
@@ -183,6 +197,142 @@ func TestServiceShutdownClosesNodeAdmissionOutsideReload(t *testing.T) {
 	}
 	if runtime.mounted || runtime.sessions != nil || routes.handler != nil {
 		t.Fatal("gateway shutdown left node admission active")
+	}
+}
+
+func TestNodeAdmissionCloseEndsSessionsBeforeWaitingForGenerationLease(t *testing.T) {
+	routes := &fakeNodeAdmissionRoutes{}
+	handler := &leaseReleasingNodeAdmissionHandler{
+		fakeNodeAdmissionHandler: &fakeNodeAdmissionHandler{},
+		closed:                   make(chan struct{}),
+	}
+	runtime := &nodeAdmissionRuntime{
+		routes:           routes,
+		handler:          handler,
+		registryPath:     "registry.json",
+		enrollmentOffers: nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{}),
+		generation:       1,
+		mounted:          true,
+	}
+
+	leaseStarted := make(chan struct{})
+	releaseLease := make(chan struct{})
+	leaseDone := make(chan error, 1)
+	go func() {
+		leaseDone <- runtime.withInvocationHandler(
+			runtime.registryPath,
+			runtime.generation,
+			func(nodeAdmissionHandler) error {
+				close(leaseStarted)
+				select {
+				case <-handler.closed:
+				case <-releaseLease:
+				}
+				return nil
+			},
+		)
+	}()
+	<-leaseStarted
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- runtime.Close(ctx)
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(releaseLease)
+		<-leaseDone
+		<-closeDone
+		t.Fatal("Close() waited for a generation lease before ending its node sessions")
+	}
+	close(releaseLease)
+	if err := <-leaseDone; err != nil {
+		t.Fatalf("leased operation error = %v", err)
+	}
+	if runtime.mounted || runtime.handler != nil || routes.unregisterCount != 1 ||
+		routes.enrollmentUnregisterCount != 1 {
+		t.Fatalf("closed runtime = %#v, routes = %#v", runtime, routes)
+	}
+}
+
+func TestNodeAdmissionCloseBoundsGenerationLeaseWait(t *testing.T) {
+	routes := &fakeNodeAdmissionRoutes{}
+	runtime := &nodeAdmissionRuntime{
+		routes:           routes,
+		handler:          &fakeNodeAdmissionHandler{},
+		registryPath:     "registry.json",
+		enrollmentOffers: nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{}),
+		generation:       1,
+		mounted:          true,
+	}
+
+	leaseStarted := make(chan struct{})
+	releaseLease := make(chan struct{})
+	leaseDone := make(chan error, 1)
+	go func() {
+		leaseDone <- runtime.withInvocationHandler(
+			runtime.registryPath,
+			runtime.generation,
+			func(nodeAdmissionHandler) error {
+				close(leaseStarted)
+				<-releaseLease
+				return nil
+			},
+		)
+	}()
+	<-leaseStarted
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	startedAt := time.Now()
+	err := runtime.Close(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
+		t.Fatalf("Close() exceeded its bounded wait: %s", elapsed)
+	}
+	if !runtime.mounted || runtime.handler == nil {
+		t.Fatal("bounded close discarded state required for a retry")
+	}
+
+	close(releaseLease)
+	if err := <-leaseDone; err != nil {
+		t.Fatalf("leased operation error = %v", err)
+	}
+	if err := runtime.Close(t.Context()); err != nil {
+		t.Fatalf("retry Close() error = %v", err)
+	}
+	if runtime.mounted || runtime.handler != nil {
+		t.Fatal("successful close retry retained node admission state")
+	}
+}
+
+func TestNodeAdmissionCloseBoundsInitialStateWait(t *testing.T) {
+	runtime := &nodeAdmissionRuntime{}
+	runtime.registryMu.Lock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	startedAt := time.Now()
+	err := runtime.Close(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 500*time.Millisecond {
+		t.Fatalf("Close() exceeded its bounded initial state wait: %s", elapsed)
+	}
+
+	runtime.registryMu.Unlock()
+	if err := runtime.Close(t.Context()); err != nil {
+		t.Fatalf("retry Close() error = %v", err)
 	}
 }
 
