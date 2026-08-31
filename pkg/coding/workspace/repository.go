@@ -668,6 +668,11 @@ func readPassiveRegularFile(root, relative string, limit int) ([]byte, os.FileIn
 	if err != nil {
 		return nil, info, false, "untracked file could not be read"
 	}
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(opened, after) || opened.Size() != after.Size() ||
+		opened.ModTime() != after.ModTime() {
+		return nil, info, false, "untracked path changed while it was read"
+	}
 	if len(content) > limit {
 		return content[:limit], info, true, ""
 	}

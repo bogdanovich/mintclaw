@@ -144,7 +144,8 @@ func validateDeleteProjectBoundaries(threadRoot string, project ProjectIdentity)
 
 func ownedThreadEntry(name string) bool {
 	switch name {
-	case metadataFileName, leaseFileName, "sessions", "context", "memory", "runtime", "diagnostics", "media",
+	case metadataFileName, leaseFileName, repositoryDirectory,
+		"sessions", "context", "memory", "runtime", "diagnostics", "media",
 		attachmentDirectory:
 		return true
 	default:

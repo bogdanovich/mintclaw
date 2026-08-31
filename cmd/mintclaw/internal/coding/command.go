@@ -20,6 +20,7 @@ import (
 	codingpicker "github.com/bogdanovich/mintclaw/pkg/coding/picker"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 type dependencies struct {
@@ -241,6 +242,16 @@ func prepareNewThread(
 	lease, leaseErr := store.AcquireLease(metadata.ThreadID)
 	if leaseErr != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, leaseErr
+	}
+	if err := captureAndPublishRepositoryBaseline(
+		ctx,
+		store,
+		lease,
+		metadata,
+		codingworkspace.BaselineOriginNew,
+		deps.now(),
+	); err != nil {
+		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, errors.Join(err, lease.Release())
 	}
 	if err := store.Save(metadata); err != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, errors.Join(err, lease.Release())
@@ -762,11 +773,53 @@ func prepareResumedThread(
 	if _, err := runtimeLayoutFor(store, metadata); err != nil {
 		return thread.Metadata{}, lease, err
 	}
+	if _, err := store.LoadRepositoryBaselineWithLease(ctx, lease, metadata); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return thread.Metadata{}, lease, err
+		}
+		if err := captureAndPublishRepositoryBaseline(
+			ctx,
+			store,
+			lease,
+			metadata,
+			codingworkspace.BaselineOriginResumeAdoption,
+			deps.now(),
+		); err != nil {
+			return thread.Metadata{}, lease, err
+		}
+	}
 	if err := store.Save(metadata); err != nil {
 		return thread.Metadata{}, lease, err
 	}
 	admitted = true
 	return metadata, lease, nil
+}
+
+func captureAndPublishRepositoryBaseline(
+	ctx context.Context,
+	store *thread.Store,
+	lease *thread.Lease,
+	metadata thread.Metadata,
+	origin codingworkspace.BaselineOrigin,
+	capturedAt time.Time,
+) error {
+	repository := codingworkspace.NewRepository(
+		metadata.Project.ProjectRoot,
+		metadata.Project.InvocationCWD,
+		codingworkspace.Limits{},
+	)
+	baseline, err := repository.CaptureBaseline(ctx, codingworkspace.BaselineRequest{
+		ProjectKey: metadata.Project.ProjectKey,
+		Origin:     origin,
+		CapturedAt: capturedAt.UTC(),
+	})
+	if err != nil {
+		return fmt.Errorf("coding thread: capture repository baseline: %w", err)
+	}
+	if err := store.PublishRepositoryBaseline(ctx, lease, metadata, baseline); err != nil {
+		return fmt.Errorf("coding thread: publish repository baseline: %w", err)
+	}
+	return nil
 }
 
 func resumeThreadNotFoundError(threadID string) error {

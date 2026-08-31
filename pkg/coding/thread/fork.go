@@ -15,6 +15,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -522,6 +523,21 @@ func (s *Store) publishFork(
 	}
 	if identityErr := validateExistingForkLeaseRoot(targetRoot, targetLease); identityErr != nil {
 		return abort(fmt.Errorf("coding thread fork: pin target root: %w", identityErr))
+	}
+	baseline, baselineErr := workspace.NewRepository(
+		child.Project.ProjectRoot,
+		child.Project.InvocationCWD,
+		workspace.Limits{},
+	).CaptureBaseline(ctx, workspace.BaselineRequest{
+		ProjectKey: child.Project.ProjectKey,
+		Origin:     workspace.BaselineOriginFork,
+		CapturedAt: time.Now().UTC(),
+	})
+	if baselineErr != nil {
+		return abort(fmt.Errorf("coding thread fork: capture child repository baseline: %w", baselineErr))
+	}
+	if baselineErr := s.PublishRepositoryBaseline(ctx, targetLease, child, baseline); baselineErr != nil {
+		return abort(fmt.Errorf("coding thread fork: publish child repository baseline: %w", baselineErr))
 	}
 	if mkdirErr := targetRoot.Mkdir("sessions", 0o700); mkdirErr != nil {
 		return abort(fmt.Errorf("coding thread fork: create pinned sessions directory: %w", mkdirErr))
