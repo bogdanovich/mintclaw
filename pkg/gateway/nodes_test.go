@@ -466,6 +466,72 @@ func TestNodeAdmissionCloseBoundsFinalStateRelease(t *testing.T) {
 	}
 }
 
+func TestNodeAdmissionCloseRetainsStoreInstalledAfterShutdownSnapshot(t *testing.T) {
+	storePath := nodes.GatewayInvocationStorePath(t.TempDir())
+	installed := make(chan *nodes.GatewayInvocationStore, 1)
+	installErrors := make(chan error, 1)
+	installDone := make(chan struct{})
+	var installOnce sync.Once
+	runtime := &nodeAdmissionRuntime{
+		handler:          &fakeNodeAdmissionHandler{},
+		registryPath:     "registry.json",
+		enrollmentOffers: nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{}),
+		generation:       1,
+		mounted:          true,
+	}
+	routes := &fakeNodeAdmissionRoutes{unregisterHook: func(path string) {
+		if path != nodews.Path {
+			return
+		}
+		installOnce.Do(func() {
+			go func() {
+				defer close(installDone)
+				store, err := runtime.gatewayInvocationStore(storePath)
+				if err != nil {
+					installErrors <- err
+					return
+				}
+				installed <- store
+			}()
+		})
+		<-installDone
+	}}
+	runtime.routes = routes
+
+	err := runtime.Close(t.Context())
+	if !errors.Is(err, errNodeAdmissionShutdownStateChanged) {
+		t.Fatalf("Close() error = %v, want shutdown state changed", err)
+	}
+	var store *nodes.GatewayInvocationStore
+	select {
+	case store = <-installed:
+	case installErr := <-installErrors:
+		t.Fatalf("install post-snapshot store: %v", installErr)
+	}
+	if runtime.invocationStore != store || runtime.invocationStorePath != storePath {
+		t.Fatal("shutdown discarded the post-snapshot store required for retry")
+	}
+	if _, _, lookupErr := store.Lookup(
+		nodes.GatewayInvocationPrincipal{},
+		"inv_post_snapshot",
+	); errors.Is(lookupErr, os.ErrClosed) {
+		t.Fatal("post-snapshot store was closed without being owned by the shutdown snapshot")
+	}
+
+	if err = runtime.Close(t.Context()); err != nil {
+		t.Fatalf("retry Close() error = %v", err)
+	}
+	if runtime.invocationStore != nil || runtime.invocationStorePath != "" {
+		t.Fatal("successful retry retained the post-snapshot store")
+	}
+	if _, _, lookupErr := store.Lookup(
+		nodes.GatewayInvocationPrincipal{},
+		"inv_closed",
+	); !errors.Is(lookupErr, os.ErrClosed) {
+		t.Fatalf("retried shutdown store lookup error = %v, want closed", lookupErr)
+	}
+}
+
 func TestNodeAdmissionDisableReconcilesActiveTerminalStore(t *testing.T) {
 	routes := &fakeNodeAdmissionRoutes{}
 	runtime := &nodeAdmissionRuntime{routes: routes}

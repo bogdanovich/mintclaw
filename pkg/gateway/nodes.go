@@ -20,7 +20,10 @@ import (
 
 const nodeAdmissionDrainTimeout = 5 * time.Second
 
-var errNodeDiscoveryAuthorityUnavailable = errors.New("node discovery authority unavailable")
+var (
+	errNodeDiscoveryAuthorityUnavailable = errors.New("node discovery authority unavailable")
+	errNodeAdmissionShutdownStateChanged = errors.New("node admission shutdown state changed during resource drain")
+)
 
 type nodeAdmissionRoutes interface {
 	RegisterHTTPHandler(string, http.Handler) error
@@ -522,6 +525,7 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	invocationStore := runtime.invocationStore
 	runtime.mounted = false
 	runtime.generation++
+	shutdownGeneration := runtime.generation
 	terminalMounted := runtime.terminalMounted
 	terminalHub := runtime.terminalHub
 	runtime.terminalMounted = false
@@ -564,6 +568,13 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	}
 	if err := waitForNodeAdmissionStateLock(ctx, runtime.registryMu.TryLock); err != nil {
 		return fmt.Errorf("release node admission shutdown state: %w", err)
+	}
+	if runtime.mounted || runtime.generation != shutdownGeneration ||
+		runtime.terminalMounted || runtime.terminalHub != nil ||
+		runtime.terminalStore != terminalStore || runtime.transferSpool != transferSpool ||
+		runtime.invocationStore != invocationStore {
+		runtime.registryMu.Unlock()
+		return errNodeAdmissionShutdownStateChanged
 	}
 	runtime.registry = nil
 	runtime.sessions = nil
