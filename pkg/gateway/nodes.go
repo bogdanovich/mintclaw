@@ -300,7 +300,10 @@ func (runtime *nodeAdmissionRuntime) gatewayTerminalStore(
 	maxRecords int,
 	maxBytes int,
 ) (*nodes.GatewayTerminalStore, error) {
-	runtime.registryMu.Lock()
+	generation := runtime.invocationGeneration()
+	if err := runtime.lockCurrentAdmissionState(generation); err != nil {
+		return nil, err
+	}
 	defer runtime.registryMu.Unlock()
 	if runtime.terminalStore != nil && runtime.terminalStorePath == path {
 		return runtime.terminalStore, nil
@@ -319,27 +322,30 @@ func (runtime *nodeAdmissionRuntime) existingGatewayTerminalStore(
 	maxRecords int,
 	maxBytes int,
 ) (*nodes.GatewayTerminalStore, bool, error) {
-	runtime.registryMu.Lock()
-	defer runtime.registryMu.Unlock()
+	runtime.registryMu.RLock()
 	if runtime.terminalStore != nil && runtime.terminalStorePath == path {
-		if err := runtime.terminalStore.ReconcileShutdown(); err != nil {
+		store := runtime.terminalStore
+		runtime.registryMu.RUnlock()
+		if err := store.ReconcileShutdown(); err != nil {
 			return nil, true, err
 		}
-		return runtime.terminalStore, true, nil
+		return store, true, nil
 	}
+	runtime.registryMu.RUnlock()
 	store, found, err := nodes.OpenExistingGatewayTerminalStore(path, maxRecords, maxBytes)
 	if err != nil || !found {
 		return nil, found, err
 	}
-	runtime.terminalStore = store
-	runtime.terminalStorePath = path
 	return store, true, nil
 }
 
 func (runtime *nodeAdmissionRuntime) gatewayTransferSpool(
 	path string,
 ) (*nodes.GatewayTransferSpool, error) {
-	runtime.registryMu.Lock()
+	generation := runtime.invocationGeneration()
+	if err := runtime.lockCurrentAdmissionState(generation); err != nil {
+		return nil, err
+	}
 	defer runtime.registryMu.Unlock()
 	if runtime.transferSpool != nil && runtime.transferSpoolPath == path {
 		return runtime.transferSpool, nil
@@ -364,7 +370,10 @@ func (runtime *nodeAdmissionRuntime) gatewayTransferSpool(
 func (runtime *nodeAdmissionRuntime) gatewayInvocationStore(
 	path string,
 ) (*nodes.GatewayInvocationStore, error) {
-	runtime.registryMu.Lock()
+	generation := runtime.invocationGeneration()
+	if err := runtime.lockCurrentAdmissionState(generation); err != nil {
+		return nil, err
+	}
 	defer runtime.registryMu.Unlock()
 	if runtime.invocationStore != nil && runtime.invocationStorePath == path {
 		return runtime.invocationStore, nil
@@ -570,9 +579,7 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 		return fmt.Errorf("release node admission shutdown state: %w", err)
 	}
 	if runtime.mounted || runtime.generation != shutdownGeneration ||
-		runtime.terminalMounted || runtime.terminalHub != nil ||
-		runtime.terminalStore != terminalStore || runtime.transferSpool != transferSpool ||
-		runtime.invocationStore != invocationStore {
+		runtime.terminalMounted || runtime.terminalHub != nil {
 		runtime.registryMu.Unlock()
 		return errNodeAdmissionShutdownStateChanged
 	}
@@ -602,6 +609,19 @@ func (runtime *nodeAdmissionRuntime) setAdmissionHandler(handler nodeAdmissionHa
 	runtime.handlerMu.Lock()
 	runtime.handler = handler
 	runtime.handlerMu.Unlock()
+}
+
+// lockCurrentAdmissionState turns the mounted generation into a commit
+// barrier for lazily opened runtime resources. A caller that observed an older
+// generation, or that queued behind shutdown, cannot publish into the closed
+// state. The registry lock remains held on success.
+func (runtime *nodeAdmissionRuntime) lockCurrentAdmissionState(expectedGeneration uint64) error {
+	runtime.registryMu.Lock()
+	if !runtime.mounted || runtime.generation != expectedGeneration {
+		runtime.registryMu.Unlock()
+		return errNodeDiscoveryAuthorityUnavailable
+	}
+	return nil
 }
 
 func waitForNodeAdmissionStateLock(ctx context.Context, tryLock func() bool) error {

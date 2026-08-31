@@ -45,6 +45,16 @@ type leaseReleasingNodeAdmissionHandler struct {
 	closed    chan struct{}
 }
 
+func newMountedTestNodeAdmissionRuntime() *nodeAdmissionRuntime {
+	return &nodeAdmissionRuntime{
+		routes:           &fakeNodeAdmissionRoutes{},
+		handler:          &fakeNodeAdmissionHandler{},
+		enrollmentOffers: nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{}),
+		generation:       1,
+		mounted:          true,
+	}
+}
+
 func (handler *leaseReleasingNodeAdmissionHandler) Close(context.Context) error {
 	handler.closeOnce.Do(func() {
 		close(handler.closed)
@@ -466,9 +476,8 @@ func TestNodeAdmissionCloseBoundsFinalStateRelease(t *testing.T) {
 	}
 }
 
-func TestNodeAdmissionCloseRetainsStoreInstalledAfterShutdownSnapshot(t *testing.T) {
+func TestNodeAdmissionCloseRejectsStoreInstalledAfterShutdownSnapshot(t *testing.T) {
 	storePath := nodes.GatewayInvocationStorePath(t.TempDir())
-	installed := make(chan *nodes.GatewayInvocationStore, 1)
 	installErrors := make(chan error, 1)
 	installDone := make(chan struct{})
 	var installOnce sync.Once
@@ -486,49 +495,94 @@ func TestNodeAdmissionCloseRetainsStoreInstalledAfterShutdownSnapshot(t *testing
 		installOnce.Do(func() {
 			go func() {
 				defer close(installDone)
-				store, err := runtime.gatewayInvocationStore(storePath)
-				if err != nil {
-					installErrors <- err
-					return
-				}
-				installed <- store
+				_, err := runtime.gatewayInvocationStore(storePath)
+				installErrors <- err
 			}()
 		})
 		<-installDone
 	}}
 	runtime.routes = routes
 
-	err := runtime.Close(t.Context())
-	if !errors.Is(err, errNodeAdmissionShutdownStateChanged) {
-		t.Fatalf("Close() error = %v, want shutdown state changed", err)
+	if err := runtime.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
-	var store *nodes.GatewayInvocationStore
-	select {
-	case store = <-installed:
-	case installErr := <-installErrors:
-		t.Fatalf("install post-snapshot store: %v", installErr)
-	}
-	if runtime.invocationStore != store || runtime.invocationStorePath != storePath {
-		t.Fatal("shutdown discarded the post-snapshot store required for retry")
-	}
-	if _, _, lookupErr := store.Lookup(
-		nodes.GatewayInvocationPrincipal{},
-		"inv_post_snapshot",
-	); errors.Is(lookupErr, os.ErrClosed) {
-		t.Fatal("post-snapshot store was closed without being owned by the shutdown snapshot")
-	}
-
-	if err = runtime.Close(t.Context()); err != nil {
-		t.Fatalf("retry Close() error = %v", err)
+	if installErr := <-installErrors; !errors.Is(installErr, errNodeDiscoveryAuthorityUnavailable) {
+		t.Fatalf("post-snapshot store install error = %v, want unavailable authority", installErr)
 	}
 	if runtime.invocationStore != nil || runtime.invocationStorePath != "" {
-		t.Fatal("successful retry retained the post-snapshot store")
+		t.Fatal("shutdown retained a rejected post-snapshot store")
 	}
-	if _, _, lookupErr := store.Lookup(
-		nodes.GatewayInvocationPrincipal{},
-		"inv_closed",
-	); !errors.Is(lookupErr, os.ErrClosed) {
-		t.Fatalf("retried shutdown store lookup error = %v, want closed", lookupErr)
+	if _, statErr := os.Stat(storePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("rejected post-snapshot store stat error = %v, want not exist", statErr)
+	}
+}
+
+func TestNodeAdmissionCloseRejectsStoreInstallerQueuedBehindFinalCleanup(t *testing.T) {
+	storePath := nodes.GatewayInvocationStorePath(t.TempDir())
+	unregistered := make(chan struct{})
+	var unregisterOnce sync.Once
+	runtime := &nodeAdmissionRuntime{
+		handler:          &fakeNodeAdmissionHandler{},
+		registryPath:     "registry.json",
+		enrollmentOffers: nodes.NewEnrollmentOfferManager(nodes.EnrollmentOfferConfig{}),
+		generation:       1,
+		mounted:          true,
+	}
+	runtime.routes = &fakeNodeAdmissionRoutes{unregisterHook: func(path string) {
+		if path == nodews.Path {
+			unregisterOnce.Do(func() { close(unregistered) })
+		}
+	}}
+	oldGeneration := runtime.invocationGeneration()
+
+	runtime.handlerMu.RLock()
+	handlerLeaseHeld := true
+	defer func() {
+		if handlerLeaseHeld {
+			runtime.handlerMu.RUnlock()
+		}
+	}()
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- runtime.Close(t.Context())
+	}()
+	<-unregistered
+
+	deadline := time.Now().Add(time.Second)
+	for runtime.registryMu.TryRLock() {
+		runtime.registryMu.RUnlock()
+		if time.Now().After(deadline) {
+			t.Fatal("final cleanup did not queue for node admission state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	installStarted := make(chan struct{})
+	installDone := make(chan error, 1)
+	go func() {
+		close(installStarted)
+		_, err := runtime.gatewayInvocationStore(storePath)
+		installDone <- err
+	}()
+	<-installStarted
+
+	runtime.handlerMu.RUnlock()
+	handlerLeaseHeld = false
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if installErr := <-installDone; !errors.Is(installErr, errNodeDiscoveryAuthorityUnavailable) {
+		t.Fatalf("post-cleanup store install error = %v, want unavailable authority", installErr)
+	}
+	if runtime.generation == oldGeneration {
+		t.Fatal("shutdown did not advance the admission generation")
+	}
+	if runtime.invocationStore != nil || runtime.invocationStorePath != "" {
+		t.Fatal("final cleanup admitted a queued store installer")
+	}
+	if _, statErr := os.Stat(storePath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("queued store stat error = %v, want not exist", statErr)
 	}
 }
 
@@ -592,7 +646,7 @@ func TestNodeAdmissionDisableReconcilesActiveTerminalStore(t *testing.T) {
 }
 
 func TestNodeAdmissionRuntimeOwnsOneInvocationStoreAndClosesIt(t *testing.T) {
-	runtime := &nodeAdmissionRuntime{}
+	runtime := newMountedTestNodeAdmissionRuntime()
 	path := nodes.GatewayInvocationStorePath(t.TempDir())
 	first, err := runtime.gatewayInvocationStore(path)
 	if err != nil {
@@ -625,11 +679,10 @@ func TestNodeAdmissionRuntimeOwnsOneInvocationStoreAndClosesIt(t *testing.T) {
 }
 
 func TestNodeAdmissionRuntimeClosesInvocationStoreWhenSessionDrainIsIncomplete(t *testing.T) {
-	runtime := &nodeAdmissionRuntime{
-		handler: &closeErrorNodeAdmissionHandler{
-			fakeNodeAdmissionHandler: &fakeNodeAdmissionHandler{},
-			err:                      nodews.ErrSessionDrainIncomplete,
-		},
+	runtime := newMountedTestNodeAdmissionRuntime()
+	runtime.handler = &closeErrorNodeAdmissionHandler{
+		fakeNodeAdmissionHandler: &fakeNodeAdmissionHandler{},
+		err:                      nodews.ErrSessionDrainIncomplete,
 	}
 	path := nodes.GatewayInvocationStorePath(t.TempDir())
 	store, err := runtime.gatewayInvocationStore(path)

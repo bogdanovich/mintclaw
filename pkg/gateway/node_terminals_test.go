@@ -526,10 +526,10 @@ func TestDisabledNodeTerminalSourceRecoversExistingStore(t *testing.T) {
 			if err != nil || source != nil {
 				t.Fatalf("disabled terminal source = (%#v, %v)", source, err)
 			}
-			if runtime.terminalStore == nil || runtime.terminalStorePath != path {
-				t.Fatal("disabled startup did not retain the recovered terminal store")
+			if runtime.terminalStore != nil || runtime.terminalStorePath != "" {
+				t.Fatal("disabled startup published a recovery-only terminal store")
 			}
-			record, found, err := runtime.terminalStore.Lookup(owner, plan.OpenID)
+			record, found, err := store.Lookup(owner, plan.OpenID)
 			if err != nil || !found ||
 				record.State != nodes.GatewayTerminalUnknown ||
 				record.Reason != "gateway_restarted" {

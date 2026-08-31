@@ -33,7 +33,7 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := &nodeAdmissionRuntime{}
+	runtime := newMountedTestNodeAdmissionRuntime()
 	t.Cleanup(func() {
 		if runtime.transferSpool != nil {
 			_ = runtime.transferSpool.Close()
@@ -203,7 +203,7 @@ func TestGatewayNodeDownloadResolvesThroughBrowserFileChooser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodeRuntime := &nodeAdmissionRuntime{}
+	nodeRuntime := newMountedTestNodeAdmissionRuntime()
 	t.Cleanup(func() {
 		if nodeRuntime.transferSpool != nil {
 			_ = nodeRuntime.transferSpool.Close()
@@ -421,7 +421,7 @@ func TestGatewayBrowserDownloadRecoversAcrossActualBrokerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodeRuntime := &nodeAdmissionRuntime{}
+	nodeRuntime := newMountedTestNodeAdmissionRuntime()
 	t.Cleanup(func() {
 		if nodeRuntime.transferSpool != nil {
 			_ = nodeRuntime.transferSpool.Close()
@@ -563,7 +563,7 @@ func TestGatewayBrowserDownloadPreservesTerminalSuccessWhenMediaRegistrationFail
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := &nodeAdmissionRuntime{}
+	runtime := newMountedTestNodeAdmissionRuntime()
 	t.Cleanup(func() {
 		if runtime.transferSpool != nil {
 			_ = runtime.transferSpool.Close()
@@ -623,7 +623,7 @@ func TestGatewayBrowserDownloadPreservesTerminalSuccessWhenMediaRegistrationFail
 
 func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing.T) {
 	workspace := t.TempDir()
-	runtime := &nodeAdmissionRuntime{}
+	runtime := newMountedTestNodeAdmissionRuntime()
 	t.Cleanup(func() {
 		if runtime.transferSpool != nil {
 			_ = runtime.transferSpool.Close()
@@ -757,7 +757,7 @@ func TestGatewayOutboundRecoveryTerminalizesMissingScreenshot(t *testing.T) {
 	if err != nil || len(admissions) != 1 {
 		t.Fatalf("Recover() = %+v, %v", admissions, err)
 	}
-	runtime := &nodeAdmissionRuntime{}
+	runtime := newMountedTestNodeAdmissionRuntime()
 	msgBus := bus.NewMessageBus()
 	reconciler, err := startGatewayOutboundReconciler(
 		t.Context(), second, msgBus, admissions, runtime, workspace, nil,
@@ -810,7 +810,7 @@ func (store failingBrowserScreenshotMediaStore) StoreIdempotentOwned(
 
 func TestGatewayBrowserScreenshotRemovesUnregisteredDeliveryCopy(t *testing.T) {
 	workspace := t.TempDir()
-	runtime := &nodeAdmissionRuntime{}
+	runtime := newMountedTestNodeAdmissionRuntime()
 	t.Cleanup(func() {
 		if runtime.transferSpool != nil {
 			_ = runtime.transferSpool.Close()
@@ -846,7 +846,7 @@ func TestGatewayBrowserScreenshotRemovesUnregisteredDeliveryCopy(t *testing.T) {
 
 func TestGatewayBrowserScreenshotRemovesCopyAfterPostRenameSyncWarning(t *testing.T) {
 	workspace := t.TempDir()
-	runtime := &nodeAdmissionRuntime{}
+	runtime := newMountedTestNodeAdmissionRuntime()
 	t.Cleanup(func() {
 		if runtime.transferSpool != nil {
 			_ = runtime.transferSpool.Close()
