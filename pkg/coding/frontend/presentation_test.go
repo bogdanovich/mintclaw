@@ -2,6 +2,8 @@ package frontend
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"reflect"
 	"strings"
 	"testing"
@@ -88,17 +90,18 @@ func TestPresentationIDsAreCollisionSafeAcrossTurnsAndCallIDs(t *testing.T) {
 	}
 }
 
-func TestPresentationIdentitiesAreBoundedBeforeCorrelation(t *testing.T) {
+func TestHashedLookingLiteralIdentityCannotCollideWithLongRawIdentity(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
-	turnID := strings.Repeat("turn", maxPresentationIdentityBytes)
-	callID := strings.Repeat("call", maxPresentationIdentityBytes)
-	projector.ToolStarted(turnID, callID, "exec", "")
-	projector.ToolCompleted(turnID, callID, "exec", "ok", time.Second, false, nil)
+	callID := strings.Repeat("call", 1024)
+	digest := sha256.Sum256([]byte(callID))
+	literalDigest := "sha256:" + hex.EncodeToString(digest[:])
+	projector.ToolStarted("turn-1", callID, "long", "")
+	projector.ToolStarted("turn-1", literalDigest, "literal", "")
 
 	items := snapshotForTest(t, projector).Items
-	if len(items) != 1 || len(items[0].ID) > 256 || len(items[0].TurnID) > 80 ||
-		items[0].Tool == nil || len(items[0].Tool.CallID) > 80 || items[0].Tool.Status != ToolSucceeded {
-		t.Fatalf("bounded correlated item = %+v", items)
+	if len(items) != 2 || items[0].ID == items[1].ID || items[0].Tool.CallID != callID ||
+		items[1].Tool.CallID != literalDigest {
+		t.Fatalf("domain-separated identities = %+v", items)
 	}
 }
 

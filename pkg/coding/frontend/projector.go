@@ -175,25 +175,37 @@ func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) 
 type streamOwnedEntry struct {
 	item       PresentationItem
 	generation uint64
+	owned      bool
 }
 
-type (
-	streamBaseline     map[string]streamOwnedEntry
-	streamOwnedEntries map[string]streamOwnedEntry
-)
+type streamBaseline struct {
+	entries  map[string]streamOwnedEntry
+	window   []streamOwnedEntry
+	hasOlder bool
+}
+
+type streamOwnedEntries map[string]streamOwnedEntry
 
 func (p *Projector) captureStreamBaseline(turnID string) streamBaseline {
 	turnID = presentationTurnID(turnID)
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	baseline := make(streamBaseline)
+	baseline := streamBaseline{
+		entries:  make(map[string]streamOwnedEntry),
+		hasOlder: p.state.HasOlderEntries,
+	}
 	for _, item := range p.state.Items {
-		if item.Message != nil && item.TurnID == turnID &&
+		if item.Message == nil {
+			continue
+		}
+		entry := streamOwnedEntry{
+			item:       clonePresentationItem(item),
+			generation: p.entryGenerations[item.ID],
+		}
+		baseline.window = append(baseline.window, entry)
+		if item.TurnID == turnID &&
 			(item.Message.Kind == EntryAssistant || item.Message.Kind == EntryReasoning) {
-			baseline[item.ID] = streamOwnedEntry{
-				item:       clonePresentationItem(item),
-				generation: p.entryGenerations[item.ID],
-			}
+			baseline.entries[item.ID] = entry
 		}
 	}
 	return baseline
@@ -217,7 +229,7 @@ func (p *Projector) discardOwnedStream(
 		ownsCurrent := streamOwned && item.TurnID == turnID && reflect.DeepEqual(item, streamEntry.item) &&
 			p.entryGenerations[item.ID] == streamEntry.generation
 		if ownsCurrent {
-			if previous, ok := baseline[item.ID]; ok {
+			if previous, ok := baseline.entries[item.ID]; ok {
 				filtered = append(filtered, clonePresentationItem(previous.item))
 				p.entryGenerations[item.ID] = previous.generation
 				visibleChange = visibleChange || !reflect.DeepEqual(previous.item, item)
@@ -233,7 +245,24 @@ func (p *Projector) discardOwnedStream(
 		return
 	}
 	p.mutateLocked(func(state *ThreadSnapshot) {
+		present := make(map[string]struct{}, len(filtered))
+		for _, item := range filtered {
+			present[item.ID] = struct{}{}
+		}
+		for _, previous := range baseline.window {
+			if _, exists := present[previous.item.ID]; exists {
+				continue
+			}
+			filtered = append(filtered, clonePresentationItem(previous.item))
+			p.entryGenerations[previous.item.ID] = previous.generation
+			present[previous.item.ID] = struct{}{}
+		}
+		slices.SortFunc(filtered, func(left, right PresentationItem) int {
+			return intCompare(left.Sequence, right.Sequence)
+		})
 		state.Items = filtered
+		state.HasOlderEntries = baseline.hasOlder
+		p.enforcePresentationBounds(state)
 		p.syncCompatibilityProjection(state)
 	})
 }
@@ -254,26 +283,15 @@ func (p *Projector) upsertStreamEntry(
 	})
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	itemID := messagePresentationID(entry)
+	item, changed := p.upsertEntry(&p.state, entry)
+	if !changed {
+		return streamOwnedEntry{}
+	}
 	p.nextEntryGeneration++
 	generation := p.nextEntryGeneration
-	p.entryGenerations[itemID] = generation
-	for i := range p.state.Items {
-		item := p.state.Items[i]
-		if item.ID != itemID {
-			continue
-		}
-		if item.Message != nil && *item.Message == entry {
-			return streamOwnedEntry{item: clonePresentationItem(item), generation: generation}
-		}
-		break
-	}
-	var owned streamOwnedEntry
-	p.mutateLocked(func(state *ThreadSnapshot) {
-		item := p.upsertEntry(state, entry)
-		owned = streamOwnedEntry{item: clonePresentationItem(item), generation: generation}
-	})
-	return owned
+	p.entryGenerations[item.ID] = generation
+	p.mutateLocked(func(*ThreadSnapshot) {})
+	return streamOwnedEntry{item: clonePresentationItem(item), generation: generation, owned: true}
 }
 
 func (p *Projector) Warning(turnID, id, content string) {
@@ -302,7 +320,6 @@ func (p *Projector) notice(kind EntryKind, turnID, id, content string) {
 func (p *Projector) ToolStarted(turnID, callID, name, arguments string) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
-		callID = boundPresentationIdentity(callID)
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID}
@@ -321,7 +338,6 @@ func (p *Projector) ToolStarted(turnID, callID, name, arguments string) {
 func (p *Projector) ToolOutput(turnID, callID, output string) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
-		callID = boundPresentationIdentity(callID)
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
@@ -341,7 +357,6 @@ func (p *Projector) ToolOutput(turnID, callID, output string) {
 func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandState) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
-		callID = boundPresentationIdentity(callID)
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
@@ -361,7 +376,6 @@ func (p *Projector) ToolCompleted(
 ) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
-		callID = boundPresentationIdentity(callID)
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Name: name}
@@ -402,7 +416,6 @@ func (p *Projector) ToolCompleted(
 func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
-		callID = boundPresentationIdentity(callID)
 		changed := make([]ChangedFile, 0, min(len(audit), p.limits.Tools))
 		for _, entry := range audit {
 			if !entry.Success || entry.Kind != "file" || strings.TrimSpace(entry.Target) == "" {
@@ -430,7 +443,6 @@ func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) {
 func (p *Projector) ToolSuspended(turnID, callID, name string, duration time.Duration) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
-		callID = boundPresentationIdentity(callID)
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Name: name}
@@ -638,7 +650,6 @@ func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 }
 
 func (p *Projector) boundedEntry(entry TranscriptEntry) TranscriptEntry {
-	entry.ID = boundPresentationIdentity(entry.ID)
 	entry.TurnID = presentationTurnID(entry.TurnID)
 	var truncated bool
 	entry.Text, truncated = boundText(entry.Text, p.limits.TextBytes)
@@ -648,7 +659,6 @@ func (p *Projector) boundedEntry(entry TranscriptEntry) TranscriptEntry {
 
 func (p *Projector) boundedTool(tool ToolState) ToolState {
 	tool.TurnID = presentationTurnID(tool.TurnID)
-	tool.CallID = boundPresentationIdentity(tool.CallID)
 	tool.Name, _ = boundText(tool.Name, p.limits.TextBytes)
 	tool.Arguments, _ = boundText(tool.Arguments, p.limits.TextBytes)
 	var outputTruncated bool

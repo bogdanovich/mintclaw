@@ -111,6 +111,9 @@ func (s *projectedStream) project(ctx context.Context, update func() streamOwned
 		return context.Canceled
 	}
 	owned := update()
+	if !owned.owned {
+		return nil
+	}
 	if s.owned == nil {
 		s.owned = make(streamOwnedEntries)
 	}

@@ -1,19 +1,14 @@
 package frontend
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
-const maxPresentationIdentityBytes = 1024
-
-func (p *Projector) upsertEntry(state *ThreadSnapshot, entry TranscriptEntry) PresentationItem {
+func (p *Projector) upsertEntry(state *ThreadSnapshot, entry TranscriptEntry) (PresentationItem, bool) {
 	entry = p.boundedEntry(entry)
 	message := entry
 	return p.upsertPresentationItem(state, PresentationItem{
@@ -28,7 +23,7 @@ func (p *Projector) upsertEntry(state *ThreadSnapshot, entry TranscriptEntry) Pr
 func (p *Projector) upsertTool(state *ThreadSnapshot, tool ToolState) PresentationItem {
 	tool = p.boundedTool(tool)
 	tool = cloneTool(tool)
-	return p.upsertPresentationItem(state, PresentationItem{
+	item, _ := p.upsertPresentationItem(state, PresentationItem{
 		ID:        toolPresentationID(tool.TurnID, tool.CallID),
 		TurnID:    tool.TurnID,
 		Kind:      PresentationToolCall,
@@ -36,25 +31,26 @@ func (p *Projector) upsertTool(state *ThreadSnapshot, tool ToolState) Presentati
 		Duration:  tool.Duration,
 		Tool:      &tool,
 	})
+	return item
 }
 
 func (p *Projector) upsertPresentationItem(
 	state *ThreadSnapshot,
 	replacement PresentationItem,
-) PresentationItem {
+) (PresentationItem, bool) {
 	index := presentationItemIndex(state.Items, replacement.ID)
 	if index >= 0 {
 		current := state.Items[index]
 		if current.Message != nil && presentationLifecycleTerminal(current.Lifecycle) &&
 			replacement.Lifecycle == PresentationActive {
-			return clonePresentationItem(current)
+			return clonePresentationItem(current), false
 		}
 		replacement.Sequence = current.Sequence
 		replacement.CreatedAt = current.CreatedAt
 		replacement.StartedAt = current.StartedAt
 		replacement = p.withPresentationTiming(replacement, &current)
 		if presentationVisibleEqual(current, replacement) {
-			return clonePresentationItem(current)
+			return clonePresentationItem(current), false
 		}
 		replacement.Revision = current.Revision + 1
 		state.Items[index] = clonePresentationItem(replacement)
@@ -69,7 +65,7 @@ func (p *Projector) upsertPresentationItem(
 	}
 	p.enforcePresentationBounds(state)
 	p.syncCompatibilityProjection(state)
-	return clonePresentationItem(replacement)
+	return clonePresentationItem(replacement), true
 }
 
 func (p *Projector) withPresentationTiming(
@@ -325,19 +321,8 @@ func encodedPresentationID(kind string, parts ...string) string {
 	return result.String()
 }
 
-func boundPresentationIdentity(value string) string {
-	if !utf8.ValidString(value) {
-		value = strings.ToValidUTF8(value, "�")
-	}
-	if len(value) <= maxPresentationIdentityBytes {
-		return value
-	}
-	digest := sha256.Sum256([]byte(value))
-	return "sha256:" + hex.EncodeToString(digest[:])
-}
-
 func presentationTurnID(turnID string) string {
-	return boundPresentationIdentity(normalizeTurnID(turnID))
+	return normalizeTurnID(turnID)
 }
 
 func intCompare(left, right uint64) int {

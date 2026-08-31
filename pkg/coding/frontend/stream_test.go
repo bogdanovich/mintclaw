@@ -155,34 +155,26 @@ func TestStreamCancelDoesNotRollbackLaterEntryWriter(t *testing.T) {
 	}
 }
 
-func TestStreamCancelDoesNotRollbackIdenticalLaterStreamer(t *testing.T) {
+func TestNoopStreamCannotClaimIdenticalLaterWriter(t *testing.T) {
 	projector, err := NewProjector("thread-1", ProjectionLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	delegate := NewStreamDelegate(projector, "thread-1")
 	traceScope := runtimeevents.NewTraceScope("/repo", "turn-1")
-	first, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
+	streamer, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
 	if !ok {
-		t.Fatal("first matching stream was rejected")
+		t.Fatal("matching stream was rejected")
 	}
-	if err = first.Finalize(t.Context(), "accepted answer"); err != nil {
-		t.Fatal(err)
-	}
-	second, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
-	if !ok {
-		t.Fatal("second matching stream was rejected")
-	}
-	if err = second.Finalize(t.Context(), "accepted answer"); err != nil {
+	projector.AssistantAccumulated("turn-1", "accepted answer", true)
+	if err = streamer.Finalize(t.Context(), "accepted answer"); err != nil {
 		t.Fatal(err)
 	}
 	beforeCancel, err := projector.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.Cancel(t.Context())
-	second.Cancel(t.Context())
-	first.Cancel(t.Context()) // Repeated cancellation must not reclaim restored ownership.
+	streamer.Cancel(t.Context())
 
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
@@ -190,6 +182,95 @@ func TestStreamCancelDoesNotRollbackIdenticalLaterStreamer(t *testing.T) {
 	}
 	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Entries) != 1 ||
 		snapshot.Entries[0].Text != "accepted answer" || !snapshot.Entries[0].Complete {
-		t.Fatalf("identical later streamer after earlier cancel = %+v", snapshot)
+		t.Fatalf("no-op stream reclaimed later writer = %+v", snapshot)
+	}
+}
+
+func TestRejectedActiveStreamCannotClaimTerminalLaterWriter(t *testing.T) {
+	projector, err := NewProjector("thread-1", ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("matching stream was rejected")
+	}
+	projector.AssistantAccumulated("turn-1", "accepted answer", true)
+	if err = streamer.Update(t.Context(), "replacement attempt"); err != nil {
+		t.Fatal(err)
+	}
+	beforeCancel, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamer.Cancel(t.Context())
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Entries) != 1 ||
+		snapshot.Entries[0].Text != "accepted answer" || !snapshot.Entries[0].Complete {
+		t.Fatalf("rejected active stream reclaimed terminal writer = %+v", snapshot)
+	}
+}
+
+func TestStreamCancelRestoresCommittedWindowEvictedByProvisionalOutput(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		laterWrite bool
+		want       []string
+	}{
+		{name: "only provisional eviction", want: []string{"A", "B"}},
+		{name: "preserve later committed writer", laterWrite: true, want: []string{"B", "D"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			projector, err := NewProjector("thread-1", ProjectionLimits{Entries: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			projector.TurnStarted("turn-1", "A")
+			projector.AssistantAccumulated("turn-1", "B", true)
+			streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
+				t.Context(),
+				"coding",
+				"thread-1",
+				"thread-1",
+				"",
+				runtimeevents.NewTraceScope("/repo", "turn-2"),
+			)
+			if !ok {
+				t.Fatal("matching stream was rejected")
+			}
+			if err = streamer.Update(t.Context(), "C"); err != nil {
+				t.Fatal(err)
+			}
+			if test.laterWrite {
+				projector.Warning("turn-3", "later", "D")
+			}
+			streamer.Cancel(t.Context())
+
+			snapshot, snapshotErr := projector.Snapshot(t.Context())
+			if snapshotErr != nil {
+				t.Fatal(snapshotErr)
+			}
+			got := make([]string, len(snapshot.Entries))
+			for index := range snapshot.Entries {
+				got[index] = snapshot.Entries[index].Text
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("restored entries = %v, want %v; snapshot=%+v", got, test.want, snapshot)
+			}
+			if test.laterWrite != snapshot.HasOlderEntries {
+				t.Fatalf("has older entries = %v, want %v", snapshot.HasOlderEntries, test.laterWrite)
+			}
+		})
 	}
 }
