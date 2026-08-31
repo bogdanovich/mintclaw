@@ -403,7 +403,7 @@ func TestGatewayOutboundReconcilerTerminalizesMissingBrowserArtifact(t *testing.
 	closeGatewayRecoveryCoordinator(t, first)
 
 	second := openGatewayRecoveryCoordinator(t, root)
-	runtime := newMountedTestNodeAdmissionRuntime()
+	runtime := &nodeAdmissionRuntime{}
 	t.Cleanup(func() {
 		_ = second.Close()
 		if runtime.transferSpool != nil {
@@ -466,7 +466,7 @@ func TestGatewayOutboundReconcilerPreservesDownloadSpoolFailure(t *testing.T) {
 	closeGatewayRecoveryCoordinator(t, first)
 
 	second := openGatewayRecoveryCoordinator(t, root)
-	runtime := newMountedTestNodeAdmissionRuntime()
+	runtime := &nodeAdmissionRuntime{}
 	spool, err := runtime.gatewayTransferSpool(nodes.GatewayTransferSpoolPath(workspace))
 	if err != nil {
 		t.Fatalf("gatewayTransferSpool() error = %v", err)

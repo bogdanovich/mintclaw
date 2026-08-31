@@ -518,7 +518,7 @@ func TestNodeAdmissionCloseRejectsStoreInstalledAfterShutdownSnapshot(t *testing
 }
 
 func TestNodeAdmissionCloseRejectsStoreInstallerQueuedBehindFinalCleanup(t *testing.T) {
-	storePath := nodes.GatewayInvocationStorePath(t.TempDir())
+	storePath := nodes.GatewayTransferSpoolPath(t.TempDir())
 	unregistered := make(chan struct{})
 	var unregisterOnce sync.Once
 	runtime := &nodeAdmissionRuntime{
@@ -562,7 +562,7 @@ func TestNodeAdmissionCloseRejectsStoreInstallerQueuedBehindFinalCleanup(t *test
 	installDone := make(chan error, 1)
 	go func() {
 		close(installStarted)
-		_, err := runtime.gatewayInvocationStore(storePath)
+		_, err := runtime.gatewayTransferSpool(storePath)
 		installDone <- err
 	}()
 	<-installStarted
@@ -578,11 +578,43 @@ func TestNodeAdmissionCloseRejectsStoreInstallerQueuedBehindFinalCleanup(t *test
 	if runtime.generation == oldGeneration {
 		t.Fatal("shutdown did not advance the admission generation")
 	}
-	if runtime.invocationStore != nil || runtime.invocationStorePath != "" {
+	if runtime.transferSpool != nil || runtime.transferSpoolPath != "" {
 		t.Fatal("final cleanup admitted a queued store installer")
 	}
 	if _, statErr := os.Stat(storePath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("queued store stat error = %v, want not exist", statErr)
+	}
+}
+
+func TestNodeAdmissionDeactivatePreservesSharedTransferSpool(t *testing.T) {
+	runtime := newMountedTestNodeAdmissionRuntime()
+	storePath := nodes.GatewayTransferSpoolPath(t.TempDir())
+	spool, err := runtime.gatewayTransferSpool(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Nodes.Enabled = false
+	if err = runtime.Reconcile(cfg); err != nil {
+		t.Fatalf("disable node admission: %v", err)
+	}
+	if runtime.mounted || runtime.handler != nil || runtime.stopped {
+		t.Fatalf("deactivated runtime = %#v", runtime)
+	}
+	retained, err := runtime.gatewayTransferSpool(storePath)
+	if err != nil || retained != spool {
+		t.Fatalf("shared transfer spool after deactivation = (%p, %v), want %p", retained, err, spool)
+	}
+
+	if err = runtime.Close(t.Context()); err != nil {
+		t.Fatalf("stop node runtime: %v", err)
+	}
+	if !runtime.stopped || runtime.transferSpool != nil || runtime.transferSpoolPath != "" {
+		t.Fatal("full runtime stop retained shared transfer authority")
+	}
+	if _, err = runtime.gatewayTransferSpool(storePath); !errors.Is(err, errNodeDiscoveryAuthorityUnavailable) {
+		t.Fatalf("post-stop shared transfer spool error = %v, want unavailable authority", err)
 	}
 }
 

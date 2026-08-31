@@ -71,6 +71,7 @@ type nodeAdmissionRuntime struct {
 	terminalMounted     bool
 	generation          uint64
 	mounted             bool
+	stopped             bool
 }
 
 type nodeDiscoverySource struct {
@@ -102,7 +103,7 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	if cfg == nil || !cfg.Nodes.Enabled {
 		ctx, cancel := context.WithTimeout(context.Background(), nodeAdmissionDrainTimeout)
 		defer cancel()
-		return runtime.Close(ctx)
+		return runtime.deactivate(ctx)
 	}
 
 	registryPath := nodes.RegistryPath(cfg.WorkspacePath())
@@ -175,6 +176,7 @@ func (runtime *nodeAdmissionRuntime) Reconcile(cfg *config.Config) error {
 	runtime.enrollmentOffers = offers
 	runtime.generation++
 	runtime.mounted = true
+	runtime.stopped = false
 	runtime.registryMu.Unlock()
 	oldOffers.Invalidate()
 	logger.InfoCF("nodes", "Node admission enabled", map[string]any{
@@ -343,7 +345,7 @@ func (runtime *nodeAdmissionRuntime) gatewayTransferSpool(
 	path string,
 ) (*nodes.GatewayTransferSpool, error) {
 	generation := runtime.invocationGeneration()
-	if err := runtime.lockCurrentAdmissionState(generation); err != nil {
+	if err := runtime.lockCurrentRuntimeState(generation); err != nil {
 		return nil, err
 	}
 	defer runtime.registryMu.Unlock()
@@ -515,6 +517,14 @@ func (runtime *nodeAdmissionRuntime) withInvocationHandler(
 }
 
 func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
+	return runtime.close(ctx, true)
+}
+
+func (runtime *nodeAdmissionRuntime) deactivate(ctx context.Context) error {
+	return runtime.close(ctx, false)
+}
+
+func (runtime *nodeAdmissionRuntime) close(ctx context.Context, stopRuntime bool) error {
 	// A generation lease and a queued state writer can wait on each other while
 	// the leased operation owns node-session work. Session closure therefore has
 	// its own pointer synchronization and runs before any registry state lock.
@@ -533,6 +543,9 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	transferSpool := runtime.transferSpool
 	invocationStore := runtime.invocationStore
 	runtime.mounted = false
+	if stopRuntime {
+		runtime.stopped = true
+	}
 	runtime.generation++
 	shutdownGeneration := runtime.generation
 	terminalMounted := runtime.terminalMounted
@@ -567,7 +580,7 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 		}
 	}
 	var transferErr error
-	if transferSpool != nil {
+	if stopRuntime && transferSpool != nil {
 		if err := transferSpool.Close(); err != nil {
 			transferErr = fmt.Errorf("close gateway transfer spool: %w", err)
 		}
@@ -579,7 +592,7 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 		return fmt.Errorf("release node admission shutdown state: %w", err)
 	}
 	if runtime.mounted || runtime.generation != shutdownGeneration ||
-		runtime.terminalMounted || runtime.terminalHub != nil {
+		runtime.terminalMounted || runtime.terminalHub != nil || stopRuntime && !runtime.stopped {
 		runtime.registryMu.Unlock()
 		return errNodeAdmissionShutdownStateChanged
 	}
@@ -587,8 +600,10 @@ func (runtime *nodeAdmissionRuntime) Close(ctx context.Context) error {
 	runtime.sessions = nil
 	runtime.terminalStore = nil
 	runtime.terminalStorePath = ""
-	runtime.transferSpool = nil
-	runtime.transferSpoolPath = ""
+	if stopRuntime {
+		runtime.transferSpool = nil
+		runtime.transferSpoolPath = ""
+	}
 	runtime.invocationStore = nil
 	runtime.invocationStorePath = ""
 	runtime.registryPath = ""
@@ -616,8 +631,22 @@ func (runtime *nodeAdmissionRuntime) setAdmissionHandler(handler nodeAdmissionHa
 // generation, or that queued behind shutdown, cannot publish into the closed
 // state. The registry lock remains held on success.
 func (runtime *nodeAdmissionRuntime) lockCurrentAdmissionState(expectedGeneration uint64) error {
+	if err := runtime.lockCurrentRuntimeState(expectedGeneration); err != nil {
+		return err
+	}
+	if !runtime.mounted {
+		runtime.registryMu.Unlock()
+		return errNodeDiscoveryAuthorityUnavailable
+	}
+	return nil
+}
+
+// lockCurrentRuntimeState guards resources shared with gateway-local features
+// that remain available while node admission is disabled. The registry lock
+// remains held on success.
+func (runtime *nodeAdmissionRuntime) lockCurrentRuntimeState(expectedGeneration uint64) error {
 	runtime.registryMu.Lock()
-	if !runtime.mounted || runtime.generation != expectedGeneration {
+	if runtime.stopped || runtime.generation != expectedGeneration {
 		runtime.registryMu.Unlock()
 		return errNodeDiscoveryAuthorityUnavailable
 	}
