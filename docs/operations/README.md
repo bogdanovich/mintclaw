@@ -45,3 +45,6 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Gateway invocation SQLite operations](gateway-invocation-sqlite.md):
   retention, health and size inspection, backup/restore, capacity exhaustion,
   and matching-state rollback.
+- [Architecture simplification Z1 session cutover](architecture-simplification-z1-session-cutover.md):
+  stopped-state session conversion, atomic installation, matched rollback,
+  reapply canaries, observation, retained recovery evidence, and cleanup.

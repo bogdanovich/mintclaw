@@ -2,13 +2,11 @@
 
 Status: active; the implementation sequence is merged through P1, C2, and
 X3.88. The corrected source-side Z1 audit passes at `e60b8e26` through PR
-#976, and the copy-only cutover command from #978 is merged.
-The explicitly authorized R1 compatibility reset, full backup, strict removal
-deployment, and rollback exercise remain complete. Production now runs
-`e36a606f`, including the strict session contracts, but the required
-stopped-state session archive, current-session conversion, and matching
-rollback exercise did not run before that deployment. They remain open and
-require fresh explicit authority.
+#976. The explicitly authorized R1 compatibility reset and the 2026-08-30 Z1
+stopped-state session cutover, matched rollback, reapply, and observation are
+complete. This closeout deletes the temporary copy-only converter from #978.
+Three runtime ownership findings exposed by the exercise remain registered as
+focused follow-up packets before the final program completion audit.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -21,12 +19,12 @@ persisted contract. Preserve only bounded additive current-plus-previous
 first-party wire compatibility; remove historical readers and schema
 generators, deprecated aliases, implicit old-state inference, duplicate
 ownership, and service-locator layers. Preserve legitimate failover, product
-aliases, and external protocols. Keep the completed R1 reset and rollback
-evidence closed, preserve the completed semantic source audit at `e60b8e26`,
-and close the operational gap left by installing the strict source release
-before the separately authorized stopped-state session cutover. Complete that
-cutover and its state-matched rollback verification without adding a
-steady-state compatibility reader.
+aliases, and external protocols. Keep the completed R1 and Z1 reset and
+rollback evidence closed, preserve the completed semantic source audit at
+`e60b8e26`, and resolve the lifecycle, SQLite writer, and terminal-error
+ownership defects exposed by the cutover as separate focused packets. Then
+repeat the source and deployed completion audit without adding a steady-state
+compatibility reader.
 
 ## Decision
 
@@ -198,7 +196,7 @@ reset criteria.
 | X3.88 | #976 | Merged; bounded history, coding fork, and Web reuse the canonical persisted-message and exact scope decoders instead of decoding those documents independently |
 | Z1 source | #964-#976; final source `e60b8e26` | Passed after correcting the premature #973 proof; every persisted session document now has one reader owner, every surviving discovery match is classified, and no production historical reader, dual writer, deprecated callable facade, or version-selected runtime remains |
 | Z1 converter preparation | #978 | Merged; a temporary copy-only external command inventories all configured session roots, emits disjoint retained/archive trees and a checksum manifest, strictly validates every retained record, and is registered for deletion after closeout |
-| Z1 deployed closeout | Post-deployment audit on `e36a606f` | Open; the strict release is installed and healthy, but no eligible stopped-state manifest or converted live corpus exists. Archive non-current sessions, convert and install the retained current cohort, verify it, and exercise state-matched rollback under fresh authority |
+| Z1 deployed closeout | Authorized operation on `edd8759b`; this closeout | Complete; 20 session roots were converted from a stopped-state snapshot, the retained current cohort was atomically installed, exact matched rollback and reapply passed, canaries and observation passed, and the temporary converter is deleted |
 
 The X3 item-to-PR mapping is: 1-7 to #810-#816; 8-13 to #818-#823;
 14 to #826; 15 to #827; 16-23 to #828-#835; 24 to #837; 25 to #839;
@@ -629,18 +627,35 @@ separation and standards alignment.
 | Empty node `key_algorithm` | Temporary first-party wire and persisted-state adapter | All retained identities and connected peers explicitly carry Ed25519; #901 deleted omitted-algorithm admission | Closed in R1 |
 | Optional node execution profile and runtime-less companion constructor | Temporary first-party wire/API adapter | Every retained record carries the authenticated execution profile; #901 made it mandatory and deleted runtime-less construction | Closed in R1 |
 | Deployed personal-profile cutover | Coordinated persisted-config and workspace cutover | All profiles use version 4 and standard `AGENTS.md`; the ignored files and inert policy entries are gone, and strict deployment plus rollback passed | Closed in R1 |
-| Non-current session identities and scopes | Coordinated persisted-state archive, not a runtime adapter | The deployed corpus has 2,828 non-current metadata documents and 636 paired histories; #972 prevents these records from entering current runtime maintenance | Open for Z1 deployed closeout |
-| Removed session metadata `aliases` | Coordinated current-state conversion | The latest live rehearsal has 329 members to delete deterministically; #968 intentionally has no reader that ignores the removed field | Open for Z1 deployed closeout |
-| Nested persisted tool calls | Coordinated current-state conversion | The latest live rehearsal has 3,755 calls plus two Google-specific metadata cases to flatten; #971 intentionally has no dual reader or dual write | Open for Z1 deployed closeout |
-| `scripts/sessioncutover` | Temporary external deployment tool, not a runtime adapter | The copy-only command accepts only the audited old shape, validates its retained output with the exact current decoders, checks source stability and per-file SHA-256, and is not linked into startup | Open; delete after the Z1 deployment, rollback exercise, and evidence capture succeed |
+| Non-current session identities and scopes | Coordinated persisted-state archive, not a runtime adapter | The stopped-state manifest archived 2,828 metadata documents and 636 paired histories; the installed current corpus contains none of them | Closed in Z1 |
+| Removed session metadata `aliases` | Coordinated current-state conversion | The stopped-state conversion removed 329 members; the post-observation verifier found no surviving member to transform | Closed in Z1 |
+| Nested persisted tool calls | Coordinated current-state conversion | The stopped-state conversion flattened 3,721 calls plus two Google-specific cases; the post-observation verifier found no surviving nested call | Closed in Z1 |
+| `scripts/sessioncutover` | Temporary external deployment tool, not a runtime adapter | Deployment, matched rollback, reapply, canaries, observation, and evidence capture passed; this closeout deletes the command and tests | Closed in Z1 |
 
-No registered R1 compatibility adapter remains open, and the final source Z1
-audit found no new source adapter. The three open rows are deployed-data gates
-created by intentionally strict post-R1 readers. They are resolved outside the
-running product under a stopped-state backup; they do not justify reintroducing
-a reader, normalizer, or migration hook into startup. The fourth open row is
-the explicitly temporary external command that performs that operation; its
-deletion is part of the same closeout rather than deferred product debt.
+No registered R1 or Z1 compatibility adapter remains open, and the final
+source Z1 audit found no new source adapter. The deployed-data gates were
+resolved outside the running product under a stopped-state backup. No Z1
+session reader, normalizer, migration hook, or converter remains in the
+steady-state source.
+
+### Post-Z1 runtime ownership register
+
+The cutover also exercised shutdown, recovery, reconciliation, and live-client
+error paths more aggressively than ordinary operation. These findings are not
+compatibility adapters and do not reopen the completed data cutover. They are
+kept as separate packets so the closeout does not become a mixed reliability
+refactor:
+
+| Packet | Finding | Required simplification and exit gate | Status |
+| --- | --- | --- | --- |
+| O1 | `mintclaw-main.service` exceeded its 30-second stop budget and was killed on each of three controlled stops | Give gateway shutdown one bounded lifecycle owner; repeated loaded stops must exit cleanly without `SIGKILL`, abandoned child processes, or session corruption | Open |
+| O2 | Seahorse reconciliation/provenance writes and live ingest can collide with `SQLITE_BUSY`; the warning recurred after final reapply | Give provenance mutation one concurrency and retry contract; startup reconciliation and live turns must complete without a database-lock failure | Open |
+| O3 | A live-agent error was delivered through the gateway outbox, but the CLI kept waiting until its outer timeout | Make success and error finals share one terminal-delivery owner; the client must return promptly after either final and never wait for a second terminator | Open |
+
+Diagnostic evidence also showed that `root_turn_id` alone is not globally
+unique across restarts. Trace selection for these packets must therefore bind
+time, profile, and session identity in addition to the turn identifier; this
+is an evidence-selection rule, not another runtime compatibility layer.
 
 C2 is closed. PR #924 moved durable checkpoint ownership to the coding
 composition root; PRs #925-#927 made recovery reads and constructors explicitly
@@ -1964,45 +1979,34 @@ removed field into current authority, or keeps a deprecated MintClaw entrypoint
 callable. Product aliases, external protocols, and genuine failover therefore
 remain without weakening the simplification rule.
 
-Deployed closeout result: **open**. The strict source release is deployed, but
-the session archive, retained-state cutover, and matching rollback evidence are
-absent. The operation remains deliberately separate from source Z1 and must
-execute in this corrected order:
+Deployed closeout result: **passed** on 2026-08-30 under running release
+`edd8759b`. The stopped-state authority retained 819 metadata documents and
+640 histories, archived 2,828 metadata documents and 636 histories, removed
+329 root `aliases` members, flattened 3,721 tool calls plus two Google-specific
+cases, and validated 10,232 messages. All 20 configured session roots passed
+source-stability, disjointness, exact-decoder, filename, and checksum checks.
 
-1. obtain fresh explicit authority for backup, stopped-state mutation,
-   installation, restart, verification, and rollback;
-2. resolve and checksum the exact running `e36a606f` binaries, units, and
-   configuration, then stop every writer of the shared session contracts and
-   take a targeted metadata-preserving backup of only the complete affected
-   session domains. Do not snapshot the full MintClaw home;
-3. run the copy-only `scripts/sessioncutover` command against that stable
-   source. Archive every non-current document without translating it, and
-   remove `aliases` and flatten old nested tool calls only in the retained
-   current cohort. Require a new output path and do not offer an in-place mode;
-   the new manifest, not the latest live rehearsal's 764/606 retained and
-   2,828/636 archived counts, is authoritative;
-4. prove the archive and converted trees are complete and disjoint, then run
-   the strict metadata, scope, JSONL, task, interaction, config, outbox, node,
-   and browser validators against the entire candidate state;
-5. atomically install the retained candidate under the already reviewed
-   `e36a606f` release or a later merged release, confirm mutually compatible
-   first-party components, restart in dependency order, and verify health,
-   service journals, recovery, Seahorse reconciliation, old retained-session
-   access, new message/tool execution, browser operation, node connectivity,
-   and an untruncated trace;
-6. exercise rollback to the exact pre-cutover binary, configuration, and
-   session snapshot captured in step 2, verify its checksums and baseline
-   health, then reapply the validated candidate. Never start the retained R1
-   binary against post-R1 mutable state; the earlier R1 rollback evidence and
-   full-state baseline remain a separate matched recovery point; and
-7. repeat the canaries, retain the manifests and archive through the
-   observation window, and delete `scripts/sessioncutover` plus any operational
-   staging copy after evidence capture.
+The retained candidate was installed by same-filesystem rename. All profiles
+loaded, the old retained session resumed, a new message completed, the VPN PTY
+smoke closed cleanly, all three expected nodes remained connected, and an
+actual browser child trace completed open-observe-close without truncation.
+The exact pre-cutover binary, configs, and untouched session snapshot were
+then restored together and passed a baseline smoke. The candidate was reapplied
+by inode-verified rename and the canaries passed again.
 
-Until that operation is authorized and passes, the roadmap remains active even
-though source Z1 is complete. Production already runs `e36a606f`; no
-steady-state compatibility code is added to make the strict source read the
-old corpus.
+After the observation window, a final copy-only verification found 828 current
+metadata documents, 649 histories, 10,400 valid messages, and zero archived
+documents, aliases, nested calls, or Google cases to transform. All expected
+services were active, no unit had failed, no legacy product process existed,
+and the ten-minute error journal was empty. The verified targeted archive and
+manifests remain in the compact recovery set; five rollback-observed trees and
+the operational staging and preflight copies were pruned. Full commands,
+digests, canaries, rollback evidence, and retained artifacts are recorded in
+the [Z1 session cutover evidence](../operations/architecture-simplification-z1-session-cutover.md).
+
+The compatibility-reset objective is therefore complete without adding a
+steady-state old-state reader. The roadmap remains active only for O1-O3 and
+the final requirement-by-requirement audit after those focused packets.
 
 ## Validation For Every Code Packet
 
