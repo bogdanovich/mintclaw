@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -461,7 +462,13 @@ func (repository *Repository) unbornWorktreePaths(
 		)
 	}
 	paths := parseStatus(status.stdout)
+	rootHandle, rootErr := os.OpenRoot(snapshot.Git.TopLevel)
+	if rootErr != nil {
+		return nil, status.truncated, "repository root could not be pinned"
+	}
+	defer func() { _ = rootHandle.Close() }()
 	current := make([]ChangedPath, 0, len(paths))
+	warning := ""
 	for _, path := range paths {
 		if path.Status == "??" {
 			current = append(current, path)
@@ -470,9 +477,16 @@ func (repository *Repository) unbornWorktreePaths(
 		if len(path.Status) >= 2 && path.Status[1] == 'D' {
 			continue
 		}
+		inspection := inspectPassivePath(rootHandle, path.Path)
+		if inspection.reason != "" {
+			warning = joinWarning(warning, inspection.reason)
+		}
+		if !inspection.exists {
+			continue
+		}
 		current = append(current, ChangedPath{Path: path.Path, Status: "A"})
 	}
-	return uniqueChangedPaths(current), status.truncated, ""
+	return uniqueChangedPaths(current), status.truncated, warning
 }
 
 func uniqueChangedPaths(paths []ChangedPath) []ChangedPath {
@@ -618,35 +632,26 @@ func readPassiveRegularFile(root, relative string, limit int) ([]byte, os.FileIn
 	if limit <= 0 {
 		return nil, nil, true, "untracked content byte budget exhausted"
 	}
-	clean := filepath.Clean(relative)
-	if clean == "." || filepath.IsAbs(clean) || clean == ".." ||
-		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return nil, nil, false, "untracked path is outside repository authority"
-	}
 	rootHandle, err := os.OpenRoot(root)
 	if err != nil {
 		return nil, nil, false, "repository root could not be pinned"
 	}
 	defer func() { _ = rootHandle.Close() }()
-	components := strings.Split(filepath.ToSlash(clean), "/")
-	for index := range components {
-		prefix := filepath.FromSlash(strings.Join(components[:index+1], "/"))
-		info, statErr := rootHandle.Lstat(prefix)
-		if statErr != nil {
-			return nil, nil, false, "untracked path changed before it could be read"
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return nil, info, false, "symlink content is not followed"
-		}
+	inspection := inspectPassivePath(rootHandle, relative)
+	if inspection.reason != "" {
+		return nil, inspection.info, false, inspection.reason
 	}
-	info, err := rootHandle.Lstat(clean)
-	if err != nil {
+	if !inspection.exists {
 		return nil, nil, false, "untracked path is unavailable"
+	}
+	info := inspection.info
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, info, false, "symlink content is not followed"
 	}
 	if !info.Mode().IsRegular() {
 		return nil, info, false, "untracked path is not a regular file"
 	}
-	file, err := rootHandle.Open(clean)
+	file, err := rootHandle.Open(inspection.clean)
 	if err != nil {
 		return nil, info, false, "untracked file could not be opened"
 	}
@@ -663,6 +668,39 @@ func readPassiveRegularFile(root, relative string, limit int) ([]byte, os.FileIn
 		return content[:limit], info, true, ""
 	}
 	return content, info, false, ""
+}
+
+type passivePathInspection struct {
+	clean  string
+	info   os.FileInfo
+	exists bool
+	reason string
+}
+
+func inspectPassivePath(rootHandle *os.Root, relative string) passivePathInspection {
+	clean := filepath.Clean(relative)
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." ||
+		strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return passivePathInspection{reason: "path is outside repository authority"}
+	}
+	components := strings.Split(filepath.ToSlash(clean), "/")
+	for index := range components {
+		prefix := filepath.FromSlash(strings.Join(components[:index+1], "/"))
+		info, statErr := rootHandle.Lstat(prefix)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return passivePathInspection{clean: clean}
+		}
+		if statErr != nil {
+			return passivePathInspection{clean: clean, reason: "path could not be inspected safely"}
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return passivePathInspection{clean: clean, info: info, exists: true}
+		}
+		if index == len(components)-1 {
+			return passivePathInspection{clean: clean, info: info, exists: true}
+		}
+	}
+	return passivePathInspection{clean: clean}
 }
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: ?(.*))?$`)
