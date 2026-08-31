@@ -41,12 +41,20 @@ func (s *Store) GetAllSessionStatuses(ctx context.Context) ([]SessionStatus, err
 	}
 	defer func() { _ = rows.Close() }()
 
-	var statuses []SessionStatus
+	var sessionKeys []string
 	for rows.Next() {
 		var sessionKey string
 		if err := rows.Scan(&sessionKey); err != nil {
 			continue
 		}
+		sessionKeys = append(sessionKeys, sessionKey)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sessions: %w", err)
+	}
+
+	statuses := make([]SessionStatus, 0, len(sessionKeys))
+	for _, sessionKey := range sessionKeys {
 		status, err := s.GetSessionStatus(ctx, sessionKey)
 		if err != nil {
 			continue
@@ -54,9 +62,6 @@ func (s *Store) GetAllSessionStatuses(ctx context.Context) ([]SessionStatus, err
 		if status != nil {
 			statuses = append(statuses, *status)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate sessions: %w", err)
 	}
 	return statuses, nil
 }
