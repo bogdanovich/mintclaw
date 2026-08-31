@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -87,6 +88,12 @@ func TestCodeAndResumePersistOutsideProjectAcrossCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	baseline, err := store.LoadRepositoryBaseline(created.ThreadID)
+	if err != nil || baseline.Origin != codingworkspace.BaselineOriginNew || !baseline.CapturedAt.Equal(
+		time.Date(2026, time.August, 10, 10, 0, 0, 0, time.UTC),
+	) {
+		t.Fatalf("created repository baseline = %#v / %v", baseline, err)
+	}
 	metadata, err := store.Load(created.ThreadID)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +104,10 @@ func TestCodeAndResumePersistOutsideProjectAcrossCommands(t *testing.T) {
 	history := readHistory(t, created.StateRoot, created.SessionKey)
 	if len(history) != 2 || history[0] != "fix the parser" || history[1] != "add a regression test" {
 		t.Fatalf("restarted history = %#v", history)
+	}
+	resumedBaseline, err := store.LoadRepositoryBaseline(created.ThreadID)
+	if err != nil || resumedBaseline.BaselineID != baseline.BaselineID {
+		t.Fatalf("resume replaced repository baseline = %#v / %v", resumedBaseline, err)
 	}
 }
 
@@ -847,6 +858,10 @@ func TestResumePromptPromotesPendingThreadMetadata(t *testing.T) {
 		persisted.Preview != "Inspect repository carefully" {
 		t.Fatalf("resumed pending metadata = %+v", persisted)
 	}
+	baseline, err := store.LoadRepositoryBaseline(metadata.ThreadID)
+	if err != nil || baseline.Origin != codingworkspace.BaselineOriginResumeAdoption {
+		t.Fatalf("legacy resume baseline = %#v / %v", baseline, err)
+	}
 }
 
 func TestResumeSelectorsAndProjectMismatchAreExplicit(t *testing.T) {
@@ -1107,6 +1122,14 @@ func TestCodePersistsDefaultSelectionBeforePromptAdmission(t *testing.T) {
 		}
 		if persisted.Model != "default-coding" || persisted.Provider != "default-provider" {
 			t.Fatalf("pre-admission selection = model %q provider %q", persisted.Model, persisted.Provider)
+		}
+		baseline, err := request.Store.LoadRepositoryBaselineWithLease(
+			ctx,
+			request.Lease,
+			request.Metadata,
+		)
+		if err != nil || baseline.Origin != codingworkspace.BaselineOriginNew {
+			t.Fatalf("pre-admission repository baseline = %#v / %v", baseline, err)
 		}
 		err = request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Input.Text)
 		return codingTurnOutcome{

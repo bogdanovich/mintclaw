@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -74,6 +75,11 @@ func TestForkThreadAtHistoricalTurnPublishesIndependentRestartableHistory(t *tes
 	}
 	if got := readForkTestHistory(t, store, child); !equalForkHistory(got, sourceHistory[:2]) {
 		t.Fatalf("child history = %#v", got)
+	}
+	forkBaseline, err := store.LoadRepositoryBaseline(child.ThreadID)
+	if err != nil || forkBaseline.Origin != workspace.BaselineOriginFork ||
+		forkBaseline.ProjectKey != child.Project.ProjectKey {
+		t.Fatalf("child repository baseline = %#v / %v", forkBaseline, err)
 	}
 
 	if err := sourceLease.Release(); err != nil {
