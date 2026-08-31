@@ -578,8 +578,11 @@ func passiveFilterOverrides(
 		return nil, "Git content-filter configuration exceeded the capture byte limit", false, true
 	}
 
+	if len(result.stdout) > 0 && result.stdout[len(result.stdout)-1] != 0 {
+		return nil, "Git content-filter configuration returned an incomplete record", false, true
+	}
 	drivers := make(map[string]struct{})
-	for _, rawKey := range bytes.Split(result.stdout, []byte{0}) {
+	for _, rawKey := range completeNULRecords(result.stdout) {
 		key := string(rawKey)
 		lowerKey := strings.ToLower(key)
 		if !strings.HasPrefix(lowerKey, "filter.") {
@@ -598,6 +601,9 @@ func passiveFilterOverrides(
 	sort.Strings(bases)
 	overrides := make([]string, 0, len(bases)*3)
 	for _, base := range bases {
+		if strings.Contains(base, "=") {
+			return nil, "Git content-filter name cannot be passively overridden", false, false
+		}
 		overrides = append(overrides, base+".clean=", base+".process=", base+".required=false")
 	}
 	return overrides, "", true, false
@@ -623,7 +629,7 @@ func sanitizedGitEnvironment() []string {
 }
 
 func parseStatus(data []byte) []ChangedPath {
-	records := bytes.Split(data, []byte{0})
+	records := completeNULRecords(data)
 	paths := make([]ChangedPath, 0, len(records))
 	for index := 0; index < len(records); index++ {
 		record := records[index]
@@ -633,7 +639,10 @@ func parseStatus(data []byte) []ChangedPath {
 		status := string(record[:2])
 		path := string(record[3:])
 		changed := ChangedPath{Path: path, Status: status}
-		if strings.ContainsAny(status, "RC") && index+1 < len(records) {
+		if strings.ContainsAny(status, "RC") {
+			if index+1 >= len(records) {
+				break
+			}
 			index++
 			changed.OriginalPath = string(records[index])
 		}
@@ -649,6 +658,14 @@ func parseStatus(data []byte) []ChangedPath {
 		return paths[left].Status < paths[right].Status
 	})
 	return paths
+}
+
+func completeNULRecords(data []byte) [][]byte {
+	lastTerminator := bytes.LastIndexByte(data, 0)
+	if lastTerminator < 0 {
+		return nil
+	}
+	return bytes.Split(data[:lastTerminator], []byte{0})
 }
 
 func parseDiffStat(data []byte) DiffStat {

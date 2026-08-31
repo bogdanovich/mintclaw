@@ -211,6 +211,7 @@ func TestRepositoryDiffSupportsLocalBaseAndCommitTargets(t *testing.T) {
 func TestRepositoryDiffUsesRootModeForTrueRootCommit(t *testing.T) {
 	root := initGitRepository(t)
 	commit := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))
+	runGitTest(t, root, "config", "log.showRoot", "false")
 
 	result := NewRepository(root, root, Limits{}).Diff(
 		t.Context(),
@@ -219,6 +220,33 @@ func TestRepositoryDiffUsesRootModeForTrueRootCommit(t *testing.T) {
 	file := requireDiffFile(t, result, "tracked.txt")
 	if result.UnavailableReason != "" || len(result.Files) != 1 || file.Additions != 1 || file.Deletions != 0 {
 		t.Fatalf("Diff(root commit) = %#v", result)
+	}
+}
+
+func TestRepositoryDiffDiscardsIncompleteNULFramedUntrackedPath(t *testing.T) {
+	root := initGitRepository(t)
+	directory := strings.Repeat("a", 180)
+	nested := strings.Repeat("b", 180)
+	name := strings.Repeat("c", 100)
+	trackedPath := filepath.Join(directory, nested, name)
+	if err := os.MkdirAll(filepath.Join(root, directory, nested), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, trackedPath), []byte("tracked\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "add", trackedPath)
+	runGitTest(t, root, "commit", "-m", "add long tracked path")
+	if err := os.WriteFile(filepath.Join(root, trackedPath+"-untracked"), []byte("untracked\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := NewRepository(root, root, Limits{CommandBytes: len(filepath.ToSlash(trackedPath))}).Diff(
+		t.Context(),
+		DiffTarget{Kind: DiffTargetCurrent},
+	)
+	if result.UnavailableReason != "" || !result.Truncated || len(result.Files) != 0 {
+		t.Fatalf("truncated NUL-framed untracked evidence = %#v", result)
 	}
 }
 
@@ -300,6 +328,38 @@ func TestRepositoryDiffDisablesConfiguredGitHelpers(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Fatalf("repository-configured helper executed: %v", err)
+	}
+}
+
+func TestRepositoryDiffFailsClosedForUnencodableFilterDriver(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sentinel shell script is Unix-specific")
+	}
+	root := initGitRepository(t)
+	sentinel := filepath.Join(t.TempDir(), "filter-helper-ran")
+	script := filepath.Join(t.TempDir(), "filter-helper")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch \"$1\"\ncat\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, ".gitattributes"),
+		[]byte("tracked.txt filter=evil=driver\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "config", "filter.evil=driver.clean", script+" "+sentinel)
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := NewRepository(root, root, Limits{}).Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent})
+	if result.UnavailableReason == "" ||
+		!strings.Contains(result.Warning, "content-filter name cannot be passively overridden") {
+		t.Fatalf("unsafe filter driver was not rejected: %#v", result)
+	}
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("unencodable filter helper executed: %v", err)
 	}
 }
 

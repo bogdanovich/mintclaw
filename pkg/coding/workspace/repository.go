@@ -432,7 +432,7 @@ func (repository *Repository) diffPaths(
 				boundedWarning("could not enumerate untracked paths", untrackedErr, untracked.stderr),
 			)
 		} else {
-			for _, path := range bytes.Split(untracked.stdout, []byte{0}) {
+			for _, path := range completeNULRecords(untracked.stdout) {
 				if len(path) > 0 {
 					paths = append(paths, ChangedPath{Path: string(path), Status: "??"})
 				}
@@ -504,7 +504,7 @@ func uniqueChangedPaths(paths []ChangedPath) []ChangedPath {
 }
 
 func parseNameStatus(data []byte) []ChangedPath {
-	records := bytes.Split(data, []byte{0})
+	records := completeNULRecords(data)
 	paths := make([]ChangedPath, 0, len(records)/2)
 	for index := 0; index < len(records); {
 		if len(records[index]) == 0 {
@@ -566,8 +566,9 @@ func (repository *Repository) diffFile(
 	}
 	if spec.rootCommit {
 		args = []string{
-			"show", "--format=", "--patch", "--no-color", "--no-ext-diff", "--no-textconv",
-			"--ignore-submodules=dirty", "--find-renames", "--unified=3", spec.resolvedRevision,
+			"diff-tree", "--root", "--no-commit-id", "-r", "--patch", "--no-color", "--no-ext-diff",
+			"--no-textconv", "--ignore-submodules=dirty", "--find-renames", "--unified=3",
+			spec.resolvedRevision,
 		}
 	} else {
 		args = spec.appendRevisions(args)
