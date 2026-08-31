@@ -155,6 +155,7 @@ func (p *Projector) TurnStarted(turnID, userMessage string) {
 		state.Status = "running"
 		if strings.TrimSpace(userMessage) == "" {
 			delete(p.reservedUserSequences, turnID)
+			p.pruneTurnOrderingState(state)
 			return
 		}
 		entry := TranscriptEntry{

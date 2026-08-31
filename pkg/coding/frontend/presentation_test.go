@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -154,6 +155,20 @@ func TestLateUserReservationSurvivesUnrelatedMessageChurn(t *testing.T) {
 		items[0].TurnID != "turn-1" || items[1].Kind != PresentationToolCall ||
 		items[1].TurnID != "turn-1" || items[0].Sequence >= items[1].Sequence {
 		t.Fatalf("late user reservation was lost = %+v", items)
+	}
+}
+
+func TestEmptyTurnStartsDoNotRetainUnrepresentedOrderingState(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{Entries: 1, Tools: 1})
+	for index := 0; index < 100; index++ {
+		projector.TurnStarted(fmt.Sprintf("turn-%d", index), "")
+	}
+	if len(projector.startedTurns) != 1 || len(projector.reservedUserSequences) != 0 {
+		t.Fatalf(
+			"unrepresented ordering state was not pruned: started=%d reserved=%d",
+			len(projector.startedTurns),
+			len(projector.reservedUserSequences),
+		)
 	}
 }
 
