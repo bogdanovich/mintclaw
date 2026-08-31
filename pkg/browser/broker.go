@@ -339,7 +339,7 @@ func (broker *Broker) RecoverAcceptedDownload(
 		return recovered, completeErr
 	}
 	progressSignature := ""
-	if actionRequiresApproval(prepared.Effect) {
+	if preparedRequiresApproval(prepared) {
 		progressSignature = prepared.ProgressSignature
 	}
 	return recovered, broker.invalidateSnapshotLocked(ctx, prepared.SessionID, progressSignature)

@@ -14,13 +14,20 @@ import (
 )
 
 const (
-	BrowserDriverPlaywrightMCP = "playwright_mcp"
-	BrowserPlacementGateway    = "gateway"
-	BrowserPlacementNode       = "node"
-	BrowserProfileManaged      = "managed"
-	BrowserNetworkExactOrigins = "exact_origins"
-	BrowserNetworkPublicWeb    = "public_web"
-	BrowserNetworkAnyHTTP      = "any_http"
+	BrowserDriverPlaywrightMCP    = "playwright_mcp"
+	BrowserPlacementGateway       = "gateway"
+	BrowserPlacementNode          = "node"
+	BrowserProfileManaged         = "managed"
+	BrowserNetworkExactOrigins    = "exact_origins"
+	BrowserNetworkPublicWeb       = "public_web"
+	BrowserNetworkAnyHTTP         = "any_http"
+	BrowserCapabilityFullAccess   = browserpolicy.CapabilityFullAccess
+	BrowserCapabilityRestricted   = browserpolicy.CapabilityRestricted
+	BrowserCapabilityLegacyStrict = browserpolicy.CapabilityLegacyStrict
+	BrowserApprovalNone           = browserpolicy.ApprovalNone
+	BrowserApprovalModelRequested = browserpolicy.ApprovalModelRequested
+	BrowserApprovalAlwaysCommit   = browserpolicy.ApprovalAlwaysCommit
+	BrowserApprovalPolicy         = browserpolicy.ApprovalPolicy
 
 	BrowserMaxSessions          = 1
 	BrowserMaxTabs              = 4
@@ -99,10 +106,24 @@ type BrowserProfileConfig struct {
 	Enabled              bool     `json:"enabled"                          yaml:"-"`
 	Mode                 string   `json:"mode,omitempty"                   yaml:"-"`
 	NetworkMode          string   `json:"network_mode,omitempty"           yaml:"-"`
+	CapabilityMode       string   `json:"capability_mode,omitempty"        yaml:"-"`
+	ApprovalMode         string   `json:"approval_mode,omitempty"          yaml:"-"`
 	DryRun               bool     `json:"dry_run"                          yaml:"-"`
 	AllowApprovedActions bool     `json:"allow_approved_actions,omitempty" yaml:"-"`
 	AllowedOrigins       []string `json:"allowed_origins,omitempty"        yaml:"-"`
 	SensitiveFields      []string `json:"sensitive_fields,omitempty"       yaml:"-"`
+}
+
+// EffectiveCapabilityMode preserves the pre-P0 behavior for existing
+// configurations while allowing owners to opt into unrestricted page control.
+func (profile BrowserProfileConfig) EffectiveCapabilityMode() string {
+	return browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode)
+}
+
+// EffectiveApprovalMode preserves the pre-P0 commit-approval behavior for
+// existing configurations. Capability and approval are deliberately separate.
+func (profile BrowserProfileConfig) EffectiveApprovalMode() string {
+	return browserpolicy.EffectiveApprovalMode(profile.ApprovalMode)
 }
 
 type BrowserLimitsConfig struct {
@@ -317,6 +338,28 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	}
 	if profile.Mode != "" && profile.Mode != BrowserProfileManaged {
 		return fmt.Errorf("browser profile %q supports only mode %q", name, BrowserProfileManaged)
+	}
+	switch profile.EffectiveCapabilityMode() {
+	case BrowserCapabilityFullAccess, BrowserCapabilityLegacyStrict:
+	case BrowserCapabilityRestricted:
+		return fmt.Errorf(
+			"browser profile %q capability_mode %q requires the restricted-policy implementation",
+			name,
+			profile.CapabilityMode,
+		)
+	default:
+		return fmt.Errorf("browser profile %q has unsupported capability_mode %q", name, profile.CapabilityMode)
+	}
+	switch profile.EffectiveApprovalMode() {
+	case BrowserApprovalNone, BrowserApprovalModelRequested, BrowserApprovalAlwaysCommit:
+	case BrowserApprovalPolicy:
+		return fmt.Errorf(
+			"browser profile %q approval_mode %q requires the restricted-policy implementation",
+			name,
+			profile.ApprovalMode,
+		)
+	default:
+		return fmt.Errorf("browser profile %q has unsupported approval_mode %q", name, profile.ApprovalMode)
 	}
 	networkMode := profile.NetworkMode
 	if profile.Enabled && networkMode == "" {

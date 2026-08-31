@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"reflect"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
 type ContextOperation string
@@ -33,6 +35,8 @@ type ContextRequest struct {
 	ContextGeneration uint64
 	TabID             string
 	FrameID           string
+	ApprovalMode      string
+	Confirmation      string
 }
 
 type ContextPreparation struct {
@@ -72,14 +76,18 @@ func (broker *Broker) PrepareContext(
 	if validateContextMutationRequest(request) != nil {
 		return ContextPreparation{}, ErrInvalid
 	}
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	storedSession, err := broker.store.GetSession(ctx, request.SessionID)
+	if err != nil || !storedSession.Owner.Equal(request.Owner) {
+		return ContextPreparation{}, errors.Join(err, ErrNotFound)
+	}
+	request.ApprovalMode = broker.approvalMode(storedSession)
 	actionHash, err := hashContextRequest(request)
 	if err != nil {
 		return ContextPreparation{}, err
 	}
 	invocationID := derivedIdentifier("context_invocation", request.Owner, request.SessionID, request.RequestID)
-
-	broker.mu.Lock()
-	defer broker.mu.Unlock()
 	existing, existingErr := broker.store.GetInvocation(ctx, invocationID)
 	if existingErr == nil && existing.State.Terminal() {
 		if existing.Owner != request.Owner || existing.SessionID != request.SessionID ||
@@ -150,7 +158,7 @@ func (broker *Broker) ExecuteContext(
 	}
 	expectedHash, err := hashContextRequest(request)
 	expectedID := derivedIdentifier("context_invocation", request.Owner, request.SessionID, request.RequestID)
-	requiresApproval := request.Operation == ContextClose
+	requiresApproval := contextRequiresApproval(request)
 	if err != nil || preparation.Invocation.ID != expectedID || preparation.Invocation.ActionHash != expectedHash ||
 		preparation.Invocation.SessionID != request.SessionID || preparation.Invocation.Owner != request.Owner ||
 		preparation.Invocation.Effect != contextOperationEffect(request.Operation) ||
@@ -282,7 +290,9 @@ func (broker *Broker) ExecuteContext(
 
 func validateContextMutationRequest(request ContextRequest) error {
 	if request.Owner.Validate() != nil || !validIdentifier(request.RequestID) ||
-		!validIdentifier(request.SessionID) || !request.Operation.validMutation() {
+		!validIdentifier(request.SessionID) || !request.Operation.validMutation() ||
+		!browserpolicy.ApprovalModeValid(request.ApprovalMode) ||
+		!browserpolicy.ConfirmationValid(request.Confirmation) {
 		return ErrInvalid
 	}
 	if request.Operation == ContextOpen {
@@ -507,10 +517,13 @@ func hashContextRequest(request ContextRequest) (string, error) {
 		ContextGeneration uint64           `json:"context_generation,omitempty"`
 		TabID             string           `json:"tab_id,omitempty"`
 		FrameID           string           `json:"frame_id,omitempty"`
+		ApprovalMode      string           `json:"approval_mode"`
+		Confirmation      string           `json:"confirmation,omitempty"`
 	}{
 		Owner: request.Owner, SessionID: request.SessionID, Operation: request.Operation,
 		ContextCatalogID: request.ContextCatalogID, ContextGeneration: request.ContextGeneration,
 		TabID: request.TabID, FrameID: request.FrameID,
+		ApprovalMode: request.ApprovalMode, Confirmation: request.Confirmation,
 	})
 	if err != nil {
 		return "", fmt.Errorf("hash browser context request: %w", err)
@@ -530,8 +543,16 @@ func contextPreparationView(
 			PreparedActionID: invocation.ID, ActionHash: invocation.ActionHash,
 			PolicyRevision: policyRevision, ExpiresAt: invocation.ExpiresAt,
 		},
-		RequiresApproval: request.Operation == ContextClose,
+		RequiresApproval: contextRequiresApproval(request),
 	}
+}
+
+func contextRequiresApproval(request ContextRequest) bool {
+	return browserpolicy.RequiresApproval(
+		request.ApprovalMode,
+		string(contextOperationEffect(request.Operation)),
+		request.Confirmation,
+	)
 }
 
 func contextApprovalMatches(preparation ContextPreparation, approval *ApprovalBinding) bool {

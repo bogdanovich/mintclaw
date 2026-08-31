@@ -875,6 +875,28 @@ func TestPlaywrightAuthorizeFillDenialDoesNotRetireWorker(t *testing.T) {
 	}
 }
 
+func TestPlaywrightFullAccessFillUsesOnlyMechanicalDOMAdmission(t *testing.T) {
+	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
+		"browser_run_code_unsafe": playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|ok\""),
+	}}
+	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 7}
+	worker := &playwrightWorker{
+		client: client, limits: config.BrowserLimitsConfig{}.Effective(),
+		navigationID: identity, navigationToken: identity.token(),
+		capabilityMode:  config.BrowserCapabilityFullAccess,
+		sensitiveFields: []string{"price", "password"},
+	}
+	if err := worker.AuthorizeFill(t.Context(), identity.token(), "e5"); err != nil {
+		t.Fatalf("AuthorizeFill() error = %v", err)
+	}
+	code, ok := client.calls[0].arguments["code"].(string)
+	if !ok || !strings.Contains(code, `"full_access":true`) ||
+		!strings.Contains(code, `if (args.policy.full_access) return mechanicallyWritable`) ||
+		!strings.Contains(code, `!nonFillTypes.has(type)`) {
+		t.Fatalf("full-access classifier code = %q", code)
+	}
+}
+
 func TestPlaywrightWorkerDoesNotAttributeAmbientProxyDenialToSnapshot(t *testing.T) {
 	proxy := &browserNetworkProxy{}
 	client := &fakePlaywrightClient{
@@ -3513,6 +3535,109 @@ func TestPlaywrightWorkerRealBrowserAnyHTTPLoopbackFixture(t *testing.T) {
 	observation, err := worker.Observe(ctx)
 	if err != nil || observation.Title != "Private Loopback Fixture" || requests.Load() == 0 {
 		t.Fatalf("loopback observation = %+v, requests = %d, error = %v", observation, requests.Load(), err)
+	}
+	if err = worker.Close(ctx); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestPlaywrightWorkerRealBrowserFullAccessFillFixture(t *testing.T) {
+	if os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER") != "1" {
+		t.Skip("set MINTCLAW_BROWSER_REAL_DRIVER=1 to run the pinned Playwright MCP fixture")
+	}
+	fixture := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(writer, `<!doctype html><title>Full Access Fixture</title>
+<label>Price <input id="price" type="number" aria-label="Price"></label>
+<input id="unnamed">
+<label>Password <input id="password" type="password" aria-label="Password"></label>
+<label>Code <input id="otp" autocomplete="one-time-code" aria-label="One-time code"></label>
+<label>Card <input id="card" autocomplete="cc-number" aria-label="Card number"></label>`)
+	}))
+	defer fixture.Close()
+
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.NetworkMode = config.BrowserNetworkAnyHTTP
+	profile.AllowedOrigins = nil
+	profile.CapabilityMode = config.BrowserCapabilityFullAccess
+	profile.ApprovalMode = config.BrowserApprovalModelRequested
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	server := root.Tools.MCP.Servers["playwright"]
+	driverTemp := t.TempDir()
+	driverOutputRoot := filepath.Join(driverTemp, "output")
+	if err := os.Mkdir(driverOutputRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
+	server.Args = []string{
+		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome", "--isolated",
+		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
+	}
+	root.Tools.MCP.Servers["playwright"] = server
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	opened, err := factory.Open(ctx, WorkerOpenRequest{
+		SessionID: "full_access_fixture", Target: "gateway", Profile: "managed", DryRun: true,
+		Limits: config.BrowserLimitsConfig{},
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	worker := opened.Owner.(*playwrightWorker)
+	t.Cleanup(func() { _ = worker.Close(context.Background()) })
+	if err = worker.Execute(ctx, DriverAction{Kind: DriverNavigate, URL: fixture.URL}); err != nil {
+		t.Fatalf("navigate error = %v", err)
+	}
+	fill := func(role, name, value string) {
+		t.Helper()
+		observation, observeErr := worker.Observe(ctx)
+		if observeErr != nil {
+			t.Fatalf("Observe(%q) error = %v", name, observeErr)
+		}
+		var target string
+		for _, element := range observation.Elements {
+			if element.Role == role && element.Name == name {
+				target = element.Target
+				break
+			}
+		}
+		if target == "" {
+			t.Fatalf("editable control role=%q name=%q is absent from %#v", role, name, observation.Elements)
+		}
+		navigationID, navigationErr := worker.NavigationIdentity(ctx)
+		if navigationErr != nil {
+			t.Fatalf("NavigationIdentity(%q) error = %v", name, navigationErr)
+		}
+		if fillErr := worker.ExecuteAfterNavigationCheck(ctx, navigationID, DriverAction{
+			Kind: DriverFill, Target: target, Element: name, Value: value,
+		}); fillErr != nil {
+			t.Fatalf("fill role=%q name=%q error = %v", role, name, fillErr)
+		}
+	}
+	fill("spinbutton", "Price", "25")
+	fill("textbox", "", "unnamed")
+	fill("textbox", "Password", "secret")
+	fill("textbox", "One-time code", "123456")
+	fill("textbox", "Card number", "test-card-value")
+	probe, err := worker.client.CallTool(ctx, "browser_run_code_unsafe", map[string]any{
+		"code": `async (page) => "MINTCLAW_FULL_ACCESS_FILL_V1|" +
+String(await page.locator("#price").inputValue() === "25") + "|" +
+String(await page.locator("#unnamed").inputValue() === "unnamed") + "|" +
+String(await page.locator("#password").inputValue() === "secret") + "|" +
+String(await page.locator("#otp").inputValue() === "123456") + "|" +
+String(await page.locator("#card").inputValue() === "test-card-value")`,
+	})
+	probeText, textErr := boundedPlaywrightText(probe, playwrightNavigationIdentityResponseBytes)
+	if err != nil || probe == nil || probe.IsError || textErr != nil ||
+		!strings.Contains(probeText, "MINTCLAW_FULL_ACCESS_FILL_V1|true|true|true|true|true") {
+		t.Fatalf("full-access fill probe = %q, %#v, %v, %v", probeText, probe, err, textErr)
 	}
 	if err = worker.Close(ctx); err != nil {
 		t.Fatalf("Close() error = %v", err)

@@ -742,6 +742,45 @@ func TestBrowserActContractRequiresApprovalOnlyForApprovalBoundClicks(t *testing
 	}
 }
 
+func TestBrowserActFullAccessAndModelRequestedApproval(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.CapabilityMode = "full_access"
+	profile.ApprovalMode = "model_requested"
+	profile.Actions = []string{"click", "fill", "navigate"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	act := descriptors[3]
+	input := browserActInputFixture()
+	input["action"] = map[string]any{"kind": "fill", "ref": "host_ref_1"}
+	input["effect"] = "local_edit"
+	input["expected_role"] = "spinbutton"
+	input["expected_name"] = "Price"
+	input["input_digest"] = BrowserInputDigest("0")
+	input["input_bytes"] = 1
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
+		t.Fatalf("full-access price fill rejected: %v", err)
+	}
+
+	input = browserActInputFixture()
+	input["action"] = map[string]any{"kind": "click", "ref": "host_ref_1"}
+	input["effect"] = "external_commit"
+	input["expected_role"] = "button"
+	input["expected_name"] = "Save"
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
+		t.Fatalf("autonomous external commit rejected: %v", err)
+	}
+	input["confirmation"] = "request"
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
+		t.Fatal("model-requested confirmation without a bound digest was accepted")
+	}
+	bindBrowserApprovalDigest(t, input)
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
+		t.Fatalf("confirmed external commit rejected: %v", err)
+	}
+}
+
 func TestBrowserActSchemaBindsApprovedUploadAlias(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.DryRun = false

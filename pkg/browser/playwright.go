@@ -622,6 +622,7 @@ func (factory *PlaywrightWorkerFactory) Open(
 		downloadReady: factory.downloadReady,
 		outputDir:     outputDir, contextSessionID: request.SessionID,
 		sensitiveFields: append([]string(nil), factory.profileConfig.SensitiveFields...),
+		capabilityMode:  factory.profileConfig.EffectiveCapabilityMode(),
 	}
 	worker.contextSecret = make([]byte, 32)
 	if _, err = rand.Read(worker.contextSecret); err != nil {
@@ -676,6 +677,7 @@ type playwrightWorker struct {
 	cancelLifetime  context.CancelFunc
 	outputDir       string
 	sensitiveFields []string
+	capabilityMode  string
 	downloadReady   bool
 
 	mu              sync.Mutex
@@ -888,7 +890,7 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 		return ErrStale
 	}
 	code, err := playwrightNavigationCheckedActionCode(
-		worker.navigationID, action, worker.limits, worker.sensitiveFields,
+		worker.navigationID, action, worker.limits, worker.sensitiveFields, worker.capabilityMode,
 	)
 	if err != nil {
 		return err
@@ -977,7 +979,7 @@ func (worker *playwrightWorker) AuthorizeFill(
 		!playwrightTargetPattern.MatchString(target) {
 		return ErrStale
 	}
-	dispatch := playwrightFillDispatch(target, "", false, worker.sensitiveFields)
+	dispatch := playwrightFillDispatch(target, "", false, worker.sensitiveFields, worker.capabilityMode)
 	code := playwrightNavigationCheckedCode(worker.navigationID, dispatch)
 	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
 	if err != nil {
@@ -995,7 +997,12 @@ func playwrightNavigationCheckedActionCode(
 	action DriverAction,
 	limits config.BrowserLimitsConfig,
 	sensitiveFields []string,
+	capabilityModes ...string,
 ) (string, error) {
+	capabilityMode := browserpolicy.CapabilityLegacyStrict
+	if len(capabilityModes) > 0 {
+		capabilityMode = browserpolicy.EffectiveCapabilityMode(capabilityModes[0])
+	}
 	tool, arguments, err := mapPlaywrightAction(action, limits)
 	if err != nil {
 		return "", err
@@ -1039,7 +1046,7 @@ func playwrightNavigationCheckedActionCode(
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").click({ button: \"left\", noWaitAfter: true });"
 	case "browser_type":
-		dispatch = playwrightFillDispatch(action.Target, action.Value, true, sensitiveFields)
+		dispatch = playwrightFillDispatch(action.Target, action.Value, true, sensitiveFields, capabilityMode)
 	case "browser_select_option":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").selectOption([" + jsonString(action.Value) + "]);"
@@ -1079,7 +1086,13 @@ func playwrightNavigationCheckedActionCode(
 	return playwrightNavigationCheckedCode(identity, dispatch), nil
 }
 
-func playwrightFillDispatch(target, value string, execute bool, sensitiveFields []string) string {
+func playwrightFillDispatch(
+	target,
+	value string,
+	execute bool,
+	sensitiveFields []string,
+	capabilityMode string,
+) string {
 	jsonString := func(value string) string {
 		encoded, _ := json.Marshal(value)
 		return string(encoded)
@@ -1087,14 +1100,19 @@ func playwrightFillDispatch(target, value string, execute bool, sensitiveFields 
 	sensitive, sensitiveErr := browserpolicy.NormalizeSensitiveFieldTerms(sensitiveFields)
 	sensitive = append(browserpolicy.BuiltInSensitiveFieldTerms(), sensitive...)
 	policyJSON, _ := json.Marshal(map[string]any{
-		"valid": sensitiveErr == nil, "sensitive": sensitive, "ordinary": browserpolicy.OrdinaryFieldTerms(),
+		"valid":       sensitiveErr == nil,
+		"full_access": capabilityMode == browserpolicy.CapabilityFullAccess,
+		"sensitive":   sensitive,
+		"ordinary":    browserpolicy.OrdinaryFieldTerms(),
 	})
 	dispatch := `const fillTarget = page.locator("aria-ref=" + ` + jsonString(target) + `);
   if (await fillTarget.count() !== 1 || !await fillTarget.isVisible()) {
     return "MINTCLAW_NAV_ACT_V1|stale";
   }
 	  const fillOutcome = await fillTarget.evaluate((element, args) => {
-    const ordinaryTypes = new Set(["", "text", "search", "email", "tel", "url", "number"]);
+	    const ordinaryTypes = new Set(["", "text", "search", "email", "tel", "url", "number"]);
+	    const nonFillTypes = new Set(["hidden", "checkbox", "radio", "file", "submit", "button", "reset",
+	      "image", "range", "color"]);
     const ordinaryAutocomplete = new Set(["", "off", "on", "name", "honorific-prefix",
       "given-name", "additional-name", "family-name", "honorific-suffix", "nickname",
       "email", "organization-title", "organization", "street-address", "address-line1",
@@ -1154,16 +1172,19 @@ func playwrightFillDispatch(target, value string, execute bool, sensitiveFields 
       const bounds = element.getBoundingClientRect();
       const visible = element.isConnected && style.visibility !== "hidden" && style.display !== "none" &&
         bounds.width > 0 && bounds.height > 0;
-      const inputLike = (tag === "input" && ordinaryTypes.has(type)) ||
-        tag === "textarea" || element.isContentEditable;
+	      const inputLike = (tag === "input" && (args.policy.full_access ? !nonFillTypes.has(type) : ordinaryTypes.has(type))) ||
+	        tag === "textarea" || element.isContentEditable;
       const effectivelyDisabled = element.disabled || element.matches(":disabled");
       const compatibleRole = role === "" || role === "textbox" || role === "searchbox";
       const ariaEnabled = ariaDisabled === "" || ariaDisabled === "false";
       const ariaWritable = ariaReadOnly === "" || ariaReadOnly === "false";
-      return args.policy.valid && visible && inputLike && !effectivelyDisabled && !element.readOnly &&
-        labelledByValid && identityPartsValid && identity.length <= 4096 && compatibleRole && ariaEnabled && ariaWritable &&
-        ordinaryAutocomplete.has(autocomplete) && !args.policy.sensitive.some(term => matchesTerm(identity, term)) &&
-        args.policy.ordinary.some(term => matchesTerm(identity, term));
+	      const mechanicallyWritable = visible && inputLike && !effectivelyDisabled && !element.readOnly &&
+	        ariaEnabled && ariaWritable;
+	      if (args.policy.full_access) return mechanicallyWritable;
+	      return args.policy.valid && mechanicallyWritable && labelledByValid && identityPartsValid &&
+	        identity.length <= 4096 && compatibleRole && ordinaryAutocomplete.has(autocomplete) &&
+	        !args.policy.sensitive.some(term => matchesTerm(identity, term)) &&
+	        args.policy.ordinary.some(term => matchesTerm(identity, term));
     };
     if (!classify()) return "denied";
     if (!args.execute) return "ok";

@@ -97,6 +97,44 @@ func TestBrowserConfigAcceptsExplicitApprovedActionMode(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigAcceptsFullAccessApprovalModes(t *testing.T) {
+	for _, approvalMode := range []string{
+		BrowserApprovalNone,
+		BrowserApprovalModelRequested,
+		BrowserApprovalAlwaysCommit,
+	} {
+		t.Run(approvalMode, func(t *testing.T) {
+			cfg := browserConfigFixture(t)
+			target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+			profile := target.Profiles[BrowserDefaultProfile]
+			profile.CapabilityMode = BrowserCapabilityFullAccess
+			profile.ApprovalMode = approvalMode
+			target.Profiles[BrowserDefaultProfile] = profile
+			cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+			if err := cfg.ValidateBrowserConfig(); err != nil {
+				t.Fatalf("ValidateBrowserConfig() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestBrowserConfigDefersRestrictedPolicyModes(t *testing.T) {
+	for _, mutate := range []func(*BrowserProfileConfig){
+		func(profile *BrowserProfileConfig) { profile.CapabilityMode = BrowserCapabilityRestricted },
+		func(profile *BrowserProfileConfig) { profile.ApprovalMode = BrowserApprovalPolicy },
+	} {
+		cfg := browserConfigFixture(t)
+		target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+		profile := target.Profiles[BrowserDefaultProfile]
+		mutate(&profile)
+		target.Profiles[BrowserDefaultProfile] = profile
+		cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+		if err := cfg.ValidateBrowserConfig(); err == nil || !strings.Contains(err.Error(), "implementation") {
+			t.Fatalf("ValidateBrowserConfig() error = %v, want deferred implementation", err)
+		}
+	}
+}
+
 func TestBrowserPolicyRevisionCanonicalizesSensitiveFields(t *testing.T) {
 	cfg := browserConfigFixture(t)
 	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
@@ -115,6 +153,31 @@ func TestBrowserPolicyRevisionCanonicalizesSensitiveFields(t *testing.T) {
 	second, err := cfg.Tools.Browser.PolicyRevision()
 	if err != nil || first != second {
 		t.Fatalf("canonical sensitive field revisions = %q and %q, error = %v", first, second, err)
+	}
+}
+
+func TestBrowserPolicyRevisionBindsCapabilityAndApprovalModes(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	legacy, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	profile := target.Profiles[BrowserDefaultProfile]
+	profile.CapabilityMode = BrowserCapabilityFullAccess
+	profile.ApprovalMode = BrowserApprovalModelRequested
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	fullAccess, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil || fullAccess == legacy {
+		t.Fatalf("policy revisions legacy=%q full_access=%q error=%v", legacy, fullAccess, err)
+	}
+	profile.ApprovalMode = BrowserApprovalNone
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	withoutApproval, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil || withoutApproval == fullAccess {
+		t.Fatalf("policy revisions model_requested=%q none=%q error=%v", fullAccess, withoutApproval, err)
 	}
 }
 

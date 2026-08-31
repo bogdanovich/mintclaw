@@ -1279,7 +1279,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		}
 		profile := browserHostProfileFixture()
 		profile.AllowedActions = []string{
-			"check", "fill", "hover", "navigate", "press", "select", "uncheck",
+			"check", "click", "fill", "hover", "navigate", "press", "select", "uncheck",
 		}
 		profile.DryRun = false
 		profile.AllowApprovedActions = true
@@ -1414,6 +1414,65 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		}
 		if worker.authorizeFillCalls != 1 {
 			t.Fatalf("fill authorization calls = %d, want 1", worker.authorizeFillCalls)
+		}
+	})
+
+	for _, test := range []struct {
+		name, role, label string
+	}{
+		{name: "sensitive field", role: "textbox", label: "Password"},
+		{name: "numeric price field", role: "spinbutton", label: "Price"},
+		{name: "unnamed field", role: "textbox"},
+	} {
+		t.Run("full access fills "+test.name, func(t *testing.T) {
+			element := browserworker.DriverElement{
+				Target: "driver_fill_1", Role: test.role, Name: test.label,
+			}
+			host, worker, initial := newFixture(t, element)
+			host.sessions["browser_session_1"].profile.CapabilityMode = "full_access"
+			host.sessions["browser_session_1"].profile.SensitiveFields = []string{"password", "price"}
+			request := BrowserHostActRequest{
+				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+				ActionInvocationID: "browser_fill_full_access",
+				Action: browserworker.Action{
+					Kind: "fill", Ref: initial.Elements[0].Ref, Value: "secret",
+				},
+				Effect: "local_edit", CurrentOrigin: "https://example.com",
+				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+				ProfileRevision: "managed-v1", ExpectedRole: test.role, ExpectedName: test.label,
+				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			}
+			result, err := host.Act(t.Context(), request)
+			if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 {
+				t.Fatalf("Fill(full access) = %#v, %v; actions=%#v", result, err, worker.actions)
+			}
+		})
+	}
+
+	t.Run("model requested approval is independent from external effect", func(t *testing.T) {
+		for _, confirmation := range []string{"", "request"} {
+			element := browserworker.DriverElement{Target: "driver_save_1", Role: "button", Name: "Save"}
+			host, worker, initial := newFixture(t, element)
+			session := host.sessions["browser_session_1"]
+			session.profile.DryRun = false
+			session.profile.AllowApprovedActions = true
+			session.profile.ApprovalMode = "model_requested"
+			request := BrowserHostActRequest{
+				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
+				ActionInvocationID: "browser_commit_" + strings.ReplaceAll(confirmation, "request", "confirmed"),
+				Action:             browserworker.Action{Kind: "click", Ref: initial.Elements[0].Ref},
+				Effect:             "external_commit", Confirmation: confirmation, CurrentOrigin: "https://example.com",
+				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+				ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
+				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			}
+			if confirmation == "request" {
+				request.ApprovalDigest, _ = nodes.BrowserApprovalDigest(browserHostActInput(request))
+			}
+			result, err := host.Act(t.Context(), request)
+			if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 {
+				t.Fatalf("Act(%q) = %#v, %v; actions=%#v", confirmation, result, err, worker.actions)
+			}
 		}
 	})
 

@@ -55,6 +55,7 @@ type PrepareActionRequest struct {
 	SnapshotGeneration uint64
 	Action             Action
 	DeclaredEffect     Effect
+	Confirmation       string
 	Upload             *UploadBinding
 }
 
@@ -367,6 +368,7 @@ func (broker *Broker) PrepareAction(ctx context.Context, request PrepareActionRe
 			existing.SnapshotGeneration != request.SnapshotGeneration || existing.Action != boundAction ||
 			(request.Action.Kind == ActionClick &&
 				existing.Effect != requestedClickEffect(request.DeclaredEffect, existing.ElementRole)) ||
+			existing.Confirmation != request.Confirmation ||
 			existing.InputDigest != inputDigest || existing.InputBytes != inputBytes {
 			return Preparation{}, ErrConflict
 		}
@@ -482,7 +484,7 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		)
 		return expired, errors.Join(ErrStale, completeErr)
 	}
-	requiresApproval := actionRequiresApproval(prepared.Effect)
+	requiresApproval := preparedRequiresApproval(prepared)
 	if requiresApproval && !approvalMatches(prepared, approval) {
 		return Invocation{}, ErrApprovalRequired
 	}
@@ -686,6 +688,8 @@ func (broker *Broker) resolvePreparedActionLocked(
 		SnapshotID:        session.SnapshotID, SnapshotGeneration: session.SnapshotGeneration,
 		CurrentOrigin: session.SnapshotOrigin, Action: boundAction,
 		InputDigest: inputDigest, InputBytes: inputBytes, DryRun: session.DryRun,
+		CapabilityMode: broker.capabilityMode(session), ApprovalMode: broker.approvalMode(session),
+		Confirmation:   request.Confirmation,
 		PolicyRevision: session.PolicyRevision, CatalogRevision: worker.CatalogRevision(),
 		CreatedAt: now.UnixNano(),
 		ExpiresAt: now.Add(time.Duration(broker.config.Limits.Effective().PreparedSeconds) * time.Second).UnixNano(),
@@ -778,7 +782,12 @@ func (broker *Broker) resolvePreparedActionLocked(
 		case ActionDownload:
 			prepared.Effect = classifyClickEffect(element)
 		case ActionFill:
-			if !ordinaryFillElement(element.Role, element.Name, broker.sensitiveFieldTerms(session)) {
+			if !browserpolicy.FillFieldAllowed(
+				prepared.CapabilityMode,
+				element.Role,
+				element.Name,
+				broker.sensitiveFieldTerms(session),
+			) {
 				return PreparedAction{}, ErrDenied
 			}
 			prepared.Effect = EffectLocalEdit
@@ -1292,7 +1301,11 @@ func preparationView(prepared PreparedAction) Preparation {
 			PreparedActionID: prepared.ID, ActionHash: prepared.ActionHash,
 			PolicyRevision: prepared.PolicyRevision, ExpiresAt: prepared.ExpiresAt,
 		},
-		RequiresApproval: actionRequiresApproval(prepared.Effect),
+		RequiresApproval: browserpolicy.RequiresApproval(
+			prepared.ApprovalMode,
+			string(prepared.Effect),
+			prepared.Confirmation,
+		),
 	}
 }
 
@@ -1300,10 +1313,6 @@ func approvalMatches(prepared PreparedAction, approval *ApprovalBinding) bool {
 	return approval != nil && approval.PreparedActionID == prepared.ID &&
 		approval.ActionHash == prepared.ActionHash && approval.PolicyRevision == prepared.PolicyRevision &&
 		approval.ExpiresAt == prepared.ExpiresAt
-}
-
-func actionRequiresApproval(effect Effect) bool {
-	return effect == EffectExternalCommit || effect == EffectUnknown
 }
 
 func dryRunDeniesAction(prepared PreparedAction) bool {
@@ -1350,7 +1359,15 @@ func requestedClickEffect(declared Effect, role string) Effect {
 }
 
 func tracksBrowserProgress(prepared PreparedAction) bool {
-	return prepared.Effect == EffectNavigation || actionRequiresApproval(prepared.Effect)
+	return prepared.Effect == EffectNavigation || preparedRequiresApproval(prepared)
+}
+
+func preparedRequiresApproval(prepared PreparedAction) bool {
+	return browserpolicy.RequiresApproval(
+		prepared.ApprovalMode,
+		string(prepared.Effect),
+		prepared.Confirmation,
+	)
 }
 
 func browserProgressCount(session Session, signature string) uint32 {
@@ -1391,15 +1408,23 @@ func cloneDialogObservation(dialog *DialogObservation) *DialogObservation {
 }
 
 func editableElementRole(role string) bool {
-	return role == "textbox" || role == "searchbox" || role == "combobox"
+	return role == "textbox" || role == "searchbox" || role == "combobox" || role == "spinbutton"
 }
 
-func ordinaryFillElement(role, name string, sensitiveTerms ...[]string) bool {
-	var configured []string
-	if len(sensitiveTerms) > 0 {
-		configured = sensitiveTerms[0]
+func (broker *Broker) capabilityMode(session Session) string {
+	target, ok := broker.config.Targets[session.Target]
+	if !ok {
+		return browserpolicy.CapabilityLegacyStrict
 	}
-	return browserpolicy.OrdinaryFillField(role, name, configured)
+	return target.Profiles[session.Profile].EffectiveCapabilityMode()
+}
+
+func (broker *Broker) approvalMode(session Session) string {
+	target, ok := broker.config.Targets[session.Target]
+	if !ok {
+		return browserpolicy.ApprovalAlwaysCommit
+	}
+	return target.Profiles[session.Profile].EffectiveApprovalMode()
 }
 
 func (broker *Broker) sensitiveFieldTerms(session Session) []string {

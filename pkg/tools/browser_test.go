@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -777,6 +778,8 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	if result.DefaultTarget != "gateway" || len(result.Targets) != 1 || result.Targets[0].Target != "gateway" ||
 		result.Targets[0].Status != "ready" || len(result.Targets[0].Profiles) != 1 ||
 		result.Targets[0].Profiles[0].NetworkMode != config.BrowserNetworkExactOrigins ||
+		result.Targets[0].Profiles[0].CapabilityMode != config.BrowserCapabilityLegacyStrict ||
+		result.Targets[0].Profiles[0].ApprovalMode != config.BrowserApprovalAlwaysCommit ||
 		!result.Targets[0].Profiles[0].DryRun || result.Targets[0].Profiles[0].AllowApprovedActions ||
 		!result.Targets[0].Features.Screenshot || !result.Targets[0].Features.PageScreenshot ||
 		!result.Targets[0].Features.ElementScreenshot ||
@@ -1763,7 +1766,7 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
 		"snapshot_id": "snapshot_1", "snapshot_generation": 3,
 		"action": map[string]any{"kind": "click", "ref": "element_1"},
-		"effect": "external_commit",
+		"effect": "external_commit", "confirmation": "request",
 	}
 	approval, err := tool.ApprovalArguments(browserToolTestContext(), args)
 	if err != nil || approval["prepared_action_id"] != "prepared_1" || approval["action_hash"] != binding.ActionHash ||
@@ -1793,6 +1796,9 @@ func TestBrowserActSuspendsAndResumesWithPreparedAuthority(t *testing.T) {
 	}
 	if source.prepareRequest.DeclaredEffect != browser.EffectExternalCommit {
 		t.Fatalf("declared effect = %q", source.prepareRequest.DeclaredEffect)
+	}
+	if source.prepareRequest.Confirmation != browserpolicy.ConfirmationRequest {
+		t.Fatalf("confirmation = %q", source.prepareRequest.Confirmation)
 	}
 }
 

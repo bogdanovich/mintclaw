@@ -14,6 +14,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
@@ -250,6 +251,8 @@ type browserProfileView struct {
 	Status               string                   `json:"status"`
 	Reason               string                   `json:"reason,omitempty"`
 	NetworkMode          string                   `json:"network_mode"`
+	CapabilityMode       string                   `json:"capability_mode"`
+	ApprovalMode         string                   `json:"approval_mode"`
 	DryRun               bool                     `json:"dry_run"`
 	AllowApprovedActions bool                     `json:"allow_approved_actions"`
 	Readiness            browser.PassiveReadiness `json:"readiness"`
@@ -340,8 +343,13 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 				status, reason = readiness.Profile.Status, readiness.Profile.Reason
 			}
 			profiles = append(profiles, browserProfileView{
-				Profile: profileName, Status: status, Reason: reason,
-				NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
+				Profile:              profileName,
+				Status:               status,
+				Reason:               reason,
+				NetworkMode:          profile.NetworkMode,
+				CapabilityMode:       profile.EffectiveCapabilityMode(),
+				ApprovalMode:         profile.EffectiveApprovalMode(),
+				DryRun:               profile.DryRun,
 				AllowApprovedActions: profile.AllowApprovedActions,
 				Readiness:            readiness,
 			})
@@ -629,6 +637,10 @@ func (*BrowserContextsTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional fresh broker-issued frame ID for select only; omit for list, open, and close.",
 			},
+			"confirmation": map[string]any{
+				"type": "string", "enum": []string{browserpolicy.ConfirmationRequest},
+				"description": "Optional. Request owner confirmation for this exact tab mutation.",
+			},
 		},
 		"required": []string{"operation", "browser_session_id"}, "additionalProperties": false,
 	}
@@ -655,7 +667,8 @@ func (tool *BrowserContextsTool) ApprovalArguments(
 		return nil, &browserSafeDenialError{cause: browser.ErrDenied}
 	}
 	operation, _ := args["operation"].(string)
-	if operation != string(browser.ContextClose) {
+	confirmation, _ := args["confirmation"].(string)
+	if operation != string(browser.ContextClose) && confirmation != browserpolicy.ConfirmationRequest {
 		return args, nil
 	}
 	preparation, err := tool.prepare(ctx, args)
@@ -771,6 +784,11 @@ func (tool *BrowserContextsTool) prepare(
 		Owner: owner, RequestID: requestID, SessionID: sessionID,
 		Operation: browser.ContextOperation(operation),
 	}
+	request.Confirmation, _ = args["confirmation"].(string)
+	if _, present := args["confirmation"]; present &&
+		request.Confirmation != browserpolicy.ConfirmationRequest {
+		return browser.ContextPreparation{}, browser.ErrInvalid
+	}
 	request.ContextCatalogID, _ = args["context_catalog_id"].(string)
 	request.TabID, _ = args["tab_id"].(string)
 	request.FrameID, _ = args["frame_id"].(string)
@@ -788,7 +806,9 @@ func (tool *BrowserContextsTool) prepare(
 
 func browserContextApprovalSummary(preparation browser.ContextPreparation) string {
 	return fmt.Sprintf(
-		"Allow browser close action with unknown effect for tab %q?",
+		"Allow browser %s action with %s effect for tab %q?",
+		preparation.Request.Operation,
+		preparation.Invocation.Effect,
 		preparation.Request.TabID,
 	)
 }
@@ -1447,6 +1467,11 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 				"description": "Required for click and ignored for other action kinds. Declare workflow impact: " +
 					"external_commit only immediately before an important external state change; unknown when genuinely unsure.",
 			},
+			"confirmation": map[string]any{
+				"type":        "string",
+				"enum":        []string{browserpolicy.ConfirmationRequest},
+				"description": "Optional. Set to request only when the user asked to confirm this exact action before execution.",
+			},
 		},
 		"required": []string{
 			"browser_session_id", "tab_id", "snapshot_id", "snapshot_generation", "action",
@@ -1799,6 +1824,11 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 			return browser.Preparation{}, browser.ErrInvalid
 		}
 	}
+	confirmation, confirmationOK := args["confirmation"].(string)
+	if _, present := args["confirmation"]; present &&
+		(!confirmationOK || confirmation != browserpolicy.ConfirmationRequest) {
+		return browser.Preparation{}, browser.ErrInvalid
+	}
 	if action.Kind == browser.ActionDownload && action.Deliver && !toolshared.ToolRecoverableOutbound(ctx) {
 		return browser.Preparation{}, browser.ErrDenied
 	}
@@ -1828,7 +1858,7 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 		Owner: owner, RequestID: requestID, SessionID: sessionID, TabID: tabID,
 		FrameID: frameID, ContextCatalogID: catalogID, ContextGeneration: uint64(contextGeneration),
 		SnapshotID: snapshotID, SnapshotGeneration: uint64(generation), Action: action,
-		DeclaredEffect: declaredEffect,
+		DeclaredEffect: declaredEffect, Confirmation: confirmation,
 	})
 }
 
