@@ -15,6 +15,7 @@ type codexLikeUXScenario struct {
 	Width      int                `json:"width"`
 	Theme      string             `json:"theme"`
 	ColorLevel string             `json:"color_level"`
+	Golden     string             `json:"compact_golden"`
 	Events     []codexLikeUXEvent `json:"events"`
 }
 
@@ -83,6 +84,14 @@ func TestCodexLikeUXGoldenScenariosExerciseCellModesAndLayout(t *testing.T) {
 		}
 		for _, mode := range []cellRenderMode{cellRenderCompact, cellRenderFull, cellRenderPlain} {
 			rendered, layout := renderTranscriptCells(cells, context, mode, false, false, false)
+			if mode == cellRenderCompact && rendered != scenario.Golden {
+				t.Fatalf(
+					"scenario %q compact golden mismatch:\nwant: %q\n got: %q",
+					scenario.Name,
+					scenario.Golden,
+					rendered,
+				)
+			}
 			if len(layout.blocks) != len(cells) {
 				t.Fatalf("scenario %q mode %d layout = %+v", scenario.Name, mode, layout)
 			}
