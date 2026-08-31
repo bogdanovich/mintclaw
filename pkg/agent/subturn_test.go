@@ -2385,6 +2385,7 @@ type objectiveRepairCaptureProvider struct {
 	mu        sync.Mutex
 	responses []*providers.LLMResponse
 	toolDefs  [][]providers.ToolDefinition
+	messages  [][]providers.Message
 	calls     int
 	onCall    func(int)
 }
@@ -2398,6 +2399,7 @@ func (p *objectiveRepairCaptureProvider) Chat(
 ) (*providers.LLMResponse, error) {
 	p.mu.Lock()
 	p.toolDefs = append(p.toolDefs, append([]providers.ToolDefinition(nil), toolDefs...))
+	p.messages = append(p.messages, append([]providers.Message(nil), messages...))
 	if len(p.responses) == 0 {
 		p.mu.Unlock()
 		return nil, errors.New("unexpected objective repair provider call")
@@ -2426,6 +2428,15 @@ func (p *objectiveRepairCaptureProvider) toolDefinitionCounts() []int {
 		counts[index] = len(p.toolDefs[index])
 	}
 	return counts
+}
+
+func (p *objectiveRepairCaptureProvider) messagesForCall(index int) []providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if index < 0 || index >= len(p.messages) {
+		return nil
+	}
+	return append([]providers.Message(nil), p.messages[index]...)
 }
 
 func TestSpawnSubTurnRepairsIncompleteResultWithoutTools(t *testing.T) {
@@ -2559,7 +2570,7 @@ func TestSpawnSubTurnRepairRestoresToolsForLateSteering(t *testing.T) {
 		`"missing_items":[],"result":"Desk — $40"}` + objectiveOutcomeEnd
 	provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{
 		{Content: invalid, FinishReason: "stop"},
-		{Content: repaired, FinishReason: "stop"},
+		{ReasoningContent: repaired, FinishReason: "stop"},
 		{Content: repaired, FinishReason: "stop"},
 	}}
 	al, cleanup := newMultiAgentLoop(t, provider)
@@ -2602,6 +2613,111 @@ func TestSpawnSubTurnRepairRestoresToolsForLateSteering(t *testing.T) {
 	if counts := provider.toolDefinitionCounts(); len(counts) != 3 || counts[0] == 0 || counts[1] != 0 ||
 		counts[2] == 0 {
 		t.Fatalf("provider tool counts = %v, want tools, model-only repair, restored tools", counts)
+	}
+	if !messageContentPresent(provider.messagesForCall(2), "Desk — $40") {
+		t.Fatalf("late-steering call lost normalized reasoning repair: %#v", provider.messagesForCall(2))
+	}
+}
+
+type repairAbortHook struct {
+	mu         sync.Mutex
+	beforeCall int
+	afterCall  int
+	after      bool
+}
+
+func (h *repairAbortHook) BeforeLLM(
+	_ context.Context,
+	req *LLMHookRequest,
+) (*LLMHookRequest, HookDecision, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.beforeCall++
+	if !h.after && h.beforeCall == 2 {
+		return req, HookDecision{Action: HookActionAbortTurn}, nil
+	}
+	return req, HookDecision{}, nil
+}
+
+func (h *repairAbortHook) AfterLLM(
+	_ context.Context,
+	resp *LLMHookResponse,
+) (*LLMHookResponse, HookDecision, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.afterCall++
+	if h.after && h.afterCall == 2 {
+		return resp, HookDecision{Action: HookActionAbortTurn}, nil
+	}
+	return resp, HookDecision{}, nil
+}
+
+func TestSpawnSubTurnRepairDispatchesAbortBeforeDeferredWork(t *testing.T) {
+	invalid := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The requested records are listed above."}` + objectiveOutcomeEnd
+	repaired := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"Desk — $40"}}],` +
+		`"missing_items":[],"result":"Desk — $40"}` + objectiveOutcomeEnd
+	for _, after := range []bool{false, true} {
+		name := "before_llm"
+		expectedProviderCalls := 1
+		if after {
+			name = "after_llm_with_late_steering"
+			expectedProviderCalls = 2
+		}
+		t.Run(name, func(t *testing.T) {
+			provider := &objectiveRepairCaptureProvider{responses: []*providers.LLMResponse{
+				{Content: invalid, FinishReason: "stop"},
+				{Content: repaired, FinishReason: "stop"},
+			}}
+			al, cleanup := newMultiAgentLoop(t, provider)
+			defer cleanup()
+			if err := al.MountHook(NamedHook("repair-abort", &repairAbortHook{after: after})); err != nil {
+				t.Fatal(err)
+			}
+			if after {
+				provider.onCall = func(call int) {
+					if call != 2 {
+						return
+					}
+					al.turns.activeTurnStates.Range(func(key, value any) bool {
+						state, ok := value.(*turnState)
+						scope, scopeOK := key.(runtimeSessionScope)
+						if !ok || !scopeOK || state.agent == nil || state.agent.ID != "beta" {
+							return true
+						}
+						if err := al.steering.pushScopeWithSender(
+							scope,
+							providers.Message{Role: "user", Content: "late abort-bound steering"},
+							"test-user",
+						); err != nil {
+							t.Errorf("push late steering: %v", err)
+						}
+						return false
+					})
+				}
+			}
+			alphaAgent, _ := al.registry.GetAgent("alpha")
+			parent := &turnState{
+				ctx: context.Background(), turnID: "parent-objective-repair-abort",
+				pendingResults: make(chan *toolshared.ToolResult, 4),
+				concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+				session:        &ephemeralSessionStore{}, agent: alphaAgent,
+				opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-abort"}},
+			}
+			result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
+				TargetAgentID: "beta", TaskPrompt: "return listing",
+				ObjectiveItems: []toolshared.ObjectiveSpec{{Item: "return listing", Kind: "result"}},
+			})
+			if err == nil || !strings.Contains(err.Error(), "hook requested turn abort") || result == nil {
+				t.Fatalf("repair abort result = (%#v, %v)", result, err)
+			}
+			if counts := provider.toolDefinitionCounts(); len(counts) != expectedProviderCalls {
+				t.Fatalf("provider calls after repair abort = %v", counts)
+			}
+		})
 	}
 }
 

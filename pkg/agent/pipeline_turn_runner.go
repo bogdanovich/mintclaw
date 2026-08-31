@@ -172,11 +172,21 @@ func (p *Pipeline) runPreparedTurnLoop(
 			turnStatus = TurnEndStatusError
 			return turnResult{}, turnStatus, callErr
 		}
+		if llmOutcome.AbortCause == TurnAbortHard {
+			turnStatus = TurnEndStatusAborted
+			result, abortErr := p.abortTurn(ts)
+			return result, turnStatus, abortErr
+		}
+		if llmOutcome.AbortCause == TurnAbortHook {
+			turnStatus = TurnEndStatusError
+			return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
+		}
 		messages = exec.messages
 		finalContent = llmOutcome.terminalCandidate(finalContent)
 		if repairIteration {
-			if repaired := strings.TrimSpace(llm.response.Content); repaired != "" {
-				repairedMessage := providers.Message{Role: "assistant", Content: llm.response.Content}
+			repairCandidate := llmOutcome.terminalCandidate(terminalContent{})
+			if repaired := strings.TrimSpace(repairCandidate.content); repaired != "" {
+				repairedMessage := providers.Message{Role: "assistant", Content: repairCandidate.content}
 				exec.messages = append(exec.messages, repairedMessage)
 				exec.objectiveRepairMessages = append(exec.objectiveRepairMessages, repairedMessage)
 				messages = exec.messages
@@ -200,15 +210,6 @@ func (p *Pipeline) runPreparedTurnLoop(
 		case ControlContinue:
 			continue
 		case ControlBreak:
-			if llmOutcome.AbortCause == TurnAbortHard {
-				turnStatus = TurnEndStatusAborted
-				result, abortErr := p.abortTurn(ts)
-				return result, turnStatus, abortErr
-			}
-			if llmOutcome.AbortCause == TurnAbortHook {
-				turnStatus = TurnEndStatusError
-				return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
-			}
 			// Ensure empty response falls back to DefaultResponse
 			if finalContent.content == "" {
 				finalContent = terminalContent{content: ts.opts.DefaultResponse}
