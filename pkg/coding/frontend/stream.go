@@ -129,8 +129,7 @@ func (s *projectedStream) finalize(ctx context.Context, content string) error {
 	if s.finalized {
 		return nil
 	}
-	s.projector.upsertStreamEntry(s.turnID, EntryAssistant, content, true, s.baseline.owner)
-	s.projector.commitStream(s.baseline.owner)
+	s.projector.finalizeStreamEntry(s.turnID, EntryAssistant, content, true, s.baseline.owner)
 	s.finalized = true
 	return nil
 }

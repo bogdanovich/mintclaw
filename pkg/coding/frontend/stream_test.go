@@ -3,6 +3,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"unicode/utf8"
@@ -195,6 +196,162 @@ func TestOverlappingStreamCancellationNeverResurrectsCanceledWriter(t *testing.T
 	if len(projector.activeStreamOwners) != 0 || len(projector.entryVersions) != 0 ||
 		len(projector.entryGenerations) != 0 {
 		t.Fatalf("canceled streams retained rollback state")
+	}
+}
+
+func TestAlternatingStreamWritersKeepOneVersionPerOwner(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	delegate := NewStreamDelegate(projector, "thread-1")
+	traceScope := runtimeevents.NewTraceScope("/repo", "turn-1")
+	first, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
+	if !ok {
+		t.Fatal("first stream was rejected")
+	}
+	second, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
+	if !ok {
+		t.Fatal("second stream was rejected")
+	}
+	for index := 0; index < 100; index++ {
+		if err := first.Update(t.Context(), fmt.Sprintf("first-%d", index)); err != nil {
+			t.Fatal(err)
+		}
+		if err := second.Update(t.Context(), fmt.Sprintf("second-%d", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Items) != 1 {
+		t.Fatalf("alternating stream items = %+v", snapshot.Items)
+	}
+	versions := 0
+	for version := projector.entryVersions[snapshot.Items[0].ID]; version != nil; version = version.previous {
+		versions++
+	}
+	if versions != 2 {
+		t.Fatalf("entry versions = %d, want one per active owner", versions)
+	}
+	first.Cancel(t.Context())
+	second.Cancel(t.Context())
+	if snapshot = snapshotForTest(t, projector); len(snapshot.Items) != 0 {
+		t.Fatalf("alternating streams survived cancellation = %+v", snapshot)
+	}
+}
+
+func TestOverlappingStreamCancellationRestoresCommittedBoundedWindow(t *testing.T) {
+	for _, order := range []string{"first_then_second", "second_then_first"} {
+		t.Run(order, func(t *testing.T) {
+			projector := newTestProjector(t, ProjectionLimits{Entries: 2})
+			projector.TurnStarted("committed", "A")
+			projector.AssistantAccumulated("committed", "B", true)
+			delegate := NewStreamDelegate(projector, "thread-1")
+			first, ok := delegate.GetStreamer(
+				t.Context(),
+				"coding",
+				"thread-1",
+				"thread-1",
+				"",
+				runtimeevents.NewTraceScope("/repo", "first"),
+			)
+			if !ok {
+				t.Fatal("first stream was rejected")
+			}
+			if err := first.Update(t.Context(), "C"); err != nil {
+				t.Fatal(err)
+			}
+			second, ok := delegate.GetStreamer(
+				t.Context(),
+				"coding",
+				"thread-1",
+				"thread-1",
+				"",
+				runtimeevents.NewTraceScope("/repo", "second"),
+			)
+			if !ok {
+				t.Fatal("second stream was rejected")
+			}
+			if err := second.Update(t.Context(), "D"); err != nil {
+				t.Fatal(err)
+			}
+
+			if order == "first_then_second" {
+				first.Cancel(t.Context())
+				second.Cancel(t.Context())
+			} else {
+				second.Cancel(t.Context())
+				first.Cancel(t.Context())
+			}
+			snapshot := snapshotForTest(t, projector)
+			got := make([]string, len(snapshot.Entries))
+			for index := range snapshot.Entries {
+				got[index] = snapshot.Entries[index].Text
+			}
+			if !reflect.DeepEqual(got, []string{"A", "B"}) || snapshot.HasOlderEntries {
+				t.Fatalf("restored committed window = %v; snapshot=%+v", got, snapshot)
+			}
+			if len(projector.rollbackCommittedMessages) != 0 {
+				t.Fatalf("rollback window survived the final cancellation")
+			}
+		})
+	}
+}
+
+func TestActiveStreamRollbackAuthorityRemainsBounded(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{Entries: 2})
+	streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "provisional"),
+	)
+	if !ok {
+		t.Fatal("stream was rejected")
+	}
+	if err := streamer.Update(t.Context(), "provisional"); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 100; index++ {
+		projector.Warning("committed", fmt.Sprintf("warning-%d", index), fmt.Sprintf("committed-%d", index))
+	}
+	if len(projector.rollbackCommittedMessages) != 2 {
+		t.Fatalf("rollback window size = %d, want 2", len(projector.rollbackCommittedMessages))
+	}
+	streamer.Cancel(t.Context())
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Text != "committed-98" ||
+		snapshot.Entries[1].Text != "committed-99" || !snapshot.HasOlderEntries {
+		t.Fatalf("bounded rollback authority = %+v", snapshot)
+	}
+}
+
+func TestActiveStreamRollbackKeepsProtectedLateUser(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{Entries: 1, Tools: 1})
+	projector.ToolStarted("turn-1", "call-1", "exec", "")
+	streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "provisional"),
+	)
+	if !ok {
+		t.Fatal("stream was rejected")
+	}
+	if err := streamer.Update(t.Context(), "provisional"); err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-2", "unrelated")
+	projector.TurnStarted("turn-1", "late user")
+	streamer.Cancel(t.Context())
+
+	items := snapshotForTest(t, projector).Items
+	if len(items) != 2 || items[0].Kind != PresentationUserMessage ||
+		items[0].TurnID != "turn-1" || items[1].Kind != PresentationToolCall ||
+		items[1].TurnID != "turn-1" || items[0].Sequence >= items[1].Sequence {
+		t.Fatalf("late user was evicted from committed rollback window = %+v", items)
 	}
 }
 

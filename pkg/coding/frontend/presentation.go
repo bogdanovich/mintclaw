@@ -25,6 +25,18 @@ func (p *Projector) upsertEntry(state *ThreadSnapshot, entry TranscriptEntry) (P
 	})
 }
 
+func (p *Projector) upsertCommittedEntry(
+	state *ThreadSnapshot,
+	entry TranscriptEntry,
+) (PresentationItem, bool) {
+	item, changed := p.upsertEntry(state, entry)
+	if changed && len(p.activeStreamOwners) != 0 {
+		p.captureRollbackCommittedMessages(state.Items, item.ID)
+		p.rebuildStreamMessageProjection(state, item.ID)
+	}
+	return item, changed
+}
+
 func (p *Projector) upsertTool(state *ThreadSnapshot, tool ToolState) PresentationItem {
 	tool = p.boundedTool(tool)
 	tool = cloneTool(tool)
@@ -43,6 +55,9 @@ func (p *Projector) upsertPresentationItem(
 	state *ThreadSnapshot,
 	replacement PresentationItem,
 ) (PresentationItem, bool) {
+	if replacement.Message != nil && len(p.activeStreamOwners) != 0 {
+		p.captureRollbackCommittedMessages(state.Items, "")
+	}
 	index := presentationItemIndex(state.Items, replacement.ID)
 	inserted := index < 0
 	if index >= 0 {

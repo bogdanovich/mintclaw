@@ -48,6 +48,8 @@ type Projector struct {
 	nextEntryGeneration        uint64
 	nextStreamOwner            uint64
 	activeStreamOwners         map[uint64]struct{}
+	rollbackCommittedMessages  []PresentationItem
+	rollbackHasOlderEntries    bool
 	nextSequence               uint64
 	nextTurnOrder              uint64
 	reservedUserSequences      map[string]uint64
@@ -165,7 +167,7 @@ func (p *Projector) TurnStarted(turnID, userMessage string) {
 			Text:     userMessage,
 			Complete: true,
 		}
-		p.upsertEntry(state, entry)
+		p.upsertCommittedEntry(state, entry)
 	})
 }
 
@@ -186,38 +188,22 @@ type entryVersion struct {
 	previous   *entryVersion
 }
 
-type streamBaselineEntry struct {
-	item       PresentationItem
-	generation uint64
-}
-
 type streamBaseline struct {
-	owner    uint64
-	window   []streamBaselineEntry
-	hasOlder bool
+	owner uint64
 }
 
 func (p *Projector) captureStreamBaseline(_ string) streamBaseline {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if len(p.activeStreamOwners) == 0 {
+		p.rollbackCommittedMessages = nil
+		p.rollbackHasOlderEntries = p.state.HasOlderEntries
+	}
+	p.captureRollbackCommittedMessages(p.state.Items, "")
 	p.nextStreamOwner++
 	owner := p.nextStreamOwner
 	p.activeStreamOwners[owner] = struct{}{}
-	baseline := streamBaseline{
-		owner:    owner,
-		hasOlder: p.state.HasOlderEntries,
-	}
-	for _, item := range p.state.Items {
-		if item.Message == nil {
-			continue
-		}
-		entry := streamBaselineEntry{
-			item:       clonePresentationItem(item),
-			generation: p.entryGenerations[item.ID],
-		}
-		baseline.window = append(baseline.window, entry)
-	}
-	return baseline
+	return streamBaseline{owner: owner}
 }
 
 // discardStream removes every version owned by a canceled provider attempt.
@@ -237,71 +223,22 @@ func (p *Projector) discardStream(baseline streamBaseline) {
 			}
 		}
 	}
-
-	visibleChange := false
-	for index := 0; index < len(p.state.Items); {
-		item := p.state.Items[index]
-		if item.Message == nil {
-			index++
-			continue
-		}
-		current := findEntryVersion(p.entryVersions[item.ID], p.entryGenerations[item.ID])
-		if current == nil || !current.canceled {
-			index++
-			continue
-		}
-		survivor := latestSurvivingEntryVersion(p.entryVersions[item.ID])
-		if survivor == nil || !survivor.present {
-			p.state.Items = slices.Delete(p.state.Items, index, index+1)
-			delete(p.entryGenerations, item.ID)
-		} else {
-			p.state.Items[index] = clonePresentationItem(survivor.item)
-			p.entryGenerations[item.ID] = survivor.generation
-			index++
-		}
-		visibleChange = true
-	}
-	if visibleChange {
-		p.mutateLocked(func(state *ThreadSnapshot) {
-			present := make(map[string]struct{}, len(state.Items))
-			for _, item := range state.Items {
-				present[item.ID] = struct{}{}
-			}
-			for _, previous := range baseline.window {
-				if _, exists := present[previous.item.ID]; exists {
-					continue
-				}
-				candidate := previous
-				if head := p.entryVersions[previous.item.ID]; head != nil {
-					survivor := latestSurvivingEntryVersion(head)
-					if survivor == nil || !survivor.present {
-						continue
-					}
-					candidate = streamBaselineEntry{
-						item: clonePresentationItem(survivor.item), generation: survivor.generation,
-					}
-				}
-				state.Items = append(state.Items, clonePresentationItem(candidate.item))
-				p.entryGenerations[candidate.item.ID] = candidate.generation
-				present[candidate.item.ID] = struct{}{}
-			}
-			slices.SortFunc(state.Items, func(left, right PresentationItem) int {
-				return intCompare(left.Sequence, right.Sequence)
-			})
-			state.HasOlderEntries = baseline.hasOlder
-			p.enforcePresentationBounds(state, "")
-			p.pruneTurnOrderingState(state)
-			p.syncCompatibilityProjection(state)
-		})
-	}
+	p.mutateLocked(func(state *ThreadSnapshot) {
+		p.rebuildStreamMessageProjection(state, "")
+	})
 	p.compactEntryVersionsIfIdle()
 }
 
-func (p *Projector) commitStream(owner uint64) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+func (p *Projector) commitStreamLocked(owner uint64) {
 	if _, active := p.activeStreamOwners[owner]; !active {
 		return
+	}
+	committed := make([]PresentationItem, 0, len(p.entryVersions))
+	for _, head := range p.entryVersions {
+		if survivor := latestSurvivingEntryVersion(head); survivor != nil && survivor.owner == owner &&
+			survivor.present {
+			committed = append(committed, clonePresentationItem(survivor.item))
+		}
 	}
 	delete(p.activeStreamOwners, owner)
 	for _, head := range p.entryVersions {
@@ -311,6 +248,8 @@ func (p *Projector) commitStream(owner uint64) {
 			}
 		}
 	}
+	p.recordRollbackCommittedMessages(committed, "")
+	p.rebuildStreamMessageProjection(&p.state, "")
 	p.compactEntryVersionsIfIdle()
 }
 
@@ -320,6 +259,90 @@ func (p *Projector) compactEntryVersionsIfIdle() {
 	}
 	clear(p.entryVersions)
 	clear(p.entryGenerations)
+	p.rollbackCommittedMessages = nil
+	p.rollbackHasOlderEntries = false
+}
+
+func (p *Projector) captureRollbackCommittedMessages(items []PresentationItem, protectedID string) {
+	committed := make([]PresentationItem, 0, len(items))
+	for _, item := range items {
+		if item.Message == nil {
+			continue
+		}
+		if survivor := latestSurvivingEntryVersion(p.entryVersions[item.ID]); survivor != nil &&
+			survivor.owner != 0 {
+			continue
+		}
+		committed = append(committed, item)
+	}
+	p.recordRollbackCommittedMessages(committed, protectedID)
+}
+
+func (p *Projector) recordRollbackCommittedMessages(items []PresentationItem, protectedID string) {
+	for _, item := range items {
+		if item.Message == nil {
+			continue
+		}
+		index := presentationItemIndex(p.rollbackCommittedMessages, item.ID)
+		if index >= 0 {
+			p.rollbackCommittedMessages[index] = clonePresentationItem(item)
+		} else {
+			p.rollbackCommittedMessages = append(
+				p.rollbackCommittedMessages,
+				clonePresentationItem(item),
+			)
+		}
+	}
+	slices.SortFunc(p.rollbackCommittedMessages, func(left, right PresentationItem) int {
+		return intCompare(left.Sequence, right.Sequence)
+	})
+	for len(p.rollbackCommittedMessages) > p.limits.Entries {
+		index := oldestPresentationPayload(p.rollbackCommittedMessages, true, protectedID)
+		p.rollbackCommittedMessages = slices.Delete(p.rollbackCommittedMessages, index, index+1)
+		p.rollbackHasOlderEntries = true
+	}
+}
+
+func (p *Projector) rebuildStreamMessageProjection(state *ThreadSnapshot, protectedID string) {
+	items := make([]PresentationItem, 0, len(state.Items)+len(p.rollbackCommittedMessages))
+	for _, item := range state.Items {
+		if item.Tool != nil {
+			items = append(items, clonePresentationItem(item))
+		}
+	}
+	for _, item := range p.rollbackCommittedMessages {
+		items = append(items, clonePresentationItem(item))
+	}
+	for id, head := range p.entryVersions {
+		survivor := latestSurvivingEntryVersion(head)
+		if survivor == nil || !survivor.present || survivor.owner == 0 {
+			continue
+		}
+		if _, active := p.activeStreamOwners[survivor.owner]; !active {
+			continue
+		}
+		if index := presentationItemIndex(items, id); index >= 0 {
+			items[index] = clonePresentationItem(survivor.item)
+		} else {
+			items = append(items, clonePresentationItem(survivor.item))
+		}
+	}
+	slices.SortFunc(items, func(left, right PresentationItem) int {
+		return intCompare(left.Sequence, right.Sequence)
+	})
+	state.Items = items
+	state.HasOlderEntries = p.rollbackHasOlderEntries
+	p.enforcePresentationBounds(state, protectedID)
+	for _, item := range state.Items {
+		if item.Message == nil {
+			continue
+		}
+		if survivor := latestSurvivingEntryVersion(p.entryVersions[item.ID]); survivor != nil {
+			p.entryGenerations[item.ID] = survivor.generation
+		}
+	}
+	p.pruneTurnOrderingState(state)
+	p.syncCompatibilityProjection(state)
 }
 
 func (p *Projector) recordEntryVersion(
@@ -346,6 +369,7 @@ func (p *Projector) recordEntryVersion(
 		p.nextEntryGeneration++
 		predecessor = &entryVersion{generation: p.nextEntryGeneration, present: false, previous: head}
 	}
+	predecessor = entryVersionsWithoutOwner(predecessor, owner)
 	p.nextEntryGeneration++
 	version := &entryVersion{
 		item:       clonePresentationItem(item),
@@ -356,6 +380,18 @@ func (p *Projector) recordEntryVersion(
 	}
 	p.entryVersions[item.ID] = version
 	p.entryGenerations[item.ID] = version.generation
+}
+
+func entryVersionsWithoutOwner(head *entryVersion, owner uint64) *entryVersion {
+	for head != nil && head.owner == owner {
+		head = head.previous
+	}
+	for version := head; version != nil; version = version.previous {
+		for version.previous != nil && version.previous.owner == owner {
+			version.previous = version.previous.previous
+		}
+	}
+	return head
 }
 
 func findEntryVersion(head *entryVersion, generation uint64) *entryVersion {
@@ -384,6 +420,37 @@ func (p *Projector) upsertStreamEntry(
 	owner uint64,
 ) bool {
 	turnID = presentationTurnID(turnID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	changed := p.upsertStreamEntryLocked(turnID, entryKind, content, complete, owner)
+	if changed {
+		p.mutateLocked(func(*ThreadSnapshot) {})
+	}
+	return changed
+}
+
+func (p *Projector) finalizeStreamEntry(
+	turnID string,
+	entryKind EntryKind,
+	content string,
+	complete bool,
+	owner uint64,
+) {
+	turnID = presentationTurnID(turnID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.upsertStreamEntryLocked(turnID, entryKind, content, complete, owner)
+	p.commitStreamLocked(owner)
+	p.mutateLocked(func(*ThreadSnapshot) {})
+}
+
+func (p *Projector) upsertStreamEntryLocked(
+	turnID string,
+	entryKind EntryKind,
+	content string,
+	complete bool,
+	owner uint64,
+) bool {
 	entry := TranscriptEntry{
 		ID:       boundPresentationIdentity(entryID(turnID, string(entryKind))),
 		TurnID:   turnID,
@@ -391,8 +458,6 @@ func (p *Projector) upsertStreamEntry(
 		Text:     content,
 		Complete: complete,
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	id := messagePresentationID(entry)
 	var previous *PresentationItem
 	if index := presentationItemIndex(p.state.Items, id); index >= 0 {
@@ -405,8 +470,11 @@ func (p *Projector) upsertStreamEntry(
 	}
 	if len(p.activeStreamOwners) != 0 {
 		p.recordEntryVersion(previous, item, owner)
+		if owner == 0 {
+			p.captureRollbackCommittedMessages(p.state.Items, item.ID)
+		}
+		p.rebuildStreamMessageProjection(&p.state, item.ID)
 	}
-	p.mutateLocked(func(*ThreadSnapshot) {})
 	return true
 }
 
@@ -430,7 +498,7 @@ func (p *Projector) notice(kind EntryKind, turnID, id, content string) {
 			ID: id, TurnID: turnID, Kind: kind, Text: content, Complete: true,
 		}
 		entry.ID = boundPresentationIdentity(entry.ID)
-		p.upsertEntry(state, entry)
+		p.upsertCommittedEntry(state, entry)
 	})
 }
 
