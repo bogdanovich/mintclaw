@@ -147,8 +147,25 @@ orphan completion with unrelated work.
 and
 [`diff_render.rs`](https://github.com/openai/codex/blob/a9519cbcdd2d664530edb2469224ee03c1056799/codex-rs/tui/src/diff_render.rs)
 produce file counts, addition/deletion totals, bounded syntax-highlighted
-previews, line numbers, and a full transcript. They also adapt palettes for
-light/dark and limited-color terminals.
+previews, line numbers, and a full transcript.
+
+The renderer treats each diff row as four visual layers: line-number gutter,
+`+`/`-` sign, syntax-highlighted content, and a full-width row background. The
+last layer extends the addition or deletion tint through the right-side padding
+rather than coloring only the text spans. On a light terminal, the fallback
+palette uses GitHub-style addition and deletion backgrounds (`#dafbe1` and
+`#ffebe9`) plus more saturated gutter backgrounds (`#aceebb` and `#ffcecb`).
+Dark terminals use muted tints (`#213a2b` and `#4a221d`) so syntax colors remain
+legible. An active syntax theme may override the rich-color backgrounds through
+its inserted/deleted scopes.
+
+Truecolor values are quantized deliberately for 256-color terminals. ANSI-16
+does not use colored backgrounds because its saturated background entries can
+overpower the content; it falls back to green/red foregrounds plus explicit
+`+`/`-` signs. Wrapped continuation rows retain the row background, while
+unchanged context rows retain the terminal's default background. These are
+useful behavioral contracts for MintClaw, not Codex-specific implementation
+details.
 
 MintClaw's P6.4 repository-evidence contract is stricter about provenance than
 the visual reference. The new TUI should render that typed evidence rather than
@@ -595,13 +612,26 @@ Scope:
   first-observed changes, and indeterminate provenance.
 - Add line numbers, rename/binary/submodule states, truncation, and full
   transcript navigation.
-- Add palette-aware syntax and diff styling.
+- Give every inserted render row a full-width green-tinted background and every
+  deleted render row a full-width red-tinted background, including wrapped
+  continuation rows and right-side padding. Keep context rows on the terminal
+  default background.
+- Use GitHub-like pastels and a stronger line-number gutter on light terminals,
+  muted tints on dark terminals, and palette-aware syntax highlighting that
+  preserves the enclosing diff background.
+- Detect truecolor, 256-color, 16-color, and no-color capabilities. Quantize
+  rich colors deliberately; degrade 16-color and no-color modes to explicit
+  `+`/`-` signs and readable foreground styles instead of saturated backgrounds.
 
 Done when:
 
 - no renderer claim implies MintClaw authored externally observed changes;
 - large/binary/changing files have explicit bounded states;
-- light, dark, 16-, 256-, truecolor, and no-color fixtures remain legible; and
+- golden tests prove full-row green/red backgrounds, distinct light-theme
+  gutters, syntax-highlight preservation, wrapped-row backgrounds, and
+  unstyled context rows;
+- light, dark, 16-, 256-, truecolor, and no-color fixtures remain legible and
+  distinguish insertions from deletions without relying on color alone; and
 - diff refresh cannot silently replace the historical evidence for an earlier
   cell.
 
@@ -790,7 +820,9 @@ true.
   summaries; failures remain prominent.
 - `Ctrl+T` or the documented equivalent opens the complete ordered evidence.
 - Active work shows phase, elapsed time, and the correct interrupt key.
-- File edits render verified file/stat/hunk evidence with truthful provenance.
+- File edits render verified file/stat/hunk evidence with truthful provenance,
+  full-width green backgrounds for additions, and full-width red backgrounds
+  for removals on capable terminals.
 - Compaction is visible without exposing or replaying its full internal prompt.
 - Concrete work ends with a bounded elapsed separator before a distinct final
   answer.
