@@ -1,12 +1,17 @@
 package frontend
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+const maxPresentationIdentityBytes = 1024
 
 func (p *Projector) upsertEntry(state *ThreadSnapshot, entry TranscriptEntry) (PresentationItem, bool) {
 	entry = p.boundedEntry(entry)
@@ -39,6 +44,7 @@ func (p *Projector) upsertPresentationItem(
 	replacement PresentationItem,
 ) (PresentationItem, bool) {
 	index := presentationItemIndex(state.Items, replacement.ID)
+	inserted := index < 0
 	if index >= 0 {
 		current := state.Items[index]
 		if current.Message != nil && presentationLifecycleTerminal(current.Lifecycle) &&
@@ -63,7 +69,12 @@ func (p *Projector) upsertPresentationItem(
 			return intCompare(left.Sequence, right.Sequence)
 		})
 	}
-	p.enforcePresentationBounds(state)
+	protectedID := ""
+	if inserted {
+		protectedID = replacement.ID
+	}
+	p.enforcePresentationBounds(state, protectedID)
+	p.pruneTurnOrderingState(state)
 	p.syncCompatibilityProjection(state)
 	return clonePresentationItem(replacement), true
 }
@@ -117,7 +128,6 @@ func (p *Projector) sequenceForNewItem(state *ThreadSnapshot, item PresentationI
 		!turnHasUserMessage(state.Items, item.TurnID) {
 		if _, reserved := p.reservedUserSequences[item.TurnID]; !reserved {
 			p.reservedUserSequences[item.TurnID] = p.allocateSequence()
-			p.pruneTurnOrderingState()
 		}
 	}
 	return p.allocateSequence()
@@ -134,56 +144,52 @@ func (p *Projector) markTurnStarted(turnID string) {
 	}
 	p.nextTurnOrder++
 	p.startedTurns[turnID] = p.nextTurnOrder
-	p.pruneTurnOrderingState()
 }
 
-func (p *Projector) pruneTurnOrderingState() {
-	limit := max(1, p.limits.Entries+p.limits.Tools)
-	for len(p.reservedUserSequences) > limit {
-		oldestTurn := ""
-		oldestSequence := ^uint64(0)
-		for turnID, sequence := range p.reservedUserSequences {
-			if sequence < oldestSequence {
-				oldestTurn = turnID
-				oldestSequence = sequence
-			}
-		}
-		delete(p.reservedUserSequences, oldestTurn)
+func (p *Projector) pruneTurnOrderingState(state *ThreadSnapshot) {
+	represented := make(map[string]struct{}, len(state.Items))
+	for _, item := range state.Items {
+		represented[item.TurnID] = struct{}{}
 	}
-	for len(p.startedTurns) > limit {
-		oldestTurn := ""
-		oldestSequence := ^uint64(0)
-		for turnID, sequence := range p.startedTurns {
-			if sequence < oldestSequence {
-				oldestTurn = turnID
-				oldestSequence = sequence
-			}
+	for turnID := range p.reservedUserSequences {
+		if _, visible := represented[turnID]; !visible {
+			delete(p.reservedUserSequences, turnID)
 		}
-		delete(p.startedTurns, oldestTurn)
+	}
+	for turnID := range p.startedTurns {
+		if _, visible := represented[turnID]; !visible && turnID != p.activeTurnID {
+			delete(p.startedTurns, turnID)
+		}
 	}
 }
 
-func (p *Projector) enforcePresentationBounds(state *ThreadSnapshot) {
+func (p *Projector) enforcePresentationBounds(state *ThreadSnapshot, protectedID string) {
 	for presentationPayloadCount(state.Items, true) > p.limits.Entries {
 		state.HasOlderEntries = true
-		for index := range state.Items {
-			if state.Items[index].Message == nil {
-				continue
-			}
-			delete(p.entryGenerations, state.Items[index].ID)
-			state.Items = slices.Delete(state.Items, index, index+1)
-			break
-		}
+		index := oldestPresentationPayload(state.Items, true, protectedID)
+		state.Items = slices.Delete(state.Items, index, index+1)
 	}
 	for presentationPayloadCount(state.Items, false) > p.limits.Tools {
-		for index := range state.Items {
-			if state.Items[index].Tool == nil {
-				continue
-			}
-			state.Items = slices.Delete(state.Items, index, index+1)
-			break
+		index := oldestPresentationPayload(state.Items, false, protectedID)
+		state.Items = slices.Delete(state.Items, index, index+1)
+	}
+}
+
+func oldestPresentationPayload(items []PresentationItem, messages bool, protectedID string) int {
+	fallback := -1
+	for index, item := range items {
+		matches := (messages && item.Message != nil) || (!messages && item.Tool != nil)
+		if !matches {
+			continue
+		}
+		if fallback < 0 {
+			fallback = index
+		}
+		if item.ID != protectedID {
+			return index
 		}
 	}
+	return fallback
 }
 
 func (p *Projector) syncCompatibilityProjection(state *ThreadSnapshot) {
@@ -318,11 +324,29 @@ func encodedPresentationID(kind string, parts ...string) string {
 		result.WriteByte(':')
 		result.WriteString(part)
 	}
-	return result.String()
+	return boundPresentationIdentity(result.String())
 }
 
 func presentationTurnID(turnID string) string {
-	return normalizeTurnID(turnID)
+	return boundPresentationIdentity(normalizeTurnID(turnID))
+}
+
+// boundPresentationIdentity keeps identity-bearing snapshot fields small and
+// valid UTF-8. Escaping short raw values that share the internal prefix keeps
+// the raw, digest, and invalid-byte domains disjoint.
+func boundPresentationIdentity(identity string) string {
+	if !utf8.ValidString(identity) {
+		digest := sha256.Sum256([]byte(identity))
+		return "~b:" + hex.EncodeToString(digest[:])
+	}
+	if len(identity) > maxPresentationIdentityBytes {
+		digest := sha256.Sum256([]byte(identity))
+		return "~h:" + hex.EncodeToString(digest[:])
+	}
+	if strings.HasPrefix(identity, "~") {
+		return "~r:" + identity
+	}
+	return identity
 }
 
 func intCompare(left, right uint64) int {

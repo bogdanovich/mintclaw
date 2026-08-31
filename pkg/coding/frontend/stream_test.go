@@ -55,6 +55,14 @@ func TestStreamCoalescesFinalStateAndKeepsUnicodeValid(t *testing.T) {
 		snapshot.Items[0].Lifecycle != PresentationCompleted || snapshot.Items[0].Message == nil {
 		t.Fatalf("coalesced presentation item = %+v", snapshot.Items)
 	}
+	if len(projector.activeStreamOwners) != 0 || len(projector.entryVersions) != 0 ||
+		len(projector.entryGenerations) != 0 {
+		t.Fatalf("finalized stream retained rollback state")
+	}
+	streamer.Cancel(t.Context())
+	if afterCancel := snapshotForTest(t, projector); !reflect.DeepEqual(afterCancel, snapshot) {
+		t.Fatalf("cancel rolled back a finalized stream: before=%+v after=%+v", snapshot, afterCancel)
+	}
 }
 
 func TestSlowStreamSubscriberConvergesToLatestView(t *testing.T) {
@@ -152,6 +160,69 @@ func TestStreamCancelDoesNotRollbackLaterEntryWriter(t *testing.T) {
 	if !reflect.DeepEqual(snapshot, beforeCancel) || len(snapshot.Entries) != 2 ||
 		snapshot.Entries[1].Text != "newer writer reasoning" {
 		t.Fatalf("later writer after stream cancel = %+v", snapshot)
+	}
+}
+
+func TestOverlappingStreamCancellationNeverResurrectsCanceledWriter(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	delegate := NewStreamDelegate(projector, "thread-1")
+	traceScope := runtimeevents.NewTraceScope("/repo", "turn-1")
+	first, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
+	if !ok {
+		t.Fatal("first stream was rejected")
+	}
+	if err := first.Update(t.Context(), "first attempt"); err != nil {
+		t.Fatal(err)
+	}
+	second, ok := delegate.GetStreamer(t.Context(), "coding", "thread-1", "thread-1", "", traceScope)
+	if !ok {
+		t.Fatal("second stream was rejected")
+	}
+	if err := second.Update(t.Context(), "second attempt"); err != nil {
+		t.Fatal(err)
+	}
+
+	first.Cancel(t.Context())
+	afterFirstCancel := snapshotForTest(t, projector)
+	if len(afterFirstCancel.Entries) != 1 || afterFirstCancel.Entries[0].Text != "second attempt" {
+		t.Fatalf("first cancel removed the newer stream = %+v", afterFirstCancel)
+	}
+	second.Cancel(t.Context())
+	afterSecondCancel := snapshotForTest(t, projector)
+	if len(afterSecondCancel.Entries) != 0 || len(afterSecondCancel.Items) != 0 {
+		t.Fatalf("second cancel resurrected the first stream = %+v", afterSecondCancel)
+	}
+	if len(projector.activeStreamOwners) != 0 || len(projector.entryVersions) != 0 ||
+		len(projector.entryGenerations) != 0 {
+		t.Fatalf("canceled streams retained rollback state")
+	}
+}
+
+func TestStreamCancelRestoresInterleavedCommittedWriter(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("stream was rejected")
+	}
+	if err := streamer.Update(t.Context(), "first provisional value"); err != nil {
+		t.Fatal(err)
+	}
+	projector.AssistantAccumulated("turn-1", "committed value", false)
+	if err := streamer.Update(t.Context(), "second provisional value"); err != nil {
+		t.Fatal(err)
+	}
+
+	streamer.Cancel(t.Context())
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "committed value" {
+		t.Fatalf("cancel did not restore interleaved committed writer = %+v", snapshot)
 	}
 }
 

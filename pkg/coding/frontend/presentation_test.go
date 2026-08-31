@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestPresentationItemsPreserveCausalOrderAndStableLifecycle(t *testing.T) {
@@ -90,18 +91,69 @@ func TestPresentationIDsAreCollisionSafeAcrossTurnsAndCallIDs(t *testing.T) {
 	}
 }
 
-func TestHashedLookingLiteralIdentityCannotCollideWithLongRawIdentity(t *testing.T) {
+func TestTaggedLiteralIdentityCannotCollideWithLongRawIdentity(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	callID := strings.Repeat("call", 1024)
 	digest := sha256.Sum256([]byte(callID))
-	literalDigest := "sha256:" + hex.EncodeToString(digest[:])
+	literalDigest := "~h:" + hex.EncodeToString(digest[:])
 	projector.ToolStarted("turn-1", callID, "long", "")
 	projector.ToolStarted("turn-1", literalDigest, "literal", "")
 
 	items := snapshotForTest(t, projector).Items
-	if len(items) != 2 || items[0].ID == items[1].ID || items[0].Tool.CallID != callID ||
-		items[1].Tool.CallID != literalDigest {
+	if len(items) != 2 || items[0].ID == items[1].ID || items[0].Tool.CallID != literalDigest ||
+		items[1].Tool.CallID != "~r:"+literalDigest {
 		t.Fatalf("domain-separated identities = %+v", items)
+	}
+	for _, item := range items {
+		if len(item.ID) > maxPresentationIdentityBytes || len(item.Tool.CallID) > maxPresentationIdentityBytes {
+			t.Fatalf("unbounded presentation identity = %+v", item)
+		}
+	}
+}
+
+func TestPresentationIdentitiesNormalizeInvalidUTF8WithoutCollisions(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	first := string([]byte{0xff, 'a'})
+	second := string([]byte{0xff, 'b'})
+	projector.ToolStarted("turn-1", first, "first", "")
+	projector.ToolStarted("turn-1", second, "second", "")
+
+	items := snapshotForTest(t, projector).Items
+	if len(items) != 2 || items[0].ID == items[1].ID || items[0].Tool.CallID == items[1].Tool.CallID {
+		t.Fatalf("invalid identities collided = %+v", items)
+	}
+	for _, item := range items {
+		if !strings.HasPrefix(item.Tool.CallID, "~b:") || !utf8.ValidString(item.Tool.CallID) ||
+			!utf8.ValidString(item.ID) {
+			t.Fatalf("invalid identity was not normalized = %+v", item)
+		}
+	}
+}
+
+func TestPresentationTurnAndEntryIdentitiesAreBounded(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted(strings.Repeat("turn", 1024), "hello")
+
+	item := snapshotForTest(t, projector).Items[0]
+	if len(item.ID) > maxPresentationIdentityBytes || len(item.TurnID) > maxPresentationIdentityBytes ||
+		len(item.Message.ID) > maxPresentationIdentityBytes ||
+		len(item.Message.TurnID) > maxPresentationIdentityBytes {
+		t.Fatalf("unbounded message identity = %+v", item)
+	}
+}
+
+func TestLateUserReservationSurvivesUnrelatedMessageChurn(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{Entries: 1, Tools: 1})
+	projector.ToolStarted("turn-1", "call-1", "exec", "")
+	projector.TurnStarted("turn-2", "second")
+	projector.TurnStarted("turn-3", "third")
+	projector.TurnStarted("turn-1", "first arrives late")
+
+	items := snapshotForTest(t, projector).Items
+	if len(items) != 2 || items[0].Kind != PresentationUserMessage ||
+		items[0].TurnID != "turn-1" || items[1].Kind != PresentationToolCall ||
+		items[1].TurnID != "turn-1" || items[0].Sequence >= items[1].Sequence {
+		t.Fatalf("late user reservation was lost = %+v", items)
 	}
 }
 
