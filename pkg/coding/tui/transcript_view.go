@@ -431,25 +431,9 @@ func renderTranscript(
 	hasNewer bool,
 	loading bool,
 ) (string, transcriptLayout) {
-	cells := make([]transcriptCell, 0, len(entries))
-	for _, entry := range entries {
-		cells = append(cells, newLegacyTranscriptCell(entry))
-	}
-	return renderTranscriptCells(cells, cellRenderContext{Width: width}, cellRenderCompact, hasOlder, hasNewer, loading)
-}
-
-func renderTranscriptCells(
-	cells []transcriptCell,
-	context cellRenderContext,
-	mode cellRenderMode,
-	hasOlder bool,
-	hasNewer bool,
-	loading bool,
-) (string, transcriptLayout) {
-	width := max(1, context.Width)
-	context.Width = width
+	width = max(1, width)
 	var content strings.Builder
-	layout := transcriptLayout{blocks: make([]transcriptBlock, 0, len(cells))}
+	layout := transcriptLayout{blocks: make([]transcriptBlock, 0, len(entries))}
 	line := 0
 	appendText := func(value string) {
 		if content.Len() > 0 {
@@ -464,26 +448,30 @@ func renderTranscriptCells(
 	} else if hasOlder {
 		appendText("↑ More transcript available (Page Up)")
 	}
-	for _, cell := range cells {
+	for _, entry := range entries {
 		if content.Len() > 0 {
 			content.WriteString("\n\n")
 			line += 2
 		}
 		start := line
-		identity := cell.Identity()
-		block := cell.Render(context, mode).plainText()
+		label := sanitizeTerminalText(entry.label)
+		body := sanitizeTerminalText(entry.text)
+		if entry.truncated {
+			body += "\n[…truncated]"
+		}
+		wrapped := ansi.Wrap(body, max(1, width-2), "")
+		block := ansi.Wrap(label, width, "")
+		if wrapped != "" {
+			block += "\n" + indentTranscript(wrapped, "  ")
+		}
 		content.WriteString(block)
 		line += strings.Count(block, "\n")
-		layout.blocks = append(layout.blocks, transcriptBlock{id: identity.ID, start: start, end: line + 1})
+		layout.blocks = append(layout.blocks, transcriptBlock{id: entry.id, start: start, end: line + 1})
 	}
 	if hasNewer {
 		appendText("↓ Newer hydrated transcript omitted; press Alt+End to reload latest")
 	}
 	return content.String(), layout
-}
-
-func wrapCellText(value string, width int) string {
-	return ansi.Wrap(value, max(1, width), "")
 }
 
 func transcriptEntryLabel(kind frontend.EntryKind) string {
