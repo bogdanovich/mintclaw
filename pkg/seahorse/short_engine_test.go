@@ -2,6 +2,7 @@ package seahorse
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -47,9 +48,9 @@ func TestNewEngineOwnsOneSQLiteConnection(t *testing.T) {
 	if err := engine.store.db.QueryRowContext(t.Context(), "PRAGMA journal_mode").Scan(&journalMode); err != nil {
 		t.Fatal(err)
 	}
-	if busyTimeout != 5000 || synchronous != 1 || journalMode != "wal" {
+	if busyTimeout != 0 || synchronous != 1 || journalMode != "wal" {
 		t.Fatalf(
-			"SQLite contract = busy_timeout:%d synchronous:%d journal_mode:%q, want 5000/1/wal",
+			"SQLite contract = busy_timeout:%d synchronous:%d journal_mode:%q, want 0/1/wal",
 			busyTimeout,
 			synchronous,
 			journalMode,
@@ -68,6 +69,14 @@ func TestNewEnginePreservesDatabasePathWithURLCharacters(t *testing.T) {
 func TestNewEnginePreservesRelativeDatabasePath(t *testing.T) {
 	t.Chdir(t.TempDir())
 	testNewEngineReopensDatabasePath(t, filepath.Join("nested", "seahorse.db"))
+}
+
+func TestNewEnginePreservesDoubleSeparatorDatabasePath(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("the test host does not provide a reachable UNC share")
+	}
+
+	testNewEngineReopensDatabasePath(t, "/"+filepath.Join(t.TempDir(), "network", "seahorse.db"))
 }
 
 func testNewEngineReopensDatabasePath(t *testing.T, dbPath string) {
@@ -174,6 +183,49 @@ waitForPool:
 		}
 	case <-time.After(time.Second):
 		t.Fatal("contending writer did not resume after owner release")
+	}
+}
+
+func TestEngineRejectsExternalWriterContentionPromptly(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "seahorse.db")
+	engine, err := NewEngine(t.Context(), Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	if _, err := engine.store.GetOrCreateConversation(t.Context(), "owned-session"); err != nil {
+		t.Fatal(err)
+	}
+
+	external, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = external.Close() })
+	externalTx, err := external.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = externalTx.Rollback() })
+	if _, err := externalTx.ExecContext(
+		t.Context(),
+		"UPDATE conversations SET updated_at = ? WHERE session_key = ?",
+		time.Now().UnixNano(),
+		"owned-session",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = engine.store.SetConversationProvenance(ctx, "owned-session", "telegram:account:chat", "main")
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("external writer contention unexpectedly succeeded")
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("external writer contention returned after %s, want less than one second", elapsed)
 	}
 }
 

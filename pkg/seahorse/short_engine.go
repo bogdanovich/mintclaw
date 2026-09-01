@@ -154,17 +154,18 @@ func (r *RetrievalEngine) Store() *Store {
 	return r.store
 }
 
-const sqliteConnectionPragmas = "_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+const sqliteConnectionPragmas = "_pragma=synchronous(NORMAL)"
 
 func sqliteConnectionDSN(dbPath string) string {
 	if dbPath == ":memory:" {
 		return "file::memory:?" + sqliteConnectionPragmas
 	}
 
+	databasePath := filepath.ToSlash(dbPath)
 	databaseURL := url.URL{
 		Scheme:   "file",
-		OmitHost: true,
-		Path:     filepath.ToSlash(dbPath),
+		OmitHost: !strings.HasPrefix(databasePath, "//"),
+		Path:     databasePath,
 		RawQuery: sqliteConnectionPragmas,
 	}
 	return databaseURL.String()
@@ -206,7 +207,8 @@ func NewEngine(ctx context.Context, config Config, completeFn CompleteFn) (*Engi
 	}
 	// One agent database has one connection owner. Cross-session reads and
 	// writes queue here instead of competing as independent SQLite writers.
-	// DSN pragmas also apply if database/sql replaces the physical connection.
+	// External writers violate that ownership contract and fail without a
+	// SQLite busy wait; the DSN keeps NORMAL sync on replacement connections.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
