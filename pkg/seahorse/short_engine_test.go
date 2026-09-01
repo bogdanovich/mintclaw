@@ -57,6 +57,47 @@ func TestNewEngineOwnsOneSQLiteConnection(t *testing.T) {
 	}
 }
 
+func TestNewEnginePreservesDatabasePathWithURLCharacters(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("question marks are not valid in Windows paths")
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "team?blue#green", "seahorse.db")
+	engine, err := NewEngine(t.Context(), Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := engine.store.GetOrCreateConversation(t.Context(), "persisted-session")
+	if err != nil {
+		_ = engine.Close()
+		t.Fatal(err)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("configured database path was not created: %v", err)
+	}
+
+	reopened, err := NewEngine(t.Context(), Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	persisted, err := reopened.store.GetOrCreateConversation(t.Context(), "persisted-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ConversationID != conversation.ConversationID {
+		t.Fatalf(
+			"reopened conversation ID = %d, want %d",
+			persisted.ConversationID,
+			conversation.ConversationID,
+		)
+	}
+}
+
 func TestEngineSerializesCrossSessionWriters(t *testing.T) {
 	engine, err := NewEngine(t.Context(), Config{DBPath: filepath.Join(t.TempDir(), "seahorse.db")}, nil)
 	if err != nil {

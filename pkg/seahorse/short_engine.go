@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -153,6 +154,21 @@ func (r *RetrievalEngine) Store() *Store {
 	return r.store
 }
 
+const sqliteConnectionPragmas = "_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+
+func sqliteConnectionDSN(dbPath string) string {
+	if dbPath == ":memory:" {
+		return "file::memory:?" + sqliteConnectionPragmas
+	}
+
+	databaseURL := url.URL{
+		Scheme:   "file",
+		Path:     filepath.ToSlash(dbPath),
+		RawQuery: sqliteConnectionPragmas,
+	}
+	return databaseURL.String()
+}
+
 // NewEngine creates an engine while bounding SQLite setup and schema work with ctx.
 func NewEngine(ctx context.Context, config Config, completeFn CompleteFn) (*Engine, error) {
 	if ctx == nil {
@@ -182,7 +198,7 @@ func NewEngine(ctx context.Context, config Config, completeFn CompleteFn) (*Engi
 
 	db, err := sql.Open(
 		"sqlite",
-		config.DBPath+"?_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)",
+		sqliteConnectionDSN(config.DBPath),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
