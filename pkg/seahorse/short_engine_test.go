@@ -62,7 +62,17 @@ func TestNewEnginePreservesDatabasePathWithURLCharacters(t *testing.T) {
 		t.Skip("question marks are not valid in Windows paths")
 	}
 
-	dbPath := filepath.Join(t.TempDir(), "team?blue#green", "seahorse.db")
+	testNewEngineReopensDatabasePath(t, filepath.Join(t.TempDir(), "team?blue#green", "seahorse.db"))
+}
+
+func TestNewEnginePreservesRelativeDatabasePath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	testNewEngineReopensDatabasePath(t, filepath.Join("nested", "seahorse.db"))
+}
+
+func testNewEngineReopensDatabasePath(t *testing.T, dbPath string) {
+	t.Helper()
+
 	engine, err := NewEngine(t.Context(), Config{DBPath: dbPath}, nil)
 	if err != nil {
 		t.Fatal(err)

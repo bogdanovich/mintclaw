@@ -163,6 +163,7 @@ func sqliteConnectionDSN(dbPath string) string {
 
 	databaseURL := url.URL{
 		Scheme:   "file",
+		OmitHost: true,
 		Path:     filepath.ToSlash(dbPath),
 		RawQuery: sqliteConnectionPragmas,
 	}
