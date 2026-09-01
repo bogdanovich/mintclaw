@@ -361,6 +361,27 @@ type failNavigationCompletionStore struct {
 	*MemoryStore
 }
 
+type acceptedMutationStore struct {
+	*MemoryStore
+	onAccepted func()
+}
+
+func (store *acceptedMutationStore) UpdateInvocation(
+	ctx context.Context,
+	expected uint64,
+	next Invocation,
+) error {
+	if err := store.MemoryStore.UpdateInvocation(ctx, expected, next); err != nil {
+		return err
+	}
+	if next.State == InvocationAccepted && store.onAccepted != nil {
+		callback := store.onAccepted
+		store.onAccepted = nil
+		callback()
+	}
+	return nil
+}
+
 func (store *failNavigationCompletionStore) UpdateInvocation(
 	ctx context.Context,
 	expected uint64,
@@ -726,15 +747,21 @@ func TestBrokerApprovalModeIsIndependentFromClickEffect(t *testing.T) {
 
 func TestBrokerRestrictedPolicyEnforcesAllowAskAndDeny(t *testing.T) {
 	for _, test := range []struct {
+		name         string
 		decision     string
+		confirmation string
 		wantApproval bool
 		wantDenied   bool
 	}{
-		{decision: browserpolicy.DecisionAllow},
-		{decision: browserpolicy.DecisionAsk, wantApproval: true},
-		{decision: browserpolicy.DecisionDeny, wantDenied: true},
+		{name: "allow", decision: browserpolicy.DecisionAllow},
+		{
+			name: "allow with explicit confirmation", decision: browserpolicy.DecisionAllow,
+			confirmation: browserpolicy.ConfirmationRequest, wantApproval: true,
+		},
+		{name: "ask", decision: browserpolicy.DecisionAsk, wantApproval: true},
+		{name: "deny", decision: browserpolicy.DecisionDeny, wantDenied: true},
 	} {
-		t.Run(test.decision, func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			root := restrictedBrowserConfig(browserpolicy.Policy{DefaultDecision: test.decision})
 			broker, worker, session := openActionTestBrokerWithConfig(t, root, NewMemoryStore())
 			owner := testOwner()
@@ -747,11 +774,11 @@ func TestBrokerRestrictedPolicyEnforcesAllowAskAndDeny(t *testing.T) {
 				t.Fatal(err)
 			}
 			prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
-				Owner: owner, RequestID: "request_restricted_" + test.decision,
+				Owner: owner, RequestID: "request_restricted_" + strings.ReplaceAll(test.name, " ", "_"),
 				SessionID: session.ID, TabID: session.TabID,
 				SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
 				Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
-				DeclaredEffect: EffectExternalCommit,
+				DeclaredEffect: EffectExternalCommit, Confirmation: test.confirmation,
 			})
 			if test.wantDenied {
 				if !errors.Is(err, ErrDenied) || len(worker.actions) != 0 {
@@ -773,6 +800,49 @@ func TestBrokerRestrictedPolicyEnforcesAllowAskAndDeny(t *testing.T) {
 				t.Fatalf("ExecuteAction() = %+v, %v; actions=%+v", invocation, err, worker.actions)
 			}
 		})
+	}
+}
+
+func TestBrokerRestrictedHookIsRevalidatedAfterDurableAcceptance(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "hook-output.json")
+	writeBrowserPolicyHookOutput(t, statePath, `{"decision":"allow"}`)
+	root := restrictedBrowserConfig(browserpolicy.Policy{
+		DefaultDecision: browserpolicy.DecisionAllow,
+		Hook: &browserpolicy.Hook{
+			Command: []string{
+				os.Args[0], "-test.run=TestBrokerRestrictedPolicyHookProcess", "--", statePath,
+			},
+			TimeoutMS: 1000,
+		},
+	})
+	store := &acceptedMutationStore{MemoryStore: NewMemoryStore()}
+	store.onAccepted = func() {
+		writeBrowserPolicyHookOutput(t, statePath, `{"decision":"deny","reason":"changed"}`)
+	}
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+	owner := testOwner()
+	button := DriverElement{Target: "save", Role: "button", Name: "Save"}
+	worker.observation = driverObservationFixture(button)
+	worker.resolveElement = button
+	worker.resolveOrigin = worker.observation.Origin
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_restricted_dispatch_hook",
+		SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		DeclaredEffect: EffectExternalCommit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
+	if !errors.Is(err, ErrDenied) || invocation.State != InvocationFailed ||
+		invocation.SafeFailure != "policy_denied" || len(worker.actions) != 0 {
+		t.Fatalf("ExecuteAction() = %+v, %v; actions=%+v", invocation, err, worker.actions)
 	}
 }
 

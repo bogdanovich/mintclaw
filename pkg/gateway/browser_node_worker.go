@@ -1019,7 +1019,7 @@ func bindCompanionRestrictedPolicy(input *nodes.BrowserActInput, prepared browse
 
 func companionBrowserActionRequiresApproval(input nodes.BrowserActInput, approvalMode string) bool {
 	if input.RestrictedDecision != "" {
-		return input.RestrictedDecision == browserpolicy.DecisionAsk
+		return browserpolicy.RestrictedRequiresApproval(input.RestrictedDecision, input.Confirmation)
 	}
 	return nodes.BrowserActionRequiresApproval(approvalMode, input.Effect, input.Confirmation)
 }

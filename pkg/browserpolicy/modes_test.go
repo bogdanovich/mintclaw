@@ -65,3 +65,26 @@ func TestApprovalModesSeparateEffectFromConfirmation(t *testing.T) {
 		})
 	}
 }
+
+func TestRestrictedApprovalKeepsExplicitConfirmationAdditive(t *testing.T) {
+	tests := []struct {
+		name         string
+		decision     string
+		confirmation string
+		want         bool
+	}{
+		{name: "allow", decision: DecisionAllow},
+		{name: "allow with request", decision: DecisionAllow, confirmation: ConfirmationRequest, want: true},
+		{name: "ask", decision: DecisionAsk, want: true},
+		{name: "ask with request", decision: DecisionAsk, confirmation: ConfirmationRequest, want: true},
+		{name: "deny fails closed", decision: DecisionDeny, want: true},
+		{name: "invalid fails closed", decision: "invalid", want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := RestrictedRequiresApproval(test.decision, test.confirmation); got != test.want {
+				t.Fatalf("RestrictedRequiresApproval() = %t, want %t", got, test.want)
+			}
+		})
+	}
+}

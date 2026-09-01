@@ -2013,6 +2013,10 @@ func TestCompanionRestrictedPolicyBindingUsesDestinationAndDecision(t *testing.T
 	if companionBrowserActionRequiresApproval(input, browserpolicy.ApprovalPolicy) {
 		t.Fatal("restricted allow unexpectedly requires approval")
 	}
+	input.Confirmation = browserpolicy.ConfirmationRequest
+	if !companionBrowserActionRequiresApproval(input, browserpolicy.ApprovalPolicy) {
+		t.Fatal("restricted allow ignored explicit confirmation")
+	}
 }
 
 func TestBrowserProfileIntersectionAllowsIndependentRestrictedPolicies(t *testing.T) {

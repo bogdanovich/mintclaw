@@ -1279,7 +1279,10 @@ func (host *BrowserHost) executeAction(
 		request.Confirmation,
 	)
 	if restricted {
-		requiresApproval = request.RestrictedDecision == browserpolicy.DecisionAsk
+		requiresApproval = browserpolicy.RestrictedRequiresApproval(
+			request.RestrictedDecision,
+			request.Confirmation,
+		)
 	}
 	dryRunDownload := action == "download" && request.Effect == "unknown" && session.profile.DryRun
 	if requiresApproval && !nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {

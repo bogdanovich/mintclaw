@@ -1636,7 +1636,10 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 	}
 	requiresApproval := BrowserActionRequiresApproval(profile.ApprovalMode, input.Effect, input.Confirmation)
 	if restricted {
-		requiresApproval = input.RestrictedDecision == browserpolicy.DecisionAsk
+		requiresApproval = browserpolicy.RestrictedRequiresApproval(
+			input.RestrictedDecision,
+			input.Confirmation,
+		)
 	}
 	if requiresApproval != BrowserApprovalDigestMatches(input) || (!requiresApproval && input.ApprovalDigest != "") {
 		return invalidBrowserActInput()

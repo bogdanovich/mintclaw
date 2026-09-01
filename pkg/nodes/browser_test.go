@@ -822,6 +822,16 @@ func TestBrowserRestrictedPolicyCommandsBindDecisionRevisionAndApproval(t *testi
 	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("restricted allow action rejected: %v", err)
 	}
+	input["confirmation"] = browserpolicy.ConfirmationRequest
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
+		t.Fatal("restricted allow ignored explicit confirmation without approval digest")
+	}
+	bindBrowserApprovalDigest(t, input)
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
+		t.Fatalf("restricted explicitly confirmed allow action rejected: %v", err)
+	}
+	delete(input, "approval_digest")
+	delete(input, "confirmation")
 	input["restricted_decision"] = browserpolicy.DecisionAsk
 	if err = validateDescriptorInvocationInput(act, input); err == nil {
 		t.Fatal("restricted ask action without approval digest was accepted")

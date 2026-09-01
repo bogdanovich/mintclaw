@@ -2578,6 +2578,14 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 	request.RestrictedDecision = browserpolicy.DecisionAllow
 	request.RestrictedPolicyRevision = policyRevision
 	request.RestrictedOrigin = "https://example.com"
+	explicitConfirmation := request
+	explicitConfirmation.Confirmation = browserpolicy.ConfirmationRequest
+	if _, err = host.Act(t.Context(), explicitConfirmation); !errors.Is(err, ErrBrowserHostDenied) {
+		t.Fatalf("Act() explicit confirmation without approval error = %v, want denied", err)
+	}
+	if len(worker.actions) != 0 {
+		t.Fatalf("unapproved explicit confirmation dispatched actions: %#v", worker.actions)
+	}
 	mismatched := request
 	mismatched.Action.URL = "https://blocked.example/"
 	if _, err = host.Act(t.Context(), mismatched); !errors.Is(err, ErrBrowserHostDenied) {

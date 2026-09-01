@@ -541,8 +541,14 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		invocationID,
 		prepared.ActionHash,
 		func(executeCtx context.Context) (json.RawMessage, error) {
+			revalidatePolicy := func() error {
+				return broker.revalidateRestrictedPolicyLocked(executeCtx, session, prepared)
+			}
 			if artifactInputAction(prepared.Action.Kind) || prepared.Action.Kind == ActionDownload {
 				if artifactInputAction(prepared.Action.Kind) && preparedDispatch {
+					if policyErr := revalidatePolicy(); policyErr != nil {
+						return nil, policyErr
+					}
 					if executeErr := preparedWorker.ExecutePrepared(
 						executeCtx,
 						workerPreparedAction,
@@ -559,6 +565,9 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					checkedUpload, ok := worker.(NavigationCheckedUploadWorker)
 					if !ok || slot.navigationID == "" {
 						return nil, ErrDriverIncompatible
+					}
+					if policyErr := revalidatePolicy(); policyErr != nil {
+						return nil, policyErr
 					}
 					if executeErr := checkedUpload.UploadAfterNavigationCheck(
 						executeCtx,
@@ -580,11 +589,17 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					if !ok {
 						return nil, ErrDriverIncompatible
 					}
+					if policyErr := revalidatePolicy(); policyErr != nil {
+						return nil, policyErr
+					}
 					download, executeErr = remote.DownloadPrepared(executeCtx, workerPreparedAction, maximum)
 				} else {
 					transferWorker, ok := worker.(TransferWorker)
 					if !ok {
 						return nil, ErrDriverIncompatible
+					}
+					if policyErr := revalidatePolicy(); policyErr != nil {
+						return nil, policyErr
 					}
 					download, executeErr = transferWorker.Download(executeCtx, driverAction, maximum)
 				}
@@ -602,6 +617,9 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 				return terminal, nil
 			}
 			if preparedDispatch {
+				if policyErr := revalidatePolicy(); policyErr != nil {
+					return nil, policyErr
+				}
 				if executeErr := preparedWorker.ExecutePrepared(executeCtx, workerPreparedAction); executeErr != nil {
 					return nil, executeErr
 				}
@@ -612,6 +630,9 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 				if slot.navigationID == "" {
 					return nil, ErrStale
 				}
+				if policyErr := revalidatePolicy(); policyErr != nil {
+					return nil, policyErr
+				}
 				if executeErr := checkedWorker.ExecuteAfterNavigationCheck(
 					executeCtx,
 					slot.navigationID,
@@ -620,6 +641,9 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					return nil, executeErr
 				}
 				return json.RawMessage(`{"status":"completed"}`), nil
+			}
+			if policyErr := revalidatePolicy(); policyErr != nil {
+				return nil, policyErr
 			}
 			if executeErr := worker.Execute(executeCtx, driverAction); executeErr != nil {
 				return nil, executeErr
@@ -1471,7 +1495,10 @@ func tracksBrowserProgress(prepared PreparedAction) bool {
 
 func preparedRequiresApproval(prepared PreparedAction) bool {
 	if browserpolicy.EffectiveApprovalMode(prepared.ApprovalMode) == browserpolicy.ApprovalPolicy {
-		return prepared.RestrictedDecision == browserpolicy.DecisionAsk
+		return browserpolicy.RestrictedRequiresApproval(
+			prepared.RestrictedDecision,
+			prepared.Confirmation,
+		)
 	}
 	return browserpolicy.RequiresApproval(
 		prepared.ApprovalMode,

@@ -66,6 +66,16 @@ func RequiresApproval(mode, effect, confirmation string) bool {
 	}
 }
 
+// RestrictedRequiresApproval keeps an explicit model confirmation request
+// additive to an operator policy decision. Invalid bindings fail closed; the
+// surrounding action contracts reject them before dispatch.
+func RestrictedRequiresApproval(decision, confirmation string) bool {
+	if !DecisionValid(decision) || !ConfirmationValid(confirmation) {
+		return true
+	}
+	return decision != DecisionAllow || confirmation == ConfirmationRequest
+}
+
 // FillFieldAllowed applies only the semantic admission layer. Driver-side DOM
 // checks still require a live writable control before dispatch.
 func FillFieldAllowed(capabilityMode, role, name string, sensitiveTerms []string) bool {
