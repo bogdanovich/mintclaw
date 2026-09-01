@@ -565,28 +565,12 @@ func (registry *FileRegistry) load() error {
 	if document.Records == nil {
 		document.Records = make(map[string]registryRecord)
 	}
-	migrated := false
 	for id, record := range document.Records {
 		if id != string(record.Snapshot.ID) {
 			return fmt.Errorf("node registry key %q does not match record id %q", id, record.Snapshot.ID)
 		}
 		if err := record.Snapshot.Validate(); err != nil {
-			migratedSnapshot, quarantined, quarantineErr := migratePreRestrictedPolicyBrowserCatalog(
-				record.Snapshot,
-			)
-			if quarantineErr != nil {
-				return fmt.Errorf(
-					"validate node registry record %q after browser contract mismatch: %w",
-					id,
-					quarantineErr,
-				)
-			}
-			if !quarantined {
-				return fmt.Errorf("validate node registry record %q: %w", id, err)
-			}
-			record.Snapshot = migratedSnapshot
-			document.Records[id] = record
-			migrated = true
+			return fmt.Errorf("validate node registry record %q: %w", id, err)
 		}
 		if record.Snapshot.State == StatePendingPairing &&
 			(record.RequestedRole != "companion" || record.RequestedAt <= 0) {
@@ -598,11 +582,6 @@ func (registry *FileRegistry) load() error {
 	}
 	if err := validateRegistryNamespace(document.Records); err != nil {
 		return fmt.Errorf("validate node registry namespace: %w", err)
-	}
-	if migrated {
-		if err := registry.save(document.Records); err != nil && !fileutil.IsCommittedWriteError(err) {
-			return fmt.Errorf("persist quarantined browser capability catalog: %w", err)
-		}
 	}
 	registry.records = document.Records
 	return nil

@@ -615,11 +615,33 @@ func (catalog CapabilityCatalog) Validate() error {
 	var browserProfiles []BrowserProfileDescriptor
 	browserCommandCount := 0
 	for _, descriptor := range catalog.Commands {
-		descriptorBytes, err := catalogDescriptorResourceBytes(descriptor)
-		if err != nil {
-			return err
+		totalBytes += len(descriptor.Name) + len(descriptor.InputSchema) + len(descriptor.OutputSchema)
+		if descriptor.ModelContract != nil {
+			modelContract, err := json.Marshal(descriptor.ModelContract)
+			if err != nil {
+				return fmt.Errorf("%w: encode model contract", ErrInvalidCapability)
+			}
+			totalBytes += len(modelContract)
 		}
-		totalBytes += descriptorBytes
+		if len(descriptor.FileProfiles) > 0 || len(descriptor.ServiceProfiles) > 0 ||
+			len(descriptor.BrowserProfiles) > 0 || len(descriptor.UpdateProfiles) > 0 ||
+			len(descriptor.JobProfiles) > 0 {
+			profiles, err := json.Marshal(struct {
+				File    []FileProfileDescriptor    `json:"file,omitempty"`
+				Service []ServiceProfileDescriptor `json:"service,omitempty"`
+				Browser []BrowserProfileDescriptor `json:"browser,omitempty"`
+				Update  []UpdateProfileDescriptor  `json:"update,omitempty"`
+				Job     []JobProfileDescriptor     `json:"job,omitempty"`
+			}{
+				File: descriptor.FileProfiles, Service: descriptor.ServiceProfiles,
+				Browser: descriptor.BrowserProfiles, Update: descriptor.UpdateProfiles,
+				Job: descriptor.JobProfiles,
+			})
+			if err != nil {
+				return fmt.Errorf("%w: encode command profiles", ErrInvalidCapability)
+			}
+			totalBytes += len(profiles)
+		}
 		if totalBytes > MaxCatalogBytes {
 			return fmt.Errorf("%w: catalog exceeds size limit", ErrInvalidCapability)
 		}
@@ -653,37 +675,6 @@ func (catalog CapabilityCatalog) Validate() error {
 		}
 	}
 	return nil
-}
-
-func catalogDescriptorResourceBytes(descriptor CommandDescriptor) (int, error) {
-	totalBytes := len(descriptor.Name) + len(descriptor.InputSchema) + len(descriptor.OutputSchema)
-	if descriptor.ModelContract != nil {
-		modelContract, err := json.Marshal(descriptor.ModelContract)
-		if err != nil {
-			return 0, fmt.Errorf("%w: encode model contract", ErrInvalidCapability)
-		}
-		totalBytes += len(modelContract)
-	}
-	if len(descriptor.FileProfiles) == 0 && len(descriptor.ServiceProfiles) == 0 &&
-		len(descriptor.BrowserProfiles) == 0 && len(descriptor.UpdateProfiles) == 0 &&
-		len(descriptor.JobProfiles) == 0 {
-		return totalBytes, nil
-	}
-	profiles, err := json.Marshal(struct {
-		File    []FileProfileDescriptor    `json:"file,omitempty"`
-		Service []ServiceProfileDescriptor `json:"service,omitempty"`
-		Browser []BrowserProfileDescriptor `json:"browser,omitempty"`
-		Update  []UpdateProfileDescriptor  `json:"update,omitempty"`
-		Job     []JobProfileDescriptor     `json:"job,omitempty"`
-	}{
-		File: descriptor.FileProfiles, Service: descriptor.ServiceProfiles,
-		Browser: descriptor.BrowserProfiles, Update: descriptor.UpdateProfiles,
-		Job: descriptor.JobProfiles,
-	})
-	if err != nil {
-		return 0, fmt.Errorf("%w: encode command profiles", ErrInvalidCapability)
-	}
-	return totalBytes + len(profiles), nil
 }
 
 // Hash returns a stable digest regardless of descriptor or schema key order.
