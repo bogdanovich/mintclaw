@@ -233,7 +233,11 @@ func TestFileRegistryQuarantinesApprovedNodeWithStoredBrowserSchemaDrift(t *test
 	}
 	if registration.Snapshot.State != StateIncompatible ||
 		registration.Snapshot.DisconnectReason != staleBrowserCatalogReason {
-		t.Fatalf("quarantined state = %q, reason = %q", registration.Snapshot.State, registration.Snapshot.DisconnectReason)
+		t.Fatalf(
+			"quarantined state = %q, reason = %q",
+			registration.Snapshot.State,
+			registration.Snapshot.DisconnectReason,
+		)
 	}
 	if len(registration.Snapshot.Catalog.Commands) != 1 ||
 		registration.Snapshot.Catalog.Commands[0].Name != "node.info.v1" {
