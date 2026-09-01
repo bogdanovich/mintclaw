@@ -35,6 +35,7 @@ const (
 	telegramFileMetadataTotalTimeout        = 50 * time.Second
 	telegramFileMetadataMaxAttempts         = 2
 	telegramFileMetadataRetryDelay          = 250 * time.Millisecond
+	telegramAPIRequestTimeout               = 2 * time.Minute
 	telegramCaptionLimit                    = 1024
 	telegramTextLimit                       = 4096
 )
@@ -89,25 +90,19 @@ func NewTelegramChannel(
 ) (*TelegramChannel, error) {
 	channelName := bc.Name()
 	var opts []telego.BotOption
+	httpClient := &http.Client{Timeout: telegramAPIRequestTimeout}
 
 	if telegramCfg.Proxy != "" {
 		proxyURL, parseErr := url.Parse(telegramCfg.Proxy)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid proxy URL %q: %w", telegramCfg.Proxy, parseErr)
 		}
-		opts = append(opts, telego.WithHTTPClient(&http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			},
-		}))
+		httpClient.Transport = &http.Transport{Proxy: http.ProxyURL(proxyURL)}
 	} else if os.Getenv("HTTP_PROXY") != "" || os.Getenv("HTTPS_PROXY") != "" {
 		// Use environment proxy if configured
-		opts = append(opts, telego.WithHTTPClient(&http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-			},
-		}))
+		httpClient.Transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
 	}
+	opts = append(opts, telego.WithHTTPClient(httpClient))
 
 	if baseURL := strings.TrimRight(strings.TrimSpace(telegramCfg.BaseURL), "/"); baseURL != "" {
 		opts = append(opts, telego.WithAPIServer(baseURL))

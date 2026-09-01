@@ -149,10 +149,10 @@ func (c *TelegramChannel) downloadPhoto(ctx context.Context, fileID string) stri
 		return ""
 	}
 
-	return c.downloadFileWithInfo(file, ".jpg")
+	return c.downloadFileWithInfo(ctx, file, ".jpg")
 }
 
-func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) string {
+func (c *TelegramChannel) downloadFileWithInfo(ctx context.Context, file *telego.File, ext string) string {
 	if file.FilePath == "" {
 		return ""
 	}
@@ -164,6 +164,7 @@ func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) st
 	filename := file.FilePath + ext
 	return utils.DownloadFile(url, filename, utils.DownloadOptions{
 		LoggerPrefix: "telegram",
+		Context:      ctx,
 	})
 }
 
@@ -176,7 +177,7 @@ func (c *TelegramChannel) downloadFile(ctx context.Context, fileID, ext string) 
 		return ""
 	}
 
-	return c.downloadFileWithInfo(file, ext)
+	return c.downloadFileWithInfo(ctx, file, ext)
 }
 
 func (c *TelegramChannel) getFile(ctx context.Context, fileID string) (*telego.File, error) {
@@ -192,7 +193,7 @@ func (c *TelegramChannel) getFile(ctx context.Context, fileID string) (*telego.F
 			attemptTimeout = telegramFileMetadataRetryTimeout
 		}
 		attemptCtx, attemptCancel := context.WithTimeout(requestCtx, attemptTimeout)
-		file, err := c.bot.GetFile(attemptCtx, &telego.GetFileParams{FileID: fileID})
+		file, err := c.getFileAttempt(attemptCtx, fileID)
 		attemptCancel()
 		if err == nil {
 			return file, nil
@@ -210,6 +211,29 @@ func (c *TelegramChannel) getFile(ctx context.Context, fileID string) (*telego.F
 		}
 	}
 	return nil, fmt.Errorf("telegram file metadata request failed after %d attempt(s): %w", attempts, lastErr)
+}
+
+// getFileAttempt fences the third-party API call with the caller's context.
+// The Telegram client normally observes cancellation itself, but this select
+// also releases the ordered per-conversation worker if a transport or caller
+// fails to return after its request context expires.
+func (c *TelegramChannel) getFileAttempt(ctx context.Context, fileID string) (*telego.File, error) {
+	type result struct {
+		file *telego.File
+		err  error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		file, err := c.bot.GetFile(ctx, &telego.GetFileParams{FileID: fileID})
+		resultCh <- result{file: file, err: err}
+	}()
+
+	select {
+	case attempt := <-resultCh:
+		return attempt.file, attempt.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func retryableTelegramFileError(err error) bool {

@@ -6354,6 +6354,25 @@ func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
 		t.Fatalf("unauthorized prompt reply triggered control sync: %#v", synced)
 	default:
 	}
+
+	unverifiedWrongPrompt := reply
+	unverifiedWrongPrompt.SpoolID = "spool-ordinary-unverified-wrong-prompt"
+	unverifiedWrongPrompt.Context.MessageID = "reply-unverified-wrong-prompt"
+	unverifiedWrongPrompt.Context.ReplyToMessageID = "7715"
+	unverifiedWrongPrompt.Context.Raw = map[string]string{
+		bus.InboundMetadataKeyInteractionResponseCandidate: "generate it yourself",
+	}
+	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(
+		t.Context(),
+		unverifiedWrongPrompt,
+		target,
+	) {
+		t.Fatal("unverified reply escaped routing while an interaction was active")
+	}
+	current, ok := registry.Get(record.ID)
+	if !ok || current.Status != interactions.StatusWaiting || current.Answer != nil {
+		t.Fatalf("unverified reply changed active interaction = %#v, found=%v", current, ok)
+	}
 }
 
 func TestProjectedAnswerMatchesEveryDeliveredTelegramPromptChunk(t *testing.T) {
@@ -6420,7 +6439,7 @@ func TestProjectedAnswerMatchesEveryDeliveredTelegramPromptChunk(t *testing.T) {
 	}
 }
 
-func TestUnmatchedFooterlessGroupCandidateFailsClosed(t *testing.T) {
+func TestUnmatchedFooterlessGroupCandidateFallsThroughToOrdinaryRouting(t *testing.T) {
 	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
 	defer cleanup()
 	target := &inboundDispatchTarget{
@@ -6436,8 +6455,8 @@ func TestUnmatchedFooterlessGroupCandidateFailsClosed(t *testing.T) {
 		},
 	}}
 
-	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), msg, target) {
-		t.Fatal("unmatched group candidate escaped fail-closed interaction routing")
+	if newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), msg, target) {
+		t.Fatal("ordinary group reply was consumed by interaction routing")
 	}
 }
 

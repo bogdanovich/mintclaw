@@ -449,19 +449,10 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 	}
 	if projectedInteractionIsUnverifiedCandidate(msg) && classification.Record.ID == "" &&
 		classification.Disposition == explicitInteractionAnswerWrongID {
-		if strings.EqualFold(strings.TrimSpace(msg.Context.Raw["is_group"]), "true") {
-			logExplicitInteractionAnswerDisposition(
-				classification.Record,
-				msg,
-				classification.Disposition,
-			)
-			_ = c.al.settleInboundAdmission(
-				ctx,
-				msg,
-				finalResponseAdmission{status: finalResponseAdmissionNotRequired},
-			)
-			return true
-		}
+		// Telegram marks every reply to this bot as a response candidate before it
+		// knows whether the replied-to message is a durable interaction prompt.
+		// With no matching record, this is an ordinary conversational reply. Let
+		// normal inbound routing handle it in groups as well as private chats.
 		return false
 	}
 	if classification.Disposition == explicitInteractionAnswerDuplicate {

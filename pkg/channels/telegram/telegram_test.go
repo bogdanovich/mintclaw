@@ -504,7 +504,7 @@ func TestDownloadFileWithInfo_AllowsLocalConfiguredBaseURL(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	path := ch.downloadFileWithInfo(&telego.File{FilePath: "photos/image"}, "")
+	path := ch.downloadFileWithInfo(t.Context(), &telego.File{FilePath: "photos/image"}, "")
 	if path == "" {
 		t.Fatal("expected local base_url download to succeed")
 	}
@@ -533,6 +533,31 @@ func TestGetFileAddsMetadataDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("getFile() error = %v, want deadline exceeded", err)
 	}
+}
+
+func TestGetFileAttemptReturnsWhenCallerIgnoresCancellation(t *testing.T) {
+	release := make(chan struct{})
+	caller := &stubCaller{callFn: func(
+		_ context.Context,
+		_ string,
+		_ *ta.RequestData,
+	) (*ta.Response, error) {
+		<-release
+		return nil, errors.New("released stalled caller")
+	}}
+	ch := newTestChannel(t, caller)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	started := time.Now()
+	_, err := ch.getFileAttempt(ctx, "stalled-file")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("getFileAttempt() error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("getFileAttempt() took %v after its deadline", elapsed)
+	}
+	close(release)
 }
 
 func TestGetFileRetriesTransientServerError(t *testing.T) {

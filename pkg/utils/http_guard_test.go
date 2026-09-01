@@ -41,6 +41,34 @@ func TestCreateSafeHTTPClient_AllowsLoopbackProxy(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 }
 
+func TestDownloadFileHonorsCallerCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	path := DownloadFile(server.URL, "stalled.txt", DownloadOptions{
+		Context: ctx,
+		Timeout: time.Second,
+	})
+	if path != "" {
+		t.Fatalf("DownloadFile() path = %q after cancellation", path)
+	}
+	select {
+	case <-requestStarted:
+	default:
+		t.Fatal("download request did not start")
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("DownloadFile() took %v after caller cancellation", elapsed)
+	}
+}
+
 func TestCreateSafeHTTPClient_BlocksPrivateRedirect(t *testing.T) {
 	allowPrivateHosts := true
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

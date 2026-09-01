@@ -65,6 +65,7 @@ func SanitizeFilename(filename string) string {
 
 // DownloadOptions holds optional parameters for downloading files
 type DownloadOptions struct {
+	Context             context.Context
 	Timeout             time.Duration
 	ExtraHeaders        map[string]string
 	LoggerPrefix        string
@@ -134,7 +135,13 @@ func DownloadFile(urlStr, filename string, opts DownloadOptions) string {
 		}
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, urlStr, nil)
+	requestParent := opts.Context
+	if requestParent == nil {
+		requestParent = context.Background()
+	}
+	requestCtx, requestCancel := context.WithTimeout(requestParent, opts.Timeout)
+	defer requestCancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to create download request", map[string]any{
 			"error": err.Error(),
