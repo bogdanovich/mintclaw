@@ -520,7 +520,11 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 			"Trust mode: yolo\nModel: configured-model",
 	}, "\n\n---\n\n")
 	wantSystem += "\n\n---\n\n" + codingworkspace.RenderPrompt(
-		codingworkspace.Capture(t.Context(), layout.ExecutionRoot(), layout.ExecutionRoot(), codingworkspace.Limits{}),
+		codingworkspace.NewRepository(
+			layout.ExecutionRoot(),
+			layout.ExecutionRoot(),
+			codingworkspace.Limits{},
+		).Status(t.Context()).Snapshot,
 		0,
 	)
 	if messages[0].Content != wantSystem {

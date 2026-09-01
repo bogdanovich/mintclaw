@@ -1,9 +1,11 @@
 package thread
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,7 +38,6 @@ func TestStorePublishesImmutableRepositoryBaselineUnderThreadLease(t *testing.T)
 		t.Context(),
 		workspace.BaselineRequest{
 			ProjectKey: project.ProjectKey,
-			Origin:     workspace.BaselineOriginNew,
 			CapturedAt: time.Now().UTC(),
 		},
 	)
@@ -65,6 +66,26 @@ func TestStorePublishesImmutableRepositoryBaselineUnderThreadLease(t *testing.T)
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("baseline file = %#v, %v", info, err)
 	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withRemovedOrigin := bytes.Replace(
+		data,
+		[]byte("  \"captured_at\":"),
+		[]byte("  \"origin\": \"new_thread\",\n  \"captured_at\":"),
+		1,
+	)
+	if bytes.Equal(data, withRemovedOrigin) {
+		t.Fatal("failed to add removed origin field to baseline fixture")
+	}
+	if err := os.WriteFile(path, withRemovedOrigin, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadRepositoryBaselineWithLease(t.Context(), lease, metadata); err == nil ||
+		!strings.Contains(err.Error(), `unknown field "origin"`) {
+		t.Fatalf("removed origin field load error = %v", err)
+	}
 }
 
 func TestStoreRejectsRepositoryBaselineWithoutOwningLease(t *testing.T) {
@@ -88,7 +109,6 @@ func TestStoreRejectsRepositoryBaselineWithoutOwningLease(t *testing.T) {
 		t.Context(),
 		workspace.BaselineRequest{
 			ProjectKey: project.ProjectKey,
-			Origin:     workspace.BaselineOriginNew,
 			CapturedAt: time.Now().UTC(),
 		},
 	)

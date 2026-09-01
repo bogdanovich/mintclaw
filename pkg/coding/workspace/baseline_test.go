@@ -20,7 +20,7 @@ func TestRepositoryBaselineCapturesBoundedFingerprintsWithoutContents(t *testing
 	}
 	capturedAt := time.Now().UTC()
 	baseline, err := NewRepository(root, root, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
-		ProjectKey: "project-key", Origin: BaselineOriginNew, CapturedAt: capturedAt,
+		ProjectKey: "project-key", CapturedAt: capturedAt,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestRepositoryBaselineOmitsUnrepresentableGitPaths(t *testing.T) {
 		t.Skipf("filesystem does not support non-UTF-8 paths: %v", err)
 	}
 	baseline, err := NewRepository(root, root, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
-		ProjectKey: "project-key", Origin: BaselineOriginNew, CapturedAt: time.Now().UTC(),
+		ProjectKey: "project-key", CapturedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +57,7 @@ func TestRepositoryBaselineOmitsUnrepresentableGitPaths(t *testing.T) {
 }
 
 func TestRepositoryBaselineBoundsAggregateEncodedPaths(t *testing.T) {
-	baseline := testBaseline(t, BaselineOriginNew, "/repo", "head")
+	baseline := testBaseline(t, "/repo", "head")
 	baseline.Paths = nil
 	for index := range 128 {
 		baseline.Paths = append(baseline.Paths, BaselinePath{
@@ -83,7 +83,7 @@ func TestCompareBaselineClassifiesTruthfulPathTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	repository := NewRepository(root, root, Limits{})
-	request := BaselineRequest{ProjectKey: "project-key", Origin: BaselineOriginNew, CapturedAt: time.Now().UTC()}
+	request := BaselineRequest{ProjectKey: "project-key", CapturedAt: time.Now().UTC()}
 	baseline, err := repository.CaptureBaseline(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func TestCompareBaselineClassifiesTruthfulPathTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved, err := repository.CaptureBaseline(t.Context(), BaselineRequest{
-		ProjectKey: "project-key", Origin: BaselineOriginNew, CapturedAt: request.CapturedAt.Add(2 * time.Second),
+		ProjectKey: "project-key", CapturedAt: request.CapturedAt.Add(2 * time.Second),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -114,35 +114,22 @@ func TestCompareBaselineClassifiesTruthfulPathTransitions(t *testing.T) {
 	}
 }
 
-func TestCompareBaselineNeverAttributesLegacyAdoptionOrChangedAuthority(t *testing.T) {
-	baseline := testBaseline(t, BaselineOriginResumeAdoption, "/repo", "head")
-	current := testBaseline(t, BaselineOriginNew, "/repo", "head")
-	baseline.Paths = []BaselinePath{
-		{Path: "new.txt", Status: "??", Fingerprint: sha256Hex("new"), EvidenceComplete: true},
-	}
-	baseline.BaselineID = baselineDigest(baseline)
-	current.Paths = baseline.Paths
-	current.BaselineID = baselineDigest(current)
+func TestCompareBaselineRejectsChangedAuthority(t *testing.T) {
+	baseline := testBaseline(t, "/repo", "head")
+	current := testBaseline(t, "/other", "head")
 	result := CompareBaseline(baseline, current)
-	if provenanceForPath(t, result, "new.txt") != ProvenanceIndeterminate || !result.Indeterminate {
-		t.Fatalf("adoption provenance = %#v", result)
-	}
-
-	baseline = testBaseline(t, BaselineOriginNew, "/repo", "head")
-	current = testBaseline(t, BaselineOriginNew, "/other", "head")
-	result = CompareBaseline(baseline, current)
 	if result.Reason != "repository authority changed since baseline" {
 		t.Fatalf("authority provenance = %#v", result)
 	}
 }
 
 func TestCompareBaselineTreatsAStatusTransitionAsOnePath(t *testing.T) {
-	baseline := testBaseline(t, BaselineOriginNew, "/repo", "head")
+	baseline := testBaseline(t, "/repo", "head")
 	baseline.Paths = []BaselinePath{
 		{Path: "changed.txt", Status: " M", Fingerprint: sha256Hex("before"), EvidenceComplete: true},
 	}
 	baseline.BaselineID = baselineDigest(baseline)
-	current := testBaseline(t, BaselineOriginNew, "/repo", "head")
+	current := testBaseline(t, "/repo", "head")
 	current.Paths = []BaselinePath{
 		{Path: "changed.txt", Status: "MM", Fingerprint: sha256Hex("after"), EvidenceComplete: true},
 	}
@@ -156,7 +143,7 @@ func TestCompareBaselineTreatsAStatusTransitionAsOnePath(t *testing.T) {
 }
 
 func TestCompareBaselineDoesNotGuessAcrossStagedIdentityChanges(t *testing.T) {
-	baseline := testBaseline(t, BaselineOriginNew, "/repo", "head")
+	baseline := testBaseline(t, "/repo", "head")
 	baseline.Paths = []BaselinePath{
 		{Path: "changed.txt", Status: "M ", Fingerprint: sha256Hex("content"), EvidenceComplete: true},
 	}
@@ -173,11 +160,11 @@ func TestCompareBaselineDoesNotGuessAcrossStagedIdentityChanges(t *testing.T) {
 	}
 }
 
-func testBaseline(t *testing.T, origin BaselineOrigin, root, head string) RepositoryBaseline {
+func testBaseline(t *testing.T, root, head string) RepositoryBaseline {
 	t.Helper()
 	baseline := RepositoryBaseline{
 		SchemaVersion: RepositoryBaselineSchemaV1,
-		ProjectKey:    "project-key", Origin: origin, CapturedAt: time.Now().UTC(),
+		ProjectKey:    "project-key", CapturedAt: time.Now().UTC(),
 		RepositoryAvailable: true, TopLevel: root, CommonDir: root + "/.git", Head: sha256Hex(head),
 		Generation: sha256Hex("generation"), PathsComplete: true, IndexComplete: true,
 		IndexFingerprint: sha256Hex("index"),

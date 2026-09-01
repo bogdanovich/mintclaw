@@ -248,7 +248,6 @@ func prepareNewThread(
 		store,
 		lease,
 		metadata,
-		codingworkspace.BaselineOriginNew,
 		deps.now(),
 	); err != nil {
 		return thread.ProjectIdentity{}, nil, thread.Metadata{}, nil, errors.Join(err, lease.Release())
@@ -774,19 +773,11 @@ func prepareResumedThread(
 		return thread.Metadata{}, lease, err
 	}
 	if _, err := store.LoadRepositoryBaselineWithLease(ctx, lease, metadata); err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			return thread.Metadata{}, lease, err
-		}
-		if err := captureAndPublishRepositoryBaseline(
-			ctx,
-			store,
-			lease,
-			metadata,
-			codingworkspace.BaselineOriginResumeAdoption,
-			deps.now(),
-		); err != nil {
-			return thread.Metadata{}, lease, err
-		}
+		return thread.Metadata{}, lease, fmt.Errorf(
+			"resume: load repository baseline for thread %q: %w",
+			metadata.ThreadID,
+			err,
+		)
 	}
 	if err := store.Save(metadata); err != nil {
 		return thread.Metadata{}, lease, err
@@ -800,7 +791,6 @@ func captureAndPublishRepositoryBaseline(
 	store *thread.Store,
 	lease *thread.Lease,
 	metadata thread.Metadata,
-	origin codingworkspace.BaselineOrigin,
 	capturedAt time.Time,
 ) error {
 	repository := codingworkspace.NewRepository(
@@ -810,7 +800,6 @@ func captureAndPublishRepositoryBaseline(
 	)
 	baseline, err := repository.CaptureBaseline(ctx, codingworkspace.BaselineRequest{
 		ProjectKey: metadata.Project.ProjectKey,
-		Origin:     origin,
 		CapturedAt: capturedAt.UTC(),
 	})
 	if err != nil {

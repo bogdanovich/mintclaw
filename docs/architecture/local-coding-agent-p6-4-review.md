@@ -82,11 +82,11 @@ confirmed before a prompt commits, normal empty-thread cleanup may remove the
 unreferenced baseline; once canonical history may have committed, the baseline
 is retained.
 
-A legacy thread without a P6.4 baseline may be adopted on resume only by
-publishing a baseline labelled `resume_adoption`. It means "state first
-observed at adoption", never "state at original thread creation". If adoption
-cannot be published safely, status remains available as current evidence but
-provenance comparison is unavailable.
+Resume requires the thread baseline to exist and validate under the selected
+thread lease. A rollout that introduces or changes this persisted contract
+must seed retained threads during a stopped-state cutover before installing
+the strict runtime. Runtime resume never reconstructs missing historical
+evidence or rewrites the baseline.
 
 A fork captures a fresh child baseline after acquiring child authority. It
 does not copy the parent's baseline or claim that parent-era workspace changes
@@ -104,7 +104,7 @@ Repository comparison describes observation, not causation. A path is one of:
 - `resolved_since_baseline`: baseline evidence was dirty and the current state
   proves that condition no longer exists;
 - `indeterminate`: bounds, unsupported state, concurrent mutation, missing
-  fingerprint, legacy adoption, or identity change prevents proof.
+  fingerprint, or identity change prevents proof.
 
 `first_observed_during_thread` never means "written by MintClaw". Verified
 tool write-audit receipts are presented separately as actions known to have
@@ -131,9 +131,12 @@ rather than a shell error.
 `diff` accepts an explicit target:
 
 - current worktree, including staged, unstaged, and bounded untracked content;
-- the thread baseline;
 - a local base branch through its merge base; or
 - one locally available commit.
+
+Thread-baseline provenance is a separate typed comparison over the immutable
+baseline and a current repository capture; it is not a placeholder diff
+target.
 
 The result contains file summaries and bounded hunks with old/new paths,
 line ranges, additions/deletions, binary or submodule metadata, provenance,

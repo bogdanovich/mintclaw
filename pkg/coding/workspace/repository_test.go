@@ -255,10 +255,6 @@ func TestRepositoryDiffReportsUnavailableTargetsWithoutMutation(t *testing.T) {
 	before := strings.TrimSpace(runGitTestOutput(t, root, "status", "--porcelain=v1"))
 	repository := NewRepository(root, root, Limits{})
 
-	baseline := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetBaseline})
-	if !strings.Contains(baseline.UnavailableReason, "baseline") {
-		t.Fatalf("Diff(baseline) = %#v", baseline)
-	}
 	missing := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetBase, Ref: "missing/ref"})
 	if missing.UnavailableReason == "" {
 		t.Fatalf("Diff(missing base) = %#v", missing)
