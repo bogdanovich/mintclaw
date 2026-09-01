@@ -530,7 +530,6 @@ func (s *Store) publishFork(
 		workspace.Limits{},
 	).CaptureBaseline(ctx, workspace.BaselineRequest{
 		ProjectKey: child.Project.ProjectKey,
-		Origin:     workspace.BaselineOriginFork,
 		CapturedAt: time.Now().UTC(),
 	})
 	if baselineErr != nil {

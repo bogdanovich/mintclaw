@@ -230,10 +230,7 @@ func (observer *Observer) PendingUpdate(ctx context.Context) (Snapshot, bool) {
 	return cloneSnapshot(snapshot), true
 }
 
-// Capture performs a compatibility one-shot repository status observation.
-// Long-lived coding surfaces should share a Repository so concurrency and
-// future evidence operations remain behind one passive boundary.
-func Capture(ctx context.Context, projectRoot, cwd string, limits Limits) Snapshot {
+func captureSnapshot(ctx context.Context, projectRoot, cwd string, limits Limits) Snapshot {
 	limits = limits.normalized()
 	snapshot := Snapshot{
 		ProjectRoot: filepath.Clean(projectRoot),

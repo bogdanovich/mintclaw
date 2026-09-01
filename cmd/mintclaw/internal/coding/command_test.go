@@ -19,7 +19,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
-	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -89,7 +88,7 @@ func TestCodeAndResumePersistOutsideProjectAcrossCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	baseline, err := store.LoadRepositoryBaseline(created.ThreadID)
-	if err != nil || baseline.Origin != codingworkspace.BaselineOriginNew || !baseline.CapturedAt.Equal(
+	if err != nil || !baseline.CapturedAt.Equal(
 		time.Date(2026, time.August, 10, 10, 0, 0, 0, time.UTC),
 	) {
 		t.Fatalf("created repository baseline = %#v / %v", baseline, err)
@@ -826,19 +825,11 @@ func TestResumePromptPromotesPendingThreadMetadata(t *testing.T) {
 	projectRoot := t.TempDir()
 	now := time.Date(2026, time.August, 29, 17, 30, 0, 0, time.UTC)
 	deps := testDependencies(home, projectRoot, &now)
-	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	_, store, metadata, lease, err := prepareNewThread(t.Context(), deps, "", "", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := thread.NewStore(filepath.Join(home, "coding"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	metadata, err := thread.NewPendingMetadata(thread.NewThreadID(), project, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save(metadata); err != nil {
+	if err := lease.Release(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -859,8 +850,59 @@ func TestResumePromptPromotesPendingThreadMetadata(t *testing.T) {
 		t.Fatalf("resumed pending metadata = %+v", persisted)
 	}
 	baseline, err := store.LoadRepositoryBaseline(metadata.ThreadID)
-	if err != nil || baseline.Origin != codingworkspace.BaselineOriginResumeAdoption {
-		t.Fatalf("legacy resume baseline = %#v / %v", baseline, err)
+	if err != nil || baseline.ProjectKey != metadata.Project.ProjectKey {
+		t.Fatalf("pending thread baseline = %#v / %v", baseline, err)
+	}
+}
+
+func TestResumeRejectsThreadWithoutRepositoryBaseline(t *testing.T) {
+	home := t.TempDir()
+	projectRoot := t.TempDir()
+	now := time.Date(2026, time.August, 29, 17, 45, 0, 0, time.UTC)
+	deps := testDependencies(home, projectRoot, &now)
+	deps.turnRunner = codingTurnRunnerFunc(func(
+		context.Context,
+		codingTurnRequest,
+	) (codingTurnOutcome, error) {
+		t.Fatal("turn runner called without a repository baseline")
+		return codingTurnOutcome{}, nil
+	})
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(filepath.Join(home, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewPendingMetadata(thread.NewThreadID(), project, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = executeCommandError(
+		newResumeCommand(deps),
+		metadata.ThreadID,
+		"--prompt",
+		"must not be admitted",
+		"--json",
+	)
+	if err == nil || !errors.Is(err, os.ErrNotExist) ||
+		!strings.Contains(err.Error(), "resume: load repository baseline") {
+		t.Fatalf("resume without baseline error = %v", err)
+	}
+	if _, loadErr := store.LoadRepositoryBaseline(metadata.ThreadID); !errors.Is(loadErr, os.ErrNotExist) {
+		t.Fatalf("resume created missing baseline: %v", loadErr)
+	}
+	persisted, loadErr := store.Load(metadata.ThreadID)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if !persisted.UpdatedAt.Equal(metadata.UpdatedAt) || !persisted.PendingFirstPrompt {
+		t.Fatalf("failed resume mutated metadata = %#v", persisted)
 	}
 }
 
@@ -1128,7 +1170,7 @@ func TestCodePersistsDefaultSelectionBeforePromptAdmission(t *testing.T) {
 			request.Lease,
 			request.Metadata,
 		)
-		if err != nil || baseline.Origin != codingworkspace.BaselineOriginNew {
+		if err != nil || baseline.ProjectKey != request.Metadata.Project.ProjectKey {
 			t.Fatalf("pre-admission repository baseline = %#v / %v", baseline, err)
 		}
 		err = request.Store.AppendUserMessage(ctx, request.Lease, request.Metadata, request.Input.Text)

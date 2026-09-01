@@ -14,7 +14,7 @@ import (
 
 func TestCaptureNonGitIsAvailableAsBoundedState(t *testing.T) {
 	root := t.TempDir()
-	snapshot := Capture(t.Context(), root, root, Limits{})
+	snapshot := captureSnapshot(t.Context(), root, root, Limits{})
 	if snapshot.Git.Available || snapshot.Git.UnavailableReason == "" {
 		t.Fatalf("non-Git snapshot = %#v", snapshot)
 	}
@@ -49,8 +49,8 @@ func TestCaptureDirtyRepositoryIsDeterministicAndBounded(t *testing.T) {
 	}
 
 	limits := Limits{ChangedPaths: 2, PromptBytes: 4096}
-	first := Capture(t.Context(), root, root, limits)
-	second := Capture(t.Context(), root, root, limits)
+	first := captureSnapshot(t.Context(), root, root, limits)
+	second := captureSnapshot(t.Context(), root, root, limits)
 	if first.Identity() != second.Identity() {
 		t.Fatalf("stable repository produced different identities:\n%#v\n%#v", first, second)
 	}
@@ -84,7 +84,7 @@ func TestCaptureDetachedUnbornAndLinkedWorktree(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, "staged.txt"), []byte("staged\nunstaged\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		snapshot := Capture(t.Context(), root, root, Limits{})
+		snapshot := captureSnapshot(t.Context(), root, root, Limits{})
 		if !snapshot.Git.Available || !snapshot.Git.Unborn || snapshot.Git.Branch != "main" ||
 			snapshot.Git.Head != "" {
 			t.Fatalf("unborn snapshot = %#v", snapshot.Git)
@@ -97,7 +97,7 @@ func TestCaptureDetachedUnbornAndLinkedWorktree(t *testing.T) {
 	t.Run("detached", func(t *testing.T) {
 		root := initGitRepository(t)
 		runGitTest(t, root, "checkout", "--detach", "HEAD")
-		snapshot := Capture(t.Context(), root, root, Limits{})
+		snapshot := captureSnapshot(t.Context(), root, root, Limits{})
 		if !snapshot.Git.Detached || snapshot.Git.Unborn || snapshot.Git.Head == "" {
 			t.Fatalf("detached snapshot = %#v", snapshot.Git)
 		}
@@ -107,7 +107,7 @@ func TestCaptureDetachedUnbornAndLinkedWorktree(t *testing.T) {
 		root := initGitRepository(t)
 		linked := filepath.Join(t.TempDir(), "linked")
 		runGitTest(t, root, "worktree", "add", "--detach", linked, "HEAD")
-		snapshot := Capture(t.Context(), linked, linked, Limits{})
+		snapshot := captureSnapshot(t.Context(), linked, linked, Limits{})
 		if !snapshot.Git.Available || !snapshot.Git.Worktree || snapshot.Git.GitDir == snapshot.Git.CommonDir {
 			t.Fatalf("linked worktree snapshot = %#v", snapshot.Git)
 		}
@@ -155,7 +155,7 @@ func TestCaptureDisablesConfiguredGitCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	snapshot := Capture(t.Context(), root, root, Limits{})
+	snapshot := captureSnapshot(t.Context(), root, root, Limits{})
 	if !snapshot.Git.StatusAvailable || !snapshot.DiffStatAvailable || !snapshot.Git.Dirty {
 		t.Fatalf("snapshot with disabled Git extensions = %#v", snapshot)
 	}
@@ -196,7 +196,7 @@ func TestCaptureDisablesConfiguredContentFilters(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			snapshot := Capture(t.Context(), root, root, Limits{})
+			snapshot := captureSnapshot(t.Context(), root, root, Limits{})
 			if !snapshot.Git.StatusAvailable || !snapshot.DiffStatAvailable || !snapshot.Git.Dirty {
 				t.Fatalf("snapshot with disabled %s filter = %#v", filterKind, snapshot)
 			}
@@ -242,7 +242,7 @@ func TestCaptureDoesNotInspectDirtySubmoduleContentFilters(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			snapshot := Capture(t.Context(), root, root, Limits{})
+			snapshot := captureSnapshot(t.Context(), root, root, Limits{})
 			if !snapshot.Git.StatusAvailable || !snapshot.DiffStatAvailable || snapshot.Git.Dirty ||
 				!snapshot.SubmoduleWorktreeStateIgnored {
 				t.Fatalf("snapshot with ignored submodule %s filter = %#v", filterKind, snapshot)
@@ -276,7 +276,7 @@ func TestCaptureIgnoresAmbientGitRepositoryOverrides(t *testing.T) {
 	t.Setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
 	t.Setenv("GIT_CONFIG_VALUE_0", "false")
 
-	snapshot := Capture(t.Context(), root, root, Limits{})
+	snapshot := captureSnapshot(t.Context(), root, root, Limits{})
 	canonicalRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +308,7 @@ func TestRenderPromptTruncatesOnlyAtRecordBoundaryWithMarker(t *testing.T) {
 
 func TestCaptureTimeoutIsBounded(t *testing.T) {
 	root := initGitRepository(t)
-	snapshot := Capture(context.Background(), root, root, Limits{Timeout: time.Nanosecond})
+	snapshot := captureSnapshot(context.Background(), root, root, Limits{Timeout: time.Nanosecond})
 	if snapshot.Git.Available && snapshot.Warning == "" && !snapshot.Truncated {
 		t.Fatalf("timeout was not surfaced: %#v", snapshot)
 	}

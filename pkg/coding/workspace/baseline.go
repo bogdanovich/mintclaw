@@ -19,17 +19,8 @@ const (
 	RepositoryBaselineMaxBytes = 256 << 10
 )
 
-type BaselineOrigin string
-
-const (
-	BaselineOriginNew            BaselineOrigin = "new_thread"
-	BaselineOriginResumeAdoption BaselineOrigin = "resume_adoption"
-	BaselineOriginFork           BaselineOrigin = "fork"
-)
-
 type BaselineRequest struct {
 	ProjectKey string
-	Origin     BaselineOrigin
 	CapturedAt time.Time
 }
 
@@ -56,7 +47,6 @@ type RepositoryBaseline struct {
 	SchemaVersion       string         `json:"schema_version"`
 	BaselineID          string         `json:"baseline_id"`
 	ProjectKey          string         `json:"project_key"`
-	Origin              BaselineOrigin `json:"origin"`
 	CapturedAt          time.Time      `json:"captured_at"`
 	RepositoryAvailable bool           `json:"repository_available"`
 	TopLevel            string         `json:"top_level,omitempty"`
@@ -93,10 +83,10 @@ func (repository *Repository) CaptureBaseline(
 
 	commandCtx, cancel := context.WithTimeout(contextOrBackground(ctx), repository.limits.Timeout)
 	defer cancel()
-	snapshot := Capture(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
+	snapshot := captureSnapshot(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
 	baseline := RepositoryBaseline{
 		SchemaVersion: RepositoryBaselineSchemaV1,
-		ProjectKey:    request.ProjectKey, Origin: request.Origin, CapturedAt: request.CapturedAt.UTC(),
+		ProjectKey:    request.ProjectKey, CapturedAt: request.CapturedAt.UTC(),
 		RepositoryAvailable: snapshot.Git.Available,
 		TopLevel:            snapshot.Git.TopLevel, CommonDir: snapshot.Git.CommonDir,
 		Head: snapshot.Git.Head, Branch: snapshot.Git.Branch,
@@ -156,7 +146,7 @@ func (repository *Repository) CaptureBaseline(
 		}
 	}
 	if snapshot.Git.Available {
-		after := Capture(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
+		after := captureSnapshot(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
 		if snapshot.Identity() != after.Identity() {
 			baseline.PathsComplete = false
 			baseline.IndexComplete = false
@@ -222,7 +212,6 @@ func (repository *Repository) Provenance(
 	}
 	current, err := repository.CaptureBaseline(ctx, BaselineRequest{
 		ProjectKey: baseline.ProjectKey,
-		Origin:     BaselineOriginNew,
 		CapturedAt: observedAt,
 	})
 	if err != nil {
@@ -285,11 +274,6 @@ func validateBaselineRequest(request BaselineRequest) error {
 		len(request.ProjectKey) > 256 || !utf8.ValidString(request.ProjectKey) {
 		return fmt.Errorf("repository baseline: project key is required within 256 bytes")
 	}
-	switch request.Origin {
-	case BaselineOriginNew, BaselineOriginResumeAdoption, BaselineOriginFork:
-	default:
-		return fmt.Errorf("repository baseline: unsupported origin %q", request.Origin)
-	}
 	if request.CapturedAt.IsZero() {
 		return fmt.Errorf("repository baseline: capture time is required")
 	}
@@ -302,7 +286,6 @@ func (baseline RepositoryBaseline) Validate() error {
 	}
 	if err := validateBaselineRequest(BaselineRequest{
 		ProjectKey: baseline.ProjectKey,
-		Origin:     baseline.Origin,
 		CapturedAt: baseline.CapturedAt,
 	}); err != nil {
 		return err
@@ -473,9 +456,6 @@ func CompareBaseline(baseline, current RepositoryBaseline) ProvenanceResult {
 func baselineComparisonReason(baseline, current RepositoryBaseline) string {
 	if baseline.Validate() != nil || current.Validate() != nil {
 		return "baseline or current evidence is invalid"
-	}
-	if baseline.Origin == BaselineOriginResumeAdoption {
-		return "legacy resume adoption cannot prove original-thread provenance"
 	}
 	if baseline.ProjectKey != current.ProjectKey || baseline.TopLevel != current.TopLevel ||
 		baseline.CommonDir != current.CommonDir {

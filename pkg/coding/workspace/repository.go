@@ -21,10 +21,9 @@ const (
 type DiffTargetKind string
 
 const (
-	DiffTargetCurrent  DiffTargetKind = "current"
-	DiffTargetBaseline DiffTargetKind = "baseline"
-	DiffTargetBase     DiffTargetKind = "base"
-	DiffTargetCommit   DiffTargetKind = "commit"
+	DiffTargetCurrent DiffTargetKind = "current"
+	DiffTargetBase    DiffTargetKind = "base"
+	DiffTargetCommit  DiffTargetKind = "commit"
 )
 
 type DiffTarget struct {
@@ -119,7 +118,7 @@ func (repository *Repository) Status(ctx context.Context) StatusResult {
 		return result
 	}
 	defer repository.release()
-	result.Snapshot = Capture(ctx, repository.projectRoot, repository.cwd, repository.limits)
+	result.Snapshot = captureSnapshot(ctx, repository.projectRoot, repository.cwd, repository.limits)
 	return result
 }
 
@@ -137,7 +136,7 @@ func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffR
 
 	commandCtx, cancel := context.WithTimeout(contextOrBackground(ctx), repository.limits.Timeout)
 	defer cancel()
-	before := Capture(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
+	before := captureSnapshot(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
 	result.RepositoryAvailable = before.Git.Available
 	result.Head = before.Git.Head
 	result.Branch = before.Git.Branch
@@ -156,11 +155,6 @@ func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffR
 	if target.Kind == "" {
 		result.Target.Kind = DiffTargetCurrent
 	}
-	if result.Target.Kind == DiffTargetBaseline {
-		result.UnavailableReason = "thread baseline is not available in this implementation packet"
-		return result
-	}
-
 	filters, warning, safe, truncated := passiveFilterOverrides(
 		commandCtx,
 		before.ProjectRoot,
@@ -208,7 +202,7 @@ func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffR
 		}
 	}
 
-	after := Capture(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
+	after := captureSnapshot(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
 	result.Stale = before.Identity() != after.Identity()
 	if result.Stale {
 		result.Warning = joinWarning(result.Warning, "repository changed while diff evidence was captured")

@@ -13,9 +13,12 @@ the combined release. The post-`e60b8e26` completion audit reopened four
 focused source packets. O4 removed speculative coding-TUI cells in #1023, O5
 removed the production-unused static node-schema mirror in #1024, and O6
 removed coding-media capability lookup through a generic store in #1025. O7
-has cut the sole deployed implicit browser-policy consumer over to explicit
-current policy and owns the remaining source deletion, coordinated release,
-and final audit.
+removed the browser-policy legacy mode in #1026 after #1027 deleted a newly
+merged historical browser-catalog reader. The same pre-deployment audit found
+O8: repository baselines still carried a runtime resume backfill, persisted
+origin variants, an unused diff target, and an exported one-shot capture seam.
+O8 owns that source deletion and the stopped-state baseline cutover before the
+combined O7/O8 release and final audit.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -642,7 +645,7 @@ separation and standards alignment.
 | Nested persisted tool calls | Coordinated current-state conversion | The stopped-state conversion flattened 3,721 calls plus two Google-specific cases; the post-observation verifier found no surviving nested call | Closed in Z1 |
 | `scripts/sessioncutover` | Temporary external deployment tool, not a runtime adapter | Deployment, matched rollback, reapply, canaries, observation, and evidence capture passed; this closeout deletes the command and tests | Closed in Z1 |
 | Restricted-policy browser catalogue transition | Coordinated first-party peer and persisted-registry reset, not a runtime adapter | The first O3 rollout strictly rejected the previously connected `ab-local-test` catalogue; the rollout restored service, upgraded that companion, archived and removed its one stale registry record, and re-approved the same identity against the current bounded command surface | Closed in O3 |
-| Temporary browser capability mode and omitted-mode fallback | Temporary configuration and execution adapter | P1 provides explicit restricted policy. The sole deployed implicit profile has been cut over to explicit `restricted` / `policy`; O7 deletes the compiled semantic branch and omitted-mode inference. | In progress; source deletion and coordinated release remain in O7 |
+| Temporary browser capability mode and omitted-mode fallback | Temporary configuration and execution adapter | P1 provides explicit restricted policy. The sole deployed implicit profile was cut over to explicit `restricted` / `policy`; #1026 deleted the compiled semantic branch and omitted-mode inference after #1027 removed the conflicting historical catalogue reader. | Source complete; coordinated O7/O8 release remains |
 
 No registered R1 or Z1 compatibility adapter remains open, and the final
 source Z1 audit found no new source adapter. The deployed-data gates were
@@ -666,7 +669,8 @@ refactor:
 | O4 | PR #1010 added a semantic transcript-cell interface, compact/full/plain modes, revisions, style roles, an adapter for the old renderer, and synthetic fixtures before the proposed ordered presentation model or active-cell store exists | Restore the one current flat in-process renderer. Delete the speculative interface, adapter, revisions, unused render modes/style model, and tests that exercise only that future seam. Keep current transcript output and layout behavior covered directly; defer cells until a real admitted presentation store needs them. | Complete; #1023 merged as `3f901c7b` |
 | O5 | `pkg/nodes/protocol/schemas/*.json` and `Schema` were a hand-maintained second copy of current Go wire contracts used only by their own tests | Delete the production-unused static schema mirror and its self-tests. Keep runtime envelope/framing codecs and the canonical typed descriptor validators/schema builders; prove no production consumer or published generation path depends on the embedded files. | Complete; #1024 merged as `cf31d9ac` |
 | O6 | Coding attachment behavior was discovered by asserting `ReferenceCatalog`, `HistoricalResolutionPolicy`, and `CurrentImageAttachmentPolicy` on the generic `MediaStore` at tool execution and message conversion time | Pass the known coding attachment catalogue and media-resolution policy explicitly from the coding composition root. Remove the optional runtime capability lookup without widening the generic gateway media contract or weakening attachment authority and lazy-history behavior. | Complete; #1025 merged as `699c0fef` |
-| O7 | Browser P1 is complete, but a migration-only execution branch and omitted capability/approval defaults remain in the pre-O7 source | Keep every enabled deployed profile on explicit current policy, delete the omitted-mode fallback and compiled migration-only execution branches, then build and deploy the mutually compatible gateway/companion release and verify browser behavior, rollback, and absence of the removed mode in source and deployed state. | In progress; deployed config cutover is complete, source and release gates remain |
+| O7 | Browser P1 is complete, but a migration-only execution branch and omitted capability/approval defaults remained in the pre-O7 source | Keep every enabled deployed profile on explicit current policy, delete the omitted-mode fallback and compiled migration-only execution branches, then build and deploy the mutually compatible gateway/companion release and verify browser behavior, rollback, and absence of the removed mode in source and deployed state. | Source complete; #1026 merged as `b8baab8b` after #1027 removed the historical catalogue migrator; combined release gates remain |
+| O8 | P6.4 repository baselines added runtime resume adoption, persisted new/adopted/fork origin variants, an unavailable baseline diff target, and an exported one-shot capture helper before the feature's first deployment | Keep one immutable baseline contract. New threads and forks publish it under their existing leases; resume strictly requires it. Seed retained threads once outside the runtime, and delete origin branching plus the speculative diff and capture API seams. | In progress; source PR and stopped-state pre-deployment cutover remain |
 
 The full O1 build, recovery, rollout, five-cycle loaded shutdown evidence,
 smokes, trace, and cleanup record is in the
@@ -2033,7 +2037,8 @@ the [Z1 session cutover evidence](../operations/architecture-simplification-z1-s
 
 The compatibility-reset objective is therefore complete without adding a
 steady-state old-state reader. O3 is also complete. The roadmap remains active
-only for the final requirement-by-requirement audit.
+for the O8 source packet, the coordinated O7/O8 baseline cutover and release,
+and the final requirement-by-requirement audit.
 
 ## Validation For Every Code Packet
 
