@@ -2,11 +2,18 @@ package nodes
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+)
+
+const (
+	preRestrictedPolicyBrowserCatalogFixtureSHA256 = "b71a4ad7de46f6c40691e39dc23b3395ef4e0b083c44586ef03add4780017fe5"
+	preRestrictedPolicyBrowserTemplateSHA256       = "92006eeb9405c97a79aef12924b399a8f9e3742c17bb45343db8a7414fe5a0d6"
 )
 
 type previousBrowserSchemaGeneration string
@@ -112,26 +119,69 @@ func TestFileRegistryQuarantinesPreRestrictedPolicyBrowserSchema(t *testing.T) {
 	}
 }
 
+func TestPreRestrictedPolicyBrowserMatcherRejectsFrozenStaticSchemaDrift(t *testing.T) {
+	descriptors := frozenPreRestrictedPolicyBrowserCatalogFixture(t)
+	recognized, err := isPreRestrictedPolicyBrowserCatalog(CapabilityCatalog{Commands: descriptors})
+	if err != nil || !recognized {
+		t.Fatalf("frozen pre-restricted catalog = recognized %v, error %v", recognized, err)
+	}
+	for index := range descriptors {
+		if descriptors[index].Name != BrowserCommandAct {
+			continue
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(descriptors[index].InputSchema, &schema); err != nil {
+			t.Fatal(err)
+		}
+		schema["future_contract_field"] = true
+		descriptors[index].InputSchema = mustJSON(schema)
+	}
+	recognized, err = isPreRestrictedPolicyBrowserCatalog(CapabilityCatalog{Commands: descriptors})
+	if err != nil || recognized {
+		t.Fatalf("drifted pre-restricted catalog = recognized %v, error %v", recognized, err)
+	}
+}
+
+func TestPreRestrictedPolicyBrowserFrozenArtifactsHavePinnedDigests(t *testing.T) {
+	for _, fixture := range []struct {
+		path string
+		want string
+	}{
+		{
+			path: filepath.Join("testdata", "browser-catalog-pre-restricted-policy.v1.json"),
+			want: preRestrictedPolicyBrowserCatalogFixtureSHA256,
+		},
+		{
+			path: filepath.Join("testdata", "browser-catalog-pre-restricted-policy-template.v1.json"),
+			want: preRestrictedPolicyBrowserTemplateSHA256,
+		},
+	} {
+		data, err := os.ReadFile(fixture.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if digest := fmt.Sprintf("%x", sha256.Sum256(data)); digest != fixture.want {
+			t.Fatalf("%s digest = %s, want %s", fixture.path, digest, fixture.want)
+		}
+	}
+}
+
 // previousBrowserCatalogFixture preserves three exact historical schema
-// generations. It is test-only so runtime code has no way to generate or
-// admit any of those contracts.
+// generations. The pre-restricted fixture was serialized by commit
+// 6d5db643dc2c704cac07f51b9151bf67ad56bf2e, before restricted policy landed,
+// so neither the fixture nor its matching template can move with the current
+// descriptor generator.
 func previousBrowserCatalogFixture(
 	t *testing.T,
 	generation previousBrowserSchemaGeneration,
 ) []CommandDescriptor {
 	t.Helper()
+	if generation == previousBrowserSchemaPreRestrictedPolicy {
+		return frozenPreRestrictedPolicyBrowserCatalogFixture(t)
+	}
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if generation == previousBrowserSchemaPreRestrictedPolicy {
-		prior := make([]CommandDescriptor, 0, len(descriptors)-1)
-		for _, descriptor := range descriptors {
-			if descriptor.Name != BrowserCommandPolicyEvaluate {
-				prior = append(prior, descriptor)
-			}
-		}
-		descriptors = prior
 	}
 	for index := range descriptors {
 		descriptor := &descriptors[index]
@@ -141,10 +191,6 @@ func previousBrowserCatalogFixture(
 			descriptor.OutputSchema = previousInlineBrowserOutputFixture(t, *descriptor)
 		case previousBrowserSchemaStreamed:
 			descriptor.OutputSchema = previousStreamedBrowserOutputFixture(t, *descriptor)
-		case previousBrowserSchemaPreRestrictedPolicy:
-			if descriptor.Name == BrowserCommandAct {
-				descriptor.InputSchema = previousRestrictedPolicyInputFixture(t, *descriptor)
-			}
 		default:
 			t.Fatalf("unknown previous browser schema generation %q", generation)
 		}
@@ -152,18 +198,20 @@ func previousBrowserCatalogFixture(
 	return descriptors
 }
 
-func previousRestrictedPolicyInputFixture(t *testing.T, descriptor CommandDescriptor) json.RawMessage {
+func frozenPreRestrictedPolicyBrowserCatalogFixture(t *testing.T) []CommandDescriptor {
 	t.Helper()
-	return rewriteBrowserSchemaFixture(t, descriptor.InputSchema, func(schema map[string]any) {
-		properties, ok := schema["properties"].(map[string]any)
-		if !ok {
-			return
-		}
-		delete(properties, "policy_effect")
-		delete(properties, "restricted_decision")
-		delete(properties, "restricted_origin")
-		delete(properties, "restricted_policy_revision")
-	})
+	data, err := os.ReadFile(filepath.Join("testdata", "browser-catalog-pre-restricted-policy.v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog CapabilityCatalog
+	if err = json.Unmarshal(data, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Commands) != len(preRestrictedPolicyBrowserCommandNames) {
+		t.Fatalf("frozen pre-restricted command count = %d", len(catalog.Commands))
+	}
+	return catalog.Commands
 }
 
 func previousInlineBrowserInputFixture(t *testing.T, descriptor CommandDescriptor) json.RawMessage {
