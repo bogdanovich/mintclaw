@@ -9,7 +9,11 @@ O1 shutdown ownership is merged through #1007 and deployed on `7e52c1dd`.
 O2 SQLite ownership is merged through #1015 and deployed on `20cf7a18`.
 O3 terminal-delivery ownership is merged through #1019 and deployed on
 `6fc47a3e`, including the coordinated browser/node contract reset exposed by
-the combined release. Only the program completion audit remains open.
+the combined release. The post-`e60b8e26` completion audit reopened four
+focused source packets: speculative coding-TUI cells, a production-unused
+static node-schema mirror, coding-media capability lookup through a generic
+store, and the temporary browser `legacy_strict` mode plus its one deployed
+implicit consumer. The program completion audit follows those packets.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -636,6 +640,7 @@ separation and standards alignment.
 | Nested persisted tool calls | Coordinated current-state conversion | The stopped-state conversion flattened 3,721 calls plus two Google-specific cases; the post-observation verifier found no surviving nested call | Closed in Z1 |
 | `scripts/sessioncutover` | Temporary external deployment tool, not a runtime adapter | Deployment, matched rollback, reapply, canaries, observation, and evidence capture passed; this closeout deletes the command and tests | Closed in Z1 |
 | Restricted-policy browser catalogue transition | Coordinated first-party peer and persisted-registry reset, not a runtime adapter | The first O3 rollout strictly rejected the previously connected `ab-local-test` catalogue; the rollout restored service, upgraded that companion, archived and removed its one stale registry record, and re-approved the same identity against the current bounded command surface | Closed in O3 |
+| Browser `legacy_strict` capability mode and omitted-mode fallback | Temporary configuration and execution adapter | The browser-policy contract says this compiled semantic policy exists only for migration and must be removed after restricted policy P1. P1 is merged, but source still accepts and defaults to `legacy_strict`; the deployed `spouse` gateway has one enabled browser profile with both mode fields omitted, while `main` and its companion explicitly use the current `full_access` contract. | Open; O7 owns an explicit deployed policy cutover followed by source deletion |
 
 No registered R1 or Z1 compatibility adapter remains open, and the final
 source Z1 audit found no new source adapter. The deployed-data gates were
@@ -656,6 +661,10 @@ refactor:
 | O1 | `mintclaw-main.service` exceeded its 30-second stop budget and was killed on all five stops observed in the cutover and observation window | Give gateway shutdown one bounded lifecycle owner; repeated loaded stops must exit cleanly without `SIGKILL`, abandoned child processes, or session corruption | Complete; #1007 deployed on `7e52c1dd`, with five loaded stops, five clean starts, no timeout or `SIGKILL`, and no surviving terminal child |
 | O2 | Seahorse reconciliation/provenance writes and live ingest can collide with `SQLITE_BUSY`; the warning recurred after final reapply | Give provenance mutation one concurrency contract; startup reconciliation and live turns must complete without a database-lock failure | Complete; #1015 deployed on `20cf7a18`, with one connection owner per agent database, fail-fast rejection of external writers, successful concurrent live turns, WAL/integrity verification, and no database-lock error |
 | O3 | A live-agent error was delivered through the gateway outbox, but the CLI kept waiting until its outer timeout | Make success and error finals share one terminal-delivery owner; the client must return promptly after either final and never wait for a second terminator | Complete; #1019 deployed on `6fc47a3e`, with correlated canonical error finals, immediate client completion regression coverage, a successful live turn and trace, and a coordinated current browser/node reset with no historical reader |
+| O4 | PR #1010 added a semantic transcript-cell interface, compact/full/plain modes, revisions, style roles, a `legacyTranscriptCell` adapter, and synthetic fixtures before the proposed ordered presentation model or active-cell store exists | Restore the one current flat in-process renderer. Delete the speculative interface, adapter, revisions, unused render modes/style model, and tests that exercise only that future seam. Keep current transcript output and layout behavior covered directly; defer cells until a real admitted presentation store needs them. | Open |
+| O5 | `pkg/nodes/protocol/schemas/*.json` and `Schema` are a hand-maintained second copy of current Go wire contracts used only by their own tests. The browser descriptor mirror already omits current `restricted` policy fields while retaining temporary `legacy_strict`. | Delete the production-unused static schema mirror and its self-tests. Keep runtime envelope/framing codecs and the canonical typed descriptor validators/schema builders; prove no production consumer or published generation path depends on the embedded files. | Open |
+| O6 | Coding attachment behavior is discovered by asserting `ReferenceCatalog`, `HistoricalResolutionPolicy`, and `CurrentImageAttachmentPolicy` on the generic `MediaStore` at tool execution and message conversion time | Pass the known coding attachment catalogue and media-resolution policy explicitly from the coding composition root. Remove the optional runtime capability lookup without widening the generic gateway media contract or weakening attachment authority and lazy-history behavior. | Open |
+| O7 | Browser P1 is complete, but the migration-only `legacy_strict` execution branch, omitted capability/approval defaults, and one deployed implicit consumer remain | Choose and write an explicit current policy for every enabled deployed browser profile, then delete `legacy_strict`, the omitted-mode fallback, and compiled migration-only execution branches. Build and deploy the mutually compatible gateway/companion release, verify browser behavior, rollback, and absence of the removed mode in source and deployed state. | Open |
 
 The full O1 build, recovery, rollout, five-cycle loaded shutdown evidence,
 smokes, trace, and cleanup record is in the

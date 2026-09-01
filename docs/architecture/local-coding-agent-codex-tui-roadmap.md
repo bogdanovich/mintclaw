@@ -385,6 +385,13 @@ the open P6.4 Git-review work.
 
 ### TUI.0 — Golden UX fixtures and renderer seam
 
+Status: deferred. PR #1010 implemented this seam before TUI.1 admitted the
+ordered presentation model or TUI.4 admitted a real active-cell store. The
+architecture-simplification O4 packet removes that speculative adapter. A
+later implementation must introduce only the renderer boundary required by
+the admitted semantic items and store, rather than preserve the temporary flat
+transcript through a `legacy` cell.
+
 Dependencies: none
 
 Effort: medium
@@ -393,8 +400,8 @@ Scope:
 
 - Convert the seven reference scenarios into repository-owned, synthetic,
   secret-free event fixtures and expected semantic assertions.
-- Introduce a cell-renderer interface with compact/full/plain modes without
-  changing the visible generic transcript yet.
+- Introduce a cell-renderer boundary with compact/full/plain behavior only
+  alongside the first real semantic cells and their owning store.
 - Add deterministic width, theme, and terminal-capability inputs.
 - Add snapshot support for selected 40-, 80-, and 120-column views.
 
