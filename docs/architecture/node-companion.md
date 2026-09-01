@@ -818,7 +818,7 @@ mutation did not execute.
 
 | Requirement | Merged PRs | Owning code | Focused evidence | Deployment status |
 | --- | --- | --- | --- | --- |
-| Domain, protocol schema, identity, and durable registry | #275, #277 | `pkg/nodes`, `pkg/nodes/protocol` | domain, schema, identity, and registry tests | Available in the merged binaries; inactive until nodes are enabled |
+| Domain, typed protocol validation, identity, and durable registry | #275, #277 | `pkg/nodes`, `pkg/nodes/protocol` | domain, codec, identity, and registry tests | Available in the merged binaries; inactive until nodes are enabled |
 | Outbound authenticated WSS and explicit pairing | #278, #282, #284 | `pkg/nodes/ws`, `pkg/gateway`, `pkg/nodes/companion` | admission, pairing, session ownership, reconnect, and reload tests | Requires an operator-configured WSS endpoint and paired companion |
 | Slim Linux/macOS companion | #280 | `cmd/mintclaw-node`, `pkg/nodes/companion` | dependency-boundary and companion startup tests | Built separately as `mintclaw-node` |
 | Operator lifecycle and durable catalog approval | #283, #288, #290 | `cmd/mintclaw`, `pkg/nodes` | approve, revoke, changed-catalog, and node-local denial tests | Explicit pairing approval required before execution |
