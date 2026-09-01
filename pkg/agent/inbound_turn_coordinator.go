@@ -349,6 +349,7 @@ func (c *inboundTurnCoordinator) handlePendingStop(
 			msg.Context.Channel,
 			msg.Context.ChatID,
 			claim.scope.sessionKey,
+			&msg.Context,
 			continueErr,
 			finalResponseAlwaysPublish,
 			target.traceScopes,

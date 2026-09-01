@@ -81,6 +81,7 @@ func (al *AgentLoop) maybePublishErrorWithScopes(
 	ctx context.Context,
 	workspace, agentID string,
 	channel, chatID, sessionKey string,
+	inboundCtx *bus.InboundContext,
 	err error,
 	policy finalResponseDeliveryPolicy,
 	traceScopes []runtimeevents.TraceScope,
@@ -88,7 +89,7 @@ func (al *AgentLoop) maybePublishErrorWithScopes(
 	if isNonPublishableTurnError(err) {
 		return rejectedFinalResponseAdmission(err)
 	}
-	return al.publishResponseWithContextAndScopes(
+	return al.publishResponseWithMetadataAndScopes(
 		ctx,
 		workspace,
 		agentID,
@@ -96,8 +97,9 @@ func (al *AgentLoop) maybePublishErrorWithScopes(
 		chatID,
 		sessionKey,
 		formatUserFacingAgentError(err),
-		nil,
+		inboundCtx,
 		policy,
+		bus.OutboundMetadata{MessageKind: bus.OutboundMessageKindFinalReply},
 		traceScopes,
 	)
 }

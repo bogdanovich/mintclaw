@@ -98,6 +98,78 @@ func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelation(t *testing.T)
 	}
 }
 
+func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelationOnError(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defaultAgent := al.registry.GetDefaultAgent()
+	if defaultAgent == nil {
+		t.Fatal("expected default agent")
+	}
+
+	initial := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:          "mintclaw",
+			ChatID:           "mintclaw:live-error-session",
+			ChatType:         "direct",
+			SenderID:         "mintclaw-user",
+			MessageID:        "live-error-request-1",
+			ReplyToMessageID: "origin-error-message-1",
+			Raw:              map[string]string{"session_id": "live-error-session"},
+		},
+		SessionKey: "session-error-1",
+	}
+	target := &continuationTarget{
+		SessionKey: "session-error-1",
+		Channel:    "mintclaw",
+		ChatID:     "mintclaw:live-error-session",
+		AgentID:    defaultAgent.ID,
+		Workspace:  defaultAgent.Workspace,
+	}
+
+	admissionCh := make(chan finalResponseAdmission, 1)
+	go func() {
+		admissionCh <- al.runTurnAndDrainSteering(
+			context.Background(),
+			initial,
+			func() (string, error) { return "", errors.New("provider unavailable") },
+			target,
+		)
+	}()
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if outbound.Context.MessageID != "live-error-request-1" {
+			t.Fatalf("message ID = %q, want live-error-request-1", outbound.Context.MessageID)
+		}
+		if outbound.Context.ReplyToMessageID != "origin-error-message-1" {
+			t.Fatalf("reply-to message ID = %q, want origin-error-message-1", outbound.Context.ReplyToMessageID)
+		}
+		if outbound.Context.SenderID != "mintclaw-user" || outbound.Context.ChatType != "direct" {
+			t.Fatalf(
+				"inbound identity = (%q, %q), want (mintclaw-user, direct)",
+				outbound.Context.SenderID,
+				outbound.Context.ChatType,
+			)
+		}
+		if outbound.Context.Raw["session_id"] != "live-error-session" ||
+			outbound.Metadata.MessageKind != bus.OutboundMessageKindFinalReply ||
+			outbound.Metadata.OutboundKind != bus.OutboundKindFinal {
+			t.Fatalf("outbound context = %#v, metadata = %#v", outbound.Context, outbound.Metadata)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected final error outbound")
+	}
+
+	select {
+	case admission := <-admissionCh:
+		if !admission.permitsInboundAck() {
+			t.Fatalf("admission = %+v, want accepted final error response", admission)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected final error response admission")
+	}
+}
+
 func TestRunTurnAndDrainSteeringPendingDeliveryPublishesNothingAndDoesNotDrain(t *testing.T) {
 	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
