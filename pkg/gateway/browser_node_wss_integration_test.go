@@ -2777,7 +2777,9 @@ func wssBrowserGatewayConfig(t *testing.T, workspace string) *config.Config {
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
 						Enabled: true, Mode: config.BrowserProfileManaged,
-						NetworkMode: config.BrowserNetworkAnyHTTP, AllowApprovedActions: true,
+						NetworkMode:    config.BrowserNetworkAnyHTTP,
+						CapabilityMode: config.BrowserCapabilityFullAccess,
+						ApprovalMode:   config.BrowserApprovalAlwaysCommit, AllowApprovedActions: true,
 					},
 				},
 			},
