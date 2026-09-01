@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 )
 
 func TestPolicyOrderedRulesAndExactMatching(t *testing.T) {
@@ -307,6 +309,46 @@ func TestCombineDecisionsIsRestrictive(t *testing.T) {
 		if err != nil || got != test.want {
 			t.Fatalf("CombineDecisions(%s, %s) = %s, %v", test.left, test.right, got, err)
 		}
+	}
+}
+
+func TestDeriveActionEffectIgnoresDeclaredAuditMetadata(t *testing.T) {
+	tests := []struct {
+		name   string
+		action browseraction.Action
+		role   string
+		want   string
+	}{
+		{
+			name: "button click", action: browseraction.Action{Kind: browseraction.ActionClick},
+			role: "button", want: "external_commit",
+		},
+		{
+			name: "link click", action: browseraction.Action{Kind: browseraction.ActionClick},
+			role: "link", want: "unknown",
+		},
+		{
+			name: "fill", action: browseraction.Action{Kind: browseraction.ActionFill},
+			role: "textbox", want: "local_edit",
+		},
+		{
+			name:   "dismiss dialog",
+			action: browseraction.Action{Kind: browseraction.ActionDialog, Decision: "dismiss"},
+			want:   "read",
+		},
+		{
+			name:   "accept dialog",
+			action: browseraction.Action{Kind: browseraction.ActionDialog, Decision: "accept"},
+			want:   "external_commit",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := DeriveActionEffect(test.action, test.role)
+			if err != nil || got != test.want {
+				t.Fatalf("DeriveActionEffect() = %q, %v; want %q", got, err, test.want)
+			}
+		})
 	}
 }
 

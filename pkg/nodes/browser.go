@@ -420,6 +420,7 @@ type BrowserActInput struct {
 	WorkspaceID              string               `json:"workspace_id,omitempty"`
 	RouteID                  string               `json:"route_id,omitempty"`
 	BrowserTarget            string               `json:"browser_target,omitempty"`
+	PolicyEffect             string               `json:"policy_effect,omitempty"`
 	RestrictedDecision       string               `json:"restricted_decision,omitempty"`
 	RestrictedPolicyRevision string               `json:"restricted_policy_revision,omitempty"`
 	RestrictedOrigin         string               `json:"restricted_origin,omitempty"`
@@ -517,6 +518,7 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		WorkspaceID              string               `json:"workspace_id,omitempty"`
 		RouteID                  string               `json:"route_id,omitempty"`
 		BrowserTarget            string               `json:"browser_target,omitempty"`
+		PolicyEffect             string               `json:"policy_effect,omitempty"`
 		RestrictedDecision       string               `json:"restricted_decision,omitempty"`
 		RestrictedPolicyRevision string               `json:"restricted_policy_revision,omitempty"`
 		RestrictedOrigin         string               `json:"restricted_origin,omitempty"`
@@ -560,6 +562,7 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		ArtifactFilename: value.ArtifactFilename, ArtifactContentType: value.ArtifactContentType,
 		ApprovalDigest: value.ApprovalDigest,
 		WorkspaceID:    value.WorkspaceID, RouteID: value.RouteID, BrowserTarget: value.BrowserTarget,
+		PolicyEffect:             value.PolicyEffect,
 		RestrictedDecision:       value.RestrictedDecision,
 		RestrictedPolicyRevision: value.RestrictedPolicyRevision,
 		RestrictedOrigin:         value.RestrictedOrigin,
@@ -1414,6 +1417,7 @@ type BrowserHostActRequest struct {
 	WorkspaceID              string
 	RouteID                  string
 	BrowserTarget            string
+	PolicyEffect             string
 	RestrictedDecision       string
 	RestrictedPolicyRevision string
 	RestrictedOrigin         string
@@ -1560,13 +1564,15 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 		browserpolicy.CapabilityRestricted
 	if restricted {
 		normalizedPolicyOrigin, policyOriginErr := browserpolicy.NormalizeHTTPOrigin(input.RestrictedOrigin)
+		derivedPolicyEffect, policyEffectErr := browserpolicy.DeriveActionEffect(input.Action, input.ExpectedRole)
 		if input.RestrictedPolicyRevision != profile.PolicyRevision ||
+			policyEffectErr != nil || input.PolicyEffect != derivedPolicyEffect ||
 			!browserpolicy.DecisionValid(input.RestrictedDecision) ||
 			input.RestrictedDecision == browserpolicy.DecisionDeny || policyOriginErr != nil ||
 			normalizedPolicyOrigin != input.RestrictedOrigin {
 			return invalidBrowserActInput()
 		}
-	} else if input.RestrictedDecision != "" || input.RestrictedPolicyRevision != "" ||
+	} else if input.PolicyEffect != "" || input.RestrictedDecision != "" || input.RestrictedPolicyRevision != "" ||
 		input.RestrictedOrigin != "" {
 		return invalidBrowserActInput()
 	}
@@ -1656,12 +1662,23 @@ func ValidateBrowserPolicyEvaluateInput(
 	if !ok || browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode) !=
 		browserpolicy.CapabilityRestricted || profile.PolicyRevision != input.PolicyRevision ||
 		!browseraction.ActionKind(input.Action).Valid() || !slices.Contains(profile.Actions, input.Action) ||
-		!BrowserClickEffectValid(input.Effect) ||
+		!browserPolicyEvaluationEffectValid(input) ||
 		originErr != nil || normalizedOrigin != input.Origin || len(input.Role) > 256 ||
 		len(input.Name) > 512 || strings.ContainsRune(input.Role, 0) || strings.ContainsRune(input.Name, 0) {
 		return fmt.Errorf("%w: malformed browser policy input", ErrInvalidInvocation)
 	}
 	return nil
+}
+
+func browserPolicyEvaluationEffectValid(input BrowserPolicyEvaluateInput) bool {
+	action := browseraction.Action{Kind: browseraction.ActionKind(input.Action)}
+	if action.Kind == browseraction.ActionDialog {
+		// The policy-evaluation command intentionally omits the private dialog
+		// decision. Final host dispatch derives it again from the bound action.
+		return input.Effect == "read" || input.Effect == "external_commit"
+	}
+	derived, err := browserpolicy.DeriveActionEffect(action, input.Role)
+	return err == nil && input.Effect == derived
 }
 
 func ValidateBrowserPolicyEvaluateResult(result BrowserPolicyEvaluateResult) error {
@@ -1890,6 +1907,9 @@ func browserCommandInputSchema(
 			"enum": []string{browserpolicy.DecisionAllow, browserpolicy.DecisionAsk},
 		}
 		properties["restricted_policy_revision"] = digest
+		properties["policy_effect"] = map[string]any{
+			"enum": []string{"external_commit", "local_edit", "navigation", "read", "unknown"},
+		}
 		properties["restricted_origin"] = map[string]any{
 			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
 		}

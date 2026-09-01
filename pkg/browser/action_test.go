@@ -918,10 +918,11 @@ func TestBrokerCannotBroadenCompanionRestrictedPolicy(t *testing.T) {
 		Owner: owner, RequestID: "request_companion_deny", SessionID: session.ID, TabID: session.TabID,
 		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
 		Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
-		DeclaredEffect: EffectExternalCommit,
+		DeclaredEffect: EffectRead,
 	})
 	if !errors.Is(err, ErrDenied) || len(worker.policyMetadata) != 1 ||
-		worker.policyMetadata[0].Name != "Save" || worker.executePreparedCall != 0 {
+		worker.policyMetadata[0].Name != "Save" ||
+		worker.policyMetadata[0].Effect != string(EffectExternalCommit) || worker.executePreparedCall != 0 {
 		t.Fatalf(
 			"PrepareAction() error=%v metadata=%+v execute=%d",
 			err,

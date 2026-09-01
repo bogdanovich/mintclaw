@@ -83,6 +83,12 @@ The browser action contract gains a separate optional confirmation value:
 model-authored request to pause. Operator policy may require a pause but the
 model cannot relax one required by configuration or a hook.
 
+Restricted policy does not consume that model-declared audit effect. It derives
+a separate conservative policy effect from the typed action and freshly
+resolved accessibility identity. The companion derives the same value again
+at final dispatch, so declaring a button click as `read` cannot bypass an
+`external_commit` rule.
+
 ## P0: full access and explicit confirmation
 
 P0 implements the profile enums, prepared-action binding, gateway and

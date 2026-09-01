@@ -928,6 +928,11 @@ func (broker *Broker) evaluateRestrictedPolicyLocked(
 		profile.EffectiveApprovalMode() != browserpolicy.ApprovalPolicy {
 		return ErrDenied
 	}
+	policyEffect, err := browserpolicy.DeriveActionEffect(prepared.Action, prepared.ElementRole)
+	if err != nil {
+		return ErrDenied
+	}
+	prepared.PolicyEffect = Effect(policyEffect)
 	revision, err := browserpolicy.PolicyRevision(*profile.Policy)
 	if err != nil {
 		return ErrDenied
@@ -975,6 +980,10 @@ func (broker *Broker) revalidateRestrictedPolicyLocked(
 	if !ok || profile.Policy == nil {
 		return ErrDenied
 	}
+	policyEffect, err := browserpolicy.DeriveActionEffect(prepared.Action, prepared.ElementRole)
+	if err != nil || prepared.PolicyEffect != Effect(policyEffect) {
+		return ErrDenied
+	}
 	revision, err := browserpolicy.PolicyRevision(*profile.Policy)
 	if err != nil || revision != prepared.RestrictedPolicyRevision {
 		return ErrDenied
@@ -1007,7 +1016,7 @@ func preparedPolicyMetadata(
 		origin = prepared.DestinationOrigin
 	}
 	return browserpolicy.ActionMetadata{
-		Action: string(prepared.Action.Kind), Effect: string(prepared.Effect), Origin: origin,
+		Action: string(prepared.Action.Kind), Effect: string(prepared.PolicyEffect), Origin: origin,
 		Role: prepared.ElementRole, Name: prepared.ElementName,
 		ProfileRevision: profileRevision, PolicyRevision: policyRevision,
 	}

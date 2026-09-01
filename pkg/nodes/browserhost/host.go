@@ -1257,10 +1257,12 @@ func (host *BrowserHost) executeAction(
 	restricted := session.profile.CapabilityMode == browserpolicy.CapabilityRestricted
 	if restricted {
 		if session.profile.Policy == nil || request.RestrictedDecision == "" ||
-			request.RestrictedPolicyRevision == "" || request.RestrictedOrigin == "" {
+			request.RestrictedPolicyRevision == "" || request.RestrictedOrigin == "" ||
+			request.PolicyEffect == "" {
 			return BrowserHostObservation{}, ErrBrowserHostDenied
 		}
-	} else if request.RestrictedDecision != "" || request.RestrictedPolicyRevision != "" ||
+	} else if request.PolicyEffect != "" || request.RestrictedDecision != "" ||
+		request.RestrictedPolicyRevision != "" ||
 		request.RestrictedOrigin != "" {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
@@ -1385,17 +1387,19 @@ func (host *BrowserHost) executeAction(
 		}
 	}
 	if restricted {
+		policyEffect, policyEffectErr := browserpolicy.DeriveActionEffect(request.Action, boundElement.Role)
 		policyOrigin := current.Origin
 		if action == "navigate" {
 			policyOrigin, err = browserHostNavigationOrigin(request.Action.URL)
 		}
-		if err != nil || policyOrigin != request.RestrictedOrigin {
+		if err != nil || policyEffectErr != nil || policyEffect != request.PolicyEffect ||
+			policyOrigin != request.RestrictedOrigin {
 			cancelAction()
 			return BrowserHostObservation{}, ErrBrowserHostDenied
 		}
 		policyRevision, revisionErr := browserpolicy.PolicyRevision(*session.profile.Policy)
 		result, evaluateErr := browserpolicy.Evaluate(actionCtx, *session.profile.Policy, browserpolicy.ActionMetadata{
-			Action: action, Effect: request.Effect, Origin: policyOrigin,
+			Action: action, Effect: policyEffect, Origin: policyOrigin,
 			Role: boundElement.Role, Name: boundElement.Name,
 			ProfileRevision: session.profile.Revision, PolicyRevision: policyRevision,
 		})
@@ -1600,6 +1604,7 @@ func browserHostActInput(request BrowserHostActRequest) nodes.BrowserActInput {
 		ArtifactFilename: request.ArtifactFilename, ArtifactContentType: request.ArtifactContentType,
 		WorkspaceID: request.WorkspaceID, RouteID: request.RouteID, BrowserTarget: request.BrowserTarget,
 		ApprovalDigest:           request.ApprovalDigest,
+		PolicyEffect:             request.PolicyEffect,
 		RestrictedDecision:       request.RestrictedDecision,
 		RestrictedPolicyRevision: request.RestrictedPolicyRevision,
 		RestrictedOrigin:         request.RestrictedOrigin,

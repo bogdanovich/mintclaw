@@ -1998,12 +1998,14 @@ func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
 func TestCompanionRestrictedPolicyBindingUsesDestinationAndDecision(t *testing.T) {
 	prepared := browser.PreparedAction{
 		CurrentOrigin: "https://example.com", DestinationOrigin: "https://tickets.example",
+		PolicyEffect:             browser.EffectExternalCommit,
 		WorkerRestrictedDecision: browserpolicy.DecisionAsk,
 		WorkerRestrictedRevision: strings.Repeat("d", 64),
 	}
 	input := nodes.BrowserActInput{Effect: "external_commit"}
 	bindCompanionRestrictedPolicy(&input, prepared)
 	if input.RestrictedDecision != browserpolicy.DecisionAsk ||
+		input.PolicyEffect != "external_commit" ||
 		input.RestrictedPolicyRevision != strings.Repeat("d", 64) ||
 		input.RestrictedOrigin != "https://tickets.example" ||
 		!companionBrowserActionRequiresApproval(input, browserpolicy.ApprovalPolicy) {

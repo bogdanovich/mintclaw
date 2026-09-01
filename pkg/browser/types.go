@@ -504,6 +504,7 @@ type PreparedAction struct {
 	CapabilityMode             string `json:"capability_mode,omitempty"`
 	ApprovalMode               string `json:"approval_mode,omitempty"`
 	Confirmation               string `json:"confirmation,omitempty"`
+	PolicyEffect               Effect `json:"policy_effect,omitempty"`
 	RestrictedDecision         string `json:"restricted_decision,omitempty"`
 	RestrictedPolicyRevision   string `json:"restricted_policy_revision,omitempty"`
 	LocalRestrictedDecision    string `json:"local_restricted_decision,omitempty"`
@@ -542,7 +543,9 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 	restricted := browserpolicy.EffectiveCapabilityMode(prepared.CapabilityMode) ==
 		browserpolicy.CapabilityRestricted
 	if restricted {
+		derivedEffect, derivedErr := browserpolicy.DeriveActionEffect(prepared.Action, prepared.ElementRole)
 		if browserpolicy.EffectiveApprovalMode(prepared.ApprovalMode) != browserpolicy.ApprovalPolicy ||
+			derivedErr != nil || string(prepared.PolicyEffect) != derivedEffect ||
 			prepared.RestrictedDecision == browserpolicy.DecisionDeny ||
 			!browserpolicy.DecisionValid(prepared.RestrictedDecision) ||
 			!browserpolicy.DecisionValid(prepared.LocalRestrictedDecision) ||
@@ -567,7 +570,8 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		if effective != prepared.RestrictedDecision {
 			return fmt.Errorf("%w: inconsistent prepared restricted policy decision", ErrInvalid)
 		}
-	} else if prepared.RestrictedDecision != "" || prepared.RestrictedPolicyRevision != "" ||
+	} else if prepared.PolicyEffect != "" || prepared.RestrictedDecision != "" ||
+		prepared.RestrictedPolicyRevision != "" ||
 		prepared.LocalRestrictedDecision != "" || prepared.WorkerRestrictedDecision != "" ||
 		prepared.WorkerRestrictedRevision != "" {
 		return fmt.Errorf("%w: unexpected prepared restricted policy binding", ErrInvalid)

@@ -344,6 +344,7 @@ func (handler *browserCommandHandler) executeAct(
 		ArtifactFilename: input.ArtifactFilename, ArtifactContentType: input.ArtifactContentType,
 		ApprovalDigest: input.ApprovalDigest,
 		WorkspaceID:    input.WorkspaceID, RouteID: input.RouteID, BrowserTarget: input.BrowserTarget,
+		PolicyEffect:             input.PolicyEffect,
 		RestrictedDecision:       input.RestrictedDecision,
 		RestrictedPolicyRevision: input.RestrictedPolicyRevision,
 		RestrictedOrigin:         input.RestrictedOrigin,

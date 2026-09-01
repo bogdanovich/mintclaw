@@ -804,6 +804,11 @@ func TestBrowserRestrictedPolicyCommandsBindDecisionRevisionAndApproval(t *testi
 	if err = validateDescriptorInvocationInput(descriptors[8], policyInput); err != nil {
 		t.Fatalf("restricted policy evaluation input rejected: %v", err)
 	}
+	policyInput["effect"] = "read"
+	if err = validateDescriptorInvocationInput(descriptors[8], policyInput); err == nil {
+		t.Fatal("restricted policy evaluation accepted a model-downgraded button effect")
+	}
+	policyInput["effect"] = "external_commit"
 	policyInput["policy_revision"] = strings.Repeat("e", 64)
 	if err = validateDescriptorInvocationInput(descriptors[8], policyInput); err == nil {
 		t.Fatal("restricted policy evaluation accepted a changed revision")
@@ -812,16 +817,22 @@ func TestBrowserRestrictedPolicyCommandsBindDecisionRevisionAndApproval(t *testi
 	act := descriptors[3]
 	input := browserActInputFixture()
 	input["action"] = map[string]any{"kind": "click", "ref": "host_ref_1"}
-	input["effect"] = "external_commit"
+	input["effect"] = "read"
 	input["current_origin"] = "https://example.com"
 	input["expected_role"] = "button"
 	input["expected_name"] = "Save"
 	input["restricted_decision"] = browserpolicy.DecisionAllow
 	input["restricted_policy_revision"] = strings.Repeat("d", 64)
 	input["restricted_origin"] = "https://example.com"
+	input["policy_effect"] = "external_commit"
 	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("restricted allow action rejected: %v", err)
 	}
+	input["policy_effect"] = "read"
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
+		t.Fatal("restricted button click accepted a model-downgraded policy effect")
+	}
+	input["policy_effect"] = "external_commit"
 	input["confirmation"] = browserpolicy.ConfirmationRequest
 	if err = validateDescriptorInvocationInput(act, input); err == nil {
 		t.Fatal("restricted allow ignored explicit confirmation without approval digest")

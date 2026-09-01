@@ -2537,12 +2537,30 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 	profile.Policy = &policy
 	profile.DryRun = false
 	profile.AllowApprovedActions = true
+	profile.AllowedActions = []string{"click", "download", "navigate", "scroll"}
 	worker := &fakeBrowserHostWorker{
 		status: browserworker.WorkerReady,
 		observations: []browserworker.DriverObservation{
-			{URL: "about:blank", Origin: "about:blank"},
-			{URL: "about:blank", Origin: "about:blank"},
-			{URL: "about:blank", Origin: "about:blank"},
+			{
+				URL: "https://example.com/form", Origin: "https://example.com",
+				Snapshot: `- button "Save" [ref=save]`,
+				Elements: []browserworker.DriverElement{{Target: "save", Role: "button", Name: "Save"}},
+			},
+			{
+				URL: "https://example.com/form", Origin: "https://example.com",
+				Snapshot: `- button "Save" [ref=save]`,
+				Elements: []browserworker.DriverElement{{Target: "save", Role: "button", Name: "Save"}},
+			},
+			{
+				URL: "https://example.com/form", Origin: "https://example.com",
+				Snapshot: `- button "Save" [ref=save]`,
+				Elements: []browserworker.DriverElement{{Target: "save", Role: "button", Name: "Save"}},
+			},
+			{
+				URL: "https://example.com/form", Origin: "https://example.com",
+				Snapshot: `- button "Save" [ref=save]`,
+				Elements: []browserworker.DriverElement{{Target: "save", Role: "button", Name: "Save"}},
+			},
 		},
 	}
 	host, err := newBrowserHost(
@@ -2559,13 +2577,15 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 	if _, err = host.Open(t.Context(), open); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+	observed, err := host.Observe(t.Context(), browserHostObserveFixture())
+	if err != nil || len(observed.Elements) != 1 {
 		t.Fatal(err)
 	}
 	result, err := host.EvaluatePolicy(t.Context(), BrowserHostPolicyRequest{
 		BrowserPolicyEvaluateInput: nodes.BrowserPolicyEvaluateInput{
 			ProfileRevision: "managed-v1", PolicyRevision: policyRevision,
-			Action: "navigate", Effect: "navigation", Origin: "https://example.com",
+			Action: "click", Effect: "external_commit", Origin: "https://example.com",
+			Role: "button", Name: "Save",
 		},
 		AgentID: "browser", ActorID: "telegram:owner",
 	})
@@ -2573,8 +2593,17 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 		result.PolicyRevision != policyRevision {
 		t.Fatalf("EvaluatePolicy() = %#v, %v", result, err)
 	}
-	request := browserHostNavigateFixture()
-	request.SnapshotGeneration = 1
+	request := BrowserHostActRequest{
+		SessionID: "browser_session_1", RoutedSessionID: "routed_session_1",
+		TabID: observed.TabID, SnapshotGeneration: observed.SnapshotGeneration,
+		ActionInvocationID: "browser_restricted_click",
+		Action:             browserworker.Action{Kind: "click", Ref: observed.Elements[0].Ref},
+		Effect:             "read", CurrentOrigin: observed.Origin,
+		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
+		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
+		AgentID: "browser", ActorID: "telegram:owner",
+	}
+	request.PolicyEffect = "external_commit"
 	request.RestrictedDecision = browserpolicy.DecisionAllow
 	request.RestrictedPolicyRevision = policyRevision
 	request.RestrictedOrigin = "https://example.com"
@@ -2586,9 +2615,17 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 	if len(worker.actions) != 0 {
 		t.Fatalf("unapproved explicit confirmation dispatched actions: %#v", worker.actions)
 	}
-	mismatched := request
-	mismatched.Action.URL = "https://blocked.example/"
-	if _, err = host.Act(t.Context(), mismatched); !errors.Is(err, ErrBrowserHostDenied) {
+	mismatchedEffect := request
+	mismatchedEffect.PolicyEffect = "read"
+	if _, err = host.Act(t.Context(), mismatchedEffect); !errors.Is(err, ErrBrowserHostDenied) {
+		t.Fatalf("Act() downgraded policy effect error = %v, want denied", err)
+	}
+	if len(worker.actions) != 0 {
+		t.Fatalf("downgraded policy effect dispatched actions: %#v", worker.actions)
+	}
+	mismatchedOrigin := request
+	mismatchedOrigin.RestrictedOrigin = "https://blocked.example"
+	if _, err = host.Act(t.Context(), mismatchedOrigin); !errors.Is(err, ErrBrowserHostDenied) {
 		t.Fatalf("Act() mismatched policy origin error = %v, want denied", err)
 	}
 	if len(worker.actions) != 0 {

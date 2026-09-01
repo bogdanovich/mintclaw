@@ -1011,6 +1011,7 @@ func bindCompanionRestrictedPolicy(input *nodes.BrowserActInput, prepared browse
 	}
 	input.RestrictedDecision = prepared.WorkerRestrictedDecision
 	input.RestrictedPolicyRevision = prepared.WorkerRestrictedRevision
+	input.PolicyEffect = string(prepared.PolicyEffect)
 	input.RestrictedOrigin = prepared.CurrentOrigin
 	if prepared.DestinationOrigin != "" {
 		input.RestrictedOrigin = prepared.DestinationOrigin

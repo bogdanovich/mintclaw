@@ -214,6 +214,36 @@ func CombineDecisions(left, right string) (string, error) {
 	return DecisionAllow, nil
 }
 
+// DeriveActionEffect returns the policy-only effect derived from typed action
+// semantics and freshly resolved accessibility identity. It never accepts the
+// model-declared audit effect as authorization input.
+func DeriveActionEffect(action browseraction.Action, role string) (string, error) {
+	switch action.Kind {
+	case browseraction.ActionNavigate:
+		return "navigation", nil
+	case browseraction.ActionClick, browseraction.ActionDownload:
+		if normalizePolicyText(role) == "button" {
+			return "external_commit", nil
+		}
+		return "unknown", nil
+	case browseraction.ActionFill, browseraction.ActionSelect, browseraction.ActionCheck,
+		browseraction.ActionUncheck, browseraction.ActionFileChooser:
+		return "local_edit", nil
+	case browseraction.ActionHover, browseraction.ActionScroll:
+		return "read", nil
+	case browseraction.ActionPress, browseraction.ActionDrag, browseraction.ActionUpload:
+		return "unknown", nil
+	case browseraction.ActionDialog:
+		if action.Decision == "dismiss" {
+			return "read", nil
+		}
+		if action.Decision == "accept" {
+			return "external_commit", nil
+		}
+	}
+	return "", ErrInvalidPolicy
+}
+
 func evaluateDeclarative(policy Policy, metadata ActionMetadata) Result {
 	for _, rule := range policy.Rules {
 		if ruleMatches(rule.Match, metadata) {
