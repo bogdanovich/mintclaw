@@ -7,8 +7,9 @@ stopped-state session cutover, matched rollback, reapply, and observation are
 complete. This closeout deletes the temporary copy-only converter from #978.
 O1 shutdown ownership is merged through #1007 and deployed on `7e52c1dd`.
 O2 SQLite ownership is merged through #1015 and deployed on `20cf7a18`.
-The O3 runtime ownership finding remains registered as the final focused
-packet before the program completion audit.
+O3 terminal-delivery ownership is merged through #1019 and deployed on
+`6fc47a3e`, including the coordinated browser/node contract reset exposed by
+the combined release. Only the program completion audit remains open.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -634,6 +635,7 @@ separation and standards alignment.
 | Removed session metadata `aliases` | Coordinated current-state conversion | The stopped-state conversion removed 329 members; the post-observation verifier found no surviving member to transform | Closed in Z1 |
 | Nested persisted tool calls | Coordinated current-state conversion | The stopped-state conversion flattened 3,721 calls plus two Google-specific cases; the post-observation verifier found no surviving nested call | Closed in Z1 |
 | `scripts/sessioncutover` | Temporary external deployment tool, not a runtime adapter | Deployment, matched rollback, reapply, canaries, observation, and evidence capture passed; this closeout deletes the command and tests | Closed in Z1 |
+| Restricted-policy browser catalogue transition | Coordinated first-party peer and persisted-registry reset, not a runtime adapter | The first O3 rollout strictly rejected the previously connected `ab-local-test` catalogue; the rollout restored service, upgraded that companion, archived and removed its one stale registry record, and re-approved the same identity against the current bounded command surface | Closed in O3 |
 
 No registered R1 or Z1 compatibility adapter remains open, and the final
 source Z1 audit found no new source adapter. The deployed-data gates were
@@ -653,7 +655,7 @@ refactor:
 | --- | --- | --- | --- |
 | O1 | `mintclaw-main.service` exceeded its 30-second stop budget and was killed on all five stops observed in the cutover and observation window | Give gateway shutdown one bounded lifecycle owner; repeated loaded stops must exit cleanly without `SIGKILL`, abandoned child processes, or session corruption | Complete; #1007 deployed on `7e52c1dd`, with five loaded stops, five clean starts, no timeout or `SIGKILL`, and no surviving terminal child |
 | O2 | Seahorse reconciliation/provenance writes and live ingest can collide with `SQLITE_BUSY`; the warning recurred after final reapply | Give provenance mutation one concurrency contract; startup reconciliation and live turns must complete without a database-lock failure | Complete; #1015 deployed on `20cf7a18`, with one connection owner per agent database, fail-fast rejection of external writers, successful concurrent live turns, WAL/integrity verification, and no database-lock error |
-| O3 | A live-agent error was delivered through the gateway outbox, but the CLI kept waiting until its outer timeout | Make success and error finals share one terminal-delivery owner; the client must return promptly after either final and never wait for a second terminator | Open |
+| O3 | A live-agent error was delivered through the gateway outbox, but the CLI kept waiting until its outer timeout | Make success and error finals share one terminal-delivery owner; the client must return promptly after either final and never wait for a second terminator | Complete; #1019 deployed on `6fc47a3e`, with correlated canonical error finals, immediate client completion regression coverage, a successful live turn and trace, and a coordinated current browser/node reset with no historical reader |
 
 The full O1 build, recovery, rollout, five-cycle loaded shutdown evidence,
 smokes, trace, and cleanup record is in the
@@ -661,6 +663,10 @@ smokes, trace, and cleanup record is in the
 The O2 build, compact recovery set, five-profile rollout, concurrent live-turn,
 persisted-session, trace-correlation, and journal evidence is in the
 [O2 Seahorse deployment evidence](../operations/architecture-simplification-o2-seahorse.md).
+The O3 build, exact-head review, rollback, coordinated browser/node reset,
+five-profile rollout, live-turn, trace, persistence, and observation evidence
+is in the
+[O3 live error-final deployment evidence](../operations/architecture-simplification-o3-live-error-final.md).
 
 Diagnostic evidence also showed that `root_turn_id` alone is not globally
 unique across restarts. Trace selection for these packets must therefore bind
@@ -2015,8 +2021,8 @@ digests, canaries, rollback evidence, and retained artifacts are recorded in
 the [Z1 session cutover evidence](../operations/architecture-simplification-z1-session-cutover.md).
 
 The compatibility-reset objective is therefore complete without adding a
-steady-state old-state reader. The roadmap remains active only for O3 and the
-final requirement-by-requirement audit after that focused packet.
+steady-state old-state reader. O3 is also complete. The roadmap remains active
+only for the final requirement-by-requirement audit.
 
 ## Validation For Every Code Packet
 
