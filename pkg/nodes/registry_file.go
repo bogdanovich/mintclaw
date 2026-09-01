@@ -573,8 +573,18 @@ func (registry *FileRegistry) load() error {
 			return fmt.Errorf("node registry key %q does not match record id %q", id, record.Snapshot.ID)
 		}
 		if err := record.Snapshot.Validate(); err != nil {
+			if !errors.Is(err, errBrowserContract) {
+				return fmt.Errorf("validate node registry record %q: %w", id, err)
+			}
 			quarantined, quarantineErr := quarantineStoredBrowserCatalog(&record)
-			if quarantineErr != nil || !quarantined {
+			if quarantineErr != nil {
+				return fmt.Errorf(
+					"validate node registry record %q after browser contract mismatch: %w",
+					id,
+					quarantineErr,
+				)
+			}
+			if !quarantined {
 				return fmt.Errorf("validate node registry record %q: %w", id, err)
 			}
 			document.Records[id] = record
@@ -607,6 +617,17 @@ func (registry *FileRegistry) load() error {
 // changing the catalog hash preserves the node identity while forcing a
 // current companion reconnect and explicit command-surface renewal.
 func quarantineStoredBrowserCatalog(record *registryRecord) (bool, error) {
+	if !validSHA256Digest(record.Snapshot.CatalogHash) {
+		return false, fmt.Errorf("%w: malformed catalog hash", ErrInvalidNode)
+	}
+	storedCatalogHash, err := record.Snapshot.Catalog.canonicalHash()
+	if err != nil {
+		return false, err
+	}
+	if storedCatalogHash != record.Snapshot.CatalogHash {
+		return false, fmt.Errorf("%w: catalog hash does not match catalog", ErrInvalidNode)
+	}
+
 	commands := make([]CommandDescriptor, 0, len(record.Snapshot.Catalog.Commands))
 	removed := false
 	for _, descriptor := range record.Snapshot.Catalog.Commands {
@@ -627,6 +648,9 @@ func quarantineStoredBrowserCatalog(record *registryRecord) (bool, error) {
 		return false, err
 	}
 	snapshot.CatalogHash = catalogHash
+	if err := snapshot.Validate(); err != nil {
+		return false, err
+	}
 	if snapshot.State != StatePendingPairing && snapshot.State != StateRevoked {
 		snapshot.State = StateIncompatible
 		snapshot.DisconnectReason = staleBrowserCatalogReason

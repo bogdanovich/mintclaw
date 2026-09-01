@@ -35,6 +35,7 @@ const (
 var (
 	ErrInvalidNode       = errors.New("invalid node")
 	ErrInvalidCapability = errors.New("invalid node capability")
+	errBrowserContract   = fmt.Errorf("%w: browser command contract mismatch", ErrInvalidCapability)
 
 	idPattern         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 	aliasPattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
@@ -420,7 +421,7 @@ func (descriptor CommandDescriptor) Validate() error {
 func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	if len(descriptor.BrowserProfiles) == 0 {
 		if IsBrowserCommand(descriptor.Name) {
-			return fmt.Errorf("%w: browser command lacks browser profiles", ErrInvalidCapability)
+			return fmt.Errorf("%w: browser command lacks browser profiles", errBrowserContract)
 		}
 		return nil
 	}
@@ -428,10 +429,10 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		return fmt.Errorf("%w: non-browser command carries browser profiles", ErrInvalidCapability)
 	}
 	if err := validateBrowserProfiles(descriptor.BrowserProfiles); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", errBrowserContract, err)
 	}
 	if descriptor.ModelContract != nil {
-		return fmt.Errorf("%w: internal browser command must not have a model contract", ErrInvalidCapability)
+		return fmt.Errorf("%w: internal browser command must not have a model contract", errBrowserContract)
 	}
 	wantRisk := RiskRead
 	if descriptor.Name == BrowserCommandSessionOpen ||
@@ -440,7 +441,7 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 		wantRisk = RiskWrite
 	}
 	if descriptor.Risk != wantRisk {
-		return fmt.Errorf("%w: browser command has incorrect risk", ErrInvalidCapability)
+		return fmt.Errorf("%w: browser command has incorrect risk", errBrowserContract)
 	}
 	expectedInput, err := canonicalJSON(BrowserCommandInputSchema(
 		descriptor.Name,
@@ -451,7 +452,7 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	}
 	actualInput, err := canonicalJSON(descriptor.InputSchema)
 	if err != nil || !bytes.Equal(actualInput, expectedInput) {
-		return fmt.Errorf("%w: browser input schema does not match typed contract", ErrInvalidCapability)
+		return fmt.Errorf("%w: browser input schema does not match typed contract", errBrowserContract)
 	}
 	expectedOutput, err := canonicalJSON(BrowserCommandOutputSchema(
 		descriptor.Name,
@@ -462,7 +463,7 @@ func (descriptor CommandDescriptor) validateBrowserProfiles() error {
 	}
 	actualOutput, err := canonicalJSON(descriptor.OutputSchema)
 	if err != nil || !bytes.Equal(actualOutput, expectedOutput) {
-		return fmt.Errorf("%w: browser output schema does not match typed contract", ErrInvalidCapability)
+		return fmt.Errorf("%w: browser output schema does not match typed contract", errBrowserContract)
 	}
 	return nil
 }
@@ -655,7 +656,7 @@ func (catalog CapabilityCatalog) Validate() error {
 			} else if !reflect.DeepEqual(browserProfiles, descriptor.BrowserProfiles) {
 				return fmt.Errorf(
 					"%w: browser commands disagree on the current profile set",
-					ErrInvalidCapability,
+					errBrowserContract,
 				)
 			}
 		}
@@ -666,11 +667,11 @@ func (catalog CapabilityCatalog) Validate() error {
 	}
 	if browserCommandCount != 0 {
 		if browserCommandCount != len(currentBrowserCommandSpecs) {
-			return fmt.Errorf("%w: browser catalog lacks a complete supported command set", ErrInvalidCapability)
+			return fmt.Errorf("%w: browser catalog lacks a complete supported command set", errBrowserContract)
 		}
 		for _, command := range currentBrowserCommandSpecs {
 			if _, present := seen[command.name]; !present {
-				return fmt.Errorf("%w: browser catalog lacks a complete supported command set", ErrInvalidCapability)
+				return fmt.Errorf("%w: browser catalog lacks a complete supported command set", errBrowserContract)
 			}
 		}
 	}

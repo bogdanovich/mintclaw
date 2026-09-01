@@ -264,6 +264,59 @@ func TestFileRegistryQuarantinesApprovedNodeWithStoredBrowserSchemaDrift(t *test
 	}
 }
 
+func TestFileRegistryRejectsUnrelatedSnapshotCorruptionWithBrowserCatalog(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*Snapshot)
+	}{
+		{
+			name: "invalid state",
+			mutate: func(snapshot *Snapshot) {
+				snapshot.State = State("future")
+			},
+		},
+		{
+			name: "catalog hash mismatch",
+			mutate: func(snapshot *Snapshot) {
+				snapshot.CatalogHash = strings.Repeat("f", 64)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "registry.json")
+			pairing := testPendingPairing(t, 1)
+			descriptors, err := BrowserCommandDescriptors(
+				[]BrowserProfileDescriptor{browserProfileDescriptorFixture()},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pairing.Node.Catalog = CapabilityCatalog{Commands: descriptors}
+			pairing.Node.CatalogHash, err = pairing.Node.Catalog.Hash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&pairing.Node)
+			document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+				string(pairing.Node.ID): {
+					Snapshot: pairing.Node, PublicKey: pairing.PublicKey, KeyAlgorithm: pairing.KeyAlgorithm,
+					RequestedRole: pairing.RequestedRole, RequestedAt: pairing.RequestedAt,
+				},
+			}}
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidNode) {
+				t.Fatalf("NewFileRegistry() error = %v, want ErrInvalidNode", err)
+			}
+		})
+	}
+}
+
 func TestFileRegistryBoundsPendingPairings(t *testing.T) {
 	registry, err := NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 1)
 	if err != nil {
