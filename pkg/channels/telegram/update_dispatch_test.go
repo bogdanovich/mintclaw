@@ -2,11 +2,13 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/mymmrac/telego"
+	ta "github.com/mymmrac/telego/telegoapi"
 )
 
 func TestRunTelegramUpdatesOrderedSerializesConversationAndParallelizesChats(t *testing.T) {
@@ -80,6 +82,52 @@ func TestTelegramUpdateConversationKeySeparatesTopics(t *testing.T) {
 	second := telegramUpdateConversationKey(telegramMessageUpdate(2, 100, 20))
 	if first == second {
 		t.Fatalf("topic keys are equal: %q", first)
+	}
+}
+
+func TestRunTelegramUpdatesOrderedContinuesAfterBoundedMediaLookup(t *testing.T) {
+	releaseCaller := make(chan struct{})
+	caller := &stubCaller{callFn: func(
+		_ context.Context,
+		_ string,
+		_ *ta.RequestData,
+	) (*ta.Response, error) {
+		<-releaseCaller
+		return nil, errors.New("released stalled caller")
+	}}
+	ch := newTestChannel(t, caller)
+	updates := make(chan telego.Update, 2)
+	secondHandled := make(chan struct{})
+	handle := func(ctx context.Context, update telego.Update) error {
+		if update.UpdateID == 1 {
+			lookupCtx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+			defer cancel()
+			_, err := ch.getFileAttempt(lookupCtx, "stalled-photo")
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return errors.New("stalled media lookup did not reach its deadline")
+			}
+			return nil
+		}
+		close(secondHandled)
+		return nil
+	}
+
+	updates <- telegramMessageUpdate(1, 100, 0)
+	updates <- telegramMessageUpdate(2, 100, 0)
+	close(updates)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runTelegramUpdatesOrdered(t.Context(), updates, handle)
+	}()
+
+	select {
+	case <-secondHandled:
+	case <-time.After(time.Second):
+		t.Fatal("text update stayed blocked behind the bounded media lookup")
+	}
+	close(releaseCaller)
+	if err := <-errCh; err != nil {
+		t.Fatalf("runTelegramUpdatesOrdered() error = %v", err)
 	}
 }
 
