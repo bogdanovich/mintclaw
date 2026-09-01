@@ -48,3 +48,6 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Architecture simplification Z1 session cutover](architecture-simplification-z1-session-cutover.md):
   stopped-state session conversion, atomic installation, matched rollback,
   reapply canaries, observation, retained recovery evidence, and cleanup.
+- [Architecture simplification O7/O8 cutover](architecture-simplification-o7-o8-cutover.md):
+  strict browser-policy and coding-baseline cutover, matched rollback and
+  reapply, passive canaries, zero-legacy audit, recovery, and cleanup.
