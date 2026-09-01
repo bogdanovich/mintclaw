@@ -6,8 +6,9 @@ X3.88. The corrected source-side Z1 audit passes at `e60b8e26` through PR
 stopped-state session cutover, matched rollback, reapply, and observation are
 complete. This closeout deletes the temporary copy-only converter from #978.
 O1 shutdown ownership is merged through #1007 and deployed on `7e52c1dd`.
-The O2 and O3 runtime ownership findings remain registered as focused
-follow-up packets before the final program completion audit.
+O2 SQLite ownership is merged through #1015 and deployed on `20cf7a18`.
+The O3 runtime ownership finding remains registered as the final focused
+packet before the program completion audit.
 
 Original audit baseline: `origin/main` at `f5c9afe9`, 2026-08-19
 
@@ -651,12 +652,15 @@ refactor:
 | Packet | Finding | Required simplification and exit gate | Status |
 | --- | --- | --- | --- |
 | O1 | `mintclaw-main.service` exceeded its 30-second stop budget and was killed on all five stops observed in the cutover and observation window | Give gateway shutdown one bounded lifecycle owner; repeated loaded stops must exit cleanly without `SIGKILL`, abandoned child processes, or session corruption | Complete; #1007 deployed on `7e52c1dd`, with five loaded stops, five clean starts, no timeout or `SIGKILL`, and no surviving terminal child |
-| O2 | Seahorse reconciliation/provenance writes and live ingest can collide with `SQLITE_BUSY`; the warning recurred after final reapply | Give provenance mutation one concurrency and retry contract; startup reconciliation and live turns must complete without a database-lock failure | Open |
+| O2 | Seahorse reconciliation/provenance writes and live ingest can collide with `SQLITE_BUSY`; the warning recurred after final reapply | Give provenance mutation one concurrency contract; startup reconciliation and live turns must complete without a database-lock failure | Complete; #1015 deployed on `20cf7a18`, with one connection owner per agent database, fail-fast rejection of external writers, successful concurrent live turns, WAL/integrity verification, and no database-lock error |
 | O3 | A live-agent error was delivered through the gateway outbox, but the CLI kept waiting until its outer timeout | Make success and error finals share one terminal-delivery owner; the client must return promptly after either final and never wait for a second terminator | Open |
 
 The full O1 build, recovery, rollout, five-cycle loaded shutdown evidence,
 smokes, trace, and cleanup record is in the
 [O1 shutdown deployment evidence](../operations/architecture-simplification-o1-shutdown.md).
+The O2 build, compact recovery set, five-profile rollout, concurrent live-turn,
+persisted-session, trace-correlation, and journal evidence is in the
+[O2 Seahorse deployment evidence](../operations/architecture-simplification-o2-seahorse.md).
 
 Diagnostic evidence also showed that `root_turn_id` alone is not globally
 unique across restarts. Trace selection for these packets must therefore bind
@@ -2011,8 +2015,8 @@ digests, canaries, rollback evidence, and retained artifacts are recorded in
 the [Z1 session cutover evidence](../operations/architecture-simplification-z1-session-cutover.md).
 
 The compatibility-reset objective is therefore complete without adding a
-steady-state old-state reader. The roadmap remains active only for O2-O3 and
-the final requirement-by-requirement audit after those focused packets.
+steady-state old-state reader. The roadmap remains active only for O3 and the
+final requirement-by-requirement audit after that focused packet.
 
 ## Validation For Every Code Packet
 
