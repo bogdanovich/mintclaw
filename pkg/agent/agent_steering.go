@@ -150,6 +150,7 @@ func (al *AgentLoop) runTurnAndDrainSteering(
 			initialMsg.Context.Channel,
 			initialMsg.Context.ChatID,
 			initialMsg.SessionKey,
+			&initialMsg.Context,
 			err,
 			finalResponseAlwaysPublish,
 			target.traceScopes,

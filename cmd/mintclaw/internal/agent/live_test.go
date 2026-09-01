@@ -87,6 +87,42 @@ func TestRunLiveReturnsCorrelatedFinalFromOneRequest(t *testing.T) {
 	}
 }
 
+func TestRunLiveReturnsCorrelatedErrorFinalWithoutWaitingForConnectionClose(t *testing.T) {
+	releaseServer := make(chan struct{})
+	server := liveTestServer(
+		t,
+		"test-token",
+		func(connection *websocket.Conn, request channelmintclaw.MintClawMessage) {
+			_ = connection.WriteJSON(channelmintclaw.MintClawMessage{
+				Type:      channelmintclaw.TypeMessageCreate,
+				SessionID: request.SessionID,
+				Payload: map[string]any{
+					channelmintclaw.PayloadKeyContent:   "Error processing message: provider unavailable",
+					channelmintclaw.PayloadKeyFinal:     true,
+					channelmintclaw.PayloadKeyKind:      channelmintclaw.MessageKindFinalReply,
+					channelmintclaw.PayloadKeyOutbound:  "final",
+					channelmintclaw.PayloadKeyRequestID: request.ID,
+				},
+			})
+			<-releaseServer
+		},
+	)
+
+	result, err := runLive(t.Context(), liveOptions{
+		ConfigPath: liveTestConfig(t, server.URL, "test-token"),
+		Message:    "trigger provider error",
+		Timeout:    time.Second,
+	})
+	close(releaseServer)
+	if err != nil {
+		t.Fatalf("runLive() error = %v", err)
+	}
+	if result.Outcome != "success" ||
+		result.Response != "Error processing message: provider unavailable" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestRunLiveReturnsApprovalRequired(t *testing.T) {
 	server := liveTestServer(
 		t,
