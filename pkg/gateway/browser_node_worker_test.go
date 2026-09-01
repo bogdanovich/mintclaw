@@ -740,7 +740,9 @@ func TestNodeBrowserWorkerFreshObservationInvalidatesOlderActionCache(t *testing
 		Prepared: browser.PreparedAction{
 			Action: browser.Action{Kind: browser.ActionNavigate},
 			Effect: browser.EffectNavigation, CurrentOrigin: "about:blank",
-			ActionHash: strings.Repeat("a", 64),
+			CapabilityMode: browserpolicy.CapabilityFullAccess,
+			ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+			ActionHash:     strings.Repeat("a", 64),
 		},
 		DriverAction: browser.DriverAction{Kind: browser.DriverNavigate, URL: "https://example.com/"},
 	}); err != nil {
@@ -800,7 +802,9 @@ func TestNodeBrowserWorkerPreservesVerifiedNavigationFailure(t *testing.T) {
 		Prepared: browser.PreparedAction{
 			Action: browser.Action{Kind: browser.ActionNavigate},
 			Effect: browser.EffectNavigation, CurrentOrigin: "about:blank",
-			ActionHash: strings.Repeat("a", 64),
+			CapabilityMode: browserpolicy.CapabilityFullAccess,
+			ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+			ActionHash:     strings.Repeat("a", 64),
 		},
 		DriverAction: browser.DriverAction{Kind: browser.DriverNavigate, URL: "https://blocked.example/"},
 	}
@@ -990,7 +994,9 @@ func TestGatewayBrowserWorkerAdvancesAfterDownloadWithoutOutput(t *testing.T) {
 			SessionID: worker.sessionID, TabID: worker.tabID,
 			Action: browser.Action{Kind: browser.ActionDownload, Ref: "host_ref_1"},
 			Effect: browser.EffectUnknown, CurrentOrigin: "https://example.com",
-			ActionHash: strings.Repeat("a", 64), ElementRole: "button", ElementName: "Save",
+			CapabilityMode: browserpolicy.CapabilityFullAccess,
+			ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+			ActionHash:     strings.Repeat("a", 64), ElementRole: "button", ElementName: "Save",
 		},
 		Action:       browser.Action{Kind: browser.ActionDownload, Ref: "host_ref_1"},
 		DriverAction: browser.DriverAction{Kind: browser.DriverDownloadAction, Target: "host_ref_1"},
@@ -1094,7 +1100,9 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 				Prepared: browser.PreparedAction{
 					Action: browser.Action{Kind: browser.ActionNavigate},
 					Effect: browser.EffectNavigation, CurrentOrigin: "about:blank",
-					ActionHash: strings.Repeat("a", 64),
+					CapabilityMode: browserpolicy.CapabilityFullAccess,
+					ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+					ActionHash:     strings.Repeat("a", 64),
 				},
 				DriverAction: browser.DriverAction{Kind: browser.DriverNavigate, URL: "https://example.com/"},
 			}); err != nil {
@@ -1879,11 +1887,20 @@ func browserNodeTestRuntime(
 ) (*config.Config, *nodeAdmissionRuntime, *browserNodeTestHandler) {
 	t.Helper()
 	workspace := t.TempDir()
-	profiles := []nodes.BrowserProfileDescriptor{{
-		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
-		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		DryRun: true, Actions: []string{"download", "navigate", "scroll"}, Limits: nodes.BrowserLimits{}.Effective(),
-	}}
+	profiles := []nodes.BrowserProfileDescriptor{
+		{
+			Alias:          "managed",
+			Revision:       "managed-v1",
+			Driver:         nodes.BrowserDriverPlaywrightMCP,
+			Mode:           nodes.BrowserProfileManaged,
+			NetworkMode:    nodes.BrowserNetworkAnyHTTP,
+			CapabilityMode: browserpolicy.CapabilityFullAccess,
+			ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+			DryRun:         true,
+			Actions:        []string{"download", "navigate", "scroll"},
+			Limits:         nodes.BrowserLimits{}.Effective(),
+		},
+	}
 	descriptors, err := nodes.BrowserCommandDescriptors(profiles)
 	if err != nil {
 		t.Fatal(err)
@@ -1962,7 +1979,9 @@ func browserNodeTestRuntime(
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
 						Enabled: true, Mode: config.BrowserProfileManaged,
-						NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: true,
+						NetworkMode:    config.BrowserNetworkAnyHTTP,
+						CapabilityMode: config.BrowserCapabilityFullAccess,
+						ApprovalMode:   config.BrowserApprovalAlwaysCommit, DryRun: true,
 					},
 				},
 			},
@@ -1979,11 +1998,14 @@ func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
 	remote := nodes.BrowserProfileDescriptor{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+		CapabilityMode:       browserpolicy.CapabilityFullAccess,
+		ApprovalMode:         browserpolicy.ApprovalAlwaysCommit,
 		AllowApprovedActions: true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
 	}
 	local := config.BrowserProfileConfig{
 		Enabled: true, Mode: config.BrowserProfileManaged,
-		NetworkMode: config.BrowserNetworkAnyHTTP, AllowApprovedActions: true,
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalAlwaysCommit, AllowApprovedActions: true,
 	}
 	if !browserProfileIntersects(local, limits, remote) {
 		t.Fatal("matching approved-action profiles did not intersect")

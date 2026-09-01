@@ -562,6 +562,8 @@ func browserToolTestConfig() *config.Config {
 					"managed": {
 						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
 						NetworkMode:    config.BrowserNetworkExactOrigins,
+						CapabilityMode: config.BrowserCapabilityFullAccess,
+						ApprovalMode:   config.BrowserApprovalAlwaysCommit,
 						AllowedOrigins: []string{"https://example.com"},
 					},
 				},
@@ -778,7 +780,7 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	if result.DefaultTarget != "gateway" || len(result.Targets) != 1 || result.Targets[0].Target != "gateway" ||
 		result.Targets[0].Status != "ready" || len(result.Targets[0].Profiles) != 1 ||
 		result.Targets[0].Profiles[0].NetworkMode != config.BrowserNetworkExactOrigins ||
-		result.Targets[0].Profiles[0].CapabilityMode != config.BrowserCapabilityLegacyStrict ||
+		result.Targets[0].Profiles[0].CapabilityMode != config.BrowserCapabilityFullAccess ||
 		result.Targets[0].Profiles[0].ApprovalMode != config.BrowserApprovalAlwaysCommit ||
 		!result.Targets[0].Profiles[0].DryRun || result.Targets[0].Profiles[0].AllowApprovedActions ||
 		!result.Targets[0].Features.Screenshot || !result.Targets[0].Features.PageScreenshot ||

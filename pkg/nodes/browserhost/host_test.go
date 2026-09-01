@@ -1431,7 +1431,6 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			}
 			host, worker, initial := newFixture(t, element)
 			host.sessions["browser_session_1"].profile.CapabilityMode = "full_access"
-			host.sessions["browser_session_1"].profile.SensitiveFields = []string{"password", "price"}
 			request := BrowserHostActRequest{
 				SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
 				ActionInvocationID: "browser_fill_full_access",
@@ -1540,44 +1539,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		}
 	})
 
-	t.Run("deny operator configured sensitive field", func(t *testing.T) {
-		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
-		host, worker, initial := newFixture(t, element)
-		host.sessions["browser_session_1"].profile.SensitiveFields = []string{"display name"}
-		request := BrowserHostActRequest{
-			SessionID:          "browser_session_1",
-			TabID:              "tab_primary",
-			SnapshotGeneration: 1,
-			ActionInvocationID: "browser_fill_configured_sensitive",
-			Action: browserworker.Action{
-				Kind:  browserworker.ActionFill,
-				Ref:   initial.Elements[0].Ref,
-				Value: "Ada",
-			},
-			Effect:                "local_edit",
-			CurrentOrigin:         "https://example.com",
-			PreparedActionHash:    strings.Repeat("b", 64),
-			BrowserPolicyRevision: strings.Repeat("a", 64),
-			ProfileRevision:       "managed-v1",
-			ExpectedRole:          "textbox",
-			ExpectedName:          "Display name",
-			RoutedSessionID:       "routed_session_1",
-			AgentID:               "browser",
-			ActorID:               "telegram:owner",
-		}
-		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
-			t.Fatalf("Fill(configured sensitive) error = %v, want denied", err)
-		}
-		if len(worker.actions) != 0 || worker.authorizeFillCalls != 0 {
-			t.Fatalf(
-				"configured-sensitive fill reached driver: actions=%#v authorizations=%d",
-				worker.actions,
-				worker.authorizeFillCalls,
-			)
-		}
-	})
-
-	t.Run("private classifier denial remains definite", func(t *testing.T) {
+	t.Run("private driver denial remains definite", func(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
 		host, worker, initial := newFixture(t, element)
 		worker.authorizeFillErr = browserworker.ErrDenied
@@ -1613,7 +1575,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		}
 	})
 
-	t.Run("final classifier denial does not quarantine", func(t *testing.T) {
+	t.Run("final driver denial does not quarantine", func(t *testing.T) {
 		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Display name"}
 		host, worker, initial := newFixture(t, element)
 		worker.executeErr = browserworker.ErrDenied
@@ -1645,28 +1607,6 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		if worker.authorizeFillCalls != 1 || session.state != "ready" || len(session.actionInvocations) != 0 {
 			t.Fatalf("final denial state: authorizations=%d state=%s invocations=%#v",
 				worker.authorizeFillCalls, session.state, session.actionInvocations)
-		}
-	})
-
-	t.Run("deny sensitive fill before dispatch", func(t *testing.T) {
-		element := browserworker.DriverElement{Target: "driver_fill_1", Role: "textbox", Name: "Password"}
-		host, worker, initial := newFixture(t, element)
-		request := BrowserHostActRequest{
-			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-			ActionInvocationID: "browser_fill_sensitive_1",
-			Action: browserworker.Action{
-				Kind: "fill", Ref: initial.Elements[0].Ref, Value: "secret",
-			},
-			Effect: "local_edit", CurrentOrigin: "https://example.com",
-			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Password",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
-		}
-		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
-			t.Fatalf("Fill(sensitive) error = %v, want denied", err)
-		}
-		if len(worker.actions) != 0 {
-			t.Fatalf("sensitive fill dispatched %d actions", len(worker.actions))
 		}
 	})
 
@@ -2353,6 +2293,9 @@ func TestCompanionPlaywrightServerUsesNormalizedSymlinkLauncherDirectory(t *test
 	}
 	t.Setenv("PATH", "/usr/bin:/bin")
 	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	brewBin := filepath.Join(root, "homebrew", "bin")
 	npmBin := filepath.Join(root, "homebrew", "lib", "node_modules", "npm", "bin")
 	profileDir := filepath.Join(root, "profile")
@@ -2381,7 +2324,9 @@ func TestCompanionPlaywrightServerUsesNormalizedSymlinkLauncherDirectory(t *test
 				DriverExecutable: launcher, DriverExecutableSHA256: hex.EncodeToString(digest[:]),
 				DriverArguments: []string{"--browser=chrome"}, ProfileDirectory: profileDir,
 				LockFile: filepath.Join(lockDir, "browser.lock"), Mode: nodes.BrowserProfileManaged,
-				NetworkMode: nodes.BrowserNetworkAnyHTTP, DryRun: true,
+				NetworkMode:    nodes.BrowserNetworkAnyHTTP,
+				CapabilityMode: browserpolicy.CapabilityFullAccess,
+				ApprovalMode:   browserpolicy.ApprovalAlwaysCommit, DryRun: true,
 				AllowedActions: []string{"navigate"}, Headed: true,
 			},
 		},
@@ -2421,12 +2366,19 @@ func TestNewBrowserHostBuildsPassiveFactoryFromNormalizedPolicy(t *testing.T) {
 		t.Skip("browser profile identity validation is admitted on Darwin and Linux")
 	}
 	root := t.TempDir()
-	executable, err := os.Executable()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tTestExecutable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(executable)
+	data, err := os.ReadFile(tTestExecutable)
 	if err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "driver")
+	if err = os.WriteFile(executable, data, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(data)
@@ -2455,7 +2407,9 @@ func TestNewBrowserHostBuildsPassiveFactoryFromNormalizedPolicy(t *testing.T) {
 				},
 				ProfileDirectory: profileDir, LockFile: filepath.Join(lockDir, "browser.lock"),
 				Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-				DryRun: true, AllowedActions: []string{"navigate"}, Headed: true,
+				CapabilityMode: browserpolicy.CapabilityFullAccess,
+				ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+				DryRun:         true, AllowedActions: []string{"navigate"}, Headed: true,
 			},
 		},
 	}).Normalize(root)
@@ -2671,7 +2625,10 @@ func browserHostProfileFixture() companion.BrowserProfilePolicy {
 		Enabled: true, Revision: "managed-v1",
 		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
 		Driver: nodes.BrowserDriverPlaywrightMCP, Mode: nodes.BrowserProfileManaged,
-		NetworkMode: nodes.BrowserNetworkAnyHTTP, DryRun: true,
+		NetworkMode:    nodes.BrowserNetworkAnyHTTP,
+		CapabilityMode: browserpolicy.CapabilityFullAccess,
+		ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+		DryRun:         true,
 		AllowedActions: []string{"download", "navigate", "scroll"}, Headed: true,
 		Limits: nodes.BrowserLimits{}.Effective(),
 	}

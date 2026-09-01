@@ -23,7 +23,6 @@ const (
 	BrowserNetworkAnyHTTP         = "any_http"
 	BrowserCapabilityFullAccess   = browserpolicy.CapabilityFullAccess
 	BrowserCapabilityRestricted   = browserpolicy.CapabilityRestricted
-	BrowserCapabilityLegacyStrict = browserpolicy.CapabilityLegacyStrict
 	BrowserApprovalNone           = browserpolicy.ApprovalNone
 	BrowserApprovalModelRequested = browserpolicy.ApprovalModelRequested
 	BrowserApprovalAlwaysCommit   = browserpolicy.ApprovalAlwaysCommit
@@ -111,20 +110,7 @@ type BrowserProfileConfig struct {
 	DryRun               bool                  `json:"dry_run"                          yaml:"-"`
 	AllowApprovedActions bool                  `json:"allow_approved_actions,omitempty" yaml:"-"`
 	AllowedOrigins       []string              `json:"allowed_origins,omitempty"        yaml:"-"`
-	SensitiveFields      []string              `json:"sensitive_fields,omitempty"       yaml:"-"`
 	Policy               *browserpolicy.Policy `json:"policy,omitempty"                 yaml:"-"`
-}
-
-// EffectiveCapabilityMode preserves the pre-P0 behavior for existing
-// configurations while allowing owners to opt into unrestricted page control.
-func (profile BrowserProfileConfig) EffectiveCapabilityMode() string {
-	return browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode)
-}
-
-// EffectiveApprovalMode preserves the pre-P0 commit-approval behavior for
-// existing configurations. Capability and approval are deliberately separate.
-func (profile BrowserProfileConfig) EffectiveApprovalMode() string {
-	return browserpolicy.EffectiveApprovalMode(profile.ApprovalMode)
 }
 
 type BrowserLimitsConfig struct {
@@ -169,7 +155,6 @@ func (cfg BrowserToolsConfig) PolicyRevision() (string, error) {
 	for targetName, target := range cfg.Targets {
 		profiles := make(map[string]BrowserProfileConfig, len(target.Profiles))
 		for profileName, profile := range target.Profiles {
-			profile.SensitiveFields, _ = browserpolicy.NormalizeSensitiveFieldTerms(profile.SensitiveFields)
 			if profile.Policy != nil {
 				normalized, err := browserpolicy.NormalizePolicy(*profile.Policy)
 				if err != nil {
@@ -347,18 +332,18 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	if profile.Mode != "" && profile.Mode != BrowserProfileManaged {
 		return fmt.Errorf("browser profile %q supports only mode %q", name, BrowserProfileManaged)
 	}
-	switch profile.EffectiveCapabilityMode() {
-	case BrowserCapabilityFullAccess, BrowserCapabilityLegacyStrict, BrowserCapabilityRestricted:
+	switch profile.CapabilityMode {
+	case BrowserCapabilityFullAccess, BrowserCapabilityRestricted:
 	default:
 		return fmt.Errorf("browser profile %q has unsupported capability_mode %q", name, profile.CapabilityMode)
 	}
-	switch profile.EffectiveApprovalMode() {
+	switch profile.ApprovalMode {
 	case BrowserApprovalNone, BrowserApprovalModelRequested, BrowserApprovalAlwaysCommit, BrowserApprovalPolicy:
 	default:
 		return fmt.Errorf("browser profile %q has unsupported approval_mode %q", name, profile.ApprovalMode)
 	}
-	restricted := profile.EffectiveCapabilityMode() == BrowserCapabilityRestricted
-	policyApproval := profile.EffectiveApprovalMode() == BrowserApprovalPolicy
+	restricted := profile.CapabilityMode == BrowserCapabilityRestricted
+	policyApproval := profile.ApprovalMode == BrowserApprovalPolicy
 	if restricted != policyApproval || restricted != (profile.Policy != nil) {
 		return fmt.Errorf(
 			"browser profile %q requires capability_mode restricted, approval_mode policy, and policy together",
@@ -380,9 +365,6 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	}
 	if len(profile.AllowedOrigins) > BrowserMaxConfiguredOrigins {
 		return fmt.Errorf("browser profile %q exceeds %d allowed origins", name, BrowserMaxConfiguredOrigins)
-	}
-	if _, err := browserpolicy.NormalizeSensitiveFieldTerms(profile.SensitiveFields); err != nil {
-		return fmt.Errorf("invalid browser profile %q sensitive_fields: %w", name, err)
 	}
 	seen := make(map[string]struct{}, len(profile.AllowedOrigins))
 	for _, rawOrigin := range profile.AllowedOrigins {

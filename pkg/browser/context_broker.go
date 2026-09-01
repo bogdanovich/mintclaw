@@ -35,12 +35,12 @@ type ContextRequest struct {
 	ContextGeneration uint64
 	TabID             string
 	FrameID           string
-	ApprovalMode      string
 	Confirmation      string
 }
 
 type ContextPreparation struct {
 	Request          ContextRequest
+	ApprovalMode     string
 	Invocation       Invocation
 	Approval         ApprovalBinding
 	RequiresApproval bool
@@ -82,8 +82,11 @@ func (broker *Broker) PrepareContext(
 	if err != nil || !storedSession.Owner.Equal(request.Owner) {
 		return ContextPreparation{}, errors.Join(err, ErrNotFound)
 	}
-	request.ApprovalMode = broker.approvalMode(storedSession)
-	actionHash, err := hashContextRequest(request)
+	approvalMode := broker.approvalMode(storedSession)
+	if !browserpolicy.ApprovalModeValid(approvalMode) {
+		return ContextPreparation{}, ErrInvalid
+	}
+	actionHash, err := hashContextRequest(request, approvalMode)
 	if err != nil {
 		return ContextPreparation{}, err
 	}
@@ -94,7 +97,7 @@ func (broker *Broker) PrepareContext(
 			existing.ActionHash != actionHash || existing.Effect != contextOperationEffect(request.Operation) {
 			return ContextPreparation{}, ErrConflict
 		}
-		return contextPreparationView(request, existing, broker.policyRevision), nil
+		return contextPreparationView(request, approvalMode, existing, broker.policyRevision), nil
 	}
 	if existingErr != nil && !errors.Is(existingErr, ErrNotFound) {
 		return ContextPreparation{}, existingErr
@@ -128,7 +131,7 @@ func (broker *Broker) PrepareContext(
 			invocation.ActionHash != actionHash || invocation.Effect != contextOperationEffect(request.Operation) {
 			return ContextPreparation{}, ErrConflict
 		}
-		return contextPreparationView(request, invocation, broker.policyRevision), nil
+		return contextPreparationView(request, approvalMode, invocation, broker.policyRevision), nil
 	}
 	if !errors.Is(err, ErrNotFound) {
 		return ContextPreparation{}, err
@@ -143,7 +146,7 @@ func (broker *Broker) PrepareContext(
 	if err = broker.store.CreateInvocation(ctx, invocation); err != nil {
 		return ContextPreparation{}, err
 	}
-	return contextPreparationView(request, invocation, broker.policyRevision), nil
+	return contextPreparationView(request, approvalMode, invocation, broker.policyRevision), nil
 }
 
 func (broker *Broker) ExecuteContext(
@@ -156,10 +159,11 @@ func (broker *Broker) ExecuteContext(
 		preparation.Invocation.ActionHash == "" || !request.Operation.validMutation() {
 		return ContextResult{}, ErrInvalid
 	}
-	expectedHash, err := hashContextRequest(request)
+	expectedHash, err := hashContextRequest(request, preparation.ApprovalMode)
 	expectedID := derivedIdentifier("context_invocation", request.Owner, request.SessionID, request.RequestID)
-	requiresApproval := contextRequiresApproval(request)
-	if err != nil || preparation.Invocation.ID != expectedID || preparation.Invocation.ActionHash != expectedHash ||
+	requiresApproval := contextRequiresApproval(request, preparation.ApprovalMode)
+	if err != nil || !browserpolicy.ApprovalModeValid(preparation.ApprovalMode) ||
+		preparation.Invocation.ID != expectedID || preparation.Invocation.ActionHash != expectedHash ||
 		preparation.Invocation.SessionID != request.SessionID || preparation.Invocation.Owner != request.Owner ||
 		preparation.Invocation.Effect != contextOperationEffect(request.Operation) ||
 		preparation.RequiresApproval != requiresApproval ||
@@ -291,7 +295,6 @@ func (broker *Broker) ExecuteContext(
 func validateContextMutationRequest(request ContextRequest) error {
 	if request.Owner.Validate() != nil || !validIdentifier(request.RequestID) ||
 		!validIdentifier(request.SessionID) || !request.Operation.validMutation() ||
-		!browserpolicy.ApprovalModeValid(request.ApprovalMode) ||
 		!browserpolicy.ConfirmationValid(request.Confirmation) {
 		return ErrInvalid
 	}
@@ -508,7 +511,7 @@ func contextOperationEffect(operation ContextOperation) Effect {
 	}
 }
 
-func hashContextRequest(request ContextRequest) (string, error) {
+func hashContextRequest(request ContextRequest, approvalMode string) (string, error) {
 	encoded, err := json.Marshal(struct {
 		Owner             Owner            `json:"owner"`
 		SessionID         string           `json:"browser_session_id"`
@@ -523,7 +526,7 @@ func hashContextRequest(request ContextRequest) (string, error) {
 		Owner: request.Owner, SessionID: request.SessionID, Operation: request.Operation,
 		ContextCatalogID: request.ContextCatalogID, ContextGeneration: request.ContextGeneration,
 		TabID: request.TabID, FrameID: request.FrameID,
-		ApprovalMode: request.ApprovalMode, Confirmation: request.Confirmation,
+		ApprovalMode: approvalMode, Confirmation: request.Confirmation,
 	})
 	if err != nil {
 		return "", fmt.Errorf("hash browser context request: %w", err)
@@ -534,22 +537,23 @@ func hashContextRequest(request ContextRequest) (string, error) {
 
 func contextPreparationView(
 	request ContextRequest,
+	approvalMode string,
 	invocation Invocation,
 	policyRevision string,
 ) ContextPreparation {
 	return ContextPreparation{
-		Request: request, Invocation: invocation,
+		Request: request, ApprovalMode: approvalMode, Invocation: invocation,
 		Approval: ApprovalBinding{
 			PreparedActionID: invocation.ID, ActionHash: invocation.ActionHash,
 			PolicyRevision: policyRevision, ExpiresAt: invocation.ExpiresAt,
 		},
-		RequiresApproval: contextRequiresApproval(request),
+		RequiresApproval: contextRequiresApproval(request, approvalMode),
 	}
 }
 
-func contextRequiresApproval(request ContextRequest) bool {
+func contextRequiresApproval(request ContextRequest, approvalMode string) bool {
 	return browserpolicy.RequiresApproval(
-		request.ApprovalMode,
+		approvalMode,
 		string(contextOperationEffect(request.Operation)),
 		request.Confirmation,
 	)

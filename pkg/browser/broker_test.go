@@ -1294,6 +1294,8 @@ func admittedBrowserConfig() *config.Config {
 					"managed": {
 						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
 						NetworkMode:    config.BrowserNetworkExactOrigins,
+						CapabilityMode: config.BrowserCapabilityFullAccess,
+						ApprovalMode:   config.BrowserApprovalAlwaysCommit,
 						AllowedOrigins: []string{"https://example.com"},
 					},
 				},

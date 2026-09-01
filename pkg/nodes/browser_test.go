@@ -1273,8 +1273,11 @@ func assertBrowserOutputInvalid(t *testing.T, descriptor CommandDescriptor, valu
 func browserProfileDescriptorFixture() BrowserProfileDescriptor {
 	return BrowserProfileDescriptor{
 		Alias: "managed", Revision: "managed-v1", Driver: "playwright_mcp",
-		Mode: "managed", NetworkMode: "any_http", DryRun: true,
-		Actions: []string{"download", "navigate"},
+		Mode: "managed", NetworkMode: "any_http",
+		CapabilityMode: browserpolicy.CapabilityFullAccess,
+		ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+		DryRun:         true,
+		Actions:        []string{"download", "navigate"},
 		Limits: BrowserLimits{
 			Sessions: 1, Tabs: 1, SessionSeconds: 3600, IdleSeconds: 600,
 			PreparedSeconds: 300, ActionSeconds: 60, SnapshotBytes: MaxBrowserSnapshotBytes,

@@ -2,28 +2,16 @@ package browserpolicy
 
 import "testing"
 
-func TestFullAccessFillIgnoresSemanticFieldIdentity(t *testing.T) {
-	for _, field := range []struct {
-		role string
-		name string
-	}{
-		{role: "textbox", name: "Price"},
-		{role: "spinbutton", name: "Price"},
-		{role: "textbox", name: ""},
-		{role: "textbox", name: "Password"},
-		{role: "textbox", name: "One-time code"},
-		{role: "textbox", name: "Card number"},
-		{role: "combobox", name: "Account"},
-	} {
-		if !FillFieldAllowed(CapabilityFullAccess, field.role, field.name, []string{"account"}) {
-			t.Fatalf("full_access rejected role=%q name=%q", field.role, field.name)
+func TestFillRoleAllowedUsesOnlyMechanicalRoles(t *testing.T) {
+	for _, role := range []string{"textbox", "searchbox", "combobox", "spinbutton"} {
+		if !FillRoleAllowed(role) {
+			t.Fatalf("fillable role %q was rejected", role)
 		}
 	}
-	if FillFieldAllowed(CapabilityFullAccess, "checkbox", "Price", nil) {
-		t.Fatal("full_access admitted a non-fillable semantic role")
-	}
-	if FillFieldAllowed(CapabilityLegacyStrict, "textbox", "Price", nil) {
-		t.Fatal("legacy_strict unexpectedly admitted Price")
+	for _, role := range []string{"", "button", "checkbox", "radio"} {
+		if FillRoleAllowed(role) {
+			t.Fatalf("non-fillable role %q was admitted", role)
+		}
 	}
 }
 
@@ -54,7 +42,7 @@ func TestApprovalModesSeparateEffectFromConfirmation(t *testing.T) {
 			confirmation: ConfirmationRequest,
 			want:         true,
 		},
-		{name: "legacy default", effect: "unknown", want: true},
+		{name: "invalid mode fails closed", effect: "unknown", want: true},
 		{name: "unimplemented policy fails closed", mode: ApprovalPolicy, effect: "read", want: true},
 	}
 	for _, test := range tests {

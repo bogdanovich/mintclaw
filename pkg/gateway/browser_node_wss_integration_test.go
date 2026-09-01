@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
@@ -2644,6 +2645,8 @@ func wssBrowserProfile() nodes.BrowserProfileDescriptor {
 	return nodes.BrowserProfileDescriptor{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+		CapabilityMode:       browserpolicy.CapabilityFullAccess,
+		ApprovalMode:         browserpolicy.ApprovalAlwaysCommit,
 		AllowApprovedActions: true,
 		Actions: []string{
 			"check",

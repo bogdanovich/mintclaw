@@ -1706,7 +1706,6 @@ func cloneBrowserConfig(source config.BrowserToolsConfig) config.BrowserToolsCon
 		for profileName, profile := range target.Profiles {
 			clonedProfile := profile
 			clonedProfile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
-			clonedProfile.SensitiveFields = append([]string(nil), profile.SensitiveFields...)
 			clonedProfile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 			clonedTarget.Profiles[profileName] = clonedProfile
 		}

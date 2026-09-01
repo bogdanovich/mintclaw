@@ -144,7 +144,6 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 					CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
 					AllowApprovedActions: profile.AllowApprovedActions,
 					AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
-					SensitiveFields:      append([]string(nil), profile.SensitiveFields...),
 				},
 				ServerConfig: server,
 			},
@@ -236,7 +235,6 @@ func cloneBrowserProfilePolicy(
 	profile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 	profile.DriverArguments = append([]string(nil), profile.DriverArguments...)
 	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
-	profile.SensitiveFields = append([]string(nil), profile.SensitiveFields...)
 	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
 	profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 	return profile
@@ -1267,12 +1265,7 @@ func (host *BrowserHost) executeAction(
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	if action == "fill" && (len(request.Action.Value) > session.limits.TextInputBytes ||
-		!nodes.BrowserFillFieldAllowedForMode(
-			session.profile.CapabilityMode,
-			request.ExpectedRole,
-			request.ExpectedName,
-			session.profile.SensitiveFields,
-		)) {
+		!nodes.BrowserFillRoleAllowed(request.ExpectedRole)) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
 	requiresApproval := nodes.BrowserActionRequiresApproval(

@@ -353,7 +353,7 @@ func TestPlaywrightCheckedNavigationRecoveryIsFailureAgnostic(t *testing.T) {
 	}, DriverAction{
 		Kind: DriverNavigate,
 		URL:  "https://example.com/net::ERR_TOO_MANY_REDIRECTS",
-	}, config.BrowserLimitsConfig{}.Effective(), nil)
+	}, config.BrowserLimitsConfig{}.Effective())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -730,19 +730,18 @@ func TestPlaywrightWorkerFailsClosedAfterNavigationCheckedDialogRejection(t *tes
 	}
 }
 
-func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *testing.T) {
+func TestPlaywrightNavigationCheckedFillChecksMechanicalBoundaryBeforeTyping(t *testing.T) {
 	code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
 		frameID: "frame-1", loaderID: "loader-1", generation: 7,
 	}, DriverAction{
 		Kind: DriverFill, Target: "e5", Element: "Display name", Value: "fill-canary",
-	}, config.BrowserLimitsConfig{}.Effective(), nil)
+	}, config.BrowserLimitsConfig{}.Effective())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, required := range []string{
 		`page.locator("aria-ref=" + "e5")`, `const fillOutcome = await fillTarget.evaluate`,
-		`args.policy.sensitive.some(term => matchesTerm(identity, term))`, `element.matches(":disabled")`,
-		`element.getAttribute("aria-labelledby")`, `candidate.id`, `compatibleRole`, `ariaEnabled`, `ariaWritable`,
+		`!nonFillTypes.has(type)`, `element.matches(":disabled")`, `ariaEnabled`, `ariaWritable`,
 		`element.focus({ preventScroll: true })`, `Object.getOwnPropertyDescriptor`,
 		`probe.type = "number"`, `getter.call(probe) !== args.value`, `setter.call(element, priorValue)`,
 		`setter.call(element, args.value)`, `element.dispatchEvent(inputEvent)`, `value: "fill-canary"`,
@@ -752,9 +751,8 @@ func TestPlaywrightNavigationCheckedFillClassifiesPrivateFieldBeforeTyping(t *te
 			t.Fatalf("protected fill code omitted %q: %s", required, code)
 		}
 	}
-	if strings.Contains(code, `fillTarget.fill(`) || strings.Count(code, `if (!classify())`) != 2 ||
-		strings.Index(code, `args.policy.sensitive.some(term => matchesTerm(identity, term))`) >
-			strings.Index(code, `setter.call(element, args.value)`) {
+	if strings.Contains(code, `fillTarget.fill(`) || strings.Count(code, `if (!isWritable())`) != 2 ||
+		strings.Contains(code, `args.policy`) || strings.Contains(code, `matchesTerm`) {
 		t.Fatalf("protected fill classification and assignment are not atomic: %s", code)
 	}
 	if err = parsePlaywrightNavigationDispatch(
@@ -830,7 +828,7 @@ func TestPlaywrightNavigationCheckedOrdinaryInteractionsDispatchBoundedPrimitive
 		t.Run(test.name, func(t *testing.T) {
 			code, err := playwrightNavigationCheckedActionCode(playwrightNavigationIdentity{
 				frameID: "frame-1", loaderID: "loader-1", generation: 7,
-			}, test.action, config.BrowserLimitsConfig{}.Effective(), nil)
+			}, test.action, config.BrowserLimitsConfig{}.Effective())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -857,25 +855,25 @@ func TestPlaywrightAuthorizeFillDenialDoesNotRetireWorker(t *testing.T) {
 	identity := playwrightNavigationIdentity{frameID: "frame-1", loaderID: "loader-1", generation: 7}
 	worker := &playwrightWorker{
 		client: client, limits: config.BrowserLimitsConfig{}.Effective(),
-		navigationID: identity, navigationToken: identity.token(), sensitiveFields: []string{"display name"},
+		navigationID: identity, navigationToken: identity.token(),
 	}
 	if err := worker.AuthorizeFill(t.Context(), identity.token(), "e5"); !errors.Is(err, ErrDenied) {
 		t.Fatalf("AuthorizeFill() error = %v, want denied", err)
 	}
 	if worker.lost {
-		t.Fatal("definite private classifier denial retired worker")
+		t.Fatal("definite private driver denial retired worker")
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("AuthorizeFill() calls = %#v", client.calls)
 	}
 	code, ok := client.calls[0].arguments["code"].(string)
 	if !ok || strings.Contains(code, "fill-canary") || strings.Contains(code, ".fill(") ||
-		!strings.Contains(code, `"display name"`) {
-		t.Fatalf("private classifier code = %q", code)
+		!strings.Contains(code, `!nonFillTypes.has(type)`) {
+		t.Fatalf("mechanical fill check code = %q", code)
 	}
 }
 
-func TestPlaywrightFullAccessFillUsesOnlyMechanicalDOMAdmission(t *testing.T) {
+func TestPlaywrightFillUsesOnlyMechanicalDOMAdmission(t *testing.T) {
 	client := &fakePlaywrightClient{callResults: map[string]*sdkmcp.CallToolResult{
 		"browser_run_code_unsafe": playwrightTextResult("### Result\n\"MINTCLAW_NAV_ACT_V1|ok\""),
 	}}
@@ -883,17 +881,15 @@ func TestPlaywrightFullAccessFillUsesOnlyMechanicalDOMAdmission(t *testing.T) {
 	worker := &playwrightWorker{
 		client: client, limits: config.BrowserLimitsConfig{}.Effective(),
 		navigationID: identity, navigationToken: identity.token(),
-		capabilityMode:  config.BrowserCapabilityFullAccess,
-		sensitiveFields: []string{"price", "password"},
 	}
 	if err := worker.AuthorizeFill(t.Context(), identity.token(), "e5"); err != nil {
 		t.Fatalf("AuthorizeFill() error = %v", err)
 	}
 	code, ok := client.calls[0].arguments["code"].(string)
-	if !ok || !strings.Contains(code, `"full_access":true`) ||
-		!strings.Contains(code, `if (args.policy.full_access) return mechanicallyWritable`) ||
-		!strings.Contains(code, `!nonFillTypes.has(type)`) {
-		t.Fatalf("full-access classifier code = %q", code)
+	if !ok || !strings.Contains(code, `!nonFillTypes.has(type)`) ||
+		strings.Contains(code, "sensitive") || strings.Contains(code, "ordinary") ||
+		strings.Contains(code, "full_access") {
+		t.Fatalf("mechanical classifier code = %q", code)
 	}
 }
 
@@ -1715,7 +1711,9 @@ func TestPlaywrightServerConfiguresAnyHTTPThroughManagedProxyOnly(t *testing.T) 
 	server := root.Tools.MCP.Servers["playwright"]
 	profile := config.BrowserProfileConfig{
 		Enabled: true, Mode: config.BrowserProfileManaged,
-		NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: true,
+		NetworkMode:    config.BrowserNetworkAnyHTTP,
+		CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode:   config.BrowserApprovalAlwaysCommit, DryRun: true,
 	}
 	configured, err := playwrightServerWithNetworkPolicy(server, profile, "http://127.0.0.1:43210")
 	if err != nil {
@@ -3763,7 +3761,9 @@ func TestNewPlaywrightManagedHostFactoryRetargetsPrivateAdapter(t *testing.T) {
 		Target: "companion", Profile: "managed",
 		ProfileConfig: config.BrowserProfileConfig{
 			Enabled: true, Mode: config.BrowserProfileManaged,
-			NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: true,
+			NetworkMode:    config.BrowserNetworkAnyHTTP,
+			CapabilityMode: config.BrowserCapabilityFullAccess,
+			ApprovalMode:   config.BrowserApprovalAlwaysCommit, DryRun: true,
 		},
 		ServerConfig: config.MCPServerConfig{
 			Command: "npx", Args: []string{"@playwright/mcp@0.0.78"}, Type: "stdio",

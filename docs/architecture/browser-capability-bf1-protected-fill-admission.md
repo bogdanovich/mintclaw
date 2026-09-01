@@ -11,9 +11,10 @@ transport.
 
 The slice does not expose raw Playwright tools, selectors, coordinates,
 JavaScript, browser endpoints, host paths, credentials, or a generic secret
-transport. It admits synthetic and ordinary non-secret form input only.
-Password, payment, one-time-code, and operator-designated sensitive fields
-remain unavailable until a separate credential policy is admitted.
+transport. It admits model-provided form input for mechanically writable
+controls. `full_access` does not classify fields by name or purpose;
+`restricted` profiles may apply explicit owner policy to bounded action
+metadata.
 
 ## Admitted contract
 
@@ -101,31 +102,19 @@ Gateway-local sessions use the same prepared-action and cleanup semantics but
 do not serialize a node dispatch. Their durable action record and all agent
 state use the same redacted projection as companion sessions.
 
-## Sensitive-field deny policy
+## Explicit capability policy
 
-The private browser host classifies the revalidated control before accepting
-the value. This slice denies at least:
+The private browser host revalidates that the resolved control is visible,
+enabled, writable, and supported by typed `fill` immediately before accepting
+the value. It does not infer authority from field names, autocomplete values,
+or a compiled semantic dictionary.
 
-- password controls;
-- payment-card number, security-code, and expiration controls;
-- one-time-code and recovery-code controls;
-- controls whose trusted autocomplete metadata identifies a credential or
-  payment field; and
-- controls matched by an operator-configured sensitive-field policy.
-
-The classification is derived from the current private DOM/accessibility
-state, never from model arguments. Unknown or conflicting classification fails
-closed. Denial happens before action acceptance and before the private driver
-receives the value. The safe error identifies only the bounded policy class,
-not the value, selector, page markup, or protected attribute.
-
-Operators may add up to 64 private identity fragments through the selected
-profile's `sensitive_fields` array. Terms are Unicode-valid strings of at most
-128 bytes, normalized for case and whitespace, and rejected when empty or
-duplicated after normalization. They participate in the browser policy
-revision and are evaluated independently by the gateway broker and the host's
-private DOM classifier. Companion-local terms are not projected into node
-capability descriptors or model-visible tool results.
+An owner who needs semantic restrictions uses a `restricted` profile. Ordered
+rules and an optional operator-owned hook may decide `allow`, `deny`, or `ask`
+from bounded action metadata such as action kind, derived effect, normalized
+origin, accessibility role, and normalized accessible-name pattern. The form
+value is never an input to that policy. Denial happens before action acceptance
+and before the private driver receives the value.
 
 No credential alias, password manager, payment vault, cookie, storage-state
 import, or origin-bound secret injection is admitted here. Such behavior
@@ -166,7 +155,8 @@ Immediately before driver dispatch, the broker or companion host revalidates:
 - fresh snapshot and semantic element authority;
 - current origin and network policy;
 - browser policy, profile, and approved catalog revisions; and
-- editable and non-sensitive field classification.
+- mechanically writable control admission and any explicit restricted-policy
+  decision.
 
 Any mismatch fails stale with zero input dispatch. A navigation beginning
 after the private final check is a concurrent browser event; an ambiguous
@@ -181,8 +171,9 @@ runtime, host, real-driver, and production-WSS tests prove:
   observation on both placements;
 - empty, malformed, oversized, invalid-UTF-8, stale, detached, hidden,
   disabled, read-only, and non-editable targets fail before driver dispatch;
-- password, payment, one-time-code, configured-sensitive, and ambiguous fields
-  fail closed without revealing the value;
+- `full_access` admits driver-supported writable controls regardless of field
+  name, while matching `restricted` rules deny or pause before revealing the
+  value to the driver;
 - the assistant tool-call intent is redacted before every durable write while
   the same in-memory call still executes with the original value;
 - the companion receives the value only in the initial ephemeral dispatch and
@@ -211,8 +202,8 @@ not reproduce the canary value.
    pairing with redacted browser fill intents.
 2. Extend the shared prepared-action and companion ephemeral-input contract
    for fill, keeping capability discovery disabled.
-3. Add private host revalidation, sensitive-field denial, and typed Playwright
-   dispatch on both placements.
+3. Add private host writability revalidation, explicit restricted-policy
+   enforcement, and typed Playwright dispatch on both placements.
 4. Add adversarial persistence, failure-injection, real-driver, and
    production-WSS coverage.
 5. Enable fill in controlled gateway and companion profiles, renew the exact
