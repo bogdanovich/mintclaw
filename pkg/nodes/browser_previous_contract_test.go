@@ -79,44 +79,71 @@ func TestFileRegistryRejectsUnsupportedPreviousSnapshotSchemaGenerations(t *test
 }
 
 func TestFileRegistryQuarantinesPreRestrictedPolicyBrowserSchema(t *testing.T) {
-	pairing := testPendingPairing(t, 1)
-	catalog := CapabilityCatalog{Commands: previousBrowserCatalogFixture(
-		t,
-		previousBrowserSchemaPreRestrictedPolicy,
-	)}
-	catalogHash, err := catalog.canonicalHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pairing.Node.Catalog = catalog
-	pairing.Node.CatalogHash = catalogHash
-	document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
-		string(pairing.Node.ID): {
-			Snapshot: pairing.Node, PublicKey: pairing.PublicKey, KeyAlgorithm: pairing.KeyAlgorithm,
-			RequestedRole: pairing.RequestedRole, RequestedAt: pairing.RequestedAt,
+	for _, test := range []struct {
+		name              string
+		commands          func(*testing.T) []CommandDescriptor
+		remainingCommands int
+	}{
+		{
+			name: "ordered browser commands",
+			commands: func(t *testing.T) []CommandDescriptor {
+				return previousBrowserCatalogFixture(t, previousBrowserSchemaPreRestrictedPolicy)
+			},
 		},
-	}}
-	encoded, err := json.Marshal(document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "registry.json")
-	if err = os.WriteFile(path, encoded, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	registry, err := NewFileRegistry(path, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pending, exists, err := registry.Pending(pairing.Node.ID)
-	if err != nil || !exists {
-		t.Fatalf("Pending() = exists %v, error %v", exists, err)
-	}
-	if len(pending.Node.Catalog.Commands) != 0 {
-		t.Fatalf("quarantined pre-restricted browser commands = %#v", pending.Node.Catalog.Commands)
-	}
-	if err := pending.Node.Validate(); err != nil {
-		t.Fatalf("quarantined pre-restricted snapshot: %v", err)
+		{
+			name: "reordered and interleaved commands",
+			commands: func(t *testing.T) []CommandDescriptor {
+				browser := previousBrowserCatalogFixture(t, previousBrowserSchemaPreRestrictedPolicy)
+				commands := make([]CommandDescriptor, 0, len(browser)+1)
+				for index := len(browser) - 1; index >= 0; index-- {
+					if index == len(browser)/2 {
+						commands = append(commands, testCatalog(t).Commands[0])
+					}
+					commands = append(commands, browser[index])
+				}
+				return commands
+			},
+			remainingCommands: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pairing := testPendingPairing(t, 1)
+			catalog := CapabilityCatalog{Commands: test.commands(t)}
+			catalogHash, err := catalog.canonicalHash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pairing.Node.Catalog = catalog
+			pairing.Node.CatalogHash = catalogHash
+			document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+				string(pairing.Node.ID): {
+					Snapshot: pairing.Node, PublicKey: pairing.PublicKey, KeyAlgorithm: pairing.KeyAlgorithm,
+					RequestedRole: pairing.RequestedRole, RequestedAt: pairing.RequestedAt,
+				},
+			}}
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "registry.json")
+			if err = os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			registry, err := NewFileRegistry(path, 4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending, exists, err := registry.Pending(pairing.Node.ID)
+			if err != nil || !exists {
+				t.Fatalf("Pending() = exists %v, error %v", exists, err)
+			}
+			if len(pending.Node.Catalog.Commands) != test.remainingCommands {
+				t.Fatalf("quarantined pre-restricted commands = %#v", pending.Node.Catalog.Commands)
+			}
+			if err := pending.Node.Validate(); err != nil {
+				t.Fatalf("quarantined pre-restricted snapshot: %v", err)
+			}
+		})
 	}
 }
 

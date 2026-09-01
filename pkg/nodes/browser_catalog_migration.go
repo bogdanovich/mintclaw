@@ -77,26 +77,43 @@ func isPreRestrictedPolicyBrowserCatalog(catalog CapabilityCatalog) (bool, error
 		return false, err
 	}
 	var profiles []BrowserProfileDescriptor
-	browserCommands := make([]CommandDescriptor, 0, len(preRestrictedPolicyBrowserCommandNames))
+	browserCommandsByName := make(
+		map[string]CommandDescriptor,
+		len(preRestrictedPolicyBrowserCommandNames),
+	)
 	nonBrowser := make([]CommandDescriptor, 0, len(catalog.Commands))
 	for _, descriptor := range catalog.Commands {
 		if !strings.HasPrefix(descriptor.Name, "browser.") {
 			nonBrowser = append(nonBrowser, descriptor)
 			continue
 		}
+		if !preRestrictedPolicyBrowserCommand(descriptor.Name) {
+			return false, nil
+		}
+		if _, duplicate := browserCommandsByName[descriptor.Name]; duplicate {
+			return false, nil
+		}
 		if profiles == nil {
 			profiles = descriptor.BrowserProfiles
 		} else if !reflect.DeepEqual(profiles, descriptor.BrowserProfiles) {
 			return false, nil
 		}
-		browserCommands = append(browserCommands, descriptor)
+		browserCommandsByName[descriptor.Name] = descriptor
 	}
-	if len(browserCommands) != len(preRestrictedPolicyBrowserCommandNames) ||
+	if len(browserCommandsByName) != len(preRestrictedPolicyBrowserCommandNames) ||
 		!preRestrictedPolicyProfiles(profiles) {
 		return false, nil
 	}
 	if err := (CapabilityCatalog{Commands: nonBrowser}).Validate(); err != nil {
 		return false, err
+	}
+	browserCommands := make([]CommandDescriptor, 0, len(preRestrictedPolicyBrowserCommandNames))
+	for _, command := range preRestrictedPolicyBrowserCommandNames {
+		descriptor, exists := browserCommandsByName[command]
+		if !exists {
+			return false, nil
+		}
+		browserCommands = append(browserCommands, descriptor)
 	}
 	bindings, ok := preRestrictedPolicyTemplateBindings(profiles)
 	if !ok {
