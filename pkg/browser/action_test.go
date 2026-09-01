@@ -2324,13 +2324,11 @@ func TestBrokerPreparesRuntimeEffectAndExecutesLocalEditOnce(t *testing.T) {
 	}
 }
 
-func TestBrokerDeniesSensitiveOrAmbiguousFillBeforePreparation(t *testing.T) {
+func TestBrokerDeniesNonFillableRolesBeforePreparation(t *testing.T) {
 	for _, field := range []DriverElement{
-		{Target: "e1", Role: "textbox", Name: "Password"},
-		{Target: "e1", Role: "textbox", Name: "Card number"},
-		{Target: "e1", Role: "textbox", Name: "One-time code"},
-		{Target: "e1", Role: "textbox", Name: ""},
-		{Target: "e1", Role: "combobox", Name: "Unclassified"},
+		{Target: "e1", Role: "button", Name: "Continue"},
+		{Target: "e1", Role: "checkbox", Name: "Subscribe"},
+		{Target: "e1", Role: "slider", Name: "Volume"},
 	} {
 		t.Run(field.Role+"_"+field.Name, func(t *testing.T) {
 			broker, worker, session := openActionTestBroker(t, NewMemoryStore())
@@ -2344,7 +2342,7 @@ func TestBrokerDeniesSensitiveOrAmbiguousFillBeforePreparation(t *testing.T) {
 			worker.resolveElement = field
 			worker.resolveOrigin = "https://example.com"
 			_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
-				Owner: owner, RequestID: "request_sensitive_fill", SessionID: session.ID,
+				Owner: owner, RequestID: "request_non_fillable", SessionID: session.ID,
 				TabID: session.TabID, SnapshotID: observation.SnapshotID,
 				SnapshotGeneration: observation.SnapshotGeneration,
 				Action: Action{
@@ -2384,7 +2382,7 @@ func TestBrokerPrivateFillDenialFailsClosedBeforeDispatch(t *testing.T) {
 			invocation, err, worker.authorizeCalls, worker.actions)
 	}
 	if _, retained := broker.slots[session.ID].inputs[prepared.Action.ID]; retained {
-		t.Fatal("private classifier denial retained live fill input")
+		t.Fatal("private driver denial retained live fill input")
 	}
 	storedSession, err := store.GetSession(t.Context(), session.ID)
 	if err != nil || storedSession.State != SessionReady || worker.closed != 0 {

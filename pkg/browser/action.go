@@ -806,12 +806,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 		case ActionDownload:
 			prepared.Effect = classifyClickEffect(element)
 		case ActionFill:
-			if !browserpolicy.FillFieldAllowed(
-				prepared.CapabilityMode,
-				element.Role,
-				element.Name,
-				broker.sensitiveFieldTerms(session),
-			) {
+			if !browserpolicy.FillRoleAllowed(element.Role) {
 				return PreparedAction{}, ErrDenied
 			}
 			prepared.Effect = EffectLocalEdit
@@ -919,13 +914,12 @@ func (broker *Broker) evaluateRestrictedPolicyLocked(
 	worker ActionWorker,
 	prepared *PreparedAction,
 ) error {
-	if prepared == nil || browserpolicy.EffectiveCapabilityMode(prepared.CapabilityMode) !=
-		browserpolicy.CapabilityRestricted {
+	if prepared == nil || prepared.CapabilityMode != browserpolicy.CapabilityRestricted {
 		return nil
 	}
 	profile, ok := broker.browserProfile(session)
 	if !ok || profile.Policy == nil ||
-		profile.EffectiveApprovalMode() != browserpolicy.ApprovalPolicy {
+		profile.ApprovalMode != browserpolicy.ApprovalPolicy {
 		return ErrDenied
 	}
 	policyEffect, err := browserpolicy.DeriveActionEffect(prepared.Action, prepared.ElementRole)
@@ -972,8 +966,7 @@ func (broker *Broker) revalidateRestrictedPolicyLocked(
 	session Session,
 	prepared PreparedAction,
 ) error {
-	if browserpolicy.EffectiveCapabilityMode(prepared.CapabilityMode) !=
-		browserpolicy.CapabilityRestricted {
+	if prepared.CapabilityMode != browserpolicy.CapabilityRestricted {
 		return nil
 	}
 	profile, ok := broker.browserProfile(session)
@@ -1503,7 +1496,7 @@ func tracksBrowserProgress(prepared PreparedAction) bool {
 }
 
 func preparedRequiresApproval(prepared PreparedAction) bool {
-	if browserpolicy.EffectiveApprovalMode(prepared.ApprovalMode) == browserpolicy.ApprovalPolicy {
+	if prepared.ApprovalMode == browserpolicy.ApprovalPolicy {
 		return browserpolicy.RestrictedRequiresApproval(
 			prepared.RestrictedDecision,
 			prepared.Confirmation,
@@ -1560,25 +1553,17 @@ func editableElementRole(role string) bool {
 func (broker *Broker) capabilityMode(session Session) string {
 	profile, ok := broker.browserProfile(session)
 	if !ok {
-		return browserpolicy.CapabilityLegacyStrict
+		return ""
 	}
-	return profile.EffectiveCapabilityMode()
+	return profile.CapabilityMode
 }
 
 func (broker *Broker) approvalMode(session Session) string {
 	profile, ok := broker.browserProfile(session)
 	if !ok {
-		return browserpolicy.ApprovalAlwaysCommit
+		return ""
 	}
-	return profile.EffectiveApprovalMode()
-}
-
-func (broker *Broker) sensitiveFieldTerms(session Session) []string {
-	profile, ok := broker.browserProfile(session)
-	if !ok {
-		return nil
-	}
-	return profile.SensitiveFields
+	return profile.ApprovalMode
 }
 
 func (broker *Broker) browserProfile(session Session) (config.BrowserProfileConfig, bool) {

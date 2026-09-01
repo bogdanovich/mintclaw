@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
 func testContextCatalog() ContextCatalog {
@@ -286,7 +288,9 @@ func TestBrokerRejectsDurableChildFramePreparationBeforeWorkerUse(t *testing.T) 
 		SnapshotID: session.SnapshotID, SnapshotGeneration: session.SnapshotGeneration,
 		CurrentOrigin: session.SnapshotOrigin,
 		Action:        Action{Kind: ActionScroll, Direction: "down", Amount: 1}, Effect: EffectRead,
-		DryRun: session.DryRun, PolicyRevision: session.PolicyRevision,
+		CapabilityMode: browserpolicy.CapabilityFullAccess,
+		ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+		DryRun:         session.DryRun, PolicyRevision: session.PolicyRevision,
 		CatalogRevision: worker.CatalogRevision(), CreatedAt: created.UnixNano(),
 		ExpiresAt: created.Add(time.Minute).UnixNano(),
 	}

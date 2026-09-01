@@ -57,7 +57,6 @@ type BrowserProfilePolicy struct {
 	CapabilityMode         string                `json:"capability_mode,omitempty"`
 	ApprovalMode           string                `json:"approval_mode,omitempty"`
 	AllowedOrigins         []string              `json:"allowed_origins,omitempty"`
-	SensitiveFields        []string              `json:"sensitive_fields,omitempty"`
 	Policy                 *browserpolicy.Policy `json:"policy,omitempty"`
 	DryRun                 bool                  `json:"dry_run"`
 	AllowApprovedActions   bool                  `json:"allow_approved_actions,omitempty"`
@@ -119,7 +118,7 @@ func browserProfilePolicyEmpty(profile BrowserProfilePolicy) bool {
 		len(profile.DriverArguments) == 0 && profile.ProfileDirectory == "" &&
 		profile.LockFile == "" && profile.Mode == "" && profile.NetworkMode == "" &&
 		profile.CapabilityMode == "" && profile.ApprovalMode == "" &&
-		len(profile.AllowedOrigins) == 0 && len(profile.SensitiveFields) == 0 && profile.Policy == nil &&
+		len(profile.AllowedOrigins) == 0 && profile.Policy == nil &&
 		!profile.DryRun && !profile.AllowApprovedActions &&
 		len(profile.AllowedActions) == 0 && !profile.Headed &&
 		profile.Limits == (nodes.BrowserLimits{})
@@ -134,7 +133,6 @@ func normalizeBrowserProfile(
 	profile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 	profile.DriverArguments = append([]string(nil), profile.DriverArguments...)
 	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
-	profile.SensitiveFields = append([]string(nil), profile.SensitiveFields...)
 	profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
 	if err := (nodes.Alias(alias)).Validate(); err != nil || alias != nodes.BrowserProfileManaged {
@@ -208,11 +206,9 @@ func normalizeBrowserProfile(
 			"profile requires managed mode and exactly one of dry_run or allow_approved_actions",
 		)
 	}
-	profile.CapabilityMode = browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode)
 	if !browserpolicy.CapabilityModeValid(profile.CapabilityMode) {
 		return BrowserProfilePolicy{}, errors.New("capability_mode is unsupported")
 	}
-	profile.ApprovalMode = browserpolicy.EffectiveApprovalMode(profile.ApprovalMode)
 	if !browserpolicy.ApprovalModeValid(profile.ApprovalMode) {
 		return BrowserProfilePolicy{}, errors.New("approval_mode is unsupported")
 	}
@@ -263,10 +259,6 @@ func normalizeBrowserProfile(
 		seenOrigins[profile.AllowedOrigins[index]] = struct{}{}
 	}
 	slices.Sort(profile.AllowedOrigins)
-	profile.SensitiveFields, err = browserpolicy.NormalizeSensitiveFieldTerms(profile.SensitiveFields)
-	if err != nil {
-		return BrowserProfilePolicy{}, err
-	}
 	if err = normalizeBrowserActions(&profile.AllowedActions); err != nil {
 		return BrowserProfilePolicy{}, err
 	}

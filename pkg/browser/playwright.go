@@ -24,7 +24,6 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	localmcp "github.com/bogdanovich/mintclaw/pkg/mcp"
 )
@@ -621,8 +620,6 @@ func (factory *PlaywrightWorkerFactory) Open(
 		limits: request.Limits.Effective(), cancelLifetime: cancelLifetime,
 		downloadReady: factory.downloadReady,
 		outputDir:     outputDir, contextSessionID: request.SessionID,
-		sensitiveFields: append([]string(nil), factory.profileConfig.SensitiveFields...),
-		capabilityMode:  factory.profileConfig.EffectiveCapabilityMode(),
 	}
 	worker.contextSecret = make([]byte, 32)
 	if _, err = rand.Read(worker.contextSecret); err != nil {
@@ -676,8 +673,6 @@ type playwrightWorker struct {
 	catalogRevision string
 	cancelLifetime  context.CancelFunc
 	outputDir       string
-	sensitiveFields []string
-	capabilityMode  string
 	downloadReady   bool
 
 	mu              sync.Mutex
@@ -889,9 +884,7 @@ func (worker *playwrightWorker) ExecuteAfterNavigationCheck(
 	if action.Kind == DriverDialog {
 		return ErrStale
 	}
-	code, err := playwrightNavigationCheckedActionCode(
-		worker.navigationID, action, worker.limits, worker.sensitiveFields, worker.capabilityMode,
-	)
+	code, err := playwrightNavigationCheckedActionCode(worker.navigationID, action, worker.limits)
 	if err != nil {
 		return err
 	}
@@ -979,7 +972,7 @@ func (worker *playwrightWorker) AuthorizeFill(
 		!playwrightTargetPattern.MatchString(target) {
 		return ErrStale
 	}
-	dispatch := playwrightFillDispatch(target, "", false, worker.sensitiveFields, worker.capabilityMode)
+	dispatch := playwrightFillDispatch(target, "", false)
 	code := playwrightNavigationCheckedCode(worker.navigationID, dispatch)
 	text, err := worker.callAndConsume(ctx, "browser_run_code_unsafe", map[string]any{"code": code}, true)
 	if err != nil {
@@ -996,13 +989,7 @@ func playwrightNavigationCheckedActionCode(
 	identity playwrightNavigationIdentity,
 	action DriverAction,
 	limits config.BrowserLimitsConfig,
-	sensitiveFields []string,
-	capabilityModes ...string,
 ) (string, error) {
-	capabilityMode := browserpolicy.CapabilityLegacyStrict
-	if len(capabilityModes) > 0 {
-		capabilityMode = browserpolicy.EffectiveCapabilityMode(capabilityModes[0])
-	}
 	tool, arguments, err := mapPlaywrightAction(action, limits)
 	if err != nil {
 		return "", err
@@ -1046,7 +1033,7 @@ func playwrightNavigationCheckedActionCode(
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").click({ button: \"left\", noWaitAfter: true });"
 	case "browser_type":
-		dispatch = playwrightFillDispatch(action.Target, action.Value, true, sensitiveFields, capabilityMode)
+		dispatch = playwrightFillDispatch(action.Target, action.Value, true)
 	case "browser_select_option":
 		dispatch = "await page.locator(\"aria-ref=\" + " + jsonString(action.Target) +
 			").selectOption([" + jsonString(action.Value) + "]);"
@@ -1090,106 +1077,38 @@ func playwrightFillDispatch(
 	target,
 	value string,
 	execute bool,
-	sensitiveFields []string,
-	capabilityMode string,
 ) string {
 	jsonString := func(value string) string {
 		encoded, _ := json.Marshal(value)
 		return string(encoded)
 	}
-	sensitive, sensitiveErr := browserpolicy.NormalizeSensitiveFieldTerms(sensitiveFields)
-	sensitive = append(browserpolicy.BuiltInSensitiveFieldTerms(), sensitive...)
-	policyJSON, _ := json.Marshal(map[string]any{
-		"valid":       sensitiveErr == nil,
-		"full_access": capabilityMode == browserpolicy.CapabilityFullAccess,
-		"sensitive":   sensitive,
-		"ordinary":    browserpolicy.OrdinaryFieldTerms(),
-	})
 	dispatch := `const fillTarget = page.locator("aria-ref=" + ` + jsonString(target) + `);
   if (await fillTarget.count() !== 1 || !await fillTarget.isVisible()) {
     return "MINTCLAW_NAV_ACT_V1|stale";
   }
 	  const fillOutcome = await fillTarget.evaluate((element, args) => {
-	    const ordinaryTypes = new Set(["", "text", "search", "email", "tel", "url", "number"]);
 	    const nonFillTypes = new Set(["hidden", "checkbox", "radio", "file", "submit", "button", "reset",
 	      "image", "range", "color"]);
-    const ordinaryAutocomplete = new Set(["", "off", "on", "name", "honorific-prefix",
-      "given-name", "additional-name", "family-name", "honorific-suffix", "nickname",
-      "email", "organization-title", "organization", "street-address", "address-line1",
-      "address-line2", "address-line3", "address-level1", "address-level2", "address-level3",
-      "address-level4", "country", "country-name", "postal-code", "tel", "tel-country-code",
-      "tel-national", "tel-area-code", "tel-local", "tel-local-prefix", "tel-local-suffix",
-      "tel-extension", "url", "photo"]);
-    const matchesTerm = (identity, term) => {
-      let offset = 0;
-      while (term && offset <= identity.length - term.length) {
-        const index = identity.indexOf(term, offset);
-        if (index < 0) return false;
-        const end = index + term.length;
-        const left = index === 0 || !/[\p{L}\p{N}]/u.test(identity[index - 1]);
-        const right = end === identity.length || !/[\p{L}\p{N}]/u.test(identity[end]);
-        if (left && right) return true;
-        offset = index + 1;
-      }
-      return false;
+	    const isWritable = () => {
+	      const tag = String(element.tagName || "").toLowerCase();
+	      const type = String(element.getAttribute("type") || "").toLowerCase();
+	      const ariaDisabled = String(element.getAttribute("aria-disabled") || "").toLowerCase().trim();
+	      const ariaReadOnly = String(element.getAttribute("aria-readonly") || "").toLowerCase().trim();
+	      const style = element.ownerDocument.defaultView.getComputedStyle(element);
+	      const bounds = element.getBoundingClientRect();
+	      const visible = element.isConnected && style.visibility !== "hidden" && style.display !== "none" &&
+	        bounds.width > 0 && bounds.height > 0;
+	      const inputLike = (tag === "input" && !nonFillTypes.has(type)) || tag === "textarea" ||
+	        element.isContentEditable;
+	      const effectivelyDisabled = element.disabled || element.matches(":disabled");
+	      const ariaEnabled = ariaDisabled === "" || ariaDisabled === "false";
+	      const ariaWritable = ariaReadOnly === "" || ariaReadOnly === "false";
+	      return visible && inputLike && !effectivelyDisabled && !element.readOnly && ariaEnabled && ariaWritable;
     };
-    const classify = () => {
-      const tag = String(element.tagName || "").toLowerCase();
-      const type = String(element.getAttribute("type") || "").toLowerCase();
-      const autocomplete = String(element.getAttribute("autocomplete") || "").toLowerCase();
-      const role = String(element.getAttribute("role") || "").toLowerCase().trim();
-      const ariaDisabled = String(element.getAttribute("aria-disabled") || "").toLowerCase().trim();
-      const ariaReadOnly = String(element.getAttribute("aria-readonly") || "").toLowerCase().trim();
-      const labelledBy = String(element.getAttribute("aria-labelledby") || "").trim();
-      const identityParts = ["name", "id", "aria-label", "placeholder", "title"].map(name =>
-        String(element.getAttribute(name) || "")).concat(Array.from(element.labels || []).map(label =>
-        String(label.textContent || "")));
-      let labelledByValid = labelledBy.length <= 1024;
-      if (labelledBy) {
-        const ids = labelledBy.split(/\s+/u).filter(Boolean);
-        const wanted = new Set(ids);
-        const references = new Map(ids.map(id => [id, []]));
-        if (ids.length === 0 || ids.length > 16 || wanted.size !== ids.length) labelledByValid = false;
-        if (labelledByValid) {
-          for (const candidate of element.ownerDocument.querySelectorAll("[id]")) {
-            if (wanted.has(candidate.id)) references.get(candidate.id).push(candidate);
-          }
-          for (const id of ids) {
-            const candidates = references.get(id);
-            const text = candidates && candidates.length === 1 ? String(candidates[0].textContent || "") : "";
-            if (!candidates || candidates.length !== 1 || !text.trim() || text.length > 1024) {
-              labelledByValid = false;
-              break;
-            }
-            identityParts.push(text);
-          }
-        }
-      }
-      const identityPartsValid = identityParts.length <= 32 &&
-        identityParts.every(part => part.length <= 1024);
-      const identity = identityParts.join(" ").toLowerCase().replace(/\s+/gu, " ").trim();
-      const style = element.ownerDocument.defaultView.getComputedStyle(element);
-      const bounds = element.getBoundingClientRect();
-      const visible = element.isConnected && style.visibility !== "hidden" && style.display !== "none" &&
-        bounds.width > 0 && bounds.height > 0;
-	      const inputLike = (tag === "input" && (args.policy.full_access ? !nonFillTypes.has(type) : ordinaryTypes.has(type))) ||
-	        tag === "textarea" || element.isContentEditable;
-      const effectivelyDisabled = element.disabled || element.matches(":disabled");
-      const compatibleRole = role === "" || role === "textbox" || role === "searchbox";
-      const ariaEnabled = ariaDisabled === "" || ariaDisabled === "false";
-      const ariaWritable = ariaReadOnly === "" || ariaReadOnly === "false";
-	      const mechanicallyWritable = visible && inputLike && !effectivelyDisabled && !element.readOnly &&
-	        ariaEnabled && ariaWritable;
-	      if (args.policy.full_access) return mechanicallyWritable;
-	      return args.policy.valid && mechanicallyWritable && labelledByValid && identityPartsValid &&
-	        identity.length <= 4096 && compatibleRole && ordinaryAutocomplete.has(autocomplete) &&
-	        !args.policy.sensitive.some(term => matchesTerm(identity, term)) &&
-	        args.policy.ordinary.some(term => matchesTerm(identity, term));
-    };
-    if (!classify()) return "denied";
-    if (!args.execute) return "ok";
-    element.focus({ preventScroll: true });
-    if (!classify()) return "denied";
+	    if (!isWritable()) return "denied";
+	    if (!args.execute) return "ok";
+	    element.focus({ preventScroll: true });
+	    if (!isWritable()) return "denied";
     const tag = String(element.tagName || "").toLowerCase();
     if (element.isContentEditable) {
       element.textContent = args.value;
@@ -1217,7 +1136,7 @@ func playwrightFillDispatch(
       new Event("input", { bubbles: true });
     element.dispatchEvent(inputEvent);
     return "ok";
-  }, { policy: ` + string(policyJSON) + `, execute: ` + strconv.FormatBool(execute) + `, value: ` + jsonString(value) + ` });
+	}, { execute: ` + strconv.FormatBool(execute) + `, value: ` + jsonString(value) + ` });
   if (fillOutcome !== "ok") return "MINTCLAW_NAV_ACT_V1|" + fillOutcome;`
 	return dispatch
 }

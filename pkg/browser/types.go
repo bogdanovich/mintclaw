@@ -540,11 +540,10 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.Action.Validate(maxTextBytes) != nil {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
 	}
-	restricted := browserpolicy.EffectiveCapabilityMode(prepared.CapabilityMode) ==
-		browserpolicy.CapabilityRestricted
+	restricted := prepared.CapabilityMode == browserpolicy.CapabilityRestricted
 	if restricted {
 		derivedEffect, derivedErr := browserpolicy.DeriveActionEffect(prepared.Action, prepared.ElementRole)
-		if browserpolicy.EffectiveApprovalMode(prepared.ApprovalMode) != browserpolicy.ApprovalPolicy ||
+		if prepared.ApprovalMode != browserpolicy.ApprovalPolicy ||
 			derivedErr != nil || string(prepared.PolicyEffect) != derivedEffect ||
 			prepared.RestrictedDecision == browserpolicy.DecisionDeny ||
 			!browserpolicy.DecisionValid(prepared.RestrictedDecision) ||
@@ -626,12 +625,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		if prepared.Action.Kind == ActionSelect && prepared.ElementRole != "combobox" {
 			return fmt.Errorf("%w: malformed prepared selection", ErrInvalid)
 		}
-		if prepared.Action.Kind == ActionFill && !browserpolicy.FillFieldAllowed(
-			prepared.CapabilityMode,
-			prepared.ElementRole,
-			prepared.ElementName,
-			nil,
-		) {
+		if prepared.Action.Kind == ActionFill && !browserpolicy.FillRoleAllowed(prepared.ElementRole) {
 			return fmt.Errorf("%w: protected fill field is unavailable", ErrDenied)
 		}
 	case ActionClick:

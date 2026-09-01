@@ -715,9 +715,10 @@ typed first-party tools and durable authority model while separating three
 questions that must not be conflated: whether an action is supported, what
 effect it reports, and whether it pauses for confirmation.
 
-1. P0 adds `full_access`, `legacy_strict`, `none`, `model_requested`, and
-   `always_commit`, with gateway/companion parity and explicit model-requested
-   confirmation.
+1. P0 added explicit capability and approval modes with gateway/companion
+   parity and explicit model-requested confirmation. The current contract
+   retains `full_access`, `restricted`, `none`, `model_requested`,
+   `always_commit`, and `policy`; both mode fields are required.
 2. P1 adds ordered restricted-policy rules and an operator-owned process hook
    with fail-closed execution and revision-bound decisions.
 

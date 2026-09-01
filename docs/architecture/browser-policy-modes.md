@@ -59,7 +59,9 @@ configured network policy.
 - `full_access`: allow every driver-supported page operation that passes the
   protocol, freshness, ownership, resource, and network checks.
 - `restricted`: apply the P1 policy object before dispatch.
-- `legacy_strict`: preserve the current compiled policy during migration only.
+
+Both `capability_mode` and `approval_mode` are required for every configured
+profile. Omission is invalid; the runtime does not infer an older policy.
 
 `approval_mode` accepts:
 
@@ -103,9 +105,9 @@ network policy, session ownership, resource limits, durable receipts, and
 crash recovery. Those are protocol and lifecycle guarantees, not semantic
 browser restrictions.
 
-P0 must not delete the existing strict policy. It moves that behavior behind
-the explicit `legacy_strict` compatibility mode for removal after the P1
-restricted policy has replaced it.
+The temporary migration policy that preceded P1 has been removed. Owners who
+need semantic restrictions express them through `restricted` policy; the
+runtime contains no compiled field-name or action-name policy.
 
 ## P1: configurable restricted policy
 

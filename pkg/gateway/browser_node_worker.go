@@ -1964,8 +1964,8 @@ func browserProfileIntersects(
 	return remote.DryRun == local.DryRun &&
 		remote.AllowApprovedActions == local.AllowApprovedActions &&
 		remote.NetworkMode == local.NetworkMode &&
-		browserpolicy.EffectiveCapabilityMode(remote.CapabilityMode) == local.EffectiveCapabilityMode() &&
-		browserpolicy.EffectiveApprovalMode(remote.ApprovalMode) == local.EffectiveApprovalMode() &&
+		remote.CapabilityMode == local.CapabilityMode &&
+		remote.ApprovalMode == local.ApprovalMode &&
 		slices.Contains(remote.Actions, "navigate") &&
 		requested.Sessions <= remote.Limits.Sessions && requested.Tabs <= remote.Limits.Tabs &&
 		requested.SessionSeconds <= remote.Limits.SessionSeconds &&
@@ -1986,10 +1986,8 @@ func browserProfilesEqual(left, right nodes.BrowserProfileDescriptor) bool {
 	return left.Alias == right.Alias && left.Revision == right.Revision &&
 		left.Driver == right.Driver && left.Mode == right.Mode &&
 		left.NetworkMode == right.NetworkMode &&
-		browserpolicy.EffectiveCapabilityMode(left.CapabilityMode) ==
-			browserpolicy.EffectiveCapabilityMode(right.CapabilityMode) &&
-		browserpolicy.EffectiveApprovalMode(left.ApprovalMode) ==
-			browserpolicy.EffectiveApprovalMode(right.ApprovalMode) &&
+		left.CapabilityMode == right.CapabilityMode &&
+		left.ApprovalMode == right.ApprovalMode &&
 		left.PolicyRevision == right.PolicyRevision && left.DryRun == right.DryRun &&
 		left.AllowApprovedActions == right.AllowApprovedActions &&
 		left.Headed == right.Headed && slices.Equal(left.Actions, right.Actions) &&

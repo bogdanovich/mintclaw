@@ -660,21 +660,10 @@ func BrowserCheckRoleAllowed(kind, role string) bool {
 	return kind == "check" && role == "radio"
 }
 
-// BrowserFillFieldAllowed is the companion-side minimum semantic deny policy.
-// It uses only freshly resolved private accessibility metadata and fails
-// closed for roles or names that cannot safely identify ordinary text input.
-func BrowserFillFieldAllowed(role, name string) bool {
-	return BrowserFillFieldAllowedWithPolicy(role, name, nil)
-}
-
-// BrowserFillFieldAllowedWithPolicy also applies companion-local private
-// operator-designated sensitive identity fragments.
-func BrowserFillFieldAllowedWithPolicy(role, name string, sensitiveTerms []string) bool {
-	return browserpolicy.OrdinaryFillField(role, name, sensitiveTerms)
-}
-
-func BrowserFillFieldAllowedForMode(capabilityMode, role, name string, sensitiveTerms []string) bool {
-	return browserpolicy.FillFieldAllowed(capabilityMode, role, name, sensitiveTerms)
+// BrowserFillRoleAllowed applies the mechanical role boundary shared with the
+// gateway. Restricted semantic authority is evaluated and bound separately.
+func BrowserFillRoleAllowed(role string) bool {
+	return browserpolicy.FillRoleAllowed(role)
 }
 
 // BrowserPressKeyValid admits only document-scoped keys that cannot express
@@ -1445,10 +1434,8 @@ type BrowserHostContextRequest struct {
 }
 
 func (profile BrowserProfileDescriptor) Validate() error {
-	restricted := browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode) ==
-		browserpolicy.CapabilityRestricted
-	policyApproval := browserpolicy.EffectiveApprovalMode(profile.ApprovalMode) ==
-		browserpolicy.ApprovalPolicy
+	restricted := profile.CapabilityMode == browserpolicy.CapabilityRestricted
+	policyApproval := profile.ApprovalMode == browserpolicy.ApprovalPolicy
 	if err := (Alias(profile.Alias)).Validate(); err != nil ||
 		!validInvocationIdentifier(profile.Revision) ||
 		profile.Driver != BrowserDriverPlaywrightMCP || profile.Mode != BrowserProfileManaged ||
@@ -1560,8 +1547,7 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 		len(input.DestinationExpectedRole) > 128 || len(input.DestinationExpectedName) > 4096 {
 		return invalidBrowserActInput()
 	}
-	restricted := browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode) ==
-		browserpolicy.CapabilityRestricted
+	restricted := profile.CapabilityMode == browserpolicy.CapabilityRestricted
 	if restricted {
 		normalizedPolicyOrigin, policyOriginErr := browserpolicy.NormalizeHTTPOrigin(input.RestrictedOrigin)
 		derivedPolicyEffect, policyEffectErr := browserpolicy.DeriveActionEffect(input.Action, input.ExpectedRole)
@@ -1600,12 +1586,8 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 	case browseraction.ActionClick:
 		valid = input.ExpectedRole != "" && BrowserClickEffectValid(input.Effect)
 	case browseraction.ActionFill:
-		valid = input.Effect == "local_edit" && BrowserFillFieldAllowedForMode(
-			profile.CapabilityMode,
-			input.ExpectedRole,
-			input.ExpectedName,
-			nil,
-		) && validBrowserProtectedInput(input, false)
+		valid = input.Effect == "local_edit" && BrowserFillRoleAllowed(input.ExpectedRole) &&
+			validBrowserProtectedInput(input, false)
 	case browseraction.ActionSelect:
 		valid = input.Effect == "local_edit" && input.ExpectedRole == "combobox" &&
 			validBrowserProtectedInput(input, false)
@@ -1659,8 +1641,8 @@ func ValidateBrowserPolicyEvaluateInput(
 ) error {
 	profile, ok := browserProfileForRevision(profiles, input.ProfileRevision)
 	normalizedOrigin, originErr := browserpolicy.NormalizeHTTPOrigin(input.Origin)
-	if !ok || browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode) !=
-		browserpolicy.CapabilityRestricted || profile.PolicyRevision != input.PolicyRevision ||
+	if !ok || profile.CapabilityMode != browserpolicy.CapabilityRestricted ||
+		profile.PolicyRevision != input.PolicyRevision ||
 		!browseraction.ActionKind(input.Action).Valid() || !slices.Contains(profile.Actions, input.Action) ||
 		!browserPolicyEvaluationEffectValid(input) ||
 		originErr != nil || normalizedOrigin != input.Origin || len(input.Role) > 256 ||

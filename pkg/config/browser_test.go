@@ -50,7 +50,8 @@ func TestBrowserConfigAcceptsExplicitEnabledDefaultTarget(t *testing.T) {
 		Profiles: map[string]BrowserProfileConfig{
 			BrowserDefaultProfile: {
 				Enabled: true, Mode: BrowserProfileManaged,
-				NetworkMode: BrowserNetworkAnyHTTP, DryRun: true,
+				NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+				ApprovalMode: BrowserApprovalAlwaysCommit, DryRun: true,
 			},
 		},
 	}
@@ -200,30 +201,9 @@ func TestBrowserPolicyRevisionBindsNormalizedRestrictedPolicyAndHook(t *testing.
 	}
 }
 
-func TestBrowserPolicyRevisionCanonicalizesSensitiveFields(t *testing.T) {
-	cfg := browserConfigFixture(t)
-	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
-	profile := target.Profiles[BrowserDefaultProfile]
-	profile.SensitiveFields = []string{"  Display   Name  ", "Cardholder"}
-	target.Profiles[BrowserDefaultProfile] = profile
-	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
-
-	first, err := cfg.Tools.Browser.PolicyRevision()
-	if err != nil {
-		t.Fatal(err)
-	}
-	profile.SensitiveFields = []string{"cardholder", "display name"}
-	target.Profiles[BrowserDefaultProfile] = profile
-	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
-	second, err := cfg.Tools.Browser.PolicyRevision()
-	if err != nil || first != second {
-		t.Fatalf("canonical sensitive field revisions = %q and %q, error = %v", first, second, err)
-	}
-}
-
 func TestBrowserPolicyRevisionBindsCapabilityAndApprovalModes(t *testing.T) {
 	cfg := browserConfigFixture(t)
-	legacy, err := cfg.Tools.Browser.PolicyRevision()
+	baseline, err := cfg.Tools.Browser.PolicyRevision()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,8 +214,8 @@ func TestBrowserPolicyRevisionBindsCapabilityAndApprovalModes(t *testing.T) {
 	target.Profiles[BrowserDefaultProfile] = profile
 	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
 	fullAccess, err := cfg.Tools.Browser.PolicyRevision()
-	if err != nil || fullAccess == legacy {
-		t.Fatalf("policy revisions legacy=%q full_access=%q error=%v", legacy, fullAccess, err)
+	if err != nil || fullAccess == baseline {
+		t.Fatalf("policy revisions baseline=%q full_access=%q error=%v", baseline, fullAccess, err)
 	}
 	profile.ApprovalMode = BrowserApprovalNone
 	target.Profiles[BrowserDefaultProfile] = profile
@@ -246,15 +226,16 @@ func TestBrowserPolicyRevisionBindsCapabilityAndApprovalModes(t *testing.T) {
 	}
 }
 
-func TestBrowserConfigRejectsDuplicateSensitiveFields(t *testing.T) {
+func TestBrowserConfigRejectsOmittedPolicyModes(t *testing.T) {
 	cfg := browserConfigFixture(t)
 	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
 	profile := target.Profiles[BrowserDefaultProfile]
-	profile.SensitiveFields = []string{"Display Name", " display   name "}
+	profile.CapabilityMode = ""
+	profile.ApprovalMode = ""
 	target.Profiles[BrowserDefaultProfile] = profile
 	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
-	if err := cfg.ValidateBrowserConfig(); err == nil || !strings.Contains(err.Error(), "duplicate term") {
-		t.Fatalf("ValidateBrowserConfig() error = %v, want duplicate sensitive field", err)
+	if err := cfg.ValidateBrowserConfig(); err == nil || !strings.Contains(err.Error(), "capability_mode") {
+		t.Fatalf("ValidateBrowserConfig() error = %v, want explicit policy modes", err)
 	}
 }
 
@@ -271,9 +252,11 @@ func TestBrowserConfigAcceptsDisabledCompanionPlacement(t *testing.T) {
 		NodeTarget: "ab-local-test",
 		Profiles: map[string]BrowserProfileConfig{
 			BrowserDefaultProfile: {
-				Enabled: false,
-				Mode:    BrowserProfileManaged,
-				DryRun:  true,
+				Enabled:        false,
+				Mode:           BrowserProfileManaged,
+				CapabilityMode: BrowserCapabilityFullAccess,
+				ApprovalMode:   BrowserApprovalAlwaysCommit,
+				DryRun:         true,
 			},
 		},
 	}
@@ -325,7 +308,8 @@ func TestBrowserConfigRejectsInvalidCompanionPlacement(t *testing.T) {
 				target.Enabled = true
 				target.Profiles[BrowserDefaultProfile] = BrowserProfileConfig{
 					Enabled: true, Mode: BrowserProfileManaged,
-					NetworkMode: BrowserNetworkAnyHTTP, DryRun: true,
+					NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+					ApprovalMode: BrowserApprovalAlwaysCommit, DryRun: true,
 				}
 			},
 			wantErr: "requires nodes.enabled",
@@ -343,7 +327,8 @@ func TestBrowserConfigRejectsInvalidCompanionPlacement(t *testing.T) {
 				Placement: BrowserPlacementNode, NodeTarget: "ab-local-test",
 				Profiles: map[string]BrowserProfileConfig{
 					BrowserDefaultProfile: {
-						Mode: BrowserProfileManaged, DryRun: true,
+						Mode: BrowserProfileManaged, CapabilityMode: BrowserCapabilityFullAccess,
+						ApprovalMode: BrowserApprovalAlwaysCommit, DryRun: true,
 					},
 				},
 			}
@@ -368,7 +353,8 @@ func TestBrowserConfigAdmitsEnabledCompanionPlacement(t *testing.T) {
 		Profiles: map[string]BrowserProfileConfig{
 			BrowserDefaultProfile: {
 				Enabled: true, Mode: BrowserProfileManaged,
-				NetworkMode: BrowserNetworkAnyHTTP, DryRun: true,
+				NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+				ApprovalMode: BrowserApprovalAlwaysCommit, DryRun: true,
 			},
 		},
 	}
@@ -595,7 +581,8 @@ func TestBrowserConfigRejectsAuthorityExpansion(t *testing.T) {
 				target := cfg.Tools.Browser.Targets["gateway"]
 				target.Profiles["other"] = BrowserProfileConfig{
 					Enabled: true, Mode: BrowserProfileManaged,
-					NetworkMode: BrowserNetworkExactOrigins, AllowedOrigins: []string{"https://example.com"},
+					NetworkMode: BrowserNetworkExactOrigins, CapabilityMode: BrowserCapabilityFullAccess,
+					ApprovalMode: BrowserApprovalAlwaysCommit, AllowedOrigins: []string{"https://example.com"},
 				}
 				cfg.Tools.Browser.Targets["gateway"] = target
 			},
@@ -887,6 +874,8 @@ func browserConfigFixture(t *testing.T) *Config {
 						Enabled:        true,
 						Mode:           BrowserProfileManaged,
 						NetworkMode:    BrowserNetworkExactOrigins,
+						CapabilityMode: BrowserCapabilityFullAccess,
+						ApprovalMode:   BrowserApprovalAlwaysCommit,
 						DryRun:         true,
 						AllowedOrigins: []string{"https://example.com"},
 					},

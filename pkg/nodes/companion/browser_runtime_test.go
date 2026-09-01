@@ -831,21 +831,10 @@ func TestRuntimeExecutesProtectedFillOnlyFromMatchingEphemeralInput(t *testing.T
 	}{
 		{name: "missing", input: input},
 		{name: "digest mismatch", input: input, ephemeral: json.RawMessage(`{"value":"different"}`)},
-		{name: "sensitive field", input: func() nodes.BrowserActInput {
-			candidate := input
-			candidate.ExpectedName = "Password"
-			return candidate
-		}(), ephemeral: json.RawMessage(`{"value":"` + secret + `"}`)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := test.input
 			candidate.ActionInvocationID = "browser_fill_denied_" + strings.ReplaceAll(test.name, " ", "_")
-			if test.name == "sensitive field" {
-				if validationErr := nodes.ValidateBrowserActInput(candidate, host.profiles); validationErr == nil {
-					t.Fatal("sensitive protected fill was accepted")
-				}
-				return
-			}
 			candidateRaw, marshalErr := json.Marshal(candidate)
 			if marshalErr != nil {
 				t.Fatal(marshalErr)
@@ -1196,7 +1185,9 @@ func browserRuntimeHostFixture() *fakeBrowserCommandHost {
 	return &fakeBrowserCommandHost{profiles: []nodes.BrowserProfileDescriptor{{
 		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		DryRun: true, Actions: []string{"navigate", "scroll"}, Limits: nodes.BrowserLimits{}.Effective(),
+		CapabilityMode: browserpolicy.CapabilityFullAccess,
+		ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+		DryRun:         true, Actions: []string{"navigate", "scroll"}, Limits: nodes.BrowserLimits{}.Effective(),
 	}}}
 }
 

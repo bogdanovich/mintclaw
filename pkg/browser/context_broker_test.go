@@ -346,7 +346,7 @@ func TestContextBrokerModelRequestedConfirmationIsExplicit(t *testing.T) {
 	base.Confirmation = "request"
 	confirmed, err := broker.PrepareContext(t.Context(), base)
 	if err != nil || !confirmed.RequiresApproval ||
-		confirmed.Request.ApprovalMode != config.BrowserApprovalModelRequested {
+		confirmed.ApprovalMode != config.BrowserApprovalModelRequested {
 		t.Fatalf("PrepareContext(confirmed) = %#v, %v", confirmed, err)
 	}
 }

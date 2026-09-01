@@ -20,10 +20,8 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	profile := companionBrowserProfileFixture(t, baseDir)
 	profile.CapabilityMode = browserpolicy.CapabilityFullAccess
 	profile.ApprovalMode = browserpolicy.ApprovalModelRequested
-	profile.SensitiveFields = []string{"  Display   Name  "}
 	originalAgents := append([]string(nil), profile.AllowedAgents...)
 	originalActions := append([]string(nil), profile.AllowedActions...)
-	originalSensitiveFields := append([]string(nil), profile.SensitiveFields...)
 	cfg, err := (Config{
 		GatewayURL: "wss://gateway.example",
 		BrowserProfiles: map[string]BrowserProfilePolicy{
@@ -39,13 +37,11 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 		strings.Join(ready.AllowedAgents, ",") != "browser,marketplace" ||
 		strings.Join(ready.AllowedActions, ",") != "check,click,download,file_chooser,hover,navigate,uncheck" ||
 		ready.CapabilityMode != browserpolicy.CapabilityFullAccess ||
-		ready.ApprovalMode != browserpolicy.ApprovalModelRequested ||
-		strings.Join(ready.SensitiveFields, ",") != "display name" {
+		ready.ApprovalMode != browserpolicy.ApprovalModelRequested {
 		t.Fatalf("normalized browser profile = %#v", ready)
 	}
 	if strings.Join(profile.AllowedAgents, ",") != strings.Join(originalAgents, ",") ||
-		strings.Join(profile.AllowedActions, ",") != strings.Join(originalActions, ",") ||
-		strings.Join(profile.SensitiveFields, ",") != strings.Join(originalSensitiveFields, ",") {
+		strings.Join(profile.AllowedActions, ",") != strings.Join(originalActions, ",") {
 		t.Fatal("Normalize() mutated caller-owned browser profile slices")
 	}
 	descriptors, err := browserProfileDescriptors(cfg.BrowserProfiles)
@@ -62,7 +58,7 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 	}
 	for _, private := range []string{
 		ready.DriverExecutable, ready.ProfileDirectory, ready.LockFile,
-		ready.DriverExecutableSHA256, "display name", "sensitive_fields", "driver_arguments", "allowed_agents",
+		ready.DriverExecutableSHA256, "driver_arguments", "allowed_agents",
 		"allowed_actors",
 	} {
 		if strings.Contains(string(encoded), private) {
@@ -285,6 +281,9 @@ func TestConfigRejectsMissingExplicitBrowserRuntimeExecutable(t *testing.T) {
 func TestNormalizeBrowserRuntimeExecutableSupportsSplitPathsAndRejectsDuplicates(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	baseDir := t.TempDir()
+	if err := os.Chmod(baseDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	runtimeExecutable := filepath.Join(baseDir, "browser runtime=value")
 	if err := os.WriteFile(runtimeExecutable, []byte("runtime"), 0o700); err != nil {
 		t.Fatal(err)
@@ -496,12 +495,19 @@ func TestBrowserProfileRuntimeIdentityFailsClosedAfterConfiguration(t *testing.T
 
 func companionBrowserProfileFixture(t *testing.T, baseDir string) BrowserProfilePolicy {
 	t.Helper()
-	executable, err := os.Executable()
+	if err := os.Chmod(baseDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	tTestExecutable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(executable)
+	data, err := os.ReadFile(tTestExecutable)
 	if err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(baseDir, "browser-driver")
+	if err = os.WriteFile(executable, data, 0o500); err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(data)
@@ -522,7 +528,9 @@ func companionBrowserProfileFixture(t *testing.T, baseDir string) BrowserProfile
 		DriverArguments:  []string{"--browser=chrome"},
 		ProfileDirectory: profileDir, LockFile: filepath.Join(lockDir, "browser.lock"),
 		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
-		DryRun: true,
+		CapabilityMode: browserpolicy.CapabilityFullAccess,
+		ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+		DryRun:         true,
 		AllowedActions: []string{
 			"navigate", "click", "download", "file_chooser", "check", "uncheck", "hover",
 		},

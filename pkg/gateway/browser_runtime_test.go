@@ -299,6 +299,8 @@ func gatewayBrowserConfig(workspace string) *config.Config {
 					config.BrowserDefaultProfile: {
 						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
 						NetworkMode:    config.BrowserNetworkExactOrigins,
+						CapabilityMode: config.BrowserCapabilityFullAccess,
+						ApprovalMode:   config.BrowserApprovalAlwaysCommit,
 						AllowedOrigins: []string{"https://example.com"},
 					},
 				},
