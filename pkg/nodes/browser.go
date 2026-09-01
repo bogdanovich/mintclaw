@@ -73,14 +73,15 @@ const (
 )
 
 const (
-	BrowserCommandSessionOpen   = "browser.session.open.v1"
-	BrowserCommandSessionStatus = "browser.session.status.v1"
-	BrowserCommandObserve       = "browser.observe.v1"
-	BrowserCommandCapture       = "browser.capture.v1"
-	BrowserCommandDiagnostics   = "browser.diagnostics.v1"
-	BrowserCommandAct           = "browser.act.v1"
-	BrowserCommandContexts      = "browser.contexts.v1"
-	BrowserCommandSessionClose  = "browser.session.close.v1"
+	BrowserCommandSessionOpen    = "browser.session.open.v1"
+	BrowserCommandSessionStatus  = "browser.session.status.v1"
+	BrowserCommandObserve        = "browser.observe.v1"
+	BrowserCommandCapture        = "browser.capture.v1"
+	BrowserCommandDiagnostics    = "browser.diagnostics.v1"
+	BrowserCommandPolicyEvaluate = "browser.policy.evaluate.v1"
+	BrowserCommandAct            = "browser.act.v1"
+	BrowserCommandContexts       = "browser.contexts.v1"
+	BrowserCommandSessionClose   = "browser.session.close.v1"
 )
 
 var currentBrowserCommandSpecs = [...]struct {
@@ -95,6 +96,7 @@ var currentBrowserCommandSpecs = [...]struct {
 	{BrowserCommandSessionClose, RiskWrite},
 	{BrowserCommandCapture, RiskRead},
 	{BrowserCommandDiagnostics, RiskRead},
+	{BrowserCommandPolicyEvaluate, RiskRead},
 }
 
 type BrowserLimits struct {
@@ -222,6 +224,7 @@ type BrowserProfileDescriptor struct {
 	NetworkMode          string        `json:"network_mode"`
 	CapabilityMode       string        `json:"capability_mode,omitempty"`
 	ApprovalMode         string        `json:"approval_mode,omitempty"`
+	PolicyRevision       string        `json:"policy_revision,omitempty"`
 	DryRun               bool          `json:"dry_run"`
 	AllowApprovedActions bool          `json:"allow_approved_actions,omitempty"`
 	Headed               bool          `json:"headed"`
@@ -389,34 +392,85 @@ func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
 }
 
 type BrowserActInput struct {
-	SessionID               string               `json:"session_id"`
-	TabID                   string               `json:"tab_id"`
-	SnapshotGeneration      uint64               `json:"snapshot_generation"`
-	ActionInvocationID      string               `json:"action_invocation_id"`
-	Action                  browseraction.Action `json:"action"`
-	Effect                  string               `json:"effect"`
-	Confirmation            string               `json:"confirmation,omitempty"`
-	CurrentOrigin           string               `json:"current_origin"`
-	PreparedActionHash      string               `json:"prepared_action_hash"`
-	BrowserPolicyRevision   string               `json:"browser_policy_revision"`
-	ProfileRevision         string               `json:"profile_revision"`
-	ExpectedRole            string               `json:"expected_role,omitempty"`
-	ExpectedName            string               `json:"expected_name,omitempty"`
-	DestinationExpectedRole string               `json:"destination_expected_role,omitempty"`
-	DestinationExpectedName string               `json:"destination_expected_name,omitempty"`
-	DialogType              string               `json:"dialog_type,omitempty"`
-	DialogMessageDigest     string               `json:"dialog_message_digest,omitempty"`
-	DialogMessageBytes      int                  `json:"dialog_message_bytes,omitempty"`
-	InputDigest             string               `json:"input_digest,omitempty"`
-	InputBytes              int                  `json:"input_bytes,omitempty"`
-	ArtifactSHA256          string               `json:"artifact_sha256,omitempty"`
-	ArtifactBytes           int64                `json:"artifact_bytes,omitempty"`
-	ArtifactFilename        string               `json:"artifact_filename,omitempty"`
-	ArtifactContentType     string               `json:"artifact_content_type,omitempty"`
-	ApprovalDigest          string               `json:"approval_digest,omitempty"`
-	WorkspaceID             string               `json:"workspace_id,omitempty"`
-	RouteID                 string               `json:"route_id,omitempty"`
-	BrowserTarget           string               `json:"browser_target,omitempty"`
+	SessionID                string               `json:"session_id"`
+	TabID                    string               `json:"tab_id"`
+	SnapshotGeneration       uint64               `json:"snapshot_generation"`
+	ActionInvocationID       string               `json:"action_invocation_id"`
+	Action                   browseraction.Action `json:"action"`
+	Effect                   string               `json:"effect"`
+	Confirmation             string               `json:"confirmation,omitempty"`
+	CurrentOrigin            string               `json:"current_origin"`
+	PreparedActionHash       string               `json:"prepared_action_hash"`
+	BrowserPolicyRevision    string               `json:"browser_policy_revision"`
+	ProfileRevision          string               `json:"profile_revision"`
+	ExpectedRole             string               `json:"expected_role,omitempty"`
+	ExpectedName             string               `json:"expected_name,omitempty"`
+	DestinationExpectedRole  string               `json:"destination_expected_role,omitempty"`
+	DestinationExpectedName  string               `json:"destination_expected_name,omitempty"`
+	DialogType               string               `json:"dialog_type,omitempty"`
+	DialogMessageDigest      string               `json:"dialog_message_digest,omitempty"`
+	DialogMessageBytes       int                  `json:"dialog_message_bytes,omitempty"`
+	InputDigest              string               `json:"input_digest,omitempty"`
+	InputBytes               int                  `json:"input_bytes,omitempty"`
+	ArtifactSHA256           string               `json:"artifact_sha256,omitempty"`
+	ArtifactBytes            int64                `json:"artifact_bytes,omitempty"`
+	ArtifactFilename         string               `json:"artifact_filename,omitempty"`
+	ArtifactContentType      string               `json:"artifact_content_type,omitempty"`
+	ApprovalDigest           string               `json:"approval_digest,omitempty"`
+	WorkspaceID              string               `json:"workspace_id,omitempty"`
+	RouteID                  string               `json:"route_id,omitempty"`
+	BrowserTarget            string               `json:"browser_target,omitempty"`
+	RestrictedDecision       string               `json:"restricted_decision,omitempty"`
+	RestrictedPolicyRevision string               `json:"restricted_policy_revision,omitempty"`
+	RestrictedOrigin         string               `json:"restricted_origin,omitempty"`
+}
+
+type BrowserPolicyEvaluateInput struct {
+	ProfileRevision string `json:"profile_revision"`
+	PolicyRevision  string `json:"policy_revision"`
+	Action          string `json:"action"`
+	Effect          string `json:"effect"`
+	Origin          string `json:"origin"`
+	Role            string `json:"role,omitempty"`
+	Name            string `json:"name,omitempty"`
+}
+
+type BrowserPolicyEvaluateResult struct {
+	ProfileRevision string `json:"profile_revision"`
+	PolicyRevision  string `json:"policy_revision"`
+	Decision        string `json:"decision"`
+	Reason          string `json:"reason,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+}
+
+func (input *BrowserPolicyEvaluateInput) UnmarshalJSON(data []byte) error {
+	type policyInputAlias BrowserPolicyEvaluateInput
+	var value policyInputAlias
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser policy input", ErrInvalidCapability)
+	}
+	*input = BrowserPolicyEvaluateInput(value)
+	return nil
+}
+
+func (result *BrowserPolicyEvaluateResult) UnmarshalJSON(data []byte) error {
+	type policyResultAlias BrowserPolicyEvaluateResult
+	var value policyResultAlias
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing browser policy result", ErrInvalidCapability)
+	}
+	*result = BrowserPolicyEvaluateResult(value)
+	return nil
 }
 
 func (input BrowserActInput) MarshalJSON() ([]byte, error) {
@@ -435,34 +489,37 @@ func (input BrowserActInput) MarshalJSON() ([]byte, error) {
 
 func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 	var value struct {
-		SessionID               string               `json:"session_id"`
-		TabID                   string               `json:"tab_id"`
-		SnapshotGeneration      json.RawMessage      `json:"snapshot_generation"`
-		ActionInvocationID      string               `json:"action_invocation_id"`
-		Action                  browseraction.Action `json:"action"`
-		Effect                  string               `json:"effect"`
-		Confirmation            string               `json:"confirmation,omitempty"`
-		CurrentOrigin           string               `json:"current_origin"`
-		PreparedActionHash      string               `json:"prepared_action_hash"`
-		BrowserPolicyRevision   string               `json:"browser_policy_revision"`
-		ProfileRevision         string               `json:"profile_revision"`
-		ExpectedRole            string               `json:"expected_role,omitempty"`
-		ExpectedName            string               `json:"expected_name,omitempty"`
-		DestinationExpectedRole string               `json:"destination_expected_role,omitempty"`
-		DestinationExpectedName string               `json:"destination_expected_name,omitempty"`
-		DialogType              string               `json:"dialog_type,omitempty"`
-		DialogMessageDigest     string               `json:"dialog_message_digest,omitempty"`
-		DialogMessageBytes      json.RawMessage      `json:"dialog_message_bytes,omitempty"`
-		InputDigest             string               `json:"input_digest,omitempty"`
-		InputBytes              json.RawMessage      `json:"input_bytes,omitempty"`
-		ArtifactSHA256          string               `json:"artifact_sha256,omitempty"`
-		ArtifactBytes           json.RawMessage      `json:"artifact_bytes,omitempty"`
-		ArtifactFilename        string               `json:"artifact_filename,omitempty"`
-		ArtifactContentType     string               `json:"artifact_content_type,omitempty"`
-		ApprovalDigest          string               `json:"approval_digest,omitempty"`
-		WorkspaceID             string               `json:"workspace_id,omitempty"`
-		RouteID                 string               `json:"route_id,omitempty"`
-		BrowserTarget           string               `json:"browser_target,omitempty"`
+		SessionID                string               `json:"session_id"`
+		TabID                    string               `json:"tab_id"`
+		SnapshotGeneration       json.RawMessage      `json:"snapshot_generation"`
+		ActionInvocationID       string               `json:"action_invocation_id"`
+		Action                   browseraction.Action `json:"action"`
+		Effect                   string               `json:"effect"`
+		Confirmation             string               `json:"confirmation,omitempty"`
+		CurrentOrigin            string               `json:"current_origin"`
+		PreparedActionHash       string               `json:"prepared_action_hash"`
+		BrowserPolicyRevision    string               `json:"browser_policy_revision"`
+		ProfileRevision          string               `json:"profile_revision"`
+		ExpectedRole             string               `json:"expected_role,omitempty"`
+		ExpectedName             string               `json:"expected_name,omitempty"`
+		DestinationExpectedRole  string               `json:"destination_expected_role,omitempty"`
+		DestinationExpectedName  string               `json:"destination_expected_name,omitempty"`
+		DialogType               string               `json:"dialog_type,omitempty"`
+		DialogMessageDigest      string               `json:"dialog_message_digest,omitempty"`
+		DialogMessageBytes       json.RawMessage      `json:"dialog_message_bytes,omitempty"`
+		InputDigest              string               `json:"input_digest,omitempty"`
+		InputBytes               json.RawMessage      `json:"input_bytes,omitempty"`
+		ArtifactSHA256           string               `json:"artifact_sha256,omitempty"`
+		ArtifactBytes            json.RawMessage      `json:"artifact_bytes,omitempty"`
+		ArtifactFilename         string               `json:"artifact_filename,omitempty"`
+		ArtifactContentType      string               `json:"artifact_content_type,omitempty"`
+		ApprovalDigest           string               `json:"approval_digest,omitempty"`
+		WorkspaceID              string               `json:"workspace_id,omitempty"`
+		RouteID                  string               `json:"route_id,omitempty"`
+		BrowserTarget            string               `json:"browser_target,omitempty"`
+		RestrictedDecision       string               `json:"restricted_decision,omitempty"`
+		RestrictedPolicyRevision string               `json:"restricted_policy_revision,omitempty"`
+		RestrictedOrigin         string               `json:"restricted_origin,omitempty"`
 	}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
@@ -503,6 +560,9 @@ func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
 		ArtifactFilename: value.ArtifactFilename, ArtifactContentType: value.ArtifactContentType,
 		ApprovalDigest: value.ApprovalDigest,
 		WorkspaceID:    value.WorkspaceID, RouteID: value.RouteID, BrowserTarget: value.BrowserTarget,
+		RestrictedDecision:       value.RestrictedDecision,
+		RestrictedPolicyRevision: value.RestrictedPolicyRevision,
+		RestrictedOrigin:         value.RestrictedOrigin,
 	}
 	return nil
 }
@@ -1325,37 +1385,46 @@ type BrowserHostCaptureRequest struct {
 }
 
 type BrowserHostActRequest struct {
-	SessionID               string
-	RoutedSessionID         string
-	TabID                   string
-	SnapshotGeneration      uint64
-	ActionInvocationID      string
-	Action                  browseraction.Action
-	Effect                  string
-	Confirmation            string
-	CurrentOrigin           string
-	PreparedActionHash      string
-	BrowserPolicyRevision   string
-	ProfileRevision         string
-	ApprovalDigest          string
-	ExpectedRole            string
-	ExpectedName            string
-	DestinationExpectedRole string
-	DestinationExpectedName string
-	DialogType              string
-	DialogMessageDigest     string
-	DialogMessageBytes      int
-	InputDigest             string
-	InputBytes              int
-	ArtifactSHA256          string
-	ArtifactBytes           int64
-	ArtifactFilename        string
-	ArtifactContentType     string
-	WorkspaceID             string
-	RouteID                 string
-	BrowserTarget           string
-	AgentID                 string
-	ActorID                 string
+	SessionID                string
+	RoutedSessionID          string
+	TabID                    string
+	SnapshotGeneration       uint64
+	ActionInvocationID       string
+	Action                   browseraction.Action
+	Effect                   string
+	Confirmation             string
+	CurrentOrigin            string
+	PreparedActionHash       string
+	BrowserPolicyRevision    string
+	ProfileRevision          string
+	ApprovalDigest           string
+	ExpectedRole             string
+	ExpectedName             string
+	DestinationExpectedRole  string
+	DestinationExpectedName  string
+	DialogType               string
+	DialogMessageDigest      string
+	DialogMessageBytes       int
+	InputDigest              string
+	InputBytes               int
+	ArtifactSHA256           string
+	ArtifactBytes            int64
+	ArtifactFilename         string
+	ArtifactContentType      string
+	WorkspaceID              string
+	RouteID                  string
+	BrowserTarget            string
+	RestrictedDecision       string
+	RestrictedPolicyRevision string
+	RestrictedOrigin         string
+	AgentID                  string
+	ActorID                  string
+}
+
+type BrowserHostPolicyRequest struct {
+	BrowserPolicyEvaluateInput
+	AgentID string
+	ActorID string
 }
 
 type BrowserHostContextRequest struct {
@@ -1372,15 +1441,19 @@ type BrowserHostContextRequest struct {
 }
 
 func (profile BrowserProfileDescriptor) Validate() error {
+	restricted := browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode) ==
+		browserpolicy.CapabilityRestricted
+	policyApproval := browserpolicy.EffectiveApprovalMode(profile.ApprovalMode) ==
+		browserpolicy.ApprovalPolicy
 	if err := (Alias(profile.Alias)).Validate(); err != nil ||
 		!validInvocationIdentifier(profile.Revision) ||
 		profile.Driver != BrowserDriverPlaywrightMCP || profile.Mode != BrowserProfileManaged ||
 		(profile.NetworkMode != BrowserNetworkExactOrigins &&
 			profile.NetworkMode != BrowserNetworkPublicWeb && profile.NetworkMode != BrowserNetworkAnyHTTP) ||
 		!browserpolicy.CapabilityModeValid(profile.CapabilityMode) ||
-		browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode) == browserpolicy.CapabilityRestricted ||
-		!browserpolicy.ApprovalModeValid(profile.ApprovalMode) ||
-		browserpolicy.EffectiveApprovalMode(profile.ApprovalMode) == browserpolicy.ApprovalPolicy ||
+		!browserpolicy.ApprovalModeValid(profile.ApprovalMode) || restricted != policyApproval ||
+		(restricted && !validSHA256Digest(profile.PolicyRevision)) ||
+		(!restricted && profile.PolicyRevision != "") ||
 		profile.DryRun == profile.AllowApprovedActions || len(profile.Actions) == 0 ||
 		len(profile.Actions) > MaxBrowserActions || !sort.StringsAreSorted(profile.Actions) {
 		return fmt.Errorf("%w: malformed browser profile descriptor", ErrInvalidCapability)
@@ -1483,6 +1556,20 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 		len(input.DestinationExpectedRole) > 128 || len(input.DestinationExpectedName) > 4096 {
 		return invalidBrowserActInput()
 	}
+	restricted := browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode) ==
+		browserpolicy.CapabilityRestricted
+	if restricted {
+		normalizedPolicyOrigin, policyOriginErr := browserpolicy.NormalizeHTTPOrigin(input.RestrictedOrigin)
+		if input.RestrictedPolicyRevision != profile.PolicyRevision ||
+			!browserpolicy.DecisionValid(input.RestrictedDecision) ||
+			input.RestrictedDecision == browserpolicy.DecisionDeny || policyOriginErr != nil ||
+			normalizedPolicyOrigin != input.RestrictedOrigin {
+			return invalidBrowserActInput()
+		}
+	} else if input.RestrictedDecision != "" || input.RestrictedPolicyRevision != "" ||
+		input.RestrictedOrigin != "" {
+		return invalidBrowserActInput()
+	}
 	kind := input.Action.Kind
 	if !browserActionUsesElementSemantics(kind) && (input.ExpectedRole != "" || input.ExpectedName != "") ||
 		kind != browseraction.ActionDrag &&
@@ -1548,8 +1635,38 @@ func ValidateBrowserActInput(input BrowserActInput, profiles []BrowserProfileDes
 		return invalidBrowserActInput()
 	}
 	requiresApproval := BrowserActionRequiresApproval(profile.ApprovalMode, input.Effect, input.Confirmation)
+	if restricted {
+		requiresApproval = input.RestrictedDecision == browserpolicy.DecisionAsk
+	}
 	if requiresApproval != BrowserApprovalDigestMatches(input) || (!requiresApproval && input.ApprovalDigest != "") {
 		return invalidBrowserActInput()
+	}
+	return nil
+}
+
+func ValidateBrowserPolicyEvaluateInput(
+	input BrowserPolicyEvaluateInput,
+	profiles []BrowserProfileDescriptor,
+) error {
+	profile, ok := browserProfileForRevision(profiles, input.ProfileRevision)
+	normalizedOrigin, originErr := browserpolicy.NormalizeHTTPOrigin(input.Origin)
+	if !ok || browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode) !=
+		browserpolicy.CapabilityRestricted || profile.PolicyRevision != input.PolicyRevision ||
+		!browseraction.ActionKind(input.Action).Valid() || !slices.Contains(profile.Actions, input.Action) ||
+		!BrowserClickEffectValid(input.Effect) ||
+		originErr != nil || normalizedOrigin != input.Origin || len(input.Role) > 256 ||
+		len(input.Name) > 512 || strings.ContainsRune(input.Role, 0) || strings.ContainsRune(input.Name, 0) {
+		return fmt.Errorf("%w: malformed browser policy input", ErrInvalidInvocation)
+	}
+	return nil
+}
+
+func ValidateBrowserPolicyEvaluateResult(result BrowserPolicyEvaluateResult) error {
+	if !validInvocationIdentifier(result.ProfileRevision) || !validSHA256Digest(result.PolicyRevision) ||
+		!browserpolicy.DecisionValid(result.Decision) || len(result.Reason) > browserpolicy.MaxHookMessageBytes ||
+		len(result.Summary) > browserpolicy.MaxHookMessageBytes || strings.ContainsRune(result.Reason, 0) ||
+		strings.ContainsRune(result.Summary, 0) {
+		return fmt.Errorf("%w: malformed browser policy result", ErrInvalidInvocation)
 	}
 	return nil
 }
@@ -1679,6 +1796,18 @@ func browserCommandInputSchema(
 			"type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
 			"items": map[string]any{"enum": []string{"console_errors", "failed_requests", "page_crashes"}},
 		})
+	case BrowserCommandPolicyEvaluate:
+		add("profile_revision", map[string]any{"enum": profileRevisions})
+		add("policy_revision", digest)
+		add("action", map[string]any{"enum": actions})
+		add("effect", map[string]any{
+			"enum": []string{"external_commit", "local_edit", "navigation", "read", "unknown"},
+		})
+		add("origin", map[string]any{
+			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
+		})
+		properties["role"] = map[string]any{"type": "string", "maxLength": 256}
+		properties["name"] = map[string]any{"type": "string", "maxLength": 512}
 	case BrowserCommandCapture:
 		add("session_id", identifier)
 		add("tab_id", identifier)
@@ -1754,6 +1883,13 @@ func browserCommandInputSchema(
 		properties["workspace_id"] = identifier
 		properties["route_id"] = identifier
 		properties["browser_target"] = identifier
+		properties["restricted_decision"] = map[string]any{
+			"enum": []string{browserpolicy.DecisionAllow, browserpolicy.DecisionAsk},
+		}
+		properties["restricted_policy_revision"] = digest
+		properties["restricted_origin"] = map[string]any{
+			"type": "string", "minLength": 1, "maxLength": MaxBrowserURLBytes,
+		}
 	case BrowserCommandContexts:
 		add("session_id", identifier)
 		add("profile_revision", map[string]any{"enum": profileRevisions})
@@ -1875,6 +2011,20 @@ func BrowserCommandOutputSchema(
 			browserDiagnosticsResultSchema(),
 			browserProtectedResultReceiptSchema(nil),
 		}})
+	case BrowserCommandPolicyEvaluate:
+		return mustJSON(map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"profile_revision", "policy_revision", "decision"},
+			"properties": map[string]any{
+				"profile_revision": identifier,
+				"policy_revision":  map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"},
+				"decision": map[string]any{"enum": []string{
+					browserpolicy.DecisionAllow, browserpolicy.DecisionDeny, browserpolicy.DecisionAsk,
+				}},
+				"reason":  map[string]any{"type": "string", "maxLength": browserpolicy.MaxHookMessageBytes},
+				"summary": map[string]any{"type": "string", "maxLength": browserpolicy.MaxHookMessageBytes},
+			},
+		})
 	case BrowserCommandCapture:
 		return mustJSON(browserOutputDescriptorSchema(limits.ScreenshotBytes))
 	case BrowserCommandAct:
@@ -2280,6 +2430,16 @@ func validateBrowserInvocationInput(descriptor CommandDescriptor, input map[stri
 			return invalidBrowserActInput()
 		}
 		return ValidateBrowserActInput(value, descriptor.BrowserProfiles)
+	case BrowserCommandPolicyEvaluate:
+		encoded, err := json.Marshal(input)
+		if err != nil {
+			return fmt.Errorf("%w: encode browser policy input", ErrInvalidInvocation)
+		}
+		var value BrowserPolicyEvaluateInput
+		if err = json.Unmarshal(encoded, &value); err != nil {
+			return fmt.Errorf("%w: decode browser policy input", ErrInvalidInvocation)
+		}
+		return ValidateBrowserPolicyEvaluateInput(value, descriptor.BrowserProfiles)
 	}
 	return nil
 }
@@ -2338,6 +2498,16 @@ func validateBrowserInvocationOutput(
 			return fmt.Errorf("%w: malformed browser observation", ErrInvalidInvocation)
 		}
 		return validateBrowserObservationBytes(value, limits)
+	case BrowserCommandPolicyEvaluate:
+		encoded, err := json.Marshal(output)
+		if err != nil {
+			return fmt.Errorf("%w: encode browser policy output", ErrInvalidInvocation)
+		}
+		var result BrowserPolicyEvaluateResult
+		if err = json.Unmarshal(encoded, &result); err != nil {
+			return fmt.Errorf("%w: decode browser policy output", ErrInvalidInvocation)
+		}
+		return ValidateBrowserPolicyEvaluateResult(result)
 	default:
 		return nil
 	}

@@ -35,6 +35,25 @@ The owner profile uses this P0 configuration:
 }
 ```
 
+For a fully unattended profile that never pauses for model-requested or
+effect-based confirmation, use the same capability mode with approvals
+disabled explicitly:
+
+```json
+{
+  "mode": "managed",
+  "network_mode": "any_http",
+  "capability_mode": "full_access",
+  "approval_mode": "none",
+  "dry_run": false,
+  "allow_approved_actions": true
+}
+```
+
+This changes only confirmation behavior. It does not bypass protocol
+validation, stale-element checks, session ownership, resource limits, or the
+configured network policy.
+
 `capability_mode` accepts:
 
 - `full_access`: allow every driver-supported page operation that passes the
@@ -122,7 +141,10 @@ Rules are evaluated in order and the first match wins. Match fields are
 bounded typed arrays; no rule accepts executable expressions. The initial P1
 match surface includes action kind, effect, exact normalized origins,
 accessibility roles, and normalized element-name patterns. An unmatched action
-uses `default_decision`.
+uses `default_decision`. Element names and patterns are lowercased and internal
+whitespace is collapsed before matching. The only pattern operator is `*`,
+which matches zero or more Unicode characters; every other character is
+literal, and regular expressions are not executed.
 
 When configured, the hook receives one canonical JSON object on standard
 input containing only bounded action metadata, profile and policy revisions,
@@ -145,7 +167,10 @@ return exactly one bounded JSON object:
 Spawn failure, timeout, non-zero exit, malformed JSON, oversized output, an
 unknown decision, or a changed policy revision fails closed. The hook command
 is an argv array and is never interpreted by a shell. Its executable and
-arguments are operator configuration and are never model-controlled.
+arguments are operator configuration and are never model-controlled. The hook
+runs with a minimal non-secret environment rather than inheriting gateway or
+companion credentials. It may run once while the action is prepared and again
+at final dispatch, so it must be deterministic and free of side effects.
 
 The hook refines the declarative result: `deny` always remains denied, while an
 `allow` or `ask` baseline may become `allow`, `ask`, or `deny`. The final

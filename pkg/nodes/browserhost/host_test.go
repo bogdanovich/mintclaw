@@ -17,6 +17,7 @@ import (
 	"time"
 
 	browserworker "github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 )
@@ -2511,6 +2512,112 @@ func TestBrowserHostOpensExplicitApprovedActionProfile(t *testing.T) {
 	request.SessionID = "browser_session_wrong_mode"
 	if _, err = host.Open(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 		t.Fatalf("Open() mismatched dry-run mode error = %v", err)
+	}
+}
+
+func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "hook-output.json")
+	writeBrowserHostPolicyHookOutput(t, statePath, `{"decision":"allow"}`)
+	policy := browserpolicy.Policy{
+		DefaultDecision: browserpolicy.DecisionAllow,
+		Hook: &browserpolicy.Hook{
+			Command: []string{
+				os.Args[0], "-test.run=TestBrowserHostRestrictedPolicyHookProcess", "--", statePath,
+			},
+			TimeoutMS: 1000,
+		},
+	}
+	policyRevision, err := browserpolicy.PolicyRevision(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := browserHostProfileFixture()
+	profile.CapabilityMode = browserpolicy.CapabilityRestricted
+	profile.ApprovalMode = browserpolicy.ApprovalPolicy
+	profile.Policy = &policy
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	worker := &fakeBrowserHostWorker{
+		status: browserworker.WorkerReady,
+		observations: []browserworker.DriverObservation{
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank"},
+			{URL: "about:blank", Origin: "about:blank"},
+		},
+	}
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.now = func() time.Time { return time.Unix(100, 0).UTC() }
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	open := browserHostOpenFixture()
+	open.DryRun = false
+	if _, err = host.Open(t.Context(), open); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = host.Observe(t.Context(), browserHostObserveFixture()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := host.EvaluatePolicy(t.Context(), BrowserHostPolicyRequest{
+		BrowserPolicyEvaluateInput: nodes.BrowserPolicyEvaluateInput{
+			ProfileRevision: "managed-v1", PolicyRevision: policyRevision,
+			Action: "navigate", Effect: "navigation", Origin: "https://example.com",
+		},
+		AgentID: "browser", ActorID: "telegram:owner",
+	})
+	if err != nil || result.Decision != browserpolicy.DecisionAllow ||
+		result.PolicyRevision != policyRevision {
+		t.Fatalf("EvaluatePolicy() = %#v, %v", result, err)
+	}
+	request := browserHostNavigateFixture()
+	request.SnapshotGeneration = 1
+	request.RestrictedDecision = browserpolicy.DecisionAllow
+	request.RestrictedPolicyRevision = policyRevision
+	request.RestrictedOrigin = "https://example.com"
+	mismatched := request
+	mismatched.Action.URL = "https://blocked.example/"
+	if _, err = host.Act(t.Context(), mismatched); !errors.Is(err, ErrBrowserHostDenied) {
+		t.Fatalf("Act() mismatched policy origin error = %v, want denied", err)
+	}
+	if len(worker.actions) != 0 {
+		t.Fatalf("mismatched policy origin dispatched actions: %#v", worker.actions)
+	}
+	writeBrowserHostPolicyHookOutput(t, statePath, `{"decision":"deny","reason":"changed"}`)
+	if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
+		t.Fatalf("Act() changed hook error = %v, want denied", err)
+	}
+	if len(worker.actions) != 0 {
+		t.Fatalf("changed companion hook dispatched actions: %#v", worker.actions)
+	}
+}
+
+func TestBrowserHostRestrictedPolicyHookProcess(t *testing.T) {
+	separator := -1
+	for index, argument := range os.Args {
+		if argument == "--" {
+			separator = index
+			break
+		}
+	}
+	if separator < 0 || separator+1 >= len(os.Args) {
+		return
+	}
+	output, err := os.ReadFile(os.Args[separator+1])
+	if err != nil {
+		os.Exit(3)
+	}
+	_, _ = os.Stdout.Write(output)
+	os.Exit(0)
+}
+
+func writeBrowserHostPolicyHookOutput(t *testing.T, path string, output string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(output), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

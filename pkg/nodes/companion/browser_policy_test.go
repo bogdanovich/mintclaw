@@ -70,12 +70,55 @@ func TestConfigNormalizesCompanionBrowserProfileWithoutProjectingHostDetails(t *
 		}
 	}
 	commands, err := nodes.BrowserCommandDescriptors(descriptors)
-	if err != nil || len(commands) != 8 {
+	if err != nil || len(commands) != 9 {
 		t.Fatalf("BrowserCommandDescriptors() count = %d, error = %v", len(commands), err)
 	}
 	for _, command := range commands {
 		if command.ModelContract != nil {
 			t.Fatalf("internal command %q became model-visible", command.Name)
+		}
+	}
+}
+
+func TestConfigProjectsOnlyRestrictedPolicyRevision(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	baseDir := t.TempDir()
+	profile := companionBrowserProfileFixture(t, baseDir)
+	profile.CapabilityMode = browserpolicy.CapabilityRestricted
+	profile.ApprovalMode = browserpolicy.ApprovalPolicy
+	profile.Policy = &browserpolicy.Policy{
+		DefaultDecision: browserpolicy.DecisionDeny,
+		Rules: []browserpolicy.Rule{{
+			ID: "allow-edit",
+			Match: browserpolicy.RuleMatch{
+				Actions: []string{"fill"}, NamePatterns: []string{"private listing *"},
+			},
+			Decision: browserpolicy.DecisionAllow,
+		}},
+		Hook: &browserpolicy.Hook{
+			Command: []string{"/private/operator/browser-policy", "--tenant=secret"}, TimeoutMS: 1000,
+		},
+	}
+	cfg, err := (Config{
+		GatewayURL:      "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{"managed": profile},
+	}).Normalize(baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptors, err := browserProfileDescriptors(cfg.BrowserProfiles)
+	if err != nil || len(descriptors) != 1 || descriptors[0].PolicyRevision == "" {
+		t.Fatalf("browserProfileDescriptors() = %#v, %v", descriptors, err)
+	}
+	encoded, err := json.Marshal(descriptors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{
+		"/private/operator/browser-policy", "--tenant=secret", "private listing", "allow-edit",
+	} {
+		if strings.Contains(string(encoded), private) {
+			t.Fatalf("browser descriptor leaked restricted policy value %q: %s", private, encoded)
 		}
 	}
 }

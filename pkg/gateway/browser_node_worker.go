@@ -701,6 +701,52 @@ func (worker *nodeBrowserWorker) SupportsPreparedAction(kind browser.ActionKind)
 	return kind.Valid() && slices.Contains(worker.actions, string(kind))
 }
 
+func (worker *nodeBrowserWorker) EvaluatePolicy(
+	ctx context.Context,
+	metadata browserpolicy.ActionMetadata,
+) (browser.WorkerPolicyEvaluation, error) {
+	descriptor, profile, err := worker.resolveAuthority(nodes.BrowserCommandPolicyEvaluate)
+	if err != nil || profile.PolicyRevision == "" {
+		return browser.WorkerPolicyEvaluation{}, browser.ErrDenied
+	}
+	input := nodes.BrowserPolicyEvaluateInput{
+		ProfileRevision: profile.Revision,
+		PolicyRevision:  profile.PolicyRevision,
+		Action:          metadata.Action,
+		Effect:          metadata.Effect,
+		Origin:          metadata.Origin,
+		Role:            metadata.Role,
+		Name:            metadata.Name,
+	}
+	if err = nodes.ValidateBrowserPolicyEvaluateInput(input, descriptor.BrowserProfiles); err != nil {
+		return browser.WorkerPolicyEvaluation{}, browser.ErrDenied
+	}
+	requestDigest := sha256.Sum256([]byte(fmt.Sprintf(
+		"%d\x00%s\x00%s\x00%s\x00%s",
+		time.Now().UTC().UnixNano(), metadata.Action, metadata.Effect, metadata.Origin, metadata.Name,
+	)))
+	var result nodes.BrowserPolicyEvaluateResult
+	if err = worker.invoke(
+		ctx,
+		descriptor,
+		"policy_"+hex.EncodeToString(requestDigest[:16]),
+		input,
+		&result,
+	); err != nil || nodes.ValidateBrowserPolicyEvaluateResult(result) != nil ||
+		result.ProfileRevision != profile.Revision || result.PolicyRevision != profile.PolicyRevision {
+		return browser.WorkerPolicyEvaluation{}, browser.ErrDenied
+	}
+	return browser.WorkerPolicyEvaluation{
+		Result: browserpolicy.Result{
+			Decision: result.Decision,
+			Reason:   result.Reason,
+			Summary:  result.Summary,
+		},
+		PolicyRevision:  result.PolicyRevision,
+		ProfileRevision: result.ProfileRevision,
+	}, nil
+}
+
 func (worker *nodeBrowserWorker) ExecutePrepared(
 	ctx context.Context,
 	request browser.WorkerPreparedAction,
@@ -728,6 +774,7 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 		ProfileRevision:       worker.profileRevision,
 		WorkspaceID:           worker.factory.workspaceID, BrowserTarget: worker.browserTarget,
 	}
+	bindCompanionRestrictedPolicy(&input, request.Prepared)
 	if action.Kind == "click" || action.Kind == "fill" || action.Kind == "select" || action.Kind == "check" ||
 		action.Kind == "uncheck" || action.Kind == "hover" || action.Kind == "drag" ||
 		action.Kind == "file_chooser" || action.Kind == "upload" {
@@ -770,11 +817,8 @@ func (worker *nodeBrowserWorker) ExecutePrepared(
 			}
 		}
 	}
-	if nodes.BrowserActionRequiresApproval(
-		request.Prepared.ApprovalMode,
-		input.Effect,
-		input.Confirmation,
-	) {
+	requiresApproval := companionBrowserActionRequiresApproval(input, request.Prepared.ApprovalMode)
+	if requiresApproval {
 		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
 		if err != nil {
 			return browser.ErrDenied
@@ -886,11 +930,8 @@ func (worker *nodeBrowserWorker) DownloadPrepared(
 		WorkspaceID: artifactOwner.WorkspaceID, RouteID: artifactOwner.RouteID,
 		BrowserTarget: worker.browserTarget,
 	}
-	if nodes.BrowserActionRequiresApproval(
-		request.Prepared.ApprovalMode,
-		input.Effect,
-		input.Confirmation,
-	) {
+	bindCompanionRestrictedPolicy(&input, request.Prepared)
+	if companionBrowserActionRequiresApproval(input, request.Prepared.ApprovalMode) {
 		input.ApprovalDigest, err = nodes.BrowserApprovalDigest(input)
 		if err != nil {
 			return browser.DriverDownload{}, browser.ErrDenied
@@ -962,6 +1003,25 @@ func (worker *nodeBrowserWorker) DownloadPrepared(
 		Path: path, Filename: retained.Spec.Filename, ContentType: retained.Spec.ContentType,
 		SHA256: retained.Spec.SHA256, Size: retained.Spec.DeclaredSize,
 	}, nil
+}
+
+func bindCompanionRestrictedPolicy(input *nodes.BrowserActInput, prepared browser.PreparedAction) {
+	if input == nil || prepared.WorkerRestrictedDecision == "" {
+		return
+	}
+	input.RestrictedDecision = prepared.WorkerRestrictedDecision
+	input.RestrictedPolicyRevision = prepared.WorkerRestrictedRevision
+	input.RestrictedOrigin = prepared.CurrentOrigin
+	if prepared.DestinationOrigin != "" {
+		input.RestrictedOrigin = prepared.DestinationOrigin
+	}
+}
+
+func companionBrowserActionRequiresApproval(input nodes.BrowserActInput, approvalMode string) bool {
+	if input.RestrictedDecision != "" {
+		return input.RestrictedDecision == browserpolicy.DecisionAsk
+	}
+	return nodes.BrowserActionRequiresApproval(approvalMode, input.Effect, input.Confirmation)
 }
 
 func (worker *nodeBrowserWorker) stageBrowserArtifact(
@@ -1928,7 +1988,8 @@ func browserProfilesEqual(left, right nodes.BrowserProfileDescriptor) bool {
 		browserpolicy.EffectiveCapabilityMode(left.CapabilityMode) ==
 			browserpolicy.EffectiveCapabilityMode(right.CapabilityMode) &&
 		browserpolicy.EffectiveApprovalMode(left.ApprovalMode) ==
-			browserpolicy.EffectiveApprovalMode(right.ApprovalMode) && left.DryRun == right.DryRun &&
+			browserpolicy.EffectiveApprovalMode(right.ApprovalMode) &&
+		left.PolicyRevision == right.PolicyRevision && left.DryRun == right.DryRun &&
 		left.AllowApprovedActions == right.AllowApprovedActions &&
 		left.Headed == right.Headed && slices.Equal(left.Actions, right.Actions) &&
 		left.Limits == right.Limits

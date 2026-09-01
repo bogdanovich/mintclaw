@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
 func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
@@ -19,7 +20,7 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(descriptors) != 8 {
+	if len(descriptors) != 9 {
 		t.Fatalf("descriptor count = %d", len(descriptors))
 	}
 	for _, descriptor := range descriptors {
@@ -47,7 +48,8 @@ func TestBrowserCommandDescriptorsAreTypedAndInternal(t *testing.T) {
 		descriptors[4].Name != BrowserCommandContexts || descriptors[4].Risk != RiskWrite ||
 		descriptors[5].Name != BrowserCommandSessionClose || descriptors[5].Risk != RiskWrite ||
 		descriptors[6].Name != BrowserCommandCapture || descriptors[6].Risk != RiskRead ||
-		descriptors[7].Name != BrowserCommandDiagnostics || descriptors[7].Risk != RiskRead {
+		descriptors[7].Name != BrowserCommandDiagnostics || descriptors[7].Risk != RiskRead ||
+		descriptors[8].Name != BrowserCommandPolicyEvaluate || descriptors[8].Risk != RiskRead {
 		t.Fatalf("descriptor order or risks = %#v", descriptors)
 	}
 }
@@ -76,9 +78,10 @@ func TestBrowserCatalogRejectsCommandSetWithoutDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withoutDiagnostics := append([]CommandDescriptor(nil), descriptors[:len(descriptors)-1]...)
+	withoutDiagnostics := append([]CommandDescriptor(nil), descriptors[:7]...)
+	withoutDiagnostics = append(withoutDiagnostics, descriptors[8])
 	if err = (CapabilityCatalog{Commands: withoutDiagnostics}).Validate(); err == nil {
-		t.Fatal("seven-command browser catalog was accepted")
+		t.Fatal("browser catalog without diagnostics was accepted")
 	}
 }
 
@@ -88,7 +91,7 @@ func TestBrowserCatalogRejectsIncompleteSupportedCommandSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	withoutCapture := append([]CommandDescriptor(nil), descriptors[:6]...)
-	withoutCapture = append(withoutCapture, descriptors[7])
+	withoutCapture = append(withoutCapture, descriptors[7:]...)
 	if err = (CapabilityCatalog{Commands: withoutCapture}).Validate(); err == nil {
 		t.Fatal("browser catalog accepted diagnostics while omitting a core command")
 	}
@@ -778,6 +781,59 @@ func TestBrowserActFullAccessAndModelRequestedApproval(t *testing.T) {
 	bindBrowserApprovalDigest(t, input)
 	if err = validateDescriptorInvocationInput(act, input); err != nil {
 		t.Fatalf("confirmed external commit rejected: %v", err)
+	}
+}
+
+func TestBrowserRestrictedPolicyCommandsBindDecisionRevisionAndApproval(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	profile.CapabilityMode = browserpolicy.CapabilityRestricted
+	profile.ApprovalMode = browserpolicy.ApprovalPolicy
+	profile.PolicyRevision = strings.Repeat("d", 64)
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	profile.Actions = []string{"click", "navigate"}
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyInput := map[string]any{
+		"profile_revision": "managed-v1", "policy_revision": strings.Repeat("d", 64),
+		"action": "click", "effect": "external_commit", "origin": "https://example.com",
+		"role": "button", "name": "Save",
+	}
+	if err = validateDescriptorInvocationInput(descriptors[8], policyInput); err != nil {
+		t.Fatalf("restricted policy evaluation input rejected: %v", err)
+	}
+	policyInput["policy_revision"] = strings.Repeat("e", 64)
+	if err = validateDescriptorInvocationInput(descriptors[8], policyInput); err == nil {
+		t.Fatal("restricted policy evaluation accepted a changed revision")
+	}
+
+	act := descriptors[3]
+	input := browserActInputFixture()
+	input["action"] = map[string]any{"kind": "click", "ref": "host_ref_1"}
+	input["effect"] = "external_commit"
+	input["current_origin"] = "https://example.com"
+	input["expected_role"] = "button"
+	input["expected_name"] = "Save"
+	input["restricted_decision"] = browserpolicy.DecisionAllow
+	input["restricted_policy_revision"] = strings.Repeat("d", 64)
+	input["restricted_origin"] = "https://example.com"
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
+		t.Fatalf("restricted allow action rejected: %v", err)
+	}
+	input["restricted_decision"] = browserpolicy.DecisionAsk
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
+		t.Fatal("restricted ask action without approval digest was accepted")
+	}
+	bindBrowserApprovalDigest(t, input)
+	if err = validateDescriptorInvocationInput(act, input); err != nil {
+		t.Fatalf("restricted ask action rejected: %v", err)
+	}
+	input["restricted_policy_revision"] = strings.Repeat("e", 64)
+	bindBrowserApprovalDigest(t, input)
+	if err = validateDescriptorInvocationInput(act, input); err == nil {
+		t.Fatal("restricted action accepted a changed policy revision")
 	}
 }
 
