@@ -60,6 +60,7 @@ func newTurnRunner(al *AgentLoop, cfg *config.Config) *turnRunner {
 			ModelExecution:       al.modelExecution,
 			Steering:             al.steering,
 			MediaResolver:        al.mediaStore,
+			CodingMedia:          al.codingMedia,
 			TerminalTasks:        &al.tasks,
 		},
 		Interaction: PipelineInteractionServices{

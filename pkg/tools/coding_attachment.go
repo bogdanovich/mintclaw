@@ -23,11 +23,11 @@ const (
 // CodingAttachmentTool selects durable coding-thread attachments without
 // materializing every historical reference into later prompts.
 type CodingAttachmentTool struct {
-	store media.MediaStore
+	store media.CodingMediaStore
 }
 
-func NewCodingAttachmentTool() *CodingAttachmentTool {
-	return &CodingAttachmentTool{}
+func NewCodingAttachmentTool(store media.CodingMediaStore) *CodingAttachmentTool {
+	return &CodingAttachmentTool{store: store}
 }
 
 func (t *CodingAttachmentTool) Name() string { return "coding_attachment" }
@@ -65,24 +65,16 @@ func (t *CodingAttachmentTool) Parameters() map[string]any {
 	}
 }
 
-func (t *CodingAttachmentTool) SetMediaStore(store media.MediaStore) {
-	t.store = store
-}
-
 func (t *CodingAttachmentTool) Execute(ctx context.Context, args map[string]any) *toolshared.ToolResult {
 	action, err := requiredStringArg(args, "action", "action")
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	catalog, ok := t.store.(media.ReferenceCatalog)
-	if !ok || catalog == nil {
-		return toolshared.ErrorResult("coding attachment catalog is unavailable")
-	}
 	switch action {
 	case "list":
-		return t.list(ctx, catalog, args)
+		return t.list(ctx, args)
 	case "open":
-		return t.open(ctx, catalog, args)
+		return t.open(ctx, args)
 	default:
 		return toolshared.ErrorResult("action must be list or open")
 	}
@@ -97,7 +89,6 @@ type codingAttachmentListResponse struct {
 
 func (t *CodingAttachmentTool) list(
 	ctx context.Context,
-	catalog media.ReferenceCatalog,
 	args map[string]any,
 ) *toolshared.ToolResult {
 	offset, err := boundedIntegerArg(args, "offset", 0, 0, 1<<20)
@@ -118,7 +109,7 @@ func (t *CodingAttachmentTool) list(
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	references, err := catalog.ListReferences(ctx)
+	references, err := t.store.ListReferences(ctx)
 	if err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("list coding attachments: %v", err))
 	}
@@ -171,14 +162,13 @@ type codingAttachmentReadResponse struct {
 
 func (t *CodingAttachmentTool) open(
 	ctx context.Context,
-	catalog media.ReferenceCatalog,
 	args map[string]any,
 ) *toolshared.ToolResult {
 	ref, err := requiredStringArg(args, "ref", "ref")
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	data, reference, err := catalog.ReadReference(ctx, ref)
+	data, reference, err := t.store.ReadReference(ctx, ref)
 	if err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("open coding attachment: %v", err))
 	}

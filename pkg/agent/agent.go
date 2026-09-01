@@ -64,6 +64,7 @@ type AgentLoop struct {
 	modelExecution        *modelExecutionManager
 	channelManager        interfaces.ChannelManager
 	mediaStore            media.MediaStore
+	codingMedia           media.CodingMediaStore
 	outboundOutbox        *outbox.Coordinator
 	transcriber           asr.Transcriber
 	cmdRegistry           *commands.Registry

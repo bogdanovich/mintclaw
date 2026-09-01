@@ -49,12 +49,7 @@ type codingAttachmentMediaStore struct {
 	closed        bool
 }
 
-var (
-	_ media.MediaStore                   = (*codingAttachmentMediaStore)(nil)
-	_ media.HistoricalResolutionPolicy   = (*codingAttachmentMediaStore)(nil)
-	_ media.CurrentImageAttachmentPolicy = (*codingAttachmentMediaStore)(nil)
-	_ media.ReferenceCatalog             = (*codingAttachmentMediaStore)(nil)
-)
+var _ media.CodingMediaStore = (*codingAttachmentMediaStore)(nil)
 
 func newCodingAttachmentMediaStore(
 	store *thread.Store,

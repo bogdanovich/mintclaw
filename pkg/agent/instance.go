@@ -532,7 +532,6 @@ func initCodingAgentTools(
 	registerTool(execTool)
 	registerTool(fstools.NewApplyPatchTool(workspace, false, nil))
 	registerTool(tools.NewUpdatePlanTool())
-	registerTool(tools.NewCodingAttachmentTool())
 	return nil
 }
 

@@ -249,12 +249,6 @@ func TestProviderToSeahorseMessageWithMedia(t *testing.T) {
 	}
 }
 
-type lazyHistoricalMediaPolicy struct{}
-
-func (lazyHistoricalMediaPolicy) ShouldResolveHistorical(ref string) bool {
-	return !strings.HasPrefix(ref, "media://coding/")
-}
-
 func TestProviderToSeahorseMessageOmitsLazyHistoricalMediaFromDerivedBudget(t *testing.T) {
 	msg := protocoltypes.Message{
 		Role: "user", Content: "old turn",
@@ -263,7 +257,15 @@ func TestProviderToSeahorseMessageOmitsLazyHistoricalMediaFromDerivedBudget(t *t
 	for index := range 32 {
 		msg.Media = append(msg.Media, fmt.Sprintf("media://coding/thread/image-%d", index))
 	}
-	result := providerToSeahorseMessageWithPolicy(msg, lazyHistoricalMediaPolicy{})
+	store := &lazyHistoricalMediaStore{
+		MediaStore: media.NewFileMediaStore(),
+		lazy:       make(map[string]bool),
+		resolved:   make(map[string]int),
+	}
+	for _, ref := range msg.Media[1:] {
+		store.lazy[ref] = true
+	}
+	result := providerToSeahorseMessageWithCodingMedia(msg, store)
 	if len(msg.Media) != 33 {
 		t.Fatalf("canonical input was mutated: %#v", msg.Media)
 	}
@@ -276,7 +278,7 @@ func TestProviderToSeahorseMessageOmitsLazyHistoricalMediaFromDerivedBudget(t *t
 	if len(mediaParts) != 1 || mediaParts[0] != "https://example.com/retained.png" {
 		t.Fatalf("derived media parts = %#v", mediaParts)
 	}
-	want := providerToSeahorseMessageWithPolicy(protocoltypes.Message{
+	want := providerToSeahorseMessageWithCodingMedia(protocoltypes.Message{
 		Role: "user", Content: "old turn", Media: []string{"https://example.com/retained.png"},
 	}, nil).TokenCount
 	if result.TokenCount != want {
@@ -293,7 +295,7 @@ func TestSeahorseRuntimeUsesMediaPolicyInjectedBeforeContextInitialization(t *te
 		lazy:       map[string]bool{lazyRef: true},
 		resolved:   make(map[string]int),
 	}
-	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, WithMediaStore(store))
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), &mockProvider{}, WithCodingMediaStore(store))
 	t.Cleanup(al.Close)
 	manager, ok := al.contextManager.(*seahorseContextManager)
 	if !ok {

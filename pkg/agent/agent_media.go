@@ -72,6 +72,7 @@ func promptCurrentTurnStart(
 func resolveMediaRefs(
 	messages []providers.Message,
 	store mediaResolver,
+	codingMedia media.CodingMediaStore,
 	maxSize int,
 	currentTurnStart ...int,
 ) []providers.Message {
@@ -119,11 +120,8 @@ func resolveMediaRefs(
 			if providerAttachmentHasRef(m.Attachments, ref) {
 				continue
 			}
-			if idx < start {
-				if policy, ok := store.(media.HistoricalResolutionPolicy); ok &&
-					!policy.ShouldResolveHistorical(ref) {
-					continue
-				}
+			if idx < start && codingMedia != nil && !codingMedia.ShouldResolveHistorical(ref) {
+				continue
 			}
 
 			localPath, meta, err := store.ResolveWithMeta(ref)
@@ -154,10 +152,8 @@ func resolveMediaRefs(
 			pathTags = append(pathTags, buildPathTag(mime, localPath))
 
 			attachCurrentImage := imageOnlyMessage
-			if currentUserMessage && !attachCurrentImage {
-				if policy, ok := store.(media.CurrentImageAttachmentPolicy); ok {
-					attachCurrentImage = policy.ShouldAttachCurrentImage(ref, meta)
-				}
+			if currentUserMessage && !attachCurrentImage && codingMedia != nil {
+				attachCurrentImage = codingMedia.ShouldAttachCurrentImage(ref, meta)
 			}
 			if attachCurrentImage && strings.HasPrefix(mime, "image/") {
 				dataURL := encodeImageToDataURL(localPath, mime, info, maxSize)

@@ -51,26 +51,6 @@ type Reference struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// ReferenceCatalog is an optional, authority-scoped read side for durable
-// media that can be selected on demand instead of materialized with history.
-type ReferenceCatalog interface {
-	ListReferences(context.Context) ([]Reference, error)
-	ReadReference(context.Context, string) ([]byte, Reference, error)
-}
-
-// HistoricalResolutionPolicy lets a store keep durable historical refs lazy.
-// Current-turn refs are always resolved independently of this policy.
-type HistoricalResolutionPolicy interface {
-	ShouldResolveHistorical(ref string) bool
-}
-
-// CurrentImageAttachmentPolicy lets an authority-scoped store opt current
-// user images into provider vision even when the same message also contains
-// text. Generic channel media keeps the conservative image-only default.
-type CurrentImageAttachmentPolicy interface {
-	ShouldAttachCurrentImage(ref string, meta MediaMeta) bool
-}
-
 // MediaOwner is a durable, non-reversible ownership projection for
 // authority-sensitive media consumers.
 type MediaOwner struct {
@@ -157,6 +137,17 @@ type MediaStore interface {
 	// ReleaseAll deletes all files registered under the given scope
 	// and removes the mapping entries. File-not-exist errors are ignored.
 	ReleaseAll(scope string) error
+}
+
+// CodingMediaStore is the complete authority-scoped media contract of one
+// coding thread. Coding composition roots pass it explicitly; generic media
+// stores do not acquire coding behavior through runtime capability discovery.
+type CodingMediaStore interface {
+	MediaStore
+	ListReferences(context.Context) ([]Reference, error)
+	ReadReference(context.Context, string) ([]byte, Reference, error)
+	ShouldResolveHistorical(ref string) bool
+	ShouldAttachCurrentImage(ref string, meta MediaMeta) bool
 }
 
 // mediaEntry holds the path and metadata for a stored media file.

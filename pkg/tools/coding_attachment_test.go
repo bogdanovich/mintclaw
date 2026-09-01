@@ -15,32 +15,38 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
-type fakeReferenceCatalogStore struct {
+type fakeCodingMediaStore struct {
 	references []media.Reference
 	data       map[string][]byte
 	listErr    error
 	readErr    error
 }
 
-func (*fakeReferenceCatalogStore) Store(string, media.MediaMeta, string) (string, error) {
+func (*fakeCodingMediaStore) Store(string, media.MediaMeta, string) (string, error) {
 	return "", errors.New("not implemented")
 }
 
-func (*fakeReferenceCatalogStore) Resolve(string) (string, error) {
+func (*fakeCodingMediaStore) Resolve(string) (string, error) {
 	return "", errors.New("not implemented")
 }
 
-func (*fakeReferenceCatalogStore) ResolveWithMeta(string) (string, media.MediaMeta, error) {
+func (*fakeCodingMediaStore) ResolveWithMeta(string) (string, media.MediaMeta, error) {
 	return "", media.MediaMeta{}, errors.New("not implemented")
 }
 
-func (*fakeReferenceCatalogStore) ReleaseAll(string) error { return nil }
+func (*fakeCodingMediaStore) ReleaseAll(string) error { return nil }
 
-func (s *fakeReferenceCatalogStore) ListReferences(context.Context) ([]media.Reference, error) {
+func (*fakeCodingMediaStore) ShouldResolveHistorical(string) bool { return true }
+
+func (*fakeCodingMediaStore) ShouldAttachCurrentImage(string, media.MediaMeta) bool {
+	return false
+}
+
+func (s *fakeCodingMediaStore) ListReferences(context.Context) ([]media.Reference, error) {
 	return append([]media.Reference(nil), s.references...), s.listErr
 }
 
-func (s *fakeReferenceCatalogStore) ReadReference(
+func (s *fakeCodingMediaStore) ReadReference(
 	_ context.Context,
 	ref string,
 ) ([]byte, media.Reference, error) {
@@ -55,7 +61,7 @@ func (s *fakeReferenceCatalogStore) ReadReference(
 	return nil, media.Reference{}, errors.New("reference not found")
 }
 
-func newFakeReferenceCatalogStore() *fakeReferenceCatalogStore {
+func newFakeCodingMediaStore() *fakeCodingMediaStore {
 	now := time.Date(2026, 8, 30, 7, 0, 0, 0, time.UTC)
 	imageData, err := base64.StdEncoding.DecodeString(
 		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -63,7 +69,7 @@ func newFakeReferenceCatalogStore() *fakeReferenceCatalogStore {
 	if err != nil {
 		panic(err)
 	}
-	return &fakeReferenceCatalogStore{
+	return &fakeCodingMediaStore{
 		references: []media.Reference{
 			{Ref: "media://old", Filename: "old.log", ContentType: "text/plain", Size: 3, CreatedAt: now},
 			{
@@ -90,9 +96,8 @@ func newFakeReferenceCatalogStore() *fakeReferenceCatalogStore {
 }
 
 func TestCodingAttachmentToolListsNewestMetadataWithPagingAndFilter(t *testing.T) {
-	store := newFakeReferenceCatalogStore()
-	tool := NewCodingAttachmentTool()
-	tool.SetMediaStore(store)
+	store := newFakeCodingMediaStore()
+	tool := NewCodingAttachmentTool(store)
 	result := tool.Execute(t.Context(), map[string]any{
 		"action": "list", "query": ".log", "limit": float64(1),
 	})
@@ -113,8 +118,7 @@ func TestCodingAttachmentToolListsNewestMetadataWithPagingAndFilter(t *testing.T
 }
 
 func TestCodingAttachmentToolOpensImageAsCurrentMedia(t *testing.T) {
-	tool := NewCodingAttachmentTool()
-	tool.SetMediaStore(newFakeReferenceCatalogStore())
+	tool := NewCodingAttachmentTool(newFakeCodingMediaStore())
 	result := tool.Execute(t.Context(), map[string]any{"action": "open", "ref": "media://image"})
 	if result.IsError || len(result.ContextMedia) != 1 || result.ContextMedia[0] != "media://image" ||
 		len(result.Media) != 0 || result.Deliverable != nil {
@@ -123,13 +127,12 @@ func TestCodingAttachmentToolOpensImageAsCurrentMedia(t *testing.T) {
 }
 
 func TestCodingAttachmentToolVerifiesImageBytesInsteadOfMetadata(t *testing.T) {
-	store := newFakeReferenceCatalogStore()
+	store := newFakeCodingMediaStore()
 	store.references = append(store.references, media.Reference{
 		Ref: "media://fake-image", Filename: "fake.png", ContentType: "image/png", Size: 8,
 	})
 	store.data["media://fake-image"] = []byte{0x89, 'P', 'N', 'G', 0xff, 0xfe, 0xfd, 0xfc}
-	tool := NewCodingAttachmentTool()
-	tool.SetMediaStore(store)
+	tool := NewCodingAttachmentTool(store)
 	result := tool.Execute(t.Context(), map[string]any{"action": "open", "ref": "media://fake-image"})
 	if !result.IsError || len(result.ContextMedia) != 0 || len(result.Media) != 0 {
 		t.Fatalf("mislabeled image result = %+v", result)
@@ -137,14 +140,13 @@ func TestCodingAttachmentToolVerifiesImageBytesInsteadOfMetadata(t *testing.T) {
 }
 
 func TestCodingAttachmentToolRejectsTruncatedImageBody(t *testing.T) {
-	store := newFakeReferenceCatalogStore()
+	store := newFakeCodingMediaStore()
 	truncated := append([]byte(nil), store.data["media://image"][:33]...)
 	store.references = append(store.references, media.Reference{
 		Ref: "media://truncated", Filename: "truncated.png", ContentType: "image/png", Size: int64(len(truncated)),
 	})
 	store.data["media://truncated"] = truncated
-	tool := NewCodingAttachmentTool()
-	tool.SetMediaStore(store)
+	tool := NewCodingAttachmentTool(store)
 	result := tool.Execute(t.Context(), map[string]any{"action": "open", "ref": "media://truncated"})
 	if !result.IsError || len(result.ContextMedia) != 0 {
 		t.Fatalf("truncated image result = %+v", result)
@@ -152,14 +154,13 @@ func TestCodingAttachmentToolRejectsTruncatedImageBody(t *testing.T) {
 }
 
 func TestCodingAttachmentToolRejectsTruncatedUTF8GIFAsImage(t *testing.T) {
-	store := newFakeReferenceCatalogStore()
+	store := newFakeCodingMediaStore()
 	truncated := []byte{'G', 'I', 'F', '8', '9', 'a', 1, 0, 1, 0, 0, 0, 0}
 	store.references = append(store.references, media.Reference{
 		Ref: "media://truncated-gif", Filename: "truncated.gif", ContentType: "image/gif", Size: int64(len(truncated)),
 	})
 	store.data["media://truncated-gif"] = truncated
-	tool := NewCodingAttachmentTool()
-	tool.SetMediaStore(store)
+	tool := NewCodingAttachmentTool(store)
 
 	result := tool.Execute(t.Context(), map[string]any{"action": "open", "ref": "media://truncated-gif"})
 	if !result.IsError || len(result.ContextMedia) != 0 || len(result.Media) != 0 {
@@ -170,14 +171,13 @@ func TestCodingAttachmentToolRejectsTruncatedUTF8GIFAsImage(t *testing.T) {
 func TestCodingAttachmentToolOpensImageLikeUTF8AsText(t *testing.T) {
 	tests := []string{"GIF report: no image", "12345678WEBP report"}
 	for index, content := range tests {
-		store := newFakeReferenceCatalogStore()
+		store := newFakeCodingMediaStore()
 		ref := fmt.Sprintf("media://image-like-text-%d", index)
 		store.references = append(store.references, media.Reference{
 			Ref: ref, Filename: "report.txt", ContentType: "text/plain", Size: int64(len(content)),
 		})
 		store.data[ref] = []byte(content)
-		tool := NewCodingAttachmentTool()
-		tool.SetMediaStore(store)
+		tool := NewCodingAttachmentTool(store)
 
 		result := tool.Execute(t.Context(), map[string]any{"action": "open", "ref": ref})
 		if result.IsError || len(result.ContextMedia) != 0 {
@@ -193,26 +193,32 @@ func TestCodingAttachmentToolOpensImageLikeUTF8AsText(t *testing.T) {
 	}
 }
 
-type threadReferenceCatalogStore struct {
+type threadCodingMediaStore struct {
 	store    *thread.Store
 	threadID string
 }
 
-func (*threadReferenceCatalogStore) Store(string, media.MediaMeta, string) (string, error) {
+func (*threadCodingMediaStore) Store(string, media.MediaMeta, string) (string, error) {
 	return "", errors.New("not implemented")
 }
 
-func (*threadReferenceCatalogStore) Resolve(string) (string, error) {
+func (*threadCodingMediaStore) Resolve(string) (string, error) {
 	return "", errors.New("not implemented")
 }
 
-func (*threadReferenceCatalogStore) ResolveWithMeta(string) (string, media.MediaMeta, error) {
+func (*threadCodingMediaStore) ResolveWithMeta(string) (string, media.MediaMeta, error) {
 	return "", media.MediaMeta{}, errors.New("not implemented")
 }
 
-func (*threadReferenceCatalogStore) ReleaseAll(string) error { return nil }
+func (*threadCodingMediaStore) ReleaseAll(string) error { return nil }
 
-func (s *threadReferenceCatalogStore) ListReferences(context.Context) ([]media.Reference, error) {
+func (*threadCodingMediaStore) ShouldResolveHistorical(string) bool { return true }
+
+func (*threadCodingMediaStore) ShouldAttachCurrentImage(string, media.MediaMeta) bool {
+	return false
+}
+
+func (s *threadCodingMediaStore) ListReferences(context.Context) ([]media.Reference, error) {
 	attachments, err := s.store.ListAttachments(s.threadID)
 	if err != nil {
 		return nil, err
@@ -227,7 +233,7 @@ func (s *threadReferenceCatalogStore) ListReferences(context.Context) ([]media.R
 	return references, nil
 }
 
-func (s *threadReferenceCatalogStore) ReadReference(
+func (s *threadCodingMediaStore) ReadReference(
 	ctx context.Context,
 	ref string,
 ) ([]byte, media.Reference, error) {
@@ -301,8 +307,7 @@ func TestCodingAttachmentToolSortsRealThreadCatalogNewestFirst(t *testing.T) {
 	}
 	newest := attachments[2]
 
-	tool := NewCodingAttachmentTool()
-	tool.SetMediaStore(&threadReferenceCatalogStore{store: store, threadID: metadata.ThreadID})
+	tool := NewCodingAttachmentTool(&threadCodingMediaStore{store: store, threadID: metadata.ThreadID})
 	result := tool.Execute(t.Context(), map[string]any{"action": "list", "limit": float64(1)})
 	if result.IsError {
 		t.Fatal(result.ForLLM)
@@ -317,8 +322,7 @@ func TestCodingAttachmentToolSortsRealThreadCatalogNewestFirst(t *testing.T) {
 }
 
 func TestCodingAttachmentToolPagesUTF8TextAtValidBoundaries(t *testing.T) {
-	tool := NewCodingAttachmentTool()
-	tool.SetMediaStore(newFakeReferenceCatalogStore())
+	tool := NewCodingAttachmentTool(newFakeCodingMediaStore())
 	result := tool.Execute(t.Context(), map[string]any{
 		"action": "open", "ref": "media://new", "limit": float64(1),
 	})
@@ -344,17 +348,13 @@ func TestCodingAttachmentToolPagesUTF8TextAtValidBoundaries(t *testing.T) {
 	}
 }
 
-func TestCodingAttachmentToolFailsClosedForUnavailableOrBinaryContent(t *testing.T) {
-	tool := NewCodingAttachmentTool()
-	if result := tool.Execute(t.Context(), map[string]any{"action": "list"}); !result.IsError {
-		t.Fatal("tool accepted missing catalog")
-	}
-	store := newFakeReferenceCatalogStore()
+func TestCodingAttachmentToolFailsClosedForMissingOrBinaryContent(t *testing.T) {
+	store := newFakeCodingMediaStore()
 	store.references = append(store.references, media.Reference{
 		Ref: "media://binary", Filename: "data.bin", ContentType: "application/octet-stream", Size: 2,
 	})
 	store.data["media://binary"] = []byte{0xff, 0xfe}
-	tool.SetMediaStore(store)
+	tool := NewCodingAttachmentTool(store)
 	if result := tool.Execute(t.Context(), map[string]any{
 		"action": "open", "ref": "media://missing",
 	}); !result.IsError {

@@ -460,16 +460,6 @@ func (al *AgentLoop) SetMediaStore(s media.MediaStore) {
 	})
 }
 
-func (al *AgentLoop) historicalMediaResolutionPolicy() media.HistoricalResolutionPolicy {
-	if al == nil {
-		return nil
-	}
-	al.mu.RLock()
-	defer al.mu.RUnlock()
-	policy, _ := al.mediaStore.(media.HistoricalResolutionPolicy)
-	return policy
-}
-
 func (al *AgentLoop) SetTranscriber(t asr.Transcriber) {
 	al.transcriber = t
 }

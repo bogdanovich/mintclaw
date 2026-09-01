@@ -417,6 +417,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 				return resolveMediaRefs(
 					rebuilt,
 					p.Context.MediaResolver,
+					p.Context.CodingMedia,
 					p.maxMediaSize(),
 					len(rebuilt)-activeTailCount,
 				)

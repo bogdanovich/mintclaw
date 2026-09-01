@@ -280,7 +280,7 @@ func (al *AgentLoop) askSideQuestion(
 
 	maxMediaSize := al.GetConfig().Agents.Defaults.GetMaxMediaSize()
 	currentTurnStart := promptCurrentTurnStart(messages, question, media)
-	messages = resolveMediaRefs(messages, al.mediaStore, maxMediaSize, currentTurnStart)
+	messages = resolveMediaRefs(messages, al.mediaStore, al.codingMedia, maxMediaSize, currentTurnStart)
 
 	execution := effectiveExecutionStateForAgent(agent)
 	routeSessionKey := ""
