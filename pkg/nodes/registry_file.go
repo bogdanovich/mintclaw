@@ -18,8 +18,6 @@ import (
 
 const registryFileVersion = 1
 
-const staleBrowserCatalogReason = "browser capability schema changed; reconnect with current software and renew command approval"
-
 // RegistryPath returns the canonical per-workspace node registry location.
 func RegistryPath(workspacePath string) string {
 	return filepath.Join(workspacePath, "state", "nodes", "registry.json")
@@ -573,10 +571,9 @@ func (registry *FileRegistry) load() error {
 			return fmt.Errorf("node registry key %q does not match record id %q", id, record.Snapshot.ID)
 		}
 		if err := record.Snapshot.Validate(); err != nil {
-			if !errors.Is(err, errBrowserContract) {
-				return fmt.Errorf("validate node registry record %q: %w", id, err)
-			}
-			quarantined, quarantineErr := quarantineStoredBrowserCatalog(&record)
+			migratedSnapshot, quarantined, quarantineErr := migratePreRestrictedPolicyBrowserCatalog(
+				record.Snapshot,
+			)
 			if quarantineErr != nil {
 				return fmt.Errorf(
 					"validate node registry record %q after browser contract mismatch: %w",
@@ -587,6 +584,7 @@ func (registry *FileRegistry) load() error {
 			if !quarantined {
 				return fmt.Errorf("validate node registry record %q: %w", id, err)
 			}
+			record.Snapshot = migratedSnapshot
 			document.Records[id] = record
 			migrated = true
 		}
@@ -608,58 +606,6 @@ func (registry *FileRegistry) load() error {
 	}
 	registry.records = document.Records
 	return nil
-}
-
-// quarantineStoredBrowserCatalog makes a persisted browser contract upgrade
-// fail closed without preventing the gateway from starting. Browser command
-// descriptors are runtime-owned typed contracts, so a stored non-current
-// descriptor is never admitted. Removing the complete browser surface and
-// changing the catalog hash preserves the node identity while forcing a
-// current companion reconnect and explicit command-surface renewal.
-func quarantineStoredBrowserCatalog(record *registryRecord) (bool, error) {
-	if !validSHA256Digest(record.Snapshot.CatalogHash) {
-		return false, fmt.Errorf("%w: malformed catalog hash", ErrInvalidNode)
-	}
-	storedCatalogHash, err := record.Snapshot.Catalog.canonicalHash()
-	if err != nil {
-		return false, err
-	}
-	if storedCatalogHash != record.Snapshot.CatalogHash {
-		return false, fmt.Errorf("%w: catalog hash does not match catalog", ErrInvalidNode)
-	}
-
-	commands := make([]CommandDescriptor, 0, len(record.Snapshot.Catalog.Commands))
-	removed := false
-	for _, descriptor := range record.Snapshot.Catalog.Commands {
-		if IsBrowserCommand(descriptor.Name) {
-			removed = true
-			continue
-		}
-		commands = append(commands, descriptor)
-	}
-	if !removed {
-		return false, nil
-	}
-
-	snapshot := cloneSnapshot(record.Snapshot)
-	snapshot.Catalog.Commands = commands
-	catalogHash, err := snapshot.Catalog.Hash()
-	if err != nil {
-		return false, err
-	}
-	snapshot.CatalogHash = catalogHash
-	if err := snapshot.Validate(); err != nil {
-		return false, err
-	}
-	if snapshot.State != StatePendingPairing && snapshot.State != StateRevoked {
-		snapshot.State = StateIncompatible
-		snapshot.DisconnectReason = staleBrowserCatalogReason
-	}
-	if err := snapshot.Validate(); err != nil {
-		return false, err
-	}
-	record.Snapshot = snapshot
-	return true, nil
 }
 
 func normalizeAliases(aliases []Alias) ([]Alias, error) {

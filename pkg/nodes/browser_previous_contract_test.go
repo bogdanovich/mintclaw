@@ -35,11 +35,10 @@ func TestBrowserCatalogRejectsExactPreviousSnapshotSchemaGenerations(t *testing.
 	}
 }
 
-func TestFileRegistryQuarantinesExactPreviousSnapshotSchemaGenerations(t *testing.T) {
+func TestFileRegistryRejectsUnsupportedPreviousSnapshotSchemaGenerations(t *testing.T) {
 	for _, generation := range []previousBrowserSchemaGeneration{
 		previousBrowserSchemaInline,
 		previousBrowserSchemaStreamed,
-		previousBrowserSchemaPreRestrictedPolicy,
 	} {
 		t.Run(string(generation), func(t *testing.T) {
 			pairing := testPendingPairing(t, 1)
@@ -64,27 +63,58 @@ func TestFileRegistryQuarantinesExactPreviousSnapshotSchemaGenerations(t *testin
 			if err = os.WriteFile(path, encoded, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			registry, err := NewFileRegistry(path, 4)
-			if err != nil {
-				t.Fatalf("load registry with previous %s browser catalog: %v", generation, err)
-			}
-			pending, exists, err := registry.Pending(pairing.Node.ID)
-			if err != nil || !exists {
-				t.Fatalf("Pending() = exists %v, error %v", exists, err)
-			}
-			if len(pending.Node.Catalog.Commands) != 0 {
-				t.Fatalf("quarantined previous %s browser commands = %#v", generation, pending.Node.Catalog.Commands)
-			}
-			if err := pending.Node.Validate(); err != nil {
-				t.Fatalf("quarantined previous %s snapshot: %v", generation, err)
+			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+				t.Fatalf("load registry with previous %s browser catalog error = %v", generation, err)
 			}
 		})
 	}
 }
 
-// previousBrowserCatalogFixture preserves the two exact schema deltas that
-// immediately preceded the current streamed-snapshot contract. It is test-only
-// so runtime code has no way to generate or admit either historical contract.
+func TestFileRegistryQuarantinesPreRestrictedPolicyBrowserSchema(t *testing.T) {
+	pairing := testPendingPairing(t, 1)
+	catalog := CapabilityCatalog{Commands: previousBrowserCatalogFixture(
+		t,
+		previousBrowserSchemaPreRestrictedPolicy,
+	)}
+	catalogHash, err := catalog.canonicalHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing.Node.Catalog = catalog
+	pairing.Node.CatalogHash = catalogHash
+	document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+		string(pairing.Node.ID): {
+			Snapshot: pairing.Node, PublicKey: pairing.PublicKey, KeyAlgorithm: pairing.KeyAlgorithm,
+			RequestedRole: pairing.RequestedRole, RequestedAt: pairing.RequestedAt,
+		},
+	}}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "registry.json")
+	if err = os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, exists, err := registry.Pending(pairing.Node.ID)
+	if err != nil || !exists {
+		t.Fatalf("Pending() = exists %v, error %v", exists, err)
+	}
+	if len(pending.Node.Catalog.Commands) != 0 {
+		t.Fatalf("quarantined pre-restricted browser commands = %#v", pending.Node.Catalog.Commands)
+	}
+	if err := pending.Node.Validate(); err != nil {
+		t.Fatalf("quarantined pre-restricted snapshot: %v", err)
+	}
+}
+
+// previousBrowserCatalogFixture preserves three exact historical schema
+// generations. It is test-only so runtime code has no way to generate or
+// admit any of those contracts.
 func previousBrowserCatalogFixture(
 	t *testing.T,
 	generation previousBrowserSchemaGeneration,
