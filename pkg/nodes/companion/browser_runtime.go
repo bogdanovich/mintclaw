@@ -32,6 +32,10 @@ type browserDiagnosticsCommandHost interface {
 	Diagnostics(context.Context, nodes.BrowserHostDiagnosticsRequest) (nodes.BrowserDiagnosticsResult, error)
 }
 
+type browserPolicyCommandHost interface {
+	EvaluatePolicy(context.Context, nodes.BrowserHostPolicyRequest) (nodes.BrowserPolicyEvaluateResult, error)
+}
+
 type browserDownloadCommandHost interface {
 	Download(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserOutputDescriptor, error)
 }
@@ -181,6 +185,24 @@ func (handler *browserCommandHandler) execute(
 			AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 		})
 		return result, browserCommandFailure(err)
+	case nodes.BrowserCommandPolicyEvaluate:
+		policyHost, ok := handler.host.(browserPolicyCommandHost)
+		if !ok {
+			return nil, ErrCommandUnavailable
+		}
+		var input nodes.BrowserPolicyEvaluateInput
+		if err := json.Unmarshal(invocation.Input, &input); err != nil ||
+			nodes.ValidateBrowserPolicyEvaluateInput(input, handler.descriptorValue.BrowserProfiles) != nil {
+			return nil, newCommandFailure(
+				"COMMAND_DENIED", "browser policy is unavailable", nodes.ErrBrowserHostDenied,
+			)
+		}
+		result, err := policyHost.EvaluatePolicy(ctx, nodes.BrowserHostPolicyRequest{
+			BrowserPolicyEvaluateInput: input,
+			AgentID:                    invocation.Plan.AgentID,
+			ActorID:                    invocation.Plan.ActorID,
+		})
+		return result, browserCommandFailure(err)
 	case nodes.BrowserCommandAct:
 		return handler.executeAct(ctx, invocation)
 	case nodes.BrowserCommandContexts:
@@ -322,7 +344,11 @@ func (handler *browserCommandHandler) executeAct(
 		ArtifactFilename: input.ArtifactFilename, ArtifactContentType: input.ArtifactContentType,
 		ApprovalDigest: input.ApprovalDigest,
 		WorkspaceID:    input.WorkspaceID, RouteID: input.RouteID, BrowserTarget: input.BrowserTarget,
-		AgentID: invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
+		PolicyEffect:             input.PolicyEffect,
+		RestrictedDecision:       input.RestrictedDecision,
+		RestrictedPolicyRevision: input.RestrictedPolicyRevision,
+		RestrictedOrigin:         input.RestrictedOrigin,
+		AgentID:                  invocation.Plan.AgentID, ActorID: invocation.Plan.ActorID,
 	}
 	if input.Action.Kind == "download" {
 		downloadHost, ok := handler.host.(browserDownloadCommandHost)

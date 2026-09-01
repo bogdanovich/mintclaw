@@ -103,15 +103,16 @@ func (target BrowserTargetConfig) EffectivePlacement() string {
 }
 
 type BrowserProfileConfig struct {
-	Enabled              bool     `json:"enabled"                          yaml:"-"`
-	Mode                 string   `json:"mode,omitempty"                   yaml:"-"`
-	NetworkMode          string   `json:"network_mode,omitempty"           yaml:"-"`
-	CapabilityMode       string   `json:"capability_mode,omitempty"        yaml:"-"`
-	ApprovalMode         string   `json:"approval_mode,omitempty"          yaml:"-"`
-	DryRun               bool     `json:"dry_run"                          yaml:"-"`
-	AllowApprovedActions bool     `json:"allow_approved_actions,omitempty" yaml:"-"`
-	AllowedOrigins       []string `json:"allowed_origins,omitempty"        yaml:"-"`
-	SensitiveFields      []string `json:"sensitive_fields,omitempty"       yaml:"-"`
+	Enabled              bool                  `json:"enabled"                          yaml:"-"`
+	Mode                 string                `json:"mode,omitempty"                   yaml:"-"`
+	NetworkMode          string                `json:"network_mode,omitempty"           yaml:"-"`
+	CapabilityMode       string                `json:"capability_mode,omitempty"        yaml:"-"`
+	ApprovalMode         string                `json:"approval_mode,omitempty"          yaml:"-"`
+	DryRun               bool                  `json:"dry_run"                          yaml:"-"`
+	AllowApprovedActions bool                  `json:"allow_approved_actions,omitempty" yaml:"-"`
+	AllowedOrigins       []string              `json:"allowed_origins,omitempty"        yaml:"-"`
+	SensitiveFields      []string              `json:"sensitive_fields,omitempty"       yaml:"-"`
+	Policy               *browserpolicy.Policy `json:"policy,omitempty"                 yaml:"-"`
 }
 
 // EffectiveCapabilityMode preserves the pre-P0 behavior for existing
@@ -169,6 +170,13 @@ func (cfg BrowserToolsConfig) PolicyRevision() (string, error) {
 		profiles := make(map[string]BrowserProfileConfig, len(target.Profiles))
 		for profileName, profile := range target.Profiles {
 			profile.SensitiveFields, _ = browserpolicy.NormalizeSensitiveFieldTerms(profile.SensitiveFields)
+			if profile.Policy != nil {
+				normalized, err := browserpolicy.NormalizePolicy(*profile.Policy)
+				if err != nil {
+					return "", fmt.Errorf("normalize browser policy for %s/%s: %w", targetName, profileName, err)
+				}
+				profile.Policy = &normalized
+			}
 			profiles[profileName] = profile
 		}
 		target.Profiles = profiles
@@ -340,26 +348,27 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 		return fmt.Errorf("browser profile %q supports only mode %q", name, BrowserProfileManaged)
 	}
 	switch profile.EffectiveCapabilityMode() {
-	case BrowserCapabilityFullAccess, BrowserCapabilityLegacyStrict:
-	case BrowserCapabilityRestricted:
-		return fmt.Errorf(
-			"browser profile %q capability_mode %q requires the restricted-policy implementation",
-			name,
-			profile.CapabilityMode,
-		)
+	case BrowserCapabilityFullAccess, BrowserCapabilityLegacyStrict, BrowserCapabilityRestricted:
 	default:
 		return fmt.Errorf("browser profile %q has unsupported capability_mode %q", name, profile.CapabilityMode)
 	}
 	switch profile.EffectiveApprovalMode() {
-	case BrowserApprovalNone, BrowserApprovalModelRequested, BrowserApprovalAlwaysCommit:
-	case BrowserApprovalPolicy:
-		return fmt.Errorf(
-			"browser profile %q approval_mode %q requires the restricted-policy implementation",
-			name,
-			profile.ApprovalMode,
-		)
+	case BrowserApprovalNone, BrowserApprovalModelRequested, BrowserApprovalAlwaysCommit, BrowserApprovalPolicy:
 	default:
 		return fmt.Errorf("browser profile %q has unsupported approval_mode %q", name, profile.ApprovalMode)
+	}
+	restricted := profile.EffectiveCapabilityMode() == BrowserCapabilityRestricted
+	policyApproval := profile.EffectiveApprovalMode() == BrowserApprovalPolicy
+	if restricted != policyApproval || restricted != (profile.Policy != nil) {
+		return fmt.Errorf(
+			"browser profile %q requires capability_mode restricted, approval_mode policy, and policy together",
+			name,
+		)
+	}
+	if profile.Policy != nil {
+		if _, err := browserpolicy.NormalizePolicy(*profile.Policy); err != nil {
+			return fmt.Errorf("invalid browser profile %q policy: %w", name, err)
+		}
 	}
 	networkMode := profile.NetworkMode
 	if profile.Enabled && networkMode == "" {

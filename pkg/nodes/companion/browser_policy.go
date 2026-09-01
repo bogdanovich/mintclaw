@@ -42,27 +42,28 @@ func companionManagedDriverArgument(argument string) bool {
 // BrowserProfilePolicy is companion-local authority. Fields that identify the
 // executable or host filesystem are never projected into capability catalogs.
 type BrowserProfilePolicy struct {
-	Enabled                bool                `json:"enabled"`
-	Revision               string              `json:"revision,omitempty"`
-	AllowedAgents          []string            `json:"allowed_agents,omitempty"`
-	AllowedActors          []string            `json:"allowed_actors,omitempty"`
-	Driver                 string              `json:"driver,omitempty"`
-	DriverExecutable       string              `json:"driver_executable,omitempty"`
-	DriverExecutableSHA256 string              `json:"driver_executable_sha256,omitempty"`
-	DriverArguments        []string            `json:"driver_arguments,omitempty"`
-	ProfileDirectory       string              `json:"profile_directory,omitempty"`
-	LockFile               string              `json:"lock_file,omitempty"`
-	Mode                   string              `json:"mode,omitempty"`
-	NetworkMode            string              `json:"network_mode,omitempty"`
-	CapabilityMode         string              `json:"capability_mode,omitempty"`
-	ApprovalMode           string              `json:"approval_mode,omitempty"`
-	AllowedOrigins         []string            `json:"allowed_origins,omitempty"`
-	SensitiveFields        []string            `json:"sensitive_fields,omitempty"`
-	DryRun                 bool                `json:"dry_run"`
-	AllowApprovedActions   bool                `json:"allow_approved_actions,omitempty"`
-	AllowedActions         []string            `json:"allowed_actions,omitempty"`
-	Headed                 bool                `json:"headed"`
-	Limits                 nodes.BrowserLimits `json:"limits,omitempty"`
+	Enabled                bool                  `json:"enabled"`
+	Revision               string                `json:"revision,omitempty"`
+	AllowedAgents          []string              `json:"allowed_agents,omitempty"`
+	AllowedActors          []string              `json:"allowed_actors,omitempty"`
+	Driver                 string                `json:"driver,omitempty"`
+	DriverExecutable       string                `json:"driver_executable,omitempty"`
+	DriverExecutableSHA256 string                `json:"driver_executable_sha256,omitempty"`
+	DriverArguments        []string              `json:"driver_arguments,omitempty"`
+	ProfileDirectory       string                `json:"profile_directory,omitempty"`
+	LockFile               string                `json:"lock_file,omitempty"`
+	Mode                   string                `json:"mode,omitempty"`
+	NetworkMode            string                `json:"network_mode,omitempty"`
+	CapabilityMode         string                `json:"capability_mode,omitempty"`
+	ApprovalMode           string                `json:"approval_mode,omitempty"`
+	AllowedOrigins         []string              `json:"allowed_origins,omitempty"`
+	SensitiveFields        []string              `json:"sensitive_fields,omitempty"`
+	Policy                 *browserpolicy.Policy `json:"policy,omitempty"`
+	DryRun                 bool                  `json:"dry_run"`
+	AllowApprovedActions   bool                  `json:"allow_approved_actions,omitempty"`
+	AllowedActions         []string              `json:"allowed_actions,omitempty"`
+	Headed                 bool                  `json:"headed"`
+	Limits                 nodes.BrowserLimits   `json:"limits,omitempty"`
 
 	// driverLauncherPath preserves the validated configured path before symlink
 	// canonicalization. It is runtime-only authority used to derive the child
@@ -118,7 +119,7 @@ func browserProfilePolicyEmpty(profile BrowserProfilePolicy) bool {
 		len(profile.DriverArguments) == 0 && profile.ProfileDirectory == "" &&
 		profile.LockFile == "" && profile.Mode == "" && profile.NetworkMode == "" &&
 		profile.CapabilityMode == "" && profile.ApprovalMode == "" &&
-		len(profile.AllowedOrigins) == 0 && len(profile.SensitiveFields) == 0 &&
+		len(profile.AllowedOrigins) == 0 && len(profile.SensitiveFields) == 0 && profile.Policy == nil &&
 		!profile.DryRun && !profile.AllowApprovedActions &&
 		len(profile.AllowedActions) == 0 && !profile.Headed &&
 		profile.Limits == (nodes.BrowserLimits{})
@@ -134,6 +135,7 @@ func normalizeBrowserProfile(
 	profile.DriverArguments = append([]string(nil), profile.DriverArguments...)
 	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
 	profile.SensitiveFields = append([]string(nil), profile.SensitiveFields...)
+	profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
 	if err := (nodes.Alias(alias)).Validate(); err != nil || alias != nodes.BrowserProfileManaged {
 		return BrowserProfilePolicy{}, errors.New("only the managed browser profile is admitted")
@@ -207,13 +209,26 @@ func normalizeBrowserProfile(
 		)
 	}
 	profile.CapabilityMode = browserpolicy.EffectiveCapabilityMode(profile.CapabilityMode)
-	if !browserpolicy.CapabilityModeValid(profile.CapabilityMode) ||
-		profile.CapabilityMode == browserpolicy.CapabilityRestricted {
+	if !browserpolicy.CapabilityModeValid(profile.CapabilityMode) {
 		return BrowserProfilePolicy{}, errors.New("capability_mode is unsupported")
 	}
 	profile.ApprovalMode = browserpolicy.EffectiveApprovalMode(profile.ApprovalMode)
-	if !browserpolicy.ApprovalModeValid(profile.ApprovalMode) || profile.ApprovalMode == browserpolicy.ApprovalPolicy {
+	if !browserpolicy.ApprovalModeValid(profile.ApprovalMode) {
 		return BrowserProfilePolicy{}, errors.New("approval_mode is unsupported")
+	}
+	restricted := profile.CapabilityMode == browserpolicy.CapabilityRestricted
+	policyApproval := profile.ApprovalMode == browserpolicy.ApprovalPolicy
+	if restricted != policyApproval || restricted != (profile.Policy != nil) {
+		return BrowserProfilePolicy{}, errors.New(
+			"capability_mode restricted, approval_mode policy, and policy must be configured together",
+		)
+	}
+	if profile.Policy != nil {
+		normalized, normalizeErr := browserpolicy.NormalizePolicy(*profile.Policy)
+		if normalizeErr != nil {
+			return BrowserProfilePolicy{}, normalizeErr
+		}
+		profile.Policy = &normalized
 	}
 	profile.Limits = profile.Limits.Effective()
 	if err = profile.Limits.Validate(); err != nil {
@@ -524,7 +539,7 @@ func browserProfileDescriptor(alias string, profile BrowserProfilePolicy) nodes.
 	if profile.DryRun {
 		actions = slices.DeleteFunc(actions, func(action string) bool { return action == "drag" })
 	}
-	return nodes.BrowserProfileDescriptor{
+	descriptor := nodes.BrowserProfileDescriptor{
 		Alias: alias, Revision: profile.Revision, Driver: profile.Driver,
 		Mode: profile.Mode, NetworkMode: profile.NetworkMode,
 		CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
@@ -533,6 +548,10 @@ func browserProfileDescriptor(alias string, profile BrowserProfilePolicy) nodes.
 		Actions: actions,
 		Limits:  profile.Limits,
 	}
+	if profile.Policy != nil {
+		descriptor.PolicyRevision, _ = browserpolicy.PolicyRevision(*profile.Policy)
+	}
+	return descriptor
 }
 
 func browserProfileDescriptors(

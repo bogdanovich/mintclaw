@@ -309,6 +309,49 @@ func (factory *preparedDragTestFactory) Open(
 	return WorkerOpenResult{Owner: factory.worker}, nil
 }
 
+type restrictedPreparedTestWorker struct {
+	*actionTestWorker
+	decision            string
+	policyRevision      string
+	profileRevision     string
+	policyMetadata      []browserpolicy.ActionMetadata
+	executePreparedCall int
+}
+
+func (*restrictedPreparedTestWorker) SupportsPreparedAction(kind ActionKind) bool {
+	return kind == ActionClick
+}
+
+func (worker *restrictedPreparedTestWorker) EvaluatePolicy(
+	_ context.Context,
+	metadata browserpolicy.ActionMetadata,
+) (WorkerPolicyEvaluation, error) {
+	worker.policyMetadata = append(worker.policyMetadata, metadata)
+	return WorkerPolicyEvaluation{
+		Result:          browserpolicy.Result{Decision: worker.decision},
+		PolicyRevision:  worker.policyRevision,
+		ProfileRevision: worker.profileRevision,
+	}, nil
+}
+
+func (worker *restrictedPreparedTestWorker) ExecutePrepared(
+	_ context.Context,
+	request WorkerPreparedAction,
+) error {
+	worker.executePreparedCall++
+	worker.actions = append(worker.actions, request.DriverAction)
+	return worker.executeErr
+}
+
+type restrictedPreparedTestFactory struct{ worker *restrictedPreparedTestWorker }
+
+func (factory *restrictedPreparedTestFactory) Open(
+	context.Context,
+	WorkerOpenRequest,
+) (WorkerOpenResult, error) {
+	return WorkerOpenResult{Owner: factory.worker}, nil
+}
+
 type failOnceStagedAcceptanceStore struct {
 	*MemoryStore
 	failures int
@@ -316,6 +359,27 @@ type failOnceStagedAcceptanceStore struct {
 
 type failNavigationCompletionStore struct {
 	*MemoryStore
+}
+
+type acceptedMutationStore struct {
+	*MemoryStore
+	onAccepted func()
+}
+
+func (store *acceptedMutationStore) UpdateInvocation(
+	ctx context.Context,
+	expected uint64,
+	next Invocation,
+) error {
+	if err := store.MemoryStore.UpdateInvocation(ctx, expected, next); err != nil {
+		return err
+	}
+	if next.State == InvocationAccepted && store.onAccepted != nil {
+		callback := store.onAccepted
+		store.onAccepted = nil
+		callback()
+	}
+	return nil
 }
 
 func (store *failNavigationCompletionStore) UpdateInvocation(
@@ -678,6 +742,219 @@ func TestBrokerApprovalModeIsIndependentFromClickEffect(t *testing.T) {
 				t.Fatalf("ExecuteAction() = %+v, %v; actions=%+v", invocation, err, worker.actions)
 			}
 		})
+	}
+}
+
+func TestBrokerRestrictedPolicyEnforcesAllowAskAndDeny(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		decision     string
+		confirmation string
+		wantApproval bool
+		wantDenied   bool
+	}{
+		{name: "allow", decision: browserpolicy.DecisionAllow},
+		{
+			name: "allow with explicit confirmation", decision: browserpolicy.DecisionAllow,
+			confirmation: browserpolicy.ConfirmationRequest, wantApproval: true,
+		},
+		{name: "ask", decision: browserpolicy.DecisionAsk, wantApproval: true},
+		{name: "deny", decision: browserpolicy.DecisionDeny, wantDenied: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := restrictedBrowserConfig(browserpolicy.Policy{DefaultDecision: test.decision})
+			broker, worker, session := openActionTestBrokerWithConfig(t, root, NewMemoryStore())
+			owner := testOwner()
+			button := DriverElement{Target: "save", Role: "button", Name: "Save"}
+			worker.observation = driverObservationFixture(button)
+			worker.resolveElement = button
+			worker.resolveOrigin = worker.observation.Origin
+			observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+				Owner: owner, RequestID: "request_restricted_" + strings.ReplaceAll(test.name, " ", "_"),
+				SessionID: session.ID, TabID: session.TabID,
+				SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+				Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+				DeclaredEffect: EffectExternalCommit, Confirmation: test.confirmation,
+			})
+			if test.wantDenied {
+				if !errors.Is(err, ErrDenied) || len(worker.actions) != 0 {
+					t.Fatalf("PrepareAction() = %+v, %v; actions=%+v", prepared, err, worker.actions)
+				}
+				return
+			}
+			if err != nil || prepared.RequiresApproval != test.wantApproval ||
+				prepared.Action.RestrictedDecision != test.decision ||
+				prepared.Action.LocalRestrictedDecision != test.decision {
+				t.Fatalf("PrepareAction() = %+v, %v", prepared, err)
+			}
+			var approval *ApprovalBinding
+			if prepared.RequiresApproval {
+				approval = &prepared.Approval
+			}
+			invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, approval)
+			if err != nil || invocation.State != InvocationSucceeded || len(worker.actions) != 1 {
+				t.Fatalf("ExecuteAction() = %+v, %v; actions=%+v", invocation, err, worker.actions)
+			}
+		})
+	}
+}
+
+func TestBrokerRestrictedHookIsRevalidatedAfterDurableAcceptance(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "hook-output.json")
+	writeBrowserPolicyHookOutput(t, statePath, `{"decision":"allow"}`)
+	root := restrictedBrowserConfig(browserpolicy.Policy{
+		DefaultDecision: browserpolicy.DecisionAllow,
+		Hook: &browserpolicy.Hook{
+			Command: []string{
+				os.Args[0], "-test.run=TestBrokerRestrictedPolicyHookProcess", "--", statePath,
+			},
+			TimeoutMS: 1000,
+		},
+	})
+	store := &acceptedMutationStore{MemoryStore: NewMemoryStore()}
+	store.onAccepted = func() {
+		writeBrowserPolicyHookOutput(t, statePath, `{"decision":"deny","reason":"changed"}`)
+	}
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, store)
+	owner := testOwner()
+	button := DriverElement{Target: "save", Role: "button", Name: "Save"}
+	worker.observation = driverObservationFixture(button)
+	worker.resolveElement = button
+	worker.resolveOrigin = worker.observation.Origin
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_restricted_dispatch_hook",
+		SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		DeclaredEffect: EffectExternalCommit,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
+	if !errors.Is(err, ErrDenied) || invocation.State != InvocationFailed ||
+		invocation.SafeFailure != "policy_denied" || len(worker.actions) != 0 {
+		t.Fatalf("ExecuteAction() = %+v, %v; actions=%+v", invocation, err, worker.actions)
+	}
+}
+
+func TestBrokerRestrictedHookDecisionIsRevalidatedBeforeDispatch(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "hook-output.json")
+	writeBrowserPolicyHookOutput(t, statePath, `{"decision":"allow"}`)
+	root := restrictedBrowserConfig(browserpolicy.Policy{
+		DefaultDecision: browserpolicy.DecisionAllow,
+		Hook: &browserpolicy.Hook{
+			Command: []string{
+				os.Args[0], "-test.run=TestBrokerRestrictedPolicyHookProcess", "--", statePath,
+			},
+			TimeoutMS: 1000,
+		},
+	})
+	broker, worker, session := openActionTestBrokerWithConfig(t, root, NewMemoryStore())
+	owner := testOwner()
+	button := DriverElement{Target: "save", Role: "button", Name: "Save"}
+	worker.observation = driverObservationFixture(button)
+	worker.resolveElement = button
+	worker.resolveOrigin = worker.observation.Origin
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_restricted_hook", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		DeclaredEffect: EffectExternalCommit,
+	})
+	if err != nil || prepared.Action.RestrictedDecision != browserpolicy.DecisionAllow {
+		t.Fatalf("PrepareAction() = %+v, %v", prepared, err)
+	}
+	writeBrowserPolicyHookOutput(t, statePath, `{"decision":"deny","reason":"changed"}`)
+	if _, err = broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil); !errors.Is(err, ErrDenied) {
+		t.Fatalf("ExecuteAction() error = %v, want ErrDenied", err)
+	}
+	if len(worker.actions) != 0 {
+		t.Fatalf("changed hook decision dispatched actions: %+v", worker.actions)
+	}
+}
+
+func TestBrokerCannotBroadenCompanionRestrictedPolicy(t *testing.T) {
+	root := restrictedBrowserConfig(browserpolicy.Policy{DefaultDecision: browserpolicy.DecisionAllow})
+	base := &actionTestWorker{observation: driverObservationFixture(
+		DriverElement{Target: "save", Role: "button", Name: "Save"},
+	)}
+	base.resolveElement = base.observation.Elements[0]
+	base.resolveOrigin = base.observation.Origin
+	worker := &restrictedPreparedTestWorker{
+		actionTestWorker: base,
+		decision:         browserpolicy.DecisionDeny,
+		policyRevision:   strings.Repeat("d", 64),
+		profileRevision:  "managed-v1",
+	}
+	broker := newTestBroker(t, root, NewMemoryStore(), &restrictedPreparedTestFactory{worker: worker})
+	broker.lookupIP = func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("93.184.216.34")}, nil
+	}
+	owner := testOwner()
+	session, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_companion_deny", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observed.SnapshotID, SnapshotGeneration: observed.SnapshotGeneration,
+		Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
+		DeclaredEffect: EffectRead,
+	})
+	if !errors.Is(err, ErrDenied) || len(worker.policyMetadata) != 1 ||
+		worker.policyMetadata[0].Name != "Save" ||
+		worker.policyMetadata[0].Effect != string(EffectExternalCommit) || worker.executePreparedCall != 0 {
+		t.Fatalf(
+			"PrepareAction() error=%v metadata=%+v execute=%d",
+			err,
+			worker.policyMetadata,
+			worker.executePreparedCall,
+		)
+	}
+}
+
+func TestBrokerRestrictedPolicyHookProcess(t *testing.T) {
+	separator := -1
+	for index, argument := range os.Args {
+		if argument == "--" {
+			separator = index
+			break
+		}
+	}
+	if separator < 0 || separator+1 >= len(os.Args) {
+		return
+	}
+	output, err := os.ReadFile(os.Args[separator+1])
+	if err != nil {
+		os.Exit(3)
+	}
+	_, _ = os.Stdout.Write(output)
+	os.Exit(0)
+}
+
+func writeBrowserPolicyHookOutput(t *testing.T, path string, output string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(output), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -3342,6 +3619,20 @@ func driverObservationFixture(elements ...DriverElement) DriverObservation {
 		URL: "https://example.com/form", Origin: "https://example.com", Title: "Fixture",
 		Snapshot: strings.Join(lines, "\n"), Elements: elements,
 	}
+}
+
+func restrictedBrowserConfig(policy browserpolicy.Policy) *config.Config {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.CapabilityMode = config.BrowserCapabilityRestricted
+	profile.ApprovalMode = config.BrowserApprovalPolicy
+	profile.Policy = &policy
+	profile.DryRun = false
+	profile.AllowApprovedActions = true
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	return root
 }
 
 func onlyVisibleRef(t *testing.T, snapshot string) string {

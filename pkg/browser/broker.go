@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
@@ -145,6 +146,21 @@ type PreparedActionWorker interface {
 	ActionWorker
 	SupportsPreparedAction(ActionKind) bool
 	ExecutePrepared(context.Context, WorkerPreparedAction) error
+}
+
+// PolicyEvaluationWorker evaluates companion-local restricted policy before
+// the gateway prepares durable action authority. The same decision and
+// revision are bound into the action and revalidated by the companion at final
+// dispatch.
+type PolicyEvaluationWorker interface {
+	PreparedActionWorker
+	EvaluatePolicy(context.Context, browserpolicy.ActionMetadata) (WorkerPolicyEvaluation, error)
+}
+
+type WorkerPolicyEvaluation struct {
+	Result          browserpolicy.Result
+	PolicyRevision  string
+	ProfileRevision string
 }
 
 // PreparedActionStager moves private artifact input to a remote worker before
@@ -1691,6 +1707,7 @@ func cloneBrowserConfig(source config.BrowserToolsConfig) config.BrowserToolsCon
 			clonedProfile := profile
 			clonedProfile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
 			clonedProfile.SensitiveFields = append([]string(nil), profile.SensitiveFields...)
+			clonedProfile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 			clonedTarget.Profiles[profileName] = clonedProfile
 		}
 		cloned.Targets[targetName] = clonedTarget

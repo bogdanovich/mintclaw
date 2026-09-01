@@ -504,6 +504,12 @@ type PreparedAction struct {
 	CapabilityMode             string `json:"capability_mode,omitempty"`
 	ApprovalMode               string `json:"approval_mode,omitempty"`
 	Confirmation               string `json:"confirmation,omitempty"`
+	PolicyEffect               Effect `json:"policy_effect,omitempty"`
+	RestrictedDecision         string `json:"restricted_decision,omitempty"`
+	RestrictedPolicyRevision   string `json:"restricted_policy_revision,omitempty"`
+	LocalRestrictedDecision    string `json:"local_restricted_decision,omitempty"`
+	WorkerRestrictedDecision   string `json:"worker_restricted_decision,omitempty"`
+	WorkerRestrictedRevision   string `json:"worker_restricted_revision,omitempty"`
 	DryRun                     bool   `json:"dry_run"`
 	PolicyRevision             string `json:"policy_revision"`
 	CatalogRevision            string `json:"catalog_revision"`
@@ -533,6 +539,42 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		prepared.CreatedAt <= 0 || prepared.ExpiresAt <= prepared.CreatedAt ||
 		prepared.Action.Validate(maxTextBytes) != nil {
 		return fmt.Errorf("%w: malformed prepared action", ErrInvalid)
+	}
+	restricted := browserpolicy.EffectiveCapabilityMode(prepared.CapabilityMode) ==
+		browserpolicy.CapabilityRestricted
+	if restricted {
+		derivedEffect, derivedErr := browserpolicy.DeriveActionEffect(prepared.Action, prepared.ElementRole)
+		if browserpolicy.EffectiveApprovalMode(prepared.ApprovalMode) != browserpolicy.ApprovalPolicy ||
+			derivedErr != nil || string(prepared.PolicyEffect) != derivedEffect ||
+			prepared.RestrictedDecision == browserpolicy.DecisionDeny ||
+			!browserpolicy.DecisionValid(prepared.RestrictedDecision) ||
+			!browserpolicy.DecisionValid(prepared.LocalRestrictedDecision) ||
+			!validDigest(prepared.RestrictedPolicyRevision) ||
+			((prepared.WorkerRestrictedDecision == "") != (prepared.WorkerRestrictedRevision == "")) ||
+			(prepared.WorkerRestrictedDecision != "" &&
+				(!browserpolicy.DecisionValid(prepared.WorkerRestrictedDecision) ||
+					!validDigest(prepared.WorkerRestrictedRevision))) {
+			return fmt.Errorf("%w: malformed prepared restricted policy binding", ErrInvalid)
+		}
+		effective := prepared.LocalRestrictedDecision
+		if prepared.WorkerRestrictedDecision != "" {
+			var err error
+			effective, err = browserpolicy.CombineDecisions(
+				prepared.LocalRestrictedDecision,
+				prepared.WorkerRestrictedDecision,
+			)
+			if err != nil {
+				return fmt.Errorf("%w: malformed prepared restricted policy decision", ErrInvalid)
+			}
+		}
+		if effective != prepared.RestrictedDecision {
+			return fmt.Errorf("%w: inconsistent prepared restricted policy decision", ErrInvalid)
+		}
+	} else if prepared.PolicyEffect != "" || prepared.RestrictedDecision != "" ||
+		prepared.RestrictedPolicyRevision != "" ||
+		prepared.LocalRestrictedDecision != "" || prepared.WorkerRestrictedDecision != "" ||
+		prepared.WorkerRestrictedRevision != "" {
+		return fmt.Errorf("%w: unexpected prepared restricted policy binding", ErrInvalid)
 	}
 	if prepared.Action.Kind != ActionDrag &&
 		(prepared.DestinationElementRole != "" || prepared.DestinationElementName != "" ||

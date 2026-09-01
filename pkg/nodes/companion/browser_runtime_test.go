@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
@@ -46,6 +47,17 @@ type fakeBrowserCommandHost struct {
 	discardedOutputs []nodes.BrowserOutputDescriptor
 	largeCatalog     bool
 	routedSessions   []string
+	policyRequests   []nodes.BrowserHostPolicyRequest
+	policyResult     nodes.BrowserPolicyEvaluateResult
+	policyError      error
+}
+
+func (host *fakeBrowserCommandHost) EvaluatePolicy(
+	_ context.Context,
+	request nodes.BrowserHostPolicyRequest,
+) (nodes.BrowserPolicyEvaluateResult, error) {
+	host.policyRequests = append(host.policyRequests, request)
+	return host.policyResult, host.policyError
 }
 
 func (host *fakeBrowserCommandHost) PrepareObservationOutput(
@@ -370,6 +382,37 @@ func TestRuntimeExecutesTypedBrowserLifecycle(t *testing.T) {
 		if routedSession != "session_test" {
 			t.Fatalf("routed session calls = %#v", host.routedSessions)
 		}
+	}
+}
+
+func TestRuntimeEvaluatesCompanionRestrictedPolicyWithBoundedMetadata(t *testing.T) {
+	host := browserRuntimeHostFixture()
+	host.profiles[0].CapabilityMode = browserpolicy.CapabilityRestricted
+	host.profiles[0].ApprovalMode = browserpolicy.ApprovalPolicy
+	host.profiles[0].PolicyRevision = strings.Repeat("d", 64)
+	host.profiles[0].Actions = []string{"click", "navigate", "scroll"}
+	host.policyResult = nodes.BrowserPolicyEvaluateResult{
+		ProfileRevision: "managed-v1", PolicyRevision: strings.Repeat("d", 64),
+		Decision: browserpolicy.DecisionAsk, Summary: "Confirm this action",
+	}
+	runtime := newBrowserRuntimeFixture(t, host)
+	input := nodes.BrowserPolicyEvaluateInput{
+		ProfileRevision: "managed-v1", PolicyRevision: strings.Repeat("d", 64),
+		Action: "click", Effect: "external_commit", Origin: "https://example.com",
+		Role: "button", Name: "Buy",
+	}
+	raw := invokeBrowserRuntime(t, runtime, nodes.BrowserCommandPolicyEvaluate, input)
+	var result nodes.BrowserPolicyEvaluateResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result != host.policyResult || len(host.policyRequests) != 1 {
+		t.Fatalf("policy result = %#v; requests = %#v", result, host.policyRequests)
+	}
+	request := host.policyRequests[0]
+	if request.BrowserPolicyEvaluateInput != input || request.AgentID != "agent_test" ||
+		request.ActorID != "actor_test" {
+		t.Fatalf("policy request = %#v", request)
 	}
 }
 
@@ -1192,6 +1235,7 @@ func browserRuntimeCommands() []string {
 		nodes.BrowserCommandObserve,
 		nodes.BrowserCommandCapture,
 		nodes.BrowserCommandDiagnostics,
+		nodes.BrowserCommandPolicyEvaluate,
 		nodes.BrowserCommandAct,
 		nodes.BrowserCommandContexts,
 		nodes.BrowserCommandSessionClose,

@@ -60,16 +60,27 @@ func RequiresApproval(mode, effect, confirmation string) bool {
 	case ApprovalAlwaysCommit:
 		return confirmation == ConfirmationRequest || effect == "external_commit" || effect == "unknown"
 	default:
-		// Restricted policy decisions are added in P1 and fail closed until then.
+		// Restricted policy decisions are evaluated and bound separately. Any
+		// caller that reaches this generic helper without that binding fails closed.
 		return true
 	}
+}
+
+// RestrictedRequiresApproval keeps an explicit model confirmation request
+// additive to an operator policy decision. Invalid bindings fail closed; the
+// surrounding action contracts reject them before dispatch.
+func RestrictedRequiresApproval(decision, confirmation string) bool {
+	if !DecisionValid(decision) || !ConfirmationValid(confirmation) {
+		return true
+	}
+	return decision != DecisionAllow || confirmation == ConfirmationRequest
 }
 
 // FillFieldAllowed applies only the semantic admission layer. Driver-side DOM
 // checks still require a live writable control before dispatch.
 func FillFieldAllowed(capabilityMode, role, name string, sensitiveTerms []string) bool {
 	switch EffectiveCapabilityMode(capabilityMode) {
-	case CapabilityFullAccess:
+	case CapabilityFullAccess, CapabilityRestricted:
 		// These are the accessibility roles Playwright may expose for controls
 		// supported by locator.fill(). In particular, input[type=number] is a
 		// spinbutton, which is common for price fields. Driver-side DOM checks

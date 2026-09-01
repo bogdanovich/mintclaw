@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/browser"
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
@@ -1991,6 +1992,51 @@ func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
 	local.AllowApprovedActions = false
 	if browserProfileIntersects(local, limits, remote) {
 		t.Fatal("mismatched action modes intersected")
+	}
+}
+
+func TestCompanionRestrictedPolicyBindingUsesDestinationAndDecision(t *testing.T) {
+	prepared := browser.PreparedAction{
+		CurrentOrigin: "https://example.com", DestinationOrigin: "https://tickets.example",
+		PolicyEffect:             browser.EffectExternalCommit,
+		WorkerRestrictedDecision: browserpolicy.DecisionAsk,
+		WorkerRestrictedRevision: strings.Repeat("d", 64),
+	}
+	input := nodes.BrowserActInput{Effect: "external_commit"}
+	bindCompanionRestrictedPolicy(&input, prepared)
+	if input.RestrictedDecision != browserpolicy.DecisionAsk ||
+		input.PolicyEffect != "external_commit" ||
+		input.RestrictedPolicyRevision != strings.Repeat("d", 64) ||
+		input.RestrictedOrigin != "https://tickets.example" ||
+		!companionBrowserActionRequiresApproval(input, browserpolicy.ApprovalPolicy) {
+		t.Fatalf("companion restricted binding = %#v", input)
+	}
+	input.RestrictedDecision = browserpolicy.DecisionAllow
+	if companionBrowserActionRequiresApproval(input, browserpolicy.ApprovalPolicy) {
+		t.Fatal("restricted allow unexpectedly requires approval")
+	}
+	input.Confirmation = browserpolicy.ConfirmationRequest
+	if !companionBrowserActionRequiresApproval(input, browserpolicy.ApprovalPolicy) {
+		t.Fatal("restricted allow ignored explicit confirmation")
+	}
+}
+
+func TestBrowserProfileIntersectionAllowsIndependentRestrictedPolicies(t *testing.T) {
+	localPolicy := browserpolicy.Policy{DefaultDecision: browserpolicy.DecisionAllow}
+	local := config.BrowserProfileConfig{
+		Enabled: true, Mode: config.BrowserProfileManaged, NetworkMode: config.BrowserNetworkAnyHTTP,
+		CapabilityMode: browserpolicy.CapabilityRestricted, ApprovalMode: browserpolicy.ApprovalPolicy,
+		Policy: &localPolicy, DryRun: false, AllowApprovedActions: true,
+	}
+	remote := nodes.BrowserProfileDescriptor{
+		Alias: "managed", Revision: "managed-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
+		Mode: nodes.BrowserProfileManaged, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+		CapabilityMode: browserpolicy.CapabilityRestricted, ApprovalMode: browserpolicy.ApprovalPolicy,
+		PolicyRevision: strings.Repeat("d", 64), DryRun: false, AllowApprovedActions: true,
+		Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+	}
+	if !browserProfileIntersects(local, config.BrowserLimitsConfig{}, remote) {
+		t.Fatal("independent gateway and companion restricted policies did not intersect")
 	}
 }
 

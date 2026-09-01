@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -49,6 +50,7 @@ type (
 	BrowserHostObserveRequest = nodes.BrowserHostObserveRequest
 	BrowserHostCaptureRequest = nodes.BrowserHostCaptureRequest
 	BrowserHostActRequest     = nodes.BrowserHostActRequest
+	BrowserHostPolicyRequest  = nodes.BrowserHostPolicyRequest
 	BrowserHostElement        = nodes.BrowserElement
 	BrowserHostObservation    = nodes.BrowserObservationResult
 	BrowserHostCloseRequest   = nodes.BrowserHostStatusRequest
@@ -236,6 +238,7 @@ func cloneBrowserProfilePolicy(
 	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
 	profile.SensitiveFields = append([]string(nil), profile.SensitiveFields...)
 	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
+	profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 	return profile
 }
 
@@ -367,6 +370,53 @@ func (host *BrowserHost) Open(
 func (host *BrowserHost) BrowserProfiles() []nodes.BrowserProfileDescriptor {
 	descriptors, _ := companion.BrowserProfileDescriptors(host.profiles)
 	return nodes.CloneBrowserProfileDescriptors(descriptors)
+}
+
+func (host *BrowserHost) EvaluatePolicy(
+	ctx context.Context,
+	request BrowserHostPolicyRequest,
+) (nodes.BrowserPolicyEvaluateResult, error) {
+	if host == nil || nodes.ValidateBrowserPolicyEvaluateInput(
+		request.BrowserPolicyEvaluateInput,
+		host.BrowserProfiles(),
+	) != nil {
+		return nodes.BrowserPolicyEvaluateResult{}, ErrBrowserHostDenied
+	}
+	var profile companion.BrowserProfilePolicy
+	found := false
+	for _, candidate := range host.profiles {
+		if candidate.Revision == request.ProfileRevision {
+			profile, found = candidate, true
+			break
+		}
+	}
+	if !found || !authorizeBrowserProfile(
+		profile,
+		request.ProfileRevision,
+		request.AgentID,
+		request.ActorID,
+	) || profile.Policy == nil {
+		return nodes.BrowserPolicyEvaluateResult{}, ErrBrowserHostDenied
+	}
+	result, err := browserpolicy.Evaluate(ctx, *profile.Policy, browserpolicy.ActionMetadata{
+		Action: request.Action, Effect: request.Effect, Origin: request.Origin,
+		Role: request.Role, Name: request.Name,
+		ProfileRevision: request.ProfileRevision, PolicyRevision: request.PolicyRevision,
+	})
+	if err != nil {
+		result = browserpolicy.Result{Decision: browserpolicy.DecisionDeny, Reason: "policy_hook_failed"}
+	}
+	output := nodes.BrowserPolicyEvaluateResult{
+		ProfileRevision: request.ProfileRevision,
+		PolicyRevision:  request.PolicyRevision,
+		Decision:        result.Decision,
+		Reason:          result.Reason,
+		Summary:         result.Summary,
+	}
+	if nodes.ValidateBrowserPolicyEvaluateResult(output) != nil {
+		return nodes.BrowserPolicyEvaluateResult{}, ErrBrowserHostDenied
+	}
+	return output, nil
 }
 
 func (host *BrowserHost) Status(
@@ -1204,6 +1254,18 @@ func (host *BrowserHost) executeAction(
 	if !browserpolicy.ConfirmationValid(request.Confirmation) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
 	}
+	restricted := session.profile.CapabilityMode == browserpolicy.CapabilityRestricted
+	if restricted {
+		if session.profile.Policy == nil || request.RestrictedDecision == "" ||
+			request.RestrictedPolicyRevision == "" || request.RestrictedOrigin == "" ||
+			request.PolicyEffect == "" {
+			return BrowserHostObservation{}, ErrBrowserHostDenied
+		}
+	} else if request.PolicyEffect != "" || request.RestrictedDecision != "" ||
+		request.RestrictedPolicyRevision != "" ||
+		request.RestrictedOrigin != "" {
+		return BrowserHostObservation{}, ErrBrowserHostDenied
+	}
 	if action == "fill" && (len(request.Action.Value) > session.limits.TextInputBytes ||
 		!nodes.BrowserFillFieldAllowedForMode(
 			session.profile.CapabilityMode,
@@ -1218,6 +1280,12 @@ func (host *BrowserHost) executeAction(
 		request.Effect,
 		request.Confirmation,
 	)
+	if restricted {
+		requiresApproval = browserpolicy.RestrictedRequiresApproval(
+			request.RestrictedDecision,
+			request.Confirmation,
+		)
+	}
 	dryRunDownload := action == "download" && request.Effect == "unknown" && session.profile.DryRun
 	if requiresApproval && !nodes.BrowserApprovalDigestMatches(browserHostActInput(request)) {
 		return BrowserHostObservation{}, ErrBrowserHostDenied
@@ -1318,6 +1386,30 @@ func (host *BrowserHost) executeAction(
 			driverAction.DestinationElement = destinationElement.Name
 		}
 	}
+	if restricted {
+		policyEffect, policyEffectErr := browserpolicy.DeriveActionEffect(request.Action, boundElement.Role)
+		policyOrigin := current.Origin
+		if action == "navigate" {
+			policyOrigin, err = browserHostNavigationOrigin(request.Action.URL)
+		}
+		if err != nil || policyEffectErr != nil || policyEffect != request.PolicyEffect ||
+			policyOrigin != request.RestrictedOrigin {
+			cancelAction()
+			return BrowserHostObservation{}, ErrBrowserHostDenied
+		}
+		policyRevision, revisionErr := browserpolicy.PolicyRevision(*session.profile.Policy)
+		result, evaluateErr := browserpolicy.Evaluate(actionCtx, *session.profile.Policy, browserpolicy.ActionMetadata{
+			Action: action, Effect: policyEffect, Origin: policyOrigin,
+			Role: boundElement.Role, Name: boundElement.Name,
+			ProfileRevision: session.profile.Revision, PolicyRevision: policyRevision,
+		})
+		if revisionErr != nil || evaluateErr != nil || policyRevision != request.RestrictedPolicyRevision ||
+			result.Decision != request.RestrictedDecision ||
+			result.Decision == browserpolicy.DecisionDeny {
+			cancelAction()
+			return BrowserHostObservation{}, ErrBrowserHostDenied
+		}
+	}
 	if action == "fill" {
 		if session.fillWorker == nil {
 			cancelAction()
@@ -1413,6 +1505,14 @@ func (host *BrowserHost) executeAction(
 	return result, nil
 }
 
+func browserHostNavigationOrigin(rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.User != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", ErrBrowserHostDenied
+	}
+	return browserpolicy.NormalizeHTTPOrigin((&url.URL{Scheme: parsed.Scheme, Host: parsed.Host}).String())
+}
+
 func observeBrowserHostNavigation(
 	ctx context.Context,
 	session *browserHostSession,
@@ -1503,7 +1603,11 @@ func browserHostActInput(request BrowserHostActRequest) nodes.BrowserActInput {
 		ArtifactSHA256: request.ArtifactSHA256, ArtifactBytes: request.ArtifactBytes,
 		ArtifactFilename: request.ArtifactFilename, ArtifactContentType: request.ArtifactContentType,
 		WorkspaceID: request.WorkspaceID, RouteID: request.RouteID, BrowserTarget: request.BrowserTarget,
-		ApprovalDigest: request.ApprovalDigest,
+		ApprovalDigest:           request.ApprovalDigest,
+		PolicyEffect:             request.PolicyEffect,
+		RestrictedDecision:       request.RestrictedDecision,
+		RestrictedPolicyRevision: request.RestrictedPolicyRevision,
+		RestrictedOrigin:         request.RestrictedOrigin,
 	}
 }
 

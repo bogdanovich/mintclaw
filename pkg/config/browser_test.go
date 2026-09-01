@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 )
 
 func TestBrowserConfigDisabledByDefault(t *testing.T) {
@@ -118,10 +120,33 @@ func TestBrowserConfigAcceptsFullAccessApprovalModes(t *testing.T) {
 	}
 }
 
-func TestBrowserConfigDefersRestrictedPolicyModes(t *testing.T) {
+func TestBrowserConfigAcceptsRestrictedPolicyMode(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	profile := target.Profiles[BrowserDefaultProfile]
+	profile.CapabilityMode = BrowserCapabilityRestricted
+	profile.ApprovalMode = BrowserApprovalPolicy
+	profile.Policy = &browserpolicy.Policy{
+		DefaultDecision: browserpolicy.DecisionDeny,
+		Rules: []browserpolicy.Rule{{
+			ID: "allow-fill", Match: browserpolicy.RuleMatch{Actions: []string{"fill"}},
+			Decision: browserpolicy.DecisionAllow,
+		}},
+	}
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() restricted policy error = %v", err)
+	}
+}
+
+func TestBrowserConfigRejectsIncompleteRestrictedPolicyModes(t *testing.T) {
 	for _, mutate := range []func(*BrowserProfileConfig){
 		func(profile *BrowserProfileConfig) { profile.CapabilityMode = BrowserCapabilityRestricted },
 		func(profile *BrowserProfileConfig) { profile.ApprovalMode = BrowserApprovalPolicy },
+		func(profile *BrowserProfileConfig) {
+			profile.Policy = &browserpolicy.Policy{DefaultDecision: browserpolicy.DecisionDeny}
+		},
 	} {
 		cfg := browserConfigFixture(t)
 		target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
@@ -129,9 +154,49 @@ func TestBrowserConfigDefersRestrictedPolicyModes(t *testing.T) {
 		mutate(&profile)
 		target.Profiles[BrowserDefaultProfile] = profile
 		cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
-		if err := cfg.ValidateBrowserConfig(); err == nil || !strings.Contains(err.Error(), "implementation") {
-			t.Fatalf("ValidateBrowserConfig() error = %v, want deferred implementation", err)
+		if err := cfg.ValidateBrowserConfig(); err == nil || !strings.Contains(err.Error(), "together") {
+			t.Fatalf("ValidateBrowserConfig() error = %v, want paired restricted policy", err)
 		}
+	}
+}
+
+func TestBrowserPolicyRevisionBindsNormalizedRestrictedPolicyAndHook(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	profile := target.Profiles[BrowserDefaultProfile]
+	profile.CapabilityMode = BrowserCapabilityRestricted
+	profile.ApprovalMode = BrowserApprovalPolicy
+	profile.Policy = &browserpolicy.Policy{
+		DefaultDecision: browserpolicy.DecisionDeny,
+		Rules: []browserpolicy.Rule{{
+			ID: "allow-edit",
+			Match: browserpolicy.RuleMatch{
+				Actions: []string{"select", "fill"}, Origins: []string{"https://EXAMPLE.com:443"},
+			},
+			Decision: browserpolicy.DecisionAllow,
+		}},
+		Hook: &browserpolicy.Hook{Command: []string{"/opt/mintclaw/browser-policy"}, TimeoutMS: 1000},
+	}
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	first, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile.Policy.Rules[0].Match.Actions = []string{"fill", "select"}
+	profile.Policy.Rules[0].Match.Origins = []string{"https://example.com"}
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	canonical, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil || canonical != first {
+		t.Fatalf("canonical policy revision = %q, %v; want %q", canonical, err, first)
+	}
+	profile.Policy.Hook.Command = append(profile.Policy.Hook.Command, "--strict")
+	target.Profiles[BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	changed, err := cfg.Tools.Browser.PolicyRevision()
+	if err != nil || changed == first {
+		t.Fatalf("changed hook revision = %q, %v; original %q", changed, err, first)
 	}
 }
 

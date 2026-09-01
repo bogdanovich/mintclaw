@@ -541,8 +541,14 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 		invocationID,
 		prepared.ActionHash,
 		func(executeCtx context.Context) (json.RawMessage, error) {
+			revalidatePolicy := func() error {
+				return broker.revalidateRestrictedPolicyLocked(executeCtx, session, prepared)
+			}
 			if artifactInputAction(prepared.Action.Kind) || prepared.Action.Kind == ActionDownload {
 				if artifactInputAction(prepared.Action.Kind) && preparedDispatch {
+					if policyErr := revalidatePolicy(); policyErr != nil {
+						return nil, policyErr
+					}
 					if executeErr := preparedWorker.ExecutePrepared(
 						executeCtx,
 						workerPreparedAction,
@@ -559,6 +565,9 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					checkedUpload, ok := worker.(NavigationCheckedUploadWorker)
 					if !ok || slot.navigationID == "" {
 						return nil, ErrDriverIncompatible
+					}
+					if policyErr := revalidatePolicy(); policyErr != nil {
+						return nil, policyErr
 					}
 					if executeErr := checkedUpload.UploadAfterNavigationCheck(
 						executeCtx,
@@ -580,11 +589,17 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					if !ok {
 						return nil, ErrDriverIncompatible
 					}
+					if policyErr := revalidatePolicy(); policyErr != nil {
+						return nil, policyErr
+					}
 					download, executeErr = remote.DownloadPrepared(executeCtx, workerPreparedAction, maximum)
 				} else {
 					transferWorker, ok := worker.(TransferWorker)
 					if !ok {
 						return nil, ErrDriverIncompatible
+					}
+					if policyErr := revalidatePolicy(); policyErr != nil {
+						return nil, policyErr
 					}
 					download, executeErr = transferWorker.Download(executeCtx, driverAction, maximum)
 				}
@@ -602,6 +617,9 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 				return terminal, nil
 			}
 			if preparedDispatch {
+				if policyErr := revalidatePolicy(); policyErr != nil {
+					return nil, policyErr
+				}
 				if executeErr := preparedWorker.ExecutePrepared(executeCtx, workerPreparedAction); executeErr != nil {
 					return nil, executeErr
 				}
@@ -612,6 +630,9 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 				if slot.navigationID == "" {
 					return nil, ErrStale
 				}
+				if policyErr := revalidatePolicy(); policyErr != nil {
+					return nil, policyErr
+				}
 				if executeErr := checkedWorker.ExecuteAfterNavigationCheck(
 					executeCtx,
 					slot.navigationID,
@@ -620,6 +641,9 @@ func (broker *Broker) ExecuteActionWithDownloadSink(
 					return nil, executeErr
 				}
 				return json.RawMessage(`{"status":"completed"}`), nil
+			}
+			if policyErr := revalidatePolicy(); policyErr != nil {
+				return nil, policyErr
 			}
 			if executeErr := worker.Execute(executeCtx, driverAction); executeErr != nil {
 				return nil, executeErr
@@ -883,7 +907,119 @@ func (broker *Broker) resolvePreparedActionLocked(
 	default:
 		return PreparedAction{}, ErrInvalid
 	}
+	if err := broker.evaluateRestrictedPolicyLocked(ctx, session, worker, &prepared); err != nil {
+		return PreparedAction{}, err
+	}
 	return prepared, nil
+}
+
+func (broker *Broker) evaluateRestrictedPolicyLocked(
+	ctx context.Context,
+	session Session,
+	worker ActionWorker,
+	prepared *PreparedAction,
+) error {
+	if prepared == nil || browserpolicy.EffectiveCapabilityMode(prepared.CapabilityMode) !=
+		browserpolicy.CapabilityRestricted {
+		return nil
+	}
+	profile, ok := broker.browserProfile(session)
+	if !ok || profile.Policy == nil ||
+		profile.EffectiveApprovalMode() != browserpolicy.ApprovalPolicy {
+		return ErrDenied
+	}
+	policyEffect, err := browserpolicy.DeriveActionEffect(prepared.Action, prepared.ElementRole)
+	if err != nil {
+		return ErrDenied
+	}
+	prepared.PolicyEffect = Effect(policyEffect)
+	revision, err := browserpolicy.PolicyRevision(*profile.Policy)
+	if err != nil {
+		return ErrDenied
+	}
+	metadata := preparedPolicyMetadata(*prepared, session.PolicyRevision, revision)
+	local, err := browserpolicy.Evaluate(ctx, *profile.Policy, metadata)
+	if err != nil || local.Decision == browserpolicy.DecisionDeny {
+		return ErrDenied
+	}
+	prepared.LocalRestrictedDecision = local.Decision
+	prepared.RestrictedDecision = local.Decision
+	prepared.RestrictedPolicyRevision = revision
+	if remote, remotePolicy := worker.(PolicyEvaluationWorker); remotePolicy {
+		result, evaluateErr := remote.EvaluatePolicy(ctx, metadata)
+		if evaluateErr != nil || !browserpolicy.DecisionValid(result.Result.Decision) ||
+			result.Result.Decision == browserpolicy.DecisionDeny || !validDigest(result.PolicyRevision) ||
+			result.ProfileRevision == "" {
+			return ErrDenied
+		}
+		prepared.WorkerRestrictedDecision = result.Result.Decision
+		prepared.WorkerRestrictedRevision = result.PolicyRevision
+		prepared.RestrictedDecision, err = browserpolicy.CombineDecisions(
+			local.Decision,
+			result.Result.Decision,
+		)
+		if err != nil || prepared.RestrictedDecision == browserpolicy.DecisionDeny {
+			return ErrDenied
+		}
+	} else if _, remote := worker.(PreparedActionWorker); remote {
+		return ErrDriverIncompatible
+	}
+	return nil
+}
+
+func (broker *Broker) revalidateRestrictedPolicyLocked(
+	ctx context.Context,
+	session Session,
+	prepared PreparedAction,
+) error {
+	if browserpolicy.EffectiveCapabilityMode(prepared.CapabilityMode) !=
+		browserpolicy.CapabilityRestricted {
+		return nil
+	}
+	profile, ok := broker.browserProfile(session)
+	if !ok || profile.Policy == nil {
+		return ErrDenied
+	}
+	policyEffect, err := browserpolicy.DeriveActionEffect(prepared.Action, prepared.ElementRole)
+	if err != nil || prepared.PolicyEffect != Effect(policyEffect) {
+		return ErrDenied
+	}
+	revision, err := browserpolicy.PolicyRevision(*profile.Policy)
+	if err != nil || revision != prepared.RestrictedPolicyRevision {
+		return ErrDenied
+	}
+	result, err := browserpolicy.Evaluate(
+		ctx,
+		*profile.Policy,
+		preparedPolicyMetadata(prepared, session.PolicyRevision, revision),
+	)
+	if err != nil || result.Decision != prepared.LocalRestrictedDecision {
+		return ErrDenied
+	}
+	effective := result.Decision
+	if prepared.WorkerRestrictedDecision != "" {
+		effective, err = browserpolicy.CombineDecisions(effective, prepared.WorkerRestrictedDecision)
+	}
+	if err != nil || effective != prepared.RestrictedDecision || effective == browserpolicy.DecisionDeny {
+		return ErrDenied
+	}
+	return nil
+}
+
+func preparedPolicyMetadata(
+	prepared PreparedAction,
+	profileRevision string,
+	policyRevision string,
+) browserpolicy.ActionMetadata {
+	origin := prepared.CurrentOrigin
+	if prepared.DestinationOrigin != "" {
+		origin = prepared.DestinationOrigin
+	}
+	return browserpolicy.ActionMetadata{
+		Action: string(prepared.Action.Kind), Effect: string(prepared.PolicyEffect), Origin: origin,
+		Role: prepared.ElementRole, Name: prepared.ElementName,
+		ProfileRevision: profileRevision, PolicyRevision: policyRevision,
+	}
 }
 
 func (broker *Broker) revalidatePreparedLocked(
@@ -924,6 +1060,9 @@ func (broker *Broker) revalidatePreparedLocked(
 		(prepared.DestinationOrigin != "" &&
 			!broker.originNetworkAllowed(ctx, session, prepared.DestinationOrigin)) {
 		return broker.quarantineNetworkDeniedLocked(ctx, session)
+	}
+	if err := broker.revalidateRestrictedPolicyLocked(ctx, session, prepared); err != nil {
+		return err
 	}
 	if prepared.Action.Kind == ActionNavigate || prepared.Action.Kind == ActionPress ||
 		prepared.Action.Kind == ActionScroll {
@@ -1301,11 +1440,7 @@ func preparationView(prepared PreparedAction) Preparation {
 			PreparedActionID: prepared.ID, ActionHash: prepared.ActionHash,
 			PolicyRevision: prepared.PolicyRevision, ExpiresAt: prepared.ExpiresAt,
 		},
-		RequiresApproval: browserpolicy.RequiresApproval(
-			prepared.ApprovalMode,
-			string(prepared.Effect),
-			prepared.Confirmation,
-		),
+		RequiresApproval: preparedRequiresApproval(prepared),
 	}
 }
 
@@ -1368,6 +1503,12 @@ func tracksBrowserProgress(prepared PreparedAction) bool {
 }
 
 func preparedRequiresApproval(prepared PreparedAction) bool {
+	if browserpolicy.EffectiveApprovalMode(prepared.ApprovalMode) == browserpolicy.ApprovalPolicy {
+		return browserpolicy.RestrictedRequiresApproval(
+			prepared.RestrictedDecision,
+			prepared.Confirmation,
+		)
+	}
 	return browserpolicy.RequiresApproval(
 		prepared.ApprovalMode,
 		string(prepared.Effect),
@@ -1417,27 +1558,36 @@ func editableElementRole(role string) bool {
 }
 
 func (broker *Broker) capabilityMode(session Session) string {
-	target, ok := broker.config.Targets[session.Target]
+	profile, ok := broker.browserProfile(session)
 	if !ok {
 		return browserpolicy.CapabilityLegacyStrict
 	}
-	return target.Profiles[session.Profile].EffectiveCapabilityMode()
+	return profile.EffectiveCapabilityMode()
 }
 
 func (broker *Broker) approvalMode(session Session) string {
-	target, ok := broker.config.Targets[session.Target]
+	profile, ok := broker.browserProfile(session)
 	if !ok {
 		return browserpolicy.ApprovalAlwaysCommit
 	}
-	return target.Profiles[session.Profile].EffectiveApprovalMode()
+	return profile.EffectiveApprovalMode()
 }
 
 func (broker *Broker) sensitiveFieldTerms(session Session) []string {
-	target, ok := broker.config.Targets[session.Target]
+	profile, ok := broker.browserProfile(session)
 	if !ok {
 		return nil
 	}
-	return target.Profiles[session.Profile].SensitiveFields
+	return profile.SensitiveFields
+}
+
+func (broker *Broker) browserProfile(session Session) (config.BrowserProfileConfig, bool) {
+	target, ok := broker.config.Targets[session.Target]
+	if !ok {
+		return config.BrowserProfileConfig{}, false
+	}
+	profile, ok := target.Profiles[session.Profile]
+	return profile, ok
 }
 
 func (broker *Broker) driverActionForPrepared(
