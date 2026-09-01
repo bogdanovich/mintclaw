@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
@@ -28,7 +29,6 @@ var errInjectedRuntimeStore = errors.New("injected runtime store failure")
 var codingRuntimeToolNames = []string{
 	"append_file",
 	"apply_patch",
-	"coding_attachment",
 	"exec",
 	"list_dir",
 	"read_file",
@@ -340,12 +340,19 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 			Command: []string{"sh", "-c", `touch "$1"`, "hook", hookMarker},
 		},
 	}
+	codingMedia := &lazyHistoricalMediaStore{
+		MediaStore:    media.NewFileMediaStore(),
+		lazy:          make(map[string]bool),
+		attachCurrent: make(map[string]bool),
+		resolved:      make(map[string]int),
+	}
 	loop, err := NewCodingAgentLoop(
 		t.Context(),
 		cfg,
 		bus.NewMessageBus(),
 		&mockProvider{},
 		profile,
+		WithCodingMediaStore(codingMedia),
 	)
 	if err != nil {
 		t.Fatalf("NewCodingAgentLoop() error = %v", err)
@@ -362,8 +369,11 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	if agent.CodingLayout.StateRoot() != layout.StateRoot() {
 		t.Fatalf("CodingLayout.StateRoot() = %q, want %q", agent.CodingLayout.StateRoot(), layout.StateRoot())
 	}
-	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
-		t.Fatalf("coding tools = %v, want %v", got, codingRuntimeToolNames)
+	wantCodingTools := append([]string(nil), codingRuntimeToolNames...)
+	wantCodingTools = append(wantCodingTools, "coding_attachment")
+	slices.Sort(wantCodingTools)
+	if got := agent.Tools.List(); !slices.Equal(got, wantCodingTools) {
+		t.Fatalf("coding tools = %v, want %v", got, wantCodingTools)
 	}
 	originalExec, ok := agent.Tools.Get("exec")
 	if !ok {
@@ -409,7 +419,7 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	if _, err := os.Stat(hookMarker); !os.IsNotExist(err) {
 		t.Fatalf("coding runtime executed configured process hook: %v", err)
 	}
-	if got := agent.Tools.List(); !slices.Equal(got, codingRuntimeToolNames) {
+	if got := agent.Tools.List(); !slices.Equal(got, wantCodingTools) {
 		t.Fatalf("coding catalog changed after dynamic injection: %v", got)
 	}
 	if _, statErr := os.Stat(executionRoot); !os.IsNotExist(statErr) {

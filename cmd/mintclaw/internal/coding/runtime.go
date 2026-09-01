@@ -232,7 +232,7 @@ func openNativeCodingRuntime(
 		provider,
 		profile,
 		agent.WithRuntimeEvents(eventBus),
-		agent.WithMediaStore(attachmentMedia),
+		agent.WithCodingMediaStore(attachmentMedia),
 	)
 	if err != nil {
 		_ = attachmentMedia.Close()

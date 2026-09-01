@@ -113,7 +113,7 @@ func TestProjectNodeFileMediaAttachmentsExposesOpaqueRefWithoutGatewayPath(t *te
 		[]string{ref},
 		store,
 	)
-	resolved := resolveMediaRefs(messages, store, 1024)
+	resolved := resolveMediaRefs(messages, store, nil, 1024)
 	if len(resolved) != 1 || len(resolved[0].Attachments) != 1 ||
 		resolved[0].Attachments[0].Ref != ref || resolved[0].Attachments[0].Filename != "inbound.png" {
 		t.Fatalf("projected messages = %#v", resolved)

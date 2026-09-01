@@ -113,7 +113,13 @@ func (p *Pipeline) runPreparedTurnLoop(
 
 		// Inject pending steering messages
 		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(pendingMessages, mediaResolver, maxMediaSize, 0)
+			resolvedPending := resolveMediaRefs(
+				pendingMessages,
+				mediaResolver,
+				p.Context.CodingMedia,
+				maxMediaSize,
+				0,
+			)
 			totalContentLen := 0
 			for i, pm := range pendingMessages {
 				providerMsg := providerPromptMessageForTurn(resolvedPending[i])

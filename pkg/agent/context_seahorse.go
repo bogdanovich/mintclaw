@@ -45,7 +45,7 @@ type seahorseAgentRuntime struct {
 	workspace                string
 	agentID                  string
 	reconciliationGeneration int
-	historicalMediaPolicy    func() media.HistoricalResolutionPolicy
+	codingMedia              media.CodingMediaStore
 	config                   seahorse.Config
 	complete                 seahorse.CompleteFn
 	rebuildStoreFactory      CodingRuntimeStoreFactory
@@ -155,14 +155,14 @@ func newSeahorseAgentRuntime(
 		return nil, fmt.Errorf("create engine: coding store factory returned an engine without retrieval")
 	}
 	runtime := &seahorseAgentRuntime{
-		engine:                engine,
-		sessions:              agent.Sessions,
-		workspace:             agent.Workspace,
-		agentID:               agent.ID,
-		config:                seahorseConfig,
-		complete:              complete,
-		rebuildStoreFactory:   rebuildStoreFactory,
-		historicalMediaPolicy: al.historicalMediaResolutionPolicy,
+		engine:              engine,
+		sessions:            agent.Sessions,
+		workspace:           agent.Workspace,
+		agentID:             agent.ID,
+		config:              seahorseConfig,
+		complete:            complete,
+		rebuildStoreFactory: rebuildStoreFactory,
+		codingMedia:         al.codingMedia,
 		reconciliationGeneration: seahorseConfig.SummaryPolicy.ReconciliationGeneration(
 			seahorseReconciliationGeneration,
 		),
@@ -934,29 +934,25 @@ func (m *seahorseContextManager) StartBackgroundReconciliation(ctx context.Conte
 
 // providerToSeahorseMessage converts a providers.Message to a seahorse.Message.
 func providerToSeahorseMessage(msg protocoltypes.Message) seahorse.Message {
-	return providerToSeahorseMessageWithPolicy(msg, nil)
+	return providerToSeahorseMessageWithCodingMedia(msg, nil)
 }
 
 func (runtime *seahorseAgentRuntime) providerToSeahorseMessage(msg protocoltypes.Message) seahorse.Message {
 	if runtime == nil {
 		return providerToSeahorseMessage(msg)
 	}
-	var policy media.HistoricalResolutionPolicy
-	if runtime.historicalMediaPolicy != nil {
-		policy = runtime.historicalMediaPolicy()
-	}
-	return providerToSeahorseMessageWithPolicy(msg, policy)
+	return providerToSeahorseMessageWithCodingMedia(msg, runtime.codingMedia)
 }
 
-func providerToSeahorseMessageWithPolicy(
+func providerToSeahorseMessageWithCodingMedia(
 	msg protocoltypes.Message,
-	policy media.HistoricalResolutionPolicy,
+	codingMedia media.CodingMediaStore,
 ) seahorse.Message {
 	indexed := msg
-	if policy != nil && len(msg.Media) > 0 {
+	if codingMedia != nil && len(msg.Media) > 0 {
 		indexed.Media = make([]string, 0, len(msg.Media))
 		for _, mediaURI := range msg.Media {
-			if policy.ShouldResolveHistorical(mediaURI) {
+			if codingMedia.ShouldResolveHistorical(mediaURI) {
 				indexed.Media = append(indexed.Media, mediaURI)
 			}
 		}

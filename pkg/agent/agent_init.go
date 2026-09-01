@@ -15,6 +15,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/skills"
 	"github.com/bogdanovich/mintclaw/pkg/state"
@@ -84,6 +85,9 @@ func newAgentLoopWithRegistry(
 			opt(al)
 		}
 	}
+	if al.codingProfile != nil {
+		registerCodingMediaTools(registry, al.codingMedia)
+	}
 	al.interactions.configure(al.GetConfig, al.codingProfile, al.observeInteractionEvent)
 	al.tasks = newTaskCoordinator(al.GetConfig, al.codingProfile, &al.interactions)
 	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && al.state == nil {
@@ -121,6 +125,22 @@ func newAgentLoopWithRegistry(
 	al.turns.replaceRunner(newTurnRunner(al, cfg))
 
 	return al
+}
+
+func registerCodingMediaTools(
+	registry *AgentRegistry,
+	store media.CodingMediaStore,
+) {
+	if registry == nil || store == nil {
+		return
+	}
+	for _, agentID := range registry.ListAgentIDs() {
+		instance, ok := registry.GetAgent(agentID)
+		if !ok || instance == nil || instance.Tools == nil {
+			continue
+		}
+		instance.Tools.Register(tools.NewCodingAttachmentTool(store))
+	}
 }
 
 // NewAgentLoopChecked constructs an AgentLoop and returns startup failures.

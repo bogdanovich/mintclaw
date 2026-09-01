@@ -17,6 +17,15 @@ func WithMediaStore(store media.MediaStore) AgentLoopOption {
 	}
 }
 
+// WithCodingMediaStore injects the complete media contract owned by one
+// coding thread. It also supplies the generic media lifecycle used by tools.
+func WithCodingMediaStore(store media.CodingMediaStore) AgentLoopOption {
+	return func(al *AgentLoop) {
+		al.mediaStore = store
+		al.codingMedia = store
+	}
+}
+
 // WithRuntimeEvents injects the runtime event bus used for new observation APIs.
 //
 // The injected bus is treated as externally owned and will not be closed by

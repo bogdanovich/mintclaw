@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,17 @@ func (s *lazyHistoricalMediaStore) ResolveWithMeta(ref string) (string, media.Me
 	return s.MediaStore.ResolveWithMeta(ref)
 }
 
+func (*lazyHistoricalMediaStore) ListReferences(context.Context) ([]media.Reference, error) {
+	return nil, nil
+}
+
+func (*lazyHistoricalMediaStore) ReadReference(
+	context.Context,
+	string,
+) ([]byte, media.Reference, error) {
+	return nil, media.Reference{}, os.ErrNotExist
+}
+
 func TestResolveMediaRefsAttachesOptedInCurrentImageWithText(t *testing.T) {
 	delegate := media.NewFileMediaStore()
 	store := &lazyHistoricalMediaStore{
@@ -56,7 +68,7 @@ func TestResolveMediaRefsAttachesOptedInCurrentImageWithText(t *testing.T) {
 	store.attachCurrent[ref] = true
 	result := resolveMediaRefs([]providers.Message{{
 		Role: "user", Content: "[image: current-with-text.png]\nInspect this screenshot.", Media: []string{ref},
-	}}, store, config.DefaultMaxMediaSize, 0)
+	}}, store, store, config.DefaultMaxMediaSize, 0)
 	if store.resolved[ref] != 1 || len(result) != 1 || len(result[0].Media) != 1 ||
 		!strings.HasPrefix(result[0].Media[0], "data:image/png;base64,") {
 		t.Fatalf("opted-in current image = calls %d messages %+v", store.resolved[ref], result)
@@ -99,7 +111,7 @@ func TestResolveMediaRefsKeepsHistoryLazyAndAccountsForSelectedToolImage(t *test
 		{Role: "assistant", Content: "Opening the selected historical image."},
 		{Role: "tool", Content: "Opened thread image", Media: []string{currentRef}},
 	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, 1)
+	result := resolveMediaRefs(messages, store, store, config.DefaultMaxMediaSize, 1)
 	if store.resolved[oldRef] != 0 || result[0].Content != "[image: old.png]" || len(result[0].Media) != 0 {
 		t.Fatalf("historical media was resolved: calls=%d message=%+v", store.resolved[oldRef], result[0])
 	}

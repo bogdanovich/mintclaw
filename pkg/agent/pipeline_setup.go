@@ -59,6 +59,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	messages = resolveMediaRefs(
 		messages,
 		p.Context.MediaResolver,
+		p.Context.CodingMedia,
 		maxMediaSize,
 		promptCurrentTurnStart(messages, ts.userMessage, ts.media),
 	)
@@ -115,6 +116,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 					return resolveMediaRefs(
 						rebuilt,
 						p.Context.MediaResolver,
+						p.Context.CodingMedia,
 						maxMediaSize,
 						promptCurrentTurnStart(rebuilt, ts.userMessage, ts.media),
 					)
@@ -357,6 +359,7 @@ func (p *Pipeline) estimateNonHistoryPromptReserve(
 	messages = resolveMediaRefs(
 		messages,
 		p.Context.MediaResolver,
+		p.Context.CodingMedia,
 		maxMediaSize,
 		promptCurrentTurnStart(messages, ts.userMessage, ts.media),
 	)
