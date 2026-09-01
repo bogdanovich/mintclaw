@@ -12,14 +12,16 @@ import (
 type previousBrowserSchemaGeneration string
 
 const (
-	previousBrowserSchemaInline   previousBrowserSchemaGeneration = "inline"
-	previousBrowserSchemaStreamed previousBrowserSchemaGeneration = "streamed"
+	previousBrowserSchemaInline              previousBrowserSchemaGeneration = "inline"
+	previousBrowserSchemaStreamed            previousBrowserSchemaGeneration = "streamed"
+	previousBrowserSchemaPreRestrictedPolicy previousBrowserSchemaGeneration = "pre_restricted_policy"
 )
 
 func TestBrowserCatalogRejectsExactPreviousSnapshotSchemaGenerations(t *testing.T) {
 	for _, generation := range []previousBrowserSchemaGeneration{
 		previousBrowserSchemaInline,
 		previousBrowserSchemaStreamed,
+		previousBrowserSchemaPreRestrictedPolicy,
 	} {
 		t.Run(string(generation), func(t *testing.T) {
 			descriptors := previousBrowserCatalogFixture(t, generation)
@@ -33,10 +35,11 @@ func TestBrowserCatalogRejectsExactPreviousSnapshotSchemaGenerations(t *testing.
 	}
 }
 
-func TestFileRegistryRejectsExactPreviousSnapshotSchemaGenerations(t *testing.T) {
+func TestFileRegistryQuarantinesExactPreviousSnapshotSchemaGenerations(t *testing.T) {
 	for _, generation := range []previousBrowserSchemaGeneration{
 		previousBrowserSchemaInline,
 		previousBrowserSchemaStreamed,
+		previousBrowserSchemaPreRestrictedPolicy,
 	} {
 		t.Run(string(generation), func(t *testing.T) {
 			pairing := testPendingPairing(t, 1)
@@ -61,8 +64,19 @@ func TestFileRegistryRejectsExactPreviousSnapshotSchemaGenerations(t *testing.T)
 			if err = os.WriteFile(path, encoded, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
-				t.Fatalf("load registry with previous %s browser catalog error = %v", generation, err)
+			registry, err := NewFileRegistry(path, 4)
+			if err != nil {
+				t.Fatalf("load registry with previous %s browser catalog: %v", generation, err)
+			}
+			pending, exists, err := registry.Pending(pairing.Node.ID)
+			if err != nil || !exists {
+				t.Fatalf("Pending() = exists %v, error %v", exists, err)
+			}
+			if len(pending.Node.Catalog.Commands) != 0 {
+				t.Fatalf("quarantined previous %s browser commands = %#v", generation, pending.Node.Catalog.Commands)
+			}
+			if err := pending.Node.Validate(); err != nil {
+				t.Fatalf("quarantined previous %s snapshot: %v", generation, err)
 			}
 		})
 	}
@@ -80,6 +94,15 @@ func previousBrowserCatalogFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
+	if generation == previousBrowserSchemaPreRestrictedPolicy {
+		prior := make([]CommandDescriptor, 0, len(descriptors)-1)
+		for _, descriptor := range descriptors {
+			if descriptor.Name != BrowserCommandPolicyEvaluate {
+				prior = append(prior, descriptor)
+			}
+		}
+		descriptors = prior
+	}
 	for index := range descriptors {
 		descriptor := &descriptors[index]
 		switch generation {
@@ -88,11 +111,29 @@ func previousBrowserCatalogFixture(
 			descriptor.OutputSchema = previousInlineBrowserOutputFixture(t, *descriptor)
 		case previousBrowserSchemaStreamed:
 			descriptor.OutputSchema = previousStreamedBrowserOutputFixture(t, *descriptor)
+		case previousBrowserSchemaPreRestrictedPolicy:
+			if descriptor.Name == BrowserCommandAct {
+				descriptor.InputSchema = previousRestrictedPolicyInputFixture(t, *descriptor)
+			}
 		default:
 			t.Fatalf("unknown previous browser schema generation %q", generation)
 		}
 	}
 	return descriptors
+}
+
+func previousRestrictedPolicyInputFixture(t *testing.T, descriptor CommandDescriptor) json.RawMessage {
+	t.Helper()
+	return rewriteBrowserSchemaFixture(t, descriptor.InputSchema, func(schema map[string]any) {
+		properties, ok := schema["properties"].(map[string]any)
+		if !ok {
+			return
+		}
+		delete(properties, "policy_effect")
+		delete(properties, "restricted_decision")
+		delete(properties, "restricted_origin")
+		delete(properties, "restricted_policy_revision")
+	})
 }
 
 func previousInlineBrowserInputFixture(t *testing.T, descriptor CommandDescriptor) json.RawMessage {

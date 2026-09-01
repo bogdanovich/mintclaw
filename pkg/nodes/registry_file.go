@@ -18,6 +18,8 @@ import (
 
 const registryFileVersion = 1
 
+const staleBrowserCatalogReason = "browser capability schema changed; reconnect with current software and renew command approval"
+
 // RegistryPath returns the canonical per-workspace node registry location.
 func RegistryPath(workspacePath string) string {
 	return filepath.Join(workspacePath, "state", "nodes", "registry.json")
@@ -565,12 +567,18 @@ func (registry *FileRegistry) load() error {
 	if document.Records == nil {
 		document.Records = make(map[string]registryRecord)
 	}
+	migrated := false
 	for id, record := range document.Records {
 		if id != string(record.Snapshot.ID) {
 			return fmt.Errorf("node registry key %q does not match record id %q", id, record.Snapshot.ID)
 		}
 		if err := record.Snapshot.Validate(); err != nil {
-			return fmt.Errorf("validate node registry record %q: %w", id, err)
+			quarantined, quarantineErr := quarantineStoredBrowserCatalog(&record)
+			if quarantineErr != nil || !quarantined {
+				return fmt.Errorf("validate node registry record %q: %w", id, err)
+			}
+			document.Records[id] = record
+			migrated = true
 		}
 		if record.Snapshot.State == StatePendingPairing &&
 			(record.RequestedRole != "companion" || record.RequestedAt <= 0) {
@@ -583,8 +591,51 @@ func (registry *FileRegistry) load() error {
 	if err := validateRegistryNamespace(document.Records); err != nil {
 		return fmt.Errorf("validate node registry namespace: %w", err)
 	}
+	if migrated {
+		if err := registry.save(document.Records); err != nil && !fileutil.IsCommittedWriteError(err) {
+			return fmt.Errorf("persist quarantined browser capability catalog: %w", err)
+		}
+	}
 	registry.records = document.Records
 	return nil
+}
+
+// quarantineStoredBrowserCatalog makes a persisted browser contract upgrade
+// fail closed without preventing the gateway from starting. Browser command
+// descriptors are runtime-owned typed contracts, so a stored non-current
+// descriptor is never admitted. Removing the complete browser surface and
+// changing the catalog hash preserves the node identity while forcing a
+// current companion reconnect and explicit command-surface renewal.
+func quarantineStoredBrowserCatalog(record *registryRecord) (bool, error) {
+	commands := make([]CommandDescriptor, 0, len(record.Snapshot.Catalog.Commands))
+	removed := false
+	for _, descriptor := range record.Snapshot.Catalog.Commands {
+		if IsBrowserCommand(descriptor.Name) {
+			removed = true
+			continue
+		}
+		commands = append(commands, descriptor)
+	}
+	if !removed {
+		return false, nil
+	}
+
+	snapshot := cloneSnapshot(record.Snapshot)
+	snapshot.Catalog.Commands = commands
+	catalogHash, err := snapshot.Catalog.Hash()
+	if err != nil {
+		return false, err
+	}
+	snapshot.CatalogHash = catalogHash
+	if snapshot.State != StatePendingPairing && snapshot.State != StateRevoked {
+		snapshot.State = StateIncompatible
+		snapshot.DisconnectReason = staleBrowserCatalogReason
+	}
+	if err := snapshot.Validate(); err != nil {
+		return false, err
+	}
+	record.Snapshot = snapshot
+	return true, nil
 }
 
 func normalizeAliases(aliases []Alias) ([]Alias, error) {
