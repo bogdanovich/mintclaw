@@ -2,6 +2,7 @@ package seahorse
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -22,6 +23,235 @@ func TestNewEngineHonorsCanceledSetup(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dbPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("canceled setup created database: %v", statErr)
+	}
+}
+
+func TestNewEngineOwnsOneSQLiteConnection(t *testing.T) {
+	engine, err := NewEngine(t.Context(), Config{DBPath: filepath.Join(t.TempDir(), "seahorse.db")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	if got := engine.store.db.Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("maximum open SQLite connections = %d, want 1", got)
+	}
+
+	var busyTimeout, synchronous int
+	var journalMode string
+	if err := engine.store.db.QueryRowContext(t.Context(), "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.store.db.QueryRowContext(t.Context(), "PRAGMA synchronous").Scan(&synchronous); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.store.db.QueryRowContext(t.Context(), "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatal(err)
+	}
+	if busyTimeout != 0 || synchronous != 1 || journalMode != "wal" {
+		t.Fatalf(
+			"SQLite contract = busy_timeout:%d synchronous:%d journal_mode:%q, want 0/1/wal",
+			busyTimeout,
+			synchronous,
+			journalMode,
+		)
+	}
+}
+
+func TestNewEnginePreservesDatabasePathWithURLCharacters(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("question marks are not valid in Windows paths")
+	}
+
+	testNewEngineReopensDatabasePath(t, filepath.Join(t.TempDir(), "team?blue#green", "seahorse.db"))
+}
+
+func TestNewEnginePreservesRelativeDatabasePath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	testNewEngineReopensDatabasePath(t, filepath.Join("nested", "seahorse.db"))
+}
+
+func TestNewEnginePreservesDoubleSeparatorDatabasePath(t *testing.T) {
+	if os.PathSeparator == '\\' {
+		t.Skip("the test host does not provide a reachable UNC share")
+	}
+
+	testNewEngineReopensDatabasePath(t, "/"+filepath.Join(t.TempDir(), "network", "seahorse.db"))
+}
+
+func testNewEngineReopensDatabasePath(t *testing.T, dbPath string) {
+	t.Helper()
+
+	engine, err := NewEngine(t.Context(), Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := engine.store.GetOrCreateConversation(t.Context(), "persisted-session")
+	if err != nil {
+		_ = engine.Close()
+		t.Fatal(err)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Fatalf("configured database path was not created: %v", err)
+	}
+
+	reopened, err := NewEngine(t.Context(), Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	persisted, err := reopened.store.GetOrCreateConversation(t.Context(), "persisted-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ConversationID != conversation.ConversationID {
+		t.Fatalf(
+			"reopened conversation ID = %d, want %d",
+			persisted.ConversationID,
+			conversation.ConversationID,
+		)
+	}
+}
+
+func TestEngineSerializesCrossSessionWriters(t *testing.T) {
+	engine, err := NewEngine(t.Context(), Config{DBPath: filepath.Join(t.TempDir(), "seahorse.db")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	store := engine.store
+
+	for _, sessionKey := range []string{"held-writer", "contending-writer"} {
+		if _, err := store.GetOrCreateConversation(t.Context(), sessionKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tx, err := store.db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	if _, err := tx.ExecContext(
+		t.Context(),
+		"UPDATE conversations SET updated_at = updated_at WHERE session_key = ?",
+		"held-writer",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	waitsBefore := store.db.Stats().WaitCount
+	result := make(chan error, 1)
+	go func() {
+		result <- store.SetConversationProvenance(
+			t.Context(),
+			"contending-writer",
+			"telegram:account:chat",
+			"main",
+		)
+	}()
+
+	waitDeadline := time.NewTimer(time.Second)
+	t.Cleanup(func() { waitDeadline.Stop() })
+	waitTicker := time.NewTicker(time.Millisecond)
+	t.Cleanup(waitTicker.Stop)
+waitForPool:
+	for {
+		if store.db.Stats().WaitCount > waitsBefore {
+			break waitForPool
+		}
+		select {
+		case err := <-result:
+			t.Fatalf("contending writer returned before the owner released its transaction: %v", err)
+		case <-waitDeadline.C:
+			t.Fatal("contending writer did not wait for the owned SQLite connection")
+		case <-waitTicker.C:
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("contending writer failed after owner release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("contending writer did not resume after owner release")
+	}
+}
+
+func TestEngineRejectsExternalWriterContentionPromptly(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "seahorse.db")
+	engine, err := NewEngine(t.Context(), Config{DBPath: dbPath}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	if _, err := engine.store.GetOrCreateConversation(t.Context(), "owned-session"); err != nil {
+		t.Fatal(err)
+	}
+
+	external, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = external.Close() })
+	externalTx, err := external.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = externalTx.Rollback() })
+	if _, err := externalTx.ExecContext(
+		t.Context(),
+		"UPDATE conversations SET updated_at = ? WHERE session_key = ?",
+		time.Now().UnixNano(),
+		"owned-session",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err = engine.store.SetConversationProvenance(ctx, "owned-session", "telegram:account:chat", "main")
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("external writer contention unexpectedly succeeded")
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("external writer contention returned after %s, want less than one second", elapsed)
+	}
+}
+
+func TestEngineListsSessionsThroughOwnedConnection(t *testing.T) {
+	engine, err := NewEngine(t.Context(), Config{DBPath: filepath.Join(t.TempDir(), "seahorse.db")}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	for _, sessionKey := range []string{"first", "second"} {
+		if _, err := engine.Ingest(t.Context(), sessionKey, []Message{{
+			Role: "user", Content: sessionKey, TokenCount: 1,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	statuses, err := engine.store.GetAllSessionStatuses(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statuses) != 2 {
+		t.Fatalf("session statuses = %#v, want two", statuses)
 	}
 }
 
@@ -729,23 +959,6 @@ func TestEngineIngestAssemblePreservesParts(t *testing.T) {
 	}
 }
 
-// --- Session Mutex ---
-
-func TestEngineSessionMutex(t *testing.T) {
-	eng := newTestEngine(t)
-
-	mu1 := eng.getSessionMutex("agent:test")
-	mu2 := eng.getSessionMutex("agent:test")
-	mu3 := eng.getSessionMutex("agent:other")
-
-	if mu1 != mu2 {
-		t.Error("expected same mutex for same session key")
-	}
-	if mu1 == mu3 {
-		t.Error("expected different mutex for different session key")
-	}
-}
-
 // --- Close ---
 
 func TestEngineClose(t *testing.T) {
@@ -1354,62 +1567,6 @@ func TestBootstrapSameContentDifferentTokenCountNoRebuild(t *testing.T) {
 			t.Errorf("message %d ID changed: before=%d, after=%d (should be no-op)",
 				i, storedBefore[i].ID, storedAfter[i].ID)
 		}
-	}
-}
-
-// --- Session Mutex ---
-
-func TestEngineSessionMutexSharded(t *testing.T) {
-	eng := newTestEngine(t)
-
-	// Same session key should always return the same mutex (deterministic hash)
-	mu1 := eng.getSessionMutex("agent:test")
-	mu2 := eng.getSessionMutex("agent:test")
-	if mu1 != mu2 {
-		t.Error("expected same mutex for same session key")
-	}
-
-	// Different session keys may share the same shard (hash collision)
-	// This is expected behavior - we just need bounded memory, not unique locks
-	mu3 := eng.getSessionMutex("agent:other")
-
-	// Both mutexes should be valid and usable
-	mu1.Lock()
-	mu1.Unlock() //nolint:staticcheck // deliberate empty critical section proves sharded mutex is usable
-	mu3.Lock()
-	mu3.Unlock() //nolint:staticcheck // deliberate empty critical section proves sharded mutex is usable
-}
-
-func TestEngineSessionMutexBoundedMemory(t *testing.T) {
-	// Verify that session mutexes use bounded memory (256 shards)
-	eng := newTestEngine(t)
-
-	// Get mutexes for many different sessions
-	seen := make(map[*sync.Mutex]bool)
-	for i := 0; i < 1000; i++ {
-		sessionKey := fmt.Sprintf("agent:session-%d", i)
-		mu := eng.getSessionMutex(sessionKey)
-		seen[mu] = true
-	}
-
-	// With 256 shards and 1000 sessions, we should see at most 256 unique mutexes
-	// (likely fewer due to hash collisions)
-	if len(seen) > 256 {
-		t.Errorf("expected at most 256 unique mutexes (shards), got %d", len(seen))
-	}
-}
-
-func TestEngineSessionMutexConsistentHash(t *testing.T) {
-	// Same session key should always hash to the same shard
-	eng := newTestEngine(t)
-
-	sessionKey := "agent:consistent-hash-test"
-	mu1 := eng.getSessionMutex(sessionKey)
-	mu2 := eng.getSessionMutex(sessionKey)
-	mu3 := eng.getSessionMutex(sessionKey)
-
-	if mu1 != mu2 || mu2 != mu3 {
-		t.Error("hash function should be deterministic - same key must map to same shard")
 	}
 }
 

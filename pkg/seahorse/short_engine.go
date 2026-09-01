@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -81,8 +82,6 @@ type AssembleBudgetReport struct {
 	PressureReasons          []string `json:"pressureReasons,omitempty"`
 }
 
-const numSessionShards = 256
-
 // Engine is the main short-term memory engine.
 type Engine struct {
 	store             *Store
@@ -92,9 +91,6 @@ type Engine struct {
 	config            Config
 	ignorePatterns    []*regexp.Regexp
 	statelessPatterns []*regexp.Regexp
-	sessionShards     [numSessionShards]struct {
-		mu sync.Mutex
-	}
 }
 
 // CompactionEngine handles LLM-based summarization (defined in short_compaction.go).
@@ -158,6 +154,23 @@ func (r *RetrievalEngine) Store() *Store {
 	return r.store
 }
 
+const sqliteConnectionPragmas = "_pragma=synchronous(NORMAL)"
+
+func sqliteConnectionDSN(dbPath string) string {
+	if dbPath == ":memory:" {
+		return "file::memory:?" + sqliteConnectionPragmas
+	}
+
+	databasePath := filepath.ToSlash(dbPath)
+	databaseURL := url.URL{
+		Scheme:   "file",
+		OmitHost: !strings.HasPrefix(databasePath, "//"),
+		Path:     databasePath,
+		RawQuery: sqliteConnectionPragmas,
+	}
+	return databaseURL.String()
+}
+
 // NewEngine creates an engine while bounding SQLite setup and schema work with ctx.
 func NewEngine(ctx context.Context, config Config, completeFn CompleteFn) (*Engine, error) {
 	if ctx == nil {
@@ -185,23 +198,24 @@ func NewEngine(ctx context.Context, config Config, completeFn CompleteFn) (*Engi
 		}
 	}
 
-	db, err := sql.Open("sqlite", config.DBPath)
+	db, err := sql.Open(
+		"sqlite",
+		sqliteConnectionDSN(config.DBPath),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+	// One agent database has one connection owner. Cross-session reads and
+	// writes queue here instead of competing as independent SQLite writers.
+	// External writers violate that ownership contract and fail without a
+	// SQLite busy wait; the DSN keeps NORMAL sync on replacement connections.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
-	// Configure SQLite for concurrent access
+	// WAL is a persistent database setting and remains explicit at setup.
 	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode = WAL;"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("enable WAL: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set busy_timeout: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, "PRAGMA synchronous = NORMAL;"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set synchronous: %w", err)
 	}
 
 	if err := runSchemaContext(ctx, db); err != nil {
@@ -289,23 +303,6 @@ func (e *Engine) isStatelessSession(sessionKey string) bool {
 	return false
 }
 
-// fnv32 computes FNV-1a 32-bit hash for session key sharding.
-func fnv32(key string) uint32 {
-	h := uint32(2166136261)
-	for _, c := range key {
-		h ^= uint32(c)
-		h *= 16777619
-	}
-	return h
-}
-
-// getSessionMutex returns the sharded mutex for a session key.
-func (e *Engine) getSessionMutex(sessionKey string) *sync.Mutex {
-	h := fnv32(sessionKey)
-	shard := h % numSessionShards
-	return &e.sessionShards[shard].mu
-}
-
 // Ingest adds messages to a conversation identified by sessionKey.
 func (e *Engine) Ingest(ctx context.Context, sessionKey string, messages []Message) (*IngestResult, error) {
 	if e.shouldIgnoreSession(sessionKey) {
@@ -314,10 +311,6 @@ func (e *Engine) Ingest(ctx context.Context, sessionKey string, messages []Messa
 	if e.isStatelessSession(sessionKey) {
 		return nil, nil
 	}
-
-	mu := e.getSessionMutex(sessionKey)
-	mu.Lock()
-	defer mu.Unlock()
 
 	conv, err := e.store.GetOrCreateConversation(ctx, sessionKey)
 	if err != nil {
