@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -116,6 +117,79 @@ func TestFileRegistryQuarantinesPreRestrictedPolicyBrowserSchema(t *testing.T) {
 	}
 	if err := pending.Node.Validate(); err != nil {
 		t.Fatalf("quarantined pre-restricted snapshot: %v", err)
+	}
+}
+
+func TestFileRegistryRejectsPreRestrictedPolicyCatalogAggregateOverflow(t *testing.T) {
+	largeSchema := `{"type":"object","description":"` + strings.Repeat("x", 60*1024) + `"}`
+	for _, test := range []struct {
+		name        string
+		descriptors func(*testing.T) []CommandDescriptor
+	}{
+		{
+			name: "command count",
+			descriptors: func(t *testing.T) []CommandDescriptor {
+				descriptors := frozenPreRestrictedPolicyBrowserCatalogFixture(t)
+				for index := len(descriptors); index <= preRestrictedPolicyMaxCatalogCommands; index++ {
+					descriptors = append(descriptors, descriptor(
+						fmt.Sprintf("system.extra%d.v1", index),
+						`{}`,
+					))
+				}
+				return descriptors
+			},
+		},
+		{
+			name: "catalog bytes",
+			descriptors: func(t *testing.T) []CommandDescriptor {
+				descriptors := frozenPreRestrictedPolicyBrowserCatalogFixture(t)
+				for index := range 4 {
+					large := descriptor(fmt.Sprintf("system.large%d.v1", index), largeSchema)
+					large.OutputSchema = json.RawMessage(largeSchema)
+					descriptors = append(descriptors, large)
+				}
+				return descriptors
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pairing := testPendingPairing(t, 1)
+			pairing.Node.Catalog = CapabilityCatalog{Commands: test.descriptors(t)}
+			nonBrowser := CapabilityCatalog{Commands: removePreRestrictedPolicyBrowserCommands(
+				pairing.Node.Catalog.Commands,
+			)}
+			if err := nonBrowser.Validate(); err != nil {
+				t.Fatalf("non-browser subset must remain individually valid: %v", err)
+			}
+			if err := validatePreRestrictedPolicyCatalogResources(pairing.Node.Catalog); !errors.Is(
+				err,
+				ErrInvalidCapability,
+			) {
+				t.Fatalf("aggregate resource validation error = %v", err)
+			}
+			var err error
+			pairing.Node.CatalogHash, err = pairing.Node.Catalog.canonicalHash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+				string(pairing.Node.ID): {
+					Snapshot: pairing.Node, PublicKey: pairing.PublicKey, KeyAlgorithm: pairing.KeyAlgorithm,
+					RequestedRole: pairing.RequestedRole, RequestedAt: pairing.RequestedAt,
+				},
+			}}
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "registry.json")
+			if err = os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+				t.Fatalf("NewFileRegistry() error = %v, want ErrInvalidCapability", err)
+			}
+		})
 	}
 }
 

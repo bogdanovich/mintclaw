@@ -11,7 +11,12 @@ import (
 	"strings"
 )
 
-const staleBrowserCatalogReason = "browser capability schema changed; reconnect with current software and renew command approval"
+const (
+	staleBrowserCatalogReason = "browser capability schema changed; reconnect with current software and renew command approval"
+
+	preRestrictedPolicyMaxCatalogCommands = 128
+	preRestrictedPolicyMaxCatalogBytes    = 512 * 1024
+)
 
 var preRestrictedPolicyBrowserCommandNames = [...]string{
 	"browser.session.open.v1",
@@ -68,6 +73,9 @@ func migratePreRestrictedPolicyBrowserCatalog(snapshot Snapshot) (Snapshot, bool
 }
 
 func isPreRestrictedPolicyBrowserCatalog(catalog CapabilityCatalog) (bool, error) {
+	if err := validatePreRestrictedPolicyCatalogResources(catalog); err != nil {
+		return false, err
+	}
 	var profiles []BrowserProfileDescriptor
 	browserCommands := make([]CommandDescriptor, 0, len(preRestrictedPolicyBrowserCommandNames))
 	nonBrowser := make([]CommandDescriptor, 0, len(catalog.Commands))
@@ -100,6 +108,24 @@ func isPreRestrictedPolicyBrowserCatalog(catalog CapabilityCatalog) (bool, error
 	}
 	template, ok := decodeHistoricalBrowserJSON(preRestrictedPolicyBrowserCatalogTemplate)
 	return ok && matchHistoricalBrowserTemplate(actual, template, bindings), nil
+}
+
+func validatePreRestrictedPolicyCatalogResources(catalog CapabilityCatalog) error {
+	if len(catalog.Commands) > preRestrictedPolicyMaxCatalogCommands {
+		return fmt.Errorf("%w: catalog contains too many commands", ErrInvalidCapability)
+	}
+	totalBytes := 0
+	for _, descriptor := range catalog.Commands {
+		descriptorBytes, err := catalogDescriptorResourceBytes(descriptor)
+		if err != nil {
+			return err
+		}
+		totalBytes += descriptorBytes
+		if totalBytes > preRestrictedPolicyMaxCatalogBytes {
+			return fmt.Errorf("%w: catalog exceeds size limit", ErrInvalidCapability)
+		}
+	}
+	return nil
 }
 
 func preRestrictedPolicyProfiles(profiles []BrowserProfileDescriptor) bool {
