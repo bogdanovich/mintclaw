@@ -120,7 +120,7 @@ func TestFileRegistryPersistsP256IdentityAlgorithm(t *testing.T) {
 	}
 }
 
-func TestFileRegistryRejectsNonCurrentBrowserSchema(t *testing.T) {
+func TestFileRegistryRejectsUnrecognizedBrowserSchemaDrift(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
 	pairing := testPendingPairing(t, 1)
 	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
@@ -153,60 +153,101 @@ func TestFileRegistryRejectsNonCurrentBrowserSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
-		t.Fatalf("NewFileRegistry() error = %v", err)
+		t.Fatalf("NewFileRegistry() error = %v, want ErrInvalidCapability", err)
 	}
 }
 
-func TestFileRegistryRejectsApprovedNodeWithStoredBrowserSchemaDrift(t *testing.T) {
+func TestFileRegistryRejectsUnrecognizedCurrentBrowserCatalogCorruption(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func([]CommandDescriptor) []CommandDescriptor
+	}{
+		{
+			name: "incomplete command set",
+			mutate: func(descriptors []CommandDescriptor) []CommandDescriptor {
+				return descriptors[:1]
+			},
+		},
+		{
+			name: "incorrect risk",
+			mutate: func(descriptors []CommandDescriptor) []CommandDescriptor {
+				for index := range descriptors {
+					if descriptors[index].Name == BrowserCommandAct {
+						descriptors[index].Risk = RiskRead
+					}
+				}
+				return descriptors
+			},
+		},
+		{
+			name: "malformed profile",
+			mutate: func(descriptors []CommandDescriptor) []CommandDescriptor {
+				descriptors[0].BrowserProfiles[0].Alias = ""
+				return descriptors
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "registry.json")
+			pairing := testPendingPairing(t, 1)
+			descriptors, err := BrowserCommandDescriptors(
+				[]BrowserProfileDescriptor{browserProfileDescriptorFixture()},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pairing.Node.Catalog = CapabilityCatalog{Commands: test.mutate(descriptors)}
+			pairing.Node.CatalogHash, err = pairing.Node.Catalog.canonicalHash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+				string(pairing.Node.ID): {
+					Snapshot: pairing.Node, PublicKey: pairing.PublicKey, KeyAlgorithm: pairing.KeyAlgorithm,
+					RequestedRole: pairing.RequestedRole, RequestedAt: pairing.RequestedAt,
+				},
+			}}
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
+				t.Fatalf("NewFileRegistry() error = %v, want ErrInvalidCapability", err)
+			}
+		})
+	}
+}
+
+func TestFileRegistryQuarantinesApprovedPreRestrictedPolicyBrowserCatalog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.json")
-	registry, err := NewFileRegistry(path, 4)
-	if err != nil {
-		t.Fatal(err)
-	}
 	pairing := testPendingPairing(t, 1)
-	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{browserProfileDescriptorFixture()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	descriptors := previousBrowserCatalogFixture(t, previousBrowserSchemaPreRestrictedPolicy)
+	descriptors = append(descriptors, testCatalog(t).Commands[0])
 	pairing.Node.Catalog = CapabilityCatalog{Commands: descriptors}
-	pairing.Node.CatalogHash, err = pairing.Node.Catalog.Hash()
+	catalogHash, err := pairing.Node.Catalog.canonicalHash()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = registry.UpsertPending(pairing); err != nil {
-		t.Fatal(err)
-	}
+	pairing.Node.CatalogHash = catalogHash
+	pairing.Node.State = StateDisconnected
+	pairing.Node.Aliases = []Alias{"browser-node"}
+	pairing.Node.DisplayName = "Browser node"
+	pairing.Node.DisconnectReason = "paired; awaiting connection"
 	commands := make([]string, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		commands = append(commands, descriptor.Name)
 	}
-	_, err = registry.Approve(pairing.Node.ID, PairingApproval{
-		Aliases: []Alias{"browser-node"}, AllowedCommands: commands, At: 2,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document registryDocument
-	if err = json.Unmarshal(data, &document); err != nil {
-		t.Fatal(err)
-	}
-	record := document.Records[string(pairing.Node.ID)]
-	for index := range record.Snapshot.Catalog.Commands {
-		if record.Snapshot.Catalog.Commands[index].Name == BrowserCommandAct {
-			record.Snapshot.Catalog.Commands[index].InputSchema = json.RawMessage(`{"type":"object"}`)
-		}
-	}
-	record.Snapshot.CatalogHash, err = record.Snapshot.Catalog.canonicalHash()
-	if err != nil {
-		t.Fatal(err)
-	}
-	record.ApprovedCatalogHash = record.Snapshot.CatalogHash
-	document.Records[string(pairing.Node.ID)] = record
-	data, err = json.Marshal(document)
+	document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+		string(pairing.Node.ID): {
+			Snapshot: pairing.Node, PublicKey: pairing.PublicKey, KeyAlgorithm: pairing.KeyAlgorithm,
+			RequestedRole: pairing.RequestedRole, RequestedAt: pairing.RequestedAt,
+			AllowedCommands: commands, ApprovedCatalogHash: pairing.Node.CatalogHash, ApprovedAt: 2,
+		},
+	}}
+	data, err := json.Marshal(document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,8 +255,97 @@ func TestFileRegistryRejectsApprovedNodeWithStoredBrowserSchemaDrift(t *testing.
 		t.Fatal(err)
 	}
 
-	if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidCapability) {
-		t.Fatalf("NewFileRegistry() error = %v, want ErrInvalidCapability", err)
+	reloaded, err := NewFileRegistry(path, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration, exists, err := reloaded.Registration(pairing.Node.ID)
+	if err != nil || !exists {
+		t.Fatalf("Registration() = exists %v, error %v", exists, err)
+	}
+	if registration.Snapshot.State != StateIncompatible ||
+		registration.Snapshot.DisconnectReason != staleBrowserCatalogReason {
+		t.Fatalf(
+			"quarantined state = %q, reason = %q",
+			registration.Snapshot.State,
+			registration.Snapshot.DisconnectReason,
+		)
+	}
+	if len(registration.Snapshot.Catalog.Commands) != 1 ||
+		registration.Snapshot.Catalog.Commands[0].Name != "node.info.v1" {
+		t.Fatalf("quarantined browser commands = %#v", registration.Snapshot.Catalog.Commands)
+	}
+	if registration.ApprovedCatalogHash == registration.Snapshot.CatalogHash {
+		t.Fatal("quarantined catalog retained executable approval")
+	}
+	if _, err := registration.ApprovedCommand(BrowserCommandAct); !errors.Is(err, ErrCommandDenied) {
+		t.Fatalf("ApprovedCommand() error = %v", err)
+	}
+	persisted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated registryDocument
+	if err := json.Unmarshal(persisted, &migrated); err != nil {
+		t.Fatal(err)
+	}
+	stored := migrated.Records[string(pairing.Node.ID)]
+	if stored.Snapshot.State != StateIncompatible ||
+		stored.Snapshot.CatalogHash != registration.Snapshot.CatalogHash {
+		t.Fatalf("persisted quarantine = %#v", stored.Snapshot)
+	}
+}
+
+func TestFileRegistryRejectsUnrelatedSnapshotCorruptionWithBrowserCatalog(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*Snapshot)
+	}{
+		{
+			name: "invalid state",
+			mutate: func(snapshot *Snapshot) {
+				snapshot.State = State("future")
+			},
+		},
+		{
+			name: "catalog hash mismatch",
+			mutate: func(snapshot *Snapshot) {
+				snapshot.CatalogHash = strings.Repeat("f", 64)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "registry.json")
+			pairing := testPendingPairing(t, 1)
+			descriptors, err := BrowserCommandDescriptors(
+				[]BrowserProfileDescriptor{browserProfileDescriptorFixture()},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pairing.Node.Catalog = CapabilityCatalog{Commands: descriptors}
+			pairing.Node.CatalogHash, err = pairing.Node.Catalog.Hash()
+			if err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&pairing.Node)
+			document := registryDocument{Version: registryFileVersion, Records: map[string]registryRecord{
+				string(pairing.Node.ID): {
+					Snapshot: pairing.Node, PublicKey: pairing.PublicKey, KeyAlgorithm: pairing.KeyAlgorithm,
+					RequestedRole: pairing.RequestedRole, RequestedAt: pairing.RequestedAt,
+				},
+			}}
+			encoded, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(path, encoded, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidNode) {
+				t.Fatalf("NewFileRegistry() error = %v, want ErrInvalidNode", err)
+			}
+		})
 	}
 }
 

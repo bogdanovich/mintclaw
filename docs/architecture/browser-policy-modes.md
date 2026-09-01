@@ -183,6 +183,16 @@ The hook refines the declarative result: `deny` always remains denied, while an
 decision and policy revision are bound into the prepared action and verified
 at the final gateway or companion dispatch boundary.
 
+When a runtime upgrade changes the typed browser command schema, a persisted
+catalog matching the recognized immediately previous generation is
+quarantined during registry loading instead of preventing the gateway from
+starting. The gateway removes the stale browser command surface, changes the
+stored catalog hash, and marks an approved node incompatible. No stale browser
+command can execute. Unrecognized schema drift and other catalog corruption
+still fail registry loading. A current companion must reconnect with the new
+catalog, after which the owner explicitly renews the command-surface approval
+before browser commands are available again.
+
 ## Validation and smoke matrix
 
 P0 automated coverage must prove:
