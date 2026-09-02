@@ -271,7 +271,7 @@ func TestFinalizePromotesReasoningShadowedByActiveStream(t *testing.T) {
 	}
 }
 
-func TestFinalizeCannotPromoteEntrySupersededByCommittedWriter(t *testing.T) {
+func TestFinalizeCannotReplaceEntrySupersededByCommittedWriter(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
 		t.Context(),
@@ -288,7 +288,7 @@ func TestFinalizeCannotPromoteEntrySupersededByCommittedWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	projector.AssistantAccumulated("turn-1", "committed", true)
-	if err := streamer.Finalize(t.Context(), "committed"); err != nil {
+	if err := streamer.Finalize(t.Context(), "stale final"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -296,6 +296,40 @@ func TestFinalizeCannotPromoteEntrySupersededByCommittedWriter(t *testing.T) {
 	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "committed" ||
 		!snapshot.Entries[0].Complete {
 		t.Fatalf("finalize replaced newer committed writer = %+v", snapshot)
+	}
+}
+
+func TestFinalizeReasoningCannotReplaceCommittedWriter(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("stream was rejected")
+	}
+	reasoning := streamer.(bus.ReasoningStreamer)
+	if err := reasoning.UpdateReasoning(t.Context(), "provisional reasoning"); err != nil {
+		t.Fatal(err)
+	}
+	projector.ReasoningAccumulated("turn-1", "committed reasoning", true)
+	if err := reasoning.FinalizeReasoning(t.Context(), "stale reasoning"); err != nil {
+		t.Fatal(err)
+	}
+	if err := streamer.Finalize(t.Context(), "accepted answer"); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Entries) != 2 || snapshot.Entries[0].Kind != EntryReasoning ||
+		snapshot.Entries[0].Text != "committed reasoning" || !snapshot.Entries[0].Complete ||
+		snapshot.Entries[1].Kind != EntryAssistant || snapshot.Entries[1].Text != "accepted answer" ||
+		!snapshot.Entries[1].Complete {
+		t.Fatalf("reasoning finalize replaced newer committed writer = %+v", snapshot)
 	}
 }
 

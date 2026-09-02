@@ -476,6 +476,9 @@ func (p *Projector) upsertStreamEntryLocked(
 		Complete: complete,
 	}
 	id := messagePresentationID(entry)
+	if owner != 0 && complete && committedVersionSupersedesOwner(p.entryVersions[id], owner) {
+		return false
+	}
 	var previous *PresentationItem
 	if index := presentationItemIndex(p.state.Items, id); index >= 0 {
 		item := clonePresentationItem(p.state.Items[index])
@@ -493,6 +496,25 @@ func (p *Projector) upsertStreamEntryLocked(
 		p.rebuildStreamMessageProjection(&p.state, item.ID)
 	}
 	return true
+}
+
+// committedVersionSupersedesOwner reports whether a committed writer landed
+// after the stream owner's newest live version. Terminal stream updates must
+// consult this barrier before mutating presentation state; commitStreamLocked
+// can then promote the owner's other unsuperseded entries atomically.
+func committedVersionSupersedesOwner(head *entryVersion, owner uint64) bool {
+	for version := head; version != nil; version = version.previous {
+		if version.canceled || !version.present {
+			continue
+		}
+		if version.owner == owner {
+			return false
+		}
+		if version.owner == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Projector) Warning(turnID, id, content string) {
