@@ -50,8 +50,8 @@ type projectedStream struct {
 	turnID    string
 	baseline  streamBaseline
 	mu        sync.Mutex
-	owned     streamOwnedEntries
 	canceled  bool
+	finalized bool
 }
 
 var (
@@ -61,15 +61,11 @@ var (
 )
 
 func (s *projectedStream) Update(ctx context.Context, content string) error {
-	return s.project(ctx, func() streamOwnedEntry {
-		return s.projector.upsertStreamEntry(s.turnID, EntryAssistant, content, false)
-	})
+	return s.project(ctx, EntryAssistant, content, false)
 }
 
 func (s *projectedStream) Finalize(ctx context.Context, content string) error {
-	return s.project(ctx, func() streamOwnedEntry {
-		return s.projector.upsertStreamEntry(s.turnID, EntryAssistant, content, true)
-	})
+	return s.finalize(ctx, content)
 }
 
 func (s *projectedStream) FinalizeWithContext(
@@ -87,18 +83,19 @@ func (s *projectedStream) FinalizeWithContext(
 }
 
 func (s *projectedStream) UpdateReasoning(ctx context.Context, content string) error {
-	return s.project(ctx, func() streamOwnedEntry {
-		return s.projector.upsertStreamEntry(s.turnID, EntryReasoning, content, false)
-	})
+	return s.project(ctx, EntryReasoning, content, false)
 }
 
 func (s *projectedStream) FinalizeReasoning(ctx context.Context, content string) error {
-	return s.project(ctx, func() streamOwnedEntry {
-		return s.projector.upsertStreamEntry(s.turnID, EntryReasoning, content, true)
-	})
+	return s.project(ctx, EntryReasoning, content, true)
 }
 
-func (s *projectedStream) project(ctx context.Context, update func() streamOwnedEntry) error {
+func (s *projectedStream) project(
+	ctx context.Context,
+	kind EntryKind,
+	content string,
+	complete bool,
+) error {
 	if err := contextError(ctx); err != nil {
 		return err
 	}
@@ -110,11 +107,30 @@ func (s *projectedStream) project(ctx context.Context, update func() streamOwned
 	if s.canceled {
 		return context.Canceled
 	}
-	owned := update()
-	if s.owned == nil {
-		s.owned = make(streamOwnedEntries)
+	if s.finalized {
+		return nil
 	}
-	s.owned[owned.entry.ID] = owned
+	s.projector.upsertStreamEntry(s.turnID, kind, content, complete, s.baseline.owner)
+	return nil
+}
+
+func (s *projectedStream) finalize(ctx context.Context, content string) error {
+	if err := contextError(ctx); err != nil {
+		return err
+	}
+	if s == nil || s.projector == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.canceled {
+		return context.Canceled
+	}
+	if s.finalized {
+		return nil
+	}
+	s.projector.finalizeStreamEntry(s.turnID, EntryAssistant, content, true, s.baseline.owner)
+	s.finalized = true
 	return nil
 }
 
@@ -126,15 +142,11 @@ func (s *projectedStream) Cancel(context.Context) {
 		return
 	}
 	s.mu.Lock()
-	if s.canceled {
+	if s.canceled || s.finalized {
 		s.mu.Unlock()
 		return
 	}
 	s.canceled = true
-	owned := make(streamOwnedEntries, len(s.owned))
-	for id, entry := range s.owned {
-		owned[id] = entry
-	}
 	s.mu.Unlock()
-	s.projector.discardOwnedStream(s.turnID, s.baseline, owned)
+	s.projector.discardStream(s.baseline)
 }

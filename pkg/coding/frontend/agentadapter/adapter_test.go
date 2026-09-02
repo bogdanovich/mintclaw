@@ -230,6 +230,12 @@ func TestAdapterProjectsMetadataRetryFallbackAndRedactedError(t *testing.T) {
 	if snapshot.Entries[0].ID == snapshot.Entries[1].ID {
 		t.Fatalf("repeated retry notices share ID %q", snapshot.Entries[0].ID)
 	}
+	if len(snapshot.Items) != 4 || snapshot.Items[0].Kind != frontend.PresentationWarning ||
+		snapshot.Items[2].Kind != frontend.PresentationWarning ||
+		snapshot.Items[3].Kind != frontend.PresentationError ||
+		snapshot.Items[3].Lifecycle != frontend.PresentationFailed {
+		t.Fatalf("ordered retry/fallback items = %+v", snapshot.Items)
+	}
 	encoded := fmt.Sprintf("%+v", snapshot)
 	if strings.Contains(encoded, "secret-token") {
 		t.Fatalf("frontend projection leaked diagnostic content: %s", encoded)
@@ -466,7 +472,8 @@ func TestAdapterProjectsToolFailureAndInterruptionInOrder(t *testing.T) {
 	}
 	if snapshot.Activity != frontend.ActivityIdle || snapshot.Status != "interrupted" ||
 		len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolFailed ||
-		snapshot.Tools[0].TurnID != "turn-1" {
+		snapshot.Tools[0].TurnID != "turn-1" || len(snapshot.Items) != 2 ||
+		snapshot.Items[1].Lifecycle != frontend.PresentationFailed {
 		t.Fatalf("interrupted snapshot = %+v", snapshot)
 	}
 }
@@ -499,7 +506,8 @@ func TestAdapterInterruptionTerminalizesRunningTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolInterrupted {
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Status != frontend.ToolInterrupted ||
+		len(snapshot.Items) != 1 || snapshot.Items[0].Lifecycle != frontend.PresentationInterrupted {
 		t.Fatalf("interrupted tools = %+v", snapshot.Tools)
 	}
 }
@@ -596,8 +604,18 @@ func TestStreamingAndNonStreamingTurnsConvergeWithoutDuplicateFinalContent(t *te
 
 	streamed := project(t, true)
 	nonStreamed := project(t, false)
+	streamedItems := streamed.Items
+	nonStreamedItems := nonStreamed.Items
+	streamed.Items = nil
+	nonStreamed.Items = nil
 	if !reflect.DeepEqual(streamed, nonStreamed) {
 		t.Fatalf("streamed state = %+v, want non-streamed %+v", streamed, nonStreamed)
+	}
+	if len(streamedItems) != 2 || len(nonStreamedItems) != 2 ||
+		streamedItems[1].Kind != frontend.PresentationAssistantMessage ||
+		streamedItems[1].Lifecycle != frontend.PresentationCompleted ||
+		nonStreamedItems[1].Lifecycle != frontend.PresentationCompleted {
+		t.Fatalf("streamed items = %+v, non-streamed items = %+v", streamedItems, nonStreamedItems)
 	}
 	if len(streamed.Entries) != 2 || streamed.Entries[1].Text != "hello" ||
 		!streamed.Entries[1].Complete {

@@ -44,13 +44,23 @@ type Projector struct {
 	limits                     ProjectionLimits
 	state                      ThreadSnapshot
 	entryGenerations           map[string]uint64
+	entryVersions              map[string]*entryVersion
 	nextEntryGeneration        uint64
+	nextStreamOwner            uint64
+	activeStreamOwners         map[uint64]struct{}
+	rollbackCommittedMessages  []PresentationItem
+	rollbackHasOlderEntries    bool
+	nextSequence               uint64
+	nextTurnOrder              uint64
+	reservedUserSequences      map[string]uint64
+	startedTurns               map[string]uint64
 	nextNotice                 uint64
 	activeTurnID               string
 	foregroundCompactionTurnID string
 	foregroundCompactionActive bool
 	nextSubscriber             uint64
 	subscribers                map[uint64]chan ThreadSnapshot
+	now                        func() time.Time
 }
 
 func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) {
@@ -61,11 +71,16 @@ func NewProjector(threadID string, limits ProjectionLimits) (*Projector, error) 
 	return &Projector{
 		limits: limits.normalized(),
 		state: ThreadSnapshot{
-			ThreadID: threadID,
+			ThreadID: boundPresentationIdentity(threadID),
 			Activity: ActivityIdle,
 		},
-		entryGenerations: make(map[string]uint64),
-		subscribers:      make(map[uint64]chan ThreadSnapshot),
+		entryGenerations:      make(map[string]uint64),
+		entryVersions:         make(map[string]*entryVersion),
+		activeStreamOwners:    make(map[uint64]struct{}),
+		reservedUserSequences: make(map[string]uint64),
+		startedTurns:          make(map[string]uint64),
+		subscribers:           make(map[uint64]chan ThreadSnapshot),
+		now:                   time.Now,
 	}, nil
 }
 
@@ -135,91 +150,283 @@ func (p *Projector) ThreadMetadataUpdated(metadata ThreadMetadata) {
 
 func (p *Projector) TurnStarted(turnID, userMessage string) {
 	p.mutate(func(state *ThreadSnapshot) {
-		turnID = normalizeTurnID(turnID)
+		turnID = presentationTurnID(turnID)
 		p.activeTurnID = turnID
+		p.markTurnStarted(turnID)
 		state.Activity = ActivityRunning
 		state.Status = "running"
 		if strings.TrimSpace(userMessage) == "" {
+			delete(p.reservedUserSequences, turnID)
+			p.pruneTurnOrderingState(state)
 			return
 		}
-		entry := p.boundedEntry(TranscriptEntry{
-			ID:       entryID(turnID, "user"),
-			TurnID:   normalizeTurnID(turnID),
+		entry := TranscriptEntry{
+			ID:       boundPresentationIdentity(entryID(turnID, "user")),
+			TurnID:   turnID,
 			Kind:     EntryUser,
 			Text:     userMessage,
 			Complete: true,
-		})
-		p.upsertEntry(state, entry)
+		}
+		p.upsertCommittedEntry(state, entry)
 	})
 }
 
 func (p *Projector) AssistantAccumulated(turnID, content string, complete bool) {
-	p.upsertStreamEntry(turnID, EntryAssistant, content, complete)
+	p.upsertStreamEntry(turnID, EntryAssistant, content, complete, 0)
 }
 
 func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) {
-	p.upsertStreamEntry(turnID, EntryReasoning, content, complete)
+	p.upsertStreamEntry(turnID, EntryReasoning, content, complete, 0)
 }
 
-type streamOwnedEntry struct {
-	entry      TranscriptEntry
+type entryVersion struct {
+	item       PresentationItem
 	generation uint64
+	owner      uint64
+	present    bool
+	canceled   bool
+	previous   *entryVersion
 }
 
-type (
-	streamBaseline     map[string]streamOwnedEntry
-	streamOwnedEntries map[string]streamOwnedEntry
-)
-
-func (p *Projector) captureStreamBaseline(turnID string) streamBaseline {
-	turnID = normalizeTurnID(turnID)
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	baseline := make(streamBaseline)
-	for _, entry := range p.state.Entries {
-		if entry.TurnID == turnID && (entry.Kind == EntryAssistant || entry.Kind == EntryReasoning) {
-			baseline[entry.ID] = streamOwnedEntry{entry: entry, generation: p.entryGenerations[entry.ID]}
-		}
-	}
-	return baseline
+type streamBaseline struct {
+	owner uint64
 }
 
-// discardOwnedStream restores answer/reasoning entries changed by a canceled
-// provider attempt when that attempt is still their latest writer. Canonical
-// turn lifecycle and entries from later writers remain untouched.
-func (p *Projector) discardOwnedStream(
-	turnID string,
-	baseline streamBaseline,
-	owned streamOwnedEntries,
-) {
-	turnID = normalizeTurnID(turnID)
+func (p *Projector) captureStreamBaseline(_ string) streamBaseline {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	filtered := make([]TranscriptEntry, 0, len(p.state.Entries))
-	visibleChange := false
-	for _, entry := range p.state.Entries {
-		streamEntry, streamOwned := owned[entry.ID]
-		ownsCurrent := streamOwned && entry.TurnID == turnID && entry == streamEntry.entry &&
-			p.entryGenerations[entry.ID] == streamEntry.generation
-		if ownsCurrent {
-			if previous, ok := baseline[entry.ID]; ok {
-				filtered = append(filtered, previous.entry)
-				p.entryGenerations[entry.ID] = previous.generation
-				visibleChange = visibleChange || previous.entry != entry
-			} else {
-				delete(p.entryGenerations, entry.ID)
-				visibleChange = true
-			}
-			continue
-		}
-		filtered = append(filtered, entry)
+	if len(p.activeStreamOwners) == 0 {
+		p.rollbackCommittedMessages = nil
+		p.rollbackHasOlderEntries = p.state.HasOlderEntries
 	}
-	if !visibleChange {
+	p.captureRollbackCommittedMessages(p.state.Items, "")
+	p.nextStreamOwner++
+	owner := p.nextStreamOwner
+	p.activeStreamOwners[owner] = struct{}{}
+	return streamBaseline{owner: owner}
+}
+
+// discardStream removes every version owned by a canceled provider attempt.
+// Linked predecessors make rollback composable when provider attempts overlap
+// or a committed writer lands between two updates from the same attempt.
+func (p *Projector) discardStream(baseline streamBaseline) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, active := p.activeStreamOwners[baseline.owner]; !active {
 		return
 	}
+	delete(p.activeStreamOwners, baseline.owner)
+	for _, head := range p.entryVersions {
+		for version := head; version != nil; version = version.previous {
+			if version.owner == baseline.owner {
+				version.canceled = true
+			}
+		}
+	}
 	p.mutateLocked(func(state *ThreadSnapshot) {
-		state.Entries = filtered
+		p.rebuildStreamMessageProjection(state, "")
 	})
+	p.compactEntryVersionsIfIdle()
+}
+
+func (p *Projector) commitStreamLocked(owner uint64) {
+	if _, active := p.activeStreamOwners[owner]; !active {
+		return
+	}
+	committed := make([]PresentationItem, 0, len(p.entryVersions))
+	for _, head := range p.entryVersions {
+		if version := finalizedEntryVersion(head, owner); version != nil && version.present {
+			committed = append(committed, clonePresentationItem(version.item))
+		}
+	}
+	delete(p.activeStreamOwners, owner)
+	for _, head := range p.entryVersions {
+		for version := head; version != nil; version = version.previous {
+			if version.owner == owner {
+				version.owner = 0
+			}
+		}
+	}
+	p.recordRollbackCommittedMessages(committed, "")
+	p.rebuildStreamMessageProjection(&p.state, "")
+	p.compactEntryVersionsIfIdle()
+}
+
+// finalizedEntryVersion returns the newest live version owned by the stream
+// unless a newer committed version already superseded it. A provisional owner
+// may shadow the version in the current view but cannot prevent its commit.
+func finalizedEntryVersion(head *entryVersion, owner uint64) *entryVersion {
+	for version := head; version != nil; version = version.previous {
+		if version.canceled {
+			continue
+		}
+		if version.owner == owner {
+			return version
+		}
+		if version.owner == 0 {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (p *Projector) compactEntryVersionsIfIdle() {
+	if len(p.activeStreamOwners) != 0 {
+		return
+	}
+	clear(p.entryVersions)
+	clear(p.entryGenerations)
+	p.rollbackCommittedMessages = nil
+	p.rollbackHasOlderEntries = false
+}
+
+func (p *Projector) captureRollbackCommittedMessages(items []PresentationItem, protectedID string) {
+	committed := make([]PresentationItem, 0, len(items))
+	for _, item := range items {
+		if item.Message == nil {
+			continue
+		}
+		if survivor := latestSurvivingEntryVersion(p.entryVersions[item.ID]); survivor != nil &&
+			survivor.owner != 0 {
+			continue
+		}
+		committed = append(committed, item)
+	}
+	p.recordRollbackCommittedMessages(committed, protectedID)
+}
+
+func (p *Projector) recordRollbackCommittedMessages(items []PresentationItem, protectedID string) {
+	for _, item := range items {
+		if item.Message == nil {
+			continue
+		}
+		index := presentationItemIndex(p.rollbackCommittedMessages, item.ID)
+		if index >= 0 {
+			p.rollbackCommittedMessages[index] = clonePresentationItem(item)
+		} else {
+			p.rollbackCommittedMessages = append(
+				p.rollbackCommittedMessages,
+				clonePresentationItem(item),
+			)
+		}
+	}
+	slices.SortFunc(p.rollbackCommittedMessages, func(left, right PresentationItem) int {
+		return intCompare(left.Sequence, right.Sequence)
+	})
+	for len(p.rollbackCommittedMessages) > p.limits.Entries {
+		index := oldestPresentationPayload(p.rollbackCommittedMessages, true, protectedID)
+		p.rollbackCommittedMessages = slices.Delete(p.rollbackCommittedMessages, index, index+1)
+		p.rollbackHasOlderEntries = true
+	}
+}
+
+func (p *Projector) rebuildStreamMessageProjection(state *ThreadSnapshot, protectedID string) {
+	items := make([]PresentationItem, 0, len(state.Items)+len(p.rollbackCommittedMessages))
+	for _, item := range state.Items {
+		if item.Tool != nil {
+			items = append(items, clonePresentationItem(item))
+		}
+	}
+	for _, item := range p.rollbackCommittedMessages {
+		items = append(items, clonePresentationItem(item))
+	}
+	for id, head := range p.entryVersions {
+		survivor := latestSurvivingEntryVersion(head)
+		if survivor == nil || !survivor.present || survivor.owner == 0 {
+			continue
+		}
+		if _, active := p.activeStreamOwners[survivor.owner]; !active {
+			continue
+		}
+		if index := presentationItemIndex(items, id); index >= 0 {
+			items[index] = clonePresentationItem(survivor.item)
+		} else {
+			items = append(items, clonePresentationItem(survivor.item))
+		}
+	}
+	slices.SortFunc(items, func(left, right PresentationItem) int {
+		return intCompare(left.Sequence, right.Sequence)
+	})
+	state.Items = items
+	state.HasOlderEntries = p.rollbackHasOlderEntries
+	p.enforcePresentationBounds(state, protectedID)
+	for _, item := range state.Items {
+		if item.Message == nil {
+			continue
+		}
+		if survivor := latestSurvivingEntryVersion(p.entryVersions[item.ID]); survivor != nil {
+			p.entryGenerations[item.ID] = survivor.generation
+		}
+	}
+	p.pruneTurnOrderingState(state)
+	p.syncCompatibilityProjection(state)
+}
+
+func (p *Projector) recordEntryVersion(
+	previous *PresentationItem,
+	item PresentationItem,
+	owner uint64,
+) {
+	head := p.entryVersions[item.ID]
+	if previous != nil && head != nil && head.present && !head.canceled && head.owner == owner &&
+		head.generation == p.entryGenerations[item.ID] {
+		head.item = clonePresentationItem(item)
+		return
+	}
+
+	var predecessor *entryVersion
+	if previous != nil {
+		predecessor = findEntryVersion(head, p.entryGenerations[item.ID])
+		if predecessor == nil {
+			predecessor = &entryVersion{
+				item: clonePresentationItem(*previous), generation: p.entryGenerations[item.ID], present: true,
+			}
+		}
+	} else if head != nil {
+		p.nextEntryGeneration++
+		predecessor = &entryVersion{generation: p.nextEntryGeneration, present: false, previous: head}
+	}
+	predecessor = entryVersionsWithoutOwner(predecessor, owner)
+	p.nextEntryGeneration++
+	version := &entryVersion{
+		item:       clonePresentationItem(item),
+		generation: p.nextEntryGeneration,
+		owner:      owner,
+		present:    true,
+		previous:   predecessor,
+	}
+	p.entryVersions[item.ID] = version
+	p.entryGenerations[item.ID] = version.generation
+}
+
+func entryVersionsWithoutOwner(head *entryVersion, owner uint64) *entryVersion {
+	for head != nil && head.owner == owner {
+		head = head.previous
+	}
+	for version := head; version != nil; version = version.previous {
+		for version.previous != nil && version.previous.owner == owner {
+			version.previous = version.previous.previous
+		}
+	}
+	return head
+}
+
+func findEntryVersion(head *entryVersion, generation uint64) *entryVersion {
+	for version := head; version != nil; version = version.previous {
+		if version.generation == generation {
+			return version
+		}
+	}
+	return nil
+}
+
+func latestSurvivingEntryVersion(head *entryVersion) *entryVersion {
+	for version := head; version != nil; version = version.previous {
+		if !version.canceled {
+			return version
+		}
+	}
+	return nil
 }
 
 func (p *Projector) upsertStreamEntry(
@@ -227,28 +434,87 @@ func (p *Projector) upsertStreamEntry(
 	entryKind EntryKind,
 	content string,
 	complete bool,
-) streamOwnedEntry {
-	entry := p.boundedEntry(TranscriptEntry{
-		ID:       entryID(turnID, string(entryKind)),
-		TurnID:   normalizeTurnID(turnID),
+	owner uint64,
+) bool {
+	turnID = presentationTurnID(turnID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	changed := p.upsertStreamEntryLocked(turnID, entryKind, content, complete, owner)
+	if changed {
+		p.mutateLocked(func(*ThreadSnapshot) {})
+	}
+	return changed
+}
+
+func (p *Projector) finalizeStreamEntry(
+	turnID string,
+	entryKind EntryKind,
+	content string,
+	complete bool,
+	owner uint64,
+) {
+	turnID = presentationTurnID(turnID)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.upsertStreamEntryLocked(turnID, entryKind, content, complete, owner)
+	p.commitStreamLocked(owner)
+	p.mutateLocked(func(*ThreadSnapshot) {})
+}
+
+func (p *Projector) upsertStreamEntryLocked(
+	turnID string,
+	entryKind EntryKind,
+	content string,
+	complete bool,
+	owner uint64,
+) bool {
+	entry := TranscriptEntry{
+		ID:       boundPresentationIdentity(entryID(turnID, string(entryKind))),
+		TurnID:   turnID,
 		Kind:     entryKind,
 		Text:     content,
 		Complete: complete,
-	})
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.nextEntryGeneration++
-	owned := streamOwnedEntry{entry: entry, generation: p.nextEntryGeneration}
-	p.entryGenerations[entry.ID] = owned.generation
-	for i := range p.state.Entries {
-		if p.state.Entries[i].ID == entry.ID && p.state.Entries[i] == entry {
-			return owned
+	}
+	id := messagePresentationID(entry)
+	if owner != 0 && complete && committedVersionSupersedesOwner(p.entryVersions[id], owner) {
+		return false
+	}
+	var previous *PresentationItem
+	if index := presentationItemIndex(p.state.Items, id); index >= 0 {
+		item := clonePresentationItem(p.state.Items[index])
+		previous = &item
+	}
+	item, changed := p.upsertEntry(&p.state, entry)
+	if !changed {
+		return false
+	}
+	if len(p.activeStreamOwners) != 0 {
+		p.recordEntryVersion(previous, item, owner)
+		if owner == 0 {
+			p.captureRollbackCommittedMessages(p.state.Items, item.ID)
+		}
+		p.rebuildStreamMessageProjection(&p.state, item.ID)
+	}
+	return true
+}
+
+// committedVersionSupersedesOwner reports whether a committed writer landed
+// after the stream owner's newest live version. Terminal stream updates must
+// consult this barrier before mutating presentation state; commitStreamLocked
+// can then promote the owner's other unsuperseded entries atomically.
+func committedVersionSupersedesOwner(head *entryVersion, owner uint64) bool {
+	for version := head; version != nil; version = version.previous {
+		if version.canceled || !version.present {
+			continue
+		}
+		if version.owner == owner {
+			return false
+		}
+		if version.owner == 0 {
+			return true
 		}
 	}
-	p.mutateLocked(func(state *ThreadSnapshot) {
-		p.upsertEntry(state, entry)
-	})
-	return owned
+	return false
 }
 
 func (p *Projector) Warning(turnID, id, content string) {
@@ -261,37 +527,48 @@ func (p *Projector) Error(turnID, id, content string) {
 
 func (p *Projector) notice(kind EntryKind, turnID, id, content string) {
 	p.mutate(func(state *ThreadSnapshot) {
-		turnID = normalizeTurnID(turnID)
+		turnID = presentationTurnID(turnID)
 		id = strings.TrimSpace(id)
 		if id == "" {
 			p.nextNotice++
 			id = fmt.Sprintf("%s:%s:%d", turnID, kind, p.nextNotice)
 		}
-		entry := p.boundedEntry(TranscriptEntry{
+		entry := TranscriptEntry{
 			ID: id, TurnID: turnID, Kind: kind, Text: content, Complete: true,
-		})
-		p.upsertEntry(state, entry)
+		}
+		entry.ID = boundPresentationIdentity(entry.ID)
+		p.upsertCommittedEntry(state, entry)
 	})
 }
 
 func (p *Projector) ToolStarted(turnID, callID, name, arguments string) {
 	p.mutate(func(state *ThreadSnapshot) {
-		tool := p.boundedTool(ToolState{
-			TurnID: normalizeTurnID(turnID), CallID: callID, Name: name, Arguments: arguments, Status: ToolRunning,
-		})
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
+		if tool.CallID == "" {
+			tool = ToolState{TurnID: turnID, CallID: callID}
+		}
+		tool.Name = name
+		tool.Arguments = arguments
+		if !terminalToolStatus(tool.Status) {
+			tool.Status = ToolRunning
+			tool.Duration = 0
+		}
 		p.upsertTool(state, tool)
 	})
 }
 
 func (p *Projector) ToolOutput(turnID, callID, output string) {
 	p.mutate(func(state *ThreadSnapshot) {
-		turnID = normalizeTurnID(turnID)
-		tool := toolByID(state.Tools, turnID, callID)
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
 		}
 		if tool.TurnID == "" {
-			tool.TurnID = normalizeTurnID(turnID)
+			tool.TurnID = turnID
 		}
 		bounded, truncated := boundText(output, p.limits.TextBytes)
 		tool.Output = bounded
@@ -304,8 +581,9 @@ func (p *Projector) ToolOutput(turnID, callID, output string) {
 // It never derives command output or lifecycle state from model-facing prose.
 func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandState) {
 	p.mutate(func(state *ThreadSnapshot) {
-		turnID = normalizeTurnID(turnID)
-		tool := toolByID(state.Tools, turnID, callID)
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
 		}
@@ -323,17 +601,19 @@ func (p *Projector) ToolCompleted(
 	writeAudit []WriteAudit,
 ) {
 	p.mutate(func(state *ThreadSnapshot) {
-		turnID = normalizeTurnID(turnID)
-		tool := toolByID(state.Tools, turnID, callID)
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Name: name}
 		}
 		if tool.TurnID == "" {
-			tool.TurnID = normalizeTurnID(turnID)
+			tool.TurnID = turnID
 		}
 		if tool.Name == "" {
 			tool.Name = name
 		}
+		previousStatus := tool.Status
 		tool.Status = ToolSucceeded
 		if failed {
 			tool.Status = ToolFailed
@@ -345,6 +625,9 @@ func (p *Projector) ToolCompleted(
 			case CommandFailed, CommandTimedOut:
 				tool.Status = ToolFailed
 			}
+		}
+		if terminalToolStatus(previousStatus) {
+			tool.Status = previousStatus
 		}
 		tool.Duration = duration
 		if output != "" || tool.Command == nil {
@@ -359,7 +642,8 @@ func (p *Projector) ToolCompleted(
 // bounded changed-file projection.
 func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) {
 	p.mutate(func(state *ThreadSnapshot) {
-		turnID = normalizeTurnID(turnID)
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
 		changed := make([]ChangedFile, 0, min(len(audit), p.limits.Tools))
 		for _, entry := range audit {
 			if !entry.Success || entry.Kind != "file" || strings.TrimSpace(entry.Target) == "" {
@@ -386,13 +670,18 @@ func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) {
 // the pending human interaction is resolved.
 func (p *Projector) ToolSuspended(turnID, callID, name string, duration time.Duration) {
 	p.mutate(func(state *ThreadSnapshot) {
-		turnID = normalizeTurnID(turnID)
-		tool := toolByID(state.Tools, turnID, callID)
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Name: name}
 		}
 		if tool.Name == "" {
 			tool.Name = name
+		}
+		if terminalToolStatus(tool.Status) {
+			p.upsertTool(state, tool)
+			return
 		}
 		tool.Status = ToolSuspended
 		tool.Duration = duration
@@ -426,6 +715,11 @@ func (p *Projector) CompactionUpdate(compaction CompactionState) {
 
 func (p *Projector) compaction(compaction CompactionState) {
 	p.mutate(func(state *ThreadSnapshot) {
+		if compaction.TurnID != "" {
+			compaction.TurnID = presentationTurnID(compaction.TurnID)
+		}
+		compaction.AttemptID = boundPresentationIdentity(compaction.AttemptID)
+		compaction.ThreadID = boundPresentationIdentity(compaction.ThreadID)
 		compaction.Reason, _ = boundText(compaction.Reason, p.limits.TextBytes)
 		state.LastCompaction = &compaction
 		if compaction.Background {
@@ -524,7 +818,7 @@ func (p *Projector) finishTurn(
 	activity Activity,
 	toolStatus ToolStatus,
 ) {
-	turnID = normalizeTurnID(turnID)
+	turnID = presentationTurnID(turnID)
 	p.mutate(func(state *ThreadSnapshot) {
 		if p.activeTurnID == turnID {
 			p.activeTurnID = ""
@@ -537,12 +831,17 @@ func (p *Projector) finishTurn(
 		state.Status, _ = boundText(status, p.limits.TextBytes)
 		lastTurn := LastTurnOutcome{TurnID: turnID, Outcome: outcome}
 		state.LastTurn = &lastTurn
+		delete(p.reservedUserSequences, turnID)
+		delete(p.startedTurns, turnID)
 		if toolStatus == "" {
 			return
 		}
-		for i := range state.Tools {
-			if state.Tools[i].TurnID == turnID && state.Tools[i].Status == ToolRunning {
-				state.Tools[i].Status = toolStatus
+		items := clonePresentationItems(state.Items)
+		for i := range items {
+			if items[i].Tool != nil && items[i].TurnID == turnID && items[i].Tool.Status == ToolRunning {
+				tool := cloneTool(*items[i].Tool)
+				tool.Status = toolStatus
+				p.upsertTool(state, tool)
 			}
 		}
 	})
@@ -585,13 +884,18 @@ func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 }
 
 func (p *Projector) boundedEntry(entry TranscriptEntry) TranscriptEntry {
-	entry.Text, entry.Truncated = boundText(entry.Text, p.limits.TextBytes)
+	var truncated bool
+	entry.Text, truncated = boundText(entry.Text, p.limits.TextBytes)
+	entry.Truncated = entry.Truncated || truncated
 	return entry
 }
 
 func (p *Projector) boundedTool(tool ToolState) ToolState {
+	tool.Name, _ = boundText(tool.Name, p.limits.TextBytes)
 	tool.Arguments, _ = boundText(tool.Arguments, p.limits.TextBytes)
-	tool.Output, tool.OutputTruncated = boundText(tool.Output, p.limits.TextBytes)
+	var outputTruncated bool
+	tool.Output, outputTruncated = boundText(tool.Output, p.limits.TextBytes)
+	tool.OutputTruncated = tool.OutputTruncated || outputTruncated
 	tool.WriteAudit = p.boundedWriteAudit(tool.WriteAudit)
 	if tool.Command != nil {
 		command := p.boundedCommand(*tool.Command)
@@ -668,59 +972,6 @@ func commandDisplayOutput(command CommandState, maximum int) (string, bool) {
 	return output, command.Truncated || truncated
 }
 
-func (p *Projector) upsertEntry(state *ThreadSnapshot, entry TranscriptEntry) {
-	previousLength := len(state.Entries)
-	state.Entries = replaceEntry(state.Entries, entry)
-	if len(state.Entries) == previousLength {
-		return
-	}
-	if overflow := len(state.Entries) - p.limits.Entries; overflow > 0 {
-		state.HasOlderEntries = true
-		for _, removed := range state.Entries[:overflow] {
-			delete(p.entryGenerations, removed.ID)
-		}
-		state.Entries = slices.Clone(state.Entries[overflow:])
-	}
-}
-
-func replaceEntry(entries []TranscriptEntry, replacement TranscriptEntry) []TranscriptEntry {
-	entries = slices.Clone(entries)
-	for i := range entries {
-		if entries[i].ID == replacement.ID {
-			entries[i] = replacement
-			return entries
-		}
-	}
-	insertAt := len(entries)
-	if replacement.Kind == EntryUser {
-		for i := range entries {
-			candidate := entries[i]
-			if candidate.TurnID == replacement.TurnID &&
-				(candidate.Kind == EntryAssistant || candidate.Kind == EntryReasoning) {
-				insertAt = i
-				break
-			}
-		}
-	}
-	entries = append(entries, TranscriptEntry{})
-	copy(entries[insertAt+1:], entries[insertAt:])
-	entries[insertAt] = replacement
-	return entries
-}
-
-func (p *Projector) upsertTool(state *ThreadSnapshot, tool ToolState) {
-	for i := range state.Tools {
-		if state.Tools[i].TurnID == tool.TurnID && state.Tools[i].CallID == tool.CallID {
-			state.Tools[i] = tool
-			return
-		}
-	}
-	state.Tools = append(state.Tools, tool)
-	if overflow := len(state.Tools) - p.limits.Tools; overflow > 0 {
-		state.Tools = slices.Clone(state.Tools[overflow:])
-	}
-}
-
 func entryID(turnID, suffix string) string {
 	return normalizeTurnID(turnID) + ":" + suffix
 }
@@ -730,15 +981,6 @@ func normalizeTurnID(turnID string) string {
 		return turnID
 	}
 	return "current"
-}
-
-func toolByID(tools []ToolState, turnID, callID string) ToolState {
-	for i := range tools {
-		if tools[i].TurnID == turnID && tools[i].CallID == callID {
-			return tools[i]
-		}
-	}
-	return ToolState{}
 }
 
 func boundText(value string, maximum int) (string, bool) {
@@ -773,6 +1015,7 @@ func contextError(ctx context.Context) error {
 }
 
 func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
+	snapshot.Items = clonePresentationItems(snapshot.Items)
 	snapshot.Entries = slices.Clone(snapshot.Entries)
 	snapshot.Tools = cloneTools(snapshot.Tools)
 	snapshot.ChangedFiles = slices.Clone(snapshot.ChangedFiles)
