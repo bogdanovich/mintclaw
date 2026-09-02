@@ -333,7 +333,7 @@ func (p *Projector) recordRollbackCommittedMessages(items []PresentationItem, pr
 func (p *Projector) rebuildStreamMessageProjection(state *ThreadSnapshot, protectedID string) {
 	items := make([]PresentationItem, 0, len(state.Items)+len(p.rollbackCommittedMessages))
 	for _, item := range state.Items {
-		if item.Tool != nil {
+		if item.Message == nil {
 			items = append(items, clonePresentationItem(item))
 		}
 	}
