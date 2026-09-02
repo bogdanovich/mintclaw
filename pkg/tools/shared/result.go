@@ -139,9 +139,12 @@ func (delivery ToolDelivery) SuppressesImplicitUserOutput() bool {
 }
 
 // ToolObservation is a bounded structured observation produced by a tool.
-// Command is currently the only admitted observation kind.
+// Exactly one pointer is populated. Pointer variants keep the union open to
+// future repository and process observations without exposing arbitrary tool
+// output to frontends.
 type ToolObservation struct {
 	Command *CommandObservation
+	Plan    *PlanObservation
 }
 
 // CommandObservation describes command output and process lifecycle without
@@ -157,6 +160,29 @@ type CommandObservation struct {
 	SessionID  string
 	Status     string
 	ExitCode   *int
+}
+
+// PlanStepStatus is one of the validated update_plan lifecycle states.
+type PlanStepStatus string
+
+const (
+	PlanStepPending    PlanStepStatus = "pending"
+	PlanStepInProgress PlanStepStatus = "in_progress"
+	PlanStepCompleted  PlanStepStatus = "completed"
+)
+
+// PlanStepObservation is one bounded, ordered plan step.
+type PlanStepObservation struct {
+	Step   string
+	Status PlanStepStatus
+}
+
+// PlanObservation is trusted presentation input produced from a validated
+// update_plan call. It is not reconstructed from ForLLM or tool arguments.
+type PlanObservation struct {
+	Explanation string
+	Steps       []PlanStepObservation
+	Truncated   bool
 }
 
 type OutboundDelivery struct {
@@ -308,12 +334,7 @@ func (tr *ToolResult) WithObservation(command CommandObservation) *ToolResult {
 	if tr == nil {
 		return tr
 	}
-	copy := command
-	if command.ExitCode != nil {
-		exitCode := *command.ExitCode
-		copy.ExitCode = &exitCode
-	}
-	tr.Observation = &ToolObservation{Command: &copy}
+	tr.Observation = SanitizeToolObservation(&ToolObservation{Command: &command})
 	return tr
 }
 

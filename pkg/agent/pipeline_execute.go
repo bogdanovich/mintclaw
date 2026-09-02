@@ -1624,15 +1624,10 @@ func (runner *toolLoopRunner) stopForDelegatedTaskSuspension(
 
 func codingToolObservation(ts *turnState, observation *toolshared.ToolObservation) *toolshared.ToolObservation {
 	if ts == nil || strings.TrimSpace(ts.opts.CodingContext.SessionKey) == "" ||
-		observation == nil || observation.Command == nil {
+		observation == nil {
 		return nil
 	}
-	command := *observation.Command
-	if observation.Command.ExitCode != nil {
-		exitCode := *observation.Command.ExitCode
-		command.ExitCode = &exitCode
-	}
-	return &toolshared.ToolObservation{Command: &command}
+	return toolshared.SanitizeToolObservation(observation)
 }
 
 func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOutcome {

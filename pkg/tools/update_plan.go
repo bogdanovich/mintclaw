@@ -51,6 +51,7 @@ func (t *UpdatePlanTool) Parameters() map[string]any {
 			"plan": map[string]any{
 				"type":        "array",
 				"minItems":    1,
+				"maxItems":    toolshared.MaxPlanObservationSteps,
 				"description": "Ordered list of plan steps. Keep exactly one step in_progress while work is active.",
 				"items": map[string]any{
 					"type":                 "object",
@@ -96,13 +97,29 @@ func (t *UpdatePlanTool) Execute(ctx context.Context, args map[string]any) *tool
 	if err != nil {
 		return toolshared.ErrorResult(fmt.Sprintf("failed to encode plan update: %v", err))
 	}
-	return toolshared.SilentResult(string(data))
+	observationSteps := make([]toolshared.PlanStepObservation, len(steps))
+	for index, step := range steps {
+		observationSteps[index] = toolshared.PlanStepObservation{
+			Step:   step.Step,
+			Status: toolshared.PlanStepStatus(step.Status),
+		}
+	}
+	observation, err := toolshared.NewPlanObservation(explanation, observationSteps)
+	if err != nil {
+		return toolshared.ErrorResult(fmt.Sprintf("failed to produce plan observation: %v", err))
+	}
+	result := toolshared.SilentResult(string(data))
+	result.Observation = &toolshared.ToolObservation{Plan: &observation}
+	return result
 }
 
 func readUpdatePlanSteps(args map[string]any) ([]updatePlanStep, error) {
 	rawPlan, ok := args["plan"].([]any)
 	if !ok || len(rawPlan) == 0 {
 		return nil, fmt.Errorf("plan required")
+	}
+	if len(rawPlan) > toolshared.MaxPlanObservationSteps {
+		return nil, fmt.Errorf("plan can contain at most %d steps", toolshared.MaxPlanObservationSteps)
 	}
 
 	steps := make([]updatePlanStep, 0, len(rawPlan))

@@ -13,15 +13,19 @@ import (
 )
 
 const (
-	defaultEntryLimit = 256
-	defaultToolLimit  = 128
-	defaultTextBytes  = 64 << 10
+	defaultEntryLimit       = 256
+	defaultToolLimit        = 128
+	defaultObservationLimit = 64
+	defaultPlanStepLimit    = 32
+	defaultTextBytes        = 64 << 10
 )
 
 type ProjectionLimits struct {
-	Entries   int
-	Tools     int
-	TextBytes int
+	Entries      int
+	Tools        int
+	Observations int
+	PlanSteps    int
+	TextBytes    int
 }
 
 func (l ProjectionLimits) normalized() ProjectionLimits {
@@ -30,6 +34,12 @@ func (l ProjectionLimits) normalized() ProjectionLimits {
 	}
 	if l.Tools <= 0 {
 		l.Tools = defaultToolLimit
+	}
+	if l.Observations <= 0 {
+		l.Observations = defaultObservationLimit
+	}
+	if l.PlanSteps <= 0 {
+		l.PlanSteps = defaultPlanStepLimit
 	}
 	if l.TextBytes <= 0 {
 		l.TextBytes = defaultTextBytes
@@ -594,6 +604,22 @@ func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandStat
 	})
 }
 
+// PlanUpdated projects one validated plan observation as an ordered semantic
+// item. It never derives plan content from a tool card, argument, or output.
+func (p *Projector) PlanUpdated(turnID, callID string, plan PlanState) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		plan.CallID = callID
+		var ok bool
+		plan, ok = p.boundedPlan(plan)
+		if !ok {
+			return
+		}
+		p.upsertPlan(state, turnID, plan)
+	})
+}
+
 func (p *Projector) ToolCompleted(
 	turnID, callID, name, output string,
 	duration time.Duration,
@@ -920,6 +946,44 @@ func (p *Projector) boundedCommand(command CommandState) CommandState {
 	return command
 }
 
+func (p *Projector) boundedPlan(plan PlanState) (PlanState, bool) {
+	if len(plan.Steps) == 0 {
+		return PlanState{}, false
+	}
+	plan.CallID = boundPresentationIdentity(plan.CallID)
+	var truncated bool
+	plan.Explanation, truncated = boundText(strings.TrimSpace(plan.Explanation), p.limits.TextBytes)
+	plan.Truncated = plan.Truncated || truncated
+	steps := make([]PlanStepState, 0, min(len(plan.Steps), p.limits.PlanSteps))
+	inProgress := 0
+	for index, step := range plan.Steps {
+		step.Step = strings.TrimSpace(step.Step)
+		if step.Step == "" {
+			return PlanState{}, false
+		}
+		switch step.Status {
+		case PlanStepPending, PlanStepInProgress, PlanStepCompleted:
+		default:
+			return PlanState{}, false
+		}
+		if step.Status == PlanStepInProgress {
+			inProgress++
+		}
+		if index >= p.limits.PlanSteps {
+			plan.Truncated = true
+			continue
+		}
+		step.Step, truncated = boundText(step.Step, p.limits.TextBytes)
+		plan.Truncated = plan.Truncated || truncated
+		steps = append(steps, step)
+	}
+	if inProgress > 1 {
+		return PlanState{}, false
+	}
+	plan.Steps = steps
+	return plan, true
+}
+
 func (p *Projector) boundedChangedFile(file ChangedFile) ChangedFile {
 	file.Path, _ = boundText(file.Path, p.limits.TextBytes)
 	file.Action, _ = boundText(file.Action, p.limits.TextBytes)
@@ -1059,6 +1123,11 @@ func cloneTool(tool ToolState) ToolState {
 		tool.Command = &command
 	}
 	return tool
+}
+
+func clonePlan(plan PlanState) PlanState {
+	plan.Steps = slices.Clone(plan.Steps)
+	return plan
 }
 
 func cloneWorkspaceSnapshot(snapshot codingworkspace.Snapshot) codingworkspace.Snapshot {

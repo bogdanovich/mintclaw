@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 func TestUpdatePlanToolParameters(t *testing.T) {
@@ -65,6 +67,39 @@ func TestUpdatePlanToolExecute(t *testing.T) {
 	if response.Plan[1].Status != "in_progress" {
 		t.Fatalf("second step status = %q, want in_progress", response.Plan[1].Status)
 	}
+	if result.Observation == nil || result.Observation.Plan == nil {
+		t.Fatalf("plan observation = %#v", result.Observation)
+	}
+	plan := result.Observation.Plan
+	if plan.Explanation != "Starting implementation." || len(plan.Steps) != 3 ||
+		plan.Steps[0].Step != "Inspect existing tools" ||
+		plan.Steps[1].Status != toolshared.PlanStepInProgress ||
+		plan.Steps[2].Status != toolshared.PlanStepPending {
+		t.Fatalf("plan observation = %+v", plan)
+	}
+}
+
+func TestUpdatePlanToolObservationIsRedactedWithoutChangingSilentResult(t *testing.T) {
+	tool := NewUpdatePlanTool()
+	secret := "sk-123456789abcdef"
+	result := tool.Execute(context.Background(), map[string]any{
+		"explanation": "Use " + secret,
+		"plan": []any{
+			map[string]any{"step": "Verify " + secret, "status": "in_progress"},
+		},
+	})
+	if result == nil || result.IsError || !result.Delivery.IsSilent() ||
+		result.Observation == nil || result.Observation.Plan == nil {
+		t.Fatalf("result = %#v", result)
+	}
+	if !strings.Contains(result.ForLLM, secret) {
+		t.Fatalf("model-facing response semantics changed: %q", result.ForLLM)
+	}
+	plan := result.Observation.Plan
+	if strings.Contains(plan.Explanation, secret) || strings.Contains(plan.Steps[0].Step, secret) ||
+		!strings.Contains(plan.Explanation+plan.Steps[0].Step, "[REDACTED]") {
+		t.Fatalf("presentation observation was not redacted: %+v", plan)
+	}
 }
 
 func TestUpdatePlanToolRejectsMultipleInProgress(t *testing.T) {
@@ -82,6 +117,9 @@ func TestUpdatePlanToolRejectsMultipleInProgress(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "at most one in_progress") {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
 	}
+	if result.Observation != nil {
+		t.Fatalf("invalid plan produced observation: %#v", result.Observation)
+	}
 }
 
 func TestUpdatePlanToolRejectsInvalidStatus(t *testing.T) {
@@ -97,5 +135,20 @@ func TestUpdatePlanToolRejectsInvalidStatus(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "must be one of") {
 		t.Fatalf("unexpected error: %s", result.ForLLM)
+	}
+	if result.Observation != nil {
+		t.Fatalf("invalid plan produced observation: %#v", result.Observation)
+	}
+}
+
+func TestUpdatePlanToolRejectsTooManySteps(t *testing.T) {
+	plan := make([]any, toolshared.MaxPlanObservationSteps+1)
+	for index := range plan {
+		plan[index] = map[string]any{"step": "step", "status": "pending"}
+	}
+	result := NewUpdatePlanTool().Execute(context.Background(), map[string]any{"plan": plan})
+	if result == nil || !result.IsError || result.Observation != nil ||
+		!strings.Contains(result.ForLLM, "at most") {
+		t.Fatalf("oversized plan result = %#v", result)
 	}
 }

@@ -51,6 +51,18 @@ func (p *Projector) upsertTool(state *ThreadSnapshot, tool ToolState) Presentati
 	return item
 }
 
+func (p *Projector) upsertPlan(state *ThreadSnapshot, turnID string, plan PlanState) PresentationItem {
+	plan = clonePlan(plan)
+	item, _ := p.upsertPresentationItem(state, PresentationItem{
+		ID:        planPresentationID(turnID, plan.CallID),
+		TurnID:    turnID,
+		Kind:      PresentationPlanUpdate,
+		Lifecycle: PresentationCompleted,
+		Plan:      &plan,
+	})
+	return item
+}
+
 func (p *Projector) upsertPresentationItem(
 	state *ThreadSnapshot,
 	replacement PresentationItem,
@@ -188,6 +200,10 @@ func (p *Projector) enforcePresentationBounds(state *ThreadSnapshot, protectedID
 		index := oldestPresentationPayload(state.Items, false, protectedID)
 		state.Items = slices.Delete(state.Items, index, index+1)
 	}
+	for planPresentationPayloadCount(state.Items) > p.limits.Observations {
+		index := oldestPlanPresentationPayload(state.Items, protectedID)
+		state.Items = slices.Delete(state.Items, index, index+1)
+	}
 }
 
 func oldestPresentationPayload(items []PresentationItem, messages bool, protectedID string) int {
@@ -195,6 +211,22 @@ func oldestPresentationPayload(items []PresentationItem, messages bool, protecte
 	for index, item := range items {
 		matches := (messages && item.Message != nil) || (!messages && item.Tool != nil)
 		if !matches {
+			continue
+		}
+		if fallback < 0 {
+			fallback = index
+		}
+		if item.ID != protectedID {
+			return index
+		}
+	}
+	return fallback
+}
+
+func oldestPlanPresentationPayload(items []PresentationItem, protectedID string) int {
+	fallback := -1
+	for index, item := range items {
+		if item.Plan == nil {
 			continue
 		}
 		if fallback < 0 {
@@ -283,7 +315,8 @@ func terminalToolStatus(status ToolStatus) bool {
 
 func presentationVisibleEqual(left, right PresentationItem) bool {
 	return left.Kind == right.Kind && left.Lifecycle == right.Lifecycle && left.Duration == right.Duration &&
-		reflect.DeepEqual(left.Message, right.Message) && reflect.DeepEqual(left.Tool, right.Tool)
+		reflect.DeepEqual(left.Message, right.Message) && reflect.DeepEqual(left.Tool, right.Tool) &&
+		reflect.DeepEqual(left.Plan, right.Plan)
 }
 
 func presentationItemIndex(items []PresentationItem, id string) int {
@@ -313,6 +346,16 @@ func presentationPayloadCount(items []PresentationItem, messages bool) int {
 	return count
 }
 
+func planPresentationPayloadCount(items []PresentationItem) int {
+	count := 0
+	for _, item := range items {
+		if item.Plan != nil {
+			count++
+		}
+	}
+	return count
+}
+
 func turnHasUserMessage(items []PresentationItem, turnID string) bool {
 	for _, item := range items {
 		if item.TurnID == turnID && item.Message != nil && item.Message.Kind == EntryUser {
@@ -328,6 +371,10 @@ func messagePresentationID(entry TranscriptEntry) string {
 
 func toolPresentationID(turnID, callID string) string {
 	return encodedPresentationID("tool", turnID, callID)
+}
+
+func planPresentationID(turnID, callID string) string {
+	return encodedPresentationID("plan", turnID, callID)
 }
 
 func encodedPresentationID(kind string, parts ...string) string {
@@ -395,6 +442,10 @@ func clonePresentationItem(item PresentationItem) PresentationItem {
 	if item.Tool != nil {
 		tool := cloneTool(*item.Tool)
 		item.Tool = &tool
+	}
+	if item.Plan != nil {
+		plan := clonePlan(*item.Plan)
+		item.Plan = &plan
 	}
 	return item
 }
