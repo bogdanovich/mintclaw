@@ -88,7 +88,7 @@ func TestCompanionProcessAuthenticatesAndInvokesOverWSS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID:     "inv_process_e2e",
 		IdempotencyKey:   "idem_process_e2e",
 		NodeID:           connected.ID,
