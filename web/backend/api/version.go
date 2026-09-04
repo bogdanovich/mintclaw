@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
-	"github.com/bogdanovich/mintclaw/web/backend/utils"
 )
 
 type systemVersionResponse struct {
@@ -40,19 +39,17 @@ func newSystemVersionCache() *systemVersionCache {
 	return &systemVersionCache{}
 }
 
-var (
+const (
 	// 15 seconds matches the gateway startup window used elsewhere in launcher flow,
 	// giving slow/embedded hosts enough time for first command invocation while
 	// staying independent from cross-file init ordering.
-	versionCmdTimeout           = 15 * time.Second
-	maxVersionResolveAttempts   = 3
-	findMintClawBinaryForInfo   = resolveGatewayBinaryForVersionInfo
-	runMintClawVersionOutput    = executeMintClawVersion
-	currentGatewayVersionState  = gatewayVersionState
-	launcherBuildInfoForVersion = fallbackSystemVersionInfoFromConfig
-	versionInfoCache            = newSystemVersionCache()
-	ansiEscapePattern           = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-	versionLinePattern          = regexp.MustCompile(
+	versionCmdTimeout         = 15 * time.Second
+	maxVersionResolveAttempts = 3
+)
+
+var (
+	ansiEscapePattern  = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	versionLinePattern = regexp.MustCompile(
 		`^(?:[^A-Za-z0-9]*\s*)?mintclaw(?:\.exe)?\s+([^\s(]+)` +
 			`(?:\s+\(git:\s*([^)]+)\))?\s*$`,
 	)
@@ -77,26 +74,26 @@ func (h *Handler) handleGetVersion(w http.ResponseWriter, r *http.Request) {
 // and falls back to launcher build metadata when command execution fails.
 func (h *Handler) resolveSystemVersionInfo(ctx context.Context) systemVersionResponse {
 	for range maxVersionResolveAttempts {
-		gatewayPID, gatewayAlive := currentGatewayVersionState()
-		if cached, ok := versionInfoCache.get(gatewayPID, gatewayAlive); ok {
+		gatewayPID, gatewayAlive := h.gatewayVersionState()
+		if cached, ok := h.versionInfoCache.get(gatewayPID, gatewayAlive); ok {
 			return cached
 		}
 
-		leader, ok := versionInfoCache.waitOrStart(ctx)
+		leader, ok := h.versionInfoCache.waitOrStart(ctx)
 		if !ok {
-			return fallbackSystemVersionInfo()
+			return h.fallbackSystemVersionInfo()
 		}
 		if !leader {
 			continue
 		}
 
 		resolved := h.resolveSystemVersionInfoUncached(ctx)
-		gatewayPID, gatewayAlive = currentGatewayVersionState()
-		versionInfoCache.finishResolve(resolved, gatewayPID, gatewayAlive)
+		gatewayPID, gatewayAlive = h.gatewayVersionState()
+		h.versionInfoCache.finishResolve(resolved, gatewayPID, gatewayAlive)
 		return resolved
 	}
 
-	return fallbackSystemVersionInfo()
+	return h.fallbackSystemVersionInfo()
 }
 
 func (h *Handler) resolveSystemVersionInfoUncached(ctx context.Context) systemVersionResponse {
@@ -104,9 +101,9 @@ func (h *Handler) resolveSystemVersionInfoUncached(ctx context.Context) systemVe
 		ctx = context.Background()
 	}
 
-	fallback := fallbackSystemVersionInfo()
+	fallback := h.fallbackSystemVersionInfo()
 
-	execPath := strings.TrimSpace(findMintClawBinaryForInfo())
+	execPath := strings.TrimSpace(h.resolveGatewayBinaryForVersionInfo())
 	if execPath == "" {
 		return fallback
 	}
@@ -114,7 +111,7 @@ func (h *Handler) resolveSystemVersionInfoUncached(ctx context.Context) systemVe
 	cmdCtx, cancel := context.WithTimeout(ctx, versionCmdTimeout)
 	defer cancel()
 
-	output, err := runMintClawVersionOutput(cmdCtx, execPath)
+	output, err := h.gateway.runVersionOutput(cmdCtx, execPath)
 	if err != nil {
 		return fallback
 	}
@@ -134,8 +131,8 @@ func (h *Handler) resolveSystemVersionInfoUncached(ctx context.Context) systemVe
 	return parsed
 }
 
-func fallbackSystemVersionInfo() systemVersionResponse {
-	return launcherBuildInfoForVersion()
+func (h *Handler) fallbackSystemVersionInfo() systemVersionResponse {
+	return h.gateway.fallbackVersion()
 }
 
 func fallbackSystemVersionInfoFromConfig() systemVersionResponse {
@@ -152,10 +149,10 @@ func fallbackSystemVersionInfoFromConfig() systemVersionResponse {
 // gateway start path when available, then falls back to launcher binary lookup.
 // This keeps version probing aligned with the actual gateway startup behavior,
 // so web and gateway do not drift onto different binaries.
-func resolveGatewayBinaryForVersionInfo() string {
-	gateway.mu.Lock()
-	cmd := gateway.cmd
-	gateway.mu.Unlock()
+func (h *Handler) resolveGatewayBinaryForVersionInfo() string {
+	h.gateway.mu.Lock()
+	cmd := h.gateway.cmd
+	h.gateway.mu.Unlock()
 
 	if cmd != nil {
 		if execPath := strings.TrimSpace(cmd.Path); execPath != "" {
@@ -163,22 +160,22 @@ func resolveGatewayBinaryForVersionInfo() string {
 		}
 	}
 
-	return utils.FindMintClawBinary()
+	return h.gateway.findBinary()
 }
 
-func gatewayVersionState() (int, bool) {
-	gateway.mu.Lock()
-	defer gateway.mu.Unlock()
+func (h *Handler) gatewayVersionState() (int, bool) {
+	h.gateway.mu.Lock()
+	defer h.gateway.mu.Unlock()
 
-	if gateway.cmd == nil || gateway.cmd.Process == nil {
+	if h.gateway.cmd == nil || h.gateway.cmd.Process == nil {
 		return 0, false
 	}
-	pid := gateway.cmd.Process.Pid
+	pid := h.gateway.cmd.Process.Pid
 	if pid <= 0 {
 		return 0, false
 	}
 
-	return pid, isCmdProcessAliveLocked(gateway.cmd)
+	return pid, h.gateway.processAlive(h.gateway.cmd)
 }
 
 func (c *systemVersionCache) get(gatewayPID int, gatewayAlive bool) (systemVersionResponse, bool) {
@@ -242,18 +239,6 @@ func (c *systemVersionCache) finishResolve(value systemVersionResponse, gatewayP
 func (c *systemVersionCache) clearCurrentLocked() {
 	c.hasCurrent = false
 	c.current = cachedSystemVersion{}
-}
-
-func (c *systemVersionCache) resetForTest() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.current = cachedSystemVersion{}
-	c.hasCurrent = false
-	if c.inflightCh != nil {
-		close(c.inflightCh)
-		c.inflightCh = nil
-	}
 }
 
 // executeMintClawVersion runs the version subcommand against the

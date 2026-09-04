@@ -123,13 +123,13 @@ func TestGetGatewayHealthUsesConfiguredHost(t *testing.T) {
 	cfg.Gateway.Host = "192.168.1.10"
 	cfg.Gateway.Port = 18791
 
-	originalHealthGet := gatewayHealthGet
+	originalHealthGet := h.gateway.healthGet
 	t.Cleanup(func() {
-		gatewayHealthGet = originalHealthGet
+		h.gateway.healthGet = originalHealthGet
 	})
 
 	var requestedURL string
-	gatewayHealthGet = func(url string, timeout time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(url string, timeout time.Duration) (*http.Response, error) {
 		requestedURL = url
 		return nil, errors.New("probe failed")
 	}
@@ -152,13 +152,13 @@ func TestGetGatewayHealthUsesProbeHostForPublicLauncher(t *testing.T) {
 	cfg.Gateway.Host = "127.0.0.1"
 	cfg.Gateway.Port = 18791
 
-	originalHealthGet := gatewayHealthGet
+	originalHealthGet := h.gateway.healthGet
 	t.Cleanup(func() {
-		gatewayHealthGet = originalHealthGet
+		h.gateway.healthGet = originalHealthGet
 	})
 
 	var requestedURL string
-	gatewayHealthGet = func(url string, timeout time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(url string, timeout time.Duration) (*http.Response, error) {
 		requestedURL = url
 		return nil, errors.New("probe failed")
 	}

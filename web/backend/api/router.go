@@ -11,6 +11,8 @@ import (
 // Handler serves HTTP API requests.
 type Handler struct {
 	configPath                 string
+	gateway                    *GatewayProcessManager
+	versionInfoCache           *systemVersionCache
 	serverPort                 int
 	serverPublic               bool
 	serverPublicExplicit       bool
@@ -33,6 +35,8 @@ type Handler struct {
 func NewHandler(configPath string) *Handler {
 	return &Handler{
 		configPath:                 configPath,
+		gateway:                    NewGatewayProcessManager(),
+		versionInfoCache:           newSystemVersionCache(),
 		serverPort:                 launcherconfig.DefaultPort,
 		serverAllowLocalhostBypass: launcherconfig.Default().AllowLocalhostBypass,
 		oauthFlows:                 make(map[string]*oauthFlow),

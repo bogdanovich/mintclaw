@@ -72,17 +72,17 @@ func (h *Handler) createMintClawHTTPProxy(token string) *httputil.ReverseProxy {
 }
 
 func (h *Handler) gatewayAvailableForProxy() bool {
-	gateway.mu.Lock()
-	ensureMintClawTokenCachedLocked(h.configPath)
-	cachedPID := gateway.pidData
-	trackedCmd := gateway.cmd
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.ensureMintClawTokenCachedLocked(h.configPath)
+	cachedPID := h.gateway.pidData
+	trackedCmd := h.gateway.cmd
+	h.gateway.mu.Unlock()
 
 	if pidData := h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), nil); pidData != nil {
-		gateway.mu.Lock()
-		gateway.pidData = pidData
-		setGatewayRuntimeStatusLocked("running")
-		gateway.mu.Unlock()
+		h.gateway.mu.Lock()
+		h.gateway.pidData = pidData
+		h.setGatewayRuntimeStatusLocked("running")
+		h.gateway.mu.Unlock()
 		return true
 	}
 
@@ -90,17 +90,17 @@ func (h *Handler) gatewayAvailableForProxy() bool {
 		return false
 	}
 
-	if isCmdProcessAliveLocked(trackedCmd) {
+	if h.gateway.processAlive(trackedCmd) {
 		return true
 	}
 
-	gateway.mu.Lock()
-	if gateway.cmd == trackedCmd {
-		gateway.pidData = nil
-		setGatewayRuntimeStatusLocked("stopped")
+	h.gateway.mu.Lock()
+	if h.gateway.cmd == trackedCmd {
+		h.gateway.pidData = nil
+		h.setGatewayRuntimeStatusLocked("stopped")
 	}
-	available := gateway.pidData != nil
-	gateway.mu.Unlock()
+	available := h.gateway.pidData != nil
+	h.gateway.mu.Unlock()
 	return available
 }
 
@@ -156,7 +156,7 @@ func (h *Handler) handleWebSocketProxy() http.HandlerFunc {
 			return
 		}
 
-		upstreamProtocol := mintclawGatewayProtocol()
+		upstreamProtocol := h.mintclawGatewayProtocol()
 		if upstreamProtocol == "" {
 			logger.Warn("MintClaw token unavailable for WebSocket proxy")
 			http.Error(w, "MintClaw channel not configured", http.StatusServiceUnavailable)
@@ -180,9 +180,9 @@ func (h *Handler) handleMintClawMediaProxy() http.HandlerFunc {
 			return
 		}
 
-		gateway.mu.Lock()
-		mintclawToken := gateway.mintclawToken
-		gateway.mu.Unlock()
+		h.gateway.mu.Lock()
+		mintclawToken := h.gateway.mintclawToken
+		h.gateway.mu.Unlock()
 
 		if mintclawToken == "" {
 			logger.Warnf("Missing MintClaw token for media proxy")
@@ -229,9 +229,9 @@ func (h *Handler) handleRegenMintClawToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	gateway.mu.Lock()
-	gateway.mintclawToken = token
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.mintclawToken = token
+	h.gateway.mu.Unlock()
 
 	h.writeMintClawInfoResponse(w, r, snapshot.Config, nil)
 }
