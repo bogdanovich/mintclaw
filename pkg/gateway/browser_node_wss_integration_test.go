@@ -681,7 +681,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if browserSource.downloadAvailable {
 		t.Fatal("production-WSS fixture unexpectedly enabled gateway-local Playwright downloads")
 	}
-	actTool := tools.NewBrowserActTool(cfg, browserSource)
+	actTool := tools.NewBrowserActTool(tools.NewBrowserToolOptions(cfg.Tools.Browser), browserSource)
 	actionSchema, err := json.Marshal(actTool.Parameters())
 	if err != nil {
 		t.Fatal(err)

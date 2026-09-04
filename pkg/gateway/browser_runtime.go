@@ -655,49 +655,49 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserTargetsTool(reloadCfg, source), nil
+			return tools.NewBrowserTargetsTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_session": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserSessionTool(reloadCfg, source), nil
+			return tools.NewBrowserSessionTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_observe": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserObserveTool(reloadCfg, source), nil
+			return tools.NewBrowserObserveTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_capture": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserCaptureTool(reloadCfg, source), nil
+			return tools.NewBrowserCaptureTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_diagnostics": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserDiagnosticsTool(reloadCfg, source), nil
+			return tools.NewBrowserDiagnosticsTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_contexts": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserContextsTool(reloadCfg, source), nil
+			return tools.NewBrowserContextsTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_act": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserActTool(reloadCfg, source), nil
+			return tools.NewBrowserActTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 	}
 	for _, name := range []string{

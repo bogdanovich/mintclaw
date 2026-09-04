@@ -37,7 +37,7 @@ func TestCompanionDownloadDoesNotRequireGatewayPlaywrightDownloadSupport(t *test
 	if !source.DownloadAvailable() {
 		t.Fatal("companion download was gated by gateway-local Playwright support")
 	}
-	tool := tools.NewBrowserActTool(cfg, source)
+	tool := tools.NewBrowserActTool(tools.NewBrowserToolOptions(cfg.Tools.Browser), source)
 	schema, err := json.Marshal(tool.Parameters())
 	if err != nil {
 		t.Fatal(err)

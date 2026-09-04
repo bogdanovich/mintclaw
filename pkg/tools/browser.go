@@ -88,6 +88,13 @@ type browserToolRuntime struct {
 	allowedAgents map[string]struct{}
 }
 
+// BrowserToolOptions is the immutable browser-policy snapshot consumed by one
+// runtime-tool generation. Construct a replacement when configuration reloads.
+type BrowserToolOptions struct {
+	config        config.BrowserToolsConfig
+	allowedAgents map[string]struct{}
+}
+
 type (
 	BrowserTargetsTool     struct{ runtime *browserToolRuntime }
 	BrowserSessionTool     struct{ runtime *browserToolRuntime }
@@ -98,16 +105,16 @@ type (
 	BrowserActTool         struct{ runtime *browserToolRuntime }
 )
 
-func NewBrowserTargetsTool(cfg *config.Config, source BrowserToolSource) *BrowserTargetsTool {
-	return &BrowserTargetsTool{runtime: newBrowserToolRuntime(cfg, source)}
+func NewBrowserTargetsTool(options BrowserToolOptions, source BrowserToolSource) *BrowserTargetsTool {
+	return &BrowserTargetsTool{runtime: newBrowserToolRuntime(options, source)}
 }
 
-func NewBrowserSessionTool(cfg *config.Config, source BrowserToolSource) *BrowserSessionTool {
-	return &BrowserSessionTool{runtime: newBrowserToolRuntime(cfg, source)}
+func NewBrowserSessionTool(options BrowserToolOptions, source BrowserToolSource) *BrowserSessionTool {
+	return &BrowserSessionTool{runtime: newBrowserToolRuntime(options, source)}
 }
 
-func NewBrowserDiagnosticsTool(cfg *config.Config, source BrowserToolSource) *BrowserDiagnosticsTool {
-	return &BrowserDiagnosticsTool{runtime: newBrowserToolRuntime(cfg, source)}
+func NewBrowserDiagnosticsTool(options BrowserToolOptions, source BrowserToolSource) *BrowserDiagnosticsTool {
+	return &BrowserDiagnosticsTool{runtime: newBrowserToolRuntime(options, source)}
 }
 
 func (tool *BrowserSessionTool) CleanupTurn(ctx context.Context) error {
@@ -125,32 +132,55 @@ func (tool *BrowserSessionTool) CleanupTurn(ctx context.Context) error {
 	return source.CloseOwner(ctx, owner)
 }
 
-func NewBrowserObserveTool(cfg *config.Config, source BrowserToolSource) *BrowserObserveTool {
-	return &BrowserObserveTool{runtime: newBrowserToolRuntime(cfg, source)}
+func NewBrowserObserveTool(options BrowserToolOptions, source BrowserToolSource) *BrowserObserveTool {
+	return &BrowserObserveTool{runtime: newBrowserToolRuntime(options, source)}
 }
 
-func NewBrowserCaptureTool(cfg *config.Config, source BrowserToolSource) *BrowserCaptureTool {
-	return &BrowserCaptureTool{runtime: newBrowserToolRuntime(cfg, source)}
+func NewBrowserCaptureTool(options BrowserToolOptions, source BrowserToolSource) *BrowserCaptureTool {
+	return &BrowserCaptureTool{runtime: newBrowserToolRuntime(options, source)}
 }
 
-func NewBrowserContextsTool(cfg *config.Config, source BrowserToolSource) *BrowserContextsTool {
-	return &BrowserContextsTool{runtime: newBrowserToolRuntime(cfg, source)}
+func NewBrowserContextsTool(options BrowserToolOptions, source BrowserToolSource) *BrowserContextsTool {
+	return &BrowserContextsTool{runtime: newBrowserToolRuntime(options, source)}
 }
 
-func NewBrowserActTool(cfg *config.Config, source BrowserToolSource) *BrowserActTool {
-	return &BrowserActTool{runtime: newBrowserToolRuntime(cfg, source)}
+func NewBrowserActTool(options BrowserToolOptions, source BrowserToolSource) *BrowserActTool {
+	return &BrowserActTool{runtime: newBrowserToolRuntime(options, source)}
 }
 
-func newBrowserToolRuntime(cfg *config.Config, source BrowserToolSource) *browserToolRuntime {
-	runtime := &browserToolRuntime{source: source, allowedAgents: make(map[string]struct{})}
-	if cfg == nil {
-		return runtime
+func NewBrowserToolOptions(cfg config.BrowserToolsConfig) BrowserToolOptions {
+	snapshot := cfg
+	snapshot.Agents = append([]string(nil), cfg.Agents...)
+	snapshot.DefaultTarget = cfg.EffectiveDefaultTarget()
+	snapshot.Limits = cfg.Limits.Effective()
+	snapshot.Targets = make(map[string]config.BrowserTargetConfig, len(cfg.Targets))
+	for targetName, target := range cfg.Targets {
+		target.Placement = target.EffectivePlacement()
+		target.Profiles = make(map[string]config.BrowserProfileConfig, len(target.Profiles))
+		for profileName, profile := range cfg.Targets[targetName].Profiles {
+			profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
+			profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
+			target.Profiles[profileName] = profile
+		}
+		snapshot.Targets[targetName] = target
 	}
-	runtime.config = cfg.Tools.Browser
-	for _, agentID := range runtime.config.Agents {
-		runtime.allowedAgents[routing.NormalizeAgentID(agentID)] = struct{}{}
+
+	options := BrowserToolOptions{
+		config:        snapshot,
+		allowedAgents: make(map[string]struct{}, len(snapshot.Agents)),
 	}
-	return runtime
+	for _, agentID := range snapshot.Agents {
+		options.allowedAgents[routing.NormalizeAgentID(agentID)] = struct{}{}
+	}
+	return options
+}
+
+func newBrowserToolRuntime(options BrowserToolOptions, source BrowserToolSource) *browserToolRuntime {
+	return &browserToolRuntime{
+		config:        options.config,
+		source:        source,
+		allowedAgents: options.allowedAgents,
+	}
 }
 
 func (runtime *browserToolRuntime) enabledForAgent(agentID string) bool {
