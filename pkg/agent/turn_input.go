@@ -116,7 +116,7 @@ func freezeTurnInput(spec turnSpec) turnInput {
 			ActiveGoal:              spec.ActiveGoal,
 		},
 		turnExecutionPolicy: turnExecutionPolicy{
-			TurnProfile:                  spec.TurnProfile,
+			TurnProfile:                  cloneEffectiveTurnProfile(spec.TurnProfile),
 			DefaultResponse:              spec.DefaultResponse,
 			EnableSummary:                spec.EnableSummary,
 			SuppressBackgroundCompaction: spec.SuppressBackgroundCompaction,
@@ -150,7 +150,7 @@ func (input turnInput) runtimeOptions() turnSpec {
 		SenderDisplayName:            input.SenderDisplayName,
 		CodingContext:                input.CodingContext,
 		ForcedSkills:                 append([]string(nil), input.ForcedSkills...),
-		TurnProfile:                  input.TurnProfile,
+		TurnProfile:                  cloneEffectiveTurnProfile(input.TurnProfile),
 		InitialSteeringMessages:      cloneProviderMessages(input.InitialSteeringMessages),
 		ActiveGoal:                   input.ActiveGoal,
 		DefaultResponse:              input.DefaultResponse,
@@ -164,4 +164,14 @@ func (input turnInput) runtimeOptions() turnSpec {
 		SuppressToolFeedback:         input.SuppressToolFeedback,
 		NoHistory:                    input.NoHistory,
 	}
+}
+
+func cloneEffectiveTurnProfile(profile config.EffectiveTurnProfile) config.EffectiveTurnProfile {
+	if profile.AllowedSkills != nil {
+		profile.AllowedSkills = append([]string{}, profile.AllowedSkills...)
+	}
+	if profile.AllowedTools != nil {
+		profile.AllowedTools = append([]string{}, profile.AllowedTools...)
+	}
+	return profile
 }

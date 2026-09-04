@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
@@ -29,6 +30,10 @@ func TestFreezeTurnInputOwnsRuntimeSnapshot(t *testing.T) {
 			Media:        []string{"media-1"},
 		},
 		ForcedSkills: []string{"skill-1"},
+		TurnProfile: config.EffectiveTurnProfile{
+			AllowedSkills: []string{"allowed-skill"},
+			AllowedTools:  []string{"allowed-tool"},
+		},
 		ObjectiveChecklist: []runtimeObjectiveItem{{
 			ID: "objective-1",
 			Acceptance: &taskresult.ObjectiveAcceptance{
@@ -49,6 +54,8 @@ func TestFreezeTurnInputOwnsRuntimeSnapshot(t *testing.T) {
 	spec.Dispatch.SessionScope.Values["chat"] = "mutated"
 	spec.Dispatch.Media[0] = "mutated"
 	spec.ForcedSkills[0] = "mutated"
+	spec.TurnProfile.AllowedSkills[0] = "mutated"
+	spec.TurnProfile.AllowedTools[0] = "mutated"
 	spec.ModelBinding.Execution.Candidates[0].Model = "mutated"
 	delete(spec.ModelBinding.Execution.CandidateProviders, "provider/model-1")
 	spec.ObjectiveChecklist[0].Acceptance.RequiredFields[0] = "mutated"
@@ -58,6 +65,8 @@ func TestFreezeTurnInputOwnsRuntimeSnapshot(t *testing.T) {
 	if input.Dispatch.InboundContext.Raw["thread"] != "original" ||
 		input.Dispatch.SessionScope.Values["chat"] != "direct:1" ||
 		input.Dispatch.Media[0] != "media-1" || input.ForcedSkills[0] != "skill-1" ||
+		input.TurnProfile.AllowedSkills[0] != "allowed-skill" ||
+		input.TurnProfile.AllowedTools[0] != "allowed-tool" ||
 		input.ModelBinding.Execution.Candidates[0].Model != "model-1" ||
 		len(input.ModelBinding.Execution.CandidateProviders) != 1 ||
 		input.ObjectiveChecklist[0].Acceptance.RequiredFields[0] != "title" ||
@@ -79,8 +88,30 @@ func TestFreezeTurnInputOwnsRuntimeSnapshot(t *testing.T) {
 		t.Fatalf("runtime options retained caller-owned hooks or mutable grant: %#v", runtimeOpts)
 	}
 	runtimeOpts.Dispatch.Media[0] = "runtime-mutated"
-	if input.Dispatch.Media[0] != "media-1" {
-		t.Fatalf("runtime option mutation reached frozen input: %#v", input.Dispatch.Media)
+	runtimeOpts.TurnProfile.AllowedSkills[0] = "runtime-mutated"
+	runtimeOpts.TurnProfile.AllowedTools[0] = "runtime-mutated"
+	if input.Dispatch.Media[0] != "media-1" || input.TurnProfile.AllowedSkills[0] != "allowed-skill" ||
+		input.TurnProfile.AllowedTools[0] != "allowed-tool" {
+		t.Fatalf("runtime option mutation reached frozen input: %#v", input)
+	}
+}
+
+func TestFreezeTurnInputDetachesEmptySessionScopeCollections(t *testing.T) {
+	scope := &session.SessionScope{
+		Dimensions: []string{},
+		Values:     map[string]string{},
+	}
+	input := freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionScope: scope}})
+
+	scope.Dimensions = append(scope.Dimensions, "chat")
+	scope.Values["chat"] = "direct:1"
+
+	if input.Dispatch.SessionScope == nil || input.Dispatch.SessionScope.Dimensions == nil ||
+		input.Dispatch.SessionScope.Values == nil {
+		t.Fatalf("frozen empty scope lost collection shape: %#v", input.Dispatch.SessionScope)
+	}
+	if len(input.Dispatch.SessionScope.Dimensions) != 0 || len(input.Dispatch.SessionScope.Values) != 0 {
+		t.Fatalf("caller mutation reached frozen empty scope: %#v", input.Dispatch.SessionScope)
 	}
 }
 

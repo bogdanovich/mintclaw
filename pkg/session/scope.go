@@ -31,10 +31,10 @@ func CloneScope(scope *SessionScope) *SessionScope {
 		return nil
 	}
 	cloned := *scope
-	if len(scope.Dimensions) > 0 {
-		cloned.Dimensions = append([]string(nil), scope.Dimensions...)
+	if scope.Dimensions != nil {
+		cloned.Dimensions = append([]string{}, scope.Dimensions...)
 	}
-	if len(scope.Values) > 0 {
+	if scope.Values != nil {
 		cloned.Values = make(map[string]string, len(scope.Values))
 		for key, value := range scope.Values {
 			cloned.Values[key] = value
