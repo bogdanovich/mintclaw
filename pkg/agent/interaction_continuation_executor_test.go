@@ -177,7 +177,7 @@ func TestContinuationTerminalContentPreservesExactSafetyHalt(t *testing.T) {
 		Control:      turnStepFinalizeExact,
 		FinalContent: "  runtime-owned halt reason  ",
 	}, llm)
-	if !ok || got.content != "runtime-owned halt reason" {
+	if !ok || got.content != "runtime-owned halt reason" || !got.persistIfToolHandled {
 		t.Fatalf("continuation terminal = (%#v, %v), want exact runtime halt", got, ok)
 	}
 }

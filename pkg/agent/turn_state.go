@@ -75,8 +75,17 @@ type LLMCallOutcome struct {
 }
 
 type terminalContent struct {
-	content   string
-	protected bool
+	content              string
+	protected            bool
+	persistIfToolHandled bool
+}
+
+func exactTerminalContent(content string) terminalContent {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		content = "The tool loop was stopped by runtime safety protection."
+	}
+	return terminalContent{content: content, persistIfToolHandled: true}
 }
 
 func (o LLMCallOutcome) terminalCandidate(retained terminalContent) terminalContent {

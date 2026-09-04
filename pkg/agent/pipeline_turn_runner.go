@@ -303,10 +303,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 					suspendedInteractionID: toolOutcome.SuspendedInteractionID,
 				}, turnStatus, nil
 			case turnStepFinalizeExact:
-				exec.terminal = terminalContent{content: toolOutcome.FinalContent}
-				if strings.TrimSpace(exec.terminal.content) == "" {
-					exec.terminal.content = "The tool loop was stopped by runtime safety protection."
-				}
+				exec.terminal = exactTerminalContent(toolOutcome.FinalContent)
 				result, finalizeErr := p.finalizeTurn(
 					turnCtx,
 					ts,

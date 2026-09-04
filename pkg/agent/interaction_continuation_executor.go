@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -126,11 +125,7 @@ func continuationTerminalContent(
 ) (terminalContent, bool) {
 	switch outcome.Control {
 	case turnStepFinalizeExact:
-		content := strings.TrimSpace(outcome.FinalContent)
-		if content == "" {
-			content = "The tool loop was stopped by runtime safety protection."
-		}
-		return terminalContent{content: content}, true
+		return exactTerminalContent(outcome.FinalContent), true
 	case turnStepFinalize:
 		if llm != nil && llm.toolResponseDisposition == toolResponseHandled {
 			return terminalContent{}, true
