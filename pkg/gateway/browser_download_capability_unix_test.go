@@ -32,7 +32,7 @@ func TestCompanionDownloadDoesNotRequireGatewayPlaywrightDownloadSupport(t *test
 		},
 	}
 	source := &gatewayBrowserToolSource{
-		config: cfg, services: &services{}, downloadAvailable: false,
+		nodeTargets: browserNodeTargets(cfg.Tools.Browser), services: &services{}, downloadAvailable: false,
 	}
 	if !source.DownloadAvailable() {
 		t.Fatal("companion download was gated by gateway-local Playwright support")
