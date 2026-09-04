@@ -2,6 +2,7 @@ import { IconCheck, IconChevronDown } from "@tabler/icons-react"
 import { useEffect, useState } from "react"
 import { useTranslation } from "react-i18next"
 
+import type { ModelProviderOption } from "@/api/models"
 import { Button } from "@/components/ui/button"
 import {
   Command,
@@ -20,11 +21,10 @@ import { cn } from "@/lib/utils"
 
 import { ProviderIcon } from "./provider-icon"
 import {
-  getCanonicalProviderKey,
   type ProviderCatalogEntry,
+  getCanonicalProviderKey,
   getProviderCatalog,
 } from "./provider-registry"
-import type { ModelProviderOption } from "@/api/models"
 
 interface ProviderComboboxProps {
   value: string
@@ -54,7 +54,8 @@ export function ProviderCombobox({
   }, [containerRef])
 
   const canonicalValue = getCanonicalProviderKey(value, backendOptions)
-  const allProviders: ProviderCatalogEntry[] = getProviderCatalog(backendOptions)
+  const allProviders: ProviderCatalogEntry[] =
+    getProviderCatalog(backendOptions)
   const visible = filterCreateAllowed
     ? allProviders.filter((p) => p.createAllowed || p.key === canonicalValue)
     : allProviders
@@ -83,9 +84,7 @@ export function ProviderCombobox({
         >
           {selected ? (
             <span className="flex items-center gap-2">
-              <ProviderIcon
-                provider={selected}
-              />
+              <ProviderIcon provider={selected} />
               {selected.label}
             </span>
           ) : showUnknownValue ? (
@@ -100,7 +99,10 @@ export function ProviderCombobox({
           <IconChevronDown className="ml-2 size-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" container={containerEl}>
+      <PopoverContent
+        className="w-[--radix-popover-trigger-width] p-0"
+        container={containerEl}
+      >
         <Command>
           <CommandInput placeholder={t("models.combobox.searchProvider")} />
           <CommandList>
@@ -111,34 +113,32 @@ export function ProviderCombobox({
             </CommandEmpty>
             <CommandGroup>
               {visible.map((provider) => {
-                const disabled = !provider.createAllowed && provider.key !== value
+                const disabled =
+                  !provider.createAllowed && provider.key !== value
 
                 return (
                   <CommandItem
                     key={provider.key}
                     value={provider.key}
-                    keywords={[
-                      provider.label,
-                      ...provider.aliases,
-                    ]}
+                    keywords={[provider.label, ...provider.aliases]}
                     onSelect={handleSelect}
                     disabled={disabled}
                   >
                     <span className="flex items-center gap-2">
-                      <ProviderIcon
-                        provider={provider}
-                      />
+                      <ProviderIcon provider={provider} />
                       <span>{provider.label}</span>
                       {provider.isLocal && (
-                         <span className="text-muted-foreground text-xs">
-                           {t("models.combobox.local")}
-                         </span>
+                        <span className="text-muted-foreground text-xs">
+                          {t("models.combobox.local")}
+                        </span>
                       )}
                     </span>
                     <IconCheck
                       className={cn(
                         "ml-auto size-4",
-                        canonicalValue === provider.key ? "opacity-100" : "opacity-0",
+                        canonicalValue === provider.key
+                          ? "opacity-100"
+                          : "opacity-0",
                       )}
                     />
                   </CommandItem>

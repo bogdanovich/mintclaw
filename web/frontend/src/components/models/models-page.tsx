@@ -27,8 +27,8 @@ import {
   getCanonicalProviderKey,
   getProviderCatalogMap,
 } from "./provider-registry"
-import { ProviderSection } from "./provider-section"
 import type { ProviderCatalogEntry } from "./provider-registry"
+import { ProviderSection } from "./provider-section"
 
 interface ProviderGroup {
   key: string
@@ -41,9 +41,9 @@ interface ProviderGroup {
 export function ModelsPage() {
   const { t } = useTranslation()
   const [models, setModels] = useState<ModelInfo[]>([])
-  const [providerOptions, setProviderOptions] = useState<
-    ModelProviderOption[]
-  >([])
+  const [providerOptions, setProviderOptions] = useState<ModelProviderOption[]>(
+    [],
+  )
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState("")
 
@@ -104,7 +104,13 @@ export function ModelsPage() {
 
   const grouped: Record<
     string,
-    { provider: Pick<ProviderCatalogEntry, "key" | "label" | "iconSlug" | "domain">; models: ModelInfo[] }
+    {
+      provider: Pick<
+        ProviderCatalogEntry,
+        "key" | "label" | "iconSlug" | "domain"
+      >
+      models: ModelInfo[]
+    }
   > = {}
   for (const model of models) {
     const providerKey = getCanonicalProviderKey(model.provider, providerOptions)

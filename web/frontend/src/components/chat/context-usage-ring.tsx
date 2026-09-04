@@ -155,19 +155,24 @@ export function ContextUsageRing({
               </div>
             )}
             <div className="flex items-center justify-between text-[10px]">
-              <span className="text-muted-foreground">{t("chat.contextCompressAt")}</span>
+              <span className="text-muted-foreground">
+                {t("chat.contextCompressAt")}
+              </span>
               <span className="tabular-nums">
                 {formatTokens(usage.compress_at_tokens)}
               </span>
             </div>
-            {usage.summarize_at_tokens != null && usage.summarize_at_tokens > 0 && (
-              <div className="flex items-center justify-between text-[10px]">
-                <span className="text-muted-foreground">{t("chat.contextSummarizeAt")}</span>
-                <span className="tabular-nums">
-                  {formatTokens(usage.summarize_at_tokens)}
-                </span>
-              </div>
-            )}
+            {usage.summarize_at_tokens != null &&
+              usage.summarize_at_tokens > 0 && (
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-muted-foreground">
+                    {t("chat.contextSummarizeAt")}
+                  </span>
+                  <span className="tabular-nums">
+                    {formatTokens(usage.summarize_at_tokens)}
+                  </span>
+                </div>
+              )}
           </div>
 
           <button

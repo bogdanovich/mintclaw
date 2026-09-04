@@ -52,7 +52,8 @@ export function FetchModelsDialog({
   const [filter, setFilter] = useState("")
 
   const canonicalProvider = getCanonicalProviderKey(provider, backendOptions)
-  const providerDef = getProviderCatalogMap(backendOptions).get(canonicalProvider)
+  const providerDef =
+    getProviderCatalogMap(backendOptions).get(canonicalProvider)
   const needsKey = providerDef?.requiresApiKey !== false
   const hasKey = !!apiKey || modelIndex !== undefined
 
@@ -136,7 +137,7 @@ export function FetchModelsDialog({
             {t("models.fetch.description")}
             {provider && (
               <span className="mt-1 block font-mono text-xs">
-                 {t("models.fetch.providerLabel")} {canonicalProvider}
+                {t("models.fetch.providerLabel")} {canonicalProvider}
                 {apiBase && ` | ${apiBase}`}
               </span>
             )}

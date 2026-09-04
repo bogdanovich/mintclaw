@@ -126,14 +126,18 @@ export function getProviderDefaultAuthMethod(
   provider: string | undefined,
   backendOptions?: ModelProviderOption[],
 ): string {
-  return getProviderCatalogEntry(provider, backendOptions)?.defaultAuthMethod ?? ""
+  return (
+    getProviderCatalogEntry(provider, backendOptions)?.defaultAuthMethod ?? ""
+  )
 }
 
 export function isProviderAuthMethodLocked(
   provider: string | undefined,
   backendOptions?: ModelProviderOption[],
 ): boolean {
-  return getProviderCatalogEntry(provider, backendOptions)?.authMethodLocked === true
+  return (
+    getProviderCatalogEntry(provider, backendOptions)?.authMethodLocked === true
+  )
 }
 
 export function providerSupportsFetch(
