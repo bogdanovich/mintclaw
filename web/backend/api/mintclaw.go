@@ -207,8 +207,12 @@ func (h *Handler) handleRegenMintClawToken(w http.ResponseWriter, r *http.Reques
 // EnsureMintClawChannel enables the MintClaw channel with sane defaults if it isn't
 // already configured. Returns true when the config was modified.
 func (h *Handler) EnsureMintClawChannel() (bool, error) {
+	return ensureMintClawChannel(h.configRepository())
+}
+
+func ensureMintClawChannel(repository *config.Repository) (bool, error) {
 	changed := false
-	_, err := h.updateConfig(func(cfg *config.Config) error {
+	_, err := repository.Update(func(cfg *config.Config) error {
 		bc := cfg.Channels.GetByType(config.ChannelMintClaw)
 		if bc == nil {
 			bc = &config.Channel{Type: config.ChannelMintClaw}
