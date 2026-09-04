@@ -704,7 +704,8 @@ func TestClientRoutesAuthenticatedTransferFramesToBoundedHandler(t *testing.T) {
 
 	digest := sha256.Sum256([]byte("payload"))
 	binding := nodews.TransferBinding{
-		TransferID: "transfer_1", Direction: protocol.TransferUpload,
+		ProtocolVersion: nodes.ProtocolV2,
+		TransferID:      "transfer_1", Direction: protocol.TransferUpload,
 		PolicyRevision: "files-v1", TotalSize: 7, SHA256: digest,
 	}
 	stream, err := sessions.OpenTransfer(t.Context(), identity.ID, binding)
