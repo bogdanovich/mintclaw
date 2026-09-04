@@ -1,0 +1,10 @@
+• The first attempt failed; I’m narrowing the retry.
+
+• Ran exec [failed] · 3s
+  exit: 1
+  stderr:
+    package test failed
+
+• Ran exec [running] · 9s
+  stdout:
+    running focused retry

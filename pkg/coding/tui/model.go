@@ -79,6 +79,7 @@ type Model struct {
 	controller          frontend.Controller
 	ctx                 context.Context
 	snapshot            frontend.ThreadSnapshot
+	cells               semanticCellStore
 	updates             <-chan frontend.ThreadSnapshot
 	viewport            viewport.Model
 	composer            textarea.Model
@@ -131,6 +132,10 @@ func NewModel(
 	if strings.TrimSpace(snapshot.ThreadID) == "" {
 		return nil, errors.New("coding frontend snapshot has no thread ID")
 	}
+	cells, err := newSemanticCellStore(snapshot.Items)
+	if err != nil {
+		return nil, fmt.Errorf("build semantic cell store: %w", err)
+	}
 	composer := textarea.New()
 	configureComposerStyles(&composer)
 	composer.ShowLineNumbers = false
@@ -145,6 +150,7 @@ func NewModel(
 		controller:         controller,
 		ctx:                ctx,
 		snapshot:           snapshot,
+		cells:              cells,
 		viewport:           viewport.New(80, 18),
 		composer:           composer,
 		width:              80,
@@ -365,10 +371,15 @@ func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
 	if snapshot.ThreadID != m.snapshot.ThreadID {
 		return errors.New("coding frontend snapshot changed thread ID")
 	}
+	cells, err := reconcileSemanticCellStore(m.cells, snapshot.Items)
+	if err != nil {
+		return fmt.Errorf("update semantic cell store: %w", err)
+	}
 	if m.initialTurnResolvedBy(snapshot) {
 		m.initialTurnPending = false
 	}
 	m.snapshot = snapshot
+	m.cells = cells
 	if !activeWork(snapshot.Activity) {
 		m.interruptPending = false
 	}
