@@ -378,7 +378,15 @@ func (p *Provider) prepareMessagesForRequest(
 		return nil, false
 	}
 
-	if !p.requiresToolRoundReasoningReplay() || len(tools) == 0 {
+	if !p.requiresToolRoundReasoningReplay() {
+		return stripReasoningMessages(messages), false
+	}
+	if thinkingLevelExplicitlyOff(options) {
+		// The request omits reasoning replay, so a later extra_body merge must not
+		// re-enable thinking and turn the serialized history into an invalid request.
+		return stripReasoningMessages(messages), true
+	}
+	if len(tools) == 0 {
 		return stripReasoningMessages(messages), false
 	}
 	if p.supportsThinking() && !reasoningReplayHistoryComplete(messages) {
@@ -387,11 +395,6 @@ func (p *Provider) prepareMessagesForRequest(
 		// so continue the tool round in non-thinking mode rather than fabricating
 		// reasoning_content or sending a request known to fail with HTTP 400.
 		return preserveReasoningReplayMessages(messages), true
-	}
-	if thinkingLevelExplicitlyOff(options) {
-		// The request omits reasoning replay, so a later extra_body merge must not
-		// re-enable thinking and turn the serialized history into an invalid request.
-		return stripReasoningMessages(messages), true
 	}
 	return preserveReasoningReplayMessages(messages), false
 }

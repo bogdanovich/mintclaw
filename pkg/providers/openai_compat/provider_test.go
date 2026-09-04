@@ -1105,21 +1105,36 @@ func TestProviderChat_PreservesAvailableReasoningInPartialToolHistory(t *testing
 	}
 }
 
-func TestProviderChat_ExplicitOffSurvivesExtraBodyWithCompleteReasoningHistory(t *testing.T) {
+func TestProviderChat_ExplicitOffSurvivesExtraBody(t *testing.T) {
 	tests := []struct {
 		name         string
 		providerName string
 		apiBase      string
 		model        string
+		tools        []ToolDefinition
 	}{
 		{
-			name:         "DeepSeek",
+			name:         "DeepSeek with tools",
+			providerName: "deepseek",
+			apiBase:      "https://api.deepseek.com/v1",
+			model:        "deepseek-v4-flash",
+			tools:        replayTestTools(),
+		},
+		{
+			name:         "DeepSeek without tools",
 			providerName: "deepseek",
 			apiBase:      "https://api.deepseek.com/v1",
 			model:        "deepseek-v4-flash",
 		},
 		{
-			name:         "MiMo",
+			name:         "MiMo with tools",
+			providerName: "mimo",
+			apiBase:      "https://api.xiaomimimo.com/v1",
+			model:        "mimo-v2.5",
+			tools:        replayTestTools(),
+		},
+		{
+			name:         "MiMo without tools",
 			providerName: "mimo",
 			apiBase:      "https://api.xiaomimimo.com/v1",
 			model:        "mimo-v2.5",
@@ -1156,7 +1171,7 @@ func TestProviderChat_ExplicitOffSurvivesExtraBodyWithCompleteReasoningHistory(t
 
 			body := p.buildRequestBody(
 				messages,
-				replayTestTools(),
+				tt.tools,
 				tt.model,
 				map[string]any{"thinking_level": "off"},
 			)
