@@ -93,7 +93,9 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	local := &wssBrowserLocalFactory{}
-	factory.(*gatewayBrowserWorkerFactory).local = local
+	factory.(*gatewayBrowserWorkerFactory).local = map[string]browser.WorkerFactory{
+		gatewayBrowserProfileKey("companion", "managed"): local,
+	}
 	acceptanceStore := &wssBrowserAcceptanceStore{Store: browser.NewMemoryStore()}
 	broker, err := browser.NewBroker(cfg, acceptanceStore, factory)
 	if err != nil {
