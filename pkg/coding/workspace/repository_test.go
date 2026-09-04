@@ -147,6 +147,35 @@ func TestRepositoryProvenancePreservesCachedDeletionAndSamePathUntrackedFile(t *
 	}
 }
 
+func TestRepositoryDiffUsesLiveProvenanceAcrossStatusTransition(t *testing.T) {
+	root := initGitRepository(t)
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("staged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "add", "tracked.txt")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("unstaged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := NewRepository(root, root, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
+		ProjectKey: "project-key", CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "checkout", "--", "tracked.txt")
+	repository, err := NewRepositoryWithBaseline(root, root, Limits{}, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	diff := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent})
+	file := requireDiffFileStatus(t, diff, "tracked.txt", "M")
+	if file.Provenance != ProvenanceFirstObservedDuringThread ||
+		file.Provenance == ProvenanceResolvedSinceBaseline {
+		t.Fatalf("live provenance after MM to M transition = %#v", diff)
+	}
+}
+
 func TestRepositoryProvenanceRefreshFailureDoesNotClaimStaleness(t *testing.T) {
 	root := initGitRepository(t)
 	limits := Limits{ConcurrentOperations: 1}
@@ -295,6 +324,12 @@ func TestRepositoryDiffSupportsLocalBaseAndCommitTargets(t *testing.T) {
 	}
 	runGitTest(t, root, "commit", "-am", "second")
 	commit := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))
+	baseline, err := NewRepository(root, root, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
+		ProjectKey: "project-key", CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(
 		filepath.Join(root, "tracked.txt"),
 		[]byte("initial\ncommitted\nworking\n"),
@@ -306,9 +341,13 @@ func TestRepositoryDiffSupportsLocalBaseAndCommitTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repository := NewRepository(root, root, Limits{})
+	repository, err := NewRepositoryWithBaseline(root, root, Limits{}, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
 	baseResult := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetBase, Ref: base})
 	if baseResult.ResolvedRevision != base || baseResult.MergeBase != base || baseResult.UnavailableReason != "" ||
+		baseResult.EvidenceGeneration != "" || baseResult.BaselineID != "" || baseResult.Provenance != nil ||
 		!hasDiffLine(requireDiffFile(t, baseResult, "tracked.txt"), "addition", 3, "working") {
 		t.Fatalf("Diff(base) = %#v", baseResult)
 	}
@@ -317,6 +356,7 @@ func TestRepositoryDiffSupportsLocalBaseAndCommitTargets(t *testing.T) {
 	}
 	commitResult := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetCommit, Ref: commit})
 	if commitResult.ResolvedRevision != commit || commitResult.MergeBase != "" ||
+		commitResult.EvidenceGeneration != "" || commitResult.BaselineID != "" || commitResult.Provenance != nil ||
 		commitResult.UnavailableReason != "" || commitResult.Additions != 1 || len(commitResult.Files) != 1 {
 		t.Fatalf("Diff(commit) = %#v", commitResult)
 	}

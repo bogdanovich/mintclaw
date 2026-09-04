@@ -176,6 +176,9 @@ func (repository *Repository) diff(ctx context.Context, target DiffTarget) DiffR
 		result.UnavailableReason = "repository evidence service is unavailable"
 		return result
 	}
+	if result.Target.Kind == "" {
+		result.Target.Kind = DiffTargetCurrent
+	}
 	if !repository.acquire(ctx) {
 		result.UnavailableReason = contextError(ctx).Error()
 		return result
@@ -185,7 +188,7 @@ func (repository *Repository) diff(ctx context.Context, target DiffTarget) DiffR
 	commandCtx, cancel := context.WithTimeout(contextOrBackground(ctx), repository.limits.Timeout)
 	defer cancel()
 	evidenceWarning := ""
-	if repository.baseline != nil {
+	if repository.baseline != nil && result.Target.Kind == DiffTargetCurrent {
 		observation, err := repository.captureBaseline(commandCtx, BaselineRequest{
 			ProjectKey: repository.baseline.ProjectKey,
 			CapturedAt: time.Now().UTC(),
@@ -211,9 +214,6 @@ func (repository *Repository) diff(ctx context.Context, target DiffTarget) DiffR
 		result.Warning = before.Warning
 		result.Truncated = before.Truncated
 		return result
-	}
-	if target.Kind == "" {
-		result.Target.Kind = DiffTargetCurrent
 	}
 	filters, warning, safe, truncated := passiveFilterOverrides(
 		commandCtx,
@@ -321,6 +321,9 @@ func (repository *Repository) attachDiffProvenance(ctx context.Context, result *
 	result.Provenance = &provenance
 	byPath := make(map[string]ProvenancePath, len(provenance.Paths))
 	for _, path := range provenance.Paths {
+		if path.Provenance == ProvenanceResolvedSinceBaseline {
+			continue
+		}
 		byPath[evidencePathKey(path.Status, path.OriginalPath, path.Path)] = path
 	}
 	for index := range result.Files {
