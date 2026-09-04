@@ -466,6 +466,7 @@ func runCapturedChat(
 	apiBase string,
 	messages []Message,
 	model string,
+	tools ...ToolDefinition,
 ) []any {
 	t.Helper()
 
@@ -502,7 +503,7 @@ func runCapturedChat(
 		}
 	}
 
-	_, err := p.Chat(t.Context(), messages, nil, model, nil)
+	_, err := p.Chat(t.Context(), messages, tools, model, nil)
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
@@ -548,6 +549,16 @@ func docsReplayRequirementMessages() []Message {
 	}
 }
 
+func replayTestTools() []ToolDefinition {
+	return []ToolDefinition{{
+		Type: "function",
+		Function: ToolFunctionDefinition{
+			Name:        "get_date",
+			Description: "Get the current date",
+		},
+	}}
+}
+
 func assertAssistantReasoningOmitted(t *testing.T, reqMessages []any, index int, label string) {
 	t.Helper()
 
@@ -575,9 +586,9 @@ func assertDocsReplayRequirements(t *testing.T, reqMessages []any, messages []Me
 	if !ok {
 		t.Fatalf("plain assistant message is not map[string]any: %T", reqMessages[1])
 	}
-	if _, exists := plainAssistant["reasoning_content"]; exists {
+	if plainAssistant["reasoning_content"] != "I know this from general knowledge." {
 		t.Fatalf(
-			"plain %s turn should omit reasoning_content on replay, got %v",
+			"plain %s turn reasoning_content = %v, want preserved for a request carrying tools",
 			label,
 			plainAssistant["reasoning_content"],
 		)
@@ -663,7 +674,7 @@ func TestProviderChat_DeepSeekPreservesReasoningContentForToolTurnHistory(t *tes
 		{Role: "user", Content: "What about Guangzhou?"},
 	}
 
-	_, err := p.Chat(t.Context(), messages, nil, "deepseek-v4-flash", nil)
+	_, err := p.Chat(t.Context(), messages, replayTestTools(), "deepseek-v4-flash", nil)
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
@@ -712,8 +723,9 @@ func TestProviderChat_HistoryCanonicalizationMatrix(t *testing.T) {
 		{Role: "tool", ToolCallID: "call_read_file", Content: "file content"},
 		{Role: "user", Content: "turn3"},
 		{
-			Role:    "assistant",
-			Content: "tool visible only",
+			Role:             "assistant",
+			Content:          "tool visible only",
+			ReasoningContent: "tool third thought",
 			ToolCalls: []ToolCall{{
 				ID:        "call_list_dir",
 				Type:      "function",
@@ -765,7 +777,7 @@ func TestProviderChat_HistoryCanonicalizationMatrix(t *testing.T) {
 			p.SetProviderName(providerName)
 		}
 
-		_, err := p.Chat(t.Context(), baseMessages, nil, "test-model", nil)
+		_, err := p.Chat(t.Context(), baseMessages, replayTestTools(), "test-model", nil)
 		if err != nil {
 			t.Fatalf("Chat() error = %v", err)
 		}
@@ -792,17 +804,14 @@ func TestProviderChat_HistoryCanonicalizationMatrix(t *testing.T) {
 			t.Fatalf("len(messages) = %d, want %d", len(msgs), len(baseMessages))
 		}
 
-		if _, ok := msgs[1]["reasoning_content"]; ok {
-			t.Fatalf(
-				"turn1 reasoning_content should be stripped for DeepSeek non-tool turn, got %v",
-				msgs[1]["reasoning_content"],
-			)
+		if msgs[1]["reasoning_content"] != "plain thought" {
+			t.Fatalf("turn1 reasoning_content = %v, want preserved", msgs[1]["reasoning_content"])
 		}
 		if msgs[3]["reasoning_content"] != "tool thought" {
 			t.Fatalf("turn2 reasoning_content = %v, want preserved", msgs[3]["reasoning_content"])
 		}
-		if _, ok := msgs[6]["reasoning_content"]; ok {
-			t.Fatalf("turn3 reasoning_content should be absent, got %v", msgs[6]["reasoning_content"])
+		if msgs[6]["reasoning_content"] != "tool third thought" {
+			t.Fatalf("turn3 reasoning_content = %v, want preserved", msgs[6]["reasoning_content"])
 		}
 		if msgs[9]["reasoning_content"] != "tool mixed thought" {
 			t.Fatalf("turn4 reasoning_content = %v, want preserved", msgs[9]["reasoning_content"])
@@ -818,17 +827,14 @@ func TestProviderChat_HistoryCanonicalizationMatrix(t *testing.T) {
 			t.Fatalf("len(messages) = %d, want %d", len(msgs), len(baseMessages))
 		}
 
-		if _, ok := msgs[1]["reasoning_content"]; ok {
-			t.Fatalf(
-				"turn1 reasoning_content should be stripped for MiMo non-tool turn, got %v",
-				msgs[1]["reasoning_content"],
-			)
+		if msgs[1]["reasoning_content"] != "plain thought" {
+			t.Fatalf("turn1 reasoning_content = %v, want preserved", msgs[1]["reasoning_content"])
 		}
 		if msgs[3]["reasoning_content"] != "tool thought" {
 			t.Fatalf("turn2 reasoning_content = %v, want preserved", msgs[3]["reasoning_content"])
 		}
-		if _, ok := msgs[6]["reasoning_content"]; ok {
-			t.Fatalf("turn3 reasoning_content should be absent, got %v", msgs[6]["reasoning_content"])
+		if msgs[6]["reasoning_content"] != "tool third thought" {
+			t.Fatalf("turn3 reasoning_content = %v, want preserved", msgs[6]["reasoning_content"])
 		}
 		if msgs[9]["reasoning_content"] != "tool mixed thought" {
 			t.Fatalf("turn4 reasoning_content = %v, want preserved", msgs[9]["reasoning_content"])
@@ -853,26 +859,21 @@ func TestProviderChat_HistoryCanonicalizationMatrix(t *testing.T) {
 }
 
 func TestProviderChat_DeepSeekDocsReplayRequirements(t *testing.T) {
-	// DeepSeek's thinking-mode and multi-round chat docs distinguish two cases:
-	// - for a plain assistant turn between two user messages without tool calls,
-	//   reasoning_content does not need to be replayed and the API ignores it if sent;
-	// - for a turn that participates in a tool-interaction round, assistant
-	//   reasoning_content must be replayed on subsequent requests.
+	// DeepSeek's thinking-mode docs distinguish requests that carry tools from
+	// requests that do not. When tools are present, reasoning_content from every
+	// previous assistant turn must be replayed, even if that turn called no tool.
 	//
-	// Keep this behavior explicit here so future changes do not "fix" the
-	// non-tool stripping based on issue reports that are broader than the
-	// vendor documentation.
+	// Keep this behavior explicit so request serialization follows the current
+	// vendor contract rather than grouping history by which old turn used tools.
 	messages := docsReplayRequirementMessages()
-	reqMessages := runCapturedChat(t, "deepseek", "", messages, "deepseek-v4-flash")
+	reqMessages := runCapturedChat(t, "deepseek", "", messages, "deepseek-v4-flash", replayTestTools()...)
 	assertDocsReplayRequirements(t, reqMessages, messages, "DeepSeek")
 }
 
 func TestProviderChat_MiMoDocsReplayRequirements(t *testing.T) {
-	// MiMo documents the same replay rule as DeepSeek for thinking-mode
-	// tool rounds: plain non-tool turns may omit reasoning_content on replay,
-	// while tool-interaction rounds must keep it in subsequent requests.
+	// MiMo follows the same replay shape for tool-enabled reasoning history.
 	messages := docsReplayRequirementMessages()
-	reqMessages := runCapturedChat(t, "mimo", "", messages, "mimo-2.5")
+	reqMessages := runCapturedChat(t, "mimo", "", messages, "mimo-2.5", replayTestTools()...)
 	assertDocsReplayRequirements(t, reqMessages, messages, "MiMo")
 }
 
@@ -885,6 +886,61 @@ func TestProviderChat_MiMoHostUsesReasoningReplayRules(t *testing.T) {
 		"mimo-2.5",
 	)
 	assertAssistantReasoningOmitted(t, reqMessages, 1, "MiMo")
+}
+
+func TestProviderChat_DeepSeekDisablesThinkingForMixedProviderToolHistory(t *testing.T) {
+	p := NewProvider(
+		"key",
+		"https://api.deepseek.com/v1",
+		"",
+		WithExtraBody(map[string]any{
+			"thinking":         map[string]any{"type": "enabled"},
+			"reasoning_effort": "max",
+		}),
+	)
+	p.SetProviderName("deepseek")
+	messages := []Message{
+		{Role: "user", Content: "Inspect the pull request"},
+		{
+			Role:    "assistant",
+			Content: "I will inspect the diff.",
+			ToolCalls: []ToolCall{{
+				ID:        "call_diff",
+				Type:      "function",
+				Name:      "exec",
+				Arguments: map[string]any{"command": "git diff"},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call_diff", Content: "diff output"},
+	}
+
+	body := p.buildRequestBody(
+		messages,
+		replayTestTools(),
+		"deepseek-v4-flash",
+		map[string]any{"thinking_level": "high"},
+	)
+
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "disabled" {
+		t.Fatalf("thinking = %#v, want explicitly disabled", body["thinking"])
+	}
+	if _, ok := body["reasoning_effort"]; ok {
+		t.Fatalf("reasoning_effort must be absent when compatibility fallback disables thinking")
+	}
+	encoded, err := json.Marshal(body["messages"])
+	if err != nil {
+		t.Fatalf("marshal request messages: %v", err)
+	}
+	var requestMessages []map[string]any
+	if err := json.Unmarshal(encoded, &requestMessages); err != nil {
+		t.Fatalf("decode request messages: %v", err)
+	}
+	for index, message := range requestMessages {
+		if _, exists := message["reasoning_content"]; exists {
+			t.Fatalf("messages[%d] fabricated reasoning_content: %#v", index, message)
+		}
+	}
 }
 
 func TestProviderChat_HTTPError(t *testing.T) {

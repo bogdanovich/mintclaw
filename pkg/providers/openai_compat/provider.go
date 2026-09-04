@@ -135,10 +135,11 @@ func (p *Provider) buildRequestBody(
 	messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) map[string]any {
 	model = normalizeModel(model, p.apiBase)
+	preparedMessages, forceThinkingOff := p.prepareMessagesForRequest(messages, tools, options)
 
 	requestBody := map[string]any{
 		"model":    model,
-		"messages": common.SerializeMessages(p.prepareMessagesForRequest(messages)),
+		"messages": common.SerializeMessages(preparedMessages),
 	}
 
 	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
@@ -196,11 +197,31 @@ func (p *Provider) buildRequestBody(
 		}
 	}
 
-	p.applyThinkingControl(requestBody, model, options)
+	thinkingOptions := options
+	if forceThinkingOff {
+		thinkingOptions = maps.Clone(options)
+		if thinkingOptions == nil {
+			thinkingOptions = make(map[string]any)
+		}
+		thinkingOptions["thinking_level"] = "off"
+		logger.WarnCF(
+			"provider.openai_compat",
+			"disabled thinking for tool request with incomplete reasoning replay history",
+			map[string]any{"provider": p.providerName, "model": model},
+		)
+	}
+	p.applyThinkingControl(requestBody, model, thinkingOptions)
 
 	// Merge extra body fields configured per-provider/model.
 	// These are injected last so they take precedence over defaults.
 	maps.Copy(requestBody, p.extraBody)
+	if forceThinkingOff {
+		// Compatibility is a request validity invariant, not a preference.
+		// Do not let a static extra_body re-enable thinking for history whose
+		// original reasoning cannot be replayed.
+		requestBody["thinking"] = map[string]any{"type": "disabled"}
+		delete(requestBody, "reasoning_effort")
+	}
 
 	return requestBody
 }
@@ -328,15 +349,29 @@ func (p *Provider) supportsThinking() bool {
 	return strings.EqualFold(strings.TrimSpace(p.providerName), "deepseek") || isDeepSeekHost(p.apiBase)
 }
 
-func (p *Provider) prepareMessagesForRequest(messages []Message) []Message {
+func (p *Provider) prepareMessagesForRequest(
+	messages []Message,
+	tools []ToolDefinition,
+	options map[string]any,
+) ([]Message, bool) {
 	if len(messages) == 0 {
-		return nil
+		return nil, false
 	}
 
-	if p.requiresToolRoundReasoningReplay() {
-		return filterReasoningReplayMessages(messages)
+	if !p.requiresToolRoundReasoningReplay() || len(tools) == 0 {
+		return stripReasoningMessages(messages), false
 	}
-	return stripReasoningMessages(messages)
+	if level, ok := normalizedThinkingLevel(options); ok && level == "off" {
+		return stripReasoningMessages(messages), false
+	}
+	if p.supportsThinking() && !reasoningReplayHistoryComplete(messages) {
+		// A fallback provider cannot reconstruct private reasoning emitted by a
+		// different model. DeepSeek rejects that mixed history in thinking mode,
+		// so continue the tool round in non-thinking mode rather than fabricating
+		// reasoning_content or sending a request known to fail with HTTP 400.
+		return stripReasoningMessages(messages), true
+	}
+	return preserveReasoningReplayMessages(messages), false
 }
 
 func (p *Provider) requiresToolRoundReasoningReplay() bool {
@@ -364,58 +399,31 @@ func isMiMoHost(apiBase string) bool {
 	return host == "xiaomimimo.com" || strings.HasSuffix(host, ".xiaomimimo.com")
 }
 
-func filterReasoningReplayMessages(messages []Message) []Message {
-	out := make([]Message, 0, len(messages))
-	start := 0
-
-	flush := func(end int) {
-		if end <= start {
-			return
-		}
-		out = append(out, filterReasoningReplayTurn(messages[start:end])...)
-		start = end
-	}
-
-	for i := 1; i < len(messages); i++ {
-		if messages[i].Role == "user" {
-			flush(i)
-		}
-	}
-	flush(len(messages))
-
-	return out
-}
-
-func filterReasoningReplayTurn(messages []Message) []Message {
-	hasToolInteraction := false
-	for _, msg := range messages {
-		if msg.Role == "tool" || (msg.Role == "assistant" && len(msg.ToolCalls) > 0) {
-			hasToolInteraction = true
-			break
-		}
-	}
-
+func preserveReasoningReplayMessages(messages []Message) []Message {
 	out := make([]Message, 0, len(messages))
 	for _, msg := range messages {
 		if messageutil.IsTransientAssistantThoughtMessage(msg) {
 			continue
 		}
-
-		cloned := msg
-		// DeepSeek and MiMo only require reasoning_content replay for turns
-		// that participate in a tool interaction round. For plain assistant
-		// turns between two user messages, the reasoning trace is ignored on
-		// replay, so we strip it here.
-		if cloned.Role == "assistant" && strings.TrimSpace(cloned.ReasoningContent) != "" && !hasToolInteraction {
-			cloned.ReasoningContent = ""
-		}
-		if assistantMessageEmpty(cloned) {
+		if assistantMessageEmpty(msg) {
 			continue
 		}
-		out = append(out, cloned)
+		out = append(out, msg)
 	}
-
 	return out
+}
+
+func reasoningReplayHistoryComplete(messages []Message) bool {
+	for _, msg := range messages {
+		if msg.Role != "assistant" || messageutil.IsTransientAssistantThoughtMessage(msg) ||
+			assistantMessageEmpty(msg) {
+			continue
+		}
+		if strings.TrimSpace(msg.ReasoningContent) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func stripReasoningMessages(messages []Message) []Message {
