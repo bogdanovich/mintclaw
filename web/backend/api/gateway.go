@@ -573,6 +573,20 @@ func (m *GatewayProcessManager) startConfigured(
 		return gatewayStartResult{}, &preconditionFailedError{reason: reason}
 	}
 
+	if m.cmd != nil && m.cmd.Process != nil && processCompletionSignaled(m.cmdDone) {
+		completedPID := m.cmd.Process.Pid
+		m.cmd = nil
+		m.cmdDone = nil
+		m.owned = false
+		m.pidData = nil
+		m.bootDefaultModel = ""
+		m.bootConfigSignature = ""
+		m.setRuntimeStatusLocked("stopped")
+		if discovered != nil && discovered.PID == completedPID {
+			discovered = nil
+		}
+	}
+
 	if m.cmd != nil && m.cmd.Process != nil && m.processAlive(m.cmd) {
 		pid := m.cmd.Process.Pid
 		if discovered != nil && discovered.PID != pid {
@@ -1065,6 +1079,18 @@ func (m *GatewayProcessManager) waitForProcessExit(cmd *exec.Cmd, timeout time.D
 			return false
 		}
 		m.sleep(m.restartPollInterval)
+	}
+}
+
+func processCompletionSignaled(done <-chan struct{}) bool {
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
 	}
 }
 

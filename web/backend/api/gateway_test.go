@@ -440,6 +440,55 @@ func TestGatewayManagerWaitForProcessExitUsesOwnedCompletion(t *testing.T) {
 	}
 }
 
+func TestGatewayManagerStartReplacesCompletedOwnedProcess(t *testing.T) {
+	h := newGatewayStartTestHandler(t)
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
+	cfg.ModelList[0].SetAPIKey("test-key")
+	if err := saveTestConfig(h.configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
+	}
+	oldCommand := &exec.Cmd{Process: &os.Process{Pid: 42}}
+	done := make(chan struct{})
+	close(done)
+
+	execCalls := 0
+	h.gateway.execCommand = func(_ string, _ ...string) *exec.Cmd {
+		execCalls++
+		return exec.Command(os.Args[0], "-test.run=TestGatewayStartHelperProcess")
+	}
+	h.gateway.processAlive = func(*exec.Cmd) bool { return true }
+	h.gateway.mu.Lock()
+	h.gateway.cmd = oldCommand
+	h.gateway.cmdDone = done
+	h.gateway.owned = true
+	h.gateway.runtimeStatus = "running"
+	h.gateway.mu.Unlock()
+
+	result, err := h.gateway.startConfigured(
+		h.gatewayLaunchOptions(),
+		func() *ppid.PidFileData { return &ppid.PidFileData{PID: oldCommand.Process.Pid} },
+		"starting",
+	)
+	if err != nil {
+		t.Fatalf("startConfigured() error = %v", err)
+	}
+	if execCalls != 1 {
+		t.Fatalf("gateway command starts = %d, want 1", execCalls)
+	}
+	if result.pid <= 0 || result.pid == oldCommand.Process.Pid {
+		t.Fatalf(
+			"startConfigured() PID = %d, want a replacement for completed PID %d",
+			result.pid,
+			oldCommand.Process.Pid,
+		)
+	}
+	if result.attached {
+		t.Fatal("startConfigured() attached to completed owned process")
+	}
+}
+
 func TestGatewayStartReady_NoDefaultModel(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
