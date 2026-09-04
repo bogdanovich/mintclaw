@@ -112,14 +112,18 @@ func TestApprovedToolExecutionIdentityIsScopedAndRestored(t *testing.T) {
 	ts := &turnState{
 		agent: &AgentInstance{ID: "main"}, channel: resumeInbound.Channel, chatID: resumeInbound.ChatID,
 		workspace: "workspace", sessionKey: "session",
-		opts: turnSpec{Dispatch: DispatchRequest{InboundContext: resumeInbound}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{InboundContext: resumeInbound}}),
+	}
+	registeredInbound := ts.opts.Dispatch.InboundContext
+	if registeredInbound == nil || registeredInbound == resumeInbound {
+		t.Fatalf("registered turn identity was not detached: %#v", registeredInbound)
 	}
 
 	executionCtx := withApprovedToolExecutionIdentity(context.Background(), origin)
 	assertToolIdentity(t, toolExecutionContextForTurn(executionCtx, ts), origin)
-	assertToolIdentity(t, toolExecutionContextForTurn(context.Background(), ts), resumeInbound)
+	assertToolIdentity(t, toolExecutionContextForTurn(context.Background(), ts), registeredInbound)
 	if ts.channel != resumeInbound.Channel || ts.chatID != resumeInbound.ChatID ||
-		ts.opts.Dispatch.InboundContext != resumeInbound {
+		ts.opts.Dispatch.InboundContext != registeredInbound {
 		t.Fatalf("registered turn identity mutated: %#v", ts)
 	}
 }

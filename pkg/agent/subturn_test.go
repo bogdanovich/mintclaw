@@ -1281,7 +1281,7 @@ func TestSpawnSubTurn_OrphanResultRouting(t *testing.T) {
 	parentCtx, cancelParent := context.WithCancel(context.Background())
 	parent := &turnState{
 		ctx:            parentCtx,
-		cancelFunc:     cancelParent,
+		turnCancel:     cancelParent,
 		turnID:         "parent-1",
 		depth:          0,
 		pendingResults: make(chan *toolshared.ToolResult, 1),
@@ -1436,7 +1436,7 @@ func TestHardAbortCascading(t *testing.T) {
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	rootTS := &turnState{
 		ctx:            rootCtx,
-		cancelFunc:     rootCancel,
+		turnCancel:     rootCancel,
 		turnID:         sessionKey,
 		workspace:      cfg.Agents.Defaults.Workspace,
 		sessionKey:     sessionKey,
@@ -1457,7 +1457,7 @@ func TestHardAbortCascading(t *testing.T) {
 	childID := "child-independent"
 	childTS := &turnState{
 		ctx:            childCtx,
-		cancelFunc:     childCancel,
+		turnCancel:     childCancel,
 		turnID:         childID,
 		workspace:      cfg.Agents.Defaults.Workspace,
 		pendingResults: make(chan *toolshared.ToolResult, 4),
@@ -1721,7 +1721,7 @@ func TestHardAbortOrderOfOperations(t *testing.T) {
 
 	rootTS := &turnState{
 		ctx:                  ctx,
-		cancelFunc:           cancel,
+		turnCancel:           cancel,
 		turnID:               "test-session-order",
 		workspace:            cfg.Agents.Defaults.Workspace,
 		sessionKey:           "test-session-order",
@@ -1768,7 +1768,7 @@ func TestFinishedChannelClosedState(t *testing.T) {
 
 	ts := &turnState{
 		ctx:            ctx,
-		cancelFunc:     cancel,
+		turnCancel:     cancel,
 		turnID:         "test-finished-channel",
 		depth:          0,
 		pendingResults: make(chan *toolshared.ToolResult, 2),
@@ -2173,7 +2173,7 @@ func TestFinish_ConcurrentCalls(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	parentTS.ctx, parentTS.turnCancel = context.WithCancel(ctx)
 
 	// Launch multiple goroutines that all call Finish() concurrently
 	const numGoroutines = 10
@@ -2253,7 +2253,7 @@ func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	parentTS.ctx, parentTS.turnCancel = context.WithCancel(ctx)
 
 	// Launch goroutines that deliver results while another goroutine calls Finish()
 	const numResults = 20
@@ -2462,7 +2462,7 @@ func TestSpawnSubTurnRepairsIncompleteResultWithoutTools(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 4),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{}, agent: alphaAgent,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair"}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair"}}),
 	}
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", TaskPrompt: "return the active listings",
@@ -2503,7 +2503,7 @@ func TestSpawnSubTurnFailsClosedAfterOneIncompleteRepair(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 4),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{}, agent: alphaAgent,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-fail-closed"}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-fail-closed"}}),
 	}
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", TaskPrompt: "return records",
@@ -2544,7 +2544,7 @@ func TestSpawnSubTurnRepairCannotRepeatBrowserAction(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 4),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{}, agent: alphaAgent,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-no-tools"}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-no-tools"}}),
 	}
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", TaskPrompt: "return records",
@@ -2601,7 +2601,7 @@ func TestSpawnSubTurnRepairRestoresToolsForLateSteering(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 4),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{}, agent: alphaAgent,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-steering"}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-steering"}}),
 	}
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", TaskPrompt: "return the listing",
@@ -2705,7 +2705,7 @@ func TestSpawnSubTurnRepairDispatchesAbortBeforeDeferredWork(t *testing.T) {
 				pendingResults: make(chan *toolshared.ToolResult, 4),
 				concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 				session:        &ephemeralSessionStore{}, agent: alphaAgent,
-				opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-abort"}},
+				opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-abort"}}),
 			}
 			result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 				TargetAgentID: "beta", TaskPrompt: "return listing",
@@ -2779,7 +2779,7 @@ func TestSpawnSubTurnRepairSurvivesContextOverflowCompaction(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 4),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{}, agent: alphaAgent,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-overflow"}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-objective-repair-overflow"}}),
 	}
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", TaskPrompt: "return standalone text", TaskID: taskID,
@@ -2865,12 +2865,12 @@ func TestSpawnSubTurn_DefaultSyncDeliveryRemovesUserDeliveryTools(t *testing.T) 
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey: "parent-default-sync-delivery",
 			},
 			NoHistory: true,
-		},
+		}),
 	}
 
 	_, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
@@ -2908,7 +2908,7 @@ func TestSpawnSubTurnBrowserChecklistRequiredBeforeExecution(t *testing.T) {
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts:           turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-browser-preflight"}},
+		opts:           freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-browser-preflight"}}),
 	}
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", TaskPrompt: "publish an item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
@@ -2943,7 +2943,7 @@ func TestSpawnSubTurnBrowserRemovesDirectDeliveryToolsForUserOnly(t *testing.T) 
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts:           turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-browser-delivery"}},
+		opts:           freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "parent-browser-delivery"}}),
 	}
 	_, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
 		TargetAgentID: "beta", TaskPrompt: "inspect one item", DeliveryMode: toolshared.AsyncDeliveryUserOnly,
@@ -2984,9 +2984,9 @@ func TestAgentLoopSpawnerForwardsBrowserObjectivesFromSpawnAndDelegate(t *testin
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts: turnSpec{Dispatch: DispatchRequest{
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
 			SessionKey: "parent-browser-objective-bridge",
-		}},
+		}}),
 	}
 	ctx := withTurnState(context.Background(), parent)
 	objectiveArgs := []any{map[string]any{"item": "inspect listings", "kind": "result"}}
@@ -3080,10 +3080,10 @@ func TestSpawnSubTurn_TargetAgentIDRemovesNodeFileTools(t *testing.T) {
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          alphaAgent,
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			Dispatch:  DispatchRequest{SessionKey: "parent-cross-agent-file-tools"},
 			NoHistory: true,
-		},
+		}),
 	}
 
 	if _, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
@@ -3149,7 +3149,7 @@ func TestSpawnSubTurn_InheritsSuppressToolFeedback(t *testing.T) {
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 		session:        &ephemeralSessionStore{},
 		agent:          parentAgent,
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "parent-suppress-tool-feedback",
 				UserMessage: "scheduled parent",
@@ -3162,7 +3162,7 @@ func TestSpawnSubTurn_InheritsSuppressToolFeedback(t *testing.T) {
 			},
 			SuppressToolFeedback: true,
 			NoHistory:            true,
-		},
+		}),
 	}
 
 	result, err := spawnSubTurn(context.Background(), al, parent, SubTurnConfig{
@@ -3229,7 +3229,7 @@ func TestSpawnSubTurn_DurableTaskDismissesPublishedToolFeedbackSession(t *testin
 		session:        &ephemeralSessionStore{},
 		agent:          parentAgent,
 		workspace:      parentAgent.Workspace,
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "parent-durable-tool-feedback",
 				UserMessage: "spawn durable child",
@@ -3241,7 +3241,7 @@ func TestSpawnSubTurn_DurableTaskDismissesPublishedToolFeedbackSession(t *testin
 				},
 			},
 			NoHistory: true,
-		},
+		}),
 	}
 
 	const taskID = "subagent-durable-feedback"
@@ -3305,7 +3305,7 @@ func TestSpawnSubTurn_ReturnsStructuredCompletionWithMedia(t *testing.T) {
 		session:        newEphemeralSession(nil),
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "parent-completion",
 				UserMessage: "parent",
@@ -3315,7 +3315,7 @@ func TestSpawnSubTurn_ReturnsStructuredCompletionWithMedia(t *testing.T) {
 				},
 			},
 			NoHistory: true,
-		},
+		}),
 	}
 	ctx := withTurnState(context.Background(), parentTS)
 
@@ -3405,7 +3405,7 @@ func TestConcurrencySemaphore_Timeout(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	parentTS.ctx, parentTS.turnCancel = context.WithCancel(ctx)
 	defer parentTS.Finish(false)
 
 	// Fill all concurrency slots
@@ -3505,7 +3505,7 @@ func TestContextWrapping_SingleLayer(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	parentTS.ctx, parentTS.turnCancel = context.WithCancel(ctx)
 	defer parentTS.Finish(false)
 
 	// Spawn a sub-turn
@@ -3551,7 +3551,7 @@ func TestSyncSubTurn_NoChannelDelivery(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	parentTS.ctx, parentTS.turnCancel = context.WithCancel(ctx)
 	defer parentTS.Finish(false)
 
 	// Spawn a SYNCHRONOUS sub-turn (Async=false)
@@ -3608,7 +3608,7 @@ func TestAsyncSubTurn_ChannelDelivery(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	parentTS.ctx, parentTS.turnCancel = context.WithCancel(ctx)
 	defer parentTS.Finish(false)
 
 	// Spawn an ASYNCHRONOUS sub-turn (Async=true)
@@ -3653,14 +3653,14 @@ func TestGrandchildAbort_CascadingCancellation(t *testing.T) {
 
 	childTS := &turnState{
 		ctx:        childCtx,
-		cancelFunc: childCancel,
+		turnCancel: childCancel,
 		turnID:     "grandchild",
 		workspace:  cfg.Agents.Defaults.Workspace,
 		al:         al,
 	}
 	parentTS := &turnState{
 		ctx:          parentCtx,
-		cancelFunc:   parentCancel,
+		turnCancel:   parentCancel,
 		turnID:       "parent",
 		workspace:    cfg.Agents.Defaults.Workspace,
 		childTurnIDs: []string{"grandchild"},
@@ -3668,7 +3668,7 @@ func TestGrandchildAbort_CascadingCancellation(t *testing.T) {
 	}
 	grandparentTS := &turnState{
 		ctx:            gpCtx,
-		cancelFunc:     gpCancel,
+		turnCancel:     gpCancel,
 		turnID:         "grandparent",
 		workspace:      cfg.Agents.Defaults.Workspace,
 		sessionKey:     "grandparent",
@@ -3732,7 +3732,7 @@ func TestNestedSubTurn_GracefulFinishSignalsDirectChildren(t *testing.T) {
 		depth:          1,
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(parentCtx)
+	parentTS.ctx, parentTS.turnCancel = context.WithCancel(parentCtx)
 
 	childTS := &turnState{
 		ctx:             context.Background(),
@@ -3810,7 +3810,7 @@ func TestAsyncSubTurn_ParentWaitsForChild(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	parentTS.ctx, parentTS.turnCancel = context.WithCancel(ctx)
 
 	var subTurnErr error
 	var subTurnResult *toolshared.ToolResult
@@ -3877,7 +3877,7 @@ func TestFinish_GracefulVsHard(t *testing.T) {
 			depth:          0,
 			pendingResults: make(chan *toolshared.ToolResult, 16),
 		}
-		ts.ctx, ts.cancelFunc = context.WithCancel(ctx)
+		ts.ctx, ts.turnCancel = context.WithCancel(ctx)
 
 		// Finish gracefully
 		ts.Finish(false)
@@ -3888,7 +3888,7 @@ func TestFinish_GracefulVsHard(t *testing.T) {
 		}
 
 		// Verify context is NOT canceled (for graceful finish, children continue)
-		// Note: In graceful mode, we don't call cancelFunc()
+		// Note: In graceful mode, we don't call turnCancel()
 		// But since we're using WithCancel on the same ctx, it might be canceled
 		// Let's check that the context is still valid for a moment
 		time.Sleep(10 * time.Millisecond)
@@ -3905,7 +3905,7 @@ func TestFinish_GracefulVsHard(t *testing.T) {
 			depth:          0,
 			pendingResults: make(chan *toolshared.ToolResult, 16),
 		}
-		ts.ctx, ts.cancelFunc = context.WithCancel(ctx)
+		ts.ctx, ts.turnCancel = context.WithCancel(ctx)
 
 		// Finish with hard abort
 		ts.Finish(true)
@@ -3929,7 +3929,7 @@ func TestFinish_GracefulVsHard(t *testing.T) {
 			depth:          0,
 			pendingResults: make(chan *toolshared.ToolResult, 16),
 		}
-		parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+		parentTS.ctx, parentTS.turnCancel = context.WithCancel(ctx)
 
 		childTS := &turnState{
 			ctx:             ctx,
@@ -3977,7 +3977,7 @@ func TestSubTurn_IndependentContext(t *testing.T) {
 		pendingResults: make(chan *toolshared.ToolResult, 16),
 		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
 	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
+	parentTS.ctx, parentTS.turnCancel = context.WithCancel(ctx)
 
 	var subTurnErr error
 	var wg sync.WaitGroup

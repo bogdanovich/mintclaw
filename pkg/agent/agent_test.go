@@ -737,12 +737,12 @@ func TestShouldPublishToolFeedback_SubTurnUsesRouteSessionOverride(t *testing.T)
 		channel:    "telegram",
 		chatID:     "chat-1",
 		sessionKey: "subturn-1",
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			Dispatch: DispatchRequest{
 				RouteSessionKey: "route-session-1",
 				SessionKey:      "subturn-1",
 			},
-		},
+		}),
 	}
 
 	if al.turns.currentRunner().toolFeedback.shouldPublishToolFeedback(ts) {
@@ -803,7 +803,7 @@ func TestDeliverFinalTurnResult_AttachesResponseFooterMetadata(t *testing.T) {
 		context.Background(),
 		traceScope,
 		defaultAgent,
-		turnSpec{
+		freezeTurnInput(turnSpec{
 			SendResponse: true,
 			Dispatch: DispatchRequest{
 				SessionKey: "session-1",
@@ -813,7 +813,7 @@ func TestDeliverFinalTurnResult_AttachesResponseFooterMetadata(t *testing.T) {
 					MessageID: "live-request-1",
 				},
 			},
-		},
+		}),
 		turnResult{
 			finalContent:      "final reply",
 			modelName:         "fallback-model",
@@ -880,7 +880,7 @@ func TestDeliverFinalTurnResult_DirectTelegramDeliveryIncludesResponseFooter(t *
 		context.Background(),
 		runtimeevents.NewTraceScope(defaultAgent.Workspace, "turn-1"),
 		defaultAgent,
-		turnSpec{
+		freezeTurnInput(turnSpec{
 			SendResponse: true,
 			Dispatch: DispatchRequest{
 				SessionKey: "session-1",
@@ -889,7 +889,7 @@ func TestDeliverFinalTurnResult_DirectTelegramDeliveryIncludesResponseFooter(t *
 					ChatID:  "-100123",
 				},
 			},
-		},
+		}),
 		turnResult{
 			finalContent:      "final reply",
 			modelName:         "fallback-model",
@@ -3067,7 +3067,7 @@ func TestDeliverFinalTurnResult_SendsDeliverableArtifactsWithFinalTextCaption(t 
 		context.Background(),
 		runtimeevents.NewTraceScope(agent.Workspace, "turn-final-media"),
 		agent,
-		turnSpec{
+		freezeTurnInput(turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:  "final-media-session",
 				UserMessage: "save the reel and translate the recipe",
@@ -3078,7 +3078,7 @@ func TestDeliverFinalTurnResult_SendsDeliverableArtifactsWithFinalTextCaption(t 
 				},
 			},
 			SendResponse: true,
-		}, turnResult{
+		}), turnResult{
 			finalContent: finalText,
 			deliverable: &taskresult.Deliverable{
 				Artifacts: []taskresult.Artifact{{
@@ -3130,7 +3130,7 @@ func TestDeliverFinalTurnTextQueuesFallbackAfterTurnCancellation(t *testing.T) {
 		turnCtx,
 		traceScope,
 		agent,
-		turnSpec{Dispatch: DispatchRequest{SessionKey: "fallback-session"}},
+		freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "fallback-session"}}),
 		bus.InboundContext{Channel: "telegram", ChatID: "chat1", SenderID: "user1"},
 		bus.OutboundMetadata{},
 		agent.ID,
@@ -3255,9 +3255,9 @@ func TestDeliverImmediateToolResultMarksOutboundInterim(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, workspace: agent.Workspace, turnID: "turn-1",
 		channel: "cli", chatID: "chat-1", sessionKey: "session-1",
-		opts: turnSpec{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
 			Channel: "cli", ChatID: "chat-1", SenderID: "user-1",
-		}}},
+		}}}),
 	}
 
 	wantScope := runtimeevents.NewTraceScope(agent.Workspace, "turn-1")
@@ -3356,9 +3356,9 @@ func TestDeliverResponseHandledToolResultMarksChannelManagerOutputFinal(t *testi
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, workspace: agent.Workspace, turnID: "turn-handled",
 		channel: "mintclaw", chatID: "mintclaw:live", sessionKey: "session-handled",
-		opts: turnSpec{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
 			Channel: "mintclaw", ChatID: "mintclaw:live", SenderID: "user-1",
-		}}},
+		}}}),
 	}
 	result := toolshared.UserResult("handled response").WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 	if _, outcome, err := al.deliverToolResultToUser(
@@ -3429,9 +3429,9 @@ func TestDeliverFinalTurnToolTextCarriesTraceSettlement(t *testing.T) {
 				agent: agent, agentID: agent.ID,
 				workspace: agent.Workspace, turnID: traceScope.TurnID,
 				channel: "cli", chatID: "chat1", sessionKey: "session-final-text",
-				opts: turnSpec{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
+				opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{InboundContext: &bus.InboundContext{
 					Channel: "cli", ChatID: "chat1", SenderID: "user1",
-				}}},
+				}}}),
 			}
 			_, outcome, err := al.deliverToolResultToUser(
 				t.Context(), ts, test.result, "final_turn",

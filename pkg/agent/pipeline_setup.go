@@ -165,13 +165,13 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		p.ingestMessage(ctx, ts, rootMsg, nil)
 	}
 
-	execution := ts.model.ExecutionState()
+	execution := ts.modelBinding.ExecutionState()
 
 	selection := p.Context.ModelExecution.selectCandidates(
 		execution,
 		ts.userMessage,
 		messages,
-		ts.model.RouteSessionKey,
+		ts.modelBinding.RouteSessionKey,
 	)
 	defaultModelName := resolvedCandidateModelName(ts.agent.Candidates, ts.agent.Model)
 	activeProvider := execution.Provider

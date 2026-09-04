@@ -2380,9 +2380,6 @@ func (r *toolLoopRunner) skipPendingToolForGracefulInterrupt(
 }
 
 func (r *toolLoopRunner) appendPendingSubTurnResult() {
-	if r.ts.pendingResults == nil {
-		return
-	}
 	if result, ok := r.ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
 		content := r.p.filterPendingResultForLLM(result.ForLLM)
 		msg := subTurnResultPromptMessage(content)

@@ -1599,11 +1599,11 @@ func (al *AgentLoop) deliverTaskInteractionFinal(
 		agent: agent, agentID: record.Route.AgentID,
 		workspace: workspace, channel: record.Route.Channel, chatID: record.Route.ChatID,
 		sessionKey: record.Route.SessionKey,
-		opts: turnSpec{Dispatch: DispatchRequest{
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
 			RouteSessionKey: record.Route.RouteSessionKey,
 			SessionKey:      record.Route.SessionKey,
 			InboundContext:  cloneInboundContext(&inbound),
-		}},
+		}}),
 		scope: al.newTurnEventScope(
 			record.Route.AgentID,
 			workspace,
