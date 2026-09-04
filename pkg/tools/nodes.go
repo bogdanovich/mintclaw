@@ -829,6 +829,7 @@ type discoveryRevisionInput struct {
 	ApprovedCommands     []string    `json:"approved_commands"`
 	ApprovedAt           int64       `json:"approved_at"`
 	RevokedAt            int64       `json:"revoked_at"`
+	ProtocolVersion      int         `json:"protocol_version"`
 }
 
 func (access *nodeTargetAccess) discoveryRevision(
@@ -846,6 +847,10 @@ func (access *nodeTargetAccess) discoveryRevision(
 		return "", errors.New("target binding is unavailable")
 	}
 	descriptorDigest, err := descriptor.HashForProtocol(snapshot.ProtocolVersion)
+	if err != nil {
+		return "", err
+	}
+	protocolVersion, err := nodes.EffectiveProtocolVersion(snapshot.ProtocolVersion)
 	if err != nil {
 		return "", err
 	}
@@ -877,6 +882,7 @@ func (access *nodeTargetAccess) discoveryRevision(
 		ApprovedCommands:     approvedCommands,
 		ApprovedAt:           registration.ApprovedAt,
 		RevokedAt:            registration.RevokedAt,
+		ProtocolVersion:      protocolVersion,
 	}
 	data, err := json.Marshal(input)
 	if err != nil {

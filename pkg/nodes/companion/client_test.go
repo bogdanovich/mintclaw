@@ -967,6 +967,18 @@ func testTransportPlan(
 	return plan
 }
 
+func TestExecutionPlanMustMatchCompanionProtocol(t *testing.T) {
+	if !executionPlanMatchesProtocol(nodes.ExecutionPlan{}, nodes.ProtocolV1) {
+		t.Fatal("legacy omitted plan protocol did not normalize to v1")
+	}
+	if executionPlanMatchesProtocol(
+		nodes.ExecutionPlan{ProtocolVersion: nodes.ProtocolV2},
+		nodes.ProtocolV1,
+	) {
+		t.Fatal("companion accepted a plan from another negotiated protocol")
+	}
+}
+
 func TestDuplicateCompanionsBackOffInsteadOfRapidlyFlapping(t *testing.T) {
 	registry, admission := testGatewayAdmission(t)
 	var requests atomic.Int32

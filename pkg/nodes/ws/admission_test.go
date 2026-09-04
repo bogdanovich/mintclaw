@@ -77,6 +77,28 @@ func TestAdmissionRejectsPlanForUnapprovedCatalogBeforeDispatch(t *testing.T) {
 	}
 }
 
+func TestAdmissionRejectsPlanFromPreviousSessionProtocol(t *testing.T) {
+	registry, handler, nodeID, plan := testInvocationAdmission(t, "")
+	registration, found, err := registry.Registration(nodeID)
+	if err != nil || !found {
+		t.Fatalf("Registration() = %#v, %v, found %v", registration, err, found)
+	}
+	v2CatalogHash, err := registration.Snapshot.Catalog.HashForProtocol(nodes.ProtocolV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2CatalogHash != registration.Snapshot.CatalogHash {
+		t.Fatal("test catalog does not exercise identical v1/v2 hashes")
+	}
+	registration.Snapshot.ProtocolVersion = nodes.ProtocolV2
+	if err = registry.Upsert(registration.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = handler.validateInvocationPreflight(nodeID, plan); !errors.Is(err, nodes.ErrCommandDenied) {
+		t.Fatalf("previous-protocol plan error = %v", err)
+	}
+}
+
 func TestValidateInvocationApprovalProjectsServiceProfile(t *testing.T) {
 	_, _, nodeID, _ := testInvocationAdmission(t, "")
 	profiles := []nodes.ServiceProfileDescriptor{
