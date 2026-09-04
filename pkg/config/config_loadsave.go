@@ -513,10 +513,17 @@ func (c *Config) SecurityCopyForReplacement(path string, current *Config) error 
 			return fmt.Errorf("restore replacement channel security: %w", err)
 		}
 	}
-	if err = resolveConfigSecrets(c, credential.NewResolver(filepath.Dir(path))); err != nil {
+	if err = c.ResolveCredentialReferences(path); err != nil {
 		return fmt.Errorf("resolve replacement credentials: %w", err)
 	}
 	return nil
+}
+
+// ResolveCredentialReferences resolves secret references relative to the
+// directory containing the public configuration while retaining their raw
+// representation for durable serialization.
+func (c *Config) ResolveCredentialReferences(path string) error {
+	return resolveConfigSecrets(c, credential.NewResolver(filepath.Dir(path)))
 }
 
 func marshalReplacementChannelSecurity(channels ChannelsConfig) (*yaml.Node, error) {
