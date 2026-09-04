@@ -2,17 +2,61 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
+// pipelineTurnPolicy is the immutable turn-policy snapshot for one runtime
+// generation. AgentLoop replaces the owning turnRunner when configuration is
+// reloaded; turns already admitted to the old generation keep these values.
+type pipelineTurnPolicy struct {
+	nativeWebEnabled      bool
+	preferNativeSearch    bool
+	maxLLMRetries         int
+	llmRetryBackoffSecs   int
+	maxMediaSize          int
+	finalTurnRender       bool
+	filterSensitiveData   bool
+	filterMinLength       int
+	sensitiveDataReplacer *strings.Replacer
+}
+
+func newPipelineTurnPolicy(cfg *config.Config) pipelineTurnPolicy {
+	policy := pipelineTurnPolicy{
+		maxLLMRetries:       2,
+		llmRetryBackoffSecs: 2,
+		maxMediaSize:        config.DefaultMaxMediaSize,
+	}
+	if cfg == nil {
+		return policy
+	}
+
+	policy.nativeWebEnabled = cfg.Tools.IsToolEnabled("web")
+	policy.preferNativeSearch = cfg.Tools.Web.PreferNative
+	if cfg.Agents.Defaults.MaxLLMRetries > 0 {
+		policy.maxLLMRetries = cfg.Agents.Defaults.MaxLLMRetries
+	}
+	if cfg.Agents.Defaults.LLMRetryBackoffSecs > 0 {
+		policy.llmRetryBackoffSecs = cfg.Agents.Defaults.LLMRetryBackoffSecs
+	}
+	policy.maxMediaSize = cfg.Agents.Defaults.GetMaxMediaSize()
+	policy.finalTurnRender = cfg.Agents.Defaults.UseFinalTurnRender()
+	policy.filterSensitiveData = cfg.Tools.IsFilterSensitiveDataEnabled()
+	policy.filterMinLength = cfg.Tools.GetFilterMinLength()
+	if policy.filterSensitiveData {
+		policy.sensitiveDataReplacer = cfg.SensitiveDataReplacer()
+	}
+	return policy
+}
+
 func (p *Pipeline) nativeSearchEnabled(
 	profile config.EffectiveTurnProfile,
 	provider providers.LLMProvider,
 ) bool {
-	if p == nil || p.Cfg == nil || !p.Cfg.Tools.IsToolEnabled("web") || !p.Cfg.Tools.Web.PreferNative {
+	if p == nil || !p.turnPolicy.nativeWebEnabled || !p.turnPolicy.preferNativeSearch {
 		return false
 	}
 	return turnProfileToolAllowed(profile, "web_search") && providers.Capabilities(provider).NativeSearch
@@ -27,14 +71,14 @@ func (contextRetrySleeper) Sleep(ctx context.Context, delay time.Duration) error
 func (p *Pipeline) llmRetrySettings() (int, int) {
 	maxRetries := 2
 	backoffSecs := 2
-	if p == nil || p.Cfg == nil {
+	if p == nil {
 		return maxRetries, backoffSecs
 	}
-	if configuredRetries := p.Cfg.Agents.Defaults.MaxLLMRetries; configuredRetries > 0 {
-		maxRetries = configuredRetries
+	if p.turnPolicy.maxLLMRetries > 0 {
+		maxRetries = p.turnPolicy.maxLLMRetries
 	}
-	if configuredBackoff := p.Cfg.Agents.Defaults.LLMRetryBackoffSecs; configuredBackoff > 0 {
-		backoffSecs = configuredBackoff
+	if p.turnPolicy.llmRetryBackoffSecs > 0 {
+		backoffSecs = p.turnPolicy.llmRetryBackoffSecs
 	}
 	return maxRetries, backoffSecs
 }
@@ -47,24 +91,25 @@ func (p *Pipeline) sleepBeforeLLMRetry(ctx context.Context, delay time.Duration)
 }
 
 func (p *Pipeline) maxMediaSize() int {
-	if p == nil || p.Cfg == nil {
+	if p == nil || p.turnPolicy.maxMediaSize <= 0 {
 		return config.DefaultMaxMediaSize
 	}
-	return p.Cfg.Agents.Defaults.GetMaxMediaSize()
+	return p.turnPolicy.maxMediaSize
 }
 
 func (p *Pipeline) shouldFinalizeAfterToolLoop(exec *turnExecution, llm *LLMIterationState) bool {
 	if p == nil {
 		return false
 	}
-	return shouldFinalizeAfterToolLoopWithRenderConfig(p.Cfg, exec, llm)
+	return shouldFinalizeAfterToolLoopWithRenderPolicy(p.turnPolicy.finalTurnRender, exec, llm)
 }
 
 func (p *Pipeline) filterToolContentForLLM(content string) string {
-	if p == nil || p.Cfg == nil || !p.Cfg.Tools.IsFilterSensitiveDataEnabled() {
+	if p == nil || !p.turnPolicy.filterSensitiveData || len(content) < p.turnPolicy.filterMinLength ||
+		p.turnPolicy.sensitiveDataReplacer == nil {
 		return content
 	}
-	return p.Cfg.FilterSensitiveData(content)
+	return p.turnPolicy.sensitiveDataReplacer.Replace(content)
 }
 
 func (p *Pipeline) filterPendingResultForLLM(content string) string {

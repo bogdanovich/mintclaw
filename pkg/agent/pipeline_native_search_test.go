@@ -10,7 +10,7 @@ func TestPipelineNativeSearchEnabledUsesConfig(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Tools.Web.Enabled = true
 	cfg.Tools.Web.PreferNative = true
-	pipeline := &Pipeline{Cfg: cfg}
+	pipeline := &Pipeline{Cfg: cfg, turnPolicy: newPipelineTurnPolicy(cfg)}
 
 	if !pipeline.nativeSearchEnabled(
 		config.EffectiveTurnProfile{},

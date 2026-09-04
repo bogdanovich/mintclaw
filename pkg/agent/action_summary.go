@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -233,11 +232,8 @@ func appendTurnWriteAudit(
 	return records
 }
 
-func finalTurnRenderEligibleForConfig(cfg *config.Config, exec *turnExecution) bool {
-	if cfg == nil || exec == nil {
-		return false
-	}
-	if !cfg.Agents.Defaults.UseFinalTurnRender() {
+func finalTurnRenderEligible(enabled bool, exec *turnExecution) bool {
+	if !enabled || exec == nil {
 		return false
 	}
 	return exec.sawSteering
@@ -322,13 +318,13 @@ func buildFinalTurnRenderInstruction(exec *turnExecution) string {
 
 func tryRenderFinalTurnReply(
 	ctx context.Context,
-	cfg *config.Config,
+	enabled bool,
 	ts *turnState,
 	exec *turnExecution,
 	fallback terminalContent,
 ) (terminalContent, bool) {
 	fallback.content = strings.TrimSpace(fallback.content)
-	if !finalTurnRenderEligibleForConfig(cfg, exec) {
+	if !finalTurnRenderEligible(enabled, exec) {
 		return fallback, false
 	}
 	if exec == nil || len(exec.messages) == 0 {
@@ -391,12 +387,12 @@ func tryRenderFinalTurnReply(
 	return terminalContent{content: content, protected: protected}, true
 }
 
-func shouldFinalizeAfterToolLoopWithRenderConfig(
-	cfg *config.Config,
+func shouldFinalizeAfterToolLoopWithRenderPolicy(
+	enabled bool,
 	exec *turnExecution,
 	llm *LLMIterationState,
 ) bool {
-	if !finalTurnRenderEligibleForConfig(cfg, exec) {
+	if !finalTurnRenderEligible(enabled, exec) {
 		return false
 	}
 	if llm == nil {

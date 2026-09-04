@@ -19,6 +19,7 @@ import (
 // execution. The owning turnRunner is replaced when runtime wiring changes.
 type Pipeline struct {
 	Cfg                  *config.Config
+	turnPolicy           pipelineTurnPolicy
 	Context              PipelineContextServices
 	Interaction          PipelineInteractionServices
 	bus                  pipelineBus
