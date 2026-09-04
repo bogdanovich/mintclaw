@@ -169,10 +169,11 @@ type Observer struct {
 	limits     Limits
 	repository *Repository
 
-	mu          sync.Mutex
-	initialized bool
-	current     Snapshot
-	emitted     string
+	mu           sync.Mutex
+	initialized  bool
+	current      Snapshot
+	emitted      string
+	forcePending bool
 }
 
 func NewObserver(projectRoot, cwd string, limits Limits) *Observer {
@@ -183,13 +184,33 @@ func NewObserver(projectRoot, cwd string, limits Limits) *Observer {
 }
 
 func (observer *Observer) Refresh(ctx context.Context) Snapshot {
+	return observer.refresh(ctx, false)
+}
+
+// RefreshPending refreshes current state and guarantees one later
+// PendingUpdate observation, even when bounded snapshot identity is unchanged.
+func (observer *Observer) RefreshPending(ctx context.Context) Snapshot {
+	return observer.refresh(ctx, true)
+}
+
+func (observer *Observer) refresh(ctx context.Context, forcePending bool) Snapshot {
 	if observer == nil {
 		return Snapshot{}
 	}
 	snapshot := observer.repository.Status(ctx).Snapshot
 	observer.mu.Lock()
+	if ctx != nil && ctx.Err() != nil {
+		if observer.initialized {
+			snapshot = cloneSnapshot(observer.current)
+		} else {
+			snapshot = Snapshot{}
+		}
+		observer.mu.Unlock()
+		return snapshot
+	}
 	observer.current = snapshot
 	observer.initialized = true
+	observer.forcePending = observer.forcePending || forcePending
 	observer.mu.Unlock()
 	return snapshot
 }
@@ -223,10 +244,11 @@ func (observer *Observer) PendingUpdate(ctx context.Context) (Snapshot, bool) {
 	identity := snapshot.Identity()
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
-	if identity == observer.emitted {
+	if identity == observer.emitted && !observer.forcePending {
 		return Snapshot{}, false
 	}
 	observer.emitted = identity
+	observer.forcePending = false
 	return cloneSnapshot(snapshot), true
 }
 

@@ -92,44 +92,68 @@ func startIgnoringTermProcess(t *testing.T) *exec.Cmd {
 	return cmd
 }
 
+func stopManagedGatewayProcess(t *testing.T, h *Handler, cmd *exec.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	if cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		h.gateway.mu.Lock()
+		managerReleased := h.gateway.cmd != cmd
+		h.gateway.mu.Unlock()
+		if managerReleased {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("gateway manager did not release test process")
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func resetGatewayTestState(t *testing.T) {
 	t.Helper()
-
-	originalHealthGet := gatewayHealthGet
-	originalProcessMatcher := gatewayProcessMatcher
-	originalExecCommand := gatewayExecCommand
-	originalRestartGracePeriod := gatewayRestartGracePeriod
-	originalRestartForceKillWindow := gatewayRestartForceKillWindow
-	originalRestartPollInterval := gatewayRestartPollInterval
 	t.Setenv("MINTCLAW_HOME", t.TempDir())
-	t.Cleanup(func() {
-		gatewayHealthGet = originalHealthGet
-		gatewayProcessMatcher = originalProcessMatcher
-		gatewayExecCommand = originalExecCommand
-		gatewayRestartGracePeriod = originalRestartGracePeriod
-		gatewayRestartForceKillWindow = originalRestartForceKillWindow
-		gatewayRestartPollInterval = originalRestartPollInterval
-
-		gateway.mu.Lock()
-		gateway.cmd = nil
-		gateway.pidData = nil
-		gateway.owned = false
-		gateway.bootDefaultModel = ""
-		gateway.bootConfigSignature = ""
-		setGatewayRuntimeStatusLocked("stopped")
-		gateway.mu.Unlock()
-	})
 }
 
 func TestMintClawGatewayProtocol(t *testing.T) {
 	resetGatewayTestState(t)
+	h := NewHandler("")
 
-	gateway.mu.Lock()
-	gateway.mintclawToken = "ui-token"
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.mintclawToken = "ui-token"
+	h.gateway.mu.Unlock()
 
-	if got := mintclawGatewayProtocol(); got != tokenPrefix+"ui-token" {
-		t.Fatalf("mintclawGatewayProtocol() = %q, want %q", got, tokenPrefix+"ui-token")
+	if got := h.mintclawGatewayProtocol(); got != tokenPrefix+"ui-token" {
+		t.Fatalf("h.mintclawGatewayProtocol() = %q, want %q", got, tokenPrefix+"ui-token")
+	}
+}
+
+func TestHandlersOwnIndependentGatewayProcessState(t *testing.T) {
+	first := NewHandler(filepath.Join(t.TempDir(), "first.json"))
+	second := NewHandler(filepath.Join(t.TempDir(), "second.json"))
+	if first.gateway == second.gateway || first.versionInfoCache == second.versionInfoCache {
+		t.Fatal("handlers share gateway process state")
+	}
+
+	first.gateway.mu.Lock()
+	first.gateway.pidData = &ppid.PidFileData{PID: 101, Port: 19001}
+	first.gateway.mintclawToken = "first-token"
+	first.gateway.runtimeStatus = "running"
+	first.gateway.logs.Append("first-handler-log")
+	first.gateway.mu.Unlock()
+
+	second.gateway.mu.Lock()
+	defer second.gateway.mu.Unlock()
+	_, secondLogTotal, _ := second.gateway.logs.LinesSince(0)
+	if second.gateway.pidData != nil || second.gateway.mintclawToken != "" ||
+		second.gateway.runtimeStatus != "stopped" || secondLogTotal != 0 {
+		t.Fatalf("second handler inherited process state: %#v", second.gateway)
 	}
 }
 
@@ -205,7 +229,7 @@ func startGatewayAndCaptureEnv(t *testing.T, h *Handler) gatewayStartEnvSnapshot
 	unsetGatewayStartEnvForTest(t, config.EnvGatewayHost)
 
 	envPath := filepath.Join(t.TempDir(), "gateway-child-env.json")
-	gatewayExecCommand = func(_ string, _ ...string) *exec.Cmd {
+	h.gateway.execCommand = func(_ string, _ ...string) *exec.Cmd {
 		return exec.Command(
 			os.Args[0],
 			"-test.run=TestGatewayStartHelperProcess",
@@ -302,7 +326,7 @@ func TestStartGatewayLocked_UsesReloadedConfigForBootSignature(t *testing.T) {
 
 	h := NewHandler(configPath)
 	h.SetServerOptions(18800, false, false, nil)
-	gatewayExecCommand = func(_ string, _ ...string) *exec.Cmd {
+	h.gateway.execCommand = func(_ string, _ ...string) *exec.Cmd {
 		return exec.Command("sleep", "30")
 	}
 
@@ -315,17 +339,12 @@ func TestStartGatewayLocked_UsesReloadedConfigForBootSignature(t *testing.T) {
 		t.Fatalf("startGatewayLocked() pid = %d, want > 0", pid)
 	}
 
-	gateway.mu.Lock()
-	cmd := gateway.cmd
-	bootSignature := gateway.bootConfigSignature
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	cmd := h.gateway.cmd
+	bootSignature := h.gateway.bootConfigSignature
+	h.gateway.mu.Unlock()
 	t.Cleanup(func() {
-		if cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		if cmd != nil {
-			_ = cmd.Wait()
-		}
+		stopManagedGatewayProcess(t, h, cmd)
 	})
 
 	updatedCfg, err := config.LoadConfig(configPath)
@@ -452,8 +471,8 @@ func TestValidateGatewayPidDataAcceptsHealthWhenMatcherInconclusive(t *testing.T
 		Port: 18790,
 	}
 
-	gatewayProcessMatcher = func(int) (bool, bool) { return false, false }
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.processMatcher = func(int) (bool, bool) { return false, false }
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return mockGatewayHealthResponse(http.StatusOK, testPID), nil
 	}
 
@@ -478,8 +497,8 @@ func TestValidateGatewayPidDataRejectsHealthPidMismatchWhenMatcherInconclusive(t
 		Port: 18790,
 	}
 
-	gatewayProcessMatcher = func(int) (bool, bool) { return false, false }
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.processMatcher = func(int) (bool, bool) { return false, false }
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return mockGatewayHealthResponse(http.StatusOK, 99999), nil
 	}
 
@@ -800,14 +819,14 @@ func TestGatewayStatusKeepsRunningWhenHealthProbeFailsAfterRunning(t *testing.T)
 		_ = cmd.Wait()
 	})
 
-	gateway.mu.Lock()
-	gateway.cmd = cmd
-	gateway.bootDefaultModel = "existing-model"
+	h.gateway.mu.Lock()
+	h.gateway.cmd = cmd
+	h.gateway.bootDefaultModel = "existing-model"
 	// Simulate a process that has already reached the running state.
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return nil, errors.New("probe failed")
 	}
 
@@ -845,14 +864,14 @@ func TestGatewayStatusKeepsPidDataWhileTrackedProcessAliveWhenPidFileUnavailable
 		_ = cmd.Wait()
 	})
 
-	gateway.mu.Lock()
-	gateway.cmd = cmd
-	gateway.pidData = &ppid.PidFileData{
+	h.gateway.mu.Lock()
+	h.gateway.cmd = cmd
+	h.gateway.pidData = &ppid.PidFileData{
 		PID:   cmd.Process.Pid,
 		Token: "existing-token",
 	}
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/gateway/status", nil)
@@ -862,9 +881,9 @@ func TestGatewayStatusKeepsPidDataWhileTrackedProcessAliveWhenPidFileUnavailable
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 
-	gateway.mu.Lock()
-	defer gateway.mu.Unlock()
-	if gateway.pidData == nil {
+	h.gateway.mu.Lock()
+	defer h.gateway.mu.Unlock()
+	if h.gateway.pidData == nil {
 		t.Fatal("gateway.pidData was cleared while runtime status remained running")
 	}
 }
@@ -883,14 +902,14 @@ func TestGatewayStatusDowngradesRunningWhenTrackedProcessExitedAndPidFileMissing
 	}
 	_ = cmd.Wait()
 
-	gateway.mu.Lock()
-	gateway.cmd = cmd
-	gateway.pidData = &ppid.PidFileData{
+	h.gateway.mu.Lock()
+	h.gateway.cmd = cmd
+	h.gateway.pidData = &ppid.PidFileData{
 		PID:   cmd.Process.Pid,
 		Token: "stale-token",
 	}
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/gateway/status", nil)
@@ -908,9 +927,9 @@ func TestGatewayStatusDowngradesRunningWhenTrackedProcessExitedAndPidFileMissing
 		t.Fatalf("gateway_status = %#v, want %q", got, "stopped")
 	}
 
-	gateway.mu.Lock()
-	defer gateway.mu.Unlock()
-	if gateway.pidData != nil {
+	h.gateway.mu.Lock()
+	defer h.gateway.mu.Unlock()
+	if h.gateway.pidData != nil {
 		t.Fatal("gateway.pidData should be cleared when tracked process has exited")
 	}
 }
@@ -977,11 +996,11 @@ func TestGatewayStopRefusesNonGatewayAttachedProcess(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	gateway.mu.Lock()
-	gateway.cmd = cmd
-	gateway.owned = false
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = cmd
+	h.gateway.owned = false
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/stop", nil)
@@ -990,17 +1009,17 @@ func TestGatewayStopRefusesNonGatewayAttachedProcess(t *testing.T) {
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
-	if !isCmdProcessAliveLocked(cmd) {
+	if !h.gateway.processAlive(cmd) {
 		t.Fatal("non-gateway process should not be terminated by /api/gateway/stop")
 	}
 }
 
 func TestGatewayStatusReportsRunningFromPidProbe(t *testing.T) {
 	resetGatewayTestState(t)
-	gatewayProcessMatcher = func(int) (bool, bool) { return true, true }
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
+	h.gateway.processMatcher = func(int) (bool, bool) { return true, true }
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -1012,11 +1031,11 @@ func TestGatewayStatusReportsRunningFromPidProbe(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	gateway.mu.Lock()
-	setGatewayRuntimeStatusLocked("stopped")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.setGatewayRuntimeStatusLocked("stopped")
+	h.gateway.mu.Unlock()
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return mockGatewayHealthResponse(http.StatusOK, cmd.Process.Pid), nil
 	}
 
@@ -1050,7 +1069,6 @@ func TestGatewayStatusReportsRunningFromPidProbe(t *testing.T) {
 
 func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 	resetGatewayTestState(t)
-	gatewayProcessMatcher = func(int) (bool, bool) { return true, true }
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
@@ -1066,6 +1084,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 	}
 
 	h := NewHandler(configPath)
+	h.gateway.processMatcher = func(int) (bool, bool) { return true, true }
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -1084,12 +1103,12 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 	})
 
 	bootSignature := computeConfigSignature(cfg)
-	gateway.mu.Lock()
-	gateway.cmd = cmd
-	gateway.bootDefaultModel = cfg.ModelList[0].ModelName
-	gateway.bootConfigSignature = bootSignature
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = cmd
+	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
+	h.gateway.bootConfigSignature = bootSignature
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -1100,7 +1119,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return mockGatewayHealthResponse(http.StatusOK, os.Getpid()), nil
 	}
 
@@ -1154,12 +1173,12 @@ func TestGatewayStatusRequiresRestartAfterToolChange(t *testing.T) {
 	}
 
 	bootSignature := computeConfigSignature(cfg)
-	gateway.mu.Lock()
-	gateway.cmd = &exec.Cmd{Process: process}
-	gateway.bootDefaultModel = cfg.ModelList[0].ModelName
-	gateway.bootConfigSignature = bootSignature
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = &exec.Cmd{Process: process}
+	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
+	h.gateway.bootConfigSignature = bootSignature
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -1170,7 +1189,7 @@ func TestGatewayStatusRequiresRestartAfterToolChange(t *testing.T) {
 		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return mockGatewayHealthResponse(http.StatusOK, os.Getpid()), nil
 	}
 
@@ -1217,12 +1236,12 @@ func TestGatewayStatusRequiresRestartAfterChannelChange(t *testing.T) {
 	}
 
 	bootSignature := computeConfigSignature(cfg)
-	gateway.mu.Lock()
-	gateway.cmd = &exec.Cmd{Process: process}
-	gateway.bootDefaultModel = cfg.ModelList[0].ModelName
-	gateway.bootConfigSignature = bootSignature
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = &exec.Cmd{Process: process}
+	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
+	h.gateway.bootConfigSignature = bootSignature
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -1237,7 +1256,7 @@ func TestGatewayStatusRequiresRestartAfterChannelChange(t *testing.T) {
 		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return mockGatewayHealthResponse(http.StatusOK, os.Getpid()), nil
 	}
 
@@ -1285,12 +1304,12 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelStreamingChange(t *testing
 	}
 
 	bootSignature := computeConfigSignature(cfg)
-	gateway.mu.Lock()
-	gateway.cmd = &exec.Cmd{Process: process}
-	gateway.bootDefaultModel = cfg.ModelList[0].ModelName
-	gateway.bootConfigSignature = bootSignature
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = &exec.Cmd{Process: process}
+	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
+	h.gateway.bootConfigSignature = bootSignature
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -1301,7 +1320,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelStreamingChange(t *testing
 		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return mockGatewayHealthResponse(http.StatusOK, os.Getpid()), nil
 	}
 
@@ -1443,12 +1462,12 @@ func TestGatewayStatusRequiresRestartAfterWebSearchConfigChange(t *testing.T) {
 	}
 
 	bootSignature := computeConfigSignature(cfg)
-	gateway.mu.Lock()
-	gateway.cmd = &exec.Cmd{Process: process}
-	gateway.bootDefaultModel = cfg.ModelList[0].ModelName
-	gateway.bootConfigSignature = bootSignature
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = &exec.Cmd{Process: process}
+	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
+	h.gateway.bootConfigSignature = bootSignature
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -1459,7 +1478,7 @@ func TestGatewayStatusRequiresRestartAfterWebSearchConfigChange(t *testing.T) {
 		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return mockGatewayHealthResponse(http.StatusOK, os.Getpid()), nil
 	}
 
@@ -1507,12 +1526,12 @@ func TestGatewayStatusNoRestartRequiredForNonSensitiveChanges(t *testing.T) {
 	}
 
 	bootSignature := computeConfigSignature(cfg)
-	gateway.mu.Lock()
-	gateway.cmd = &exec.Cmd{Process: process}
-	gateway.bootDefaultModel = cfg.ModelList[0].ModelName
-	gateway.bootConfigSignature = bootSignature
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = &exec.Cmd{Process: process}
+	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
+	h.gateway.bootConfigSignature = bootSignature
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -1523,7 +1542,7 @@ func TestGatewayStatusNoRestartRequiredForNonSensitiveChanges(t *testing.T) {
 		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return mockGatewayHealthResponse(http.StatusOK, os.Getpid()), nil
 	}
 
@@ -1567,12 +1586,12 @@ func TestGatewayStatusNoRestartRequiredWhenNotRunning(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	gateway.mu.Lock()
-	gateway.cmd = nil
-	gateway.bootDefaultModel = ""
-	gateway.bootConfigSignature = ""
-	setGatewayRuntimeStatusLocked("stopped")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = nil
+	h.gateway.bootDefaultModel = ""
+	h.gateway.bootConfigSignature = ""
+	h.setGatewayRuntimeStatusLocked("stopped")
+	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
 	if err != nil {
@@ -1583,7 +1602,7 @@ func TestGatewayStatusNoRestartRequiredWhenNotRunning(t *testing.T) {
 		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return nil, errors.New("no gateway running")
 	}
 
@@ -1624,14 +1643,14 @@ func TestGatewayStatusReturnsErrorAfterStartupWindowExpires(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	gateway.mu.Lock()
-	gateway.cmd = cmd
-	gateway.bootDefaultModel = "existing-model"
-	setGatewayRuntimeStatusLocked("starting")
-	gateway.startupDeadline = time.Now().Add(-time.Second)
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = cmd
+	h.gateway.bootDefaultModel = "existing-model"
+	h.setGatewayRuntimeStatusLocked("starting")
+	h.gateway.startupDeadline = time.Now().Add(-time.Second)
+	h.gateway.mu.Unlock()
 
-	gatewayHealthGet = func(string, time.Duration) (*http.Response, error) {
+	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
 		return nil, errors.New("probe failed")
 	}
 
@@ -1656,19 +1675,18 @@ func TestGatewayStatusReturnsErrorAfterStartupWindowExpires(t *testing.T) {
 func TestGatewayStatusReturnsRestartingDuringRestartGap(t *testing.T) {
 	resetGatewayTestState(t)
 
-	// Mock health check to return error, so it won't override our "restarting" status
-	gatewayHealthGet = func(url string, timeout time.Duration) (*http.Response, error) {
-		return nil, errors.New("mock health check error")
-	}
-
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
+	// Mock health check to return error, so it won't override our "restarting" status
+	h.gateway.healthGet = func(url string, timeout time.Duration) (*http.Response, error) {
+		return nil, errors.New("mock health check error")
+	}
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	gateway.mu.Lock()
-	setGatewayRuntimeStatusLocked("restarting")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.setGatewayRuntimeStatusLocked("restarting")
+	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/gateway/status", nil)
@@ -1705,12 +1723,12 @@ func TestGatewayRestartKeepsRunningProcessWhenPreconditionsFail(t *testing.T) {
 
 	cmd := startLongRunningProcess(t)
 	t.Cleanup(func() {
-		gateway.mu.Lock()
-		if gateway.cmd == cmd {
-			gateway.cmd = nil
-			gateway.bootDefaultModel = ""
+		h.gateway.mu.Lock()
+		if h.gateway.cmd == cmd {
+			h.gateway.cmd = nil
+			h.gateway.bootDefaultModel = ""
 		}
-		gateway.mu.Unlock()
+		h.gateway.mu.Unlock()
 
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
@@ -1718,10 +1736,10 @@ func TestGatewayRestartKeepsRunningProcessWhenPreconditionsFail(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	gateway.mu.Lock()
-	gateway.cmd = cmd
-	gateway.bootDefaultModel = "existing-model"
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = cmd
+	h.gateway.bootDefaultModel = "existing-model"
+	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/restart", nil)
@@ -1731,9 +1749,9 @@ func TestGatewayRestartKeepsRunningProcessWhenPreconditionsFail(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
 
-	gateway.mu.Lock()
-	stillRunning := gateway.cmd == cmd && isCmdProcessAliveLocked(cmd)
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	stillRunning := h.gateway.cmd == cmd && h.gateway.processAlive(cmd)
+	h.gateway.mu.Unlock()
 
 	if !stillRunning {
 		t.Fatalf("gateway process was stopped when restart preconditions failed")
@@ -1758,12 +1776,12 @@ func TestGatewayRestartKeepsOldProcessWhenItDoesNotExitInTime(t *testing.T) {
 
 	cmd := startIgnoringTermProcess(t)
 	t.Cleanup(func() {
-		gateway.mu.Lock()
-		if gateway.cmd == cmd {
-			gateway.cmd = nil
-			gateway.bootDefaultModel = ""
+		h.gateway.mu.Lock()
+		if h.gateway.cmd == cmd {
+			h.gateway.cmd = nil
+			h.gateway.bootDefaultModel = ""
 		}
-		gateway.mu.Unlock()
+		h.gateway.mu.Unlock()
 
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
@@ -1771,15 +1789,15 @@ func TestGatewayRestartKeepsOldProcessWhenItDoesNotExitInTime(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	gatewayRestartGracePeriod = 150 * time.Millisecond
-	gatewayRestartForceKillWindow = 150 * time.Millisecond
-	gatewayRestartPollInterval = 10 * time.Millisecond
+	h.gateway.restartGracePeriod = 150 * time.Millisecond
+	h.gateway.restartKillWindow = 150 * time.Millisecond
+	h.gateway.restartPollInterval = 10 * time.Millisecond
 
-	gateway.mu.Lock()
-	gateway.cmd = cmd
-	gateway.bootDefaultModel = "existing-model"
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.cmd = cmd
+	h.gateway.bootDefaultModel = "existing-model"
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/gateway/restart", nil)
@@ -1789,10 +1807,10 @@ func TestGatewayRestartKeepsOldProcessWhenItDoesNotExitInTime(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 
-	gateway.mu.Lock()
-	stillRunning := gateway.cmd == cmd && isCmdProcessAliveLocked(cmd)
-	status := gateway.runtimeStatus
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	stillRunning := h.gateway.cmd == cmd && h.gateway.processAlive(cmd)
+	status := h.gateway.runtimeStatus
+	h.gateway.mu.Unlock()
 
 	if !stillRunning {
 		t.Fatalf("gateway process was replaced before the old process exited")
@@ -1804,11 +1822,6 @@ func TestGatewayRestartKeepsOldProcessWhenItDoesNotExitInTime(t *testing.T) {
 
 func TestGatewayRestartReturnsErrorStatusWhenReplacementFailsToStart(t *testing.T) {
 	resetGatewayTestState(t)
-
-	// Mock health check to return error, so it won't override our "error" status
-	gatewayHealthGet = func(url string, timeout time.Duration) (*http.Response, error) {
-		return nil, errors.New("mock health check error")
-	}
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
@@ -1826,6 +1839,10 @@ func TestGatewayRestartReturnsErrorStatusWhenReplacementFailsToStart(t *testing.
 	t.Setenv("MINTCLAW_BINARY", invalidBinaryPath)
 
 	h := NewHandler(configPath)
+	// Mock health check to return error, so it won't override our "error" status
+	h.gateway.healthGet = func(url string, timeout time.Duration) (*http.Response, error) {
+		return nil, errors.New("mock health check error")
+	}
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -1891,10 +1908,10 @@ func TestGatewayLogsReturnsIncrementalHistory(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	gateway.logs.Clear()
-	gateway.logs.Append("first line")
-	gateway.logs.Append("second line")
-	runID := gateway.logs.RunID()
+	h.gateway.logs.Clear()
+	h.gateway.logs.Append("first line")
+	h.gateway.logs.Append("second line")
+	runID := h.gateway.logs.RunID()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(
@@ -1934,10 +1951,10 @@ func TestGatewayClearLogsResetsBufferedHistory(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	gateway.logs.Clear()
-	gateway.logs.Append("first line")
-	gateway.logs.Append("second line")
-	previousRunID := gateway.logs.RunID()
+	h.gateway.logs.Clear()
+	h.gateway.logs.Append("first line")
+	h.gateway.logs.Append("second line")
+	previousRunID := h.gateway.logs.RunID()
 
 	clearRec := httptest.NewRecorder()
 	clearReq := httptest.NewRequest(http.MethodPost, "/api/gateway/logs/clear", nil)

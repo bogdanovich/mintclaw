@@ -7,43 +7,34 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"runtime"
 	"testing"
 )
 
-func setupVersionTestIsolation(t *testing.T) {
+func setGatewayVersionState(t *testing.T, h *Handler, pid int, alive *bool) {
 	t.Helper()
-
-	originalGatewayState := currentGatewayVersionState
-	originalFinder := findMintClawBinaryForInfo
-	originalRunner := runMintClawVersionOutput
-	originalFallback := launcherBuildInfoForVersion
-	t.Cleanup(func() {
-		currentGatewayVersionState = originalGatewayState
-		findMintClawBinaryForInfo = originalFinder
-		runMintClawVersionOutput = originalRunner
-		launcherBuildInfoForVersion = originalFallback
-		versionInfoCache.resetForTest()
-	})
-
-	currentGatewayVersionState = func() (int, bool) { return 0, false }
-	versionInfoCache.resetForTest()
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("FindProcess(%d) error = %v", pid, err)
+	}
+	h.gateway.cmd = &exec.Cmd{Process: process}
+	h.gateway.processAlive = func(*exec.Cmd) bool { return *alive }
 }
 
 func TestGetSystemVersionUsesMintClawBinaryInfo(t *testing.T) {
-	setupVersionTestIsolation(t)
+	h := NewHandler("")
 
-	launcherBuildInfoForVersion = func() systemVersionResponse {
+	h.gateway.fallbackVersion = func() systemVersionResponse {
 		return systemVersionResponse{Version: "fallback", GoVersion: "go-fallback"}
 	}
 
-	findMintClawBinaryForInfo = func() string { return "mintclaw" }
-	runMintClawVersionOutput = func(_ context.Context, _ string) (string, error) {
+	h.gateway.findBinary = func() string { return "mintclaw" }
+	h.gateway.runVersionOutput = func(_ context.Context, _ string) (string, error) {
 		return "mintclaw v1.2.3 (git: deadbeef)\nBuild: 2026-03-27T12:34:56Z\nGo: go1.25.8\n", nil
 	}
 
-	h := NewHandler("")
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -75,7 +66,7 @@ func TestGetSystemVersionUsesMintClawBinaryInfo(t *testing.T) {
 }
 
 func TestGetSystemVersionFallsBackToLauncherInfoWhenCommandFails(t *testing.T) {
-	setupVersionTestIsolation(t)
+	h := NewHandler("")
 
 	expected := systemVersionResponse{
 		Version:   "v9.9.9",
@@ -83,14 +74,13 @@ func TestGetSystemVersionFallsBackToLauncherInfoWhenCommandFails(t *testing.T) {
 		BuildTime: "2026-03-27T10:43:34+0000",
 		GoVersion: "go1.25.8",
 	}
-	launcherBuildInfoForVersion = func() systemVersionResponse { return expected }
+	h.gateway.fallbackVersion = func() systemVersionResponse { return expected }
 
-	findMintClawBinaryForInfo = func() string { return "mintclaw" }
-	runMintClawVersionOutput = func(_ context.Context, _ string) (string, error) {
+	h.gateway.findBinary = func() string { return "mintclaw" }
+	h.gateway.runVersionOutput = func(_ context.Context, _ string) (string, error) {
 		return "", errors.New("binary unavailable")
 	}
 
-	h := NewHandler("")
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
@@ -122,8 +112,6 @@ func TestGetSystemVersionFallsBackToLauncherInfoWhenCommandFails(t *testing.T) {
 }
 
 func TestParseMintClawVersionOutput(t *testing.T) {
-	setupVersionTestIsolation(t)
-
 	raw := "mintclaw 18ec263 (git: 18ec2631)\nBuild: 2026-03-27T10:43:34+0000\nGo: go1.25.8\n"
 	got, ok := parseMintClawVersionOutput(raw)
 	if !ok {
@@ -144,8 +132,6 @@ func TestParseMintClawVersionOutput(t *testing.T) {
 }
 
 func TestParseMintClawVersionOutputIgnoresUsageLine(t *testing.T) {
-	setupVersionTestIsolation(t)
-
 	raw := "Usage: mintclaw version [flags]\n"
 	got, ok := parseMintClawVersionOutput(raw)
 	if ok {
@@ -154,8 +140,6 @@ func TestParseMintClawVersionOutputIgnoresUsageLine(t *testing.T) {
 }
 
 func TestParseMintClawVersionOutputAcceptsLetterOnlyHashVersion(t *testing.T) {
-	setupVersionTestIsolation(t)
-
 	raw := "mintclaw abcdefa (git: abcdefabcdefabcdefabcdefabcdefabcdefabcd)\n"
 	got, ok := parseMintClawVersionOutput(raw)
 	if !ok {
@@ -170,18 +154,17 @@ func TestParseMintClawVersionOutputAcceptsLetterOnlyHashVersion(t *testing.T) {
 }
 
 func TestResolveSystemVersionInfoFallsBackRuntimeGoVersion(t *testing.T) {
-	setupVersionTestIsolation(t)
+	h := NewHandler("")
 
-	launcherBuildInfoForVersion = func() systemVersionResponse {
+	h.gateway.fallbackVersion = func() systemVersionResponse {
 		return systemVersionResponse{Version: "dev", GoVersion: ""}
 	}
 
-	findMintClawBinaryForInfo = func() string { return "mintclaw" }
-	runMintClawVersionOutput = func(_ context.Context, _ string) (string, error) {
+	h.gateway.findBinary = func() string { return "mintclaw" }
+	h.gateway.runVersionOutput = func(_ context.Context, _ string) (string, error) {
 		return "mintclaw v1.0.0\n", nil
 	}
 
-	h := NewHandler("")
 	got := h.resolveSystemVersionInfo(context.Background())
 	if got.GoVersion != runtime.Version() {
 		t.Fatalf("go_version = %q, want runtime version %q", got.GoVersion, runtime.Version())
@@ -189,23 +172,23 @@ func TestResolveSystemVersionInfoFallsBackRuntimeGoVersion(t *testing.T) {
 }
 
 func TestResolveSystemVersionInfoCachesWhileGatewayAlive(t *testing.T) {
-	setupVersionTestIsolation(t)
+	h := NewHandler("")
 
-	launcherBuildInfoForVersion = func() systemVersionResponse {
+	h.gateway.fallbackVersion = func() systemVersionResponse {
 		return systemVersionResponse{Version: "dev", GoVersion: "go-fallback"}
 	}
-	findMintClawBinaryForInfo = func() string { return "mintclaw" }
+	h.gateway.findBinary = func() string { return "mintclaw" }
 
 	pid := 4321
-	currentGatewayVersionState = func() (int, bool) { return pid, true }
+	alive := true
+	setGatewayVersionState(t, h, pid, &alive)
 
 	runCount := 0
-	runMintClawVersionOutput = func(_ context.Context, _ string) (string, error) {
+	h.gateway.runVersionOutput = func(_ context.Context, _ string) (string, error) {
 		runCount++
 		return fmt.Sprintf("mintclaw v1.2.%d\n", runCount), nil
 	}
 
-	h := NewHandler("")
 	first := h.resolveSystemVersionInfo(context.Background())
 	second := h.resolveSystemVersionInfo(context.Background())
 
@@ -221,29 +204,23 @@ func TestResolveSystemVersionInfoCachesWhileGatewayAlive(t *testing.T) {
 }
 
 func TestResolveSystemVersionInfoInvalidatesCacheWhenGatewayStops(t *testing.T) {
-	setupVersionTestIsolation(t)
+	h := NewHandler("")
 
-	launcherBuildInfoForVersion = func() systemVersionResponse {
+	h.gateway.fallbackVersion = func() systemVersionResponse {
 		return systemVersionResponse{Version: "dev", GoVersion: "go-fallback"}
 	}
-	findMintClawBinaryForInfo = func() string { return "mintclaw" }
+	h.gateway.findBinary = func() string { return "mintclaw" }
 
 	alive := true
 	pid := 9876
-	currentGatewayVersionState = func() (int, bool) {
-		if !alive {
-			return 0, false
-		}
-		return pid, true
-	}
+	setGatewayVersionState(t, h, pid, &alive)
 
 	runCount := 0
-	runMintClawVersionOutput = func(_ context.Context, _ string) (string, error) {
+	h.gateway.runVersionOutput = func(_ context.Context, _ string) (string, error) {
 		runCount++
 		return fmt.Sprintf("mintclaw v2.0.%d\n", runCount), nil
 	}
 
-	h := NewHandler("")
 	first := h.resolveSystemVersionInfo(context.Background())
 	second := h.resolveSystemVersionInfo(context.Background())
 
@@ -265,15 +242,15 @@ func TestResolveSystemVersionInfoInvalidatesCacheWhenGatewayStops(t *testing.T) 
 }
 
 func TestResolveSystemVersionInfoSkipsCommandWhenContextCanceled(t *testing.T) {
-	setupVersionTestIsolation(t)
+	h := NewHandler("")
 
-	launcherBuildInfoForVersion = func() systemVersionResponse {
+	h.gateway.fallbackVersion = func() systemVersionResponse {
 		return systemVersionResponse{Version: "v3.0.0", GoVersion: "go-fallback"}
 	}
-	findMintClawBinaryForInfo = func() string { return "mintclaw" }
+	h.gateway.findBinary = func() string { return "mintclaw" }
 
 	runCount := 0
-	runMintClawVersionOutput = func(_ context.Context, _ string) (string, error) {
+	h.gateway.runVersionOutput = func(_ context.Context, _ string) (string, error) {
 		runCount++
 		return "mintclaw v9.9.9\n", nil
 	}
@@ -281,7 +258,6 @@ func TestResolveSystemVersionInfoSkipsCommandWhenContextCanceled(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	h := NewHandler("")
 	got := h.resolveSystemVersionInfo(canceledCtx)
 
 	if runCount != 0 {
@@ -293,24 +269,19 @@ func TestResolveSystemVersionInfoSkipsCommandWhenContextCanceled(t *testing.T) {
 }
 
 func TestResolveGatewayBinaryForVersionInfoPrefersGatewayCommandPath(t *testing.T) {
-	setupVersionTestIsolation(t)
+	h := NewHandler("")
 
-	originalFinder := findMintClawBinaryForInfo
+	h.gateway.mu.Lock()
+	originalCmd := h.gateway.cmd
+	h.gateway.cmd = &exec.Cmd{Path: "/tmp/mintclaw-from-gateway"}
+	h.gateway.mu.Unlock()
 	t.Cleanup(func() {
-		findMintClawBinaryForInfo = originalFinder
+		h.gateway.mu.Lock()
+		h.gateway.cmd = originalCmd
+		h.gateway.mu.Unlock()
 	})
 
-	gateway.mu.Lock()
-	originalCmd := gateway.cmd
-	gateway.cmd = &exec.Cmd{Path: "/tmp/mintclaw-from-gateway"}
-	gateway.mu.Unlock()
-	t.Cleanup(func() {
-		gateway.mu.Lock()
-		gateway.cmd = originalCmd
-		gateway.mu.Unlock()
-	})
-
-	got := resolveGatewayBinaryForVersionInfo()
+	got := h.resolveGatewayBinaryForVersionInfo()
 	if got != "/tmp/mintclaw-from-gateway" {
 		t.Fatalf("exec path = %q, want %q", got, "/tmp/mintclaw-from-gateway")
 	}

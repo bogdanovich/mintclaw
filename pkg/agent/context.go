@@ -632,6 +632,16 @@ func (cb *ContextBuilder) RefreshCodingWorkspace(
 	return cb.codingWorkspace.PendingUpdate(ctx)
 }
 
+// RefreshCodingWorkspaceSnapshot refreshes prompt workspace state without
+// consuming the next frontend observation. Callers that may be canceled before
+// committing their own projection must leave that observation pending.
+func (cb *ContextBuilder) RefreshCodingWorkspaceSnapshot(ctx context.Context) codingworkspace.Snapshot {
+	if cb == nil || cb.codingWorkspace == nil {
+		return codingworkspace.Snapshot{}
+	}
+	return cb.codingWorkspace.RefreshPending(ctx)
+}
+
 func (cb *ContextBuilder) formatCodingRuntimeContext(codingContext CodingPromptContext) string {
 	if cb == nil {
 		return formatCodingThreadContext(CodingPromptContext{}, codingContext)

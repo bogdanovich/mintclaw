@@ -208,6 +208,37 @@ func TestRepositoryProvenanceRefreshFailureDoesNotClaimStaleness(t *testing.T) {
 	}
 }
 
+func TestBaseDiffPostCaptureDetectsContentChangeWithStableSnapshotIdentity(t *testing.T) {
+	root := initGitRepository(t)
+	base := strings.TrimSpace(runGitTestOutput(t, root, "rev-parse", "HEAD"))
+	baseline, err := NewRepository(root, root, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
+		ProjectKey: "project-key", CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("alpha\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := NewRepositoryWithBaseline(root, root, Limits{}, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := repository.diff(t.Context(), DiffTarget{Kind: DiffTargetBase, Ref: base})
+	before := captureSnapshot(t.Context(), root, root, Limits{}.normalized())
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("bravo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after := captureSnapshot(t.Context(), root, root, Limits{}.normalized())
+	if before.Identity() != after.Identity() {
+		t.Fatalf("test fixture changed snapshot identity = %q / %q", before.Identity(), after.Identity())
+	}
+	repository.attachDiffProvenance(t.Context(), &diff)
+	if !diff.Stale || diff.Provenance == nil || !diff.Provenance.Indeterminate {
+		t.Fatalf("base diff content transition was not marked stale = %#v", diff)
+	}
+}
+
 func TestRepositoryDiffUnbornMatchesCurrentWorktree(t *testing.T) {
 	root := t.TempDir()
 	runGitTest(t, root, "init", "-b", "main")
@@ -347,7 +378,8 @@ func TestRepositoryDiffSupportsLocalBaseAndCommitTargets(t *testing.T) {
 	}
 	baseResult := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetBase, Ref: base})
 	if baseResult.ResolvedRevision != base || baseResult.MergeBase != base || baseResult.UnavailableReason != "" ||
-		baseResult.EvidenceGeneration != "" || baseResult.BaselineID != "" || baseResult.Provenance != nil ||
+		baseResult.EvidenceGeneration == "" || baseResult.BaselineID != baseline.BaselineID ||
+		baseResult.Provenance == nil ||
 		!hasDiffLine(requireDiffFile(t, baseResult, "tracked.txt"), "addition", 3, "working") {
 		t.Fatalf("Diff(base) = %#v", baseResult)
 	}

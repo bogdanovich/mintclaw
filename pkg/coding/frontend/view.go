@@ -260,14 +260,16 @@ type ThreadSnapshot struct {
 	Items    []PresentationItem `json:"items,omitempty"`
 	// Entries and Tools are compatibility projections derived from Items while
 	// the existing TUI migrates to semantic cells.
-	Entries         []TranscriptEntry         `json:"entries,omitempty"`
-	Tools           []ToolState               `json:"tools,omitempty"`
-	ChangedFiles    []ChangedFile             `json:"changed_files,omitempty"`
-	ContextUsage    ContextUsage              `json:"context_usage,omitempty"`
-	LastCompaction  *CompactionState          `json:"last_compaction,omitempty"`
-	Workspace       *codingworkspace.Snapshot `json:"workspace,omitempty"`
-	Status          string                    `json:"status,omitempty"`
-	HasOlderEntries bool                      `json:"has_older_entries,omitempty"`
+	Entries          []TranscriptEntry             `json:"entries,omitempty"`
+	Tools            []ToolState                   `json:"tools,omitempty"`
+	ChangedFiles     []ChangedFile                 `json:"changed_files,omitempty"`
+	ContextUsage     ContextUsage                  `json:"context_usage,omitempty"`
+	LastCompaction   *CompactionState              `json:"last_compaction,omitempty"`
+	Workspace        *codingworkspace.Snapshot     `json:"workspace,omitempty"`
+	RepositoryStatus *codingworkspace.StatusResult `json:"repository_status,omitempty"`
+	RepositoryDiff   *codingworkspace.DiffResult   `json:"repository_diff,omitempty"`
+	Status           string                        `json:"status,omitempty"`
+	HasOlderEntries  bool                          `json:"has_older_entries,omitempty"`
 }
 
 // ViewSource is the in-process read side of the frontend controller boundary.
@@ -364,4 +366,11 @@ type TranscriptPager interface {
 // explicitly observe branch and worktree changes made outside the active turn.
 type WorkspaceRefresher interface {
 	RefreshWorkspace(context.Context) error
+}
+
+// RepositoryEvidenceReader exposes the same passive typed evidence used by
+// coding model tools to non-model frontends.
+type RepositoryEvidenceReader interface {
+	RepositoryStatus(context.Context) (codingworkspace.StatusResult, error)
+	RepositoryDiff(context.Context, codingworkspace.DiffTarget) (codingworkspace.DiffResult, error)
 }
