@@ -12,6 +12,7 @@
     "build": "tsc -b && vite build",
     "build:backend": "tsc -b && vite build --outDir ../backend/dist --emptyOutDir && node ./scripts/ensure-backend-gitkeep.cjs",
     "lint": "eslint .",
+    "test": "vitest run",
     "preview": "vite preview",
     "format": "prettier --check .",
     "check": "prettier --write . && eslint --fix"
@@ -68,6 +69,7 @@
     "prettier-plugin-tailwindcss": "^0.8.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.65.0",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vitest": "^5.0.0"
   }
 }

@@ -10,11 +10,11 @@ import i18n from "i18next"
 import LanguageDetector from "i18next-browser-languagedetector"
 import { initReactI18next } from "react-i18next"
 
+import bnIn from "./locales/bn-in.json"
+import cs from "./locales/cs.json"
 import en from "./locales/en.json"
 import ptBr from "./locales/pt-br.json"
-import bnIn from "./locales/bn-in.json"
 import zh from "./locales/zh.json"
-import cs from "./locales/cs.json"
 
 dayjs.extend(relativeTime)
 dayjs.extend(localizedFormat)
