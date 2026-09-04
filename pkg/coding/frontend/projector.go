@@ -729,8 +729,51 @@ func (p *Projector) ContextUsage(used, limit int) {
 
 func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) {
 	p.mutate(func(state *ThreadSnapshot) {
+		invalidateMutableRepositoryEvidence(state)
 		workspace := cloneWorkspaceSnapshot(snapshot)
 		state.Workspace = &workspace
+	})
+}
+
+func invalidateMutableRepositoryEvidence(state *ThreadSnapshot) {
+	state.RepositoryStatus = nil
+	if state.RepositoryDiff != nil && state.RepositoryDiff.Target.Kind != codingworkspace.DiffTargetCommit {
+		state.RepositoryDiff = nil
+	}
+}
+
+func (p *Projector) RepositoryStatusUpdated(status codingworkspace.StatusResult) {
+	p.mutate(func(state *ThreadSnapshot) {
+		if state.RepositoryDiff != nil &&
+			state.RepositoryDiff.Target.Kind != codingworkspace.DiffTargetCommit &&
+			!mutableDiffMatchesStatus(*state.RepositoryDiff, status) {
+			state.RepositoryDiff = nil
+		}
+		copy := cloneRepositoryStatus(status)
+		state.RepositoryStatus = &copy
+		workspace := cloneWorkspaceSnapshot(status.Snapshot)
+		state.Workspace = &workspace
+	})
+}
+
+func mutableDiffMatchesStatus(
+	diff codingworkspace.DiffResult,
+	status codingworkspace.StatusResult,
+) bool {
+	if diff.Stale || status.Stale || diff.Generation == "" || diff.Generation != status.Snapshot.Identity() {
+		return false
+	}
+	return diff.EvidenceGeneration != "" &&
+		status.Provenance != nil &&
+		!status.Provenance.Indeterminate &&
+		status.Provenance.CurrentEvidenceGeneration != "" &&
+		status.Provenance.CurrentEvidenceGeneration == diff.EvidenceGeneration
+}
+
+func (p *Projector) RepositoryDiffUpdated(diff codingworkspace.DiffResult) {
+	p.mutate(func(state *ThreadSnapshot) {
+		copy := cloneRepositoryDiff(diff)
+		state.RepositoryDiff = &copy
 	})
 }
 
@@ -1094,6 +1137,14 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 		workspace := cloneWorkspaceSnapshot(*snapshot.Workspace)
 		snapshot.Workspace = &workspace
 	}
+	if snapshot.RepositoryStatus != nil {
+		status := cloneRepositoryStatus(*snapshot.RepositoryStatus)
+		snapshot.RepositoryStatus = &status
+	}
+	if snapshot.RepositoryDiff != nil {
+		diff := cloneRepositoryDiff(*snapshot.RepositoryDiff)
+		snapshot.RepositoryDiff = &diff
+	}
 	return snapshot
 }
 
@@ -1132,4 +1183,12 @@ func clonePlan(plan PlanState) PlanState {
 func cloneWorkspaceSnapshot(snapshot codingworkspace.Snapshot) codingworkspace.Snapshot {
 	snapshot.ChangedPaths = slices.Clone(snapshot.ChangedPaths)
 	return snapshot
+}
+
+func cloneRepositoryStatus(status codingworkspace.StatusResult) codingworkspace.StatusResult {
+	return status.Clone()
+}
+
+func cloneRepositoryDiff(diff codingworkspace.DiffResult) codingworkspace.DiffResult {
+	return diff.Clone()
 }

@@ -148,6 +148,15 @@ func TestCodingWorkspaceSnapshotRefreshesPromptAndEmitsFrontendObservation(t *te
 	if _, changed = builder.RefreshCodingWorkspace(t.Context()); changed {
 		t.Fatal("unchanged explicit workspace refresh emitted a duplicate snapshot")
 	}
+	runCodingWorkspaceGit(t, project, "switch", "-c", "pending-refresh-branch")
+	refreshed = builder.RefreshCodingWorkspaceSnapshot(t.Context())
+	if refreshed.Git.Branch != "pending-refresh-branch" {
+		t.Fatalf("non-consuming workspace refresh = %+v", refreshed)
+	}
+	pending, changed := builder.pendingCodingWorkspaceUpdate(t.Context())
+	if !changed || pending.Git.Branch != "pending-refresh-branch" {
+		t.Fatalf("pending observation after non-consuming refresh = changed:%v snapshot:%+v", changed, pending)
+	}
 }
 
 func writeCodingWorkspaceTestFile(t *testing.T, path, content string) {

@@ -116,12 +116,14 @@ func newAgentRegistryWithCodingRuntimeProfile(
 		agentCfg := &agentConfigs[index]
 		agentID := routing.NormalizeAgentID(agentCfg.ID)
 		layout, _ := profile.AgentLayout(agentID)
+		repository, _ := profile.AgentRepository(agentID)
 		instance, err := newCodingAgentInstance(
 			agentCfg,
 			&cfg.Agents.Defaults,
 			cfg,
 			provider,
 			layout,
+			repository,
 			profile.storeFactory,
 		)
 		if err != nil {

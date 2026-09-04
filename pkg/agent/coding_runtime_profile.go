@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/seahorse"
@@ -21,6 +22,7 @@ import (
 // before registry construction.
 type CodingRuntimeProfile struct {
 	agentLayouts map[string]CodingRuntimeLayout
+	repositories map[string]*codingworkspace.Repository
 	storeFactory CodingRuntimeStoreFactory
 }
 
@@ -52,8 +54,9 @@ func (defaultCodingRuntimeStoreFactory) NewSeahorseEngine(
 // CodingRuntimeBinding binds one configured runtime agent to a coding thread.
 // The configured agent ID and thread ID are independent.
 type CodingRuntimeBinding struct {
-	AgentID string
-	Layout  CodingRuntimeLayout
+	AgentID    string
+	Layout     CodingRuntimeLayout
+	Repository *codingworkspace.Repository
 }
 
 // NewCodingRuntimeProfile validates and indexes bindings without creating filesystem state.
@@ -73,6 +76,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 	}
 	profile := CodingRuntimeProfile{
 		agentLayouts: make(map[string]CodingRuntimeLayout, len(bindings)),
+		repositories: make(map[string]*codingworkspace.Repository, len(bindings)),
 		storeFactory: storeFactory,
 	}
 	threadAgents := make(map[string]string, len(bindings))
@@ -94,6 +98,15 @@ func NewCodingRuntimeProfileWithStoreFactory(
 			)
 		}
 		profile.agentLayouts[agentID] = layout
+		repository := binding.Repository
+		if repository == nil {
+			repository = codingworkspace.NewRepository(
+				layout.ExecutionRoot(),
+				layout.ExecutionRoot(),
+				codingworkspace.Limits{},
+			)
+		}
+		profile.repositories[agentID] = repository
 		threadAgents[layout.ThreadID()] = agentID
 	}
 	if len(profile.agentLayouts) == 0 {
@@ -193,6 +206,11 @@ func runtimeDependencyIsNil(dependency any) bool {
 func (p CodingRuntimeProfile) AgentLayout(agentID string) (CodingRuntimeLayout, bool) {
 	layout, ok := p.agentLayouts[routing.NormalizeAgentID(agentID)]
 	return layout, ok
+}
+
+func (p CodingRuntimeProfile) AgentRepository(agentID string) (*codingworkspace.Repository, bool) {
+	repository, ok := p.repositories[routing.NormalizeAgentID(agentID)]
+	return repository, ok && repository != nil
 }
 
 func (al *AgentLoop) codingLayoutForWorkspace(workspace string) (CodingRuntimeLayout, bool) {

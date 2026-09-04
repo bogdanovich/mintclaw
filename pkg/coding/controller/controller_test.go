@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 type blockingRuntime struct {
@@ -33,6 +34,157 @@ type workspaceRefreshRuntime struct {
 	*blockingRuntime
 	refreshes  int
 	refreshErr error
+}
+
+type blockingWorkspaceRefreshRuntime struct {
+	*blockingRuntime
+	statusStarted  chan struct{}
+	statusRelease  chan struct{}
+	refreshStarted chan struct{}
+	refreshRelease chan struct{}
+}
+
+func (runtime *blockingWorkspaceRefreshRuntime) RepositoryStatus(
+	ctx context.Context,
+) (codingworkspace.StatusResult, error) {
+	if runtime.statusStarted == nil {
+		return codingworkspace.StatusResult{}, nil
+	}
+	runtime.statusStarted <- struct{}{}
+	select {
+	case <-runtime.statusRelease:
+		return codingworkspace.StatusResult{}, nil
+	case <-ctx.Done():
+		return codingworkspace.StatusResult{}, ctx.Err()
+	}
+}
+
+func (*blockingWorkspaceRefreshRuntime) RepositoryDiff(
+	context.Context,
+	codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	return codingworkspace.DiffResult{}, nil
+}
+
+func (runtime *blockingWorkspaceRefreshRuntime) RefreshWorkspaceEvidence(
+	ctx context.Context,
+) (codingworkspace.StatusResult, error) {
+	runtime.refreshStarted <- struct{}{}
+	select {
+	case <-runtime.refreshRelease:
+		return codingworkspace.StatusResult{SchemaVersion: codingworkspace.RepositoryStatusSchemaV1}, nil
+	case <-ctx.Done():
+		return codingworkspace.StatusResult{}, ctx.Err()
+	}
+}
+
+type repositoryEvidenceRuntime struct {
+	*blockingRuntime
+	target codingworkspace.DiffTarget
+}
+
+type blockingRepositoryEvidenceRuntime struct {
+	*blockingRuntime
+	statusStarted chan struct{}
+}
+
+type orderedRepositoryEvidenceRuntime struct {
+	*blockingRuntime
+	mu            sync.Mutex
+	statusCalls   int
+	statusStarted chan int
+	firstRelease  chan struct{}
+}
+
+func (runtime *orderedRepositoryEvidenceRuntime) RepositoryStatus(
+	context.Context,
+) (codingworkspace.StatusResult, error) {
+	runtime.mu.Lock()
+	call := runtime.statusCalls
+	runtime.statusCalls++
+	runtime.mu.Unlock()
+	runtime.statusStarted <- call
+	if call == 0 {
+		<-runtime.firstRelease
+	}
+	root := "/new"
+	if call == 0 {
+		root = "/old"
+	}
+	return codingworkspace.StatusResult{
+		SchemaVersion: codingworkspace.RepositoryStatusSchemaV1,
+		Snapshot:      codingworkspace.Snapshot{ProjectRoot: root},
+	}, nil
+}
+
+func (*orderedRepositoryEvidenceRuntime) RepositoryDiff(
+	context.Context,
+	codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	return codingworkspace.DiffResult{}, nil
+}
+
+type commitBoundaryRepositoryRuntime struct {
+	*blockingRuntime
+	statusStarted    chan struct{}
+	statusRelease    chan struct{}
+	statusReturned   chan struct{}
+	interruptStarted chan struct{}
+	interruptRelease chan struct{}
+}
+
+func (runtime *commitBoundaryRepositoryRuntime) RepositoryStatus(
+	context.Context,
+) (codingworkspace.StatusResult, error) {
+	close(runtime.statusStarted)
+	<-runtime.statusRelease
+	close(runtime.statusReturned)
+	return codingworkspace.StatusResult{
+		SchemaVersion: codingworkspace.RepositoryStatusSchemaV1,
+		Snapshot:      codingworkspace.Snapshot{ProjectRoot: "/canceled"},
+	}, nil
+}
+
+func (*commitBoundaryRepositoryRuntime) RepositoryDiff(
+	context.Context,
+	codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	return codingworkspace.DiffResult{}, nil
+}
+
+func (runtime *commitBoundaryRepositoryRuntime) Interrupt(context.Context) error {
+	close(runtime.interruptStarted)
+	<-runtime.interruptRelease
+	return nil
+}
+
+func (runtime *blockingRepositoryEvidenceRuntime) RepositoryStatus(
+	ctx context.Context,
+) (codingworkspace.StatusResult, error) {
+	runtime.statusStarted <- struct{}{}
+	<-ctx.Done()
+	return codingworkspace.StatusResult{SchemaVersion: codingworkspace.RepositoryStatusSchemaV1}, nil
+}
+
+func (*blockingRepositoryEvidenceRuntime) RepositoryDiff(
+	context.Context,
+	codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	return codingworkspace.DiffResult{}, nil
+}
+
+func (*repositoryEvidenceRuntime) RepositoryStatus(
+	context.Context,
+) (codingworkspace.StatusResult, error) {
+	return codingworkspace.StatusResult{SchemaVersion: codingworkspace.RepositoryStatusSchemaV1}, nil
+}
+
+func (runtime *repositoryEvidenceRuntime) RepositoryDiff(
+	_ context.Context,
+	target codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	runtime.target = target
+	return codingworkspace.DiffResult{SchemaVersion: codingworkspace.RepositoryDiffSchemaV1, Target: target}, nil
 }
 
 type lifecycleRuntime struct {
@@ -66,9 +218,11 @@ func (r *cancelCauseRuntime) RunTurn(ctx context.Context, input frontend.TurnInp
 	return errors.Join(context.Cause(ctx), r.joinedError)
 }
 
-func (r *workspaceRefreshRuntime) RefreshWorkspace(context.Context) error {
+func (r *workspaceRefreshRuntime) RefreshWorkspaceEvidence(
+	context.Context,
+) (codingworkspace.StatusResult, error) {
 	r.refreshes++
-	return r.refreshErr
+	return codingworkspace.StatusResult{SchemaVersion: codingworkspace.RepositoryStatusSchemaV1}, r.refreshErr
 }
 
 func (r *pagedRuntime) TranscriptPage(
@@ -465,6 +619,329 @@ func TestWorkspaceRefreshIsSerializedAndOptional(t *testing.T) {
 		t.Fatalf("unsupported refresh error = %v", err)
 	}
 	if err := unsupported.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkspaceRefreshExcludesTurnAndCompactionWhileActive(t *testing.T) {
+	runtime := &blockingWorkspaceRefreshRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		refreshStarted:  make(chan struct{}, 1),
+		refreshRelease:  make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	refreshErr := make(chan error, 1)
+	go func() { refreshErr <- controller.RefreshWorkspace(t.Context()) }()
+	<-runtime.refreshStarted
+	if err := controller.Submit(
+		t.Context(),
+		frontend.TurnInput{Text: "work"},
+	); !errors.Is(
+		err,
+		ErrWorkspaceRefreshActive,
+	) {
+		t.Fatalf("Submit() during workspace refresh error = %v", err)
+	}
+	if err := controller.Compact(t.Context()); !errors.Is(err, ErrWorkspaceRefreshActive) {
+		t.Fatalf("Compact() during workspace refresh error = %v", err)
+	}
+	close(runtime.refreshRelease)
+	if err := <-refreshErr; err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "after refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.HardCancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueuedWorkspaceRefreshExcludesLaterTurn(t *testing.T) {
+	runtime := &blockingWorkspaceRefreshRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		statusStarted:   make(chan struct{}, 1),
+		statusRelease:   make(chan struct{}),
+		refreshStarted:  make(chan struct{}, 1),
+		refreshRelease:  make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	statusErr := make(chan error, 1)
+	go func() {
+		_, err := controller.RepositoryStatus(t.Context())
+		statusErr <- err
+	}()
+	<-runtime.statusStarted
+	refreshReply := make(chan error, 1)
+	if err := controller.enqueue(t.Context(), command{
+		kind:  commandRefreshWorkspace,
+		ctx:   t.Context(),
+		reply: refreshReply,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Submit(
+		t.Context(),
+		frontend.TurnInput{Text: "work"},
+	); !errors.Is(
+		err,
+		ErrWorkspaceRefreshActive,
+	) {
+		t.Fatalf("Submit() with queued workspace refresh error = %v", err)
+	}
+	close(runtime.statusRelease)
+	if err := <-statusErr; err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.refreshStarted
+	if err := controller.Submit(
+		t.Context(),
+		frontend.TurnInput{Text: "still blocked"},
+	); !errors.Is(
+		err,
+		ErrWorkspaceRefreshActive,
+	) {
+		t.Fatalf("Submit() with active queued workspace refresh error = %v", err)
+	}
+	close(runtime.refreshRelease)
+	if err := <-refreshReply; err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCanceledQueuedWorkspaceRefreshStopsExcludingTurnsImmediately(t *testing.T) {
+	runtime := &blockingWorkspaceRefreshRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		statusStarted:   make(chan struct{}, 1),
+		statusRelease:   make(chan struct{}),
+		refreshStarted:  make(chan struct{}, 1),
+		refreshRelease:  make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	statusErr := make(chan error, 1)
+	go func() {
+		_, err := controller.RepositoryStatus(t.Context())
+		statusErr <- err
+	}()
+	<-runtime.statusStarted
+	refreshCtx, cancelRefresh := context.WithCancel(t.Context())
+	refreshReply := make(chan error, 1)
+	if err := controller.enqueue(t.Context(), command{
+		kind:  commandRefreshWorkspace,
+		ctx:   refreshCtx,
+		reply: refreshReply,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancelRefresh()
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "work"}); err != nil {
+		t.Fatalf("Submit() after queued refresh cancellation = %v", err)
+	}
+	<-runtime.runStarted
+	if err := <-refreshReply; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled queued refresh error = %v", err)
+	}
+	close(runtime.statusRelease)
+	if err := <-statusErr; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runtime.refreshStarted:
+		t.Fatal("canceled queued refresh was executed")
+	default:
+	}
+	if err := controller.HardCancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryEvidenceDelegatesTypedReadOnlyCapability(t *testing.T) {
+	runtime := &repositoryEvidenceRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	status, err := controller.RepositoryStatus(t.Context())
+	if err != nil || status.SchemaVersion != codingworkspace.RepositoryStatusSchemaV1 {
+		t.Fatalf("status = %#v / %v", status, err)
+	}
+	target := codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase, Ref: "main"}
+	diff, err := controller.RepositoryDiff(t.Context(), target)
+	if err != nil || diff.SchemaVersion != codingworkspace.RepositoryDiffSchemaV1 || runtime.target != target {
+		t.Fatalf("diff/target = %#v / %#v / %v", diff, runtime.target, err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.RepositoryStatus(t.Context()); !errors.Is(err, ErrClosed) {
+		t.Fatalf("repository status after close error = %v", err)
+	}
+
+	unsupported := newTestController(t, newBlockingRuntime())
+	if _, err := unsupported.RepositoryStatus(t.Context()); !errors.Is(err, frontend.ErrWorkspaceRefreshUnsupported) {
+		t.Fatalf("unsupported repository status error = %v", err)
+	}
+	if err := unsupported.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryEvidenceRunsOutsideActorAndCloseCancelsIt(t *testing.T) {
+	runtime := &blockingRepositoryEvidenceRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		statusStarted:   make(chan struct{}, 1),
+	}
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := codingworkspace.StatusResult{
+		SchemaVersion: codingworkspace.RepositoryStatusSchemaV1,
+		Snapshot:      codingworkspace.Snapshot{ProjectRoot: "/valid"},
+	}
+	projector.RepositoryStatusUpdated(valid)
+	controller, err := New(projector, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "work"}); err != nil {
+		t.Fatal(err)
+	}
+	statusErr := make(chan error, 1)
+	go func() {
+		_, statusErrValue := controller.RepositoryStatus(context.Background())
+		statusErr <- statusErrValue
+	}()
+	<-runtime.statusStarted
+	if err := controller.Interrupt(t.Context()); err != nil {
+		t.Fatalf("Interrupt() while repository read is active = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() with repository read = %v", err)
+	}
+	if err := <-statusErr; !errors.Is(err, context.Canceled) && !errors.Is(err, ErrClosed) {
+		t.Fatalf("RepositoryStatus() after Close() = %v", err)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.RepositoryStatus == nil || snapshot.RepositoryStatus.Snapshot.ProjectRoot != "/valid" {
+		t.Fatalf("canceled repository read replaced valid state = %#v", snapshot.RepositoryStatus)
+	}
+}
+
+func TestRepositoryEvidencePreservesAdmissionOrder(t *testing.T) {
+	runtime := &orderedRepositoryEvidenceRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		statusStarted:   make(chan int, 2),
+		firstRelease:    make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	results := make(chan codingworkspace.StatusResult, 2)
+	errs := make(chan error, 2)
+	go func() {
+		status, err := controller.RepositoryStatus(t.Context())
+		results <- status
+		errs <- err
+	}()
+	if call := <-runtime.statusStarted; call != 0 {
+		t.Fatalf("first evidence call = %d", call)
+	}
+	go func() {
+		status, err := controller.RepositoryStatus(t.Context())
+		results <- status
+		errs <- err
+	}()
+	select {
+	case call := <-runtime.statusStarted:
+		t.Fatalf("evidence call %d started before the first completed", call)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(runtime.firstRelease)
+	if call := <-runtime.statusStarted; call != 1 {
+		t.Fatalf("second evidence call = %d", call)
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		<-results
+	}
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.RepositoryStatus == nil || snapshot.RepositoryStatus.Snapshot.ProjectRoot != "/new" {
+		t.Fatalf("repository status = %#v, want newest admitted result", snapshot.RepositoryStatus)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryEvidenceRechecksCancellationBeforeProjection(t *testing.T) {
+	runtime := &commitBoundaryRepositoryRuntime{
+		blockingRuntime:  newBlockingRuntime(),
+		statusStarted:    make(chan struct{}),
+		statusRelease:    make(chan struct{}),
+		statusReturned:   make(chan struct{}),
+		interruptStarted: make(chan struct{}),
+		interruptRelease: make(chan struct{}),
+	}
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{
+		SchemaVersion: codingworkspace.RepositoryStatusSchemaV1,
+		Snapshot:      codingworkspace.Snapshot{ProjectRoot: "/valid"},
+	})
+	controller, err := New(projector, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "hold actor control"}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.runStarted
+	requestCtx, cancel := context.WithCancel(t.Context())
+	statusErr := make(chan error, 1)
+	go func() {
+		_, requestErr := controller.RepositoryStatus(requestCtx)
+		statusErr <- requestErr
+	}()
+	<-runtime.statusStarted
+	interruptErr := make(chan error, 1)
+	go func() { interruptErr <- controller.Interrupt(t.Context()) }()
+	<-runtime.interruptStarted
+	close(runtime.statusRelease)
+	<-runtime.statusReturned
+	cancel()
+	if err := <-statusErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("RepositoryStatus() error = %v, want cancellation", err)
+	}
+	close(runtime.interruptRelease)
+	if err := <-interruptErr; err != nil {
+		t.Fatalf("Interrupt() error = %v", err)
+	}
+	if _, err := controller.RepositoryDiff(t.Context(), codingworkspace.DiffTarget{}); err != nil {
+		t.Fatalf("evidence barrier error = %v", err)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.RepositoryStatus == nil || snapshot.RepositoryStatus.Snapshot.ProjectRoot != "/valid" {
+		t.Fatalf("canceled evidence was projected = %#v", snapshot.RepositoryStatus)
+	}
+	if err := controller.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }

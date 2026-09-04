@@ -139,6 +139,46 @@ func TestObserverPublishesOnlyChangedSnapshots(t *testing.T) {
 	}
 }
 
+func TestObserverRefreshPendingRearmsUnchangedObservation(t *testing.T) {
+	root := initGitRepository(t)
+	observer := NewObserver(root, root, Limits{})
+	observer.Refresh(t.Context())
+	first, changed := observer.PendingUpdate(t.Context())
+	if !changed {
+		t.Fatal("initial workspace observation was not pending")
+	}
+	refreshed := observer.RefreshPending(t.Context())
+	if refreshed.Identity() != first.Identity() {
+		t.Fatalf("unchanged refresh identity = %q, want %q", refreshed.Identity(), first.Identity())
+	}
+	pending, changed := observer.PendingUpdate(t.Context())
+	if !changed || pending.Identity() != refreshed.Identity() {
+		t.Fatalf("rearmed observation = changed:%v snapshot:%+v", changed, pending)
+	}
+	if _, changed = observer.PendingUpdate(t.Context()); changed {
+		t.Fatal("rearmed observation was emitted twice")
+	}
+}
+
+func TestObserverRefreshPendingPreservesStateWhenCaptureIsCanceled(t *testing.T) {
+	root := initGitRepository(t)
+	observer := NewObserver(root, root, Limits{})
+	observer.Refresh(t.Context())
+	current, changed := observer.PendingUpdate(t.Context())
+	if !changed {
+		t.Fatal("initial workspace observation was not pending")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	refreshed := observer.RefreshPending(ctx)
+	if refreshed.Identity() != current.Identity() {
+		t.Fatalf("canceled refresh replaced current snapshot = %+v", refreshed)
+	}
+	if _, changed = observer.PendingUpdate(t.Context()); changed {
+		t.Fatal("canceled refresh armed an unavailable workspace observation")
+	}
+}
+
 func TestCaptureDisablesConfiguredGitCommands(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sentinel shell script is Unix-specific")
