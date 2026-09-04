@@ -28,9 +28,11 @@ B2 completion evidence is recorded in
 [Browser Capability B2 Deployment Evidence](../operations/browser-capability-b2-deployment-evidence.md).
 BF3 privileged Playwright execution remains a separate opt-in proposal. BF4
 managed runtime distribution remains deferred until measured evidence meets an
-admission trigger. All other later slices remain proposals until an operator
-selects one and a separate admission fixes its exact scope, authority,
-completion evidence, and stop conditions.
+admission trigger. B4 is admitted for phased implementation in
+[Browser Capability B4 Admission](browser-capability-b4-admission.md), governed
+by [Browser B4 Execution Goal](browser-b4-execution-goal.md). B5 and B6 remain
+proposals until an operator selects one and a separate admission fixes its exact
+scope, authority, completion evidence, and stop conditions.
 
 The roadmap is ordered by immediate risk reduction, operator value, and
 security dependencies rather than calendar dates. Browser milestone labels use
@@ -892,6 +894,12 @@ Stop a parity slice if:
   processes, or unapproved network authority outside its admitted boundary.
 
 ## B4: Browser Identity and Attached-User Profiles
+
+Status: admitted for phased implementation. The authoritative scope, profile
+classes, credential boundary, attached-browser consent model, delivery order,
+acceptance evidence, and stop conditions are recorded in
+[Browser Capability B4 Admission](browser-capability-b4-admission.md). Execution
+progress is tracked in [Browser B4 Execution Goal](browser-b4-execution-goal.md).
 
 ### Operator outcome
 
