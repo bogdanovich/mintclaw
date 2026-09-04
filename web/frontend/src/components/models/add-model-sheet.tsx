@@ -37,10 +37,13 @@ import { refreshGatewayState } from "@/store/gateway"
 
 import { FetchModelsDialog } from "./fetch-models-dialog"
 import {
-  getEffectiveAPIBase,
-  getSubmittedAPIBase,
-  normalizeApiBase,
-} from "./model-provider-form-shared"
+  EMPTY_MODEL_FORM,
+  type ModelFormState,
+  projectModelForm,
+  transitionModelProvider,
+  validateModelForm,
+} from "./model-form"
+import { getEffectiveAPIBase } from "./model-provider-form-shared"
 import { type FieldValidation, validateModelField } from "./model-validation"
 import { ProviderCombobox } from "./provider-combobox"
 import {
@@ -54,44 +57,13 @@ import {
 } from "./provider-registry"
 import { TestModelDialog } from "./test-model-dialog"
 
-interface AddForm {
+interface AddForm extends ModelFormState {
   modelName: string
-  provider: string
-  model: string
-  apiBase: string
-  apiKey: string
-  proxy: string
-  authMethod: string
-  connectMode: string
-  workspace: string
-  rpm: string
-  maxTokensField: string
-  requestTimeout: string
-  thinkingLevel: string
-  toolSchemaTransform: string
-  streamingEnabled: boolean
-  extraBody: string
-  customHeaders: string
 }
 
 const EMPTY_ADD_FORM: AddForm = {
+  ...EMPTY_MODEL_FORM,
   modelName: "",
-  provider: "",
-  model: "",
-  apiBase: "",
-  apiKey: "",
-  proxy: "",
-  authMethod: "",
-  connectMode: "",
-  workspace: "",
-  rpm: "",
-  maxTokensField: "",
-  requestTimeout: "",
-  thinkingLevel: "",
-  toolSchemaTransform: "",
-  streamingEnabled: false,
-  extraBody: "",
-  customHeaders: "",
 }
 
 interface AddModelSheetProps {
@@ -179,18 +151,20 @@ export function AddModelSheet({
 
   const validate = (): boolean => {
     const errors: Partial<Record<keyof AddForm, string>> = {}
+    const shared = validateModelForm(form, providerOptions, modelValidation)
     const modelName = form.modelName.trim()
     if (!modelName) {
       errors.modelName = t("models.add.errorRequired")
     } else if (existingModelNames.some((name) => name.trim() === modelName)) {
       errors.modelName = t("models.add.errorDuplicateModelName")
     }
-    if (!providerDef) {
+    if (shared.provider) {
       errors.provider = t("models.field.providerInvalid")
     }
-    if (!form.model.trim()) errors.model = t("models.add.errorRequired")
-    if (modelValidation?.level === "error") {
-      errors.model = t(
+    if (shared.modelId === "required") {
+      errors.modelId = t("models.add.errorRequired")
+    } else if (shared.modelId === "invalid" && modelValidation) {
+      errors.modelId = t(
         modelValidation.messageKey,
         modelValidation.messageParams,
       )
@@ -225,55 +199,18 @@ export function AddModelSheet({
 
   const handleModelChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value
-    setForm((f) => ({ ...f, model: value }))
-    if (fieldErrors.model) {
-      setFieldErrors((prev) => ({ ...prev, model: undefined }))
+    setForm((f) => ({ ...f, modelId: value }))
+    if (fieldErrors.modelId) {
+      setFieldErrors((prev) => ({ ...prev, modelId: undefined }))
     }
     debouncedValidateModel(value, form.provider)
   }
 
   const handleProviderChange = (provider: string) => {
-    setForm((f) => {
-      const previousOption = getProviderCatalogEntry(
-        f.provider,
-        providerOptions,
-      )
-      const nextOption = getProviderCatalogEntry(provider, providerOptions)
-      const previousDefaultBase = normalizeApiBase(
-        getProviderDefaultAPIBase(f.provider, providerOptions),
-      )
-      const nextDefaultBase = normalizeApiBase(
-        getProviderDefaultAPIBase(provider, providerOptions),
-      )
-      const currentApiBase = normalizeApiBase(f.apiBase)
-      let authMethod = f.authMethod
-      let apiBase = f.apiBase
-      if (nextOption?.authMethodLocked) {
-        authMethod = nextOption.defaultAuthMethod ?? ""
-      } else if (
-        previousOption?.authMethodLocked &&
-        f.authMethod === (previousOption.defaultAuthMethod ?? "")
-      ) {
-        authMethod = ""
-      }
-      if (
-        currentApiBase &&
-        previousDefaultBase &&
-        currentApiBase === previousDefaultBase &&
-        currentApiBase !== nextDefaultBase
-      ) {
-        apiBase = ""
-      }
-      return {
-        ...f,
-        provider: getCanonicalProviderKey(provider, providerOptions),
-        apiBase,
-        authMethod,
-      }
-    })
+    setForm((form) => transitionModelProvider(form, provider, providerOptions))
     // Re-validate model with new provider context
-    if (form.model) {
-      debouncedValidateModel(form.model, provider)
+    if (form.modelId) {
+      debouncedValidateModel(form.modelId, provider)
     }
     // Clear setAsDefault if the new provider doesn't support being default
     const allowed =
@@ -289,26 +226,26 @@ export function AddModelSheet({
 
   const applyFix = () => {
     if (modelValidation?.fix) {
-      setForm((f) => ({ ...f, model: modelValidation.fix! }))
+      setForm((f) => ({ ...f, modelId: modelValidation.fix! }))
       setModelValidation(null)
     }
   }
 
   const handleCommonModel = (modelId: string) => {
-    setForm((f) => ({ ...f, model: modelId }))
+    setForm((f) => ({ ...f, modelId }))
     setModelValidation(null)
-    if (fieldErrors.model) {
-      setFieldErrors((prev) => ({ ...prev, model: undefined }))
+    if (fieldErrors.modelId) {
+      setFieldErrors((prev) => ({ ...prev, modelId: undefined }))
     }
   }
 
   const handleFetchFill = (models: string[]) => {
     setFetchedModels(models)
     if (models.length >= 1) {
-      setForm((f) => ({ ...f, model: models[0] }))
+      setForm((f) => ({ ...f, modelId: models[0] }))
       setModelValidation(null)
-      if (fieldErrors.model) {
-        setFieldErrors((prev) => ({ ...prev, model: undefined }))
+      if (fieldErrors.modelId) {
+        setFieldErrors((prev) => ({ ...prev, modelId: undefined }))
       }
     }
   }
@@ -344,35 +281,17 @@ export function AddModelSheet({
     form.apiBase,
     providerOptions,
   )
-  const submittedApiBase = getSubmittedAPIBase(form.apiBase)
 
   const handleSave = async () => {
     if (!validate()) return
 
-    let extraBody: Record<string, unknown> | undefined
-    let customHeaders: Record<string, string> | undefined
-    try {
-      if (form.extraBody.trim()) {
-        extraBody = JSON.parse(form.extraBody.trim())
-      } else {
-        extraBody = {}
-      }
-    } catch {
-      setServerError(
-        t("models.field.extraBody") + ": " + t("models.field.invalidJson"),
-      )
-      return
-    }
-    try {
-      if (form.customHeaders.trim()) {
-        customHeaders = JSON.parse(form.customHeaders.trim())
-      } else {
-        customHeaders = {}
-      }
-    } catch {
-      setServerError(
-        t("models.field.customHeaders") + ": " + t("models.field.invalidJson"),
-      )
+    const projection = projectModelForm(form, providerOptions)
+    if (!projection.ok) {
+      const label =
+        projection.field === "extraBody"
+          ? t("models.field.extraBody")
+          : t("models.field.customHeaders")
+      setServerError(label + ": " + t("models.field.invalidJson"))
       return
     }
 
@@ -380,31 +299,10 @@ export function AddModelSheet({
     setServerError("")
     try {
       const modelName = form.modelName.trim()
-      const provider = canonicalProvider
-      const modelId = form.model.trim()
       await addModel({
         model_name: modelName,
-        provider: provider || undefined,
-        model: modelId,
         enabled: true,
-        api_base: submittedApiBase,
-        api_key: form.apiKey.trim() || undefined,
-        proxy: form.proxy.trim() || undefined,
-        auth_method: authMethodLocked
-          ? defaultAuthMethod || undefined
-          : form.authMethod.trim() || undefined,
-        connect_mode: form.connectMode.trim() || undefined,
-        workspace: form.workspace.trim() || undefined,
-        rpm: form.rpm ? Number(form.rpm) : undefined,
-        max_tokens_field: form.maxTokensField.trim() || undefined,
-        request_timeout: form.requestTimeout
-          ? Number(form.requestTimeout)
-          : undefined,
-        thinking_level: form.thinkingLevel.trim() || undefined,
-        tool_schema_transform: form.toolSchemaTransform.trim() || undefined,
-        streaming: form.streamingEnabled ? { enabled: true } : undefined,
-        extra_body: extraBody,
-        custom_headers: customHeaders,
+        ...projection.value,
       })
       if (setAsDefault) {
         await setDefaultModel(modelName)
@@ -484,7 +382,7 @@ export function AddModelSheet({
                 hint={t("models.add.modelIdHint")}
               >
                 <Input
-                  value={form.model}
+                  value={form.modelId}
                   onChange={handleModelChange}
                   placeholder={
                     providerDef
@@ -493,7 +391,7 @@ export function AddModelSheet({
                   }
                   className="font-mono text-sm"
                   aria-invalid={
-                    !!fieldErrors.model || modelValidation?.level === "error"
+                    !!fieldErrors.modelId || modelValidation?.level === "error"
                   }
                 />
                 {modelValidation && modelValidation.messageKey && (
@@ -523,9 +421,9 @@ export function AddModelSheet({
                     )}
                   </div>
                 )}
-                {fieldErrors.model && !modelValidation && (
+                {fieldErrors.modelId && !modelValidation && (
                   <p className="text-destructive text-xs">
-                    {fieldErrors.model}
+                    {fieldErrors.modelId}
                   </p>
                 )}
                 {commonModels.length > 0 && (
@@ -547,7 +445,7 @@ export function AddModelSheet({
                     {catalogModels.map((m) => (
                       <Badge
                         key={m}
-                        variant={form.model === m ? "default" : "outline"}
+                        variant={form.modelId === m ? "default" : "outline"}
                         className="cursor-pointer font-mono text-xs"
                         onClick={() => handleCommonModel(m)}
                       >
@@ -561,7 +459,7 @@ export function AddModelSheet({
                     {fetchedModels.map((m) => (
                       <Badge
                         key={m}
-                        variant={form.model === m ? "default" : "outline"}
+                        variant={form.modelId === m ? "default" : "outline"}
                         className="cursor-pointer font-mono text-xs"
                         onClick={() => handleCommonModel(m)}
                       >
@@ -617,7 +515,7 @@ export function AddModelSheet({
                   variant="outline"
                   size="sm"
                   onClick={() => setTestOpen(true)}
-                  disabled={!form.provider || !form.model}
+                  disabled={!form.provider || !form.modelId}
                 >
                   <IconPlugConnected className="size-4" />
                   {t("models.test.testConnection")}
@@ -829,7 +727,7 @@ export function AddModelSheet({
           onClose={() => setTestOpen(false)}
           inlineParams={{
             provider: canonicalProvider,
-            model: form.model,
+            model: form.modelId,
             apiBase: effectiveApiBase,
             apiKey: form.apiKey,
             authMethod: effectiveAuthMethod,

@@ -823,7 +823,7 @@ func TestGatewayStatusKeepsRunningWhenHealthProbeFailsAfterRunning(t *testing.T)
 	h.gateway.cmd = cmd
 	h.gateway.bootDefaultModel = "existing-model"
 	// Simulate a process that has already reached the running state.
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
@@ -870,7 +870,7 @@ func TestGatewayStatusKeepsPidDataWhileTrackedProcessAliveWhenPidFileUnavailable
 		PID:   cmd.Process.Pid,
 		Token: "existing-token",
 	}
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
@@ -908,7 +908,7 @@ func TestGatewayStatusDowngradesRunningWhenTrackedProcessExitedAndPidFileMissing
 		PID:   cmd.Process.Pid,
 		Token: "stale-token",
 	}
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
@@ -999,7 +999,7 @@ func TestGatewayStopRefusesNonGatewayAttachedProcess(t *testing.T) {
 	h.gateway.mu.Lock()
 	h.gateway.cmd = cmd
 	h.gateway.owned = false
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
@@ -1032,7 +1032,7 @@ func TestGatewayStatusReportsRunningFromPidProbe(t *testing.T) {
 	})
 
 	h.gateway.mu.Lock()
-	h.setGatewayRuntimeStatusLocked("stopped")
+	h.gateway.setRuntimeStatusLocked("stopped")
 	h.gateway.mu.Unlock()
 
 	h.gateway.healthGet = func(string, time.Duration) (*http.Response, error) {
@@ -1107,7 +1107,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelChange(t *testing.T) {
 	h.gateway.cmd = cmd
 	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
 	h.gateway.bootConfigSignature = bootSignature
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
@@ -1177,7 +1177,7 @@ func TestGatewayStatusRequiresRestartAfterToolChange(t *testing.T) {
 	h.gateway.cmd = &exec.Cmd{Process: process}
 	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
 	h.gateway.bootConfigSignature = bootSignature
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
@@ -1240,7 +1240,7 @@ func TestGatewayStatusRequiresRestartAfterChannelChange(t *testing.T) {
 	h.gateway.cmd = &exec.Cmd{Process: process}
 	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
 	h.gateway.bootConfigSignature = bootSignature
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
@@ -1308,7 +1308,7 @@ func TestGatewayStatusRequiresRestartAfterDefaultModelStreamingChange(t *testing
 	h.gateway.cmd = &exec.Cmd{Process: process}
 	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
 	h.gateway.bootConfigSignature = bootSignature
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
@@ -1466,7 +1466,7 @@ func TestGatewayStatusRequiresRestartAfterWebSearchConfigChange(t *testing.T) {
 	h.gateway.cmd = &exec.Cmd{Process: process}
 	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
 	h.gateway.bootConfigSignature = bootSignature
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
@@ -1530,7 +1530,7 @@ func TestGatewayStatusNoRestartRequiredForNonSensitiveChanges(t *testing.T) {
 	h.gateway.cmd = &exec.Cmd{Process: process}
 	h.gateway.bootDefaultModel = cfg.ModelList[0].ModelName
 	h.gateway.bootConfigSignature = bootSignature
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
@@ -1590,7 +1590,7 @@ func TestGatewayStatusNoRestartRequiredWhenNotRunning(t *testing.T) {
 	h.gateway.cmd = nil
 	h.gateway.bootDefaultModel = ""
 	h.gateway.bootConfigSignature = ""
-	h.setGatewayRuntimeStatusLocked("stopped")
+	h.gateway.setRuntimeStatusLocked("stopped")
 	h.gateway.mu.Unlock()
 
 	updatedCfg, err := config.LoadConfig(configPath)
@@ -1646,7 +1646,7 @@ func TestGatewayStatusReturnsErrorAfterStartupWindowExpires(t *testing.T) {
 	h.gateway.mu.Lock()
 	h.gateway.cmd = cmd
 	h.gateway.bootDefaultModel = "existing-model"
-	h.setGatewayRuntimeStatusLocked("starting")
+	h.gateway.setRuntimeStatusLocked("starting")
 	h.gateway.startupDeadline = time.Now().Add(-time.Second)
 	h.gateway.mu.Unlock()
 
@@ -1685,7 +1685,7 @@ func TestGatewayStatusReturnsRestartingDuringRestartGap(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	h.gateway.mu.Lock()
-	h.setGatewayRuntimeStatusLocked("restarting")
+	h.gateway.setRuntimeStatusLocked("restarting")
 	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
@@ -1796,7 +1796,7 @@ func TestGatewayRestartKeepsOldProcessWhenItDoesNotExitInTime(t *testing.T) {
 	h.gateway.mu.Lock()
 	h.gateway.cmd = cmd
 	h.gateway.bootDefaultModel = "existing-model"
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	rec := httptest.NewRecorder()
