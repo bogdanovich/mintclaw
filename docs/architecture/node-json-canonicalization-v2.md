@@ -52,7 +52,9 @@ The new representation is node protocol major version 2. A v2 gateway may
 temporarily admit v1 companions only to support the gateway-first rollout, and
 must compute v1 catalog and plan bindings for those v1 sessions. A v2
 companion requires a gateway that advertises v2. No connection may mix v1 and
-v2 canonicalization within one authenticated session.
+v2 canonicalization within one authenticated session. Invocation and transfer
+dispatch both bind their retained protocol to the exact authenticated session
+generation before any durable dispatched transition.
 
 The negotiated version is persisted on the node snapshot. Legacy omitted
 snapshot and execution-plan version fields mean v1. V1 plans continue omitting

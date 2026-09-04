@@ -20,15 +20,17 @@ var defaultDeactivationRetryDelays = []time.Duration{
 }
 
 var (
-	ErrSessionHubClosed       = errors.New("node session hub is closed")
-	ErrSessionSuperseded      = errors.New("node session was superseded")
-	ErrSessionDrainIncomplete = errors.New("node session drain did not complete")
+	ErrSessionHubClosed         = errors.New("node session hub is closed")
+	ErrSessionSuperseded        = errors.New("node session was superseded")
+	ErrSessionDrainIncomplete   = errors.New("node session drain did not complete")
+	ErrTransferProtocolMismatch = errors.New("transfer protocol does not match authenticated session")
 )
 
 type sessionEntry struct {
-	connection io.Closer
-	peer       *peer
-	active     bool
+	connection      io.Closer
+	peer            *peer
+	protocolVersion int
+	active          bool
 }
 
 type transportEntry struct {
@@ -103,7 +105,26 @@ func (hub *SessionHub) Claim(
 	activate func() error,
 	deactivate func() error,
 ) (func() (bool, error), error) {
-	entry := &sessionEntry{connection: connection}
+	return hub.ClaimForProtocol(id, nodes.ProtocolV1, connection, activate, deactivate)
+}
+
+// ClaimForProtocol binds an authenticated connection to its negotiated node
+// protocol for the lifetime of the session generation.
+func (hub *SessionHub) ClaimForProtocol(
+	id nodes.ID,
+	protocolVersion int,
+	connection io.Closer,
+	activate func() error,
+	deactivate func() error,
+) (func() (bool, error), error) {
+	protocolVersion, err := nodes.EffectiveProtocolVersion(protocolVersion)
+	if err != nil {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		return nil, err
+	}
+	entry := &sessionEntry{connection: connection, protocolVersion: protocolVersion}
 	if livePeer, ok := connection.(*peer); ok {
 		entry.peer = livePeer
 	}
