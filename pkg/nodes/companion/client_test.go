@@ -255,7 +255,7 @@ func TestClientExecutesCorrelatedInvocationOverAuthenticatedSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID:     "inv_transport",
 		IdempotencyKey:   "idem_transport",
 		NodeID:           identity.ID,
@@ -971,6 +971,18 @@ func testTransportPlan(
 		t.Fatal(err)
 	}
 	return plan
+}
+
+func TestExecutionPlanMustMatchCompanionProtocol(t *testing.T) {
+	if !executionPlanMatchesProtocol(nodes.ExecutionPlan{}, nodes.ProtocolV1) {
+		t.Fatal("legacy omitted plan protocol did not normalize to v1")
+	}
+	if executionPlanMatchesProtocol(
+		nodes.ExecutionPlan{ProtocolVersion: nodes.ProtocolV2},
+		nodes.ProtocolV1,
+	) {
+		t.Fatal("companion accepted a plan from another negotiated protocol")
+	}
 }
 
 func TestDuplicateCompanionsBackOffInsteadOfRapidlyFlapping(t *testing.T) {
