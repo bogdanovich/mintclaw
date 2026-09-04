@@ -48,7 +48,7 @@ func RenderStatusPlain(status StatusResult) string {
 }
 
 func RenderDiffPlain(diff DiffResult) string {
-	target := string(diff.Target.Kind)
+	target := displayText(string(diff.Target.Kind))
 	if diff.Target.Ref != "" {
 		target += " " + displayText(diff.Target.Ref)
 	}
@@ -109,7 +109,7 @@ func provenanceLabel(kind ProvenanceKind, reason string) string {
 	if kind == "" {
 		return ""
 	}
-	label := " [" + string(kind)
+	label := " [" + displayText(string(kind))
 	if reason != "" {
 		label += ": " + displayText(reason)
 	}

@@ -341,6 +341,38 @@ func TestCommandPanelScrollMakesTailDiffDiagnosticsReachable(t *testing.T) {
 	}
 }
 
+func TestSupersededEvidenceCompletionPreservesNewerError(t *testing.T) {
+	controller := &evidenceController{fakeController: newController(t)}
+	controller.status = codingworkspace.StatusResult{
+		Snapshot: codingworkspace.Snapshot{Git: codingworkspace.GitState{
+			Available: true, StatusAvailable: true, Branch: "main",
+		}},
+	}
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model.composer.SetValue("/status")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("/status did not start evidence request")
+	}
+	staleCompletion := command()
+
+	model.composer.SetValue("/diff unsupported")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.err == nil || !strings.Contains(model.err.Error(), "target must be") {
+		t.Fatalf("newer diff error = %v", model.err)
+	}
+	model = updateModel(t, model, staleCompletion)
+	if model.err == nil || !strings.Contains(model.err.Error(), "target must be") || model.workspaceNotice != "" {
+		t.Fatalf("stale status completion changed newer UI state: err=%v notice=%q", model.err, model.workspaceNotice)
+	}
+}
+
 func TestCommandPanelsEscapeStructuredSnapshotFields(t *testing.T) {
 	snapshot := frontend.ThreadSnapshot{
 		ThreadID: "thread\nforged-thread\tcell",

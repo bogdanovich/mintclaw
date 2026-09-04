@@ -88,3 +88,26 @@ func TestRenderDiffPlainPreservesUnavailableDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+func TestPlainRenderersEscapeOpenEnumValues(t *testing.T) {
+	unsafe := "unsafe\x1b]8;;https://example.invalid\x07"
+	status := RenderStatusPlain(StatusResult{
+		Snapshot: Snapshot{
+			Git:          GitState{Available: true, StatusAvailable: true},
+			ChangedPaths: []ChangedPath{{Path: "safe.go", Status: " M"}},
+		},
+		Provenance: &ProvenanceResult{Paths: []ProvenancePath{{
+			Path: "safe.go", Status: " M", Provenance: ProvenanceKind(unsafe),
+		}}},
+	})
+	diff := RenderDiffPlain(DiffResult{
+		Target:            DiffTarget{Kind: DiffTargetKind(unsafe)},
+		UnavailableReason: "unsupported target",
+	})
+	for name, rendered := range map[string]string{"status": status, "diff": diff} {
+		if strings.ContainsAny(rendered, "\x1b\x07") || !strings.Contains(rendered, `\x1b`) ||
+			!strings.Contains(rendered, `\x07`) {
+			t.Fatalf("%s renderer emitted unsafe enum value: %q", name, rendered)
+		}
+	}
+}

@@ -69,11 +69,13 @@ type WorkspaceRefreshMsg struct {
 }
 
 type RepositoryStatusMsg struct {
-	Err error
+	RequestID uint64
+	Err       error
 }
 
 type RepositoryDiffMsg struct {
-	Err error
+	RequestID uint64
+	Err       error
 }
 
 // ClipboardImageMsg completes one asynchronous system-clipboard image read.
@@ -112,6 +114,8 @@ type Model struct {
 	workspaceNotice     string
 	commandPanel        commandPanel
 	commandPanelOffset  int
+	nextEvidenceRequest uint64
+	activeEvidenceReq   uint64
 	composerAttachments []composerAttachment
 	pasteDirectory      string
 	nextPasteNumber     int
@@ -255,21 +259,33 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.workspaceNotice = "repository refreshed"
 		return m, nil
 	case RepositoryStatusMsg:
+		if message.RequestID == 0 || message.RequestID != m.activeEvidenceReq {
+			return m, nil
+		}
+		m.activeEvidenceReq = 0
+		if m.err != nil || m.workspaceNotice != "repository status loading" {
+			return m, nil
+		}
 		if message.Err != nil {
 			m.err = message.Err
 			m.workspaceNotice = "repository status unavailable"
 			return m, nil
 		}
-		m.err = nil
 		m.workspaceNotice = "repository status refreshed"
 		return m, nil
 	case RepositoryDiffMsg:
+		if message.RequestID == 0 || message.RequestID != m.activeEvidenceReq {
+			return m, nil
+		}
+		m.activeEvidenceReq = 0
+		if m.err != nil || m.workspaceNotice != "repository diff loading" {
+			return m, nil
+		}
 		if message.Err != nil {
 			m.err = message.Err
 			m.workspaceNotice = "repository diff unavailable"
 			return m, nil
 		}
-		m.err = nil
 		m.workspaceNotice = "repository diff refreshed"
 		return m, nil
 	case ClipboardImageMsg:
@@ -537,6 +553,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 	case "ctrl+r":
+		m.supersedeEvidenceRequest()
 		if activeWork(m.snapshot.Activity) || m.initialTurnPending {
 			m.workspaceNotice = "repository refresh is available when idle"
 			return true, nil
@@ -559,6 +576,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.toggleSelectedTool()
 		return true, nil
 	case "enter":
+		m.supersedeEvidenceRequest()
 		if message.Paste {
 			return true, nil
 		}
@@ -846,10 +864,11 @@ func workspaceRefreshCmd(ctx context.Context, refresher frontend.WorkspaceRefres
 func repositoryStatusCmd(
 	ctx context.Context,
 	reader frontend.RepositoryEvidenceReader,
+	requestID uint64,
 ) tea.Cmd {
 	return func() tea.Msg {
 		_, err := reader.RepositoryStatus(ctx)
-		return RepositoryStatusMsg{Err: err}
+		return RepositoryStatusMsg{RequestID: requestID, Err: err}
 	}
 }
 
@@ -857,9 +876,29 @@ func repositoryDiffCmd(
 	ctx context.Context,
 	reader frontend.RepositoryEvidenceReader,
 	target codingworkspace.DiffTarget,
+	requestID uint64,
 ) tea.Cmd {
 	return func() tea.Msg {
 		_, err := reader.RepositoryDiff(ctx, target)
-		return RepositoryDiffMsg{Err: err}
+		return RepositoryDiffMsg{RequestID: requestID, Err: err}
+	}
+}
+
+func (m *Model) beginEvidenceRequest() uint64 {
+	m.nextEvidenceRequest++
+	if m.nextEvidenceRequest == 0 {
+		m.nextEvidenceRequest++
+	}
+	m.activeEvidenceReq = m.nextEvidenceRequest
+	return m.activeEvidenceReq
+}
+
+func (m *Model) supersedeEvidenceRequest() {
+	if m.activeEvidenceReq == 0 {
+		return
+	}
+	m.activeEvidenceReq = 0
+	if m.workspaceNotice == "repository status loading" || m.workspaceNotice == "repository diff loading" {
+		m.workspaceNotice = ""
 	}
 }
