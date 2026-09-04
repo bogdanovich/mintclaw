@@ -26,7 +26,9 @@ func toolTerminalRequest(
 	fallback terminalContent,
 ) terminalRequest {
 	content := fallback
-	if strings.TrimSpace(outcome.FinalContent) != "" {
+	if outcome.TerminalMode == terminalRenderExact {
+		content = exactTerminalContent(outcome.FinalContent)
+	} else if strings.TrimSpace(outcome.FinalContent) != "" {
 		content = terminalContent{content: outcome.FinalContent}
 	}
 	if llm != nil && llm.toolResponseDisposition == toolResponseHandled &&

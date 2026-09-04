@@ -64,7 +64,7 @@ func newFinalizationContext(
 ) FinalizationContext {
 	_, inputTokens, outputTokens, totalTokens := ts.llmUsageTotals()
 	disposition := finalResponsePending
-	if llm.toolResponseDisposition == toolResponseHandled {
+	if llm.toolResponseDisposition == toolResponseHandled && !terminal.persistIfToolHandled {
 		disposition = finalResponseAlreadyHandled
 	}
 

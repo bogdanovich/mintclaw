@@ -179,7 +179,8 @@ func TestToolTerminalRequestPreservesExactSafetyHalt(t *testing.T) {
 		FinalContent: "  runtime-owned halt reason  ",
 		TerminalMode: terminalRenderExact,
 	}, llm, terminalContent{})
-	if got.renderMode != terminalRenderExact || strings.TrimSpace(got.content.content) != "runtime-owned halt reason" {
+	if got.renderMode != terminalRenderExact || strings.TrimSpace(got.content.content) != "runtime-owned halt reason" ||
+		!got.content.persistIfToolHandled {
 		t.Fatalf("tool terminal request = %#v, want exact runtime halt", got)
 	}
 }
