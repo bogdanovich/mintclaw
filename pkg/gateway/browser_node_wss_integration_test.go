@@ -1538,7 +1538,7 @@ func prepareWSSBrowserRestartPlan(
 	if descriptor.Name == "" {
 		t.Fatal("browser action descriptor is unavailable")
 	}
-	catalogHash, err := runtime.Catalog().Hash()
+	catalogHash, err := runtime.Catalog().HashForProtocol(nodes.ProtocolV2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1558,7 +1558,7 @@ func prepareWSSBrowserRestartPlan(
 		ActorID: owner.ActorID, WorkspaceID: "browser_restart_workspace",
 		ExecutionID: "browser_restart_execution",
 	}
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID: "browser_restart_invocation", IdempotencyKey: "browser_restart_idempotency",
 		NodeID: nodeID, CatalogHash: catalogHash, Command: descriptor.Name, Input: input,
 		AgentID: principal.AgentID, SessionID: principal.SessionID, ActorID: principal.ActorID,

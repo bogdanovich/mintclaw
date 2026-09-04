@@ -57,7 +57,7 @@ type connectedWorkers struct {
 	events   sync.WaitGroup
 }
 
-const companionProtocolVersion = nodes.ProtocolV1
+const companionProtocolVersion = nodes.ProtocolV2
 
 func NewClientWithRuntime(
 	cfg Config,

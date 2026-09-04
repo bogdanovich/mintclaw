@@ -255,7 +255,7 @@ func TestClientExecutesCorrelatedInvocationOverAuthenticatedSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID:     "inv_transport",
 		IdempotencyKey:   "idem_transport",
 		NodeID:           identity.ID,
