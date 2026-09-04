@@ -1877,7 +1877,13 @@ func browserNodeTestRegisterReplacement(
 	if err = runtime.registry.Upsert(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	release, err := runtime.sessions.Claim(nodeID, &testNodeConnection{}, nil, func() error { return nil })
+	release, err := runtime.sessions.ClaimForProtocol(
+		nodeID,
+		snapshot.ProtocolVersion,
+		&testNodeConnection{},
+		nil,
+		func() error { return nil },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1956,7 +1962,13 @@ func browserNodeTestRuntime(
 		t.Fatalf("registration = %#v, %v, %v", registration, found, err)
 	}
 	sessions := nodews.NewSessionHub()
-	release, err := sessions.Claim(nodeID, &testNodeConnection{}, nil, func() error { return nil })
+	release, err := sessions.ClaimForProtocol(
+		nodeID,
+		snapshot.ProtocolVersion,
+		&testNodeConnection{},
+		nil,
+		func() error { return nil },
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
