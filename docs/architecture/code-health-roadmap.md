@@ -335,6 +335,12 @@ builders and a small set of black-box turn/interaction contract tests, then
 migrate tests only when their production area changes. Do not perform a mass
 test rewrite.
 
+Agent tests now have one lifecycle-safe loop fixture and one turn-state builder
+that crosses the production freeze boundary. The shared turn helper and the
+recently changed delivery coordinator use them, while explicit low-level state
+tests remain direct. Public-entry contract scenarios cover ordinary terminal
+turns and durable interaction suspension without duplicating runner phases.
+
 ### H8.4 Documentation closeout
 
 - move completed execution ledgers out of the primary architecture index when
