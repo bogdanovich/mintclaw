@@ -65,7 +65,8 @@ type TranscriptPageMsg struct {
 
 // WorkspaceRefreshMsg completes an explicit repository observation.
 type WorkspaceRefreshMsg struct {
-	Err error
+	RequestID uint64
+	Err       error
 }
 
 type RepositoryStatusMsg struct {
@@ -246,6 +247,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	case WorkspaceRefreshMsg:
+		if message.RequestID == 0 || message.RequestID != m.activeEvidenceReq {
+			return m, nil
+		}
+		m.activeEvidenceReq = 0
+		if !m.refreshingWorkspace || m.err != nil {
+			return m, nil
+		}
 		m.refreshingWorkspace = false
 		if message.Err != nil {
 			if errors.Is(message.Err, frontend.ErrWorkspaceRefreshUnsupported) {
@@ -565,7 +573,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		m.refreshingWorkspace = true
 		m.workspaceNotice = ""
-		return true, workspaceRefreshCmd(m.ctx, refresher)
+		return true, workspaceRefreshCmd(m.ctx, refresher, m.beginEvidenceRequest())
 	case "alt+j":
 		m.navigateTools(1)
 		return true, nil
@@ -855,9 +863,13 @@ func transcriptPageCmd(
 	}
 }
 
-func workspaceRefreshCmd(ctx context.Context, refresher frontend.WorkspaceRefresher) tea.Cmd {
+func workspaceRefreshCmd(
+	ctx context.Context,
+	refresher frontend.WorkspaceRefresher,
+	requestID uint64,
+) tea.Cmd {
 	return func() tea.Msg {
-		return WorkspaceRefreshMsg{Err: refresher.RefreshWorkspace(ctx)}
+		return WorkspaceRefreshMsg{RequestID: requestID, Err: refresher.RefreshWorkspace(ctx)}
 	}
 }
 
@@ -898,6 +910,7 @@ func (m *Model) supersedeEvidenceRequest() {
 		return
 	}
 	m.activeEvidenceReq = 0
+	m.refreshingWorkspace = false
 	if m.workspaceNotice == "repository status loading" || m.workspaceNotice == "repository diff loading" {
 		m.workspaceNotice = ""
 	}

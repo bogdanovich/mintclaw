@@ -339,6 +339,12 @@ func TestCommandPanelScrollMakesTailDiffDiagnosticsReachable(t *testing.T) {
 	if model.commandPanelOffset == 0 || !strings.Contains(model.View(), "warning: tail diagnostic") {
 		t.Fatalf("scrolled diff page = offset %d / %q", model.commandPanelOffset, model.View())
 	}
+	model.resize(12, 8)
+	for _, line := range strings.Split(model.commandPanelView(), "\n") {
+		if width := ansi.StringWidth(line); width > 12 {
+			t.Fatalf("narrow command panel line width = %d: %q", width, line)
+		}
+	}
 }
 
 func TestSupersededEvidenceCompletionPreservesNewerError(t *testing.T) {
@@ -370,6 +376,76 @@ func TestSupersededEvidenceCompletionPreservesNewerError(t *testing.T) {
 	model = updateModel(t, model, staleCompletion)
 	if model.err == nil || !strings.Contains(model.err.Error(), "target must be") || model.workspaceNotice != "" {
 		t.Fatalf("stale status completion changed newer UI state: err=%v notice=%q", model.err, model.workspaceNotice)
+	}
+}
+
+func TestRepositoryOperationsIgnoreCrossedCompletions(t *testing.T) {
+	newModel := func() (*Model, *evidenceController) {
+		controller := &evidenceController{fakeController: newController(t)}
+		controller.status = codingworkspace.StatusResult{
+			Snapshot: codingworkspace.Snapshot{Git: codingworkspace.GitState{
+				Available: true, StatusAvailable: true, Branch: "main",
+			}},
+		}
+		model, err := newTestModel(controller)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return model, controller
+	}
+
+	model, _ := newModel()
+	updated, refreshCommand := model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(*Model)
+	staleRefresh := refreshCommand()
+	model.composer.SetValue("/status")
+	updated, statusCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	statusCompletion := statusCommand()
+	model = updateModel(t, model, staleRefresh)
+	if model.workspaceNotice != "repository status loading" {
+		t.Fatalf("old refresh replaced status request: %q", model.workspaceNotice)
+	}
+	model = updateModel(t, model, statusCompletion)
+	if model.workspaceNotice != "repository status refreshed" {
+		t.Fatalf("status completion after old refresh = %q", model.workspaceNotice)
+	}
+
+	model, _ = newModel()
+	model.composer.SetValue("/status")
+	updated, statusCommand = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	staleStatus := statusCommand()
+	updated, refreshCommand = model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(*Model)
+	refreshCompletion := refreshCommand()
+	model = updateModel(t, model, staleStatus)
+	if !model.refreshingWorkspace || model.workspaceNotice != "" {
+		t.Fatalf(
+			"old status replaced refresh request: refreshing=%v notice=%q",
+			model.refreshingWorkspace,
+			model.workspaceNotice,
+		)
+	}
+	model = updateModel(t, model, refreshCompletion)
+	if model.refreshingWorkspace || model.workspaceNotice != "repository refreshed" {
+		t.Fatalf(
+			"refresh completion after old status: refreshing=%v notice=%q",
+			model.refreshingWorkspace,
+			model.workspaceNotice,
+		)
+	}
+
+	model, _ = newModel()
+	updated, refreshCommand = model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(*Model)
+	staleRefresh = refreshCommand()
+	model.composer.SetValue("/diff unsupported")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	model = updateModel(t, model, staleRefresh)
+	if model.err == nil || !strings.Contains(model.err.Error(), "target must be") || model.workspaceNotice != "" {
+		t.Fatalf("old refresh changed newer error: err=%v notice=%q", model.err, model.workspaceNotice)
 	}
 }
 

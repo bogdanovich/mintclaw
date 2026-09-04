@@ -249,12 +249,13 @@ func (m *Model) commandPanelView() string {
 	end := min(len(lines), offset+pageSize)
 	visible := append([]string(nil), lines[offset:end]...)
 	if len(lines) > pageSize {
-		visible = append(visible, fmt.Sprintf(
+		footer := fmt.Sprintf(
 			"lines %d-%d of %d · PgUp/PgDown scroll · Esc closes",
 			offset+1,
 			end,
 			len(lines),
-		))
+		)
+		visible = append(visible, clipLine(footer, m.width))
 	}
 	return strings.Join(visible, "\n")
 }
