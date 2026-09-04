@@ -183,8 +183,9 @@ func (handler *AdmissionHandler) ServeHTTP(writer http.ResponseWriter, request *
 	var session *peer
 	if result.State == nodes.StateConnected {
 		session = newPeer(connection)
-		release, err = handler.sessions.Claim(
+		release, err = handler.sessions.ClaimForProtocol(
 			result.NodeID,
+			admission.ProtocolVersion(),
 			session,
 			func() error { return handler.authenticator.Connect(admission) },
 			func() error {
