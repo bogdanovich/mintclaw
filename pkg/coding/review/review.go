@@ -198,15 +198,22 @@ func (event Event) Validate() error {
 	}
 }
 
+func (event Event) Clone() Event {
+	if event.Finding != nil {
+		finding := *event.Finding
+		event.Finding = &finding
+	}
+	return event
+}
+
 // State is the bounded current review projection shared by frontends.
 type State struct {
-	ReviewID           string    `json:"review_id"`
-	Target             Target    `json:"target"`
-	Phase              Phase     `json:"phase"`
-	EvidenceGeneration string    `json:"evidence_generation,omitempty"`
-	Progress           string    `json:"progress,omitempty"`
-	Findings           []Finding `json:"findings,omitempty"`
-	Result             *Result   `json:"result,omitempty"`
+	ReviewID string    `json:"review_id"`
+	Target   Target    `json:"target"`
+	Phase    Phase     `json:"phase"`
+	Progress string    `json:"progress,omitempty"`
+	Findings []Finding `json:"findings,omitempty"`
+	Result   *Result   `json:"result,omitempty"`
 }
 
 func NewID() string { return uuid.NewString() }

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
@@ -19,6 +20,7 @@ var (
 	ErrClosed                 = errors.New("coding controller is closed")
 	ErrTurnActive             = errors.New("coding turn is active")
 	ErrCompactionActive       = errors.New("coding compaction is active")
+	ErrReviewActive           = errors.New("coding review is active")
 	ErrWorkspaceRefreshActive = errors.New("coding workspace refresh is active")
 	ErrNoActiveTurn           = errors.New("no coding turn is active")
 	ErrUnsupported            = frontend.ErrCommandUnsupported
@@ -40,6 +42,18 @@ type workspaceEvidenceRefresher interface {
 	RefreshWorkspaceEvidence(context.Context) (codingworkspace.StatusResult, error)
 }
 
+// reviewRuntime returns only after a valid result has crossed its durable
+// selected-thread publication boundary. The controller remains the sole owner
+// of frontend lifecycle projection.
+type reviewRuntime interface {
+	RunReview(
+		context.Context,
+		string,
+		codingreview.Target,
+		func(codingreview.Event) error,
+	) (codingreview.Result, error)
+}
+
 type commandKind uint8
 
 const (
@@ -54,18 +68,20 @@ const (
 	commandRefreshWorkspace
 	commandRepositoryStatus
 	commandRepositoryDiff
+	commandReview
 	commandClose
 )
 
 type command struct {
-	kind        commandKind
-	ctx         context.Context
-	content     string
-	input       frontend.TurnInput
-	diffTarget  codingworkspace.DiffTarget
-	reply       chan error
-	statusReply chan repositoryStatusResponse
-	diffReply   chan repositoryDiffResponse
+	kind         commandKind
+	ctx          context.Context
+	content      string
+	input        frontend.TurnInput
+	diffTarget   codingworkspace.DiffTarget
+	reviewTarget codingreview.Target
+	reply        chan error
+	statusReply  chan repositoryStatusResponse
+	diffReply    chan repositoryDiffResponse
 }
 
 type repositoryStatusResponse struct {
@@ -97,15 +113,23 @@ const (
 	operationWorkspaceRefresh
 	operationRepositoryStatus
 	operationRepositoryDiff
+	operationReview
 )
 
 type operationResult struct {
-	id      uint64
-	kind    operationKind
-	request command
-	status  codingworkspace.StatusResult
-	diff    codingworkspace.DiffResult
-	err     error
+	id       uint64
+	kind     operationKind
+	request  command
+	status   codingworkspace.StatusResult
+	diff     codingworkspace.DiffResult
+	review   codingreview.Result
+	reviewID string
+	err      error
+}
+
+type reviewOperationEvent struct {
+	reviewID string
+	event    codingreview.Event
 }
 
 type evidenceOperation struct {
@@ -124,12 +148,16 @@ type Controller struct {
 	commands        chan command
 	results         chan operationResult
 	evidenceResults chan operationResult
+	reviewEvents    chan reviewOperationEvent
 	done            chan struct{}
 	closeMu         sync.Mutex
 	closeErr        error
 }
 
-var _ frontend.Controller = (*Controller)(nil)
+var (
+	_ frontend.Controller = (*Controller)(nil)
+	_ frontend.Reviewer   = (*Controller)(nil)
+)
 
 func New(projector *frontend.Projector, runtime Runtime) (*Controller, error) {
 	if projector == nil {
@@ -144,6 +172,7 @@ func New(projector *frontend.Projector, runtime Runtime) (*Controller, error) {
 		commands:        make(chan command),
 		results:         make(chan operationResult, 1),
 		evidenceResults: make(chan operationResult),
+		reviewEvents:    make(chan reviewOperationEvent),
 		done:            make(chan struct{}),
 	}
 	go controller.coordinate()
@@ -284,6 +313,35 @@ func (c *Controller) RepositoryDiff(
 	}
 }
 
+func (c *Controller) Review(ctx context.Context, target codingreview.Target) error {
+	if err := target.Validate(); err != nil {
+		return err
+	}
+	ctx = contextOrBackground(ctx)
+	reply := make(chan error, 1)
+	request := command{kind: commandReview, ctx: ctx, reviewTarget: target, reply: reply}
+	if err := c.enqueue(ctx, request); err != nil {
+		return err
+	}
+	return awaitReviewAdmission(ctx, reply, c.done)
+}
+
+func awaitReviewAdmission(ctx context.Context, reply <-chan error, done <-chan struct{}) error {
+	select {
+	case err := <-reply:
+		return err
+	case <-done:
+		select {
+		case err := <-reply:
+			return err
+		default:
+			return ErrClosed
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (c *Controller) Close(ctx context.Context) error {
 	return c.send(ctx, commandClose, "")
 }
@@ -359,6 +417,9 @@ func (c *Controller) coordinate() {
 	var active bool
 	var hardCancelRequested bool
 	var compacting bool
+	var reviewing bool
+	var activeReviewID string
+	var reviewCancelCause error
 	var closing bool
 	var operationCancel context.CancelCauseFunc
 	var activeEvidence *evidenceOperation
@@ -368,7 +429,7 @@ func (c *Controller) coordinate() {
 	var closeErr error
 
 	finishClose := func() bool {
-		if !closing || active || compacting || activeEvidence != nil || len(evidenceQueue) != 0 {
+		if !closing || active || compacting || reviewing || activeEvidence != nil || len(evidenceQueue) != 0 {
 			return false
 		}
 		closeErr = errors.Join(closeErr, c.runtime.Close())
@@ -407,6 +468,11 @@ func (c *Controller) coordinate() {
 		return false
 	}
 
+	backgroundCompactionActive := func() bool {
+		observer, ok := c.runtime.(frontend.BackgroundCompactionObserver)
+		return ok && observer.BackgroundCompactionActive()
+	}
+
 	startNextEvidence := func() {
 		pruneCanceledEvidence()
 		if closing || activeEvidence != nil || len(evidenceQueue) == 0 {
@@ -433,6 +499,10 @@ func (c *Controller) coordinate() {
 
 	for {
 		select {
+		case update := <-c.reviewEvents:
+			if reviewing && update.reviewID == activeReviewID {
+				_ = c.projector.ReviewEvent(update.reviewID, update.event)
+			}
 		case result := <-c.evidenceResults:
 			if activeEvidence == nil || activeEvidence.id != result.id {
 				continue
@@ -470,6 +540,19 @@ func (c *Controller) coordinate() {
 				hardCancelRequested = false
 			case operationCompaction:
 				compacting = false
+			case operationReview:
+				if result.reviewID == activeReviewID && reviewCancelCause != nil {
+					result.err = errors.Join(result.err, reviewCancelCause)
+				}
+				reviewing = false
+				activeReviewID = ""
+				reviewCancelCause = nil
+				if result.err != nil {
+					c.projector.ReviewInterrupted(result.reviewID)
+				} else if err := c.projector.ReviewCompleted(result.review); err != nil {
+					result.err = err
+					c.projector.ReviewInterrupted(result.reviewID)
+				}
 			}
 			operationCancel = nil
 			c.projectOperationError(result)
@@ -487,6 +570,8 @@ func (c *Controller) coordinate() {
 				switch {
 				case active:
 					request.reply <- ErrTurnActive
+				case reviewing:
+					request.reply <- ErrReviewActive
 				case compacting:
 					request.reply <- ErrCompactionActive
 				case workspaceRefreshPending():
@@ -514,12 +599,28 @@ func (c *Controller) coordinate() {
 					}
 				}
 			case commandInterrupt:
+				if reviewing {
+					reviewCancelCause = context.Canceled
+					if operationCancel != nil {
+						operationCancel(context.Canceled)
+					}
+					request.reply <- nil
+					continue
+				}
 				if !active {
 					request.reply <- ErrNoActiveTurn
 					continue
 				}
 				request.reply <- c.runtime.Interrupt(request.ctx)
 			case commandHardCancel:
+				if reviewing {
+					reviewCancelCause = ErrHardCanceled
+					if operationCancel != nil {
+						operationCancel(ErrHardCanceled)
+					}
+					request.reply <- nil
+					continue
+				}
 				if !active {
 					request.reply <- ErrNoActiveTurn
 					continue
@@ -536,6 +637,8 @@ func (c *Controller) coordinate() {
 				switch {
 				case active:
 					request.reply <- ErrTurnActive
+				case reviewing:
+					request.reply <- ErrReviewActive
 				case compacting:
 					request.reply <- ErrCompactionActive
 				case workspaceRefreshPending():
@@ -551,11 +654,12 @@ func (c *Controller) coordinate() {
 				switch {
 				case active:
 					request.reply <- ErrTurnActive
+				case reviewing:
+					request.reply <- ErrReviewActive
 				case compacting:
 					request.reply <- ErrCompactionActive
 				default:
-					if observer, ok := c.runtime.(frontend.BackgroundCompactionObserver); ok &&
-						observer.BackgroundCompactionActive() {
+					if backgroundCompactionActive() {
 						request.reply <- ErrCompactionActive
 						continue
 					}
@@ -576,6 +680,8 @@ func (c *Controller) coordinate() {
 				switch {
 				case active:
 					request.reply <- ErrTurnActive
+				case reviewing:
+					request.reply <- ErrReviewActive
 				case compacting:
 					request.reply <- ErrCompactionActive
 				default:
@@ -597,6 +703,36 @@ func (c *Controller) coordinate() {
 					continue
 				}
 				admitEvidence(operationRepositoryDiff, request)
+			case commandReview:
+				runner, ok := c.runtime.(reviewRuntime)
+				if !ok {
+					request.reply <- ErrUnsupported
+					continue
+				}
+				switch {
+				case active:
+					request.reply <- ErrTurnActive
+				case reviewing:
+					request.reply <- ErrReviewActive
+				case compacting:
+					request.reply <- ErrCompactionActive
+				case backgroundCompactionActive():
+					request.reply <- ErrCompactionActive
+				case workspaceRefreshPending():
+					request.reply <- ErrWorkspaceRefreshActive
+				default:
+					reviewID := codingreview.NewID()
+					if err := c.projector.ReviewEntered(reviewID, request.reviewTarget); err != nil {
+						request.reply <- err
+						continue
+					}
+					reviewing = true
+					activeReviewID = reviewID
+					operationCtx, cancel := context.WithCancelCause(rootCtx)
+					operationCancel = cancel
+					go c.runReview(operationCtx, runner, reviewID, request.reviewTarget)
+					request.reply <- nil
+				}
 			case commandClose:
 				closeReplies = append(closeReplies, request.reply)
 				if closing {
@@ -610,7 +746,10 @@ func (c *Controller) coordinate() {
 					if operationCancel != nil {
 						operationCancel(ErrHardCanceled)
 					}
-				} else if compacting && operationCancel != nil {
+				} else if (compacting || reviewing) && operationCancel != nil {
+					if reviewing {
+						reviewCancelCause = context.Canceled
+					}
 					operationCancel(context.Canceled)
 				}
 				if activeEvidence != nil {
@@ -639,6 +778,55 @@ func (c *Controller) run(ctx context.Context, kind operationKind, input frontend
 	c.results <- operationResult{kind: kind, err: err}
 }
 
+func (c *Controller) runReview(
+	ctx context.Context,
+	runner reviewRuntime,
+	reviewID string,
+	target codingreview.Target,
+) {
+	var emitMu sync.Mutex
+	var emitErr error
+	recordEmitError := func(err error) error {
+		emitMu.Lock()
+		defer emitMu.Unlock()
+		if emitErr == nil {
+			emitErr = err
+		}
+		return err
+	}
+	emit := func(event codingreview.Event) error {
+		event = event.Clone()
+		if err := event.Validate(); err != nil {
+			return recordEmitError(err)
+		}
+		select {
+		case c.reviewEvents <- reviewOperationEvent{reviewID: reviewID, event: event}:
+			return nil
+		case <-ctx.Done():
+			return recordEmitError(context.Cause(ctx))
+		case <-c.done:
+			return recordEmitError(ErrClosed)
+		}
+	}
+	result, err := runner.RunReview(ctx, reviewID, target, emit)
+	emitMu.Lock()
+	err = errors.Join(err, emitErr)
+	emitMu.Unlock()
+	if err == nil {
+		switch {
+		case result.ReviewID != reviewID:
+			err = fmt.Errorf("coding review result ID does not match active review")
+		case result.Target != target:
+			err = fmt.Errorf("coding review result target does not match active review")
+		default:
+			err = result.Validate()
+		}
+	}
+	c.results <- operationResult{
+		kind: operationReview, reviewID: reviewID, review: result, err: err,
+	}
+}
+
 func (c *Controller) runEvidence(ctx context.Context, id uint64, kind operationKind, request command) {
 	result := operationResult{id: id, kind: kind, request: request}
 	switch kind {
@@ -659,9 +847,12 @@ func (c *Controller) projectOperationError(result operationResult) {
 	if result.err == nil || isOnlyIntentionalCancellation(result.err) {
 		return
 	}
-	if result.kind == operationTurn {
+	switch result.kind {
+	case operationTurn:
 		c.projector.Error("", "controller:turn-error", "coding turn failed")
-	} else {
+	case operationReview:
+		c.projector.Error("", "controller:review-error", "coding review failed")
+	default:
 		c.projector.Error("", "controller:compaction-error", "coding compaction failed")
 	}
 }
