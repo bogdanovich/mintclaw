@@ -1427,6 +1427,23 @@ func markTestInteractionWaiting(
 	return record
 }
 
+func assertInteractionEventTypes(
+	t *testing.T,
+	registry *interactions.Registry,
+	interactionID string,
+	want ...interactions.EventType,
+) {
+	t.Helper()
+	events := registry.ListEvents(interactionID)
+	got := make([]interactions.EventType, 0, len(events))
+	for _, event := range events {
+		got = append(got, event.Type)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("interaction events = %v, want %v", got, want)
+	}
+}
+
 func prepareWaitingControlInteraction(
 	t *testing.T,
 	al *AgentLoop,
@@ -6118,6 +6135,25 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 		t.Fatalf("retained replay produced a notice: %#v", outbound)
 	default:
 	}
+	assertInteractionEventTypes(
+		t,
+		registry,
+		first.ID,
+		interactions.EventCreated,
+		interactions.EventPromptDelivery,
+		interactions.EventWaiting,
+		interactions.EventAnswerClaimed,
+		interactions.EventResumeStarted,
+		interactions.EventResolved,
+	)
+	assertInteractionEventTypes(
+		t,
+		registry,
+		second.ID,
+		interactions.EventCreated,
+		interactions.EventPromptDelivery,
+		interactions.EventWaiting,
+	)
 }
 
 func TestProjectedAnswerMatchesDurablePromptAcrossRetainedShortIDCollision(t *testing.T) {
@@ -8222,6 +8258,16 @@ func TestRepeatedStopDoesNotDuplicateInteractionCancellation(t *testing.T) {
 	if calls != 0 {
 		t.Fatalf("model calls after repeated stop = %d, want 0", calls)
 	}
+	assertInteractionEventTypes(
+		t,
+		al.interactionRegistryForWorkspace(agent.Workspace),
+		record.ID,
+		interactions.EventCreated,
+		interactions.EventPromptDelivery,
+		interactions.EventWaiting,
+		interactions.EventCanceling,
+		interactions.EventCancelled,
+	)
 }
 
 func TestInteractionControlCancellationRequiresAuthorizedRoute(t *testing.T) {
@@ -8313,6 +8359,16 @@ func TestSessionControlCommandsCancelInteractionAndContinueNormally(t *testing.T
 			if calls != 0 {
 				t.Fatalf("%s model calls = %d, want 0", tt.command, calls)
 			}
+			assertInteractionEventTypes(
+				t,
+				al.interactionRegistryForWorkspace(agent.Workspace),
+				record.ID,
+				interactions.EventCreated,
+				interactions.EventPromptDelivery,
+				interactions.EventWaiting,
+				interactions.EventCanceling,
+				interactions.EventCancelled,
+			)
 		})
 	}
 }
@@ -8554,6 +8610,18 @@ func TestResumeClaimedInteractionAppendsOneToolResultAndResolves(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for resumed final response")
 	}
+	assertInteractionEventTypes(
+		t,
+		registry,
+		record.ID,
+		interactions.EventCreated,
+		interactions.EventPromptDelivery,
+		interactions.EventWaiting,
+		interactions.EventAnswerClaimed,
+		interactions.EventResumeStarted,
+		interactions.EventFinalDelivery,
+		interactions.EventResolved,
+	)
 }
 
 func TestInteractionWorkerReleasesSessionBeforeDrainingDeferredIngress(t *testing.T) {
@@ -8716,6 +8784,18 @@ func TestRecoverHumanInteractionsResumesDurableClaimAfterRestartWindow(t *testin
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for recovered continuation")
 	}
+	assertInteractionEventTypes(
+		t,
+		registry,
+		record.ID,
+		interactions.EventCreated,
+		interactions.EventPromptDelivery,
+		interactions.EventWaiting,
+		interactions.EventAnswerClaimed,
+		interactions.EventResumeStarted,
+		interactions.EventFinalDelivery,
+		interactions.EventResolved,
+	)
 }
 
 func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *testing.T) {
@@ -8807,6 +8887,18 @@ func TestRecoverResumingInteractionReplaysPersistedFinalWithoutModelCall(t *test
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for replayed final")
 	}
+	assertInteractionEventTypes(
+		t,
+		registry,
+		record.ID,
+		interactions.EventCreated,
+		interactions.EventPromptDelivery,
+		interactions.EventWaiting,
+		interactions.EventAnswerClaimed,
+		interactions.EventResumeStarted,
+		interactions.EventFinalDelivery,
+		interactions.EventResolved,
+	)
 }
 
 func TestRecoverResumingInteractionHydratesJournaledDeliverableBeforeFinal(t *testing.T) {
