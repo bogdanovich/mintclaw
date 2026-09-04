@@ -22,6 +22,7 @@ const (
 	// MaxInvocationOutput leaves room for protocol envelope and recovery-record
 	// metadata inside the 1 MiB WebSocket frame. Larger data uses artifacts.
 	MaxInvocationOutput     = 512 * 1024
+	MaxExecutionPlanBytes   = MaxInvocationInputBytes + 64*1024
 	MaxPolicyRevisionLength = 128
 	MaxExecutionPlanTTL     = 5 * time.Minute
 	MaxExecutionPlanSkew    = 30 * time.Second
@@ -369,7 +370,7 @@ func (plan ExecutionPlan) computeHash() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("%w: encode plan: %w", ErrInvalidInvocation, err)
 	}
-	canonical, err := canonicalBytesForProtocol(data, protocolVersion)
+	canonical, err := canonicalBytesForProtocol(data, protocolVersion, MaxExecutionPlanBytes)
 	if err != nil {
 		return "", fmt.Errorf("%w: canonicalize plan: %w", ErrInvalidInvocation, err)
 	}
@@ -632,17 +633,22 @@ func canonicalInvocationInputValueForProtocol(
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: invalid input: %w", ErrInvalidInvocation, err)
 	}
-	if _, ok := value.(map[string]any); !ok {
+	object, ok := value.(map[string]any)
+	if !ok {
 		return nil, nil, fmt.Errorf("%w: input must be an object", ErrInvalidInvocation)
 	}
-	canonical, err := canonicalBytesForProtocol(raw, protocolVersion)
+	canonical, err := canonicalBytesForProtocol(raw, protocolVersion, MaxInvocationInputBytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: canonicalize input: %w", ErrInvalidInvocation, err)
 	}
-	if len(canonical) > MaxInvocationInputBytes {
-		return nil, nil, fmt.Errorf("%w: canonical input is outside bounds", ErrInvalidInvocation)
+	if protocolVersion == ProtocolV2 {
+		value, err = jsonstrict.Decode(canonical)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: decode canonical input: %w", ErrInvalidInvocation, err)
+		}
+		object = value.(map[string]any)
 	}
-	return json.RawMessage(canonical), value.(map[string]any), nil
+	return json.RawMessage(canonical), object, nil
 }
 
 func validateInvocationInput(rawSchema json.RawMessage, input map[string]any) error {
@@ -694,6 +700,17 @@ func ValidateInvocationOutputForProtocol(
 	if !ok {
 		return nil, fmt.Errorf("%w: output must be an object", ErrInvalidInvocation)
 	}
+	canonical, err := canonicalBytesForProtocol(raw, protocolVersion, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%w: canonicalize output: %w", ErrInvalidInvocation, err)
+	}
+	if protocolVersion == ProtocolV2 {
+		value, err = jsonstrict.Decode(canonical)
+		if err != nil {
+			return nil, fmt.Errorf("%w: decode canonical output: %w", ErrInvalidInvocation, err)
+		}
+		object = value.(map[string]any)
+	}
 	if validationErr := validateInvocationValue(descriptor.OutputSchema, object, "output"); validationErr != nil {
 		return nil, validationErr
 	}
@@ -706,25 +723,22 @@ func ValidateInvocationOutputForProtocol(
 			return nil, validationErr
 		}
 	}
-	canonical, err := canonicalBytesForProtocol(raw, protocolVersion)
-	if err != nil {
-		return nil, fmt.Errorf("%w: canonicalize output: %w", ErrInvalidInvocation, err)
-	}
-	if len(canonical) > limit {
-		return nil, fmt.Errorf("%w: canonical output is outside bounds", ErrInvalidInvocation)
-	}
 	return json.RawMessage(canonical), nil
 }
 
-func canonicalBytesForProtocol(raw []byte, protocolVersion int) ([]byte, error) {
+func canonicalBytesForProtocol(raw []byte, protocolVersion int, maxBytes int) ([]byte, error) {
 	protocolVersion, err := EffectiveProtocolVersion(protocolVersion)
 	if err != nil {
 		return nil, err
 	}
 	if protocolVersion == ProtocolV2 {
-		return jsonstrict.CanonicalV2(raw)
+		return jsonstrict.CanonicalV2Bounded(raw, maxBytes)
 	}
-	return jsonstrict.Canonical(raw)
+	canonical, err := jsonstrict.Canonical(raw)
+	if err == nil && len(canonical) > maxBytes {
+		err = jsonstrict.ErrCanonicalTooLarge
+	}
+	return canonical, err
 }
 
 func validateInvocationValue(rawSchema json.RawMessage, value map[string]any, label string) error {
