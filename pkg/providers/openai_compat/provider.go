@@ -232,7 +232,7 @@ func (p *Provider) applyThinkingControl(requestBody map[string]any, model string
 		return
 	}
 
-	if p.supportsThinking() {
+	if p.usesDeepSeekThinkingControl() {
 		p.applyDeepSeekThinkingControl(requestBody, level)
 		return
 	}
@@ -289,6 +289,8 @@ func (p *Provider) thinkingControlKind(model string) string {
 	lowerModel := strings.ToLower(strings.TrimSpace(model))
 
 	switch providerName {
+	case "mimo":
+		return "thinking_type"
 	case "volcengine":
 		return "thinking_type"
 	case "zhipu", "zai":
@@ -302,6 +304,9 @@ func (p *Provider) thinkingControlKind(model string) string {
 	}
 
 	if providerName == "openai" || providerName == "" {
+		if isMiMoHost(p.apiBase) {
+			return "thinking_type"
+		}
 		if isVolcengineHost(p.apiBase) || strings.Contains(lowerModel, "doubao") {
 			return "thinking_type"
 		}
@@ -346,7 +351,15 @@ func (p *Provider) SetProviderName(providerName string) {
 }
 
 func (p *Provider) supportsThinking() bool {
+	return p.usesDeepSeekThinkingControl() || p.usesMiMoThinkingControl()
+}
+
+func (p *Provider) usesDeepSeekThinkingControl() bool {
 	return strings.EqualFold(strings.TrimSpace(p.providerName), "deepseek") || isDeepSeekHost(p.apiBase)
+}
+
+func (p *Provider) usesMiMoThinkingControl() bool {
+	return strings.EqualFold(strings.TrimSpace(p.providerName), "mimo") || isMiMoHost(p.apiBase)
 }
 
 func (p *Provider) prepareMessagesForRequest(
@@ -363,7 +376,7 @@ func (p *Provider) prepareMessagesForRequest(
 	}
 	if p.supportsThinking() && !reasoningReplayHistoryComplete(messages) {
 		// A fallback provider cannot reconstruct private reasoning emitted by a
-		// different model. DeepSeek rejects that mixed history in thinking mode,
+		// different model. DeepSeek and MiMo reject that mixed history in thinking mode,
 		// so continue the tool round in non-thinking mode rather than fabricating
 		// reasoning_content or sending a request known to fail with HTTP 400.
 		return stripReasoningMessages(messages), true
@@ -391,12 +404,9 @@ func isDeepSeekHost(apiBase string) bool {
 }
 
 func isMiMoHost(apiBase string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(apiBase))
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	return host == "xiaomimimo.com" || strings.HasSuffix(host, ".xiaomimimo.com")
+	host := normalizedHostname(apiBase)
+	return host == "xiaomimimo.com" || strings.HasSuffix(host, ".xiaomimimo.com") ||
+		host == "mimo.mi.com" || strings.HasSuffix(host, ".mimo.mi.com")
 }
 
 func preserveReasoningReplayMessages(messages []Message) []Message {
