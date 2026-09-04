@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,6 +18,78 @@ import (
 type secretFieldFixture struct {
 	path  string
 	value string
+}
+
+func TestProjectPublicConfigRemovesEveryRegisteredSecretWithoutMutatingSource(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ModelList = SecureModelList{&ModelConfig{
+		ModelName: "projection-model",
+		Provider:  "openai",
+		Model:     "gpt-4",
+		Enabled:   true,
+	}}
+	cfg.Channels = make(ChannelsConfig)
+
+	fixtures := make([]secretFieldFixture, 0)
+	seedSecretFields(reflect.ValueOf(cfg), "config", &fixtures)
+	seedRegisteredChannelSecrets(cfg.Channels, &fixtures)
+	if len(fixtures) == 0 {
+		t.Fatal("secret fixture discovery found no fields")
+	}
+
+	projected, err := ProjectPublicConfig(cfg)
+	if err != nil {
+		t.Fatalf("ProjectPublicConfig() error = %v", err)
+	}
+	publicData, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatalf("Marshal(projected) error = %v", err)
+	}
+	projectedFields := make(map[string][]string)
+	collectSecretFields(reflect.ValueOf(projected), "config", projectedFields)
+	collectRegisteredChannelSecrets(t, projected.Channels, projectedFields)
+	if len(projectedFields) != 0 {
+		paths := make([]string, 0, len(projectedFields))
+		for path := range projectedFields {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		t.Fatalf("public projection retains populated secret fields: %v", paths)
+	}
+	for _, fixture := range fixtures {
+		if strings.Contains(string(publicData), fixture.value) {
+			t.Errorf("public projection contains the secret for %s", fixture.path)
+		}
+	}
+
+	originalFields := make(map[string][]string, len(fixtures))
+	collectSecretFields(reflect.ValueOf(cfg), "config", originalFields)
+	collectRegisteredChannelSecrets(t, cfg.Channels, originalFields)
+	for _, fixture := range fixtures {
+		values := originalFields[fixture.path]
+		if len(values) != 1 || values[0] != fixture.value {
+			t.Errorf("public projection mutated the secret bound to %s", fixture.path)
+		}
+	}
+
+	projected.ModelList[0].Model = "changed"
+	delete(projected.Channels, "contract-telegram")
+	if cfg.ModelList[0].Model != "gpt-4" || len(projected.Channels) == len(cfg.Channels) {
+		t.Fatal("public projection shares mutable model or channel state with the source")
+	}
+}
+
+func TestProjectPublicConfigRejectsUnregisteredChannelSchema(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Channels = ChannelsConfig{
+		"unknown": {
+			Type:     "unregistered-channel",
+			Settings: RawNode(`{"credential":"must-not-be-projected"}`),
+		},
+	}
+	if _, err := ProjectPublicConfig(cfg); err == nil {
+		t.Fatal("ProjectPublicConfig() accepted an unregistered channel schema")
+	}
 }
 
 func TestRepositoryDocumentsProjectEveryRegisteredSecretField(t *testing.T) {

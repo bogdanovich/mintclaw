@@ -146,7 +146,11 @@ func validateConfigForSave(cfg *config.Config) error {
 		return fmt.Errorf("config is nil")
 	}
 
-	data, err := json.Marshal(cfg)
+	publicCfg, err := config.ProjectPublicConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to project config: %w", err)
+	}
+	data, err := json.Marshal(publicCfg)
 	if err != nil {
 		return fmt.Errorf("failed to serialize config: %w", err)
 	}

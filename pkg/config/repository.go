@@ -319,7 +319,11 @@ func marshalConfigDocuments(cfg *Config) (configDocuments, error) {
 	if err != nil {
 		return configDocuments{}, err
 	}
-	publicData, err := json.MarshalIndent(&copyCfg, "", "  ")
+	publicCfg, err := ProjectPublicConfig(&copyCfg)
+	if err != nil {
+		return configDocuments{}, err
+	}
+	publicData, err := json.MarshalIndent(publicCfg, "", "  ")
 	if err != nil {
 		return configDocuments{}, err
 	}

@@ -235,48 +235,71 @@ type Channel struct {
 // Outputs nested format: common fields at top level, channel-specific in "settings".
 // Secure fields (SecureString/SecureStrings) are removed from settings output.
 func (b Channel) MarshalJSON() ([]byte, error) {
-	var settings RawNode
+	settings := b.Settings
 	if b.extend != nil {
-		raw, err := json.Marshal(b.extend)
+		projected, err := projectPublicExtensionValue(reflect.ValueOf(b.extend))
 		if err != nil {
 			return nil, err
 		}
-		raw = preserveExplicitDisabledStreaming(raw, b.Settings)
-		settings = raw
-	} else {
-		settings = b.Settings
+		raw, err := json.Marshal(projected.Interface())
+		if err != nil {
+			return nil, err
+		}
+		settings = preserveExplicitStreamingEnabled(raw, b.Settings)
 	}
 
 	out := b
 	out.Settings = settings
+	out.extend = nil
 
 	// Use type alias to bypass our custom MarshalJSON (infinite recursion)
 	type Alias Channel
 	return json.Marshal((*Alias)(&out))
 }
 
-func preserveExplicitDisabledStreaming(settings, original RawNode) RawNode {
+func preserveExplicitStreamingEnabled(settings, original RawNode) RawNode {
 	if len(original) == 0 || len(settings) == 0 {
 		return settings
 	}
 
-	var originalMap map[string]any
+	var originalMap map[string]json.RawMessage
 	if err := json.Unmarshal(original, &originalMap); err != nil {
 		return settings
 	}
-	originalStreaming, ok := originalMap["streaming"].(map[string]any)
-	if !ok || originalStreaming["enabled"] != false {
+	var originalStreaming map[string]json.RawMessage
+	if err := json.Unmarshal(originalMap["streaming"], &originalStreaming); err != nil {
+		return settings
+	}
+	var originalEnabled *bool
+	if err := json.Unmarshal(originalStreaming["enabled"], &originalEnabled); err != nil || originalEnabled == nil {
 		return settings
 	}
 
-	var settingsMap map[string]any
+	var settingsMap map[string]json.RawMessage
 	if err := json.Unmarshal(settings, &settingsMap); err != nil {
 		return settings
 	}
-	if _, exists := settingsMap["streaming"]; exists {
+	if settingsMap == nil {
+		settingsMap = make(map[string]json.RawMessage)
+	}
+	settingsStreaming := make(map[string]json.RawMessage)
+	if rawStreaming, ok := settingsMap["streaming"]; ok {
+		if err := json.Unmarshal(rawStreaming, &settingsStreaming); err != nil {
+			return settings
+		}
+		if settingsStreaming == nil {
+			return settings
+		}
+	}
+	if _, explicit := settingsStreaming["enabled"]; explicit {
 		return settings
 	}
-	settingsMap["streaming"] = map[string]any{"enabled": false}
+	settingsStreaming["enabled"] = json.RawMessage("false")
+	streamingData, err := json.Marshal(settingsStreaming)
+	if err != nil {
+		return settings
+	}
+	settingsMap["streaming"] = streamingData
 
 	data, err := json.Marshal(settingsMap)
 	if err != nil {

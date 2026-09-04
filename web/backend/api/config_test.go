@@ -173,6 +173,13 @@ func setConfigIfMatch(t *testing.T, req *http.Request, configPath string) {
 func TestHandleGetConfig_ReturnsRevisionWithoutWritingConfig(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
+	const secret = "get-config-public-projection-secret"
+	if _, err := config.NewRepository(configPath).Update(func(cfg *config.Config) error {
+		cfg.Tools.Web.Gemini.APIKey = *config.NewSecureString(secret)
+		return nil
+	}); err != nil {
+		t.Fatalf("seed config secret: %v", err)
+	}
 
 	securityPath := filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile)
 	publicBefore, err := os.ReadFile(configPath)
@@ -212,6 +219,9 @@ func TestHandleGetConfig_ReturnsRevisionWithoutWritingConfig(t *testing.T) {
 	}
 	if bytes.Contains(rec.Body.Bytes(), []byte(`"dm_scope"`)) {
 		t.Fatalf("response contains removed session.dm_scope field: %s", rec.Body.Bytes())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte(secret)) {
+		t.Fatal("GET /api/config exposed a secret value")
 	}
 	publicAfter, _ := os.ReadFile(configPath)
 	securityAfter, _ := os.ReadFile(securityPath)
