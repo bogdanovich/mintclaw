@@ -1388,7 +1388,7 @@ func TestToolApprovalBypassRequiresTrustedNodeTool(t *testing.T) {
 	cfg.Tools.Approval.BypassNodeTargets = []string{"vpn"}
 	arguments := map[string]any{"target": "vpn"}
 	registry := tools.NewToolRegistry()
-	registry.Register(tools.NewNodeInvokeTool(nil, nil))
+	registry.Register(tools.NewNodeInvokeTool(tools.NewNodeToolOptions(nil), nil))
 
 	if bypass, _ := toolApprovalBypass(cfg, registry, "nodes_invoke", arguments); !bypass {
 		t.Fatal("trusted node tool did not receive the configured target bypass")

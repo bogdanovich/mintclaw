@@ -64,7 +64,7 @@ func TestGenericNodeDiscoveryHidesInternalWorkspaceCommandsAndExplainsPublicTool
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 
 	summary := decodeNodeResult(t, tool.Execute(ctx, map[string]any{"action": "describe", "target": "build"}))
@@ -84,7 +84,7 @@ func TestGenericNodeDiscoveryHidesInternalWorkspaceCommandsAndExplainsPublicTool
 		!strings.Contains(tool.Description(), "Delete remote files with an apply_patch *** Delete File section") {
 		t.Fatalf("nodes tool description lacks workspace guidance: %q", tool.Description())
 	}
-	noSnapshot := NewNodeDiscoveryTool(cfg, &fakeNodeDiscoverySource{})
+	noSnapshot := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), &fakeNodeDiscoverySource{})
 	result = noSnapshot.Execute(ctx, map[string]any{
 		"action": "describe", "target": "build", "command": nodes.WorkspaceCommandRead,
 	})
@@ -154,7 +154,7 @@ func TestNodeDiscoveryToolListUsesEffectiveAgentPolicy(t *testing.T) {
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
 
 	mainResult := tool.Execute(
 		toolshared.WithToolSessionContext(context.Background(), "main", "session", nil),
@@ -235,7 +235,7 @@ func TestNodeDiscoveryToolReturnsOneBoundedCommandContract(t *testing.T) {
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 
 	summary := tool.Execute(ctx, map[string]any{"action": "describe", "target": "build"})
@@ -316,7 +316,7 @@ func TestNodeDiscoveryProjectsOnlyConfiguredFileProfile(t *testing.T) {
 		},
 		connected: map[nodes.ID]bool{snapshot.ID: true},
 	}
-	result := NewNodeDiscoveryTool(cfg, source).Execute(
+	result := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(
 		toolshared.WithToolSessionContext(context.Background(), "main", "session", nil),
 		map[string]any{
 			"action":  "describe",
@@ -381,7 +381,7 @@ func TestNodeDiscoveryProjectsOnlyConfiguredServiceProfile(t *testing.T) {
 	target := cfg.Execution.Targets["build"]
 	target.ServiceProfile = "server-services"
 	cfg.Execution.Targets["build"] = target
-	result := NewNodeDiscoveryTool(cfg, source).Execute(
+	result := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(
 		toolshared.WithToolSessionContext(context.Background(), "main", "session", nil),
 		map[string]any{
 			"action":  "describe",
@@ -417,7 +417,7 @@ func TestNodeDiscoveryProjectsOnlyConfiguredServiceProfile(t *testing.T) {
 	}
 	target.ServiceProfile = "secret-services"
 	cfg.Execution.Targets["build"] = target
-	secretResult := NewNodeDiscoveryTool(cfg, source).Execute(
+	secretResult := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(
 		toolshared.WithToolSessionContext(context.Background(), "main", "session", nil),
 		map[string]any{"action": "describe", "target": "build", "command": descriptor.Name},
 	)
@@ -428,7 +428,7 @@ func TestNodeDiscoveryProjectsOnlyConfiguredServiceProfile(t *testing.T) {
 
 	target.ServiceProfile = ""
 	cfg.Execution.Targets["build"] = target
-	denied := NewNodeDiscoveryTool(cfg, source).Execute(
+	denied := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(
 		toolshared.WithToolSessionContext(context.Background(), "main", "session", nil),
 		map[string]any{"action": "describe", "target": "build", "command": descriptor.Name},
 	)
@@ -463,7 +463,7 @@ func TestNodeDiscoveryBindsConfiguredServiceApprovalBypass(t *testing.T) {
 	args := map[string]any{
 		"action": "describe", "target": "build", "command": descriptor.Name,
 	}
-	required := decodeNodeResult(t, NewNodeDiscoveryTool(cfg, source).Execute(ctx, args))
+	required := decodeNodeResult(t, NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(ctx, args))
 	requiredRevision := required["discovery_revision"]
 	requiredCommand := required["command"].(map[string]any)
 	if requiredCommand["service"].(map[string]any)["action_approval"] != "required" {
@@ -471,7 +471,7 @@ func TestNodeDiscoveryBindsConfiguredServiceApprovalBypass(t *testing.T) {
 	}
 
 	cfg.Tools.Approval.BypassNodeTargets = []string{"build"}
-	bypassed := decodeNodeResult(t, NewNodeDiscoveryTool(cfg, source).Execute(ctx, args))
+	bypassed := decodeNodeResult(t, NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(ctx, args))
 	bypassedCommand := bypassed["command"].(map[string]any)
 	service := bypassedCommand["service"].(map[string]any)
 	execution := bypassedCommand["execution"].(map[string]any)
@@ -559,7 +559,7 @@ func TestNodeDiscoveryAdmitsMaximumServiceActionProjection(t *testing.T) {
 	target.ServiceProfile = profiles[0].Alias
 	cfg.Execution.Targets["build"] = target
 	cfg.Tools.Approval.BypassNodeTargets = []string{"build"}
-	result := NewNodeDiscoveryTool(cfg, source).Execute(
+	result := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(
 		toolshared.WithToolSessionContext(context.Background(), "main", "session", nil),
 		map[string]any{"action": "describe", "target": "build", "command": descriptor.Name},
 	)
@@ -744,7 +744,7 @@ func TestNodeDiscoveryToolFailsClosedForOversizedCommandProjection(t *testing.T)
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 	summary := decodeNodeResult(t, tool.Execute(ctx, map[string]any{
 		"action": "describe",
@@ -806,7 +806,7 @@ func TestNodeDiscoveryToolBoundsAndSortsMaximumCatalog(t *testing.T) {
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 	args := map[string]any{"action": "describe", "target": "build"}
 	first := tool.Execute(ctx, args)
@@ -874,13 +874,13 @@ func TestNodeDiscoveryRevisionTracksAuthorityButNotHeartbeat(t *testing.T) {
 		}))
 		return payload["discovery_revision"].(string)
 	}
-	initial := revision(NewNodeDiscoveryTool(cfg, source))
+	initial := revision(NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source))
 
 	snapshot.LastSeenAt++
 	registration.Snapshot = snapshot
 	source.byRef["builder-node"] = snapshot
 	source.registrations[snapshot.ID] = registration
-	if heartbeat := revision(NewNodeDiscoveryTool(cfg, source)); heartbeat != initial {
+	if heartbeat := revision(NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)); heartbeat != initial {
 		t.Fatalf("heartbeat changed discovery revision: %s != %s", heartbeat, initial)
 	}
 
@@ -888,14 +888,14 @@ func TestNodeDiscoveryRevisionTracksAuthorityButNotHeartbeat(t *testing.T) {
 	registration.Snapshot = snapshot
 	source.byRef["builder-node"] = snapshot
 	source.registrations[snapshot.ID] = registration
-	policyChanged := revision(NewNodeDiscoveryTool(cfg, source))
+	policyChanged := revision(NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source))
 	if policyChanged == initial {
 		t.Fatal("policy revision did not invalidate discovery")
 	}
 
 	narrowed := nodeDiscoveryTestConfig()
 	narrowed.Agents.Defaults.TargetPolicy.AllowedTargets = []string{"build"}
-	if changed := revision(NewNodeDiscoveryTool(narrowed, source)); changed == policyChanged {
+	if changed := revision(NewNodeDiscoveryTool(NewNodeToolOptions(narrowed), source)); changed == policyChanged {
 		t.Fatal("effective target grant did not invalidate discovery")
 	}
 
@@ -904,7 +904,7 @@ func TestNodeDiscoveryRevisionTracksAuthorityButNotHeartbeat(t *testing.T) {
 	binding.Node = "builder-node-2"
 	rebound.Execution.Targets["build"] = binding
 	source.byRef["builder-node-2"] = snapshot
-	reboundRevision := revision(NewNodeDiscoveryTool(rebound, source))
+	reboundRevision := revision(NewNodeDiscoveryTool(NewNodeToolOptions(rebound), source))
 	if reboundRevision == policyChanged {
 		t.Fatal("target binding did not invalidate discovery")
 	}
@@ -918,7 +918,7 @@ func TestNodeDiscoveryRevisionTracksAuthorityButNotHeartbeat(t *testing.T) {
 	registration.ApprovedCatalogHash = catalogHash
 	source.byRef["builder-node-2"] = snapshot
 	source.registrations[snapshot.ID] = registration
-	if changed := revision(NewNodeDiscoveryTool(rebound, source)); changed == reboundRevision {
+	if changed := revision(NewNodeDiscoveryTool(NewNodeToolOptions(rebound), source)); changed == reboundRevision {
 		t.Fatal("descriptor model contract did not invalidate discovery")
 	}
 }
@@ -946,7 +946,7 @@ func TestNodeDiscoveryRevisionChangesWhenAliasMovesToAnotherIdentity(t *testing.
 		connected:     map[nodes.ID]bool{snapshot.ID: true},
 		registrations: map[nodes.ID]nodes.Registration{snapshot.ID: registration},
 	}
-	tool := NewNodeDiscoveryTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 	revision := func() string {
 		t.Helper()
@@ -1000,7 +1000,7 @@ func TestNodeDiscoveryToolDescribeRedactsIdentityAndUnapprovedCapabilities(t *te
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 
 	result := tool.Execute(ctx, map[string]any{"action": "describe", "target": "build"})
@@ -1046,7 +1046,7 @@ func TestNodeDiscoveryToolRequiresReapprovalForChangedCatalog(t *testing.T) {
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 
 	listResult := tool.Execute(ctx, map[string]any{"action": "list"})
@@ -1089,7 +1089,7 @@ func TestNodeDiscoveryToolDoesNotTrustPersistedConnectedStateAfterRestart(t *tes
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 
 	for _, action := range []map[string]any{
@@ -1122,7 +1122,7 @@ func TestNodeDiscoveryToolDoesNotSuggestReapprovalForRevokedNode(t *testing.T) {
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 
 	for _, action := range []map[string]any{
@@ -1165,7 +1165,7 @@ func TestNodeDiscoveryToolOmitsUntrustedNodeClaims(t *testing.T) {
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, source)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source)
 	ctx := toolshared.WithToolSessionContext(context.Background(), "main", "session", nil)
 
 	for _, action := range []map[string]any{
@@ -1190,7 +1190,7 @@ func TestNodeDiscoveryToolOmitsUntrustedNodeClaims(t *testing.T) {
 }
 
 func TestNodeDiscoveryToolRejectsInvisibleTarget(t *testing.T) {
-	tool := NewNodeDiscoveryTool(nodeDiscoveryTestConfig(), &fakeNodeDiscoverySource{})
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), &fakeNodeDiscoverySource{})
 	ctx := toolshared.WithToolSessionContext(context.Background(), "ops", "session", nil)
 	result := tool.Execute(ctx, map[string]any{"action": "describe", "target": "build"})
 	if !result.IsError || !strings.Contains(result.ForLLM, "not visible") {
@@ -1206,7 +1206,7 @@ func TestNodeDiscoveryToolWithoutPolicyExposesNoTargets(t *testing.T) {
 			},
 		},
 	}
-	tool := NewNodeDiscoveryTool(cfg, &fakeNodeDiscoverySource{})
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), &fakeNodeDiscoverySource{})
 	result := tool.Execute(context.Background(), map[string]any{"action": "list"})
 	payload := decodeNodeResult(t, result)
 	if got := payload["count"]; got != float64(0) {
@@ -1215,10 +1215,9 @@ func TestNodeDiscoveryToolWithoutPolicyExposesNoTargets(t *testing.T) {
 }
 
 func TestNodeDiscoveryToolReturnsRegistryErrors(t *testing.T) {
-	tool := NewNodeDiscoveryTool(
-		nodeDiscoveryTestConfig(),
-		&fakeNodeDiscoverySource{err: errors.New("registry unavailable")},
-	)
+	options := NewNodeToolOptions(nodeDiscoveryTestConfig())
+	tool := NewNodeDiscoveryTool(options, &fakeNodeDiscoverySource{err: errors.New("registry unavailable")})
+
 	result := tool.Execute(context.Background(), map[string]any{"action": "list"})
 	if !result.IsError || !strings.Contains(result.ForLLM, "node registry lookup failed") ||
 		strings.Contains(result.ForLLM, "registry unavailable") {
@@ -1227,9 +1226,41 @@ func TestNodeDiscoveryToolReturnsRegistryErrors(t *testing.T) {
 }
 
 func TestNodeDiscoveryToolLoopSemantics(t *testing.T) {
-	tool := NewNodeDiscoveryTool(nil, nil)
+	tool := NewNodeDiscoveryTool(NewNodeToolOptions(nil), nil)
 	if got := tool.ToolLoopSemantics(); got != loopguard.SemanticsReadOnlyIdempotent {
 		t.Fatalf("loop semantics = %q", got)
+	}
+}
+
+func TestNodeToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
+	cfg := nodeFileTransferTestConfig()
+	cfg.Tools.Approval.BypassNodeTargets = []string{"build"}
+	options := NewNodeToolOptions(cfg)
+
+	target := cfg.Execution.Targets["build"]
+	target.Node = "replacement-node"
+	target.FileProfile = ""
+	cfg.Execution.Targets["build"] = target
+	cfg.Agents.Defaults.TargetPolicy.DefaultTarget = "cold"
+	cfg.Agents.Defaults.TargetPolicy.AllowedTargets[0] = "vpn"
+	cfg.Agents.List[0].TargetPolicy.AllowedTargets[0] = "cold"
+	cfg.Tools.Approval.BypassNodeTargets[0] = "cold"
+
+	snapshotTarget := options.targets["build"]
+	if snapshotTarget.Node != "builder-node" || snapshotTarget.FileProfile != "project" {
+		t.Fatalf("node tool options observed mutated target: %#v", snapshotTarget)
+	}
+	if options.defaultPolicy.DefaultTarget != "build" || options.defaultPolicy.AllowedTargets[0] != "cold" {
+		t.Fatalf("node tool options observed mutated default policy: %#v", options.defaultPolicy)
+	}
+	if options.agentPolicies["ops"].AllowedTargets[0] != "vpn" {
+		t.Fatalf("node tool options observed mutated agent policy: %#v", options.agentPolicies["ops"])
+	}
+	if _, bypass := options.approvalBypassTargets["build"]; !bypass {
+		t.Fatal("node tool options observed a mutated approval bypass list")
+	}
+	if _, permitted := options.fileAgents["main"]; !permitted {
+		t.Fatal("node tool options lost its snapshotted file-transfer agent")
 	}
 }
 

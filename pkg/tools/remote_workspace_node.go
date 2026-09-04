@@ -55,7 +55,7 @@ func NewRemoteWorkspaceNodeRouter(
 	if cfg == nil || source == nil || strings.TrimSpace(agentID) == "" {
 		return nil, fmt.Errorf("remote workspace node router requires config, source, and agent")
 	}
-	runtime := newNodeInvocationToolRuntime(cfg, source)
+	runtime := newNodeInvocationToolRuntime(NewNodeToolOptions(cfg), source)
 	visible, _ := runtime.access.visibleTargets(agentID)
 	byAlias := make(map[string]remoteWorkspaceNodeBinding)
 	aliases := make([]string, 0, len(cfg.Execution.RemoteWorkspaces))

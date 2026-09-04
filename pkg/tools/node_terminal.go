@@ -152,18 +152,18 @@ type NodeTerminalEventPayload struct {
 	ErrorCode   string `json:"error_code,omitempty"`
 }
 
-func NewNodeTerminalTool(cfg *config.Config, source NodeTerminalSource) *NodeTerminalTool {
+func NewNodeTerminalTool(options NodeToolOptions, source NodeTerminalSource) *NodeTerminalTool {
 	return &NodeTerminalTool{
-		access: newNodeTargetAccess(cfg, source),
+		access: newNodeTargetAccess(options, source),
 		source: source,
 	}
 }
 
 // NewNodeTerminalOperator creates the deterministic operator-side terminal
 // opener using the same configured target authority as the model-facing tool.
-func NewNodeTerminalOperator(cfg *config.Config, source NodeTerminalSource) *NodeTerminalOperator {
+func NewNodeTerminalOperator(options NodeToolOptions, source NodeTerminalSource) *NodeTerminalOperator {
 	return &NodeTerminalOperator{
-		access: newNodeTargetAccess(cfg, source),
+		access: newNodeTargetAccess(options, source),
 		source: source,
 	}
 }

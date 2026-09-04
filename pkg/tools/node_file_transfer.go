@@ -182,16 +182,16 @@ func (denial *nodeFileSafeDenialError) SafeApprovalDenialResult() *toolshared.To
 	})
 }
 
-func NewNodeFileInfoTool(cfg *config.Config, source NodeFileTransferSource) *NodeFileInfoTool {
-	return &NodeFileInfoTool{runtime: newNodeFileTransferToolRuntime(cfg, source)}
+func NewNodeFileInfoTool(options NodeToolOptions, source NodeFileTransferSource) *NodeFileInfoTool {
+	return &NodeFileInfoTool{runtime: newNodeFileTransferToolRuntime(options, source)}
 }
 
-func NewNodeUploadTool(cfg *config.Config, source NodeFileTransferSource) *NodeUploadTool {
-	return &NodeUploadTool{runtime: newNodeFileTransferToolRuntime(cfg, source)}
+func NewNodeUploadTool(options NodeToolOptions, source NodeFileTransferSource) *NodeUploadTool {
+	return &NodeUploadTool{runtime: newNodeFileTransferToolRuntime(options, source)}
 }
 
-func NewNodeDownloadTool(cfg *config.Config, source NodeFileTransferSource) *NodeDownloadTool {
-	return &NodeDownloadTool{runtime: newNodeFileTransferToolRuntime(cfg, source)}
+func NewNodeDownloadTool(options NodeToolOptions, source NodeFileTransferSource) *NodeDownloadTool {
+	return &NodeDownloadTool{runtime: newNodeFileTransferToolRuntime(options, source)}
 }
 
 // SetEventPublisher injects the runtime event bus used for file-transfer observations.
@@ -216,13 +216,13 @@ func (tool *NodeDownloadTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 }
 
 func newNodeFileTransferToolRuntime(
-	cfg *config.Config,
+	options NodeToolOptions,
 	source NodeFileTransferSource,
 ) *nodeFileTransferToolRuntime {
 	return &nodeFileTransferToolRuntime{
-		access:          newNodeTargetAccess(cfg, source),
+		access:          newNodeTargetAccess(options, source),
 		source:          source,
-		permittedAgents: configuredNodeFileAgents(cfg),
+		permittedAgents: options.fileAgents,
 	}
 }
 

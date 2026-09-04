@@ -150,7 +150,7 @@ func (source *fakeNodeFileTransferSource) HandoffDownloadedArtifact(
 
 func TestNodeFileInfoReusesExactApprovalAndQueriesWithoutReplay(t *testing.T) {
 	source := newFakeNodeFileTransferSource(t, "required")
-	tool := NewNodeFileInfoTool(nodeFileTransferTestConfig(), source)
+	tool := NewNodeFileInfoTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "file-call-1")
 	args := nodeFileInfoTestArgs(t, source, ctx)
 
@@ -191,7 +191,7 @@ func TestNodeFileInfoReusesExactApprovalAndQueriesWithoutReplay(t *testing.T) {
 
 func TestNodeDownloadReusesJobArtifactAuthorityAndExactApproval(t *testing.T) {
 	source := newFakeNodeJobArtifactSource(t, "required")
-	tool := NewNodeDownloadTool(nodeJobArtifactTestConfig(), source)
+	tool := NewNodeDownloadTool(NewNodeToolOptions(nodeJobArtifactTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "job-artifact-call")
 	args := nodeJobArtifactDownloadTestArgs(t, source, ctx)
 
@@ -250,7 +250,7 @@ func TestNodeDownloadSchemaRequiresExactlyOneSourceKind(t *testing.T) {
 
 func TestNodeFileTransferEventsExposeLifecycleWithoutContentOrAuthority(t *testing.T) {
 	source := newFakeNodeFileTransferSource(t, "none")
-	tool := NewNodeFileInfoTool(nodeFileTransferTestConfig(), source)
+	tool := NewNodeFileInfoTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 	eventBus := &recordingNodeEventBus{}
 	tool.SetEventPublisher(eventBus)
 	ctx := nodeInvocationTestContext("actor-1", "file-event-call")
@@ -393,7 +393,7 @@ func mergeNodeFileApprovalArguments(base, extra map[string]any) map[string]any {
 
 func TestNodeFileApprovalContinuationRejectsChangedInputAndActor(t *testing.T) {
 	source := newFakeNodeFileTransferSource(t, "required")
-	tool := NewNodeFileInfoTool(nodeFileTransferTestConfig(), source)
+	tool := NewNodeFileInfoTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "file-call-1")
 	args := nodeFileInfoTestArgs(t, source, ctx)
 	if _, err := tool.ApprovalArguments(ctx, args); err != nil {
@@ -474,7 +474,7 @@ func TestNodeFileApprovalBypassDispatchesRequiredUploadAndDownload(t *testing.T)
 				SHA256:       strings.Repeat("a", sha256.Size*2),
 			},
 		}
-		tool := NewNodeUploadTool(nodeFileTransferTestConfig(), source)
+		tool := NewNodeUploadTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 		ctx := nodeInvocationTestContext("actor-1", "file-bypass-upload")
 		args := nodeFileUploadTestArgs(t, source, ctx, "media://bypass-upload")
 		if result := tool.Execute(ctx, args); !strings.Contains(result.ForLLM, "APPROVAL_REQUIRED") {
@@ -501,7 +501,7 @@ func TestNodeFileApprovalBypassDispatchesRequiredUploadAndDownload(t *testing.T)
 			Filename:    "image.png",
 			ContentType: "image/png",
 		}
-		tool := NewNodeDownloadTool(nodeFileTransferTestConfig(), source)
+		tool := NewNodeDownloadTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 		ctx := nodeInvocationTestContext("actor-1", "file-bypass-download")
 		args := nodeFileDownloadTestArgs(t, source, ctx, false)
 		if result := tool.Execute(ctx, args); !strings.Contains(result.ForLLM, "APPROVAL_REQUIRED") {
@@ -529,7 +529,7 @@ func TestNodeUploadApprovalContinuationBindsOriginalMediaArtifact(t *testing.T) 
 			SHA256:       strings.Repeat("a", sha256.Size*2),
 		},
 	}
-	tool := NewNodeUploadTool(nodeFileTransferTestConfig(), source)
+	tool := NewNodeUploadTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "file-call-upload")
 	args := nodeFileUploadTestArgs(t, source, ctx, "media://artifact-one")
 	approval, err := tool.ApprovalArguments(ctx, args)
@@ -557,7 +557,7 @@ func TestGenericNodeInvokeRejectsFileTransferCommands(t *testing.T) {
 		t,
 		nodeFileUploadTestDescriptor("none"),
 	)
-	tool := NewNodeInvokeTool(nodeFileTransferTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 	result := tool.Execute(
 		nodeInvocationTestContext("actor-1", "generic-file-call"),
 		map[string]any{
@@ -578,14 +578,14 @@ func TestNodeStatusAndCancelUseActorScopedFileTransferLifecycle(t *testing.T) {
 	source := newFakeNodeFileTransferSource(t, "none")
 	ctx := nodeInvocationTestContext("actor-1", "file-call-status")
 	args := nodeFileInfoTestArgs(t, source, ctx)
-	invoked := NewNodeFileInfoTool(nodeFileTransferTestConfig(), source).Execute(ctx, args)
+	invoked := NewNodeFileInfoTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(ctx, args)
 	payload := decodeNodeResult(t, invoked)
 	transferID, _ := payload["transfer_id"].(string)
 	if transferID == "" {
 		t.Fatalf("invocation result = %#v", payload)
 	}
 
-	status := NewNodeStatusTool(nodeFileTransferTestConfig(), source).Execute(
+	status := NewNodeStatusTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(
 		ctx,
 		map[string]any{"invocation_id": transferID},
 	)
@@ -594,7 +594,7 @@ func TestNodeStatusAndCancelUseActorScopedFileTransferLifecycle(t *testing.T) {
 		t.Fatalf("file status = %#v, queries=%d", statusPayload, source.queryCalls)
 	}
 
-	denied := NewNodeCancelTool(nodeFileTransferTestConfig(), source).Execute(
+	denied := NewNodeCancelTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(
 		nodeInvocationTestContext("actor-2", "other-cancel-call"),
 		map[string]any{"invocation_id": transferID},
 	)
@@ -603,7 +603,7 @@ func TestNodeStatusAndCancelUseActorScopedFileTransferLifecycle(t *testing.T) {
 		t.Fatalf("cross-actor cancel = %#v, cancels=%d", deniedPayload, source.cancelCalls)
 	}
 
-	canceled := NewNodeCancelTool(nodeFileTransferTestConfig(), source).Execute(
+	canceled := NewNodeCancelTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(
 		ctx,
 		map[string]any{"invocation_id": transferID},
 	)
@@ -619,11 +619,11 @@ func TestNodeStatusReportsDisconnectedFileTransferUnknownWithoutReplay(t *testin
 	args := nodeFileInfoTestArgs(t, source, ctx)
 	payload := decodeNodeResult(
 		t,
-		NewNodeFileInfoTool(nodeFileTransferTestConfig(), source).Execute(ctx, args),
+		NewNodeFileInfoTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(ctx, args),
 	)
 	source.connected["private-node-id"] = false
 
-	status := NewNodeStatusTool(nodeFileTransferTestConfig(), source).Execute(
+	status := NewNodeStatusTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(
 		ctx,
 		map[string]any{"invocation_id": payload["transfer_id"]},
 	)
@@ -642,11 +642,11 @@ func TestNodeCancelReportsDisconnectedFileTransferUnknownWithoutRequest(t *testi
 	args := nodeFileInfoTestArgs(t, source, ctx)
 	payload := decodeNodeResult(
 		t,
-		NewNodeFileInfoTool(nodeFileTransferTestConfig(), source).Execute(ctx, args),
+		NewNodeFileInfoTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(ctx, args),
 	)
 	source.connected["private-node-id"] = false
 
-	canceled := NewNodeCancelTool(nodeFileTransferTestConfig(), source).Execute(
+	canceled := NewNodeCancelTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(
 		ctx,
 		map[string]any{"invocation_id": payload["transfer_id"]},
 	)
@@ -680,7 +680,7 @@ func TestNodeDownloadDeliveryIsClaimedOnceWithoutCompletionReply(t *testing.T) {
 		ContentType: "image/png",
 	}
 	source.handoffRef = "media://downloaded-image"
-	tool := NewNodeDownloadTool(nodeFileTransferTestConfig(), source)
+	tool := NewNodeDownloadTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "file-call-download")
 	args := nodeFileDownloadTestArgs(t, source, ctx, true)
 
@@ -720,7 +720,7 @@ func TestNodeDownloadRetainOnlyKeepsExplicitFalseInPlan(t *testing.T) {
 		Filename:    "image.png",
 		ContentType: "image/png",
 	}
-	tool := NewNodeDownloadTool(nodeFileTransferTestConfig(), source)
+	tool := NewNodeDownloadTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "file-call-retain-only")
 	args := nodeFileDownloadTestArgs(t, source, ctx, false)
 
@@ -736,7 +736,7 @@ func TestNodeDownloadRetainOnlyKeepsExplicitFalseInPlan(t *testing.T) {
 
 func TestNodeFileApprovalPreparationReturnsOnlySafeDenial(t *testing.T) {
 	source := newFakeNodeFileTransferSource(t, "required")
-	tool := NewNodeFileInfoTool(nodeFileTransferTestConfig(), source)
+	tool := NewNodeFileInfoTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "file-call-1")
 	args := nodeFileInfoTestArgs(t, source, ctx)
 	args["discovery_revision"] = "stale"
@@ -765,7 +765,7 @@ func TestNodeFileToolsRequireExplicitAgentGrant(t *testing.T) {
 			},
 		},
 	}
-	runtime := newNodeFileTransferToolRuntime(cfg, newFakeNodeFileTransferSource(t, "none"))
+	runtime := newNodeFileTransferToolRuntime(NewNodeToolOptions(cfg), newFakeNodeFileTransferSource(t, "none"))
 	if !runtime.enabledForAgent("main", false) ||
 		runtime.enabledForAgent("inherited", false) ||
 		!runtime.enabledForAgent("explicit", false) {
@@ -779,7 +779,7 @@ func TestNodeFileToolsRequireExplicitAgentGrant(t *testing.T) {
 func TestNodeFileContextCancellationRequestsBoundCancel(t *testing.T) {
 	source := newFakeNodeFileTransferSource(t, "none")
 	source.dispatchErr = context.Canceled
-	tool := NewNodeFileInfoTool(nodeFileTransferTestConfig(), source)
+	tool := NewNodeFileInfoTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source)
 	ctx, cancel := context.WithCancel(nodeInvocationTestContext("actor-1", "file-call-1"))
 	args := nodeFileInfoTestArgs(t, source, ctx)
 	cancel()
@@ -900,7 +900,7 @@ func nodeJobArtifactDownloadTestArgs(
 	ctx context.Context,
 ) map[string]any {
 	t.Helper()
-	result := NewNodeDiscoveryTool(nodeJobArtifactTestConfig(), source).Execute(
+	result := NewNodeDiscoveryTool(NewNodeToolOptions(nodeJobArtifactTestConfig()), source).Execute(
 		ctx,
 		map[string]any{
 			"action": "describe", "target": "build", "command": nodes.JobCommandArtifacts,
@@ -928,7 +928,7 @@ func nodeFileInfoTestArgs(
 	ctx context.Context,
 ) map[string]any {
 	t.Helper()
-	result := NewNodeDiscoveryTool(nodeFileTransferTestConfig(), source).Execute(
+	result := NewNodeDiscoveryTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(
 		ctx,
 		map[string]any{
 			"action":  "describe",
@@ -951,7 +951,7 @@ func nodeFileUploadTestArgs(
 	artifactRef string,
 ) map[string]any {
 	t.Helper()
-	result := NewNodeDiscoveryTool(nodeFileTransferTestConfig(), source).Execute(
+	result := NewNodeDiscoveryTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(
 		ctx,
 		map[string]any{
 			"action":  "describe",
@@ -976,7 +976,7 @@ func nodeFileDownloadTestArgs(
 	deliver bool,
 ) map[string]any {
 	t.Helper()
-	result := NewNodeDiscoveryTool(nodeFileTransferTestConfig(), source).Execute(
+	result := NewNodeDiscoveryTool(NewNodeToolOptions(nodeFileTransferTestConfig()), source).Execute(
 		ctx,
 		map[string]any{
 			"action":  "describe",

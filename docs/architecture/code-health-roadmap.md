@@ -61,7 +61,7 @@ not targets by themselves.
 | H3 | Add frontend contracts and remove model-form duplication | H0 | Completed |
 | H4 | Extract human-interaction application orchestration | H0 | Completed |
 | H5 | Consolidate turn input, runtime state, outcomes, and finalization | H0, H4 characterization tests | Completed |
-| H6 | Reduce root-config coupling at high-change boundaries | H1, H2, H5 | In progress |
+| H6 | Reduce root-config coupling at high-change boundaries | H1, H2, H5 | Completed |
 | H7 | Simplify canonical node JSON numbers through a protocol cutover | H0 | In progress |
 | H8 | Remove confirmed legacy and close the program | H1-H7 | Not started |
 
@@ -277,6 +277,11 @@ Browser runtime-tool generations now receive a deep-copied browser policy
 projection instead of the mutable root config. Effective limits, target
 placement, and the default target are resolved when each reload generation is
 composed; nested origins and policy rules cannot drift afterward.
+
+Node discovery, invocation, transfer, and terminal tools now share an immutable
+execution-policy projection constructed for their reload generation. Target
+bindings, per-agent visibility, approval bypasses, and file-transfer grants are
+copied once and cannot drift when the root config is replaced or mutated.
 
 Deliverables:
 
