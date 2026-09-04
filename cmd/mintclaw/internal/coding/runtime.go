@@ -649,7 +649,6 @@ type nativeControllerRuntime struct {
 var (
 	_ controller.Runtime                    = (*nativeControllerRuntime)(nil)
 	_ frontend.TranscriptPager              = (*nativeControllerRuntime)(nil)
-	_ frontend.WorkspaceRefresher           = (*nativeControllerRuntime)(nil)
 	_ frontend.RepositoryEvidenceReader     = (*nativeControllerRuntime)(nil)
 	_ frontend.ThreadLifecycle              = (*nativeControllerRuntime)(nil)
 	_ frontend.BackgroundCompactionObserver = (*nativeControllerRuntime)(nil)
@@ -677,26 +676,32 @@ func (r *nativeControllerRuntime) SetArchived(_ context.Context, archived bool) 
 	return agentadapter.ProjectThreadMetadata(r.projector, candidate)
 }
 
-func (r *nativeControllerRuntime) RefreshWorkspace(ctx context.Context) error {
+func (r *nativeControllerRuntime) RefreshWorkspaceEvidence(
+	ctx context.Context,
+) (codingworkspace.StatusResult, error) {
 	if r.loop == nil || r.projector == nil {
-		return frontend.ErrWorkspaceRefreshUnsupported
+		return codingworkspace.StatusResult{}, frontend.ErrWorkspaceRefreshUnsupported
 	}
 	registry := r.loop.GetRegistry()
 	if registry == nil {
-		return frontend.ErrWorkspaceRefreshUnsupported
+		return codingworkspace.StatusResult{}, frontend.ErrWorkspaceRefreshUnsupported
 	}
 	agentInstance := registry.GetDefaultAgent()
 	if agentInstance == nil || agentInstance.ContextBuilder == nil {
-		return frontend.ErrWorkspaceRefreshUnsupported
+		return codingworkspace.StatusResult{}, frontend.ErrWorkspaceRefreshUnsupported
 	}
-	snapshot, changed := agentInstance.ContextBuilder.RefreshCodingWorkspace(ctx)
-	if !changed {
-		_, err := r.RepositoryStatus(ctx)
-		return err
+	agentInstance.ContextBuilder.RefreshCodingWorkspace(ctx)
+	if err := ctx.Err(); err != nil {
+		return codingworkspace.StatusResult{}, err
 	}
-	r.projector.WorkspaceUpdated(snapshot)
-	_, err := r.RepositoryStatus(ctx)
-	return err
+	if agentInstance.Repository == nil {
+		return codingworkspace.StatusResult{}, frontend.ErrWorkspaceRefreshUnsupported
+	}
+	status := agentInstance.Repository.Status(ctx)
+	if err := ctx.Err(); err != nil {
+		return codingworkspace.StatusResult{}, err
+	}
+	return status, nil
 }
 
 func (r *nativeControllerRuntime) RepositoryStatus(
@@ -706,9 +711,7 @@ func (r *nativeControllerRuntime) RepositoryStatus(
 	if err != nil {
 		return codingworkspace.StatusResult{}, err
 	}
-	status := repository.Status(ctx)
-	r.projector.RepositoryStatusUpdated(status)
-	return status, nil
+	return repository.Status(ctx), nil
 }
 
 func (r *nativeControllerRuntime) RepositoryDiff(
@@ -719,9 +722,7 @@ func (r *nativeControllerRuntime) RepositoryDiff(
 	if err != nil {
 		return codingworkspace.DiffResult{}, err
 	}
-	diff := repository.Diff(ctx, target)
-	r.projector.RepositoryDiffUpdated(diff)
-	return diff, nil
+	return repository.Diff(ctx, target), nil
 }
 
 func (r *nativeControllerRuntime) repositoryEvidence() (*codingworkspace.Repository, error) {

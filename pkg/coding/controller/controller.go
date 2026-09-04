@@ -35,6 +35,10 @@ type Runtime interface {
 	Close() error
 }
 
+type workspaceEvidenceRefresher interface {
+	RefreshWorkspaceEvidence(context.Context) (codingworkspace.StatusResult, error)
+}
+
 type commandKind uint8
 
 const (
@@ -89,23 +93,31 @@ type operationKind uint8
 const (
 	operationTurn operationKind = iota
 	operationCompaction
+	operationWorkspaceRefresh
+	operationRepositoryStatus
+	operationRepositoryDiff
 )
 
 type operationResult struct {
-	kind operationKind
-	err  error
+	id      uint64
+	kind    operationKind
+	request command
+	status  codingworkspace.StatusResult
+	diff    codingworkspace.DiffResult
+	err     error
 }
 
 // Controller serializes coding commands while exposing the current in-process
 // presentation view. Exactly one actor owns admission state.
 type Controller struct {
-	projector *frontend.Projector
-	runtime   Runtime
-	commands  chan command
-	results   chan operationResult
-	done      chan struct{}
-	closeMu   sync.Mutex
-	closeErr  error
+	projector       *frontend.Projector
+	runtime         Runtime
+	commands        chan command
+	results         chan operationResult
+	evidenceResults chan operationResult
+	done            chan struct{}
+	closeMu         sync.Mutex
+	closeErr        error
 }
 
 var _ frontend.Controller = (*Controller)(nil)
@@ -118,11 +130,12 @@ func New(projector *frontend.Projector, runtime Runtime) (*Controller, error) {
 		return nil, fmt.Errorf("coding controller runtime is required")
 	}
 	controller := &Controller{
-		projector: projector,
-		runtime:   runtime,
-		commands:  make(chan command),
-		results:   make(chan operationResult, 1),
-		done:      make(chan struct{}),
+		projector:       projector,
+		runtime:         runtime,
+		commands:        make(chan command),
+		results:         make(chan operationResult, 1),
+		evidenceResults: make(chan operationResult),
+		done:            make(chan struct{}),
 	}
 	go controller.coordinate()
 	return controller, nil
@@ -339,11 +352,13 @@ func (c *Controller) coordinate() {
 	var compacting bool
 	var closing bool
 	var operationCancel context.CancelCauseFunc
+	evidenceCancels := make(map[uint64]context.CancelCauseFunc)
+	var nextEvidenceID uint64
 	var closeReplies []chan error
 	var closeErr error
 
 	finishClose := func() bool {
-		if !closing || active || compacting {
+		if !closing || active || compacting || len(evidenceCancels) != 0 {
 			return false
 		}
 		closeErr = errors.Join(closeErr, c.runtime.Close())
@@ -358,6 +373,30 @@ func (c *Controller) coordinate() {
 
 	for {
 		select {
+		case result := <-c.evidenceResults:
+			if cancel, ok := evidenceCancels[result.id]; ok {
+				cancel(context.Canceled)
+				delete(evidenceCancels, result.id)
+			}
+			if result.err == nil {
+				switch result.kind {
+				case operationWorkspaceRefresh, operationRepositoryStatus:
+					c.projector.RepositoryStatusUpdated(result.status)
+				case operationRepositoryDiff:
+					c.projector.RepositoryDiffUpdated(result.diff)
+				}
+			}
+			switch result.kind {
+			case operationWorkspaceRefresh:
+				result.request.reply <- result.err
+			case operationRepositoryStatus:
+				result.request.statusReply <- repositoryStatusResponse{status: result.status, err: result.err}
+			case operationRepositoryDiff:
+				result.request.diffReply <- repositoryDiffResponse{diff: result.diff, err: result.err}
+			}
+			if finishClose() {
+				return
+			}
 		case result := <-c.results:
 			switch result.kind {
 			case operationTurn:
@@ -469,29 +508,33 @@ func (c *Controller) coordinate() {
 				case compacting:
 					request.reply <- ErrCompactionActive
 				default:
-					refresher, ok := c.runtime.(frontend.WorkspaceRefresher)
-					if !ok {
+					if _, ok := c.runtime.(workspaceEvidenceRefresher); !ok {
 						request.reply <- frontend.ErrWorkspaceRefreshUnsupported
 						continue
 					}
-					request.reply <- refresher.RefreshWorkspace(request.ctx)
+					nextEvidenceID++
+					operationCtx, cancel := context.WithCancelCause(request.ctx)
+					evidenceCancels[nextEvidenceID] = cancel
+					go c.runEvidence(operationCtx, nextEvidenceID, operationWorkspaceRefresh, request)
 				}
 			case commandRepositoryStatus:
-				reader, ok := c.runtime.(frontend.RepositoryEvidenceReader)
-				if !ok {
+				if _, ok := c.runtime.(frontend.RepositoryEvidenceReader); !ok {
 					request.replyError(frontend.ErrWorkspaceRefreshUnsupported)
 					continue
 				}
-				status, err := reader.RepositoryStatus(request.ctx)
-				request.statusReply <- repositoryStatusResponse{status: status, err: err}
+				nextEvidenceID++
+				operationCtx, cancel := context.WithCancelCause(request.ctx)
+				evidenceCancels[nextEvidenceID] = cancel
+				go c.runEvidence(operationCtx, nextEvidenceID, operationRepositoryStatus, request)
 			case commandRepositoryDiff:
-				reader, ok := c.runtime.(frontend.RepositoryEvidenceReader)
-				if !ok {
+				if _, ok := c.runtime.(frontend.RepositoryEvidenceReader); !ok {
 					request.replyError(frontend.ErrWorkspaceRefreshUnsupported)
 					continue
 				}
-				diff, err := reader.RepositoryDiff(request.ctx, request.diffTarget)
-				request.diffReply <- repositoryDiffResponse{diff: diff, err: err}
+				nextEvidenceID++
+				operationCtx, cancel := context.WithCancelCause(request.ctx)
+				evidenceCancels[nextEvidenceID] = cancel
+				go c.runEvidence(operationCtx, nextEvidenceID, operationRepositoryDiff, request)
 			case commandClose:
 				closeReplies = append(closeReplies, request.reply)
 				if closing {
@@ -507,6 +550,9 @@ func (c *Controller) coordinate() {
 					}
 				} else if compacting && operationCancel != nil {
 					operationCancel(context.Canceled)
+				}
+				for _, cancel := range evidenceCancels {
+					cancel(context.Canceled)
 				}
 				if finishClose() {
 					return
@@ -524,6 +570,22 @@ func (c *Controller) run(ctx context.Context, kind operationKind, input frontend
 		err = c.runtime.Compact(ctx)
 	}
 	c.results <- operationResult{kind: kind, err: err}
+}
+
+func (c *Controller) runEvidence(ctx context.Context, id uint64, kind operationKind, request command) {
+	result := operationResult{id: id, kind: kind, request: request}
+	switch kind {
+	case operationWorkspaceRefresh:
+		result.status, result.err = c.runtime.(workspaceEvidenceRefresher).RefreshWorkspaceEvidence(ctx)
+	case operationRepositoryStatus:
+		result.status, result.err = c.runtime.(frontend.RepositoryEvidenceReader).RepositoryStatus(ctx)
+	case operationRepositoryDiff:
+		result.diff, result.err = c.runtime.(frontend.RepositoryEvidenceReader).RepositoryDiff(ctx, request.diffTarget)
+	}
+	if err := ctx.Err(); err != nil {
+		result.err = err
+	}
+	c.evidenceResults <- result
 }
 
 func (c *Controller) projectOperationError(result operationResult) {

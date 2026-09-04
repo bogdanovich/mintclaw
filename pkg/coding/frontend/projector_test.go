@@ -71,6 +71,44 @@ func TestRepositoryEvidenceUpdatesDoNotAliasNestedState(t *testing.T) {
 	}
 }
 
+func TestRepositoryStatusAdvanceClearsOnlyObsoleteCurrentDiff(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	before := codingworkspace.Snapshot{ProjectRoot: "/repo", CWD: "/repo"}
+	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{Snapshot: before})
+	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{
+		Target:     codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Generation: before.Identity(),
+	})
+	after := before
+	after.Git.Dirty = true
+	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{Snapshot: after})
+	if snapshot := snapshotForTest(t, projector); snapshot.RepositoryDiff != nil {
+		t.Fatalf("obsolete current diff was retained = %#v", snapshot.RepositoryDiff)
+	}
+	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{
+		Target:     codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Generation: after.Identity(), EvidenceGeneration: "old-content",
+	})
+	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{
+		Snapshot: after,
+		Provenance: &codingworkspace.ProvenanceResult{
+			CurrentEvidenceGeneration: "new-content",
+		},
+	})
+	if snapshot := snapshotForTest(t, projector); snapshot.RepositoryDiff != nil {
+		t.Fatalf("content-stale current diff was retained = %#v", snapshot.RepositoryDiff)
+	}
+
+	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{
+		Target:     codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCommit, Ref: "HEAD"},
+		Generation: before.Identity(),
+	})
+	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{Snapshot: before})
+	if snapshot := snapshotForTest(t, projector); snapshot.RepositoryDiff == nil {
+		t.Fatal("immutable commit diff was cleared by status refresh")
+	}
+}
+
 func TestSubscribeReturnsCurrentViewAndPublishesLaterViews(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	projector.Open(false)

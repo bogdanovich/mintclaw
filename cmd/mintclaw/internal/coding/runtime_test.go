@@ -380,8 +380,27 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	if !ok {
 		t.Fatal("native coding controller does not expose workspace refresh")
 	}
+	subscribeCtx, cancelSubscribe := context.WithCancel(t.Context())
+	defer cancelSubscribe()
+	_, workspaceUpdates, err := frontendController.Subscribe(subscribeCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := refresher.RefreshWorkspace(t.Context()); err != nil {
 		t.Fatalf("RefreshWorkspace() error = %v", err)
+	}
+	select {
+	case update := <-workspaceUpdates:
+		if update.Workspace == nil || update.RepositoryStatus == nil {
+			t.Fatalf("workspace refresh update is not atomic = %#v", update)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("workspace refresh did not publish an update")
+	}
+	select {
+	case update := <-workspaceUpdates:
+		t.Fatalf("workspace refresh published an intermediate update = %#v", update)
+	case <-time.After(100 * time.Millisecond):
 	}
 	refreshed, err := frontendController.Snapshot(t.Context())
 	if err != nil {

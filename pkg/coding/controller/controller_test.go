@@ -41,6 +41,26 @@ type repositoryEvidenceRuntime struct {
 	target codingworkspace.DiffTarget
 }
 
+type blockingRepositoryEvidenceRuntime struct {
+	*blockingRuntime
+	statusStarted chan struct{}
+}
+
+func (runtime *blockingRepositoryEvidenceRuntime) RepositoryStatus(
+	ctx context.Context,
+) (codingworkspace.StatusResult, error) {
+	runtime.statusStarted <- struct{}{}
+	<-ctx.Done()
+	return codingworkspace.StatusResult{SchemaVersion: codingworkspace.RepositoryStatusSchemaV1}, nil
+}
+
+func (*blockingRepositoryEvidenceRuntime) RepositoryDiff(
+	context.Context,
+	codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	return codingworkspace.DiffResult{}, nil
+}
+
 func (*repositoryEvidenceRuntime) RepositoryStatus(
 	context.Context,
 ) (codingworkspace.StatusResult, error) {
@@ -86,9 +106,11 @@ func (r *cancelCauseRuntime) RunTurn(ctx context.Context, input frontend.TurnInp
 	return errors.Join(context.Cause(ctx), r.joinedError)
 }
 
-func (r *workspaceRefreshRuntime) RefreshWorkspace(context.Context) error {
+func (r *workspaceRefreshRuntime) RefreshWorkspaceEvidence(
+	context.Context,
+) (codingworkspace.StatusResult, error) {
 	r.refreshes++
-	return r.refreshErr
+	return codingworkspace.StatusResult{SchemaVersion: codingworkspace.RepositoryStatusSchemaV1}, r.refreshErr
 }
 
 func (r *pagedRuntime) TranscriptPage(
@@ -514,5 +536,50 @@ func TestRepositoryEvidenceDelegatesTypedReadOnlyCapability(t *testing.T) {
 	}
 	if err := unsupported.Close(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRepositoryEvidenceRunsOutsideActorAndCloseCancelsIt(t *testing.T) {
+	runtime := &blockingRepositoryEvidenceRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		statusStarted:   make(chan struct{}, 1),
+	}
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := codingworkspace.StatusResult{
+		SchemaVersion: codingworkspace.RepositoryStatusSchemaV1,
+		Snapshot:      codingworkspace.Snapshot{ProjectRoot: "/valid"},
+	}
+	projector.RepositoryStatusUpdated(valid)
+	controller, err := New(projector, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "work"}); err != nil {
+		t.Fatal(err)
+	}
+	statusErr := make(chan error, 1)
+	go func() {
+		_, statusErrValue := controller.RepositoryStatus(context.Background())
+		statusErr <- statusErrValue
+	}()
+	<-runtime.statusStarted
+	if err := controller.Interrupt(t.Context()); err != nil {
+		t.Fatalf("Interrupt() while repository read is active = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() with repository read = %v", err)
+	}
+	if err := <-statusErr; !errors.Is(err, context.Canceled) && !errors.Is(err, ErrClosed) {
+		t.Fatalf("RepositoryStatus() after Close() = %v", err)
+	}
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.RepositoryStatus == nil || snapshot.RepositoryStatus.Snapshot.ProjectRoot != "/valid" {
+		t.Fatalf("canceled repository read replaced valid state = %#v", snapshot.RepositoryStatus)
 	}
 }
