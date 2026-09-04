@@ -108,7 +108,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		Browser:       &browserRuntime{broker: broker, policyRevision: policyRevision},
 	}
 	browserSource := &gatewayBrowserToolSource{
-		services: servicesOwner, config: cfg, policyRevision: policyRevision,
+		services: servicesOwner, nodeTargets: browserNodeTargets(cfg.Tools.Browser), policyRevision: policyRevision,
 		workspace: workspace, limits: cfg.Tools.Browser.Limits.Effective(),
 	}
 	owner := browser.Owner{
