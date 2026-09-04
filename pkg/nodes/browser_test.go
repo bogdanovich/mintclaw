@@ -126,6 +126,76 @@ func TestBrowserCaptureProtocolV2IntegersDecodeExactly(t *testing.T) {
 	}
 }
 
+func TestBrowserSessionOpenProtocolV2ValidatesCanonicalIntegerSpellings(t *testing.T) {
+	profile := browserProfileDescriptorFixture()
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalogHash, err := (CapabilityCatalog{Commands: descriptors}).HashForProtocol(ProtocolV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(browserSessionOpenInputFixture(profile.Limits))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := fmt.Sprintf(`"sessions":%d`, profile.Limits.Sessions)
+	input := json.RawMessage(strings.Replace(string(encoded), sessions, sessions+"e0", 1))
+	request := InvocationRequest{
+		InvocationID: "browser_open_v2", IdempotencyKey: "browser_open_v2", NodeID: ID("browser_node_v2"),
+		CatalogHash: catalogHash, Command: BrowserCommandSessionOpen, Input: input,
+		AgentID: "main", SessionID: "session_v2", ActorID: "user_v2",
+		TimeoutSeconds: 30, OutputLimitBytes: MaxInvocationOutput,
+	}
+	plan, err := PrepareExecutionPlanForProtocol(
+		ProtocolV2,
+		request,
+		descriptors[0],
+		"local",
+		"policy-v2",
+		time.Unix(1, 0),
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plan.Input), "e0") {
+		t.Fatalf("v2 browser input retained exponent spelling: %s", plan.Input)
+	}
+}
+
+func TestBrowserDiagnosticsProtocolV2ValidatesCanonicalIntegerSpellings(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
+		browserProfileDescriptorFixture(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := json.RawMessage(`{
+		"session_id":"session_1","tab_id":"tab_1","snapshot_generation":26e0,
+		"categories":[{
+			"category":"console_errors","count":1e0,"omitted_count":0e0,"truncated":false,
+			"entries":[{
+				"timestamp":1e0,"severity":"error","origin":"https://example.com","path":"/safe",
+				"message_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			}]
+		}]
+	}`)
+	canonical, err := ValidateInvocationOutputForProtocol(
+		ProtocolV2,
+		descriptors[7],
+		output,
+		MaxInvocationOutput,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(canonical), "e0") {
+		t.Fatalf("v2 browser output retained exponent spelling: %s", canonical)
+	}
+}
+
 func TestBrowserSelectDispatchAcceptsWorstCaseJSONEscaping(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.Actions = []string{"select"}
