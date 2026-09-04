@@ -122,8 +122,12 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				a.projector.ToolSuspended(turnID, payload.ToolCallID, payload.Tool, payload.Duration)
 				break
 			}
-			if payload.Observation != nil && payload.Observation.Command != nil {
-				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*payload.Observation.Command))
+			observation := toolshared.SanitizeToolObservation(payload.Observation)
+			if observation != nil && observation.Command != nil {
+				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+			}
+			if observation != nil && observation.Plan != nil {
+				a.projector.PlanUpdated(turnID, payload.ToolCallID, projectPlan(*observation.Plan))
 			}
 			audit := projectWriteAudit(payload.WriteAudit)
 			a.projector.ToolCompleted(
@@ -290,6 +294,21 @@ func projectCommand(command toolshared.CommandObservation) frontend.CommandState
 		Status: status, SessionID: command.SessionID, ExitCode: command.ExitCode,
 		Truncated: command.Truncated, Background: command.Background,
 		Canceled: command.Canceled, TimedOut: command.TimedOut,
+	}
+}
+
+func projectPlan(plan toolshared.PlanObservation) frontend.PlanState {
+	steps := make([]frontend.PlanStepState, len(plan.Steps))
+	for index, step := range plan.Steps {
+		steps[index] = frontend.PlanStepState{
+			Step:   step.Step,
+			Status: frontend.PlanStepStatus(step.Status),
+		}
+	}
+	return frontend.PlanState{
+		Explanation: plan.Explanation,
+		Steps:       steps,
+		Truncated:   plan.Truncated,
 	}
 }
 

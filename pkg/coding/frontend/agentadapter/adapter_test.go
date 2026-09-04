@@ -42,7 +42,7 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	publish(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{
 		ToolCallID: "call-1",
 		Tool:       "exec",
-		Arguments:  map[string]any{"command": "secret command", "timeout": 10},
+		Arguments:  map[string]any{"command": "sk-123456789abcdef", "timeout": 10},
 	})
 	publish(runtimeevents.KindAgentToolExecEnd, agent.ToolExecEndPayload{
 		ToolCallID: "call-1",
@@ -108,7 +108,7 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 		snapshot.LastCompaction.Duration != 1500*time.Millisecond {
 		t.Fatalf("compaction metrics = %+v", snapshot.LastCompaction)
 	}
-	if strings.Contains(snapshot.Tools[0].Arguments, "secret command") ||
+	if strings.Contains(snapshot.Tools[0].Arguments, "sk-123456789abcdef") ||
 		snapshot.Tools[0].Arguments != "fields: command, timeout" {
 		t.Fatalf("argument projection = %q", snapshot.Tools[0].Arguments)
 	}
@@ -117,6 +117,100 @@ func TestAdapterProjectsRuntimeLifecycleWithoutArgumentValues(t *testing.T) {
 	}
 	if snapshot.ContextUsage.UsedTokens != 120 || snapshot.ContextUsage.LimitTokens != 1000 {
 		t.Fatalf("context usage = %+v", snapshot.ContextUsage)
+	}
+}
+
+func TestAdapterProjectsExactTypedPlanWithoutParsingArgumentsOrOutput(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1")}
+	publish := func(kind runtimeevents.Kind, payload any) {
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+		})
+	}
+	publish(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{
+		ToolCallID: "call-1", Tool: "update_plan",
+		Arguments: map[string]any{"plan": "misleading argument plan", "secret": "sk-123456789abcdef"},
+	})
+	publish(runtimeevents.KindAgentToolExecEnd, agent.ToolExecEndPayload{
+		ToolCallID: "call-1", Tool: "update_plan", ForLLMLen: 1_000_000,
+		Observation: &toolshared.ToolObservation{Plan: &toolshared.PlanObservation{
+			Explanation: "Starting implementation.",
+			Steps: []toolshared.PlanStepObservation{
+				{Step: "Inspect", Status: toolshared.PlanStepCompleted},
+				{Step: "Implement", Status: toolshared.PlanStepInProgress},
+				{Step: "Verify", Status: toolshared.PlanStepPending},
+			},
+		}},
+	})
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Items) != 2 || snapshot.Items[1].Kind != frontend.PresentationPlanUpdate ||
+		snapshot.Items[1].Plan == nil {
+		t.Fatalf("typed plan items = %+v", snapshot.Items)
+	}
+	plan := snapshot.Items[1].Plan
+	want := []frontend.PlanStepState{
+		{Step: "Inspect", Status: frontend.PlanStepCompleted},
+		{Step: "Implement", Status: frontend.PlanStepInProgress},
+		{Step: "Verify", Status: frontend.PlanStepPending},
+	}
+	if plan.Explanation != "Starting implementation." || !reflect.DeepEqual(plan.Steps, want) {
+		t.Fatalf("typed plan = %+v", plan)
+	}
+	encoded := fmt.Sprintf("%+v", snapshot)
+	if strings.Contains(encoded, "misleading argument plan") || strings.Contains(encoded, "sk-123456789abcdef") {
+		t.Fatalf("argument/output content entered presentation: %s", encoded)
+	}
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Arguments != "fields: plan, secret" ||
+		snapshot.Tools[0].Output != "" {
+		t.Fatalf("generic fallback changed = %+v", snapshot.Tools)
+	}
+}
+
+func TestAdapterDropsInvalidOrAmbiguousPlanObservations(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1")}
+	exitCode := 0
+	wrapped.PublishNonBlocking(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentToolExecEnd, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Payload: agent.ToolExecEndPayload{
+			ToolCallID: "call-1", Tool: "update_plan",
+			Observation: &toolshared.ToolObservation{
+				Command: &toolshared.CommandObservation{ExitCode: &exitCode},
+				Plan: &toolshared.PlanObservation{Steps: []toolshared.PlanStepObservation{{
+					Step: "invalid", Status: "blocked",
+				}}},
+			},
+		},
+	})
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Items) != 1 || snapshot.Items[0].Tool == nil || snapshot.Items[0].Plan != nil {
+		t.Fatalf("invalid observation entered presentation = %+v", snapshot.Items)
 	}
 }
 

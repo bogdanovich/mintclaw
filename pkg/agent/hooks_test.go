@@ -1481,6 +1481,22 @@ func TestAfterToolTimeoutCannotMutateCommandObservation(t *testing.T) {
 	}
 }
 
+func TestCloneToolObservationClonesPlanSteps(t *testing.T) {
+	original := &toolshared.ToolObservation{Plan: &toolshared.PlanObservation{
+		Explanation: "Current plan",
+		Steps: []toolshared.PlanStepObservation{{
+			Step: "Inspect", Status: toolshared.PlanStepInProgress,
+		}},
+	}}
+	cloned := cloneToolObservation(original)
+	original.Plan.Explanation = "mutated"
+	original.Plan.Steps[0].Step = "mutated"
+	if cloned == nil || cloned.Plan == nil || cloned.Plan.Explanation != "Current plan" ||
+		len(cloned.Plan.Steps) != 1 || cloned.Plan.Steps[0].Step != "Inspect" {
+		t.Fatalf("plan observation clone = %#v", cloned)
+	}
+}
+
 type respondWithMediaHook struct {
 	respondTools    map[string]bool
 	media           []string

@@ -94,6 +94,68 @@ func TestSlowStreamSubscriberConvergesToLatestView(t *testing.T) {
 	}
 }
 
+func TestStreamRebuildPreservesTypedPlanItems(t *testing.T) {
+	for _, action := range []string{"update", "finalize", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			projector := newTestProjector(t, ProjectionLimits{})
+			projector.PlanUpdated("turn-1", "plan-1", PlanState{
+				Explanation: "Keep this plan",
+				Steps:       []PlanStepState{{Step: "Verify", Status: PlanStepInProgress}},
+			})
+			streamer, ok := NewStreamDelegate(projector, "thread-1").GetStreamer(
+				t.Context(),
+				"coding",
+				"thread-1",
+				"thread-1",
+				"",
+				runtimeevents.NewTraceScope("/repo", "turn-1"),
+			)
+			if !ok {
+				t.Fatal("matching stream was rejected")
+			}
+
+			switch action {
+			case "update":
+				if err := streamer.Update(t.Context(), "working"); err != nil {
+					t.Fatal(err)
+				}
+			case "finalize":
+				if err := streamer.Finalize(t.Context(), "done"); err != nil {
+					t.Fatal(err)
+				}
+			case "cancel":
+				if err := streamer.Update(t.Context(), "discarded"); err != nil {
+					t.Fatal(err)
+				}
+				streamer.Cancel(t.Context())
+			}
+
+			snapshot := snapshotForTest(t, projector)
+			var plan *PlanState
+			messageCount := 0
+			for index := range snapshot.Items {
+				if snapshot.Items[index].Plan != nil {
+					plan = snapshot.Items[index].Plan
+				}
+				if snapshot.Items[index].Message != nil {
+					messageCount++
+				}
+			}
+			if plan == nil || plan.CallID != "plan-1" || plan.Explanation != "Keep this plan" ||
+				len(plan.Steps) != 1 || plan.Steps[0].Step != "Verify" {
+				t.Fatalf("%s removed typed plan: %+v", action, snapshot.Items)
+			}
+			wantMessages := 1
+			if action == "cancel" {
+				wantMessages = 0
+			}
+			if messageCount != wantMessages {
+				t.Fatalf("%s message count = %d, want %d: %+v", action, messageCount, wantMessages, snapshot.Items)
+			}
+		})
+	}
+}
+
 func TestStreamCancelDoesNotClaimTurnInterruption(t *testing.T) {
 	projector, err := NewProjector("thread-1", ProjectionLimits{})
 	if err != nil {

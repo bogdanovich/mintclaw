@@ -76,6 +76,7 @@ const (
 	PresentationReasoning        PresentationKind = "reasoning"
 	PresentationToolMessage      PresentationKind = "tool_message"
 	PresentationToolCall         PresentationKind = "tool_call"
+	PresentationPlanUpdate       PresentationKind = "plan_update"
 	PresentationWarning          PresentationKind = "warning"
 	PresentationError            PresentationKind = "error"
 )
@@ -163,6 +164,28 @@ type CommandState struct {
 	TimedOut   bool          `json:"timed_out,omitempty"`
 }
 
+type PlanStepStatus string
+
+const (
+	PlanStepPending    PlanStepStatus = "pending"
+	PlanStepInProgress PlanStepStatus = "in_progress"
+	PlanStepCompleted  PlanStepStatus = "completed"
+)
+
+type PlanStepState struct {
+	Step   string         `json:"step"`
+	Status PlanStepStatus `json:"status"`
+}
+
+// PlanState is a bounded tool-owned plan update. It contains only validated
+// observation data and never model-facing tool JSON or argument values.
+type PlanState struct {
+	CallID      string          `json:"call_id"`
+	Explanation string          `json:"explanation,omitempty"`
+	Steps       []PlanStepState `json:"steps"`
+	Truncated   bool            `json:"truncated,omitempty"`
+}
+
 // PresentationItem is the authoritative ordered unit consumed by coding
 // frontends. Exactly one typed payload is present. Sequence and ID are stable;
 // Revision advances only when renderer-visible state changes.
@@ -179,6 +202,7 @@ type PresentationItem struct {
 	Duration    time.Duration         `json:"duration,omitempty"`
 	Message     *TranscriptEntry      `json:"message,omitempty"`
 	Tool        *ToolState            `json:"tool,omitempty"`
+	Plan        *PlanState            `json:"plan,omitempty"`
 }
 
 // ChangedFile is derived only from a successful file-kind WriteAudit.

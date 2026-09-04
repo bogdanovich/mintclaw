@@ -26,3 +26,38 @@ func TestCodingToolObservationIsCodingOnlyAndCloned(t *testing.T) {
 		t.Fatalf("coding observation aliases tool result = %#v", got)
 	}
 }
+
+func TestCodingToolObservationAdmitsOnlySafePlanUnion(t *testing.T) {
+	observation := &toolshared.ToolObservation{Plan: &toolshared.PlanObservation{
+		Explanation: "Implement the fix",
+		Steps: []toolshared.PlanStepObservation{
+			{Step: "Inspect", Status: toolshared.PlanStepCompleted},
+			{Step: "Patch", Status: toolshared.PlanStepInProgress},
+		},
+	}}
+	if got := codingToolObservation(&turnState{}, observation); got != nil {
+		t.Fatalf("personal turn plan observation = %#v", got)
+	}
+	ts := &turnState{opts: turnSpec{CodingContext: CodingPromptContext{SessionKey: "thread-1"}}}
+	got := codingToolObservation(ts, observation)
+	if got == nil || got.Plan == nil || got.Command != nil || len(got.Plan.Steps) != 2 ||
+		got.Plan.Steps[1].Step != "Patch" {
+		t.Fatalf("coding plan observation = %#v", got)
+	}
+	observation.Plan.Steps[1].Step = "mutated"
+	if got.Plan.Steps[1].Step != "Patch" {
+		t.Fatalf("coding plan observation aliases tool result = %#v", got)
+	}
+
+	exitCode := 0
+	observation.Command = &toolshared.CommandObservation{ExitCode: &exitCode}
+	if ambiguous := codingToolObservation(ts, observation); ambiguous != nil {
+		t.Fatalf("ambiguous observation union admitted = %#v", ambiguous)
+	}
+	invalid := &toolshared.ToolObservation{Plan: &toolshared.PlanObservation{
+		Steps: []toolshared.PlanStepObservation{{Step: "Blocked", Status: "blocked"}},
+	}}
+	if got := codingToolObservation(ts, invalid); got != nil {
+		t.Fatalf("invalid plan observation admitted = %#v", got)
+	}
+}

@@ -232,6 +232,118 @@ func TestPresentationProjectionIsBoundedAndCompatibilityIsDerived(t *testing.T) 
 	assertCompatibilityDerivedFromItems(t, view)
 }
 
+func TestPlanPresentationPreservesTypedOrderLifecycleAndIdentity(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
+	projector.now = func() time.Time { return now }
+	projector.ToolStarted("turn-1", "call-1", "update_plan", "fields: plan")
+	now = now.Add(time.Second)
+	plan := PlanState{
+		Explanation: "Starting implementation.",
+		Steps: []PlanStepState{
+			{Step: "Inspect", Status: PlanStepCompleted},
+			{Step: "Implement", Status: PlanStepInProgress},
+			{Step: "Verify", Status: PlanStepPending},
+		},
+	}
+	projector.PlanUpdated("turn-1", "call-1", plan)
+	projector.ToolCompleted("turn-1", "call-1", "update_plan", "", time.Second, false, nil)
+
+	view := snapshotForTest(t, projector)
+	if len(view.Items) != 2 || view.Items[0].Kind != PresentationToolCall ||
+		view.Items[1].Kind != PresentationPlanUpdate || view.Items[1].Lifecycle != PresentationCompleted ||
+		view.Items[1].Plan == nil || view.Items[1].Plan.CallID != "call-1" {
+		t.Fatalf("plan presentation = %+v", view.Items)
+	}
+	assertPresentationSequences(t, view.Items, []uint64{2, 3})
+	if !reflect.DeepEqual(view.Items[1].Plan.Steps, plan.Steps) ||
+		view.Items[1].Plan.Explanation != plan.Explanation || len(view.Tools) != 1 || len(view.Entries) != 0 {
+		t.Fatalf("typed plan or compatibility projection = %+v", view)
+	}
+	before := view.Items[1]
+	now = now.Add(time.Minute)
+	projector.PlanUpdated("turn-1", "call-1", plan)
+	after := snapshotForTest(t, projector).Items[1]
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("identical plan update changed stable item: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestPlanPresentationNormalizesCallIDOnce(t *testing.T) {
+	digest := sha256.Sum256([]byte("literal"))
+	tests := []struct {
+		name   string
+		callID string
+	}{
+		{name: "long", callID: strings.Repeat("call", 1024)},
+		{name: "invalid UTF-8", callID: string([]byte{0xff, 'a'})},
+		{name: "literal tagged", callID: "~h:" + hex.EncodeToString(digest[:])},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projector := newTestProjector(t, ProjectionLimits{})
+			projector.ToolStarted("turn-1", tt.callID, "update_plan", "")
+			projector.PlanUpdated("turn-1", tt.callID, PlanState{Steps: []PlanStepState{{
+				Step: "Verify", Status: PlanStepInProgress,
+			}}})
+
+			view := snapshotForTest(t, projector)
+			if len(view.Items) != 2 || view.Items[0].Tool == nil || view.Items[1].Plan == nil {
+				t.Fatalf("plan presentation = %+v", view.Items)
+			}
+			if view.Items[1].Plan.CallID != view.Items[0].Tool.CallID {
+				t.Fatalf(
+					"plan call ID %q does not match tool call ID %q",
+					view.Items[1].Plan.CallID,
+					view.Items[0].Tool.CallID,
+				)
+			}
+		})
+	}
+}
+
+func TestPlanPresentationIsSeparatelyBoundedAndRejectsInvalidPlans(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{
+		Tools: 1, Observations: 1, PlanSteps: 2, TextBytes: 32,
+	})
+	for index := 1; index <= 2; index++ {
+		turnID := fmt.Sprintf("turn-%d", index)
+		callID := fmt.Sprintf("call-%d", index)
+		projector.ToolStarted(turnID, callID, "update_plan", "")
+		projector.PlanUpdated(turnID, callID, PlanState{
+			Explanation: strings.Repeat("explanation", 20),
+			Steps: []PlanStepState{
+				{Step: "one", Status: PlanStepCompleted},
+				{Step: "two", Status: PlanStepInProgress},
+				{Step: "three", Status: PlanStepPending},
+			},
+		})
+	}
+	view := snapshotForTest(t, projector)
+	if len(view.Items) != 2 || len(view.Tools) != 1 || view.Tools[0].CallID != "call-2" {
+		t.Fatalf("separately bounded presentation = %+v", view)
+	}
+	var plan *PlanState
+	for index := range view.Items {
+		if view.Items[index].Plan != nil {
+			plan = view.Items[index].Plan
+		}
+	}
+	if plan == nil || plan.CallID != "call-2" || len(plan.Steps) != 2 || !plan.Truncated ||
+		len(plan.Explanation) > 32 {
+		t.Fatalf("bounded plan = %+v", plan)
+	}
+
+	before := snapshotForTest(t, projector).Items
+	projector.PlanUpdated("turn-invalid", "call-invalid", PlanState{Steps: []PlanStepState{
+		{Step: "one", Status: PlanStepInProgress},
+		{Step: "two", Status: PlanStepInProgress},
+	}})
+	if after := snapshotForTest(t, projector).Items; !reflect.DeepEqual(after, before) {
+		t.Fatalf("invalid plan entered presentation: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestCompactionLifecycleDoesNotReorderPresentationItems(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	projector.TurnStarted("turn-1", "fix it")
@@ -263,13 +375,17 @@ func TestSlowSubscriberKeepsCommittedAndLatestActivePresentationItems(t *testing
 	projector.TurnStarted("turn-1", "fix it")
 	projector.ToolStarted("turn-1", "call-1", "exec", "fields: command")
 	projector.ToolCompleted("turn-1", "call-1", "exec", "ok", time.Second, false, nil)
+	projector.PlanUpdated("turn-1", "plan-1", PlanState{Steps: []PlanStepState{{
+		Step: "Verify", Status: PlanStepInProgress,
+	}}})
 	projector.AssistantAccumulated("turn-1", "wor", false)
 	projector.AssistantAccumulated("turn-1", "working", false)
 
 	latest := <-updates
 	want := snapshotForTest(t, projector)
-	if !reflect.DeepEqual(latest, want) || len(latest.Items) != 3 ||
-		latest.Items[1].Lifecycle != PresentationCompleted || latest.Items[2].Lifecycle != PresentationActive {
+	if !reflect.DeepEqual(latest, want) || len(latest.Items) != 4 ||
+		latest.Items[1].Lifecycle != PresentationCompleted || latest.Items[2].Plan == nil ||
+		latest.Items[2].Lifecycle != PresentationCompleted || latest.Items[3].Lifecycle != PresentationActive {
 		t.Fatalf("slow subscriber latest = %+v, want %+v", latest, want)
 	}
 }
@@ -283,15 +399,20 @@ func TestPresentationSnapshotCloneDoesNotAliasTypedPayloads(t *testing.T) {
 	projector.ToolCompleted("turn-1", "call-1", "exec", "", time.Second, true, []WriteAudit{{
 		Kind: "file", Target: "main.go", Action: "update", Success: true,
 	}})
+	projector.PlanUpdated("turn-1", "plan-1", PlanState{Steps: []PlanStepState{{
+		Step: "Verify", Status: PlanStepInProgress,
+	}}})
 
 	view := snapshotForTest(t, projector)
 	item := &view.Items[0]
 	*item.CompletedAt = item.CompletedAt.Add(time.Hour)
 	item.Tool.WriteAudit[0].Target = "consumer.go"
 	*item.Tool.Command.ExitCode = 11
-	stable := snapshotForTest(t, projector).Items[0]
+	view.Items[1].Plan.Steps[0].Step = "mutated"
+	stableView := snapshotForTest(t, projector)
+	stable := stableView.Items[0]
 	if stable.Tool.WriteAudit[0].Target != "main.go" || *stable.Tool.Command.ExitCode != 7 ||
-		stable.CompletedAt.Equal(*item.CompletedAt) {
+		stable.CompletedAt.Equal(*item.CompletedAt) || stableView.Items[1].Plan.Steps[0].Step != "Verify" {
 		t.Fatalf("presentation item aliased consumer state: %+v", stable)
 	}
 }
