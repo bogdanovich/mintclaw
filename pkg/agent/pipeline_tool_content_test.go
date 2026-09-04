@@ -16,7 +16,7 @@ func TestPipelineFilterToolContentForLLMUsesConfig(t *testing.T) {
 			APIKeys:   config.SimpleSecureStrings("sk-long-key-12345"),
 		},
 	}
-	pipeline := &Pipeline{Cfg: cfg}
+	pipeline := &Pipeline{Cfg: cfg, turnPolicy: newPipelineTurnPolicy(cfg)}
 
 	got := pipeline.filterToolContentForLLM("token sk-long-key-12345 should be hidden")
 	if got != "token [FILTERED] should be hidden" {
@@ -34,7 +34,7 @@ func TestPipelineFilterPendingResultForLLM_UsesConfigPath(t *testing.T) {
 			APIKeys:   config.SimpleSecureStrings("sk-long-key-12345"),
 		},
 	}
-	pipeline := &Pipeline{Cfg: cfg}
+	pipeline := &Pipeline{Cfg: cfg, turnPolicy: newPipelineTurnPolicy(cfg)}
 
 	got := pipeline.filterPendingResultForLLM("pending sk-long-key-12345 result")
 	if got != "pending [FILTERED] result" {

@@ -61,7 +61,7 @@ not targets by themselves.
 | H3 | Add frontend contracts and remove model-form duplication | H0 | Completed |
 | H4 | Extract human-interaction application orchestration | H0 | Completed |
 | H5 | Consolidate turn input, runtime state, outcomes, and finalization | H0, H4 characterization tests | Completed |
-| H6 | Reduce root-config coupling at high-change boundaries | H1, H2, H5 | Not started |
+| H6 | Reduce root-config coupling at high-change boundaries | H1, H2, H5 | In progress |
 | H7 | Simplify canonical node JSON numbers through a protocol cutover | H0 | In progress |
 | H8 | Remove confirmed legacy and close the program | H1-H7 | Not started |
 
@@ -267,6 +267,11 @@ and state holders.
 
 Keep parsing and validation centralized, but stop passing the full mutable root
 config where a subsystem uses a small stable subset.
+
+The turn pipeline now resolves its web-search, retry, media, final-render, and
+sensitive-data policies once when a runtime generation is composed. A config
+reload replaces the owning runner; turns admitted to the previous generation
+continue against its immutable policy snapshot.
 
 Deliverables:
 
