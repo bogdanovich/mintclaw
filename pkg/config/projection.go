@@ -266,5 +266,5 @@ func (p *publicProjector) projectChannelSettings(channel Channel) (RawNode, erro
 	if err != nil {
 		return nil, err
 	}
-	return preserveExplicitDisabledStreaming(data, channel.Settings), nil
+	return preserveExplicitStreamingEnabled(data, channel.Settings), nil
 }

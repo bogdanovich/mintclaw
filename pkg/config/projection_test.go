@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -298,5 +299,43 @@ func TestRepositoryPublicProjectionPreservesDecodedStreamingEnablement(t *testin
 	if streaming := reloadedSettings.(*MintClawSettings).Streaming; !streaming.Enabled ||
 		streaming.ThrottleSeconds != 2 {
 		t.Fatalf("reloaded streaming config = %#v, want enabled with preserved tuning", streaming)
+	}
+}
+
+func TestRepositoryPublicProjectionPreservesDecodedStreamingDisablement(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	cfg := DefaultConfig()
+	channel := cfg.Channels.Get(ChannelMintClaw)
+	channel.Settings = RawNode(
+		`{"ping_interval":9007199254740993,"streaming":{"enabled":true,"throttle_seconds":2}}`,
+	)
+	channel.extend = nil
+	decoded, err := channel.GetDecoded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded.(*MintClawSettings).Streaming.Enabled = false
+
+	if _, err = NewRepository(configPath).Save(cfg); err != nil {
+		t.Fatalf("Repository.Save() error = %v", err)
+	}
+	publicData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(publicData, []byte(`"ping_interval": 9007199254740993`)) {
+		t.Fatalf("saved config changed the exact ping interval:\n%s", publicData)
+	}
+	reloaded, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	reloadedSettings, err := reloaded.Channels.Get(ChannelMintClaw).GetDecoded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	streaming := reloadedSettings.(*MintClawSettings).Streaming
+	if streaming.Enabled || streaming.ThrottleSeconds != 2 {
+		t.Fatalf("reloaded streaming config = %#v, want disabled with preserved tuning", streaming)
 	}
 }

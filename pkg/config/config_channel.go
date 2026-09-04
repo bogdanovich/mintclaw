@@ -245,7 +245,7 @@ func (b Channel) MarshalJSON() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		settings = preserveExplicitDisabledStreaming(raw, b.Settings)
+		settings = preserveExplicitStreamingEnabled(raw, b.Settings)
 	}
 
 	out := b
@@ -257,32 +257,46 @@ func (b Channel) MarshalJSON() ([]byte, error) {
 	return json.Marshal((*Alias)(&out))
 }
 
-func preserveExplicitDisabledStreaming(settings, original RawNode) RawNode {
+func preserveExplicitStreamingEnabled(settings, original RawNode) RawNode {
 	if len(original) == 0 || len(settings) == 0 {
 		return settings
 	}
 
-	var originalMap map[string]any
+	var originalMap map[string]json.RawMessage
 	if err := json.Unmarshal(original, &originalMap); err != nil {
 		return settings
 	}
-	originalStreaming, ok := originalMap["streaming"].(map[string]any)
-	if !ok || originalStreaming["enabled"] != false {
+	var originalStreaming map[string]json.RawMessage
+	if err := json.Unmarshal(originalMap["streaming"], &originalStreaming); err != nil {
+		return settings
+	}
+	var originalEnabled *bool
+	if err := json.Unmarshal(originalStreaming["enabled"], &originalEnabled); err != nil || originalEnabled == nil {
 		return settings
 	}
 
-	var settingsMap map[string]any
+	var settingsMap map[string]json.RawMessage
 	if err := json.Unmarshal(settings, &settingsMap); err != nil {
 		return settings
 	}
-	settingsStreaming, ok := settingsMap["streaming"].(map[string]any)
-	if !ok {
-		settingsStreaming = make(map[string]any)
-	} else if _, explicit := settingsStreaming["enabled"]; explicit {
+	if settingsMap == nil {
+		settingsMap = make(map[string]json.RawMessage)
+	}
+	settingsStreaming := make(map[string]json.RawMessage)
+	if rawStreaming, ok := settingsMap["streaming"]; ok {
+		if err := json.Unmarshal(rawStreaming, &settingsStreaming); err != nil {
+			return settings
+		}
+	}
+	if _, explicit := settingsStreaming["enabled"]; explicit {
 		return settings
 	}
-	settingsStreaming["enabled"] = false
-	settingsMap["streaming"] = settingsStreaming
+	settingsStreaming["enabled"] = json.RawMessage("false")
+	streamingData, err := json.Marshal(settingsStreaming)
+	if err != nil {
+		return settings
+	}
+	settingsMap["streaming"] = streamingData
 
 	data, err := json.Marshal(settingsMap)
 	if err != nil {
