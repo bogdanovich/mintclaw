@@ -401,16 +401,16 @@ func TestHandleRegenMintClawToken_RefreshesGatewayTokenCache(t *testing.T) {
 		t.Fatalf("EnsureMintClawChannel() error = %v", err)
 	}
 
-	origMintClawToken := gateway.mintclawToken
+	origMintClawToken := h.gateway.mintclawToken
 	t.Cleanup(func() {
-		gateway.mu.Lock()
-		gateway.mintclawToken = origMintClawToken
-		gateway.mu.Unlock()
+		h.gateway.mu.Lock()
+		h.gateway.mintclawToken = origMintClawToken
+		h.gateway.mu.Unlock()
 	})
 
-	gateway.mu.Lock()
-	gateway.mintclawToken = "stale-token"
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.mintclawToken = "stale-token"
+	h.gateway.mu.Unlock()
 
 	req := httptest.NewRequest(http.MethodPost, "http://launcher.local/api/mintclaw/token", nil)
 	rec := httptest.NewRecorder()
@@ -438,23 +438,20 @@ func TestHandleRegenMintClawToken_RefreshesGatewayTokenCache(t *testing.T) {
 		t.Fatal("expected regenerated mintclaw token to differ from stale cache")
 	}
 
-	gateway.mu.Lock()
-	defer gateway.mu.Unlock()
-	if gateway.mintclawToken != token {
-		t.Fatalf("gateway.mintclawToken = %q, want %q", gateway.mintclawToken, token)
+	h.gateway.mu.Lock()
+	defer h.gateway.mu.Unlock()
+	if h.gateway.mintclawToken != token {
+		t.Fatalf("gateway.mintclawToken = %q, want %q", h.gateway.mintclawToken, token)
 	}
 }
 
 func TestHandleWebSocketProxyReloadsGatewayTargetFromConfig(t *testing.T) {
-	origMatcher := gatewayProcessMatcher
-	gatewayProcessMatcher = func(int) (bool, bool) { return true, true }
-	t.Cleanup(func() { gatewayProcessMatcher = origMatcher })
-
 	home := t.TempDir()
 	t.Setenv("MINTCLAW_HOME", home)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
+	h.gateway.processMatcher = func(int) (bool, bool) { return true, true }
 	handler := h.handleWebSocketProxy()
 
 	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -494,16 +491,16 @@ func TestHandleWebSocketProxyReloadsGatewayTargetFromConfig(t *testing.T) {
 		Host:  cfg.Gateway.Host,
 		Port:  cfg.Gateway.Port,
 	})
-	origPidData := gateway.pidData
-	origMintClawToken := gateway.mintclawToken
+	origPidData := h.gateway.pidData
+	origMintClawToken := h.gateway.mintclawToken
 	t.Cleanup(func() {
 		ppid.RemovePidFile(globalConfigDir())
-		gateway.pidData = origPidData
-		gateway.mintclawToken = origMintClawToken
+		h.gateway.pidData = origPidData
+		h.gateway.mintclawToken = origMintClawToken
 	})
 
-	gateway.pidData = &ppid.PidFileData{}
-	gateway.mintclawToken = "mintclaw"
+	h.gateway.pidData = &ppid.PidFileData{}
+	h.gateway.mintclawToken = "mintclaw"
 	req1 := newMintClawProxyRequest(http.MethodGet, "/mintclaw/ws")
 	rec1 := httptest.NewRecorder()
 	handler(rec1, req1)
@@ -533,15 +530,12 @@ func TestHandleWebSocketProxyReloadsGatewayTargetFromConfig(t *testing.T) {
 }
 
 func TestHandleWebSocketProxyLoadsCachedMintClawTokenWhenMissing(t *testing.T) {
-	origMatcher := gatewayProcessMatcher
-	gatewayProcessMatcher = func(int) (bool, bool) { return true, true }
-	t.Cleanup(func() { gatewayProcessMatcher = origMatcher })
-
 	home := t.TempDir()
 	t.Setenv("MINTCLAW_HOME", home)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
+	h.gateway.processMatcher = func(int) (bool, bool) { return true, true }
 	handler := h.handleWebSocketProxy()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -584,15 +578,15 @@ func TestHandleWebSocketProxyLoadsCachedMintClawTokenWhenMissing(t *testing.T) {
 		ppid.RemovePidFile(globalConfigDir())
 	})
 
-	origPidData := gateway.pidData
-	origMintClawToken := gateway.mintclawToken
+	origPidData := h.gateway.pidData
+	origMintClawToken := h.gateway.mintclawToken
 	t.Cleanup(func() {
-		gateway.pidData = origPidData
-		gateway.mintclawToken = origMintClawToken
+		h.gateway.pidData = origPidData
+		h.gateway.mintclawToken = origMintClawToken
 	})
 
-	gateway.pidData = &ppid.PidFileData{}
-	gateway.mintclawToken = ""
+	h.gateway.pidData = &ppid.PidFileData{}
+	h.gateway.mintclawToken = ""
 
 	req := newMintClawProxyRequest(http.MethodGet, "/mintclaw/ws?session_id=test-session")
 	rec := httptest.NewRecorder()
@@ -604,21 +598,18 @@ func TestHandleWebSocketProxyLoadsCachedMintClawTokenWhenMissing(t *testing.T) {
 	if body := rec.Body.String(); body != "proxied" {
 		t.Fatalf("body = %q, want %q", body, "proxied")
 	}
-	if gateway.mintclawToken != "cached-token" {
-		t.Fatalf("gateway.mintclawToken = %q, want %q", gateway.mintclawToken, "cached-token")
+	if h.gateway.mintclawToken != "cached-token" {
+		t.Fatalf("gateway.mintclawToken = %q, want %q", h.gateway.mintclawToken, "cached-token")
 	}
 }
 
 func TestHandleWebSocketProxyLoadsPidDataOnDemand(t *testing.T) {
-	origMatcher := gatewayProcessMatcher
-	gatewayProcessMatcher = func(int) (bool, bool) { return true, true }
-	t.Cleanup(func() { gatewayProcessMatcher = origMatcher })
-
 	home := t.TempDir()
 	t.Setenv("MINTCLAW_HOME", home)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
+	h.gateway.processMatcher = func(int) (bool, bool) { return true, true }
 	handler := h.handleWebSocketProxy()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -662,22 +653,22 @@ func TestHandleWebSocketProxyLoadsPidDataOnDemand(t *testing.T) {
 		ppid.RemovePidFile(globalConfigDir())
 	})
 
-	origPidData := gateway.pidData
-	origMintClawToken := gateway.mintclawToken
-	origStatus := gateway.runtimeStatus
+	origPidData := h.gateway.pidData
+	origMintClawToken := h.gateway.mintclawToken
+	origStatus := h.gateway.runtimeStatus
 	t.Cleanup(func() {
-		gateway.mu.Lock()
-		gateway.pidData = origPidData
-		gateway.mintclawToken = origMintClawToken
-		gateway.runtimeStatus = origStatus
-		gateway.mu.Unlock()
+		h.gateway.mu.Lock()
+		h.gateway.pidData = origPidData
+		h.gateway.mintclawToken = origMintClawToken
+		h.gateway.runtimeStatus = origStatus
+		h.gateway.mu.Unlock()
 	})
 
-	gateway.mu.Lock()
-	gateway.pidData = nil
-	gateway.mintclawToken = ""
-	setGatewayRuntimeStatusLocked("stopped")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.pidData = nil
+	h.gateway.mintclawToken = ""
+	h.setGatewayRuntimeStatusLocked("stopped")
+	h.gateway.mu.Unlock()
 
 	req := newMintClawProxyRequest(http.MethodGet, "/mintclaw/ws?session_id=test-session")
 	rec := httptest.NewRecorder()
@@ -692,13 +683,13 @@ func TestHandleWebSocketProxyLoadsPidDataOnDemand(t *testing.T) {
 		t.Fatalf("forwarded protocol = %q, want %q", got, expected)
 	}
 
-	gateway.mu.Lock()
-	defer gateway.mu.Unlock()
-	if gateway.pidData == nil {
+	h.gateway.mu.Lock()
+	defer h.gateway.mu.Unlock()
+	if h.gateway.pidData == nil {
 		t.Fatal("gateway.pidData should be loaded from pid file")
 	}
-	if gateway.runtimeStatus != "running" {
-		t.Fatalf("runtimeStatus = %q, want %q", gateway.runtimeStatus, "running")
+	if h.gateway.runtimeStatus != "running" {
+		t.Fatalf("runtimeStatus = %q, want %q", h.gateway.runtimeStatus, "running")
 	}
 }
 
@@ -792,22 +783,22 @@ func TestHandleMintClawMediaProxyUsesRawBearerToken(t *testing.T) {
 		_ = cmd.Wait()
 	})
 
-	origPidData := gateway.pidData
-	origMintClawToken := gateway.mintclawToken
-	origCmd := gateway.cmd
+	origPidData := h.gateway.pidData
+	origMintClawToken := h.gateway.mintclawToken
+	origCmd := h.gateway.cmd
 	t.Cleanup(func() {
-		gateway.mu.Lock()
-		gateway.pidData = origPidData
-		gateway.mintclawToken = origMintClawToken
-		gateway.cmd = origCmd
-		gateway.mu.Unlock()
+		h.gateway.mu.Lock()
+		h.gateway.pidData = origPidData
+		h.gateway.mintclawToken = origMintClawToken
+		h.gateway.cmd = origCmd
+		h.gateway.mu.Unlock()
 	})
 
-	gateway.mu.Lock()
-	gateway.pidData = &ppid.PidFileData{PID: cmd.Process.Pid}
-	gateway.mintclawToken = "ui-token"
-	gateway.cmd = cmd
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.pidData = &ppid.PidFileData{PID: cmd.Process.Pid}
+	h.gateway.mintclawToken = "ui-token"
+	h.gateway.cmd = cmd
+	h.gateway.mu.Unlock()
 
 	req := newMintClawProxyRequest(http.MethodGet, "/mintclaw/media/attachment-1")
 	rec := httptest.NewRecorder()
@@ -848,25 +839,25 @@ func TestHandleWebSocketProxyRejectsStalePidDataAfterProcessExit(t *testing.T) {
 	}
 	_ = cmd.Wait()
 
-	origPidData := gateway.pidData
-	origMintClawToken := gateway.mintclawToken
-	origCmd := gateway.cmd
-	origStatus := gateway.runtimeStatus
+	origPidData := h.gateway.pidData
+	origMintClawToken := h.gateway.mintclawToken
+	origCmd := h.gateway.cmd
+	origStatus := h.gateway.runtimeStatus
 	t.Cleanup(func() {
-		gateway.mu.Lock()
-		gateway.pidData = origPidData
-		gateway.mintclawToken = origMintClawToken
-		gateway.cmd = origCmd
-		gateway.runtimeStatus = origStatus
-		gateway.mu.Unlock()
+		h.gateway.mu.Lock()
+		h.gateway.pidData = origPidData
+		h.gateway.mintclawToken = origMintClawToken
+		h.gateway.cmd = origCmd
+		h.gateway.runtimeStatus = origStatus
+		h.gateway.mu.Unlock()
 	})
 
-	gateway.mu.Lock()
-	gateway.pidData = &ppid.PidFileData{PID: cmd.Process.Pid, Token: "stale-token"}
-	gateway.mintclawToken = "ui-token"
-	gateway.cmd = cmd
-	setGatewayRuntimeStatusLocked("running")
-	gateway.mu.Unlock()
+	h.gateway.mu.Lock()
+	h.gateway.pidData = &ppid.PidFileData{PID: cmd.Process.Pid, Token: "stale-token"}
+	h.gateway.mintclawToken = "ui-token"
+	h.gateway.cmd = cmd
+	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.mu.Unlock()
 
 	req := newMintClawProxyRequest(http.MethodGet, "/mintclaw/ws?session_id=test-session")
 	rec := httptest.NewRecorder()
@@ -875,23 +866,20 @@ func TestHandleWebSocketProxyRejectsStalePidDataAfterProcessExit(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-	gateway.mu.Lock()
-	defer gateway.mu.Unlock()
-	if gateway.pidData != nil {
+	h.gateway.mu.Lock()
+	defer h.gateway.mu.Unlock()
+	if h.gateway.pidData != nil {
 		t.Fatal("gateway.pidData should be cleared after stale process exit is detected")
 	}
 }
 
 func TestHandleWebSocketProxy_AllowsArbitraryOrigin(t *testing.T) {
-	origMatcher := gatewayProcessMatcher
-	gatewayProcessMatcher = func(int) (bool, bool) { return true, true }
-	t.Cleanup(func() { gatewayProcessMatcher = origMatcher })
-
 	home := t.TempDir()
 	t.Setenv("MINTCLAW_HOME", home)
 
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	h := NewHandler(configPath)
+	h.gateway.processMatcher = func(int) (bool, bool) { return true, true }
 	handler := h.handleWebSocketProxy()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -934,15 +922,15 @@ func TestHandleWebSocketProxy_AllowsArbitraryOrigin(t *testing.T) {
 		ppid.RemovePidFile(globalConfigDir())
 	})
 
-	origPidData := gateway.pidData
-	origMintClawToken := gateway.mintclawToken
+	origPidData := h.gateway.pidData
+	origMintClawToken := h.gateway.mintclawToken
 	t.Cleanup(func() {
-		gateway.pidData = origPidData
-		gateway.mintclawToken = origMintClawToken
+		h.gateway.pidData = origPidData
+		h.gateway.mintclawToken = origMintClawToken
 	})
 
-	gateway.pidData = &ppid.PidFileData{}
-	gateway.mintclawToken = "ui-token"
+	h.gateway.pidData = &ppid.PidFileData{}
+	h.gateway.mintclawToken = "ui-token"
 
 	req := httptest.NewRequest(http.MethodGet, "http://launcher.local/mintclaw/ws?session_id=test-session", nil)
 	req.Header.Set("Origin", "http://evil.example")

@@ -22,8 +22,8 @@ func TestSaveWeixinBindingReturnsSuccessWhenRestartFails(t *testing.T) {
 		t.Fatalf("saveTestConfig() error = %v", err)
 	}
 
-	originalHealthGet := gatewayHealthGet
-	gatewayHealthGet = func(url string, timeout time.Duration) (*http.Response, error) {
+	h := NewHandler(configPath)
+	h.gateway.healthGet = func(url string, timeout time.Duration) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body: io.NopCloser(strings.NewReader(
@@ -31,11 +31,7 @@ func TestSaveWeixinBindingReturnsSuccessWhenRestartFails(t *testing.T) {
 			)),
 		}, nil
 	}
-	t.Cleanup(func() {
-		gatewayHealthGet = originalHealthGet
-	})
 
-	h := NewHandler(configPath)
 	if err := h.saveWeixinBinding("bot-token", "bot-account"); err != nil {
 		t.Fatalf("saveWeixinBinding() error = %v, want nil after config save succeeds", err)
 	}

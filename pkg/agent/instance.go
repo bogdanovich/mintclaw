@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/isolation"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
@@ -47,6 +48,7 @@ type AgentInstance struct {
 	Sessions                  session.SessionStore
 	ContextBuilder            *ContextBuilder
 	Tools                     *tools.ToolRegistry
+	Repository                *codingworkspace.Repository
 	trustedToolRegistry       *tools.ToolRegistry
 	Subagents                 *config.SubagentsConfig
 	SkillsFilter              []string
@@ -145,6 +147,7 @@ type agentToolInitConfig struct {
 
 type runtimeInstanceDependencies struct {
 	storeFactory CodingRuntimeStoreFactory
+	repository   *codingworkspace.Repository
 }
 
 type agentIdentityConfig struct {
@@ -194,10 +197,12 @@ func newCodingAgentInstance(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 	layout CodingRuntimeLayout,
+	repository *codingworkspace.Repository,
 	storeFactory CodingRuntimeStoreFactory,
 ) (*AgentInstance, error) {
 	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
 		storeFactory: storeFactory,
+		repository:   repository,
 	})
 }
 
@@ -226,6 +231,10 @@ func newAgentInstance(
 	}
 
 	codingRuntime := layout != nil
+	var repository *codingworkspace.Repository
+	if runtimeDeps != nil {
+		repository = runtimeDeps.repository
+	}
 	model := resolveAgentModel(agentCfg, defaults)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 	var agentToolPolicy, agentMCPServerPolicy *config.AgentCapabilityPolicy
@@ -307,7 +316,10 @@ func newAgentInstance(
 		if contextBuilder.codingInstructions != nil {
 			workingDirectory = contextBuilder.codingInstructions.workingDirectory()
 		}
-		if err := initCodingAgentTools(workspace, workingDirectory, cfg, toolInit); err != nil {
+		if repository == nil {
+			repository = codingworkspace.NewRepository(workspace, workingDirectory, codingworkspace.Limits{})
+		}
+		if err := initCodingAgentTools(workspace, workingDirectory, cfg, toolInit, repository); err != nil {
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
 		}
@@ -354,6 +366,7 @@ func newAgentInstance(
 		Sessions:                  sessions,
 		ContextBuilder:            contextBuilder,
 		Tools:                     toolInit.toolsRegistry,
+		Repository:                repository,
 		Subagents:                 identity.subagents,
 		SkillsFilter:              identity.skillsFilter,
 		MCPServerPolicy:           agentMCPServerPolicy,
@@ -509,6 +522,7 @@ func initCodingAgentTools(
 	workingDirectory string,
 	cfg *config.Config,
 	initCfg agentToolInitConfig,
+	repository *codingworkspace.Repository,
 ) error {
 	registerTool := func(tool toolshared.Tool) {
 		initCfg.toolsRegistry.Register(tool)
@@ -532,6 +546,8 @@ func initCodingAgentTools(
 	registerTool(execTool)
 	registerTool(fstools.NewApplyPatchTool(workspace, false, nil))
 	registerTool(tools.NewUpdatePlanTool())
+	registerTool(tools.NewRepositoryStatusTool(repository))
+	registerTool(tools.NewRepositoryDiffTool(repository))
 	return nil
 }
 

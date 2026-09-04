@@ -32,6 +32,8 @@ var codingRuntimeToolNames = []string{
 	"exec",
 	"list_dir",
 	"read_file",
+	"repository_diff",
+	"repository_status",
 	"search_files",
 	"update_plan",
 	"write_file",
