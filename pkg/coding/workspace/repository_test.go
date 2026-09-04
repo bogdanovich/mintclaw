@@ -52,6 +52,53 @@ func TestRepositoryDiffCurrentReturnsStructuredTrackedAndUntrackedChanges(t *tes
 	}
 }
 
+func TestRepositoryStatusAndBaselineDiffExposeTruthfulProvenance(t *testing.T) {
+	root := initGitRepository(t)
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("pre-existing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := NewRepository(root, root, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
+		ProjectKey: "project-key", CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("new\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := NewRepositoryWithBaseline(root, root, Limits{}, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := repository.Status(t.Context())
+	if status.Stale || status.BaselineID != baseline.BaselineID || status.Provenance == nil ||
+		provenanceForPath(t, *status.Provenance, "tracked.txt") != ProvenancePreExisting ||
+		provenanceForPath(t, *status.Provenance, "new.txt") != ProvenanceFirstObservedDuringThread {
+		t.Fatalf("status = %#v", status)
+	}
+	diff := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetBaseline})
+	if diff.Stale || diff.Target.Kind != DiffTargetBaseline || diff.BaselineID != baseline.BaselineID ||
+		diff.Provenance == nil || requireDiffFile(t, diff, "tracked.txt").Provenance != ProvenancePreExisting ||
+		requireDiffFile(t, diff, "new.txt").Provenance != ProvenanceFirstObservedDuringThread {
+		t.Fatalf("baseline diff = %#v", diff)
+	}
+}
+
+func TestNewRepositoryWithBaselineRejectsDifferentRepositoryAuthority(t *testing.T) {
+	root := initGitRepository(t)
+	baseline, err := NewRepository(root, root, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
+		ProjectKey: "project-key", CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := initGitRepository(t)
+	_, err = NewRepositoryWithBaseline(other, other, Limits{}, baseline)
+	if err == nil || !strings.Contains(err.Error(), "repository baseline authority mismatch") {
+		t.Fatalf("NewRepositoryWithBaseline() error = %v", err)
+	}
+}
+
 func TestRepositoryDiffPreservesCachedDeletionAndSamePathUntrackedFile(t *testing.T) {
 	root := initGitRepository(t)
 	runGitTest(t, root, "rm", "--cached", "tracked.txt")

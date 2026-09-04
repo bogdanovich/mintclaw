@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -21,9 +22,10 @@ const (
 type DiffTargetKind string
 
 const (
-	DiffTargetCurrent DiffTargetKind = "current"
-	DiffTargetBase    DiffTargetKind = "base"
-	DiffTargetCommit  DiffTargetKind = "commit"
+	DiffTargetCurrent  DiffTargetKind = "current"
+	DiffTargetBaseline DiffTargetKind = "baseline"
+	DiffTargetBase     DiffTargetKind = "base"
+	DiffTargetCommit   DiffTargetKind = "commit"
 )
 
 type DiffTarget struct {
@@ -32,8 +34,11 @@ type DiffTarget struct {
 }
 
 type StatusResult struct {
-	SchemaVersion string   `json:"schema_version"`
-	Snapshot      Snapshot `json:"snapshot"`
+	SchemaVersion string            `json:"schema_version"`
+	Snapshot      Snapshot          `json:"snapshot"`
+	BaselineID    string            `json:"baseline_id,omitempty"`
+	Provenance    *ProvenanceResult `json:"provenance,omitempty"`
+	Stale         bool              `json:"stale,omitempty"`
 }
 
 type DiffLine struct {
@@ -54,36 +59,40 @@ type DiffHunk struct {
 }
 
 type DiffFile struct {
-	Path         string     `json:"path"`
-	OriginalPath string     `json:"original_path,omitempty"`
-	Status       string     `json:"status"`
-	Binary       bool       `json:"binary,omitempty"`
-	Submodule    bool       `json:"submodule,omitempty"`
-	Symlink      bool       `json:"symlink,omitempty"`
-	Omitted      string     `json:"omitted,omitempty"`
-	Additions    int        `json:"additions,omitempty"`
-	Deletions    int        `json:"deletions,omitempty"`
-	Hunks        []DiffHunk `json:"hunks,omitempty"`
-	Truncated    bool       `json:"truncated,omitempty"`
+	Path             string         `json:"path"`
+	OriginalPath     string         `json:"original_path,omitempty"`
+	Status           string         `json:"status"`
+	Binary           bool           `json:"binary,omitempty"`
+	Submodule        bool           `json:"submodule,omitempty"`
+	Symlink          bool           `json:"symlink,omitempty"`
+	Omitted          string         `json:"omitted,omitempty"`
+	Additions        int            `json:"additions,omitempty"`
+	Deletions        int            `json:"deletions,omitempty"`
+	Hunks            []DiffHunk     `json:"hunks,omitempty"`
+	Truncated        bool           `json:"truncated,omitempty"`
+	Provenance       ProvenanceKind `json:"provenance,omitempty"`
+	ProvenanceReason string         `json:"provenance_reason,omitempty"`
 }
 
 type DiffResult struct {
-	SchemaVersion       string     `json:"schema_version"`
-	Target              DiffTarget `json:"target"`
-	ResolvedRevision    string     `json:"resolved_revision,omitempty"`
-	MergeBase           string     `json:"merge_base,omitempty"`
-	RepositoryAvailable bool       `json:"repository_available"`
-	Head                string     `json:"head,omitempty"`
-	Branch              string     `json:"branch,omitempty"`
-	Generation          string     `json:"generation,omitempty"`
-	Files               []DiffFile `json:"files,omitempty"`
-	Additions           int        `json:"additions,omitempty"`
-	Deletions           int        `json:"deletions,omitempty"`
-	BinaryFiles         int        `json:"binary_files,omitempty"`
-	Truncated           bool       `json:"truncated,omitempty"`
-	Stale               bool       `json:"stale,omitempty"`
-	UnavailableReason   string     `json:"unavailable_reason,omitempty"`
-	Warning             string     `json:"warning,omitempty"`
+	SchemaVersion       string            `json:"schema_version"`
+	Target              DiffTarget        `json:"target"`
+	ResolvedRevision    string            `json:"resolved_revision,omitempty"`
+	MergeBase           string            `json:"merge_base,omitempty"`
+	RepositoryAvailable bool              `json:"repository_available"`
+	Head                string            `json:"head,omitempty"`
+	Branch              string            `json:"branch,omitempty"`
+	Generation          string            `json:"generation,omitempty"`
+	Files               []DiffFile        `json:"files,omitempty"`
+	Additions           int               `json:"additions,omitempty"`
+	Deletions           int               `json:"deletions,omitempty"`
+	BinaryFiles         int               `json:"binary_files,omitempty"`
+	Truncated           bool              `json:"truncated,omitempty"`
+	Stale               bool              `json:"stale,omitempty"`
+	UnavailableReason   string            `json:"unavailable_reason,omitempty"`
+	Warning             string            `json:"warning,omitempty"`
+	BaselineID          string            `json:"baseline_id,omitempty"`
+	Provenance          *ProvenanceResult `json:"provenance,omitempty"`
 }
 
 // Repository is the sole passive Git evidence boundary for one coding
@@ -95,6 +104,34 @@ type Repository struct {
 	cwd         string
 	limits      Limits
 	slots       chan struct{}
+	baseline    *RepositoryBaseline
+}
+
+func NewRepositoryWithBaseline(
+	projectRoot, cwd string,
+	limits Limits,
+	baseline RepositoryBaseline,
+) (*Repository, error) {
+	if err := baseline.Validate(); err != nil {
+		return nil, err
+	}
+	repository := NewRepository(projectRoot, cwd, limits)
+	canonicalProjectRoot, err := filepath.EvalSymlinks(repository.projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("repository baseline authority: resolve project root: %w", err)
+	}
+	canonicalProjectRoot = filepath.Clean(canonicalProjectRoot)
+	if baseline.RepositoryAvailable && canonicalProjectRoot != baseline.TopLevel {
+		return nil, fmt.Errorf(
+			"repository baseline authority mismatch: project root %q does not match baseline root %q",
+			canonicalProjectRoot,
+			baseline.TopLevel,
+		)
+	}
+	copy := baseline
+	copy.Paths = append([]BaselinePath(nil), baseline.Paths...)
+	repository.baseline = &copy
+	return repository, nil
 }
 
 func NewRepository(projectRoot, cwd string, limits Limits) *Repository {
@@ -117,12 +154,44 @@ func (repository *Repository) Status(ctx context.Context) StatusResult {
 		result.Snapshot.Git.UnavailableReason = contextError(ctx).Error()
 		return result
 	}
-	defer repository.release()
-	result.Snapshot = captureSnapshot(ctx, repository.projectRoot, repository.cwd, repository.limits)
+	func() {
+		defer repository.release()
+		result.Snapshot = captureSnapshot(ctx, repository.projectRoot, repository.cwd, repository.limits)
+	}()
+	repository.attachStatusProvenance(ctx, &result)
 	return result
 }
 
 func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffResult {
+	requested := target
+	if requested.Kind == "" {
+		requested.Kind = DiffTargetCurrent
+	}
+	if requested.Kind == DiffTargetBaseline {
+		if repository == nil || repository.baseline == nil {
+			return DiffResult{
+				SchemaVersion:     RepositoryDiffSchemaV1,
+				Target:            requested,
+				UnavailableReason: "thread baseline is unavailable",
+			}
+		}
+		target = DiffTarget{Kind: DiffTargetCurrent}
+	}
+	result := repository.diff(ctx, target)
+	result.Target = requested
+	if requested.Kind == DiffTargetBaseline && result.UnavailableReason == "" {
+		result.Warning = joinWarning(
+			result.Warning,
+			"hunks show current HEAD-relative changes; the thread baseline supplies provenance only",
+		)
+	}
+	if requested.Kind == DiffTargetCurrent || requested.Kind == DiffTargetBaseline {
+		repository.attachDiffProvenance(ctx, &result)
+	}
+	return result
+}
+
+func (repository *Repository) diff(ctx context.Context, target DiffTarget) DiffResult {
 	result := DiffResult{SchemaVersion: RepositoryDiffSchemaV1, Target: target}
 	if repository == nil {
 		result.UnavailableReason = "repository evidence service is unavailable"
@@ -212,6 +281,77 @@ func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffR
 		result.Warning = joinWarning(result.Warning, "repository diff capture: "+err.Error())
 	}
 	return result
+}
+
+func (repository *Repository) attachStatusProvenance(ctx context.Context, result *StatusResult) {
+	if repository == nil || repository.baseline == nil || result == nil {
+		return
+	}
+	result.BaselineID = repository.baseline.BaselineID
+	provenance, err := repository.Provenance(ctx, *repository.baseline, time.Now().UTC())
+	if err != nil {
+		provenance = unavailableProvenance(repository.baseline.BaselineID, "provenance refresh is unavailable")
+	}
+	if result.Snapshot.Identity() != provenance.CurrentGeneration {
+		result.Stale = true
+		provenance = unavailableProvenance(
+			repository.baseline.BaselineID,
+			"repository changed between status and provenance observations",
+		)
+	}
+	result.Provenance = &provenance
+}
+
+func (repository *Repository) attachDiffProvenance(ctx context.Context, result *DiffResult) {
+	if repository == nil || repository.baseline == nil || result == nil {
+		return
+	}
+	result.BaselineID = repository.baseline.BaselineID
+	provenance, err := repository.Provenance(ctx, *repository.baseline, time.Now().UTC())
+	if err != nil {
+		provenance = unavailableProvenance(repository.baseline.BaselineID, "provenance refresh is unavailable")
+	}
+	if result.Stale || result.Generation != provenance.CurrentGeneration {
+		result.Stale = true
+		provenance = unavailableProvenance(
+			repository.baseline.BaselineID,
+			"repository changed between diff and provenance observations",
+		)
+	}
+	result.Provenance = &provenance
+	byPath := make(map[string]ProvenancePath, len(provenance.Paths))
+	for _, path := range provenance.Paths {
+		byPath[evidencePathKey(path.Status, path.OriginalPath, path.Path)] = path
+	}
+	for index := range result.Files {
+		path, ok := byPath[evidencePathKey(
+			result.Files[index].Status,
+			result.Files[index].OriginalPath,
+			result.Files[index].Path,
+		)]
+		if !ok {
+			result.Files[index].Provenance = ProvenanceIndeterminate
+			result.Files[index].ProvenanceReason = provenance.Reason
+			if result.Files[index].ProvenanceReason == "" {
+				result.Files[index].ProvenanceReason = "bounded evidence does not cover this diff path"
+			}
+			continue
+		}
+		result.Files[index].Provenance = path.Provenance
+		result.Files[index].ProvenanceReason = path.Reason
+	}
+}
+
+func evidencePathKey(status, originalPath, path string) string {
+	status = strings.TrimSpace(status)
+	if status != "??" && status != "" {
+		status = status[:1]
+	}
+	return status + "\x00" + originalPath + "\x00" + path
+}
+
+func unavailableProvenance(baselineID, reason string) ProvenanceResult {
+	return ProvenanceResult{BaselineID: baselineID, Indeterminate: true, Reason: reason}
 }
 
 func (repository *Repository) acquire(ctx context.Context) bool {
