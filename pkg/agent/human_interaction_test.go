@@ -3982,6 +3982,17 @@ func TestStopCancellationAbortsBlockingApprovedTool(t *testing.T) {
 		!cancellation.CommandHandled {
 		t.Fatalf("approval stop cancellation = %#v", cancellation)
 	}
+	if cancellation.Effects != (interactionCancellationEffects{
+		CancellationFenced:         true,
+		ContinuationAbortRequested: true,
+		ControlsRemovalRequested:   true,
+		ToolResultPersisted:        true,
+		TaskCancelled:              true,
+		CancellationCompleted:      true,
+		OriginCleanupRequested:     true,
+	}) {
+		t.Fatalf("approval stop effects = %#v", cancellation.Effects)
+	}
 	select {
 	case <-tool.canceled:
 	case <-time.After(time.Second):
@@ -6933,6 +6944,16 @@ func TestStopCancellationPairsSuspendedToolCall(t *testing.T) {
 	if !cancellation.Matched || !cancellation.Canceled ||
 		cancellation.Failed || !cancellation.CommandHandled {
 		t.Fatalf("stop cancellation result = %#v", cancellation)
+	}
+	if cancellation.Effects != (interactionCancellationEffects{
+		CancellationFenced:       true,
+		ControlsRemovalRequested: true,
+		ToolResultPersisted:      true,
+		TaskCancelled:            true,
+		CancellationCompleted:    true,
+		OriginCleanupRequested:   true,
+	}) {
+		t.Fatalf("stop cancellation effects = %#v", cancellation.Effects)
 	}
 	record, _ = registry.Get(record.ID)
 	if record.Status != interactions.StatusCancelled {

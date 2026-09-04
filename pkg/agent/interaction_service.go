@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
 // interactionAuthorizationContext is the resolved route identity presented to
@@ -57,6 +59,38 @@ type answerInteractionCommand struct {
 	Scope         *session.SessionScope
 }
 
+// cancelInteractionCommand separates command recognition at ingress from the
+// ordered cancellation transaction owned by interactionService.
+type cancelInteractionCommand struct {
+	Message       bus.InboundMessage
+	Authorization interactionAuthorizationContext
+	Workspace     string
+	Agent         *AgentInstance
+	Target        *inboundDispatchTarget
+	ControlName   string
+	FailureCode   string
+}
+
+type interactionCancellationEffects struct {
+	CancellationFenced         bool
+	ContinuationAbortRequested bool
+	ControlsRemovalRequested   bool
+	ToolResultPersisted        bool
+	TaskCancelled              bool
+	CancellationCompleted      bool
+	OriginCleanupRequested     bool
+}
+
+type interactionControlCancellationResult struct {
+	Matched        bool
+	Canceled       bool
+	Failed         bool
+	CommandHandled bool
+	TaskID         string
+	Kind           interactions.Kind
+	Effects        interactionCancellationEffects
+}
+
 type interactionAnswerEffects struct {
 	AnswerPersisted          bool
 	ControlsRemovalRequested bool
@@ -100,6 +134,38 @@ func newAnswerInteractionCommand(
 		Agent:     target.Agent,
 		Scope:     session.CloneScope(&target.Allocation.Scope),
 	}, nil
+}
+
+func newCancelInteractionCommand(
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+) (cancelInteractionCommand, bool) {
+	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) != "" ||
+		target == nil || target.Agent == nil {
+		return cancelInteractionCommand{}, false
+	}
+	name, matched := commands.CommandName(msg.Content)
+	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice]) ==
+		bus.InboundInteractionChoiceCancel {
+		name = "stop"
+		matched = true
+	}
+	if !matched || (name != "new" && name != "reset" && name != "clear" && name != "stop") {
+		return cancelInteractionCommand{}, false
+	}
+	return cancelInteractionCommand{
+		Message: msg,
+		Authorization: interactionAuthorizationContext{
+			SessionKey:    target.SessionKey,
+			RouteScopeKey: target.Allocation.RouteScopeKey,
+			Inbound:       msg.Context,
+		},
+		Workspace:   target.Agent.Workspace,
+		Agent:       target.Agent,
+		Target:      target,
+		ControlName: name,
+		FailureCode: "session_control_" + name,
+	}, true
 }
 
 func (service interactionService) Answer(
@@ -312,4 +378,248 @@ func (service interactionService) resume(
 		command.Message.Context,
 		record,
 	)
+}
+
+func (service interactionService) Cancel(
+	ctx context.Context,
+	command cancelInteractionCommand,
+) (interactionControlCancellationResult, error) {
+	result := interactionControlCancellationResult{}
+	runtime := service.runtime
+	if runtime == nil || command.Target == nil || command.Agent == nil ||
+		strings.TrimSpace(command.Workspace) == "" {
+		return result, fmt.Errorf("interaction cancellation runtime is unavailable")
+	}
+	message := command.Message
+	registry := runtime.interactionRegistryForWorkspace(command.Workspace)
+	record, found := activeInteractionForSession(registry, command.Authorization.SessionKey)
+	if !found || !command.Authorization.authorizes(record.Route) {
+		return result, nil
+	}
+	projectedChoice := strings.TrimSpace(
+		message.Context.Raw[bus.InboundMetadataKeyInteractionChoice],
+	)
+	projectedShortID := strings.TrimSpace(
+		message.Context.Raw[bus.InboundMetadataKeyInteractionShortID],
+	)
+	if projectedChoice == bus.InboundInteractionChoiceCancel && projectedShortID == "" {
+		return result, nil
+	}
+	if projectedShortID != "" && !strings.EqualFold(projectedShortID, record.ShortID) {
+		return result, nil
+	}
+	if projectedChoice == bus.InboundInteractionChoiceCancel &&
+		runtime.projectedInteractionPromptIdentity(
+			record,
+			projectedInteractionPromptMessageID(message),
+		) != projectedInteractionPromptMatch {
+		return result, nil
+	}
+	result.Matched = true
+	result.TaskID = strings.TrimSpace(record.Origin.TaskID)
+	result.Kind = record.Kind
+	runInteractionLifecycleBoundaryHook(ctx, interactionBoundaryCancelAfterLoad)
+
+	claimTurnID := fmt.Sprintf(
+		"pending-interaction-cancel-%s-%d",
+		record.ShortID,
+		runtime.turns.nextSequence(),
+	)
+	claim, _, claimed := runtime.turns.claimRuntimeRouteSession(
+		command.Target,
+		claimTurnID,
+	)
+	if !claimed {
+		current, err := service.beginCancellationFence(
+			registry,
+			record,
+			command.Authorization,
+			command.FailureCode,
+		)
+		if err != nil {
+			result.Failed = true
+			return result, err
+		}
+		record = current
+		result.Effects.CancellationFenced = true
+		result.TaskID = strings.TrimSpace(record.Origin.TaskID)
+		result.Kind = record.Kind
+		if err := service.abortContinuation(record, command.Agent); err != nil {
+			result.Failed = true
+			return result, fmt.Errorf("abort interaction continuation: %w", err)
+		}
+		result.Effects.ContinuationAbortRequested = true
+		claim, claimed = service.waitForCancellationClaim(
+			ctx,
+			command.Target,
+			claimTurnID,
+		)
+	}
+	if !claimed {
+		result.Failed = true
+		return result, fmt.Errorf("interaction session is busy while canceling")
+	}
+	defer claim.releaseIfOwned()
+
+	current, active := activeInteractionForSession(
+		registry,
+		command.Authorization.SessionKey,
+	)
+	if !active || current.ID != record.ID ||
+		!command.Authorization.authorizes(current.Route) {
+		result.Failed = true
+		return result, fmt.Errorf("interaction changed while waiting to cancel")
+	}
+	record = current
+	result.TaskID = strings.TrimSpace(record.Origin.TaskID)
+	result.Kind = record.Kind
+	if interactionFinalizationStarted(record) {
+		result.Failed = true
+		return result, fmt.Errorf("interaction finalization already started")
+	}
+	continuationAgent := runtime.interactionContinuationAgent(record, command.Agent)
+	if continuationAgent != nil {
+		runtime.turns.takePendingStop(newRuntimeSessionScope(
+			continuationAgent.Workspace,
+			interactionContinuationSessionKey(record),
+		))
+	}
+
+	if record.Status != interactions.StatusCanceling {
+		var err error
+		record, err = registry.BeginCancellation(
+			record.ID,
+			record.Revision,
+			command.FailureCode,
+		)
+		if err != nil {
+			result.Failed = true
+			return result, fmt.Errorf("begin %s cancellation: %w", command.ControlName, err)
+		}
+		result.Effects.CancellationFenced = true
+	}
+	runtime.syncInteractionControls(
+		command.Workspace,
+		record,
+		bus.OutboundInteractionControlsRemove,
+	)
+	result.Effects.ControlsRemovalRequested = true
+	if err := runtime.ensureInteractionCancellationToolResult(
+		ctx,
+		runtime.interactionContinuationAgent(record, command.Agent),
+		record,
+		record.FailureCode,
+	); err != nil {
+		result.Failed = true
+		return result, fmt.Errorf("persist %s cancellation result: %w", command.ControlName, err)
+	}
+	result.Effects.ToolResultPersisted = true
+	if err := runtime.failInteractionTask(
+		command.Workspace,
+		record,
+		taskregistry.StatusCancelled,
+		"human input was canceled",
+	); err != nil {
+		result.Failed = true
+		return result, fmt.Errorf("cancel owning task: %w", err)
+	}
+	result.Effects.TaskCancelled = true
+	completed, err := registry.CompleteCancellation(record.ID, record.Revision)
+	if err != nil {
+		result.Failed = true
+		return result, fmt.Errorf("complete %s cancellation: %w", command.ControlName, err)
+	}
+	result.Effects.CancellationCompleted = true
+	runtime.cleanupInteractionOriginTools(
+		ctx,
+		runtime.interactionContinuationAgent(completed, command.Agent),
+		completed,
+	)
+	result.Effects.OriginCleanupRequested = true
+	result.Canceled = true
+	result.CommandHandled = command.ControlName == "stop"
+	return result, nil
+}
+
+func (service interactionService) beginCancellationFence(
+	registry *interactions.Registry,
+	loaded interactions.Record,
+	authorization interactionAuthorizationContext,
+	code string,
+) (interactions.Record, error) {
+	for attempt := 0; attempt < interactionCancelFenceAttempts; attempt++ {
+		current, active := activeInteractionForSession(registry, authorization.SessionKey)
+		if !active || current.ID != loaded.ID ||
+			!authorization.authorizes(current.Route) {
+			return interactions.Record{}, fmt.Errorf("interaction changed while preparing cancellation")
+		}
+		if current.Status == interactions.StatusCanceling {
+			return current, nil
+		}
+		if interactionFinalizationStarted(current) {
+			return interactions.Record{}, fmt.Errorf("interaction finalization already started")
+		}
+		fenced, err := registry.BeginCancellation(current.ID, current.Revision, code)
+		if err == nil {
+			return fenced, nil
+		}
+		if !errors.Is(err, interactions.ErrConflict) {
+			return interactions.Record{}, fmt.Errorf("begin cancellation fence: %w", err)
+		}
+	}
+	return interactions.Record{}, fmt.Errorf("interaction kept changing while preparing cancellation")
+}
+
+func interactionFinalizationStarted(record interactions.Record) bool {
+	return len(record.FinalDeliveryIDs) > 0
+}
+
+func (service interactionService) abortContinuation(
+	record interactions.Record,
+	fallbackAgent *AgentInstance,
+) error {
+	runtime := service.runtime
+	agent := runtime.interactionContinuationAgent(record, fallbackAgent)
+	if agent == nil {
+		return fmt.Errorf("interaction continuation agent is unavailable")
+	}
+	scope := newRuntimeSessionScope(
+		agent.Workspace,
+		interactionContinuationSessionKey(record),
+	)
+	state := runtime.turns.activeTurnState(scope)
+	if state == nil {
+		runtime.turns.markPendingStop(scope)
+		return nil
+	}
+	if strings.HasPrefix(state.snapshot().TurnID, pendingTurnPrefix) {
+		runtime.turns.markPendingStop(scope)
+		return nil
+	}
+	if err := runtime.hardAbortScope(scope); err != nil &&
+		runtime.turns.activeTurnState(scope) != nil {
+		return err
+	}
+	return nil
+}
+
+func (service interactionService) waitForCancellationClaim(
+	ctx context.Context,
+	target *inboundDispatchTarget,
+	turnID string,
+) (*runtimeSessionClaim, bool) {
+	for attempt := 0; attempt < interactionCancelClaimAttempts; attempt++ {
+		timer := time.NewTimer(interactionCancelClaimDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, false
+		case <-timer.C:
+		}
+		claim, _, claimed := service.runtime.turns.claimRuntimeRouteSession(target, turnID)
+		if claimed {
+			return claim, true
+		}
+	}
+	return nil, false
 }
