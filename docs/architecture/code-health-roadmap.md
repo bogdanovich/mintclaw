@@ -62,7 +62,7 @@ not targets by themselves.
 | H4 | Extract human-interaction application orchestration | H0 | Completed |
 | H5 | Consolidate turn input, runtime state, outcomes, and finalization | H0, H4 characterization tests | In progress |
 | H6 | Reduce root-config coupling at high-change boundaries | H1, H2, H5 | Not started |
-| H7 | Simplify canonical node JSON numbers through a protocol cutover | H0 | Not started |
+| H7 | Simplify canonical node JSON numbers through a protocol cutover | H0 | In progress |
 | H8 | Remove confirmed legacy and close the program | H1-H7 | Not started |
 
 Packets H1-H4 may proceed independently after H0. H5 should remain a sequence

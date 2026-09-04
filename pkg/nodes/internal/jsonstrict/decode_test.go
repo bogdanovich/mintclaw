@@ -3,6 +3,7 @@ package jsonstrict
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,61 @@ func TestCanonicalHandlesLargeExponentsWithoutExpansion(t *testing.T) {
 	}
 	if string(canonical) != `{"value":1e1000002}` {
 		t.Fatalf("Canonical() = %s", canonical)
+	}
+}
+
+func TestCanonicalV2UsesPlainSyntaxForMathematicalIntegers(t *testing.T) {
+	tests := map[string]string{
+		`{"value":60}`:                 `{"value":60}`,
+		`{"value":6e1}`:                `{"value":60}`,
+		`{"value":60.0}`:               `{"value":60}`,
+		`{"value":0.6e2}`:              `{"value":60}`,
+		`{"value":9007199254740993.0}`: `{"value":9007199254740993}`,
+		`{"value":-0e999999}`:          `{"value":0}`,
+	}
+	for input, want := range tests {
+		got, err := CanonicalV2([]byte(input))
+		if err != nil {
+			t.Fatalf("CanonicalV2(%s) error = %v", input, err)
+		}
+		if string(got) != want {
+			t.Fatalf("CanonicalV2(%s) = %s, want %s", input, got, want)
+		}
+	}
+}
+
+func TestCanonicalV2NormalizesFractions(t *testing.T) {
+	tests := map[string]string{
+		`{"value":1.25}`:        `{"value":1.25}`,
+		`{"value":125e-2}`:      `{"value":1.25}`,
+		`{"value":0.001}`:       `{"value":1e-3}`,
+		`{"value":1e-3}`:        `{"value":1e-3}`,
+		`{"value":123.4500}`:    `{"value":1.2345e2}`,
+		`{"value":1e-1000000}`:  `{"value":1e-1000000}`,
+		`{"value":10e-1000001}`: `{"value":1e-1000000}`,
+	}
+	for input, want := range tests {
+		got, err := CanonicalV2([]byte(input))
+		if err != nil {
+			t.Fatalf("CanonicalV2(%s) error = %v", input, err)
+		}
+		if string(got) != want {
+			t.Fatalf("CanonicalV2(%s) = %s, want %s", input, got, want)
+		}
+	}
+}
+
+func TestCanonicalV2RejectsNumbersOutsideBounds(t *testing.T) {
+	inputs := []string{
+		`{"value":1e4096}`,
+		`{"value":1e1000001}`,
+		`{"value":1e-1000001}`,
+		`{"value":0.` + strings.Repeat("1", maxCanonicalSignificantDigits+1) + `}`,
+	}
+	for _, input := range inputs {
+		if _, err := CanonicalV2([]byte(input)); err == nil {
+			t.Fatalf("CanonicalV2(%s) succeeded, want bounded-number error", input)
+		}
 	}
 }
 
