@@ -65,6 +65,15 @@ type runtimeObjectiveItem struct {
 	Acceptance *taskresult.ObjectiveAcceptance
 }
 
+func cloneRuntimeObjectiveChecklist(items []runtimeObjectiveItem) []runtimeObjectiveItem {
+	cloned := make([]runtimeObjectiveItem, len(items))
+	for index, item := range items {
+		cloned[index] = item
+		cloned[index].Acceptance = taskresult.CloneObjectiveAcceptance(item.Acceptance)
+	}
+	return cloned
+}
+
 func normalizeObjectiveChecklist(specs []toolshared.ObjectiveSpec) []runtimeObjectiveItem {
 	items := make([]runtimeObjectiveItem, 0, min(len(specs), objectiveOutcomeLimit))
 	for _, spec := range specs {

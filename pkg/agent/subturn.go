@@ -629,17 +629,18 @@ func spawnSubTurn(
 	if !opts.TurnProfile.Enabled {
 		opts.TurnProfile = parentTS.opts.TurnProfile
 	}
+	input := freezeTurnInput(opts)
 
 	// Create event scope for the child turn
 	scope := al.newTurnEventScope(
 		agent.ID,
 		agent.Workspace,
 		childID,
-		newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
+		newTurnContext(input.Dispatch.InboundContext, input.Dispatch.RouteResult, input.Dispatch.SessionScope),
 	)
 
 	// Create child turnState using the new API
-	childTS := newTurnState(&agent, opts, scope)
+	childTS := newTurnStateFromInput(&agent, input, nil, scope)
 
 	// Set SubTurn-specific fields
 	childTS.cancelFunc = cancel

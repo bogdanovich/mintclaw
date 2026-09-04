@@ -124,8 +124,8 @@ func (r *turnRunner) run(
 		if turnStatus == TurnEndStatusCompleted && err == nil {
 			if ts.opts.ExpectFinalDelivery &&
 				strings.TrimSpace(result.finalContent) != "" &&
-				ts.opts.FinalDeliveryObservation != nil {
-				ts.opts.FinalDeliveryObservation.observeSteering(acceptedSteering)
+				ts.observers.FinalDelivery != nil {
+				ts.observers.FinalDelivery.observeSteering(acceptedSteering)
 				return
 			}
 			runtime.inbound.ackAcceptedSteeringMessages(ctx, acceptedSteering)
@@ -148,8 +148,8 @@ func (r *turnRunner) run(
 			Workspace:   ts.workspace,
 		},
 	)
-	if ts.opts.OnTurnReady != nil {
-		ts.opts.OnTurnReady()
+	if ts.observers.OnReady != nil {
+		ts.observers.OnReady()
 	}
 
 	if execute == nil {

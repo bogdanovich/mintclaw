@@ -94,42 +94,6 @@ type AgentLoop struct {
 	providerFactory func(*config.ModelConfig) (providers.LLMProvider, string, error)
 }
 
-// turnSpec is the canonical runtime representation of one admitted turn.
-// Entrypoint-specific requests are normalized into this shape before execution.
-type turnSpec struct {
-	mode                         turnMode
-	Dispatch                     DispatchRequest
-	ModelBinding                 effectiveModelBinding
-	TaskID                       string // Durable task owning this turn, when one exists
-	ObjectiveChecklist           []runtimeObjectiveItem
-	InteractionWorkspace         string              // Workspace owning inbound interaction routing
-	InteractionSessionKey        string              // User-facing session that owns interaction answers
-	InteractionRouteKey          string              // Routed scope key that owns interaction answers
-	InteractionOriginExecution   string              // Original non-approval execution identity for a continuation
-	InteractionOriginContext     *bus.InboundContext // Original tool identity for a continuation
-	TurnStatus                   *TurnEndStatus
-	TurnResult                   *turnResult         // Optional caller-owned terminal snapshot
-	ApprovalGrant                *ToolApprovalGrant  // Internal one-time durable approval capability
-	SenderDisplayName            string              // Current sender display name for dynamic context
-	CodingContext                CodingPromptContext // Runtime-owned coding identity for prompt assembly
-	ForcedSkills                 []string            // Skills explicitly requested for this message
-	TurnProfile                  config.EffectiveTurnProfile
-	InitialSteeringMessages      []providers.Message       // Steering messages from refactor/agent
-	ActiveGoal                   string                    // Dynamic session goal reminder for normal LLM turns
-	DefaultResponse              string                    // Response when LLM returns empty
-	EnableSummary                bool                      // Whether to trigger summarization
-	SuppressBackgroundCompaction bool                      // Whether this short-lived caller can outlive background work
-	SendResponse                 bool                      // Whether to send response via bus
-	ExpectFinalDelivery          bool                      // Whether an outer coordinator will publish the final response
-	FinalDeliveryObservation     *finalDeliveryObservation // Collects state settled by an outer final response
-	AllowInterimMintClawPublish  bool                      // Whether mintclaw tool-call interim text can be published when SendResponse is false
-	DirectStreaming              bool                      // Whether a direct frontend supplies its own stream delegate
-	OnTurnReady                  func()                    // Signals that direct turn controls can target the registered owner
-	SuppressToolUserDelivery     bool                      // Whether direct user-facing delivery from tools is suppressed for this turn
-	SuppressToolFeedback         bool                      // Whether to suppress inline tool feedback messages
-	NoHistory                    bool                      // If true, don't load session history (for heartbeat)
-}
-
 type continuationTarget struct {
 	finalDeliveryObservation
 	AgentID                string
@@ -426,6 +390,18 @@ func (al *AgentLoop) runAgentLoop(
 	agent *AgentInstance,
 	opts turnSpec,
 ) (string, error) {
+	result, err := al.runAgentTurn(ctx, agent, opts)
+	if err != nil {
+		return "", err
+	}
+	return result.responseContent(), nil
+}
+
+func (al *AgentLoop) runAgentTurn(
+	ctx context.Context,
+	agent *AgentInstance,
+	opts turnSpec,
+) (turnResult, error) {
 	return al.runAgentLoopWithExecution(ctx, agent, opts, nil)
 }
 
@@ -441,20 +417,20 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 	agent *AgentInstance,
 	opts turnSpec,
 	execute pipelineTurnExecutionFunc,
-) (string, error) {
+) (turnResult, error) {
 	if agent == nil {
-		return "", fmt.Errorf("agent is unavailable")
+		return turnResult{}, fmt.Errorf("agent is unavailable")
 	}
 	admittedCtx, releaseAdmission, err := al.turns.acquireAgentTurn(ctx, agent.ID)
 	if err != nil {
-		return "", err
+		return turnResult{}, err
 	}
 	defer releaseAdmission()
 	ctx = admittedCtx
 
 	currentAgent, changed, err := al.currentAgentGeneration(agent)
 	if err != nil {
-		return "", err
+		return turnResult{}, err
 	}
 	if changed {
 		agent = currentAgent
@@ -469,15 +445,16 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 	opts = normalizeTurnSpec(opts)
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
-		return "", err
+		return turnResult{}, err
 	}
 	al.applyActiveGoalPrompt(&opts)
+	input := freezeTurnInput(opts)
 
 	// Record last channel for heartbeat notifications (skip internal channels and cli)
-	if opts.Dispatch.Channel() != "" &&
-		opts.Dispatch.ChatID() != "" &&
-		!constants.IsInternalChannel(opts.Dispatch.Channel()) {
-		channelKey := fmt.Sprintf("%s:%s", opts.Dispatch.Channel(), opts.Dispatch.ChatID())
+	if input.Dispatch.Channel() != "" &&
+		input.Dispatch.ChatID() != "" &&
+		!constants.IsInternalChannel(input.Dispatch.Channel()) {
+		channelKey := fmt.Sprintf("%s:%s", input.Dispatch.Channel(), input.Dispatch.ChatID())
 		if recordErr := al.RecordLastChannel(channelKey); recordErr != nil {
 			logger.WarnCF(
 				"agent",
@@ -489,53 +466,47 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 
 	ensureSessionMetadata(
 		agent.Sessions,
-		opts.Dispatch.SessionKey,
-		opts.Dispatch.SessionScope,
+		input.Dispatch.SessionKey,
+		input.Dispatch.SessionScope,
 	)
 
 	turnScope := al.newTurnEventScope(
 		agent.ID,
 		agent.Workspace,
-		opts.Dispatch.SessionKey,
+		input.Dispatch.SessionKey,
 		newTurnContext(
-			opts.Dispatch.InboundContext,
-			opts.Dispatch.RouteResult,
-			opts.Dispatch.SessionScope,
+			input.Dispatch.InboundContext,
+			input.Dispatch.RouteResult,
+			input.Dispatch.SessionScope,
 		),
 	)
-	ts := newTurnState(agent, opts, turnScope)
-	if bindErr := bindNodeFileMediaOwner(al.mediaStore, ts, opts.Dispatch.Media); bindErr != nil {
+	ts := newTurnStateFromInput(agent, input, opts.ApprovalGrant, turnScope)
+	if bindErr := bindNodeFileMediaOwner(al.mediaStore, ts, input.Dispatch.Media); bindErr != nil {
 		logger.WarnCF("media", "Failed to bind inbound media ownership", map[string]any{
 			"agent_id":    agent.ID,
-			"media_count": len(opts.Dispatch.Media),
+			"media_count": len(input.Dispatch.Media),
 		})
 	}
-	if opts.FinalDeliveryObservation != nil {
-		opts.FinalDeliveryObservation.observeTurn(
+	if input.observers.FinalDelivery != nil {
+		input.observers.FinalDelivery.observeTurn(
 			runtimeevents.NewTraceScope(turnScope.workspace, turnScope.turnID),
 		)
 	}
 	var result turnResult
 	result, err = al.turns.currentRunner().run(ctx, ts, execute)
 	if err != nil {
-		return "", err
+		return result, err
 	}
-	if opts.TurnResult != nil {
-		*opts.TurnResult = result
-	}
-	if opts.TurnStatus != nil {
-		*opts.TurnStatus = result.status
-	}
-	if opts.FinalDeliveryObservation != nil &&
+	if input.observers.FinalDelivery != nil &&
 		result.status != TurnEndStatusAborted &&
 		result.status != TurnEndStatusSuspended {
-		opts.FinalDeliveryObservation.observeResponse(outboundMetadataForTurnResult(result))
+		input.observers.FinalDelivery.observeResponse(outboundMetadataForTurnResult(result))
 	}
 	if result.status == TurnEndStatusAborted {
-		return "", nil
+		return result, nil
 	}
 	if result.status == TurnEndStatusSuspended {
-		return "", nil
+		return result, nil
 	}
 
 	for _, followUp := range result.followUps {
@@ -552,7 +523,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 		ctx,
 		runtimeevents.NewTraceScope(turnScope.workspace, turnScope.turnID),
 		agent,
-		opts,
+		input.runtimeOptions(),
 		result,
 	)
 
@@ -561,21 +532,21 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 		logger.InfoCF("agent", fmt.Sprintf("Response: %s", responsePreview),
 			map[string]any{
 				"agent_id":     agent.ID,
-				"session_key":  opts.Dispatch.SessionKey,
+				"session_key":  input.Dispatch.SessionKey,
 				"iterations":   ts.currentIteration(),
 				"final_length": len(result.finalContent),
 			})
 	}
 
-	al.compactAfterFinalDelivery(ctx, agent, opts, result)
+	al.compactAfterFinalDelivery(ctx, agent, input, result)
 
-	return result.finalContent, nil
+	return result, nil
 }
 
 func (al *AgentLoop) compactAfterFinalDelivery(
 	ctx context.Context,
 	agent *AgentInstance,
-	opts turnSpec,
+	opts turnInput,
 	result turnResult,
 ) {
 	if !result.compactAfterDelivery || al.contextManager == nil || agent == nil {

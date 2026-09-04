@@ -39,6 +39,18 @@ type modelSelectionInspection struct {
 	Override       state.SessionModelOverride
 }
 
+func cloneEffectiveModelBinding(binding effectiveModelBinding) effectiveModelBinding {
+	binding.Execution = cloneEffectiveExecutionState(binding.Execution)
+	return binding
+}
+
+func cloneEffectiveExecutionState(execution effectiveExecutionState) effectiveExecutionState {
+	execution.Candidates = append([]providers.FallbackCandidate(nil), execution.Candidates...)
+	execution.CandidateProviders = cloneCandidateProviderMap(execution.CandidateProviders)
+	execution.LightCandidates = append([]providers.FallbackCandidate(nil), execution.LightCandidates...)
+	return execution
+}
+
 func (b effectiveModelBinding) Cleanup() {
 	if b.cleanup != nil {
 		b.cleanup()

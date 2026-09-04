@@ -269,7 +269,6 @@ func (service interactionService) resumeOwned(
 	}
 	modelBinding := runtime.bindEffectiveModel(routeSessionKey, agent)
 	defer modelBinding.Cleanup()
-	turnStatus := TurnEndStatusCompleted
 	expectFinalDelivery := runtime.interactionContinuationExpectsUserDelivery(
 		interactionWorkspace, record,
 	)
@@ -277,7 +276,6 @@ func (service interactionService) resumeOwned(
 	if expectFinalDelivery {
 		deliveryObservation = &finalDeliveryObservation{}
 	}
-	var resumedTurn turnResult
 	dispatch := DispatchRequest{
 		RouteSessionKey: routeSessionKey,
 		BaseSessionKey:  continuationSessionKey,
@@ -293,32 +291,30 @@ func (service interactionService) resumeOwned(
 	continuationOpts.InteractionOriginExecution = record.Origin.ExecutionID
 	continuationOpts.InteractionOriginContext = cloneInboundContext(record.Origin.ExecutionContext)
 	continuationOpts.ObjectiveChecklist = runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist)
-	continuationOpts.TurnStatus = &turnStatus
-	continuationOpts.TurnResult = &resumedTurn
 	continuationOpts.ExpectFinalDelivery = deliveryObservation != nil
 	continuationOpts.FinalDeliveryObservation = deliveryObservation
 	continuationOpts.InitialSteeringMessages = supersedingSteering
 	continuationExecutor.configure(&continuationOpts)
-	finalContent, runErr := runtime.runAgentLoopWithExecution(
+	resumedTurn, runErr := runtime.runAgentLoopWithExecution(
 		ctx, agent, continuationOpts, continuationExecutor.execute,
 	)
-	if turnStatus == TurnEndStatusAborted {
+	if resumedTurn.status == TurnEndStatusAborted {
 		continuationExecutor.abort()
 	}
 	if runErr != nil {
 		_, _ = registry.RecordResumeFailure(resuming.ID, resuming.Revision, runErr.Error())
 		return runErr
 	}
-	if turnStatus == TurnEndStatusSuspended {
+	if resumedTurn.status == TurnEndStatusSuspended {
 		return nil
 	}
-	if turnStatus == TurnEndStatusAborted {
+	if resumedTurn.status == TurnEndStatusAborted {
 		return nil
 	}
 	audits := interactionOutcomeAudits(resuming)
 	audits = appendTurnWriteAudit(audits, "", resumedTurn.writeAudit)
 	finalContent, objectiveOutcome := extractResumedObjectiveOutcome(
-		finalContent, audits, resuming,
+		resumedTurn.finalContent, audits, resuming,
 	)
 	runtime.sealActiveInteractionSteeringHandoff(interactionWorkspace, resuming.ID)
 	var traceScopes []runtimeevents.TraceScope
