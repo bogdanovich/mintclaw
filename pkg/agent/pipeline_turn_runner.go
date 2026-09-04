@@ -22,6 +22,22 @@ type terminalGatewayOutcome struct {
 	err    error
 }
 
+func toolTerminalRequest(
+	outcome ToolLoopOutcome,
+	llm *LLMIterationState,
+	fallback terminalContent,
+) terminalRequest {
+	content := fallback
+	if strings.TrimSpace(outcome.FinalContent) != "" {
+		content = terminalContent{content: outcome.FinalContent}
+	}
+	if llm != nil && llm.toolResponseDisposition == toolResponseHandled &&
+		outcome.TerminalMode != terminalRenderExact {
+		content = terminalContent{}
+	}
+	return terminalRequest{content: content, renderMode: outcome.TerminalMode}
+}
+
 func (p *Pipeline) runTurnLoop(
 	ctx context.Context,
 	turnCtx context.Context,
@@ -292,22 +308,13 @@ func (p *Pipeline) runPreparedTurnLoop(
 					suspendedInteractionID: toolOutcome.SuspendedInteractionID,
 				}, turnStatus, nil
 			case turnStepFinalize:
-				// A handled tool response suppresses DefaultResponse; otherwise use
-				// outcome content when present.
-				if strings.TrimSpace(toolOutcome.FinalContent) != "" {
-					exec.terminal = terminalContent{content: toolOutcome.FinalContent}
-				}
-				if llm.toolResponseDisposition == toolResponseHandled &&
-					toolOutcome.TerminalMode != terminalRenderExact {
-					exec.terminal = terminalContent{}
-				}
 				terminal := p.completeTerminal(
 					turnCtx,
 					ts,
 					exec,
 					llm,
 					turnStatus,
-					terminalRequest{content: exec.terminal, renderMode: toolOutcome.TerminalMode},
+					toolTerminalRequest(toolOutcome, llm, exec.terminal),
 				)
 				if terminal.resume {
 					continue

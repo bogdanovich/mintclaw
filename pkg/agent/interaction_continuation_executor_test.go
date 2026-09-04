@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -166,5 +167,19 @@ func TestInteractionContinuationConfigureKeepsResumeInboundContext(t *testing.T)
 	}
 	if opts.Dispatch.InboundContext != resumeInbound {
 		t.Fatalf("resume inbound context changed: %#v", opts.Dispatch.InboundContext)
+	}
+}
+
+func TestToolTerminalRequestPreservesExactSafetyHalt(t *testing.T) {
+	llm := newLLMIterationState(1)
+	llm.toolResponseDisposition = toolResponseHandled
+
+	got := toolTerminalRequest(ToolLoopOutcome{
+		Control:      turnStepFinalize,
+		FinalContent: "  runtime-owned halt reason  ",
+		TerminalMode: terminalRenderExact,
+	}, llm, terminalContent{})
+	if got.renderMode != terminalRenderExact || strings.TrimSpace(got.content.content) != "runtime-owned halt reason" {
+		t.Fatalf("tool terminal request = %#v, want exact runtime halt", got)
 	}
 }

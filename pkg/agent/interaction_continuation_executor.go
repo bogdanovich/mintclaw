@@ -106,18 +106,13 @@ func (e *interactionContinuationExecutor) execute(
 		}
 		ts.consumeApprovalGrant()
 		if outcome.Control == turnStepFinalize {
-			content := terminalContent{content: outcome.FinalContent}
-			if llm.toolResponseDisposition == toolResponseHandled &&
-				outcome.TerminalMode != terminalRenderExact {
-				content = terminalContent{}
-			}
 			terminal := pipeline.completeTerminal(
 				turnCtx,
 				ts,
 				exec,
 				llm,
 				TurnEndStatusCompleted,
-				terminalRequest{content: content, renderMode: outcome.TerminalMode},
+				toolTerminalRequest(outcome, llm, terminalContent{}),
 			)
 			if !terminal.resume {
 				return terminal.result, terminal.status, terminal.err
