@@ -237,7 +237,7 @@ type Channel struct {
 func (b Channel) MarshalJSON() ([]byte, error) {
 	settings := b.Settings
 	if b.extend != nil {
-		projected, err := projectPublicValue(reflect.ValueOf(b.extend))
+		projected, err := projectPublicExtensionValue(reflect.ValueOf(b.extend))
 		if err != nil {
 			return nil, err
 		}

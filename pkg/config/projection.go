@@ -36,6 +36,14 @@ func projectPublicValue(value reflect.Value) (reflect.Value, error) {
 	return projector.project(value, false)
 }
 
+// projectPublicExtensionValue applies the stricter policy required at
+// extension boundaries. Extension-owned marshalers must not retain private or
+// opaque state that the projector cannot inspect safely.
+func projectPublicExtensionValue(value reflect.Value) (reflect.Value, error) {
+	projector := publicProjector{active: make(map[projectionReference]struct{})}
+	return projector.project(value, true)
+}
+
 type projectionReference struct {
 	typeOf   reflect.Type
 	pointer  uintptr
@@ -250,7 +258,7 @@ func (p *publicProjector) projectChannelSettings(channel Channel) (RawNode, erro
 			return nil, err
 		}
 	}
-	projected, err := p.project(reflect.ValueOf(settings), false)
+	projected, err := p.project(reflect.ValueOf(settings), true)
 	if err != nil {
 		return nil, err
 	}

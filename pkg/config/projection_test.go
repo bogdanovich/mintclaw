@@ -21,6 +21,14 @@ type privateProjectionMap map[*privateProjectionMapKey]string
 
 type privateProjectionFunc func() string
 
+type opaqueProjectionChannelSettings struct {
+	Reveal privateProjectionFunc `json:"-"`
+}
+
+func (s *opaqueProjectionChannelSettings) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]string{"secret": s.Reveal()})
+}
+
 func (f privateProjectionFunc) MarshalJSON() ([]byte, error) {
 	return json.Marshal(f())
 }
@@ -110,6 +118,34 @@ func TestProjectPublicConfigRejectsOpaqueCustomMarshaler(t *testing.T) {
 
 	if _, err = ProjectPublicConfig(cfg); err == nil || !strings.Contains(err.Error(), "opaque func") {
 		t.Fatalf("ProjectPublicConfig() error = %v, want opaque-function rejection", err)
+	}
+}
+
+func TestProjectPublicConfigRejectsOpaqueRegisteredChannelSettings(t *testing.T) {
+	const channelType = "opaque_projection_test_channel"
+	secret := "opaque-channel-secret"
+	settings := &opaqueProjectionChannelSettings{
+		Reveal: func() string { return secret },
+	}
+	unsafeJSON, err := json.Marshal(settings)
+	if err != nil || !strings.Contains(string(unsafeJSON), secret) {
+		t.Fatalf("custom channel marshaler test setup did not expose captured state: %s, %v", unsafeJSON, err)
+	}
+	RegisterChannelSettings(channelType, opaqueProjectionChannelSettings{})
+	cfg := DefaultConfig()
+	cfg.Channels = ChannelsConfig{
+		"opaque": {
+			Type:   channelType,
+			extend: settings,
+		},
+	}
+
+	if _, err = ProjectPublicConfig(cfg); err == nil || !strings.Contains(err.Error(), "opaque func") {
+		t.Fatalf("ProjectPublicConfig() error = %v, want opaque-function rejection", err)
+	}
+	channel := *cfg.Channels["opaque"]
+	if _, err = json.Marshal(channel); err == nil || !strings.Contains(err.Error(), "opaque func") {
+		t.Fatalf("Channel.MarshalJSON() error = %v, want opaque-function rejection", err)
 	}
 }
 
