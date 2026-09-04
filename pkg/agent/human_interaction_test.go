@@ -3432,9 +3432,16 @@ func TestMalformedMultilineAnswerCanRetryAndResumeExactlyOnce(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	malformed.Context.MessageID = "malformed-answer"
-	ownership, _, err := al.processInteractionInbound(t.Context(), malformed, target)
-	if err != nil || ownership != interactionInboundCallerOwned {
-		t.Fatalf("malformed processInteractionInbound() = (%v, %v)", ownership, err)
+	command, err := newAnswerInteractionCommand(malformed, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := newInteractionService(al).Answer(t.Context(), command)
+	if err != nil || result.Ownership != interactionInboundCallerOwned {
+		t.Fatalf("malformed interactionService.Answer() = (%v, %v)", result.Ownership, err)
+	}
+	if result.Effects != (interactionAnswerEffects{}) {
+		t.Fatalf("malformed answer effects = %#v, want none", result.Effects)
 	}
 	afterMalformed, _ := registry.Get(record.ID)
 	if afterMalformed.Status != interactions.StatusWaiting ||
@@ -3463,9 +3470,17 @@ func TestMalformedMultilineAnswerCanRetryAndResumeExactlyOnce(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	valid.Context.MessageID = "valid-answer"
-	ownership, _, err = al.processInteractionInbound(t.Context(), valid, target)
-	if err != nil || ownership != interactionInboundClaimed {
-		t.Fatalf("valid processInteractionInbound() = (%v, %v)", ownership, err)
+	command, err = newAnswerInteractionCommand(valid, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = newInteractionService(al).Answer(t.Context(), command)
+	if err != nil || result.Ownership != interactionInboundClaimed {
+		t.Fatalf("valid interactionService.Answer() = (%v, %v)", result.Ownership, err)
+	}
+	if !result.Effects.AnswerPersisted || !result.Effects.ControlsRemovalRequested ||
+		!result.Effects.ResumeAttempted || result.Effects.ContinuationQueued {
+		t.Fatalf("valid answer effects = %#v", result.Effects)
 	}
 	resolved, _ := registry.Get(record.ID)
 	if resolved.Status != interactions.StatusResolved || resolved.Answer == nil ||

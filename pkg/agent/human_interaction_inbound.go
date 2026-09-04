@@ -1027,155 +1027,13 @@ func (al *AgentLoop) processInteractionInbound(
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
 ) (interactionInboundOwnership, finalResponseAdmission, error) {
-	notRequired := finalResponseAdmission{status: finalResponseAdmissionNotRequired}
-	registry := al.interactionRegistryForWorkspace(target.Agent.Workspace)
-	if registry.LastLoadError() != nil {
-		return al.interactionNoticeResult(
-			ctx,
-			msg,
-			target.SessionKey,
-			"Pending input state is unavailable; this session cannot continue until it is recovered.",
-		)
-	}
-	record, ok := activeInteractionForSession(registry, target.SessionKey)
-	if !ok {
-		return interactionInboundCallerOwned, notRequired, fmt.Errorf(
-			"active interaction disappeared for session %q",
-			target.SessionKey,
-		)
-	}
-	if record.Status == interactions.StatusClaimed || record.Status == interactions.StatusResuming {
-		if interactionInboundReplaysAnswer(record, msg.Context) {
-			if err := al.settleInboundAdmission(ctx, msg, notRequired); err != nil {
-				return interactionInboundClaimed, notRequired, err
-			}
-			return interactionInboundClaimed, notRequired, al.resumeClaimedInteraction(
-				ctx,
-				registry,
-				target.Agent.Workspace,
-				al.interactionContinuationAgent(record, target.Agent),
-				&target.Allocation.Scope,
-				msg.Context,
-				record,
-			)
-		}
-		if _, _, explicit := splitExplicitInteractionAnswer(msg.Content); explicit {
-			logExplicitInteractionAnswerDisposition(
-				record,
-				msg,
-				explicitInteractionAnswerDuplicate,
-			)
-			return interactionInboundCallerOwned, al.publishInteractionNoticeAdmission(
-				ctx,
-				msg,
-				target.SessionKey,
-				"An answer has already been accepted for this interaction.",
-			), nil
-		}
-		if err := al.enqueueInteractionContinuationInbound(ctx, msg, target, record); err != nil {
-			return interactionInboundCallerOwned, notRequired, err
-		}
-		return interactionInboundDeferred, notRequired, nil
-	}
-	if record.Status != interactions.StatusWaiting {
-		return interactionInboundCallerOwned, notRequired, fmt.Errorf(
-			"interaction %q is not accepting input from status %q",
-			record.ID,
-			record.Status,
-		)
-	}
-	if !interactionRouteAuthorizes(record.Route, target, msg.Context) {
-		return interactionInboundCallerOwned, al.publishInteractionNoticeAdmission(
-			ctx,
-			msg,
-			target.SessionKey,
-			"This session is waiting for an answer from the authorized user.",
-		), nil
-	}
-	if interactionApprovalSupersededByInbound(record, msg) {
-		msg = al.prepareInboundMessageForAgent(ctx, msg)
-		answer := interactions.Answer{
-			Text:       msg.Content,
-			Media:      append([]string(nil), msg.Media...),
-			Superseded: true,
-			MessageID:  strings.TrimSpace(msg.Context.MessageID),
-			ReceivedAt: time.Now().UnixMilli(),
-		}
-		claimed, err := registry.ClaimAnswer(
-			record.ID,
-			record.Revision,
-			answer,
-			interactions.OutcomeDenied,
-		)
-		if err != nil {
-			if errors.Is(err, interactions.ErrAnswerTooLate) || errors.Is(err, interactions.ErrDuplicateAnswer) {
-				return interactionInboundCallerOwned, al.publishInteractionNoticeAdmission(
-					ctx,
-					msg,
-					target.SessionKey,
-					"This interaction changed while applying your new guidance; please retry.",
-				), nil
-			}
-			return interactionInboundCallerOwned, notRequired, err
-		}
-		al.syncInteractionControls(target.Agent.Workspace, claimed, bus.OutboundInteractionControlsRemove)
-		if err := al.settleInboundAdmission(ctx, msg, notRequired); err != nil {
-			return interactionInboundClaimed, notRequired, err
-		}
-		return interactionInboundClaimed, notRequired, al.resumeClaimedInteraction(
-			ctx,
-			registry,
-			target.Agent.Workspace,
-			al.interactionContinuationAgent(claimed, target.Agent),
-			&target.Allocation.Scope,
-			msg.Context,
-			claimed,
-		)
-	}
-	answerContent := al.interactionAnswerContent(record, msg)
-	answer, err := parseInteractionAnswer(record, answerContent, msg.Context.MessageID)
+	command, err := newAnswerInteractionCommand(msg, target)
 	if err != nil {
-		return al.interactionNoticeResult(
-			ctx,
-			msg,
-			target.SessionKey,
-			"I could not accept that answer: "+err.Error(),
-		)
+		return interactionInboundCallerOwned,
+			finalResponseAdmission{status: finalResponseAdmissionNotRequired}, err
 	}
-	answer.ResponseMessageID = strings.TrimSpace(
-		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
-	)
-	outcome := interactionAnswerOutcome(record, answer)
-	claimed, err := registry.ClaimAnswer(
-		record.ID,
-		record.Revision,
-		answer,
-		outcome,
-	)
-	if err != nil {
-		if errors.Is(err, interactions.ErrAnswerTooLate) || errors.Is(err, interactions.ErrDuplicateAnswer) {
-			return interactionInboundCallerOwned, al.publishInteractionNoticeAdmission(
-				ctx,
-				msg,
-				target.SessionKey,
-				"An answer is already being processed for this session.",
-			), nil
-		}
-		return interactionInboundCallerOwned, notRequired, err
-	}
-	al.syncInteractionControls(target.Agent.Workspace, claimed, bus.OutboundInteractionControlsRemove)
-	if err := al.settleInboundAdmission(ctx, msg, notRequired); err != nil {
-		return interactionInboundClaimed, notRequired, err
-	}
-	return interactionInboundClaimed, notRequired, al.resumeClaimedInteraction(
-		ctx,
-		registry,
-		target.Agent.Workspace,
-		al.interactionContinuationAgent(claimed, target.Agent),
-		&target.Allocation.Scope,
-		msg.Context,
-		claimed,
-	)
+	result, err := newInteractionService(al).Answer(ctx, command)
+	return result.Ownership, result.Admission, err
 }
 
 func interactionApprovalSupersededByInbound(
@@ -1193,24 +1051,6 @@ func interactionApprovalSupersededByInbound(
 	}
 	_, err := parseInteractionAnswer(record, msg.Content, msg.Context.MessageID)
 	return err != nil
-}
-
-func (al *AgentLoop) enqueueInteractionContinuationInbound(
-	ctx context.Context,
-	msg bus.InboundMessage,
-	target *inboundDispatchTarget,
-	record interactions.Record,
-) error {
-	agent := al.interactionContinuationAgent(record, target.Agent)
-	if agent == nil {
-		return fmt.Errorf("interaction continuation agent is unavailable")
-	}
-	return al.enqueueInteractionContinuationInboundForScope(
-		ctx,
-		msg,
-		newRuntimeSessionScope(agent.Workspace, interactionContinuationSessionKey(record)),
-		agent.ID,
-	)
 }
 
 func (al *AgentLoop) enqueueInteractionContinuationInboundForScope(
@@ -1231,15 +1071,6 @@ func (al *AgentLoop) enqueueInteractionContinuationInboundForScope(
 			InboundSpoolID: msg.SpoolID,
 		},
 	)
-}
-
-func (al *AgentLoop) interactionNoticeResult(
-	ctx context.Context,
-	msg bus.InboundMessage,
-	sessionKey string,
-	content string,
-) (interactionInboundOwnership, finalResponseAdmission, error) {
-	return interactionInboundCallerOwned, al.publishInteractionNoticeAdmission(ctx, msg, sessionKey, content), nil
 }
 
 func (al *AgentLoop) interactionAnswerContent(record interactions.Record, msg bus.InboundMessage) string {
@@ -1313,27 +1144,14 @@ func interactionRouteAuthorizes(
 	target *inboundDispatchTarget,
 	inbound bus.InboundContext,
 ) bool {
-	if target == nil || route.SessionKey != target.SessionKey ||
-		route.Channel != inbound.Channel || route.ChatID != inbound.ChatID ||
-		route.SenderID != inbound.SenderID {
+	if target == nil {
 		return false
 	}
-	if route.RouteSessionKey != "" && route.RouteSessionKey != target.Allocation.RouteScopeKey {
-		return false
-	}
-	checks := [][2]string{
-		{route.AccountID, inbound.Account},
-		{route.ChatType, inbound.ChatType},
-		{route.TopicID, inbound.TopicID},
-		{route.SpaceID, inbound.SpaceID},
-		{route.SpaceType, inbound.SpaceType},
-	}
-	for _, check := range checks {
-		if check[0] != "" && check[0] != check[1] {
-			return false
-		}
-	}
-	return true
+	return (interactionAuthorizationContext{
+		SessionKey:    target.SessionKey,
+		RouteScopeKey: target.Allocation.RouteScopeKey,
+		Inbound:       inbound,
+	}).authorizes(route)
 }
 
 func parseInteractionAnswer(
