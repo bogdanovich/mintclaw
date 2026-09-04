@@ -760,7 +760,7 @@ func normalizeStringArrayItems(items []string, options stringArrayParserOptions)
 func getSecretString(m map[string]any, key string) (string, bool) {
 	if raw, exists := m[key]; exists {
 		s, isString := raw.(string)
-		if isString {
+		if isString && s != legacySecretPlaceholder {
 			return s, true
 		}
 	}

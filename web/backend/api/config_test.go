@@ -2149,6 +2149,96 @@ func TestHandlePatchConfig_DoesNotPersistShadowRegistryAuthTokenField(t *testing
 	}
 }
 
+func TestHandleConfigWrite_ShadowRegistryTokenOverridesLegacyPlaceholder(t *testing.T) {
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+			if err := os.WriteFile(
+				filepath.Join(filepath.Dir(configPath), "replacement.key"),
+				[]byte("replacement-token\n"),
+				0o600,
+			); err != nil {
+				t.Fatalf("write replacement credential: %v", err)
+			}
+
+			repository := config.NewRepository(configPath)
+			if _, err := repository.Update(func(cfg *config.Config) error {
+				registry, _ := cfg.Tools.Skills.Registries.Get("github")
+				registry.AuthToken = *config.NewSecureString("current-token")
+				cfg.Tools.Skills.Registries.Set("github", registry)
+				return nil
+			}); err != nil {
+				t.Fatalf("seed registry credential: %v", err)
+			}
+			snapshot, err := repository.ReadOnly()
+			if err != nil {
+				t.Fatalf("ReadOnly() error = %v", err)
+			}
+
+			payload := map[string]any{
+				"tools": map[string]any{
+					"skills": map[string]any{
+						"registries": map[string]any{
+							"github": map[string]any{},
+						},
+					},
+				},
+			}
+			if method == http.MethodPut {
+				body, marshalErr := json.Marshal(snapshot.Config)
+				if marshalErr != nil {
+					t.Fatalf("Marshal(config) error = %v", marshalErr)
+				}
+				if unmarshalErr := json.Unmarshal(body, &payload); unmarshalErr != nil {
+					t.Fatalf("Unmarshal(config) error = %v", unmarshalErr)
+				}
+			}
+			toolsMap := payload["tools"].(map[string]any)
+			skillsMap := toolsMap["skills"].(map[string]any)
+			registriesMap := skillsMap["registries"].(map[string]any)
+			registryMap := registriesMap["github"].(map[string]any)
+			registryMap["auth_token"] = legacySecretPlaceholder
+			registryMap["_auth_token"] = "file://replacement.key"
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal(payload) error = %v", err)
+			}
+
+			handler := NewHandler(configPath)
+			mux := http.NewServeMux()
+			handler.RegisterRoutes(mux)
+			req := httptest.NewRequest(method, "/api/config", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			if method == http.MethodPut {
+				req.Header.Set("If-Match", configRevisionETag(snapshot.Revision))
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			updated, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			registry, ok := updated.Tools.Skills.Registries.Get("github")
+			if !ok || registry.AuthToken.String() != "replacement-token" {
+				t.Fatalf("updated registry = %#v", registry)
+			}
+			security, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
+			if err != nil {
+				t.Fatalf("ReadFile(.security.yml) error = %v", err)
+			}
+			if !bytes.Contains(security, []byte("file://replacement.key")) ||
+				bytes.Contains(security, []byte("_auth_token")) {
+				t.Fatalf("unexpected security document:\n%s", security)
+			}
+		})
+	}
+}
+
 func TestHandlePatchConfig_RemovesRegistryWithStoredAuthToken(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
