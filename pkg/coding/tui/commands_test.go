@@ -25,6 +25,7 @@ type evidenceController struct {
 func (controller *evidenceController) RepositoryStatus(
 	context.Context,
 ) (codingworkspace.StatusResult, error) {
+	controller.RepositoryStatusUpdated(controller.status)
 	return controller.status, nil
 }
 
@@ -33,6 +34,7 @@ func (controller *evidenceController) RepositoryDiff(
 	target codingworkspace.DiffTarget,
 ) (codingworkspace.DiffResult, error) {
 	controller.target = target
+	controller.RepositoryDiffUpdated(controller.diff)
 	return controller.diff, nil
 }
 
@@ -260,6 +262,19 @@ func TestRepositoryPanelsRefreshThroughTypedEvidenceReader(t *testing.T) {
 		!strings.Contains(model.View(), "Repository diff (base main)") ||
 		!strings.Contains(model.View(), "typed.go") || !strings.Contains(model.View(), "first_observed_during_thread") {
 		t.Fatalf("typed diff target/panel = %#v / %q", controller.target, model.View())
+	}
+
+	controller.status.Snapshot.Git.Branch = "new-status"
+	model.composer.SetValue("/status")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	model = updateModel(t, model, command())
+	if model.snapshot.RepositoryDiff != nil || !strings.Contains(model.View(), "new-status") {
+		t.Fatalf(
+			"canonical status refresh retained obsolete diff: %#v / %q",
+			model.snapshot.RepositoryDiff,
+			model.View(),
+		)
 	}
 }
 

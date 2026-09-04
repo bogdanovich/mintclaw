@@ -69,13 +69,13 @@ type WorkspaceRefreshMsg struct {
 }
 
 type RepositoryStatusMsg struct {
-	Status codingworkspace.StatusResult
-	Err    error
+	Snapshot frontend.ThreadSnapshot
+	Err      error
 }
 
 type RepositoryDiffMsg struct {
-	Diff codingworkspace.DiffResult
-	Err  error
+	Snapshot frontend.ThreadSnapshot
+	Err      error
 }
 
 // ClipboardImageMsg completes one asynchronous system-clipboard image read.
@@ -261,12 +261,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspaceNotice = "repository status unavailable"
 			return m, nil
 		}
+		if err := m.installSnapshot(message.Snapshot); err != nil {
+			m.err = err
+			m.workspaceNotice = "repository status unavailable"
+			return m, nil
+		}
 		m.err = nil
 		m.workspaceNotice = "repository status refreshed"
-		status := message.Status.Clone()
-		m.snapshot.RepositoryStatus = &status
-		workspace := status.Snapshot
-		m.snapshot.Workspace = &workspace
 		return m, nil
 	case RepositoryDiffMsg:
 		if message.Err != nil {
@@ -274,10 +275,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspaceNotice = "repository diff unavailable"
 			return m, nil
 		}
+		if err := m.installSnapshot(message.Snapshot); err != nil {
+			m.err = err
+			m.workspaceNotice = "repository diff unavailable"
+			return m, nil
+		}
 		m.err = nil
 		m.workspaceNotice = "repository diff refreshed"
-		diff := message.Diff.Clone()
-		m.snapshot.RepositoryDiff = &diff
 		return m, nil
 	case ClipboardImageMsg:
 		m.clipboardPasteBusy = false
@@ -840,20 +844,31 @@ func workspaceRefreshCmd(ctx context.Context, refresher frontend.WorkspaceRefres
 	}
 }
 
-func repositoryStatusCmd(ctx context.Context, reader frontend.RepositoryEvidenceReader) tea.Cmd {
+func repositoryStatusCmd(
+	ctx context.Context,
+	controller frontend.Controller,
+	reader frontend.RepositoryEvidenceReader,
+) tea.Cmd {
 	return func() tea.Msg {
-		status, err := reader.RepositoryStatus(ctx)
-		return RepositoryStatusMsg{Status: status, Err: err}
+		if _, err := reader.RepositoryStatus(ctx); err != nil {
+			return RepositoryStatusMsg{Err: err}
+		}
+		snapshot, err := controller.Snapshot(ctx)
+		return RepositoryStatusMsg{Snapshot: snapshot, Err: err}
 	}
 }
 
 func repositoryDiffCmd(
 	ctx context.Context,
+	controller frontend.Controller,
 	reader frontend.RepositoryEvidenceReader,
 	target codingworkspace.DiffTarget,
 ) tea.Cmd {
 	return func() tea.Msg {
-		diff, err := reader.RepositoryDiff(ctx, target)
-		return RepositoryDiffMsg{Diff: diff, Err: err}
+		if _, err := reader.RepositoryDiff(ctx, target); err != nil {
+			return RepositoryDiffMsg{Err: err}
+		}
+		snapshot, err := controller.Snapshot(ctx)
+		return RepositoryDiffMsg{Snapshot: snapshot, Err: err}
 	}
 }

@@ -121,7 +121,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.workspaceNotice = "repository status loading"
-		return true, repositoryStatusCmd(m.ctx, reader)
+		return true, repositoryStatusCmd(m.ctx, m.controller, reader)
 	case "/model":
 		return show(commandPanelModel)
 	case "/diff":
@@ -138,7 +138,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.workspaceNotice = "repository diff loading"
-		return true, repositoryDiffCmd(m.ctx, reader, target)
+		return true, repositoryDiffCmd(m.ctx, m.controller, reader, target)
 	case "/compact":
 		if !noArgs() {
 			return true, nil
