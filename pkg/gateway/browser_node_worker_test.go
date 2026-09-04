@@ -96,7 +96,10 @@ func (handler *browserNodeTestHandler) WithPreparationAuthority(
 ) (nodes.CommandApproval, error) {
 	for _, descriptor := range handler.registration.Snapshot.Catalog.Commands {
 		if descriptor.Name == command {
-			approval := nodes.CommandApproval{Descriptor: descriptor}
+			approval := nodes.CommandApproval{
+				Descriptor:      descriptor,
+				ProtocolVersion: handler.registration.Snapshot.ProtocolVersion,
+			}
 			return approval, operation(handler.registration, approval)
 		}
 	}
@@ -1828,7 +1831,7 @@ func browserNodeTestMutateCatalog(
 			}
 		}
 	}
-	snapshot.CatalogHash, err = snapshot.Catalog.Hash()
+	snapshot.CatalogHash, err = snapshot.Catalog.HashForProtocol(snapshot.ProtocolVersion)
 	if err != nil {
 		return nodes.Registration{}, err
 	}
@@ -1906,7 +1909,7 @@ func browserNodeTestRuntime(
 		t.Fatal(err)
 	}
 	catalog := nodes.CapabilityCatalog{Commands: descriptors}
-	catalogHash, err := catalog.Hash()
+	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1924,7 +1927,7 @@ func browserNodeTestRuntime(
 		t.Fatal(err)
 	}
 	snapshot := nodes.Snapshot{
-		ID: nodeID, State: nodes.StatePendingPairing, ProtocolVersion: nodes.ProtocolV1,
+		ID: nodeID, State: nodes.StatePendingPairing, ProtocolVersion: nodes.ProtocolV2,
 		Platform: "darwin", Architecture: "amd64", SoftwareVersion: "test",
 		CatalogHash: catalogHash, Catalog: catalog, Executor: "local", PolicyRevision: "policy-v1",
 		LastSeenAt: time.Now().Unix(),
