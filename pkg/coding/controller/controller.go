@@ -107,6 +107,14 @@ type operationResult struct {
 	err     error
 }
 
+type evidenceOperation struct {
+	id      uint64
+	kind    operationKind
+	request command
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+}
+
 // Controller serializes coding commands while exposing the current in-process
 // presentation view. Exactly one actor owns admission state.
 type Controller struct {
@@ -352,13 +360,14 @@ func (c *Controller) coordinate() {
 	var compacting bool
 	var closing bool
 	var operationCancel context.CancelCauseFunc
-	evidenceCancels := make(map[uint64]context.CancelCauseFunc)
+	var activeEvidence *evidenceOperation
+	var evidenceQueue []evidenceOperation
 	var nextEvidenceID uint64
 	var closeReplies []chan error
 	var closeErr error
 
 	finishClose := func() bool {
-		if !closing || active || compacting || len(evidenceCancels) != 0 {
+		if !closing || active || compacting || activeEvidence != nil || len(evidenceQueue) != 0 {
 			return false
 		}
 		closeErr = errors.Join(closeErr, c.runtime.Close())
@@ -371,13 +380,41 @@ func (c *Controller) coordinate() {
 		return true
 	}
 
+	startNextEvidence := func() {
+		if closing || activeEvidence != nil || len(evidenceQueue) == 0 {
+			return
+		}
+		operation := evidenceQueue[0]
+		evidenceQueue = evidenceQueue[1:]
+		activeEvidence = &operation
+		go c.runEvidence(operation.ctx, operation.id, operation.kind, operation.request)
+	}
+
+	admitEvidence := func(kind operationKind, request command) {
+		nextEvidenceID++
+		operationCtx, cancel := context.WithCancelCause(request.ctx)
+		evidenceQueue = append(evidenceQueue, evidenceOperation{
+			id:      nextEvidenceID,
+			kind:    kind,
+			request: request,
+			ctx:     operationCtx,
+			cancel:  cancel,
+		})
+		startNextEvidence()
+	}
+
 	for {
 		select {
 		case result := <-c.evidenceResults:
-			if cancel, ok := evidenceCancels[result.id]; ok {
-				cancel(context.Canceled)
-				delete(evidenceCancels, result.id)
+			if activeEvidence == nil || activeEvidence.id != result.id {
+				continue
 			}
+			operation := *activeEvidence
+			if err := operation.ctx.Err(); err != nil {
+				result.err = err
+			}
+			operation.cancel(context.Canceled)
+			activeEvidence = nil
 			if result.err == nil {
 				switch result.kind {
 				case operationWorkspaceRefresh, operationRepositoryStatus:
@@ -394,6 +431,7 @@ func (c *Controller) coordinate() {
 			case operationRepositoryDiff:
 				result.request.diffReply <- repositoryDiffResponse{diff: result.diff, err: result.err}
 			}
+			startNextEvidence()
 			if finishClose() {
 				return
 			}
@@ -512,29 +550,20 @@ func (c *Controller) coordinate() {
 						request.reply <- frontend.ErrWorkspaceRefreshUnsupported
 						continue
 					}
-					nextEvidenceID++
-					operationCtx, cancel := context.WithCancelCause(request.ctx)
-					evidenceCancels[nextEvidenceID] = cancel
-					go c.runEvidence(operationCtx, nextEvidenceID, operationWorkspaceRefresh, request)
+					admitEvidence(operationWorkspaceRefresh, request)
 				}
 			case commandRepositoryStatus:
 				if _, ok := c.runtime.(frontend.RepositoryEvidenceReader); !ok {
 					request.replyError(frontend.ErrWorkspaceRefreshUnsupported)
 					continue
 				}
-				nextEvidenceID++
-				operationCtx, cancel := context.WithCancelCause(request.ctx)
-				evidenceCancels[nextEvidenceID] = cancel
-				go c.runEvidence(operationCtx, nextEvidenceID, operationRepositoryStatus, request)
+				admitEvidence(operationRepositoryStatus, request)
 			case commandRepositoryDiff:
 				if _, ok := c.runtime.(frontend.RepositoryEvidenceReader); !ok {
 					request.replyError(frontend.ErrWorkspaceRefreshUnsupported)
 					continue
 				}
-				nextEvidenceID++
-				operationCtx, cancel := context.WithCancelCause(request.ctx)
-				evidenceCancels[nextEvidenceID] = cancel
-				go c.runEvidence(operationCtx, nextEvidenceID, operationRepositoryDiff, request)
+				admitEvidence(operationRepositoryDiff, request)
 			case commandClose:
 				closeReplies = append(closeReplies, request.reply)
 				if closing {
@@ -551,9 +580,14 @@ func (c *Controller) coordinate() {
 				} else if compacting && operationCancel != nil {
 					operationCancel(context.Canceled)
 				}
-				for _, cancel := range evidenceCancels {
-					cancel(context.Canceled)
+				if activeEvidence != nil {
+					activeEvidence.cancel(context.Canceled)
 				}
+				for _, operation := range evidenceQueue {
+					operation.cancel(context.Canceled)
+					operation.request.replyError(context.Canceled)
+				}
+				evidenceQueue = nil
 				if finishClose() {
 					return
 				}
