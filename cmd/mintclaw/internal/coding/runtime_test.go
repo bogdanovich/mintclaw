@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
@@ -329,6 +330,22 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	baseline, err := codingworkspace.NewRepository(
+		project.ProjectRoot,
+		project.InvocationCWD,
+		codingworkspace.Limits{},
+	).CaptureBaseline(t.Context(), codingworkspace.BaselineRequest{
+		ProjectKey: project.ProjectKey,
+		CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	if err := store.PublishRepositoryBaseline(t.Context(), lease, metadata, baseline); err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
 	provider := &blockingCodingProvider{started: make(chan struct{})}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.ModelName = metadata.Model
@@ -373,6 +390,20 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	if refreshed.Workspace == nil || refreshed.Workspace.ProjectRoot != project.ProjectRoot ||
 		refreshed.Workspace.CWD != project.InvocationCWD {
 		t.Fatalf("refreshed workspace = %+v", refreshed.Workspace)
+	}
+	if refreshed.RepositoryStatus == nil || refreshed.RepositoryStatus.BaselineID != baseline.BaselineID {
+		t.Fatalf("refreshed repository status = %+v", refreshed.RepositoryStatus)
+	}
+	evidence, ok := frontendController.(frontend.RepositoryEvidenceReader)
+	if !ok {
+		t.Fatal("native coding controller does not expose repository evidence")
+	}
+	diff, err := evidence.RepositoryDiff(
+		t.Context(),
+		codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBaseline},
+	)
+	if err != nil || diff.BaselineID != baseline.BaselineID || diff.Target.Kind != codingworkspace.DiffTargetBaseline {
+		t.Fatalf("baseline repository diff = %+v / %v", diff, err)
 	}
 	if err := frontendController.Submit(
 		t.Context(),

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 type blockingRuntime struct {
@@ -33,6 +34,25 @@ type workspaceRefreshRuntime struct {
 	*blockingRuntime
 	refreshes  int
 	refreshErr error
+}
+
+type repositoryEvidenceRuntime struct {
+	*blockingRuntime
+	target codingworkspace.DiffTarget
+}
+
+func (*repositoryEvidenceRuntime) RepositoryStatus(
+	context.Context,
+) (codingworkspace.StatusResult, error) {
+	return codingworkspace.StatusResult{SchemaVersion: codingworkspace.RepositoryStatusSchemaV1}, nil
+}
+
+func (runtime *repositoryEvidenceRuntime) RepositoryDiff(
+	_ context.Context,
+	target codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	runtime.target = target
+	return codingworkspace.DiffResult{SchemaVersion: codingworkspace.RepositoryDiffSchemaV1, Target: target}, nil
 }
 
 type lifecycleRuntime struct {
@@ -463,6 +483,34 @@ func TestWorkspaceRefreshIsSerializedAndOptional(t *testing.T) {
 	unsupported := newTestController(t, newBlockingRuntime())
 	if err := unsupported.RefreshWorkspace(t.Context()); !errors.Is(err, frontend.ErrWorkspaceRefreshUnsupported) {
 		t.Fatalf("unsupported refresh error = %v", err)
+	}
+	if err := unsupported.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRepositoryEvidenceDelegatesTypedReadOnlyCapability(t *testing.T) {
+	runtime := &repositoryEvidenceRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	status, err := controller.RepositoryStatus(t.Context())
+	if err != nil || status.SchemaVersion != codingworkspace.RepositoryStatusSchemaV1 {
+		t.Fatalf("status = %#v / %v", status, err)
+	}
+	target := codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase, Ref: "main"}
+	diff, err := controller.RepositoryDiff(t.Context(), target)
+	if err != nil || diff.SchemaVersion != codingworkspace.RepositoryDiffSchemaV1 || runtime.target != target {
+		t.Fatalf("diff/target = %#v / %#v / %v", diff, runtime.target, err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.RepositoryStatus(t.Context()); !errors.Is(err, ErrClosed) {
+		t.Fatalf("repository status after close error = %v", err)
+	}
+
+	unsupported := newTestController(t, newBlockingRuntime())
+	if _, err := unsupported.RepositoryStatus(t.Context()); !errors.Is(err, frontend.ErrWorkspaceRefreshUnsupported) {
+		t.Fatalf("unsupported repository status error = %v", err)
 	}
 	if err := unsupported.Close(t.Context()); err != nil {
 		t.Fatal(err)

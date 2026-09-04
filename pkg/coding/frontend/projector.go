@@ -734,6 +734,22 @@ func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) {
 	})
 }
 
+func (p *Projector) RepositoryStatusUpdated(status codingworkspace.StatusResult) {
+	p.mutate(func(state *ThreadSnapshot) {
+		copy := cloneRepositoryStatus(status)
+		state.RepositoryStatus = &copy
+		workspace := cloneWorkspaceSnapshot(status.Snapshot)
+		state.Workspace = &workspace
+	})
+}
+
+func (p *Projector) RepositoryDiffUpdated(diff codingworkspace.DiffResult) {
+	p.mutate(func(state *ThreadSnapshot) {
+		copy := cloneRepositoryDiff(diff)
+		state.RepositoryDiff = &copy
+	})
+}
+
 // CompactionUpdate projects one correlated compaction lifecycle observation.
 func (p *Projector) CompactionUpdate(compaction CompactionState) {
 	p.compaction(compaction)
@@ -1094,6 +1110,14 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 		workspace := cloneWorkspaceSnapshot(*snapshot.Workspace)
 		snapshot.Workspace = &workspace
 	}
+	if snapshot.RepositoryStatus != nil {
+		status := cloneRepositoryStatus(*snapshot.RepositoryStatus)
+		snapshot.RepositoryStatus = &status
+	}
+	if snapshot.RepositoryDiff != nil {
+		diff := cloneRepositoryDiff(*snapshot.RepositoryDiff)
+		snapshot.RepositoryDiff = &diff
+	}
 	return snapshot
 }
 
@@ -1132,4 +1156,12 @@ func clonePlan(plan PlanState) PlanState {
 func cloneWorkspaceSnapshot(snapshot codingworkspace.Snapshot) codingworkspace.Snapshot {
 	snapshot.ChangedPaths = slices.Clone(snapshot.ChangedPaths)
 	return snapshot
+}
+
+func cloneRepositoryStatus(status codingworkspace.StatusResult) codingworkspace.StatusResult {
+	return status.Clone()
+}
+
+func cloneRepositoryDiff(diff codingworkspace.DiffResult) codingworkspace.DiffResult {
+	return diff.Clone()
 }

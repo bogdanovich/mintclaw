@@ -34,6 +34,43 @@ func TestWorkspaceUpdateDoesNotAliasCallerOrConsumerState(t *testing.T) {
 	}
 }
 
+func TestRepositoryEvidenceUpdatesDoNotAliasNestedState(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	status := codingworkspace.StatusResult{
+		SchemaVersion: codingworkspace.RepositoryStatusSchemaV1,
+		Provenance: &codingworkspace.ProvenanceResult{Paths: []codingworkspace.ProvenancePath{{
+			Path: "status.go", Provenance: codingworkspace.ProvenancePreExisting,
+		}}},
+	}
+	diff := codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Files: []codingworkspace.DiffFile{{Path: "diff.go", Hunks: []codingworkspace.DiffHunk{{
+			Lines: []codingworkspace.DiffLine{{Kind: "addition", Text: "new"}},
+		}}}},
+	}
+	projector.RepositoryStatusUpdated(status)
+	projector.RepositoryDiffUpdated(diff)
+	status.Provenance.Paths[0].Path = "caller-status.go"
+	diff.Files[0].Hunks[0].Lines[0].Text = "caller"
+
+	view := snapshotForTest(t, projector)
+	if view.RepositoryStatus.Provenance.Paths[0].Path != "status.go" ||
+		view.RepositoryDiff.Files[0].Hunks[0].Lines[0].Text != "new" {
+		t.Fatalf("repository view = %#v / %#v", view.RepositoryStatus, view.RepositoryDiff)
+	}
+	view.RepositoryStatus.Provenance.Paths[0].Path = "consumer-status.go"
+	view.RepositoryDiff.Files[0].Hunks[0].Lines[0].Text = "consumer"
+	stable := snapshotForTest(t, projector)
+	if stable.RepositoryStatus.Provenance.Paths[0].Path != "status.go" ||
+		stable.RepositoryDiff.Files[0].Hunks[0].Lines[0].Text != "new" {
+		t.Fatalf(
+			"repository projection aliased consumer state = %#v / %#v",
+			stable.RepositoryStatus,
+			stable.RepositoryDiff,
+		)
+	}
+}
+
 func TestSubscribeReturnsCurrentViewAndPublishesLaterViews(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	projector.Open(false)

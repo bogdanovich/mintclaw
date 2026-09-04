@@ -12,6 +12,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 var (
@@ -46,15 +47,41 @@ const (
 	commandUnarchive
 	commandNewThread
 	commandRefreshWorkspace
+	commandRepositoryStatus
+	commandRepositoryDiff
 	commandClose
 )
 
 type command struct {
-	kind    commandKind
-	ctx     context.Context
-	content string
-	input   frontend.TurnInput
-	reply   chan error
+	kind        commandKind
+	ctx         context.Context
+	content     string
+	input       frontend.TurnInput
+	diffTarget  codingworkspace.DiffTarget
+	reply       chan error
+	statusReply chan repositoryStatusResponse
+	diffReply   chan repositoryDiffResponse
+}
+
+type repositoryStatusResponse struct {
+	status codingworkspace.StatusResult
+	err    error
+}
+
+type repositoryDiffResponse struct {
+	diff codingworkspace.DiffResult
+	err  error
+}
+
+func (request command) replyError(err error) {
+	switch request.kind {
+	case commandRepositoryStatus:
+		request.statusReply <- repositoryStatusResponse{err: err}
+	case commandRepositoryDiff:
+		request.diffReply <- repositoryDiffResponse{err: err}
+	default:
+		request.reply <- err
+	}
 }
 
 type operationKind uint8
@@ -188,6 +215,53 @@ func (c *Controller) RefreshWorkspace(ctx context.Context) error {
 	return c.send(ctx, commandRefreshWorkspace, "")
 }
 
+func (c *Controller) RepositoryStatus(ctx context.Context) (codingworkspace.StatusResult, error) {
+	ctx = contextOrBackground(ctx)
+	reply := make(chan repositoryStatusResponse, 1)
+	request := command{kind: commandRepositoryStatus, ctx: ctx, statusReply: reply}
+	if err := c.enqueue(ctx, request); err != nil {
+		return codingworkspace.StatusResult{}, err
+	}
+	select {
+	case response := <-reply:
+		return response.status, response.err
+	case <-c.done:
+		select {
+		case response := <-reply:
+			return response.status, response.err
+		default:
+			return codingworkspace.StatusResult{}, ErrClosed
+		}
+	case <-ctx.Done():
+		return codingworkspace.StatusResult{}, ctx.Err()
+	}
+}
+
+func (c *Controller) RepositoryDiff(
+	ctx context.Context,
+	target codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	ctx = contextOrBackground(ctx)
+	reply := make(chan repositoryDiffResponse, 1)
+	request := command{kind: commandRepositoryDiff, ctx: ctx, diffTarget: target, diffReply: reply}
+	if err := c.enqueue(ctx, request); err != nil {
+		return codingworkspace.DiffResult{}, err
+	}
+	select {
+	case response := <-reply:
+		return response.diff, response.err
+	case <-c.done:
+		select {
+		case response := <-reply:
+			return response.diff, response.err
+		default:
+			return codingworkspace.DiffResult{}, ErrClosed
+		}
+	case <-ctx.Done():
+		return codingworkspace.DiffResult{}, ctx.Err()
+	}
+}
+
 func (c *Controller) Close(ctx context.Context) error {
 	return c.send(ctx, commandClose, "")
 }
@@ -207,15 +281,8 @@ func (c *Controller) sendInput(
 	}
 	reply := make(chan error, 1)
 	request := command{kind: kind, ctx: ctx, content: content, input: input, reply: reply}
-	select {
-	case c.commands <- request:
-	case <-c.done:
-		if kind == commandClose {
-			return c.closedError()
-		}
-		return ErrClosed
-	case <-ctx.Done():
-		return ctx.Err()
+	if err := c.enqueue(ctx, request); err != nil {
+		return err
 	}
 	select {
 	case err := <-reply:
@@ -233,6 +300,27 @@ func (c *Controller) sendInput(
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (c *Controller) enqueue(ctx context.Context, request command) error {
+	select {
+	case c.commands <- request:
+	case <-c.done:
+		if request.kind == commandClose {
+			return c.closedError()
+		}
+		return ErrClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return nil
+}
+
+func contextOrBackground(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func (c *Controller) closedError() error {
@@ -285,7 +373,7 @@ func (c *Controller) coordinate() {
 			}
 		case request := <-c.commands:
 			if closing && request.kind != commandClose {
-				request.reply <- ErrClosed
+				request.replyError(ErrClosed)
 				continue
 			}
 			switch request.kind {
@@ -388,6 +476,22 @@ func (c *Controller) coordinate() {
 					}
 					request.reply <- refresher.RefreshWorkspace(request.ctx)
 				}
+			case commandRepositoryStatus:
+				reader, ok := c.runtime.(frontend.RepositoryEvidenceReader)
+				if !ok {
+					request.replyError(frontend.ErrWorkspaceRefreshUnsupported)
+					continue
+				}
+				status, err := reader.RepositoryStatus(request.ctx)
+				request.statusReply <- repositoryStatusResponse{status: status, err: err}
+			case commandRepositoryDiff:
+				reader, ok := c.runtime.(frontend.RepositoryEvidenceReader)
+				if !ok {
+					request.replyError(frontend.ErrWorkspaceRefreshUnsupported)
+					continue
+				}
+				diff, err := reader.RepositoryDiff(request.ctx, request.diffTarget)
+				request.diffReply <- repositoryDiffResponse{diff: diff, err: err}
 			case commandClose:
 				closeReplies = append(closeReplies, request.reply)
 				if closing {

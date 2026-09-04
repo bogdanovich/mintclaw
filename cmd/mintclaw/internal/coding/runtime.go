@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
@@ -192,7 +193,22 @@ func openNativeCodingRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("coding runtime: create provider: %w", err)
 	}
-	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{AgentID: "main", Layout: layout})
+	baseline, err := request.Store.LoadRepositoryBaselineWithLease(constructionCtx, request.Lease, request.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("coding runtime: load repository baseline: %w", err)
+	}
+	repository, err := codingworkspace.NewRepositoryWithBaseline(
+		request.Metadata.Project.ProjectRoot,
+		request.Metadata.Project.InvocationCWD,
+		codingworkspace.Limits{},
+		baseline,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("coding runtime: initialize repository evidence: %w", err)
+	}
+	profile, err := agent.NewCodingRuntimeProfile(agent.CodingRuntimeBinding{
+		AgentID: "main", Layout: layout, Repository: repository,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -634,6 +650,7 @@ var (
 	_ controller.Runtime                    = (*nativeControllerRuntime)(nil)
 	_ frontend.TranscriptPager              = (*nativeControllerRuntime)(nil)
 	_ frontend.WorkspaceRefresher           = (*nativeControllerRuntime)(nil)
+	_ frontend.RepositoryEvidenceReader     = (*nativeControllerRuntime)(nil)
 	_ frontend.ThreadLifecycle              = (*nativeControllerRuntime)(nil)
 	_ frontend.BackgroundCompactionObserver = (*nativeControllerRuntime)(nil)
 )
@@ -674,10 +691,52 @@ func (r *nativeControllerRuntime) RefreshWorkspace(ctx context.Context) error {
 	}
 	snapshot, changed := agentInstance.ContextBuilder.RefreshCodingWorkspace(ctx)
 	if !changed {
-		return nil
+		_, err := r.RepositoryStatus(ctx)
+		return err
 	}
 	r.projector.WorkspaceUpdated(snapshot)
-	return nil
+	_, err := r.RepositoryStatus(ctx)
+	return err
+}
+
+func (r *nativeControllerRuntime) RepositoryStatus(
+	ctx context.Context,
+) (codingworkspace.StatusResult, error) {
+	repository, err := r.repositoryEvidence()
+	if err != nil {
+		return codingworkspace.StatusResult{}, err
+	}
+	status := repository.Status(ctx)
+	r.projector.RepositoryStatusUpdated(status)
+	return status, nil
+}
+
+func (r *nativeControllerRuntime) RepositoryDiff(
+	ctx context.Context,
+	target codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	repository, err := r.repositoryEvidence()
+	if err != nil {
+		return codingworkspace.DiffResult{}, err
+	}
+	diff := repository.Diff(ctx, target)
+	r.projector.RepositoryDiffUpdated(diff)
+	return diff, nil
+}
+
+func (r *nativeControllerRuntime) repositoryEvidence() (*codingworkspace.Repository, error) {
+	if r == nil || r.loop == nil || r.projector == nil {
+		return nil, frontend.ErrWorkspaceRefreshUnsupported
+	}
+	registry := r.loop.GetRegistry()
+	if registry == nil {
+		return nil, frontend.ErrWorkspaceRefreshUnsupported
+	}
+	agentInstance := registry.GetDefaultAgent()
+	if agentInstance == nil || agentInstance.Repository == nil {
+		return nil, frontend.ErrWorkspaceRefreshUnsupported
+	}
+	return agentInstance.Repository, nil
 }
 
 func (r *nativeControllerRuntime) TranscriptPage(
