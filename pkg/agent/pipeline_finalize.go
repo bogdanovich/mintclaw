@@ -70,11 +70,15 @@ func newFinalizationContext(
 
 	var historyMessage *providers.Message
 	if disposition == finalResponsePending && !ts.opts.NoHistory {
+		reasoningContent := responseReasoningContent(llm.response)
+		if terminal.persistIfToolHandled && llm.toolResponseDisposition == toolResponseHandled {
+			reasoningContent = ""
+		}
 		message := providers.Message{
 			Role:             "assistant",
 			Content:          terminal.content,
 			ModelName:        exec.model.llmModelName,
-			ReasoningContent: responseReasoningContent(llm.response),
+			ReasoningContent: reasoningContent,
 			Deliverable:      taskresult.CloneDeliverable(exec.deliverable),
 		}
 		historyMessage = &message
