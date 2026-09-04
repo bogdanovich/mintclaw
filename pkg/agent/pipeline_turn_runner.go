@@ -173,14 +173,23 @@ func (p *Pipeline) runPreparedTurnLoop(
 			turnStatus = TurnEndStatusError
 			return turnResult{}, turnStatus, callErr
 		}
-		if llmOutcome.AbortCause == TurnAbortHard {
-			turnStatus = TurnEndStatusAborted
-			result, abortErr := p.abortTurn(ts)
-			return result, turnStatus, abortErr
+		if llmOutcome.Control == turnStepAbort {
+			switch llmOutcome.AbortCause {
+			case turnAbortHard:
+				turnStatus = TurnEndStatusAborted
+				result, abortErr := p.abortTurn(ts)
+				return result, turnStatus, abortErr
+			case turnAbortHook:
+				turnStatus = TurnEndStatusError
+				return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
+			default:
+				turnStatus = TurnEndStatusError
+				return turnResult{}, turnStatus, fmt.Errorf("model phase returned abort without a cause")
+			}
 		}
-		if llmOutcome.AbortCause == TurnAbortHook {
+		if llmOutcome.AbortCause != turnAbortNone {
 			turnStatus = TurnEndStatusError
-			return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
+			return turnResult{}, turnStatus, fmt.Errorf("model phase returned an abort cause without aborting")
 		}
 		exec.terminal = llmOutcome.terminalCandidate(exec.terminal)
 		if repairIteration {
@@ -204,9 +213,9 @@ func (p *Pipeline) runPreparedTurnLoop(
 		}
 
 		switch llmOutcome.Control {
-		case ControlContinue:
+		case turnStepContinue:
 			continue
-		case ControlBreak:
+		case turnStepFinalize:
 			// Ensure empty response falls back to DefaultResponse
 			if exec.terminal.content == "" {
 				exec.terminal = terminalContent{content: ts.opts.DefaultResponse}
@@ -230,7 +239,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 				turnStatus = TurnEndStatusError
 			}
 			return result, turnStatus, finalizeErr
-		case ControlToolLoop:
+		case turnStepExecuteTools:
 			// Execute tools via Pipeline
 			toolOutcome := p.ExecuteTools(ctx, turnCtx, ts, exec, llm)
 			if toolOutcome.TurnErr != nil {
@@ -241,11 +250,15 @@ func (p *Pipeline) runPreparedTurnLoop(
 				turnStatus = TurnEndStatusError
 				return turnResult{}, turnStatus, toolOutcome.JournalErr
 			}
+			if toolOutcome.Control != turnStepAbort && toolOutcome.AbortCause != turnAbortNone {
+				turnStatus = TurnEndStatusError
+				return turnResult{}, turnStatus, fmt.Errorf("tool phase returned an abort cause without aborting")
+			}
 			switch toolOutcome.Control {
-			case ToolControlContinue:
+			case turnStepContinue:
 				// ExecuteTools already appended model-visible results to exec.messages.
 				continue
-			case ToolControlFinalize:
+			case turnStepFinalizeWhenReady:
 				renderedContent, rendered := tryRenderFinalTurnReply(
 					turnCtx,
 					p.Cfg,
@@ -282,18 +295,15 @@ func (p *Pipeline) runPreparedTurnLoop(
 					turnStatus = TurnEndStatusError
 				}
 				return result, turnStatus, finalizeErr
-			case ToolControlSuspend:
+			case turnStepSuspend:
 				turnStatus = TurnEndStatusSuspended
 				ts.setPhase(TurnPhaseSuspended)
 				return turnResult{
 					status:                 turnStatus,
 					suspendedInteractionID: toolOutcome.SuspendedInteractionID,
 				}, turnStatus, nil
-			case ToolControlHalt:
-				exec.terminal = terminalContent{content: toolOutcome.FinalContent}
-				if strings.TrimSpace(exec.terminal.content) == "" {
-					exec.terminal.content = "The tool loop was stopped by runtime safety protection."
-				}
+			case turnStepFinalizeExact:
+				exec.terminal = exactTerminalContent(toolOutcome.FinalContent)
 				result, finalizeErr := p.finalizeTurn(
 					turnCtx,
 					ts,
@@ -306,18 +316,9 @@ func (p *Pipeline) runPreparedTurnLoop(
 					turnStatus = TurnEndStatusError
 				}
 				return result, turnStatus, finalizeErr
-			case ToolControlBreak:
-				if toolOutcome.AbortCause == TurnAbortHard {
-					turnStatus = TurnEndStatusAborted
-					result, abortErr := p.abortTurn(ts)
-					return result, turnStatus, abortErr
-				}
-				if toolOutcome.AbortCause == TurnAbortHook {
-					turnStatus = TurnEndStatusError
-					return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
-				}
-				// ExecuteTools returned ControlBreak. A handled tool response suppresses
-				// DefaultResponse; otherwise use outcome content when present.
+			case turnStepFinalize:
+				// A handled tool response suppresses DefaultResponse; otherwise use
+				// outcome content when present.
 				if strings.TrimSpace(toolOutcome.FinalContent) != "" {
 					exec.terminal = terminalContent{content: toolOutcome.FinalContent}
 				}
@@ -343,7 +344,26 @@ func (p *Pipeline) runPreparedTurnLoop(
 					turnStatus = TurnEndStatusError
 				}
 				return result, turnStatus, finalizeErr
+			case turnStepAbort:
+				switch toolOutcome.AbortCause {
+				case turnAbortHard:
+					turnStatus = TurnEndStatusAborted
+					result, abortErr := p.abortTurn(ts)
+					return result, turnStatus, abortErr
+				case turnAbortHook:
+					turnStatus = TurnEndStatusError
+					return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
+				default:
+					turnStatus = TurnEndStatusError
+					return turnResult{}, turnStatus, fmt.Errorf("tool phase returned abort without a cause")
+				}
+			default:
+				turnStatus = TurnEndStatusError
+				return turnResult{}, turnStatus, fmt.Errorf("tool phase returned unknown step %d", toolOutcome.Control)
 			}
+		default:
+			turnStatus = TurnEndStatusError
+			return turnResult{}, turnStatus, fmt.Errorf("model phase returned unknown step %d", llmOutcome.Control)
 		}
 	}
 

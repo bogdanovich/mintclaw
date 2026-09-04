@@ -698,7 +698,7 @@ func TestToolExecutionEndEventCarriesVerifiedWriteAudit(t *testing.T) {
 		ts,
 		exec,
 		llm,
-	); outcome.Control != ToolControlContinue {
+	); outcome.Control != turnStepContinue {
 		t.Fatalf("tool outcome = %+v", outcome)
 	}
 	for _, event := range emitter.events {
@@ -743,7 +743,7 @@ func TestHandledToolSynchronousSummarizeCarriesTurnScope(t *testing.T) {
 	}
 
 	outcome := runner.completeToolBatch(t.Context())
-	if outcome.Control != ToolControlBreak {
+	if outcome.Control != turnStepFinalize {
 		t.Fatalf("handled tool outcome = %+v", outcome)
 	}
 	manager.mu.Lock()
@@ -1462,7 +1462,7 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	}
 
 	control := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-	if control.Control != ToolControlSuspend {
+	if control.Control != turnStepSuspend {
 		t.Fatalf("control = %v, want suspend", control.Control)
 	}
 	if !feedback.paused || feedback.dismissed {
@@ -1556,7 +1556,7 @@ func TestPipelineDelegatedTaskSuspensionTerminatesMixedToolBatch(t *testing.T) {
 			pipeline := &Pipeline{Interaction: PipelineInteractionServices{ToolFeedback: feedback}}
 
 			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-			if outcome.Control != ToolControlSuspend || outcome.SuspendedInteractionID != "" {
+			if outcome.Control != turnStepSuspend || outcome.SuspendedInteractionID != "" {
 				t.Fatalf("outcome = %#v, want delegated suspension without parent interaction ID", outcome)
 			}
 			if suspendedTool.executions != 1 || ordinaryTool.executions != test.wantOrdinaryCalls {
@@ -1621,7 +1621,7 @@ func TestPipelineHookDelegatedTaskSuspensionTerminatesToolBatch(t *testing.T) {
 	}}
 
 	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-	if outcome.Control != ToolControlSuspend {
+	if outcome.Control != turnStepSuspend {
 		t.Fatalf("outcome = %#v, want suspend", outcome)
 	}
 	if firstTool.executions != 0 || deferredTool.executions != 0 {
@@ -1708,7 +1708,7 @@ func TestPipelineDelegatedTaskSuspensionDominatesJournalFailure(t *testing.T) {
 			}
 
 			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-			if outcome.Control != ToolControlSuspend || outcome.JournalErr != nil {
+			if outcome.Control != turnStepSuspend || outcome.JournalErr != nil {
 				t.Fatalf("outcome = %#v, want suspension to dominate journal failure", outcome)
 			}
 			wantFirstExecutions := 1
@@ -1818,7 +1818,7 @@ func TestPipelineDelegatedTaskSuspensionSurvivesAfterToolRewrite(t *testing.T) {
 			}}
 
 			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-			if outcome.Control != ToolControlSuspend || deferredTool.executions != 0 || !feedback.paused {
+			if outcome.Control != turnStepSuspend || deferredTool.executions != 0 || !feedback.paused {
 				t.Fatalf(
 					"outcome = %#v, deferred executions = %d, feedback paused = %v",
 					outcome,
@@ -1878,7 +1878,7 @@ func TestPipelineDelegatedTaskSuspensionDominatesPostExecutionAbort(t *testing.T
 			}
 
 			outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-			if outcome.Control != ToolControlSuspend || outcome.AbortCause != TurnAbortNone ||
+			if outcome.Control != turnStepSuspend || outcome.AbortCause != turnAbortNone ||
 				deferredTool.executions != 0 || !feedback.paused {
 				t.Fatalf(
 					"outcome = %#v, deferred executions = %d, feedback paused = %v",
@@ -1943,7 +1943,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 			ts,
 			exec,
 			llm,
-		); outcome.Control != ToolControlSuspend {
+		); outcome.Control != turnStepSuspend {
 			t.Fatalf(
 				"control = %v, want suspend; requests=%#v messages=%#v",
 				outcome.Control,
@@ -1986,7 +1986,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 			ts,
 			exec,
 			llm,
-		); outcome.Control != ToolControlContinue {
+		); outcome.Control != turnStepContinue {
 			t.Fatalf("control = %v, want continue", outcome.Control)
 		}
 		if got := <-called; got != interactions.OutcomeCanceled {
@@ -2019,7 +2019,7 @@ func TestPipelineForwardsAndCancelsSuspensionDomainResolution(t *testing.T) {
 			ts,
 			exec,
 			llm,
-		); outcome.Control != ToolControlContinue {
+		); outcome.Control != turnStepContinue {
 			t.Fatalf("control = %v, want continue", outcome.Control)
 		}
 		if got := <-called; got != interactions.OutcomeCanceled {
@@ -2091,7 +2091,7 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 	pipeline := &Pipeline{Interaction: PipelineInteractionServices{Suspension: manager}}
 
 	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-	if outcome.Control != ToolControlSuspend || outcome.SuspendedInteractionID != "interaction-bound" {
+	if outcome.Control != turnStepSuspend || outcome.SuspendedInteractionID != "interaction-bound" {
 		t.Fatalf("outcome = %+v, want bound approval suspension", outcome)
 	}
 	if tool.executions != 1 || tool.preparationCalls != 1 || len(manager.requests) != 1 {
@@ -2140,7 +2140,7 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 	}
 	pipeline.Interaction.Hooks = hooks
 	resumeOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), resumeState, resumeExec, resumeLLM)
-	if resumeOutcome.Control != ToolControlContinue || !tool.continued || len(manager.consumptions) != 1 {
+	if resumeOutcome.Control != turnStepContinue || !tool.continued || len(manager.consumptions) != 1 {
 		t.Fatalf(
 			"resume outcome = %+v, continued = %t, consumptions = %#v, messages = %#v",
 			resumeOutcome,
@@ -2182,7 +2182,7 @@ func TestPipelineAdmitsSingleLineBrowserApprovalSummary(t *testing.T) {
 	pipeline := &Pipeline{Interaction: PipelineInteractionServices{Suspension: manager}}
 
 	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-	if outcome.Control != ToolControlSuspend || len(manager.requests) != 1 ||
+	if outcome.Control != turnStepSuspend || len(manager.requests) != 1 ||
 		manager.requests[0].ApprovalAction != summary {
 		t.Fatalf("browser approval admission = %+v, requests = %#v", outcome, manager.requests)
 	}
@@ -2219,7 +2219,7 @@ func TestPipelineSuspensionFailureBecomesPairedToolError(t *testing.T) {
 		ts,
 		exec,
 		llm,
-	); control.Control != ToolControlContinue {
+	); control.Control != turnStepContinue {
 		t.Fatalf("control = %v, want continue with tool error", control.Control)
 	}
 	if len(manager.requests) != 0 {
@@ -2268,7 +2268,7 @@ func TestPipelineSteeringWinsBeforeSuspensionCommit(t *testing.T) {
 		ts,
 		exec,
 		llm,
-	); control.Control != ToolControlContinue {
+	); control.Control != turnStepContinue {
 		t.Fatalf("control = %v, want continue", control.Control)
 	}
 	if len(manager.requests) != 0 || len(exec.pendingMessages) != 1 {
@@ -2446,7 +2446,7 @@ func TestPipelineLoopGuardBlocksAndPreservesToolCallResults(t *testing.T) {
 			ts,
 			exec,
 			llm,
-		); got.Control != ToolControlContinue {
+		); got.Control != turnStepContinue {
 			t.Fatalf("iteration %d control = %v", i, got.Control)
 		}
 	}
@@ -2535,7 +2535,7 @@ func TestPipelineLoopGuardUsesDurableProjectionForProtectedArguments(t *testing.
 			ts,
 			exec,
 			llm,
-		); outcome.Control != ToolControlContinue {
+		); outcome.Control != turnStepContinue {
 			t.Fatalf("iteration %d outcome = %+v", index, outcome)
 		}
 	}
@@ -2602,7 +2602,7 @@ func TestPipelineProtectedToolResultStaysInMemoryAndIsRedactedFromDurableState(t
 		ts,
 		exec,
 		llm,
-	); outcome.Control != ToolControlContinue {
+	); outcome.Control != turnStepContinue {
 		t.Fatalf("outcome = %+v", outcome)
 	}
 	if len(exec.messages) != 1 || !strings.Contains(exec.messages[0].Content, canary) {
@@ -2682,7 +2682,7 @@ func TestPipelineEmergencyHaltTerminatesUnknownSuccessfulLoop(t *testing.T) {
 		llm.toolResponseDisposition = toolResponseNeedsModel
 		outcome := pipeline.ExecuteTools(context.Background(), context.Background(), ts, exec, llm)
 		if i < config.IdenticalCallHalt {
-			if outcome.Control != ToolControlContinue {
+			if outcome.Control != turnStepContinue {
 				t.Fatalf("iteration %d outcome = %#v", i, outcome)
 			}
 			if i == config.IdenticalCallWarn &&
@@ -2691,7 +2691,7 @@ func TestPipelineEmergencyHaltTerminatesUnknownSuccessfulLoop(t *testing.T) {
 			}
 			continue
 		}
-		if outcome.Control != ToolControlHalt ||
+		if outcome.Control != turnStepFinalizeExact ||
 			!strings.Contains(outcome.FinalContent, "Stopped the turn") {
 			t.Fatalf("terminal outcome = %#v", outcome)
 		}
@@ -2947,7 +2947,7 @@ func TestPipelineLoopGuardBlocksBeforeApprovalAuthority(t *testing.T) {
 				ts,
 				exec,
 				llm,
-			); control.Control != ToolControlContinue {
+			); control.Control != turnStepContinue {
 				t.Fatalf("control = %v, want continue", control.Control)
 			}
 			if len(tool.bindingCalls) != 0 || len(manager.requests) != 0 ||
@@ -3262,7 +3262,7 @@ func TestPipelineSteeringPreservesEntireEmittedToolBatch(t *testing.T) {
 		ts,
 		exec,
 		llm,
-	); got.Control != ToolControlContinue {
+	); got.Control != turnStepContinue {
 		t.Fatalf("control = %v, want continue", got.Control)
 	}
 	if read.executions != 1 || write.executions != 1 || commit.executions != 1 || unknown.executions != 1 {

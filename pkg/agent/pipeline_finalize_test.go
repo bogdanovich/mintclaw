@@ -130,6 +130,34 @@ func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T
 	}
 }
 
+func TestFinalizationContextExactTerminalOverridesHandledDisposition(t *testing.T) {
+	ts := &turnState{opts: freezeTurnInput(turnSpec{})}
+	exec := &turnExecution{model: turnExecutionModel{llmModelName: "active-model"}}
+	const protectedReasoningCanary = "ephemeral-browser-fill-canary"
+	llm := &LLMIterationState{
+		toolResponseDisposition: toolResponseHandled,
+		response:                &providers.LLMResponse{ReasoningContent: protectedReasoningCanary},
+	}
+
+	finalization := newFinalizationContext(
+		ts,
+		exec,
+		llm,
+		TurnEndStatusCompleted,
+		exactTerminalContent("runtime-owned halt reason"),
+	)
+
+	if finalization.disposition != finalResponsePending {
+		t.Fatalf("disposition = %v, want pending persistence", finalization.disposition)
+	}
+	if finalization.historyMessage == nil || finalization.historyMessage.Content != "runtime-owned halt reason" {
+		t.Fatalf("history message = %#v, want exact terminal content", finalization.historyMessage)
+	}
+	if finalization.historyMessage.ReasoningContent != "" {
+		t.Fatalf("history retained protected provider reasoning: %#v", finalization.historyMessage)
+	}
+}
+
 func TestFinalizationResultDetachesCompleteDeliverable(t *testing.T) {
 	finalization := FinalizationContext{
 		deliverable: &taskresult.Deliverable{

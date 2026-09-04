@@ -125,11 +125,11 @@ func (p *Pipeline) prepareLLMRequest(
 			}
 		case HookActionAbortTurn:
 			cancelConfiguredStreamingLLM(turnCtx, llm)
-			return completeLLMStage(LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHook}), nil
+			return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHook}), nil
 		case HookActionHardAbort:
 			cancelConfiguredStreamingLLM(turnCtx, llm)
 			_ = ts.requestHardAbort()
-			return completeLLMStage(LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}), nil
+			return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 		}
 	}
 	if exec.objectiveRepairActive {

@@ -161,7 +161,7 @@ func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testi
 	if err != nil {
 		t.Fatalf("normalizeAndDispatchLLMResponse() error = %v", err)
 	}
-	if outcome.Control != ControlBreak || outcome.FinalContent != "stage response" {
+	if outcome.Control != turnStepFinalize || outcome.FinalContent != "stage response" {
 		t.Fatalf("normalizeAndDispatchLLMResponse() outcome = %+v", outcome)
 	}
 	if calls, prompt, completion, total := ts.llmUsageTotals(); calls != 1 || prompt != 11 || completion != 7 ||
@@ -203,7 +203,7 @@ func TestBrowserDiagnosticsFollowUpMarksTerminalOutcomeProtected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeAndDispatchLLMResponse() error = %v", err)
 	}
-	if outcome.Control != ControlBreak || outcome.FinalContent != llm.response.Content ||
+	if outcome.Control != turnStepFinalize || outcome.FinalContent != llm.response.Content ||
 		!outcome.FinalContentProtected {
 		t.Fatalf("protected diagnostics outcome = %#v", outcome)
 	}
@@ -252,7 +252,7 @@ func TestBrowserDiagnosticsTaintSurvivesHookDuplicatedRootMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeAndDispatchLLMResponse() error = %v", err)
 	}
-	if outcome.Control != ControlBreak || outcome.FinalContent != llm.response.Content ||
+	if outcome.Control != turnStepFinalize || outcome.FinalContent != llm.response.Content ||
 		!outcome.FinalContentProtected {
 		t.Fatalf("hook-cloned root diagnostics outcome = %#v", outcome)
 	}
@@ -313,7 +313,7 @@ func TestLLMNormalizationPersistsProjectionButRetainsExecutionArguments(t *testi
 		t.Fatalf("invoke = %+v, %v", stage, invokeErr)
 	}
 	outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
-	if err != nil || outcome.Control != ControlToolLoop {
+	if err != nil || outcome.Control != turnStepExecuteTools {
 		t.Fatalf("normalize = %+v, %v", outcome, err)
 	}
 	if got := llm.normalizedToolCalls[0].Arguments["value"]; got != secret {

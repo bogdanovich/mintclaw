@@ -168,3 +168,16 @@ func TestInteractionContinuationConfigureKeepsResumeInboundContext(t *testing.T)
 		t.Fatalf("resume inbound context changed: %#v", opts.Dispatch.InboundContext)
 	}
 }
+
+func TestContinuationTerminalContentPreservesExactSafetyHalt(t *testing.T) {
+	llm := newLLMIterationState(1)
+	llm.toolResponseDisposition = toolResponseHandled
+
+	got, ok := continuationTerminalContent(ToolLoopOutcome{
+		Control:      turnStepFinalizeExact,
+		FinalContent: "  runtime-owned halt reason  ",
+	}, llm)
+	if !ok || got.content != "runtime-owned halt reason" || !got.persistIfToolHandled {
+		t.Fatalf("continuation terminal = (%#v, %v), want exact runtime halt", got, ok)
+	}
+}

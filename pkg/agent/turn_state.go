@@ -39,76 +39,67 @@ const (
 )
 
 // =============================================================================
-// Control signals returned from Pipeline methods to drive the turn runner.
+// turnStep is the shared transition vocabulary for model and tool phases.
 // =============================================================================
 
-type Control int
+type turnStep uint8
 
 const (
-	// ControlContinue tells the runner to jump back to the top of the turn loop
-	// (equivalent to the original "goto turnLoop").
-	ControlContinue Control = iota
-	// ControlBreak tells the runner to exit the turn loop and proceed to Finalize.
-	ControlBreak
-	// ControlToolLoop tells the runner to execute the tool loop.
-	ControlToolLoop
+	turnStepContinue turnStep = iota
+	turnStepExecuteTools
+	turnStepFinalize
+	// turnStepFinalizeWhenReady lets final rendering request another model
+	// iteration when required inputs arrive during the terminal boundary.
+	turnStepFinalizeWhenReady
+	// turnStepFinalizeExact preserves runtime safety content without rendering
+	// another model response.
+	turnStepFinalizeExact
+	turnStepSuspend
+	turnStepAbort
 )
 
-// TurnAbortCause describes why a pipeline phase asked the runner to abort.
-type TurnAbortCause int
+type turnAbortCause uint8
 
 const (
-	TurnAbortNone TurnAbortCause = iota
-	TurnAbortHook
-	TurnAbortHard
+	turnAbortNone turnAbortCause = iota
+	turnAbortHook
+	turnAbortHard
 )
 
 // LLMCallOutcome is the explicit result of one LLM phase.
 type LLMCallOutcome struct {
-	Control               Control
+	Control               turnStep
 	FinalContent          string
 	FinalContentProtected bool
-	AbortCause            TurnAbortCause
+	AbortCause            turnAbortCause
 }
 
 type terminalContent struct {
-	content   string
-	protected bool
+	content              string
+	protected            bool
+	persistIfToolHandled bool
+}
+
+func exactTerminalContent(content string) terminalContent {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		content = "The tool loop was stopped by runtime safety protection."
+	}
+	return terminalContent{content: content, persistIfToolHandled: true}
 }
 
 func (o LLMCallOutcome) terminalCandidate(retained terminalContent) terminalContent {
-	if o.Control != ControlBreak {
+	if o.Control != turnStepFinalize {
 		return retained
 	}
 	return terminalContent{content: o.FinalContent, protected: o.FinalContentProtected}
 }
 
-// ToolControl signals returned from ExecuteTools to drive tool loop iteration.
-type ToolControl int
-
-const (
-	// ToolControlContinue tells the tool loop to jump to the next iteration
-	// (pendingMessages arrived, SubTurn results, etc.).
-	ToolControlContinue ToolControl = iota
-	// ToolControlBreak tells the tool loop to exit and return to the runner.
-	ToolControlBreak
-	// ToolControlFinalize tells the runner that all tool responses were
-	// handled and the turn should finalize without another LLM call.
-	ToolControlFinalize
-	// ToolControlSuspend exits without final rendering after durable continuation
-	// ownership has transferred to the runtime or a descendant task.
-	ToolControlSuspend
-	// ToolControlHalt terminates the turn with exact runtime safety content.
-	// The coordinator must not render another model response or continue queued
-	// work after this outcome.
-	ToolControlHalt
-)
-
 // ToolLoopOutcome is the explicit result of one tool-execution phase.
 type ToolLoopOutcome struct {
-	Control                ToolControl
+	Control                turnStep
 	FinalContent           string
-	AbortCause             TurnAbortCause
+	AbortCause             turnAbortCause
 	SuspendedInteractionID string
 	TurnErr                error
 	JournalErr             error

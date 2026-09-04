@@ -415,10 +415,12 @@ type toolCallState struct {
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
 // tool execution with async callbacks, media delivery, and steering injection.
 // Returns an explicit outcome indicating what the coordinator should do next:
-//   - ToolControlContinue: all tool results handled, pendingMessages or steering exists, continue turn
-//   - ToolControlBreak: tool loop exited, proceed to coordinator's hardAbort/finalContent/finalize
-//   - ToolControlSuspend: durable continuation ownership moved outside this turn
-//   - ToolControlHalt: finalize exact runtime safety content without another model call
+//   - turnStepContinue: all tool results handled, pendingMessages or steering exists, continue turn
+//   - turnStepFinalize: tool loop exited with model content or a fully handled response
+//   - turnStepFinalizeWhenReady: render accumulated context unless new work arrives
+//   - turnStepFinalizeExact: finalize exact runtime safety content without another model call
+//   - turnStepSuspend: durable continuation ownership moved outside this turn
+//   - turnStepAbort: stop for a hook or hard-abort request
 func (p *Pipeline) ExecuteTools(
 	ctx context.Context,
 	turnCtx context.Context,
@@ -438,14 +440,14 @@ func (p *Pipeline) ExecuteTools(
 	}
 	if llm.assistantToolCallsWriteErr != nil {
 		return ToolLoopOutcome{
-			Control:    ToolControlBreak,
+			Control:    turnStepFinalize,
 			JournalErr: fmt.Errorf("persist assistant tool-call intent: %w", llm.assistantToolCallsWriteErr),
 		}
 	}
 	defer func() {
 		if runner.journalErr != nil {
 			outcome = ToolLoopOutcome{
-				Control:    ToolControlBreak,
+				Control:    turnStepFinalize,
 				JournalErr: fmt.Errorf("persist tool transcript: %w", runner.journalErr),
 			}
 		}
@@ -474,7 +476,7 @@ func (runner *toolLoopRunner) executeToolCall(
 		return stopToolBatch(ToolLoopOutcome{})
 	}
 	if ts.hardAbortRequested() {
-		return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
+		return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
 	}
 	call := &toolCallState{
 		index:     i,
@@ -555,7 +557,7 @@ func (runner *toolLoopRunner) admitToolCall(
 		case HookActionRespond:
 			if toolReq != nil && toolReq.HookResult != nil {
 				if !ts.tryMarkToolExecutionStarted() {
-					return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
+					return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
 				}
 				hookResult := normalizeToolResultForSyncDelivery(ts, toolReq.HookResult)
 				auditArgs := tools.ToolLogArguments(toolName, toolArgs)
@@ -629,7 +631,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					}
 					if aborted {
 						return stopToolBatch(ToolLoopOutcome{
-							Control: ToolControlBreak, AbortCause: TurnAbortHard,
+							Control: turnStepAbort, AbortCause: turnAbortHard,
 						})
 					}
 					hookResult = settlement.result
@@ -672,7 +674,7 @@ func (runner *toolLoopRunner) admitToolCall(
 						}
 						if aborted {
 							return stopToolBatch(ToolLoopOutcome{
-								Control: ToolControlBreak, AbortCause: TurnAbortHard,
+								Control: turnStepAbort, AbortCause: turnAbortHard,
 							})
 						}
 
@@ -742,7 +744,7 @@ func (runner *toolLoopRunner) admitToolCall(
 				if terminalTurnErr != nil {
 					exec.messages = runner.messages
 					return stopToolBatch(ToolLoopOutcome{
-						Control: ToolControlBreak,
+						Control: turnStepFinalize,
 						TurnErr: terminalTurnErr,
 					})
 				}
@@ -757,7 +759,7 @@ func (runner *toolLoopRunner) admitToolCall(
 					}
 					exec.messages = runner.messages
 					return stopToolBatch(ToolLoopOutcome{
-						Control: ToolControlHalt, FinalContent: loopDecision.Message,
+						Control: turnStepFinalizeExact, FinalContent: loopDecision.Message,
 					})
 				}
 				if terminalBatch {
@@ -795,10 +797,10 @@ func (runner *toolLoopRunner) admitToolCall(
 			_ = runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
 			return skipToolCall()
 		case HookActionAbortTurn:
-			return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHook})
+			return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHook})
 		case HookActionHardAbort:
 			_ = ts.requestHardAbort()
-			return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
+			return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
 		}
 	}
 	if p.Interaction.Hooks != nil && runner.skipPendingToolForGracefulInterrupt(tc, toolName) {
@@ -833,7 +835,7 @@ func (runner *toolLoopRunner) admitToolCall(
 			)
 			exec.messages = runner.messages
 			return stopToolBatch(ToolLoopOutcome{
-				Control: ToolControlHalt, FinalContent: loopDecision.Message,
+				Control: turnStepFinalizeExact, FinalContent: loopDecision.Message,
 			})
 		}
 		return skipToolCall()
@@ -1224,7 +1226,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 
 	toolStart := time.Now()
 	if !ts.tryMarkToolExecutionStarted() {
-		return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
+		return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
 	}
 	if p.durableToolLifecycle && call.loopSemantics != loopguard.SemanticsReadOnlyIdempotent {
 		if err := runner.journalToolExecutionStart(turnCtx, tc, toolName); err != nil {
@@ -1268,7 +1270,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 				effectiveCall, toolResult, call.protectedResult,
 			)
 		}
-		return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
+		return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
 	}
 
 	if p.Interaction.Hooks != nil {
@@ -1304,14 +1306,14 @@ func (runner *toolLoopRunner) invokeToolCall(
 				break
 			}
 			resolveCanceledToolSuspension(execCtx, toolResult)
-			return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHook})
+			return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHook})
 		case HookActionHardAbort:
 			if call.taskSuspended {
 				break
 			}
 			resolveCanceledToolSuspension(execCtx, toolResult)
 			_ = ts.requestHardAbort()
-			return stopToolBatch(ToolLoopOutcome{Control: ToolControlBreak, AbortCause: TurnAbortHard})
+			return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
 		}
 	}
 
@@ -1427,7 +1429,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		}
 		if aborted {
 			return stopToolBatch(ToolLoopOutcome{
-				Control: ToolControlBreak, AbortCause: TurnAbortHard,
+				Control: turnStepAbort, AbortCause: turnAbortHard,
 			})
 		}
 		toolResult = settlement.result
@@ -1468,7 +1470,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 			}
 			if aborted {
 				return stopToolBatch(ToolLoopOutcome{
-					Control: ToolControlBreak, AbortCause: TurnAbortHard,
+					Control: turnStepAbort, AbortCause: turnAbortHard,
 				})
 			}
 
@@ -1542,7 +1544,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 	if terminalTurnErr != nil {
 		exec.messages = runner.messages
 		return stopToolBatch(ToolLoopOutcome{
-			Control: ToolControlBreak,
+			Control: turnStepFinalize,
 			TurnErr: terminalTurnErr,
 		})
 	}
@@ -1563,7 +1565,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				llm.toolResponseDisposition = toolResponseNeedsModel
 				exec.messages = runner.messages
 				return stopToolBatch(ToolLoopOutcome{
-					Control:      ToolControlBreak,
+					Control:      turnStepFinalize,
 					FinalContent: fatalMCPServerErrorReply(mcpServerName, toolName),
 				})
 			}
@@ -1583,7 +1585,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 				llm.toolResponseDisposition = toolResponseNeedsModel
 				exec.messages = runner.messages
 				return stopToolBatch(ToolLoopOutcome{
-					Control:      ToolControlBreak,
+					Control:      turnStepFinalize,
 					FinalContent: repeatedFatalToolErrorReply(toolName),
 				})
 			}
@@ -1599,7 +1601,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		}
 		exec.messages = runner.messages
 		return stopToolBatch(ToolLoopOutcome{
-			Control: ToolControlHalt, FinalContent: loopDecision.Message,
+			Control: turnStepFinalizeExact, FinalContent: loopDecision.Message,
 		})
 	}
 	if terminalBatch {
@@ -1620,7 +1622,7 @@ func (runner *toolLoopRunner) stopForDelegatedTaskSuspension(
 
 	runner.transferPendingSteeringOwnership()
 	runner.exec.messages = runner.messages
-	return stopToolBatch(ToolLoopOutcome{Control: ToolControlSuspend})
+	return stopToolBatch(ToolLoopOutcome{Control: turnStepSuspend})
 }
 
 func codingToolObservation(ts *turnState, observation *toolshared.ToolObservation) *toolshared.ToolObservation {
@@ -1653,7 +1655,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				"tool_response_disposition": llm.toolResponseDisposition.String(),
 			})
 		llm.toolResponseDisposition = toolResponseNeedsModel
-		return ToolLoopOutcome{Control: ToolControlContinue}
+		return ToolLoopOutcome{Control: turnStepContinue}
 	}
 
 	// Poll for newly arrived steering
@@ -1668,7 +1670,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 			})
 		exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
 		llm.toolResponseDisposition = toolResponseNeedsModel
-		return ToolLoopOutcome{Control: ToolControlContinue}
+		return ToolLoopOutcome{Control: turnStepContinue}
 	}
 
 	// No pending steering: finalize or continue according to the typed response disposition.
@@ -1682,7 +1684,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				"tool_count": len(normalizedToolCalls),
 			},
 		)
-		return ToolLoopOutcome{Control: ToolControlFinalize}
+		return ToolLoopOutcome{Control: turnStepFinalizeWhenReady}
 	}
 
 	if llm.toolResponseDisposition == toolResponseHandled {
@@ -1731,7 +1733,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				"iteration":  iteration,
 				"tool_count": len(normalizedToolCalls),
 			})
-		return ToolLoopOutcome{Control: ToolControlBreak}
+		return ToolLoopOutcome{Control: turnStepFinalize}
 	}
 
 	// A model response is still required and no steering is pending, so continue and let the coordinator
@@ -1740,7 +1742,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 	logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 		"agent_id": ts.agent.ID, "iteration": iteration,
 	})
-	return ToolLoopOutcome{Control: ToolControlContinue}
+	return ToolLoopOutcome{Control: turnStepContinue}
 }
 
 func (r *toolLoopRunner) prepareToolApprovalSuspension(
@@ -2419,9 +2421,9 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	result *toolshared.ToolResult,
 	argumentHash string,
 	approvalAction string,
-) (ToolControl, bool, *toolshared.ToolResult) {
+) (turnStep, bool, *toolshared.ToolResult) {
 	if result == nil || result.Control.Suspension == nil {
-		return ToolControlContinue, false, result
+		return turnStepContinue, false, result
 	}
 	resolveCanceled := func() { resolveCanceledToolSuspension(ctx, result) }
 
@@ -2443,12 +2445,12 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		)
 		r.exec.messages = r.messages
 		r.llm.toolResponseDisposition = toolResponseNeedsModel
-		return ToolControlContinue, true, nil
+		return turnStepContinue, true, nil
 	}
 
-	fallback := func(message string) (ToolControl, bool, *toolshared.ToolResult) {
+	fallback := func(message string) (turnStep, bool, *toolshared.ToolResult) {
 		resolveCanceled()
-		return ToolControlContinue, false, toolshared.ErrorResult(message)
+		return turnStepContinue, false, toolshared.ErrorResult(message)
 	}
 	if r.ts == nil || r.ts.opts.NoHistory {
 		return fallback("request_user_input requires durable session history")
@@ -2553,7 +2555,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 			InteractionID: disposition.InteractionID,
 		},
 	)
-	return ToolControlSuspend, true, nil
+	return turnStepSuspend, true, nil
 }
 
 func resolveCanceledToolSuspension(ctx context.Context, result *toolshared.ToolResult) {
