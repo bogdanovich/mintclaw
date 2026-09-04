@@ -18,6 +18,8 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
+	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -26,6 +28,8 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
+	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 )
 
 type codingTurnRequest struct {
@@ -109,6 +113,8 @@ type nativeCodingRuntime struct {
 	metadata        thread.Metadata
 	model           string
 	provider        string
+	repository      *codingworkspace.Repository
+	reviewer        *codingreviewer.Executor
 	streaming       bool
 	store           *thread.Store
 	lease           *thread.Lease
@@ -189,7 +195,7 @@ func openNativeCodingRuntime(
 	if err != nil {
 		return nil, err
 	}
-	provider, _, err := r.createProvider(runtimeCfg)
+	provider, providerModel, err := r.createProvider(runtimeCfg)
 	if err != nil {
 		return nil, fmt.Errorf("coding runtime: create provider: %w", err)
 	}
@@ -257,6 +263,23 @@ func openNativeCodingRuntime(
 		return nil, fmt.Errorf("coding runtime: initialize agent: %w", err)
 	}
 	loop.SetMediaStore(attachmentMedia)
+	reviewer, err := codingreviewer.New(
+		provider,
+		providerModel,
+		newNativeReviewerToolset(
+			request.Metadata.Project.ProjectRoot,
+			runtimeCfg.Tools.ReadFile.MaxReadFileSize,
+		),
+		codingreviewer.Limits{},
+		time.Now,
+	)
+	if err != nil {
+		_ = loop.CloseContext(context.Background())
+		_ = attachmentMedia.Close()
+		messageBus.Close()
+		_ = baseEventBus.Close()
+		return nil, fmt.Errorf("coding runtime: initialize reviewer: %w", err)
+	}
 	readTurnHistory := r.readTurnHistory
 	if readTurnHistory == nil {
 		readTurnHistory = func(
@@ -276,6 +299,8 @@ func openNativeCodingRuntime(
 		metadata:        request.Metadata,
 		model:           modelName,
 		provider:        providerName,
+		repository:      repository,
+		reviewer:        reviewer,
 		streaming:       projector != nil,
 		store:           request.Store,
 		lease:           request.Lease,
@@ -295,6 +320,45 @@ func openNativeCodingRuntime(
 		}
 	}
 	return runtime, nil
+}
+
+type nativeReviewerToolset struct {
+	registry *tools.ToolRegistry
+}
+
+func newNativeReviewerToolset(projectRoot string, maxReadFileSize int) nativeReviewerToolset {
+	registry := tools.NewToolRegistry()
+	registry.Register(fstools.NewReadFileBytesTool(projectRoot, true, maxReadFileSize))
+	registry.Register(fstools.NewListDirTool(projectRoot, true))
+	registry.Register(fstools.NewSearchFilesTool(projectRoot, true, maxReadFileSize))
+	return nativeReviewerToolset{registry: registry}
+}
+
+func (toolset nativeReviewerToolset) Definitions() []providers.ToolDefinition {
+	if toolset.registry == nil {
+		return nil
+	}
+	return toolset.registry.ToProviderDefs()
+}
+
+func (toolset nativeReviewerToolset) Execute(
+	ctx context.Context,
+	name string,
+	arguments map[string]any,
+) codingreviewer.ToolResult {
+	switch name {
+	case "list_dir", "read_file", "search_files":
+	default:
+		return codingreviewer.ToolResult{Content: "review tool is not allowed", IsError: true}
+	}
+	if toolset.registry == nil {
+		return codingreviewer.ToolResult{Content: "review tools are unavailable", IsError: true}
+	}
+	result := toolset.registry.Execute(ctx, name, arguments)
+	if result == nil {
+		return codingreviewer.ToolResult{Content: "review tool returned no result", IsError: true}
+	}
+	return codingreviewer.ToolResult{Content: result.ContentForLLM(), IsError: result.IsError}
 }
 
 func codingHistoryCursor(
@@ -726,18 +790,72 @@ func (r *nativeControllerRuntime) RepositoryDiff(
 }
 
 func (r *nativeControllerRuntime) repositoryEvidence() (*codingworkspace.Repository, error) {
-	if r == nil || r.loop == nil || r.projector == nil {
+	if r == nil || r.repository == nil || r.projector == nil {
 		return nil, frontend.ErrWorkspaceRefreshUnsupported
 	}
-	registry := r.loop.GetRegistry()
-	if registry == nil {
-		return nil, frontend.ErrWorkspaceRefreshUnsupported
+	return r.repository, nil
+}
+
+func (r *nativeControllerRuntime) RunReview(
+	ctx context.Context,
+	reviewID string,
+	target codingreview.Target,
+	emit func(codingreview.Event) error,
+) (codingreview.Result, error) {
+	if r == nil || r.reviewer == nil || r.store == nil || r.lease == nil {
+		return codingreview.Result{}, fmt.Errorf("coding review runtime is unavailable")
 	}
-	agentInstance := registry.GetDefaultAgent()
-	if agentInstance == nil || agentInstance.Repository == nil {
-		return nil, frontend.ErrWorkspaceRefreshUnsupported
+	repository, err := r.repositoryEvidence()
+	if err != nil {
+		return codingreview.Result{}, err
 	}
-	return agentInstance.Repository, nil
+	if emitErr := emit(
+		codingreview.Event{Kind: codingreview.EventProgress, Progress: "freezing repository evidence"},
+	); emitErr != nil {
+		return codingreview.Result{}, emitErr
+	}
+	frozen := repository.Diff(ctx, target.DiffTarget())
+	if cause := context.Cause(ctx); cause != nil {
+		return codingreview.Result{}, cause
+	}
+	if !frozen.RepositoryAvailable || frozen.UnavailableReason != "" {
+		return codingreview.Result{}, fmt.Errorf(
+			"coding review repository evidence is unavailable: %s",
+			strings.TrimSpace(frozen.UnavailableReason),
+		)
+	}
+	if emitErr := emit(
+		codingreview.Event{Kind: codingreview.EventProgress, Progress: "reviewing frozen repository evidence"},
+	); emitErr != nil {
+		return codingreview.Result{}, emitErr
+	}
+	result, err := r.reviewer.Review(ctx, reviewID, target, frozen)
+	if err != nil {
+		return codingreview.Result{}, err
+	}
+	current := repository.Diff(ctx, target.DiffTarget())
+	if cause := context.Cause(ctx); cause != nil {
+		return codingreview.Result{}, cause
+	}
+	result = codingreviewer.ReconcileEvidence(result, frozen, current)
+	if validationErr := result.ValidateAgainstFrozenDiff(frozen); validationErr != nil {
+		return codingreview.Result{}, fmt.Errorf("coding review reconcile evidence: %w", validationErr)
+	}
+	for index := range result.Findings {
+		finding := result.Findings[index]
+		if emitErr := emit(codingreview.Event{Kind: codingreview.EventFinding, Finding: &finding}); emitErr != nil {
+			return codingreview.Result{}, emitErr
+		}
+	}
+	if emitErr := emit(
+		codingreview.Event{Kind: codingreview.EventProgress, Progress: "publishing review result"},
+	); emitErr != nil {
+		return codingreview.Result{}, emitErr
+	}
+	if publishErr := r.store.PublishReviewResult(ctx, r.lease, r.metadata, result, frozen); publishErr != nil {
+		return codingreview.Result{}, fmt.Errorf("coding review publish result: %w", publishErr)
+	}
+	return result, nil
 }
 
 func (r *nativeControllerRuntime) TranscriptPage(

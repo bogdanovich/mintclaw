@@ -16,6 +16,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -29,6 +30,54 @@ import (
 type blockingCodingProvider struct {
 	started chan struct{}
 	once    sync.Once
+}
+
+type reviewCodingProvider struct {
+	mu    sync.Mutex
+	calls []reviewProviderCall
+}
+
+type reviewProviderCall struct {
+	tools []providers.ToolDefinition
+	model string
+}
+
+func (provider *reviewCodingProvider) Chat(
+	_ context.Context,
+	_ []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.mu.Lock()
+	provider.calls = append(provider.calls, reviewProviderCall{
+		tools: append([]providers.ToolDefinition(nil), tools...),
+		model: model,
+	})
+	provider.mu.Unlock()
+	return &providers.LLMResponse{Content: `{
+		"summary":"One defect found.",
+		"findings":[{
+			"severity":"major",
+			"title":"Addition changed to multiplication",
+			"explanation":"Add now multiplies its operands and violates its contract.",
+			"confidence":0.99,
+			"location_state":"current",
+			"path":"calc.go",
+			"start_line":3,
+			"end_line":3
+		}]
+	}`}, nil
+}
+
+func (*reviewCodingProvider) GetDefaultModel() string { return "fixture-model-id" }
+
+func (provider *reviewCodingProvider) Calls() []reviewProviderCall {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	result := make([]reviewProviderCall, len(provider.calls))
+	copy(result, provider.calls)
+	return result
 }
 
 func (p *blockingCodingProvider) Chat(
@@ -530,6 +579,152 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	}
 	if persisted.Preview != metadata.Preview {
 		t.Fatalf("canceled prompt changed preview to %q", persisted.Preview)
+	}
+}
+
+func TestNativeControllerPublishesReadOnlyReviewResult(t *testing.T) {
+	projectRoot := nativeCodingFixtureProject(t)
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "review fixture", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "fixture-alias"
+	metadata.Provider = "fixture"
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := codingworkspace.NewRepository(
+		project.ProjectRoot,
+		project.InvocationCWD,
+		codingworkspace.Limits{},
+	).CaptureBaseline(t.Context(), codingworkspace.BaselineRequest{
+		ProjectKey: project.ProjectKey,
+		CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	if err := store.PublishRepositoryBaseline(t.Context(), lease, metadata, baseline); err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	nativeCodingWriteFile(
+		t,
+		filepath.Join(projectRoot, "calc.go"),
+		"package fixture\n\nfunc Add(a, b int) int { return a * b }\n",
+	)
+
+	provider := &reviewCodingProvider{}
+	dependencies := nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return nativeCodingFixtureConfig(), nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			return provider, "fixture-model-id", nil
+		},
+	}
+	frontendController, err := newNativeCodingControllerWithDependencies(
+		codingTurnRequest{Store: store, Lease: lease, Metadata: metadata},
+		true,
+		frontend.ProjectionLimits{},
+		dependencies,
+		time.Now,
+	)
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	defer func() { _ = frontendController.Close(t.Context()) }()
+	reviewer, ok := frontendController.(frontend.Reviewer)
+	if !ok {
+		t.Fatal("native coding controller does not expose review")
+	}
+	if err := reviewer.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent}); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	var snapshot frontend.ThreadSnapshot
+	for {
+		snapshot, err = frontendController.Snapshot(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.Review != nil && snapshot.Review.Phase == codingreview.PhaseCompleted {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("review did not complete: %#v", snapshot.Review)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if snapshot.Review.Result == nil || len(snapshot.Review.Result.Findings) != 1 ||
+		snapshot.Review.Result.Findings[0].LocationState != codingreview.LocationCurrent {
+		t.Fatalf("projected review = %#v", snapshot.Review)
+	}
+	persisted, err := store.LoadReviewResultWithLease(
+		t.Context(),
+		lease,
+		metadata,
+		snapshot.Review.ReviewID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ReviewID != snapshot.Review.ReviewID || persisted.Summary != "One defect found." {
+		t.Fatalf("persisted review = %#v", persisted)
+	}
+	calls := provider.Calls()
+	if len(calls) != 1 || calls[0].model != "fixture-model-id" {
+		t.Fatalf("review provider calls = %#v", calls)
+	}
+	toolNames := make([]string, len(calls[0].tools))
+	for index, definition := range calls[0].tools {
+		toolNames[index] = definition.Function.Name
+	}
+	if strings.Join(toolNames, ",") != "list_dir,read_file,search_files" {
+		t.Fatalf("review tools = %v", toolNames)
+	}
+	if err := frontendController.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history := readHistory(t, stateRoot, metadata.SessionKey); len(history) != 0 {
+		t.Fatalf("review wrote hidden canonical transcript messages: %#v", history)
+	}
+}
+
+func TestNativeReviewerToolsetRestrictsReadsToProject(t *testing.T) {
+	projectRoot := t.TempDir()
+	outsideRoot := t.TempDir()
+	secretPath := filepath.Join(outsideRoot, "secret.txt")
+	nativeCodingWriteFile(t, secretPath, "must not escape")
+	toolset := newNativeReviewerToolset(projectRoot, 1024)
+
+	result := toolset.Execute(t.Context(), "read_file", map[string]any{"path": secretPath})
+	if !result.IsError || strings.Contains(result.Content, "must not escape") {
+		t.Fatalf("outside-project read result = %#v", result)
+	}
+	forbidden := toolset.Execute(t.Context(), "exec", map[string]any{"command": "pwd"})
+	if !forbidden.IsError {
+		t.Fatalf("mutation-capable tool result = %#v", forbidden)
 	}
 }
 
