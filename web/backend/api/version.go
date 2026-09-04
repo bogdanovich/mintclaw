@@ -150,9 +150,13 @@ func fallbackSystemVersionInfoFromConfig() systemVersionResponse {
 // This keeps version probing aligned with the actual gateway startup behavior,
 // so web and gateway do not drift onto different binaries.
 func (h *Handler) resolveGatewayBinaryForVersionInfo() string {
-	h.gateway.mu.Lock()
-	cmd := h.gateway.cmd
-	h.gateway.mu.Unlock()
+	return h.gateway.resolveBinaryForVersionInfo()
+}
+
+func (m *GatewayProcessManager) resolveBinaryForVersionInfo() string {
+	m.mu.Lock()
+	cmd := m.cmd
+	m.mu.Unlock()
 
 	if cmd != nil {
 		if execPath := strings.TrimSpace(cmd.Path); execPath != "" {
@@ -160,22 +164,26 @@ func (h *Handler) resolveGatewayBinaryForVersionInfo() string {
 		}
 	}
 
-	return h.gateway.findBinary()
+	return m.findBinary()
 }
 
 func (h *Handler) gatewayVersionState() (int, bool) {
-	h.gateway.mu.Lock()
-	defer h.gateway.mu.Unlock()
+	return h.gateway.versionState()
+}
 
-	if h.gateway.cmd == nil || h.gateway.cmd.Process == nil {
+func (m *GatewayProcessManager) versionState() (int, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.cmd == nil || m.cmd.Process == nil {
 		return 0, false
 	}
-	pid := h.gateway.cmd.Process.Pid
+	pid := m.cmd.Process.Pid
 	if pid <= 0 {
 		return 0, false
 	}
 
-	return pid, h.gateway.processAlive(h.gateway.cmd)
+	return pid, m.processAlive(m.cmd)
 }
 
 func (c *systemVersionCache) get(gatewayPID int, gatewayAlive bool) (systemVersionResponse, bool) {
