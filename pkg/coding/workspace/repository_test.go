@@ -112,6 +112,73 @@ func TestRepositoryDiffPreservesCachedDeletionAndSamePathUntrackedFile(t *testin
 	}
 }
 
+func TestRepositoryProvenancePreservesCachedDeletionAndSamePathUntrackedFile(t *testing.T) {
+	root := initGitRepository(t)
+	baseline, err := NewRepository(root, root, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
+		ProjectKey: "project-key", CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "rm", "--cached", "tracked.txt")
+	repository, err := NewRepositoryWithBaseline(root, root, Limits{}, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := repository.Status(t.Context())
+	if status.Provenance == nil {
+		t.Fatalf("status provenance = %#v", status)
+	}
+	seen := map[string]int{}
+	for _, path := range status.Provenance.Paths {
+		if path.Path == "tracked.txt" {
+			seen[path.Status]++
+		}
+	}
+	if seen["D "] != 1 || seen["??"] != 1 {
+		t.Fatalf("same-path status provenance = %#v", status.Provenance.Paths)
+	}
+	diff := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent})
+	for _, expected := range []string{"D", "??"} {
+		file := requireDiffFileStatus(t, diff, "tracked.txt", expected)
+		if file.Provenance != ProvenanceIndeterminate || file.ProvenanceReason == "" {
+			t.Fatalf("same-path diff provenance for %q = %#v", expected, file)
+		}
+	}
+}
+
+func TestRepositoryProvenanceRefreshFailureDoesNotClaimStaleness(t *testing.T) {
+	root := initGitRepository(t)
+	limits := Limits{ConcurrentOperations: 1}
+	baseline, err := NewRepository(root, root, limits).CaptureBaseline(t.Context(), BaselineRequest{
+		ProjectKey: "project-key", CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := NewRepositoryWithBaseline(root, root, limits, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repository.acquire(t.Context()) {
+		t.Fatal("acquire repository slot")
+	}
+	defer repository.release()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	status := StatusResult{Snapshot: captureSnapshot(t.Context(), root, root, Limits{}.normalized())}
+	repository.attachStatusProvenance(ctx, &status)
+	if status.Stale || status.Provenance == nil ||
+		status.Provenance.Reason != "provenance refresh is unavailable" {
+		t.Fatalf("status after failed provenance refresh = %#v", status)
+	}
+	diff := DiffResult{Generation: status.Snapshot.Identity(), EvidenceGeneration: "present"}
+	repository.attachDiffProvenance(ctx, &diff)
+	if diff.Stale || diff.Provenance == nil || diff.Provenance.Reason != "provenance refresh is unavailable" {
+		t.Fatalf("diff after failed provenance refresh = %#v", diff)
+	}
+}
+
 func TestRepositoryDiffUnbornMatchesCurrentWorktree(t *testing.T) {
 	root := t.TempDir()
 	runGitTest(t, root, "init", "-b", "main")

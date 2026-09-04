@@ -82,6 +82,7 @@ type DiffResult struct {
 	Head                string            `json:"head,omitempty"`
 	Branch              string            `json:"branch,omitempty"`
 	Generation          string            `json:"generation,omitempty"`
+	EvidenceGeneration  string            `json:"evidence_generation,omitempty"`
 	Files               []DiffFile        `json:"files,omitempty"`
 	Additions           int               `json:"additions,omitempty"`
 	Deletions           int               `json:"deletions,omitempty"`
@@ -183,6 +184,18 @@ func (repository *Repository) diff(ctx context.Context, target DiffTarget) DiffR
 
 	commandCtx, cancel := context.WithTimeout(contextOrBackground(ctx), repository.limits.Timeout)
 	defer cancel()
+	evidenceWarning := ""
+	if repository.baseline != nil {
+		observation, err := repository.captureBaseline(commandCtx, BaselineRequest{
+			ProjectKey: repository.baseline.ProjectKey,
+			CapturedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			evidenceWarning = "content-sensitive diff generation is unavailable"
+		} else {
+			result.EvidenceGeneration = baselineEvidenceGeneration(observation)
+		}
+	}
 	before := captureSnapshot(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
 	result.RepositoryAvailable = before.Git.Available
 	result.Head = before.Git.Head
@@ -207,7 +220,7 @@ func (repository *Repository) diff(ctx context.Context, target DiffTarget) DiffR
 		before.ProjectRoot,
 		repository.limits.CommandBytes,
 	)
-	result.Warning = joinWarning(before.Warning, warning)
+	result.Warning = joinWarning(joinWarning(evidenceWarning, before.Warning), warning)
 	result.Truncated = before.Truncated || truncated
 	if !safe {
 		result.UnavailableReason = "Git content-filter configuration could not be made passive"
@@ -269,8 +282,7 @@ func (repository *Repository) attachStatusProvenance(ctx context.Context, result
 	provenance, err := repository.Provenance(ctx, *repository.baseline, time.Now().UTC())
 	if err != nil {
 		provenance = unavailableProvenance(repository.baseline.BaselineID, "provenance refresh is unavailable")
-	}
-	if result.Snapshot.Identity() != provenance.CurrentGeneration {
+	} else if result.Snapshot.Identity() != provenance.CurrentGeneration {
 		result.Stale = true
 		provenance = unavailableProvenance(
 			repository.baseline.BaselineID,
@@ -288,8 +300,18 @@ func (repository *Repository) attachDiffProvenance(ctx context.Context, result *
 	provenance, err := repository.Provenance(ctx, *repository.baseline, time.Now().UTC())
 	if err != nil {
 		provenance = unavailableProvenance(repository.baseline.BaselineID, "provenance refresh is unavailable")
-	}
-	if result.Stale || result.Generation != provenance.CurrentGeneration {
+	} else if result.Stale {
+		provenance = unavailableProvenance(
+			repository.baseline.BaselineID,
+			"repository changed while diff evidence was captured",
+		)
+	} else if result.EvidenceGeneration == "" || provenance.CurrentEvidenceGeneration == "" {
+		provenance = unavailableProvenance(
+			repository.baseline.BaselineID,
+			"content-sensitive diff generation is unavailable",
+		)
+	} else if result.Generation != provenance.CurrentGeneration ||
+		result.EvidenceGeneration != provenance.CurrentEvidenceGeneration {
 		result.Stale = true
 		provenance = unavailableProvenance(
 			repository.baseline.BaselineID,

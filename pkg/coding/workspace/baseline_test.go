@@ -123,7 +123,7 @@ func TestCompareBaselineRejectsChangedAuthority(t *testing.T) {
 	}
 }
 
-func TestCompareBaselineTreatsAStatusTransitionAsOnePath(t *testing.T) {
+func TestCompareBaselinePreservesBothSidesOfStatusTransition(t *testing.T) {
 	baseline := testBaseline(t, "/repo", "head")
 	baseline.Paths = []BaselinePath{
 		{Path: "changed.txt", Status: " M", Fingerprint: sha256Hex("before"), EvidenceComplete: true},
@@ -136,9 +136,39 @@ func TestCompareBaselineTreatsAStatusTransitionAsOnePath(t *testing.T) {
 	current.BaselineID = baselineDigest(current)
 
 	result := CompareBaseline(baseline, current)
-	if len(result.Paths) != 1 || result.Paths[0].Path != "changed.txt" ||
-		result.Paths[0].Provenance != ProvenanceFirstObservedDuringThread {
+	seen := map[string]ProvenanceKind{}
+	for _, path := range result.Paths {
+		seen[path.Status] = path.Provenance
+	}
+	if len(result.Paths) != 2 || seen[" M"] != ProvenanceResolvedSinceBaseline ||
+		seen["MM"] != ProvenanceFirstObservedDuringThread {
 		t.Fatalf("status transition provenance = %#v", result)
+	}
+}
+
+func TestBaselineEvidenceGenerationDetectsContentChangeWithStableSnapshotIdentity(t *testing.T) {
+	before := testBaseline(t, "/repo", "head")
+	before.Paths = []BaselinePath{{
+		Path: "changed.txt", Status: " M", Fingerprint: sha256Hex("before"), EvidenceComplete: true,
+	}}
+	before.BaselineID = baselineDigest(before)
+	after := before
+	after.CapturedAt = before.CapturedAt.Add(time.Second)
+	after.Paths = []BaselinePath{{
+		Path: "changed.txt", Status: " M", Fingerprint: sha256Hex("after"), EvidenceComplete: true,
+	}}
+	after.BaselineID = baselineDigest(after)
+	if before.Generation != after.Generation ||
+		baselineEvidenceGeneration(before) == baselineEvidenceGeneration(after) {
+		t.Fatalf(
+			"content-sensitive generations = %q / %q",
+			baselineEvidenceGeneration(before),
+			baselineEvidenceGeneration(after),
+		)
+	}
+	provenance := CompareBaseline(before, after)
+	if provenance.CurrentEvidenceGeneration != baselineEvidenceGeneration(after) {
+		t.Fatalf("current evidence generation = %#v", provenance)
 	}
 }
 
