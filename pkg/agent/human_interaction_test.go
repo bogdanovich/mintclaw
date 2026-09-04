@@ -4216,10 +4216,23 @@ func TestDurableHumanApprovalBindsTrustedPreparedArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = al.resumeClaimedInteraction(
-		t.Context(), registry, agent.Workspace, agent, nil, *inbound, record,
-	); err != nil {
+	resumeCommand, err := newResumeInteractionCommand(
+		registry, agent.Workspace, agent, nil, *inbound, record,
+	)
+	if err != nil {
 		t.Fatal(err)
+	}
+	resumeResult, err := newInteractionService(al).Resume(t.Context(), resumeCommand)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if effects := resumeResult.Effects; !effects.SingleFlightOwned ||
+		effects.SingleFlightJoined || !effects.SteeringHandoffConfigured || !effects.ContinuationStarted ||
+		!effects.FinalizationCompleted {
+		t.Fatalf("Resume() effects = %#v", effects)
+	}
+	if resumeResult.Record.Status != interactions.StatusResolved {
+		t.Fatalf("Resume() record status = %q, want resolved", resumeResult.Record.Status)
 	}
 	resolved, _ := registry.Get(record.ID)
 	if resolved.ApprovalConsumedAt == 0 || tool.executions != 1 {

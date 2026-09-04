@@ -883,15 +883,18 @@ func (al *AgentLoop) recoverClaimedInteraction(
 	}
 	defer claim.releaseIfOwned()
 	recoveryHandled = true
-	if err := al.resumeClaimedInteractionOwned(
-		ctx,
+	resumeCommand, err := newResumeInteractionCommand(
 		registry,
 		workspace,
 		agent,
 		scope,
 		inboundContextForInteraction(record.Route),
 		record,
-	); err != nil {
+	)
+	if err == nil {
+		err = newInteractionService(al).resumeOwned(ctx, resumeCommand)
+	}
+	if err != nil {
 		recoveryErr = err
 		logger.WarnCF("agent", "Failed to recover human interaction", map[string]any{
 			"interaction_id": record.ID,

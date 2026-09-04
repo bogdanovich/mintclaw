@@ -369,8 +369,7 @@ func (service interactionService) resume(
 	command answerInteractionCommand,
 	record interactions.Record,
 ) error {
-	return service.runtime.resumeClaimedInteraction(
-		ctx,
+	resumeCommand, err := newResumeInteractionCommand(
 		registry,
 		command.Workspace,
 		service.runtime.interactionContinuationAgent(record, command.Agent),
@@ -378,6 +377,11 @@ func (service interactionService) resume(
 		command.Message.Context,
 		record,
 	)
+	if err != nil {
+		return err
+	}
+	_, err = service.Resume(ctx, resumeCommand)
+	return err
 }
 
 func (service interactionService) Cancel(
