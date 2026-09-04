@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -169,15 +170,17 @@ func TestInteractionContinuationConfigureKeepsResumeInboundContext(t *testing.T)
 	}
 }
 
-func TestContinuationTerminalContentPreservesExactSafetyHalt(t *testing.T) {
+func TestToolTerminalRequestPreservesExactSafetyHalt(t *testing.T) {
 	llm := newLLMIterationState(1)
 	llm.toolResponseDisposition = toolResponseHandled
 
-	got, ok := continuationTerminalContent(ToolLoopOutcome{
-		Control:      turnStepFinalizeExact,
+	got := toolTerminalRequest(ToolLoopOutcome{
+		Control:      turnStepFinalize,
 		FinalContent: "  runtime-owned halt reason  ",
-	}, llm)
-	if !ok || got.content != "runtime-owned halt reason" || !got.persistIfToolHandled {
-		t.Fatalf("continuation terminal = (%#v, %v), want exact runtime halt", got, ok)
+		TerminalMode: terminalRenderExact,
+	}, llm, terminalContent{})
+	if got.renderMode != terminalRenderExact || strings.TrimSpace(got.content.content) != "runtime-owned halt reason" ||
+		!got.content.persistIfToolHandled {
+		t.Fatalf("tool terminal request = %#v, want exact runtime halt", got)
 	}
 }

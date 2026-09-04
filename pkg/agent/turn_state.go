@@ -48,14 +48,16 @@ const (
 	turnStepContinue turnStep = iota
 	turnStepExecuteTools
 	turnStepFinalize
-	// turnStepFinalizeWhenReady lets final rendering request another model
-	// iteration when required inputs arrive during the terminal boundary.
-	turnStepFinalizeWhenReady
-	// turnStepFinalizeExact preserves runtime safety content without rendering
-	// another model response.
-	turnStepFinalizeExact
 	turnStepSuspend
 	turnStepAbort
+)
+
+type terminalRenderMode uint8
+
+const (
+	terminalRenderOptional terminalRenderMode = iota
+	terminalRenderRequired
+	terminalRenderExact
 )
 
 type turnAbortCause uint8
@@ -99,6 +101,7 @@ func (o LLMCallOutcome) terminalCandidate(retained terminalContent) terminalCont
 type ToolLoopOutcome struct {
 	Control                turnStep
 	FinalContent           string
+	TerminalMode           terminalRenderMode
 	AbortCause             turnAbortCause
 	SuspendedInteractionID string
 	TurnErr                error

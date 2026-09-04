@@ -391,21 +391,6 @@ func tryRenderFinalTurnReply(
 	return terminalContent{content: content, protected: protected}, true
 }
 
-func renderFinalTurnReply(
-	ctx context.Context,
-	cfg *config.Config,
-	ts *turnState,
-	exec *turnExecution,
-	fallback terminalContent,
-) terminalContent {
-	content, ok := tryRenderFinalTurnReply(ctx, cfg, ts, exec, fallback)
-	if ok {
-		return content
-	}
-	fallback.content = strings.TrimSpace(fallback.content)
-	return fallback
-}
-
 func shouldFinalizeAfterToolLoopWithRenderConfig(
 	cfg *config.Config,
 	exec *turnExecution,

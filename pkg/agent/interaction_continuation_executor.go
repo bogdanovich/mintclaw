@@ -105,33 +105,22 @@ func (e *interactionContinuationExecutor) execute(
 			return turnResult{}, TurnEndStatusError, repairErr
 		}
 		ts.consumeApprovalGrant()
-		if terminal, ok := continuationTerminalContent(outcome, llm); ok {
-			result, finalizeErr := pipeline.finalizeTurn(
-				turnCtx, ts, exec, llm, TurnEndStatusCompleted, terminal,
+		if outcome.Control == turnStepFinalize {
+			terminal := pipeline.completeTerminal(
+				turnCtx,
+				ts,
+				exec,
+				llm,
+				TurnEndStatusCompleted,
+				toolTerminalRequest(outcome, llm, terminalContent{}),
 			)
-			if finalizeErr != nil {
-				return result, TurnEndStatusError, finalizeErr
+			if !terminal.resume {
+				return terminal.result, terminal.status, terminal.err
 			}
-			return result, TurnEndStatusCompleted, nil
 		}
 	}
 
 	return pipeline.runPreparedTurnLoop(ctx, turnCtx, ts, exec)
-}
-
-func continuationTerminalContent(
-	outcome ToolLoopOutcome,
-	llm *LLMIterationState,
-) (terminalContent, bool) {
-	switch outcome.Control {
-	case turnStepFinalizeExact:
-		return exactTerminalContent(outcome.FinalContent), true
-	case turnStepFinalize:
-		if llm != nil && llm.toolResponseDisposition == toolResponseHandled {
-			return terminalContent{}, true
-		}
-	}
-	return terminalContent{}, false
 }
 
 func repairJournaledToolPair(
