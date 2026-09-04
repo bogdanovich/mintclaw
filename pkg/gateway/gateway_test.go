@@ -437,6 +437,21 @@ func TestBrowserToolsTrackAgentGrantAcrossReload(t *testing.T) {
 	}
 }
 
+func TestBrowserToolSourcePlacementIsIsolatedFromReloadConfigMutation(t *testing.T) {
+	cfg := gatewayBrowserConfig(t.TempDir())
+	target := cfg.Tools.Browser.Targets["gateway"]
+	target.Placement = config.BrowserPlacementNode
+	cfg.Tools.Browser.Targets["gateway"] = target
+
+	snapshot := browserNodeTargets(cfg.Tools.Browser)
+	target.Placement = config.BrowserPlacementGateway
+	cfg.Tools.Browser.Targets["gateway"] = target
+
+	if _, retained := snapshot["gateway"]; !retained {
+		t.Fatal("browser tool source observed mutated target placement")
+	}
+}
+
 func TestConfigReloadRetainsOldRegistryWhenBrowserLeaseCannotDrain(t *testing.T) {
 	cfg := gatewayBrowserConfig(t.TempDir())
 	cfg.Agents.Defaults.ContextManager = "none"
