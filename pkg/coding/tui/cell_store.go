@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
@@ -48,10 +49,7 @@ func reconcileSemanticCellStore(
 			return semanticCellStore{}, fmt.Errorf("duplicate presentation item ID %q", item.ID)
 		}
 
-		cell, err := reconcileSemanticCell(previous.byID[item.ID], item)
-		if err != nil {
-			return semanticCellStore{}, err
-		}
+		cell := reconcileSemanticCell(previous.byID[item.ID], item)
 		next.ordered = append(next.ordered, cell)
 		next.byID[item.ID] = cell
 		if presentationCellCommitted(item.Lifecycle) {
@@ -66,39 +64,21 @@ func reconcileSemanticCellStore(
 func reconcileSemanticCell(
 	current *presentationCell,
 	item frontend.PresentationItem,
-) (*presentationCell, error) {
+) *presentationCell {
 	if current == nil {
-		return newPresentationCell(item), nil
+		return newPresentationCell(item)
 	}
-	identity := current.Identity()
-	if item.Sequence != identity.Sequence {
-		return nil, fmt.Errorf(
-			"presentation item %q changed stable sequence from %d to %d",
-			item.ID,
-			identity.Sequence,
-			item.Sequence,
-		)
+	if semanticCellItemEqual(current.item, item) {
+		return current
 	}
-	if item.Kind != identity.Kind {
-		return nil, fmt.Errorf(
-			"presentation item %q changed stable kind from %q to %q",
-			item.ID,
-			identity.Kind,
-			item.Kind,
-		)
-	}
-	if item.TurnID != current.item.TurnID {
-		return nil, fmt.Errorf(
-			"presentation item %q changed stable turn from %q to %q",
-			item.ID,
-			current.item.TurnID,
-			item.TurnID,
-		)
-	}
-	if item.Revision == identity.Revision {
-		return current, nil
-	}
-	return newPresentationCell(item), nil
+	return newPresentationCell(item)
+}
+
+func semanticCellItemEqual(left, right frontend.PresentationItem) bool {
+	return left.ID == right.ID && left.TurnID == right.TurnID && left.Sequence == right.Sequence &&
+		left.Revision == right.Revision && left.Kind == right.Kind && left.Lifecycle == right.Lifecycle &&
+		left.Duration == right.Duration && reflect.DeepEqual(left.Message, right.Message) &&
+		reflect.DeepEqual(left.Tool, right.Tool) && reflect.DeepEqual(left.Plan, right.Plan)
 }
 
 func validateSemanticCellItem(item frontend.PresentationItem) error {

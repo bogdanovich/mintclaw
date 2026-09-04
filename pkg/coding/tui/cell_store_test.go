@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
@@ -92,26 +93,6 @@ func TestSemanticCellStoreRejectsAmbiguousSnapshotsAtomically(t *testing.T) {
 			},
 		},
 		{
-			name: "changed stable sequence",
-			items: []frontend.PresentationItem{
-				semanticMessageItem("assistant-1", 2, 3, frontend.PresentationActive, "moved"),
-			},
-		},
-		{
-			name: "changed stable kind",
-			items: []frontend.PresentationItem{
-				semanticToolItem("assistant-1", 1, 3, frontend.PresentationActive, frontend.ToolRunning),
-			},
-		},
-		{
-			name: "changed stable turn",
-			items: func() []frontend.PresentationItem {
-				changed := semanticMessageItem("assistant-1", 1, 3, frontend.PresentationActive, "moved")
-				changed.TurnID = "turn-2"
-				return []frontend.PresentationItem{changed}
-			}(),
-		},
-		{
 			name: "unordered sequence",
 			items: []frontend.PresentationItem{
 				semanticToolItem("tool-2", 2, 1, frontend.PresentationCompleted, frontend.ToolSucceeded),
@@ -138,6 +119,24 @@ func TestSemanticCellStoreRejectsAmbiguousSnapshotsAtomically(t *testing.T) {
 				t.Fatalf("failed reconcile mutated original store: %+v", store)
 			}
 		})
+	}
+}
+
+func TestSemanticCellStoreRebuildsEqualRevisionWithDifferentAuthoritativeContent(t *testing.T) {
+	item := semanticMessageItem("assistant-1", 1, 3, frontend.PresentationActive, "canceled value")
+	store, err := newSemanticCellStore([]frontend.PresentationItem{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := store.ordered[0]
+	item.Message.Text = "fallback value"
+	store, err = reconcileSemanticCellStore(store, []frontend.PresentationItem{item})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.ordered[0] == previous || store.ordered[0].item.Message.Text != "fallback value" ||
+		previous.item.Message.Text != "canceled value" {
+		t.Fatalf("authoritative replacement failed: previous=%+v next=%+v", previous.item, store.ordered[0].item)
 	}
 }
 
@@ -274,6 +273,73 @@ func TestModelSemanticCellsAcceptProjectorStreamRollback(t *testing.T) {
 		model.cells.ordered[0].item.Message.Text != "committed value" {
 		t.Fatalf("rollback semantic cells = %+v, provisional revision=%d", model.cells, provisionalRevision)
 	}
+}
+
+func TestModelSemanticCellsAcceptCoalescedStreamRemovalAndFallback(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = startModelSubscription(t, model)
+	newStream := func() bus.Streamer {
+		streamer, accepted := frontend.NewStreamDelegate(projector, "thread-1").GetStreamer(
+			t.Context(),
+			"coding",
+			"thread-1",
+			"thread-1",
+			"",
+			runtimeevents.NewTraceScope("/repo", "turn-1"),
+		)
+		if !accepted {
+			t.Fatal("matching stream was rejected")
+		}
+		return streamer
+	}
+	canceled := newStream()
+	for _, value := range []string{"canceled one", "canceled two", "canceled value"} {
+		if err := canceled.Update(t.Context(), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	canceledSnapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.installSnapshot(canceledSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	previous := model.cells.ordered[0]
+	canceled.Cancel(t.Context())
+
+	fallback := newStream()
+	for _, value := range []string{"fallback one", "fallback two", "fallback value"} {
+		if err := fallback.Update(t.Context(), value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fallbackSnapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, command := model.Update(SnapshotMsg{Snapshot: fallbackSnapshot})
+	model, ok := updated.(*Model)
+	if !ok {
+		t.Fatalf("updated model = %T", updated)
+	}
+	if model.err != nil || command == nil {
+		t.Fatalf("coalesced fallback error=%v next-subscription=%v", model.err, command)
+	}
+	if len(model.cells.ordered) != 1 || model.cells.ordered[0] == previous ||
+		model.cells.ordered[0].Identity().Sequence == previous.Identity().Sequence ||
+		model.cells.ordered[0].Identity().Revision != previous.Identity().Revision ||
+		model.cells.ordered[0].item.Message.Text != "fallback value" {
+		t.Fatalf("coalesced fallback cells=%+v previous=%+v", model.cells, previous.item)
+	}
+	fallback.Cancel(t.Context())
 }
 
 func TestCellRenderContextValidation(t *testing.T) {
