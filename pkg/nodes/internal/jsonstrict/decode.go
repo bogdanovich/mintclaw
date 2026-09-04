@@ -200,8 +200,8 @@ func normalizeNumberV2(number json.Number) (json.Number, error) {
 	scale := big.NewInt(int64(-len(parts[3]) + trailingZeros))
 	if parts[4] != "" {
 		parsedExponent, ok := new(big.Int).SetString(parts[4], 10)
-		if !ok || !canonicalExponentInRange(parsedExponent) {
-			return "", fmt.Errorf("JSON number exponent %q is outside bounds", parts[4])
+		if !ok {
+			return "", fmt.Errorf("invalid JSON number exponent %q", parts[4])
 		}
 		scale.Add(scale, parsedExponent)
 	}

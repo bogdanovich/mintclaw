@@ -74,11 +74,13 @@ func TestCanonicalV2UsesPlainSyntaxForMathematicalIntegers(t *testing.T) {
 
 func TestCanonicalV2NormalizesFractions(t *testing.T) {
 	tests := map[string]string{
-		`{"value":1.25}`:     `{"value":1.25}`,
-		`{"value":125e-2}`:   `{"value":1.25}`,
-		`{"value":0.001}`:    `{"value":1e-3}`,
-		`{"value":1e-3}`:     `{"value":1e-3}`,
-		`{"value":123.4500}`: `{"value":1.2345e2}`,
+		`{"value":1.25}`:        `{"value":1.25}`,
+		`{"value":125e-2}`:      `{"value":1.25}`,
+		`{"value":0.001}`:       `{"value":1e-3}`,
+		`{"value":1e-3}`:        `{"value":1e-3}`,
+		`{"value":123.4500}`:    `{"value":1.2345e2}`,
+		`{"value":1e-1000000}`:  `{"value":1e-1000000}`,
+		`{"value":10e-1000001}`: `{"value":1e-1000000}`,
 	}
 	for input, want := range tests {
 		got, err := CanonicalV2([]byte(input))
@@ -95,6 +97,7 @@ func TestCanonicalV2RejectsNumbersOutsideBounds(t *testing.T) {
 	inputs := []string{
 		`{"value":1e4096}`,
 		`{"value":1e1000001}`,
+		`{"value":1e-1000001}`,
 		`{"value":0.` + strings.Repeat("1", maxCanonicalSignificantDigits+1) + `}`,
 	}
 	for _, input := range inputs {
