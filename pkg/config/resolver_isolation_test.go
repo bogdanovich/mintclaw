@@ -52,10 +52,18 @@ func TestRepositorySaveResolvesFileReferencesAgainstRepository(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "shared.key"), []byte("saved-secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "registry.key"), []byte("registry-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := DefaultConfig()
 	cfg.ModelList[0].APIKeys = SimpleSecureStrings("placeholder")
 	cfg.ModelList[0].APIKeys[0].Set("file://shared.key")
+	cfg.Tools.Skills.Registries.Set("custom", SkillRegistryConfig{
+		Enabled:   true,
+		BaseURL:   "https://skills.example.com",
+		AuthToken: *NewSecureString("file://registry.key"),
+	})
 	snapshot, err := NewRepository(configPath).Save(cfg)
 	if err != nil {
 		t.Fatalf("Repository.Save() error = %v", err)
@@ -66,12 +74,55 @@ func TestRepositorySaveResolvesFileReferencesAgainstRepository(t *testing.T) {
 	if got := cfg.ModelList[0].APIKey(); got != "file://shared.key" {
 		t.Fatalf("Repository.Save() mutated caller key to %q", got)
 	}
+	savedRegistry, exists := snapshot.Config.Tools.Skills.Registries.Get("custom")
+	if !exists || savedRegistry.AuthToken.String() != "registry-secret" {
+		t.Fatalf("saved registry = %#v, want resolved registry token", savedRegistry)
+	}
 	security, err := os.ReadFile(filepath.Join(dir, SecurityConfigFile))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(security), "file://shared.key") {
 		t.Fatalf("security config did not preserve file reference:\n%s", security)
+	}
+	if !strings.Contains(string(security), "file://registry.key") {
+		t.Fatalf("security config did not preserve registry file reference:\n%s", security)
+	}
+}
+
+func TestRepositorySaveValidatesReconstructedSnapshotBeforeCommit(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	repository := NewRepository(configPath)
+	if _, err := repository.Save(DefaultConfig()); err != nil {
+		t.Fatalf("save baseline: %v", err)
+	}
+	publicBefore, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	securityPath := filepath.Join(dir, SecurityConfigFile)
+	securityBefore, err := os.ReadFile(securityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := DefaultConfig()
+	invalid.Tools.RequestUserInput.DefaultTimeoutSeconds = 59
+	if _, err = repository.Save(invalid); err == nil ||
+		!strings.Contains(err.Error(), "default_timeout_seconds") {
+		t.Fatalf("Repository.Save() error = %v, want request_user_input validation error", err)
+	}
+	publicAfter, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	securityAfter, err := os.ReadFile(securityPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(publicBefore, publicAfter) || !bytes.Equal(securityBefore, securityAfter) {
+		t.Fatal("failed snapshot validation changed the durable config pair")
 	}
 }
 

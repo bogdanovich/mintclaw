@@ -385,7 +385,7 @@ func (c *SkillRegistryConfig) UnmarshalYAML(value *yaml.Node) error {
 
 func (c SkillRegistryConfig) MarshalYAML() (any, error) {
 	m := map[string]any{}
-	if c.AuthToken.String() != "" {
+	if !c.AuthToken.IsZero() {
 		m["auth_token"] = c.AuthToken
 	}
 	return m, nil
@@ -466,7 +466,7 @@ func (v SkillsRegistriesConfig) MarshalYAML() (any, error) {
 		if strings.TrimSpace(name) == "" || registry == nil {
 			continue
 		}
-		if registry.AuthToken.String() == "" {
+		if registry.AuthToken.IsZero() {
 			continue
 		}
 		mm[name] = onlySecureRegistryData{

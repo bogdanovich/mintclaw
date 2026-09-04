@@ -239,11 +239,9 @@ func (r *Repository) saveLocked(cfg *Config) (Snapshot, error) {
 	if err = mergeSecurityConfig(snapshotConfig, documents.security, securityPath(r.path), nil); err != nil {
 		return Snapshot{}, fmt.Errorf("decode saved security config: %w", err)
 	}
-	if err = initChannelList(snapshotConfig.Channels, false); err != nil {
-		return Snapshot{}, fmt.Errorf("initialize saved channels: %w", err)
-	}
-	if err = resolveConfigSecrets(snapshotConfig, credential.NewResolver(filepath.Dir(r.path))); err != nil {
-		return Snapshot{}, fmt.Errorf("resolve saved credentials: %w", err)
+	resolver := credential.NewResolver(filepath.Dir(r.path))
+	if err = finalizeLoadedConfig(snapshotConfig, resolver, false); err != nil {
+		return Snapshot{}, fmt.Errorf("finalize saved config: %w", err)
 	}
 	documents.config = snapshotConfig
 	return r.saveDocumentsLocked(documents)
