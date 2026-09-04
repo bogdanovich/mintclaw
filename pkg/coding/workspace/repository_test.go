@@ -347,7 +347,7 @@ func TestRepositoryDiffSupportsLocalBaseAndCommitTargets(t *testing.T) {
 	}
 	baseResult := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetBase, Ref: base})
 	if baseResult.ResolvedRevision != base || baseResult.MergeBase != base || baseResult.UnavailableReason != "" ||
-		baseResult.EvidenceGeneration != "" || baseResult.BaselineID != "" || baseResult.Provenance != nil ||
+		baseResult.EvidenceGeneration == "" || baseResult.BaselineID != "" || baseResult.Provenance != nil ||
 		!hasDiffLine(requireDiffFile(t, baseResult, "tracked.txt"), "addition", 3, "working") {
 		t.Fatalf("Diff(base) = %#v", baseResult)
 	}

@@ -36,6 +36,48 @@ type workspaceRefreshRuntime struct {
 	refreshErr error
 }
 
+type blockingWorkspaceRefreshRuntime struct {
+	*blockingRuntime
+	statusStarted  chan struct{}
+	statusRelease  chan struct{}
+	refreshStarted chan struct{}
+	refreshRelease chan struct{}
+}
+
+func (runtime *blockingWorkspaceRefreshRuntime) RepositoryStatus(
+	ctx context.Context,
+) (codingworkspace.StatusResult, error) {
+	if runtime.statusStarted == nil {
+		return codingworkspace.StatusResult{}, nil
+	}
+	runtime.statusStarted <- struct{}{}
+	select {
+	case <-runtime.statusRelease:
+		return codingworkspace.StatusResult{}, nil
+	case <-ctx.Done():
+		return codingworkspace.StatusResult{}, ctx.Err()
+	}
+}
+
+func (*blockingWorkspaceRefreshRuntime) RepositoryDiff(
+	context.Context,
+	codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	return codingworkspace.DiffResult{}, nil
+}
+
+func (runtime *blockingWorkspaceRefreshRuntime) RefreshWorkspaceEvidence(
+	ctx context.Context,
+) (codingworkspace.StatusResult, error) {
+	runtime.refreshStarted <- struct{}{}
+	select {
+	case <-runtime.refreshRelease:
+		return codingworkspace.StatusResult{SchemaVersion: codingworkspace.RepositoryStatusSchemaV1}, nil
+	case <-ctx.Done():
+		return codingworkspace.StatusResult{}, ctx.Err()
+	}
+}
+
 type repositoryEvidenceRuntime struct {
 	*blockingRuntime
 	target codingworkspace.DiffTarget
@@ -577,6 +619,98 @@ func TestWorkspaceRefreshIsSerializedAndOptional(t *testing.T) {
 		t.Fatalf("unsupported refresh error = %v", err)
 	}
 	if err := unsupported.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkspaceRefreshExcludesTurnAndCompactionWhileActive(t *testing.T) {
+	runtime := &blockingWorkspaceRefreshRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		refreshStarted:  make(chan struct{}, 1),
+		refreshRelease:  make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	refreshErr := make(chan error, 1)
+	go func() { refreshErr <- controller.RefreshWorkspace(t.Context()) }()
+	<-runtime.refreshStarted
+	if err := controller.Submit(
+		t.Context(),
+		frontend.TurnInput{Text: "work"},
+	); !errors.Is(
+		err,
+		ErrWorkspaceRefreshActive,
+	) {
+		t.Fatalf("Submit() during workspace refresh error = %v", err)
+	}
+	if err := controller.Compact(t.Context()); !errors.Is(err, ErrWorkspaceRefreshActive) {
+		t.Fatalf("Compact() during workspace refresh error = %v", err)
+	}
+	close(runtime.refreshRelease)
+	if err := <-refreshErr; err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "after refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.HardCancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueuedWorkspaceRefreshExcludesLaterTurn(t *testing.T) {
+	runtime := &blockingWorkspaceRefreshRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		statusStarted:   make(chan struct{}, 1),
+		statusRelease:   make(chan struct{}),
+		refreshStarted:  make(chan struct{}, 1),
+		refreshRelease:  make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	statusErr := make(chan error, 1)
+	go func() {
+		_, err := controller.RepositoryStatus(t.Context())
+		statusErr <- err
+	}()
+	<-runtime.statusStarted
+	refreshReply := make(chan error, 1)
+	if err := controller.enqueue(t.Context(), command{
+		kind:  commandRefreshWorkspace,
+		ctx:   t.Context(),
+		reply: refreshReply,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Submit(
+		t.Context(),
+		frontend.TurnInput{Text: "work"},
+	); !errors.Is(
+		err,
+		ErrWorkspaceRefreshActive,
+	) {
+		t.Fatalf("Submit() with queued workspace refresh error = %v", err)
+	}
+	close(runtime.statusRelease)
+	if err := <-statusErr; err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.refreshStarted
+	if err := controller.Submit(
+		t.Context(),
+		frontend.TurnInput{Text: "still blocked"},
+	); !errors.Is(
+		err,
+		ErrWorkspaceRefreshActive,
+	) {
+		t.Fatalf("Submit() with active queued workspace refresh error = %v", err)
+	}
+	close(runtime.refreshRelease)
+	if err := <-refreshReply; err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }

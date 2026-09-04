@@ -71,7 +71,7 @@ func TestRepositoryEvidenceUpdatesDoNotAliasNestedState(t *testing.T) {
 	}
 }
 
-func TestRepositoryStatusAdvanceClearsOnlyObsoleteCurrentDiff(t *testing.T) {
+func TestRepositoryStatusAdvanceClearsObsoleteMutableDiff(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	before := codingworkspace.Snapshot{ProjectRoot: "/repo", CWD: "/repo"}
 	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{Snapshot: before})
@@ -97,6 +97,27 @@ func TestRepositoryStatusAdvanceClearsOnlyObsoleteCurrentDiff(t *testing.T) {
 	})
 	if snapshot := snapshotForTest(t, projector); snapshot.RepositoryDiff != nil {
 		t.Fatalf("content-stale current diff was retained = %#v", snapshot.RepositoryDiff)
+	}
+	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{
+		Target:     codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase, Ref: "main"},
+		Generation: before.Identity(),
+	})
+	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{Snapshot: after})
+	if snapshot := snapshotForTest(t, projector); snapshot.RepositoryDiff != nil {
+		t.Fatalf("obsolete base diff was retained = %#v", snapshot.RepositoryDiff)
+	}
+	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{
+		Target:     codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase, Ref: "main"},
+		Generation: after.Identity(), EvidenceGeneration: "old-base-content",
+	})
+	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{
+		Snapshot: after,
+		Provenance: &codingworkspace.ProvenanceResult{
+			CurrentEvidenceGeneration: "new-base-content",
+		},
+	})
+	if snapshot := snapshotForTest(t, projector); snapshot.RepositoryDiff != nil {
+		t.Fatalf("content-stale base diff was retained = %#v", snapshot.RepositoryDiff)
 	}
 
 	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{

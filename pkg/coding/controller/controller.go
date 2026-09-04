@@ -16,12 +16,13 @@ import (
 )
 
 var (
-	ErrClosed           = errors.New("coding controller is closed")
-	ErrTurnActive       = errors.New("coding turn is active")
-	ErrCompactionActive = errors.New("coding compaction is active")
-	ErrNoActiveTurn     = errors.New("no coding turn is active")
-	ErrUnsupported      = frontend.ErrCommandUnsupported
-	ErrHardCanceled     = errors.New("coding turn was hard-canceled")
+	ErrClosed                 = errors.New("coding controller is closed")
+	ErrTurnActive             = errors.New("coding turn is active")
+	ErrCompactionActive       = errors.New("coding compaction is active")
+	ErrWorkspaceRefreshActive = errors.New("coding workspace refresh is active")
+	ErrNoActiveTurn           = errors.New("no coding turn is active")
+	ErrUnsupported            = frontend.ErrCommandUnsupported
+	ErrHardCanceled           = errors.New("coding turn was hard-canceled")
 )
 
 // Runtime is the single-writer backend owned by a Controller. RunTurn and
@@ -362,6 +363,7 @@ func (c *Controller) coordinate() {
 	var operationCancel context.CancelCauseFunc
 	var activeEvidence *evidenceOperation
 	var evidenceQueue []evidenceOperation
+	var workspaceRefreshPending int
 	var nextEvidenceID uint64
 	var closeReplies []chan error
 	var closeErr error
@@ -381,18 +383,28 @@ func (c *Controller) coordinate() {
 	}
 
 	startNextEvidence := func() {
-		if closing || activeEvidence != nil || len(evidenceQueue) == 0 {
-			return
+		for !closing && activeEvidence == nil && len(evidenceQueue) != 0 {
+			operation := evidenceQueue[0]
+			evidenceQueue = evidenceQueue[1:]
+			if err := operation.ctx.Err(); err != nil {
+				operation.cancel(context.Canceled)
+				if operation.kind == operationWorkspaceRefresh {
+					workspaceRefreshPending--
+				}
+				operation.request.replyError(err)
+				continue
+			}
+			activeEvidence = &operation
+			go c.runEvidence(operation.ctx, operation.id, operation.kind, operation.request)
 		}
-		operation := evidenceQueue[0]
-		evidenceQueue = evidenceQueue[1:]
-		activeEvidence = &operation
-		go c.runEvidence(operation.ctx, operation.id, operation.kind, operation.request)
 	}
 
 	admitEvidence := func(kind operationKind, request command) {
 		nextEvidenceID++
 		operationCtx, cancel := context.WithCancelCause(request.ctx)
+		if kind == operationWorkspaceRefresh {
+			workspaceRefreshPending++
+		}
 		evidenceQueue = append(evidenceQueue, evidenceOperation{
 			id:      nextEvidenceID,
 			kind:    kind,
@@ -415,6 +427,9 @@ func (c *Controller) coordinate() {
 			}
 			operation.cancel(context.Canceled)
 			activeEvidence = nil
+			if operation.kind == operationWorkspaceRefresh {
+				workspaceRefreshPending--
+			}
 			if result.err == nil {
 				switch result.kind {
 				case operationWorkspaceRefresh, operationRepositoryStatus:
@@ -460,6 +475,8 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrTurnActive
 				case compacting:
 					request.reply <- ErrCompactionActive
+				case workspaceRefreshPending != 0:
+					request.reply <- ErrWorkspaceRefreshActive
 				default:
 					active = true
 					operationCtx, cancel := context.WithCancelCause(rootCtx)
@@ -507,6 +524,8 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrTurnActive
 				case compacting:
 					request.reply <- ErrCompactionActive
+				case workspaceRefreshPending != 0:
+					request.reply <- ErrWorkspaceRefreshActive
 				default:
 					compacting = true
 					operationCtx, cancel := context.WithCancelCause(rootCtx)

@@ -737,9 +737,8 @@ func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) {
 func (p *Projector) RepositoryStatusUpdated(status codingworkspace.StatusResult) {
 	p.mutate(func(state *ThreadSnapshot) {
 		if state.RepositoryDiff != nil &&
-			(state.RepositoryDiff.Target.Kind == "" ||
-				state.RepositoryDiff.Target.Kind == codingworkspace.DiffTargetCurrent) &&
-			!currentDiffMatchesStatus(*state.RepositoryDiff, status) {
+			state.RepositoryDiff.Target.Kind != codingworkspace.DiffTargetCommit &&
+			!mutableDiffMatchesStatus(*state.RepositoryDiff, status) {
 			state.RepositoryDiff = nil
 		}
 		copy := cloneRepositoryStatus(status)
@@ -749,7 +748,7 @@ func (p *Projector) RepositoryStatusUpdated(status codingworkspace.StatusResult)
 	})
 }
 
-func currentDiffMatchesStatus(
+func mutableDiffMatchesStatus(
 	diff codingworkspace.DiffResult,
 	status codingworkspace.StatusResult,
 ) bool {

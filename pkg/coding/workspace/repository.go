@@ -188,7 +188,8 @@ func (repository *Repository) diff(ctx context.Context, target DiffTarget) DiffR
 	commandCtx, cancel := context.WithTimeout(contextOrBackground(ctx), repository.limits.Timeout)
 	defer cancel()
 	evidenceWarning := ""
-	if repository.baseline != nil && result.Target.Kind == DiffTargetCurrent {
+	if repository.baseline != nil &&
+		(result.Target.Kind == DiffTargetCurrent || result.Target.Kind == DiffTargetBase) {
 		observation, err := repository.captureBaseline(commandCtx, BaselineRequest{
 			ProjectKey: repository.baseline.ProjectKey,
 			CapturedAt: time.Now().UTC(),
