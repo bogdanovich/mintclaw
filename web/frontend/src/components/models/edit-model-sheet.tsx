@@ -38,10 +38,14 @@ import { refreshGatewayState } from "@/store/gateway"
 
 import { FetchModelsDialog } from "./fetch-models-dialog"
 import {
-  getEffectiveAPIBase,
-  getSubmittedAPIBase,
-  normalizeApiBase,
-} from "./model-provider-form-shared"
+  EMPTY_MODEL_FORM,
+  type ModelFormState,
+  modelToForm,
+  projectModelForm,
+  transitionModelProvider,
+  validateModelForm,
+} from "./model-form"
+import { getEffectiveAPIBase } from "./model-provider-form-shared"
 import { type FieldValidation, validateModelField } from "./model-validation"
 import { ProviderCombobox } from "./provider-combobox"
 import {
@@ -55,56 +59,12 @@ import {
 } from "./provider-registry"
 import { TestModelDialog } from "./test-model-dialog"
 
-interface EditForm {
-  provider: string
-  modelId: string
-  apiKey: string
-  apiBase: string
-  proxy: string
-  authMethod: string
-  connectMode: string
-  workspace: string
-  rpm: string
-  maxTokensField: string
-  requestTimeout: string
-  thinkingLevel: string
-  toolSchemaTransform: string
-  streamingEnabled: boolean
-  extraBody: string
-  customHeaders: string
-}
-
 interface EditModelSheetProps {
   model: ModelInfo | null
   open: boolean
   onClose: () => void
   onSaved: () => void
   providerOptions?: ModelProviderOption[]
-}
-
-function buildInitialEditForm(model: ModelInfo): EditForm {
-  return {
-    provider: getCanonicalProviderKey(model.provider),
-    modelId: model.model,
-    apiKey: "",
-    apiBase: model.api_base ?? "",
-    proxy: model.proxy ?? "",
-    authMethod: model.auth_method ?? "",
-    connectMode: model.connect_mode ?? "",
-    workspace: model.workspace ?? "",
-    rpm: model.rpm ? String(model.rpm) : "",
-    maxTokensField: model.max_tokens_field ?? "",
-    requestTimeout: model.request_timeout ? String(model.request_timeout) : "",
-    thinkingLevel: model.thinking_level ?? "",
-    toolSchemaTransform: model.tool_schema_transform ?? "",
-    streamingEnabled: model.streaming?.enabled === true,
-    extraBody: model.extra_body
-      ? JSON.stringify(model.extra_body, null, 2)
-      : "",
-    customHeaders: model.custom_headers
-      ? JSON.stringify(model.custom_headers, null, 2)
-      : "",
-  }
 }
 
 export function EditModelSheet({
@@ -115,24 +75,7 @@ export function EditModelSheet({
   providerOptions,
 }: EditModelSheetProps) {
   const { t } = useTranslation()
-  const [form, setForm] = useState<EditForm>({
-    provider: "",
-    modelId: "",
-    apiKey: "",
-    apiBase: "",
-    proxy: "",
-    authMethod: "",
-    connectMode: "",
-    workspace: "",
-    rpm: "",
-    maxTokensField: "",
-    requestTimeout: "",
-    thinkingLevel: "",
-    toolSchemaTransform: "",
-    streamingEnabled: false,
-    extraBody: "",
-    customHeaders: "",
-  })
+  const [form, setForm] = useState<ModelFormState>(EMPTY_MODEL_FORM)
   const [saving, setSaving] = useState(false)
   const [setAsDefault, setSetAsDefault] = useState(false)
   const [error, setError] = useState("")
@@ -146,7 +89,7 @@ export function EditModelSheet({
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const providerMap = getProviderCatalogMap(providerOptions)
 
-  const initialForm = model ? buildInitialEditForm(model) : null
+  const initialForm = model ? modelToForm(model, providerOptions) : null
   const isDirty =
     model != null &&
     (JSON.stringify(form) !== JSON.stringify(initialForm) ||
@@ -154,7 +97,7 @@ export function EditModelSheet({
 
   useEffect(() => {
     if (model) {
-      setForm(buildInitialEditForm(model))
+      setForm(modelToForm(model, providerOptions))
       setSetAsDefault(model.is_default)
       setError("")
       setModelValidation(null)
@@ -186,7 +129,7 @@ export function EditModelSheet({
   }, [model, providerOptions])
 
   const setField =
-    (key: keyof EditForm) =>
+    (key: keyof ModelFormState) =>
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       if (error) setError("")
       setForm((f) => ({ ...f, [key]: e.target.value }))
@@ -215,44 +158,7 @@ export function EditModelSheet({
 
   const handleProviderChange = (provider: string) => {
     if (error) setError("")
-    setForm((f) => {
-      const previousOption = getProviderCatalogEntry(
-        f.provider,
-        providerOptions,
-      )
-      const nextOption = getProviderCatalogEntry(provider, providerOptions)
-      const previousDefaultBase = normalizeApiBase(
-        getProviderDefaultAPIBase(f.provider, providerOptions),
-      )
-      const nextDefaultBase = normalizeApiBase(
-        getProviderDefaultAPIBase(provider, providerOptions),
-      )
-      const currentApiBase = normalizeApiBase(f.apiBase)
-      let authMethod = f.authMethod
-      let apiBase = f.apiBase
-      if (nextOption?.authMethodLocked) {
-        authMethod = nextOption.defaultAuthMethod ?? ""
-      } else if (
-        previousOption?.authMethodLocked &&
-        f.authMethod === (previousOption.defaultAuthMethod ?? "")
-      ) {
-        authMethod = ""
-      }
-      if (
-        currentApiBase &&
-        previousDefaultBase &&
-        currentApiBase === previousDefaultBase &&
-        currentApiBase !== nextDefaultBase
-      ) {
-        apiBase = ""
-      }
-      return {
-        ...f,
-        provider: getCanonicalProviderKey(provider, providerOptions),
-        apiBase,
-        authMethod,
-      }
-    })
+    setForm((form) => transitionModelProvider(form, provider, providerOptions))
     if (form.modelId) {
       debouncedValidateModel(form.modelId, provider)
     }
@@ -315,79 +221,41 @@ export function EditModelSheet({
     form.apiBase,
     providerOptions,
   )
-  const submittedApiBase = getSubmittedAPIBase(form.apiBase)
 
   const handleSave = async () => {
     if (!model) return
-    if (!providerDef) {
+    const validation = validateModelForm(form, providerOptions, modelValidation)
+    if (validation.provider) {
       setError(t("models.field.providerInvalid"))
       return
     }
-    if (!form.modelId.trim()) {
+    if (validation.modelId === "required") {
       setError(t("models.add.errorRequired"))
       return
     }
-    if (modelValidation?.level === "error") return
+    if (validation.modelId === "invalid") return
 
-    let extraBody: Record<string, unknown> | undefined
-    let customHeaders: Record<string, string> | undefined
-    try {
-      if (form.extraBody.trim()) {
-        extraBody = JSON.parse(form.extraBody.trim())
-      } else {
-        extraBody = {}
-      }
-    } catch {
-      setError(
-        t("models.field.extraBody") + ": " + t("models.field.invalidJson"),
-      )
-      return
-    }
-    try {
-      if (form.customHeaders.trim()) {
-        customHeaders = JSON.parse(form.customHeaders.trim())
-      } else {
-        customHeaders = {}
-      }
-    } catch {
-      setError(
-        t("models.field.customHeaders") + ": " + t("models.field.invalidJson"),
-      )
+    const projection = projectModelForm(
+      form,
+      providerOptions,
+      model.streaming?.enabled,
+    )
+    if (!projection.ok) {
+      const label =
+        projection.field === "extraBody"
+          ? t("models.field.extraBody")
+          : t("models.field.customHeaders")
+      setError(label + ": " + t("models.field.invalidJson"))
       return
     }
 
     setSaving(true)
     setError("")
     try {
-      const modelId = form.modelId.trim()
-      const provider = canonicalProvider
-      const streaming =
-        model.streaming?.enabled === true || form.streamingEnabled
-          ? { enabled: form.streamingEnabled }
-          : undefined
       await updateModel(model.index, {
         model_name: model.model_name,
-        provider: provider,
-        model: modelId,
         enabled: model.enabled,
-        api_base: submittedApiBase,
-        api_key: form.apiKey.trim() || undefined,
-        proxy: form.proxy.trim() || undefined,
-        auth_method: authMethodLocked
-          ? defaultAuthMethod || undefined
-          : form.authMethod.trim() || undefined,
-        connect_mode: form.connectMode.trim() || undefined,
-        workspace: form.workspace.trim() || undefined,
-        rpm: form.rpm ? Number(form.rpm) : undefined,
-        max_tokens_field: form.maxTokensField.trim() || undefined,
-        request_timeout: form.requestTimeout
-          ? Number(form.requestTimeout)
-          : undefined,
-        thinking_level: form.thinkingLevel.trim() || undefined,
-        tool_schema_transform: form.toolSchemaTransform.trim() || undefined,
-        streaming,
-        extra_body: extraBody,
-        custom_headers: customHeaders,
+        ...projection.value,
       })
       if (setAsDefault && !model.is_default) {
         await setDefaultModel(model.model_name)

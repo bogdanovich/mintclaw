@@ -34,6 +34,31 @@ export interface ModelInfo {
   default_model_allowed?: boolean
 }
 
+// ModelSaveRequest is the write contract shared by the add and edit endpoints.
+// Keep response-only availability and status fields out of mutation payloads.
+export interface ModelSaveRequest {
+  model_name: string
+  provider?: string
+  model: string
+  enabled: boolean
+  api_base?: string
+  api_key?: string
+  proxy?: string
+  auth_method?: string
+  connect_mode?: string
+  workspace?: string
+  rpm?: number
+  max_tokens_field?: string
+  request_timeout?: number
+  thinking_level?: string
+  tool_schema_transform?: string
+  streaming?: {
+    enabled: boolean
+  }
+  extra_body?: Record<string, unknown>
+  custom_headers?: Record<string, string>
+}
+
 export interface ModelProviderOption {
   id: string
   display_name?: string
@@ -86,7 +111,7 @@ export async function getModels(): Promise<ModelsListResponse> {
 }
 
 export async function addModel(
-  model: Omit<Partial<ModelInfo>, "enabled"> & Pick<ModelInfo, "enabled">,
+  model: ModelSaveRequest,
 ): Promise<ModelActionResponse> {
   return request<ModelActionResponse>("/api/models", {
     method: "POST",
@@ -97,7 +122,7 @@ export async function addModel(
 
 export async function updateModel(
   index: number,
-  model: Partial<ModelInfo>,
+  model: ModelSaveRequest,
 ): Promise<ModelActionResponse> {
   return request<ModelActionResponse>(`/api/models/${index}`, {
     method: "PUT",
