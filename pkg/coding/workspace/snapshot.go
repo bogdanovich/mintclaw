@@ -199,6 +199,15 @@ func (observer *Observer) refresh(ctx context.Context, forcePending bool) Snapsh
 	}
 	snapshot := observer.repository.Status(ctx).Snapshot
 	observer.mu.Lock()
+	if ctx != nil && ctx.Err() != nil {
+		if observer.initialized {
+			snapshot = cloneSnapshot(observer.current)
+		} else {
+			snapshot = Snapshot{}
+		}
+		observer.mu.Unlock()
+		return snapshot
+	}
 	observer.current = snapshot
 	observer.initialized = true
 	observer.forcePending = observer.forcePending || forcePending
