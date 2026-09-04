@@ -109,7 +109,6 @@ contain slashes. Examples:
 | `enabled` | Yes for active entries | Sole activation switch. Set it explicitly; credentials and model names do not imply activation. |
 | `proxy` | No | HTTP proxy URL |
 | `auth_method` | No | Authentication method: `oauth`, `token` |
-| `connect_mode` | No | Connection mode for CLI providers: `stdio`, `grpc` |
 | `rpm` | No | Requests per minute limit |
 | `max_tokens_field` | No | Field name for max tokens |
 | `request_timeout` | No | HTTP request timeout in seconds; `<=0` uses default `120s` |

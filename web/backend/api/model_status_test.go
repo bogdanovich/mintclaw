@@ -154,9 +154,8 @@ func TestProbeLocalModelAvailability_GPT4FreeUsesOpenAICompatibleProbe(t *testin
 func TestModelProbeCacheKey_DifferentAPIKeysProduceDifferentKeys(t *testing.T) {
 	base := &config.ModelConfig{
 		ModelName: "local-vllm", Provider: "vllm", Model: "custom-model",
-		APIBase:     "http://127.0.0.1:8000/v1",
-		AuthMethod:  "local",
-		ConnectMode: "",
+		APIBase:    "http://127.0.0.1:8000/v1",
+		AuthMethod: "local",
 	}
 
 	m1 := *base
@@ -191,15 +190,13 @@ func TestModelProbeCacheKey_NormalizesTrailingSlashInAPIBase(t *testing.T) {
 func TestModelProbeCacheKey_IgnoresDisplayAndConnectionFields(t *testing.T) {
 	base := &config.ModelConfig{
 		ModelName: "vllm-one", Provider: "vllm", Model: "custom-model",
-		APIBase:     "http://127.0.0.1:8000/v1",
-		AuthMethod:  "none",
-		ConnectMode: "http",
+		APIBase:    "http://127.0.0.1:8000/v1",
+		AuthMethod: "none",
 	}
 	changed := &config.ModelConfig{
 		ModelName: "vllm-two", Provider: "vllm", Model: "custom-model",
-		APIBase:     "http://127.0.0.1:8000/v1",
-		AuthMethod:  "token",
-		ConnectMode: "ws",
+		APIBase:    "http://127.0.0.1:8000/v1",
+		AuthMethod: "token",
 	}
 
 	k1 := modelProbeCacheKey(base)

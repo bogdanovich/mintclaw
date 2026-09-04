@@ -307,8 +307,6 @@
       "authMethod": "Metoda autentizace",
       "authMethodHint": "Metoda autentizace: oauth, token. Ponechte prázdné pro autentizaci API klíčem.",
       "authMethodManagedHint": "Tento poskytovatel spravuje režim ověřování automaticky.",
-      "connectMode": "Režim připojení",
-      "connectModeHint": "Režim připojení pro CLI-based providery: stdio nebo grpc.",
       "workspace": "Cesta k workspace",
       "workspaceHint": "Pracovní adresář pro CLI-based providery (např. GitHub Copilot).",
       "requestTimeout": "Timeout požadavku (s)",

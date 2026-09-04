@@ -45,7 +45,6 @@ type modelResponse struct {
 	Proxy      string `json:"proxy,omitempty"`
 	AuthMethod string `json:"auth_method,omitempty"`
 	// Advanced fields
-	ConnectMode         string                      `json:"connect_mode,omitempty"`
 	Workspace           string                      `json:"workspace,omitempty"`
 	RPM                 int                         `json:"rpm,omitempty"`
 	MaxTokensField      string                      `json:"max_tokens_field,omitempty"`
@@ -189,7 +188,6 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			APIKey:              maskAPIKey(m.APIKey()),
 			Proxy:               m.Proxy,
 			AuthMethod:          m.AuthMethod,
-			ConnectMode:         m.ConnectMode,
 			Workspace:           m.Workspace,
 			RPM:                 m.RPM,
 			MaxTokensField:      m.MaxTokensField,

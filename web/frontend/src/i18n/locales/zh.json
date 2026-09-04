@@ -309,8 +309,6 @@
       "authMethod": "认证方式",
       "authMethodHint": "认证方式：oauth、token。留空表示使用 API Key 认证。",
       "authMethodManagedHint": "该 Provider 的认证方式由系统自动管理。",
-      "connectMode": "连接模式",
-      "connectModeHint": "CLI 型服务商的连接模式：stdio 或 grpc。",
       "workspace": "工作目录",
       "workspaceHint": "CLI 型服务商的工作目录路径（如 GitHub Copilot）。",
       "requestTimeout": "请求超时（秒）",

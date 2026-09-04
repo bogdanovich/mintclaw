@@ -310,8 +310,6 @@
       "authMethod": "Auth Method",
       "authMethodHint": "Authentication method: oauth, token. Leave blank for API key auth.",
       "authMethodManagedHint": "This provider's auth method is managed by the system.",
-      "connectMode": "Connect Mode",
-      "connectModeHint": "Connection mode for CLI-based providers: stdio or grpc.",
       "workspace": "Workspace Path",
       "workspaceHint": "Working directory for CLI-based providers (e.g. GitHub Copilot).",
       "requestTimeout": "Request Timeout (s)",
