@@ -942,7 +942,7 @@ func testRuntimePlanAtWithOutputLimit(
 ) nodes.ExecutionPlan {
 	t.Helper()
 	catalog := runtime.Catalog()
-	catalogHash, err := catalog.Hash()
+	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -974,7 +974,7 @@ func testRuntimePlanAtWithOutputLimit(
 			t.Fatal("project job runtime test descriptor")
 		}
 	}
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID:     "inv_" + strings.ReplaceAll(command, ".", "_"),
 		IdempotencyKey:   "idem_" + strings.ReplaceAll(command, ".", "_"),
 		NodeID:           runtime.nodeID,

@@ -394,14 +394,14 @@ func (client *Client) connectAndAuthenticate(
 }
 
 func (client *Client) identityProof(challenge nodes.Challenge) (nodes.IdentityProof, error) {
-	if challenge.MinProtocol > nodes.ProtocolV1 || challenge.MaxProtocol < nodes.ProtocolV1 {
+	if challenge.MinProtocol > nodes.ProtocolV2 || challenge.MaxProtocol < nodes.ProtocolV2 {
 		return nodes.IdentityProof{}, ErrIncompatibleGateway
 	}
 	return nodes.NewIdentityProof(
 		client.identity.PrivateKey,
 		challenge.Nonce,
-		nodes.ProtocolV1,
-		nodes.ProtocolV1,
+		nodes.ProtocolV2,
+		nodes.ProtocolV2,
 		client.clientVersion,
 		runtime.GOOS,
 		runtime.GOARCH,
@@ -1251,7 +1251,7 @@ func readChallenge(connection *websocket.Conn) (nodes.Challenge, error) {
 	if nonceErr != nil || len(nonce) != 32 {
 		return nodes.Challenge{}, errors.New("node gateway returned a malformed admission nonce")
 	}
-	if challenge.MinProtocol > nodes.ProtocolV1 || challenge.MaxProtocol < nodes.ProtocolV1 {
+	if challenge.MinProtocol > nodes.ProtocolV2 || challenge.MaxProtocol < nodes.ProtocolV2 {
 		return nodes.Challenge{}, ErrIncompatibleGateway
 	}
 	if challenge.ExpiresAt <= time.Now().Unix() {

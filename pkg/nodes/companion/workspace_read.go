@@ -379,7 +379,7 @@ func workspaceOutputFits(result any, descriptor nodes.CommandDescriptor, outputL
 	if err != nil {
 		return false
 	}
-	_, err = nodes.ValidateInvocationOutput(descriptor, encoded, outputLimit)
+	_, err = nodes.ValidateInvocationOutputForProtocol(nodes.ProtocolV2, descriptor, encoded, outputLimit)
 	return err == nil
 }
 

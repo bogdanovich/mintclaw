@@ -441,7 +441,7 @@ func updateRuntimeFixture(
 		t.Fatal(err)
 	}
 	descriptor := runtimeValue.Catalog().Commands[2]
-	catalogHash, err := runtimeValue.Catalog().Hash()
+	catalogHash, err := runtimeValue.Catalog().HashForProtocol(nodes.ProtocolV2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -449,7 +449,7 @@ func updateRuntimeFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID: "invocation-1", IdempotencyKey: "idempotency-1", NodeID: nodeID,
 		CatalogHash: catalogHash, Command: "node.update.v1", Update: authority,
 		Input: []byte(`{"release":"current"}`), AgentID: "agent-1", SessionID: "session-1",

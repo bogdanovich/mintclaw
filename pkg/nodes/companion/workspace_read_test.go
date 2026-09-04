@@ -174,13 +174,21 @@ func TestWorkspaceReadTransportPreservesDuplicateFileNotFound(t *testing.T) {
 		"start_line":1,
 		"max_lines":10
 	}`)
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
-		InvocationID: "inv_workspace_not_found", IdempotencyKey: "idem_workspace_not_found",
-		NodeID: identity.ID, CatalogHash: registration.Snapshot.CatalogHash,
-		Command: descriptor.Name, Input: input,
-		AgentID: "agent_test", SessionID: "session_test", ActorID: "actor_test",
-		TimeoutSeconds: 5, OutputLimitBytes: 4096,
-	}, descriptor, registration.Snapshot.Executor, registration.Snapshot.PolicyRevision, time.Now(), time.Minute)
+	plan, err := nodes.PrepareExecutionPlanForProtocol(
+		registration.Snapshot.ProtocolVersion,
+		nodes.InvocationRequest{
+			InvocationID: "inv_workspace_not_found", IdempotencyKey: "idem_workspace_not_found",
+			NodeID: identity.ID, CatalogHash: registration.Snapshot.CatalogHash,
+			Command: descriptor.Name, Input: input,
+			AgentID: "agent_test", SessionID: "session_test", ActorID: "actor_test",
+			TimeoutSeconds: 5, OutputLimitBytes: 4096,
+		},
+		descriptor,
+		registration.Snapshot.Executor,
+		registration.Snapshot.PolicyRevision,
+		time.Now(),
+		time.Minute,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
