@@ -950,7 +950,6 @@ func (p *Projector) boundedPlan(plan PlanState) (PlanState, bool) {
 	if len(plan.Steps) == 0 {
 		return PlanState{}, false
 	}
-	plan.CallID = boundPresentationIdentity(plan.CallID)
 	var truncated bool
 	plan.Explanation, truncated = boundText(strings.TrimSpace(plan.Explanation), p.limits.TextBytes)
 	plan.Truncated = plan.Truncated || truncated

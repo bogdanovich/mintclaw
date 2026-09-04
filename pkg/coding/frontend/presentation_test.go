@@ -269,6 +269,39 @@ func TestPlanPresentationPreservesTypedOrderLifecycleAndIdentity(t *testing.T) {
 	}
 }
 
+func TestPlanPresentationNormalizesCallIDOnce(t *testing.T) {
+	digest := sha256.Sum256([]byte("literal"))
+	tests := []struct {
+		name   string
+		callID string
+	}{
+		{name: "long", callID: strings.Repeat("call", 1024)},
+		{name: "invalid UTF-8", callID: string([]byte{0xff, 'a'})},
+		{name: "literal tagged", callID: "~h:" + hex.EncodeToString(digest[:])},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projector := newTestProjector(t, ProjectionLimits{})
+			projector.ToolStarted("turn-1", tt.callID, "update_plan", "")
+			projector.PlanUpdated("turn-1", tt.callID, PlanState{Steps: []PlanStepState{{
+				Step: "Verify", Status: PlanStepInProgress,
+			}}})
+
+			view := snapshotForTest(t, projector)
+			if len(view.Items) != 2 || view.Items[0].Tool == nil || view.Items[1].Plan == nil {
+				t.Fatalf("plan presentation = %+v", view.Items)
+			}
+			if view.Items[1].Plan.CallID != view.Items[0].Tool.CallID {
+				t.Fatalf(
+					"plan call ID %q does not match tool call ID %q",
+					view.Items[1].Plan.CallID,
+					view.Items[0].Tool.CallID,
+				)
+			}
+		})
+	}
+}
+
 func TestPlanPresentationIsSeparatelyBoundedAndRejectsInvalidPlans(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{
 		Tools: 1, Observations: 1, PlanSteps: 2, TextBytes: 32,
