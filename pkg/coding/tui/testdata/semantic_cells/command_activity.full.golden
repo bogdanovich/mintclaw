@@ -1,0 +1,19 @@
+• I’ll inspect the command path before changing it.
+
+• Ran exec [succeeded] · 1.2s
+  exit: 0
+  stdout:
+    frontend tests passed
+
+• Ran exec [succeeded] · 900ms
+  exit: 0
+  stdout:
+    configuration checked
+
+• Background exec [running] · 19s
+  execution: background
+  session: session-1
+  stdout:
+    reviewing package boundaries
+
+• The command path is verified.

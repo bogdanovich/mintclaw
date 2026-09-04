@@ -1,0 +1,407 @@
+[
+  {
+    "name": "command_activity",
+    "width": 120,
+    "theme": "dark",
+    "color_level": "truecolor",
+    "items": [
+      {
+        "id": "commentary-1",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 1,
+        "kind": "assistant_message",
+        "lifecycle": "completed",
+        "message": {
+          "id": "commentary-1",
+          "turn_id": "turn-1",
+          "kind": "assistant",
+          "text": "I’ll inspect the command path before changing it.",
+          "complete": true
+        }
+      },
+      {
+        "id": "command-1",
+        "turn_id": "turn-1",
+        "sequence": 2,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "completed",
+        "duration": 1200000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-1",
+          "name": "exec",
+          "arguments": "fields: command, workdir",
+          "status": "succeeded",
+          "duration": 1200000000,
+          "command": {
+            "stdout": "frontend tests passed",
+            "status": "succeeded",
+            "exit_code": 0
+          }
+        }
+      },
+      {
+        "id": "command-2",
+        "turn_id": "turn-1",
+        "sequence": 3,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "completed",
+        "duration": 900000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-2",
+          "name": "exec",
+          "arguments": "fields: command, workdir",
+          "status": "succeeded",
+          "duration": 900000000,
+          "command": {
+            "stdout": "configuration checked",
+            "status": "succeeded",
+            "exit_code": 0
+          }
+        }
+      },
+      {
+        "id": "command-3",
+        "turn_id": "turn-1",
+        "sequence": 4,
+        "revision": 1,
+        "kind": "tool_call",
+        "lifecycle": "active",
+        "duration": 19000000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-3",
+          "name": "exec",
+          "arguments": "fields: command, wait",
+          "status": "running",
+          "command": {
+            "stdout": "reviewing package boundaries",
+            "status": "running",
+            "session_id": "session-1",
+            "background": true
+          }
+        }
+      },
+      {
+        "id": "final-1",
+        "turn_id": "turn-1",
+        "sequence": 5,
+        "revision": 1,
+        "kind": "assistant_message",
+        "lifecycle": "completed",
+        "message": {
+          "id": "final-1",
+          "turn_id": "turn-1",
+          "kind": "assistant",
+          "text": "The command path is verified.",
+          "complete": true
+        }
+      }
+    ],
+    "expected": [
+      {"id": "commentary-1", "kind": "assistant_message", "lifecycle": "completed", "revision": 1},
+      {"id": "command-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
+      {"id": "command-2", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
+      {"id": "command-3", "kind": "tool_call", "lifecycle": "active", "revision": 1},
+      {"id": "final-1", "kind": "assistant_message", "lifecycle": "completed", "revision": 1}
+    ]
+  },
+  {
+    "name": "status_card",
+    "width": 80,
+    "theme": "dark",
+    "color_level": "ansi256",
+    "items": [
+      {
+        "id": "status-1",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 1,
+        "kind": "tool_message",
+        "lifecycle": "completed",
+        "message": {
+          "id": "status-1",
+          "turn_id": "turn-1",
+          "kind": "tool",
+          "text": "activity idle · branch feature/semantic-cells · context 24%",
+          "complete": true
+        }
+      }
+    ],
+    "expected": [
+      {"id": "status-1", "kind": "tool_message", "lifecycle": "completed", "revision": 1}
+    ]
+  },
+  {
+    "name": "working_and_failure",
+    "width": 80,
+    "theme": "dark",
+    "color_level": "truecolor",
+    "items": [
+      {
+        "id": "commentary-1",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 1,
+        "kind": "assistant_message",
+        "lifecycle": "completed",
+        "message": {
+          "id": "commentary-1",
+          "turn_id": "turn-1",
+          "kind": "assistant",
+          "text": "The first attempt failed; I’m narrowing the retry.",
+          "complete": true
+        }
+      },
+      {
+        "id": "failed-command",
+        "turn_id": "turn-1",
+        "sequence": 2,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "failed",
+        "duration": 3000000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-failed",
+          "name": "exec",
+          "arguments": "fields: command",
+          "status": "failed",
+          "duration": 3000000000,
+          "command": {
+            "stderr": "package test failed",
+            "status": "failed",
+            "exit_code": 1
+          }
+        }
+      },
+      {
+        "id": "retry-command",
+        "turn_id": "turn-1",
+        "sequence": 3,
+        "revision": 1,
+        "kind": "tool_call",
+        "lifecycle": "active",
+        "duration": 9000000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-retry",
+          "name": "exec",
+          "arguments": "fields: command",
+          "status": "running",
+          "command": {
+            "stdout": "running focused retry",
+            "status": "running"
+          }
+        }
+      }
+    ],
+    "expected": [
+      {"id": "commentary-1", "kind": "assistant_message", "lifecycle": "completed", "revision": 1},
+      {"id": "failed-command", "kind": "tool_call", "lifecycle": "failed", "revision": 2},
+      {"id": "retry-command", "kind": "tool_call", "lifecycle": "active", "revision": 1}
+    ]
+  },
+  {
+    "name": "elapsed_working",
+    "width": 40,
+    "theme": "light",
+    "color_level": "ansi16",
+    "items": [
+      {
+        "id": "background-1",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 3,
+        "kind": "tool_call",
+        "lifecycle": "suspended",
+        "duration": 78000000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-background",
+          "name": "exec",
+          "arguments": "fields: session-id",
+          "status": "suspended",
+          "duration": 78000000000,
+          "command": {
+            "stdout": "waiting for reviewer",
+            "status": "running",
+            "session_id": "review-1",
+            "background": true
+          }
+        }
+      }
+    ],
+    "expected": [
+      {"id": "background-1", "kind": "tool_call", "lifecycle": "suspended", "revision": 3}
+    ]
+  },
+  {
+    "name": "commentary_compaction_and_diff",
+    "width": 120,
+    "theme": "light",
+    "color_level": "truecolor",
+    "items": [
+      {
+        "id": "commentary-1",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 1,
+        "kind": "assistant_message",
+        "lifecycle": "completed",
+        "message": {
+          "id": "commentary-1",
+          "turn_id": "turn-1",
+          "kind": "assistant",
+          "text": "I found the ownership boundary and will compact before editing.",
+          "complete": true
+        }
+      },
+      {
+        "id": "compaction-1",
+        "turn_id": "turn-1",
+        "sequence": 2,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "completed",
+        "duration": 2100000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-compact",
+          "name": "compact",
+          "arguments": "fields: reason",
+          "output": "context compacted",
+          "status": "succeeded",
+          "duration": 2100000000
+        }
+      },
+      {
+        "id": "edit-1",
+        "turn_id": "turn-1",
+        "sequence": 3,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "completed",
+        "duration": 800000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-edit",
+          "name": "apply_patch",
+          "arguments": "fields: patch",
+          "status": "succeeded",
+          "duration": 800000000,
+          "write_audit": [
+            {"kind": "file", "target": "pkg/coding/tui/cell.go", "action": "update", "success": true, "tool": "apply_patch"},
+            {"kind": "file", "target": "pkg/coding/tui/cell_test.go", "action": "create", "success": true, "tool": "apply_patch"}
+          ]
+        }
+      }
+    ],
+    "expected": [
+      {"id": "commentary-1", "kind": "assistant_message", "lifecycle": "completed", "revision": 1},
+      {"id": "compaction-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
+      {"id": "edit-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2}
+    ]
+  },
+  {
+    "name": "plan_pending",
+    "width": 80,
+    "theme": "dark",
+    "color_level": "ansi256",
+    "items": [
+      {
+        "id": "plan-1",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 1,
+        "kind": "plan_update",
+        "lifecycle": "completed",
+        "plan": {
+          "call_id": "call-plan-1",
+          "explanation": "Verify the architecture before implementation.",
+          "steps": [
+            {"step": "Inspect the presentation contract", "status": "in_progress"},
+            {"step": "Implement the semantic cells", "status": "pending"},
+            {"step": "Run focused validation", "status": "pending"}
+          ]
+        }
+      }
+    ],
+    "expected": [
+      {"id": "plan-1", "kind": "plan_update", "lifecycle": "completed", "revision": 1}
+    ]
+  },
+  {
+    "name": "plan_progress",
+    "width": 40,
+    "theme": "light",
+    "color_level": "none",
+    "items": [
+      {
+        "id": "plan-1",
+        "turn_id": "turn-1",
+        "sequence": 1,
+        "revision": 2,
+        "kind": "plan_update",
+        "lifecycle": "completed",
+        "plan": {
+          "call_id": "call-plan-1",
+          "explanation": "The contract is stable; implementation is active.",
+          "steps": [
+            {"step": "Inspect the presentation contract", "status": "completed"},
+            {"step": "Implement the semantic cells", "status": "in_progress"},
+            {"step": "Run focused validation", "status": "pending"}
+          ]
+        }
+      },
+      {
+        "id": "command-1",
+        "turn_id": "turn-1",
+        "sequence": 2,
+        "revision": 2,
+        "kind": "tool_call",
+        "lifecycle": "completed",
+        "duration": 2400000000,
+        "tool": {
+          "turn_id": "turn-1",
+          "call_id": "call-test",
+          "name": "exec",
+          "arguments": "fields: command",
+          "status": "succeeded",
+          "duration": 2400000000,
+          "command": {
+            "stdout": "focused tests passed",
+            "status": "succeeded",
+            "exit_code": 0
+          }
+        }
+      },
+      {
+        "id": "plan-2",
+        "turn_id": "turn-1",
+        "sequence": 3,
+        "revision": 1,
+        "kind": "plan_update",
+        "lifecycle": "completed",
+        "plan": {
+          "call_id": "call-plan-2",
+          "explanation": "Implementation and focused validation are complete.",
+          "steps": [
+            {"step": "Inspect the presentation contract", "status": "completed"},
+            {"step": "Implement the semantic cells", "status": "completed"},
+            {"step": "Run focused validation", "status": "completed"}
+          ]
+        }
+      }
+    ],
+    "expected": [
+      {"id": "plan-1", "kind": "plan_update", "lifecycle": "completed", "revision": 2},
+      {"id": "command-1", "kind": "tool_call", "lifecycle": "completed", "revision": 2},
+      {"id": "plan-2", "kind": "plan_update", "lifecycle": "completed", "revision": 1}
+    ]
+  }
+]

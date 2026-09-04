@@ -385,12 +385,12 @@ the open P6.4 Git-review work.
 
 ### TUI.0 — Golden UX fixtures and renderer seam
 
-Status: deferred. PR #1010 implemented this seam before TUI.1 admitted the
-ordered presentation model or TUI.4 admitted a real active-cell store. The
-architecture-simplification O4 packet removes that speculative adapter. A
-later implementation must introduce only the renderer boundary required by
-the admitted semantic items and store, rather than preserve the temporary flat
-transcript through a `legacy` cell.
+Status: implemented after TUI.1 and TUI.2. PR #1010's speculative adapter was
+removed by the architecture-simplification O4 packet because it wrapped the
+temporary flat transcript through a `legacy` cell. The replacement consumes
+authoritative `PresentationItem` values, reconciles them into a disposable
+model-owned semantic-cell store by stable ID/revision, and keeps the renderer
+boundary inactive in the shipped viewport until TUI.4 completes the cutover.
 
 Dependencies: none
 
@@ -500,7 +500,8 @@ Effort: large
 
 Scope:
 
-- Add renderer-neutral committed and active cell state to the TUI model.
+- Extend the renderer-neutral committed and active cell state admitted by
+  TUI.0 into the visible TUI rendering path.
 - Update active cells by stable item ID/revision instead of rebuilding one flat
   transcript string for every output chunk.
 - Cache width-sensitive layout by cell revision, width, theme, and mode.
