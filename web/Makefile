@@ -9,11 +9,9 @@ GO_BUILD_TAGS?=goolm,stdjson
 GOFLAGS?=-v -tags $(GO_BUILD_TAGS)
 GOCACHE?=$(abspath ../.cache/go-build)
 GOMODCACHE?=$(abspath ../.cache/go-mod)
-GOTOOLCHAIN?=local
 export CGO_ENABLED
 export GOCACHE
 export GOMODCACHE
-export GOTOOLCHAIN
 
 # Build variables
 BUILD_DIR=build

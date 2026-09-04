@@ -68,8 +68,9 @@ relationship, the intentional divergence, and the trade-offs behind it.
 
 ### Build the CLI
 
-Prerequisites: Go 1.26+. Node.js 22+ and pnpm 10.33.0+ are needed only for the
-Web launcher.
+Prerequisites: Go 1.26.6+. The default automatic Go toolchain selection can
+install the required patch release. Node.js 22+ and pnpm 10.33.0+ are needed
+only for the Web launcher.
 
 ```bash
 git clone https://github.com/bogdanovich/mintclaw.git
