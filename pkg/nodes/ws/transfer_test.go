@@ -80,6 +80,58 @@ func TestTransferStreamUsesAuthenticatedPeerGeneration(t *testing.T) {
 	}
 }
 
+func TestOpenTransferRejectsRetainedProtocolAfterReconnect(t *testing.T) {
+	for _, transferID := range []string{"file_transfer_1", "job_artifact_transfer_1"} {
+		t.Run(transferID, func(t *testing.T) {
+			hub := NewSessionHub()
+			nodeID := testTransferNodeID()
+			original := newPeer(&transferRecordingConnection{})
+			original.markReady()
+			releaseOriginal, err := hub.ClaimForProtocol(
+				nodeID,
+				nodes.ProtocolV1,
+				original,
+				nil,
+				nil,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replacementConnection := &transferRecordingConnection{}
+			replacement := newPeer(replacementConnection)
+			replacement.markReady()
+			releaseReplacement, err := hub.ClaimForProtocol(
+				nodeID,
+				nodes.ProtocolV2,
+				replacement,
+				nil,
+				nil,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_, _ = releaseOriginal()
+				_, _ = releaseReplacement()
+				_ = hub.Close(context.Background())
+			})
+
+			binding := testTransferBinding()
+			binding.ProtocolVersion = nodes.ProtocolV1
+			binding.TransferID = transferID
+			if _, err = hub.OpenTransfer(t.Context(), nodeID, binding); !errors.Is(
+				err,
+				ErrTransferProtocolMismatch,
+			) {
+				t.Fatalf("OpenTransfer() error = %v, want protocol mismatch", err)
+			}
+			if _, payload := replacementConnection.lastWrite(); len(payload) != 0 {
+				t.Fatalf("protocol-mismatched transfer wrote %d bytes", len(payload))
+			}
+		})
+	}
+}
+
 func TestTransferStreamRejectsBindingAndSequenceChanges(t *testing.T) {
 	t.Parallel()
 	binding := testTransferBinding()
@@ -417,6 +469,65 @@ func TestTransferWriteKeepsExactPeerGenerationStable(t *testing.T) {
 	}
 }
 
+func TestTransferDispatchKeepsExactPeerGenerationStable(t *testing.T) {
+	connection := newGatedTransferConnection()
+	defer connection.release()
+	binding := testTransferBinding()
+	hub, _, stream := openTestTransferStream(t, connection, binding)
+	frame := testTransferFrame(binding, protocol.TransferFramePrepare, 0, []byte(`{"operation":"info"}`))
+	commitStarted := make(chan struct{})
+	allowCommit := make(chan struct{})
+	type sendResult struct {
+		dispatched bool
+		err        error
+	}
+	sent := make(chan sendResult, 1)
+	go func() {
+		dispatched, sendErr := stream.SendAtDispatch(t.Context(), frame, func(write func() error) error {
+			close(commitStarted)
+			<-allowCommit
+			return write()
+		})
+		sent <- sendResult{dispatched: dispatched, err: sendErr}
+	}()
+	<-commitStarted
+
+	replacement := newPeer(&transferRecordingConnection{})
+	replacement.markReady()
+	type claimResult struct {
+		release func() (bool, error)
+		err     error
+	}
+	claimed := make(chan claimResult, 1)
+	go func() {
+		release, claimErr := hub.Claim(testTransferNodeID(), replacement, nil, nil)
+		claimed <- claimResult{release: release, err: claimErr}
+	}()
+	select {
+	case result := <-claimed:
+		t.Fatalf("replacement claimed during durable transfer dispatch: %v", result.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(allowCommit)
+	<-connection.writeStarted
+	select {
+	case result := <-claimed:
+		t.Fatalf("replacement claimed during transfer prepare write: %v", result.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	connection.release()
+	result := <-sent
+	if !result.dispatched || result.err != nil {
+		t.Fatalf("SendAtDispatch() = (dispatched %v, error %v)", result.dispatched, result.err)
+	}
+	claim := <-claimed
+	if claim.err != nil {
+		t.Fatal(claim.err)
+	}
+	defer func() { _, _ = claim.release() }()
+}
+
 func TestTransferDeliverySerializesWithNormalClose(t *testing.T) {
 	t.Parallel()
 	binding := testTransferBinding()
@@ -633,11 +744,12 @@ func waitForFrameQueueLength(
 
 func testTransferBinding() TransferBinding {
 	return TransferBinding{
-		TransferID:     "transfer_1",
-		Direction:      protocol.TransferUpload,
-		PolicyRevision: "files-v1",
-		TotalSize:      7,
-		SHA256:         sha256.Sum256([]byte("payload")),
+		ProtocolVersion: nodes.ProtocolV1,
+		TransferID:      "transfer_1",
+		Direction:       protocol.TransferUpload,
+		PolicyRevision:  "files-v1",
+		TotalSize:       7,
+		SHA256:          sha256.Sum256([]byte("payload")),
 	}
 }
 

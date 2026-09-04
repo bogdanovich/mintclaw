@@ -411,6 +411,7 @@ type nodeBrowserWorker struct {
 	policyRevision    string
 	catalogHash       string
 	catalogRevision   string
+	protocolVersion   int
 	actions           []string
 	tabID             string
 
@@ -1058,7 +1059,8 @@ func (worker *nodeBrowserWorker) stageBrowserArtifact(
 	}
 	transferID := browserNodeStableID("browser_artifact", worker.sessionID, request.InvocationID)
 	binding := nodews.TransferBinding{
-		TransferID: transferID, Direction: protocol.TransferUpload,
+		ProtocolVersion: worker.protocolVersion,
+		TransferID:      transferID, Direction: protocol.TransferUpload,
 		PolicyRevision: worker.profileRevision, TotalSize: uint64(request.Prepared.ArtifactBytes), SHA256: digest,
 	}
 	stream, err := sessions.OpenTransfer(ctx, worker.nodeID, binding)
@@ -1322,7 +1324,8 @@ func (worker *nodeBrowserWorker) receiveBrowserOutput(
 		return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
 	}
 	stream, err := sessions.OpenTransfer(ctx, worker.nodeID, nodews.TransferBinding{
-		TransferID: descriptor.TransferID, Direction: protocol.TransferDownload,
+		ProtocolVersion: worker.protocolVersion,
+		TransferID:      descriptor.TransferID, Direction: protocol.TransferDownload,
 		PolicyRevision: descriptor.ProfileRevision, TotalSize: descriptor.Size, SHA256: bindingDigest,
 	})
 	if err != nil {
@@ -1436,7 +1439,8 @@ func (worker *nodeBrowserWorker) receiveBrowserSnapshot(
 		return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 	}
 	stream, err := sessions.OpenTransfer(transferCtx, worker.nodeID, nodews.TransferBinding{
-		TransferID: output.TransferID, Direction: protocol.TransferDownload,
+		ProtocolVersion: worker.protocolVersion,
+		TransferID:      output.TransferID, Direction: protocol.TransferDownload,
 		PolicyRevision: output.ProfileRevision, TotalSize: output.Size, SHA256: bindingDigest,
 	})
 	if err != nil {
@@ -1638,15 +1642,21 @@ func (worker *nodeBrowserWorker) resolveAuthority(
 	if !ok {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
 	}
+	protocolVersion, protocolErr := nodes.EffectiveProtocolVersion(record.Snapshot.ProtocolVersion)
+	if protocolErr != nil {
+		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrWorkerUnavailable
+	}
 	if worker.catalogHash == "" {
 		worker.nodeID = record.Snapshot.ID
 		worker.executor = record.Snapshot.Executor
 		worker.policyRevision = record.Snapshot.PolicyRevision
 		worker.catalogHash = record.Snapshot.CatalogHash
+		worker.protocolVersion = protocolVersion
 	} else if worker.nodeID != record.Snapshot.ID ||
 		worker.executor != record.Snapshot.Executor ||
 		worker.policyRevision != record.Snapshot.PolicyRevision ||
-		worker.catalogHash != record.Snapshot.CatalogHash {
+		worker.catalogHash != record.Snapshot.CatalogHash ||
+		worker.protocolVersion != protocolVersion {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
 	}
 	if worker.profileDescriptor.Alias != "" &&
@@ -1696,7 +1706,8 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 		TimeoutSeconds:   min(worker.limits.ActionSeconds, nodes.MaxBrowserActionSeconds),
 		OutputLimitBytes: min(worker.limits.ToolResultBytes, nodes.MaxBrowserToolResultBytes),
 	}
-	plan, err := nodes.PrepareExecutionPlan(
+	plan, err := nodes.PrepareExecutionPlanForProtocol(
+		record.Snapshot.ProtocolVersion,
 		request, descriptor, record.Snapshot.Executor, record.Snapshot.PolicyRevision,
 		time.Now(), nodes.MaxExecutionPlanTTL,
 	)
@@ -1786,11 +1797,12 @@ func browserRetainedInvocationMatches(
 	plan nodes.ExecutionPlan,
 	descriptor nodes.CommandDescriptor,
 ) bool {
-	descriptorHash, err := descriptor.Hash()
+	descriptorHash, err := descriptor.HashForProtocol(plan.ProtocolVersion)
 	if err != nil {
 		return false
 	}
 	return record.Plan.InvocationID == plan.InvocationID &&
+		record.Plan.ProtocolVersion == plan.ProtocolVersion &&
 		record.Plan.IdempotencyKey == plan.IdempotencyKey &&
 		record.Plan.NodeID == plan.NodeID && record.Plan.CatalogHash == plan.CatalogHash &&
 		record.Plan.Command == plan.Command && record.Plan.DescriptorHash == descriptorHash &&
@@ -1903,8 +1915,8 @@ func (worker *nodeBrowserWorker) validateAuthority(
 	if !ok {
 		return browser.ErrDenied
 	}
-	expectedHash, expectedErr := expected.Hash()
-	currentHash, currentErr := descriptor.Hash()
+	expectedHash, expectedErr := expected.HashForProtocol(current.Snapshot.ProtocolVersion)
+	currentHash, currentErr := descriptor.HashForProtocol(current.Snapshot.ProtocolVersion)
 	if expectedErr != nil || currentErr != nil || expectedHash != currentHash {
 		return browser.ErrDenied
 	}

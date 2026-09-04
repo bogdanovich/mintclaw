@@ -20,6 +20,7 @@ import (
 
 const (
 	ProtocolV1            = 1
+	ProtocolV2            = 2
 	MaxIDLength           = 128
 	MaxAliasLength        = 64
 	MaxCommandNameLen     = 128
@@ -31,6 +32,27 @@ const (
 	MaxModelExamples      = 4
 	MaxModelExampleBytes  = 8 * 1024
 )
+
+// EffectiveProtocolVersion maps legacy omitted protocol fields to v1 and
+// rejects versions this binary cannot interpret.
+func EffectiveProtocolVersion(version int) (int, error) {
+	if version == 0 {
+		return ProtocolV1, nil
+	}
+	if version < ProtocolV1 || version > ProtocolV2 {
+		return 0, fmt.Errorf("%w: unsupported protocol version %d", ErrInvalidNode, version)
+	}
+	return version, nil
+}
+
+// NegotiateProtocol selects the newest protocol in the peer's advertised
+// range that this binary supports.
+func NegotiateProtocol(minimum, maximum int) (int, error) {
+	if minimum <= 0 || maximum < minimum || minimum > ProtocolV2 || maximum < ProtocolV1 {
+		return 0, fmt.Errorf("%w: incompatible protocol range", ErrInvalidNode)
+	}
+	return min(maximum, ProtocolV2), nil
+}
 
 var (
 	ErrInvalidNode       = errors.New("invalid node")
@@ -596,10 +618,18 @@ func (descriptor CommandDescriptor) Capability() string {
 
 // Hash returns the canonical identity of one command contract.
 func (descriptor CommandDescriptor) Hash() (string, error) {
+	return descriptor.HashForProtocol(ProtocolV1)
+}
+
+// HashForProtocol returns the command identity under the selected protocol's
+// canonical JSON representation.
+func (descriptor CommandDescriptor) HashForProtocol(protocolVersion int) (string, error) {
 	if err := descriptor.Validate(); err != nil {
 		return "", err
 	}
-	return (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).canonicalHash()
+	return (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).boundedCanonicalHashForProtocol(
+		protocolVersion,
+	)
 }
 
 type CapabilityCatalog struct {
@@ -679,37 +709,68 @@ func (catalog CapabilityCatalog) Validate() error {
 
 // Hash returns a stable digest regardless of descriptor or schema key order.
 func (catalog CapabilityCatalog) Hash() (string, error) {
+	return catalog.HashForProtocol(ProtocolV1)
+}
+
+// HashForProtocol returns a stable digest using the selected protocol's
+// canonical number representation.
+func (catalog CapabilityCatalog) HashForProtocol(protocolVersion int) (string, error) {
 	if err := catalog.Validate(); err != nil {
 		return "", err
 	}
-	return catalog.canonicalHash()
+	return catalog.boundedCanonicalHashForProtocol(protocolVersion)
 }
 
 // canonicalHash hashes catalog bytes without validating command semantics.
 // Callers must establish their appropriate invariants first; opaque dispatched
 // tombstones use it only to verify the identity stored in their signed plan.
 func (catalog CapabilityCatalog) canonicalHash() (string, error) {
+	return catalog.canonicalHashForProtocol(ProtocolV1)
+}
+
+func (catalog CapabilityCatalog) canonicalHashForProtocol(protocolVersion int) (string, error) {
+	return catalog.hashForProtocol(protocolVersion, false)
+}
+
+func (catalog CapabilityCatalog) boundedCanonicalHashForProtocol(protocolVersion int) (string, error) {
+	return catalog.hashForProtocol(protocolVersion, true)
+}
+
+func (catalog CapabilityCatalog) hashForProtocol(protocolVersion int, bounded bool) (string, error) {
+	protocolVersion, protocolErr := EffectiveProtocolVersion(protocolVersion)
+	if protocolErr != nil {
+		return "", protocolErr
+	}
+	canonicalize := func(raw json.RawMessage, maxBytes int) (json.RawMessage, error) {
+		if bounded {
+			return canonicalJSONForProtocolBounded(raw, protocolVersion, maxBytes)
+		}
+		return canonicalJSONForProtocol(raw, protocolVersion)
+	}
 	commands := append([]CommandDescriptor(nil), catalog.Commands...)
 	if commands == nil {
 		commands = make([]CommandDescriptor, 0)
 	}
 	slices.SortFunc(commands, func(a, b CommandDescriptor) int { return cmp.Compare(a.Name, b.Name) })
 	for i := range commands {
-		var err error
-		commands[i].InputSchema, err = canonicalJSON(commands[i].InputSchema)
-		if err != nil {
-			return "", err
+		var canonicalErr error
+		commands[i].InputSchema, canonicalErr = canonicalize(commands[i].InputSchema, MaxSchemaBytes)
+		if canonicalErr != nil {
+			return "", canonicalErr
 		}
-		commands[i].OutputSchema, err = canonicalJSON(commands[i].OutputSchema)
-		if err != nil {
-			return "", err
+		commands[i].OutputSchema, canonicalErr = canonicalize(commands[i].OutputSchema, MaxSchemaBytes)
+		if canonicalErr != nil {
+			return "", canonicalErr
 		}
 		if commands[i].ModelContract != nil {
 			contract := cloneCommandModelContract(*commands[i].ModelContract)
 			for exampleIndex := range contract.Examples {
-				contract.Examples[exampleIndex], err = canonicalJSON(contract.Examples[exampleIndex])
-				if err != nil {
-					return "", err
+				contract.Examples[exampleIndex], canonicalErr = canonicalize(
+					contract.Examples[exampleIndex],
+					MaxModelExampleBytes,
+				)
+				if canonicalErr != nil {
+					return "", canonicalErr
 				}
 			}
 			commands[i].ModelContract = &contract
@@ -718,6 +779,9 @@ func (catalog CapabilityCatalog) canonicalHash() (string, error) {
 	data, err := json.Marshal(CapabilityCatalog{Commands: commands})
 	if err != nil {
 		return "", fmt.Errorf("marshal capability catalog: %w", err)
+	}
+	if bounded && len(data) > MaxCatalogBytes {
+		return "", fmt.Errorf("%w: canonical catalog exceeds size limit", ErrInvalidCapability)
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
@@ -785,8 +849,9 @@ func (snapshot Snapshot) Validate() error {
 		}
 		seen[alias] = struct{}{}
 	}
-	if snapshot.ProtocolVersion < 0 {
-		return fmt.Errorf("%w: negative protocol version", ErrInvalidNode)
+	protocolVersion, protocolErr := EffectiveProtocolVersion(snapshot.ProtocolVersion)
+	if protocolErr != nil {
+		return protocolErr
 	}
 	if err := snapshot.Catalog.Validate(); err != nil {
 		return err
@@ -803,7 +868,7 @@ func (snapshot Snapshot) Validate() error {
 	if !validSHA256Digest(snapshot.CatalogHash) {
 		return fmt.Errorf("%w: malformed catalog hash", ErrInvalidNode)
 	}
-	catalogHash, err := snapshot.Catalog.Hash()
+	catalogHash, err := snapshot.Catalog.HashForProtocol(protocolVersion)
 	if err != nil {
 		return err
 	}
@@ -888,9 +953,46 @@ func validateObjectSchema(label string, raw json.RawMessage) error {
 }
 
 func canonicalJSON(raw json.RawMessage) (json.RawMessage, error) {
-	data, err := jsonstrict.Canonical(raw)
+	return canonicalJSONForProtocol(raw, ProtocolV1)
+}
+
+func canonicalJSONForProtocol(raw json.RawMessage, protocolVersion int) (json.RawMessage, error) {
+	protocolVersion, err := EffectiveProtocolVersion(protocolVersion)
+	if err != nil {
+		return nil, err
+	}
+	var data []byte
+	if protocolVersion == ProtocolV2 {
+		data, err = jsonstrict.CanonicalV2(raw)
+	} else {
+		data, err = jsonstrict.Canonical(raw)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize json: %w", err)
+	}
+	return json.RawMessage(data), nil
+}
+
+func canonicalJSONForProtocolBounded(
+	raw json.RawMessage,
+	protocolVersion int,
+	maxBytes int,
+) (json.RawMessage, error) {
+	protocolVersion, err := EffectiveProtocolVersion(protocolVersion)
+	if err != nil {
+		return nil, err
+	}
+	var data []byte
+	if protocolVersion == ProtocolV2 {
+		data, err = jsonstrict.CanonicalV2Bounded(raw, maxBytes)
+	} else {
+		data, err = jsonstrict.Canonical(raw)
+		if err == nil && len(data) > maxBytes {
+			err = jsonstrict.ErrCanonicalTooLarge
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: canonicalize bounded json: %w", ErrInvalidCapability, err)
 	}
 	return json.RawMessage(data), nil
 }

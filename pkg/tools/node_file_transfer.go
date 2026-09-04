@@ -68,24 +68,25 @@ type NodeFileTransferSource interface {
 }
 
 type NodeFileTransferBinding struct {
-	TransferID     string
-	Direction      protocol.TransferDirection
-	ProfileAlias   string
-	PolicyRevision string
-	Path           string
-	Publication    string
-	TotalSize      uint64
-	SHA256         [sha256.Size]byte
-	ExpiresAt      int64
-	Filename       string
-	ContentType    string
-	SourceKind     string
-	JobProfile     string
-	JobID          string
-	JobArtifactRef string
-	AgentID        string
-	SessionID      string
-	ActorID        string
+	ProtocolVersion int
+	TransferID      string
+	Direction       protocol.TransferDirection
+	ProfileAlias    string
+	PolicyRevision  string
+	Path            string
+	Publication     string
+	TotalSize       uint64
+	SHA256          [sha256.Size]byte
+	ExpiresAt       int64
+	Filename        string
+	ContentType     string
+	SourceKind      string
+	JobProfile      string
+	JobID           string
+	JobArtifactRef  string
+	AgentID         string
+	SessionID       string
+	ActorID         string
 }
 
 type NodeFileTransferResult struct {
@@ -876,7 +877,8 @@ func (runtime *nodeFileTransferToolRuntime) prepare(
 		TimeoutSeconds:   int(nodeFileTransferTTL / time.Second),
 		OutputLimitBytes: nodes.MaxInvocationOutput,
 	}
-	plan, err := nodes.PrepareExecutionPlan(
+	plan, err := nodes.PrepareExecutionPlanForProtocol(
+		resolved.snapshot.ProtocolVersion,
 		request,
 		descriptor,
 		resolved.snapshot.Executor,
@@ -997,8 +999,9 @@ func (runtime *nodeFileTransferToolRuntime) prepareJobArtifactDownload(
 		ctx,
 		resolved.snapshot.ID,
 		NodeFileTransferBinding{
-			TransferID: stableNodeInvocationID("job_artifact_info", transferID),
-			Direction:  protocol.TransferDownload, ProfileAlias: profile.Alias,
+			ProtocolVersion: resolved.snapshot.ProtocolVersion,
+			TransferID:      stableNodeInvocationID("job_artifact_info", transferID),
+			Direction:       protocol.TransferDownload, ProfileAlias: profile.Alias,
 			PolicyRevision: profile.Revision, SourceKind: nodes.JobArtifactTransferSourceKind,
 			JobProfile: profile.Alias, JobID: jobID, JobArtifactRef: artifactRef,
 			AgentID: principal.AgentID, SessionID: principal.SessionID, ActorID: principal.ActorID,
@@ -1039,7 +1042,8 @@ func (runtime *nodeFileTransferToolRuntime) prepareJobArtifactDownload(
 		AgentID: principal.AgentID, SessionID: principal.SessionID, ActorID: principal.ActorID,
 		TimeoutSeconds: int(nodeFileTransferTTL / time.Second), OutputLimitBytes: nodes.MaxInvocationOutput,
 	}
-	plan, err := nodes.PrepareExecutionPlan(
+	plan, err := nodes.PrepareExecutionPlanForProtocol(
+		resolved.snapshot.ProtocolVersion,
 		request,
 		descriptor,
 		resolved.snapshot.Executor,
@@ -1390,14 +1394,15 @@ func (runtime *nodeFileTransferToolRuntime) preparePlanInput(
 			ctx,
 			resolved.snapshot.ID,
 			NodeFileTransferBinding{
-				TransferID:     infoID,
-				Direction:      protocol.TransferDownload,
-				ProfileAlias:   profile.Alias,
-				PolicyRevision: profile.Revision,
-				Path:           input.Source,
-				TotalSize:      0,
-				SHA256:         sha256.Sum256(nil),
-				ExpiresAt:      expiresAt,
+				ProtocolVersion: resolved.snapshot.ProtocolVersion,
+				TransferID:      infoID,
+				Direction:       protocol.TransferDownload,
+				ProfileAlias:    profile.Alias,
+				PolicyRevision:  profile.Revision,
+				Path:            input.Source,
+				TotalSize:       0,
+				SHA256:          sha256.Sum256(nil),
+				ExpiresAt:       expiresAt,
 			},
 		)
 		if err != nil || info.State != "committed" ||
@@ -1621,11 +1626,16 @@ func validateRetainedJobArtifactDownload(
 	deliver bool,
 	owner nodes.TransferArtifactOwner,
 ) error {
+	protocolVersion, protocolMatches := matchingNodeProtocol(
+		record.Plan.ProtocolVersion,
+		resolved.snapshot.ProtocolVersion,
+	)
 	if record.Target != resolved.name || record.Plan.NodeID != resolved.snapshot.ID ||
+		!protocolMatches ||
 		record.Plan.CatalogHash != resolved.snapshot.CatalogHash ||
 		record.Plan.Command != nodes.InternalJobArtifactDownloadCommand ||
 		record.Descriptor.Name != descriptor.Name ||
-		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor) ||
+		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor, protocolVersion) ||
 		record.Plan.PolicyRevision != profile.Revision ||
 		record.Plan.ExpiresAt <= time.Now().Unix() {
 		return fmt.Errorf("%w: retained job artifact authority changed", errDiscoveryStale)
@@ -1661,12 +1671,16 @@ func validateRetainedFileTransfer(
 	owner nodes.TransferArtifactOwner,
 	mediaOwner media.MediaOwner,
 ) error {
+	protocolVersion, protocolMatches := matchingNodeProtocol(
+		record.Plan.ProtocolVersion,
+		resolved.snapshot.ProtocolVersion,
+	)
 	if record.Target != resolved.name || record.Plan.NodeID != resolved.snapshot.ID {
 		return fmt.Errorf("%w: retained target authority changed", errDiscoveryStale)
 	}
-	if record.Plan.CatalogHash != resolved.snapshot.CatalogHash ||
+	if !protocolMatches || record.Plan.CatalogHash != resolved.snapshot.CatalogHash ||
 		record.Descriptor.Name != descriptor.Name ||
-		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor) {
+		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor, protocolVersion) {
 		return fmt.Errorf("%w: retained catalog authority changed", errDiscoveryStale)
 	}
 	if record.Plan.PolicyRevision != profile.Revision {
@@ -1712,8 +1726,14 @@ func validateRetainedFileTransfer(
 	return record.Plan.ValidateAgainstHash(record.ExpectedPlanHash)
 }
 
-func descriptorHashOrEmpty(descriptor nodes.CommandDescriptor) string {
-	hash, _ := descriptor.Hash()
+func matchingNodeProtocol(planVersion, snapshotVersion int) (int, bool) {
+	planProtocol, planErr := nodes.EffectiveProtocolVersion(planVersion)
+	snapshotProtocol, snapshotErr := nodes.EffectiveProtocolVersion(snapshotVersion)
+	return snapshotProtocol, planErr == nil && snapshotErr == nil && planProtocol == snapshotProtocol
+}
+
+func descriptorHashOrEmpty(descriptor nodes.CommandDescriptor, protocolVersion int) string {
+	hash, _ := descriptor.HashForProtocol(protocolVersion)
 	return hash
 }
 

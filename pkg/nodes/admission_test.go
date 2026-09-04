@@ -32,6 +32,9 @@ func TestAuthenticatorPersistsPendingPairingAndRejectsReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if challenge.MinProtocol != ProtocolV1 || challenge.MaxProtocol != ProtocolV2 {
+		t.Fatalf("challenge protocol range = %d..%d", challenge.MinProtocol, challenge.MaxProtocol)
+	}
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +69,56 @@ func TestAuthenticatorPersistsPendingPairingAndRejectsReplay(t *testing.T) {
 	}
 	if _, err := authenticator.Authenticate(proof); !errors.Is(err, ErrChallengeUnknown) {
 		t.Fatalf("replayed Admit() error = %v", err)
+	}
+}
+
+func TestAuthenticatorNegotiatesV2AndPersistsProtocolHash(t *testing.T) {
+	registry, err := NewFileRegistry(filepath.Join(t.TempDir(), "registry.json"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(registry, AdmissionConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := authenticator.IssueChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := CapabilityCatalog{Commands: []CommandDescriptor{
+		descriptor("node.info.v1", `{"type":"integer","maximum":60}`),
+	}}
+	proof, err := NewIdentityProof(
+		privateKey,
+		challenge.Nonce,
+		ProtocolV2,
+		ProtocolV2,
+		"v0.2.0",
+		"linux",
+		"amd64",
+		catalog,
+		currentTestExecutionProfile(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authenticator.Authenticate(proof); err != nil {
+		t.Fatal(err)
+	}
+	pending, found, err := registry.Pending(proof.NodeID)
+	if err != nil || !found {
+		t.Fatalf("Pending() = found %v, error %v", found, err)
+	}
+	wantHash, err := catalog.HashForProtocol(ProtocolV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Node.ProtocolVersion != ProtocolV2 || pending.Node.CatalogHash != wantHash {
+		t.Fatalf("pending v2 node = %#v", pending.Node)
 	}
 }
 

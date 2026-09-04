@@ -77,6 +77,28 @@ func TestAdmissionRejectsPlanForUnapprovedCatalogBeforeDispatch(t *testing.T) {
 	}
 }
 
+func TestAdmissionRejectsPlanFromPreviousSessionProtocol(t *testing.T) {
+	registry, handler, nodeID, plan := testInvocationAdmission(t, "")
+	registration, found, err := registry.Registration(nodeID)
+	if err != nil || !found {
+		t.Fatalf("Registration() = %#v, %v, found %v", registration, err, found)
+	}
+	v2CatalogHash, err := registration.Snapshot.Catalog.HashForProtocol(nodes.ProtocolV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2CatalogHash != registration.Snapshot.CatalogHash {
+		t.Fatal("test catalog does not exercise identical v1/v2 hashes")
+	}
+	registration.Snapshot.ProtocolVersion = nodes.ProtocolV2
+	if err = registry.Upsert(registration.Snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = handler.validateInvocationPreflight(nodeID, plan); !errors.Is(err, nodes.ErrCommandDenied) {
+		t.Fatalf("previous-protocol plan error = %v", err)
+	}
+}
+
 func TestValidateInvocationApprovalProjectsServiceProfile(t *testing.T) {
 	_, _, nodeID, _ := testInvocationAdmission(t, "")
 	profiles := []nodes.ServiceProfileDescriptor{
@@ -330,6 +352,75 @@ func TestAdmissionRevocationWaitsForDispatchWrite(t *testing.T) {
 			result.dispatched,
 			result.err,
 		)
+	}
+}
+
+func TestAdmissionSessionReplacementWaitsForDispatchFrame(t *testing.T) {
+	_, handler, nodeID, plan := testInvocationAdmission(t, "")
+	connection := newGatedTransferConnection()
+	defer connection.release()
+	session := newPeer(connection)
+	session.markReady()
+	releaseSession, err := handler.sessions.Claim(nodeID, session, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = releaseSession() }()
+
+	commitStarted := make(chan struct{})
+	allowCommit := make(chan struct{})
+	type invokeResult struct {
+		dispatched bool
+		err        error
+	}
+	invoked := make(chan invokeResult, 1)
+	go func() {
+		_, dispatched, invokeErr := handler.Invoke(t.Context(), nodeID, plan, nil, func() error {
+			close(commitStarted)
+			<-allowCommit
+			return nil
+		})
+		invoked <- invokeResult{dispatched: dispatched, err: invokeErr}
+	}()
+	<-commitStarted
+
+	replacement := newPeer(&transferRecordingConnection{})
+	replacement.markReady()
+	type claimResult struct {
+		release func() (bool, error)
+		err     error
+	}
+	claimed := make(chan claimResult, 1)
+	go func() {
+		release, claimErr := handler.sessions.Claim(nodeID, replacement, nil, nil)
+		claimed <- claimResult{release: release, err: claimErr}
+	}()
+	select {
+	case result := <-claimed:
+		t.Fatalf("replacement claimed during durable dispatch: %v", result.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(allowCommit)
+	select {
+	case <-connection.writeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("dispatch did not reach its first frame write")
+	}
+	select {
+	case result := <-claimed:
+		t.Fatalf("replacement claimed during first frame write: %v", result.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	connection.release()
+	claim := <-claimed
+	if claim.err != nil {
+		t.Fatal(claim.err)
+	}
+	defer func() { _, _ = claim.release() }()
+	result := <-invoked
+	if !result.dispatched || !errors.Is(result.err, ErrNodeDisconnected) {
+		t.Fatalf("Invoke() = (dispatched %v, error %v)", result.dispatched, result.err)
 	}
 }
 
