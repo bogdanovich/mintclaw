@@ -271,3 +271,32 @@ func TestRepositoryPublicProjectionPreservesDisabledStreamingWithTuning(t *testi
 		t.Fatalf("reloaded streaming config = %#v", reloadedStreaming)
 	}
 }
+
+func TestRepositoryPublicProjectionPreservesDecodedStreamingEnablement(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	cfg := DefaultConfig()
+	channel := cfg.Channels.Get(ChannelMintClaw)
+	channel.Settings = RawNode(`{"streaming":{"enabled":false,"throttle_seconds":2}}`)
+	channel.extend = nil
+	decoded, err := channel.GetDecoded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded.(*MintClawSettings).Streaming.Enabled = true
+
+	if _, err = NewRepository(configPath).Save(cfg); err != nil {
+		t.Fatalf("Repository.Save() error = %v", err)
+	}
+	reloaded, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	reloadedSettings, err := reloaded.Channels.Get(ChannelMintClaw).GetDecoded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streaming := reloadedSettings.(*MintClawSettings).Streaming; !streaming.Enabled ||
+		streaming.ThrottleSeconds != 2 {
+		t.Fatalf("reloaded streaming config = %#v, want enabled with preserved tuning", streaming)
+	}
+}

@@ -278,6 +278,8 @@ func preserveExplicitDisabledStreaming(settings, original RawNode) RawNode {
 	settingsStreaming, ok := settingsMap["streaming"].(map[string]any)
 	if !ok {
 		settingsStreaming = make(map[string]any)
+	} else if _, explicit := settingsStreaming["enabled"]; explicit {
+		return settings
 	}
 	settingsStreaming["enabled"] = false
 	settingsMap["streaming"] = settingsStreaming
