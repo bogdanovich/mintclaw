@@ -113,6 +113,16 @@ func TestCapabilityCatalogHashIsProtocolBound(t *testing.T) {
 	}
 }
 
+func TestCanonicalJSONForProtocolRejectsExpandedV2Payload(t *testing.T) {
+	raw := json.RawMessage(`{"values":[1e4095,1e4095,1e4095]}`)
+	if _, err := canonicalJSONForProtocolBounded(raw, ProtocolV2, MaxModelExampleBytes); !errors.Is(
+		err,
+		ErrInvalidCapability,
+	) {
+		t.Fatalf("canonicalJSONForProtocolBounded() error = %v", err)
+	}
+}
+
 func TestProtocolNegotiationAndLegacyDefault(t *testing.T) {
 	if got, err := EffectiveProtocolVersion(0); err != nil || got != ProtocolV1 {
 		t.Fatalf("EffectiveProtocolVersion(0) = %d, %v", got, err)

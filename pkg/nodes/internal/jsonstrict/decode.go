@@ -11,7 +11,10 @@ import (
 	"strings"
 )
 
-var ErrDuplicateMember = errors.New("duplicate JSON object member")
+var (
+	ErrDuplicateMember   = errors.New("duplicate JSON object member")
+	ErrCanonicalTooLarge = errors.New("canonical JSON exceeds size limit")
+)
 
 var numberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
 
@@ -52,16 +55,42 @@ func CanonicalV2(data []byte) ([]byte, error) {
 	return canonical(data, normalizeNumberV2)
 }
 
+// CanonicalV2Bounded limits both the accepted input and accumulated normalized
+// number text before the final encoding allocation.
+func CanonicalV2Bounded(data []byte, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 || len(data) > maxBytes {
+		return nil, ErrCanonicalTooLarge
+	}
+	return canonicalBounded(data, normalizeNumberV2, maxBytes)
+}
+
 func canonical(data []byte, normalize func(json.Number) (json.Number, error)) ([]byte, error) {
+	return canonicalBounded(data, normalize, 0)
+}
+
+func canonicalBounded(
+	data []byte,
+	normalize func(json.Number) (json.Number, error),
+	maxBytes int,
+) ([]byte, error) {
 	value, err := Decode(data)
 	if err != nil {
 		return nil, err
 	}
-	value, err = normalizeNumbers(value, normalize)
+	var remaining *int
+	if maxBytes > 0 {
+		budget := maxBytes
+		remaining = &budget
+	}
+	value, err = normalizeNumbersBounded(value, normalize, remaining)
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(value)
+	encoded, err := json.Marshal(value)
+	if err == nil && remaining != nil && len(encoded) > maxBytes {
+		return nil, ErrCanonicalTooLarge
+	}
+	return encoded, err
 }
 
 func decodeValue(decoder *json.Decoder) (any, error) {
@@ -124,16 +153,27 @@ func decodeArray(decoder *json.Decoder) ([]any, error) {
 	return values, nil
 }
 
-func normalizeNumbers(
+func normalizeNumbersBounded(
 	value any,
 	normalize func(json.Number) (json.Number, error),
+	remaining *int,
 ) (any, error) {
 	switch typed := value.(type) {
 	case json.Number:
-		return normalize(typed)
+		normalized, err := normalize(typed)
+		if err != nil {
+			return nil, err
+		}
+		if remaining != nil {
+			if len(normalized.String()) > *remaining {
+				return nil, ErrCanonicalTooLarge
+			}
+			*remaining -= len(normalized.String())
+		}
+		return normalized, nil
 	case map[string]any:
 		for key, child := range typed {
-			normalized, err := normalizeNumbers(child, normalize)
+			normalized, err := normalizeNumbersBounded(child, normalize, remaining)
 			if err != nil {
 				return nil, err
 			}
@@ -141,7 +181,7 @@ func normalizeNumbers(
 		}
 	case []any:
 		for index, child := range typed {
-			normalized, err := normalizeNumbers(child, normalize)
+			normalized, err := normalizeNumbersBounded(child, normalize, remaining)
 			if err != nil {
 				return nil, err
 			}

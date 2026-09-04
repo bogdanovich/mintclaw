@@ -738,16 +738,18 @@ func (catalog CapabilityCatalog) canonicalHashForProtocol(protocolVersion int) (
 	slices.SortFunc(commands, func(a, b CommandDescriptor) int { return cmp.Compare(a.Name, b.Name) })
 	for i := range commands {
 		var canonicalErr error
-		commands[i].InputSchema, canonicalErr = canonicalJSONForProtocol(
+		commands[i].InputSchema, canonicalErr = canonicalJSONForProtocolBounded(
 			commands[i].InputSchema,
 			protocolVersion,
+			MaxSchemaBytes,
 		)
 		if canonicalErr != nil {
 			return "", canonicalErr
 		}
-		commands[i].OutputSchema, canonicalErr = canonicalJSONForProtocol(
+		commands[i].OutputSchema, canonicalErr = canonicalJSONForProtocolBounded(
 			commands[i].OutputSchema,
 			protocolVersion,
+			MaxSchemaBytes,
 		)
 		if canonicalErr != nil {
 			return "", canonicalErr
@@ -755,9 +757,10 @@ func (catalog CapabilityCatalog) canonicalHashForProtocol(protocolVersion int) (
 		if commands[i].ModelContract != nil {
 			contract := cloneCommandModelContract(*commands[i].ModelContract)
 			for exampleIndex := range contract.Examples {
-				contract.Examples[exampleIndex], canonicalErr = canonicalJSONForProtocol(
+				contract.Examples[exampleIndex], canonicalErr = canonicalJSONForProtocolBounded(
 					contract.Examples[exampleIndex],
 					protocolVersion,
+					MaxModelExampleBytes,
 				)
 				if canonicalErr != nil {
 					return "", canonicalErr
@@ -769,6 +772,9 @@ func (catalog CapabilityCatalog) canonicalHashForProtocol(protocolVersion int) (
 	data, err := json.Marshal(CapabilityCatalog{Commands: commands})
 	if err != nil {
 		return "", fmt.Errorf("marshal capability catalog: %w", err)
+	}
+	if len(data) > MaxCatalogBytes {
+		return "", fmt.Errorf("%w: canonical catalog exceeds size limit", ErrInvalidCapability)
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
@@ -956,6 +962,30 @@ func canonicalJSONForProtocol(raw json.RawMessage, protocolVersion int) (json.Ra
 	}
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize json: %w", err)
+	}
+	return json.RawMessage(data), nil
+}
+
+func canonicalJSONForProtocolBounded(
+	raw json.RawMessage,
+	protocolVersion int,
+	maxBytes int,
+) (json.RawMessage, error) {
+	protocolVersion, err := EffectiveProtocolVersion(protocolVersion)
+	if err != nil {
+		return nil, err
+	}
+	var data []byte
+	if protocolVersion == ProtocolV2 {
+		data, err = jsonstrict.CanonicalV2Bounded(raw, maxBytes)
+	} else {
+		data, err = jsonstrict.Canonical(raw)
+		if err == nil && len(data) > maxBytes {
+			err = jsonstrict.ErrCanonicalTooLarge
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: canonicalize bounded json: %w", ErrInvalidCapability, err)
 	}
 	return json.RawMessage(data), nil
 }

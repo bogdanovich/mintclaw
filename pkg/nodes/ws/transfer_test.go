@@ -469,6 +469,65 @@ func TestTransferWriteKeepsExactPeerGenerationStable(t *testing.T) {
 	}
 }
 
+func TestTransferDispatchKeepsExactPeerGenerationStable(t *testing.T) {
+	connection := newGatedTransferConnection()
+	defer connection.release()
+	binding := testTransferBinding()
+	hub, _, stream := openTestTransferStream(t, connection, binding)
+	frame := testTransferFrame(binding, protocol.TransferFramePrepare, 0, []byte(`{"operation":"info"}`))
+	commitStarted := make(chan struct{})
+	allowCommit := make(chan struct{})
+	type sendResult struct {
+		dispatched bool
+		err        error
+	}
+	sent := make(chan sendResult, 1)
+	go func() {
+		dispatched, sendErr := stream.SendAtDispatch(t.Context(), frame, func(write func() error) error {
+			close(commitStarted)
+			<-allowCommit
+			return write()
+		})
+		sent <- sendResult{dispatched: dispatched, err: sendErr}
+	}()
+	<-commitStarted
+
+	replacement := newPeer(&transferRecordingConnection{})
+	replacement.markReady()
+	type claimResult struct {
+		release func() (bool, error)
+		err     error
+	}
+	claimed := make(chan claimResult, 1)
+	go func() {
+		release, claimErr := hub.Claim(testTransferNodeID(), replacement, nil, nil)
+		claimed <- claimResult{release: release, err: claimErr}
+	}()
+	select {
+	case result := <-claimed:
+		t.Fatalf("replacement claimed during durable transfer dispatch: %v", result.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(allowCommit)
+	<-connection.writeStarted
+	select {
+	case result := <-claimed:
+		t.Fatalf("replacement claimed during transfer prepare write: %v", result.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	connection.release()
+	result := <-sent
+	if !result.dispatched || result.err != nil {
+		t.Fatalf("SendAtDispatch() = (dispatched %v, error %v)", result.dispatched, result.err)
+	}
+	claim := <-claimed
+	if claim.err != nil {
+		t.Fatal(claim.err)
+	}
+	defer func() { _, _ = claim.release() }()
+}
+
 func TestTransferDeliverySerializesWithNormalClose(t *testing.T) {
 	t.Parallel()
 	binding := testTransferBinding()

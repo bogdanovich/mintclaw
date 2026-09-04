@@ -265,9 +265,45 @@ func (hub *SessionHub) Request(
 		hub.mu.Unlock()
 		return protocol.Envelope{}, false, ErrNodeDisconnected
 	}
-	session := slot.current.peer
+	entry := slot.current
+	session := entry.peer
 	hub.mu.Unlock()
-	return session.request(ctx, method, params, idempotencyKey, dispatch)
+	return session.requestWithLease(
+		ctx,
+		method,
+		params,
+		idempotencyKey,
+		dispatch,
+		func(write func() (bool, error)) (bool, error) {
+			release, leaseErr := hub.acquireSessionGeneration(slot, entry)
+			if leaseErr != nil {
+				return false, leaseErr
+			}
+			defer release()
+			return write()
+		},
+	)
+}
+
+func (hub *SessionHub) acquireSessionGeneration(
+	slot *sessionSlot,
+	entry *sessionEntry,
+) (func(), error) {
+	if hub == nil || slot == nil || entry == nil {
+		return nil, ErrNodeDisconnected
+	}
+	slot.lifecycle.Lock()
+	hub.mu.Lock()
+	current := !hub.closed &&
+		slot.current == entry &&
+		entry.active &&
+		entry.peer != nil
+	hub.mu.Unlock()
+	if !current {
+		slot.lifecycle.Unlock()
+		return nil, ErrNodeDisconnected
+	}
+	return slot.lifecycle.Unlock, nil
 }
 
 func (hub *SessionHub) Close(ctx context.Context) error {
