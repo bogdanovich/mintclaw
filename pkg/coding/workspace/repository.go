@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -32,8 +33,11 @@ type DiffTarget struct {
 }
 
 type StatusResult struct {
-	SchemaVersion string   `json:"schema_version"`
-	Snapshot      Snapshot `json:"snapshot"`
+	SchemaVersion string            `json:"schema_version"`
+	Snapshot      Snapshot          `json:"snapshot"`
+	BaselineID    string            `json:"baseline_id,omitempty"`
+	Provenance    *ProvenanceResult `json:"provenance,omitempty"`
+	Stale         bool              `json:"stale,omitempty"`
 }
 
 type DiffLine struct {
@@ -54,36 +58,41 @@ type DiffHunk struct {
 }
 
 type DiffFile struct {
-	Path         string     `json:"path"`
-	OriginalPath string     `json:"original_path,omitempty"`
-	Status       string     `json:"status"`
-	Binary       bool       `json:"binary,omitempty"`
-	Submodule    bool       `json:"submodule,omitempty"`
-	Symlink      bool       `json:"symlink,omitempty"`
-	Omitted      string     `json:"omitted,omitempty"`
-	Additions    int        `json:"additions,omitempty"`
-	Deletions    int        `json:"deletions,omitempty"`
-	Hunks        []DiffHunk `json:"hunks,omitempty"`
-	Truncated    bool       `json:"truncated,omitempty"`
+	Path             string         `json:"path"`
+	OriginalPath     string         `json:"original_path,omitempty"`
+	Status           string         `json:"status"`
+	Binary           bool           `json:"binary,omitempty"`
+	Submodule        bool           `json:"submodule,omitempty"`
+	Symlink          bool           `json:"symlink,omitempty"`
+	Omitted          string         `json:"omitted,omitempty"`
+	Additions        int            `json:"additions,omitempty"`
+	Deletions        int            `json:"deletions,omitempty"`
+	Hunks            []DiffHunk     `json:"hunks,omitempty"`
+	Truncated        bool           `json:"truncated,omitempty"`
+	Provenance       ProvenanceKind `json:"provenance,omitempty"`
+	ProvenanceReason string         `json:"provenance_reason,omitempty"`
 }
 
 type DiffResult struct {
-	SchemaVersion       string     `json:"schema_version"`
-	Target              DiffTarget `json:"target"`
-	ResolvedRevision    string     `json:"resolved_revision,omitempty"`
-	MergeBase           string     `json:"merge_base,omitempty"`
-	RepositoryAvailable bool       `json:"repository_available"`
-	Head                string     `json:"head,omitempty"`
-	Branch              string     `json:"branch,omitempty"`
-	Generation          string     `json:"generation,omitempty"`
-	Files               []DiffFile `json:"files,omitempty"`
-	Additions           int        `json:"additions,omitempty"`
-	Deletions           int        `json:"deletions,omitempty"`
-	BinaryFiles         int        `json:"binary_files,omitempty"`
-	Truncated           bool       `json:"truncated,omitempty"`
-	Stale               bool       `json:"stale,omitempty"`
-	UnavailableReason   string     `json:"unavailable_reason,omitempty"`
-	Warning             string     `json:"warning,omitempty"`
+	SchemaVersion       string            `json:"schema_version"`
+	Target              DiffTarget        `json:"target"`
+	ResolvedRevision    string            `json:"resolved_revision,omitempty"`
+	MergeBase           string            `json:"merge_base,omitempty"`
+	RepositoryAvailable bool              `json:"repository_available"`
+	Head                string            `json:"head,omitempty"`
+	Branch              string            `json:"branch,omitempty"`
+	Generation          string            `json:"generation,omitempty"`
+	EvidenceGeneration  string            `json:"evidence_generation,omitempty"`
+	Files               []DiffFile        `json:"files,omitempty"`
+	Additions           int               `json:"additions,omitempty"`
+	Deletions           int               `json:"deletions,omitempty"`
+	BinaryFiles         int               `json:"binary_files,omitempty"`
+	Truncated           bool              `json:"truncated,omitempty"`
+	Stale               bool              `json:"stale,omitempty"`
+	UnavailableReason   string            `json:"unavailable_reason,omitempty"`
+	Warning             string            `json:"warning,omitempty"`
+	BaselineID          string            `json:"baseline_id,omitempty"`
+	Provenance          *ProvenanceResult `json:"provenance,omitempty"`
 }
 
 // Repository is the sole passive Git evidence boundary for one coding
@@ -95,6 +104,34 @@ type Repository struct {
 	cwd         string
 	limits      Limits
 	slots       chan struct{}
+	baseline    *RepositoryBaseline
+}
+
+func NewRepositoryWithBaseline(
+	projectRoot, cwd string,
+	limits Limits,
+	baseline RepositoryBaseline,
+) (*Repository, error) {
+	if err := baseline.Validate(); err != nil {
+		return nil, err
+	}
+	repository := NewRepository(projectRoot, cwd, limits)
+	canonicalProjectRoot, err := filepath.EvalSymlinks(repository.projectRoot)
+	if err != nil {
+		return nil, fmt.Errorf("repository baseline authority: resolve project root: %w", err)
+	}
+	canonicalProjectRoot = filepath.Clean(canonicalProjectRoot)
+	if baseline.RepositoryAvailable && canonicalProjectRoot != baseline.TopLevel {
+		return nil, fmt.Errorf(
+			"repository baseline authority mismatch: project root %q does not match baseline root %q",
+			canonicalProjectRoot,
+			baseline.TopLevel,
+		)
+	}
+	copy := baseline
+	copy.Paths = append([]BaselinePath(nil), baseline.Paths...)
+	repository.baseline = &copy
+	return repository, nil
 }
 
 func NewRepository(projectRoot, cwd string, limits Limits) *Repository {
@@ -117,16 +154,30 @@ func (repository *Repository) Status(ctx context.Context) StatusResult {
 		result.Snapshot.Git.UnavailableReason = contextError(ctx).Error()
 		return result
 	}
-	defer repository.release()
-	result.Snapshot = captureSnapshot(ctx, repository.projectRoot, repository.cwd, repository.limits)
+	func() {
+		defer repository.release()
+		result.Snapshot = captureSnapshot(ctx, repository.projectRoot, repository.cwd, repository.limits)
+	}()
+	repository.attachStatusProvenance(ctx, &result)
 	return result
 }
 
 func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffResult {
+	result := repository.diff(ctx, target)
+	if result.Target.Kind == DiffTargetCurrent {
+		repository.attachDiffProvenance(ctx, &result)
+	}
+	return result
+}
+
+func (repository *Repository) diff(ctx context.Context, target DiffTarget) DiffResult {
 	result := DiffResult{SchemaVersion: RepositoryDiffSchemaV1, Target: target}
 	if repository == nil {
 		result.UnavailableReason = "repository evidence service is unavailable"
 		return result
+	}
+	if result.Target.Kind == "" {
+		result.Target.Kind = DiffTargetCurrent
 	}
 	if !repository.acquire(ctx) {
 		result.UnavailableReason = contextError(ctx).Error()
@@ -136,6 +187,18 @@ func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffR
 
 	commandCtx, cancel := context.WithTimeout(contextOrBackground(ctx), repository.limits.Timeout)
 	defer cancel()
+	evidenceWarning := ""
+	if repository.baseline != nil && result.Target.Kind == DiffTargetCurrent {
+		observation, err := repository.captureBaseline(commandCtx, BaselineRequest{
+			ProjectKey: repository.baseline.ProjectKey,
+			CapturedAt: time.Now().UTC(),
+		})
+		if err != nil {
+			evidenceWarning = "content-sensitive diff generation is unavailable"
+		} else {
+			result.EvidenceGeneration = baselineEvidenceGeneration(observation)
+		}
+	}
 	before := captureSnapshot(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
 	result.RepositoryAvailable = before.Git.Available
 	result.Head = before.Git.Head
@@ -152,15 +215,12 @@ func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffR
 		result.Truncated = before.Truncated
 		return result
 	}
-	if target.Kind == "" {
-		result.Target.Kind = DiffTargetCurrent
-	}
 	filters, warning, safe, truncated := passiveFilterOverrides(
 		commandCtx,
 		before.ProjectRoot,
 		repository.limits.CommandBytes,
 	)
-	result.Warning = joinWarning(before.Warning, warning)
+	result.Warning = joinWarning(joinWarning(evidenceWarning, before.Warning), warning)
 	result.Truncated = before.Truncated || truncated
 	if !safe {
 		result.UnavailableReason = "Git content-filter configuration could not be made passive"
@@ -212,6 +272,89 @@ func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffR
 		result.Warning = joinWarning(result.Warning, "repository diff capture: "+err.Error())
 	}
 	return result
+}
+
+func (repository *Repository) attachStatusProvenance(ctx context.Context, result *StatusResult) {
+	if repository == nil || repository.baseline == nil || result == nil {
+		return
+	}
+	result.BaselineID = repository.baseline.BaselineID
+	provenance, err := repository.Provenance(ctx, *repository.baseline, time.Now().UTC())
+	if err != nil {
+		provenance = unavailableProvenance(repository.baseline.BaselineID, "provenance refresh is unavailable")
+	} else if result.Snapshot.Identity() != provenance.CurrentGeneration {
+		result.Stale = true
+		provenance = unavailableProvenance(
+			repository.baseline.BaselineID,
+			"repository changed between status and provenance observations",
+		)
+	}
+	result.Provenance = &provenance
+}
+
+func (repository *Repository) attachDiffProvenance(ctx context.Context, result *DiffResult) {
+	if repository == nil || repository.baseline == nil || result == nil {
+		return
+	}
+	result.BaselineID = repository.baseline.BaselineID
+	provenance, err := repository.Provenance(ctx, *repository.baseline, time.Now().UTC())
+	if err != nil {
+		provenance = unavailableProvenance(repository.baseline.BaselineID, "provenance refresh is unavailable")
+	} else if result.Stale {
+		provenance = unavailableProvenance(
+			repository.baseline.BaselineID,
+			"repository changed while diff evidence was captured",
+		)
+	} else if result.EvidenceGeneration == "" || provenance.CurrentEvidenceGeneration == "" {
+		provenance = unavailableProvenance(
+			repository.baseline.BaselineID,
+			"content-sensitive diff generation is unavailable",
+		)
+	} else if result.Generation != provenance.CurrentGeneration ||
+		result.EvidenceGeneration != provenance.CurrentEvidenceGeneration {
+		result.Stale = true
+		provenance = unavailableProvenance(
+			repository.baseline.BaselineID,
+			"repository changed between diff and provenance observations",
+		)
+	}
+	result.Provenance = &provenance
+	byPath := make(map[string]ProvenancePath, len(provenance.Paths))
+	for _, path := range provenance.Paths {
+		if path.Provenance == ProvenanceResolvedSinceBaseline {
+			continue
+		}
+		byPath[evidencePathKey(path.Status, path.OriginalPath, path.Path)] = path
+	}
+	for index := range result.Files {
+		path, ok := byPath[evidencePathKey(
+			result.Files[index].Status,
+			result.Files[index].OriginalPath,
+			result.Files[index].Path,
+		)]
+		if !ok {
+			result.Files[index].Provenance = ProvenanceIndeterminate
+			result.Files[index].ProvenanceReason = provenance.Reason
+			if result.Files[index].ProvenanceReason == "" {
+				result.Files[index].ProvenanceReason = "bounded evidence does not cover this diff path"
+			}
+			continue
+		}
+		result.Files[index].Provenance = path.Provenance
+		result.Files[index].ProvenanceReason = path.Reason
+	}
+}
+
+func evidencePathKey(status, originalPath, path string) string {
+	status = strings.TrimSpace(status)
+	if status != "??" && status != "" {
+		status = status[:1]
+	}
+	return status + "\x00" + originalPath + "\x00" + path
+}
+
+func unavailableProvenance(baselineID, reason string) ProvenanceResult {
+	return ProvenanceResult{BaselineID: baselineID, Indeterminate: true, Reason: reason}
 }
 
 func (repository *Repository) acquire(ctx context.Context) bool {

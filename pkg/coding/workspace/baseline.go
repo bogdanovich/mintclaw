@@ -80,7 +80,13 @@ func (repository *Repository) CaptureBaseline(
 		return RepositoryBaseline{}, contextError(ctx)
 	}
 	defer repository.release()
+	return repository.captureBaseline(ctx, request)
+}
 
+func (repository *Repository) captureBaseline(
+	ctx context.Context,
+	request BaselineRequest,
+) (RepositoryBaseline, error) {
 	commandCtx, cancel := context.WithTimeout(contextOrBackground(ctx), repository.limits.Timeout)
 	defer cancel()
 	snapshot := captureSnapshot(commandCtx, repository.projectRoot, repository.cwd, repository.limits)
@@ -398,15 +404,20 @@ type ProvenancePath struct {
 }
 
 type ProvenanceResult struct {
-	BaselineID        string           `json:"baseline_id"`
-	CurrentGeneration string           `json:"current_generation,omitempty"`
-	Paths             []ProvenancePath `json:"paths,omitempty"`
-	Indeterminate     bool             `json:"indeterminate,omitempty"`
-	Reason            string           `json:"reason,omitempty"`
+	BaselineID                string           `json:"baseline_id"`
+	CurrentGeneration         string           `json:"current_generation,omitempty"`
+	CurrentEvidenceGeneration string           `json:"current_evidence_generation,omitempty"`
+	Paths                     []ProvenancePath `json:"paths,omitempty"`
+	Indeterminate             bool             `json:"indeterminate,omitempty"`
+	Reason                    string           `json:"reason,omitempty"`
 }
 
 func CompareBaseline(baseline, current RepositoryBaseline) ProvenanceResult {
-	result := ProvenanceResult{BaselineID: baseline.BaselineID, CurrentGeneration: current.Generation}
+	result := ProvenanceResult{
+		BaselineID:                baseline.BaselineID,
+		CurrentGeneration:         current.Generation,
+		CurrentEvidenceGeneration: baselineEvidenceGeneration(current),
+	}
 	reason := baselineComparisonReason(baseline, current)
 	result.Indeterminate = reason != ""
 	baselinePaths := baselinePathMap(baseline.Paths)
@@ -482,9 +493,17 @@ func baselineComparisonReason(baseline, current RepositoryBaseline) string {
 func baselinePathMap(paths []BaselinePath) map[string]BaselinePath {
 	result := make(map[string]BaselinePath, len(paths))
 	for _, path := range paths {
-		result[path.OriginalPath+"\x00"+path.Path] = path
+		result[path.Status+"\x00"+path.OriginalPath+"\x00"+path.Path] = path
 	}
 	return result
+}
+
+func baselineEvidenceGeneration(baseline RepositoryBaseline) string {
+	baseline.BaselineID = ""
+	baseline.CapturedAt = time.Time{}
+	data, _ := json.Marshal(baseline)
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
 }
 
 func baselinePathEqual(left, right BaselinePath) bool {
