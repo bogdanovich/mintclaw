@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,9 +106,9 @@ func (e *interactionContinuationExecutor) execute(
 			return turnResult{}, TurnEndStatusError, repairErr
 		}
 		ts.consumeApprovalGrant()
-		if outcome.Control == turnStepFinalize && llm.toolResponseDisposition == toolResponseHandled {
+		if terminal, ok := continuationTerminalContent(outcome, llm); ok {
 			result, finalizeErr := pipeline.finalizeTurn(
-				turnCtx, ts, exec, llm, TurnEndStatusCompleted, terminalContent{},
+				turnCtx, ts, exec, llm, TurnEndStatusCompleted, terminal,
 			)
 			if finalizeErr != nil {
 				return result, TurnEndStatusError, finalizeErr
@@ -117,6 +118,25 @@ func (e *interactionContinuationExecutor) execute(
 	}
 
 	return pipeline.runPreparedTurnLoop(ctx, turnCtx, ts, exec)
+}
+
+func continuationTerminalContent(
+	outcome ToolLoopOutcome,
+	llm *LLMIterationState,
+) (terminalContent, bool) {
+	switch outcome.Control {
+	case turnStepFinalizeExact:
+		content := strings.TrimSpace(outcome.FinalContent)
+		if content == "" {
+			content = "The tool loop was stopped by runtime safety protection."
+		}
+		return terminalContent{content: content}, true
+	case turnStepFinalize:
+		if llm != nil && llm.toolResponseDisposition == toolResponseHandled {
+			return terminalContent{}, true
+		}
+	}
+	return terminalContent{}, false
 }
 
 func repairJournaledToolPair(
