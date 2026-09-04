@@ -627,7 +627,9 @@ func (descriptor CommandDescriptor) HashForProtocol(protocolVersion int) (string
 	if err := descriptor.Validate(); err != nil {
 		return "", err
 	}
-	return (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).canonicalHashForProtocol(protocolVersion)
+	return (CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}).boundedCanonicalHashForProtocol(
+		protocolVersion,
+	)
 }
 
 type CapabilityCatalog struct {
@@ -716,7 +718,7 @@ func (catalog CapabilityCatalog) HashForProtocol(protocolVersion int) (string, e
 	if err := catalog.Validate(); err != nil {
 		return "", err
 	}
-	return catalog.canonicalHashForProtocol(protocolVersion)
+	return catalog.boundedCanonicalHashForProtocol(protocolVersion)
 }
 
 // canonicalHash hashes catalog bytes without validating command semantics.
@@ -727,9 +729,23 @@ func (catalog CapabilityCatalog) canonicalHash() (string, error) {
 }
 
 func (catalog CapabilityCatalog) canonicalHashForProtocol(protocolVersion int) (string, error) {
+	return catalog.hashForProtocol(protocolVersion, false)
+}
+
+func (catalog CapabilityCatalog) boundedCanonicalHashForProtocol(protocolVersion int) (string, error) {
+	return catalog.hashForProtocol(protocolVersion, true)
+}
+
+func (catalog CapabilityCatalog) hashForProtocol(protocolVersion int, bounded bool) (string, error) {
 	protocolVersion, protocolErr := EffectiveProtocolVersion(protocolVersion)
 	if protocolErr != nil {
 		return "", protocolErr
+	}
+	canonicalize := func(raw json.RawMessage, maxBytes int) (json.RawMessage, error) {
+		if bounded {
+			return canonicalJSONForProtocolBounded(raw, protocolVersion, maxBytes)
+		}
+		return canonicalJSONForProtocol(raw, protocolVersion)
 	}
 	commands := append([]CommandDescriptor(nil), catalog.Commands...)
 	if commands == nil {
@@ -738,28 +754,19 @@ func (catalog CapabilityCatalog) canonicalHashForProtocol(protocolVersion int) (
 	slices.SortFunc(commands, func(a, b CommandDescriptor) int { return cmp.Compare(a.Name, b.Name) })
 	for i := range commands {
 		var canonicalErr error
-		commands[i].InputSchema, canonicalErr = canonicalJSONForProtocolBounded(
-			commands[i].InputSchema,
-			protocolVersion,
-			MaxSchemaBytes,
-		)
+		commands[i].InputSchema, canonicalErr = canonicalize(commands[i].InputSchema, MaxSchemaBytes)
 		if canonicalErr != nil {
 			return "", canonicalErr
 		}
-		commands[i].OutputSchema, canonicalErr = canonicalJSONForProtocolBounded(
-			commands[i].OutputSchema,
-			protocolVersion,
-			MaxSchemaBytes,
-		)
+		commands[i].OutputSchema, canonicalErr = canonicalize(commands[i].OutputSchema, MaxSchemaBytes)
 		if canonicalErr != nil {
 			return "", canonicalErr
 		}
 		if commands[i].ModelContract != nil {
 			contract := cloneCommandModelContract(*commands[i].ModelContract)
 			for exampleIndex := range contract.Examples {
-				contract.Examples[exampleIndex], canonicalErr = canonicalJSONForProtocolBounded(
+				contract.Examples[exampleIndex], canonicalErr = canonicalize(
 					contract.Examples[exampleIndex],
-					protocolVersion,
 					MaxModelExampleBytes,
 				)
 				if canonicalErr != nil {
@@ -773,7 +780,7 @@ func (catalog CapabilityCatalog) canonicalHashForProtocol(protocolVersion int) (
 	if err != nil {
 		return "", fmt.Errorf("marshal capability catalog: %w", err)
 	}
-	if len(data) > MaxCatalogBytes {
+	if bounded && len(data) > MaxCatalogBytes {
 		return "", fmt.Errorf("%w: canonical catalog exceeds size limit", ErrInvalidCapability)
 	}
 	sum := sha256.Sum256(data)
