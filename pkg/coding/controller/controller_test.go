@@ -715,6 +715,55 @@ func TestQueuedWorkspaceRefreshExcludesLaterTurn(t *testing.T) {
 	}
 }
 
+func TestCanceledQueuedWorkspaceRefreshStopsExcludingTurnsImmediately(t *testing.T) {
+	runtime := &blockingWorkspaceRefreshRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		statusStarted:   make(chan struct{}, 1),
+		statusRelease:   make(chan struct{}),
+		refreshStarted:  make(chan struct{}, 1),
+		refreshRelease:  make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	statusErr := make(chan error, 1)
+	go func() {
+		_, err := controller.RepositoryStatus(t.Context())
+		statusErr <- err
+	}()
+	<-runtime.statusStarted
+	refreshCtx, cancelRefresh := context.WithCancel(t.Context())
+	refreshReply := make(chan error, 1)
+	if err := controller.enqueue(t.Context(), command{
+		kind:  commandRefreshWorkspace,
+		ctx:   refreshCtx,
+		reply: refreshReply,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cancelRefresh()
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "work"}); err != nil {
+		t.Fatalf("Submit() after queued refresh cancellation = %v", err)
+	}
+	<-runtime.runStarted
+	if err := <-refreshReply; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled queued refresh error = %v", err)
+	}
+	close(runtime.statusRelease)
+	if err := <-statusErr; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-runtime.refreshStarted:
+		t.Fatal("canceled queued refresh was executed")
+	default:
+	}
+	if err := controller.HardCancel(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRepositoryEvidenceDelegatesTypedReadOnlyCapability(t *testing.T) {
 	runtime := &repositoryEvidenceRuntime{blockingRuntime: newBlockingRuntime()}
 	controller := newTestController(t, runtime)

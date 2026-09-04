@@ -164,7 +164,7 @@ func (repository *Repository) Status(ctx context.Context) StatusResult {
 
 func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffResult {
 	result := repository.diff(ctx, target)
-	if result.Target.Kind == DiffTargetCurrent {
+	if result.Target.Kind == DiffTargetCurrent || result.Target.Kind == DiffTargetBase {
 		repository.attachDiffProvenance(ctx, &result)
 	}
 	return result

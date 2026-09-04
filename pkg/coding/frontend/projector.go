@@ -729,9 +729,17 @@ func (p *Projector) ContextUsage(used, limit int) {
 
 func (p *Projector) WorkspaceUpdated(snapshot codingworkspace.Snapshot) {
 	p.mutate(func(state *ThreadSnapshot) {
+		invalidateMutableRepositoryEvidence(state)
 		workspace := cloneWorkspaceSnapshot(snapshot)
 		state.Workspace = &workspace
 	})
+}
+
+func invalidateMutableRepositoryEvidence(state *ThreadSnapshot) {
+	state.RepositoryStatus = nil
+	if state.RepositoryDiff != nil && state.RepositoryDiff.Target.Kind != codingworkspace.DiffTargetCommit {
+		state.RepositoryDiff = nil
+	}
 }
 
 func (p *Projector) RepositoryStatusUpdated(status codingworkspace.StatusResult) {
@@ -752,13 +760,13 @@ func mutableDiffMatchesStatus(
 	diff codingworkspace.DiffResult,
 	status codingworkspace.StatusResult,
 ) bool {
-	if diff.Generation != status.Snapshot.Identity() {
+	if diff.Stale || status.Stale || diff.Generation == "" || diff.Generation != status.Snapshot.Identity() {
 		return false
 	}
-	if diff.EvidenceGeneration == "" {
-		return true
-	}
-	return status.Provenance != nil &&
+	return diff.EvidenceGeneration != "" &&
+		status.Provenance != nil &&
+		!status.Provenance.Indeterminate &&
+		status.Provenance.CurrentEvidenceGeneration != "" &&
 		status.Provenance.CurrentEvidenceGeneration == diff.EvidenceGeneration
 }
 

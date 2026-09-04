@@ -130,6 +130,102 @@ func TestRepositoryStatusAdvanceClearsObsoleteMutableDiff(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAdvanceInvalidatesMutableRepositoryEvidence(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	workspace := codingworkspace.Snapshot{ProjectRoot: "/repo", CWD: "/repo"}
+	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{Snapshot: workspace})
+	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{
+		Target: codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase, Ref: "main"},
+	})
+	projector.WorkspaceUpdated(workspace)
+	snapshot := snapshotForTest(t, projector)
+	if snapshot.RepositoryStatus != nil || snapshot.RepositoryDiff != nil {
+		t.Fatalf(
+			"workspace advance retained mutable evidence = %#v / %#v",
+			snapshot.RepositoryStatus,
+			snapshot.RepositoryDiff,
+		)
+	}
+
+	projector.RepositoryStatusUpdated(codingworkspace.StatusResult{Snapshot: workspace})
+	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{
+		Target: codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCommit, Ref: "HEAD"},
+	})
+	projector.WorkspaceUpdated(workspace)
+	snapshot = snapshotForTest(t, projector)
+	if snapshot.RepositoryStatus != nil || snapshot.RepositoryDiff == nil {
+		t.Fatalf(
+			"workspace advance did not preserve only immutable diff = %#v / %#v",
+			snapshot.RepositoryStatus,
+			snapshot.RepositoryDiff,
+		)
+	}
+}
+
+func TestRepositoryStatusDoesNotValidateMutableDiffWithIncompleteEvidence(t *testing.T) {
+	workspace := codingworkspace.Snapshot{ProjectRoot: "/repo", CWD: "/repo"}
+	for _, test := range []struct {
+		name   string
+		diff   codingworkspace.DiffResult
+		status codingworkspace.StatusResult
+	}{
+		{
+			name: "missing diff evidence generation",
+			diff: codingworkspace.DiffResult{
+				Target:     codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+				Generation: workspace.Identity(),
+			},
+			status: completeStatusEvidence(workspace, "current"),
+		},
+		{
+			name: "indeterminate provenance",
+			diff: codingworkspace.DiffResult{
+				Target:     codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase},
+				Generation: workspace.Identity(), EvidenceGeneration: "current",
+			},
+			status: codingworkspace.StatusResult{
+				Snapshot: workspace,
+				Provenance: &codingworkspace.ProvenanceResult{
+					CurrentEvidenceGeneration: "current", Indeterminate: true,
+				},
+			},
+		},
+		{
+			name: "stale status",
+			diff: codingworkspace.DiffResult{
+				Target:     codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+				Generation: workspace.Identity(), EvidenceGeneration: "current",
+			},
+			status: func() codingworkspace.StatusResult {
+				status := completeStatusEvidence(workspace, "current")
+				status.Stale = true
+				return status
+			}(),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			projector := newTestProjector(t, ProjectionLimits{})
+			projector.RepositoryDiffUpdated(test.diff)
+			projector.RepositoryStatusUpdated(test.status)
+			if snapshot := snapshotForTest(t, projector); snapshot.RepositoryDiff != nil {
+				t.Fatalf("incomplete evidence retained mutable diff = %#v", snapshot.RepositoryDiff)
+			}
+		})
+	}
+}
+
+func completeStatusEvidence(
+	workspace codingworkspace.Snapshot,
+	evidenceGeneration string,
+) codingworkspace.StatusResult {
+	return codingworkspace.StatusResult{
+		Snapshot: workspace,
+		Provenance: &codingworkspace.ProvenanceResult{
+			CurrentEvidenceGeneration: evidenceGeneration,
+		},
+	}
+}
+
 func TestSubscribeReturnsCurrentViewAndPublishesLaterViews(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	projector.Open(false)
