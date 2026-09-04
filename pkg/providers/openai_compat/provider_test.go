@@ -1019,6 +1019,80 @@ func TestProviderChat_MiMoDisablesThinkingForMixedProviderToolHistory(t *testing
 	}
 }
 
+func TestProviderChat_ExplicitOffSurvivesExtraBodyWithCompleteReasoningHistory(t *testing.T) {
+	tests := []struct {
+		name         string
+		providerName string
+		apiBase      string
+		model        string
+	}{
+		{
+			name:         "DeepSeek",
+			providerName: "deepseek",
+			apiBase:      "https://api.deepseek.com/v1",
+			model:        "deepseek-v4-flash",
+		},
+		{
+			name:         "MiMo",
+			providerName: "mimo",
+			apiBase:      "https://api.xiaomimimo.com/v1",
+			model:        "mimo-v2.5",
+		},
+	}
+	messages := []Message{
+		{Role: "user", Content: "Inspect the pull request"},
+		{
+			Role:             "assistant",
+			Content:          "I will inspect the diff.",
+			ReasoningContent: "I should inspect the changed files.",
+			ToolCalls: []ToolCall{{
+				ID:        "call_diff",
+				Type:      "function",
+				Name:      "exec",
+				Arguments: map[string]any{"command": "git diff"},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call_diff", Content: "diff output"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProvider(
+				"key",
+				tt.apiBase,
+				"",
+				WithExtraBody(map[string]any{
+					"thinking":         map[string]any{"type": "enabled"},
+					"reasoning_effort": "max",
+				}),
+			)
+			p.SetProviderName(tt.providerName)
+
+			body := p.buildRequestBody(
+				messages,
+				replayTestTools(),
+				tt.model,
+				map[string]any{"thinking_level": "off"},
+			)
+
+			thinking, ok := body["thinking"].(map[string]any)
+			if !ok || thinking["type"] != "disabled" {
+				t.Fatalf("thinking = %#v, want explicitly disabled", body["thinking"])
+			}
+			if _, ok := body["reasoning_effort"]; ok {
+				t.Fatal("reasoning_effort must be absent when thinking is explicitly disabled")
+			}
+			encoded, err := json.Marshal(body["messages"])
+			if err != nil {
+				t.Fatalf("marshal request messages: %v", err)
+			}
+			if bytes.Contains(encoded, []byte("reasoning_content")) {
+				t.Fatalf("explicit-off request retained reasoning_content: %s", encoded)
+			}
+		})
+	}
+}
+
 func TestProviderChat_HTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)

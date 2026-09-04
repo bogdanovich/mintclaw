@@ -135,7 +135,7 @@ func (p *Provider) buildRequestBody(
 	messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) map[string]any {
 	model = normalizeModel(model, p.apiBase)
-	preparedMessages, forceThinkingOff := p.prepareMessagesForRequest(messages, tools, options)
+	preparedMessages, enforceThinkingOff := p.prepareMessagesForRequest(messages, tools, options)
 
 	requestBody := map[string]any{
 		"model":    model,
@@ -198,32 +198,39 @@ func (p *Provider) buildRequestBody(
 	}
 
 	thinkingOptions := options
-	if forceThinkingOff {
+	if enforceThinkingOff {
 		thinkingOptions = maps.Clone(options)
 		if thinkingOptions == nil {
 			thinkingOptions = make(map[string]any)
 		}
 		thinkingOptions["thinking_level"] = "off"
-		logger.WarnCF(
-			"provider.openai_compat",
-			"disabled thinking for tool request with incomplete reasoning replay history",
-			map[string]any{"provider": p.providerName, "model": model},
-		)
+		if !thinkingLevelExplicitlyOff(options) {
+			logger.WarnCF(
+				"provider.openai_compat",
+				"disabled thinking for tool request with incomplete reasoning replay history",
+				map[string]any{"provider": p.providerName, "model": model},
+			)
+		}
 	}
 	p.applyThinkingControl(requestBody, model, thinkingOptions)
 
 	// Merge extra body fields configured per-provider/model.
 	// These are injected last so they take precedence over defaults.
 	maps.Copy(requestBody, p.extraBody)
-	if forceThinkingOff {
+	if enforceThinkingOff {
 		// Compatibility is a request validity invariant, not a preference.
-		// Do not let a static extra_body re-enable thinking for history whose
-		// original reasoning cannot be replayed.
+		// Do not let a static extra_body re-enable thinking after request
+		// serialization omitted reasoning replay.
 		requestBody["thinking"] = map[string]any{"type": "disabled"}
 		delete(requestBody, "reasoning_effort")
 	}
 
 	return requestBody
+}
+
+func thinkingLevelExplicitlyOff(options map[string]any) bool {
+	level, ok := normalizedThinkingLevel(options)
+	return ok && level == "off"
 }
 
 func (p *Provider) applyThinkingControl(requestBody map[string]any, model string, options map[string]any) {
@@ -381,8 +388,10 @@ func (p *Provider) prepareMessagesForRequest(
 		// reasoning_content or sending a request known to fail with HTTP 400.
 		return stripReasoningMessages(messages), true
 	}
-	if level, ok := normalizedThinkingLevel(options); ok && level == "off" {
-		return stripReasoningMessages(messages), false
+	if thinkingLevelExplicitlyOff(options) {
+		// The request omits reasoning replay, so a later extra_body merge must not
+		// re-enable thinking and turn the serialized history into an invalid request.
+		return stripReasoningMessages(messages), true
 	}
 	return preserveReasoningReplayMessages(messages), false
 }
