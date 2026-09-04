@@ -28,6 +28,12 @@ type PidFileData struct {
 	Host    string `json:"host"`
 }
 
+// ProcessRunning reports whether pid identifies a live process using the
+// platform-specific liveness probe shared by PID-file validation.
+func ProcessRunning(pid int) bool {
+	return isProcessRunning(pid)
+}
+
 var pidMu sync.Mutex
 
 // pidFilePath returns the absolute path for the PID file given the home directory.
