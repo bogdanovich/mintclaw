@@ -629,17 +629,24 @@ func canonicalInvocationInputValueForProtocol(
 	if len(raw) == 0 || len(raw) > MaxInvocationInputBytes {
 		return nil, nil, fmt.Errorf("%w: input is outside bounds", ErrInvalidInvocation)
 	}
-	canonical, err := canonicalBytesForProtocol(raw, protocolVersion, MaxInvocationInputBytes)
+	value, err := jsonstrict.Decode(raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w: canonicalize input: %w", ErrInvalidInvocation, err)
-	}
-	value, err := jsonstrict.Decode(canonical)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: decode canonical input: %w", ErrInvalidInvocation, err)
+		return nil, nil, fmt.Errorf("%w: invalid input: %w", ErrInvalidInvocation, err)
 	}
 	object, ok := value.(map[string]any)
 	if !ok {
 		return nil, nil, fmt.Errorf("%w: input must be an object", ErrInvalidInvocation)
+	}
+	canonical, err := canonicalBytesForProtocol(raw, protocolVersion, MaxInvocationInputBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: canonicalize input: %w", ErrInvalidInvocation, err)
+	}
+	if protocolVersion == ProtocolV2 {
+		value, err = jsonstrict.Decode(canonical)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: decode canonical input: %w", ErrInvalidInvocation, err)
+		}
+		object = value.(map[string]any)
 	}
 	return json.RawMessage(canonical), object, nil
 }
@@ -685,17 +692,24 @@ func ValidateInvocationOutputForProtocol(
 	if limit <= 0 || limit > MaxInvocationOutput || len(raw) == 0 || len(raw) > limit {
 		return nil, fmt.Errorf("%w: output is outside bounds", ErrInvalidInvocation)
 	}
-	canonical, err := canonicalBytesForProtocol(raw, protocolVersion, limit)
+	value, err := jsonstrict.Decode(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: canonicalize output: %w", ErrInvalidInvocation, err)
-	}
-	value, err := jsonstrict.Decode(canonical)
-	if err != nil {
-		return nil, fmt.Errorf("%w: decode canonical output: %w", ErrInvalidInvocation, err)
+		return nil, fmt.Errorf("%w: invalid output: %w", ErrInvalidInvocation, err)
 	}
 	object, ok := value.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("%w: output must be an object", ErrInvalidInvocation)
+	}
+	canonical, err := canonicalBytesForProtocol(raw, protocolVersion, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%w: canonicalize output: %w", ErrInvalidInvocation, err)
+	}
+	if protocolVersion == ProtocolV2 {
+		value, err = jsonstrict.Decode(canonical)
+		if err != nil {
+			return nil, fmt.Errorf("%w: decode canonical output: %w", ErrInvalidInvocation, err)
+		}
+		object = value.(map[string]any)
 	}
 	if validationErr := validateInvocationValue(descriptor.OutputSchema, object, "output"); validationErr != nil {
 		return nil, validationErr
