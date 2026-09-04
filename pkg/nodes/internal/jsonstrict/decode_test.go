@@ -107,6 +107,20 @@ func TestCanonicalV2RejectsNumbersOutsideBounds(t *testing.T) {
 	}
 }
 
+func TestCanonicalV2BoundedStopsNumericExpansion(t *testing.T) {
+	input := []byte(`{"values":[1e4095,1e4095,1e4095]}`)
+	if _, err := CanonicalV2Bounded(input, 8*1024); !errors.Is(err, ErrCanonicalTooLarge) {
+		t.Fatalf("CanonicalV2Bounded() error = %v", err)
+	}
+	canonical, err := CanonicalV2Bounded(input, 16*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(canonical) <= len(input) || len(canonical) > 16*1024 {
+		t.Fatalf("bounded canonical size = %d for %d-byte input", len(canonical), len(input))
+	}
+}
+
 func TestCanonicalPreservesEmptyArrays(t *testing.T) {
 	canonical, err := Canonical([]byte(`{"values":[]}`))
 	if err != nil {

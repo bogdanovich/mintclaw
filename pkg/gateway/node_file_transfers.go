@@ -359,9 +359,6 @@ func (source *nodeFileTransferSource) dispatchFileInfo(
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
 	defer func() { _ = stream.Close() }()
-	if dispatched, dispatchErr := source.markFileTransferDispatched(owner, record); dispatchErr != nil {
-		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
-	}
 	payload, marshalErr := json.Marshal(nodeFileTransferPrepare{
 		Operation: "info",
 		Path:      input.Path,
@@ -372,8 +369,14 @@ func (source *nodeFileTransferSource) dispatchFileInfo(
 	}
 	frame.Type = protocol.TransferFramePrepare
 	frame.Payload = payload
-	if sendErr := stream.Send(ctx, frame); sendErr != nil {
-		return tools.NodeFileTransferResult{}, true, sendErr
+	if dispatched, dispatchErr := source.dispatchFileTransferPrepare(
+		ctx,
+		stream,
+		owner,
+		record,
+		frame,
+	); dispatchErr != nil {
+		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
 	}
 	response, receiveErr := stream.Receive(ctx)
 	if receiveErr != nil {
@@ -410,9 +413,6 @@ func (source *nodeFileTransferSource) dispatchFileUpload(
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
 	defer func() { _ = stream.Close() }()
-	if dispatched, dispatchErr := source.markFileTransferDispatched(owner, record); dispatchErr != nil {
-		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
-	}
 	payload, marshalErr := json.Marshal(nodeFileTransferPrepare{
 		Operation:   "upload",
 		Path:        input.Destination,
@@ -424,8 +424,14 @@ func (source *nodeFileTransferSource) dispatchFileUpload(
 	}
 	frame.Type = protocol.TransferFramePrepare
 	frame.Payload = payload
-	if sendErr := stream.Send(ctx, frame); sendErr != nil {
-		return tools.NodeFileTransferResult{}, true, sendErr
+	if dispatched, dispatchErr := source.dispatchFileTransferPrepare(
+		ctx,
+		stream,
+		owner,
+		record,
+		frame,
+	); dispatchErr != nil {
+		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
 	}
 	response, receiveErr := stream.Receive(ctx)
 	if receiveErr != nil {
@@ -527,9 +533,6 @@ func (source *nodeFileTransferSource) dispatchFileDownload(
 		return tools.NodeFileTransferResult{}, false, openErr
 	}
 	defer func() { _ = stream.Close() }()
-	if dispatched, dispatchErr := source.markFileTransferDispatched(owner, record); dispatchErr != nil {
-		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
-	}
 	prepare := nodeFileTransferPrepare{
 		Operation: "download", Path: input.Source, ExpiresAt: record.Plan.ExpiresAt,
 	}
@@ -546,8 +549,14 @@ func (source *nodeFileTransferSource) dispatchFileDownload(
 	}
 	frame.Type = protocol.TransferFramePrepare
 	frame.Payload = payload
-	if sendErr := stream.Send(ctx, frame); sendErr != nil {
-		return tools.NodeFileTransferResult{}, true, sendErr
+	if dispatched, dispatchErr := source.dispatchFileTransferPrepare(
+		ctx,
+		stream,
+		owner,
+		record,
+		frame,
+	); dispatchErr != nil {
+		return tools.NodeFileTransferResult{}, dispatched, dispatchErr
 	}
 	for {
 		response, receiveErr := stream.Receive(ctx)
@@ -766,6 +775,28 @@ func (source *nodeFileTransferSource) markFileTransferDispatched(
 		return true, nodes.ErrGatewayInvocationDispatched
 	}
 	return true, nil
+}
+
+func (source *nodeFileTransferSource) dispatchFileTransferPrepare(
+	ctx context.Context,
+	stream *nodews.TransferStream,
+	owner nodes.GatewayInvocationOwner,
+	record nodes.GatewayInvocationRecord,
+	frame protocol.TransferFrame,
+) (bool, error) {
+	durablyDispatched := false
+	_, err := stream.SendAtDispatch(ctx, frame, func(write func() error) error {
+		var markErr error
+		durablyDispatched, markErr = source.markFileTransferDispatched(owner, record)
+		if markErr == nil {
+			return write()
+		}
+		if durablyDispatched && fileutil.IsCommittedWriteError(markErr) {
+			return errors.Join(markErr, write())
+		}
+		return markErr
+	})
+	return durablyDispatched, err
 }
 
 func (source *nodeFileTransferSource) queryRemoteFileTransfer(
