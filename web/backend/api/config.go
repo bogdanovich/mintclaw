@@ -117,7 +117,10 @@ func (h *Handler) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to apply security config: %v", err), http.StatusInternalServerError)
 		return
 	}
-	applyConfigSecretsFromMap(&cfg, raw)
+	if err = applyConfigSecretsFromMap(&cfg, raw, h.configPath); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to resolve config secrets: %v", err), http.StatusBadRequest)
+		return
+	}
 
 	if errs := validateConfig(&cfg); len(errs) > 0 {
 		w.Header().Set("Content-Type", "application/json")
@@ -266,7 +269,9 @@ func applyConfigMergePatch(current *config.Config, patch map[string]any, configP
 	if err = updated.SecurityCopyForReplacement(configPath, current); err != nil {
 		return nil, fmt.Errorf("apply security config: %w", err)
 	}
-	applyConfigSecretsFromMap(&updated, base)
+	if err = applyConfigSecretsFromMap(&updated, base, configPath); err != nil {
+		return nil, fmt.Errorf("resolve config secrets: %w", err)
+	}
 	return &updated, nil
 }
 
@@ -755,7 +760,7 @@ func normalizeStringArrayItems(items []string, options stringArrayParserOptions)
 func getSecretString(m map[string]any, key string) (string, bool) {
 	if raw, exists := m[key]; exists {
 		s, isString := raw.(string)
-		if isString {
+		if isString && s != legacySecretPlaceholder {
 			return s, true
 		}
 	}
@@ -768,7 +773,9 @@ func getSecretString(m map[string]any, key string) (string, bool) {
 	return "", false
 }
 
-func applyConfigSecretsFromMap(cfg *config.Config, raw map[string]any) {
+const legacySecretPlaceholder = "[NOT_HERE]"
+
+func applyConfigSecretsFromMap(cfg *config.Config, raw map[string]any, configPath string) error {
 	channelsMap, _ := asMapField(raw, "channel_list")
 	for chName, chData := range channelsMap {
 		chMap, ok := chData.(map[string]any)
@@ -799,29 +806,25 @@ func applyConfigSecretsFromMap(cfg *config.Config, raw map[string]any) {
 	}
 
 	// Handle tools secrets
-	tools, hasTools := asMapField(raw, "tools")
-	if !hasTools {
-		return
-	}
-	skills, hasSkills := asMapField(tools, "skills")
-	if !hasSkills {
-		return
-	}
-	registries, hasRegistries := asMapField(skills, "registries")
-	if !hasRegistries {
-		return
-	}
+	tools, _ := asMapField(raw, "tools")
+	skills, _ := asMapField(tools, "skills")
+	registries, _ := asMapField(skills, "registries")
 	for registryName, rawRegistry := range registries {
 		registryMap, ok := rawRegistry.(map[string]any)
 		if !ok {
 			continue
 		}
-		if authToken, hasAuthToken := getSecretString(registryMap, "auth_token"); hasAuthToken {
+		if authToken, hasAuthToken := getSecretString(
+			registryMap,
+			"auth_token",
+		); hasAuthToken &&
+			authToken != legacySecretPlaceholder {
 			registryCfg, _ := cfg.Tools.Skills.Registries.Get(registryName)
 			registryCfg.AuthToken.Set(authToken)
 			cfg.Tools.Skills.Registries.Set(registryName, registryCfg)
 		}
 	}
+	return cfg.ResolveCredentialReferences(configPath)
 }
 
 // applySecureStringsToStruct walks a struct and applies SecureString fields
@@ -845,6 +848,9 @@ func applySecureStringsToStruct(rv reflect.Value, rawMap map[string]any) {
 			}
 			// Direct SecureString field
 			if s, ok := rawVal.(string); ok {
+				if s == legacySecretPlaceholder {
+					continue
+				}
 				if f.Type == reflect.TypeOf(config.SecureString{}) {
 					sf.Set(reflect.ValueOf(*config.NewSecureString(s)))
 				} else if f.Type == reflect.TypeOf(&config.SecureString{}) {
