@@ -463,12 +463,20 @@ func validateInvocationApproval(
 	nodeID nodes.ID,
 	plan nodes.ExecutionPlan,
 ) error {
+	approvalProtocol, err := nodes.EffectiveProtocolVersion(approval.ProtocolVersion)
+	if err != nil {
+		return err
+	}
+	planProtocol, err := nodes.EffectiveProtocolVersion(plan.ProtocolVersion)
+	if err != nil || planProtocol != approvalProtocol {
+		return fmt.Errorf("%w: execution plan protocol is stale", nodes.ErrCommandDenied)
+	}
 	descriptor := approval.Descriptor
 	if len(descriptor.FileProfiles) > 0 {
 		var input struct {
 			ProfileRevision string `json:"profile_revision"`
 		}
-		if err := json.Unmarshal(plan.Input, &input); err != nil {
+		if decodeErr := json.Unmarshal(plan.Input, &input); decodeErr != nil {
 			return fmt.Errorf("%w: execution plan lacks file profile authority", nodes.ErrCommandDenied)
 		}
 		profileAlias := ""
@@ -532,7 +540,7 @@ func validateInvocationApproval(
 			)
 		}
 	}
-	descriptorHash, err := descriptor.HashForProtocol(plan.ProtocolVersion)
+	descriptorHash, err := descriptor.HashForProtocol(planProtocol)
 	if err != nil {
 		return err
 	}

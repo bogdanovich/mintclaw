@@ -60,8 +60,9 @@ type AdmissionResult struct {
 // CommandApproval binds one command descriptor to the exact capability
 // catalog approved for the connected node.
 type CommandApproval struct {
-	Descriptor  CommandDescriptor
-	CatalogHash string
+	Descriptor      CommandDescriptor
+	CatalogHash     string
+	ProtocolVersion int
 }
 
 // Admission is a verified identity decision. Connected decisions become
@@ -314,9 +315,13 @@ func commandApproval(registration Registration, command string) (CommandApproval
 	if err != nil {
 		return CommandApproval{}, err
 	}
+	protocolVersion, err := EffectiveProtocolVersion(registration.Snapshot.ProtocolVersion)
+	if err != nil {
+		return CommandApproval{}, err
+	}
 	return CommandApproval{
-		Descriptor:  descriptor,
-		CatalogHash: registration.ApprovedCatalogHash,
+		Descriptor: descriptor, CatalogHash: registration.ApprovedCatalogHash,
+		ProtocolVersion: protocolVersion,
 	}, nil
 }
 

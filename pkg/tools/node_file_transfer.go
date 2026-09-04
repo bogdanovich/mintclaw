@@ -1623,11 +1623,16 @@ func validateRetainedJobArtifactDownload(
 	deliver bool,
 	owner nodes.TransferArtifactOwner,
 ) error {
+	protocolVersion, protocolMatches := matchingNodeProtocol(
+		record.Plan.ProtocolVersion,
+		resolved.snapshot.ProtocolVersion,
+	)
 	if record.Target != resolved.name || record.Plan.NodeID != resolved.snapshot.ID ||
+		!protocolMatches ||
 		record.Plan.CatalogHash != resolved.snapshot.CatalogHash ||
 		record.Plan.Command != nodes.InternalJobArtifactDownloadCommand ||
 		record.Descriptor.Name != descriptor.Name ||
-		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor, record.Plan.ProtocolVersion) ||
+		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor, protocolVersion) ||
 		record.Plan.PolicyRevision != profile.Revision ||
 		record.Plan.ExpiresAt <= time.Now().Unix() {
 		return fmt.Errorf("%w: retained job artifact authority changed", errDiscoveryStale)
@@ -1663,12 +1668,16 @@ func validateRetainedFileTransfer(
 	owner nodes.TransferArtifactOwner,
 	mediaOwner media.MediaOwner,
 ) error {
+	protocolVersion, protocolMatches := matchingNodeProtocol(
+		record.Plan.ProtocolVersion,
+		resolved.snapshot.ProtocolVersion,
+	)
 	if record.Target != resolved.name || record.Plan.NodeID != resolved.snapshot.ID {
 		return fmt.Errorf("%w: retained target authority changed", errDiscoveryStale)
 	}
-	if record.Plan.CatalogHash != resolved.snapshot.CatalogHash ||
+	if !protocolMatches || record.Plan.CatalogHash != resolved.snapshot.CatalogHash ||
 		record.Descriptor.Name != descriptor.Name ||
-		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor, record.Plan.ProtocolVersion) {
+		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor, protocolVersion) {
 		return fmt.Errorf("%w: retained catalog authority changed", errDiscoveryStale)
 	}
 	if record.Plan.PolicyRevision != profile.Revision {
@@ -1712,6 +1721,12 @@ func validateRetainedFileTransfer(
 		return fmt.Errorf("%w: retained file command changed", errDiscoveryStale)
 	}
 	return record.Plan.ValidateAgainstHash(record.ExpectedPlanHash)
+}
+
+func matchingNodeProtocol(planVersion, snapshotVersion int) (int, bool) {
+	planProtocol, planErr := nodes.EffectiveProtocolVersion(planVersion)
+	snapshotProtocol, snapshotErr := nodes.EffectiveProtocolVersion(snapshotVersion)
+	return snapshotProtocol, planErr == nil && snapshotErr == nil && planProtocol == snapshotProtocol
 }
 
 func descriptorHashOrEmpty(descriptor nodes.CommandDescriptor, protocolVersion int) string {

@@ -57,6 +57,8 @@ type connectedWorkers struct {
 	events   sync.WaitGroup
 }
 
+const companionProtocolVersion = nodes.ProtocolV1
+
 func NewClientWithRuntime(
 	cfg Config,
 	identity Identity,
@@ -966,7 +968,8 @@ func (client *Client) handleInvoke(
 			"invalid execution plan",
 		)
 	}
-	if envelope.IdempotencyKey == "" || envelope.IdempotencyKey != plan.IdempotencyKey {
+	if !executionPlanMatchesProtocol(plan, companionProtocolVersion) ||
+		envelope.IdempotencyKey == "" || envelope.IdempotencyKey != plan.IdempotencyKey {
 		return client.writeCommandError(
 			writer,
 			envelope.ID,
@@ -993,6 +996,11 @@ func (client *Client) handleInvoke(
 		OK:     &ok,
 		Result: result,
 	})
+}
+
+func executionPlanMatchesProtocol(plan nodes.ExecutionPlan, protocolVersion int) bool {
+	planProtocol, err := nodes.EffectiveProtocolVersion(plan.ProtocolVersion)
+	return err == nil && planProtocol == protocolVersion
 }
 
 func invocationCommandFailure(err error) (string, string) {
