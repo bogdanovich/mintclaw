@@ -862,8 +862,12 @@ func (ts *turnState) skillContextSnapshotsSnapshot() []SkillContextSnapshot {
 
 func (ts *turnState) setTurnCancel(cancel context.CancelFunc) {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	ts.turnCancel = cancel
+	hardAbort := ts.hardAbort
+	ts.mu.Unlock()
+	if hardAbort && cancel != nil {
+		cancel()
+	}
 }
 
 func (ts *turnState) setProviderCancel(cancel context.CancelFunc) {
@@ -1211,6 +1215,9 @@ func (ts *turnState) addChildTurn(childID string) {
 // remains open because asynchronous child deliveries may still hold a sender.
 func (ts *turnState) Finish(isHardAbort bool) {
 	ts.mu.Lock()
+	if isHardAbort {
+		ts.hardAbort = true
+	}
 	ts.isFinished.Store(true)
 	ts.pendingResultsSealed = true
 	turnCancel := ts.turnCancel
