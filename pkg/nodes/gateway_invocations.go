@@ -196,7 +196,7 @@ func (record GatewayInvocationRecord) validateFields(descriptorValidated bool) e
 			return err
 		}
 		var err error
-		descriptorHash, err = record.Descriptor.Hash()
+		descriptorHash, err = record.Descriptor.HashForProtocol(record.Plan.ProtocolVersion)
 		if err != nil {
 			return err
 		}

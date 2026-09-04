@@ -279,6 +279,7 @@ func (tool *NodeDiscoveryTool) describe(
 	binding := tool.access.targets[target]
 	description.Commands = visibleNodeCommands(
 		snapshot.Catalog,
+		snapshot.ProtocolVersion,
 		registration,
 		entry.Availability,
 		binding.FileProfile,
@@ -290,7 +291,12 @@ func (tool *NodeDiscoveryTool) describe(
 	if command == "" {
 		return nodeJSONResult(description)
 	}
-	descriptor, ok := visibleNodeCommand(snapshot.Catalog, registration, command)
+	descriptor, ok := visibleNodeCommand(
+		snapshot.Catalog,
+		snapshot.ProtocolVersion,
+		registration,
+		command,
+	)
 	if !ok || entry.RequiresReapproval {
 		return toolshared.ErrorResult("command is unavailable on this target")
 	}
@@ -362,7 +368,7 @@ func (access *nodeTargetAccess) resolve(
 	connected := snapshot.State == nodes.StateConnected && record.Connected
 	entry.liveConnected = connected
 	if registration != nil {
-		currentCatalogHash := catalogHash(snapshot.Catalog)
+		currentCatalogHash := catalogHash(snapshot.Catalog, snapshot.ProtocolVersion)
 		if registration.RevokedAt == 0 &&
 			snapshot.State != nodes.StateRevoked &&
 			registration.ApprovedAt > 0 &&
@@ -379,6 +385,7 @@ func (access *nodeTargetAccess) resolve(
 		}
 		commands := visibleNodeCommands(
 			snapshot.Catalog,
+			snapshot.ProtocolVersion,
 			registration,
 			targetAvailability,
 			binding.FileProfile,
@@ -412,6 +419,7 @@ func (access *nodeTargetAccess) visibleTargets(agentID string) ([]string, string
 
 func visibleNodeCommands(
 	catalog nodes.CapabilityCatalog,
+	protocolVersion int,
 	registration *nodes.Registration,
 	targetAvailability string,
 	fileProfile string,
@@ -425,7 +433,7 @@ func visibleNodeCommands(
 	}
 	if registration.ApprovedAt <= 0 ||
 		registration.ApprovedCatalogHash == "" ||
-		registration.ApprovedCatalogHash != catalogHash(catalog) {
+		registration.ApprovedCatalogHash != catalogHash(catalog, protocolVersion) {
 		return []nodeCommandSummary{}
 	}
 	allowed := make(map[string]struct{}, len(registration.AllowedCommands))
@@ -549,6 +557,7 @@ func projectUpdateDescriptorForTarget(
 
 func visibleNodeCommand(
 	catalog nodes.CapabilityCatalog,
+	protocolVersion int,
 	registration *nodes.Registration,
 	name string,
 ) (nodes.CommandDescriptor, bool) {
@@ -563,7 +572,7 @@ func visibleNodeCommand(
 			if allowed == name &&
 				registration.ApprovedAt > 0 &&
 				registration.ApprovedCatalogHash != "" &&
-				registration.ApprovedCatalogHash == catalogHash(catalog) {
+				registration.ApprovedCatalogHash == catalogHash(catalog, protocolVersion) {
 				return descriptor, true
 			}
 		}
@@ -836,7 +845,7 @@ func (access *nodeTargetAccess) discoveryRevision(
 	if !ok {
 		return "", errors.New("target binding is unavailable")
 	}
-	descriptorDigest, err := descriptor.Hash()
+	descriptorDigest, err := descriptor.HashForProtocol(snapshot.ProtocolVersion)
 	if err != nil {
 		return "", err
 	}
@@ -882,8 +891,8 @@ func (access *nodeTargetAccess) bypassesApproval(target string) bool {
 	return bypass
 }
 
-func catalogHash(catalog nodes.CapabilityCatalog) string {
-	hash, err := catalog.Hash()
+func catalogHash(catalog nodes.CapabilityCatalog, protocolVersion int) string {
+	hash, err := catalog.HashForProtocol(protocolVersion)
 	if err != nil {
 		return ""
 	}

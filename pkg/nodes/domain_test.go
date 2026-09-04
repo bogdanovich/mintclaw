@@ -86,6 +86,45 @@ func TestCapabilityCatalogHashNormalizesEquivalentNumbers(t *testing.T) {
 	}
 }
 
+func TestCapabilityCatalogHashIsProtocolBound(t *testing.T) {
+	catalog := CapabilityCatalog{Commands: []CommandDescriptor{
+		descriptor("system.exec.v1", `{"type":"integer","maximum":60}`),
+	}}
+	v1, err := catalog.HashForProtocol(ProtocolV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := catalog.HashForProtocol(ProtocolV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1 == v2 {
+		t.Fatal("protocol-specific canonical representations produced the same catalog hash")
+	}
+	equivalent := CapabilityCatalog{Commands: []CommandDescriptor{
+		descriptor("system.exec.v1", `{"maximum":6e1,"type":"integer"}`),
+	}}
+	equivalentV2, err := equivalent.HashForProtocol(ProtocolV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2 != equivalentV2 {
+		t.Fatalf("equivalent v2 catalog hashes differ: %s != %s", v2, equivalentV2)
+	}
+}
+
+func TestProtocolNegotiationAndLegacyDefault(t *testing.T) {
+	if got, err := EffectiveProtocolVersion(0); err != nil || got != ProtocolV1 {
+		t.Fatalf("EffectiveProtocolVersion(0) = %d, %v", got, err)
+	}
+	if got, err := NegotiateProtocol(ProtocolV1, ProtocolV2); err != nil || got != ProtocolV2 {
+		t.Fatalf("NegotiateProtocol(v1, v2) = %d, %v", got, err)
+	}
+	if _, err := NegotiateProtocol(ProtocolV2+1, ProtocolV2+1); !errors.Is(err, ErrInvalidNode) {
+		t.Fatalf("unsupported range error = %v", err)
+	}
+}
+
 func TestCapabilityCatalogHashBindsCanonicalModelContract(t *testing.T) {
 	first := descriptor(
 		"system.info.v1",
@@ -515,6 +554,31 @@ func TestSnapshotValidatesCatalogHash(t *testing.T) {
 	snapshot.CatalogHash = "not-a-digest"
 	if err := snapshot.Validate(); !errors.Is(err, ErrInvalidNode) {
 		t.Fatalf("malformed catalog hash error = %v", err)
+	}
+}
+
+func TestSnapshotValidatesV2CatalogHash(t *testing.T) {
+	catalog := CapabilityCatalog{Commands: []CommandDescriptor{
+		descriptor("node.info.v1", `{"type":"integer","maximum":60}`),
+	}}
+	hash, err := catalog.HashForProtocol(ProtocolV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{
+		ID: ID("node_v2"), State: StateConnected, ProtocolVersion: ProtocolV2,
+		Catalog: catalog, CatalogHash: hash, Executor: "local", PolicyRevision: "policy-1",
+	}
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	v1Hash, err := catalog.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.CatalogHash = v1Hash
+	if err := snapshot.Validate(); !errors.Is(err, ErrInvalidNode) {
+		t.Fatalf("v1 hash on v2 snapshot error = %v", err)
 	}
 }
 

@@ -876,7 +876,8 @@ func (runtime *nodeFileTransferToolRuntime) prepare(
 		TimeoutSeconds:   int(nodeFileTransferTTL / time.Second),
 		OutputLimitBytes: nodes.MaxInvocationOutput,
 	}
-	plan, err := nodes.PrepareExecutionPlan(
+	plan, err := nodes.PrepareExecutionPlanForProtocol(
+		resolved.snapshot.ProtocolVersion,
 		request,
 		descriptor,
 		resolved.snapshot.Executor,
@@ -1039,7 +1040,8 @@ func (runtime *nodeFileTransferToolRuntime) prepareJobArtifactDownload(
 		AgentID: principal.AgentID, SessionID: principal.SessionID, ActorID: principal.ActorID,
 		TimeoutSeconds: int(nodeFileTransferTTL / time.Second), OutputLimitBytes: nodes.MaxInvocationOutput,
 	}
-	plan, err := nodes.PrepareExecutionPlan(
+	plan, err := nodes.PrepareExecutionPlanForProtocol(
+		resolved.snapshot.ProtocolVersion,
 		request,
 		descriptor,
 		resolved.snapshot.Executor,
@@ -1625,7 +1627,7 @@ func validateRetainedJobArtifactDownload(
 		record.Plan.CatalogHash != resolved.snapshot.CatalogHash ||
 		record.Plan.Command != nodes.InternalJobArtifactDownloadCommand ||
 		record.Descriptor.Name != descriptor.Name ||
-		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor) ||
+		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor, record.Plan.ProtocolVersion) ||
 		record.Plan.PolicyRevision != profile.Revision ||
 		record.Plan.ExpiresAt <= time.Now().Unix() {
 		return fmt.Errorf("%w: retained job artifact authority changed", errDiscoveryStale)
@@ -1666,7 +1668,7 @@ func validateRetainedFileTransfer(
 	}
 	if record.Plan.CatalogHash != resolved.snapshot.CatalogHash ||
 		record.Descriptor.Name != descriptor.Name ||
-		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor) {
+		record.Plan.DescriptorHash != descriptorHashOrEmpty(descriptor, record.Plan.ProtocolVersion) {
 		return fmt.Errorf("%w: retained catalog authority changed", errDiscoveryStale)
 	}
 	if record.Plan.PolicyRevision != profile.Revision {
@@ -1712,8 +1714,8 @@ func validateRetainedFileTransfer(
 	return record.Plan.ValidateAgainstHash(record.ExpectedPlanHash)
 }
 
-func descriptorHashOrEmpty(descriptor nodes.CommandDescriptor) string {
-	hash, _ := descriptor.Hash()
+func descriptorHashOrEmpty(descriptor nodes.CommandDescriptor, protocolVersion int) string {
+	hash, _ := descriptor.HashForProtocol(protocolVersion)
 	return hash
 }
 

@@ -532,7 +532,7 @@ func validateInvocationApproval(
 			)
 		}
 	}
-	descriptorHash, err := descriptor.Hash()
+	descriptorHash, err := descriptor.HashForProtocol(plan.ProtocolVersion)
 	if err != nil {
 		return err
 	}
@@ -648,7 +648,12 @@ func validateInvocationResult(
 	plan nodes.ExecutionPlan,
 	result json.RawMessage,
 ) (json.RawMessage, error) {
-	return nodes.ValidateInvocationOutput(descriptor, result, plan.OutputLimitBytes)
+	return nodes.ValidateInvocationOutputForProtocol(
+		plan.ProtocolVersion,
+		descriptor,
+		result,
+		plan.OutputLimitBytes,
+	)
 }
 
 func (handler *AdmissionHandler) releaseSession(

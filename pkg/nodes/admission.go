@@ -139,7 +139,7 @@ func (auth *Authenticator) IssueChallenge() (Challenge, error) {
 	return Challenge{
 		Nonce:       nonce,
 		MinProtocol: ProtocolV1,
-		MaxProtocol: ProtocolV1,
+		MaxProtocol: ProtocolV2,
 		ExpiresAt:   expiresAt.Unix(),
 	}, nil
 }
@@ -152,6 +152,10 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 	if err != nil {
 		return Admission{}, err
 	}
+	protocolVersion, err := NegotiateProtocol(proof.MinProtocol, proof.MaxProtocol)
+	if err != nil {
+		return Admission{}, err
+	}
 	if (publicKey.Algorithm == KeyAlgorithmECDSAP256SHA256 && proof.Platform != "android") ||
 		(publicKey.Algorithm == KeyAlgorithmEd25519 && proof.Platform == "android") {
 		return Admission{}, ErrEnrollmentOfferInvalid
@@ -160,7 +164,7 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 	node := Snapshot{
 		ID:              proof.NodeID,
 		State:           StatePendingPairing,
-		ProtocolVersion: ProtocolV1,
+		ProtocolVersion: protocolVersion,
 		Platform:        proof.Platform,
 		Architecture:    proof.Architecture,
 		SoftwareVersion: proof.ClientVersion,

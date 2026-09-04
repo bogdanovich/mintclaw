@@ -1696,7 +1696,8 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 		TimeoutSeconds:   min(worker.limits.ActionSeconds, nodes.MaxBrowserActionSeconds),
 		OutputLimitBytes: min(worker.limits.ToolResultBytes, nodes.MaxBrowserToolResultBytes),
 	}
-	plan, err := nodes.PrepareExecutionPlan(
+	plan, err := nodes.PrepareExecutionPlanForProtocol(
+		record.Snapshot.ProtocolVersion,
 		request, descriptor, record.Snapshot.Executor, record.Snapshot.PolicyRevision,
 		time.Now(), nodes.MaxExecutionPlanTTL,
 	)
@@ -1786,11 +1787,12 @@ func browserRetainedInvocationMatches(
 	plan nodes.ExecutionPlan,
 	descriptor nodes.CommandDescriptor,
 ) bool {
-	descriptorHash, err := descriptor.Hash()
+	descriptorHash, err := descriptor.HashForProtocol(plan.ProtocolVersion)
 	if err != nil {
 		return false
 	}
 	return record.Plan.InvocationID == plan.InvocationID &&
+		record.Plan.ProtocolVersion == plan.ProtocolVersion &&
 		record.Plan.IdempotencyKey == plan.IdempotencyKey &&
 		record.Plan.NodeID == plan.NodeID && record.Plan.CatalogHash == plan.CatalogHash &&
 		record.Plan.Command == plan.Command && record.Plan.DescriptorHash == descriptorHash &&
@@ -1903,8 +1905,8 @@ func (worker *nodeBrowserWorker) validateAuthority(
 	if !ok {
 		return browser.ErrDenied
 	}
-	expectedHash, expectedErr := expected.Hash()
-	currentHash, currentErr := descriptor.Hash()
+	expectedHash, expectedErr := expected.HashForProtocol(current.Snapshot.ProtocolVersion)
+	currentHash, currentErr := descriptor.HashForProtocol(current.Snapshot.ProtocolVersion)
 	if expectedErr != nil || currentErr != nil || expectedHash != currentHash {
 		return browser.ErrDenied
 	}

@@ -69,6 +69,13 @@ type InvocationRequest struct {
 }
 
 func (request InvocationRequest) Validate() error {
+	return request.validateForProtocol(ProtocolV1)
+}
+
+func (request InvocationRequest) validateForProtocol(protocolVersion int) error {
+	if _, err := EffectiveProtocolVersion(protocolVersion); err != nil {
+		return err
+	}
 	if !validInvocationIdentifier(request.InvocationID) ||
 		!validInvocationIdentifier(request.IdempotencyKey) ||
 		!validInvocationIdentifier(request.AgentID) ||
@@ -107,7 +114,7 @@ func (request InvocationRequest) Validate() error {
 	if request.OutputLimitBytes <= 0 || request.OutputLimitBytes > MaxInvocationOutput {
 		return fmt.Errorf("%w: output limit is outside bounds", ErrInvalidInvocation)
 	}
-	if _, err := canonicalInvocationInput(request.Input); err != nil {
+	if _, err := canonicalInvocationInputForProtocol(request.Input, protocolVersion); err != nil {
 		return err
 	}
 	return nil
@@ -118,13 +125,14 @@ func (request InvocationRequest) Validate() error {
 // the expected digest independently and compare it before dispatch.
 type ExecutionPlan struct {
 	InvocationRequest
-	Risk           Risk   `json:"risk"`
-	DescriptorHash string `json:"descriptor_hash"`
-	Executor       string `json:"executor"`
-	PolicyRevision string `json:"policy_revision"`
-	PreparedAt     int64  `json:"prepared_at"`
-	ExpiresAt      int64  `json:"expires_at"`
-	PlanHash       string `json:"plan_hash"`
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	Risk            Risk   `json:"risk"`
+	DescriptorHash  string `json:"descriptor_hash"`
+	Executor        string `json:"executor"`
+	PolicyRevision  string `json:"policy_revision"`
+	PreparedAt      int64  `json:"prepared_at"`
+	ExpiresAt       int64  `json:"expires_at"`
+	PlanHash        string `json:"plan_hash"`
 }
 
 // InvocationDispatch is the transport-only envelope for an execution plan and
@@ -169,7 +177,33 @@ func PrepareExecutionPlan(
 	preparedAt time.Time,
 	ttl time.Duration,
 ) (ExecutionPlan, error) {
-	if err := request.Validate(); err != nil {
+	return PrepareExecutionPlanForProtocol(
+		ProtocolV1,
+		request,
+		descriptor,
+		executor,
+		policyRevision,
+		preparedAt,
+		ttl,
+	)
+}
+
+// PrepareExecutionPlanForProtocol binds all canonical hashes and JSON payloads
+// to the protocol negotiated for the target node.
+func PrepareExecutionPlanForProtocol(
+	protocolVersion int,
+	request InvocationRequest,
+	descriptor CommandDescriptor,
+	executor string,
+	policyRevision string,
+	preparedAt time.Time,
+	ttl time.Duration,
+) (ExecutionPlan, error) {
+	protocolVersion, protocolErr := EffectiveProtocolVersion(protocolVersion)
+	if protocolErr != nil {
+		return ExecutionPlan{}, protocolErr
+	}
+	if err := request.validateForProtocol(protocolVersion); err != nil {
 		return ExecutionPlan{}, err
 	}
 	if err := descriptor.Validate(); err != nil {
@@ -238,7 +272,7 @@ func PrepareExecutionPlan(
 			)
 		}
 	}
-	descriptorHash, err := descriptor.Hash()
+	descriptorHash, err := descriptor.HashForProtocol(protocolVersion)
 	if err != nil {
 		return ExecutionPlan{}, err
 	}
@@ -252,7 +286,7 @@ func PrepareExecutionPlan(
 			ErrInvalidInvocation,
 		)
 	}
-	input, value, err := canonicalInvocationInputValue(request.Input)
+	input, value, err := canonicalInvocationInputValueForProtocol(request.Input, protocolVersion)
 	if err != nil {
 		return ExecutionPlan{}, err
 	}
@@ -272,6 +306,9 @@ func PrepareExecutionPlan(
 		PreparedAt:        preparedAt.Unix(),
 		ExpiresAt:         preparedAt.Add(ttl).Unix(),
 	}
+	if protocolVersion != ProtocolV1 {
+		plan.ProtocolVersion = protocolVersion
+	}
 	hash, err := plan.computeHash()
 	if err != nil {
 		return ExecutionPlan{}, err
@@ -281,7 +318,11 @@ func PrepareExecutionPlan(
 }
 
 func (plan ExecutionPlan) Validate() error {
-	if err := plan.InvocationRequest.Validate(); err != nil {
+	protocolVersion, protocolErr := EffectiveProtocolVersion(plan.ProtocolVersion)
+	if protocolErr != nil {
+		return fmt.Errorf("%w: unsupported plan protocol", ErrInvalidInvocation)
+	}
+	if err := plan.validateForProtocol(protocolVersion); err != nil {
 		return err
 	}
 	if !plan.Risk.Valid() || !validSHA256Digest(plan.DescriptorHash) ||
@@ -319,12 +360,16 @@ func (plan ExecutionPlan) ValidateAgainstHash(expected string) error {
 }
 
 func (plan ExecutionPlan) computeHash() (string, error) {
+	protocolVersion, err := EffectiveProtocolVersion(plan.ProtocolVersion)
+	if err != nil {
+		return "", fmt.Errorf("%w: unsupported plan protocol", ErrInvalidInvocation)
+	}
 	plan.PlanHash = ""
 	data, err := json.Marshal(plan)
 	if err != nil {
 		return "", fmt.Errorf("%w: encode plan: %w", ErrInvalidInvocation, err)
 	}
-	canonical, err := jsonstrict.Canonical(data)
+	canonical, err := canonicalBytesForProtocol(data, protocolVersion)
 	if err != nil {
 		return "", fmt.Errorf("%w: canonicalize plan: %w", ErrInvalidInvocation, err)
 	}
@@ -435,7 +480,11 @@ func (policy LocalCommandPolicy) authorize(
 	if err := runtimeCatalog.Validate(); err != nil {
 		return err
 	}
-	actualCatalogHash, err := runtimeCatalog.Hash()
+	protocolVersion, err := EffectiveProtocolVersion(plan.ProtocolVersion)
+	if err != nil {
+		return err
+	}
+	actualCatalogHash, err := runtimeCatalog.HashForProtocol(protocolVersion)
 	if err != nil {
 		return err
 	}
@@ -449,7 +498,7 @@ func (policy LocalCommandPolicy) authorize(
 	if !advertised {
 		return fmt.Errorf("%w: command is not advertised by local runtime", ErrCommandDenied)
 	}
-	_, input, err := canonicalInvocationInputValue(plan.Input)
+	_, input, err := canonicalInvocationInputValueForProtocol(plan.Input, protocolVersion)
 	if err != nil {
 		return err
 	}
@@ -507,7 +556,7 @@ func (policy LocalCommandPolicy) authorize(
 		}
 		descriptor = projected
 	}
-	descriptorHash, hashErr := descriptor.Hash()
+	descriptorHash, hashErr := descriptor.HashForProtocol(protocolVersion)
 	if hashErr != nil ||
 		descriptor.Name != plan.Command || descriptor.Risk != plan.Risk ||
 		descriptorHash != plan.DescriptorHash ||
@@ -560,12 +609,22 @@ func (catalog CapabilityCatalog) command(name string) (CommandDescriptor, bool) 
 	return CommandDescriptor{}, false
 }
 
-func canonicalInvocationInput(raw json.RawMessage) (json.RawMessage, error) {
-	canonical, _, err := canonicalInvocationInputValue(raw)
+func canonicalInvocationInputForProtocol(
+	raw json.RawMessage,
+	protocolVersion int,
+) (json.RawMessage, error) {
+	canonical, _, err := canonicalInvocationInputValueForProtocol(raw, protocolVersion)
 	return canonical, err
 }
 
 func canonicalInvocationInputValue(raw json.RawMessage) (json.RawMessage, map[string]any, error) {
+	return canonicalInvocationInputValueForProtocol(raw, ProtocolV1)
+}
+
+func canonicalInvocationInputValueForProtocol(
+	raw json.RawMessage,
+	protocolVersion int,
+) (json.RawMessage, map[string]any, error) {
 	if len(raw) == 0 || len(raw) > MaxInvocationInputBytes {
 		return nil, nil, fmt.Errorf("%w: input is outside bounds", ErrInvalidInvocation)
 	}
@@ -576,7 +635,7 @@ func canonicalInvocationInputValue(raw json.RawMessage) (json.RawMessage, map[st
 	if _, ok := value.(map[string]any); !ok {
 		return nil, nil, fmt.Errorf("%w: input must be an object", ErrInvalidInvocation)
 	}
-	canonical, err := jsonstrict.Canonical(raw)
+	canonical, err := canonicalBytesForProtocol(raw, protocolVersion)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: canonicalize input: %w", ErrInvalidInvocation, err)
 	}
@@ -607,6 +666,20 @@ func ValidateInvocationOutput(
 	raw json.RawMessage,
 	limit int,
 ) (json.RawMessage, error) {
+	return ValidateInvocationOutputForProtocol(ProtocolV1, descriptor, raw, limit)
+}
+
+// ValidateInvocationOutputForProtocol validates and canonicalizes an output
+// using the representation negotiated for its execution plan.
+func ValidateInvocationOutputForProtocol(
+	protocolVersion int,
+	descriptor CommandDescriptor,
+	raw json.RawMessage,
+	limit int,
+) (json.RawMessage, error) {
+	if _, err := EffectiveProtocolVersion(protocolVersion); err != nil {
+		return nil, err
+	}
 	if err := descriptor.Validate(); err != nil {
 		return nil, err
 	}
@@ -633,7 +706,7 @@ func ValidateInvocationOutput(
 			return nil, validationErr
 		}
 	}
-	canonical, err := jsonstrict.Canonical(raw)
+	canonical, err := canonicalBytesForProtocol(raw, protocolVersion)
 	if err != nil {
 		return nil, fmt.Errorf("%w: canonicalize output: %w", ErrInvalidInvocation, err)
 	}
@@ -641,6 +714,17 @@ func ValidateInvocationOutput(
 		return nil, fmt.Errorf("%w: canonical output is outside bounds", ErrInvalidInvocation)
 	}
 	return json.RawMessage(canonical), nil
+}
+
+func canonicalBytesForProtocol(raw []byte, protocolVersion int) ([]byte, error) {
+	protocolVersion, err := EffectiveProtocolVersion(protocolVersion)
+	if err != nil {
+		return nil, err
+	}
+	if protocolVersion == ProtocolV2 {
+		return jsonstrict.CanonicalV2(raw)
+	}
+	return jsonstrict.Canonical(raw)
 }
 
 func validateInvocationValue(rawSchema json.RawMessage, value map[string]any, label string) error {

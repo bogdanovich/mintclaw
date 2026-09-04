@@ -131,12 +131,12 @@ func TestRuntimeClientAuthenticatesExecutionProfile(t *testing.T) {
 	proof, err := client.identityProof(nodes.Challenge{
 		Nonce:       "challenge",
 		MinProtocol: nodes.ProtocolV1,
-		MaxProtocol: nodes.ProtocolV1,
+		MaxProtocol: nodes.ProtocolV2,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proof.MinProtocol != nodes.ProtocolV1 ||
+	if proof.MinProtocol != nodes.ProtocolV1 || proof.MaxProtocol != nodes.ProtocolV1 ||
 		proof.Executor != LocalExecutor ||
 		proof.PolicyRevision != policy.Revision {
 		t.Fatalf("runtime proof = %#v", proof)
