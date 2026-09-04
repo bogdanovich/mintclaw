@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
 func TestPipelineTurnPolicyIsStableUntilRuntimeReplacement(t *testing.T) {
@@ -52,6 +53,24 @@ func TestPipelineTurnPolicyIsStableUntilRuntimeReplacement(t *testing.T) {
 	); got != "token [FILTERED] should be hidden" {
 		t.Fatalf("current sensitive-data policy returned %q", got)
 	}
+	profile := config.EffectiveTurnProfile{
+		Enabled:          true,
+		SystemPromptMode: config.TurnProfileModeOff,
+		ToolsMode:        config.TurnProfileModeCustom,
+		AllowedTools:     []string{"web_search"},
+	}
+	turn := &turnState{
+		agent: &AgentInstance{
+			Provider: &nativeSearchProvider{supported: true},
+			Tools:    tools.NewToolRegistry(),
+		},
+		opts:    freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: "policy-snapshot"}}),
+		profile: profile,
+	}
+	currentPrompt := current.promptRequestForTurn(turn, nil, "", "search", nil)
+	if currentPrompt.SuppressToolUseRule || !currentPrompt.ToolUseFallback {
+		t.Fatalf("current prompt lost callable native search: %#v", currentPrompt)
+	}
 
 	replacement := &Pipeline{Cfg: cfg, turnPolicy: newPipelineTurnPolicy(cfg)}
 	if replacement.nativeSearchEnabled(config.EffectiveTurnProfile{}, &nativeSearchProvider{supported: true}) {
@@ -73,5 +92,9 @@ func TestPipelineTurnPolicyIsStableUntilRuntimeReplacement(t *testing.T) {
 		"token sk-long-key-12345 should stay",
 	); got != "token sk-long-key-12345 should stay" {
 		t.Fatalf("replacement sensitive-data policy returned %q", got)
+	}
+	replacementPrompt := replacement.promptRequestForTurn(turn, nil, "", "search", nil)
+	if !replacementPrompt.SuppressToolUseRule || replacementPrompt.ToolUseFallback {
+		t.Fatalf("replacement prompt retained old callable native search: %#v", replacementPrompt)
 	}
 }

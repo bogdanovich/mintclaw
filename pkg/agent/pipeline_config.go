@@ -162,7 +162,7 @@ func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
 	if p == nil || ts == nil || ts.agent == nil || ts.agent.ContextBuilder == nil {
 		return nil
 	}
-	req := promptBuildRequestForTurn(ts, history, summary, currentMessage, media, p.Cfg)
+	req := p.promptRequestForTurn(ts, history, summary, currentMessage, media)
 	req.ActiveSkills = append([]string(nil), activeSkills...)
 	messages := ts.agent.ContextBuilder.BuildMessagesFromPrompt(req)
 	if p.Context.TerminalTasks != nil {
@@ -180,4 +180,21 @@ func (p *Pipeline) buildTurnMessagesWithProtectedTurnBoundary(
 		}
 	}
 	return projectNodeFileMediaAttachments(messages, ts, media, p.Context.MediaResolver)
+}
+
+func (p *Pipeline) promptRequestForTurn(
+	ts *turnState,
+	history []providers.Message,
+	summary string,
+	currentMessage string,
+	media []string,
+) PromptBuildRequest {
+	return promptBuildRequestForTurn(
+		ts,
+		history,
+		summary,
+		currentMessage,
+		media,
+		p.nativeSearchEnabled(ts.profile, ts.agent.Provider),
+	)
 }

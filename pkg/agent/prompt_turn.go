@@ -15,7 +15,7 @@ func promptBuildRequestForTurn(
 	summary string,
 	currentMessage string,
 	media []string,
-	cfg *config.Config,
+	nativeSearchCallable bool,
 ) PromptBuildRequest {
 	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
 		ts.opts.Dispatch.ChatType(),
@@ -47,7 +47,7 @@ func promptBuildRequestForTurn(
 	hasCallableTools := true
 	if ts.profile.Enabled {
 		hasCallableTools = turnProfileHasCallableTools(ts.profile, ts.agent.Tools.ToProviderDefs()) ||
-			turnProfileNativeSearchCallable(cfg, ts.profile, ts.agent)
+			nativeSearchCallable
 	}
 	if turnProfileSystemPromptOff(ts.profile) {
 		req.SuppressDefaultSystemPrompt = true
