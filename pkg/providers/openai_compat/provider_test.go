@@ -1019,6 +1019,92 @@ func TestProviderChat_MiMoDisablesThinkingForMixedProviderToolHistory(t *testing
 	}
 }
 
+func TestProviderChat_PreservesAvailableReasoningInPartialToolHistory(t *testing.T) {
+	tests := []struct {
+		name         string
+		providerName string
+		apiBase      string
+		model        string
+	}{
+		{
+			name:         "DeepSeek",
+			providerName: "deepseek",
+			apiBase:      "https://api.deepseek.com/v1",
+			model:        "deepseek-v4-flash",
+		},
+		{
+			name:         "MiMo",
+			providerName: "mimo",
+			apiBase:      "https://api.xiaomimimo.com/v1",
+			model:        "mimo-v2.5",
+		},
+	}
+	messages := []Message{
+		{Role: "user", Content: "Inspect the pull request"},
+		{
+			Role:             "assistant",
+			Content:          "I will inspect the repository first.",
+			ReasoningContent: "The repository state will determine the next step.",
+		},
+		{Role: "user", Content: "Continue"},
+		{
+			Role:    "assistant",
+			Content: "I will inspect the diff.",
+			ToolCalls: []ToolCall{{
+				ID:        "call_diff",
+				Type:      "function",
+				Name:      "exec",
+				Arguments: map[string]any{"command": "git diff"},
+			}},
+		},
+		{Role: "tool", ToolCallID: "call_diff", Content: "diff output"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProvider(
+				"key",
+				tt.apiBase,
+				"",
+				WithExtraBody(map[string]any{
+					"thinking":         map[string]any{"type": "enabled"},
+					"reasoning_effort": "max",
+				}),
+			)
+			p.SetProviderName(tt.providerName)
+
+			body := p.buildRequestBody(
+				messages,
+				replayTestTools(),
+				tt.model,
+				map[string]any{"thinking_level": "high"},
+			)
+
+			thinking, ok := body["thinking"].(map[string]any)
+			if !ok || thinking["type"] != "disabled" {
+				t.Fatalf("thinking = %#v, want explicitly disabled", body["thinking"])
+			}
+			if _, ok := body["reasoning_effort"]; ok {
+				t.Fatal("reasoning_effort must be absent when partial history disables thinking")
+			}
+			encoded, err := json.Marshal(body["messages"])
+			if err != nil {
+				t.Fatalf("marshal request messages: %v", err)
+			}
+			var requestMessages []map[string]any
+			if err := json.Unmarshal(encoded, &requestMessages); err != nil {
+				t.Fatalf("decode request messages: %v", err)
+			}
+			if got := requestMessages[1]["reasoning_content"]; got != messages[1].ReasoningContent {
+				t.Fatalf("available reasoning_content = %#v, want preserved", got)
+			}
+			if _, exists := requestMessages[3]["reasoning_content"]; exists {
+				t.Fatalf("missing reasoning_content was fabricated: %#v", requestMessages[3])
+			}
+		})
+	}
+}
+
 func TestProviderChat_ExplicitOffSurvivesExtraBodyWithCompleteReasoningHistory(t *testing.T) {
 	tests := []struct {
 		name         string

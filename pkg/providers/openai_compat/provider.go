@@ -386,7 +386,7 @@ func (p *Provider) prepareMessagesForRequest(
 		// different model. DeepSeek and MiMo reject that mixed history in thinking mode,
 		// so continue the tool round in non-thinking mode rather than fabricating
 		// reasoning_content or sending a request known to fail with HTTP 400.
-		return stripReasoningMessages(messages), true
+		return preserveReasoningReplayMessages(messages), true
 	}
 	if thinkingLevelExplicitlyOff(options) {
 		// The request omits reasoning replay, so a later extra_body merge must not
