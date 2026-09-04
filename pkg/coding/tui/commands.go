@@ -66,6 +66,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.commandPanel = panel
+		m.commandPanelOffset = 0
 		m.err = nil
 		m.clearCommandDraft()
 		return true, nil
@@ -114,6 +115,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.commandPanel = commandPanelStatus
+		m.commandPanelOffset = 0
 		m.err = nil
 		m.clearCommandDraft()
 		reader, ok := m.controller.(frontend.RepositoryEvidenceReader)
@@ -121,7 +123,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.workspaceNotice = "repository status loading"
-		return true, repositoryStatusCmd(m.ctx, m.controller, reader)
+		return true, repositoryStatusCmd(m.ctx, reader)
 	case "/model":
 		return show(commandPanelModel)
 	case "/diff":
@@ -131,6 +133,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.commandPanel = commandPanelDiff
+		m.commandPanelOffset = 0
 		m.err = nil
 		m.clearCommandDraft()
 		reader, ok := m.controller.(frontend.RepositoryEvidenceReader)
@@ -138,7 +141,7 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.workspaceNotice = "repository diff loading"
-		return true, repositoryDiffCmd(m.ctx, m.controller, reader, target)
+		return true, repositoryDiffCmd(m.ctx, reader, target)
 	case "/compact":
 		if !noArgs() {
 			return true, nil
@@ -240,19 +243,45 @@ func slashCommandError(operation string, err error) error {
 }
 
 func (m *Model) commandPanelView() string {
-	content := commandPanelContent(m.commandPanel, m.snapshot)
-	content = sanitizeTerminalText(content)
+	lines := m.commandPanelLines()
+	pageSize := m.commandPanelPageSize(len(lines))
+	offset := min(max(0, m.commandPanelOffset), max(0, len(lines)-pageSize))
+	end := min(len(lines), offset+pageSize)
+	visible := append([]string(nil), lines[offset:end]...)
+	if len(lines) > pageSize {
+		visible = append(visible, fmt.Sprintf(
+			"lines %d-%d of %d · PgUp/PgDown scroll · Esc closes",
+			offset+1,
+			end,
+			len(lines),
+		))
+	}
+	return strings.Join(visible, "\n")
+}
+
+func (m *Model) commandPanelLines() []string {
+	content := sanitizeTerminalText(commandPanelContent(m.commandPanel, m.snapshot))
 	wrapped := ansi.Wrap(content, max(1, m.width), "")
 	lines := strings.Split(strings.TrimSpace(wrapped), "\n")
-	limit := max(1, m.viewport.Height)
-	if len(lines) > limit {
-		hidden := len(lines) - limit + 1
-		lines = append(lines[:limit-1], fmt.Sprintf("… %d more lines; Esc closes", hidden))
-	}
 	for index := range lines {
 		lines[index] = clipLine(lines[index], m.width)
 	}
-	return strings.Join(lines, "\n")
+	return lines
+}
+
+func (m *Model) commandPanelPageSize(lineCount int) int {
+	height := max(1, m.viewport.Height)
+	if lineCount <= height {
+		return height
+	}
+	return max(1, height-1)
+}
+
+func (m *Model) scrollCommandPanel(direction int) {
+	lineCount := len(m.commandPanelLines())
+	pageSize := m.commandPanelPageSize(lineCount)
+	maximum := max(0, lineCount-pageSize)
+	m.commandPanelOffset = min(max(0, m.commandPanelOffset+direction*pageSize), maximum)
 }
 
 func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) string {
@@ -274,7 +303,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"",
 			"Keyboard",
 			"Enter submit · Ctrl+J newline · Ctrl+V paste clipboard image · Ctrl+C interrupt/exit",
-			"PgUp history · Alt+End latest · Ctrl+R refresh repository",
+			"PgUp/PgDown scroll panel or transcript · Alt+End latest · Ctrl+R refresh repository",
 			"Alt+J/Alt+K select tool · Ctrl+O expand tool · Esc close panel",
 			"Start a prompt with // when its text must begin with a slash.",
 		}, "\n")

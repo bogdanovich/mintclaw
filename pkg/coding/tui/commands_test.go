@@ -246,8 +246,16 @@ func TestRepositoryPanelsRefreshThroughTypedEvidenceReader(t *testing.T) {
 	if command == nil {
 		t.Fatal("/status did not request typed repository evidence")
 	}
-	model = updateModel(t, model, command())
-	if !strings.Contains(model.View(), "typed-status") || model.snapshot.RepositoryStatus == nil {
+	completion := command()
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Title: "newer canonical state"})
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	model = updateModel(t, model, completion)
+	if !strings.Contains(model.View(), "typed-status") || model.snapshot.RepositoryStatus == nil ||
+		model.snapshot.Metadata.Title != "newer canonical state" {
 		t.Fatalf("typed status panel = %q", model.View())
 	}
 
@@ -257,7 +265,13 @@ func TestRepositoryPanelsRefreshThroughTypedEvidenceReader(t *testing.T) {
 	if command == nil {
 		t.Fatal("/diff did not request typed repository evidence")
 	}
-	model = updateModel(t, model, command())
+	completion = command()
+	snapshot, err = controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	model = updateModel(t, model, completion)
 	if controller.target.Kind != codingworkspace.DiffTargetBase || controller.target.Ref != "main" ||
 		!strings.Contains(model.View(), "Repository diff (base main)") ||
 		!strings.Contains(model.View(), "typed.go") || !strings.Contains(model.View(), "first_observed_during_thread") {
@@ -268,13 +282,62 @@ func TestRepositoryPanelsRefreshThroughTypedEvidenceReader(t *testing.T) {
 	model.composer.SetValue("/status")
 	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(*Model)
-	model = updateModel(t, model, command())
+	completion = command()
+	snapshot, err = controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	model = updateModel(t, model, completion)
 	if model.snapshot.RepositoryDiff != nil || !strings.Contains(model.View(), "new-status") {
 		t.Fatalf(
 			"canonical status refresh retained obsolete diff: %#v / %q",
 			model.snapshot.RepositoryDiff,
 			model.View(),
 		)
+	}
+}
+
+func TestCommandPanelScrollMakesTailDiffDiagnosticsReachable(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := codingworkspace.DiffResult{
+		Target: codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Files: []codingworkspace.DiffFile{{
+			Path: "long.go", Status: " M",
+			Hunks: []codingworkspace.DiffHunk{{
+				OldStart: 1, OldLines: 8, NewStart: 1, NewLines: 8,
+				Lines: []codingworkspace.DiffLine{
+					{Kind: "context", OldLine: 1, NewLine: 1, Text: "line 1"},
+					{Kind: "context", OldLine: 2, NewLine: 2, Text: "line 2"},
+					{Kind: "context", OldLine: 3, NewLine: 3, Text: "line 3"},
+					{Kind: "context", OldLine: 4, NewLine: 4, Text: "line 4"},
+					{Kind: "context", OldLine: 5, NewLine: 5, Text: "line 5"},
+					{Kind: "context", OldLine: 6, NewLine: 6, Text: "line 6"},
+					{Kind: "context", OldLine: 7, NewLine: 7, Text: "line 7"},
+					{Kind: "context", OldLine: 8, NewLine: 8, Text: "line 8"},
+				},
+			}},
+		}},
+		Warning: "tail diagnostic",
+	}
+	snapshot := model.snapshot.Clone()
+	snapshot.RepositoryDiff = &diff
+	if err = model.installSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	model.commandPanel = commandPanelDiff
+	model.resize(60, 8)
+	if strings.Contains(model.View(), "tail diagnostic") || !strings.Contains(model.View(), "PgUp/PgDown scroll") {
+		t.Fatalf("initial diff page = %q", model.View())
+	}
+	for range 8 {
+		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyPgDown})
+	}
+	if model.commandPanelOffset == 0 || !strings.Contains(model.View(), "warning: tail diagnostic") {
+		t.Fatalf("scrolled diff page = offset %d / %q", model.commandPanelOffset, model.View())
 	}
 }
 

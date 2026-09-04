@@ -69,13 +69,11 @@ type WorkspaceRefreshMsg struct {
 }
 
 type RepositoryStatusMsg struct {
-	Snapshot frontend.ThreadSnapshot
-	Err      error
+	Err error
 }
 
 type RepositoryDiffMsg struct {
-	Snapshot frontend.ThreadSnapshot
-	Err      error
+	Err error
 }
 
 // ClipboardImageMsg completes one asynchronous system-clipboard image read.
@@ -113,6 +111,7 @@ type Model struct {
 	refreshingWorkspace bool
 	workspaceNotice     string
 	commandPanel        commandPanel
+	commandPanelOffset  int
 	composerAttachments []composerAttachment
 	pasteDirectory      string
 	nextPasteNumber     int
@@ -261,22 +260,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.workspaceNotice = "repository status unavailable"
 			return m, nil
 		}
-		if err := m.installSnapshot(message.Snapshot); err != nil {
-			m.err = err
-			m.workspaceNotice = "repository status unavailable"
-			return m, nil
-		}
 		m.err = nil
 		m.workspaceNotice = "repository status refreshed"
 		return m, nil
 	case RepositoryDiffMsg:
 		if message.Err != nil {
 			m.err = message.Err
-			m.workspaceNotice = "repository diff unavailable"
-			return m, nil
-		}
-		if err := m.installSnapshot(message.Snapshot); err != nil {
-			m.err = err
 			m.workspaceNotice = "repository diff unavailable"
 			return m, nil
 		}
@@ -538,7 +527,13 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	case "esc":
 		if m.commandPanel != commandPanelNone {
 			m.commandPanel = commandPanelNone
+			m.commandPanelOffset = 0
 			m.err = nil
+			return true, nil
+		}
+	case "pgdown":
+		if m.commandPanel != commandPanelNone {
+			m.scrollCommandPanel(1)
 			return true, nil
 		}
 	case "ctrl+r":
@@ -607,6 +602,10 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			}
 		}
 	case "pgup":
+		if m.commandPanel != commandPanelNone {
+			m.scrollCommandPanel(-1)
+			return true, nil
+		}
 		if m.viewport.AtTop() && m.transcript.hasOlder && !m.transcript.loading {
 			if pager, ok := m.controller.(frontend.TranscriptPager); ok {
 				m.transcript.loading = true
@@ -846,29 +845,21 @@ func workspaceRefreshCmd(ctx context.Context, refresher frontend.WorkspaceRefres
 
 func repositoryStatusCmd(
 	ctx context.Context,
-	controller frontend.Controller,
 	reader frontend.RepositoryEvidenceReader,
 ) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := reader.RepositoryStatus(ctx); err != nil {
-			return RepositoryStatusMsg{Err: err}
-		}
-		snapshot, err := controller.Snapshot(ctx)
-		return RepositoryStatusMsg{Snapshot: snapshot, Err: err}
+		_, err := reader.RepositoryStatus(ctx)
+		return RepositoryStatusMsg{Err: err}
 	}
 }
 
 func repositoryDiffCmd(
 	ctx context.Context,
-	controller frontend.Controller,
 	reader frontend.RepositoryEvidenceReader,
 	target codingworkspace.DiffTarget,
 ) tea.Cmd {
 	return func() tea.Msg {
-		if _, err := reader.RepositoryDiff(ctx, target); err != nil {
-			return RepositoryDiffMsg{Err: err}
-		}
-		snapshot, err := controller.Snapshot(ctx)
-		return RepositoryDiffMsg{Snapshot: snapshot, Err: err}
+		_, err := reader.RepositoryDiff(ctx, target)
+		return RepositoryDiffMsg{Err: err}
 	}
 }
