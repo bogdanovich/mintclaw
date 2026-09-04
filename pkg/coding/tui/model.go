@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 const composerHeight = 4
@@ -64,7 +65,18 @@ type TranscriptPageMsg struct {
 
 // WorkspaceRefreshMsg completes an explicit repository observation.
 type WorkspaceRefreshMsg struct {
-	Err error
+	RequestID uint64
+	Err       error
+}
+
+type RepositoryStatusMsg struct {
+	RequestID uint64
+	Err       error
+}
+
+type RepositoryDiffMsg struct {
+	RequestID uint64
+	Err       error
 }
 
 // ClipboardImageMsg completes one asynchronous system-clipboard image read.
@@ -102,6 +114,9 @@ type Model struct {
 	refreshingWorkspace bool
 	workspaceNotice     string
 	commandPanel        commandPanel
+	commandPanelOffset  int
+	nextEvidenceRequest uint64
+	activeEvidenceReq   uint64
 	composerAttachments []composerAttachment
 	pasteDirectory      string
 	nextPasteNumber     int
@@ -232,7 +247,15 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 	case WorkspaceRefreshMsg:
+		if message.RequestID == 0 || message.RequestID != m.activeEvidenceReq {
+			return m, nil
+		}
+		m.activeEvidenceReq = 0
+		refreshing := m.refreshingWorkspace
 		m.refreshingWorkspace = false
+		if !refreshing || m.err != nil {
+			return m, nil
+		}
 		if message.Err != nil {
 			if errors.Is(message.Err, frontend.ErrWorkspaceRefreshUnsupported) {
 				m.workspaceNotice = "repository refresh unavailable"
@@ -243,6 +266,44 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		m.workspaceNotice = "repository refreshed"
+		return m, nil
+	case RepositoryStatusMsg:
+		if message.RequestID == 0 || message.RequestID != m.activeEvidenceReq {
+			return m, nil
+		}
+		m.activeEvidenceReq = 0
+		loading := m.workspaceNotice == "repository status loading"
+		if loading {
+			m.workspaceNotice = ""
+		}
+		if m.err != nil || !loading {
+			return m, nil
+		}
+		if message.Err != nil {
+			m.err = message.Err
+			m.workspaceNotice = "repository status unavailable"
+			return m, nil
+		}
+		m.workspaceNotice = "repository status refreshed"
+		return m, nil
+	case RepositoryDiffMsg:
+		if message.RequestID == 0 || message.RequestID != m.activeEvidenceReq {
+			return m, nil
+		}
+		m.activeEvidenceReq = 0
+		loading := m.workspaceNotice == "repository diff loading"
+		if loading {
+			m.workspaceNotice = ""
+		}
+		if m.err != nil || !loading {
+			return m, nil
+		}
+		if message.Err != nil {
+			m.err = message.Err
+			m.workspaceNotice = "repository diff unavailable"
+			return m, nil
+		}
+		m.workspaceNotice = "repository diff refreshed"
 		return m, nil
 	case ClipboardImageMsg:
 		m.clipboardPasteBusy = false
@@ -499,10 +560,17 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	case "esc":
 		if m.commandPanel != commandPanelNone {
 			m.commandPanel = commandPanelNone
+			m.commandPanelOffset = 0
 			m.err = nil
 			return true, nil
 		}
+	case "pgdown":
+		if m.commandPanel != commandPanelNone {
+			m.scrollCommandPanel(1)
+			return true, nil
+		}
 	case "ctrl+r":
+		m.supersedeEvidenceRequest()
 		if activeWork(m.snapshot.Activity) || m.initialTurnPending {
 			m.workspaceNotice = "repository refresh is available when idle"
 			return true, nil
@@ -512,9 +580,10 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.workspaceNotice = "repository refresh unavailable"
 			return true, nil
 		}
+		m.err = nil
 		m.refreshingWorkspace = true
 		m.workspaceNotice = ""
-		return true, workspaceRefreshCmd(m.ctx, refresher)
+		return true, workspaceRefreshCmd(m.ctx, refresher, m.beginEvidenceRequest())
 	case "alt+j":
 		m.navigateTools(1)
 		return true, nil
@@ -525,6 +594,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.toggleSelectedTool()
 		return true, nil
 	case "enter":
+		m.supersedeEvidenceRequest()
 		if message.Paste {
 			return true, nil
 		}
@@ -568,6 +638,10 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			}
 		}
 	case "pgup":
+		if m.commandPanel != commandPanelNone {
+			m.scrollCommandPanel(-1)
+			return true, nil
+		}
 		if m.viewport.AtTop() && m.transcript.hasOlder && !m.transcript.loading {
 			if pager, ok := m.controller.(frontend.TranscriptPager); ok {
 				m.transcript.loading = true
@@ -799,8 +873,55 @@ func transcriptPageCmd(
 	}
 }
 
-func workspaceRefreshCmd(ctx context.Context, refresher frontend.WorkspaceRefresher) tea.Cmd {
+func workspaceRefreshCmd(
+	ctx context.Context,
+	refresher frontend.WorkspaceRefresher,
+	requestID uint64,
+) tea.Cmd {
 	return func() tea.Msg {
-		return WorkspaceRefreshMsg{Err: refresher.RefreshWorkspace(ctx)}
+		return WorkspaceRefreshMsg{RequestID: requestID, Err: refresher.RefreshWorkspace(ctx)}
+	}
+}
+
+func repositoryStatusCmd(
+	ctx context.Context,
+	reader frontend.RepositoryEvidenceReader,
+	requestID uint64,
+) tea.Cmd {
+	return func() tea.Msg {
+		_, err := reader.RepositoryStatus(ctx)
+		return RepositoryStatusMsg{RequestID: requestID, Err: err}
+	}
+}
+
+func repositoryDiffCmd(
+	ctx context.Context,
+	reader frontend.RepositoryEvidenceReader,
+	target codingworkspace.DiffTarget,
+	requestID uint64,
+) tea.Cmd {
+	return func() tea.Msg {
+		_, err := reader.RepositoryDiff(ctx, target)
+		return RepositoryDiffMsg{RequestID: requestID, Err: err}
+	}
+}
+
+func (m *Model) beginEvidenceRequest() uint64 {
+	m.nextEvidenceRequest++
+	if m.nextEvidenceRequest == 0 {
+		m.nextEvidenceRequest++
+	}
+	m.activeEvidenceReq = m.nextEvidenceRequest
+	return m.activeEvidenceReq
+}
+
+func (m *Model) supersedeEvidenceRequest() {
+	if m.activeEvidenceReq == 0 {
+		return
+	}
+	m.activeEvidenceReq = 0
+	m.refreshingWorkspace = false
+	if m.workspaceNotice == "repository status loading" || m.workspaceNotice == "repository diff loading" {
+		m.workspaceNotice = ""
 	}
 }
