@@ -416,9 +416,7 @@ type toolCallState struct {
 // tool execution with async callbacks, media delivery, and steering injection.
 // Returns an explicit outcome indicating what the coordinator should do next:
 //   - turnStepContinue: all tool results handled, pendingMessages or steering exists, continue turn
-//   - turnStepFinalize: tool loop exited with model content or a fully handled response
-//   - turnStepFinalizeWhenReady: render accumulated context unless new work arrives
-//   - turnStepFinalizeExact: finalize exact runtime safety content without another model call
+//   - turnStepFinalize: tool loop exited with a terminal rendering policy
 //   - turnStepSuspend: durable continuation ownership moved outside this turn
 //   - turnStepAbort: stop for a hook or hard-abort request
 func (p *Pipeline) ExecuteTools(
@@ -759,7 +757,9 @@ func (runner *toolLoopRunner) admitToolCall(
 					}
 					exec.messages = runner.messages
 					return stopToolBatch(ToolLoopOutcome{
-						Control: turnStepFinalizeExact, FinalContent: loopDecision.Message,
+						Control:      turnStepFinalize,
+						FinalContent: loopDecision.Message,
+						TerminalMode: terminalRenderExact,
 					})
 				}
 				if terminalBatch {
@@ -835,7 +835,7 @@ func (runner *toolLoopRunner) admitToolCall(
 			)
 			exec.messages = runner.messages
 			return stopToolBatch(ToolLoopOutcome{
-				Control: turnStepFinalizeExact, FinalContent: loopDecision.Message,
+				Control: turnStepFinalize, FinalContent: loopDecision.Message, TerminalMode: terminalRenderExact,
 			})
 		}
 		return skipToolCall()
@@ -1601,7 +1601,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		}
 		exec.messages = runner.messages
 		return stopToolBatch(ToolLoopOutcome{
-			Control: turnStepFinalizeExact, FinalContent: loopDecision.Message,
+			Control: turnStepFinalize, FinalContent: loopDecision.Message, TerminalMode: terminalRenderExact,
 		})
 	}
 	if terminalBatch {
@@ -1684,7 +1684,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				"tool_count": len(normalizedToolCalls),
 			},
 		)
-		return ToolLoopOutcome{Control: turnStepFinalizeWhenReady}
+		return ToolLoopOutcome{Control: turnStepFinalize, TerminalMode: terminalRenderRequired}
 	}
 
 	if llm.toolResponseDisposition == toolResponseHandled {

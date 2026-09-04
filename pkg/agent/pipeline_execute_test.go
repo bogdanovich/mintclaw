@@ -2691,7 +2691,7 @@ func TestPipelineEmergencyHaltTerminatesUnknownSuccessfulLoop(t *testing.T) {
 			}
 			continue
 		}
-		if outcome.Control != turnStepFinalizeExact ||
+		if outcome.Control != turnStepFinalize || outcome.TerminalMode != terminalRenderExact ||
 			!strings.Contains(outcome.FinalContent, "Stopped the turn") {
 			t.Fatalf("terminal outcome = %#v", outcome)
 		}

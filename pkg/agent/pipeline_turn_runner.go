@@ -10,6 +10,18 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
+type terminalRequest struct {
+	content    terminalContent
+	renderMode terminalRenderMode
+}
+
+type terminalGatewayOutcome struct {
+	result turnResult
+	status TurnEndStatus
+	resume bool
+	err    error
+}
+
 func (p *Pipeline) runTurnLoop(
 	ctx context.Context,
 	turnCtx context.Context,
@@ -37,13 +49,33 @@ func (p *Pipeline) runPreparedTurnLoop(
 	maxMediaSize := p.maxMediaSize()
 	mediaResolver := p.Context.MediaResolver
 	llm := newLLMIterationState(0)
+	terminalRequested := false
 
 	for {
 		graceful, _ := ts.gracefulInterruptRequested()
 		canRun := ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || graceful ||
 			exec.objectiveRepairPending
-		if !canRun && !p.continueWithPendingSubTurnResults(ts, exec) {
-			break
+		if terminalRequested || (!canRun && !p.continueWithPendingSubTurnResults(ts, exec)) {
+			if exec.terminal.content == "" {
+				if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
+					exec.terminal = terminalContent{content: toolLimitResponse}
+				} else {
+					exec.terminal = terminalContent{content: ts.opts.DefaultResponse}
+				}
+			}
+			terminal := p.completeTerminal(
+				turnCtx,
+				ts,
+				exec,
+				llm,
+				turnStatus,
+				terminalRequest{content: exec.terminal},
+			)
+			if terminal.resume {
+				terminalRequested = false
+				continue
+			}
+			return terminal.result, terminal.status, terminal.err
 		}
 		if ts.hardAbortRequested() {
 			turnStatus = TurnEndStatusAborted
@@ -87,7 +119,8 @@ func (p *Pipeline) runPreparedTurnLoop(
 						"turn_id":   ts.turnID,
 					},
 				)
-				break
+				terminalRequested = true
+				continue
 			}
 			logger.InfoCF(
 				"agent",
@@ -216,29 +249,22 @@ func (p *Pipeline) runPreparedTurnLoop(
 		case turnStepContinue:
 			continue
 		case turnStepFinalize:
-			// Ensure empty response falls back to DefaultResponse
+			// Ensure empty response falls back to DefaultResponse.
 			if exec.terminal.content == "" {
 				exec.terminal = terminalContent{content: ts.opts.DefaultResponse}
 			}
-			if p.continueWithPendingSubTurnResults(ts, exec) {
-				continue
-			}
-			exec.terminal = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, exec.terminal)
-			if p.scheduleObjectiveOutcomeRepair(turnCtx, ts, exec, llm, exec.terminal) {
-				continue
-			}
-			result, finalizeErr := p.finalizeTurn(
+			terminal := p.completeTerminal(
 				turnCtx,
 				ts,
 				exec,
 				llm,
 				turnStatus,
-				exec.terminal,
+				terminalRequest{content: exec.terminal},
 			)
-			if finalizeErr != nil {
-				turnStatus = TurnEndStatusError
+			if terminal.resume {
+				continue
 			}
-			return result, turnStatus, finalizeErr
+			return terminal.result, terminal.status, terminal.err
 		case turnStepExecuteTools:
 			// Execute tools via Pipeline
 			toolOutcome := p.ExecuteTools(ctx, turnCtx, ts, exec, llm)
@@ -258,43 +284,6 @@ func (p *Pipeline) runPreparedTurnLoop(
 			case turnStepContinue:
 				// ExecuteTools already appended model-visible results to exec.messages.
 				continue
-			case turnStepFinalizeWhenReady:
-				renderedContent, rendered := tryRenderFinalTurnReply(
-					turnCtx,
-					p.Cfg,
-					ts,
-					exec,
-					exec.terminal,
-				)
-				exec.terminal = renderedContent
-				if !rendered {
-					continue
-				}
-				if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
-					exec.markSteeringObserved()
-					logger.InfoCF(
-						"agent",
-						"Steering arrived during terminal render; continuing turn",
-						map[string]any{
-							"agent_id":       ts.agent.ID,
-							"iteration":      iteration,
-							"steering_count": len(steerMsgs),
-						},
-					)
-					exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
-					continue
-				}
-				if p.continueWithPendingSubTurnResults(ts, exec) {
-					continue
-				}
-				if p.scheduleObjectiveOutcomeRepair(turnCtx, ts, exec, llm, exec.terminal) {
-					continue
-				}
-				result, finalizeErr := p.finalizeTurn(turnCtx, ts, exec, llm, turnStatus, exec.terminal)
-				if finalizeErr != nil {
-					turnStatus = TurnEndStatusError
-				}
-				return result, turnStatus, finalizeErr
 			case turnStepSuspend:
 				turnStatus = TurnEndStatusSuspended
 				ts.setPhase(TurnPhaseSuspended)
@@ -302,51 +291,28 @@ func (p *Pipeline) runPreparedTurnLoop(
 					status:                 turnStatus,
 					suspendedInteractionID: toolOutcome.SuspendedInteractionID,
 				}, turnStatus, nil
-			case turnStepFinalizeExact:
-				exec.terminal = terminalContent{content: toolOutcome.FinalContent}
-				if strings.TrimSpace(exec.terminal.content) == "" {
-					exec.terminal.content = "The tool loop was stopped by runtime safety protection."
-				}
-				result, finalizeErr := p.finalizeTurn(
-					turnCtx,
-					ts,
-					exec,
-					llm,
-					turnStatus,
-					exec.terminal,
-				)
-				if finalizeErr != nil {
-					turnStatus = TurnEndStatusError
-				}
-				return result, turnStatus, finalizeErr
 			case turnStepFinalize:
 				// A handled tool response suppresses DefaultResponse; otherwise use
 				// outcome content when present.
 				if strings.TrimSpace(toolOutcome.FinalContent) != "" {
 					exec.terminal = terminalContent{content: toolOutcome.FinalContent}
 				}
-				if llm.toolResponseDisposition == toolResponseHandled {
+				if llm.toolResponseDisposition == toolResponseHandled &&
+					toolOutcome.TerminalMode != terminalRenderExact {
 					exec.terminal = terminalContent{}
 				}
-				if p.continueWithPendingSubTurnResults(ts, exec) {
-					continue
-				}
-				exec.terminal = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, exec.terminal)
-				if p.scheduleObjectiveOutcomeRepair(turnCtx, ts, exec, llm, exec.terminal) {
-					continue
-				}
-				result, finalizeErr := p.finalizeTurn(
+				terminal := p.completeTerminal(
 					turnCtx,
 					ts,
 					exec,
 					llm,
 					turnStatus,
-					exec.terminal,
+					terminalRequest{content: exec.terminal, renderMode: toolOutcome.TerminalMode},
 				)
-				if finalizeErr != nil {
-					turnStatus = TurnEndStatusError
+				if terminal.resume {
+					continue
 				}
-				return result, turnStatus, finalizeErr
+				return terminal.result, terminal.status, terminal.err
 			case turnStepAbort:
 				switch toolOutcome.AbortCause {
 				case turnAbortHard:
@@ -369,40 +335,69 @@ func (p *Pipeline) runPreparedTurnLoop(
 			return turnResult{}, turnStatus, fmt.Errorf("model phase returned unknown step %d", llmOutcome.Control)
 		}
 	}
+}
 
+func (p *Pipeline) completeTerminal(
+	turnCtx context.Context,
+	ts *turnState,
+	exec *turnExecution,
+	llm *LLMIterationState,
+	status TurnEndStatus,
+	request terminalRequest,
+) terminalGatewayOutcome {
 	if ts.hardAbortRequested() {
-		turnStatus = TurnEndStatusAborted
-		result, abortErr := p.abortTurn(ts)
-		return result, turnStatus, abortErr
+		result, err := p.abortTurn(ts)
+		return terminalGatewayOutcome{result: result, status: TurnEndStatusAborted, err: err}
 	}
 
-	if exec.terminal.content == "" {
-		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
-			exec.terminal = terminalContent{content: toolLimitResponse}
-		} else {
-			exec.terminal = terminalContent{content: ts.opts.DefaultResponse}
+	exec.terminal = request.content
+	if request.renderMode == terminalRenderExact {
+		if strings.TrimSpace(exec.terminal.content) == "" {
+			exec.terminal.content = "The tool loop was stopped by runtime safety protection."
+		}
+	} else {
+		if p.continueWithPendingSubTurnResults(ts, exec) {
+			return terminalGatewayOutcome{status: status, resume: true}
+		}
+
+		rendered, ok := tryRenderFinalTurnReply(turnCtx, p.Cfg, ts, exec, exec.terminal)
+		exec.terminal = rendered
+		if request.renderMode == terminalRenderRequired && !ok {
+			return terminalGatewayOutcome{status: status, resume: true}
+		}
+
+		if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
+			exec.markSteeringObserved()
+			logger.InfoCF(
+				"agent",
+				"Steering arrived during terminal render; continuing turn",
+				map[string]any{
+					"agent_id":       ts.agent.ID,
+					"iteration":      ts.currentIteration(),
+					"steering_count": len(steerMsgs),
+				},
+			)
+			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+			return terminalGatewayOutcome{status: status, resume: true}
+		}
+		if p.continueWithPendingSubTurnResults(ts, exec) {
+			return terminalGatewayOutcome{status: status, resume: true}
+		}
+		if p.scheduleObjectiveOutcomeRepair(turnCtx, ts, exec, llm, exec.terminal) {
+			exec.terminal = terminalContent{}
+			return terminalGatewayOutcome{status: status, resume: true}
 		}
 	}
-	exec.terminal = renderFinalTurnReply(turnCtx, p.Cfg, ts, exec, exec.terminal)
-	if p.scheduleObjectiveOutcomeRepair(turnCtx, ts, exec, llm, exec.terminal) {
-		// Recursive re-entry historically began with an empty local terminal.
-		// Preserve that behavior until H5.4 removes the recursive gateway.
-		exec.terminal = terminalContent{}
-		return p.runPreparedTurnLoop(ctx, turnCtx, ts, exec)
-	}
 
-	// Check hard abort before finalizing (may have been set during tool execution)
 	if ts.hardAbortRequested() {
-		turnStatus = TurnEndStatusAborted
-		result, abortErr := p.abortTurn(ts)
-		return result, turnStatus, abortErr
+		result, err := p.abortTurn(ts)
+		return terminalGatewayOutcome{result: result, status: TurnEndStatusAborted, err: err}
 	}
-
-	result, err := p.finalizeTurn(turnCtx, ts, exec, llm, turnStatus, exec.terminal)
+	result, err := p.finalizeTurn(turnCtx, ts, exec, llm, status, exec.terminal)
 	if err != nil {
-		turnStatus = TurnEndStatusError
+		status = TurnEndStatusError
 	}
-	return result, turnStatus, err
+	return terminalGatewayOutcome{result: result, status: status, err: err}
 }
 
 func (p *Pipeline) scheduleObjectiveOutcomeRepair(

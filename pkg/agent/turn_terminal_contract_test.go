@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"testing"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
@@ -10,6 +11,10 @@ import (
 )
 
 func TestTerminalTurnPathsProduceExactlyOneOutcomeAndFinalization(t *testing.T) {
+	repairedOutcome := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":"complete standalone result"}}],` +
+		`"missing_items":[],"result":"complete standalone result"}` + objectiveOutcomeEnd
 	tests := []struct {
 		name                 string
 		provider             func() providers.LLMProvider
@@ -53,6 +58,35 @@ func TestTerminalTurnPathsProduceExactlyOneOutcomeAndFinalization(t *testing.T) 
 			wantFinalContent:     "rendered terminal response",
 			wantPersistedContent: "rendered terminal response",
 			wantIterations:       1,
+		},
+		{
+			name: "post-tool render failure resumes model loop",
+			provider: func() providers.LLMProvider {
+				return &sequenceProvider{
+					responses: []*providers.LLMResponse{
+						{
+							Content: "tool intent",
+							ToolCalls: []providers.ToolCall{{
+								ID: "call-render-retry", Name: "contract_tool", Arguments: map[string]any{},
+							}},
+							FinishReason: "tool_calls",
+						},
+						nil,
+						{Content: "model-loop terminal response", FinishReason: "stop"},
+					},
+					errors: []error{nil, errors.New("render unavailable"), nil, errors.New("render unavailable")},
+				}
+			},
+			configure: func(al *AgentLoop, agent *AgentInstance, opts *turnSpec) {
+				al.GetConfig().Agents.Defaults.FinalTurnRenderMode = "llm"
+				agent.Tools.Register(&fixedToolResultTool{
+					name: "contract_tool", result: toolshared.SilentResult("tool completed"),
+				})
+				opts.InitialSteeringMessages = []providers.Message{{Role: "user", Content: "clarification"}}
+			},
+			wantFinalContent:     "model-loop terminal response",
+			wantPersistedContent: "model-loop terminal response",
+			wantIterations:       2,
 		},
 		{
 			name: "tool-loop safety halt",
@@ -100,6 +134,32 @@ func TestTerminalTurnPathsProduceExactlyOneOutcomeAndFinalization(t *testing.T) 
 			},
 			wantFinalContent:     toolLimitResponse,
 			wantPersistedContent: toolLimitResponse,
+			wantIterations:       2,
+		},
+		{
+			name: "iteration exhaustion with bounded objective repair",
+			provider: func() providers.LLMProvider {
+				return &sequenceProvider{responses: []*providers.LLMResponse{
+					{
+						ToolCalls: []providers.ToolCall{{
+							ID: "call-before-repair", Name: "contract_tool", Arguments: map[string]any{},
+						}},
+						FinishReason: "tool_calls",
+					},
+					{Content: repairedOutcome, FinishReason: "stop"},
+				}}
+			},
+			configure: func(_ *AgentLoop, agent *AgentInstance, opts *turnSpec) {
+				agent.MaxIterations = 1
+				agent.Tools.Register(&fixedToolResultTool{
+					name: "contract_tool", result: toolshared.SilentResult("tool completed"),
+				})
+				opts.ObjectiveChecklist = normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+					Item: "return a complete standalone result", Kind: "result",
+				}})
+			},
+			wantFinalContent:     repairedOutcome,
+			wantPersistedContent: repairedOutcome,
 			wantIterations:       2,
 		},
 	}

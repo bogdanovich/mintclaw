@@ -105,14 +105,23 @@ func (e *interactionContinuationExecutor) execute(
 			return turnResult{}, TurnEndStatusError, repairErr
 		}
 		ts.consumeApprovalGrant()
-		if outcome.Control == turnStepFinalize && llm.toolResponseDisposition == toolResponseHandled {
-			result, finalizeErr := pipeline.finalizeTurn(
-				turnCtx, ts, exec, llm, TurnEndStatusCompleted, terminalContent{},
-			)
-			if finalizeErr != nil {
-				return result, TurnEndStatusError, finalizeErr
+		if outcome.Control == turnStepFinalize {
+			content := terminalContent{content: outcome.FinalContent}
+			if llm.toolResponseDisposition == toolResponseHandled &&
+				outcome.TerminalMode != terminalRenderExact {
+				content = terminalContent{}
 			}
-			return result, TurnEndStatusCompleted, nil
+			terminal := pipeline.completeTerminal(
+				turnCtx,
+				ts,
+				exec,
+				llm,
+				TurnEndStatusCompleted,
+				terminalRequest{content: content, renderMode: outcome.TerminalMode},
+			)
+			if !terminal.resume {
+				return terminal.result, terminal.status, terminal.err
+			}
 		}
 	}
 
