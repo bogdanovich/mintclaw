@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,27 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
+
+type evidenceController struct {
+	*fakeController
+	status codingworkspace.StatusResult
+	diff   codingworkspace.DiffResult
+	target codingworkspace.DiffTarget
+}
+
+func (controller *evidenceController) RepositoryStatus(
+	context.Context,
+) (codingworkspace.StatusResult, error) {
+	return controller.status, nil
+}
+
+func (controller *evidenceController) RepositoryDiff(
+	_ context.Context,
+	target codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	controller.target = target
+	return controller.diff, nil
+}
 
 func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 	controller := newController(t)
@@ -193,6 +215,51 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 	if !strings.Contains(model.View(), "Current bounded repository changes") ||
 		!strings.Contains(model.View(), "branch: feature/live") || !strings.Contains(model.View(), "no changed paths") {
 		t.Fatalf("diff panel = %q", model.View())
+	}
+}
+
+func TestRepositoryPanelsRefreshThroughTypedEvidenceReader(t *testing.T) {
+	controller := &evidenceController{fakeController: newController(t)}
+	controller.status = codingworkspace.StatusResult{
+		SchemaVersion: codingworkspace.RepositoryStatusSchemaV1,
+		Snapshot: codingworkspace.Snapshot{Git: codingworkspace.GitState{
+			Available: true, StatusAvailable: true, Branch: "typed-status",
+		}},
+	}
+	controller.diff = codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase, Ref: "main"},
+		Files: []codingworkspace.DiffFile{{
+			Path: "typed.go", Status: "M", Provenance: codingworkspace.ProvenanceFirstObservedDuringThread,
+		}},
+	}
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model.composer.SetValue("/status")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("/status did not request typed repository evidence")
+	}
+	model = updateModel(t, model, command())
+	if !strings.Contains(model.View(), "typed-status") || model.snapshot.RepositoryStatus == nil {
+		t.Fatalf("typed status panel = %q", model.View())
+	}
+
+	model.composer.SetValue("/diff base main")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("/diff did not request typed repository evidence")
+	}
+	model = updateModel(t, model, command())
+	if controller.target.Kind != codingworkspace.DiffTargetBase || controller.target.Ref != "main" ||
+		!strings.Contains(model.View(), "Repository diff (base main)") ||
+		!strings.Contains(model.View(), "typed.go") || !strings.Contains(model.View(), "first_observed_during_thread") {
+		t.Fatalf("typed diff target/panel = %#v / %q", controller.target, model.View())
 	}
 }
 

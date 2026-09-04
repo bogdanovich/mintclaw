@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 type commandPanel uint8
@@ -109,11 +110,35 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 	case "/help", "/?":
 		return show(commandPanelHelp)
 	case "/status":
-		return show(commandPanelStatus)
+		if !noArgs() {
+			return true, nil
+		}
+		m.commandPanel = commandPanelStatus
+		m.err = nil
+		m.clearCommandDraft()
+		reader, ok := m.controller.(frontend.RepositoryEvidenceReader)
+		if !ok {
+			return true, nil
+		}
+		m.workspaceNotice = "repository status loading"
+		return true, repositoryStatusCmd(m.ctx, reader)
 	case "/model":
 		return show(commandPanelModel)
 	case "/diff":
-		return show(commandPanelDiff)
+		target, err := slashDiffTarget(command.args)
+		if err != nil {
+			m.err = err
+			return true, nil
+		}
+		m.commandPanel = commandPanelDiff
+		m.err = nil
+		m.clearCommandDraft()
+		reader, ok := m.controller.(frontend.RepositoryEvidenceReader)
+		if !ok {
+			return true, nil
+		}
+		m.workspaceNotice = "repository diff loading"
+		return true, repositoryDiffCmd(m.ctx, reader, target)
 	case "/compact":
 		if !noArgs() {
 			return true, nil
@@ -169,6 +194,28 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 	}
 }
 
+func slashDiffTarget(args string) (codingworkspace.DiffTarget, error) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent}, nil
+	}
+	target := codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetKind(strings.ToLower(fields[0]))}
+	switch target.Kind {
+	case codingworkspace.DiffTargetCurrent, codingworkspace.DiffTargetBaseline:
+		if len(fields) != 1 {
+			return codingworkspace.DiffTarget{}, fmt.Errorf("/diff %s does not accept a ref", target.Kind)
+		}
+	case codingworkspace.DiffTargetBase, codingworkspace.DiffTargetCommit:
+		if len(fields) != 2 {
+			return codingworkspace.DiffTarget{}, fmt.Errorf("/diff %s requires one local ref", target.Kind)
+		}
+		target.Ref = fields[1]
+	default:
+		return codingworkspace.DiffTarget{}, errors.New("/diff target must be current, baseline, base, or commit")
+	}
+	return target, nil
+}
+
 func (m *Model) clearCommandDraft() {
 	m.composer.Reset()
 	m.historyIndex = -1
@@ -216,7 +263,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"/help              show commands and keyboard bindings",
 			"/status            show live thread and workspace status",
 			"/model             show the current model and provider",
-			"/diff              show the current bounded repository change summary",
+			"/diff [target]     show bounded hunks for current, baseline, base, or commit",
 			"/attach <paths…>   attach local files to the draft",
 			"/compact           start real context compaction when idle",
 			"/rename <title>    request a thread title change",
@@ -258,7 +305,9 @@ func statusPanelContent(snapshot frontend.ThreadSnapshot) string {
 		"model: " + boundedSingleLine(modelStatus(snapshot.Metadata), 512),
 		"context: " + strings.TrimPrefix(contextStatus(snapshot.ContextUsage), "context "),
 	}
-	if workspace := snapshot.Workspace; workspace != nil {
+	if snapshot.RepositoryStatus != nil {
+		lines = append(lines, "", codingworkspace.RenderStatusPlain(*snapshot.RepositoryStatus))
+	} else if workspace := snapshot.Workspace; workspace != nil {
 		lines = append(
 			lines,
 			"branch: "+boundedSingleLine(branchStatus(workspace), 512),
@@ -343,6 +392,9 @@ func compactionContinuation(compaction *frontend.CompactionState) string {
 }
 
 func diffPanelContent(snapshot frontend.ThreadSnapshot) string {
+	if snapshot.RepositoryDiff != nil {
+		return codingworkspace.RenderDiffPlain(*snapshot.RepositoryDiff)
+	}
 	lines := []string{"Current bounded repository changes"}
 	workspace := snapshot.Workspace
 	if workspace == nil {
