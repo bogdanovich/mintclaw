@@ -3,11 +3,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -37,7 +34,8 @@ func IsPublicAllowFrom(values []string) bool {
 }
 
 const (
-	notHere = `"[NOT_HERE]"`
+	// legacySecretPlaceholder is accepted only when reading old public configuration.
+	legacySecretPlaceholder = `"[NOT_HERE]"`
 )
 
 // SecureStrings is a slice of SecureString
@@ -47,9 +45,6 @@ type SecureStrings []*SecureString
 
 // IsZero returns true if the SecureStrings is nil or empty.
 func (s SecureStrings) IsZero() bool {
-	if !callerFromYaml() {
-		return true
-	}
 	return len(s) == 0
 }
 
@@ -88,11 +83,13 @@ func unique[T comparable](input []T) []T {
 }
 
 func (s SecureStrings) MarshalJSON() ([]byte, error) {
-	return []byte(notHere), nil
+	// Public boundaries remove the field through ProjectPublicConfig. Null is a
+	// defense in depth for accidental serialization of the runtime graph.
+	return []byte("null"), nil
 }
 
 func (s *SecureStrings) UnmarshalJSON(value []byte) error {
-	if string(value) == notHere {
+	if string(value) == legacySecretPlaceholder {
 		return nil
 	}
 	var v []*SecureString
@@ -127,25 +124,9 @@ type SecureString struct {
 	raw      string // Persisted raw value (enc://, file://, or plaintext)
 }
 
-func callerFromYaml() bool {
-	_, file, _, ok := runtime.Caller(2)
-	if ok {
-		d := filepath.Dir(file)
-		// check the caller is from yaml.v
-		if !strings.Contains(d, "yaml.v") {
-			return false
-		}
-	}
-	return true
-}
-
-// IsZero returns true if the SecureString is empty
-// if caller not yaml, just return true for prevent marshal this field
+// IsZero returns true if the SecureString has no persisted or resolved value.
 func (s SecureString) IsZero() bool {
-	if !callerFromYaml() {
-		return true
-	}
-	return s.resolved == ""
+	return s.raw == "" && s.resolved == ""
 }
 
 func NewSecureString(value string) *SecureString {
@@ -170,11 +151,13 @@ func (s *SecureString) Set(value string) *SecureString {
 }
 
 func (s SecureString) MarshalJSON() ([]byte, error) {
-	return []byte(notHere), nil
+	// Public boundaries remove the field through ProjectPublicConfig. Null is a
+	// defense in depth for accidental serialization of the runtime graph.
+	return []byte("null"), nil
 }
 
 func (s *SecureString) UnmarshalJSON(value []byte) error {
-	if string(value) == notHere {
+	if string(value) == legacySecretPlaceholder {
 		return nil
 	}
 	var v string
@@ -214,41 +197,25 @@ func (s *SecureString) UnmarshalYAML(value *yaml.Node) error {
 
 func (s *SecureString) fromRaw(v string) error {
 	s.raw = v
-	vv, err := resolveKey(v)
-	if err != nil {
-		return err
+	if strings.HasPrefix(v, credential.FileScheme) {
+		// Relative file references need the owning repository path. The loader
+		// resolves them after environment and channel settings are initialized.
+		s.resolved = ""
+		return nil
 	}
-	s.resolved = vv
-	return nil
-}
-
-var (
-	secResolverMu sync.RWMutex
-	secResolver   *credential.Resolver
-)
-
-func updateResolver(path string) {
-	secResolverMu.Lock()
-	defer secResolverMu.Unlock()
-	secResolver = credential.NewResolver(path)
-}
-
-func resolveKey(v string) (string, error) {
-	secResolverMu.RLock()
-	resolver := secResolver
-	secResolverMu.RUnlock()
-	if resolver == nil {
-		resolver = credential.NewResolver("")
-	}
-	if strings.HasPrefix(v, "enc://") || strings.HasPrefix(v, "file://") {
-		decrypted, err := resolver.Resolve(v)
+	if strings.HasPrefix(v, credential.EncScheme) {
+		// Encrypted values are path-independent, so standalone channel decoding
+		// can retain its historical eager validation and decryption behavior.
+		resolved, err := credential.NewResolver("").Resolve(v)
 		if err != nil {
 			logger.Errorf("Resolve error: %v", err)
-			return "", err
+			return err
 		}
-		return decrypted, nil
+		s.resolved = resolved
+		return nil
 	}
-	return v, nil
+	s.resolved = v
+	return nil
 }
 
 func (s *SecureString) UnmarshalText(text []byte) error {

@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/bogdanovich/mintclaw/pkg"
+	"github.com/bogdanovich/mintclaw/pkg/credential"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
@@ -36,8 +37,6 @@ func loadConfigForUpdate(path string) (*Config, error) {
 }
 
 func loadConfigReadOnly(path string, applyRuntimeOverrides bool) (*Config, error) {
-	updateResolver(filepath.Dir(path))
-
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -65,7 +64,8 @@ func loadConfigReadOnly(path string, applyRuntimeOverrides bool) (*Config, error
 		return nil, fmt.Errorf("failed to load security config: %w", err)
 	}
 
-	if err = finalizeLoadedConfig(cfg, applyRuntimeOverrides); err != nil {
+	resolver := credential.NewResolver(filepath.Dir(path))
+	if err = finalizeLoadedConfig(cfg, resolver, applyRuntimeOverrides); err != nil {
 		return nil, err
 	}
 
@@ -130,7 +130,11 @@ func decodeCurrentConfig(data []byte, target *Config, label string) error {
 	return nil
 }
 
-func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
+func finalizeLoadedConfig(
+	cfg *Config,
+	resolver *credential.Resolver,
+	applyRuntimeOverrides bool,
+) error {
 	gatewayHostBeforeEnv := cfg.Gateway.Host
 	if applyRuntimeOverrides {
 		if err := env.Parse(cfg); err != nil {
@@ -140,6 +144,9 @@ func finalizeLoadedConfig(cfg *Config, applyRuntimeOverrides bool) error {
 	}
 	if err := initChannelList(cfg.Channels, applyRuntimeOverrides); err != nil {
 		return err
+	}
+	if err := resolveConfigSecrets(cfg, resolver); err != nil {
+		return fmt.Errorf("resolve config credentials: %w", err)
 	}
 	if err := cfg.ValidateTurnProfile(); err != nil {
 		return err
@@ -505,6 +512,9 @@ func (c *Config) SecurityCopyForReplacement(path string, current *Config) error 
 		if err = c.Channels.UnmarshalYAML(replacementChannelSecurity); err != nil {
 			return fmt.Errorf("restore replacement channel security: %w", err)
 		}
+	}
+	if err = resolveConfigSecrets(c, credential.NewResolver(filepath.Dir(path))); err != nil {
+		return fmt.Errorf("resolve replacement credentials: %w", err)
 	}
 	return nil
 }

@@ -56,7 +56,7 @@ not targets by themselves.
 | Packet | Scope | Depends on | Status |
 | --- | --- | --- | --- |
 | H0 | Restore a trustworthy development baseline | None | Completed |
-| H1 | Make config secret projection explicit | H0 | In progress |
+| H1 | Make config secret projection explicit | H0 | Completed |
 | H2 | Give the web gateway process one instance owner | H0 | In progress |
 | H3 | Add frontend contracts and remove model-form duplication | H0 | Completed |
 | H4 | Extract human-interaction application orchestration | H0 | Completed |

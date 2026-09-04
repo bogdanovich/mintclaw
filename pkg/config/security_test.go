@@ -69,7 +69,7 @@ func TestSaveAndLoadSecurityConfig(t *testing.T) {
 		out, err = json.Marshal(s)
 		require.NoError(t, err)
 		t.Logf("output: %v", string(out))
-		assert.Equal(t, "{}", string(out))
+		assert.Equal(t, `{"secret":null}`, string(out))
 	})
 	tmpDir := t.TempDir()
 	secPath := filepath.Join(tmpDir, SecurityConfigFile)
@@ -148,8 +148,22 @@ func TestSaveAndLoadSecurityConfig(t *testing.T) {
 		marshal, err := json.Marshal(original)
 		require.NoError(t, err)
 		t.Logf("json: %s", string(marshal))
-		assert.NotContains(t, string(marshal), "\"api_keys\"")
-		assert.NotContains(t, string(marshal), notHere)
+		assert.Contains(t, string(marshal), `"api_keys":null`)
+		assert.NotContains(t, string(marshal), legacySecretPlaceholder)
+		for _, secret := range []string{
+			"key1",
+			"key2",
+			"model2_key",
+			"brave_key",
+			"github_token",
+			"telegram_token",
+			"feishu_app_secret",
+			"discord_token",
+			"qq_app_secret",
+			"mintclaw_client_token",
+		} {
+			assert.NotContains(t, string(marshal), secret)
+		}
 
 		err = json.Unmarshal(marshal, cfg2)
 		require.NoError(t, err)
