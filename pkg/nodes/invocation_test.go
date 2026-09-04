@@ -523,6 +523,40 @@ func TestPrepareExecutionPlanBoundsCanonicalInput(t *testing.T) {
 	}
 }
 
+func TestPrepareExecutionPlanV2BoundsAggregateNumericExpansion(t *testing.T) {
+	t.Parallel()
+
+	input := json.RawMessage(`{"values":[` + strings.TrimSuffix(strings.Repeat("1e4095,", 129), ",") + `]}`)
+	if len(input) >= MaxInvocationInputBytes {
+		t.Fatalf("test input unexpectedly exceeds raw limit: %d", len(input))
+	}
+	if _, err := PrepareExecutionPlanForProtocol(
+		ProtocolV2,
+		invocationRequest(input),
+		invocationDescriptor(RiskWrite),
+		"local",
+		"policy-1",
+		time.Unix(1, 0),
+		time.Minute,
+	); !errors.Is(err, ErrInvalidInvocation) {
+		t.Fatalf("expanded v2 canonical input error = %v", err)
+	}
+}
+
+func TestValidateInvocationOutputV2BoundsAggregateNumericExpansion(t *testing.T) {
+	t.Parallel()
+
+	output := json.RawMessage(`{"values":[1e4095,1e4095,1e4095]}`)
+	descriptor := invocationDescriptor(RiskWrite)
+	descriptor.OutputSchema = json.RawMessage(`{"type":"object"}`)
+	if _, err := ValidateInvocationOutputForProtocol(ProtocolV2, descriptor, output, 8*1024); !errors.Is(
+		err,
+		ErrInvalidInvocation,
+	) {
+		t.Fatalf("expanded v2 canonical output error = %v", err)
+	}
+}
+
 func TestExecutionPlanRejectsExtremeTimestampLifetime(t *testing.T) {
 	plan, err := PrepareExecutionPlan(
 		invocationRequest(json.RawMessage(`{"argv":["git","status"]}`)),
