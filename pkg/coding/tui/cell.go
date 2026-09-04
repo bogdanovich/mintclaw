@@ -255,8 +255,10 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 	}
 	if tool.Command != nil {
 		lines = append(lines, commandEvidenceCellLines(*tool.Command)...)
-	} else if output := strings.TrimSpace(sanitizeTerminalText(tool.Output)); output != "" {
-		lines = append(lines, logicalCellLines("  output:\n"+indentCellEvidence(output), cellStyleDefault)...)
+	} else if output := sanitizeTerminalText(tool.Output); strings.TrimSpace(output) != "" {
+		lines = append(
+			lines,
+			logicalCellLines("  output:\n"+indentCellEvidence(output), cellStyleDefault)...)
 	}
 	return cellDocument{Lines: lines, Truncated: tool.OutputTruncated || toolCommandTruncated(tool.Command)}
 }
@@ -285,8 +287,8 @@ func commandEvidenceCellLines(command frontend.CommandState) []cellLine {
 		{label: "stderr", value: command.Stderr},
 		{label: "output", value: command.Output},
 	} {
-		value := strings.TrimSpace(sanitizeTerminalText(evidence.value))
-		if value == "" {
+		value := sanitizeTerminalText(evidence.value)
+		if strings.TrimSpace(value) == "" {
 			continue
 		}
 		lines = append(
@@ -374,7 +376,7 @@ func wrapCellDocument(document cellDocument, width int) cellDocument {
 		if len(line.Spans) != 0 {
 			role = line.Spans[0].Role
 		}
-		value := line.plainText()
+		value := expandCellTabs(line.plainText(), 4)
 		indent := value[:len(value)-len(strings.TrimLeft(value, " "))]
 		body := strings.TrimPrefix(value, indent)
 		if body == "" {
@@ -385,6 +387,7 @@ func wrapCellDocument(document cellDocument, width int) cellDocument {
 			indent = strings.Repeat(" ", max(0, width-1))
 		}
 		bodyWidth := max(1, width-ansi.StringWidth(indent))
+		body = replaceOverwideCellGraphemes(body, bodyWidth)
 		parts := strings.Split(ansi.Wrap(body, bodyWidth, ""), "\n")
 		for _, part := range parts {
 			wrapped = append(wrapped, styledCellLine(indent+part, role))
@@ -392,6 +395,46 @@ func wrapCellDocument(document cellDocument, width int) cellDocument {
 	}
 	document.Lines = wrapped
 	return document
+}
+
+func expandCellTabs(value string, tabWidth int) string {
+	tabWidth = max(1, tabWidth)
+	var expanded strings.Builder
+	column := 0
+	for value != "" {
+		cluster, width := ansi.FirstGraphemeCluster(value, ansi.GraphemeWidth)
+		if cluster == "" {
+			break
+		}
+		value = value[len(cluster):]
+		if cluster == "\t" {
+			spaces := tabWidth - column%tabWidth
+			expanded.WriteString(strings.Repeat(" ", spaces))
+			column += spaces
+			continue
+		}
+		expanded.WriteString(cluster)
+		column += max(0, width)
+	}
+	return expanded.String()
+}
+
+func replaceOverwideCellGraphemes(value string, widthLimit int) string {
+	widthLimit = max(1, widthLimit)
+	var bounded strings.Builder
+	for value != "" {
+		cluster, width := ansi.FirstGraphemeCluster(value, ansi.GraphemeWidth)
+		if cluster == "" {
+			break
+		}
+		value = value[len(cluster):]
+		if width > widthLimit {
+			bounded.WriteRune('�')
+			continue
+		}
+		bounded.WriteString(cluster)
+	}
+	return bounded.String()
 }
 
 type cellLayoutBlock struct {

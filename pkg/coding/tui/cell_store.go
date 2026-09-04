@@ -8,8 +8,6 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
 
-var errStaleSemanticCellRevision = errors.New("stale semantic cell revision")
-
 // semanticCellStore is a disposable renderer index over the authoritative
 // bounded frontend snapshot. It owns immutable cells, never conversation or
 // runtime state, and can be rebuilt from ThreadSnapshot.Items at any time.
@@ -95,15 +93,6 @@ func reconcileSemanticCell(
 			item.ID,
 			current.item.TurnID,
 			item.TurnID,
-		)
-	}
-	if item.Revision < identity.Revision {
-		return nil, fmt.Errorf(
-			"%w for %q: got %d after %d",
-			errStaleSemanticCellRevision,
-			item.ID,
-			item.Revision,
-			identity.Revision,
 		)
 	}
 	if item.Revision == identity.Revision {

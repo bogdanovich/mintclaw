@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
 
 func TestSemanticCellStoreReconcilesStableActiveAndCommittedCells(t *testing.T) {
@@ -72,7 +72,7 @@ func TestSemanticCellStoreReconcilesStableActiveAndCommittedCells(t *testing.T) 
 	}
 }
 
-func TestSemanticCellStoreRejectsAmbiguousOrStaleSnapshotsAtomically(t *testing.T) {
+func TestSemanticCellStoreRejectsAmbiguousSnapshotsAtomically(t *testing.T) {
 	item := semanticMessageItem("assistant-1", 1, 2, frontend.PresentationActive, "working")
 	store, err := newSemanticCellStore([]frontend.PresentationItem{item})
 	if err != nil {
@@ -83,15 +83,7 @@ func TestSemanticCellStoreRejectsAmbiguousOrStaleSnapshotsAtomically(t *testing.
 	tests := []struct {
 		name  string
 		items []frontend.PresentationItem
-		stale bool
 	}{
-		{
-			name: "stale revision",
-			items: []frontend.PresentationItem{
-				semanticMessageItem("assistant-1", 1, 1, frontend.PresentationActive, "older"),
-			},
-			stale: true,
-		},
 		{
 			name: "duplicate ID",
 			items: []frontend.PresentationItem{
@@ -141,9 +133,6 @@ func TestSemanticCellStoreRejectsAmbiguousOrStaleSnapshotsAtomically(t *testing.
 			next, reconcileErr := reconcileSemanticCellStore(store, tt.items)
 			if reconcileErr == nil {
 				t.Fatalf("reconcile succeeded with store %+v", next)
-			}
-			if tt.stale && !errors.Is(reconcileErr, errStaleSemanticCellRevision) {
-				t.Fatalf("error = %v, want stale revision", reconcileErr)
 			}
 			if store.ordered[0] != original || store.ordered[0].item.Message.Text != "working" {
 				t.Fatalf("failed reconcile mutated original store: %+v", store)
@@ -231,6 +220,62 @@ func TestModelOwnsSemanticCellsWhileKeepingCompatibilityViewport(t *testing.T) {
 	}
 }
 
+func TestModelSemanticCellsAcceptProjectorStreamRollback(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = startModelSubscription(t, model)
+	streamer, ok := frontend.NewStreamDelegate(projector, "thread-1").GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("matching stream was rejected")
+	}
+	if err := streamer.Update(t.Context(), "first provisional value"); err != nil {
+		t.Fatal(err)
+	}
+	projector.AssistantAccumulated("turn-1", "committed value", false)
+	if err := streamer.Update(t.Context(), "second provisional value"); err != nil {
+		t.Fatal(err)
+	}
+	provisional, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.installSnapshot(provisional); err != nil {
+		t.Fatal(err)
+	}
+	provisionalRevision := model.cells.ordered[0].Identity().Revision
+
+	streamer.Cancel(t.Context())
+	rolledBack, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, command := model.Update(SnapshotMsg{Snapshot: rolledBack})
+	model, ok = updated.(*Model)
+	if !ok {
+		t.Fatalf("updated model = %T", updated)
+	}
+	if model.err != nil || command == nil {
+		t.Fatalf("rollback update error=%v next-subscription=%v", model.err, command)
+	}
+	if len(model.cells.ordered) != 1 || model.cells.ordered[0].Identity().Revision >= provisionalRevision ||
+		model.cells.ordered[0].item.Message.Text != "committed value" {
+		t.Fatalf("rollback semantic cells = %+v, provisional revision=%d", model.cells, provisionalRevision)
+	}
+}
+
 func TestCellRenderContextValidation(t *testing.T) {
 	valid := []cellRenderContext{
 		{Width: 40, Theme: cellThemeDark, ColorLevel: cellColorTrueColor},
@@ -273,7 +318,7 @@ func TestSemanticCellSanitizerPreservesOrdinaryPunctuation(t *testing.T) {
 
 func TestSemanticCellWrappingBoundsIndentAndTruncationAtNarrowWidths(t *testing.T) {
 	document := cellDocument{
-		Lines:     logicalCellLines("    evidence", cellStyleDefault),
+		Lines:     logicalCellLines("\t界👩🏽‍💻 evidence", cellStyleDefault),
 		Truncated: true,
 	}
 	for width := 1; width <= 12; width++ {
@@ -282,10 +327,50 @@ func TestSemanticCellWrappingBoundsIndentAndTruncationAtNarrowWidths(t *testing.
 			t.Fatalf("width %d lost truncation state", width)
 		}
 		for _, line := range wrapped.Lines {
+			if strings.Contains(line.plainText(), "\t") {
+				t.Fatalf("width %d retained a terminal-dependent tab: %q", width, line.plainText())
+			}
 			if visible := visibleCellWidth(line.plainText()); visible > width {
 				t.Fatalf("width %d produced line width %d: %q", width, visible, line.plainText())
 			}
 		}
+	}
+}
+
+func TestSemanticCellFullEvidencePreservesSignificantWhitespace(t *testing.T) {
+	command := semanticToolItem("command", 1, 1, frontend.PresentationCompleted, frontend.ToolSucceeded)
+	command.Tool.Command = &frontend.CommandState{
+		Status: frontend.CommandSucceeded,
+		Stdout: "  indented  \n\n",
+	}
+	generic := semanticToolItem("generic", 2, 1, frontend.PresentationCompleted, frontend.ToolSucceeded)
+	generic.Tool.Name = "inspect"
+	generic.Tool.Output = "  generic  \n\n"
+
+	for _, test := range []struct {
+		name string
+		cell *presentationCell
+		want string
+	}{
+		{
+			name: "typed command",
+			cell: newPresentationCell(command),
+			want: "• Ran exec [succeeded]\n  stdout:\n      indented  \n    \n    ",
+		},
+		{
+			name: "generic tool",
+			cell: newPresentationCell(generic),
+			want: "• Tool inspect [succeeded]\n  output:\n      generic  \n    \n    ",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, mode := range []cellRenderMode{cellRenderFull, cellRenderPlain} {
+				got := test.cell.Render(cellRenderContext{Width: 80}, mode).plainText()
+				if got != test.want {
+					t.Fatalf("mode %d evidence = %q, want %q", mode, got, test.want)
+				}
+			}
+		})
 	}
 }
 
