@@ -365,7 +365,7 @@ func (p *Pipeline) completeTerminal(
 			exec.terminal.content = "The tool loop was stopped by runtime safety protection."
 		}
 	} else {
-		if p.continueWithPendingSubTurnResults(ts, exec) {
+		if request.renderMode != terminalRenderRequired && p.continueWithPendingSubTurnResults(ts, exec) {
 			return terminalGatewayOutcome{status: status, resume: true}
 		}
 
@@ -376,6 +376,7 @@ func (p *Pipeline) completeTerminal(
 		}
 
 		if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
+			cancelConfiguredStreamingLLM(turnCtx, llm)
 			exec.markSteeringObserved()
 			logger.InfoCF(
 				"agent",

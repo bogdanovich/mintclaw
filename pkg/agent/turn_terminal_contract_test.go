@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -9,6 +10,104 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
+
+type terminalRenderCallbackProvider struct {
+	onChat   func()
+	response string
+}
+
+func (provider *terminalRenderCallbackProvider) Chat(
+	context.Context,
+	[]providers.Message,
+	[]providers.ToolDefinition,
+	string,
+	map[string]any,
+) (*providers.LLMResponse, error) {
+	if provider.onChat != nil {
+		provider.onChat()
+	}
+	return &providers.LLMResponse{Content: provider.response, FinishReason: "stop"}, nil
+}
+
+func (*terminalRenderCallbackProvider) GetDefaultModel() string { return "terminal-render-model" }
+
+func TestRequiredTerminalRenderDrainsSubturnResultsAfterRendering(t *testing.T) {
+	provider := &terminalRenderCallbackProvider{response: "rendered response"}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.GetConfig().Agents.Defaults.FinalTurnRenderMode = "llm"
+	pipeline := newTestPipeline(al)
+	ts := newTurnState(agent, makeTestTurnSpec("terminal-render-subturn"), turnEventScope{})
+	ts.pendingResults = make(chan *toolshared.ToolResult, 1)
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	exec.sawSteering = true
+	accepted := false
+	provider.onChat = func() {
+		accepted = ts.enqueuePendingResult(&toolshared.ToolResult{ForLLM: "late child result"})
+	}
+
+	outcome := pipeline.completeTerminal(
+		t.Context(),
+		ts,
+		exec,
+		newLLMIterationState(1),
+		TurnEndStatusCompleted,
+		terminalRequest{content: terminalContent{content: "fallback"}, renderMode: terminalRenderRequired},
+	)
+	if !accepted || !outcome.resume || outcome.err != nil {
+		t.Fatalf("terminal outcome = %#v, child accepted = %v", outcome, accepted)
+	}
+	if !messageContentPresent(exec.pendingMessages, "late child result") {
+		t.Fatalf("pending messages omitted late child result: %#v", exec.pendingMessages)
+	}
+}
+
+func TestTerminalRenderSteeringCancelsConfiguredStream(t *testing.T) {
+	provider := &terminalRenderCallbackProvider{response: "abandoned rendered response"}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.GetConfig().Agents.Defaults.FinalTurnRenderMode = "llm"
+	pipeline := newTestPipeline(al)
+	ts := newTurnState(agent, makeTestTurnSpec("terminal-render-stream"), turnEventScope{})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	exec.sawSteering = true
+	streamer := &recordingStreamer{}
+	llm := newLLMIterationState(1)
+	llm.streamingPublisher = &streamingChunkPublisher{streamer: streamer}
+	provider.onChat = func() {
+		if pushErr := al.steering.pushScopeWithSender(
+			ts.runtimeSessionScope(),
+			providers.Message{Role: "user", Content: "new direction"},
+			"",
+		); pushErr != nil {
+			t.Errorf("push steering: %v", pushErr)
+		}
+	}
+
+	outcome := pipeline.completeTerminal(
+		t.Context(),
+		ts,
+		exec,
+		llm,
+		TurnEndStatusCompleted,
+		terminalRequest{content: terminalContent{content: "fallback"}, renderMode: terminalRenderRequired},
+	)
+	if !outcome.resume || outcome.err != nil {
+		t.Fatalf("terminal outcome = %#v", outcome)
+	}
+	if streamer.canceled != 1 || llm.streamingPublisher != nil {
+		t.Fatalf("stream cancellation = %d, publisher = %#v", streamer.canceled, llm.streamingPublisher)
+	}
+	if !messageContentPresent(exec.pendingMessages, "new direction") {
+		t.Fatalf("pending messages omitted steering: %#v", exec.pendingMessages)
+	}
+}
 
 func TestTerminalTurnPathsProduceExactlyOneOutcomeAndFinalization(t *testing.T) {
 	repairedOutcome := objectiveOutcomeStart +
