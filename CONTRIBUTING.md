@@ -15,10 +15,15 @@ optimize for reliable deployed behavior.
 
 Prerequisites:
 
-- Go 1.26 or later
+- Go 1.26.6 or later
 - the golangci-lint version recorded in `.golangci-lint-version`
 - `make`
 - Node.js 22+ and pnpm 10.33.0+ for launcher/frontend changes
+
+The version in `go.mod` is the authoritative minimum. CI installs that version
+directly, and Make targets preserve the caller's `GOTOOLCHAIN` policy. Keep
+Go's default automatic toolchain selection enabled, or install a local
+toolchain that satisfies `go.mod`.
 
 Build and test:
 

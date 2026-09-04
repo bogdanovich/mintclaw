@@ -40,11 +40,9 @@ GO_BUILD_TAGS?=goolm,stdjson
 GOFLAGS?=-v -tags $(GO_BUILD_TAGS)
 GOCACHE?=$(CURDIR)/.cache/go-build
 GOMODCACHE?=$(CURDIR)/.cache/go-mod
-GOTOOLCHAIN?=local
 export CGO_ENABLED
 export GOCACHE
 export GOMODCACHE
-export GOTOOLCHAIN
 # Patch creack/pty for loong64 support (upstream doesn't have ztypes_loong64.go)
 PTY_PATCH_LOONG64=pty_dir=$$(go env GOMODCACHE)/github.com/creack/pty@v1.1.9; \
 	if [ -d "$$pty_dir" ] && [ ! -f "$$pty_dir/ztypes_loong64.go" ]; then \
