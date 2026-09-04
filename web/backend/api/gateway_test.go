@@ -388,12 +388,28 @@ func TestGatewayManagerSerializesConcurrentStarts(t *testing.T) {
 		err    error
 	}
 	outcomes := make(chan startOutcome, 2)
+	discoveryEntered := make(chan struct{}, 2)
+	releaseDiscovery := make(chan struct{}, 2)
+	discover := func() *ppid.PidFileData {
+		discoveryEntered <- struct{}{}
+		<-releaseDiscovery
+		return nil
+	}
 	start := func() {
-		result, err := h.gateway.startConfigured(h.gatewayLaunchOptions(), nil, "starting")
+		result, err := h.gateway.startConfigured(h.gatewayLaunchOptions(), discover, "starting")
 		outcomes <- startOutcome{result: result, err: err}
 	}
 	go start()
+	<-discoveryEntered
 	go start()
+	select {
+	case <-discoveryEntered:
+		t.Fatal("second PID discovery entered before the first lifecycle operation completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseDiscovery <- struct{}{}
+	<-discoveryEntered
+	releaseDiscovery <- struct{}{}
 
 	first := <-outcomes
 	second := <-outcomes
@@ -405,6 +421,22 @@ func TestGatewayManagerSerializesConcurrentStarts(t *testing.T) {
 	}
 	if got := len(execCalls); got != 1 {
 		t.Fatalf("gateway command starts = %d, want 1", got)
+	}
+}
+
+func TestGatewayManagerWaitForProcessExitUsesOwnedCompletion(t *testing.T) {
+	manager := NewGatewayProcessManager()
+	command := &exec.Cmd{Process: &os.Process{Pid: 42}}
+	done := make(chan struct{})
+	manager.processAlive = func(*exec.Cmd) bool { return true }
+	manager.mu.Lock()
+	manager.cmd = command
+	manager.cmdDone = done
+	manager.mu.Unlock()
+
+	close(done)
+	if !manager.waitForProcessExit(command, time.Second) {
+		t.Fatal("owned process completion was ignored while the OS liveness probe remained true")
 	}
 }
 

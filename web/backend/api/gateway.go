@@ -36,6 +36,7 @@ type GatewayProcessManager struct {
 	lifecycleMu         sync.Mutex
 	mu                  sync.Mutex
 	cmd                 *exec.Cmd
+	cmdDone             <-chan struct{}
 	owned               bool // true if we started the process, false if we attached to an existing one
 	bootDefaultModel    string
 	bootConfigSignature string
@@ -84,6 +85,8 @@ type gatewayStartResult struct {
 	pid      int
 	attached bool
 }
+
+type gatewayPIDDiscovery func() *ppid.PidFileData
 
 // NewGatewayProcessManager returns isolated process state for one Handler.
 func NewGatewayProcessManager() *GatewayProcessManager {
@@ -489,8 +492,13 @@ func (h *Handler) registerGatewayRoutes(mux *http.ServeMux) {
 // TryAutoStartGateway checks whether gateway start preconditions are met and
 // starts it when possible. Intended to be called by the backend at startup.
 func (h *Handler) TryAutoStartGateway() {
-	pidData := h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), nil)
-	started, err := h.gateway.startConfigured(h.gatewayLaunchOptions(), pidData, "starting")
+	started, err := h.gateway.startConfigured(
+		h.gatewayLaunchOptions(),
+		func() *ppid.PidFileData {
+			return h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), nil)
+		},
+		"starting",
+	)
 	if err != nil {
 		var precondition *preconditionFailedError
 		if errors.As(err, &precondition) {
@@ -544,11 +552,16 @@ func gatewayStartReady(configPath string) (bool, string, error) {
 
 func (m *GatewayProcessManager) startConfigured(
 	options gatewayLaunchOptions,
-	discovered *ppid.PidFileData,
+	discover gatewayPIDDiscovery,
 	initialStatus string,
 ) (gatewayStartResult, error) {
 	m.lifecycleMu.Lock()
 	defer m.lifecycleMu.Unlock()
+
+	var discovered *ppid.PidFileData
+	if discover != nil {
+		discovered = discover()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -588,6 +601,7 @@ func (m *GatewayProcessManager) startConfigured(
 	}
 
 	m.cmd = nil
+	m.cmdDone = nil
 	m.owned = false
 	m.pidData = nil
 	m.bootDefaultModel = ""
@@ -982,6 +996,7 @@ func (m *GatewayProcessManager) attachLocked(pid int, cfg *config.Config) error 
 	}
 
 	m.cmd = &exec.Cmd{Process: process}
+	m.cmdDone = nil
 	m.owned = false // We didn't start this process
 	m.setRuntimeStatusLocked("running")
 
@@ -1008,6 +1023,7 @@ func (m *GatewayProcessManager) statusWithoutHealthLocked() string {
 		// running state once the tracked process exits.
 		if !m.processAlive(m.cmd) {
 			m.cmd = nil
+			m.cmdDone = nil
 			m.owned = false
 			m.bootDefaultModel = ""
 			m.bootConfigSignature = ""
@@ -1028,6 +1044,20 @@ func (m *GatewayProcessManager) waitForProcessExit(cmd *exec.Cmd, timeout time.D
 
 	deadline := m.now().Add(timeout)
 	for {
+		m.mu.Lock()
+		tracked := m.cmd == cmd
+		done := m.cmdDone
+		m.mu.Unlock()
+		if !tracked {
+			return true
+		}
+		if done != nil {
+			select {
+			case <-done:
+				return true
+			default:
+			}
+		}
 		if !m.processAlive(cmd) {
 			return true
 		}
@@ -1096,6 +1126,7 @@ func (m *GatewayProcessManager) stopLocked() (int, error) {
 
 	logger.InfoC("gateway", fmt.Sprintf("Sent stop signal to gateway (PID: %d)", pid))
 	m.cmd = nil
+	m.cmdDone = nil
 	m.owned = false
 	m.bootDefaultModel = ""
 	m.pidData = nil
@@ -1156,6 +1187,7 @@ func (m *GatewayProcessManager) startLocked(
 		// Attach to existing process
 		pid = existingPid
 		m.cmd = nil // Clear first to ensure clean state
+		m.cmdDone = nil
 		if err = m.attachLocked(pid, cfg); err != nil {
 			logger.ErrorC("gateway", fmt.Sprintf("Failed to attach to existing gateway (PID %d): %v", pid, err))
 			return 0, err
@@ -1218,6 +1250,8 @@ func (m *GatewayProcessManager) startLocked(
 	}
 
 	m.cmd = cmd
+	done := make(chan struct{})
+	m.cmdDone = done
 	m.owned = true // We started this process
 	m.bootDefaultModel = defaultModelName
 	m.bootConfigSignature = computeConfigSignature(cfg)
@@ -1231,8 +1265,10 @@ func (m *GatewayProcessManager) startLocked(
 
 	// Wait for exit in background and clean up
 	go func() {
-		if err := cmd.Wait(); err != nil {
-			logger.ErrorC("gateway", fmt.Sprintf("Gateway process exited: %v", err))
+		waitErr := cmd.Wait()
+		close(done)
+		if waitErr != nil {
+			logger.ErrorC("gateway", fmt.Sprintf("Gateway process exited: %v", waitErr))
 		} else {
 			logger.InfoC("gateway", "Gateway process exited normally")
 		}
@@ -1240,6 +1276,7 @@ func (m *GatewayProcessManager) startLocked(
 		m.mu.Lock()
 		if m.cmd == cmd {
 			m.cmd = nil
+			m.cmdDone = nil
 			m.bootDefaultModel = ""
 			m.bootConfigSignature = ""
 			if m.runtimeStatus != "restarting" {
@@ -1311,8 +1348,13 @@ func (m *GatewayProcessManager) startLocked(
 //
 //	POST /api/gateway/start
 func (h *Handler) handleGatewayStart(w http.ResponseWriter, r *http.Request) {
-	pidData := h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), nil)
-	started, err := h.gateway.startConfigured(h.gatewayLaunchOptions(), pidData, "starting")
+	started, err := h.gateway.startConfigured(
+		h.gatewayLaunchOptions(),
+		func() *ppid.PidFileData {
+			return h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), nil)
+		},
+		"starting",
+	)
 	if err != nil {
 		var precondition *preconditionFailedError
 		if !errors.As(err, &precondition) {
@@ -1404,6 +1446,7 @@ func (m *GatewayProcessManager) restart(options gatewayLaunchOptions) (int, erro
 				m.setRuntimeStatusLocked("running")
 			} else {
 				m.cmd = nil
+				m.cmdDone = nil
 				m.bootDefaultModel = ""
 				m.setRuntimeStatusLocked("error")
 			}
@@ -1415,11 +1458,13 @@ func (m *GatewayProcessManager) restart(options gatewayLaunchOptions) (int, erro
 	m.mu.Lock()
 	if m.cmd == previousCmd {
 		m.cmd = nil
+		m.cmdDone = nil
 		m.bootDefaultModel = ""
 	}
 	pid, err := m.startLocked(options, "restarting", 0)
 	if err != nil {
 		m.cmd = nil
+		m.cmdDone = nil
 		m.bootDefaultModel = ""
 		m.setRuntimeStatusLocked("error")
 	}
