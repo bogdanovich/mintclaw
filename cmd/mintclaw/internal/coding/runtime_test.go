@@ -400,10 +400,10 @@ func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
 	}
 	diff, err := evidence.RepositoryDiff(
 		t.Context(),
-		codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBaseline},
+		codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
 	)
-	if err != nil || diff.BaselineID != baseline.BaselineID || diff.Target.Kind != codingworkspace.DiffTargetBaseline {
-		t.Fatalf("baseline repository diff = %+v / %v", diff, err)
+	if err != nil || diff.BaselineID != baseline.BaselineID || diff.Target.Kind != codingworkspace.DiffTargetCurrent {
+		t.Fatalf("current repository diff with baseline provenance = %+v / %v", diff, err)
 	}
 	if err := frontendController.Submit(
 		t.Context(),
