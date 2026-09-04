@@ -1259,7 +1259,7 @@ func TestNodeToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 	if _, bypass := options.approvalBypassTargets["build"]; !bypass {
 		t.Fatal("node tool options observed a mutated approval bypass list")
 	}
-	if _, permitted := options.fileAgents["main"]; !permitted {
+	if _, permitted := options.fileAgents["ops"]; !permitted {
 		t.Fatal("node tool options lost its snapshotted file-transfer agent")
 	}
 }
