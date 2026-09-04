@@ -235,20 +235,22 @@ type Channel struct {
 // Outputs nested format: common fields at top level, channel-specific in "settings".
 // Secure fields (SecureString/SecureStrings) are removed from settings output.
 func (b Channel) MarshalJSON() ([]byte, error) {
-	var settings RawNode
+	settings := b.Settings
 	if b.extend != nil {
-		raw, err := json.Marshal(b.extend)
+		projected, err := projectPublicValue(reflect.ValueOf(b.extend))
 		if err != nil {
 			return nil, err
 		}
-		raw = preserveExplicitDisabledStreaming(raw, b.Settings)
-		settings = raw
-	} else {
-		settings = b.Settings
+		raw, err := json.Marshal(projected.Interface())
+		if err != nil {
+			return nil, err
+		}
+		settings = preserveExplicitDisabledStreaming(raw, b.Settings)
 	}
 
 	out := b
 	out.Settings = settings
+	out.extend = nil
 
 	// Use type alias to bypass our custom MarshalJSON (infinite recursion)
 	type Alias Channel
@@ -273,10 +275,12 @@ func preserveExplicitDisabledStreaming(settings, original RawNode) RawNode {
 	if err := json.Unmarshal(settings, &settingsMap); err != nil {
 		return settings
 	}
-	if _, exists := settingsMap["streaming"]; exists {
-		return settings
+	settingsStreaming, ok := settingsMap["streaming"].(map[string]any)
+	if !ok {
+		settingsStreaming = make(map[string]any)
 	}
-	settingsMap["streaming"] = map[string]any{"enabled": false}
+	settingsStreaming["enabled"] = false
+	settingsMap["streaming"] = settingsStreaming
 
 	data, err := json.Marshal(settingsMap)
 	if err != nil {
