@@ -6,7 +6,7 @@ Browser milestone B4, **Browser Identity and Attached-User Profiles**, is
 admitted as the dependency-ordered sequence in this document. It extends the
 deployed first-party browser contract on gateway and companion placements. It
 does not expose raw Playwright MCP tools, browser endpoints, profile paths,
-cookies, storage state, or credential values to the model.
+cookies, or storage state to the model.
 
 The implementation is governed by
 [Browser B4 Execution Goal](browser-b4-execution-goal.md). Each phase is a
@@ -27,11 +27,6 @@ choose among:
 The same first-party tools continue to perform browser work. Profiles change
 where identity state lives and how a session is activated; they do not create
 a second model-facing automation API.
-
-An operator may also configure origin-bound credentials. The model can request
-a typed credential fill by opaque alias and field name, but it cannot list or
-read secret values. Resolution happens only on the execution host immediately
-before the existing protected-fill dispatch boundary.
 
 Cloud is reserved as a profile identity class, but B4 does not enable a cloud
 provider. Provider selection, credentials, billing, live-view URLs, and remote
@@ -90,9 +85,8 @@ profile and never follows an unvalidated replacement or symlink.
 
 An `ephemeral` profile creates one owner-only runtime directory and isolated
 browser context for one browser session. It starts without cookies, local
-storage, cache, service-worker state, or a copied managed profile. It may use an
-explicit origin-bound credential grant, but any resulting login state remains
-ephemeral.
+storage, cache, service-worker state, or a copied managed profile. Any login
+state created during the session remains ephemeral.
 
 Close, expiry, cancellation, open failure, driver loss, gateway reload, node
 disconnect recovery, and process restart must terminate the worker and remove
@@ -177,10 +171,10 @@ Every profile operation is authorized by the intersection of:
 
 Possessing or guessing an alias is not authority. Unknown, disabled,
 ungranted, and unavailable profiles return the same bounded denial class so
-the tool cannot be used to enumerate another actor's identities or credentials.
+the tool cannot be used to enumerate another actor's identities.
 
-A profile revision change, disable, actor or agent grant removal, credential
-grant change, or attached-consent revocation prevents new opens and actions.
+A profile revision change, disable, actor or agent grant removal, or
+attached-consent revocation prevents new opens and actions.
 Gateway configuration reload must close or quarantine every session owned by
 the retired generation before the replacement becomes active. A companion
 profile change requires a new catalog/profile revision; the gateway closes or
@@ -225,14 +219,7 @@ following shape and semantics are normative:
                 "profile_directory": "/var/lib/mintclaw/browser/personal",
                 "lock_file": "/run/mintclaw/browser-personal.lock",
                 "headed": true
-              },
-              "credential_grants": [
-                {
-                  "alias": "facebook-personal",
-                  "origins": ["https://www.facebook.com"],
-                  "fields": ["username", "password"]
-                }
-              ]
+              }
             },
             "scratch": {
               "enabled": true,
@@ -272,44 +259,14 @@ following shape and semantics are normative:
             }
           }
         }
-      },
-      "credentials": {
-        "facebook-personal": {
-          "fields": ["username", "password"]
-        }
       }
     }
   }
 }
 ```
 
-The gateway secret overlay stores values separately:
-
-```yaml
-tools:
-  browser:
-    credentials:
-      facebook-personal:
-        username: file://browser/facebook-username
-        password: enc://REDACTED
-```
-
-Browser credential fields use the existing `SecureString` and local
-`file://`/`enc://` resolution boundary, but this new configuration rejects
-inline plaintext values. Secret files must remain inside the configured secret
-root with owner-only permissions. Resolved values are added to sensitive-data
-filtering but are never used as a substitute for preventing persistence in the
-first place.
-
-Companion profiles declare the same safe alias, origin, and field grants in
-their existing companion-local policy and resolve secret values from that
-host's private `file://` or `enc://` configuration. Gateway secrets are never
-sent to a companion. A companion that lacks the local alias omits
-`credential_fill` for that profile or returns the same non-enumerating
-`credential_unavailable` error if its state changed after discovery.
-
-The operator configuration may choose any valid profile and credential aliases.
-MintClaw contains no site, field-name, or account-name allowlist.
+The operator configuration may choose any valid profile alias. MintClaw
+contains no site or account-name allowlist.
 
 ## Model-Facing Contract
 
@@ -320,16 +277,15 @@ and actor. Each safe profile descriptor adds:
 
 - `mode`: `managed`, `ephemeral`, or `attached_user`;
 - persistence: `retained`, `session_only`, or `user_owned`;
-- whether headed view, handoff, per-session attach consent, and credential fill
-  are available;
+- whether headed view, handoff, and per-session attach consent are available;
 - the existing capability, approval, network, action, context, diagnostic, and
   artifact flags and bounded limits; and
 - for attached profiles, the safe action-origin mode and whether the profile is
   ready, awaiting operator presence, busy, degraded, or unavailable.
 
-Discovery never returns actor lists, credential aliases or fields, paths,
-browser endpoints, extension tokens, installed extensions, cookies, storage
-state, or the titles and URLs of unattached user tabs.
+Discovery never returns actor lists, paths, browser endpoints, extension
+tokens, installed extensions, cookies, storage state, or the titles and URLs
+of unattached user tabs.
 
 ### Session lifecycle
 
@@ -345,47 +301,15 @@ native browser profile or tab by host identifier.
 Close detaches an attached tab without closing the user's Chrome process or
 other tabs. Driver or gateway loss never kills the user-owned browser.
 
-### Credential fill
-
-`browser_act` gains one typed action:
-
-```json
-{
-  "kind": "credential_fill",
-  "ref": "e12",
-  "credential_alias": "facebook-personal",
-  "credential_field": "password"
-}
-```
-
-The action requires a fresh semantic reference to a mechanically writable
-control. Trusted code resolves the current top-level origin, profile grant,
-credential alias and field, then obtains the secret on the execution host. The
-secret reuses the protected-fill ephemeral slot, digest, redacted durable
-projection, final document check, and no-replay behavior. Durable state keeps
-only the opaque aliases, byte count, and domain-separated digest.
-
-`credential_fill` is `local_edit`; a later submit remains a separate action and
-approval decision. Restricted policy can allow, deny, or ask based on action,
-origin, profile, role, accessible element name, and opaque credential alias. It
-never receives the secret. Full access admits the action only when the profile
-contains the exact credential grant; `full_access` cannot create or broaden a
-credential grant.
-
-Wrong origin, missing field, unavailable resolver, stale reference, and denied
-grant fail before secret resolution or driver dispatch. Safe errors do not
-distinguish a missing alias from an alias not granted to the current owner.
-
 ## Delivery Sequence
 
 1. Generalize profile authority and migrate the existing managed profile.
 2. Complete managed profile aliasing, revision-bound revocation, and lifecycle
    conformance on gateway and companion.
 3. Add ephemeral profiles and prove cleanup on gateway and companion.
-4. Add origin-bound credential grants and host-local protected injection.
-5. Add per-session attached Chrome on the gateway through the Playwright
+4. Add per-session attached Chrome on the gateway through the Playwright
    extension flow.
-6. Add the same attached-user contract on the Darwin companion and record
+5. Add the same attached-user contract on the Darwin companion and record
    global B4 production evidence.
 
 The exact acceptance gates and stop conditions for each phase are in the
@@ -407,11 +331,6 @@ B4 is complete only when all of the following are proven:
 - gateway and companion ephemeral sessions start clean and leave no retained
   browser identity after success, failure, cancellation, reload, disconnect,
   restart, and forced cleanup error paths;
-- credential injection succeeds only for an exact granted origin and writable
-  fresh element, while persisted stores, histories, traces, logs, approvals,
-  node plans, node ledgers, artifacts, and safe errors contain no plaintext
-  canary;
-- the gateway and companion never transfer credential values between hosts;
 - attached Chrome requires visible, expiring, one-use owner consent, exposes
   only the selected tab, and detaches without closing the user browser;
 - denial, expiry, disconnect, revocation, reload, and restart cannot leave a
@@ -423,12 +342,11 @@ B4 is complete only when all of the following are proven:
 - `browser_targets` advertises only features actually available on that target,
   profile, placement, and runtime generation; and
 - real owner-routed smoke workflows complete on gateway and companion for
-  managed reuse, ephemeral cleanup, credential origin denial, attached consent,
-  fresh observe/action, detach, immediate profile reuse, and process/lock audit.
+  managed reuse, ephemeral cleanup, attached consent, fresh observe/action,
+  detach, immediate profile reuse, and process/lock audit.
 
-Production credential smoke tests use synthetic credentials and an
-operator-controlled origin. Attached smoke tests use a non-sensitive tab and
-make no irreversible external commit.
+Attached smoke tests use a non-sensitive tab and make no irreversible external
+commit.
 
 ## Mandatory Stop Conditions
 
@@ -443,8 +361,6 @@ Stop the affected phase and require a new architecture decision if:
   concurrently to complete migration;
 - an ephemeral profile can retain identity state without a detectable cleanup
   failure;
-- credential injection requires plaintext configuration, persistence, replay,
-  logging, or gateway-to-companion secret transfer;
 - attached Chrome requires exposing generic CDP, raw MCP, arbitrary extension
   control, or a permanent unbounded authorization;
 - attached mode is presented as enforcing browser-wide request policy that the
@@ -452,17 +368,32 @@ Stop the affected phase and require a new architecture decision if:
 - revocation cannot prevent new actions or cannot quarantine an active session
   whose worker outcome is uncertain;
 - closing an attached session can terminate or mutate unrelated user tabs;
-- the model can enumerate ungranted profiles or credential metadata through
-  distinguishable errors; or
-- live validation requires an irreversible external commit or a real personal
-  credential.
+- the model can enumerate ungranted profiles through distinguishable errors;
+  or
+- live validation requires an irreversible external commit.
 
 ## Non-Goals
 
 B4 does not add cloud providers, provider billing, remote live-view services,
-profile export/import, cookie or storage-state tools, password-manager APIs,
-TOTP generation, CAPTCHA bypass, arbitrary headers, client certificates, raw
-Playwright execution, generic JavaScript, generic MCP forwarding, CDP access,
-desktop control, coordinate input, site-specific recipes, browser migration
-between hosts, or workspace routing. Those remain B5, B6, BF3, or separately
-admitted work.
+profile export/import, cookie or storage-state tools, credential injection,
+password-manager APIs, TOTP generation, CAPTCHA bypass, arbitrary headers,
+client certificates, raw Playwright execution, generic JavaScript, generic MCP
+forwarding, CDP access, desktop control, coordinate input, site-specific
+recipes, browser migration between hosts, or workspace routing. Those remain
+B5, B6, BF3, or separately admitted work.
+
+## Deferred Credential Provider Direction
+
+Persistent managed profiles are the current authentication mechanism: the
+operator signs in through the existing visible handoff and the browser retains
+the resulting session state. Direct credential injection is deferred until a
+real workflow demonstrates that profile-based login is insufficient.
+
+If admitted later, credential resolution must remain host-local and behind a
+provider interface. For 1Password Individual or Personal subscriptions, the
+1Password CLI desktop-app integration can serve only as an attended provider
+because it requires a locally running, unlocked app and interactive operator
+authentication. Unattended 1Password access requires a Teams or Business
+service account and should be scoped read-only to a dedicated MintClaw vault.
+Google Secret Manager is another possible adapter, but no external secret
+manager is currently planned or required.

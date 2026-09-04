@@ -779,6 +779,8 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), nil), &result)
 	if result.DefaultTarget != "gateway" || len(result.Targets) != 1 || result.Targets[0].Target != "gateway" ||
 		result.Targets[0].Status != "ready" || len(result.Targets[0].Profiles) != 1 ||
+		result.Targets[0].Profiles[0].Mode != config.BrowserProfileManaged ||
+		result.Targets[0].Profiles[0].Persistence != "retained" ||
 		result.Targets[0].Profiles[0].NetworkMode != config.BrowserNetworkExactOrigins ||
 		result.Targets[0].Profiles[0].CapabilityMode != config.BrowserCapabilityFullAccess ||
 		result.Targets[0].Profiles[0].ApprovalMode != config.BrowserApprovalAlwaysCommit ||
@@ -806,6 +808,50 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	denied := tool.Execute(other, nil)
 	if denied == nil || !denied.IsError || !strings.Contains(denied.ContentForLLM(), `"code":"not_granted"`) {
 		t.Fatalf("ungranted result = %#v", denied)
+	}
+}
+
+func TestBrowserTargetsFiltersCanonicalProfilesByExactActorAndAgentGrant(t *testing.T) {
+	cfg := browserToolTestConfig()
+	target := cfg.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.Revision = "managed-v1"
+	profile.AllowedAgents = []string{"browser"}
+	profile.AllowedActors = []string{"person:42"}
+	profile.Runtime = config.BrowserProfileRuntimeConfig{
+		ProfileDirectory: "/private/browser/managed",
+		LockFile:         "/private/browser/managed.lock",
+		Headed:           true,
+	}
+	target.Profiles["managed"] = profile
+	cfg.Tools.Browser.Targets["gateway"] = target
+
+	source := &fakeBrowserToolSource{available: true}
+	tool := NewBrowserTargetsTool(cfg, source)
+	granted := tool.Execute(browserToolTestContext(), nil)
+	var result browserTargetResult
+	decodeBrowserToolResult(t, granted, &result)
+	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 ||
+		result.Targets[0].Profiles[0].Profile != "managed" ||
+		result.Targets[0].Profiles[0].Mode != config.BrowserProfileManaged ||
+		result.Targets[0].Profiles[0].Persistence != "retained" {
+		t.Fatalf("granted canonical targets = %#v", result)
+	}
+	for _, forbidden := range []string{
+		"managed-v1", "person:42", "/private/browser", "managed.lock",
+	} {
+		if strings.Contains(granted.ContentForLLM(), forbidden) {
+			t.Fatalf("discovery exposed private authority %q: %s", forbidden, granted.ContentForLLM())
+		}
+	}
+
+	otherActor := toolshared.WithToolInboundMetadata(browserToolTestContext(), bus.InboundContext{
+		SenderID: "telegram-user-99", ActorID: "person:99",
+	})
+	var hidden browserTargetResult
+	decodeBrowserToolResult(t, tool.Execute(otherActor, nil), &hidden)
+	if hidden.DefaultTarget != "" || len(hidden.Targets) != 0 || source.readinessCalls != 1 {
+		t.Fatalf("ungranted canonical targets = %#v; readiness calls = %d", hidden, source.readinessCalls)
 	}
 }
 

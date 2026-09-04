@@ -21,6 +21,13 @@ func OpaqueAgentID(agentID string) string {
 	return "agent_" + hex.EncodeToString(digest[:16])
 }
 
+// OpaqueActorID maps an authenticated route actor onto the non-reversible
+// identity stored in browser authority and durable session records.
+func OpaqueActorID(actorID string) string {
+	digest := sha256.Sum256([]byte("actor\x00" + strings.TrimSpace(actorID)))
+	return "actor_" + hex.EncodeToString(digest[:16])
+}
+
 const (
 	initialBlankOrigin    = "about:blank"
 	MaxIdentifierBytes    = browseraction.MaxIdentifierBytes
