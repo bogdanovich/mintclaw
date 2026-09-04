@@ -1313,15 +1313,15 @@ func TestPipelineAllowAllBypassesApprovalHook(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: "main", turnID: "turn-allow-all",
 		sessionKey: "allow-all", workspace: t.TempDir(),
+		approvalGrant: &ToolApprovalGrant{
+			InteractionID:      "approval-before-allow-all",
+			Revision:           1,
+			OriginExecutionID:  "original-execution",
+			OriginArgumentHash: strings.Repeat("a", 64),
+		},
 		opts: turnSpec{
 			NoHistory: true,
 			Dispatch:  DispatchRequest{SessionKey: "allow-all"},
-			ApprovalGrant: &ToolApprovalGrant{
-				InteractionID:      "approval-before-allow-all",
-				Revision:           1,
-				OriginExecutionID:  "original-execution",
-				OriginArgumentHash: strings.Repeat("a", 64),
-			},
 		},
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
@@ -1359,11 +1359,11 @@ func TestPipelineAllowAllBypassesApprovalHook(t *testing.T) {
 			tool.continued,
 		)
 	}
-	if len(manager.consumptions) != 1 || ts.opts.ApprovalGrant != nil {
+	if len(manager.consumptions) != 1 || ts.currentApprovalGrant() != nil {
 		t.Fatalf(
 			"approval consumptions = %d, retained grant = %#v",
 			len(manager.consumptions),
-			ts.opts.ApprovalGrant,
+			ts.currentApprovalGrant(),
 		)
 	}
 	if got := manager.consumptions[0].Origin.ArgumentHash; got != strings.Repeat("a", 64) {
@@ -2110,12 +2110,12 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 	resumeState := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-bound-approval-resume",
 		sessionKey: "session-bound-approval", workspace: workspace,
+		approvalGrant: &ToolApprovalGrant{
+			InteractionID: "interaction-bound", Revision: 2,
+			OriginExecutionID: "execution-original", OriginArgumentHash: wantHash,
+		},
 		opts: turnSpec{
 			Dispatch: DispatchRequest{SessionKey: "session-bound-approval"},
-			ApprovalGrant: &ToolApprovalGrant{
-				InteractionID: "interaction-bound", Revision: 2,
-				OriginExecutionID: "execution-original", OriginArgumentHash: wantHash,
-			},
 		},
 	}
 	resumeExec := newTurnExecution(agent, resumeState.opts, nil, "", nil)
@@ -2141,11 +2141,11 @@ func TestPipelineBindsToolOriginatedApprovalSuspensionToTrustedArguments(t *test
 			resumeExec.messages,
 		)
 	}
-	if manager.consumptions[0].Origin.ArgumentHash != wantHash || resumeState.opts.ApprovalGrant != nil {
+	if manager.consumptions[0].Origin.ArgumentHash != wantHash || resumeState.currentApprovalGrant() != nil {
 		t.Fatalf(
 			"consumed hash = %q, retained grant = %#v",
 			manager.consumptions[0].Origin.ArgumentHash,
-			resumeState.opts.ApprovalGrant,
+			resumeState.currentApprovalGrant(),
 		)
 	}
 }
@@ -2892,9 +2892,9 @@ func TestPipelineLoopGuardBlocksBeforeApprovalAuthority(t *testing.T) {
 			ts := &turnState{
 				agent: agent, agentID: "main", turnID: "turn-approval-loop",
 				sessionKey: "approval-loop", workspace: t.TempDir(),
+				approvalGrant: test.grant,
 				opts: turnSpec{
-					NoHistory:     true,
-					ApprovalGrant: test.grant,
+					NoHistory: true,
 					Dispatch: DispatchRequest{
 						SessionKey: "approval-loop",
 					},

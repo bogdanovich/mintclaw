@@ -21,6 +21,14 @@ type DispatchRequest struct {
 	Media           []string
 }
 
+func cloneDispatchRequest(request DispatchRequest) DispatchRequest {
+	request.InboundContext = cloneInboundContext(request.InboundContext)
+	request.RouteResult = cloneResolvedRoute(request.RouteResult)
+	request.SessionScope = session.CloneScope(request.SessionScope)
+	request.Media = append([]string(nil), request.Media...)
+	return request
+}
+
 func (r DispatchRequest) Channel() string {
 	if r.InboundContext == nil {
 		return ""

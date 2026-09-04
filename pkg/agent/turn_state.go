@@ -134,6 +134,13 @@ type turnResult struct {
 	suspendedInteractionID string
 }
 
+func (result turnResult) responseContent() string {
+	if result.status == TurnEndStatusAborted || result.status == TurnEndStatusSuspended {
+		return ""
+	}
+	return result.finalContent
+}
+
 // =============================================================================
 // ActiveTurnInfo - public info about an active turn
 // =============================================================================
@@ -323,6 +330,9 @@ type turnState struct {
 	profile config.EffectiveTurnProfile
 	scope   turnEventScope
 
+	approvalGrant *ToolApprovalGrant
+	observers     turnObservationHooks
+
 	turnID             string
 	executionID        string
 	agentID            string
@@ -402,8 +412,24 @@ type turnState struct {
 // turnState constructors and active turn management
 // =============================================================================
 
-func newTurnState(agent *AgentInstance, opts turnSpec, scope turnEventScope) *turnState {
-	binding := opts.ModelBinding
+// newTurnState preserves the canonical test-construction seam while production
+// entrypoints pass an already-frozen input to newTurnStateFromInput.
+func newTurnState(agent *AgentInstance, spec turnSpec, scope turnEventScope) *turnState {
+	return newTurnStateFromInput(agent, freezeTurnInput(spec), spec.ApprovalGrant, scope)
+}
+
+func newTurnStateFromInput(
+	agent *AgentInstance,
+	opts turnInput,
+	approvalGrant *ToolApprovalGrant,
+	scope turnEventScope,
+) *turnState {
+	runtimeOpts := opts.runtimeOptions()
+	if approvalGrant != nil {
+		grant := *approvalGrant
+		approvalGrant = &grant
+	}
+	binding := runtimeOpts.ModelBinding
 	if binding.WorkspaceAgent == nil {
 		binding.WorkspaceAgent = agent
 	}
@@ -418,33 +444,35 @@ func newTurnState(agent *AgentInstance, opts turnSpec, scope turnEventScope) *tu
 		workspace = agent.Workspace
 	}
 	ts := &turnState{
-		agent:        agent,
-		opts:         opts,
-		model:        binding,
-		profile:      opts.TurnProfile,
-		scope:        scope,
-		turnID:       scope.turnID,
-		executionID:  "execution_" + uuid.NewString(),
-		agentID:      agentID,
-		sessionKey:   opts.Dispatch.SessionKey,
-		activeSkills: activeSkillNames(agent, opts),
-		turnCtx:      cloneTurnContext(scope.context),
-		channel:      opts.Dispatch.Channel(),
-		chatID:       opts.Dispatch.ChatID(),
-		workspace:    workspace,
-		userMessage:  opts.Dispatch.UserMessage,
-		media:        append([]string(nil), opts.Dispatch.Media...),
-		phase:        TurnPhaseSetup,
-		startedAt:    time.Now(),
+		agent:         agent,
+		opts:          runtimeOpts,
+		model:         binding,
+		profile:       runtimeOpts.TurnProfile,
+		scope:         scope,
+		turnID:        scope.turnID,
+		executionID:   "execution_" + uuid.NewString(),
+		agentID:       agentID,
+		sessionKey:    runtimeOpts.Dispatch.SessionKey,
+		activeSkills:  activeSkillNames(agent, runtimeOpts),
+		turnCtx:       cloneTurnContext(scope.context),
+		channel:       runtimeOpts.Dispatch.Channel(),
+		chatID:        runtimeOpts.Dispatch.ChatID(),
+		workspace:     workspace,
+		userMessage:   runtimeOpts.Dispatch.UserMessage,
+		media:         append([]string(nil), runtimeOpts.Dispatch.Media...),
+		phase:         TurnPhaseSetup,
+		startedAt:     time.Now(),
+		approvalGrant: approvalGrant,
+		observers:     opts.observers,
 	}
 
 	// Bind session store and capture initial history length for rollback logic
 	var history []providers.Message
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		history = agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+		history = agent.Sessions.GetHistory(runtimeOpts.Dispatch.SessionKey)
 		ts.initialHistoryLength = len(history)
-		ts.captureCanonicalRestorePoint(history, agent.Sessions.GetSummary(opts.Dispatch.SessionKey))
+		ts.captureCanonicalRestorePoint(history, agent.Sessions.GetSummary(runtimeOpts.Dispatch.SessionKey))
 	}
 	if agent != nil && agent.ContextBuilder != nil {
 		ts.codingInstructions = newCodingInstructionTurnState(
@@ -454,6 +482,28 @@ func newTurnState(agent *AgentInstance, opts turnSpec, scope turnEventScope) *tu
 	}
 
 	return ts
+}
+
+func (ts *turnState) currentApprovalGrant() *ToolApprovalGrant {
+	if ts == nil {
+		return nil
+	}
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	if ts.approvalGrant == nil {
+		return nil
+	}
+	grant := *ts.approvalGrant
+	return &grant
+}
+
+func (ts *turnState) consumeApprovalGrant() {
+	if ts == nil {
+		return
+	}
+	ts.mu.Lock()
+	ts.approvalGrant = nil
+	ts.mu.Unlock()
 }
 
 func (r *turnRuntime) registerActiveTurn(ts *turnState) {
