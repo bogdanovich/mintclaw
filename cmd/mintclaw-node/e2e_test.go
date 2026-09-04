@@ -208,11 +208,12 @@ func TestCompanionProcessTransfersFilesOverAuthenticatedWSS(t *testing.T) {
 	uploadContent := bytes.Repeat([]byte("real process upload\n"), 20000)
 	uploadDigest := sha256.Sum256(uploadContent)
 	uploadBinding := nodews.TransferBinding{
-		TransferID:     "process_upload",
-		Direction:      protocol.TransferUpload,
-		PolicyRevision: "project-files-v1",
-		TotalSize:      uint64(len(uploadContent)),
-		SHA256:         uploadDigest,
+		ProtocolVersion: nodes.ProtocolV2,
+		TransferID:      "process_upload",
+		Direction:       protocol.TransferUpload,
+		PolicyRevision:  "project-files-v1",
+		TotalSize:       uint64(len(uploadContent)),
+		SHA256:          uploadDigest,
 	}
 	uploadCtx, cancelUpload := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancelUpload()
@@ -252,11 +253,12 @@ func TestCompanionProcessTransfersFilesOverAuthenticatedWSS(t *testing.T) {
 	}
 	downloadDigest := sha256.Sum256(downloadContent)
 	downloadBinding := nodews.TransferBinding{
-		TransferID:     "process_download",
-		Direction:      protocol.TransferDownload,
-		PolicyRevision: "project-files-v1",
-		TotalSize:      uint64(len(downloadContent)),
-		SHA256:         downloadDigest,
+		ProtocolVersion: nodes.ProtocolV2,
+		TransferID:      "process_download",
+		Direction:       protocol.TransferDownload,
+		PolicyRevision:  "project-files-v1",
+		TotalSize:       uint64(len(downloadContent)),
+		SHA256:          downloadDigest,
 	}
 	downloadCtx, cancelDownload := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancelDownload()
