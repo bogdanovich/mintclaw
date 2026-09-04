@@ -55,7 +55,7 @@ not targets by themselves.
 
 | Packet | Scope | Depends on | Status |
 | --- | --- | --- | --- |
-| H0 | Restore a trustworthy development baseline | None | Not started |
+| H0 | Restore a trustworthy development baseline | None | In progress |
 | H1 | Make config secret projection explicit | H0 | Not started |
 | H2 | Give the web gateway process one instance owner | H0 | Not started |
 | H3 | Add frontend contracts and remove model-form duplication | H0 | Not started |
