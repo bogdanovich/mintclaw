@@ -874,11 +874,8 @@ func TestRegistryCorruptSnapshotFailsClosed(t *testing.T) {
 	}
 }
 
-func TestRegistryObsoleteApprovalDoesNotDisableCurrentRecords(t *testing.T) {
+func TestRegistryRejectsObsoleteApprovalSnapshot(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
-	question := makeWaiting(
-		t, registry, clock, "interaction_current111111", "session-current",
-	)
 	request := validCreate(clock, "interaction_obsolete11111", "session-obsolete")
 	request.Kind = KindApproval
 	request.Questions = nil
@@ -918,15 +915,15 @@ func TestRegistryObsoleteApprovalDoesNotDisableCurrentRecords(t *testing.T) {
 	}
 
 	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
-	if err := reloaded.LastLoadError(); err != nil {
-		t.Fatalf("obsolete approval disabled interaction store: %v", err)
+	if err := reloaded.LastLoadError(); err == nil || !strings.Contains(err.Error(), "invalid argument hash") {
+		t.Fatalf("obsolete approval snapshot load error = %v", err)
 	}
-	if got, ok := reloaded.Get(question.ID); !ok || got.Status != StatusWaiting {
-		t.Fatalf("current interaction unavailable after reload: (%+v, %v)", got, ok)
-	}
-	if got, ok := reloaded.Get(obsolete.ID); !ok ||
-		got.Origin.ArgumentHash != "" || got.Origin.ExecutionContext != nil {
-		t.Fatalf("obsolete approval reload = (%+v, %v)", got, ok)
+	if _, err := reloaded.Create(validCreate(
+		clock,
+		"interaction_current111111",
+		"session-current",
+	)); !errors.Is(err, ErrStoreUnavailable) {
+		t.Fatalf("create after rejected snapshot error = %v", err)
 	}
 }
 
