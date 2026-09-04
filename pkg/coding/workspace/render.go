@@ -179,7 +179,11 @@ func displayRename(original, current string) string {
 func displayText(value string) string {
 	var builder strings.Builder
 	for _, current := range value {
-		if current == '\t' || !unicode.IsControl(current) {
+		if current == '\t' {
+			builder.WriteString(`\t`)
+			continue
+		}
+		if !unicode.IsControl(current) {
 			builder.WriteRune(current)
 			continue
 		}

@@ -251,10 +251,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.activeEvidenceReq = 0
-		if !m.refreshingWorkspace || m.err != nil {
+		refreshing := m.refreshingWorkspace
+		m.refreshingWorkspace = false
+		if !refreshing || m.err != nil {
 			return m, nil
 		}
-		m.refreshingWorkspace = false
 		if message.Err != nil {
 			if errors.Is(message.Err, frontend.ErrWorkspaceRefreshUnsupported) {
 				m.workspaceNotice = "repository refresh unavailable"
@@ -271,7 +272,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.activeEvidenceReq = 0
-		if m.err != nil || m.workspaceNotice != "repository status loading" {
+		loading := m.workspaceNotice == "repository status loading"
+		if loading {
+			m.workspaceNotice = ""
+		}
+		if m.err != nil || !loading {
 			return m, nil
 		}
 		if message.Err != nil {
@@ -286,7 +291,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.activeEvidenceReq = 0
-		if m.err != nil || m.workspaceNotice != "repository diff loading" {
+		loading := m.workspaceNotice == "repository diff loading"
+		if loading {
+			m.workspaceNotice = ""
+		}
+		if m.err != nil || !loading {
 			return m, nil
 		}
 		if message.Err != nil {
@@ -571,6 +580,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			m.workspaceNotice = "repository refresh unavailable"
 			return true, nil
 		}
+		m.err = nil
 		m.refreshingWorkspace = true
 		m.workspaceNotice = ""
 		return true, workspaceRefreshCmd(m.ctx, refresher, m.beginEvidenceRequest())

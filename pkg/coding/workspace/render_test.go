@@ -111,3 +111,27 @@ func TestPlainRenderersEscapeOpenEnumValues(t *testing.T) {
 		}
 	}
 }
+
+func TestPlainRenderersEscapeTerminalDependentTabs(t *testing.T) {
+	status := RenderStatusPlain(StatusResult{
+		Snapshot: Snapshot{
+			Git:          GitState{Available: true, StatusAvailable: true},
+			ChangedPaths: []ChangedPath{{Path: "tab\tname.go", Status: " M"}},
+		},
+	})
+	diff := RenderDiffPlain(DiffResult{
+		Target: DiffTarget{Kind: DiffTargetCurrent},
+		Files: []DiffFile{{
+			Path: "tab\tname.go", Status: " M",
+			Hunks: []DiffHunk{{
+				Header: "func\tname", NewStart: 1, NewLines: 1,
+				Lines: []DiffLine{{Kind: "addition", NewLine: 1, Text: "value\t:= true"}},
+			}},
+		}},
+	})
+	for name, rendered := range map[string]string{"status": status, "diff": diff} {
+		if strings.ContainsRune(rendered, '\t') || !strings.Contains(rendered, `\t`) {
+			t.Fatalf("%s renderer retained a terminal-dependent tab: %q", name, rendered)
+		}
+	}
+}

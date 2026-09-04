@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,11 +307,11 @@ func TestCommandPanelScrollMakesTailDiffDiagnosticsReachable(t *testing.T) {
 	diff := codingworkspace.DiffResult{
 		Target: codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
 		Files: []codingworkspace.DiffFile{{
-			Path: "long.go", Status: " M",
+			Path: "long\t.go", Status: " M",
 			Hunks: []codingworkspace.DiffHunk{{
 				OldStart: 1, OldLines: 8, NewStart: 1, NewLines: 8,
 				Lines: []codingworkspace.DiffLine{
-					{Kind: "context", OldLine: 1, NewLine: 1, Text: "line 1"},
+					{Kind: "context", OldLine: 1, NewLine: 1, Text: "line\t1"},
 					{Kind: "context", OldLine: 2, NewLine: 2, Text: "line 2"},
 					{Kind: "context", OldLine: 3, NewLine: 3, Text: "line 3"},
 					{Kind: "context", OldLine: 4, NewLine: 4, Text: "line 4"},
@@ -341,6 +342,9 @@ func TestCommandPanelScrollMakesTailDiffDiagnosticsReachable(t *testing.T) {
 	}
 	model.resize(12, 8)
 	for _, line := range strings.Split(model.commandPanelView(), "\n") {
+		if strings.ContainsRune(line, '\t') {
+			t.Fatalf("narrow command panel retained a terminal-dependent tab: %q", line)
+		}
 		if width := ansi.StringWidth(line); width > 12 {
 			t.Fatalf("narrow command panel line width = %d: %q", width, line)
 		}
@@ -376,6 +380,82 @@ func TestSupersededEvidenceCompletionPreservesNewerError(t *testing.T) {
 	model = updateModel(t, model, staleCompletion)
 	if model.err == nil || !strings.Contains(model.err.Error(), "target must be") || model.workspaceNotice != "" {
 		t.Fatalf("stale status completion changed newer UI state: err=%v notice=%q", model.err, model.workspaceNotice)
+	}
+}
+
+func TestRepositoryCompletionsRetireLoadingStateAroundErrors(t *testing.T) {
+	newModel := func() *Model {
+		model, err := newTestModel(&evidenceController{fakeController: newController(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return model
+	}
+
+	model := newModel()
+	model.err = errors.New("old error")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(*Model)
+	if command == nil || model.err != nil || !model.refreshingWorkspace {
+		t.Fatalf(
+			"accepted refresh retained old state: command=%v err=%v refreshing=%v",
+			command,
+			model.err,
+			model.refreshingWorkspace,
+		)
+	}
+	model = updateModel(t, model, command())
+	if model.refreshingWorkspace || model.workspaceNotice != "repository refreshed" {
+		t.Fatalf("refresh completion = refreshing:%v notice:%q", model.refreshingWorkspace, model.workspaceNotice)
+	}
+
+	for _, test := range []struct {
+		name  string
+		start func(*Model) (tea.Model, tea.Cmd)
+	}{
+		{
+			name: "refresh",
+			start: func(model *Model) (tea.Model, tea.Cmd) {
+				return model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+			},
+		},
+		{
+			name: "status",
+			start: func(model *Model) (tea.Model, tea.Cmd) {
+				model.composer.SetValue("/status")
+				return model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			},
+		},
+		{
+			name: "diff",
+			start: func(model *Model) (tea.Model, tea.Cmd) {
+				model.composer.SetValue("/diff")
+				return model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := newModel()
+			updated, command := test.start(model)
+			model = updated.(*Model)
+			if command == nil {
+				t.Fatal("repository operation did not start")
+			}
+			completion := command()
+			newerErr := errors.New("newer UI error")
+			model.err = newerErr
+			model = updateModel(t, model, completion)
+			if !errors.Is(model.err, newerErr) || model.activeEvidenceReq != 0 ||
+				model.refreshingWorkspace || model.workspaceNotice != "" {
+				t.Fatalf(
+					"completion retained operation state: err=%v request=%d refreshing=%v notice=%q",
+					model.err,
+					model.activeEvidenceReq,
+					model.refreshingWorkspace,
+					model.workspaceNotice,
+				)
+			}
+		})
 	}
 }
 
