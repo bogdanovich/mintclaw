@@ -431,7 +431,7 @@ func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
 	if !errors.Is(outcome.TurnErr, errFinalHandledDeliveryAmbiguous) {
 		t.Fatalf("turn error = %v, want ambiguous delivery", outcome.TurnErr)
 	}
-	if outcome.JournalErr != nil || outcome.Control != ToolControlBreak {
+	if outcome.JournalErr != nil || outcome.Control != turnStepFinalize {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 	canonical := matchingToolResult(t, store.GetHistory(sessionKey), toolCall.ID)
@@ -558,7 +558,7 @@ func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
 	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: settlement}}
 
 	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-	if outcome.AbortCause != TurnAbortHard {
+	if outcome.AbortCause != turnAbortHard {
 		t.Fatalf("abort cause = %v, want hard abort", outcome.AbortCause)
 	}
 	if sibling.executions != 0 {
