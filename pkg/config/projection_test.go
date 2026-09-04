@@ -26,6 +26,10 @@ type opaqueProjectionChannelSettings struct {
 	Reveal privateProjectionFunc `json:"-"`
 }
 
+type nullableStreamingChannelSettings struct {
+	Streaming *StreamingConfig `json:"streaming"`
+}
+
 func (s *opaqueProjectionChannelSettings) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]string{"secret": s.Reveal()})
 }
@@ -337,5 +341,53 @@ func TestRepositoryPublicProjectionPreservesDecodedStreamingDisablement(t *testi
 	streaming := reloadedSettings.(*MintClawSettings).Streaming
 	if streaming.Enabled || streaming.ThrottleSeconds != 2 {
 		t.Fatalf("reloaded streaming config = %#v, want disabled with preserved tuning", streaming)
+	}
+}
+
+func TestPublicProjectionPreservesExplicitNullableStreamingRemoval(t *testing.T) {
+	const channelType = "nullable_streaming_projection_test_channel"
+	RegisterChannelSettings(channelType, nullableStreamingChannelSettings{})
+	channel := &Channel{
+		Type:     channelType,
+		Settings: RawNode(`{"streaming":{"enabled":true,"throttle_seconds":2}}`),
+	}
+	decoded, err := channel.GetDecoded()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded.(*nullableStreamingChannelSettings).Streaming = nil
+	cfg := DefaultConfig()
+	cfg.Channels = ChannelsConfig{"nullable": channel}
+
+	projected, err := ProjectPublicConfig(cfg)
+	if err != nil {
+		t.Fatalf("ProjectPublicConfig() error = %v", err)
+	}
+	projectedData, err := json.Marshal(projected.Channels["nullable"])
+	if err != nil {
+		t.Fatalf("json.Marshal(projected channel) error = %v", err)
+	}
+	if !bytes.Contains(projectedData, []byte(`"streaming":null`)) {
+		t.Fatalf("projected nullable streaming = %s, want explicit null", projectedData)
+	}
+
+	channelData, err := json.Marshal(*channel)
+	if err != nil {
+		t.Fatalf("Channel.MarshalJSON() error = %v", err)
+	}
+	if !bytes.Contains(channelData, []byte(`"streaming":null`)) {
+		t.Fatalf("channel nullable streaming = %s, want explicit null", channelData)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if _, err = NewRepository(configPath).Save(cfg); err != nil {
+		t.Fatalf("Repository.Save() error = %v", err)
+	}
+	publicData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(publicData, []byte(`"streaming": null`)) {
+		t.Fatalf("saved nullable streaming = %s, want explicit null", publicData)
 	}
 }

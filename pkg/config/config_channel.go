@@ -287,6 +287,9 @@ func preserveExplicitStreamingEnabled(settings, original RawNode) RawNode {
 		if err := json.Unmarshal(rawStreaming, &settingsStreaming); err != nil {
 			return settings
 		}
+		if settingsStreaming == nil {
+			return settings
+		}
 	}
 	if _, explicit := settingsStreaming["enabled"]; explicit {
 		return settings
