@@ -88,6 +88,16 @@ func (directory *anchoredDirectory) openRegular(name string) (*os.File, os.FileI
 }
 
 func (directory *anchoredDirectory) acquireLock(name string) (func(), error) {
+	if directory == nil || directory.handle == 0 {
+		return nil, errors.New("anchored directory is closed")
+	}
+	if err := validateAnchoredName(name); err != nil {
+		return nil, err
+	}
+	releaseProcessLock, err := acquireAnchoredProcessLock(directory.path, name)
+	if err != nil {
+		return nil, fmt.Errorf("identify anchored directory lock: %w", err)
+	}
 	handle, err := directory.openRelative(
 		name,
 		windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE,
@@ -95,20 +105,24 @@ func (directory *anchoredDirectory) acquireLock(name string) (func(), error) {
 		windows.FILE_NON_DIRECTORY_FILE,
 	)
 	if err != nil {
+		releaseProcessLock()
 		return nil, fmt.Errorf("open gateway terminal store lock: %w", err)
 	}
 	lock := os.NewFile(uintptr(handle), name)
 	if lock == nil {
 		_ = windows.CloseHandle(handle)
+		releaseProcessLock()
 		return nil, errors.New("open gateway terminal store lock: invalid handle")
 	}
 	info, err := lock.Stat()
 	if err != nil {
 		_ = lock.Close()
+		releaseProcessLock()
 		return nil, fmt.Errorf("inspect gateway terminal store lock: %w", err)
 	}
 	if !info.Mode().IsRegular() {
 		_ = lock.Close()
+		releaseProcessLock()
 		return nil, fmt.Errorf("gateway terminal store lock is non-regular: %q", name)
 	}
 	overlapped := &windows.Overlapped{}
@@ -121,11 +135,13 @@ func (directory *anchoredDirectory) acquireLock(name string) (func(), error) {
 		overlapped,
 	); err != nil {
 		_ = lock.Close()
+		releaseProcessLock()
 		return nil, fmt.Errorf("lock gateway terminal store: %w", err)
 	}
 	return func() {
 		_ = windows.UnlockFileEx(windows.Handle(lock.Fd()), 0, 1, 0, overlapped)
 		_ = lock.Close()
+		releaseProcessLock()
 	}, nil
 }
 

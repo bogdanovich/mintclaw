@@ -92,6 +92,10 @@ func (directory *anchoredDirectory) acquireLock(name string) (func(), error) {
 	if err := validateAnchoredName(name); err != nil {
 		return nil, err
 	}
+	releaseProcessLock, err := acquireAnchoredProcessLock(directory.file.Name(), name)
+	if err != nil {
+		return nil, fmt.Errorf("identify anchored directory lock: %w", err)
+	}
 	descriptor, err := unix.Openat(
 		int(directory.file.Fd()),
 		name,
@@ -99,33 +103,40 @@ func (directory *anchoredDirectory) acquireLock(name string) (func(), error) {
 		0o600,
 	)
 	if err != nil {
+		releaseProcessLock()
 		return nil, fmt.Errorf("open gateway terminal store lock: %w", err)
 	}
 	lock := os.NewFile(uintptr(descriptor), name)
 	if lock == nil {
 		_ = unix.Close(descriptor)
+		releaseProcessLock()
 		return nil, errors.New("open gateway terminal store lock: invalid descriptor")
 	}
 	info, err := lock.Stat()
 	if err != nil {
 		_ = lock.Close()
+		releaseProcessLock()
 		return nil, fmt.Errorf("inspect gateway terminal store lock: %w", err)
 	}
 	if !info.Mode().IsRegular() {
 		_ = lock.Close()
+		releaseProcessLock()
 		return nil, fmt.Errorf("gateway terminal store lock is non-regular: %q", name)
 	}
 	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Nlink != 1 {
 		_ = lock.Close()
+		releaseProcessLock()
 		return nil, fmt.Errorf("gateway terminal store lock is multiply linked: %q", name)
 	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		_ = lock.Close()
+		releaseProcessLock()
 		return nil, fmt.Errorf("lock gateway terminal store: %w", err)
 	}
 	return func() {
 		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 		_ = lock.Close()
+		releaseProcessLock()
 	}, nil
 }
 
