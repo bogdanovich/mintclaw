@@ -19,6 +19,12 @@ type privateProjectionMapKey struct {
 
 type privateProjectionMap map[*privateProjectionMapKey]string
 
+type privateProjectionFunc func() string
+
+func (f privateProjectionFunc) MarshalJSON() ([]byte, error) {
+	return json.Marshal(f())
+}
+
 func (m privateProjectionMap) MarshalJSON() ([]byte, error) {
 	secrets := make([]string, 0, len(m))
 	for key := range m {
@@ -89,6 +95,72 @@ func TestProjectPublicConfigRejectsSecretBearingCustomMapKey(t *testing.T) {
 		if key.secret.String() != secret {
 			t.Fatal("failed public projection mutated the source map key")
 		}
+	}
+}
+
+func TestProjectPublicConfigRejectsOpaqueCustomMarshaler(t *testing.T) {
+	secret := "opaque-function-secret"
+	payload := privateProjectionFunc(func() string { return secret })
+	unsafeJSON, err := json.Marshal(payload)
+	if err != nil || !strings.Contains(string(unsafeJSON), secret) {
+		t.Fatalf("custom function test setup did not expose captured state: %s, %v", unsafeJSON, err)
+	}
+	cfg := DefaultConfig()
+	cfg.ModelList[0].ExtraBody = map[string]any{"payload": payload}
+
+	if _, err = ProjectPublicConfig(cfg); err == nil || !strings.Contains(err.Error(), "opaque func") {
+		t.Fatalf("ProjectPublicConfig() error = %v, want opaque-function rejection", err)
+	}
+}
+
+func TestProjectPublicConfigRejectsCyclicExtensionValue(t *testing.T) {
+	cycle := map[string]any{}
+	cycle["self"] = cycle
+	cfg := DefaultConfig()
+	cfg.ModelList[0].ExtraBody = map[string]any{"cycle": cycle}
+
+	if _, err := ProjectPublicConfig(cfg); err == nil || !strings.Contains(err.Error(), "cyclic map") {
+		t.Fatalf("ProjectPublicConfig() error = %v, want cycle rejection", err)
+	}
+}
+
+func TestProjectPublicConfigClonesCommonChannelFields(t *testing.T) {
+	ignoreMentions := true
+	ignoreReplies := false
+	cfg := DefaultConfig()
+	source := cfg.Channels.Get(ChannelMintClaw)
+	source.AllowFrom = []string{"source-user"}
+	source.GroupTrigger = GroupTriggerConfig{
+		IgnoreNonBotMentions: &ignoreMentions,
+		IgnoreNonBotReplies:  &ignoreReplies,
+		Prefixes:             []string{"source-prefix"},
+		Topics: map[string]GroupTriggerConfig{
+			"topic": {Prefixes: []string{"source-topic-prefix"}},
+		},
+	}
+	source.Placeholder.Text = []string{"source-placeholder"}
+
+	projected, err := ProjectPublicConfig(cfg)
+	if err != nil {
+		t.Fatalf("ProjectPublicConfig() error = %v", err)
+	}
+	channel := projected.Channels.Get(ChannelMintClaw)
+	channel.AllowFrom[0] = "changed-user"
+	*channel.GroupTrigger.IgnoreNonBotMentions = false
+	*channel.GroupTrigger.IgnoreNonBotReplies = true
+	channel.GroupTrigger.Prefixes[0] = "changed-prefix"
+	topic := channel.GroupTrigger.Topics["topic"]
+	topic.Prefixes[0] = "changed-topic-prefix"
+	channel.GroupTrigger.Topics["topic"] = topic
+	channel.Placeholder.Text[0] = "changed-placeholder"
+
+	if source.AllowFrom[0] != "source-user" ||
+		!*source.GroupTrigger.IgnoreNonBotMentions ||
+		*source.GroupTrigger.IgnoreNonBotReplies ||
+		source.GroupTrigger.Prefixes[0] != "source-prefix" ||
+		source.GroupTrigger.Topics["topic"].Prefixes[0] != "source-topic-prefix" ||
+		source.Placeholder.Text[0] != "source-placeholder" {
+		t.Fatal("mutating projected channel common fields changed the source")
 	}
 }
 

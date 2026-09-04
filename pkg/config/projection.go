@@ -32,10 +32,22 @@ func ProjectPublicConfig(cfg *Config) (*Config, error) {
 }
 
 func projectPublicValue(value reflect.Value) (reflect.Value, error) {
-	return projectPublicValueWithPolicy(value, false)
+	projector := publicProjector{active: make(map[projectionReference]struct{})}
+	return projector.project(value, false)
 }
 
-func projectPublicValueWithPolicy(value reflect.Value, rejectPrivateState bool) (reflect.Value, error) {
+type projectionReference struct {
+	typeOf   reflect.Type
+	pointer  uintptr
+	length   int
+	capacity int
+}
+
+type publicProjector struct {
+	active map[projectionReference]struct{}
+}
+
+func (p *publicProjector) project(value reflect.Value, rejectPrivateState bool) (reflect.Value, error) {
 	if !value.IsValid() {
 		return value, nil
 	}
@@ -43,7 +55,7 @@ func projectPublicValueWithPolicy(value reflect.Value, rejectPrivateState bool) 
 	case secureStringType, secureStringPointerType, secureStringsType, secureStringsPointerType:
 		return reflect.Zero(value.Type()), nil
 	case channelType:
-		channel, err := projectPublicChannel(value.Interface().(Channel))
+		channel, err := p.projectChannel(value.Interface().(Channel))
 		if err != nil {
 			return reflect.Value{}, err
 		}
@@ -55,7 +67,12 @@ func projectPublicValueWithPolicy(value reflect.Value, rejectPrivateState bool) 
 		if value.IsNil() {
 			return reflect.Zero(value.Type()), nil
 		}
-		projected, err := projectPublicValueWithPolicy(value.Elem(), rejectPrivateState)
+		leave, err := p.enter(value)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		defer leave()
+		projected, err := p.project(value.Elem(), rejectPrivateState)
 		if err != nil {
 			return reflect.Value{}, err
 		}
@@ -66,7 +83,7 @@ func projectPublicValueWithPolicy(value reflect.Value, rejectPrivateState bool) 
 		if value.IsNil() {
 			return reflect.Zero(value.Type()), nil
 		}
-		projected, err := projectPublicValueWithPolicy(value.Elem(), true)
+		projected, err := p.project(value.Elem(), true)
 		if err != nil {
 			return reflect.Value{}, err
 		}
@@ -87,7 +104,7 @@ func projectPublicValueWithPolicy(value reflect.Value, rejectPrivateState bool) 
 				}
 				continue
 			}
-			projected, err := projectPublicValueWithPolicy(value.Field(index), rejectPrivateState)
+			projected, err := p.project(value.Field(index), rejectPrivateState)
 			if err != nil {
 				return reflect.Value{}, err
 			}
@@ -98,10 +115,15 @@ func projectPublicValueWithPolicy(value reflect.Value, rejectPrivateState bool) 
 		if value.IsNil() {
 			return reflect.Zero(value.Type()), nil
 		}
+		leave, err := p.enter(value)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		defer leave()
 		result := reflect.MakeMapWithSize(value.Type(), value.Len())
 		iterator := value.MapRange()
 		for iterator.Next() {
-			projectedKey, err := projectPublicValueWithPolicy(iterator.Key(), rejectPrivateState)
+			projectedKey, err := p.project(iterator.Key(), rejectPrivateState)
 			if err != nil {
 				return reflect.Value{}, err
 			}
@@ -111,7 +133,7 @@ func projectPublicValueWithPolicy(value reflect.Value, rejectPrivateState bool) 
 			if result.MapIndex(projectedKey).IsValid() {
 				return reflect.Value{}, fmt.Errorf("projected map keys collide for %s", value.Type())
 			}
-			projected, err := projectPublicValueWithPolicy(iterator.Value(), rejectPrivateState)
+			projected, err := p.project(iterator.Value(), rejectPrivateState)
 			if err != nil {
 				return reflect.Value{}, err
 			}
@@ -122,9 +144,14 @@ func projectPublicValueWithPolicy(value reflect.Value, rejectPrivateState bool) 
 		if value.IsNil() {
 			return reflect.Zero(value.Type()), nil
 		}
+		leave, err := p.enter(value)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		defer leave()
 		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
 		for index := range value.Len() {
-			projected, err := projectPublicValueWithPolicy(value.Index(index), rejectPrivateState)
+			projected, err := p.project(value.Index(index), rejectPrivateState)
 			if err != nil {
 				return reflect.Value{}, err
 			}
@@ -134,30 +161,71 @@ func projectPublicValueWithPolicy(value reflect.Value, rejectPrivateState bool) 
 	case reflect.Array:
 		result := reflect.New(value.Type()).Elem()
 		for index := range value.Len() {
-			projected, err := projectPublicValueWithPolicy(value.Index(index), rejectPrivateState)
+			projected, err := p.project(value.Index(index), rejectPrivateState)
 			if err != nil {
 				return reflect.Value{}, err
 			}
 			result.Index(index).Set(projected)
 		}
 		return result, nil
+	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
+		if rejectPrivateState && !value.IsNil() {
+			return reflect.Value{}, fmt.Errorf(
+				"cannot project non-zero opaque %s value of type %s",
+				value.Kind(),
+				value.Type(),
+			)
+		}
+		return value, nil
 	default:
 		return value, nil
 	}
 }
 
-func projectPublicChannel(channel Channel) (Channel, error) {
-	settings, err := projectPublicChannelSettings(channel)
+func (p *publicProjector) enter(value reflect.Value) (func(), error) {
+	reference := projectionReference{
+		typeOf:  value.Type(),
+		pointer: uintptr(value.UnsafePointer()),
+	}
+	if value.Kind() == reflect.Slice {
+		reference.length = value.Len()
+		reference.capacity = value.Cap()
+	}
+	if _, exists := p.active[reference]; exists {
+		return nil, fmt.Errorf("cannot project cyclic %s value of type %s", value.Kind(), value.Type())
+	}
+	p.active[reference] = struct{}{}
+	return func() { delete(p.active, reference) }, nil
+}
+
+func (p *publicProjector) projectChannel(channel Channel) (Channel, error) {
+	settings, err := p.projectChannelSettings(channel)
 	if err != nil {
 		return Channel{}, err
 	}
-	projected := channel
-	projected.Settings = settings
-	projected.extend = nil
+	groupTrigger, err := p.project(reflect.ValueOf(channel.GroupTrigger), false)
+	if err != nil {
+		return Channel{}, err
+	}
+	placeholder, err := p.project(reflect.ValueOf(channel.Placeholder), false)
+	if err != nil {
+		return Channel{}, err
+	}
+	projected := Channel{
+		name:               channel.name,
+		Enabled:            channel.Enabled,
+		Type:               channel.Type,
+		AllowFrom:          append([]string(nil), channel.AllowFrom...),
+		ReasoningChannelID: channel.ReasoningChannelID,
+		GroupTrigger:       groupTrigger.Interface().(GroupTriggerConfig),
+		Typing:             channel.Typing,
+		Placeholder:        placeholder.Interface().(PlaceholderConfig),
+		Settings:           settings,
+	}
 	return projected, nil
 }
 
-func projectPublicChannelSettings(channel Channel) (RawNode, error) {
+func (p *publicProjector) projectChannelSettings(channel Channel) (RawNode, error) {
 	prototype := newChannelSettings(channel.Type)
 	if prototype == nil {
 		return nil, fmt.Errorf("channel type %q is not registered", channel.Type)
@@ -182,7 +250,7 @@ func projectPublicChannelSettings(channel Channel) (RawNode, error) {
 			return nil, err
 		}
 	}
-	projected, err := projectPublicValue(reflect.ValueOf(settings))
+	projected, err := p.project(reflect.ValueOf(settings), false)
 	if err != nil {
 		return nil, err
 	}
