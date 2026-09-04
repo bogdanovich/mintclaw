@@ -1508,6 +1508,41 @@ func TestHardAbortCascading(t *testing.T) {
 	}
 }
 
+func TestHardAbortBeforeChildRunnerStartIsDurable(t *testing.T) {
+	al, cfg, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+
+	parent := &turnState{
+		turnID:    "parent-before-child-start",
+		workspace: cfg.Agents.Defaults.Workspace,
+		al:        al,
+	}
+	childID := "registered-child-before-runner-start"
+	child := &turnState{
+		turnID:    childID,
+		workspace: cfg.Agents.Defaults.Workspace,
+		al:        al,
+	}
+	al.turns.activeTurnStates.Store(newRuntimeSubTurnScope(child.workspace, childID), child)
+	defer al.turns.activeTurnStates.Delete(newRuntimeSubTurnScope(child.workspace, childID))
+	parent.addChildTurn(childID)
+
+	// Reproduce the registration window before turnRunner.run installs the
+	// runtime-owned cancellation function.
+	parent.Finish(true)
+	if !child.hardAbortRequested() {
+		t.Fatal("registered child did not retain the cascaded hard abort")
+	}
+
+	childCtx, childCancel := context.WithCancel(context.Background())
+	child.setTurnCancel(childCancel)
+	select {
+	case <-childCtx.Done():
+	default:
+		t.Fatal("late-installed child turn cancellation was not invoked")
+	}
+}
+
 // TestHardAbortSessionRollback verifies that HardAbort rolls back session history
 // to the state before the turn started, discarding all messages added during the turn.
 func TestHardAbortSessionRollback(t *testing.T) {
