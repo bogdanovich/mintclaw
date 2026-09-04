@@ -201,7 +201,7 @@ func slashDiffTarget(args string) (codingworkspace.DiffTarget, error) {
 	}
 	target := codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetKind(strings.ToLower(fields[0]))}
 	switch target.Kind {
-	case codingworkspace.DiffTargetCurrent, codingworkspace.DiffTargetBaseline:
+	case codingworkspace.DiffTargetCurrent:
 		if len(fields) != 1 {
 			return codingworkspace.DiffTarget{}, fmt.Errorf("/diff %s does not accept a ref", target.Kind)
 		}
@@ -211,7 +211,7 @@ func slashDiffTarget(args string) (codingworkspace.DiffTarget, error) {
 		}
 		target.Ref = fields[1]
 	default:
-		return codingworkspace.DiffTarget{}, errors.New("/diff target must be current, baseline, base, or commit")
+		return codingworkspace.DiffTarget{}, errors.New("/diff target must be current, base, or commit")
 	}
 	return target, nil
 }
@@ -263,7 +263,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"/help              show commands and keyboard bindings",
 			"/status            show live thread and workspace status",
 			"/model             show the current model and provider",
-			"/diff [target]     show bounded hunks for current, baseline, base, or commit",
+			"/diff [target]     show bounded hunks for current, base, or commit",
 			"/attach <paths…>   attach local files to the draft",
 			"/compact           start real context compaction when idle",
 			"/rename <title>    request a thread title change",

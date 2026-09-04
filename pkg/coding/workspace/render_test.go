@@ -53,7 +53,7 @@ func TestRenderStatusPlainKeepsSamePathStatusesDistinct(t *testing.T) {
 func TestRenderDiffPlainIncludesBoundedHunksAndDiagnostics(t *testing.T) {
 	diff := DiffResult{
 		SchemaVersion: RepositoryDiffSchemaV1,
-		Target:        DiffTarget{Kind: DiffTargetBaseline},
+		Target:        DiffTarget{Kind: DiffTargetCurrent},
 		Files: []DiffFile{{
 			Path: "changed.go", Status: " M", Provenance: ProvenanceFirstObservedDuringThread,
 			Hunks: []DiffHunk{{
@@ -68,7 +68,7 @@ func TestRenderDiffPlainIncludesBoundedHunksAndDiagnostics(t *testing.T) {
 	}
 	rendered := RenderDiffPlain(diff)
 	for _, wanted := range []string{
-		"Repository diff (baseline)", "first_observed_during_thread", "-     1 old", "+     1 new", "hunk truncated",
+		"Repository diff (current)", "first_observed_during_thread", "-     1 old", "+     1 new", "hunk truncated",
 		"evidence incomplete or stale",
 	} {
 		if !strings.Contains(rendered, wanted) {
