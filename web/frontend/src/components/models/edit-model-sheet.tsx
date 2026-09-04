@@ -1,5 +1,5 @@
 import { IconLoader2 } from "@tabler/icons-react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 
 import {
@@ -89,6 +89,10 @@ export function EditModelSheet({
     model != null &&
     (JSON.stringify(form) !== JSON.stringify(initialForm) ||
       setAsDefault !== model.is_default)
+  useEffect(() => {
+    if (open && model) setError("")
+  }, [model, open])
+
   const providerError =
     form.provider && !getProviderCatalogEntry(form.provider, providerOptions)
       ? t("models.field.providerInvalid")
