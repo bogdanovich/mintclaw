@@ -491,6 +491,17 @@ func (session *peer) request(
 	idempotencyKey string,
 	dispatch func(func() error) error,
 ) (protocol.Envelope, bool, error) {
+	return session.requestWithLease(ctx, method, params, idempotencyKey, dispatch, nil)
+}
+
+func (session *peer) requestWithLease(
+	ctx context.Context,
+	method string,
+	params json.RawMessage,
+	idempotencyKey string,
+	dispatch func(func() error) error,
+	lease func(func() (bool, error)) (bool, error),
+) (protocol.Envelope, bool, error) {
 	select {
 	case <-ctx.Done():
 		return protocol.Envelope{}, false, ctx.Err()
@@ -514,13 +525,24 @@ func (session *peer) request(
 		session.pending[id] = result
 	}
 	session.pendingMu.Unlock()
-	dispatched, err := session.writeEnvelopeAtDispatch(ctx, protocol.Envelope{
-		Type:           protocol.FrameRequest,
-		ID:             id,
-		Method:         method,
-		Params:         params,
-		IdempotencyKey: idempotencyKey,
-	}, dispatch)
+	write := func() (bool, error) {
+		return session.writeEnvelopeAtDispatch(ctx, protocol.Envelope{
+			Type:           protocol.FrameRequest,
+			ID:             id,
+			Method:         method,
+			Params:         params,
+			IdempotencyKey: idempotencyKey,
+		}, dispatch)
+	}
+	var (
+		dispatched bool
+		err        error
+	)
+	if lease == nil {
+		dispatched, err = write()
+	} else {
+		dispatched, err = lease(write)
+	}
 	if err != nil {
 		if dispatched {
 			session.abandon(id)
@@ -621,6 +643,22 @@ func (session *peer) writeEnvelopeAtDispatch(
 	if err != nil {
 		return false, err
 	}
+	return session.writeApplicationFrameAtDispatch(
+		ctx,
+		websocket.TextMessage,
+		data,
+		"request",
+		dispatch,
+	)
+}
+
+func (session *peer) writeApplicationFrameAtDispatch(
+	ctx context.Context,
+	messageType int,
+	data []byte,
+	frameKind string,
+	dispatch func(func() error) error,
+) (bool, error) {
 	writeCtx, cancel := context.WithTimeout(ctx, defaultWriteTimeout)
 	defer cancel()
 	select {
@@ -647,7 +685,7 @@ func (session *peer) writeEnvelopeAtDispatch(
 	var transportErr error
 	write := func() error {
 		if dispatched {
-			return errors.New("node request frame write called more than once")
+			return fmt.Errorf("node %s frame write called more than once", frameKind)
 		}
 		dispatched = true
 		cancelDone := make(chan struct{})
@@ -655,7 +693,7 @@ func (session *peer) writeEnvelopeAtDispatch(
 			_ = session.connection.SetWriteDeadline(time.Now())
 			close(cancelDone)
 		})
-		transportErr = session.connection.WriteMessage(websocket.TextMessage, data)
+		transportErr = session.connection.WriteMessage(messageType, data)
 		if !stopCancel() {
 			<-cancelDone
 		}
@@ -667,7 +705,7 @@ func (session *peer) writeEnvelopeAtDispatch(
 	} else {
 		writeErr = dispatch(write)
 		if writeErr == nil && !dispatched {
-			writeErr = errors.New("node dispatch completed without writing request frame")
+			writeErr = fmt.Errorf("node dispatch completed without writing %s frame", frameKind)
 		}
 	}
 	if transportErr != nil {
@@ -692,51 +730,20 @@ func (session *peer) writeControl(messageType int, data []byte, deadline time.Ti
 	return session.connection.WriteControl(messageType, data, deadline)
 }
 
-func (session *peer) writeTransferFrame(
+func (session *peer) writeTransferFrameAtDispatch(
 	ctx context.Context,
 	frame protocol.TransferFrame,
+	dispatch func(func() error) error,
 ) (bool, error) {
 	data, err := protocol.EncodeTransferFrame(frame)
 	if err != nil {
 		return false, err
 	}
-	writeCtx, cancel := context.WithTimeout(ctx, defaultWriteTimeout)
-	defer cancel()
-	select {
-	case session.writeSlot <- struct{}{}:
-		defer func() { <-session.writeSlot }()
-	case <-writeCtx.Done():
-		return false, writeCtx.Err()
-	case <-session.closed:
-		return false, ErrNodeDisconnected
-	}
-	select {
-	case <-writeCtx.Done():
-		return false, writeCtx.Err()
-	case <-session.closed:
-		return false, ErrNodeDisconnected
-	default:
-	}
-	deadline, _ := writeCtx.Deadline()
-	if err := session.connection.SetWriteDeadline(deadline); err != nil {
-		_ = session.Close()
-		return false, err
-	}
-	cancelDone := make(chan struct{})
-	stopCancel := context.AfterFunc(writeCtx, func() {
-		_ = session.connection.SetWriteDeadline(time.Now())
-		close(cancelDone)
-	})
-	writeErr := session.connection.WriteMessage(websocket.BinaryMessage, data)
-	if !stopCancel() {
-		<-cancelDone
-	}
-	if writeErr != nil {
-		_ = session.Close()
-		if ctx.Err() != nil {
-			return true, ctx.Err()
-		}
-		return true, writeErr
-	}
-	return true, nil
+	return session.writeApplicationFrameAtDispatch(
+		ctx,
+		websocket.BinaryMessage,
+		data,
+		"transfer",
+		dispatch,
+	)
 }

@@ -25,7 +25,9 @@ rejection. It changes only number rendering:
 
 These limits prevent a short exponent spelling from causing unbounded output.
 They are protocol validation errors, not rounding: accepted values remain
-exact.
+exact. Canonical schemas and model examples must also remain within their
+existing byte limits after number expansion, and the final canonical catalog
+must remain within the catalog byte limit.
 
 ## Affected authority and persistence
 
@@ -54,7 +56,7 @@ must compute v1 catalog and plan bindings for those v1 sessions. A v2
 companion requires a gateway that advertises v2. No connection may mix v1 and
 v2 canonicalization within one authenticated session. Invocation and transfer
 dispatch both bind their retained protocol to the exact authenticated session
-generation before any durable dispatched transition.
+generation through the durable dispatched transition and first frame write.
 
 The negotiated version is persisted on the node snapshot. Legacy omitted
 snapshot and execution-plan version fields mean v1. V1 plans continue omitting
