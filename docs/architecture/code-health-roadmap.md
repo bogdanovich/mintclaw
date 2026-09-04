@@ -56,10 +56,10 @@ not targets by themselves.
 | Packet | Scope | Depends on | Status |
 | --- | --- | --- | --- |
 | H0 | Restore a trustworthy development baseline | None | Completed |
-| H1 | Make config secret projection explicit | H0 | Not started |
+| H1 | Make config secret projection explicit | H0 | In progress |
 | H2 | Give the web gateway process one instance owner | H0 | Completed |
 | H3 | Add frontend contracts and remove model-form duplication | H0 | Completed |
-| H4 | Extract human-interaction application orchestration | H0 | In progress |
+| H4 | Extract human-interaction application orchestration | H0 | Completed |
 | H5 | Consolidate turn input, runtime state, outcomes, and finalization | H0, H4 characterization tests | Not started |
 | H6 | Reduce root-config coupling at high-change boundaries | H1, H2, H5 | Not started |
 | H7 | Simplify canonical node JSON numbers through a protocol cutover | H0 | Not started |

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,29 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
+
+type evidenceController struct {
+	*fakeController
+	status codingworkspace.StatusResult
+	diff   codingworkspace.DiffResult
+	target codingworkspace.DiffTarget
+}
+
+func (controller *evidenceController) RepositoryStatus(
+	context.Context,
+) (codingworkspace.StatusResult, error) {
+	controller.RepositoryStatusUpdated(controller.status)
+	return controller.status, nil
+}
+
+func (controller *evidenceController) RepositoryDiff(
+	_ context.Context,
+	target codingworkspace.DiffTarget,
+) (codingworkspace.DiffResult, error) {
+	controller.target = target
+	controller.RepositoryDiffUpdated(controller.diff)
+	return controller.diff, nil
+}
 
 func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 	controller := newController(t)
@@ -193,6 +218,314 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 	if !strings.Contains(model.View(), "Current bounded repository changes") ||
 		!strings.Contains(model.View(), "branch: feature/live") || !strings.Contains(model.View(), "no changed paths") {
 		t.Fatalf("diff panel = %q", model.View())
+	}
+}
+
+func TestRepositoryPanelsRefreshThroughTypedEvidenceReader(t *testing.T) {
+	controller := &evidenceController{fakeController: newController(t)}
+	controller.status = codingworkspace.StatusResult{
+		SchemaVersion: codingworkspace.RepositoryStatusSchemaV1,
+		Snapshot: codingworkspace.Snapshot{Git: codingworkspace.GitState{
+			Available: true, StatusAvailable: true, Branch: "typed-status",
+		}},
+	}
+	controller.diff = codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase, Ref: "main"},
+		Files: []codingworkspace.DiffFile{{
+			Path: "typed.go", Status: "M", Provenance: codingworkspace.ProvenanceFirstObservedDuringThread,
+		}},
+	}
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model.composer.SetValue("/status")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("/status did not request typed repository evidence")
+	}
+	completion := command()
+	controller.ThreadMetadataUpdated(frontend.ThreadMetadata{Title: "newer canonical state"})
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	model = updateModel(t, model, completion)
+	if !strings.Contains(model.View(), "typed-status") || model.snapshot.RepositoryStatus == nil ||
+		model.snapshot.Metadata.Title != "newer canonical state" {
+		t.Fatalf("typed status panel = %q", model.View())
+	}
+
+	model.composer.SetValue("/diff base main")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("/diff did not request typed repository evidence")
+	}
+	completion = command()
+	snapshot, err = controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	model = updateModel(t, model, completion)
+	if controller.target.Kind != codingworkspace.DiffTargetBase || controller.target.Ref != "main" ||
+		!strings.Contains(model.View(), "Repository diff (base main)") ||
+		!strings.Contains(model.View(), "typed.go") || !strings.Contains(model.View(), "first_observed_during_thread") {
+		t.Fatalf("typed diff target/panel = %#v / %q", controller.target, model.View())
+	}
+
+	controller.status.Snapshot.Git.Branch = "new-status"
+	model.composer.SetValue("/status")
+	updated, command = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	completion = command()
+	snapshot, err = controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
+	model = updateModel(t, model, completion)
+	if model.snapshot.RepositoryDiff != nil || !strings.Contains(model.View(), "new-status") {
+		t.Fatalf(
+			"canonical status refresh retained obsolete diff: %#v / %q",
+			model.snapshot.RepositoryDiff,
+			model.View(),
+		)
+	}
+}
+
+func TestCommandPanelScrollMakesTailDiffDiagnosticsReachable(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := codingworkspace.DiffResult{
+		Target: codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Files: []codingworkspace.DiffFile{{
+			Path: "long\t.go", Status: " M",
+			Hunks: []codingworkspace.DiffHunk{{
+				OldStart: 1, OldLines: 8, NewStart: 1, NewLines: 8,
+				Lines: []codingworkspace.DiffLine{
+					{Kind: "context", OldLine: 1, NewLine: 1, Text: "line\t1"},
+					{Kind: "context", OldLine: 2, NewLine: 2, Text: "line 2"},
+					{Kind: "context", OldLine: 3, NewLine: 3, Text: "line 3"},
+					{Kind: "context", OldLine: 4, NewLine: 4, Text: "line 4"},
+					{Kind: "context", OldLine: 5, NewLine: 5, Text: "line 5"},
+					{Kind: "context", OldLine: 6, NewLine: 6, Text: "line 6"},
+					{Kind: "context", OldLine: 7, NewLine: 7, Text: "line 7"},
+					{Kind: "context", OldLine: 8, NewLine: 8, Text: "line 8"},
+				},
+			}},
+		}},
+		Warning: "tail diagnostic",
+	}
+	snapshot := model.snapshot.Clone()
+	snapshot.RepositoryDiff = &diff
+	if err = model.installSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	model.commandPanel = commandPanelDiff
+	model.resize(60, 8)
+	if strings.Contains(model.View(), "tail diagnostic") || !strings.Contains(model.View(), "PgUp/PgDown scroll") {
+		t.Fatalf("initial diff page = %q", model.View())
+	}
+	for range 8 {
+		model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyPgDown})
+	}
+	if model.commandPanelOffset == 0 || !strings.Contains(model.View(), "warning: tail diagnostic") {
+		t.Fatalf("scrolled diff page = offset %d / %q", model.commandPanelOffset, model.View())
+	}
+	model.resize(12, 8)
+	for _, line := range strings.Split(model.commandPanelView(), "\n") {
+		if strings.ContainsRune(line, '\t') {
+			t.Fatalf("narrow command panel retained a terminal-dependent tab: %q", line)
+		}
+		if width := ansi.StringWidth(line); width > 12 {
+			t.Fatalf("narrow command panel line width = %d: %q", width, line)
+		}
+	}
+}
+
+func TestSupersededEvidenceCompletionPreservesNewerError(t *testing.T) {
+	controller := &evidenceController{fakeController: newController(t)}
+	controller.status = codingworkspace.StatusResult{
+		Snapshot: codingworkspace.Snapshot{Git: codingworkspace.GitState{
+			Available: true, StatusAvailable: true, Branch: "main",
+		}},
+	}
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	model.composer.SetValue("/status")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("/status did not start evidence request")
+	}
+	staleCompletion := command()
+
+	model.composer.SetValue("/diff unsupported")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if model.err == nil || !strings.Contains(model.err.Error(), "target must be") {
+		t.Fatalf("newer diff error = %v", model.err)
+	}
+	model = updateModel(t, model, staleCompletion)
+	if model.err == nil || !strings.Contains(model.err.Error(), "target must be") || model.workspaceNotice != "" {
+		t.Fatalf("stale status completion changed newer UI state: err=%v notice=%q", model.err, model.workspaceNotice)
+	}
+}
+
+func TestRepositoryCompletionsRetireLoadingStateAroundErrors(t *testing.T) {
+	newModel := func() *Model {
+		model, err := newTestModel(&evidenceController{fakeController: newController(t)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return model
+	}
+
+	model := newModel()
+	model.err = errors.New("old error")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(*Model)
+	if command == nil || model.err != nil || !model.refreshingWorkspace {
+		t.Fatalf(
+			"accepted refresh retained old state: command=%v err=%v refreshing=%v",
+			command,
+			model.err,
+			model.refreshingWorkspace,
+		)
+	}
+	model = updateModel(t, model, command())
+	if model.refreshingWorkspace || model.workspaceNotice != "repository refreshed" {
+		t.Fatalf("refresh completion = refreshing:%v notice:%q", model.refreshingWorkspace, model.workspaceNotice)
+	}
+
+	for _, test := range []struct {
+		name  string
+		start func(*Model) (tea.Model, tea.Cmd)
+	}{
+		{
+			name: "refresh",
+			start: func(model *Model) (tea.Model, tea.Cmd) {
+				return model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+			},
+		},
+		{
+			name: "status",
+			start: func(model *Model) (tea.Model, tea.Cmd) {
+				model.composer.SetValue("/status")
+				return model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			},
+		},
+		{
+			name: "diff",
+			start: func(model *Model) (tea.Model, tea.Cmd) {
+				model.composer.SetValue("/diff")
+				return model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := newModel()
+			updated, command := test.start(model)
+			model = updated.(*Model)
+			if command == nil {
+				t.Fatal("repository operation did not start")
+			}
+			completion := command()
+			newerErr := errors.New("newer UI error")
+			model.err = newerErr
+			model = updateModel(t, model, completion)
+			if !errors.Is(model.err, newerErr) || model.activeEvidenceReq != 0 ||
+				model.refreshingWorkspace || model.workspaceNotice != "" {
+				t.Fatalf(
+					"completion retained operation state: err=%v request=%d refreshing=%v notice=%q",
+					model.err,
+					model.activeEvidenceReq,
+					model.refreshingWorkspace,
+					model.workspaceNotice,
+				)
+			}
+		})
+	}
+}
+
+func TestRepositoryOperationsIgnoreCrossedCompletions(t *testing.T) {
+	newModel := func() (*Model, *evidenceController) {
+		controller := &evidenceController{fakeController: newController(t)}
+		controller.status = codingworkspace.StatusResult{
+			Snapshot: codingworkspace.Snapshot{Git: codingworkspace.GitState{
+				Available: true, StatusAvailable: true, Branch: "main",
+			}},
+		}
+		model, err := newTestModel(controller)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return model, controller
+	}
+
+	model, _ := newModel()
+	updated, refreshCommand := model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(*Model)
+	staleRefresh := refreshCommand()
+	model.composer.SetValue("/status")
+	updated, statusCommand := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	statusCompletion := statusCommand()
+	model = updateModel(t, model, staleRefresh)
+	if model.workspaceNotice != "repository status loading" {
+		t.Fatalf("old refresh replaced status request: %q", model.workspaceNotice)
+	}
+	model = updateModel(t, model, statusCompletion)
+	if model.workspaceNotice != "repository status refreshed" {
+		t.Fatalf("status completion after old refresh = %q", model.workspaceNotice)
+	}
+
+	model, _ = newModel()
+	model.composer.SetValue("/status")
+	updated, statusCommand = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	staleStatus := statusCommand()
+	updated, refreshCommand = model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(*Model)
+	refreshCompletion := refreshCommand()
+	model = updateModel(t, model, staleStatus)
+	if !model.refreshingWorkspace || model.workspaceNotice != "" {
+		t.Fatalf(
+			"old status replaced refresh request: refreshing=%v notice=%q",
+			model.refreshingWorkspace,
+			model.workspaceNotice,
+		)
+	}
+	model = updateModel(t, model, refreshCompletion)
+	if model.refreshingWorkspace || model.workspaceNotice != "repository refreshed" {
+		t.Fatalf(
+			"refresh completion after old status: refreshing=%v notice=%q",
+			model.refreshingWorkspace,
+			model.workspaceNotice,
+		)
+	}
+
+	model, _ = newModel()
+	updated, refreshCommand = model.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	model = updated.(*Model)
+	staleRefresh = refreshCommand()
+	model.composer.SetValue("/diff unsupported")
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	model = updateModel(t, model, staleRefresh)
+	if model.err == nil || !strings.Contains(model.err.Error(), "target must be") || model.workspaceNotice != "" {
+		t.Fatalf("old refresh changed newer error: err=%v notice=%q", model.err, model.workspaceNotice)
 	}
 }
 

@@ -41,9 +41,15 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	publicCfg, err := config.ProjectPublicConfig(snapshot.Config)
+	if err != nil {
+		http.Error(w, "Failed to project response", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	writeConfigRevision(w, snapshot.Revision)
-	if err := json.NewEncoder(w).Encode(snapshot.Config); err != nil {
+	if err := json.NewEncoder(w).Encode(publicCfg); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 }
@@ -236,7 +242,11 @@ func applyConfigMergePatch(current *config.Config, patch map[string]any, configP
 	if err := normalizeConfigStringArrayFields(patch, current); err != nil {
 		return nil, &configPatchRequestError{err: fmt.Errorf("invalid string array field: %w", err)}
 	}
-	existing, err := json.Marshal(current)
+	publicCurrent, err := config.ProjectPublicConfig(current)
+	if err != nil {
+		return nil, fmt.Errorf("project current config: %w", err)
+	}
+	existing, err := json.Marshal(publicCurrent)
 	if err != nil {
 		return nil, fmt.Errorf("serialize current config: %w", err)
 	}
