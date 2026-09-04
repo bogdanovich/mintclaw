@@ -72,36 +72,8 @@ func (h *Handler) createMintClawHTTPProxy(token string) *httputil.ReverseProxy {
 }
 
 func (h *Handler) gatewayAvailableForProxy() bool {
-	h.gateway.mu.Lock()
-	h.ensureMintClawTokenCachedLocked(h.configPath)
-	cachedPID := h.gateway.pidData
-	trackedCmd := h.gateway.cmd
-	h.gateway.mu.Unlock()
-
-	if pidData := h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), nil); pidData != nil {
-		h.gateway.mu.Lock()
-		h.gateway.pidData = pidData
-		h.setGatewayRuntimeStatusLocked("running")
-		h.gateway.mu.Unlock()
-		return true
-	}
-
-	if cachedPID == nil {
-		return false
-	}
-
-	if h.gateway.processAlive(trackedCmd) {
-		return true
-	}
-
-	h.gateway.mu.Lock()
-	if h.gateway.cmd == trackedCmd {
-		h.gateway.pidData = nil
-		h.setGatewayRuntimeStatusLocked("stopped")
-	}
-	available := h.gateway.pidData != nil
-	h.gateway.mu.Unlock()
-	return available
+	discovered := h.sanitizeGatewayPidData(ppid.ReadPidFileWithCheck(globalConfigDir()), nil)
+	return h.gateway.availableForProxy(h.configPath, discovered)
 }
 
 func decodeMintClawSettings(cfg *config.Config) (config.MintClawSettings, bool) {
@@ -180,9 +152,7 @@ func (h *Handler) handleMintClawMediaProxy() http.HandlerFunc {
 			return
 		}
 
-		h.gateway.mu.Lock()
-		mintclawToken := h.gateway.mintclawToken
-		h.gateway.mu.Unlock()
+		mintclawToken := h.gateway.mintclawTokenValue()
 
 		if mintclawToken == "" {
 			logger.Warnf("Missing MintClaw token for media proxy")
@@ -229,9 +199,7 @@ func (h *Handler) handleRegenMintClawToken(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	h.gateway.mu.Lock()
-	h.gateway.mintclawToken = token
-	h.gateway.mu.Unlock()
+	h.gateway.setMintClawToken(token)
 
 	h.writeMintClawInfoResponse(w, r, snapshot.Config, nil)
 }

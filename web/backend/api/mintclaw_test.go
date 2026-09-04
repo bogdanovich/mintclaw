@@ -667,7 +667,7 @@ func TestHandleWebSocketProxyLoadsPidDataOnDemand(t *testing.T) {
 	h.gateway.mu.Lock()
 	h.gateway.pidData = nil
 	h.gateway.mintclawToken = ""
-	h.setGatewayRuntimeStatusLocked("stopped")
+	h.gateway.setRuntimeStatusLocked("stopped")
 	h.gateway.mu.Unlock()
 
 	req := newMintClawProxyRequest(http.MethodGet, "/mintclaw/ws?session_id=test-session")
@@ -856,7 +856,7 @@ func TestHandleWebSocketProxyRejectsStalePidDataAfterProcessExit(t *testing.T) {
 	h.gateway.pidData = &ppid.PidFileData{PID: cmd.Process.Pid, Token: "stale-token"}
 	h.gateway.mintclawToken = "ui-token"
 	h.gateway.cmd = cmd
-	h.setGatewayRuntimeStatusLocked("running")
+	h.gateway.setRuntimeStatusLocked("running")
 	h.gateway.mu.Unlock()
 
 	req := newMintClawProxyRequest(http.MethodGet, "/mintclaw/ws?session_id=test-session")
