@@ -239,7 +239,7 @@ func startGatewayAndCaptureEnv(t *testing.T, h *Handler) gatewayStartEnvSnapshot
 		)
 	}
 
-	pid, err := h.startGatewayLocked("starting", 0)
+	pid, err := h.gateway.startProcess(h.gatewayLaunchOptions(), "starting", 0)
 	if err != nil {
 		t.Fatalf("startGatewayLocked() error = %v", err)
 	}
@@ -331,7 +331,7 @@ func TestStartGatewayLocked_UsesReloadedConfigForBootSignature(t *testing.T) {
 	}
 
 	originalSignature := computeConfigSignature(cfg)
-	pid, err := h.startGatewayLocked("starting", 0)
+	pid, err := h.gateway.startProcess(h.gatewayLaunchOptions(), "starting", 0)
 	if err != nil {
 		t.Fatalf("startGatewayLocked() error = %v", err)
 	}
@@ -357,6 +357,54 @@ func TestStartGatewayLocked_UsesReloadedConfigForBootSignature(t *testing.T) {
 	}
 	if bootSignature != expectedSignature {
 		t.Fatalf("bootConfigSignature = %q, want %q", bootSignature, expectedSignature)
+	}
+}
+
+func TestGatewayManagerSerializesConcurrentStarts(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
+	cfg.ModelList[0].SetAPIKey("test-key")
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	execCalls := make(chan struct{}, 2)
+	h.gateway.execCommand = func(_ string, _ ...string) *exec.Cmd {
+		execCalls <- struct{}{}
+		if runtime.GOOS == "windows" {
+			return exec.Command("powershell", "-NoProfile", "-Command", "Start-Sleep -Seconds 30")
+		}
+		return exec.Command("sleep", "30")
+	}
+	t.Cleanup(func() {
+		_, _, _ = h.gateway.stop(false)
+	})
+
+	type startOutcome struct {
+		result gatewayStartResult
+		err    error
+	}
+	outcomes := make(chan startOutcome, 2)
+	start := func() {
+		result, err := h.gateway.startConfigured(h.gatewayLaunchOptions(), nil, "starting")
+		outcomes <- startOutcome{result: result, err: err}
+	}
+	go start()
+	go start()
+
+	first := <-outcomes
+	second := <-outcomes
+	if first.err != nil || second.err != nil {
+		t.Fatalf("concurrent starts returned errors: %v, %v", first.err, second.err)
+	}
+	if first.result.pid <= 0 || second.result.pid != first.result.pid {
+		t.Fatalf("concurrent start PIDs = %d, %d, want one positive PID", first.result.pid, second.result.pid)
+	}
+	if got := len(execCalls); got != 1 {
+		t.Fatalf("gateway command starts = %d, want 1", got)
 	}
 }
 
