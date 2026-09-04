@@ -35,28 +35,28 @@ type workspacePatchHandler struct {
 }
 
 type workspaceReadInput struct {
-	ProfileRevision   string  `json:"profile_revision"`
-	WorkspaceRevision string  `json:"workspace_revision"`
-	WorkingScope      string  `json:"working_scope"`
-	Path              string  `json:"path"`
-	Offset            float64 `json:"offset,omitempty"`
-	Length            float64 `json:"length,omitempty"`
-	StartLine         float64 `json:"start_line,omitempty"`
-	MaxLines          float64 `json:"max_lines,omitempty"`
+	ProfileRevision   string `json:"profile_revision"`
+	WorkspaceRevision string `json:"workspace_revision"`
+	WorkingScope      string `json:"working_scope"`
+	Path              string `json:"path"`
+	Offset            int64  `json:"offset,omitempty"`
+	Length            int    `json:"length,omitempty"`
+	StartLine         int    `json:"start_line,omitempty"`
+	MaxLines          int    `json:"max_lines,omitempty"`
 }
 
 type workspaceSearchInput struct {
-	ProfileRevision   string  `json:"profile_revision"`
-	WorkspaceRevision string  `json:"workspace_revision"`
-	WorkingScope      string  `json:"working_scope"`
-	Pattern           string  `json:"pattern"`
-	Target            string  `json:"target,omitempty"`
-	Path              string  `json:"path,omitempty"`
-	FileGlob          string  `json:"file_glob,omitempty"`
-	OutputMode        string  `json:"output_mode,omitempty"`
-	Context           float64 `json:"context,omitempty"`
-	Limit             float64 `json:"limit,omitempty"`
-	IncludeIgnored    bool    `json:"include_ignored,omitempty"`
+	ProfileRevision   string `json:"profile_revision"`
+	WorkspaceRevision string `json:"workspace_revision"`
+	WorkingScope      string `json:"working_scope"`
+	Pattern           string `json:"pattern"`
+	Target            string `json:"target,omitempty"`
+	Path              string `json:"path,omitempty"`
+	FileGlob          string `json:"file_glob,omitempty"`
+	OutputMode        string `json:"output_mode,omitempty"`
+	Context           int    `json:"context,omitempty"`
+	Limit             int    `json:"limit,omitempty"`
+	IncludeIgnored    bool   `json:"include_ignored,omitempty"`
 }
 
 type workspaceWriteInput struct {
@@ -237,8 +237,8 @@ func (handler workspaceSearchHandler) execute(
 		root,
 		WorkspaceSearchOptions{
 			Pattern: input.Pattern, Target: input.Target, Path: input.Path,
-			FileGlob: input.FileGlob, OutputMode: input.OutputMode, Context: int(input.Context),
-			Limit: int(input.Limit), IncludeIgnored: input.IncludeIgnored,
+			FileGlob: input.FileGlob, OutputMode: input.OutputMode, Context: input.Context,
+			Limit: input.Limit, IncludeIgnored: input.IncludeIgnored,
 		},
 	)
 	if err != nil {
@@ -300,8 +300,8 @@ func (handler workspaceReadHandler) execute(
 		input.ProfileRevision,
 		path,
 		WorkspaceReadOptions{
-			Offset: int64(input.Offset), Length: int(input.Length),
-			StartLine: int(input.StartLine), MaxLines: int(input.MaxLines),
+			Offset: input.Offset, Length: input.Length,
+			StartLine: input.StartLine, MaxLines: input.MaxLines,
 		},
 	)
 	if err != nil {

@@ -97,11 +97,11 @@ func TestBrowserCatalogRejectsIncompleteSupportedCommandSet(t *testing.T) {
 	}
 }
 
-func TestBrowserCaptureCanonicalNumbersDecodeExactly(t *testing.T) {
+func TestBrowserCaptureProtocolV2IntegersDecodeExactly(t *testing.T) {
 	var input BrowserCaptureInput
 	if err := json.Unmarshal([]byte(`{
 		"session_id":"session_1","tab_id":"tab_1","snapshot_id":"snapshot_1",
-		"snapshot_generation":1e0,"document_id":"document_1","invocation_id":"capture_1",
+		"snapshot_generation":1,"document_id":"document_1","invocation_id":"capture_1",
 		"workspace_id":"workspace_1","route_id":"route_1","browser_target":"companion","target":"page",
 		"profile_revision":"managed-v1","browser_policy_revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	}`), &input); err != nil || input.SnapshotGeneration != 1 || input.BrowserTarget != "companion" {
@@ -114,12 +114,15 @@ func TestBrowserCaptureCanonicalNumbersDecodeExactly(t *testing.T) {
 		"workspace_id":"workspace_1","route_id":"route_1","target":"companion","profile_revision":"managed-v1",
 		"browser_policy_revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"invocation_id":"capture_1","tab_id":"tab_1","document_id":"document_1",
-		"snapshot_id":"snapshot_1","snapshot_generation":1e0,"capture_target":"page",
-		"filename":"browser-screenshot.png","content_type":"image/png","size":9e0,
+		"snapshot_id":"snapshot_1","snapshot_generation":1,"capture_target":"page",
+		"filename":"browser-screenshot.png","content_type":"image/png","size":9,
 		"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		"captured_at":1.786816223e9,"expires_at":1.786816283e9,"cleanup_policy":"session_or_expiry"
+		"captured_at":1786816223,"expires_at":1786816283,"cleanup_policy":"session_or_expiry"
 	}`), &descriptor); err != nil || descriptor.Size != 9 || descriptor.CapturedAt != 1786816223 {
 		t.Fatalf("BrowserOutputDescriptor = %+v, %v", descriptor, err)
+	}
+	if err := json.Unmarshal([]byte(`{"snapshot_generation":1e0}`), &input); err == nil {
+		t.Fatal("BrowserCaptureInput accepted a protocol-v1 exponent integer")
 	}
 }
 
@@ -425,7 +428,7 @@ func TestBrowserCommandDescriptorsRejectDragInDryRunProfile(t *testing.T) {
 	}
 }
 
-func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
+func TestBrowserSessionResultDecodesProtocolV2IntegerTimestamps(t *testing.T) {
 	var result BrowserSessionResult
 	if err := json.Unmarshal([]byte(`{
 		"session_id":"session_1",
@@ -433,8 +436,8 @@ func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
 		"tab_id":"tab_primary",
 		"controller":"agent",
 		"features":{"observe":true,"navigate":true,"screenshot":false,"download":false},
-		"expires_at":1.786223585e9,
-		"idle_expires_at":1.786220045e9
+		"expires_at":1786223585,
+		"idle_expires_at":1786220045
 	}`), &result); err != nil {
 		t.Fatal(err)
 	}
@@ -445,6 +448,7 @@ func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
 	for _, invalid := range []string{
 		`{"session_id":"session_1","state":"ready","expires_at":1.5}`,
 		`{"session_id":"session_1","state":"ready","expires_at":-1}`,
+		`{"session_id":"session_1","state":"ready","expires_at":1e1}`,
 		`{"session_id":"session_1","state":"ready","expires_at":1e100}`,
 	} {
 		if err := json.Unmarshal([]byte(invalid), &result); err == nil {
@@ -453,15 +457,15 @@ func TestBrowserSessionResultDecodesCanonicalIntegerTimestamps(t *testing.T) {
 	}
 }
 
-func TestBrowserPayloadsDecodeCanonicalSnapshotGenerationsExactly(t *testing.T) {
+func TestBrowserPayloadsDecodeProtocolV2SnapshotGenerationsExactly(t *testing.T) {
 	var observe BrowserObserveInput
 	if err := json.Unmarshal([]byte(`{"session_id":"session_1","tab_id":"tab_primary",`+
-		`"snapshot_generation":1e1,"screenshot":false}`), &observe); err != nil {
+		`"snapshot_generation":10,"screenshot":false}`), &observe); err != nil {
 		t.Fatal(err)
 	}
 	var action BrowserActInput
 	if err := json.Unmarshal([]byte(`{"session_id":"session_1","tab_id":"tab_primary",`+
-		`"snapshot_generation":1e2,"action_invocation_id":"action_1",`+
+		`"snapshot_generation":100,"action_invocation_id":"action_1",`+
 		`"action":{"kind":"navigate","url":"https://example.com"},`+
 		`"effect":"navigation","current_origin":"about:blank",`+
 		`"prepared_action_hash":"`+strings.Repeat("a", 64)+`",`+
@@ -471,14 +475,14 @@ func TestBrowserPayloadsDecodeCanonicalSnapshotGenerationsExactly(t *testing.T) 
 	}
 	var observation BrowserObservationResult
 	if err := json.Unmarshal([]byte(`{"session_id":"session_1","tab_id":"tab_primary",`+
-		`"snapshot_generation":1e2,"url":"about:blank","origin":"about:blank",`+
+		`"snapshot_generation":100,"url":"about:blank","origin":"about:blank",`+
 		`"snapshot":"","elements":[],"truncated":false}`), &observation); err != nil {
 		t.Fatal(err)
 	}
 	var actionResult BrowserActResult
 	if err := json.Unmarshal([]byte(`{"action_invocation_id":"action_1","state":"succeeded",`+
 		`"observation":{"session_id":"session_1","tab_id":"tab_primary",`+
-		`"snapshot_generation":1e1,"url":"about:blank","origin":"about:blank",`+
+		`"snapshot_generation":10,"url":"about:blank","origin":"about:blank",`+
 		`"snapshot":"","elements":[],"truncated":false}}`), &actionResult); err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +493,7 @@ func TestBrowserPayloadsDecodeCanonicalSnapshotGenerationsExactly(t *testing.T) 
 			observe.SnapshotGeneration, action.SnapshotGeneration, observation)
 	}
 
-	for _, invalid := range []string{"1.5", "-1", "1e100"} {
+	for _, invalid := range []string{"1.5", "-1", "1e1", "1e100"} {
 		data := []byte(`{"session_id":"session_1","tab_id":"tab_primary",` +
 			`"snapshot_generation":` + invalid + `,"screenshot":false}`)
 		if err := json.Unmarshal(data, &observe); err == nil {
@@ -583,7 +587,7 @@ func TestBrowserActContractAcceptsBoundedScrollAndCanonicalAmount(t *testing.T) 
 	}
 	var decoded browser.Action
 	if err = json.Unmarshal(
-		[]byte(`{"kind":"scroll","direction":"up","amount":1e0,"future_option":true}`),
+		[]byte(`{"kind":"scroll","direction":"up","amount":1,"future_option":true}`),
 		&decoded,
 	); err != nil ||
 		decoded.Amount != 1 {

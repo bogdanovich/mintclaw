@@ -413,7 +413,7 @@ func testDirectJobPlan(
 			jobHelperEnabled: "1",
 			jobHelperAction:  action,
 		},
-		TimeoutSeconds: float64(timeout),
+		TimeoutSeconds: timeout,
 		Artifacts:      artifacts,
 	})
 	if err != nil {
@@ -438,7 +438,7 @@ func testDirectJobPlan(
 		t.Fatal("project job descriptor")
 	}
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID: "inv_job_" + suffix, IdempotencyKey: "idem_job_" + suffix,
 		NodeID: "node_test", CatalogHash: strings.Repeat("a", 64), Command: JobCommandStart,
 		Input: input, AgentID: "agent_test", SessionID: "session_test", ActorID: "actor_test",

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
@@ -23,9 +22,9 @@ type serviceStatusInput struct {
 }
 
 type serviceLogsInput struct {
-	Service      string  `json:"service"`
-	Entries      float64 `json:"entries,omitempty"`
-	SinceSeconds float64 `json:"since_seconds,omitempty"`
+	Service      string `json:"service"`
+	Entries      int    `json:"entries,omitempty"`
+	SinceSeconds int    `json:"since_seconds,omitempty"`
 }
 
 type serviceActionInput struct {
@@ -188,14 +187,12 @@ func (handler *serviceCommandHandler) prepare(plan nodes.ExecutionPlan) (any, er
 		if err := decodeStrictJSON(plan.Input, &input); err != nil {
 			return nil, err
 		}
-		if input.Entries < 0 || input.SinceSeconds < 0 ||
-			math.Trunc(input.Entries) != input.Entries ||
-			math.Trunc(input.SinceSeconds) != input.SinceSeconds {
+		if input.Entries < 0 || input.SinceSeconds < 0 {
 			return nil, errors.New("service log bounds are invalid")
 		}
 		return ServiceLogRequest{
 			Profile: plan.ServiceProfile, Service: input.Service,
-			Entries: int(input.Entries), SinceSeconds: int(input.SinceSeconds),
+			Entries: input.Entries, SinceSeconds: input.SinceSeconds,
 		}, nil
 	case "service.action.v1":
 		var input serviceActionInput
