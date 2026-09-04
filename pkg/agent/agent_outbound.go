@@ -302,7 +302,7 @@ func (al *AgentLoop) deliverFinalTurnResult(
 	ctx context.Context,
 	traceScope runtimeevents.TraceScope,
 	agent *AgentInstance,
-	opts turnSpec,
+	opts turnInput,
 	result turnResult,
 ) {
 	if al == nil || al.bus == nil || agent == nil {
@@ -391,7 +391,7 @@ func (al *AgentLoop) deliverFinalTurnText(
 	ctx context.Context,
 	traceScope runtimeevents.TraceScope,
 	agent *AgentInstance,
-	opts turnSpec,
+	opts turnInput,
 	outboundCtx bus.InboundContext,
 	metadata bus.OutboundMetadata,
 	agentID, sessionKey string,

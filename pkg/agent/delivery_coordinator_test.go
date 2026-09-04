@@ -600,12 +600,12 @@ func newDeliveryCoordinatorTestRuntimeWithWorkspace(
 		channel:    "telegram",
 		chatID:     "chat-1",
 		sessionKey: "session-1",
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			Dispatch: DispatchRequest{
 				SessionKey:     "session-1",
 				InboundContext: inbound,
 			},
-		},
+		}),
 		scope: al.newTurnEventScope(agent.ID, agent.Workspace, "session-1", &TurnContext{Inbound: inbound}),
 	}
 	return al, msgBus, ts, workspace

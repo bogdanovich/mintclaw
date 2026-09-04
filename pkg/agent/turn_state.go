@@ -183,6 +183,7 @@ type turnExecution struct {
 	objectiveRepairActive    bool
 	objectiveRepairMessages  []providers.Message
 	objectiveRepairTailIndex int
+	terminal                 terminalContent
 
 	loopGuard *loopguard.Controller
 
@@ -273,7 +274,7 @@ func (e *turnExecution) markSteeringObserved() {
 // newTurnExecution creates a turnExecution initialized from turnState and options.
 func newTurnExecution(
 	agent *AgentInstance,
-	opts turnSpec,
+	opts turnInput,
 	history []providers.Message,
 	summary string,
 	messages []providers.Message,
@@ -324,11 +325,11 @@ func (e *turnExecution) shouldTrackTurnOwnedSteering(msg providers.Message) bool
 type turnState struct {
 	mu sync.RWMutex
 
-	agent   *AgentInstance
-	opts    turnSpec
-	model   effectiveModelBinding
-	profile config.EffectiveTurnProfile
-	scope   turnEventScope
+	agent        *AgentInstance
+	opts         turnInput
+	modelBinding effectiveModelBinding
+	profile      config.EffectiveTurnProfile
+	scope        turnEventScope
 
 	approvalGrant *ToolApprovalGrant
 	observers     turnObservationHooks
@@ -351,11 +352,10 @@ type turnState struct {
 	userMessage string
 	media       []string
 
-	phase                 TurnPhase
-	iteration             int
-	startedAt             time.Time
-	finalContent          string
-	finalContentProtected bool
+	phase            TurnPhase
+	iteration        int
+	startedAt        time.Time
+	terminalSnapshot terminalContent
 
 	followUps []bus.InboundMessage
 
@@ -387,13 +387,12 @@ type turnState struct {
 	initialHistoryLength int                         // Snapshot of history length at turn start
 
 	// Additional SubTurn fields
-	ctx              context.Context    // Context for this turn
-	cancelFunc       context.CancelFunc // Cancel function for this turn's context
-	critical         bool               // Whether this SubTurn should continue after parent ends
-	parentTurnState  *turnState         // Reference to parent turnState
-	parentEnded      atomic.Bool        // Whether parent has ended
-	finishSignalOnce sync.Once          // Ensures finishedChan is closed once
-	finishedChan     chan struct{}      // Closed when turn finishes
+	ctx              context.Context // Context for this turn
+	critical         bool            // Whether this SubTurn should continue after parent ends
+	parentTurnState  *turnState      // Reference to parent turnState
+	parentEnded      atomic.Bool     // Whether parent has ended
+	finishSignalOnce sync.Once       // Ensures finishedChan is closed once
+	finishedChan     chan struct{}   // Closed when turn finishes
 
 	// Token budget tracking
 	tokenBudget      *atomic.Int64        // Shared token budget counter
@@ -424,12 +423,11 @@ func newTurnStateFromInput(
 	approvalGrant *ToolApprovalGrant,
 	scope turnEventScope,
 ) *turnState {
-	runtimeOpts := opts.runtimeOptions()
 	if approvalGrant != nil {
 		grant := *approvalGrant
 		approvalGrant = &grant
 	}
-	binding := runtimeOpts.ModelBinding
+	binding := opts.ModelBinding
 	if binding.WorkspaceAgent == nil {
 		binding.WorkspaceAgent = agent
 	}
@@ -445,21 +443,21 @@ func newTurnStateFromInput(
 	}
 	ts := &turnState{
 		agent:         agent,
-		opts:          runtimeOpts,
-		model:         binding,
-		profile:       runtimeOpts.TurnProfile,
+		opts:          opts,
+		modelBinding:  binding,
+		profile:       opts.TurnProfile,
 		scope:         scope,
 		turnID:        scope.turnID,
 		executionID:   "execution_" + uuid.NewString(),
 		agentID:       agentID,
-		sessionKey:    runtimeOpts.Dispatch.SessionKey,
-		activeSkills:  activeSkillNames(agent, runtimeOpts),
+		sessionKey:    opts.Dispatch.SessionKey,
+		activeSkills:  activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
 		turnCtx:       cloneTurnContext(scope.context),
-		channel:       runtimeOpts.Dispatch.Channel(),
-		chatID:        runtimeOpts.Dispatch.ChatID(),
+		channel:       opts.Dispatch.Channel(),
+		chatID:        opts.Dispatch.ChatID(),
 		workspace:     workspace,
-		userMessage:   runtimeOpts.Dispatch.UserMessage,
-		media:         append([]string(nil), runtimeOpts.Dispatch.Media...),
+		userMessage:   opts.Dispatch.UserMessage,
+		media:         append([]string(nil), opts.Dispatch.Media...),
 		phase:         TurnPhaseSetup,
 		startedAt:     time.Now(),
 		approvalGrant: approvalGrant,
@@ -470,9 +468,9 @@ func newTurnStateFromInput(
 	var history []providers.Message
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		history = agent.Sessions.GetHistory(runtimeOpts.Dispatch.SessionKey)
+		history = agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
 		ts.initialHistoryLength = len(history)
-		ts.captureCanonicalRestorePoint(history, agent.Sessions.GetSummary(runtimeOpts.Dispatch.SessionKey))
+		ts.captureCanonicalRestorePoint(history, agent.Sessions.GetSummary(opts.Dispatch.SessionKey))
 	}
 	if agent != nil && agent.ContextBuilder != nil {
 		ts.codingInstructions = newCodingInstructionTurnState(
@@ -637,26 +635,25 @@ func (ts *turnState) currentIteration() int {
 func (ts *turnState) setFinalContent(content string, protected bool) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	ts.finalContent = content
-	ts.finalContentProtected = protected
+	ts.terminalSnapshot = terminalContent{content: content, protected: protected}
 }
 
 func (ts *turnState) finalContentProtectedSnapshot() bool {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
-	return ts.finalContentProtected
+	return ts.terminalSnapshot.protected
 }
 
 func (ts *turnState) finalContentLen() int {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
-	return len(ts.finalContent)
+	return len(ts.terminalSnapshot.content)
 }
 
 func (ts *turnState) finalContentSnapshot() string {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
-	return ts.finalContent
+	return ts.terminalSnapshot.content
 }
 
 func (ts *turnState) recordToolKind(tool string) {
@@ -865,8 +862,12 @@ func (ts *turnState) skillContextSnapshotsSnapshot() []SkillContextSnapshot {
 
 func (ts *turnState) setTurnCancel(cancel context.CancelFunc) {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	ts.turnCancel = cancel
+	hardAbort := ts.hardAbort
+	ts.mu.Unlock()
+	if hardAbort && cancel != nil {
+		cancel()
+	}
 }
 
 func (ts *turnState) setProviderCancel(cancel context.CancelFunc) {
@@ -1147,12 +1148,79 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 // SubTurn-related methods
 // =============================================================================
 
+func (ts *turnState) configureSubTurnConcurrency(limit int) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.pendingResults = make(chan *toolshared.ToolResult, 16)
+	if limit > 0 {
+		ts.concurrencySem = make(chan struct{}, limit)
+	}
+}
+
+func (ts *turnState) subTurnCapacitySnapshot() (active, limit int, enabled bool) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	if ts.concurrencySem == nil {
+		return 0, 0, false
+	}
+	return len(ts.concurrencySem), cap(ts.concurrencySem), true
+}
+
+func (ts *turnState) tryAcquireSubTurnSlot() bool {
+	ts.mu.RLock()
+	sem := ts.concurrencySem
+	ts.mu.RUnlock()
+	if sem == nil {
+		return false
+	}
+	select {
+	case sem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (ts *turnState) waitForSubTurnSlot(ctx context.Context) bool {
+	ts.mu.RLock()
+	sem := ts.concurrencySem
+	ts.mu.RUnlock()
+	if sem == nil {
+		return false
+	}
+	select {
+	case sem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (ts *turnState) releaseSubTurnSlot() {
+	ts.mu.RLock()
+	sem := ts.concurrencySem
+	ts.mu.RUnlock()
+	if sem != nil {
+		<-sem
+	}
+}
+
+func (ts *turnState) addChildTurn(childID string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.childTurnIDs = append(ts.childTurnIDs, childID)
+}
+
 // Finish marks the turn as finished and broadcasts completion. pendingResults
 // remains open because asynchronous child deliveries may still hold a sender.
 func (ts *turnState) Finish(isHardAbort bool) {
 	ts.mu.Lock()
+	if isHardAbort {
+		ts.hardAbort = true
+	}
 	ts.isFinished.Store(true)
 	ts.pendingResultsSealed = true
+	turnCancel := ts.turnCancel
 	ts.finishSignalOnce.Do(func() {
 		if ts.finishedChan == nil {
 			ts.finishedChan = make(chan struct{})
@@ -1170,9 +1238,9 @@ func (ts *turnState) Finish(isHardAbort bool) {
 		ts.parentEnded.Store(true)
 	}
 
-	// Cancel the turn context
-	if ts.cancelFunc != nil {
-		ts.cancelFunc()
+	// Cancel the runtime-owned turn context.
+	if turnCancel != nil {
+		turnCancel()
 	}
 
 	// Hard abort cascades to all child turns

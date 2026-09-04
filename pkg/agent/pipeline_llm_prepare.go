@@ -85,7 +85,7 @@ func (p *Pipeline) prepareLLMRequest(
 	if llm.useNativeSearch {
 		llm.llmOpts["native_search"] = true
 	}
-	execution := ts.model.ExecutionState()
+	execution := ts.modelBinding.ExecutionState()
 	applyTurnThinkingOptions(exec, llm, execution, exec.model.activeProvider, true)
 	llm.llmModel = exec.model.activeModel
 

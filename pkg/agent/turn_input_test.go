@@ -81,19 +81,6 @@ func TestFreezeTurnInputOwnsRuntimeSnapshot(t *testing.T) {
 	if readyCalls != 1 {
 		t.Fatalf("ready calls = %d, want 1", readyCalls)
 	}
-
-	runtimeOpts := input.runtimeOptions()
-	if runtimeOpts.FinalDeliveryObservation != nil || runtimeOpts.OnTurnReady != nil ||
-		runtimeOpts.ApprovalGrant != nil {
-		t.Fatalf("runtime options retained caller-owned hooks or mutable grant: %#v", runtimeOpts)
-	}
-	runtimeOpts.Dispatch.Media[0] = "runtime-mutated"
-	runtimeOpts.TurnProfile.AllowedSkills[0] = "runtime-mutated"
-	runtimeOpts.TurnProfile.AllowedTools[0] = "runtime-mutated"
-	if input.Dispatch.Media[0] != "media-1" || input.TurnProfile.AllowedSkills[0] != "allowed-skill" ||
-		input.TurnProfile.AllowedTools[0] != "allowed-tool" {
-		t.Fatalf("runtime option mutation reached frozen input: %#v", input)
-	}
 }
 
 func TestFreezeTurnInputDetachesEmptySessionScopeCollections(t *testing.T) {
@@ -127,8 +114,5 @@ func TestTurnApprovalGrantIsMutableStateNotInput(t *testing.T) {
 	state.consumeApprovalGrant()
 	if got := state.currentApprovalGrant(); got != nil {
 		t.Fatalf("approval grant after consumption = %#v", got)
-	}
-	if input.runtimeOptions().ApprovalGrant != nil {
-		t.Fatal("frozen input unexpectedly owns the mutable approval grant")
 	}
 }

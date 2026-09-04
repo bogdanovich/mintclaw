@@ -11,11 +11,11 @@ import (
 
 func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 	ts := &turnState{
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			SendResponse:                false,
 			AllowInterimMintClawPublish: true,
 			EnableSummary:               true,
-		},
+		}),
 		followUps: []bus.InboundMessage{{Content: "follow up"}},
 	}
 	ts.RecordLLMUsage(&providers.UsageInfo{
@@ -101,7 +101,7 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 
 func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T) {
 	ts := &turnState{
-		opts: turnSpec{EnableSummary: true},
+		opts: freezeTurnInput(turnSpec{EnableSummary: true}),
 	}
 	exec := &turnExecution{
 		model: turnExecutionModel{
@@ -164,10 +164,10 @@ func TestFinalizationResultDetachesCompleteDeliverable(t *testing.T) {
 }
 
 func TestNewFinalizationContextSuppressesOnlyBackgroundCompaction(t *testing.T) {
-	ts := &turnState{opts: turnSpec{
+	ts := &turnState{opts: freezeTurnInput(turnSpec{
 		EnableSummary:                true,
 		SuppressBackgroundCompaction: true,
-	}}
+	})}
 	finalization := newFinalizationContext(
 		ts,
 		&turnExecution{},

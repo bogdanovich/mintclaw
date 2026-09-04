@@ -1384,7 +1384,7 @@ func TestConfiguredStreamingFinalTurnUsesAccumulatedTurnUsage(t *testing.T) {
 
 func TestPipelineFinalizeUsesAccumulatedTurnUsage(t *testing.T) {
 	ts := &turnState{
-		opts: turnSpec{NoHistory: true},
+		opts: freezeTurnInput(turnSpec{NoHistory: true}),
 	}
 	ts.RecordLLMUsage(&providers.UsageInfo{
 		PromptTokens:     10000,
