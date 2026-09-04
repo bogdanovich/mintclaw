@@ -58,8 +58,9 @@ func NewRepositoryDiffTool(repository repositoryEvidence) *RepositoryDiffTool {
 func (*RepositoryDiffTool) Name() string { return "repository_diff" }
 
 func (*RepositoryDiffTool) Description() string {
-	return "Inspect bounded repository file summaries and hunks for current changes, the thread baseline, " +
-		"a local base branch, or one local commit. This read-only tool never fetches refs or mutates Git state."
+	return "Inspect bounded repository file summaries and hunks for current changes, a local base branch, " +
+		"or one local commit. Current evidence includes separate thread-baseline provenance. " +
+		"This read-only tool never fetches refs or mutates Git state."
 }
 
 func (*RepositoryDiffTool) Parameters() map[string]any {
@@ -68,7 +69,7 @@ func (*RepositoryDiffTool) Parameters() map[string]any {
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"target": map[string]any{
-				"type": "string", "enum": []string{"current", "baseline", "base", "commit"},
+				"type": "string", "enum": []string{"current", "base", "commit"},
 				"description": "Evidence scope. Defaults to current.",
 			},
 			"ref": map[string]any{
@@ -114,7 +115,7 @@ func repositoryDiffTarget(args map[string]any) (codingworkspace.DiffTarget, erro
 		return codingworkspace.DiffTarget{}, fmt.Errorf("repository diff ref is invalid")
 	}
 	switch kind {
-	case codingworkspace.DiffTargetCurrent, codingworkspace.DiffTargetBaseline:
+	case codingworkspace.DiffTargetCurrent:
 		if ref != "" {
 			return codingworkspace.DiffTarget{}, fmt.Errorf("repository diff %s target does not accept ref", kind)
 		}

@@ -52,7 +52,7 @@ func TestRepositoryDiffCurrentReturnsStructuredTrackedAndUntrackedChanges(t *tes
 	}
 }
 
-func TestRepositoryStatusAndBaselineDiffExposeTruthfulProvenance(t *testing.T) {
+func TestRepositoryStatusAndCurrentDiffExposeTruthfulProvenance(t *testing.T) {
 	root := initGitRepository(t)
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("pre-existing\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -76,11 +76,11 @@ func TestRepositoryStatusAndBaselineDiffExposeTruthfulProvenance(t *testing.T) {
 		provenanceForPath(t, *status.Provenance, "new.txt") != ProvenanceFirstObservedDuringThread {
 		t.Fatalf("status = %#v", status)
 	}
-	diff := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetBaseline})
-	if diff.Stale || diff.Target.Kind != DiffTargetBaseline || diff.BaselineID != baseline.BaselineID ||
+	diff := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent})
+	if diff.Stale || diff.Target.Kind != DiffTargetCurrent || diff.BaselineID != baseline.BaselineID ||
 		diff.Provenance == nil || requireDiffFile(t, diff, "tracked.txt").Provenance != ProvenancePreExisting ||
 		requireDiffFile(t, diff, "new.txt").Provenance != ProvenanceFirstObservedDuringThread {
-		t.Fatalf("baseline diff = %#v", diff)
+		t.Fatalf("current diff = %#v", diff)
 	}
 }
 

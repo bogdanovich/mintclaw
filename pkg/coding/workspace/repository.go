@@ -22,10 +22,9 @@ const (
 type DiffTargetKind string
 
 const (
-	DiffTargetCurrent  DiffTargetKind = "current"
-	DiffTargetBaseline DiffTargetKind = "baseline"
-	DiffTargetBase     DiffTargetKind = "base"
-	DiffTargetCommit   DiffTargetKind = "commit"
+	DiffTargetCurrent DiffTargetKind = "current"
+	DiffTargetBase    DiffTargetKind = "base"
+	DiffTargetCommit  DiffTargetKind = "commit"
 )
 
 type DiffTarget struct {
@@ -163,29 +162,8 @@ func (repository *Repository) Status(ctx context.Context) StatusResult {
 }
 
 func (repository *Repository) Diff(ctx context.Context, target DiffTarget) DiffResult {
-	requested := target
-	if requested.Kind == "" {
-		requested.Kind = DiffTargetCurrent
-	}
-	if requested.Kind == DiffTargetBaseline {
-		if repository == nil || repository.baseline == nil {
-			return DiffResult{
-				SchemaVersion:     RepositoryDiffSchemaV1,
-				Target:            requested,
-				UnavailableReason: "thread baseline is unavailable",
-			}
-		}
-		target = DiffTarget{Kind: DiffTargetCurrent}
-	}
 	result := repository.diff(ctx, target)
-	result.Target = requested
-	if requested.Kind == DiffTargetBaseline && result.UnavailableReason == "" {
-		result.Warning = joinWarning(
-			result.Warning,
-			"hunks show current HEAD-relative changes; the thread baseline supplies provenance only",
-		)
-	}
-	if requested.Kind == DiffTargetCurrent || requested.Kind == DiffTargetBaseline {
+	if result.Target.Kind == DiffTargetCurrent {
 		repository.attachDiffProvenance(ctx, &result)
 	}
 	return result
