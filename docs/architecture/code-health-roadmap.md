@@ -60,7 +60,7 @@ not targets by themselves.
 | H2 | Give the web gateway process one instance owner | H0 | Completed |
 | H3 | Add frontend contracts and remove model-form duplication | H0 | Completed |
 | H4 | Extract human-interaction application orchestration | H0 | Completed |
-| H5 | Consolidate turn input, runtime state, outcomes, and finalization | H0, H4 characterization tests | In progress |
+| H5 | Consolidate turn input, runtime state, outcomes, and finalization | H0, H4 characterization tests | Completed |
 | H6 | Reduce root-config coupling at high-change boundaries | H1, H2, H5 | Not started |
 | H7 | Simplify canonical node JSON numbers through a protocol cutover | H0 | Not started |
 | H8 | Remove confirmed legacy and close the program | H1-H7 | Not started |
