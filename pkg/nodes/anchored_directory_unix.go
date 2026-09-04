@@ -54,10 +54,14 @@ func openAnchoredDirectory(path string) (*anchoredDirectory, error) {
 	return &anchoredDirectory{
 		file: file,
 		identity: anchoredDirectoryIdentity{
-			volume: uint64(stat.Dev),
-			file:   stat.Ino,
+			volume: anchoredStatUint64(stat.Dev),
+			file:   anchoredStatUint64(stat.Ino),
 		},
 	}, nil
+}
+
+func anchoredStatUint64[Value ~int | ~int32 | ~int64 | ~uint | ~uint32 | ~uint64](value Value) uint64 {
+	return uint64(value)
 }
 
 func (directory *anchoredDirectory) processLockKey(name string) anchoredProcessLockKey {
