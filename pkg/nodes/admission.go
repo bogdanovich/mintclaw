@@ -72,6 +72,12 @@ type Admission struct {
 	snapshot Snapshot
 }
 
+// ProtocolVersion returns the authenticated protocol selected for this
+// admission. The value is valid after Authenticate succeeds.
+func (admission Admission) ProtocolVersion() int {
+	return admission.snapshot.ProtocolVersion
+}
+
 type AdmissionConfig struct {
 	ChallengeTTL     time.Duration
 	MaxChallenges    int

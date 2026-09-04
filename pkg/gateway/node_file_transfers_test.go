@@ -131,7 +131,8 @@ func TestRetainedNodeFileTransferBindsExactJobArtifactOwner(t *testing.T) {
 			Guidance: []string{}, Examples: []json.RawMessage{},
 		},
 	}
-	plan, err := nodes.PrepareExecutionPlan(
+	plan, err := nodes.PrepareExecutionPlanForProtocol(
+		nodes.ProtocolV2,
 		nodes.InvocationRequest{
 			InvocationID: "job_artifact_transfer", IdempotencyKey: "job_artifact_idem",
 			NodeID: "node_1", CatalogHash: strings.Repeat("c", sha256.Size*2),
@@ -157,7 +158,8 @@ func TestRetainedNodeFileTransferBindsExactJobArtifactOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retained.SourceKind != nodes.JobArtifactTransferSourceKind || binding.Path != "" ||
+	if retained.SourceKind != nodes.JobArtifactTransferSourceKind ||
+		binding.ProtocolVersion != nodes.ProtocolV2 || binding.Path != "" ||
 		binding.JobProfile != "builds" || binding.JobID != "job_0123456789abcdef0123456789abcdef" ||
 		binding.JobArtifactRef != "jobart_0123456789abcdef" || binding.AgentID != "agent_1" ||
 		binding.SessionID != "session_1" || binding.ActorID != "actor_1" {
