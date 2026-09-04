@@ -276,6 +276,16 @@ func PlaywrightHandoffAvailable(root *config.Config) bool {
 	if !ok {
 		return false
 	}
+	profile, ok := target.Profiles[config.BrowserDefaultProfile]
+	if !ok || !profile.Enabled {
+		profile, ok = onlyEnabledBrowserProfile(target.Profiles)
+	}
+	if !ok {
+		return false
+	}
+	if profile.CanonicalAuthority() {
+		return profile.Mode == config.BrowserProfileManaged && profile.Runtime.Headed
+	}
 	for _, argument := range server.Args {
 		if argument == "--headless" || strings.HasPrefix(argument, "--headless=") ||
 			argument == "--extension" || strings.HasPrefix(argument, "--extension=") {
@@ -283,6 +293,23 @@ func PlaywrightHandoffAvailable(root *config.Config) bool {
 		}
 	}
 	return true
+}
+
+func onlyEnabledBrowserProfile(
+	profiles map[string]config.BrowserProfileConfig,
+) (config.BrowserProfileConfig, bool) {
+	var selected config.BrowserProfileConfig
+	found := false
+	for _, profile := range profiles {
+		if !profile.Enabled {
+			continue
+		}
+		if found {
+			return config.BrowserProfileConfig{}, false
+		}
+		selected, found = profile, true
+	}
+	return selected, found
 }
 
 func playwrightOutputRoot(server config.MCPServerConfig) (config.MCPServerConfig, string) {
@@ -306,6 +333,21 @@ func playwrightOutputRoot(server config.MCPServerConfig) (config.MCPServerConfig
 }
 
 func NewPlaywrightWorkerFactory(rootConfig *config.Config) (*PlaywrightWorkerFactory, error) {
+	return NewPlaywrightProfileWorkerFactory(
+		rootConfig,
+		config.BrowserDefaultTarget,
+		config.BrowserDefaultProfile,
+	)
+}
+
+// NewPlaywrightProfileWorkerFactory binds one configured local profile to one
+// private worker factory. Runtime paths are derived from trusted profile
+// authority and never accepted through the model-facing open request.
+func NewPlaywrightProfileWorkerFactory(
+	rootConfig *config.Config,
+	targetName string,
+	profileName string,
+) (*PlaywrightWorkerFactory, error) {
 	if rootConfig == nil {
 		return nil, errors.New("playwright worker factory requires a root config")
 	}
@@ -315,11 +357,11 @@ func NewPlaywrightWorkerFactory(rootConfig *config.Config) (*PlaywrightWorkerFac
 	if !rootConfig.Tools.Browser.Enabled {
 		return nil, ErrDenied
 	}
-	target, ok := rootConfig.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	target, ok := rootConfig.Tools.Browser.Targets[targetName]
 	if !ok || !target.Enabled || target.Driver != config.BrowserDriverPlaywrightMCP {
 		return nil, ErrDenied
 	}
-	profile, ok := target.Profiles[config.BrowserDefaultProfile]
+	profile, ok := target.Profiles[profileName]
 	if !ok || !profile.Enabled || profile.DryRun == profile.AllowApprovedActions {
 		return nil, ErrDenied
 	}
@@ -327,13 +369,24 @@ func NewPlaywrightWorkerFactory(rootConfig *config.Config) (*PlaywrightWorkerFac
 	if !ok {
 		return nil, ErrDenied
 	}
+	if profile.CanonicalAuthority() {
+		runtime, err := normalizeManagedProfileRuntime(profile.Runtime)
+		if err != nil {
+			return nil, err
+		}
+		profile.Runtime = runtime
+	}
+	server, err := playwrightServerForProfile(server, profile)
+	if err != nil {
+		return nil, err
+	}
 	if err := validatePlaywrightManagedPolicy(server); err != nil {
 		return nil, err
 	}
 	return newPlaywrightManagedHostFactory(PlaywrightManagedHostConfig{
-		Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+		Target: targetName, Profile: profileName,
 		ProfileConfig: profile, ServerConfig: server,
-	}, PlaywrightDownloadAvailable(rootConfig))
+	}, playwrightServerDownloadAvailable(server))
 }
 
 // NewPlaywrightManagedHostFactory reuses the B1 Playwright worker on another
@@ -564,6 +617,13 @@ func (factory *PlaywrightWorkerFactory) Open(
 		request.Profile != factory.profileName || request.DryRun != factory.profileConfig.DryRun ||
 		!validIdentifier(request.SessionID) {
 		return WorkerOpenResult{}, ErrDenied
+	}
+	if factory.profileConfig.CanonicalAuthority() {
+		runtime, err := normalizeManagedProfileRuntime(factory.profileConfig.Runtime)
+		if err != nil || runtime != factory.profileConfig.Runtime {
+			factory.readiness.Store(playwrightReadinessUnavailable)
+			return WorkerOpenResult{}, ErrWorkerUnavailable
+		}
 	}
 	client := factory.clientFactory()
 	if client == nil {

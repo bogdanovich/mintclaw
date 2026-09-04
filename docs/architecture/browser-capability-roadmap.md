@@ -896,7 +896,7 @@ Stop a parity slice if:
 ## B4: Browser Identity and Attached-User Profiles
 
 Status: admitted for phased implementation. The authoritative scope, profile
-classes, credential boundary, attached-browser consent model, delivery order,
+classes, attached-browser consent model, delivery order,
 acceptance evidence, and stop conditions are recorded in
 [Browser Capability B4 Admission](browser-capability-b4-admission.md). Execution
 progress is tracked in [Browser B4 Execution Goal](browser-b4-execution-goal.md).
@@ -904,8 +904,8 @@ progress is tracked in [Browser B4 Execution Goal](browser-b4-execution-goal.md)
 ### Operator outcome
 
 An operator can deliberately select a managed, ephemeral, cloud, or existing
-signed-in browser identity without revealing profile storage or credentials to
-the browser specialist.
+signed-in browser identity without revealing profile storage to the browser
+specialist.
 
 ### Profile authority
 
@@ -915,15 +915,14 @@ Profiles are operator-created aliases bound to:
 - allowed gateway, node, or provider targets;
 - allowed origins and cross-origin transitions;
 - allowed action classes;
-- credential aliases and injection mode;
 - unattended, operator-present, or bounded-arming requirements;
 - persistence, backup, migration, and retention policy;
 - headed, live-view, and takeover behavior.
 
-Profile export, cookie extraction, storage-state retrieval, and raw credential
-reads are denied model surfaces. Credential injection is origin-bound and
-occurs inside the broker, worker, browser, or operating-system credential
-facility.
+Profile export, cookie extraction, and storage-state retrieval are denied model
+surfaces. Persistent managed profiles retain login state after an operator
+signs in through visible handoff. Direct credential injection and password
+manager integration are deferred until profile-based login proves insufficient.
 
 ### Attached-user browser
 
@@ -943,30 +942,32 @@ The initial attached mode should require:
 
 ### Suggested delivery sequence
 
-1. Define the profile schema, storage ownership, credential boundary, migration
-   rules, and revocation behavior.
+1. Define the profile schema, storage ownership, migration rules, and revocation
+   behavior.
 2. Move the existing managed profile behind an opaque alias without changing
    its data.
 3. Add ephemeral profiles and prove complete cleanup.
-4. Add origin-bound credential injection using one supported secret backend.
-5. Add attached Chrome on one local platform with explicit operator consent.
-6. Add companion attached-browser support only after local evidence and B3
+4. Add attached Chrome on one local platform with explicit operator consent.
+5. Add companion attached-browser support only after local evidence and B3
    target policy are stable.
 
 ### Completion evidence
 
 B4 is complete only when:
 
-- the model cannot enumerate or read credentials, cookies, storage state,
-  profile paths, or raw browser endpoints;
+- the model cannot enumerate or read cookies, storage state, profile paths, or
+  raw browser endpoints;
 - two workers cannot attach to or mutate the same profile concurrently;
 - profile revocation prevents new actions and closes or quarantines active
   sessions according to policy;
-- credential injection refuses a mismatched origin;
 - ephemeral profiles leave no retained login state;
 - attached-user mode is visibly armed, bounded, revocable, and disabled by
   default;
 - human takeover remains distinct from attached-profile approval.
+
+Deferred credential-provider direction is recorded in the B4 admission. It is
+not part of B4 completion and requires a separate admission before
+implementation.
 
 ## B5: Providers and Repeatable Workflow Adapters
 
