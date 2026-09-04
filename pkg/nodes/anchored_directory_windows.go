@@ -15,8 +15,9 @@ import (
 )
 
 type anchoredDirectory struct {
-	handle windows.Handle
-	path   string
+	handle   windows.Handle
+	path     string
+	identity anchoredDirectoryIdentity
 }
 
 type anchoredFileRenameInformation struct {
@@ -57,7 +58,18 @@ func openAnchoredDirectory(path string) (*anchoredDirectory, error) {
 		_ = windows.CloseHandle(handle)
 		return nil, fmt.Errorf("open anchored directory: linked or non-directory %q", absolutePath)
 	}
-	return &anchoredDirectory{handle: handle, path: absolutePath}, nil
+	return &anchoredDirectory{
+		handle: handle,
+		path:   absolutePath,
+		identity: anchoredDirectoryIdentity{
+			volume: uint64(info.VolumeSerialNumber),
+			file:   uint64(info.FileIndexHigh)<<32 | uint64(info.FileIndexLow),
+		},
+	}, nil
+}
+
+func (directory *anchoredDirectory) processLockKey(name string) anchoredProcessLockKey {
+	return anchoredProcessLockKey{directory: directory.identity, name: name}
 }
 
 func (directory *anchoredDirectory) openRegular(name string) (*os.File, os.FileInfo, error) {
@@ -94,10 +106,7 @@ func (directory *anchoredDirectory) acquireLock(name string) (func(), error) {
 	if err := validateAnchoredName(name); err != nil {
 		return nil, err
 	}
-	releaseProcessLock, err := acquireAnchoredProcessLock(directory.path, name)
-	if err != nil {
-		return nil, fmt.Errorf("identify anchored directory lock: %w", err)
-	}
+	releaseProcessLock := acquireAnchoredProcessLock(directory.processLockKey(name))
 	handle, err := directory.openRelative(
 		name,
 		windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE,

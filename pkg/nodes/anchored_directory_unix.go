@@ -15,7 +15,8 @@ import (
 )
 
 type anchoredDirectory struct {
-	file *os.File
+	file     *os.File
+	identity anchoredDirectoryIdentity
 }
 
 func openAnchoredDirectory(path string) (*anchoredDirectory, error) {
@@ -45,7 +46,22 @@ func openAnchoredDirectory(path string) (*anchoredDirectory, error) {
 		_ = file.Close()
 		return nil, fmt.Errorf("open anchored directory: non-directory %q", absolutePath)
 	}
-	return &anchoredDirectory{file: file}, nil
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		_ = file.Close()
+		return nil, fmt.Errorf("open anchored directory: identity unavailable for %q", absolutePath)
+	}
+	return &anchoredDirectory{
+		file: file,
+		identity: anchoredDirectoryIdentity{
+			volume: uint64(stat.Dev),
+			file:   stat.Ino,
+		},
+	}, nil
+}
+
+func (directory *anchoredDirectory) processLockKey(name string) anchoredProcessLockKey {
+	return anchoredProcessLockKey{directory: directory.identity, name: name}
 }
 
 func (directory *anchoredDirectory) openRegular(name string) (*os.File, os.FileInfo, error) {
@@ -92,10 +108,7 @@ func (directory *anchoredDirectory) acquireLock(name string) (func(), error) {
 	if err := validateAnchoredName(name); err != nil {
 		return nil, err
 	}
-	releaseProcessLock, err := acquireAnchoredProcessLock(directory.file.Name(), name)
-	if err != nil {
-		return nil, fmt.Errorf("identify anchored directory lock: %w", err)
-	}
+	releaseProcessLock := acquireAnchoredProcessLock(directory.processLockKey(name))
 	descriptor, err := unix.Openat(
 		int(directory.file.Fd()),
 		name,

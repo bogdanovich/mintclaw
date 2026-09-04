@@ -1,6 +1,7 @@
 package nodes
 
 import (
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,14 @@ import (
 func TestAnchoredDirectoryConcurrentLockCreation(t *testing.T) {
 	directoryPath := t.TempDir()
 	const workers = 16
+	keyDirectory, err := openAnchoredDirectory(directoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := keyDirectory.processLockKey("state.db.init.lock")
+	if err = keyDirectory.close(); err != nil {
+		t.Fatal(err)
+	}
 
 	results := make(chan error, workers)
 	var active atomic.Int32
@@ -60,14 +69,40 @@ func TestAnchoredDirectoryConcurrentLockCreation(t *testing.T) {
 	if maximum.Load() != 1 {
 		t.Fatalf("maximum concurrent anchored lock holders = %d, want 1", maximum.Load())
 	}
-	key, err := filepath.Abs(filepath.Join(directoryPath, "state.db.init.lock"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	anchoredProcessLocks.Lock()
-	_, retained := anchoredProcessLocks.entries[filepath.Clean(key)]
+	_, retained := anchoredProcessLocks.entries[key]
 	anchoredProcessLocks.Unlock()
 	if retained {
 		t.Fatal("released anchored process lock remains registered")
+	}
+}
+
+func TestAnchoredDirectoryAliasPathsShareProcessLockKey(t *testing.T) {
+	root := t.TempDir()
+	realParent := filepath.Join(root, "real")
+	directoryPath := filepath.Join(realParent, "state")
+	if err := os.MkdirAll(directoryPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasParent := filepath.Join(root, "alias")
+	if err := os.Symlink(realParent, aliasParent); err != nil {
+		t.Skipf("create directory alias: %v", err)
+	}
+
+	direct, err := openAnchoredDirectory(directoryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = direct.close() }()
+	aliased, err := openAnchoredDirectory(filepath.Join(aliasParent, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = aliased.close() }()
+
+	directKey := direct.processLockKey("state.db.init.lock")
+	aliasedKey := aliased.processLockKey("state.db.init.lock")
+	if directKey != aliasedKey {
+		t.Fatalf("alias process lock key = %#v, want %#v", aliasedKey, directKey)
 	}
 }

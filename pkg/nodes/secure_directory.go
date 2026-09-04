@@ -16,22 +16,26 @@ type anchoredProcessLock struct {
 	refs int
 }
 
+type anchoredDirectoryIdentity struct {
+	volume uint64
+	file   uint64
+}
+
+type anchoredProcessLockKey struct {
+	directory anchoredDirectoryIdentity
+	name      string
+}
+
 var anchoredProcessLocks = struct {
 	sync.Mutex
-	entries map[string]*anchoredProcessLock
-}{entries: make(map[string]*anchoredProcessLock)}
+	entries map[anchoredProcessLockKey]*anchoredProcessLock
+}{entries: make(map[anchoredProcessLockKey]*anchoredProcessLock)}
 
 // acquireAnchoredProcessLock serializes blocking file-lock users inside this
 // process. File locks still coordinate separate processes, but their behavior
 // for independently opened descriptors in one process differs across operating
 // systems. The process lock gives callers one consistent critical section.
-func acquireAnchoredProcessLock(directoryPath, name string) (func(), error) {
-	absolutePath, err := filepath.Abs(filepath.Join(directoryPath, name))
-	if err != nil {
-		return nil, err
-	}
-	key := filepath.Clean(absolutePath)
-
+func acquireAnchoredProcessLock(key anchoredProcessLockKey) func() {
 	anchoredProcessLocks.Lock()
 	entry := anchoredProcessLocks.entries[key]
 	if entry == nil {
@@ -53,7 +57,7 @@ func acquireAnchoredProcessLock(directoryPath, name string) (func(), error) {
 			}
 			anchoredProcessLocks.Unlock()
 		})
-	}, nil
+	}
 }
 
 func validateAnchoredName(name string) error {
