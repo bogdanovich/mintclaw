@@ -690,7 +690,7 @@ func (r *nativeControllerRuntime) RefreshWorkspaceEvidence(
 	if agentInstance == nil || agentInstance.ContextBuilder == nil {
 		return codingworkspace.StatusResult{}, frontend.ErrWorkspaceRefreshUnsupported
 	}
-	agentInstance.ContextBuilder.RefreshCodingWorkspace(ctx)
+	agentInstance.ContextBuilder.RefreshCodingWorkspaceSnapshot(ctx)
 	if err := ctx.Err(); err != nil {
 		return codingworkspace.StatusResult{}, err
 	}
