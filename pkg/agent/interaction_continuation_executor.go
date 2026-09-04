@@ -89,7 +89,7 @@ func (e *interactionContinuationExecutor) execute(
 		); repairErr != nil {
 			return turnResult{}, TurnEndStatusError, repairErr
 		}
-		ts.opts.ApprovalGrant = nil
+		ts.consumeApprovalGrant()
 		if outcome.Control == ToolControlBreak && llm.toolResponseDisposition == toolResponseHandled {
 			result, finalizeErr := pipeline.finalizeTurn(
 				turnCtx, ts, exec, llm, TurnEndStatusCompleted, terminalContent{},

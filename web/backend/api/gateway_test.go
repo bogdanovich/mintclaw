@@ -239,7 +239,7 @@ func startGatewayAndCaptureEnv(t *testing.T, h *Handler) gatewayStartEnvSnapshot
 		)
 	}
 
-	pid, err := h.startGatewayLocked("starting", 0)
+	pid, err := h.gateway.startProcess(h.gatewayLaunchOptions(), "starting", 0)
 	if err != nil {
 		t.Fatalf("startGatewayLocked() error = %v", err)
 	}
@@ -331,7 +331,7 @@ func TestStartGatewayLocked_UsesReloadedConfigForBootSignature(t *testing.T) {
 	}
 
 	originalSignature := computeConfigSignature(cfg)
-	pid, err := h.startGatewayLocked("starting", 0)
+	pid, err := h.gateway.startProcess(h.gatewayLaunchOptions(), "starting", 0)
 	if err != nil {
 		t.Fatalf("startGatewayLocked() error = %v", err)
 	}
@@ -357,6 +357,159 @@ func TestStartGatewayLocked_UsesReloadedConfigForBootSignature(t *testing.T) {
 	}
 	if bootSignature != expectedSignature {
 		t.Fatalf("bootConfigSignature = %q, want %q", bootSignature, expectedSignature)
+	}
+}
+
+func TestGatewayManagerSerializesConcurrentStarts(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
+	cfg.ModelList[0].SetAPIKey("test-key")
+	if err := saveTestConfig(configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	execCalls := make(chan struct{}, 2)
+	h.gateway.execCommand = func(_ string, _ ...string) *exec.Cmd {
+		execCalls <- struct{}{}
+		if runtime.GOOS == "windows" {
+			return exec.Command("powershell", "-NoProfile", "-Command", "Start-Sleep -Seconds 30")
+		}
+		return exec.Command("sleep", "30")
+	}
+	t.Cleanup(func() {
+		_, _, _ = h.gateway.stop(false)
+	})
+
+	type startOutcome struct {
+		result gatewayStartResult
+		err    error
+	}
+	outcomes := make(chan startOutcome, 2)
+	discoveryEntered := make(chan struct{}, 2)
+	releaseDiscovery := make(chan struct{}, 2)
+	discover := func() *ppid.PidFileData {
+		discoveryEntered <- struct{}{}
+		<-releaseDiscovery
+		return nil
+	}
+	start := func() {
+		result, err := h.gateway.startConfigured(h.gatewayLaunchOptions(), discover, "starting")
+		outcomes <- startOutcome{result: result, err: err}
+	}
+	go start()
+	<-discoveryEntered
+	go start()
+	select {
+	case <-discoveryEntered:
+		t.Fatal("second PID discovery entered before the first lifecycle operation completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseDiscovery <- struct{}{}
+	<-discoveryEntered
+	releaseDiscovery <- struct{}{}
+
+	first := <-outcomes
+	second := <-outcomes
+	if first.err != nil || second.err != nil {
+		t.Fatalf("concurrent starts returned errors: %v, %v", first.err, second.err)
+	}
+	if first.result.pid <= 0 || second.result.pid != first.result.pid {
+		t.Fatalf("concurrent start PIDs = %d, %d, want one positive PID", first.result.pid, second.result.pid)
+	}
+	if got := len(execCalls); got != 1 {
+		t.Fatalf("gateway command starts = %d, want 1", got)
+	}
+}
+
+func TestGatewayManagerWaitForProcessExitUsesOwnedCompletion(t *testing.T) {
+	manager := NewGatewayProcessManager()
+	command := &exec.Cmd{Process: &os.Process{Pid: 42}}
+	done := make(chan struct{})
+	manager.processAlive = func(*exec.Cmd) bool { return true }
+	manager.mu.Lock()
+	manager.cmd = command
+	manager.cmdDone = done
+	manager.mu.Unlock()
+
+	close(done)
+	if !manager.waitForProcessExit(command, time.Second) {
+		t.Fatal("owned process completion was ignored while the OS liveness probe remained true")
+	}
+}
+
+func TestGatewayProcessLivenessTracksExitedAttachedProcess(t *testing.T) {
+	owned := startLongRunningProcess(t)
+	attachedProcess, err := os.FindProcess(owned.Process.Pid)
+	if err != nil {
+		_ = owned.Process.Kill()
+		_ = owned.Wait()
+		t.Fatalf("FindProcess(%d) error = %v", owned.Process.Pid, err)
+	}
+	attached := &exec.Cmd{Process: attachedProcess}
+	if !isCmdProcessAlive(attached) {
+		_ = owned.Process.Kill()
+		_ = owned.Wait()
+		t.Fatal("attached process reported stopped while running")
+	}
+
+	if err = owned.Process.Kill(); err != nil {
+		t.Fatalf("Kill() error = %v", err)
+	}
+	_ = owned.Wait()
+	if isCmdProcessAlive(attached) {
+		t.Fatal("attached process reported running after exit")
+	}
+}
+
+func TestGatewayManagerStartReplacesCompletedOwnedProcess(t *testing.T) {
+	h := newGatewayStartTestHandler(t)
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
+	cfg.ModelList[0].SetAPIKey("test-key")
+	if err := saveTestConfig(h.configPath, cfg); err != nil {
+		t.Fatalf("saveTestConfig() error = %v", err)
+	}
+	oldCommand := &exec.Cmd{Process: &os.Process{Pid: 42}}
+	done := make(chan struct{})
+	close(done)
+
+	execCalls := 0
+	h.gateway.execCommand = func(_ string, _ ...string) *exec.Cmd {
+		execCalls++
+		return exec.Command(os.Args[0], "-test.run=TestGatewayStartHelperProcess")
+	}
+	h.gateway.processAlive = func(*exec.Cmd) bool { return true }
+	h.gateway.mu.Lock()
+	h.gateway.cmd = oldCommand
+	h.gateway.cmdDone = done
+	h.gateway.owned = true
+	h.gateway.runtimeStatus = "running"
+	h.gateway.mu.Unlock()
+
+	result, err := h.gateway.startConfigured(
+		h.gatewayLaunchOptions(),
+		func() *ppid.PidFileData { return &ppid.PidFileData{PID: oldCommand.Process.Pid} },
+		"starting",
+	)
+	if err != nil {
+		t.Fatalf("startConfigured() error = %v", err)
+	}
+	if execCalls != 1 {
+		t.Fatalf("gateway command starts = %d, want 1", execCalls)
+	}
+	if result.pid <= 0 || result.pid == oldCommand.Process.Pid {
+		t.Fatalf(
+			"startConfigured() PID = %d, want a replacement for completed PID %d",
+			result.pid,
+			oldCommand.Process.Pid,
+		)
+	}
+	if result.attached {
+		t.Fatal("startConfigured() attached to completed owned process")
 	}
 }
 

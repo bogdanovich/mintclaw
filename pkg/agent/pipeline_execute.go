@@ -884,13 +884,14 @@ func (runner *toolLoopRunner) approveToolCall(
 		approvalBypass = true
 		trustedExecution = nil
 	}
+	approvalGrant := ts.currentApprovalGrant()
 	execCtx = toolshared.WithToolApprovalContinuation(
 		execCtx,
-		ts.opts.ApprovalGrant != nil && !approvalBypass,
+		approvalGrant != nil && !approvalBypass,
 	)
 	execCtx = toolshared.WithToolApprovalBypass(execCtx, approvalBypass)
 
-	if (!approvalBypass && p.Interaction.Hooks != nil) || ts.opts.ApprovalGrant != nil {
+	if (!approvalBypass && p.Interaction.Hooks != nil) || approvalGrant != nil {
 		approval := ApprovalDecision{Approved: true}
 		if !approvalBypass && p.Interaction.Hooks != nil {
 			approval = p.Interaction.Hooks.ApproveTool(turnCtx, &ToolApprovalRequest{
@@ -909,7 +910,7 @@ func (runner *toolLoopRunner) approveToolCall(
 		approvalArgs := toolArgs
 		var approvalArgsErr error
 		approvalCanProceed := approval.Approved || approval.RequireHuman
-		if (ts.opts.ApprovalGrant != nil || approval.RequireHuman) && approvalCanProceed {
+		if (approvalGrant != nil || approval.RequireHuman) && approvalCanProceed {
 			approvalArgsErr = toolRegistry.ValidateArguments(toolName, toolArgs)
 			if approvalArgsErr == nil {
 				approvalArgs, approvalArgsErr = toolRegistry.ApprovalArguments(
@@ -931,7 +932,7 @@ func (runner *toolLoopRunner) approveToolCall(
 			}
 		}
 		if denial, safe := tools.SafeApprovalDenialResult(approvalArgsErr); safe {
-			ts.opts.ApprovalGrant = nil
+			ts.consumeApprovalGrant()
 			llm.toolResponseDisposition = toolResponseNeedsModel
 			denyContent := denial.ContentForLLM()
 			p.emitEvent(
@@ -948,7 +949,7 @@ func (runner *toolLoopRunner) approveToolCall(
 			}, toolMessagePersistOnly)
 			return skipToolCall()
 		}
-		if grant := ts.opts.ApprovalGrant; grant != nil {
+		if grant := approvalGrant; grant != nil {
 			var consumeErr error
 			if !approval.Approved && !approval.RequireHuman {
 				consumeErr = fmt.Errorf("current approval policy denied execution: %s", approval.Reason)
@@ -994,7 +995,7 @@ func (runner *toolLoopRunner) approveToolCall(
 				}
 				approval = ApprovalDecision{Reason: reason}
 			} else {
-				ts.opts.ApprovalGrant = nil
+				ts.consumeApprovalGrant()
 				approval = ApprovalDecision{Approved: true}
 			}
 		}
@@ -2589,7 +2590,7 @@ func effectiveToolExecutionID(ts *turnState) string {
 	if ts == nil {
 		return ""
 	}
-	if grant := ts.opts.ApprovalGrant; grant != nil {
+	if grant := ts.currentApprovalGrant(); grant != nil {
 		if executionID := strings.TrimSpace(grant.OriginExecutionID); executionID != "" {
 			return executionID
 		}
