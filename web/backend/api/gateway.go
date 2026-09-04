@@ -975,21 +975,10 @@ func isCmdProcessAlive(cmd *exec.Cmd) bool {
 		return false
 	}
 
-	// Do not read cmd.ProcessState here: exec.Cmd.Wait writes it without using
-	// the manager mutex. The manager's sole waiter clears the tracked command
-	// after exit. Windows does not support Signal(0), so a still-tracked command
-	// is considered alive until that waiter commits the exit transition.
-	if runtime.GOOS == "windows" {
-		return true
-	}
-
-	err := cmd.Process.Signal(syscall.Signal(0))
-	if err == nil {
-		return true
-	}
-	var errno syscall.Errno
-	// EPERM means the process exists but cannot be signaled by this user.
-	return errors.As(err, &errno) && errno == syscall.EPERM
+	// Never read cmd.ProcessState: exec.Cmd.Wait writes it outside the manager
+	// mutex. PID liveness also covers attached processes, which have no Cmd
+	// waiter; on Windows the shared probe uses GetExitCodeProcess.
+	return ppid.ProcessRunning(cmd.Process.Pid)
 }
 
 func (m *GatewayProcessManager) setRuntimeStatusLocked(status string) {

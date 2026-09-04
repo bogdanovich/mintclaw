@@ -440,6 +440,30 @@ func TestGatewayManagerWaitForProcessExitUsesOwnedCompletion(t *testing.T) {
 	}
 }
 
+func TestGatewayProcessLivenessTracksExitedAttachedProcess(t *testing.T) {
+	owned := startLongRunningProcess(t)
+	attachedProcess, err := os.FindProcess(owned.Process.Pid)
+	if err != nil {
+		_ = owned.Process.Kill()
+		_ = owned.Wait()
+		t.Fatalf("FindProcess(%d) error = %v", owned.Process.Pid, err)
+	}
+	attached := &exec.Cmd{Process: attachedProcess}
+	if !isCmdProcessAlive(attached) {
+		_ = owned.Process.Kill()
+		_ = owned.Wait()
+		t.Fatal("attached process reported stopped while running")
+	}
+
+	if err = owned.Process.Kill(); err != nil {
+		t.Fatalf("Kill() error = %v", err)
+	}
+	_ = owned.Wait()
+	if isCmdProcessAlive(attached) {
+		t.Fatal("attached process reported running after exit")
+	}
+}
+
 func TestGatewayManagerStartReplacesCompletedOwnedProcess(t *testing.T) {
 	h := newGatewayStartTestHandler(t)
 	cfg := config.DefaultConfig()
