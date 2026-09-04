@@ -517,10 +517,33 @@ func TestValidateGatewayPidDataRejectsHealthPidMismatchWhenMatcherInconclusive(t
 func TestGatewayStartReady_RejectsUnknownDefaultModel(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.ModelName = "missing-model"
+	cfg.Agents.Defaults.ModelName = cfg.ModelList[0].ModelName
+	cfg.ModelList[0].Enabled = true
+	cfg.ModelList[0].SetAPIKey("test-key")
 	err := saveTestConfig(configPath, cfg)
 	if err != nil {
 		t.Fatalf("saveTestConfig() error = %v", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err = json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	agents, agentsOK := document["agents"].(map[string]any)
+	defaults, defaultsOK := agents["defaults"].(map[string]any)
+	if !agentsOK || !defaultsOK {
+		t.Fatalf("saved config is missing agents.defaults: %#v", document["agents"])
+	}
+	defaults["model_name"] = "missing-model"
+	data, err = json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	h := NewHandler(configPath)
