@@ -914,32 +914,36 @@ func TestProviderChat_DeepSeekDisablesThinkingForMixedProviderToolHistory(t *tes
 		{Role: "tool", ToolCallID: "call_diff", Content: "diff output"},
 	}
 
-	body := p.buildRequestBody(
-		messages,
-		replayTestTools(),
-		"deepseek-v4-flash",
-		map[string]any{"thinking_level": "high"},
-	)
+	for _, level := range []string{"high", "off"} {
+		t.Run(level, func(t *testing.T) {
+			body := p.buildRequestBody(
+				messages,
+				replayTestTools(),
+				"deepseek-v4-flash",
+				map[string]any{"thinking_level": level},
+			)
 
-	thinking, ok := body["thinking"].(map[string]any)
-	if !ok || thinking["type"] != "disabled" {
-		t.Fatalf("thinking = %#v, want explicitly disabled", body["thinking"])
-	}
-	if _, ok := body["reasoning_effort"]; ok {
-		t.Fatalf("reasoning_effort must be absent when compatibility fallback disables thinking")
-	}
-	encoded, err := json.Marshal(body["messages"])
-	if err != nil {
-		t.Fatalf("marshal request messages: %v", err)
-	}
-	var requestMessages []map[string]any
-	if err := json.Unmarshal(encoded, &requestMessages); err != nil {
-		t.Fatalf("decode request messages: %v", err)
-	}
-	for index, message := range requestMessages {
-		if _, exists := message["reasoning_content"]; exists {
-			t.Fatalf("messages[%d] fabricated reasoning_content: %#v", index, message)
-		}
+			thinking, ok := body["thinking"].(map[string]any)
+			if !ok || thinking["type"] != "disabled" {
+				t.Fatalf("thinking = %#v, want explicitly disabled", body["thinking"])
+			}
+			if _, ok := body["reasoning_effort"]; ok {
+				t.Fatalf("reasoning_effort must be absent when compatibility fallback disables thinking")
+			}
+			encoded, err := json.Marshal(body["messages"])
+			if err != nil {
+				t.Fatalf("marshal request messages: %v", err)
+			}
+			var requestMessages []map[string]any
+			if err := json.Unmarshal(encoded, &requestMessages); err != nil {
+				t.Fatalf("decode request messages: %v", err)
+			}
+			for index, message := range requestMessages {
+				if _, exists := message["reasoning_content"]; exists {
+					t.Fatalf("messages[%d] fabricated reasoning_content: %#v", index, message)
+				}
+			}
+		})
 	}
 }
 

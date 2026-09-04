@@ -361,15 +361,15 @@ func (p *Provider) prepareMessagesForRequest(
 	if !p.requiresToolRoundReasoningReplay() || len(tools) == 0 {
 		return stripReasoningMessages(messages), false
 	}
-	if level, ok := normalizedThinkingLevel(options); ok && level == "off" {
-		return stripReasoningMessages(messages), false
-	}
 	if p.supportsThinking() && !reasoningReplayHistoryComplete(messages) {
 		// A fallback provider cannot reconstruct private reasoning emitted by a
 		// different model. DeepSeek rejects that mixed history in thinking mode,
 		// so continue the tool round in non-thinking mode rather than fabricating
 		// reasoning_content or sending a request known to fail with HTTP 400.
 		return stripReasoningMessages(messages), true
+	}
+	if level, ok := normalizedThinkingLevel(options); ok && level == "off" {
+		return stripReasoningMessages(messages), false
 	}
 	return preserveReasoningReplayMessages(messages), false
 }
