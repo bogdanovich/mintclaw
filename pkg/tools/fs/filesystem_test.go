@@ -2,6 +2,7 @@ package fstools
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -506,6 +507,32 @@ func TestFilesystemTool_ListDir_Success(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, "subdir") {
 		t.Errorf("Expected subdir in listing, got: %s", result.ForLLM)
+	}
+}
+
+func TestFilesystemTool_BoundedListDirStopsAtSourceLimits(t *testing.T) {
+	tmpDir := t.TempDir()
+	for index := range 20 {
+		name := fmt.Sprintf("entry-%02d-with-a-long-name.txt", index)
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("content"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tool := NewBoundedListDirTool("", false, 3, 80)
+	result := tool.Execute(t.Context(), map[string]any{"path": tmpDir})
+	if result.IsError {
+		t.Fatalf("bounded list error = %s", result.ContentForLLM())
+	}
+	content := result.ContentForLLM()
+	if len(content) > 80 {
+		t.Fatalf("bounded list bytes = %d, want <= 80", len(content))
+	}
+	if !strings.Contains(content, "[directory listing truncated]") {
+		t.Fatalf("bounded list omitted truncation marker: %q", content)
+	}
+	if strings.Count(content, "FILE: ") > 3 {
+		t.Fatalf("bounded list exceeded entry limit: %q", content)
 	}
 }
 

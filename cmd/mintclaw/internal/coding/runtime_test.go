@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
+	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/config"
@@ -430,6 +431,16 @@ func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.
 		_ = lease.Release()
 		t.Fatal(err)
 	}
+	reviewer, ok := frontendController.(frontend.Reviewer)
+	if !ok {
+		t.Fatal("native coding controller does not expose typed review admission")
+	}
+	if reviewErr := reviewer.Review(
+		t.Context(),
+		codingreview.Target{Kind: codingreview.TargetCurrent},
+	); !errors.Is(reviewErr, frontend.ErrCommandUnsupported) {
+		t.Fatalf("Review() without provider capability error = %v", reviewErr)
+	}
 	refresher, ok := frontendController.(frontend.WorkspaceRefresher)
 	if !ok {
 		t.Fatal("native coding controller does not expose workspace refresh")
@@ -719,12 +730,114 @@ func TestNativeControllerPublishesReadOnlyReviewResult(t *testing.T) {
 	}
 }
 
+func TestNativeReviewReconcilesEvidenceImmediatelyBeforePublication(t *testing.T) {
+	projectRoot := nativeCodingFixtureProject(t)
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "review boundary", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "fixture-alias"
+	metadata.Provider = "fixture"
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lease.Release() }()
+	repository := codingworkspace.NewRepository(projectRoot, project.InvocationCWD, codingworkspace.Limits{})
+	baseline, err := repository.CaptureBaseline(t.Context(), codingworkspace.BaselineRequest{
+		ProjectKey: project.ProjectKey,
+		CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PublishRepositoryBaseline(t.Context(), lease, metadata, baseline); err != nil {
+		t.Fatal(err)
+	}
+	repository, err = codingworkspace.NewRepositoryWithBaseline(
+		projectRoot,
+		project.InvocationCWD,
+		codingworkspace.Limits{},
+		baseline,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedPath := filepath.Join(projectRoot, "calc.go")
+	nativeCodingWriteFile(t, changedPath, "package fixture\n\nfunc Add(a, b int) int { return a * b }\n")
+	executor, err := codingreviewer.New(
+		&reviewCodingProvider{},
+		"fixture-model-id",
+		newNativeReviewerToolset(projectRoot),
+		codingreviewer.Limits{},
+		time.Now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := frontend.NewProjector(metadata.ThreadID, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &nativeControllerRuntime{
+		nativeCodingRuntime: &nativeCodingRuntime{
+			metadata: metadata, repository: repository, reviewer: executor, store: store, lease: lease,
+		},
+		lease: lease, projector: projector,
+	}
+	reviewID := codingreview.NewID()
+	result, err := runtime.RunReview(
+		t.Context(),
+		reviewID,
+		codingreview.Target{Kind: codingreview.TargetCurrent},
+		func(event codingreview.Event) error {
+			if event.Kind == codingreview.EventProgress && event.Progress == "publishing review result" {
+				nativeCodingWriteFile(
+					t,
+					changedPath,
+					"package fixture\n\nfunc Add(a, b int) int { return a - b }\n",
+				)
+			}
+			return nil
+		},
+		func() error { return nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Stale || len(result.Findings) != 1 ||
+		result.Findings[0].LocationState != codingreview.LocationStale {
+		t.Fatalf("publication-boundary result = %#v", result)
+	}
+	persisted, err := store.LoadReviewResultWithLease(t.Context(), lease, metadata, reviewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.Stale || persisted.Findings[0].LocationState != codingreview.LocationStale {
+		t.Fatalf("persisted publication-boundary result = %#v", persisted)
+	}
+}
+
 func TestNativeReviewerToolsetRestrictsReadsToProject(t *testing.T) {
 	projectRoot := t.TempDir()
 	outsideRoot := t.TempDir()
 	secretPath := filepath.Join(outsideRoot, "secret.txt")
 	nativeCodingWriteFile(t, secretPath, "must not escape")
-	toolset := newNativeReviewerToolset(projectRoot, 1024)
+	toolset := newNativeReviewerToolset(projectRoot)
 
 	result := toolset.Execute(t.Context(), "read_file", map[string]any{"path": secretPath})
 	if !result.IsError || strings.Contains(result.Content, "must not escape") {
@@ -733,6 +846,16 @@ func TestNativeReviewerToolsetRestrictsReadsToProject(t *testing.T) {
 	forbidden := toolset.Execute(t.Context(), "exec", map[string]any{"command": "pwd"})
 	if !forbidden.IsError {
 		t.Fatalf("mutation-capable tool result = %#v", forbidden)
+	}
+	largePath := filepath.Join(projectRoot, "large.txt")
+	largeContent := strings.Repeat("a", nativeReviewerFileBytes) + "MUST_NOT_BE_READ"
+	nativeCodingWriteFile(t, largePath, largeContent)
+	bounded := toolset.Execute(t.Context(), "read_file", map[string]any{
+		"path": largePath, "length": nativeReviewerFileBytes * 4,
+	})
+	if bounded.IsError || strings.Contains(bounded.Content, "MUST_NOT_BE_READ") ||
+		len(bounded.Content) > nativeReviewerFileBytes+1024 {
+		t.Fatalf("review read source bound result = %d bytes, error=%t", len(bounded.Content), bounded.IsError)
 	}
 }
 

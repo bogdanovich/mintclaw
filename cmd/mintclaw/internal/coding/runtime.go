@@ -270,10 +270,7 @@ func openNativeCodingRuntime(
 		reviewer, err = codingreviewer.New(
 			provider,
 			providerModel,
-			newNativeReviewerToolset(
-				request.Metadata.Project.ProjectRoot,
-				runtimeCfg.Tools.ReadFile.MaxReadFileSize,
-			),
+			newNativeReviewerToolset(request.Metadata.Project.ProjectRoot),
 			codingreviewer.Limits{},
 			time.Now,
 		)
@@ -331,11 +328,22 @@ type nativeReviewerToolset struct {
 	registry *tools.ToolRegistry
 }
 
-func newNativeReviewerToolset(projectRoot string, maxReadFileSize int) nativeReviewerToolset {
+const (
+	nativeReviewerFileBytes  = 64 << 10
+	nativeReviewerDirEntries = 512
+	nativeReviewerDirBytes   = 64 << 10
+)
+
+func newNativeReviewerToolset(projectRoot string) nativeReviewerToolset {
 	registry := tools.NewToolRegistry()
-	registry.Register(fstools.NewReadFileBytesTool(projectRoot, true, maxReadFileSize))
-	registry.Register(fstools.NewListDirTool(projectRoot, true))
-	registry.Register(fstools.NewSearchFilesTool(projectRoot, true, maxReadFileSize))
+	registry.Register(fstools.NewReadFileBytesTool(projectRoot, true, nativeReviewerFileBytes))
+	registry.Register(fstools.NewBoundedListDirTool(
+		projectRoot,
+		true,
+		nativeReviewerDirEntries,
+		nativeReviewerDirBytes,
+	))
+	registry.Register(fstools.NewSearchFilesTool(projectRoot, true, nativeReviewerFileBytes))
 	return nativeReviewerToolset{registry: registry}
 }
 
@@ -814,6 +822,10 @@ func (r *nativeControllerRuntime) repositoryEvidence() (*codingworkspace.Reposit
 	return r.repository, nil
 }
 
+func (r *nativeControllerRuntime) ReviewAvailable() bool {
+	return r != nil && r.reviewer != nil
+}
+
 func (r *nativeControllerRuntime) RunReview(
 	ctx context.Context,
 	reviewID string,
@@ -873,6 +885,14 @@ func (r *nativeControllerRuntime) RunReview(
 		codingreview.Event{Kind: codingreview.EventProgress, Progress: "publishing review result"},
 	); emitErr != nil {
 		return codingreview.Result{}, emitErr
+	}
+	current = repository.Diff(ctx, target.DiffTarget())
+	if cause := context.Cause(ctx); cause != nil {
+		return codingreview.Result{}, cause
+	}
+	result = codingreviewer.ReconcileEvidence(result, frozen, current)
+	if validationErr := result.ValidateAgainstFrozenDiff(frozen); validationErr != nil {
+		return codingreview.Result{}, fmt.Errorf("coding review final evidence reconciliation: %w", validationErr)
 	}
 	if commitErr := commit(); commitErr != nil {
 		return codingreview.Result{}, commitErr

@@ -1009,7 +1009,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 }
 
 type ListDirTool struct {
-	fs fileSystem
+	fs         fileSystem
+	maxEntries int
+	maxBytes   int
 }
 
 func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Regexp) *ListDirTool {
@@ -1018,6 +1020,21 @@ func NewListDirTool(workspace string, restrict bool, allowPaths ...[]*regexp.Reg
 		patterns = allowPaths[0]
 	}
 	return &ListDirTool{fs: buildFs(workspace, restrict, patterns)}
+}
+
+// NewBoundedListDirTool constructs a list operation that stops reading and
+// formatting once either caller-supplied bound is reached.
+func NewBoundedListDirTool(
+	workspace string,
+	restrict bool,
+	maxEntries int,
+	maxBytes int,
+	allowPaths ...[]*regexp.Regexp,
+) *ListDirTool {
+	tool := NewListDirTool(workspace, restrict, allowPaths...)
+	tool.maxEntries = max(1, maxEntries)
+	tool.maxBytes = max(1, maxBytes)
+	return tool
 }
 
 func (t *ListDirTool) Name() string {
@@ -1051,11 +1068,45 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		path = "."
 	}
 
+	if t.maxEntries > 0 && t.maxBytes > 0 {
+		return t.executeBounded(ctx, path)
+	}
 	entries, err := t.fs.ReadDir(path)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to read directory: %v", err))
 	}
 	return formatDirEntries(entries)
+}
+
+func (t *ListDirTool) executeBounded(ctx context.Context, path string) *ToolResult {
+	if err := context.Cause(ctx); err != nil {
+		return ErrorResult(err.Error())
+	}
+	directory, err := t.fs.Open(path)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to read directory: %v", err))
+	}
+	defer func() { _ = directory.Close() }()
+	reader, ok := directory.(fs.ReadDirFile)
+	if !ok {
+		return ErrorResult("failed to read directory: bounded directory reads are unsupported")
+	}
+	entries, readErr := reader.ReadDir(t.maxEntries)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return ErrorResult(fmt.Sprintf("failed to read directory: %v", readErr))
+	}
+	truncated := false
+	if readErr == nil {
+		extra, extraErr := reader.ReadDir(1)
+		if extraErr != nil && !errors.Is(extraErr, io.EOF) {
+			return ErrorResult(fmt.Sprintf("failed to read directory: %v", extraErr))
+		}
+		truncated = len(extra) != 0
+	}
+	if err := context.Cause(ctx); err != nil {
+		return ErrorResult(err.Error())
+	}
+	return formatBoundedDirEntries(entries, t.maxBytes, truncated)
 }
 
 func formatDirEntries(entries []os.DirEntry) *ToolResult {
@@ -1066,6 +1117,32 @@ func formatDirEntries(entries []os.DirEntry) *ToolResult {
 		} else {
 			result.WriteString("FILE: " + entry.Name() + "\n")
 		}
+	}
+	return NewToolResult(result.String())
+}
+
+func formatBoundedDirEntries(entries []os.DirEntry, maxBytes int, truncated bool) *ToolResult {
+	const marker = "[directory listing truncated]\n"
+	if maxBytes <= len(marker) {
+		return NewToolResult(marker[:maxBytes])
+	}
+	contentLimit := max(0, maxBytes-len(marker))
+	var result strings.Builder
+	result.Grow(min(contentLimit, 4096))
+	for _, entry := range entries {
+		prefix := "FILE: "
+		if entry.IsDir() {
+			prefix = "DIR:  "
+		}
+		line := prefix + strings.ToValidUTF8(entry.Name(), "�") + "\n"
+		if result.Len()+len(line) > contentLimit {
+			truncated = true
+			break
+		}
+		result.WriteString(line)
+	}
+	if truncated {
+		result.WriteString(marker)
 	}
 	return NewToolResult(result.String())
 }

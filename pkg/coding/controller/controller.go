@@ -56,6 +56,10 @@ type reviewRuntime interface {
 	) (codingreview.Result, error)
 }
 
+type reviewAvailability interface {
+	ReviewAvailable() bool
+}
+
 type commandKind uint8
 
 const (
@@ -333,10 +337,13 @@ func (c *Controller) Review(ctx context.Context, target codingreview.Target) err
 	if err := c.enqueue(ctx, request); err != nil {
 		return err
 	}
-	return awaitReviewAdmission(ctx, reply, c.done)
+	return awaitReviewAdmission(reply, c.done)
 }
 
-func awaitReviewAdmission(ctx context.Context, reply <-chan error, done <-chan struct{}) error {
+// awaitReviewAdmission waits for the actor-owned admission decision after the
+// request has been enqueued. The actor rechecks request cancellation before it
+// starts detached review work, so its reply must win any later cancellation.
+func awaitReviewAdmission(reply <-chan error, done <-chan struct{}) error {
 	select {
 	case err := <-reply:
 		return err
@@ -347,8 +354,6 @@ func awaitReviewAdmission(ctx context.Context, reply <-chan error, done <-chan s
 		default:
 			return ErrClosed
 		}
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 
@@ -742,6 +747,15 @@ func (c *Controller) coordinate() {
 			case commandReview:
 				runner, ok := c.runtime.(reviewRuntime)
 				if !ok {
+					request.reply <- ErrUnsupported
+					continue
+				}
+				if err := request.ctx.Err(); err != nil {
+					request.reply <- err
+					continue
+				}
+				if availability, declared := c.runtime.(reviewAvailability); declared &&
+					!availability.ReviewAvailable() {
 					request.reply <- ErrUnsupported
 					continue
 				}

@@ -859,8 +859,44 @@ func TestReviewAdmissionReplyWinsConcurrentClose(t *testing.T) {
 	reply <- nil
 	done := make(chan struct{})
 	close(done)
-	if err := awaitReviewAdmission(t.Context(), reply, done); err != nil {
+	if err := awaitReviewAdmission(reply, done); err != nil {
 		t.Fatalf("accepted review admission error = %v", err)
+	}
+}
+
+func TestCanceledQueuedReviewDoesNotEnterLifecycle(t *testing.T) {
+	runtime := &reviewTestRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		started:         make(chan string, 1),
+		release:         make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	requestCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	reply := make(chan error, 1)
+	controller.commands <- command{
+		kind:         commandReview,
+		ctx:          requestCtx,
+		reviewTarget: codingreview.Target{Kind: codingreview.TargetCurrent},
+		reply:        reply,
+	}
+	if err := <-reply; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled queued review error = %v", err)
+	}
+	select {
+	case reviewID := <-runtime.started:
+		t.Fatalf("canceled review started runtime operation %q", reviewID)
+	default:
+	}
+	snapshot, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Review != nil {
+		t.Fatalf("canceled review entered lifecycle = %#v", snapshot.Review)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 
