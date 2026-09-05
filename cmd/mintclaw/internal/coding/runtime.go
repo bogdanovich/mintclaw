@@ -329,9 +329,12 @@ type nativeReviewerToolset struct {
 }
 
 const (
-	nativeReviewerFileBytes  = 64 << 10
-	nativeReviewerDirEntries = 512
-	nativeReviewerDirBytes   = 64 << 10
+	nativeReviewerFileBytes     = 64 << 10
+	nativeReviewerDirEntries    = 512
+	nativeReviewerDirBytes      = 64 << 10
+	nativeReviewerSearchFiles   = 512
+	nativeReviewerSearchBytes   = 4 << 20
+	nativeReviewerSearchEntries = 4096
 )
 
 func newNativeReviewerToolset(projectRoot string) nativeReviewerToolset {
@@ -343,7 +346,14 @@ func newNativeReviewerToolset(projectRoot string) nativeReviewerToolset {
 		nativeReviewerDirEntries,
 		nativeReviewerDirBytes,
 	))
-	registry.Register(fstools.NewSearchFilesTool(projectRoot, true, nativeReviewerFileBytes))
+	registry.Register(fstools.NewBoundedSearchFilesTool(
+		projectRoot,
+		true,
+		nativeReviewerFileBytes,
+		nativeReviewerSearchFiles,
+		nativeReviewerSearchBytes,
+		nativeReviewerSearchEntries,
+	))
 	return nativeReviewerToolset{registry: registry}
 }
 

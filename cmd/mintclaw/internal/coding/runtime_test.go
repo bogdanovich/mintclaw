@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -856,6 +857,16 @@ func TestNativeReviewerToolsetRestrictsReadsToProject(t *testing.T) {
 	if bounded.IsError || strings.Contains(bounded.Content, "MUST_NOT_BE_READ") ||
 		len(bounded.Content) > nativeReviewerFileBytes+1024 {
 		t.Fatalf("review read source bound result = %d bytes, error=%t", len(bounded.Content), bounded.IsError)
+	}
+	for index := 0; index < nativeReviewerSearchFiles; index++ {
+		nativeCodingWriteFile(t, filepath.Join(projectRoot, fmt.Sprintf("source-%04d.txt", index)), "haystack\n")
+	}
+	search := toolset.Execute(t.Context(), "search_files", map[string]any{
+		"pattern": "missing needle",
+		"path":    ".",
+	})
+	if search.IsError || !strings.Contains(search.Content, "reason=max_file_size,source_file_limit") {
+		t.Fatalf("review search source bound result = %#v", search)
 	}
 }
 
