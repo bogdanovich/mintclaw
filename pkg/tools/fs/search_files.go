@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -12,7 +13,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 )
@@ -22,6 +22,7 @@ const (
 	maxSearchFilesLimit           = 500
 	maxSearchFilesContext         = 10
 	defaultSearchFilesMaxFileSize = 1024 * 1024
+	maxSearchFilesInputBytes      = 64 * 1024 * 1024
 	maxSearchFilesResultBytes     = 16000
 	searchFilesTruncationReserve  = 1024
 )
@@ -44,6 +45,9 @@ func NewSearchFilesTool(
 	}
 	if maxFileSize <= 0 {
 		maxFileSize = defaultSearchFilesMaxFileSize
+	}
+	if maxFileSize > maxSearchFilesInputBytes {
+		maxFileSize = maxSearchFilesInputBytes
 	}
 	return &SearchFilesTool{
 		fs:          buildFs(workspace, restrict, patterns),
@@ -269,6 +273,7 @@ func (t *SearchFilesTool) searchFileNames(
 		t.fs,
 		opts.path,
 		opts.includeIgnored,
+		t.maxFileSize,
 		stats,
 		func(path string, entry os.DirEntry) error {
 			if entry.IsDir() {
@@ -343,6 +348,7 @@ func (t *SearchFilesTool) searchContent(ctx context.Context, opts searchFilesOpt
 		t.fs,
 		opts.path,
 		opts.includeIgnored,
+		t.maxFileSize,
 		stats,
 		func(path string, entry os.DirEntry) error {
 			if entry.IsDir() {
@@ -351,12 +357,12 @@ func (t *SearchFilesTool) searchContent(ctx context.Context, opts searchFilesOpt
 			if opts.fileGlob != "" && !matchGlob(opts.fileGlob, entry.Name(), path) {
 				return nil
 			}
-			data, readErr := t.fs.ReadFile(path)
+			data, tooLarge, readErr := readSearchFileBounded(t.fs, path, t.maxFileSize)
 			if readErr != nil {
 				stats.readSkipped++
 				return errSearchFileSkipped
 			}
-			if len(data) > t.maxFileSize {
+			if tooLarge {
 				stats.maxFileSkipped++
 				return nil
 			}
@@ -786,10 +792,11 @@ func walkSearchFilesWithStats(
 	sysFs fileSystem,
 	root string,
 	includeIgnored bool,
+	maxFileSize int,
 	stats *searchWalkStats,
 	fn func(path string, entry os.DirEntry) error,
 ) error {
-	return walkSearchFilesWithIgnore(ctx, sysFs, root, includeIgnored, gitIgnoreState{}, stats, fn)
+	return walkSearchFilesWithIgnore(ctx, sysFs, root, includeIgnored, maxFileSize, gitIgnoreState{}, stats, fn)
 }
 
 func walkSearchFilesWithIgnore(
@@ -797,28 +804,43 @@ func walkSearchFilesWithIgnore(
 	sysFs fileSystem,
 	root string,
 	includeIgnored bool,
+	maxFileSize int,
 	ignoreState gitIgnoreState,
 	stats *searchWalkStats,
 	fn func(path string, entry os.DirEntry) error,
 ) error {
 	entries, err := sysFs.ReadDir(root)
 	if err != nil {
-		data, readErr := sysFs.ReadFile(root)
-		if readErr != nil {
+		file, openErr := sysFs.Open(root)
+		if openErr != nil {
 			return fmt.Errorf("failed to search path: %w", err)
 		}
+		info, statErr := file.Stat()
+		_ = file.Close()
+		if statErr != nil || info.IsDir() {
+			return fmt.Errorf("failed to search path: %w", err)
+		}
+		entry := fs.FileInfoToDirEntry(info)
 		if !includeIgnored {
-			ignoreState = ignoreState.withGitIgnore(sysFs, filepath.Dir(root))
+			var ignoreSafe bool
+			ignoreState, ignoreSafe = ignoreState.withGitIgnore(sysFs, filepath.Dir(root), maxFileSize)
+			if !ignoreSafe {
+				return fmt.Errorf("failed to search path: .gitignore exceeds the search file-size limit")
+			}
 		}
 		if !includeIgnored && ignoreState.ignored(root, false) {
-			recordIgnoredSearchSkip(stats, root, fakeFileEntry{name: filepath.Base(root), size: int64(len(data))})
+			recordIgnoredSearchSkip(stats, root, entry)
 			return nil
 		}
-		return fn(root, fakeFileEntry{name: filepath.Base(root), size: int64(len(data))})
+		return fn(root, entry)
 	}
 
 	if !includeIgnored {
-		ignoreState = ignoreState.withGitIgnore(sysFs, root)
+		var ignoreSafe bool
+		ignoreState, ignoreSafe = ignoreState.withGitIgnore(sysFs, root, maxFileSize)
+		if !ignoreSafe {
+			return fmt.Errorf("failed to search path: .gitignore exceeds the search file-size limit")
+		}
 	}
 
 	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
@@ -853,6 +875,7 @@ func walkSearchFilesWithIgnore(
 				sysFs,
 				path,
 				includeIgnored,
+				maxFileSize,
 				ignoreState,
 				stats,
 				fn,
@@ -905,10 +928,17 @@ type gitIgnoreRule struct {
 	hasSlash bool
 }
 
-func (s gitIgnoreState) withGitIgnore(sysFs fileSystem, dir string) gitIgnoreState {
-	data, err := sysFs.ReadFile(joinSearchPath(dir, ".gitignore"))
+func (s gitIgnoreState) withGitIgnore(
+	sysFs fileSystem,
+	dir string,
+	maxFileSize int,
+) (gitIgnoreState, bool) {
+	data, tooLarge, err := readSearchFileBounded(sysFs, joinSearchPath(dir, ".gitignore"), maxFileSize)
+	if tooLarge {
+		return s, false
+	}
 	if err != nil || len(data) == 0 {
-		return s
+		return s, true
 	}
 
 	next := gitIgnoreState{rules: append([]gitIgnoreRule(nil), s.rules...)}
@@ -946,7 +976,26 @@ func (s gitIgnoreState) withGitIgnore(sysFs fileSystem, dir string) gitIgnoreSta
 			hasSlash: strings.Contains(pattern, "/"),
 		})
 	}
-	return next
+	return next, true
+}
+
+func readSearchFileBounded(sysFs fileSystem, path string, maxFileSize int) ([]byte, bool, error) {
+	file, err := sysFs.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = file.Close() }()
+	if info, statErr := file.Stat(); statErr == nil && info.Size() > int64(maxFileSize) {
+		return nil, true, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxFileSize)+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(data) > maxFileSize {
+		return nil, true, nil
+	}
+	return data, false, nil
 }
 
 func (s gitIgnoreState) ignored(path string, isDir bool) bool {
@@ -1071,22 +1120,3 @@ func cleanDisplayPath(path string) string {
 	}
 	return filepath.ToSlash(cleaned)
 }
-
-type fakeFileEntry struct {
-	name string
-	size int64
-}
-
-func (f fakeFileEntry) Name() string               { return f.name }
-func (f fakeFileEntry) IsDir() bool                { return false }
-func (f fakeFileEntry) Type() os.FileMode          { return 0 }
-func (f fakeFileEntry) Info() (os.FileInfo, error) { return fakeFileInfo(f), nil }
-
-type fakeFileInfo fakeFileEntry
-
-func (f fakeFileInfo) Name() string       { return f.name }
-func (f fakeFileInfo) Size() int64        { return f.size }
-func (f fakeFileInfo) Mode() os.FileMode  { return 0o600 }
-func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
-func (f fakeFileInfo) IsDir() bool        { return false }
-func (f fakeFileInfo) Sys() any           { return nil }

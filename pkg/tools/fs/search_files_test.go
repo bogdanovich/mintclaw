@@ -565,6 +565,47 @@ func TestSearchFilesTool_ReportsMaxFileSizeSkip(t *testing.T) {
 	)
 }
 
+func TestSearchFilesToolSkipsSparseFileBeforeReading(t *testing.T) {
+	tmpDir := t.TempDir()
+	mustWriteSearchFile(t, tmpDir, "small.txt", "needle\n")
+	sparsePath := filepath.Join(tmpDir, "sparse.txt")
+	sparse, err := os.Create(sparsePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sparse.Truncate(1 << 40); err != nil {
+		_ = sparse.Close()
+		t.Fatal(err)
+	}
+	if err := sparse.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSearchFilesTool(tmpDir, true, 1024)
+	result := tool.Execute(t.Context(), map[string]any{"pattern": "needle", "path": "."})
+	if result.IsError || !strings.Contains(result.ForLLM, "small.txt") ||
+		!strings.Contains(result.ForLLM, "skipped_max_file_size_count=1") {
+		t.Fatalf("sparse-file search result = %#v", result)
+	}
+	explicit := tool.Execute(t.Context(), map[string]any{"pattern": "needle", "path": "sparse.txt"})
+	if explicit.IsError || !strings.Contains(explicit.ForLLM, "skipped_max_file_size_count=1") {
+		t.Fatalf("explicit sparse-file search result = %#v", explicit)
+	}
+}
+
+func TestSearchFilesToolFailsClosedForOversizedGitignore(t *testing.T) {
+	tmpDir := t.TempDir()
+	mustWriteSearchFile(t, tmpDir, ".gitignore", strings.Repeat("ignored-*\n", 20))
+	mustWriteSearchFile(t, tmpDir, "ignored-secret.txt", "needle\n")
+
+	tool := NewSearchFilesTool(tmpDir, true, 32)
+	result := tool.Execute(t.Context(), map[string]any{"pattern": "needle", "path": "."})
+	if !result.IsError || !strings.Contains(result.ForLLM, ".gitignore exceeds") ||
+		strings.Contains(result.ForLLM, "ignored-secret.txt") {
+		t.Fatalf("oversized-gitignore search result = %#v", result)
+	}
+}
+
 func assertSearchTruncation(t *testing.T, output string, wants ...string) {
 	t.Helper()
 	if !strings.Contains(output, "Search truncation:") {
