@@ -54,6 +54,10 @@ func consumeLegacyModelConnectModes(raw any, label string) error {
 		if !exists {
 			continue
 		}
+		if rawMode == nil {
+			delete(model, "connect_mode")
+			continue
+		}
 		mode, ok := rawMode.(string)
 		if !ok {
 			return fmt.Errorf("%s field model_list[%d].connect_mode must be a string", label, index)
