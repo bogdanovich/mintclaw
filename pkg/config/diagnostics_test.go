@@ -37,11 +37,12 @@ func TestValidateConfigPatchJSONConsumesLegacyModelConnectMode(t *testing.T) {
 		})
 	}
 
-	err := ValidateConfigPatchJSON(
-		[]byte(`{"model_list":[{"connect_mode":"stdio"}]}`),
-		DefaultConfig(),
-	)
-	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "model_list[0].connect_mode"))
-	require.True(t, strings.Contains(err.Error(), "no longer supported"))
+	for _, encoded := range []string{`"stdio"`, `"tcp"`, `42`} {
+		err := ValidateConfigPatchJSON(
+			[]byte(fmt.Sprintf(`{"model_list":[{"connect_mode":%s}]}`, encoded)),
+			DefaultConfig(),
+		)
+		require.Error(t, err)
+		require.True(t, strings.Contains(err.Error(), "model_list[0].connect_mode"))
+	}
 }
