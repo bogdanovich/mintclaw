@@ -31,6 +31,13 @@ const (
 type SearchFilesTool struct {
 	fs          fileSystem
 	maxFileSize int
+	limits      searchSourceLimits
+}
+
+type searchSourceLimits struct {
+	files   int
+	bytes   int64
+	entries int
 }
 
 func NewSearchFilesTool(
@@ -53,6 +60,27 @@ func NewSearchFilesTool(
 		fs:          buildFs(workspace, restrict, patterns),
 		maxFileSize: maxFileSize,
 	}
+}
+
+// NewBoundedSearchFilesTool constructs a search whose traversal and source
+// reads stop at aggregate per-call limits. It is intended for constrained
+// callers such as the native coding reviewer; the regular constructor keeps
+// its existing behavior.
+func NewBoundedSearchFilesTool(
+	workspace string,
+	restrict bool,
+	maxFileSize int,
+	maxFiles int,
+	maxBytes int64,
+	maxEntries int,
+) *SearchFilesTool {
+	tool := NewSearchFilesTool(workspace, restrict, maxFileSize)
+	tool.limits = searchSourceLimits{
+		files:   max(1, maxFiles),
+		bytes:   max(1, maxBytes),
+		entries: max(1, maxEntries),
+	}
+	return tool
 }
 
 func (t *SearchFilesTool) Name() string {
@@ -163,6 +191,7 @@ type searchTruncationInfo struct {
 	renderedOmittedSet bool
 	skippedIgnored     int
 	skippedMaxFileSize int
+	skippedSpecial     int
 }
 
 type searchWalkStats struct {
@@ -170,6 +199,12 @@ type searchWalkStats struct {
 	maxFileSkipped   int
 	binarySkipped    int
 	readSkipped      int
+	specialSkipped   int
+	filesVisited     int
+	bytesRead        int64
+	entriesVisited   int
+	sourceLimit      string
+	limits           searchSourceLimits
 	ignoredCandidate func(path string, entry os.DirEntry) bool
 }
 
@@ -259,6 +294,7 @@ func (t *SearchFilesTool) searchFileNames(
 	var matches []string
 	truncation := newSearchTruncationInfo(opts.limit)
 	stats := &searchWalkStats{
+		limits: t.limits,
 		ignoredCandidate: func(path string, entry os.DirEntry) bool {
 			if entry.IsDir() {
 				return false
@@ -294,7 +330,7 @@ func (t *SearchFilesTool) searchFileNames(
 			return nil
 		},
 	)
-	if err != nil && !errors.Is(err, errSearchLimitReached) {
+	if err != nil && !errors.Is(err, errSearchLimitReached) && !errors.Is(err, errSearchSourceLimitReached) {
 		return ErrorResult(err.Error())
 	}
 	sort.Strings(matches)
@@ -340,7 +376,7 @@ func (t *SearchFilesTool) searchContent(ctx context.Context, opts searchFilesOpt
 	fileCounts := map[string]int{}
 	filesOnly := map[string]bool{}
 	filesScanned := 0
-	stats := &searchWalkStats{}
+	stats := &searchWalkStats{limits: t.limits}
 	truncation := newSearchTruncationInfo(opts.limit)
 
 	walkErr := walkSearchFilesWithStats(
@@ -357,8 +393,16 @@ func (t *SearchFilesTool) searchContent(ctx context.Context, opts searchFilesOpt
 			if opts.fileGlob != "" && !matchGlob(opts.fileGlob, entry.Name(), path) {
 				return nil
 			}
-			data, tooLarge, readErr := readSearchFileBounded(t.fs, path, t.maxFileSize)
+			data, tooLarge, readErr := readSearchFileBoundedWithStats(
+				t.fs,
+				path,
+				t.maxFileSize,
+				stats,
+			)
 			if readErr != nil {
+				if errors.Is(readErr, errSearchSourceLimitReached) {
+					return readErr
+				}
 				stats.readSkipped++
 				return errSearchFileSkipped
 			}
@@ -405,7 +449,8 @@ func (t *SearchFilesTool) searchContent(ctx context.Context, opts searchFilesOpt
 			return nil
 		},
 	)
-	if walkErr != nil && !errors.Is(walkErr, errSearchLimitReached) && !errors.Is(walkErr, errSearchFileSkipped) {
+	if walkErr != nil && !errors.Is(walkErr, errSearchLimitReached) &&
+		!errors.Is(walkErr, errSearchFileSkipped) && !errors.Is(walkErr, errSearchSourceLimitReached) {
 		return ErrorResult(walkErr.Error())
 	}
 
@@ -650,6 +695,17 @@ func (i *searchTruncationInfo) addWalkStats(stats *searchWalkStats, includeIgnor
 		i.skippedIgnored = stats.ignoredSkipped
 		i.recomputeOmitted()
 	}
+	if stats.sourceLimit != "" {
+		i.mark(stats.sourceLimit, i.returned, 0, false)
+		i.omittedUnknown = true
+		i.recomputeOmitted()
+	}
+	if stats.specialSkipped > 0 {
+		i.mark("special_files", i.returned, 0, false)
+		i.omittedUnknown = true
+		i.skippedSpecial = stats.specialSkipped
+		i.recomputeOmitted()
+	}
 }
 
 func (i *searchTruncationInfo) hasReason(reason string) bool {
@@ -660,7 +716,7 @@ func (s *searchWalkStats) totalSkipped() int {
 	if s == nil {
 		return 0
 	}
-	return s.ignoredSkipped + s.maxFileSkipped + s.binarySkipped + s.readSkipped
+	return s.ignoredSkipped + s.maxFileSkipped + s.binarySkipped + s.readSkipped + s.specialSkipped
 }
 
 func appendSearchTruncationBlock(
@@ -705,6 +761,9 @@ func truncationBlock(truncation *searchTruncationInfo, opts searchFilesOptions) 
 	}
 	if truncation.skippedMaxFileSize > 0 {
 		fmt.Fprintf(&b, "  skipped_max_file_size_count=%d\n", truncation.skippedMaxFileSize)
+	}
+	if truncation.skippedSpecial > 0 {
+		fmt.Fprintf(&b, "  skipped_special_file_count=%d\n", truncation.skippedSpecial)
 	}
 	b.WriteString("  suggested_narrowing.path=set a narrower path\n")
 	b.WriteString("  suggested_narrowing.file_glob=set file_glob such as *.go or *.md\n")
@@ -783,8 +842,9 @@ func contextAfter(lines []string, idx int, count int) []numberedLine {
 }
 
 var (
-	errSearchLimitReached = fmt.Errorf("search limit reached")
-	errSearchFileSkipped  = fmt.Errorf("search file skipped")
+	errSearchLimitReached       = fmt.Errorf("search limit reached")
+	errSearchFileSkipped        = fmt.Errorf("search file skipped")
+	errSearchSourceLimitReached = fmt.Errorf("search source limit reached")
 )
 
 func walkSearchFilesWithStats(
@@ -809,9 +869,12 @@ func walkSearchFilesWithIgnore(
 	stats *searchWalkStats,
 	fn func(path string, entry os.DirEntry) error,
 ) error {
-	entries, err := sysFs.ReadDir(root)
+	entries, directoryTruncated, err := readSearchDirectory(sysFs, root, stats)
 	if err != nil {
-		file, openErr := sysFs.Open(root)
+		if errors.Is(err, errSearchSourceLimitReached) {
+			return err
+		}
+		file, openErr := openSearchPath(sysFs, root, stats)
 		if openErr != nil {
 			return fmt.Errorf("failed to search path: %w", err)
 		}
@@ -820,10 +883,25 @@ func walkSearchFilesWithIgnore(
 		if statErr != nil || info.IsDir() {
 			return fmt.Errorf("failed to search path: %w", err)
 		}
+		if !info.Mode().IsRegular() {
+			if stats != nil {
+				stats.specialSkipped++
+			}
+			return nil
+		}
 		entry := fs.FileInfoToDirEntry(info)
 		if !includeIgnored {
 			var ignoreSafe bool
-			ignoreState, ignoreSafe = ignoreState.withGitIgnore(sysFs, filepath.Dir(root), maxFileSize)
+			var ignoreErr error
+			ignoreState, ignoreSafe, ignoreErr = ignoreState.withGitIgnore(
+				sysFs,
+				filepath.Dir(root),
+				maxFileSize,
+				stats,
+			)
+			if ignoreErr != nil {
+				return ignoreErr
+			}
 			if !ignoreSafe {
 				return fmt.Errorf("failed to search path: .gitignore exceeds the search file-size limit")
 			}
@@ -832,12 +910,23 @@ func walkSearchFilesWithIgnore(
 			recordIgnoredSearchSkip(stats, root, entry)
 			return nil
 		}
+		if stats != nil && stats.limits.files > 0 {
+			if stats.filesVisited >= stats.limits.files {
+				stats.sourceLimit = "source_file_limit"
+				return errSearchSourceLimitReached
+			}
+			stats.filesVisited++
+		}
 		return fn(root, entry)
 	}
 
 	if !includeIgnored {
 		var ignoreSafe bool
-		ignoreState, ignoreSafe = ignoreState.withGitIgnore(sysFs, root, maxFileSize)
+		var ignoreErr error
+		ignoreState, ignoreSafe, ignoreErr = ignoreState.withGitIgnore(sysFs, root, maxFileSize, stats)
+		if ignoreErr != nil {
+			return ignoreErr
+		}
 		if !ignoreSafe {
 			return fmt.Errorf("failed to search path: .gitignore exceeds the search file-size limit")
 		}
@@ -863,6 +952,19 @@ func walkSearchFilesWithIgnore(
 			recordIgnoredSearchSkip(stats, path, entry)
 			continue
 		}
+		if !entry.IsDir() && !entry.Type().IsRegular() {
+			if stats != nil {
+				stats.specialSkipped++
+			}
+			continue
+		}
+		if !entry.IsDir() && stats != nil && stats.limits.files > 0 {
+			if stats.filesVisited >= stats.limits.files {
+				stats.sourceLimit = "source_file_limit"
+				return errSearchSourceLimitReached
+			}
+			stats.filesVisited++
+		}
 		if err := fn(path, entry); err != nil {
 			if errors.Is(err, errSearchFileSkipped) {
 				continue
@@ -884,7 +986,60 @@ func walkSearchFilesWithIgnore(
 			}
 		}
 	}
+	if directoryTruncated {
+		return errSearchSourceLimitReached
+	}
 	return nil
+}
+
+func readSearchDirectory(
+	sysFs fileSystem,
+	root string,
+	stats *searchWalkStats,
+) ([]os.DirEntry, bool, error) {
+	if stats == nil || stats.limits.entries <= 0 {
+		entries, err := sysFs.ReadDir(root)
+		return entries, false, err
+	}
+	remaining := stats.limits.entries - stats.entriesVisited
+	if remaining <= 0 {
+		stats.sourceLimit = "source_entry_limit"
+		return nil, false, errSearchSourceLimitReached
+	}
+	file, err := openSearchPath(sysFs, root, stats)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.IsDir() {
+		return nil, false, fmt.Errorf("search path is not a directory")
+	}
+	directory, ok := file.(fs.ReadDirFile)
+	if !ok {
+		return nil, false, fmt.Errorf("bounded search cannot stream directory entries")
+	}
+	entries, err := directory.ReadDir(remaining + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, false, err
+	}
+	truncated := len(entries) > remaining
+	if truncated {
+		entries = entries[:remaining]
+		stats.sourceLimit = "source_entry_limit"
+	}
+	stats.entriesVisited += len(entries)
+	return entries, truncated, nil
+}
+
+func openSearchPath(sysFs fileSystem, path string, stats *searchWalkStats) (fs.File, error) {
+	if stats != nil && (stats.limits.files > 0 || stats.limits.bytes > 0 || stats.limits.entries > 0) {
+		return sysFs.OpenNonBlocking(path)
+	}
+	return sysFs.Open(path)
 }
 
 func recordIgnoredSearchSkip(stats *searchWalkStats, path string, entry os.DirEntry) {
@@ -932,13 +1087,28 @@ func (s gitIgnoreState) withGitIgnore(
 	sysFs fileSystem,
 	dir string,
 	maxFileSize int,
-) (gitIgnoreState, bool) {
-	data, tooLarge, err := readSearchFileBounded(sysFs, joinSearchPath(dir, ".gitignore"), maxFileSize)
-	if tooLarge {
-		return s, false
+	stats *searchWalkStats,
+) (gitIgnoreState, bool, error) {
+	data, tooLarge, err := readSearchFileBoundedWithStats(
+		sysFs,
+		joinSearchPath(dir, ".gitignore"),
+		maxFileSize,
+		stats,
+	)
+	if errors.Is(err, errSearchSourceLimitReached) {
+		return s, false, err
 	}
-	if err != nil || len(data) == 0 {
-		return s, true
+	if tooLarge {
+		return s, false, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return s, true, nil
+	}
+	if err != nil {
+		return s, false, err
+	}
+	if len(data) == 0 {
+		return s, true, nil
 	}
 
 	next := gitIgnoreState{rules: append([]gitIgnoreRule(nil), s.rules...)}
@@ -976,21 +1146,54 @@ func (s gitIgnoreState) withGitIgnore(
 			hasSlash: strings.Contains(pattern, "/"),
 		})
 	}
-	return next, true
+	return next, true, nil
 }
 
-func readSearchFileBounded(sysFs fileSystem, path string, maxFileSize int) ([]byte, bool, error) {
-	file, err := sysFs.Open(path)
+func readSearchFileBoundedWithStats(
+	sysFs fileSystem,
+	path string,
+	maxFileSize int,
+	stats *searchWalkStats,
+) ([]byte, bool, error) {
+	file, err := openSearchPath(sysFs, path, stats)
 	if err != nil {
 		return nil, false, err
 	}
 	defer func() { _ = file.Close() }()
-	if info, statErr := file.Stat(); statErr == nil && info.Size() > int64(maxFileSize) {
-		return nil, true, nil
+	remaining := int64(maxFileSize + 1)
+	if stats != nil && stats.limits.bytes > 0 {
+		remaining = stats.limits.bytes - stats.bytesRead
+		if remaining <= 0 {
+			stats.sourceLimit = "source_byte_limit"
+			return nil, false, errSearchSourceLimitReached
+		}
 	}
-	data, err := io.ReadAll(io.LimitReader(file, int64(maxFileSize)+1))
+	if info, statErr := file.Stat(); statErr == nil {
+		if !info.Mode().IsRegular() {
+			if stats != nil {
+				stats.specialSkipped++
+			}
+			return nil, false, nil
+		}
+		if info.Size() > int64(maxFileSize) {
+			return nil, true, nil
+		}
+		if info.Size() > remaining {
+			stats.sourceLimit = "source_byte_limit"
+			return nil, false, errSearchSourceLimitReached
+		}
+	}
+	readLimit := min(int64(maxFileSize)+1, remaining)
+	data, err := io.ReadAll(io.LimitReader(file, readLimit))
 	if err != nil {
 		return nil, false, err
+	}
+	if stats != nil {
+		stats.bytesRead += int64(len(data))
+		if stats.limits.bytes > 0 && int64(len(data)) == remaining {
+			stats.sourceLimit = "source_byte_limit"
+			return nil, false, errSearchSourceLimitReached
+		}
 	}
 	if len(data) > maxFileSize {
 		return nil, true, nil

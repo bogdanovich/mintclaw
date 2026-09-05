@@ -606,6 +606,40 @@ func TestSearchFilesToolFailsClosedForOversizedGitignore(t *testing.T) {
 	}
 }
 
+func TestBoundedSearchFilesToolStopsAtAggregateSourceLimits(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxFiles   int
+		maxBytes   int64
+		maxEntries int
+		wantReason string
+	}{
+		{name: "files", maxFiles: 1, maxBytes: 1024, maxEntries: 100, wantReason: "source_file_limit"},
+		{name: "bytes", maxFiles: 100, maxBytes: 8, maxEntries: 100, wantReason: "source_byte_limit"},
+		{name: "entries", maxFiles: 100, maxBytes: 1024, maxEntries: 1, wantReason: "source_entry_limit"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			mustWriteSearchFile(t, root, "a.txt", "absent\n")
+			mustWriteSearchFile(t, root, "b.txt", "absent\n")
+			tool := NewBoundedSearchFilesTool(
+				root,
+				true,
+				64,
+				test.maxFiles,
+				test.maxBytes,
+				test.maxEntries,
+			)
+			result := tool.Execute(t.Context(), map[string]any{"pattern": "needle", "path": "."})
+			if result.IsError {
+				t.Fatalf("bounded search failed: %s", result.ForLLM)
+			}
+			assertSearchTruncation(t, result.ForLLM, "reason="+test.wantReason, "omitted_count=unknown")
+		})
+	}
+}
+
 func assertSearchTruncation(t *testing.T, output string, wants ...string) {
 	t.Helper()
 	if !strings.Contains(output, "Search truncation:") {

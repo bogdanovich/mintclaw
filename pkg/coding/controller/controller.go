@@ -42,16 +42,22 @@ type workspaceEvidenceRefresher interface {
 	RefreshWorkspaceEvidence(context.Context) (codingworkspace.StatusResult, error)
 }
 
-// reviewRuntime returns only after a valid result has crossed its durable
-// selected-thread publication boundary. The controller remains the sole owner
-// of frontend lifecycle projection.
+// reviewRuntime validates its result, calls the supplied commit function
+// immediately before durable selected-thread publication, and returns only
+// after publication. The controller linearizes commit against cancellation and
+// remains the sole owner of frontend lifecycle projection.
 type reviewRuntime interface {
 	RunReview(
 		context.Context,
 		string,
 		codingreview.Target,
 		func(codingreview.Event) error,
+		func() error,
 	) (codingreview.Result, error)
+}
+
+type reviewAvailability interface {
+	ReviewAvailable() bool
 }
 
 type commandKind uint8
@@ -117,19 +123,25 @@ const (
 )
 
 type operationResult struct {
-	id       uint64
-	kind     operationKind
-	request  command
-	status   codingworkspace.StatusResult
-	diff     codingworkspace.DiffResult
-	review   codingreview.Result
-	reviewID string
-	err      error
+	id              uint64
+	kind            operationKind
+	request         command
+	status          codingworkspace.StatusResult
+	diff            codingworkspace.DiffResult
+	review          codingreview.Result
+	reviewID        string
+	reviewCommitted bool
+	err             error
 }
 
 type reviewOperationEvent struct {
 	reviewID string
 	event    codingreview.Event
+}
+
+type reviewCommitRequest struct {
+	reviewID string
+	reply    chan error
 }
 
 type evidenceOperation struct {
@@ -149,6 +161,7 @@ type Controller struct {
 	results         chan operationResult
 	evidenceResults chan operationResult
 	reviewEvents    chan reviewOperationEvent
+	reviewCommits   chan reviewCommitRequest
 	done            chan struct{}
 	closeMu         sync.Mutex
 	closeErr        error
@@ -173,6 +186,7 @@ func New(projector *frontend.Projector, runtime Runtime) (*Controller, error) {
 		results:         make(chan operationResult, 1),
 		evidenceResults: make(chan operationResult),
 		reviewEvents:    make(chan reviewOperationEvent),
+		reviewCommits:   make(chan reviewCommitRequest),
 		done:            make(chan struct{}),
 	}
 	go controller.coordinate()
@@ -323,10 +337,13 @@ func (c *Controller) Review(ctx context.Context, target codingreview.Target) err
 	if err := c.enqueue(ctx, request); err != nil {
 		return err
 	}
-	return awaitReviewAdmission(ctx, reply, c.done)
+	return awaitReviewAdmission(reply, c.done)
 }
 
-func awaitReviewAdmission(ctx context.Context, reply <-chan error, done <-chan struct{}) error {
+// awaitReviewAdmission waits for the actor-owned admission decision after the
+// request has been enqueued. The actor rechecks request cancellation before it
+// starts detached review work, so its reply must win any later cancellation.
+func awaitReviewAdmission(reply <-chan error, done <-chan struct{}) error {
 	select {
 	case err := <-reply:
 		return err
@@ -337,8 +354,6 @@ func awaitReviewAdmission(ctx context.Context, reply <-chan error, done <-chan s
 		default:
 			return ErrClosed
 		}
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 
@@ -420,6 +435,7 @@ func (c *Controller) coordinate() {
 	var reviewing bool
 	var activeReviewID string
 	var reviewCancelCause error
+	var reviewCommitted bool
 	var closing bool
 	var operationCancel context.CancelCauseFunc
 	var activeEvidence *evidenceOperation
@@ -503,6 +519,16 @@ func (c *Controller) coordinate() {
 			if reviewing && update.reviewID == activeReviewID {
 				_ = c.projector.ReviewEvent(update.reviewID, update.event)
 			}
+		case request := <-c.reviewCommits:
+			switch {
+			case !reviewing || request.reviewID != activeReviewID:
+				request.reply <- fmt.Errorf("coding review publication is no longer active")
+			case reviewCancelCause != nil:
+				request.reply <- reviewCancelCause
+			default:
+				reviewCommitted = true
+				request.reply <- nil
+			}
 		case result := <-c.evidenceResults:
 			if activeEvidence == nil || activeEvidence.id != result.id {
 				continue
@@ -541,12 +567,19 @@ func (c *Controller) coordinate() {
 			case operationCompaction:
 				compacting = false
 			case operationReview:
-				if result.reviewID == activeReviewID && reviewCancelCause != nil {
+				if result.err == nil && !result.reviewCommitted {
+					result.err = fmt.Errorf("coding review returned before publication commit")
+				}
+				if result.reviewID == activeReviewID && result.reviewCommitted != reviewCommitted {
+					result.err = errors.Join(result.err, fmt.Errorf("coding review publication state mismatch"))
+				}
+				if result.reviewID == activeReviewID && !reviewCommitted && reviewCancelCause != nil {
 					result.err = errors.Join(result.err, reviewCancelCause)
 				}
 				reviewing = false
 				activeReviewID = ""
 				reviewCancelCause = nil
+				reviewCommitted = false
 				if result.err != nil {
 					c.projector.ReviewInterrupted(result.reviewID)
 				} else if err := c.projector.ReviewCompleted(result.review); err != nil {
@@ -600,6 +633,10 @@ func (c *Controller) coordinate() {
 				}
 			case commandInterrupt:
 				if reviewing {
+					if reviewCommitted {
+						request.reply <- nil
+						continue
+					}
 					reviewCancelCause = context.Canceled
 					if operationCancel != nil {
 						operationCancel(context.Canceled)
@@ -614,6 +651,10 @@ func (c *Controller) coordinate() {
 				request.reply <- c.runtime.Interrupt(request.ctx)
 			case commandHardCancel:
 				if reviewing {
+					if reviewCommitted {
+						request.reply <- nil
+						continue
+					}
 					reviewCancelCause = ErrHardCanceled
 					if operationCancel != nil {
 						operationCancel(ErrHardCanceled)
@@ -709,6 +750,15 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrUnsupported
 					continue
 				}
+				if err := request.ctx.Err(); err != nil {
+					request.reply <- err
+					continue
+				}
+				if availability, declared := c.runtime.(reviewAvailability); declared &&
+					!availability.ReviewAvailable() {
+					request.reply <- ErrUnsupported
+					continue
+				}
 				switch {
 				case active:
 					request.reply <- ErrTurnActive
@@ -728,6 +778,7 @@ func (c *Controller) coordinate() {
 					}
 					reviewing = true
 					activeReviewID = reviewID
+					reviewCommitted = false
 					operationCtx, cancel := context.WithCancelCause(rootCtx)
 					operationCancel = cancel
 					go c.runReview(operationCtx, runner, reviewID, request.reviewTarget)
@@ -747,10 +798,12 @@ func (c *Controller) coordinate() {
 						operationCancel(ErrHardCanceled)
 					}
 				} else if (compacting || reviewing) && operationCancel != nil {
-					if reviewing {
+					if reviewing && !reviewCommitted {
 						reviewCancelCause = context.Canceled
+						operationCancel(context.Canceled)
+					} else if compacting {
+						operationCancel(context.Canceled)
 					}
-					operationCancel(context.Canceled)
 				}
 				if activeEvidence != nil {
 					activeEvidence.cancel(context.Canceled)
@@ -808,10 +861,43 @@ func (c *Controller) runReview(
 			return recordEmitError(ErrClosed)
 		}
 	}
-	result, err := runner.RunReview(ctx, reviewID, target, emit)
+	var commitMu sync.Mutex
+	commitCalled := false
+	committed := false
+	commit := func() error {
+		commitMu.Lock()
+		if commitCalled {
+			commitMu.Unlock()
+			return fmt.Errorf("coding review publication commit was already requested")
+		}
+		commitCalled = true
+		commitMu.Unlock()
+		request := reviewCommitRequest{reviewID: reviewID, reply: make(chan error, 1)}
+		select {
+		case c.reviewCommits <- request:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-c.done:
+			return ErrClosed
+		}
+		// Once the coordinator accepts the request, its reply is the
+		// linearization result. A concurrent cancellation must not race and
+		// overwrite an already accepted publication commit.
+		err := <-request.reply
+		if err == nil {
+			commitMu.Lock()
+			committed = true
+			commitMu.Unlock()
+		}
+		return err
+	}
+	result, err := runner.RunReview(ctx, reviewID, target, emit, commit)
 	emitMu.Lock()
 	err = errors.Join(err, emitErr)
 	emitMu.Unlock()
+	commitMu.Lock()
+	resultCommitted := committed
+	commitMu.Unlock()
 	if err == nil {
 		switch {
 		case result.ReviewID != reviewID:
@@ -823,7 +909,7 @@ func (c *Controller) runReview(
 		}
 	}
 	c.results <- operationResult{
-		kind: operationReview, reviewID: reviewID, review: result, err: err,
+		kind: operationReview, reviewID: reviewID, review: result, reviewCommitted: resultCommitted, err: err,
 	}
 }
 
