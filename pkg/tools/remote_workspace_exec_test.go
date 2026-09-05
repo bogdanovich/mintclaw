@@ -98,10 +98,20 @@ func TestWorkspaceExecResolvesGenerationBoundSourcePerCall(t *testing.T) {
 		factoryCalls++
 		return current, nil
 	})
+	workspace := cfg.Execution.RemoteWorkspaces["project"]
+	workspace.Target = "replacement"
+	workspace.WorkingScope = "widened"
+	workspace.Revision = "mutated-v2"
+	cfg.Execution.RemoteWorkspaces["project"] = workspace
+	cfg.Execution.Targets["build"] = config.ExecutionTarget{Type: "node", Node: "replacement-node"}
+	cfg.Agents.Defaults.TargetPolicy.AllowedTargets = []string{"replacement"}
 	result := tool.Execute(nodeInvocationTestContext("owner", "workspace-exec-fresh-source"), map[string]any{
 		"remote_workspace": "project", "executable": "go", "args": []any{"version"}, "mode": "foreground",
 	})
-	if result.IsError || factoryCalls != 1 || current.dispatchCalls != 1 || stale.dispatchCalls != 0 {
+	payload := decodeNodeResult(t, result)
+	if result.IsError || payload["target"] != "build" ||
+		payload["remote_workspace_revision"] != "project-workspace-v1" ||
+		factoryCalls != 1 || current.dispatchCalls != 1 || stale.dispatchCalls != 0 {
 		t.Fatalf(
 			"fresh source result = %#v; factory=%d current=%d stale=%d",
 			result,

@@ -61,6 +61,7 @@ type TurnCleanupTool interface {
 
 type nodeTargetApprovalBypassProvider interface {
 	approvalBypassOwner() toolshared.Tool
+	approvalBypassesTarget(string) bool
 }
 
 // TrustedToolExecution binds approval provenance to the exact tool instance
@@ -372,7 +373,7 @@ func (r *ToolRegistry) TrustedNodeApprovalBypassTarget(
 		return "", nil, false
 	}
 	target, ok := args["target"].(string)
-	if !ok || target == "" {
+	if !ok || target == "" || !provider.approvalBypassesTarget(target) {
 		return "", nil, false
 	}
 	return target, &TrustedToolExecution{

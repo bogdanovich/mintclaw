@@ -1388,7 +1388,7 @@ func TestToolApprovalBypassRequiresTrustedNodeTool(t *testing.T) {
 	cfg.Tools.Approval.BypassNodeTargets = []string{"vpn"}
 	arguments := map[string]any{"target": "vpn"}
 	registry := tools.NewToolRegistry()
-	registry.Register(tools.NewNodeInvokeTool(nil, nil))
+	registry.Register(tools.NewNodeInvokeTool(tools.NewNodeToolOptions(cfg), nil))
 
 	if bypass, _ := toolApprovalBypass(cfg, registry, "nodes_invoke", arguments); !bypass {
 		t.Fatal("trusted node tool did not receive the configured target bypass")
@@ -1403,6 +1403,18 @@ func TestToolApprovalBypassRequiresTrustedNodeTool(t *testing.T) {
 	}
 	if bypass, _ := toolApprovalBypass(cfg, registry, "nodes_invoke", map[string]any{}); bypass {
 		t.Fatal("node tool without an explicit target received the configured bypass")
+	}
+	cfg.Tools.Approval.BypassNodeTargets = []string{"approval-test"}
+	if bypass, _ := toolApprovalBypass(cfg, registry, "nodes_invoke", arguments); !bypass {
+		t.Fatal("retained node tool lost its snapshotted target bypass")
+	}
+	if bypass, _ := toolApprovalBypass(
+		cfg,
+		registry,
+		"nodes_invoke",
+		map[string]any{"target": "approval-test"},
+	); bypass {
+		t.Fatal("mutable config widened the retained node tool bypass")
 	}
 
 	registry.Register(&replacementNodeTool{})

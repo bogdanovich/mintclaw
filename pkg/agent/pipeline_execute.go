@@ -47,11 +47,8 @@ func toolApprovalBypass(
 	if registry == nil {
 		return false, nil
 	}
-	target, execution, trusted := registry.TrustedNodeApprovalBypassTarget(toolName, arguments)
+	_, execution, trusted := registry.TrustedNodeApprovalBypassTarget(toolName, arguments)
 	if !trusted {
-		return false, nil
-	}
-	if !cfg.Tools.Approval.BypassesNodeTarget(target) {
 		return false, nil
 	}
 	return true, execution

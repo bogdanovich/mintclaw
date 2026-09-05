@@ -23,7 +23,7 @@ func TestBindNodeFileMediaOwnerUsesExactActorAndRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := tools.NewToolRegistry()
-	registry.Register(tools.NewNodeUploadTool(nil, nil))
+	registry.Register(tools.NewNodeUploadTool(tools.NewNodeToolOptions(nil), nil))
 	ts := &turnState{
 		agent:     &AgentInstance{ID: "main", Tools: registry},
 		workspace: "/workspace/main",
@@ -105,7 +105,7 @@ func TestProjectNodeFileMediaAttachmentsExposesOpaqueRefWithoutGatewayPath(t *te
 		t.Fatal(err)
 	}
 	registry := tools.NewToolRegistry()
-	registry.Register(tools.NewNodeUploadTool(nil, nil))
+	registry.Register(tools.NewNodeUploadTool(tools.NewNodeToolOptions(nil), nil))
 	ts := &turnState{agent: &AgentInstance{ID: "main", Tools: registry}}
 	messages := projectNodeFileMediaAttachments(
 		[]providers.Message{{Role: "user", Content: "upload this", Media: []string{ref}}},
