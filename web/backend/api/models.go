@@ -227,6 +227,10 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = r.Body.Close() }()
+	if err = config.ValidateModelConfigJSON(body); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid model config: %v", err), http.StatusBadRequest)
+		return
+	}
 
 	type custom struct {
 		config.ModelConfig
@@ -297,6 +301,10 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = r.Body.Close() }()
+	if err = config.ValidateModelConfigJSON(body); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid model config: %v", err), http.StatusBadRequest)
+		return
+	}
 
 	var rawFields map[string]json.RawMessage
 	if err = json.Unmarshal(body, &rawFields); err != nil {
