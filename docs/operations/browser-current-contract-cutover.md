@@ -5,7 +5,7 @@ Status: pre-deployment evidence
 Audit date: 2026-08-20
 
 This record covers B1 of the
-[Architecture Simplification Roadmap](../architecture/architecture-simplification-roadmap.md).
+[Architecture Simplification Roadmap](../architecture/archive/architecture-simplification-roadmap.md).
 It verifies that historical browser schema implementations can be deleted
 without converting executable production authority.
 

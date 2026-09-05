@@ -6,6 +6,11 @@ this companion requires and selects v2. Integer adapters remain only in
 gateway-side readers that must accept drained v1 plans until a zero-v1 deployed
 state audit permits their removal.
 
+The local production canary is deployed on v2. Two connected external nodes
+remain on v1, so the bounded gateway compatibility reader is still required;
+see the
+[Node JSON Canonicalization V2 Cutover](../operations/node-json-canonicalization-v2-cutover.md).
+
 ## Numeric representation
 
 Node protocol v2 canonical JSON keeps the existing UTF-8 JSON encoding,

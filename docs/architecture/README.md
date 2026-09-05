@@ -4,13 +4,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 
 - [Steering](steering.md): injecting messages into a running agent loop between tool calls.
 - [Codex-Style Steering Roadmap](codex-style-steering-roadmap.md): incompatible replacement of pending-tool classification with same-turn post-batch user-input steering.
-- [Architecture Simplification Roadmap](architecture-simplification-roadmap.md):
-  canonical internal contracts, bounded additive wire compatibility, removal
-  of historical fallback paths, browser/task/delivery ownership consolidation,
-  AgentLoop decomposition, and an in-process coding frontend.
-- [Code Health Roadmap](code-health-roadmap.md): focused correctness,
-  ownership, coupling, frontend, protocol, and legacy cleanup packets for the
-  current post-simplification architecture.
+- [Code Health Architecture State](code-health.md): current ownership,
+  compatibility boundaries, and guardrails after the completed simplification
+  and code-health programs.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
 - [Local Coding Agent P2.2 Project Instructions](local-coding-agent-p2-project-instructions.md): one-file AGENTS/CLAUDE fallback selection, root-to-cwd scope precedence, bounded late-discovery barriers, cache invalidation, and symlink safety.
@@ -125,6 +121,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 
 ## Archived Plans
 
+- [Architecture Simplification Roadmap](archive/architecture-simplification-roadmap.md): completed canonical-contract,
+  ownership-consolidation, legacy-removal, and coding-frontend program.
+- [Code Health Roadmap](archive/code-health-roadmap.md): completed correctness,
+  ownership, coupling, frontend, protocol, and legacy-cleanup program.
 - [Current Refactoring Audit](current-refactoring-audit.md): superseded July 2026 static audit retained as implementation
   history.
 - [Reliability and Refactoring Roadmap](archive/reliability-refactoring-roadmap.md): completed durability, security,
