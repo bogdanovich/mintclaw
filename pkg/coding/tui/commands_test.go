@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
@@ -21,6 +22,17 @@ type evidenceController struct {
 	status codingworkspace.StatusResult
 	diff   codingworkspace.DiffResult
 	target codingworkspace.DiffTarget
+}
+
+type reviewController struct {
+	*fakeController
+	target codingreview.Target
+	err    error
+}
+
+func (controller *reviewController) Review(_ context.Context, target codingreview.Target) error {
+	controller.target = target
+	return controller.err
 }
 
 func (controller *evidenceController) RepositoryStatus(
@@ -98,6 +110,108 @@ func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 	if command != nil || model.ComposerValue() != "/status unexpected" || model.err == nil ||
 		!strings.Contains(model.err.Error(), "does not accept arguments") {
 		t.Fatalf("malformed status state: draft=%q err=%v command=%v", model.ComposerValue(), model.err, command)
+	}
+}
+
+func TestSlashReviewUsesTypedTargetAndRendersCurrentState(t *testing.T) {
+	controller := &reviewController{fakeController: newController(t)}
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.composer.SetValue("/review base main -- focus on cancellation")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || model.commandPanel != commandPanelReview || model.pendingSlashCommand != "review" {
+		t.Fatalf(
+			"review admission = command=%v panel=%v pending=%q",
+			command,
+			model.commandPanel,
+			model.pendingSlashCommand,
+		)
+	}
+	model = updateModel(t, model, command())
+	want := codingreview.Target{
+		Kind: codingreview.TargetBase, Ref: "main", Instructions: "focus on cancellation",
+	}
+	if controller.target != want || model.pendingSlashCommand != "" {
+		t.Fatalf("review target = %#v, pending=%q", controller.target, model.pendingSlashCommand)
+	}
+	state := codingreview.State{Target: want, Phase: codingreview.PhaseProgress, Progress: "inspecting changes"}
+	model.snapshot.Review = &state
+	for _, text := range []string{"Local code review", "target: base main", "phase: progress", "inspecting changes"} {
+		if !strings.Contains(model.commandPanelView(), text) {
+			t.Fatalf("review panel omits %q: %s", text, model.commandPanelView())
+		}
+	}
+}
+
+func TestSlashReviewAdmissionFailureClosesWaitingPanel(t *testing.T) {
+	controller := &reviewController{fakeController: newController(t), err: frontend.ErrCommandUnsupported}
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.composer.SetValue("/review")
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*Model)
+	if command == nil || model.commandPanel != commandPanelReview {
+		t.Fatalf("review waiting panel = command=%v panel=%v", command, model.commandPanel)
+	}
+	model = updateModel(t, model, command())
+	if model.commandPanel != commandPanelNone || model.err == nil ||
+		!strings.Contains(model.err.Error(), "current provider") {
+		t.Fatalf("failed review panel = %v, error=%v", model.commandPanel, model.err)
+	}
+}
+
+func TestSlashReviewTargetValidation(t *testing.T) {
+	tests := []struct {
+		input string
+		want  codingreview.Target
+		err   string
+	}{
+		{input: "", want: codingreview.Target{Kind: codingreview.TargetCurrent}},
+		{
+			input: "current -- security",
+			want:  codingreview.Target{Kind: codingreview.TargetCurrent, Instructions: "security"},
+		},
+		{input: "commit HEAD~1", want: codingreview.Target{Kind: codingreview.TargetCommit, Ref: "HEAD~1"}},
+		{input: "base", err: "requires one local ref"},
+		{input: "current main", err: "does not accept a ref"},
+		{input: "mystery", err: "target must be"},
+	}
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			got, err := slashReviewTarget(test.input)
+			if test.err != "" {
+				if err == nil || !strings.Contains(err.Error(), test.err) {
+					t.Fatalf("slashReviewTarget(%q) error = %v", test.input, err)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("slashReviewTarget(%q) = %#v, %v", test.input, got, err)
+			}
+		})
+	}
+}
+
+func TestReviewActivityIsInterruptible(t *testing.T) {
+	controller := newController(t)
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.snapshot.Activity = frontend.ActivityReviewing
+	updated, command := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = updated.(*Model)
+	if command == nil || !model.interruptPending {
+		t.Fatalf("review interrupt = command=%v pending=%v", command, model.interruptPending)
+	}
+	_ = command()
+	if controller.interrupts.Load() != 1 {
+		t.Fatalf("review interrupt calls = %d", controller.interrupts.Load())
 	}
 }
 

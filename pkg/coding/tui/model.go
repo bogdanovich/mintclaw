@@ -328,6 +328,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case CommandResultMsg:
 		m.pendingSlashCommand = ""
 		if message.Err != nil {
+			if message.Operation == "review" {
+				m.commandPanel = commandPanelNone
+				m.commandPanelOffset = 0
+			}
 			m.err = slashCommandError(message.Operation, message.Err)
 		} else {
 			m.err = nil
@@ -784,7 +788,7 @@ func (m *Model) handleInterrupt() (tea.Model, tea.Cmd) {
 
 func activeWork(activity frontend.Activity) bool {
 	return activity == frontend.ActivityRunning || activity == frontend.ActivityCompacting ||
-		activity == frontend.ActivityInterrupting
+		activity == frontend.ActivityReviewing || activity == frontend.ActivityInterrupting
 }
 
 func nextSnapshotCmd(

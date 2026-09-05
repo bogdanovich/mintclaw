@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
@@ -22,6 +23,7 @@ const (
 	commandPanelStatus
 	commandPanelModel
 	commandPanelDiff
+	commandPanelReview
 )
 
 type parsedSlashCommand struct {
@@ -142,6 +144,25 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		}
 		m.workspaceNotice = "repository diff loading"
 		return true, repositoryDiffCmd(m.ctx, reader, target, m.beginEvidenceRequest())
+	case "/review":
+		target, err := slashReviewTarget(command.args)
+		if err != nil {
+			m.err = err
+			return true, nil
+		}
+		reviewer, ok := m.controller.(frontend.Reviewer)
+		if !ok {
+			m.err = errors.New("native code review is unavailable for this controller")
+			return true, nil
+		}
+		m.commandPanel = commandPanelReview
+		m.commandPanelOffset = 0
+		m.err = nil
+		m.clearCommandDraft()
+		m.pendingSlashCommand = "review"
+		return true, typedCommandCmd(m.ctx, "review", func(ctx context.Context) error {
+			return reviewer.Review(ctx, target)
+		})
 	case "/compact":
 		if !noArgs() {
 			return true, nil
@@ -219,6 +240,36 @@ func slashDiffTarget(args string) (codingworkspace.DiffTarget, error) {
 	return target, nil
 }
 
+func slashReviewTarget(args string) (codingreview.Target, error) {
+	scope, instructions, separated := strings.Cut(args, "--")
+	if !separated {
+		scope = args
+		instructions = ""
+	}
+	fields := strings.Fields(scope)
+	target := codingreview.Target{Kind: codingreview.TargetCurrent, Instructions: strings.TrimSpace(instructions)}
+	if len(fields) > 0 {
+		target.Kind = codingreview.TargetKind(strings.ToLower(fields[0]))
+	}
+	switch target.Kind {
+	case codingreview.TargetCurrent:
+		if len(fields) > 1 {
+			return codingreview.Target{}, errors.New("/review current does not accept a ref")
+		}
+	case codingreview.TargetBase, codingreview.TargetCommit:
+		if len(fields) != 2 {
+			return codingreview.Target{}, fmt.Errorf("/review %s requires one local ref", target.Kind)
+		}
+		target.Ref = fields[1]
+	default:
+		return codingreview.Target{}, errors.New("/review target must be current, base, or commit")
+	}
+	if err := target.Validate(); err != nil {
+		return codingreview.Target{}, fmt.Errorf("/review: %w", err)
+	}
+	return target, nil
+}
+
 func (m *Model) clearCommandDraft() {
 	m.composer.Reset()
 	m.historyIndex = -1
@@ -237,6 +288,8 @@ func slashCommandError(operation string, err error) error {
 			return errors.New("thread rename is unavailable; the current title is unchanged")
 		case "archive", "unarchive":
 			return fmt.Errorf("thread %s is unavailable; lifecycle state is unchanged", operation)
+		case "review":
+			return errors.New("native code review is unavailable for the current provider")
 		}
 	}
 	return fmt.Errorf("%s command: %w", operation, err)
@@ -294,11 +347,11 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"/status            show live thread and workspace status",
 			"/model             show the current model and provider",
 			"/diff [target]     show bounded hunks for current, base, or commit",
+			"/review [target] [-- instructions]  run a read-only local review",
 			"/attach <paths…>   attach local files to the draft",
 			"/compact           start real context compaction when idle",
 			"/rename <title>    request a thread title change",
-			"/archive           hide this thread from the active catalog",
-			"/unarchive         return this thread to the active catalog",
+			"/archive | /unarchive  hide or restore this thread in the active catalog",
 			"/new               request a new coding thread",
 			"/exit              close the controller and exit",
 			"",
@@ -318,6 +371,11 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 		}, "\n")
 	case commandPanelDiff:
 		return diffPanelContent(snapshot)
+	case commandPanelReview:
+		if snapshot.Review == nil {
+			return "Local code review\nphase: waiting for admission"
+		}
+		return codingreview.RenderStatePlain(*snapshot.Review)
 	default:
 		return ""
 	}
