@@ -89,7 +89,7 @@ func machineJSONRequested(args []string) bool {
 	hasJSON := false
 	for _, arg := range args {
 		switch arg {
-		case "doctor", "nodes", "agent", "code", "resume", "threads":
+		case "doctor", "nodes", "agent", "code", "resume", "review", "threads":
 			hasJSONCommand = true
 		case "--json":
 			hasJSON = true
@@ -110,7 +110,7 @@ func codingFrontendRequested(args []string) bool {
 		if strings.HasPrefix(arg, "-") {
 			continue
 		}
-		return arg == "code" || arg == "resume"
+		return arg == "code" || arg == "resume" || arg == "review"
 	}
 	return false
 }

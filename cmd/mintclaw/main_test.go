@@ -104,6 +104,7 @@ func TestCodingFrontendRequested(t *testing.T) {
 	}{
 		{name: "code", args: []string{"code"}, want: true},
 		{name: "resume", args: []string{"--no-color", "resume", "thread-id"}, want: true},
+		{name: "review", args: []string{"review", "--last"}, want: true},
 		{name: "other", args: []string{"status"}, want: false},
 		{name: "prompt word", args: []string{"agent", "-m", "resume"}, want: false},
 	}
