@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -51,6 +53,19 @@ func TestForkThreadAtHistoricalTurnPublishesIndependentRestartableHistory(t *tes
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sourceLease.Release() })
+	parentReview := codingreview.Result{
+		SchemaVersion: codingreview.SchemaVersion, ReviewID: codingreview.NewID(),
+		Target: codingreview.Target{Kind: codingreview.TargetCurrent}, EvidenceGeneration: "parent-generation",
+		Summary: "Visible only in the parent.", CompletedAt: time.Now().UTC(),
+	}
+	parentDiff := codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1, RepositoryAvailable: true,
+		Target:             codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		EvidenceGeneration: "parent-generation",
+	}
+	if err := store.PublishReviewResult(t.Context(), sourceLease, source, parentReview, parentDiff); err != nil {
+		t.Fatal(err)
+	}
 
 	targetID := NewThreadID()
 	child, result, err := store.ForkThread(t.Context(), sourceLease, ForkOptions{
@@ -86,6 +101,11 @@ func TestForkThreadAtHistoricalTurnPublishesIndependentRestartableHistory(t *tes
 	childLease, err := store.AcquireLease(child.ThreadID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if latest, ok, loadErr := store.LoadLatestReviewResultWithLease(
+		t.Context(), childLease, child,
+	); loadErr != nil || ok || latest.ReviewID != "" {
+		t.Fatalf("fork copied parent review authority = %#v, ok=%t, error=%v", latest, ok, loadErr)
 	}
 	if err := store.AppendUserMessage(t.Context(), childLease, child, "child only"); err != nil {
 		t.Fatal(err)

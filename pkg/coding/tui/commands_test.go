@@ -146,6 +146,35 @@ func TestSlashReviewUsesTypedTargetAndRendersCurrentState(t *testing.T) {
 	}
 }
 
+func TestCompletedReviewOpensDisplayOnlyPanelOnResume(t *testing.T) {
+	controller := newController(t)
+	result := codingreview.Result{
+		SchemaVersion:      codingreview.SchemaVersion,
+		ReviewID:           codingreview.NewID(),
+		Target:             codingreview.Target{Kind: codingreview.TargetCurrent},
+		EvidenceGeneration: "generation-1",
+		Summary:            "Restored without rerunning.",
+		CompletedAt:        time.Now().UTC(),
+	}
+	if err := controller.ReviewRestored(result); err != nil {
+		t.Fatal(err)
+	}
+	model, err := newTestModel(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.commandPanel != commandPanelReview || model.pendingSlashCommand != "" {
+		t.Fatalf(
+			"restored review panel = %v pending=%q",
+			model.commandPanel,
+			model.pendingSlashCommand,
+		)
+	}
+	if content := model.commandPanelView(); !strings.Contains(content, "Restored without rerunning.") {
+		t.Fatalf("restored review panel content = %q", content)
+	}
+}
+
 func TestSlashReviewAdmissionFailureClosesWaitingPanel(t *testing.T) {
 	controller := &reviewController{fakeController: newController(t), err: frontend.ErrCommandUnsupported}
 	model, err := newTestModel(controller)

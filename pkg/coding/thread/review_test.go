@@ -12,6 +12,7 @@ import (
 
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 func TestStorePublishesImmutableReviewResultUnderThreadLease(t *testing.T) {
@@ -72,6 +73,10 @@ func TestStorePublishesImmutableReviewResultUnderThreadLease(t *testing.T) {
 	if err != nil || loaded.ReviewID != result.ReviewID || loaded.Summary != result.Summary {
 		t.Fatalf("loaded review = %#v, %v", loaded, err)
 	}
+	latest, ok, err := store.LoadLatestReviewResultWithLease(t.Context(), lease, metadata)
+	if err != nil || !ok || !reflect.DeepEqual(latest, result) {
+		t.Fatalf("latest review = %#v, ok=%t, error=%v", latest, ok, err)
+	}
 	if err := store.PublishReviewResult(
 		t.Context(),
 		lease,
@@ -95,6 +100,184 @@ func TestStorePublishesImmutableReviewResultUnderThreadLease(t *testing.T) {
 	)
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("review result file = %#v, %v", info, err)
+	}
+}
+
+func TestStoreLatestReviewPointerAdvancesAndSurvivesCompactionMetadata(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := ResolveProject(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdAt := time.Date(2026, time.September, 5, 1, 0, 0, 0, time.UTC)
+	metadata, err := NewMetadata(NewThreadID(), project, "review recovery", createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	diff := codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1, RepositoryAvailable: true,
+		Target:             codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		EvidenceGeneration: "generation-1",
+	}
+	first := codingreview.Result{
+		SchemaVersion: codingreview.SchemaVersion, ReviewID: codingreview.NewID(),
+		Target: codingreview.Target{Kind: codingreview.TargetCurrent}, EvidenceGeneration: "generation-1",
+		Summary: "First result.", CompletedAt: createdAt.Add(time.Minute),
+	}
+	second := first.Clone()
+	second.ReviewID = codingreview.NewID()
+	second.Summary = "Second result."
+	second.CompletedAt = createdAt.Add(2 * time.Minute)
+	for _, result := range []codingreview.Result{first, second} {
+		if err := store.PublishReviewResult(t.Context(), lease, metadata, result, diff); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metadata.Compaction = &Compaction{At: createdAt.Add(3 * time.Minute), Revision: 7}
+	metadata.UpdatedAt = metadata.Compaction.At
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	latest, ok, err := store.LoadLatestReviewResultWithLease(t.Context(), lease, metadata)
+	if err != nil || !ok || !reflect.DeepEqual(latest, second) {
+		t.Fatalf("latest review after compaction = %#v, ok=%t, error=%v", latest, ok, err)
+	}
+	originalWriteReview := store.writeReview
+	third := second.Clone()
+	third.ReviewID = codingreview.NewID()
+	third.Summary = "Must not become latest."
+	third.CompletedAt = createdAt.Add(4 * time.Minute)
+	store.writeReview = func(pinned *os.Root, name string, data []byte, mode os.FileMode) error {
+		if err := originalWriteReview(pinned, name, data, mode); err != nil {
+			return err
+		}
+		if err := pinned.Link(name, name+".extra-link"); err != nil {
+			return err
+		}
+		return &fileutil.CommittedWriteError{Err: errors.New("injected temporary-link cleanup failure")}
+	}
+	publishErr := store.PublishReviewResult(t.Context(), lease, metadata, third, diff)
+	store.writeReview = originalWriteReview
+	if publishErr == nil || fileutil.IsCommittedWriteError(publishErr) ||
+		!strings.Contains(publishErr.Error(), "verify warned immutable result") {
+		t.Fatalf("unsafe warned result publication error = %v", publishErr)
+	}
+	latest, ok, err = store.LoadLatestReviewResultWithLease(t.Context(), lease, metadata)
+	if err != nil || !ok || !reflect.DeepEqual(latest, second) {
+		t.Fatalf("unsafe warned result advanced latest = %#v, ok=%t, error=%v", latest, ok, err)
+	}
+	pointerPath := filepath.Join(
+		root, "coding", "threads", metadata.ThreadID, repositoryDirectory, reviewDirectory, reviewLatestFileName,
+	)
+	if err := os.WriteFile(pointerPath, bytes.Repeat([]byte{'x'}, maxReviewIndexBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.LoadLatestReviewResultWithLease(t.Context(), lease, metadata); err == nil ||
+		!strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized latest review pointer error = %v", err)
+	}
+}
+
+func TestStoreLatestReviewIsAbsentUntilCompletedResultPublication(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := ResolveProject(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewMetadata(NewThreadID(), project, "no completed review", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	result, ok, err := store.LoadLatestReviewResultWithLease(t.Context(), lease, metadata)
+	if err != nil || ok || result.ReviewID != "" {
+		t.Fatalf("review before completion = %#v, ok=%t, error=%v", result, ok, err)
+	}
+}
+
+func TestStoreDoesNotClassifyReviewDirectoryCreationAsPublishedResult(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := ResolveProject(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewMetadata(NewThreadID(), project, "first review", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	result := codingreview.Result{
+		SchemaVersion: codingreview.SchemaVersion, ReviewID: codingreview.NewID(),
+		Target: codingreview.Target{Kind: codingreview.TargetCurrent}, EvidenceGeneration: "generation-1",
+		Summary: "Must not be advertised.", CompletedAt: time.Now().UTC(),
+	}
+	diff := codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1, RepositoryAvailable: true,
+		Target:             codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		EvidenceGeneration: "generation-1",
+	}
+	originalSyncRoot := store.syncRoot
+	injected := errors.New("injected reviews parent sync failure")
+	store.syncRoot = func(pinned *os.Root) error {
+		if filepath.Base(pinned.Name()) == repositoryDirectory {
+			return injected
+		}
+		return originalSyncRoot(pinned)
+	}
+	publishErr := store.PublishReviewResult(t.Context(), lease, metadata, result, diff)
+	store.syncRoot = originalSyncRoot
+	if publishErr == nil || fileutil.IsCommittedWriteError(publishErr) || !errors.Is(publishErr, injected) {
+		t.Fatalf("pre-publication directory error = %v", publishErr)
+	}
+	latest, ok, loadErr := store.LoadLatestReviewResultWithLease(t.Context(), lease, metadata)
+	if loadErr != nil || ok || latest.ReviewID != "" {
+		t.Fatalf("directory-only commit advertised review = %#v, ok=%t, error=%v", latest, ok, loadErr)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(
+		threadRoot, repositoryDirectory, reviewDirectory, result.ReviewID+".json",
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("result file exists after directory-only commit: %v", err)
 	}
 }
 

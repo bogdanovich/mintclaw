@@ -848,6 +848,31 @@ func (p *Projector) ReviewCompleted(result codingreview.Result) error {
 	return nil
 }
 
+// ReviewRestored projects one previously completed durable review without
+// recreating live review-task authority.
+func (p *Projector) ReviewRestored(result codingreview.Result) error {
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	p.mutate(func(state *ThreadSnapshot) {
+		copy := result.Clone()
+		phase := codingreview.PhaseCompleted
+		if result.Stale {
+			phase = codingreview.PhaseStale
+		}
+		state.Review = &codingreview.State{
+			ReviewID: result.ReviewID,
+			Target:   result.Target,
+			Phase:    phase,
+			Findings: append([]codingreview.Finding(nil), result.Findings...),
+			Result:   &copy,
+		}
+		state.Activity = ActivityIdle
+		state.Status = "completed repository review restored"
+	})
+	return nil
+}
+
 func (p *Projector) ReviewInterrupted(reviewID string) {
 	p.mutate(func(state *ThreadSnapshot) {
 		if state.Review == nil || state.Review.ReviewID != reviewID ||

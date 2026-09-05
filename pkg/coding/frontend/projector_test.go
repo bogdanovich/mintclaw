@@ -74,6 +74,31 @@ func TestReviewProjectionRejectsInvalidEventsAndIgnoresMismatchedCompletion(t *t
 	}
 }
 
+func TestReviewRestoredProjectsCompletedStateWithoutLiveAuthority(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	result := codingreview.Result{
+		SchemaVersion:      codingreview.SchemaVersion,
+		ReviewID:           codingreview.NewID(),
+		Target:             codingreview.Target{Kind: codingreview.TargetCurrent},
+		EvidenceGeneration: "generation-1",
+		Summary:            "Restored result.",
+		CompletedAt:        time.Now().UTC(),
+	}
+	if err := projector.ReviewRestored(result); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := snapshotForTest(t, projector)
+	if snapshot.Activity != ActivityIdle || snapshot.Review == nil ||
+		snapshot.Review.Phase != codingreview.PhaseCompleted || snapshot.Review.Result == nil ||
+		snapshot.Review.Result.ReviewID != result.ReviewID {
+		t.Fatalf("restored review projection = %#v", snapshot.Review)
+	}
+	result.Summary = "caller mutation"
+	if stable := snapshotForTest(t, projector); stable.Review.Result.Summary != "Restored result." {
+		t.Fatal("restored review aliases caller state")
+	}
+}
+
 func TestWorkspaceUpdateDoesNotAliasCallerOrConsumerState(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	workspace := codingworkspace.Snapshot{

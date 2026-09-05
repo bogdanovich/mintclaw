@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -38,6 +39,12 @@ type blockingCodingProvider struct {
 type reviewCodingProvider struct {
 	mu    sync.Mutex
 	calls []reviewProviderCall
+}
+
+type blockingReviewProvider struct {
+	started chan struct{}
+	once    sync.Once
+	calls   atomic.Int32
 }
 
 type reviewProviderCall struct {
@@ -87,6 +94,25 @@ func (provider *reviewCodingProvider) Calls() []reviewProviderCall {
 	result := make([]reviewProviderCall, len(provider.calls))
 	copy(result, provider.calls)
 	return result
+}
+
+func (provider *blockingReviewProvider) Chat(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.calls.Add(1)
+	provider.once.Do(func() { close(provider.started) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (*blockingReviewProvider) GetDefaultModel() string { return "fixture-model-id" }
+
+func (*blockingReviewProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{CallerMediatedTools: true}
 }
 
 func (p *blockingCodingProvider) Chat(
@@ -728,6 +754,211 @@ func TestNativeControllerPublishesReadOnlyReviewResult(t *testing.T) {
 	}
 	if history := readHistory(t, stateRoot, metadata.SessionKey); len(history) != 0 {
 		t.Fatalf("review wrote hidden canonical transcript messages: %#v", history)
+	}
+	restartLease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := newNativeCodingControllerWithDependencies(
+		codingTurnRequest{Store: store, Lease: restartLease, Metadata: metadata},
+		true,
+		frontend.ProjectionLimits{},
+		dependencies,
+		time.Now,
+	)
+	if err != nil {
+		_ = restartLease.Release()
+		t.Fatal(err)
+	}
+	restartedSnapshot, err := restarted.Snapshot(t.Context())
+	if err != nil {
+		_ = restarted.Close(t.Context())
+		t.Fatal(err)
+	}
+	if restartedSnapshot.Activity != frontend.ActivityIdle || restartedSnapshot.Review == nil ||
+		restartedSnapshot.Review.Phase != codingreview.PhaseCompleted || restartedSnapshot.Review.Result == nil ||
+		restartedSnapshot.Review.Result.ReviewID != snapshot.Review.ReviewID {
+		_ = restarted.Close(t.Context())
+		t.Fatalf("review after restart = %#v", restartedSnapshot.Review)
+	}
+	if len(provider.Calls()) != 1 {
+		_ = restarted.Close(t.Context())
+		t.Fatalf("completed review reran after restart: calls=%d", len(provider.Calls()))
+	}
+	if err := restarted.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	nativeCodingWriteFile(
+		t,
+		filepath.Join(projectRoot, "calc.go"),
+		"package fixture\n\nfunc Add(a, b int) int { return a - b }\n",
+	)
+	staleLease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleController, err := newNativeCodingControllerWithDependencies(
+		codingTurnRequest{Store: store, Lease: staleLease, Metadata: metadata},
+		true,
+		frontend.ProjectionLimits{},
+		dependencies,
+		time.Now,
+	)
+	if err != nil {
+		_ = staleLease.Release()
+		t.Fatal(err)
+	}
+	staleSnapshot, err := staleController.Snapshot(t.Context())
+	if err != nil {
+		_ = staleController.Close(t.Context())
+		t.Fatal(err)
+	}
+	if staleSnapshot.Review == nil || staleSnapshot.Review.Phase != codingreview.PhaseStale ||
+		staleSnapshot.Review.Result == nil || !staleSnapshot.Review.Result.Stale ||
+		staleSnapshot.Review.Result.Findings[0].LocationState != codingreview.LocationStale ||
+		staleSnapshot.Review.Result.Findings[0].StartLine != 0 {
+		_ = staleController.Close(t.Context())
+		t.Fatalf("review after repository changed = %#v", staleSnapshot.Review)
+	}
+	if len(provider.Calls()) != 1 {
+		_ = staleController.Close(t.Context())
+		t.Fatalf("stale review reran after restart: calls=%d", len(provider.Calls()))
+	}
+	if err := staleController.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInterruptedNativeReviewDoesNotRerunAfterRestart(t *testing.T) {
+	projectRoot := nativeCodingFixtureProject(t)
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "interrupted review", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "fixture-alias"
+	metadata.Provider = "fixture"
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := codingworkspace.NewRepository(
+		project.ProjectRoot,
+		project.InvocationCWD,
+		codingworkspace.Limits{},
+	).CaptureBaseline(t.Context(), codingworkspace.BaselineRequest{
+		ProjectKey: project.ProjectKey,
+		CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	if err := store.PublishRepositoryBaseline(t.Context(), lease, metadata, baseline); err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	provider := &blockingReviewProvider{started: make(chan struct{})}
+	dependencies := nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return nativeCodingFixtureConfig(), nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			return provider, "fixture-model-id", nil
+		},
+	}
+	frontendController, err := newNativeCodingControllerWithDependencies(
+		codingTurnRequest{Store: store, Lease: lease, Metadata: metadata},
+		true,
+		frontend.ProjectionLimits{},
+		dependencies,
+		time.Now,
+	)
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	reviewer := frontendController.(frontend.Reviewer)
+	if err := reviewer.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent}); err != nil {
+		_ = frontendController.Close(t.Context())
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		_ = frontendController.Close(t.Context())
+		t.Fatal("native review provider did not start")
+	}
+	if err := frontendController.Interrupt(t.Context()); err != nil {
+		_ = frontendController.Close(t.Context())
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		snapshot, snapshotErr := frontendController.Snapshot(t.Context())
+		if snapshotErr != nil {
+			_ = frontendController.Close(t.Context())
+			t.Fatal(snapshotErr)
+		}
+		if snapshot.Review != nil && snapshot.Review.Phase == codingreview.PhaseInterrupted {
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = frontendController.Close(t.Context())
+			t.Fatalf("interrupted review did not settle: %#v", snapshot.Review)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := frontendController.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	restartLease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, ok, loadErr := store.LoadLatestReviewResultWithLease(
+		t.Context(), restartLease, metadata,
+	); loadErr != nil || ok || result.ReviewID != "" {
+		_ = restartLease.Release()
+		t.Fatalf("interrupted review became durable = %#v, ok=%t, error=%v", result, ok, loadErr)
+	}
+	restarted, err := newNativeCodingControllerWithDependencies(
+		codingTurnRequest{Store: store, Lease: restartLease, Metadata: metadata},
+		true,
+		frontend.ProjectionLimits{},
+		dependencies,
+		time.Now,
+	)
+	if err != nil {
+		_ = restartLease.Release()
+		t.Fatal(err)
+	}
+	restartedSnapshot, err := restarted.Snapshot(t.Context())
+	if err != nil {
+		_ = restarted.Close(t.Context())
+		t.Fatal(err)
+	}
+	if restartedSnapshot.Review != nil || restartedSnapshot.Activity != frontend.ActivityIdle {
+		_ = restarted.Close(t.Context())
+		t.Fatalf("interrupted review restored live authority: %#v", restartedSnapshot.Review)
+	}
+	if provider.calls.Load() != 1 {
+		_ = restarted.Close(t.Context())
+		t.Fatalf("interrupted review reran after restart: calls=%d", provider.calls.Load())
+	}
+	if err := restarted.Close(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 

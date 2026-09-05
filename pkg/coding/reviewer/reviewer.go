@@ -553,6 +553,46 @@ func ReconcileEvidence(result review.Result, frozen, current workspace.DiffResul
 	return result
 }
 
+// ReconcileRestoredEvidence converts current locations to historical ones
+// when repository evidence changed after an immutable review was published.
+func ReconcileRestoredEvidence(result review.Result, current workspace.DiffResult) review.Result {
+	if restoredEvidenceMatches(result, current) {
+		return result
+	}
+	result.Stale = true
+	for index := range result.Findings {
+		finding := &result.Findings[index]
+		if finding.LocationState != review.LocationCurrent {
+			continue
+		}
+		if safeStalePath(finding.Path) {
+			finding.LocationState = review.LocationStale
+			finding.StartLine = 0
+			finding.EndLine = 0
+		} else {
+			finding.LocationState = review.LocationUnlocated
+			finding.Path = ""
+			finding.StartLine = 0
+			finding.EndLine = 0
+		}
+	}
+	result.Diagnostic = joinDiagnostic(result.Diagnostic, "repository evidence changed since review completion")
+	return result
+}
+
+func restoredEvidenceMatches(result review.Result, current workspace.DiffResult) bool {
+	if result.Stale || current.SchemaVersion != workspace.RepositoryDiffSchemaV1 ||
+		!current.RepositoryAvailable || current.UnavailableReason != "" ||
+		current.Target != result.Target.DiffTarget() {
+		return false
+	}
+	if result.Target.Kind == review.TargetCommit {
+		return current.ResolvedRevision == result.ResolvedRevision
+	}
+	return !current.Stale && current.EvidenceGeneration == result.EvidenceGeneration &&
+		current.ResolvedRevision == result.ResolvedRevision && current.MergeBase == result.MergeBase
+}
+
 func evidenceMatches(target review.Target, frozen, current workspace.DiffResult) bool {
 	if current.SchemaVersion != workspace.RepositoryDiffSchemaV1 || !current.RepositoryAvailable ||
 		current.UnavailableReason != "" || current.Target != frozen.Target {
