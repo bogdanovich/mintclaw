@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 
@@ -74,7 +73,7 @@ type shellExecInput struct {
 	Script         string            `json:"script"`
 	CWD            string            `json:"cwd"`
 	Env            map[string]string `json:"env"`
-	TimeoutSeconds float64           `json:"timeout_seconds"`
+	TimeoutSeconds int               `json:"timeout_seconds"`
 }
 
 type shellExecRuntime struct {
@@ -293,12 +292,11 @@ func (handler *shellExecHandler) prepare(plan nodes.ExecutionPlan) (ShellBrokerR
 	}
 	if input.Profile != handler.profile.Alias ||
 		input.TimeoutSeconds <= 0 ||
-		input.TimeoutSeconds > float64(handler.profile.TimeoutSecondsMax) ||
-		input.TimeoutSeconds > float64(plan.TimeoutSeconds) ||
-		math.Trunc(input.TimeoutSeconds) != input.TimeoutSeconds {
+		input.TimeoutSeconds > handler.profile.TimeoutSecondsMax ||
+		input.TimeoutSeconds > plan.TimeoutSeconds {
 		return ShellBrokerRequest{}, errors.New("shell.exec profile or timeout is invalid")
 	}
-	timeoutSeconds := int(input.TimeoutSeconds)
+	timeoutSeconds := input.TimeoutSeconds
 	modelInput := map[string]any{
 		"profile": input.Profile, "script": input.Script, "cwd": input.CWD,
 		"env": stringMapToAny(input.Env), "timeout_seconds": timeoutSeconds,

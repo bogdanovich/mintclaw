@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"slices"
 	"strings"
@@ -310,23 +309,14 @@ func decodeJobIDInput(raw json.RawMessage) (jobIDInput, error) {
 }
 
 func decodeJobLogsInput(raw json.RawMessage) (jobLogsInput, error) {
-	var wire struct {
-		JobID      string  `json:"job_id"`
-		Stream     string  `json:"stream"`
-		Cursor     float64 `json:"cursor"`
-		LimitBytes float64 `json:"limit_bytes"`
-	}
-	if err := decodeStrictJSON(raw, &wire); err != nil || !validJobID(wire.JobID) ||
-		(wire.Stream != "stdout" && wire.Stream != "stderr") ||
-		wire.Cursor < 0 || wire.Cursor > nodes.MaxJobLogBytes || math.Trunc(wire.Cursor) != wire.Cursor ||
-		wire.LimitBytes < 1 || wire.LimitBytes > nodes.MaxJobLogChunkBytes ||
-		math.Trunc(wire.LimitBytes) != wire.LimitBytes {
+	var input jobLogsInput
+	if err := decodeStrictJSON(raw, &input); err != nil || !validJobID(input.JobID) ||
+		(input.Stream != "stdout" && input.Stream != "stderr") ||
+		input.Cursor < 0 || input.Cursor > nodes.MaxJobLogBytes ||
+		input.LimitBytes < 1 || input.LimitBytes > nodes.MaxJobLogChunkBytes {
 		return jobLogsInput{}, errors.New("invalid node job log request")
 	}
-	return jobLogsInput{
-		JobID: wire.JobID, Stream: wire.Stream,
-		Cursor: int64(wire.Cursor), LimitBytes: int(wire.LimitBytes),
-	}, nil
+	return input, nil
 }
 
 func validJobID(value string) bool {

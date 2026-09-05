@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math"
 	"os"
 	"os/exec"
 	"slices"
@@ -49,7 +48,7 @@ func newCommandFailure(code, message string, cause error) error {
 type systemExecInput struct {
 	Argv           []string          `json:"argv"`
 	CWD            string            `json:"cwd"`
-	TimeoutSeconds float64           `json:"timeout_seconds"`
+	TimeoutSeconds int               `json:"timeout_seconds"`
 	Env            map[string]string `json:"env"`
 }
 
@@ -161,8 +160,7 @@ func (handler *systemExecHandler) prepare(
 		return preparedSystemExec{}, errors.New("invalid system.exec input")
 	}
 	if len(input.Argv) == 0 || len(input.Argv) > maxSystemExecArgv ||
-		input.TimeoutSeconds <= 0 || input.TimeoutSeconds > float64(planTimeoutSeconds) ||
-		math.Trunc(input.TimeoutSeconds) != input.TimeoutSeconds ||
+		input.TimeoutSeconds <= 0 || input.TimeoutSeconds > planTimeoutSeconds ||
 		len(input.CWD) == 0 || len(input.CWD) > maxSystemExecWorkingDir ||
 		input.Env == nil || len(input.Env) > maxSystemExecEnvNames {
 		return preparedSystemExec{}, errors.New("system.exec input exceeds policy bounds")
@@ -193,7 +191,7 @@ func (handler *systemExecHandler) prepare(
 		executable:     executable,
 		args:           append([]string(nil), input.Argv[1:]...),
 		cwd:            cwd,
-		timeoutSeconds: int(input.TimeoutSeconds),
+		timeoutSeconds: input.TimeoutSeconds,
 		env:            environment,
 	}, nil
 }

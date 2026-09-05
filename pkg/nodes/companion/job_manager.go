@@ -25,7 +25,7 @@ const (
 type directJobInput struct {
 	Argv           []string                 `json:"argv"`
 	CWD            string                   `json:"cwd"`
-	TimeoutSeconds float64                  `json:"timeout_seconds"`
+	TimeoutSeconds int                      `json:"timeout_seconds"`
 	Env            map[string]string        `json:"env"`
 	Artifacts      []JobArtifactDeclaration `json:"artifacts"`
 }

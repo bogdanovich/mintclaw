@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net/url"
 	"slices"
 	"sort"
@@ -116,53 +115,24 @@ type BrowserLimits struct {
 	RetentionSecs   int `json:"retention_seconds"`
 }
 
-// decodeCanonicalBrowserLimits accepts canonical JSON numbers such as 6e1
-// while preserving the integer-only limits contract. Node invocation
-// canonicalization may use exponent notation for an original integer literal.
-func decodeCanonicalBrowserLimits(data []byte) (BrowserLimits, error) {
-	var values struct {
-		Sessions        float64 `json:"sessions"`
-		Tabs            float64 `json:"tabs"`
-		SessionSeconds  float64 `json:"session_seconds"`
-		IdleSeconds     float64 `json:"idle_seconds"`
-		PreparedSeconds float64 `json:"prepared_seconds"`
-		ActionSeconds   float64 `json:"action_seconds"`
-		SnapshotBytes   float64 `json:"snapshot_bytes"`
-		ScreenshotBytes float64 `json:"screenshot_bytes"`
-		UploadBytes     float64 `json:"upload_bytes"`
-		DownloadBytes   float64 `json:"download_bytes"`
-		SnapshotRefs    float64 `json:"snapshot_refs"`
-		TextInputBytes  float64 `json:"text_input_bytes"`
-		ToolResultBytes float64 `json:"tool_result_bytes"`
-		RetentionSecs   float64 `json:"retention_seconds"`
+func decodeStrictBrowserJSON(data []byte, target any, description string) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
 	}
-	if err := json.Unmarshal(data, &values); err != nil {
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("%w: trailing %s", ErrInvalidCapability, description)
+	}
+	return nil
+}
+
+func decodeBrowserLimits(data []byte) (BrowserLimits, error) {
+	var limits BrowserLimits
+	if err := decodeStrictBrowserJSON(data, &limits, "browser limits"); err != nil {
 		return BrowserLimits{}, err
 	}
-	numbers := []float64{
-		values.Sessions, values.Tabs, values.SessionSeconds, values.IdleSeconds,
-		values.PreparedSeconds, values.ActionSeconds, values.SnapshotBytes,
-		values.ScreenshotBytes, values.UploadBytes, values.DownloadBytes,
-		values.SnapshotRefs, values.TextInputBytes, values.ToolResultBytes,
-		values.RetentionSecs,
-	}
-	for _, value := range numbers {
-		if value < 0 || value > MaxBrowserUploadBytes || value != float64(int(value)) {
-			return BrowserLimits{}, fmt.Errorf(
-				"%w: browser limits must be bounded integers",
-				ErrInvalidCapability,
-			)
-		}
-	}
-	return BrowserLimits{
-		Sessions: int(values.Sessions), Tabs: int(values.Tabs),
-		SessionSeconds: int(values.SessionSeconds), IdleSeconds: int(values.IdleSeconds),
-		PreparedSeconds: int(values.PreparedSeconds), ActionSeconds: int(values.ActionSeconds),
-		SnapshotBytes: int(values.SnapshotBytes), ScreenshotBytes: int(values.ScreenshotBytes),
-		UploadBytes: int(values.UploadBytes), DownloadBytes: int(values.DownloadBytes),
-		SnapshotRefs: int(values.SnapshotRefs), TextInputBytes: int(values.TextInputBytes),
-		ToolResultBytes: int(values.ToolResultBytes), RetentionSecs: int(values.RetentionSecs),
-	}, nil
+	return limits, nil
 }
 
 func (limits BrowserLimits) Validate() error {
@@ -213,6 +183,32 @@ func effectiveBrowserLimit(value, fallback int) int {
 	return value
 }
 
+// DecodeBrowserInvocationResultForProtocol preserves typed result decoding for
+// retained protocol-v1 companions. Their canonical receipts may use exponent
+// notation for exact integers; protocol-v2 canonicalization restores bounded
+// plain integer spellings without floating-point conversion.
+func DecodeBrowserInvocationResultForProtocol(
+	protocolVersion int,
+	raw json.RawMessage,
+	maximum int,
+	result any,
+) error {
+	effective, err := EffectiveProtocolVersion(protocolVersion)
+	if err != nil {
+		return err
+	}
+	if maximum <= 0 || maximum > MaxBrowserToolResultBytes || len(raw) == 0 || len(raw) > maximum {
+		return fmt.Errorf("%w: browser result is outside bounds", ErrInvalidInvocation)
+	}
+	if effective == ProtocolV1 {
+		raw, err = canonicalJSONForProtocolBounded(raw, ProtocolV2, maximum)
+		if err != nil {
+			return fmt.Errorf("%w: normalize protocol-v1 browser result: %w", ErrInvalidInvocation, err)
+		}
+	}
+	return json.Unmarshal(raw, result)
+}
+
 // BrowserProfileDescriptor is the model-safe projection of companion-local
 // browser authority. Driver commands, endpoints, profile paths, lock paths,
 // environment, and credentials intentionally never cross the node boundary.
@@ -245,32 +241,12 @@ type BrowserSessionOpenInput struct {
 }
 
 func (input *BrowserSessionOpenInput) UnmarshalJSON(data []byte) error {
-	var value struct {
-		SessionID             string          `json:"session_id"`
-		Profile               string          `json:"profile"`
-		ProfileRevision       string          `json:"profile_revision"`
-		BrowserPolicyRevision string          `json:"browser_policy_revision"`
-		DryRun                bool            `json:"dry_run"`
-		Limits                json.RawMessage `json:"limits"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	type plain BrowserSessionOpenInput
+	var value plain
+	if err := decodeStrictBrowserJSON(data, &value, "browser session open input"); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("%w: trailing browser session open input", ErrInvalidCapability)
-	}
-	limits, err := decodeCanonicalBrowserLimits(value.Limits)
-	if err != nil {
-		return err
-	}
-	*input = BrowserSessionOpenInput{
-		SessionID: value.SessionID, Profile: value.Profile,
-		ProfileRevision:       value.ProfileRevision,
-		BrowserPolicyRevision: value.BrowserPolicyRevision,
-		DryRun:                value.DryRun, Limits: limits,
-	}
+	*input = BrowserSessionOpenInput(value)
 	return nil
 }
 
@@ -296,28 +272,12 @@ type BrowserDiagnosticsInput struct {
 }
 
 func (input *BrowserDiagnosticsInput) UnmarshalJSON(data []byte) error {
-	var value struct {
-		SessionID          string          `json:"session_id"`
-		TabID              string          `json:"tab_id"`
-		SnapshotGeneration json.RawMessage `json:"snapshot_generation"`
-		Categories         []string        `json:"categories"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	type plain BrowserDiagnosticsInput
+	var value plain
+	if err := decodeStrictBrowserJSON(data, &value, "browser diagnostics input"); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("%w: trailing browser diagnostics input", ErrInvalidCapability)
-	}
-	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
-	if err != nil {
-		return err
-	}
-	*input = BrowserDiagnosticsInput{
-		SessionID: value.SessionID, TabID: value.TabID,
-		SnapshotGeneration: generation, Categories: append([]string(nil), value.Categories...),
-	}
+	*input = BrowserDiagnosticsInput(value)
 	return nil
 }
 
@@ -340,54 +300,22 @@ type BrowserCaptureInput struct {
 }
 
 func (input *BrowserCaptureInput) UnmarshalJSON(data []byte) error {
-	type captureInputAlias BrowserCaptureInput
-	var value struct {
-		captureInputAlias
-		SnapshotGeneration json.RawMessage `json:"snapshot_generation"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	type plain BrowserCaptureInput
+	var value plain
+	if err := decodeStrictBrowserJSON(data, &value, "browser capture input"); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("%w: trailing browser capture input", ErrInvalidCapability)
-	}
-	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
-	if err != nil {
-		return err
-	}
-	*input = BrowserCaptureInput(value.captureInputAlias)
-	input.SnapshotGeneration = generation
+	*input = BrowserCaptureInput(value)
 	return nil
 }
 
 func (input *BrowserObserveInput) UnmarshalJSON(data []byte) error {
-	var value struct {
-		SessionID          string          `json:"session_id"`
-		TabID              string          `json:"tab_id"`
-		SnapshotGeneration json.RawMessage `json:"snapshot_generation"`
-		Screenshot         bool            `json:"screenshot"`
-		WorkspaceID        string          `json:"workspace_id"`
-		BrowserTarget      string          `json:"browser_target"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	type plain BrowserObserveInput
+	var value plain
+	if err := decodeStrictBrowserJSON(data, &value, "browser observe input"); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("%w: trailing browser observe input", ErrInvalidCapability)
-	}
-	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
-	if err != nil {
-		return fmt.Errorf("decode browser observe generation: %w", err)
-	}
-	*input = BrowserObserveInput{
-		SessionID: value.SessionID, TabID: value.TabID,
-		SnapshotGeneration: generation, Screenshot: value.Screenshot,
-		WorkspaceID: value.WorkspaceID, BrowserTarget: value.BrowserTarget,
-	}
+	*input = BrowserObserveInput(value)
 	return nil
 }
 
@@ -489,84 +417,21 @@ func (input BrowserActInput) MarshalJSON() ([]byte, error) {
 }
 
 func (input *BrowserActInput) UnmarshalJSON(data []byte) error {
-	var value struct {
-		SessionID                string               `json:"session_id"`
-		TabID                    string               `json:"tab_id"`
-		SnapshotGeneration       json.RawMessage      `json:"snapshot_generation"`
-		ActionInvocationID       string               `json:"action_invocation_id"`
-		Action                   browseraction.Action `json:"action"`
-		Effect                   string               `json:"effect"`
-		Confirmation             string               `json:"confirmation,omitempty"`
-		CurrentOrigin            string               `json:"current_origin"`
-		PreparedActionHash       string               `json:"prepared_action_hash"`
-		BrowserPolicyRevision    string               `json:"browser_policy_revision"`
-		ProfileRevision          string               `json:"profile_revision"`
-		ExpectedRole             string               `json:"expected_role,omitempty"`
-		ExpectedName             string               `json:"expected_name,omitempty"`
-		DestinationExpectedRole  string               `json:"destination_expected_role,omitempty"`
-		DestinationExpectedName  string               `json:"destination_expected_name,omitempty"`
-		DialogType               string               `json:"dialog_type,omitempty"`
-		DialogMessageDigest      string               `json:"dialog_message_digest,omitempty"`
-		DialogMessageBytes       json.RawMessage      `json:"dialog_message_bytes,omitempty"`
-		InputDigest              string               `json:"input_digest,omitempty"`
-		InputBytes               json.RawMessage      `json:"input_bytes,omitempty"`
-		ArtifactSHA256           string               `json:"artifact_sha256,omitempty"`
-		ArtifactBytes            json.RawMessage      `json:"artifact_bytes,omitempty"`
-		ArtifactFilename         string               `json:"artifact_filename,omitempty"`
-		ArtifactContentType      string               `json:"artifact_content_type,omitempty"`
-		ApprovalDigest           string               `json:"approval_digest,omitempty"`
-		WorkspaceID              string               `json:"workspace_id,omitempty"`
-		RouteID                  string               `json:"route_id,omitempty"`
-		BrowserTarget            string               `json:"browser_target,omitempty"`
-		PolicyEffect             string               `json:"policy_effect,omitempty"`
-		RestrictedDecision       string               `json:"restricted_decision,omitempty"`
-		RestrictedPolicyRevision string               `json:"restricted_policy_revision,omitempty"`
-		RestrictedOrigin         string               `json:"restricted_origin,omitempty"`
-	}
+	type plain BrowserActInput
+	var value plain
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
-	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
-	if err != nil {
-		return fmt.Errorf("decode browser action generation: %w", err)
-	}
-	inputBytes, err := decodeCanonicalBrowserGeneration(value.InputBytes)
-	if err != nil {
-		return fmt.Errorf("decode browser action input bytes: %w", err)
-	}
-	if inputBytes > MaxBrowserTextInputBytes {
+	if value.InputBytes < 0 || value.InputBytes > MaxBrowserTextInputBytes {
 		return fmt.Errorf("%w: browser action input bytes exceed the limit", ErrInvalidCapability)
 	}
-	dialogMessageBytes, err := decodeCanonicalBrowserGeneration(value.DialogMessageBytes)
-	if err != nil || dialogMessageBytes > MaxBrowserDialogMessageBytes {
+	if value.DialogMessageBytes < 0 || value.DialogMessageBytes > MaxBrowserDialogMessageBytes {
 		return fmt.Errorf("%w: browser dialog message bytes exceed the limit", ErrInvalidCapability)
 	}
-	artifactBytes, err := decodeCanonicalBrowserGeneration(value.ArtifactBytes)
-	if err != nil || artifactBytes > MaxBrowserUploadBytes {
+	if value.ArtifactBytes < 0 || value.ArtifactBytes > MaxBrowserUploadBytes {
 		return fmt.Errorf("%w: browser artifact bytes exceed the limit", ErrInvalidCapability)
 	}
-	*input = BrowserActInput{
-		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
-		ActionInvocationID: value.ActionInvocationID, Action: value.Action,
-		Effect: value.Effect, Confirmation: value.Confirmation, CurrentOrigin: value.CurrentOrigin,
-		PreparedActionHash:    value.PreparedActionHash,
-		BrowserPolicyRevision: value.BrowserPolicyRevision,
-		ProfileRevision:       value.ProfileRevision,
-		ExpectedRole:          value.ExpectedRole, ExpectedName: value.ExpectedName,
-		DestinationExpectedRole: value.DestinationExpectedRole,
-		DestinationExpectedName: value.DestinationExpectedName,
-		DialogType:              value.DialogType, DialogMessageDigest: value.DialogMessageDigest,
-		DialogMessageBytes: int(dialogMessageBytes),
-		InputDigest:        value.InputDigest, InputBytes: int(inputBytes),
-		ArtifactSHA256: value.ArtifactSHA256, ArtifactBytes: int64(artifactBytes),
-		ArtifactFilename: value.ArtifactFilename, ArtifactContentType: value.ArtifactContentType,
-		ApprovalDigest: value.ApprovalDigest,
-		WorkspaceID:    value.WorkspaceID, RouteID: value.RouteID, BrowserTarget: value.BrowserTarget,
-		PolicyEffect:             value.PolicyEffect,
-		RestrictedDecision:       value.RestrictedDecision,
-		RestrictedPolicyRevision: value.RestrictedPolicyRevision,
-		RestrictedOrigin:         value.RestrictedOrigin,
-	}
+	*input = BrowserActInput(value)
 	return nil
 }
 
@@ -693,37 +558,15 @@ type BrowserDiagnosticEntry struct {
 }
 
 func (entry *BrowserDiagnosticEntry) UnmarshalJSON(data []byte) error {
-	var value struct {
-		Timestamp     json.RawMessage `json:"timestamp"`
-		Severity      string          `json:"severity"`
-		ResourceClass string          `json:"resource_class"`
-		FailureCode   string          `json:"failure_code"`
-		Origin        string          `json:"origin"`
-		Path          string          `json:"path"`
-		Line          json.RawMessage `json:"line"`
-		MessageHash   string          `json:"message_hash"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	type plain BrowserDiagnosticEntry
+	var value plain
+	if err := decodeStrictBrowserJSON(data, &value, "browser diagnostic entry"); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("%w: trailing browser diagnostic entry", ErrInvalidCapability)
+	if value.Timestamp < 0 || value.Line < 0 {
+		return fmt.Errorf("%w: browser diagnostic numbers must be nonnegative", ErrInvalidCapability)
 	}
-	timestamp, err := decodeCanonicalBrowserTimestamp(value.Timestamp)
-	if err != nil {
-		return err
-	}
-	line, err := decodeCanonicalBrowserInt(value.Line)
-	if err != nil {
-		return err
-	}
-	*entry = BrowserDiagnosticEntry{
-		Timestamp: timestamp, Severity: value.Severity, ResourceClass: value.ResourceClass,
-		FailureCode: value.FailureCode, Origin: value.Origin, Path: value.Path,
-		Line: line, MessageHash: value.MessageHash,
-	}
+	*entry = BrowserDiagnosticEntry(value)
 	return nil
 }
 
@@ -736,33 +579,15 @@ type BrowserDiagnosticCategory struct {
 }
 
 func (category *BrowserDiagnosticCategory) UnmarshalJSON(data []byte) error {
-	var value struct {
-		Category     string                   `json:"category"`
-		Count        json.RawMessage          `json:"count"`
-		OmittedCount json.RawMessage          `json:"omitted_count"`
-		Truncated    bool                     `json:"truncated"`
-		Entries      []BrowserDiagnosticEntry `json:"entries"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	type plain BrowserDiagnosticCategory
+	var value plain
+	if err := decodeStrictBrowserJSON(data, &value, "browser diagnostic category"); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("%w: trailing browser diagnostic category", ErrInvalidCapability)
+	if value.Count < 0 || value.OmittedCount < 0 {
+		return fmt.Errorf("%w: browser diagnostic counts must be nonnegative", ErrInvalidCapability)
 	}
-	count, err := decodeCanonicalBrowserInt(value.Count)
-	if err != nil {
-		return err
-	}
-	omitted, err := decodeCanonicalBrowserInt(value.OmittedCount)
-	if err != nil {
-		return err
-	}
-	*category = BrowserDiagnosticCategory{
-		Category: value.Category, Count: count, OmittedCount: omitted,
-		Truncated: value.Truncated, Entries: value.Entries,
-	}
+	*category = BrowserDiagnosticCategory(value)
 	return nil
 }
 
@@ -776,30 +601,12 @@ type BrowserDiagnosticsResult struct {
 }
 
 func (result *BrowserDiagnosticsResult) UnmarshalJSON(data []byte) error {
-	var value struct {
-		SessionID          string                      `json:"session_id"`
-		TabID              string                      `json:"tab_id"`
-		SnapshotGeneration json.RawMessage             `json:"snapshot_generation"`
-		Categories         []BrowserDiagnosticCategory `json:"categories"`
-		Truncated          bool                        `json:"truncated"`
-		ProtectedResult    bool                        `json:"protected_result"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	type plain BrowserDiagnosticsResult
+	var value plain
+	if err := decodeStrictBrowserJSON(data, &value, "browser diagnostics result"); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("%w: trailing browser diagnostics result", ErrInvalidCapability)
-	}
-	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
-	if err != nil {
-		return err
-	}
-	*result = BrowserDiagnosticsResult{
-		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
-		Categories: value.Categories, Truncated: value.Truncated, ProtectedResult: value.ProtectedResult,
-	}
+	*result = BrowserDiagnosticsResult(value)
 	return nil
 }
 
@@ -876,73 +683,16 @@ type BrowserSessionResult struct {
 }
 
 func (result *BrowserSessionResult) UnmarshalJSON(data []byte) error {
-	var value struct {
-		SessionID     string              `json:"session_id"`
-		State         string              `json:"state"`
-		Reason        string              `json:"reason,omitempty"`
-		Recovery      string              `json:"recovery,omitempty"`
-		TabID         string              `json:"tab_id,omitempty"`
-		Controller    string              `json:"controller,omitempty"`
-		Features      BrowserHostFeatures `json:"features,omitempty"`
-		ExpiresAt     json.RawMessage     `json:"expires_at,omitempty"`
-		IdleExpiresAt json.RawMessage     `json:"idle_expires_at,omitempty"`
-	}
+	type plain BrowserSessionResult
+	var value plain
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
-	expiresAt, err := decodeCanonicalBrowserTimestamp(value.ExpiresAt)
-	if err != nil {
-		return fmt.Errorf("decode browser session expiry: %w", err)
+	if value.ExpiresAt < 0 || value.IdleExpiresAt < 0 {
+		return fmt.Errorf("%w: browser timestamps must be nonnegative", ErrInvalidCapability)
 	}
-	idleExpiresAt, err := decodeCanonicalBrowserTimestamp(value.IdleExpiresAt)
-	if err != nil {
-		return fmt.Errorf("decode browser session idle expiry: %w", err)
-	}
-	*result = BrowserSessionResult{
-		SessionID: value.SessionID, State: value.State,
-		Reason: value.Reason, Recovery: value.Recovery,
-		TabID: value.TabID, Controller: value.Controller, Features: value.Features,
-		ExpiresAt: expiresAt, IdleExpiresAt: idleExpiresAt,
-	}
+	*result = BrowserSessionResult(value)
 	return nil
-}
-
-// decodeCanonicalBrowserTimestamp accepts exponent notation emitted by the
-// invocation canonicalizer without rounding values or weakening the integer
-// wire contract. Status and close results omit these fields and decode as zero.
-func decodeCanonicalBrowserTimestamp(data json.RawMessage) (int64, error) {
-	if len(data) == 0 {
-		return 0, nil
-	}
-	value, ok := new(big.Rat).SetString(string(data))
-	if !ok || !value.IsInt() || value.Sign() < 0 || !value.Num().IsInt64() {
-		return 0, fmt.Errorf("%w: browser timestamp must be a nonnegative integer", ErrInvalidCapability)
-	}
-	return value.Num().Int64(), nil
-}
-
-func decodeCanonicalBrowserInt(data json.RawMessage) (int, error) {
-	value, err := decodeCanonicalBrowserTimestamp(data)
-	if err != nil || uint64(value) > uint64(^uint(0)>>1) {
-		return 0, fmt.Errorf("%w: browser integer is outside bounds", ErrInvalidCapability)
-	}
-	return int(value), nil
-}
-
-// decodeCanonicalBrowserGeneration accepts exponent notation emitted by the
-// invocation canonicalizer while retaining the exact uint64 wire contract.
-func decodeCanonicalBrowserGeneration(data json.RawMessage) (uint64, error) {
-	if len(data) == 0 {
-		return 0, nil
-	}
-	value, ok := new(big.Rat).SetString(string(data))
-	if !ok || !value.IsInt() || value.Sign() < 0 || !value.Num().IsUint64() {
-		return 0, fmt.Errorf(
-			"%w: browser snapshot generation must be a nonnegative integer",
-			ErrInvalidCapability,
-		)
-	}
-	return value.Num().Uint64(), nil
 }
 
 func (result BrowserSessionResult) MarshalJSON() ([]byte, error) {
@@ -988,40 +738,6 @@ type BrowserObservationResult struct {
 	ProtectedResult    bool                      `json:"protected_result,omitempty"`
 	DocumentID         string                    `json:"document_id,omitempty"`
 	Output             *BrowserOutputDescriptor  `json:"output,omitempty"`
-}
-
-func (result *BrowserObservationResult) UnmarshalJSON(data []byte) error {
-	var value struct {
-		SessionID          string                    `json:"session_id"`
-		TabID              string                    `json:"tab_id"`
-		SnapshotGeneration json.RawMessage           `json:"snapshot_generation"`
-		URL                string                    `json:"url"`
-		Origin             string                    `json:"origin"`
-		Title              string                    `json:"title,omitempty"`
-		Snapshot           string                    `json:"snapshot"`
-		Elements           []BrowserElement          `json:"elements"`
-		PendingDialog      *BrowserDialogObservation `json:"pending_dialog,omitempty"`
-		Truncated          bool                      `json:"truncated"`
-		ProtectedResult    bool                      `json:"protected_result,omitempty"`
-		DocumentID         string                    `json:"document_id,omitempty"`
-		Output             *BrowserOutputDescriptor  `json:"output,omitempty"`
-	}
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
-	if err != nil {
-		return fmt.Errorf("decode browser observation generation: %w", err)
-	}
-	*result = BrowserObservationResult{
-		SessionID: value.SessionID, TabID: value.TabID, SnapshotGeneration: generation,
-		URL: value.URL, Origin: value.Origin, Title: value.Title, Snapshot: value.Snapshot,
-		Elements: value.Elements, PendingDialog: value.PendingDialog, Truncated: value.Truncated,
-		ProtectedResult: value.ProtectedResult,
-		DocumentID:      value.DocumentID,
-		Output:          value.Output,
-	}
-	return nil
 }
 
 // BrowserSnapshotPayload is the private streamed portion of a large semantic
@@ -1253,71 +969,15 @@ type BrowserOutputDescriptor struct {
 }
 
 func (descriptor *BrowserOutputDescriptor) UnmarshalJSON(data []byte) error {
-	var value struct {
-		TransferID            string          `json:"transfer_id"`
-		Kind                  string          `json:"kind"`
-		SessionID             string          `json:"session_id"`
-		RoutedSessionID       string          `json:"routed_session_id"`
-		AgentID               string          `json:"agent_id"`
-		ActorID               string          `json:"actor_id"`
-		WorkspaceID           string          `json:"workspace_id"`
-		RouteID               string          `json:"route_id,omitempty"`
-		Target                string          `json:"target"`
-		ProfileRevision       string          `json:"profile_revision"`
-		BrowserPolicyRevision string          `json:"browser_policy_revision"`
-		InvocationID          string          `json:"invocation_id"`
-		TabID                 string          `json:"tab_id,omitempty"`
-		FrameID               string          `json:"frame_id,omitempty"`
-		ContextID             string          `json:"context_id,omitempty"`
-		DocumentID            string          `json:"document_id,omitempty"`
-		SnapshotID            string          `json:"snapshot_id,omitempty"`
-		SnapshotGeneration    json.RawMessage `json:"snapshot_generation,omitempty"`
-		CaptureTarget         string          `json:"capture_target,omitempty"`
-		ElementRef            string          `json:"element_ref,omitempty"`
-		Filename              string          `json:"filename"`
-		ContentType           string          `json:"content_type"`
-		Size                  json.RawMessage `json:"size"`
-		SHA256                string          `json:"sha256"`
-		CapturedAt            json.RawMessage `json:"captured_at"`
-		ExpiresAt             json.RawMessage `json:"expires_at"`
-		CleanupPolicy         string          `json:"cleanup_policy"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
+	type plain BrowserOutputDescriptor
+	var value plain
+	if err := decodeStrictBrowserJSON(data, &value, "browser output descriptor"); err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("%w: trailing browser output descriptor", ErrInvalidCapability)
+	if value.CapturedAt < 0 || value.ExpiresAt < 0 {
+		return fmt.Errorf("%w: browser output timestamps must be nonnegative", ErrInvalidCapability)
 	}
-	generation, err := decodeCanonicalBrowserGeneration(value.SnapshotGeneration)
-	if err != nil {
-		return err
-	}
-	size, err := decodeCanonicalBrowserGeneration(value.Size)
-	if err != nil {
-		return err
-	}
-	capturedAt, err := decodeCanonicalBrowserTimestamp(value.CapturedAt)
-	if err != nil {
-		return err
-	}
-	expiresAt, err := decodeCanonicalBrowserTimestamp(value.ExpiresAt)
-	if err != nil {
-		return err
-	}
-	*descriptor = BrowserOutputDescriptor{
-		TransferID: value.TransferID, Kind: value.Kind, SessionID: value.SessionID,
-		RoutedSessionID: value.RoutedSessionID, AgentID: value.AgentID, ActorID: value.ActorID,
-		WorkspaceID: value.WorkspaceID, RouteID: value.RouteID,
-		Target: value.Target, ProfileRevision: value.ProfileRevision,
-		BrowserPolicyRevision: value.BrowserPolicyRevision, InvocationID: value.InvocationID,
-		TabID: value.TabID, FrameID: value.FrameID, ContextID: value.ContextID,
-		DocumentID: value.DocumentID, SnapshotID: value.SnapshotID, SnapshotGeneration: generation,
-		CaptureTarget: value.CaptureTarget, ElementRef: value.ElementRef,
-		Filename: value.Filename, ContentType: value.ContentType, Size: size, SHA256: value.SHA256,
-		CapturedAt: capturedAt, ExpiresAt: expiresAt, CleanupPolicy: value.CleanupPolicy,
-	}
+	*descriptor = BrowserOutputDescriptor(value)
 	return nil
 }
 
@@ -2454,7 +2114,7 @@ func validateBrowserSessionOpenLimits(input map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("%w: encode browser session limits", ErrInvalidInvocation)
 	}
-	limits, err := decodeCanonicalBrowserLimits(encoded)
+	limits, err := decodeBrowserLimits(encoded)
 	if err != nil {
 		return fmt.Errorf("%w: decode browser session limits", ErrInvalidInvocation)
 	}
@@ -2465,6 +2125,7 @@ func validateBrowserSessionOpenLimits(input map[string]any) error {
 }
 
 func validateBrowserInvocationOutput(
+	protocolVersion int,
 	command string,
 	limits BrowserLimits,
 	output map[string]any,
@@ -2484,7 +2145,12 @@ func validateBrowserInvocationOutput(
 			return fmt.Errorf("%w: browser diagnostics exceed the result limit", ErrInvalidCapability)
 		}
 		var result BrowserDiagnosticsResult
-		if err = json.Unmarshal(encoded, &result); err != nil || !validBrowserDiagnosticsResult(result) {
+		if err = DecodeBrowserInvocationResultForProtocol(
+			protocolVersion,
+			encoded,
+			MaxBrowserDiagnosticBytes,
+			&result,
+		); err != nil || !validBrowserDiagnosticsResult(result) {
 			return fmt.Errorf("%w: malformed browser diagnostics", ErrInvalidCapability)
 		}
 		return nil

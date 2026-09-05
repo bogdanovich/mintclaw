@@ -1,8 +1,10 @@
 # Node JSON Canonicalization V2
 
-Status: protocol-v2 companion activation. The gateway advertises v1 through v2
-for gateway-first compatibility; this companion now requires and selects v2.
-Legacy numeric adapter removal remains a separate cleanup step.
+Status: protocol-v2 companion and integer-contract cleanup complete. The
+gateway still advertises v1 through v2 for gateway-first compatibility, while
+this companion requires and selects v2. Integer adapters remain only in
+gateway-side readers that must accept drained v1 plans until a zero-v1 deployed
+state audit permits their removal.
 
 ## Numeric representation
 

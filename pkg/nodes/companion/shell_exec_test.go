@@ -141,12 +141,12 @@ func TestShellExecAcceptsRootProfileWithoutOptionalEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog := runtime.Catalog()
-	catalogHash, err := catalog.Hash()
+	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	descriptor := shellRuntimeDescriptor(t, runtime)
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID:   "inv_root_shell",
 		IdempotencyKey: "idem_root_shell",
 		NodeID:         runtime.nodeID,
@@ -164,8 +164,8 @@ func TestShellExecAcceptsRootProfileWithoutOptionalEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.ToLower(string(plan.Input)), `"timeout_seconds":3e1`) {
-		t.Fatalf("test input did not exercise canonical exponent form: %s", plan.Input)
+	if !strings.Contains(string(plan.Input), `"timeout_seconds":30`) {
+		t.Fatalf("test input did not exercise canonical integer form: %s", plan.Input)
 	}
 	if _, err := runtime.Invoke(t.Context(), plan); err != nil {
 		t.Fatalf("root shell invocation rejected: %v", err)
