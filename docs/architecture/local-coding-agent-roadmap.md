@@ -1688,6 +1688,9 @@ Done when:
 - Review output links findings to current paths and line positions where stable.
 - Large diffs remain bounded and navigable.
 
+Completed by the [P6.4 exit record](local-coding-agent-p6-4-exit.md). P6.5 and
+later roadmap packets remain uncompleted.
+
 #### P6.5 — Structured code intelligence
 
 Dependencies: P2.7, P6.4
