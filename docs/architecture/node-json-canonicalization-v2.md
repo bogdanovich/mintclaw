@@ -1,8 +1,8 @@
 # Node JSON Canonicalization V2
 
-Status: dual-protocol gateway foundation. The gateway advertises v1 through v2,
-but the current companion still selects v1; v2 companion activation and legacy
-adapter removal remain separate rollout steps.
+Status: protocol-v2 companion activation. The gateway advertises v1 through v2
+for gateway-first compatibility; this companion now requires and selects v2.
+Legacy numeric adapter removal remains a separate cleanup step.
 
 ## Numeric representation
 

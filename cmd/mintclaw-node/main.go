@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/browserhost"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/update/control"
@@ -253,15 +254,12 @@ func run(args []string) error {
 		return err
 	}
 	if managed {
-		catalogHash, hashErr := commandRuntime.Catalog().Hash()
-		if hashErr != nil {
-			return hashErr
+		health, healthErr := managedNodeHealth(identity.ID, clientVersion(), commandRuntime.Catalog())
+		if healthErr != nil {
+			return healthErr
 		}
 		if err = client.SetStableObserver(func(context.Context) error {
-			return coordinatorClient.ReportHealth(control.Health{
-				NodeID: string(identity.ID), Version: clientVersion(), Platform: runtime.GOOS,
-				Architecture: runtime.GOARCH, CatalogHash: catalogHash,
-			})
+			return coordinatorClient.ReportHealth(health)
 		}); err != nil {
 			return err
 		}
@@ -282,6 +280,21 @@ func run(args []string) error {
 	}
 	slog.Info("starting node companion", "node_id", identity.ID, "gateway", cfg.GatewayURL)
 	return client.Run(ctx)
+}
+
+func managedNodeHealth(
+	nodeID nodes.ID,
+	softwareVersion string,
+	catalog nodes.CapabilityCatalog,
+) (control.Health, error) {
+	catalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
+	if err != nil {
+		return control.Health{}, err
+	}
+	return control.Health{
+		NodeID: string(nodeID), Version: softwareVersion, Platform: runtime.GOOS,
+		Architecture: runtime.GOARCH, CatalogHash: catalogHash,
+	}, nil
 }
 
 func clientVersion() string {

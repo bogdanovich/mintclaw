@@ -104,7 +104,8 @@ func TestClientAuthenticatesPinnedWSSIdentity(t *testing.T) {
 		t.Fatalf("Authenticate() = %#v", result)
 	}
 	pending, exists, err := registry.Pending(identity.ID)
-	if err != nil || !exists || pending.Node.ID != identity.ID {
+	if err != nil || !exists || pending.Node.ID != identity.ID ||
+		pending.Node.ProtocolVersion != nodes.ProtocolV2 {
 		t.Fatalf("Pending() = %#v, exists %v, error %v", pending, exists, err)
 	}
 }
@@ -136,13 +137,18 @@ func TestRuntimeClientAuthenticatesExecutionProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if proof.MinProtocol != nodes.ProtocolV1 || proof.MaxProtocol != nodes.ProtocolV1 ||
+	if proof.MinProtocol != nodes.ProtocolV2 || proof.MaxProtocol != nodes.ProtocolV2 ||
 		proof.Executor != LocalExecutor ||
 		proof.PolicyRevision != policy.Revision {
 		t.Fatalf("runtime proof = %#v", proof)
 	}
 	if _, verifyErr := proof.VerifyIdentity(); verifyErr != nil {
 		t.Fatalf("VerifyIdentity() error = %v", verifyErr)
+	}
+	if _, err = client.identityProof(nodes.Challenge{
+		Nonce: "challenge", MinProtocol: nodes.ProtocolV1, MaxProtocol: nodes.ProtocolV1,
+	}); !errors.Is(err, ErrIncompatibleGateway) {
+		t.Fatalf("v1-only challenge error = %v", err)
 	}
 }
 
@@ -249,7 +255,7 @@ func TestClientExecutesCorrelatedInvocationOverAuthenticatedSession(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID:     "inv_transport",
 		IdempotencyKey:   "idem_transport",
 		NodeID:           identity.ID,
@@ -698,7 +704,8 @@ func TestClientRoutesAuthenticatedTransferFramesToBoundedHandler(t *testing.T) {
 
 	digest := sha256.Sum256([]byte("payload"))
 	binding := nodews.TransferBinding{
-		TransferID: "transfer_1", Direction: protocol.TransferUpload,
+		ProtocolVersion: nodes.ProtocolV2,
+		TransferID:      "transfer_1", Direction: protocol.TransferUpload,
 		PolicyRevision: "files-v1", TotalSize: 7, SHA256: digest,
 	}
 	stream, err := sessions.OpenTransfer(t.Context(), identity.ID, binding)
@@ -944,11 +951,11 @@ func testTransportPlan(
 	suffix string,
 ) nodes.ExecutionPlan {
 	t.Helper()
-	catalogHash, err := commandRuntime.Catalog().Hash()
+	catalogHash, err := commandRuntime.Catalog().HashForProtocol(nodes.ProtocolV2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
 		InvocationID:     "inv_" + suffix,
 		IdempotencyKey:   "idem_" + suffix,
 		NodeID:           commandRuntime.nodeID,
