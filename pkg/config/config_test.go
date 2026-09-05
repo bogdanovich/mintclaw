@@ -606,11 +606,12 @@ func TestDecodeCurrentConfigConsumesLegacyModelConnectMode(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		name string
-		mode string
+		name    string
+		encoded string
 	}{
-		{name: "empty", mode: ""},
-		{name: "grpc", mode: "grpc"},
+		{name: "empty", encoded: `""`},
+		{name: "grpc", encoded: `"grpc"`},
+		{name: "null", encoded: `null`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -619,9 +620,9 @@ func TestDecodeCurrentConfigConsumesLegacyModelConnectMode(t *testing.T) {
 				"version":%d,
 				"model_list":[{
 					"model_name":"copilot","provider":"github-copilot","model":"gpt-5",
-					"connect_mode":%q,"enabled":false
+					"connect_mode":%s,"enabled":false
 				}]
-			}`, CurrentVersion, test.mode)
+			}`, CurrentVersion, test.encoded)
 			var cfg Config
 			if err := DecodeCurrentConfig([]byte(raw), &cfg); err != nil {
 				t.Fatalf("DecodeCurrentConfig() error = %v", err)
