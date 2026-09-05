@@ -47,6 +47,7 @@ func TestNewMintClawCommand(t *testing.T) {
 		"model",
 		"nodes",
 		"onboard",
+		"review",
 		"resume",
 		"skills",
 		"status",
@@ -82,6 +83,7 @@ func TestMachineJSONRequested(t *testing.T) {
 		{name: "live agent json", args: []string{"agent", "live", "--json"}, want: true},
 		{name: "coding json", args: []string{"code", "fix it", "--json"}, want: true},
 		{name: "resume json", args: []string{"resume", "--json"}, want: true},
+		{name: "review json", args: []string{"review", "--json"}, want: true},
 		{name: "threads json", args: []string{"threads", "delete", "id", "--json"}, want: true},
 		{name: "other json command", args: []string{"status", "--json"}, want: false},
 		{name: "explicit false", args: []string{"doctor", "--json=false"}, want: false},
@@ -102,6 +104,7 @@ func TestCodingFrontendRequested(t *testing.T) {
 	}{
 		{name: "code", args: []string{"code"}, want: true},
 		{name: "resume", args: []string{"--no-color", "resume", "thread-id"}, want: true},
+		{name: "review", args: []string{"review", "--last"}, want: true},
 		{name: "other", args: []string{"status"}, want: false},
 		{name: "prompt word", args: []string{"agent", "-m", "resume"}, want: false},
 	}

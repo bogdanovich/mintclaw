@@ -35,6 +35,7 @@ type dependencies struct {
 	runTUI          func(context.Context, frontend.Controller, tui.Options) error
 	newPickerSource func(*thread.Store, thread.ProjectIdentity) (codingpicker.Source, error)
 	runPicker       func(context.Context, codingpicker.Source, tui.PickerOptions) (tui.PickerSelection, error)
+	reviewContext   func(context.Context) (context.Context, context.CancelFunc)
 }
 
 func defaultDependencies() dependencies {
@@ -50,6 +51,7 @@ func defaultDependencies() dependencies {
 		runTUI:          tui.Run,
 		newPickerSource: newPickerCatalogSource,
 		runPicker:       tui.RunPicker,
+		reviewContext:   newReviewSignalContext,
 	}
 }
 
@@ -160,6 +162,9 @@ func completeDependencies(deps dependencies) dependencies {
 	}
 	if deps.runPicker == nil {
 		deps.runPicker = tui.RunPicker
+	}
+	if deps.reviewContext == nil {
+		deps.reviewContext = newReviewSignalContext
 	}
 	return deps
 }
