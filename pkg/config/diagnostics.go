@@ -14,9 +14,12 @@ import (
 	"golang.org/x/term"
 )
 
-func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
+func decodeCurrentConfigJSONWithDiagnostics(data []byte, target any, label string) error {
 	raw, err := parseUniqueJSON(data, label)
 	if err != nil {
+		return err
+	}
+	if err = consumeLegacyModelConnectModes(raw, label); err != nil {
 		return err
 	}
 	targetType := reflect.TypeOf(target)
@@ -29,6 +32,41 @@ func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
 
 	if err := json.Unmarshal(data, target); err != nil {
 		return wrapJSONError(data, err, label)
+	}
+	return nil
+}
+
+func consumeLegacyModelConnectModes(raw any, label string) error {
+	root, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	models, ok := root["model_list"].([]any)
+	if !ok {
+		return nil
+	}
+	for index, rawModel := range models {
+		model, ok := rawModel.(map[string]any)
+		if !ok {
+			continue
+		}
+		rawMode, exists := model["connect_mode"]
+		if !exists {
+			continue
+		}
+		mode, ok := rawMode.(string)
+		if !ok {
+			return fmt.Errorf("%s field model_list[%d].connect_mode must be a string", label, index)
+		}
+		if mode != "" && mode != "grpc" {
+			return fmt.Errorf(
+				"%s field model_list[%d].connect_mode %q is no longer supported; remove the field",
+				label,
+				index,
+				mode,
+			)
+		}
+		delete(model, "connect_mode")
 	}
 	return nil
 }

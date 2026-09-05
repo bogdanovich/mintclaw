@@ -117,7 +117,7 @@ func decodeCurrentConfig(data []byte, target *Config, label string) error {
 	if target == nil {
 		return errors.New("config decode target must not be nil")
 	}
-	if err := decodeJSONWithDiagnostics(data, target, label); err != nil {
+	if err := decodeCurrentConfigJSONWithDiagnostics(data, target, label); err != nil {
 		return err
 	}
 	if target.Version != CurrentVersion {
