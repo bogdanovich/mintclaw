@@ -94,6 +94,7 @@ func normalizeBrowserProfiles(
 		return nil, fmt.Errorf("browser_profiles exceeds the %d profile limit", nodes.MaxBrowserProfiles)
 	}
 	normalized := make(map[string]BrowserProfilePolicy, len(profiles))
+	enabledProfiles := 0
 	for alias, profile := range profiles {
 		if !profile.Enabled {
 			if !browserProfilePolicyEmpty(profile) {
@@ -107,6 +108,10 @@ func normalizeBrowserProfiles(
 			return nil, fmt.Errorf("validate browser profile %q: %w", alias, err)
 		}
 		normalized[alias] = ready
+		enabledProfiles++
+	}
+	if enabledProfiles > 1 {
+		return nil, errors.New("one enabled browser profile is admitted during B4 phase 1")
 	}
 	return normalized, nil
 }
@@ -135,8 +140,8 @@ func normalizeBrowserProfile(
 	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
 	profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
-	if err := (nodes.Alias(alias)).Validate(); err != nil || alias != nodes.BrowserProfileManaged {
-		return BrowserProfilePolicy{}, errors.New("only the managed browser profile is admitted")
+	if err := (nodes.Alias(alias)).Validate(); err != nil {
+		return BrowserProfilePolicy{}, errors.New("browser profile alias is invalid")
 	}
 	if !browserPrincipalPattern.MatchString(profile.Revision) {
 		return BrowserProfilePolicy{}, errors.New("revision is invalid")

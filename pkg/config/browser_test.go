@@ -39,6 +39,114 @@ func TestBrowserConfigAcceptsAdmittedB1Shape(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigAcceptsCanonicalManagedProfileAuthority(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	delete(target.Profiles, BrowserDefaultProfile)
+	target.Profiles["personal"] = BrowserProfileConfig{
+		Enabled: true, Revision: "personal-v1", Mode: BrowserProfileManaged,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:123456"},
+		NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+		ApprovalMode: BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Runtime: BrowserProfileRuntimeConfig{
+			ProfileDirectory: "/var/lib/mintclaw/browser/personal",
+			LockFile:         "/run/mintclaw/browser-personal.lock",
+			Headed:           true,
+		},
+	}
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	server := cfg.Tools.MCP.Servers["playwright"]
+	server.ExclusiveLockFile = ""
+	cfg.Tools.MCP.Servers["playwright"] = server
+
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() canonical error = %v", err)
+	}
+}
+
+func TestBrowserConfigRejectsIncompleteCanonicalProfileAuthority(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*BrowserProfileConfig, *MCPServerConfig)
+		wantErr string
+	}{
+		{
+			name: "missing revision",
+			mutate: func(profile *BrowserProfileConfig, _ *MCPServerConfig) {
+				profile.Revision = ""
+			},
+			wantErr: "valid revision",
+		},
+		{
+			name: "missing actors",
+			mutate: func(profile *BrowserProfileConfig, _ *MCPServerConfig) {
+				profile.AllowedActors = nil
+			},
+			wantErr: "non-empty allowed_agents and allowed_actors",
+		},
+		{
+			name: "agent outside global grant",
+			mutate: func(profile *BrowserProfileConfig, _ *MCPServerConfig) {
+				profile.AllowedAgents = []string{"marketplace"}
+			},
+			wantErr: "is not granted by tools.browser.agents",
+		},
+		{
+			name: "relative profile directory",
+			mutate: func(profile *BrowserProfileConfig, _ *MCPServerConfig) {
+				profile.Runtime.ProfileDirectory = "browser/personal"
+			},
+			wantErr: "runtime paths must be absolute",
+		},
+		{
+			name: "lock inside profile",
+			mutate: func(profile *BrowserProfileConfig, _ *MCPServerConfig) {
+				profile.Runtime.LockFile = filepath.Join(profile.Runtime.ProfileDirectory, "browser.lock")
+			},
+			wantErr: "lock_file must be outside profile_directory",
+		},
+		{
+			name: "template owns lock",
+			mutate: func(_ *BrowserProfileConfig, server *MCPServerConfig) {
+				server.ExclusiveLockFile = "/run/mintclaw/template.lock"
+			},
+			wantErr: "cannot set profile-owned exclusive_lock_file",
+		},
+		{
+			name: "template owns identity argument",
+			mutate: func(_ *BrowserProfileConfig, server *MCPServerConfig) {
+				server.Args = append(server.Args, "--headless")
+			},
+			wantErr: "contains profile-owned argument",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := browserConfigFixture(t)
+			target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+			profile := target.Profiles[BrowserDefaultProfile]
+			profile.Revision = "managed-v1"
+			profile.AllowedAgents = []string{"browser"}
+			profile.AllowedActors = []string{"telegram:123456"}
+			profile.Runtime = BrowserProfileRuntimeConfig{
+				ProfileDirectory: "/var/lib/mintclaw/browser/managed",
+				LockFile:         "/run/mintclaw/browser-managed.lock",
+			}
+			server := cfg.Tools.MCP.Servers["playwright"]
+			server.ExclusiveLockFile = ""
+			test.mutate(&profile, &server)
+			target.Profiles[BrowserDefaultProfile] = profile
+			cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+			cfg.Tools.MCP.Servers["playwright"] = server
+			err := cfg.ValidateBrowserConfig()
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ValidateBrowserConfig() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestBrowserConfigAcceptsExplicitEnabledDefaultTarget(t *testing.T) {
 	cfg := browserConfigFixture(t)
 	cfg.Nodes.Enabled = true
@@ -360,6 +468,41 @@ func TestBrowserConfigAdmitsEnabledCompanionPlacement(t *testing.T) {
 	}
 	if err := cfg.ValidateBrowserConfig(); err != nil {
 		t.Fatalf("ValidateBrowserConfig() enabled companion error = %v", err)
+	}
+}
+
+func TestBrowserConfigAdmitsCanonicalCompanionProfileWithoutGatewayRuntimePaths(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	cfg.Nodes.Enabled = true
+	cfg.Execution.Targets = map[string]ExecutionTarget{
+		"ab-local-test": {Type: "node", Node: "darwin-companion"},
+	}
+	cfg.Tools.Browser.Targets["companion"] = BrowserTargetConfig{
+		Enabled: true, Placement: BrowserPlacementNode, NodeTarget: "ab-local-test",
+		Profiles: map[string]BrowserProfileConfig{
+			"personal": {
+				Enabled: true, Revision: "personal-v1", Mode: BrowserProfileManaged,
+				AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:123456"},
+				NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+				ApprovalMode: BrowserApprovalAlwaysCommit, DryRun: true,
+			},
+		},
+	}
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() canonical companion error = %v", err)
+	}
+
+	target := cfg.Tools.Browser.Targets["companion"]
+	profile := target.Profiles["personal"]
+	profile.Runtime = BrowserProfileRuntimeConfig{
+		ProfileDirectory: "/private/companion/profile",
+		LockFile:         "/private/companion/profile.lock",
+	}
+	target.Profiles["personal"] = profile
+	cfg.Tools.Browser.Targets["companion"] = target
+	if err := cfg.ValidateBrowserConfig(); err == nil ||
+		!strings.Contains(err.Error(), "configured on the companion host") {
+		t.Fatalf("gateway-owned companion runtime error = %v", err)
 	}
 }
 

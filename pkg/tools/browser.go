@@ -233,7 +233,7 @@ func (tool *BrowserActTool) ToolEnabledForAgent(agentID string) bool {
 
 func (*BrowserTargetsTool) Name() string { return "browser_targets" }
 func (*BrowserTargetsTool) Description() string {
-	return "List browser targets and managed profiles granted to this agent without starting a browser. " +
+	return "List browser targets and identity profiles granted to this agent and actor without starting a browser. " +
 		"When the task does not name a target, use default_target when present; never infer preference from array order."
 }
 
@@ -278,6 +278,8 @@ type browserFeatureView struct {
 
 type browserProfileView struct {
 	Profile              string                   `json:"profile"`
+	Mode                 string                   `json:"mode"`
+	Persistence          string                   `json:"persistence"`
 	Status               string                   `json:"status"`
 	Reason               string                   `json:"reason,omitempty"`
 	NetworkMode          string                   `json:"network_mode"`
@@ -310,7 +312,12 @@ type browserLimitsView struct {
 }
 
 func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *toolshared.ToolResult {
-	if !tool.runtime.enabledForAgent(toolshared.ToolAgentID(ctx)) {
+	agentID := strings.TrimSpace(toolshared.ToolAgentID(ctx))
+	actorID := strings.TrimSpace(toolshared.ToolActorID(ctx))
+	if actorID == "" {
+		actorID = strings.TrimSpace(toolshared.ToolSenderID(ctx))
+	}
+	if !tool.runtime.enabledForAgent(agentID) || actorID == "" {
 		return browserErrorResult(
 			"not_granted",
 			"Browser access is not granted to this agent.",
@@ -338,9 +345,12 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 		target := tool.runtime.config.Targets[name]
 		profileNames := make([]string, 0, len(target.Profiles))
 		for profileName, profile := range target.Profiles {
-			if profile.Enabled {
+			if profile.Enabled && browserProfileGranted(profile, agentID, actorID) {
 				profileNames = append(profileNames, profileName)
 			}
+		}
+		if len(profileNames) == 0 {
+			continue
 		}
 		sort.Strings(profileNames)
 		diagnostics, diagnosticsErr := tool.runtime.source.PassiveTargetDiagnostics(
@@ -374,6 +384,8 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			}
 			profiles = append(profiles, browserProfileView{
 				Profile:              profileName,
+				Mode:                 profile.Mode,
+				Persistence:          browserProfilePersistence(profile.Mode),
 				Status:               status,
 				Reason:               reason,
 				NetworkMode:          profile.NetworkMode,
@@ -451,7 +463,33 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 			},
 		})
 	}
+	if !slices.ContainsFunc(views, func(view browserTargetView) bool {
+		return view.Target == defaultTarget
+	}) {
+		defaultTarget = ""
+	}
 	return tool.runtime.result(browserTargetResult{DefaultTarget: defaultTarget, Targets: views})
+}
+
+func browserProfileGranted(profile config.BrowserProfileConfig, agentID, actorID string) bool {
+	if !profile.CanonicalAuthority() {
+		return true
+	}
+	return slices.Contains(profile.AllowedAgents, routing.NormalizeAgentID(agentID)) &&
+		slices.Contains(profile.AllowedActors, actorID)
+}
+
+func browserProfilePersistence(mode string) string {
+	switch mode {
+	case config.BrowserProfileManaged:
+		return "retained"
+	case "ephemeral":
+		return "session_only"
+	case "attached_user":
+		return "user_owned"
+	default:
+		return "unknown"
+	}
 }
 
 func readinessRank(status string) int {
@@ -1985,7 +2023,7 @@ func browserOwnerFromContext(ctx context.Context) (browser.Owner, error) {
 		return browser.Owner{}, errors.New("browser tool context is incomplete")
 	}
 	return browser.Owner{
-		ActorID:     browserContextID("actor", actorID),
+		ActorID:     browser.OpaqueActorID(actorID),
 		AgentID:     browser.OpaqueAgentID(routing.NormalizeAgentID(agentID)),
 		SessionKey:  browserContextID("session", sessionKey),
 		ExecutionID: browserContextID("execution", executionID),

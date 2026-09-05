@@ -6,7 +6,7 @@ Status: admitted, not started.
 
 Implement Browser Identity and Attached-User Profiles end to end under
 [Browser Capability B4 Admission](browser-capability-b4-admission.md). The goal
-ends only after all six phases are merged, deployed, and live-validated on the
+ends only after all five phases are merged, deployed, and live-validated on the
 placements named by each phase, and global completion evidence is committed.
 
 Implementation uses the MintClaw autonomous pull-request workflow. Each phase
@@ -18,12 +18,11 @@ evidence is sufficient to continue safely.
 
 | Phase | Status | Required outcome |
 | --- | --- | --- |
-| 1. Profile authority and production cutover | Pending | Canonical multi-profile schema, private runtime mapping, safe discovery, and lossless migration of the deployed `managed` identity |
+| 1. Profile authority and production cutover | In progress | Canonical multi-profile schema, private runtime mapping, safe discovery, and lossless migration of the deployed `managed` identity |
 | 2. Managed alias and revocation parity | Pending | Arbitrary managed aliases, exact grants, revision-bound revocation, lease isolation, and gateway/companion conformance |
 | 3. Ephemeral profiles | Pending | Fresh session-only identity with verified cleanup and quarantine semantics on gateway and companion |
-| 4. Origin-bound credential injection | Pending | Host-local opaque credential grants using protected fill with zero plaintext persistence or cross-host transfer |
-| 5. Gateway attached Chrome | Pending | Visible per-session Playwright-extension consent, selected-tab authority, detach, and gateway lifecycle evidence |
-| 6. Companion attached Chrome and closeout | Pending | The same attached contract on the Darwin companion plus global B4 production evidence and roadmap closeout |
+| 4. Gateway attached Chrome | Pending | Visible per-session Playwright-extension consent, selected-tab authority, detach, and gateway lifecycle evidence |
+| 5. Companion attached Chrome and closeout | Pending | The same attached contract on the Darwin companion plus global B4 production evidence and roadmap closeout |
 
 ## Rules For Every Phase
 
@@ -94,7 +93,7 @@ Acceptance criteria:
 
 - two managed aliases independently open, retain state, close, and immediately
   reuse their own storage on gateway and companion;
-- cross-alias session IDs, refs, approvals, artifacts, and credentials fail
+- cross-alias session IDs, refs, approvals, and artifacts fail
   before dispatch;
 - concurrent opens for one profile are busy without poisoning another
   profile's readiness; global session-capacity exhaustion remains a distinct
@@ -125,31 +124,7 @@ Acceptance criteria:
 - gateway and companion real-process smoke tests prove clean start, cleanup,
   immediate reuse, and no orphan browser or driver process.
 
-## Phase 4: Origin-Bound Credential Injection
-
-Add opaque credential grants and typed `credential_fill`. Use the existing
-secure-string resolver with owner-only `file://` and `enc://` values; reject
-inline plaintext. Resolve secrets only on the execution host after current
-origin, profile grant, field, writable element, document identity, and policy
-checks. Reuse protected-fill ephemeral delivery and durable redaction.
-
-Acceptance criteria:
-
-- exact granted origin and field fill successfully on gateway and companion;
-- wrong origin, redirect, missing or ungranted alias, wrong field, stale ref,
-  non-writable element, revoked profile, resolver failure, and policy denial
-  dispatch no secret bytes;
-- gateway credentials never cross the node transport and companion credentials
-  never cross back to the gateway;
-- high-entropy canaries are absent from config JSON, browser store, agent
-  history, traces, logs, approvals, events, node plans, node ledgers, artifacts,
-  safe errors, and post-cleanup process arguments and environments;
-- crash, disconnect, cancellation, timeout, and restart cannot replay or
-  reconstruct a credential fill; and
-- live synthetic-origin smoke tests prove success and origin denial on each
-  placement without using personal credentials.
-
-## Phase 5: Gateway Attached Chrome
+## Phase 4: Gateway Attached Chrome
 
 Add `attached_user` on the gateway with the official Playwright extension
 connector. Opening requires one expiring owner-routed consent and visible
@@ -175,7 +150,7 @@ Acceptance criteria:
 - a non-sensitive real tab completes consent, observe, one reversible action,
   close, immediate reattach, and process/lock audit.
 
-## Phase 6: Companion Attached Chrome And Closeout
+## Phase 5: Companion Attached Chrome And Closeout
 
 Extend the same attached-user descriptor, consent, controller, origin,
 freshness, detach, and safe-error contract to the admitted Darwin companion.
@@ -203,7 +178,7 @@ Acceptance criteria:
 ## Global Completion And Stop Rule
 
 Do not mark the goal complete after a partial profile mode, a green test suite,
-or a successful gateway-only demonstration. Completion requires all six phases,
+or a successful gateway-only demonstration. Completion requires all five phases,
 the B4 global acceptance evidence, merged closeout documentation, deployed
 gateway and companion versions, and no unresolved review or production defect
 within the admitted scope.
@@ -211,4 +186,4 @@ within the admitted scope.
 If any mandatory stop condition in the B4 admission is reached, stop the
 affected implementation before broadening authority. Record the exact evidence
 and request a new architecture decision rather than silently weakening
-identity, credential, consent, revocation, or cleanup guarantees.
+identity, consent, revocation, or cleanup guarantees.

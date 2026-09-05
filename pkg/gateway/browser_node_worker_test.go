@@ -1733,7 +1733,13 @@ func TestGatewayLocalDiagnosticsHideDragFromDryRunAndMixedProfiles(t *testing.T)
 		NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: false, AllowApprovedActions: true,
 	}
 	cfg.Tools.Browser.Targets = map[string]config.BrowserTargetConfig{"gateway": target}
-	factory := &gatewayBrowserWorkerFactory{config: cfg, local: &readyLocalBrowserFactory{}}
+	factory := &gatewayBrowserWorkerFactory{
+		config: cfg,
+		local: map[string]browser.WorkerFactory{
+			gatewayBrowserProfileKey("gateway", "managed"): &readyLocalBrowserFactory{},
+			gatewayBrowserProfileKey("gateway", "active"):  &readyLocalBrowserFactory{},
+		},
+	}
 
 	dryRun, err := factory.PassiveTargetDiagnostics(t.Context(), "gateway", []string{"managed"})
 	if err != nil || slices.Contains(dryRun.Actions, browser.ActionDrag) {
@@ -2058,6 +2064,16 @@ func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
 	local.AllowApprovedActions = false
 	if browserProfileIntersects(local, limits, remote) {
 		t.Fatal("mismatched action modes intersected")
+	}
+	local.DryRun = false
+	local.AllowApprovedActions = true
+	local.Revision = "managed-v2"
+	if browserProfileIntersects(local, limits, remote) {
+		t.Fatal("mismatched canonical profile revisions intersected")
+	}
+	local.Revision = remote.Revision
+	if !browserProfileIntersects(local, limits, remote) {
+		t.Fatal("matching canonical profile revisions did not intersect")
 	}
 }
 

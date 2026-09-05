@@ -439,6 +439,18 @@ func NewBroker(rootConfig *config.Config, store Store, factory WorkerFactory) (*
 	for index, agentID := range browserConfig.Agents {
 		browserConfig.Agents[index] = OpaqueAgentID(agentID)
 	}
+	for targetName, target := range browserConfig.Targets {
+		for profileName, profile := range target.Profiles {
+			for index, agentID := range profile.AllowedAgents {
+				profile.AllowedAgents[index] = OpaqueAgentID(agentID)
+			}
+			for index, actorID := range profile.AllowedActors {
+				profile.AllowedActors[index] = OpaqueActorID(actorID)
+			}
+			target.Profiles[profileName] = profile
+		}
+		browserConfig.Targets[targetName] = target
+	}
 	bindingKey := make([]byte, 32)
 	if _, err = rand.Read(bindingKey); err != nil {
 		return nil, fmt.Errorf("generate browser action binding key: %w", err)
@@ -1669,6 +1681,11 @@ func (broker *Broker) authorize(request OpenRequest) (config.BrowserTargetConfig
 	if !ok || !profile.Enabled {
 		return config.BrowserTargetConfig{}, config.BrowserProfileConfig{}, ErrDenied
 	}
+	if profile.CanonicalAuthority() &&
+		(!contains(profile.AllowedAgents, request.Owner.AgentID) ||
+			!contains(profile.AllowedActors, request.Owner.ActorID)) {
+		return config.BrowserTargetConfig{}, config.BrowserProfileConfig{}, ErrDenied
+	}
 	return target, profile, nil
 }
 
@@ -1705,6 +1722,8 @@ func cloneBrowserConfig(source config.BrowserToolsConfig) config.BrowserToolsCon
 		clonedTarget.Profiles = make(map[string]config.BrowserProfileConfig, len(target.Profiles))
 		for profileName, profile := range target.Profiles {
 			clonedProfile := profile
+			clonedProfile.AllowedAgents = append([]string(nil), profile.AllowedAgents...)
+			clonedProfile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 			clonedProfile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
 			clonedProfile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 			clonedTarget.Profiles[profileName] = clonedProfile
