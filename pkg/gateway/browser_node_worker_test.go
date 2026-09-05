@@ -487,6 +487,35 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 	}
 }
 
+func TestNodeBrowserWorkerReadsProtocolV1CanonicalIntegers(t *testing.T) {
+	worker := &nodeBrowserWorker{protocolVersion: nodes.ProtocolV1}
+	var result nodes.BrowserSessionResult
+	err := worker.decodeInvocationResult(json.RawMessage(`{
+		"session_id":"browser_session_v1","state":"ready","tab_id":"tab_primary",
+		"controller":"agent","features":{"observe":true,"navigate":true,"contexts":true},
+		"expires_at":1.788565003e9,"idle_expires_at":1.788561403e9
+	}`), &result)
+	if err != nil {
+		t.Fatalf("decode protocol-v1 browser result: %v", err)
+	}
+	if result.ExpiresAt != 1788565003 || result.IdleExpiresAt != 1788561403 {
+		t.Fatalf("protocol-v1 browser timestamps = %d, %d", result.ExpiresAt, result.IdleExpiresAt)
+	}
+	var invalid nodes.BrowserSessionResult
+	if err = worker.decodeInvocationResult(
+		json.RawMessage(`{"session_id":"browser_session_v1","state":"ready","expires_at":1.5}`),
+		&invalid,
+	); err == nil {
+		t.Fatal("protocol-v1 browser reader accepted a fractional timestamp")
+	}
+	if err = worker.decodeInvocationResult(
+		json.RawMessage(`{"session_id":"browser_session_v1","state":"ready","expires_at":1e999999}`),
+		&invalid,
+	); err == nil {
+		t.Fatal("protocol-v1 browser reader expanded an unbounded timestamp")
+	}
+}
+
 func TestGatewayBrowserWorkerCommitsPublicationAfterSessionPersistence(t *testing.T) {
 	cfg, runtime, _ := browserNodeTestRuntime(t)
 	baseFactory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
