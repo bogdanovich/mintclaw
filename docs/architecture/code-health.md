@@ -31,11 +31,13 @@ archives the execution ledgers and records the deployed state.
 
 ## Bounded compatibility
 
-The deployed gateway remains dual-protocol because two connected external
-nodes still negotiate node protocol v1. The locally managed canary negotiates
-v2. V1 parsing is therefore a versioned wire-edge obligation, not a second
-steady-state representation; it can be removed only after a zero-v1 fleet
-audit. The deployed inventory is recorded in the
+All three connected companions now negotiate node protocol v2. The deployed
+gateway temporarily retains v1 parsing for 148 expired no-replay invocation
+tombstones that were still present at fleet closeout. V1 parsing is therefore
+a versioned persistence-edge obligation, not a second steady-state
+representation; it can be removed after retention pruning and a fresh audit
+show zero connected, active, or retained v1 work. The deployed inventory is
+recorded in the
 [Node JSON Canonicalization V2 Cutover](../operations/node-json-canonicalization-v2-cutover.md).
 
 The obsolete provider `connect_mode` is not persisted or exposed by the
