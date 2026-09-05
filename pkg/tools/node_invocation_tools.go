@@ -5,23 +5,22 @@ import (
 	"errors"
 	"time"
 
-	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
-func NewNodeInvokeTool(cfg *config.Config, source NodeInvocationSource) *NodeInvokeTool {
-	return &NodeInvokeTool{runtime: newNodeInvocationToolRuntime(cfg, source)}
+func NewNodeInvokeTool(options NodeToolOptions, source NodeInvocationSource) *NodeInvokeTool {
+	return &NodeInvokeTool{runtime: newNodeInvocationToolRuntime(options, source)}
 }
 
-func NewNodeStatusTool(cfg *config.Config, source NodeInvocationSource) *NodeStatusTool {
-	return &NodeStatusTool{runtime: newNodeInvocationToolRuntime(cfg, source)}
+func NewNodeStatusTool(options NodeToolOptions, source NodeInvocationSource) *NodeStatusTool {
+	return &NodeStatusTool{runtime: newNodeInvocationToolRuntime(options, source)}
 }
 
-func NewNodeCancelTool(cfg *config.Config, source NodeInvocationSource) *NodeCancelTool {
-	return &NodeCancelTool{runtime: newNodeInvocationToolRuntime(cfg, source)}
+func NewNodeCancelTool(options NodeToolOptions, source NodeInvocationSource) *NodeCancelTool {
+	return &NodeCancelTool{runtime: newNodeInvocationToolRuntime(options, source)}
 }
 
 // SetEventPublisher injects the runtime event bus used for node invocation audit events.
@@ -46,11 +45,11 @@ func (tool *NodeCancelTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 }
 
 func newNodeInvocationToolRuntime(
-	cfg *config.Config,
+	options NodeToolOptions,
 	source NodeInvocationSource,
 ) *nodeInvocationToolRuntime {
 	return &nodeInvocationToolRuntime{
-		access: newNodeTargetAccess(cfg, source),
+		access: newNodeTargetAccess(options, source),
 		source: source,
 	}
 }

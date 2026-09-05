@@ -2149,6 +2149,96 @@ func TestHandlePatchConfig_DoesNotPersistShadowRegistryAuthTokenField(t *testing
 	}
 }
 
+func TestHandleConfigWrite_ShadowRegistryTokenOverridesLegacyPlaceholder(t *testing.T) {
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+			if err := os.WriteFile(
+				filepath.Join(filepath.Dir(configPath), "replacement.key"),
+				[]byte("replacement-token\n"),
+				0o600,
+			); err != nil {
+				t.Fatalf("write replacement credential: %v", err)
+			}
+
+			repository := config.NewRepository(configPath)
+			if _, err := repository.Update(func(cfg *config.Config) error {
+				registry, _ := cfg.Tools.Skills.Registries.Get("github")
+				registry.AuthToken = *config.NewSecureString("current-token")
+				cfg.Tools.Skills.Registries.Set("github", registry)
+				return nil
+			}); err != nil {
+				t.Fatalf("seed registry credential: %v", err)
+			}
+			snapshot, err := repository.ReadOnly()
+			if err != nil {
+				t.Fatalf("ReadOnly() error = %v", err)
+			}
+
+			payload := map[string]any{
+				"tools": map[string]any{
+					"skills": map[string]any{
+						"registries": map[string]any{
+							"github": map[string]any{},
+						},
+					},
+				},
+			}
+			if method == http.MethodPut {
+				body, marshalErr := json.Marshal(snapshot.Config)
+				if marshalErr != nil {
+					t.Fatalf("Marshal(config) error = %v", marshalErr)
+				}
+				if unmarshalErr := json.Unmarshal(body, &payload); unmarshalErr != nil {
+					t.Fatalf("Unmarshal(config) error = %v", unmarshalErr)
+				}
+			}
+			toolsMap := payload["tools"].(map[string]any)
+			skillsMap := toolsMap["skills"].(map[string]any)
+			registriesMap := skillsMap["registries"].(map[string]any)
+			registryMap := registriesMap["github"].(map[string]any)
+			registryMap["auth_token"] = legacySecretPlaceholder
+			registryMap["_auth_token"] = "file://replacement.key"
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal(payload) error = %v", err)
+			}
+
+			handler := NewHandler(configPath)
+			mux := http.NewServeMux()
+			handler.RegisterRoutes(mux)
+			req := httptest.NewRequest(method, "/api/config", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			if method == http.MethodPut {
+				req.Header.Set("If-Match", configRevisionETag(snapshot.Revision))
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			updated, err := config.LoadConfig(configPath)
+			if err != nil {
+				t.Fatalf("LoadConfig() error = %v", err)
+			}
+			registry, ok := updated.Tools.Skills.Registries.Get("github")
+			if !ok || registry.AuthToken.String() != "replacement-token" {
+				t.Fatalf("updated registry = %#v", registry)
+			}
+			security, err := os.ReadFile(filepath.Join(filepath.Dir(configPath), config.SecurityConfigFile))
+			if err != nil {
+				t.Fatalf("ReadFile(.security.yml) error = %v", err)
+			}
+			if !bytes.Contains(security, []byte("file://replacement.key")) ||
+				bytes.Contains(security, []byte("_auth_token")) {
+				t.Fatalf("unexpected security document:\n%s", security)
+			}
+		})
+	}
+}
+
 func TestHandlePatchConfig_RemovesRegistryWithStoredAuthToken(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
@@ -2571,10 +2661,117 @@ func TestApplyConfigSecretsFromMap_TelegramToken(t *testing.T) {
 		},
 	}
 
-	applyConfigSecretsFromMap(cfg, raw)
+	if err := applyConfigSecretsFromMap(cfg, raw, filepath.Join(t.TempDir(), "config.json")); err != nil {
+		t.Fatalf("applyConfigSecretsFromMap() error = %v", err)
+	}
 
 	if got := tgCfg.Token.String(); got != "secret-from-api" {
 		t.Fatalf("telegram token = %q, want %q", got, "secret-from-api")
+	}
+}
+
+func TestApplyConfigSecretsFromMap_PreservesLegacyPlaceholders(t *testing.T) {
+	cfg := config.DefaultConfig()
+	telegram := cfg.Channels["telegram"]
+	decoded, err := telegram.GetDecoded()
+	if err != nil {
+		t.Fatalf("GetDecoded() error = %v", err)
+	}
+	telegramSettings := decoded.(*config.TelegramSettings)
+	telegramSettings.Token = *config.NewSecureString("current-channel-token")
+
+	github, ok := cfg.Tools.Skills.Registries.Get("github")
+	if !ok {
+		t.Fatal("default GitHub registry is missing")
+	}
+	github.AuthToken = *config.NewSecureString("current-registry-token")
+	cfg.Tools.Skills.Registries.Set("github", github)
+
+	raw := map[string]any{
+		"channel_list": map[string]any{
+			"telegram": map[string]any{
+				"settings": map[string]any{"token": legacySecretPlaceholder},
+			},
+		},
+		"tools": map[string]any{
+			"skills": map[string]any{
+				"registries": map[string]any{
+					"github": map[string]any{"auth_token": legacySecretPlaceholder},
+				},
+			},
+		},
+	}
+	if err := applyConfigSecretsFromMap(cfg, raw, filepath.Join(t.TempDir(), "config.json")); err != nil {
+		t.Fatalf("applyConfigSecretsFromMap() error = %v", err)
+	}
+
+	if got := telegramSettings.Token.String(); got != "current-channel-token" {
+		t.Fatalf("telegram token = %q, want preserved token", got)
+	}
+	github, _ = cfg.Tools.Skills.Registries.Get("github")
+	if got := github.AuthToken.String(); got != "current-registry-token" {
+		t.Fatalf("GitHub token = %q, want preserved token", got)
+	}
+}
+
+func TestApplyConfigSecretsFromMap_ResolvesAndPersistsFileReferences(t *testing.T) {
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "config.json")
+	if err := os.WriteFile(filepath.Join(configDir, "channel.key"), []byte("channel-secret\n"), 0o600); err != nil {
+		t.Fatalf("write channel credential: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "registry.key"), []byte("registry-secret\n"), 0o600); err != nil {
+		t.Fatalf("write registry credential: %v", err)
+	}
+
+	cfg := config.DefaultConfig()
+	telegram := cfg.Channels["telegram"]
+	telegram.Enabled = true
+	decoded, err := telegram.GetDecoded()
+	if err != nil {
+		t.Fatalf("GetDecoded() error = %v", err)
+	}
+	telegramSettings := decoded.(*config.TelegramSettings)
+	raw := map[string]any{
+		"channel_list": map[string]any{
+			"telegram": map[string]any{
+				"enabled":  true,
+				"settings": map[string]any{"token": "file://channel.key"},
+			},
+		},
+		"tools": map[string]any{
+			"skills": map[string]any{
+				"registries": map[string]any{
+					"github": map[string]any{"auth_token": "file://registry.key"},
+				},
+			},
+		},
+	}
+	if err = applyConfigSecretsFromMap(cfg, raw, configPath); err != nil {
+		t.Fatalf("applyConfigSecretsFromMap() error = %v", err)
+	}
+
+	if got := telegramSettings.Token.String(); got != "channel-secret" {
+		t.Fatalf("telegram token = %q, want resolved file secret", got)
+	}
+	github, ok := cfg.Tools.Skills.Registries.Get("github")
+	if !ok {
+		t.Fatal("default GitHub registry is missing")
+	}
+	if got := github.AuthToken.String(); got != "registry-secret" {
+		t.Fatalf("GitHub token = %q, want resolved file secret", got)
+	}
+	if _, err = config.NewRepository(configPath).Save(cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	security, err := os.ReadFile(filepath.Join(configDir, config.SecurityConfigFile))
+	if err != nil {
+		t.Fatalf("ReadFile(.security.yml) error = %v", err)
+	}
+	for _, reference := range []string{"file://channel.key", "file://registry.key"} {
+		if !bytes.Contains(security, []byte(reference)) {
+			t.Fatalf("security document omitted %q:\n%s", reference, security)
+		}
 	}
 }
 
@@ -2612,7 +2809,9 @@ func TestApplyConfigSecretsFromMap_TeamsWebhook(t *testing.T) {
 		},
 	}
 
-	applyConfigSecretsFromMap(cfg, raw)
+	if err := applyConfigSecretsFromMap(cfg, raw, filepath.Join(t.TempDir(), "config.json")); err != nil {
+		t.Fatalf("applyConfigSecretsFromMap() error = %v", err)
+	}
 
 	// Verify the decoded struct has the updated SecureString value
 	decoded, err := bc.GetDecoded()
@@ -2672,7 +2871,9 @@ func TestApplyConfigSecretsFromMap_MultipleChannels(t *testing.T) {
 		},
 	}
 
-	applyConfigSecretsFromMap(cfg, raw)
+	if err = applyConfigSecretsFromMap(cfg, raw, filepath.Join(t.TempDir(), "config.json")); err != nil {
+		t.Fatalf("applyConfigSecretsFromMap() error = %v", err)
+	}
 
 	if got := tgCfg.Token.String(); got != "new-telegram-token" {
 		t.Fatalf("telegram token = %q, want %q", got, "new-telegram-token")
@@ -2702,7 +2903,9 @@ func TestApplyConfigSecretsFromMap_SkipsNonStringValues(t *testing.T) {
 		},
 	}
 
-	applyConfigSecretsFromMap(cfg, raw)
+	if err = applyConfigSecretsFromMap(cfg, raw, filepath.Join(t.TempDir(), "config.json")); err != nil {
+		t.Fatalf("applyConfigSecretsFromMap() error = %v", err)
+	}
 
 	if got := tgCfg.Token.String(); got != "original-token" {
 		t.Fatalf("telegram token = %q, want %q", got, "original-token")
@@ -2725,7 +2928,9 @@ func TestApplyConfigSecretsFromMap_ChannelNotDecodedYet(t *testing.T) {
 		},
 	}
 
-	applyConfigSecretsFromMap(cfg, raw)
+	if err := applyConfigSecretsFromMap(cfg, raw, filepath.Join(t.TempDir(), "config.json")); err != nil {
+		t.Fatalf("applyConfigSecretsFromMap() error = %v", err)
+	}
 
 	decoded, err := bc.GetDecoded()
 	if err != nil {

@@ -135,37 +135,6 @@ func freezeTurnInput(spec turnSpec) turnInput {
 	}
 }
 
-func (input turnInput) runtimeOptions() turnSpec {
-	return turnSpec{
-		mode:                         input.mode,
-		Dispatch:                     cloneDispatchRequest(input.Dispatch),
-		ModelBinding:                 cloneEffectiveModelBinding(input.ModelBinding),
-		TaskID:                       input.TaskID,
-		ObjectiveChecklist:           cloneRuntimeObjectiveChecklist(input.ObjectiveChecklist),
-		InteractionWorkspace:         input.InteractionWorkspace,
-		InteractionSessionKey:        input.InteractionSessionKey,
-		InteractionRouteKey:          input.InteractionRouteKey,
-		InteractionOriginExecution:   input.InteractionOriginExecution,
-		InteractionOriginContext:     cloneInboundContext(input.InteractionOriginContext),
-		SenderDisplayName:            input.SenderDisplayName,
-		CodingContext:                input.CodingContext,
-		ForcedSkills:                 append([]string(nil), input.ForcedSkills...),
-		TurnProfile:                  cloneEffectiveTurnProfile(input.TurnProfile),
-		InitialSteeringMessages:      cloneProviderMessages(input.InitialSteeringMessages),
-		ActiveGoal:                   input.ActiveGoal,
-		DefaultResponse:              input.DefaultResponse,
-		EnableSummary:                input.EnableSummary,
-		SuppressBackgroundCompaction: input.SuppressBackgroundCompaction,
-		SendResponse:                 input.SendResponse,
-		ExpectFinalDelivery:          input.ExpectFinalDelivery,
-		AllowInterimMintClawPublish:  input.AllowInterimMintClawPublish,
-		DirectStreaming:              input.DirectStreaming,
-		SuppressToolUserDelivery:     input.SuppressToolUserDelivery,
-		SuppressToolFeedback:         input.SuppressToolFeedback,
-		NoHistory:                    input.NoHistory,
-	}
-}
-
 func cloneEffectiveTurnProfile(profile config.EffectiveTurnProfile) config.EffectiveTurnProfile {
 	if profile.AllowedSkills != nil {
 		profile.AllowedSkills = append([]string{}, profile.AllowedSkills...)

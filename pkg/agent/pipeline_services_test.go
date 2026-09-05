@@ -76,9 +76,9 @@ func TestPipelineInterimMessageDeliveryDoesNotDismissToolFeedback(t *testing.T) 
 		&turnState{
 			channel: "telegram",
 			chatID:  "chat-1",
-			opts: turnSpec{Dispatch: DispatchRequest{
+			opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
 				InboundContext: &bus.InboundContext{},
-			}},
+			}}),
 		},
 		result,
 		"message",

@@ -115,7 +115,7 @@ func estimateNonHistoryPromptReserveForTurnSpec(
 		return EstimateToolDefsTokens(toolDefs)
 	}
 
-	contextualSkills := activeSkillNames(agent, opts)
+	contextualSkills := activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills)
 	if agent.ContextBuilder != nil {
 		contextualSkills = agent.ContextBuilder.ResolveActiveSkillsForContext(contextualSkills)
 	}

@@ -210,7 +210,7 @@ func setupBrowserRuntime(ctx context.Context, cfg *config.Config, runningService
 
 type gatewayBrowserToolSource struct {
 	services            *services
-	config              *config.Config
+	nodeTargets         map[string]struct{}
 	policyRevision      string
 	workspace           string
 	screenshotRetention time.Duration
@@ -268,14 +268,11 @@ func (source *gatewayBrowserToolSource) PassiveTargetDiagnostics(
 			screenshotAvailable := source.ScreenshotAvailable()
 			downloadAvailable := artifactTransferAvailable && source.downloadAvailable
 			handoffAvailable := source.HandoffAvailable()
-			if source.config != nil {
-				if configured, ok := source.config.Tools.Browser.Targets[target]; ok &&
-					configured.EffectivePlacement() == config.BrowserPlacementNode {
-					screenshotAvailable = screenshotAvailable && readinessByProfile != nil && contexts
-					uploadAvailable = uploadAvailable && slices.Contains(actions, browser.ActionUpload)
-					downloadAvailable = artifactTransferAvailable && slices.Contains(actions, browser.ActionDownload)
-					handoffAvailable = false
-				}
+			if _, nodeTarget := source.nodeTargets[target]; nodeTarget {
+				screenshotAvailable = screenshotAvailable && readinessByProfile != nil && contexts
+				uploadAvailable = uploadAvailable && slices.Contains(actions, browser.ActionUpload)
+				downloadAvailable = artifactTransferAvailable && slices.Contains(actions, browser.ActionDownload)
+				handoffAvailable = false
 			}
 			result := tools.BrowserTargetDiagnostics{
 				Profiles:    make(map[string]browser.PassiveReadiness, len(profiles)),
@@ -639,8 +636,8 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 		}
 		return &gatewayBrowserToolSource{
 			services: runningServices, policyRevision: policyRevision,
-			config:    reloadCfg,
-			workspace: reloadCfg.WorkspacePath(),
+			nodeTargets: browserNodeTargets(reloadCfg.Tools.Browser),
+			workspace:   reloadCfg.WorkspacePath(),
 			screenshotRetention: browserScreenshotRetention(
 				reloadCfg.Tools.Browser.Limits.Effective().RetentionSecs,
 			),
@@ -655,49 +652,49 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserTargetsTool(reloadCfg, source), nil
+			return tools.NewBrowserTargetsTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_session": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserSessionTool(reloadCfg, source), nil
+			return tools.NewBrowserSessionTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_observe": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserObserveTool(reloadCfg, source), nil
+			return tools.NewBrowserObserveTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_capture": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserCaptureTool(reloadCfg, source), nil
+			return tools.NewBrowserCaptureTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_diagnostics": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserDiagnosticsTool(reloadCfg, source), nil
+			return tools.NewBrowserDiagnosticsTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_contexts": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserContextsTool(reloadCfg, source), nil
+			return tools.NewBrowserContextsTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 		"browser_act": func(reloadCfg *config.Config) (toolshared.Tool, error) {
 			source, err := sourceFor(reloadCfg)
 			if err != nil {
 				return nil, err
 			}
-			return tools.NewBrowserActTool(reloadCfg, source), nil
+			return tools.NewBrowserActTool(tools.NewBrowserToolOptions(reloadCfg.Tools.Browser), source), nil
 		},
 	}
 	for _, name := range []string{
@@ -709,6 +706,16 @@ func setupBrowserTools(cfg *config.Config, agentLoop *agent.AgentLoop, runningSe
 		}
 	}
 	return nil
+}
+
+func browserNodeTargets(policy config.BrowserToolsConfig) map[string]struct{} {
+	targets := make(map[string]struct{})
+	for name, target := range policy.Targets {
+		if target.Enabled && target.EffectivePlacement() == config.BrowserPlacementNode {
+			targets[name] = struct{}{}
+		}
+	}
+	return targets
 }
 
 func browserScreenshotRetention(seconds int) time.Duration {

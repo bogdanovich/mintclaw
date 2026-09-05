@@ -13,6 +13,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/commands"
+	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -482,17 +483,21 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 	return utils.Truncate(sb.String(), maxLLMRequestLogChars)
 }
 
-func activeSkillNames(agent *AgentInstance, opts turnSpec) []string {
+func activeSkillNames(
+	agent *AgentInstance,
+	profile config.EffectiveTurnProfile,
+	forcedSkills []string,
+) []string {
 	if agent == nil {
 		return nil
 	}
-	if turnProfileSkillsOff(opts.TurnProfile) {
+	if turnProfileSkillsOff(profile) {
 		return nil
 	}
 
-	combined := make([]string, 0, len(agent.SkillsFilter)+len(opts.ForcedSkills))
+	combined := make([]string, 0, len(agent.SkillsFilter)+len(forcedSkills))
 	combined = append(combined, agent.SkillsFilter...)
-	combined = append(combined, opts.ForcedSkills...)
+	combined = append(combined, forcedSkills...)
 	if len(combined) == 0 {
 		return nil
 	}
@@ -517,8 +522,8 @@ func activeSkillNames(agent *AgentInstance, opts turnSpec) []string {
 		resolved = append(resolved, name)
 	}
 
-	if turnProfileCustomSkills(opts.TurnProfile) {
-		return filterNamesByTurnProfile(resolved, opts.TurnProfile.AllowedSkills)
+	if turnProfileCustomSkills(profile) {
+		return filterNamesByTurnProfile(resolved, profile.AllowedSkills)
 	}
 	return resolved
 }
