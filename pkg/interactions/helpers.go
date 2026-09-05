@@ -138,7 +138,7 @@ func cloneExecutionContext(src *bus.InboundContext) *bus.InboundContext {
 	return &cloned
 }
 
-func validateInteractionCreateMetadata(
+func validateInteractionMetadata(
 	kind Kind,
 	executionContext *bus.InboundContext,
 	action string,
@@ -159,33 +159,6 @@ func validateInteractionCreateMetadata(
 		return fmt.Errorf("%w: approval requires a bounded action description", ErrInvalidInteraction)
 	}
 	return validateExecutionContext(executionContext)
-}
-
-func validateStoredInteractionMetadata(
-	kind Kind,
-	executionContext *bus.InboundContext,
-	action string,
-) error {
-	if kind != KindApproval {
-		if strings.TrimSpace(action) != "" {
-			return fmt.Errorf("question interaction carries an approval action")
-		}
-		if executionContext != nil {
-			return validateExecutionContext(executionContext)
-		}
-		return nil
-	}
-	// Obsolete snapshots can remain readable, but the agent recovery path
-	// refuses to execute approvals without current authority metadata.
-	if executionContext != nil {
-		if err := validateExecutionContext(executionContext); err != nil {
-			return err
-		}
-	}
-	if !validBoundedString(action, MaxApprovalAction) {
-		return fmt.Errorf("approval action exceeds bounds")
-	}
-	return nil
 }
 
 func validateExecutionContext(ctx *bus.InboundContext) error {

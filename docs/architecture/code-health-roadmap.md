@@ -63,7 +63,7 @@ not targets by themselves.
 | H5 | Consolidate turn input, runtime state, outcomes, and finalization | H0, H4 characterization tests | Completed |
 | H6 | Reduce root-config coupling at high-change boundaries | H1, H2, H5 | Completed |
 | H7 | Simplify canonical node JSON numbers through a protocol cutover | H0 | Completed |
-| H8 | Remove confirmed legacy and close the program | H1-H7 | Not started |
+| H8 | Remove confirmed legacy and close the program | H1-H7 | In progress |
 
 Packets H1-H4 may proceed independently after H0. H5 should remain a sequence
 of small pull requests, not one large branch. H7 is isolated because it changes
@@ -328,6 +328,9 @@ Inventory deployed interaction records before changing readers. Convert,
 quarantine, or deliberately discard obsolete approval records that lack the
 current execution context or argument hash. After the cutover, remove tolerant
 steady-state readers and prove that old records cannot recover authority.
+
+The production inventory and cutover decision are recorded in
+[Interaction Record Strict-Reader Cutover](../operations/interaction-record-strict-reader-cutover.md).
 
 ### H8.2 Dead provider modes
 

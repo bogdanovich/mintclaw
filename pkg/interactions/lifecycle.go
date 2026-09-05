@@ -718,7 +718,7 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 	if !validArgumentHashForKind(req.Kind, req.Origin.ArgumentHash) {
 		return Record{}, fmt.Errorf("%w: approval requires a canonical argument hash", ErrInvalidInteraction)
 	}
-	if err := validateInteractionCreateMetadata(req.Kind, req.Origin.ExecutionContext, req.ApprovalAction); err != nil {
+	if err := validateInteractionMetadata(req.Kind, req.Origin.ExecutionContext, req.ApprovalAction); err != nil {
 		return Record{}, err
 	}
 	if err := validateQuestions(req.Kind, req.Questions); err != nil {
