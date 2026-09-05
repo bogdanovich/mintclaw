@@ -12,6 +12,7 @@ import (
 
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
 func TestStorePublishesImmutableReviewResultUnderThreadLease(t *testing.T) {
@@ -155,6 +156,30 @@ func TestStoreLatestReviewPointerAdvancesAndSurvivesCompactionMetadata(t *testin
 	latest, ok, err := store.LoadLatestReviewResultWithLease(t.Context(), lease, metadata)
 	if err != nil || !ok || !reflect.DeepEqual(latest, second) {
 		t.Fatalf("latest review after compaction = %#v, ok=%t, error=%v", latest, ok, err)
+	}
+	originalWriteReview := store.writeReview
+	third := second.Clone()
+	third.ReviewID = codingreview.NewID()
+	third.Summary = "Must not become latest."
+	third.CompletedAt = createdAt.Add(4 * time.Minute)
+	store.writeReview = func(pinned *os.Root, name string, data []byte, mode os.FileMode) error {
+		if err := originalWriteReview(pinned, name, data, mode); err != nil {
+			return err
+		}
+		if err := pinned.Link(name, name+".extra-link"); err != nil {
+			return err
+		}
+		return &fileutil.CommittedWriteError{Err: errors.New("injected temporary-link cleanup failure")}
+	}
+	publishErr := store.PublishReviewResult(t.Context(), lease, metadata, third, diff)
+	store.writeReview = originalWriteReview
+	if publishErr == nil || fileutil.IsCommittedWriteError(publishErr) ||
+		!strings.Contains(publishErr.Error(), "verify warned immutable result") {
+		t.Fatalf("unsafe warned result publication error = %v", publishErr)
+	}
+	latest, ok, err = store.LoadLatestReviewResultWithLease(t.Context(), lease, metadata)
+	if err != nil || !ok || !reflect.DeepEqual(latest, second) {
+		t.Fatalf("unsafe warned result advanced latest = %#v, ok=%t, error=%v", latest, ok, err)
 	}
 	pointerPath := filepath.Join(
 		root, "coding", "threads", metadata.ThreadID, repositoryDirectory, reviewDirectory, reviewLatestFileName,

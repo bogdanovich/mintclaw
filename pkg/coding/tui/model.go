@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
@@ -172,9 +173,22 @@ func NewModel(
 		height:             24,
 		focused:            true,
 		historyIndex:       -1,
+		commandPanel:       initialCommandPanel(snapshot),
 		readClipboardImage: readSystemClipboardImage,
 		writePasteFile:     writePrivatePasteFile,
 	}, nil
+}
+
+func initialCommandPanel(snapshot frontend.ThreadSnapshot) commandPanel {
+	if snapshot.Review == nil || snapshot.Review.Result == nil {
+		return commandPanelNone
+	}
+	switch snapshot.Review.Phase {
+	case codingreview.PhaseCompleted, codingreview.PhaseStale:
+		return commandPanelReview
+	default:
+		return commandPanelNone
+	}
 }
 
 func configureComposerStyles(composer *textarea.Model) {

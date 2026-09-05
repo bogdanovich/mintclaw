@@ -582,14 +582,14 @@ func ReconcileRestoredEvidence(result review.Result, current workspace.DiffResul
 
 func restoredEvidenceMatches(result review.Result, current workspace.DiffResult) bool {
 	if result.Stale || current.SchemaVersion != workspace.RepositoryDiffSchemaV1 ||
-		!current.RepositoryAvailable || current.UnavailableReason != "" || current.Stale ||
+		!current.RepositoryAvailable || current.UnavailableReason != "" ||
 		current.Target != result.Target.DiffTarget() {
 		return false
 	}
 	if result.Target.Kind == review.TargetCommit {
 		return current.ResolvedRevision == result.ResolvedRevision
 	}
-	return current.EvidenceGeneration == result.EvidenceGeneration &&
+	return !current.Stale && current.EvidenceGeneration == result.EvidenceGeneration &&
 		current.ResolvedRevision == result.ResolvedRevision && current.MergeBase == result.MergeBase
 }
 

@@ -823,7 +823,7 @@ func readAttachmentRootFile(
 	if entry.Mode()&os.ModeSymlink != 0 {
 		return nil, "", 0, fmt.Errorf("source path became a symbolic link")
 	}
-	file, err := root.OpenFile(name, os.O_RDONLY, 0)
+	file, err := openPinnedRootFile(root, name)
 	if err != nil {
 		return nil, "", 0, err
 	}

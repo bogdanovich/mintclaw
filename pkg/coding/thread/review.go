@@ -85,9 +85,17 @@ func (s *Store) PublishReviewResult(
 			return fmt.Errorf("coding thread review: inspect destination: %w", err)
 		}
 		var durabilityWarnings error
-		if err := writeRootFileExclusiveAtomic(root, name, data, 0o600); err != nil {
+		if err := s.writeReview(root, name, data, 0o600); err != nil {
 			if !fileutil.IsCommittedWriteError(err) {
 				return fmt.Errorf("coding thread review: publish result: %w", err)
+			}
+			verified, _, _, verifyErr := readAttachmentRootFile(ctx, root, name, codingreview.MaxResultBytes)
+			if verifyErr != nil || !bytes.Equal(verified, data) {
+				return fmt.Errorf(
+					"coding thread review: verify warned immutable result %q before publishing latest pointer: %w",
+					result.ReviewID,
+					errors.Join(verifyErr, errReviewResultVerificationMismatch(verified, data)),
+				)
 			}
 			durabilityWarnings = err
 		}
@@ -109,6 +117,13 @@ func (s *Store) PublishReviewResult(
 		}
 		return nil
 	})
+}
+
+func errReviewResultVerificationMismatch(actual, expected []byte) error {
+	if bytes.Equal(actual, expected) {
+		return nil
+	}
+	return fmt.Errorf("immutable result content does not match the publication")
 }
 
 // LoadLatestReviewResultWithLease restores the latest completed review under

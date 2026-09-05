@@ -305,6 +305,7 @@ type Store struct {
 	mkdirDurable func(string, string, os.FileMode) error
 	writeAtomic  func(string, []byte, os.FileMode) error
 	writeRoot    func(*os.Root, string, []byte, os.FileMode) error
+	writeReview  func(*os.Root, string, []byte, os.FileMode) error
 	syncRoot     func(*os.Root) error
 	syncDir      func(string) error
 
@@ -335,6 +336,7 @@ func NewStore(root string) (*Store, error) {
 		mkdirDurable: fileutil.MkdirAllDurable,
 		writeAtomic:  fileutil.WriteFileAtomic,
 		writeRoot:    writeRootFileAtomic,
+		writeReview:  writeRootFileExclusiveAtomic,
 		syncRoot:     syncRootDirectory,
 		syncDir:      fileutil.SyncDirectory,
 	}, nil

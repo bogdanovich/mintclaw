@@ -440,6 +440,30 @@ func TestReconcileRestoredEvidenceKeepsOnlyStillCurrentLocations(t *testing.T) {
 	}
 }
 
+func TestReconcileRestoredCommitIgnoresWorkingTreeRace(t *testing.T) {
+	target := review.Target{Kind: review.TargetCommit, Ref: "HEAD"}
+	result := review.Result{
+		SchemaVersion:    review.SchemaVersion,
+		ReviewID:         "e5768a80-a5be-4bda-b21c-0da34b02502c",
+		Target:           target,
+		ResolvedRevision: "0123456789abcdef",
+		Summary:          "Commit review.",
+		Findings: []review.Finding{{
+			Severity: review.SeverityMinor, Title: "Check result", Explanation: "The result needs review.",
+			Confidence: 0.8, LocationState: review.LocationCurrent, Path: "main.go", StartLine: 4, EndLine: 4,
+		}},
+		CompletedAt: time.Now().UTC(),
+	}
+	current := workspace.DiffResult{
+		SchemaVersion: workspace.RepositoryDiffSchemaV1, RepositoryAvailable: true,
+		Target: target.DiffTarget(), ResolvedRevision: result.ResolvedRevision, Stale: true,
+	}
+	restored := ReconcileRestoredEvidence(result, current)
+	if restored.Stale || restored.Findings[0].LocationState != review.LocationCurrent {
+		t.Fatalf("content-addressed commit review became stale = %#v", restored)
+	}
+}
+
 func TestBoundedToolResultIncludesMarkerWithinLimit(t *testing.T) {
 	const limit = 64
 	result := boundedToolResult(strings.Repeat("x", 100), limit)
