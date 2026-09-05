@@ -1,7 +1,7 @@
 # P6.4 Git review and change-summary contract
 
-Status: implementation contract; P6.4 remains open until its roadmap exit
-record is merged.
+Status: complete. Evidence is recorded in the
+[P6.4 exit record](local-coding-agent-p6-4-exit.md).
 
 This contract makes repository evidence a native coding-runtime capability.
 It follows the same responsibility boundary as Codex: deterministic Git
@@ -207,7 +207,7 @@ another thread.
 
 ## Admitted implementation packets
 
-P6.4 implementation should proceed through focused dependent packets:
+P6.4 proceeded through focused dependent packets:
 
 1. reusable passive repository evidence and typed bounded status/diff;
 2. durable baseline ownership and truthful provenance comparison;
@@ -216,7 +216,6 @@ P6.4 implementation should proceed through focused dependent packets:
 5. restart, fork, compaction, large-repository, race, and platform closeout;
 6. docs-only evidence and roadmap exit record.
 
-Each implementation packet requires focused tests, changed-package lint,
-relevant tagged and race tests, cross-platform compilation, exact-head review,
-green CI, owner rocket approval, and a merge commit. P6.5 structured code
+The [P6.4 exit record](local-coding-agent-p6-4-exit.md) maps these packets to
+their merged implementation and validation evidence. P6.5 structured code
 intelligence and all later roadmap work remain out of scope.
