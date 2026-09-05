@@ -71,6 +71,14 @@ func (s *Store) PublishReviewResult(
 		}
 		hierarchy, err := s.openAttachmentHierarchy(view.thread, true, repositoryDirectory, reviewDirectory)
 		if err != nil {
+			var committed *fileutil.CommittedWriteError
+			if errors.As(err, &committed) {
+				return fmt.Errorf(
+					"coding thread review: create result directory before publication: %w (hierarchy error: %s)",
+					committed.Err,
+					err.Error(),
+				)
+			}
 			return fmt.Errorf("coding thread review: create result directory: %w", err)
 		}
 		defer func() { _ = hierarchy.Close() }()

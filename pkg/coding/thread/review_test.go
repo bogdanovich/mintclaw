@@ -221,6 +221,66 @@ func TestStoreLatestReviewIsAbsentUntilCompletedResultPublication(t *testing.T) 
 	}
 }
 
+func TestStoreDoesNotClassifyReviewDirectoryCreationAsPublishedResult(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewStore(filepath.Join(root, "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := ResolveProject(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := NewMetadata(NewThreadID(), project, "first review", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
+	result := codingreview.Result{
+		SchemaVersion: codingreview.SchemaVersion, ReviewID: codingreview.NewID(),
+		Target: codingreview.Target{Kind: codingreview.TargetCurrent}, EvidenceGeneration: "generation-1",
+		Summary: "Must not be advertised.", CompletedAt: time.Now().UTC(),
+	}
+	diff := codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1, RepositoryAvailable: true,
+		Target:             codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		EvidenceGeneration: "generation-1",
+	}
+	originalSyncRoot := store.syncRoot
+	injected := errors.New("injected reviews parent sync failure")
+	store.syncRoot = func(pinned *os.Root) error {
+		if filepath.Base(pinned.Name()) == repositoryDirectory {
+			return injected
+		}
+		return originalSyncRoot(pinned)
+	}
+	publishErr := store.PublishReviewResult(t.Context(), lease, metadata, result, diff)
+	store.syncRoot = originalSyncRoot
+	if publishErr == nil || fileutil.IsCommittedWriteError(publishErr) || !errors.Is(publishErr, injected) {
+		t.Fatalf("pre-publication directory error = %v", publishErr)
+	}
+	latest, ok, loadErr := store.LoadLatestReviewResultWithLease(t.Context(), lease, metadata)
+	if loadErr != nil || ok || latest.ReviewID != "" {
+		t.Fatalf("directory-only commit advertised review = %#v, ok=%t, error=%v", latest, ok, loadErr)
+	}
+	threadRoot, err := store.ThreadRoot(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(
+		threadRoot, repositoryDirectory, reviewDirectory, result.ReviewID+".json",
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("result file exists after directory-only commit: %v", err)
+	}
+}
+
 func TestStoreRejectsAmbiguousReviewResultJSON(t *testing.T) {
 	root := t.TempDir()
 	store, err := NewStore(filepath.Join(root, "coding"))
