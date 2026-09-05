@@ -183,6 +183,31 @@ func effectiveBrowserLimit(value, fallback int) int {
 	return value
 }
 
+// DecodeBrowserInvocationResultForProtocol preserves typed result decoding for
+// retained protocol-v1 companions. Their canonical receipts may use exponent
+// notation for exact integers; protocol-v2 canonicalization restores bounded
+// plain integer spellings without floating-point conversion.
+func DecodeBrowserInvocationResultForProtocol(
+	protocolVersion int,
+	raw json.RawMessage,
+	result any,
+) error {
+	effective, err := EffectiveProtocolVersion(protocolVersion)
+	if err != nil {
+		return err
+	}
+	if len(raw) == 0 || len(raw) > MaxBrowserToolResultBytes {
+		return fmt.Errorf("%w: browser result is outside bounds", ErrInvalidInvocation)
+	}
+	if effective == ProtocolV1 {
+		raw, err = canonicalJSONForProtocolBounded(raw, ProtocolV2, MaxBrowserToolResultBytes)
+		if err != nil {
+			return fmt.Errorf("%w: normalize protocol-v1 browser result: %w", ErrInvalidInvocation, err)
+		}
+	}
+	return json.Unmarshal(raw, result)
+}
+
 // BrowserProfileDescriptor is the model-safe projection of companion-local
 // browser authority. Driver commands, endpoints, profile paths, lock paths,
 // environment, and credentials intentionally never cross the node boundary.

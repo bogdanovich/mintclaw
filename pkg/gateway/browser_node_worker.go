@@ -1754,7 +1754,7 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 		raw, dispatched, err = dispatch(ctx, owner, gatewayRecord.Plan.InvocationID,
 			gatewayRecord.ExpectedPlanHash, ephemeralInput)
 		if err == nil {
-			return json.Unmarshal(raw, output)
+			return worker.decodeInvocationResult(raw, output)
 		}
 		if browserInvocationSessionNotFound(err) {
 			return errNodeBrowserSessionNotFound
@@ -1769,7 +1769,7 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 			raw, dispatched, err = dispatch(ctx, owner, gatewayRecord.Plan.InvocationID,
 				gatewayRecord.ExpectedPlanHash, ephemeralInput)
 			if err == nil {
-				return json.Unmarshal(raw, output)
+				return worker.decodeInvocationResult(raw, output)
 			}
 			if browserInvocationSessionNotFound(err) {
 				return errNodeBrowserSessionNotFound
@@ -1790,6 +1790,19 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 		return browser.ErrWorkerUnavailable
 	}
 	return worker.reconcileInvocation(ctx, gatewayRecord, principal, len(ephemeralInput) != 0, output)
+}
+
+// decodeInvocationResult keeps the current protocol-v2 structs
+// strict while retaining read compatibility with successful protocol-v1
+// receipts. Protocol v1 canonicalization can spell an exact integer such as a
+// Unix timestamp as 1.788565003e9, which encoding/json does not assign to an
+// integer field. Normalize only mathematically integral v1 numbers to bounded
+// plain decimal before the typed gateway read.
+func (worker *nodeBrowserWorker) decodeInvocationResult(raw json.RawMessage, output any) error {
+	if worker == nil {
+		return browser.ErrWorkerUnavailable
+	}
+	return nodes.DecodeBrowserInvocationResultForProtocol(worker.protocolVersion, raw, output)
 }
 
 func browserRetainedInvocationMatches(
@@ -1829,7 +1842,7 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 		if err == nil {
 			switch remote.State {
 			case nodes.InvocationSucceeded:
-				return json.Unmarshal(remote.Result, output)
+				return worker.decodeInvocationResult(remote.Result, output)
 			case nodes.InvocationFailed, nodes.InvocationCanceled:
 				if remote.Failure != nil && remote.Failure.Code == nodes.InvocationDispatchCommandDenied {
 					return browser.ErrDenied
@@ -1862,7 +1875,7 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 			)
 			redispatched = true
 			if dispatchErr == nil {
-				return json.Unmarshal(raw, output)
+				return worker.decodeInvocationResult(raw, output)
 			}
 			if !dispatched {
 				return browser.ErrWorkerUnavailable
