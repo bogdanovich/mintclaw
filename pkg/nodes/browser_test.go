@@ -196,6 +196,48 @@ func TestBrowserDiagnosticsProtocolV2ValidatesCanonicalIntegerSpellings(t *testi
 	}
 }
 
+func TestBrowserDiagnosticsProtocolV1ValidatesCanonicalIntegerSpellings(t *testing.T) {
+	descriptors, err := BrowserCommandDescriptors([]BrowserProfileDescriptor{
+		browserProfileDescriptorFixture(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := json.RawMessage(`{
+		"session_id":"session_1","tab_id":"tab_1","snapshot_generation":2.6e1,
+		"categories":[{
+			"category":"console_errors","count":3e0,"omitted_count":2e0,"truncated":true,
+			"entries":[{
+				"timestamp":1.788565003e9,"severity":"error","origin":"https://example.com","path":"/safe",
+				"message_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			}]
+		}],"truncated":true
+	}`)
+	canonical, err := ValidateInvocationOutputForProtocol(
+		ProtocolV1,
+		descriptors[7],
+		output,
+		MaxInvocationOutput,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result BrowserDiagnosticsResult
+	if err = DecodeBrowserInvocationResultForProtocol(
+		ProtocolV1,
+		canonical,
+		MaxBrowserDiagnosticBytes,
+		&result,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if result.SnapshotGeneration != 26 || len(result.Categories) != 1 ||
+		result.Categories[0].Count != 3 || result.Categories[0].OmittedCount != 2 ||
+		len(result.Categories[0].Entries) != 1 || result.Categories[0].Entries[0].Timestamp != 1788565003 {
+		t.Fatalf("protocol-v1 diagnostics = %#v", result)
+	}
+}
+
 func TestBrowserSelectDispatchAcceptsWorstCaseJSONEscaping(t *testing.T) {
 	profile := browserProfileDescriptorFixture()
 	profile.Actions = []string{"select"}

@@ -1802,7 +1802,12 @@ func (worker *nodeBrowserWorker) decodeInvocationResult(raw json.RawMessage, out
 	if worker == nil {
 		return browser.ErrWorkerUnavailable
 	}
-	return nodes.DecodeBrowserInvocationResultForProtocol(worker.protocolVersion, raw, output)
+	return nodes.DecodeBrowserInvocationResultForProtocol(
+		worker.protocolVersion,
+		raw,
+		nodes.MaxBrowserToolResultBytes,
+		output,
+	)
 }
 
 func browserRetainedInvocationMatches(
