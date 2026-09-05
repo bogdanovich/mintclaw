@@ -3,12 +3,15 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
@@ -192,6 +195,121 @@ type lifecycleRuntime struct {
 	renamed              string
 	archived             bool
 	backgroundCompacting atomic.Bool
+}
+
+type reviewTestRuntime struct {
+	*blockingRuntime
+	started              chan string
+	release              chan struct{}
+	events               []codingreview.Event
+	result               codingreview.Result
+	err                  error
+	target               codingreview.Target
+	backgroundCompacting atomic.Bool
+}
+
+type ignoredReviewEventErrorRuntime struct {
+	*blockingRuntime
+}
+
+type mutatingReviewEventRuntime struct {
+	*blockingRuntime
+	emitted chan struct{}
+	release chan struct{}
+}
+
+type cancelIgnoringReviewRuntime struct {
+	*blockingRuntime
+	started chan struct{}
+	release chan struct{}
+}
+
+func (runtime *cancelIgnoringReviewRuntime) RunReview(
+	_ context.Context,
+	reviewID string,
+	target codingreview.Target,
+	_ func(codingreview.Event) error,
+) (codingreview.Result, error) {
+	close(runtime.started)
+	<-runtime.release
+	return codingreview.Result{
+		SchemaVersion: codingreview.SchemaVersion, ReviewID: reviewID, Target: target,
+		EvidenceGeneration: "generation-1", Summary: "No findings.", CompletedAt: time.Now().UTC(),
+	}, nil
+}
+
+func (runner *mutatingReviewEventRuntime) RunReview(
+	ctx context.Context,
+	reviewID string,
+	target codingreview.Target,
+	emit func(codingreview.Event) error,
+) (codingreview.Result, error) {
+	finding := codingreview.Finding{
+		Severity: codingreview.SeverityMinor, Title: "Original", Explanation: "Original explanation.",
+		Confidence: 0.8, LocationState: codingreview.LocationCurrent, Path: "main.go", StartLine: 4, EndLine: 4,
+	}
+	if err := emit(codingreview.Event{Kind: codingreview.EventFinding, Finding: &finding}); err != nil {
+		return codingreview.Result{}, err
+	}
+	close(runner.emitted)
+	for index := 0; ; index++ {
+		select {
+		case <-runner.release:
+			resultFinding := finding
+			resultFinding.Title = "Original"
+			return codingreview.Result{
+				SchemaVersion: codingreview.SchemaVersion, ReviewID: reviewID, Target: target,
+				EvidenceGeneration: "generation-1", Summary: "One finding.",
+				Findings: []codingreview.Finding{resultFinding}, CompletedAt: time.Now().UTC(),
+			}, nil
+		case <-ctx.Done():
+			return codingreview.Result{}, context.Cause(ctx)
+		default:
+			finding.Title = fmt.Sprintf("runtime mutation %d", index)
+			runtime.Gosched()
+		}
+	}
+}
+
+func (runtime *ignoredReviewEventErrorRuntime) RunReview(
+	_ context.Context,
+	reviewID string,
+	target codingreview.Target,
+	emit func(codingreview.Event) error,
+) (codingreview.Result, error) {
+	_ = emit(codingreview.Event{Kind: codingreview.EventFinding})
+	return codingreview.Result{
+		SchemaVersion: codingreview.SchemaVersion, ReviewID: reviewID, Target: target,
+		EvidenceGeneration: "generation-1", Summary: "No findings.", CompletedAt: time.Now().UTC(),
+	}, nil
+}
+
+func (runtime *reviewTestRuntime) RunReview(
+	ctx context.Context,
+	reviewID string,
+	target codingreview.Target,
+	emit func(codingreview.Event) error,
+) (codingreview.Result, error) {
+	runtime.target = target
+	runtime.started <- reviewID
+	for _, event := range runtime.events {
+		if err := emit(event); err != nil {
+			return codingreview.Result{}, err
+		}
+	}
+	select {
+	case <-runtime.release:
+	case <-ctx.Done():
+		return codingreview.Result{}, context.Cause(ctx)
+	}
+	result := runtime.result.Clone()
+	result.ReviewID = reviewID
+	result.Target = target
+	return result, runtime.err
+}
+
+func (runtime *reviewTestRuntime) BackgroundCompactionActive() bool {
+	return runtime.backgroundCompacting.Load()
 }
 
 func (r *lifecycleRuntime) BackgroundCompactionActive() bool { return r.backgroundCompacting.Load() }
@@ -510,11 +628,315 @@ func TestUnsupportedCommandsAreExplicit(t *testing.T) {
 	if err := controller.NewThread(ctx); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("NewThread() error = %v, want %v", err, ErrUnsupported)
 	}
+	if err := controller.Review(
+		ctx,
+		codingreview.Target{Kind: codingreview.TargetCurrent},
+	); !errors.Is(
+		err,
+		ErrUnsupported,
+	) {
+		t.Fatalf("Review() error = %v, want %v", err, ErrUnsupported)
+	}
 	if err := controller.Interrupt(ctx); !errors.Is(err, ErrNoActiveTurn) {
 		t.Fatalf("Interrupt() error = %v, want %v", err, ErrNoActiveTurn)
 	}
 	if err := controller.Close(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReviewLifecycleIsSerializedAndProjectsOnlyCorrelatedResult(t *testing.T) {
+	finding := codingreview.Finding{
+		Severity: codingreview.SeverityMajor, Title: "Handle error", Explanation: "The error is ignored.",
+		Confidence: 0.9, LocationState: codingreview.LocationCurrent, Path: "main.go", StartLine: 4, EndLine: 4,
+	}
+	runtime := &reviewTestRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		started:         make(chan string, 1),
+		release:         make(chan struct{}),
+		events: []codingreview.Event{
+			{Kind: codingreview.EventProgress, Progress: "checking changed files"},
+			{Kind: codingreview.EventFinding, Finding: &finding},
+		},
+		result: codingreview.Result{
+			SchemaVersion: codingreview.SchemaVersion, EvidenceGeneration: "generation-1",
+			ResolvedRevision: "base-tip", MergeBase: "merge-base", CompletedAt: time.Now().UTC(),
+			Summary: "One issue found.", Findings: []codingreview.Finding{finding},
+		},
+	}
+	controller := newTestController(t, runtime)
+	target := codingreview.Target{Kind: codingreview.TargetBase, Ref: "main", Instructions: "Focus on failures."}
+	if err := controller.Review(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	reviewID := <-runtime.started
+	if runtime.target != target {
+		t.Fatalf("runtime target = %#v, want %#v", runtime.target, target)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "overlap"}); !errors.Is(err, ErrReviewActive) {
+		t.Fatalf("Submit() during review error = %v", err)
+	}
+	if err := controller.Compact(t.Context()); !errors.Is(err, ErrReviewActive) {
+		t.Fatalf("Compact() during review error = %v", err)
+	}
+	waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
+		return snapshot.Review != nil && snapshot.Review.ReviewID == reviewID &&
+			snapshot.Review.Phase == codingreview.PhaseProgress && len(snapshot.Review.Findings) == 1
+	})
+	close(runtime.release)
+	completed := waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
+		return snapshot.Review != nil && snapshot.Review.Phase == codingreview.PhaseCompleted
+	})
+	if completed.Activity != frontend.ActivityIdle || completed.Review.Result == nil ||
+		completed.Review.Result.EvidenceGeneration != "generation-1" {
+		t.Fatalf("completed review snapshot = %#v", completed)
+	}
+	completed.Review.Findings[0].Title = "caller mutation"
+	again, err := controller.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Review.Findings[0].Title != finding.Title {
+		t.Fatal("snapshot review findings share caller-owned memory")
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInterruptCancelsReviewWithoutProjectingFailure(t *testing.T) {
+	runtime := &reviewTestRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		started:         make(chan string, 1),
+		release:         make(chan struct{}),
+		result: codingreview.Result{
+			SchemaVersion: codingreview.SchemaVersion, EvidenceGeneration: "generation-1",
+			CompletedAt: time.Now().UTC(), Summary: "No findings.",
+		},
+	}
+	controller := newTestController(t, runtime)
+	if err := controller.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.started
+	if err := controller.Interrupt(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
+		return snapshot.Review != nil && snapshot.Review.Phase == codingreview.PhaseInterrupted
+	})
+	for _, entry := range snapshot.Entries {
+		if entry.ID == "controller:review-error" {
+			t.Fatal("intentional review interruption was projected as a failure")
+		}
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAcceptedReviewCancellationDominatesRuntimeSuccess(t *testing.T) {
+	runtime := &cancelIgnoringReviewRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		started:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	if err := controller.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.started
+	if err := controller.Interrupt(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	close(runtime.release)
+	snapshot := waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
+		return snapshot.Review != nil && snapshot.Review.Phase == codingreview.PhaseInterrupted
+	})
+	if snapshot.Review.Result != nil {
+		t.Fatalf("canceled review projected successful result = %#v", snapshot.Review.Result)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewRejectsBackgroundCompaction(t *testing.T) {
+	runtime := &reviewTestRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		started:         make(chan string, 1),
+		release:         make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "work"}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.runStarted
+	runtime.backgroundCompacting.Store(true)
+	close(runtime.runRelease)
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := controller.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent})
+		if errors.Is(err, ErrCompactionActive) {
+			break
+		}
+		if !errors.Is(err, ErrTurnActive) || time.Now().After(deadline) {
+			t.Fatalf("post-turn background Review() error = %v, want %v", err, ErrCompactionActive)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	runtime.backgroundCompacting.Store(false)
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewAdmissionReplyWinsConcurrentClose(t *testing.T) {
+	reply := make(chan error, 1)
+	reply <- nil
+	done := make(chan struct{})
+	close(done)
+	if err := awaitReviewAdmission(t.Context(), reply, done); err != nil {
+		t.Fatalf("accepted review admission error = %v", err)
+	}
+}
+
+func TestInvalidReviewResultEndsLifecycleAndProjectsFailure(t *testing.T) {
+	runtime := &reviewTestRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		started:         make(chan string, 1),
+		release:         make(chan struct{}),
+		result: codingreview.Result{
+			SchemaVersion:      codingreview.SchemaVersion,
+			EvidenceGeneration: "generation-1",
+			CompletedAt:        time.Now().UTC(),
+		},
+	}
+	controller := newTestController(t, runtime)
+	if err := controller.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.started
+	close(runtime.release)
+	snapshot := waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
+		if snapshot.Review == nil || snapshot.Review.Phase != codingreview.PhaseInterrupted {
+			return false
+		}
+		for _, entry := range snapshot.Entries {
+			if entry.ID == "controller:review-error" {
+				return true
+			}
+		}
+		return false
+	})
+	if snapshot.Activity != frontend.ActivityIdle {
+		t.Fatalf("failed review left activity = %q", snapshot.Activity)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "continue"}); err != nil {
+		t.Fatalf("failed review stranded controller: %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIgnoredReviewEventCallbackErrorFailsReview(t *testing.T) {
+	controller := newTestController(t, &ignoredReviewEventErrorRuntime{blockingRuntime: newBlockingRuntime()})
+	if err := controller.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
+		if snapshot.Review == nil || snapshot.Review.Phase != codingreview.PhaseInterrupted {
+			return false
+		}
+		for _, entry := range snapshot.Entries {
+			if entry.ID == "controller:review-error" {
+				return true
+			}
+		}
+		return false
+	})
+	if snapshot.Activity != frontend.ActivityIdle {
+		t.Fatalf("failed callback left activity = %q", snapshot.Activity)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewEventClonesRuntimeOwnedFindingBeforeProjection(t *testing.T) {
+	runtime := &mutatingReviewEventRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		emitted:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	if err := controller.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.emitted
+	snapshot := waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
+		return snapshot.Review != nil && len(snapshot.Review.Findings) == 1
+	})
+	if snapshot.Review.Findings[0].Title != "Original" {
+		t.Fatalf("projected runtime-owned mutation = %q", snapshot.Review.Findings[0].Title)
+	}
+	close(runtime.release)
+	waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
+		return snapshot.Review != nil && snapshot.Review.Phase == codingreview.PhaseCompleted
+	})
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCloseCancelsReviewAndWaitsForRuntime(t *testing.T) {
+	runtime := &reviewTestRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		started:         make(chan string, 1),
+		release:         make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	if err := controller.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.started
+	closed := make(chan error, 1)
+	go func() {
+		closed <- controller.Close(context.Background())
+	}()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not cancel the active review")
+	}
+	if runtime.closes != 1 {
+		t.Fatalf("runtime Close() calls = %d, want 1", runtime.closes)
+	}
+}
+
+func waitControllerSnapshot(
+	t *testing.T,
+	controller *Controller,
+	accept func(frontend.ThreadSnapshot) bool,
+) frontend.ThreadSnapshot {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		snapshot, err := controller.Snapshot(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if accept(snapshot) {
+			return snapshot
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for controller snapshot: %#v", snapshot)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

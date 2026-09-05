@@ -533,7 +533,7 @@ func validateGatewayInvocationRecordForStorage(record GatewayInvocationRecord) e
 	}
 	descriptorHash, err := (CapabilityCatalog{
 		Commands: []CommandDescriptor{record.Descriptor},
-	}).canonicalHash()
+	}).canonicalHashForProtocol(record.Plan.ProtocolVersion)
 	if err != nil {
 		return err
 	}

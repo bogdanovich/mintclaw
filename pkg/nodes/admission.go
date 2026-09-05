@@ -60,8 +60,9 @@ type AdmissionResult struct {
 // CommandApproval binds one command descriptor to the exact capability
 // catalog approved for the connected node.
 type CommandApproval struct {
-	Descriptor  CommandDescriptor
-	CatalogHash string
+	Descriptor      CommandDescriptor
+	CatalogHash     string
+	ProtocolVersion int
 }
 
 // Admission is a verified identity decision. Connected decisions become
@@ -69,6 +70,12 @@ type CommandApproval struct {
 type Admission struct {
 	Result   AdmissionResult
 	snapshot Snapshot
+}
+
+// ProtocolVersion returns the authenticated protocol selected for this
+// admission. The value is valid after Authenticate succeeds.
+func (admission Admission) ProtocolVersion() int {
+	return admission.snapshot.ProtocolVersion
 }
 
 type AdmissionConfig struct {
@@ -139,7 +146,7 @@ func (auth *Authenticator) IssueChallenge() (Challenge, error) {
 	return Challenge{
 		Nonce:       nonce,
 		MinProtocol: ProtocolV1,
-		MaxProtocol: ProtocolV1,
+		MaxProtocol: ProtocolV2,
 		ExpiresAt:   expiresAt.Unix(),
 	}, nil
 }
@@ -152,6 +159,10 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 	if err != nil {
 		return Admission{}, err
 	}
+	protocolVersion, err := NegotiateProtocol(proof.MinProtocol, proof.MaxProtocol)
+	if err != nil {
+		return Admission{}, err
+	}
 	if (publicKey.Algorithm == KeyAlgorithmECDSAP256SHA256 && proof.Platform != "android") ||
 		(publicKey.Algorithm == KeyAlgorithmEd25519 && proof.Platform == "android") {
 		return Admission{}, ErrEnrollmentOfferInvalid
@@ -160,7 +171,7 @@ func (auth *Authenticator) Authenticate(proof IdentityProof) (Admission, error) 
 	node := Snapshot{
 		ID:              proof.NodeID,
 		State:           StatePendingPairing,
-		ProtocolVersion: ProtocolV1,
+		ProtocolVersion: protocolVersion,
 		Platform:        proof.Platform,
 		Architecture:    proof.Architecture,
 		SoftwareVersion: proof.ClientVersion,
@@ -310,9 +321,13 @@ func commandApproval(registration Registration, command string) (CommandApproval
 	if err != nil {
 		return CommandApproval{}, err
 	}
+	protocolVersion, err := EffectiveProtocolVersion(registration.Snapshot.ProtocolVersion)
+	if err != nil {
+		return CommandApproval{}, err
+	}
 	return CommandApproval{
-		Descriptor:  descriptor,
-		CatalogHash: registration.ApprovedCatalogHash,
+		Descriptor: descriptor, CatalogHash: registration.ApprovedCatalogHash,
+		ProtocolVersion: protocolVersion,
 	}, nil
 }
 

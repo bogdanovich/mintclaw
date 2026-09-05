@@ -13,14 +13,18 @@ import (
 // TransferBinding is the immutable transfer identity admitted on one
 // authenticated peer generation.
 type TransferBinding struct {
-	TransferID     string
-	Direction      protocol.TransferDirection
-	PolicyRevision string
-	TotalSize      uint64
-	SHA256         [32]byte
+	ProtocolVersion int
+	TransferID      string
+	Direction       protocol.TransferDirection
+	PolicyRevision  string
+	TotalSize       uint64
+	SHA256          [32]byte
 }
 
 func (binding TransferBinding) Validate() error {
+	if _, err := nodes.EffectiveProtocolVersion(binding.ProtocolVersion); err != nil {
+		return err
+	}
 	return binding.ValidateFrame(protocol.TransferFrame{
 		Type:           protocol.TransferFrameStatus,
 		Direction:      binding.Direction,
@@ -99,7 +103,14 @@ func (hub *SessionHub) OpenTransfer(
 	case <-session.ready:
 	}
 	var subscription *transferFrameSubscription
-	err := hub.withTransferGeneration(slot, entry, func() error {
+	err := hub.withSessionGeneration(slot, entry, func() error {
+		bindingProtocol, protocolErr := nodes.EffectiveProtocolVersion(binding.ProtocolVersion)
+		if protocolErr != nil {
+			return protocolErr
+		}
+		if bindingProtocol != entry.protocolVersion {
+			return ErrTransferProtocolMismatch
+		}
 		var subscribeErr error
 		subscription, subscribeErr = session.subscribeTransfer(binding)
 		return subscribeErr
@@ -118,7 +129,7 @@ func (hub *SessionHub) OpenTransfer(
 	}, nil
 }
 
-func (hub *SessionHub) withTransferGeneration(
+func (hub *SessionHub) withSessionGeneration(
 	slot *sessionSlot,
 	entry *sessionEntry,
 	operation func() error,
@@ -126,17 +137,11 @@ func (hub *SessionHub) withTransferGeneration(
 	if hub == nil || slot == nil || entry == nil || operation == nil {
 		return ErrNodeDisconnected
 	}
-	slot.lifecycle.Lock()
-	defer slot.lifecycle.Unlock()
-	hub.mu.Lock()
-	current := !hub.closed &&
-		slot.current == entry &&
-		entry.active &&
-		entry.peer != nil
-	hub.mu.Unlock()
-	if !current {
-		return ErrNodeDisconnected
+	release, err := hub.acquireSessionGeneration(slot, entry)
+	if err != nil {
+		return err
 	}
+	defer release()
 	return operation()
 }
 
@@ -144,13 +149,39 @@ func (stream *TransferStream) Send(
 	ctx context.Context,
 	frame protocol.TransferFrame,
 ) error {
+	_, err := stream.sendAtDispatch(ctx, frame, nil)
+	return err
+}
+
+// SendAtDispatch keeps this exact authenticated generation leased while
+// dispatch durably admits the transfer and writes its first frame.
+func (stream *TransferStream) SendAtDispatch(
+	ctx context.Context,
+	frame protocol.TransferFrame,
+	dispatch func(func() error) error,
+) (bool, error) {
+	if dispatch == nil {
+		return false, errors.New("transfer dispatch callback is required")
+	}
+	if frame.Type != protocol.TransferFramePrepare {
+		return false, protocol.ErrInvalidTransferFrame
+	}
+	return stream.sendAtDispatch(ctx, frame, dispatch)
+}
+
+func (stream *TransferStream) sendAtDispatch(
+	ctx context.Context,
+	frame protocol.TransferFrame,
+	dispatch func(func() error) error,
+) (bool, error) {
 	if stream == nil || stream.session == nil || stream.subscription == nil {
-		return ErrNodeDisconnected
+		return false, ErrNodeDisconnected
 	}
 	if err := stream.binding.ValidateFrame(frame); err != nil {
-		return err
+		return false, err
 	}
-	return stream.hub.withTransferGeneration(stream.slot, stream.entry, func() error {
+	var dispatched bool
+	err := stream.hub.withSessionGeneration(stream.slot, stream.entry, func() error {
 		stream.stateMu.Lock()
 		defer stream.stateMu.Unlock()
 		if stream.closed {
@@ -173,7 +204,8 @@ func (stream *TransferStream) Send(
 				return protocol.ErrInvalidTransferFrame
 			}
 		}
-		dispatched, err := stream.session.writeTransferFrame(ctx, frame)
+		var err error
+		dispatched, err = stream.session.writeTransferFrameAtDispatch(ctx, frame, dispatch)
 		if frame.Type == protocol.TransferFrameCommit && dispatched {
 			// Once transport dispatch begins, a failed write is ambiguous. The
 			// peer closes on transport failure; otherwise this binding remains
@@ -195,6 +227,7 @@ func (stream *TransferStream) Send(
 		}
 		return nil
 	})
+	return dispatched, err
 }
 
 func (stream *TransferStream) Receive(
@@ -211,7 +244,7 @@ func (stream *TransferStream) Receive(
 	if err != nil {
 		return protocol.TransferFrame{}, err
 	}
-	err = stream.hub.withTransferGeneration(stream.slot, stream.entry, func() error {
+	err = stream.hub.withSessionGeneration(stream.slot, stream.entry, func() error {
 		stream.stateMu.Lock()
 		defer stream.stateMu.Unlock()
 		if stream.closed {

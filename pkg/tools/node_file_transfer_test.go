@@ -37,6 +37,15 @@ type fakeNodeFileTransferSource struct {
 	handoffCalls   int
 }
 
+func TestRetainedFileTransferProtocolMustMatchCurrentNode(t *testing.T) {
+	if _, matches := matchingNodeProtocol(0, nodes.ProtocolV1); !matches {
+		t.Fatal("legacy omitted and explicit v1 protocols did not match")
+	}
+	if _, matches := matchingNodeProtocol(nodes.ProtocolV1, nodes.ProtocolV2); matches {
+		t.Fatal("retained v1 authority survived a v2 reconnect")
+	}
+}
+
 func TestNodeFileTransferDescriptionsDelegateApprovalToRuntime(t *testing.T) {
 	for _, tool := range []toolshared.Tool{&NodeUploadTool{}, &NodeDownloadTool{}} {
 		description := tool.Description()

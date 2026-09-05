@@ -36,9 +36,71 @@ func TestPrepareExecutionPlanCanonicalHash(t *testing.T) {
 	if first.PlanHash != second.PlanHash {
 		t.Fatalf("equivalent plans have different hashes: %q != %q", first.PlanHash, second.PlanHash)
 	}
+	encoded, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"protocol_version"`) {
+		t.Fatalf("v1 plan exposed a protocol field to legacy companions: %s", encoded)
+	}
 	second.TimeoutSeconds++
 	if err := second.Validate(); !errors.Is(err, ErrInvalidInvocation) {
 		t.Fatalf("tampered plan Validate() error = %v", err)
+	}
+}
+
+func TestPrepareExecutionPlanV2BindsPlainIntegerCanonicalization(t *testing.T) {
+	descriptor := CommandDescriptor{
+		Name: "system.metric.v1",
+		InputSchema: json.RawMessage(
+			`{"type":"object","properties":{"value":{"type":"integer"}},` +
+				`"required":["value"],"additionalProperties":false}`,
+		),
+		OutputSchema: json.RawMessage(`{"type":"object"}`),
+		Risk:         RiskRead,
+	}
+	catalog := CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}
+	catalogHash, err := catalog.HashForProtocol(ProtocolV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := InvocationRequest{
+		InvocationID: "inv_v2", IdempotencyKey: "idem_v2", NodeID: ID("node_v2"),
+		CatalogHash: catalogHash, Command: descriptor.Name,
+		Input: json.RawMessage(`{"value":6e1}`), AgentID: "main", SessionID: "session_v2", ActorID: "user_v2",
+		TimeoutSeconds: 30, OutputLimitBytes: 1024,
+	}
+	plan, err := PrepareExecutionPlanForProtocol(
+		ProtocolV2,
+		request,
+		descriptor,
+		"local",
+		"policy-2",
+		time.Unix(1, 0),
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.ProtocolVersion != ProtocolV2 || string(plan.Input) != `{"value":60}` {
+		t.Fatalf("v2 plan = protocol %d input %s", plan.ProtocolVersion, plan.Input)
+	}
+	encoded, err := json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"protocol_version":2`) {
+		t.Fatalf("v2 plan omitted its protocol boundary: %s", encoded)
+	}
+	if err := plan.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	policy := LocalCommandPolicy{
+		Revision: "policy-2", AllowedCommands: []string{descriptor.Name}, MaximumRisk: RiskRead,
+		MaxTimeoutSeconds: 30, MaxOutputBytes: 1024,
+	}
+	if err := policy.Authorize(plan, catalog, plan.NodeID, plan.Executor, time.Unix(1, 0)); err != nil {
+		t.Fatalf("Authorize() error = %v", err)
 	}
 }
 

@@ -1,7 +1,8 @@
 # Node JSON Canonicalization V2
 
-Status: cutover specification; implementation is not active until node protocol
-v2 is admitted.
+Status: dual-protocol gateway foundation. The gateway advertises v1 through v2,
+but the current companion still selects v1; v2 companion activation and legacy
+adapter removal remain separate rollout steps.
 
 ## Numeric representation
 
@@ -22,7 +23,9 @@ rejection. It changes only number rendering:
 
 These limits prevent a short exponent spelling from causing unbounded output.
 They are protocol validation errors, not rounding: accepted values remain
-exact.
+exact. Canonical schemas and model examples must also remain within their
+existing byte limits after number expansion, and the final canonical catalog
+must remain within the catalog byte limit.
 
 ## Affected authority and persistence
 
@@ -49,7 +52,15 @@ The new representation is node protocol major version 2. A v2 gateway may
 temporarily admit v1 companions only to support the gateway-first rollout, and
 must compute v1 catalog and plan bindings for those v1 sessions. A v2
 companion requires a gateway that advertises v2. No connection may mix v1 and
-v2 canonicalization within one authenticated session.
+v2 canonicalization within one authenticated session. Invocation and transfer
+dispatch both bind their retained protocol to the exact authenticated session
+generation through the durable dispatched transition and first frame write.
+
+The negotiated version is persisted on the node snapshot. Legacy omitted
+snapshot and execution-plan version fields mean v1. V1 plans continue omitting
+the field so an upgraded gateway remains wire-compatible with old companions;
+v2 plans carry `"protocol_version":2` and select v2 catalog, descriptor, input,
+plan, and output canonicalization end to end.
 
 ## Rollout
 
@@ -73,4 +84,3 @@ dual-protocol gateway is still running, restoring their matching v1 ledgers
 only if no v2 invocation was accepted. Then restore the gateway v1 invocation
 store and gateway binary together. Never attach a v1 binary to a v2 ledger or
 reuse a v2 plan hash as v1 authority.
-

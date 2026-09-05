@@ -884,12 +884,28 @@ func TestNodeDiscoveryRevisionTracksAuthorityButNotHeartbeat(t *testing.T) {
 		t.Fatalf("heartbeat changed discovery revision: %s != %s", heartbeat, initial)
 	}
 
+	snapshot.ProtocolVersion = nodes.ProtocolV2
+	v2CatalogHash, err := catalog.HashForProtocol(nodes.ProtocolV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2CatalogHash != catalogHash {
+		t.Fatal("test catalog does not exercise identical v1/v2 hashes")
+	}
+	registration.Snapshot = snapshot
+	source.byRef["builder-node"] = snapshot
+	source.registrations[snapshot.ID] = registration
+	protocolChanged := revision(NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source))
+	if protocolChanged == initial {
+		t.Fatal("protocol change did not invalidate discovery")
+	}
+
 	snapshot.PolicyRevision = "policy-2"
 	registration.Snapshot = snapshot
 	source.byRef["builder-node"] = snapshot
 	source.registrations[snapshot.ID] = registration
 	policyChanged := revision(NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source))
-	if policyChanged == initial {
+	if policyChanged == protocolChanged {
 		t.Fatal("policy revision did not invalidate discovery")
 	}
 
