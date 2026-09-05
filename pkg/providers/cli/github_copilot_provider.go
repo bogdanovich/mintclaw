@@ -13,8 +13,7 @@ import (
 )
 
 type GitHubCopilotProvider struct {
-	uri         string
-	connectMode string // "stdio" or "grpc"
+	uri string
 
 	client  *copilot.Client
 	session copilotSession
@@ -32,43 +31,25 @@ type copilotSession interface {
 	SendAndWait(ctx context.Context, options copilot.MessageOptions) (*copilot.SessionEvent, error)
 }
 
-func NewGitHubCopilotProvider(uri string, connectMode string, model string) (*GitHubCopilotProvider, error) {
-	if connectMode == "" {
-		connectMode = "grpc"
+func NewGitHubCopilotProvider(uri string, model string) (*GitHubCopilotProvider, error) {
+	client := copilot.NewClient(&copilot.ClientOptions{
+		CLIUrl: uri,
+	})
+	if err := client.Start(context.Background()); err != nil {
+		return nil, normalizeCopilotError(err, nil)
 	}
 
-	switch connectMode {
-	case "stdio":
-		// TODO: Implement stdio mode for GitHub Copilot provider
-		// See https://github.com/github/copilot-sdk/blob/main/docs/getting-started.md for details
-		return nil, fmt.Errorf("stdio mode not implemented for GitHub Copilot provider; please use 'grpc' mode instead")
-	case "grpc":
-		client := copilot.NewClient(&copilot.ClientOptions{
-			CLIUrl: uri,
-		})
-		if err := client.Start(context.Background()); err != nil {
-			return nil, normalizeCopilotError(err, nil)
-		}
-
-		session, err := client.CreateSession(context.Background(), &copilot.SessionConfig{
-			Model:               model,
-			OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
-			Hooks:               &copilot.SessionHooks{},
-		})
-		if err != nil {
-			_ = client.Stop()
-			return nil, normalizeCopilotError(err, nil)
-		}
-
-		return &GitHubCopilotProvider{
-			uri:         uri,
-			connectMode: connectMode,
-			client:      client,
-			session:     session,
-		}, nil
-	default:
-		return nil, fmt.Errorf("unknown connect mode: %s", connectMode)
+	session, err := client.CreateSession(context.Background(), &copilot.SessionConfig{
+		Model:               model,
+		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+		Hooks:               &copilot.SessionHooks{},
+	})
+	if err != nil {
+		_ = client.Stop()
+		return nil, normalizeCopilotError(err, nil)
 	}
+
+	return &GitHubCopilotProvider{uri: uri, client: client, session: session}, nil
 }
 
 func (p *GitHubCopilotProvider) Close() {

@@ -109,13 +109,18 @@ contain slashes. Examples:
 | `enabled` | Yes for active entries | Sole activation switch. Set it explicitly; credentials and model names do not imply activation. |
 | `proxy` | No | HTTP proxy URL |
 | `auth_method` | No | Authentication method: `oauth`, `token` |
-| `connect_mode` | No | Connection mode for CLI providers: `stdio`, `grpc` |
 | `rpm` | No | Requests per minute limit |
 | `max_tokens_field` | No | Field name for max tokens |
 | `request_timeout` | No | HTTP request timeout in seconds; `<=0` uses default `120s` |
 
 > **Note**: `api_key` (singular) is not accepted. Put every credential in the
 > `api_keys` array during the manual conversion.
+
+Older version-4 model entries may still contain `connect_mode`. MintClaw now
+uses the GitHub Copilot SDK transport directly: empty, `null`, and `grpc`
+legacy values are consumed during loading and omitted from the current config
+projection. Remove the field from the source document. `stdio` and other
+values are no longer supported and fail with an indexed migration error.
 
 ## Load Balancing
 

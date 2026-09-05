@@ -153,6 +153,157 @@ func TestHandleAddModelRequiresExplicitEnabledValue(t *testing.T) {
 	}
 }
 
+func TestHandleModelMutationsConsumeLegacyConnectMode(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   func(string) string
+	}{
+		{
+			name:   "add",
+			method: http.MethodPost,
+			path:   "/api/models",
+			body: func(mode string) string {
+				return fmt.Sprintf(`{
+					"model_name":"compat-added",
+					"provider":"openai",
+					"model":"gpt-5.4-mini",
+					"enabled":true,
+					"connect_mode":%s
+				}`, mode)
+			},
+		},
+		{
+			name:   "update",
+			method: http.MethodPut,
+			path:   "/api/models/0",
+			body: func(mode string) string {
+				return fmt.Sprintf(`{
+					"model_name":"compat-updated",
+					"provider":"openai",
+					"model":"gpt-5.4-mini",
+					"connect_mode":%s
+				}`, mode)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for modeName, mode := range map[string]string{"empty": `""`, "grpc": `"grpc"`, "null": `null`} {
+				t.Run(modeName, func(t *testing.T) {
+					configPath, cleanup := setupOAuthTestEnv(t)
+					defer cleanup()
+					h := NewHandler(configPath)
+					mux := http.NewServeMux()
+					h.RegisterRoutes(mux)
+
+					recorder := httptest.NewRecorder()
+					request := httptest.NewRequest(test.method, test.path, bytes.NewBufferString(test.body(mode)))
+					request.Header.Set("Content-Type", "application/json")
+					mux.ServeHTTP(recorder, request)
+					if recorder.Code != http.StatusOK {
+						t.Fatalf(
+							"connect_mode=%s status = %d, want %d, body=%s",
+							mode,
+							recorder.Code,
+							http.StatusOK,
+							recorder.Body,
+						)
+					}
+					persisted, err := os.ReadFile(configPath)
+					if err != nil {
+						t.Fatalf("read persisted config: %v", err)
+					}
+					if bytes.Contains(persisted, []byte("connect_mode")) {
+						t.Fatalf("connect_mode=%s was persisted: %s", mode, persisted)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestHandleModelMutationsRejectUnsupportedConnectModeWithoutWriting(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		body   func(string) string
+	}{
+		{
+			name:   "add",
+			method: http.MethodPost,
+			path:   "/api/models",
+			body: func(mode string) string {
+				return fmt.Sprintf(`{
+					"model_name":"rejected-add",
+					"provider":"openai",
+					"model":"gpt-5.4-mini",
+					"enabled":true,
+					"connect_mode":%s
+				}`, mode)
+			},
+		},
+		{
+			name:   "update",
+			method: http.MethodPut,
+			path:   "/api/models/0",
+			body: func(mode string) string {
+				return fmt.Sprintf(`{
+					"model_name":"rejected-update",
+					"provider":"openai",
+					"model":"gpt-5.4-mini",
+					"connect_mode":%s
+				}`, mode)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for modeName, mode := range map[string]string{"stdio": `"stdio"`, "other": `"tcp"`, "invalid_type": `42`} {
+				t.Run(modeName, func(t *testing.T) {
+					configPath, cleanup := setupOAuthTestEnv(t)
+					defer cleanup()
+					before, err := os.ReadFile(configPath)
+					if err != nil {
+						t.Fatalf("read config before mutation: %v", err)
+					}
+
+					h := NewHandler(configPath)
+					mux := http.NewServeMux()
+					h.RegisterRoutes(mux)
+					recorder := httptest.NewRecorder()
+					request := httptest.NewRequest(test.method, test.path, bytes.NewBufferString(test.body(mode)))
+					request.Header.Set("Content-Type", "application/json")
+					mux.ServeHTTP(recorder, request)
+					if recorder.Code != http.StatusBadRequest {
+						t.Fatalf(
+							"connect_mode=%s status = %d, want %d, body=%s",
+							mode,
+							recorder.Code,
+							http.StatusBadRequest,
+							recorder.Body,
+						)
+					}
+					if !strings.Contains(recorder.Body.String(), "connect_mode") {
+						t.Fatalf("connect_mode=%s body = %q, want compatibility error", mode, recorder.Body.String())
+					}
+					after, readErr := os.ReadFile(configPath)
+					if readErr != nil {
+						t.Fatalf("read config after mutation: %v", readErr)
+					}
+					if !bytes.Equal(after, before) {
+						t.Fatalf("connect_mode=%s changed config despite rejection", mode)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestHandleUpdateModelPreservesOmittedEnabledValue(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()

@@ -295,17 +295,6 @@ export function ModelFormFields({
         </Field>
 
         <Field
-          label={t("models.field.connectMode")}
-          hint={t("models.field.connectModeHint")}
-        >
-          <Input
-            value={form.connectMode}
-            onChange={setField("connectMode")}
-            placeholder="stdio"
-          />
-        </Field>
-
-        <Field
           label={t("models.field.workspace")}
           hint={t("models.field.workspaceHint")}
         >

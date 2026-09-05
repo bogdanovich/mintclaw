@@ -14,9 +14,12 @@ import (
 	"golang.org/x/term"
 )
 
-func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
+func decodeCurrentConfigJSONWithDiagnostics(data []byte, target any, label string) error {
 	raw, err := parseUniqueJSON(data, label)
 	if err != nil {
+		return err
+	}
+	if err = consumeLegacyModelConnectModes(raw, label); err != nil {
 		return err
 	}
 	targetType := reflect.TypeOf(target)
@@ -33,6 +36,72 @@ func decodeJSONWithDiagnostics(data []byte, target any, label string) error {
 	return nil
 }
 
+func consumeLegacyModelConnectModes(raw any, label string) error {
+	root, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	models, ok := root["model_list"].([]any)
+	if !ok {
+		return nil
+	}
+	for index, rawModel := range models {
+		model, ok := rawModel.(map[string]any)
+		if !ok {
+			continue
+		}
+		if err := consumeLegacyModelConnectMode(model, fmt.Sprintf("model_list[%d]", index), label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func consumeLegacyModelConnectMode(model map[string]any, path, label string) error {
+	rawMode, exists := model["connect_mode"]
+	if !exists {
+		return nil
+	}
+	fieldPath := "connect_mode"
+	if path != "" {
+		fieldPath = path + ".connect_mode"
+	}
+	if rawMode == nil {
+		delete(model, "connect_mode")
+		return nil
+	}
+	mode, ok := rawMode.(string)
+	if !ok {
+		return fmt.Errorf("%s field %s must be a string", label, fieldPath)
+	}
+	if mode != "" && mode != "grpc" {
+		return fmt.Errorf(
+			"%s field %s %q is no longer supported; remove the field",
+			label,
+			fieldPath,
+			mode,
+		)
+	}
+	delete(model, "connect_mode")
+	return nil
+}
+
+// ValidateModelConfigJSON validates compatibility fields accepted by the
+// single-model mutation API before the current ModelConfig is decoded. Empty,
+// null, and grpc connect_mode values are consumed for rolling upgrades; all
+// other values are rejected now that model transports are gRPC-only.
+func ValidateModelConfigJSON(data []byte) error {
+	raw, err := parseUniqueJSON(data, "model config")
+	if err != nil {
+		return err
+	}
+	model, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return consumeLegacyModelConnectMode(model, "", "model config")
+}
+
 // ValidateConfigJSON rejects malformed configuration JSON and duplicate object
 // fields before callers normalize or merge the document.
 func ValidateConfigJSON(data []byte) error {
@@ -45,6 +114,9 @@ func ValidateConfigJSON(data []byte) error {
 func ValidateConfigPatchJSON(data []byte, current *Config) error {
 	raw, err := parseUniqueJSON(data, "config patch")
 	if err != nil {
+		return err
+	}
+	if err = consumeLegacyModelConnectModes(raw, "config patch"); err != nil {
 		return err
 	}
 	if err := validateJSONShape(raw, reflect.TypeOf(&Config{}), "config patch"); err != nil {

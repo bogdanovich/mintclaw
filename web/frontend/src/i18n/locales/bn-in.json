@@ -308,8 +308,6 @@
       "authMethod": "প্রমাণীকরণ পদ্ধতি",
       "authMethodHint": "প্রমাণীকরণ পদ্ধতি: oauth, token। API কী প্রমাণীকরণের জন্য খালি রাখুন।",
       "authMethodManagedHint": "এই প্রোভাইডারের প্রমাণীকরণ পদ্ধতি সিস্টেম দ্বারা পরিচালিত।",
-      "connectMode": "সংযোগ মোড",
-      "connectModeHint": "CLI-ভিত্তিক প্রোভাইডারদের জন্য সংযোগ মোড: stdio বা grpc।",
       "workspace": "ওয়ার্কস্পেস পাথ",
       "workspaceHint": "CLI-ভিত্তিক প্রোভাইডারদের জন্য কাজের ডিরেক্টরি (যেমন GitHub Copilot)।",
       "requestTimeout": "অনুরোধ টাইমআউট (সেকেন্ড)",

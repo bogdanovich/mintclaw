@@ -338,11 +338,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if apiBase == "" {
 			apiBase = "localhost:4321"
 		}
-		connectMode := cfg.ConnectMode
-		if connectMode == "" {
-			connectMode = "grpc"
-		}
-		provider, err := NewGitHubCopilotProvider(apiBase, connectMode, modelID)
+		provider, err := NewGitHubCopilotProvider(apiBase, modelID)
 		if err != nil {
 			return nil, "", err
 		}

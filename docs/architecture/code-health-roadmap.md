@@ -338,6 +338,13 @@ Remove the advertised GitHub Copilot `stdio` branch if no committed product
 milestone will implement it. If it remains planned, give it an owner, contract,
 and milestone instead of retaining an always-failing mode.
 
+GitHub Copilot now has one supported transport through its SDK client. The
+never-implemented `stdio` branch and its cross-layer `connect_mode` setting have
+been removed from runtime config, the backend contract, and the model form. The
+v4 load boundary consumes previously valid empty or `grpc` values without
+retaining them; unsupported legacy values fail with an explicit migration
+error, and newly saved configs never emit the field.
+
 ### H8.3 Test construction seams
 
 The Go suite is extensive but high-change agent tests frequently construct

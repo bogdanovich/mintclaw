@@ -310,8 +310,6 @@
       "authMethod": "Método de Autenticação",
       "authMethodHint": "Método de autenticação: oauth, token. Deixe em branco para autenticação por API Key.",
       "authMethodManagedHint": "O método de autenticação deste provider é gerenciado pelo sistema.",
-      "connectMode": "Modo de Conexão",
-      "connectModeHint": "Modo de conexão para providers baseados em CLI: stdio ou grpc.",
       "workspace": "Caminho do Workspace",
       "workspaceHint": "Diretório de trabalho para providers baseados em CLI (ex: GitHub Copilot).",
       "requestTimeout": "Timeout da Requisição (s)",

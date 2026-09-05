@@ -602,6 +602,60 @@ func TestDecodeCurrentConfigRejectsRemovedAgentImageModelFields(t *testing.T) {
 	}
 }
 
+func TestDecodeCurrentConfigConsumesLegacyModelConnectMode(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		encoded string
+	}{
+		{name: "empty", encoded: `""`},
+		{name: "grpc", encoded: `"grpc"`},
+		{name: "null", encoded: `null`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			raw := fmt.Sprintf(`{
+				"version":%d,
+				"model_list":[{
+					"model_name":"copilot","provider":"github-copilot","model":"gpt-5",
+					"connect_mode":%s,"enabled":false
+				}]
+			}`, CurrentVersion, test.encoded)
+			var cfg Config
+			if err := DecodeCurrentConfig([]byte(raw), &cfg); err != nil {
+				t.Fatalf("DecodeCurrentConfig() error = %v", err)
+			}
+			encoded, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), "connect_mode") {
+				t.Fatalf("legacy connect_mode survived current config projection: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestDecodeCurrentConfigRejectsUnsupportedLegacyModelConnectMode(t *testing.T) {
+	t.Parallel()
+
+	raw := fmt.Sprintf(`{
+		"version":%d,
+		"model_list":[{
+			"model_name":"copilot","provider":"github-copilot","model":"gpt-5",
+			"connect_mode":"stdio","enabled":false
+		}]
+	}`, CurrentVersion)
+	var cfg Config
+	err := DecodeCurrentConfig([]byte(raw), &cfg)
+	if err == nil || !strings.Contains(err.Error(), "model_list[0].connect_mode") ||
+		!strings.Contains(err.Error(), "no longer supported") {
+		t.Fatalf("DecodeCurrentConfig() error = %v, want removed connect-mode rejection", err)
+	}
+}
+
 func TestLoadConfig_ImageGenerateModel(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.json")

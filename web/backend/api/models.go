@@ -45,7 +45,6 @@ type modelResponse struct {
 	Proxy      string `json:"proxy,omitempty"`
 	AuthMethod string `json:"auth_method,omitempty"`
 	// Advanced fields
-	ConnectMode         string                      `json:"connect_mode,omitempty"`
 	Workspace           string                      `json:"workspace,omitempty"`
 	RPM                 int                         `json:"rpm,omitempty"`
 	MaxTokensField      string                      `json:"max_tokens_field,omitempty"`
@@ -189,7 +188,6 @@ func (h *Handler) handleListModels(w http.ResponseWriter, r *http.Request) {
 			APIKey:              maskAPIKey(m.APIKey()),
 			Proxy:               m.Proxy,
 			AuthMethod:          m.AuthMethod,
-			ConnectMode:         m.ConnectMode,
 			Workspace:           m.Workspace,
 			RPM:                 m.RPM,
 			MaxTokensField:      m.MaxTokensField,
@@ -229,6 +227,10 @@ func (h *Handler) handleAddModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = r.Body.Close() }()
+	if err = config.ValidateModelConfigJSON(body); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid model config: %v", err), http.StatusBadRequest)
+		return
+	}
 
 	type custom struct {
 		config.ModelConfig
@@ -299,6 +301,10 @@ func (h *Handler) handleUpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = r.Body.Close() }()
+	if err = config.ValidateModelConfigJSON(body); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid model config: %v", err), http.StatusBadRequest)
+		return
+	}
 
 	var rawFields map[string]json.RawMessage
 	if err = json.Unmarshal(body, &rawFields); err != nil {

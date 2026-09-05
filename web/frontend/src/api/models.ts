@@ -13,7 +13,6 @@ export interface ModelInfo {
   proxy?: string
   auth_method?: string
   // Advanced fields
-  connect_mode?: string
   workspace?: string
   rpm?: number
   max_tokens_field?: string
@@ -45,7 +44,6 @@ export interface ModelSaveRequest {
   api_key?: string
   proxy?: string
   auth_method?: string
-  connect_mode?: string
   workspace?: string
   rpm?: number
   max_tokens_field?: string

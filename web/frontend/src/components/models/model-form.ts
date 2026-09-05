@@ -24,7 +24,6 @@ export interface ModelFormState {
   apiBase: string
   proxy: string
   authMethod: string
-  connectMode: string
   workspace: string
   rpm: string
   maxTokensField: string
@@ -43,7 +42,6 @@ export const EMPTY_MODEL_FORM: ModelFormState = {
   apiBase: "",
   proxy: "",
   authMethod: "",
-  connectMode: "",
   workspace: "",
   rpm: "",
   maxTokensField: "",
@@ -88,7 +86,6 @@ export function modelToForm(
     apiBase: model.api_base ?? "",
     proxy: model.proxy ?? "",
     authMethod: model.auth_method ?? "",
-    connectMode: model.connect_mode ?? "",
     workspace: model.workspace ?? "",
     rpm: model.rpm ? String(model.rpm) : "",
     maxTokensField: model.max_tokens_field ?? "",
@@ -192,7 +189,6 @@ export function projectModelForm(
       auth_method: authMethodLocked
         ? defaultAuthMethod || undefined
         : form.authMethod.trim() || undefined,
-      connect_mode: form.connectMode.trim() || undefined,
       workspace: form.workspace.trim() || undefined,
       rpm: form.rpm ? Number(form.rpm) : undefined,
       max_tokens_field: form.maxTokensField.trim() || undefined,
