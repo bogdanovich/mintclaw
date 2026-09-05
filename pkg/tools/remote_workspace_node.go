@@ -46,6 +46,24 @@ type RemoteWorkspaceNodeRouter struct {
 	aliases []string
 }
 
+func (router *RemoteWorkspaceNodeRouter) withInvocationSource(
+	source NodeInvocationSource,
+) (*RemoteWorkspaceNodeRouter, error) {
+	if router == nil || router.runtime == nil || router.runtime.access == nil || source == nil {
+		return nil, ErrRemoteWorkspaceUnavailable
+	}
+	access := *router.runtime.access
+	access.source = source
+	runtime := &nodeInvocationToolRuntime{
+		access: &access, source: source,
+		runtimeEvents: router.runtime.runtimeEvents, eventSource: router.runtime.eventSource,
+	}
+	return &RemoteWorkspaceNodeRouter{
+		agentID: router.agentID, runtime: runtime, invoke: &NodeInvokeTool{runtime: runtime},
+		byAlias: router.byAlias, aliases: slices.Clone(router.aliases),
+	}, nil
+}
+
 func NewRemoteWorkspaceNodeRouter(
 	cfg *config.Config,
 	source NodeInvocationSource,

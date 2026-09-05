@@ -69,6 +69,10 @@ type NodeTerminalTool struct {
 
 func (tool *NodeTerminalTool) approvalBypassOwner() toolshared.Tool { return tool }
 
+func (tool *NodeTerminalTool) approvalBypassesTarget(target string) bool {
+	return tool != nil && tool.access != nil && tool.access.bypassesApproval(target)
+}
+
 // NodeTerminalOperator opens terminals for an explicitly authenticated
 // operator while sharing the same target and command authority checks as the
 // model-facing tool.

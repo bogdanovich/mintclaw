@@ -149,6 +149,16 @@ func (tool *NodeUploadTool) approvalBypassOwner() toolshared.Tool { return tool 
 
 func (tool *NodeDownloadTool) approvalBypassOwner() toolshared.Tool { return tool }
 
+func (tool *NodeUploadTool) approvalBypassesTarget(target string) bool {
+	return tool != nil && tool.runtime != nil && tool.runtime.access != nil &&
+		tool.runtime.access.bypassesApproval(target)
+}
+
+func (tool *NodeDownloadTool) approvalBypassesTarget(target string) bool {
+	return tool != nil && tool.runtime != nil && tool.runtime.access != nil &&
+		tool.runtime.access.bypassesApproval(target)
+}
+
 type nodeFileTransferToolRuntime struct {
 	access          *nodeTargetAccess
 	source          NodeFileTransferSource
