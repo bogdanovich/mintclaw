@@ -7,6 +7,11 @@ second service manager.
 
 ## Authority layout
 
+Linux deployments that use root helpers must also satisfy the shared
+[privileged runtime lifecycle](node-linux-privileged-runtime.md), including a
+systemd-owned volatile socket directory, an acyclic dependency graph, and a
+post-install reboot smoke.
+
 Use four independent grants:
 
 1. the companion advertises only `service.status.v1`, `service.logs.v1`, and
