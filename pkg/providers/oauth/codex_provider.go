@@ -223,8 +223,9 @@ func (p *CodexProvider) Capabilities() providercapabilities.ProviderCapabilities
 		return providercapabilities.ProviderCapabilities{}
 	}
 	return providercapabilities.ProviderCapabilities{
-		Thinking:     true,
-		NativeSearch: p.enableWebSearch,
+		Thinking:            true,
+		NativeSearch:        p.enableWebSearch,
+		CallerMediatedTools: true,
 		ImageGeneration: providercapabilities.ImageGenerationCapabilities{
 			Supported:    true,
 			ProviderID:   "openai-codex",

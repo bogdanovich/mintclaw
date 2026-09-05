@@ -49,10 +49,18 @@ func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
 		return providercapabilities.ProviderCapabilities{}
 	}
 	return providercapabilities.ProviderCapabilities{
-		Streaming:    true,
-		Thinking:     p.supportsThinking(),
-		NativeSearch: p.supportsNativeSearch(),
+		Streaming:           true,
+		Thinking:            p.supportsThinking(),
+		NativeSearch:        p.supportsNativeSearch(),
+		CallerMediatedTools: p.callerMediatedToolsSupported(),
 	}
+}
+
+func (p *Provider) callerMediatedToolsSupported() bool {
+	if p.providerName == "openrouter" || strings.Contains(strings.ToLower(p.apiBase), "openrouter.ai") {
+		return false
+	}
+	return len(p.extraBody) == 0
 }
 
 type Option func(*Provider)
@@ -104,7 +112,7 @@ func WithRequestTimeout(timeout time.Duration) Option {
 
 func WithExtraBody(extraBody map[string]any) Option {
 	return func(p *Provider) {
-		p.extraBody = extraBody
+		p.extraBody = maps.Clone(extraBody)
 	}
 }
 

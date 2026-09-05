@@ -46,6 +46,10 @@ func NewScriptedProvider(model string, steps ...ProviderStep) *ScriptedProvider 
 	}
 }
 
+func (*ScriptedProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{CallerMediatedTools: true}
+}
+
 func (p *ScriptedProvider) Chat(
 	_ context.Context,
 	messages []providers.Message,

@@ -43,7 +43,7 @@ type Provider struct {
 }
 
 func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
-	return providercapabilities.ProviderCapabilities{}
+	return providercapabilities.ProviderCapabilities{CallerMediatedTools: true}
 }
 
 // Option configures the Azure Provider.
