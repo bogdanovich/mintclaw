@@ -273,6 +273,11 @@ sensitive-data policies once when a runtime generation is composed. A config
 reload replaces the owning runner; turns admitted to the previous generation
 continue against its immutable policy snapshot.
 
+Browser runtime-tool generations now receive a deep-copied browser policy
+projection instead of the mutable root config. Effective limits, target
+placement, and the default target are resolved when each reload generation is
+composed; nested origins and policy rules cannot drift afterward.
+
 Deliverables:
 
 1. Introduce immutable options at the composition root for the browser runtime,
