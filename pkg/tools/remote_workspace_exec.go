@@ -21,10 +21,7 @@ const defaultWorkspaceExecTimeout = 30
 // lifecycle of its own.
 type WorkspaceExecTool struct {
 	router        *RemoteWorkspaceNodeRouter
-	config        *config.Config
-	agentID       string
 	sourceFactory func() (NodeInvocationSource, error)
-	eventBus      runtimeevents.Bus
 }
 
 func NewWorkspaceExecTool(
@@ -37,12 +34,11 @@ func NewWorkspaceExecTool(
 		return nil, err
 	}
 	router.runtime.eventSource = "workspace_exec"
-	return &WorkspaceExecTool{router: router, config: cfg, agentID: agentID}, nil
+	return &WorkspaceExecTool{router: router}, nil
 }
 
 func (tool *WorkspaceExecTool) SetEventPublisher(eventBus runtimeevents.Bus) {
 	if tool != nil && tool.router != nil {
-		tool.eventBus = eventBus
 		tool.router.SetEventPublisher(eventBus)
 	}
 }
@@ -68,17 +64,10 @@ func (tool *WorkspaceExecTool) routerForCall() (*RemoteWorkspaceNodeRouter, erro
 	if err != nil || source == nil {
 		return nil, ErrRemoteWorkspaceUnavailable
 	}
-	router, err := NewRemoteWorkspaceNodeRouter(
-		tool.config,
-		source,
-		tool.agentID,
-		"workspace_exec",
-	)
+	router, err := tool.router.withInvocationSource(source)
 	if err != nil {
 		return nil, err
 	}
-	router.runtime.eventSource = "workspace_exec"
-	router.SetEventPublisher(tool.eventBus)
 	return router, nil
 }
 

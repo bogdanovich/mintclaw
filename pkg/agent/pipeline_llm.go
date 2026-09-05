@@ -159,7 +159,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 				break
 			}
 			if exec.model.autoFallback {
-				p.updateAutoFallbackSelection(ts.model.RouteSessionKey,
+				p.updateAutoFallbackSelection(ts.modelBinding.RouteSessionKey,
 					exec.model.selectedCandidates,
 					fbResult,
 					exec.model.usedLight,
@@ -176,9 +176,9 @@ func (p *Pipeline) invokeLLMWithRetry(
 		)
 		if err == nil &&
 			exec.model.autoFallback &&
-			strings.TrimSpace(ts.model.RouteSessionKey) != "" &&
+			strings.TrimSpace(ts.modelBinding.RouteSessionKey) != "" &&
 			len(exec.model.selectedCandidates) > 0 {
-			p.updateAutoFallbackSelection(ts.model.RouteSessionKey,
+			p.updateAutoFallbackSelection(ts.modelBinding.RouteSessionKey,
 				exec.model.selectedCandidates,
 				&providers.FallbackResult{
 					Response: resp,
@@ -209,7 +209,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 		}
 		if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
 			_ = ts.requestHardAbort()
-			return completeLLMStage(LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}), nil
+			return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 		}
 		if isConfiguredStreamingTerminalError(err) {
 			break
@@ -297,7 +297,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			if sleepErr := p.sleepBeforeLLMRetry(turnCtx, backoff); sleepErr != nil {
 				if ts.hardAbortRequested() {
 					_ = ts.requestHardAbort()
-					return completeLLMStage(LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}), nil
+					return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 				}
 				err = sleepErr
 				break
@@ -525,11 +525,11 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			}
 		case HookActionAbortTurn:
 			cancelConfiguredStreamingLLM(turnCtx, llm)
-			return LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHook}, nil
+			return LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHook}, nil
 		case HookActionHardAbort:
 			cancelConfiguredStreamingLLM(turnCtx, llm)
 			_ = ts.requestHardAbort()
-			return LLMCallOutcome{Control: ControlBreak, AbortCause: TurnAbortHard}, nil
+			return LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}, nil
 		}
 	}
 	// Save finishReason and usage on the active turn state. Use ts directly
@@ -663,7 +663,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 						"steering_count": len(steerMsgs),
 					})
 				exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
-				return LLMCallOutcome{Control: ControlContinue}, nil
+				return LLMCallOutcome{Control: turnStepContinue}, nil
 			}
 		}
 
@@ -674,7 +674,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 				"content_chars": len(responseContent),
 			})
 		return LLMCallOutcome{
-			Control: ControlBreak, FinalContent: responseContent,
+			Control: turnStepFinalize, FinalContent: responseContent,
 			FinalContentProtected: sensitiveDiagnosticResponse,
 		}, nil
 	}
@@ -686,7 +686,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			"tool_calls": len(llm.response.ToolCalls),
 		})
 		return LLMCallOutcome{
-			Control: ControlBreak, FinalContent: llm.response.Content,
+			Control: turnStepFinalize, FinalContent: llm.response.Content,
 			FinalContentProtected: sensitiveDiagnosticResponse,
 		}, nil
 	}
@@ -798,7 +798,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 		)
 	}
 
-	return LLMCallOutcome{Control: ControlToolLoop}, nil
+	return LLMCallOutcome{Control: turnStepExecuteTools}, nil
 }
 
 func validateDurableToolCallIDs(calls []providers.ToolCall) error {

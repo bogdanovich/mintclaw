@@ -204,10 +204,10 @@ func TestPipelineFinalHandledDeliveryCanonicalizesSettlement(t *testing.T) {
 						turnID:     "turn-final-handled",
 						sessionKey: sessionKey,
 						session:    store,
-						opts: turnSpec{
+						opts: freezeTurnInput(turnSpec{
 							SendResponse: true,
 							Dispatch:     DispatchRequest{SessionKey: sessionKey},
-						},
+						}),
 					}
 					toolCall := providers.ToolCall{
 						ID:        "call-final-message",
@@ -320,7 +320,7 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-pending-receipt",
 		sessionKey: sessionKey, session: store,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}}),
 	}
 	toolCall := providers.ToolCall{ID: "call-send-file", Name: tool.Name(), Arguments: map[string]any{}}
 	siblingCall := providers.ToolCall{
@@ -409,7 +409,7 @@ func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-ambiguous-receipt",
 		sessionKey: sessionKey, session: store,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}}),
 	}
 	toolCall := providers.ToolCall{
 		ID: "call-ambiguous-message", Name: tool.Name(), Arguments: map[string]any{},
@@ -431,7 +431,7 @@ func TestPipelineFinalHandledAmbiguousReceiptSettlesAndStopsTurn(t *testing.T) {
 	if !errors.Is(outcome.TurnErr, errFinalHandledDeliveryAmbiguous) {
 		t.Fatalf("turn error = %v, want ambiguous delivery", outcome.TurnErr)
 	}
-	if outcome.JournalErr != nil || outcome.Control != ToolControlBreak {
+	if outcome.JournalErr != nil || outcome.Control != turnStepFinalize {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 	canonical := matchingToolResult(t, store.GetHistory(sessionKey), toolCall.ID)
@@ -451,9 +451,9 @@ func TestReceiptlessFinalHandledTextUsesSynchronousConfirmation(t *testing.T) {
 		channel:    "telegram",
 		chatID:     "chat-1",
 		sessionKey: "receiptless-text",
-		opts: turnSpec{Dispatch: DispatchRequest{
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
 			InboundContext: &bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
-		}},
+		}}),
 	}
 	result := toolshared.UserResult("hello").WithDeliveryIntent(toolshared.DeliveryFinalHandled)
 
@@ -533,7 +533,7 @@ func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-hard-abort",
 		sessionKey: sessionKey, session: store,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}}),
 	}
 	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
 	siblingCall := providers.ToolCall{
@@ -558,7 +558,7 @@ func TestPipelineFinalHandledHardAbortKeepsToolBatchComplete(t *testing.T) {
 	pipeline := &Pipeline{Interaction: PipelineInteractionServices{SyncToolDelivery: settlement}}
 
 	outcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
-	if outcome.AbortCause != TurnAbortHard {
+	if outcome.AbortCause != turnAbortHard {
 		t.Fatalf("abort cause = %v, want hard abort", outcome.AbortCause)
 	}
 	if sibling.executions != 0 {
@@ -608,7 +608,7 @@ func TestPipelineFinalHandledBatchReservationFailureIsAtomic(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-reservation-failure",
 		sessionKey: sessionKey, session: store,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}}),
 	}
 	priorCall := providers.ToolCall{ID: "call-prior", Name: prior.Name(), Arguments: map[string]any{}}
 	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
@@ -700,7 +700,7 @@ func TestPipelineFinalHandledDeliveryFinalizationFailureStopsBeforeModel(t *test
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, turnID: "turn-finalization-failure",
 		sessionKey: sessionKey, session: store,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}}),
 	}
 	toolCall := providers.ToolCall{ID: "call-final-message", Name: tool.Name(), Arguments: map[string]any{}}
 	siblingCall := providers.ToolCall{

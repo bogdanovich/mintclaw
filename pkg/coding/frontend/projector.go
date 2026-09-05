@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
@@ -777,6 +778,90 @@ func (p *Projector) RepositoryDiffUpdated(diff codingworkspace.DiffResult) {
 	})
 }
 
+func (p *Projector) ReviewEntered(reviewID string, target codingreview.Target) error {
+	if err := codingreview.ValidateID(reviewID); err != nil {
+		return err
+	}
+	if err := target.Validate(); err != nil {
+		return err
+	}
+	p.mutate(func(state *ThreadSnapshot) {
+		state.Activity = ActivityReviewing
+		state.Status = "reviewing repository changes"
+		review := codingreview.State{ReviewID: reviewID, Target: target, Phase: codingreview.PhaseEntered}
+		state.Review = &review
+	})
+	return nil
+}
+
+func (p *Projector) ReviewEvent(reviewID string, event codingreview.Event) error {
+	if err := codingreview.ValidateID(reviewID); err != nil {
+		return err
+	}
+	if err := event.Validate(); err != nil {
+		return err
+	}
+	p.mutate(func(state *ThreadSnapshot) {
+		if state.Review == nil || state.Review.ReviewID != reviewID ||
+			(state.Review.Phase != codingreview.PhaseEntered && state.Review.Phase != codingreview.PhaseProgress) {
+			return
+		}
+		review := state.Review.Clone()
+		review.Phase = codingreview.PhaseProgress
+		switch event.Kind {
+		case codingreview.EventProgress:
+			review.Progress = event.Progress
+		case codingreview.EventFinding:
+			if len(review.Findings) < codingreview.MaxFindings {
+				review.Findings = append(review.Findings, *event.Finding)
+			}
+		}
+		state.Review = &review
+	})
+	return nil
+}
+
+func (p *Projector) ReviewCompleted(result codingreview.Result) error {
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	p.mutate(func(state *ThreadSnapshot) {
+		if state.Review == nil || state.Review.ReviewID != result.ReviewID || state.Review.Target != result.Target {
+			return
+		}
+		copy := result.Clone()
+		phase := codingreview.PhaseCompleted
+		if result.Stale {
+			phase = codingreview.PhaseStale
+		}
+		review := codingreview.State{
+			ReviewID: result.ReviewID,
+			Target:   result.Target,
+			Phase:    phase,
+			Findings: append([]codingreview.Finding(nil), result.Findings...),
+			Result:   &copy,
+		}
+		state.Review = &review
+		state.Activity = ActivityIdle
+		state.Status = "repository review completed"
+	})
+	return nil
+}
+
+func (p *Projector) ReviewInterrupted(reviewID string) {
+	p.mutate(func(state *ThreadSnapshot) {
+		if state.Review == nil || state.Review.ReviewID != reviewID ||
+			(state.Review.Phase != codingreview.PhaseEntered && state.Review.Phase != codingreview.PhaseProgress) {
+			return
+		}
+		review := state.Review.Clone()
+		review.Phase = codingreview.PhaseInterrupted
+		state.Review = &review
+		state.Activity = ActivityIdle
+		state.Status = "repository review interrupted"
+	})
+}
+
 // CompactionUpdate projects one correlated compaction lifecycle observation.
 func (p *Projector) CompactionUpdate(compaction CompactionState) {
 	p.compaction(compaction)
@@ -1144,6 +1229,10 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	if snapshot.RepositoryDiff != nil {
 		diff := cloneRepositoryDiff(*snapshot.RepositoryDiff)
 		snapshot.RepositoryDiff = &diff
+	}
+	if snapshot.Review != nil {
+		review := snapshot.Review.Clone()
+		snapshot.Review = &review
 	}
 	return snapshot
 }

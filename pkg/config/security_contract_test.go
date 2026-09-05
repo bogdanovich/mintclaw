@@ -118,7 +118,7 @@ func TestRepositoryDocumentsProjectEveryRegisteredSecretField(t *testing.T) {
 	}
 	publicDocument := string(documents.public)
 	securityDocument := string(documents.security)
-	if strings.Contains(publicDocument, notHere) {
+	if strings.Contains(publicDocument, legacySecretPlaceholder) {
 		t.Fatal("public document contains the internal secret placeholder")
 	}
 	for _, fixture := range fixtures {

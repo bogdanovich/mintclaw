@@ -33,6 +33,16 @@ type NodeDiscoveryTool struct {
 	access *nodeTargetAccess
 }
 
+// NodeToolOptions is the immutable execution-policy snapshot shared by one
+// generation of node tools. Construct a replacement when configuration reloads.
+type NodeToolOptions struct {
+	targets               map[string]config.ExecutionTarget
+	defaultPolicy         *config.TargetPolicy
+	agentPolicies         map[string]*config.TargetPolicy
+	approvalBypassTargets map[string]struct{}
+	fileAgents            map[string]struct{}
+}
+
 type nodeTargetAccess struct {
 	source                NodeDiscoverySource
 	targets               map[string]config.ExecutionTarget
@@ -147,34 +157,44 @@ type nodeCommandDescription struct {
 	DiscoveryRevision string              `json:"discovery_revision"`
 }
 
-func NewNodeDiscoveryTool(cfg *config.Config, source NodeDiscoverySource) *NodeDiscoveryTool {
-	return &NodeDiscoveryTool{access: newNodeTargetAccess(cfg, source)}
+func NewNodeDiscoveryTool(options NodeToolOptions, source NodeDiscoverySource) *NodeDiscoveryTool {
+	return &NodeDiscoveryTool{access: newNodeTargetAccess(options, source)}
 }
 
-func newNodeTargetAccess(cfg *config.Config, source NodeDiscoverySource) *nodeTargetAccess {
-	access := &nodeTargetAccess{
-		source:                source,
+func NewNodeToolOptions(cfg *config.Config) NodeToolOptions {
+	options := NodeToolOptions{
 		targets:               make(map[string]config.ExecutionTarget),
 		agentPolicies:         make(map[string]*config.TargetPolicy),
 		approvalBypassTargets: make(map[string]struct{}),
+		fileAgents:            configuredNodeFileAgents(cfg),
 	}
 	if cfg == nil {
-		return access
+		return options
 	}
 	for name, target := range cfg.Execution.Targets {
-		access.targets[name] = target
+		options.targets[name] = target
 	}
 	for _, target := range cfg.Tools.Approval.BypassNodeTargets {
-		access.approvalBypassTargets[target] = struct{}{}
+		options.approvalBypassTargets[target] = struct{}{}
 	}
-	access.defaultPolicy = cloneTargetPolicy(cfg.Agents.Defaults.TargetPolicy)
+	options.defaultPolicy = cloneTargetPolicy(cfg.Agents.Defaults.TargetPolicy)
 	for i := range cfg.Agents.List {
 		agentCfg := &cfg.Agents.List[i]
 		if agentCfg.TargetPolicy != nil {
-			access.agentPolicies[routing.NormalizeAgentID(agentCfg.ID)] = cloneTargetPolicy(agentCfg.TargetPolicy)
+			options.agentPolicies[routing.NormalizeAgentID(agentCfg.ID)] = cloneTargetPolicy(agentCfg.TargetPolicy)
 		}
 	}
-	return access
+	return options
+}
+
+func newNodeTargetAccess(options NodeToolOptions, source NodeDiscoverySource) *nodeTargetAccess {
+	return &nodeTargetAccess{
+		source:                source,
+		targets:               options.targets,
+		defaultPolicy:         options.defaultPolicy,
+		agentPolicies:         options.agentPolicies,
+		approvalBypassTargets: options.approvalBypassTargets,
+	}
 }
 
 func (*NodeDiscoveryTool) Name() string { return "nodes" }

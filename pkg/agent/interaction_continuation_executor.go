@@ -67,17 +67,32 @@ func (e *interactionContinuationExecutor) execute(
 		if outcome.JournalErr != nil {
 			return turnResult{}, TurnEndStatusError, outcome.JournalErr
 		}
-		if outcome.Control == ToolControlSuspend {
+		if outcome.Control == turnStepSuspend {
 			ts.setPhase(TurnPhaseSuspended)
 			return turnResult{
 				status:                 TurnEndStatusSuspended,
 				suspendedInteractionID: outcome.SuspendedInteractionID,
 			}, TurnEndStatusSuspended, nil
 		}
-		if ts.hardAbortRequested() || outcome.AbortCause == TurnAbortHard {
+		if ts.hardAbortRequested() {
 			e.abort()
 			result, abortErr := pipeline.abortTurn(ts)
 			return result, TurnEndStatusAborted, abortErr
+		}
+		if outcome.Control == turnStepAbort {
+			switch outcome.AbortCause {
+			case turnAbortHard:
+				e.abort()
+				result, abortErr := pipeline.abortTurn(ts)
+				return result, TurnEndStatusAborted, abortErr
+			case turnAbortHook:
+				return turnResult{}, TurnEndStatusError, fmt.Errorf("hook requested turn abort")
+			default:
+				return turnResult{}, TurnEndStatusError, fmt.Errorf("tool phase returned abort without a cause")
+			}
+		}
+		if outcome.AbortCause != turnAbortNone {
+			return turnResult{}, TurnEndStatusError, fmt.Errorf("tool phase returned an abort cause without aborting")
 		}
 		if e.validateTool != nil {
 			if validateErr := e.validateTool(); validateErr != nil {
@@ -90,14 +105,18 @@ func (e *interactionContinuationExecutor) execute(
 			return turnResult{}, TurnEndStatusError, repairErr
 		}
 		ts.consumeApprovalGrant()
-		if outcome.Control == ToolControlBreak && llm.toolResponseDisposition == toolResponseHandled {
-			result, finalizeErr := pipeline.finalizeTurn(
-				turnCtx, ts, exec, llm, TurnEndStatusCompleted, terminalContent{},
+		if outcome.Control == turnStepFinalize {
+			terminal := pipeline.completeTerminal(
+				turnCtx,
+				ts,
+				exec,
+				llm,
+				TurnEndStatusCompleted,
+				toolTerminalRequest(outcome, llm, terminalContent{}),
 			)
-			if finalizeErr != nil {
-				return result, TurnEndStatusError, finalizeErr
+			if !terminal.resume {
+				return terminal.result, terminal.status, terminal.err
 			}
-			return result, TurnEndStatusCompleted, nil
 		}
 	}
 

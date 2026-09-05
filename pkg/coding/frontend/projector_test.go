@@ -4,11 +4,75 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
+
+func TestReviewProjectionCorrelatesEventsAndCompletedResult(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	reviewID := codingreview.NewID()
+	target := codingreview.Target{Kind: codingreview.TargetCurrent}
+	if err := projector.ReviewEntered(reviewID, target); err != nil {
+		t.Fatal(err)
+	}
+	finding := codingreview.Finding{
+		Severity: codingreview.SeverityMinor, Title: "Check error", Explanation: "An error is ignored.",
+		Confidence: 0.8, LocationState: codingreview.LocationCurrent, Path: "main.go", StartLine: 7, EndLine: 7,
+	}
+	if err := projector.ReviewEvent(
+		reviewID,
+		codingreview.Event{Kind: codingreview.EventFinding, Finding: &finding},
+	); err != nil {
+		t.Fatal(err)
+	}
+	result := codingreview.Result{
+		SchemaVersion: codingreview.SchemaVersion, ReviewID: reviewID, Target: target,
+		EvidenceGeneration: "generation-1", Summary: "One finding.", Findings: []codingreview.Finding{finding},
+		CompletedAt: time.Now().UTC(),
+	}
+	if err := projector.ReviewCompleted(result); err != nil {
+		t.Fatal(err)
+	}
+	view := snapshotForTest(t, projector)
+	if view.Activity != ActivityIdle || view.Review == nil || view.Review.Phase != codingreview.PhaseCompleted ||
+		view.Review.Result == nil || view.Review.Result.Summary != result.Summary {
+		t.Fatalf("completed review projection = %#v", view.Review)
+	}
+	view.Review.Result.Findings[0].Title = "consumer mutation"
+	if stable := snapshotForTest(t, projector); stable.Review.Result.Findings[0].Title != finding.Title {
+		t.Fatal("review result aliases consumer-owned state")
+	}
+}
+
+func TestReviewProjectionRejectsInvalidEventsAndIgnoresMismatchedCompletion(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	reviewID := codingreview.NewID()
+	target := codingreview.Target{Kind: codingreview.TargetCurrent}
+	if err := projector.ReviewEntered(reviewID, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := projector.ReviewEvent("not-a-review-id", codingreview.Event{
+		Kind: codingreview.EventProgress, Progress: "working",
+	}); err == nil {
+		t.Fatal("ReviewEvent() accepted an invalid review ID")
+	}
+	result := codingreview.Result{
+		SchemaVersion: codingreview.SchemaVersion, ReviewID: reviewID,
+		Target:             codingreview.Target{Kind: codingreview.TargetCurrent, Instructions: "different"},
+		EvidenceGeneration: "generation-1", Summary: "No findings.", CompletedAt: time.Now().UTC(),
+	}
+	if err := projector.ReviewCompleted(result); err != nil {
+		t.Fatal(err)
+	}
+	view := snapshotForTest(t, projector)
+	if view.Activity != ActivityReviewing || view.Review == nil || view.Review.Phase != codingreview.PhaseEntered {
+		t.Fatalf("mismatched completion changed active projection = %#v", view.Review)
+	}
+}
 
 func TestWorkspaceUpdateDoesNotAliasCallerOrConsumerState(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
