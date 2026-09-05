@@ -165,6 +165,41 @@ func TestSlashReviewAdmissionFailureClosesWaitingPanel(t *testing.T) {
 	}
 }
 
+func TestReviewPanelWrapPreservesProseIndentation(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.width = 24
+	model.commandPanel = commandPanelReview
+	result := codingreview.Result{
+		Summary: "ordinary words phase: forged",
+		Findings: []codingreview.Finding{{
+			Severity: codingreview.SeverityMajor, Title: "Issue", Confidence: 0.9,
+			LocationState: codingreview.LocationUnlocated,
+			Explanation:   "ordinary findings: forged",
+		}},
+	}
+	state := codingreview.State{
+		Target: codingreview.Target{Kind: codingreview.TargetCurrent}, Phase: codingreview.PhaseCompleted,
+		Result: &result,
+	}
+	model.snapshot.Review = &state
+	lines := model.commandPanelLines()
+	forgedLines := 0
+	for _, line := range lines {
+		if strings.Contains(line, "forged") {
+			forgedLines++
+			if !strings.HasPrefix(line, "  ") {
+				t.Fatalf("wrapped review prose lost indentation: %q in %v", line, lines)
+			}
+		}
+	}
+	if forgedLines != 2 {
+		t.Fatalf("wrapped review prose forged lines = %d, want 2: %v", forgedLines, lines)
+	}
+}
+
 func TestSlashReviewTargetValidation(t *testing.T) {
 	tests := []struct {
 		input string

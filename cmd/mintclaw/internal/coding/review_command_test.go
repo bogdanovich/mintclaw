@@ -18,7 +18,10 @@ type headlessReviewController struct {
 	result     codingreview.Result
 	reviewErr  error
 	interrupts atomic.Int32
+	closes     atomic.Int32
 	closeFn    func() error
+	block      bool
+	started    chan struct{}
 }
 
 func (controller *headlessReviewController) Review(_ context.Context, target codingreview.Target) error {
@@ -29,6 +32,12 @@ func (controller *headlessReviewController) Review(_ context.Context, target cod
 	result.Target = target
 	if err := controller.ReviewEntered(result.ReviewID, target); err != nil {
 		return err
+	}
+	if controller.started != nil {
+		close(controller.started)
+	}
+	if controller.block {
+		return nil
 	}
 	return controller.ReviewCompleted(result)
 }
@@ -48,6 +57,7 @@ func (*headlessReviewController) Rename(context.Context, string) error    { retu
 func (*headlessReviewController) SetArchived(context.Context, bool) error { return nil }
 func (*headlessReviewController) NewThread(context.Context) error         { return nil }
 func (controller *headlessReviewController) Close(context.Context) error {
+	controller.closes.Add(1)
 	if controller.closeFn != nil {
 		return controller.closeFn()
 	}
@@ -168,5 +178,63 @@ func TestReviewCommandSelectsThreadAndRendersJSON(t *testing.T) {
 	if rendered.Action != "reviewed" || rendered.ThreadID != created.ThreadID ||
 		rendered.Review.ReviewID != result.ReviewID || rendered.Review.Summary != result.Summary {
 		t.Fatalf("review command output = %#v", rendered)
+	}
+}
+
+func TestReviewCommandSignalContextInterruptsBlockingReview(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	now := time.Date(2026, time.September, 4, 20, 0, 0, 0, time.UTC)
+	deps := testDependencies(home, project, &now)
+	var created commandResult
+	if err := json.Unmarshal(executeCommand(t, newCodeCommand(deps), "inspect", "--json"), &created); err != nil {
+		t.Fatal(err)
+	}
+	var cancel context.CancelFunc
+	deps.reviewContext = func(parent context.Context) (context.Context, context.CancelFunc) {
+		ctx, cancelContext := context.WithCancel(parent)
+		cancel = cancelContext
+		return ctx, cancelContext
+	}
+	started := make(chan struct{})
+	var controller *headlessReviewController
+	deps.newController = func(request codingTurnRequest, _ bool) (frontend.Controller, error) {
+		projector, err := frontend.NewProjector(request.Metadata.ThreadID, frontend.ProjectionLimits{})
+		if err != nil {
+			return nil, err
+		}
+		controller = &headlessReviewController{
+			Projector: projector,
+			result: codingreview.Result{
+				SchemaVersion: codingreview.SchemaVersion, ReviewID: codingreview.NewID(),
+				EvidenceGeneration: "generation-1", Summary: "not completed", CompletedAt: now,
+			},
+			block: true, started: started, closeFn: request.Lease.Release,
+		}
+		return controller, nil
+	}
+	command := newReviewCommand(deps)
+	command.SetArgs([]string{created.ThreadID})
+	result := make(chan error, 1)
+	go func() { result <- command.Execute() }()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("headless review did not enter")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled review error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("signal-context cancellation did not stop headless review")
+	}
+	if controller.interrupts.Load() != 1 {
+		t.Fatalf("blocking review interrupt calls = %d", controller.interrupts.Load())
+	}
+	if controller.closes.Load() != 1 {
+		t.Fatalf("blocking review close calls = %d", controller.closes.Load())
 	}
 }

@@ -318,10 +318,15 @@ func (m *Model) commandPanelView() string {
 
 func (m *Model) commandPanelLines() []string {
 	content := sanitizeTerminalText(commandPanelContent(m.commandPanel, m.snapshot))
-	wrapped := ansi.Wrap(content, max(1, m.width), "")
-	lines := strings.Split(strings.TrimSpace(wrapped), "\n")
-	for index := range lines {
-		lines[index] = clipLine(lines[index], m.width)
+	logical := strings.Split(strings.Trim(content, "\n"), "\n")
+	lines := make([]string, 0, len(logical))
+	for _, line := range logical {
+		prefix := line[:len(line)-len(strings.TrimLeft(line, " "))]
+		body := strings.TrimPrefix(line, prefix)
+		wrapped := strings.Split(ansi.Wrap(body, max(1, m.width-ansi.StringWidth(prefix)), ""), "\n")
+		for _, part := range wrapped {
+			lines = append(lines, clipLine(prefix+part, m.width))
+		}
 	}
 	return lines
 }

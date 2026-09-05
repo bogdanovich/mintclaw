@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -60,7 +62,9 @@ func newReviewCommand(deps dependencies) *cobra.Command {
 			if err := validateReviewCommandOptions(options); err != nil {
 				return err
 			}
-			return runReviewCommand(cmd.Context(), cmd.OutOrStdout(), deps, options)
+			reviewCtx, stopSignals := deps.reviewContext(cmd.Context())
+			defer stopSignals()
+			return runReviewCommand(reviewCtx, cmd.OutOrStdout(), deps, options)
 		},
 	}
 	cmd.Flags().BoolVar(&last, "last", false, "Review the most recently updated active thread in this project")
@@ -70,6 +74,10 @@ func newReviewCommand(deps dependencies) *cobra.Command {
 	cmd.Flags().StringVar(&instructions, "instructions", "", "Bounded custom review instructions")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit the schema-versioned review result as JSON")
 	return cmd
+}
+
+func newReviewSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, os.Interrupt)
 }
 
 func validateReviewCommandOptions(options reviewCommandOptions) error {
