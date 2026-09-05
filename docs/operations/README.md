@@ -8,6 +8,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
 - [Node Companion P0 deployment evidence](node-companion-p0-deployment.md):
   same-SHA rollout, bounded smoke verification, stale-revision drill, evidence,
   and rollback.
+- [Linux node privileged runtime lifecycle](node-linux-privileged-runtime.md):
+  root-owned volatile socket directories, acyclic systemd dependencies,
+  effective-process readiness, and mandatory reboot verification.
 - [Node Companion P2 file-transfer deployment](node-companion-p2-deployment.md):
   deny-by-default rollout, reversible transfer fixtures, redaction checks, and
   rollback evidence.
