@@ -1,14 +1,14 @@
 # Node JSON Canonicalization V2
 
 Status: protocol-v2 companion and integer-contract cleanup complete. The
-gateway still advertises v1 through v2 for gateway-first compatibility, while
-this companion requires and selects v2. Integer adapters remain only in
-gateway-side readers that must accept drained v1 plans until a zero-v1 deployed
-state audit permits their removal.
+gateway still advertises v1 through v2 for retained-record compatibility,
+while current companions require and select v2. Integer adapters remain only
+in gateway-side readers that must accept retained v1 plans until retention and
+a zero-v1 deployed-state audit permit their removal.
 
-The local production canary is deployed on v2. Two connected external nodes
-remain on v1, so the bounded gateway compatibility reader is still required;
-see the
+All three connected companions are deployed on v2. At fleet closeout, 148
+expired v1 no-replay invocation tombstones remained, so the bounded gateway
+compatibility reader is still required; see the
 [Node JSON Canonicalization V2 Cutover](../operations/node-json-canonicalization-v2-cutover.md).
 
 ## Numeric representation
@@ -45,7 +45,7 @@ uses canonical JSON:
 | Execution plans | `PlanHash`, separately retained expected hash, approval binding | Do not rehash. Drain v1 work and start a fresh v2 invocation store. |
 | Invocation input | Canonical request input and `PlanHash` | Validate and canonicalize with the connection protocol before plan preparation. |
 | Invocation output | Canonical result in the companion ledger and gateway result | Finish or discard with its original v1 plan; do not replay it as v2. |
-| Gateway invocation store | `<workspace>/state/node_invocations.db` | Must contain no prepared or dispatched v1 work at cutover; back up and replace it as one unit. |
+| Gateway invocation store | `<workspace>/state/node_invocations.db` | Must contain no live v1 work at cutover. Preserve expired no-replay tombstones and their v1 reader until retention removes them. |
 | Companion invocation ledger | `<state_dir>/invocations.json` | Stop the companion, back up the v1 ledger, and start an empty v2 ledger. |
 | Node registry | `<workspace>/state/nodes/registry.json` | Preserve identity keys and pairing state, but require the connected v2 catalog digest to match before command approval is usable. |
 
@@ -79,10 +79,12 @@ plan, and output canonicalization end to end.
    and running v1 invocation. An incomplete drain blocks the cutover.
 4. Stop each companion, archive its v1 invocation ledger, deploy the v2
    companion, and reconnect. Reapprove commands whose v2 catalog digest differs.
-5. After every companion reports protocol v2, replace the drained gateway
-   invocation store with the v2 schema and re-enable admission.
-6. Record the inventory and backup locations in the deployment log. Removal of
-   v1 readers requires a later zero-v1 deployed-state audit.
+5. After every companion reports protocol v2, audit the gateway invocation
+   store. Preserve expired v1 no-replay tombstones and the reader needed to
+   load them until normal retention removes them.
+6. Record the inventory and backup locations in the deployment log. Remove v1
+   readers only after a later audit shows zero connected, active, or retained
+   v1 work.
 
 ## Rollback
 
