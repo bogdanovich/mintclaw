@@ -30,8 +30,8 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
   bounded testing of the running gateway agent and its live node sessions
   without Telegram or a second agent runtime.
 - [Node JSON canonicalization v2 cutover](node-json-canonicalization-v2-cutover.md):
-  gateway-first rollout, local v2 canary, mixed-fleet inventory, verification,
-  checksummed rollback, and the remaining zero-v1 gate.
+  gateway-first rollout, completed v2 fleet inventory, verification,
+  checksummed rollback, and the retained-record zero-v1 gate.
 - [Interaction record strict-reader cutover](interaction-record-strict-reader-cutover.md):
   approval-authority inventory, binary-only rollout, live verification, and
   rollback evidence.
