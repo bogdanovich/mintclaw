@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -241,26 +242,28 @@ func slashDiffTarget(args string) (codingworkspace.DiffTarget, error) {
 }
 
 func slashReviewTarget(args string) (codingreview.Target, error) {
-	scope, instructions, separated := strings.Cut(args, "--")
-	if !separated {
-		scope = args
-		instructions = ""
+	fields := strings.Fields(args)
+	separator := slices.Index(fields, "--")
+	scopeFields := fields
+	instructions := ""
+	if separator >= 0 {
+		scopeFields = fields[:separator]
+		instructions = strings.Join(fields[separator+1:], " ")
 	}
-	fields := strings.Fields(scope)
 	target := codingreview.Target{Kind: codingreview.TargetCurrent, Instructions: strings.TrimSpace(instructions)}
-	if len(fields) > 0 {
-		target.Kind = codingreview.TargetKind(strings.ToLower(fields[0]))
+	if len(scopeFields) > 0 {
+		target.Kind = codingreview.TargetKind(strings.ToLower(scopeFields[0]))
 	}
 	switch target.Kind {
 	case codingreview.TargetCurrent:
-		if len(fields) > 1 {
+		if len(scopeFields) > 1 {
 			return codingreview.Target{}, errors.New("/review current does not accept a ref")
 		}
 	case codingreview.TargetBase, codingreview.TargetCommit:
-		if len(fields) != 2 {
+		if len(scopeFields) != 2 {
 			return codingreview.Target{}, fmt.Errorf("/review %s requires one local ref", target.Kind)
 		}
-		target.Ref = fields[1]
+		target.Ref = scopeFields[1]
 	default:
 		return codingreview.Target{}, errors.New("/review target must be current, base, or commit")
 	}

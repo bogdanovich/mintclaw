@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // RenderStatePlain renders the frontend-neutral review projection for plain
@@ -12,10 +13,11 @@ func RenderStatePlain(state State) string {
 	lines := []string{
 		"Local code review",
 		"target: " + renderTarget(state.Target),
-		"phase: " + string(state.Phase),
+		"phase: " + displayText(string(state.Phase)),
 	}
+	lines = appendMultilineField(lines, "instructions", state.Target.Instructions)
 	if state.Progress != "" {
-		lines = append(lines, "progress: "+state.Progress)
+		lines = appendMultilineField(lines, "progress", state.Progress)
 	}
 	if state.Result != nil {
 		lines = append(lines, "")
@@ -35,35 +37,34 @@ func RenderResultPlain(result Result) string {
 	if result.Stale {
 		phase = PhaseStale
 	}
-	return strings.Join(append([]string{
+	lines := []string{
 		"Local code review",
 		"target: " + renderTarget(result.Target),
 		"phase: " + string(phase),
-		"",
-	}, renderResultBody(result)...), "\n")
+	}
+	lines = appendMultilineField(lines, "instructions", result.Target.Instructions)
+	lines = append(lines, "")
+	return strings.Join(append(lines, renderResultBody(result)...), "\n")
 }
 
 func renderTarget(target Target) string {
-	value := string(target.Kind)
+	value := displayText(string(target.Kind))
 	if target.Ref != "" {
-		value += " " + target.Ref
-	}
-	if target.Instructions != "" {
-		value += "\ninstructions: " + target.Instructions
+		value += " " + displayText(target.Ref)
 	}
 	return value
 }
 
 func renderResultBody(result Result) []string {
-	lines := []string{"summary: " + result.Summary}
+	lines := appendMultilineField(nil, "summary", result.Summary)
 	if result.EvidenceGeneration != "" {
-		lines = append(lines, "evidence: "+result.EvidenceGeneration)
+		lines = append(lines, "evidence: "+displayText(result.EvidenceGeneration))
 	}
 	if result.ResolvedRevision != "" {
-		lines = append(lines, "revision: "+result.ResolvedRevision)
+		lines = append(lines, "revision: "+displayText(result.ResolvedRevision))
 	}
 	if result.MergeBase != "" {
-		lines = append(lines, "merge base: "+result.MergeBase)
+		lines = append(lines, "merge base: "+displayText(result.MergeBase))
 	}
 	lines = append(lines, fmt.Sprintf("findings: %d", len(result.Findings)))
 	if result.Stale {
@@ -73,7 +74,7 @@ func renderResultBody(result Result) []string {
 		lines = append(lines, "truncated: true")
 	}
 	if result.Diagnostic != "" {
-		lines = append(lines, "diagnostic: "+result.Diagnostic)
+		lines = appendMultilineField(lines, "diagnostic", result.Diagnostic)
 	}
 	if len(result.Findings) > 0 {
 		lines = append(lines, "")
@@ -92,12 +93,12 @@ func renderFindings(findings []Finding) []string {
 		lines = append(lines, fmt.Sprintf(
 			"%d. [%s] %s",
 			index+1,
-			finding.Severity,
-			finding.Title,
+			displayText(string(finding.Severity)),
+			displayText(finding.Title),
 		))
 		lines = append(lines, "   location: "+renderLocation(finding))
 		lines = append(lines, fmt.Sprintf("   confidence: %.2f", finding.Confidence))
-		lines = append(lines, "   "+finding.Explanation)
+		lines = appendMultilineField(lines, "   explanation", finding.Explanation)
 	}
 	return lines
 }
@@ -117,15 +118,49 @@ func renderLocation(finding Finding) string {
 	switch finding.LocationState {
 	case LocationCurrent:
 		if finding.StartLine == finding.EndLine {
-			return fmt.Sprintf("%s:%d", finding.Path, finding.StartLine)
+			return fmt.Sprintf("%s:%d", displayText(finding.Path), finding.StartLine)
 		}
-		return fmt.Sprintf("%s:%d-%d", finding.Path, finding.StartLine, finding.EndLine)
+		return fmt.Sprintf("%s:%d-%d", displayText(finding.Path), finding.StartLine, finding.EndLine)
 	case LocationStale:
 		if finding.Path != "" {
-			return finding.Path + " (stale; no current line claimed)"
+			return displayText(finding.Path) + " (stale; no current line claimed)"
 		}
 		return "stale; no current location claimed"
 	default:
 		return "unlocated"
 	}
+}
+
+func appendMultilineField(lines []string, label string, value string) []string {
+	if value == "" {
+		return lines
+	}
+	lines = append(lines, label+":")
+	indent := strings.Repeat(" ", len(label)-len(strings.TrimLeft(label, " "))+2)
+	for _, line := range strings.Split(value, "\n") {
+		lines = append(lines, indent+displayText(line))
+	}
+	return lines
+}
+
+func displayText(value string) string {
+	var builder strings.Builder
+	for _, current := range value {
+		if current == '\t' {
+			builder.WriteString(`\t`)
+			continue
+		}
+		if !unicode.IsControl(current) {
+			builder.WriteRune(current)
+			continue
+		}
+		if current <= 0xff {
+			_, _ = fmt.Fprintf(&builder, "\\x%02x", current)
+		} else if current <= 0xffff {
+			_, _ = fmt.Fprintf(&builder, "\\u%04x", current)
+		} else {
+			_, _ = fmt.Fprintf(&builder, "\\U%08x", current)
+		}
+	}
+	return builder.String()
 }

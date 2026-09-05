@@ -177,6 +177,10 @@ func TestSlashReviewTargetValidation(t *testing.T) {
 			want:  codingreview.Target{Kind: codingreview.TargetCurrent, Instructions: "security"},
 		},
 		{input: "commit HEAD~1", want: codingreview.Target{Kind: codingreview.TargetCommit, Ref: "HEAD~1"}},
+		{
+			input: "base feature--branch",
+			want:  codingreview.Target{Kind: codingreview.TargetBase, Ref: "feature--branch"},
+		},
 		{input: "base", err: "requires one local ref"},
 		{input: "current main", err: "does not accept a ref"},
 		{input: "mystery", err: "target must be"},
