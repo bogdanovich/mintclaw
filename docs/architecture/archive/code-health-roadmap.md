@@ -1,6 +1,6 @@
 # Code Health Roadmap
 
-Status: active.
+Status: complete.
 
 Audit baseline: `origin/main` at `e8953566`, 2026-09-03.
 
@@ -63,7 +63,7 @@ not targets by themselves.
 | H5 | Consolidate turn input, runtime state, outcomes, and finalization | H0, H4 characterization tests | Completed |
 | H6 | Reduce root-config coupling at high-change boundaries | H1, H2, H5 | Completed |
 | H7 | Simplify canonical node JSON numbers through a protocol cutover | H0 | Completed |
-| H8 | Remove confirmed legacy and close the program | H1-H7 | In progress |
+| H8 | Remove confirmed legacy and close the program | H1-H7 | Completed |
 
 Packets H1-H4 may proceed independently after H0. H5 should remain a sequence
 of small pull requests, not one large branch. H7 is isolated because it changes
@@ -330,7 +330,7 @@ current execution context or argument hash. After the cutover, remove tolerant
 steady-state readers and prove that old records cannot recover authority.
 
 The production inventory and cutover decision are recorded in
-[Interaction Record Strict-Reader Cutover](../operations/interaction-record-strict-reader-cutover.md).
+[Interaction Record Strict-Reader Cutover](../../operations/interaction-record-strict-reader-cutover.md).
 
 ### H8.2 Dead provider modes
 
@@ -367,6 +367,12 @@ turns and durable interaction suspension without duplicating runner phases.
   operational cutover evidence;
 - replace this document with a short current-state architecture note after all
   completion gates pass.
+
+Completed after the merged H8 implementation was deployed and verified. The
+primary architecture index now points to the short
+[Code Health Architecture State](../code-health.md); this execution ledger and
+the earlier architecture-simplification roadmap remain archived as historical
+evidence.
 
 ## Per-Packet Evidence
 

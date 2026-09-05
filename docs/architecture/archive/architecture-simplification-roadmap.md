@@ -282,7 +282,7 @@ above and refined the reset scope:
 
 The authorized 2026-08-25 local bridge rollout completed the first two
 companion upgrades and is recorded in
-[R1 Local Node-Identity Bridge Rollout](../operations/architecture-simplification-r1-node-bridge.md):
+[R1 Local Node-Identity Bridge Rollout](../../operations/architecture-simplification-r1-node-bridge.md):
 
 - `p5a-canary` and `p3-canary` now run the exact `71ad3e53` node build and are
   connected as `v0.1.0-p8a.2-814-g71ad3e53`;
@@ -676,17 +676,17 @@ refactor:
 
 The full O1 build, recovery, rollout, five-cycle loaded shutdown evidence,
 smokes, trace, and cleanup record is in the
-[O1 shutdown deployment evidence](../operations/architecture-simplification-o1-shutdown.md).
+[O1 shutdown deployment evidence](../../operations/architecture-simplification-o1-shutdown.md).
 The O2 build, compact recovery set, five-profile rollout, concurrent live-turn,
 persisted-session, trace-correlation, and journal evidence is in the
-[O2 Seahorse deployment evidence](../operations/architecture-simplification-o2-seahorse.md).
+[O2 Seahorse deployment evidence](../../operations/architecture-simplification-o2-seahorse.md).
 The O3 build, exact-head review, rollback, coordinated browser/node reset,
 five-profile rollout, live-turn, trace, persistence, and observation evidence
 is in the
-[O3 live error-final deployment evidence](../operations/architecture-simplification-o3-live-error-final.md).
+[O3 live error-final deployment evidence](../../operations/architecture-simplification-o3-live-error-final.md).
 The combined O7/O8 release, coding and browser cutovers, matched rollback,
 passive canaries, and final deployed audit are in the
-[O7/O8 cutover evidence](../operations/architecture-simplification-o7-o8-cutover.md).
+[O7/O8 cutover evidence](../../operations/architecture-simplification-o7-o8-cutover.md).
 
 Diagnostic evidence also showed that `root_turn_id` alone is not globally
 unique across restarts. Trace selection for these packets must therefore bind
@@ -2038,7 +2038,7 @@ and the ten-minute error journal was empty. The verified targeted archive and
 manifests remain in the compact recovery set; 15 rollback-observed trees and
 the operational staging and preflight copies were pruned. Full commands,
 digests, canaries, rollback evidence, and retained artifacts are recorded in
-the [Z1 session cutover evidence](../operations/architecture-simplification-z1-session-cutover.md).
+the [Z1 session cutover evidence](../../operations/architecture-simplification-z1-session-cutover.md).
 
 The compatibility-reset objective is complete without adding a steady-state
 old-state reader. O1 through O8 are complete, the combined release and matched
