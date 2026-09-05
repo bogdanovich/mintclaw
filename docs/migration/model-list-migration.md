@@ -116,6 +116,12 @@ contain slashes. Examples:
 > **Note**: `api_key` (singular) is not accepted. Put every credential in the
 > `api_keys` array during the manual conversion.
 
+Older version-4 model entries may still contain `connect_mode`. MintClaw now
+uses the GitHub Copilot SDK transport directly: empty, `null`, and `grpc`
+legacy values are consumed during loading and omitted from the current config
+projection. Remove the field from the source document. `stdio` and other
+values are no longer supported and fail with an indexed migration error.
+
 ## Load Balancing
 
 There are two ways to configure load balancing:
