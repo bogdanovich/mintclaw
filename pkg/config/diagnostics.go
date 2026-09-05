@@ -89,6 +89,9 @@ func ValidateConfigPatchJSON(data []byte, current *Config) error {
 	if err != nil {
 		return err
 	}
+	if err = consumeLegacyModelConnectModes(raw, "config patch"); err != nil {
+		return err
+	}
 	if err := validateJSONShape(raw, reflect.TypeOf(&Config{}), "config patch"); err != nil {
 		return err
 	}
