@@ -15,13 +15,15 @@ import (
 
 type headlessReviewController struct {
 	*frontend.Projector
-	result     codingreview.Result
-	reviewErr  error
-	interrupts atomic.Int32
-	closes     atomic.Int32
-	closeFn    func() error
-	block      bool
-	started    chan struct{}
+	result                          codingreview.Result
+	reviewErr                       error
+	interrupts                      atomic.Int32
+	closes                          atomic.Int32
+	observerCanceledBeforeInterrupt atomic.Bool
+	closeFn                         func() error
+	block                           bool
+	started                         chan struct{}
+	observeCtx                      context.Context
 }
 
 func (controller *headlessReviewController) Review(_ context.Context, target codingreview.Target) error {
@@ -47,8 +49,18 @@ func (controller *headlessReviewController) Submit(context.Context, frontend.Tur
 }
 
 func (controller *headlessReviewController) Interrupt(context.Context) error {
+	if controller.observeCtx != nil && controller.observeCtx.Err() != nil {
+		controller.observerCanceledBeforeInterrupt.Store(true)
+	}
 	controller.interrupts.Add(1)
 	return nil
+}
+
+func (controller *headlessReviewController) Subscribe(
+	ctx context.Context,
+) (frontend.ThreadSnapshot, <-chan frontend.ThreadSnapshot, error) {
+	controller.observeCtx = ctx
+	return controller.Projector.Subscribe(ctx)
 }
 
 func (*headlessReviewController) HardCancel(context.Context) error        { return nil }
@@ -233,6 +245,9 @@ func TestReviewCommandSignalContextInterruptsBlockingReview(t *testing.T) {
 	}
 	if controller.interrupts.Load() != 1 {
 		t.Fatalf("blocking review interrupt calls = %d", controller.interrupts.Load())
+	}
+	if controller.observerCanceledBeforeInterrupt.Load() {
+		t.Fatal("review observation was canceled before cooperative interrupt")
 	}
 	if controller.closes.Load() != 1 {
 		t.Fatalf("blocking review close calls = %d", controller.closes.Load())

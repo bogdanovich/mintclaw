@@ -159,7 +159,10 @@ func executeHeadlessReview(
 	if err := reviewer.Review(ctx, target); err != nil {
 		return codingreview.Result{}, fmt.Errorf("review: admit: %w", err)
 	}
-	observeCtx, cancelObserve := context.WithCancel(ctx)
+	// Keep observation alive until this function has cooperatively interrupted
+	// the admitted review. If observation inherited command cancellation, its
+	// update channel could close before the ctx.Done branch invokes Interrupt.
+	observeCtx, cancelObserve := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelObserve()
 	snapshot, updates, err := controller.Subscribe(observeCtx)
 	if err != nil {
