@@ -45,6 +45,28 @@ func TestGatewayInvocationSQLiteRejectsNonCurrentBrowserSchema(t *testing.T) {
 	}
 }
 
+func TestGatewayInvocationSQLiteRejectsLegacyPlanProtocols(t *testing.T) {
+	for _, version := range []int{0, 1} {
+		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
+			store, err := NewGatewayInvocationStore(path, 16*1024*1024)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			record := gatewayBrowserObserveRecord(t, time.Now(), fmt.Sprintf("legacy_%d", version))
+			record.Plan.ProtocolVersion = version
+			writeGatewayInvocationSQLiteRecordForTest(t, path, record)
+
+			if _, err = NewGatewayInvocationStore(path, 16*1024*1024); !errors.Is(err, ErrInvalidInvocation) {
+				t.Fatalf("legacy protocol version %d error = %v", version, err)
+			}
+		})
+	}
+}
+
 func TestGatewayInvocationSQLiteRetainsOpaqueDispatchedTombstone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "node_invocations.db")
 	store, err := NewGatewayInvocationStore(path, 16*1024*1024)

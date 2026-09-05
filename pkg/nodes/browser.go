@@ -183,28 +183,11 @@ func effectiveBrowserLimit(value, fallback int) int {
 	return value
 }
 
-// DecodeBrowserInvocationResultForProtocol preserves typed result decoding for
-// retained protocol-v1 companions. Their canonical receipts may use exponent
-// notation for exact integers; protocol-v2 canonicalization restores bounded
-// plain integer spellings without floating-point conversion.
-func DecodeBrowserInvocationResultForProtocol(
-	protocolVersion int,
-	raw json.RawMessage,
-	maximum int,
-	result any,
-) error {
-	effective, err := EffectiveProtocolVersion(protocolVersion)
-	if err != nil {
-		return err
-	}
+// DecodeBrowserInvocationResult decodes one bounded, canonical v2 result into
+// its typed gateway representation.
+func DecodeBrowserInvocationResult(raw json.RawMessage, maximum int, result any) error {
 	if maximum <= 0 || maximum > MaxBrowserToolResultBytes || len(raw) == 0 || len(raw) > maximum {
 		return fmt.Errorf("%w: browser result is outside bounds", ErrInvalidInvocation)
-	}
-	if effective == ProtocolV1 {
-		raw, err = canonicalJSONForProtocolBounded(raw, ProtocolV2, maximum)
-		if err != nil {
-			return fmt.Errorf("%w: normalize protocol-v1 browser result: %w", ErrInvalidInvocation, err)
-		}
 	}
 	return json.Unmarshal(raw, result)
 }
@@ -2125,7 +2108,6 @@ func validateBrowserSessionOpenLimits(input map[string]any) error {
 }
 
 func validateBrowserInvocationOutput(
-	protocolVersion int,
 	command string,
 	limits BrowserLimits,
 	output map[string]any,
@@ -2145,11 +2127,8 @@ func validateBrowserInvocationOutput(
 			return fmt.Errorf("%w: browser diagnostics exceed the result limit", ErrInvalidCapability)
 		}
 		var result BrowserDiagnosticsResult
-		if err = DecodeBrowserInvocationResultForProtocol(
-			protocolVersion,
-			encoded,
-			MaxBrowserDiagnosticBytes,
-			&result,
+		if err = DecodeBrowserInvocationResult(
+			encoded, MaxBrowserDiagnosticBytes, &result,
 		); err != nil || !validBrowserDiagnosticsResult(result) {
 			return fmt.Errorf("%w: malformed browser diagnostics", ErrInvalidCapability)
 		}

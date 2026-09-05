@@ -88,7 +88,7 @@ func TestCompanionProcessAuthenticatesAndInvokesOverWSS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := nodes.PrepareExecutionPlanForProtocol(nodes.ProtocolV2, nodes.InvocationRequest{
+	plan, err := nodes.PrepareExecutionPlan(nodes.InvocationRequest{
 		InvocationID:     "inv_process_e2e",
 		IdempotencyKey:   "idem_process_e2e",
 		NodeID:           connected.ID,
@@ -208,7 +208,7 @@ func TestCompanionProcessTransfersFilesOverAuthenticatedWSS(t *testing.T) {
 	uploadContent := bytes.Repeat([]byte("real process upload\n"), 20000)
 	uploadDigest := sha256.Sum256(uploadContent)
 	uploadBinding := nodews.TransferBinding{
-		ProtocolVersion: nodes.ProtocolV2,
+		ProtocolVersion: nodes.ProtocolVersion,
 		TransferID:      "process_upload",
 		Direction:       protocol.TransferUpload,
 		PolicyRevision:  "project-files-v1",
@@ -253,7 +253,7 @@ func TestCompanionProcessTransfersFilesOverAuthenticatedWSS(t *testing.T) {
 	}
 	downloadDigest := sha256.Sum256(downloadContent)
 	downloadBinding := nodews.TransferBinding{
-		ProtocolVersion: nodes.ProtocolV2,
+		ProtocolVersion: nodes.ProtocolVersion,
 		TransferID:      "process_download",
 		Direction:       protocol.TransferDownload,
 		PolicyRevision:  "project-files-v1",

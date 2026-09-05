@@ -135,11 +135,10 @@ func NewIdentityProof(
 	if err != nil {
 		return IdentityProof{}, err
 	}
-	protocolVersion, err := NegotiateProtocol(minProtocol, maxProtocol)
-	if err != nil {
+	if _, protocolErr := NegotiateProtocol(minProtocol, maxProtocol); protocolErr != nil {
 		return IdentityProof{}, fmt.Errorf("%w: incompatible protocol range", ErrInvalidIdentityProof)
 	}
-	catalogHash, err := catalog.HashForProtocol(protocolVersion)
+	catalogHash, err := catalog.Hash()
 	if err != nil {
 		return IdentityProof{}, err
 	}
@@ -251,8 +250,7 @@ func (proof IdentityProof) validateClaims() error {
 			return fmt.Errorf("%w: malformed enrollment proof", ErrInvalidIdentityProof)
 		}
 	}
-	protocolVersion, protocolErr := NegotiateProtocol(proof.MinProtocol, proof.MaxProtocol)
-	if protocolErr != nil {
+	if _, err := NegotiateProtocol(proof.MinProtocol, proof.MaxProtocol); err != nil {
 		return fmt.Errorf("%w: incompatible protocol range", ErrInvalidIdentityProof)
 	}
 	if len(proof.ClientVersion) == 0 || len(proof.ClientVersion) > MaxClientVersionLength ||
@@ -267,7 +265,7 @@ func (proof IdentityProof) validateClaims() error {
 	if err := validateCompanionCatalog(proof.Catalog); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidIdentityProof, err)
 	}
-	catalogHash, err := proof.Catalog.HashForProtocol(protocolVersion)
+	catalogHash, err := proof.Catalog.Hash()
 	if err != nil || catalogHash != proof.CatalogHash {
 		return fmt.Errorf("%w: catalog hash does not match catalog", ErrInvalidIdentityProof)
 	}

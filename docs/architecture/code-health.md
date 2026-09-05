@@ -23,21 +23,18 @@ archives the execution ledgers and records the deployed state.
   finalization gateway. Phase-oriented files expose those boundaries.
 - Browser, node, tool, and provider policy are projected into immutable,
   generation-owned snapshots rather than read repeatedly from the root config.
-- Node protocol v2 owns canonical number rendering for current companions;
-  versioned gateway readers contain the temporary v1 compatibility edge.
+- Node protocol v2 is the sole admitted, persisted, and canonicalized node
+  representation. Omitted and v1 snapshot or plan versions fail closed.
 - Approval snapshots require their current authority fields. GitHub Copilot
   has one SDK transport, and agent contract tests use supported fixtures rather
   than constructing private runtime state.
 
 ## Bounded compatibility
 
-All three connected companions now negotiate node protocol v2. The deployed
-gateway temporarily retains v1 parsing for 148 expired no-replay invocation
-tombstones that were still present at fleet closeout. V1 parsing is therefore
-a versioned persistence-edge obligation, not a second steady-state
-representation; it can be removed after retention pruning and a fresh audit
-show zero connected, active, or retained v1 work. The deployed inventory is
-recorded in the
+All three connected companions negotiate node protocol v2. Protocol-v1
+support was retired only after retention pruning and a fresh audit could show
+zero connected, active, or retained v1 work. The fleet cutover inventory and
+the reader-removal gate are recorded in the
 [Node JSON Canonicalization V2 Cutover](../operations/node-json-canonicalization-v2-cutover.md).
 
 The obsolete provider `connect_mode` is not persisted or exposed by the

@@ -411,7 +411,6 @@ type nodeBrowserWorker struct {
 	policyRevision    string
 	catalogHash       string
 	catalogRevision   string
-	protocolVersion   int
 	actions           []string
 	tabID             string
 
@@ -1059,8 +1058,7 @@ func (worker *nodeBrowserWorker) stageBrowserArtifact(
 	}
 	transferID := browserNodeStableID("browser_artifact", worker.sessionID, request.InvocationID)
 	binding := nodews.TransferBinding{
-		ProtocolVersion: worker.protocolVersion,
-		TransferID:      transferID, Direction: protocol.TransferUpload,
+		TransferID: transferID, Direction: protocol.TransferUpload,
 		PolicyRevision: worker.profileRevision, TotalSize: uint64(request.Prepared.ArtifactBytes), SHA256: digest,
 	}
 	stream, err := sessions.OpenTransfer(ctx, worker.nodeID, binding)
@@ -1324,8 +1322,7 @@ func (worker *nodeBrowserWorker) receiveBrowserOutput(
 		return nodes.TransferArtifactRecord{}, browser.ErrWorkerUnavailable
 	}
 	stream, err := sessions.OpenTransfer(ctx, worker.nodeID, nodews.TransferBinding{
-		ProtocolVersion: worker.protocolVersion,
-		TransferID:      descriptor.TransferID, Direction: protocol.TransferDownload,
+		TransferID: descriptor.TransferID, Direction: protocol.TransferDownload,
 		PolicyRevision: descriptor.ProfileRevision, TotalSize: descriptor.Size, SHA256: bindingDigest,
 	})
 	if err != nil {
@@ -1439,8 +1436,7 @@ func (worker *nodeBrowserWorker) receiveBrowserSnapshot(
 		return nodes.BrowserObservationResult{}, true, browser.ErrSnapshotTransfer
 	}
 	stream, err := sessions.OpenTransfer(transferCtx, worker.nodeID, nodews.TransferBinding{
-		ProtocolVersion: worker.protocolVersion,
-		TransferID:      output.TransferID, Direction: protocol.TransferDownload,
+		TransferID: output.TransferID, Direction: protocol.TransferDownload,
 		PolicyRevision: output.ProfileRevision, TotalSize: output.Size, SHA256: bindingDigest,
 	})
 	if err != nil {
@@ -1642,8 +1638,7 @@ func (worker *nodeBrowserWorker) resolveAuthority(
 	if !ok {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
 	}
-	protocolVersion, protocolErr := nodes.EffectiveProtocolVersion(record.Snapshot.ProtocolVersion)
-	if protocolErr != nil {
+	if err := nodes.ValidateProtocolVersion(record.Snapshot.ProtocolVersion); err != nil {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrWorkerUnavailable
 	}
 	if worker.catalogHash == "" {
@@ -1651,12 +1646,10 @@ func (worker *nodeBrowserWorker) resolveAuthority(
 		worker.executor = record.Snapshot.Executor
 		worker.policyRevision = record.Snapshot.PolicyRevision
 		worker.catalogHash = record.Snapshot.CatalogHash
-		worker.protocolVersion = protocolVersion
 	} else if worker.nodeID != record.Snapshot.ID ||
 		worker.executor != record.Snapshot.Executor ||
 		worker.policyRevision != record.Snapshot.PolicyRevision ||
-		worker.catalogHash != record.Snapshot.CatalogHash ||
-		worker.protocolVersion != protocolVersion {
+		worker.catalogHash != record.Snapshot.CatalogHash {
 		return nodes.CommandDescriptor{}, nodes.BrowserProfileDescriptor{}, browser.ErrDenied
 	}
 	if worker.profileDescriptor.Alias != "" &&
@@ -1706,8 +1699,7 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 		TimeoutSeconds:   min(worker.limits.ActionSeconds, nodes.MaxBrowserActionSeconds),
 		OutputLimitBytes: min(worker.limits.ToolResultBytes, nodes.MaxBrowserToolResultBytes),
 	}
-	plan, err := nodes.PrepareExecutionPlanForProtocol(
-		record.Snapshot.ProtocolVersion,
+	plan, err := nodes.PrepareExecutionPlan(
 		request, descriptor, record.Snapshot.Executor, record.Snapshot.PolicyRevision,
 		time.Now(), nodes.MaxExecutionPlanTTL,
 	)
@@ -1792,22 +1784,13 @@ func (worker *nodeBrowserWorker) invokeWithEphemeral(
 	return worker.reconcileInvocation(ctx, gatewayRecord, principal, len(ephemeralInput) != 0, output)
 }
 
-// decodeInvocationResult keeps the current protocol-v2 structs
-// strict while retaining read compatibility with successful protocol-v1
-// receipts. Protocol v1 canonicalization can spell an exact integer such as a
-// Unix timestamp as 1.788565003e9, which encoding/json does not assign to an
-// integer field. Normalize only mathematically integral v1 numbers to bounded
-// plain decimal before the typed gateway read.
+// decodeInvocationResult keeps the protocol-v2 structs strict while decoding
+// one bounded result from the companion.
 func (worker *nodeBrowserWorker) decodeInvocationResult(raw json.RawMessage, output any) error {
 	if worker == nil {
 		return browser.ErrWorkerUnavailable
 	}
-	return nodes.DecodeBrowserInvocationResultForProtocol(
-		worker.protocolVersion,
-		raw,
-		nodes.MaxBrowserToolResultBytes,
-		output,
-	)
+	return nodes.DecodeBrowserInvocationResult(raw, nodes.MaxBrowserToolResultBytes, output)
 }
 
 func browserRetainedInvocationMatches(
@@ -1815,7 +1798,7 @@ func browserRetainedInvocationMatches(
 	plan nodes.ExecutionPlan,
 	descriptor nodes.CommandDescriptor,
 ) bool {
-	descriptorHash, err := descriptor.HashForProtocol(plan.ProtocolVersion)
+	descriptorHash, err := descriptor.Hash()
 	if err != nil {
 		return false
 	}
@@ -1933,8 +1916,8 @@ func (worker *nodeBrowserWorker) validateAuthority(
 	if !ok {
 		return browser.ErrDenied
 	}
-	expectedHash, expectedErr := expected.HashForProtocol(current.Snapshot.ProtocolVersion)
-	currentHash, currentErr := descriptor.HashForProtocol(current.Snapshot.ProtocolVersion)
+	expectedHash, expectedErr := expected.Hash()
+	currentHash, currentErr := descriptor.Hash()
 	if expectedErr != nil || currentErr != nil || expectedHash != currentHash {
 		return browser.ErrDenied
 	}

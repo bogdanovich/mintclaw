@@ -273,7 +273,7 @@ func TestDecodeEnrollmentOfferURIRejectsMalformedPayloads(t *testing.T) {
 	}
 }
 
-func TestAndroidEnrollmentLanguageNeutralFixture(t *testing.T) {
+func TestAndroidEnrollmentProtocolV1FixtureIsRejected(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "enrollment-android.v1.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -305,8 +305,8 @@ func TestAndroidEnrollmentLanguageNeutralFixture(t *testing.T) {
 	if base64.RawURLEncoding.EncodeToString(transcript) != fixture.Transcript {
 		t.Fatal("fixture transcript changed")
 	}
-	if _, err := fixture.Proof.VerifyIdentity(); err != nil {
-		t.Fatalf("fixture identity proof: %v", err)
+	if _, err := fixture.Proof.VerifyIdentity(); !errors.Is(err, ErrInvalidIdentityProof) {
+		t.Fatalf("protocol-v1 fixture identity proof: %v", err)
 	}
 	secret, err := base64.RawURLEncoding.Strict().DecodeString(fixture.Offer.Secret)
 	if err != nil {

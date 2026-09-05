@@ -482,11 +482,8 @@ func verifyRemoteInvocation(
 		return nodes.ErrGatewayInvocationConflict
 	}
 	if remote.State == nodes.InvocationSucceeded {
-		result, err := nodes.ValidateInvocationOutputForProtocol(
-			gateway.Plan.ProtocolVersion,
-			gateway.Descriptor,
-			remote.Result,
-			gateway.Plan.OutputLimitBytes,
+		result, err := nodes.ValidateInvocationOutput(
+			gateway.Descriptor, remote.Result, gateway.Plan.OutputLimitBytes,
 		)
 		if err != nil {
 			return nodes.ErrGatewayInvocationConflict

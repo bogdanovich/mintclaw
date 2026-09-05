@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +32,7 @@ func TestFileRegistryPersistsPendingPairingSecurely(t *testing.T) {
 		Node: Snapshot{
 			ID:               id,
 			State:            StatePendingPairing,
-			ProtocolVersion:  ProtocolV1,
+			ProtocolVersion:  ProtocolVersion,
 			Platform:         "linux",
 			Architecture:     "amd64",
 			SoftwareVersion:  "v0.1.0",
@@ -764,6 +765,44 @@ func TestFileRegistryRejectsCorruptDocument(t *testing.T) {
 	}
 }
 
+func TestFileRegistryRejectsLegacySnapshotProtocols(t *testing.T) {
+	for _, version := range []int{0, 1} {
+		t.Run(fmt.Sprintf("version_%d", version), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "registry.json")
+			registry, err := NewFileRegistry(path, 4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pairing := testPendingPairing(t, 1)
+			if err = registry.UpsertPending(pairing); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document registryDocument
+			if err = json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			record := document.Records[string(pairing.Node.ID)]
+			record.Snapshot.ProtocolVersion = version
+			document.Records[string(pairing.Node.ID)] = record
+			data, err = json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err = NewFileRegistry(path, 4); !errors.Is(err, ErrInvalidNode) {
+				t.Fatalf("legacy protocol version %d error = %v", version, err)
+			}
+		})
+	}
+}
+
 func testPendingPairing(t *testing.T, timestamp int64) PendingPairing {
 	t.Helper()
 	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
@@ -778,7 +817,7 @@ func testPendingPairing(t *testing.T, timestamp int64) PendingPairing {
 		Node: Snapshot{
 			ID:              id,
 			State:           StatePendingPairing,
-			ProtocolVersion: ProtocolV1,
+			ProtocolVersion: ProtocolVersion,
 			CatalogHash:     emptyCatalogHash(t),
 			Catalog:         CapabilityCatalog{},
 			Executor:        "local",

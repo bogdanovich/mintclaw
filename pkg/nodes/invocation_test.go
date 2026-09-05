@@ -40,8 +40,8 @@ func TestPrepareExecutionPlanCanonicalHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encoded), `"protocol_version"`) {
-		t.Fatalf("v1 plan exposed a protocol field to legacy companions: %s", encoded)
+	if !strings.Contains(string(encoded), `"protocol_version":2`) {
+		t.Fatalf("plan omitted its protocol boundary: %s", encoded)
 	}
 	second.TimeoutSeconds++
 	if err := second.Validate(); !errors.Is(err, ErrInvalidInvocation) {
@@ -60,7 +60,7 @@ func TestPrepareExecutionPlanV2BindsPlainIntegerCanonicalization(t *testing.T) {
 		Risk:         RiskRead,
 	}
 	catalog := CapabilityCatalog{Commands: []CommandDescriptor{descriptor}}
-	catalogHash, err := catalog.HashForProtocol(ProtocolV2)
+	catalogHash, err := catalog.Hash()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +70,7 @@ func TestPrepareExecutionPlanV2BindsPlainIntegerCanonicalization(t *testing.T) {
 		Input: json.RawMessage(`{"value":6e1}`), AgentID: "main", SessionID: "session_v2", ActorID: "user_v2",
 		TimeoutSeconds: 30, OutputLimitBytes: 1024,
 	}
-	plan, err := PrepareExecutionPlanForProtocol(
-		ProtocolV2,
+	plan, err := PrepareExecutionPlan(
 		request,
 		descriptor,
 		"local",
@@ -82,7 +81,7 @@ func TestPrepareExecutionPlanV2BindsPlainIntegerCanonicalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.ProtocolVersion != ProtocolV2 || string(plan.Input) != `{"value":60}` {
+	if plan.ProtocolVersion != ProtocolVersion || string(plan.Input) != `{"value":60}` {
 		t.Fatalf("v2 plan = protocol %d input %s", plan.ProtocolVersion, plan.Input)
 	}
 	encoded, err := json.Marshal(plan)
@@ -530,8 +529,7 @@ func TestPrepareExecutionPlanV2BoundsAggregateNumericExpansion(t *testing.T) {
 	if len(input) >= MaxInvocationInputBytes {
 		t.Fatalf("test input unexpectedly exceeds raw limit: %d", len(input))
 	}
-	if _, err := PrepareExecutionPlanForProtocol(
-		ProtocolV2,
+	if _, err := PrepareExecutionPlan(
 		invocationRequest(input),
 		invocationDescriptor(RiskWrite),
 		"local",
@@ -549,7 +547,7 @@ func TestValidateInvocationOutputV2BoundsAggregateNumericExpansion(t *testing.T)
 	output := json.RawMessage(`{"values":[1e4095,1e4095,1e4095]}`)
 	descriptor := invocationDescriptor(RiskWrite)
 	descriptor.OutputSchema = json.RawMessage(`{"type":"object"}`)
-	if _, err := ValidateInvocationOutputForProtocol(ProtocolV2, descriptor, output, 8*1024); !errors.Is(
+	if _, err := ValidateInvocationOutput(descriptor, output, 8*1024); !errors.Is(
 		err,
 		ErrInvalidInvocation,
 	) {
@@ -671,12 +669,13 @@ func TestRegistrationApprovedCommandIntersectsCatalogAndApproval(t *testing.T) {
 	}
 	registration := Registration{
 		Snapshot: Snapshot{
-			ID:             ID("node_test"),
-			State:          StateConnected,
-			CatalogHash:    catalogHash,
-			Catalog:        catalog,
-			Executor:       "local",
-			PolicyRevision: "policy-1",
+			ID:              ID("node_test"),
+			State:           StateConnected,
+			ProtocolVersion: ProtocolVersion,
+			CatalogHash:     catalogHash,
+			Catalog:         catalog,
+			Executor:        "local",
+			PolicyRevision:  "policy-1",
 		},
 		AllowedCommands:     []string{descriptor.Name},
 		ApprovedCatalogHash: catalogHash,

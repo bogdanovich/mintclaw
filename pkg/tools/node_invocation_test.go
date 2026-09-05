@@ -2216,12 +2216,13 @@ func newFakeNodeInvocationSource(t *testing.T) *fakeNodeInvocationSource {
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{command}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID:             "private-node-id",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "policy-1",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "policy-1",
 	}
 	discovery := &fakeNodeDiscoverySource{
 		byRef: map[string]nodes.Snapshot{"builder-node": snapshot},
@@ -2267,12 +2268,13 @@ func nodeInvocationTestArgs() map[string]any {
 		panic(err)
 	}
 	snapshot := nodes.Snapshot{
-		ID:             "private-node-id",
-		State:          nodes.StateConnected,
-		Catalog:        catalog,
-		CatalogHash:    catalogHash,
-		Executor:       "local",
-		PolicyRevision: "policy-1",
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id",
+		State:           nodes.StateConnected,
+		Catalog:         catalog,
+		CatalogHash:     catalogHash,
+		Executor:        "local",
+		PolicyRevision:  "policy-1",
 	}
 	registration := nodes.Registration{
 		Snapshot:            snapshot,

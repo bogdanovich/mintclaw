@@ -350,7 +350,8 @@ func workspaceExecTestSetup(t *testing.T, allowJobs bool) (*config.Config, *fake
 	catalog := nodes.CapabilityCatalog{Commands: []nodes.CommandDescriptor{system, job}}
 	catalogHash := mustCatalogHash(t, catalog)
 	snapshot := nodes.Snapshot{
-		ID: "private-node-id", State: nodes.StateConnected, Catalog: catalog,
+		ProtocolVersion: nodes.ProtocolVersion,
+		ID:              "private-node-id", State: nodes.StateConnected, Catalog: catalog,
 		CatalogHash: catalogHash, Executor: "local", PolicyRevision: "policy-v1",
 	}
 	discovery := &fakeNodeDiscoverySource{

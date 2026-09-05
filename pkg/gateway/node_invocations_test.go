@@ -761,7 +761,7 @@ func newRealNodePreparationFixture(t *testing.T) *realNodePreparationFixture {
 	snapshot := nodes.Snapshot{
 		ID:              nodeID,
 		State:           nodes.StatePendingPairing,
-		ProtocolVersion: nodes.ProtocolV1,
+		ProtocolVersion: nodes.ProtocolVersion,
 		Platform:        "linux",
 		Architecture:    "amd64",
 		SoftwareVersion: "v0.1.0",
