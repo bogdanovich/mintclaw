@@ -46,7 +46,7 @@ type Provider struct {
 }
 
 func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
-	return providercapabilities.ProviderCapabilities{}
+	return providercapabilities.ProviderCapabilities{CallerMediatedTools: true}
 }
 
 // NewProvider creates a new Anthropic Messages API provider.
