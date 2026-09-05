@@ -265,22 +265,25 @@ func openNativeCodingRuntime(
 		return nil, fmt.Errorf("coding runtime: initialize agent: %w", err)
 	}
 	loop.SetMediaStore(attachmentMedia)
-	reviewer, err := codingreviewer.New(
-		provider,
-		providerModel,
-		newNativeReviewerToolset(
-			request.Metadata.Project.ProjectRoot,
-			runtimeCfg.Tools.ReadFile.MaxReadFileSize,
-		),
-		codingreviewer.Limits{},
-		time.Now,
-	)
-	if err != nil {
-		_ = loop.CloseContext(context.Background())
-		_ = attachmentMedia.Close()
-		messageBus.Close()
-		_ = baseEventBus.Close()
-		return nil, fmt.Errorf("coding runtime: initialize reviewer: %w", err)
+	var reviewer *codingreviewer.Executor
+	if providers.Capabilities(provider).CallerMediatedTools {
+		reviewer, err = codingreviewer.New(
+			provider,
+			providerModel,
+			newNativeReviewerToolset(
+				request.Metadata.Project.ProjectRoot,
+				runtimeCfg.Tools.ReadFile.MaxReadFileSize,
+			),
+			codingreviewer.Limits{},
+			time.Now,
+		)
+		if err != nil {
+			_ = loop.CloseContext(context.Background())
+			_ = attachmentMedia.Close()
+			messageBus.Close()
+			_ = baseEventBus.Close()
+			return nil, fmt.Errorf("coding runtime: initialize reviewer: %w", err)
+		}
 	}
 	readTurnHistory := r.readTurnHistory
 	if readTurnHistory == nil {
@@ -818,8 +821,11 @@ func (r *nativeControllerRuntime) RunReview(
 	emit func(codingreview.Event) error,
 	commit func() error,
 ) (codingreview.Result, error) {
-	if r == nil || r.reviewer == nil || r.store == nil || r.lease == nil {
+	if r == nil || r.store == nil || r.lease == nil {
 		return codingreview.Result{}, fmt.Errorf("coding review runtime is unavailable")
+	}
+	if r.reviewer == nil {
+		return codingreview.Result{}, frontend.ErrCommandUnsupported
 	}
 	repository, err := r.repositoryEvidence()
 	if err != nil {

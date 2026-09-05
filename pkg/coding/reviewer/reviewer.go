@@ -217,7 +217,7 @@ func (executor *Executor) runConversation(
 			messages,
 			definitions,
 			executor.model,
-			map[string]any{"max_tokens": executor.limits.MaxTokens},
+			providers.CallerMediatedToolsOptions(map[string]any{"max_tokens": executor.limits.MaxTokens}),
 		)
 		if err != nil {
 			return "", fmt.Errorf("coding reviewer: provider: %w", err)

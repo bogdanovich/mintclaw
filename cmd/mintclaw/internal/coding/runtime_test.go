@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,8 +39,9 @@ type reviewCodingProvider struct {
 }
 
 type reviewProviderCall struct {
-	tools []providers.ToolDefinition
-	model string
+	tools   []providers.ToolDefinition
+	model   string
+	options map[string]any
 }
 
 func (provider *reviewCodingProvider) Chat(
@@ -47,12 +49,13 @@ func (provider *reviewCodingProvider) Chat(
 	_ []providers.Message,
 	tools []providers.ToolDefinition,
 	model string,
-	_ map[string]any,
+	options map[string]any,
 ) (*providers.LLMResponse, error) {
 	provider.mu.Lock()
 	provider.calls = append(provider.calls, reviewProviderCall{
-		tools: append([]providers.ToolDefinition(nil), tools...),
-		model: model,
+		tools:   append([]providers.ToolDefinition(nil), tools...),
+		model:   model,
+		options: maps.Clone(options),
 	})
 	provider.mu.Unlock()
 	return &providers.LLMResponse{Content: `{
@@ -111,10 +114,7 @@ func (p *blockingCodingProvider) ChatStreamEvents(
 func (p *blockingCodingProvider) GetDefaultModel() string { return "coding-test" }
 
 func (p *blockingCodingProvider) Capabilities() providers.ProviderCapabilities {
-	return providers.ProviderCapabilities{
-		Streaming:           true,
-		CallerMediatedTools: true,
-	}
+	return providers.ProviderCapabilities{Streaming: true}
 }
 
 func TestPendingThreadTitlePromotesOnceUnlessRenamed(t *testing.T) {
@@ -359,7 +359,7 @@ func TestCodingRuntimeConfigSkipsDisabledAliasEntries(t *testing.T) {
 	}
 }
 
-func TestNativeControllerDrivesAndInterruptsHeadlessCodingTurn(t *testing.T) {
+func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -703,6 +703,9 @@ func TestNativeControllerPublishesReadOnlyReviewResult(t *testing.T) {
 	}
 	if strings.Join(toolNames, ",") != "list_dir,read_file,search_files" {
 		t.Fatalf("review tools = %v", toolNames)
+	}
+	if calls[0].options["native_search"] != false {
+		t.Fatalf("review provider options = %#v, want native_search=false", calls[0].options)
 	}
 	if err := frontendController.Close(t.Context()); err != nil {
 		t.Fatal(err)

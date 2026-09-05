@@ -866,19 +866,16 @@ func (c *Controller) runReview(
 		case <-c.done:
 			return ErrClosed
 		}
-		select {
-		case err := <-request.reply:
-			if err == nil {
-				commitMu.Lock()
-				committed = true
-				commitMu.Unlock()
-			}
-			return err
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-c.done:
-			return ErrClosed
+		// Once the coordinator accepts the request, its reply is the
+		// linearization result. A concurrent cancellation must not race and
+		// overwrite an already accepted publication commit.
+		err := <-request.reply
+		if err == nil {
+			commitMu.Lock()
+			committed = true
+			commitMu.Unlock()
 		}
+		return err
 	}
 	result, err := runner.RunReview(ctx, reviewID, target, emit, commit)
 	emitMu.Lock()
