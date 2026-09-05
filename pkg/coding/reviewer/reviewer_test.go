@@ -50,6 +50,16 @@ func (provider *fakeProvider) Chat(
 
 func (*fakeProvider) GetDefaultModel() string { return "test-model" }
 
+func (*fakeProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{CallerMediatedTools: true}
+}
+
+type autonomousFakeProvider struct{ fakeProvider }
+
+func (*autonomousFakeProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{}
+}
+
 type fakeToolset struct {
 	definitions []providers.ToolDefinition
 	results     map[string]ToolResult
@@ -139,6 +149,19 @@ func TestReviewUsesOnlyReadToolsAndNormalizesRenameLocation(t *testing.T) {
 	}
 }
 
+func TestNewRejectsProviderWithoutCallerMediatedTools(t *testing.T) {
+	_, err := New(
+		&autonomousFakeProvider{},
+		"native-model",
+		&fakeToolset{definitions: readToolDefinitions()},
+		Limits{},
+		time.Now,
+	)
+	if err == nil || !strings.Contains(err.Error(), "caller-mediated tool execution") {
+		t.Fatalf("New() error = %v", err)
+	}
+}
+
 func TestReviewRejectsProviderMutationToolCall(t *testing.T) {
 	provider := &fakeProvider{responses: []*providers.LLMResponse{{
 		ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "write_file"}},
@@ -159,6 +182,93 @@ func TestReviewRejectsProviderMutationToolCall(t *testing.T) {
 	}
 	if len(toolset.executed) != 0 {
 		t.Fatalf("forbidden tool executed: %v", toolset.executed)
+	}
+}
+
+func TestReviewRejectsToolCallBatchBeforeCopyOrExecution(t *testing.T) {
+	calls := make([]providers.ToolCall, defaultToolCalls+1)
+	for index := range calls {
+		calls[index] = providers.ToolCall{ID: "call", Name: "read_file"}
+	}
+	provider := &fakeProvider{responses: []*providers.LLMResponse{{ToolCalls: calls}}}
+	toolset := &fakeToolset{definitions: readToolDefinitions()}
+	executor, err := New(provider, "native-model", toolset, Limits{}, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = executor.Review(
+		t.Context(),
+		"e5768a80-a5be-4bda-b21c-0da34b02502c",
+		review.Target{Kind: review.TargetCurrent},
+		currentDiff(),
+	)
+	if err == nil || !strings.Contains(err.Error(), "exceeded 24 read-only tool calls") {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if len(toolset.executed) != 0 {
+		t.Fatalf("oversized tool batch executed: %v", toolset.executed)
+	}
+}
+
+func TestCommitReviewUsesOnlyFrozenEvidence(t *testing.T) {
+	provider := &fakeProvider{responses: []*providers.LLMResponse{{
+		Content: `{"summary":"No findings.","findings":[]}`,
+	}}}
+	executor, err := New(
+		provider,
+		"native-model",
+		&fakeToolset{definitions: readToolDefinitions()},
+		Limits{},
+		time.Now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen := currentDiff()
+	frozen.Target = workspace.DiffTarget{Kind: workspace.DiffTargetCommit, Ref: "main~1"}
+	frozen.ResolvedRevision = "0123456789abcdef"
+	frozen.EvidenceGeneration = ""
+	result, err := executor.Review(
+		t.Context(),
+		"e5768a80-a5be-4bda-b21c-0da34b02502c",
+		review.Target{Kind: review.TargetCommit, Ref: "main~1"},
+		frozen,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.calls) != 1 || len(provider.calls[0].tools) != 0 ||
+		result.ResolvedRevision != frozen.ResolvedRevision {
+		t.Fatalf("commit review call/result = %#v / %#v", provider.calls, result)
+	}
+}
+
+func TestCommitReviewRejectsProviderToolCall(t *testing.T) {
+	provider := &fakeProvider{responses: []*providers.LLMResponse{{
+		ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "read_file"}},
+	}}}
+	executor, err := New(
+		provider,
+		"native-model",
+		&fakeToolset{definitions: readToolDefinitions()},
+		Limits{},
+		time.Now,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen := currentDiff()
+	frozen.Target = workspace.DiffTarget{Kind: workspace.DiffTargetCommit, Ref: "main~1"}
+	frozen.ResolvedRevision = "0123456789abcdef"
+	frozen.EvidenceGeneration = ""
+	_, err = executor.Review(
+		t.Context(),
+		"e5768a80-a5be-4bda-b21c-0da34b02502c",
+		review.Target{Kind: review.TargetCommit, Ref: "main~1"},
+		frozen,
+	)
+	if err == nil || !strings.Contains(err.Error(), "unavailable for this review target") {
+		t.Fatalf("Review() error = %v", err)
 	}
 }
 

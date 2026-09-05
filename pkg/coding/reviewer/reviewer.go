@@ -111,6 +111,9 @@ func New(
 	if provider == nil {
 		return nil, fmt.Errorf("coding reviewer: provider is required")
 	}
+	if !providers.Capabilities(provider).CallerMediatedTools {
+		return nil, fmt.Errorf("coding reviewer: provider does not guarantee caller-mediated tool execution")
+	}
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return nil, fmt.Errorf("coding reviewer: native model ID is required")
@@ -155,9 +158,13 @@ func (executor *Executor) Review(
 
 	evidence, evidenceTruncated := truncateUTF8(workspace.RenderDiffPlain(frozen), executor.limits.EvidenceBytes)
 	messages := reviewMessages(target, evidence, evidenceTruncated)
-	definitions, err := safeDefinitions(executor.tools.Definitions())
-	if err != nil {
-		return review.Result{}, err
+	var definitions []providers.ToolDefinition
+	if target.Kind != review.TargetCommit {
+		var definitionsErr error
+		definitions, definitionsErr = safeDefinitions(executor.tools.Definitions())
+		if definitionsErr != nil {
+			return review.Result{}, definitionsErr
+		}
 	}
 	response, err := executor.runConversation(ctx, messages, definitions)
 	if err != nil {
@@ -227,8 +234,14 @@ func (executor *Executor) runConversation(
 		if len(response.ToolCalls) == 0 {
 			return response.Content, nil
 		}
+		if len(definitions) == 0 {
+			return "", fmt.Errorf("coding reviewer: read-only tools are unavailable for this review target")
+		}
 		if round == executor.limits.ToolRounds {
 			return "", fmt.Errorf("coding reviewer: exceeded %d read-only tool rounds", executor.limits.ToolRounds)
+		}
+		if len(response.ToolCalls) > executor.limits.ToolCalls-toolCalls {
+			return "", fmt.Errorf("coding reviewer: exceeded %d read-only tool calls", executor.limits.ToolCalls)
 		}
 		messages = append(messages, providers.Message{
 			Role:      "assistant",

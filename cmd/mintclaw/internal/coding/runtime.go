@@ -128,9 +128,11 @@ type nativeCodingRuntime struct {
 		string,
 		agent.DirectTurnOptions,
 	) (string, error)
-	historyCursor memory.HistoryCursor
-	closeOnce     sync.Once
-	closeErr      error
+	historyCursor  memory.HistoryCursor
+	closeOnce      sync.Once
+	operationalMu  sync.Mutex
+	operationalErr error
+	closeErr       error
 }
 
 // codingCheckpointBus keeps durable coding-thread metadata observation in the
@@ -572,14 +574,27 @@ func (r *nativeCodingRuntime) Compact(ctx context.Context) error {
 
 func (r *nativeCodingRuntime) Close() error {
 	r.closeOnce.Do(func() {
+		r.operationalMu.Lock()
+		operationalErr := r.operationalErr
+		r.operationalMu.Unlock()
 		r.closeErr = errors.Join(
 			r.loop.CloseContext(context.Background()),
 			r.attachmentMedia.Close(),
 			r.eventBus.Close(),
+			operationalErr,
 		)
 		r.messageBus.Close()
 	})
 	return r.closeErr
+}
+
+func (r *nativeCodingRuntime) recordOperationalError(err error) {
+	if r == nil || err == nil {
+		return
+	}
+	r.operationalMu.Lock()
+	r.operationalErr = errors.Join(r.operationalErr, err)
+	r.operationalMu.Unlock()
 }
 
 type codingMetadataState struct {
@@ -801,6 +816,7 @@ func (r *nativeControllerRuntime) RunReview(
 	reviewID string,
 	target codingreview.Target,
 	emit func(codingreview.Event) error,
+	commit func() error,
 ) (codingreview.Result, error) {
 	if r == nil || r.reviewer == nil || r.store == nil || r.lease == nil {
 		return codingreview.Result{}, fmt.Errorf("coding review runtime is unavailable")
@@ -852,8 +868,15 @@ func (r *nativeControllerRuntime) RunReview(
 	); emitErr != nil {
 		return codingreview.Result{}, emitErr
 	}
+	if commitErr := commit(); commitErr != nil {
+		return codingreview.Result{}, commitErr
+	}
 	if publishErr := r.store.PublishReviewResult(ctx, r.lease, r.metadata, result, frozen); publishErr != nil {
-		return codingreview.Result{}, fmt.Errorf("coding review publish result: %w", publishErr)
+		wrapped := fmt.Errorf("coding review publish result: %w", publishErr)
+		if !fileutil.IsCommittedWriteError(publishErr) {
+			return codingreview.Result{}, wrapped
+		}
+		r.recordOperationalError(wrapped)
 	}
 	return result, nil
 }

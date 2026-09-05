@@ -224,14 +224,40 @@ type cancelIgnoringReviewRuntime struct {
 	release chan struct{}
 }
 
+type committedReviewRuntime struct {
+	*blockingRuntime
+	committed chan struct{}
+	release   chan struct{}
+}
+
+func (runtime *committedReviewRuntime) RunReview(
+	_ context.Context,
+	reviewID string,
+	target codingreview.Target,
+	_ func(codingreview.Event) error,
+	commit func() error,
+) (codingreview.Result, error) {
+	if err := commit(); err != nil {
+		return codingreview.Result{}, err
+	}
+	close(runtime.committed)
+	<-runtime.release
+	return codingreview.Result{
+		SchemaVersion: codingreview.SchemaVersion, ReviewID: reviewID, Target: target,
+		EvidenceGeneration: "generation-1", Summary: "No findings.", CompletedAt: time.Now().UTC(),
+	}, nil
+}
+
 func (runtime *cancelIgnoringReviewRuntime) RunReview(
 	_ context.Context,
 	reviewID string,
 	target codingreview.Target,
 	_ func(codingreview.Event) error,
+	commit func() error,
 ) (codingreview.Result, error) {
 	close(runtime.started)
 	<-runtime.release
+	_ = commit()
 	return codingreview.Result{
 		SchemaVersion: codingreview.SchemaVersion, ReviewID: reviewID, Target: target,
 		EvidenceGeneration: "generation-1", Summary: "No findings.", CompletedAt: time.Now().UTC(),
@@ -243,6 +269,7 @@ func (runner *mutatingReviewEventRuntime) RunReview(
 	reviewID string,
 	target codingreview.Target,
 	emit func(codingreview.Event) error,
+	commit func() error,
 ) (codingreview.Result, error) {
 	finding := codingreview.Finding{
 		Severity: codingreview.SeverityMinor, Title: "Original", Explanation: "Original explanation.",
@@ -255,6 +282,9 @@ func (runner *mutatingReviewEventRuntime) RunReview(
 	for index := 0; ; index++ {
 		select {
 		case <-runner.release:
+			if err := commit(); err != nil {
+				return codingreview.Result{}, err
+			}
 			resultFinding := finding
 			resultFinding.Title = "Original"
 			return codingreview.Result{
@@ -276,6 +306,7 @@ func (runtime *ignoredReviewEventErrorRuntime) RunReview(
 	reviewID string,
 	target codingreview.Target,
 	emit func(codingreview.Event) error,
+	_ func() error,
 ) (codingreview.Result, error) {
 	_ = emit(codingreview.Event{Kind: codingreview.EventFinding})
 	return codingreview.Result{
@@ -289,6 +320,7 @@ func (runtime *reviewTestRuntime) RunReview(
 	reviewID string,
 	target codingreview.Target,
 	emit func(codingreview.Event) error,
+	commit func() error,
 ) (codingreview.Result, error) {
 	runtime.target = target
 	runtime.started <- reviewID
@@ -305,6 +337,11 @@ func (runtime *reviewTestRuntime) RunReview(
 	result := runtime.result.Clone()
 	result.ReviewID = reviewID
 	result.Target = target
+	if runtime.err == nil {
+		if err := commit(); err != nil {
+			return codingreview.Result{}, err
+		}
+	}
 	return result, runtime.err
 }
 
@@ -755,6 +792,32 @@ func TestAcceptedReviewCancellationDominatesRuntimeSuccess(t *testing.T) {
 	})
 	if snapshot.Review.Result != nil {
 		t.Fatalf("canceled review projected successful result = %#v", snapshot.Review.Result)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewPublicationCommitDominatesLaterCancellation(t *testing.T) {
+	runtime := &committedReviewRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		committed:       make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	if err := controller.Review(t.Context(), codingreview.Target{Kind: codingreview.TargetCurrent}); err != nil {
+		t.Fatal(err)
+	}
+	<-runtime.committed
+	if err := controller.Interrupt(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	close(runtime.release)
+	snapshot := waitControllerSnapshot(t, controller, func(snapshot frontend.ThreadSnapshot) bool {
+		return snapshot.Review != nil && snapshot.Review.Phase == codingreview.PhaseCompleted
+	})
+	if snapshot.Review.Result == nil || snapshot.Review.Result.Summary != "No findings." {
+		t.Fatalf("committed review result = %#v", snapshot.Review)
 	}
 	if err := controller.Close(t.Context()); err != nil {
 		t.Fatal(err)

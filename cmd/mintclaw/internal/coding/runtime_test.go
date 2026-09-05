@@ -72,6 +72,10 @@ func (provider *reviewCodingProvider) Chat(
 
 func (*reviewCodingProvider) GetDefaultModel() string { return "fixture-model-id" }
 
+func (*reviewCodingProvider) Capabilities() providers.ProviderCapabilities {
+	return providers.ProviderCapabilities{CallerMediatedTools: true}
+}
+
 func (provider *reviewCodingProvider) Calls() []reviewProviderCall {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
@@ -108,7 +112,8 @@ func (p *blockingCodingProvider) GetDefaultModel() string { return "coding-test"
 
 func (p *blockingCodingProvider) Capabilities() providers.ProviderCapabilities {
 	return providers.ProviderCapabilities{
-		Streaming: true,
+		Streaming:           true,
+		CallerMediatedTools: true,
 	}
 }
 
