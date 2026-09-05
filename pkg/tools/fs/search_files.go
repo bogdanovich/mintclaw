@@ -191,6 +191,7 @@ type searchTruncationInfo struct {
 	renderedOmittedSet bool
 	skippedIgnored     int
 	skippedMaxFileSize int
+	skippedSpecial     int
 }
 
 type searchWalkStats struct {
@@ -198,6 +199,7 @@ type searchWalkStats struct {
 	maxFileSkipped   int
 	binarySkipped    int
 	readSkipped      int
+	specialSkipped   int
 	filesVisited     int
 	bytesRead        int64
 	entriesVisited   int
@@ -698,6 +700,12 @@ func (i *searchTruncationInfo) addWalkStats(stats *searchWalkStats, includeIgnor
 		i.omittedUnknown = true
 		i.recomputeOmitted()
 	}
+	if stats.specialSkipped > 0 {
+		i.mark("special_files", i.returned, 0, false)
+		i.omittedUnknown = true
+		i.skippedSpecial = stats.specialSkipped
+		i.recomputeOmitted()
+	}
 }
 
 func (i *searchTruncationInfo) hasReason(reason string) bool {
@@ -708,7 +716,7 @@ func (s *searchWalkStats) totalSkipped() int {
 	if s == nil {
 		return 0
 	}
-	return s.ignoredSkipped + s.maxFileSkipped + s.binarySkipped + s.readSkipped
+	return s.ignoredSkipped + s.maxFileSkipped + s.binarySkipped + s.readSkipped + s.specialSkipped
 }
 
 func appendSearchTruncationBlock(
@@ -753,6 +761,9 @@ func truncationBlock(truncation *searchTruncationInfo, opts searchFilesOptions) 
 	}
 	if truncation.skippedMaxFileSize > 0 {
 		fmt.Fprintf(&b, "  skipped_max_file_size_count=%d\n", truncation.skippedMaxFileSize)
+	}
+	if truncation.skippedSpecial > 0 {
+		fmt.Fprintf(&b, "  skipped_special_file_count=%d\n", truncation.skippedSpecial)
 	}
 	b.WriteString("  suggested_narrowing.path=set a narrower path\n")
 	b.WriteString("  suggested_narrowing.file_glob=set file_glob such as *.go or *.md\n")
@@ -863,7 +874,7 @@ func walkSearchFilesWithIgnore(
 		if errors.Is(err, errSearchSourceLimitReached) {
 			return err
 		}
-		file, openErr := sysFs.Open(root)
+		file, openErr := openSearchPath(sysFs, root, stats)
 		if openErr != nil {
 			return fmt.Errorf("failed to search path: %w", err)
 		}
@@ -871,6 +882,12 @@ func walkSearchFilesWithIgnore(
 		_ = file.Close()
 		if statErr != nil || info.IsDir() {
 			return fmt.Errorf("failed to search path: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			if stats != nil {
+				stats.specialSkipped++
+			}
+			return nil
 		}
 		entry := fs.FileInfoToDirEntry(info)
 		if !includeIgnored {
@@ -935,6 +952,12 @@ func walkSearchFilesWithIgnore(
 			recordIgnoredSearchSkip(stats, path, entry)
 			continue
 		}
+		if !entry.IsDir() && !entry.Type().IsRegular() {
+			if stats != nil {
+				stats.specialSkipped++
+			}
+			continue
+		}
 		if !entry.IsDir() && stats != nil && stats.limits.files > 0 {
 			if stats.filesVisited >= stats.limits.files {
 				stats.sourceLimit = "source_file_limit"
@@ -983,7 +1006,7 @@ func readSearchDirectory(
 		stats.sourceLimit = "source_entry_limit"
 		return nil, false, errSearchSourceLimitReached
 	}
-	file, err := sysFs.Open(root)
+	file, err := openSearchPath(sysFs, root, stats)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1010,6 +1033,13 @@ func readSearchDirectory(
 	}
 	stats.entriesVisited += len(entries)
 	return entries, truncated, nil
+}
+
+func openSearchPath(sysFs fileSystem, path string, stats *searchWalkStats) (fs.File, error) {
+	if stats != nil && (stats.limits.files > 0 || stats.limits.bytes > 0 || stats.limits.entries > 0) {
+		return sysFs.OpenNonBlocking(path)
+	}
+	return sysFs.Open(path)
 }
 
 func recordIgnoredSearchSkip(stats *searchWalkStats, path string, entry os.DirEntry) {
@@ -1125,7 +1155,7 @@ func readSearchFileBoundedWithStats(
 	maxFileSize int,
 	stats *searchWalkStats,
 ) ([]byte, bool, error) {
-	file, err := sysFs.Open(path)
+	file, err := openSearchPath(sysFs, path, stats)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1139,6 +1169,12 @@ func readSearchFileBoundedWithStats(
 		}
 	}
 	if info, statErr := file.Stat(); statErr == nil {
+		if !info.Mode().IsRegular() {
+			if stats != nil {
+				stats.specialSkipped++
+			}
+			return nil, false, nil
+		}
 		if info.Size() > int64(maxFileSize) {
 			return nil, true, nil
 		}

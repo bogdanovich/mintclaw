@@ -339,7 +339,7 @@ const (
 
 func newNativeReviewerToolset(projectRoot string) nativeReviewerToolset {
 	registry := tools.NewToolRegistry()
-	registry.Register(fstools.NewReadFileBytesTool(projectRoot, true, nativeReviewerFileBytes))
+	registry.Register(fstools.NewRegularFileBytesTool(projectRoot, true, nativeReviewerFileBytes))
 	registry.Register(fstools.NewBoundedListDirTool(
 		projectRoot,
 		true,

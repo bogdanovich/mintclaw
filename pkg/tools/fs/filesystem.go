@@ -281,8 +281,9 @@ func isWithinWorkspace(candidate, workspace string) bool {
 }
 
 type ReadFileTool struct {
-	fs      fileSystem
-	maxSize int64
+	fs          fileSystem
+	maxSize     int64
+	regularOnly bool
 }
 
 type ReadFileLinesTool struct {
@@ -319,6 +320,19 @@ func NewReadFileBytesTool(
 	allowPaths ...[]*regexp.Regexp,
 ) *ReadFileTool {
 	return NewReadFileTool(workspace, restrict, maxReadFileSize, allowPaths...)
+}
+
+// NewRegularFileBytesTool constructs a reader that opens paths without
+// blocking on special files and accepts regular files only.
+func NewRegularFileBytesTool(
+	workspace string,
+	restrict bool,
+	maxReadFileSize int,
+	allowPaths ...[]*regexp.Regexp,
+) *ReadFileTool {
+	tool := NewReadFileTool(workspace, restrict, maxReadFileSize, allowPaths...)
+	tool.regularOnly = true
+	return tool
 }
 
 func NewReadFileLinesTool(
@@ -439,11 +453,25 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		length = t.maxSize
 	}
 
-	file, err := t.fs.Open(path)
+	var file fs.File
+	if t.regularOnly {
+		file, err = t.fs.OpenNonBlocking(path)
+	} else {
+		file, err = t.fs.Open(path)
+	}
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
 	defer func() { _ = file.Close() }()
+	if t.regularOnly {
+		info, statErr := file.Stat()
+		if statErr != nil {
+			return ErrorResult(fmt.Sprintf("failed to inspect file: %v", statErr))
+		}
+		if !info.Mode().IsRegular() {
+			return ErrorResult("failed to read file: path is not a regular file")
+		}
+	}
 
 	// measure total size
 	totalSize := int64(-1) // -1 means unknown
@@ -1082,11 +1110,18 @@ func (t *ListDirTool) executeBounded(ctx context.Context, path string) *ToolResu
 	if err := context.Cause(ctx); err != nil {
 		return ErrorResult(err.Error())
 	}
-	directory, err := t.fs.Open(path)
+	directory, err := t.fs.OpenNonBlocking(path)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to read directory: %v", err))
 	}
 	defer func() { _ = directory.Close() }()
+	info, statErr := directory.Stat()
+	if statErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to inspect directory: %v", statErr))
+	}
+	if !info.IsDir() {
+		return ErrorResult("failed to read directory: path is not a directory")
+	}
 	reader, ok := directory.(fs.ReadDirFile)
 	if !ok {
 		return ErrorResult("failed to read directory: bounded directory reads are unsupported")
@@ -1155,6 +1190,7 @@ type fileSystem interface {
 	RemoveFile(path string) error
 	ReadDir(path string) ([]os.DirEntry, error)
 	Open(path string) (fs.File, error)
+	OpenNonBlocking(path string) (fs.File, error)
 }
 
 // hostFs is an unrestricted fileReadWriter. Relative paths resolve from its
@@ -1189,6 +1225,10 @@ func (h *hostFs) ReadFile(path string) ([]byte, error) {
 
 func (h *hostFs) ReadDir(path string) ([]os.DirEntry, error) {
 	return os.ReadDir(h.resolve(path))
+}
+
+func (h *hostFs) OpenNonBlocking(path string) (fs.File, error) {
+	return os.OpenFile(h.resolve(path), os.O_RDONLY|nonBlockingReadFlag(), 0)
 }
 
 func (h *hostFs) WriteFile(path string, data []byte) error {
@@ -1374,6 +1414,19 @@ func (r *sandboxFs) Open(path string) (fs.File, error) {
 	return f, err
 }
 
+func (r *sandboxFs) OpenNonBlocking(path string) (fs.File, error) {
+	var f fs.File
+	err := r.execute(path, func(root *os.Root, relPath string) error {
+		file, err := root.OpenFile(relPath, os.O_RDONLY|nonBlockingReadFlag(), 0)
+		if err != nil {
+			return err
+		}
+		f = file
+		return nil
+	})
+	return f, err
+}
+
 // whitelistFs wraps a sandboxFs and allows access to specific paths outside
 // the workspace when they match any of the provided patterns.
 type whitelistFs struct {
@@ -1419,6 +1472,13 @@ func (w *whitelistFs) Open(path string) (fs.File, error) {
 		return w.host.Open(path)
 	}
 	return w.sandbox.Open(path)
+}
+
+func (w *whitelistFs) OpenNonBlocking(path string) (fs.File, error) {
+	if w.matches(path) {
+		return w.host.OpenNonBlocking(path)
+	}
+	return w.sandbox.OpenNonBlocking(path)
 }
 
 // buildFs returns the appropriate fileSystem implementation based on restriction
