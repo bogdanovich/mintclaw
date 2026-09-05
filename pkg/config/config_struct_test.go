@@ -49,7 +49,7 @@ func TestLoadSecurityValue(t *testing.T) {
 	assert.Equal(t, "https://example.com", v0.MintClaw.Url)
 	assert.Equal(t, "token0", v0.MintClaw.Token.String())
 
-	const jsonWant = `{"mintclaw":{"url":"https://example.com","token":"[NOT_HERE]","api_keys":"[NOT_HERE]"}}`
+	const jsonWant = `{"mintclaw":{"url":"https://example.com","token":null,"api_keys":null}}`
 	assert.Equal(t, want, string(bytes))
 	assert.Equal(t, jsonWant, string(jsonBytes))
 
@@ -109,7 +109,7 @@ func TestLoadSecurityValue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(
 		t,
-		`{"tools":{"mintclaw":{"url":"https://example.com","token":"[NOT_HERE]","api_keys":"[NOT_HERE]"}}}`,
+		`{"tools":{"mintclaw":{"url":"https://example.com","token":null,"api_keys":null}}}`,
 		string(jsonBytes),
 	)
 
@@ -145,6 +145,30 @@ func TestLoadSecurityValue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, v6.Tools.MintClaw.Token)
 	assert.Equal(t, "newtoken1", v6.Tools.MintClaw.Token.String())
+}
+
+func TestSecureValuesAcceptLegacyJSONPlaceholder(t *testing.T) {
+	type legacySecrets struct {
+		Token   *SecureString `json:"token"`
+		APIKeys SecureStrings `json:"api_keys"`
+	}
+
+	secrets := legacySecrets{
+		Token:   NewSecureString("existing-token"),
+		APIKeys: SimpleSecureStrings("existing-key"),
+	}
+	if err := json.Unmarshal(
+		[]byte(`{"token":"[NOT_HERE]","api_keys":"[NOT_HERE]"}`),
+		&secrets,
+	); err != nil {
+		t.Fatalf("Unmarshal(legacy placeholders) error = %v", err)
+	}
+	if got := secrets.Token.String(); got != "existing-token" {
+		t.Fatalf("token = %q, want existing-token", got)
+	}
+	if got := (&secrets.APIKeys).Values(); !reflect.DeepEqual(got, []string{"existing-key"}) {
+		t.Fatalf("api keys = %v, want [existing-key]", got)
+	}
 }
 
 func TestSkillRegistryConfigDecodeParam(t *testing.T) {

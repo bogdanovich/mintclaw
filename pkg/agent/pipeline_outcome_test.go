@@ -47,10 +47,10 @@ func TestPipelinePhaseOutcomesCarryAbortCause(t *testing.T) {
 	tests := []struct {
 		name   string
 		action HookAction
-		want   TurnAbortCause
+		want   turnAbortCause
 	}{
-		{name: "hook abort", action: HookActionAbortTurn, want: TurnAbortHook},
-		{name: "hard abort", action: HookActionHardAbort, want: TurnAbortHard},
+		{name: "hook abort", action: HookActionAbortTurn, want: turnAbortHook},
+		{name: "hard abort", action: HookActionHardAbort, want: turnAbortHard},
 	}
 
 	for _, test := range tests {
@@ -77,8 +77,8 @@ func TestPipelinePhaseOutcomesCarryAbortCause(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CallLLM() error = %v", err)
 			}
-			if llmOutcome.Control != ControlBreak || llmOutcome.AbortCause != test.want {
-				t.Fatalf("LLM outcome = %#v, want break with abort cause %v", llmOutcome, test.want)
+			if llmOutcome.Control != turnStepAbort || llmOutcome.AbortCause != test.want {
+				t.Fatalf("LLM outcome = %#v, want abort with cause %v", llmOutcome, test.want)
 			}
 
 			toolTS := newTurnState(agent, makeTestTurnSpec("outcome-tool-abort"), turnEventScope{
@@ -91,8 +91,8 @@ func TestPipelinePhaseOutcomesCarryAbortCause(t *testing.T) {
 				normalizedToolCalls: []providers.ToolCall{{ID: "call-1", Name: "unused"}},
 			}
 			toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), toolTS, toolExec, toolLLM)
-			if toolOutcome.Control != ToolControlBreak || toolOutcome.AbortCause != test.want {
-				t.Fatalf("tool outcome = %#v, want break with abort cause %v", toolOutcome, test.want)
+			if toolOutcome.Control != turnStepAbort || toolOutcome.AbortCause != test.want {
+				t.Fatalf("tool outcome = %#v, want abort with cause %v", toolOutcome, test.want)
 			}
 		})
 	}
@@ -106,25 +106,25 @@ func TestLLMCallOutcomeTerminalCandidate(t *testing.T) {
 	}{
 		{
 			name:    "continue retains prior answer",
-			outcome: LLMCallOutcome{Control: ControlContinue},
+			outcome: LLMCallOutcome{Control: turnStepContinue},
 			want:    terminalContent{content: "retained answer", protected: true},
 		},
 		{
 			name:    "tool loop retains prior answer",
-			outcome: LLMCallOutcome{Control: ControlToolLoop},
+			outcome: LLMCallOutcome{Control: turnStepExecuteTools},
 			want:    terminalContent{content: "retained answer", protected: true},
 		},
 		{
 			name: "terminal answer replaces prior answer",
 			outcome: LLMCallOutcome{
-				Control:      ControlBreak,
+				Control:      turnStepFinalize,
 				FinalContent: "replacement answer",
 			},
 			want: terminalContent{content: "replacement answer"},
 		},
 		{
 			name:    "empty terminal answer clears prior answer",
-			outcome: LLMCallOutcome{Control: ControlBreak},
+			outcome: LLMCallOutcome{Control: turnStepFinalize},
 		},
 	}
 

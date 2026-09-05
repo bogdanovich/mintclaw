@@ -125,7 +125,7 @@ func TestResolveSubagentModelPlan_NilTarget(t *testing.T) {
 
 func TestInheritedSubagentOverride_ReadsParentBinding(t *testing.T) {
 	parent := &turnState{
-		model: effectiveModelBinding{
+		modelBinding: effectiveModelBinding{
 			Override: state.SessionModelOverride{Model: "gemini-flash-lite"},
 		},
 	}
@@ -142,12 +142,12 @@ func TestBuildSubagentChildBinding_ReusesTargetRuntimeWhenPlanMatches(t *testing
 		Fallbacks: []string{"deepseek"},
 	}
 	parent := &turnState{
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			Dispatch: DispatchRequest{
 				RouteSessionKey: "route-parent",
 			},
-		},
-		model: effectiveModelBinding{
+		}),
+		modelBinding: effectiveModelBinding{
 			Override: state.SessionModelOverride{Model: "gemini-flash-lite"},
 		},
 	}
@@ -222,7 +222,7 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 		},
 	}
 	parent := &turnState{
-		model: effectiveModelBinding{
+		modelBinding: effectiveModelBinding{
 			Override: state.SessionModelOverride{Model: "gemini-flash-lite"},
 		},
 	}

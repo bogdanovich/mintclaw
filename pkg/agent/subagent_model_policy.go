@@ -157,7 +157,7 @@ func inheritedSubagentOverride(parentTS *turnState) string {
 	if parentTS == nil {
 		return ""
 	}
-	override := normalizeSessionModelOverride(parentTS.model.Override)
+	override := normalizeSessionModelOverride(parentTS.modelBinding.Override)
 	return strings.TrimSpace(override.Model)
 }
 
@@ -178,7 +178,7 @@ func (al *AgentLoop) buildSubagentChildBinding(
 			binding.RouteSessionKey = strings.TrimSpace(parentTS.opts.Dispatch.RouteSessionKey)
 		}
 		if overrideModel != "" {
-			binding.Override = normalizeSessionModelOverride(parentTS.model.Override)
+			binding.Override = normalizeSessionModelOverride(parentTS.modelBinding.Override)
 		}
 		return binding, nil
 	}
@@ -214,7 +214,7 @@ func (al *AgentLoop) buildSubagentChildBinding(
 		binding.RouteSessionKey = strings.TrimSpace(parentTS.opts.Dispatch.RouteSessionKey)
 	}
 	if overrideModel != "" {
-		binding.Override = normalizeSessionModelOverride(parentTS.model.Override)
+		binding.Override = normalizeSessionModelOverride(parentTS.modelBinding.Override)
 	}
 	return binding, nil
 }

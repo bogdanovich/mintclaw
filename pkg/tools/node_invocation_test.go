@@ -286,7 +286,7 @@ func (source *fakeNodeInvocationSource) QueryInvocation(
 
 func TestNodeInvokeToolReusesPreparedAuthorityAndDispatches(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	args := nodeInvocationTestArgs()
 
@@ -322,7 +322,7 @@ func TestNodeInvokeToolReusesPreparedAuthorityAndDispatches(t *testing.T) {
 func TestNodeInvokeToolReportsGatewayCapacityWithoutBlamingDiscovery(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
 	source.prepareErr = nodes.ErrGatewayInvocationStoreFull
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 
 	result := tool.Execute(
 		nodeInvocationTestContext("actor-1", "call-store-full"),
@@ -358,7 +358,7 @@ func TestNodeUpdateInvocationBindsReleaseAuthorityAcrossApproval(t *testing.T) {
 	binding.UpdateProfile = "stable"
 	cfg.Execution.Targets["build"] = binding
 	ctx := nodeInvocationTestContext("actor-1", "call-update")
-	discovery := NewNodeDiscoveryTool(cfg, source).Execute(ctx, map[string]any{
+	discovery := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(ctx, map[string]any{
 		"action": "describe", "target": "build", "command": command.Name,
 	})
 	if discovery.IsError {
@@ -376,7 +376,7 @@ func TestNodeUpdateInvocationBindsReleaseAuthorityAcrossApproval(t *testing.T) {
 		"target": "build", "command": command.Name,
 		"input": map[string]any{"release": "current"}, "discovery_revision": revision,
 	}
-	tool := NewNodeInvokeTool(cfg, source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(cfg), source)
 	eventBus := &recordingNodeEventBus{}
 	tool.SetEventPublisher(eventBus)
 	approval, err := tool.ApprovalArguments(ctx, args)
@@ -444,7 +444,7 @@ func TestNodeJobInvocationBindsTargetProfileAcrossApproval(t *testing.T) {
 	binding.JobProfile = "tests"
 	cfg.Execution.Targets["build"] = binding
 	ctx := nodeInvocationTestContext("actor-1", "call-job-start")
-	discovery := NewNodeDiscoveryTool(cfg, source).Execute(ctx, map[string]any{
+	discovery := NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(ctx, map[string]any{
 		"action": "describe", "target": "build", "command": nodes.JobCommandStart,
 	})
 	revision := decodeNodeResult(t, discovery)["discovery_revision"]
@@ -456,7 +456,7 @@ func TestNodeJobInvocationBindsTargetProfileAcrossApproval(t *testing.T) {
 		},
 		"discovery_revision": revision,
 	}
-	tool := NewNodeInvokeTool(cfg, source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(cfg), source)
 	approval, err := tool.ApprovalArguments(ctx, args)
 	if err != nil {
 		t.Fatal(err)
@@ -532,7 +532,7 @@ func TestNodeInvokeToolRequiresHumanApprovalContinuationForShellExec(t *testing.
 		ApprovedAt:          1,
 	}
 	ctx := nodeInvocationTestContext("actor-1", "call-shell")
-	discovery := NewNodeDiscoveryTool(nodeDiscoveryTestConfig(), source).Execute(
+	discovery := NewNodeDiscoveryTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 		ctx,
 		map[string]any{
 			"action": "describe", "target": "build", "command": command.Name,
@@ -551,7 +551,7 @@ func TestNodeInvokeToolRequiresHumanApprovalContinuationForShellExec(t *testing.
 		},
 		"discovery_revision": revision,
 	}
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	oversizedInputs := []map[string]any{
 		{
 			"profile": "owner",
@@ -654,7 +654,7 @@ func TestNodeInvokeToolRequiresHumanApprovalContinuationForShellExec(t *testing.
 		ApprovedCatalogHash: catalogHash,
 		ApprovedAt:          1,
 	}
-	bypassTool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), bypassSource)
+	bypassTool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), bypassSource)
 	bypassCtx := nodeInvocationTestContext("actor-1", "call-shell-bypass")
 	result = bypassTool.Execute(toolshared.WithToolApprovalBypass(bypassCtx, true), args)
 	if result.IsError || bypassSource.prepareCalls != 1 || bypassSource.dispatchCalls != 1 {
@@ -669,7 +669,7 @@ func TestNodeInvokeToolRequiresHumanApprovalContinuationForShellExec(t *testing.
 
 func TestNodeInvokeToolRejectsStaleDiscoveryBeforePreparation(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	args := nodeInvocationTestArgs()
 	args["discovery_revision"] = "dr_v1_stale"
 
@@ -692,7 +692,7 @@ func TestNodeInvokeToolRejectsStaleDiscoveryBeforePreparation(t *testing.T) {
 
 func TestNodeInvokeToolMarksOnlyStructuredApprovalDenialAsModelSafe(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	args := nodeInvocationTestArgs()
 	args["discovery_revision"] = "dr_v1_stale-secret-value"
 	_, err := tool.ApprovalArguments(
@@ -729,7 +729,7 @@ func TestNodeInvokeToolRejectsAliasReassignmentBeforePreparation(t *testing.T) {
 	source.registrations[replacement.ID] = registration
 	source.connected[replacement.ID] = true
 
-	result := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(
+	result := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 		nodeInvocationTestContext("actor-1", "call-alias-move"),
 		nodeInvocationTestArgs(),
 	)
@@ -760,7 +760,7 @@ func TestNodeInvokeToolRevalidatesAuthorityInsidePreparationLease(t *testing.T) 
 		source.registrations[snapshot.ID] = registration
 	}
 
-	result := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(
+	result := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 		nodeInvocationTestContext("actor-1", "call-authority-race"),
 		nodeInvocationTestArgs(),
 	)
@@ -806,7 +806,7 @@ func TestNodeInvokeToolTargetGrantOrBindingChangeMakesDiscoveryStale(t *testing.
 			source := newFakeNodeInvocationSource(t)
 			cfg := nodeDiscoveryTestConfig()
 			test.mutate(cfg)
-			result := NewNodeInvokeTool(cfg, source).Execute(
+			result := NewNodeInvokeTool(NewNodeToolOptions(cfg), source).Execute(
 				nodeInvocationTestContext("actor-1", "call-target-stale"),
 				nodeInvocationTestArgs(),
 			)
@@ -836,7 +836,7 @@ func TestNodeInvokeToolReportsCatalogReapprovalRequirement(t *testing.T) {
 	registration.ApprovedCatalogHash = strings.Repeat("a", 64)
 	source.registrations[snapshot.ID] = registration
 
-	result := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(
+	result := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 		nodeInvocationTestContext("actor-1", "call-reapproval-stale"),
 		args,
 	)
@@ -877,17 +877,18 @@ func TestNodeInvokeToolRejectsLocallyUnavailableCommandBeforePreparation(t *test
 	source.registrations[snapshot.ID] = registration
 
 	ctx := nodeInvocationTestContext("actor-1", "call-unavailable")
-	discovered := decodeNodeResult(t, NewNodeDiscoveryTool(
-		nodeDiscoveryTestConfig(),
-		source,
-	).Execute(ctx, map[string]any{
-		"action":  "describe",
-		"target":  "build",
-		"command": command.Name,
-	}))
+	discovered := decodeNodeResult(t, NewNodeDiscoveryTool(NewNodeToolOptions(
+		nodeDiscoveryTestConfig()),
+
+		source).
+		Execute(ctx, map[string]any{
+			"action":  "describe",
+			"target":  "build",
+			"command": command.Name,
+		}))
 	args := nodeInvocationTestArgs()
 	args["discovery_revision"] = discovered["discovery_revision"]
-	result := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(ctx, args)
+	result := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(ctx, args)
 	assertNodeDenialResult(
 		t,
 		result,
@@ -921,11 +922,11 @@ func TestNodeInvokeToolDispatchesOnlyTargetBoundServiceProfile(t *testing.T) {
 	binding.ServiceProfile = "server-services"
 	cfg.Execution.Targets["build"] = binding
 	ctx := nodeInvocationTestContext("actor-1", "call-service-closed")
-	discovered := decodeNodeResult(t, NewNodeDiscoveryTool(cfg, source).Execute(
+	discovered := decodeNodeResult(t, NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(
 		ctx,
 		map[string]any{"action": "describe", "target": "build", "command": descriptor.Name},
 	))
-	result := NewNodeInvokeTool(cfg, source).Execute(ctx, map[string]any{
+	result := NewNodeInvokeTool(NewNodeToolOptions(cfg), source).Execute(ctx, map[string]any{
 		"target":             "build",
 		"command":            descriptor.Name,
 		"input":              map[string]any{"service": "vpn"},
@@ -961,7 +962,7 @@ func TestNodeInvokeToolBindsServiceActionApprovalAndContinuation(t *testing.T) {
 	binding.ServiceProfile = "server-services"
 	cfg.Execution.Targets["build"] = binding
 	ctx := nodeInvocationTestContext("actor-1", "call-service-action")
-	discovered := decodeNodeResult(t, NewNodeDiscoveryTool(cfg, source).Execute(
+	discovered := decodeNodeResult(t, NewNodeDiscoveryTool(NewNodeToolOptions(cfg), source).Execute(
 		ctx,
 		map[string]any{"action": "describe", "target": "build", "command": descriptor.Name},
 	))
@@ -971,7 +972,7 @@ func TestNodeInvokeToolBindsServiceActionApprovalAndContinuation(t *testing.T) {
 		"input":              map[string]any{"service": "vpn", "action": "restart"},
 		"discovery_revision": discovered["discovery_revision"],
 	}
-	tool := NewNodeInvokeTool(cfg, source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(cfg), source)
 	approval, err := tool.ApprovalArguments(ctx, args)
 	if err != nil || approval["plan_hash"] == "" {
 		t.Fatalf("service action approval binding = %#v, error %v", approval, err)
@@ -1186,7 +1187,7 @@ func TestNodeInvokeToolReturnsSafeConstraintDenials(t *testing.T) {
 			source := newFakeNodeInvocationSource(t)
 			args := nodeInvocationTestArgs()
 			test.mutate(args)
-			result := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(
+			result := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 				nodeInvocationTestContext("actor-1", "call-constraint"),
 				args,
 			)
@@ -1222,7 +1223,7 @@ func TestNodeInvokeToolReturnsSafeSchemaDenial(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
 	args := nodeInvocationTestArgs()
 	args["input"] = map[string]any{"argv": "secret malformed argv"}
-	result := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(
+	result := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 		nodeInvocationTestContext("actor-1", "call-schema"),
 		args,
 	)
@@ -1243,7 +1244,7 @@ func TestNodeInvokeToolDeniesDisconnectedTargetAfterFreshDiscovery(t *testing.T)
 	source.connected["private-node-id"] = false
 	ctx := nodeInvocationTestContext("actor-1", "call-disconnected")
 	args := freshNodeInvocationArgs(t, source, ctx)
-	result := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(ctx, args)
+	result := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(ctx, args)
 	assertNodeDenialResult(
 		t,
 		result,
@@ -1275,7 +1276,7 @@ func TestNodeInvokeToolDeniesPartiallyDescribedCommand(t *testing.T) {
 
 	ctx := nodeInvocationTestContext("actor-1", "call-partial")
 	args := freshNodeInvocationArgs(t, source, ctx)
-	result := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(ctx, args)
+	result := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(ctx, args)
 	assertNodeDenialResult(
 		t,
 		result,
@@ -1287,7 +1288,7 @@ func TestNodeInvokeToolDeniesPartiallyDescribedCommand(t *testing.T) {
 
 func TestNodeInvokeToolApprovalResumeCannotRefreshRetainedAuthority(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-resume-stale")
 	args := nodeInvocationTestArgs()
 	if _, err := tool.ApprovalArguments(ctx, args); err != nil {
@@ -1315,7 +1316,7 @@ func TestNodeInvokeToolApprovalResumeCannotRefreshRetainedAuthority(t *testing.T
 		)
 	}
 
-	discovery := NewNodeDiscoveryTool(nodeDiscoveryTestConfig(), source)
+	discovery := NewNodeDiscoveryTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	discovered := decodeNodeResult(t, discovery.Execute(ctx, map[string]any{
 		"action":  "describe",
 		"target":  "build",
@@ -1340,7 +1341,7 @@ func TestNodeInvokeToolApprovalResumeCannotRefreshRetainedAuthority(t *testing.T
 
 func TestNodeInvokeToolNamespacesProviderCallByExecutionAndWorkspace(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	args := nodeInvocationTestArgs()
 	firstCtx := nodeInvocationTestContext("actor-1", "reused-call")
 	first, err := tool.ApprovalArguments(firstCtx, args)
@@ -1380,7 +1381,7 @@ func TestNodeInvokeToolNamespacesProviderCallByExecutionAndWorkspace(t *testing.
 
 func TestNodeInvokeToolApprovalResumeRetainsOriginExecutionIdentity(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	first, err := tool.ApprovalArguments(ctx, nodeInvocationTestArgs())
 	if err != nil {
@@ -1401,7 +1402,7 @@ func TestNodeInvokeToolApprovalResumeRetainsOriginExecutionIdentity(t *testing.T
 
 func TestNodeInvokeToolRejectsChangedArgumentsAfterPreparation(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	if _, err := tool.ApprovalArguments(ctx, nodeInvocationTestArgs()); err != nil {
 		t.Fatal(err)
@@ -1415,7 +1416,7 @@ func TestNodeInvokeToolRejectsChangedArgumentsAfterPreparation(t *testing.T) {
 
 func TestNodeInvokeToolDoesNotReplaceExpiredAuthorityOnApprovalResume(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	if _, err := tool.ApprovalArguments(ctx, nodeInvocationTestArgs()); err != nil {
 		t.Fatal(err)
@@ -1436,7 +1437,7 @@ func TestNodeInvokeToolDoesNotReplaceExpiredAuthorityOnApprovalResume(t *testing
 func TestNodeInvokeToolReportsPostDispatchUncertaintyWithoutReplay(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
 	source.dispatchErr = errors.New("transport closed")
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	result := tool.Execute(
 		nodeInvocationTestContext("actor-1", "call-1"),
 		nodeInvocationTestArgs(),
@@ -1455,7 +1456,7 @@ func TestNodeInvokeToolReportsDefinitiveCompanionRejection(t *testing.T) {
 		errors.New("secret policy and command detail"),
 	)
 	eventBus := &recordingNodeEventBus{}
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	tool.SetEventPublisher(eventBus)
 
 	result := tool.Execute(
@@ -1500,7 +1501,7 @@ func TestNodeInvokeToolReportsMissingWorkspaceFileAsTerminalFailure(t *testing.T
 		nodes.InvocationDispatchFileNotFound,
 		errors.New("secret absolute companion path"),
 	)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 
 	result := tool.Execute(
 		nodeInvocationTestContext("actor-1", "call-1"),
@@ -1523,7 +1524,7 @@ func TestNodeInvokeToolKeepsRemoteUnknownAsPostDispatchUncertainty(t *testing.T)
 		nodes.InvocationDispatchUnknown,
 		errors.New("secret uncertain detail"),
 	)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 
 	result := tool.Execute(
 		nodeInvocationTestContext("actor-1", "call-1"),
@@ -1540,7 +1541,7 @@ func TestNodeInvokeToolKeepsRemoteUnknownAsPostDispatchUncertainty(t *testing.T)
 
 func TestNodeInvocationEventsUseProvenStatesAndRedactPayloads(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	eventBus := &recordingNodeEventBus{}
 	tool.SetEventPublisher(eventBus)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
@@ -1629,7 +1630,7 @@ func TestNodeInvocationEventsReportUncertainThenObservedFailure(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
 	source.dispatchErr = errors.New("sensitive transport endpoint disconnected")
 	eventBus := &recordingNodeEventBus{}
-	invoke := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	invoke := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	invoke.SetEventPublisher(eventBus)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 
@@ -1641,7 +1642,7 @@ func TestNodeInvocationEventsReportUncertainThenObservedFailure(t *testing.T) {
 	record := mustFakeGatewayInvocation(t, source, ctx, invocationID)
 	source.remote = failedRemoteInvocation(record)
 
-	status := NewNodeStatusTool(nodeDiscoveryTestConfig(), source)
+	status := NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	status.SetEventPublisher(eventBus)
 	statusResult := status.Execute(ctx, map[string]any{"invocation_id": invocationID})
 	if statusResult.IsError {
@@ -1712,8 +1713,8 @@ func TestNodeInvocationPreparedEventEmittedOnceForConcurrentToolCall(t *testing.
 	source := &atomicPrepareNodeInvocationSource{fakeNodeInvocationSource: base}
 	eventBus := &recordingNodeEventBus{}
 	tools := []*NodeInvokeTool{
-		NewNodeInvokeTool(nodeDiscoveryTestConfig(), source),
-		NewNodeInvokeTool(nodeDiscoveryTestConfig(), source),
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source),
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source),
 	}
 	for _, tool := range tools {
 		tool.SetEventPublisher(eventBus)
@@ -1756,7 +1757,7 @@ func TestNodeInvocationPreparedEventEmittedOnceForConcurrentToolCall(t *testing.
 
 func TestNodeInvokeToolTreatsAlreadyDispatchedAsUncertain(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	if result := tool.Execute(ctx, nodeInvocationTestArgs()); result.IsError {
 		t.Fatalf("first invoke = %#v", result)
@@ -1773,7 +1774,7 @@ func TestNodeInvokeToolTreatsAlreadyDispatchedAsUncertain(t *testing.T) {
 func TestNodeInvokeToolDistinguishesPreDispatchDenial(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
 	source.preDispatchErr = errors.New("durable authority unavailable")
-	tool := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	result := tool.Execute(ctx, nodeInvocationTestArgs())
 	if !result.IsError ||
@@ -1789,7 +1790,7 @@ func TestNodeInvokeToolDistinguishesPreDispatchDenial(t *testing.T) {
 
 func TestNodeStatusToolIsActorScopedAndRecoversResult(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	invoke := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	invoke := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	invocationID := decodeNodeResult(
 		t,
@@ -1798,7 +1799,7 @@ func TestNodeStatusToolIsActorScopedAndRecoversResult(t *testing.T) {
 	record := mustFakeGatewayInvocation(t, source, ctx, invocationID)
 	source.remote = successfulRemoteInvocation(record)
 
-	status := NewNodeStatusTool(nodeDiscoveryTestConfig(), source)
+	status := NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	payload := decodeNodeResult(
 		t,
 		status.Execute(ctx, map[string]any{"invocation_id": invocationID}),
@@ -1817,7 +1818,7 @@ func TestNodeStatusToolIsActorScopedAndRecoversResult(t *testing.T) {
 
 func TestNodeStatusToolReportsDisconnectedDispatchedInvocationAsUnknown(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	invoke := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	invoke := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	invocationID := decodeNodeResult(
 		t,
@@ -1826,7 +1827,7 @@ func TestNodeStatusToolReportsDisconnectedDispatchedInvocationAsUnknown(t *testi
 	source.connected = map[nodes.ID]bool{}
 	source.queryErr = nodes.NewInvocationQueryError(nodes.InvocationQueryNodeUnavailable, nil)
 
-	status := NewNodeStatusTool(nodeDiscoveryTestConfig(), source)
+	status := NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	payload := decodeNodeResult(
 		t,
 		status.Execute(ctx, map[string]any{"invocation_id": invocationID}),
@@ -1845,7 +1846,7 @@ func TestNodeStatusToolRecoversWhenInitiallyDisconnectedNodeReconnects(t *testin
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	invocationID := decodeNodeResult(
 		t,
-		NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(ctx, nodeInvocationTestArgs()),
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(ctx, nodeInvocationTestArgs()),
 	)["invocation_id"].(string)
 	record := mustFakeGatewayInvocation(t, source, ctx, invocationID)
 	source.connected = map[nodes.ID]bool{}
@@ -1856,7 +1857,7 @@ func TestNodeStatusToolRecoversWhenInitiallyDisconnectedNodeReconnects(t *testin
 
 	payload := decodeNodeResult(
 		t,
-		NewNodeStatusTool(nodeDiscoveryTestConfig(), source).Execute(
+		NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 			ctx,
 			map[string]any{"invocation_id": invocationID},
 		),
@@ -1876,13 +1877,13 @@ func TestNodeStatusToolRecoversWhenInitiallyDisconnectedNodeReconnects(t *testin
 
 func TestNodeStatusToolReturnsPreparedStateWithoutQuery(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	invoke := NewNodeInvokeTool(nodeDiscoveryTestConfig(), source)
+	invoke := NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	approval, err := invoke.ApprovalArguments(ctx, nodeInvocationTestArgs())
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := NewNodeStatusTool(nodeDiscoveryTestConfig(), source)
+	status := NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	payload := decodeNodeResult(t, status.Execute(ctx, map[string]any{
 		"invocation_id": approval["invocation_id"],
 	}))
@@ -1896,7 +1897,7 @@ func TestNodeStatusToolRecoversAfterBoundedTransientQueriesWithoutRedispatch(t *
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	invocationID := decodeNodeResult(
 		t,
-		NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(ctx, nodeInvocationTestArgs()),
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(ctx, nodeInvocationTestArgs()),
 	)["invocation_id"].(string)
 	record := mustFakeGatewayInvocation(t, source, ctx, invocationID)
 	source.remote = successfulRemoteInvocation(record)
@@ -1907,7 +1908,7 @@ func TestNodeStatusToolRecoversAfterBoundedTransientQueriesWithoutRedispatch(t *
 
 	payload := decodeNodeResult(
 		t,
-		NewNodeStatusTool(nodeDiscoveryTestConfig(), source).Execute(
+		NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 			ctx,
 			map[string]any{"invocation_id": invocationID},
 		),
@@ -1930,12 +1931,12 @@ func TestNodeStatusToolPreservesSafeFailureClassificationAfterBoundedPolling(t *
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	invocationID := decodeNodeResult(
 		t,
-		NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(ctx, nodeInvocationTestArgs()),
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(ctx, nodeInvocationTestArgs()),
 	)["invocation_id"].(string)
 	privateCause := errors.New("dial secret.internal.example:1234")
 	source.queryErr = nodes.NewInvocationQueryError(nodes.InvocationQueryNodeUnavailable, privateCause)
 	eventBus := &recordingNodeEventBus{}
-	status := NewNodeStatusTool(nodeDiscoveryTestConfig(), source)
+	status := NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	status.SetEventPublisher(eventBus)
 
 	payload := decodeNodeResult(t, status.Execute(ctx, map[string]any{"invocation_id": invocationID}))
@@ -1970,13 +1971,13 @@ func TestNodeStatusToolDoesNotRetryLedgerFailure(t *testing.T) {
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	invocationID := decodeNodeResult(
 		t,
-		NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(ctx, nodeInvocationTestArgs()),
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(ctx, nodeInvocationTestArgs()),
 	)["invocation_id"].(string)
 	source.queryErr = nodes.NewInvocationQueryError(nodes.InvocationQueryLedgerUnavailable, nil)
 
 	payload := decodeNodeResult(
 		t,
-		NewNodeStatusTool(nodeDiscoveryTestConfig(), source).Execute(
+		NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 			ctx,
 			map[string]any{"invocation_id": invocationID},
 		),
@@ -1992,14 +1993,14 @@ func TestNodeStatusToolDoesNotRetryOrExposeRejectedRecord(t *testing.T) {
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	invocationID := decodeNodeResult(
 		t,
-		NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(ctx, nodeInvocationTestArgs()),
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(ctx, nodeInvocationTestArgs()),
 	)["invocation_id"].(string)
 	privateCause := errors.New("remote result exposed private.internal.example")
 	source.queryErr = nodes.NewInvocationQueryError(nodes.InvocationQueryRejected, privateCause)
 
 	payload := decodeNodeResult(
 		t,
-		NewNodeStatusTool(nodeDiscoveryTestConfig(), source).Execute(
+		NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 			ctx,
 			map[string]any{"invocation_id": invocationID},
 		),
@@ -2022,7 +2023,7 @@ func TestNodeStatusToolPreservesDeadlineDuringRetryBackoff(t *testing.T) {
 	baseCtx := nodeInvocationTestContext("actor-1", "call-1")
 	invocationID := decodeNodeResult(
 		t,
-		NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(baseCtx, nodeInvocationTestArgs()),
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(baseCtx, nodeInvocationTestArgs()),
 	)["invocation_id"].(string)
 	source.queryErr = nodes.NewInvocationQueryError(nodes.InvocationQueryTransportUnavailable, nil)
 	ctx, cancel := context.WithTimeout(baseCtx, 20*time.Millisecond)
@@ -2030,7 +2031,7 @@ func TestNodeStatusToolPreservesDeadlineDuringRetryBackoff(t *testing.T) {
 
 	payload := decodeNodeResult(
 		t,
-		NewNodeStatusTool(nodeDiscoveryTestConfig(), source).Execute(
+		NewNodeStatusTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 			ctx,
 			map[string]any{"invocation_id": invocationID},
 		),
@@ -2046,7 +2047,7 @@ func TestNodeCancelToolIsIdempotentAndRequiresExactExecutionScope(t *testing.T) 
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
 	invocationID := decodeNodeResult(
 		t,
-		NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(ctx, nodeInvocationTestArgs()),
+		NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(ctx, nodeInvocationTestArgs()),
 	)["invocation_id"].(string)
 	record := mustFakeGatewayInvocation(t, source, ctx, invocationID)
 	now := time.Now().UnixNano()
@@ -2058,7 +2059,7 @@ func TestNodeCancelToolIsIdempotentAndRequiresExactExecutionScope(t *testing.T) 
 		AcceptedAt: now, UpdatedAt: now, ExpiresAt: record.Plan.ExpiresAt,
 		Cancellation: &nodes.InvocationCancellation{RequestedAt: now},
 	}
-	cancel := NewNodeCancelTool(nodeDiscoveryTestConfig(), source)
+	cancel := NewNodeCancelTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	args := map[string]any{"invocation_id": invocationID}
 	first := decodeNodeResult(t, cancel.Execute(ctx, args))
 	repeated := decodeNodeResult(t, cancel.Execute(ctx, args))
@@ -2113,7 +2114,7 @@ func TestNodeCancelToolDistinguishesConfirmedAndTerminalOutcomes(t *testing.T) {
 			ctx := nodeInvocationTestContext("actor-1", "call-1")
 			invocationID := decodeNodeResult(
 				t,
-				NewNodeInvokeTool(nodeDiscoveryTestConfig(), source).Execute(
+				NewNodeInvokeTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 					ctx,
 					nodeInvocationTestArgs(),
 				),
@@ -2122,7 +2123,7 @@ func TestNodeCancelToolDistinguishesConfirmedAndTerminalOutcomes(t *testing.T) {
 			source.remote = test.remote(record)
 			payload := decodeNodeResult(
 				t,
-				NewNodeCancelTool(nodeDiscoveryTestConfig(), source).Execute(
+				NewNodeCancelTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 					ctx,
 					map[string]any{"invocation_id": invocationID},
 				),
@@ -2137,14 +2138,15 @@ func TestNodeCancelToolDistinguishesConfirmedAndTerminalOutcomes(t *testing.T) {
 func TestNodeCancelToolPersistsOfflineIntentWithoutReplay(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
 	ctx := nodeInvocationTestContext("actor-1", "call-1")
-	approval, err := NewNodeInvokeTool(
-		nodeDiscoveryTestConfig(),
-		source,
-	).ApprovalArguments(ctx, nodeInvocationTestArgs())
+	approval, err := NewNodeInvokeTool(NewNodeToolOptions(
+		nodeDiscoveryTestConfig()),
+
+		source).
+		ApprovalArguments(ctx, nodeInvocationTestArgs())
 	if err != nil {
 		t.Fatal(err)
 	}
-	cancel := NewNodeCancelTool(nodeDiscoveryTestConfig(), source)
+	cancel := NewNodeCancelTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	args := map[string]any{"invocation_id": approval["invocation_id"]}
 	prepared := decodeNodeResult(t, cancel.Execute(ctx, args))
 	if prepared["status"] != "already_terminal" || source.cancelCalls != 0 {
@@ -2190,14 +2192,20 @@ func TestNodeCancelToolPersistsOfflineIntentWithoutReplay(t *testing.T) {
 
 func TestNodeInvocationToolRuntimeSemantics(t *testing.T) {
 	source := newFakeNodeInvocationSource(t)
-	if got := NewNodeInvokeTool(nil, source).ToolLoopSemantics(); got != loopguard.SemanticsMutating {
+	if got := NewNodeInvokeTool(
+		NewNodeToolOptions(nil),
+		source,
+	).ToolLoopSemantics(); got != loopguard.SemanticsMutating {
 		t.Fatalf("invoke semantics = %q", got)
 	}
-	if got := NewNodeStatusTool(nil, source).ToolLoopSemantics(); got !=
+	if got := NewNodeStatusTool(NewNodeToolOptions(nil), source).ToolLoopSemantics(); got !=
 		loopguard.SemanticsReadOnlyIdempotent {
 		t.Fatalf("status semantics = %q", got)
 	}
-	if got := NewNodeCancelTool(nil, source).ToolLoopSemantics(); got != loopguard.SemanticsMutating {
+	if got := NewNodeCancelTool(
+		NewNodeToolOptions(nil),
+		source,
+	).ToolLoopSemantics(); got != loopguard.SemanticsMutating {
 		t.Fatalf("cancel semantics = %q", got)
 	}
 }
@@ -2273,7 +2281,7 @@ func nodeInvocationTestArgs() map[string]any {
 		ApprovedAt:          1,
 	}
 	revision, err := newNodeTargetAccess(
-		nodeDiscoveryTestConfig(),
+		NewNodeToolOptions(nodeDiscoveryTestConfig()),
 		nil,
 	).discoveryRevision("main", "build", command.Name, snapshot, registration, command, true)
 	if err != nil {
@@ -2293,7 +2301,7 @@ func freshNodeInvocationArgs(
 	ctx context.Context,
 ) map[string]any {
 	t.Helper()
-	result := NewNodeDiscoveryTool(nodeDiscoveryTestConfig(), source).Execute(
+	result := NewNodeDiscoveryTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source).Execute(
 		ctx,
 		map[string]any{
 			"action":  "describe",

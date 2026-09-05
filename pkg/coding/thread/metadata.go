@@ -312,6 +312,7 @@ type Store struct {
 	afterAttachmentGCQuarantinePublish func()
 	afterAttachmentBlobPublication     func()
 	afterAttachmentManifestValidation  func()
+	afterReviewResultRead              func()
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -112,14 +113,18 @@ func TestApprovedToolExecutionIdentityIsScopedAndRestored(t *testing.T) {
 	ts := &turnState{
 		agent: &AgentInstance{ID: "main"}, channel: resumeInbound.Channel, chatID: resumeInbound.ChatID,
 		workspace: "workspace", sessionKey: "session",
-		opts: turnSpec{Dispatch: DispatchRequest{InboundContext: resumeInbound}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{InboundContext: resumeInbound}}),
+	}
+	registeredInbound := ts.opts.Dispatch.InboundContext
+	if registeredInbound == nil || registeredInbound == resumeInbound {
+		t.Fatalf("registered turn identity was not detached: %#v", registeredInbound)
 	}
 
 	executionCtx := withApprovedToolExecutionIdentity(context.Background(), origin)
 	assertToolIdentity(t, toolExecutionContextForTurn(executionCtx, ts), origin)
-	assertToolIdentity(t, toolExecutionContextForTurn(context.Background(), ts), resumeInbound)
+	assertToolIdentity(t, toolExecutionContextForTurn(context.Background(), ts), registeredInbound)
 	if ts.channel != resumeInbound.Channel || ts.chatID != resumeInbound.ChatID ||
-		ts.opts.Dispatch.InboundContext != resumeInbound {
+		ts.opts.Dispatch.InboundContext != registeredInbound {
 		t.Fatalf("registered turn identity mutated: %#v", ts)
 	}
 }
@@ -162,5 +167,20 @@ func TestInteractionContinuationConfigureKeepsResumeInboundContext(t *testing.T)
 	}
 	if opts.Dispatch.InboundContext != resumeInbound {
 		t.Fatalf("resume inbound context changed: %#v", opts.Dispatch.InboundContext)
+	}
+}
+
+func TestToolTerminalRequestPreservesExactSafetyHalt(t *testing.T) {
+	llm := newLLMIterationState(1)
+	llm.toolResponseDisposition = toolResponseHandled
+
+	got := toolTerminalRequest(ToolLoopOutcome{
+		Control:      turnStepFinalize,
+		FinalContent: "  runtime-owned halt reason  ",
+		TerminalMode: terminalRenderExact,
+	}, llm, terminalContent{})
+	if got.renderMode != terminalRenderExact || strings.TrimSpace(got.content.content) != "runtime-owned halt reason" ||
+		!got.content.persistIfToolHandled {
+		t.Fatalf("tool terminal request = %#v, want exact runtime halt", got)
 	}
 }

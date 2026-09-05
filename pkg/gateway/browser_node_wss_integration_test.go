@@ -108,7 +108,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		Browser:       &browserRuntime{broker: broker, policyRevision: policyRevision},
 	}
 	browserSource := &gatewayBrowserToolSource{
-		services: servicesOwner, config: cfg, policyRevision: policyRevision,
+		services: servicesOwner, nodeTargets: browserNodeTargets(cfg.Tools.Browser), policyRevision: policyRevision,
 		workspace: workspace, limits: cfg.Tools.Browser.Limits.Effective(),
 	}
 	owner := browser.Owner{
@@ -681,7 +681,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	if browserSource.downloadAvailable {
 		t.Fatal("production-WSS fixture unexpectedly enabled gateway-local Playwright downloads")
 	}
-	actTool := tools.NewBrowserActTool(cfg, browserSource)
+	actTool := tools.NewBrowserActTool(tools.NewBrowserToolOptions(cfg.Tools.Browser), browserSource)
 	actionSchema, err := json.Marshal(actTool.Parameters())
 	if err != nil {
 		t.Fatal(err)
