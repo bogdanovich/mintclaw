@@ -13,9 +13,9 @@ func TestOutboundMessageForTurnCarriesTraceScopeWithoutSettlement(t *testing.T) 
 		turnID:    "turn-1",
 		channel:   "telegram",
 		chatID:    "chat-1",
-		opts: turnSpec{Dispatch: DispatchRequest{
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
 			InboundContext: &bus.InboundContext{Channel: "telegram", ChatID: "chat-1"},
-		}},
+		}}),
 	}
 
 	msg := outboundMessageForTurn(ts, "working")

@@ -149,6 +149,11 @@ type NodeInvokeTool struct {
 
 func (tool *NodeInvokeTool) approvalBypassOwner() toolshared.Tool { return tool }
 
+func (tool *NodeInvokeTool) approvalBypassesTarget(target string) bool {
+	return tool != nil && tool.runtime != nil && tool.runtime.access != nil &&
+		tool.runtime.access.bypassesApproval(target)
+}
+
 type NodeStatusTool struct {
 	runtime *nodeInvocationToolRuntime
 }

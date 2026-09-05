@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
@@ -25,6 +26,7 @@ const (
 	ActivityRunning      Activity = "running"
 	ActivityInterrupting Activity = "interrupting"
 	ActivityCompacting   Activity = "compacting"
+	ActivityReviewing    Activity = "reviewing"
 	ActivityWaitingInput Activity = "waiting_for_input"
 	ActivityFailed       Activity = "failed"
 )
@@ -268,6 +270,7 @@ type ThreadSnapshot struct {
 	Workspace        *codingworkspace.Snapshot     `json:"workspace,omitempty"`
 	RepositoryStatus *codingworkspace.StatusResult `json:"repository_status,omitempty"`
 	RepositoryDiff   *codingworkspace.DiffResult   `json:"repository_diff,omitempty"`
+	Review           *codingreview.State           `json:"review,omitempty"`
 	Status           string                        `json:"status,omitempty"`
 	HasOlderEntries  bool                          `json:"has_older_entries,omitempty"`
 }
@@ -373,4 +376,10 @@ type WorkspaceRefresher interface {
 type RepositoryEvidenceReader interface {
 	RepositoryStatus(context.Context) (codingworkspace.StatusResult, error)
 	RepositoryDiff(context.Context, codingworkspace.DiffTarget) (codingworkspace.DiffResult, error)
+}
+
+// Reviewer is an optional controller capability. Implementations admit one
+// native read-only review operation; unsupported frontends do not advertise it.
+type Reviewer interface {
+	Review(context.Context, codingreview.Target) error
 }

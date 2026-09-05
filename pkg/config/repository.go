@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/bogdanovich/mintclaw/pkg/credential"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
@@ -231,6 +232,18 @@ func (r *Repository) saveLocked(cfg *Config) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	snapshotConfig, err := loadConfig(documents.public)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("decode saved public config: %w", err)
+	}
+	if err = mergeSecurityConfig(snapshotConfig, documents.security, securityPath(r.path), nil); err != nil {
+		return Snapshot{}, fmt.Errorf("decode saved security config: %w", err)
+	}
+	resolver := credential.NewResolver(filepath.Dir(r.path))
+	if err = finalizeLoadedConfig(snapshotConfig, resolver, false); err != nil {
+		return Snapshot{}, fmt.Errorf("finalize saved config: %w", err)
+	}
+	documents.config = snapshotConfig
 	return r.saveDocumentsLocked(documents)
 }
 

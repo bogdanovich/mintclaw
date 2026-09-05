@@ -41,6 +41,7 @@ func newTurnRunner(al *AgentLoop, cfg *config.Config) *turnRunner {
 	}
 	runner.pipeline = &Pipeline{
 		Cfg:                  cfg,
+		turnPolicy:           newPipelineTurnPolicy(cfg),
 		bus:                  al.bus,
 		events:               events,
 		activeRequests:       al.turns.activeRequests,

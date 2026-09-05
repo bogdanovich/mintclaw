@@ -11,11 +11,11 @@ import (
 
 func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 	ts := &turnState{
-		opts: turnSpec{
+		opts: freezeTurnInput(turnSpec{
 			SendResponse:                false,
 			AllowInterimMintClawPublish: true,
 			EnableSummary:               true,
-		},
+		}),
 		followUps: []bus.InboundMessage{{Content: "follow up"}},
 	}
 	ts.RecordLLMUsage(&providers.UsageInfo{
@@ -101,7 +101,7 @@ func TestNewFinalizationContextCapturesTerminalSnapshot(t *testing.T) {
 
 func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T) {
 	ts := &turnState{
-		opts: turnSpec{EnableSummary: true},
+		opts: freezeTurnInput(turnSpec{EnableSummary: true}),
 	}
 	exec := &turnExecution{
 		model: turnExecutionModel{
@@ -127,6 +127,34 @@ func TestFinalizationContextAlreadyHandledSkipsHistoryAndCompaction(t *testing.T
 	}
 	if result.modelName != "active-model" || result.defaultModelName != "default-model" {
 		t.Fatalf("result models = (%q, %q)", result.modelName, result.defaultModelName)
+	}
+}
+
+func TestFinalizationContextExactTerminalOverridesHandledDisposition(t *testing.T) {
+	ts := &turnState{opts: freezeTurnInput(turnSpec{})}
+	exec := &turnExecution{model: turnExecutionModel{llmModelName: "active-model"}}
+	const protectedReasoningCanary = "ephemeral-browser-fill-canary"
+	llm := &LLMIterationState{
+		toolResponseDisposition: toolResponseHandled,
+		response:                &providers.LLMResponse{ReasoningContent: protectedReasoningCanary},
+	}
+
+	finalization := newFinalizationContext(
+		ts,
+		exec,
+		llm,
+		TurnEndStatusCompleted,
+		exactTerminalContent("runtime-owned halt reason"),
+	)
+
+	if finalization.disposition != finalResponsePending {
+		t.Fatalf("disposition = %v, want pending persistence", finalization.disposition)
+	}
+	if finalization.historyMessage == nil || finalization.historyMessage.Content != "runtime-owned halt reason" {
+		t.Fatalf("history message = %#v, want exact terminal content", finalization.historyMessage)
+	}
+	if finalization.historyMessage.ReasoningContent != "" {
+		t.Fatalf("history retained protected provider reasoning: %#v", finalization.historyMessage)
 	}
 }
 
@@ -164,10 +192,10 @@ func TestFinalizationResultDetachesCompleteDeliverable(t *testing.T) {
 }
 
 func TestNewFinalizationContextSuppressesOnlyBackgroundCompaction(t *testing.T) {
-	ts := &turnState{opts: turnSpec{
+	ts := &turnState{opts: freezeTurnInput(turnSpec{
 		EnableSummary:                true,
 		SuppressBackgroundCompaction: true,
-	}}
+	})}
 	finalization := newFinalizationContext(
 		ts,
 		&turnExecution{},

@@ -15,7 +15,7 @@ func promptBuildRequestForTurn(
 	summary string,
 	currentMessage string,
 	media []string,
-	cfg *config.Config,
+	nativeSearchCallable bool,
 ) PromptBuildRequest {
 	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
 		ts.opts.Dispatch.ChatType(),
@@ -39,15 +39,15 @@ func promptBuildRequestForTurn(
 			history,
 			time.Now(),
 		),
-		ActiveSkills:         activeSkillNames(ts.agent, ts.opts),
-		Overlays:             promptOverlaysForOptions(ts.opts),
+		ActiveSkills:         activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
+		Overlays:             promptOverlays(ts.opts.ActiveGoal),
 		BackgroundTaskSafety: !ts.opts.NoHistory,
 		CodingContext:        ts.opts.CodingContext,
 	}
 	hasCallableTools := true
 	if ts.profile.Enabled {
 		hasCallableTools = turnProfileHasCallableTools(ts.profile, ts.agent.Tools.ToProviderDefs()) ||
-			turnProfileNativeSearchCallable(cfg, ts.profile, ts.agent)
+			nativeSearchCallable
 	}
 	if turnProfileSystemPromptOff(ts.profile) {
 		req.SuppressDefaultSystemPrompt = true
@@ -117,8 +117,8 @@ func promptBuildRequestForTurnSpec(
 			history,
 			time.Now(),
 		),
-		ActiveSkills:         activeSkillNames(agent, opts),
-		Overlays:             promptOverlaysForOptions(opts),
+		ActiveSkills:         activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
+		Overlays:             promptOverlays(opts.ActiveGoal),
 		BackgroundTaskSafety: !opts.NoHistory,
 		CodingContext:        opts.CodingContext,
 	}
@@ -178,9 +178,9 @@ func normalizePromptBuildRequestRelations(
 	return req
 }
 
-func promptOverlaysForOptions(opts turnSpec) []PromptPart {
+func promptOverlays(activeGoal string) []PromptPart {
 	var overlays []PromptPart
-	if activeGoal := strings.TrimSpace(opts.ActiveGoal); activeGoal != "" {
+	if activeGoal = strings.TrimSpace(activeGoal); activeGoal != "" {
 		overlays = append(overlays, PromptPart{
 			ID:      "context.active_goal",
 			Layer:   PromptLayerContext,
