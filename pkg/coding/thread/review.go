@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 	"unicode/utf8"
 
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
@@ -17,10 +18,18 @@ import (
 
 const (
 	reviewDirectory      = "reviews"
+	reviewLatestFileName = "latest.json"
+	maxReviewIndexBytes  = 1024
 	maxReviewJSONNesting = 16
 )
 
 var ErrReviewResultExists = errors.New("coding thread review result already exists")
+
+type latestReviewIndex struct {
+	SchemaVersion int       `json:"schema_version"`
+	ReviewID      string    `json:"review_id"`
+	CompletedAt   time.Time `json:"completed_at"`
+}
 
 // PublishReviewResult writes one immutable completed review item while the
 // selected-thread writer lease is held.
@@ -44,6 +53,10 @@ func (s *Store) PublishReviewResult(
 	if err != nil {
 		return err
 	}
+	indexData, err := encodeLatestReviewIndex(result)
+	if err != nil {
+		return err
+	}
 	return lease.withActive(s.root, metadata.ThreadID, func() error {
 		if err := context.Cause(ctx); err != nil {
 			return err
@@ -61,8 +74,8 @@ func (s *Store) PublishReviewResult(
 			return fmt.Errorf("coding thread review: create result directory: %w", err)
 		}
 		defer func() { _ = hierarchy.Close() }()
-		if err := view.validateHierarchy(hierarchy); err != nil {
-			return fmt.Errorf("coding thread review: validate result directory: %w", err)
+		if hierarchyErr := view.validateHierarchy(hierarchy); hierarchyErr != nil {
+			return fmt.Errorf("coding thread review: validate result directory: %w", hierarchyErr)
 		}
 		root := hierarchy.Leaf()
 		name := result.ReviewID + ".json"
@@ -71,14 +84,105 @@ func (s *Store) PublishReviewResult(
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("coding thread review: inspect destination: %w", err)
 		}
+		var durabilityWarnings error
 		if err := writeRootFileExclusiveAtomic(root, name, data, 0o600); err != nil {
-			return fmt.Errorf("coding thread review: publish: %w", err)
+			if !fileutil.IsCommittedWriteError(err) {
+				return fmt.Errorf("coding thread review: publish result: %w", err)
+			}
+			durabilityWarnings = err
+		}
+		if err := writeRootFileAtomic(root, reviewLatestFileName, indexData, 0o600); err != nil {
+			if !fileutil.IsCommittedWriteError(err) {
+				return fmt.Errorf(
+					"coding thread review: publish latest pointer after immutable result %q: %w",
+					result.ReviewID,
+					err,
+				)
+			}
+			durabilityWarnings = errors.Join(durabilityWarnings, err)
 		}
 		if err := errors.Join(view.validateWriter(lease), view.validateHierarchy(hierarchy)); err != nil {
 			return &fileutil.CommittedWriteError{Err: fmt.Errorf("validate published review authority: %w", err)}
 		}
+		if durabilityWarnings != nil {
+			return &fileutil.CommittedWriteError{Err: durabilityWarnings}
+		}
 		return nil
 	})
+}
+
+// LoadLatestReviewResultWithLease restores the latest completed review under
+// the selected thread's existing writer authority. A thread with no completed
+// review returns ok=false; interrupted reviews never create this pointer.
+func (s *Store) LoadLatestReviewResultWithLease(
+	ctx context.Context,
+	lease *Lease,
+	metadata Metadata,
+) (result codingreview.Result, ok bool, resultErr error) {
+	if s == nil {
+		return codingreview.Result{}, false, fmt.Errorf("coding thread review store is nil")
+	}
+	if ctx == nil {
+		return codingreview.Result{}, false, fmt.Errorf("coding thread review: context is required")
+	}
+	if err := metadata.Validate(); err != nil {
+		return codingreview.Result{}, false, err
+	}
+	resultErr = lease.withActive(s.root, metadata.ThreadID, func() error {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		view, err := s.openAttachmentStoreView(metadata.ThreadID)
+		if err != nil {
+			return fmt.Errorf("coding thread review: pin thread: %w", err)
+		}
+		defer func() { _ = view.Close() }()
+		if writerErr := view.validateWriter(lease); writerErr != nil {
+			return fmt.Errorf("coding thread review: validate writer: %w", writerErr)
+		}
+		hierarchy, err := s.openAttachmentHierarchy(view.thread, false, repositoryDirectory, reviewDirectory)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("coding thread review: open result directory: %w", err)
+		}
+		defer func() { _ = hierarchy.Close() }()
+		if hierarchyErr := view.validateHierarchy(hierarchy); hierarchyErr != nil {
+			return fmt.Errorf("coding thread review: validate result directory: %w", hierarchyErr)
+		}
+		root := hierarchy.Leaf()
+		indexData, _, _, err := readAttachmentRootFile(ctx, root, reviewLatestFileName, maxReviewIndexBytes)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("coding thread review: read latest pointer: %w", err)
+		}
+		index, err := decodeLatestReviewIndex(indexData)
+		if err != nil {
+			return fmt.Errorf("coding thread review: decode latest pointer: %w", err)
+		}
+		result, err = loadReviewResult(ctx, root, index.ReviewID)
+		if err != nil {
+			return fmt.Errorf("coding thread review: load latest result: %w", err)
+		}
+		if !result.CompletedAt.Equal(index.CompletedAt) {
+			return fmt.Errorf("coding thread review: latest pointer completion time does not match result")
+		}
+		if s.afterReviewResultRead != nil {
+			s.afterReviewResultRead()
+		}
+		if validationErr := errors.Join(
+			view.validateWriter(lease),
+			view.validateHierarchy(hierarchy),
+		); validationErr != nil {
+			return fmt.Errorf("coding thread review: revalidate latest result authority: %w", validationErr)
+		}
+		ok = true
+		return nil
+	})
+	return result, ok, resultErr
 }
 
 // LoadReviewResultWithLease reads one immutable result under the selected
@@ -153,6 +257,50 @@ func encodeReviewResult(result codingreview.Result, frozenDiff codingworkspace.D
 		return nil, fmt.Errorf("coding thread review result exceeds %d bytes", codingreview.MaxResultBytes)
 	}
 	return data, nil
+}
+
+func encodeLatestReviewIndex(result codingreview.Result) ([]byte, error) {
+	if err := result.Validate(); err != nil {
+		return nil, err
+	}
+	data, err := json.MarshalIndent(latestReviewIndex{
+		SchemaVersion: codingreview.SchemaVersion,
+		ReviewID:      result.ReviewID,
+		CompletedAt:   result.CompletedAt,
+	}, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	data = append(data, '\n')
+	if len(data) > maxReviewIndexBytes {
+		return nil, fmt.Errorf("coding thread latest review pointer exceeds %d bytes", maxReviewIndexBytes)
+	}
+	return data, nil
+}
+
+func decodeLatestReviewIndex(data []byte) (latestReviewIndex, error) {
+	if err := validateStrictReviewJSON(data); err != nil {
+		return latestReviewIndex{}, err
+	}
+	var index latestReviewIndex
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&index); err != nil {
+		return latestReviewIndex{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return latestReviewIndex{}, fmt.Errorf("trailing JSON content")
+	}
+	if index.SchemaVersion != codingreview.SchemaVersion {
+		return latestReviewIndex{}, fmt.Errorf("unsupported latest review schema %d", index.SchemaVersion)
+	}
+	if err := codingreview.ValidateID(index.ReviewID); err != nil {
+		return latestReviewIndex{}, err
+	}
+	if index.CompletedAt.IsZero() || index.CompletedAt.Location() != time.UTC {
+		return latestReviewIndex{}, fmt.Errorf("latest review completion time must be a nonzero UTC timestamp")
+	}
+	return index, nil
 }
 
 func loadReviewResult(ctx context.Context, root *os.Root, reviewID string) (codingreview.Result, error) {

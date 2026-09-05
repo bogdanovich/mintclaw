@@ -1067,6 +1067,23 @@ func newNativeCodingControllerWithDependencies(
 	if projectionErr := agentadapter.ProjectThreadMetadata(projector, request.Metadata); projectionErr != nil {
 		return nil, projectionErr
 	}
+	var latestReview codingreview.Result
+	var hasLatestReview bool
+	restoreCtx := context.Background()
+	cancelRestore := func() {}
+	if resumed {
+		restoreCtx, cancelRestore = context.WithTimeout(context.Background(), codingResumeRecoveryTimeout)
+		latestReview, hasLatestReview, err = request.Store.LoadLatestReviewResultWithLease(
+			restoreCtx,
+			request.Lease,
+			request.Metadata,
+		)
+		if err != nil {
+			cancelRestore()
+			return nil, fmt.Errorf("coding controller: restore latest review: %w", err)
+		}
+	}
+	defer cancelRestore()
 	metadataState := newCodingMetadataState(request.Store, request.Metadata, now)
 	native, err := openNativeCodingRuntime(
 		dependencies,
@@ -1076,6 +1093,14 @@ func newNativeCodingControllerWithDependencies(
 	)
 	if err != nil {
 		return nil, err
+	}
+	if hasLatestReview {
+		current := native.repository.Diff(restoreCtx, latestReview.Target.DiffTarget())
+		latestReview = codingreviewer.ReconcileRestoredEvidence(latestReview, current)
+		if restoreErr := projector.ReviewRestored(latestReview); restoreErr != nil {
+			_ = native.Close()
+			return nil, fmt.Errorf("coding controller: project latest review: %w", restoreErr)
+		}
 	}
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: native,

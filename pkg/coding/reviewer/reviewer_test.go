@@ -410,6 +410,36 @@ func TestReconcileEvidenceDowngradesCurrentLocations(t *testing.T) {
 	}
 }
 
+func TestReconcileRestoredEvidenceKeepsOnlyStillCurrentLocations(t *testing.T) {
+	current := currentDiff()
+	result := review.Result{
+		SchemaVersion:      review.SchemaVersion,
+		ReviewID:           "e5768a80-a5be-4bda-b21c-0da34b02502c",
+		Target:             review.Target{Kind: review.TargetCurrent},
+		EvidenceGeneration: current.EvidenceGeneration,
+		Summary:            "One defect found.",
+		Findings: []review.Finding{{
+			Severity: review.SeverityMajor, Title: "Wrong result", Explanation: "The result is wrong.",
+			Confidence: 0.9, LocationState: review.LocationCurrent, Path: "new.go", StartLine: 8, EndLine: 8,
+		}},
+		CompletedAt: time.Now().UTC(),
+	}
+	matching := ReconcileRestoredEvidence(result.Clone(), current)
+	if matching.Stale || matching.Findings[0].LocationState != review.LocationCurrent {
+		t.Fatalf("matching restored review = %#v", matching)
+	}
+	current.EvidenceGeneration = "changed-evidence"
+	stale := ReconcileRestoredEvidence(result.Clone(), current)
+	if !stale.Stale || stale.Findings[0].LocationState != review.LocationStale ||
+		stale.Findings[0].StartLine != 0 || stale.Findings[0].EndLine != 0 ||
+		!strings.Contains(stale.Diagnostic, "changed since review completion") {
+		t.Fatalf("changed restored review = %#v", stale)
+	}
+	if err := stale.Validate(); err != nil {
+		t.Fatalf("stale restored review is invalid: %v", err)
+	}
+}
+
 func TestBoundedToolResultIncludesMarkerWithinLimit(t *testing.T) {
 	const limit = 64
 	result := boundedToolResult(strings.Repeat("x", 100), limit)
