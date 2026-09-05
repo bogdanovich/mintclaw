@@ -7,12 +7,106 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/testharness/llmscenario"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
+
+func TestPublicTurnContractReturnsOneTerminalResponse(t *testing.T) {
+	provider := llmscenario.NewScriptedProvider(
+		"contract-model",
+		llmscenario.ProviderStep{
+			Name:     "terminal response",
+			Response: llmscenario.TextResponse("contract complete"),
+		},
+	)
+	fixture := newAgentLoopTestFixture(t, provider)
+
+	response, err := fixture.Loop.ProcessDirectWithChannel(
+		t.Context(),
+		"complete this turn",
+		"contract-terminal",
+		"cli",
+		"direct",
+	)
+	if err != nil || response != "contract complete" {
+		t.Fatalf("public terminal turn = (%q, %v)", response, err)
+	}
+	if err = provider.AssertExhausted(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublicInteractionContractSuspendsWithoutTerminalResponse(t *testing.T) {
+	provider := llmscenario.NewScriptedProvider(
+		"contract-model",
+		llmscenario.ProviderStep{
+			Name: "request durable input",
+			Response: llmscenario.ToolCallResponse(
+				"I need a deployment target.",
+				llmscenario.ToolCall("call-question", "request_user_input", map[string]any{
+					"questions": []any{map[string]any{
+						"id": "deploy_target", "header": "Target",
+						"question": "Which target should receive the deployment?",
+						"options": []any{
+							map[string]any{
+								"label": "Staging", "description": "Deploy to the staging environment.",
+							},
+							map[string]any{
+								"label": "Production", "description": "Deploy to the production environment.",
+							},
+						},
+					}},
+				}),
+			),
+		},
+	)
+	fixture := newAgentLoopTestFixture(t, provider, func(cfg *config.Config) {
+		cfg.Tools.RequestUserInput.Enabled = true
+	})
+	manager := newInteractionChannelManager()
+	installInteractionChannelManager(t, fixture.Loop, manager)
+
+	response, err := fixture.Loop.ProcessDirectWithChannel(
+		t.Context(),
+		"deploy the release",
+		"contract-interaction",
+		"telegram",
+		"chat-contract",
+	)
+	if err != nil || response != "" {
+		t.Fatalf("public interaction turn = (%q, %v), want suspended empty response", response, err)
+	}
+	if err = provider.AssertExhausted(); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := fixture.Loop.interactionRegistryForWorkspace(fixture.Agent.Workspace)
+	records := registry.ListNonterminal()
+	if len(records) != 1 || records[0].Kind != interactions.KindQuestion ||
+		records[0].Status != interactions.StatusWaiting {
+		t.Fatalf("durable interactions = %#v", records)
+	}
+	record := records[0]
+	cataloged, catalogErr := fixture.Loop.interactions.catalogedWorkspaces()
+	if catalogErr != nil || len(cataloged) != 1 || cataloged[0] != fixture.Agent.Workspace {
+		t.Fatalf("isolated interaction catalog = (%v, %v)", cataloged, catalogErr)
+	}
+	select {
+	case prompt := <-manager.sent:
+		if !prompt.Metadata.IsQuestionPrompt() || prompt.Metadata.IsFinal() ||
+			prompt.Metadata.InteractionID != record.ID {
+			t.Fatalf("interaction prompt contract = %#v", prompt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("durable interaction prompt was not delivered")
+	}
+}
 
 func TestMockLLMScenario_ProcessDirectExecutesToolAndReturnsFinalAnswer(t *testing.T) {
 	const toolName = "scenario_extract_recipe"

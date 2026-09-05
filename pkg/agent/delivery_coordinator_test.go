@@ -571,21 +571,7 @@ func newDeliveryCoordinatorTestRuntimeWithWorkspace(
 	response string,
 ) (*AgentLoop, *bus.MessageBus, *turnState, string) {
 	t.Helper()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace: workspace,
-				ModelName: "test-model",
-				MaxTokens: 4096,
-			},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	al := NewAgentLoop(cfg, msgBus, &simpleMockProvider{response: response})
-	agent := al.registry.GetDefaultAgent()
-	if agent == nil {
-		t.Fatal("expected default agent")
-	}
+	fixture := newAgentLoopTestFixtureWithWorkspace(t, workspace, &simpleMockProvider{response: response})
 	inbound := &bus.InboundContext{
 		Channel:  "telegram",
 		ChatID:   "chat-1",
@@ -593,22 +579,10 @@ func newDeliveryCoordinatorTestRuntimeWithWorkspace(
 		TopicID:  "topic-1",
 		SenderID: "user-1",
 	}
-	ts := &turnState{
-		agent:      agent,
-		agentID:    agent.ID,
-		workspace:  workspace,
-		channel:    "telegram",
-		chatID:     "chat-1",
-		sessionKey: "session-1",
-		opts: freezeTurnInput(turnSpec{
-			Dispatch: DispatchRequest{
-				SessionKey:     "session-1",
-				InboundContext: inbound,
-			},
-		}),
-		scope: al.newTurnEventScope(agent.ID, agent.Workspace, "session-1", &TurnContext{Inbound: inbound}),
-	}
-	return al, msgBus, ts, workspace
+	ts := fixture.turnState(turnSpec{Dispatch: DispatchRequest{
+		SessionKey: "session-1", InboundContext: inbound,
+	}})
+	return fixture.Loop, fixture.Bus, ts, workspace
 }
 
 func assertNoOutboundMessage(t *testing.T, msgBus *bus.MessageBus, context string) {

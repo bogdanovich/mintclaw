@@ -391,30 +391,8 @@ func newTurnCoordTestLoop(
 	provider providers.LLMProvider,
 ) (*AgentLoop, *AgentInstance, func()) {
 	t.Helper()
-	tmpDir := t.TempDir()
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Workspace:         tmpDir,
-				ModelName:         "test-model",
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-				ContextManager:    "none",
-			},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	al := NewAgentLoop(cfg, msgBus, provider)
-	agent := al.registry.GetDefaultAgent()
-	if agent == nil {
-		t.Fatal("expected default agent")
-	}
-
-	return al, agent, func() {
-		al.Close()
-	}
+	fixture := newAgentLoopTestFixture(t, provider)
+	return fixture.Loop, fixture.Agent, fixture.Close
 }
 
 func makeTestTurnSpec(sessionKey string) turnSpec {
