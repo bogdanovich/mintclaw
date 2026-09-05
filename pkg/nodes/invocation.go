@@ -716,6 +716,7 @@ func ValidateInvocationOutputForProtocol(
 	}
 	if IsBrowserCommand(descriptor.Name) {
 		if validationErr := validateBrowserInvocationOutput(
+			protocolVersion,
 			descriptor.Name,
 			strictestBrowserLimits(descriptor.BrowserProfiles),
 			object,
