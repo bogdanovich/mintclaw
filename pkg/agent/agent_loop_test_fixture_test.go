@@ -6,6 +6,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
@@ -53,6 +54,7 @@ func newAgentLoopTestFixtureWithWorkspace(
 	}
 	messageBus := bus.NewMessageBus()
 	loop := NewAgentLoop(cfg, messageBus, provider)
+	loop.interactions.catalog = interactions.NewWorkspaceCatalog(t.TempDir())
 	fixture := &agentLoopTestFixture{
 		Loop: loop, Agent: loop.registry.GetDefaultAgent(), Config: cfg, Bus: messageBus,
 	}

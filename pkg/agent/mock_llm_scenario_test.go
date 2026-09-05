@@ -93,6 +93,10 @@ func TestPublicInteractionContractSuspendsWithoutTerminalResponse(t *testing.T) 
 		t.Fatalf("durable interactions = %#v", records)
 	}
 	record := records[0]
+	cataloged, catalogErr := fixture.Loop.interactions.catalogedWorkspaces()
+	if catalogErr != nil || len(cataloged) != 1 || cataloged[0] != fixture.Agent.Workspace {
+		t.Fatalf("isolated interaction catalog = (%v, %v)", cataloged, catalogErr)
+	}
 	select {
 	case prompt := <-manager.sent:
 		if !prompt.Metadata.IsQuestionPrompt() || prompt.Metadata.IsFinal() ||
