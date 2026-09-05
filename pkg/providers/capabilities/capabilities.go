@@ -5,11 +5,17 @@ package capabilities
 // ProviderCapabilities is the authoritative declaration of the optional
 // behavior and limits exposed by one provider instance.
 type ProviderCapabilities struct {
-	Streaming       bool
-	Thinking        bool
-	NativeSearch    bool
-	ImageGeneration ImageGenerationCapabilities
-	ToolSchema      ToolSchemaLimits
+	Streaming    bool
+	Thinking     bool
+	NativeSearch bool
+	// CallerMediatedTools declares support for a request-scoped mode in which
+	// Chat can only request the supplied tools and cannot autonomously act on the
+	// caller's host or external systems. Callers enforcing that boundary must use
+	// providers.CallerMediatedToolsOptions. False is the conservative value for
+	// agentic, configurable tool-override, and unknown transports.
+	CallerMediatedTools bool
+	ImageGeneration     ImageGenerationCapabilities
+	ToolSchema          ToolSchemaLimits
 }
 
 // ImageGenerationCapabilities describes provider-owned image generation behavior.

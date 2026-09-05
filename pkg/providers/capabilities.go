@@ -3,6 +3,8 @@ package providers
 import (
 	"context"
 	"errors"
+	"maps"
+	"reflect"
 
 	providercapabilities "github.com/bogdanovich/mintclaw/pkg/providers/capabilities"
 )
@@ -14,7 +16,7 @@ var (
 
 // Capabilities returns the provider's normalized descriptor.
 func Capabilities(provider LLMProvider) ProviderCapabilities {
-	if provider == nil {
+	if nilInterface(provider) {
 		return ProviderCapabilities{}
 	}
 	capable, ok := provider.(CapabilityProvider)
@@ -26,10 +28,33 @@ func Capabilities(provider LLMProvider) ProviderCapabilities {
 
 // ImageCapabilities returns the provider's normalized image generation metadata.
 func ImageCapabilities(provider ImageGenerationProvider) ImageGenerationCapabilities {
-	if provider == nil {
+	if nilInterface(provider) {
 		return ImageGenerationCapabilities{}
 	}
 	return provider.Capabilities().Normalized().ImageGeneration
+}
+
+// CallerMediatedToolsOptions returns a detached request-options map that
+// explicitly disables provider-owned native tools. It is required when
+// CallerMediatedTools is used as a security boundary.
+func CallerMediatedToolsOptions(options map[string]any) map[string]any {
+	result := make(map[string]any, len(options)+1)
+	maps.Copy(result, options)
+	result["native_search"] = false
+	return result
+}
+
+func nilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
 }
 
 // ChatStreamEvents invokes the provider's declared event-streaming operation.

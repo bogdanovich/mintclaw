@@ -64,8 +64,9 @@ func (p *GeminiProvider) GetDefaultModel() string {
 
 func (p *GeminiProvider) Capabilities() providercapabilities.ProviderCapabilities {
 	return providercapabilities.ProviderCapabilities{
-		Streaming: true,
-		Thinking:  true,
+		Streaming:           true,
+		Thinking:            true,
+		CallerMediatedTools: len(p.extraBody) == 0,
 	}
 }
 

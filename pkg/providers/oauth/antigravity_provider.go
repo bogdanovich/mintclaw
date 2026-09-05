@@ -35,7 +35,7 @@ type AntigravityProvider struct {
 }
 
 func (p *AntigravityProvider) Capabilities() providercapabilities.ProviderCapabilities {
-	return providercapabilities.ProviderCapabilities{}
+	return providercapabilities.ProviderCapabilities{CallerMediatedTools: true}
 }
 
 // NewAntigravityProvider creates a new Antigravity provider using stored auth credentials.

@@ -51,7 +51,8 @@ type Provider struct {
 
 func (p *Provider) Capabilities() providercapabilities.ProviderCapabilities {
 	return providercapabilities.ProviderCapabilities{
-		Streaming: true,
+		Streaming:           true,
+		CallerMediatedTools: true,
 	}
 }
 
