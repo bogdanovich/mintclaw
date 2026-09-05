@@ -550,7 +550,7 @@ func (source *fakeBrowserToolSource) ExecuteAction(
 	return source.execute, source.err
 }
 
-func browserToolTestConfig() *config.Config {
+func browserToolTestRootConfig() *config.Config {
 	cfg := config.DefaultConfig()
 	cfg.Tools.Browser = config.BrowserToolsConfig{
 		Enabled: true,
@@ -571,6 +571,52 @@ func browserToolTestConfig() *config.Config {
 		},
 	}
 	return cfg
+}
+
+func browserToolTestConfig() BrowserToolOptions {
+	cfg := browserToolTestRootConfig()
+	return NewBrowserToolOptions(cfg.Tools.Browser)
+}
+
+func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
+	cfg := browserToolTestRootConfig()
+	cfg.Tools.Browser.Limits.ActionSeconds = 17
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.Policy = &browserpolicy.Policy{
+		DefaultDecision: browserpolicy.DecisionAllow,
+		Rules: []browserpolicy.Rule{{
+			ID: "navigation",
+			Match: browserpolicy.RuleMatch{
+				Actions: []string{string(browser.ActionNavigate)},
+			},
+			Decision: browserpolicy.DecisionAllow,
+		}},
+	}
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+
+	options := NewBrowserToolOptions(cfg.Tools.Browser)
+	cfg.Tools.Browser.Agents[0] = "other"
+	cfg.Tools.Browser.DefaultTarget = "other"
+	cfg.Tools.Browser.Limits.ActionSeconds = 29
+	profile.AllowedOrigins[0] = "https://changed.example"
+	profile.Policy.Rules[0].Match.Actions[0] = string(browser.ActionClick)
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+
+	tool := NewBrowserTargetsTool(options, &fakeBrowserToolSource{available: true})
+	if !tool.ToolEnabledForAgent("browser") || tool.ToolEnabledForAgent("other") {
+		t.Fatal("browser tool options observed a mutated agent allowlist")
+	}
+	if options.config.DefaultTarget != config.BrowserDefaultTarget || options.config.Limits.ActionSeconds != 17 {
+		t.Fatalf("browser tool options observed mutated scalar policy: %#v", options.config)
+	}
+	snapshotProfile := options.config.Targets[config.BrowserDefaultTarget].Profiles[config.BrowserDefaultProfile]
+	if snapshotProfile.AllowedOrigins[0] != "https://example.com" ||
+		snapshotProfile.Policy.Rules[0].Match.Actions[0] != string(browser.ActionNavigate) {
+		t.Fatalf("browser tool options observed mutated nested policy: %#v", snapshotProfile)
+	}
 }
 
 func browserToolTestContext() context.Context {
@@ -810,7 +856,7 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 }
 
 func TestBrowserTargetsReportsAndOrdersExplicitDefaultBeforeAlphabeticalTargets(t *testing.T) {
-	cfg := browserToolTestConfig()
+	cfg := browserToolTestRootConfig()
 	cfg.Tools.Browser.Targets["companion"] = config.BrowserTargetConfig{
 		Enabled: true,
 		Profiles: map[string]config.BrowserProfileConfig{
@@ -824,9 +870,14 @@ func TestBrowserTargetsReportsAndOrdersExplicitDefaultBeforeAlphabeticalTargets(
 
 	var result browserTargetResult
 	decodeBrowserToolResult(
-		t, NewBrowserTargetsTool(cfg, &fakeBrowserToolSource{available: true}).Execute(
+		t,
+		NewBrowserTargetsTool(
+			NewBrowserToolOptions(cfg.Tools.Browser),
+			&fakeBrowserToolSource{available: true},
+		).Execute(
 			browserToolTestContext(), nil,
-		), &result,
+		),
+		&result,
 	)
 	if result.DefaultTarget != "gateway" || len(result.Targets) != 2 ||
 		result.Targets[0].Target != "gateway" || result.Targets[1].Target != "companion" {
@@ -835,7 +886,7 @@ func TestBrowserTargetsReportsAndOrdersExplicitDefaultBeforeAlphabeticalTargets(
 }
 
 func TestBrowserTargetsReportsExplicitApprovedActionMode(t *testing.T) {
-	cfg := browserToolTestConfig()
+	cfg := browserToolTestRootConfig()
 	target := cfg.Tools.Browser.Targets["gateway"]
 	profile := target.Profiles["managed"]
 	profile.DryRun = false
@@ -845,9 +896,14 @@ func TestBrowserTargetsReportsExplicitApprovedActionMode(t *testing.T) {
 
 	var result browserTargetResult
 	decodeBrowserToolResult(
-		t, NewBrowserTargetsTool(cfg, &fakeBrowserToolSource{available: true}).Execute(
+		t,
+		NewBrowserTargetsTool(
+			NewBrowserToolOptions(cfg.Tools.Browser),
+			&fakeBrowserToolSource{available: true},
+		).Execute(
 			browserToolTestContext(), nil,
-		), &result,
+		),
+		&result,
 	)
 	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 ||
 		result.Targets[0].Profiles[0].DryRun || !result.Targets[0].Profiles[0].AllowApprovedActions {
@@ -1427,12 +1483,15 @@ func TestBrowserActSchemaOmitsFileChooserWithoutEligibleArtifactTarget(t *testin
 }
 
 func TestBrowserActSchemaIncludesFileChooserForNodeTarget(t *testing.T) {
-	cfg := browserToolTestConfig()
+	cfg := browserToolTestRootConfig()
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	target.Placement = config.BrowserPlacementNode
 	target.NodeTarget = "personal-node"
 	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
-	parameters := NewBrowserActTool(cfg, &fakeBrowserToolSource{available: true}).Parameters()
+	parameters := NewBrowserActTool(
+		NewBrowserToolOptions(cfg.Tools.Browser),
+		&fakeBrowserToolSource{available: true},
+	).Parameters()
 	properties := parameters["properties"].(map[string]any)
 	action := properties["action"].(map[string]any)
 	if browserActionSchemaBranch(action, browser.ActionFileChooser) == nil {
@@ -1455,7 +1514,7 @@ func TestBrowserScreenshotRequiresRecoverableOutboundOwnerBeforeCapture(t *testi
 }
 
 func TestBrowserTargetsReportsExplicitAnyHTTPMode(t *testing.T) {
-	cfg := browserToolTestConfig()
+	cfg := browserToolTestRootConfig()
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.NetworkMode = config.BrowserNetworkAnyHTTP
@@ -1466,7 +1525,10 @@ func TestBrowserTargetsReportsExplicitAnyHTTPMode(t *testing.T) {
 	var result browserTargetResult
 	decodeBrowserToolResult(
 		t,
-		NewBrowserTargetsTool(cfg, &fakeBrowserToolSource{available: true}).Execute(
+		NewBrowserTargetsTool(
+			NewBrowserToolOptions(cfg.Tools.Browser),
+			&fakeBrowserToolSource{available: true},
+		).Execute(
 			browserToolTestContext(), nil,
 		),
 		&result,
@@ -1595,7 +1657,7 @@ func TestBrowserObserveResolvesDefaultTabAndReturnsBoundedProjection(t *testing.
 }
 
 func TestBrowserObserveDeliversEscapedTruncatedSnapshotWithinToolLimit(t *testing.T) {
-	cfg := browserToolTestConfig()
+	cfg := browserToolTestRootConfig()
 	cfg.Tools.Browser.Limits.ToolResultBytes = config.BrowserToolResultEnvelopeBytes + 512
 	snapshot := `- text "` + strings.Repeat(`quoted\\path"`, 12)
 	source := &fakeBrowserToolSource{
@@ -1607,9 +1669,10 @@ func TestBrowserObserveDeliversEscapedTruncatedSnapshotWithinToolLimit(t *testin
 			Title: "Listing", Snapshot: snapshot, Truncated: true,
 		},
 	}
-	result := NewBrowserObserveTool(cfg, source).Execute(browserToolTestContext(), map[string]any{
-		"browser_session_id": "browser_session_1",
-	})
+	result := NewBrowserObserveTool(NewBrowserToolOptions(cfg.Tools.Browser), source).Execute(
+		browserToolTestContext(), map[string]any{
+			"browser_session_id": "browser_session_1",
+		})
 	var observation browserObservationView
 	decodeBrowserToolResult(t, result, &observation)
 	if !observation.Truncated || observation.Snapshot != snapshot ||

@@ -588,7 +588,7 @@ func setupNodeTools(
 		if reloadCfg == nil || !reloadCfg.Nodes.Enabled {
 			return nil, nil
 		}
-		return tools.NewNodeDiscoveryTool(reloadCfg, &nodeDiscoverySource{
+		return tools.NewNodeDiscoveryTool(tools.NewNodeToolOptions(reloadCfg), &nodeDiscoverySource{
 			runtime:      runtime,
 			registryPath: nodes.RegistryPath(reloadCfg.WorkspacePath()),
 		}), nil
@@ -600,7 +600,7 @@ func setupNodeTools(
 		nodeInvocationToolFactory(
 			runtime,
 			func(cfg *config.Config, source tools.NodeInvocationSource) toolshared.Tool {
-				tool := tools.NewNodeInvokeTool(cfg, source)
+				tool := tools.NewNodeInvokeTool(tools.NewNodeToolOptions(cfg), source)
 				tool.SetEventPublisher(agentLoop.RuntimeEventBus())
 				return tool
 			},
@@ -613,7 +613,7 @@ func setupNodeTools(
 		nodeInvocationToolFactory(
 			runtime,
 			func(cfg *config.Config, source tools.NodeInvocationSource) toolshared.Tool {
-				tool := tools.NewNodeStatusTool(cfg, source)
+				tool := tools.NewNodeStatusTool(tools.NewNodeToolOptions(cfg), source)
 				tool.SetEventPublisher(agentLoop.RuntimeEventBus())
 				return tool
 			},
@@ -626,7 +626,7 @@ func setupNodeTools(
 		nodeInvocationToolFactory(
 			runtime,
 			func(cfg *config.Config, source tools.NodeInvocationSource) toolshared.Tool {
-				tool := tools.NewNodeCancelTool(cfg, source)
+				tool := tools.NewNodeCancelTool(tools.NewNodeToolOptions(cfg), source)
 				tool.SetEventPublisher(agentLoop.RuntimeEventBus())
 				return tool
 			},
@@ -668,7 +668,7 @@ func setupNodeTools(
 		nodeFileTransferToolFactory(
 			runtime,
 			func(cfg *config.Config, source tools.NodeFileTransferSource) toolshared.Tool {
-				tool := tools.NewNodeFileInfoTool(cfg, source)
+				tool := tools.NewNodeFileInfoTool(tools.NewNodeToolOptions(cfg), source)
 				tool.SetEventPublisher(agentLoop.RuntimeEventBus())
 				return tool
 			},
@@ -681,7 +681,7 @@ func setupNodeTools(
 		nodeFileTransferToolFactory(
 			runtime,
 			func(cfg *config.Config, source tools.NodeFileTransferSource) toolshared.Tool {
-				tool := tools.NewNodeUploadTool(cfg, source)
+				tool := tools.NewNodeUploadTool(tools.NewNodeToolOptions(cfg), source)
 				tool.SetEventPublisher(agentLoop.RuntimeEventBus())
 				return tool
 			},
@@ -694,7 +694,7 @@ func setupNodeTools(
 		nodeFileTransferToolFactory(
 			runtime,
 			func(cfg *config.Config, source tools.NodeFileTransferSource) toolshared.Tool {
-				tool := tools.NewNodeDownloadTool(cfg, source)
+				tool := tools.NewNodeDownloadTool(tools.NewNodeToolOptions(cfg), source)
 				tool.SetEventPublisher(agentLoop.RuntimeEventBus())
 				return tool
 			},
@@ -753,7 +753,7 @@ func setupNodeTools(
 			if source == nil || runtime.terminalOperatorHub() == nil {
 				return nil, nil
 			}
-			tool := tools.NewNodeTerminalTool(reloadCfg, source)
+			tool := tools.NewNodeTerminalTool(tools.NewNodeToolOptions(reloadCfg), source)
 			tool.SetEventPublisher(agentLoop.RuntimeEventBus())
 			return tool, nil
 		},

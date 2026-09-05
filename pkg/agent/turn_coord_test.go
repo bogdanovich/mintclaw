@@ -896,8 +896,8 @@ func TestPipeline_CallLLM_SimpleResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallLLM failed: %v", err)
 	}
-	if ctrl.Control != ControlBreak {
-		t.Errorf("expected ControlBreak, got %v", ctrl.Control)
+	if ctrl.Control != turnStepFinalize {
+		t.Errorf("expected turnStepFinalize, got %v", ctrl.Control)
 	}
 	if llm.response == nil {
 		t.Fatal("expected non-nil response")
@@ -972,8 +972,8 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackIdentityAlias(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallLLM failed: %v", err)
 	}
-	if ctrl.Control != ControlBreak {
-		t.Fatalf("expected ControlBreak, got %v", ctrl.Control)
+	if ctrl.Control != turnStepFinalize {
+		t.Fatalf("expected turnStepFinalize, got %v", ctrl.Control)
 	}
 	if exec.model.llmModelName != "secondary" {
 		t.Fatalf("exec.model.llmModelName = %q, want %q", exec.model.llmModelName, "secondary")
@@ -1022,8 +1022,8 @@ func TestPipeline_CallLLM_UsesSuccessfulFallbackDisplayNameWithoutAlias(t *testi
 	if err != nil {
 		t.Fatalf("CallLLM failed: %v", err)
 	}
-	if ctrl.Control != ControlBreak {
-		t.Fatalf("expected ControlBreak, got %v", ctrl.Control)
+	if ctrl.Control != turnStepFinalize {
+		t.Fatalf("expected turnStepFinalize, got %v", ctrl.Control)
 	}
 	if exec.model.llmModelName != "anthropic/claude-sonnet" {
 		t.Fatalf(
@@ -1223,8 +1223,8 @@ func TestPipeline_CallLLM_WithToolCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallLLM failed: %v", err)
 	}
-	if ctrl.Control != ControlToolLoop {
-		t.Errorf("expected ControlToolLoop, got %v", ctrl.Control)
+	if ctrl.Control != turnStepExecuteTools {
+		t.Errorf("expected turnStepExecuteTools, got %v", ctrl.Control)
 	}
 	if len(llm.normalizedToolCalls) == 0 {
 		t.Fatal("expected tool calls")
@@ -1261,8 +1261,8 @@ func TestPipeline_CallLLM_UsesNativeSearchWithoutClientWebSearchTool(t *testing.
 	if err != nil {
 		t.Fatalf("CallLLM failed: %v", err)
 	}
-	if ctrl.Control != ControlBreak {
-		t.Fatalf("expected ControlBreak, got %v", ctrl.Control)
+	if ctrl.Control != turnStepFinalize {
+		t.Fatalf("expected turnStepFinalize, got %v", ctrl.Control)
 	}
 	if got, _ := provider.lastOpts["native_search"].(bool); !got {
 		t.Fatalf("expected native_search=true, got %#v", provider.lastOpts["native_search"])
@@ -1368,8 +1368,8 @@ func TestPipeline_CallLLM_HTTP5xxRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected HTTP 500 retry to recover, got error: %v", err)
 	}
-	if ctrl.Control != ControlBreak {
-		t.Fatalf("expected ControlBreak, got %v", ctrl.Control)
+	if ctrl.Control != turnStepFinalize {
+		t.Fatalf("expected turnStepFinalize, got %v", ctrl.Control)
 	}
 	if ctrl.FinalContent != "Recovered from server error" {
 		t.Fatalf("finalContent = %q, want recovered response", ctrl.FinalContent)
@@ -1546,8 +1546,8 @@ func TestPipeline_CallLLM_StickyAutoFallbackAcrossTurns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallLLM(first) failed: %v", err)
 	}
-	if ctrl.Control != ControlBreak {
-		t.Fatalf("CallLLM(first) control = %v, want %v", ctrl.Control, ControlBreak)
+	if ctrl.Control != turnStepFinalize {
+		t.Fatalf("CallLLM(first) control = %v, want %v", ctrl.Control, turnStepFinalize)
 	}
 
 	secondTS := newTurnState(
@@ -1572,8 +1572,8 @@ func TestPipeline_CallLLM_StickyAutoFallbackAcrossTurns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CallLLM(second) failed: %v", err)
 	}
-	if ctrl.Control != ControlBreak {
-		t.Fatalf("CallLLM(second) control = %v, want %v", ctrl.Control, ControlBreak)
+	if ctrl.Control != turnStepFinalize {
+		t.Fatalf("CallLLM(second) control = %v, want %v", ctrl.Control, turnStepFinalize)
 	}
 
 	provider.mu.Lock()
@@ -1809,7 +1809,7 @@ func (p *countingErrorProvider) GetDefaultModel() string {
 
 func TestPipeline_ExecuteTools_NoTools(t *testing.T) {
 	// Provider returns no tool calls, so ExecuteTools should not be called
-	// This test verifies the ControlBreak path from CallLLM
+	// This test verifies the turnStepFinalize path from CallLLM
 	provider := &simpleConvProvider{}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
@@ -1825,14 +1825,14 @@ func TestPipeline_ExecuteTools_NoTools(t *testing.T) {
 		t.Fatalf("SetupTurn failed: %v", err)
 	}
 
-	// First CallLLM returns ControlBreak (no tools)
+	// First CallLLM returns turnStepFinalize (no tools)
 	ctrl, err := pipeline.CallLLM(context.Background(), context.Background(), ts, exec, newLLMIterationState(1))
 	if err != nil {
 		t.Fatalf("CallLLM failed: %v", err)
 	}
 
-	if ctrl.Control != ControlBreak {
-		t.Fatalf("expected ControlBreak, got %v", ctrl.Control)
+	if ctrl.Control != turnStepFinalize {
+		t.Fatalf("expected turnStepFinalize, got %v", ctrl.Control)
 	}
 	// No tools to execute, Finalize should be called directly
 }
@@ -2031,8 +2031,8 @@ func TestCallLLMMintClawToolInterimRequiresDurableIntent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if outcome.Control != ControlToolLoop {
-				t.Fatalf("CallLLM() control = %v, want %v", outcome.Control, ControlToolLoop)
+			if outcome.Control != turnStepExecuteTools {
+				t.Fatalf("CallLLM() control = %v, want %v", outcome.Control, turnStepExecuteTools)
 			}
 			if recorder.toolCallInterims != tc.want {
 				t.Fatalf("tool-call interims = %d, want %d", recorder.toolCallInterims, tc.want)

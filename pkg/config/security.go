@@ -52,25 +52,38 @@ func loadSecurityConfigForChannels(
 		}
 		return fmt.Errorf("failed to read security config: %w", err)
 	}
+	return mergeSecurityConfig(cfg, data, securityPath, allowedChannels)
+}
+
+func mergeSecurityConfig(
+	cfg *Config,
+	data []byte,
+	label string,
+	allowedChannels map[string]struct{},
+) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
 
 	// Parse YAML into a yaml.Node tree so channels can be validated and merged
 	// separately from the other security fields.
 	var rootNode yaml.Node
-	if err = yaml.Unmarshal(data, &rootNode); err != nil {
+	if err := yaml.Unmarshal(data, &rootNode); err != nil {
 		return fmt.Errorf("failed to parse security config: %w", err)
 	}
 
 	channelsNode := channelSecuritySettingsNode(&rootNode)
 	if allowedChannels != nil {
 		retainChannelSecuritySettings(channelsNode, allowedChannels)
-		data, err = yaml.Marshal(&rootNode)
+		filteredData, err := yaml.Marshal(&rootNode)
 		if err != nil {
 			return fmt.Errorf("failed to filter channel security config: %w", err)
 		}
+		data = filteredData
 	}
 
 	if channelsNode != nil {
-		if err := validateChannelSecuritySettings(channelsNode, cfg, securityPath); err != nil {
+		if err := validateChannelSecuritySettings(channelsNode, cfg, label); err != nil {
 			return err
 		}
 	}
@@ -80,7 +93,7 @@ func loadSecurityConfigForChannels(
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(cfg); err != nil {
-		return fmt.Errorf("failed to parse security config %s: %w", securityPath, err)
+		return fmt.Errorf("failed to parse security config %s: %w", label, err)
 	}
 	return nil
 }

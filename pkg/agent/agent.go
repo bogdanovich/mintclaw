@@ -523,7 +523,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 		ctx,
 		runtimeevents.NewTraceScope(turnScope.workspace, turnScope.turnID),
 		agent,
-		input.runtimeOptions(),
+		input,
 		result,
 	)
 

@@ -31,14 +31,21 @@ type semanticRegistryTool struct {
 
 type futureTrustedNodeTool struct {
 	mockRegistryTool
+	bypassTargets map[string]struct{}
 }
 
 func (tool *futureTrustedNodeTool) approvalBypassOwner() toolshared.Tool { return tool }
+
+func (tool *futureTrustedNodeTool) approvalBypassesTarget(target string) bool {
+	_, allowed := tool.bypassTargets[target]
+	return allowed
+}
 
 func TestToolRegistryRecognizesFutureTrustedNodeCapability(t *testing.T) {
 	registry := NewToolRegistry()
 	registry.Register(&futureTrustedNodeTool{
 		mockRegistryTool: mockRegistryTool{name: "nodes_future_operation"},
+		bypassTargets:    map[string]struct{}{"vpn": {}},
 	})
 
 	target, execution, trusted := registry.TrustedNodeApprovalBypassTarget(
@@ -69,7 +76,7 @@ func TestTrustedToolExecutionUsesValidatedInstanceAfterReplacement(t *testing.T)
 			"additionalProperties": false,
 		},
 		result: toolshared.SilentResult("trusted result"),
-	}}
+	}, bypassTargets: map[string]struct{}{"vpn": {}}}
 	registry.Register(trustedTool)
 	args := map[string]any{"target": "vpn"}
 	_, execution, trusted := registry.TrustedNodeApprovalBypassTarget(trustedTool.Name(), args)

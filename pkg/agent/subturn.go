@@ -395,32 +395,28 @@ func spawnSubTurn(
 	// parent's goroutine to be blocked waiting for a semaphore slot while child turns are
 	// blocked delivering results — a deadlock.
 	var semAcquired bool
-	if parentTS.concurrencySem != nil {
+	active, limit, capacityEnabled := parentTS.subTurnCapacitySnapshot()
+	if capacityEnabled {
 		waitStarted := time.Now()
-		active := len(parentTS.concurrencySem)
-		limit := cap(parentTS.concurrencySem)
 		emitParentAdmission := func(state string) {
 			al.emitSubTurnAdmission(
 				parentTS, childID, "", "parent_capacity", state,
 				active, limit, waitStarted, rtCfg.concurrencyTimeout,
 			)
 		}
-		select {
-		case parentTS.concurrencySem <- struct{}{}:
+		if parentTS.tryAcquireSubTurnSlot() {
 			semAcquired = true
-		default:
+		} else {
 			emitParentAdmission("queued")
 			go al.turns.currentRunner().toolFeedback.publishSubTurnAdmissionWait(
 				admissionCtx, parentTS, "parent subturn capacity", rtCfg.concurrencyTimeout,
 			)
-			select {
-			case parentTS.concurrencySem <- struct{}{}:
+			if parentTS.waitForSubTurnSlot(admissionCtx) {
 				semAcquired = true
-			case <-admissionCtx.Done():
 			}
 		}
 		if semAcquired && admissionCtx.Err() != nil {
-			<-parentTS.concurrencySem
+			parentTS.releaseSubTurnSlot()
 			semAcquired = false
 		}
 		if !semAcquired {
@@ -442,7 +438,7 @@ func spawnSubTurn(
 		emitParentAdmission("admitted")
 		defer func() {
 			if semAcquired {
-				<-parentTS.concurrencySem
+				parentTS.releaseSubTurnSlot()
 			}
 		}()
 	}
@@ -643,13 +639,11 @@ func spawnSubTurn(
 	childTS := newTurnStateFromInput(&agent, input, nil, scope)
 
 	// Set SubTurn-specific fields
-	childTS.cancelFunc = cancel
 	childTS.critical = cfg.Critical
 	childTS.depth = parentTS.depth + 1
 	childTS.parentTurnID = parentTS.turnID
 	childTS.parentTurnState = parentTS
-	childTS.pendingResults = make(chan *toolshared.ToolResult, 16)
-	childTS.concurrencySem = make(chan struct{}, rtCfg.maxConcurrent)
+	childTS.configureSubTurnConcurrency(rtCfg.maxConcurrent)
 	childTS.al = al // back-ref for hard abort cascade
 	childTS.session = agent.Sessions
 
@@ -677,9 +671,7 @@ func spawnSubTurn(
 	defer al.turns.activeTurnStates.Delete(childScope)
 
 	// 5. Establish parent-child relationship (thread-safe)
-	parentTS.mu.Lock()
-	parentTS.childTurnIDs = append(parentTS.childTurnIDs, childID)
-	parentTS.mu.Unlock()
+	parentTS.addChildTurn(childID)
 
 	// 6. Emit Spawn event
 	al.emitEvent(runtimeevents.KindAgentSubTurnSpawn,
@@ -757,7 +749,7 @@ func spawnSubTurn(
 	// - The parent goroutine is blocked waiting for a semaphore slot
 	// - The parent cannot consume pendingResults because it is blocked on the semaphore
 	if semAcquired {
-		<-parentTS.concurrencySem
+		parentTS.releaseSubTurnSlot()
 		semAcquired = false // prevent the defer from double-releasing
 	}
 

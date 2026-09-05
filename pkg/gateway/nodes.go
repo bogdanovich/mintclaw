@@ -463,7 +463,7 @@ func (runtime *nodeAdmissionRuntime) configureTerminalOperator(
 	hub := newNodeTerminalOperatorHub(token, allowOrigins)
 	if cfg != nil && source != nil {
 		boundSource := &nodeTerminalHubSource{nodeTerminalSource: source, hub: hub}
-		opener := tools.NewNodeTerminalOperator(cfg, boundSource)
+		opener := tools.NewNodeTerminalOperator(tools.NewNodeToolOptions(cfg), boundSource)
 		hub.configureOpener(opener, cfg.WorkspacePath())
 	}
 	if wasMounted {

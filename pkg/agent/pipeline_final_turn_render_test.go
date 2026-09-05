@@ -11,10 +11,10 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-func TestPipelineShouldFinalizeAfterToolLoopUsesConfig(t *testing.T) {
+func TestPipelineShouldFinalizeAfterToolLoopUsesPolicySnapshot(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.FinalTurnRenderMode = "llm"
-	pipeline := &Pipeline{Cfg: cfg}
+	pipeline := &Pipeline{Cfg: cfg, turnPolicy: newPipelineTurnPolicy(cfg)}
 	exec := &turnExecution{
 		sawSteering: true,
 	}
@@ -50,7 +50,7 @@ func TestFinalTurnRenderCarriesProtectedDiagnostics(t *testing.T) {
 		{Role: "tool", ToolCallID: "diagnostics-call", Content: canary},
 	}
 
-	got, rendered := tryRenderFinalTurnReply(t.Context(), cfg, ts, exec, terminalContent{})
+	got, rendered := tryRenderFinalTurnReply(t.Context(), true, ts, exec, terminalContent{})
 	if !rendered || got.content != "rendered diagnostics "+canary || !got.protected {
 		t.Fatalf("protected final render = (%#v, %v)", got, rendered)
 	}
@@ -120,7 +120,7 @@ func TestCodingFinalTurnRenderRefreshesWorkspaceSnapshot(t *testing.T) {
 	writeCodingWorkspaceTestFile(t, filepath.Join(project, "final.txt"), "external final-render change\n")
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.FinalTurnRenderMode = "llm"
-	result, rendered := tryRenderFinalTurnReply(t.Context(), cfg, ts, execState, terminalContent{})
+	result, rendered := tryRenderFinalTurnReply(t.Context(), true, ts, execState, terminalContent{})
 	if !rendered || result.content != "captured response" {
 		t.Fatalf("final render = (%#v, %v)", result, rendered)
 	}

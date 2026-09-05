@@ -23,19 +23,19 @@ func TestBindNodeFileMediaOwnerUsesExactActorAndRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := tools.NewToolRegistry()
-	registry.Register(tools.NewNodeUploadTool(nil, nil))
+	registry.Register(tools.NewNodeUploadTool(tools.NewNodeToolOptions(nil), nil))
 	ts := &turnState{
 		agent:     &AgentInstance{ID: "main", Tools: registry},
 		workspace: "/workspace/main",
 		channel:   "telegram",
 		chatID:    "chat-1",
-		opts: turnSpec{Dispatch: DispatchRequest{
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
 			RouteSessionKey: "telegram:chat-1:topic-1",
 			SessionKey:      "session-1",
 			InboundContext: &bus.InboundContext{
 				Channel: "telegram", ChatID: "chat-1", TopicID: "topic-1", ActorID: "actor-a",
 			},
-		}},
+		}}),
 	}
 	if bindErr := bindNodeFileMediaOwner(store, ts, []string{ref}); bindErr != nil {
 		t.Fatal(bindErr)
@@ -72,13 +72,13 @@ func TestBindNodeFileMediaOwnerDoesNothingWithoutUploadAuthority(t *testing.T) {
 		workspace: "/workspace/main",
 		channel:   "telegram",
 		chatID:    "chat-1",
-		opts: turnSpec{Dispatch: DispatchRequest{
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
 			RouteSessionKey: "telegram:chat-1",
 			SessionKey:      "session-1",
 			InboundContext: &bus.InboundContext{
 				Channel: "telegram", ChatID: "chat-1", ActorID: "actor-a",
 			},
-		}},
+		}}),
 	}
 	if bindErr := bindNodeFileMediaOwner(store, ts, []string{ref}); bindErr != nil {
 		t.Fatal(bindErr)
@@ -105,7 +105,7 @@ func TestProjectNodeFileMediaAttachmentsExposesOpaqueRefWithoutGatewayPath(t *te
 		t.Fatal(err)
 	}
 	registry := tools.NewToolRegistry()
-	registry.Register(tools.NewNodeUploadTool(nil, nil))
+	registry.Register(tools.NewNodeUploadTool(tools.NewNodeToolOptions(nil), nil))
 	ts := &turnState{agent: &AgentInstance{ID: "main", Tools: registry}}
 	messages := projectNodeFileMediaAttachments(
 		[]providers.Message{{Role: "user", Content: "upload this", Media: []string{ref}}},

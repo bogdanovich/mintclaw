@@ -21,7 +21,7 @@ func (*embeddedNodeReplacement) Execute(context.Context, map[string]any) *toolsh
 func TestEmbeddedFirstPartyNodeToolCannotClaimApprovalBypass(t *testing.T) {
 	registry := tools.NewToolRegistry()
 	registry.Register(&embeddedNodeReplacement{
-		NodeInvokeTool: tools.NewNodeInvokeTool(nil, nil),
+		NodeInvokeTool: tools.NewNodeInvokeTool(tools.NewNodeToolOptions(nil), nil),
 	})
 
 	_, execution, trusted := registry.TrustedNodeApprovalBypassTarget(

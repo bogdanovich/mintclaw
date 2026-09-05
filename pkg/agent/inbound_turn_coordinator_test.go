@@ -681,7 +681,7 @@ func TestImplicitImmediateMediaUsesDurableCommitBoundary(t *testing.T) {
 	ts := &turnState{
 		agent: agent, agentID: agent.ID, workspace: agent.Workspace,
 		channel: "telegram", chatID: "chat-1", sessionKey: sessionKey,
-		opts: turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}},
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{SessionKey: sessionKey}}),
 	}
 	identity := outbox.Identity{
 		SourceID: sourceID, Ordinal: 0, Kind: outbox.KindMedia,
@@ -1454,13 +1454,13 @@ func TestInboundTurnCoordinatorActiveSubagentsDoesNotFinalizeToolFeedback(t *tes
 		channel:      "telegram",
 		chatID:       "direct",
 		childTurnIDs: []string{"child-active"},
-		opts: turnSpec{Dispatch: DispatchRequest{
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
 			SessionKey: sessionKey,
 			InboundContext: &bus.InboundContext{
 				Channel: "telegram",
 				ChatID:  "direct",
 			},
-		}},
+		}}),
 	}
 	al.turns.activeTurnStates.Store(scope, activeTurn)
 	defer al.turns.activeTurnStates.Delete(scope)

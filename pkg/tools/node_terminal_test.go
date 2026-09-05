@@ -158,7 +158,7 @@ func (source *fakeNodeTerminalSource) BindTerminalOperator(
 
 func TestNodeTerminalToolDiscoversOnlySafeOwnerAliases(t *testing.T) {
 	source := newFakeNodeTerminalSource(t)
-	tool := NewNodeTerminalTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeTerminalTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	parameters, err := json.Marshal(tool.Parameters())
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +193,7 @@ func TestNodeTerminalToolDiscoversOnlySafeOwnerAliases(t *testing.T) {
 
 func TestNodeTerminalToolBindsApprovalAndAuthenticatedOperatorSession(t *testing.T) {
 	source := newFakeNodeTerminalSource(t)
-	tool := NewNodeTerminalTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeTerminalTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeTerminalTestContext("actor-1", "call-open")
 	args := nodeTerminalOpenArgs(t, tool, ctx)
 	approval, err := tool.ApprovalArguments(ctx, args)
@@ -231,7 +231,7 @@ func TestNodeTerminalToolBindsApprovalAndAuthenticatedOperatorSession(t *testing
 	}
 
 	bypassSource := newFakeNodeTerminalSource(t)
-	bypassTool := NewNodeTerminalTool(nodeDiscoveryTestConfig(), bypassSource)
+	bypassTool := NewNodeTerminalTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), bypassSource)
 	bypassCtx := nodeTerminalTestContext("actor-1", "call-open-bypass")
 	bypassArgs := nodeTerminalOpenArgs(t, bypassTool, bypassCtx)
 	bypassed := decodeNodeResult(
@@ -252,7 +252,7 @@ func TestNodeTerminalToolBindsApprovalAndAuthenticatedOperatorSession(t *testing
 
 func TestNodeTerminalOperatorOpensWithSharedAuthorityChecks(t *testing.T) {
 	source := newFakeNodeTerminalSource(t)
-	operator := NewNodeTerminalOperator(nodeDiscoveryTestConfig(), source)
+	operator := NewNodeTerminalOperator(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	owner := nodes.TerminalOwner{
 		ActorID: "operator_test", AgentID: "agent_test", RouteID: "route_test",
 		SessionID: "session_test", WorkspaceID: "workspace_test",
@@ -276,7 +276,7 @@ func TestNodeTerminalOperatorOpensWithSharedAuthorityChecks(t *testing.T) {
 
 func TestNodeTerminalOperatorReplaysLostOpenResponse(t *testing.T) {
 	source := newFakeNodeTerminalSource(t)
-	operator := NewNodeTerminalOperator(nodeDiscoveryTestConfig(), source)
+	operator := NewNodeTerminalOperator(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	owner := nodes.TerminalOwner{
 		ActorID: "operator_test", AgentID: "agent_test", RouteID: "route_test",
 		SessionID: "session_test", WorkspaceID: "workspace_test",
@@ -319,7 +319,7 @@ func TestNodeTerminalOperatorDeniesInvisibleTargetAndProfile(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source := newFakeNodeTerminalSource(t)
-			operator := NewNodeTerminalOperator(nodeDiscoveryTestConfig(), source)
+			operator := NewNodeTerminalOperator(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 			owner := nodes.TerminalOwner{
 				ActorID: "operator_test", AgentID: "agent_test", RouteID: "route_test",
 				SessionID: "session_test", WorkspaceID: "workspace_test",
@@ -339,7 +339,7 @@ func TestNodeTerminalOperatorDeniesInvisibleTargetAndProfile(t *testing.T) {
 
 func TestNodeTerminalToolDeniesDifferentOwnerAndNonOperatorRoute(t *testing.T) {
 	source := newFakeNodeTerminalSource(t)
-	tool := NewNodeTerminalTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeTerminalTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	ctx := nodeTerminalTestContext("actor-1", "call-open")
 	args := nodeTerminalOpenArgs(t, tool, ctx)
 	if _, err := tool.ApprovalArguments(ctx, args); err != nil {
@@ -418,7 +418,7 @@ func TestNodeTerminalToolDeniesDifferentOwnerAndNonOperatorRoute(t *testing.T) {
 
 func TestNodeTerminalEventsAreRedacted(t *testing.T) {
 	source := newFakeNodeTerminalSource(t)
-	tool := NewNodeTerminalTool(nodeDiscoveryTestConfig(), source)
+	tool := NewNodeTerminalTool(NewNodeToolOptions(nodeDiscoveryTestConfig()), source)
 	eventBus := &recordingNodeEventBus{}
 	tool.SetEventPublisher(eventBus)
 	ctx := nodeTerminalTestContext("actor-1", "call-events")

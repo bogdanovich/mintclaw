@@ -108,7 +108,7 @@ func TestGenericNodeInvokeCannotBypassRemoteWorkspaceAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := NewNodeInvokeTool(cfg, source).Execute(ctx, args)
+	result := NewNodeInvokeTool(NewNodeToolOptions(cfg), source).Execute(ctx, args)
 	if !result.IsError || source.dispatchCalls != 0 {
 		t.Fatalf("generic workspace invocation = %#v; dispatch calls = %d", result, source.dispatchCalls)
 	}
