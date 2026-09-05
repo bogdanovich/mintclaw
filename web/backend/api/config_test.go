@@ -550,6 +550,58 @@ func TestHandlePatchConfig_RejectsNonCurrentSchemaWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestHandlePatchConfigConsumesLegacyModelConnectMode(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		encoded string
+	}{
+		{name: "empty", encoded: `""`},
+		{name: "grpc", encoded: `"grpc"`},
+		{name: "null", encoded: `null`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configPath, cleanup := setupOAuthTestEnv(t)
+			defer cleanup()
+			handler := NewHandler(configPath)
+			mux := http.NewServeMux()
+			handler.RegisterRoutes(mux)
+			body := fmt.Sprintf(`{"model_list":[{
+				"model_name":"copilot","provider":"github-copilot","model":"gpt-5",
+				"connect_mode":%s,"enabled":false
+			}]}`, test.encoded)
+			req := httptest.NewRequest(http.MethodPatch, "/api/config", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("PATCH /api/config status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body)
+			}
+			stored, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(stored), "connect_mode") {
+				t.Fatalf("legacy connect_mode survived PATCH: %s", stored)
+			}
+		})
+	}
+}
+
+func TestHandlePatchConfigRejectsUnsupportedLegacyModelConnectMode(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+	assertRejectedConfigWritePreservesDocuments(
+		t,
+		configPath,
+		http.MethodPatch,
+		[]byte(`{"model_list":[{
+			"model_name":"copilot","provider":"github-copilot","model":"gpt-5",
+			"connect_mode":"stdio","enabled":false
+		}]}`),
+		"model_list[0].connect_mode \"stdio\" is no longer supported",
+	)
+}
+
 func assertRejectedConfigWritePreservesDocuments(
 	t *testing.T,
 	configPath string,
