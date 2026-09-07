@@ -252,6 +252,7 @@ func ToolInboundContext(ctx context.Context) bus.InboundContext {
 }
 
 func cloneToolInboundContext(inbound bus.InboundContext) bus.InboundContext {
+	inbound.MediaGroup.MessageIDs = append([]string(nil), inbound.MediaGroup.MessageIDs...)
 	inbound.ReplyHandles = cloneToolStringMap(inbound.ReplyHandles)
 	inbound.Raw = cloneToolStringMap(inbound.Raw)
 	return inbound

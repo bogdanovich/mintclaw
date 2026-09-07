@@ -4566,9 +4566,11 @@ func TestHandleMessage_MediaGroupCombinesCaptionMessages(t *testing.T) {
 	case inbound := <-messageBus.InboundChan():
 		assert.Equal(t, "2", inbound.Context.MessageID)
 		assert.Equal(t, "meal caption", inbound.Content)
-		assert.Equal(t, "album-1", inbound.Context.Raw["media_group_id"])
-		assert.Equal(t, "2", inbound.Context.Raw["media_group_count"])
-		assert.Equal(t, "1,2", inbound.Context.Raw["media_group_message_ids"])
+		assert.Equal(t, "album-1", inbound.Context.MediaGroup.ID)
+		assert.Equal(t, []string{"1", "2"}, inbound.Context.MediaGroup.MessageIDs)
+		assert.NotContains(t, inbound.Context.Raw, "media_group_id")
+		assert.NotContains(t, inbound.Context.Raw, "media_group_count")
+		assert.NotContains(t, inbound.Context.Raw, "media_group_message_ids")
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for combined media group message")
 	}
@@ -4597,9 +4599,8 @@ func TestHandleMessage_SuppressedMediaGroupPreservesProvenance(t *testing.T) {
 		t.Fatalf("expected grouped album to be observed, got inbound: %#v", inbound)
 	case observed := <-messageBus.ObservedChan():
 		assert.Equal(t, "@someone album caption\nsecond", observed.Content)
-		assert.Equal(t, "album-suppressed", observed.Context.Raw["media_group_id"])
-		assert.Equal(t, "2", observed.Context.Raw["media_group_count"])
-		assert.Equal(t, "1,2", observed.Context.Raw["media_group_message_ids"])
+		assert.Equal(t, "album-suppressed", observed.Context.MediaGroup.ID)
+		assert.Equal(t, []string{"1", "2"}, observed.Context.MediaGroup.MessageIDs)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for suppressed media group observation")
 	}

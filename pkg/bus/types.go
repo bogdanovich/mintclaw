@@ -37,6 +37,13 @@ func (r InboundMessageRelation) IsZero() bool {
 	return r.Kind == ""
 }
 
+// InboundMediaGroup preserves platform-native album membership after an
+// adapter has normalized several media items into one inbound message.
+type InboundMediaGroup struct {
+	ID         string   `json:"id,omitempty"`
+	MessageIDs []string `json:"message_ids,omitempty"`
+}
+
 // InboundContext captures the normalized, platform-agnostic facts about an
 // inbound message. This is the source of truth for routing and session
 // allocation.
@@ -65,6 +72,7 @@ type InboundContext struct {
 	ReplyToSenderID  string                 `json:"reply_to_sender_id,omitempty"`
 	ReceivedAt       time.Time              `json:"received_at,omitzero"`
 	Relation         InboundMessageRelation `json:"relation,omitzero"`
+	MediaGroup       InboundMediaGroup      `json:"media_group,omitzero"`
 
 	ReplyHandles map[string]string `json:"reply_handles,omitempty"`
 	Raw          map[string]string `json:"raw,omitempty"`

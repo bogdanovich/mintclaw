@@ -2,8 +2,9 @@
 
 Status: implemented for the core event/relation path. Typed event time and
 relation facts survive durable ingress and replay, and prompt assembly consumes
-them without reclassification. Platform-native grouping remains F3 of the
-[Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
+them without reclassification. Telegram album identity and member message IDs
+also use a typed durable contract; stable interaction projections remain F3 of
+the [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
 
 MintClaw preserves normalized inbound messages and their structural relation
 facts through the durable ingress spool. Relation classification happens after
@@ -272,10 +273,13 @@ Status: implemented by follow-up packet F2.
 
 ### PR 4: normalize platform-native grouping
 
-Status: admitted as follow-up packet F3.
+Status: partially implemented by the Telegram media-group slice of follow-up
+packet F3.
 
-- lift Telegram album/photo-burst semantics into explicit relation metadata
-- avoid adapter-local hidden merge behavior where a relation record is better
+- Telegram album/photo-burst aggregates carry typed native group identity and
+  member message IDs through durable ingress and replay
+- the adapter still emits one normalized aggregate per album; changing that
+  user-visible behavior is not part of the admitted typed-boundary cleanup
 
 ### PR 5: add policy controls
 

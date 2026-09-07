@@ -68,6 +68,10 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 			MessageID:        "1712.01",
 			ReplyToMessageID: "1700.01",
 			Mentioned:        true,
+			MediaGroup: InboundMediaGroup{
+				ID:         " album-1 ",
+				MessageIDs: []string{" 1 ", "2"},
+			},
 		},
 		Content: "hello",
 	}
@@ -75,6 +79,7 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 	if err := mb.PublishInbound(context.Background(), msg); err != nil {
 		t.Fatalf("PublishInbound failed: %v", err)
 	}
+	msg.Context.MediaGroup.MessageIDs[0] = "mutated"
 
 	got := <-mb.InboundChan()
 	if got.Context.Channel != "slack" {
@@ -97,6 +102,10 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 	}
 	if got.Context.ReplyToMessageID != "1700.01" {
 		t.Fatalf("expected reply_to_message_id 1700.01, got %q", got.Context.ReplyToMessageID)
+	}
+	if got.Context.MediaGroup.ID != "album-1" ||
+		!slices.Equal(got.Context.MediaGroup.MessageIDs, []string{"1", "2"}) {
+		t.Fatalf("expected normalized media group, got %#v", got.Context.MediaGroup)
 	}
 	if got.Context.ActorID != "U123" {
 		t.Fatalf("expected actor_id to default to sender U123, got %q", got.Context.ActorID)
@@ -224,6 +233,10 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 				Kind:      InboundRelationAdjacentFollowupMedia,
 				MediaOnly: true,
 			},
+			MediaGroup: InboundMediaGroup{
+				ID:         "album-1",
+				MessageIDs: []string{"message-1", "message-2"},
+			},
 		},
 		Content:    "before restart",
 		SessionKey: "agent:main:slack:chat:topic-a",
@@ -271,6 +284,10 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 	}
 	if got.Context.Relation.Kind != InboundRelationAdjacentFollowupMedia || !got.Context.Relation.MediaOnly {
 		t.Fatalf("relation = %#v, want durable adjacent media relation", got.Context.Relation)
+	}
+	if got.Context.MediaGroup.ID != "album-1" ||
+		!slices.Equal(got.Context.MediaGroup.MessageIDs, []string{"message-1", "message-2"}) {
+		t.Fatalf("media group = %#v, want durable album membership", got.Context.MediaGroup)
 	}
 	if err := second.AckInbound(context.Background(), got); err != nil {
 		t.Fatalf("AckInbound failed: %v", err)
@@ -349,6 +366,9 @@ func TestPendingLegacySpoolRecordHydratesMessageReceivedAt(t *testing.T) {
 	}
 	if len(pending) != 1 || !pending[0].Context.ReceivedAt.Equal(receivedAt) {
 		t.Fatalf("pending received_at = %#v, want %v", pending, receivedAt)
+	}
+	if pending[0].Context.MediaGroup.ID != "" || len(pending[0].Context.MediaGroup.MessageIDs) != 0 {
+		t.Fatalf("legacy media group = %#v, want zero value", pending[0].Context.MediaGroup)
 	}
 }
 

@@ -65,6 +65,11 @@ func normalizeInboundContext(ctx InboundContext) InboundContext {
 		ctx.ReceivedAt = ctx.ReceivedAt.UTC()
 	}
 	ctx.Relation.Kind = InboundRelationKind(normalizeKind(string(ctx.Relation.Kind)))
+	ctx.MediaGroup.ID = strings.TrimSpace(ctx.MediaGroup.ID)
+	ctx.MediaGroup.MessageIDs = append([]string(nil), ctx.MediaGroup.MessageIDs...)
+	for index := range ctx.MediaGroup.MessageIDs {
+		ctx.MediaGroup.MessageIDs[index] = strings.TrimSpace(ctx.MediaGroup.MessageIDs[index])
+	}
 	ctx.ReplyHandles = cloneStringMap(ctx.ReplyHandles)
 	ctx.Raw = cloneStringMap(ctx.Raw)
 	return ctx

@@ -57,6 +57,8 @@ platforms.
 - Preserve reply / adjacent-followup / media-only interpretation through the
   typed durable inbound relation model; prompt assembly consumes those facts
   without guessing message boundaries from raw history.
+- Preserve platform-native media-group identity and member message IDs as
+  typed durable inbound facts rather than adapter-owned `Raw` keys.
 
 ## 6. Automation And Agent Workflows
 
