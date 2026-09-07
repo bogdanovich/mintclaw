@@ -468,6 +468,34 @@ func TestConfigKeepsCompanionBrowserProfilesDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestConfigAcceptsOneCanonicalManagedBrowserAliasAndRejectsTwo(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	firstRoot := t.TempDir()
+	first := companionBrowserProfileFixture(t, firstRoot)
+	cfg, err := (Config{
+		GatewayURL: "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{
+			"personal": first,
+		},
+	}).Normalize(firstRoot)
+	if err != nil || !cfg.BrowserProfiles["personal"].Enabled {
+		t.Fatalf("canonical alias config = %#v, %v", cfg.BrowserProfiles, err)
+	}
+
+	secondRoot := t.TempDir()
+	second := companionBrowserProfileFixture(t, secondRoot)
+	_, err = (Config{
+		GatewayURL: "wss://gateway.example",
+		BrowserProfiles: map[string]BrowserProfilePolicy{
+			"personal": first,
+			"work":     second,
+		},
+	}).Normalize("")
+	if err == nil || !strings.Contains(err.Error(), "one enabled browser profile") {
+		t.Fatalf("two enabled aliases error = %v", err)
+	}
+}
+
 func TestBrowserProfileRuntimeIdentityFailsClosedAfterConfiguration(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	baseDir := t.TempDir()

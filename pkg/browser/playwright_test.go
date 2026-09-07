@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +53,47 @@ type fakePlaywrightClient struct {
 	closeErr            error
 	closeCalls          int
 	diagnosticInitCalls int
+}
+
+func canonicalPlaywrightConfig(
+	t *testing.T,
+	headed bool,
+) (*config.Config, string, string) {
+	t.Helper()
+	runtimeRoot := t.TempDir()
+	var err error
+	runtimeRoot, err = filepath.EvalSymlinks(runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileDirectory := filepath.Join(runtimeRoot, "personal")
+	if err = os.Mkdir(profileDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockDirectory := filepath.Join(runtimeRoot, "locks")
+	if err = os.Mkdir(lockDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockFile := filepath.Join(lockDirectory, "personal.lock")
+	root := admittedBrowserConfig()
+	server := root.Tools.MCP.Servers["playwright"]
+	server.ExclusiveLockFile = ""
+	root.Tools.MCP.Servers["playwright"] = server
+	target := root.Tools.Browser.Targets["gateway"]
+	delete(target.Profiles, "managed")
+	target.Profiles["personal"] = config.BrowserProfileConfig{
+		Enabled: true, Revision: "personal-v1", Mode: config.BrowserProfileManaged,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Runtime: config.BrowserProfileRuntimeConfig{
+			ProfileDirectory: profileDirectory,
+			LockFile:         lockFile,
+			Headed:           headed,
+		},
+	}
+	root.Tools.Browser.Targets["gateway"] = target
+	return root, profileDirectory, lockFile
 }
 
 func (client *fakePlaywrightClient) Connect(
@@ -1516,6 +1558,101 @@ func TestPlaywrightWorkerFactoryOwnsPrivateClientAndMapsAdmittedCalls(t *testing
 	}
 	if scroll := client.calls[6].arguments; scroll["deltaX"] != 0 || scroll["deltaY"] != 1000 {
 		t.Fatalf("scroll arguments = %+v", scroll)
+	}
+}
+
+func TestPlaywrightProfileFactoryDerivesCanonicalRuntimeIdentity(t *testing.T) {
+	root, profileDirectory, lockFile := canonicalPlaywrightConfig(t, true)
+	profileDirectory, _ = filepath.EvalSymlinks(profileDirectory)
+	lockParent, _ := filepath.EvalSymlinks(filepath.Dir(lockFile))
+	lockFile = filepath.Join(lockParent, filepath.Base(lockFile))
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "personal")
+	if err != nil {
+		t.Fatalf("NewPlaywrightProfileWorkerFactory() error = %v", err)
+	}
+	if factory.target != "gateway" || factory.profileName != "personal" ||
+		factory.serverConfig.ExclusiveLockFile != lockFile {
+		t.Fatalf("canonical factory authority = %#v", factory)
+	}
+	joined := strings.Join(factory.serverConfig.Args, "\x00")
+	if !strings.Contains(joined, "--user-data-dir\x00"+profileDirectory) ||
+		strings.Contains(joined, "--headless") {
+		t.Fatalf("canonical headed driver arguments = %#v", factory.serverConfig.Args)
+	}
+
+	headless, _, _ := canonicalPlaywrightConfig(t, false)
+	headlessFactory, err := NewPlaywrightProfileWorkerFactory(headless, "gateway", "personal")
+	if err != nil || !slices.Contains(headlessFactory.serverConfig.Args, "--headless") {
+		t.Fatalf("canonical headless factory = %#v, %v", headlessFactory, err)
+	}
+}
+
+func TestPlaywrightProfileFactoryRejectsUnsafeCanonicalRuntimeIdentity(t *testing.T) {
+	root, profileDirectory, _ := canonicalPlaywrightConfig(t, true)
+	if err := os.Chmod(profileDirectory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "personal"); err == nil ||
+		!strings.Contains(err.Error(), "not private") {
+		t.Fatalf("permissive profile error = %v", err)
+	}
+
+	root, profileDirectory, _ = canonicalPlaywrightConfig(t, true)
+	link := filepath.Join(t.TempDir(), "profile-link")
+	if err := os.Symlink(profileDirectory, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["personal"]
+	profile.Runtime.ProfileDirectory = link
+	target.Profiles["personal"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	if _, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "personal"); err == nil ||
+		!strings.Contains(err.Error(), "identity is unsafe") {
+		t.Fatalf("symlinked profile error = %v", err)
+	}
+}
+
+func TestPlaywrightProfileFactoryRejectsCanonicalRuntimeAncestorSymlinks(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*config.BrowserProfileRuntimeConfig, string)
+		wantErr string
+	}{
+		{
+			name: "profile directory ancestor",
+			mutate: func(runtime *config.BrowserProfileRuntimeConfig, aliasRoot string) {
+				runtime.ProfileDirectory = filepath.Join(aliasRoot, "personal")
+			},
+			wantErr: "profile directory identity is unsafe",
+		},
+		{
+			name: "lock parent ancestor",
+			mutate: func(runtime *config.BrowserProfileRuntimeConfig, aliasRoot string) {
+				runtime.LockFile = filepath.Join(aliasRoot, "locks", "personal.lock")
+			},
+			wantErr: "lock parent identity is unsafe",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root, profileDirectory, _ := canonicalPlaywrightConfig(t, true)
+			aliasParent := t.TempDir()
+			aliasRoot := filepath.Join(aliasParent, "runtime-link")
+			if err := os.Symlink(filepath.Dir(profileDirectory), aliasRoot); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+			target := root.Tools.Browser.Targets["gateway"]
+			profile := target.Profiles["personal"]
+			test.mutate(&profile.Runtime, aliasRoot)
+			target.Profiles["personal"] = profile
+			root.Tools.Browser.Targets["gateway"] = target
+
+			_, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "personal")
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ancestor symlink error = %v, want %q", err, test.wantErr)
+			}
+		})
 	}
 }
 

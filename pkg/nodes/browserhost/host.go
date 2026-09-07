@@ -175,7 +175,7 @@ func newBrowserHost(
 		if factories[alias] == nil {
 			return nil, fmt.Errorf("browser profile %q requires a worker factory", alias)
 		}
-		clonedProfiles[alias] = cloneBrowserProfilePolicy(profile)
+		clonedProfiles[alias] = opaqueBrowserProfilePolicy(profile)
 	}
 	return &BrowserHost{
 		profiles: clonedProfiles, factories: factories, now: time.Now,
@@ -237,6 +237,19 @@ func cloneBrowserProfilePolicy(
 	profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
 	profile.AllowedActions = append([]string(nil), profile.AllowedActions...)
 	profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
+	return profile
+}
+
+func opaqueBrowserProfilePolicy(
+	profile companion.BrowserProfilePolicy,
+) companion.BrowserProfilePolicy {
+	profile = cloneBrowserProfilePolicy(profile)
+	for index, agentID := range profile.AllowedAgents {
+		profile.AllowedAgents[index] = browserworker.OpaqueAgentID(agentID)
+	}
+	for index, actorID := range profile.AllowedActors {
+		profile.AllowedActors[index] = browserworker.OpaqueActorID(actorID)
+	}
 	return profile
 }
 

@@ -583,6 +583,8 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 	cfg.Tools.Browser.Limits.ActionSeconds = 17
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.AllowedAgents = []string{"browser"}
+	profile.AllowedActors = []string{"telegram:42"}
 	profile.Policy = &browserpolicy.Policy{
 		DefaultDecision: browserpolicy.DecisionAllow,
 		Rules: []browserpolicy.Rule{{
@@ -600,6 +602,8 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 	cfg.Tools.Browser.Agents[0] = "other"
 	cfg.Tools.Browser.DefaultTarget = "other"
 	cfg.Tools.Browser.Limits.ActionSeconds = 29
+	profile.AllowedAgents[0] = "other"
+	profile.AllowedActors[0] = "telegram:99"
 	profile.AllowedOrigins[0] = "https://changed.example"
 	profile.Policy.Rules[0].Match.Actions[0] = string(browser.ActionClick)
 	target.Profiles[config.BrowserDefaultProfile] = profile
@@ -613,7 +617,8 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 		t.Fatalf("browser tool options observed mutated scalar policy: %#v", options.config)
 	}
 	snapshotProfile := options.config.Targets[config.BrowserDefaultTarget].Profiles[config.BrowserDefaultProfile]
-	if snapshotProfile.AllowedOrigins[0] != "https://example.com" ||
+	if snapshotProfile.AllowedAgents[0] != "browser" || snapshotProfile.AllowedActors[0] != "telegram:42" ||
+		snapshotProfile.AllowedOrigins[0] != "https://example.com" ||
 		snapshotProfile.Policy.Rules[0].Match.Actions[0] != string(browser.ActionNavigate) {
 		t.Fatalf("browser tool options observed mutated nested policy: %#v", snapshotProfile)
 	}
@@ -621,7 +626,7 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 
 func browserToolTestContext() context.Context {
 	ctx := toolshared.WithToolInboundMetadata(context.Background(), bus.InboundContext{
-		SenderID: "telegram-user-42", ActorID: "person:42",
+		Channel: "telegram", SenderID: "42",
 	})
 	ctx = toolshared.WithToolSessionContext(ctx, "browser", "history-session", nil)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, "telegram:primary:chat:42")
@@ -825,6 +830,8 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	decodeBrowserToolResult(t, tool.Execute(browserToolTestContext(), nil), &result)
 	if result.DefaultTarget != "gateway" || len(result.Targets) != 1 || result.Targets[0].Target != "gateway" ||
 		result.Targets[0].Status != "ready" || len(result.Targets[0].Profiles) != 1 ||
+		result.Targets[0].Profiles[0].Mode != config.BrowserProfileManaged ||
+		result.Targets[0].Profiles[0].Persistence != "retained" ||
 		result.Targets[0].Profiles[0].NetworkMode != config.BrowserNetworkExactOrigins ||
 		result.Targets[0].Profiles[0].CapabilityMode != config.BrowserCapabilityFullAccess ||
 		result.Targets[0].Profiles[0].ApprovalMode != config.BrowserApprovalAlwaysCommit ||
@@ -852,6 +859,81 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 	denied := tool.Execute(other, nil)
 	if denied == nil || !denied.IsError || !strings.Contains(denied.ContentForLLM(), `"code":"not_granted"`) {
 		t.Fatalf("ungranted result = %#v", denied)
+	}
+}
+
+func TestBrowserTargetsFiltersCanonicalProfilesByExactActorAndAgentGrant(t *testing.T) {
+	root := browserToolTestRootConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.Revision = "managed-v1"
+	profile.AllowedAgents = []string{"browser"}
+	profile.AllowedActors = []string{"telegram:42"}
+	profile.Runtime = config.BrowserProfileRuntimeConfig{
+		ProfileDirectory: "/private/browser/managed",
+		LockFile:         "/private/browser/managed.lock",
+		Headed:           true,
+	}
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+
+	source := &fakeBrowserToolSource{available: true}
+	tool := NewBrowserTargetsTool(NewBrowserToolOptions(root.Tools.Browser), source)
+	granted := tool.Execute(browserToolTestContext(), nil)
+	var result browserTargetResult
+	decodeBrowserToolResult(t, granted, &result)
+	if len(result.Targets) != 1 || len(result.Targets[0].Profiles) != 1 ||
+		result.Targets[0].Profiles[0].Profile != "managed" ||
+		result.Targets[0].Profiles[0].Mode != config.BrowserProfileManaged ||
+		result.Targets[0].Profiles[0].Persistence != "retained" {
+		t.Fatalf("granted canonical targets = %#v", result)
+	}
+	for _, forbidden := range []string{
+		"managed-v1", "telegram:42", "/private/browser", "managed.lock",
+	} {
+		if strings.Contains(granted.ContentForLLM(), forbidden) {
+			t.Fatalf("discovery exposed private authority %q: %s", forbidden, granted.ContentForLLM())
+		}
+	}
+
+	otherActor := toolshared.WithToolInboundMetadata(browserToolTestContext(), bus.InboundContext{
+		Channel: "telegram", SenderID: "99",
+	})
+	var hidden browserTargetResult
+	decodeBrowserToolResult(t, tool.Execute(otherActor, nil), &hidden)
+	if hidden.DefaultTarget != "" || len(hidden.Targets) != 0 || source.readinessCalls != 1 {
+		t.Fatalf("ungranted canonical targets = %#v; readiness calls = %d", hidden, source.readinessCalls)
+	}
+
+	sameLocalActorOnDiscord := toolshared.WithToolInboundMetadata(browserToolTestContext(), bus.InboundContext{
+		Channel: "discord", SenderID: "42",
+	})
+	decodeBrowserToolResult(t, tool.Execute(sameLocalActorOnDiscord, nil), &hidden)
+	if hidden.DefaultTarget != "" || len(hidden.Targets) != 0 || source.readinessCalls != 1 {
+		t.Fatalf("cross-channel canonical targets = %#v; readiness calls = %d", hidden, source.readinessCalls)
+	}
+	telegramOwner, err := browserOwnerFromContext(browserToolTestContext())
+	if err != nil {
+		t.Fatalf("telegram browser owner: %v", err)
+	}
+	discordOwner, err := browserOwnerFromContext(sameLocalActorOnDiscord)
+	if err != nil {
+		t.Fatalf("discord browser owner: %v", err)
+	}
+	if telegramOwner.ActorID != browser.OpaqueActorID("telegram:42") ||
+		discordOwner.ActorID != browser.OpaqueActorID("discord:42") ||
+		telegramOwner.ActorID == discordOwner.ActorID {
+		t.Fatalf("channel-qualified owners = %#v, %#v", telegramOwner, discordOwner)
+	}
+	canonicalTelegram := toolshared.WithToolInboundMetadata(browserToolTestContext(), bus.InboundContext{
+		Channel: "telegram", SenderID: "telegram:42",
+	})
+	canonicalOwner, err := browserOwnerFromContext(canonicalTelegram)
+	if err != nil {
+		t.Fatalf("canonical telegram browser owner: %v", err)
+	}
+	if canonicalOwner.ActorID != telegramOwner.ActorID {
+		t.Fatalf("canonical actor was not stable: %#v, %#v", telegramOwner, canonicalOwner)
 	}
 }
 
@@ -1608,7 +1690,7 @@ func TestBrowserSessionUsesOpaqueContextOwnerAndExactOperations(t *testing.T) {
 		t.Fatalf("session result = %#v; request = %#v", result, source.openRequest)
 	}
 	owner := source.openRequest.Owner
-	if owner.Validate() != nil || owner.ActorID == "person:42" ||
+	if owner.Validate() != nil || owner.ActorID == "telegram:42" ||
 		!strings.HasPrefix(owner.ActorID, "actor_") || !strings.HasPrefix(owner.ExecutionID, "execution_") {
 		t.Fatalf("opaque owner = %#v", owner)
 	}

@@ -695,6 +695,78 @@ func TestBrokerDeniesUnadmittedAuthorityBeforeWorkerOpen(t *testing.T) {
 	}
 }
 
+func TestBrokerEnforcesCanonicalProfileActorAndAgentGrantsBeforeWorkerOpen(t *testing.T) {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.Revision = "managed-v1"
+	profile.AllowedAgents = []string{"browser"}
+	profile.AllowedActors = []string{"telegram:owner"}
+	profile.Runtime = config.BrowserProfileRuntimeConfig{
+		ProfileDirectory: "/var/lib/mintclaw/browser/managed",
+		LockFile:         "/var/lib/mintclaw/browser-managed.lock",
+	}
+	target.Profiles["managed"] = profile
+	root.Tools.Browser.Targets["gateway"] = target
+	server := root.Tools.MCP.Servers["playwright"]
+	server.ExclusiveLockFile = ""
+	root.Tools.MCP.Servers["playwright"] = server
+
+	tests := []struct {
+		name  string
+		owner Owner
+		allow bool
+	}{
+		{
+			name: "exact grant",
+			owner: Owner{
+				ActorID: OpaqueActorID("telegram:owner"), AgentID: OpaqueAgentID("browser"),
+				SessionKey: "session_1", ExecutionID: "execution_1",
+			},
+			allow: true,
+		},
+		{
+			name: "different actor",
+			owner: Owner{
+				ActorID: OpaqueActorID("telegram:other"), AgentID: OpaqueAgentID("browser"),
+				SessionKey: "session_1", ExecutionID: "execution_1",
+			},
+		},
+		{
+			name: "different agent",
+			owner: Owner{
+				ActorID: OpaqueActorID("telegram:owner"), AgentID: OpaqueAgentID("marketplace"),
+				SessionKey: "session_1", ExecutionID: "execution_1",
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			factory := &fakeWorkerFactory{}
+			broker := newTestBroker(t, root, NewMemoryStore(), factory)
+			_, err := broker.Open(t.Context(), OpenRequest{
+				Owner: test.owner, Target: "gateway", Profile: "managed",
+			})
+			if test.allow && err != nil {
+				t.Fatalf("Open() exact grant error = %v", err)
+			}
+			if !test.allow && !errors.Is(err, ErrDenied) {
+				t.Fatalf("Open() ungranted error = %v, want ErrDenied", err)
+			}
+			if got := len(factory.requests); got != boolInt(test.allow) {
+				t.Fatalf("worker open requests = %d, allow = %t", got, test.allow)
+			}
+		})
+	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func TestBrokerRejectsSecondProfileSessionBeforeWorkerOpen(t *testing.T) {
 	store := NewMemoryStore()
 	factory := &fakeWorkerFactory{}

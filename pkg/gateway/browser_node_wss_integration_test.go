@@ -27,11 +27,113 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
+	"github.com/bogdanovich/mintclaw/pkg/nodes/browserhost"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 	"github.com/bogdanovich/mintclaw/pkg/nodes/protocol"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
+
+func TestCompanionBrowserHostAcceptsOpaqueGatewayPrincipalsOverProductionWSS(t *testing.T) {
+	workspace := t.TempDir()
+	registry, admission, runtimeState := newVerticalSliceNodeRuntime(t, workspace)
+	server := httptest.NewTLSServer(admission)
+	defer server.Close()
+	defer closeVerticalSliceAdmission(t, admission)
+
+	profileDescriptor := wssBrowserProfile()
+	profile := companion.BrowserProfilePolicy{
+		Enabled: true, Revision: profileDescriptor.Revision,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+		Driver: nodes.BrowserDriverPlaywrightMCP, Mode: nodes.BrowserProfileManaged,
+		NetworkMode: profileDescriptor.NetworkMode, CapabilityMode: profileDescriptor.CapabilityMode,
+		ApprovalMode: profileDescriptor.ApprovalMode, AllowApprovedActions: true,
+		AllowedActions: []string{"navigate"}, Limits: profileDescriptor.Limits,
+	}
+	worker := &wssRealBrowserHostWorker{}
+	workerFactory := &wssRealBrowserHostFactory{worker: worker}
+	host, err := browserhost.NewBrowserHostForIntegration(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browser.WorkerFactory{"managed": workerFactory},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := companion.LoadOrCreateIdentity(filepath.Join(t.TempDir(), "identity"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := browserRuntimeCommands()
+	policy := nodes.LocalCommandPolicy{
+		Revision: "browser-host-principal-policy", AllowedCommands: commands,
+		MaximumRisk: nodes.RiskWrite, MaxTimeoutSeconds: nodes.MaxBrowserActionSeconds,
+		MaxOutputBytes: nodes.MaxBrowserToolResultBytes,
+	}
+	ledger, err := companion.NewFileInvocationLedger(
+		companion.InvocationLedgerPath(filepath.Join(t.TempDir(), "runtime")),
+		companion.DefaultInvocationLedgerLimit,
+		companion.DefaultInvocationLedgerBytes,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ledger.Close()
+	commandRuntime, err := companion.NewRuntime(
+		identity.ID, "browser-host-principal-test", policy, ledger, companion.WithBrowserHost(host),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := wssBrowserClient(
+		t, wssBrowserCompanionConfig(t, server, policy), identity, commandRuntime,
+	)
+	result, err := client.Authenticate(t.Context())
+	if err != nil || result.State != nodes.StatePendingPairing {
+		t.Fatalf("bootstrap admission = %#v, %v", result, err)
+	}
+	if _, err = registry.Approve(identity.ID, nodes.PairingApproval{
+		Aliases: []nodes.Alias{"ab-local-test"}, AllowedCommands: commands, At: time.Now().Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run := startWSSBrowserClient(t, client)
+	defer run.stop(t)
+	waitForVerticalSliceNodeState(t, registry, nodes.StateConnected)
+
+	cfg := wssBrowserGatewayConfig(t, workspace)
+	gatewayFactory, err := newGatewayBrowserWorkerFactory(cfg, runtimeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := &wssBrowserLocalFactory{}
+	gatewayFactory.(*gatewayBrowserWorkerFactory).local = map[string]browser.WorkerFactory{
+		gatewayBrowserProfileKey("companion", "managed"): local,
+	}
+	broker, err := browser.NewBroker(cfg, browser.NewMemoryStore(), gatewayFactory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := browser.Owner{
+		AgentID: browser.OpaqueAgentID("browser"), ActorID: browser.OpaqueActorID("telegram:owner"),
+		SessionKey: "browser-host-principal-session", ExecutionID: "browser-host-principal-execution",
+	}
+	opened, err := broker.Open(t.Context(), browser.OpenRequest{
+		Owner: owner, Target: "companion", Profile: "managed",
+	})
+	if err != nil || opened.State != browser.SessionReady || workerFactory.opens != 1 || local.opens != 0 {
+		t.Fatalf(
+			"gateway-to-host Open() = %#v, %v; host opens=%d local opens=%d",
+			opened,
+			err,
+			workerFactory.opens,
+			local.opens,
+		)
+	}
+	closed, err := broker.Close(t.Context(), owner, opened.ID)
+	if err != nil || closed.State != browser.SessionClosed || worker.closeCalls != 1 {
+		t.Fatalf("gateway-to-host Close() = %#v, %v; worker closes=%d", closed, err, worker.closeCalls)
+	}
+}
 
 func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 	workspace := t.TempDir()
@@ -93,7 +195,9 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	local := &wssBrowserLocalFactory{}
-	factory.(*gatewayBrowserWorkerFactory).local = local
+	factory.(*gatewayBrowserWorkerFactory).local = map[string]browser.WorkerFactory{
+		gatewayBrowserProfileKey("companion", "managed"): local,
+	}
 	acceptanceStore := &wssBrowserAcceptanceStore{Store: browser.NewMemoryStore()}
 	broker, err := browser.NewBroker(cfg, acceptanceStore, factory)
 	if err != nil {
@@ -2959,4 +3063,83 @@ func (factory *wssBrowserLocalFactory) Open(
 ) (browser.WorkerOpenResult, error) {
 	factory.opens++
 	return browser.WorkerOpenResult{}, errors.New("local browser fallback must not run")
+}
+
+type wssRealBrowserHostFactory struct {
+	worker *wssRealBrowserHostWorker
+	opens  int
+}
+
+func (factory *wssRealBrowserHostFactory) Open(
+	context.Context,
+	browser.WorkerOpenRequest,
+) (browser.WorkerOpenResult, error) {
+	factory.opens++
+	return browser.WorkerOpenResult{Owner: factory.worker}, nil
+}
+
+type wssRealBrowserHostWorker struct {
+	closeCalls int
+}
+
+func (*wssRealBrowserHostWorker) Status(context.Context) (browser.WorkerStatus, error) {
+	return browser.WorkerReady, nil
+}
+
+func (worker *wssRealBrowserHostWorker) Close(context.Context) error {
+	worker.closeCalls++
+	return nil
+}
+
+func (*wssRealBrowserHostWorker) Observe(context.Context) (browser.DriverObservation, error) {
+	return browser.DriverObservation{URL: "about:blank", Origin: "about:blank"}, nil
+}
+
+func (*wssRealBrowserHostWorker) Resolve(
+	context.Context,
+	string,
+) (browser.DriverElement, string, error) {
+	return browser.DriverElement{}, "", browser.ErrStale
+}
+
+func (*wssRealBrowserHostWorker) Execute(context.Context, browser.DriverAction) error {
+	return nil
+}
+
+func (*wssRealBrowserHostWorker) CatalogRevision() string {
+	return "integration-driver-v1"
+}
+
+func (*wssRealBrowserHostWorker) NavigationIdentity(context.Context) (string, error) {
+	return "integration-navigation-v1", nil
+}
+
+func (*wssRealBrowserHostWorker) ExecuteAfterNavigationCheck(
+	context.Context,
+	string,
+	browser.DriverAction,
+) error {
+	return nil
+}
+
+func (*wssRealBrowserHostWorker) ContextCatalog(context.Context) (browser.ContextCatalog, error) {
+	return browser.ContextCatalog{}, nil
+}
+
+func (*wssRealBrowserHostWorker) OpenTab(context.Context) (browser.ContextCatalog, error) {
+	return browser.ContextCatalog{}, nil
+}
+
+func (*wssRealBrowserHostWorker) SelectContext(
+	context.Context,
+	browser.ContextMutationAuthority,
+) (browser.DriverObservation, browser.ContextCatalog, error) {
+	return browser.DriverObservation{}, browser.ContextCatalog{}, nil
+}
+
+func (*wssRealBrowserHostWorker) CloseTab(
+	context.Context,
+	browser.ContextMutationAuthority,
+) (browser.ContextCatalog, error) {
+	return browser.ContextCatalog{}, nil
 }
