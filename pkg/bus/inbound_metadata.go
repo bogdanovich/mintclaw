@@ -1,39 +1,17 @@
 package bus
 
-// InboundMetadataKeyInteractionChoice carries a channel-validated, bounded
-// interaction choice separately from any quoted context added to Content.
-const InboundMetadataKeyInteractionChoice = "interaction_choice"
-
-// InboundMetadataKeyInteractionResponse carries the channel-authored text of
-// a reply to an interaction prompt without any quoted-message decoration.
-const InboundMetadataKeyInteractionResponse = "interaction_response"
-
-// InboundMetadataKeyInteractionResponseCandidate carries reply text that the
-// channel cannot authenticate as an interaction response on its own. The
-// agent may promote it only after matching the replied-to platform message ID
-// against a durable interaction prompt receipt.
-const InboundMetadataKeyInteractionResponseCandidate = "interaction_response_candidate"
-
-// InboundMetadataKeyInteractionShortID binds a channel-projected response to
-// the exact interaction prompt that produced its controls.
-const InboundMetadataKeyInteractionShortID = "interaction_short_id"
-
-// InboundMetadataKeyInteractionResponseError marks a channel-projected
-// interaction response that could not be resolved to a valid answer.
-const InboundMetadataKeyInteractionResponseError = "interaction_response_error"
-
-// InboundMetadataKeyInteractionOptionIndex preserves a channel-validated
-// option callback until the durable prompt receipt can resolve its label.
-const InboundMetadataKeyInteractionOptionIndex = "interaction_option_index"
-
-// InboundMetadataKeyInteractionResponseMessageID carries the channel message
-// that a final interaction response can safely reply to when the inbound event
-// itself is not a message, such as a Telegram callback query.
-const InboundMetadataKeyInteractionResponseMessageID = "interaction_response_message_id"
-
+// These keys are read only while normalizing durable spool records written
+// before inbound interaction projections became typed. New adapters must write
+// InboundContext.Interaction instead. Remove this compatibility reader after
+// pre-F3 inbound spools have drained from supported deployments.
 const (
-	InboundInteractionChoiceAllowOnce = "allow_once"
-	InboundInteractionChoiceDeny      = "deny"
-	InboundInteractionChoiceCancel    = "cancel"
-	InboundInteractionCancelLabel     = "⛔ Cancel turn"
+	legacyInboundInteractionChoiceKey            = "interaction_choice"
+	legacyInboundInteractionResponseKey          = "interaction_response"
+	legacyInboundInteractionResponseCandidateKey = "interaction_response_candidate"
+	legacyInboundInteractionShortIDKey           = "interaction_short_id"
+	legacyInboundInteractionResponseErrorKey     = "interaction_response_error"
+	legacyInboundInteractionOptionIndexKey       = "interaction_option_index"
+	legacyInboundInteractionResponseMessageIDKey = "interaction_response_message_id"
 )
+
+const InboundInteractionCancelLabel = "⛔ Cancel turn"

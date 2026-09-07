@@ -59,6 +59,9 @@ platforms.
   without guessing message boundaries from raw history.
 - Preserve platform-native media-group identity and member message IDs as
   typed durable inbound facts rather than adapter-owned `Raw` keys.
+- Carry channel-validated interaction choices, replies, prompt identity, and
+  callback resolution as a typed inbound projection rather than shared `Raw`
+  string keys.
 
 ## 6. Automation And Agent Workflows
 

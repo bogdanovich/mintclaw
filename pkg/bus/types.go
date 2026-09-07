@@ -44,6 +44,34 @@ type InboundMediaGroup struct {
 	MessageIDs []string `json:"message_ids,omitempty"`
 }
 
+// InboundInteractionChoice is a channel-validated interaction control action.
+type InboundInteractionChoice string
+
+const (
+	InboundInteractionChoiceAllowOnce InboundInteractionChoice = "allow_once"
+	InboundInteractionChoiceDeny      InboundInteractionChoice = "deny"
+	InboundInteractionChoiceCancel    InboundInteractionChoice = "cancel"
+)
+
+// InboundInteractionProjection carries the stable facts a channel derives
+// from a reply to an interaction prompt. Durable interaction state remains
+// owned by the interactions package.
+type InboundInteractionProjection struct {
+	Choice            InboundInteractionChoice `json:"choice,omitempty"`
+	Response          string                   `json:"response,omitempty"`
+	ResponseCandidate string                   `json:"response_candidate,omitempty"`
+	ShortID           string                   `json:"short_id,omitempty"`
+	Unresolved        bool                     `json:"unresolved,omitempty"`
+	OptionIndex       *int                     `json:"option_index,omitempty"`
+	ResponseMessageID string                   `json:"response_message_id,omitempty"`
+}
+
+func (p InboundInteractionProjection) IsZero() bool {
+	return p.Choice == "" && p.Response == "" && p.ResponseCandidate == "" &&
+		p.ShortID == "" && !p.Unresolved && p.OptionIndex == nil &&
+		p.ResponseMessageID == ""
+}
+
 // InboundContext captures the normalized, platform-agnostic facts about an
 // inbound message. This is the source of truth for routing and session
 // allocation.
@@ -68,11 +96,12 @@ type InboundContext struct {
 
 	Mentioned bool `json:"mentioned,omitempty"`
 
-	ReplyToMessageID string                 `json:"reply_to_message_id,omitempty"`
-	ReplyToSenderID  string                 `json:"reply_to_sender_id,omitempty"`
-	ReceivedAt       time.Time              `json:"received_at,omitzero"`
-	Relation         InboundMessageRelation `json:"relation,omitzero"`
-	MediaGroup       InboundMediaGroup      `json:"media_group,omitzero"`
+	ReplyToMessageID string                       `json:"reply_to_message_id,omitempty"`
+	ReplyToSenderID  string                       `json:"reply_to_sender_id,omitempty"`
+	ReceivedAt       time.Time                    `json:"received_at,omitzero"`
+	Relation         InboundMessageRelation       `json:"relation,omitzero"`
+	MediaGroup       InboundMediaGroup            `json:"media_group,omitzero"`
+	Interaction      InboundInteractionProjection `json:"interaction,omitzero"`
 
 	ReplyHandles map[string]string `json:"reply_handles,omitempty"`
 	Raw          map[string]string `json:"raw,omitempty"`

@@ -2,9 +2,10 @@
 
 Status: implemented for the core event/relation path. Typed event time and
 relation facts survive durable ingress and replay, and prompt assembly consumes
-them without reclassification. Telegram album identity and member message IDs
-also use a typed durable contract; stable interaction projections remain F3 of
-the [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
+them without reclassification. Telegram album identity and member message IDs,
+plus channel-validated interaction response projections, also use typed durable
+contracts tracked by the
+[Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
 
 MintClaw preserves normalized inbound messages and their structural relation
 facts through the durable ingress spool. Relation classification happens after

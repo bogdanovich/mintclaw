@@ -1,6 +1,9 @@
 package bus
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // NormalizeInboundMessage normalizes the canonical inbound context.
 func NormalizeInboundMessage(msg InboundMessage) InboundMessage {
@@ -72,7 +75,65 @@ func normalizeInboundContext(ctx InboundContext) InboundContext {
 	}
 	ctx.ReplyHandles = cloneStringMap(ctx.ReplyHandles)
 	ctx.Raw = cloneStringMap(ctx.Raw)
+	ctx.Interaction = normalizeInboundInteractionProjection(ctx.Interaction)
+	migrateLegacyInboundInteractionProjection(&ctx)
 	return ctx
+}
+
+func normalizeInboundInteractionProjection(
+	projection InboundInteractionProjection,
+) InboundInteractionProjection {
+	projection.Choice = InboundInteractionChoice(normalizeKind(string(projection.Choice)))
+	projection.Response = strings.TrimSpace(projection.Response)
+	projection.ResponseCandidate = strings.TrimSpace(projection.ResponseCandidate)
+	projection.ShortID = strings.TrimSpace(projection.ShortID)
+	projection.ResponseMessageID = strings.TrimSpace(projection.ResponseMessageID)
+	if projection.OptionIndex != nil {
+		optionIndex := *projection.OptionIndex
+		projection.OptionIndex = &optionIndex
+	}
+	return projection
+}
+
+func migrateLegacyInboundInteractionProjection(ctx *InboundContext) {
+	if ctx == nil || len(ctx.Raw) == 0 {
+		return
+	}
+	if ctx.Interaction.IsZero() {
+		ctx.Interaction = InboundInteractionProjection{
+			Choice: InboundInteractionChoice(
+				normalizeKind(ctx.Raw[legacyInboundInteractionChoiceKey]),
+			),
+			Response: strings.TrimSpace(
+				ctx.Raw[legacyInboundInteractionResponseKey],
+			),
+			ResponseCandidate: strings.TrimSpace(
+				ctx.Raw[legacyInboundInteractionResponseCandidateKey],
+			),
+			ShortID: strings.TrimSpace(
+				ctx.Raw[legacyInboundInteractionShortIDKey],
+			),
+			Unresolved: strings.TrimSpace(ctx.Raw[legacyInboundInteractionResponseErrorKey]) != "",
+			ResponseMessageID: strings.TrimSpace(
+				ctx.Raw[legacyInboundInteractionResponseMessageIDKey],
+			),
+		}
+		if optionIndex, err := strconv.Atoi(strings.TrimSpace(
+			ctx.Raw[legacyInboundInteractionOptionIndexKey],
+		)); err == nil && optionIndex >= 0 {
+			ctx.Interaction.OptionIndex = &optionIndex
+		}
+	}
+	delete(ctx.Raw, legacyInboundInteractionChoiceKey)
+	delete(ctx.Raw, legacyInboundInteractionResponseKey)
+	delete(ctx.Raw, legacyInboundInteractionResponseCandidateKey)
+	delete(ctx.Raw, legacyInboundInteractionShortIDKey)
+	delete(ctx.Raw, legacyInboundInteractionResponseErrorKey)
+	delete(ctx.Raw, legacyInboundInteractionOptionIndexKey)
+	delete(ctx.Raw, legacyInboundInteractionResponseMessageIDKey)
+	if len(ctx.Raw) == 0 {
+		ctx.Raw = nil
+	}
 }
 
 func defaultSourceRef(ctx InboundContext) string {

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -194,10 +193,7 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 		msg = promoteProjectedInteractionResponseCandidate(msg)
 		msg = resolveProjectedInteractionOption(classification.Record, msg)
 	}
-	responseError := strings.TrimSpace(
-		msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError],
-	)
-	if responseError != "" && classification.Disposition == explicitInteractionAnswerActive {
+	if msg.Context.Interaction.Unresolved && classification.Disposition == explicitInteractionAnswerActive {
 		logExplicitInteractionAnswerDisposition(
 			classification.Record,
 			msg,
@@ -252,58 +248,43 @@ func (c *inboundTurnCoordinator) routeProjectedInteractionAnswer(
 }
 
 func projectedInteractionAnswer(msg bus.InboundMessage) (string, bool) {
-	if len(msg.Context.Raw) == 0 {
-		return "", false
-	}
-	choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
-	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	projection := msg.Context.Interaction
+	choice := strings.TrimSpace(string(projection.Choice))
+	response := strings.TrimSpace(projection.Response)
 	if response == "" {
-		response = strings.TrimSpace(
-			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
-		)
+		response = strings.TrimSpace(projection.ResponseCandidate)
 	}
-	responseError := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError])
-	if choice == "" && response == "" && responseError == "" {
+	if choice == "" && response == "" && !projection.Unresolved {
 		return "", false
 	}
-	return strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID]), true
+	return strings.TrimSpace(projection.ShortID), true
 }
 
 func promoteProjectedInteractionResponseCandidate(msg bus.InboundMessage) bus.InboundMessage {
-	if len(msg.Context.Raw) == 0 ||
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) != "" {
+	if strings.TrimSpace(msg.Context.Interaction.Response) != "" {
 		return msg
 	}
-	response := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate])
+	response := strings.TrimSpace(msg.Context.Interaction.ResponseCandidate)
 	if response == "" {
 		return msg
 	}
-	raw := make(map[string]string, len(msg.Context.Raw))
-	for key, value := range msg.Context.Raw {
-		raw[key] = value
-	}
-	delete(raw, bus.InboundMetadataKeyInteractionResponseCandidate)
-	raw[bus.InboundMetadataKeyInteractionResponse] = response
-	msg.Context.Raw = raw
+	msg.Context.Interaction.ResponseCandidate = ""
+	msg.Context.Interaction.Response = response
 	msg.Content = response
 	return msg
 }
 
 func projectedInteractionIsUnverifiedCandidate(msg bus.InboundMessage) bool {
-	return len(msg.Context.Raw) != 0 &&
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice]) == "" &&
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) == "" &&
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError]) == "" &&
-		strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate]) != ""
+	projection := msg.Context.Interaction
+	return strings.TrimSpace(string(projection.Choice)) == "" &&
+		strings.TrimSpace(projection.Response) == "" &&
+		!projection.Unresolved &&
+		strings.TrimSpace(projection.ResponseCandidate) != ""
 }
 
 func projectedInteractionPromptMessageID(msg bus.InboundMessage) string {
-	if len(msg.Context.Raw) != 0 {
-		if messageID := strings.TrimSpace(
-			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
-		); messageID != "" {
-			return messageID
-		}
+	if messageID := strings.TrimSpace(msg.Context.Interaction.ResponseMessageID); messageID != "" {
+		return messageID
 	}
 	return strings.TrimSpace(msg.Context.ReplyToMessageID)
 }
@@ -312,27 +293,21 @@ func resolveProjectedInteractionOption(
 	record interactions.Record,
 	msg bus.InboundMessage,
 ) bus.InboundMessage {
-	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponseError]) == "" ||
-		record.Kind != interactions.KindQuestion || len(record.Questions) != 1 {
+	if !msg.Context.Interaction.Unresolved ||
+		msg.Context.Interaction.OptionIndex == nil || record.Kind != interactions.KindQuestion ||
+		len(record.Questions) != 1 {
 		return msg
 	}
-	index, err := strconv.Atoi(strings.TrimSpace(
-		msg.Context.Raw[bus.InboundMetadataKeyInteractionOptionIndex],
-	))
-	if err != nil || index < 0 || index >= len(record.Questions[0].Options) {
+	index := *msg.Context.Interaction.OptionIndex
+	if index < 0 || index >= len(record.Questions[0].Options) {
 		return msg
 	}
 	response := strings.TrimSpace(record.Questions[0].Options[index].Label)
 	if response == "" {
 		return msg
 	}
-	raw := make(map[string]string, len(msg.Context.Raw))
-	for key, value := range msg.Context.Raw {
-		raw[key] = value
-	}
-	delete(raw, bus.InboundMetadataKeyInteractionResponseError)
-	raw[bus.InboundMetadataKeyInteractionResponse] = response
-	msg.Context.Raw = raw
+	msg.Context.Interaction.Unresolved = false
+	msg.Context.Interaction.Response = response
 	msg.Content = response
 	return msg
 }
@@ -883,16 +858,14 @@ func (al *AgentLoop) interactionAnswerContent(record interactions.Record, msg bu
 	}
 
 	if record.Kind == interactions.KindApproval {
-		choice := strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+		choice := bus.InboundInteractionChoice(strings.TrimSpace(string(msg.Context.Interaction.Choice)))
 		switch choice {
 		case bus.InboundInteractionChoiceAllowOnce, bus.InboundInteractionChoiceDeny:
-			return choice
+			return string(choice)
 		}
 	}
 	if record.Kind == interactions.KindQuestion {
-		if response := strings.TrimSpace(
-			msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse],
-		); response != "" {
+		if response := strings.TrimSpace(msg.Context.Interaction.Response); response != "" {
 			return response
 		}
 	}

@@ -152,9 +152,11 @@ Completion gate:
 
 ### F3: normalize stable platform grouping and interaction facts
 
-Status: in progress. Telegram media-group identity and membership are typed
-and survive durable replay without dual-writing legacy `Raw` keys. The
-interaction projection slice remains to be implemented separately.
+Status: implemented. Telegram media-group identity and membership and stable
+interaction projection facts are typed and survive durable replay without
+dual-writing legacy `Raw` keys. One normalization-only compatibility reader
+hydrates pre-F3 spool records and must be removed after those records have
+drained from supported deployments.
 
 Scope:
 

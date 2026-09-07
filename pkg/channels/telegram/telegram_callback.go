@@ -91,22 +91,19 @@ func (c *TelegramChannel) handleInteractionCallback(
 	)
 	metadata := map[string]string{
 		"user_id": platformID, "username": query.From.Username,
-		"first_name":                             query.From.FirstName,
-		"is_group":                               strconv.FormatBool(message.Chat.Type != "private"),
-		bus.InboundMetadataKeyInteractionShortID: callback.shortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: strconv.Itoa(message.MessageID),
+		"first_name": query.From.FirstName,
+		"is_group":   strconv.FormatBool(message.Chat.Type != "private"),
 	}
-	if choice != "" {
-		metadata[bus.InboundMetadataKeyInteractionChoice] = choice
-	}
-	if response != "" {
-		metadata[bus.InboundMetadataKeyInteractionResponse] = response
+	projection := bus.InboundInteractionProjection{
+		Choice: choice, Response: response, ShortID: callback.shortID,
+		ResponseMessageID: strconv.Itoa(message.MessageID),
 	}
 	if callback.action == "option" {
-		metadata[bus.InboundMetadataKeyInteractionOptionIndex] = strconv.Itoa(callback.index)
+		optionIndex := callback.index
+		projection.OptionIndex = &optionIndex
 	}
 	if !resolved {
-		metadata[bus.InboundMetadataKeyInteractionResponseError] = "unresolved callback option"
+		projection.Unresolved = true
 	}
 	chatID := strconv.FormatInt(message.Chat.ID, 10)
 	if message.Chat.IsForum && message.MessageThreadID != 0 {
@@ -114,7 +111,8 @@ func (c *TelegramChannel) handleInteractionCallback(
 	}
 	inbound := bus.InboundContext{
 		Channel: c.Name(), ChatID: chatID, SenderID: platformID,
-		MessageID: query.ID, ReplyToMessageID: strconv.Itoa(message.MessageID), Raw: metadata,
+		MessageID: query.ID, ReplyToMessageID: strconv.Itoa(message.MessageID),
+		Interaction: projection, Raw: metadata,
 	}
 	if message.Chat.Type == "private" {
 		inbound.ChatType = "direct"
@@ -186,7 +184,7 @@ func (c *TelegramChannel) resolveInteractionCallback(
 	senderID string,
 	promptMessageID int,
 	callback telegramInteractionCallbackData,
-) (content, choice, response string, resolved bool) {
+) (content string, choice bus.InboundInteractionChoice, response string, resolved bool) {
 	switch callback.action {
 	case "allow":
 		return "Allow once", bus.InboundInteractionChoiceAllowOnce, "Allow once", true

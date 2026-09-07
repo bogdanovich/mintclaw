@@ -54,6 +54,7 @@ func TestPublishConsume(t *testing.T) {
 func TestPublishInbound_NormalizesContext(t *testing.T) {
 	mb := NewMessageBus()
 	defer mb.Close()
+	optionIndex := 1
 
 	msg := InboundMessage{
 		Context: InboundContext{
@@ -72,6 +73,14 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 				ID:         " album-1 ",
 				MessageIDs: []string{" 1 ", "2"},
 			},
+			Interaction: InboundInteractionProjection{
+				Choice: InboundInteractionChoiceAllowOnce, Response: " Allow once ",
+				ShortID: " abc12345 ", OptionIndex: &optionIndex,
+			},
+			Raw: map[string]string{
+				legacyInboundInteractionResponseKey: "legacy response",
+				"transport":                         "test",
+			},
 		},
 		Content: "hello",
 	}
@@ -80,6 +89,7 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 		t.Fatalf("PublishInbound failed: %v", err)
 	}
 	msg.Context.MediaGroup.MessageIDs[0] = "mutated"
+	*msg.Context.Interaction.OptionIndex = 9
 
 	got := <-mb.InboundChan()
 	if got.Context.Channel != "slack" {
@@ -106,6 +116,14 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 	if got.Context.MediaGroup.ID != "album-1" ||
 		!slices.Equal(got.Context.MediaGroup.MessageIDs, []string{"1", "2"}) {
 		t.Fatalf("expected normalized media group, got %#v", got.Context.MediaGroup)
+	}
+	if got.Context.Interaction.Choice != InboundInteractionChoiceAllowOnce ||
+		got.Context.Interaction.Response != "Allow once" || got.Context.Interaction.ShortID != "abc12345" ||
+		got.Context.Interaction.OptionIndex == nil || *got.Context.Interaction.OptionIndex != 1 {
+		t.Fatalf("expected normalized interaction projection, got %#v", got.Context.Interaction)
+	}
+	if len(got.Context.Raw) != 1 || got.Context.Raw["transport"] != "test" {
+		t.Fatalf("expected typed interaction to replace legacy raw keys, got %#v", got.Context.Raw)
 	}
 	if got.Context.ActorID != "U123" {
 		t.Fatalf("expected actor_id to default to sender U123, got %q", got.Context.ActorID)
@@ -159,6 +177,9 @@ func TestInboundPayloadJSONOwnsAddressingInContext(t *testing.T) {
 				contextPayload["sender_id"] != "user-1" ||
 				contextPayload["message_id"] != "message-1" {
 				t.Fatalf("unexpected context payload: %#v", contextPayload)
+			}
+			if _, exists := contextPayload["interaction"]; exists {
+				t.Fatalf("zero interaction projection was serialized: %s", encoded)
 			}
 		})
 	}
@@ -222,6 +243,7 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 	first.SetInboundSpool(spool)
 	receivedAt := time.Date(2026, 9, 6, 17, 30, 0, 0, time.FixedZone("test", -7*60*60))
 	wantReceivedAt := receivedAt.UTC()
+	optionIndex := 0
 	if publishErr := first.PublishInbound(context.Background(), InboundMessage{
 		Context: InboundContext{
 			Channel:    "slack",
@@ -236,6 +258,10 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 			MediaGroup: InboundMediaGroup{
 				ID:         "album-1",
 				MessageIDs: []string{"message-1", "message-2"},
+			},
+			Interaction: InboundInteractionProjection{
+				Unresolved: true, ShortID: "abc12345",
+				OptionIndex: &optionIndex, ResponseMessageID: "message-2",
 			},
 		},
 		Content:    "before restart",
@@ -289,6 +315,11 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 		!slices.Equal(got.Context.MediaGroup.MessageIDs, []string{"message-1", "message-2"}) {
 		t.Fatalf("media group = %#v, want durable album membership", got.Context.MediaGroup)
 	}
+	if !got.Context.Interaction.Unresolved ||
+		got.Context.Interaction.ShortID != "abc12345" || got.Context.Interaction.OptionIndex == nil ||
+		*got.Context.Interaction.OptionIndex != 0 || got.Context.Interaction.ResponseMessageID != "message-2" {
+		t.Fatalf("interaction = %#v, want durable callback projection", got.Context.Interaction)
+	}
 	if err := second.AckInbound(context.Background(), got); err != nil {
 		t.Fatalf("AckInbound failed: %v", err)
 	}
@@ -341,7 +372,7 @@ func TestPersistInboundContextUpdatesOnlyDurableFacts(t *testing.T) {
 	}
 }
 
-func TestPendingLegacySpoolRecordHydratesMessageReceivedAt(t *testing.T) {
+func TestPendingLegacySpoolRecordHydratesContext(t *testing.T) {
 	spool, err := NewInboundSpool(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewInboundSpool failed: %v", err)
@@ -352,7 +383,16 @@ func TestPendingLegacySpoolRecordHydratesMessageReceivedAt(t *testing.T) {
 		ID:         "legacy-received-at",
 		ReceivedAt: receivedAt,
 		Message: InboundMessage{
-			Context: InboundContext{Channel: "telegram", ChatID: "chat", SenderID: "user"},
+			Context: InboundContext{
+				Channel: "telegram", ChatID: "chat", SenderID: "user",
+				Raw: map[string]string{
+					legacyInboundInteractionResponseErrorKey:     " unresolved callback option ",
+					legacyInboundInteractionShortIDKey:           " abc12345 ",
+					legacyInboundInteractionOptionIndexKey:       "0",
+					legacyInboundInteractionResponseMessageIDKey: "message-2",
+					"transport": "legacy",
+				},
+			},
 			Content: "legacy",
 		},
 	}
@@ -369,6 +409,14 @@ func TestPendingLegacySpoolRecordHydratesMessageReceivedAt(t *testing.T) {
 	}
 	if pending[0].Context.MediaGroup.ID != "" || len(pending[0].Context.MediaGroup.MessageIDs) != 0 {
 		t.Fatalf("legacy media group = %#v, want zero value", pending[0].Context.MediaGroup)
+	}
+	projection := pending[0].Context.Interaction
+	if !projection.Unresolved || projection.ShortID != "abc12345" ||
+		projection.OptionIndex == nil || *projection.OptionIndex != 0 || projection.ResponseMessageID != "message-2" {
+		t.Fatalf("legacy interaction projection = %#v, want migrated callback facts", projection)
+	}
+	if len(pending[0].Context.Raw) != 1 || pending[0].Context.Raw["transport"] != "legacy" {
+		t.Fatalf("legacy raw metadata = %#v, want interaction keys removed", pending[0].Context.Raw)
 	}
 }
 
