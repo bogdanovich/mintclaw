@@ -130,8 +130,9 @@ These are intentional decision points, not implied implementation promises:
 
 - PDF0B selects a parser and render/extract path only after executable backend,
   packaging, malformed-input, isolation, licensing, and platform evidence.
-- macOS document processing stays unavailable until a mandatory sandbox is
-  admitted. Cross-platform buildability does not count as runtime isolation.
+- macOS document processing stays unavailable until the mandatory bounded
+  worker is admitted. Cross-platform buildability does not count as runtime
+  process containment.
 - password decryption stays unavailable unless PDF1C proves a protected secret
   path and exact crypto policy.
 - signed, certified, timestamped, rights-enabled, and restricted documents are
@@ -147,15 +148,24 @@ but returned `REVISE` for two remaining ambiguities:
 
 1. the top-level objective still implied that external delivery always ends in
    receipt or refusal, omitting ambiguous remote acceptance; and
-2. PDF0A did not name the initial runtime tuple or require executable network,
-   external-file, and resource-limit escape probes.
+2. PDF0A did not name the initial runtime tuple or an executable worker
+   containment suite.
 
 The roadmap now defines `uncertain` and `delivery_ambiguous` as valid truthful
 terminal reports, without claiming receipt or replaying blindly. PDF0A admits
-only `linux/amd64` initially and requires real-process probes for network,
-external files, CPU, memory, process count, runtime, output, and scratch
-cleanup. Every other tuple advertises the capability as unavailable until it
-passes the same boundary and fixture evidence.
+only `linux/amd64` initially and requires real-process probes for path-free
+immutable input, scrubbed environment, runtime and output limits, process-group
+cancellation, and scratch cleanup. Every other tuple advertises the capability
+as unavailable until it passes the same boundary and fixture evidence.
+
+After the roadmap review, an implementation checkpoint compared this boundary
+with OpenClaw's in-process PDFium WASM path and explicitly bounded MintClaw's
+design. PDF0A keeps the meaningful child-process crash/hang boundary but does
+not authorize a new daemon or a custom namespace, seccomp, container, or
+sandbox manager. Stronger host confinement must reuse a qualified packaged
+primitive in a later backend decision; otherwise the project documents and
+accepts the narrower WASM threat model instead of allowing the milestone to
+grow without limit.
 
 A final independent focused pass checked only these two changes and returned
 `APPROVE` with both findings resolved.
@@ -165,6 +175,6 @@ A final independent focused pass checked only these two changes and returned
 Approved for PDF0A implementation only, subject to the roadmap remaining the
 source of truth for its completion criteria. Later phases require predecessor
 evidence and a new focused admission or goal. Architecture review must reopen
-if implementation weakens immutable acquisition, mandatory isolation,
-protected-value handling, sole-owner composition, ambiguity semantics, or any
-fail-closed boundary.
+if implementation weakens immutable acquisition, mandatory process
+containment, protected-value handling, sole-owner composition, ambiguity
+semantics, or any fail-closed boundary.

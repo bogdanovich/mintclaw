@@ -57,7 +57,47 @@ func (s *Snapshot) Close() error {
 }
 
 func Acquire(ctx context.Context, inputPath string, options AcquireOptions) (*Snapshot, Report) {
-	return acquireForPlatform(ctx, inputPath, options, runtime.GOOS, runtime.GOARCH)
+	return acquireWithWorker(ctx, inputPath, options, runtime.GOOS, runtime.GOARCH, NewProcessWorker())
+}
+
+func acquireWithWorker(
+	ctx context.Context,
+	inputPath string,
+	options AcquireOptions,
+	goos string,
+	goarch string,
+	worker Worker,
+) (*Snapshot, Report) {
+	snapshot, report := acquireForPlatform(ctx, inputPath, options, goos, goarch)
+	if snapshot == nil || report.State != StateSucceeded || report.Input == nil {
+		return snapshot, report
+	}
+	if worker == nil {
+		return cleanupAcquisitionFailure(
+			snapshot,
+			failReport(report, StateUnavailable, FailureWorkerUnavailable, "document worker is unavailable"),
+		)
+	}
+	workerResult := worker.Verify(ctx, snapshot, *report.Input)
+	expectedInput := newWorkerRequest(*report.Input).Input
+	if workerResult.State == StateSucceeded && workerResult.Input != nil &&
+		*workerResult.Input == expectedInput && workerResult.Failure == nil {
+		return snapshot, report
+	}
+	if workerResult.State == StateSucceeded {
+		workerResult = workerFailure(
+			report.OperationID,
+			StateFailed,
+			FailureWorkerProtocol,
+			"document worker returned an invalid response",
+		)
+	}
+	state := workerResult.State
+	if state == "" {
+		state = StateFailed
+	}
+	failure := safeWorkerFailure(workerResult)
+	return cleanupAcquisitionFailure(snapshot, failReport(report, state, failure.Code, failure.Message))
 }
 
 func acquireForPlatform(

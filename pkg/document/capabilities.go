@@ -19,7 +19,7 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 	if goos == "linux" && goarch == "amd64" {
 		acquire = OperationCapability{State: CapabilitySupported}
 	}
-	workerReason := "mandatory isolated document worker is not implemented yet"
+	workerReason := "document inspection backend is not selected yet"
 	return CapabilityReport{
 		SchemaVersion: CapabilitySchemaVersion,
 		Platform:      goos,
