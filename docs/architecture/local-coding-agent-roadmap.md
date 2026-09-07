@@ -1736,6 +1736,10 @@ Done when:
 - Automation can resume by ID without a TTY.
 - Signals and command cancellation return stable exit semantics.
 
+Completed by the [P7.1 exit record](local-coding-agent-p7-1-exit.md). The
+one-shot command is the supported automation baseline; P7.2 remains an
+investigation and does not admit a daemon without measured product benefit.
+
 #### P7.2 — Optional local coding daemon investigation
 
 Dependencies: P7.1
