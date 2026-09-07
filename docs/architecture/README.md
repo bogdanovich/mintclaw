@@ -52,6 +52,12 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   browser milestones for current-specialist hardening, first-party tools,
   artifacts, human handoff, companion placement, profiles, providers, and
   computer fallback.
+- [Reliable PDF Support Roadmap](pdf-support-roadmap.md): ordered document
+  identity, inspection, read/render, AcroForm, durable form, XFA, transformation,
+  companion, and production-verification milestones.
+- [Reliable PDF Support Roadmap Review](pdf-support-roadmap-review.md):
+  architecture-completeness audit, admitted decisions, findings, and stop gates
+  for the PDF execution program.
 - [Browser Capability B0 Admission](browser-capability-b0-admission.md):
   admitted no-blind-replay, exclusive stdio lease, MCP artifact ownership,
   specialist allowlist, diagnostics, deployment evidence, and exact stop
