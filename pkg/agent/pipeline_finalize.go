@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -69,8 +70,13 @@ func newFinalizationContext(
 	if llm.toolResponseDisposition == toolResponseHandled && !terminal.persistIfToolHandled {
 		disposition = finalResponseAlreadyHandled
 	}
+	messageID := llm.assistantMessageID
 	reasoningContent := responseReasoningContent(llm.response)
-	if terminal.persistIfToolHandled && llm.toolResponseDisposition == toolResponseHandled {
+	if finalizationFollowsToolMessage(llm) {
+		// The tool-calling assistant message was already admitted as commentary.
+		// A rendered or runtime-owned terminal is a separate canonical assistant
+		// message and must not replace that commentary in the live projection.
+		messageID = fmt.Sprintf("terminal-message-%d", llm.iteration)
 		reasoningContent = ""
 	}
 
@@ -89,7 +95,7 @@ func newFinalizationContext(
 	return FinalizationContext{
 		content:          terminal.content,
 		contentProtected: terminal.protected,
-		messageID:        llm.assistantMessageID,
+		messageID:        messageID,
 		reasoningContent: reasoningContent,
 		status:           status,
 		disposition:      disposition,
@@ -116,6 +122,13 @@ func newFinalizationContext(
 			compactAfterDelivery:        ts.opts.EnableSummary && !ts.opts.SuppressBackgroundCompaction,
 		},
 	}
+}
+
+func finalizationFollowsToolMessage(llm *LLMIterationState) bool {
+	if len(llm.normalizedToolCalls) > 0 {
+		return true
+	}
+	return llm.response != nil && len(llm.response.ToolCalls) > 0
 }
 
 func (p *Pipeline) finalizeTurn(

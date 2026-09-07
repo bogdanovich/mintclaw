@@ -198,6 +198,74 @@ func TestCodingFinalMessageIsCommittedBeforeStreamFinalization(t *testing.T) {
 	}
 }
 
+func TestCodingToolCommentarySurvivesDistinctTerminalCommit(t *testing.T) {
+	_, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	agent.Tools.Register(resultOnlyDurabilityTestTool{})
+	emitter := &orderedCodingPresentationEmitter{}
+	pipeline := &Pipeline{events: emitter}
+	opts := makeTestTurnSpec("coding-commentary-terminal-session")
+	opts.mode = turnModeCoding
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID: "coding-commentary-terminal-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec := &turnExecution{model: turnExecutionModel{
+		llmModelName: "test-model", defaultModelName: "test-model",
+	}}
+	llm := newLLMIterationState(3)
+	llm.response = &providers.LLMResponse{
+		Content: "I found the parser boundary.", ReasoningContent: "tool-round reasoning",
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-1", Name: "result_only_test", Arguments: map[string]any{"value": "safe"},
+		}},
+	}
+
+	outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil || outcome.Control != turnStepExecuteTools {
+		t.Fatalf("normalize outcome = %+v, error = %v", outcome, err)
+	}
+	result, err := pipeline.finalizeTurn(
+		t.Context(),
+		ts,
+		exec,
+		llm,
+		TurnEndStatusCompleted,
+		exactTerminalContent("The tool loop was stopped safely."),
+	)
+	if err != nil || result.finalContent != "The tool loop was stopped safely." {
+		t.Fatalf("finalize result = %+v, error = %v", result, err)
+	}
+	if len(emitter.events) != 2 {
+		t.Fatalf("committed events = %+v", emitter.events)
+	}
+	commentary, commentaryOK := emitter.events[0].payload.(AssistantMessageCommittedPayload)
+	final, finalOK := emitter.events[1].payload.(AssistantMessageCommittedPayload)
+	if !commentaryOK || commentary.MessageID != "provider-message-3" ||
+		commentary.Phase != AssistantMessagePhaseCommentary ||
+		commentary.Content != "I found the parser boundary." {
+		t.Fatalf("commentary payload = %#v", emitter.events[0].payload)
+	}
+	if !finalOK || final.MessageID != "terminal-message-3" ||
+		final.Phase != AssistantMessagePhaseFinal || final.Content != "The tool loop was stopped safely." {
+		t.Fatalf("final payload = %#v", emitter.events[1].payload)
+	}
+	if commentary.MessageID == final.MessageID {
+		t.Fatalf("commentary and final reused message ID %q", commentary.MessageID)
+	}
+
+	history := agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+	var assistants []providers.Message
+	for _, message := range history {
+		if message.Role == "assistant" {
+			assistants = append(assistants, message)
+		}
+	}
+	if len(assistants) != 2 || assistants[0].Content != "I found the parser boundary." ||
+		assistants[1].Content != "The tool loop was stopped safely." {
+		t.Fatalf("canonical assistant history = %+v", assistants)
+	}
+}
+
 func TestAssistantPresentationEventIsCodingOnlyAndDropsEmptyMessages(t *testing.T) {
 	for _, test := range []struct {
 		name      string
