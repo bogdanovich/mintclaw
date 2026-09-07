@@ -88,10 +88,12 @@ type subTurnRuntimeConfig struct {
 // runner. Tools construct their public request and pass it through
 // AgentLoopSpawner rather than recovering AgentLoop from context.
 type SubTurnConfig struct {
-	Model      string
-	Tools      []toolshared.Tool
-	TaskPrompt string
-	MaxTokens  int
+	Model string
+	// ModelOverride is an exact configured model_name scoped to this child turn.
+	ModelOverride string
+	Tools         []toolshared.Tool
+	TaskPrompt    string
+	MaxTokens     int
 
 	// Async controls the result delivery mechanism:
 	//
@@ -197,6 +199,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 	// Convert tools.SubTurnConfig to agent.SubTurnConfig
 	agentCfg := SubTurnConfig{
 		Model:              cfg.Model,
+		ModelOverride:      cfg.ModelOverride,
 		Tools:              cfg.Tools,
 		TaskPrompt:         cfg.TaskPrompt,
 		InitialMessages:    cfg.InitialMessages,
@@ -506,7 +509,7 @@ func spawnSubTurn(
 	childCtx, cancel := context.WithTimeout(executionBase, timeout)
 	defer cancel()
 
-	modelBinding, err := al.buildSubagentChildBinding(parentTS, baseAgent)
+	modelBinding, err := al.buildSubagentChildBinding(parentTS, baseAgent, cfg.ModelOverride)
 	if err != nil {
 		return nil, err
 	}

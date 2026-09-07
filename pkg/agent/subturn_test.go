@@ -219,6 +219,15 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	al.cfg.ModelList = append(al.cfg.ModelList, &config.ModelConfig{
+		ModelName: "gpt-5.6-sol",
+		Provider:  "openai",
+		Model:     "gpt-5.6-sol",
+		Enabled:   true,
+	})
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return provider, modelConfig.Model, nil
+	}
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
 	requestTool, err := tools.NewRequestUserInputTool(tools.RequestUserInputToolOptions{})
@@ -252,7 +261,8 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
 
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
-		Model: agent.Model, TaskPrompt: "deploy", TaskID: "subagent-1", Critical: true,
+		Model: agent.Model, ModelOverride: "gpt-5.6-sol",
+		TaskPrompt: "deploy", TaskID: "subagent-1", Critical: true,
 	})
 	if err != nil || result == nil || !result.Control.TaskSuspended {
 		t.Fatalf("spawnSubTurn() = (%#v, %v), want suspended durable task", result, err)
@@ -264,6 +274,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	interaction, ok := al.interactionRegistryForWorkspace(agent.Workspace).FindNonterminalByTaskID("subagent-1")
 	if !ok || interaction.Route.SessionKey != "owner-session" ||
 		interaction.Origin.TaskID != "subagent-1" ||
+		interaction.Origin.ModelName != "gpt-5.6-sol" ||
 		interaction.Origin.ContinuationSessionKey != durableTaskSessionKey(
 			agent.Workspace, "subagent-1",
 		) {
@@ -309,6 +320,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	second, ok := al.interactionRegistryForWorkspace(agent.Workspace).FindNonterminalByTaskID("subagent-1")
 	if !ok || second.ID == interaction.ID || second.Status != interactions.StatusWaiting ||
 		second.Route.SessionKey != "owner-session" ||
+		second.Origin.ModelName != "gpt-5.6-sol" ||
 		second.Origin.ContinuationSessionKey != interaction.Origin.ContinuationSessionKey {
 		t.Fatalf("second interaction = %#v", second)
 	}

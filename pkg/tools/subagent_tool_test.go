@@ -68,7 +68,15 @@ func TestSubagentTool_Description(t *testing.T) {
 
 // TestSubagentTool_Parameters verifies tool parameters schema
 func TestSubagentTool_Parameters(t *testing.T) {
-	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	manager, err := NewSubagentManager(SubagentManagerConfig{
+		DefaultModel:    "test-model",
+		AvailableModels: []string{"gpt-5.6-sol", "gpt-5.6-luna"},
+		Spawner:         &mockSpawner{},
+		TaskRegistry:    taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir())),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	tool := newTestSubagentTool(t, manager)
 
 	params := tool.Parameters()
@@ -104,6 +112,14 @@ func TestSubagentTool_Parameters(t *testing.T) {
 	if label["type"] != "string" {
 		t.Errorf("Label type should be 'string', got: %v", label["type"])
 	}
+	model, ok := props["model"].(map[string]any)
+	if !ok {
+		t.Fatal("Model parameter should exist")
+	}
+	modelEnum, ok := model["enum"].([]string)
+	if !ok || len(modelEnum) != 2 || modelEnum[0] != "gpt-5.6-luna" || modelEnum[1] != "gpt-5.6-sol" {
+		t.Fatalf("model enum = %#v, want sorted configured models", model["enum"])
+	}
 
 	// Check required fields
 	required, ok := params["required"].([]string)
@@ -112,6 +128,33 @@ func TestSubagentTool_Parameters(t *testing.T) {
 	}
 	if len(required) != 1 || required[0] != "task" {
 		t.Errorf("Required should be ['task'], got: %v", required)
+	}
+}
+
+func TestSubagentToolUsesTemporaryModelOverride(t *testing.T) {
+	spawner := &mockSpawner{}
+	manager, err := NewSubagentManager(SubagentManagerConfig{
+		DefaultModel:    "gpt-5.6-luna",
+		AvailableModels: []string{"gpt-5.6-luna", "gpt-5.6-sol"},
+		Spawner:         spawner,
+		TaskRegistry:    taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir())),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := newTestSubagentTool(t, manager).Execute(context.Background(), map[string]any{
+		"task":  "edit the PDF",
+		"model": "gpt-5.6-sol",
+	})
+	if result == nil || result.IsError {
+		t.Fatalf("result = %#v, want success", result)
+	}
+	if spawner.lastConfig.ModelOverride != "gpt-5.6-sol" {
+		t.Fatalf("ModelOverride = %q, want gpt-5.6-sol", spawner.lastConfig.ModelOverride)
+	}
+	if !strings.Contains(result.ForLLM, "Model: gpt-5.6-sol") {
+		t.Fatalf("ForLLM = %q, want selected model", result.ForLLM)
 	}
 }
 

@@ -19,6 +19,7 @@ type subagentModelPlan struct {
 	Fallbacks      []string
 	Mode           string
 	ParentOverride string
+	Explicit       bool
 }
 
 func normalizedModelName(raw string) string {
@@ -102,6 +103,7 @@ func mergeSubagentsConfig(defaults, override *config.SubagentsConfig) *config.Su
 func resolveSubagentModelPlan(
 	targetAgent *AgentInstance,
 	parentOverride string,
+	explicitModel string,
 ) subagentModelPlan {
 	plan := subagentModelPlan{
 		Mode:           subagentSessionModelOverrideIgnore,
@@ -121,6 +123,11 @@ func resolveSubagentModelPlan(
 				plan.Mode = mode
 			}
 		}
+	}
+	if explicitModel = strings.TrimSpace(explicitModel); explicitModel != "" {
+		plan.Primary = explicitModel
+		plan.Explicit = true
+		return plan
 	}
 	if plan.ParentOverride == "" {
 		return plan
@@ -164,12 +171,13 @@ func inheritedSubagentOverride(parentTS *turnState) string {
 func (al *AgentLoop) buildSubagentChildBinding(
 	parentTS *turnState,
 	targetAgent *AgentInstance,
+	explicitModel string,
 ) (effectiveModelBinding, error) {
 	if targetAgent == nil {
 		return effectiveModelBinding{}, nil
 	}
 	overrideModel := inheritedSubagentOverride(parentTS)
-	plan := resolveSubagentModelPlan(targetAgent, overrideModel)
+	plan := resolveSubagentModelPlan(targetAgent, overrideModel, explicitModel)
 	if subagentPlanMatchesAgent(plan, targetAgent) {
 		binding := effectiveModelBinding{
 			WorkspaceAgent: targetAgent,
@@ -183,7 +191,7 @@ func (al *AgentLoop) buildSubagentChildBinding(
 		return binding, nil
 	}
 	execution, cleanup, err := al.buildExecutionStateForModel(targetAgent, plan.Primary, plan.Fallbacks)
-	if err != nil && overrideModel != "" && plan.Mode != subagentSessionModelOverrideIgnore {
+	if err != nil && !plan.Explicit && overrideModel != "" && plan.Mode != subagentSessionModelOverrideIgnore {
 		logger.WarnCF("subturn", "Falling back to target agent model after subagent override resolution failed",
 			map[string]any{
 				"target_agent_id": targetAgent.ID,
@@ -196,14 +204,19 @@ func (al *AgentLoop) buildSubagentChildBinding(
 	if err != nil {
 		return effectiveModelBinding{}, err
 	}
-	if execution.Router == nil {
-		execution.Router = targetAgent.Router
-	}
-	if len(execution.LightCandidates) == 0 && len(targetAgent.LightCandidates) > 0 {
-		execution.LightCandidates = append([]providers.FallbackCandidate(nil), targetAgent.LightCandidates...)
-	}
-	if execution.LightProvider == nil {
-		execution.LightProvider = targetAgent.LightProvider
+	// An explicit request names the model that must handle this child task.
+	// Keeping automatic light-model routing enabled here could silently replace
+	// that choice before the first LLM call.
+	if !plan.Explicit {
+		if execution.Router == nil {
+			execution.Router = targetAgent.Router
+		}
+		if len(execution.LightCandidates) == 0 && len(targetAgent.LightCandidates) > 0 {
+			execution.LightCandidates = append([]providers.FallbackCandidate(nil), targetAgent.LightCandidates...)
+		}
+		if execution.LightProvider == nil {
+			execution.LightProvider = targetAgent.LightProvider
+		}
 	}
 	binding := effectiveModelBinding{
 		WorkspaceAgent: targetAgent,

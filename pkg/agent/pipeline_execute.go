@@ -2498,6 +2498,14 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		route.SpaceID = inbound.SpaceID
 		route.SpaceType = inbound.SpaceType
 	}
+	modelName := ""
+	if strings.TrimSpace(r.ts.opts.TaskID) != "" {
+		modelName = strings.TrimSpace(r.exec.model.llmModelName)
+		if modelName == "" {
+			execution := r.ts.modelBinding.ExecutionState()
+			modelName = resolvedCandidateModelName(execution.Candidates, execution.Model)
+		}
+	}
 	disposition, err := r.p.Interaction.Suspension.SuspendToolCall(ctx, ToolSuspensionRequest{
 		Workspace:        interactionWorkspace,
 		Prompt:           *result.Control.Suspension,
@@ -2512,6 +2520,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 			ToolName:               toolName,
 			TaskID:                 r.ts.opts.TaskID,
 			ContinuationSessionKey: r.ts.sessionKey,
+			ModelName:              modelName,
 			ArgumentHash:           strings.TrimSpace(argumentHash),
 			ObjectiveChecklist:     interactionObjectiveChecklist(r.ts.opts.ObjectiveChecklist),
 		},

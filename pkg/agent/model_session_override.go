@@ -255,6 +255,37 @@ func (al *AgentLoop) buildSessionOverrideExecution(
 	return al.buildExecutionStateForModel(baseAgent, modelName, baseAgent.Fallbacks)
 }
 
+func (al *AgentLoop) bindResumedInteractionModel(
+	routeSessionKey string,
+	baseAgent *AgentInstance,
+	modelName string,
+) effectiveModelBinding {
+	binding := al.bindEffectiveModel(routeSessionKey, baseAgent)
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" || baseAgent == nil {
+		return binding
+	}
+	current := binding.ExecutionState()
+	if resolvedCandidateModelName(current.Candidates, current.Model) == modelName {
+		return binding
+	}
+
+	execution, cleanup, err := al.buildExecutionStateForModel(baseAgent, modelName, baseAgent.Fallbacks)
+	if err != nil {
+		logger.WarnCF("agent", "Falling back to current model for interaction continuation", map[string]any{
+			"agent_id":           baseAgent.ID,
+			"session_key":        strings.TrimSpace(routeSessionKey),
+			"continuation_model": modelName,
+			"error":              err.Error(),
+		})
+		return binding
+	}
+	binding.Cleanup()
+	binding.Execution = execution
+	binding.cleanup = cleanup
+	return binding
+}
+
 func (al *AgentLoop) bindEffectiveModel(
 	routeSessionKey string,
 	baseAgent *AgentInstance,

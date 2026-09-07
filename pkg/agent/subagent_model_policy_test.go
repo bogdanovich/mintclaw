@@ -43,7 +43,7 @@ func TestResolveSubagentModelPlan_Ignore(t *testing.T) {
 			SessionModelOverrideMode: subagentSessionModelOverrideIgnore,
 		},
 	}
-	got := resolveSubagentModelPlan(target, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(target, "gemini-flash-lite", "")
 	if got.Primary != "gpt-5.4" {
 		t.Fatalf("Primary = %q, want gpt-5.4", got.Primary)
 	}
@@ -60,7 +60,7 @@ func TestResolveSubagentModelPlan_Inherit(t *testing.T) {
 			SessionModelOverrideMode: subagentSessionModelOverrideInherit,
 		},
 	}
-	got := resolveSubagentModelPlan(target, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(target, "gemini-flash-lite", "")
 	if got.Primary != "gemini-flash-lite" {
 		t.Fatalf("Primary = %q, want gemini-flash-lite", got.Primary)
 	}
@@ -77,7 +77,7 @@ func TestResolveSubagentModelPlan_FallbackOnly(t *testing.T) {
 			SessionModelOverrideMode: subagentSessionModelOverrideFallbackOnly,
 		},
 	}
-	got := resolveSubagentModelPlan(target, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(target, "gemini-flash-lite", "")
 	if got.Primary != "gpt-5.4" {
 		t.Fatalf("Primary = %q, want gpt-5.4", got.Primary)
 	}
@@ -98,7 +98,7 @@ func TestResolveSubagentModelPlan_UsesConfiguredSubagentModel(t *testing.T) {
 			SessionModelOverrideMode: subagentSessionModelOverrideIgnore,
 		},
 	}
-	got := resolveSubagentModelPlan(target, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(target, "gemini-flash-lite", "")
 	if got.Primary != "kimi" {
 		t.Fatalf("Primary = %q, want kimi", got.Primary)
 	}
@@ -107,8 +107,30 @@ func TestResolveSubagentModelPlan_UsesConfiguredSubagentModel(t *testing.T) {
 	}
 }
 
+func TestResolveSubagentModelPlan_ExplicitModelWins(t *testing.T) {
+	target := &AgentInstance{
+		Model:     "gpt-5.6-luna",
+		Fallbacks: []string{"default-fallback"},
+		Subagents: &config.SubagentsConfig{
+			Model: &config.AgentModelConfig{
+				Primary:   "configured-child",
+				Fallbacks: []string{"child-fallback"},
+			},
+			SessionModelOverrideMode: subagentSessionModelOverrideInherit,
+		},
+	}
+
+	got := resolveSubagentModelPlan(target, "session-override", "gpt-5.6-sol")
+	if got.Primary != "gpt-5.6-sol" || !got.Explicit {
+		t.Fatalf("plan = %#v, want explicit gpt-5.6-sol", got)
+	}
+	if len(got.Fallbacks) != 1 || got.Fallbacks[0] != "child-fallback" {
+		t.Fatalf("Fallbacks = %#v, want child policy fallbacks", got.Fallbacks)
+	}
+}
+
 func TestResolveSubagentModelPlan_NilTarget(t *testing.T) {
-	got := resolveSubagentModelPlan(nil, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(nil, "gemini-flash-lite", "")
 	if got.Primary != "" {
 		t.Fatalf("Primary = %q, want empty", got.Primary)
 	}
@@ -152,7 +174,7 @@ func TestBuildSubagentChildBinding_ReusesTargetRuntimeWhenPlanMatches(t *testing
 		},
 	}
 
-	got, err := al.buildSubagentChildBinding(parent, target)
+	got, err := al.buildSubagentChildBinding(parent, target, "")
 	if err != nil {
 		t.Fatalf("buildSubagentChildBinding() error = %v", err)
 	}
@@ -203,6 +225,14 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 				APIBase:   "https://example.invalid/v1",
 				Enabled:   true,
 			},
+			{
+				ModelName: "gpt-5.6-sol",
+				Provider:  "openai",
+				Model:     "gpt-5.6-sol",
+				APIKeys:   config.SimpleSecureStrings("test-key"),
+				APIBase:   "https://example.invalid/v1",
+				Enabled:   true,
+			},
 		},
 	}
 	al := &AgentLoop{cfg: cfg}
@@ -227,7 +257,7 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 		},
 	}
 
-	got, err := al.buildSubagentChildBinding(parent, target)
+	got, err := al.buildSubagentChildBinding(parent, target, "")
 	if err != nil {
 		t.Fatalf("buildSubagentChildBinding() error = %v", err)
 	}
@@ -242,4 +272,29 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 		t.Fatal("ExecutionState().LightProvider = nil, want preserved provider")
 	}
 	got.Cleanup()
+
+	explicit, err := al.buildSubagentChildBinding(parent, target, "gpt-5.6-sol")
+	if err != nil {
+		t.Fatalf("explicit buildSubagentChildBinding() error = %v", err)
+	}
+	defer explicit.Cleanup()
+	explicitExecution := explicit.ExecutionState()
+	if explicitExecution.Model != "gpt-5.6-sol" || len(explicitExecution.Candidates) == 0 ||
+		explicitExecution.Candidates[0].DisplayName != "gpt-5.6-sol" {
+		t.Fatalf("explicit execution = %#v, want gpt-5.6-sol primary", explicitExecution)
+	}
+	if explicitExecution.Router != nil || len(explicitExecution.LightCandidates) != 0 ||
+		explicitExecution.LightProvider != nil {
+		t.Fatalf("explicit execution retained automatic light-model routing: %#v", explicitExecution)
+	}
+	if explicit.Override.Model != "gemini-flash-lite" {
+		t.Fatalf("explicit binding lost parent override metadata: %#v", explicit.Override)
+	}
+	if target.Model != "test-model" {
+		t.Fatalf("explicit child selection mutated parent agent model to %q", target.Model)
+	}
+	if invalid, invalidErr := al.buildSubagentChildBinding(parent, target, "missing-model"); invalidErr == nil {
+		invalid.Cleanup()
+		t.Fatal("unknown explicit model silently fell back to the target or session model")
+	}
 }

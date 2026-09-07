@@ -267,7 +267,11 @@ func (service interactionService) resumeOwned(
 	if routeSessionKey == "" {
 		routeSessionKey = record.Route.SessionKey
 	}
-	modelBinding := runtime.bindEffectiveModel(routeSessionKey, agent)
+	modelBinding := runtime.bindResumedInteractionModel(
+		routeSessionKey,
+		agent,
+		record.Origin.ModelName,
+	)
 	defer modelBinding.Cleanup()
 	expectFinalDelivery := runtime.interactionContinuationExpectsUserDelivery(
 		interactionWorkspace, record,

@@ -275,6 +275,7 @@ func TestRegistryLifecyclePersistsAndReloads(t *testing.T) {
 func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	request := validCreate(clock, "interaction_receipt111111", "session-receipt")
+	request.Origin.ModelName = "gpt-5.6-sol"
 	request.Origin.ObjectiveChecklist = []ObjectiveChecklistItem{{
 		ID: "objective_1", Item: "publish microwave", Kind: "external_action",
 	}, {
@@ -297,6 +298,7 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
 	got, ok := reloaded.Get(record.ID)
 	if !ok || len(got.OutcomeReceipts) != 1 || got.OutcomeReceipts[0].ID != "inv-1" ||
+		got.Origin.ModelName != "gpt-5.6-sol" ||
 		len(got.Origin.ObjectiveChecklist) != 2 || got.Origin.ObjectiveChecklist[0].ID != "objective_1" ||
 		got.Origin.ObjectiveChecklist[1].Acceptance == nil ||
 		got.Origin.ObjectiveChecklist[1].Acceptance.RequiredFields[1] != "price" {

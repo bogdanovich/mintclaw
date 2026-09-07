@@ -25,7 +25,9 @@ type SubTurnSpawner interface {
 
 // SubTurnConfig holds configuration for spawning a sub-turn.
 type SubTurnConfig struct {
-	Model              string
+	Model string
+	// ModelOverride is an exact configured model_name scoped to this child turn.
+	ModelOverride      string
 	Tools              []toolshared.Tool
 	TaskPrompt         string
 	MaxTokens          int
@@ -44,6 +46,7 @@ type SubTurnConfig struct {
 
 type SubagentManager struct {
 	defaultModel string
+	models       []string
 	maxTokens    int
 	temperature  float64
 	spawner      SubTurnSpawner
@@ -53,11 +56,12 @@ type SubagentManager struct {
 // SubagentManagerConfig contains the immutable dependencies and LLM defaults
 // shared by synchronous and background child turns.
 type SubagentManagerConfig struct {
-	DefaultModel string
-	MaxTokens    int
-	Temperature  float64
-	Spawner      SubTurnSpawner
-	TaskRegistry *taskregistry.Registry
+	DefaultModel    string
+	AvailableModels []string
+	MaxTokens       int
+	Temperature     float64
+	Spawner         SubTurnSpawner
+	TaskRegistry    *taskregistry.Registry
 }
 
 // NewSubagentManager requires the canonical task registry shared by every
@@ -71,6 +75,7 @@ func NewSubagentManager(config SubagentManagerConfig) (*SubagentManager, error) 
 	}
 	return &SubagentManager{
 		defaultModel: config.DefaultModel,
+		models:       normalizeAvailableModels(config.AvailableModels),
 		maxTokens:    config.MaxTokens,
 		temperature:  config.Temperature,
 		spawner:      config.Spawner,
@@ -81,6 +86,27 @@ func NewSubagentManager(config SubagentManagerConfig) (*SubagentManager, error) 
 func (sm *SubagentManager) Spawn(
 	ctx context.Context,
 	task, label, agentID, originChannel, originChatID string,
+	deliveryMode toolshared.AsyncDeliveryMode,
+	callback toolshared.AsyncCallback,
+	objectiveSets ...[]toolshared.ObjectiveSpec,
+) (string, error) {
+	return sm.spawnWithModel(
+		ctx,
+		task,
+		label,
+		agentID,
+		"",
+		originChannel,
+		originChatID,
+		deliveryMode,
+		callback,
+		objectiveSets...,
+	)
+}
+
+func (sm *SubagentManager) spawnWithModel(
+	ctx context.Context,
+	task, label, agentID, modelOverride, originChannel, originChatID string,
 	deliveryMode toolshared.AsyncDeliveryMode,
 	callback toolshared.AsyncCallback,
 	objectiveSets ...[]toolshared.ObjectiveSpec,
@@ -117,7 +143,7 @@ func (sm *SubagentManager) Spawn(
 	}
 
 	// Start task in background with context cancellation support
-	go sm.runTask(ctx, record, objectiveItems, callback)
+	go sm.runTask(ctx, record, modelOverride, objectiveItems, callback)
 
 	if label != "" {
 		return fmt.Sprintf(
@@ -267,6 +293,7 @@ func numericInt(raw any) (int, bool) {
 func (sm *SubagentManager) runTask(
 	ctx context.Context,
 	task taskregistry.Record,
+	modelOverride string,
 	objectiveItems []toolshared.ObjectiveSpec,
 	callback toolshared.AsyncCallback,
 ) {
@@ -294,6 +321,7 @@ func (sm *SubagentManager) runTask(
 	result, err := sm.spawnSubTurn(ctx, SubTurnConfig{
 		TaskID:         task.TaskID,
 		TargetAgentID:  task.AgentID,
+		ModelOverride:  modelOverride,
 		TaskPrompt:     buildSpawnSystemPrompt(task.Task, task.Label),
 		Critical:       true,
 		ObjectiveItems: append([]toolshared.ObjectiveSpec(nil), objectiveItems...),
@@ -454,7 +482,11 @@ func (t *SubagentTool) Name() string {
 }
 
 func (t *SubagentTool) Description() string {
-	return "Execute a subagent task synchronously and return the result. Use this for delegating specific tasks to an independent agent instance. Returns execution summary to user and full details to LLM."
+	return "Execute a subagent task synchronously and return the result. " +
+		"Use this for delegating a bounded task to an independent agent instance, including when a different " +
+		"configured model would materially improve quality, speed, or cost. An optional model override applies " +
+		"only to the child task, so the parent conversation resumes on its current model. Returns an execution " +
+		"summary to the user and full details to the LLM."
 }
 
 func (t *SubagentTool) Parameters() map[string]any {
@@ -469,6 +501,7 @@ func (t *SubagentTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional short label for the task (for display)",
 			},
+			"model":           modelOverrideParameter(t.manager.models),
 			"objective_items": objectiveItemsParameter(),
 		},
 		"required": []string{"task"},
@@ -484,6 +517,10 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	label, ok := args["label"].(string)
 	if !ok {
 		label = ""
+	}
+	modelOverride, parseErr := parseModelOverride(args["model"], t.manager.models)
+	if parseErr != nil {
+		return toolshared.ErrorResult(parseErr.Error()).WithError(parseErr)
 	}
 	objectiveItems, parseErr := parseObjectiveItems(args["objective_items"])
 	if parseErr != nil {
@@ -509,6 +546,7 @@ Task: %s`,
 	}
 
 	result, err := t.manager.spawnSubTurn(ctx, SubTurnConfig{
+		ModelOverride:  modelOverride,
 		Tools:          nil, // Will inherit from parent via context
 		TaskPrompt:     systemPrompt,
 		Async:          false, // Synchronous execution
@@ -538,8 +576,12 @@ Task: %s`,
 	if labelStr == "" {
 		labelStr = "(unnamed)"
 	}
-	llmContent := fmt.Sprintf("Subagent task completed:\nLabel: %s\nResult: %s",
-		labelStr, result.ForLLM)
+	modelLine := ""
+	if modelOverride != "" {
+		modelLine = fmt.Sprintf("\nModel: %s", modelOverride)
+	}
+	llmContent := fmt.Sprintf("Subagent task completed:\nLabel: %s%s\nResult: %s",
+		labelStr, modelLine, result.ForLLM)
 
 	result.ForLLM = llmContent
 	result.ForUser = userContent

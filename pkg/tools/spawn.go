@@ -46,7 +46,11 @@ func (t *SpawnTool) Name() string {
 }
 
 func (t *SpawnTool) Description() string {
-	return "Spawn a subagent to handle a task in the background. Use this for complex or time-consuming tasks that can run independently. The subagent will complete the task and report back when done. Optional delivery_mode controls whether the final async result goes to the user, the parent agent, or both."
+	return "Spawn a subagent to handle a task in the background. Use this for complex or time-consuming tasks " +
+		"that can run independently, including when a different configured model would materially improve quality, " +
+		"speed, or cost. An optional model override applies only to the child task, so the parent conversation stays " +
+		"on its current model. The subagent will complete the task and report back when done. Optional delivery_mode " +
+		"controls whether the final async result goes to the user, the parent agent, or both."
 }
 
 func (t *SpawnTool) Parameters() map[string]any {
@@ -63,6 +67,7 @@ func (t *SpawnTool) Parameters() map[string]any {
 			"type":        "string",
 			"description": "Optional target agent ID to delegate the task to",
 		},
+		"model": modelOverrideParameter(t.manager.models),
 		"delivery_mode": map[string]any{
 			"type":        "string",
 			"description": "Optional async result routing policy: user_only, parent_only, or user_and_parent. Defaults to user_only.",
@@ -114,6 +119,10 @@ func (t *SpawnTool) execute(
 		agentID = ""
 	}
 	targetAgentID := strings.TrimSpace(agentID)
+	modelOverride, err := parseModelOverride(args["model"], t.manager.models)
+	if err != nil {
+		return toolshared.ErrorResult(err.Error()).WithError(err)
+	}
 	deliveryMode, err := parseSpawnDeliveryMode(args["delivery_mode"])
 	if err != nil {
 		return toolshared.ErrorResult(err.Error()).WithError(err)
@@ -145,11 +154,12 @@ func (t *SpawnTool) execute(
 			cb(cbCtx, res)
 		}
 	}
-	ack, err := t.manager.Spawn(
+	ack, err := t.manager.spawnWithModel(
 		ctx,
 		task,
 		label,
 		strings.TrimSpace(agentID),
+		modelOverride,
 		toolshared.ToolChannel(ctx),
 		toolshared.ToolChatID(ctx),
 		deliveryMode,
