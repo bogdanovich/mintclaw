@@ -273,6 +273,7 @@ func (service interactionService) Answer(
 			Superseded: true,
 			MessageID:  strings.TrimSpace(message.Context.MessageID),
 			ReceivedAt: message.Context.ReceivedAt.UnixMilli(),
+			Relation:   message.Context.Relation,
 		}
 		claimed, err := registry.ClaimAnswer(
 			record.ID,

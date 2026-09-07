@@ -1247,11 +1247,11 @@ func interactionSupersedingSteering(
 	if record.Answer == nil || !record.Answer.Superseded {
 		return nil
 	}
-	message := steeringPromptMessage(providers.Message{
-		Role:    "user",
-		Content: record.Answer.Text,
-		Media:   append([]string(nil), record.Answer.Media...),
-	})
+	message := steeringPromptMessage(currentTurnUserPromptMessage(
+		record.Answer.Text,
+		record.Answer.Media,
+		record.Answer.Relation,
+	))
 	if record.Answer.ReceivedAt != 0 {
 		receivedAt := time.UnixMilli(record.Answer.ReceivedAt).UTC()
 		message.CreatedAt = &receivedAt
