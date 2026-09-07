@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -132,5 +133,55 @@ func TestAcquireCommandWritesReportAndMapsExitClass(t *testing.T) {
 				t.Fatalf("output = %s", output.String())
 			}
 		})
+	}
+}
+
+func TestPrivateWorkerCommandIsHiddenAndUsesInheritedInput(t *testing.T) {
+	request := documentpkg.WorkerRequest{
+		SchemaVersion: documentpkg.WorkerRequestSchemaVersion,
+		OperationID:   "document_operation_cli_worker",
+		Operation:     "verify_snapshot",
+		Input: documentpkg.WorkerInput{
+			ContentType: "application/pdf",
+			Size:        4,
+			SHA256:      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+	}
+	requestBytes, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var gotSnapshot string
+	deps := commandDeps{
+		serveWorker: func(requestReader io.Reader, snapshotReader io.Reader, output io.Writer) error {
+			data, readErr := io.ReadAll(snapshotReader)
+			if readErr != nil {
+				return readErr
+			}
+			gotSnapshot = string(data)
+			_, readErr = io.Copy(output, requestReader)
+			return readErr
+		},
+		workerInput: func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader([]byte("%PDF"))), nil
+		},
+	}
+	cmd := newDocumentCommand(deps)
+	worker, _, err := cmd.Find([]string{"_worker"})
+	if err != nil {
+		t.Fatalf("find worker command: %v", err)
+	}
+	if !worker.Hidden {
+		t.Fatal("private document worker is visible in CLI help")
+	}
+	var output bytes.Buffer
+	cmd.SetIn(bytes.NewReader(requestBytes))
+	cmd.SetOut(&output)
+	cmd.SetArgs([]string{"_worker"})
+	if err = cmd.Execute(); err != nil {
+		t.Fatalf("execute private worker: %v", err)
+	}
+	if gotSnapshot != "%PDF" || !bytes.Equal(output.Bytes(), requestBytes) {
+		t.Fatalf("snapshot = %q, output = %s", gotSnapshot, output.Bytes())
 	}
 }

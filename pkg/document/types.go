@@ -30,6 +30,12 @@ const (
 	FailureLimitExceeded       FailureCode = "limit_exceeded"
 	FailureSourceChanged       FailureCode = "source_changed"
 	FailureCanceled            FailureCode = "canceled"
+	FailureWorkerUnavailable   FailureCode = "worker_unavailable"
+	FailureWorkerProtocol      FailureCode = "worker_protocol"
+	FailureWorkerCrashed       FailureCode = "worker_crashed"
+	FailureWorkerOutputLimit   FailureCode = "worker_output_limit"
+	FailureWorkerTimeout       FailureCode = "worker_timeout"
+	FailureWorkerInputMismatch FailureCode = "worker_input_mismatch"
 	FailureInternal            FailureCode = "internal_failure"
 )
 

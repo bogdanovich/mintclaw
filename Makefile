@@ -376,6 +376,7 @@ test: generate
 ## test-document: Run the focused document contract and CLI tests
 test-document:
 	@$(GO) test $(GOFLAGS) ./pkg/document ./cmd/mintclaw/internal/document
+	@./scripts/document-worker-smoke.sh
 
 ## integration-test: Run Docker-backed integration test suites
 integration-test:

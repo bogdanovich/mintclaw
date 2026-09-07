@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -16,6 +17,8 @@ type commandDeps struct {
 	capabilities func() documentpkg.CapabilityReport
 	acquire      func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	scratchRoot  func() string
+	serveWorker  func(io.Reader, io.Reader, io.Writer) error
+	workerInput  func() (io.ReadCloser, error)
 }
 
 type ExitError struct {
@@ -32,6 +35,8 @@ func NewDocumentCommand(scratchRoot func() string) *cobra.Command {
 		capabilities: documentpkg.Capabilities,
 		acquire:      documentpkg.Acquire,
 		scratchRoot:  scratchRoot,
+		serveWorker:  documentpkg.ServeWorker,
+		workerInput:  openWorkerInput,
 	})
 }
 
@@ -43,8 +48,38 @@ func newDocumentCommand(deps commandDeps) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	cmd.AddCommand(newCapabilitiesCommand(deps), newAcquireCommand(deps))
+	cmd.AddCommand(newCapabilitiesCommand(deps), newAcquireCommand(deps), newWorkerCommand(deps))
 	return cmd
+}
+
+func newWorkerCommand(deps commandDeps) *cobra.Command {
+	return &cobra.Command{
+		Use:           "_worker",
+		Short:         "Run the private document worker",
+		Args:          cobra.NoArgs,
+		Hidden:        true,
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if deps.serveWorker == nil || deps.workerInput == nil {
+				return fmt.Errorf("document worker dependencies are unavailable")
+			}
+			input, err := deps.workerInput()
+			if err != nil {
+				return err
+			}
+			defer func() { _ = input.Close() }()
+			return deps.serveWorker(cmd.InOrStdin(), input, cmd.OutOrStdout())
+		},
+	}
+}
+
+func openWorkerInput() (io.ReadCloser, error) {
+	file := os.NewFile(documentpkg.WorkerInputFileDescriptor(), "document-snapshot")
+	if file == nil {
+		return nil, fmt.Errorf("document worker input is unavailable")
+	}
+	return file, nil
 }
 
 func newCapabilitiesCommand(deps commandDeps) *cobra.Command {

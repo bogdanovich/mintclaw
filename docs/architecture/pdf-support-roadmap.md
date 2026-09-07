@@ -170,10 +170,15 @@ Every PDF milestone follows these rules.
     model produces a visible unavailable state unless policy explicitly
     permits a named fallback.
 12. **Untrusted documents are parsed out of process.** The document worker is
-    mandatory and fail-closed even for Go-native libraries. It receives byte,
-    page, pixel, time, memory, process, and output limits; network and external
-    file access are denied. Unsupported OS/architecture tuples advertise the
-    document capability as unavailable instead of parsing in the core process.
+    mandatory and fail-closed even for Go-native libraries. The minimum
+    boundary is a short-lived child of the current MintClaw executable with a
+    path-free versioned protocol, inherited immutable input descriptor,
+    scrubbed environment, private scratch, runtime/output limits, process-group
+    termination, and deterministic cleanup. Stronger network and filesystem
+    confinement may use a qualified, packaged operating-system primitive, but
+    MintClaw does not grow a custom sandbox manager to provide it. Unsupported
+    OS/architecture tuples advertise the document capability as unavailable
+    instead of parsing in the core process.
 13. **Sensitive values never enter ordinary history or telemetry.** Passwords
     and raw form values use protected references and protected storage. They
     are absent, not merely best-effort redacted, from ordinary tool arguments,
@@ -237,6 +242,16 @@ daemon. Its control plane may be an in-process Go package, but untrusted PDF
 parsing runs only in a strictly launched helper process. A persistent worker
 is justified only by measured startup, memory, concurrency, or isolation
 evidence.
+
+The initial worker is deliberately smaller than a general sandbox subsystem.
+It self-spawns from the installed MintClaw artifact for one operation, accepts
+one immutable snapshot descriptor plus bounded JSON, and exits. It does not
+add a daemon, broker, coordinator, durable worker state, or another installed
+binary. If a future backend needs host-level network or filesystem confinement,
+PDF0B must qualify an existing OS/container primitive and its packaging. A need
+to implement namespaces, seccomp, container lifecycle, or a second control
+plane inside MintClaw triggers an architecture checkpoint; it is not absorbed
+into PDF0A by scope drift.
 
 ### Document reference
 
@@ -576,8 +591,10 @@ unavailable.
 - acquire only regular files, without following symlinks, into protected
   operation scratch while calculating size and SHA-256;
 - detect replacement or mutation races and discard incomplete snapshots;
-- add a mandatory out-of-process document-worker launcher with cancellation,
-  timeout, resource limits, deny-network and deny-external-file policy;
+- add a mandatory short-lived document-worker subprocess with a path-free
+  versioned protocol, cancellation, timeout, bounded output, process-group
+  termination, scrubbed environment, private scratch, and deterministic
+  cleanup;
 - keep protected scratch outside agent-visible workspace `tmp/`;
 - admit `linux/amd64` as the initial runtime tuple and advertise every other
   tuple as unavailable until separately proven;
@@ -601,10 +618,10 @@ unavailable.
 - symlink, FIFO/device, path replacement, mid-copy mutation, oversized input,
   cancellation, worker crash, and concurrent acquisition fixtures have typed
   results and leave no admitted partial snapshot;
-- real-process escape probes prove that the `linux/amd64` worker cannot reach
-  the network, read an unexposed external canary, exceed its CPU, memory,
-  process-count, runtime, or output limits, or retain protected scratch after
-  cleanup;
+- real-process probes prove that the `linux/amd64` worker receives no source
+  path or ambient secrets, cannot exceed its runtime or output limits, loses
+  its complete process group on cancellation, and cannot retain protected
+  scratch after cleanup;
 - two files with the same name but different bytes keep distinct identities;
 - ordinary inbound refs are owner-bound before acquisition and cross-route
   resolution is denied;
@@ -619,8 +636,12 @@ unavailable.
 #### Stop gate
 
 Do not begin PDF0B until untrusted bytes can reach only an immutable snapshot
-and the mandatory isolated worker on every advertised platform. An optional
-global isolation setting or an in-process parser does not satisfy this gate.
+and the mandatory bounded worker process on every advertised platform. An
+in-process parser does not satisfy this gate. If backend qualification later
+shows that acceptable risk requires stronger host confinement, use a packaged
+standard primitive or return to an explicitly documented OpenClaw-like WASM
+risk model; do not build a general sandbox platform inside the document
+milestone.
 
 ### PDF0B: Inspection, classification, and backend decision
 
