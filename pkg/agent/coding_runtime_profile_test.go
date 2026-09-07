@@ -532,7 +532,12 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	if messages[0].Content != wantSystem {
 		t.Fatalf("coding system prompt =\n%s\nwant:\n%s", messages[0].Content, wantSystem)
 	}
-	for _, expected := range []string{"exec with rg or rg --files", "Gather only the evidence needed"} {
+	for _, expected := range []string{
+		"exec with rg or rg --files",
+		"Gather only the evidence needed",
+		"Before a new work phase or after a material discovery",
+		"Do not narrate routine tool calls",
+	} {
 		if !strings.Contains(messages[0].Content, expected) {
 			t.Fatalf("coding system prompt omits efficient inspection guidance %q:\n%s", expected, messages[0].Content)
 		}
@@ -632,6 +637,19 @@ func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	if len(history) != 4 || history[2].Content != "inspect the diagram" ||
 		!slices.Equal(history[2].Media, []string{mediaRef}) {
 		t.Fatalf("structured coding history = %#v", history)
+	}
+}
+
+func TestCodingProgressUpdateGuidanceDoesNotEnterPersonalAgentPrompt(t *testing.T) {
+	builder := NewContextBuilder(t.TempDir())
+	prompt := builder.BuildSystemPrompt()
+	for _, codingOnly := range []string{
+		"Before a new work phase or after a material discovery",
+		"Do not narrate routine tool calls",
+	} {
+		if strings.Contains(prompt, codingOnly) {
+			t.Fatalf("personal agent prompt contains coding-only guidance %q:\n%s", codingOnly, prompt)
+		}
 	}
 }
 

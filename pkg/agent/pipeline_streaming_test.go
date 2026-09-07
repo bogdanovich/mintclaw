@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -608,7 +609,13 @@ func TestConfiguredStreamingProjectsProviderAccumulatedEvents(t *testing.T) {
 	if got := snapshot.Entries[0]; got.Kind != frontend.EntryReasoning || got.Text != "thinking 💡" || !got.Complete {
 		t.Fatalf("reasoning entry = %#v, want complete accumulated reasoning", got)
 	}
-	if got := snapshot.Entries[1]; got.Kind != frontend.EntryAssistant || got.Text != "answer ✅" || !got.Complete {
+	if got := snapshot.Entries[0]; got.Phase != "" ||
+		!strings.HasSuffix(got.ID, ":reasoning:provider-message-1") {
+		t.Fatalf("reasoning identity/phase = %#v", got)
+	}
+	if got := snapshot.Entries[1]; got.Kind != frontend.EntryAssistant || got.Text != "answer ✅" ||
+		!got.Complete || got.Phase != frontend.AssistantPhaseFinal ||
+		!strings.HasSuffix(got.ID, ":assistant:provider-message-1") {
 		t.Fatalf("assistant entry = %#v, want complete accumulated answer", got)
 	}
 }

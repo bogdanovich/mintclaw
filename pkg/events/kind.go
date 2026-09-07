@@ -12,6 +12,8 @@ const (
 	KindAgentLLMDelta Kind = "agent.llm.delta"
 	// KindAgentLLMResponse is emitted after an LLM response.
 	KindAgentLLMResponse Kind = "agent.llm.response"
+	// KindAgentAssistantMessageCommitted admits provider text into coding presentation state.
+	KindAgentAssistantMessageCommitted Kind = "agent.assistant_message.committed"
 	// KindAgentLLMRetry is emitted before retrying an LLM request.
 	KindAgentLLMRetry Kind = "agent.llm.retry"
 	// KindAgentLLMFallbackAttempt records one fallback candidate outcome.
@@ -149,6 +151,7 @@ var knownKinds = []Kind{
 	KindAgentLLMRequest,
 	KindAgentLLMDelta,
 	KindAgentLLMResponse,
+	KindAgentAssistantMessageCommitted,
 	KindAgentLLMRetry,
 	KindAgentLLMFallbackAttempt,
 	KindAgentContextCompress,

@@ -979,7 +979,12 @@ func hydratedTranscriptEntries(index int, message providers.Message) []frontend.
 			entries = append(entries, entry(frontend.EntryReasoning, "reasoning", message.ReasoningContent))
 		}
 		if strings.TrimSpace(message.Content) != "" {
-			entries = append(entries, entry(frontend.EntryAssistant, "assistant", message.Content))
+			assistant := entry(frontend.EntryAssistant, "assistant", message.Content)
+			assistant.Phase = frontend.AssistantPhaseFinal
+			if len(message.ToolCalls) > 0 {
+				assistant.Phase = frontend.AssistantPhaseCommentary
+			}
+			entries = append(entries, assistant)
 		}
 		return entries
 	case "tool":

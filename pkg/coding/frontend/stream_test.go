@@ -193,6 +193,151 @@ func TestStreamCancelDoesNotClaimTurnInterruption(t *testing.T) {
 	}
 }
 
+func TestCommittedCommentarySurvivesItsStreamAndLaterRounds(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "fix it")
+	delegate := NewStreamDelegate(projector, "thread-1")
+	first, ok := delegate.GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("first stream was rejected")
+	}
+	first.(interface{ SetAssistantMessageID(string) }).SetAssistantMessageID("provider-message-1")
+	if err := first.Update(t.Context(), "Inspecting the parser."); err != nil {
+		t.Fatal(err)
+	}
+	if !projector.AssistantMessageCommitted(
+		"turn-1",
+		"provider-message-1",
+		"Inspecting the parser.",
+		AssistantPhaseCommentary,
+	) {
+		t.Fatal("commentary commit was ignored")
+	}
+	first.Cancel(t.Context())
+	projector.ToolStarted("turn-1", "call-1", "read_file", "")
+	projector.ToolCompleted("turn-1", "call-1", "read_file", "", 0, false, nil)
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", AttemptID: "compact-1", Status: CompactionRunning, Background: true,
+	})
+	projector.CompactionUpdate(CompactionState{
+		TurnID: "turn-1", AttemptID: "compact-1", Status: CompactionCompleted, Background: true,
+	})
+
+	second, ok := delegate.GetStreamer(
+		t.Context(),
+		"coding",
+		"thread-1",
+		"thread-1",
+		"",
+		runtimeevents.NewTraceScope("/repo", "turn-1"),
+	)
+	if !ok {
+		t.Fatal("second stream was rejected")
+	}
+	second.(interface{ SetAssistantMessageID(string) }).SetAssistantMessageID("provider-message-2")
+	if err := second.Update(t.Context(), "The parser already handles this case."); err != nil {
+		t.Fatal(err)
+	}
+	if !projector.AssistantMessageCommitted(
+		"turn-1",
+		"provider-message-2",
+		"The parser already handles this case.",
+		AssistantPhaseFinal,
+	) {
+		t.Fatal("final commit was ignored")
+	}
+	if err := second.Finalize(t.Context(), "The parser already handles this case."); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Entries) != 3 || snapshot.Entries[1].Phase != AssistantPhaseCommentary ||
+		snapshot.Entries[1].Text != "Inspecting the parser." ||
+		snapshot.Entries[2].Phase != AssistantPhaseFinal ||
+		snapshot.Entries[2].Text != "The parser already handles this case." {
+		t.Fatalf("assistant phases = %+v", snapshot.Entries)
+	}
+	if len(snapshot.Items) != 4 || snapshot.Items[1].Message == nil || snapshot.Items[2].Tool == nil ||
+		snapshot.Items[3].Message == nil || snapshot.Items[1].Sequence >= snapshot.Items[2].Sequence ||
+		snapshot.Items[2].Sequence >= snapshot.Items[3].Sequence {
+		t.Fatalf("commentary/tool/final order = %+v", snapshot.Items)
+	}
+}
+
+func TestAssistantMessageCommitDropsBlankAndKeepsReasoningUnphased(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	if projector.AssistantMessageCommitted(
+		"turn-1",
+		"provider-message-1",
+		" \n\t ",
+		AssistantPhaseCommentary,
+	) {
+		t.Fatal("blank commentary was committed")
+	}
+	if !projector.ReasoningMessageCommitted("turn-1", "provider-message-1", "separate reasoning") {
+		t.Fatal("reasoning commit was ignored")
+	}
+	if projector.AssistantMessageCommitted("turn-1", "provider-message-1", "text", "reasoning") {
+		t.Fatal("invalid assistant phase was committed")
+	}
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Kind != EntryReasoning ||
+		snapshot.Entries[0].Phase != "" || snapshot.Entries[0].Text != "separate reasoning" {
+		t.Fatalf("reasoning projection = %+v", snapshot.Entries)
+	}
+}
+
+func TestRetryRollbackIsLimitedToUncommittedMessageIdentity(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	delegate := NewStreamDelegate(projector, "thread-1")
+	stream := func(messageID, content string) bus.Streamer {
+		t.Helper()
+		streamer, ok := delegate.GetStreamer(
+			t.Context(),
+			"coding",
+			"thread-1",
+			"thread-1",
+			"",
+			runtimeevents.NewTraceScope("/repo", "turn-1"),
+		)
+		if !ok {
+			t.Fatal("stream was rejected")
+		}
+		streamer.(interface{ SetAssistantMessageID(string) }).SetAssistantMessageID(messageID)
+		if err := streamer.Update(t.Context(), content); err != nil {
+			t.Fatal(err)
+		}
+		return streamer
+	}
+
+	failed := stream("provider-message-1", "failed attempt")
+	failed.Cancel(t.Context())
+	succeeded := stream("provider-message-1", "accepted commentary")
+	projector.AssistantMessageCommitted(
+		"turn-1",
+		"provider-message-1",
+		"accepted commentary",
+		AssistantPhaseCommentary,
+	)
+	succeeded.Cancel(t.Context())
+	next := stream("provider-message-2", "uncommitted next attempt")
+	next.Cancel(t.Context())
+
+	snapshot := snapshotForTest(t, projector)
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].Text != "accepted commentary" ||
+		snapshot.Entries[0].Phase != AssistantPhaseCommentary {
+		t.Fatalf("retry rollback result = %+v", snapshot.Entries)
+	}
+}
+
 func TestStreamCancelDoesNotRollbackLaterEntryWriter(t *testing.T) {
 	projector, err := NewProjector("thread-1", ProjectionLimits{})
 	if err != nil {
