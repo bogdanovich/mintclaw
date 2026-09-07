@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -237,6 +238,12 @@ func (record Record) validateEvent() error {
 
 const (
 	MaxEventTextBytes    = 64 << 10
+	MaxEventItems        = 128
+	MaxEventEntries      = 64
+	MaxEventTools        = 64
+	MaxEventChangedFiles = 128
+	MaxEventWriteAudits  = 64
+	MaxEventPlanSteps    = 32
 	MaxQuestionOptions   = 32
 	MaxQuestionTextBytes = 8 << 10
 )
@@ -458,6 +465,28 @@ func validateSnapshotEvent(identity ControlIdentity, snapshot frontend.ThreadSna
 	if err != nil || parsed.String() != snapshot.ThreadID || !validActivity(snapshot.Activity) {
 		return fmt.Errorf("%w: malformed coding worker snapshot", ErrInvalidRecord)
 	}
+	if len(snapshot.Items) > MaxEventItems || len(snapshot.Entries) > MaxEventEntries ||
+		len(snapshot.Tools) > MaxEventTools || len(snapshot.ChangedFiles) > MaxEventChangedFiles {
+		return fmt.Errorf("%w: coding worker snapshot exceeds collection limits", ErrInvalidRecord)
+	}
+	for _, item := range snapshot.Items {
+		if err := (ItemUpdatedPayload{ControlIdentity: identity, Item: item}).Validate(); err != nil {
+			return err
+		}
+	}
+	for _, entry := range snapshot.Entries {
+		if !validTranscriptEntry(entry) {
+			return fmt.Errorf("%w: malformed coding snapshot entry", ErrInvalidRecord)
+		}
+	}
+	for _, tool := range snapshot.Tools {
+		if !validToolState(tool) {
+			return fmt.Errorf("%w: malformed coding snapshot tool", ErrInvalidRecord)
+		}
+	}
+	if snapshot.ContextUsage.UsedTokens < 0 || snapshot.ContextUsage.LimitTokens < 0 {
+		return fmt.Errorf("%w: malformed coding snapshot context usage", ErrInvalidRecord)
+	}
 	return nil
 }
 
@@ -508,12 +537,85 @@ func validPresentationItemPayload(item frontend.PresentationItem) bool {
 	message, tool, plan := item.Message != nil, item.Tool != nil, item.Plan != nil
 	switch item.Kind {
 	case frontend.PresentationToolCall:
-		return !message && tool && !plan
+		return !message && tool && !plan && item.Tool.TurnID == item.TurnID && validToolState(*item.Tool)
 	case frontend.PresentationPlanUpdate:
-		return !message && !tool && plan
+		return !message && !tool && plan && validPlanState(*item.Plan)
 	default:
-		return message && !tool && !plan
+		return message && !tool && !plan && item.Message.TurnID == item.TurnID &&
+			validTranscriptEntry(*item.Message) && presentationKindMatchesEntry(item.Kind, item.Message.Kind)
 	}
+}
+
+func validTranscriptEntry(entry frontend.TranscriptEntry) bool {
+	if !validIdentifier(entry.ID) || !validIdentifier(entry.TurnID) {
+		return false
+	}
+	switch entry.Kind {
+	case frontend.EntryUser, frontend.EntryAssistant, frontend.EntryReasoning, frontend.EntryTool,
+		frontend.EntryWarning, frontend.EntryError:
+		return true
+	default:
+		return false
+	}
+}
+
+func presentationKindMatchesEntry(kind frontend.PresentationKind, entry frontend.EntryKind) bool {
+	switch entry {
+	case frontend.EntryUser:
+		return kind == frontend.PresentationUserMessage
+	case frontend.EntryAssistant:
+		return kind == frontend.PresentationAssistantMessage
+	case frontend.EntryReasoning:
+		return kind == frontend.PresentationReasoning
+	case frontend.EntryTool:
+		return kind == frontend.PresentationToolMessage
+	case frontend.EntryWarning:
+		return kind == frontend.PresentationWarning
+	case frontend.EntryError:
+		return kind == frontend.PresentationError
+	default:
+		return false
+	}
+}
+
+func validToolState(tool frontend.ToolState) bool {
+	if !validIdentifier(tool.TurnID) || !validIdentifier(tool.CallID) ||
+		!validBoundedText(tool.Name, MaxAttachmentMeta) || len(tool.WriteAudit) > MaxEventWriteAudits {
+		return false
+	}
+	switch tool.Status {
+	case frontend.ToolRunning, frontend.ToolSuspended, frontend.ToolSucceeded,
+		frontend.ToolFailed, frontend.ToolInterrupted, frontend.ToolUnknown:
+	default:
+		return false
+	}
+	if tool.Command == nil {
+		return true
+	}
+	switch tool.Command.Status {
+	case frontend.CommandRunning, frontend.CommandSucceeded, frontend.CommandFailed,
+		frontend.CommandCanceled, frontend.CommandTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+func validPlanState(plan frontend.PlanState) bool {
+	if !validIdentifier(plan.CallID) || len(plan.Steps) > MaxEventPlanSteps {
+		return false
+	}
+	for _, step := range plan.Steps {
+		if !validBoundedText(step.Step, MaxQuestionTextBytes) {
+			return false
+		}
+		switch step.Status {
+		case frontend.PlanStepPending, frontend.PlanStepInProgress, frontend.PlanStepCompleted:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validateEventText(raw json.RawMessage) error {
@@ -527,7 +629,7 @@ func validateEventText(raw json.RawMessage) error {
 	inspect = func(current any) error {
 		switch typed := current.(type) {
 		case string:
-			if len(typed) > MaxEventTextBytes || !utf8.ValidString(typed) || containsUnsafeControl(typed) {
+			if len(typed) > MaxEventTextBytes || !utf8.ValidString(typed) || containsTerminalControl(typed) {
 				return fmt.Errorf("%w: event payload contains unsafe or oversized text", ErrInvalidRecord)
 			}
 		case []any:
@@ -546,6 +648,15 @@ func validateEventText(raw json.RawMessage) error {
 		return nil
 	}
 	return inspect(value)
+}
+
+func containsTerminalControl(value string) bool {
+	return strings.ContainsFunc(value, func(character rune) bool {
+		if character == '\n' || character == '\r' || character == '\t' {
+			return false
+		}
+		return character == '\x1b' || unicode.IsControl(character)
+	})
 }
 
 func Encode(record Record) ([]byte, error) {
