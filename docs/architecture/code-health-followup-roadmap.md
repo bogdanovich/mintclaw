@@ -105,8 +105,7 @@ Completion gate:
 
 Status: implemented. Typed facts are assigned before durable spooling,
 classified after route/session admission, persisted back to processing or
-released records, and retained by replay. F2 owns removal of the remaining
-prompt-only compatibility fallback.
+released records, and retained by replay.
 
 Scope:
 
@@ -130,6 +129,11 @@ Completion gate:
 - focused bus, ingress, and classifier tests pass.
 
 ### F2: make prompt assembly a relation consumer
+
+Status: implemented. Prompt-build requests carry the admitted typed relation;
+prompt assembly only renders that relation. Legacy/unset dispatches default
+once before frozen turn input, and synthetic prompts receive an explicit
+standalone shape without consulting history or processing time.
 
 Scope:
 

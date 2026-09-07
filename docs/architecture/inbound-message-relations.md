@@ -1,14 +1,13 @@
 # Inbound Message Relations
 
-Status: partially implemented. Typed event time and relation facts are
-persisted through durable ingress, and admitted turns prefer those facts.
-Generic prompt construction still has a processing-time compatibility fallback;
-its removal and platform grouping remain F2-F3 of the
+Status: implemented for the core event/relation path. Typed event time and
+relation facts survive durable ingress and replay, and prompt assembly consumes
+them without reclassification. Platform-native grouping remains F3 of the
 [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
 
-MintClaw currently preserves normalized inbound messages through the durable
-ingress spool, but it still leaves too much conversational boundary inference
-to prompt-building heuristics.
+MintClaw preserves normalized inbound messages and their structural relation
+facts through the durable ingress spool. Relation classification happens after
+route/session admission, before prompt construction.
 
 This document records the target architecture for handling adjacent follow-up
 messages, media-only turns, replies, albums, and other inbound continuations in
@@ -266,7 +265,7 @@ Status: implemented by follow-up packet F1.
 
 ### PR 3: move prompt logic to consume relation metadata
 
-Status: admitted as follow-up packet F2.
+Status: implemented by follow-up packet F2.
 
 - remove prompt-local guessing where possible
 - keep prompt assembly responsible only for rendering context, not inferring it

@@ -113,13 +113,9 @@ type PromptBuildRequest struct {
 	ChatID            string
 	SenderID          string
 	SenderDisplayName string
-	ReplyToMessageID  string
-	// AllowAdjacentMediaFollowup enables inferred media-only continuation from
-	// the previous user turn. Callers should only set it when the session scope
-	// is known to be single-sender-safe, or when sender metadata can prove the
-	// prior user message came from the same sender.
-	AllowAdjacentMediaFollowup bool
-	CurrentMessageRelation     InboundMessageRelation
+	// CurrentMessageRelation is classified before prompt assembly. Renderers
+	// consume it as supplied and do not infer reply or adjacency from history.
+	CurrentMessageRelation InboundMessageRelation
 
 	ActiveSkills []string
 	Overlays     []PromptPart

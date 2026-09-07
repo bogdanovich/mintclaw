@@ -1054,7 +1054,11 @@ func (cb *ContextBuilder) BuildMessages(
 		ChatID:            chatID,
 		SenderID:          senderID,
 		SenderDisplayName: senderDisplayName,
-		ActiveSkills:      append([]string(nil), activeSkills...),
+		CurrentMessageRelation: standaloneInboundMessageRelation(
+			currentMessage,
+			media,
+		),
+		ActiveSkills: append([]string(nil), activeSkills...),
 	})
 }
 
@@ -1266,7 +1270,6 @@ func (cb *ContextBuilder) BuildMessagesFromPrompt(req PromptBuildRequest) []prov
 
 	// Add conversation history
 	messages = append(messages, history...)
-	req = normalizePromptBuildRequestRelations(req, history, time.Now())
 
 	// Add current user message. Media-only turns must still be preserved so
 	// multimodal providers receive the uploaded image even when the user sends

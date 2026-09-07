@@ -54,9 +54,9 @@ platforms.
 - Keep generated images and files deliverable without duplicate completion
   messages.
 - Keep channel feedback throttling controlled by real edit intervals.
-- Move reply / adjacent-followup / media-only interpretation toward an explicit
-  inbound relation model so prompt assembly does not have to guess message
-  boundaries from raw history.
+- Preserve reply / adjacent-followup / media-only interpretation through the
+  typed durable inbound relation model; prompt assembly consumes those facts
+  without guessing message boundaries from raw history.
 
 ## 6. Automation And Agent Workflows
 
