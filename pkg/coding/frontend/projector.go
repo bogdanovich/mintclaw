@@ -183,11 +183,55 @@ func (p *Projector) TurnStarted(turnID, userMessage string) {
 }
 
 func (p *Projector) AssistantAccumulated(turnID, content string, complete bool) {
-	p.upsertStreamEntry(turnID, EntryAssistant, content, complete, 0)
+	phase := AssistantPhase("")
+	if complete {
+		phase = AssistantPhaseFinal
+	}
+	p.upsertStreamEntry(turnID, EntryAssistant, "", phase, content, complete, 0)
 }
 
 func (p *Projector) ReasoningAccumulated(turnID, content string, complete bool) {
-	p.upsertStreamEntry(turnID, EntryReasoning, content, complete, 0)
+	p.upsertStreamEntry(turnID, EntryReasoning, "", "", content, complete, 0)
+}
+
+// AssistantMessageCommitted admits one successful provider message into the
+// durable presentation order. Empty content never creates a blank cell.
+func (p *Projector) AssistantMessageCommitted(
+	turnID, messageID, content string,
+	phase AssistantPhase,
+) bool {
+	if strings.TrimSpace(content) == "" || !validAssistantPhase(phase) {
+		return false
+	}
+	return p.upsertStreamEntry(turnID, EntryAssistant, messageID, phase, content, true, 0)
+}
+
+// ReasoningMessageCommitted preserves separately admitted reasoning without
+// allowing it to acquire an assistant commentary/final phase.
+func (p *Projector) ReasoningMessageCommitted(turnID, messageID, content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	return p.upsertStreamEntry(turnID, EntryReasoning, messageID, "", content, true, 0)
+}
+
+// EnsureAssistantFinal provides a terminal-event compatibility fallback. It
+// does not duplicate a final message already committed by the coding runtime.
+func (p *Projector) EnsureAssistantFinal(turnID, content string) bool {
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	turnID = presentationTurnID(turnID)
+	p.mu.RLock()
+	for _, item := range p.state.Items {
+		if item.TurnID == turnID && item.Message != nil && item.Message.Kind == EntryAssistant &&
+			item.Message.Phase == AssistantPhaseFinal {
+			p.mu.RUnlock()
+			return false
+		}
+	}
+	p.mu.RUnlock()
+	return p.AssistantMessageCommitted(turnID, "", content, AssistantPhaseFinal)
 }
 
 type entryVersion struct {
@@ -443,6 +487,8 @@ func latestSurvivingEntryVersion(head *entryVersion) *entryVersion {
 func (p *Projector) upsertStreamEntry(
 	turnID string,
 	entryKind EntryKind,
+	messageID string,
+	phase AssistantPhase,
 	content string,
 	complete bool,
 	owner uint64,
@@ -450,7 +496,7 @@ func (p *Projector) upsertStreamEntry(
 	turnID = presentationTurnID(turnID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	changed := p.upsertStreamEntryLocked(turnID, entryKind, content, complete, owner)
+	changed := p.upsertStreamEntryLocked(turnID, entryKind, messageID, phase, content, complete, owner)
 	if changed {
 		p.mutateLocked(func(*ThreadSnapshot) {})
 	}
@@ -460,6 +506,8 @@ func (p *Projector) upsertStreamEntry(
 func (p *Projector) finalizeStreamEntry(
 	turnID string,
 	entryKind EntryKind,
+	messageID string,
+	phase AssistantPhase,
 	content string,
 	complete bool,
 	owner uint64,
@@ -467,7 +515,7 @@ func (p *Projector) finalizeStreamEntry(
 	turnID = presentationTurnID(turnID)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.upsertStreamEntryLocked(turnID, entryKind, content, complete, owner)
+	p.upsertStreamEntryLocked(turnID, entryKind, messageID, phase, content, complete, owner)
 	p.commitStreamLocked(owner)
 	p.mutateLocked(func(*ThreadSnapshot) {})
 }
@@ -475,14 +523,20 @@ func (p *Projector) finalizeStreamEntry(
 func (p *Projector) upsertStreamEntryLocked(
 	turnID string,
 	entryKind EntryKind,
+	messageID string,
+	phase AssistantPhase,
 	content string,
 	complete bool,
 	owner uint64,
 ) bool {
+	if entryKind != EntryAssistant {
+		phase = ""
+	}
 	entry := TranscriptEntry{
-		ID:       boundPresentationIdentity(entryID(turnID, string(entryKind))),
+		ID:       boundPresentationIdentity(streamEntryID(turnID, entryKind, messageID)),
 		TurnID:   turnID,
 		Kind:     entryKind,
+		Phase:    phase,
 		Text:     content,
 		Complete: complete,
 	}
@@ -507,6 +561,18 @@ func (p *Projector) upsertStreamEntryLocked(
 		p.rebuildStreamMessageProjection(&p.state, item.ID)
 	}
 	return true
+}
+
+func validAssistantPhase(phase AssistantPhase) bool {
+	return phase == AssistantPhaseCommentary || phase == AssistantPhaseFinal
+}
+
+func streamEntryID(turnID string, kind EntryKind, messageID string) string {
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return entryID(turnID, string(kind))
+	}
+	return entryID(turnID, string(kind)+":"+messageID)
 }
 
 // committedVersionSupersedesOwner reports whether a committed writer landed
@@ -1063,6 +1129,9 @@ func (p *Projector) mutateLocked(apply func(*ThreadSnapshot)) {
 }
 
 func (p *Projector) boundedEntry(entry TranscriptEntry) TranscriptEntry {
+	if entry.Kind != EntryAssistant || (entry.Phase != "" && !validAssistantPhase(entry.Phase)) {
+		entry.Phase = ""
+	}
 	var truncated bool
 	entry.Text, truncated = boundText(entry.Text, p.limits.TextBytes)
 	entry.Truncated = entry.Truncated || truncated

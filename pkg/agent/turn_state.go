@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -213,6 +214,7 @@ func (d toolResponseDisposition) String() string {
 
 type LLMIterationState struct {
 	iteration                   int
+	assistantMessageID          string
 	response                    *providers.LLMResponse
 	normalizedToolCalls         []providers.ToolCall
 	toolResponseDisposition     toolResponseDisposition
@@ -232,7 +234,10 @@ type LLMIterationState struct {
 }
 
 func newLLMIterationState(iteration int) *LLMIterationState {
-	return &LLMIterationState{iteration: iteration}
+	return &LLMIterationState{
+		iteration:          iteration,
+		assistantMessageID: fmt.Sprintf("provider-message-%d", iteration),
+	}
 }
 
 type turnExecutionModel struct {

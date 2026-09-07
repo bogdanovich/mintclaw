@@ -42,6 +42,8 @@ type finalizationDelivery struct {
 type FinalizationContext struct {
 	content          string
 	contentProtected bool
+	messageID        string
+	reasoningContent string
 	status           TurnEndStatus
 	disposition      finalResponseDisposition
 	modelName        string
@@ -67,13 +69,13 @@ func newFinalizationContext(
 	if llm.toolResponseDisposition == toolResponseHandled && !terminal.persistIfToolHandled {
 		disposition = finalResponseAlreadyHandled
 	}
+	reasoningContent := responseReasoningContent(llm.response)
+	if terminal.persistIfToolHandled && llm.toolResponseDisposition == toolResponseHandled {
+		reasoningContent = ""
+	}
 
 	var historyMessage *providers.Message
 	if disposition == finalResponsePending && !ts.opts.NoHistory {
-		reasoningContent := responseReasoningContent(llm.response)
-		if terminal.persistIfToolHandled && llm.toolResponseDisposition == toolResponseHandled {
-			reasoningContent = ""
-		}
 		message := providers.Message{
 			Role:             "assistant",
 			Content:          terminal.content,
@@ -87,6 +89,8 @@ func newFinalizationContext(
 	return FinalizationContext{
 		content:          terminal.content,
 		contentProtected: terminal.protected,
+		messageID:        llm.assistantMessageID,
+		reasoningContent: reasoningContent,
 		status:           status,
 		disposition:      disposition,
 		modelName:        exec.model.llmModelName,
@@ -158,6 +162,15 @@ func (p *Pipeline) Finalize(
 		}
 		ts.recordPersistedMessage(finalMsg)
 		p.ingestMessage(turnCtx, ts, finalMsg, nil)
+	}
+	if !finalization.contentProtected {
+		p.emitCodingAssistantMessageCommitted(
+			ts,
+			finalization.messageID,
+			AssistantMessagePhaseFinal,
+			finalization.content,
+			finalization.reasoningContent,
+		)
 	}
 
 	contextUsage := computeContextUsage(ts.agent, ts.sessionKey)

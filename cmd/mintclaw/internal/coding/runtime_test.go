@@ -1498,7 +1498,8 @@ func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing
 		t.Fatalf("safe entries = %+v", page.Entries)
 	}
 	if page.Entries[0].Kind != frontend.EntryUser || page.Entries[1].Kind != frontend.EntryReasoning ||
-		page.Entries[2].Kind != frontend.EntryAssistant {
+		page.Entries[2].Kind != frontend.EntryAssistant ||
+		page.Entries[1].Phase != "" || page.Entries[2].Phase != frontend.AssistantPhaseFinal {
 		t.Fatalf("entry kinds = %+v", page.Entries)
 	}
 	for _, entry := range page.Entries {
@@ -1521,6 +1522,72 @@ func TestNativeControllerTranscriptPageHydratesOnlySafeDisplayContent(t *testing
 	_, err = runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
 	if !errors.Is(err, frontend.ErrTranscriptHistoryChanged) {
 		t.Fatalf("replacement page error = %v", err)
+	}
+}
+
+func TestHydratedTranscriptEntriesReconstructAssistantPhasesFromCanonicalHistory(t *testing.T) {
+	commentary := hydratedTranscriptEntries(4, providers.Message{
+		Role: "assistant", Content: "Inspecting the parser.", ReasoningContent: "separate reasoning",
+		ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "read_file"}},
+	})
+	final := hydratedTranscriptEntries(7, providers.Message{
+		Role: "assistant", Content: "The parser is fixed.",
+	})
+
+	if len(commentary) != 2 || commentary[0].Kind != frontend.EntryReasoning ||
+		commentary[0].Phase != "" || commentary[1].Kind != frontend.EntryAssistant ||
+		commentary[1].Phase != frontend.AssistantPhaseCommentary ||
+		commentary[1].ID != "history:4:assistant" {
+		t.Fatalf("hydrated commentary = %+v", commentary)
+	}
+	if len(final) != 1 || final[0].Kind != frontend.EntryAssistant ||
+		final[0].Phase != frontend.AssistantPhaseFinal || final[0].ID != "history:7:assistant" {
+		t.Fatalf("hydrated final = %+v", final)
+	}
+	if got := hydratedTranscriptEntries(8, providers.Message{
+		Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "call-empty", Name: "read_file"}},
+	}); len(got) != 0 {
+		t.Fatalf("empty commentary produced entries = %+v", got)
+	}
+}
+
+func TestNativeControllerTranscriptPageRestoresCommentaryOrderAfterRestart(t *testing.T) {
+	sessions := session.NewMemoryStore()
+	const sessionKey = "coding:thread-restart"
+	for _, message := range []providers.Message{
+		{Role: "user", Content: "fix it"},
+		{
+			Role: "assistant", Content: "Inspecting the parser.",
+			ToolCalls: []providers.ToolCall{{ID: "call-1", Name: "read_file"}},
+		},
+		{Role: "tool", ToolCallID: "call-1", Content: "private tool result"},
+		{Role: "assistant", Content: "The parser is fixed."},
+	} {
+		if err := sessions.AppendTurnMessage(t.Context(), sessionKey, message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opening, err := sessions.ReadTurnHistoryPage(
+		t.Context(),
+		sessionKey,
+		memory.HistoryPageRequest{Before: -1, Limit: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &nativeControllerRuntime{nativeCodingRuntime: &nativeCodingRuntime{
+		sessions: sessions, metadata: thread.Metadata{SessionKey: sessionKey}, historyCursor: opening.Cursor,
+	}}
+	page, err := runtime.TranscriptPage(t.Context(), frontend.TranscriptPageRequest{Before: -1, Limit: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Entries) != 3 || page.Entries[0].Kind != frontend.EntryUser ||
+		page.Entries[1].Phase != frontend.AssistantPhaseCommentary ||
+		page.Entries[1].Text != "Inspecting the parser." ||
+		page.Entries[2].Phase != frontend.AssistantPhaseFinal ||
+		page.Entries[2].Text != "The parser is fixed." {
+		t.Fatalf("restarted transcript = %+v", page.Entries)
 	}
 }
 

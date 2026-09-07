@@ -117,6 +117,27 @@ type LLMResponsePayload struct {
 	DiagnosticToolCalls string
 }
 
+// AssistantMessagePhase classifies provider-produced assistant text for a
+// coding frontend without conflating progress commentary and final answers.
+type AssistantMessagePhase string
+
+const (
+	AssistantMessagePhaseCommentary AssistantMessagePhase = "commentary"
+	AssistantMessagePhaseFinal      AssistantMessagePhase = "final"
+)
+
+// AssistantMessageCommittedPayload carries coding-only display content after
+// its canonical history write succeeds or an explicitly history-free turn is
+// admitted. Runtime logging strips the raw text.
+type AssistantMessageCommittedPayload struct {
+	MessageID        string
+	Phase            AssistantMessagePhase
+	Content          string
+	ReasoningContent string
+	ContentLen       int
+	ReasoningLen     int
+}
+
 // LLMDeltaPayload describes a streamed LLM delta.
 type LLMDeltaPayload struct {
 	ContentDeltaLen   int

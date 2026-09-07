@@ -690,7 +690,14 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			FinalContentProtected: sensitiveDiagnosticResponse,
 		}, nil
 	}
-	cancelConfiguredStreamingLLM(turnCtx, llm)
+	if ts.opts.mode == turnModeCoding {
+		// Keep this attempt visible until its assistant/tool-call record is admitted.
+		// The deferred cancel then removes only provisional versions; the committed
+		// coding presentation event survives under the same message identity.
+		defer cancelConfiguredStreamingLLM(turnCtx, llm)
+	} else {
+		cancelConfiguredStreamingLLM(turnCtx, llm)
+	}
 
 	// Tool-call path: normalize and prepare for tool execution
 	llm.normalizedToolCalls = make([]providers.ToolCall, 0, len(llm.response.ToolCalls))
@@ -782,6 +789,15 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			ts.recordPersistedMessage(assistantMsg)
 		}
 		p.ingestMessage(turnCtx, ts, assistantMsg, writeErr)
+	}
+	if ts.opts.NoHistory || llm.assistantToolCallsPersisted {
+		p.emitCodingAssistantMessageCommitted(
+			ts,
+			llm.assistantMessageID,
+			AssistantMessagePhaseCommentary,
+			assistantMsg.Content,
+			assistantMsg.ReasoningContent,
+		)
 	}
 	if shouldPublishMintClawToolCallInterim && (ts.opts.NoHistory || llm.assistantToolCallsPersisted) {
 		interimContent := assistantMsg.Content

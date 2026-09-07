@@ -108,6 +108,11 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		} else {
 			a.projector.TurnStarted(turnID, "")
 		}
+	case runtimeevents.KindAgentAssistantMessageCommitted:
+		payload, ok := event.Payload.(agent.AssistantMessageCommittedPayload)
+		if ok {
+			a.projectAssistantMessage(turnID, payload)
+		}
 	case runtimeevents.KindAgentTurnEnd:
 		a.projectTurnEnd(turnID, event.Payload)
 	case runtimeevents.KindAgentToolExecStart:
@@ -221,6 +226,20 @@ func (a *Adapter) project(event runtimeevents.Event) {
 			a.projector.TurnFailed(turnID, "agent error")
 		}
 	}
+}
+
+func (a *Adapter) projectAssistantMessage(turnID string, payload agent.AssistantMessageCommittedPayload) {
+	var phase frontend.AssistantPhase
+	switch payload.Phase {
+	case agent.AssistantMessagePhaseCommentary:
+		phase = frontend.AssistantPhaseCommentary
+	case agent.AssistantMessagePhaseFinal:
+		phase = frontend.AssistantPhaseFinal
+	default:
+		return
+	}
+	a.projector.ReasoningMessageCommitted(turnID, payload.MessageID, payload.ReasoningContent)
+	a.projector.AssistantMessageCommitted(turnID, payload.MessageID, payload.Content, phase)
 }
 
 func (a *Adapter) projectCompaction(
@@ -341,7 +360,7 @@ func (a *Adapter) projectTurnEnd(turnID string, value any) {
 		return
 	}
 	if payload.FinalContent != "" {
-		a.projector.AssistantAccumulated(turnID, payload.FinalContent, true)
+		a.projector.EnsureAssistantFinal(turnID, payload.FinalContent)
 	}
 	if payload.ContextUsedTokens > 0 || payload.ContextLimitTokens > 0 {
 		a.projector.ContextUsage(payload.ContextUsedTokens, payload.ContextLimitTokens)

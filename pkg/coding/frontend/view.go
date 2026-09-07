@@ -58,13 +58,23 @@ const (
 	EntryError     EntryKind = "error"
 )
 
+// AssistantPhase identifies whether provider-produced assistant text explains
+// ongoing work or completes the turn. Non-assistant entries leave it empty.
+type AssistantPhase string
+
+const (
+	AssistantPhaseCommentary AssistantPhase = "commentary"
+	AssistantPhaseFinal      AssistantPhase = "final"
+)
+
 type TranscriptEntry struct {
-	ID        string    `json:"id"`
-	TurnID    string    `json:"turn_id"`
-	Kind      EntryKind `json:"kind"`
-	Text      string    `json:"text"`
-	Complete  bool      `json:"complete"`
-	Truncated bool      `json:"truncated,omitempty"`
+	ID        string         `json:"id"`
+	TurnID    string         `json:"turn_id"`
+	Kind      EntryKind      `json:"kind"`
+	Phase     AssistantPhase `json:"phase,omitempty"`
+	Text      string         `json:"text"`
+	Complete  bool           `json:"complete"`
+	Truncated bool           `json:"truncated,omitempty"`
 }
 
 // PresentationKind identifies the semantic renderer selected for one ordered

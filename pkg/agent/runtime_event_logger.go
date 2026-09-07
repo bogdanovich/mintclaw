@@ -171,6 +171,18 @@ func runtimeEventLogSafePayload(payload any) any {
 			safe.FinalContent, safe.FinalContentLen = diagnosticTurnFinalContent(safe)
 		}
 		return &safe
+	case AssistantMessageCommittedPayload:
+		value.Content = ""
+		value.ReasoningContent = ""
+		return value
+	case *AssistantMessageCommittedPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		safe.Content = ""
+		safe.ReasoningContent = ""
+		return &safe
 	case LLMFallbackAttemptPayload:
 		value.DiagnosticMessage = ""
 		return value
@@ -324,6 +336,11 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 		fields["prompt_tokens"] = payload.PromptTokens
 		fields["completion_tokens"] = payload.CompletionTokens
 		fields["total_tokens"] = payload.TotalTokens
+	case AssistantMessageCommittedPayload:
+		fields["message_id"] = payload.MessageID
+		fields["phase"] = payload.Phase
+		fields["content_len"] = payload.ContentLen
+		fields["reasoning_len"] = payload.ReasoningLen
 	case LLMRetryPayload:
 		fields["attempt"] = payload.Attempt
 		fields["max_retries"] = payload.MaxRetries
