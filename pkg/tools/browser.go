@@ -17,6 +17,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
@@ -315,10 +316,7 @@ type browserLimitsView struct {
 
 func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *toolshared.ToolResult {
 	agentID := strings.TrimSpace(toolshared.ToolAgentID(ctx))
-	actorID := strings.TrimSpace(toolshared.ToolActorID(ctx))
-	if actorID == "" {
-		actorID = strings.TrimSpace(toolshared.ToolSenderID(ctx))
-	}
+	actorID := browserCanonicalActorID(ctx)
 	if !tool.runtime.enabledForAgent(agentID) || actorID == "" {
 		return browserErrorResult(
 			"not_granted",
@@ -2011,10 +2009,7 @@ func browserApprovalVerb(kind browser.ActionKind) string {
 }
 
 func browserOwnerFromContext(ctx context.Context) (browser.Owner, error) {
-	actorID := strings.TrimSpace(toolshared.ToolActorID(ctx))
-	if actorID == "" {
-		actorID = strings.TrimSpace(toolshared.ToolSenderID(ctx))
-	}
+	actorID := browserCanonicalActorID(ctx)
 	agentID := strings.TrimSpace(toolshared.ToolAgentID(ctx))
 	sessionKey := strings.TrimSpace(toolshared.ToolRouteSessionKey(ctx))
 	if sessionKey == "" {
@@ -2030,6 +2025,23 @@ func browserOwnerFromContext(ctx context.Context) (browser.Owner, error) {
 		SessionKey:  browserContextID("session", sessionKey),
 		ExecutionID: browserContextID("execution", executionID),
 	}, nil
+}
+
+func browserCanonicalActorID(ctx context.Context) string {
+	inbound := toolshared.ToolInboundContext(ctx)
+	channel := strings.ToLower(strings.TrimSpace(inbound.Channel))
+	actorID := strings.TrimSpace(inbound.ActorID)
+	if actorID == "" {
+		actorID = strings.TrimSpace(inbound.SenderID)
+	}
+	if channel == "" || actorID == "" {
+		return ""
+	}
+	if platform, platformID, ok := identity.ParseCanonicalID(actorID); ok &&
+		strings.EqualFold(strings.TrimSpace(platform), channel) {
+		return identity.BuildCanonicalID(channel, platformID)
+	}
+	return identity.BuildCanonicalID(channel, actorID)
 }
 
 func browserRequestID(ctx context.Context) (string, error) {

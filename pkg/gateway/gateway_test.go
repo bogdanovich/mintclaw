@@ -726,7 +726,7 @@ func TestBrowserToolLeaseRejectsRevokedGrantAfterSuccessfulReload(t *testing.T) 
 
 func gatewayBrowserToolContext(agentID string) context.Context {
 	ctx := toolshared.WithToolInboundMetadata(context.Background(), bus.InboundContext{
-		SenderID: "browser-test-user", ActorID: "browser-test-actor",
+		Channel: "telegram", SenderID: "browser-test-user", ActorID: "browser-test-actor",
 	})
 	ctx = toolshared.WithToolSessionContext(ctx, agentID, "browser-test-history", nil)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, "telegram:browser-test")
