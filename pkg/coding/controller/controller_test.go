@@ -44,6 +44,23 @@ type noReadyRuntime struct {
 	*blockingRuntime
 }
 
+type recordingSteerRuntime struct {
+	*blockingRuntime
+	steerMu  sync.Mutex
+	steers   []frontend.SteerInput
+	steerErr error
+}
+
+func (runtime *recordingSteerRuntime) Steer(_ context.Context, input frontend.SteerInput) error {
+	runtime.steerMu.Lock()
+	defer runtime.steerMu.Unlock()
+	if runtime.steerErr != nil {
+		return runtime.steerErr
+	}
+	runtime.steers = append(runtime.steers, input)
+	return nil
+}
+
 type pagedRuntime struct {
 	*blockingRuntime
 	page frontend.TranscriptPage
@@ -533,6 +550,130 @@ func TestSubmitRunsOutsideCoordinatorAndRejectsSecondPrompt(t *testing.T) {
 			runtime.hardCancels,
 			runtime.closes,
 		)
+	}
+}
+
+func TestSteerIsExplicitActiveTurnCapabilityAndIdempotent(t *testing.T) {
+	runtime := &recordingSteerRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "before", Text: "too early"},
+	); !errors.Is(
+		err,
+		ErrNoActiveTurn,
+	) {
+		t.Fatalf("Steer() before turn error = %v, want %v", err, ErrNoActiveTurn)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	input := frontend.SteerInput{ID: "steer-1", Text: "focus on the parser"}
+	if err := controller.Steer(t.Context(), input); err != nil {
+		t.Fatalf("Steer() error = %v", err)
+	}
+	if err := controller.Steer(t.Context(), input); err != nil {
+		t.Fatalf("duplicate Steer() error = %v", err)
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: input.ID, Text: "change focus"},
+	); !errors.Is(err, ErrSteerConflict) {
+		t.Fatalf("conflicting Steer() error = %v, want %v", err, ErrSteerConflict)
+	}
+	runtime.steerMu.Lock()
+	steers := append([]frontend.SteerInput(nil), runtime.steers...)
+	runtime.steerMu.Unlock()
+	if len(steers) != 1 || steers[0] != input {
+		t.Fatalf("runtime steers = %#v, want only %#v", steers, input)
+	}
+	close(runtime.runRelease)
+	if err := controller.AwaitTurn(t.Context()); err != nil {
+		t.Fatalf("AwaitTurn() error = %v", err)
+	}
+	if err := controller.Steer(t.Context(), input); err != nil {
+		t.Fatalf("post-settlement duplicate Steer() error = %v", err)
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "after", Text: "too late"},
+	); !errors.Is(
+		err,
+		ErrNoActiveTurn,
+	) {
+		t.Fatalf("post-settlement new Steer() error = %v, want %v", err, ErrNoActiveTurn)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSteerDoesNotCacheRuntimeFailure(t *testing.T) {
+	injected := errors.New("queue full")
+	runtime := &recordingSteerRuntime{blockingRuntime: newBlockingRuntime(), steerErr: injected}
+	controller := newTestController(t, runtime)
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	input := frontend.SteerInput{ID: "retryable", Text: "try this"}
+	if err := controller.Steer(t.Context(), input); !errors.Is(err, injected) {
+		t.Fatalf("first Steer() error = %v, want %v", err, injected)
+	}
+	runtime.steerMu.Lock()
+	runtime.steerErr = nil
+	runtime.steerMu.Unlock()
+	if err := controller.Steer(t.Context(), input); err != nil {
+		t.Fatalf("retried Steer() error = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSteerRejectsInvalidUnsupportedAndExcessInputs(t *testing.T) {
+	controller := newTestController(t, newBlockingRuntime())
+	if err := controller.Steer(t.Context(), frontend.SteerInput{ID: "bad id", Text: "valid"}); err == nil {
+		t.Fatal("Steer() accepted malformed ID")
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "valid", Text: "guidance"},
+	); !errors.Is(
+		err,
+		ErrUnsupported,
+	) {
+		t.Fatalf("unsupported Steer() error = %v, want %v", err, ErrUnsupported)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	runtime := &recordingSteerRuntime{blockingRuntime: newBlockingRuntime()}
+	limited := newTestController(t, runtime)
+	if err := limited.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
+		t.Fatal(err)
+	}
+	for index := range frontend.MaxSteersPerTurn {
+		if err := limited.Steer(t.Context(), frontend.SteerInput{
+			ID: fmt.Sprintf("steer-%d", index), Text: "bounded guidance",
+		}); err != nil {
+			t.Fatalf("Steer(%d) error = %v", index, err)
+		}
+	}
+	if err := limited.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "overflow", Text: "one too many"},
+	); !errors.Is(
+		err,
+		ErrSteerLimit,
+	) {
+		t.Fatalf("overflow Steer() error = %v, want %v", err, ErrSteerLimit)
+	}
+	if err := limited.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 

@@ -111,6 +111,7 @@ type nativeCodingRuntime struct {
 	sessions        session.SessionStore
 	readTurnHistory func(context.Context, session.SessionStore, string) ([]providers.Message, error)
 	metadata        thread.Metadata
+	workspace       string
 	model           string
 	provider        string
 	repository      *codingworkspace.Repository
@@ -128,6 +129,7 @@ type nativeCodingRuntime struct {
 		string,
 		agent.DirectTurnOptions,
 	) (string, error)
+	steer          func(string, string, string, providers.Message) error
 	historyCursor  memory.HistoryCursor
 	closeOnce      sync.Once
 	operationalMu  sync.Mutex
@@ -299,6 +301,7 @@ func openNativeCodingRuntime(
 		sessions:        loop.GetRegistry().GetDefaultAgent().Sessions,
 		readTurnHistory: readTurnHistory,
 		metadata:        request.Metadata,
+		workspace:       layout.ExecutionRoot(),
 		model:           modelName,
 		provider:        providerName,
 		repository:      repository,
@@ -309,6 +312,7 @@ func openNativeCodingRuntime(
 		attachmentMedia: attachmentMedia,
 		now:             time.Now,
 		processDirect:   loop.ProcessDirectInputWithOptions,
+		steer:           loop.Steer,
 	}
 	if projector != nil {
 		runtime.historyCursor, err = codingHistoryCursor(
@@ -583,6 +587,27 @@ func codingDirectTurnOptions(streaming bool, onReady func()) agent.DirectTurnOpt
 
 func (r *nativeCodingRuntime) Interrupt(_ context.Context) error {
 	return r.loop.InterruptGracefulSession(r.metadata.SessionKey, "finish the current work and summarize")
+}
+
+func (r *nativeCodingRuntime) Steer(ctx context.Context, input frontend.SteerInput) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	steer := r.steer
+	if steer == nil && r.loop != nil {
+		steer = r.loop.Steer
+	}
+	if steer == nil {
+		return fmt.Errorf("coding runtime: steering is unavailable")
+	}
+	return steer(
+		r.workspace,
+		r.metadata.SessionKey,
+		"main",
+		providers.Message{Role: "user", Content: input.Text},
+	)
 }
 
 func (r *nativeCodingRuntime) HardCancel(_ context.Context) error {

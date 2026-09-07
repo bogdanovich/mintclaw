@@ -1168,6 +1168,46 @@ func TestCodingDirectTurnOptionsEnableBackgroundCompactionForPersistentRuntime(t
 	}
 }
 
+func TestNativeCodingRuntimeSteerUsesBoundRuntimeScope(t *testing.T) {
+	var workspace, sessionKey, agentID string
+	var message providers.Message
+	runtime := &nativeCodingRuntime{
+		workspace: "/tmp/execution-root",
+		metadata:  thread.Metadata{SessionKey: "coding:thread-1"},
+		steer: func(gotWorkspace, gotSessionKey, gotAgentID string, gotMessage providers.Message) error {
+			workspace = gotWorkspace
+			sessionKey = gotSessionKey
+			agentID = gotAgentID
+			message = gotMessage
+			return nil
+		},
+	}
+	if err := runtime.Steer(t.Context(), frontend.SteerInput{ID: "steer-1", Text: "new guidance"}); err != nil {
+		t.Fatalf("Steer() error = %v", err)
+	}
+	if workspace != runtime.workspace || sessionKey != runtime.metadata.SessionKey || agentID != "main" ||
+		message.Role != "user" || message.Content != "new guidance" || message.InboundSpoolID != "" {
+		t.Fatalf(
+			"steer scope = workspace:%q session:%q agent:%q message:%+v",
+			workspace,
+			sessionKey,
+			agentID,
+			message,
+		)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := runtime.Steer(
+		canceled,
+		frontend.SteerInput{ID: "steer-2", Text: "late"},
+	); !errors.Is(
+		err,
+		context.Canceled,
+	) {
+		t.Fatalf("canceled Steer() error = %v, want %v", err, context.Canceled)
+	}
+}
+
 func TestNativeRuntimeAdmitsAttachmentAndStoresExactReference(t *testing.T) {
 	store, lease, metadata := newRuntimeAttachmentThread(t)
 	sessions := session.NewMemoryStore()
