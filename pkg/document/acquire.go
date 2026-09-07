@@ -28,8 +28,9 @@ type AcquireOptions struct {
 }
 
 type Snapshot struct {
-	path string
-	dir  string
+	path      string
+	dir       string
+	removeAll func(string) error
 }
 
 func (s *Snapshot) Path() string {
@@ -43,7 +44,11 @@ func (s *Snapshot) Close() error {
 	if s == nil || s.dir == "" {
 		return nil
 	}
-	err := os.RemoveAll(s.dir)
+	removeAll := os.RemoveAll
+	if s.removeAll != nil {
+		removeAll = s.removeAll
+	}
+	err := removeAll(s.dir)
 	if err == nil {
 		s.path = ""
 		s.dir = ""
@@ -126,36 +131,42 @@ func acquireSnapshot(
 		return nil, failReport(report, StateFailed, FailureInternal, "protected scratch is unavailable")
 	}
 	snapshot := &Snapshot{path: filepath.Join(operationDir, "snapshot.pdf"), dir: operationDir}
-	keepSnapshot := false
-	defer func() {
-		if !keepSnapshot {
-			_ = snapshot.Close()
-		}
-	}()
 
 	digest, size, err := copyAndHash(ctx, source, snapshot.path, report.Limits.MaxInputBytes)
 	if err != nil {
-		return nil, acquisitionFailure(report, err)
+		return cleanupAcquisitionFailure(snapshot, acquisitionFailure(report, err))
 	}
 	if afterFirstRead != nil {
 		afterFirstRead()
 	}
 	stable, err := verifyStableSource(ctx, inputPath, source, sourceInfo, digest, size, report.Limits.MaxInputBytes)
 	if err != nil {
-		return nil, acquisitionFailure(report, err)
+		return cleanupAcquisitionFailure(snapshot, acquisitionFailure(report, err))
 	}
 	if !stable {
-		return nil, failReport(report, StateFailed, FailureSourceChanged, "document changed during acquisition")
+		return cleanupAcquisitionFailure(
+			snapshot,
+			failReport(report, StateFailed, FailureSourceChanged, "document changed during acquisition"),
+		)
 	}
 	contentType, err := detectPDF(snapshot.path)
 	if err != nil {
-		return nil, failReport(report, StateFailed, FailureInternal, "immutable snapshot could not be verified")
+		return cleanupAcquisitionFailure(
+			snapshot,
+			failReport(report, StateFailed, FailureInternal, "immutable snapshot could not be verified"),
+		)
 	}
 	if contentType == "" {
-		return nil, failReport(report, StateUnsupported, FailureUnsupportedType, "input is not a PDF document")
+		return cleanupAcquisitionFailure(
+			snapshot,
+			failReport(report, StateUnsupported, FailureUnsupportedType, "input is not a PDF document"),
+		)
 	}
 	if err := os.Chmod(snapshot.path, 0o400); err != nil {
-		return nil, failReport(report, StateFailed, FailureInternal, "immutable snapshot could not be protected")
+		return cleanupAcquisitionFailure(
+			snapshot,
+			failReport(report, StateFailed, FailureInternal, "immutable snapshot could not be protected"),
+		)
 	}
 
 	report.State = StateSucceeded
@@ -171,8 +182,19 @@ func acquireSnapshot(
 		CleanupPolicy:    "delete_on_operation_close",
 	}
 	report.Failure = nil
-	keepSnapshot = true
 	return snapshot, report
+}
+
+func cleanupAcquisitionFailure(snapshot *Snapshot, report Report) (*Snapshot, Report) {
+	if err := snapshot.Close(); err != nil {
+		return snapshot, failReport(
+			report,
+			StateFailed,
+			FailureInternal,
+			"protected scratch cleanup failed",
+		)
+	}
+	return nil, report
 }
 
 type acquisitionError struct {
@@ -202,6 +224,10 @@ func acquisitionFailure(report Report, err error) Report {
 }
 
 func openRegularSource(path string) (*os.File, os.FileInfo, error) {
+	return openRegularSourceWithHook(path, nil)
+}
+
+func openRegularSourceWithHook(path string, afterLstat func()) (*os.File, os.FileInfo, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, nil, &acquisitionError{code: FailureInvalidInput, err: err}
@@ -211,6 +237,9 @@ func openRegularSource(path string) (*os.File, os.FileInfo, error) {
 			code: FailureInvalidInput,
 			err:  fmt.Errorf("source is not a direct regular file"),
 		}
+	}
+	if afterLstat != nil {
+		afterLstat()
 	}
 	file, err := openSourceNoFollow(path)
 	if err != nil {

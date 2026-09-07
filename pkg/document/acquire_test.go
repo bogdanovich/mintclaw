@@ -3,6 +3,7 @@ package document
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -204,6 +205,44 @@ func TestAcquireSnapshotSeparatesEqualNamesWithDifferentBytes(t *testing.T) {
 			secondReport,
 			secondReport.Failure,
 		)
+	}
+}
+
+func TestCleanupFailureReturnsRetryableSnapshotOwnership(t *testing.T) {
+	root := directTempDir(t)
+	operationDir := filepath.Join(root, "operation")
+	if err := os.Mkdir(operationDir, 0o700); err != nil {
+		t.Fatalf("create operation directory: %v", err)
+	}
+	snapshotPath := filepath.Join(operationDir, "snapshot.pdf")
+	writeFixture(t, snapshotPath, []byte("%PDF-1.7\n%%EOF\n"))
+	cleanupErr := errors.New("injected cleanup failure")
+	snapshot := &Snapshot{
+		path: snapshotPath,
+		dir:  operationDir,
+		removeAll: func(string) error {
+			return cleanupErr
+		},
+	}
+	original := failReport(
+		newReport("document_operation_cleanup_failure", 1024),
+		StateUnsupported,
+		FailureUnsupportedType,
+		"input is not a PDF document",
+	)
+
+	gotSnapshot, gotReport := cleanupAcquisitionFailure(snapshot, original)
+	if gotSnapshot != snapshot || gotSnapshot.Path() != snapshotPath {
+		t.Fatalf("cleanup ownership was lost: snapshot = %#v", gotSnapshot)
+	}
+	assertFailure(t, gotReport, StateFailed, FailureInternal)
+
+	snapshot.removeAll = nil
+	if err := snapshot.Close(); err != nil {
+		t.Fatalf("retry cleanup: %v", err)
+	}
+	if _, err := os.Stat(operationDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("operation directory survived retry: %v", err)
 	}
 }
 

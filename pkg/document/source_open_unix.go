@@ -41,7 +41,12 @@ func openSourceNoFollow(path string) (*os.File, error) {
 		_ = unix.Close(directoryFD)
 		directoryFD = nextFD
 	}
-	fd, err := unix.Openat(directoryFD, parts[len(parts)-1], unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	fd, err := unix.Openat(
+		directoryFD,
+		parts[len(parts)-1],
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
 	if err != nil {
 		return nil, err
 	}
