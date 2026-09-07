@@ -18,6 +18,15 @@ type inboundDispatchTarget struct {
 	Allocation    session.Allocation
 	SessionKey    string
 	RouteClaimKey string
+	relationRoot  *inboundRelationRoot
+}
+
+// inboundRelationRoot keeps the event identity needed to classify follow-ups
+// while a claimed root is waiting to reach canonical session history.
+type inboundRelationRoot struct {
+	SpoolID    string
+	MessageID  string
+	ReceivedAt time.Time
 }
 
 type inboundMessageTurn struct {
@@ -96,6 +105,22 @@ func runtimeRouteClaimKey(routeScopeKey, explicitSessionKey string) string {
 	return "route:" + strings.TrimSpace(routeScopeKey)
 }
 
+func targetWithInboundRelationRoot(
+	target *inboundDispatchTarget,
+	msg bus.InboundMessage,
+) *inboundDispatchTarget {
+	if target == nil {
+		return nil
+	}
+	claimedTarget := *target
+	claimedTarget.relationRoot = &inboundRelationRoot{
+		SpoolID:    msg.SpoolID,
+		MessageID:  strings.TrimSpace(msg.Context.MessageID),
+		ReceivedAt: msg.Context.ReceivedAt,
+	}
+	return &claimedTarget
+}
+
 func (al *AgentLoop) buildInboundMessageTurnForTarget(
 	ctx context.Context,
 	msg bus.InboundMessage,
@@ -144,6 +169,7 @@ func (al *AgentLoop) prepareInboundMessageForTarget(
 		if target != nil && target.Agent != nil && target.Agent.Sessions != nil {
 			history = target.Agent.Sessions.GetHistory(target.SessionKey)
 		}
+		history = historyWithPendingRelationRoot(history, target, msg)
 		msg.Context.Relation = classifyPromptCurrentMessageRelation(
 			msg.Content,
 			msg.Media,
@@ -159,6 +185,53 @@ func (al *AgentLoop) prepareInboundMessageForTarget(
 		}
 	}
 	return msg, nil
+}
+
+func historyWithPendingRelationRoot(
+	history []providers.Message,
+	target *inboundDispatchTarget,
+	msg bus.InboundMessage,
+) []providers.Message {
+	if target == nil || target.relationRoot == nil || target.relationRoot.ReceivedAt.IsZero() ||
+		target.relationRoot.matches(msg) {
+		return history
+	}
+
+	rootAt := target.relationRoot.ReceivedAt
+	for i := range history {
+		if history[i].RootTurnStart && history[i].CreatedAt != nil && history[i].CreatedAt.Equal(rootAt) {
+			return history
+		}
+	}
+
+	insertAt := len(history)
+	for i := range history {
+		if history[i].CreatedAt != nil && !history[i].CreatedAt.Before(rootAt) {
+			insertAt = i
+			break
+		}
+	}
+	rootMessage := providers.Message{
+		Role:          "user",
+		CreatedAt:     &rootAt,
+		RootTurnStart: true,
+	}
+	withRoot := make([]providers.Message, 0, len(history)+1)
+	withRoot = append(withRoot, history[:insertAt]...)
+	withRoot = append(withRoot, rootMessage)
+	withRoot = append(withRoot, history[insertAt:]...)
+	return withRoot
+}
+
+func (root inboundRelationRoot) matches(msg bus.InboundMessage) bool {
+	if root.SpoolID != "" && msg.SpoolID != "" {
+		return root.SpoolID == msg.SpoolID
+	}
+	messageID := strings.TrimSpace(msg.Context.MessageID)
+	if root.MessageID != "" && messageID != "" {
+		return root.MessageID == messageID
+	}
+	return !root.ReceivedAt.IsZero() && root.ReceivedAt.Equal(msg.Context.ReceivedAt)
 }
 
 func normalizeDispatchInboundRelation(

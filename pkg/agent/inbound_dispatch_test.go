@@ -311,6 +311,74 @@ func TestBuildInboundMessageTurnPersistsEventTimeRelationForReplay(t *testing.T)
 	}
 }
 
+func TestPendingRelationRootDoesNotClassifyItselfAsFollowup(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	receivedAt := time.Date(2026, 9, 7, 6, 59, 0, 0, time.UTC)
+	msg := bus.InboundMessage{
+		SpoolID: "spool-root",
+		Context: bus.InboundContext{
+			Channel:    "telegram",
+			ChatID:     "chat-1",
+			ChatType:   "direct",
+			SenderID:   "telegram:42",
+			MessageID:  "root-1",
+			ReceivedAt: receivedAt,
+		},
+		Content: "[media only]",
+		Media:   []string{"media://image-1"},
+	}
+	target, err := al.resolveInboundDispatchTarget(msg)
+	if err != nil {
+		t.Fatalf("resolveInboundDispatchTarget() error = %v", err)
+	}
+	prepared, err := al.prepareInboundMessageForTarget(
+		t.Context(),
+		msg,
+		targetWithInboundRelationRoot(target, msg),
+	)
+	if err != nil {
+		t.Fatalf("prepareInboundMessageForTarget() error = %v", err)
+	}
+	if prepared.Context.Relation.Kind != bus.InboundRelationStandalone ||
+		!prepared.Context.Relation.MediaOnly {
+		t.Fatalf("root relation = %#v, want standalone media", prepared.Context.Relation)
+	}
+}
+
+func TestPendingRelationRootStopsAfterCanonicalRootAppears(t *testing.T) {
+	rootAt := time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC)
+	assistantAt := rootAt.Add(30 * time.Second)
+	followAt := rootAt.Add(time.Minute)
+	target := &inboundDispatchTarget{
+		relationRoot: &inboundRelationRoot{SpoolID: "spool-root", ReceivedAt: rootAt},
+	}
+	history := []providers.Message{
+		{Role: "user", Content: "Here is what I ate", CreatedAt: &rootAt, RootTurnStart: true},
+		{Role: "assistant", Content: "Saved.", CreatedAt: &assistantAt},
+	}
+	withRoot := historyWithPendingRelationRoot(history, target, bus.InboundMessage{
+		SpoolID: "spool-followup",
+		Context: bus.InboundContext{
+			ReceivedAt: followAt,
+		},
+	})
+	if len(withRoot) != len(history) {
+		t.Fatalf("history length = %d, want canonical history length %d", len(withRoot), len(history))
+	}
+	relation := classifyPromptCurrentMessageRelation(
+		"[media only]",
+		[]string{"media://image-1"},
+		"",
+		true,
+		withRoot,
+		followAt,
+	)
+	if relation.Kind != bus.InboundRelationStandalone {
+		t.Fatalf("relation after assistant = %#v, want standalone", relation)
+	}
+}
+
 func TestProcessMessagePersistsInboundReceivedAtAsRootTimestamp(t *testing.T) {
 	al, cleanup := newInboundDispatchTestLoop(t)
 	defer cleanup()

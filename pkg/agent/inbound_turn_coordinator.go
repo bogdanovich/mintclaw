@@ -83,13 +83,13 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 		return
 	}
 
-	claim, activeTarget, claimed := c.claimSession(target)
+	claim, activeTarget, claimed := c.claimSession(targetWithInboundRelationRoot(target, msg))
 	if !claimed {
 		c.handleBusySession(ctx, msg, activeTarget)
 		return
 	}
 
-	c.startWorker(ctx, msg, target, claim)
+	c.startWorker(ctx, msg, activeTarget, claim)
 }
 
 func (c *inboundTurnCoordinator) handleScopedInspectionCommand(
