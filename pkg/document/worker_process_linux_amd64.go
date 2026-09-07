@@ -101,7 +101,35 @@ func (w *processWorker) run(
 	command.Stdout = stdout
 	command.Stderr = stderr
 
-	runErr := command.Run()
+	if startErr := command.Start(); startErr != nil {
+		if ctx.Err() != nil {
+			return workerFailure(request.OperationID, StateCanceled, FailureCanceled, "document worker was canceled")
+		}
+		if errors.Is(processCtx.Err(), context.DeadlineExceeded) {
+			return workerFailure(
+				request.OperationID,
+				StateFailed,
+				FailureWorkerTimeout,
+				"document worker exceeded its runtime limit",
+			)
+		}
+		return workerFailure(
+			request.OperationID,
+			StateUnavailable,
+			FailureWorkerUnavailable,
+			"document worker executable is unavailable",
+		)
+	}
+	waitErr := command.Wait()
+	if terminateErr := killWorkerProcessGroup(command); terminateErr != nil &&
+		!errors.Is(terminateErr, os.ErrProcessDone) {
+		return workerFailure(
+			request.OperationID,
+			StateFailed,
+			FailureInternal,
+			"document worker process cleanup failed",
+		)
+	}
 	if stdout.exceeded || stderr.exceeded {
 		return workerFailure(
 			request.OperationID,
@@ -121,7 +149,7 @@ func (w *processWorker) run(
 			"document worker exceeded its runtime limit",
 		)
 	}
-	if runErr != nil {
+	if waitErr != nil {
 		return workerFailure(
 			request.OperationID,
 			StateFailed,

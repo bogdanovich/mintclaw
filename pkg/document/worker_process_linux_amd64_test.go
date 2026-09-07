@@ -30,6 +30,30 @@ func TestProcessWorkerSuccessUsesRealSubprocessAndCleansScratch(t *testing.T) {
 	assertOnlySnapshotRemains(t, snapshot)
 }
 
+func TestProcessWorkerKillsDescendantAfterSuccessfulLeaderExit(t *testing.T) {
+	snapshot, input := processWorkerFixture(t)
+	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+	worker := testProcessWorker("serve-with-descendant", pidFile)
+
+	result := worker.Verify(t.Context(), snapshot, input)
+	if result.State != StateSucceeded || result.Input == nil {
+		t.Fatalf("worker result = %#v", result)
+	}
+	childPID := waitForWorkerChildPID(t, pidFile)
+	waitForProcessExit(t, childPID)
+	assertOnlySnapshotRemains(t, snapshot)
+}
+
+func TestProcessWorkerReportsLaunchFailureAsUnavailable(t *testing.T) {
+	snapshot, input := processWorkerFixture(t)
+	worker := testProcessWorker("serve")
+	worker.executable = filepath.Join(t.TempDir(), "missing-mintclaw")
+
+	result := worker.Verify(t.Context(), snapshot, input)
+	assertWorkerFailure(t, result, StateUnavailable, FailureWorkerUnavailable)
+	assertOnlySnapshotRemains(t, snapshot)
+}
+
 func TestProcessWorkerReturnsTypedTerminalFailures(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -144,6 +168,26 @@ func TestDocumentWorkerHelperProcess(t *testing.T) {
 			os.Exit(97)
 		}
 		time.Sleep(time.Minute)
+	case "serve-with-descendant":
+		if separator+2 >= len(os.Args) {
+			os.Exit(99)
+		}
+		child := exec.Command("/bin/sleep", "60")
+		if err := child.Start(); err != nil {
+			os.Exit(100)
+		}
+		if err := os.WriteFile(os.Args[separator+2], []byte(strconv.Itoa(child.Process.Pid)), 0o600); err != nil {
+			os.Exit(101)
+		}
+		input := os.NewFile(WorkerInputFileDescriptor(), "document-snapshot")
+		if input == nil {
+			os.Exit(102)
+		}
+		if err := ServeWorker(os.Stdin, input, os.Stdout); err != nil {
+			os.Exit(103)
+		}
+		_ = input.Close()
+		os.Exit(0)
 	default:
 		os.Exit(98)
 	}
