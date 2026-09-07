@@ -216,7 +216,7 @@ func TestCompanionBrowserLifecycleAndReconnectOverProductionWSS(t *testing.T) {
 		workspace: workspace, limits: cfg.Tools.Browser.Limits.Effective(),
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "browser-wss-session", ExecutionID: "browser-wss-execution",
 	}
 
@@ -1250,7 +1250,7 @@ func TestCompanionBrowserSnapshotTransferRecoveryOverProductionWSS(t *testing.T)
 			sessionID := "browser_snapshot_" + strings.ReplaceAll(test.name, " ", "_")
 			opened, openErr := factory.Open(t.Context(), browser.WorkerOpenRequest{
 				Owner: browser.Owner{
-					ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+					ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 					SessionKey: sessionID, ExecutionID: "execution_" + sessionID,
 				},
 				SessionID: sessionID, Target: "companion", Profile: "managed", DryRun: false,
@@ -1387,7 +1387,7 @@ func TestCompanionBrowserContextsOverProductionWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "browser-context-wss-session", ExecutionID: "browser-context-wss-execution",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -1585,7 +1585,7 @@ func TestCompanionBrowserClickDryRunDeniedOverProductionWSS(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "browser-wss-dry-run", ExecutionID: "browser-wss-dry-run-execution",
 	}
 	session := openWSSBrowserSession(t, broker, owner)
@@ -2880,7 +2880,9 @@ func wssBrowserGatewayConfig(t *testing.T, workspace string) *config.Config {
 				Enabled: true, Placement: config.BrowserPlacementNode, NodeTarget: "ab-local-test",
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
-						Enabled: true, Mode: config.BrowserProfileManaged,
+						Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents:  []string{"browser"},
+						AllowedActors:  []string{"actor_test", "telegram:owner"},
 						NetworkMode:    config.BrowserNetworkAnyHTTP,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalAlwaysCommit, AllowApprovedActions: true,

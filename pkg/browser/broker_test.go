@@ -1353,7 +1353,6 @@ func admittedBrowserConfig() *config.Config {
 	root := config.DefaultConfig()
 	root.Tools.MCP.Servers["playwright"] = config.MCPServerConfig{
 		Enabled: false, Command: "npx", Type: "stdio",
-		ExclusiveLockFile: "/var/lib/mintclaw/playwright.lock",
 	}
 	root.Tools.Browser = config.BrowserToolsConfig{
 		Enabled: true,
@@ -1364,11 +1363,17 @@ func admittedBrowserConfig() *config.Config {
 				DriverServer: "playwright",
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
-						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
+						Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+						DryRun:         true,
 						NetworkMode:    config.BrowserNetworkExactOrigins,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalAlwaysCommit,
 						AllowedOrigins: []string{"https://example.com"},
+						Runtime: config.BrowserProfileRuntimeConfig{
+							ProfileDirectory: "/var/lib/mintclaw/browser/managed",
+							LockFile:         "/var/lib/mintclaw/browser-managed.lock",
+						},
 					},
 				},
 			},
@@ -1379,7 +1384,7 @@ func admittedBrowserConfig() *config.Config {
 
 func testOwner() Owner {
 	return Owner{
-		ActorID: "actor_1", AgentID: OpaqueAgentID("browser"),
+		ActorID: OpaqueActorID("telegram:owner"), AgentID: OpaqueAgentID("browser"),
 		SessionKey: "telegram_chat_1", ExecutionID: "execution_1",
 	}
 }

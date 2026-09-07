@@ -319,7 +319,7 @@ func TestGatewayBrowserWorkerCloseAcceptsConfirmedMissingCompanionSession(t *tes
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -417,7 +417,7 @@ func TestGatewayBrowserWorkerRoutesTypedLifecycleToCompanion(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -529,7 +529,7 @@ func TestGatewayBrowserWorkerCommitsPublicationAfterSessionPersistence(t *testin
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -574,7 +574,7 @@ func TestGatewayBrowserWorkerCaptureUsesCommittedAndCurrentAuthorities(t *testin
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -683,7 +683,7 @@ func TestGatewayBrowserWorkerRejectsCaptureAfterCrossOriginPrivateObservation(t 
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -753,7 +753,7 @@ func TestNodeBrowserWorkerFreshObservationInvalidatesOlderActionCache(t *testing
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -812,7 +812,7 @@ func TestNodeBrowserWorkerPreservesVerifiedNavigationFailure(t *testing.T) {
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -892,7 +892,7 @@ func TestGatewayBrowserWorkerRefreshesRecoveredObservationWithFreshInvocation(t 
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -928,7 +928,7 @@ func TestGatewayBrowserWorkerRetriesTransientStaleObservationWithFreshInvocation
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -969,7 +969,7 @@ func TestGatewayBrowserWorkerRefreshesProtectedDiagnosticsWithFreshInvocation(t 
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -1005,7 +1005,7 @@ func TestGatewayBrowserWorkerAdvancesAfterDownloadWithoutOutput(t *testing.T) {
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -1059,7 +1059,7 @@ func TestGatewayBrowserWorkerRefreshesRecoveredContextWithoutReplayingMutation(t
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -1108,7 +1108,7 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 			}
 			opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 				Owner: browser.Owner{
-					ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+					ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 					SessionKey: "session_test", ExecutionID: "execution_test",
 				},
 				SessionID: "browser_session_test", Target: "companion",
@@ -1176,7 +1176,7 @@ func TestGatewayBrowserWorkerRefreshesRecoveredSelectObservationWithoutReplay(t 
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -1269,7 +1269,7 @@ func TestGatewayBrowserWorkerRoutesApprovedTypedClickToCompanion(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -1360,7 +1360,7 @@ func TestGatewayBrowserWorkerRoutesTypedCheckUncheckAndHover(t *testing.T) {
 				t.Fatal(err)
 			}
 			owner := browser.Owner{
-				ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+				ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 				SessionKey: "session_test", ExecutionID: "execution_test",
 			}
 			session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -1457,7 +1457,7 @@ func TestGatewayBrowserWorkerRoutesProtectedFillOnlyInEphemeralEnvelope(t *testi
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -1563,7 +1563,7 @@ func TestGatewayBrowserWorkerRoutesProtectedDialogOnlyInEphemeralEnvelope(t *tes
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{
@@ -1688,7 +1688,7 @@ func TestGatewayBrowserDiagnosticsCapabilityIsIndependentFromCoreReadiness(t *te
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_test", ExecutionID: "execution_test",
 		},
 		SessionID: "browser_session_test", Target: "companion",
@@ -1800,7 +1800,7 @@ func TestGatewayBrowserWorkerPinsSessionToResolvedNodeAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_test", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_test", ExecutionID: "execution_test",
 	}
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
@@ -2028,7 +2028,8 @@ func browserNodeTestRuntime(
 				Enabled: true, Placement: config.BrowserPlacementNode, NodeTarget: "ab-local-test",
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
-						Enabled: true, Mode: config.BrowserProfileManaged,
+						Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents: []string{"browser"}, AllowedActors: []string{"actor_test"},
 						NetworkMode:    config.BrowserNetworkAnyHTTP,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalAlwaysCommit, DryRun: true,

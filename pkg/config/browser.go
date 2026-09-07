@@ -130,10 +130,7 @@ type BrowserProfileRuntimeConfig struct {
 	Headed           bool   `json:"headed"                      yaml:"-"`
 }
 
-// CanonicalAuthority reports whether a profile uses the B4 authority schema.
-// Empty authority remains temporarily readable only for the Phase 1
-// production cutover and is removed by the follow-up cleanup change.
-func (profile BrowserProfileConfig) CanonicalAuthority() bool {
+func browserProfileAuthorityConfigured(profile BrowserProfileConfig) bool {
 	return profile.Revision != "" || len(profile.AllowedAgents) != 0 ||
 		len(profile.AllowedActors) != 0 || profile.Runtime != (BrowserProfileRuntimeConfig{})
 }
@@ -315,7 +312,7 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 		return fmt.Errorf("browser target %q has unsupported placement %q", name, target.Placement)
 	}
 	for profileName, profile := range target.Profiles {
-		if !profile.Enabled || !profile.CanonicalAuthority() {
+		if !profile.Enabled {
 			continue
 		}
 		if err := validateBrowserProfileGrants(profileName, profile, cfg.Tools.Browser.Agents); err != nil {
@@ -371,27 +368,19 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	if strings.TrimSpace(server.Command) == "" {
 		return fmt.Errorf("browser driver server %q requires a command", target.DriverServer)
 	}
-	canonical := false
-	for _, profile := range target.Profiles {
-		canonical = canonical || (profile.Enabled && profile.CanonicalAuthority())
+	if strings.TrimSpace(server.ExclusiveLockFile) != "" {
+		return fmt.Errorf(
+			"browser driver server %q cannot set profile-owned exclusive_lock_file",
+			target.DriverServer,
+		)
 	}
-	if canonical {
-		if strings.TrimSpace(server.ExclusiveLockFile) != "" {
+	for _, argument := range server.Args {
+		if browserProfileOwnedDriverArgument(argument) {
 			return fmt.Errorf(
-				"browser driver server %q cannot set profile-owned exclusive_lock_file",
-				target.DriverServer,
+				"browser driver server %q contains profile-owned argument %q",
+				target.DriverServer, argument,
 			)
 		}
-		for _, argument := range server.Args {
-			if browserProfileOwnedDriverArgument(argument) {
-				return fmt.Errorf(
-					"browser driver server %q contains profile-owned argument %q",
-					target.DriverServer, argument,
-				)
-			}
-		}
-	} else if strings.TrimSpace(server.ExclusiveLockFile) == "" {
-		return fmt.Errorf("browser driver server %q requires exclusive_lock_file", target.DriverServer)
 	}
 	if !hasEnabledBrowserProfile(map[string]BrowserTargetConfig{name: target}) {
 		return fmt.Errorf("enabled browser target %q requires an enabled profile", name)
@@ -403,7 +392,7 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 	if !browserAliasPattern.MatchString(name) {
 		return fmt.Errorf("invalid tools.browser.targets.%s profile alias %q", targetName, name)
 	}
-	if !profile.Enabled && profile.CanonicalAuthority() {
+	if !profile.Enabled && browserProfileAuthorityConfigured(profile) {
 		return fmt.Errorf("disabled browser profile %q cannot configure authority", name)
 	}
 	if profile.Mode != "" && profile.Mode != BrowserProfileManaged {
@@ -455,10 +444,7 @@ func validateBrowserProfile(targetName, name string, profile BrowserProfileConfi
 		seen[origin] = struct{}{}
 	}
 	if profile.Enabled {
-		if !profile.CanonicalAuthority() && name != BrowserDefaultProfile {
-			return fmt.Errorf("B1 supports only the %q browser profile", BrowserDefaultProfile)
-		}
-		if profile.CanonicalAuthority() && !browserPrincipalPattern.MatchString(profile.Revision) {
+		if !browserPrincipalPattern.MatchString(profile.Revision) {
 			return fmt.Errorf("browser profile %q requires a valid revision", name)
 		}
 		if profile.Mode != BrowserProfileManaged {
@@ -560,7 +546,7 @@ func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetCon
 			continue
 		}
 		for profileName, profile := range target.Profiles {
-			if !profile.Enabled || !profile.CanonicalAuthority() {
+			if !profile.Enabled {
 				continue
 			}
 			if err := validateGatewayBrowserProfileRuntime(profileName, profile.Runtime); err != nil {

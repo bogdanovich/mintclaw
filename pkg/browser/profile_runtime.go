@@ -83,9 +83,6 @@ func playwrightServerForProfile(
 	server config.MCPServerConfig,
 	profile config.BrowserProfileConfig,
 ) (config.MCPServerConfig, error) {
-	if !profile.CanonicalAuthority() {
-		return server, nil
-	}
 	if server.ExclusiveLockFile != "" {
 		return config.MCPServerConfig{}, errors.New("browser driver template contains a profile lock")
 	}

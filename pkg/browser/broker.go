@@ -1681,9 +1681,8 @@ func (broker *Broker) authorize(request OpenRequest) (config.BrowserTargetConfig
 	if !ok || !profile.Enabled {
 		return config.BrowserTargetConfig{}, config.BrowserProfileConfig{}, ErrDenied
 	}
-	if profile.CanonicalAuthority() &&
-		(!contains(profile.AllowedAgents, request.Owner.AgentID) ||
-			!contains(profile.AllowedActors, request.Owner.ActorID)) {
+	if !contains(profile.AllowedAgents, request.Owner.AgentID) ||
+		!contains(profile.AllowedActors, request.Owner.ActorID) {
 		return config.BrowserTargetConfig{}, config.BrowserProfileConfig{}, ErrDenied
 	}
 	return target, profile, nil
