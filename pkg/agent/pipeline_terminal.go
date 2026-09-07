@@ -67,21 +67,6 @@ func (p *Pipeline) completeTerminal(
 			return terminalGatewayOutcome{status: status, resume: true}
 		}
 
-		if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
-			cancelConfiguredStreamingLLM(turnCtx, llm)
-			exec.markSteeringObserved()
-			logger.InfoCF(
-				"agent",
-				"Steering arrived during terminal render; continuing turn",
-				map[string]any{
-					"agent_id":       ts.agent.ID,
-					"iteration":      ts.currentIteration(),
-					"steering_count": len(steerMsgs),
-				},
-			)
-			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
-			return terminalGatewayOutcome{status: status, resume: true}
-		}
 		if p.continueWithPendingSubTurnResults(ts, exec) {
 			return terminalGatewayOutcome{status: status, resume: true}
 		}
@@ -89,6 +74,22 @@ func (p *Pipeline) completeTerminal(
 			exec.terminal = terminalContent{}
 			return terminalGatewayOutcome{status: status, resume: true}
 		}
+	}
+
+	if steerMsgs := p.dequeueOrSealSteeringForTerminal(ts); len(steerMsgs) > 0 {
+		cancelConfiguredStreamingLLM(turnCtx, llm)
+		exec.markSteeringObserved()
+		logger.InfoCF(
+			"agent",
+			"Steering arrived during terminal transition; continuing turn",
+			map[string]any{
+				"agent_id":       ts.agent.ID,
+				"iteration":      ts.currentIteration(),
+				"steering_count": len(steerMsgs),
+			},
+		)
+		exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+		return terminalGatewayOutcome{status: status, resume: true}
 	}
 
 	if ts.hardAbortRequested() {

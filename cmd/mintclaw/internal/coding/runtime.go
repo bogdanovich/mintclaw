@@ -316,7 +316,7 @@ func openNativeCodingRuntime(
 		attachmentMedia:     attachmentMedia,
 		now:                 time.Now,
 		processDirect:       loop.ProcessDirectInputWithOptions,
-		steer:               loop.Steer,
+		steer:               loop.SteerActiveCodingTurn,
 		clearCodingSteering: loop.ClearCodingSteering,
 	}
 	if projector != nil {
@@ -605,22 +605,23 @@ func (r *nativeCodingRuntime) Steer(ctx context.Context, input frontend.SteerInp
 	if r.activeTurnGeneration == 0 {
 		return controller.ErrNoActiveTurn
 	}
-	if r.loop != nil && r.loop.GetActiveTurnByScope(r.workspace, r.metadata.SessionKey) == nil {
-		return controller.ErrNoActiveTurn
-	}
 	steer := r.steer
 	if steer == nil && r.loop != nil {
-		steer = r.loop.Steer
+		steer = r.loop.SteerActiveCodingTurn
 	}
 	if steer == nil {
 		return fmt.Errorf("coding runtime: steering is unavailable")
 	}
-	return steer(
+	err := steer(
 		r.workspace,
 		r.metadata.SessionKey,
 		"main",
 		providers.Message{Role: "user", Content: input.Text},
 	)
+	if errors.Is(err, agent.ErrNoActiveSteerableTurn) {
+		return controller.ErrNoActiveTurn
+	}
+	return err
 }
 
 func (r *nativeCodingRuntime) beginTurnControl() (uint64, error) {

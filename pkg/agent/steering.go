@@ -16,6 +16,8 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+var ErrNoActiveSteerableTurn = errors.New("no active steerable turn")
+
 // SteeringMode controls how queued steering messages are dequeued.
 type SteeringMode string
 
@@ -352,6 +354,32 @@ func (al *AgentLoop) Steer(
 	scope := newRuntimeSessionScope(workspace, sessionKey)
 	if !scope.complete() {
 		return fmt.Errorf("steering workspace and session are required")
+	}
+	return al.enqueueSteeringMessageWithSender(scope, agentID, "", msg)
+}
+
+// SteerActiveCodingTurn atomically admits guidance only while the scoped
+// coding turn still has a terminal queue poll ahead of it. A successful
+// return therefore cannot race terminal settlement and leak or disappear.
+func (al *AgentLoop) SteerActiveCodingTurn(
+	workspace, sessionKey, agentID string,
+	msg providers.Message,
+) error {
+	if !al.usesCodingProfile() || al.turns == nil {
+		return ErrNoActiveSteerableTurn
+	}
+	scope := newRuntimeSessionScope(workspace, sessionKey)
+	if !scope.complete() {
+		return fmt.Errorf("steering workspace and session are required")
+	}
+	ts := al.turns.activeTurnState(scope)
+	if ts == nil {
+		return ErrNoActiveSteerableTurn
+	}
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
+	if !ts.steeringOpen || al.turns.activeTurnState(scope) != ts {
+		return ErrNoActiveSteerableTurn
 	}
 	return al.enqueueSteeringMessageWithSender(scope, agentID, "", msg)
 }

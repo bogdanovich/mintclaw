@@ -1240,6 +1240,30 @@ func TestNativeCodingRuntimeSteerUsesBoundRuntimeScope(t *testing.T) {
 	}
 }
 
+func TestNativeCodingRuntimeMapsSealedAgentTurnToNoActiveTurn(t *testing.T) {
+	runtime := &nativeCodingRuntime{
+		workspace: "/tmp/execution-root",
+		metadata:  thread.Metadata{SessionKey: "coding:thread-1"},
+		steer: func(string, string, string, providers.Message) error {
+			return agent.ErrNoActiveSteerableTurn
+		},
+	}
+	generation, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.finishTurnControl(generation)
+	if err := runtime.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "sealed", Text: "too late"},
+	); !errors.Is(
+		err,
+		controller.ErrNoActiveTurn,
+	) {
+		t.Fatalf("Steer() error = %v, want %v", err, controller.ErrNoActiveTurn)
+	}
+}
+
 func TestNativeRuntimeAdmitsAttachmentAndStoresExactReference(t *testing.T) {
 	store, lease, metadata := newRuntimeAttachmentThread(t)
 	sessions := session.NewMemoryStore()

@@ -323,6 +323,10 @@ func (e *turnExecution) shouldTrackTurnOwnedSteering(msg providers.Message) bool
 
 type turnState struct {
 	mu sync.RWMutex
+	// steeringAdmissionMu makes the last terminal queue poll and coding
+	// steering admission one linearizable transition.
+	steeringAdmissionMu sync.Mutex
+	steeringOpen        bool
 
 	agent        *AgentInstance
 	opts         turnInput
@@ -504,11 +508,17 @@ func (ts *turnState) consumeApprovalGrant() {
 }
 
 func (r *turnRuntime) registerActiveTurn(ts *turnState) {
+	ts.steeringAdmissionMu.Lock()
+	ts.steeringOpen = true
 	r.activeTurnStates.Store(ts.runtimeSessionScope(), ts)
+	ts.steeringAdmissionMu.Unlock()
 }
 
 func (r *turnRuntime) clearActiveTurn(ts *turnState) {
-	r.activeTurnStates.Delete(ts.runtimeSessionScope())
+	ts.steeringAdmissionMu.Lock()
+	ts.steeringOpen = false
+	r.activeTurnStates.CompareAndDelete(ts.runtimeSessionScope(), ts)
+	ts.steeringAdmissionMu.Unlock()
 }
 
 func (r *turnRuntime) activeTurnState(scope runtimeSessionScope) *turnState {

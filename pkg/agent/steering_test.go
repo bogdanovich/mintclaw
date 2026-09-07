@@ -52,6 +52,69 @@ func TestClearCodingSteeringIsProfileAndScopeBound(t *testing.T) {
 	}
 }
 
+func TestSteerActiveCodingTurnLinearizesWithTerminalSeal(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	al.codingProfile = &CodingRuntimeProfile{}
+	agent := al.registry.GetDefaultAgent()
+	for iteration := 0; iteration < 100; iteration++ {
+		scope := newRuntimeSessionScope(agent.Workspace, fmt.Sprintf("coding:thread-%d", iteration))
+		turn := &turnState{
+			agentID:    agent.ID,
+			workspace:  agent.Workspace,
+			sessionKey: scope.sessionKey,
+		}
+		al.turns.registerActiveTurn(turn)
+		pipeline := &Pipeline{Context: PipelineContextServices{Steering: al.steering}}
+
+		start := make(chan struct{})
+		steerResult := make(chan error, 1)
+		terminalResult := make(chan []providers.Message, 1)
+		go func() {
+			<-start
+			steerResult <- al.SteerActiveCodingTurn(
+				scope.workspace,
+				scope.sessionKey,
+				agent.ID,
+				providers.Message{Role: "user", Content: "race guidance"},
+			)
+		}()
+		go func() {
+			<-start
+			terminalResult <- pipeline.dequeueOrSealSteeringForTerminal(turn)
+		}()
+		close(start)
+		steerErr := <-steerResult
+		messages := <-terminalResult
+		switch {
+		case steerErr == nil && len(messages) == 1 && messages[0].Content == "race guidance":
+		case errors.Is(steerErr, ErrNoActiveSteerableTurn) && len(messages) == 0:
+		default:
+			t.Fatalf(
+				"iteration %d linearization = steer:%v messages:%#v",
+				iteration,
+				steerErr,
+				messages,
+			)
+		}
+		if len(messages) > 0 {
+			if remaining := pipeline.dequeueOrSealSteeringForTerminal(turn); len(remaining) != 0 {
+				t.Fatalf("iteration %d unexpected remaining steering: %#v", iteration, remaining)
+			}
+		}
+		if lateErr := al.SteerActiveCodingTurn(
+			scope.workspace,
+			scope.sessionKey,
+			agent.ID,
+			providers.Message{Role: "user", Content: "late"},
+		); !errors.Is(lateErr, ErrNoActiveSteerableTurn) {
+			t.Fatalf("iteration %d late steer error = %v", iteration, lateErr)
+		}
+		al.turns.clearActiveTurn(turn)
+	}
+}
+
 func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelation(t *testing.T) {
 	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()

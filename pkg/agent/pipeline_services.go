@@ -124,6 +124,23 @@ func (p *Pipeline) dequeueSteeringMessagesForTurn(ts *turnState) []providers.Mes
 	)
 }
 
+// dequeueOrSealSteeringForTerminal performs the final queue observation under
+// the same turn-owned gate used by active coding steering admission. Once it
+// returns no messages, a concurrent coding steer must fail instead of being
+// acknowledged after the turn has lost its last opportunity to consume it.
+func (p *Pipeline) dequeueOrSealSteeringForTerminal(ts *turnState) []providers.Message {
+	if ts == nil {
+		return nil
+	}
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
+	messages := p.dequeueSteeringMessagesForTurn(ts)
+	if len(messages) == 0 {
+		ts.steeringOpen = false
+	}
+	return messages
+}
+
 func (p *Pipeline) returnSteeringMessagesForTurn(ts *turnState, messages []providers.Message) {
 	if p == nil || p.Context.Steering == nil || ts == nil || len(messages) == 0 {
 		return
