@@ -56,8 +56,14 @@ func parseModelOverride(raw any, availableModels []string) (string, error) {
 	if model != strings.TrimSpace(model) {
 		return "", fmt.Errorf("model must exactly match a configured model_name without surrounding whitespace")
 	}
-	if len(availableModels) == 0 || slices.Contains(availableModels, model) {
+	if slices.Contains(availableModels, model) {
 		return model, nil
+	}
+	if len(availableModels) == 0 {
+		return "", fmt.Errorf(
+			"model %q is not available; no configured model_name values are available",
+			model,
+		)
 	}
 	return "", fmt.Errorf(
 		"model %q is not available; choose one of: %s",

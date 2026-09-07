@@ -92,7 +92,15 @@ func TestSpawnTool_Execute_EmptyTask(t *testing.T) {
 
 func TestSpawnTool_Execute_ValidTask(t *testing.T) {
 	spawner := &mockSpawner{done: make(chan struct{})}
-	manager := newTestSubagentManager(t, "test-model", t.TempDir(), spawner)
+	manager, err := NewSubagentManager(SubagentManagerConfig{
+		DefaultModel:    "test-model",
+		AvailableModels: []string{"test-model", "gpt-5.6-sol"},
+		Spawner:         spawner,
+		TaskRegistry:    taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir())),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	tool := newTestSpawnTool(t, manager)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -183,6 +191,35 @@ func TestSpawnToolRejectsUnavailableModelBeforeStartingTask(t *testing.T) {
 	select {
 	case <-spawner.done:
 		t.Fatal("child runner started for unavailable model")
+	default:
+	}
+}
+
+func TestSpawnToolRejectsModelWhenNoModelsAreAvailable(t *testing.T) {
+	spawner := &mockSpawner{done: make(chan struct{})}
+	manager, err := NewSubagentManager(SubagentManagerConfig{
+		DefaultModel: "default",
+		Spawner:      spawner,
+		TaskRegistry: taskregistry.NewRegistry(taskregistry.WorkspaceStorePath(t.TempDir())),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := newTestSpawnTool(t, manager)
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"task":  "edit the PDF",
+		"model": "gpt-5.6-sol",
+	})
+	if result == nil || !result.IsError || !strings.Contains(result.ForLLM, "not available") {
+		t.Fatalf("result = %#v, want unavailable-model error", result)
+	}
+	if tasks := manager.taskRegistry.List(); len(tasks) != 0 {
+		t.Fatalf("tasks = %#v, want no task created", tasks)
+	}
+	select {
+	case <-spawner.done:
+		t.Fatal("child runner started without any available models")
 	default:
 	}
 }

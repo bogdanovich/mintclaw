@@ -2500,11 +2500,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	}
 	modelName := ""
 	if strings.TrimSpace(r.ts.opts.TaskID) != "" {
-		modelName = strings.TrimSpace(r.exec.model.llmModelName)
-		if modelName == "" {
-			execution := r.ts.modelBinding.ExecutionState()
-			modelName = resolvedCandidateModelName(execution.Candidates, execution.Model)
-		}
+		modelName = strings.TrimSpace(r.ts.modelBinding.ExactModel)
 	}
 	disposition, err := r.p.Interaction.Suspension.SuspendToolCall(ctx, ToolSuspensionRequest{
 		Workspace:        interactionWorkspace,

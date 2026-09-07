@@ -1455,6 +1455,9 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 		}),
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	// A policy-selected durable child may currently be using a routed light or
+	// fallback model, but that runtime choice must not become an exact resume pin.
+	exec.model.llmModelName = "routed-fallback-model"
 	llm := newLLMIterationState(1)
 	llm.normalizedToolCalls = []providers.ToolCall{
 		{ID: "call-question", Name: requestTool.Name(), Arguments: map[string]any{
@@ -1493,6 +1496,7 @@ func TestPipelineSuspendsDurablyWithoutFabricatingPendingToolResult(t *testing.T
 	request := manager.requests[0]
 	if request.Origin.ToolCallID != "call-question" || request.Origin.TurnID != ts.turnID ||
 		request.Origin.TaskID != "task-suspend" ||
+		request.Origin.ModelName != "" ||
 		request.Origin.ArgumentHash != "" || request.ApprovalAction != "" ||
 		request.Route.SenderID != "responder-2" || request.Route.AccountID != "primary" ||
 		request.Route.TopicID != "topic-1" || request.Route.SpaceID != "space-1" {
