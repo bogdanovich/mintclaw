@@ -155,7 +155,7 @@ func (al *AgentLoop) prepareInboundMessageForTarget(
 	}
 	if al.turns != nil && al.turns.inbound != nil {
 		if err := al.turns.inbound.persistContext(ctx, msg); err != nil {
-			return bus.InboundMessage{}, fmt.Errorf("persist classified inbound relation: %w", err)
+			return msg, fmt.Errorf("persist classified inbound relation: %w", err)
 		}
 	}
 	return msg, nil

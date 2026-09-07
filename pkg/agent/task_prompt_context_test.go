@@ -185,7 +185,18 @@ func TestBackgroundTaskSafetySurvivesSuppressedToolUsePrompt(t *testing.T) {
 
 func TestTerminalTaskContextDoesNotChangeAdjacentMediaClassification(t *testing.T) {
 	al, _, ts, workspace := newDeliveryCoordinatorTestRuntime(t, "ok")
-	ts.opts.Dispatch.InboundContext = &bus.InboundContext{ChatType: "direct"}
+	media := []string{"media://image-1"}
+	ts.userMessage = "[media only]"
+	ts.media = append([]string(nil), media...)
+	ts.opts.Dispatch.UserMessage = ts.userMessage
+	ts.opts.Dispatch.Media = append([]string(nil), media...)
+	ts.opts.Dispatch.InboundContext = &bus.InboundContext{
+		ChatType: "direct",
+		Relation: bus.InboundMessageRelation{
+			Kind:      bus.InboundRelationAdjacentFollowupMedia,
+			MediaOnly: true,
+		},
+	}
 	if err := al.taskRegistryForWorkspace(workspace).Upsert(taskregistry.Record{
 		TaskID: "terminal-before-media", Runtime: taskregistry.RuntimeSubagent,
 		Status: taskregistry.StatusSucceeded, TerminalSummary: "previous work finished",
@@ -196,7 +207,7 @@ func TestTerminalTaskContextDoesNotChangeAdjacentMediaClassification(t *testing.
 	createdAt := time.Now().Add(-time.Minute)
 	history := []providers.Message{{Role: "user", Content: "Here is what I ate", CreatedAt: &createdAt}}
 	messages := newTestPipeline(al).buildTurnMessages(
-		ts, history, "", "[media only]", []string{"media://image-1"}, nil,
+		ts, history, "", ts.userMessage, media, nil,
 	)
 	last := messages[len(messages)-1]
 	if !strings.Contains(last.Content, "arrived shortly after the user's previous message") {

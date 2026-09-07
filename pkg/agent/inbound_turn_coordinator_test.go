@@ -28,6 +28,7 @@ type finalResponseAdmissionTestBus struct {
 	publishErr     error
 	publishResults []error
 	publishCalls   int
+	persistErr     error
 
 	mu           sync.Mutex
 	acked        []string
@@ -363,6 +364,39 @@ func (b *finalResponseAdmissionTestBus) AckInbound(
 		return err
 	}
 	return b.MessageBus.AckInbound(ctx, msg)
+}
+
+func (b *finalResponseAdmissionTestBus) PersistInboundContext(
+	ctx context.Context,
+	msg bus.InboundMessage,
+) error {
+	if b.persistErr != nil {
+		return b.persistErr
+	}
+	return b.MessageBus.PersistInboundContext(ctx, msg)
+}
+
+func TestBusySessionReleasesOriginalSpoolWhenContextPersistenceFails(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	persistErr := errors.New("persist classified context failed")
+	trackingBus := &finalResponseAdmissionTestBus{
+		MessageBus: msgBus,
+		persistErr: persistErr,
+	}
+	setTestMessageBus(al, trackingBus)
+
+	msg := finalResponseAdmissionInboundMessage("spool-persist-failure")
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("resolveSteeringTarget() rejected test inbound")
+	}
+	newInboundTurnCoordinator(al).handleBusySession(t.Context(), msg, target)
+
+	acked, released, cause := trackingBus.ownership()
+	if len(acked) != 0 || !containsExactly(released, msg.SpoolID) || !errors.Is(cause, persistErr) {
+		t.Fatalf("persistence failure ownership = acked:%v released:%v cause:%v", acked, released, cause)
+	}
 }
 
 func TestOutboundTransactionPersistsBeforePublishAndSuppressesSameProcessReplay(t *testing.T) {

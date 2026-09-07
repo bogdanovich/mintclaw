@@ -277,6 +277,11 @@ func (d *asyncToolCompletionDelivery) deliverAsyncToolCompletion(req AsyncDelive
 		}
 		origin.SenderID = fmt.Sprintf("async:%s", asyncToolName)
 	}
+	// The cloned context supplies delivery provenance only. Event time and
+	// relation describe the original inbound message, not this synthesized
+	// completion prompt.
+	origin.ReceivedAt = time.Time{}
+	origin.Relation = bus.InboundMessageRelation{}
 	completionCtx, completionCancel := context.WithTimeout(
 		context.WithoutCancel(deliveryContext),
 		asyncCompletionSynthesisTimeout,

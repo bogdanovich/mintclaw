@@ -625,11 +625,15 @@ func (c *inboundTurnCoordinator) enqueueContendedInteractionInbound(
 	if flight.handoffSealed || !flight.handoff.configured() {
 		return c.enqueueDeferredInteractionInbound(ctx, msg, target)
 	}
+	continuationAgent := c.al.interactionContinuationAgent(record, target.Agent)
+	if continuationAgent == nil {
+		return fmt.Errorf("interaction continuation agent is unavailable")
+	}
 	return c.al.enqueueInteractionContinuationInboundForScope(
 		ctx,
 		msg,
 		flight.handoff.sourceScope,
-		flight.handoff.sourceAgentID,
+		continuationAgent,
 	)
 }
 
@@ -835,16 +839,27 @@ func (al *AgentLoop) enqueueInteractionContinuationInboundForScope(
 	ctx context.Context,
 	msg bus.InboundMessage,
 	scope runtimeSessionScope,
-	agentID string,
+	agent *AgentInstance,
 ) error {
-	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	if agent == nil {
+		return fmt.Errorf("interaction continuation agent is unavailable")
+	}
+	var err error
+	msg, err = al.prepareInboundMessageForTarget(ctx, msg, &inboundDispatchTarget{
+		Agent:      agent,
+		SessionKey: scope.sessionKey,
+	})
+	if err != nil {
+		return err
+	}
 	return al.enqueueSteeringMessageWithSender(
 		scope,
-		agentID,
+		agent.ID,
 		msg.Context.SenderID,
 		providers.Message{
 			Role:           "user",
 			Content:        msg.Content,
+			CreatedAt:      inboundReceivedAt(msg),
 			Media:          append([]string(nil), msg.Media...),
 			InboundSpoolID: msg.SpoolID,
 		},
@@ -1237,6 +1252,10 @@ func interactionSupersedingSteering(
 		Content: record.Answer.Text,
 		Media:   append([]string(nil), record.Answer.Media...),
 	})
+	if record.Answer.ReceivedAt != 0 {
+		receivedAt := time.UnixMilli(record.Answer.ReceivedAt).UTC()
+		message.CreatedAt = &receivedAt
+	}
 	_, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
 	if resultIndex >= 0 {
 		for _, existing := range history[resultIndex+1:] {

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,7 +21,7 @@ func promptBuildRequestForTurn(
 	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
 		ts.opts.Dispatch.ChatType(),
 	)
-	relation := ts.opts.Dispatch.InboundRelation()
+	relation := relationForPromptInput(ts.opts.Dispatch, currentMessage, media)
 	if relation.IsZero() {
 		relation = classifyPromptCurrentMessageRelation(
 			currentMessage,
@@ -102,7 +103,7 @@ func promptBuildRequestForTurnSpec(
 	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
 		opts.Dispatch.ChatType(),
 	)
-	relation := opts.Dispatch.InboundRelation()
+	relation := relationForPromptInput(opts.Dispatch, currentMessage, media)
 	if relation.IsZero() {
 		relation = classifyPromptCurrentMessageRelation(
 			currentMessage,
@@ -162,6 +163,27 @@ func promptBuildRequestForTurnSpec(
 
 func allowAdjacentMediaFollowupForChatType(chatType string) bool {
 	return strings.EqualFold(strings.TrimSpace(chatType), "direct")
+}
+
+func relationForPromptInput(
+	dispatch DispatchRequest,
+	currentMessage string,
+	media []string,
+) InboundMessageRelation {
+	if currentMessage == dispatch.UserMessage && slices.Equal(media, dispatch.Media) {
+		return dispatch.InboundRelation()
+	}
+	// Relation facts belong to the admitted inbound event. Callers may reuse a
+	// dispatch for derived prompts, but those prompts must not inherit the
+	// origin event's reply or adjacency semantics.
+	return classifyPromptCurrentMessageRelation(
+		currentMessage,
+		media,
+		"",
+		false,
+		nil,
+		time.Time{},
+	)
 }
 
 func normalizePromptBuildRequestRelations(
@@ -267,7 +289,7 @@ func currentTurnUserPromptMessage(
 	media []string,
 	relation InboundMessageRelation,
 ) providers.Message {
-	if relation.MediaOnly {
+	if relation.MediaOnly && len(media) > 0 {
 		lines := []string{
 			"[New user message with attached media only]",
 			"No text or caption was provided with this message.",

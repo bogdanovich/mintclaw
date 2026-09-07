@@ -231,7 +231,7 @@ func (service interactionService) Answer(
 				continuationAgent.Workspace,
 				interactionContinuationSessionKey(record),
 			),
-			continuationAgent.ID,
+			continuationAgent,
 		); err != nil {
 			return result, err
 		}
@@ -255,14 +255,24 @@ func (service interactionService) Answer(
 		)
 	}
 	if interactionApprovalSupersededByInbound(record, command.Message) {
-		message := service.runtime.prepareInboundMessageForAgent(ctx, command.Message)
+		message, prepareErr := service.runtime.prepareInboundMessageForTarget(
+			ctx,
+			command.Message,
+			&inboundDispatchTarget{
+				Agent:      command.Agent,
+				SessionKey: command.Authorization.SessionKey,
+			},
+		)
+		if prepareErr != nil {
+			return result, prepareErr
+		}
 		command.Message = message
 		answer := interactions.Answer{
 			Text:       message.Content,
 			Media:      append([]string(nil), message.Media...),
 			Superseded: true,
 			MessageID:  strings.TrimSpace(message.Context.MessageID),
-			ReceivedAt: time.Now().UnixMilli(),
+			ReceivedAt: message.Context.ReceivedAt.UnixMilli(),
 		}
 		claimed, err := registry.ClaimAnswer(
 			record.ID,
