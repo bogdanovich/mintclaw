@@ -2,6 +2,7 @@ package config
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ func TestBrowserConfigDisabledByDefault(t *testing.T) {
 	}
 }
 
-func TestBrowserConfigAcceptsAdmittedB1Shape(t *testing.T) {
+func TestBrowserConfigAcceptsCanonicalManagedShape(t *testing.T) {
 	cfg := browserConfigFixture(t)
 	if err := cfg.ValidateBrowserConfig(); err != nil {
 		t.Fatalf("ValidateBrowserConfig() error = %v", err)
@@ -70,6 +71,16 @@ func TestBrowserConfigRejectsIncompleteCanonicalProfileAuthority(t *testing.T) {
 		mutate  func(*BrowserProfileConfig, *MCPServerConfig)
 		wantErr string
 	}{
+		{
+			name: "legacy profile without authority",
+			mutate: func(profile *BrowserProfileConfig, _ *MCPServerConfig) {
+				profile.Revision = ""
+				profile.AllowedAgents = nil
+				profile.AllowedActors = nil
+				profile.Runtime = BrowserProfileRuntimeConfig{}
+			},
+			wantErr: "valid revision",
+		},
 		{
 			name: "missing revision",
 			mutate: func(profile *BrowserProfileConfig, _ *MCPServerConfig) {
@@ -271,7 +282,8 @@ func TestBrowserConfigAcceptsExplicitEnabledDefaultTarget(t *testing.T) {
 		Enabled: true, Placement: BrowserPlacementNode, NodeTarget: "ab-local-test",
 		Profiles: map[string]BrowserProfileConfig{
 			BrowserDefaultProfile: {
-				Enabled: true, Mode: BrowserProfileManaged,
+				Enabled: true, Revision: "managed-v1", Mode: BrowserProfileManaged,
+				AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
 				NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
 				ApprovalMode: BrowserApprovalAlwaysCommit, DryRun: true,
 			},
@@ -529,7 +541,8 @@ func TestBrowserConfigRejectsInvalidCompanionPlacement(t *testing.T) {
 				cfg.Nodes.Enabled = false
 				target.Enabled = true
 				target.Profiles[BrowserDefaultProfile] = BrowserProfileConfig{
-					Enabled: true, Mode: BrowserProfileManaged,
+					Enabled: true, Revision: "managed-v1", Mode: BrowserProfileManaged,
+					AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
 					NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
 					ApprovalMode: BrowserApprovalAlwaysCommit, DryRun: true,
 				}
@@ -574,7 +587,8 @@ func TestBrowserConfigAdmitsEnabledCompanionPlacement(t *testing.T) {
 		Enabled: true, Placement: BrowserPlacementNode, NodeTarget: "ab-local-test",
 		Profiles: map[string]BrowserProfileConfig{
 			BrowserDefaultProfile: {
-				Enabled: true, Mode: BrowserProfileManaged,
+				Enabled: true, Revision: "managed-v1", Mode: BrowserProfileManaged,
+				AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
 				NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
 				ApprovalMode: BrowserApprovalAlwaysCommit, DryRun: true,
 			},
@@ -700,13 +714,13 @@ func TestBrowserConfigRequiresSessionScopedDriver(t *testing.T) {
 			wantErr: "must not be enabled in the generic MCP manager",
 		},
 		{
-			name: "missing lease",
+			name: "template owns profile lease",
 			mutate: func(cfg *Config) {
 				server := cfg.Tools.MCP.Servers["playwright"]
-				server.ExclusiveLockFile = ""
+				server.ExclusiveLockFile = "/run/mintclaw/template.lock"
 				cfg.Tools.MCP.Servers["playwright"] = server
 			},
-			wantErr: "requires exclusive_lock_file",
+			wantErr: "cannot set profile-owned exclusive_lock_file",
 		},
 		{
 			name: "remote transport",
@@ -836,14 +850,18 @@ func TestBrowserConfigRejectsAuthorityExpansion(t *testing.T) {
 			name: "second profile",
 			mutate: func(cfg *Config) {
 				target := cfg.Tools.Browser.Targets["gateway"]
-				target.Profiles["other"] = BrowserProfileConfig{
-					Enabled: true, Mode: BrowserProfileManaged,
-					NetworkMode: BrowserNetworkExactOrigins, CapabilityMode: BrowserCapabilityFullAccess,
-					ApprovalMode: BrowserApprovalAlwaysCommit, AllowedOrigins: []string{"https://example.com"},
-				}
+				other := target.Profiles["managed"]
+				other.Revision = "other-v1"
+				other.Runtime.ProfileDirectory = filepath.Join(
+					filepath.Dir(other.Runtime.ProfileDirectory), "other",
+				)
+				other.Runtime.LockFile = filepath.Join(
+					filepath.Dir(other.Runtime.LockFile), "other.lock",
+				)
+				target.Profiles["other"] = other
 				cfg.Tools.Browser.Targets["gateway"] = target
 			},
-			wantErr: "supports only the \"managed\" browser profile",
+			wantErr: "supports one enabled profile during B4 phase 1",
 		},
 		{
 			name: "private origin",
@@ -1110,13 +1128,24 @@ func TestIsPublicBrowserIPRejectsIANASpecialPurposeRanges(t *testing.T) {
 
 func browserConfigFixture(t *testing.T) *Config {
 	t.Helper()
+	runtimeRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileDirectory := filepath.Join(runtimeRoot, "managed")
+	if err = os.Mkdir(profileDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockDirectory := filepath.Join(runtimeRoot, "locks")
+	if err = os.Mkdir(lockDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	cfg := DefaultConfig()
 	cfg.Tools.MCP.Servers["playwright"] = MCPServerConfig{
-		Enabled:           false,
-		Command:           "npx",
-		Args:              []string{"-y", "@playwright/mcp@0.0.78"},
-		Type:              "stdio",
-		ExclusiveLockFile: filepath.Join(t.TempDir(), "playwright.lock"),
+		Enabled: false,
+		Command: "npx",
+		Args:    []string{"-y", "@playwright/mcp@0.0.78"},
+		Type:    "stdio",
 	}
 	cfg.Tools.Browser = BrowserToolsConfig{
 		Enabled: true,
@@ -1129,12 +1158,19 @@ func browserConfigFixture(t *testing.T) *Config {
 				Profiles: map[string]BrowserProfileConfig{
 					"managed": {
 						Enabled:        true,
+						Revision:       "managed-v1",
 						Mode:           BrowserProfileManaged,
+						AllowedAgents:  []string{"browser"},
+						AllowedActors:  []string{"telegram:owner"},
 						NetworkMode:    BrowserNetworkExactOrigins,
 						CapabilityMode: BrowserCapabilityFullAccess,
 						ApprovalMode:   BrowserApprovalAlwaysCommit,
 						DryRun:         true,
 						AllowedOrigins: []string{"https://example.com"},
+						Runtime: BrowserProfileRuntimeConfig{
+							ProfileDirectory: profileDirectory,
+							LockFile:         filepath.Join(lockDirectory, "managed.lock"),
+						},
 					},
 				},
 			},

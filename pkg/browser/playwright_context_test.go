@@ -697,7 +697,7 @@ func TestPlaywrightContextWorkerRealBrowserTabsAndNestedFrames(t *testing.T) {
 	}))
 	defer fixture.Close()
 
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, false)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.NetworkMode = config.BrowserNetworkPublicWeb
@@ -710,9 +710,8 @@ func TestPlaywrightContextWorkerRealBrowserTabsAndNestedFrames(t *testing.T) {
 	if mkdirErr := os.Mkdir(driverOutput, 0o700); mkdirErr != nil {
 		t.Fatal(mkdirErr)
 	}
-	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
 	server.Args = []string{
-		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome", "--isolated",
+		"-y", "@playwright/mcp@0.0.78", "--browser=chrome",
 		"--output-mode=stdout", "--output-dir=" + driverOutput,
 	}
 	if runtime.GOOS == "darwin" {

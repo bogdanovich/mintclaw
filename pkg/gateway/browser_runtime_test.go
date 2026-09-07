@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -72,7 +73,7 @@ func TestBrowserRuntimeRetainsOwnershipUntilWorkerShutdownSucceeds(t *testing.T)
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_1", ExecutionID: "execution_1",
 	}
 	if _, err = broker.Open(context.Background(), browser.OpenRequest{
@@ -128,7 +129,7 @@ func TestServiceShutdownReportsBrowserCleanupFailure(t *testing.T) {
 	}
 	if _, err = broker.Open(context.Background(), browser.OpenRequest{
 		Owner: browser.Owner{
-			ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+			ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
 			SessionKey: "session_1", ExecutionID: "execution_1",
 		},
 		Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
@@ -166,7 +167,7 @@ func TestBrowserRuntimeCloseHonorsCallerDeadlineAndRetainsOwnership(t *testing.T
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "session_1", ExecutionID: "execution_1",
 	}
 	if _, err = broker.Open(context.Background(), browser.OpenRequest{
@@ -283,11 +284,22 @@ func TestBrowserSweepIntervalUsesShortestAuthorityLifetime(t *testing.T) {
 }
 
 func gatewayBrowserConfig(workspace string) *config.Config {
+	runtimeRoot, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		panic(err)
+	}
+	profileDirectory := filepath.Join(runtimeRoot, "browser-profile")
+	lockDirectory := filepath.Join(runtimeRoot, "browser-locks")
+	if err = os.MkdirAll(profileDirectory, 0o700); err != nil {
+		panic(err)
+	}
+	if err = os.MkdirAll(lockDirectory, 0o700); err != nil {
+		panic(err)
+	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Workspace = workspace
 	cfg.Tools.MCP.Servers["playwright"] = config.MCPServerConfig{
 		Enabled: false, Command: "npx", Type: "stdio",
-		ExclusiveLockFile: filepath.Join(workspace, "playwright.lock"),
 	}
 	cfg.Tools.Browser = config.BrowserToolsConfig{
 		Enabled: true,
@@ -297,11 +309,18 @@ func gatewayBrowserConfig(workspace string) *config.Config {
 				Enabled: true, Driver: config.BrowserDriverPlaywrightMCP, DriverServer: "playwright",
 				Profiles: map[string]config.BrowserProfileConfig{
 					config.BrowserDefaultProfile: {
-						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
+						Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents:  []string{"browser"},
+						AllowedActors:  []string{"actor_1", "telegram:browser-test-actor"},
+						DryRun:         true,
 						NetworkMode:    config.BrowserNetworkExactOrigins,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalAlwaysCommit,
 						AllowedOrigins: []string{"https://example.com"},
+						Runtime: config.BrowserProfileRuntimeConfig{
+							ProfileDirectory: profileDirectory,
+							LockFile:         filepath.Join(lockDirectory, "managed.lock"),
+						},
 					},
 				},
 			},

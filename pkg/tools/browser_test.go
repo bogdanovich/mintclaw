@@ -560,7 +560,9 @@ func browserToolTestRootConfig() *config.Config {
 				Enabled: true, Driver: config.BrowserDriverPlaywrightMCP, DriverServer: "playwright",
 				Profiles: map[string]config.BrowserProfileConfig{
 					"managed": {
-						Enabled: true, Mode: config.BrowserProfileManaged, DryRun: true,
+						Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+						AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
+						DryRun:         true,
 						NetworkMode:    config.BrowserNetworkExactOrigins,
 						CapabilityMode: config.BrowserCapabilityFullAccess,
 						ApprovalMode:   config.BrowserApprovalAlwaysCommit,
@@ -943,7 +945,8 @@ func TestBrowserTargetsReportsAndOrdersExplicitDefaultBeforeAlphabeticalTargets(
 		Enabled: true,
 		Profiles: map[string]config.BrowserProfileConfig{
 			"managed": {
-				Enabled: true, Mode: config.BrowserProfileManaged,
+				Enabled: true, Revision: "managed-v1", Mode: config.BrowserProfileManaged,
+				AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:42"},
 				NetworkMode: config.BrowserNetworkAnyHTTP, DryRun: true,
 			},
 		},

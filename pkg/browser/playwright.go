@@ -272,10 +272,6 @@ func PlaywrightHandoffAvailable(root *config.Config) bool {
 	if !ok || !target.Enabled || target.Driver != config.BrowserDriverPlaywrightMCP {
 		return false
 	}
-	server, ok := root.Tools.MCP.Servers[target.DriverServer]
-	if !ok {
-		return false
-	}
 	profile, ok := target.Profiles[config.BrowserDefaultProfile]
 	if !ok || !profile.Enabled {
 		profile, ok = onlyEnabledBrowserProfile(target.Profiles)
@@ -283,16 +279,7 @@ func PlaywrightHandoffAvailable(root *config.Config) bool {
 	if !ok {
 		return false
 	}
-	if profile.CanonicalAuthority() {
-		return profile.Mode == config.BrowserProfileManaged && profile.Runtime.Headed
-	}
-	for _, argument := range server.Args {
-		if argument == "--headless" || strings.HasPrefix(argument, "--headless=") ||
-			argument == "--extension" || strings.HasPrefix(argument, "--extension=") {
-			return false
-		}
-	}
-	return true
+	return profile.Mode == config.BrowserProfileManaged && profile.Runtime.Headed
 }
 
 func onlyEnabledBrowserProfile(
@@ -369,14 +356,12 @@ func NewPlaywrightProfileWorkerFactory(
 	if !ok {
 		return nil, ErrDenied
 	}
-	if profile.CanonicalAuthority() {
-		runtime, err := normalizeManagedProfileRuntime(profile.Runtime)
-		if err != nil {
-			return nil, err
-		}
-		profile.Runtime = runtime
+	runtime, err := normalizeManagedProfileRuntime(profile.Runtime)
+	if err != nil {
+		return nil, err
 	}
-	server, err := playwrightServerForProfile(server, profile)
+	profile.Runtime = runtime
+	server, err = playwrightServerForProfile(server, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -618,12 +603,10 @@ func (factory *PlaywrightWorkerFactory) Open(
 		!validIdentifier(request.SessionID) {
 		return WorkerOpenResult{}, ErrDenied
 	}
-	if factory.profileConfig.CanonicalAuthority() {
-		runtime, err := normalizeManagedProfileRuntime(factory.profileConfig.Runtime)
-		if err != nil || runtime != factory.profileConfig.Runtime {
-			factory.readiness.Store(playwrightReadinessUnavailable)
-			return WorkerOpenResult{}, ErrWorkerUnavailable
-		}
+	runtime, err := normalizeManagedProfileRuntime(factory.profileConfig.Runtime)
+	if err != nil || runtime != factory.profileConfig.Runtime {
+		factory.readiness.Store(playwrightReadinessUnavailable)
+		return WorkerOpenResult{}, ErrWorkerUnavailable
 	}
 	client := factory.clientFactory()
 	if client == nil {

@@ -96,6 +96,33 @@ func canonicalPlaywrightConfig(
 	return root, profileDirectory, lockFile
 }
 
+func runtimeAdmittedBrowserConfig(t *testing.T, headed bool) *config.Config {
+	t.Helper()
+	runtimeRoot, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileDirectory := filepath.Join(runtimeRoot, "managed")
+	if err = os.Mkdir(profileDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lockDirectory := filepath.Join(runtimeRoot, "locks")
+	if err = os.Mkdir(lockDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.Runtime = config.BrowserProfileRuntimeConfig{
+		ProfileDirectory: profileDirectory,
+		LockFile:         filepath.Join(lockDirectory, "managed.lock"),
+		Headed:           headed,
+	}
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+	return root
+}
+
 func (client *fakePlaywrightClient) Connect(
 	ctx context.Context,
 	name string,
@@ -1381,7 +1408,7 @@ func (client *fakePlaywrightClient) Close() error {
 }
 
 func TestPlaywrightWorkerFactoryOwnsPrivateClientAndMapsAdmittedCalls(t *testing.T) {
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, true)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.AllowedOrigins = []string{"https://Example.COM:443/", "http://b.example:80"}
@@ -1433,11 +1460,12 @@ func TestPlaywrightWorkerFactoryOwnsPrivateClientAndMapsAdmittedCalls(t *testing
 	}
 	args := client.connectCfg.Args
 	if client.connectName != playwrightPrivateServerName || client.connectCfg.Command != "npx" ||
-		client.connectCfg.Enabled || len(args) < 10 ||
-		!reflect.DeepEqual(args[:4], []string{"--caps", "vision", "--proxy-server", args[3]}) ||
-		!strings.HasPrefix(args[3], "http://127.0.0.1:") ||
+		client.connectCfg.Enabled || len(args) < 12 ||
+		!reflect.DeepEqual(args[:2], []string{"--user-data-dir", profile.Runtime.ProfileDirectory}) ||
+		!reflect.DeepEqual(args[2:6], []string{"--caps", "vision", "--proxy-server", args[5]}) ||
+		!strings.HasPrefix(args[5], "http://127.0.0.1:") ||
 		!reflect.DeepEqual(
-			args[4:8],
+			args[6:10],
 			[]string{"--proxy-bypass", "<-loopback>", "--allowed-origins", "http://b.example;https://example.com"},
 		) ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_ALLOWED_ORIGINS"] !=
@@ -1445,26 +1473,26 @@ func TestPlaywrightWorkerFactoryOwnsPrivateClientAndMapsAdmittedCalls(t *testing
 		client.connectCfg.Env["PLAYWRIGHT_MCP_BLOCKED_ORIGINS"] != "" ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_CAPS"] != "vision" ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_CONFIG"] != "" ||
-		client.connectCfg.Env["PLAYWRIGHT_MCP_PROXY_SERVER"] != args[3] ||
+		client.connectCfg.Env["PLAYWRIGHT_MCP_PROXY_SERVER"] != args[5] ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_PROXY_BYPASS"] != "<-loopback>" ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_CDP_ENDPOINT"] != "" ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_ENDPOINT"] != "" ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_EXTENSION"] != "" {
 		t.Fatalf("private connection = %q, %+v", client.connectName, client.connectCfg)
 	}
-	if len(args) != 12 || args[8] != "--config" || !filepath.IsAbs(args[9]) ||
-		filepath.Base(args[9]) != playwrightDownloadConfigName ||
-		args[10] != "--output-dir" || !filepath.IsAbs(args[11]) {
+	if len(args) != 14 || args[10] != "--config" || !filepath.IsAbs(args[11]) ||
+		filepath.Base(args[11]) != playwrightDownloadConfigName ||
+		args[12] != "--output-dir" || !filepath.IsAbs(args[13]) {
 		t.Fatalf("download-denying connection = %+v", client.connectCfg)
 	}
-	boundary, boundaryErr := os.ReadFile(args[9])
-	boundaryInfo, boundaryStatErr := os.Lstat(args[9])
+	boundary, boundaryErr := os.ReadFile(args[11])
+	boundaryInfo, boundaryStatErr := os.Lstat(args[11])
 	if boundaryErr != nil || boundaryStatErr != nil || string(boundary) !=
 		"{\"browser\":{\"contextOptions\":{\"acceptDownloads\":false}}}\n" ||
 		(runtime.GOOS != "windows" && boundaryInfo.Mode().Perm() != 0o600) {
 		t.Fatalf("download boundary = %q, %#v, %v, %v", boundary, boundaryInfo, boundaryErr, boundaryStatErr)
 	}
-	driverOutputDir := args[11]
+	driverOutputDir := args[13]
 	if info, statErr := os.Lstat(driverOutputDir); statErr != nil || !info.IsDir() ||
 		(runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
 		t.Fatalf("private output directory = %q, %#v, %v", driverOutputDir, info, statErr)
@@ -1657,7 +1685,7 @@ func TestPlaywrightProfileFactoryRejectsCanonicalRuntimeAncestorSymlinks(t *test
 }
 
 func TestPlaywrightWorkerFactoryBindsExplicitApprovedActionMode(t *testing.T) {
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, true)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.DryRun = false
@@ -1695,7 +1723,7 @@ func TestPlaywrightWorkerFactoryConfiguresPublicWebWithoutDriverAllowlist(t *tes
 	t.Setenv("PLAYWRIGHT_MCP_EXTENSION", "true")
 	t.Setenv("PLAYWRIGHT_MCP_PROXY_SERVER", "http://unmanaged-proxy.example")
 	t.Setenv("PLAYWRIGHT_MCP_PROXY_BYPASS", "localhost")
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, true)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.NetworkMode = config.BrowserNetworkPublicWeb
@@ -1730,7 +1758,8 @@ func TestPlaywrightWorkerFactoryConfiguresPublicWebWithoutDriverAllowlist(t *tes
 	if strings.Contains(strings.Join(client.connectCfg.Args, " "), "--allowed-origins") ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_ALLOWED_ORIGINS"] != "" ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_CAPS"] != "vision" ||
-		client.connectCfg.Env["PLAYWRIGHT_MCP_PROXY_SERVER"] != client.connectCfg.Args[3] ||
+		len(client.connectCfg.Args) < 6 ||
+		client.connectCfg.Env["PLAYWRIGHT_MCP_PROXY_SERVER"] != client.connectCfg.Args[5] ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_PROXY_BYPASS"] != "<-loopback>" ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_CDP_ENDPOINT"] != "" ||
 		client.connectCfg.Env["PLAYWRIGHT_MCP_ENDPOINT"] != "" ||
@@ -1757,15 +1786,16 @@ func TestPlaywrightDownloadAvailabilityRequiresScopedChromiumBoundary(t *testing
 }
 
 func TestPlaywrightHandoffAvailabilityRequiresLocalHeadedDriver(t *testing.T) {
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, true)
 	wantSupported := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
 	if got := PlaywrightHandoffAvailable(root); got != wantSupported {
 		t.Fatalf("default PlaywrightHandoffAvailable() = %t, want %t", got, wantSupported)
 	}
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
-	server := root.Tools.MCP.Servers[target.DriverServer]
-	server.Args = append(server.Args, "--headless")
-	root.Tools.MCP.Servers[target.DriverServer] = server
+	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.Runtime.Headed = false
+	target.Profiles[config.BrowserDefaultProfile] = profile
+	root.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
 	if PlaywrightHandoffAvailable(root) {
 		t.Fatal("headless Playwright unexpectedly admitted human handoff")
 	}
@@ -1801,7 +1831,7 @@ func TestPlaywrightWorkerBlocksAutomationDuringHumanControl(t *testing.T) {
 }
 
 func TestPlaywrightPassiveReadinessIsBoundedAndDoesNotStartDriver(t *testing.T) {
-	factory, err := NewPlaywrightWorkerFactory(admittedBrowserConfig())
+	factory, err := NewPlaywrightWorkerFactory(runtimeAdmittedBrowserConfig(t, true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1894,8 +1924,11 @@ func TestPlaywrightWorkerFactoryRejectsOperatorOriginControls(t *testing.T) {
 		{name: "CDP endpoint equals argument", args: []string{"--cdp-endpoint=http://127.0.0.1:9222"}},
 		{name: "bound endpoint argument", args: []string{"--endpoint", "ws://127.0.0.1:3000"}},
 		{name: "bound endpoint equals argument", args: []string{"--endpoint=ws://127.0.0.1:3000"}},
-		{name: "extension argument", args: []string{"--extension"}},
-		{name: "extension equals argument", args: []string{"--extension=chrome"}},
+		{name: "extension argument", args: []string{"--extension"}, want: "profile-owned argument"},
+		{
+			name: "extension equals argument", args: []string{"--extension=chrome"},
+			want: "profile-owned argument",
+		},
 		{name: "allowed environment", env: map[string]string{"PLAYWRIGHT_MCP_ALLOWED_ORIGINS": "*"}},
 		{name: "blocked environment", env: map[string]string{"PLAYWRIGHT_MCP_BLOCKED_ORIGINS": ""}},
 		{name: "caps environment", env: map[string]string{"PLAYWRIGHT_MCP_CAPS": "pdf"}},
@@ -1921,7 +1954,7 @@ func TestPlaywrightWorkerFactoryRejectsOperatorOriginControls(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			root := admittedBrowserConfig()
+			root := runtimeAdmittedBrowserConfig(t, true)
 			server := root.Tools.MCP.Servers["playwright"]
 			server.Args = test.args
 			server.Env = test.env
@@ -1948,7 +1981,7 @@ func TestPlaywrightWorkerFactoryRejectsIncompatibleCatalog(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			factory, err := NewPlaywrightWorkerFactory(admittedBrowserConfig())
+			factory, err := NewPlaywrightWorkerFactory(runtimeAdmittedBrowserConfig(t, true))
 			if err != nil {
 				t.Fatalf("NewPlaywrightWorkerFactory() error = %v", err)
 			}
@@ -1974,7 +2007,7 @@ func TestPlaywrightWorkerFactoryRejectsIncompatibleCatalog(t *testing.T) {
 }
 
 func TestPlaywrightWorkerFactoryReturnsRetryableCleanupOwnerAfterCatalogFailure(t *testing.T) {
-	factory, err := NewPlaywrightWorkerFactory(admittedBrowserConfig())
+	factory, err := NewPlaywrightWorkerFactory(runtimeAdmittedBrowserConfig(t, true))
 	if err != nil {
 		t.Fatalf("NewPlaywrightWorkerFactory() error = %v", err)
 	}
@@ -2002,7 +2035,7 @@ func TestPlaywrightWorkerFactoryReturnsRetryableCleanupOwnerAfterCatalogFailure(
 }
 
 func TestBrokerRetriesPlaywrightCleanupAfterCatalogFailure(t *testing.T) {
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, true)
 	factory, err := NewPlaywrightWorkerFactory(root)
 	if err != nil {
 		t.Fatalf("NewPlaywrightWorkerFactory() error = %v", err)
@@ -2882,7 +2915,7 @@ Done</div><output id="drag-result"></output>
 	fixtureURL.Host = "browser-fixture.test:" + fixtureURL.Port()
 	fixtureOrigin := fixtureURL.String()
 
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, false)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.NetworkMode = config.BrowserNetworkPublicWeb
@@ -2895,9 +2928,8 @@ Done</div><output id="drag-result"></output>
 	if err = os.Mkdir(driverOutputRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
 	server.Args = []string{
-		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome", "--isolated",
+		"-y", "@playwright/mcp@0.0.78", "--browser=chrome",
 		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
 	}
 	root.Tools.MCP.Servers["playwright"] = server
@@ -3494,7 +3526,7 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 	fixtureURL.Host = "browser-fixture.test:" + fixtureURL.Port()
 	fixtureOrigin := fixtureURL.String()
 
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, false)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.NetworkMode = config.BrowserNetworkPublicWeb
@@ -3506,9 +3538,8 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(driverTemp, "output"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
 	server.Args = []string{
-		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome", "--isolated",
+		"-y", "@playwright/mcp@0.0.78", "--browser=chrome",
 		"--output-mode=stdout", "--output-dir=" + filepath.Join(driverTemp, "output"),
 	}
 	root.Tools.MCP.Servers["playwright"] = server
@@ -3630,7 +3661,7 @@ func TestPlaywrightWorkerRealBrowserAnyHTTPLoopbackFixture(t *testing.T) {
 	}))
 	defer fixture.Close()
 
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, false)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.NetworkMode = config.BrowserNetworkAnyHTTP
@@ -3643,9 +3674,8 @@ func TestPlaywrightWorkerRealBrowserAnyHTTPLoopbackFixture(t *testing.T) {
 	if mkdirErr := os.Mkdir(driverOutputRoot, 0o700); mkdirErr != nil {
 		t.Fatal(mkdirErr)
 	}
-	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
 	server.Args = []string{
-		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome", "--isolated",
+		"-y", "@playwright/mcp@0.0.78", "--browser=chrome",
 		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
 	}
 	root.Tools.MCP.Servers["playwright"] = server
@@ -3691,7 +3721,7 @@ func TestPlaywrightWorkerRealBrowserFullAccessFillFixture(t *testing.T) {
 	}))
 	defer fixture.Close()
 
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, false)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.NetworkMode = config.BrowserNetworkAnyHTTP
@@ -3706,9 +3736,8 @@ func TestPlaywrightWorkerRealBrowserFullAccessFillFixture(t *testing.T) {
 	if err := os.Mkdir(driverOutputRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
 	server.Args = []string{
-		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome", "--isolated",
+		"-y", "@playwright/mcp@0.0.78", "--browser=chrome",
 		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
 	}
 	root.Tools.MCP.Servers["playwright"] = server
@@ -3791,7 +3820,7 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 	}))
 	defer fixture.Close()
 
-	root := admittedBrowserConfig()
+	root := runtimeAdmittedBrowserConfig(t, false)
 	target := root.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
 	profile.NetworkMode = config.BrowserNetworkAnyHTTP
@@ -3804,10 +3833,8 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 	if mkdirErr := os.Mkdir(driverOutputRoot, 0o700); mkdirErr != nil {
 		t.Fatal(mkdirErr)
 	}
-	server.ExclusiveLockFile = filepath.Join(driverTemp, "playwright.lock")
 	server.Args = []string{
-		"-y", "@playwright/mcp@0.0.78", "--headless", "--browser=chrome",
-		"--user-data-dir=" + filepath.Join(driverTemp, "profile"),
+		"-y", "@playwright/mcp@0.0.78", "--browser=chrome",
 		"--output-mode=stdout", "--output-dir=" + driverOutputRoot,
 	}
 	if executable := strings.TrimSpace(os.Getenv("MINTCLAW_BROWSER_REAL_DRIVER_EXECUTABLE")); executable != "" {

@@ -249,7 +249,7 @@ func TestGatewayNodeDownloadResolvesThroughBrowserFileChooser(t *testing.T) {
 	}
 	servicesOwner.Browser = &browserRuntime{broker: broker, policyRevision: policyRevision}
 	owner := browser.Owner{
-		ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "route_1", ExecutionID: "execution_1",
 	}
 	session, err := broker.Open(context.Background(), browser.OpenRequest{
@@ -376,7 +376,7 @@ func TestGatewayBrowserDownloadRecoversAcrossActualBrokerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := browser.Owner{
-		ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "route_1", ExecutionID: "execution_1",
 	}
 	session, err := broker.Open(context.Background(), browser.OpenRequest{
@@ -579,7 +579,7 @@ func TestGatewayBrowserDownloadPreservesTerminalSuccessWhenMediaRegistrationFail
 		screenshotRetention: time.Hour, limits: cfg.Tools.Browser.Limits.Effective(),
 	}
 	owner := browser.Owner{
-		ActorID: "actor_1", AgentID: browser.OpaqueAgentID("browser"),
+		ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
 		SessionKey: "route_1", ExecutionID: "execution_1",
 	}
 	session, err := broker.Open(t.Context(), browser.OpenRequest{

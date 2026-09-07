@@ -472,9 +472,6 @@ func (tool *BrowserTargetsTool) Execute(ctx context.Context, _ map[string]any) *
 }
 
 func browserProfileGranted(profile config.BrowserProfileConfig, agentID, actorID string) bool {
-	if !profile.CanonicalAuthority() {
-		return true
-	}
 	return slices.Contains(profile.AllowedAgents, routing.NormalizeAgentID(agentID)) &&
 		slices.Contains(profile.AllowedActors, actorID)
 }
