@@ -57,3 +57,8 @@ container, or repository-wide rewrite.
 Historical decisions and packet evidence remain in the archived
 [Code Health Roadmap](archive/code-health-roadmap.md) and
 [Architecture Simplification Roadmap](archive/architecture-simplification-roadmap.md).
+
+The follow-up audit admitted a narrower program for deterministic inbound
+relations, typed inbound boundaries, and explicit coding controller operation
+state. Its evidence, scope limits, and ordered packets are recorded in the
+[Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
