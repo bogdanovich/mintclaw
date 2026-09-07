@@ -4872,6 +4872,9 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		SenderID: "user-1", ActorID: "actor-1", MessageID: "origin-message",
 		OriginID: "origin-1", OriginType: "forward", SourceRef: "source-1",
 		ReplyToMessageID: "origin-reply", ReplyToSenderID: "reply-user",
+		MediaGroup: bus.InboundMediaGroup{
+			ID: "album-1", MessageIDs: []string{"origin-message", "album-message-2"},
+		},
 		ReplyHandles: map[string]string{"telegram": "reply-handle"},
 		Raw:          map[string]string{"thread_ts": "original-thread", "transport": "original"},
 	}
@@ -4889,6 +4892,7 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	// model process restart before the approval answer arrives.
 	original.ReplyHandles["telegram"] = "mutated"
 	original.Raw["thread_ts"] = "mutated"
+	original.MediaGroup.MessageIDs[0] = "mutated"
 	al.interactions.registries.Delete(agent.Workspace)
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, ok := activeInteractionForSession(registry, "session-context")
@@ -4928,6 +4932,8 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	}
 	if tool.inbound.MessageID != "origin-message" ||
 		tool.inbound.ReplyToMessageID != "origin-reply" ||
+		tool.inbound.MediaGroup.ID != "album-1" ||
+		tool.inbound.MediaGroup.MessageIDs[0] != "origin-message" ||
 		tool.inbound.ReplyHandles["telegram"] != "reply-handle" ||
 		tool.inbound.Raw["thread_ts"] != "original-thread" ||
 		tool.inbound.ActorID != "actor-1" || tool.inbound.SourceRef != "source-1" {

@@ -230,7 +230,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	if content == "" {
 		content = "[media only]"
 	}
-	mediaGroupMetadata := telegramMediaGroupMetadata(messages)
+	mediaGroup := telegramInboundMediaGroup(messages)
 	interactionReply := c.telegramInteractionReplyMetadata(message, content, platformID)
 	interactionDirected := interactionReply.choice != "" || interactionReply.response != "" ||
 		interactionReply.responseCandidate != ""
@@ -254,7 +254,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 				sender,
 				isMentioned,
 				"mentions another user/bot without mentioning this bot",
-				mediaGroupMetadata,
+				mediaGroup,
 			)
 			logger.DebugCF(
 				"telegram",
@@ -284,7 +284,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 				sender,
 				isMentioned,
 				"reply to a non-bot message without mentioning this bot",
-				mediaGroupMetadata,
+				mediaGroup,
 			)
 			logger.DebugCF(
 				"telegram",
@@ -365,16 +365,15 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	if interactionReply.shortID != "" {
 		metadata[bus.InboundMetadataKeyInteractionShortID] = interactionReply.shortID
 	}
-	mergeTelegramRawMetadata(metadata, mediaGroupMetadata)
-
 	inboundCtx := bus.InboundContext{
-		Channel:   c.Name(),
-		ChatID:    compositeChatID,
-		ChatType:  peerKind,
-		SenderID:  platformID,
-		MessageID: messageID,
-		Mentioned: isMentioned,
-		Raw:       metadata,
+		Channel:    c.Name(),
+		ChatID:     compositeChatID,
+		ChatType:   peerKind,
+		SenderID:   platformID,
+		MessageID:  messageID,
+		Mentioned:  isMentioned,
+		MediaGroup: mediaGroup,
+		Raw:        metadata,
 	}
 	if message.Chat.IsForum && threadID != 0 {
 		inboundCtx.TopicID = fmt.Sprintf("%d", threadID)
@@ -394,7 +393,7 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 	return nil
 }
 
-func telegramMediaGroupMetadata(messages []*telego.Message) map[string]string {
+func telegramInboundMediaGroup(messages []*telego.Message) bus.InboundMediaGroup {
 	messageIDs := make([]string, 0, len(messages))
 	mediaGroupID := ""
 	for _, msg := range messages {
@@ -407,21 +406,11 @@ func telegramMediaGroupMetadata(messages []*telego.Message) map[string]string {
 		messageIDs = append(messageIDs, strconv.Itoa(msg.MessageID))
 	}
 	if mediaGroupID == "" {
-		return nil
+		return bus.InboundMediaGroup{}
 	}
-	return map[string]string{
-		"media_group_id":          mediaGroupID,
-		"media_group_count":       strconv.Itoa(len(messageIDs)),
-		"media_group_message_ids": strings.Join(messageIDs, ","),
-	}
-}
-
-func mergeTelegramRawMetadata(dst, src map[string]string) {
-	if dst == nil {
-		return
-	}
-	for key, value := range src {
-		dst[key] = value
+	return bus.InboundMediaGroup{
+		ID:         mediaGroupID,
+		MessageIDs: messageIDs,
 	}
 }
 
@@ -434,7 +423,7 @@ func (c *TelegramChannel) observeSuppressedTelegramMessage(
 	sender bus.SenderInfo,
 	isMentioned bool,
 	reason string,
-	extraRaw map[string]string,
+	mediaGroup bus.InboundMediaGroup,
 ) {
 	if message == nil || message.From == nil {
 		return
@@ -454,15 +443,15 @@ func (c *TelegramChannel) observeSuppressedTelegramMessage(
 		"first_name": message.From.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
-	mergeTelegramRawMetadata(metadata, extraRaw)
 	inboundCtx := bus.InboundContext{
-		Channel:   c.Name(),
-		ChatID:    fmt.Sprintf("%d", chatID),
-		ChatType:  peerKind,
-		SenderID:  fmt.Sprintf("%d", message.From.ID),
-		MessageID: fmt.Sprintf("%d", message.MessageID),
-		Mentioned: isMentioned,
-		Raw:       metadata,
+		Channel:    c.Name(),
+		ChatID:     fmt.Sprintf("%d", chatID),
+		ChatType:   peerKind,
+		SenderID:   fmt.Sprintf("%d", message.From.ID),
+		MessageID:  fmt.Sprintf("%d", message.MessageID),
+		Mentioned:  isMentioned,
+		MediaGroup: mediaGroup,
+		Raw:        metadata,
 	}
 	if message.Chat.IsForum && threadID != 0 {
 		inboundCtx.TopicID = fmt.Sprintf("%d", threadID)

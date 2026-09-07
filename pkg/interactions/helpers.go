@@ -133,6 +133,7 @@ func cloneExecutionContext(src *bus.InboundContext) *bus.InboundContext {
 		return nil
 	}
 	cloned := *src
+	cloned.MediaGroup.MessageIDs = append([]string(nil), src.MediaGroup.MessageIDs...)
 	cloned.ReplyHandles = cloneStringMap(src.ReplyHandles)
 	cloned.Raw = cloneStringMap(src.Raw)
 	return &cloned
