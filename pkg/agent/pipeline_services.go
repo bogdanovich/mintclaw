@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
@@ -26,6 +27,14 @@ func persistFullSessionMessage(
 ) error {
 	assignCanonicalTimestamp(msg, time.Now())
 	return store.AppendTurnMessage(ctx, sessionKey, *msg)
+}
+
+// canonicalMessageAppendCommitted distinguishes a durable append with a
+// post-commit warning from pre-commit and indeterminate failures. Callers must
+// still surface the warning, but must not roll back state already admitted to
+// canonical history.
+func canonicalMessageAppendCommitted(err error) bool {
+	return err == nil || memory.IsCommittedAppendError(err)
 }
 
 func assignCanonicalTimestamp(msg *providers.Message, fallback time.Time) {

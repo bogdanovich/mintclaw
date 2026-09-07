@@ -6,14 +6,16 @@ import (
 	"testing"
 
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
 type assistantPersistTrackingStore struct {
 	session.SessionStore
-	assistantPersisted bool
-	failAssistant      error
+	assistantPersisted     bool
+	failAssistant          error
+	warnAssistantAfterSave error
 }
 
 func (s *assistantPersistTrackingStore) AppendTurnMessage(
@@ -29,6 +31,7 @@ func (s *assistantPersistTrackingStore) AppendTurnMessage(
 	}
 	if message.Role == "assistant" {
 		s.assistantPersisted = true
+		return s.warnAssistantAfterSave
 	}
 	return nil
 }
@@ -147,6 +150,71 @@ func TestFailedHistoryWriteDoesNotCommitCodingCommentary(t *testing.T) {
 	}
 }
 
+func TestCommittedAppendWarningAdmitsCodingCommentaryBeforeSurfacingError(t *testing.T) {
+	_, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	agent.Tools.Register(resultOnlyDurabilityTestTool{})
+	warning := &memory.CommittedAppendError{Err: errors.New("metadata sync warning")}
+	store := &assistantPersistTrackingStore{
+		SessionStore: agent.Sessions, warnAssistantAfterSave: warning,
+	}
+	agent.Sessions = store
+	emitter := &orderedCodingPresentationEmitter{store: store}
+	pipeline := &Pipeline{events: emitter}
+	opts := makeTestTurnSpec("coding-commentary-committed-warning")
+	opts.mode = turnModeCoding
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID: "coding-commentary-committed-warning-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec := &turnExecution{model: turnExecutionModel{llmModelName: "test-model"}}
+	streamer := &recordingStreamer{}
+	llm := newLLMIterationState(2)
+	llm.streamingPublisher = &streamingChunkPublisher{streamer: streamer}
+	llm.response = &providers.LLMResponse{
+		Content: "The durable record needs a metadata repair.",
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-1", Name: "result_only_test", Arguments: map[string]any{"value": "safe"},
+		}},
+	}
+
+	outcome, err := pipeline.normalizeAndDispatchLLMResponse(t.Context(), ts, exec, llm)
+	if err != nil || outcome.Control != turnStepExecuteTools {
+		t.Fatalf("normalize outcome = %+v, error = %v", outcome, err)
+	}
+	if !llm.assistantToolCallsPersisted || !errors.Is(llm.assistantToolCallsWriteErr, warning) {
+		t.Fatalf(
+			"assistant admission = persisted:%v error:%v",
+			llm.assistantToolCallsPersisted,
+			llm.assistantToolCallsWriteErr,
+		)
+	}
+	if emitter.emittedBeforeSave || len(emitter.events) != 1 {
+		t.Fatalf("committed presentation = premature:%v events:%+v", emitter.emittedBeforeSave, emitter.events)
+	}
+	payload, ok := emitter.events[0].payload.(AssistantMessageCommittedPayload)
+	if !ok || payload.MessageID != "provider-message-2" ||
+		payload.Phase != AssistantMessagePhaseCommentary ||
+		payload.Content != "The durable record needs a metadata repair." {
+		t.Fatalf("commentary payload = %#v", emitter.events[0].payload)
+	}
+	if streamer.canceled != 1 {
+		t.Fatalf("provisional stream cancellations = %d, want 1", streamer.canceled)
+	}
+	if persisted := ts.persistedMessagesSnapshot(); len(persisted) != 1 ||
+		persisted[0].Content != "The durable record needs a metadata repair." {
+		t.Fatalf("turn-persisted messages = %+v", persisted)
+	}
+	history := agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+	if len(history) != 1 || history[0].Content != "The durable record needs a metadata repair." {
+		t.Fatalf("canonical history = %+v", history)
+	}
+
+	toolOutcome := pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	if toolOutcome.Control != turnStepFinalize || !errors.Is(toolOutcome.JournalErr, warning) {
+		t.Fatalf("tool outcome = %+v, want committed warning surfaced", toolOutcome)
+	}
+}
+
 func TestCodingFinalMessageIsCommittedBeforeStreamFinalization(t *testing.T) {
 	_, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
 	defer cleanup()
@@ -195,6 +263,57 @@ func TestCodingFinalMessageIsCommittedBeforeStreamFinalization(t *testing.T) {
 	if !ok || payload.MessageID != "provider-message-2" || payload.Phase != AssistantMessagePhaseFinal ||
 		payload.Content != "The parser is fixed." || payload.ReasoningContent != "separate final reasoning" {
 		t.Fatalf("final payload = %#v", emitter.events[0].payload)
+	}
+}
+
+func TestCommittedAppendWarningAdmitsCodingFinalBeforeReturningError(t *testing.T) {
+	_, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	warning := &memory.CommittedAppendError{Err: errors.New("metadata sync warning")}
+	store := &assistantPersistTrackingStore{
+		SessionStore: agent.Sessions, warnAssistantAfterSave: warning,
+	}
+	agent.Sessions = store
+	emitter := &orderedCodingPresentationEmitter{store: store}
+	pipeline := &Pipeline{events: emitter}
+	opts := makeTestTurnSpec("coding-final-committed-warning")
+	opts.mode = turnModeCoding
+	ts := newTurnState(agent, opts, turnEventScope{
+		turnID: "coding-final-committed-warning-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec := &turnExecution{model: turnExecutionModel{
+		llmModelName: "test-model", defaultModelName: "test-model",
+	}}
+	streamer := &recordingStreamer{}
+	llm := newLLMIterationState(1)
+	llm.response = &providers.LLMResponse{Content: "The final answer is durable."}
+	llm.streamingPublisher = &streamingChunkPublisher{streamer: streamer}
+
+	result, err := pipeline.finalizeTurn(
+		t.Context(),
+		ts,
+		exec,
+		llm,
+		TurnEndStatusCompleted,
+		terminalContent{content: llm.response.Content},
+	)
+	if !errors.Is(err, warning) || result.status != TurnEndStatusError {
+		t.Fatalf("finalize result = %+v, error = %v", result, err)
+	}
+	if emitter.emittedBeforeSave || len(emitter.events) != 1 {
+		t.Fatalf("committed presentation = premature:%v events:%+v", emitter.emittedBeforeSave, emitter.events)
+	}
+	payload, ok := emitter.events[0].payload.(AssistantMessageCommittedPayload)
+	if !ok || payload.MessageID != "provider-message-1" ||
+		payload.Phase != AssistantMessagePhaseFinal || payload.Content != "The final answer is durable." {
+		t.Fatalf("final payload = %#v", emitter.events[0].payload)
+	}
+	if streamer.canceled != 1 || len(streamer.finalized) != 0 {
+		t.Fatalf("stream state = canceled:%d finalized:%v", streamer.canceled, streamer.finalized)
+	}
+	history := agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+	if len(history) != 1 || history[0].Content != "The final answer is durable." {
+		t.Fatalf("canonical history = %+v", history)
 	}
 }
 

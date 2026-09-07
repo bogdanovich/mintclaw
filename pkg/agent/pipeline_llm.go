@@ -784,8 +784,8 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	if !ts.opts.NoHistory {
 		writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &assistantMsg)
 		llm.assistantToolCallsWriteErr = writeErr
-		llm.assistantToolCallsPersisted = writeErr == nil
-		if writeErr == nil {
+		llm.assistantToolCallsPersisted = canonicalMessageAppendCommitted(writeErr)
+		if llm.assistantToolCallsPersisted {
 			ts.recordPersistedMessage(assistantMsg)
 		}
 		p.ingestMessage(turnCtx, ts, assistantMsg, writeErr)

@@ -192,6 +192,36 @@ func TestFinalizationContextAfterToolMessageUsesDistinctIdentity(t *testing.T) {
 	}
 }
 
+func TestFinalizationContextDirectResponseWithRawToolCallsKeepsProviderIdentity(t *testing.T) {
+	ts := &turnState{opts: freezeTurnInput(turnSpec{})}
+	exec := &turnExecution{model: turnExecutionModel{llmModelName: "active-model"}}
+	llm := newLLMIterationState(5)
+	llm.gracefulTerminal = true
+	llm.response = &providers.LLMResponse{
+		ReasoningContent: "direct-final reasoning",
+		ToolCalls:        []providers.ToolCall{{ID: "ignored-call", Name: "read_file"}},
+	}
+
+	finalization := newFinalizationContext(
+		ts,
+		exec,
+		llm,
+		TurnEndStatusCompleted,
+		terminalContent{content: "direct final answer"},
+	)
+
+	if finalization.messageID != "provider-message-5" {
+		t.Fatalf("message ID = %q, want provider-message-5", finalization.messageID)
+	}
+	if finalization.reasoningContent != "direct-final reasoning" {
+		t.Fatalf("reasoning = %q, want preserved direct-final reasoning", finalization.reasoningContent)
+	}
+	if finalization.historyMessage == nil ||
+		finalization.historyMessage.ReasoningContent != "direct-final reasoning" {
+		t.Fatalf("history message = %#v, want preserved direct-final reasoning", finalization.historyMessage)
+	}
+}
+
 func TestFinalizationResultDetachesCompleteDeliverable(t *testing.T) {
 	finalization := FinalizationContext{
 		deliverable: &taskresult.Deliverable{
