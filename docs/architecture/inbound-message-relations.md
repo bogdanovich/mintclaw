@@ -1,9 +1,10 @@
 # Inbound Message Relations
 
-Status: partially implemented. The classifier seam exists, but relation facts
-are not yet persisted through durable ingress and prompt assembly still uses
-processing time. The admitted implementation sequence is tracked by F1-F3 of
-the [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
+Status: partially implemented. Typed event time and relation facts are
+persisted through durable ingress, and admitted turns prefer those facts.
+Generic prompt construction still has a processing-time compatibility fallback;
+its removal and platform grouping remain F2-F3 of the
+[Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
 
 MintClaw currently preserves normalized inbound messages through the durable
 ingress spool, but it still leaves too much conversational boundary inference
@@ -257,7 +258,7 @@ Status: complete.
 
 ### PR 2: introduce typed relation metadata
 
-Status: admitted as follow-up packet F1.
+Status: implemented by follow-up packet F1.
 
 - add relation fields to the normalized inbound/prompt-build path
 - keep existing behavior by mapping current heuristics to the new fields

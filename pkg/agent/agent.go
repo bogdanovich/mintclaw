@@ -443,6 +443,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 	}
 
 	opts = normalizeTurnSpec(opts)
+	opts.Dispatch = normalizeDispatchInboundRelation(agent, opts.Dispatch, time.Now())
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
 		return turnResult{}, err

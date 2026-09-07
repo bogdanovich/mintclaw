@@ -42,9 +42,9 @@ platforms.
 
 ## 5. Channels And Media
 
-- Re-architect channel lifecycle so startup, retry, reload, inbound exposure,
-  and readiness are supervised through explicit runtime state instead of being
-  tightly coupled inside `channels.Manager`.
+- Preserve the current `ChannelLifecycle`, `DeliveryRuntime`, and
+  `StreamCoordinator` ownership split for startup, retry, reload, inbound
+  exposure, readiness, delivery, and streaming.
 - Keep shared webhook/HTTP registration tied to active channel runtimes rather
   than configured channel presence.
 - Make startup retry generation-aware and cancelable across reload/shutdown.
@@ -79,15 +79,13 @@ platforms.
 
 - Keep `/model` as the conversation-scoped model selector and `/switch` as the
   explicit workspace-wide operator path until `/switch` is deprecated.
-- Replace ad hoc override-agent cloning with a clearer effective-model
-  resolution path.
-- Resolve model-selection state once per routed turn, then pass that binding
-  through command/runtime and execution code instead of repeatedly re-reading
-  per-session override state.
+- Keep model-selection state resolved once per routed turn through
+  `effectiveModelBinding`, then pass that immutable execution projection through
+  command and runtime code.
 - Keep invalid session overrides self-healing and bounded to the routed
   conversation key.
 - Preserve current provider/model selection semantics while reducing the amount
   of agent-instance mutation/cloning required to execute a session override.
-- After the binding layer is stable, consider moving from "derived
-  AgentInstance" materialization toward per-turn provider/model resolution so
-  session overrides stop carrying copied tool/router/provider bookkeeping.
+- Remove remaining derived-agent materialization only in focused call sites
+  where the effective binding already owns provider/model resolution; do not
+  create a second selection abstraction.

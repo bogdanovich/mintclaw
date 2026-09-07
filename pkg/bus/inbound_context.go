@@ -61,6 +61,10 @@ func normalizeInboundContext(ctx InboundContext) InboundContext {
 	}
 	ctx.ReplyToMessageID = strings.TrimSpace(ctx.ReplyToMessageID)
 	ctx.ReplyToSenderID = strings.TrimSpace(ctx.ReplyToSenderID)
+	if !ctx.ReceivedAt.IsZero() {
+		ctx.ReceivedAt = ctx.ReceivedAt.UTC()
+	}
+	ctx.Relation.Kind = InboundRelationKind(normalizeKind(string(ctx.Relation.Kind)))
 	ctx.ReplyHandles = cloneStringMap(ctx.ReplyHandles)
 	ctx.Raw = cloneStringMap(ctx.Raw)
 	return ctx

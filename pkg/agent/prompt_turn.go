@@ -20,6 +20,17 @@ func promptBuildRequestForTurn(
 	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
 		ts.opts.Dispatch.ChatType(),
 	)
+	relation := ts.opts.Dispatch.InboundRelation()
+	if relation.IsZero() {
+		relation = classifyPromptCurrentMessageRelation(
+			currentMessage,
+			media,
+			ts.opts.Dispatch.ReplyToMessageID(),
+			allowAdjacentMediaFollowup,
+			history,
+			time.Now(),
+		)
+	}
 	req := PromptBuildRequest{
 		History:                    history,
 		Summary:                    summary,
@@ -31,18 +42,11 @@ func promptBuildRequestForTurn(
 		SenderDisplayName:          ts.opts.SenderDisplayName,
 		ReplyToMessageID:           ts.opts.Dispatch.ReplyToMessageID(),
 		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
-		CurrentMessageRelation: classifyPromptCurrentMessageRelation(
-			currentMessage,
-			media,
-			ts.opts.Dispatch.ReplyToMessageID(),
-			allowAdjacentMediaFollowup,
-			history,
-			time.Now(),
-		),
-		ActiveSkills:         activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
-		Overlays:             promptOverlays(ts.opts.ActiveGoal),
-		BackgroundTaskSafety: !ts.opts.NoHistory,
-		CodingContext:        ts.opts.CodingContext,
+		CurrentMessageRelation:     relation,
+		ActiveSkills:               activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
+		Overlays:                   promptOverlays(ts.opts.ActiveGoal),
+		BackgroundTaskSafety:       !ts.opts.NoHistory,
+		CodingContext:              ts.opts.CodingContext,
 	}
 	hasCallableTools := true
 	if ts.profile.Enabled {
@@ -98,6 +102,17 @@ func promptBuildRequestForTurnSpec(
 	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
 		opts.Dispatch.ChatType(),
 	)
+	relation := opts.Dispatch.InboundRelation()
+	if relation.IsZero() {
+		relation = classifyPromptCurrentMessageRelation(
+			currentMessage,
+			media,
+			opts.Dispatch.ReplyToMessageID(),
+			allowAdjacentMediaFollowup,
+			history,
+			time.Now(),
+		)
+	}
 	req := PromptBuildRequest{
 		History:                    history,
 		Summary:                    summary,
@@ -109,18 +124,11 @@ func promptBuildRequestForTurnSpec(
 		SenderDisplayName:          opts.SenderDisplayName,
 		ReplyToMessageID:           opts.Dispatch.ReplyToMessageID(),
 		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
-		CurrentMessageRelation: classifyPromptCurrentMessageRelation(
-			currentMessage,
-			media,
-			opts.Dispatch.ReplyToMessageID(),
-			allowAdjacentMediaFollowup,
-			history,
-			time.Now(),
-		),
-		ActiveSkills:         activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
-		Overlays:             promptOverlays(opts.ActiveGoal),
-		BackgroundTaskSafety: !opts.NoHistory,
-		CodingContext:        opts.CodingContext,
+		CurrentMessageRelation:     relation,
+		ActiveSkills:               activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
+		Overlays:                   promptOverlays(opts.ActiveGoal),
+		BackgroundTaskSafety:       !opts.NoHistory,
+		CodingContext:              opts.CodingContext,
 	}
 	profile := opts.TurnProfile
 	hasCallableTools := true

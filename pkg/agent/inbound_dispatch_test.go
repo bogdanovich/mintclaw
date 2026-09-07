@@ -7,6 +7,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
@@ -243,6 +244,101 @@ func TestBuildInboundMessageTurn_PreparesInboundMessage(t *testing.T) {
 			turn.Options.Dispatch.Channel(),
 			turn.Options.Dispatch.ChatID(),
 		)
+	}
+	if turn.Message.Context.ReceivedAt.IsZero() {
+		t.Fatal("prepared message is missing received_at")
+	}
+	if turn.Options.Dispatch.InboundRelation().Kind != bus.InboundRelationStandalone {
+		t.Fatalf("relation = %#v, want standalone", turn.Options.Dispatch.InboundRelation())
+	}
+}
+
+func TestBuildInboundMessageTurnPersistsEventTimeRelationForReplay(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	spool, err := bus.NewInboundSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewInboundSpool failed: %v", err)
+	}
+	msgBus.SetInboundSpool(spool)
+
+	previousReceivedAt := time.Date(2026, 9, 6, 20, 0, 0, 0, time.UTC)
+	currentReceivedAt := previousReceivedAt.Add(time.Minute)
+	msg := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:    "telegram",
+			ChatID:     "chat-1",
+			ChatType:   "direct",
+			SenderID:   "telegram:42",
+			ReceivedAt: currentReceivedAt,
+		},
+		Content: "[media only]",
+		Media:   []string{"media://image-1"},
+	}
+	target, err := al.resolveInboundDispatchTarget(msg)
+	if err != nil {
+		t.Fatalf("resolveInboundDispatchTarget() error = %v", err)
+	}
+	target.Agent.Sessions.AddFullMessage(target.SessionKey, providers.Message{
+		Role:      "user",
+		Content:   "Here is what I ate",
+		CreatedAt: &previousReceivedAt,
+	})
+	if err = msgBus.PublishInbound(t.Context(), msg); err != nil {
+		t.Fatalf("PublishInbound failed: %v", err)
+	}
+	spooled := <-msgBus.InboundChan()
+
+	turn, err := al.buildInboundMessageTurn(t.Context(), spooled)
+	if err != nil {
+		t.Fatalf("buildInboundMessageTurn() error = %v", err)
+	}
+	defer turn.Cleanup()
+	if turn.Options.Dispatch.InboundRelation().Kind != bus.InboundRelationAdjacentFollowupMedia {
+		t.Fatalf("turn relation = %#v, want adjacent media follow-up", turn.Options.Dispatch.InboundRelation())
+	}
+
+	pending, err := msgBus.PendingInboundSpool(t.Context())
+	if err != nil {
+		t.Fatalf("PendingInboundSpool failed: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1", len(pending))
+	}
+	if !pending[0].Context.ReceivedAt.Equal(currentReceivedAt) ||
+		pending[0].Context.Relation.Kind != bus.InboundRelationAdjacentFollowupMedia {
+		t.Fatalf("persisted facts = %#v, want event time and adjacent media relation", pending[0].Context)
+	}
+}
+
+func TestProcessMessagePersistsInboundReceivedAtAsRootTimestamp(t *testing.T) {
+	al, cleanup := newInboundDispatchTestLoop(t)
+	defer cleanup()
+	receivedAt := time.Date(2026, 9, 6, 21, 15, 0, 0, time.UTC)
+	msg := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:    "telegram",
+			ChatID:     "chat-1",
+			ChatType:   "direct",
+			SenderID:   "telegram:42",
+			ReceivedAt: receivedAt,
+		},
+		Content: "remember event time",
+	}
+	target, err := al.resolveInboundDispatchTarget(msg)
+	if err != nil {
+		t.Fatalf("resolveInboundDispatchTarget() error = %v", err)
+	}
+
+	if _, err = al.processMessage(t.Context(), msg); err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	history := target.Agent.Sessions.GetHistory(target.SessionKey)
+	if len(history) == 0 || !history[0].RootTurnStart || history[0].CreatedAt == nil {
+		t.Fatalf("root history = %#v, want timestamped root user message", history)
+	}
+	if !history[0].CreatedAt.Equal(receivedAt) {
+		t.Fatalf("root CreatedAt = %v, want %v", history[0].CreatedAt, receivedAt)
 	}
 }
 

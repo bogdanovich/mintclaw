@@ -19,6 +19,10 @@ type MessageBus interface {
 	// AckInbound confirms that a durable inbound message has been accepted or processed.
 	AckInbound(ctx context.Context, msg bus.InboundMessage) error
 
+	// PersistInboundContext stores route-owned facts learned before a durable
+	// inbound message starts execution.
+	PersistInboundContext(ctx context.Context, msg bus.InboundMessage) error
+
 	// ReleaseInbound returns a durable inbound message to the queue after a transient failure.
 	ReleaseInbound(ctx context.Context, msg bus.InboundMessage, cause error) error
 

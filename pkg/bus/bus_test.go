@@ -179,11 +179,21 @@ func TestPublishInbound_WithSpoolWritesAndAckRemovesEntry(t *testing.T) {
 	if got.SpoolID == "" {
 		t.Fatal("expected spooled inbound message to have SpoolID")
 	}
+	if got.Context.ReceivedAt.IsZero() {
+		t.Fatal("expected received_at to be assigned before spooling")
+	}
 	if got.Content != "durable hello" {
 		t.Fatalf("content = %q, want durable hello", got.Content)
 	}
 	if _, err := os.Stat(spool.processingPath(got.SpoolID)); err != nil {
 		t.Fatalf("expected processing spool file: %v", err)
+	}
+	pending, err := spool.Pending(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Pending failed: %v", err)
+	}
+	if len(pending) != 1 || !pending[0].Context.ReceivedAt.Equal(got.Context.ReceivedAt) {
+		t.Fatalf("pending received_at = %#v, want %v", pending, got.Context.ReceivedAt)
 	}
 	if err := mb.AckInbound(context.Background(), got); err != nil {
 		t.Fatalf("AckInbound failed: %v", err)
@@ -201,12 +211,19 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 		t.Fatalf("NewInboundSpool failed: %v", err)
 	}
 	first.SetInboundSpool(spool)
+	receivedAt := time.Date(2026, 9, 6, 17, 30, 0, 0, time.FixedZone("test", -7*60*60))
+	wantReceivedAt := receivedAt.UTC()
 	if publishErr := first.PublishInbound(context.Background(), InboundMessage{
 		Context: InboundContext{
-			Channel:  "slack",
-			ChatID:   "chat",
-			TopicID:  "topic-a",
-			SenderID: "user",
+			Channel:    "slack",
+			ChatID:     "chat",
+			TopicID:    "topic-a",
+			SenderID:   "user",
+			ReceivedAt: receivedAt,
+			Relation: InboundMessageRelation{
+				Kind:      InboundRelationAdjacentFollowupMedia,
+				MediaOnly: true,
+			},
 		},
 		Content:    "before restart",
 		SessionKey: "agent:main:slack:chat:topic-a",
@@ -249,11 +266,89 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 	if got.SessionKey != "agent:main:slack:chat:topic-a" {
 		t.Fatalf("session key = %q, want topic session", got.SessionKey)
 	}
+	if !got.Context.ReceivedAt.Equal(wantReceivedAt) {
+		t.Fatalf("received_at = %v, want %v", got.Context.ReceivedAt, wantReceivedAt)
+	}
+	if got.Context.Relation.Kind != InboundRelationAdjacentFollowupMedia || !got.Context.Relation.MediaOnly {
+		t.Fatalf("relation = %#v, want durable adjacent media relation", got.Context.Relation)
+	}
 	if err := second.AckInbound(context.Background(), got); err != nil {
 		t.Fatalf("AckInbound failed: %v", err)
 	}
 	if _, err := os.Stat(secondSpool.processingPath(got.SpoolID)); !os.IsNotExist(err) {
 		t.Fatalf("expected replayed processing file removed, stat err=%v", err)
+	}
+}
+
+func TestPersistInboundContextUpdatesOnlyDurableFacts(t *testing.T) {
+	spool, err := NewInboundSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewInboundSpool failed: %v", err)
+	}
+	mb := NewMessageBus()
+	defer mb.Close()
+	mb.SetInboundSpool(spool)
+
+	if err = mb.PublishInbound(t.Context(), InboundMessage{
+		Context: InboundContext{Channel: "telegram", ChatID: "chat", ChatType: "direct", SenderID: "user"},
+		Content: "[media only]",
+		Media:   []string{"media://image-1"},
+	}); err != nil {
+		t.Fatalf("PublishInbound failed: %v", err)
+	}
+	msg := <-mb.InboundChan()
+	if err = mb.ReleaseInbound(t.Context(), msg, errors.New("retry before classification")); err != nil {
+		t.Fatalf("ReleaseInbound failed: %v", err)
+	}
+	msg.Content = "derived transcript must not replace raw content"
+	msg.Context.Relation = InboundMessageRelation{
+		Kind:      InboundRelationAdjacentFollowupMedia,
+		MediaOnly: true,
+	}
+	if err = mb.PersistInboundContext(t.Context(), msg); err != nil {
+		t.Fatalf("PersistInboundContext failed: %v", err)
+	}
+
+	pending, err := spool.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending failed: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1", len(pending))
+	}
+	if pending[0].Content != "[media only]" {
+		t.Fatalf("content = %q, want original raw content", pending[0].Content)
+	}
+	if pending[0].Context.Relation != msg.Context.Relation {
+		t.Fatalf("relation = %#v, want %#v", pending[0].Context.Relation, msg.Context.Relation)
+	}
+}
+
+func TestPendingLegacySpoolRecordHydratesMessageReceivedAt(t *testing.T) {
+	spool, err := NewInboundSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewInboundSpool failed: %v", err)
+	}
+	receivedAt := time.Date(2026, 9, 6, 23, 45, 0, 0, time.UTC)
+	record := spooledInboundRecord{
+		Version:    inboundSpoolVersion,
+		ID:         "legacy-received-at",
+		ReceivedAt: receivedAt,
+		Message: InboundMessage{
+			Context: InboundContext{Channel: "telegram", ChatID: "chat", SenderID: "user"},
+			Content: "legacy",
+		},
+	}
+	if err = spool.writeRecord(spool.processingPath(record.ID), record); err != nil {
+		t.Fatalf("writeRecord failed: %v", err)
+	}
+
+	pending, err := spool.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending failed: %v", err)
+	}
+	if len(pending) != 1 || !pending[0].Context.ReceivedAt.Equal(receivedAt) {
+		t.Fatalf("pending received_at = %#v, want %v", pending, receivedAt)
 	}
 }
 

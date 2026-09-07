@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/commands"
@@ -159,7 +160,11 @@ func (c *inboundTurnCoordinator) enqueueDeferredInteractionInbound(
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
 ) error {
-	msg = c.al.prepareInboundMessageForAgent(ctx, msg)
+	var err error
+	msg, err = c.al.prepareInboundMessageForTarget(ctx, msg, target)
+	if err != nil {
+		return err
+	}
 	return c.al.enqueueSteeringMessageWithSender(
 		target.runtimeSessionScope(),
 		target.Agent.ID,
@@ -167,6 +172,7 @@ func (c *inboundTurnCoordinator) enqueueDeferredInteractionInbound(
 		providers.Message{
 			Role:           "user",
 			Content:        msg.Content,
+			CreatedAt:      inboundReceivedAt(msg),
 			Media:          append([]string(nil), msg.Media...),
 			InboundSpoolID: msg.SpoolID,
 		},
@@ -199,7 +205,11 @@ func (c *inboundTurnCoordinator) handleBusySession(
 		return
 	}
 
-	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	msg, err := al.prepareInboundMessageForTarget(ctx, msg, target)
+	if err != nil {
+		al.turns.inbound.release(ctx, msg, err)
+		return
+	}
 	if err := al.enqueueSteeringMessageWithSender(
 		scope,
 		target.Agent.ID,
@@ -207,6 +217,7 @@ func (c *inboundTurnCoordinator) handleBusySession(
 		providers.Message{
 			Role:           "user",
 			Content:        msg.Content,
+			CreatedAt:      inboundReceivedAt(msg),
 			Media:          append([]string(nil), msg.Media...),
 			InboundSpoolID: msg.SpoolID,
 		},
@@ -220,6 +231,14 @@ func (c *inboundTurnCoordinator) handleBusySession(
 			})
 		al.turns.inbound.release(ctx, msg, err)
 	}
+}
+
+func inboundReceivedAt(msg bus.InboundMessage) *time.Time {
+	if msg.Context.ReceivedAt.IsZero() {
+		return nil
+	}
+	receivedAt := msg.Context.ReceivedAt
+	return &receivedAt
 }
 
 func (c *inboundTurnCoordinator) startWorker(
@@ -287,7 +306,11 @@ func (c *inboundTurnCoordinator) runWorker(
 		return
 	}
 
-	turn := al.buildInboundMessageTurnForTarget(ctx, msg, target)
+	turn, err := al.buildInboundMessageTurnForTarget(ctx, msg, target)
+	if err != nil {
+		al.turns.inbound.release(context.Background(), msg, err)
+		return
+	}
 	admission := al.runInboundTurnWithSteering(ctx, turn)
 	_ = al.settleInboundAdmission(ctx, msg, admission)
 }

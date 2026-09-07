@@ -2,6 +2,7 @@ package agent
 
 import (
 	"strings"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -69,6 +70,20 @@ func (r DispatchRequest) SenderID() string {
 		return ""
 	}
 	return r.InboundContext.SenderID
+}
+
+func (r DispatchRequest) ReceivedAt() time.Time {
+	if r.InboundContext == nil {
+		return time.Time{}
+	}
+	return r.InboundContext.ReceivedAt
+}
+
+func (r DispatchRequest) InboundRelation() bus.InboundMessageRelation {
+	if r.InboundContext == nil {
+		return bus.InboundMessageRelation{}
+	}
+	return r.InboundContext.Relation
 }
 
 func normalizeTurnSpecInPlace(opts *turnSpec) {

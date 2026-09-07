@@ -158,6 +158,9 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 	if !ts.opts.NoHistory && (strings.TrimSpace(ts.userMessage) != "" || len(ts.media) > 0) {
 		rootMsg := userPromptMessage(ts.userMessage, ts.media)
 		rootMsg.RootTurnStart = true
+		if receivedAt := ts.opts.Dispatch.ReceivedAt(); !receivedAt.IsZero() {
+			rootMsg.CreatedAt = &receivedAt
+		}
 		if writeErr := persistFullSessionMessage(ctx, ts.agent.Sessions, ts.sessionKey, &rootMsg); writeErr != nil {
 			return nil, &turnAdmissionError{err: fmt.Errorf("persist root user message: %w", writeErr)}
 		}

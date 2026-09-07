@@ -295,7 +295,6 @@ func TestPromptBuildRequestForTurnSpec_AllowsDirectAdjacentMedia(t *testing.T) {
 }
 
 func TestPromptBuildRequestForTurnSpec_CarriesCurrentMessageRelation(t *testing.T) {
-	ts := time.Now().Add(-time.Minute)
 	opts := normalizeTurnSpec(turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "session-1",
@@ -303,6 +302,10 @@ func TestPromptBuildRequestForTurnSpec_CarriesCurrentMessageRelation(t *testing.
 			Media:       []string{"media://image-1"},
 			InboundContext: &bus.InboundContext{
 				Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+				Relation: bus.InboundMessageRelation{
+					Kind:      bus.InboundRelationAdjacentFollowupMedia,
+					MediaOnly: true,
+				},
 			},
 		},
 	})
@@ -311,7 +314,7 @@ func TestPromptBuildRequestForTurnSpec_CarriesCurrentMessageRelation(t *testing.
 		nil,
 		nil,
 		opts,
-		[]providers.Message{{Role: "user", Content: "Here is what I ate", CreatedAt: &ts}},
+		nil,
 		"",
 		opts.Dispatch.UserMessage,
 		opts.Dispatch.Media,

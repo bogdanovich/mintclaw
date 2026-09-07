@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/constants"
@@ -321,6 +322,9 @@ func (al *AgentLoop) prepareInboundMessageForAgent(
 	msg bus.InboundMessage,
 ) bus.InboundMessage {
 	msg = bus.NormalizeInboundMessage(msg)
+	if msg.Context.ReceivedAt.IsZero() {
+		msg.Context.ReceivedAt = time.Now().UTC()
+	}
 
 	var hadAudio bool
 	msg, hadAudio = al.transcribeAudioInMessage(ctx, msg)

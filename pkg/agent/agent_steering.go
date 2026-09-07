@@ -72,6 +72,16 @@ type inboundSpool struct {
 	bus agentinterfaces.MessageBus
 }
 
+func (s *inboundSpool) persistContext(ctx context.Context, msg bus.InboundMessage) error {
+	if msg.SpoolID == "" || s == nil || s.bus == nil {
+		return nil
+	}
+	if err := s.bus.PersistInboundContext(ctx, msg); err != nil {
+		return fmt.Errorf("persist inbound context for spool entry %s: %w", msg.SpoolID, err)
+	}
+	return nil
+}
+
 func (s *inboundSpool) ack(ctx context.Context, msg bus.InboundMessage) error {
 	if msg.SpoolID == "" || s == nil || s.bus == nil {
 		return nil
