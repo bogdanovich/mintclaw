@@ -222,6 +222,9 @@ func publish[T any](
 
 func (mb *MessageBus) PublishInbound(ctx context.Context, msg InboundMessage) error {
 	msg = NormalizeInboundMessage(msg)
+	if msg.Context.ReceivedAt.IsZero() {
+		msg.Context.ReceivedAt = time.Now().UTC()
+	}
 	if msg.Context.isZero() {
 		mb.publishFailure("inbound", runtimeScopeFromInboundContext(msg.Context), ErrMissingInboundContext)
 		return ErrMissingInboundContext
@@ -247,6 +250,15 @@ func (mb *MessageBus) PublishInbound(ctx context.Context, msg InboundMessage) er
 			mb.publishFailure("inbound", scope, err)
 		}
 		return err
+	}
+	return nil
+}
+
+// PersistInboundContext updates normalized facts that are learned after route
+// and session admission while the durable spool entry is still processing.
+func (mb *MessageBus) PersistInboundContext(_ context.Context, msg InboundMessage) error {
+	if spool := mb.getInboundSpool(); spool != nil {
+		return spool.PersistContext(msg)
 	}
 	return nil
 }

@@ -513,9 +513,20 @@ func (t *approvalContextTool) Execute(ctx context.Context, _ map[string]any) *to
 
 type interactionOwnershipBus struct {
 	*bus.MessageBus
-	mu       sync.Mutex
-	acked    []string
-	released []string
+	mu        sync.Mutex
+	acked     []string
+	released  []string
+	persisted []bus.InboundMessage
+}
+
+func (b *interactionOwnershipBus) PersistInboundContext(
+	ctx context.Context,
+	msg bus.InboundMessage,
+) error {
+	b.mu.Lock()
+	b.persisted = append(b.persisted, msg)
+	b.mu.Unlock()
+	return b.MessageBus.PersistInboundContext(ctx, msg)
 }
 
 func (b *interactionOwnershipBus) AckInbound(ctx context.Context, msg bus.InboundMessage) error {
@@ -546,6 +557,12 @@ func (b *interactionOwnershipBus) ownership() ([]string, []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return append([]string(nil), b.acked...), append([]string(nil), b.released...)
+}
+
+func (b *interactionOwnershipBus) persistedInbound() []bus.InboundMessage {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]bus.InboundMessage(nil), b.persisted...)
 }
 
 func countMatchingStrings(values []string, target string) int {
@@ -5607,11 +5624,13 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 		Agent: agent, SessionKey: sessionKey,
 		Allocation: session.Allocation{RouteScopeKey: request.Route.RouteSessionKey},
 	}
+	receivedAt := time.Date(2026, 9, 7, 3, 15, 0, 0, time.UTC)
 	msg := bus.InboundMessage{
 		Content: "Use staging instead", SpoolID: "spool-correction",
 		Context: inboundContextForInteraction(request.Route),
 	}
 	msg.Context.MessageID = "answer-2"
+	msg.Context.ReceivedAt = receivedAt
 	ownerScope := newRuntimeSessionScope(agent.Workspace, sessionKey)
 	claim, claimed := al.turns.claimRuntimeSession(ownerScope, "test-active-resume")
 	if !claimed {
@@ -5645,6 +5664,14 @@ func TestAdditionalMessageDuringResumeIsDeferred(t *testing.T) {
 	if len(queued) != 1 || queued[0].InboundSpoolID != "spool-correction" {
 		t.Fatalf("deferred message = %#v", queued)
 	}
+	if queued[0].CreatedAt == nil || !queued[0].CreatedAt.Equal(receivedAt) {
+		t.Fatalf("deferred message CreatedAt = %v, want %v", queued[0].CreatedAt, receivedAt)
+	}
+	persisted := tracker.persistedInbound()
+	if len(persisted) != 1 || !persisted[0].Context.ReceivedAt.Equal(receivedAt) ||
+		persisted[0].Context.Relation.Kind != bus.InboundRelationStandalone {
+		t.Fatalf("persisted resume-flight facts = %#v", persisted)
+	}
 }
 
 func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation(t *testing.T) {
@@ -5661,6 +5688,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 		continuationSession = "task-approval-steering"
 		guidance            = "Открой All postings и найди микроволновку там"
 	)
+	receivedAt := time.Date(2026, 9, 7, 3, 30, 0, 0, time.UTC)
 	ensureSessionMetadata(agent.Sessions, continuationSession, &session.SessionScope{
 		Version: session.ScopeVersion, AgentID: agent.ID, Channel: "telegram", RouteScopeKey: "route-owner",
 	})
@@ -5675,7 +5703,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 	})
 	inbound := bus.InboundContext{
 		Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
-		SenderID: "user-1", MessageID: "guidance-1",
+		SenderID: "user-1", MessageID: "guidance-1", ReceivedAt: receivedAt,
 	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, err := registry.Create(interactions.CreateRequest{
@@ -5715,13 +5743,20 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 
 	current, _ := registry.Get(record.ID)
 	if current.Status != interactions.StatusResolved || current.Outcome != interactions.OutcomeDenied ||
-		current.Answer == nil || !current.Answer.Superseded || current.Answer.Text != guidance {
+		current.Answer == nil || !current.Answer.Superseded || current.Answer.Text != guidance ||
+		current.Answer.Relation.Kind != bus.InboundRelationStandalone {
 		t.Fatalf("superseded interaction = %#v", current)
+	}
+	if current.Answer.ReceivedAt != receivedAt.UnixMilli() {
+		t.Fatalf("superseding answer ReceivedAt = %d, want %d", current.Answer.ReceivedAt, receivedAt.UnixMilli())
 	}
 	var sawGuidance bool
 	for _, message := range provider.messages {
 		if message.Role == "user" && strings.Contains(message.Content, guidance) {
 			sawGuidance = true
+			if message.CreatedAt == nil || !message.CreatedAt.Equal(receivedAt) {
+				t.Fatalf("superseding steering CreatedAt = %v, want %v", message.CreatedAt, receivedAt)
+			}
 		}
 	}
 	if !sawGuidance {
@@ -5740,6 +5775,68 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 	acked, released := tracker.counts()
 	if acked != 1 || released != 0 {
 		t.Fatalf("guidance spool ownership = acked:%d released:%d, want 1/0", acked, released)
+	}
+}
+
+func TestSupersedingMediaRelationSurvivesRegistryReload(t *testing.T) {
+	workspace := t.TempDir()
+	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(workspace))
+	receivedAt := time.Date(2026, 9, 7, 4, 0, 0, 0, time.UTC)
+	record, err := registry.Create(interactions.CreateRequest{
+		Kind: interactions.KindApproval,
+		Route: interactions.Route{
+			AgentID: "main", SessionKey: "owner-session", RouteSessionKey: "route-owner",
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+		},
+		Origin: interactions.Origin{
+			TurnID: "turn-reload-guidance", ToolCallID: "call-reload-guidance", ToolName: "browser_act",
+			ArgumentHash: strings.Repeat("a", 64),
+			ExecutionContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
+			},
+		},
+		PromptSummary:  "Approve browser action",
+		ApprovalAction: "Click search",
+		ExpiresAt:      receivedAt.Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record = markTestInteractionWaiting(t, registry, record)
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text:       "[media only]",
+		Media:      []string{"media://guidance-image"},
+		Superseded: true,
+		MessageID:  "guidance-reload",
+		ReceivedAt: receivedAt.UnixMilli(),
+		Relation: bus.InboundMessageRelation{
+			Kind:      bus.InboundRelationReplyToMessage,
+			MediaOnly: true,
+		},
+	}, interactions.OutcomeDenied)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded := interactions.NewRegistry(interactions.WorkspaceStorePath(workspace))
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatal(err)
+	}
+	recovered, ok := reloaded.Get(record.ID)
+	if !ok || recovered.Answer == nil ||
+		recovered.Answer.Relation.Kind != bus.InboundRelationReplyToMessage ||
+		!recovered.Answer.Relation.MediaOnly {
+		t.Fatalf("recovered superseding relation = %#v, found=%v", recovered.Answer, ok)
+	}
+	steering := interactionSupersedingSteering(recovered, nil)
+	if len(steering) != 1 ||
+		!strings.Contains(steering[0].Content, "sent as a reply to an earlier chat message") ||
+		strings.Contains(steering[0].Content, "Do not assume it continues the previous request") ||
+		len(steering[0].Media) != 1 || steering[0].Media[0] != "media://guidance-image" {
+		t.Fatalf("recovered superseding steering = %#v", steering)
+	}
+	if steering[0].CreatedAt == nil || !steering[0].CreatedAt.Equal(receivedAt) {
+		t.Fatalf("recovered steering CreatedAt = %v, want %v", steering[0].CreatedAt, receivedAt)
 	}
 }
 

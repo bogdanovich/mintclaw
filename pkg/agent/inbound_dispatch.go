@@ -2,9 +2,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -15,6 +18,15 @@ type inboundDispatchTarget struct {
 	Allocation    session.Allocation
 	SessionKey    string
 	RouteClaimKey string
+	relationRoot  *inboundRelationRoot
+}
+
+// inboundRelationRoot keeps the event identity needed to classify follow-ups
+// while a claimed root is waiting to reach canonical session history.
+type inboundRelationRoot struct {
+	SpoolID    string
+	MessageID  string
+	ReceivedAt time.Time
 }
 
 type inboundMessageTurn struct {
@@ -58,7 +70,7 @@ func (al *AgentLoop) buildInboundMessageTurn(
 	if err != nil {
 		return inboundMessageTurn{}, err
 	}
-	return al.buildInboundMessageTurnForTarget(ctx, msg, target), nil
+	return al.buildInboundMessageTurnForTarget(ctx, msg, target)
 }
 
 func (al *AgentLoop) resolveInboundDispatchTarget(msg bus.InboundMessage) (*inboundDispatchTarget, error) {
@@ -93,12 +105,32 @@ func runtimeRouteClaimKey(routeScopeKey, explicitSessionKey string) string {
 	return "route:" + strings.TrimSpace(routeScopeKey)
 }
 
+func targetWithInboundRelationRoot(
+	target *inboundDispatchTarget,
+	msg bus.InboundMessage,
+) *inboundDispatchTarget {
+	if target == nil {
+		return nil
+	}
+	claimedTarget := *target
+	claimedTarget.relationRoot = &inboundRelationRoot{
+		SpoolID:    msg.SpoolID,
+		MessageID:  strings.TrimSpace(msg.Context.MessageID),
+		ReceivedAt: msg.Context.ReceivedAt,
+	}
+	return &claimedTarget
+}
+
 func (al *AgentLoop) buildInboundMessageTurnForTarget(
 	ctx context.Context,
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
-) inboundMessageTurn {
-	msg = al.prepareInboundMessageForAgent(ctx, msg)
+) (inboundMessageTurn, error) {
+	var err error
+	msg, err = al.prepareInboundMessageForTarget(ctx, msg, target)
+	if err != nil {
+		return inboundMessageTurn{}, err
+	}
 	allocation := target.Allocation
 	sessionKey := target.SessionKey
 	modelBinding := al.bindEffectiveModel(allocation.RouteScopeKey, target.Agent)
@@ -123,5 +155,112 @@ func (al *AgentLoop) buildInboundMessageTurnForTarget(
 		ScopeKey:     sessionKey,
 		SessionKey:   sessionKey,
 		ModelBinding: modelBinding,
+	}, nil
+}
+
+func (al *AgentLoop) prepareInboundMessageForTarget(
+	ctx context.Context,
+	msg bus.InboundMessage,
+	target *inboundDispatchTarget,
+) (bus.InboundMessage, error) {
+	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	if msg.Context.Relation.IsZero() {
+		var history []providers.Message
+		if target != nil && target.Agent != nil && target.Agent.Sessions != nil {
+			history = target.Agent.Sessions.GetHistory(target.SessionKey)
+		}
+		history = historyWithPendingRelationRoot(history, target, msg)
+		msg.Context.Relation = classifyPromptCurrentMessageRelation(
+			msg.Content,
+			msg.Media,
+			msg.Context.ReplyToMessageID,
+			allowAdjacentMediaFollowupForChatType(msg.Context.ChatType),
+			history,
+			msg.Context.ReceivedAt,
+		)
 	}
+	if al.turns != nil && al.turns.inbound != nil {
+		if err := al.turns.inbound.persistContext(ctx, msg); err != nil {
+			return msg, fmt.Errorf("persist classified inbound relation: %w", err)
+		}
+	}
+	return msg, nil
+}
+
+func historyWithPendingRelationRoot(
+	history []providers.Message,
+	target *inboundDispatchTarget,
+	msg bus.InboundMessage,
+) []providers.Message {
+	if target == nil || target.relationRoot == nil || target.relationRoot.ReceivedAt.IsZero() ||
+		target.relationRoot.matches(msg) {
+		return history
+	}
+
+	rootAt := target.relationRoot.ReceivedAt
+	for i := range history {
+		if history[i].RootTurnStart && history[i].CreatedAt != nil && history[i].CreatedAt.Equal(rootAt) {
+			return history
+		}
+	}
+
+	insertAt := len(history)
+	for i := range history {
+		if history[i].CreatedAt != nil && !history[i].CreatedAt.Before(rootAt) {
+			insertAt = i
+			break
+		}
+	}
+	rootMessage := providers.Message{
+		Role:          "user",
+		CreatedAt:     &rootAt,
+		RootTurnStart: true,
+	}
+	withRoot := make([]providers.Message, 0, len(history)+1)
+	withRoot = append(withRoot, history[:insertAt]...)
+	withRoot = append(withRoot, rootMessage)
+	withRoot = append(withRoot, history[insertAt:]...)
+	return withRoot
+}
+
+func (root inboundRelationRoot) matches(msg bus.InboundMessage) bool {
+	if root.SpoolID != "" && msg.SpoolID != "" {
+		return root.SpoolID == msg.SpoolID
+	}
+	messageID := strings.TrimSpace(msg.Context.MessageID)
+	if root.MessageID != "" && messageID != "" {
+		return root.MessageID == messageID
+	}
+	return !root.ReceivedAt.IsZero() && root.ReceivedAt.Equal(msg.Context.ReceivedAt)
+}
+
+func normalizeDispatchInboundRelation(
+	agent *AgentInstance,
+	dispatch DispatchRequest,
+	fallback time.Time,
+) DispatchRequest {
+	if dispatch.InboundContext == nil {
+		return dispatch
+	}
+	inboundContext := *dispatch.InboundContext
+	dispatch.InboundContext = &inboundContext
+	if dispatch.InboundContext.ReceivedAt.IsZero() {
+		dispatch.InboundContext.ReceivedAt = fallback.UTC()
+	}
+	if !dispatch.InboundContext.Relation.IsZero() {
+		return dispatch
+	}
+	var history []providers.Message
+	if agent != nil && agent.Sessions != nil {
+		history = agent.Sessions.GetHistory(dispatch.SessionKey)
+	}
+	dispatch.InboundContext.Relation = classifyPromptCurrentMessageRelation(
+		dispatch.UserMessage,
+		dispatch.Media,
+		dispatch.ReplyToMessageID(),
+		allowAdjacentMediaFollowupForChatType(dispatch.ChatType()),
+		history,
+		dispatch.InboundContext.ReceivedAt,
+	)
+	return dispatch
 }

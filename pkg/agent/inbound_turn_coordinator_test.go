@@ -28,6 +28,7 @@ type finalResponseAdmissionTestBus struct {
 	publishErr     error
 	publishResults []error
 	publishCalls   int
+	persistErr     error
 
 	mu           sync.Mutex
 	acked        []string
@@ -363,6 +364,147 @@ func (b *finalResponseAdmissionTestBus) AckInbound(
 		return err
 	}
 	return b.MessageBus.AckInbound(ctx, msg)
+}
+
+func (b *finalResponseAdmissionTestBus) PersistInboundContext(
+	ctx context.Context,
+	msg bus.InboundMessage,
+) error {
+	if b.persistErr != nil {
+		return b.persistErr
+	}
+	return b.MessageBus.PersistInboundContext(ctx, msg)
+}
+
+func TestBusySessionReleasesOriginalSpoolWhenContextPersistenceFails(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	persistErr := errors.New("persist classified context failed")
+	trackingBus := &finalResponseAdmissionTestBus{
+		MessageBus: msgBus,
+		persistErr: persistErr,
+	}
+	setTestMessageBus(al, trackingBus)
+
+	msg := finalResponseAdmissionInboundMessage("spool-persist-failure")
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("resolveSteeringTarget() rejected test inbound")
+	}
+	newInboundTurnCoordinator(al).handleBusySession(t.Context(), msg, target)
+
+	acked, released, cause := trackingBus.ownership()
+	if len(acked) != 0 || !containsExactly(released, msg.SpoolID) || !errors.Is(cause, persistErr) {
+		t.Fatalf("persistence failure ownership = acked:%v released:%v cause:%v", acked, released, cause)
+	}
+}
+
+func TestBlockedRootClassifiesAndPersistsAdjacentFollowupForReplay(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	spoolDir := t.TempDir()
+	spool, err := bus.NewInboundSpool(spoolDir)
+	if err != nil {
+		t.Fatalf("NewInboundSpool() error = %v", err)
+	}
+	msgBus.SetInboundSpool(spool)
+
+	// Hold the only worker so the root owns the session claim without reaching
+	// canonical history. The follow-up must still classify against that root.
+	al.workerSem <- struct{}{}
+	rootCtx, cancelRoot := context.WithCancel(t.Context())
+	capacityHeld := true
+	defer func() {
+		cancelRoot()
+		if capacityHeld {
+			<-al.workerSem
+		}
+	}()
+
+	rootAt := time.Date(2026, 9, 7, 7, 0, 0, 0, time.UTC)
+	root := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:    "telegram",
+			ChatID:     "chat-1",
+			ChatType:   "direct",
+			SenderID:   "telegram:42",
+			MessageID:  "root-1",
+			ReceivedAt: rootAt,
+		},
+		Content: "Here is what I ate",
+	}
+	if err = msgBus.PublishInbound(rootCtx, root); err != nil {
+		t.Fatalf("PublishInbound(root) error = %v", err)
+	}
+	spooledRoot := <-msgBus.InboundChan()
+	coordinator := newInboundTurnCoordinator(al)
+	coordinator.handleInbound(rootCtx, spooledRoot)
+
+	followAt := rootAt.Add(time.Minute)
+	followup := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:    "telegram",
+			ChatID:     "chat-1",
+			ChatType:   "direct",
+			SenderID:   "telegram:42",
+			MessageID:  "followup-1",
+			ReceivedAt: followAt,
+		},
+		Content: "[media only]",
+		Media:   []string{"media://image-1"},
+	}
+	if err = msgBus.PublishInbound(t.Context(), followup); err != nil {
+		t.Fatalf("PublishInbound(follow-up) error = %v", err)
+	}
+	spooledFollowup := <-msgBus.InboundChan()
+	activeTarget, ok := al.resolveSteeringTarget(spooledFollowup)
+	if !ok || activeTarget == nil || activeTarget.Agent == nil {
+		t.Fatal("resolveSteeringTarget() did not return the claimed root target")
+	}
+	if history := activeTarget.Agent.Sessions.GetHistory(activeTarget.SessionKey); len(history) != 0 {
+		t.Fatalf("history before worker admission = %#v, want empty", history)
+	}
+	coordinator.handleInbound(t.Context(), spooledFollowup)
+
+	if err = msgBus.ReleaseInbound(t.Context(), spooledFollowup, errors.New("simulate restart")); err != nil {
+		t.Fatalf("ReleaseInbound(follow-up) error = %v", err)
+	}
+	reopened, err := bus.NewInboundSpool(spoolDir)
+	if err != nil {
+		t.Fatalf("NewInboundSpool(reopen) error = %v", err)
+	}
+	replayed, err := reopened.Pending(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("Pending(reopen) error = %v", err)
+	}
+	var replayedFollowup *bus.InboundMessage
+	for i := range replayed {
+		if replayed[i].Context.MessageID == "followup-1" {
+			replayedFollowup = &replayed[i]
+			break
+		}
+	}
+	if replayedFollowup == nil {
+		t.Fatalf("replayed messages = %#v, want follow-up", replayed)
+	}
+	if replayedFollowup.Context.Relation.Kind != bus.InboundRelationAdjacentFollowupMedia ||
+		!replayedFollowup.Context.Relation.MediaOnly ||
+		!replayedFollowup.Context.ReceivedAt.Equal(followAt) {
+		t.Fatalf("replayed follow-up facts = %#v, want adjacent relation at %v", replayedFollowup.Context, followAt)
+	}
+
+	cancelRoot()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for al.ActiveTurnCount() != 0 {
+		select {
+		case <-deadline.C:
+			t.Fatal("blocked root claim was not released after cancellation")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	<-al.workerSem
+	capacityHeld = false
 }
 
 func TestOutboundTransactionPersistsBeforePublishAndSuppressesSameProcessReplay(t *testing.T) {

@@ -1497,7 +1497,14 @@ func TestProcessAsyncCompletionUsesNoHistory(t *testing.T) {
 		CompletionID: "completion-1",
 		Content:      asyncCompletionPrompt("spawn", "fresh background result"),
 		Origin: bus.InboundContext{
-			Channel: "telegram", ChatID: "chat-1", ChatType: "direct",
+			Channel:    "telegram",
+			ChatID:     "chat-1",
+			ChatType:   "direct",
+			ReceivedAt: time.Date(2026, 9, 7, 3, 0, 0, 0, time.UTC),
+			Relation: bus.InboundMessageRelation{
+				Kind:      bus.InboundRelationAdjacentFollowupMedia,
+				MediaOnly: true,
+			},
 		},
 		SenderID: "async:spawn",
 	})

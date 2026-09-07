@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
@@ -18,22 +19,16 @@ var attachmentOnlyPlaceholders = map[string]struct{}{
 	"[file]":       {},
 }
 
-type InboundRelationKind string
-
-const (
-	InboundRelationStandalone            InboundRelationKind = "standalone"
-	InboundRelationReplyToMessage        InboundRelationKind = "reply_to_message"
-	InboundRelationAdjacentFollowupMedia InboundRelationKind = "adjacent_followup_media"
+type (
+	InboundRelationKind    = bus.InboundRelationKind
+	InboundMessageRelation = bus.InboundMessageRelation
 )
 
-type InboundMessageRelation struct {
-	Kind      InboundRelationKind
-	MediaOnly bool
-}
-
-func (r InboundMessageRelation) IsZero() bool {
-	return r.Kind == ""
-}
+const (
+	InboundRelationStandalone            = bus.InboundRelationStandalone
+	InboundRelationReplyToMessage        = bus.InboundRelationReplyToMessage
+	InboundRelationAdjacentFollowupMedia = bus.InboundRelationAdjacentFollowupMedia
+)
 
 func classifyPromptCurrentMessageRelation(
 	content string,
@@ -63,7 +58,7 @@ func recentUserFollowupCandidate(history []providers.Message, now time.Time, win
 		return false
 	}
 	if now.IsZero() {
-		now = time.Now()
+		return false
 	}
 
 	lastUserIdx := -1
@@ -87,7 +82,8 @@ func recentUserFollowupCandidate(history []providers.Message, now time.Time, win
 	if lastUser.CreatedAt == nil || lastUser.CreatedAt.IsZero() {
 		return false
 	}
-	if now.Sub(*lastUser.CreatedAt) > window {
+	age := now.Sub(*lastUser.CreatedAt)
+	if age < 0 || age > window {
 		return false
 	}
 

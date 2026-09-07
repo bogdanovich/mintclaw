@@ -15,6 +15,28 @@ type SenderInfo struct {
 	DisplayName string `json:"display_name,omitempty"` // display name
 }
 
+// InboundRelationKind identifies the structural relationship between one
+// normalized inbound event and earlier events in the same routed session.
+type InboundRelationKind string
+
+const (
+	InboundRelationStandalone            InboundRelationKind = "standalone"
+	InboundRelationReplyToMessage        InboundRelationKind = "reply_to_message"
+	InboundRelationAdjacentFollowupMedia InboundRelationKind = "adjacent_followup_media"
+)
+
+// InboundMessageRelation is durable structural metadata. It deliberately
+// carries no semantic confidence or prompt policy: downstream consumers decide
+// how to render a classified relation.
+type InboundMessageRelation struct {
+	Kind      InboundRelationKind `json:"kind,omitempty"`
+	MediaOnly bool                `json:"media_only,omitempty"`
+}
+
+func (r InboundMessageRelation) IsZero() bool {
+	return r.Kind == ""
+}
+
 // InboundContext captures the normalized, platform-agnostic facts about an
 // inbound message. This is the source of truth for routing and session
 // allocation.
@@ -39,8 +61,10 @@ type InboundContext struct {
 
 	Mentioned bool `json:"mentioned,omitempty"`
 
-	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
-	ReplyToSenderID  string `json:"reply_to_sender_id,omitempty"`
+	ReplyToMessageID string                 `json:"reply_to_message_id,omitempty"`
+	ReplyToSenderID  string                 `json:"reply_to_sender_id,omitempty"`
+	ReceivedAt       time.Time              `json:"received_at,omitzero"`
+	Relation         InboundMessageRelation `json:"relation,omitzero"`
 
 	ReplyHandles map[string]string `json:"reply_handles,omitempty"`
 	Raw          map[string]string `json:"raw,omitempty"`

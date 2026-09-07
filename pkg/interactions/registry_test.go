@@ -331,6 +331,10 @@ func TestRegistryPersistsSupersedingApprovalGuidance(t *testing.T) {
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, Answer{
 		Text: "Open All postings instead", Media: []string{"media://guidance-image"},
 		Superseded: true, MessageID: "guidance-1",
+		Relation: bus.InboundMessageRelation{
+			Kind:      bus.InboundRelationReplyToMessage,
+			MediaOnly: true,
+		},
 	}, OutcomeDenied)
 	if err != nil {
 		t.Fatal(err)
@@ -344,6 +348,7 @@ func TestRegistryPersistsSupersedingApprovalGuidance(t *testing.T) {
 	if !ok || got.Answer == nil || !got.Answer.Superseded ||
 		got.Answer.Text != "Open All postings instead" ||
 		len(got.Answer.Media) != 1 || got.Answer.Media[0] != "media://guidance-image" ||
+		got.Answer.Relation.Kind != bus.InboundRelationReplyToMessage || !got.Answer.Relation.MediaOnly ||
 		got.Outcome != OutcomeDenied {
 		t.Fatalf("reloaded superseding guidance = %#v, found=%v", got, ok)
 	}

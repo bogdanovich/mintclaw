@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,17 @@ func promptBuildRequestForTurn(
 	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
 		ts.opts.Dispatch.ChatType(),
 	)
+	relation := relationForPromptInput(ts.opts.Dispatch, currentMessage, media)
+	if relation.IsZero() {
+		relation = classifyPromptCurrentMessageRelation(
+			currentMessage,
+			media,
+			ts.opts.Dispatch.ReplyToMessageID(),
+			allowAdjacentMediaFollowup,
+			history,
+			time.Now(),
+		)
+	}
 	req := PromptBuildRequest{
 		History:                    history,
 		Summary:                    summary,
@@ -31,18 +43,11 @@ func promptBuildRequestForTurn(
 		SenderDisplayName:          ts.opts.SenderDisplayName,
 		ReplyToMessageID:           ts.opts.Dispatch.ReplyToMessageID(),
 		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
-		CurrentMessageRelation: classifyPromptCurrentMessageRelation(
-			currentMessage,
-			media,
-			ts.opts.Dispatch.ReplyToMessageID(),
-			allowAdjacentMediaFollowup,
-			history,
-			time.Now(),
-		),
-		ActiveSkills:         activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
-		Overlays:             promptOverlays(ts.opts.ActiveGoal),
-		BackgroundTaskSafety: !ts.opts.NoHistory,
-		CodingContext:        ts.opts.CodingContext,
+		CurrentMessageRelation:     relation,
+		ActiveSkills:               activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
+		Overlays:                   promptOverlays(ts.opts.ActiveGoal),
+		BackgroundTaskSafety:       !ts.opts.NoHistory,
+		CodingContext:              ts.opts.CodingContext,
 	}
 	hasCallableTools := true
 	if ts.profile.Enabled {
@@ -98,6 +103,17 @@ func promptBuildRequestForTurnSpec(
 	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
 		opts.Dispatch.ChatType(),
 	)
+	relation := relationForPromptInput(opts.Dispatch, currentMessage, media)
+	if relation.IsZero() {
+		relation = classifyPromptCurrentMessageRelation(
+			currentMessage,
+			media,
+			opts.Dispatch.ReplyToMessageID(),
+			allowAdjacentMediaFollowup,
+			history,
+			time.Now(),
+		)
+	}
 	req := PromptBuildRequest{
 		History:                    history,
 		Summary:                    summary,
@@ -109,18 +125,11 @@ func promptBuildRequestForTurnSpec(
 		SenderDisplayName:          opts.SenderDisplayName,
 		ReplyToMessageID:           opts.Dispatch.ReplyToMessageID(),
 		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
-		CurrentMessageRelation: classifyPromptCurrentMessageRelation(
-			currentMessage,
-			media,
-			opts.Dispatch.ReplyToMessageID(),
-			allowAdjacentMediaFollowup,
-			history,
-			time.Now(),
-		),
-		ActiveSkills:         activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
-		Overlays:             promptOverlays(opts.ActiveGoal),
-		BackgroundTaskSafety: !opts.NoHistory,
-		CodingContext:        opts.CodingContext,
+		CurrentMessageRelation:     relation,
+		ActiveSkills:               activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
+		Overlays:                   promptOverlays(opts.ActiveGoal),
+		BackgroundTaskSafety:       !opts.NoHistory,
+		CodingContext:              opts.CodingContext,
 	}
 	profile := opts.TurnProfile
 	hasCallableTools := true
@@ -154,6 +163,27 @@ func promptBuildRequestForTurnSpec(
 
 func allowAdjacentMediaFollowupForChatType(chatType string) bool {
 	return strings.EqualFold(strings.TrimSpace(chatType), "direct")
+}
+
+func relationForPromptInput(
+	dispatch DispatchRequest,
+	currentMessage string,
+	media []string,
+) InboundMessageRelation {
+	if currentMessage == dispatch.UserMessage && slices.Equal(media, dispatch.Media) {
+		return dispatch.InboundRelation()
+	}
+	// Relation facts belong to the admitted inbound event. Callers may reuse a
+	// dispatch for derived prompts, but those prompts must not inherit the
+	// origin event's reply or adjacency semantics.
+	return classifyPromptCurrentMessageRelation(
+		currentMessage,
+		media,
+		"",
+		false,
+		nil,
+		time.Time{},
+	)
 }
 
 func normalizePromptBuildRequestRelations(
@@ -259,7 +289,7 @@ func currentTurnUserPromptMessage(
 	media []string,
 	relation InboundMessageRelation,
 ) providers.Message {
-	if relation.MediaOnly {
+	if relation.MediaOnly && len(media) > 0 {
 		lines := []string{
 			"[New user message with attached media only]",
 			"No text or caption was provided with this message.",

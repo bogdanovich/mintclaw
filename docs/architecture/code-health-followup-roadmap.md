@@ -103,6 +103,11 @@ Completion gate:
 
 ### F1: add typed inbound event facts
 
+Status: implemented. Typed facts are assigned before durable spooling,
+classified after route/session admission, persisted back to processing or
+released records, and retained by replay. F2 owns removal of the remaining
+prompt-only compatibility fallback.
+
 Scope:
 
 - add a normalized received/event timestamp to the durable inbound contract;
