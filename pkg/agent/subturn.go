@@ -524,6 +524,7 @@ func spawnSubTurn(
 	if err != nil {
 		return nil, err
 	}
+	defer modelBinding.Cleanup()
 	durableTask := strings.TrimSpace(cfg.TaskID) != ""
 	ephemeralStore := newEphemeralSession(nil)
 	agent := *baseAgent // shallow copy

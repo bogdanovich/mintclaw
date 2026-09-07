@@ -378,6 +378,45 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	}
 }
 
+func TestSpawnSubTurnReleasesExactModelBinding(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	al.cfg.ModelList = append(al.cfg.ModelList, &config.ModelConfig{
+		ModelName: "gpt-5.6-sol",
+		Provider:  "openai",
+		Model:     "gpt-5.6-sol",
+		Enabled:   true,
+	})
+	exactProvider := &countingStatefulProvider{}
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return exactProvider, modelConfig.Model, nil
+	}
+	parent := newTurnState(agent, turnSpec{Dispatch: DispatchRequest{
+		RouteSessionKey: "route-cleanup",
+		SessionKey:      "session-cleanup",
+	}}, al.newTurnEventScope(
+		agent.ID,
+		agent.Workspace,
+		"parent-cleanup",
+		newTurnContext(nil, nil, nil),
+	))
+	parent.ctx = t.Context()
+	parent.pendingResults = make(chan *toolshared.ToolResult, 1)
+	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
+
+	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+		Model:         agent.Model,
+		ModelOverride: "gpt-5.6-sol",
+		TaskPrompt:    "complete the exact-model child",
+	})
+	if err != nil || result == nil {
+		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
+	}
+	if exactProvider.closeCount != 1 {
+		t.Fatalf("exact provider close count = %d, want 1", exactProvider.closeCount)
+	}
+}
+
 func TestDurableTaskSubTurnWaitsForHumanApproval(t *testing.T) {
 	provider := &sequenceProvider{responses: []*providers.LLMResponse{
 		{ToolCalls: []providers.ToolCall{{
