@@ -583,6 +583,8 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 	cfg.Tools.Browser.Limits.ActionSeconds = 17
 	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
 	profile := target.Profiles[config.BrowserDefaultProfile]
+	profile.AllowedAgents = []string{"browser"}
+	profile.AllowedActors = []string{"person:42"}
 	profile.Policy = &browserpolicy.Policy{
 		DefaultDecision: browserpolicy.DecisionAllow,
 		Rules: []browserpolicy.Rule{{
@@ -600,6 +602,8 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 	cfg.Tools.Browser.Agents[0] = "other"
 	cfg.Tools.Browser.DefaultTarget = "other"
 	cfg.Tools.Browser.Limits.ActionSeconds = 29
+	profile.AllowedAgents[0] = "other"
+	profile.AllowedActors[0] = "person:99"
 	profile.AllowedOrigins[0] = "https://changed.example"
 	profile.Policy.Rules[0].Match.Actions[0] = string(browser.ActionClick)
 	target.Profiles[config.BrowserDefaultProfile] = profile
@@ -613,7 +617,8 @@ func TestBrowserToolOptionsAreIsolatedFromReloadConfigMutation(t *testing.T) {
 		t.Fatalf("browser tool options observed mutated scalar policy: %#v", options.config)
 	}
 	snapshotProfile := options.config.Targets[config.BrowserDefaultTarget].Profiles[config.BrowserDefaultProfile]
-	if snapshotProfile.AllowedOrigins[0] != "https://example.com" ||
+	if snapshotProfile.AllowedAgents[0] != "browser" || snapshotProfile.AllowedActors[0] != "person:42" ||
+		snapshotProfile.AllowedOrigins[0] != "https://example.com" ||
 		snapshotProfile.Policy.Rules[0].Match.Actions[0] != string(browser.ActionNavigate) {
 		t.Fatalf("browser tool options observed mutated nested policy: %#v", snapshotProfile)
 	}
@@ -858,8 +863,8 @@ func TestBrowserTargetsIsScopedAndSideEffectFree(t *testing.T) {
 }
 
 func TestBrowserTargetsFiltersCanonicalProfilesByExactActorAndAgentGrant(t *testing.T) {
-	cfg := browserToolTestConfig()
-	target := cfg.Tools.Browser.Targets["gateway"]
+	root := browserToolTestRootConfig()
+	target := root.Tools.Browser.Targets["gateway"]
 	profile := target.Profiles["managed"]
 	profile.Revision = "managed-v1"
 	profile.AllowedAgents = []string{"browser"}
@@ -870,10 +875,10 @@ func TestBrowserTargetsFiltersCanonicalProfilesByExactActorAndAgentGrant(t *test
 		Headed:           true,
 	}
 	target.Profiles["managed"] = profile
-	cfg.Tools.Browser.Targets["gateway"] = target
+	root.Tools.Browser.Targets["gateway"] = target
 
 	source := &fakeBrowserToolSource{available: true}
-	tool := NewBrowserTargetsTool(cfg, source)
+	tool := NewBrowserTargetsTool(NewBrowserToolOptions(root.Tools.Browser), source)
 	granted := tool.Execute(browserToolTestContext(), nil)
 	var result browserTargetResult
 	decodeBrowserToolResult(t, granted, &result)

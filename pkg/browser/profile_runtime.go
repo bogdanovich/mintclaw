@@ -27,7 +27,10 @@ func normalizeManagedProfileRuntime(
 	if err != nil {
 		return config.BrowserProfileRuntimeConfig{}, errors.New("browser profile directory identity is unsafe")
 	}
-	profileDirectory = filepath.Clean(realProfile)
+	realProfile = filepath.Clean(realProfile)
+	if realProfile != profileDirectory {
+		return config.BrowserProfileRuntimeConfig{}, errors.New("browser profile directory identity is unsafe")
+	}
 	profileInfo, err := os.Lstat(profileDirectory)
 	if err != nil || !profileInfo.IsDir() || profileInfo.Mode()&os.ModeSymlink != 0 ||
 		validateBrowserRuntimeOwner(profileInfo, true) != nil {
@@ -35,15 +38,19 @@ func normalizeManagedProfileRuntime(
 			"browser profile directory is not private to the gateway account",
 		)
 	}
-	configuredLockParent, err := os.Lstat(filepath.Dir(lockFile))
+	lockParent := filepath.Dir(lockFile)
+	configuredLockParent, err := os.Lstat(lockParent)
 	if err != nil || configuredLockParent.Mode()&os.ModeSymlink != 0 {
 		return config.BrowserProfileRuntimeConfig{}, errors.New("browser profile lock parent identity is unsafe")
 	}
-	realLockParent, err := filepath.EvalSymlinks(filepath.Dir(lockFile))
+	realLockParent, err := filepath.EvalSymlinks(lockParent)
 	if err != nil {
 		return config.BrowserProfileRuntimeConfig{}, errors.New("browser profile lock parent identity is unsafe")
 	}
 	realLockParent = filepath.Clean(realLockParent)
+	if realLockParent != lockParent {
+		return config.BrowserProfileRuntimeConfig{}, errors.New("browser profile lock parent identity is unsafe")
+	}
 	lockFile = filepath.Join(realLockParent, filepath.Base(lockFile))
 	parentInfo, err := os.Lstat(realLockParent)
 	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 ||

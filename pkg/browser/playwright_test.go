@@ -61,12 +61,17 @@ func canonicalPlaywrightConfig(
 ) (*config.Config, string, string) {
 	t.Helper()
 	runtimeRoot := t.TempDir()
+	var err error
+	runtimeRoot, err = filepath.EvalSymlinks(runtimeRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	profileDirectory := filepath.Join(runtimeRoot, "personal")
-	if err := os.Mkdir(profileDirectory, 0o700); err != nil {
+	if err = os.Mkdir(profileDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	lockDirectory := filepath.Join(runtimeRoot, "locks")
-	if err := os.Mkdir(lockDirectory, 0o700); err != nil {
+	if err = os.Mkdir(lockDirectory, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	lockFile := filepath.Join(lockDirectory, "personal.lock")
@@ -1605,6 +1610,49 @@ func TestPlaywrightProfileFactoryRejectsUnsafeCanonicalRuntimeIdentity(t *testin
 	if _, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "personal"); err == nil ||
 		!strings.Contains(err.Error(), "identity is unsafe") {
 		t.Fatalf("symlinked profile error = %v", err)
+	}
+}
+
+func TestPlaywrightProfileFactoryRejectsCanonicalRuntimeAncestorSymlinks(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*config.BrowserProfileRuntimeConfig, string)
+		wantErr string
+	}{
+		{
+			name: "profile directory ancestor",
+			mutate: func(runtime *config.BrowserProfileRuntimeConfig, aliasRoot string) {
+				runtime.ProfileDirectory = filepath.Join(aliasRoot, "personal")
+			},
+			wantErr: "profile directory identity is unsafe",
+		},
+		{
+			name: "lock parent ancestor",
+			mutate: func(runtime *config.BrowserProfileRuntimeConfig, aliasRoot string) {
+				runtime.LockFile = filepath.Join(aliasRoot, "locks", "personal.lock")
+			},
+			wantErr: "lock parent identity is unsafe",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root, profileDirectory, _ := canonicalPlaywrightConfig(t, true)
+			aliasParent := t.TempDir()
+			aliasRoot := filepath.Join(aliasParent, "runtime-link")
+			if err := os.Symlink(filepath.Dir(profileDirectory), aliasRoot); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+			target := root.Tools.Browser.Targets["gateway"]
+			profile := target.Profiles["personal"]
+			test.mutate(&profile.Runtime, aliasRoot)
+			target.Profiles["personal"] = profile
+			root.Tools.Browser.Targets["gateway"] = target
+
+			_, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "personal")
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ancestor symlink error = %v, want %q", err, test.wantErr)
+			}
+		})
 	}
 }
 

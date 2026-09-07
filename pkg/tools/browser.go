@@ -158,6 +158,8 @@ func NewBrowserToolOptions(cfg config.BrowserToolsConfig) BrowserToolOptions {
 		target.Placement = target.EffectivePlacement()
 		target.Profiles = make(map[string]config.BrowserProfileConfig, len(target.Profiles))
 		for profileName, profile := range cfg.Targets[targetName].Profiles {
+			profile.AllowedAgents = append([]string(nil), profile.AllowedAgents...)
+			profile.AllowedActors = append([]string(nil), profile.AllowedActors...)
 			profile.AllowedOrigins = append([]string(nil), profile.AllowedOrigins...)
 			profile.Policy = browserpolicy.ClonePolicy(profile.Policy)
 			target.Profiles[profileName] = profile
