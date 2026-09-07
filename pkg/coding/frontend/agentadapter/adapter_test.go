@@ -884,3 +884,80 @@ func TestWrappedBusProjectionRemainsLosslessWhenOrdinarySubscriberDrops(t *testi
 		t.Fatal("test did not force ordinary event subscriber loss")
 	}
 }
+
+func TestWrappedBusPreservesCommittedCommentaryWhenOrdinarySubscriberDrops(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	_, _, err = eventBus.Channel().SubscribeChan(t.Context(), runtimeevents.SubscribeOptions{
+		Name:         "intentionally-slow",
+		Buffer:       1,
+		Backpressure: runtimeevents.DropNewest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+
+	scope := runtimeevents.Scope{
+		SessionKey: "thread-1",
+		TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+	}
+	wrapped.PublishNonBlocking(runtimeevents.Event{
+		Kind:    runtimeevents.KindAgentTurnStart,
+		Source:  runtimeevents.Source{Component: "agent", Name: "coding"},
+		Scope:   scope,
+		Payload: agent.TurnStartPayload{UserMessage: "fix it"},
+	})
+
+	streamer, ok := frontend.NewStreamDelegate(projector, "thread-1").GetStreamer(
+		t.Context(), "coding", "thread-1", "thread-1", "", scope.TraceScope,
+	)
+	if !ok {
+		t.Fatal("matching stream was rejected")
+	}
+	messageStream, ok := streamer.(interface{ SetAssistantMessageID(string) })
+	if !ok {
+		t.Fatal("stream does not support assistant message identity")
+	}
+	messageStream.SetAssistantMessageID("provider-message-1")
+	if err = streamer.Update(t.Context(), "I found the parser boundary."); err != nil {
+		t.Fatal(err)
+	}
+
+	result := wrapped.PublishNonBlocking(runtimeevents.Event{
+		Kind:   runtimeevents.KindAgentAssistantMessageCommitted,
+		Source: runtimeevents.Source{Component: "agent", Name: "coding"},
+		Scope:  scope,
+		Payload: agent.AssistantMessageCommittedPayload{
+			MessageID: "provider-message-1",
+			Phase:     agent.AssistantMessagePhaseCommentary,
+			Content:   "I found the parser boundary.",
+		},
+	})
+	if result.Dropped == 0 {
+		t.Fatal("test did not drop the committed event from the ordinary subscriber")
+	}
+	streamer.Cancel(t.Context())
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Entries) != 2 {
+		t.Fatalf("entries = %+v", snapshot.Entries)
+	}
+	commentary := snapshot.Entries[1]
+	if commentary.Kind != frontend.EntryAssistant ||
+		commentary.ID != "turn-1:assistant:provider-message-1" ||
+		commentary.Phase != frontend.AssistantPhaseCommentary ||
+		commentary.Text != "I found the parser boundary." || !commentary.Complete {
+		t.Fatalf("committed commentary after subscriber drop = %+v", commentary)
+	}
+}
