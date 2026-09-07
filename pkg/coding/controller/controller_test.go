@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,7 +26,22 @@ type blockingRuntime struct {
 	hardCancels    int
 	closes         int
 	closeErr       error
+	runErr         error
 	stopOnce       sync.Once
+}
+
+type delayedReadyRuntime struct {
+	*blockingRuntime
+	readyRelease chan struct{}
+}
+
+type immediateReadyFailureRuntime struct {
+	*blockingRuntime
+	err error
+}
+
+type noReadyRuntime struct {
+	*blockingRuntime
 }
 
 type pagedRuntime struct {
@@ -401,10 +417,39 @@ func (r *blockingRuntime) RunTurn(ctx context.Context, input frontend.TurnInput,
 	ready()
 	select {
 	case <-r.runRelease:
-		return nil
+		return r.runErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (r *delayedReadyRuntime) RunTurn(ctx context.Context, input frontend.TurnInput, ready func()) error {
+	r.runStarted <- input
+	select {
+	case <-r.readyRelease:
+		ready()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-r.runRelease:
+		return r.runErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *immediateReadyFailureRuntime) RunTurn(
+	_ context.Context,
+	_ frontend.TurnInput,
+	ready func(),
+) error {
+	ready()
+	return r.err
+}
+
+func (*noReadyRuntime) RunTurn(context.Context, frontend.TurnInput, func()) error {
+	return nil
 }
 
 func (r *blockingRuntime) Interrupt(context.Context) error {
@@ -488,6 +533,123 @@ func TestSubmitRunsOutsideCoordinatorAndRejectsSecondPrompt(t *testing.T) {
 			runtime.hardCancels,
 			runtime.closes,
 		)
+	}
+}
+
+func TestSubmitDoesNotAdmitAlreadyCanceledRequest(t *testing.T) {
+	runtime := newBlockingRuntime()
+	controller := newTestController(t, runtime)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := controller.Submit(ctx, frontend.TurnInput{Text: "canceled"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Submit() error = %v, want %v", err, context.Canceled)
+	}
+	select {
+	case input := <-runtime.runStarted:
+		t.Fatalf("canceled turn was admitted: %#v", input)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSubmitCancellationBeforeReadinessDoesNotBlockCoordinator(t *testing.T) {
+	runtime := &delayedReadyRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		readyRelease:    make(chan struct{}),
+	}
+	controller := newTestController(t, runtime)
+	ctx, cancel := context.WithCancel(t.Context())
+	submitted := make(chan error, 1)
+	go func() { submitted <- controller.Submit(ctx, frontend.TurnInput{Text: "admitted"}) }()
+	select {
+	case <-runtime.runStarted:
+	case <-time.After(time.Second):
+		t.Fatal("turn did not enter the runtime")
+	}
+	cancel()
+	select {
+	case err := <-submitted:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Submit() error = %v, want %v", err, context.Canceled)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Submit() remained blocked before readiness")
+	}
+	if err := controller.AwaitTurn(t.Context()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("AwaitTurn() error = %v, want %v", err, context.Canceled)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSubmitPreservesReadinessWhenFastFailureAlsoSettles(t *testing.T) {
+	injected := errors.New("fast admitted failure")
+	runtime := &immediateReadyFailureRuntime{blockingRuntime: newBlockingRuntime(), err: injected}
+	controller := newTestController(t, runtime)
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "fail fast"}); err != nil {
+		t.Fatalf("Submit() error = %v, want admitted nil", err)
+	}
+	if err := controller.AwaitTurn(t.Context()); !errors.Is(err, injected) {
+		t.Fatalf("AwaitTurn() error = %v, want %v", err, injected)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSubmitRetainsFailureWhenRuntimeReturnsWithoutReadiness(t *testing.T) {
+	runtime := &noReadyRuntime{blockingRuntime: newBlockingRuntime()}
+	controller := newTestController(t, runtime)
+	err := controller.Submit(t.Context(), frontend.TurnInput{Text: "missing readiness"})
+	if err == nil || !strings.Contains(err.Error(), "returned before admission") {
+		t.Fatalf("Submit() error = %v, want missing-admission failure", err)
+	}
+	for range 2 {
+		settlementErr := controller.AwaitTurn(t.Context())
+		if settlementErr == nil || settlementErr.Error() != err.Error() {
+			t.Fatalf("AwaitTurn() error = %v, want retained %v", settlementErr, err)
+		}
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestAwaitTurnWaitsForAndRetainsRuntimeSettlement(t *testing.T) {
+	injected := errors.New("post-turn persistence failed")
+	runtime := newBlockingRuntime()
+	runtime.runErr = injected
+	controller := newTestController(t, runtime)
+	if err := controller.AwaitTurn(t.Context()); !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("AwaitTurn() before submit = %v, want %v", err, ErrNoActiveTurn)
+	}
+	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- controller.AwaitTurn(t.Context()) }()
+	select {
+	case err := <-waited:
+		t.Fatalf("AwaitTurn() returned before runtime settlement: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(runtime.runRelease)
+	select {
+	case err := <-waited:
+		if !errors.Is(err, injected) {
+			t.Fatalf("AwaitTurn() error = %v, want %v", err, injected)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AwaitTurn() did not return after runtime settlement")
+	}
+	if err := controller.AwaitTurn(t.Context()); !errors.Is(err, injected) {
+		t.Fatalf("retained AwaitTurn() error = %v, want %v", err, injected)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 

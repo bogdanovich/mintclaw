@@ -200,6 +200,11 @@ func main() {
 		if errors.As(err, &documentExit) {
 			os.Exit(documentExit.Code)
 		}
+		var codingExit *coding.ExitError
+		if errors.As(err, &codingExit) {
+			fmt.Fprint(os.Stderr, cliui.FormatCLIError(err.Error(), last))
+			os.Exit(codingExit.Code)
+		}
 		fmt.Fprint(os.Stderr, cliui.FormatCLIError(err.Error(), last))
 		os.Exit(1)
 	}
