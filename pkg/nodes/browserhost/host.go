@@ -138,14 +138,8 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 		factory, err := browserworker.NewPlaywrightManagedHostFactory(
 			browserworker.PlaywrightManagedHostConfig{
 				Target: companionBrowserTarget, Profile: alias,
-				ProfileConfig: config.BrowserProfileConfig{
-					Enabled: true, Mode: config.BrowserProfileManaged,
-					NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
-					CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
-					AllowApprovedActions: profile.AllowApprovedActions,
-					AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
-				},
-				ServerConfig: server,
+				ProfileConfig: companionBrowserProfileConfig(profile),
+				ServerConfig:  server,
 			},
 		)
 		if err != nil {
@@ -154,6 +148,21 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 		factories[alias] = factory
 	}
 	return newBrowserHost(profiles, factories)
+}
+
+func companionBrowserProfileConfig(profile companion.BrowserProfilePolicy) config.BrowserProfileConfig {
+	return config.BrowserProfileConfig{
+		Enabled: true, Mode: config.BrowserProfileManaged,
+		NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
+		CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
+		AllowApprovedActions: profile.AllowApprovedActions,
+		AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
+		Runtime: config.BrowserProfileRuntimeConfig{
+			ProfileDirectory: profile.ProfileDirectory,
+			LockFile:         profile.LockFile,
+			Headed:           profile.Headed,
+		},
+	}
 }
 
 func newBrowserHost(
