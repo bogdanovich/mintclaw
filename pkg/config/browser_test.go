@@ -147,6 +147,120 @@ func TestBrowserConfigRejectsIncompleteCanonicalProfileAuthority(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigRejectsConflictingCanonicalGatewayRuntimeIdentities(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*BrowserProfileRuntimeConfig, BrowserProfileRuntimeConfig)
+		wantErr string
+	}{
+		{
+			name: "identical profile directories",
+			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
+				runtime.ProfileDirectory = existing.ProfileDirectory
+			},
+			wantErr: "overlapping profile_directory paths",
+		},
+		{
+			name: "nested profile directory",
+			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
+				runtime.ProfileDirectory = filepath.Join(existing.ProfileDirectory, "nested")
+			},
+			wantErr: "overlapping profile_directory paths",
+		},
+		{
+			name: "profile directory containing existing directory",
+			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
+				runtime.ProfileDirectory = filepath.Dir(existing.ProfileDirectory)
+			},
+			wantErr: "overlapping profile_directory paths",
+		},
+		{
+			name: "identical lock files",
+			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
+				runtime.LockFile = existing.LockFile
+			},
+			wantErr: "reuse the same lock_file",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := browserConfigFixture(t)
+			target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+			profile := target.Profiles[BrowserDefaultProfile]
+			profile.Revision = "managed-v1"
+			profile.AllowedAgents = []string{"browser"}
+			profile.AllowedActors = []string{"telegram:123456"}
+			profile.Runtime = BrowserProfileRuntimeConfig{
+				ProfileDirectory: "/var/lib/mintclaw/browser/managed",
+				LockFile:         "/run/mintclaw/browser-managed.lock",
+			}
+			target.Profiles[BrowserDefaultProfile] = profile
+			cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+
+			otherRuntime := BrowserProfileRuntimeConfig{
+				ProfileDirectory: "/var/lib/mintclaw/browser/personal",
+				LockFile:         "/run/mintclaw/browser-personal.lock",
+			}
+			test.mutate(&otherRuntime, profile.Runtime)
+			cfg.Tools.Browser.Targets["secondary"] = BrowserTargetConfig{
+				Enabled:      true,
+				Driver:       BrowserDriverPlaywrightMCP,
+				DriverServer: "playwright",
+				Profiles: map[string]BrowserProfileConfig{
+					"personal": {
+						Enabled: true, Revision: "personal-v1", Mode: BrowserProfileManaged,
+						AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:123456"},
+						NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+						ApprovalMode: BrowserApprovalModelRequested, AllowApprovedActions: true,
+						Runtime: otherRuntime,
+					},
+				},
+			}
+			server := cfg.Tools.MCP.Servers["playwright"]
+			server.ExclusiveLockFile = ""
+			cfg.Tools.MCP.Servers["playwright"] = server
+
+			err := cfg.ValidateBrowserConfig()
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ValidateBrowserConfig() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestBrowserGatewayRuntimeIdentityValidationAllowsDistinctPaths(t *testing.T) {
+	targets := map[string]BrowserTargetConfig{
+		"gateway": {
+			Enabled: true,
+			Profiles: map[string]BrowserProfileConfig{
+				"managed": {
+					Enabled: true, Revision: "managed-v1",
+					Runtime: BrowserProfileRuntimeConfig{
+						ProfileDirectory: "/var/lib/mintclaw/browser/managed",
+						LockFile:         "/run/mintclaw/browser-managed.lock",
+					},
+				},
+			},
+		},
+		"secondary": {
+			Enabled: true,
+			Profiles: map[string]BrowserProfileConfig{
+				"personal": {
+					Enabled: true, Revision: "personal-v1",
+					Runtime: BrowserProfileRuntimeConfig{
+						ProfileDirectory: "/var/lib/mintclaw/browser/personal",
+						LockFile:         "/run/mintclaw/browser-personal.lock",
+					},
+				},
+			},
+		},
+	}
+	if err := validateBrowserGatewayRuntimeIdentities(targets); err != nil {
+		t.Fatalf("validateBrowserGatewayRuntimeIdentities() error = %v", err)
+	}
+}
+
 func TestBrowserConfigAcceptsExplicitEnabledDefaultTarget(t *testing.T) {
 	cfg := browserConfigFixture(t)
 	cfg.Nodes.Enabled = true

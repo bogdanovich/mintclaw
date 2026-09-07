@@ -9,6 +9,7 @@ import (
 	"net"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
@@ -229,6 +230,9 @@ func (cfg *Config) ValidateBrowserConfig() error {
 	}
 	if len(browser.Targets) > 8 {
 		return errors.New("invalid tools.browser.targets: exceeds 8 entries")
+	}
+	if err := validateBrowserGatewayRuntimeIdentities(browser.Targets); err != nil {
+		return err
 	}
 	for targetName, target := range browser.Targets {
 		if err := cfg.validateBrowserTarget(targetName, target); err != nil {
@@ -536,6 +540,75 @@ func validateGatewayBrowserProfileRuntime(name string, runtime BrowserProfileRun
 		return fmt.Errorf("browser profile %q lock_file must be outside profile_directory", name)
 	}
 	return nil
+}
+
+type browserGatewayRuntimeIdentity struct {
+	target           string
+	profile          string
+	profileDirectory string
+	lockFile         string
+}
+
+// validateBrowserGatewayRuntimeIdentities keeps managed Chrome identities
+// distinct across the whole gateway configuration. Phase 1 still admits only
+// one enabled gateway target and profile; enforcing the invariant here makes a
+// later multi-profile admission unable to expose shared storage accidentally.
+func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetConfig) error {
+	identities := make([]browserGatewayRuntimeIdentity, 0)
+	for targetName, target := range targets {
+		if !target.Enabled || target.EffectivePlacement() != BrowserPlacementGateway {
+			continue
+		}
+		for profileName, profile := range target.Profiles {
+			if !profile.Enabled || !profile.CanonicalAuthority() {
+				continue
+			}
+			if err := validateGatewayBrowserProfileRuntime(profileName, profile.Runtime); err != nil {
+				// Per-profile validation reports malformed paths with the more
+				// specific profile error.
+				continue
+			}
+			identities = append(identities, browserGatewayRuntimeIdentity{
+				target:           targetName,
+				profile:          profileName,
+				profileDirectory: filepath.Clean(profile.Runtime.ProfileDirectory),
+				lockFile:         filepath.Clean(profile.Runtime.LockFile),
+			})
+		}
+	}
+	sort.Slice(identities, func(i, j int) bool {
+		if identities[i].target != identities[j].target {
+			return identities[i].target < identities[j].target
+		}
+		return identities[i].profile < identities[j].profile
+	})
+	for i := range identities {
+		for j := i + 1; j < len(identities); j++ {
+			left, right := identities[i], identities[j]
+			leftName := left.target + "/" + left.profile
+			rightName := right.target + "/" + right.profile
+			if browserRuntimePathContains(left.profileDirectory, right.profileDirectory) ||
+				browserRuntimePathContains(right.profileDirectory, left.profileDirectory) {
+				return fmt.Errorf(
+					"browser profiles %q and %q have overlapping profile_directory paths",
+					leftName, rightName,
+				)
+			}
+			if left.lockFile == right.lockFile {
+				return fmt.Errorf(
+					"browser profiles %q and %q reuse the same lock_file",
+					leftName, rightName,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func browserRuntimePathContains(parent, candidate string) bool {
+	relative, err := filepath.Rel(parent, candidate)
+	return err == nil && (relative == "." ||
+		(relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))))
 }
 
 func browserProfileOwnedDriverArgument(argument string) bool {
