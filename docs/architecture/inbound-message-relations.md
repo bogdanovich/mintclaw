@@ -1,5 +1,10 @@
 # Inbound Message Relations
 
+Status: partially implemented. The classifier seam exists, but relation facts
+are not yet persisted through durable ingress and prompt assembly still uses
+processing time. The admitted implementation sequence is tracked by F1-F3 of
+the [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
+
 MintClaw currently preserves normalized inbound messages through the durable
 ingress spool, but it still leaves too much conversational boundary inference
 to prompt-building heuristics.
@@ -240,9 +245,11 @@ For each PR in this track:
 That keeps the rollout from drifting back toward ad hoc prompt guessing while
 still allowing small, reviewable increments.
 
-## Rollout Plan
+## Original Rollout Plan
 
 ### PR 1: document and isolate current heuristic
+
+Status: complete.
 
 - land this design note
 - isolate current media-follow-up heuristic behind one helper / classifier seam
@@ -250,21 +257,30 @@ still allowing small, reviewable increments.
 
 ### PR 2: introduce typed relation metadata
 
+Status: admitted as follow-up packet F1.
+
 - add relation fields to the normalized inbound/prompt-build path
 - keep existing behavior by mapping current heuristics to the new fields
 - add focused tests for relation classification
 
 ### PR 3: move prompt logic to consume relation metadata
 
+Status: admitted as follow-up packet F2.
+
 - remove prompt-local guessing where possible
 - keep prompt assembly responsible only for rendering context, not inferring it
 
 ### PR 4: normalize platform-native grouping
 
+Status: admitted as follow-up packet F3.
+
 - lift Telegram album/photo-burst semantics into explicit relation metadata
 - avoid adapter-local hidden merge behavior where a relation record is better
 
 ### PR 5: add policy controls
+
+Status: deferred. No policy framework is admitted until the typed structural
+contract is deployed and evidence shows that per-agent controls are needed.
 
 - make adjacency behavior configurable by workspace/agent
 - default conservatively
