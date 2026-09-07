@@ -258,7 +258,9 @@ This audit strengthens the existing roadmap rather than replacing it. The P0
 runtime-root refactor is still the correct prerequisite. New requirements are
 limited to recoverable frontend state, durable interrupted-tool recovery,
 scope-correct instruction loading, a coding-harness quality gate, stronger TUI
-fidelity criteria, optional LSP, and a later checkpoint/rewind investigation.
+fidelity criteria, and a later checkpoint/rewind investigation. Optional LSP
+was considered from the Oh My Pi and OpenCode evidence but was subsequently
+[not admitted](local-coding-agent-p6-5-decision.md); it is not a requirement.
 
 Filesystem rollback is deliberately not moved into the MVP. Both Oh My Pi and
 OpenCode demonstrate that useful undo requires an independent snapshot model,
@@ -1688,40 +1690,28 @@ Done when:
 - Review output links findings to current paths and line positions where stable.
 - Large diffs remain bounded and navigable.
 
-Completed by the [P6.4 exit record](local-coding-agent-p6-4-exit.md). P6.5 and
-later roadmap packets remain uncompleted.
+Completed by the [P6.4 exit record](local-coding-agent-p6-4-exit.md).
 
-#### P6.5 — Structured code intelligence
+#### P6.5 — Structured code intelligence (not admitted)
 
 Dependencies: P2.7, P6.4
 
-Scope:
+Decision: do not implement this packet. Current Codex and Pi do not depend on an
+LSP subsystem, while the Oh My Pi and OpenCode implementations demonstrate a
+substantial server-lifecycle, synchronization, versioning, workspace-edit, and
+testing burden. MintClaw's existing read/search/edit/exec, repository evidence,
+compiler/test, and native review paths are the supported baseline.
 
-- Add an optional LSP-backed tool for diagnostics, definitions, references,
-  symbols, hover, and previewable rename operations.
-- Detect applicable servers without installing or executing repository-provided
-  binaries implicitly.
-- Bound startup, request, idle, output, and shutdown lifecycles per project.
-- Route LSP workspace edits through the same write audit, repository refresh,
-  cancellation, and frontend event paths as ordinary coding tools.
-- Treat LSP as an enhancement: projects without a supported server remain fully
-  usable through read/search/edit/exec.
-
-Done when:
-
-- Diagnostics and navigation work on deterministic fixtures for at least two
-  language-server families.
-- Rename preview and apply handle multi-file edits, stale documents, and partial
-  failure without bypassing write audit.
-- Missing, crashing, or slow servers degrade cleanly and do not block startup.
-- Structured code intelligence demonstrates measurable benefit over baseline
-  search/edit fixtures before being enabled by default.
+The evidence and conditions for reconsideration are recorded in the
+[P6.5 decision](local-coding-agent-p6-5-decision.md). No dormant LSP scaffolding
+is retained.
 
 #### P6 exit gate
 
 The beta UX supports normal thread lifecycle, historical discovery, rich input,
-trustworthy repository review, and optional evidence-backed code intelligence
-without expanding into remote execution.
+and trustworthy repository review without depending on LSP or expanding into
+remote execution. P6 closes with the P6.4 exit record and the P6.5 non-admission
+decision; P7.1 is the next implementation packet.
 
 ### P7 — Non-interactive and always-on extensions
 
@@ -2076,8 +2066,7 @@ must not be included in metrics by default.
 - Automatic commit, push, reset, rebase, or merge without an explicit user
   request.
 - Automatic workspace rewind coupled to conversational fork or message undo.
-- A debugger/DAP stack before the native coding runtime, TUI, compaction, and
-  optional LSP path are stable.
+- A debugger/DAP or LSP stack without a new evidence-backed product admission.
 - A project-local `.mintclaw` state directory.
 - Replacing canonical JSONL with Seahorse or another derived database.
 - Making generic personal memory part of coding context by default.
@@ -2097,7 +2086,7 @@ must not be included in metrics by default.
 | Compaction loses an important decision | Versioned coding policy, canonical transcript, deterministic continuity evaluation |
 | TUI blocks the agent or sees stale state | Authoritative current views, bounded coalescing subscription, headless presentation tests |
 | TUI corrupts terminal history or Unicode input | Admit one screen model and test IME, width, resize, tmux, SSH, and restoration |
-| LSP adds slow or fragile startup | Optional lazy per-project lifecycle with timeouts and baseline-tool fallback |
+| Language intelligence grows into a fragile process stack | Do not implement LSP under this roadmap; use compiler, type-checker, linter, test, read, and search tools unless a new evidence-backed admission proves insufficient |
 | Workspace rewind discards user changes | Keep it post-MVP until checkpoint ownership, preview, conflict, and inverse semantics are admitted |
 | Derived state slows resume | Revision watermarks, lazy/bounded rebuild, visible degraded mode |
 | Remote gateway edits the wrong filesystem | Gateway sends only allowed target/project aliases; the node-local worker owns path, thread, and execution |
