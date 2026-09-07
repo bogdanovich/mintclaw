@@ -1021,6 +1021,16 @@ func (r *nativeControllerRuntime) RunTurn(
 	return r.persistTurnOutcome(turnDisplayContent(input), outcome, turnErr)
 }
 
+func (r *nativeControllerRuntime) TurnSettlementError() error {
+	if r == nil {
+		return nil
+	}
+	r.operationalMu.Lock()
+	operationalErr := r.operationalErr
+	r.operationalMu.Unlock()
+	return errors.Join(operationalErr, r.metadataState.accumulatedError())
+}
+
 func (r *nativeControllerRuntime) persistTurnOutcome(
 	prompt string,
 	outcome codingTurnOutcome,

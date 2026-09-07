@@ -1406,6 +1406,12 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	if !errors.Is(metadataState.accumulatedError(), committedCause) {
 		t.Fatalf("deferred metadata warning = %v, want %v", metadataState.accumulatedError(), committedCause)
 	}
+	operationalCause := errors.New("deferred operational failure")
+	runtime.recordOperationalError(operationalCause)
+	settlementErr := runtime.TurnSettlementError()
+	if !errors.Is(settlementErr, committedCause) || !errors.Is(settlementErr, operationalCause) {
+		t.Fatalf("TurnSettlementError() = %v, want metadata and operational failures", settlementErr)
+	}
 }
 
 func TestNativeControllerLifecyclePersistsAndProjectsAtomically(t *testing.T) {
