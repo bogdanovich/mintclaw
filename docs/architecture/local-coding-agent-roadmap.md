@@ -48,7 +48,9 @@ The following decisions are part of the admitted scope:
 6. Coding state is stored under the MintClaw home directory, never by creating
    `sessions/`, `state/`, memory, or diagnostic directories in a source checkout.
 7. Initial coding execution is local and in-process. A remote gateway cannot
-   operate on a laptop cwd without a separate local daemon or node boundary.
+   operate on a laptop cwd without a node boundary. The P7.2 placement
+   decision admits a supervised task-scoped worker behind Node Companion, not
+   a machine-wide coding daemon.
 8. Canonical JSONL remains the durable conversation source of truth. Seahorse
    remains a derived, rebuildable context and compaction index.
 9. Compaction preserves continuity but never becomes the authority for live
@@ -1744,25 +1746,41 @@ investigation and does not admit a daemon without measured product benefit.
 
 Dependencies: P7.1
 
+The [P7.2 worker placement decision](local-coding-agent-p7-2-worker-placement.md)
+rejects a machine-wide coding daemon. Measurements show that local process and
+catalogue startup are small relative to provider work, while the coding
+profile currently has no MCP initialization to amortize. The admitted boundary
+is one supervised, task-scoped worker per coding task over private inherited
+pipes. The placement investigation is complete; the worker-control
+implementation below remains part of P7.2.
+
 Scope:
 
-- Evaluate whether a local daemon materially improves warm startup, background
-  tasks, MCP reuse, or remote attachment.
-- Compare a supervised one-shot coding worker with a persistent daemon behind
-  the same project/thread/task interface.
-- Define local authentication, protocol versioning, process ownership, upgrade,
-  crash recovery, and project filesystem authority.
-- Compare in-process CLI, daemon, and existing gateway/node approaches.
-- Keep the paired-node companion as a capability host: it may launch or contact
-  the coding worker but does not absorb agent-loop or thread-store ownership.
+- Add a private, schema-versioned bidirectional worker protocol over inherited
+  stdin/stdout pipes; do not add a discoverable socket or HTTP service.
+- Bind one worker generation to one task, native coding thread, task mode,
+  canonical project, and execution root.
+- Expose start, resume, bounded snapshot/status, same-turn steering,
+  interruption, hard cancellation, and clean shutdown without TUI state.
+- Add an explicit controller steering capability; do not overload a second
+  submit or infer steering from prose.
+- Define build/protocol negotiation, process ownership, crash classification,
+  successor-generation resume, lease recovery, and project filesystem
+  authority.
+- Keep the paired-node companion as a capability host and supervisor. It does
+  not absorb agent-loop, controller, provider, or thread-store ownership.
+- Preserve local in-process TUI and one-shot `code exec` paths.
 
 Done when:
 
-- A design decision is recorded with measured startup/resource evidence.
-- The chosen worker boundary can start, resume, status, steer, and cancel a
-  coding thread without depending on terminal UI state.
-- No daemon is added unless it has a bounded product benefit.
-- The foreground local path remains supported.
+- The decision record's worker-control done criteria pass on Linux and macOS.
+- A parent can start, resume, status, steer, interrupt, and cancel one coding
+  thread through the worker protocol without depending on terminal UI state.
+- Disconnect, crash, malformed input, version mismatch, and cancellation races
+  have bounded explicit outcomes and never blindly replay an accepted task.
+- No machine-wide daemon is added without satisfying the decision record's
+  reconsideration gate.
+- The foreground local and one-shot headless paths remain supported.
 
 #### P7.3 — Multi-agent coding and worktrees
 
@@ -1782,7 +1800,7 @@ Done when:
 
 #### P7.4 — Channel-to-coding task handoff
 
-Dependencies: P7.2, P7.3
+Dependencies: completed P7.2 worker control, P7.3
 
 The Node Companion side of this packet is constrained by the
 [`P8b remote-coding checkpoint`](node-companion-p8b-remote-coding-checkpoint.md).
