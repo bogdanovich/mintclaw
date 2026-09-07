@@ -437,7 +437,7 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 		if opts.mode == turnModeScheduled || opts.mode == turnModeHeartbeat {
 			agent = agentWithoutInheritedNodeFileTools(agent)
 		}
-		binding := al.bindEffectiveModel(opts.ModelBinding.RouteSessionKey, agent)
+		binding := al.rebindModelAfterGenerationChange(opts.ModelBinding, agent)
 		defer binding.Cleanup()
 		opts.ModelBinding = binding
 	}

@@ -174,7 +174,7 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		execution,
 		ts.userMessage,
 		messages,
-		ts.modelBinding.RouteSessionKey,
+		ts.modelBinding.autoFallbackRouteSessionKey(),
 	)
 	defaultModelName := resolvedCandidateModelName(ts.agent.Candidates, ts.agent.Model)
 	activeProvider := execution.Provider

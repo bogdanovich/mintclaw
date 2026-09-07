@@ -57,6 +57,10 @@ An explicit per-call model always wins over both the configured child model
 and an inherited session override. Automatic light-model routing is disabled
 for that child run so it cannot silently replace the requested model. Normal
 provider fallback candidates remain available if the requested model fails.
+The exact-model binding also ignores the parent route's sticky automatic
+fallback and never updates it; the route key remains attached only for session
+ownership and delivery. The same isolation is restored after a durable child
+resumes from human input or crosses a configuration reload.
 
 ## Autonomous Per-Task Selection
 

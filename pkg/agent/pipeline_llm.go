@@ -159,7 +159,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 				break
 			}
 			if exec.model.autoFallback {
-				p.updateAutoFallbackSelection(ts.modelBinding.RouteSessionKey,
+				p.updateAutoFallbackSelection(ts.modelBinding.autoFallbackRouteSessionKey(),
 					exec.model.selectedCandidates,
 					fbResult,
 					exec.model.usedLight,
@@ -176,9 +176,9 @@ func (p *Pipeline) invokeLLMWithRetry(
 		)
 		if err == nil &&
 			exec.model.autoFallback &&
-			strings.TrimSpace(ts.modelBinding.RouteSessionKey) != "" &&
+			strings.TrimSpace(ts.modelBinding.autoFallbackRouteSessionKey()) != "" &&
 			len(exec.model.selectedCandidates) > 0 {
-			p.updateAutoFallbackSelection(ts.modelBinding.RouteSessionKey,
+			p.updateAutoFallbackSelection(ts.modelBinding.autoFallbackRouteSessionKey(),
 				exec.model.selectedCandidates,
 				&providers.FallbackResult{
 					Response: resp,

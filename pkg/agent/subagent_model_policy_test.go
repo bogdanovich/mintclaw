@@ -2,6 +2,7 @@ package agent
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -296,5 +297,93 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 	if invalid, invalidErr := al.buildSubagentChildBinding(parent, target, "missing-model"); invalidErr == nil {
 		invalid.Cleanup()
 		t.Fatal("unknown explicit model silently fell back to the target or session model")
+	}
+}
+
+func TestExactChildBindingIsolatesLightAndStickyRouting(t *testing.T) {
+	provider := &stickyFallbackProvider{}
+	al, target, cleanup := newTurnCoordFallbackTestLoop(t, provider)
+	defer cleanup()
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return provider, modelConfig.Model, nil
+	}
+	target.Router = routing.New(routing.RouterConfig{LightModel: "fallback-model", Threshold: 1})
+	target.LightCandidates = []providers.FallbackCandidate{target.Candidates[1]}
+	target.LightProvider = provider
+	parent := &turnState{opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
+		RouteSessionKey: "route-parent",
+	}})}
+
+	binding, err := al.buildSubagentChildBinding(parent, target, target.Model)
+	if err != nil {
+		t.Fatalf("buildSubagentChildBinding() error = %v", err)
+	}
+	defer binding.Cleanup()
+	execution := binding.ExecutionState()
+	if execution.Model != target.Model || binding.ExactModel != target.Model {
+		t.Fatalf("exact same-model binding = %#v, execution = %#v", binding, execution)
+	}
+	if execution.Router != nil || len(execution.LightCandidates) != 0 || execution.LightProvider != nil {
+		t.Fatalf("exact same-model binding retained light routing: %#v", execution)
+	}
+	if binding.RouteSessionKey != "route-parent" || binding.autoFallbackRouteSessionKey() != "" {
+		t.Fatalf("exact binding route isolation = %#v", binding)
+	}
+
+	err = al.setAutoModelSelection("route-parent", state.AutoModelSelection{
+		SelectedProvider: execution.Candidates[0].Provider,
+		SelectedModel:    execution.Candidates[0].Model,
+		ActiveProvider:   execution.Candidates[1].Provider,
+		ActiveModel:      execution.Candidates[1].Model,
+		Reason:           string(providers.FailoverRateLimit),
+		ExpiresAt:        time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := al.selectCandidates(execution, "", nil, binding.autoFallbackRouteSessionKey())
+	if selection.activeCandidates[0].StableKey() != execution.Candidates[0].StableKey() {
+		t.Fatalf("exact binding consumed parent sticky fallback: %#v", selection.activeCandidates)
+	}
+	if err = al.clearAutoModelSelection("route-parent"); err != nil {
+		t.Fatal(err)
+	}
+	al.modelExecution.updateAutoFallbackSelection(
+		binding.autoFallbackRouteSessionKey(),
+		selection.selectedCandidates,
+		&providers.FallbackResult{
+			Provider: execution.Candidates[1].Provider,
+			Model:    execution.Candidates[1].Model,
+			Attempts: []providers.FallbackAttempt{{Reason: providers.FailoverRateLimit}},
+		},
+		false,
+	)
+	if _, ok := al.getAutoModelSelection("route-parent"); ok {
+		t.Fatal("exact child mutated the parent sticky fallback selection")
+	}
+}
+
+func TestBindResumedInteractionModel_RebuildsExactSameModel(t *testing.T) {
+	provider := &simpleConvProvider{}
+	al, target, cleanup := newTurnCoordFallbackTestLoop(t, provider)
+	defer cleanup()
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return provider, modelConfig.Model, nil
+	}
+	target.Router = routing.New(routing.RouterConfig{LightModel: "fallback-model", Threshold: 1})
+	target.LightCandidates = []providers.FallbackCandidate{target.Candidates[1]}
+	target.LightProvider = provider
+
+	binding := al.bindResumedInteractionModel("route-parent", target, target.Model)
+	defer binding.Cleanup()
+	execution := binding.ExecutionState()
+	if execution.Model != target.Model || binding.ExactModel != target.Model {
+		t.Fatalf("resumed exact binding = %#v, execution = %#v", binding, execution)
+	}
+	if execution.Router != nil || len(execution.LightCandidates) != 0 || execution.LightProvider != nil {
+		t.Fatalf("resumed exact binding retained light routing: %#v", execution)
+	}
+	if binding.RouteSessionKey != "route-parent" || binding.autoFallbackRouteSessionKey() != "" {
+		t.Fatalf("resumed exact binding route isolation = %#v", binding)
 	}
 }

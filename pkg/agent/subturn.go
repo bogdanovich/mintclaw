@@ -505,6 +505,17 @@ func spawnSubTurn(
 	}
 	cancelAdmission()
 	defer releaseAdmissions()
+	// Admission may wait across an atomic registry/config reload. Re-resolve
+	// the target before constructing the model binding so a removed target or
+	// model fails explicitly and a surviving target uses the current runtime
+	// generation.
+	currentBaseAgent, changed, err := al.currentAgentGeneration(baseAgent)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		baseAgent = currentBaseAgent
+	}
 	executionBase = inheritOutboundTransaction(executionBase, ctx)
 	childCtx, cancel := context.WithTimeout(executionBase, timeout)
 	defer cancel()

@@ -178,7 +178,7 @@ func (al *AgentLoop) buildSubagentChildBinding(
 	}
 	overrideModel := inheritedSubagentOverride(parentTS)
 	plan := resolveSubagentModelPlan(targetAgent, overrideModel, explicitModel)
-	if subagentPlanMatchesAgent(plan, targetAgent) {
+	if !plan.Explicit && subagentPlanMatchesAgent(plan, targetAgent) {
 		binding := effectiveModelBinding{
 			WorkspaceAgent: targetAgent,
 		}
@@ -222,6 +222,9 @@ func (al *AgentLoop) buildSubagentChildBinding(
 		WorkspaceAgent: targetAgent,
 		Execution:      execution,
 		cleanup:        cleanup,
+	}
+	if plan.Explicit {
+		binding.ExactModel = plan.Primary
 	}
 	if parentTS != nil {
 		binding.RouteSessionKey = strings.TrimSpace(parentTS.opts.Dispatch.RouteSessionKey)

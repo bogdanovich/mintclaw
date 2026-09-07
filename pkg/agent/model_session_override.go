@@ -17,7 +17,11 @@ type effectiveModelBinding struct {
 	WorkspaceAgent  *AgentInstance
 	Execution       effectiveExecutionState
 	Override        state.SessionModelOverride
-	cleanup         func()
+	// ExactModel records a task-scoped model pin. RouteSessionKey still owns
+	// delivery and session state, but exact bindings must not consume or mutate
+	// that route's sticky automatic-fallback selection.
+	ExactModel string
+	cleanup    func()
 }
 
 type effectiveExecutionState struct {
@@ -55,6 +59,13 @@ func (b effectiveModelBinding) Cleanup() {
 	if b.cleanup != nil {
 		b.cleanup()
 	}
+}
+
+func (b effectiveModelBinding) autoFallbackRouteSessionKey() string {
+	if strings.TrimSpace(b.ExactModel) != "" {
+		return ""
+	}
+	return strings.TrimSpace(b.RouteSessionKey)
 }
 
 func effectiveExecutionStateForAgent(agent *AgentInstance) effectiveExecutionState {
@@ -260,14 +271,9 @@ func (al *AgentLoop) bindResumedInteractionModel(
 	baseAgent *AgentInstance,
 	modelName string,
 ) effectiveModelBinding {
-	binding := al.bindEffectiveModel(routeSessionKey, baseAgent)
 	modelName = strings.TrimSpace(modelName)
 	if modelName == "" || baseAgent == nil {
-		return binding
-	}
-	current := binding.ExecutionState()
-	if resolvedCandidateModelName(current.Candidates, current.Model) == modelName {
-		return binding
+		return al.bindEffectiveModel(routeSessionKey, baseAgent)
 	}
 
 	execution, cleanup, err := al.buildExecutionStateForModel(baseAgent, modelName, baseAgent.Fallbacks)
@@ -278,12 +284,15 @@ func (al *AgentLoop) bindResumedInteractionModel(
 			"continuation_model": modelName,
 			"error":              err.Error(),
 		})
-		return binding
+		return al.bindEffectiveModel(routeSessionKey, baseAgent)
 	}
-	binding.Cleanup()
-	binding.Execution = execution
-	binding.cleanup = cleanup
-	return binding
+	return effectiveModelBinding{
+		RouteSessionKey: strings.TrimSpace(routeSessionKey),
+		WorkspaceAgent:  baseAgent,
+		Execution:       execution,
+		ExactModel:      modelName,
+		cleanup:         cleanup,
+	}
 }
 
 func (al *AgentLoop) bindEffectiveModel(
@@ -331,6 +340,16 @@ func (al *AgentLoop) bindEffectiveModel(
 	return binding
 }
 
+func (al *AgentLoop) rebindModelAfterGenerationChange(
+	previous effectiveModelBinding,
+	baseAgent *AgentInstance,
+) effectiveModelBinding {
+	if exactModel := strings.TrimSpace(previous.ExactModel); exactModel != "" {
+		return al.bindResumedInteractionModel(previous.RouteSessionKey, baseAgent, exactModel)
+	}
+	return al.bindEffectiveModel(previous.RouteSessionKey, baseAgent)
+}
+
 func (al *AgentLoop) buildModelSelectionInspection(
 	cfg *config.Config,
 	binding effectiveModelBinding,
@@ -342,6 +361,10 @@ func (al *AgentLoop) buildModelSelectionInspection(
 	}
 	workspaceAgent := inspection.WorkspaceAgent
 	if workspaceAgent == nil {
+		return inspection
+	}
+	if strings.TrimSpace(binding.ExactModel) != "" {
+		inspection.Override = state.SessionModelOverride{}
 		return inspection
 	}
 
@@ -374,7 +397,7 @@ func (al *AgentLoop) buildModelSelectionInspection(
 			selectedCandidates: append([]providers.FallbackCandidate(nil), workspaceSelection.Candidates...),
 			activeCandidates:   append([]providers.FallbackCandidate(nil), workspaceSelection.Candidates...),
 			model:              resolvedCandidateModel(workspaceSelection.Candidates, workspaceSelection.Model),
-		}, binding.RouteSessionKey)
+		}, binding.autoFallbackRouteSessionKey())
 		workspaceSelection.Candidates = executionDecision.activeCandidates
 		workspaceSelection.Model = executionDecision.model
 		inspection.Execution = workspaceSelection
