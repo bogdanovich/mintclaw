@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -18,36 +17,21 @@ func promptBuildRequestForTurn(
 	media []string,
 	nativeSearchCallable bool,
 ) PromptBuildRequest {
-	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
-		ts.opts.Dispatch.ChatType(),
-	)
 	relation := relationForPromptInput(ts.opts.Dispatch, currentMessage, media)
-	if relation.IsZero() {
-		relation = classifyPromptCurrentMessageRelation(
-			currentMessage,
-			media,
-			ts.opts.Dispatch.ReplyToMessageID(),
-			allowAdjacentMediaFollowup,
-			history,
-			time.Now(),
-		)
-	}
 	req := PromptBuildRequest{
-		History:                    history,
-		Summary:                    summary,
-		CurrentMessage:             currentMessage,
-		Media:                      append([]string(nil), media...),
-		Channel:                    ts.channel,
-		ChatID:                     ts.chatID,
-		SenderID:                   ts.opts.Dispatch.SenderID(),
-		SenderDisplayName:          ts.opts.SenderDisplayName,
-		ReplyToMessageID:           ts.opts.Dispatch.ReplyToMessageID(),
-		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
-		CurrentMessageRelation:     relation,
-		ActiveSkills:               activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
-		Overlays:                   promptOverlays(ts.opts.ActiveGoal),
-		BackgroundTaskSafety:       !ts.opts.NoHistory,
-		CodingContext:              ts.opts.CodingContext,
+		History:                history,
+		Summary:                summary,
+		CurrentMessage:         currentMessage,
+		Media:                  append([]string(nil), media...),
+		Channel:                ts.channel,
+		ChatID:                 ts.chatID,
+		SenderID:               ts.opts.Dispatch.SenderID(),
+		SenderDisplayName:      ts.opts.SenderDisplayName,
+		CurrentMessageRelation: relation,
+		ActiveSkills:           activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
+		Overlays:               promptOverlays(ts.opts.ActiveGoal),
+		BackgroundTaskSafety:   !ts.opts.NoHistory,
+		CodingContext:          ts.opts.CodingContext,
 	}
 	hasCallableTools := true
 	if ts.profile.Enabled {
@@ -100,36 +84,21 @@ func promptBuildRequestForTurnSpec(
 	currentMessage string,
 	media []string,
 ) PromptBuildRequest {
-	allowAdjacentMediaFollowup := allowAdjacentMediaFollowupForChatType(
-		opts.Dispatch.ChatType(),
-	)
 	relation := relationForPromptInput(opts.Dispatch, currentMessage, media)
-	if relation.IsZero() {
-		relation = classifyPromptCurrentMessageRelation(
-			currentMessage,
-			media,
-			opts.Dispatch.ReplyToMessageID(),
-			allowAdjacentMediaFollowup,
-			history,
-			time.Now(),
-		)
-	}
 	req := PromptBuildRequest{
-		History:                    history,
-		Summary:                    summary,
-		CurrentMessage:             currentMessage,
-		Media:                      append([]string(nil), media...),
-		Channel:                    opts.Dispatch.Channel(),
-		ChatID:                     opts.Dispatch.ChatID(),
-		SenderID:                   opts.Dispatch.SenderID(),
-		SenderDisplayName:          opts.SenderDisplayName,
-		ReplyToMessageID:           opts.Dispatch.ReplyToMessageID(),
-		AllowAdjacentMediaFollowup: allowAdjacentMediaFollowup,
-		CurrentMessageRelation:     relation,
-		ActiveSkills:               activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
-		Overlays:                   promptOverlays(opts.ActiveGoal),
-		BackgroundTaskSafety:       !opts.NoHistory,
-		CodingContext:              opts.CodingContext,
+		History:                history,
+		Summary:                summary,
+		CurrentMessage:         currentMessage,
+		Media:                  append([]string(nil), media...),
+		Channel:                opts.Dispatch.Channel(),
+		ChatID:                 opts.Dispatch.ChatID(),
+		SenderID:               opts.Dispatch.SenderID(),
+		SenderDisplayName:      opts.SenderDisplayName,
+		CurrentMessageRelation: relation,
+		ActiveSkills:           activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
+		Overlays:               promptOverlays(opts.ActiveGoal),
+		BackgroundTaskSafety:   !opts.NoHistory,
+		CodingContext:          opts.CodingContext,
 	}
 	profile := opts.TurnProfile
 	hasCallableTools := true
@@ -161,10 +130,6 @@ func promptBuildRequestForTurnSpec(
 	return req
 }
 
-func allowAdjacentMediaFollowupForChatType(chatType string) bool {
-	return strings.EqualFold(strings.TrimSpace(chatType), "direct")
-}
-
 func relationForPromptInput(
 	dispatch DispatchRequest,
 	currentMessage string,
@@ -176,36 +141,7 @@ func relationForPromptInput(
 	// Relation facts belong to the admitted inbound event. Callers may reuse a
 	// dispatch for derived prompts, but those prompts must not inherit the
 	// origin event's reply or adjacency semantics.
-	return classifyPromptCurrentMessageRelation(
-		currentMessage,
-		media,
-		"",
-		false,
-		nil,
-		time.Time{},
-	)
-}
-
-func normalizePromptBuildRequestRelations(
-	req PromptBuildRequest,
-	history []providers.Message,
-	now time.Time,
-) PromptBuildRequest {
-	if strings.TrimSpace(req.CurrentMessage) == "" && len(req.Media) == 0 {
-		return req
-	}
-	if !req.CurrentMessageRelation.IsZero() {
-		return req
-	}
-	req.CurrentMessageRelation = classifyPromptCurrentMessageRelation(
-		req.CurrentMessage,
-		req.Media,
-		req.ReplyToMessageID,
-		req.AllowAdjacentMediaFollowup,
-		history,
-		now,
-	)
-	return req
+	return standaloneInboundMessageRelation(currentMessage, media)
 }
 
 func promptOverlays(activeGoal string) []PromptPart {

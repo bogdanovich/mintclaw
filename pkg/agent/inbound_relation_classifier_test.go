@@ -9,6 +9,17 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
 
+func TestAllowAdjacentMediaFollowupForChatType_OnlyDirect(t *testing.T) {
+	for _, chatType := range []string{"", "group", "channel", "private"} {
+		if allowAdjacentMediaFollowupForChatType(chatType) {
+			t.Fatalf("allowAdjacentMediaFollowupForChatType(%q) = true, want false", chatType)
+		}
+	}
+	if !allowAdjacentMediaFollowupForChatType("direct") {
+		t.Fatal("allowAdjacentMediaFollowupForChatType(direct) = false, want true")
+	}
+}
+
 func TestClassifyPromptCurrentMessageRelation_ReplyWinsForMediaOnly(t *testing.T) {
 	got := classifyPromptCurrentMessageRelation(
 		"[media only]",

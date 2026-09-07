@@ -128,6 +128,12 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 	if opts != nil {
 		opts.ForcedSkills = append(opts.ForcedSkills, skillName)
 		opts.Dispatch.UserMessage = message
+		if opts.Dispatch.InboundContext != nil {
+			opts.Dispatch.InboundContext.Relation = standaloneInboundMessageRelation(
+				message,
+				opts.Dispatch.Media,
+			)
+		}
 	}
 
 	return true, false, ""

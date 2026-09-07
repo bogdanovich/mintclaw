@@ -2403,7 +2403,11 @@ func TestApplyExplicitSkillCommand_InlineMessageMutatesOptions(t *testing.T) {
 	opts := &turnSpec{
 		Dispatch: DispatchRequest{
 			SessionKey:  "agent:main:test",
-			UserMessage: "/use finance-news dammi le ultime news",
+			UserMessage: "/use finance-news [image]",
+			Media:       []string{"media://image-1"},
+			InboundContext: &bus.InboundContext{Relation: bus.InboundMessageRelation{
+				Kind: bus.InboundRelationStandalone,
+			}},
 		},
 	}
 	matched, handled, reply := al.applyExplicitSkillCommand(opts.Dispatch.UserMessage, agent, opts)
@@ -2416,11 +2420,15 @@ func TestApplyExplicitSkillCommand_InlineMessageMutatesOptions(t *testing.T) {
 	if reply != "" {
 		t.Fatalf("unexpected reply: %q", reply)
 	}
-	if opts.Dispatch.UserMessage != "dammi le ultime news" {
-		t.Fatalf("opts.Dispatch.UserMessage = %q, want %q", opts.Dispatch.UserMessage, "dammi le ultime news")
+	if opts.Dispatch.UserMessage != "[image]" {
+		t.Fatalf("opts.Dispatch.UserMessage = %q, want %q", opts.Dispatch.UserMessage, "[image]")
 	}
 	if len(opts.ForcedSkills) != 1 || opts.ForcedSkills[0] != "finance-news" {
 		t.Fatalf("opts.ForcedSkills = %#v, want [finance-news]", opts.ForcedSkills)
+	}
+	if relation := opts.Dispatch.InboundRelation(); relation.Kind != bus.InboundRelationStandalone ||
+		!relation.MediaOnly {
+		t.Fatalf("opts.Dispatch.InboundRelation() = %#v, want standalone media-only", relation)
 	}
 }
 

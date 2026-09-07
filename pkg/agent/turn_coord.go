@@ -262,6 +262,10 @@ func (al *AgentLoop) askSideQuestion(
 			ChatID:            chatID,
 			SenderID:          senderID,
 			SenderDisplayName: senderDisplayName,
+			CurrentMessageRelation: standaloneInboundMessageRelation(
+				question,
+				media,
+			),
 		}
 	} else {
 		promptReq = promptBuildRequestForTurnSpec(

@@ -1682,10 +1682,14 @@ func TestAgentLoop_Run_BatchesDeferredMessagesBySenderIntoOneContinuationTurn(t 
 	subCtx, subCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer subCancel()
 
-	select {
-	case <-msgBus.OutboundChan():
-	case <-subCtx.Done():
-		t.Fatal("expected outbound response")
+	continued := false
+	for !continued {
+		select {
+		case outbound := <-msgBus.OutboundChan():
+			continued = outbound.Content == "continued response"
+		case <-subCtx.Done():
+			t.Fatal("expected continued outbound response")
+		}
 	}
 
 	cancelRun()

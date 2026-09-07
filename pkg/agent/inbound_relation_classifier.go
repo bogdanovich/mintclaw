@@ -30,6 +30,10 @@ const (
 	InboundRelationAdjacentFollowupMedia = bus.InboundRelationAdjacentFollowupMedia
 )
 
+func allowAdjacentMediaFollowupForChatType(chatType string) bool {
+	return strings.EqualFold(strings.TrimSpace(chatType), "direct")
+}
+
 func classifyPromptCurrentMessageRelation(
 	content string,
 	media []string,
@@ -38,11 +42,9 @@ func classifyPromptCurrentMessageRelation(
 	history []providers.Message,
 	now time.Time,
 ) InboundMessageRelation {
-	content = strings.TrimSpace(content)
-	_, placeholderOnly := attachmentOnlyPlaceholders[content]
-	mediaOnly := len(media) > 0 && (content == "" || placeholderOnly)
-	if !mediaOnly {
-		return InboundMessageRelation{Kind: InboundRelationStandalone, MediaOnly: false}
+	relation := standaloneInboundMessageRelation(content, media)
+	if !relation.MediaOnly {
+		return relation
 	}
 	if strings.TrimSpace(replyToMessageID) != "" {
 		return InboundMessageRelation{Kind: InboundRelationReplyToMessage, MediaOnly: true}
@@ -50,7 +52,16 @@ func classifyPromptCurrentMessageRelation(
 	if allowAdjacentMediaFollowup && recentUserFollowupCandidate(history, now, adjacentMediaFollowupWindow) {
 		return InboundMessageRelation{Kind: InboundRelationAdjacentFollowupMedia, MediaOnly: true}
 	}
-	return InboundMessageRelation{Kind: InboundRelationStandalone, MediaOnly: true}
+	return relation
+}
+
+func standaloneInboundMessageRelation(content string, media []string) InboundMessageRelation {
+	content = strings.TrimSpace(content)
+	_, placeholderOnly := attachmentOnlyPlaceholders[content]
+	return InboundMessageRelation{
+		Kind:      InboundRelationStandalone,
+		MediaOnly: len(media) > 0 && (content == "" || placeholderOnly),
+	}
 }
 
 func recentUserFollowupCandidate(history []providers.Message, now time.Time, window time.Duration) bool {
