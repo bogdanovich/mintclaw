@@ -1819,12 +1819,25 @@ func TestAgentLoop_Run_ContinuationPreservesSenderAffinityAcrossDeferredTurns(t 
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for first provider call to start")
 	}
+	active := onlyActiveTurnForTest(t, al)
+	if active == nil || active.SessionKey == "" {
+		t.Fatal("expected active turn with session key")
+	}
+	sessionKey := active.SessionKey
 
 	if err := msgBus.PublishInbound(pubCtx, msgB1); err != nil {
 		t.Fatalf("publish B1 inbound: %v", err)
 	}
 	if err := msgBus.PublishInbound(pubCtx, msgB2); err != nil {
 		t.Fatalf("publish B2 inbound: %v", err)
+	}
+	waitForSpoolEntries(t, spoolDir, "*.processing", 3)
+	deadline := time.Now().Add(2 * time.Second)
+	for al.pendingSteeringCountForScope(testRuntimeSessionScope(al, sessionKey)) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for both B messages to enter steering queue")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	close(provider.releaseFirstCall)
@@ -1835,13 +1848,15 @@ func TestAgentLoop_Run_ContinuationPreservesSenderAffinityAcrossDeferredTurns(t 
 		t.Fatal("timeout waiting for continuation turn for sender B")
 	}
 
-	if err := msgBus.PublishInbound(pubCtx, msgC); err != nil {
+	continuationPubCtx, continuationPubCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer continuationPubCancel()
+	if err := msgBus.PublishInbound(continuationPubCtx, msgC); err != nil {
 		t.Fatalf("publish C inbound: %v", err)
 	}
 
 	close(provider.releaseSecondCall)
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for {
 		provider.mu.Lock()
 		calls := provider.calls
