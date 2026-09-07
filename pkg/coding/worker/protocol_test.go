@@ -150,11 +150,18 @@ func TestInitializeAndCommandPayloadValidation(t *testing.T) {
 	steer := TurnSteerParams{
 		ControlIdentity: binding.ControlIdentity(),
 		Text:            "use the failing fixture",
-		QuestionAnswer:  &QuestionAnswerRef{QuestionID: "question-1", AnswerID: "answer-1"},
+		QuestionAnswer: &QuestionAnswerRef{
+			QuestionID: "question-1", QuestionRevision: 2, AnswerID: "answer-1",
+		},
 	}
 	if err := steer.Validate(); err != nil {
 		t.Fatalf("TurnSteerParams.Validate() error = %v", err)
 	}
+	steer.QuestionAnswer.QuestionRevision = 0
+	if err := steer.Validate(); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("stale question revision error = %v, want %v", err, ErrInvalidRecord)
+	}
+	steer.QuestionAnswer.QuestionRevision = 2
 	steer.QuestionAnswer.AnswerID = "bad answer"
 	if err := steer.Validate(); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("invalid question answer error = %v, want %v", err, ErrInvalidRecord)
@@ -227,7 +234,8 @@ func TestRecordSeparatesRequestResponseAndEventFields(t *testing.T) {
 			Method: MethodTurnStart, IdempotencyKey: "start-1", Params: empty, Result: empty,
 		},
 		{
-			SchemaVersion: ProtocolV1, Type: RecordResponse, ID: "request-1", OK: &truth,
+			SchemaVersion: ProtocolV1, Type: RecordResponse, ID: "request-1",
+			Method: MethodTurnStart, OK: &truth,
 			Result: empty, Event: EventWorkerReady,
 		},
 		{
@@ -243,6 +251,7 @@ func TestRecordSeparatesRequestResponseAndEventFields(t *testing.T) {
 		SchemaVersion: ProtocolV1,
 		Type:          RecordResponse,
 		ID:            "request-2",
+		Method:        MethodTurnInterrupt,
 		OK:            boolPointer(false),
 		Error: &ProtocolError{
 			Code: ErrorNoActiveTurn, Message: "no active turn",
@@ -250,6 +259,97 @@ func TestRecordSeparatesRequestResponseAndEventFields(t *testing.T) {
 	}
 	if _, err := Encode(failure); err != nil {
 		t.Fatalf("Encode(failure) error = %v", err)
+	}
+}
+
+func TestRecordDispatchesClosedRequestAndResultSchemas(t *testing.T) {
+	binding := testBinding(t)
+	empty := json.RawMessage(`{}`)
+	for _, method := range []Method{
+		MethodInitialize, MethodTurnStart, MethodTurnSteer, MethodTurnInterrupt,
+		MethodTurnCancel, MethodSnapshotRead, MethodShutdown,
+	} {
+		record := Record{
+			SchemaVersion: ProtocolV1, Type: RecordRequest, ID: "request-1",
+			Method: method, IdempotencyKey: "operation-1", Params: empty,
+		}
+		if method == MethodSnapshotRead {
+			record.IdempotencyKey = ""
+		}
+		if _, err := Encode(record); !errors.Is(err, ErrInvalidRecord) {
+			t.Fatalf("Encode(%s empty request) error = %v, want %v", method, err, ErrInvalidRecord)
+		}
+	}
+
+	ack, err := MarshalPayload(AckResult{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []Method{
+		MethodTurnStart, MethodTurnSteer, MethodTurnInterrupt, MethodTurnCancel, MethodShutdown,
+	} {
+		record := Record{
+			SchemaVersion: ProtocolV1, Type: RecordResponse, ID: "request-1",
+			Method: method, OK: boolPointer(true), Result: ack,
+		}
+		if _, err := Encode(record); err != nil {
+			t.Fatalf("Encode(%s ack) error = %v", method, err)
+		}
+		record.Result = json.RawMessage(`{"unexpected":true}`)
+		if _, err := Encode(record); !errors.Is(err, ErrInvalidRecord) {
+			t.Fatalf("Encode(%s open ack) error = %v, want %v", method, err, ErrInvalidRecord)
+		}
+	}
+
+	initialize, err := MarshalPayload(InitializeParams{
+		MinProtocolVersion: ProtocolV1, MaxProtocolVersion: ProtocolV1,
+		ParentBuildID: "parent-test-build", Binding: binding,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := Record{
+		SchemaVersion: ProtocolV1, Type: RecordRequest, ID: "initialize-1",
+		Method: MethodInitialize, IdempotencyKey: "initialize-1", Params: initialize,
+	}
+	if _, err := Encode(request); err != nil {
+		t.Fatalf("Encode(initialize) error = %v", err)
+	}
+	result, err := MarshalPayload(InitializeResult{Identity: BoundIdentity{
+		ProtocolVersion: ProtocolV1, WorkerBuildID: binding.ExpectedWorkerBuildID, Binding: binding,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := Record{
+		SchemaVersion: ProtocolV1, Type: RecordResponse, ID: request.ID,
+		Method: MethodInitialize, OK: boolPointer(true), Result: result,
+	}
+	if _, err := Encode(response); err != nil {
+		t.Fatalf("Encode(initialize response) error = %v", err)
+	}
+
+	snapshotResult := SnapshotResult{
+		ControlIdentity: binding.ControlIdentity(),
+		Snapshot: frontend.ThreadSnapshot{
+			ThreadID: binding.ThreadID, Activity: frontend.ActivityRunning,
+		},
+	}
+	snapshotPayload, err := MarshalPayload(snapshotResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotResponse := Record{
+		SchemaVersion: ProtocolV1, Type: RecordResponse, ID: "snapshot-1",
+		Method: MethodSnapshotRead, OK: boolPointer(true), Result: snapshotPayload,
+	}
+	if _, err := Encode(snapshotResponse); err != nil {
+		t.Fatalf("Encode(snapshot response) error = %v", err)
+	}
+	snapshotResult.Snapshot.Activity = "teleporting"
+	snapshotResponse.Result = mustPayload(t, snapshotResult)
+	if _, err := Encode(snapshotResponse); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("Encode(malformed snapshot response) error = %v, want %v", err, ErrInvalidRecord)
 	}
 }
 

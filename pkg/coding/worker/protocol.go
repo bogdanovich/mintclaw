@@ -192,7 +192,7 @@ func (record Record) validateRequest() error {
 	} else if record.IdempotencyKey != "" {
 		return fmt.Errorf("%w: %s does not accept an idempotency key", ErrInvalidRecord, record.Method)
 	}
-	if err := validateJSONObject("params", record.Params); err != nil {
+	if _, err := DecodeRequestPayload(record.Method, record.Params); err != nil {
 		return err
 	}
 	if record.OK != nil || len(record.Result) != 0 || record.Error != nil ||
@@ -203,10 +203,10 @@ func (record Record) validateRequest() error {
 }
 
 func (record Record) validateResponse() error {
-	if !validIdentifier(record.ID) || record.OK == nil {
-		return fmt.Errorf("%w: response requires a valid ID and ok", ErrInvalidRecord)
+	if !validIdentifier(record.ID) || !record.Method.Valid() || record.OK == nil {
+		return fmt.Errorf("%w: response requires a valid ID, method, and ok", ErrInvalidRecord)
 	}
-	if record.Method != "" || record.IdempotencyKey != "" || len(record.Params) != 0 ||
+	if record.IdempotencyKey != "" || len(record.Params) != 0 ||
 		record.Event != "" || len(record.Payload) != 0 {
 		return fmt.Errorf("%w: response contains fields from another record type", ErrInvalidRecord)
 	}
@@ -214,7 +214,8 @@ func (record Record) validateResponse() error {
 		if record.Error != nil {
 			return fmt.Errorf("%w: successful response contains an error", ErrInvalidRecord)
 		}
-		return validateJSONObject("result", record.Result)
+		_, err := DecodeResultPayload(record.Method, record.Result)
+		return err
 	}
 	if len(record.Result) != 0 || record.Error == nil {
 		return fmt.Errorf("%w: failed response requires only an error", ErrInvalidRecord)
@@ -452,7 +453,7 @@ func DecodeEventPayload(event EventName, raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	if err := payload.Validate(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: invalid %s event payload: %w", ErrInvalidRecord, event, err)
 	}
 	return payload, nil
 }
@@ -702,6 +703,62 @@ func DecodePayload(raw json.RawMessage, destination any) error {
 	return nil
 }
 
+// DecodeRequestPayload selects and validates the closed request schema owned
+// by method. Worker implementations consume this dispatcher instead of
+// reproducing method switches at each transport boundary.
+func DecodeRequestPayload(method Method, raw json.RawMessage) (any, error) {
+	var payload interface{ Validate() error }
+	switch method {
+	case MethodInitialize:
+		payload = &InitializeParams{}
+	case MethodTurnStart:
+		payload = &TurnStartParams{}
+	case MethodTurnSteer:
+		payload = &TurnSteerParams{}
+	case MethodTurnInterrupt, MethodTurnCancel, MethodSnapshotRead, MethodShutdown:
+		payload = &GenerationParams{}
+	default:
+		return nil, fmt.Errorf("%w: unsupported request method %q", ErrInvalidRecord, method)
+	}
+	if err := DecodePayload(raw, payload); err != nil {
+		return nil, err
+	}
+	if err := payload.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: invalid %s request payload: %w", ErrInvalidRecord, method, err)
+	}
+	return payload, nil
+}
+
+// AckResult is the explicit closed schema for commands whose successful
+// response carries no data.
+type AckResult struct{}
+
+func (AckResult) Validate() error { return nil }
+
+// DecodeResultPayload selects and validates a self-describing successful
+// response. Response envelopes retain the method so captured records remain
+// independently verifiable.
+func DecodeResultPayload(method Method, raw json.RawMessage) (any, error) {
+	var payload interface{ Validate() error }
+	switch method {
+	case MethodInitialize:
+		payload = &InitializeResult{}
+	case MethodSnapshotRead:
+		payload = &SnapshotResult{}
+	case MethodTurnStart, MethodTurnSteer, MethodTurnInterrupt, MethodTurnCancel, MethodShutdown:
+		payload = &AckResult{}
+	default:
+		return nil, fmt.Errorf("%w: unsupported response method %q", ErrInvalidRecord, method)
+	}
+	if err := DecodePayload(raw, payload); err != nil {
+		return nil, err
+	}
+	if err := payload.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: invalid %s response payload: %w", ErrInvalidRecord, method, err)
+	}
+	return payload, nil
+}
+
 func MarshalPayload(value any) (json.RawMessage, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -907,12 +964,14 @@ func (params TurnStartParams) FrontendInput() frontend.TurnInput {
 }
 
 type QuestionAnswerRef struct {
-	QuestionID string `json:"question_id"`
-	AnswerID   string `json:"answer_id"`
+	QuestionID       string `json:"question_id"`
+	QuestionRevision uint64 `json:"question_revision"`
+	AnswerID         string `json:"answer_id"`
 }
 
 func (reference QuestionAnswerRef) Validate() error {
-	if !validIdentifier(reference.QuestionID) || !validIdentifier(reference.AnswerID) {
+	if !validIdentifier(reference.QuestionID) || reference.QuestionRevision == 0 ||
+		!validIdentifier(reference.AnswerID) {
 		return fmt.Errorf("%w: malformed question answer reference", ErrInvalidRecord)
 	}
 	return nil
@@ -959,13 +1018,18 @@ type SnapshotResult struct {
 }
 
 func (result SnapshotResult) Validate() error {
-	if err := result.ControlIdentity.Validate(); err != nil {
+	if err := validateStructuredText(result); err != nil {
 		return err
 	}
-	if strings.TrimSpace(result.Snapshot.ThreadID) == "" {
-		return fmt.Errorf("%w: malformed worker snapshot identity", ErrInvalidRecord)
+	return validateSnapshotEvent(result.ControlIdentity, result.Snapshot)
+}
+
+func validateStructuredText(value any) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("%w: encode protocol value for text validation: %w", ErrInvalidRecord, err)
 	}
-	return nil
+	return validateEventText(raw)
 }
 
 func validIdentifier(value string) bool {
