@@ -126,12 +126,17 @@ architecture.
    document audit through a deliberative high-capability model. Lightweight
    models may perform routine extraction, but a fallback to one must not
    silently authorize completion when the required audit model is unavailable.
-7. Keep orchestration in a reusable PDF skill: acquire, inspect, select a
+7. Put deterministic document operations behind one stable, versioned CLI with
+   structured JSON input and output instead of adding one permanently visible
+   model tool per operation. Use an existing trusted executor where suitable,
+   or one deferred native adapter when MintClaw must own artifact identity,
+   policy, remote placement, or redaction.
+8. Keep orchestration in a reusable PDF skill: acquire, inspect, select a
    supported strategy, collect only missing facts, edit, verify structurally,
-   render, verify visually, and deliver one clear final result. Keep binary
-   transformation and validation in native tools or isolated workers rather
-   than relying on prompt compliance.
-8. Protect sensitive documents with restrictive temporary storage, bounded
+   render, verify visually, and deliver one clear final result. Activate its
+   full instructions only for a PDF attachment or an explicit document request;
+   ordinary turns should carry only bounded skill-catalog metadata.
+9. Protect sensitive documents with restrictive temporary storage, bounded
    retention, and redaction of field values and command arguments from normal
    logs and diagnostic traces.
 
