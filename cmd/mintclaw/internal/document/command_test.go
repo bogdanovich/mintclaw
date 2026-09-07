@@ -84,6 +84,17 @@ func TestAcquireCommandWritesReportAndMapsExitClass(t *testing.T) {
 			},
 			wantCode: 4,
 		},
+		{
+			name: "unsupported input type",
+			report: documentpkg.Report{
+				SchemaVersion: documentpkg.ReportSchemaVersion, OperationID: "operation_unsupported_type",
+				Operation: "acquire", State: documentpkg.StateUnsupported,
+				Failure: &documentpkg.Failure{
+					Code: documentpkg.FailureUnsupportedType, Message: "input is not a PDF document",
+				},
+			},
+			wantCode: 4,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

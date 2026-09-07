@@ -164,7 +164,12 @@ func reportExitCode(report documentpkg.Report) int {
 	switch report.State {
 	case documentpkg.StateSucceeded:
 		return 0
-	case documentpkg.StateUnavailable, documentpkg.StateUnsupported, documentpkg.StateDenied:
+	case documentpkg.StateUnavailable, documentpkg.StateDenied:
+		return 3
+	case documentpkg.StateUnsupported:
+		if report.Failure != nil && report.Failure.Code == documentpkg.FailureUnsupportedType {
+			return 4
+		}
 		return 3
 	case documentpkg.StateCanceled:
 		return 6
@@ -176,7 +181,6 @@ func reportExitCode(report documentpkg.Report) int {
 		}
 		if report.Failure != nil &&
 			(report.Failure.Code == documentpkg.FailureInvalidInput ||
-				report.Failure.Code == documentpkg.FailureUnsupportedType ||
 				report.Failure.Code == documentpkg.FailureSourceChanged) {
 			return 4
 		}
