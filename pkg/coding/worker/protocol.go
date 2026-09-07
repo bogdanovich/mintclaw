@@ -112,6 +112,7 @@ const (
 	ErrorNoActiveTurn       ErrorCode = "no_active_turn"
 	ErrorTurnNotSteerable   ErrorCode = "turn_not_steerable"
 	ErrorSteerConflict      ErrorCode = "steer_conflict"
+	ErrorSteerLimit         ErrorCode = "steer_limit"
 	ErrorWorkerStopping     ErrorCode = "worker_stopping"
 	ErrorCanceled           ErrorCode = "canceled"
 	ErrorInterrupted        ErrorCode = "interrupted"
@@ -123,7 +124,7 @@ func (code ErrorCode) Valid() bool {
 	switch code {
 	case ErrorInvalidRequest, ErrorUnsupportedVersion, ErrorNotInitialized,
 		ErrorIdentityMismatch, ErrorTurnActive, ErrorNoActiveTurn, ErrorTurnNotSteerable,
-		ErrorSteerConflict, ErrorWorkerStopping, ErrorCanceled, ErrorInterrupted,
+		ErrorSteerConflict, ErrorSteerLimit, ErrorWorkerStopping, ErrorCanceled, ErrorInterrupted,
 		ErrorUncertain, ErrorInternal:
 		return true
 	default:
@@ -224,7 +225,7 @@ func (record Record) validateEvent() error {
 	if !record.Event.Valid() {
 		return fmt.Errorf("%w: event requires a supported name", ErrInvalidRecord)
 	}
-	if err := validateJSONObject("payload", record.Payload); err != nil {
+	if _, err := DecodeEventPayload(record.Event, record.Payload); err != nil {
 		return err
 	}
 	if record.ID != "" || record.Method != "" || record.IdempotencyKey != "" ||
@@ -232,6 +233,319 @@ func (record Record) validateEvent() error {
 		return fmt.Errorf("%w: event contains fields from another record type", ErrInvalidRecord)
 	}
 	return nil
+}
+
+const (
+	MaxEventTextBytes    = 64 << 10
+	MaxQuestionOptions   = 32
+	MaxQuestionTextBytes = 8 << 10
+)
+
+// WorkerReadyPayload is emitted only after the bound controller and thread
+// lease are ready to accept commands.
+type WorkerReadyPayload struct {
+	ControlIdentity
+	Snapshot frontend.ThreadSnapshot `json:"snapshot"`
+}
+
+func (payload WorkerReadyPayload) Validate() error {
+	return validateSnapshotEvent(payload.ControlIdentity, payload.Snapshot)
+}
+
+// ItemUpdatedPayload carries one complete renderer-neutral item revision.
+type ItemUpdatedPayload struct {
+	ControlIdentity
+	Item frontend.PresentationItem `json:"item"`
+}
+
+func (payload ItemUpdatedPayload) Validate() error {
+	if err := payload.ControlIdentity.Validate(); err != nil {
+		return err
+	}
+	if !validIdentifier(payload.Item.ID) || !validIdentifier(payload.Item.TurnID) ||
+		payload.Item.Sequence == 0 || payload.Item.Revision == 0 ||
+		!validPresentationKind(payload.Item.Kind) || !validPresentationLifecycle(payload.Item.Lifecycle) {
+		return fmt.Errorf("%w: malformed coding item event", ErrInvalidRecord)
+	}
+	if !validPresentationItemPayload(payload.Item) {
+		return fmt.Errorf("%w: coding item event has the wrong typed payload", ErrInvalidRecord)
+	}
+	return nil
+}
+
+// StatusChangedPayload projects the worker's current controller activity.
+type StatusChangedPayload struct {
+	ControlIdentity
+	Activity frontend.Activity `json:"activity"`
+	Status   string            `json:"status"`
+}
+
+func (payload StatusChangedPayload) Validate() error {
+	if err := payload.ControlIdentity.Validate(); err != nil {
+		return err
+	}
+	if !validActivity(payload.Activity) || !validBoundedText(payload.Status, MaxStatusBytes) {
+		return fmt.Errorf("%w: malformed coding status event", ErrInvalidRecord)
+	}
+	return nil
+}
+
+type QuestionStatus string
+
+const (
+	QuestionWaiting  QuestionStatus = "waiting"
+	QuestionAnswered QuestionStatus = "answered"
+	QuestionCanceled QuestionStatus = "canceled"
+)
+
+type QuestionOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// QuestionState is the complete versioned question identity exposed to the
+// trusted parent. Answers correlate this identity separately.
+type QuestionState struct {
+	QuestionID string           `json:"question_id"`
+	Revision   uint64           `json:"revision"`
+	Status     QuestionStatus   `json:"status"`
+	Prompt     string           `json:"prompt"`
+	Options    []QuestionOption `json:"options,omitempty"`
+}
+
+func (question QuestionState) Validate() error {
+	if !validIdentifier(question.QuestionID) || question.Revision == 0 ||
+		(question.Status != QuestionWaiting && question.Status != QuestionAnswered &&
+			question.Status != QuestionCanceled) ||
+		!validBoundedText(question.Prompt, MaxQuestionTextBytes) || len(question.Options) > MaxQuestionOptions {
+		return fmt.Errorf("%w: malformed coding question state", ErrInvalidRecord)
+	}
+	seen := make(map[string]struct{}, len(question.Options))
+	for _, option := range question.Options {
+		if !validIdentifier(option.ID) || !validBoundedText(option.Label, MaxAttachmentMeta) ||
+			!validOptionalText(option.Description, MaxQuestionTextBytes) {
+			return fmt.Errorf("%w: malformed coding question option", ErrInvalidRecord)
+		}
+		if _, duplicate := seen[option.ID]; duplicate {
+			return fmt.Errorf("%w: duplicate coding question option", ErrInvalidRecord)
+		}
+		seen[option.ID] = struct{}{}
+	}
+	return nil
+}
+
+type QuestionStatePayload struct {
+	ControlIdentity
+	Question QuestionState `json:"question"`
+}
+
+func (payload QuestionStatePayload) Validate() error {
+	if err := payload.ControlIdentity.Validate(); err != nil {
+		return err
+	}
+	return payload.Question.Validate()
+}
+
+type ContextUsagePayload struct {
+	ControlIdentity
+	Usage frontend.ContextUsage `json:"usage"`
+}
+
+func (payload ContextUsagePayload) Validate() error {
+	if err := payload.ControlIdentity.Validate(); err != nil {
+		return err
+	}
+	if payload.Usage.UsedTokens < 0 || payload.Usage.LimitTokens < 0 {
+		return fmt.Errorf("%w: malformed coding context usage", ErrInvalidRecord)
+	}
+	return nil
+}
+
+type TurnTerminalPayload struct {
+	ControlIdentity
+	TurnID  string               `json:"turn_id"`
+	Outcome frontend.TurnOutcome `json:"outcome"`
+	Status  string               `json:"status"`
+}
+
+func (payload TurnTerminalPayload) Validate() error {
+	if err := payload.ControlIdentity.Validate(); err != nil {
+		return err
+	}
+	if !validIdentifier(payload.TurnID) || !validTurnOutcome(payload.Outcome) ||
+		!validBoundedText(payload.Status, MaxStatusBytes) {
+		return fmt.Errorf("%w: malformed coding terminal event", ErrInvalidRecord)
+	}
+	return nil
+}
+
+type WorkerStopReason string
+
+const (
+	WorkerStopCompleted WorkerStopReason = "completed"
+	WorkerStopShutdown  WorkerStopReason = "shutdown"
+	WorkerStopCanceled  WorkerStopReason = "canceled"
+	WorkerStopFailed    WorkerStopReason = "failed"
+)
+
+type WorkerStoppedPayload struct {
+	ControlIdentity
+	Reason WorkerStopReason `json:"reason"`
+	Error  *ProtocolError   `json:"error,omitempty"`
+}
+
+func (payload WorkerStoppedPayload) Validate() error {
+	if err := payload.ControlIdentity.Validate(); err != nil {
+		return err
+	}
+	switch payload.Reason {
+	case WorkerStopCompleted, WorkerStopShutdown, WorkerStopCanceled:
+		if payload.Error != nil {
+			return fmt.Errorf("%w: successful worker stop contains an error", ErrInvalidRecord)
+		}
+	case WorkerStopFailed:
+		if payload.Error == nil {
+			return fmt.Errorf("%w: failed worker stop requires an error", ErrInvalidRecord)
+		}
+		return payload.Error.Validate()
+	default:
+		return fmt.Errorf("%w: malformed worker stop reason", ErrInvalidRecord)
+	}
+	return nil
+}
+
+// DecodeEventPayload applies the closed-world schema owned by each event.
+// Callers receive the corresponding concrete payload pointer.
+func DecodeEventPayload(event EventName, raw json.RawMessage) (any, error) {
+	if !event.Valid() {
+		return nil, fmt.Errorf("%w: unsupported event payload %q", ErrInvalidRecord, event)
+	}
+	if err := validateEventText(raw); err != nil {
+		return nil, err
+	}
+	var payload interface{ Validate() error }
+	switch event {
+	case EventWorkerReady:
+		payload = &WorkerReadyPayload{}
+	case EventItemUpdated:
+		payload = &ItemUpdatedPayload{}
+	case EventStatusChanged:
+		payload = &StatusChangedPayload{}
+	case EventQuestionState:
+		payload = &QuestionStatePayload{}
+	case EventContextUsage:
+		payload = &ContextUsagePayload{}
+	case EventTurnTerminal:
+		payload = &TurnTerminalPayload{}
+	case EventWorkerStopped:
+		payload = &WorkerStoppedPayload{}
+	}
+	if err := DecodePayload(raw, payload); err != nil {
+		return nil, err
+	}
+	if err := payload.Validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func validateSnapshotEvent(identity ControlIdentity, snapshot frontend.ThreadSnapshot) error {
+	if err := identity.Validate(); err != nil {
+		return err
+	}
+	parsed, err := uuid.Parse(snapshot.ThreadID)
+	if err != nil || parsed.String() != snapshot.ThreadID || !validActivity(snapshot.Activity) {
+		return fmt.Errorf("%w: malformed coding worker snapshot", ErrInvalidRecord)
+	}
+	return nil
+}
+
+func validActivity(activity frontend.Activity) bool {
+	switch activity {
+	case frontend.ActivityIdle, frontend.ActivityRunning, frontend.ActivityInterrupting,
+		frontend.ActivityCompacting, frontend.ActivityReviewing, frontend.ActivityWaitingInput,
+		frontend.ActivityFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTurnOutcome(outcome frontend.TurnOutcome) bool {
+	switch outcome {
+	case frontend.TurnOutcomeCompleted, frontend.TurnOutcomeSuspended,
+		frontend.TurnOutcomeFailed, frontend.TurnOutcomeInterrupted:
+		return true
+	default:
+		return false
+	}
+}
+
+func validPresentationKind(kind frontend.PresentationKind) bool {
+	switch kind {
+	case frontend.PresentationUserMessage, frontend.PresentationAssistantMessage,
+		frontend.PresentationReasoning, frontend.PresentationToolMessage,
+		frontend.PresentationToolCall, frontend.PresentationPlanUpdate,
+		frontend.PresentationWarning, frontend.PresentationError:
+		return true
+	default:
+		return false
+	}
+}
+
+func validPresentationLifecycle(lifecycle frontend.PresentationLifecycle) bool {
+	switch lifecycle {
+	case frontend.PresentationActive, frontend.PresentationCompleted, frontend.PresentationFailed,
+		frontend.PresentationInterrupted, frontend.PresentationSuspended, frontend.PresentationUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+func validPresentationItemPayload(item frontend.PresentationItem) bool {
+	message, tool, plan := item.Message != nil, item.Tool != nil, item.Plan != nil
+	switch item.Kind {
+	case frontend.PresentationToolCall:
+		return !message && tool && !plan
+	case frontend.PresentationPlanUpdate:
+		return !message && !tool && plan
+	default:
+		return message && !tool && !plan
+	}
+}
+
+func validateEventText(raw json.RawMessage) error {
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return fmt.Errorf("%w: malformed event payload: %w", ErrInvalidRecord, err)
+	}
+	var inspect func(any) error
+	inspect = func(current any) error {
+		switch typed := current.(type) {
+		case string:
+			if len(typed) > MaxEventTextBytes || !utf8.ValidString(typed) || containsUnsafeControl(typed) {
+				return fmt.Errorf("%w: event payload contains unsafe or oversized text", ErrInvalidRecord)
+			}
+		case []any:
+			for _, entry := range typed {
+				if err := inspect(entry); err != nil {
+					return err
+				}
+			}
+		case map[string]any:
+			for _, entry := range typed {
+				if err := inspect(entry); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return inspect(value)
 }
 
 func Encode(record Record) ([]byte, error) {

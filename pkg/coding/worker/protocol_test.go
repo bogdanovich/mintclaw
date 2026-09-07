@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 )
 
@@ -252,6 +253,138 @@ func TestRecordSeparatesRequestResponseAndEventFields(t *testing.T) {
 	}
 }
 
+func TestEventPayloadSchemasAreClosedAndRequired(t *testing.T) {
+	binding := testBinding(t)
+	identity := binding.ControlIdentity()
+	tests := []struct {
+		name    string
+		event   EventName
+		payload any
+	}{
+		{
+			name: "ready", event: EventWorkerReady,
+			payload: WorkerReadyPayload{
+				ControlIdentity: identity,
+				Snapshot: frontend.ThreadSnapshot{
+					ThreadID: binding.ThreadID, Activity: frontend.ActivityIdle,
+				},
+			},
+		},
+		{
+			name: "item", event: EventItemUpdated,
+			payload: ItemUpdatedPayload{
+				ControlIdentity: identity,
+				Item: frontend.PresentationItem{
+					ID: "item-1", TurnID: "turn-1", Sequence: 1, Revision: 1,
+					Kind: frontend.PresentationAssistantMessage, Lifecycle: frontend.PresentationCompleted,
+					Message: &frontend.TranscriptEntry{
+						ID: "message-1", TurnID: "turn-1", Kind: frontend.EntryAssistant,
+						Text: "result", Complete: true,
+					},
+				},
+			},
+		},
+		{
+			name: "status", event: EventStatusChanged,
+			payload: StatusChangedPayload{
+				ControlIdentity: identity, Activity: frontend.ActivityRunning, Status: "running",
+			},
+		},
+		{
+			name: "question", event: EventQuestionState,
+			payload: QuestionStatePayload{
+				ControlIdentity: identity,
+				Question: QuestionState{
+					QuestionID: "question-1", Revision: 1, Status: QuestionWaiting,
+					Prompt:  "Which target?",
+					Options: []QuestionOption{{ID: "target-a", Label: "Target A"}},
+				},
+			},
+		},
+		{
+			name: "context", event: EventContextUsage,
+			payload: ContextUsagePayload{
+				ControlIdentity: identity,
+				Usage:           frontend.ContextUsage{UsedTokens: 128, LimitTokens: 1024},
+			},
+		},
+		{
+			name: "terminal", event: EventTurnTerminal,
+			payload: TurnTerminalPayload{
+				ControlIdentity: identity, TurnID: "turn-1",
+				Outcome: frontend.TurnOutcomeCompleted, Status: "completed",
+			},
+		},
+		{
+			name: "stopped", event: EventWorkerStopped,
+			payload: WorkerStoppedPayload{ControlIdentity: identity, Reason: WorkerStopCompleted},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := MarshalPayload(test.payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := Record{SchemaVersion: ProtocolV1, Type: RecordEvent, Event: test.event, Payload: raw}
+			encoded, err := Encode(record)
+			if err != nil {
+				t.Fatalf("Encode() error = %v", err)
+			}
+			decoded, err := Decode(encoded)
+			if err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			if _, err := DecodeEventPayload(decoded.Event, decoded.Payload); err != nil {
+				t.Fatalf("DecodeEventPayload() error = %v", err)
+			}
+		})
+	}
+
+	for name, record := range map[string]Record{
+		"empty terminal": {
+			SchemaVersion: ProtocolV1, Type: RecordEvent, Event: EventTurnTerminal,
+			Payload: json.RawMessage(`{}`),
+		},
+		"wrong payload": {
+			SchemaVersion: ProtocolV1, Type: RecordEvent, Event: EventStatusChanged,
+			Payload: mustPayload(t, TurnTerminalPayload{
+				ControlIdentity: identity, TurnID: "turn-1",
+				Outcome: frontend.TurnOutcomeCompleted, Status: "completed",
+			}),
+		},
+		"unknown field": {
+			SchemaVersion: ProtocolV1, Type: RecordEvent, Event: EventWorkerStopped,
+			Payload: json.RawMessage(`{
+				"task_id":"task-1",
+				"task_generation_id":"task-generation-1",
+				"worker_generation_id":"worker-generation-1",
+				"reason":"completed",
+				"unexpected":true
+			}`),
+		},
+		"terminal control": {
+			SchemaVersion: ProtocolV1, Type: RecordEvent, Event: EventStatusChanged,
+			Payload: mustPayload(t, StatusChangedPayload{
+				ControlIdentity: identity, Activity: frontend.ActivityRunning, Status: "running\x1b[2J",
+			}),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Encode(record); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("Encode() error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
+func TestSteerLimitHasStableWireCode(t *testing.T) {
+	protocolError := ProtocolError{Code: ErrorSteerLimit, Message: "steer limit reached"}
+	if err := protocolError.Validate(); err != nil {
+		t.Fatalf("ProtocolError.Validate() error = %v", err)
+	}
+}
+
 func TestDecodePayloadRejectsUnknownAndDuplicateFields(t *testing.T) {
 	type payload struct {
 		Value string `json:"value"`
@@ -269,4 +402,13 @@ func TestDecodePayloadRejectsUnknownAndDuplicateFields(t *testing.T) {
 
 func boolPointer(value bool) *bool {
 	return &value
+}
+
+func mustPayload(t *testing.T, value any) json.RawMessage {
+	t.Helper()
+	raw, err := MarshalPayload(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
