@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	configcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/config"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/cron"
 	doctorcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/doctor"
+	documentcmd "github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/document"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/gateway"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/mcp"
 	"github.com/bogdanovich/mintclaw/cmd/mintclaw/internal/migrate"
@@ -89,7 +91,7 @@ func machineJSONRequested(args []string) bool {
 	hasJSON := false
 	for _, arg := range args {
 		switch arg {
-		case "doctor", "nodes", "agent", "code", "resume", "review", "threads":
+		case "doctor", "document", "nodes", "agent", "code", "resume", "review", "threads":
 			hasJSONCommand = true
 		case "--json":
 			hasJSON = true
@@ -153,6 +155,9 @@ mintclaw --no-color status`,
 		gateway.NewGatewayCommand(),
 		status.NewStatusCommand(),
 		doctorcmd.NewDoctorCommand(),
+		documentcmd.NewDocumentCommand(func() string {
+			return filepath.Join(config.GetHome(), "state", "document-scratch")
+		}),
 		cron.NewCronCommand(),
 		mcp.NewMCPCommand(),
 		migrate.NewMigrateCommand(),
@@ -190,6 +195,15 @@ func main() {
 		var doctorExit *doctorcmd.ExitError
 		if errors.As(err, &doctorExit) {
 			os.Exit(doctorExit.Code)
+		}
+		var documentExit *documentcmd.ExitError
+		if errors.As(err, &documentExit) {
+			os.Exit(documentExit.Code)
+		}
+		var codingExit *coding.ExitError
+		if errors.As(err, &codingExit) {
+			fmt.Fprint(os.Stderr, cliui.FormatCLIError(err.Error(), last))
+			os.Exit(codingExit.Code)
 		}
 		fmt.Fprint(os.Stderr, cliui.FormatCLIError(err.Error(), last))
 		os.Exit(1)

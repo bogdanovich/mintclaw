@@ -1,4 +1,4 @@
-.PHONY: all build build-node build-node-broker install uninstall clean help test integration-test build-all fmt fmt-check lint lint-docs fix
+.PHONY: all build build-node build-node-broker install uninstall clean help test test-document integration-test build-all fmt fmt-check lint lint-docs fix
 
 # Build variables
 BINARY_NAME=mintclaw
@@ -372,6 +372,10 @@ vet: generate
 test: generate
 	@$(GO) test $(GOFLAGS) $$($(GO) list $(GOFLAGS) ./... | grep -v github.com/bogdanovich/mintclaw/web/)
 	@cd web && make test
+
+## test-document: Run the focused document contract and CLI tests
+test-document:
+	@$(GO) test $(GOFLAGS) ./pkg/document ./cmd/mintclaw/internal/document
 
 ## integration-test: Run Docker-backed integration test suites
 integration-test:

@@ -2,6 +2,8 @@
 
 Operational docs for debugging, diagnosis, and production troubleshooting.
 
+- [Document acquisition smoke](document-acquisition.md): PDF0A local immutable
+  identity CLI, supported tuple, expected JSON, cleanup, and focused tests.
 - [Troubleshooting](troubleshooting.md): common failures, symptoms, and recovery steps.
 - [Debugging MintClaw](debug.md): live logs, passive diagnostic traces, and
   root-cause workflow.

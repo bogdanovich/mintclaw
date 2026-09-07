@@ -142,6 +142,7 @@ func newCodeCommand(deps dependencies) *cobra.Command {
 		"Attach a local file to the first turn (repeatable)",
 	)
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON")
+	cmd.AddCommand(newCodeExecCommand(deps))
 	return cmd
 }
 
@@ -721,7 +722,7 @@ func prepareResumedThread(
 	}
 	inspection, err := thread.InspectLocation(ctx, metadata.Project, project.InvocationCWD)
 	if err != nil {
-		return thread.Metadata{}, lease, err
+		return thread.Metadata{}, lease, &projectResolutionError{err: err}
 	}
 	var admittedProject thread.ProjectIdentity
 	switch inspection.State {
@@ -734,19 +735,19 @@ func prepareResumedThread(
 		}
 		admittedProject = *inspection.Current
 	case thread.LocationMismatch:
-		return thread.Metadata{}, lease, fmt.Errorf(
+		return thread.Metadata{}, lease, &projectResolutionError{err: fmt.Errorf(
 			"resume: thread %q belongs to %q, not current project %q; change directory before resuming",
 			metadata.ThreadID,
 			metadata.Project.ProjectRoot,
 			project.ProjectRoot,
-		)
+		)}
 	case thread.LocationMissing, thread.LocationMoved:
-		return thread.Metadata{}, lease, fmt.Errorf(
+		return thread.Metadata{}, lease, &projectResolutionError{err: fmt.Errorf(
 			"resume: thread %q project location %q is %s; explicit relocation is required",
 			metadata.ThreadID,
 			metadata.Project.ProjectRoot,
 			inspection.State,
-		)
+		)}
 	default:
 		return thread.Metadata{}, lease, fmt.Errorf(
 			"resume: thread %q has unknown project location state",
@@ -855,11 +856,13 @@ func preserveCommittedPromptState(threadID string, promptStored bool, err error)
 func resolveEnvironment(ctx context.Context, deps dependencies) (thread.ProjectIdentity, *thread.Store, error) {
 	cwd, err := deps.cwd()
 	if err != nil {
-		return thread.ProjectIdentity{}, nil, fmt.Errorf("coding command: get current directory: %w", err)
+		return thread.ProjectIdentity{}, nil, &projectResolutionError{
+			err: fmt.Errorf("coding command: get current directory: %w", err),
+		}
 	}
 	project, err := thread.ResolveProject(ctx, cwd)
 	if err != nil {
-		return thread.ProjectIdentity{}, nil, err
+		return thread.ProjectIdentity{}, nil, &projectResolutionError{err: err}
 	}
 	home := strings.TrimSpace(deps.home())
 	if home == "" {
@@ -870,6 +873,24 @@ func resolveEnvironment(ctx context.Context, deps dependencies) (thread.ProjectI
 		return thread.ProjectIdentity{}, nil, err
 	}
 	return project, store, nil
+}
+
+type projectResolutionError struct {
+	err error
+}
+
+func (e *projectResolutionError) Error() string {
+	if e == nil || e.err == nil {
+		return "coding project is invalid"
+	}
+	return e.err.Error()
+}
+
+func (e *projectResolutionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
 }
 
 func resultFor(

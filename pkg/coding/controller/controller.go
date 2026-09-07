@@ -60,6 +60,10 @@ type reviewAvailability interface {
 	ReviewAvailable() bool
 }
 
+type turnSettlementErrorSource interface {
+	TurnSettlementError() error
+}
+
 type commandKind uint8
 
 const (
@@ -75,6 +79,7 @@ const (
 	commandRepositoryStatus
 	commandRepositoryDiff
 	commandReview
+	commandAwaitTurn
 	commandClose
 )
 
@@ -131,6 +136,7 @@ type operationResult struct {
 	review          codingreview.Result
 	reviewID        string
 	reviewCommitted bool
+	projectErr      error
 	err             error
 }
 
@@ -168,8 +174,9 @@ type Controller struct {
 }
 
 var (
-	_ frontend.Controller = (*Controller)(nil)
-	_ frontend.Reviewer   = (*Controller)(nil)
+	_ frontend.Controller  = (*Controller)(nil)
+	_ frontend.Reviewer    = (*Controller)(nil)
+	_ frontend.TurnSettler = (*Controller)(nil)
 )
 
 func New(projector *frontend.Projector, runtime Runtime) (*Controller, error) {
@@ -219,7 +226,36 @@ func (c *Controller) Submit(ctx context.Context, input frontend.TurnInput) error
 	if err := validateTurnInput(input); err != nil {
 		return err
 	}
-	return c.sendInput(ctx, commandSubmit, "", input.Clone())
+	ctx = contextOrBackground(ctx)
+	reply := make(chan error, 1)
+	request := command{kind: commandSubmit, ctx: ctx, input: input.Clone(), reply: reply}
+	if err := c.enqueue(ctx, request); err != nil {
+		return err
+	}
+	return awaitTurnAdmission(reply, c.done)
+}
+
+// awaitTurnAdmission waits for the actor-owned admission decision after the
+// request has entered the command queue. The actor checks cancellation before
+// starting work, so its reply definitively says whether a turn was admitted.
+func awaitTurnAdmission(reply <-chan error, done <-chan struct{}) error {
+	select {
+	case err := <-reply:
+		return err
+	case <-done:
+		select {
+		case err := <-reply:
+			return err
+		default:
+			return ErrClosed
+		}
+	}
+}
+
+// AwaitTurn waits for the currently admitted turn, or returns the retained
+// settlement of the most recently admitted turn. It never cancels the turn.
+func (c *Controller) AwaitTurn(ctx context.Context) error {
+	return c.send(ctx, commandAwaitTurn, "")
 }
 
 func validateTurnInput(input frontend.TurnInput) error {
@@ -438,6 +474,12 @@ func (c *Controller) coordinate() {
 	var reviewCommitted bool
 	var closing bool
 	var operationCancel context.CancelCauseFunc
+	var pendingTurnAdmission *command
+	var pendingTurnReady <-chan struct{}
+	var pendingTurnCanceled <-chan struct{}
+	var turnWaiters []command
+	var turnSettlementAvailable bool
+	var turnSettlementErr error
 	var activeEvidence *evidenceOperation
 	var evidenceQueue []evidenceOperation
 	var nextEvidenceID uint64
@@ -515,6 +557,24 @@ func (c *Controller) coordinate() {
 
 	for {
 		select {
+		case <-pendingTurnReady:
+			pendingTurnAdmission.reply <- nil
+			pendingTurnAdmission = nil
+			pendingTurnReady = nil
+			pendingTurnCanceled = nil
+		case <-pendingTurnCanceled:
+			select {
+			case <-pendingTurnReady:
+				pendingTurnAdmission.reply <- nil
+			default:
+				if operationCancel != nil {
+					operationCancel(context.Cause(pendingTurnAdmission.ctx))
+				}
+				pendingTurnAdmission.reply <- pendingTurnAdmission.ctx.Err()
+			}
+			pendingTurnAdmission = nil
+			pendingTurnReady = nil
+			pendingTurnCanceled = nil
 		case update := <-c.reviewEvents:
 			if reviewing && update.reviewID == activeReviewID {
 				_ = c.projector.ReviewEvent(update.reviewID, update.event)
@@ -560,6 +620,22 @@ func (c *Controller) coordinate() {
 				return
 			}
 		case result := <-c.results:
+			if result.kind == operationTurn && pendingTurnAdmission != nil {
+				select {
+				case <-pendingTurnReady:
+					pendingTurnAdmission.reply <- nil
+				default:
+					admissionErr := result.err
+					if admissionErr == nil {
+						admissionErr = errors.New("coding turn returned before admission")
+						result.err = admissionErr
+					}
+					pendingTurnAdmission.reply <- admissionErr
+				}
+				pendingTurnAdmission = nil
+				pendingTurnReady = nil
+				pendingTurnCanceled = nil
+			}
 			switch result.kind {
 			case operationTurn:
 				active = false
@@ -589,6 +665,18 @@ func (c *Controller) coordinate() {
 			}
 			operationCancel = nil
 			c.projectOperationError(result)
+			if result.kind == operationTurn {
+				turnSettlementAvailable = true
+				turnSettlementErr = result.err
+				for _, waiter := range turnWaiters {
+					if err := waiter.ctx.Err(); err != nil {
+						waiter.reply <- err
+					} else {
+						waiter.reply <- result.err
+					}
+				}
+				turnWaiters = nil
+			}
 			if finishClose() {
 				return
 			}
@@ -600,6 +688,10 @@ func (c *Controller) coordinate() {
 			pruneCanceledEvidence()
 			switch request.kind {
 			case commandSubmit:
+				if err := request.ctx.Err(); err != nil {
+					request.reply <- err
+					continue
+				}
 				switch {
 				case active:
 					request.reply <- ErrTurnActive
@@ -611,6 +703,8 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrWorkspaceRefreshActive
 				default:
 					active = true
+					turnSettlementAvailable = false
+					turnSettlementErr = nil
 					operationCtx, cancel := context.WithCancelCause(rootCtx)
 					operationCancel = cancel
 					ready := make(chan struct{})
@@ -618,18 +712,9 @@ func (c *Controller) coordinate() {
 					go c.run(operationCtx, operationTurn, request.input, func() {
 						readyOnce.Do(func() { close(ready) })
 					})
-					select {
-					case <-ready:
-						request.reply <- nil
-					case result := <-c.results:
-						active = false
-						operationCancel = nil
-						c.projectOperationError(result)
-						request.reply <- result.err
-					case <-request.ctx.Done():
-						operationCancel(context.Cause(request.ctx))
-						request.reply <- request.ctx.Err()
-					}
+					pendingTurnAdmission = &request
+					pendingTurnReady = ready
+					pendingTurnCanceled = request.ctx.Done()
 				}
 			case commandInterrupt:
 				if reviewing {
@@ -784,6 +869,15 @@ func (c *Controller) coordinate() {
 					go c.runReview(operationCtx, runner, reviewID, request.reviewTarget)
 					request.reply <- nil
 				}
+			case commandAwaitTurn:
+				switch {
+				case active:
+					turnWaiters = append(turnWaiters, request)
+				case turnSettlementAvailable:
+					request.reply <- turnSettlementErr
+				default:
+					request.reply <- ErrNoActiveTurn
+				}
 			case commandClose:
 				closeReplies = append(closeReplies, request.reply)
 				if closing {
@@ -823,12 +917,17 @@ func (c *Controller) coordinate() {
 
 func (c *Controller) run(ctx context.Context, kind operationKind, input frontend.TurnInput, ready func()) {
 	var err error
+	var projectErr error
 	if kind == operationTurn {
 		err = c.runtime.RunTurn(ctx, input, ready)
+		projectErr = err
+		if source, ok := c.runtime.(turnSettlementErrorSource); ok {
+			err = errors.Join(err, source.TurnSettlementError())
+		}
 	} else {
 		err = c.runtime.Compact(ctx)
 	}
-	c.results <- operationResult{kind: kind, err: err}
+	c.results <- operationResult{kind: kind, projectErr: projectErr, err: err}
 }
 
 func (c *Controller) runReview(
@@ -930,7 +1029,11 @@ func (c *Controller) runEvidence(ctx context.Context, id uint64, kind operationK
 }
 
 func (c *Controller) projectOperationError(result operationResult) {
-	if result.err == nil || isOnlyIntentionalCancellation(result.err) {
+	err := result.err
+	if result.kind == operationTurn {
+		err = result.projectErr
+	}
+	if err == nil || isOnlyIntentionalCancellation(err) {
 		return
 	}
 	switch result.kind {

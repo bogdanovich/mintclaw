@@ -341,6 +341,14 @@ type Controller interface {
 	CommandSink
 }
 
+// TurnSettler is the optional completion barrier used by non-interactive
+// frontends. A terminal presentation snapshot can precede post-turn durable
+// persistence; AwaitTurn returns only after the admitted controller operation
+// has settled and reports that operation's final error.
+type TurnSettler interface {
+	AwaitTurn(context.Context) error
+}
+
 // TranscriptPageRequest selects a bounded canonical transcript window. Before
 // is an exclusive message index; a negative value selects the current end.
 type TranscriptPageRequest struct {

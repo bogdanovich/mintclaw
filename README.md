@@ -119,12 +119,16 @@ Running on an older Android phone? Use the [Termux guide](docs/guides/android-te
   capabilities on paired Linux or macOS nodes.
 - A context-aware assistant using Seahorse-backed history, bounded prompt
   assembly, session routing, and durable per-conversation goals.
+- A local coding agent with durable project sessions, an interactive terminal
+  UI, native repository review, and scriptable one-turn execution through
+  `mintclaw code exec`.
 
 ## Run it your way
 
 | Surface | Best for | Start here |
 | --- | --- | --- |
 | CLI | One-shot work, interactive chat, scripting, and diagnostics | `mintclaw onboard`, `mintclaw agent`, `mintclaw doctor` |
+| Coding agent | Interactive or scriptable work in a local repository | `mintclaw code`, `mintclaw code exec`, `mintclaw resume` |
 | Web launcher | Browser-based setup, configuration, and chat | [Docker and launcher guide](docs/guides/docker.md) |
 | Gateway | Always-on chat apps, scheduled work, and live agent sessions | [Chat apps](docs/guides/chat-apps.md) |
 | Docker | Reproducible server or local deployment | [Docker Compose](docs/guides/docker.md#docker-compose) |
