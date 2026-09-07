@@ -110,6 +110,7 @@ func TestDocumentWorkerHelperProcess(t *testing.T) {
 		if err := ServeWorker(os.Stdin, input, os.Stdout); err != nil {
 			os.Exit(93)
 		}
+		os.Exit(0)
 	case "crash":
 		os.Exit(23)
 	case "malformed":
