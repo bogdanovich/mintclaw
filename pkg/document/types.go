@@ -29,6 +29,7 @@ const (
 	FailureUnsupportedType     FailureCode = "unsupported_type"
 	FailureLimitExceeded       FailureCode = "limit_exceeded"
 	FailureSourceChanged       FailureCode = "source_changed"
+	FailureSourceUnauthorized  FailureCode = "source_not_authorized"
 	FailureCanceled            FailureCode = "canceled"
 	FailureWorkerUnavailable   FailureCode = "worker_unavailable"
 	FailureWorkerProtocol      FailureCode = "worker_protocol"
@@ -50,6 +51,7 @@ type Authority struct {
 
 type DocumentRef struct {
 	Ref              string    `json:"ref"`
+	SourceRef        string    `json:"source_ref,omitempty"`
 	OriginalFilename string    `json:"original_filename"`
 	ContentType      string    `json:"content_type"`
 	Size             int64     `json:"size"`

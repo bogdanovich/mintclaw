@@ -12,7 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
-func TestBindNodeFileMediaOwnerUsesExactActorAndRoute(t *testing.T) {
+func TestBindInboundMediaOwnerUsesExactActorAndRoute(t *testing.T) {
 	store := media.NewFileMediaStore()
 	path := filepath.Join(t.TempDir(), "inbound.bin")
 	if err := os.WriteFile(path, []byte("owned"), 0o600); err != nil {
@@ -22,10 +22,8 @@ func TestBindNodeFileMediaOwnerUsesExactActorAndRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry := tools.NewToolRegistry()
-	registry.Register(tools.NewNodeUploadTool(tools.NewNodeToolOptions(nil), nil))
 	ts := &turnState{
-		agent:     &AgentInstance{ID: "main", Tools: registry},
+		agent:     &AgentInstance{ID: "main", Tools: tools.NewToolRegistry()},
 		workspace: "/workspace/main",
 		channel:   "telegram",
 		chatID:    "chat-1",
@@ -37,7 +35,7 @@ func TestBindNodeFileMediaOwnerUsesExactActorAndRoute(t *testing.T) {
 			},
 		}}),
 	}
-	if bindErr := bindNodeFileMediaOwner(store, ts, []string{ref}); bindErr != nil {
+	if bindErr := bindInboundMediaOwner(store, ts, []string{ref}); bindErr != nil {
 		t.Fatal(bindErr)
 	}
 	ownerA, err := nodeFileMediaOwnerForTurn(ts)
@@ -57,13 +55,48 @@ func TestBindNodeFileMediaOwnerUsesExactActorAndRoute(t *testing.T) {
 	}
 }
 
-func TestBindNodeFileMediaOwnerDoesNothingWithoutUploadAuthority(t *testing.T) {
+func TestBindInboundMediaOwnerDoesNotDependOnNodeUploadAuthority(t *testing.T) {
 	store := media.NewFileMediaStore()
 	path := filepath.Join(t.TempDir(), "inbound.bin")
 	if err := os.WriteFile(path, []byte("unbound"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ref, err := store.Store(path, media.MediaMeta{Source: "telegram"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := &turnState{
+		agent:     &AgentInstance{ID: "main", Tools: tools.NewToolRegistry()},
+		workspace: "/workspace/main",
+		channel:   "telegram",
+		chatID:    "chat-1",
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
+			RouteSessionKey: "telegram:chat-1",
+			SessionKey:      "session-1",
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram", ChatID: "chat-1", ActorID: "actor-a",
+			},
+		}}),
+	}
+	if bindErr := bindInboundMediaOwner(store, ts, []string{ref}); bindErr != nil {
+		t.Fatal(bindErr)
+	}
+	owner, err := nodeFileMediaOwnerForTurn(ts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, resolveErr := store.ResolveOwnedWithMeta(ref, owner); resolveErr != nil {
+		t.Fatalf("ordinary inbound media was not owner-bound: %v", resolveErr)
+	}
+}
+
+func TestBindNodeFileMediaOwnerStillRequiresUploadAuthority(t *testing.T) {
+	store := media.NewFileMediaStore()
+	path := filepath.Join(t.TempDir(), "tool-result.bin")
+	if err := os.WriteFile(path, []byte("unbound"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(path, media.MediaMeta{Source: "tool"}, "result")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +121,7 @@ func TestBindNodeFileMediaOwnerDoesNothingWithoutUploadAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, resolveErr := store.ResolveOwnedWithMeta(ref, owner); resolveErr == nil {
-		t.Fatal("profile without nodes_upload authority unexpectedly bound media")
+		t.Fatal("tool media was bound without nodes_upload authority")
 	}
 }
 

@@ -8,8 +8,16 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-type nodeFileMediaOwnerBinder interface {
+type mediaOwnerBinder interface {
 	BindOwner(ref string, owner media.MediaOwner) error
+}
+
+func bindInboundMediaOwner(
+	resolver mediaResolver,
+	ts *turnState,
+	refs []string,
+) error {
+	return bindTurnMediaOwner(resolver, ts, refs)
 }
 
 func bindNodeFileMediaOwner(
@@ -21,7 +29,18 @@ func bindNodeFileMediaOwner(
 		ts.agent.Tools == nil || !ts.agent.Tools.HasRegistered("nodes_upload") {
 		return nil
 	}
-	binder, ok := resolver.(nodeFileMediaOwnerBinder)
+	return bindTurnMediaOwner(resolver, ts, refs)
+}
+
+func bindTurnMediaOwner(
+	resolver mediaResolver,
+	ts *turnState,
+	refs []string,
+) error {
+	if len(refs) == 0 || resolver == nil || ts == nil || ts.agent == nil {
+		return nil
+	}
+	binder, ok := resolver.(mediaOwnerBinder)
 	if !ok {
 		return errors.New("media store does not support durable owner binding")
 	}
