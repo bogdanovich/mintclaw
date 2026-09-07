@@ -1171,6 +1171,7 @@ func TestCodingDirectTurnOptionsEnableBackgroundCompactionForPersistentRuntime(t
 func TestNativeCodingRuntimeSteerUsesBoundRuntimeScope(t *testing.T) {
 	var workspace, sessionKey, agentID string
 	var message providers.Message
+	clearCalls := 0
 	runtime := &nativeCodingRuntime{
 		workspace: "/tmp/execution-root",
 		metadata:  thread.Metadata{SessionKey: "coding:thread-1"},
@@ -1181,6 +1182,23 @@ func TestNativeCodingRuntimeSteerUsesBoundRuntimeScope(t *testing.T) {
 			message = gotMessage
 			return nil
 		},
+		clearCodingSteering: func(gotWorkspace, gotSessionKey string) int {
+			clearCalls++
+			if gotWorkspace != "/tmp/execution-root" || gotSessionKey != "coding:thread-1" {
+				t.Fatalf(
+					"clearCodingSteering() scope = (%q, %q), want (%q, %q)",
+					gotWorkspace,
+					gotSessionKey,
+					"/tmp/execution-root",
+					"coding:thread-1",
+				)
+			}
+			return 1
+		},
+	}
+	generation, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatalf("beginTurnControl() error = %v", err)
 	}
 	if err := runtime.Steer(t.Context(), frontend.SteerInput{ID: "steer-1", Text: "new guidance"}); err != nil {
 		t.Fatalf("Steer() error = %v", err)
@@ -1194,6 +1212,20 @@ func TestNativeCodingRuntimeSteerUsesBoundRuntimeScope(t *testing.T) {
 			agentID,
 			message,
 		)
+	}
+	runtime.finishTurnControl(generation)
+	runtime.finishTurnControl(generation)
+	if clearCalls != 1 {
+		t.Fatalf("clearCodingSteering() calls = %d, want 1", clearCalls)
+	}
+	if err := runtime.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "late", Text: "do not queue"},
+	); !errors.Is(
+		err,
+		controller.ErrNoActiveTurn,
+	) {
+		t.Fatalf("late Steer() error = %v, want %v", err, controller.ErrNoActiveTurn)
 	}
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()

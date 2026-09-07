@@ -450,6 +450,20 @@ func (al *AgentLoop) SetSteeringMode(mode SteeringMode) {
 	al.steering.setMode(mode)
 }
 
+// ClearCodingSteering discards steering that a direct coding runtime did not
+// consume before its turn ended. Coding profiles have no inbound channel
+// spool, so these messages must never carry into a later root turn.
+func (al *AgentLoop) ClearCodingSteering(workspace, sessionKey string) int {
+	if !al.usesCodingProfile() || al.steering == nil {
+		return 0
+	}
+	scope := newRuntimeSessionScope(workspace, sessionKey)
+	if !scope.complete() {
+		return 0
+	}
+	return al.steering.clearScope(scope)
+}
+
 func (al *AgentLoop) dequeueSteeringMessagesForScope(scope runtimeSessionScope) []providers.Message {
 	if al.steering == nil {
 		return nil

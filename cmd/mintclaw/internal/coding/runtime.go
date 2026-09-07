@@ -129,12 +129,16 @@ type nativeCodingRuntime struct {
 		string,
 		agent.DirectTurnOptions,
 	) (string, error)
-	steer          func(string, string, string, providers.Message) error
-	historyCursor  memory.HistoryCursor
-	closeOnce      sync.Once
-	operationalMu  sync.Mutex
-	operationalErr error
-	closeErr       error
+	steer                func(string, string, string, providers.Message) error
+	clearCodingSteering  func(string, string) int
+	turnControlMu        sync.Mutex
+	nextTurnGeneration   uint64
+	activeTurnGeneration uint64
+	historyCursor        memory.HistoryCursor
+	closeOnce            sync.Once
+	operationalMu        sync.Mutex
+	operationalErr       error
+	closeErr             error
 }
 
 // codingCheckpointBus keeps durable coding-thread metadata observation in the
@@ -295,24 +299,25 @@ func openNativeCodingRuntime(
 		}
 	}
 	runtime := &nativeCodingRuntime{
-		loop:            loop,
-		messageBus:      messageBus,
-		eventBus:        baseEventBus,
-		sessions:        loop.GetRegistry().GetDefaultAgent().Sessions,
-		readTurnHistory: readTurnHistory,
-		metadata:        request.Metadata,
-		workspace:       layout.ExecutionRoot(),
-		model:           modelName,
-		provider:        providerName,
-		repository:      repository,
-		reviewer:        reviewer,
-		streaming:       projector != nil,
-		store:           request.Store,
-		lease:           request.Lease,
-		attachmentMedia: attachmentMedia,
-		now:             time.Now,
-		processDirect:   loop.ProcessDirectInputWithOptions,
-		steer:           loop.Steer,
+		loop:                loop,
+		messageBus:          messageBus,
+		eventBus:            baseEventBus,
+		sessions:            loop.GetRegistry().GetDefaultAgent().Sessions,
+		readTurnHistory:     readTurnHistory,
+		metadata:            request.Metadata,
+		workspace:           layout.ExecutionRoot(),
+		model:               modelName,
+		provider:            providerName,
+		repository:          repository,
+		reviewer:            reviewer,
+		streaming:           projector != nil,
+		store:               request.Store,
+		lease:               request.Lease,
+		attachmentMedia:     attachmentMedia,
+		now:                 time.Now,
+		processDirect:       loop.ProcessDirectInputWithOptions,
+		steer:               loop.Steer,
+		clearCodingSteering: loop.ClearCodingSteering,
 	}
 	if projector != nil {
 		runtime.historyCursor, err = codingHistoryCursor(
@@ -595,6 +600,14 @@ func (r *nativeCodingRuntime) Steer(ctx context.Context, input frontend.SteerInp
 			return err
 		}
 	}
+	r.turnControlMu.Lock()
+	defer r.turnControlMu.Unlock()
+	if r.activeTurnGeneration == 0 {
+		return controller.ErrNoActiveTurn
+	}
+	if r.loop != nil && r.loop.GetActiveTurnByScope(r.workspace, r.metadata.SessionKey) == nil {
+		return controller.ErrNoActiveTurn
+	}
 	steer := r.steer
 	if steer == nil && r.loop != nil {
 		steer = r.loop.Steer
@@ -608,6 +621,29 @@ func (r *nativeCodingRuntime) Steer(ctx context.Context, input frontend.SteerInp
 		"main",
 		providers.Message{Role: "user", Content: input.Text},
 	)
+}
+
+func (r *nativeCodingRuntime) beginTurnControl() (uint64, error) {
+	r.turnControlMu.Lock()
+	defer r.turnControlMu.Unlock()
+	if r.activeTurnGeneration != 0 {
+		return 0, controller.ErrTurnActive
+	}
+	r.nextTurnGeneration++
+	r.activeTurnGeneration = r.nextTurnGeneration
+	return r.activeTurnGeneration, nil
+}
+
+func (r *nativeCodingRuntime) finishTurnControl(generation uint64) {
+	r.turnControlMu.Lock()
+	defer r.turnControlMu.Unlock()
+	if generation == 0 || r.activeTurnGeneration != generation {
+		return
+	}
+	r.activeTurnGeneration = 0
+	if r.clearCodingSteering != nil {
+		r.clearCodingSteering(r.workspace, r.metadata.SessionKey)
+	}
 }
 
 func (r *nativeCodingRuntime) HardCancel(_ context.Context) error {
@@ -1047,7 +1083,12 @@ func (r *nativeControllerRuntime) RunTurn(
 	input frontend.TurnInput,
 	onReady func(),
 ) error {
+	generation, err := r.beginTurnControl()
+	if err != nil {
+		return err
+	}
 	outcome, turnErr := r.runTurn(ctx, input, onReady)
+	r.finishTurnControl(generation)
 	return r.persistTurnOutcome(turnDisplayContent(input), outcome, turnErr)
 }
 

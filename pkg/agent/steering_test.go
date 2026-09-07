@@ -30,6 +30,28 @@ func userMessageContains(msg providers.Message, text string) bool {
 	return msg.Role == "user" && strings.Contains(msg.Content, text)
 }
 
+func TestClearCodingSteeringIsProfileAndScopeBound(t *testing.T) {
+	scope := newRuntimeSessionScope("/repo", "coding:thread-1")
+	queue := newSteeringQueue(SteeringOneAtATime)
+	if err := queue.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "late"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	regular := &AgentLoop{steering: queue}
+	if cleared := regular.ClearCodingSteering(scope.workspace, scope.sessionKey); cleared != 0 {
+		t.Fatalf("regular runtime cleared %d message(s), want 0", cleared)
+	}
+	if depth := queue.lenScope(scope); depth != 1 {
+		t.Fatalf("regular runtime queue depth = %d, want 1", depth)
+	}
+	coding := &AgentLoop{steering: queue, codingProfile: &CodingRuntimeProfile{}}
+	if cleared := coding.ClearCodingSteering(scope.workspace, scope.sessionKey); cleared != 1 {
+		t.Fatalf("coding runtime cleared %d message(s), want 1", cleared)
+	}
+	if depth := queue.lenScope(scope); depth != 0 {
+		t.Fatalf("coding runtime queue depth = %d, want 0", depth)
+	}
+}
+
 func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelation(t *testing.T) {
 	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
