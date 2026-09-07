@@ -22,6 +22,11 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/nodes/companion"
 )
 
+var (
+	hostAgentID = browserworker.OpaqueAgentID("browser")
+	hostActorID = browserworker.OpaqueActorID("telegram:owner")
+)
+
 type fakeBrowserHostFactory struct {
 	worker   browserworker.Worker
 	err      error
@@ -322,7 +327,7 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 
 	initial, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || initial.SnapshotGeneration != 1 || initial.URL != "about:blank" {
 		t.Fatalf("initial Observe() = %#v, %v", initial, err)
@@ -335,7 +340,7 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("b", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || navigated.SnapshotGeneration != 2 || navigated.Title != "Example" ||
 		len(navigated.Elements) != 1 || navigated.Elements[0].Ref == "e1" ||
@@ -365,7 +370,7 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("c", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if !errors.Is(err, ErrBrowserHostStale) || len(worker.actions) != 1 {
 		t.Fatalf("stale Navigate() error = %v, actions = %d", err, len(worker.actions))
@@ -373,14 +378,14 @@ func TestBrowserHostReusesWorkerForTypedLifecycle(t *testing.T) {
 
 	closed, err := host.Close(t.Context(), BrowserHostCloseRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || closed.State != "closed" || worker.closeCalls != 1 {
 		t.Fatalf("Close() = %#v, %v, calls = %d", closed, err, worker.closeCalls)
 	}
 	closed, err = host.Close(t.Context(), BrowserHostCloseRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || closed.State != "closed" || worker.closeCalls != 1 {
 		t.Fatalf("repeated Close() = %#v, %v, calls = %d", closed, err, worker.closeCalls)
@@ -414,7 +419,7 @@ func TestBrowserHostDiagnosticsEnforcesFreshAuthorityAndSafeSummary(t *testing.T
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 0,
 			Categories: []string{"failed_requests"},
 		},
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	result, err := host.Diagnostics(t.Context(), request)
 	if err != nil || result.Categories[0].Entries[0].Path != "/api" ||
@@ -768,7 +773,7 @@ func TestBrowserHostCapturesNavigationBoundPageIdempotently(t *testing.T) {
 			Target: "page", ProfileRevision: "managed-v1",
 			BrowserPolicyRevision: strings.Repeat("a", 64),
 		},
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	first, err := host.Capture(context.Background(), request)
 	if err != nil || first.TransferID == "" || first.Size == 0 || first.SHA256 == "" {
@@ -824,7 +829,7 @@ func TestBrowserHostSerializesConcurrentCaptureRegistration(t *testing.T) {
 			Target: "page", ProfileRevision: "managed-v1",
 			BrowserPolicyRevision: strings.Repeat("a", 64),
 		},
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	registrationEntered := make(chan struct{})
 	registrationRelease := make(chan struct{})
@@ -897,7 +902,7 @@ func TestBrowserHostElementCaptureRequiresFreshSemanticTarget(t *testing.T) {
 			Target: "element", Ref: observation.Elements[0].Ref, ProfileRevision: "managed-v1",
 			BrowserPolicyRevision: strings.Repeat("a", 64),
 		},
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	if _, err = host.Capture(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 		t.Fatalf("Capture() detached element error = %v, want stale", err)
@@ -919,7 +924,7 @@ func TestBrowserHostExecutesBoundedScrollWithReadEffect(t *testing.T) {
 	}
 	if _, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -930,7 +935,7 @@ func TestBrowserHostExecutesBoundedScrollWithReadEffect(t *testing.T) {
 		Effect:             "read", CurrentOrigin: "about:blank",
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1", RoutedSessionID: "routed_session_1",
-		AgentID: "browser", ActorID: "telegram:owner",
+		AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || result.SnapshotGeneration != 2 || result.Snapshot != "after scroll" {
 		t.Fatalf("Scroll() = %#v, %v", result, err)
@@ -974,7 +979,7 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 		}
 		initial, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		})
 		if err != nil || len(initial.Elements) != 1 || initial.Elements[0].Ref == "driver_ref_1" ||
 			strings.Contains(initial.Snapshot, "driver_ref_1") {
@@ -987,7 +992,7 @@ func TestBrowserHostExecutesOnlyAttestedSemanticallyFreshClick(t *testing.T) {
 			Effect:             "external_commit", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		}
 		request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
 		if err != nil {
@@ -1121,7 +1126,7 @@ func TestBrowserHostReferenceBindingPreservesProjectedSnapshotLimit(t *testing.T
 	streamed, err := host.PrepareObservationOutput(nodes.BrowserHostObservationOutputRequest{
 		SessionID: observed.SessionID, RoutedSessionID: "routed_session_1",
 		InvocationID: "browser_observe_dense_refs_1", WorkspaceID: "workspace_1",
-		BrowserTarget: "companion", AgentID: "browser", ActorID: "telegram:owner",
+		BrowserTarget: "companion", AgentID: hostAgentID, ActorID: hostActorID,
 	}, observed)
 	if err != nil || streamed.Output == nil {
 		t.Fatalf("PrepareObservationOutput() = %#v, %v", streamed, err)
@@ -1174,7 +1179,7 @@ func TestBrowserHostExecutesBoundProtectedDialog(t *testing.T) {
 	}
 	initial, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || initial.PendingDialog == nil {
 		t.Fatalf("initial dialog = %#v, %v", initial, err)
@@ -1192,7 +1197,7 @@ func TestBrowserHostExecutesBoundProtectedDialog(t *testing.T) {
 		ProfileRevision: "managed-v1", DialogType: "prompt",
 		DialogMessageDigest: nodes.BrowserDialogMessageDigest("prompt", message),
 		DialogMessageBytes:  len(message), InputDigest: nodes.BrowserInputDigest(secret), InputBytes: len(secret),
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
 	if err != nil {
@@ -1237,7 +1242,7 @@ func TestBrowserHostRejectsReplacedDialogBeforeDispatch(t *testing.T) {
 	}
 	if _, err = host.Observe(t.Context(), BrowserHostObserveRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1252,7 +1257,7 @@ func TestBrowserHostRejectsReplacedDialogBeforeDispatch(t *testing.T) {
 		ProfileRevision: "managed-v1", DialogType: "confirm",
 		DialogMessageDigest: nodes.BrowserDialogMessageDigest("confirm", "First"),
 		DialogMessageBytes:  len("First"),
-		RoutedSessionID:     "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID:     "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	if _, err = host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostStale) {
 		t.Fatalf("Dialog(replaced) error = %v, want stale", err)
@@ -1300,7 +1305,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 		}
 		initial, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 			SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1320,7 +1325,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			Effect: "local_edit", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		}
 		result, err := host.Act(t.Context(), request)
 		if err != nil || result.SnapshotGeneration != 2 {
@@ -1357,7 +1362,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 				Effect: test.effect, CurrentOrigin: "https://example.com",
 				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 				ProfileRevision: "managed-v1", ExpectedRole: test.role, ExpectedName: "Control",
-				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+				RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 			}
 			result, err := host.Act(t.Context(), request)
 			if err != nil || result.SnapshotGeneration != 2 {
@@ -1380,7 +1385,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			Effect:             "local_edit", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", ExpectedRole: "radio", ExpectedName: "Primary",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		}
 		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Uncheck(radio) error = %v, want denied", err)
@@ -1402,7 +1407,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			Effect: "local_edit", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		}
 		result, err := host.Act(t.Context(), request)
 		if err != nil || result.SnapshotGeneration != 2 {
@@ -1440,7 +1445,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 				Effect: "local_edit", CurrentOrigin: "https://example.com",
 				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 				ProfileRevision: "managed-v1", ExpectedRole: test.role, ExpectedName: test.label,
-				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+				RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 			}
 			result, err := host.Act(t.Context(), request)
 			if err != nil || result.SnapshotGeneration != 2 || len(worker.actions) != 1 {
@@ -1464,7 +1469,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 				Effect:             "external_commit", Confirmation: confirmation, CurrentOrigin: "https://example.com",
 				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 				ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
-				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+				RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 			}
 			if confirmation == "request" {
 				request.ApprovalDigest, _ = nodes.BrowserApprovalDigest(browserHostActInput(request))
@@ -1493,7 +1498,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", ExpectedRole: "textbox", ExpectedName: "Display name",
 			InputDigest: nodes.BrowserInputDigest("Ada"), InputBytes: len("Ada"),
-			RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+			RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 		}
 		request.ApprovalDigest, _ = nodes.BrowserApprovalDigest(browserHostActInput(request))
 		result, err := host.Act(t.Context(), request)
@@ -1524,8 +1529,8 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			ExpectedRole:          "textbox",
 			ExpectedName:          "Display name",
 			RoutedSessionID:       "routed_session_1",
-			AgentID:               "browser",
-			ActorID:               "telegram:owner",
+			AgentID:               hostAgentID,
+			ActorID:               hostActorID,
 		}
 		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Fill(over profile limit) error = %v, want denied", err)
@@ -1561,8 +1566,8 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			ExpectedRole:          "textbox",
 			ExpectedName:          "Display name",
 			RoutedSessionID:       "routed_session_1",
-			AgentID:               "browser",
-			ActorID:               "telegram:owner",
+			AgentID:               hostAgentID,
+			ActorID:               hostActorID,
 		}
 		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Fill(private denial) error = %v, want denied", err)
@@ -1597,8 +1602,8 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			ExpectedRole:          "textbox",
 			ExpectedName:          "Display name",
 			RoutedSessionID:       "routed_session_1",
-			AgentID:               "browser",
-			ActorID:               "telegram:owner",
+			AgentID:               hostAgentID,
+			ActorID:               hostActorID,
 		}
 		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
 			t.Fatalf("Fill(final denial) error = %v, want denied", err)
@@ -1619,7 +1624,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			Effect:             "unknown", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", RoutedSessionID: "routed_session_1",
-			AgentID: "browser", ActorID: "telegram:owner",
+			AgentID: hostAgentID, ActorID: hostActorID,
 		}
 		var err error
 		request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
@@ -1649,7 +1654,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 			Effect: "unknown", CurrentOrigin: "https://example.com",
 			PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 			ProfileRevision: "managed-v1", RoutedSessionID: "routed_session_1",
-			AgentID: "browser", ActorID: "telegram:owner",
+			AgentID: hostAgentID, ActorID: hostActorID,
 		}
 		request.ApprovalDigest, _ = nodes.BrowserApprovalDigest(browserHostActInput(request))
 		if _, err := host.Act(t.Context(), request); !errors.Is(err, ErrBrowserHostDenied) {
@@ -1671,12 +1676,20 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 					"navigation_1", "navigation_1", "navigation_2", "navigation_2",
 				}
 				request := BrowserHostActRequest{
-					SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-					ActionInvocationID: "browser_replaced_" + action,
-					Effect:             "local_edit", CurrentOrigin: "https://example.com",
-					PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
-					ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
-					RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+					SessionID:             "browser_session_1",
+					TabID:                 "tab_primary",
+					SnapshotGeneration:    1,
+					ActionInvocationID:    "browser_replaced_" + action,
+					Effect:                "local_edit",
+					CurrentOrigin:         "https://example.com",
+					PreparedActionHash:    strings.Repeat("b", 64),
+					BrowserPolicyRevision: strings.Repeat("a", 64),
+					ProfileRevision:       "managed-v1",
+					ExpectedRole:          "combobox",
+					ExpectedName:          "State",
+					RoutedSessionID:       "routed_session_1",
+					AgentID:               hostAgentID,
+					ActorID:               hostActorID,
 				}
 				if action == "select" {
 					request.Action = browserworker.Action{
@@ -1723,7 +1736,7 @@ func TestBrowserHostExecutesTypedSelectAndDocumentPress(t *testing.T) {
 				Effect:             "local_edit", CurrentOrigin: "https://example.com",
 				PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 				ProfileRevision: "managed-v1", ExpectedRole: "combobox", ExpectedName: "State",
-				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+				RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 			}
 			if action == "select" {
 				request.Action = browserworker.Action{
@@ -1785,7 +1798,7 @@ func TestBrowserHostExecutesApprovedDragWithFreshSourceAndDestination(t *testing
 	}
 	initial, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || len(initial.Elements) != 2 {
 		t.Fatalf("Observe() = %#v, %v", initial, err)
@@ -1800,7 +1813,7 @@ func TestBrowserHostExecutesApprovedDragWithFreshSourceAndDestination(t *testing
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1", ExpectedRole: source.Role, ExpectedName: source.Name,
 		DestinationExpectedRole: destination.Role, DestinationExpectedName: destination.Name,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	request.ApprovalDigest, err = nodes.BrowserApprovalDigest(browserHostActInput(request))
 	if err != nil {
@@ -1821,8 +1834,15 @@ func TestBrowserHostEnforcesLocalPrincipalLimitsAndSingleSession(t *testing.T) {
 	factory := &fakeBrowserHostFactory{worker: worker}
 	host := newTestBrowserHost(t, factory)
 
+	cleartext := browserHostOpenFixture()
+	cleartext.AgentID = "browser"
+	cleartext.ActorID = "telegram:owner"
+	if _, err := host.Open(t.Context(), cleartext); !errors.Is(err, ErrBrowserHostDenied) ||
+		len(factory.requests) != 0 {
+		t.Fatalf("clear-text principal Open() error = %v, requests = %d", err, len(factory.requests))
+	}
 	denied := browserHostOpenFixture()
-	denied.ActorID = "telegram:intruder"
+	denied.ActorID = browserworker.OpaqueActorID("telegram:intruder")
 	if _, err := host.Open(t.Context(), denied); !errors.Is(err, ErrBrowserHostDenied) ||
 		len(factory.requests) != 0 {
 		t.Fatalf("unauthorized Open() error = %v, requests = %d", err, len(factory.requests))
@@ -1862,7 +1882,7 @@ func TestBrowserHostBindsEveryCommandToRoutedSession(t *testing.T) {
 	}
 	status := BrowserHostStatusRequest{
 		SessionID: "browser_session_1", RoutedSessionID: "routed_session_2",
-		ProfileRevision: "managed-v1", AgentID: "browser", ActorID: "telegram:owner",
+		ProfileRevision: "managed-v1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	if _, err := host.Status(t.Context(), status); !errors.Is(err, ErrBrowserHostDenied) {
 		t.Fatalf("cross-session Status() error = %v", err)
@@ -1870,7 +1890,7 @@ func TestBrowserHostBindsEveryCommandToRoutedSession(t *testing.T) {
 	if _, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 		SessionID: "browser_session_1", RoutedSessionID: "routed_session_2",
 		TabID: "tab_primary", SnapshotGeneration: 1,
-		AgentID: "browser", ActorID: "telegram:owner",
+		AgentID: hostAgentID, ActorID: hostActorID,
 	}); !errors.Is(err, ErrBrowserHostDenied) {
 		t.Fatalf("cross-session Observe() error = %v", err)
 	}
@@ -1947,7 +1967,7 @@ func TestBrowserHostRetriesFailedStartupCleanupOnClose(t *testing.T) {
 	worker.closeErr = nil
 	closed, err := host.Close(t.Context(), BrowserHostCloseRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || closed.State != "closed" || worker.closeCalls != 2 {
 		t.Fatalf("cleanup Close() = %#v, %v, closes = %d", closed, err, worker.closeCalls)
@@ -1972,7 +1992,7 @@ func TestBrowserHostFailedCleanupKeepsProfileOccupied(t *testing.T) {
 	worker.closeErr = nil
 	if _, err := host.Close(t.Context(), BrowserHostCloseRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1999,7 +2019,7 @@ func TestBrowserHostPreservesAdmittedIdleLimitOnActivity(t *testing.T) {
 	host.now = func() time.Time { return time.Unix(101, 0).UTC() }
 	observed, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2012,7 +2032,7 @@ func TestBrowserHostPreservesAdmittedIdleLimitOnActivity(t *testing.T) {
 	}
 	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || observed.SnapshotGeneration != 1 || status.IdleExpiresAt != 104 {
 		t.Fatalf("activity status = %#v, observation = %#v, error = %v", status, observed, err)
@@ -2041,7 +2061,7 @@ func TestBrowserHostReservesInvocationAndQuarantinesAmbiguousExecute(t *testing.
 	}
 	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || status.State != "lost" || status.Reason != "outcome_unknown" ||
 		status.Recovery != "close" {
@@ -2084,14 +2104,14 @@ func TestBrowserHostPreservesReadySessionAfterVerifiedNavigationFailure(t *testi
 	}
 	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || status.State != "ready" || status.Reason != "" || status.Recovery != "" {
 		t.Fatalf("preserved Status() = %#v, %v", status, err)
 	}
 	observed, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 2,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || observed.SnapshotGeneration != 2 || observed.Snapshot != stable.Snapshot {
 		t.Fatalf("post-failure Observe() = %#v, %v", observed, err)
@@ -2211,7 +2231,7 @@ func TestBrowserHostCloseDuringOpenCannotResurrectWorker(t *testing.T) {
 	<-factory.started
 	closed, err := host.Close(t.Context(), BrowserHostCloseRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || closed.State != "closed" {
 		t.Fatalf("Close() during open = %#v, %v", closed, err)
@@ -2233,7 +2253,7 @@ func TestBrowserHostStatusNeverRecreatesLostWorker(t *testing.T) {
 	}
 	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || status.State != "lost" || status.Recovery != "close" ||
 		len(factory.requests) != 1 {
@@ -2252,7 +2272,7 @@ func TestBrowserHostExpiresAndClosesIdleWorker(t *testing.T) {
 	}
 	status, err := host.Status(t.Context(), BrowserHostStatusRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || status.State != "closed" || status.Reason != "session_expired" ||
 		worker.closeCalls != 1 {
@@ -2443,6 +2463,31 @@ func newTestBrowserHost(t *testing.T, factory browserHostFactory) *BrowserHost {
 	return host
 }
 
+func TestBrowserHostSnapshotsOpaqueCompanionGrants(t *testing.T) {
+	profile := browserHostProfileFixture()
+	worker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{"managed": profile},
+		map[string]browserHostFactory{"managed": &fakeBrowserHostFactory{worker: worker}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	if profile.AllowedAgents[0] != "browser" || profile.AllowedActors[0] != "telegram:owner" {
+		t.Fatalf("caller profile grants mutated: agents=%#v actors=%#v", profile.AllowedAgents, profile.AllowedActors)
+	}
+	snapshot := host.profiles["managed"]
+	if len(snapshot.AllowedAgents) != 1 || snapshot.AllowedAgents[0] != hostAgentID ||
+		len(snapshot.AllowedActors) != 1 || snapshot.AllowedActors[0] != hostActorID {
+		t.Fatalf("host grant snapshot = agents=%#v actors=%#v", snapshot.AllowedAgents, snapshot.AllowedActors)
+	}
+	opened, err := host.Open(t.Context(), browserHostOpenFixture())
+	if err != nil || opened.State != "ready" {
+		t.Fatalf("Open(opaque gateway principals) = %#v, %v", opened, err)
+	}
+}
+
 func TestBrowserHostOpensExplicitApprovedActionProfile(t *testing.T) {
 	profile := browserHostProfileFixture()
 	profile.DryRun = false
@@ -2541,7 +2586,7 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 			Action: "click", Effect: "external_commit", Origin: "https://example.com",
 			Role: "button", Name: "Save",
 		},
-		AgentID: "browser", ActorID: "telegram:owner",
+		AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || result.Decision != browserpolicy.DecisionAllow ||
 		result.PolicyRevision != policyRevision {
@@ -2555,7 +2600,7 @@ func TestBrowserHostRevalidatesRestrictedHookAtFinalDispatch(t *testing.T) {
 		Effect:             "read", CurrentOrigin: observed.Origin,
 		PreparedActionHash: strings.Repeat("b", 64), BrowserPolicyRevision: strings.Repeat("a", 64),
 		ProfileRevision: "managed-v1", ExpectedRole: "button", ExpectedName: "Save",
-		AgentID: "browser", ActorID: "telegram:owner",
+		AgentID: hostAgentID, ActorID: hostActorID,
 	}
 	request.PolicyEffect = "external_commit"
 	request.RestrictedDecision = browserpolicy.DecisionAllow
@@ -2658,7 +2703,7 @@ func TestBrowserHostExecutesContextLifecycleWithBoundAuthority(t *testing.T) {
 	request := nodes.BrowserHostContextRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
 		RoutedSessionID: "routed_session_1", RequestID: "context_request_1",
-		AgentID: "browser", ActorID: "telegram:owner", Operation: "list",
+		AgentID: hostAgentID, ActorID: hostActorID, Operation: "list",
 	}
 	listed, err := host.Contexts(t.Context(), request)
 	if err != nil || listed.Catalog.SelectedTabID != "context_tab_1" {
@@ -2685,7 +2730,7 @@ func TestBrowserHostExecutesContextLifecycleWithBoundAuthority(t *testing.T) {
 	}
 	observed, err := host.Observe(t.Context(), BrowserHostObserveRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 2,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	})
 	if err != nil || observed.URL != "https://frame.example/" ||
 		!strings.Contains(observed.Snapshot, "frame-only") || worker.observeCalls != 0 {
@@ -2723,7 +2768,7 @@ func TestBrowserHostContextListPreservesEquivalentObservationAuthority(t *testin
 	contextRequest := nodes.BrowserHostContextRequest{
 		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
 		RoutedSessionID: "routed_session_1", RequestID: "context_request_1",
-		AgentID: "browser", ActorID: "telegram:owner", Operation: "list",
+		AgentID: hostAgentID, ActorID: hostActorID, Operation: "list",
 	}
 	if _, err := host.Contexts(t.Context(), contextRequest); err != nil {
 		t.Fatalf("first Contexts(list) error = %v", err)
@@ -2778,7 +2823,7 @@ func TestBrowserHostClassifiesContextSelectionStaleByDispatchCertainty(t *testin
 			request := nodes.BrowserHostContextRequest{
 				SessionID: "browser_session_1", ProfileRevision: "managed-v1",
 				RoutedSessionID: "routed_session_1", RequestID: "context_request_1",
-				AgentID: "browser", ActorID: "telegram:owner", Operation: "open",
+				AgentID: hostAgentID, ActorID: hostActorID, Operation: "open",
 			}
 			opened, err := host.Contexts(t.Context(), request)
 			if err != nil {
@@ -2794,7 +2839,7 @@ func TestBrowserHostClassifiesContextSelectionStaleByDispatchCertainty(t *testin
 			}
 			status, statusErr := host.Status(t.Context(), BrowserHostStatusRequest{
 				SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-				RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+				RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 			})
 			if statusErr != nil || status.State != test.wantState || status.Reason != test.wantReason {
 				t.Fatalf("Status() = %#v, %v", status, statusErr)
@@ -2807,8 +2852,8 @@ func browserHostOpenFixture() BrowserHostOpenRequest {
 	return BrowserHostOpenRequest{
 		SessionID: "browser_session_1", Profile: "managed", ProfileRevision: "managed-v1",
 		BrowserPolicyRevision: strings.Repeat("a", 64), RoutedSessionID: "routed_session_1",
-		AgentID: "browser",
-		ActorID: "telegram:owner", DryRun: true, Limits: nodes.BrowserLimits{}.Effective(),
+		AgentID: hostAgentID,
+		ActorID: hostActorID, DryRun: true, Limits: nodes.BrowserLimits{}.Effective(),
 	}
 }
 
@@ -2820,13 +2865,13 @@ func browserHostNavigateFixture() BrowserHostActRequest {
 		Effect:             "navigation", CurrentOrigin: "about:blank",
 		PreparedActionHash:    strings.Repeat("b", 64),
 		BrowserPolicyRevision: strings.Repeat("a", 64), ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 }
 
 func browserHostObserveFixture() BrowserHostObserveRequest {
 	return BrowserHostObserveRequest{
 		SessionID: "browser_session_1", TabID: "tab_primary", SnapshotGeneration: 1,
-		RoutedSessionID: "routed_session_1", AgentID: "browser", ActorID: "telegram:owner",
+		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
 	}
 }
