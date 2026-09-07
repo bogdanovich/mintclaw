@@ -62,7 +62,7 @@ The parts that would make remote coding truthful do not yet exist on main:
 | Required owner | Missing merged prerequisite |
 | --- | --- |
 | Local coding runtime | P7.1 stable non-interactive new/resume execution and machine events |
-| Worker lifecycle | P7.2 decision and implementation for start/resume/status/steer/cancel independent of TUI state |
+| Worker lifecycle | P7.2 task-scoped worker control for start/resume/status/steer/cancel independent of TUI state |
 | Repository isolation | P7.3 isolated worktree allocation, writer ownership, safe cleanup, and conflict handoff |
 | Durable coding task | a typed task-to-thread/worktree binding and terminal deliverable projection |
 | Node coding host | project alias catalogue, node-local coding policy, worker adapter, and accepted-task reconciliation |
@@ -81,8 +81,10 @@ evidenced:
 
 1. P7.1 exposes one stable non-interactive coding execution contract for new
    and resumed native threads, with typed events and cancellation outcomes.
-2. P7.2 selects one worker boundary that supports start, resume, status,
-   steer, cancel, crash recovery, and upgrade without depending on a TUI.
+2. P7.2 implements the task-scoped pipe worker selected by the
+   [placement decision](local-coding-agent-p7-2-worker-placement.md), including
+   start, resume, status, steer, cancel, crash recovery, and version
+   negotiation without depending on a TUI.
 3. P7.3 owns isolated worktree creation, branch identity, exclusive writer
    lease, dirty/conflict handoff, cancellation, and non-destructive cleanup.
 4. The canonical `CodingThread` lifecycle can represent running,
