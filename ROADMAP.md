@@ -119,7 +119,9 @@ architecture.
 5. Treat XFA as an explicit capability boundary. Use a verified XFA-capable
    renderer or editor when one is configured; otherwise stop with a structured
    unsupported-capability result. Editing embedded datasets alone must never be
-   reported as a completed visible form.
+   reported as a completed visible form. A browser-based schema or data-entry
+   view may assist the workflow, but it is not a correctness backend unless the
+   exported PDF also passes the authoritative renderer and verification gates.
 6. Route high-risk interpretation, cross-field reconciliation, and the final
    document audit through a deliberative high-capability model. Lightweight
    models may perform routine extraction, but a fallback to one must not
