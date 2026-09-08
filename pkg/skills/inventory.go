@@ -75,7 +75,10 @@ func NewWorkspaceSkillInventoryWithLimits(
 	workspace string,
 	limits ManagedSkillLimits,
 ) *WorkspaceSkillInventory {
-	workspaceRoot := filepath.Clean(workspace)
+	workspaceRoot, err := filepath.Abs(filepath.Clean(workspace))
+	if err != nil {
+		workspaceRoot = filepath.Clean(workspace)
+	}
 	return &WorkspaceSkillInventory{
 		workspaceRoot: workspaceRoot,
 		skillsRoot:    filepath.Join(workspaceRoot, "skills"),
@@ -88,6 +91,9 @@ func NewWorkspaceSkillInventoryWithLimits(
 func (inventory *WorkspaceSkillInventory) ValidateRoot() error {
 	if inventory == nil {
 		return errors.New("workspace skill inventory is required")
+	}
+	if err := validateRealDirectoryAncestors(inventory.workspaceRoot); err != nil {
+		return fmt.Errorf("inspect workspace root: %w", err)
 	}
 	workspaceInfo, err := os.Lstat(inventory.workspaceRoot)
 	if err != nil {
@@ -397,6 +403,35 @@ func managedSkillFromScan(managed ManagedSkill, scanErr error) (ManagedSkill, er
 
 func invalidManagedSkillError(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalidManagedSkill, fmt.Sprintf(format, args...))
+}
+
+func validateRealDirectoryAncestors(path string) error {
+	absoluteParent, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("resolve absolute path: %w", err)
+	}
+	volume := filepath.VolumeName(absoluteParent)
+	current := volume + string(filepath.Separator)
+	remainder := strings.TrimPrefix(absoluteParent, volume)
+	remainder = strings.TrimLeft(remainder, string(filepath.Separator))
+
+	for _, component := range strings.Split(remainder, string(filepath.Separator)) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("workspace path contains a symlink component")
+		}
+		if !info.IsDir() {
+			return errors.New("workspace path contains a non-directory component")
+		}
+	}
+	return nil
 }
 
 type managedHashWriter interface {

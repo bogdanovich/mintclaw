@@ -13,7 +13,7 @@ import (
 const managedSkillMarkdown = "---\nname: test-skill\ndescription: Managed skill\n---\n\n# Managed Skill\n"
 
 func TestWorkspaceSkillInventoryInspectsLocalAndThirdPartySkills(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInventoryTempDir(t)
 	targetDir := writeManagedSkillFixture(t, workspace, "test-skill", managedSkillMarkdown)
 	writeManagedFile(t, targetDir, "references/guide.md", "guide", 0o644)
 	inventory := NewWorkspaceSkillInventory(workspace)
@@ -47,12 +47,12 @@ func TestWorkspaceSkillInventoryInspectsLocalAndThirdPartySkills(t *testing.T) {
 }
 
 func TestWorkspaceSkillInventoryRevisionIsOrderIndependent(t *testing.T) {
-	firstWorkspace := t.TempDir()
+	firstWorkspace := canonicalInventoryTempDir(t)
 	firstDir := writeManagedSkillFixture(t, firstWorkspace, "test-skill", managedSkillMarkdown)
 	writeManagedFile(t, firstDir, "scripts/z.sh", "z", 0o755)
 	writeManagedFile(t, firstDir, "references/a.md", "a", 0o644)
 
-	secondWorkspace := t.TempDir()
+	secondWorkspace := canonicalInventoryTempDir(t)
 	secondDir := writeManagedSkillFixture(t, secondWorkspace, "test-skill", managedSkillMarkdown)
 	writeManagedFile(t, secondDir, "references/a.md", "a", 0o644)
 	writeManagedFile(t, secondDir, "scripts/z.sh", "z", 0o755)
@@ -71,7 +71,7 @@ func TestWorkspaceSkillInventoryRevisionIsOrderIndependent(t *testing.T) {
 }
 
 func TestWorkspaceSkillInventoryRevisionTracksContentAndMode(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInventoryTempDir(t)
 	targetDir := writeManagedSkillFixture(t, workspace, "test-skill", managedSkillMarkdown)
 	scriptPath := writeManagedFile(t, targetDir, "scripts/check.sh", "first", 0o644)
 	inventory := NewWorkspaceSkillInventory(workspace)
@@ -113,7 +113,7 @@ func TestWorkspaceSkillInventoryRevisionTracksContentAndMode(t *testing.T) {
 }
 
 func TestWorkspaceSkillInventoryRejectsSymlinks(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInventoryTempDir(t)
 	targetDir := writeManagedSkillFixture(t, workspace, "test-skill", managedSkillMarkdown)
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	if err := os.WriteFile(outside, []byte("outside"), 0o600); err != nil {
@@ -133,7 +133,7 @@ func TestWorkspaceSkillInventoryRejectsSymlinks(t *testing.T) {
 }
 
 func TestWorkspaceSkillInventoryRejectsSymlinkRoot(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInventoryTempDir(t)
 	realRoot := t.TempDir()
 	if err := os.Symlink(realRoot, filepath.Join(workspace, "skills")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
@@ -148,8 +148,26 @@ func TestWorkspaceSkillInventoryRejectsSymlinkRoot(t *testing.T) {
 	}
 }
 
+func TestWorkspaceSkillInventoryRejectsSymlinkWorkspaceAncestor(t *testing.T) {
+	safeParent := canonicalInventoryTempDir(t)
+	realParent := canonicalInventoryTempDir(t)
+	realWorkspace := filepath.Join(realParent, "workspace")
+	if err := os.Mkdir(realWorkspace, 0o755); err != nil {
+		t.Fatalf("create real workspace: %v", err)
+	}
+	linkedParent := filepath.Join(safeParent, "linked-parent")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	inventory := NewWorkspaceSkillInventory(filepath.Join(linkedParent, "workspace"))
+	if err := inventory.ValidateRoot(); err == nil || !strings.Contains(err.Error(), "symlink component") {
+		t.Fatalf("ValidateRoot() error = %v", err)
+	}
+}
+
 func TestWorkspaceSkillInventoryExposesMalformedOrigin(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInventoryTempDir(t)
 	targetDir := writeManagedSkillFixture(t, workspace, "test-skill", managedSkillMarkdown)
 	writeManagedFile(t, targetDir, OriginMetadataFilename, `{"version":1}`, 0o600)
 
@@ -163,7 +181,7 @@ func TestWorkspaceSkillInventoryExposesMalformedOrigin(t *testing.T) {
 }
 
 func TestWorkspaceSkillInventoryEnforcesBounds(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInventoryTempDir(t)
 	targetDir := writeManagedSkillFixture(t, workspace, "test-skill", managedSkillMarkdown)
 	writeManagedFile(t, targetDir, "extra.txt", "extra", 0o600)
 	limits := DefaultManagedSkillLimits()
@@ -179,7 +197,7 @@ func TestWorkspaceSkillInventoryEnforcesBounds(t *testing.T) {
 }
 
 func TestWorkspaceSkillInventoryListsInvalidCanonicalEntries(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInventoryTempDir(t)
 	writeManagedSkillFixture(t, workspace, "test-skill", managedSkillMarkdown)
 	badDir := filepath.Join(workspace, "skills", "bad_name")
 	if err := os.MkdirAll(badDir, 0o755); err != nil {
@@ -200,7 +218,7 @@ func TestWorkspaceSkillInventoryListsInvalidCanonicalEntries(t *testing.T) {
 }
 
 func TestWorkspaceSkillInventoryRejectsMetadataNameMismatch(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInventoryTempDir(t)
 	writeManagedSkillFixture(
 		t,
 		workspace,
@@ -218,14 +236,14 @@ func TestWorkspaceSkillInventoryRejectsMetadataNameMismatch(t *testing.T) {
 }
 
 func TestWorkspaceSkillInventoryDistinguishesAbsentSkill(t *testing.T) {
-	_, err := NewWorkspaceSkillInventory(t.TempDir()).Inspect("missing-skill")
+	_, err := NewWorkspaceSkillInventory(canonicalInventoryTempDir(t)).Inspect("missing-skill")
 	if !errors.Is(err, ErrManagedSkillNotFound) {
 		t.Fatalf("Inspect() error = %v, want ErrManagedSkillNotFound", err)
 	}
 }
 
 func TestWorkspaceSkillInventorySupportsConcurrentIndependentReads(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInventoryTempDir(t)
 	writeManagedSkillFixture(t, workspace, "test-skill", managedSkillMarkdown)
 	inventory := NewWorkspaceSkillInventory(workspace)
 	want := mustInspectManagedSkill(t, inventory, "test-skill").Revision
@@ -289,4 +307,14 @@ func mustInspectManagedSkill(
 		t.Fatalf("Inspect(%q) = (%#v, %v)", name, managed, err)
 	}
 	return managed
+}
+
+func canonicalInventoryTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve temporary directory: %v", err)
+	}
+	return resolved
 }
