@@ -33,9 +33,32 @@ func (e *ExclusiveLeaseBusyError) Unwrap() error {
 type exclusiveServerLease struct {
 	file        *os.File
 	parent      *exclusiveLeaseParent
+	namespace   *exclusiveLeaseNamespace
 	reservation string
 	mu          sync.Mutex
 	closed      bool
+}
+
+type exclusiveLeaseNamespace struct {
+	file   *os.File
+	parent *exclusiveLeaseParent
+}
+
+func (namespace *exclusiveLeaseNamespace) validate() error {
+	if namespace == nil {
+		return nil
+	}
+	return namespace.parent.validateLeaf(namespace.file)
+}
+
+func (namespace *exclusiveLeaseNamespace) close() error {
+	if namespace == nil {
+		return nil
+	}
+	unlockErr := releaseExclusiveFileLock(namespace.file)
+	fileErr := namespace.file.Close()
+	namespace.parent.close()
+	return errors.Join(unlockErr, fileErr)
 }
 
 type exclusiveLeaseParent struct {
@@ -155,6 +178,19 @@ func acquireExclusiveServerLease(serverName, path string) (*exclusiveServerLease
 			releaseExclusiveLeasePath(reservation)
 		}
 	}()
+	namespace, err := acquireExclusiveLeaseNamespace(path)
+	if err != nil {
+		if errors.Is(err, errExclusiveLeaseBusy) {
+			return nil, &ExclusiveLeaseBusyError{Server: serverName}
+		}
+		return nil, fmt.Errorf("reserve MCP server exclusive lease namespace: %w", withoutPath(err))
+	}
+	releaseNamespace := true
+	defer func() {
+		if releaseNamespace {
+			_ = namespace.close()
+		}
+	}()
 	file, parent, err := openExclusiveLeaseFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open MCP server exclusive lease: %w", withoutPath(err))
@@ -173,9 +209,16 @@ func acquireExclusiveServerLease(serverName, path string) (*exclusiveServerLease
 		parent.close()
 		return nil, fmt.Errorf("validate MCP server exclusive lease: %w", err)
 	}
+	if err = namespace.validate(); err != nil {
+		_ = releaseExclusiveFileLock(file)
+		_ = file.Close()
+		parent.close()
+		return nil, fmt.Errorf("validate MCP server exclusive lease namespace: %w", err)
+	}
+	releaseNamespace = false
 	releaseReservation = false
 	return &exclusiveServerLease{
-		file: file, parent: parent, reservation: reservation,
+		file: file, parent: parent, namespace: namespace, reservation: reservation,
 	}, nil
 }
 
@@ -204,7 +247,7 @@ func (l *exclusiveServerLease) validate() error {
 	if l.closed {
 		return errExclusiveLeaseUnsafe
 	}
-	return l.parent.validateLeaf(l.file)
+	return errors.Join(l.namespace.validate(), l.parent.validateLeaf(l.file))
 }
 
 func (l *exclusiveServerLease) finish(requireStableNamespace bool) error {
@@ -220,14 +263,15 @@ func (l *exclusiveServerLease) finish(requireStableNamespace bool) error {
 		return fmt.Errorf("validate MCP server exclusive lease before release: %w", errExclusiveLeaseUnsafe)
 	}
 	if requireStableNamespace {
-		if err := l.parent.validateLeaf(l.file); err != nil {
+		if err := errors.Join(l.namespace.validate(), l.parent.validateLeaf(l.file)); err != nil {
 			return fmt.Errorf("validate MCP server exclusive lease before release: %w", err)
 		}
 	}
 	unlockErr := releaseExclusiveFileLock(l.file)
 	fileErr := l.file.Close()
 	l.parent.close()
+	namespaceErr := l.namespace.close()
 	releaseExclusiveLeasePath(l.reservation)
 	l.closed = true
-	return errors.Join(unlockErr, fileErr)
+	return errors.Join(unlockErr, fileErr, namespaceErr)
 }

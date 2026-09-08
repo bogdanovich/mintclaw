@@ -15,6 +15,8 @@ import (
 
 func exclusiveLeaseReservationKey(path string) string { return strings.ToLower(path) }
 
+func acquireExclusiveLeaseNamespace(string) (*exclusiveLeaseNamespace, error) { return nil, nil }
+
 func openExclusiveLeaseFile(path string) (*os.File, *exclusiveLeaseParent, error) {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {

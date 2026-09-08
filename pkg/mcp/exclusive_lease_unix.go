@@ -3,7 +3,9 @@
 package mcp
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -12,6 +14,48 @@ import (
 )
 
 func exclusiveLeaseReservationKey(path string) string { return path }
+
+func acquireExclusiveLeaseNamespace(path string) (*exclusiveLeaseNamespace, error) {
+	root, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		return nil, errExclusiveLeaseUnsafe
+	}
+	info, err := os.Lstat(root)
+	stat, statOK := infoSysStat(info)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		info.Mode()&os.ModeSticky == 0 || info.Mode().Perm()&0o002 == 0 ||
+		!statOK || stat.Uid != 0 {
+		return nil, errExclusiveLeaseUnsafe
+	}
+	digest := sha256.Sum256([]byte(path))
+	guardPath := filepath.Join(
+		root,
+		fmt.Sprintf(".mintclaw-exclusive-lease-%d-%x.lock", os.Geteuid(), digest),
+	)
+	file, parent, err := openExclusiveLeaseFile(guardPath)
+	if err != nil {
+		return nil, err
+	}
+	if err = tryAcquireExclusiveFileLock(file); err != nil {
+		_ = file.Close()
+		parent.close()
+		return nil, err
+	}
+	namespace := &exclusiveLeaseNamespace{file: file, parent: parent}
+	if err = namespace.validate(); err != nil {
+		_ = namespace.close()
+		return nil, err
+	}
+	return namespace, nil
+}
+
+func infoSysStat(info os.FileInfo) (*syscall.Stat_t, bool) {
+	if info == nil {
+		return nil, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return stat, ok
+}
 
 func openExclusiveLeaseFile(path string) (*os.File, *exclusiveLeaseParent, error) {
 	parent, leaf, err := openExclusiveLeaseParent(path)
@@ -43,7 +87,7 @@ func openExclusiveLeaseFile(path string) (*os.File, *exclusiveLeaseParent, error
 		parent.close()
 		return nil, nil, err
 	}
-	stat, statOK := info.Sys().(*syscall.Stat_t)
+	stat, statOK := infoSysStat(info)
 	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !statOK ||
 		stat.Nlink != 1 || stat.Uid != uint32(os.Geteuid()) {
 		_ = file.Close()

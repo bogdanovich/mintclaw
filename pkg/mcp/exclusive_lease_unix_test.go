@@ -3,10 +3,63 @@
 package mcp
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
+
+const exclusiveLeaseHelperPathEnv = "MINTCLAW_EXCLUSIVE_LEASE_HELPER_PATH"
+
+func TestExclusiveServerLeaseCrossProcessHelper(t *testing.T) {
+	path := os.Getenv(exclusiveLeaseHelperPathEnv)
+	if path == "" {
+		return
+	}
+	lease, err := acquireExclusiveServerLease("helper", path)
+	if lease != nil {
+		lease.release()
+		t.Fatal("helper acquired the rebound canonical lease")
+	}
+	if !errors.Is(err, errExclusiveLeaseBusy) {
+		t.Fatalf("helper acquire error = %v, want busy", err)
+	}
+}
+
+func TestExclusiveServerLeaseRejectsCrossProcessParentRebindContender(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "locks")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(parent, "playwright.lock")
+	lease, err := acquireExclusiveServerLease("playwright", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := parent + "-moved"
+	if err = os.Rename(parent, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestExclusiveServerLeaseCrossProcessHelper$")
+	command.Env = append(os.Environ(), exclusiveLeaseHelperPathEnv+"="+path)
+	if output, runErr := command.CombinedOutput(); runErr != nil {
+		t.Fatalf("helper-process contender error = %v, output = %s", runErr, output)
+	}
+	if err = os.Remove(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(moved, parent); err != nil {
+		t.Fatal(err)
+	}
+	if err = lease.close(); err != nil {
+		t.Fatalf("release after parent restore error = %v", err)
+	}
+}
 
 func assertExclusiveLeaseFileSecurity(t *testing.T, path string) {
 	t.Helper()
