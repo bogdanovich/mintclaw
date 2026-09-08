@@ -219,6 +219,15 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	}}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	al.cfg.ModelList = append(al.cfg.ModelList, &config.ModelConfig{
+		ModelName: "gpt-5.6-sol",
+		Provider:  "openai",
+		Model:     "gpt-5.6-sol",
+		Enabled:   true,
+	})
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return provider, modelConfig.Model, nil
+	}
 	manager := newInteractionChannelManager()
 	installInteractionChannelManager(t, al, manager)
 	requestTool, err := tools.NewRequestUserInputTool(tools.RequestUserInputToolOptions{})
@@ -252,7 +261,8 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
 
 	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
-		Model: agent.Model, TaskPrompt: "deploy", TaskID: "subagent-1", Critical: true,
+		Model: agent.Model, ModelOverride: "gpt-5.6-sol",
+		TaskPrompt: "deploy", TaskID: "subagent-1", Critical: true,
 	})
 	if err != nil || result == nil || !result.Control.TaskSuspended {
 		t.Fatalf("spawnSubTurn() = (%#v, %v), want suspended durable task", result, err)
@@ -264,6 +274,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	interaction, ok := al.interactionRegistryForWorkspace(agent.Workspace).FindNonterminalByTaskID("subagent-1")
 	if !ok || interaction.Route.SessionKey != "owner-session" ||
 		interaction.Origin.TaskID != "subagent-1" ||
+		interaction.Origin.ModelName != "gpt-5.6-sol" ||
 		interaction.Origin.ContinuationSessionKey != durableTaskSessionKey(
 			agent.Workspace, "subagent-1",
 		) {
@@ -309,6 +320,7 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 	second, ok := al.interactionRegistryForWorkspace(agent.Workspace).FindNonterminalByTaskID("subagent-1")
 	if !ok || second.ID == interaction.ID || second.Status != interactions.StatusWaiting ||
 		second.Route.SessionKey != "owner-session" ||
+		second.Origin.ModelName != "gpt-5.6-sol" ||
 		second.Origin.ContinuationSessionKey != interaction.Origin.ContinuationSessionKey {
 		t.Fatalf("second interaction = %#v", second)
 	}
@@ -363,6 +375,45 @@ func TestDurableTaskSubTurnSuspendsIntoWaitingTask(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("resumed task final was not delivered")
+	}
+}
+
+func TestSpawnSubTurnReleasesExactModelBinding(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &simpleConvProvider{})
+	defer cleanup()
+	al.cfg.ModelList = append(al.cfg.ModelList, &config.ModelConfig{
+		ModelName: "gpt-5.6-sol",
+		Provider:  "openai",
+		Model:     "gpt-5.6-sol",
+		Enabled:   true,
+	})
+	exactProvider := &countingStatefulProvider{}
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return exactProvider, modelConfig.Model, nil
+	}
+	parent := newTurnState(agent, turnSpec{Dispatch: DispatchRequest{
+		RouteSessionKey: "route-cleanup",
+		SessionKey:      "session-cleanup",
+	}}, al.newTurnEventScope(
+		agent.ID,
+		agent.Workspace,
+		"parent-cleanup",
+		newTurnContext(nil, nil, nil),
+	))
+	parent.ctx = t.Context()
+	parent.pendingResults = make(chan *toolshared.ToolResult, 1)
+	parent.concurrencySem = make(chan struct{}, defaultMaxConcurrentSubTurns)
+
+	result, err := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+		Model:         agent.Model,
+		ModelOverride: "gpt-5.6-sol",
+		TaskPrompt:    "complete the exact-model child",
+	})
+	if err != nil || result == nil {
+		t.Fatalf("spawnSubTurn() = (%#v, %v)", result, err)
+	}
+	if exactProvider.closeCount != 1 {
+		t.Fatalf("exact provider close count = %d, want 1", exactProvider.closeCount)
 	}
 }
 
@@ -996,6 +1047,113 @@ func TestSpawnSubTurnExecutionTimeoutStartsAfterAdmission(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for child completion")
+	}
+}
+
+func TestSpawnSubTurnRefreshesQueuedTargetAfterConfigReload(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Workspace = t.TempDir()
+	cfg.Agents.Defaults.ContextManager = "none"
+	cfg.Agents.Defaults.ModelName = "test-model"
+	cfg.Agents.Defaults.SubTurn.ConcurrencyTimeoutSec = 5
+	cfg.Agents.List = []config.AgentConfig{
+		{ID: "alpha", Default: true, Workspace: t.TempDir()},
+		{ID: "beta", MaxParallelTurns: 1, Workspace: t.TempDir()},
+	}
+	cfg.ModelList = []*config.ModelConfig{{
+		ModelName: "gpt-5.6-sol",
+		Provider:  "openai",
+		Model:     "gpt-5.6-sol",
+		Enabled:   true,
+	}}
+	provider := &modelRecordingProvider{}
+	al := NewAgentLoop(cfg, bus.NewMessageBus(), provider)
+	defer al.Close()
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return provider, modelConfig.Model, nil
+	}
+
+	_, releaseBusy, err := al.turns.acquireAgentTurn(t.Context(), "beta")
+	if err != nil {
+		t.Fatal(err)
+	}
+	busyReleased := false
+	defer func() {
+		if !busyReleased {
+			releaseBusy()
+		}
+	}()
+	alpha, ok := al.registry.GetAgent("alpha")
+	if !ok {
+		t.Fatal("alpha agent not found")
+	}
+	parent := &turnState{
+		ctx:            t.Context(),
+		turnID:         "parent-reload",
+		pendingResults: make(chan *toolshared.ToolResult, 1),
+		concurrencySem: make(chan struct{}, defaultMaxConcurrentSubTurns),
+		session:        &ephemeralSessionStore{},
+		agent:          alpha,
+		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
+			RouteSessionKey: "route-reload",
+			SessionKey:      "session-reload",
+		}}),
+	}
+	runtimeCh, closeEvents := subscribeRuntimeEventsForTest(
+		t,
+		al,
+		4,
+		runtimeevents.KindAgentSubTurnAdmission,
+	)
+	defer closeEvents()
+	childDone := make(chan error, 1)
+	go func() {
+		_, spawnErr := spawnSubTurn(t.Context(), al, parent, SubTurnConfig{
+			TargetAgentID: "beta",
+			ModelOverride: "gpt-5.6-sol",
+			TaskPrompt:    "run after reload",
+			Timeout:       time.Second,
+		})
+		childDone <- spawnErr
+	}()
+
+	for {
+		select {
+		case event := <-runtimeCh:
+			payload, payloadOK := event.Payload.(SubTurnAdmissionPayload)
+			if payloadOK && payload.AgentID == "beta" && payload.State == "queued" {
+				goto queued
+			}
+		case <-time.After(time.Second):
+			t.Fatal("child did not queue for beta admission")
+		}
+	}
+
+queued:
+	reloaded := *cfg
+	reloaded.Agents = cfg.Agents
+	reloaded.Agents.List = append([]config.AgentConfig(nil), cfg.Agents.List[:1]...)
+	prepared, err := al.PrepareConfigReload(t.Context(), provider, &reloaded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.Abort()
+	if err = prepared.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	releaseBusy()
+	busyReleased = true
+
+	select {
+	case err = <-childDone:
+		if err == nil || !strings.Contains(err.Error(), `agent "beta" is unavailable after config reload`) {
+			t.Fatalf("queued child error = %v, want removed target generation error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued child did not finish after config reload")
+	}
+	if got := provider.getLastModel(); got != "" {
+		t.Fatalf("removed target executed model %q", got)
 	}
 }
 

@@ -633,6 +633,26 @@ func TestDelegateTool_Execute_AllowAllPolicy(t *testing.T) {
 	}
 }
 
+func TestDelegateToolUsesTemporaryModelOverride(t *testing.T) {
+	spawner := &delegateMockSpawner{}
+	tool := newTestDelegateTool(t, DelegateToolConfig{
+		Spawner:         spawner,
+		AvailableModels: []string{"gpt-5.6-luna", "gpt-5.6-sol"},
+	})
+
+	result := tool.Execute(context.Background(), map[string]any{
+		"agent_id": "researcher",
+		"task":     "review the contract",
+		"model":    "gpt-5.6-sol",
+	})
+	if result == nil || result.IsError {
+		t.Fatalf("result = %#v, want success", result)
+	}
+	if spawner.lastCfg.ModelOverride != "gpt-5.6-sol" {
+		t.Fatalf("ModelOverride = %q, want gpt-5.6-sol", spawner.lastCfg.ModelOverride)
+	}
+}
+
 func TestDelegateTool_Execute_UserOnlyMarksHandled(t *testing.T) {
 	spawner := &delegateMockSpawner{}
 	tool := newTestDelegateTool(t, DelegateToolConfig{Spawner: spawner})

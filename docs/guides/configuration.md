@@ -729,6 +729,25 @@ Example injected shape:
 
 In practice, this means a generalist agent can choose a peer based on its role description, then call `spawn` with the peer's `agent_id`. The runtime resolves the rest.
 
+### Per-task model selection
+
+The `subagent`, `spawn`, and `delegate` tools expose an optional `model`
+argument. Its allowed values are the enabled, non-virtual `model_name` aliases
+from `model_list`. This allows the agent to select a stronger model for a
+bounded high-value operation, or a faster/cheaper model for routine work.
+
+The selection is temporary by construction: the requested model runs in a
+child turn, while the parent conversation keeps its current model and resumes
+without an explicit restore step. An explicit child model takes precedence
+over `subagents.model` and `session_model_override_mode`, and it bypasses
+automatic light-model routing for that child task. Provider fallbacks still
+apply on errors.
+
+For example, if `gpt-5.6-sol` is an enabled `model_name`, a parent agent can
+call `subagent` with `model: "gpt-5.6-sol"` to edit or verify one PDF and then
+continue on its existing default. Tool allow/deny policy and normal child-turn
+depth, concurrency, timeout, and workspace restrictions still apply.
+
 ### 🔒 Security Sandbox
 
 MintClaw runs in a sandboxed environment by default. The agent can only access files and execute commands within the configured workspace.

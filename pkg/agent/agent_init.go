@@ -238,6 +238,7 @@ func registerSharedTools(
 	provider providers.LLMProvider,
 ) {
 	allowReadPaths := buildAllowReadPatterns(cfg)
+	availableModels := availableChildModelNames(cfg)
 	var ttsProvider tts.TTSProvider
 	if cfg.Tools.IsToolEnabled("send_tts") {
 		ttsProvider = tts.DetectTTS(cfg)
@@ -438,11 +439,12 @@ func registerSharedTools(
 		subagentEnabled := cfg.Tools.IsToolEnabled("subagent")
 		if spawnEnabled && subagentEnabled {
 			subagentManager, managerErr := tools.NewSubagentManager(tools.SubagentManagerConfig{
-				DefaultModel: agent.Model,
-				MaxTokens:    agent.MaxTokens,
-				Temperature:  agent.Temperature,
-				Spawner:      NewSubTurnSpawner(al),
-				TaskRegistry: taskRegistry,
+				DefaultModel:    agent.Model,
+				AvailableModels: availableModels,
+				MaxTokens:       agent.MaxTokens,
+				Temperature:     agent.Temperature,
+				Spawner:         NewSubTurnSpawner(al),
+				TaskRegistry:    taskRegistry,
 			})
 			if managerErr != nil {
 				logger.ErrorCF("agent", "Failed to initialize subagent manager", map[string]any{
@@ -490,6 +492,7 @@ func registerSharedTools(
 				RequiresObjectiveChecklist: targetRequiresObjectiveChecklist,
 				SelfAgentID:                currentAgentID,
 				TaskRegistry:               taskRegistry,
+				AvailableModels:            availableModels,
 			})
 			if delegateErr != nil {
 				logger.ErrorCF("agent", "Failed to initialize delegate tool", map[string]any{
@@ -502,6 +505,20 @@ func registerSharedTools(
 		}
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.ToolPolicy, agent.Tools)
 	}
+}
+
+func availableChildModelNames(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	models := make([]string, 0, len(cfg.ModelList))
+	for _, model := range cfg.ModelList {
+		if model == nil || model.IsVirtual() || !model.Enabled {
+			continue
+		}
+		models = append(models, model.ModelName)
+	}
+	return models
 }
 
 func codingLayoutForAgent(profile *CodingRuntimeProfile, agentID string) (CodingRuntimeLayout, bool) {

@@ -290,7 +290,7 @@ func (al *AgentLoop) askSideQuestion(
 	routeSessionKey := ""
 	if opts != nil {
 		execution = opts.ModelBinding.ExecutionState()
-		routeSessionKey = opts.ModelBinding.RouteSessionKey
+		routeSessionKey = opts.ModelBinding.autoFallbackRouteSessionKey()
 	}
 	selection := al.selectCandidates(
 		execution,

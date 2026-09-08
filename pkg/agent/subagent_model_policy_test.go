@@ -2,6 +2,7 @@ package agent
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
@@ -43,7 +44,7 @@ func TestResolveSubagentModelPlan_Ignore(t *testing.T) {
 			SessionModelOverrideMode: subagentSessionModelOverrideIgnore,
 		},
 	}
-	got := resolveSubagentModelPlan(target, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(target, "gemini-flash-lite", "")
 	if got.Primary != "gpt-5.4" {
 		t.Fatalf("Primary = %q, want gpt-5.4", got.Primary)
 	}
@@ -60,7 +61,7 @@ func TestResolveSubagentModelPlan_Inherit(t *testing.T) {
 			SessionModelOverrideMode: subagentSessionModelOverrideInherit,
 		},
 	}
-	got := resolveSubagentModelPlan(target, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(target, "gemini-flash-lite", "")
 	if got.Primary != "gemini-flash-lite" {
 		t.Fatalf("Primary = %q, want gemini-flash-lite", got.Primary)
 	}
@@ -77,7 +78,7 @@ func TestResolveSubagentModelPlan_FallbackOnly(t *testing.T) {
 			SessionModelOverrideMode: subagentSessionModelOverrideFallbackOnly,
 		},
 	}
-	got := resolveSubagentModelPlan(target, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(target, "gemini-flash-lite", "")
 	if got.Primary != "gpt-5.4" {
 		t.Fatalf("Primary = %q, want gpt-5.4", got.Primary)
 	}
@@ -98,7 +99,7 @@ func TestResolveSubagentModelPlan_UsesConfiguredSubagentModel(t *testing.T) {
 			SessionModelOverrideMode: subagentSessionModelOverrideIgnore,
 		},
 	}
-	got := resolveSubagentModelPlan(target, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(target, "gemini-flash-lite", "")
 	if got.Primary != "kimi" {
 		t.Fatalf("Primary = %q, want kimi", got.Primary)
 	}
@@ -107,8 +108,30 @@ func TestResolveSubagentModelPlan_UsesConfiguredSubagentModel(t *testing.T) {
 	}
 }
 
+func TestResolveSubagentModelPlan_ExplicitModelWins(t *testing.T) {
+	target := &AgentInstance{
+		Model:     "gpt-5.6-luna",
+		Fallbacks: []string{"default-fallback"},
+		Subagents: &config.SubagentsConfig{
+			Model: &config.AgentModelConfig{
+				Primary:   "configured-child",
+				Fallbacks: []string{"child-fallback"},
+			},
+			SessionModelOverrideMode: subagentSessionModelOverrideInherit,
+		},
+	}
+
+	got := resolveSubagentModelPlan(target, "session-override", "gpt-5.6-sol")
+	if got.Primary != "gpt-5.6-sol" || !got.Explicit {
+		t.Fatalf("plan = %#v, want explicit gpt-5.6-sol", got)
+	}
+	if len(got.Fallbacks) != 1 || got.Fallbacks[0] != "child-fallback" {
+		t.Fatalf("Fallbacks = %#v, want child policy fallbacks", got.Fallbacks)
+	}
+}
+
 func TestResolveSubagentModelPlan_NilTarget(t *testing.T) {
-	got := resolveSubagentModelPlan(nil, "gemini-flash-lite")
+	got := resolveSubagentModelPlan(nil, "gemini-flash-lite", "")
 	if got.Primary != "" {
 		t.Fatalf("Primary = %q, want empty", got.Primary)
 	}
@@ -152,7 +175,7 @@ func TestBuildSubagentChildBinding_ReusesTargetRuntimeWhenPlanMatches(t *testing
 		},
 	}
 
-	got, err := al.buildSubagentChildBinding(parent, target)
+	got, err := al.buildSubagentChildBinding(parent, target, "")
 	if err != nil {
 		t.Fatalf("buildSubagentChildBinding() error = %v", err)
 	}
@@ -203,6 +226,14 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 				APIBase:   "https://example.invalid/v1",
 				Enabled:   true,
 			},
+			{
+				ModelName: "gpt-5.6-sol",
+				Provider:  "openai",
+				Model:     "gpt-5.6-sol",
+				APIKeys:   config.SimpleSecureStrings("test-key"),
+				APIBase:   "https://example.invalid/v1",
+				Enabled:   true,
+			},
 		},
 	}
 	al := &AgentLoop{cfg: cfg}
@@ -227,7 +258,7 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 		},
 	}
 
-	got, err := al.buildSubagentChildBinding(parent, target)
+	got, err := al.buildSubagentChildBinding(parent, target, "")
 	if err != nil {
 		t.Fatalf("buildSubagentChildBinding() error = %v", err)
 	}
@@ -242,4 +273,117 @@ func TestBuildSubagentChildBinding_PreservesTargetRoutingStateOnRebuild(t *testi
 		t.Fatal("ExecutionState().LightProvider = nil, want preserved provider")
 	}
 	got.Cleanup()
+
+	explicit, err := al.buildSubagentChildBinding(parent, target, "gpt-5.6-sol")
+	if err != nil {
+		t.Fatalf("explicit buildSubagentChildBinding() error = %v", err)
+	}
+	defer explicit.Cleanup()
+	explicitExecution := explicit.ExecutionState()
+	if explicitExecution.Model != "gpt-5.6-sol" || len(explicitExecution.Candidates) == 0 ||
+		explicitExecution.Candidates[0].DisplayName != "gpt-5.6-sol" {
+		t.Fatalf("explicit execution = %#v, want gpt-5.6-sol primary", explicitExecution)
+	}
+	if explicitExecution.Router != nil || len(explicitExecution.LightCandidates) != 0 ||
+		explicitExecution.LightProvider != nil {
+		t.Fatalf("explicit execution retained automatic light-model routing: %#v", explicitExecution)
+	}
+	if explicit.Override.Model != "gemini-flash-lite" {
+		t.Fatalf("explicit binding lost parent override metadata: %#v", explicit.Override)
+	}
+	if target.Model != "test-model" {
+		t.Fatalf("explicit child selection mutated parent agent model to %q", target.Model)
+	}
+	if invalid, invalidErr := al.buildSubagentChildBinding(parent, target, "missing-model"); invalidErr == nil {
+		invalid.Cleanup()
+		t.Fatal("unknown explicit model silently fell back to the target or session model")
+	}
+}
+
+func TestExactChildBindingIsolatesLightAndStickyRouting(t *testing.T) {
+	provider := &stickyFallbackProvider{}
+	al, target, cleanup := newTurnCoordFallbackTestLoop(t, provider)
+	defer cleanup()
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return provider, modelConfig.Model, nil
+	}
+	target.Router = routing.New(routing.RouterConfig{LightModel: "fallback-model", Threshold: 1})
+	target.LightCandidates = []providers.FallbackCandidate{target.Candidates[1]}
+	target.LightProvider = provider
+	parent := &turnState{opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
+		RouteSessionKey: "route-parent",
+	}})}
+
+	binding, err := al.buildSubagentChildBinding(parent, target, target.Model)
+	if err != nil {
+		t.Fatalf("buildSubagentChildBinding() error = %v", err)
+	}
+	defer binding.Cleanup()
+	execution := binding.ExecutionState()
+	if execution.Model != target.Model || binding.ExactModel != target.Model {
+		t.Fatalf("exact same-model binding = %#v, execution = %#v", binding, execution)
+	}
+	if execution.Router != nil || len(execution.LightCandidates) != 0 || execution.LightProvider != nil {
+		t.Fatalf("exact same-model binding retained light routing: %#v", execution)
+	}
+	if binding.RouteSessionKey != "route-parent" || binding.autoFallbackRouteSessionKey() != "" {
+		t.Fatalf("exact binding route isolation = %#v", binding)
+	}
+
+	err = al.setAutoModelSelection("route-parent", state.AutoModelSelection{
+		SelectedProvider: execution.Candidates[0].Provider,
+		SelectedModel:    execution.Candidates[0].Model,
+		ActiveProvider:   execution.Candidates[1].Provider,
+		ActiveModel:      execution.Candidates[1].Model,
+		Reason:           string(providers.FailoverRateLimit),
+		ExpiresAt:        time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := al.selectCandidates(execution, "", nil, binding.autoFallbackRouteSessionKey())
+	if selection.activeCandidates[0].StableKey() != execution.Candidates[0].StableKey() {
+		t.Fatalf("exact binding consumed parent sticky fallback: %#v", selection.activeCandidates)
+	}
+	if err = al.clearAutoModelSelection("route-parent"); err != nil {
+		t.Fatal(err)
+	}
+	al.modelExecution.updateAutoFallbackSelection(
+		binding.autoFallbackRouteSessionKey(),
+		selection.selectedCandidates,
+		&providers.FallbackResult{
+			Provider: execution.Candidates[1].Provider,
+			Model:    execution.Candidates[1].Model,
+			Attempts: []providers.FallbackAttempt{{Reason: providers.FailoverRateLimit}},
+		},
+		false,
+	)
+	if _, ok := al.getAutoModelSelection("route-parent"); ok {
+		t.Fatal("exact child mutated the parent sticky fallback selection")
+	}
+}
+
+func TestBindResumedInteractionModel_RebuildsExactSameModel(t *testing.T) {
+	provider := &simpleConvProvider{}
+	al, target, cleanup := newTurnCoordFallbackTestLoop(t, provider)
+	defer cleanup()
+	al.providerFactory = func(modelConfig *config.ModelConfig) (providers.LLMProvider, string, error) {
+		return provider, modelConfig.Model, nil
+	}
+	target.Router = routing.New(routing.RouterConfig{LightModel: "fallback-model", Threshold: 1})
+	target.LightCandidates = []providers.FallbackCandidate{target.Candidates[1]}
+	target.LightProvider = provider
+
+	binding := al.bindResumedInteractionModel("route-parent", target, target.Model)
+	defer binding.Cleanup()
+	execution := binding.ExecutionState()
+	if execution.Model != target.Model || binding.ExactModel != target.Model {
+		t.Fatalf("resumed exact binding = %#v, execution = %#v", binding, execution)
+	}
+	if execution.Router != nil || len(execution.LightCandidates) != 0 || execution.LightProvider != nil {
+		t.Fatalf("resumed exact binding retained light routing: %#v", execution)
+	}
+	if binding.RouteSessionKey != "route-parent" || binding.autoFallbackRouteSessionKey() != "" {
+		t.Fatalf("resumed exact binding route isolation = %#v", binding)
+	}
 }

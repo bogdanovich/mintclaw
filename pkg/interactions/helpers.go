@@ -63,6 +63,7 @@ func normalizeOrigin(origin Origin) Origin {
 	origin.ToolName = strings.TrimSpace(origin.ToolName)
 	origin.TaskID = strings.TrimSpace(origin.TaskID)
 	origin.ContinuationSessionKey = strings.TrimSpace(origin.ContinuationSessionKey)
+	origin.ModelName = strings.TrimSpace(origin.ModelName)
 	origin.ArgumentHash = strings.TrimSpace(origin.ArgumentHash)
 	origin.ExecutionContext = cloneExecutionContext(origin.ExecutionContext)
 	origin.ObjectiveChecklist = append([]ObjectiveChecklistItem(nil), origin.ObjectiveChecklist...)

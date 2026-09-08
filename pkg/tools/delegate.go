@@ -24,6 +24,7 @@ type DelegateTool struct {
 	requiresObjectiveChecklist func(targetAgentID string) bool
 	selfAgentID                string
 	taskRegistry               *taskregistry.Registry
+	models                     []string
 	taskSeq                    atomic.Int64
 }
 
@@ -33,6 +34,7 @@ type DelegateToolConfig struct {
 	RequiresObjectiveChecklist func(targetAgentID string) bool
 	SelfAgentID                string
 	TaskRegistry               *taskregistry.Registry
+	AvailableModels            []string
 }
 
 func NewDelegateTool(config DelegateToolConfig) (*DelegateTool, error) {
@@ -58,6 +60,7 @@ func NewDelegateTool(config DelegateToolConfig) (*DelegateTool, error) {
 		requiresObjectiveChecklist: config.RequiresObjectiveChecklist,
 		selfAgentID:                selfAgentID,
 		taskRegistry:               config.TaskRegistry,
+		models:                     normalizeAvailableModels(config.AvailableModels),
 	}, nil
 }
 
@@ -86,6 +89,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"type":        "string",
 			"description": "Clear description of the task to delegate",
 		},
+		"model": modelOverrideParameter(t.models),
 		"delivery_mode": map[string]any{
 			"type":        "string",
 			"description": "Optional sync result routing policy: parent_only, user_only, or user_and_parent. Defaults to parent_only.",
@@ -118,6 +122,10 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	task, _ := args["task"].(string)
 	if strings.TrimSpace(task) == "" {
 		return toolshared.ErrorResult("task is required and must be a non-empty string")
+	}
+	modelOverride, err := parseModelOverride(args["model"], t.models)
+	if err != nil {
+		return toolshared.ErrorResult(err.Error()).WithError(err)
 	}
 	deliveryMode, err := parseDelegateDeliveryMode(args["delivery_mode"])
 	if err != nil {
@@ -160,6 +168,7 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
 		TaskID:         taskID,
 		TargetAgentID:  agentID,
+		ModelOverride:  modelOverride,
 		TaskPrompt:     task,
 		Async:          false,
 		DeliveryMode:   deliveryMode,

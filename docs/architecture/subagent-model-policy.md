@@ -40,8 +40,8 @@ Supported fields:
 Child-run model selection follows this order:
 
 1. Explicit per-call model override.
-   Current MintClaw child tools do not expose this yet; the slot is reserved for
-   future extension.
+   The optional `model` argument on `subagent`, `spawn`, and `delegate` accepts
+   an exact enabled `model_list[].model_name`.
 2. Target agent `subagents.model`
 3. Global `agents.defaults.subagents.model`
 4. Target agent normal `model`
@@ -52,6 +52,33 @@ Session model override propagation is then applied according to
 1. `agents.list[].subagents.session_model_override_mode`
 2. `agents.defaults.subagents.session_model_override_mode`
 3. implicit default: `ignore`
+
+An explicit per-call model always wins over both the configured child model
+and an inherited session override. Automatic light-model routing is disabled
+for that child run so it cannot silently replace the requested model. Normal
+provider fallback candidates remain available if the requested model fails.
+The exact-model binding also ignores the parent route's sticky automatic
+fallback and never updates it; the route key remains attached only for session
+ownership and delivery. The same isolation is restored after a durable child
+resumes from human input or crosses a configuration reload.
+
+## Autonomous Per-Task Selection
+
+The child-tool schemas expose the enabled, non-virtual model names as the
+allowed values for `model`. This lets the parent model choose a stronger,
+faster, or cheaper configured model for a bounded task when that materially
+helps, or honor an explicit user request such as using `gpt-5.6-sol` for one
+PDF operation.
+
+This is delegation, not mutation of the parent session:
+
+- `subagent` waits for the selected-model child and returns its result inline.
+- `spawn` runs the selected-model child in the background.
+- `delegate` combines a named target agent's workspace and tools with the
+  explicit per-call model.
+- The parent continues on its existing model without a restore call.
+- A durable child that pauses for human input records its active model and
+  resumes on that model when it is still available.
 
 ## Mode Semantics
 
@@ -120,6 +147,7 @@ This policy intentionally does not:
 - rebuild the full parent runtime prompt for children
 - implicitly rewrite every child tool or async runtime
 - force all child agents to inherit a parent override unless configured
+- change the parent conversation's session model override
 
 The design is intentionally declarative: target child agents declare how much
 parent session model state they want to inherit.

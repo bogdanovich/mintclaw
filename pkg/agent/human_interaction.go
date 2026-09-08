@@ -236,6 +236,7 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 			ToolName:               request.Origin.ToolName,
 			TaskID:                 request.Origin.TaskID,
 			ContinuationSessionKey: request.Origin.ContinuationSessionKey,
+			ModelName:              request.Origin.ModelName,
 			ArgumentHash:           request.Origin.ArgumentHash,
 			ExecutionContext:       executionContext,
 			ObjectiveChecklist: append(
