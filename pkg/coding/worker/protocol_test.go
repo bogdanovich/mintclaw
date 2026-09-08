@@ -278,8 +278,40 @@ func TestEveryCommandRequiresIdempotencyKey(t *testing.T) {
 			}
 		})
 	}
-	if Method("snapshot.read").Valid() {
-		t.Fatal("snapshot.read belongs to the later event/snapshot protocol packet")
+	snapshot := Record{
+		SchemaVersion: ProtocolV1,
+		Type:          RecordRequest,
+		ID:            "snapshot-1",
+		Method:        MethodSnapshotRead,
+		Params: mustPayload(t, GenerationParams{
+			ControlIdentity: binding.ControlIdentity(),
+		}),
+	}
+	if !snapshot.Method.Valid() || snapshot.Method.RequiresIdempotencyKey() {
+		t.Fatal("snapshot.read must be a valid read-only command")
+	}
+	if _, err := Encode(snapshot); err != nil {
+		t.Fatalf("Encode(snapshot.read) error = %v", err)
+	}
+	snapshot.IdempotencyKey = "not-accepted"
+	if _, err := Encode(snapshot); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("Encode(snapshot.read with key) error = %v, want %v", err, ErrInvalidRecord)
+	}
+}
+
+func TestTurnStartRejectsAggregatePayloadBeyondRecordBudget(t *testing.T) {
+	binding := testBinding(t)
+	attachments := make([]TurnAttachment, 32)
+	for index := range attachments {
+		attachments[index] = TurnAttachment{SourcePath: "/" + strings.Repeat("p", MaxPathBytes-1)}
+	}
+	params := TurnStartParams{
+		ControlIdentity: binding.ControlIdentity(),
+		Text:            strings.Repeat("x", thread.MaxPromptBytes),
+		Attachments:     attachments,
+	}
+	if err := params.Validate(); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("TurnStartParams.Validate() error = %v, want %v", err, ErrRecordTooLarge)
 	}
 }
 
