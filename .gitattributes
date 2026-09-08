@@ -2,3 +2,6 @@
 *.sh text eol=lf
 docker/entrypoint.sh text eol=lf
 .gitignore text eol=lf
+
+# PDF fixtures contain fixed-width xref records whose trailing spaces are significant.
+pkg/document/testdata/*.pdf binary

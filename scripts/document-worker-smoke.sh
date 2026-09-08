@@ -14,6 +14,8 @@ trap 'rm -rf -- "$smoke_root"' EXIT HUP INT TERM
 
 binary="$smoke_root/mintclaw"
 report="$smoke_root/report.json"
+inspection="$smoke_root/inspection.json"
+protected="$smoke_root/protected.json"
 mintclaw_home="$smoke_root/home"
 
 cd "$repo_root"
@@ -27,7 +29,32 @@ grep -Fq '"operation": "acquire"' "$report"
 grep -Fq '"state": "succeeded"' "$report"
 grep -Fq '"content_type": "application/pdf"' "$report"
 
-if grep -Fq "$repo_root" "$report"; then
+MINTCLAW_HOME="$mintclaw_home" "$binary" document inspect \
+	--input pkg/document/testdata/text.pdf \
+	--json >"$inspection"
+
+grep -Fq '"operation": "inspect"' "$inspection"
+grep -Fq '"state": "succeeded"' "$inspection"
+grep -Fq '"name": "pdfcpu"' "$inspection"
+grep -Fq '"page_count"' "$inspection"
+grep -Fq '"extractable_text"' "$inspection"
+grep -Fq '"state": "present"' "$inspection"
+
+set +e
+MINTCLAW_HOME="$mintclaw_home" "$binary" document inspect \
+	--input pkg/document/testdata/encrypted-password-required.pdf \
+	--json >"$protected"
+protected_status=$?
+set -e
+if [ "$protected_status" -ne 3 ]; then
+	echo "document worker smoke: protected input exit $protected_status, expected 3" >&2
+	exit 1
+fi
+grep -Fq '"state": "unsupported"' "$protected"
+grep -Fq '"code": "password_required"' "$protected"
+
+if grep -Fq "$repo_root" "$report" || grep -Fq "$repo_root" "$inspection" || \
+	grep -Fq "$repo_root" "$protected"; then
 	echo "document worker smoke: report leaked repository path" >&2
 	exit 1
 fi
@@ -37,4 +64,4 @@ if [ -d "$mintclaw_home/state/document-scratch" ] && \
 	exit 1
 fi
 
-echo "document worker smoke: OK"
+echo "document worker smoke: MINTCLAW_PDF0B_WORKER_OK"

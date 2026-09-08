@@ -1,0 +1,46 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm 6 0 R  >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R /Annots [7 0 R] >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<<  /Length 56 >>
+stream
+BT /F1 12 Tf 72 720 Td (Synthetic signed fixture) Tj ET
+
+endstream
+endobj
+6 0 obj
+<< /SigFlags 3 /Fields [7 0 R] >>
+endobj
+7 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Sig /T (approval) /V 8 0 R /Rect [72 650 250 675] /P 3 0 R >>
+endobj
+8 0 obj
+<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 0 0 0] /Contents <00> /Reference [<< /TransformMethod /FieldMDP /TransformParams << /Type /TransformParams /Action /Include /Fields [(name)] /V /1.2 >> >>] >>
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000015 00000 n 
+0000000081 00000 n 
+0000000138 00000 n 
+0000000280 00000 n 
+0000000350 00000 n 
+0000000457 00000 n 
+0000000506 00000 n 
+0000000621 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R /ID [<4d696e74436c61775044463042><4d696e74436c61775044463042>] >>
+startxref
+878
+%%EOF

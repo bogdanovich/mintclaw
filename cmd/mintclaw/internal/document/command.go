@@ -16,6 +16,7 @@ import (
 type commandDeps struct {
 	capabilities func() documentpkg.CapabilityReport
 	acquire      func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
+	inspect      func(context.Context, string, documentpkg.AcquireOptions) (*documentpkg.Snapshot, documentpkg.Report)
 	scratchRoot  func() string
 	serveWorker  func(io.Reader, io.Reader, io.Writer) error
 	workerInput  func() (io.ReadCloser, error)
@@ -34,6 +35,7 @@ func NewDocumentCommand(scratchRoot func() string) *cobra.Command {
 	return newDocumentCommand(commandDeps{
 		capabilities: documentpkg.Capabilities,
 		acquire:      documentpkg.Acquire,
+		inspect:      documentpkg.Inspect,
 		scratchRoot:  scratchRoot,
 		serveWorker:  documentpkg.ServeWorker,
 		workerInput:  openWorkerInput,
@@ -48,7 +50,12 @@ func newDocumentCommand(deps commandDeps) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	cmd.AddCommand(newCapabilitiesCommand(deps), newAcquireCommand(deps), newWorkerCommand(deps))
+	cmd.AddCommand(
+		newCapabilitiesCommand(deps),
+		newAcquireCommand(deps),
+		newInspectCommand(deps),
+		newWorkerCommand(deps),
+	)
 	return cmd
 }
 
@@ -142,6 +149,49 @@ func newAcquireCommand(deps commandDeps) *cobra.Command {
 	return cmd
 }
 
+func newInspectCommand(deps commandDeps) *cobra.Command {
+	var input string
+	var jsonOutput bool
+	cmd := &cobra.Command{
+		Use:   "inspect",
+		Short: "Inspect immutable PDF structure",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if deps.inspect == nil {
+				return fmt.Errorf("document inspection is unavailable")
+			}
+			snapshot, report := deps.inspect(cmd.Context(), input, documentpkg.AcquireOptions{
+				ScratchRoot: deps.scratchRoot(),
+			})
+			if snapshot != nil {
+				defer func() { _ = snapshot.Close() }()
+				if err := snapshot.Close(); err != nil {
+					report.State = documentpkg.StateFailed
+					report.Inspection = nil
+					report.Failure = &documentpkg.Failure{
+						Code: documentpkg.FailureInternal, Message: "protected scratch cleanup failed",
+					}
+				}
+			}
+			if jsonOutput {
+				if err := writeJSON(cmd.OutOrStdout(), report); err != nil {
+					return err
+				}
+			} else if err := writeInspectReport(cmd.OutOrStdout(), report); err != nil {
+				return err
+			}
+			if code := reportExitCode(report); code != 0 {
+				return &ExitError{Code: code, Message: "document inspection did not succeed"}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&input, "input", "", "Path to the local PDF")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable JSON output")
+	_ = cmd.MarkFlagRequired("input")
+	return cmd
+}
+
 func writeJSON(writer io.Writer, value any) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetIndent("", "  ")
@@ -171,7 +221,15 @@ func writeCapabilities(writer io.Writer, report documentpkg.CapabilityReport) er
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(writer, "Maximum input size: %d bytes\n", report.Limits.MaxInputBytes)
+	_, err := fmt.Fprintf(
+		writer,
+		"Limits: input=%d bytes, pages=%d, decoded content=%d bytes, objects=%d, recursion=%d\n",
+		report.Limits.MaxInputBytes,
+		report.Limits.MaxPages,
+		report.Limits.MaxContentBytes,
+		report.Limits.MaxObjects,
+		report.Limits.MaxRecursionDepth,
+	)
 	return err
 }
 
@@ -195,6 +253,42 @@ func writeAcquireReport(writer io.Writer, report documentpkg.Report) error {
 	return err
 }
 
+func writeInspectReport(writer io.Writer, report documentpkg.Report) error {
+	if report.State != documentpkg.StateSucceeded || report.Input == nil || report.Inspection == nil {
+		message := "document inspection failed"
+		if report.Failure != nil {
+			message = report.Failure.Message
+		}
+		_, err := fmt.Fprintf(writer, "Document inspection %s: %s\n", report.State, message)
+		return err
+	}
+	facts := report.Inspection
+	if _, err := fmt.Fprintf(writer, "Inspected %q\n", filepath.Base(report.Input.OriginalFilename)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "SHA-256: %s\n", report.Input.SHA256); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "PDF version: %s\n", facts.PDFVersion.Value); err != nil {
+		return err
+	}
+	pages := 0
+	if facts.PageCount.Value != nil {
+		pages = *facts.PageCount.Value
+	}
+	_, err := fmt.Fprintf(
+		writer,
+		"Pages: %d; encrypted: %s; signatures: %s; AcroForm: %s; XFA: %s; text: %s\n",
+		pages,
+		facts.Encryption.State,
+		facts.Signatures.State,
+		facts.AcroForm.State,
+		facts.XFA.State,
+		facts.ExtractableText.State,
+	)
+	return err
+}
+
 func reportExitCode(report documentpkg.Report) int {
 	switch report.State {
 	case documentpkg.StateSucceeded:
@@ -202,7 +296,9 @@ func reportExitCode(report documentpkg.Report) int {
 	case documentpkg.StateUnavailable, documentpkg.StateDenied:
 		return 3
 	case documentpkg.StateUnsupported:
-		if report.Failure != nil && report.Failure.Code == documentpkg.FailureUnsupportedType {
+		if report.Failure != nil &&
+			(report.Failure.Code == documentpkg.FailureUnsupportedType ||
+				report.Failure.Code == documentpkg.FailureMalformedPDF) {
 			return 4
 		}
 		return 3
@@ -211,12 +307,15 @@ func reportExitCode(report documentpkg.Report) int {
 	case documentpkg.StateUncertain:
 		return 7
 	case documentpkg.StateFailed:
-		if report.Failure != nil && report.Failure.Code == documentpkg.FailureLimitExceeded {
+		if report.Failure != nil &&
+			(report.Failure.Code == documentpkg.FailureLimitExceeded ||
+				report.Failure.Code == documentpkg.FailureInspectionLimit) {
 			return 5
 		}
 		if report.Failure != nil &&
 			(report.Failure.Code == documentpkg.FailureInvalidInput ||
-				report.Failure.Code == documentpkg.FailureSourceChanged) {
+				report.Failure.Code == documentpkg.FailureSourceChanged ||
+				report.Failure.Code == documentpkg.FailureMalformedPDF) {
 			return 4
 		}
 	}

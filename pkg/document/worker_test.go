@@ -108,6 +108,44 @@ func TestWorkerProtocolRejectsUnboundedOrAmbiguousJSON(t *testing.T) {
 	}
 }
 
+func TestWorkerProtocolRejectsUntrustedInspectionFacts(t *testing.T) {
+	valid := *defaultInspectionFacts()
+	tests := []struct {
+		name   string
+		mutate func(*InspectionFacts)
+	}{
+		{name: "backend", mutate: func(facts *InspectionFacts) { facts.Backend.Name = "other" }},
+		{name: "version value", mutate: func(facts *InspectionFacts) {
+			facts.PDFVersion = StringFact{State: FactPresent, Value: "/private/source.pdf"}
+		}},
+		{name: "unknown value", mutate: func(facts *InspectionFacts) {
+			facts.Encryption.Permissions = StringFact{State: FactUnknown, Value: "secret"}
+		}},
+		{name: "warning", mutate: func(facts *InspectionFacts) {
+			facts.Warnings = []string{"document bytes: secret"}
+		}},
+		{name: "incoherent form", mutate: func(facts *InspectionFacts) {
+			one := 1
+			facts.AcroForm = AcroFormFacts{
+				State: FactAbsent, FieldCount: IntegerFact{State: FactPresent, Value: &one},
+			}
+			facts.XFA = XFAFacts{
+				State: FactAbsent, Representation: StringFact{State: FactAbsent},
+				Rendering: StringFact{State: FactAbsent},
+			}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			facts := valid
+			test.mutate(&facts)
+			if validInspectionFacts(facts) {
+				t.Fatalf("accepted untrusted facts: %#v", facts)
+			}
+		})
+	}
+}
+
 func TestAcquireRequiresSuccessfulWorkerAndCleansFailure(t *testing.T) {
 	root := directTempDir(t)
 	inputPath := filepath.Join(root, "input.pdf")
@@ -173,6 +211,7 @@ func testWorkerRequest(data []byte) WorkerRequest {
 			Size:        int64(len(data)),
 			SHA256:      hex.EncodeToString(digest[:]),
 		},
+		Limits: defaultInspectionLimits(),
 	}
 }
 

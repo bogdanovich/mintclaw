@@ -1,23 +1,21 @@
-# Document Acquisition Smoke
+# Document Acquisition And Inspection
 
 ## Status
 
-PDF0A acquisition and subprocess-boundary slice, complete for `linux/amd64`.
-The [PDF0A exit record](../architecture/pdf0a-exit-record.md) contains merged-main deployment,
-runtime, rollback, and residual-limit evidence. The command proves bounded
-local-file acquisition, immutable identity, and a real short-lived worker
-handshake. The shared service additionally admits an inbound `media://`
-reference only for its immutable workspace, agent, actor, route, and session
-owner. It does not parse PDF objects, render pages, register an agent tool, or
-retain a durable document job. PDF parsing and inspection remain unavailable;
-PDF0B is a separate milestone.
+PDF0A acquisition and PDF0B inspection are available for `linux/amd64`. The
+[PDF0A exit record](../architecture/pdf0a-exit-record.md) contains merged-main deployment and rollback evidence for
+the acquisition foundation. The [PDF0B backend decision](../architecture/pdf0b-backend-decision.md) records parser
+qualification, normalization, oracle, packaging, and residual limits.
 
-The initial admitted runtime tuple is `linux/amd64`. Other platforms return a
-structured `unsupported_platform` result. This is intentional until the
-mandatory subprocess boundary and the same real-process probes are admitted
-there.
+The commands prove bounded local-file acquisition, immutable identity, and deterministic parsing in a short-lived
+worker. The shared service also admits an inbound `media://` reference only for its immutable workspace, agent, actor,
+route, and session owner. PDF0B does not render or return document content, register an agent tool, accept passwords,
+or retain a durable document job. Those behaviors remain outside this operator-only milestone.
 
-## Automated check
+Only `linux/amd64` is admitted. Other platforms return a structured `unsupported_platform` result before opening the
+input. This remains intentional until each tuple proves the same worker, packaged backend, and fixture contracts.
+
+## Automated checks
 
 From the repository root:
 
@@ -25,41 +23,42 @@ From the repository root:
 make test-document
 ```
 
-The focused suite covers direct regular files, final-component symlinks,
-FIFO/devices, non-PDF input, byte limits, cancellation, path replacement,
-mid-copy mutation, distinct digests for duplicate names, concurrent
-acquisition, read-only snapshots, report redaction, and cleanup. It also proves
-same-owner inbound acquisition and refusal before snapshot creation for every
-workspace, agent, actor, route, or session mismatch, invalid or released refs,
-and replaced backing files. On `linux/amd64` it additionally launches a real
-worker process for both local and owner-bound media inputs and covers success,
-scrubbed environment, malformed or oversized output, crash, timeout, complete
-process-group cancellation, and worker-scratch cleanup.
+The suite covers regular files, symlinks, FIFO/devices, MIME refusal, byte limits, cancellation, replacement and
+mutation races, duplicate names, concurrent operations, read-only snapshots, report redaction, and cleanup. It proves
+same-owner inbound admission and refusal before snapshot creation for every workspace, agent, actor, route, or session
+mismatch, invalid or released references, and replaced backing files.
 
-The synthetic inventory and its evidence-test mapping are checked in at
-`pkg/document/testdata/acquisition-manifest.json`. No fixture contains personal
-or production data.
+Inspection coverage adds text/image/mixed pages, AcroForm, XFA, signatures, restrictions, encryption,
+password-required refusal, malformed structures, deterministic limits, and strict parent-side result validation. On
+`linux/amd64`, real worker tests cover descriptor-only input, scrubbed environment, malformed or oversized output,
+crash, timeout, process-group cancellation, concurrent inspection, and worker-scratch cleanup.
+
+The synthetic inventories and evidence mappings are in `pkg/document/testdata/acquisition-manifest.json` and
+`pkg/document/testdata/inspection-manifest.json`. No fixture contains personal or production data. On a host with the
+pinned independent oracle, also run:
+
+```sh
+PDF0B_POPPLER_VERSION=24.02.0 make test-document-oracle
+```
 
 ## Inbound service contract
 
-Inbound adapters bind ordinary turn media before agent execution, independently
-of whether the profile exposes node file transfer. An eventual document agent
-adapter calls the same service boundary as the CLI:
+Inbound adapters bind ordinary turn media before agent execution, independently of node file-transfer policy. A future
+agent adapter will use the same service boundary as the CLI:
 
 ```go
 snapshot, report := document.AcquireMedia(ctx, mediaStore, mediaRef, owner, options)
+snapshot, report := document.InspectMedia(ctx, mediaStore, mediaRef, owner, options)
 ```
 
-`owner` must contain the exact non-reversible workspace, agent, actor, route,
-and session correlations already stored with the reference. The binding also
-pins size and SHA-256. Acquisition receives an authority-checked open file
-descriptor and verifies those exact bytes again while creating the immutable
-snapshot; it never reopens a mutable backing path. Unknown, unbound, released,
-altered, or cross-authority refs all return `denied` with
-`source_not_authorized`; the response deliberately does not reveal whether a
-reference exists. A successful report retains the opaque source ref and safe
-correlations, but never the backing path or bytes. The worker receives only
-content type, size, SHA-256, and the immutable snapshot descriptor.
+`owner` contains the exact non-reversible workspace, agent, actor, route, and session correlations bound to the
+reference. The binding pins size and SHA-256. Acquisition receives an authority-checked open descriptor and verifies
+those bytes while creating the immutable snapshot; it never reopens a mutable backing path. Unknown, unbound, released,
+altered, or cross-authority refs return `denied` with `source_not_authorized` without revealing whether a reference
+exists.
+
+A successful report retains the opaque source reference and safe correlations, but never the backing path or bytes.
+The worker receives only content type, size, SHA-256, explicit limits, and the immutable snapshot descriptor.
 
 ## Manual Linux smoke
 
@@ -69,69 +68,74 @@ Build the current branch and use the checked-in synthetic fixture:
 make build
 ./build/mintclaw document capabilities --json
 ./build/mintclaw document acquire \
-  --input pkg/document/testdata/acquisition-fixture.pdf \
+  --input pkg/document/testdata/text.pdf \
+  --json
+./build/mintclaw document inspect \
+  --input pkg/document/testdata/text.pdf \
   --json
 ```
 
-The capability report must say `linux` / `amd64`, advertise only `acquire` as
-`supported`, and keep parser-backed operations `unavailable`. The acquisition
-report must have:
+The capability report must identify `linux/amd64`, advertise `acquire` and `inspect` as `supported`, and leave extract,
+render, fields, fill, verify, and flatten unavailable. The acquisition report must contain:
 
-- `schema_version` equal to `mintclaw.document_report.v1`;
-- `operation` equal to `acquire` and `state` equal to `succeeded`;
-- content type `application/pdf`, the exact input byte size, and a 64-character
-  SHA-256 digest;
+- schema `mintclaw.document_report.v1`;
+- operation `acquire` and state `succeeded`;
+- content type `application/pdf`, exact size, and a 64-character SHA-256 digest;
 - authority kind `local_operator`; and
 - no local input or protected-scratch path.
 
-The immutable snapshot is operation-scoped and is deleted when the CLI command
-closes. Re-running the command produces a new operation ID but the same input
-size and digest. A successful report also means the installed executable
-started its private worker mode, passed the snapshot on an inherited file
-descriptor, received a matching versioned result, and cleaned the worker
-scratch. The worker command is hidden and is not an operator API.
+The inspection report is tied to the same digest. For `text.pdf`, it reports pdfcpu `v0.15.0`, PDF version `1.7`, one
+page, no encryption, signatures, AcroForm, or XFA, and `extractable_text.state: present`. It contains no extracted text.
+The operation-scoped snapshot is deleted when the CLI closes.
+
+Check the protected-input disposition separately:
+
+```sh
+set +e
+./build/mintclaw document inspect \
+  --input pkg/document/testdata/encrypted-password-required.pdf \
+  --json
+echo "$?"
+set -e
+```
+
+Expected: exit status `3`, terminal state `unsupported`, failure `password_required`, and partial facts proving
+encryption and password requirement. PDF0B has no password input and does not attempt decryption.
 
 ## Deployed Linux smoke
 
-After merged `main` has been built and installed on the configured deployment,
-run from a MintClaw checkout:
+After merged `main` is built and installed on the configured deployment, run:
 
 ```sh
 scripts/document-deployed-smoke.sh --host server@oc
 ```
 
-The script uses `/home/server/src/mintclaw/build/mintclaw` and the checked-in
-`pkg/document/testdata/acquisition-fixture.pdf`; it never reads a live profile.
-It prints the deployed repository SHA, fixture digest, `state=succeeded`,
-`scratch=clean`, and `marker=MINTCLAW_DOCUMENT_ACQUIRE_OK`. It fails if the
-report exposes the repository path or protected scratch survives. Omit
-`--host` to try `server@oc` and then `server@oc-ts`.
+The harness uses `/home/server/src/mintclaw/build/mintclaw` and checked-in `text.pdf`; it never reads a live profile. It
+prints the deployed SHA, fixture digest, `state=succeeded`, `scratch=clean`, and
+`marker=MINTCLAW_DOCUMENT_INSPECT_OK`. It fails if either report exposes the repository path or protected scratch
+survives. Omit `--host` to try `server@oc` and then `server@oc-ts`.
 
 ## Unsupported-platform smoke
 
-On macOS, Windows, Linux ARM, or another not-yet-admitted tuple:
+On macOS, Windows, Linux ARM, or another unadmitted tuple:
 
 ```sh
-./build/mintclaw document acquire \
-  --input pkg/document/testdata/acquisition-fixture.pdf \
+./build/mintclaw document inspect \
+  --input pkg/document/testdata/text.pdf \
   --json
 ```
 
-Expected result: exit status `3`, terminal state `unavailable`, and failure code
-`unsupported_platform`. MintClaw must not open or inspect the input before that
-fail-closed result.
+Expected: exit status `3`, terminal state `unavailable`, and failure `unsupported_platform`. MintClaw must not open the
+input or create protected scratch before returning that result.
 
 ## Current boundary
 
-The worker is a subprocess containment boundary, not a new general sandbox
-platform. It receives no original path, MintClaw configuration, credentials,
-or ambient environment, and it is bounded by runtime and output limits. It does
-not itself claim host-level network or arbitrary-filesystem isolation. A
-future parser backend may add stronger confinement only by qualifying a ready,
-packaged Linux primitive; MintClaw will not implement a custom namespace,
-seccomp, or container manager for this feature.
+The parser runs only in the worker. The worker is a subprocess containment boundary, not a general sandbox platform.
+It receives no original path, MintClaw config, credentials, or ambient environment, and it is bounded by input, page,
+decoded-content, runtime, and output limits. It does not claim host-level network or arbitrary-filesystem isolation.
+Future document operations may add stronger confinement only by qualifying a ready, packaged primitive; MintClaw will
+not build a custom namespace, seccomp, or container manager for this feature.
 
-PDF object inspection remains unavailable. macOS remains fail-closed until its
-separate parity slice proves the same worker, fixture, packaging, and cleanup
-contracts described in the roadmap. PDF0A is closed for `linux/amd64`; the next
-implementation goal may cover only the admitted PDF0B inspection and backend-decision boundary.
+PDF extraction, rendering, form writes, password handling, and agent/channel exposure remain unavailable. macOS stays
+fail-closed until its later roadmap parity slice proves worker, fixture, packaging, signing, update, rollback, privacy,
+cancellation, and cleanup contracts on both architectures. PDF1A requires a separate goal after the PDF0B exit record.
