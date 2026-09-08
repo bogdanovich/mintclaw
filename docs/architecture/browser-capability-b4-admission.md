@@ -14,6 +14,9 @@ focused pull request or the smallest coherent dependent pull-request sequence.
 A later phase starts only after its prerequisites are merged, deployed, and
 live-validated on every placement it changes.
 
+[Phase 1 deployment evidence](../operations/browser-b4-phase1-evidence.md)
+records the completed canonical profile cutover. Phase 2 is active.
+
 ## Operator Outcome
 
 An operator can configure multiple named browser identities and deliberately

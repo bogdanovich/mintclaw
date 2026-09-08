@@ -89,6 +89,15 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Browser Capability B2 Deployment Evidence](../operations/browser-capability-b2-deployment-evidence.md):
   merged revisions, live artifact round-trip, passive diagnostics, human
   handoff and resume, privacy checks, cleanup, health, and residual limits.
+- [Browser Capability B4 Admission](browser-capability-b4-admission.md):
+  admitted managed, ephemeral, and attached-user profile authority, phased
+  delivery, acceptance criteria, and mandatory stop conditions.
+- [Browser B4 Execution Goal](browser-b4-execution-goal.md):
+  five dependency-ordered phases for profile cutover, alias revocation,
+  ephemeral cleanup, and attached Chrome on gateway and companion.
+- [Browser B4 Phase 1 Deployment Evidence](../operations/browser-b4-phase1-evidence.md):
+  canonical profile authority, lossless managed-identity cutover, exact
+  deployment, live first-party canaries, trace settlement, and rollback.
 - [Browser Capability BF1 Scroll Parity Admission](browser-capability-bf1-scroll-admission.md):
   admitted shared scroll semantics, exact per-target action discovery,
   companion wire authority, deployment order, and completion gates for the
