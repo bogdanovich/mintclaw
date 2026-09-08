@@ -291,6 +291,10 @@ func TestQuestionAndWorkerStopInvariants(t *testing.T) {
 	if err := failed.Validate(); err != nil {
 		t.Fatalf("WorkerStoppedPayload.Validate(failed) error = %v", err)
 	}
+	idle := WorkerStoppedPayload{ControlIdentity: control, Reason: WorkerStopIdle}
+	if err := idle.Validate(); err != nil {
+		t.Fatalf("WorkerStoppedPayload.Validate(idle) error = %v", err)
+	}
 }
 
 func TestEventPayloadSchemasRejectUnknownAndUnsafeContent(t *testing.T) {
