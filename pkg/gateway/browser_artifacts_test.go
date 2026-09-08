@@ -48,7 +48,8 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 	request := browser.ScreenshotRequest{RequestID: "request_1"}
 	capture := browser.ScreenshotCapture{
 		SessionID: "session_1", Target: "gateway", Profile: "managed",
-		PolicyRevision: "policy_1", TabID: "tab_primary", SnapshotID: "snapshot_1",
+		PolicyRevision: "policy_1", ProfileRevision: "managed-v1",
+		TabID: "tab_primary", SnapshotID: "snapshot_1",
 		SnapshotGeneration: 2, Data: data, ContentType: "image/png",
 	}
 	ctx := gatewayBrowserArtifactContext(workspace)
@@ -61,6 +62,13 @@ func TestGatewayBrowserScreenshotUsesP2SpoolAndIdempotentMediaDelivery(t *testin
 	wantDigest := sha256.Sum256(data)
 	if artifact.SHA256 != hex.EncodeToString(wantDigest[:]) {
 		t.Fatalf("artifact digest = %q", artifact.SHA256)
+	}
+	wrongRevision := capture
+	wrongRevision.ProfileRevision = "managed-v2"
+	if _, conflictErr := source.retainScreenshot(ctx, request, wrongRevision); !errors.Is(
+		conflictErr, nodes.ErrTransferArtifactConflict,
+	) {
+		t.Fatalf("cross-profile screenshot replay error = %v, want transfer conflict", conflictErr)
 	}
 	path, meta, err := store.ResolveWithMeta(artifact.MediaRef)
 	if err != nil || meta.ContentType != "image/png" || meta.Filename != browserScreenshotFilename {
@@ -644,7 +652,8 @@ func TestGatewayOutboundRecoveryUsesGatewayWorkspaceBeforePublication(t *testing
 	request := browser.ScreenshotRequest{RequestID: "request_recovery"}
 	artifact, err := source.retainScreenshot(ctx, request, browser.ScreenshotCapture{
 		SessionID: "session_recovery", Target: "gateway", Profile: "managed",
-		PolicyRevision: "policy_1", TabID: "tab_primary", SnapshotID: "snapshot_1",
+		PolicyRevision: "policy_1", ProfileRevision: "managed-v1",
+		TabID: "tab_primary", SnapshotID: "snapshot_1",
 		SnapshotGeneration: 1,
 		Data: append(
 			append([]byte(nil), []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}...),
@@ -831,7 +840,8 @@ func TestGatewayBrowserScreenshotRemovesUnregisteredDeliveryCopy(t *testing.T) {
 		browser.ScreenshotRequest{RequestID: "request_cleanup"},
 		browser.ScreenshotCapture{
 			SessionID: "session_cleanup", Target: "gateway", Profile: "managed",
-			PolicyRevision: "policy_1", TabID: "tab_primary", SnapshotID: "snapshot_1",
+			PolicyRevision: "policy_1", ProfileRevision: "managed-v1",
+			TabID: "tab_primary", SnapshotID: "snapshot_1",
 			SnapshotGeneration: 1, Data: data, ContentType: "image/png",
 		},
 	)
@@ -888,7 +898,8 @@ func TestGatewayBrowserScreenshotRemovesCopyAfterPostRenameSyncWarning(t *testin
 		browser.ScreenshotRequest{RequestID: "request_post_rename_cleanup"},
 		browser.ScreenshotCapture{
 			SessionID: "session_cleanup", Target: "gateway", Profile: "managed",
-			PolicyRevision: "policy_1", TabID: "tab_primary", SnapshotID: "snapshot_1",
+			PolicyRevision: "policy_1", ProfileRevision: "managed-v1",
+			TabID: "tab_primary", SnapshotID: "snapshot_1",
 			SnapshotGeneration: 1, Data: data, ContentType: "image/png",
 		},
 	)

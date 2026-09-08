@@ -106,7 +106,8 @@ func TestBrowserHostSeparatesManagedAliasFactoriesAndGlobalCapacity(t *testing.T
 	}
 	opened, err := host.Open(t.Context(), personalRequest)
 	if err != nil || opened.State != "ready" || len(personalFactory.requests) != 1 ||
-		personalFactory.requests[0].Profile != "personal" {
+		personalFactory.requests[0].Profile != "personal" ||
+		personalFactory.requests[0].ProfileRevision != "personal-v1" {
 		t.Fatalf("Open(personal after release) = %#v, %v; requests = %#v", opened, err, personalFactory.requests)
 	}
 }

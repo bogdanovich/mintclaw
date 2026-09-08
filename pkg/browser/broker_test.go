@@ -209,10 +209,12 @@ func TestBrokerOpenAndCloseSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if session.State != SessionReady || !session.DryRun || session.Revision != 2 {
+	if session.State != SessionReady || !session.DryRun || session.Revision != 2 ||
+		session.ProfileRevision != "managed-v1" {
 		t.Fatalf("Open() session = %+v", session)
 	}
 	if len(factory.requests) != 1 || factory.requests[0].SessionID != session.ID ||
+		factory.requests[0].ProfileRevision != session.ProfileRevision ||
 		factory.requests[0].Limits.Sessions != 1 {
 		t.Fatalf("worker requests = %+v", factory.requests)
 	}
@@ -836,8 +838,9 @@ func TestBrokerSeparatesProfileLeaseFromGlobalSessionCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(personal after release) error = %v", err)
 	}
-	if personalSession.Profile != "personal" || len(factory.requests) != 2 ||
-		factory.requests[1].Profile != "personal" {
+	if personalSession.Profile != "personal" || personalSession.ProfileRevision != "personal-v1" ||
+		len(factory.requests) != 2 || factory.requests[1].Profile != "personal" ||
+		factory.requests[1].ProfileRevision != "personal-v1" {
 		t.Fatalf("personal session = %#v, requests = %#v", personalSession, factory.requests)
 	}
 	if _, err = broker.Close(t.Context(), otherOwner, personalSession.ID); err != nil {

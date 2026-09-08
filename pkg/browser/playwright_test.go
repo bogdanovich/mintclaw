@@ -1435,7 +1435,8 @@ func TestPlaywrightWorkerFactoryOwnsPrivateClientAndMapsAdmittedCalls(t *testing
 	factory.clientFactory = func() playwrightMCPClient { return client }
 	openCtx, cancelOpen := context.WithCancel(context.Background())
 	opened, err := factory.Open(openCtx, WorkerOpenRequest{
-		SessionID: "session_1", Target: "gateway", Profile: "managed", DryRun: true,
+		SessionID: "session_1", Target: "gateway", Profile: "managed",
+		ProfileRevision: "managed-v1", DryRun: true,
 		Limits: config.BrowserLimitsConfig{},
 	})
 	if err != nil {
@@ -1700,13 +1701,15 @@ func TestPlaywrightWorkerFactoryBindsExplicitApprovedActionMode(t *testing.T) {
 	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
 	factory.clientFactory = func() playwrightMCPClient { return client }
 	if _, err = factory.Open(t.Context(), WorkerOpenRequest{
-		SessionID: "wrong_mode", Target: "gateway", Profile: "managed", DryRun: true,
+		SessionID: "wrong_mode", Target: "gateway", Profile: "managed",
+		ProfileRevision: "managed-v1", DryRun: true,
 		Limits: config.BrowserLimitsConfig{},
 	}); !errors.Is(err, ErrDenied) {
 		t.Fatalf("Open() mismatched dry-run mode error = %v", err)
 	}
 	opened, err := factory.Open(t.Context(), WorkerOpenRequest{
-		SessionID: "approved_mode", Target: "gateway", Profile: "managed", DryRun: false,
+		SessionID: "approved_mode", Target: "gateway", Profile: "managed",
+		ProfileRevision: "managed-v1", DryRun: false,
 		Limits: config.BrowserLimitsConfig{},
 	})
 	if err != nil {
@@ -1714,6 +1717,31 @@ func TestPlaywrightWorkerFactoryBindsExplicitApprovedActionMode(t *testing.T) {
 	}
 	if err = opened.Owner.Close(t.Context()); err != nil {
 		t.Fatalf("Close() approved-action worker error = %v", err)
+	}
+}
+
+func TestPlaywrightWorkerFactoryRejectsMissingOrMismatchedProfileRevisionBeforeDriverStart(t *testing.T) {
+	root := runtimeAdmittedBrowserConfig(t, true)
+	factory, err := NewPlaywrightWorkerFactory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientStarts := 0
+	factory.clientFactory = func() playwrightMCPClient {
+		clientStarts++
+		return &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	}
+	for _, revision := range []string{"", "managed-v2"} {
+		_, openErr := factory.Open(t.Context(), WorkerOpenRequest{
+			SessionID: "revision_test", Target: "gateway", Profile: "managed",
+			ProfileRevision: revision, DryRun: true, Limits: config.BrowserLimitsConfig{},
+		})
+		if !errors.Is(openErr, ErrDenied) {
+			t.Fatalf("Open(profile revision %q) error = %v, want ErrDenied", revision, openErr)
+		}
+	}
+	if clientStarts != 0 {
+		t.Fatalf("profile revision rejection started %d driver clients", clientStarts)
 	}
 }
 
@@ -1740,7 +1768,8 @@ func TestPlaywrightWorkerFactoryConfiguresPublicWebWithoutDriverAllowlist(t *tes
 	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
 	factory.clientFactory = func() playwrightMCPClient { return client }
 	opened, err := factory.Open(context.Background(), WorkerOpenRequest{
-		SessionID: "session_public", Target: "gateway", Profile: "managed", DryRun: true,
+		SessionID: "session_public", Target: "gateway", Profile: "managed",
+		ProfileRevision: "managed-v1", DryRun: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1988,7 +2017,8 @@ func TestPlaywrightWorkerFactoryRejectsIncompatibleCatalog(t *testing.T) {
 			client := &fakePlaywrightClient{catalog: test.catalog}
 			factory.clientFactory = func() playwrightMCPClient { return client }
 			opened, openErr := factory.Open(context.Background(), WorkerOpenRequest{
-				SessionID: "session_1", Target: "gateway", Profile: "managed", DryRun: true,
+				SessionID: "session_1", Target: "gateway", Profile: "managed",
+				ProfileRevision: "managed-v1", DryRun: true,
 			})
 			if !errors.Is(openErr, ErrDriverIncompatible) || opened.Owner == nil || client.closeCalls != 0 {
 				t.Fatalf("Open() = %+v, %v; client closes = %d", opened, openErr, client.closeCalls)
@@ -2016,7 +2046,8 @@ func TestPlaywrightWorkerFactoryReturnsRetryableCleanupOwnerAfterCatalogFailure(
 	}
 	factory.clientFactory = func() playwrightMCPClient { return client }
 	opened, err := factory.Open(context.Background(), WorkerOpenRequest{
-		SessionID: "session_1", Target: "gateway", Profile: "managed", DryRun: true,
+		SessionID: "session_1", Target: "gateway", Profile: "managed",
+		ProfileRevision: "managed-v1", DryRun: true,
 	})
 	if !errors.Is(err, ErrDriverIncompatible) || opened.Owner == nil {
 		t.Fatalf("Open() = %+v, %v; want cleanup owner and incompatible error", opened, err)
@@ -2947,7 +2978,8 @@ Done</div><output id="drag-result"></output>
 	defer cancel()
 	opened, err := factory.Open(ctx, WorkerOpenRequest{
 		SessionID: "fixture_session", Target: "gateway", Profile: "managed", DryRun: true,
-		Limits: config.BrowserLimitsConfig{},
+		ProfileRevision: "managed-v1",
+		Limits:          config.BrowserLimitsConfig{},
 	})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -3474,7 +3506,8 @@ Done</div><output id="drag-result"></output>
 		t.Run("reject_"+test.name, func(t *testing.T) {
 			negative, openErr := factory.Open(ctx, WorkerOpenRequest{
 				SessionID: "negative_" + test.name, Target: "gateway", Profile: "managed", DryRun: true,
-				Limits: config.BrowserLimitsConfig{},
+				ProfileRevision: "managed-v1",
+				Limits:          config.BrowserLimitsConfig{},
 			})
 			if openErr != nil {
 				t.Fatalf("Open() error = %v", openErr)
@@ -3557,7 +3590,8 @@ func TestPlaywrightWorkerRealBrowserFileChooserFixture(t *testing.T) {
 	defer cancel()
 	opened, err := factory.Open(ctx, WorkerOpenRequest{
 		SessionID: "file_chooser_fixture", Target: "gateway", Profile: "managed", DryRun: true,
-		Limits: config.BrowserLimitsConfig{},
+		ProfileRevision: "managed-v1",
+		Limits:          config.BrowserLimitsConfig{},
 	})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -3687,7 +3721,8 @@ func TestPlaywrightWorkerRealBrowserAnyHTTPLoopbackFixture(t *testing.T) {
 	defer cancel()
 	opened, err := factory.Open(ctx, WorkerOpenRequest{
 		SessionID: "any_http_fixture", Target: "gateway", Profile: "managed", DryRun: true,
-		Limits: config.BrowserLimitsConfig{},
+		ProfileRevision: "managed-v1",
+		Limits:          config.BrowserLimitsConfig{},
 	})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -3749,7 +3784,8 @@ func TestPlaywrightWorkerRealBrowserFullAccessFillFixture(t *testing.T) {
 	defer cancel()
 	opened, err := factory.Open(ctx, WorkerOpenRequest{
 		SessionID: "full_access_fixture", Target: "gateway", Profile: "managed", DryRun: true,
-		Limits: config.BrowserLimitsConfig{},
+		ProfileRevision: "managed-v1",
+		Limits:          config.BrowserLimitsConfig{},
 	})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -3851,7 +3887,8 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 
 	first, err := factory.Open(ctx, WorkerOpenRequest{
 		SessionID: "persistent_first", Target: "gateway", Profile: "managed", DryRun: true,
-		Limits: config.BrowserLimitsConfig{},
+		ProfileRevision: "managed-v1",
+		Limits:          config.BrowserLimitsConfig{},
 	})
 	if err != nil {
 		t.Fatalf("first Open() error = %v", err)
@@ -3906,7 +3943,8 @@ func TestPlaywrightWorkerRealBrowserConsecutivePersistentSessions(t *testing.T) 
 
 	second, err := factory.Open(ctx, WorkerOpenRequest{
 		SessionID: "persistent_second", Target: "gateway", Profile: "managed", DryRun: true,
-		Limits: config.BrowserLimitsConfig{},
+		ProfileRevision: "managed-v1",
+		Limits:          config.BrowserLimitsConfig{},
 	})
 	if err != nil {
 		t.Fatalf("second Open() error = %v", err)

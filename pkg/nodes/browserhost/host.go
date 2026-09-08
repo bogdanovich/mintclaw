@@ -152,7 +152,7 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 
 func companionBrowserProfileConfig(profile companion.BrowserProfilePolicy) config.BrowserProfileConfig {
 	return config.BrowserProfileConfig{
-		Enabled: true, Mode: config.BrowserProfileManaged,
+		Enabled: true, Revision: profile.Revision, Mode: config.BrowserProfileManaged,
 		NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
 		CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
 		AllowApprovedActions: profile.AllowApprovedActions,
@@ -338,7 +338,7 @@ func (host *BrowserHost) Open(
 
 	opened, openErr := host.factories[request.Profile].Open(ctx, browserworker.WorkerOpenRequest{
 		SessionID: request.SessionID, Target: companionBrowserTarget,
-		Profile: request.Profile, DryRun: request.DryRun,
+		Profile: request.Profile, ProfileRevision: request.ProfileRevision, DryRun: request.DryRun,
 		Limits: browserConfigLimits(request.Limits),
 	})
 	actionWorker, workerOK := opened.Owner.(browserworker.ActionWorker)

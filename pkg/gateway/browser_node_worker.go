@@ -356,7 +356,8 @@ func (factory *nodeBrowserWorkerFactory) Open(
 		return browser.WorkerOpenResult{}, browser.ErrDenied
 	}
 	profile, ok := target.Profiles[request.Profile]
-	if !ok || !profile.Enabled || profile.DryRun == profile.AllowApprovedActions {
+	if !ok || !profile.Enabled || request.ProfileRevision != profile.Revision ||
+		profile.DryRun == profile.AllowApprovedActions {
 		return browser.WorkerOpenResult{}, browser.ErrDenied
 	}
 	worker := &nodeBrowserWorker{
@@ -1311,7 +1312,7 @@ func (worker *nodeBrowserWorker) receiveBrowserOutput(
 	}
 	spec := nodes.TransferArtifactSpec{
 		TransferID: owner.ToolCallID, Direction: nodes.TransferDirectionDownload,
-		Target: worker.browserTarget, ProfileRevision: descriptor.BrowserPolicyRevision,
+		Target: worker.browserTarget, ProfileRevision: descriptor.ProfileRevision,
 		SourceKind: sourceKind, SourceScope: sourceScope,
 		SourceID: sourceID, SourceRevision: sourceRevision,
 		Filename: descriptor.Filename, ContentType: descriptor.ContentType,

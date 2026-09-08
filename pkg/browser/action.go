@@ -706,6 +706,7 @@ func (broker *Broker) resolvePreparedActionLocked(
 	now := broker.now().UTC()
 	prepared := PreparedAction{
 		SessionID: session.ID, Owner: session.Owner, Target: session.Target, Profile: session.Profile,
+		ProfileRevision:      session.ProfileRevision,
 		ControllerGeneration: session.ControllerGeneration, TabID: session.TabID,
 		FrameID: session.FrameID, ContextCatalogID: request.ContextCatalogID,
 		ContextGeneration: request.ContextGeneration,
@@ -931,7 +932,7 @@ func (broker *Broker) evaluateRestrictedPolicyLocked(
 	if err != nil {
 		return ErrDenied
 	}
-	metadata := preparedPolicyMetadata(*prepared, session.PolicyRevision, revision)
+	metadata := preparedPolicyMetadata(*prepared, session.ProfileRevision, revision)
 	local, err := browserpolicy.Evaluate(ctx, *profile.Policy, metadata)
 	if err != nil || local.Decision == browserpolicy.DecisionDeny {
 		return ErrDenied
@@ -943,7 +944,7 @@ func (broker *Broker) evaluateRestrictedPolicyLocked(
 		result, evaluateErr := remote.EvaluatePolicy(ctx, metadata)
 		if evaluateErr != nil || !browserpolicy.DecisionValid(result.Result.Decision) ||
 			result.Result.Decision == browserpolicy.DecisionDeny || !validDigest(result.PolicyRevision) ||
-			result.ProfileRevision == "" {
+			result.ProfileRevision != session.ProfileRevision {
 			return ErrDenied
 		}
 		prepared.WorkerRestrictedDecision = result.Result.Decision
@@ -984,7 +985,7 @@ func (broker *Broker) revalidateRestrictedPolicyLocked(
 	result, err := browserpolicy.Evaluate(
 		ctx,
 		*profile.Policy,
-		preparedPolicyMetadata(prepared, session.PolicyRevision, revision),
+		preparedPolicyMetadata(prepared, session.ProfileRevision, revision),
 	)
 	if err != nil || result.Decision != prepared.LocalRestrictedDecision {
 		return ErrDenied
@@ -1036,7 +1037,9 @@ func (broker *Broker) revalidatePreparedLocked(
 	if prepared.FrameID != "" {
 		return ErrDriverIncompatible
 	}
-	if broker.now().UTC().UnixNano() >= prepared.ExpiresAt || session.PolicyRevision != prepared.PolicyRevision ||
+	if broker.now().UTC().UnixNano() >= prepared.ExpiresAt ||
+		session.ProfileRevision == "" || session.ProfileRevision != prepared.ProfileRevision ||
+		session.PolicyRevision != prepared.PolicyRevision ||
 		session.Target != prepared.Target || session.Profile != prepared.Profile ||
 		session.ControllerGeneration != prepared.ControllerGeneration || session.TabID != prepared.TabID ||
 		!sessionMatchesContextBinding(
@@ -1167,7 +1170,7 @@ func (broker *Broker) actionSessionLocked(
 	if session.State != SessionReady || session.EffectiveController() != ControllerAgent || session.TabID != tabID {
 		return Session{}, nil, nil, ErrWorkerUnavailable
 	}
-	if session.PolicyRevision != broker.policyRevision {
+	if !broker.sessionAuthorityCurrent(session) {
 		_, finishErr := broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
 		return Session{}, nil, nil, errors.Join(ErrWorkerUnavailable, finishErr)
 	}
@@ -1573,6 +1576,14 @@ func (broker *Broker) browserProfile(session Session) (config.BrowserProfileConf
 	}
 	profile, ok := target.Profiles[session.Profile]
 	return profile, ok
+}
+
+func (broker *Broker) sessionAuthorityCurrent(session Session) bool {
+	if session.ProfileRevision == "" || session.PolicyRevision != broker.policyRevision {
+		return false
+	}
+	profile, ok := broker.browserProfile(session)
+	return ok && profile.Enabled && profile.Revision == session.ProfileRevision
 }
 
 func (broker *Broker) driverActionForPrepared(

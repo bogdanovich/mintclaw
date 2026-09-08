@@ -129,7 +129,7 @@ func (broker *Broker) CaptureScreenshot(
 	}
 	return ScreenshotCapture{
 		SessionID: session.ID, Target: session.Target, Profile: session.Profile,
-		PolicyRevision: session.PolicyRevision, TabID: session.TabID,
+		ProfileRevision: session.ProfileRevision, PolicyRevision: session.PolicyRevision, TabID: session.TabID,
 		FrameID: session.FrameID, ContextCatalogID: request.ContextCatalogID,
 		ContextGeneration: request.ContextGeneration,
 		SnapshotID:        session.SnapshotID, SnapshotGeneration: session.SnapshotGeneration,

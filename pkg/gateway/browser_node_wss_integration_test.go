@@ -1254,7 +1254,8 @@ func TestCompanionBrowserSnapshotTransferRecoveryOverProductionWSS(t *testing.T)
 					SessionKey: sessionID, ExecutionID: "execution_" + sessionID,
 				},
 				SessionID: sessionID, Target: "companion", Profile: "managed", DryRun: false,
-				Limits: cfg.Tools.Browser.Limits.Effective(),
+				ProfileRevision: "managed-v1",
+				Limits:          cfg.Tools.Browser.Limits.Effective(),
 			})
 			if openErr != nil {
 				t.Fatal(openErr)

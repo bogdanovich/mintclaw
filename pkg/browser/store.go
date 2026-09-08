@@ -100,7 +100,8 @@ func (store *MemoryStore) UpdateSession(_ context.Context, expected uint64, next
 	}
 	if current.Owner != next.Owner || current.Target != next.Target ||
 		current.Profile != next.Profile || current.CreatedAt != next.CreatedAt ||
-		current.DryRun != next.DryRun || current.PolicyRevision != next.PolicyRevision ||
+		current.DryRun != next.DryRun || current.ProfileRevision != next.ProfileRevision ||
+		current.PolicyRevision != next.PolicyRevision ||
 		!validControllerTransition(current, next) || !validContextTransition(current, next) ||
 		current.ExpiresAt != next.ExpiresAt ||
 		!validSnapshotTransition(current, next) ||
