@@ -47,6 +47,9 @@ Operational docs for debugging, diagnosis, and production troubleshooting.
   canonical profile authority, lossless managed-identity cutover, exact gateway
   and Darwin deployment, first-party canaries, trace settlement, cleanup, and
   rollback.
+- [Browser B4 Phase 2 deployment evidence](browser-b4-phase2-evidence.md):
+  managed-alias isolation, lease and capacity conformance, revision-bound
+  revocation, quarantine recovery, exact restoration, and rollback.
 - [Browser Functional Parity Phase 5 deployment evidence](browser-functional-parity-phase5-evidence.md):
   merged ordinary-interaction slices, live gateway and companion file-chooser
   proof, specialist-boundary restoration, cleanup, health, and rollback.

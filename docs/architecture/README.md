@@ -100,6 +100,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Browser B4 Phase 1 Deployment Evidence](../operations/browser-b4-phase1-evidence.md):
   canonical profile authority, lossless managed-identity cutover, exact
   deployment, live first-party canaries, trace settlement, and rollback.
+- [Browser B4 Phase 2 Deployment Evidence](../operations/browser-b4-phase2-evidence.md):
+  managed-alias isolation, capacity behavior, revision-bound revocation,
+  quarantine recovery, exact production restoration, and rollback.
 - [Browser Capability BF1 Scroll Parity Admission](browser-capability-bf1-scroll-admission.md):
   admitted shared scroll semantics, exact per-target action discovery,
   companion wire authority, deployment order, and completion gates for the
