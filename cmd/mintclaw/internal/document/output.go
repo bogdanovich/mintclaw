@@ -67,17 +67,78 @@ type stagedArtifactOutput struct {
 	destination string
 	directory   bool
 	overwrite   bool
+	identity    *pathIdentity
+}
+
+type pathIdentity struct {
+	file      *os.File
+	info      os.FileInfo
+	directory bool
+}
+
+func openPathIdentity(path string, directory bool) (*pathIdentity, error) {
+	file, err := openOutputIdentity(path)
+	if err != nil {
+		return nil, err
+	}
+	info, statErr := file.Stat()
+	current, currentErr := os.Lstat(path)
+	if statErr != nil || currentErr != nil || !validOutputType(info, directory) ||
+		!validOutputType(current, directory) || !os.SameFile(info, current) {
+		_ = file.Close()
+		return nil, errors.New("document output identity is unavailable")
+	}
+	return &pathIdentity{file: file, info: info, directory: directory}, nil
+}
+
+func (identity *pathIdentity) matches(path string) bool {
+	if identity == nil || identity.file == nil || path == "" {
+		return false
+	}
+	current, err := os.Lstat(path)
+	return err == nil && validOutputType(current, identity.directory) && os.SameFile(identity.info, current)
+}
+
+func (identity *pathIdentity) close() {
+	if identity != nil && identity.file != nil {
+		_ = identity.file.Close()
+		identity.file = nil
+	}
+}
+
+func (output *stagedArtifactOutput) clearStage() {
+	if output == nil {
+		return
+	}
+	output.path = ""
+	output.identity.close()
+	output.identity = nil
+}
+
+func (output *stagedArtifactOutput) bindStageIdentity() error {
+	if output == nil || output.path == "" || output.identity != nil {
+		return errors.New("document staged output identity is invalid")
+	}
+	identity, err := openPathIdentity(output.path, output.directory)
+	if err != nil {
+		return err
+	}
+	output.identity = identity
+	return nil
 }
 
 func (output *stagedArtifactOutput) abort() {
-	if output == nil || output.path == "" {
+	if output == nil {
 		return
 	}
-	if output.directory {
-		_ = os.RemoveAll(output.path)
-	} else {
-		_ = os.Remove(output.path)
+	if output.path != "" && output.identity != nil && output.identity.matches(output.path) {
+		if output.directory {
+			_ = os.RemoveAll(output.path)
+		} else {
+			_ = os.Remove(output.path)
+		}
 	}
+	output.clearStage()
 }
 
 func (output *stagedArtifactOutput) commit() error {
@@ -88,50 +149,53 @@ func (output *stagedArtifactOutput) commitWithHook(afterValidation func()) error
 	if output == nil || output.path == "" {
 		return errors.New("document output was not staged")
 	}
+	if output.identity == nil || !output.identity.matches(output.path) {
+		return errors.New("document staged output changed during publication")
+	}
 	if !output.overwrite {
-		if afterValidation != nil {
-			afterValidation()
-		}
-		if err := renamePathNoReplace(output.path, output.destination); err != nil {
-			if _, statErr := os.Lstat(output.destination); statErr == nil {
-				return errors.New("document output already exists; use --overwrite to replace it")
-			}
-			return err
-		}
-		output.path = ""
-		return nil
+		return output.commitNoReplace(afterValidation)
 	}
 	return output.replaceWithHook(afterValidation)
+}
+
+func (output *stagedArtifactOutput) commitNoReplace(afterValidation func()) error {
+	if afterValidation != nil {
+		afterValidation()
+	}
+	if !output.identity.matches(output.path) {
+		return errors.New("document staged output changed during publication")
+	}
+	if err := renamePathNoReplace(output.path, output.destination); err != nil {
+		if _, statErr := os.Lstat(output.destination); statErr == nil {
+			return errors.New("document output already exists; use --overwrite to replace it")
+		}
+		return err
+	}
+	if !output.identity.matches(output.destination) {
+		return errors.New("document staged output identity changed during publication")
+	}
+	output.clearStage()
+	return nil
 }
 
 func (output *stagedArtifactOutput) replaceWithHook(afterValidation func()) error {
 	info, err := os.Lstat(output.destination)
 	if errors.Is(err, os.ErrNotExist) {
-		if afterValidation != nil {
-			afterValidation()
-		}
-		if err = renamePathNoReplace(output.path, output.destination); err == nil {
-			output.path = ""
-		}
-		return err
+		return output.commitNoReplace(afterValidation)
 	} else if err != nil {
 		return err
 	}
 	if !validOutputType(info, output.directory) {
 		return errors.New("document output destination has the wrong type")
 	}
-	identity, err := openOutputIdentity(output.destination)
+	destinationIdentity, err := openPathIdentity(output.destination, output.directory)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = identity.Close() }()
-	opened, statErr := identity.Stat()
-	current, currentErr := os.Lstat(output.destination)
-	if statErr != nil || currentErr != nil || !validOutputType(opened, output.directory) ||
-		!validOutputType(current, output.directory) || !os.SameFile(info, opened) || !os.SameFile(opened, current) {
+	defer destinationIdentity.close()
+	if !os.SameFile(info, destinationIdentity.info) {
 		return errors.New("document output destination changed during publication")
 	}
-	info = opened
 	backupRoot, err := os.MkdirTemp(
 		filepath.Dir(output.destination),
 		"."+filepath.Base(output.destination)+".mintclaw-backup-*",
@@ -139,45 +203,102 @@ func (output *stagedArtifactOutput) replaceWithHook(afterValidation func()) erro
 	if err != nil {
 		return err
 	}
+	backupRootIdentity, err := openPathIdentity(backupRoot, true)
+	if err != nil {
+		return errors.New("document output backup identity is unavailable")
+	}
+	defer backupRootIdentity.close()
 	preserveBackup := false
 	defer func() {
-		if !preserveBackup {
+		if !preserveBackup && backupRootIdentity.matches(backupRoot) {
 			_ = os.RemoveAll(backupRoot)
 		}
 	}()
 	if afterValidation != nil {
 		afterValidation()
 	}
+	if !output.identity.matches(output.path) || !destinationIdentity.matches(output.destination) ||
+		!backupRootIdentity.matches(backupRoot) {
+		return errors.New("document output identity changed during publication")
+	}
 	if err = exchangePaths(output.path, output.destination); err != nil {
 		return err
 	}
-	moved, movedErr := os.Lstat(output.path)
-	if movedErr != nil || !validOutputType(moved, output.directory) || !os.SameFile(info, moved) {
-		if rollbackErr := exchangePaths(output.path, output.destination); rollbackErr != nil {
+	if !output.identity.matches(output.destination) || !destinationIdentity.matches(output.path) {
+		if rollbackErr := rollbackVerifiedExchange(
+			output.path,
+			destinationIdentity,
+			output.destination,
+			output.identity,
+			nil,
+		); rollbackErr != nil {
 			preserveBackup = true
-			output.path = ""
 			return fmt.Errorf("document output destination changed and rollback failed: %w", rollbackErr)
 		}
 		return errors.New("document output destination changed during publication")
 	}
 
 	backup := filepath.Join(backupRoot, "validated-destination")
-	if err = renamePathNoReplace(output.path, backup); err != nil {
-		output.path = ""
-		return nil
-	}
-	output.path = ""
-	backupInfo, statErr := os.Lstat(backup)
-	if statErr != nil || !validOutputType(backupInfo, output.directory) || !os.SameFile(info, backupInfo) {
+	if !destinationIdentity.matches(output.path) || !backupRootIdentity.matches(backupRoot) {
 		preserveBackup = true
-		return nil
+		return errors.New("document output destination changed during publication cleanup")
 	}
+	if err = renamePathNoReplace(output.path, backup); err != nil {
+		rollbackErr := rollbackVerifiedExchange(
+			output.path,
+			destinationIdentity,
+			output.destination,
+			output.identity,
+			nil,
+		)
+		if rollbackErr != nil {
+			preserveBackup = true
+			return fmt.Errorf("document output cleanup and rollback failed: %w", rollbackErr)
+		}
+		return fmt.Errorf("document output cleanup failed: %w", err)
+	}
+	if !output.identity.matches(output.destination) || !destinationIdentity.matches(backup) ||
+		!backupRootIdentity.matches(backupRoot) {
+		preserveBackup = true
+		return errors.New("document output identity changed during publication cleanup")
+	}
+	output.clearStage()
 	if output.directory {
 		if err = os.RemoveAll(backup); err != nil {
 			preserveBackup = true
+			return fmt.Errorf("document output cleanup failed: %w", err)
 		}
 	} else if err = os.Remove(backup); err != nil {
 		preserveBackup = true
+		return fmt.Errorf("document output cleanup failed: %w", err)
+	}
+	return nil
+}
+
+func rollbackVerifiedExchange(
+	left string,
+	leftIdentity *pathIdentity,
+	right string,
+	rightIdentity *pathIdentity,
+	afterValidation func(),
+) error {
+	if leftIdentity == nil || rightIdentity == nil {
+		return errors.New("document output rollback identities are unavailable")
+	}
+	if !leftIdentity.matches(left) || !rightIdentity.matches(right) {
+		return errors.New("document output rollback identities changed")
+	}
+	if afterValidation != nil {
+		afterValidation()
+	}
+	if !leftIdentity.matches(left) || !rightIdentity.matches(right) {
+		return errors.New("document output rollback identities changed")
+	}
+	if err := exchangePaths(left, right); err != nil {
+		return err
+	}
+	if !leftIdentity.matches(right) || !rightIdentity.matches(left) {
+		return errors.New("document output rollback identities changed")
 	}
 	return nil
 }
@@ -216,8 +337,14 @@ func stageArtifactFile(
 		return nil, err
 	}
 	output.path = temporary.Name()
+	if err = output.bindStageIdentity(); err != nil {
+		_ = temporary.Close()
+		output.abort()
+		return nil, err
+	}
+	complete := false
 	defer func() {
-		if err != nil {
+		if !complete {
 			output.abort()
 		}
 	}()
@@ -233,6 +360,7 @@ func stageArtifactFile(
 	if err != nil {
 		return nil, err
 	}
+	complete = true
 	return output, nil
 }
 
@@ -270,7 +398,19 @@ func stageArtifactDirectory(
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = os.RemoveAll(stage) }()
+	output := &stagedArtifactOutput{
+		path: stage, destination: destination, directory: true, overwrite: overwrite,
+	}
+	if err = output.bindStageIdentity(); err != nil {
+		output.abort()
+		return nil, err
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			output.abort()
+		}
+	}()
 	for _, artifact := range artifacts {
 		if len(artifact.Pages) != 1 {
 			return nil, errors.New("rendered artifact page mapping is invalid")
@@ -280,10 +420,7 @@ func stageArtifactDirectory(
 			return nil, err
 		}
 	}
-	output := &stagedArtifactOutput{
-		path: stage, destination: destination, directory: true, overwrite: overwrite,
-	}
-	stage = ""
+	complete = true
 	return output, nil
 }
 

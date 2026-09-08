@@ -61,8 +61,10 @@ runtime `npx`, and model-authored shell pipelines remain outside the production 
 
 The gateway never invokes Poppler directly, including during capability discovery. Runtime
 admission reads each executable without following a symlink and checks its exact digest without
-executing it. Inside the one-shot worker, each Poppler child is launched through the same verified,
-open executable inode at `/proc/self/fd/3`, closing the check-to-execute race. PDF0A first copies and hashes the source into one
+executing it. Inside the one-shot worker, executable bytes are copied and hashed in one stream into
+a sealed Linux `memfd`; each Poppler child is launched only from that immutable snapshot at
+`/proc/self/fd/3`. Path replacement and in-place mutation therefore cannot change the admitted bytes
+after verification. PDF0A first copies and hashes the source into one
 read-only operation snapshot. The existing private `mintclaw document _worker` child receives that
 snapshot through inherited descriptor 3, verifies its size and digest, and launches one absolute
 Poppler executable with a scrubbed environment, empty `PATH`, private working directory, 30-second

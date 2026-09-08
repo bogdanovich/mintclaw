@@ -188,7 +188,7 @@ func TestDirectoryPublicationDoesNotReplaceConcurrentDestination(t *testing.T) {
 	}
 }
 
-func TestDirectoryOverwriteRollsBackConcurrentIdentityChange(t *testing.T) {
+func TestDirectoryOverwriteRejectsConcurrentDestinationIdentityChange(t *testing.T) {
 	root := t.TempDir()
 	ref := "document-artifact://operation/page-0001.png"
 	source := filepath.Join(root, "source.png")
@@ -236,6 +236,110 @@ func TestDirectoryOverwriteRollsBackConcurrentIdentityChange(t *testing.T) {
 		t.Fatalf("concurrent destination changed: %q, %v", data, readErr)
 	}
 	staged.abort()
+}
+
+func TestDirectoryOverwriteRejectsStageIdentityReplacement(t *testing.T) {
+	root := t.TempDir()
+	ref := "document-artifact://operation/page-0001.png"
+	source := filepath.Join(root, "source.png")
+	if err := os.WriteFile(source, []byte("page"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "rendered")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	destinationCanary := filepath.Join(destination, "destination-canary")
+	if err := os.WriteFile(destinationCanary, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := stageArtifactDirectory(
+		testArtifactOpener{ref: ref, path: source},
+		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
+		destination,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := filepath.Join(root, "replacement-stage")
+	if err = os.Mkdir(replacement, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacementCanary := filepath.Join(replacement, "replacement-canary")
+	if err = os.WriteFile(replacementCanary, []byte("preserved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stagePath := staged.path
+	var hookErr error
+	err = staged.commitWithHook(func() {
+		if hookErr = os.RemoveAll(stagePath); hookErr != nil {
+			return
+		}
+		hookErr = os.Rename(replacement, stagePath)
+	})
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if err == nil {
+		t.Fatal("overwrite published a replacement staged directory")
+	}
+	staged.abort()
+	if data, readErr := os.ReadFile(destinationCanary); readErr != nil || string(data) != "old" {
+		t.Fatalf("validated destination changed: %q, %v", data, readErr)
+	}
+	if data, readErr := os.ReadFile(
+		filepath.Join(stagePath, "replacement-canary"),
+	); readErr != nil ||
+		string(data) != "preserved" {
+		t.Fatalf("replacement stage was deleted: %q, %v", data, readErr)
+	}
+}
+
+func TestRollbackRefusesChangedExpectedIdentity(t *testing.T) {
+	root := t.TempDir()
+	left := filepath.Join(root, "left")
+	right := filepath.Join(root, "right")
+	replacement := filepath.Join(root, "replacement")
+	for path, marker := range map[string]string{left: "left", right: "right", replacement: "replacement"} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, marker), []byte(marker), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var hookErr error
+	leftIdentity, err := openPathIdentity(left, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leftIdentity.close()
+	rightIdentity, err := openPathIdentity(right, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rightIdentity.close()
+	if err = exchangePaths(left, right); err != nil {
+		t.Fatal(err)
+	}
+	err = rollbackVerifiedExchange(left, rightIdentity, right, leftIdentity, func() {
+		if hookErr = os.RemoveAll(left); hookErr != nil {
+			return
+		}
+		hookErr = os.Rename(replacement, left)
+	})
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if err == nil {
+		t.Fatal("rollback exchanged a changed observed identity")
+	}
+	for path, marker := range map[string]string{left: "replacement", right: "left"} {
+		if data, readErr := os.ReadFile(filepath.Join(path, marker)); readErr != nil || string(data) != marker {
+			t.Fatalf("rollback changed %s: %q, %v", path, data, readErr)
+		}
+	}
 }
 
 type testArtifactOpener struct {

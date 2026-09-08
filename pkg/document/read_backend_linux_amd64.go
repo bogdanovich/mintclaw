@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -28,6 +30,7 @@ const (
 	popplerInfoSHA256       = "3293dda06d80e1e38dab859aa47368c2876aedc41cbc2e24e8fb9a4e66392078"
 	popplerStderrLimit      = 8 * 1024
 	verifiedExecutablePath  = "/proc/self/fd/3"
+	maximumExecutableBytes  = int64(64 * 1024 * 1024)
 )
 
 var errPopplerTextOutputLimit = errors.New("document text output limit exceeded")
@@ -65,19 +68,40 @@ func executableSHA256(path string) string {
 }
 
 func newVerifiedPopplerCommand(executable, expectedSHA256 string, arguments ...string) (*exec.Cmd, *os.File, error) {
-	file, err := openSourceNoFollow(executable)
+	source, err := openSourceNoFollow(executable)
 	if err != nil {
 		return nil, nil, errors.New("document read backend is unavailable")
 	}
+	defer func() { _ = source.Close() }()
+	descriptor, err := unix.MemfdCreate("mintclaw-poppler", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
+	if err != nil {
+		return nil, nil, errors.New("document read backend cannot be isolated")
+	}
+	snapshot := os.NewFile(uintptr(descriptor), "mintclaw-poppler")
+	if snapshot == nil {
+		_ = unix.Close(descriptor)
+		return nil, nil, errors.New("document read backend cannot be isolated")
+	}
+	fail := func(message string) (*exec.Cmd, *os.File, error) {
+		_ = snapshot.Close()
+		return nil, nil, errors.New(message)
+	}
 	hash := sha256.New()
-	if _, err = io.Copy(hash, io.LimitReader(file, 64*1024*1024)); err != nil ||
+	written, err := io.Copy(io.MultiWriter(snapshot, hash), io.LimitReader(source, maximumExecutableBytes+1))
+	if err != nil || written <= 0 || written > maximumExecutableBytes ||
 		hex.EncodeToString(hash.Sum(nil)) != expectedSHA256 {
-		_ = file.Close()
-		return nil, nil, errors.New("document read backend identity is not admitted")
+		return fail("document read backend identity is not admitted")
+	}
+	if _, err = snapshot.Seek(0, io.SeekStart); err != nil {
+		return fail("document read backend cannot be isolated")
+	}
+	seals := unix.F_SEAL_SEAL | unix.F_SEAL_SHRINK | unix.F_SEAL_GROW | unix.F_SEAL_WRITE
+	if _, err = unix.FcntlInt(snapshot.Fd(), unix.F_ADD_SEALS, seals); err != nil {
+		return fail("document read backend cannot be isolated")
 	}
 	command := exec.Command(verifiedExecutablePath, arguments...)
-	command.ExtraFiles = []*os.File{file}
-	return command, file, nil
+	command.ExtraFiles = []*os.File{snapshot}
+	return command, snapshot, nil
 }
 
 func (popplerReadBackend) Extract(data []byte, request WorkerRequest) backendRead {
