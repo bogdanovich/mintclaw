@@ -96,13 +96,13 @@ func TestClientDisconnectClosesConnectionScopedBrowserSessions(t *testing.T) {
 		logger:  slog.New(slog.DiscardHandler),
 	}
 	client.disconnectBrowser()
-	if host.shutdownCalls != 1 {
-		t.Fatalf("browser shutdown calls = %d, want 1", host.shutdownCalls)
+	if host.disconnectCalls != 1 {
+		t.Fatalf("browser disconnect calls = %d, want 1", host.disconnectCalls)
 	}
-	host.shutdownError = errors.New("cleanup failed")
+	host.disconnectError = errors.New("cleanup failed")
 	client.disconnectBrowser()
-	if host.shutdownCalls != 2 {
-		t.Fatalf("browser shutdown calls after failure = %d, want 2", host.shutdownCalls)
+	if host.disconnectCalls != 2 {
+		t.Fatalf("browser disconnect calls after failure = %d, want 2", host.disconnectCalls)
 	}
 }
 

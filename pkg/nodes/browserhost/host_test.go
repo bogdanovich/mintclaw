@@ -112,6 +112,73 @@ func TestBrowserHostSeparatesManagedAliasFactoriesAndGlobalCapacity(t *testing.T
 	}
 }
 
+func TestBrowserHostDisconnectClosesOnlyEphemeralSessions(t *testing.T) {
+	managedProfile := browserHostProfileFixture()
+	ephemeralProfile := managedProfile
+	ephemeralProfile.Revision = "ephemeral-v1"
+	ephemeralProfile.Mode = nodes.BrowserProfileEphemeral
+	managedWorker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+	ephemeralWorker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{
+			"managed":   managedProfile,
+			"ephemeral": ephemeralProfile,
+		},
+		map[string]browserHostFactory{
+			"managed":   &fakeBrowserHostFactory{worker: managedWorker},
+			"ephemeral": &fakeBrowserHostFactory{worker: ephemeralWorker},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host.now = func() time.Time { return time.Unix(100, 0).UTC() }
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+
+	managedRequest := browserHostOpenFixture()
+	if _, err = host.Open(t.Context(), managedRequest); err != nil {
+		t.Fatalf("Open(managed) error = %v", err)
+	}
+	if err = host.Disconnect(t.Context()); err != nil || managedWorker.closeCalls != 0 {
+		t.Fatalf("Disconnect(managed) error = %v, closes = %d", err, managedWorker.closeCalls)
+	}
+	managedStatus, err := host.Status(t.Context(), BrowserHostStatusRequest{
+		SessionID: managedRequest.SessionID, ProfileRevision: managedRequest.ProfileRevision,
+		RoutedSessionID: managedRequest.RoutedSessionID,
+		AgentID:         managedRequest.AgentID, ActorID: managedRequest.ActorID,
+	})
+	if err != nil || managedStatus.State != "ready" {
+		t.Fatalf("managed status after disconnect = %#v, %v", managedStatus, err)
+	}
+	if _, err = host.Close(t.Context(), BrowserHostCloseRequest{
+		SessionID: managedRequest.SessionID, ProfileRevision: managedRequest.ProfileRevision,
+		RoutedSessionID: managedRequest.RoutedSessionID,
+		AgentID:         managedRequest.AgentID, ActorID: managedRequest.ActorID,
+	}); err != nil {
+		t.Fatalf("Close(managed) error = %v", err)
+	}
+
+	ephemeralRequest := browserHostOpenFixture()
+	ephemeralRequest.SessionID = "browser_session_ephemeral"
+	ephemeralRequest.RoutedSessionID = "routed_session_ephemeral"
+	ephemeralRequest.Profile = "ephemeral"
+	ephemeralRequest.ProfileRevision = "ephemeral-v1"
+	if _, err = host.Open(t.Context(), ephemeralRequest); err != nil {
+		t.Fatalf("Open(ephemeral) error = %v", err)
+	}
+	if err = host.Disconnect(t.Context()); err != nil || ephemeralWorker.closeCalls != 1 {
+		t.Fatalf("Disconnect(ephemeral) error = %v, closes = %d", err, ephemeralWorker.closeCalls)
+	}
+	ephemeralStatus, err := host.Status(t.Context(), BrowserHostStatusRequest{
+		SessionID: ephemeralRequest.SessionID, ProfileRevision: ephemeralRequest.ProfileRevision,
+		RoutedSessionID: ephemeralRequest.RoutedSessionID,
+		AgentID:         ephemeralRequest.AgentID, ActorID: ephemeralRequest.ActorID,
+	})
+	if err != nil || ephemeralStatus.State != "closed" {
+		t.Fatalf("ephemeral status after disconnect = %#v, %v", ephemeralStatus, err)
+	}
+}
+
 type fakeBrowserHostWorker struct {
 	status                  browserworker.WorkerStatus
 	statusErr               error

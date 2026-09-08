@@ -50,8 +50,8 @@ type fakeBrowserCommandHost struct {
 	policyRequests   []nodes.BrowserHostPolicyRequest
 	policyResult     nodes.BrowserPolicyEvaluateResult
 	policyError      error
-	shutdownCalls    int
-	shutdownError    error
+	disconnectCalls  int
+	disconnectError  error
 }
 
 func TestBrowserCommandFailurePreservesCleanupRequired(t *testing.T) {
@@ -68,9 +68,9 @@ func TestBrowserCommandFailurePreservesCleanupRequired(t *testing.T) {
 	}
 }
 
-func (host *fakeBrowserCommandHost) Shutdown(context.Context) error {
-	host.shutdownCalls++
-	return host.shutdownError
+func (host *fakeBrowserCommandHost) Disconnect(context.Context) error {
+	host.disconnectCalls++
+	return host.disconnectError
 }
 
 func (host *fakeBrowserCommandHost) EvaluatePolicy(

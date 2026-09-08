@@ -18,9 +18,9 @@ type BrowserCommandHost interface {
 	Observe(context.Context, nodes.BrowserHostObserveRequest) (nodes.BrowserObservationResult, error)
 	Act(context.Context, nodes.BrowserHostActRequest) (nodes.BrowserObservationResult, error)
 	Close(context.Context, nodes.BrowserHostStatusRequest) (nodes.BrowserSessionResult, error)
-	// Shutdown closes all live browser sessions at the connection lifecycle
-	// boundary. The host remains reusable after the gateway reconnects.
-	Shutdown(context.Context) error
+	// Disconnect closes connection-scoped browser sessions. Persistent managed
+	// sessions remain available when the same gateway reconnects.
+	Disconnect(context.Context) error
 }
 
 type browserContextCommandHost interface {

@@ -900,7 +900,7 @@ func (client *Client) disconnectBrowser() {
 	}
 	cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelCleanup()
-	if err := client.runtime.browserHost.Shutdown(cleanupContext); err != nil {
+	if err := client.runtime.browserHost.Disconnect(cleanupContext); err != nil {
 		client.logger.Error("companion browser disconnect cleanup failed", "error", err)
 	}
 }

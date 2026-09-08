@@ -1725,6 +1725,39 @@ func closeBrowserHostOwner(ctx context.Context, owner browserworker.Worker) erro
 	return owner.Close(cleanupContext)
 }
 
+// Disconnect releases browser identities whose authority is scoped to one
+// companion transport connection. Managed profiles deliberately survive a
+// transient reconnect; their durable gateway session remains authoritative.
+func (host *BrowserHost) Disconnect(ctx context.Context) error {
+	if host == nil {
+		return nil
+	}
+	host.mu.Lock()
+	sessions := make(map[string]*browserHostSession, len(host.sessions))
+	for id, session := range host.sessions {
+		sessions[id] = session
+	}
+	host.mu.Unlock()
+	var disconnectErr error
+	for id, session := range sessions {
+		session.mu.Lock()
+		if session.profile.Mode != nodes.BrowserProfileEphemeral {
+			session.mu.Unlock()
+			continue
+		}
+		request := BrowserHostCloseRequest{
+			SessionID: id, ProfileRevision: session.profile.Revision,
+			RoutedSessionID: session.routedSessionID,
+			AgentID:         session.agentID, ActorID: session.actorID,
+		}
+		session.mu.Unlock()
+		if _, err := host.Close(ctx, request); err != nil {
+			disconnectErr = errors.Join(disconnectErr, err)
+		}
+	}
+	return disconnectErr
+}
+
 func (host *BrowserHost) Shutdown(ctx context.Context) error {
 	if host == nil {
 		return nil
