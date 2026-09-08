@@ -2,7 +2,7 @@
 
 ## Status And Objective
 
-Status: in progress. Phase 1 is complete and Phase 2 is active.
+Status: in progress. Phases 1 and 2 are complete and Phase 3 is active.
 
 Implement Browser Identity and Attached-User Profiles end to end under
 [Browser Capability B4 Admission](browser-capability-b4-admission.md). The goal
@@ -24,8 +24,8 @@ evidence is sufficient to continue safely.
 | Phase | Status | Required outcome |
 | --- | --- | --- |
 | 1. Profile authority and production cutover | [Complete](../operations/browser-b4-phase1-evidence.md) | Canonical multi-profile schema, private runtime mapping, safe discovery, and lossless migration of the deployed `managed` identity |
-| 2. Managed alias and revocation parity | In progress | Arbitrary managed aliases, exact grants, revision-bound revocation, lease isolation, and gateway/companion conformance |
-| 3. Ephemeral profiles | Pending | Fresh session-only identity with verified cleanup and quarantine semantics on gateway and companion |
+| 2. Managed alias and revocation parity | [Complete](../operations/browser-b4-phase2-evidence.md) | Arbitrary managed aliases, exact grants, revision-bound revocation, lease isolation, and gateway/companion conformance |
+| 3. Ephemeral profiles | In progress | Fresh session-only identity with verified cleanup and quarantine semantics on gateway and companion |
 | 4. Gateway attached Chrome | Pending | Visible per-session Playwright-extension consent, selected-tab authority, detach, and gateway lifecycle evidence |
 | 5. Companion attached Chrome and closeout | Pending | The same attached contract on the Darwin companion plus global B4 production evidence and roadmap closeout |
 

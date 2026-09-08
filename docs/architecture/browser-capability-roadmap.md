@@ -898,13 +898,15 @@ Stop a parity slice if:
 
 ## B4: Browser Identity and Attached-User Profiles
 
-Status: Phase 1 complete; Phase 2 in progress. The authoritative scope, profile
+Status: Phases 1 and 2 complete; Phase 3 in progress. The authoritative scope, profile
 classes, attached-browser consent model, delivery order,
 acceptance evidence, and stop conditions are recorded in
 [Browser Capability B4 Admission](browser-capability-b4-admission.md). Execution
 progress is tracked in [Browser B4 Execution Goal](browser-b4-execution-goal.md),
-and [Phase 1 deployment evidence](../operations/browser-b4-phase1-evidence.md)
-records the canonical managed-profile cutover.
+[Phase 1 deployment evidence](../operations/browser-b4-phase1-evidence.md)
+records the canonical managed-profile cutover, and
+[Phase 2 deployment evidence](../operations/browser-b4-phase2-evidence.md)
+records managed-alias isolation and revision-bound revocation parity.
 
 ### Operator outcome
 
