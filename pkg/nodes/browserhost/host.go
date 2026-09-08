@@ -355,8 +355,9 @@ func (host *BrowserHost) Open(
 		cleanupErr := closeBrowserHostOwner(ctx, opened.Owner)
 		session.mu.Lock()
 		session.state = "lost"
+		var cleanupClass error
 		if cleanupErr != nil {
-			session.safeFailure = "cleanup_required"
+			session.safeFailure, cleanupClass = browserHostCleanupFailure(cleanupErr)
 			session.cleanupOwner = opened.Owner
 		} else if errors.Is(openErr, browserworker.ErrDriverIncompatible) {
 			session.safeFailure = "driver_incompatible"
@@ -366,15 +367,12 @@ func (host *BrowserHost) Open(
 		session.mu.Unlock()
 		if openErr != nil {
 			if cleanupErr != nil {
-				return host.sessionView(session), errors.Join(openErr, ErrBrowserHostCleanupRequired)
+				return host.sessionView(session), errors.Join(openErr, cleanupClass)
 			}
 			return host.sessionView(session), openErr
 		}
 		if cleanupErr != nil {
-			return host.sessionView(session), errors.Join(
-				browserworker.ErrWorkerUnavailable,
-				ErrBrowserHostCleanupRequired,
-			)
+			return host.sessionView(session), cleanupClass
 		}
 		return host.sessionView(session), browserworker.ErrWorkerUnavailable
 	}
@@ -383,13 +381,14 @@ func (host *BrowserHost) Open(
 		session.mu.Unlock()
 		cleanupErr := closeBrowserHostOwner(ctx, actionWorker)
 		session.mu.Lock()
+		var cleanupClass error
 		if cleanupErr != nil {
 			session.state = "lost"
-			session.safeFailure = "cleanup_required"
+			session.safeFailure, cleanupClass = browserHostCleanupFailure(cleanupErr)
 			session.cleanupOwner = actionWorker
 		}
 		session.mu.Unlock()
-		return host.sessionView(session), ErrBrowserHostLost
+		return host.sessionView(session), errors.Join(ErrBrowserHostLost, cleanupClass)
 	}
 	session.worker = actionWorker
 	session.navigationWorker = navigationWorker
@@ -1680,10 +1679,10 @@ func (host *BrowserHost) Close(
 		if session.cleanupOwner != nil {
 			if closeErr := session.cleanupOwner.Close(ctx); closeErr != nil {
 				session.state = "lost"
-				session.safeFailure = "cleanup_required"
+				session.safeFailure, closeErr = browserHostCleanupFailure(closeErr)
 				return browserHostSessionView(session), errors.Join(
 					ErrBrowserHostLost,
-					ErrBrowserHostCleanupRequired,
+					closeErr,
 				)
 			}
 			session.cleanupOwner = nil
@@ -1698,10 +1697,10 @@ func (host *BrowserHost) Close(
 	session.state = "closing"
 	if closeErr := session.worker.Close(ctx); closeErr != nil {
 		session.state = "lost"
-		session.safeFailure = "cleanup_required"
+		session.safeFailure, closeErr = browserHostCleanupFailure(closeErr)
 		return browserHostSessionView(session), errors.Join(
 			ErrBrowserHostLost,
-			ErrBrowserHostCleanupRequired,
+			closeErr,
 		)
 	}
 	session.worker = nil
@@ -1723,6 +1722,18 @@ func closeBrowserHostOwner(ctx context.Context, owner browserworker.Worker) erro
 	)
 	defer cancelCleanup()
 	return owner.Close(cleanupContext)
+}
+
+// browserHostCleanupFailure preserves the worker's cleanup certainty instead
+// of manufacturing an ephemeral cleanup incident for every close error.
+func browserHostCleanupFailure(cleanupErr error) (string, error) {
+	if errors.Is(cleanupErr, browserworker.ErrCleanupRequired) {
+		return "cleanup_required", errors.Join(
+			browserworker.ErrWorkerUnavailable,
+			ErrBrowserHostCleanupRequired,
+		)
+	}
+	return "worker_unavailable", browserworker.ErrWorkerUnavailable
 }
 
 // Disconnect releases browser identities whose authority is scoped to one
@@ -1800,7 +1811,7 @@ func (host *BrowserHost) expireSessionLocked(
 	if session.worker != nil {
 		if err := session.worker.Close(ctx); err != nil {
 			session.state = "lost"
-			session.safeFailure = "cleanup_required"
+			session.safeFailure, _ = browserHostCleanupFailure(err)
 			return true
 		}
 		session.worker = nil

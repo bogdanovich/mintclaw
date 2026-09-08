@@ -2073,24 +2073,42 @@ func TestBrowserHostFailedOpenCleansReturnedWorkerAndReportsSafeState(t *testing
 	}
 }
 
-func TestBrowserHostRetriesFailedStartupCleanupOnClose(t *testing.T) {
-	worker := &fakeBrowserHostWorker{closeErr: errors.New("cleanup failed")}
-	host := newTestBrowserHost(t, &fakeBrowserHostFactory{
-		worker: worker, err: browserworker.ErrWorkerUnavailable,
-	})
-	result, err := host.Open(t.Context(), browserHostOpenFixture())
-	if !errors.Is(err, browserworker.ErrWorkerUnavailable) ||
-		!errors.Is(err, ErrBrowserHostCleanupRequired) || result.Reason != "cleanup_required" ||
-		worker.closeCalls != 1 {
-		t.Fatalf("failed Open() = %#v, %v, closes = %d", result, err, worker.closeCalls)
+func TestBrowserHostClassifiesFailedStartupCleanupByWorkerSentinel(t *testing.T) {
+	tests := []struct {
+		name            string
+		mode            string
+		closeErr        error
+		wantReason      string
+		wantCleanupFlag bool
+	}{
+		{
+			name: "managed worker unavailable", mode: nodes.BrowserProfileManaged,
+			closeErr: browserworker.ErrWorkerUnavailable, wantReason: "worker_unavailable",
+		},
+		{
+			name: "ephemeral deletion unverified", mode: nodes.BrowserProfileEphemeral,
+			closeErr:   errors.Join(browserworker.ErrWorkerUnavailable, browserworker.ErrCleanupRequired),
+			wantReason: "cleanup_required", wantCleanupFlag: true,
+		},
 	}
-	worker.closeErr = nil
-	closed, err := host.Close(t.Context(), BrowserHostCloseRequest{
-		SessionID: "browser_session_1", ProfileRevision: "managed-v1",
-		RoutedSessionID: "routed_session_1", AgentID: hostAgentID, ActorID: hostActorID,
-	})
-	if err != nil || closed.State != "closed" || worker.closeCalls != 2 {
-		t.Fatalf("cleanup Close() = %#v, %v, closes = %d", closed, err, worker.closeCalls)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worker := &fakeBrowserHostWorker{closeErr: test.closeErr}
+			host, request := newTestBrowserHostForMode(t, test.mode, &fakeBrowserHostFactory{
+				worker: worker, err: browserworker.ErrWorkerUnavailable,
+			})
+			result, err := host.Open(t.Context(), request)
+			if !errors.Is(err, browserworker.ErrWorkerUnavailable) ||
+				errors.Is(err, ErrBrowserHostCleanupRequired) != test.wantCleanupFlag ||
+				result.Reason != test.wantReason || worker.closeCalls != 1 {
+				t.Fatalf("failed Open() = %#v, %v, closes = %d", result, err, worker.closeCalls)
+			}
+			worker.closeErr = nil
+			closed, err := host.Close(t.Context(), browserHostCloseRequest(request))
+			if err != nil || closed.State != "closed" || worker.closeCalls != 2 {
+				t.Fatalf("cleanup Close() = %#v, %v, closes = %d", closed, err, worker.closeCalls)
+			}
+		})
 	}
 }
 
@@ -2119,6 +2137,49 @@ func TestBrowserHostFailedCleanupKeepsProfileOccupied(t *testing.T) {
 	if _, err := host.Open(t.Context(), second); !errors.Is(err, browserworker.ErrWorkerUnavailable) ||
 		len(factory.requests) != 2 {
 		t.Fatalf("Open() after cleanup error = %v, requests = %d", err, len(factory.requests))
+	}
+}
+
+func TestBrowserHostClassifiesCloseCleanupByWorkerSentinel(t *testing.T) {
+	tests := []struct {
+		name            string
+		mode            string
+		closeErr        error
+		wantReason      string
+		wantCleanupFlag bool
+	}{
+		{
+			name: "managed worker unavailable", mode: nodes.BrowserProfileManaged,
+			closeErr: browserworker.ErrWorkerUnavailable, wantReason: "worker_unavailable",
+		},
+		{
+			name: "ephemeral deletion unverified", mode: nodes.BrowserProfileEphemeral,
+			closeErr:   errors.Join(browserworker.ErrWorkerUnavailable, browserworker.ErrCleanupRequired),
+			wantReason: "cleanup_required", wantCleanupFlag: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+			host, request := newTestBrowserHostForMode(
+				t, test.mode, &fakeBrowserHostFactory{worker: worker},
+			)
+			if _, err := host.Open(t.Context(), request); err != nil {
+				t.Fatal(err)
+			}
+			worker.closeErr = test.closeErr
+			result, err := host.Close(t.Context(), browserHostCloseRequest(request))
+			if !errors.Is(err, ErrBrowserHostLost) ||
+				errors.Is(err, ErrBrowserHostCleanupRequired) != test.wantCleanupFlag ||
+				result.State != "lost" || result.Reason != test.wantReason || worker.closeCalls != 1 {
+				t.Fatalf("failed Close() = %#v, %v, closes = %d", result, err, worker.closeCalls)
+			}
+			worker.closeErr = nil
+			result, err = host.Close(t.Context(), browserHostCloseRequest(request))
+			if err != nil || result.State != "closed" || worker.closeCalls != 2 {
+				t.Fatalf("retry Close() = %#v, %v, closes = %d", result, err, worker.closeCalls)
+			}
+		})
 	}
 }
 
@@ -2400,6 +2461,52 @@ func TestBrowserHostExpiresAndClosesIdleWorker(t *testing.T) {
 	}
 }
 
+func TestBrowserHostClassifiesExpiryCleanupByWorkerSentinel(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       string
+		closeErr   error
+		wantReason string
+	}{
+		{
+			name: "managed worker unavailable", mode: nodes.BrowserProfileManaged,
+			closeErr: browserworker.ErrWorkerUnavailable, wantReason: "worker_unavailable",
+		},
+		{
+			name: "ephemeral deletion unverified", mode: nodes.BrowserProfileEphemeral,
+			closeErr:   errors.Join(browserworker.ErrWorkerUnavailable, browserworker.ErrCleanupRequired),
+			wantReason: "cleanup_required",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+			host, request := newTestBrowserHostForMode(
+				t, test.mode, &fakeBrowserHostFactory{worker: worker},
+			)
+			if _, err := host.Open(t.Context(), request); err != nil {
+				t.Fatal(err)
+			}
+			worker.closeErr = test.closeErr
+			host.now = func() time.Time {
+				return time.Unix(100+int64(nodes.MaxBrowserIdleSeconds)+1, 0).UTC()
+			}
+			status, err := host.Status(t.Context(), browserHostStatusRequest(request))
+			if err != nil || status.State != "lost" || status.Reason != test.wantReason ||
+				(status.Reason == "cleanup_required") != errors.Is(
+					test.closeErr, browserworker.ErrCleanupRequired,
+				) || worker.closeCalls != 1 {
+				t.Fatalf("expired Status() = %#v, %v, closes = %d", status, err, worker.closeCalls)
+			}
+			worker.closeErr = nil
+			status, err = host.Close(t.Context(), browserHostCloseRequest(request))
+			if err != nil || status.State != "closed" || worker.closeCalls != 2 {
+				t.Fatalf("expiry cleanup Close() = %#v, %v, closes = %d", status, err, worker.closeCalls)
+			}
+		})
+	}
+}
+
 func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	profile := browserHostProfileFixture()
@@ -2620,16 +2727,36 @@ func TestCompanionBrowserProfileConfigForwardsRuntimeAuthority(t *testing.T) {
 
 func newTestBrowserHost(t *testing.T, factory browserHostFactory) *BrowserHost {
 	t.Helper()
+	host, _ := newTestBrowserHostForMode(t, nodes.BrowserProfileManaged, factory)
+	return host
+}
+
+func newTestBrowserHostForMode(
+	t *testing.T,
+	mode string,
+	factory browserHostFactory,
+) (*BrowserHost, BrowserHostOpenRequest) {
+	t.Helper()
+	profile := browserHostProfileFixture()
+	alias := nodes.BrowserProfileManaged
+	if mode == nodes.BrowserProfileEphemeral {
+		alias = nodes.BrowserProfileEphemeral
+		profile.Mode = mode
+		profile.Revision = "ephemeral-v1"
+	}
 	host, err := newBrowserHost(
-		map[string]companion.BrowserProfilePolicy{"managed": browserHostProfileFixture()},
-		map[string]browserHostFactory{"managed": factory},
+		map[string]companion.BrowserProfilePolicy{alias: profile},
+		map[string]browserHostFactory{alias: factory},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	host.now = func() time.Time { return time.Unix(100, 0).UTC() }
 	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
-	return host
+	request := browserHostOpenFixture()
+	request.Profile = alias
+	request.ProfileRevision = profile.Revision
+	return host, request
 }
 
 func TestBrowserHostSnapshotsOpaqueCompanionGrants(t *testing.T) {
@@ -3024,6 +3151,17 @@ func browserHostOpenFixture() BrowserHostOpenRequest {
 		AgentID: hostAgentID,
 		ActorID: hostActorID, DryRun: true, Limits: nodes.BrowserLimits{}.Effective(),
 	}
+}
+
+func browserHostStatusRequest(request BrowserHostOpenRequest) BrowserHostStatusRequest {
+	return BrowserHostStatusRequest{
+		SessionID: request.SessionID, ProfileRevision: request.ProfileRevision,
+		RoutedSessionID: request.RoutedSessionID, AgentID: request.AgentID, ActorID: request.ActorID,
+	}
+}
+
+func browserHostCloseRequest(request BrowserHostOpenRequest) BrowserHostCloseRequest {
+	return browserHostStatusRequest(request)
 }
 
 func browserHostNavigateFixture() BrowserHostActRequest {
