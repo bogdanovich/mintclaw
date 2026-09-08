@@ -47,6 +47,7 @@ type RecordType string
 const (
 	RecordRequest  RecordType = "request"
 	RecordResponse RecordType = "response"
+	RecordEvent    RecordType = "event"
 )
 
 type Method string
@@ -57,23 +58,24 @@ const (
 	MethodTurnSteer     Method = "turn.steer"
 	MethodTurnInterrupt Method = "turn.interrupt"
 	MethodTurnCancel    Method = "turn.cancel"
+	MethodSnapshotRead  Method = "snapshot.read"
 	MethodShutdown      Method = "shutdown"
 )
 
 func (method Method) Valid() bool {
 	switch method {
 	case MethodInitialize, MethodTurnStart, MethodTurnSteer, MethodTurnInterrupt,
-		MethodTurnCancel, MethodShutdown:
+		MethodTurnCancel, MethodSnapshotRead, MethodShutdown:
 		return true
 	default:
 		return false
 	}
 }
 
-// RequiresIdempotencyKey reports whether a request must carry a key. Every
-// v1 command can mutate worker state, including initialization and shutdown.
+// RequiresIdempotencyKey reports whether a request must carry a key. The
+// read-only snapshot command has no replay side effects.
 func (method Method) RequiresIdempotencyKey() bool {
-	return method.Valid()
+	return method.Valid() && method != MethodSnapshotRead
 }
 
 type ErrorCode string
@@ -138,6 +140,8 @@ type Record struct {
 	OK             *bool           `json:"ok,omitempty"`
 	Result         json.RawMessage `json:"result,omitempty"`
 	Error          *ProtocolError  `json:"error,omitempty"`
+	Event          EventName       `json:"event,omitempty"`
+	Payload        json.RawMessage `json:"payload,omitempty"`
 }
 
 func (record Record) Validate() error {
@@ -149,6 +153,8 @@ func (record Record) Validate() error {
 		return record.validateRequest()
 	case RecordResponse:
 		return record.validateResponse()
+	case RecordEvent:
+		return record.validateEvent()
 	default:
 		return fmt.Errorf("%w: unsupported record type %q", ErrInvalidRecord, record.Type)
 	}
@@ -168,7 +174,8 @@ func (record Record) validateRequest() error {
 	if _, err := DecodeRequestPayload(record.Method, record.Params); err != nil {
 		return err
 	}
-	if record.OK != nil || len(record.Result) != 0 || record.Error != nil {
+	if record.OK != nil || len(record.Result) != 0 || record.Error != nil ||
+		record.Event != "" || len(record.Payload) != 0 {
 		return fmt.Errorf("%w: request contains fields from another record type", ErrInvalidRecord)
 	}
 	return nil
@@ -178,7 +185,8 @@ func (record Record) validateResponse() error {
 	if !validIdentifier(record.ID) || !record.Method.Valid() || record.OK == nil {
 		return fmt.Errorf("%w: response requires a valid ID, method, and ok", ErrInvalidRecord)
 	}
-	if record.IdempotencyKey != "" || len(record.Params) != 0 {
+	if record.IdempotencyKey != "" || len(record.Params) != 0 ||
+		record.Event != "" || len(record.Payload) != 0 {
 		return fmt.Errorf("%w: response contains fields from another record type", ErrInvalidRecord)
 	}
 	if *record.OK {
@@ -192,6 +200,20 @@ func (record Record) validateResponse() error {
 		return fmt.Errorf("%w: failed response requires only an error", ErrInvalidRecord)
 	}
 	return record.Error.Validate()
+}
+
+func (record Record) validateEvent() error {
+	if !record.Event.Valid() {
+		return fmt.Errorf("%w: event requires a supported name", ErrInvalidRecord)
+	}
+	if _, err := DecodeEventPayload(record.Event, record.Payload); err != nil {
+		return err
+	}
+	if record.ID != "" || record.Method != "" || record.IdempotencyKey != "" ||
+		len(record.Params) != 0 || record.OK != nil || len(record.Result) != 0 || record.Error != nil {
+		return fmt.Errorf("%w: event contains fields from another record type", ErrInvalidRecord)
+	}
+	return nil
 }
 
 func (record Record) validateWireShape(members map[string]json.RawMessage) error {
@@ -209,6 +231,8 @@ func (record Record) validateWireShape(members map[string]json.RawMessage) error
 		} else {
 			required = append(required, "error")
 		}
+	case RecordEvent:
+		required = []string{"schema_version", "type", "event", "payload"}
 	default:
 		return fmt.Errorf("%w: unsupported record type %q", ErrInvalidRecord, record.Type)
 	}
@@ -235,7 +259,7 @@ func DecodeRequestPayload(method Method, raw json.RawMessage) (any, error) {
 		payload = &TurnStartParams{}
 	case MethodTurnSteer:
 		payload = &TurnSteerParams{}
-	case MethodTurnInterrupt, MethodTurnCancel, MethodShutdown:
+	case MethodTurnInterrupt, MethodTurnCancel, MethodSnapshotRead, MethodShutdown:
 		payload = &GenerationParams{}
 	default:
 		return nil, fmt.Errorf("%w: unsupported request method %q", ErrInvalidRecord, method)
@@ -266,6 +290,8 @@ func DecodeResultPayload(method Method, raw json.RawMessage) (any, error) {
 	switch method {
 	case MethodInitialize:
 		payload = &InitializeResult{}
+	case MethodSnapshotRead:
+		payload = &SnapshotResult{}
 	case MethodTurnStart, MethodTurnSteer, MethodTurnInterrupt, MethodTurnCancel, MethodShutdown:
 		payload = &AckResult{}
 	default:

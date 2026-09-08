@@ -278,8 +278,24 @@ func TestEveryCommandRequiresIdempotencyKey(t *testing.T) {
 			}
 		})
 	}
-	if Method("snapshot.read").Valid() {
-		t.Fatal("snapshot.read belongs to the later event/snapshot protocol packet")
+	snapshot := Record{
+		SchemaVersion: ProtocolV1,
+		Type:          RecordRequest,
+		ID:            "snapshot-1",
+		Method:        MethodSnapshotRead,
+		Params: mustPayload(t, GenerationParams{
+			ControlIdentity: binding.ControlIdentity(),
+		}),
+	}
+	if !snapshot.Method.Valid() || snapshot.Method.RequiresIdempotencyKey() {
+		t.Fatal("snapshot.read must be a valid read-only command")
+	}
+	if _, err := Encode(snapshot); err != nil {
+		t.Fatalf("Encode(snapshot.read) error = %v", err)
+	}
+	snapshot.IdempotencyKey = "not-accepted"
+	if _, err := Encode(snapshot); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("Encode(snapshot.read with key) error = %v, want %v", err, ErrInvalidRecord)
 	}
 }
 
