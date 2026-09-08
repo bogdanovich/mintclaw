@@ -71,6 +71,9 @@ func (w *processWorker) run(
 	timeout := w.timeout
 	if timeout <= 0 {
 		timeout = defaultWorkerTimeout
+		if request.Operation == workerOperationExtract || request.Operation == workerOperationRender {
+			timeout = defaultReadWorkerTimeout
+		}
 	}
 	processCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

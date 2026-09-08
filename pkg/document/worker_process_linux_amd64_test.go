@@ -3,11 +3,13 @@
 package document
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,6 +78,61 @@ func TestProcessInspectorSuccessUsesRealSubprocessAndCleansScratch(t *testing.T)
 		t.Fatalf("worker result = %#v", result)
 	}
 	assertOnlySnapshotRemains(t, snapshot)
+}
+
+func TestProcessReaderUsesPinnedPopplerAndAdoptsVerifiedArtifacts(t *testing.T) {
+	if !readBackendAvailable() {
+		t.Skip("pinned Poppler 24.02.0 backend is unavailable")
+	}
+	worker := testProcessWorker("serve")
+	worker.timeout = 10 * time.Second
+
+	t.Run("extract", func(t *testing.T) {
+		snapshot, input := processInspectorFixture(t, "extract")
+		read := WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationExtract)}
+		result := worker.Extract(t.Context(), snapshot, input, defaultInspectionLimits(), read)
+		if result.State != StateSucceeded || result.Extraction == nil || len(result.Artifacts) != 1 {
+			t.Fatalf("extraction result = %#v", result)
+		}
+		artifact, err := snapshot.OpenArtifact(result.Artifacts[0].Artifact.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(artifact)
+		_ = artifact.Close()
+		if err != nil || !bytes.Contains(data, []byte("MintClaw text fixture")) {
+			t.Fatalf("extracted artifact = %q, %v", data, err)
+		}
+		if strings.Contains(string(data), snapshot.path) {
+			t.Fatalf("extracted artifact leaked snapshot path: %q", data)
+		}
+		if err = snapshot.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("render", func(t *testing.T) {
+		snapshot, input := processReadFixture(t, "render", "image-only.pdf")
+		read := WorkerReadRequest{Pages: []int{1}, Limits: defaultReadLimits(workerOperationRender)}
+		result := worker.Render(t.Context(), snapshot, input, defaultInspectionLimits(), read)
+		if result.State != StateSucceeded || result.Rendering == nil || len(result.Artifacts) != 1 ||
+			result.Artifacts[0].Artifact.ContentType != "image/png" {
+			t.Fatalf("render result = %#v", result)
+		}
+		artifact, err := snapshot.OpenArtifact(result.Artifacts[0].Artifact.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		header := make([]byte, 8)
+		_, err = io.ReadFull(artifact, header)
+		_ = artifact.Close()
+		if err != nil || !bytes.Equal(header, []byte("\x89PNG\r\n\x1a\n")) {
+			t.Fatalf("rendered header = %x, %v", header, err)
+		}
+		if err = snapshot.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func TestProcessInspectorConcurrentOperationsAreIsolated(t *testing.T) {
@@ -333,13 +390,17 @@ func processWorkerFixture(t *testing.T) (*Snapshot, DocumentRef) {
 }
 
 func processInspectorFixture(t *testing.T, operationID string) (*Snapshot, DocumentRef) {
+	return processReadFixture(t, operationID, "text.pdf")
+}
+
+func processReadFixture(t *testing.T, operationID, filename string) (*Snapshot, DocumentRef) {
 	t.Helper()
 	dir := filepath.Join(directTempDir(t), "operation")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatalf("create operation directory: %v", err)
 	}
 	path := filepath.Join(dir, "snapshot.pdf")
-	data, err := os.ReadFile(filepath.Join("testdata", "text.pdf"))
+	data, err := os.ReadFile(filepath.Join("testdata", filename))
 	if err != nil {
 		t.Fatal(err)
 	}

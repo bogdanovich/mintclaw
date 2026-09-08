@@ -21,11 +21,14 @@ const (
 
 	workerOperationVerify  = "verify_snapshot"
 	workerOperationInspect = "inspect"
+	workerOperationExtract = "extract"
+	workerOperationRender  = "render"
 	workerInputFD          = 3
 
-	defaultWorkerTimeout    = 5 * time.Second
-	defaultWorkerOutputSize = 16 * 1024
-	maxWorkerRequestSize    = 16 * 1024
+	defaultWorkerTimeout     = 5 * time.Second
+	defaultReadWorkerTimeout = 30 * time.Second
+	defaultWorkerOutputSize  = 64 * 1024
+	maxWorkerRequestSize     = 64 * 1024
 )
 
 // WorkerInputFileDescriptor is the inherited descriptor used by the private CLI worker entrypoint.
@@ -45,11 +48,23 @@ type WorkerInput struct {
 
 // WorkerRequest is the versioned, path-free request accepted by the private worker command.
 type WorkerRequest struct {
-	SchemaVersion string      `json:"schema_version"`
-	OperationID   string      `json:"operation_id"`
-	Operation     string      `json:"operation"`
-	Input         WorkerInput `json:"input"`
-	Limits        Limits      `json:"limits"`
+	SchemaVersion string             `json:"schema_version"`
+	OperationID   string             `json:"operation_id"`
+	Operation     string             `json:"operation"`
+	Input         WorkerInput        `json:"input"`
+	Limits        Limits             `json:"limits"`
+	Read          *WorkerReadRequest `json:"read,omitempty"`
+}
+
+type WorkerReadRequest struct {
+	Pages  []int      `json:"pages"`
+	Limits ReadLimits `json:"limits"`
+}
+
+// WorkerArtifact names one artifact relative to the worker scratch. It never carries a path.
+type WorkerArtifact struct {
+	Name     string   `json:"name"`
+	Artifact Artifact `json:"artifact"`
 }
 
 // WorkerResult is the worker's bounded terminal response. It intentionally has no artifact path fields.
@@ -59,6 +74,9 @@ type WorkerResult struct {
 	State         State            `json:"state"`
 	Input         *WorkerInput     `json:"input,omitempty"`
 	Inspection    *InspectionFacts `json:"inspection,omitempty"`
+	Extraction    *ExtractionFacts `json:"extraction,omitempty"`
+	Rendering     *RenderingFacts  `json:"rendering,omitempty"`
+	Artifacts     []WorkerArtifact `json:"artifacts,omitempty"`
 	Failure       *Failure         `json:"failure,omitempty"`
 }
 
@@ -72,6 +90,14 @@ type InspectorWorker interface {
 	Inspect(context.Context, *Snapshot, DocumentRef, Limits) WorkerResult
 }
 
+type ExtractorWorker interface {
+	Extract(context.Context, *Snapshot, DocumentRef, Limits, WorkerReadRequest) WorkerResult
+}
+
+type RendererWorker interface {
+	Render(context.Context, *Snapshot, DocumentRef, Limits, WorkerReadRequest) WorkerResult
+}
+
 // NewProcessWorker returns the short-lived worker used by production document acquisition.
 // It launches the current MintClaw executable in its private document worker mode.
 func NewProcessWorker() Worker {
@@ -82,6 +108,10 @@ func NewProcessWorker() Worker {
 func NewProcessInspector() InspectorWorker {
 	return newProcessWorker()
 }
+
+func NewProcessExtractor() ExtractorWorker { return newProcessWorker() }
+
+func NewProcessRenderer() RendererWorker { return newProcessWorker() }
 
 func (w *processWorker) Verify(ctx context.Context, snapshot *Snapshot, input DocumentRef) WorkerResult {
 	return w.runOperation(ctx, snapshot, input, defaultInspectionLimits(), workerOperationVerify)
@@ -96,6 +126,39 @@ func (w *processWorker) Inspect(
 	return w.runOperation(ctx, snapshot, input, limits, workerOperationInspect)
 }
 
+func (w *processWorker) Extract(
+	ctx context.Context,
+	snapshot *Snapshot,
+	input DocumentRef,
+	limits Limits,
+	read WorkerReadRequest,
+) WorkerResult {
+	return w.runReadOperation(ctx, snapshot, input, limits, workerOperationExtract, read)
+}
+
+func (w *processWorker) Render(
+	ctx context.Context,
+	snapshot *Snapshot,
+	input DocumentRef,
+	limits Limits,
+	read WorkerReadRequest,
+) WorkerResult {
+	return w.runReadOperation(ctx, snapshot, input, limits, workerOperationRender, read)
+}
+
+func (w *processWorker) runReadOperation(
+	ctx context.Context,
+	snapshot *Snapshot,
+	input DocumentRef,
+	limits Limits,
+	operation string,
+	read WorkerReadRequest,
+) WorkerResult {
+	request := newWorkerOperationRequest(input, limits, operation)
+	request.Read = &read
+	return w.runRequest(ctx, snapshot, request)
+}
+
 func (w *processWorker) runOperation(
 	ctx context.Context,
 	snapshot *Snapshot,
@@ -104,6 +167,10 @@ func (w *processWorker) runOperation(
 	operation string,
 ) WorkerResult {
 	request := newWorkerOperationRequest(input, limits, operation)
+	return w.runRequest(ctx, snapshot, request)
+}
+
+func (w *processWorker) runRequest(ctx context.Context, snapshot *Snapshot, request WorkerRequest) WorkerResult {
 	if err := validateWorkerRequest(request); err != nil {
 		return workerFailure(request.OperationID, StateFailed, FailureWorkerProtocol, "invalid document worker request")
 	}
@@ -136,6 +203,17 @@ func (w *processWorker) runOperation(
 	}
 
 	result := w.run(ctx, snapshot.path, workerScratch, request)
+	if result.State == StateSucceeded &&
+		(request.Operation == workerOperationExtract || request.Operation == workerOperationRender) {
+		if err = adoptWorkerArtifacts(snapshot, workerScratch, request, &result); err != nil {
+			result = workerFailure(
+				request.OperationID,
+				StateFailed,
+				FailureArtifactInvalid,
+				"document worker artifact validation failed",
+			)
+		}
+	}
 	if cleanupErr := os.RemoveAll(workerScratch); cleanupErr != nil {
 		return workerFailure(
 			request.OperationID,
@@ -171,7 +249,13 @@ func newWorkerOperationRequest(input DocumentRef, limits Limits, operation strin
 
 // ServeWorker handles exactly one private worker request using the snapshot inherited on file descriptor 3.
 func ServeWorker(requestReader io.Reader, snapshotReader io.Reader, output io.Writer) error {
-	return serveWorkerWithBackend(requestReader, snapshotReader, output, newInspectionBackend())
+	return serveWorkerWithBackends(
+		requestReader,
+		snapshotReader,
+		output,
+		newInspectionBackend(),
+		newReadBackend(),
+	)
 }
 
 func serveWorkerWithBackend(
@@ -180,6 +264,16 @@ func serveWorkerWithBackend(
 	output io.Writer,
 	backend inspectionBackend,
 ) error {
+	return serveWorkerWithBackends(requestReader, snapshotReader, output, backend, newReadBackend())
+}
+
+func serveWorkerWithBackends(
+	requestReader io.Reader,
+	snapshotReader io.Reader,
+	output io.Writer,
+	inspection inspectionBackend,
+	reader readBackend,
+) error {
 	request, err := decodeWorkerRequest(requestReader)
 	if err != nil {
 		return err
@@ -187,7 +281,7 @@ func serveWorkerWithBackend(
 
 	data, result := verifyWorkerSnapshot(request, snapshotReader)
 	if result.State == StateSucceeded && request.Operation == workerOperationInspect {
-		if backend == nil {
+		if inspection == nil {
 			result = workerFailure(
 				request.OperationID,
 				StateUnavailable,
@@ -195,13 +289,41 @@ func serveWorkerWithBackend(
 				"document inspection backend is unavailable",
 			)
 		} else {
-			outcome := backend.Inspect(bytes.NewReader(data), request.Limits)
+			outcome := inspection.Inspect(bytes.NewReader(data), request.Limits)
 			result = WorkerResult{
 				SchemaVersion: WorkerResultSchemaVersion,
 				OperationID:   request.OperationID,
 				State:         outcome.State,
 				Input:         &request.Input,
 				Inspection:    outcome.Facts,
+				Failure:       outcome.Failure,
+			}
+		}
+	}
+	if result.State == StateSucceeded &&
+		(request.Operation == workerOperationExtract || request.Operation == workerOperationRender) {
+		if reader == nil {
+			result = workerFailure(
+				request.OperationID,
+				StateUnavailable,
+				FailureBackendUnavailable,
+				"document read backend is unavailable",
+			)
+		} else {
+			var outcome backendRead
+			if request.Operation == workerOperationExtract {
+				outcome = reader.Extract(data, request)
+			} else {
+				outcome = reader.Render(data, request)
+			}
+			result = WorkerResult{
+				SchemaVersion: WorkerResultSchemaVersion,
+				OperationID:   request.OperationID,
+				State:         outcome.State,
+				Input:         &request.Input,
+				Extraction:    outcome.Extraction,
+				Rendering:     outcome.Rendering,
+				Artifacts:     outcome.Artifacts,
 				Failure:       outcome.Failure,
 			}
 		}
@@ -264,7 +386,7 @@ func decodeWorkerResult(data []byte, request WorkerRequest) (WorkerResult, error
 	}
 	if result.State == StateSucceeded {
 		if result.Input == nil || result.Failure != nil || *result.Input != request.Input ||
-			!validWorkerSuccessPayload(request.Operation, result.Inspection) {
+			!validWorkerSuccessPayload(request, result) {
 			return WorkerResult{}, errors.New("document worker success response is invalid")
 		}
 		return result, nil
@@ -272,7 +394,9 @@ func decodeWorkerResult(data []byte, request WorkerRequest) (WorkerResult, error
 	if !validWorkerFailure(result.State, result.Failure) {
 		return WorkerResult{}, errors.New("document worker failure response is invalid")
 	}
-	if request.Operation == workerOperationVerify && (result.Input != nil || result.Inspection != nil) {
+	if request.Operation == workerOperationVerify &&
+		(result.Input != nil || result.Inspection != nil || result.Extraction != nil || result.Rendering != nil ||
+			len(result.Artifacts) != 0) {
 		return WorkerResult{}, errors.New("document worker verify failure response is invalid")
 	}
 	if request.Operation == workerOperationInspect {
@@ -283,15 +407,31 @@ func decodeWorkerResult(data []byte, request WorkerRequest) (WorkerResult, error
 			return WorkerResult{}, errors.New("document worker inspect failure facts are invalid")
 		}
 	}
+	if request.Operation == workerOperationExtract || request.Operation == workerOperationRender {
+		if result.Input != nil && *result.Input != request.Input {
+			return WorkerResult{}, errors.New("document worker read failure input is invalid")
+		}
+		if result.Extraction != nil || result.Rendering != nil || len(result.Artifacts) != 0 {
+			return WorkerResult{}, errors.New("document worker read failure payload is invalid")
+		}
+	}
 	return result, nil
 }
 
-func validWorkerSuccessPayload(operation string, inspection *InspectionFacts) bool {
-	switch operation {
+func validWorkerSuccessPayload(request WorkerRequest, result WorkerResult) bool {
+	switch request.Operation {
 	case workerOperationVerify:
-		return inspection == nil
+		return result.Inspection == nil && result.Extraction == nil && result.Rendering == nil &&
+			len(result.Artifacts) == 0
 	case workerOperationInspect:
-		return inspection != nil && validInspectionFacts(*inspection)
+		return result.Inspection != nil && validInspectionFacts(*result.Inspection) &&
+			result.Extraction == nil && result.Rendering == nil && len(result.Artifacts) == 0
+	case workerOperationExtract:
+		return result.Inspection == nil && result.Extraction != nil && result.Rendering == nil &&
+			validExtractionFacts(request, *result.Extraction, result.Artifacts)
+	case workerOperationRender:
+		return result.Inspection == nil && result.Extraction == nil && result.Rendering != nil &&
+			validRenderingFacts(request, *result.Rendering, result.Artifacts)
 	default:
 		return false
 	}
@@ -308,11 +448,13 @@ func validWorkerFailure(state State, failure *Failure) bool {
 		return failure.Code == FailureWorkerUnavailable || failure.Code == FailureUnsupportedPlatform ||
 			failure.Code == FailureBackendUnavailable
 	case StateUnsupported:
-		return failure.Code == FailurePasswordRequired
+		return failure.Code == FailurePasswordRequired || failure.Code == FailureUnsupportedFeature ||
+			failure.Code == FailureTextUnavailable || failure.Code == FailureVisionUnavailable
 	case StateFailed:
 		switch failure.Code {
 		case FailureInternal, FailureWorkerProtocol, FailureWorkerCrashed, FailureWorkerOutputLimit,
-			FailureWorkerTimeout, FailureWorkerInputMismatch, FailureMalformedPDF, FailureInspectionLimit:
+			FailureWorkerTimeout, FailureWorkerInputMismatch, FailureMalformedPDF, FailureInspectionLimit,
+			FailureExtractionLimit, FailureRenderLimit, FailureArtifactInvalid:
 			return true
 		}
 	}
@@ -336,7 +478,13 @@ func safeWorkerFailure(result WorkerResult) Failure {
 		FailureMalformedPDF:        "PDF structure is malformed or unsupported",
 		FailurePasswordRequired:    "document inspection requires a protected password input",
 		FailureInspectionLimit:     "document exceeds an inspection limit",
-		FailureBackendUnavailable:  "document inspection backend is unavailable",
+		FailureBackendUnavailable:  "document backend is unavailable",
+		FailureExtractionLimit:     "document extraction exceeded a limit",
+		FailureRenderLimit:         "document rendering exceeded a limit",
+		FailureArtifactInvalid:     "document worker artifact validation failed",
+		FailureUnsupportedFeature:  "document feature is not supported",
+		FailureTextUnavailable:     "selected document pages have no extractable text",
+		FailureVisionUnavailable:   "document vision processing is unavailable",
 	}
 	return Failure{Code: result.Failure.Code, Message: messages[result.Failure.Code]}
 }
@@ -369,7 +517,8 @@ func decodeBoundedJSON(reader io.Reader, maximum int, target any) error {
 
 func validateWorkerRequest(request WorkerRequest) error {
 	if request.SchemaVersion != WorkerRequestSchemaVersion ||
-		(request.Operation != workerOperationVerify && request.Operation != workerOperationInspect) ||
+		(request.Operation != workerOperationVerify && request.Operation != workerOperationInspect &&
+			request.Operation != workerOperationExtract && request.Operation != workerOperationRender) ||
 		!opaqueOperationID.MatchString(request.OperationID) {
 		return errors.New("document worker request identity is invalid")
 	}
@@ -377,12 +526,65 @@ func validateWorkerRequest(request WorkerRequest) error {
 		!validWorkerLimits(request.Limits) || request.Input.Size > request.Limits.MaxInputBytes {
 		return errors.New("document worker input metadata is invalid")
 	}
+	if request.Operation == workerOperationExtract || request.Operation == workerOperationRender {
+		if request.Read == nil || !validWorkerReadRequest(request.Operation, *request.Read) {
+			return errors.New("document worker read request is invalid")
+		}
+	} else if request.Read != nil {
+		return errors.New("document worker read request is unexpected")
+	}
 	decodedDigest, err := hex.DecodeString(request.Input.SHA256)
 	if err != nil || len(decodedDigest) != sha256.Size ||
 		request.Input.SHA256 != strings.ToLower(request.Input.SHA256) {
 		return errors.New("document worker digest is invalid")
 	}
 	return nil
+}
+
+func validWorkerReadRequest(operation string, read WorkerReadRequest) bool {
+	if len(read.Pages) == 0 || !validReadLimits(read.Limits) {
+		return false
+	}
+	maximumPages := read.Limits.MaxPages
+	if operation == workerOperationExtract && maximumPages > DefaultMaxExtractPages {
+		return false
+	}
+	if operation == workerOperationRender && maximumPages > DefaultMaxRenderPages {
+		return false
+	}
+	if len(read.Pages) > maximumPages {
+		return false
+	}
+	previous := 0
+	for _, page := range read.Pages {
+		if page <= previous || page > DefaultMaxPages {
+			return false
+		}
+		previous = page
+	}
+	return true
+}
+
+func validReadLimits(limits ReadLimits) bool {
+	return limits.MaxPages > 0 && limits.MaxPages <= DefaultMaxExtractPages &&
+		limits.MaxCharacters > 0 && limits.MaxCharacters <= DefaultMaxExtractChars &&
+		limits.DPI > 0 && limits.DPI <= DefaultRenderDPI &&
+		limits.MaxDimension > 0 && limits.MaxDimension <= HardMaxRenderEdge &&
+		limits.MaxPixelsPerPage > 0 && limits.MaxPixelsPerPage <= DefaultMaxPixelsPerPage &&
+		limits.MaxTotalPixels > 0 && limits.MaxTotalPixels <= DefaultMaxRenderPixels &&
+		limits.MaxArtifactBytes > 0 && limits.MaxArtifactBytes <= DefaultMaxArtifactBytes
+}
+
+func defaultReadLimits(operation string) ReadLimits {
+	maximumPages := DefaultMaxExtractPages
+	if operation == workerOperationRender {
+		maximumPages = DefaultMaxRenderPages
+	}
+	return ReadLimits{
+		MaxPages: maximumPages, MaxCharacters: DefaultMaxExtractChars, DPI: DefaultRenderDPI,
+		MaxDimension: DefaultMaxRenderEdge, MaxPixelsPerPage: DefaultMaxPixelsPerPage,
+		MaxTotalPixels: DefaultMaxRenderPixels, MaxArtifactBytes: DefaultMaxArtifactBytes,
+	}
 }
 
 func validWorkerLimits(limits Limits) bool {

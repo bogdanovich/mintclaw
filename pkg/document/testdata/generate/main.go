@@ -27,13 +27,13 @@ type manifest struct {
 }
 
 type manifestFixture struct {
-	ID           string                 `json:"id"`
-	File         string                 `json:"file"`
-	SHA256       string                 `json:"sha256"`
-	Construction string                 `json:"construction"`
-	License      string                 `json:"license"`
-	Expected     map[string]interface{} `json:"expected"`
-	EvidenceTest string                 `json:"evidence_test"`
+	ID           string         `json:"id"`
+	File         string         `json:"file"`
+	SHA256       string         `json:"sha256"`
+	Construction string         `json:"construction"`
+	License      string         `json:"license"`
+	Expected     map[string]any `json:"expected"`
+	EvidenceTest string         `json:"evidence_test"`
 }
 
 func main() {
@@ -89,7 +89,7 @@ func main() {
 		SHA256:       hex.EncodeToString(encryptedDigest[:]),
 		Construction: "pdfcpu_v0.15.0_aes256_one_time_password_discarded",
 		License:      "MIT (MintClaw repository)",
-		Expected: map[string]interface{}{
+		Expected: map[string]any{
 			"state":             "unsupported",
 			"failure_code":      "password_required",
 			"encryption":        "present",
@@ -101,6 +101,25 @@ func main() {
 	must(err)
 	encoded = append(encoded, '\n')
 	must(os.WriteFile(filepath.Join(root, "inspection-manifest.json"), encoded, 0o644))
+	writeReadFixtures(root)
+}
+
+func writeReadFixtures(root string) {
+	fixtures := []fixture{
+		unicodeFixture(),
+		rotatedCropFixture(),
+		ambiguousReadingOrderFixture(),
+		extremeDimensionsFixture(),
+		excessiveTextFixture(),
+		manyPagesFixture(21),
+	}
+	for _, item := range fixtures {
+		data := item.data
+		if data == nil {
+			data = encodePDF(item.objects)
+		}
+		must(os.WriteFile(filepath.Join(root, item.name), data, 0o644))
+	}
 }
 
 func textFixture() fixture {
@@ -118,7 +137,10 @@ func imageOnlyFixture() fixture {
 		catalog("2 0 R", ""),
 		pages("3 0 R"),
 		page("2 0 R", "5 0 R", "/XObject << /Im1 4 0 R >>", ""),
-		streamDict("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", []byte{0, 0, 0}),
+		streamDict(
+			"/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+			[]byte{0, 0, 0},
+		),
 		stream("q 10 0 0 10 72 720 cm /Im1 Do Q\n"),
 	}}
 }
@@ -148,10 +170,106 @@ func mixedFixture() fixture {
 		page("2 0 R", "7 0 R", "/Font << /F1 5 0 R >>", ""),
 		page("2 0 R", "8 0 R", "/XObject << /Im1 6 0 R >>", ""),
 		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
-		streamDict("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", []byte{0, 0, 0}),
+		streamDict(
+			"/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+			[]byte{0, 0, 0},
+		),
 		stream("BT /F1 12 Tf 72 720 Td (MintClaw mixed text page) Tj ET\n"),
 		stream("q 10 0 0 10 72 720 cm /Im1 Do Q\n"),
 	}}
+}
+
+func unicodeFixture() fixture {
+	return fixture{name: "unicode.pdf", objects: []pdfObject{
+		catalog("2 0 R", ""),
+		pages("3 0 R"),
+		page("2 0 R", "5 0 R", "/Font << /F1 4 0 R >>", ""),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"),
+		stream(`BT /F1 12 Tf 72 720 Td (MintClaw Caf\351 r\351sum\351) Tj ET` + "\n"),
+	}}
+}
+
+func rotatedCropFixture() fixture {
+	return fixture{name: "rotated-crop.pdf", objects: []pdfObject{
+		catalog("2 0 R", ""),
+		pages("3 0 R"),
+		page(
+			"2 0 R",
+			"5 0 R",
+			"/Font << /F1 4 0 R >>",
+			"/Rotate 90 /CropBox [0 0 306 396]",
+		),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		stream("BT /F1 12 Tf 72 300 Td (MINTCLAW_ROTATED_CROP) Tj ET\n"),
+	}}
+}
+
+func ambiguousReadingOrderFixture() fixture {
+	return fixture{name: "ambiguous-reading-order.pdf", objects: []pdfObject{
+		catalog("2 0 R", ""),
+		pages("3 0 R"),
+		page("2 0 R", "5 0 R", "/Font << /F1 4 0 R >>", ""),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		stream(
+			"BT /F1 12 Tf 72 120 Td (MINTCLAW_SECOND_VISUAL) Tj ET\n" +
+				"BT /F1 12 Tf 72 720 Td (MINTCLAW_FIRST_VISUAL) Tj ET\n",
+		),
+	}}
+}
+
+func extremeDimensionsFixture() fixture {
+	return fixture{name: "extreme-dimensions.pdf", objects: []pdfObject{
+		catalog("2 0 R", ""),
+		pages("3 0 R"),
+		rawObject(
+			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200000 200000] " +
+				"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+		),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		stream("BT /F1 12 Tf 72 720 Td (MINTCLAW_EXTREME_DIMENSIONS) Tj ET\n"),
+	}}
+}
+
+func excessiveTextFixture() fixture {
+	text := strings.Repeat("MINTCLAW_EXCESSIVE_TEXT_", 14_000)
+	return fixture{name: "excessive-text.pdf", objects: []pdfObject{
+		catalog("2 0 R", ""),
+		pages("3 0 R"),
+		page("2 0 R", "5 0 R", "/Font << /F1 4 0 R >>", ""),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		stream("BT /F1 8 Tf 20 720 Td (" + text + ") Tj ET\n"),
+	}}
+}
+
+func manyPagesFixture(count int) fixture {
+	objects := []pdfObject{catalog("2 0 R", "")}
+	kids := make([]string, 0, count)
+	for pageNumber := 1; pageNumber <= count; pageNumber++ {
+		kids = append(kids, fmt.Sprintf("%d 0 R", pageNumber+2))
+	}
+	objects = append(objects, rawObject(fmt.Sprintf(
+		"<< /Type /Pages /Kids [%s] /Count %d >>",
+		strings.Join(kids, " "),
+		count,
+	)))
+	fontObject := count + 3
+	contentStart := fontObject + 1
+	for pageNumber := 1; pageNumber <= count; pageNumber++ {
+		objects = append(objects, page(
+			"2 0 R",
+			fmt.Sprintf("%d 0 R", contentStart+pageNumber-1),
+			fmt.Sprintf("/Font << /F1 %d 0 R >>", fontObject),
+			"",
+		))
+	}
+	objects = append(objects, rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"))
+	for pageNumber := 1; pageNumber <= count; pageNumber++ {
+		objects = append(objects, stream(fmt.Sprintf(
+			"BT /F1 12 Tf 72 720 Td (MINTCLAW_PAGE_%02d) Tj ET\n",
+			pageNumber,
+		)))
+	}
+	return fixture{name: "many-pages.pdf", objects: objects}
 }
 
 func acroFormFixture() fixture {
@@ -162,7 +280,9 @@ func acroFormFixture() fixture {
 		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
 		stream("BT /F1 12 Tf 72 720 Td (Synthetic AcroForm) Tj ET\n"),
 		rawObject("<< /Fields [7 0 R] /NeedAppearances true >>"),
-		rawObject("<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (MintClaw) /DA (/F1 12 Tf 0 g) /Rect [72 650 250 675] /P 3 0 R >>"),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (MintClaw) /DA (/F1 12 Tf 0 g) /Rect [72 650 250 675] /P 3 0 R >>",
+		),
 	}}
 }
 
@@ -251,10 +371,11 @@ func unsignedSignatureFixture() fixture {
 func signedFixture(name, signatureType, transform string) fixture {
 	permissions := ""
 	reference := ""
-	if transform == "DocMDP" {
+	switch transform {
+	case "DocMDP":
 		permissions = "/Perms << /DocMDP 8 0 R >>"
 		reference = "/Reference [<< /TransformMethod /DocMDP /TransformParams << /Type /TransformParams /P 2 /V /1.2 >> >>]"
-	} else if transform == "FieldMDP" {
+	case "FieldMDP":
 		reference = "/Reference [<< /TransformMethod /FieldMDP /TransformParams << /Type /TransformParams /Action /Include /Fields [(name)] /V /1.2 >> >>]"
 	}
 	subFilter := "adbe.pkcs7.detached"
@@ -268,7 +389,9 @@ func signedFixture(name, signatureType, transform string) fixture {
 		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
 		stream("BT /F1 12 Tf 72 720 Td (Synthetic signed fixture) Tj ET\n"),
 		rawObject("<< /SigFlags 3 /Fields [7 0 R] >>"),
-		rawObject("<< /Type /Annot /Subtype /Widget /FT /Sig /T (approval) /V 8 0 R /Rect [72 650 250 675] /P 3 0 R >>"),
+		rawObject(
+			"<< /Type /Annot /Subtype /Widget /FT /Sig /T (approval) /V 8 0 R /Rect [72 650 250 675] /P 3 0 R >>",
+		),
 		rawObject(fmt.Sprintf(
 			"<< /Type /%s /Filter /Adobe.PPKLite /SubFilter /%s /ByteRange [0 0 0 0] /Contents <00> %s >>",
 			signatureType,
@@ -285,7 +408,9 @@ func rightsEnabledFixture() fixture {
 		page("2 0 R", "5 0 R", "/Font << /F1 4 0 R >>", ""),
 		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
 		stream("BT /F1 12 Tf 72 720 Td (Synthetic usage rights fixture) Tj ET\n"),
-		rawObject("<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 0 0 0] /Contents <00> /Reference [<< /TransformMethod /UR3 /TransformParams << /Type /TransformParams /V /2.2 /Form true >> >>] >>"),
+		rawObject(
+			"<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 0 0 0] /Contents <00> /Reference [<< /TransformMethod /UR3 /TransformParams << /Type /TransformParams /V /2.2 /Form true >> >>] >>",
+		),
 	}}
 }
 
@@ -362,7 +487,7 @@ func adversarialNestingFixture() fixture {
 }
 
 func manifestEntry(name, digest string) manifestFixture {
-	expected := map[string]interface{}{
+	expected := map[string]any{
 		"state":        "succeeded",
 		"pdf_version":  "1.7",
 		"page_count":   1,
@@ -431,27 +556,27 @@ func manifestEntry(name, digest string) manifestFixture {
 		expected["restrictions"] = "present"
 		expected["usage_rights"] = "present"
 	case "truncated.pdf", "malformed-xref.pdf", "oversized-stream-declaration.pdf", "malformed-metadata.pdf":
-		expected = map[string]interface{}{
+		expected = map[string]any{
 			"state":        "failed",
 			"failure_code": "malformed_pdf",
 		}
 	case "oversized-object-count.pdf":
-		expected = map[string]interface{}{
+		expected = map[string]any{
 			"state":        "failed",
 			"failure_code": "malformed_pdf",
 		}
 	case "decoded-content-limit.pdf", "decoded-content-array-limit.pdf", "metadata-decoded-limit.pdf":
-		expected = map[string]interface{}{
+		expected = map[string]any{
 			"state":        "failed",
 			"failure_code": "inspection_limit",
 		}
 	case "xfa-decoded-limit.pdf":
-		expected = map[string]interface{}{
+		expected = map[string]any{
 			"state":        "failed",
 			"failure_code": "inspection_limit",
 		}
 	case "adversarial-nesting.pdf":
-		expected = map[string]interface{}{
+		expected = map[string]any{
 			"state":        "failed",
 			"failure_code": "malformed_pdf",
 		}

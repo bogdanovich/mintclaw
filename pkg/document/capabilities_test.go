@@ -2,7 +2,7 @@ package document
 
 import "testing"
 
-func TestCapabilitiesAdmitOnlyLinuxAMD64AcquisitionAndInspection(t *testing.T) {
+func TestCapabilitiesAdmitOnlyLinuxAMD64DocumentReads(t *testing.T) {
 	tests := []struct {
 		goos  string
 		arch  string
@@ -25,6 +25,9 @@ func TestCapabilitiesAdmitOnlyLinuxAMD64AcquisitionAndInspection(t *testing.T) {
 			if report.Operations["inspect"].State != test.state {
 				t.Fatalf("inspect state = %q, want %q", report.Operations["inspect"].State, test.state)
 			}
+			if report.Operations["extract"].State != test.state || report.Operations["render"].State != test.state {
+				t.Fatalf("read capabilities = %#v, want %q", report.Operations, test.state)
+			}
 			if report.Limits.MaxInputBytes != DefaultMaxInputBytes {
 				t.Fatalf("max input bytes = %d, want %d", report.Limits.MaxInputBytes, DefaultMaxInputBytes)
 			}
@@ -33,6 +36,10 @@ func TestCapabilitiesAdmitOnlyLinuxAMD64AcquisitionAndInspection(t *testing.T) {
 				report.Limits.MaxObjects != DefaultMaxObjects ||
 				report.Limits.MaxRecursionDepth != DefaultMaxRecursionDepth {
 				t.Fatalf("inspection limits = %#v", report.Limits)
+			}
+			if report.ReadLimits[operationExtract].MaxPages != DefaultMaxExtractPages ||
+				report.ReadLimits[operationRender].MaxPages != DefaultMaxRenderPages {
+				t.Fatalf("read limits = %#v", report.ReadLimits)
 			}
 		})
 	}

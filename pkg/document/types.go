@@ -11,6 +11,15 @@ const (
 	DefaultMaxContentBytes   = int64(8 * 1024 * 1024)
 	DefaultMaxObjects        = 200_000
 	DefaultMaxRecursionDepth = 64
+	DefaultMaxExtractPages   = 20
+	DefaultMaxExtractChars   = 256_000
+	DefaultMaxRenderPages    = 8
+	DefaultRenderDPI         = 144
+	DefaultMaxRenderEdge     = 3_200
+	HardMaxRenderEdge        = 4_096
+	DefaultMaxPixelsPerPage  = int64(16_000_000)
+	DefaultMaxRenderPixels   = int64(32_000_000)
+	DefaultMaxArtifactBytes  = int64(32 * 1024 * 1024)
 )
 
 type State string
@@ -28,24 +37,32 @@ const (
 type FailureCode string
 
 const (
-	FailureUnsupportedPlatform FailureCode = "unsupported_platform"
-	FailureInvalidInput        FailureCode = "invalid_input"
-	FailureUnsupportedType     FailureCode = "unsupported_type"
-	FailureLimitExceeded       FailureCode = "limit_exceeded"
-	FailureSourceChanged       FailureCode = "source_changed"
-	FailureSourceUnauthorized  FailureCode = "source_not_authorized"
-	FailureCanceled            FailureCode = "canceled"
-	FailureWorkerUnavailable   FailureCode = "worker_unavailable"
-	FailureWorkerProtocol      FailureCode = "worker_protocol"
-	FailureWorkerCrashed       FailureCode = "worker_crashed"
-	FailureWorkerOutputLimit   FailureCode = "worker_output_limit"
-	FailureWorkerTimeout       FailureCode = "worker_timeout"
-	FailureWorkerInputMismatch FailureCode = "worker_input_mismatch"
-	FailureMalformedPDF        FailureCode = "malformed_pdf"
-	FailurePasswordRequired    FailureCode = "password_required"
-	FailureInspectionLimit     FailureCode = "inspection_limit"
-	FailureBackendUnavailable  FailureCode = "backend_unavailable"
-	FailureInternal            FailureCode = "internal_failure"
+	FailureUnsupportedPlatform  FailureCode = "unsupported_platform"
+	FailureInvalidInput         FailureCode = "invalid_input"
+	FailureUnsupportedType      FailureCode = "unsupported_type"
+	FailureLimitExceeded        FailureCode = "limit_exceeded"
+	FailureSourceChanged        FailureCode = "source_changed"
+	FailureSourceUnauthorized   FailureCode = "source_not_authorized"
+	FailureCanceled             FailureCode = "canceled"
+	FailureWorkerUnavailable    FailureCode = "worker_unavailable"
+	FailureWorkerProtocol       FailureCode = "worker_protocol"
+	FailureWorkerCrashed        FailureCode = "worker_crashed"
+	FailureWorkerOutputLimit    FailureCode = "worker_output_limit"
+	FailureWorkerTimeout        FailureCode = "worker_timeout"
+	FailureWorkerInputMismatch  FailureCode = "worker_input_mismatch"
+	FailureMalformedPDF         FailureCode = "malformed_pdf"
+	FailurePasswordRequired     FailureCode = "password_required"
+	FailureInspectionLimit      FailureCode = "inspection_limit"
+	FailureInvalidPageSelection FailureCode = "invalid_page_selection"
+	FailureExtractionLimit      FailureCode = "extraction_limit"
+	FailureRenderLimit          FailureCode = "render_limit"
+	FailureTextUnavailable      FailureCode = "text_unavailable"
+	FailureVisionUnavailable    FailureCode = "vision_unavailable"
+	FailureArtifactInvalid      FailureCode = "artifact_invalid"
+	FailureArtifactRegistration FailureCode = "artifact_registration_failed"
+	FailureUnsupportedFeature   FailureCode = "unsupported_feature"
+	FailureBackendUnavailable   FailureCode = "backend_unavailable"
+	FailureInternal             FailureCode = "internal_failure"
 )
 
 type FactState string
@@ -99,8 +116,63 @@ type Report struct {
 	State         State            `json:"state"`
 	Input         *DocumentRef     `json:"input,omitempty"`
 	Limits        Limits           `json:"limits"`
+	ReadLimits    *ReadLimits      `json:"read_limits,omitempty"`
 	Inspection    *InspectionFacts `json:"inspection,omitempty"`
+	Extraction    *ExtractionFacts `json:"extraction,omitempty"`
+	Rendering     *RenderingFacts  `json:"rendering,omitempty"`
+	Artifacts     []Artifact       `json:"artifacts,omitempty"`
 	Failure       *Failure         `json:"failure,omitempty"`
+}
+
+type ReadLimits struct {
+	MaxPages         int   `json:"max_pages"`
+	MaxCharacters    int   `json:"max_characters"`
+	DPI              int   `json:"dpi"`
+	MaxDimension     int   `json:"max_dimension"`
+	MaxPixelsPerPage int64 `json:"max_pixels_per_page"`
+	MaxTotalPixels   int64 `json:"max_total_pixels"`
+	MaxArtifactBytes int64 `json:"max_artifact_bytes"`
+}
+
+type Artifact struct {
+	Ref          string `json:"ref"`
+	Kind         string `json:"kind"`
+	ContentType  string `json:"content_type"`
+	Size         int64  `json:"size"`
+	SHA256       string `json:"sha256"`
+	SourceSHA256 string `json:"source_sha256"`
+	Pages        []int  `json:"pages"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	Truncated    bool   `json:"truncated,omitempty"`
+}
+
+type PageTextFacts struct {
+	Page       int  `json:"page"`
+	Characters int  `json:"characters"`
+	Truncated  bool `json:"truncated,omitempty"`
+}
+
+type ExtractionFacts struct {
+	Backend         BackendIdentity `json:"backend"`
+	SelectedPages   []int           `json:"selected_pages"`
+	Pages           []PageTextFacts `json:"pages"`
+	TotalCharacters int             `json:"total_characters"`
+	Truncated       bool            `json:"truncated,omitempty"`
+}
+
+type PageRenderFacts struct {
+	Page   int `json:"page"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+type RenderingFacts struct {
+	Backend       BackendIdentity   `json:"backend"`
+	SelectedPages []int             `json:"selected_pages"`
+	Pages         []PageRenderFacts `json:"pages"`
+	DPI           int               `json:"dpi"`
+	TotalPixels   int64             `json:"total_pixels"`
 }
 
 type StringFact struct {
@@ -114,9 +186,10 @@ type IntegerFact struct {
 }
 
 type BackendIdentity struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Role    string `json:"role"`
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	Role          string `json:"role"`
+	IsolationMode string `json:"isolation_mode,omitempty"`
 }
 
 type EncryptionFacts struct {
@@ -183,4 +256,5 @@ type CapabilityReport struct {
 	Architecture  string                         `json:"architecture"`
 	Operations    map[string]OperationCapability `json:"operations"`
 	Limits        Limits                         `json:"limits"`
+	ReadLimits    map[string]ReadLimits          `json:"read_limits"`
 }

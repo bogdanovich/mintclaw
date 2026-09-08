@@ -8,7 +8,13 @@ const (
 )
 
 func Capabilities() CapabilityReport {
-	return capabilitiesFor(runtime.GOOS, runtime.GOARCH)
+	report := capabilitiesFor(runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" && !readBackendAvailable() {
+		reason := "document read backend poppler 24.02.0 is unavailable"
+		report.Operations[operationExtract] = OperationCapability{State: CapabilityUnavailable, Reason: reason}
+		report.Operations[operationRender] = OperationCapability{State: CapabilityUnavailable, Reason: reason}
+	}
+	return report
 }
 
 func capabilitiesFor(goos, goarch string) CapabilityReport {
@@ -26,7 +32,13 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 	if goos == "linux" && goarch == "amd64" {
 		inspect = OperationCapability{State: CapabilitySupported}
 	}
-	laterReason := "document extraction and rendering are not implemented yet"
+	read := OperationCapability{
+		State:  CapabilityUnavailable,
+		Reason: "document extraction and rendering are initially admitted only on linux/amd64",
+	}
+	if goos == "linux" && goarch == "amd64" {
+		read = OperationCapability{State: CapabilitySupported}
+	}
 	return CapabilityReport{
 		SchemaVersion: CapabilitySchemaVersion,
 		Platform:      goos,
@@ -34,8 +46,8 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 		Operations: map[string]OperationCapability{
 			"acquire": acquire,
 			"inspect": inspect,
-			"extract": {State: CapabilityUnavailable, Reason: laterReason},
-			"render":  {State: CapabilityUnavailable, Reason: laterReason},
+			"extract": read,
+			"render":  read,
 			"fields":  {State: CapabilityUnavailable, Reason: "AcroForm support is not implemented yet"},
 			"fill":    {State: CapabilityUnavailable, Reason: "AcroForm support is not implemented yet"},
 			"verify":  {State: CapabilityUnavailable, Reason: "document verification is not implemented yet"},
@@ -47,6 +59,10 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 			MaxContentBytes:   DefaultMaxContentBytes,
 			MaxObjects:        DefaultMaxObjects,
 			MaxRecursionDepth: DefaultMaxRecursionDepth,
+		},
+		ReadLimits: map[string]ReadLimits{
+			operationExtract: defaultReadLimits(workerOperationExtract),
+			operationRender:  defaultReadLimits(workerOperationRender),
 		},
 	}
 }
