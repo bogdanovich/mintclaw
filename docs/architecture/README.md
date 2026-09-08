@@ -12,6 +12,9 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   conditional layout follow-up work.
 - [AgentLoop Runtime Host](agentloop-runtime.md): AgentLoop/Pipeline split, inbound scheduling, session claims, recovery, and intentional coupling.
 - [Local Coding Agent Roadmap](local-coding-agent-roadmap.md): ordered runtime-boundary, project-thread, coding-profile, terminal UI, compaction, resume, automation, and release work for a native local coding agent.
+- [Self-Improvement Control Plane Roadmap](self-improvement-roadmap.md):
+  proposal-first skill evolution, bounded retrospectives, external extension
+  lifecycle, and controlled chat-to-PR-to-deploy self-development.
 - [Local Coding Agent P2.2 Project Instructions](local-coding-agent-p2-project-instructions.md): one-file AGENTS/CLAUDE fallback selection, root-to-cwd scope precedence, bounded late-discovery barriers, cache invalidation, and symlink safety.
 - [Local Coding Agent P2.3 Workspace Snapshots](local-coding-agent-p2-workspace-snapshots.md): bounded deterministic
   Git observations, prompt freshness, post-write refresh, and frontend repository-state updates.
