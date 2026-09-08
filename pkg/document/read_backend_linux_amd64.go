@@ -102,15 +102,11 @@ func (popplerReadBackend) Extract(data []byte, request WorkerRequest) backendRea
 		if failure != nil {
 			return backendRead{State: StateFailed, Failure: failure}
 		}
-		rawCharacters := utf8.RuneCountInString(text)
-		characters := rawCharacters
-		pageTruncated := rawCharacters > remaining ||
-			(rawCharacters == remaining && index < len(request.Read.Pages)-1)
-		if characters > remaining {
-			text = truncateRunes(text, remaining)
-			characters = remaining
-			pageTruncated = true
-		}
+		text, characters, pageTruncated := boundExtractedPageText(
+			text,
+			remaining,
+			index < len(request.Read.Pages)-1,
+		)
 		remaining -= characters
 		if err := encoder.Encode(struct {
 			Page      int    `json:"page"`
@@ -122,7 +118,6 @@ func (popplerReadBackend) Extract(data []byte, request WorkerRequest) backendRea
 		pages = append(pages, PageTextFacts{Page: page, Characters: characters, Truncated: pageTruncated})
 		truncated = truncated || pageTruncated
 		if remaining == 0 {
-			truncated = true
 			break
 		}
 	}
@@ -170,6 +165,15 @@ func (popplerReadBackend) Extract(data []byte, request WorkerRequest) backendRea
 		},
 		Artifacts: []WorkerArtifact{{Name: name, Artifact: descriptor}},
 	}
+}
+
+func boundExtractedPageText(text string, remaining int, hasLaterPage bool) (string, int, bool) {
+	characters := utf8.RuneCountInString(text)
+	truncated := characters > remaining || (characters == remaining && hasLaterPage)
+	if characters > remaining {
+		return truncateRunes(text, remaining), remaining, true
+	}
+	return text, characters, truncated
 }
 
 func popplerPageText(data []byte, page, remaining int) (string, *Failure) {

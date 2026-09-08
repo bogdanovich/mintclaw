@@ -22,6 +22,21 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
+func TestProductionReadWorkersUseReadTimeout(t *testing.T) {
+	extractor, ok := NewProcessExtractor().(*processWorker)
+	if !ok || extractor.timeout != defaultReadWorkerTimeout {
+		t.Fatalf("extractor timeout = %#v", extractor)
+	}
+	renderer, ok := NewProcessRenderer().(*processWorker)
+	if !ok || renderer.timeout != defaultReadWorkerTimeout {
+		t.Fatalf("renderer timeout = %#v", renderer)
+	}
+	inspector, ok := NewProcessInspector().(*processWorker)
+	if !ok || inspector.timeout != defaultWorkerTimeout {
+		t.Fatalf("inspector timeout = %#v", inspector)
+	}
+}
+
 const workerSecretCanary = "MINTCLAW_DOCUMENT_SECRET_CANARY"
 
 func TestProcessWorkerSuccessUsesRealSubprocessAndCleansScratch(t *testing.T) {

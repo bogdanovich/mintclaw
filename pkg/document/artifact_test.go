@@ -5,6 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"os"
 	"path/filepath"
@@ -169,6 +172,28 @@ func TestAdoptWorkerArtifactsRejectsContentThatContradictsFacts(t *testing.T) {
 	snapshot := &Snapshot{path: filepath.Join(snapshotDir, "snapshot.pdf"), dir: snapshotDir}
 	if err := adoptWorkerArtifacts(snapshot, workerDir, request, &result); err == nil {
 		t.Fatal("adopted artifact containing unknown content fields")
+	}
+}
+
+func TestValidateRenderedArtifactDecodesCompletePNG(t *testing.T) {
+	var encoded bytes.Buffer
+	pixels := image.NewRGBA(image.Rect(0, 0, 2, 3))
+	pixels.Set(0, 0, color.RGBA{R: 0xff, A: 0xff})
+	if err := png.Encode(&encoded, pixels); err != nil {
+		t.Fatal(err)
+	}
+	result := &WorkerResult{Rendering: &RenderingFacts{}}
+	artifact := Artifact{Pages: []int{1}, Width: 2, Height: 3}
+	if err := validateRenderedArtifact(encoded.Bytes(), result, artifact); err != nil {
+		t.Fatalf("valid PNG rejected: %v", err)
+	}
+	truncated := encoded.Bytes()[:encoded.Len()-8]
+	if err := validateRenderedArtifact(truncated, result, artifact); err == nil {
+		t.Fatal("accepted PNG with a truncated IEND chunk")
+	}
+	withTrailingData := append(append([]byte(nil), encoded.Bytes()...), []byte("trailing")...)
+	if err := validateRenderedArtifact(withTrailingData, result, artifact); err == nil {
+		t.Fatal("accepted PNG with trailing data")
 	}
 }
 

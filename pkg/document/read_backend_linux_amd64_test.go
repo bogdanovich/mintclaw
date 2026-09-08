@@ -137,3 +137,18 @@ func TestReadBackendFixtureOutcomes(t *testing.T) {
 		})
 	}
 }
+
+func TestBoundExtractedPageTextDoesNotTruncateExactFinalPage(t *testing.T) {
+	const text = "123456789012345678901"
+	bounded, characters, truncated := boundExtractedPageText(text, 21, false)
+	if bounded != text || characters != 21 || truncated {
+		t.Fatalf("exact final page = %q, %d, %t", bounded, characters, truncated)
+	}
+	if _, _, truncated = boundExtractedPageText(text, 21, true); !truncated {
+		t.Fatal("exact budget with a later selected page was not marked truncated")
+	}
+	bounded, characters, truncated = boundExtractedPageText(text+"2", 21, false)
+	if bounded != text || characters != 21 || !truncated {
+		t.Fatalf("over-budget page = %q, %d, %t", bounded, characters, truncated)
+	}
+}

@@ -22,10 +22,10 @@ type processWorker struct {
 	maxOutput  int
 }
 
-func newProcessWorker() *processWorker {
+func newProcessWorker(timeout time.Duration) *processWorker {
 	return &processWorker{
 		args:      []string{"document", "_worker"},
-		timeout:   defaultWorkerTimeout,
+		timeout:   timeout,
 		maxOutput: defaultWorkerOutputSize,
 	}
 }

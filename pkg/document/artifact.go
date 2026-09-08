@@ -152,8 +152,10 @@ func validateRenderedArtifact(data []byte, result *WorkerResult, artifact Artifa
 		!bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")) {
 		return errors.New("document rendered page artifact is invalid")
 	}
-	configuration, err := png.DecodeConfig(bytes.NewReader(data))
-	if err != nil || configuration.Width != artifact.Width || configuration.Height != artifact.Height {
+	reader := bytes.NewReader(data)
+	page, err := png.Decode(reader)
+	if err != nil || reader.Len() != 0 || page.Bounds().Dx() != artifact.Width ||
+		page.Bounds().Dy() != artifact.Height {
 		return errors.New("document rendered page dimensions are invalid")
 	}
 	return nil

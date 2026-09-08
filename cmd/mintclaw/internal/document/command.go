@@ -210,7 +210,7 @@ func newExtractCommand(deps commandDeps) *cobra.Command {
 			if deps.extract == nil {
 				return fmt.Errorf("document extraction is unavailable")
 			}
-			pages, err := parsePageSelection(pageSelection)
+			pages, err := parsePageSelection(pageSelection, documentpkg.DefaultMaxExtractPages)
 			if err != nil {
 				return &ExitError{Code: 4, Message: err.Error()}
 			}
@@ -219,12 +219,17 @@ func newExtractCommand(deps commandDeps) *cobra.Command {
 				Pages:   pages,
 				Limits:  documentpkg.ReadLimits{MaxCharacters: maxCharacters},
 			})
+			var staged *stagedArtifactOutput
 			if snapshot != nil && report.State == documentpkg.StateSucceeded && len(report.Artifacts) == 1 {
-				if err = publishArtifactFile(snapshot, report.Artifacts[0].Ref, output, overwrite); err != nil {
+				if staged, err = stageArtifactFile(snapshot, report.Artifacts[0].Ref, output, overwrite); err != nil {
 					failArtifactPublication(&report)
 				}
 			}
-			closeSnapshot(snapshot, &report)
+			var closeSnapshot func() error
+			if snapshot != nil {
+				closeSnapshot = snapshot.Close
+			}
+			finishArtifactPublication(closeSnapshot, staged, &report)
 			if jsonOutput {
 				err = writeJSON(cmd.OutOrStdout(), report)
 			} else {
@@ -263,7 +268,7 @@ func newRenderCommand(deps commandDeps) *cobra.Command {
 			if deps.render == nil {
 				return fmt.Errorf("document rendering is unavailable")
 			}
-			pages, err := parsePageSelection(pageSelection)
+			pages, err := parsePageSelection(pageSelection, documentpkg.DefaultMaxRenderPages)
 			if err != nil {
 				return &ExitError{Code: 4, Message: err.Error()}
 			}
@@ -272,12 +277,22 @@ func newRenderCommand(deps commandDeps) *cobra.Command {
 				Pages:   pages,
 				Limits:  documentpkg.ReadLimits{DPI: dpi, MaxDimension: maxDimension},
 			})
+			var staged *stagedArtifactOutput
 			if snapshot != nil && report.State == documentpkg.StateSucceeded && len(report.Artifacts) > 0 {
-				if err = publishArtifactDirectory(snapshot, report.Artifacts, outputDirectory, overwrite); err != nil {
+				if staged, err = stageArtifactDirectory(
+					snapshot,
+					report.Artifacts,
+					outputDirectory,
+					overwrite,
+				); err != nil {
 					failArtifactPublication(&report)
 				}
 			}
-			closeSnapshot(snapshot, &report)
+			var closeSnapshot func() error
+			if snapshot != nil {
+				closeSnapshot = snapshot.Close
+			}
+			finishArtifactPublication(closeSnapshot, staged, &report)
 			if jsonOutput {
 				err = writeJSON(cmd.OutOrStdout(), report)
 			} else {

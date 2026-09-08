@@ -2,11 +2,14 @@
 
 package document
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type processWorker struct{}
 
-func newProcessWorker() *processWorker {
+func newProcessWorker(_ time.Duration) *processWorker {
 	return &processWorker{}
 }
 

@@ -101,17 +101,17 @@ type RendererWorker interface {
 // NewProcessWorker returns the short-lived worker used by production document acquisition.
 // It launches the current MintClaw executable in its private document worker mode.
 func NewProcessWorker() Worker {
-	return newProcessWorker()
+	return newProcessWorker(defaultWorkerTimeout)
 }
 
 // NewProcessInspector returns the same one-shot worker with the bounded inspect operation selected.
 func NewProcessInspector() InspectorWorker {
-	return newProcessWorker()
+	return newProcessWorker(defaultWorkerTimeout)
 }
 
-func NewProcessExtractor() ExtractorWorker { return newProcessWorker() }
+func NewProcessExtractor() ExtractorWorker { return newProcessWorker(defaultReadWorkerTimeout) }
 
-func NewProcessRenderer() RendererWorker { return newProcessWorker() }
+func NewProcessRenderer() RendererWorker { return newProcessWorker(defaultReadWorkerTimeout) }
 
 func (w *processWorker) Verify(ctx context.Context, snapshot *Snapshot, input DocumentRef) WorkerResult {
 	return w.runOperation(ctx, snapshot, input, defaultInspectionLimits(), workerOperationVerify)
