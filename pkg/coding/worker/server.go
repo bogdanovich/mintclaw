@@ -134,8 +134,6 @@ func (server *Server) Serve(ctx context.Context, input io.ReadCloser, output io.
 					}
 				}
 				idle = nil
-			} else {
-				resetIdleTimer(idleTimer, server.idleTimeout)
 			}
 		case source, open := <-session.updates:
 			if !open {
@@ -172,16 +170,6 @@ func (server *Server) Serve(ctx context.Context, input io.ReadCloser, output io.
 			return ErrControlStreamUncertain
 		}
 	}
-}
-
-func resetIdleTimer(timer *time.Timer, timeout time.Duration) {
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	timer.Reset(timeout)
 }
 
 func readWorkerRequests(
@@ -449,19 +437,20 @@ func (session *serverSession) publishSnapshot(
 func (session *serverSession) finishTurn(output io.Writer, settlement error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), serverCleanupTimeout)
 	defer cancel()
+	var finalizationErr error
 	if session.controller != nil {
 		source, err := session.controller.Snapshot(ctx)
 		if err == nil {
 			if publishErr := session.publishSnapshot(ctx, output, source); publishErr != nil {
-				settlement = errors.Join(settlement, publishErr)
+				finalizationErr = errors.Join(finalizationErr, publishErr)
 			}
 		} else {
-			settlement = errors.Join(settlement, err)
+			finalizationErr = errors.Join(finalizationErr, err)
 		}
 	}
 	closeErr := session.closeController()
-	settlement = errors.Join(settlement, closeErr)
-	reason, returnErr := session.turnStopOutcome(settlement)
+	finalizationErr = errors.Join(finalizationErr, closeErr)
+	reason, returnErr := session.turnStopOutcome(settlement, finalizationErr)
 	var stoppedError *ProtocolError
 	if reason == WorkerStopFailed {
 		stoppedError = protocolError(ErrorInternal)
@@ -472,7 +461,13 @@ func (session *serverSession) finishTurn(output io.Writer, settlement error) err
 	return returnErr
 }
 
-func (session *serverSession) turnStopOutcome(settlement error) (WorkerStopReason, error) {
+func (session *serverSession) turnStopOutcome(
+	settlement error,
+	finalizationErr error,
+) (WorkerStopReason, error) {
+	if finalizationErr != nil {
+		return WorkerStopFailed, ErrTaskFailed
+	}
 	if session.state.snapshot.LastTurn != nil {
 		switch session.state.snapshot.LastTurn.Outcome {
 		case TurnOutcomeCompleted:

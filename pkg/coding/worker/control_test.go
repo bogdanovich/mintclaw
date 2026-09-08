@@ -32,6 +32,8 @@ type workerTestController struct {
 	hardCancels int
 	closes      int
 	question    *QuestionState
+	snapshotErr error
+	closeErr    error
 }
 
 func newWorkerTestController(binding Binding) (*workerTestController, error) {
@@ -50,6 +52,12 @@ func newWorkerTestController(binding Binding) (*workerTestController, error) {
 func (controllerInstance *workerTestController) Snapshot(
 	ctx context.Context,
 ) (frontend.ThreadSnapshot, error) {
+	controllerInstance.mu.Lock()
+	err := controllerInstance.snapshotErr
+	controllerInstance.mu.Unlock()
+	if err != nil {
+		return frontend.ThreadSnapshot{}, err
+	}
 	return controllerInstance.projector.Snapshot(ctx)
 }
 
@@ -123,11 +131,12 @@ func (controllerInstance *workerTestController) Close(context.Context) error {
 	controllerInstance.mu.Lock()
 	controllerInstance.closes++
 	active := controllerInstance.active
+	closeErr := controllerInstance.closeErr
 	controllerInstance.mu.Unlock()
 	if active {
-		return controllerInstance.HardCancel(context.Background())
+		return errors.Join(controllerInstance.HardCancel(context.Background()), closeErr)
 	}
-	return nil
+	return closeErr
 }
 
 func (controllerInstance *workerTestController) AwaitTurn(ctx context.Context) error {
@@ -649,7 +658,24 @@ func TestInitializedWorkerExitsAfterBoundedIdleWindow(t *testing.T) {
 	}
 	controllerInstance := <-controllers
 	waitForWorkerEvent(t, client, EventWorkerReady)
+	pollDone := make(chan struct{})
+	go func() {
+		defer close(pollDone)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-client.Done():
+				return
+			case <-ticker.C:
+				_, _ = client.ReadSnapshot(t.Context(), GenerationParams{
+					ControlIdentity: binding.ControlIdentity(),
+				})
+			}
+		}
+	}()
 	waitDone(t, client.Done())
+	waitDone(t, pollDone)
 	if err = client.Err(); err != nil {
 		t.Fatalf("idle worker client error = %v", err)
 	}
@@ -671,6 +697,61 @@ func TestInitializedWorkerExitsAfterBoundedIdleWindow(t *testing.T) {
 	controllerInstance.mu.Unlock()
 	if closes != 1 {
 		t.Fatalf("idle controller closes = %d, want 1", closes)
+	}
+}
+
+func TestCanceledTurnWithFinalizationFailureReportsWorkerFailure(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		configure func(*workerTestController)
+	}{
+		{
+			name: "final snapshot",
+			configure: func(controllerInstance *workerTestController) {
+				controllerInstance.snapshotErr = errors.New("final snapshot failed")
+			},
+		},
+		{
+			name: "controller close",
+			configure: func(controllerInstance *workerTestController) {
+				controllerInstance.closeErr = errors.New("controller close failed")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			binding := testBinding(t)
+			harness := newWorkerTestHarness(t, test.configure)
+			initializeHarness(t, harness, binding)
+			waitForWorkerEvent(t, harness.client, EventWorkerReady)
+			if err := harness.client.StartTurn(t.Context(), "start-1", TurnStartParams{
+				ControlIdentity: binding.ControlIdentity(), Text: "inspect",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := harness.client.Cancel(t.Context(), "cancel-1", GenerationParams{
+				ControlIdentity: binding.ControlIdentity(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			waitDone(t, harness.client.Done())
+			stopped := waitForWorkerEvent(t, harness.client, EventWorkerStopped)
+			payload, err := DecodeEventPayload(EventWorkerStopped, stopped.Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outcome := payload.(*WorkerStoppedPayload)
+			if outcome.Reason != WorkerStopFailed || outcome.Error == nil || outcome.Error.Code != ErrorInternal {
+				t.Fatalf("worker stop outcome = %#v, want failed internal error", outcome)
+			}
+			select {
+			case err = <-harness.serverDone:
+				if !errors.Is(err, ErrTaskFailed) {
+					t.Fatalf("Serve() error = %v, want %v", err, ErrTaskFailed)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("server did not exit after failed cancellation finalization")
+			}
+		})
 	}
 }
 
@@ -757,6 +838,96 @@ func TestClientAcceptsLateResponseForCanceledCallAndContinues(t *testing.T) {
 		ControlIdentity: binding.ControlIdentity(),
 	}); err != nil {
 		t.Fatalf("call after late response error = %v", err)
+	}
+	if err := <-workerDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientBindsLateInitializeResponseBeforeReadyEvent(t *testing.T) {
+	binding := testBinding(t)
+	client, requests, responses := newManualClient(t)
+	requestRead := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	workerDone := make(chan error, 1)
+	go func() {
+		reader, err := newWireReader(requests)
+		if err != nil {
+			workerDone <- err
+			return
+		}
+		initialize := reader.read()
+		if initialize.err != nil {
+			workerDone <- initialize.err
+			return
+		}
+		close(requestRead)
+		<-releaseResponse
+		result := InitializeResult{Identity: BoundIdentity{
+			ProtocolVersion: ProtocolV1,
+			WorkerBuildID:   testWorkerBuildID,
+			Binding:         binding,
+		}}
+		if _, err = writeWireRecord(responses, successfulResponse(initialize.record, result)); err != nil {
+			workerDone <- err
+			return
+		}
+		ready, err := eventRecord(projectedEvent{
+			name: EventWorkerReady,
+			payload: WorkerReadyPayload{
+				ControlIdentity: binding.ControlIdentity(),
+				Snapshot: Snapshot{
+					ThreadID: binding.ThreadID,
+					Activity: ActivityIdle,
+				},
+			},
+		})
+		if err != nil {
+			workerDone <- err
+			return
+		}
+		if _, err = writeWireRecord(responses, ready); err != nil {
+			workerDone <- err
+			return
+		}
+		snapshotRequest := reader.read()
+		if snapshotRequest.err != nil {
+			workerDone <- snapshotRequest.err
+			return
+		}
+		snapshot := SnapshotResult{
+			ControlIdentity: binding.ControlIdentity(),
+			Snapshot: Snapshot{
+				ThreadID: binding.ThreadID,
+				Activity: ActivityIdle,
+			},
+		}
+		_, err = writeWireRecord(responses, successfulResponse(snapshotRequest.record, snapshot))
+		workerDone <- err
+	}()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	initializeDone := make(chan error, 1)
+	go func() {
+		_, err := client.Initialize(ctx, "initialize-1", InitializeParams{
+			MinProtocolVersion: ProtocolV1,
+			MaxProtocolVersion: ProtocolV1,
+			ParentBuildID:      "parent-build",
+			Binding:            binding,
+		})
+		initializeDone <- err
+	}()
+	waitDone(t, requestRead)
+	cancel()
+	if err := <-initializeDone; !errors.Is(err, ErrControlStreamUncertain) {
+		t.Fatalf("late Initialize() error = %v, want uncertainty", err)
+	}
+	close(releaseResponse)
+	waitForWorkerEvent(t, client, EventWorkerReady)
+	if _, err := client.ReadSnapshot(t.Context(), GenerationParams{
+		ControlIdentity: binding.ControlIdentity(),
+	}); err != nil {
+		t.Fatalf("snapshot after late initialize response error = %v", err)
 	}
 	if err := <-workerDone; err != nil {
 		t.Fatal(err)

@@ -83,7 +83,7 @@ type Client struct {
 
 	mu            sync.Mutex
 	pending       map[string]pendingCall
-	abandoned     map[string]Method
+	abandoned     map[string]pendingCall
 	events        []RetainedEvent
 	eventBytes    int
 	nextCursor    uint64
@@ -112,7 +112,7 @@ func NewClient(input io.ReadCloser, output io.WriteCloser) (*Client, error) {
 		writeGate: make(chan struct{}, 1),
 		prefix:    uuid.NewString(),
 		pending:   make(map[string]pendingCall),
-		abandoned: make(map[string]Method),
+		abandoned: make(map[string]pendingCall),
 		done:      make(chan struct{}),
 		wake:      make(chan struct{}, 1),
 	}
@@ -259,7 +259,7 @@ func (client *Client) Call(
 	written, writeErr := writeWireRecord(client.output, request)
 	client.writeGate <- struct{}{}
 	if writeErr != nil {
-		client.abandon(request.ID, method)
+		client.abandon(request.ID)
 		client.finish(writeErr)
 		return nil, classifyCallFailure(method, written > 0, writeErr)
 	}
@@ -281,7 +281,7 @@ func (client *Client) awaitResponse(
 				return responseResult(response)
 			default:
 			}
-			if !client.abandon(request.ID, request.Method) {
+			if !client.abandon(request.ID) {
 				select {
 				case response := <-call.reply:
 					return responseResult(response)
@@ -295,7 +295,7 @@ func (client *Client) awaitResponse(
 				return responseResult(response)
 			default:
 			}
-			client.abandon(request.ID, request.Method)
+			client.abandon(request.ID)
 			return nil, classifyCallFailure(request.Method, true, client.closedError())
 		}
 	}
@@ -433,8 +433,12 @@ func (client *Client) deliverResponse(response Record) bool {
 		pending.reply <- cloneRecord(response)
 		return true
 	}
-	method, abandoned := client.abandoned[response.ID]
-	if abandoned && method == response.Method {
+	abandonedCall, abandoned := client.abandoned[response.ID]
+	if abandoned && abandonedCall.method == response.Method {
+		if abandonedCall.initializeBinding != nil &&
+			!client.bindInitializedResponseLocked(response, *abandonedCall.initializeBinding) {
+			return false
+		}
 		delete(client.abandoned, response.ID)
 		return true
 	}
@@ -517,15 +521,16 @@ func eventControlIdentity(record Record) (ControlIdentity, bool) {
 	}
 }
 
-func (client *Client) abandon(requestID string, method Method) bool {
+func (client *Client) abandon(requestID string) bool {
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if _, exists := client.pending[requestID]; !exists {
+	call, exists := client.pending[requestID]
+	if !exists {
 		return false
 	}
 	delete(client.pending, requestID)
 	if len(client.abandoned) < maxClientAbandonedCalls {
-		client.abandoned[requestID] = method
+		client.abandoned[requestID] = call
 	}
 	return true
 }
