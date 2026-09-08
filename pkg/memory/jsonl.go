@@ -740,6 +740,66 @@ func readMessages(ctx context.Context, path string, skip int) ([]providers.Messa
 	return msgs, nil
 }
 
+// readCommittedMessages reads the complete JSONL prefix described by metadata.
+// Unlike readMessages, it rejects missing, malformed, or count-mismatched data:
+// callers use this path when admitting work from canonical session state.
+func readCommittedMessages(
+	ctx context.Context,
+	path string,
+	committedCount int,
+	skip int,
+) ([]providers.Message, error) {
+	if err := contextCause(ctx); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) && committedCount == 0 {
+		return []providers.Message{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("memory: open committed jsonl: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	msgs := make([]providers.Message, 0, max(0, committedCount-skip))
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxJSONLRecordBytes)
+
+	lineNum := 0
+	for scanner.Scan() {
+		if err := contextCause(ctx); err != nil {
+			return nil, err
+		}
+		lineNum++
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			return nil, fmt.Errorf("memory: committed jsonl line %d is empty", lineNum)
+		}
+		msg, decodeErr := DecodeJSONLMessage(line)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("memory: decode committed jsonl line %d: %w", lineNum, decodeErr)
+		}
+		if lineNum <= skip || messageutil.IsTransientAssistantThoughtMessage(msg) {
+			continue
+		}
+		msgs = append(msgs, msg)
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		return nil, fmt.Errorf("memory: scan committed jsonl: %w", scanErr)
+	}
+	if err := contextCause(ctx); err != nil {
+		return nil, err
+	}
+	if lineNum != committedCount {
+		return nil, fmt.Errorf(
+			"memory: committed jsonl record count %d does not match metadata count %d",
+			lineNum,
+			committedCount,
+		)
+	}
+	return msgs, nil
+}
+
 // scanRetainedMessageLines returns the total number of non-empty raw JSONL
 // lines plus the raw line numbers that survive readMessages filtering.
 // TruncateHistory uses this to compute keepLast against retained messages
@@ -950,9 +1010,7 @@ func (s *JSONLStore) GetSnapshot(
 		return SessionSnapshot{}, recoveryErr
 	}
 
-	// Pass meta.Skip so readMessages skips those lines without
-	// unmarshaling them — avoids wasted CPU on truncated messages.
-	msgs, err := readMessages(ctx, s.jsonlPath(sessionKey), meta.Skip)
+	msgs, err := readCommittedMessages(ctx, s.jsonlPath(sessionKey), meta.Count, meta.Skip)
 	if err != nil {
 		return SessionSnapshot{}, err
 	}
