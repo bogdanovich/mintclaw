@@ -1512,12 +1512,16 @@ func (tool *BrowserActTool) Parameters() map[string]any {
 				"description": "Copy exactly when present in the fresh browser_observe result; otherwise omit.",
 			},
 			"context_catalog_id": map[string]any{
-				"type":        "string",
-				"description": "Conditionally required: copy exactly when present in the fresh browser_observe result; otherwise omit.",
+				"type":      "string",
+				"minLength": 1,
+				"description": "Optional. Copy exactly only when present in the fresh browser_observe result. " +
+					"Never invent a placeholder; otherwise omit both context_catalog_id and context_generation.",
 			},
 			"context_generation": map[string]any{
-				"type":        "integer",
-				"description": "Conditionally required: copy exactly when context_catalog_id is present in the fresh browser_observe result; otherwise omit.",
+				"type":    "integer",
+				"minimum": 1,
+				"description": "Optional. Copy exactly only when context_catalog_id is also present in the same fresh browser_observe result. " +
+					"Never use zero or another placeholder; otherwise omit both fields.",
 			},
 			"snapshot_id": map[string]any{
 				"type":        "string",
@@ -1561,6 +1565,11 @@ func (runtime *browserToolRuntime) fileChooserAvailable() bool {
 func (*BrowserActTool) ToolLoopSemantics() loopguard.Semantics { return loopguard.SemanticsMutating }
 
 const browserProtectedInputRedaction = "*"
+
+var errBrowserActionContextAuthority = fmt.Errorf(
+	"%w: browser action context authority is incomplete or invalid",
+	browser.ErrInvalid,
+)
 
 // DurableArguments removes protected fill and dialog-prompt text before assistant intent can be
 // persisted or reused. It deliberately leaves the current in-memory call
@@ -1651,6 +1660,26 @@ func (*BrowserActTool) ProtectedDurableArguments(args map[string]any) bool {
 // protected fill. Keep that live result out of durable state independently of
 // whether the current action arguments are sensitive.
 func (*BrowserActTool) ProtectedDurableResult(map[string]any) bool { return true }
+
+// SafeSchemaValidationFailure preserves browser-specific recovery guidance
+// when malformed context-authority fields would otherwise be rejected by the
+// registry before Execute can classify them. All other schema failures retain
+// the registry's generic fail-closed response.
+func (tool *BrowserActTool) SafeSchemaValidationFailure(args map[string]any) *toolshared.ToolResult {
+	if !browserActionContextAuthorityInvalid(args) {
+		return nil
+	}
+	withoutContextAuthority := make(map[string]any, len(args))
+	for field, value := range args {
+		if field != "context_catalog_id" && field != "context_generation" {
+			withoutContextAuthority[field] = value
+		}
+	}
+	if validateToolArgs(tool.Parameters(), withoutContextAuthority) != nil {
+		return nil
+	}
+	return browserActionToolError(errBrowserActionContextAuthority)
+}
 
 func cloneBrowserToolArguments(args map[string]any) (map[string]any, error) {
 	encoded, err := json.Marshal(args)
@@ -1922,10 +1951,9 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	tabID, tabOK := args["tab_id"].(string)
 	frameID, _ := args["frame_id"].(string)
 	catalogID, _ := args["context_catalog_id"].(string)
-	contextGeneration, contextGenerationOK := browserInteger(args["context_generation"])
-	if _, present := args["context_generation"]; present &&
-		(!contextGenerationOK || contextGeneration < 1) {
-		return browser.Preparation{}, browser.ErrInvalid
+	contextGeneration, _ := browserInteger(args["context_generation"])
+	if browserActionContextAuthorityInvalid(args) {
+		return browser.Preparation{}, errBrowserActionContextAuthority
 	}
 	snapshotID, snapshotOK := args["snapshot_id"].(string)
 	generation, generationOK := browserInteger(args["snapshot_generation"])
@@ -1938,6 +1966,16 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 		SnapshotID: snapshotID, SnapshotGeneration: uint64(generation), Action: action,
 		DeclaredEffect: declaredEffect, Confirmation: confirmation,
 	})
+}
+
+func browserActionContextAuthorityInvalid(args map[string]any) bool {
+	catalogID, catalogOK := args["context_catalog_id"].(string)
+	_, catalogPresent := args["context_catalog_id"]
+	contextGeneration, contextGenerationOK := browserInteger(args["context_generation"])
+	_, contextGenerationPresent := args["context_generation"]
+	return catalogPresent != contextGenerationPresent ||
+		(catalogPresent && (!catalogOK || catalogID == "" ||
+			!contextGenerationOK || contextGeneration < 1))
 }
 
 func browserInteger(value any) (int, bool) {
@@ -2124,6 +2162,14 @@ func browserToolError(err error) *toolshared.ToolResult {
 }
 
 func browserActionToolError(err error) *toolshared.ToolResult {
+	if errors.Is(err, errBrowserActionContextAuthority) {
+		return browserErrorResult(
+			"invalid_context_authority",
+			"Browser context authority is incomplete or invalid. Observe again; copy both context_catalog_id and "+
+				"context_generation only when both are returned, otherwise omit both. Never invent placeholder values.",
+			"observe_again_copy_returned_context_or_omit_both",
+		)
+	}
 	if errors.Is(err, browser.ErrNoProgress) {
 		return browserErrorResult(
 			"no_progress",
