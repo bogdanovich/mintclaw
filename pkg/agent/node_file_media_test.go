@@ -9,6 +9,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 )
 
@@ -22,31 +23,29 @@ func TestBindInboundMediaOwnerUsesExactActorAndRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := &turnState{
-		agent:     &AgentInstance{ID: "main", Tools: tools.NewToolRegistry()},
-		workspace: "/workspace/main",
-		channel:   "telegram",
-		chatID:    "chat-1",
-		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
-			RouteSessionKey: "telegram:chat-1:topic-1",
-			SessionKey:      "session-1",
-			InboundContext: &bus.InboundContext{
-				Channel: "telegram", ChatID: "chat-1", TopicID: "topic-1", ActorID: "actor-a",
-			},
-		}}),
+	target := &inboundDispatchTarget{
+		Agent:      &AgentInstance{ID: "main", Workspace: "/workspace/main", Tools: tools.NewToolRegistry()},
+		Allocation: session.Allocation{RouteScopeKey: "telegram:chat-1:topic-1"},
+		SessionKey: "session-1",
 	}
-	if bindErr := bindInboundMediaOwner(store, ts, []string{ref}); bindErr != nil {
+	msg := bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", TopicID: "topic-1", ActorID: "actor-a",
+		},
+		Media: []string{ref},
+	}
+	if bindErr := bindInboundMediaOwnerForTarget(store, target, msg); bindErr != nil {
 		t.Fatal(bindErr)
 	}
-	ownerA, err := nodeFileMediaOwnerForTurn(ts)
+	ownerA, err := inboundMediaOwnerForTarget(target, msg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, resolveErr := store.ResolveOwnedWithMeta(ref, ownerA); resolveErr != nil {
 		t.Fatalf("exact owner failed to resolve: %v", resolveErr)
 	}
-	ts.opts.Dispatch.InboundContext.ActorID = "actor-b"
-	ownerB, err := nodeFileMediaOwnerForTurn(ts)
+	msg.Context.ActorID = "actor-b"
+	ownerB, err := inboundMediaOwnerForTarget(target, msg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,23 +64,19 @@ func TestBindInboundMediaOwnerDoesNotDependOnNodeUploadAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := &turnState{
-		agent:     &AgentInstance{ID: "main", Tools: tools.NewToolRegistry()},
-		workspace: "/workspace/main",
-		channel:   "telegram",
-		chatID:    "chat-1",
-		opts: freezeTurnInput(turnSpec{Dispatch: DispatchRequest{
-			RouteSessionKey: "telegram:chat-1",
-			SessionKey:      "session-1",
-			InboundContext: &bus.InboundContext{
-				Channel: "telegram", ChatID: "chat-1", ActorID: "actor-a",
-			},
-		}}),
+	target := &inboundDispatchTarget{
+		Agent:      &AgentInstance{ID: "main", Workspace: "/workspace/main", Tools: tools.NewToolRegistry()},
+		Allocation: session.Allocation{RouteScopeKey: "telegram:chat-1"},
+		SessionKey: "session-1",
 	}
-	if bindErr := bindInboundMediaOwner(store, ts, []string{ref}); bindErr != nil {
+	msg := bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "telegram", ChatID: "chat-1", ActorID: "actor-a"},
+		Media:   []string{ref},
+	}
+	if bindErr := bindInboundMediaOwnerForTarget(store, target, msg); bindErr != nil {
 		t.Fatal(bindErr)
 	}
-	owner, err := nodeFileMediaOwnerForTurn(ts)
+	owner, err := inboundMediaOwnerForTarget(target, msg)
 	if err != nil {
 		t.Fatal(err)
 	}

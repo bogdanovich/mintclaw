@@ -42,11 +42,12 @@ MintClaw already provides useful foundations:
 
 - inbound channel attachments are durably indexed behind `media://`
   references and ordinary turn admission binds them to exact workspace,
-  agent, actor, route, and session authority; document acquisition adds the
-  immutable content digest;
+  agent, actor, route, and session authority plus an immutable size/SHA-256
+  identity;
 - `MediaStore` retains filename, content type, local backing path, lifecycle
-  scope, cleanup policy, and creation time, but not an immutable content
-  digest for every reference;
+  scope, cleanup policy, and creation time; authority-bound references also
+  retain the admitted content identity, while generic unowned references do
+  not;
 - typed task deliverables and outbound media delivery can represent produced
   artifacts without parsing final chat prose;
 - workspace-local scratch storage and cleanup conventions already exist;

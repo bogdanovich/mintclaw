@@ -49,8 +49,11 @@ snapshot, report := document.AcquireMedia(ctx, mediaStore, mediaRef, owner, opti
 ```
 
 `owner` must contain the exact non-reversible workspace, agent, actor, route,
-and session correlations already stored with the reference. Unknown,
-unbound, released, altered, or cross-authority refs all return `denied` with
+and session correlations already stored with the reference. The binding also
+pins size and SHA-256. Acquisition receives an authority-checked open file
+descriptor and verifies those exact bytes again while creating the immutable
+snapshot; it never reopens a mutable backing path. Unknown, unbound, released,
+altered, or cross-authority refs all return `denied` with
 `source_not_authorized`; the response deliberately does not reveal whether a
 reference exists. A successful report retains the opaque source ref and safe
 correlations, but never the backing path or bytes. The worker receives only

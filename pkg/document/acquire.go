@@ -32,15 +32,18 @@ type AcquireOptions struct {
 // OwnedMediaResolver resolves one opaque media reference only when the caller
 // presents the exact authority durably bound to it.
 type OwnedMediaResolver interface {
-	ResolveOwnedWithMeta(string, media.MediaOwner) (string, media.MediaMeta, error)
+	OpenOwned(string, media.MediaOwner) (*media.OwnedMediaSource, error)
 }
 
 type acquisitionSource struct {
-	path      string
-	ref       string
-	filename  string
-	kind      string
-	authority Authority
+	path               string
+	file               *os.File
+	expectedIdentity   *media.ContentIdentity
+	authorizationBound bool
+	ref                string
+	filename           string
+	kind               string
+	authority          Authority
 }
 
 type Snapshot struct {
@@ -215,16 +218,19 @@ func acquireMediaForPlatform(
 	if resolver == nil || !validOwnedMediaInput(ref, owner) {
 		return nil, unauthorizedSource(report)
 	}
-	inputPath, meta, err := resolver.ResolveOwnedWithMeta(ref, owner)
-	if err != nil {
+	source, err := resolver.OpenOwned(ref, owner)
+	if err != nil || source == nil || source.File == nil {
 		return nil, unauthorizedSource(report)
 	}
+	defer func() { _ = source.Close() }()
 	return acquireSnapshotSource(ctx, acquisitionSource{
-		path:      inputPath,
-		ref:       ref,
-		filename:  safeMediaFilename(meta.Filename),
-		kind:      "inbound_media",
-		authority: documentAuthority(owner),
+		file:               source.File,
+		expectedIdentity:   &source.Identity,
+		authorizationBound: true,
+		ref:                ref,
+		filename:           safeMediaFilename(source.Meta.Filename),
+		kind:               "inbound_media",
+		authority:          documentAuthority(owner),
 	}, options.ScratchRoot, report, nil)
 }
 
@@ -316,15 +322,29 @@ func acquireSnapshotSource(
 	if err := ctx.Err(); err != nil {
 		return nil, failReport(report, StateCanceled, FailureCanceled, "document acquisition was canceled")
 	}
-	if strings.TrimSpace(input.path) == "" || strings.TrimSpace(scratchRoot) == "" {
+	if (input.file == nil && strings.TrimSpace(input.path) == "") || strings.TrimSpace(scratchRoot) == "" {
 		return nil, failReport(report, StateFailed, FailureInvalidInput, "input and protected scratch are required")
 	}
 
-	source, sourceInfo, err := openRegularSource(input.path)
-	if err != nil {
-		return nil, acquisitionFailure(report, err)
+	source := input.file
+	var sourceInfo os.FileInfo
+	var err error
+	closeSource := false
+	if source == nil {
+		source, sourceInfo, err = openRegularSource(input.path)
+		closeSource = true
+	} else {
+		sourceInfo, err = source.Stat()
+		if err == nil && !sourceInfo.Mode().IsRegular() {
+			err = &acquisitionError{code: FailureInvalidInput, err: errors.New("source is not a regular file")}
+		}
 	}
-	defer func() { _ = source.Close() }()
+	if err != nil {
+		return nil, acquisitionSourceFailure(report, input, err)
+	}
+	if closeSource {
+		defer func() { _ = source.Close() }()
+	}
 	if sourceInfo.Size() > report.Limits.MaxInputBytes {
 		return nil, failReport(report, StateFailed, FailureLimitExceeded, "document exceeds the input byte limit")
 	}
@@ -337,16 +357,30 @@ func acquireSnapshotSource(
 
 	digest, size, err := copyAndHash(ctx, source, snapshot.path, report.Limits.MaxInputBytes)
 	if err != nil {
-		return cleanupAcquisitionFailure(snapshot, acquisitionFailure(report, err))
+		return cleanupAcquisitionFailure(snapshot, acquisitionSourceFailure(report, input, err))
 	}
 	if afterFirstRead != nil {
 		afterFirstRead()
 	}
-	stable, err := verifyStableSource(ctx, input.path, source, sourceInfo, digest, size, report.Limits.MaxInputBytes)
+	stable, err := verifyStableAcquisitionSource(
+		ctx,
+		input.path,
+		source,
+		sourceInfo,
+		digest,
+		size,
+		report.Limits.MaxInputBytes,
+		input.file != nil,
+	)
 	if err != nil {
-		return cleanupAcquisitionFailure(snapshot, acquisitionFailure(report, err))
+		return cleanupAcquisitionFailure(snapshot, acquisitionSourceFailure(report, input, err))
 	}
-	if !stable {
+	identityMatches := input.expectedIdentity == nil ||
+		(input.expectedIdentity.Size == size && input.expectedIdentity.SHA256 == digest)
+	if !stable || !identityMatches {
+		if input.authorizationBound {
+			return cleanupAcquisitionFailure(snapshot, unauthorizedSource(report))
+		}
 		return cleanupAcquisitionFailure(
 			snapshot,
 			failReport(report, StateFailed, FailureSourceChanged, "document changed during acquisition"),
@@ -425,6 +459,18 @@ func acquisitionFailure(report Report, err error) Report {
 		}
 	}
 	return failReport(report, StateFailed, FailureInternal, "document acquisition failed")
+}
+
+func acquisitionSourceFailure(report Report, input acquisitionSource, err error) Report {
+	if !input.authorizationBound || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return acquisitionFailure(report, err)
+	}
+	var typed *acquisitionError
+	if errors.As(err, &typed) && typed.code == FailureLimitExceeded {
+		return acquisitionFailure(report, err)
+	}
+	return unauthorizedSource(report)
 }
 
 func openRegularSource(path string) (*os.File, os.FileInfo, error) {
@@ -558,6 +604,39 @@ func verifyStableSource(
 	return count == wantSize && digest == wantDigest &&
 		initial.Size() == final.Size() && initial.ModTime().Equal(final.ModTime()) &&
 		current.Mode()&os.ModeSymlink == 0 && os.SameFile(initial, final) && os.SameFile(final, current), nil
+}
+
+func verifyStableAcquisitionSource(
+	ctx context.Context,
+	path string,
+	source *os.File,
+	initial os.FileInfo,
+	wantDigest string,
+	wantSize int64,
+	maxBytes int64,
+	openedByAuthority bool,
+) (bool, error) {
+	if !openedByAuthority {
+		return verifyStableSource(ctx, path, source, initial, wantDigest, wantSize, maxBytes)
+	}
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	hash := sha256.New()
+	count, err := io.Copy(hash, io.LimitReader(&contextReader{ctx: ctx, reader: source}, maxBytes+1))
+	if err != nil {
+		return false, err
+	}
+	if count > maxBytes {
+		return false, &acquisitionError{code: FailureLimitExceeded, err: fmt.Errorf("input exceeded limit")}
+	}
+	final, err := source.Stat()
+	if err != nil {
+		return false, err
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	return count == wantSize && digest == wantDigest && initial.Size() == final.Size() &&
+		initial.ModTime().Equal(final.ModTime()) && os.SameFile(initial, final), nil
 }
 
 func detectPDF(path string) (string, error) {

@@ -24,6 +24,7 @@ func newInboundTurnCoordinator(al *AgentLoop) *inboundTurnCoordinator {
 
 func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.InboundMessage) {
 	al := c.al
+	msg = bus.NormalizeInboundMessage(msg)
 	if al.outboundCoordinator() != nil {
 		ctx = withOutboundTransaction(ctx, msg.SpoolID)
 	}
@@ -34,6 +35,10 @@ func (c *inboundTurnCoordinator) handleInbound(ctx context.Context, msg bus.Inbo
 		// the required ordering and does not enter session steering.
 		admission := al.processMessageSync(ctx, msg)
 		_ = al.settleInboundAdmission(ctx, msg, admission)
+		return
+	}
+	if err := bindInboundMediaOwnerForTarget(al.mediaStore, target, msg); err != nil {
+		al.turns.inbound.release(ctx, msg, fmt.Errorf("admit inbound media: %w", err))
 		return
 	}
 	if c.handleScopedInspectionCommand(ctx, msg, target) {

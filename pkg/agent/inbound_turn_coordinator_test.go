@@ -399,6 +399,95 @@ func TestBusySessionReleasesOriginalSpoolWhenContextPersistenceFails(t *testing.
 	}
 }
 
+func TestBusySessionBindsInboundMediaBeforeQueueing(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	store := media.NewFileMediaStore()
+	path := t.TempDir() + "/inbound.pdf"
+	if err := os.WriteFile(path, []byte("%PDF-1.7\nowned\n%%EOF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(path, media.MediaMeta{Filename: "inbound.pdf"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetMediaStore(store)
+	msg := finalResponseAdmissionInboundMessage("spool-media-busy")
+	msg.Media = []string{ref}
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("resolveSteeringTarget() rejected test inbound")
+	}
+	coordinator := newInboundTurnCoordinator(al)
+	claim, _, claimed := coordinator.claimSession(target)
+	if !claimed {
+		t.Fatal("claimSession() rejected test target")
+	}
+	defer claim.releaseIfOwned()
+
+	coordinator.handleInbound(t.Context(), msg)
+
+	owner, err := inboundMediaOwnerForTarget(target, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := store.OpenOwned(ref, owner)
+	if err != nil {
+		t.Fatalf("busy media was not owner-bound before queueing: %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := al.pendingSteeringCountForScope(target.runtimeSessionScope()); got != 1 {
+		t.Fatalf("queued steering messages = %d, want 1", got)
+	}
+}
+
+func TestInboundMediaOwnerConflictReleasesBeforeClaimOrQueue(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	trackingBus := &finalResponseAdmissionTestBus{MessageBus: msgBus}
+	setTestMessageBus(al, trackingBus)
+	store := media.NewFileMediaStore()
+	path := t.TempDir() + "/inbound.pdf"
+	if err := os.WriteFile(path, []byte("%PDF-1.7\nowned\n%%EOF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(path, media.MediaMeta{Filename: "inbound.pdf"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetMediaStore(store)
+	msg := finalResponseAdmissionInboundMessage("spool-media-conflict")
+	msg.Media = []string{ref}
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("resolveSteeringTarget() rejected test inbound")
+	}
+	owner, err := inboundMediaOwnerForTarget(target, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner.ActorID = "actor_other"
+	if err := store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
+
+	acked, released, cause := trackingBus.ownership()
+	if len(acked) != 0 || !containsExactly(released, msg.SpoolID) ||
+		cause == nil || !strings.Contains(cause.Error(), "owner conflict") {
+		t.Fatalf("admission conflict ownership = acked:%v released:%v cause:%v", acked, released, cause)
+	}
+	if got := al.ActiveTurnCount(); got != 0 {
+		t.Fatalf("active turns after admission conflict = %d, want 0", got)
+	}
+	if got := al.pendingSteeringCountForScope(target.runtimeSessionScope()); got != 0 {
+		t.Fatalf("queued steering after admission conflict = %d, want 0", got)
+	}
+}
+
 func TestBlockedRootClassifiesAndPersistsAdjacentFollowupForReplay(t *testing.T) {
 	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()

@@ -245,7 +245,7 @@ func (al *AgentLoop) processScheduledMessage(
 	ctx context.Context,
 	msg bus.InboundMessage,
 ) (string, string, error) {
-	msg = al.prepareInboundMessageForAgent(ctx, msg)
+	msg = bus.NormalizeInboundMessage(msg)
 	route, agent, routeErr := al.resolveMessageRoute(msg)
 	if routeErr != nil {
 		return "", "", routeErr
@@ -261,6 +261,12 @@ func (al *AgentLoop) processScheduledMessage(
 		allocation.SessionKey,
 		msg.SessionKey,
 	)
+	if bindErr := bindInboundMediaOwnerForTarget(al.mediaStore, &inboundDispatchTarget{
+		Route: route, Agent: agent, Allocation: allocation, SessionKey: sessionKey,
+	}, msg); bindErr != nil {
+		return "", "", fmt.Errorf("admit scheduled media: %w", bindErr)
+	}
+	msg = al.prepareInboundMessageForAgent(ctx, msg)
 	modelBinding := al.bindEffectiveModel(allocation.RouteScopeKey, agent)
 	defer modelBinding.Cleanup()
 
@@ -480,6 +486,16 @@ func (al *AgentLoop) observeMessage(ctx context.Context, msg bus.ObservedMessage
 		allocation.SessionKey,
 		msg.SessionKey,
 	)
+	target := &inboundDispatchTarget{
+		Route: route, Agent: agent, Allocation: allocation, SessionKey: sessionKey,
+	}
+	if bindErr := bindInboundMediaOwnerForTarget(al.mediaStore, target, inbound); bindErr != nil {
+		logger.WarnCF("agent", "Rejected observed media before persistence", map[string]any{
+			"channel": msg.Context.Channel,
+			"chat_id": msg.Context.ChatID,
+		})
+		return
+	}
 	ensureSessionMetadata(
 		agent.Sessions,
 		sessionKey,

@@ -198,11 +198,56 @@ func TestAcquireOwnedMediaDeniesExpiredReference(t *testing.T) {
 }
 
 func TestAcquireOwnedMediaRejectsBackingFileReplacement(t *testing.T) {
+	for _, replacementKind := range []string{"regular", "symlink"} {
+		t.Run(replacementKind, func(t *testing.T) {
+			root := directTempDir(t)
+			inputPath := filepath.Join(root, "owned.pdf")
+			targetPath := filepath.Join(root, "replacement.pdf")
+			writeFixture(t, inputPath, []byte("%PDF-1.7\noriginal\n%%EOF\n"))
+			writeFixture(t, targetPath, []byte("%PDF-1.7\nreplaced\n%%EOF\n"))
+			store := media.NewFileMediaStore()
+			ref, err := store.Store(inputPath, media.MediaMeta{Filename: "owned.pdf"}, "inbound")
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := testMediaOwner(t)
+			if err := store.BindOwner(ref, owner); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(inputPath); err != nil {
+				t.Fatal(err)
+			}
+			switch replacementKind {
+			case "regular":
+				writeFixture(t, inputPath, []byte("%PDF-1.7\nreplaced\n%%EOF\n"))
+			case "symlink":
+				if err := os.Symlink(targetPath, inputPath); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			scratch := filepath.Join(root, "protected")
+			worker := &countingWorker{}
+			snapshot, report := acquireMediaWithWorker(
+				t.Context(), store, ref, owner, AcquireOptions{ScratchRoot: scratch},
+				"linux", "amd64", worker,
+			)
+			if snapshot != nil {
+				t.Fatal("replaced backing file returned a snapshot")
+			}
+			assertFailure(t, report, StateDenied, FailureSourceUnauthorized)
+			if worker.calls != 0 {
+				t.Fatalf("worker calls = %d, want 0", worker.calls)
+			}
+			assertPathAbsent(t, scratch)
+		})
+	}
+}
+
+func TestAcquireOwnedMediaDeniesMutationAfterAuthorizedOpen(t *testing.T) {
 	root := directTempDir(t)
 	inputPath := filepath.Join(root, "owned.pdf")
-	targetPath := filepath.Join(root, "replacement.pdf")
 	writeFixture(t, inputPath, []byte("%PDF-1.7\noriginal\n%%EOF\n"))
-	writeFixture(t, targetPath, []byte("%PDF-1.7\nreplacement\n%%EOF\n"))
 	store := media.NewFileMediaStore()
 	ref, err := store.Store(inputPath, media.MediaMeta{Filename: "owned.pdf"}, "inbound")
 	if err != nil {
@@ -212,22 +257,25 @@ func TestAcquireOwnedMediaRejectsBackingFileReplacement(t *testing.T) {
 	if err := store.BindOwner(ref, owner); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(inputPath); err != nil {
-		t.Fatal(err)
+	resolver := &mutatingOwnedMediaResolver{
+		FileMediaStore: store,
+		path:           inputPath,
+		replacement:    []byte("%PDF-1.7\nreplaced\n%%EOF\n"),
 	}
-	if err := os.Symlink(targetPath, inputPath); err != nil {
-		t.Fatal(err)
-	}
-
+	worker := &countingWorker{}
 	scratch := filepath.Join(root, "protected")
 	snapshot, report := acquireMediaWithWorker(
-		t.Context(), store, ref, owner, AcquireOptions{ScratchRoot: scratch}, "linux", "amd64", acceptingWorker{},
+		t.Context(), resolver, ref, owner, AcquireOptions{ScratchRoot: scratch},
+		"linux", "amd64", worker,
 	)
 	if snapshot != nil {
-		t.Fatal("replaced backing file returned a snapshot")
+		t.Fatal("mutated authority-bound source returned a snapshot")
 	}
-	assertFailure(t, report, StateFailed, FailureInvalidInput)
-	assertPathAbsent(t, scratch)
+	assertFailure(t, report, StateDenied, FailureSourceUnauthorized)
+	if worker.calls != 0 {
+		t.Fatalf("worker calls = %d, want 0", worker.calls)
+	}
+	assertEmptyDirectory(t, scratch)
 }
 
 func TestAcquireOwnedMediaChecksPlatformBeforeResolving(t *testing.T) {
@@ -317,16 +365,46 @@ func (acceptingWorker) Verify(_ context.Context, _ *Snapshot, input DocumentRef)
 	}
 }
 
+type countingWorker struct {
+	calls int
+}
+
+func (worker *countingWorker) Verify(_ context.Context, _ *Snapshot, _ DocumentRef) WorkerResult {
+	worker.calls++
+	return WorkerResult{}
+}
+
 type countingOwnedMediaResolver struct {
 	calls int
 }
 
-func (resolver *countingOwnedMediaResolver) ResolveOwnedWithMeta(
+type mutatingOwnedMediaResolver struct {
+	*media.FileMediaStore
+	path        string
+	replacement []byte
+}
+
+func (resolver *mutatingOwnedMediaResolver) OpenOwned(
+	ref string,
+	owner media.MediaOwner,
+) (*media.OwnedMediaSource, error) {
+	source, err := resolver.FileMediaStore.OpenOwned(ref, owner)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(resolver.path, resolver.replacement, 0o600); err != nil {
+		_ = source.Close()
+		return nil, err
+	}
+	return source, nil
+}
+
+func (resolver *countingOwnedMediaResolver) OpenOwned(
 	_ string,
 	_ media.MediaOwner,
-) (string, media.MediaMeta, error) {
+) (*media.OwnedMediaSource, error) {
 	resolver.calls++
-	return "", media.MediaMeta{}, os.ErrNotExist
+	return nil, os.ErrNotExist
 }
 
 func testMediaOwner(t *testing.T) media.MediaOwner {
