@@ -2449,6 +2449,28 @@ func TestNewBrowserHostBuildsPassiveFactoryFromNormalizedPolicy(t *testing.T) {
 	}
 }
 
+func TestCompanionBrowserProfileConfigForwardsRuntimeAuthority(t *testing.T) {
+	profile := browserHostProfileFixture()
+	profile.ProfileDirectory = "/private/browser/profile"
+	profile.LockFile = "/private/browser/locks/managed.lock"
+	profile.Headed = true
+	profile.AllowedOrigins = []string{"https://example.com"}
+
+	configured := companionBrowserProfileConfig(profile)
+	if configured.Runtime.ProfileDirectory != profile.ProfileDirectory ||
+		configured.Runtime.LockFile != profile.LockFile ||
+		configured.Runtime.Headed != profile.Headed {
+		t.Fatalf("companion runtime authority was not forwarded: %#v", configured.Runtime)
+	}
+	if !reflect.DeepEqual(configured.AllowedOrigins, profile.AllowedOrigins) {
+		t.Fatalf("allowed origins = %#v, want %#v", configured.AllowedOrigins, profile.AllowedOrigins)
+	}
+	profile.AllowedOrigins[0] = "https://mutated.example"
+	if configured.AllowedOrigins[0] != "https://example.com" {
+		t.Fatal("companion browser config retained caller-owned allowed origins")
+	}
+}
+
 func newTestBrowserHost(t *testing.T, factory browserHostFactory) *BrowserHost {
 	t.Helper()
 	host, err := newBrowserHost(
