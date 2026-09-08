@@ -1029,6 +1029,7 @@ func cloneToolObservation(observation *toolshared.ToolObservation) *toolshared.T
 	cloned := *observation
 	if observation.Command != nil {
 		command := *observation.Command
+		command.Transcript = append([]toolshared.CommandTranscriptEntry(nil), observation.Command.Transcript...)
 		if observation.Command.ExitCode != nil {
 			exitCode := *observation.Command.ExitCode
 			command.ExitCode = &exitCode

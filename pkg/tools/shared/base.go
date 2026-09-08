@@ -97,7 +97,10 @@ var (
 	ctxKeyApprovalBypass      = &toolCtxKey{"approvalBypass"}
 	ctxKeyRecoverableOutbound = &toolCtxKey{"recoverableOutbound"}
 	ctxKeyHistoryDisabled     = &toolCtxKey{"historyDisabled"}
+	ctxKeyCommandObservation  = &toolCtxKey{"commandObservation"}
 )
+
+type commandObservationSink func(CommandObservation)
 
 // WithToolContext returns a child context carrying channel and chatID.
 func WithToolContext(ctx context.Context, channel, chatID string) context.Context {
@@ -170,6 +173,35 @@ func WithToolRouteSessionKey(ctx context.Context, routeSessionKey string) contex
 // human-approval restart.
 func WithToolCallID(ctx context.Context, toolCallID string) context.Context {
 	return context.WithValue(ctx, ctxKeyToolCallID, toolCallID)
+}
+
+// WithCommandObservationSink installs a request-scoped, coding-only progress
+// sink. Tools publish safe observations through PublishCommandObservation;
+// the sink is never retained on a singleton tool instance.
+func WithCommandObservationSink(
+	ctx context.Context,
+	sink func(CommandObservation),
+) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyCommandObservation, commandObservationSink(sink))
+}
+
+// PublishCommandObservation sanitizes and clones a command observation before
+// delivering it to the optional coding presentation sink.
+func PublishCommandObservation(ctx context.Context, observation CommandObservation) {
+	if ctx == nil {
+		return
+	}
+	sink, ok := ctx.Value(ctxKeyCommandObservation).(commandObservationSink)
+	if !ok || sink == nil {
+		return
+	}
+	safe := SanitizeToolObservation(&ToolObservation{Command: &observation})
+	if safe != nil && safe.Command != nil {
+		sink(*safe.Command)
+	}
 }
 
 // WithToolExecutionIdentity carries the stable logical turn identity and

@@ -1,1 +1,5 @@
-• Background exec [suspended] · 1m18s
+• Running in background mintclaw review
+  execution: background
+  process: review-1
+  └ stdout> waiting for reviewer
+  ctrl+t to view full transcript

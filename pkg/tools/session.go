@@ -42,6 +42,7 @@ type ProcessSession struct {
 	ID              string
 	PID             int
 	Command         string
+	CWD             string
 	PTY             bool
 	Background      bool
 	StartTime       int64
@@ -56,6 +57,8 @@ type ProcessSession struct {
 	waitErr         error
 	completionOnce  sync.Once
 	terminate       func(int) error
+	capture         *commandObservationCapture
+	cancelRequested bool
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
@@ -111,6 +114,7 @@ func (s *ProcessSession) killProcess() error {
 	if err := terminate(pid); err != nil {
 		return err
 	}
+	s.cancelRequested = true
 
 	return nil
 }
@@ -120,19 +124,74 @@ func (s *ProcessSession) Kill() error {
 }
 
 func (s *ProcessSession) complete(exitCode int, waitErr error) {
+	normalized := normalizeSessionWaitError(waitErr)
 	s.mu.Lock()
 	s.ExitCode = exitCode
-	s.waitErr = normalizeSessionWaitError(waitErr)
+	s.waitErr = normalized
 	if s.waitErr != nil {
 		s.Status = "error"
 	} else {
 		s.Status = "done"
 	}
+	capture := s.capture
+	completion := s.completion
+	canceled := s.cancelRequested
 	s.mu.Unlock()
-	if s.completion != nil {
+	status := "succeeded"
+	if canceled {
+		status = "canceled"
+	} else if exitCode != 0 || normalized != nil {
+		status = "failed"
+	}
+	if capture != nil {
+		capture.complete(status, &exitCode)
+	}
+	if completion != nil {
 		s.completionOnce.Do(func() {
 			close(s.completion)
 		})
+	}
+}
+
+func (s *ProcessSession) commandObservation(action string) toolshared.CommandObservation {
+	s.mu.Lock()
+	command := s.Command
+	cwd := s.CWD
+	sessionID := s.ID
+	status := s.Status
+	exitCode := s.ExitCode
+	s.mu.Unlock()
+	observation := toolshared.CommandObservation{
+		Action: action, Command: command, CWD: cwd, Source: "agent",
+		Background: true, SessionID: sessionID, Status: status,
+	}
+	if status != "running" {
+		observation.ExitCode = &exitCode
+	}
+	return observation
+}
+
+func (s *ProcessSession) appendOutput(stream string, data []byte) {
+	if s == nil || len(data) == 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.outputBuffer.Len() >= maxOutputBufferSize {
+		if !s.outputTruncated {
+			s.outputBuffer.WriteString(outputTruncateMarker)
+			s.outputTruncated = true
+		}
+	} else {
+		s.outputBuffer.Write(data)
+	}
+	capture := s.capture
+	var publish func()
+	if capture != nil {
+		publish = capture.reserveAppend(stream, data)
+	}
+	s.mu.Unlock()
+	if publish != nil {
+		publish()
 	}
 }
 
@@ -169,10 +228,18 @@ func (s *ProcessSession) waitForCompletion() error {
 }
 
 func (s *ProcessSession) Write(data string) error {
+	return s.writeInput(data, data)
+}
+
+// writeInput keeps every delivered input prefix and its presentation
+// observation on the same side of the session terminal edge. displayValue may
+// differ from data for encoded keys and is used only when the full write was
+// delivered; a partial write records only the physical prefix.
+func (s *ProcessSession) writeInput(data, displayValue string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.Status != "running" {
+		s.mu.Unlock()
 		return ErrSessionDone
 	}
 
@@ -182,10 +249,28 @@ func (s *ProcessSession) Write(data string) error {
 	} else if s.stdinWriter != nil {
 		writer = s.stdinWriter
 	} else {
+		s.mu.Unlock()
 		return ErrNoStdin
 	}
 
-	_, err := writer.Write([]byte(data))
+	written, err := writer.Write([]byte(data))
+	reportedWritten := written
+	written = min(max(written, 0), len(data))
+	var publish func()
+	if written > 0 && s.capture != nil {
+		delivered := data[:written]
+		if written == len(data) && displayValue != "" {
+			delivered = displayValue
+		}
+		publish = s.capture.reserveAppend("input", []byte(delivered))
+	}
+	if reportedWritten != len(data) && err == nil {
+		err = io.ErrShortWrite
+	}
+	s.mu.Unlock()
+	if publish != nil {
+		publish()
+	}
 	return err
 }
 

@@ -25,6 +25,7 @@ const (
 	commandPanelModel
 	commandPanelDiff
 	commandPanelReview
+	commandPanelTranscript
 )
 
 type parsedSlashCommand struct {
@@ -317,7 +318,13 @@ func (m *Model) commandPanelView() string {
 }
 
 func (m *Model) commandPanelLines() []string {
-	content := sanitizeTerminalText(commandPanelContent(m.commandPanel, m.snapshot))
+	var content string
+	if m.commandPanel == commandPanelTranscript {
+		content = strings.Join(m.fullTranscriptPanelLines(), "\n")
+	} else {
+		content = commandPanelContent(m.commandPanel, m.snapshot)
+	}
+	content = sanitizeTerminalText(content)
 	logical := strings.Split(strings.Trim(content, "\n"), "\n")
 	lines := make([]string, 0, len(logical))
 	for _, line := range logical {
@@ -366,7 +373,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"Keyboard",
 			"Enter submit · Ctrl+J newline · Ctrl+V paste clipboard image · Ctrl+C interrupt/exit",
 			"PgUp/PgDown scroll panel or transcript · Alt+End latest · Ctrl+R refresh repository",
-			"Alt+J/Alt+K select tool · Ctrl+O expand tool · Esc close panel",
+			"Alt+J/Alt+K select tool · Ctrl+O expand tool · Ctrl+T full transcript · Esc close panel",
 			"Start a prompt with // when its text must begin with a slash.",
 		}, "\n")
 	case commandPanelStatus:
@@ -384,6 +391,8 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			return "Local code review\nphase: waiting for admission"
 		}
 		return codingreview.RenderStatePlain(*snapshot.Review)
+	case commandPanelTranscript:
+		return ""
 	default:
 		return ""
 	}

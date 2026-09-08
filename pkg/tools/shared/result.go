@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
@@ -151,16 +152,39 @@ type ToolObservation struct {
 // CommandObservation describes command output and process lifecycle without
 // requiring a frontend to parse ForLLM or ForUser prose.
 type CommandObservation struct {
-	Stdout     string
-	Stderr     string
-	Output     string
-	Truncated  bool
-	Background bool
-	Canceled   bool
-	TimedOut   bool
-	SessionID  string
-	Status     string
-	ExitCode   *int
+	Action      string
+	Command     string
+	CWD         string
+	Input       string
+	Source      string
+	Stdout      string
+	Stderr      string
+	Output      string
+	Transcript  []CommandTranscriptEntry
+	Duration    time.Duration
+	Truncated   bool
+	Background  bool
+	OwnsProcess bool
+	Canceled    bool
+	TimedOut    bool
+	SessionID   string
+	Status      string
+	ExitCode    *int
+}
+
+// CommandTranscriptEntry is one causally ordered, tool-owned command stream
+// fragment. Sequence is local to one command/process observation and lets a
+// coalescing frontend merge progress with the final snapshot idempotently.
+type CommandTranscriptEntry struct {
+	Sequence uint64
+	Stream   string
+	Text     string
+}
+
+// CodingObservationProvider lets a native tool describe its safe initial
+// presentation state without exposing arbitrary model-facing arguments.
+type CodingObservationProvider interface {
+	CodingStartObservation(map[string]any) *ToolObservation
 }
 
 // PlanStepStatus is one of the validated update_plan lifecycle states.

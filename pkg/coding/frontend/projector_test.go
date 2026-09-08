@@ -2,7 +2,9 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -438,12 +440,237 @@ func TestCompletedToolReflectsFailedBackgroundCommand(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	exitCode := 7
 	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
-		Status: CommandFailed, Background: true, ExitCode: &exitCode,
+		Status: CommandFailed, Background: true, OwnsProcess: true, ExitCode: &exitCode,
 	})
 	projector.ToolCompleted("turn-1", "call-1", "exec", "", 0, false, nil)
 	tools := snapshotForTest(t, projector).Tools
 	if len(tools) != 1 || tools[0].Status != ToolFailed {
 		t.Fatalf("completed background command tools = %+v", tools)
+	}
+}
+
+func TestCommandLifecycleCorrelatesEdgesWithoutCrossCallAttachment(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolCommandOutput("turn-1", "late-start", CommandState{
+		Status:     CommandRunning,
+		Transcript: []CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "before-start"}},
+	})
+	projector.ToolStarted("turn-1", "other", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "other", CommandState{
+		Command: "printf other", Status: CommandRunning, OwnsProcess: true,
+		Transcript: []CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "other-output"}},
+	})
+	projector.ToolStarted("turn-1", "late-start", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "late-start", CommandState{
+		Command: "printf late", Status: CommandSucceeded, OwnsProcess: true,
+		Transcript: []CommandTranscriptEntry{
+			{Sequence: 1, Stream: "stdout", Text: "before-start"},
+			{Sequence: 2, Stream: "stdout", Text: "after-start"},
+		},
+	})
+	projector.ToolCommandOutput("turn-1", "late-start", CommandState{
+		Status: CommandRunning, OwnsProcess: true,
+		Transcript: []CommandTranscriptEntry{{Sequence: 3, Stream: "stdout", Text: "after-completion"}},
+	})
+
+	tools := snapshotForTest(t, projector).Tools
+	if len(tools) != 2 {
+		t.Fatalf("command tools = %+v", tools)
+	}
+	byCall := make(map[string]ToolState, len(tools))
+	for _, tool := range tools {
+		byCall[tool.CallID] = tool
+	}
+	late := byCall["late-start"]
+	other := byCall["other"]
+	if late.Command == nil || late.Command.Orphan || late.Command.Command != "printf late" ||
+		late.Command.Status != CommandSucceeded || len(late.Command.Transcript) != 3 ||
+		!strings.Contains(late.Output, "after-start") || !strings.Contains(late.Output, "after-completion") {
+		t.Fatalf("late-start command = %+v", late)
+	}
+	if other.Command == nil || other.Command.Command != "printf other" ||
+		strings.Contains(other.Output, "before-start") || strings.Contains(other.Output, "after-start") {
+		t.Fatalf("other command received unrelated output: %+v", other)
+	}
+}
+
+func TestOrphanCommandCompletionRemainsExplicit(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	exitCode := 0
+	projector.ToolCommandOutput("turn-1", "orphan", CommandState{
+		Command: "true", Status: CommandSucceeded, OwnsProcess: true, ExitCode: &exitCode,
+	})
+	tool := snapshotForTest(t, projector).Tools[0]
+	if tool.Command == nil || !tool.Command.Orphan || tool.Status != ToolSucceeded {
+		t.Fatalf("orphan command = %+v", tool)
+	}
+}
+
+func TestBackgroundCommandOutlivesToolAndTurnThenCompletes(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "background", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "background", CommandState{
+		Command: "sleep 1", Status: CommandRunning, Background: true, OwnsProcess: true,
+		SessionID: "session-1",
+	})
+	projector.ToolCompleted("turn-1", "background", "exec", "", time.Millisecond, false, nil)
+	projector.TurnInterrupted("turn-1", "interrupted")
+	tool := snapshotForTest(t, projector).Tools[0]
+	if tool.Status != ToolRunning || tool.Command == nil || tool.Command.Status != CommandRunning {
+		t.Fatalf("background command was terminalized with its turn: %+v", tool)
+	}
+	exitCode := 0
+	projector.ToolCommandOutput("turn-1", "background", CommandState{
+		Status: CommandSucceeded, Background: true, OwnsProcess: true, ExitCode: &exitCode,
+		Duration: time.Second,
+	})
+	tool = snapshotForTest(t, projector).Tools[0]
+	if tool.Status != ToolSucceeded || tool.Command.Status != CommandSucceeded || tool.Duration != time.Second {
+		t.Fatalf("background terminal command = %+v", tool)
+	}
+}
+
+func TestTerminalBackgroundDurationSurvivesLaterToolCompletion(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "background", "exec", "fields: command")
+	processDuration := 3 * time.Second
+	projector.ToolCommandOutput("turn-1", "background", CommandState{
+		Command: "true", Status: CommandSucceeded, Background: true, OwnsProcess: true,
+		SessionID: "session-1", Duration: processDuration,
+	})
+	projector.ToolCompleted("turn-1", "background", "exec", "", time.Millisecond, false, nil)
+
+	tool := snapshotForTest(t, projector).Tools[0]
+	if tool.Duration != processDuration || tool.Command == nil || tool.Command.Duration != processDuration {
+		t.Fatalf("terminal background duration = %+v", tool)
+	}
+}
+
+func TestUnadmittedBackgroundCommandIsTerminalizedWithAbnormalTurn(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "background", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "background", CommandState{
+		Command: "sleep 1", Status: CommandRunning, Background: true, OwnsProcess: true,
+	})
+	projector.TurnInterrupted("turn-1", "interrupted before process admission")
+
+	tool := snapshotForTest(t, projector).Tools[0]
+	if tool.Status != ToolInterrupted || tool.Command == nil || tool.Command.Status != CommandCanceled ||
+		!tool.Command.Canceled {
+		t.Fatalf("unadmitted background command = %+v", tool)
+	}
+}
+
+func TestFailedToolTerminalizesCommandThatNeverProducedAnOutcome(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "call-1", "exec", "fields: command")
+	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Command: "missing-binary", Status: CommandRunning, OwnsProcess: true,
+	})
+	projector.ToolCompleted("turn-1", "call-1", "exec", "", time.Millisecond, true, nil)
+	tool := snapshotForTest(t, projector).Tools[0]
+	if tool.Status != ToolFailed || tool.Command == nil || tool.Command.Status != CommandFailed {
+		t.Fatalf("failed command without terminal observation = %+v", tool)
+	}
+}
+
+func TestFailedToolTerminalizesUnadmittedBackgroundCommand(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "call-1", "exec", "fields: command, background")
+	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Action: "run", Command: "missing-binary", Status: CommandRunning, Background: true,
+	})
+	projector.ToolCompleted("turn-1", "call-1", "exec", "failed to start command", time.Millisecond, true, nil)
+
+	tool := snapshotForTest(t, projector).Tools[0]
+	if tool.Status != ToolFailed || tool.Command == nil || tool.Command.Status != CommandFailed ||
+		tool.Command.OwnsProcess || tool.Command.SessionID != "" {
+		t.Fatalf("failed unadmitted background command = %+v", tool)
+	}
+}
+
+func TestSuccessfulTerminalInteractionDoesNotOwnTargetProcessOutcome(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "kill-call", "exec", "fields: action, sessionId")
+	projector.ToolCommandOutput("turn-1", "kill-call", CommandState{
+		Action: "kill", Command: "sleep 30", Status: CommandCanceled, Background: true,
+	})
+	projector.ToolCompleted("turn-1", "kill-call", "exec", "", time.Millisecond, false, nil)
+	tool := snapshotForTest(t, projector).Tools[0]
+	if tool.Status != ToolSucceeded || tool.Command == nil || tool.Command.Status != CommandCanceled ||
+		tool.Command.OwnsProcess {
+		t.Fatalf("terminal interaction lifecycle = %+v", tool)
+	}
+}
+
+func TestCommandTranscriptIsBoundedAcross32CorrelatedCalls(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 256})
+	for index := range 32 {
+		callID := fmt.Sprintf("call-%02d", index)
+		projector.ToolStarted("turn-1", callID, "exec", "fields: command")
+		for sequence := range 40 {
+			projector.ToolCommandOutput("turn-1", callID, CommandState{
+				Command: fmt.Sprintf("printf call-%02d", index), Status: CommandRunning, OwnsProcess: true,
+				Transcript: []CommandTranscriptEntry{{
+					Sequence: uint64(sequence + 1), Stream: "stdout",
+					Text: fmt.Sprintf("call-%02d-output-%02d\n", index, sequence),
+				}},
+			})
+		}
+	}
+	tools := snapshotForTest(t, projector).Tools
+	if len(tools) != 32 {
+		t.Fatalf("command count = %d, want 32", len(tools))
+	}
+	for _, tool := range tools {
+		if tool.Command == nil || !strings.Contains(tool.Command.Command, tool.CallID) {
+			t.Fatalf("uncorrelated command identity = %+v", tool)
+		}
+		total := 0
+		var transcript strings.Builder
+		for _, entry := range tool.Command.Transcript {
+			total += len(entry.Text)
+			transcript.WriteString(entry.Text)
+		}
+		if total > 256 || len(tool.Command.Transcript) > defaultToolLimit {
+			t.Fatalf(
+				"unbounded call %s transcript: entries=%d bytes=%d",
+				tool.CallID,
+				len(tool.Command.Transcript),
+				total,
+			)
+		}
+		if !strings.Contains(transcript.String(), tool.CallID) {
+			t.Fatalf("call %s lost its own transcript: %q", tool.CallID, transcript.String())
+		}
+		for other := range 32 {
+			otherID := fmt.Sprintf("call-%02d", other)
+			if otherID != tool.CallID && strings.Contains(transcript.String(), otherID) {
+				t.Fatalf("call %s received transcript from %s: %q", tool.CallID, otherID, transcript.String())
+			}
+		}
+	}
+}
+
+func TestTerminalCommandSnapshotReplacesTruncatedLivePrefix(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "call-1", "exec", "")
+	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Status: CommandRunning, OwnsProcess: true,
+		Transcript: []CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "head\n"}},
+	})
+	projector.ToolCommandOutput("turn-1", "call-1", CommandState{
+		Status: CommandSucceeded, OwnsProcess: true, Truncated: true,
+		Transcript: []CommandTranscriptEntry{
+			{Sequence: 1, Stream: "stdout", Text: "head\n"},
+			{Stream: "system", Text: "[… omitted …]\n"},
+			{Sequence: 99, Stream: "stdout", Text: "tail\n"},
+		},
+	})
+	command := snapshotForTest(t, projector).Tools[0].Command
+	if command == nil || len(command.Transcript) != 3 || command.Transcript[1].Stream != "system" ||
+		command.Transcript[2].Text != "tail\n" {
+		t.Fatalf("terminal command transcript = %+v", command)
 	}
 }
 

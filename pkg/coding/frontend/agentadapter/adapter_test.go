@@ -294,7 +294,8 @@ func TestAdapterProjectsBoundedToolOwnedCommandObservation(t *testing.T) {
 		ForLLMLen: 999999, ForUserLen: 999999,
 		Observation: &toolshared.ToolObservation{Command: &toolshared.CommandObservation{
 			Stdout: strings.Repeat("o", 512), Stderr: strings.Repeat("e", 512), Status: "canceled",
-			ExitCode: &exitCode, Truncated: true, Background: true, Canceled: true, SessionID: "session-1",
+			ExitCode: &exitCode, Truncated: true, Background: true, OwnsProcess: true,
+			Canceled: true, SessionID: "session-1",
 		}},
 	})
 
@@ -317,6 +318,73 @@ func TestAdapterProjectsBoundedToolOwnedCommandObservation(t *testing.T) {
 	}
 }
 
+func TestAdapterProjectsCommandStartProgressAndCompletionByCallID(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{
+		SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+	}
+	publish := func(kind runtimeevents.Kind, payload any) {
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+		})
+	}
+	for _, callID := range []string{"call-a", "call-b"} {
+		publish(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{
+			ToolCallID: callID, Tool: "exec",
+			Observation: &toolshared.ToolObservation{Command: &toolshared.CommandObservation{
+				Action: "run", Command: "printf " + callID, CWD: "/repo", Source: "agent",
+				Status: "running", OwnsProcess: true,
+			}},
+		})
+	}
+	publish(runtimeevents.KindAgentToolExecProgress, agent.ToolExecProgressPayload{
+		ToolCallID: "call-b", Tool: "exec",
+		Observation: &toolshared.ToolObservation{Command: &toolshared.CommandObservation{
+			Status: "running", OwnsProcess: true,
+			Transcript: []toolshared.CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "only-b"}},
+		}},
+	})
+	exitCode := 0
+	publish(runtimeevents.KindAgentToolExecEnd, agent.ToolExecEndPayload{
+		ToolCallID: "call-a", Tool: "exec", Duration: time.Second,
+		Observation: &toolshared.ToolObservation{Command: &toolshared.CommandObservation{
+			Status: "succeeded", OwnsProcess: true, ExitCode: &exitCode,
+			Transcript: []toolshared.CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "only-a"}},
+		}},
+	})
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byCall := make(map[string]frontend.ToolState, len(snapshot.Tools))
+	for _, tool := range snapshot.Tools {
+		byCall[tool.CallID] = tool
+	}
+	if len(byCall) != 2 || byCall["call-a"].Command == nil || byCall["call-b"].Command == nil {
+		t.Fatalf("projected commands = %+v", snapshot.Tools)
+	}
+	if byCall["call-a"].Command.Command != "printf call-a" || byCall["call-a"].Status != frontend.ToolSucceeded ||
+		!strings.Contains(byCall["call-a"].Output, "only-a") ||
+		strings.Contains(byCall["call-a"].Output, "only-b") {
+		t.Fatalf("call-a projection = %+v", byCall["call-a"])
+	}
+	if byCall["call-b"].Command.Command != "printf call-b" || byCall["call-b"].Status != frontend.ToolRunning ||
+		!strings.Contains(byCall["call-b"].Output, "only-b") ||
+		strings.Contains(byCall["call-b"].Output, "only-a") {
+		t.Fatalf("call-b projection = %+v", byCall["call-b"])
+	}
+}
+
 func TestProjectCommandMapsCompletedNonzeroExitToFailure(t *testing.T) {
 	exitCode := 7
 	command := projectCommand(toolshared.CommandObservation{Status: "done", ExitCode: &exitCode})
@@ -327,6 +395,12 @@ func TestProjectCommandMapsCompletedNonzeroExitToFailure(t *testing.T) {
 	command = projectCommand(toolshared.CommandObservation{Status: "exited", ExitCode: &exitCode})
 	if command.Status != frontend.CommandSucceeded {
 		t.Fatalf("completed zero command = %+v", command)
+	}
+	for _, status := range []string{"failed", "error"} {
+		command = projectCommand(toolshared.CommandObservation{Status: status})
+		if command.Status != frontend.CommandFailed {
+			t.Fatalf("%s command = %+v", status, command)
+		}
 	}
 }
 

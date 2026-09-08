@@ -39,15 +39,15 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 	model.resize(100, 30)
 	collapsed := renderedModelTranscript(model, 100)
 	for _, marker := range []string{
-		"[running]", "[suspended]", "[succeeded]", "[failed]", "[interrupted]", "[unknown]",
+		"[running]", "[suspended]", "[succeeded]", "[failed]", "Command interrupted", "[unknown]",
 	} {
 		if !strings.Contains(collapsed, marker) {
 			t.Fatalf("collapsed cards omit %q: %q", marker, collapsed)
 		}
 	}
 	if strings.Contains(collapsed, "SECRET_TOKEN") || strings.Contains(collapsed, "secret command") ||
-		strings.Contains(collapsed, "safe stdout") {
-		t.Fatalf("collapsed card leaked arguments or output: %q", collapsed)
+		!strings.Contains(collapsed, "safe stdout") || !strings.Contains(collapsed, "ctrl+t") {
+		t.Fatalf("collapsed card leaked arguments or omitted bounded command evidence: %q", collapsed)
 	}
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}, Alt: true})
@@ -57,8 +57,8 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
 	expanded := renderedModelTranscript(model, 100)
 	for _, want := range []string{
-		"[interrupted]", "exit: 130", "execution: background", "[…truncated]", "stdout:", "safe stdout", "stderr:",
-		"safe stderr", "· 1.5s",
+		"Command interrupted", "exit 130", "execution: background", "[… transcript bounded …]", "stdout>",
+		"safe stdout", "stderr>", "safe stderr", "· 1.5s",
 	} {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expanded card omits %q: %q", want, expanded)

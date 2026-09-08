@@ -1,9 +1,17 @@
 • I’ll inspect the command path before changing it.
 
-• Ran exec [succeeded] · 1.2s
+• Ran go test ./pkg/coding/frontend · 1.2s
+  └ stdout> frontend tests passed
+  ctrl+t to view full transcript
 
-• Ran exec [succeeded] · 900ms
+• Ran mintclaw config check · 900ms
+  └ stdout> configuration checked
+  ctrl+t to view full transcript
 
-• Background exec [running] · 19s
+• Running in background go test ./...
+  execution: background
+  process: session-1
+  └ stdout> reviewing package boundaries
+  ctrl+t to view full transcript
 
 • The command path is verified.

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -97,8 +98,9 @@ func (line cellLine) plainText() string {
 }
 
 type cellDocument struct {
-	Lines     []cellLine
-	Truncated bool
+	Lines             []cellLine
+	Truncated         bool
+	TruncationVisible bool
 }
 
 func (document cellDocument) plainText() string {
@@ -150,6 +152,11 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 	var document cellDocument
 	if cell.item.Kind == frontend.PresentationPlanUpdate {
 		document = cell.planDocument(context.Width)
+	} else if cell.item.Tool != nil && cell.item.Tool.Command != nil {
+		document = wrapCellDocument(
+			cell.commandDocument(*cell.item.Tool, *cell.item.Tool.Command, mode, context.Width),
+			context.Width,
+		)
 	} else {
 		document = wrapCellDocument(cell.semanticDocument(mode), context.Width)
 	}
@@ -324,18 +331,14 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 	if tool == nil {
 		return cellDocument{}
 	}
+	if tool.Command != nil {
+		return cell.commandDocument(*tool, *tool.Command, mode, 120)
+	}
 	name := strings.TrimSpace(sanitizeTerminalText(tool.Name))
 	if name == "" {
 		name = "tool"
 	}
 	title := "• Tool " + name + " [" + toolStatusLabel(tool.Status) + "]"
-	if tool.Command != nil {
-		if tool.Command.Background {
-			title = "• Background " + name + " [" + toolStatusLabel(tool.Status) + "]"
-		} else {
-			title = "• Ran " + name + " [" + toolStatusLabel(tool.Status) + "]"
-		}
-	}
 	if len(tool.WriteAudit) != 0 {
 		title = "• Edited " + strconv.Itoa(len(tool.WriteAudit)) + " " + pluralize("file", len(tool.WriteAudit)) +
 			" [" + toolStatusLabel(tool.Status) + "]"
@@ -352,9 +355,7 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 	if mode == cellRenderCompact {
 		return cellDocument{Lines: lines, Truncated: tool.OutputTruncated || toolCommandTruncated(tool.Command)}
 	}
-	if tool.Command != nil {
-		lines = append(lines, commandEvidenceCellLines(*tool.Command)...)
-	} else if output := sanitizeTerminalText(tool.Output); strings.TrimSpace(output) != "" {
+	if output := sanitizeTerminalText(tool.Output); strings.TrimSpace(output) != "" {
 		lines = append(
 			lines,
 			logicalCellLines("  output:\n"+indentCellEvidence(output), cellStyleDefault)...)
@@ -362,39 +363,233 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 	return cellDocument{Lines: lines, Truncated: tool.OutputTruncated || toolCommandTruncated(tool.Command)}
 }
 
-func commandEvidenceCellLines(command frontend.CommandState) []cellLine {
-	lines := make([]cellLine, 0, 6)
+func (cell *presentationCell) commandDocument(
+	tool frontend.ToolState,
+	command frontend.CommandState,
+	mode cellRenderMode,
+	width int,
+) cellDocument {
+	title, role := commandCellTitle(tool, command)
+	lines := []cellLine{styledCellLine(title, role)}
+	if command.Orphan {
+		lines = append(lines, styledCellLine("  outcome arrived without a matching start event", cellStyleFailure))
+	}
+	if command.CWD != "" {
+		lines = append(lines, logicalCellLines("  cwd: "+sanitizeTerminalText(command.CWD), cellStyleMuted)...)
+	}
 	if command.Background {
 		lines = append(lines, styledCellLine("  execution: background", cellStyleMuted))
 	}
 	if command.SessionID != "" {
 		lines = append(
 			lines,
-			logicalCellLines("  session: "+sanitizeTerminalText(command.SessionID), cellStyleMuted)...)
-	}
-	if command.ExitCode != nil {
-		lines = append(
-			lines,
-			styledCellLine("  exit: "+strconv.Itoa(*command.ExitCode), lifecycleCellRoleForCommand(command)),
+			logicalCellLines("  process: "+sanitizeTerminalText(command.SessionID), cellStyleMuted)...,
 		)
 	}
-	for _, evidence := range []struct {
-		label string
-		value string
-	}{
-		{label: "stdout", value: command.Stdout},
-		{label: "stderr", value: command.Stderr},
-		{label: "output", value: command.Output},
-	} {
-		value := sanitizeTerminalText(evidence.value)
-		if strings.TrimSpace(value) == "" {
+
+	evidence := commandTranscriptText(command)
+	if mode == cellRenderCompact {
+		lines = append(lines, compactCommandEvidenceLines(evidence, width)...)
+		if evidence != "" || command.Truncated {
+			hint := "  ctrl+t to view full transcript"
+			if command.Truncated {
+				hint = "  output truncated · ctrl+t to view full transcript"
+			}
+			lines = append(lines, styledCellLine(hint, cellStyleMuted))
+		}
+		return cellDocument{
+			Lines: lines, Truncated: command.Truncated, TruncationVisible: command.Truncated,
+		}
+	}
+	if command.Command != "" {
+		lines = append(lines, logicalCellLines("  $ "+sanitizeTerminalText(command.Command), cellStyleAccent)...)
+	}
+	if command.Action != "" && command.Action != "run" {
+		lines = append(lines, styledCellLine("  action: "+sanitizeTerminalText(command.Action), cellStyleMuted))
+	}
+	if evidence != "" {
+		lines = append(lines, logicalCellLines(indentCellEvidence(evidence), cellStyleDefault)...)
+	}
+	if command.Truncated {
+		lines = append(lines, styledCellLine("  [… transcript bounded …]", cellStyleMuted))
+	}
+	lines = append(lines, commandOutcomeCellLines(command, cell.item.Duration)...)
+	return cellDocument{
+		Lines: lines, Truncated: command.Truncated, TruncationVisible: command.Truncated,
+	}
+}
+
+func commandCellTitle(tool frontend.ToolState, command frontend.CommandState) (string, cellStyleRole) {
+	display := boundedSingleLine(command.Command, 512)
+	if display == "" {
+		display = boundedSingleLine(tool.Name, 256)
+	}
+	if display == "" {
+		display = "command"
+	}
+	status := command.Status
+	if status == "" {
+		status = frontend.CommandUnknown
+	}
+	action := strings.TrimSpace(command.Action)
+	if action == "" {
+		action = "run"
+	}
+	if action != "run" {
+		verb := map[string]string{
+			"poll": "Checked", "read": "Read output from", "write": "Interacted with",
+			"send-keys": "Interacted with", "kill": "Stopped",
+		}[action]
+		if verb == "" {
+			verb = "Observed"
+		}
+		return fmt.Sprintf(
+				"• %s %s [%s]",
+				verb,
+				display,
+				commandStatusLabel(status),
+			), lifecycleCellRole(
+				cellLifecycleForCommand(command),
+			)
+	}
+	switch status {
+	case frontend.CommandRunning:
+		if command.Background {
+			return "• Running in background " + display, cellStyleAccent
+		}
+		return "• Running " + display, cellStyleAccent
+	case frontend.CommandSucceeded:
+		if command.Source == frontend.CommandSourceUserShell {
+			return "• You ran " + display + commandDurationSuffix(tool.Duration), cellStyleSuccess
+		}
+		return "• Ran " + display + commandDurationSuffix(tool.Duration), cellStyleSuccess
+	case frontend.CommandFailed, frontend.CommandTimedOut:
+		return "! Command failed " + display + commandDurationSuffix(tool.Duration), cellStyleFailure
+	case frontend.CommandCanceled:
+		return "! Command interrupted " + display + commandDurationSuffix(tool.Duration), cellStyleFailure
+	default:
+		return "? Command outcome unknown " + display, cellStyleMuted
+	}
+}
+
+func commandDurationSuffix(duration time.Duration) string {
+	if duration <= 0 {
+		return ""
+	}
+	return " · " + formatToolDuration(duration)
+}
+
+func commandStatusLabel(status frontend.CommandStatus) string {
+	if status == "" {
+		return string(frontend.CommandUnknown)
+	}
+	return sanitizeTerminalText(string(status))
+}
+
+func cellLifecycleForCommand(command frontend.CommandState) frontend.PresentationLifecycle {
+	switch command.Status {
+	case frontend.CommandSucceeded:
+		return frontend.PresentationCompleted
+	case frontend.CommandFailed, frontend.CommandTimedOut:
+		return frontend.PresentationFailed
+	case frontend.CommandCanceled:
+		return frontend.PresentationInterrupted
+	case frontend.CommandRunning:
+		return frontend.PresentationActive
+	default:
+		return frontend.PresentationUnknown
+	}
+}
+
+func commandTranscriptText(command frontend.CommandState) string {
+	if len(command.Transcript) == 0 {
+		parts := make([]string, 0, 3)
+		if command.Stdout != "" {
+			parts = append(parts, "stdout> "+command.Stdout)
+		}
+		if command.Stderr != "" {
+			parts = append(parts, "stderr> "+command.Stderr)
+		}
+		if command.Stdout == "" && command.Stderr == "" && command.Output != "" {
+			parts = append(parts, "output> "+command.Output)
+		}
+		return sanitizeTerminalText(strings.Join(parts, "\n"))
+	}
+	var transcript strings.Builder
+	stream := ""
+	endsWithNewline := true
+	for _, entry := range command.Transcript {
+		value := sanitizeTerminalText(entry.Text)
+		if value == "" {
 			continue
 		}
-		lines = append(
-			lines,
-			logicalCellLines("  "+evidence.label+":\n"+indentCellEvidence(value), cellStyleDefault)...)
+		label := commandStreamLabel(entry.Stream)
+		if label != stream {
+			if transcript.Len() != 0 && !endsWithNewline {
+				transcript.WriteByte('\n')
+			}
+			transcript.WriteString(label)
+			transcript.WriteString("> ")
+			stream = label
+		}
+		transcript.WriteString(value)
+		endsWithNewline = strings.HasSuffix(value, "\n")
 	}
-	return lines
+	return transcript.String()
+}
+
+func commandStreamLabel(stream string) string {
+	switch strings.ToLower(strings.TrimSpace(stream)) {
+	case "stdout":
+		return "stdout"
+	case "stderr":
+		return "stderr"
+	case "input", "stdin":
+		return "stdin"
+	case "error":
+		return "error"
+	case "system":
+		return "system"
+	default:
+		return "terminal"
+	}
+}
+
+func compactCommandEvidenceLines(evidence string, width int) []cellLine {
+	if evidence == "" {
+		return nil
+	}
+	logical := strings.Split(evidence, "\n")
+	lines := make([]cellLine, 0, len(logical))
+	for index, line := range logical {
+		prefix := "    "
+		if index == 0 {
+			prefix = "  └ "
+		}
+		lines = append(lines, styledCellLine(prefix+line, cellStyleMuted))
+	}
+	wrapped := wrapCellDocument(cellDocument{Lines: lines}, max(1, width)).Lines
+	const maximum = 5
+	if len(wrapped) <= maximum {
+		return wrapped
+	}
+	omitted := len(wrapped) - 4
+	return []cellLine{
+		wrapped[0], wrapped[1],
+		styledCellLine("    "+fmt.Sprintf("… %d lines omitted …", omitted), cellStyleMuted),
+		wrapped[len(wrapped)-2], wrapped[len(wrapped)-1],
+	}
+}
+
+func commandOutcomeCellLines(command frontend.CommandState, duration time.Duration) []cellLine {
+	parts := []string{commandStatusLabel(command.Status)}
+	if command.ExitCode != nil {
+		parts = append(parts, "exit "+strconv.Itoa(*command.ExitCode))
+	}
+	if duration > 0 {
+		parts = append(parts, formatToolDuration(duration))
+	}
+	return []cellLine{styledCellLine("  "+strings.Join(parts, " · "), lifecycleCellRoleForCommand(command))}
 }
 
 func lifecycleCellRoleForCommand(command frontend.CommandState) cellStyleRole {
@@ -466,7 +661,7 @@ func logicalCellLines(value string, role cellStyleRole) []cellLine {
 func wrapCellDocument(document cellDocument, width int) cellDocument {
 	width = max(1, width)
 	logicalLines := document.Lines
-	if document.Truncated {
+	if document.Truncated && !document.TruncationVisible {
 		logicalLines = append(slices.Clone(logicalLines), styledCellLine("[…truncated]", cellStyleMuted))
 	}
 	wrapped := make([]cellLine, 0, len(logicalLines))

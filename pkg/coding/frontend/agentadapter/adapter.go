@@ -119,6 +119,18 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		payload, ok := event.Payload.(agent.ToolExecStartPayload)
 		if ok {
 			a.projector.ToolStarted(turnID, payload.ToolCallID, payload.Tool, argumentShape(payload.Arguments))
+			observation := toolshared.SanitizeToolObservation(payload.Observation)
+			if observation != nil && observation.Command != nil {
+				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+			}
+		}
+	case runtimeevents.KindAgentToolExecProgress:
+		payload, ok := event.Payload.(agent.ToolExecProgressPayload)
+		if ok {
+			observation := toolshared.SanitizeToolObservation(payload.Observation)
+			if observation != nil && observation.Command != nil {
+				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+			}
 		}
 	case runtimeevents.KindAgentToolExecEnd:
 		payload, ok := event.Payload.(agent.ToolExecEndPayload)
@@ -297,23 +309,36 @@ func projectCommand(command toolshared.CommandObservation) frontend.CommandState
 		status = frontend.CommandRunning
 	case "succeeded":
 		status = frontend.CommandSucceeded
+	case "failed", "error":
+		status = frontend.CommandFailed
 	case "done", "exited":
 		status = frontend.CommandSucceeded
 		if command.ExitCode != nil && *command.ExitCode != 0 {
 			status = frontend.CommandFailed
 		}
-	case "canceled":
+	case "canceled", "interrupted":
 		status = frontend.CommandCanceled
 	case "timed_out":
 		status = frontend.CommandTimedOut
 	default:
-		status = frontend.CommandFailed
+		status = frontend.CommandUnknown
+	}
+	transcript := make([]frontend.CommandTranscriptEntry, 0, len(command.Transcript))
+	for _, entry := range command.Transcript {
+		transcript = append(transcript, frontend.CommandTranscriptEntry{
+			Sequence: entry.Sequence,
+			Stream:   entry.Stream,
+			Text:     entry.Text,
+		})
 	}
 	return frontend.CommandState{
+		Action: command.Action, Command: command.Command, CWD: command.CWD, Input: command.Input,
+		Source: frontend.CommandSource(command.Source),
 		Stdout: command.Stdout, Stderr: command.Stderr, Output: command.Output,
+		Transcript: transcript, Duration: command.Duration,
 		Status: status, SessionID: command.SessionID, ExitCode: command.ExitCode,
 		Truncated: command.Truncated, Background: command.Background,
-		Canceled: command.Canceled, TimedOut: command.TimedOut,
+		OwnsProcess: command.OwnsProcess, Canceled: command.Canceled, TimedOut: command.TimedOut,
 	}
 }
 

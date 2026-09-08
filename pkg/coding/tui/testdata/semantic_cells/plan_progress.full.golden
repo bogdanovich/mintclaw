@@ -5,10 +5,10 @@
     → Implement the semantic cells
     □ Run focused validation
 
-• Ran exec [succeeded] · 2.4s
-  exit: 0
-  stdout:
-    focused tests passed
+• Ran go test ./pkg/coding/tui · 2.4s
+  $ go test ./pkg/coding/tui
+    stdout> focused tests passed
+  succeeded · exit 0 · 2.4s
 
 • Updated Plan
   └ Implementation and focused

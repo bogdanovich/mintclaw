@@ -164,11 +164,11 @@ func TestSemanticCellOwnsTypedPayloadAndSanitizesEveryRenderMode(t *testing.T) {
 				t.Fatalf("mode %d line width %d > 16: %q", mode, width, line.plainText())
 			}
 		}
-		if mode == cellRenderCompact && strings.Contains(text, "failure") {
-			t.Fatalf("compact mode exposed full command evidence: %q", text)
-		}
-		if mode != cellRenderCompact && !strings.Contains(text, "failure") {
+		if !strings.Contains(text, "failure") {
 			t.Fatalf("mode %d omitted full command evidence: %q", mode, text)
+		}
+		if mode == cellRenderCompact && !strings.Contains(text, "ctrl+t") {
+			t.Fatalf("compact command omitted transcript route: %q", text)
 		}
 		if mode == cellRenderPlain {
 			for _, line := range document.Lines {
@@ -461,7 +461,7 @@ func TestSemanticCellFullEvidencePreservesSignificantWhitespace(t *testing.T) {
 		{
 			name: "typed command",
 			cell: newPresentationCell(command),
-			want: "• Ran exec [succeeded]\n  stdout:\n      indented  \n    \n    ",
+			want: "• Ran exec\n    stdout>   indented  \n    \n    \n  succeeded",
 		},
 		{
 			name: "generic tool",

@@ -1006,9 +1006,10 @@ func (runner *toolLoopRunner) invokeToolCall(
 		runtimeevents.KindAgentToolExecStart,
 		ts.eventMeta("runTurn", "turn.tool.start"),
 		ToolExecStartPayload{
-			ToolCallID: tc.ID,
-			Tool:       toolName,
-			Arguments:  cloneEventArguments(auditArgs),
+			ToolCallID:  tc.ID,
+			Tool:        toolName,
+			Arguments:   cloneEventArguments(auditArgs),
+			Observation: codingToolStartObservation(ts, toolRegistry, toolName, toolArgs),
 		},
 	)
 
@@ -1074,6 +1075,20 @@ func (runner *toolLoopRunner) invokeToolCall(
 			runner.journalErr = fmt.Errorf("persist tool start marker: %w", err)
 			return stopToolBatch(ToolLoopOutcome{})
 		}
+	}
+	if strings.TrimSpace(ts.opts.CodingContext.SessionKey) != "" {
+		progressMeta := ts.eventMeta("runTurn", "turn.tool.progress")
+		execCtx = toolshared.WithCommandObservationSink(execCtx, func(observation toolshared.CommandObservation) {
+			p.emitEvent(
+				runtimeevents.KindAgentToolExecProgress,
+				progressMeta,
+				ToolExecProgressPayload{
+					ToolCallID:  tc.ID,
+					Tool:        toolName,
+					Observation: &toolshared.ToolObservation{Command: &observation},
+				},
+			)
+		})
 	}
 	var toolResult *toolshared.ToolResult
 	if trustedExecution != nil {
@@ -1470,6 +1485,26 @@ func codingToolObservation(ts *turnState, observation *toolshared.ToolObservatio
 		return nil
 	}
 	return toolshared.SanitizeToolObservation(observation)
+}
+
+func codingToolStartObservation(
+	ts *turnState,
+	registry *tools.ToolRegistry,
+	toolName string,
+	arguments map[string]any,
+) *toolshared.ToolObservation {
+	if ts == nil || strings.TrimSpace(ts.opts.CodingContext.SessionKey) == "" || registry == nil {
+		return nil
+	}
+	tool, ok := registry.Get(toolName)
+	if !ok {
+		return nil
+	}
+	provider, ok := tool.(toolshared.CodingObservationProvider)
+	if !ok {
+		return nil
+	}
+	return toolshared.SanitizeToolObservation(provider.CodingStartObservation(arguments))
 }
 
 func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOutcome {

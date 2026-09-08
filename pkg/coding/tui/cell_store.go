@@ -343,3 +343,55 @@ func (m *Model) selectedToolCellID() string {
 	}
 	return ""
 }
+
+// fullTranscriptPanelLines renders the currently hydrated transcript window
+// without terminal styling. It intentionally reuses the semantic cells so a
+// command's compact preview and complete evidence cannot diverge.
+func (m *Model) fullTranscriptPanelLines() []string {
+	context := cellRenderContext{Width: max(1, m.width), Theme: m.theme, ColorLevel: cellColorNone}
+	lines := []string{"Full transcript · copy-safe plain text · Ctrl+T or Esc closes"}
+	if m.transcript.loading {
+		lines = append(lines, "[earlier transcript loading]")
+	} else if !m.transcript.disabled && (m.transcript.hasOlder || m.snapshot.HasOlderEntries) {
+		lines = append(lines, "[earlier transcript omitted; close this panel and press Page Up to load more]")
+	}
+
+	liveMessageIDs := make(map[string]struct{}, len(m.cells.ordered))
+	for _, cell := range m.cells.ordered {
+		if cell.item.Message != nil {
+			liveMessageIDs[cell.item.Message.ID] = struct{}{}
+		}
+	}
+	appendCell := func(cell semanticCell) {
+		if cell == nil {
+			return
+		}
+		document := cell.Render(context, cellRenderPlain)
+		text := strings.Trim(renderCellDocument(document, context, cellRenderPlain), "\n")
+		if text == "" {
+			return
+		}
+		if len(lines) > 0 && lines[len(lines)-1] != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines, strings.Split(sanitizeTerminalText(text), "\n")...)
+	}
+	for _, cell := range m.hydratedCells.ordered {
+		if cell.item.Message != nil {
+			if _, duplicate := liveMessageIDs[cell.item.Message.ID]; duplicate {
+				continue
+			}
+		}
+		appendCell(cell)
+	}
+	for _, cell := range m.cells.ordered {
+		if redundantNativePlanTool(cell) {
+			continue
+		}
+		appendCell(cell)
+	}
+	if m.transcript.hasNewer {
+		lines = append(lines, "", "[newer hydrated transcript omitted; close this panel and press Alt+End]")
+	}
+	return lines
+}

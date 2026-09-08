@@ -1497,6 +1497,18 @@ func TestCloneToolObservationClonesPlanSteps(t *testing.T) {
 	}
 }
 
+func TestCloneToolObservationClonesCommandTranscript(t *testing.T) {
+	original := &toolshared.ToolObservation{Command: &toolshared.CommandObservation{
+		Transcript: []toolshared.CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "stable"}},
+	}}
+	cloned := cloneToolObservation(original)
+	original.Command.Transcript[0].Text = "mutated"
+	if cloned == nil || cloned.Command == nil || len(cloned.Command.Transcript) != 1 ||
+		cloned.Command.Transcript[0].Text != "stable" {
+		t.Fatalf("command transcript clone = %+v", cloned)
+	}
+}
+
 type respondWithMediaHook struct {
 	respondTools    map[string]bool
 	media           []string

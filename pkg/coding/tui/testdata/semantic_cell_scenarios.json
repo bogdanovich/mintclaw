@@ -36,6 +36,7 @@
           "status": "succeeded",
           "duration": 1200000000,
           "command": {
+            "command": "go test ./pkg/coding/frontend",
             "stdout": "frontend tests passed",
             "status": "succeeded",
             "exit_code": 0
@@ -58,6 +59,7 @@
           "status": "succeeded",
           "duration": 900000000,
           "command": {
+            "command": "mintclaw config check",
             "stdout": "configuration checked",
             "status": "succeeded",
             "exit_code": 0
@@ -79,6 +81,7 @@
           "arguments": "fields: command, wait",
           "status": "running",
           "command": {
+            "command": "go test ./...",
             "stdout": "reviewing package boundaries",
             "status": "running",
             "session_id": "session-1",
@@ -173,6 +176,7 @@
           "status": "failed",
           "duration": 3000000000,
           "command": {
+            "command": "go test ./pkg/coding/tui",
             "stderr": "package test failed",
             "status": "failed",
             "exit_code": 1
@@ -194,6 +198,7 @@
           "arguments": "fields: command",
           "status": "running",
           "command": {
+            "command": "go test ./pkg/coding/tui -run TestFocused",
             "stdout": "running focused retry",
             "status": "running"
           }
@@ -228,6 +233,7 @@
           "status": "suspended",
           "duration": 78000000000,
           "command": {
+            "command": "mintclaw review",
             "stdout": "waiting for reviewer",
             "status": "running",
             "session_id": "review-1",
@@ -374,6 +380,7 @@
           "status": "succeeded",
           "duration": 2400000000,
           "command": {
+            "command": "go test ./pkg/coding/tui",
             "stdout": "focused tests passed",
             "status": "succeeded",
             "exit_code": 0

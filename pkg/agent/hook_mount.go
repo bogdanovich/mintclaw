@@ -333,6 +333,7 @@ func validHookEventKinds() map[string]string {
 	kinds["context_snapshot"] = runtimeevents.KindAgentContextSnapshot.String()
 	kinds["session_summarize"] = runtimeevents.KindAgentSessionSummarize.String()
 	kinds["tool_exec_start"] = runtimeevents.KindAgentToolExecStart.String()
+	kinds["tool_exec_progress"] = runtimeevents.KindAgentToolExecProgress.String()
 	kinds["tool_exec_end"] = runtimeevents.KindAgentToolExecEnd.String()
 	kinds["tool_exec_skipped"] = runtimeevents.KindAgentToolExecSkipped.String()
 	kinds["tool_loop_decision"] = runtimeevents.KindAgentToolLoopDecision.String()

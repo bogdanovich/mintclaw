@@ -575,6 +575,9 @@ Done when:
 
 ### TUI.7 — Command lifecycle and full transcript
 
+Status: implemented. See the
+[TUI.7 exit record](local-coding-agent-tui-7-exit.md).
+
 Dependencies: TUI.4
 
 Effort: large
