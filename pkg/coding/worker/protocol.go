@@ -4,18 +4,14 @@
 package worker
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -645,93 +641,6 @@ func validPlanState(plan Plan) bool {
 	return true
 }
 
-func validateProtocolText(raw json.RawMessage) error {
-	var value any
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&value); err != nil {
-		return fmt.Errorf("%w: malformed protocol payload: %w", ErrInvalidRecord, err)
-	}
-	var inspect func(any) error
-	inspect = func(current any) error {
-		switch typed := current.(type) {
-		case string:
-			if len(typed) > MaxEventTextBytes || !utf8.ValidString(typed) || containsTerminalControl(typed) {
-				return fmt.Errorf("%w: protocol payload contains unsafe or oversized text", ErrInvalidRecord)
-			}
-		case []any:
-			for _, entry := range typed {
-				if err := inspect(entry); err != nil {
-					return err
-				}
-			}
-		case map[string]any:
-			for key, entry := range typed {
-				if len(key) > MaxEventTextBytes || !utf8.ValidString(key) || containsTerminalControl(key) {
-					return fmt.Errorf("%w: protocol payload contains unsafe or oversized text", ErrInvalidRecord)
-				}
-				if err := inspect(entry); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-	return inspect(value)
-}
-
-func containsTerminalControl(value string) bool {
-	return strings.ContainsFunc(value, func(character rune) bool {
-		if character == '\n' || character == '\r' || character == '\t' {
-			return false
-		}
-		return character == '\x1b' || unicode.IsControl(character)
-	})
-}
-
-func Encode(record Record) ([]byte, error) {
-	if err := record.Validate(); err != nil {
-		return nil, err
-	}
-	data, err := json.Marshal(record)
-	if err != nil {
-		return nil, fmt.Errorf("encode coding worker record: %w", err)
-	}
-	if len(data) > MaxRecordBytes {
-		return nil, ErrRecordTooLarge
-	}
-	return data, nil
-}
-
-func Decode(data []byte) (Record, error) {
-	if len(data) > MaxRecordBytes {
-		return Record{}, ErrRecordTooLarge
-	}
-	var record Record
-	if err := decodeStrict(data, &record); err != nil {
-		return Record{}, fmt.Errorf("%w: %w", ErrInvalidRecord, err)
-	}
-	if err := record.Validate(); err != nil {
-		return Record{}, err
-	}
-	return record, nil
-}
-
-// DecodePayload applies the v1 closed-world field policy to one params,
-// result, or event payload object.
-func DecodePayload(raw json.RawMessage, destination any) error {
-	if destination == nil {
-		return fmt.Errorf("%w: payload destination is required", ErrInvalidRecord)
-	}
-	if err := validateJSONObject("payload", raw); err != nil {
-		return err
-	}
-	if err := decodeStrict(raw, destination); err != nil {
-		return fmt.Errorf("%w: decode payload: %w", ErrInvalidRecord, err)
-	}
-	return nil
-}
-
 // DecodeRequestPayload selects and validates the closed request schema owned
 // by method. Worker implementations consume this dispatcher instead of
 // reproducing method switches at each transport boundary.
@@ -792,17 +701,6 @@ func DecodeResultPayload(method Method, raw json.RawMessage) (any, error) {
 		return nil, fmt.Errorf("%w: invalid %s response payload: %w", ErrInvalidRecord, method, err)
 	}
 	return payload, nil
-}
-
-func MarshalPayload(value any) (json.RawMessage, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("marshal coding worker payload: %w", err)
-	}
-	if err := validateJSONObject("payload", data); err != nil {
-		return nil, err
-	}
-	return data, nil
 }
 
 func NegotiateProtocol(minimum, maximum int) (int, error) {
@@ -1071,14 +969,6 @@ func (result SnapshotResult) Validate() error {
 	return validateSnapshotEvent(result.ControlIdentity, result.Snapshot)
 }
 
-func validateStructuredText(value any) error {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("%w: encode protocol value for text validation: %w", ErrInvalidRecord, err)
-	}
-	return validateProtocolText(raw)
-}
-
 func validIdentifier(value string) bool {
 	return len(value) > 0 && len(value) <= MaxIDBytes && identifierPattern.MatchString(value)
 }
@@ -1107,172 +997,4 @@ func containsUnsafeControl(value string) bool {
 	return strings.ContainsFunc(value, func(character rune) bool {
 		return character == '\x1b' || character == 0 || character == '\x7f'
 	})
-}
-
-func validateJSONObject(label string, raw json.RawMessage) error {
-	if len(raw) == 0 {
-		return fmt.Errorf("%w: missing %s", ErrInvalidRecord, label)
-	}
-	var object map[string]json.RawMessage
-	if err := decodeStrict(raw, &object); err != nil {
-		return fmt.Errorf("%w: malformed %s: %w", ErrInvalidRecord, label, err)
-	}
-	if object == nil {
-		return fmt.Errorf("%w: %s must be an object", ErrInvalidRecord, label)
-	}
-	return nil
-}
-
-func decodeStrict(data []byte, destination any) error {
-	if len(bytes.TrimSpace(data)) == 0 {
-		return errors.New("empty JSON")
-	}
-	if err := validateJSONMembers(data, reflect.TypeOf(destination)); err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return errors.New("trailing JSON data")
-	}
-	return nil
-}
-
-var rawMessageType = reflect.TypeOf(json.RawMessage{})
-
-func validateJSONMembers(data []byte, destinationType reflect.Type) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := scanJSONValue(decoder, destinationType); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("trailing JSON data")
-	}
-	return nil
-}
-
-func scanJSONValue(decoder *json.Decoder, destinationType reflect.Type) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, composite := token.(json.Delim)
-	if !composite {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		fields, exact := exactJSONFields(destinationType)
-		childType := mapElementType(destinationType)
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			member, memberErr := decoder.Token()
-			if memberErr != nil {
-				return memberErr
-			}
-			name, ok := member.(string)
-			if !ok {
-				return errors.New("JSON object member is not a string")
-			}
-			if _, duplicate := seen[name]; duplicate {
-				return fmt.Errorf("duplicate JSON member %q", name)
-			}
-			seen[name] = struct{}{}
-			if exact {
-				var allowed bool
-				childType, allowed = fields[name]
-				if !allowed {
-					return fmt.Errorf("non-canonical JSON member %q", name)
-				}
-			}
-			if scanErr := scanJSONValue(decoder, childType); scanErr != nil {
-				return scanErr
-			}
-		}
-	case '[':
-		childType := collectionElementType(destinationType)
-		for decoder.More() {
-			if scanErr := scanJSONValue(decoder, childType); scanErr != nil {
-				return scanErr
-			}
-		}
-	default:
-		return errors.New("unexpected JSON delimiter")
-	}
-	closing, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	expected := json.Delim('}')
-	if delimiter == '[' {
-		expected = ']'
-	}
-	if closing != expected {
-		return errors.New("mismatched JSON delimiter")
-	}
-	return nil
-}
-
-func exactJSONFields(destinationType reflect.Type) (map[string]reflect.Type, bool) {
-	destinationType = indirectJSONType(destinationType)
-	if destinationType == nil || destinationType == rawMessageType || destinationType.Kind() != reflect.Struct {
-		return nil, false
-	}
-	fields := make(map[string]reflect.Type)
-	collectExactJSONFields(destinationType, fields)
-	return fields, true
-}
-
-func collectExactJSONFields(destinationType reflect.Type, fields map[string]reflect.Type) {
-	for index := 0; index < destinationType.NumField(); index++ {
-		field := destinationType.Field(index)
-		if field.PkgPath != "" {
-			continue
-		}
-		tag := field.Tag.Get("json")
-		name, _, _ := strings.Cut(tag, ",")
-		if name == "-" {
-			continue
-		}
-		if field.Anonymous && name == "" {
-			embeddedType := indirectJSONType(field.Type)
-			if embeddedType != nil && embeddedType.Kind() == reflect.Struct && embeddedType != rawMessageType {
-				collectExactJSONFields(embeddedType, fields)
-				continue
-			}
-		}
-		if name == "" {
-			name = field.Name
-		}
-		fields[name] = field.Type
-	}
-}
-
-func indirectJSONType(destinationType reflect.Type) reflect.Type {
-	for destinationType != nil && destinationType.Kind() == reflect.Pointer {
-		destinationType = destinationType.Elem()
-	}
-	return destinationType
-}
-
-func mapElementType(destinationType reflect.Type) reflect.Type {
-	destinationType = indirectJSONType(destinationType)
-	if destinationType != nil && destinationType.Kind() == reflect.Map {
-		return destinationType.Elem()
-	}
-	return nil
-}
-
-func collectionElementType(destinationType reflect.Type) reflect.Type {
-	destinationType = indirectJSONType(destinationType)
-	if destinationType != nil &&
-		(destinationType.Kind() == reflect.Array || destinationType.Kind() == reflect.Slice) {
-		return destinationType.Elem()
-	}
-	return nil
 }
