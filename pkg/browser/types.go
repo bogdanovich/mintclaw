@@ -41,6 +41,7 @@ const (
 
 var (
 	ErrBusy                 = errors.New("browser profile is busy")
+	ErrCapacity             = errors.New("browser session capacity is exhausted")
 	ErrConflict             = errors.New("browser state conflicts with durable state")
 	ErrDenied               = errors.New("browser authority denied")
 	ErrDriverIncompatible   = errors.New("browser driver is incompatible")

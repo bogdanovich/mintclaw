@@ -94,7 +94,6 @@ func normalizeBrowserProfiles(
 		return nil, fmt.Errorf("browser_profiles exceeds the %d profile limit", nodes.MaxBrowserProfiles)
 	}
 	normalized := make(map[string]BrowserProfilePolicy, len(profiles))
-	enabledProfiles := 0
 	for alias, profile := range profiles {
 		if !profile.Enabled {
 			if !browserProfilePolicyEmpty(profile) {
@@ -108,12 +107,51 @@ func normalizeBrowserProfiles(
 			return nil, fmt.Errorf("validate browser profile %q: %w", alias, err)
 		}
 		normalized[alias] = ready
-		enabledProfiles++
 	}
-	if enabledProfiles > 1 {
-		return nil, errors.New("one enabled browser profile is admitted during B4 phase 1")
+	if err := validateBrowserProfileIsolation(normalized); err != nil {
+		return nil, err
 	}
 	return normalized, nil
+}
+
+func validateBrowserProfileIsolation(profiles map[string]BrowserProfilePolicy) error {
+	aliases := make([]string, 0, len(profiles))
+	for alias, profile := range profiles {
+		if profile.Enabled {
+			aliases = append(aliases, alias)
+		}
+	}
+	slices.Sort(aliases)
+	for index, leftAlias := range aliases {
+		left := profiles[leftAlias]
+		for _, rightAlias := range aliases[index+1:] {
+			right := profiles[rightAlias]
+			if pathWithin(left.ProfileDirectory, right.ProfileDirectory) ||
+				pathWithin(right.ProfileDirectory, left.ProfileDirectory) {
+				return fmt.Errorf(
+					"browser profiles %q and %q have overlapping profile_directory paths",
+					leftAlias,
+					rightAlias,
+				)
+			}
+			if left.LockFile == right.LockFile {
+				return fmt.Errorf(
+					"browser profiles %q and %q reuse the same lock_file",
+					leftAlias,
+					rightAlias,
+				)
+			}
+			if pathWithin(right.LockFile, left.ProfileDirectory) ||
+				pathWithin(left.LockFile, right.ProfileDirectory) {
+				return fmt.Errorf(
+					"browser profiles %q and %q have a lock_file inside another profile_directory",
+					leftAlias,
+					rightAlias,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 func browserProfilePolicyEmpty(profile BrowserProfilePolicy) bool {

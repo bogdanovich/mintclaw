@@ -473,6 +473,9 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 
 	broker.mu.Lock()
 	defer broker.mu.Unlock()
+	if err = broker.ensureSessionCapacityLocked(ctx, request.Target, request.Profile); err != nil {
+		return Session{}, err
+	}
 	id, err := broker.newID()
 	if err != nil {
 		return Session{}, fmt.Errorf("generate browser session ID: %w", err)
@@ -573,7 +576,11 @@ func (broker *Broker) ProfileAvailability(
 	if err != nil {
 		return ProfileAvailability{}, err
 	}
+	activeSessions := 0
 	for _, session := range sessions {
+		if !session.State.Terminal() {
+			activeSessions++
+		}
 		if session.Target != targetName || session.Profile != profileName || session.State.Terminal() {
 			continue
 		}
@@ -583,7 +590,35 @@ func (broker *Broker) ProfileAvailability(
 		}
 		return ProfileAvailability{Status: "degraded", Reason: "recovery_required"}, nil
 	}
+	if activeSessions >= broker.config.Limits.Effective().Sessions {
+		return ProfileAvailability{Status: "busy", Reason: "session_capacity"}, nil
+	}
 	return ProfileAvailability{Status: "ready"}, nil
+}
+
+func (broker *Broker) ensureSessionCapacityLocked(
+	ctx context.Context,
+	targetName string,
+	profileName string,
+) error {
+	sessions, err := broker.store.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	activeSessions := 0
+	for _, session := range sessions {
+		if session.State.Terminal() {
+			continue
+		}
+		if session.Target == targetName && session.Profile == profileName {
+			return ErrBusy
+		}
+		activeSessions++
+	}
+	if activeSessions >= broker.config.Limits.Effective().Sessions {
+		return ErrCapacity
+	}
+	return nil
 }
 
 // PassiveReadiness reports configured and last-observed driver readiness plus
@@ -652,7 +687,7 @@ func passiveReadiness(availability ProfileAvailability, driver DriverReadiness) 
 	switch availability.Status {
 	case ReadinessBusy:
 		result.Status, result.Worker = ReadinessBusy, ReadinessReady
-		result.Code, result.Action = "profile_busy", "wait_or_close_session"
+		result.Code, result.Action = availability.Reason, "wait_or_close_session"
 	case ReadinessDegraded:
 		result.Status, result.Worker = ReadinessDegraded, ReadinessDegraded
 		result.Code, result.Action = "recovery_required", "close_or_recover_session"

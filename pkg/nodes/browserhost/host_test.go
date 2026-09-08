@@ -60,6 +60,57 @@ func (factory *fakeBrowserHostFactory) Open(
 	return browserworker.WorkerOpenResult{Owner: factory.worker}, factory.err
 }
 
+func TestBrowserHostSeparatesManagedAliasFactoriesAndGlobalCapacity(t *testing.T) {
+	managedProfile := browserHostProfileFixture()
+	personalProfile := managedProfile
+	personalProfile.Revision = "personal-v1"
+	managedWorker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+	personalWorker := &fakeBrowserHostWorker{status: browserworker.WorkerReady}
+	managedFactory := &fakeBrowserHostFactory{worker: managedWorker}
+	personalFactory := &fakeBrowserHostFactory{worker: personalWorker}
+	host, err := newBrowserHost(
+		map[string]companion.BrowserProfilePolicy{
+			"managed":  managedProfile,
+			"personal": personalProfile,
+		},
+		map[string]browserHostFactory{
+			"managed":  managedFactory,
+			"personal": personalFactory,
+		},
+	)
+	if err != nil {
+		t.Fatalf("newBrowserHost() error = %v", err)
+	}
+	host.verifyProfile = func(companion.BrowserProfilePolicy) error { return nil }
+	managedRequest := browserHostOpenFixture()
+	if _, err = host.Open(t.Context(), managedRequest); err != nil {
+		t.Fatalf("Open(managed) error = %v", err)
+	}
+	personalRequest := managedRequest
+	personalRequest.SessionID = "browser_session_personal"
+	personalRequest.RoutedSessionID = "routed_session_personal"
+	personalRequest.Profile = "personal"
+	personalRequest.ProfileRevision = "personal-v1"
+	if _, err = host.Open(t.Context(), personalRequest); !errors.Is(err, ErrBrowserHostBusy) {
+		t.Fatalf("Open(personal at capacity) error = %v, want ErrBrowserHostBusy", err)
+	}
+	if len(personalFactory.requests) != 0 {
+		t.Fatalf("personal worker opens at capacity = %d, want 0", len(personalFactory.requests))
+	}
+	if _, err = host.Close(t.Context(), BrowserHostCloseRequest{
+		SessionID: managedRequest.SessionID, ProfileRevision: managedRequest.ProfileRevision,
+		RoutedSessionID: managedRequest.RoutedSessionID,
+		AgentID:         managedRequest.AgentID, ActorID: managedRequest.ActorID,
+	}); err != nil {
+		t.Fatalf("Close(managed) error = %v", err)
+	}
+	opened, err := host.Open(t.Context(), personalRequest)
+	if err != nil || opened.State != "ready" || len(personalFactory.requests) != 1 ||
+		personalFactory.requests[0].Profile != "personal" {
+		t.Fatalf("Open(personal after release) = %#v, %v; requests = %#v", opened, err, personalFactory.requests)
+	}
+}
+
 type fakeBrowserHostWorker struct {
 	status                  browserworker.WorkerStatus
 	statusErr               error

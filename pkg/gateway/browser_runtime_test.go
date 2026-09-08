@@ -26,6 +26,39 @@ func TestBrowserRuntimeDisabledDoesNotOwnState(t *testing.T) {
 	}
 }
 
+func TestGatewayBrowserWorkerFactoryBuildsOneFactoryPerManagedAlias(t *testing.T) {
+	root := t.TempDir()
+	cfg := gatewayBrowserConfig(root)
+	runtimeRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+	personal := target.Profiles[config.BrowserDefaultProfile]
+	personal.Revision = "personal-v1"
+	personal.Runtime.ProfileDirectory = filepath.Join(runtimeRoot, "browser-personal")
+	personal.Runtime.LockFile = filepath.Join(runtimeRoot, "browser-locks", "personal.lock")
+	if err := os.Mkdir(personal.Runtime.ProfileDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target.Profiles["personal"] = personal
+	cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+
+	rawFactory, err := newGatewayBrowserWorkerFactory(cfg, nil)
+	if err != nil {
+		t.Fatalf("newGatewayBrowserWorkerFactory() error = %v", err)
+	}
+	factory, ok := rawFactory.(*gatewayBrowserWorkerFactory)
+	if !ok {
+		t.Fatalf("worker factory type = %T", rawFactory)
+	}
+	managed := factory.local[gatewayBrowserProfileKey(config.BrowserDefaultTarget, config.BrowserDefaultProfile)]
+	personalFactory := factory.local[gatewayBrowserProfileKey(config.BrowserDefaultTarget, "personal")]
+	if len(factory.local) != 2 || managed == nil || personalFactory == nil || managed == personalFactory {
+		t.Fatalf("local factories = %#v", factory.local)
+	}
+}
+
 func TestBrowserRuntimeOwnsAndReleasesDurableStore(t *testing.T) {
 	root := t.TempDir()
 	cfg := gatewayBrowserConfig(root)

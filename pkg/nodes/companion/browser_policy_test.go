@@ -468,7 +468,7 @@ func TestConfigKeepsCompanionBrowserProfilesDisabledByDefault(t *testing.T) {
 	}
 }
 
-func TestConfigAcceptsOneCanonicalManagedBrowserAliasAndRejectsTwo(t *testing.T) {
+func TestConfigAcceptsMultipleCanonicalManagedBrowserAliases(t *testing.T) {
 	requireBrowserProfileIdentitySupport(t)
 	firstRoot := t.TempDir()
 	first := companionBrowserProfileFixture(t, firstRoot)
@@ -484,15 +484,68 @@ func TestConfigAcceptsOneCanonicalManagedBrowserAliasAndRejectsTwo(t *testing.T)
 
 	secondRoot := t.TempDir()
 	second := companionBrowserProfileFixture(t, secondRoot)
-	_, err = (Config{
+	second.Revision = "work-v1"
+	cfg, err = (Config{
 		GatewayURL: "wss://gateway.example",
 		BrowserProfiles: map[string]BrowserProfilePolicy{
 			"personal": first,
 			"work":     second,
 		},
 	}).Normalize("")
-	if err == nil || !strings.Contains(err.Error(), "one enabled browser profile") {
-		t.Fatalf("two enabled aliases error = %v", err)
+	if err != nil || !cfg.BrowserProfiles["personal"].Enabled || !cfg.BrowserProfiles["work"].Enabled {
+		t.Fatalf("multiple canonical aliases = %#v, %v", cfg.BrowserProfiles, err)
+	}
+}
+
+func TestConfigRejectsConflictingCompanionBrowserProfileIdentities(t *testing.T) {
+	requireBrowserProfileIdentitySupport(t)
+	tests := []struct {
+		name    string
+		mutate  func(*BrowserProfilePolicy, BrowserProfilePolicy)
+		wantErr string
+	}{
+		{
+			name: "overlapping profile directories",
+			mutate: func(other *BrowserProfilePolicy, first BrowserProfilePolicy) {
+				other.ProfileDirectory = first.ProfileDirectory
+			},
+			wantErr: "overlapping profile_directory paths",
+		},
+		{
+			name: "shared lock file",
+			mutate: func(other *BrowserProfilePolicy, first BrowserProfilePolicy) {
+				other.LockFile = first.LockFile
+			},
+			wantErr: "reuse the same lock_file",
+		},
+		{
+			name: "lock inside another profile directory",
+			mutate: func(other *BrowserProfilePolicy, first BrowserProfilePolicy) {
+				other.LockFile = filepath.Join(first.ProfileDirectory, "work.lock")
+			},
+			wantErr: "lock_file inside another profile_directory",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			firstRoot := t.TempDir()
+			first := companionBrowserProfileFixture(t, firstRoot)
+			secondRoot := t.TempDir()
+			second := companionBrowserProfileFixture(t, secondRoot)
+			second.Revision = "work-v1"
+			test.mutate(&second, first)
+			_, err := (Config{
+				GatewayURL: "wss://gateway.example",
+				BrowserProfiles: map[string]BrowserProfilePolicy{
+					"personal": first,
+					"work":     second,
+				},
+			}).Normalize("")
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("Normalize() error = %v, want %q", err, test.wantErr)
+			}
+		})
 	}
 }
 
