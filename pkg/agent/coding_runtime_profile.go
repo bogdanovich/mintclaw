@@ -113,7 +113,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 			)
 		}
 		if binding.ReadOnly {
-			bound, authorityErr := repository.BoundToRoot(layout.ExecutionRoot())
+			boundRepository, authorityErr := repository.BindToRoot(layout.ExecutionRoot())
 			if authorityErr != nil {
 				return CodingRuntimeProfile{}, fmt.Errorf(
 					"coding runtime profile: validate read-only repository authority for agent %q: %w",
@@ -121,12 +121,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 					authorityErr,
 				)
 			}
-			if !bound {
-				return CodingRuntimeProfile{}, fmt.Errorf(
-					"coding runtime profile: read-only repository authority for agent %q must match its execution root",
-					agentID,
-				)
-			}
+			repository = boundRepository
 		}
 		profile.repositories[agentID] = repository
 		profile.readOnly[agentID] = binding.ReadOnly

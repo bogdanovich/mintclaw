@@ -19,6 +19,8 @@ const (
 	RepositoryDiffSchemaV1   = "mintclaw.repository_diff.v1"
 )
 
+var ErrRepositoryAuthorityMismatch = errors.New("repository evidence authority does not match root")
+
 type DiffTargetKind string
 
 const (
@@ -144,34 +146,45 @@ func NewRepository(projectRoot, cwd string, limits Limits) *Repository {
 	}
 }
 
-// BoundToRoot reports whether the repository's configured evidence root is
-// canonically identical to root and its working directory is confined below
-// it. The check resolves symlinks through the nearest existing ancestor, so it
-// also applies before a not-yet-created project directory exists.
-func (repository *Repository) BoundToRoot(root string) (bool, error) {
+// BindToRoot validates the repository's configured evidence root against root
+// and returns an independent repository that uses the canonical root and
+// working directory. Freezing those paths prevents a validated symlink alias
+// from being redirected after admission. Symlinks are resolved through the
+// nearest existing ancestor, so the check also applies before a nested path
+// exists.
+func (repository *Repository) BindToRoot(root string) (*Repository, error) {
 	if repository == nil {
-		return false, nil
+		return nil, ErrRepositoryAuthorityMismatch
 	}
 	canonicalRoot, err := resolveRepositoryAuthorityPath(root)
 	if err != nil {
-		return false, fmt.Errorf("resolve authority root: %w", err)
+		return nil, fmt.Errorf("resolve authority root: %w", err)
 	}
 	canonicalProjectRoot, err := resolveRepositoryAuthorityPath(repository.projectRoot)
 	if err != nil {
-		return false, fmt.Errorf("resolve repository root: %w", err)
+		return nil, fmt.Errorf("resolve repository root: %w", err)
 	}
 	canonicalCWD, err := resolveRepositoryAuthorityPath(repository.cwd)
 	if err != nil {
-		return false, fmt.Errorf("resolve repository working directory: %w", err)
+		return nil, fmt.Errorf("resolve repository working directory: %w", err)
 	}
 	if canonicalProjectRoot != canonicalRoot {
-		return false, nil
+		return nil, ErrRepositoryAuthorityMismatch
 	}
 	relativeCWD, err := filepath.Rel(canonicalRoot, canonicalCWD)
 	if err != nil {
-		return false, fmt.Errorf("compare repository working directory authority: %w", err)
+		return nil, fmt.Errorf("compare repository working directory authority: %w", err)
 	}
-	return relativeCWD == "." || filepath.IsLocal(relativeCWD), nil
+	if relativeCWD != "." && !filepath.IsLocal(relativeCWD) {
+		return nil, ErrRepositoryAuthorityMismatch
+	}
+	bound := NewRepository(canonicalProjectRoot, canonicalCWD, repository.limits)
+	if repository.baseline != nil {
+		baseline := *repository.baseline
+		baseline.Paths = append([]BaselinePath(nil), repository.baseline.Paths...)
+		bound.baseline = &baseline
+	}
+	return bound, nil
 }
 
 func resolveRepositoryAuthorityPath(path string) (string, error) {
