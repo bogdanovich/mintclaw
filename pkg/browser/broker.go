@@ -745,7 +745,7 @@ func (broker *Broker) finishFailedOpen(
 	}
 	session = closing
 	if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-		return session, ErrWorkerUnavailable
+		return session, errors.Join(ErrWorkerUnavailable, ErrCleanupRequired)
 	}
 
 	session.State = SessionLost
@@ -838,7 +838,10 @@ func (broker *Broker) Status(ctx context.Context, owner Owner, sessionID string)
 	if slot != nil {
 		slot.safeFailure = safeFailure
 		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-			return Session{}, fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
+			return Session{}, errors.Join(
+				fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
+				ErrCleanupRequired,
+			)
 		}
 	}
 	if err = broker.terminateInvocationsLocked(ctx, session.ID, safeFailure); err != nil {
@@ -885,6 +888,10 @@ func (broker *Broker) Handoff(ctx context.Context, owner Owner, sessionID string
 	}
 	if !broker.sessionAuthorityCurrent(session) {
 		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
+	}
+	profile, profileOK := broker.browserProfile(session)
+	if !profileOK || profile.Mode != config.BrowserProfileManaged {
+		return Session{}, ErrDenied
 	}
 	if session.State != SessionReady || session.EffectiveController() != ControllerAgent {
 		return Session{}, ErrConflict
@@ -1368,10 +1375,14 @@ func (broker *Broker) finishSessionLocked(
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return Session{}, errors.Join(
 					fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
+					ErrCleanupRequired,
 					ctxErr,
 				)
 			}
-			return Session{}, fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
+			return Session{}, errors.Join(
+				fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
+				ErrCleanupRequired,
+			)
 		}
 	}
 	session.State = desired

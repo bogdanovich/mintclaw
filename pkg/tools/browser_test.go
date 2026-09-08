@@ -1646,6 +1646,20 @@ func TestBrowserToolSessionCapacityErrorIsDistinctAndBounded(t *testing.T) {
 	}
 }
 
+func TestBrowserToolCleanupRequiredErrorIsSafeAndOperatorBound(t *testing.T) {
+	result := browserToolError(errors.Join(
+		browser.ErrWorkerUnavailable,
+		browser.ErrCleanupRequired,
+		errors.New("sensitive host path"),
+	))
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"code":"cleanup_required"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"contact_operator"`) ||
+		strings.Contains(result.ContentForLLM(), "sensitive host path") {
+		t.Fatalf("cleanup-required browser result = %#v", result)
+	}
+}
+
 func TestBrowserToolSnapshotTransferErrorIsSafeAndRetryable(t *testing.T) {
 	result := browserToolError(browser.ErrSnapshotTransfer)
 	if result == nil || !result.IsError ||

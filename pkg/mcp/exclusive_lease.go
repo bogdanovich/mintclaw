@@ -31,6 +31,30 @@ type exclusiveServerLease struct {
 	once sync.Once
 }
 
+// ExclusiveServerLease is a process-scoped owner of the same lock used by a
+// private MCP server. It lets trusted lifecycle code reconcile host-owned
+// state only while no server process can be using that state.
+type ExclusiveServerLease struct {
+	lease *exclusiveServerLease
+}
+
+// AcquireExclusiveServerLease acquires the configured MCP process lock
+// without starting the server. Callers must close the returned lease.
+func AcquireExclusiveServerLease(serverName, path string) (*ExclusiveServerLease, error) {
+	lease, err := acquireExclusiveServerLease(serverName, path)
+	if err != nil {
+		return nil, err
+	}
+	return &ExclusiveServerLease{lease: lease}, nil
+}
+
+func (lease *ExclusiveServerLease) Close() error {
+	if lease != nil && lease.lease != nil {
+		lease.lease.release()
+	}
+	return nil
+}
+
 func acquireExclusiveServerLease(serverName, path string) (*exclusiveServerLease, error) {
 	file, err := openExclusiveLeaseFile(path)
 	if err != nil {

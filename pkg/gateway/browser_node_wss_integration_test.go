@@ -2683,6 +2683,19 @@ func (host *wssBrowserHost) Close(
 	return wssBrowserSessionResult(request.SessionID, "closed"), nil
 }
 
+func (host *wssBrowserHost) Shutdown(context.Context) error {
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	host.urls = make(map[string]string)
+	host.contexts = make(map[string]nodes.BrowserContextCatalog)
+	host.snapshots = make(map[string]uint64)
+	host.pendingDialogs = make(map[string]*nodes.BrowserDialogObservation)
+	host.policies = make(map[string]string)
+	host.limits = make(map[string]nodes.BrowserLimits)
+	host.expires = make(map[string]int64)
+	return nil
+}
+
 func (host *wssBrowserHost) commandSequence() []string {
 	host.mu.Lock()
 	defer host.mu.Unlock()

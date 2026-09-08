@@ -296,6 +296,16 @@ func (handler *browserNodeTestHandler) Invoke(
 		}
 	case nodes.BrowserCommandSessionClose:
 		if handler.closeFailureCode != "" {
+			now := time.Now().UnixNano()
+			handler.invocations[plan.InvocationID] = nodes.InvocationRecord{
+				InvocationID: plan.InvocationID, IdempotencyKey: plan.IdempotencyKey,
+				PlanHash: plan.PlanHash, NodeID: plan.NodeID, CatalogHash: plan.CatalogHash,
+				Command: plan.Command, Risk: plan.Risk, State: nodes.InvocationFailed,
+				AcceptedAt: now, UpdatedAt: now, CompletedAt: now, ExpiresAt: plan.ExpiresAt,
+				Failure: &nodes.InvocationFailure{
+					Code: handler.closeFailureCode, Message: "browser cleanup requires operator attention",
+				},
+			}
 			return nil, true, nodes.NewInvocationDispatchError(
 				handler.closeFailureCode,
 				errors.New("private companion failure"),
@@ -339,6 +349,33 @@ func TestGatewayBrowserWorkerCloseAcceptsConfirmedMissingCompanionSession(t *tes
 	status, err := worker.Status(t.Context())
 	if err != nil || status != browser.WorkerLost {
 		t.Fatalf("Status() = %q, %v", status, err)
+	}
+}
+
+func TestGatewayBrowserWorkerPreservesCompanionCleanupRequired(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+		Owner: browser.Owner{
+			ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
+			SessionKey: "session_test", ExecutionID: "execution_test",
+		},
+		SessionID: "browser_cleanup_test", Target: "companion",
+		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler.mu.Lock()
+	handler.closeFailureCode = nodes.InvocationDispatchBrowserCleanupRequired
+	handler.mu.Unlock()
+	if err = opened.Owner.Close(t.Context()); !errors.Is(err, browser.ErrCleanupRequired) ||
+		!errors.Is(err, browser.ErrWorkerUnavailable) {
+		t.Fatalf("Close() cleanup-required error = %v", err)
 	}
 }
 
@@ -2181,6 +2218,28 @@ func TestBrowserProfileIntersectionRequiresExactActionMode(t *testing.T) {
 	local.Revision = remote.Revision
 	if !browserProfileIntersects(local, limits, remote) {
 		t.Fatal("matching canonical profile revisions did not intersect")
+	}
+}
+
+func TestBrowserProfileIntersectionAcceptsOnlyMatchingEphemeralMode(t *testing.T) {
+	remote := nodes.BrowserProfileDescriptor{
+		Alias: "ephemeral", Revision: "ephemeral-v1", Driver: nodes.BrowserDriverPlaywrightMCP,
+		Mode: nodes.BrowserProfileEphemeral, NetworkMode: nodes.BrowserNetworkAnyHTTP,
+		CapabilityMode: browserpolicy.CapabilityFullAccess,
+		ApprovalMode:   browserpolicy.ApprovalAlwaysCommit,
+		DryRun:         true, Actions: []string{"navigate"}, Limits: nodes.BrowserLimits{}.Effective(),
+	}
+	local := config.BrowserProfileConfig{
+		Enabled: true, Revision: "ephemeral-v1", Mode: config.BrowserProfileEphemeral,
+		NetworkMode: config.BrowserNetworkAnyHTTP, CapabilityMode: config.BrowserCapabilityFullAccess,
+		ApprovalMode: config.BrowserApprovalAlwaysCommit, DryRun: true,
+	}
+	if !browserProfileIntersects(local, config.BrowserLimitsConfig{}, remote) {
+		t.Fatal("matching ephemeral profiles did not intersect")
+	}
+	local.Mode = config.BrowserProfileManaged
+	if browserProfileIntersects(local, config.BrowserLimitsConfig{}, remote) {
+		t.Fatal("managed local profile intersected ephemeral companion authority")
 	}
 }
 

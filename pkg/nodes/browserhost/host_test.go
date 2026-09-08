@@ -2012,7 +2012,8 @@ func TestBrowserHostRetriesFailedStartupCleanupOnClose(t *testing.T) {
 		worker: worker, err: browserworker.ErrWorkerUnavailable,
 	})
 	result, err := host.Open(t.Context(), browserHostOpenFixture())
-	if !errors.Is(err, browserworker.ErrWorkerUnavailable) || result.Reason != "cleanup_required" ||
+	if !errors.Is(err, browserworker.ErrWorkerUnavailable) ||
+		!errors.Is(err, ErrBrowserHostCleanupRequired) || result.Reason != "cleanup_required" ||
 		worker.closeCalls != 1 {
 		t.Fatalf("failed Open() = %#v, %v, closes = %d", result, err, worker.closeCalls)
 	}
@@ -2356,6 +2357,33 @@ func TestCompanionPlaywrightServerOwnsProfileAndTransportPolicy(t *testing.T) {
 	if _, err = companionPlaywrightServer(profile); err == nil ||
 		!strings.Contains(err.Error(), "host-managed option") || strings.Contains(err.Error(), "9222") {
 		t.Fatalf("raw endpoint argument error = %v", err)
+	}
+}
+
+func TestCompanionPlaywrightServerOwnsEphemeralIsolation(t *testing.T) {
+	t.Setenv("PATH", "/usr/bin:/bin")
+	profile := browserHostProfileFixture()
+	profile.DriverExecutable = "/usr/local/lib/node_modules/npm/bin/npx-cli.js"
+	profile.Mode = nodes.BrowserProfileEphemeral
+	profile.ProfileDirectory = ""
+	profile.EphemeralRoot = "/Users/operator/.mintclaw/browser/ephemeral"
+	profile.LockFile = "/Users/operator/.mintclaw/browser-ephemeral.lock"
+	profile.DriverArguments = []string{"-y", "@playwright/mcp@0.0.78", "--browser=chrome"}
+	server, err := companionPlaywrightServer(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(server.Args, "\x00")
+	if !strings.Contains(joined, "--isolated") ||
+		strings.Contains(joined, "--user-data-dir") ||
+		!strings.Contains(joined, "--output-mode\x00stdout") {
+		t.Fatalf("ephemeral companion server = %#v", server)
+	}
+	profileConfig := companionBrowserProfileConfig(profile)
+	if profileConfig.Mode != nodes.BrowserProfileEphemeral ||
+		profileConfig.Runtime.EphemeralRoot != profile.EphemeralRoot ||
+		profileConfig.Runtime.ProfileDirectory != "" {
+		t.Fatalf("ephemeral worker profile = %#v", profileConfig)
 	}
 }
 

@@ -39,6 +39,7 @@ var (
 	ErrBrowserHostStale            = nodes.ErrBrowserHostStale
 	ErrBrowserHostNavigationFailed = nodes.ErrBrowserHostNavigationFailed
 	ErrBrowserHostLost             = nodes.ErrBrowserHostLost
+	ErrBrowserHostCleanupRequired  = nodes.ErrBrowserHostCleanupRequired
 	browserHostIDPattern           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 )
 
@@ -135,8 +136,8 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 		if err != nil {
 			return nil, fmt.Errorf("configure browser profile %q: %w", alias, err)
 		}
-		factory, err := browserworker.NewPlaywrightManagedHostFactory(
-			browserworker.PlaywrightManagedHostConfig{
+		factory, err := browserworker.NewPlaywrightHostFactory(
+			browserworker.PlaywrightHostConfig{
 				Target: companionBrowserTarget, Profile: alias,
 				ProfileConfig: companionBrowserProfileConfig(profile),
 				ServerConfig:  server,
@@ -152,13 +153,14 @@ func NewBrowserHost(profiles map[string]companion.BrowserProfilePolicy) (*Browse
 
 func companionBrowserProfileConfig(profile companion.BrowserProfilePolicy) config.BrowserProfileConfig {
 	return config.BrowserProfileConfig{
-		Enabled: true, Revision: profile.Revision, Mode: config.BrowserProfileManaged,
+		Enabled: true, Revision: profile.Revision, Mode: profile.Mode,
 		NetworkMode: profile.NetworkMode, DryRun: profile.DryRun,
 		CapabilityMode: profile.CapabilityMode, ApprovalMode: profile.ApprovalMode,
 		AllowApprovedActions: profile.AllowApprovedActions,
 		AllowedOrigins:       append([]string(nil), profile.AllowedOrigins...),
 		Runtime: config.BrowserProfileRuntimeConfig{
 			ProfileDirectory: profile.ProfileDirectory,
+			EphemeralRoot:    profile.EphemeralRoot,
 			LockFile:         profile.LockFile,
 			Headed:           profile.Headed,
 		},
@@ -205,10 +207,12 @@ func companionPlaywrightServer(profile companion.BrowserProfilePolicy) (config.M
 			return config.MCPServerConfig{}, errors.New("driver arguments contain a host-managed option")
 		}
 	}
-	args = append(args,
-		"--user-data-dir", profile.ProfileDirectory,
-		"--output-mode", "stdout",
-	)
+	if profile.Mode == nodes.BrowserProfileEphemeral {
+		args = append(args, "--isolated")
+	} else {
+		args = append(args, "--user-data-dir", profile.ProfileDirectory)
+	}
+	args = append(args, "--output-mode", "stdout")
 	if !profile.Headed {
 		args = append(args, "--headless")
 	}
@@ -361,7 +365,16 @@ func (host *BrowserHost) Open(
 		}
 		session.mu.Unlock()
 		if openErr != nil {
+			if cleanupErr != nil {
+				return host.sessionView(session), errors.Join(openErr, ErrBrowserHostCleanupRequired)
+			}
 			return host.sessionView(session), openErr
+		}
+		if cleanupErr != nil {
+			return host.sessionView(session), errors.Join(
+				browserworker.ErrWorkerUnavailable,
+				ErrBrowserHostCleanupRequired,
+			)
 		}
 		return host.sessionView(session), browserworker.ErrWorkerUnavailable
 	}
@@ -1668,7 +1681,10 @@ func (host *BrowserHost) Close(
 			if closeErr := session.cleanupOwner.Close(ctx); closeErr != nil {
 				session.state = "lost"
 				session.safeFailure = "cleanup_required"
-				return browserHostSessionView(session), ErrBrowserHostLost
+				return browserHostSessionView(session), errors.Join(
+					ErrBrowserHostLost,
+					ErrBrowserHostCleanupRequired,
+				)
 			}
 			session.cleanupOwner = nil
 		}
@@ -1683,7 +1699,10 @@ func (host *BrowserHost) Close(
 	if closeErr := session.worker.Close(ctx); closeErr != nil {
 		session.state = "lost"
 		session.safeFailure = "cleanup_required"
-		return browserHostSessionView(session), ErrBrowserHostLost
+		return browserHostSessionView(session), errors.Join(
+			ErrBrowserHostLost,
+			ErrBrowserHostCleanupRequired,
+		)
 	}
 	session.worker = nil
 	session.contextWorker = nil

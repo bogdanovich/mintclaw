@@ -1872,6 +1872,10 @@ func (worker *nodeBrowserWorker) reconcileInvocation(
 			case nodes.InvocationSucceeded:
 				return worker.decodeInvocationResult(remote.Result, output)
 			case nodes.InvocationFailed, nodes.InvocationCanceled:
+				if remote.Failure != nil &&
+					remote.Failure.Code == nodes.InvocationDispatchBrowserCleanupRequired {
+					return errors.Join(browser.ErrWorkerUnavailable, browser.ErrCleanupRequired)
+				}
 				if remote.Failure != nil && remote.Failure.Code == nodes.InvocationDispatchCommandDenied {
 					return browser.ErrDenied
 				}

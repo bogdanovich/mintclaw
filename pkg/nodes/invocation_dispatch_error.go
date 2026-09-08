@@ -9,6 +9,7 @@ const (
 	InvocationDispatchFileNotFound            = "FILE_NOT_FOUND"
 	InvocationDispatchBrowserSessionNotFound  = "SESSION_NOT_FOUND"
 	InvocationDispatchBrowserNavigationFailed = "NAVIGATION_FAILED"
+	InvocationDispatchBrowserCleanupRequired  = "CLEANUP_REQUIRED"
 	InvocationDispatchIdempotencyConflict     = "IDEMPOTENCY_CONFLICT"
 	InvocationDispatchInvalidPlan             = "INVALID_PLAN"
 	InvocationDispatchNodeBusy                = "NODE_BUSY"
@@ -53,6 +54,7 @@ func normalizeInvocationDispatchErrorCode(code string) string {
 		InvocationDispatchFileNotFound,
 		InvocationDispatchBrowserSessionNotFound,
 		InvocationDispatchBrowserNavigationFailed,
+		InvocationDispatchBrowserCleanupRequired,
 		InvocationDispatchIdempotencyConflict,
 		InvocationDispatchInvalidPlan,
 		InvocationDispatchNodeBusy,

@@ -40,6 +40,112 @@ func TestBrowserConfigAcceptsCanonicalManagedShape(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigAcceptsCanonicalEphemeralProfileAuthority(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	managed := target.Profiles[BrowserDefaultProfile]
+	runtimeRoot := filepath.Dir(managed.Runtime.ProfileDirectory)
+	ephemeralRoot := filepath.Join(runtimeRoot, "ephemeral")
+	if err := os.Mkdir(ephemeralRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	delete(target.Profiles, BrowserDefaultProfile)
+	target.Profiles["ephemeral"] = BrowserProfileConfig{
+		Enabled: true, Revision: "ephemeral-v1", Mode: BrowserProfileEphemeral,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+		NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+		ApprovalMode: BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Runtime: BrowserProfileRuntimeConfig{
+			EphemeralRoot: ephemeralRoot,
+			LockFile:      filepath.Join(runtimeRoot, "locks", "ephemeral.lock"),
+		},
+	}
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() ephemeral error = %v", err)
+	}
+}
+
+func TestBrowserConfigRejectsAmbiguousEphemeralRuntimeAuthority(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*BrowserProfileConfig)
+		wantErr string
+	}{
+		{
+			name: "persistent directory",
+			mutate: func(profile *BrowserProfileConfig) {
+				profile.Runtime.ProfileDirectory = "/var/lib/mintclaw/browser/persistent"
+			},
+			wantErr: "cannot set profile_directory",
+		},
+		{
+			name: "missing ephemeral root",
+			mutate: func(profile *BrowserProfileConfig) {
+				profile.Runtime.EphemeralRoot = ""
+			},
+			wantErr: "runtime paths must be absolute",
+		},
+		{
+			name: "lock nested in ephemeral root",
+			mutate: func(profile *BrowserProfileConfig) {
+				profile.Runtime.LockFile = filepath.Join(profile.Runtime.EphemeralRoot, "browser.lock")
+			},
+			wantErr: "lock_file must be outside ephemeral_root",
+		},
+		{
+			name: "derived lifecycle lock overlaps root",
+			mutate: func(profile *BrowserProfileConfig) {
+				profile.Runtime.EphemeralRoot = profile.Runtime.LockFile + BrowserEphemeralLifecycleLockSuffix
+			},
+			wantErr: "lifecycle lock must be outside ephemeral_root",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := browserConfigFixture(t)
+			target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+			managed := target.Profiles[BrowserDefaultProfile]
+			runtimeRoot := filepath.Dir(managed.Runtime.ProfileDirectory)
+			profile := managed
+			profile.Mode = BrowserProfileEphemeral
+			profile.Revision = "ephemeral-v1"
+			profile.Runtime = BrowserProfileRuntimeConfig{
+				EphemeralRoot: filepath.Join(runtimeRoot, "ephemeral"),
+				LockFile:      filepath.Join(runtimeRoot, "locks", "ephemeral.lock"),
+			}
+			test.mutate(&profile)
+			target.Profiles[BrowserDefaultProfile] = profile
+			cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+			err := cfg.ValidateBrowserConfig()
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("ValidateBrowserConfig() error = %v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestBrowserConfigRejectsManagedAndEphemeralStorageOverlap(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	managed := target.Profiles[BrowserDefaultProfile]
+	target.Profiles["ephemeral"] = BrowserProfileConfig{
+		Enabled: true, Revision: "ephemeral-v1", Mode: BrowserProfileEphemeral,
+		AllowedAgents: []string{"browser"}, AllowedActors: []string{"telegram:owner"},
+		NetworkMode: BrowserNetworkAnyHTTP, CapabilityMode: BrowserCapabilityFullAccess,
+		ApprovalMode: BrowserApprovalModelRequested, AllowApprovedActions: true,
+		Runtime: BrowserProfileRuntimeConfig{
+			EphemeralRoot: filepath.Join(managed.Runtime.ProfileDirectory, "ephemeral"),
+			LockFile:      filepath.Join(filepath.Dir(managed.Runtime.ProfileDirectory), "locks", "ephemeral.lock"),
+		},
+	}
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	if err := cfg.ValidateBrowserConfig(); err == nil ||
+		!strings.Contains(err.Error(), "overlapping storage roots") {
+		t.Fatalf("ValidateBrowserConfig() overlap error = %v", err)
+	}
+}
+
 func TestBrowserConfigAcceptsCanonicalManagedProfileAuthority(t *testing.T) {
 	cfg := browserConfigFixture(t)
 	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
@@ -198,21 +304,21 @@ func TestBrowserConfigRejectsConflictingCanonicalGatewayRuntimeIdentities(t *tes
 			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
 				runtime.ProfileDirectory = existing.ProfileDirectory
 			},
-			wantErr: "overlapping profile_directory paths",
+			wantErr: "overlapping storage roots",
 		},
 		{
 			name: "nested profile directory",
 			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
 				runtime.ProfileDirectory = filepath.Join(existing.ProfileDirectory, "nested")
 			},
-			wantErr: "overlapping profile_directory paths",
+			wantErr: "overlapping storage roots",
 		},
 		{
 			name: "profile directory containing existing directory",
 			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
 				runtime.ProfileDirectory = filepath.Dir(existing.ProfileDirectory)
 			},
-			wantErr: "overlapping profile_directory paths",
+			wantErr: "overlapping storage roots",
 		},
 		{
 			name: "identical lock files",
@@ -226,7 +332,7 @@ func TestBrowserConfigRejectsConflictingCanonicalGatewayRuntimeIdentities(t *tes
 			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
 				runtime.LockFile = filepath.Join(existing.ProfileDirectory, "personal.lock")
 			},
-			wantErr: "lock_file inside another profile_directory",
+			wantErr: "lock_file inside another storage root",
 		},
 		{
 			name: "existing lock file inside other profile directory",
@@ -234,7 +340,7 @@ func TestBrowserConfigRejectsConflictingCanonicalGatewayRuntimeIdentities(t *tes
 				runtime.ProfileDirectory = filepath.Dir(existing.LockFile)
 				runtime.LockFile = "/var/lib/mintclaw/browser-personal.lock"
 			},
-			wantErr: "lock_file inside another profile_directory",
+			wantErr: "lock_file inside another storage root",
 		},
 	}
 
@@ -822,7 +928,7 @@ func TestBrowserConfigRejectsAuthorityExpansion(t *testing.T) {
 				target.Profiles["managed"] = profile
 				cfg.Tools.Browser.Targets["gateway"] = target
 			},
-			wantErr: "supports only mode \"managed\"",
+			wantErr: "unsupported mode",
 		},
 		{
 			name: "non-dry-run profile",

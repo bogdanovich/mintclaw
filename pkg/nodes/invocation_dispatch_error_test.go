@@ -45,6 +45,14 @@ func TestInvocationDispatchErrorBoundsRemoteClassification(t *testing.T) {
 	if !classified || code != InvocationDispatchBrowserNavigationFailed {
 		t.Fatalf("browser-navigation-failed dispatch code = %q, %v", code, classified)
 	}
+	cleanupRequired := NewInvocationDispatchError(
+		InvocationDispatchBrowserCleanupRequired,
+		cause,
+	)
+	code, classified = InvocationDispatchErrorCode(cleanupRequired)
+	if !classified || code != InvocationDispatchBrowserCleanupRequired {
+		t.Fatalf("browser-cleanup-required dispatch code = %q, %v", code, classified)
+	}
 
 	unknown := NewInvocationDispatchError("PRIVATE_REMOTE_CODE", cause)
 	code, classified = InvocationDispatchErrorCode(unknown)

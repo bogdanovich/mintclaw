@@ -239,15 +239,16 @@ type invocationStore interface {
 // Runtime is the instance-scoped capability boundary. It owns no gateway
 // connection and can therefore be reused by a future multi-binding supervisor.
 type Runtime struct {
-	nodeID    nodes.ID
-	policy    nodes.LocalCommandPolicy
-	catalog   nodes.CapabilityCatalog
-	handlers  map[string]commandHandler
-	ledger    invocationStore
-	activeMu  sync.Mutex
-	active    map[string]*activeInvocation
-	terminals *TerminalCoordinator
-	updates   UpdateCoordinator
+	nodeID      nodes.ID
+	policy      nodes.LocalCommandPolicy
+	catalog     nodes.CapabilityCatalog
+	handlers    map[string]commandHandler
+	ledger      invocationStore
+	activeMu    sync.Mutex
+	active      map[string]*activeInvocation
+	terminals   *TerminalCoordinator
+	updates     UpdateCoordinator
+	browserHost BrowserCommandHost
 }
 
 func NewRuntime(
@@ -365,13 +366,14 @@ func NewRuntime(
 		return nil, errors.New("node invocation ledger is required")
 	}
 	commandRuntime := &Runtime{
-		nodeID:   nodeID,
-		policy:   policy,
-		catalog:  catalog,
-		handlers: byName,
-		ledger:   ledger,
-		active:   make(map[string]*activeInvocation),
-		updates:  settings.updateRecovery,
+		nodeID:      nodeID,
+		policy:      policy,
+		catalog:     catalog,
+		handlers:    byName,
+		ledger:      ledger,
+		active:      make(map[string]*activeInvocation),
+		updates:     settings.updateRecovery,
+		browserHost: settings.browserHost,
 	}
 	if settings.shellExec != nil && settings.terminalBroker != nil &&
 		settings.shellExec.handler.contract != nil &&
