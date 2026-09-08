@@ -1,12 +1,14 @@
 # Code Health Maintenance Roadmap
 
-Status: active. M0 admits the roadmap; M1-M6 are scheduled implementation
-packets. M7 is an evidence-gated architecture checkpoint, not unconditional
-refactoring work.
+Status: complete. M0-M6 delivered the scheduled maintenance packets, and M7
+completed the evidence-gated architecture checkpoint. M7 admitted one bounded
+controller extraction and left projector ownership unchanged.
 
 Baseline: `origin/main` at `477f29e9` on 2026-09-08. The H0-H8 and post-H8
 programs are complete. This roadmap covers the smaller correctness and
 maintainability risks found by a fresh audit of the resulting architecture.
+
+Completion head: `origin/main` at `f72b8b3d` on 2026-09-08.
 
 ## Objective
 
@@ -318,17 +320,17 @@ Checkpoint record (2026-09-08, `origin/main` at `1979c935`):
   command admission and result linearization; further splitting is not admitted
   without another independently changing invariant cluster.
 
-## Execution Order
+## Execution Record
 
-1. M0 lands first as a docs-only PR.
-2. M1, M2, and M3 land sequentially because they touch adjacent agent runtime
-   boundaries.
-3. M4 and M5 are otherwise independent but each starts from the latest merged
-   `origin/main`.
-4. M6 follows after the agent runtime packets so its characterization tests see
-   the final lifecycle shape.
-5. M7 runs only after the named coding feature churn settles; a documented
-   no-change decision satisfies the packet when extraction is not justified.
+1. M0 landed first as a docs-only PR.
+2. M1, M2, and M3 landed sequentially because they touched adjacent agent
+   runtime boundaries.
+3. M4 and M5 each started from the latest merged `origin/main`.
+4. M6 followed the agent runtime packets so its characterization tests saw the
+   final lifecycle shape.
+5. M7 ran as an evidence gate after the controller protocol churn settled. It
+   extracted the proven controller queue invariant and recorded a no-change
+   decision for the projector while semantic TUI migration remained active.
 
 Each non-stacked packet starts from the latest `origin/main`, uses a focused PR,
 and runs formatting, changed-package lint, affected tests, and broader tests in
@@ -357,6 +359,17 @@ proportion to persistence, routing, delivery, or concurrency risk.
 - M6 — merged in #1134 (`1979c935`): replaced the central command callback
   block with concrete MCP, goal, model, session, and context capability binders
   and removed the root configuration dependency from `commands.Runtime`.
+- M7 — merged in #1136 (`f72b8b3d`): extracted the controller's actor-owned
+  evidence queue with FIFO, cancellation, stale-result, refresh-exclusion, and
+  close-drain characterization tests; retained projector ownership after the
+  checkpoint found no independent reducer worth extracting during TUI.7 work.
+
+The first aggregate M7 test run exposed a pre-existing assertion race in
+`TestGatewayOutboundReconcilerRevalidatesDelayedAdmissionBeforePublication`:
+the test can observe its callback signal before the callback persists the
+abandoned state. The exact rerun passed, all other exact-head checks were
+already green, and M7 does not touch the gateway package. Test synchronization
+hardening remains a separate follow-up rather than an M7 production change.
 
 ## Separate Compatibility Closeouts
 
@@ -385,3 +398,5 @@ The roadmap is complete when:
 - M7 records an evidence-backed change or no-change decision;
 - no new framework or permanent compatibility representation was introduced
   solely to reduce file size or metric scores.
+
+All criteria above are satisfied at completion head `f72b8b3d`.
