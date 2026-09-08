@@ -509,7 +509,9 @@ func (ts *turnState) consumeApprovalGrant() {
 
 func (r *turnRuntime) registerActiveTurn(ts *turnState) {
 	ts.steeringAdmissionMu.Lock()
-	ts.steeringOpen = true
+	// Registration makes cancellation addressable before setup, but coding
+	// steering stays closed until SetupTurn has succeeded.
+	ts.steeringOpen = false
 	r.activeTurnStates.Store(ts.runtimeSessionScope(), ts)
 	ts.steeringAdmissionMu.Unlock()
 }
@@ -915,12 +917,16 @@ func (ts *turnState) markGracefulTerminalUsed() {
 }
 
 func (ts *turnState) requestHardAbort() bool {
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
 	ts.mu.Lock()
 	if ts.hardAbort {
 		ts.mu.Unlock()
+		ts.steeringOpen = false
 		return false
 	}
 	ts.hardAbort = true
+	ts.steeringOpen = false
 	turnCancel := ts.turnCancel
 	providerCancel := ts.providerCancel
 	ts.mu.Unlock()

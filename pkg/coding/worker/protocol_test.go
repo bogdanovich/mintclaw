@@ -332,7 +332,7 @@ func TestRecordDispatchesClosedRequestAndResultSchemas(t *testing.T) {
 	snapshotResult := SnapshotResult{
 		ControlIdentity: binding.ControlIdentity(),
 		Snapshot: Snapshot{
-			ThreadID: binding.ThreadID, Activity: frontend.ActivityRunning,
+			ThreadID: binding.ThreadID, Activity: ActivityRunning,
 		},
 	}
 	snapshotPayload, err := MarshalPayload(snapshotResult)
@@ -351,8 +351,8 @@ func TestRecordDispatchesClosedRequestAndResultSchemas(t *testing.T) {
 	if _, err := Encode(snapshotResponse); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("Encode(malformed snapshot response) error = %v, want %v", err, ErrInvalidRecord)
 	}
-	snapshotResult.Snapshot.Activity = frontend.ActivityIdle
-	snapshotResult.Snapshot.LastTurn = &frontend.LastTurnOutcome{TurnID: "turn-1", Outcome: "teleported"}
+	snapshotResult.Snapshot.Activity = ActivityIdle
+	snapshotResult.Snapshot.LastTurn = &LastTurnOutcome{TurnID: "turn-1", Outcome: "teleported"}
 	snapshotResponse.Result = mustPayload(t, snapshotResult)
 	if _, err := Encode(snapshotResponse); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("Encode(malformed last turn) error = %v, want %v", err, ErrInvalidRecord)
@@ -372,7 +372,7 @@ func TestEventPayloadSchemasAreClosedAndRequired(t *testing.T) {
 			payload: WorkerReadyPayload{
 				ControlIdentity: identity,
 				Snapshot: Snapshot{
-					ThreadID: binding.ThreadID, Activity: frontend.ActivityIdle,
+					ThreadID: binding.ThreadID, Activity: ActivityIdle,
 				},
 			},
 		},
@@ -380,20 +380,13 @@ func TestEventPayloadSchemasAreClosedAndRequired(t *testing.T) {
 			name: "item", event: EventItemUpdated,
 			payload: ItemUpdatedPayload{
 				ControlIdentity: identity,
-				Item: frontend.PresentationItem{
-					ID: "item-1", TurnID: "turn-1", Sequence: 1, Revision: 1,
-					Kind: frontend.PresentationAssistantMessage, Lifecycle: frontend.PresentationCompleted,
-					Message: &frontend.TranscriptEntry{
-						ID: "message-1", TurnID: "turn-1", Kind: frontend.EntryAssistant,
-						Text: "result", Complete: true,
-					},
-				},
+				Item:            validSnapshotItem("", "message-1", 1),
 			},
 		},
 		{
 			name: "status", event: EventStatusChanged,
 			payload: StatusChangedPayload{
-				ControlIdentity: identity, Activity: frontend.ActivityRunning, Status: "running",
+				ControlIdentity: identity, Activity: ActivityRunning, Status: "running",
 			},
 		},
 		{
@@ -411,14 +404,14 @@ func TestEventPayloadSchemasAreClosedAndRequired(t *testing.T) {
 			name: "context", event: EventContextUsage,
 			payload: ContextUsagePayload{
 				ControlIdentity: identity,
-				Usage:           frontend.ContextUsage{UsedTokens: 128, LimitTokens: 1024},
+				Usage:           ContextUsage{UsedTokens: 128, LimitTokens: 1024},
 			},
 		},
 		{
 			name: "terminal", event: EventTurnTerminal,
 			payload: TurnTerminalPayload{
 				ControlIdentity: identity, TurnID: "turn-1",
-				Outcome: frontend.TurnOutcomeCompleted, Status: "completed",
+				Outcome: TurnOutcomeCompleted, Status: "completed",
 			},
 		},
 		{
@@ -456,7 +449,7 @@ func TestEventPayloadSchemasAreClosedAndRequired(t *testing.T) {
 			SchemaVersion: ProtocolV1, Type: RecordEvent, Event: EventStatusChanged,
 			Payload: mustPayload(t, TurnTerminalPayload{
 				ControlIdentity: identity, TurnID: "turn-1",
-				Outcome: frontend.TurnOutcomeCompleted, Status: "completed",
+				Outcome: TurnOutcomeCompleted, Status: "completed",
 			}),
 		},
 		"unknown field": {
@@ -472,7 +465,7 @@ func TestEventPayloadSchemasAreClosedAndRequired(t *testing.T) {
 		"terminal control": {
 			SchemaVersion: ProtocolV1, Type: RecordEvent, Event: EventStatusChanged,
 			Payload: mustPayload(t, StatusChangedPayload{
-				ControlIdentity: identity, Activity: frontend.ActivityRunning, Status: "running\x1b[2J",
+				ControlIdentity: identity, Activity: ActivityRunning, Status: "running\x1b[2J",
 			}),
 		},
 	} {
@@ -533,16 +526,27 @@ func TestSnapshotRejectsAmbiguousItemIdentityAndOrder(t *testing.T) {
 	lateFirst.Sequence = 2
 	earlySecond := second
 	earlySecond.Sequence = 1
-	for name, items := range map[string][]frontend.PresentationItem{
-		"duplicate ID":        {first, duplicateID},
-		"duplicate sequence":  {first, duplicateSequence},
-		"decreasing sequence": {lateFirst, earlySecond},
+	forgedMessage := validSnapshotItem("", "message-1", 2)
+	forgedMessage.ID = "forged-message-item"
+	firstTool := validSnapshotToolItem("call-1", 1)
+	forgedTool := validSnapshotToolItem("call-1", 2)
+	forgedTool.ID = "forged-tool-item"
+	firstPlan := validSnapshotPlanItem("plan-1", 1)
+	forgedPlan := validSnapshotPlanItem("plan-1", 2)
+	forgedPlan.ID = "forged-plan-item"
+	for name, items := range map[string][]Item{
+		"duplicate ID":                     {first, duplicateID},
+		"duplicate sequence":               {first, duplicateSequence},
+		"decreasing sequence":              {lateFirst, earlySecond},
+		"repeated nested message identity": {first, forgedMessage},
+		"repeated nested tool identity":    {firstTool, forgedTool},
+		"repeated nested plan identity":    {firstPlan, forgedPlan},
 	} {
 		t.Run(name, func(t *testing.T) {
 			result := SnapshotResult{
 				ControlIdentity: binding.ControlIdentity(),
 				Snapshot: Snapshot{
-					ThreadID: binding.ThreadID, Activity: frontend.ActivityIdle, Items: items,
+					ThreadID: binding.ThreadID, Activity: ActivityIdle, Items: items,
 				},
 			}
 			response := Record{
@@ -553,6 +557,87 @@ func TestSnapshotRejectsAmbiguousItemIdentityAndOrder(t *testing.T) {
 				t.Fatalf("Encode(snapshot) error = %v, want %v", err, ErrInvalidRecord)
 			}
 		})
+	}
+}
+
+func TestFailedResponseRejectsUnsafeErrorText(t *testing.T) {
+	for name, protocolError := range map[string]*ProtocolError{
+		"message": {
+			Code: ErrorInternal, Message: "worker\bfailed",
+		},
+		"detail value": {
+			Code: ErrorInternal, Message: "worker failed",
+			Details: json.RawMessage(`{"reason":"unsafe\bdetail"}`),
+		},
+		"detail key": {
+			Code: ErrorInternal, Message: "worker failed",
+			Details: json.RawMessage(`{"unsafe\bkey":"detail"}`),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			record := Record{
+				SchemaVersion: ProtocolV1, Type: RecordResponse, ID: "request-1",
+				Method: MethodTurnStart, OK: boolPointer(false), Error: protocolError,
+			}
+			if _, err := Encode(record); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("Encode(failed response) error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
+func TestSnapshotFromFrontendFreezesCanonicalV1Items(t *testing.T) {
+	binding := testBinding(t)
+	projector, err := frontend.NewProjector(binding.ThreadID, frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.Open(false)
+	projector.TurnStarted("turn-1", "inspect the parser")
+	if !projector.AssistantMessageCommitted(
+		"turn-1",
+		"assistant-1",
+		"done",
+		frontend.AssistantPhaseFinal,
+	) {
+		t.Fatal("assistant message was not projected")
+	}
+	source, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := SnapshotFromFrontend(source)
+	if err := validateSnapshotEvent(binding.ControlIdentity(), snapshot); err != nil {
+		t.Fatalf("validateSnapshotEvent() error = %v", err)
+	}
+	if len(snapshot.Items) != len(source.Items) || len(snapshot.Items) != 2 {
+		t.Fatalf("wire items = %#v, source items = %#v", snapshot.Items, source.Items)
+	}
+	for index, item := range snapshot.Items {
+		if item.ID != source.Items[index].ID || item.ID != canonicalItemID(item) {
+			t.Fatalf("item %d identity = %q, source = %q", index, item.ID, source.Items[index].ID)
+		}
+	}
+	forged := source.Items[0]
+	forged.ID = "frontend-only-identity"
+	converted := itemFromFrontend(forged)
+	if converted.ID == forged.ID || converted.ID != canonicalItemID(converted) {
+		t.Fatalf("converted identity = %q, forged source = %q", converted.ID, forged.ID)
+	}
+}
+
+func TestCanonicalItemIDBoundsLongNestedIdentity(t *testing.T) {
+	item := validSnapshotItem("", strings.Repeat("m", 120), 1)
+	item.TurnID = strings.Repeat("t", 120)
+	item.Message.TurnID = item.TurnID
+	item.ID = canonicalItemID(item)
+	if !validIdentifier(item.ID) || len(item.ID) > MaxIDBytes {
+		t.Fatalf("canonical item identity = %q", item.ID)
+	}
+	if err := (ItemUpdatedPayload{
+		ControlIdentity: testBinding(t).ControlIdentity(), Item: item,
+	}).Validate(); err != nil {
+		t.Fatalf("long nested identity validation error = %v", err)
 	}
 }
 
@@ -610,15 +695,42 @@ func boolPointer(value bool) *bool {
 	return &value
 }
 
-func validSnapshotItem(id, messageID string, sequence uint64) frontend.PresentationItem {
-	return frontend.PresentationItem{
-		ID: id, TurnID: "turn-1", Sequence: sequence, Revision: 1,
-		Kind: frontend.PresentationAssistantMessage, Lifecycle: frontend.PresentationCompleted,
-		Message: &frontend.TranscriptEntry{
-			ID: messageID, TurnID: "turn-1", Kind: frontend.EntryAssistant,
-			Phase: frontend.AssistantPhaseFinal, Text: "done", Complete: true,
+func validSnapshotItem(_ string, messageID string, sequence uint64) Item {
+	item := Item{
+		TurnID: "turn-1", Sequence: sequence, Revision: 1,
+		Kind: ItemAssistantMessage, Lifecycle: ItemCompleted,
+		Message: &Message{
+			ID: messageID, TurnID: "turn-1", Kind: MessageAssistant,
+			Phase: AssistantPhaseFinal, Text: "done", Complete: true,
 		},
 	}
+	item.ID = canonicalItemID(item)
+	return item
+}
+
+func validSnapshotToolItem(callID string, sequence uint64) Item {
+	item := Item{
+		TurnID: "turn-1", Sequence: sequence, Revision: 1,
+		Kind: ItemToolCall, Lifecycle: ItemCompleted,
+		Tool: &Tool{
+			TurnID: "turn-1", CallID: callID, Name: "read_file", Status: ToolSucceeded,
+		},
+	}
+	item.ID = canonicalItemID(item)
+	return item
+}
+
+func validSnapshotPlanItem(callID string, sequence uint64) Item {
+	item := Item{
+		TurnID: "turn-1", Sequence: sequence, Revision: 1,
+		Kind: ItemPlanUpdate, Lifecycle: ItemCompleted,
+		Plan: &Plan{
+			CallID: callID,
+			Steps:  []PlanStep{{Step: "inspect", Status: PlanStepCompleted}},
+		},
+	}
+	item.ID = canonicalItemID(item)
+	return item
 }
 
 func mustPayload(t *testing.T, value any) json.RawMessage {

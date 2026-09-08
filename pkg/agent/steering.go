@@ -373,7 +373,7 @@ func (al *AgentLoop) SteerActiveCodingTurn(
 		return fmt.Errorf("steering workspace and session are required")
 	}
 	ts := al.turns.activeTurnState(scope)
-	if ts == nil {
+	if ts == nil || ts.opts.mode != turnModeCoding {
 		return ErrNoActiveSteerableTurn
 	}
 	ts.steeringAdmissionMu.Lock()

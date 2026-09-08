@@ -17,6 +17,7 @@ func (p *Pipeline) runTurnLoop(
 ) (turnResult, TurnEndStatus, error) {
 	exec, err := p.SetupTurn(turnCtx, ts)
 	if err != nil {
+		p.sealSteeringAdmission(ts)
 		return turnResult{}, TurnEndStatusError, err
 	}
 	defer func() {
@@ -24,6 +25,13 @@ func (p *Pipeline) runTurnLoop(
 			exec.model.cleanup()
 		}
 	}()
+	if !p.openSteeringAdmission(ts) {
+		result, abortErr := p.abortTurn(ts)
+		return result, TurnEndStatusAborted, abortErr
+	}
+	if ts.observers.OnReady != nil {
+		ts.observers.OnReady()
+	}
 	return p.runPreparedTurnLoop(ctx, turnCtx, ts, exec)
 }
 
@@ -38,7 +46,18 @@ func (p *Pipeline) runPreparedTurnLoop(
 	mediaResolver := p.Context.MediaResolver
 	llm := newLLMIterationState(0)
 	terminalRequested := false
+	continueAfterExit := func(reason string) bool {
+		if ts.opts.mode != turnModeCoding {
+			return false
+		}
+		if !p.continueWithSteeringAtExit(turnCtx, ts, exec, llm, reason) {
+			return false
+		}
+		turnStatus = TurnEndStatusCompleted
+		return true
+	}
 
+turnLoop:
 	for {
 		graceful, _ := ts.gracefulInterruptRequested()
 		canRun := ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || graceful ||
@@ -67,6 +86,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 		}
 		if ts.hardAbortRequested() {
 			turnStatus = TurnEndStatusAborted
+			p.sealSteeringAdmission(ts)
 			result, abortErr := p.abortTurn(ts)
 			return result, turnStatus, abortErr
 		}
@@ -148,6 +168,9 @@ func (p *Pipeline) runPreparedTurnLoop(
 					writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &pm)
 					if writeErr != nil {
 						turnStatus = TurnEndStatusError
+						if continueAfterExit("steering persistence error") {
+							continue turnLoop
+						}
 						return turnResult{}, turnStatus, fmt.Errorf("persist steering message: %w", writeErr)
 					}
 					ts.recordPersistedMessage(pm)
@@ -192,24 +215,37 @@ func (p *Pipeline) runPreparedTurnLoop(
 		}
 		if callErr != nil {
 			turnStatus = TurnEndStatusError
+			if continueAfterExit("model error") {
+				continue
+			}
 			return turnResult{}, turnStatus, callErr
 		}
 		if llmOutcome.Control == turnStepAbort {
 			switch llmOutcome.AbortCause {
 			case turnAbortHard:
 				turnStatus = TurnEndStatusAborted
+				p.sealSteeringAdmission(ts)
 				result, abortErr := p.abortTurn(ts)
 				return result, turnStatus, abortErr
 			case turnAbortHook:
 				turnStatus = TurnEndStatusError
+				if continueAfterExit("model hook abort") {
+					continue
+				}
 				return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
 			default:
 				turnStatus = TurnEndStatusError
+				if continueAfterExit("invalid model abort") {
+					continue
+				}
 				return turnResult{}, turnStatus, fmt.Errorf("model phase returned abort without a cause")
 			}
 		}
 		if llmOutcome.AbortCause != turnAbortNone {
 			turnStatus = TurnEndStatusError
+			if continueAfterExit("invalid model outcome") {
+				continue
+			}
 			return turnResult{}, turnStatus, fmt.Errorf("model phase returned an abort cause without aborting")
 		}
 		exec.terminal = llmOutcome.terminalCandidate(exec.terminal)
@@ -258,14 +294,23 @@ func (p *Pipeline) runPreparedTurnLoop(
 			toolOutcome := p.ExecuteTools(ctx, turnCtx, ts, exec, llm)
 			if toolOutcome.TurnErr != nil {
 				turnStatus = TurnEndStatusError
+				if continueAfterExit("tool error") {
+					continue
+				}
 				return turnResult{}, turnStatus, toolOutcome.TurnErr
 			}
 			if toolOutcome.JournalErr != nil {
 				turnStatus = TurnEndStatusError
+				if continueAfterExit("tool journal error") {
+					continue
+				}
 				return turnResult{}, turnStatus, toolOutcome.JournalErr
 			}
 			if toolOutcome.Control != turnStepAbort && toolOutcome.AbortCause != turnAbortNone {
 				turnStatus = TurnEndStatusError
+				if continueAfterExit("invalid tool outcome") {
+					continue
+				}
 				return turnResult{}, turnStatus, fmt.Errorf("tool phase returned an abort cause without aborting")
 			}
 			switch toolOutcome.Control {
@@ -274,6 +319,9 @@ func (p *Pipeline) runPreparedTurnLoop(
 				continue
 			case turnStepSuspend:
 				turnStatus = TurnEndStatusSuspended
+				if continueAfterExit("tool suspension") {
+					continue
+				}
 				ts.setPhase(TurnPhaseSuspended)
 				return turnResult{
 					status:                 turnStatus,
@@ -296,21 +344,34 @@ func (p *Pipeline) runPreparedTurnLoop(
 				switch toolOutcome.AbortCause {
 				case turnAbortHard:
 					turnStatus = TurnEndStatusAborted
+					p.sealSteeringAdmission(ts)
 					result, abortErr := p.abortTurn(ts)
 					return result, turnStatus, abortErr
 				case turnAbortHook:
 					turnStatus = TurnEndStatusError
+					if continueAfterExit("tool hook abort") {
+						continue
+					}
 					return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
 				default:
 					turnStatus = TurnEndStatusError
+					if continueAfterExit("invalid tool abort") {
+						continue
+					}
 					return turnResult{}, turnStatus, fmt.Errorf("tool phase returned abort without a cause")
 				}
 			default:
 				turnStatus = TurnEndStatusError
+				if continueAfterExit("invalid tool step") {
+					continue
+				}
 				return turnResult{}, turnStatus, fmt.Errorf("tool phase returned unknown step %d", toolOutcome.Control)
 			}
 		default:
 			turnStatus = TurnEndStatusError
+			if continueAfterExit("invalid model step") {
+				continue
+			}
 			return turnResult{}, turnStatus, fmt.Errorf("model phase returned unknown step %d", llmOutcome.Control)
 		}
 	}

@@ -144,6 +144,9 @@ func (protocolError ProtocolError) Validate() error {
 	if !protocolError.Code.Valid() || !validBoundedText(protocolError.Message, MaxErrorMessageBytes) {
 		return fmt.Errorf("%w: malformed protocol error", ErrInvalidRecord)
 	}
+	if err := validateStructuredText(protocolError); err != nil {
+		return err
+	}
 	if len(protocolError.Details) != 0 {
 		return validateJSONObject("error details", protocolError.Details)
 	}
@@ -251,12 +254,12 @@ const (
 // frontend view. Repository state, review state, workspace paths, compaction
 // diagnostics, metadata, and compatibility projections stay in-process.
 type Snapshot struct {
-	ThreadID     string                      `json:"thread_id"`
-	Activity     frontend.Activity           `json:"activity"`
-	LastTurn     *frontend.LastTurnOutcome   `json:"last_turn,omitempty"`
-	Items        []frontend.PresentationItem `json:"items,omitempty"`
-	ContextUsage frontend.ContextUsage       `json:"context_usage,omitempty"`
-	Status       string                      `json:"status,omitempty"`
+	ThreadID     string           `json:"thread_id"`
+	Activity     Activity         `json:"activity"`
+	LastTurn     *LastTurnOutcome `json:"last_turn,omitempty"`
+	Items        []Item           `json:"items,omitempty"`
+	ContextUsage ContextUsage     `json:"context_usage,omitempty"`
+	Status       string           `json:"status,omitempty"`
 }
 
 // WorkerReadyPayload is emitted only after the bound controller and thread
@@ -273,7 +276,7 @@ func (payload WorkerReadyPayload) Validate() error {
 // ItemUpdatedPayload carries one complete renderer-neutral item revision.
 type ItemUpdatedPayload struct {
 	ControlIdentity
-	Item frontend.PresentationItem `json:"item"`
+	Item Item `json:"item"`
 }
 
 func (payload ItemUpdatedPayload) Validate() error {
@@ -283,7 +286,8 @@ func (payload ItemUpdatedPayload) Validate() error {
 	if !validIdentifier(payload.Item.ID) || !validIdentifier(payload.Item.TurnID) ||
 		payload.Item.Sequence == 0 || payload.Item.Revision == 0 ||
 		payload.Item.Duration < 0 ||
-		!validPresentationKind(payload.Item.Kind) || !validPresentationLifecycle(payload.Item.Lifecycle) {
+		!validItemKind(payload.Item.Kind) || !validItemLifecycle(payload.Item.Lifecycle) ||
+		payload.Item.ID != canonicalItemID(payload.Item) {
 		return fmt.Errorf("%w: malformed coding item event", ErrInvalidRecord)
 	}
 	if !validPresentationItemPayload(payload.Item) {
@@ -295,8 +299,8 @@ func (payload ItemUpdatedPayload) Validate() error {
 // StatusChangedPayload projects the worker's current controller activity.
 type StatusChangedPayload struct {
 	ControlIdentity
-	Activity frontend.Activity `json:"activity"`
-	Status   string            `json:"status"`
+	Activity Activity `json:"activity"`
+	Status   string   `json:"status"`
 }
 
 func (payload StatusChangedPayload) Validate() error {
@@ -368,7 +372,7 @@ func (payload QuestionStatePayload) Validate() error {
 
 type ContextUsagePayload struct {
 	ControlIdentity
-	Usage frontend.ContextUsage `json:"usage"`
+	Usage ContextUsage `json:"usage"`
 }
 
 func (payload ContextUsagePayload) Validate() error {
@@ -383,9 +387,9 @@ func (payload ContextUsagePayload) Validate() error {
 
 type TurnTerminalPayload struct {
 	ControlIdentity
-	TurnID  string               `json:"turn_id"`
-	Outcome frontend.TurnOutcome `json:"outcome"`
-	Status  string               `json:"status"`
+	TurnID  string      `json:"turn_id"`
+	Outcome TurnOutcome `json:"outcome"`
+	Status  string      `json:"status"`
 }
 
 func (payload TurnTerminalPayload) Validate() error {
@@ -509,55 +513,50 @@ func validateSnapshotEvent(identity ControlIdentity, snapshot Snapshot) error {
 	return nil
 }
 
-func validActivity(activity frontend.Activity) bool {
+func validActivity(activity Activity) bool {
 	switch activity {
-	case frontend.ActivityIdle, frontend.ActivityRunning, frontend.ActivityInterrupting,
-		frontend.ActivityCompacting, frontend.ActivityReviewing, frontend.ActivityWaitingInput,
-		frontend.ActivityFailed:
+	case ActivityIdle, ActivityRunning, ActivityInterrupting, ActivityCompacting,
+		ActivityReviewing, ActivityWaitingInput, ActivityFailed:
 		return true
 	default:
 		return false
 	}
 }
 
-func validTurnOutcome(outcome frontend.TurnOutcome) bool {
+func validTurnOutcome(outcome TurnOutcome) bool {
 	switch outcome {
-	case frontend.TurnOutcomeCompleted, frontend.TurnOutcomeSuspended,
-		frontend.TurnOutcomeFailed, frontend.TurnOutcomeInterrupted:
+	case TurnOutcomeCompleted, TurnOutcomeSuspended, TurnOutcomeFailed, TurnOutcomeInterrupted:
 		return true
 	default:
 		return false
 	}
 }
 
-func validPresentationKind(kind frontend.PresentationKind) bool {
+func validItemKind(kind ItemKind) bool {
 	switch kind {
-	case frontend.PresentationUserMessage, frontend.PresentationAssistantMessage,
-		frontend.PresentationReasoning, frontend.PresentationToolMessage,
-		frontend.PresentationToolCall, frontend.PresentationPlanUpdate,
-		frontend.PresentationWarning, frontend.PresentationError:
+	case ItemUserMessage, ItemAssistantMessage, ItemReasoning, ItemToolMessage,
+		ItemToolCall, ItemPlanUpdate, ItemWarning, ItemError:
 		return true
 	default:
 		return false
 	}
 }
 
-func validPresentationLifecycle(lifecycle frontend.PresentationLifecycle) bool {
+func validItemLifecycle(lifecycle ItemLifecycle) bool {
 	switch lifecycle {
-	case frontend.PresentationActive, frontend.PresentationCompleted, frontend.PresentationFailed,
-		frontend.PresentationInterrupted, frontend.PresentationSuspended, frontend.PresentationUnknown:
+	case ItemActive, ItemCompleted, ItemFailed, ItemInterrupted, ItemSuspended, ItemUnknown:
 		return true
 	default:
 		return false
 	}
 }
 
-func validPresentationItemPayload(item frontend.PresentationItem) bool {
+func validPresentationItemPayload(item Item) bool {
 	message, tool, plan := item.Message != nil, item.Tool != nil, item.Plan != nil
 	switch item.Kind {
-	case frontend.PresentationToolCall:
+	case ItemToolCall:
 		return !message && tool && !plan && item.Tool.TurnID == item.TurnID && validToolState(*item.Tool)
-	case frontend.PresentationPlanUpdate:
+	case ItemPlanUpdate:
 		return !message && !tool && plan && validPlanState(*item.Plan)
 	default:
 		return message && !tool && !plan && item.Message.TurnID == item.TurnID &&
@@ -565,42 +564,41 @@ func validPresentationItemPayload(item frontend.PresentationItem) bool {
 	}
 }
 
-func validTranscriptEntry(entry frontend.TranscriptEntry) bool {
+func validTranscriptEntry(entry Message) bool {
 	if !validIdentifier(entry.ID) || !validIdentifier(entry.TurnID) {
 		return false
 	}
 	switch entry.Kind {
-	case frontend.EntryAssistant:
-		return entry.Phase == "" || entry.Phase == frontend.AssistantPhaseCommentary ||
-			entry.Phase == frontend.AssistantPhaseFinal
-	case frontend.EntryUser, frontend.EntryReasoning, frontend.EntryTool,
-		frontend.EntryWarning, frontend.EntryError:
+	case MessageAssistant:
+		return entry.Phase == "" || entry.Phase == AssistantPhaseCommentary ||
+			entry.Phase == AssistantPhaseFinal
+	case MessageUser, MessageReasoning, MessageTool, MessageWarning, MessageError:
 		return entry.Phase == ""
 	default:
 		return false
 	}
 }
 
-func presentationKindMatchesEntry(kind frontend.PresentationKind, entry frontend.EntryKind) bool {
+func presentationKindMatchesEntry(kind ItemKind, entry MessageKind) bool {
 	switch entry {
-	case frontend.EntryUser:
-		return kind == frontend.PresentationUserMessage
-	case frontend.EntryAssistant:
-		return kind == frontend.PresentationAssistantMessage
-	case frontend.EntryReasoning:
-		return kind == frontend.PresentationReasoning
-	case frontend.EntryTool:
-		return kind == frontend.PresentationToolMessage
-	case frontend.EntryWarning:
-		return kind == frontend.PresentationWarning
-	case frontend.EntryError:
-		return kind == frontend.PresentationError
+	case MessageUser:
+		return kind == ItemUserMessage
+	case MessageAssistant:
+		return kind == ItemAssistantMessage
+	case MessageReasoning:
+		return kind == ItemReasoning
+	case MessageTool:
+		return kind == ItemToolMessage
+	case MessageWarning:
+		return kind == ItemWarning
+	case MessageError:
+		return kind == ItemError
 	default:
 		return false
 	}
 }
 
-func validToolState(tool frontend.ToolState) bool {
+func validToolState(tool Tool) bool {
 	if !validIdentifier(tool.TurnID) || !validIdentifier(tool.CallID) ||
 		!validBoundedText(tool.Name, MaxAttachmentMeta) || tool.Duration < 0 ||
 		len(tool.WriteAudit) > MaxEventWriteAudits {
@@ -615,8 +613,7 @@ func validToolState(tool frontend.ToolState) bool {
 		}
 	}
 	switch tool.Status {
-	case frontend.ToolRunning, frontend.ToolSuspended, frontend.ToolSucceeded,
-		frontend.ToolFailed, frontend.ToolInterrupted, frontend.ToolUnknown:
+	case ToolRunning, ToolSuspended, ToolSucceeded, ToolFailed, ToolInterrupted, ToolUnknown:
 	default:
 		return false
 	}
@@ -624,15 +621,14 @@ func validToolState(tool frontend.ToolState) bool {
 		return true
 	}
 	switch tool.Command.Status {
-	case frontend.CommandRunning, frontend.CommandSucceeded, frontend.CommandFailed,
-		frontend.CommandCanceled, frontend.CommandTimedOut:
+	case CommandRunning, CommandSucceeded, CommandFailed, CommandCanceled, CommandTimedOut:
 		return true
 	default:
 		return false
 	}
 }
 
-func validPlanState(plan frontend.PlanState) bool {
+func validPlanState(plan Plan) bool {
 	if !validIdentifier(plan.CallID) || len(plan.Steps) > MaxEventPlanSteps {
 		return false
 	}
@@ -641,7 +637,7 @@ func validPlanState(plan frontend.PlanState) bool {
 			return false
 		}
 		switch step.Status {
-		case frontend.PlanStepPending, frontend.PlanStepInProgress, frontend.PlanStepCompleted:
+		case PlanStepPending, PlanStepInProgress, PlanStepCompleted:
 		default:
 			return false
 		}
@@ -670,7 +666,10 @@ func validateProtocolText(raw json.RawMessage) error {
 				}
 			}
 		case map[string]any:
-			for _, entry := range typed {
+			for key, entry := range typed {
+				if len(key) > MaxEventTextBytes || !utf8.ValidString(key) || containsTerminalControl(key) {
+					return fmt.Errorf("%w: protocol payload contains unsafe or oversized text", ErrInvalidRecord)
+				}
 				if err := inspect(entry); err != nil {
 					return err
 				}

@@ -47,6 +47,7 @@ func (p *Pipeline) completeTerminal(
 	request terminalRequest,
 ) terminalGatewayOutcome {
 	if ts.hardAbortRequested() {
+		p.sealSteeringAdmission(ts)
 		result, err := p.abortTurn(ts)
 		return terminalGatewayOutcome{result: result, status: TurnEndStatusAborted, err: err}
 	}
@@ -76,23 +77,12 @@ func (p *Pipeline) completeTerminal(
 		}
 	}
 
-	if steerMsgs := p.dequeueOrSealSteeringForTerminal(ts); len(steerMsgs) > 0 {
-		cancelConfiguredStreamingLLM(turnCtx, llm)
-		exec.markSteeringObserved()
-		logger.InfoCF(
-			"agent",
-			"Steering arrived during terminal transition; continuing turn",
-			map[string]any{
-				"agent_id":       ts.agent.ID,
-				"iteration":      ts.currentIteration(),
-				"steering_count": len(steerMsgs),
-			},
-		)
-		exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+	if p.continueWithSteeringAtExit(turnCtx, ts, exec, llm, "terminal transition") {
 		return terminalGatewayOutcome{status: status, resume: true}
 	}
 
 	if ts.hardAbortRequested() {
+		p.sealSteeringAdmission(ts)
 		result, err := p.abortTurn(ts)
 		return terminalGatewayOutcome{result: result, status: TurnEndStatusAborted, err: err}
 	}
@@ -101,6 +91,40 @@ func (p *Pipeline) completeTerminal(
 		status = TurnEndStatusError
 	}
 	return terminalGatewayOutcome{result: result, status: status, err: err}
+}
+
+// continueWithSteeringAtExit is the single non-cancellation exit gateway for
+// active coding guidance. It either moves every admitted message into the
+// current turn's next iteration or seals admission before the caller exits.
+func (p *Pipeline) continueWithSteeringAtExit(
+	turnCtx context.Context,
+	ts *turnState,
+	exec *turnExecution,
+	llm *LLMIterationState,
+	reason string,
+) bool {
+	hadAdmittedPending := len(exec.pendingMessages) > 0
+	steerMessages := p.dequeueOrSealSteeringAtExit(ts, hadAdmittedPending)
+	if len(steerMessages) == 0 && !hadAdmittedPending {
+		return false
+	}
+	cancelConfiguredStreamingLLM(turnCtx, llm)
+	if len(steerMessages) > 0 {
+		exec.markSteeringObserved()
+		exec.pendingMessages = append(exec.pendingMessages, steerMessages...)
+	}
+	logger.InfoCF(
+		"agent",
+		"Steering arrived during turn exit; continuing turn",
+		map[string]any{
+			"agent_id":       ts.agent.ID,
+			"iteration":      ts.currentIteration(),
+			"reason":         reason,
+			"pending_count":  len(exec.pendingMessages),
+			"steering_count": len(steerMessages),
+		},
+	)
+	return true
 }
 
 func (p *Pipeline) scheduleObjectiveOutcomeRepair(
