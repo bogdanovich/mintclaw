@@ -2,10 +2,11 @@
 
 ## Status
 
-Selected execution program. PDF0A is complete for `linux/amd64`; its merged,
+Selected execution program. PDF0A and PDF0B are complete for `linux/amd64`; their merged,
 deployed evidence and remaining platform limits are recorded in the
-[PDF0A exit record](pdf0a-exit-record.md). PDF0B is the next admitted milestone,
-but requires its own bounded implementation goal. This roadmap specializes the repository-level
+[PDF0A exit record](pdf0a-exit-record.md) and [PDF0B exit record](pdf0b-exit-record.md).
+PDF1A is the next sequenced milestone but is not admitted until it has its own bounded goal.
+This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
 
@@ -649,6 +650,12 @@ risk model; do not build a general sandbox platform inside the document
 milestone.
 
 ### PDF0B: Inspection, classification, and backend decision
+
+#### Exit status
+
+Complete for `linux/amd64`. The [PDF0B exit record](pdf0b-exit-record.md) records the selected
+backend and oracle, 25-fixture evidence, implementation merge, exact deployment, runtime trace,
+rollback, and the stop boundary before PDF1A. No other runtime tuple or PDF1A behavior is admitted.
 
 #### Operator outcome
 

@@ -2,9 +2,9 @@
 
 ## Status
 
-Active implementation contract for PDF0B. This document specializes the
-[PDF0B roadmap milestone](pdf-support-roadmap.md#pdf0b-inspection-classification-and-backend-decision)
-without admitting PDF1A behavior.
+Completed implementation contract for PDF0B. The implementation and exact deployment evidence are
+recorded in the [PDF0B exit record](pdf0b-exit-record.md). This document remains the historical
+source of truth for the completed milestone and does not admit PDF1A behavior.
 
 The public operator interface is part of MintClaw:
 
