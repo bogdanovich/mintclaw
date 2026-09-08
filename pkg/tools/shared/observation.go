@@ -1,20 +1,19 @@
 package toolshared
 
 import (
-	"fmt"
 	"strings"
 
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 )
 
 const (
 	// MaxPlanObservationSteps bounds both update_plan admission and frontend
 	// observation production. Normal coding plans are intentionally concise.
-	MaxPlanObservationSteps = 32
-
-	maxPlanExplanationBytes = 4 << 10
-	maxPlanStepBytes        = 768
-	maxPlanTextBytes        = 32 << 10
+	MaxPlanObservationSteps = codingplan.MaxSteps
+	maxPlanExplanationBytes = codingplan.MaxExplanationBytes
+	maxPlanStepBytes        = codingplan.MaxStepBytes
+	maxPlanTextBytes        = codingplan.MaxTextBytes
 
 	maxCommandOutputBytes   = 64 << 10
 	maxCommandIdentityBytes = 1 << 10
@@ -23,55 +22,7 @@ const (
 // NewPlanObservation validates, redacts, bounds, and clones one plan before it
 // crosses into presentation state.
 func NewPlanObservation(explanation string, steps []PlanStepObservation) (PlanObservation, error) {
-	if len(steps) == 0 {
-		return PlanObservation{}, fmt.Errorf("plan observation requires at least one step")
-	}
-	if len(steps) > MaxPlanObservationSteps {
-		return PlanObservation{}, fmt.Errorf(
-			"plan observation has %d steps; maximum is %d",
-			len(steps),
-			MaxPlanObservationSteps,
-		)
-	}
-
-	result := PlanObservation{Steps: make([]PlanStepObservation, 0, len(steps))}
-	var truncated bool
-	result.Explanation, truncated = sanitizeObservationText(
-		strings.TrimSpace(explanation),
-		maxPlanExplanationBytes,
-	)
-	result.Truncated = truncated
-
-	inProgress := 0
-	for index, step := range steps {
-		text := strings.TrimSpace(step.Step)
-		if text == "" {
-			return PlanObservation{}, fmt.Errorf("plan observation step %d is empty", index)
-		}
-		switch step.Status {
-		case PlanStepPending, PlanStepInProgress, PlanStepCompleted:
-		default:
-			return PlanObservation{}, fmt.Errorf("plan observation step %d has invalid status", index)
-		}
-		if step.Status == PlanStepInProgress {
-			inProgress++
-		}
-
-		text, stepTruncated := sanitizeObservationText(text, maxPlanStepBytes)
-		result.Truncated = result.Truncated || stepTruncated
-		result.Steps = append(result.Steps, PlanStepObservation{Step: text, Status: step.Status})
-	}
-	if inProgress > 1 {
-		return PlanObservation{}, fmt.Errorf("plan observation can contain at most one in_progress step")
-	}
-	textBytes := len(result.Explanation)
-	for _, step := range result.Steps {
-		textBytes += len(step.Step)
-	}
-	if textBytes > maxPlanTextBytes {
-		return PlanObservation{}, fmt.Errorf("plan observation text exceeds %d bytes", maxPlanTextBytes)
-	}
-	return result, nil
+	return codingplan.New(explanation, steps)
 }
 
 // SanitizeToolObservation returns an independent safe observation or nil when

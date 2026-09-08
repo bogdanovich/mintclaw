@@ -8,6 +8,7 @@ import (
 	"errors"
 	"time"
 
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
@@ -148,6 +149,7 @@ type ToolState struct {
 	Status          ToolStatus    `json:"status"`
 	Duration        time.Duration `json:"duration,omitempty"`
 	OutputTruncated bool          `json:"output_truncated,omitempty"`
+	PlanObserved    bool          `json:"plan_observed,omitempty"`
 	WriteAudit      []WriteAudit  `json:"write_audit,omitempty"`
 	Command         *CommandState `json:"command,omitempty"`
 }
@@ -176,27 +178,19 @@ type CommandState struct {
 	TimedOut   bool          `json:"timed_out,omitempty"`
 }
 
-type PlanStepStatus string
+type PlanStepStatus = codingplan.StepStatus
 
 const (
-	PlanStepPending    PlanStepStatus = "pending"
-	PlanStepInProgress PlanStepStatus = "in_progress"
-	PlanStepCompleted  PlanStepStatus = "completed"
+	PlanStepPending    = codingplan.StepPending
+	PlanStepInProgress = codingplan.StepInProgress
+	PlanStepCompleted  = codingplan.StepCompleted
 )
 
-type PlanStepState struct {
-	Step   string         `json:"step"`
-	Status PlanStepStatus `json:"status"`
-}
+type PlanStepState = codingplan.Step
 
 // PlanState is a bounded tool-owned plan update. It contains only validated
 // observation data and never model-facing tool JSON or argument values.
-type PlanState struct {
-	CallID      string          `json:"call_id"`
-	Explanation string          `json:"explanation,omitempty"`
-	Steps       []PlanStepState `json:"steps"`
-	Truncated   bool            `json:"truncated,omitempty"`
-}
+type PlanState = codingplan.State
 
 // PresentationItem is the authoritative ordered unit consumed by coding
 // frontends. Exactly one typed payload is present. Sequence and ID are stable;
@@ -284,6 +278,12 @@ type ThreadSnapshot struct {
 	Review           *codingreview.State           `json:"review,omitempty"`
 	Status           string                        `json:"status,omitempty"`
 	HasOlderEntries  bool                          `json:"has_older_entries,omitempty"`
+}
+
+// CurrentPlan returns an independent copy of the latest authoritative plan
+// visible in this bounded snapshot.
+func (snapshot ThreadSnapshot) CurrentPlan() *PlanState {
+	return latestPresentationPlan(snapshot.Items)
 }
 
 // ViewSource is the in-process read side of the frontend controller boundary.

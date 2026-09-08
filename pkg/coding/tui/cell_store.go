@@ -282,6 +282,9 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
 	}
 	for _, cell := range m.cells.ordered {
+		if redundantNativePlanTool(cell) {
+			continue
+		}
 		mode := cellRenderCompact
 		selected := false
 		if cell.item.Tool != nil {
@@ -308,6 +311,28 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 		)})
 	}
 	return specs
+}
+
+func redundantNativePlanTool(cell *presentationCell) bool {
+	if cell == nil || cell.item.Tool == nil {
+		return false
+	}
+	return redundantNativePlanToolState(*cell.item.Tool)
+}
+
+func redundantNativePlanToolState(tool frontend.ToolState) bool {
+	return tool.PlanObserved && tool.Status == frontend.ToolSucceeded && tool.Command == nil &&
+		len(tool.WriteAudit) == 0
+}
+
+func navigableToolStates(tools []frontend.ToolState) []frontend.ToolState {
+	visible := make([]frontend.ToolState, 0, len(tools))
+	for _, tool := range tools {
+		if !redundantNativePlanToolState(tool) {
+			visible = append(visible, tool)
+		}
+	}
+	return visible
 }
 
 func (m *Model) selectedToolCellID() string {

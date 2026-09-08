@@ -164,7 +164,7 @@ func sameSemanticCellInstance(left, right semanticCell) bool {
 
 func renderSemanticCellLines(spec semanticCellRenderSpec, context cellRenderContext) []string {
 	document := spec.cell.Render(context, spec.mode)
-	text := document.plainText()
+	text := renderCellDocument(document, context, spec.mode)
 	if text == "" {
 		return nil
 	}
@@ -179,6 +179,54 @@ func renderSemanticCellLines(spec semanticCellRenderSpec, context cellRenderCont
 		lines[0] = "▶ " + lines[0]
 	}
 	return lines
+}
+
+func renderCellDocument(document cellDocument, context cellRenderContext, mode cellRenderMode) string {
+	lines := make([]string, 0, len(document.Lines))
+	for _, line := range document.Lines {
+		var rendered strings.Builder
+		for _, span := range line.Spans {
+			prefix := cellRoleANSI(span.Role, context, mode)
+			if prefix == "" {
+				rendered.WriteString(span.Text)
+				continue
+			}
+			rendered.WriteString(prefix)
+			rendered.WriteString(span.Text)
+			rendered.WriteString("\x1b[0m")
+		}
+		lines = append(lines, rendered.String())
+	}
+	return strings.Join(lines, "\n")
+}
+
+func cellRoleANSI(role cellStyleRole, context cellRenderContext, mode cellRenderMode) string {
+	if mode == cellRenderPlain || context.ColorLevel == cellColorNone {
+		return ""
+	}
+	switch role {
+	case cellStylePlanTitle:
+		return "\x1b[1m"
+	case cellStylePlanExplanation:
+		return "\x1b[2;3m"
+	case cellStylePlanCompleted:
+		return "\x1b[2;9m"
+	case cellStylePlanCurrent:
+		switch context.ColorLevel {
+		case cellColorANSI16:
+			return "\x1b[1;36m"
+		case cellColorANSI256:
+			return "\x1b[1;38;5;75m"
+		case cellColorTrueColor:
+			if context.Theme == cellThemeLight {
+				return "\x1b[1;38;2;0;112;160m"
+			}
+			return "\x1b[1;38;2;92;200;255m"
+		}
+	case cellStylePlanPending:
+		return "\x1b[2m"
+	}
+	return ""
 }
 
 func (document semanticViewportDocument) visibleLines(start, end int) []string {

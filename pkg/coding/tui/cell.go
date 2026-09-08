@@ -68,6 +68,11 @@ const (
 	cellStyleFailure
 	cellStyleInsertion
 	cellStyleDeletion
+	cellStylePlanTitle
+	cellStylePlanExplanation
+	cellStylePlanCompleted
+	cellStylePlanCurrent
+	cellStylePlanPending
 )
 
 type cellSpan struct {
@@ -142,8 +147,12 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 	if document, ok := cell.renderCache[key]; ok {
 		return document
 	}
-	document := cell.semanticDocument(mode)
-	document = wrapCellDocument(document, context.Width)
+	var document cellDocument
+	if cell.item.Kind == frontend.PresentationPlanUpdate {
+		document = cell.planDocument(context.Width)
+	} else {
+		document = wrapCellDocument(cell.semanticDocument(mode), context.Width)
+	}
 	if mode == cellRenderPlain {
 		for lineIndex := range document.Lines {
 			for spanIndex := range document.Lines[lineIndex].Spans {
@@ -174,8 +183,6 @@ func (cell *presentationCell) semanticDocument(mode cellRenderMode) cellDocument
 		return cell.messageDocument(mode)
 	case frontend.PresentationToolCall:
 		return cell.toolDocument(mode)
-	case frontend.PresentationPlanUpdate:
-		return cell.planDocument()
 	default:
 		return cellDocument{Lines: []cellLine{styledCellLine("• Unsupported presentation item", cellStyleFailure)}}
 	}
@@ -214,18 +221,30 @@ func (cell *presentationCell) messageDocument(_ cellRenderMode) cellDocument {
 	}
 }
 
-func (cell *presentationCell) planDocument() cellDocument {
+func (cell *presentationCell) planDocument(width int) cellDocument {
 	plan := cell.item.Plan
 	if plan == nil {
 		return cellDocument{}
 	}
-	lines := []cellLine{styledCellLine("• Updated Plan", lifecycleCellRole(cell.item.Lifecycle))}
+	lines := wrappedPlanText("Updated Plan", "• ", "  ", cellStylePlanTitle, width)
+	bodyStarted := false
+	appendBody := func(text, firstIndent, nextIndent string, role cellStyleRole) {
+		outer := "    "
+		if !bodyStarted {
+			outer = "  └ "
+		}
+		lines = append(lines, wrappedPlanText(text, outer+firstIndent, "    "+nextIndent, role, width)...)
+		bodyStarted = true
+	}
 	if explanation := strings.TrimSpace(sanitizeTerminalText(plan.Explanation)); explanation != "" {
-		lines = append(lines, logicalCellLines("  "+explanation, cellStyleMuted)...)
+		appendBody(explanation, "", "", cellStylePlanExplanation)
 	}
 	for _, step := range plan.Steps {
 		glyph, role := planStepCellStyle(step.Status)
-		lines = append(lines, logicalCellLines("  "+glyph+" "+sanitizeTerminalText(step.Step), role)...)
+		appendBody(sanitizeTerminalText(step.Step), glyph+" ", "  ", role)
+	}
+	if plan.Truncated {
+		appendBody("[…truncated]", "", "", cellStyleMuted)
 	}
 	return cellDocument{Lines: lines, Truncated: plan.Truncated}
 }
@@ -233,12 +252,46 @@ func (cell *presentationCell) planDocument() cellDocument {
 func planStepCellStyle(status frontend.PlanStepStatus) (string, cellStyleRole) {
 	switch status {
 	case frontend.PlanStepCompleted:
-		return "✓", cellStyleSuccess
+		return "✔", cellStylePlanCompleted
 	case frontend.PlanStepInProgress:
-		return "→", cellStyleAccent
+		return "□", cellStylePlanCurrent
 	default:
-		return "□", cellStyleMuted
+		return "□", cellStylePlanPending
 	}
+}
+
+func wrappedPlanText(
+	value, initialPrefix, continuationPrefix string,
+	role cellStyleRole,
+	width int,
+) []cellLine {
+	width = max(1, width)
+	value = expandCellTabs(sanitizeTerminalText(value), 4)
+	logical := strings.Split(value, "\n")
+	lines := make([]cellLine, 0, len(logical))
+	first := true
+	for _, text := range logical {
+		prefix := continuationPrefix
+		if first {
+			prefix = initialPrefix
+		}
+		prefix = ansi.Truncate(prefix, max(0, width-1), "")
+		bodyWidth := max(1, width-ansi.StringWidth(prefix))
+		text = replaceOverwideCellGraphemes(text, bodyWidth)
+		parts := strings.Split(ansi.Wrap(text, bodyWidth, ""), "\n")
+		if len(parts) == 0 {
+			parts = []string{""}
+		}
+		for index, part := range parts {
+			linePrefix := prefix
+			if !first || index > 0 {
+				linePrefix = ansi.Truncate(continuationPrefix, max(0, width-1), "")
+			}
+			lines = append(lines, styledCellLine(linePrefix+part, role))
+			first = false
+		}
+	}
+	return lines
 }
 
 func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {

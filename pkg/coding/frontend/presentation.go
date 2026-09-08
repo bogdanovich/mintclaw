@@ -356,6 +356,17 @@ func planPresentationPayloadCount(items []PresentationItem) int {
 	return count
 }
 
+func latestPresentationPlan(items []PresentationItem) *PlanState {
+	for index := len(items) - 1; index >= 0; index-- {
+		if items[index].Plan == nil {
+			continue
+		}
+		plan := clonePlan(*items[index].Plan)
+		return &plan
+	}
+	return nil
+}
+
 func turnHasUserMessage(items []PresentationItem, turnID string) bool {
 	for _, item := range items {
 		if item.TurnID == turnID && item.Message != nil && item.Message.Kind == EntryUser {

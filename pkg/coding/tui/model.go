@@ -754,6 +754,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 }
 
 func (m *Model) normalizeToolSelection(tools []frontend.ToolState) {
+	tools = navigableToolStates(tools)
 	if len(tools) == 0 {
 		m.selectedToolID = ""
 		m.expandedToolID = ""
@@ -771,7 +772,7 @@ func (m *Model) normalizeToolSelection(tools []frontend.ToolState) {
 }
 
 func (m *Model) navigateTools(direction int) {
-	tools := m.snapshot.Tools
+	tools := navigableToolStates(m.snapshot.Tools)
 	if len(tools) == 0 {
 		m.workspaceNotice = "no tool cards"
 		return
@@ -792,7 +793,7 @@ func (m *Model) navigateTools(direction int) {
 }
 
 func (m *Model) toggleSelectedTool() {
-	tools := m.snapshot.Tools
+	tools := navigableToolStates(m.snapshot.Tools)
 	if len(tools) == 0 {
 		m.workspaceNotice = "no tool cards"
 		return

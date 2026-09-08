@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
@@ -684,7 +685,40 @@ func (p *Projector) PlanUpdated(turnID, callID string, plan PlanState) {
 		if !ok {
 			return
 		}
+		if current := latestPresentationPlan(state.Items); current != nil && codingplan.ContentEqual(*current, plan) {
+			return
+		}
 		p.upsertPlan(state, turnID, plan)
+	})
+}
+
+// ToolPlanObserved marks a tool card as represented by the native plan
+// surface. A frontend can then suppress only the redundant successful card
+// while retaining missing-observation and failed tool evidence.
+func (p *Projector) ToolPlanObserved(turnID, callID string) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
+		if tool.CallID == "" {
+			return
+		}
+		tool.PlanObserved = true
+		p.upsertTool(state, tool)
+	})
+}
+
+// PlanRestored projects one durable current-plan checkpoint without inventing
+// a tool call or parsing canonical model-facing history.
+func (p *Projector) PlanRestored(plan PlanState) {
+	p.mutate(func(state *ThreadSnapshot) {
+		plan.CallID = "restored-current-plan"
+		var ok bool
+		plan, ok = p.boundedPlan(plan)
+		if !ok {
+			return
+		}
+		p.upsertPlan(state, "restored-current-plan", plan)
 	})
 }
 

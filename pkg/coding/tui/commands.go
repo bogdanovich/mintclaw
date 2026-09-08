@@ -414,6 +414,25 @@ func statusPanelContent(snapshot frontend.ThreadSnapshot) string {
 			),
 		)
 	}
+	if plan := snapshot.CurrentPlan(); plan != nil {
+		completed := 0
+		for _, step := range plan.Steps {
+			if step.Status == frontend.PlanStepCompleted {
+				completed++
+			}
+		}
+		lines = append(lines, "", "Current plan", fmt.Sprintf("progress: %d/%d completed", completed, len(plan.Steps)))
+		if explanation := strings.TrimSpace(plan.Explanation); explanation != "" {
+			lines = append(lines, "note: "+boundedSingleLine(explanation, 512))
+		}
+		for _, step := range plan.Steps {
+			glyph, _ := planStepCellStyle(step.Status)
+			lines = append(lines, glyph+" "+boundedSingleLine(step.Step, 768))
+		}
+		if plan.Truncated {
+			lines = append(lines, "[plan observation truncated]")
+		}
+	}
 	if compaction := snapshot.LastCompaction; compaction != nil {
 		lines = append(lines, compactionStatusLines(compaction)...)
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
@@ -29,6 +30,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type blockingCodingProvider struct {
@@ -156,7 +158,7 @@ func TestPendingThreadTitlePromotesOnceUnlessRenamed(t *testing.T) {
 		if metadataErr != nil {
 			t.Fatal(metadataErr)
 		}
-		state := newCodingMetadataState(nil, metadata, func() time.Time {
+		state := newCodingMetadataState(nil, nil, metadata, func() time.Time {
 			return created.Add(time.Minute)
 		})
 		state.save = func(thread.Metadata) error { return nil }
@@ -1134,7 +1136,7 @@ func TestNativeControllerDoesNotReusePriorOutcomeAfterPreTurnFailure(t *testing.
 			},
 		},
 		projector:     projector,
-		metadataState: newCodingMetadataState(store, metadata, time.Now),
+		metadataState: newCodingMetadataState(store, nil, metadata, time.Now),
 	}
 	if err := runtime.persistTurnOutcome("first stored prompt", codingTurnOutcome{
 		Model: metadata.Model, Provider: metadata.Provider, PromptStored: true,
@@ -1359,6 +1361,7 @@ func TestNativeControllerPublishesOnlyCommittedMetadata(t *testing.T) {
 	injected := errors.New("injected pre-commit save failure")
 	metadataState := newCodingMetadataState(
 		nil,
+		nil,
 		metadata,
 		func() time.Time { return metadata.UpdatedAt.Add(time.Minute) },
 	)
@@ -1439,7 +1442,7 @@ func TestNativeControllerLifecyclePersistsAndProjectsAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := created.Add(time.Minute)
-	state := newCodingMetadataState(store, metadata, func() time.Time { return now })
+	state := newCodingMetadataState(store, nil, metadata, func() time.Time { return now })
 	runtime := &nativeControllerRuntime{
 		nativeCodingRuntime: &nativeCodingRuntime{metadata: metadata},
 		projector:           projector,
@@ -1609,7 +1612,7 @@ func TestCodingMetadataStatePersistsOnlyCompletedCompactionCheckpoint(t *testing
 		t.Fatal(err)
 	}
 	completedAt := createdAt.Add(time.Minute)
-	state := newCodingMetadataState(store, metadata, func() time.Time { return completedAt })
+	state := newCodingMetadataState(store, nil, metadata, func() time.Time { return completedAt })
 	state.observeCompaction(agent.ContextCompressLifecyclePayload{
 		Status: agent.ContextCompressLifecycleNoProgress, TranscriptRevision: 6,
 	})
@@ -1640,7 +1643,7 @@ func TestCodingCheckpointBusObservesMatchingTerminalCompaction(t *testing.T) {
 	checkpointBus := &codingCheckpointBus{
 		Bus:        runtimeevents.NewBus(),
 		sessionKey: "coding:thread",
-		observe: func(payload agent.ContextCompressLifecyclePayload) {
+		observeCompaction: func(payload agent.ContextCompressLifecyclePayload) {
 			observed = append(observed, payload)
 		},
 	}
@@ -1669,6 +1672,168 @@ func TestCodingCheckpointBusObservesMatchingTerminalCompaction(t *testing.T) {
 	}
 }
 
+func TestCodingCheckpointBusObservesOnlySafeMatchingCompletedPlans(t *testing.T) {
+	t.Parallel()
+
+	var observed []codingplan.State
+	checkpointBus := &codingCheckpointBus{
+		Bus:        runtimeevents.NewBus(),
+		sessionKey: "coding:thread",
+		observePlan: func(plan codingplan.State) {
+			observed = append(observed, plan)
+		},
+	}
+	t.Cleanup(func() { _ = checkpointBus.Close() })
+	plan := &toolshared.ToolObservation{Plan: &toolshared.PlanObservation{
+		Explanation: "safe",
+		Steps: []toolshared.PlanStepObservation{{
+			Step: "Inspect", Status: toolshared.PlanStepInProgress,
+		}},
+	}}
+	publish := func(component, sessionKey string, payload agent.ToolExecEndPayload) {
+		t.Helper()
+		checkpointBus.PublishNonBlocking(runtimeevents.Event{
+			Kind:    runtimeevents.KindAgentToolExecEnd,
+			Source:  runtimeevents.Source{Component: component},
+			Scope:   runtimeevents.Scope{SessionKey: sessionKey},
+			Payload: payload,
+		})
+	}
+
+	publish("agent", "coding:other", agent.ToolExecEndPayload{Observation: plan})
+	publish("gateway", "coding:thread", agent.ToolExecEndPayload{Observation: plan})
+	publish("agent", "coding:thread", agent.ToolExecEndPayload{Observation: plan, Suspended: true})
+	publish("agent", "coding:thread", agent.ToolExecEndPayload{Observation: plan, IsError: true})
+	publish("agent", "coding:thread", agent.ToolExecEndPayload{Observation: &toolshared.ToolObservation{
+		Plan: &toolshared.PlanObservation{Steps: []toolshared.PlanStepObservation{{Step: "", Status: "invalid"}}},
+	}})
+	publish("agent", "coding:thread", agent.ToolExecEndPayload{Observation: plan})
+
+	if len(observed) != 1 || observed[0].Explanation != "safe" || len(observed[0].Steps) != 1 {
+		t.Fatalf("observed plans = %+v, want one safe matching completion", observed)
+	}
+	plan.Plan.Steps[0].Step = "mutated"
+	if observed[0].Steps[0].Step != "Inspect" {
+		t.Fatalf("observed plan aliases event payload: %+v", observed[0])
+	}
+}
+
+func TestCodingMetadataStatePersistsCurrentPlanCheckpoint(t *testing.T) {
+	store, lease, metadata := newRuntimeAttachmentThread(t)
+	updatedAt := metadata.CreatedAt.Add(time.Minute)
+	state := newCodingMetadataState(store, lease, metadata, func() time.Time { return updatedAt })
+	state.observePlan(codingplan.State{
+		CallID:      "ephemeral-call",
+		Explanation: "Implement the checklist",
+		Steps: []codingplan.Step{
+			{Step: "Inspect", Status: codingplan.StepCompleted},
+			{Step: "Implement", Status: codingplan.StepInProgress},
+		},
+	})
+	if err := state.accumulatedError(); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, ok, err := store.LoadCurrentPlan(t.Context(), lease, metadata)
+	if err != nil || !ok {
+		t.Fatalf("load current plan = %+v, ok=%t, error=%v", checkpoint, ok, err)
+	}
+	if checkpoint.Plan.CallID != "" || checkpoint.Plan.Explanation != "Implement the checklist" ||
+		!checkpoint.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("current plan checkpoint = %+v", checkpoint)
+	}
+}
+
+func TestNativeControllerRestoresCurrentPlanWithoutInventingToolHistory(t *testing.T) {
+	projectRoot := nativeCodingFixtureProject(t)
+	project, err := thread.ResolveProject(t.Context(), projectRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := thread.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := thread.NewMetadata(thread.NewThreadID(), project, "resume plan", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata.Model = "fixture-alias"
+	metadata.Provider = "fixture"
+	if err := store.ProvisionThread(metadata.ThreadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(metadata); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.AcquireLease(metadata.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := codingworkspace.NewRepository(
+		project.ProjectRoot,
+		project.InvocationCWD,
+		codingworkspace.Limits{},
+	).CaptureBaseline(t.Context(), codingworkspace.BaselineRequest{
+		ProjectKey: project.ProjectKey,
+		CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	if err := store.PublishRepositoryBaseline(t.Context(), lease, metadata, baseline); err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	plan, err := codingplan.New("Continue after restart.", []codingplan.Step{{
+		Step: "Verify the implementation", Status: codingplan.StepInProgress,
+	}})
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	checkpoint, err := thread.NewCurrentPlanCheckpoint(plan, metadata.CreatedAt.Add(time.Minute))
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	if err := store.SaveCurrentPlan(t.Context(), lease, metadata, checkpoint); err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	dependencies := nativeCodingTurnRunner{
+		loadConfig: func() (*config.Config, error) { return nativeCodingFixtureConfig(), nil },
+		createProvider: func(*config.Config) (providers.LLMProvider, string, error) {
+			return &blockingCodingProvider{started: make(chan struct{})}, "fixture-model-id", nil
+		},
+	}
+	frontendController, err := newNativeCodingControllerWithDependencies(
+		codingTurnRequest{Store: store, Lease: lease, Metadata: metadata},
+		true,
+		frontend.ProjectionLimits{},
+		dependencies,
+		time.Now,
+	)
+	if err != nil {
+		_ = lease.Release()
+		t.Fatal(err)
+	}
+	snapshot, err := frontendController.Snapshot(t.Context())
+	if err != nil {
+		_ = frontendController.Close(t.Context())
+		t.Fatal(err)
+	}
+	current := snapshot.CurrentPlan()
+	if current == nil || current.Explanation != "Continue after restart." || len(current.Steps) != 1 ||
+		current.Steps[0].Step != "Verify the implementation" || len(snapshot.Tools) != 0 {
+		_ = frontendController.Close(t.Context())
+		t.Fatalf("restored current plan = %+v, tools=%+v", current, snapshot.Tools)
+	}
+	if err := frontendController.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCodingMetadataStateKeepsCompactionDerivedWhenMetadataWriteFails(t *testing.T) {
 	project, err := thread.ResolveProject(t.Context(), t.TempDir())
 	if err != nil {
@@ -1679,7 +1844,7 @@ func TestCodingMetadataStateKeepsCompactionDerivedWhenMetadataWriteFails(t *test
 		t.Fatal(err)
 	}
 	injected := errors.New("injected metadata checkpoint failure")
-	state := newCodingMetadataState(nil, metadata, time.Now)
+	state := newCodingMetadataState(nil, nil, metadata, time.Now)
 	state.save = func(thread.Metadata) error { return injected }
 	state.observeCompaction(agent.ContextCompressLifecyclePayload{
 		Status: agent.ContextCompressLifecycleCompleted, TranscriptRevision: 9,

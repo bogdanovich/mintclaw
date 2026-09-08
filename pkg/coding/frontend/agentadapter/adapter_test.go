@@ -157,8 +157,8 @@ func TestAdapterProjectsExactTypedPlanWithoutParsingArgumentsOrOutput(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Items) != 2 || snapshot.Items[1].Kind != frontend.PresentationPlanUpdate ||
-		snapshot.Items[1].Plan == nil {
+	if len(snapshot.Items) != 2 || snapshot.Items[0].Tool == nil || !snapshot.Items[0].Tool.PlanObserved ||
+		snapshot.Items[1].Kind != frontend.PresentationPlanUpdate || snapshot.Items[1].Plan == nil {
 		t.Fatalf("typed plan items = %+v", snapshot.Items)
 	}
 	plan := snapshot.Items[1].Plan

@@ -772,6 +772,37 @@ func TestCommandPanelsEscapeStructuredSnapshotFields(t *testing.T) {
 	}
 }
 
+func TestStatusPanelIncludesCurrentAuthoritativePlan(t *testing.T) {
+	snapshot := frontend.ThreadSnapshot{
+		ThreadID: "thread-1",
+		Items: []frontend.PresentationItem{{
+			ID: "plan", TurnID: "turn", Sequence: 1, Revision: 1,
+			Kind: frontend.PresentationPlanUpdate, Lifecycle: frontend.PresentationCompleted,
+			Plan: &frontend.PlanState{
+				Explanation: "Continue after resume.",
+				Steps: []frontend.PlanStepState{
+					{Step: "Inspect", Status: frontend.PlanStepCompleted},
+					{Step: "Implement", Status: frontend.PlanStepInProgress},
+					{Step: "Verify", Status: frontend.PlanStepPending},
+				},
+			},
+		}},
+	}
+	status := statusPanelContent(snapshot)
+	for _, want := range []string{
+		"Current plan",
+		"progress: 1/3 completed",
+		"note: Continue after resume.",
+		"✔ Inspect",
+		"□ Implement",
+		"□ Verify",
+	} {
+		if !strings.Contains(status, want) {
+			t.Fatalf("status omits %q: %q", want, status)
+		}
+	}
+}
+
 func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	controller := newController(t)
 	model, err := newTestModel(controller)

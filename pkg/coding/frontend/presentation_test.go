@@ -269,6 +269,54 @@ func TestPlanPresentationPreservesTypedOrderLifecycleAndIdentity(t *testing.T) {
 	}
 }
 
+func TestPlanPresentationSuppressesIdenticalCallsAndRetainsMeaningfulProgress(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	plan := PlanState{
+		Explanation: "Implement in order.",
+		Steps: []PlanStepState{
+			{Step: "Inspect", Status: PlanStepInProgress},
+			{Step: "Implement", Status: PlanStepPending},
+		},
+	}
+	projector.PlanUpdated("turn-1", "call-1", plan)
+	projector.PlanUpdated("turn-2", "call-2", plan)
+	view := snapshotForTest(t, projector)
+	if len(view.Items) != 1 || view.Items[0].Plan == nil || view.Items[0].Plan.CallID != "call-1" {
+		t.Fatalf("identical plan calls created noise: %+v", view.Items)
+	}
+
+	plan.Steps[0].Status = PlanStepCompleted
+	plan.Steps[1].Status = PlanStepInProgress
+	projector.PlanUpdated("turn-2", "call-3", plan)
+	view = snapshotForTest(t, projector)
+	if len(view.Items) != 2 || view.Items[1].Plan == nil || view.Items[1].Plan.CallID != "call-3" ||
+		view.Items[1].Plan.Steps[1].Status != PlanStepInProgress {
+		t.Fatalf("meaningful plan progress was not retained: %+v", view.Items)
+	}
+}
+
+func TestPlanRestoredCreatesCurrentPlanWithoutToolHistory(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.PlanRestored(PlanState{
+		Explanation: "Continue after restart.",
+		Steps:       []PlanStepState{{Step: "Verify", Status: PlanStepInProgress}},
+	})
+	view := snapshotForTest(t, projector)
+	if len(view.Items) != 1 || view.Items[0].Plan == nil || len(view.Tools) != 0 ||
+		view.Items[0].Plan.CallID != "restored-current-plan" ||
+		view.Items[0].Plan.Steps[0].Step != "Verify" {
+		t.Fatalf("restored plan projection = %+v", view)
+	}
+	current := view.CurrentPlan()
+	if current == nil || current.Steps[0].Step != "Verify" {
+		t.Fatalf("current plan = %+v", current)
+	}
+	current.Steps[0].Step = "mutated"
+	if view.CurrentPlan().Steps[0].Step != "Verify" {
+		t.Fatalf("current plan aliases snapshot state: %+v", view.CurrentPlan())
+	}
+}
+
 func TestPlanPresentationNormalizesCallIDOnce(t *testing.T) {
 	digest := sha256.Sum256([]byte("literal"))
 	tests := []struct {
@@ -314,7 +362,7 @@ func TestPlanPresentationIsSeparatelyBoundedAndRejectsInvalidPlans(t *testing.T)
 			Explanation: strings.Repeat("explanation", 20),
 			Steps: []PlanStepState{
 				{Step: "one", Status: PlanStepCompleted},
-				{Step: "two", Status: PlanStepInProgress},
+				{Step: fmt.Sprintf("two-%d", index), Status: PlanStepInProgress},
 				{Step: "three", Status: PlanStepPending},
 			},
 		})

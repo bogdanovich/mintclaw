@@ -211,8 +211,51 @@ func TestModelRendersAuthoritativeSemanticCells(t *testing.T) {
 		t.Fatalf("updated model semantic cells = %+v", model.cells)
 	}
 	if after := renderedModelTranscript(model, 80); after == before ||
-		!strings.Contains(after, "• Updated Plan") || !strings.Contains(after, "→ Inspect") {
+		!strings.Contains(after, "• Updated Plan") || !strings.Contains(after, "□ Inspect") {
 		t.Fatalf("semantic plan cell was not visible:\nbefore: %q\n after: %q", before, after)
+	}
+}
+
+func TestModelHidesOnlySuccessfulToolCardRepresentedByNativePlan(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := frontend.PlanState{Steps: []frontend.PlanStepState{{
+		Step: "Inspect", Status: frontend.PlanStepInProgress,
+	}}}
+	projector.ToolStarted("turn-1", "call-1", "update_plan", "")
+	projector.ToolPlanObserved("turn-1", "call-1")
+	projector.PlanUpdated("turn-1", "call-1", plan)
+	projector.ToolCompleted("turn-1", "call-1", "update_plan", "", 0, false, nil)
+
+	projector.ToolStarted("turn-2", "call-2", "update_plan", "")
+	projector.ToolPlanObserved("turn-2", "call-2")
+	projector.PlanUpdated("turn-2", "call-2", plan)
+	projector.ToolCompleted("turn-2", "call-2", "update_plan", "", 0, false, nil)
+
+	projector.ToolStarted("turn-3", "call-3", "update_plan", "")
+	projector.ToolCompleted("turn-3", "call-3", "update_plan", "invalid plan", 0, true, nil)
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.installSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	rendered := renderedModelTranscript(model, 80)
+	if strings.Count(rendered, "Updated Plan") != 1 ||
+		strings.Contains(rendered, "Tool update_plan [succeeded]") ||
+		!strings.Contains(rendered, "Tool update_plan [failed]") {
+		t.Fatalf("native plan/tool visibility = %q", rendered)
+	}
+	model.navigateTools(1)
+	if model.selectedToolID != toolViewID(snapshot.Tools[len(snapshot.Tools)-1]) {
+		t.Fatalf("tool navigation selected hidden native-plan card: %q", model.selectedToolID)
 	}
 }
 
@@ -484,7 +527,11 @@ func TestSemanticCellRolesPreservePlanAndVerifiedWriteMeaning(t *testing.T) {
 		plan.Lines[2].Spans[0].Role,
 		plan.Lines[3].Spans[0].Role,
 	}
-	if !reflect.DeepEqual(roles, []cellStyleRole{cellStyleSuccess, cellStyleAccent, cellStyleMuted}) {
+	if !reflect.DeepEqual(roles, []cellStyleRole{
+		cellStylePlanCompleted,
+		cellStylePlanCurrent,
+		cellStylePlanPending,
+	}) {
 		t.Fatalf("plan roles = %v", roles)
 	}
 
