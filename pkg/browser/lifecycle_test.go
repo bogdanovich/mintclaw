@@ -707,6 +707,29 @@ func TestBrokerPolicyChangeInvalidatesSession(t *testing.T) {
 	}
 }
 
+func TestBrokerProfileRevisionChangeInvalidatesSession(t *testing.T) {
+	factory := &fakeWorkerFactory{}
+	broker := lifecycleTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)
+	session, err := broker.Open(
+		context.Background(),
+		OpenRequest{Owner: testOwner(), Target: "gateway", Profile: "managed"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := broker.config.Targets["gateway"]
+	profile := target.Profiles["managed"]
+	profile.Revision = "managed-v2"
+	target.Profiles["managed"] = profile
+	broker.config.Targets["gateway"] = target
+
+	got, err := broker.Status(context.Background(), testOwner(), session.ID)
+	if err != nil || got.State != SessionLost || got.SafeFailure != "policy_changed" ||
+		factory.workers[0].closed != 1 {
+		t.Fatalf("Status() = %+v, %v; worker = %+v", got, err, factory.workers[0])
+	}
+}
+
 func lifecycleTestBroker(t *testing.T, cfg *config.Config, store Store, factory WorkerFactory) *Broker {
 	t.Helper()
 	broker, err := NewBroker(cfg, store, factory)

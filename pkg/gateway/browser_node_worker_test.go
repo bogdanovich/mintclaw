@@ -324,6 +324,7 @@ func TestGatewayBrowserWorkerCloseAcceptsConfirmedMissingCompanionSession(t *tes
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -338,6 +339,33 @@ func TestGatewayBrowserWorkerCloseAcceptsConfirmedMissingCompanionSession(t *tes
 	status, err := worker.Status(t.Context())
 	if err != nil || status != browser.WorkerLost {
 		t.Fatalf("Status() = %q, %v", status, err)
+	}
+}
+
+func TestGatewayBrowserWorkerRejectsMissingOrMismatchedProfileRevisionBeforeNodeDispatch(t *testing.T) {
+	cfg, runtime, handler := browserNodeTestRuntime(t)
+	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, revision := range []string{"", "managed-v2"} {
+		_, openErr := factory.Open(t.Context(), browser.WorkerOpenRequest{
+			Owner: browser.Owner{
+				ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
+				SessionKey: "session_test", ExecutionID: "execution_test",
+			},
+			SessionID: "browser_revision_test", Target: "companion", Profile: "managed",
+			ProfileRevision: revision, DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		})
+		if !errors.Is(openErr, browser.ErrDenied) {
+			t.Fatalf("Open(profile revision %q) error = %v, want ErrDenied", revision, openErr)
+		}
+	}
+	handler.mu.Lock()
+	dispatched := len(handler.commands)
+	handler.mu.Unlock()
+	if dispatched != 0 {
+		t.Fatalf("profile revision rejection dispatched %d companion commands", dispatched)
 	}
 }
 
@@ -758,6 +786,7 @@ func TestNodeBrowserWorkerFreshObservationInvalidatesOlderActionCache(t *testing
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -817,6 +846,7 @@ func TestNodeBrowserWorkerPreservesVerifiedNavigationFailure(t *testing.T) {
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -897,6 +927,7 @@ func TestGatewayBrowserWorkerRefreshesRecoveredObservationWithFreshInvocation(t 
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -933,6 +964,7 @@ func TestGatewayBrowserWorkerRetriesTransientStaleObservationWithFreshInvocation
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -974,6 +1006,7 @@ func TestGatewayBrowserWorkerRefreshesProtectedDiagnosticsWithFreshInvocation(t 
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1010,6 +1043,7 @@ func TestGatewayBrowserWorkerAdvancesAfterDownloadWithoutOutput(t *testing.T) {
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1064,6 +1098,7 @@ func TestGatewayBrowserWorkerRefreshesRecoveredContextWithoutReplayingMutation(t
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1113,6 +1148,7 @@ func TestGatewayBrowserWorkerInvalidatesCachedObservationWhenContextCatalogChang
 				},
 				SessionID: "browser_session_test", Target: "companion",
 				Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+				ProfileRevision: "managed-v1",
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1181,6 +1217,7 @@ func TestGatewayBrowserWorkerRefreshesRecoveredSelectObservationWithoutReplay(t 
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1693,6 +1730,7 @@ func TestGatewayBrowserDiagnosticsCapabilityIsIndependentFromCoreReadiness(t *te
 		},
 		SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatalf("core browser open failed without diagnostics approval: %v", err)
@@ -1806,6 +1844,7 @@ func TestGatewayBrowserWorkerPinsSessionToResolvedNodeAuthority(t *testing.T) {
 	opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
 		Owner: owner, SessionID: "browser_session_test", Target: "companion",
 		Profile: "managed", DryRun: true, Limits: cfg.Tools.Browser.Limits.Effective(),
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatal(err)

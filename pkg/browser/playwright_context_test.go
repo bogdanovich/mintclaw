@@ -741,6 +741,7 @@ func TestPlaywrightContextWorkerRealBrowserTabsAndNestedFrames(t *testing.T) {
 	opened, err := factory.Open(ctx, WorkerOpenRequest{
 		SessionID: "context_real_fixture",
 		Target:    "gateway", Profile: "managed", DryRun: true, Limits: config.BrowserLimitsConfig{},
+		ProfileRevision: "managed-v1",
 	})
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

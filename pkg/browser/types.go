@@ -182,6 +182,7 @@ type ScreenshotCapture struct {
 	SessionID          string
 	Target             string
 	Profile            string
+	ProfileRevision    string
 	PolicyRevision     string
 	TabID              string
 	FrameID            string
@@ -367,6 +368,7 @@ type Session struct {
 	Profile                string          `json:"profile"`
 	State                  SessionState    `json:"state"`
 	DryRun                 bool            `json:"dry_run"`
+	ProfileRevision        string          `json:"profile_revision,omitempty"`
 	PolicyRevision         string          `json:"policy_revision"`
 	ControllerGeneration   uint64          `json:"controller_generation"`
 	Controller             ControllerState `json:"controller"`
@@ -392,7 +394,9 @@ type Session struct {
 
 func (session Session) Validate() error {
 	if !validIdentifier(session.ID) || !validIdentifier(session.Target) ||
-		!validIdentifier(session.Profile) || !validIdentifier(session.PolicyRevision) ||
+		!validIdentifier(session.Profile) ||
+		(session.ProfileRevision != "" && !validIdentifier(session.ProfileRevision)) ||
+		!validIdentifier(session.PolicyRevision) ||
 		!session.State.Valid() || session.Owner.Validate() != nil ||
 		session.ControllerGeneration == 0 || !session.EffectiveController().Valid() ||
 		!validIdentifier(session.TabID) || session.Revision == 0 ||
@@ -519,6 +523,7 @@ type PreparedAction struct {
 	WorkerRestrictedDecision   string `json:"worker_restricted_decision,omitempty"`
 	WorkerRestrictedRevision   string `json:"worker_restricted_revision,omitempty"`
 	DryRun                     bool   `json:"dry_run"`
+	ProfileRevision            string `json:"profile_revision,omitempty"`
 	PolicyRevision             string `json:"policy_revision"`
 	CatalogRevision            string `json:"catalog_revision"`
 	ActionHash                 string `json:"action_hash"`
@@ -541,6 +546,7 @@ func (prepared PreparedAction) Validate(maxTextBytes int) error {
 		!browserpolicy.ApprovalModeValid(prepared.ApprovalMode) ||
 		!browserpolicy.ConfirmationValid(prepared.Confirmation) ||
 		prepared.DialogMessageBytes < 0 || prepared.DialogMessageBytes > MaxDialogMessageBytes ||
+		(prepared.ProfileRevision != "" && !validIdentifier(prepared.ProfileRevision)) ||
 		!validIdentifier(prepared.PolicyRevision) || !validDigest(prepared.CatalogRevision) ||
 		!validDigest(prepared.ActionHash) ||
 		(prepared.ProgressSignature != "" && !validDigest(prepared.ProgressSignature)) ||

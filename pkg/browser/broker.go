@@ -24,12 +24,13 @@ const (
 )
 
 type WorkerOpenRequest struct {
-	SessionID string
-	Owner     Owner
-	Target    string
-	Profile   string
-	DryRun    bool
-	Limits    config.BrowserLimitsConfig
+	SessionID       string
+	Owner           Owner
+	Target          string
+	Profile         string
+	ProfileRevision string
+	DryRun          bool
+	Limits          config.BrowserLimitsConfig
 }
 
 type Worker interface {
@@ -484,7 +485,8 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 	limits := broker.config.Limits.Effective()
 	session := Session{
 		ID: id, Owner: request.Owner, Target: request.Target, Profile: request.Profile,
-		State: SessionOpening, DryRun: profile.DryRun, PolicyRevision: broker.policyRevision,
+		State: SessionOpening, DryRun: profile.DryRun,
+		ProfileRevision: profile.Revision, PolicyRevision: broker.policyRevision,
 		ControllerGeneration: 1, Controller: ControllerAgent,
 		TabID: "tab_primary", Revision: 1, CreatedAt: now.UnixNano(),
 		UpdatedAt: now.UnixNano(), LastActivityAt: now.UnixNano(),
@@ -502,7 +504,7 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 	}
 	opened, openErr := broker.factory.Open(ctx, WorkerOpenRequest{
 		SessionID: session.ID, Owner: session.Owner, Target: session.Target, Profile: session.Profile,
-		DryRun: session.DryRun, Limits: limits,
+		ProfileRevision: session.ProfileRevision, DryRun: session.DryRun, Limits: limits,
 	})
 	if openErr != nil {
 		return broker.finishFailedOpen(ctx, session, opened.Owner)
@@ -801,7 +803,7 @@ func (broker *Broker) Status(ctx context.Context, owner Owner, sessionID string)
 	if !session.Owner.Equal(owner) {
 		return Session{}, ErrNotFound
 	}
-	if !session.State.Terminal() && session.PolicyRevision != broker.policyRevision {
+	if !session.State.Terminal() && !broker.sessionAuthorityCurrent(session) {
 		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
 	}
 	if !session.State.Terminal() && broker.sessionExpired(session, broker.now().UTC()) {
@@ -1062,7 +1064,7 @@ func (broker *Broker) Touch(ctx context.Context, owner Owner, sessionID string) 
 		broker.slots[session.ID] == nil {
 		return Session{}, ErrWorkerUnavailable
 	}
-	if session.PolicyRevision != broker.policyRevision {
+	if !broker.sessionAuthorityCurrent(session) {
 		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
 	}
 	now := broker.now().UTC()
@@ -1116,9 +1118,9 @@ func (broker *Broker) Sweep(ctx context.Context) error {
 			continue
 		}
 		if !session.State.Terminal() &&
-			(session.PolicyRevision != broker.policyRevision || broker.sessionExpired(session, now)) {
+			(!broker.sessionAuthorityCurrent(session) || broker.sessionExpired(session, now)) {
 			state, failure := SessionExpired, ""
-			if session.PolicyRevision != broker.policyRevision {
+			if !broker.sessionAuthorityCurrent(session) {
 				state, failure = SessionLost, "policy_changed"
 			}
 			if _, err = broker.finishSessionLocked(ctx, session, state, failure); err != nil {
@@ -1520,7 +1522,7 @@ func (broker *Broker) executePreparedLocked(
 		!session.Owner.Equal(owner) {
 		return Invocation{}, ErrWorkerUnavailable
 	}
-	if session.PolicyRevision != broker.policyRevision {
+	if !broker.sessionAuthorityCurrent(session) {
 		if _, finishErr := broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed"); finishErr != nil {
 			return Invocation{}, errors.Join(ErrWorkerUnavailable, finishErr)
 		}

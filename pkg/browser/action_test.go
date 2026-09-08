@@ -599,7 +599,8 @@ func TestBrokerHonorsDeclaredClickNavigationWithoutApproval(t *testing.T) {
 		Action:         Action{Kind: ActionClick, Ref: onlyVisibleRef(t, observed.Snapshot)},
 		DeclaredEffect: EffectNavigation,
 	})
-	if err != nil || prepared.RequiresApproval || prepared.Action.Effect != EffectNavigation {
+	if err != nil || prepared.RequiresApproval || prepared.Action.Effect != EffectNavigation ||
+		prepared.Action.ProfileRevision != session.ProfileRevision {
 		t.Fatalf("PrepareAction() = %+v, %v", prepared, err)
 	}
 	invocation, err := broker.ExecuteAction(t.Context(), owner, prepared.Action.ID, nil)
@@ -2647,6 +2648,69 @@ func TestFileStorePersistsPreparedApprovalBinding(t *testing.T) {
 	got, err := reopened.GetPreparedAction(context.Background(), prepared.Action.ID)
 	if err != nil || got != prepared.Action {
 		t.Fatalf("reopened prepared action = %+v, %v; want %+v", got, err, prepared.Action)
+	}
+}
+
+func TestFileStoreReadsVersionTwoAuthorityWithoutProfileRevision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "browser.json")
+	store, err := NewFileStore(path, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, _, session := openActionTestBroker(t, store)
+	owner := testOwner()
+	observation, err := broker.Observe(t.Context(), owner, session.ID, session.TabID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := broker.PrepareAction(t.Context(), PrepareActionRequest{
+		Owner: owner, RequestID: "request_legacy_v2", SessionID: session.ID, TabID: session.TabID,
+		SnapshotID: observation.SnapshotID, SnapshotGeneration: observation.SnapshotGeneration,
+		Action: Action{Kind: ActionNavigate, URL: "https://example.com/next"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document fileStoreDocument
+	if err = json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	legacySession := document.Sessions[session.ID]
+	legacySession.ProfileRevision = ""
+	document.Sessions[session.ID] = legacySession
+	legacyPrepared := document.PreparedActions[prepared.Action.ID]
+	legacyPrepared.ProfileRevision = ""
+	legacyPrepared.ActionHash, err = hashPreparedAction(legacyPrepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.PreparedActions[prepared.Action.ID] = legacyPrepared
+	raw, err = json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewFileStore(path, 0, 0)
+	if err != nil {
+		t.Fatalf("NewFileStore(legacy version 2) error = %v", err)
+	}
+	defer reopened.Close()
+	gotSession, sessionErr := reopened.GetSession(t.Context(), session.ID)
+	gotPrepared, preparedErr := reopened.GetPreparedAction(t.Context(), prepared.Action.ID)
+	if sessionErr != nil || preparedErr != nil || gotSession.ProfileRevision != "" ||
+		gotPrepared.ProfileRevision != "" {
+		t.Fatalf(
+			"legacy authority = session %+v (%v), prepared %+v (%v)",
+			gotSession, sessionErr, gotPrepared, preparedErr,
+		)
 	}
 }
 

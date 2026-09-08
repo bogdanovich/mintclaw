@@ -242,7 +242,7 @@ func (source *gatewayBrowserToolSource) retainScreenshot(
 	}
 	spec := nodes.TransferArtifactSpec{
 		TransferID: request.RequestID, Direction: nodes.TransferDirectionDownload,
-		Target: capture.Target, ProfileRevision: capture.PolicyRevision,
+		Target: capture.Target, ProfileRevision: capture.ProfileRevision,
 		SourceKind: browserScreenshotKind(captureTarget), SourceScope: capture.TabID,
 		SourceID: capture.SnapshotID, SourceRevision: capture.SnapshotGeneration,
 		Filename: browserScreenshotFilename, ContentType: capture.ContentType,

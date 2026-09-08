@@ -600,6 +600,7 @@ func (factory *PlaywrightWorkerFactory) Open(
 ) (WorkerOpenResult, error) {
 	if factory == nil || factory.clientFactory == nil || request.Target != factory.target ||
 		request.Profile != factory.profileName || request.DryRun != factory.profileConfig.DryRun ||
+		request.ProfileRevision != factory.profileConfig.Revision ||
 		!validIdentifier(request.SessionID) {
 		return WorkerOpenResult{}, ErrDenied
 	}
