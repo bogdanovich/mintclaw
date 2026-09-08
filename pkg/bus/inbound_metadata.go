@@ -1,5 +1,11 @@
 package bus
 
+// This key is read only while normalizing durable spool records written before
+// MintClaw client session provenance became typed. New adapters must write
+// InboundContext.ClientSessionID instead. Remove this compatibility reader
+// after pre-M4 MintClaw inbound spools have drained from supported deployments.
+const legacyInboundClientSessionIDKey = "session_id"
+
 // These keys are read only while normalizing durable spool records written
 // before inbound interaction projections became typed. New adapters must write
 // InboundContext.Interaction instead. Remove this compatibility reader after

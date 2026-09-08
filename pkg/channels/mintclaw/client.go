@@ -280,14 +280,14 @@ func (c *MintClawClientChannel) handleServerMessage(pc *mintclawConn, msg MintCl
 	}
 
 	inboundCtx := bus.InboundContext{
-		Channel:   "mintclaw_client",
-		ChatID:    chatID,
-		ChatType:  "direct",
-		SenderID:  senderID,
-		MessageID: msg.ID,
+		Channel:         "mintclaw_client",
+		ChatID:          chatID,
+		ChatType:        "direct",
+		SenderID:        senderID,
+		MessageID:       msg.ID,
+		ClientSessionID: sessionID,
 		Raw: map[string]string{
-			"platform":   "mintclaw_client",
-			"session_id": sessionID,
+			"platform": "mintclaw_client",
 		},
 	}
 

@@ -133,6 +133,65 @@ func TestPublishInbound_NormalizesContext(t *testing.T) {
 	}
 }
 
+func TestNormalizeInboundContextMigratesMintClawClientSessionID(t *testing.T) {
+	tests := []struct {
+		name            string
+		context         InboundContext
+		wantSessionID   string
+		wantRawSession  string
+		wantRawMetadata string
+	}{
+		{
+			name: "legacy mintclaw metadata",
+			context: InboundContext{
+				Channel: " MINTCLAW ",
+				Raw: map[string]string{
+					legacyInboundClientSessionIDKey: " legacy-session ",
+					"transport":                     "websocket",
+				},
+			},
+			wantSessionID:   "legacy-session",
+			wantRawMetadata: "websocket",
+		},
+		{
+			name: "typed provenance wins",
+			context: InboundContext{
+				Channel:         "mintclaw",
+				ClientSessionID: " typed-session ",
+				Raw:             map[string]string{legacyInboundClientSessionIDKey: "stale-session"},
+			},
+			wantSessionID: "typed-session",
+		},
+		{
+			name: "other channel retains adapter metadata",
+			context: InboundContext{
+				Channel: "telegram",
+				Raw:     map[string]string{legacyInboundClientSessionIDKey: "adapter-session"},
+			},
+			wantRawSession: "adapter-session",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := NormalizeInboundContext(test.context)
+			if got.ClientSessionID != test.wantSessionID {
+				t.Fatalf("ClientSessionID = %q, want %q", got.ClientSessionID, test.wantSessionID)
+			}
+			if got.Raw[legacyInboundClientSessionIDKey] != test.wantRawSession {
+				t.Fatalf(
+					"legacy raw session = %q, want %q",
+					got.Raw[legacyInboundClientSessionIDKey],
+					test.wantRawSession,
+				)
+			}
+			if got.Raw["transport"] != test.wantRawMetadata {
+				t.Fatalf("transport metadata = %q, want %q", got.Raw["transport"], test.wantRawMetadata)
+			}
+		})
+	}
+}
+
 func TestInboundPayloadJSONOwnsAddressingInContext(t *testing.T) {
 	tests := map[string]any{
 		"turn": InboundMessage{
@@ -246,11 +305,12 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 	optionIndex := 0
 	if publishErr := first.PublishInbound(context.Background(), InboundMessage{
 		Context: InboundContext{
-			Channel:    "slack",
-			ChatID:     "chat",
-			TopicID:    "topic-a",
-			SenderID:   "user",
-			ReceivedAt: receivedAt,
+			Channel:         "slack",
+			ChatID:          "chat",
+			TopicID:         "topic-a",
+			SenderID:        "user",
+			ClientSessionID: "frontend-session-1",
+			ReceivedAt:      receivedAt,
 			Relation: InboundMessageRelation{
 				Kind:      InboundRelationAdjacentFollowupMedia,
 				MediaOnly: true,
@@ -301,6 +361,9 @@ func TestReplayInboundMessagesReplaysCapturedUnackedMessage(t *testing.T) {
 	}
 	if got.Context.TopicID != "topic-a" {
 		t.Fatalf("topic id = %q, want topic-a", got.Context.TopicID)
+	}
+	if got.Context.ClientSessionID != "frontend-session-1" {
+		t.Fatalf("client session ID = %q, want frontend-session-1", got.Context.ClientSessionID)
 	}
 	if got.SessionKey != "agent:main:slack:chat:topic-a" {
 		t.Fatalf("session key = %q, want topic session", got.SessionKey)
@@ -384,8 +447,9 @@ func TestPendingLegacySpoolRecordHydratesContext(t *testing.T) {
 		ReceivedAt: receivedAt,
 		Message: InboundMessage{
 			Context: InboundContext{
-				Channel: "telegram", ChatID: "chat", SenderID: "user",
+				Channel: "mintclaw", ChatID: "mintclaw:legacy-session", SenderID: "user",
 				Raw: map[string]string{
+					legacyInboundClientSessionIDKey:              " legacy-session ",
 					legacyInboundInteractionResponseErrorKey:     " unresolved callback option ",
 					legacyInboundInteractionShortIDKey:           " abc12345 ",
 					legacyInboundInteractionOptionIndexKey:       "0",
@@ -409,6 +473,9 @@ func TestPendingLegacySpoolRecordHydratesContext(t *testing.T) {
 	}
 	if pending[0].Context.MediaGroup.ID != "" || len(pending[0].Context.MediaGroup.MessageIDs) != 0 {
 		t.Fatalf("legacy media group = %#v, want zero value", pending[0].Context.MediaGroup)
+	}
+	if pending[0].Context.ClientSessionID != "legacy-session" {
+		t.Fatalf("legacy client session ID = %q, want legacy-session", pending[0].Context.ClientSessionID)
 	}
 	projection := pending[0].Context.Interaction
 	if !projection.Unresolved || projection.ShortID != "abc12345" ||

@@ -94,6 +94,8 @@ type InboundContext struct {
 	OriginType string `json:"origin_type,omitempty"`
 	SourceRef  string `json:"source_ref,omitempty"`
 
+	ClientSessionID string `json:"client_session_id,omitempty"`
+
 	Mentioned bool `json:"mentioned,omitempty"`
 
 	ReplyToMessageID string                       `json:"reply_to_message_id,omitempty"`
