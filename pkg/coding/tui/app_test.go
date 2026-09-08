@@ -79,6 +79,37 @@ func TestRunClosesControllerAfterProgramFailure(t *testing.T) {
 	}
 }
 
+func TestRunFlushesActivePresentationIndexBeforeClosingController(t *testing.T) {
+	controller := newController(t)
+	controller.TurnStarted("turn-1", "inspect")
+	controller.AssistantAccumulated("turn-1", "working", false)
+	var rendered *Model
+
+	err := Run(t.Context(), controller, Options{
+		newProgram: func(model tea.Model, _ ...tea.ProgramOption) program {
+			var ok bool
+			rendered, ok = model.(*Model)
+			if !ok {
+				t.Fatalf("model = %T", model)
+			}
+			if len(rendered.cells.active) != 1 {
+				t.Fatalf("active cells before shutdown = %d", len(rendered.cells.active))
+			}
+			return fakeProgram{model: model}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendered == nil || len(rendered.cells.active) != 0 ||
+		len(rendered.cells.committed) != len(rendered.cells.ordered) {
+		t.Fatalf("presentation index was not flushed: %+v", rendered.cells)
+	}
+	if lifecycle := rendered.cells.byID[rendered.cells.ordered[1].Identity().ID].Identity().Lifecycle; lifecycle != frontend.PresentationActive {
+		t.Fatalf("shutdown rewrote runtime lifecycle to %q", lifecycle)
+	}
+}
+
 func TestRunNoColorDisablesComposerANSI(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)

@@ -38,7 +38,9 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 	}
 	model.resize(100, 30)
 	collapsed := renderedModelTranscript(model, 100)
-	for _, marker := range []string{"[running]", "[suspended]", "[ok]", "[failed]", "[interrupted]", "[unknown]"} {
+	for _, marker := range []string{
+		"[running]", "[suspended]", "[succeeded]", "[failed]", "[interrupted]", "[unknown]",
+	} {
 		if !strings.Contains(collapsed, marker) {
 			t.Fatalf("collapsed cards omit %q: %q", marker, collapsed)
 		}
@@ -55,8 +57,8 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
 	expanded := renderedModelTranscript(model, 100)
 	for _, want := range []string{
-		"command canceled", "exit 130", "background", "[output truncated]", "stdout:", "safe stdout", "stderr:",
-		"safe stderr", "duration 1.5s",
+		"[interrupted]", "exit: 130", "execution: background", "[…truncated]", "stdout:", "safe stdout", "stderr:",
+		"safe stderr", "· 1.5s",
 	} {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expanded card omits %q: %q", want, expanded)
@@ -276,20 +278,9 @@ func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
 }
 
 func renderedModelTranscript(model *Model, width int) string {
-	state := model.snapshot
-	content, _ := renderTranscript(
-		buildTranscriptView(
-			model.transcript.entries(state.Entries),
-			state.Tools,
-			state.ChangedFiles,
-			state.Workspace,
-			model.selectedToolID,
-			model.expandedToolID,
-		),
-		width,
-		false,
-		false,
-		false,
-	)
-	return content
+	if model.viewport.Width != width {
+		model.viewport.Width = width
+		model.refreshViewport()
+	}
+	return model.document.text()
 }

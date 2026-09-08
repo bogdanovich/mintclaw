@@ -182,7 +182,7 @@ func TestSemanticCellOwnsTypedPayloadAndSanitizesEveryRenderMode(t *testing.T) {
 	}
 }
 
-func TestModelOwnsSemanticCellsWhileKeepingCompatibilityViewport(t *testing.T) {
+func TestModelRendersAuthoritativeSemanticCells(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -210,12 +210,9 @@ func TestModelOwnsSemanticCellsWhileKeepingCompatibilityViewport(t *testing.T) {
 	if len(model.cells.ordered) != 2 || model.cells.ordered[1].Identity().Kind != frontend.PresentationPlanUpdate {
 		t.Fatalf("updated model semantic cells = %+v", model.cells)
 	}
-	if after := renderedModelTranscript(model, 80); after != before {
-		t.Fatalf(
-			"semantic cell admission changed shipped compatibility viewport:\nbefore: %q\n after: %q",
-			before,
-			after,
-		)
+	if after := renderedModelTranscript(model, 80); after == before ||
+		!strings.Contains(after, "• Updated Plan") || !strings.Contains(after, "→ Inspect") {
+		t.Fatalf("semantic plan cell was not visible:\nbefore: %q\n after: %q", before, after)
 	}
 }
 

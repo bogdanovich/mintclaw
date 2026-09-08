@@ -396,34 +396,6 @@ type transcriptAnchor struct {
 	valid  bool
 }
 
-func (l transcriptLayout) anchorAt(line int) transcriptAnchor {
-	for _, block := range l.blocks {
-		if line >= block.start && line < block.end {
-			return transcriptAnchor{id: block.id, offset: line - block.start, valid: true}
-		}
-		if line < block.start {
-			return transcriptAnchor{id: block.id, valid: true}
-		}
-	}
-	if len(l.blocks) > 0 {
-		block := l.blocks[len(l.blocks)-1]
-		return transcriptAnchor{id: block.id, offset: max(0, block.end-block.start-1), valid: true}
-	}
-	return transcriptAnchor{}
-}
-
-func (l transcriptLayout) lineFor(anchor transcriptAnchor) (int, bool) {
-	if !anchor.valid {
-		return 0, false
-	}
-	for _, block := range l.blocks {
-		if block.id == anchor.id {
-			return block.start + min(anchor.offset, max(0, block.end-block.start-1)), true
-		}
-	}
-	return 0, false
-}
-
 func renderTranscript(
 	entries []transcriptViewEntry,
 	width int,
