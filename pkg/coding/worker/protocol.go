@@ -440,7 +440,7 @@ func DecodeEventPayload(event EventName, raw json.RawMessage) (any, error) {
 	if !event.Valid() {
 		return nil, fmt.Errorf("%w: unsupported event payload %q", ErrInvalidRecord, event)
 	}
-	if err := validateEventText(raw); err != nil {
+	if err := validateProtocolText(raw); err != nil {
 		return nil, err
 	}
 	var payload interface{ Validate() error }
@@ -488,10 +488,20 @@ func validateSnapshotEvent(identity ControlIdentity, snapshot Snapshot) error {
 	if len(snapshot.Items) > MaxEventItems {
 		return fmt.Errorf("%w: coding worker snapshot exceeds collection limits", ErrInvalidRecord)
 	}
+	seenItemIDs := make(map[string]struct{}, len(snapshot.Items))
+	var previousSequence uint64
 	for _, item := range snapshot.Items {
 		if err := (ItemUpdatedPayload{ControlIdentity: identity, Item: item}).Validate(); err != nil {
 			return err
 		}
+		if _, duplicate := seenItemIDs[item.ID]; duplicate {
+			return fmt.Errorf("%w: duplicate coding snapshot item identity", ErrInvalidRecord)
+		}
+		if previousSequence != 0 && item.Sequence <= previousSequence {
+			return fmt.Errorf("%w: coding snapshot item sequence is not increasing", ErrInvalidRecord)
+		}
+		seenItemIDs[item.ID] = struct{}{}
+		previousSequence = item.Sequence
 	}
 	if snapshot.ContextUsage.UsedTokens < 0 || snapshot.ContextUsage.LimitTokens < 0 {
 		return fmt.Errorf("%w: malformed coding snapshot context usage", ErrInvalidRecord)
@@ -639,19 +649,19 @@ func validPlanState(plan frontend.PlanState) bool {
 	return true
 }
 
-func validateEventText(raw json.RawMessage) error {
+func validateProtocolText(raw json.RawMessage) error {
 	var value any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if err := decoder.Decode(&value); err != nil {
-		return fmt.Errorf("%w: malformed event payload: %w", ErrInvalidRecord, err)
+		return fmt.Errorf("%w: malformed protocol payload: %w", ErrInvalidRecord, err)
 	}
 	var inspect func(any) error
 	inspect = func(current any) error {
 		switch typed := current.(type) {
 		case string:
 			if len(typed) > MaxEventTextBytes || !utf8.ValidString(typed) || containsTerminalControl(typed) {
-				return fmt.Errorf("%w: event payload contains unsafe or oversized text", ErrInvalidRecord)
+				return fmt.Errorf("%w: protocol payload contains unsafe or oversized text", ErrInvalidRecord)
 			}
 		case []any:
 			for _, entry := range typed {
@@ -740,6 +750,9 @@ func DecodeRequestPayload(method Method, raw json.RawMessage) (any, error) {
 	default:
 		return nil, fmt.Errorf("%w: unsupported request method %q", ErrInvalidRecord, method)
 	}
+	if err := validateProtocolText(raw); err != nil {
+		return nil, err
+	}
 	if err := DecodePayload(raw, payload); err != nil {
 		return nil, err
 	}
@@ -769,6 +782,9 @@ func DecodeResultPayload(method Method, raw json.RawMessage) (any, error) {
 		payload = &AckResult{}
 	default:
 		return nil, fmt.Errorf("%w: unsupported response method %q", ErrInvalidRecord, method)
+	}
+	if err := validateProtocolText(raw); err != nil {
+		return nil, err
 	}
 	if err := DecodePayload(raw, payload); err != nil {
 		return nil, err
@@ -1046,7 +1062,7 @@ func validateStructuredText(value any) error {
 	if err != nil {
 		return fmt.Errorf("%w: encode protocol value for text validation: %w", ErrInvalidRecord, err)
 	}
-	return validateEventText(raw)
+	return validateProtocolText(raw)
 }
 
 func validIdentifier(value string) bool {

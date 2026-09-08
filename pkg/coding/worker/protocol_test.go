@@ -506,6 +506,56 @@ func TestDecodePayloadRejectsUnknownAndDuplicateFields(t *testing.T) {
 	}
 }
 
+func TestRequestPayloadRejectsTextThatCannotReachEvents(t *testing.T) {
+	binding := testBinding(t)
+	params := mustPayload(t, TurnSteerParams{
+		ControlIdentity: binding.ControlIdentity(),
+		Text:            "inspect\bthe parser",
+	})
+	record := Record{
+		SchemaVersion: ProtocolV1, Type: RecordRequest, ID: "steer-1",
+		Method: MethodTurnSteer, IdempotencyKey: "steer-1", Params: params,
+	}
+	if _, err := Encode(record); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("Encode(unsafe steer) error = %v, want %v", err, ErrInvalidRecord)
+	}
+}
+
+func TestSnapshotRejectsAmbiguousItemIdentityAndOrder(t *testing.T) {
+	binding := testBinding(t)
+	first := validSnapshotItem("item-1", "message-1", 1)
+	second := validSnapshotItem("item-2", "message-2", 2)
+	duplicateID := second
+	duplicateID.ID = first.ID
+	duplicateSequence := second
+	duplicateSequence.Sequence = first.Sequence
+	lateFirst := first
+	lateFirst.Sequence = 2
+	earlySecond := second
+	earlySecond.Sequence = 1
+	for name, items := range map[string][]frontend.PresentationItem{
+		"duplicate ID":        {first, duplicateID},
+		"duplicate sequence":  {first, duplicateSequence},
+		"decreasing sequence": {lateFirst, earlySecond},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := SnapshotResult{
+				ControlIdentity: binding.ControlIdentity(),
+				Snapshot: Snapshot{
+					ThreadID: binding.ThreadID, Activity: frontend.ActivityIdle, Items: items,
+				},
+			}
+			response := Record{
+				SchemaVersion: ProtocolV1, Type: RecordResponse, ID: "snapshot-1",
+				Method: MethodSnapshotRead, OK: boolPointer(true), Result: mustPayload(t, result),
+			}
+			if _, err := Encode(response); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("Encode(snapshot) error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
 func TestDecodeRejectsCaseFoldedJSONAliasesAtEveryDepth(t *testing.T) {
 	for name, malformed := range map[string][]byte{
 		"top-level alias": []byte(
@@ -558,6 +608,17 @@ func TestDecodeRejectsCaseFoldedJSONAliasesAtEveryDepth(t *testing.T) {
 
 func boolPointer(value bool) *bool {
 	return &value
+}
+
+func validSnapshotItem(id, messageID string, sequence uint64) frontend.PresentationItem {
+	return frontend.PresentationItem{
+		ID: id, TurnID: "turn-1", Sequence: sequence, Revision: 1,
+		Kind: frontend.PresentationAssistantMessage, Lifecycle: frontend.PresentationCompleted,
+		Message: &frontend.TranscriptEntry{
+			ID: messageID, TurnID: "turn-1", Kind: frontend.EntryAssistant,
+			Phase: frontend.AssistantPhaseFinal, Text: "done", Complete: true,
+		},
+	}
 }
 
 func mustPayload(t *testing.T, value any) json.RawMessage {
