@@ -23,6 +23,7 @@ func testBinding(t *testing.T) Binding {
 		TaskGenerationID:      "task-generation-1",
 		WorkerGenerationID:    "worker-generation-1",
 		ThreadID:              thread.NewThreadID(),
+		ThreadOpenMode:        ThreadOpenNew,
 		Project:               project,
 		ExecutionRoot:         project.ProjectRoot,
 		ExecutionRootIdentity: ExecutionRootIdentity(project.ProjectRoot),
@@ -67,6 +68,11 @@ func TestBindingPinsEveryWorkerAuthorityDimension(t *testing.T) {
 	if err := binding.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
+	resumed := binding
+	resumed.ThreadOpenMode = ThreadOpenResume
+	if err := resumed.Validate(); err != nil {
+		t.Fatalf("resume binding Validate() error = %v", err)
+	}
 	if err := binding.Authorize(binding.ControlIdentity()); err != nil {
 		t.Fatalf("Authorize() error = %v", err)
 	}
@@ -83,6 +89,7 @@ func TestBindingPinsEveryWorkerAuthorityDimension(t *testing.T) {
 		{name: "task generation", mutate: func(value *Binding) { value.TaskGenerationID = "bad id" }},
 		{name: "worker generation", mutate: func(value *Binding) { value.WorkerGenerationID = "" }},
 		{name: "thread", mutate: func(value *Binding) { value.ThreadID = "not-a-uuid" }},
+		{name: "thread open mode", mutate: func(value *Binding) { value.ThreadOpenMode = "discover" }},
 		{name: "project", mutate: func(value *Binding) { value.Project.ProjectKey = "changed" }},
 		{name: "execution root", mutate: func(value *Binding) { value.ExecutionRoot = "relative" }},
 		{

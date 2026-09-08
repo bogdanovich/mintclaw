@@ -829,6 +829,20 @@ func (mode TaskMode) Valid() bool {
 	return mode == TaskModeInvestigate || mode == TaskModeMutate
 }
 
+// ThreadOpenMode makes thread creation versus strict resume an immutable
+// supervisor decision. Workers must not infer this authority from whether
+// thread state happens to exist on disk.
+type ThreadOpenMode string
+
+const (
+	ThreadOpenNew    ThreadOpenMode = "new"
+	ThreadOpenResume ThreadOpenMode = "resume"
+)
+
+func (mode ThreadOpenMode) Valid() bool {
+	return mode == ThreadOpenNew || mode == ThreadOpenResume
+}
+
 // Binding is the immutable identity authorized before repository or model
 // construction. Project identifies the configured source project;
 // ExecutionRoot may become a distinct P7.3 worktree.
@@ -837,6 +851,7 @@ type Binding struct {
 	TaskGenerationID      string                 `json:"task_generation_id"`
 	WorkerGenerationID    string                 `json:"worker_generation_id"`
 	ThreadID              string                 `json:"thread_id"`
+	ThreadOpenMode        ThreadOpenMode         `json:"thread_open_mode"`
 	Project               thread.ProjectIdentity `json:"project"`
 	ExecutionRoot         string                 `json:"execution_root"`
 	ExecutionRootIdentity string                 `json:"execution_root_identity"`
@@ -873,11 +888,11 @@ func (binding Binding) Validate() error {
 	if binding.ExecutionRootIdentity != ExecutionRootIdentity(binding.ExecutionRoot) {
 		return fmt.Errorf("%w: execution root identity does not match its path", ErrInvalidRecord)
 	}
-	if !binding.Mode.Valid() || !validIdentifier(binding.ProviderProfile) ||
+	if !binding.ThreadOpenMode.Valid() || !binding.Mode.Valid() || !validIdentifier(binding.ProviderProfile) ||
 		!validBoundedText(binding.Model, MaxModelIDBytes) || !validIdentifier(binding.Provider) ||
 		!validBuildID(binding.ExpectedWorkerBuildID) {
 		return fmt.Errorf(
-			"%w: invalid mode, model/provider profile, or worker build identity",
+			"%w: invalid thread/task mode, model/provider profile, or worker build identity",
 			ErrInvalidRecord,
 		)
 	}
