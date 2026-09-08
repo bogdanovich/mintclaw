@@ -148,6 +148,7 @@ type agentToolInitConfig struct {
 type runtimeInstanceDependencies struct {
 	storeFactory CodingRuntimeStoreFactory
 	repository   *codingworkspace.Repository
+	readOnly     bool
 }
 
 type agentIdentityConfig struct {
@@ -198,11 +199,13 @@ func newCodingAgentInstance(
 	provider providers.LLMProvider,
 	layout CodingRuntimeLayout,
 	repository *codingworkspace.Repository,
+	readOnly bool,
 	storeFactory CodingRuntimeStoreFactory,
 ) (*AgentInstance, error) {
 	return newAgentInstance(agentCfg, defaults, cfg, provider, &layout, &runtimeInstanceDependencies{
 		storeFactory: storeFactory,
 		repository:   repository,
+		readOnly:     readOnly,
 	})
 }
 
@@ -319,7 +322,14 @@ func newAgentInstance(
 		if repository == nil {
 			repository = codingworkspace.NewRepository(workspace, workingDirectory, codingworkspace.Limits{})
 		}
-		if err := initCodingAgentTools(workspace, workingDirectory, cfg, toolInit, repository); err != nil {
+		if err := initCodingAgentTools(
+			workspace,
+			workingDirectory,
+			cfg,
+			toolInit,
+			repository,
+			runtimeDeps != nil && runtimeDeps.readOnly,
+		); err != nil {
 			_ = sessions.Close()
 			return nil, fmt.Errorf("construct agent: %w", err)
 		}
@@ -523,28 +533,32 @@ func initCodingAgentTools(
 	cfg *config.Config,
 	initCfg agentToolInitConfig,
 	repository *codingworkspace.Repository,
+	readOnly bool,
 ) error {
 	registerTool := func(tool toolshared.Tool) {
 		initCfg.toolsRegistry.Register(tool)
 	}
 	maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
-	registerTool(fstools.NewReadFileBytesTool(workspace, false, maxReadFileSize, nil))
-	registerTool(fstools.NewAppendFileTool(workspace, false, nil))
-	writeTool := fstools.NewWriteFileTool(workspace, false, nil)
-	writeTool.SetAlternativeTools([]string{"append_file"})
-	registerTool(writeTool)
-	registerTool(fstools.NewListDirTool(workspace, false, nil))
-	registerTool(fstools.NewSearchFilesTool(workspace, false, maxReadFileSize, nil))
+	registerTool(fstools.NewReadFileBytesTool(workspace, readOnly, maxReadFileSize, nil))
+	registerTool(fstools.NewListDirTool(workspace, readOnly, nil))
+	registerTool(fstools.NewSearchFilesTool(workspace, readOnly, maxReadFileSize, nil))
 
-	execCfg := *cfg
-	execCfg.Tools = cfg.Tools
-	execCfg.Tools.Exec = config.ExecConfig{TimeoutSeconds: cfg.Tools.Exec.TimeoutSeconds}
-	execTool, err := tools.NewCodingExecToolWithRuntimeConfig(workingDirectory, initCfg.execScratch, &execCfg)
-	if err != nil {
-		return fmt.Errorf("initialize coding exec tool: %w", err)
+	if !readOnly {
+		registerTool(fstools.NewAppendFileTool(workspace, false, nil))
+		writeTool := fstools.NewWriteFileTool(workspace, false, nil)
+		writeTool.SetAlternativeTools([]string{"append_file"})
+		registerTool(writeTool)
+
+		execCfg := *cfg
+		execCfg.Tools = cfg.Tools
+		execCfg.Tools.Exec = config.ExecConfig{TimeoutSeconds: cfg.Tools.Exec.TimeoutSeconds}
+		execTool, err := tools.NewCodingExecToolWithRuntimeConfig(workingDirectory, initCfg.execScratch, &execCfg)
+		if err != nil {
+			return fmt.Errorf("initialize coding exec tool: %w", err)
+		}
+		registerTool(execTool)
+		registerTool(fstools.NewApplyPatchTool(workspace, false, nil))
 	}
-	registerTool(execTool)
-	registerTool(fstools.NewApplyPatchTool(workspace, false, nil))
 	registerTool(tools.NewUpdatePlanTool())
 	registerTool(tools.NewRepositoryStatusTool(repository))
 	registerTool(tools.NewRepositoryDiffTool(repository))

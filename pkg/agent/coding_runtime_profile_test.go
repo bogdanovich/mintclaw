@@ -39,6 +39,15 @@ var codingRuntimeToolNames = []string{
 	"write_file",
 }
 
+var codingReadOnlyRuntimeToolNames = []string{
+	"list_dir",
+	"read_file",
+	"repository_diff",
+	"repository_status",
+	"search_files",
+	"update_plan",
+}
+
 type trackedRuntimeSessionStore struct {
 	session.SessionStore
 	session.HistoryRevisionProvider
@@ -434,6 +443,73 @@ func TestNewCodingAgentLoopSeparatesExecutionAndState(t *testing.T) {
 	}
 	if _, statErr := os.Stat(layout.StatePaths().SessionsRoot); statErr != nil {
 		t.Fatalf("state sessions root was not created: %v", statErr)
+	}
+}
+
+func TestNewCodingAgentLoopReadOnlyAuthorityOmitsMutationTools(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	if err := os.Mkdir(executionRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	insidePath := filepath.Join(executionRoot, "inside.txt")
+	if err := os.WriteFile(insidePath, []byte("inside evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outsidePath := filepath.Join(root, "outside.txt")
+	if err := os.WriteFile(outsidePath, []byte("outside secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := NewCodingRuntimeLayout(
+		"thread-read-only",
+		executionRoot,
+		filepath.Join(root, "private", "main"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID:  "main",
+		Layout:   layout,
+		ReadOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("NewCodingRuntimeProfile() error = %v", err)
+	}
+	if readOnly, ok := profile.AgentReadOnly("main"); !ok || !readOnly {
+		t.Fatalf("AgentReadOnly() = %v, %v, want true, true", readOnly, ok)
+	}
+
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.ContextManager = "none"
+	loop, err := NewCodingAgentLoop(t.Context(), cfg, bus.NewMessageBus(), &mockProvider{}, profile)
+	if err != nil {
+		t.Fatalf("NewCodingAgentLoop() error = %v", err)
+	}
+	t.Cleanup(loop.Close)
+
+	agent := loop.GetRegistry().GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("default agent is nil")
+	}
+	if got := agent.Tools.List(); !slices.Equal(got, codingReadOnlyRuntimeToolNames) {
+		t.Fatalf("read-only coding tools = %v, want %v", got, codingReadOnlyRuntimeToolNames)
+	}
+	for _, forbidden := range []string{"append_file", "apply_patch", "exec", "write_file"} {
+		if _, ok := agent.Tools.Get(forbidden); ok {
+			t.Fatalf("read-only coding runtime registered %q", forbidden)
+		}
+	}
+	readTool, ok := agent.Tools.Get("read_file")
+	if !ok {
+		t.Fatal("read-only coding runtime omitted read_file")
+	}
+	if result := readTool.Execute(t.Context(), map[string]any{"path": insidePath}); result.IsError {
+		t.Fatalf("read inside execution root: %s", result.ContentForLLM())
+	}
+	if result := readTool.Execute(t.Context(), map[string]any{"path": outsidePath}); !result.IsError {
+		t.Fatalf("read-only coding runtime read path outside execution root: %s", result.ContentForLLM())
 	}
 }
 
