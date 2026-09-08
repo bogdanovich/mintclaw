@@ -200,7 +200,11 @@ func (p *Pipeline) SetupTurn(ctx context.Context, ts *turnState) (*turnExecution
 		strings.TrimSpace(ts.userMessage) == "" && len(ts.media) == 0 {
 		recoveryHistory := history
 		if ts.agent != nil && ts.agent.Sessions != nil {
-			recoveryHistory = ts.agent.Sessions.GetHistory(ts.sessionKey)
+			var readErr error
+			recoveryHistory, readErr = ts.agent.Sessions.ReadTurnHistory(ctx, ts.sessionKey)
+			if readErr != nil {
+				return nil, fmt.Errorf("read interaction recovery history: %w", readErr)
+			}
 		}
 		exec.deliverable = unfinishedTurnDeliverable(recoveryHistory)
 	}

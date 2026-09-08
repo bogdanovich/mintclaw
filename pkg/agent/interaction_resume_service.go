@@ -177,10 +177,11 @@ func (service interactionService) resumeOwned(
 			return err
 		}
 	}
-	supersedingSteering := interactionSupersedingSteering(
-		record,
-		agent.Sessions.GetHistory(continuationSessionKey),
-	)
+	continuationHistory, readErr := agent.Sessions.ReadTurnHistory(ctx, continuationSessionKey)
+	if readErr != nil {
+		return fmt.Errorf("read interaction continuation history: %w", readErr)
+	}
+	supersedingSteering := interactionSupersedingSteering(record, continuationHistory)
 	resuming := record
 	continuationExecutor := &interactionContinuationExecutor{}
 	if record.Status == interactions.StatusClaimed {
@@ -198,9 +199,12 @@ func (service interactionService) resumeOwned(
 			return interactions.ErrNotFound
 		}
 		resuming = current
+		continuationHistory, readErr = agent.Sessions.ReadTurnHistory(ctx, continuationSessionKey)
+		if readErr != nil {
+			return fmt.Errorf("read approved interaction history: %w", readErr)
+		}
 		if _, resultIndex := interactionToolPairIndexes(
-			agent.Sessions.GetHistory(continuationSessionKey),
-			resuming.Origin.ToolCallID,
+			continuationHistory, resuming.Origin.ToolCallID,
 		); resultIndex < 0 {
 			if resuming.ApprovalConsumedAt != 0 {
 				outcome := interactions.OutcomeDeliveryUnknown
@@ -247,9 +251,12 @@ func (service interactionService) resumeOwned(
 		}
 		resuming = current
 	}
+	continuationHistory, readErr = agent.Sessions.ReadTurnHistory(ctx, continuationSessionKey)
+	if readErr != nil {
+		return fmt.Errorf("read resumed interaction history: %w", readErr)
+	}
 	if finalContent, recoveredDeliverable, ok := interactionFinalAfterToolResult(
-		agent.Sessions.GetHistory(continuationSessionKey),
-		record.Origin.ToolCallID,
+		continuationHistory, record.Origin.ToolCallID,
 	); ok {
 		cleanContent, objectiveOutcome := extractResumedObjectiveOutcome(
 			finalContent, interactionOutcomeAudits(resuming), resuming,

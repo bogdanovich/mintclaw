@@ -255,7 +255,9 @@ func (p *Pipeline) invokeLLMWithRetry(
 				}
 				exec.history = stripMessageMedia(exec.history)
 				ts.stripPersistedMessageMedia()
-				ts.refreshCanonicalRestorePointFromSession()
+				if snapshotErr := ts.refreshCanonicalRestorePointFromSession(turnCtx); snapshotErr != nil {
+					return llmStageResult{}, snapshotErr
+				}
 			}
 			llm.callMessages = strippedCallMessages
 			continue
@@ -366,7 +368,10 @@ func (p *Pipeline) invokeLLMWithRetry(
 				})
 			}
 			compactCancel()
-			ts.refreshCanonicalRestorePointFromSession()
+			if snapshotErr := ts.refreshCanonicalRestorePointFromSession(ctx); snapshotErr != nil {
+				err = snapshotErr
+				break
+			}
 			persistedTurn := ts.persistedMessagesSnapshot()
 			protectedTurnTail := ts.liveTurnMessagesSnapshot()
 			asmResp, asmErr := p.Context.Runtime.Assemble(ctx, &AssembleRequest{

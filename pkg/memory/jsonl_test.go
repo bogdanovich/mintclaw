@@ -897,6 +897,32 @@ func TestGetHistory_Ordering(t *testing.T) {
 	}
 }
 
+func TestGetSnapshotReturnsHistoryAndSummary(t *testing.T) {
+	store := newTestStore(t)
+	ctx := t.Context()
+	if err := store.AddMessage(ctx, "snapshot", "user", "current"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err := store.SetSummary(ctx, "snapshot", "current summary"); err != nil {
+		t.Fatalf("SetSummary: %v", err)
+	}
+
+	snapshot, err := store.GetSnapshot(ctx, "snapshot")
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if len(snapshot.History) != 1 || snapshot.History[0].Content != "current" ||
+		snapshot.Summary != "current summary" {
+		t.Fatalf("GetSnapshot() = %#v", snapshot)
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err = store.GetSnapshot(canceled, "snapshot"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetSnapshot() error = %v, want %v", err, context.Canceled)
+	}
+}
+
 func TestSetSummary_GetSummary(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

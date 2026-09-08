@@ -919,29 +919,42 @@ func (s *JSONLStore) addMsg(ctx context.Context, sessionKey string, msg provider
 func (s *JSONLStore) GetHistory(
 	ctx context.Context, sessionKey string,
 ) ([]providers.Message, error) {
-	if err := contextCause(ctx); err != nil {
+	snapshot, err := s.GetSnapshot(ctx, sessionKey)
+	if err != nil {
 		return nil, err
+	}
+	return snapshot.History, nil
+}
+
+// GetSnapshot reads history and summary while holding the session lock so a
+// caller never constructs a restore point from two different canonical states.
+func (s *JSONLStore) GetSnapshot(
+	ctx context.Context,
+	sessionKey string,
+) (SessionSnapshot, error) {
+	if err := contextCause(ctx); err != nil {
+		return SessionSnapshot{}, err
 	}
 	l := s.sessionLock(sessionKey)
 	l.Lock()
 	defer l.Unlock()
 	if err := contextCause(ctx); err != nil {
-		return nil, err
+		return SessionSnapshot{}, err
 	}
 
 	meta, err := s.readMeta(sessionKey)
 	if err != nil {
-		return nil, err
+		return SessionSnapshot{}, err
 	}
 
 	// Pass meta.Skip so readMessages skips those lines without
 	// unmarshaling them — avoids wasted CPU on truncated messages.
 	msgs, err := readMessages(ctx, s.jsonlPath(sessionKey), meta.Skip)
 	if err != nil {
-		return nil, err
+		return SessionSnapshot{}, err
 	}
 
-	return msgs, nil
+	return SessionSnapshot{History: msgs, Summary: meta.Summary}, nil
 }
 
 // GetHistoryPage scans canonical JSONL under the session lock but retains and

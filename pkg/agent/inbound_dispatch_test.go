@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +105,33 @@ func TestBuildInboundMessageTurn_ConstructsDispatchEnvelope(t *testing.T) {
 	}
 	if turn.Options.ModelBinding.WorkspaceAgent != turn.Agent {
 		t.Fatal("ModelBinding.WorkspaceAgent does not match routed agent")
+	}
+}
+
+func TestBuildInboundMessageTurnRejectsRelationHistoryReadFailure(t *testing.T) {
+	al, cleanup := newInboundDispatchTestLoop(t)
+	defer cleanup()
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("expected default agent")
+	}
+	wantErr := errors.New("relation history unavailable")
+	agent.Sessions = &historyReadFailingSessionStore{
+		SessionStore: agent.Sessions,
+		err:          wantErr,
+	}
+
+	_, err := al.buildInboundMessageTurn(t.Context(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel:  "telegram",
+			ChatID:   "chat-1",
+			ChatType: "direct",
+			SenderID: "user-1",
+		},
+		Content: "hello",
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("buildInboundMessageTurn() error = %v, want %v", err, wantErr)
 	}
 }
 
