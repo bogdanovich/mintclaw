@@ -11,40 +11,52 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func openExclusiveLeaseFile(path string) (*os.File, error) {
+func exclusiveLeaseReservationKey(path string) string { return path }
+
+func openExclusiveLeaseFile(path string) (*os.File, *exclusiveLeaseParent, error) {
 	parent, leaf, err := openExclusiveLeaseParent(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer parent.close()
 	fd, err := unix.Openat(
 		int(parent.file.Fd()),
 		leaf,
-		unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		unix.O_CREAT|unix.O_EXCL|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
 		0o600,
 	)
+	if errors.Is(err, syscall.EEXIST) {
+		fd, err = unix.Openat(
+			int(parent.file.Fd()),
+			leaf,
+			unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+			0,
+		)
+	}
 	if err != nil {
-		return nil, err
+		parent.close()
+		return nil, nil, err
 	}
 	file := os.NewFile(uintptr(fd), path)
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
-		return nil, err
+		parent.close()
+		return nil, nil, err
 	}
-	if !info.Mode().IsRegular() {
+	stat, statOK := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || !statOK ||
+		stat.Nlink != 1 || stat.Uid != uint32(os.Geteuid()) {
 		_ = file.Close()
-		return nil, errExclusiveLeaseUnsafe
+		parent.close()
+		return nil, nil, errExclusiveLeaseUnsafe
 	}
-	if err = parent.validate(); err != nil {
+	parent.leaf = leaf
+	if err = parent.validateLeaf(file); err != nil {
 		_ = file.Close()
-		return nil, err
+		parent.close()
+		return nil, nil, err
 	}
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	return file, nil
+	return file, parent, nil
 }
 
 func openExclusiveLeaseParent(path string) (*exclusiveLeaseParent, string, error) {

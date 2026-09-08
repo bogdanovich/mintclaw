@@ -59,6 +59,12 @@ func recoverEphemeralProfileRuntime(runtime config.BrowserProfileRuntimeConfig) 
 		return fmt.Errorf("acquire browser ephemeral recovery lease: %w", err)
 	}
 	defer func() { _ = recoveryLease.Close() }()
+	if err = lifecycleLease.Validate(); err != nil {
+		return fmt.Errorf("validate browser ephemeral lifecycle lease: %w", err)
+	}
+	if err = recoveryLease.Validate(); err != nil {
+		return fmt.Errorf("validate browser ephemeral recovery lease: %w", err)
+	}
 	root, rootInfo, err := openEphemeralRoot(normalized.EphemeralRoot)
 	if err != nil {
 		return err
@@ -96,6 +102,12 @@ func recoverEphemeralProfileRuntime(runtime config.BrowserProfileRuntimeConfig) 
 		!os.SameFile(rootInfo, current) {
 		return errors.New("browser ephemeral root identity changed during recovery")
 	}
+	if err = lifecycleLease.Validate(); err != nil {
+		return fmt.Errorf("validate browser ephemeral lifecycle lease after recovery: %w", err)
+	}
+	if err = recoveryLease.Validate(); err != nil {
+		return fmt.Errorf("validate browser ephemeral recovery lease after recovery: %w", err)
+	}
 	return nil
 }
 
@@ -130,6 +142,11 @@ func createEphemeralRuntimeLease(
 		rename:    root.Rename,
 		removeAll: root.RemoveAll,
 		sync:      func() error { return syncRootDirectory(root) },
+	}
+	if err = lifecycleLease.Validate(); err != nil {
+		_ = root.Close()
+		_ = lifecycleLease.Close()
+		return nil, fmt.Errorf("validate browser ephemeral lifecycle lease: %w", err)
 	}
 	random := make([]byte, 8)
 	if _, err = rand.Read(random); err != nil {
@@ -202,6 +219,9 @@ func (lease *ephemeralRuntimeLease) Close() error {
 		!ephemeralRuntimeNamePattern.MatchString(lease.name) ||
 		!ephemeralRuntimeNamePattern.MatchString(lease.quarantineName) {
 		return errors.New("browser ephemeral cleanup authority is unavailable")
+	}
+	if err := lease.lifecycle.Validate(); err != nil {
+		return fmt.Errorf("browser ephemeral lifecycle lease identity changed before cleanup: %w", err)
 	}
 	configured, err := os.Lstat(lease.rootPath)
 	if err != nil || !os.SameFile(lease.rootInfo, configured) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -30,13 +31,17 @@ func (e *ExclusiveLeaseBusyError) Unwrap() error {
 }
 
 type exclusiveServerLease struct {
-	file *os.File
-	once sync.Once
+	file        *os.File
+	parent      *exclusiveLeaseParent
+	reservation string
+	mu          sync.Mutex
+	closed      bool
 }
 
 type exclusiveLeaseParent struct {
 	file     *os.File
 	path     string
+	leaf     string
 	identity os.FileInfo
 }
 
@@ -54,10 +59,52 @@ func (parent *exclusiveLeaseParent) validate() error {
 	return nil
 }
 
+func (parent *exclusiveLeaseParent) validateLeaf(file *os.File) error {
+	if err := parent.validate(); err != nil || file == nil || parent.leaf == "" {
+		return errExclusiveLeaseUnsafe
+	}
+	opened, openedErr := file.Stat()
+	current, currentErr := os.Lstat(filepath.Join(parent.path, parent.leaf))
+	if openedErr != nil || currentErr != nil || !opened.Mode().IsRegular() ||
+		!current.Mode().IsRegular() || current.Mode()&os.ModeSymlink != 0 ||
+		!os.SameFile(opened, current) {
+		return errExclusiveLeaseUnsafe
+	}
+	return parent.validate()
+}
+
 func (parent *exclusiveLeaseParent) close() {
 	if parent != nil && parent.file != nil {
 		_ = parent.file.Close()
 	}
+}
+
+var exclusiveLeaseReservations = struct {
+	sync.Mutex
+	paths map[string]struct{}
+}{paths: make(map[string]struct{})}
+
+func reserveExclusiveLeasePath(path string) (string, bool) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", false
+	}
+	key := exclusiveLeaseReservationKey(path)
+	exclusiveLeaseReservations.Lock()
+	defer exclusiveLeaseReservations.Unlock()
+	if _, found := exclusiveLeaseReservations.paths[key]; found {
+		return key, false
+	}
+	exclusiveLeaseReservations.paths[key] = struct{}{}
+	return key, true
+}
+
+func releaseExclusiveLeasePath(key string) {
+	if key == "" {
+		return
+	}
+	exclusiveLeaseReservations.Lock()
+	delete(exclusiveLeaseReservations.paths, key)
+	exclusiveLeaseReservations.Unlock()
 }
 
 // ExclusiveServerLease is a process-scoped owner of the same lock used by a
@@ -79,24 +126,57 @@ func AcquireExclusiveServerLease(serverName, path string) (*ExclusiveServerLease
 
 func (lease *ExclusiveServerLease) Close() error {
 	if lease != nil && lease.lease != nil {
-		lease.lease.release()
+		return lease.lease.close()
 	}
 	return nil
 }
 
+// Validate confirms that the configured namespace still names the parent and
+// leaf owned by this lease. Lifecycle callers use it around protected work so
+// a rebound path becomes a retryable fail-closed condition.
+func (lease *ExclusiveServerLease) Validate() error {
+	if lease == nil || lease.lease == nil {
+		return errExclusiveLeaseUnsafe
+	}
+	return lease.lease.validate()
+}
+
 func acquireExclusiveServerLease(serverName, path string) (*exclusiveServerLease, error) {
-	file, err := openExclusiveLeaseFile(path)
+	reservation, reserved := reserveExclusiveLeasePath(path)
+	if !reserved {
+		if filepath.IsAbs(path) && filepath.Clean(path) == path {
+			return nil, &ExclusiveLeaseBusyError{Server: serverName}
+		}
+		return nil, fmt.Errorf("open MCP server exclusive lease: %w", errExclusiveLeaseUnsafe)
+	}
+	releaseReservation := true
+	defer func() {
+		if releaseReservation {
+			releaseExclusiveLeasePath(reservation)
+		}
+	}()
+	file, parent, err := openExclusiveLeaseFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open MCP server exclusive lease: %w", withoutPath(err))
 	}
-	if err := tryAcquireExclusiveFileLock(file); err != nil {
+	if lockErr := tryAcquireExclusiveFileLock(file); lockErr != nil {
 		_ = file.Close()
-		if errors.Is(err, errExclusiveLeaseBusy) {
+		parent.close()
+		if errors.Is(lockErr, errExclusiveLeaseBusy) {
 			return nil, &ExclusiveLeaseBusyError{Server: serverName}
 		}
-		return nil, fmt.Errorf("lock MCP server exclusive lease: %w", err)
+		return nil, fmt.Errorf("lock MCP server exclusive lease: %w", lockErr)
 	}
-	return &exclusiveServerLease{file: file}, nil
+	if err = parent.validateLeaf(file); err != nil {
+		_ = releaseExclusiveFileLock(file)
+		_ = file.Close()
+		parent.close()
+		return nil, fmt.Errorf("validate MCP server exclusive lease: %w", err)
+	}
+	releaseReservation = false
+	return &exclusiveServerLease{
+		file: file, parent: parent, reservation: reservation,
+	}, nil
 }
 
 func withoutPath(err error) error {
@@ -108,11 +188,46 @@ func withoutPath(err error) error {
 }
 
 func (l *exclusiveServerLease) release() {
+	_ = l.finish(false)
+}
+
+func (l *exclusiveServerLease) close() error {
+	return l.finish(true)
+}
+
+func (l *exclusiveServerLease) validate() error {
 	if l == nil {
-		return
+		return errExclusiveLeaseUnsafe
 	}
-	l.once.Do(func() {
-		_ = releaseExclusiveFileLock(l.file)
-		_ = l.file.Close()
-	})
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return errExclusiveLeaseUnsafe
+	}
+	return l.parent.validateLeaf(l.file)
+}
+
+func (l *exclusiveServerLease) finish(requireStableNamespace bool) error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return nil
+	}
+	if l.file == nil || l.parent == nil {
+		return fmt.Errorf("validate MCP server exclusive lease before release: %w", errExclusiveLeaseUnsafe)
+	}
+	if requireStableNamespace {
+		if err := l.parent.validateLeaf(l.file); err != nil {
+			return fmt.Errorf("validate MCP server exclusive lease before release: %w", err)
+		}
+	}
+	unlockErr := releaseExclusiveFileLock(l.file)
+	fileErr := l.file.Close()
+	l.parent.close()
+	releaseExclusiveLeasePath(l.reservation)
+	l.closed = true
+	return errors.Join(unlockErr, fileErr)
 }

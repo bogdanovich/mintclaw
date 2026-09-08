@@ -54,6 +54,65 @@ func TestAcquireExclusiveServerLeaseRejectsSymlinkWithoutMutatingTarget(t *testi
 	}
 }
 
+func TestAcquireExclusiveServerLeaseRejectsHardLinkWithoutMutatingTarget(t *testing.T) {
+	for _, mode := range []os.FileMode{0o700, 0o600} {
+		t.Run(mode.String(), func(t *testing.T) {
+			root := t.TempDir()
+			target := filepath.Join(root, "outside")
+			if err := os.WriteFile(target, []byte("unchanged"), mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(target, mode); err != nil {
+				t.Fatal(err)
+			}
+			leasePath := filepath.Join(root, "playwright.lock")
+			if err := os.Link(target, leasePath); err != nil {
+				t.Skipf("hard links unavailable: %v", err)
+			}
+
+			lease, err := AcquireExclusiveServerLease("playwright", leasePath)
+			if err == nil {
+				_ = lease.Close()
+				t.Fatal("AcquireExclusiveServerLease() accepted a hard link")
+			}
+			info, statErr := os.Stat(target)
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if got := info.Mode().Perm(); got != mode {
+				t.Fatalf("hard-link target permissions = %04o, want %04o", got, mode)
+			}
+			contents, readErr := os.ReadFile(target)
+			if readErr != nil || string(contents) != "unchanged" {
+				t.Fatalf("hard-link target contents = %q, %v", contents, readErr)
+			}
+		})
+	}
+}
+
+func TestAcquireExclusiveServerLeaseRejectsPermissiveExistingFileWithoutRepair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "playwright.lock")
+	if err := os.WriteFile(path, []byte("existing"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := AcquireExclusiveServerLease("playwright", path)
+	if err == nil {
+		_ = lease.Close()
+		t.Fatal("AcquireExclusiveServerLease() repaired an unsafe existing file")
+	}
+	info, statErr := os.Stat(path)
+	if statErr != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("existing file mode = %#v, %v; want unchanged 0700", info, statErr)
+	}
+	contents, readErr := os.ReadFile(path)
+	if readErr != nil || string(contents) != "existing" {
+		t.Fatalf("existing file contents = %q, %v", contents, readErr)
+	}
+}
+
 func TestAcquireExclusiveServerLeaseRejectsSymlinkedParentWithoutMutatingTarget(t *testing.T) {
 	root := t.TempDir()
 	lockParent := filepath.Join(root, "locks")

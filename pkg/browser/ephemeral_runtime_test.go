@@ -154,6 +154,50 @@ func TestEphemeralRuntimeLeaseFailsClosedOnRootSymlinkSwap(t *testing.T) {
 	}
 }
 
+func TestEphemeralRuntimeLeaseRetainsCanonicalLifecycleNamespace(t *testing.T) {
+	runtime := ephemeralRuntimeFixture(t)
+	lease, err := createEphemeralRuntimeLease(runtime, "lifecycle_parent_swap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockParent := filepath.Dir(runtime.LockFile)
+	movedParent := lockParent + "-moved"
+	renameErr := os.Rename(lockParent, movedParent)
+	if renameErr == nil {
+		if err = os.Mkdir(lockParent, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	second, secondErr := createEphemeralRuntimeLease(runtime, "lifecycle_contender")
+	if second != nil {
+		_ = second.Close()
+		t.Fatal("canonical lifecycle contender acquired a second lease")
+	}
+	if secondErr == nil || !strings.Contains(secondErr.Error(), "exclusive lease is busy") {
+		t.Fatalf("canonical lifecycle contender error = %v, want busy", secondErr)
+	}
+	if renameErr != nil {
+		if err = lease.Close(); err != nil {
+			t.Fatalf("Close() after denied parent rename error = %v", err)
+		}
+		return
+	}
+	if err = lease.Close(); err == nil ||
+		!strings.Contains(err.Error(), "lifecycle lease identity changed") {
+		t.Fatalf("Close() while lifecycle parent is rebound error = %v", err)
+	}
+	if err = os.Remove(lockParent); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(movedParent, lockParent); err != nil {
+		t.Fatal(err)
+	}
+	if err = lease.Close(); err != nil {
+		t.Fatalf("Close() after lifecycle parent restore error = %v", err)
+	}
+	assertDirectoryEmpty(t, runtime.EphemeralRoot)
+}
+
 func TestEphemeralRuntimeLeaseFailsClosedOnSessionSwapAndPermissionChange(t *testing.T) {
 	t.Run("symlink swap", func(t *testing.T) {
 		runtime := ephemeralRuntimeFixture(t)
