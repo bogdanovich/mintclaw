@@ -120,7 +120,7 @@ func validateWorkerArtifactFile(
 	case workerOperationExtract:
 		return validateExtractedArtifact(data, result, worker.Artifact)
 	case workerOperationRender:
-		return validateRenderedArtifact(data, result, worker.Artifact)
+		return validateRenderedArtifact(data, result, worker.Artifact, request.Read.Limits)
 	default:
 		return errors.New("document worker artifact operation is invalid")
 	}
@@ -147,10 +147,17 @@ func validateExtractedArtifact(data []byte, result *WorkerResult, artifact Artif
 	return nil
 }
 
-func validateRenderedArtifact(data []byte, result *WorkerResult, artifact Artifact) error {
+func validateRenderedArtifact(data []byte, result *WorkerResult, artifact Artifact, limits ReadLimits) error {
 	if result.Rendering == nil || len(artifact.Pages) != 1 || len(data) < 8 ||
 		!bytes.Equal(data[:8], []byte("\x89PNG\r\n\x1a\n")) {
 		return errors.New("document rendered page artifact is invalid")
+	}
+	configuration, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil || configuration.Width != artifact.Width || configuration.Height != artifact.Height ||
+		configuration.Width <= 0 || configuration.Height <= 0 ||
+		configuration.Width > limits.MaxDimension || configuration.Height > limits.MaxDimension ||
+		int64(configuration.Width)*int64(configuration.Height) > limits.MaxPixelsPerPage {
+		return errors.New("document rendered page dimensions are invalid")
 	}
 	reader := bytes.NewReader(data)
 	page, err := png.Decode(reader)

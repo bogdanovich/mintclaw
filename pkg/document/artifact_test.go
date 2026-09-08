@@ -3,8 +3,10 @@ package document
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -184,16 +186,25 @@ func TestValidateRenderedArtifactDecodesCompletePNG(t *testing.T) {
 	}
 	result := &WorkerResult{Rendering: &RenderingFacts{}}
 	artifact := Artifact{Pages: []int{1}, Width: 2, Height: 3}
-	if err := validateRenderedArtifact(encoded.Bytes(), result, artifact); err != nil {
+	limits := defaultReadLimits(workerOperationRender)
+	if err := validateRenderedArtifact(encoded.Bytes(), result, artifact, limits); err != nil {
 		t.Fatalf("valid PNG rejected: %v", err)
 	}
 	truncated := encoded.Bytes()[:encoded.Len()-8]
-	if err := validateRenderedArtifact(truncated, result, artifact); err == nil {
+	if err := validateRenderedArtifact(truncated, result, artifact, limits); err == nil {
 		t.Fatal("accepted PNG with a truncated IEND chunk")
 	}
 	withTrailingData := append(append([]byte(nil), encoded.Bytes()...), []byte("trailing")...)
-	if err := validateRenderedArtifact(withTrailingData, result, artifact); err == nil {
+	if err := validateRenderedArtifact(withTrailingData, result, artifact, limits); err == nil {
 		t.Fatal("accepted PNG with trailing data")
+	}
+	oversized := append([]byte(nil), encoded.Bytes()...)
+	binary.BigEndian.PutUint32(oversized[16:20], uint32(limits.MaxDimension+1))
+	binary.BigEndian.PutUint32(oversized[29:33], crc32.ChecksumIEEE(oversized[12:29]))
+	oversizedArtifact := artifact
+	oversizedArtifact.Width = limits.MaxDimension + 1
+	if err := validateRenderedArtifact(oversized, result, oversizedArtifact, limits); err == nil {
+		t.Fatal("accepted PNG dimensions above the parent-side decode limit")
 	}
 }
 

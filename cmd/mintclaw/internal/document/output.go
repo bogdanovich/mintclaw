@@ -97,14 +97,18 @@ func (output *stagedArtifactOutput) commit() error {
 		_ = os.Remove(output.path)
 		return nil
 	}
-	return replaceStagedPath(output.path, output.destination)
+	return replaceStagedPath(output.path, output.destination, output.directory)
 }
 
-func replaceStagedPath(stage, destination string) error {
-	if _, err := os.Lstat(destination); errors.Is(err, os.ErrNotExist) {
+func replaceStagedPath(stage, destination string, directory bool) error {
+	info, err := os.Lstat(destination)
+	if errors.Is(err, os.ErrNotExist) {
 		return os.Rename(stage, destination)
 	} else if err != nil {
 		return err
+	}
+	if (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) {
+		return errors.New("document output destination has the wrong type")
 	}
 
 	parent := filepath.Dir(destination)

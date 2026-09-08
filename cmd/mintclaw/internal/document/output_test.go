@@ -104,6 +104,57 @@ func TestArtifactPublicationWaitsForSnapshotCleanup(t *testing.T) {
 	}
 }
 
+func TestArtifactOverwriteRejectsWrongDestinationTypes(t *testing.T) {
+	root := t.TempDir()
+	ref := "document-artifact://operation/artifact"
+	source := filepath.Join(root, "artifact")
+	if err := os.WriteFile(source, []byte("new"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	opener := testArtifactOpener{ref: ref, path: source}
+
+	fileDestination := filepath.Join(root, "file-destination")
+	if err := os.Mkdir(fileDestination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	canary := filepath.Join(fileDestination, "canary")
+	if err := os.WriteFile(canary, []byte("preserved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stagedFile, err := stageArtifactFile(opener, ref, fileDestination, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = stagedFile.commit(); err == nil {
+		t.Fatal("file publication replaced a directory")
+	}
+	stagedFile.abort()
+	if data, readErr := os.ReadFile(canary); readErr != nil || string(data) != "preserved" {
+		t.Fatalf("file publication changed directory destination: %q, %v", data, readErr)
+	}
+
+	directoryDestination := filepath.Join(root, "directory-destination")
+	if err = os.WriteFile(directoryDestination, []byte("preserved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stagedDirectory, err := stageArtifactDirectory(
+		opener,
+		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
+		directoryDestination,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = stagedDirectory.commit(); err == nil {
+		t.Fatal("directory publication replaced a file")
+	}
+	stagedDirectory.abort()
+	if data, readErr := os.ReadFile(directoryDestination); readErr != nil || string(data) != "preserved" {
+		t.Fatalf("directory publication changed file destination: %q, %v", data, readErr)
+	}
+}
+
 type testArtifactOpener struct {
 	ref  string
 	path string
