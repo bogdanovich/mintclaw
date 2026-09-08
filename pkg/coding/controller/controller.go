@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
@@ -23,6 +24,8 @@ var (
 	ErrReviewActive           = errors.New("coding review is active")
 	ErrWorkspaceRefreshActive = errors.New("coding workspace refresh is active")
 	ErrNoActiveTurn           = errors.New("no coding turn is active")
+	ErrSteerConflict          = errors.New("coding steer ID conflicts with an accepted steer")
+	ErrSteerLimit             = errors.New("coding turn steer limit reached")
 	ErrUnsupported            = frontend.ErrCommandUnsupported
 	ErrHardCanceled           = errors.New("coding turn was hard-canceled")
 )
@@ -40,6 +43,10 @@ type Runtime interface {
 
 type workspaceEvidenceRefresher interface {
 	RefreshWorkspaceEvidence(context.Context) (codingworkspace.StatusResult, error)
+}
+
+type steeringRuntime interface {
+	Steer(context.Context, frontend.SteerInput) error
 }
 
 // reviewRuntime validates its result, calls the supplied commit function
@@ -68,6 +75,7 @@ type commandKind uint8
 
 const (
 	commandSubmit commandKind = iota
+	commandSteer
 	commandInterrupt
 	commandHardCancel
 	commandCompact
@@ -88,6 +96,7 @@ type command struct {
 	ctx          context.Context
 	content      string
 	input        frontend.TurnInput
+	steer        frontend.SteerInput
 	diffTarget   codingworkspace.DiffTarget
 	reviewTarget codingreview.Target
 	reply        chan error
@@ -176,6 +185,7 @@ type Controller struct {
 
 var (
 	_ frontend.Controller  = (*Controller)(nil)
+	_ frontend.Steerer     = (*Controller)(nil)
 	_ frontend.Reviewer    = (*Controller)(nil)
 	_ frontend.TurnSettler = (*Controller)(nil)
 )
@@ -236,6 +246,21 @@ func (c *Controller) Submit(ctx context.Context, input frontend.TurnInput) error
 	return awaitTurnAdmission(reply, c.done)
 }
 
+// Steer appends bounded guidance to the active turn. Acceptance is
+// idempotent for the lifetime of that turn and never starts a new turn.
+func (c *Controller) Steer(ctx context.Context, input frontend.SteerInput) error {
+	if err := validateSteerInput(input); err != nil {
+		return err
+	}
+	ctx = contextOrBackground(ctx)
+	reply := make(chan error, 1)
+	request := command{kind: commandSteer, ctx: ctx, steer: input, reply: reply}
+	if err := c.enqueue(ctx, request); err != nil {
+		return err
+	}
+	return awaitTurnAdmission(reply, c.done)
+}
+
 // awaitTurnAdmission waits for the actor-owned admission decision after the
 // request has entered the command queue. The actor checks cancellation before
 // starting work, so its reply definitively says whether a turn was admitted.
@@ -281,6 +306,35 @@ func validateTurnInput(input frontend.TurnInput) error {
 		}
 	}
 	return nil
+}
+
+func validateSteerInput(input frontend.SteerInput) error {
+	if !validSteerID(input.ID) {
+		return fmt.Errorf(
+			"coding steer: ID must match [A-Za-z0-9][A-Za-z0-9._:-]* within %d bytes",
+			frontend.MaxSteerIDBytes,
+		)
+	}
+	if err := thread.ValidatePrompt(input.Text); err != nil {
+		return fmt.Errorf("coding steer: %w", err)
+	}
+	return nil
+}
+
+func validSteerID(value string) bool {
+	if value == "" || len(value) > frontend.MaxSteerIDBytes {
+		return false
+	}
+	for index, character := range value {
+		letter := character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
+		digit := character >= '0' && character <= '9'
+		suffixPunctuation := index > 0 && (character == '.' || character == '_' || character == ':' || character == '-')
+		if character <= unicode.MaxASCII && (letter || digit || suffixPunctuation) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (c *Controller) Interrupt(ctx context.Context) error {
@@ -479,6 +533,7 @@ func (c *Controller) coordinate() {
 	var nextEvidenceID uint64
 	var closeReplies []chan error
 	var closeErr error
+	var turnSteering *turnSteeringState
 
 	finishClose := func() bool {
 		if !closing || primary.active() || activeEvidence != nil || len(evidenceQueue) != 0 {
@@ -552,6 +607,7 @@ func (c *Controller) coordinate() {
 	for {
 		select {
 		case <-pendingTurnReady:
+			turnSteering.open()
 			pendingTurnAdmission.reply <- nil
 			pendingTurnAdmission = nil
 			pendingTurnReady = nil
@@ -559,6 +615,7 @@ func (c *Controller) coordinate() {
 		case <-pendingTurnCanceled:
 			select {
 			case <-pendingTurnReady:
+				turnSteering.open()
 				pendingTurnAdmission.reply <- nil
 			default:
 				primary.cancel(context.Cause(pendingTurnAdmission.ctx))
@@ -607,6 +664,7 @@ func (c *Controller) coordinate() {
 			if result.kind == operationTurn && pendingTurnAdmission != nil {
 				select {
 				case <-pendingTurnReady:
+					turnSteering.open()
 					pendingTurnAdmission.reply <- nil
 				default:
 					admissionErr := result.err
@@ -631,6 +689,7 @@ func (c *Controller) coordinate() {
 			}
 			c.projectOperationError(result)
 			if result.kind == operationTurn {
+				turnSteering = nil
 				turnSettlementAvailable = true
 				turnSettlementErr = result.err
 				for _, waiter := range turnWaiters {
@@ -667,15 +726,43 @@ func (c *Controller) coordinate() {
 				}
 				turnSettlementAvailable = false
 				turnSettlementErr = nil
+				turnSteering = newTurnSteeringState()
 				operationCtx := primary.start(rootCtx, operationTurn)
 				ready := make(chan struct{})
 				var readyOnce sync.Once
 				go c.run(operationCtx, operationTurn, request.input, func() {
 					readyOnce.Do(func() { close(ready) })
-				})
+				}, turnSteering)
 				pendingTurnAdmission = &request
 				pendingTurnReady = ready
 				pendingTurnCanceled = request.ctx.Done()
+			case commandSteer:
+				if err := request.ctx.Err(); err != nil {
+					request.reply <- err
+					continue
+				}
+				switch {
+				case primary.is(operationReview):
+					request.reply <- ErrReviewActive
+					continue
+				case primary.is(operationCompaction):
+					request.reply <- ErrCompactionActive
+					continue
+				case !primary.is(operationTurn):
+					request.reply <- ErrNoActiveTurn
+					continue
+				}
+				request.reply <- turnSteering.steer(
+					request.ctx,
+					request.steer,
+					func(ctx context.Context, input frontend.SteerInput) error {
+						runtime, ok := c.runtime.(steeringRuntime)
+						if !ok {
+							return ErrUnsupported
+						}
+						return runtime.Steer(ctx, input)
+					},
+				)
 			case commandInterrupt:
 				if primary.is(operationReview) {
 					primary.cancel(context.Canceled)
@@ -697,6 +784,7 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrNoActiveTurn
 					continue
 				}
+				turnSteering.close()
 				err := c.runtime.HardCancel(request.ctx)
 				primary.cancel(ErrHardCanceled)
 				if err == nil {
@@ -713,7 +801,7 @@ func (c *Controller) coordinate() {
 					continue
 				}
 				operationCtx := primary.start(rootCtx, operationCompaction)
-				go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil)
+				go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil, nil)
 				request.reply <- nil
 			case commandRename, commandArchive, commandUnarchive:
 				if err := primary.admissionError(); err != nil {
@@ -809,6 +897,7 @@ func (c *Controller) coordinate() {
 				}
 				closing = true
 				if primary.is(operationTurn) && !primary.turnHardCancelRequested() {
+					turnSteering.close()
 					err := c.runtime.HardCancel(context.WithoutCancel(request.ctx))
 					closeErr = errors.Join(closeErr, err)
 					if err == nil {
@@ -834,11 +923,18 @@ func (c *Controller) coordinate() {
 	}
 }
 
-func (c *Controller) run(ctx context.Context, kind operationKind, input frontend.TurnInput, ready func()) {
+func (c *Controller) run(
+	ctx context.Context,
+	kind operationKind,
+	input frontend.TurnInput,
+	ready func(),
+	turnSteering *turnSteeringState,
+) {
 	var err error
 	var projectErr error
 	if kind == operationTurn {
 		err = c.runtime.RunTurn(ctx, input, ready)
+		turnSteering.close()
 		projectErr = err
 		if source, ok := c.runtime.(turnSettlementErrorSource); ok {
 			err = errors.Join(err, source.TurnSettlementError())
