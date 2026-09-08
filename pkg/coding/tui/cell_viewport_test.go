@@ -245,6 +245,51 @@ func TestSemanticViewportResumeHydrationPreservesOrderAndComposer(t *testing.T) 
 	}
 }
 
+func TestSemanticViewportSeparatorAnchorSurvivesStreamingAndResize(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range 12 {
+		turnID := fmt.Sprintf("turn-%d", index)
+		projector.TurnStarted(turnID, strings.Repeat("question ", 4))
+		projector.AssistantAccumulated(turnID, strings.Repeat("answer ", 4), true)
+	}
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(40, 10)
+	target := model.layout.Blocks[len(model.layout.Blocks)/2]
+	separator := target.Start - 1
+	model.viewport.SetYOffset(separator)
+	anchor := model.captureViewportPosition().anchor
+	if !anchor.before || anchor.id != target.ID {
+		t.Fatalf("separator anchor = %+v, target = %+v", anchor, target)
+	}
+
+	projector.TurnStarted("streaming", "later question")
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.installSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if model.viewport.YOffset != separator {
+		t.Fatalf("streaming moved separator from %d to %d", separator, model.viewport.YOffset)
+	}
+
+	model.resize(24, 9)
+	want, ok := model.layout.lineFor(anchor)
+	if !ok || model.viewport.YOffset != want {
+		t.Fatalf("resize separator offset = %d, want %d (found=%v)", model.viewport.YOffset, want, ok)
+	}
+	if got := model.layout.anchorAt(model.viewport.YOffset); !got.before || got.id != anchor.id {
+		t.Fatalf("resize changed separator anchor from %+v to %+v", anchor, got)
+	}
+}
+
 func TestSemanticViewportLongActiveOutputBoundsVisibleRendering(t *testing.T) {
 	cell := newPresentationCell(semanticMessageItem(
 		"active",

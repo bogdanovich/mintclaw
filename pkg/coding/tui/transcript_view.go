@@ -393,6 +393,7 @@ type transcriptLayout struct {
 type transcriptAnchor struct {
 	id     string
 	offset int
+	before bool
 	valid  bool
 }
 

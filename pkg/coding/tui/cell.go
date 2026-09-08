@@ -474,7 +474,7 @@ func (layout cellLayout) anchorAt(line int) transcriptAnchor {
 			return transcriptAnchor{id: block.ID, offset: line - block.Start, valid: true}
 		}
 		if line < block.Start {
-			return transcriptAnchor{id: block.ID, valid: true}
+			return transcriptAnchor{id: block.ID, before: true, valid: true}
 		}
 	}
 	if len(layout.Blocks) > 0 {
@@ -492,6 +492,9 @@ func (layout cellLayout) lineFor(anchor transcriptAnchor) (int, bool) {
 	}
 	for _, block := range layout.Blocks {
 		if block.ID == anchor.id {
+			if anchor.before {
+				return max(0, block.Start-1), true
+			}
 			return block.Start + min(anchor.offset, max(0, block.End-block.Start-1)), true
 		}
 	}
