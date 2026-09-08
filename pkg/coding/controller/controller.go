@@ -533,7 +533,7 @@ func (c *Controller) coordinate() {
 	var nextEvidenceID uint64
 	var closeReplies []chan error
 	var closeErr error
-	var acceptedSteers map[string]string
+	var turnSteering *turnSteeringState
 
 	finishClose := func() bool {
 		if !closing || primary.active() || activeEvidence != nil || len(evidenceQueue) != 0 {
@@ -607,6 +607,7 @@ func (c *Controller) coordinate() {
 	for {
 		select {
 		case <-pendingTurnReady:
+			turnSteering.open()
 			pendingTurnAdmission.reply <- nil
 			pendingTurnAdmission = nil
 			pendingTurnReady = nil
@@ -614,6 +615,7 @@ func (c *Controller) coordinate() {
 		case <-pendingTurnCanceled:
 			select {
 			case <-pendingTurnReady:
+				turnSteering.open()
 				pendingTurnAdmission.reply <- nil
 			default:
 				primary.cancel(context.Cause(pendingTurnAdmission.ctx))
@@ -662,6 +664,7 @@ func (c *Controller) coordinate() {
 			if result.kind == operationTurn && pendingTurnAdmission != nil {
 				select {
 				case <-pendingTurnReady:
+					turnSteering.open()
 					pendingTurnAdmission.reply <- nil
 				default:
 					admissionErr := result.err
@@ -686,6 +689,7 @@ func (c *Controller) coordinate() {
 			}
 			c.projectOperationError(result)
 			if result.kind == operationTurn {
+				turnSteering = nil
 				turnSettlementAvailable = true
 				turnSettlementErr = result.err
 				for _, waiter := range turnWaiters {
@@ -722,13 +726,13 @@ func (c *Controller) coordinate() {
 				}
 				turnSettlementAvailable = false
 				turnSettlementErr = nil
-				acceptedSteers = make(map[string]string)
+				turnSteering = newTurnSteeringState()
 				operationCtx := primary.start(rootCtx, operationTurn)
 				ready := make(chan struct{})
 				var readyOnce sync.Once
 				go c.run(operationCtx, operationTurn, request.input, func() {
 					readyOnce.Do(func() { close(ready) })
-				})
+				}, turnSteering)
 				pendingTurnAdmission = &request
 				pendingTurnReady = ready
 				pendingTurnCanceled = request.ctx.Done()
@@ -748,28 +752,17 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrNoActiveTurn
 					continue
 				}
-				if accepted, exists := acceptedSteers[request.steer.ID]; exists {
-					if accepted == request.steer.Text {
-						request.reply <- nil
-					} else {
-						request.reply <- ErrSteerConflict
-					}
-					continue
-				}
-				if len(acceptedSteers) >= frontend.MaxSteersPerTurn {
-					request.reply <- ErrSteerLimit
-					continue
-				}
-				runtime, ok := c.runtime.(steeringRuntime)
-				if !ok {
-					request.reply <- ErrUnsupported
-					continue
-				}
-				err := runtime.Steer(request.ctx, request.steer)
-				if err == nil {
-					acceptedSteers[request.steer.ID] = request.steer.Text
-				}
-				request.reply <- err
+				request.reply <- turnSteering.steer(
+					request.ctx,
+					request.steer,
+					func(ctx context.Context, input frontend.SteerInput) error {
+						runtime, ok := c.runtime.(steeringRuntime)
+						if !ok {
+							return ErrUnsupported
+						}
+						return runtime.Steer(ctx, input)
+					},
+				)
 			case commandInterrupt:
 				if primary.is(operationReview) {
 					primary.cancel(context.Canceled)
@@ -791,6 +784,7 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrNoActiveTurn
 					continue
 				}
+				turnSteering.close()
 				err := c.runtime.HardCancel(request.ctx)
 				primary.cancel(ErrHardCanceled)
 				if err == nil {
@@ -807,7 +801,7 @@ func (c *Controller) coordinate() {
 					continue
 				}
 				operationCtx := primary.start(rootCtx, operationCompaction)
-				go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil)
+				go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil, nil)
 				request.reply <- nil
 			case commandRename, commandArchive, commandUnarchive:
 				if err := primary.admissionError(); err != nil {
@@ -903,6 +897,7 @@ func (c *Controller) coordinate() {
 				}
 				closing = true
 				if primary.is(operationTurn) && !primary.turnHardCancelRequested() {
+					turnSteering.close()
 					err := c.runtime.HardCancel(context.WithoutCancel(request.ctx))
 					closeErr = errors.Join(closeErr, err)
 					if err == nil {
@@ -928,11 +923,18 @@ func (c *Controller) coordinate() {
 	}
 }
 
-func (c *Controller) run(ctx context.Context, kind operationKind, input frontend.TurnInput, ready func()) {
+func (c *Controller) run(
+	ctx context.Context,
+	kind operationKind,
+	input frontend.TurnInput,
+	ready func(),
+	turnSteering *turnSteeringState,
+) {
 	var err error
 	var projectErr error
 	if kind == operationTurn {
 		err = c.runtime.RunTurn(ctx, input, ready)
+		turnSteering.close()
 		projectErr = err
 		if source, ok := c.runtime.(turnSettlementErrorSource); ok {
 			err = errors.Join(err, source.TurnSettlementError())

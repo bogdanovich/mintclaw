@@ -51,12 +51,25 @@ type recordingSteerRuntime struct {
 	steerErr error
 }
 
+type delayedReadySteerRuntime struct {
+	*delayedReadyRuntime
+	steerMu    sync.Mutex
+	steerCalls int
+}
+
 type completedSteerRuntime struct {
 	*blockingRuntime
-	steerMu       sync.Mutex
-	turnActive    bool
-	turnCompleted chan struct{}
-	steerCalls    int
+	steerMu           sync.Mutex
+	turnCompleted     chan struct{}
+	settlementRelease chan struct{}
+	steerCalls        int
+}
+
+func (runtime *delayedReadySteerRuntime) Steer(_ context.Context, _ frontend.SteerInput) error {
+	runtime.steerMu.Lock()
+	runtime.steerCalls++
+	runtime.steerMu.Unlock()
+	return nil
 }
 
 func (runtime *completedSteerRuntime) RunTurn(
@@ -64,29 +77,25 @@ func (runtime *completedSteerRuntime) RunTurn(
 	input frontend.TurnInput,
 	ready func(),
 ) error {
-	runtime.steerMu.Lock()
-	runtime.turnActive = true
-	runtime.steerMu.Unlock()
 	runtime.runStarted <- input
 	ready()
 	select {
 	case <-runtime.runRelease:
 	case <-ctx.Done():
 	}
-	runtime.steerMu.Lock()
-	runtime.turnActive = false
-	close(runtime.turnCompleted)
-	runtime.steerMu.Unlock()
 	return ctx.Err()
 }
 
 func (runtime *completedSteerRuntime) Steer(_ context.Context, _ frontend.SteerInput) error {
 	runtime.steerMu.Lock()
 	defer runtime.steerMu.Unlock()
-	if !runtime.turnActive {
-		return ErrNoActiveTurn
-	}
 	runtime.steerCalls++
+	return nil
+}
+
+func (runtime *completedSteerRuntime) TurnSettlementError() error {
+	close(runtime.turnCompleted)
+	<-runtime.settlementRelease
 	return nil
 }
 
@@ -669,10 +678,57 @@ func TestSteerDoesNotCacheRuntimeFailure(t *testing.T) {
 	}
 }
 
+func TestSteerRejectsBeforeTurnReadinessWithoutCallingRuntime(t *testing.T) {
+	runtime := &delayedReadySteerRuntime{delayedReadyRuntime: &delayedReadyRuntime{
+		blockingRuntime: newBlockingRuntime(),
+		readyRelease:    make(chan struct{}),
+	}}
+	controller := newTestController(t, runtime)
+	submitResult := make(chan error, 1)
+	go func() {
+		submitResult <- controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"})
+	}()
+	select {
+	case <-runtime.runStarted:
+	case <-time.After(time.Second):
+		t.Fatal("runtime did not start")
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "early", Text: "too early"},
+	); !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("pre-readiness Steer() error = %v, want %v", err, ErrNoActiveTurn)
+	}
+	runtime.steerMu.Lock()
+	steerCalls := runtime.steerCalls
+	runtime.steerMu.Unlock()
+	if steerCalls != 0 {
+		t.Fatalf("pre-readiness steer reached runtime %d time(s)", steerCalls)
+	}
+	close(runtime.readyRelease)
+	if err := <-submitResult; err != nil {
+		t.Fatalf("Submit() after readiness error = %v", err)
+	}
+	if err := controller.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "active", Text: "now active"},
+	); err != nil {
+		t.Fatalf("active Steer() error = %v", err)
+	}
+	close(runtime.runRelease)
+	if err := controller.AwaitTurn(t.Context()); err != nil {
+		t.Fatalf("AwaitTurn() error = %v", err)
+	}
+	if err := controller.Close(t.Context()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
 func TestSteerRejectsRuntimeCompletedBeforeActorObservesResult(t *testing.T) {
 	runtime := &completedSteerRuntime{
-		blockingRuntime: newBlockingRuntime(),
-		turnCompleted:   make(chan struct{}),
+		blockingRuntime:   newBlockingRuntime(),
+		turnCompleted:     make(chan struct{}),
+		settlementRelease: make(chan struct{}),
 	}
 	controller := newTestController(t, runtime)
 	if err := controller.Submit(t.Context(), frontend.TurnInput{Text: "inspect"}); err != nil {
@@ -698,6 +754,10 @@ func TestSteerRejectsRuntimeCompletedBeforeActorObservesResult(t *testing.T) {
 	runtime.steerMu.Unlock()
 	if steerCalls != 0 {
 		t.Fatalf("late steer reached runtime queue %d time(s)", steerCalls)
+	}
+	close(runtime.settlementRelease)
+	if err := controller.AwaitTurn(t.Context()); err != nil {
+		t.Fatalf("AwaitTurn() error = %v", err)
 	}
 	if err := controller.Close(t.Context()); err != nil {
 		t.Fatalf("Close() error = %v", err)
