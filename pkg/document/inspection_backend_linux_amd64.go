@@ -69,6 +69,12 @@ func (pdfCPUInspectionBackend) Inspect(reader io.ReadSeeker, limits Limits) back
 	if catalogAcroForm != nil {
 		catalogAcroForm = catalogAcroForm.Clone()
 	}
+	if err = boundCatalogMetadata(context, preValidationRoot, limits.MaxContentBytes); err != nil {
+		if isPDFCPUResourceLimit(err) {
+			return failedInspection(FailureInspectionLimit, "document exceeds an inspection limit")
+		}
+		return failedInspection(FailureMalformedPDF, "PDF catalog metadata is malformed")
+	}
 	if err = pdfcpuapi.ValidateContext(context); err != nil {
 		if isPDFCPUResourceLimit(err) {
 			return failedInspection(FailureInspectionLimit, "document exceeds an inspection limit")
@@ -100,6 +106,39 @@ func (pdfCPUInspectionBackend) Inspect(reader io.ReadSeeker, limits Limits) back
 	}
 
 	return backendInspection{State: StateSucceeded, Facts: facts}
+}
+
+// boundCatalogMetadata pre-decodes the one stream that pdfcpu validation decodes
+// without consulting Configuration.Limits.MaxDecodeBytes. Persisting the bounded
+// result makes the validator reuse Content instead of invoking its 512 MiB default.
+func boundCatalogMetadata(context *model.Context, root types.Dict, limit int64) error {
+	metadata, found := root.Find("Metadata")
+	if !found || metadata == nil {
+		return nil
+	}
+	stream, _, err := context.DereferenceStreamDict(metadata)
+	if err != nil || stream == nil {
+		return err
+	}
+	content, err := decodeBoundedStream(*stream, limit)
+	if errors.Is(err, filter.ErrUnsupportedFilter) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("decode catalog metadata: %w", err)
+	}
+	stream.Content = content
+	switch value := metadata.(type) {
+	case types.IndirectRef:
+		entry, ok := context.FindTableEntry(value.ObjectNumber.Value(), value.GenerationNumber.Value())
+		if !ok || entry == nil || entry.Free {
+			return errors.New("catalog metadata object is unavailable")
+		}
+		entry.Object = *stream
+	case types.StreamDict:
+		root["Metadata"] = *stream
+	}
+	return nil
 }
 
 func isPDFCPUResourceLimit(err error) bool {

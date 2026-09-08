@@ -168,6 +168,18 @@
       "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
     },
     {
+      "id": "metadata-decoded-limit",
+      "file": "metadata-decoded-limit.pdf",
+      "sha256": "b436bafabf1718cbe4cb79750e2e8f72328dcd2dc7a28f811dd5904d08048ba5",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "inspection_limit",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
       "id": "unsigned-signature",
       "file": "unsigned-signature.pdf",
       "sha256": "7a9480cb8c667524fe074d609edf3fa03d7e834d5d43f6dda8f5b165f7157727",

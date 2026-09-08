@@ -49,6 +49,7 @@ func main() {
 		xfaFixture("xfa-dynamic.pdf", false, "required"),
 		xfaFixture("hybrid-xfa-static.pdf", true, "forbidden"),
 		xfaLimitFixture(),
+		metadataLimitFixture(),
 		unsignedSignatureFixture(),
 		signedFixture("signed-certified.pdf", "Sig", "DocMDP"),
 		signedFixture("field-restricted.pdf", "Sig", "FieldMDP"),
@@ -204,6 +205,19 @@ func xfaLimitFixture() fixture {
 		stream("BT /F1 12 Tf 72 720 Td (Synthetic XFA limit fixture) Tj ET\n"),
 		rawObject("<< /Fields [] /XFA 7 0 R >>"),
 		flateStream(payload),
+	}}
+}
+
+func metadataLimitFixture() fixture {
+	payload := append([]byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/">`), bytes.Repeat([]byte(" "), 9*1024*1024)...)
+	payload = append(payload, []byte(`</x:xmpmeta>`)...)
+	return fixture{name: "metadata-decoded-limit.pdf", objects: []pdfObject{
+		catalog("2 0 R", "/Metadata 6 0 R"),
+		pages("3 0 R"),
+		page("2 0 R", "5 0 R", "/Font << /F1 4 0 R >>", ""),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		stream("BT /F1 12 Tf 72 720 Td (Synthetic metadata limit fixture) Tj ET\n"),
+		flateStreamDict("/Type /Metadata /Subtype /XML", payload),
 	}}
 }
 
@@ -411,7 +425,7 @@ func manifestEntry(name, digest string) manifestFixture {
 			"state":        "failed",
 			"failure_code": "malformed_pdf",
 		}
-	case "decoded-content-limit.pdf", "decoded-content-array-limit.pdf":
+	case "decoded-content-limit.pdf", "decoded-content-array-limit.pdf", "metadata-decoded-limit.pdf":
 		expected = map[string]interface{}{
 			"state":        "failed",
 			"failure_code": "inspection_limit",
@@ -475,12 +489,16 @@ func streamDict(dictionary string, data []byte) pdfObject {
 }
 
 func flateStream(data []byte) pdfObject {
+	return flateStreamDict("", data)
+}
+
+func flateStreamDict(dictionary string, data []byte) pdfObject {
 	var compressed bytes.Buffer
 	writer := zlib.NewWriter(&compressed)
 	_, err := writer.Write(data)
 	must(err)
 	must(writer.Close())
-	return streamDict("/Filter /FlateDecode", compressed.Bytes())
+	return streamDict(strings.TrimSpace(dictionary+" /Filter /FlateDecode"), compressed.Bytes())
 }
 
 func encodePDF(objects []pdfObject) []byte {
