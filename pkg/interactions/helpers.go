@@ -135,6 +135,10 @@ func cloneExecutionContext(src *bus.InboundContext) *bus.InboundContext {
 	}
 	cloned := *src
 	cloned.MediaGroup.MessageIDs = append([]string(nil), src.MediaGroup.MessageIDs...)
+	if src.Interaction.OptionIndex != nil {
+		optionIndex := *src.Interaction.OptionIndex
+		cloned.Interaction.OptionIndex = &optionIndex
+	}
 	cloned.ReplyHandles = cloneStringMap(src.ReplyHandles)
 	cloned.Raw = cloneStringMap(src.Raw)
 	return &cloned

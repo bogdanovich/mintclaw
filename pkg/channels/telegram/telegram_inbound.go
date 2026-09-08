@@ -353,18 +353,6 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		"first_name": user.FirstName,
 		"is_group":   fmt.Sprintf("%t", message.Chat.Type != "private"),
 	}
-	if interactionReply.choice != "" {
-		metadata[bus.InboundMetadataKeyInteractionChoice] = interactionReply.choice
-	}
-	if interactionReply.response != "" {
-		metadata[bus.InboundMetadataKeyInteractionResponse] = interactionReply.response
-	}
-	if interactionReply.responseCandidate != "" {
-		metadata[bus.InboundMetadataKeyInteractionResponseCandidate] = interactionReply.responseCandidate
-	}
-	if interactionReply.shortID != "" {
-		metadata[bus.InboundMetadataKeyInteractionShortID] = interactionReply.shortID
-	}
 	inboundCtx := bus.InboundContext{
 		Channel:    c.Name(),
 		ChatID:     compositeChatID,
@@ -373,7 +361,13 @@ func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego
 		MessageID:  messageID,
 		Mentioned:  isMentioned,
 		MediaGroup: mediaGroup,
-		Raw:        metadata,
+		Interaction: bus.InboundInteractionProjection{
+			Choice:            interactionReply.choice,
+			Response:          interactionReply.response,
+			ResponseCandidate: interactionReply.responseCandidate,
+			ShortID:           interactionReply.shortID,
+		},
+		Raw: metadata,
 	}
 	if message.Chat.IsForum && threadID != 0 {
 		inboundCtx.TopicID = fmt.Sprintf("%d", threadID)

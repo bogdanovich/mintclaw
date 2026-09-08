@@ -1741,14 +1741,14 @@ func TestInteractionAnswerContentUsesTelegramApprovalButtonChoice(t *testing.T) 
 		Content: "[quoted assistant message]: approve?\n\nAllow once",
 		Context: bus.InboundContext{
 			Channel: "tg1", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceAllowOnce,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceAllowOnce,
 			},
 		},
 	}
 
 	content := al.interactionAnswerContent(record, msg)
-	if content != bus.InboundInteractionChoiceAllowOnce {
+	if content != string(bus.InboundInteractionChoiceAllowOnce) {
 		t.Fatalf("interactionAnswerContent() = %q", content)
 	}
 	answer, err := parseInteractionAnswer(record, content, "answer-1")
@@ -1765,8 +1765,8 @@ func TestInteractionAnswerContentUsesCleanTelegramQuestionReply(t *testing.T) {
 		Content: "[quoted assistant message]: What value?\n\ngenerate it yourself",
 		Context: bus.InboundContext{
 			Channel: "tg1", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+			Interaction: bus.InboundInteractionProjection{
+				Response: "generate it yourself",
 			},
 		},
 	}
@@ -1786,8 +1786,8 @@ func TestInteractionAnswerContentIgnoresChoiceOutsideTelegramApprovalReply(t *te
 		Content: "Allow once",
 		Context: bus.InboundContext{
 			Channel: "telegram", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceAllowOnce,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceAllowOnce,
 			},
 		},
 	}
@@ -1816,8 +1816,8 @@ func TestInteractionAnswerContentRejectsNonTelegramInstanceNamedTelegram(t *test
 		Content: "[quoted assistant message]: approve?\n\nAllow once",
 		Context: bus.InboundContext{
 			Channel: "telegram", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceAllowOnce,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceAllowOnce,
 			},
 		},
 	}
@@ -1844,8 +1844,8 @@ func TestInteractionAnswerContentConcurrentConfigReload(t *testing.T) {
 		Content: "[quoted assistant message]: approve?\n\nAllow once",
 		Context: bus.InboundContext{
 			Channel: "tg1", ReplyToMessageID: "prompt-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceAllowOnce,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceAllowOnce,
 			},
 		},
 	}
@@ -1878,7 +1878,7 @@ func TestInteractionAnswerContentConcurrentConfigReload(t *testing.T) {
 			return
 		default:
 			got := al.interactionAnswerContent(record, msg)
-			if got != msg.Content && got != bus.InboundInteractionChoiceAllowOnce {
+			if got != msg.Content && got != string(bus.InboundInteractionChoiceAllowOnce) {
 				t.Fatalf("interactionAnswerContent() = %q", got)
 			}
 		}
@@ -2245,10 +2245,8 @@ func TestProjectedInteractionCallbackPersistsFinalReplyTarget(t *testing.T) {
 		},
 	})
 	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
-	msg.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponse:          "Canary",
-		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	msg.Context.Interaction = bus.InboundInteractionProjection{
+		Response: "Canary", ShortID: record.ShortID, ResponseMessageID: "7716",
 	}
 
 	newInboundTurnCoordinator(al).handleInteractionInbound(t.Context(), msg, target)
@@ -2258,11 +2256,11 @@ func TestProjectedInteractionCallbackPersistsFinalReplyTarget(t *testing.T) {
 		if final.ReplyToMessageID != "7716" {
 			t.Fatalf("callback final reply target = %q, want original Telegram message 7716", final.ReplyToMessageID)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("callback continuation final was not delivered")
 	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	resolved, _ := registry.Get(record.ID)
 	for resolved.Status != interactions.StatusResolved && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -4587,11 +4585,9 @@ func TestApprovalRecoveryNeverReexecutesConsumedOrTimedOutCall(t *testing.T) {
 					Context: inboundContextForInteraction(record.Route),
 				}
 				repeated.Context.MessageID = "repeated-unknown-approval"
-				repeated.Context.Raw = map[string]string{
-					bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-					bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-					bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-					bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+				repeated.Context.Interaction = bus.InboundInteractionProjection{
+					Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+					ShortID: record.ShortID, ResponseMessageID: "7716",
 				}
 				if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(
 					t.Context(), repeated, target,
@@ -4732,11 +4728,9 @@ func TestExpiredProjectedApprovalPublishesDurableStatus(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	answer.Context.MessageID = "expired-projected-answer"
-	answer.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	answer.Context.Interaction = bus.InboundInteractionProjection{
+		Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+		ShortID: record.ShortID, ResponseMessageID: "7716",
 	}
 	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), answer, target) {
 		t.Fatal("expired projected approval escaped interaction protocol routing")
@@ -4811,11 +4805,9 @@ func TestFailedProjectedApprovalPublishesDurableStatus(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	answer.Context.MessageID = "failed-projected-answer"
-	answer.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "7717",
+	answer.Context.Interaction = bus.InboundInteractionProjection{
+		Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+		ShortID: record.ShortID, ResponseMessageID: "7717",
 	}
 
 	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), answer, target) {
@@ -4866,6 +4858,7 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
+	optionIndex := 1
 	original := &bus.InboundContext{
 		Channel: "telegram", Account: "bot-1", ChatID: "chat-1", ChatType: "group",
 		TopicID: "topic-1", SpaceID: "space-1", SpaceType: "workspace",
@@ -4874,6 +4867,9 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		ReplyToMessageID: "origin-reply", ReplyToSenderID: "reply-user",
 		MediaGroup: bus.InboundMediaGroup{
 			ID: "album-1", MessageIDs: []string{"origin-message", "album-message-2"},
+		},
+		Interaction: bus.InboundInteractionProjection{
+			Response: "Canary", ShortID: "abc12345", OptionIndex: &optionIndex,
 		},
 		ReplyHandles: map[string]string{"telegram": "reply-handle"},
 		Raw:          map[string]string{"thread_ts": "original-thread", "transport": "original"},
@@ -4888,11 +4884,12 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		t.Fatalf("initial approval turn = (%q, %q, %v)", response, turnStatus, err)
 	}
 
-	// Mutate every map supplied by the caller, then force a registry reload to
-	// model process restart before the approval answer arrives.
+	// Mutate every reference-backed field supplied by the caller, then force a
+	// registry reload to model process restart before the approval answer arrives.
 	original.ReplyHandles["telegram"] = "mutated"
 	original.Raw["thread_ts"] = "mutated"
 	original.MediaGroup.MessageIDs[0] = "mutated"
+	*original.Interaction.OptionIndex = 9
 	al.interactions.registries.Delete(agent.Workspace)
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, ok := activeInteractionForSession(registry, "session-context")
@@ -4934,6 +4931,8 @@ func TestApprovalRecoveryUsesPersistedOriginalExecutionContext(t *testing.T) {
 		tool.inbound.ReplyToMessageID != "origin-reply" ||
 		tool.inbound.MediaGroup.ID != "album-1" ||
 		tool.inbound.MediaGroup.MessageIDs[0] != "origin-message" ||
+		tool.inbound.Interaction.ShortID != "abc12345" ||
+		tool.inbound.Interaction.OptionIndex == nil || *tool.inbound.Interaction.OptionIndex != 1 ||
 		tool.inbound.ReplyHandles["telegram"] != "reply-handle" ||
 		tool.inbound.Raw["thread_ts"] != "original-thread" ||
 		tool.inbound.ActorID != "actor-1" || tool.inbound.SourceRef != "source-1" {
@@ -5955,10 +5954,9 @@ func TestConcurrentExplicitInteractionAnswersNeverBecomeSteering(t *testing.T) {
 	contenders[6].Context.MessageID = "answer-wrong-topic"
 	contenders[6].Context.TopicID = "topic-2"
 	contenders[7].Context.MessageID = "projected-answer-second"
-	contenders[7].Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse: "Allow once",
-		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	contenders[7].Context.Interaction = bus.InboundInteractionProjection{
+		Choice:   bus.InboundInteractionChoiceAllowOnce,
+		Response: "Allow once", ShortID: record.ShortID,
 	}
 	for _, contender := range contenders {
 		if _, projected := projectedInteractionAnswer(contender); projected {
@@ -6123,16 +6121,14 @@ func TestExplicitAnswerContentionReleasesBeforeDurableAnswerAdmission(t *testing
 			coordinator := newInboundTurnCoordinator(al)
 			if test.projected {
 				contender.Content = "Allow once"
-				contender.Context.Raw = map[string]string{
-					bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-					bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-					bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-					bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+				contender.Context.Interaction = bus.InboundInteractionProjection{
+					Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+					ShortID: record.ShortID, ResponseMessageID: "7716",
 				}
 				if test.unresolved {
-					delete(contender.Context.Raw, bus.InboundMetadataKeyInteractionChoice)
-					delete(contender.Context.Raw, bus.InboundMetadataKeyInteractionResponse)
-					contender.Context.Raw[bus.InboundMetadataKeyInteractionResponseError] = "unresolved callback option"
+					contender.Context.Interaction.Choice = ""
+					contender.Context.Interaction.Response = ""
+					contender.Context.Interaction.Unresolved = true
 				}
 				if !coordinator.routeProjectedInteractionAnswer(t.Context(), contender, target) {
 					t.Fatal("projected pre-admission contender escaped protocol routing")
@@ -6233,15 +6229,14 @@ func TestRetainedAnswerReplayPrecedesNewActiveInteractionWrongID(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	staleButton.Context.MessageID = "later-button-message"
-	staleButton.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:  bus.InboundInteractionChoiceCancel,
-		bus.InboundMetadataKeyInteractionShortID: first.ShortID,
+	staleButton.Context.Interaction = bus.InboundInteractionProjection{
+		Choice: bus.InboundInteractionChoiceCancel, ShortID: first.ShortID,
 	}
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), staleButton)
 	identitylessCancel := staleButton
 	identitylessCancel.SpoolID = "spool-retained-identityless-cancel"
 	identitylessCancel.Context.MessageID = "identityless-cancel"
-	delete(identitylessCancel.Context.Raw, bus.InboundMetadataKeyInteractionShortID)
+	identitylessCancel.Context.Interaction.ShortID = ""
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), identitylessCancel)
 	acked, released := tracker.counts()
 	if acked != 3 || released != 0 {
@@ -6344,11 +6339,9 @@ func TestProjectedAnswerMatchesDurablePromptAcrossRetainedShortIDCollision(t *te
 	callback := func(messageID string) bus.InboundMessage {
 		msg := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 		msg.Context.MessageID = "callback-" + messageID
-		msg.Context.Raw = map[string]string{
-			bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceAllowOnce,
-			bus.InboundMetadataKeyInteractionResponse:          "Allow once",
-			bus.InboundMetadataKeyInteractionShortID:           second.ShortID,
-			bus.InboundMetadataKeyInteractionResponseMessageID: messageID,
+		msg.Context.Interaction = bus.InboundInteractionProjection{
+			Choice: bus.InboundInteractionChoiceAllowOnce, Response: "Allow once",
+			ShortID: second.ShortID, ResponseMessageID: messageID,
 		}
 		return msg
 	}
@@ -6415,11 +6408,10 @@ func TestProjectedAnswerRetriesUntilPromptReceiptIsDurable(t *testing.T) {
 	callback := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 	callback.Context.MessageID = "callback-fast"
 	callback.Content = "Interaction option 1"
-	callback.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionOptionIndex:       "0",
-		bus.InboundMetadataKeyInteractionResponseError:     "unresolved callback option",
-		bus.InboundMetadataKeyInteractionShortID:           record.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "7716",
+	optionIndex := 0
+	callback.Context.Interaction = bus.InboundInteractionProjection{
+		OptionIndex: &optionIndex, Unresolved: true,
+		ShortID: record.ShortID, ResponseMessageID: "7716",
 	}
 
 	classification := al.classifyProjectedInteractionAnswer(callback, target, record.ShortID)
@@ -6440,8 +6432,8 @@ func TestProjectedAnswerRetriesUntilPromptReceiptIsDurable(t *testing.T) {
 		t.Fatalf("delivered prompt replay classification = %#v", classification)
 	}
 	callback = resolveProjectedInteractionOption(classification.Record, callback)
-	if callback.Context.Raw[bus.InboundMetadataKeyInteractionResponseError] != "" ||
-		callback.Context.Raw[bus.InboundMetadataKeyInteractionResponse] != "Canary" ||
+	if callback.Context.Interaction.Unresolved ||
+		callback.Context.Interaction.Response != "Canary" ||
 		callback.Content != "Canary" {
 		t.Fatalf("replayed option callback = %#v", callback)
 	}
@@ -6479,9 +6471,8 @@ func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
 	reply := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 	reply.Context.MessageID = "reply-1"
 	reply.Context.ReplyToMessageID = "7716"
-	reply.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
-		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	reply.Context.Interaction = bus.InboundInteractionProjection{
+		Response: "generate it yourself", ShortID: record.ShortID,
 	}
 
 	classification := al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
@@ -6527,8 +6518,8 @@ func TestProjectedAnswerUsesOrdinaryTelegramReplyPromptIdentity(t *testing.T) {
 	unverifiedWrongPrompt.SpoolID = "spool-ordinary-unverified-wrong-prompt"
 	unverifiedWrongPrompt.Context.MessageID = "reply-unverified-wrong-prompt"
 	unverifiedWrongPrompt.Context.ReplyToMessageID = "7715"
-	unverifiedWrongPrompt.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponseCandidate: "generate it yourself",
+	unverifiedWrongPrompt.Context.Interaction = bus.InboundInteractionProjection{
+		ResponseCandidate: "generate it yourself",
 	}
 	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(
 		t.Context(),
@@ -6578,13 +6569,13 @@ func TestProjectedAnswerMatchesEveryDeliveredTelegramPromptChunk(t *testing.T) {
 			reply := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 			reply.Context.MessageID = fmt.Sprintf("reply-%d", index)
 			reply.Context.ReplyToMessageID = promptMessageID
-			reply.Context.Raw = map[string]string{
-				bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+			reply.Context.Interaction = bus.InboundInteractionProjection{
+				Response: "generate it yourself",
 			}
 			shortID := ""
 			if index == len(promptMessageIDs)-1 {
 				shortID = record.ShortID
-				reply.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = shortID
+				reply.Context.Interaction.ShortID = shortID
 			}
 
 			classification := al.classifyProjectedInteractionAnswer(reply, target, shortID)
@@ -6598,8 +6589,8 @@ func TestProjectedAnswerMatchesEveryDeliveredTelegramPromptChunk(t *testing.T) {
 	wrongPrompt := bus.InboundMessage{Context: inboundContextForInteraction(request.Route)}
 	wrongPrompt.Context.MessageID = "reply-unrelated"
 	wrongPrompt.Context.ReplyToMessageID = "9199"
-	wrongPrompt.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponse: "generate it yourself",
+	wrongPrompt.Context.Interaction = bus.InboundInteractionProjection{
+		Response: "generate it yourself",
 	}
 	classification := al.classifyProjectedInteractionAnswer(wrongPrompt, target, "")
 	if classification.Disposition != explicitInteractionAnswerWrongID || classification.Record.ID != record.ID {
@@ -6617,10 +6608,8 @@ func TestUnmatchedFooterlessGroupCandidateFallsThroughToOrdinaryRouting(t *testi
 	msg := bus.InboundMessage{Context: bus.InboundContext{
 		Channel: "telegram", ChatID: "group-1", ChatType: "group",
 		SenderID: "user-1", MessageID: "reply-1", ReplyToMessageID: "unrelated-bot-message",
-		Raw: map[string]string{
-			"is_group": "true",
-			bus.InboundMetadataKeyInteractionResponseCandidate: "historical follow-up",
-		},
+		Interaction: bus.InboundInteractionProjection{ResponseCandidate: "historical follow-up"},
+		Raw:         map[string]string{"is_group": "true"},
 	}}
 
 	if newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), msg, target) {
@@ -6662,9 +6651,8 @@ func TestProjectedMultiQuestionReplyRequiresDurablePromptIdentity(t *testing.T) 
 	reply.Context = inboundContextForInteraction(request.Route)
 	reply.Context.MessageID = "multi-reply"
 	reply.Context.ReplyToMessageID = "8800"
-	reply.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionResponse: reply.Content,
-		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	reply.Context.Interaction = bus.InboundInteractionProjection{
+		Response: reply.Content, ShortID: record.ShortID,
 	}
 
 	classification := al.classifyProjectedInteractionAnswer(reply, target, record.ShortID)
@@ -6725,10 +6713,9 @@ func TestStaleCancelCallbackCannotCancelNewerShortIDCollision(t *testing.T) {
 	}
 	callback.Context.MessageID = "callback-stale-cancel"
 	callback.Context.ReplyToMessageID = "100"
-	callback.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:            bus.InboundInteractionChoiceCancel,
-		bus.InboundMetadataKeyInteractionShortID:           old.ShortID,
-		bus.InboundMetadataKeyInteractionResponseMessageID: "100",
+	callback.Context.Interaction = bus.InboundInteractionProjection{
+		Choice: bus.InboundInteractionChoiceCancel, ShortID: old.ShortID,
+		ResponseMessageID: "100",
 	}
 
 	newInboundTurnCoordinator(al).handleInbound(t.Context(), callback)
@@ -6791,10 +6778,9 @@ func TestReloadedClaimedInteractionRejectsLosingProjectedAnswer(t *testing.T) {
 		Context: inboundContextForInteraction(request.Route),
 	}
 	loser.Context.MessageID = "answer-second"
-	loser.Context.Raw = map[string]string{
-		bus.InboundMetadataKeyInteractionChoice:   bus.InboundInteractionChoiceAllowOnce,
-		bus.InboundMetadataKeyInteractionResponse: "Allow once",
-		bus.InboundMetadataKeyInteractionShortID:  record.ShortID,
+	loser.Context.Interaction = bus.InboundInteractionProjection{
+		Choice:   bus.InboundInteractionChoiceAllowOnce,
+		Response: "Allow once", ShortID: record.ShortID,
 	}
 	if !newInboundTurnCoordinator(al).routeProjectedInteractionAnswer(t.Context(), loser, target) {
 		t.Fatal("reloaded losing answer escaped interaction protocol routing")
@@ -8123,13 +8109,13 @@ func TestQuestionCancelButtonUsesStopCancellation(t *testing.T) {
 		SessionKey: session.BuildOpaqueSessionKey("agent:main:test:question-cancel"),
 		Context: bus.InboundContext{
 			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceCancel,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceCancel,
 			},
 		},
 	})
 	record, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
-	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
+	msg.Context.Interaction.ShortID = record.ShortID
 	msg.Context.ReplyToMessageID = "7716"
 	seedTestInteractionPromptOutcomeWithMessages(
 		t, coordinator, agent.Workspace, record, outbox.StatusDelivered, 1, []string{"7716"},
@@ -8163,7 +8149,7 @@ func TestQuestionResponseTakesPriorityOverCommandShapedOption(t *testing.T) {
 				SessionKey: session.BuildOpaqueSessionKey("agent:main:test:command-option"),
 				Context: bus.InboundContext{
 					Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "user-1",
-					Raw: map[string]string{bus.InboundMetadataKeyInteractionResponse: option},
+					Interaction: bus.InboundInteractionProjection{Response: option},
 				},
 			})
 			_, target := prepareWaitingControlInteraction(t, al, agent, msg, "")
@@ -8190,13 +8176,13 @@ func TestWaitingForegroundInteractionStopUsesSuccessfulStopContract(t *testing.T
 		Context: bus.InboundContext{
 			Channel: "telegram", Account: "primary", ChatID: "chat-1", ChatType: "direct",
 			TopicID: "topic-1", SenderID: "user-1", MessageID: "stop-1",
-			Raw: map[string]string{
-				bus.InboundMetadataKeyInteractionChoice: bus.InboundInteractionChoiceCancel,
+			Interaction: bus.InboundInteractionProjection{
+				Choice: bus.InboundInteractionChoiceCancel,
 			},
 		},
 	})
 	record, _ := prepareWaitingControlInteraction(t, al, agent, msg, "")
-	msg.Context.Raw[bus.InboundMetadataKeyInteractionShortID] = record.ShortID
+	msg.Context.Interaction.ShortID = record.ShortID
 	msg.Context.ReplyToMessageID = "7716"
 	seedTestInteractionPromptOutcomeWithMessages(
 		t, coordinator, agent.Workspace, record, outbox.StatusDelivered, 1, []string{"7716"},

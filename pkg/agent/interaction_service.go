@@ -140,13 +140,13 @@ func newCancelInteractionCommand(
 	msg bus.InboundMessage,
 	target *inboundDispatchTarget,
 ) (cancelInteractionCommand, bool) {
-	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionResponse]) != "" ||
+	if strings.TrimSpace(msg.Context.Interaction.Response) != "" ||
 		target == nil || target.Agent == nil {
 		return cancelInteractionCommand{}, false
 	}
 	name, matched := commands.CommandName(msg.Content)
-	if strings.TrimSpace(msg.Context.Raw[bus.InboundMetadataKeyInteractionChoice]) ==
-		bus.InboundInteractionChoiceCancel {
+	choice := bus.InboundInteractionChoice(strings.TrimSpace(string(msg.Context.Interaction.Choice)))
+	if choice == bus.InboundInteractionChoiceCancel {
 		name = "stop"
 		matched = true
 	}
@@ -305,9 +305,7 @@ func (service interactionService) Answer(
 			"I could not accept that answer: "+err.Error(),
 		)
 	}
-	answer.ResponseMessageID = strings.TrimSpace(
-		command.Message.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
-	)
+	answer.ResponseMessageID = strings.TrimSpace(command.Message.Context.Interaction.ResponseMessageID)
 	claimed, err := registry.ClaimAnswer(
 		record.ID,
 		record.Revision,
@@ -411,12 +409,10 @@ func (service interactionService) Cancel(
 	if !found || !command.Authorization.authorizes(record.Route) {
 		return result, nil
 	}
-	projectedChoice := strings.TrimSpace(
-		message.Context.Raw[bus.InboundMetadataKeyInteractionChoice],
+	projectedChoice := bus.InboundInteractionChoice(
+		strings.TrimSpace(string(message.Context.Interaction.Choice)),
 	)
-	projectedShortID := strings.TrimSpace(
-		message.Context.Raw[bus.InboundMetadataKeyInteractionShortID],
-	)
+	projectedShortID := strings.TrimSpace(message.Context.Interaction.ShortID)
 	if projectedChoice == bus.InboundInteractionChoiceCancel && projectedShortID == "" {
 		return result, nil
 	}

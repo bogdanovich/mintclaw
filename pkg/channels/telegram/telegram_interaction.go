@@ -26,7 +26,7 @@ type telegramInteractionControls struct {
 }
 
 type telegramInteractionReply struct {
-	choice            string
+	choice            bus.InboundInteractionChoice
 	response          string
 	responseCandidate string
 	shortID           string
@@ -181,7 +181,7 @@ func (c *TelegramChannel) telegramInteractionMetadata(
 	message *telego.Message,
 	content string,
 	senderID string,
-) (string, string) {
+) (bus.InboundInteractionChoice, string) {
 	reply := c.telegramInteractionReplyMetadata(message, content, senderID)
 	return reply.choice, reply.response
 }

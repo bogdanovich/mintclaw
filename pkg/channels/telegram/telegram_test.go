@@ -3624,8 +3624,11 @@ func TestHandleMessage_ApprovalButtonReplyPreservesQuoteAndProjectsChoice(t *tes
 		inbound.Content,
 	)
 	assert.Equal(t, bus.InboundInteractionChoiceAllowOnce,
-		inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
-	assert.Equal(t, "Allow once", inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+		inbound.Context.Interaction.Choice)
+	assert.Equal(t, "Allow once", inbound.Context.Interaction.Response)
+	assert.NotContains(t, inbound.Context.Raw, "interaction_choice")
+	assert.NotContains(t, inbound.Context.Raw, "interaction_response")
+	assert.NotContains(t, inbound.Context.Raw, "interaction_short_id")
 }
 
 func TestHandleMessage_ApprovalButtonReplyPassesGroupAndTopicMentionOnly(t *testing.T) {
@@ -3677,7 +3680,7 @@ func TestHandleMessage_ApprovalButtonReplyPassesGroupAndTopicMentionOnly(t *test
 			assert.Equal(t, test.wantChat, inbound.Context.ChatID)
 			assert.False(t, inbound.Context.Mentioned)
 			assert.Equal(t, bus.InboundInteractionChoiceAllowOnce,
-				inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
+				inbound.Context.Interaction.Choice)
 		})
 	}
 }
@@ -3737,7 +3740,7 @@ func TestHandleMessage_QuestionResponsesPassGroupMentionOnly(t *testing.T) {
 			case inbound := <-messageBus.InboundChan():
 				assert.False(t, inbound.Context.Mentioned)
 				assert.Equal(t, test.text,
-					inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+					inbound.Context.Interaction.Response)
 			case <-time.After(time.Second):
 				t.Fatal("question response was filtered")
 			}
@@ -3778,7 +3781,7 @@ func TestHandleMessage_FooterlessBotReplyReachesDurableGroupValidation(t *testin
 		assert.Equal(
 			t,
 			"@alice historical follow-up",
-			inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+			inbound.Context.Interaction.ResponseCandidate,
 		)
 	case <-time.After(time.Second):
 		t.Fatal("footerless bot reply was filtered before durable validation")
@@ -3823,7 +3826,7 @@ func TestHandleMessage_FooterlessReplyNormalizesOwnBotMentionOnly(t *testing.T) 
 		assert.Equal(
 			t,
 			"@alice allow once",
-			inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponseCandidate],
+			inbound.Context.Interaction.ResponseCandidate,
 		)
 	case <-time.After(time.Second):
 		t.Fatal("mentioned footerless reply was filtered")
@@ -3883,8 +3886,8 @@ func TestHandleMessage_ActiveCancelControlPassesGroupMentionOnly(t *testing.T) {
 	select {
 	case inbound := <-messageBus.InboundChan():
 		assert.Equal(t, bus.InboundInteractionChoiceCancel,
-			inbound.Context.Raw[bus.InboundMetadataKeyInteractionChoice])
-		assert.Empty(t, inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+			inbound.Context.Interaction.Choice)
+		assert.Empty(t, inbound.Context.Interaction.Response)
 	case <-time.After(time.Second):
 		t.Fatal("active cancel control was filtered")
 	}
@@ -4198,11 +4201,18 @@ func TestHandleInteractionCallbackPublishesIdentityBoundAnswer(t *testing.T) {
 	assert.Equal(
 		t,
 		"72",
-		published.Context.Raw[bus.InboundMetadataKeyInteractionResponseMessageID],
+		published.Context.Interaction.ResponseMessageID,
 	)
-	assert.Equal(t, "abc12345", published.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
-	assert.Equal(t, "Generate it", published.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
-	assert.Equal(t, "0", published.Context.Raw[bus.InboundMetadataKeyInteractionOptionIndex])
+	assert.Equal(t, "abc12345", published.Context.Interaction.ShortID)
+	assert.Equal(t, "Generate it", published.Context.Interaction.Response)
+	require.NotNil(t, published.Context.Interaction.OptionIndex)
+	assert.Equal(t, 0, *published.Context.Interaction.OptionIndex)
+	for _, key := range []string{
+		"interaction_choice", "interaction_response", "interaction_short_id",
+		"interaction_option_index", "interaction_response_message_id", "interaction_response_error",
+	} {
+		assert.NotContains(t, published.Context.Raw, key)
+	}
 	assert.Equal(t, "1771", published.Context.TopicID)
 	require.Len(t, caller.calls, 1)
 	assert.Contains(t, caller.calls[0].URL, "answerCallbackQuery")
@@ -4339,7 +4349,7 @@ func TestHandleInteractionCallbackPreservesControlsOwnedByAnotherGroupSender(t *
 	select {
 	case inbound := <-messageBus.InboundChan():
 		assert.Equal(t, "16", inbound.Context.SenderID)
-		assert.Equal(t, "owner123", inbound.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+		assert.Equal(t, "owner123", inbound.Context.Interaction.ShortID)
 	case <-time.After(time.Second):
 		t.Fatal("other-sender callback was not durably published")
 	}
@@ -4369,7 +4379,7 @@ func TestHandleInteractionCallbackWithEmptyProjectionDoesNotRemoveGroupControls(
 	select {
 	case inbound := <-messageBus.InboundChan():
 		assert.Equal(t, "16", inbound.Context.SenderID)
-		assert.Equal(t, "owner123", inbound.Context.Raw[bus.InboundMetadataKeyInteractionShortID])
+		assert.Equal(t, "owner123", inbound.Context.Interaction.ShortID)
 	case <-time.After(time.Second):
 		t.Fatal("callback with empty projection was not durably published")
 	}
@@ -4448,7 +4458,7 @@ func TestHandleMessage_CaptionReplyUsesCleanInteractionResponse(t *testing.T) {
 	require.NoError(t, ch.handleMessage(context.Background(), msg))
 	inbound := <-messageBus.InboundChan()
 	assert.Equal(t, "[quoted assistant message from mintclaw_bot]: Which input?\n\nuse this caption", inbound.Content)
-	assert.Equal(t, "use this caption", inbound.Context.Raw[bus.InboundMetadataKeyInteractionResponse])
+	assert.Equal(t, "use this caption", inbound.Context.Interaction.Response)
 }
 
 func TestTelegramQuotedContent_IncludesVoiceMarkerAlongsideCaption(t *testing.T) {
