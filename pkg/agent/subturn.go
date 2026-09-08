@@ -961,6 +961,11 @@ func (e *ephemeralSessionStore) ReadTurnSnapshot(
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if ctx != nil {
+		if err := context.Cause(ctx); err != nil {
+			return session.TurnSnapshot{}, err
+		}
+	}
 	return session.TurnSnapshot{
 		History: append([]providers.Message(nil), e.history...),
 		Summary: e.summary,

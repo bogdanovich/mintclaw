@@ -38,6 +38,20 @@ type eventCollector struct {
 	events []runtimeevents.Event
 }
 
+type observedCancellationContext struct {
+	context.Context
+	checked chan struct{}
+	once    sync.Once
+}
+
+func (c *observedCancellationContext) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.checked) })
+	return err
+}
+
+func (*observedCancellationContext) Value(any) any { return nil }
+
 func newEventCollector(t *testing.T, al *AgentLoop) (*eventCollector, func()) {
 	t.Helper()
 	c := &eventCollector{}
@@ -3672,6 +3686,26 @@ func TestEphemeralSession_AutoTruncate(t *testing.T) {
 	expectedFirstContent := fmt.Sprintf("message-%d", 20) // First 20 were discarded
 	if firstMsg.Content != expectedFirstContent {
 		t.Errorf("Expected first message to be %q, got %q", expectedFirstContent, firstMsg.Content)
+	}
+}
+
+func TestEphemeralSessionSnapshotRejectsCancellationWhileWaitingForLock(t *testing.T) {
+	store := newEphemeralSession(nil).(*ephemeralSessionStore)
+	store.mu.Lock()
+
+	base, cancel := context.WithCancel(t.Context())
+	ctx := &observedCancellationContext{Context: base, checked: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() {
+		_, err := store.ReadTurnSnapshot(ctx, "test")
+		result <- err
+	}()
+
+	<-ctx.checked
+	cancel()
+	store.mu.Unlock()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ReadTurnSnapshot() error = %v, want %v", err, context.Canceled)
 	}
 }
 
