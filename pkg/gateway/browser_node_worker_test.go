@@ -47,6 +47,7 @@ type browserNodeTestHandler struct {
 	redactNextDiagnostics    bool
 	dynamicContextCatalog    bool
 	rotateElementRefs        bool
+	closeInvocationIDs       []string
 	closeFailureCode         string
 	actFailureCode           string
 }
@@ -295,6 +296,7 @@ func (handler *browserNodeTestHandler) Invoke(
 			handler.redactNextContext = false
 		}
 	case nodes.BrowserCommandSessionClose:
+		handler.closeInvocationIDs = append(handler.closeInvocationIDs, plan.InvocationID)
 		if handler.closeFailureCode != "" {
 			now := time.Now().UnixNano()
 			handler.invocations[plan.InvocationID] = nodes.InvocationRecord{
@@ -352,7 +354,7 @@ func TestGatewayBrowserWorkerCloseAcceptsConfirmedMissingCompanionSession(t *tes
 	}
 }
 
-func TestGatewayBrowserWorkerPreservesCompanionCleanupRequired(t *testing.T) {
+func TestGatewayBrowserWorkerRetriesCompanionCleanupRequiredWithFreshInvocation(t *testing.T) {
 	cfg, runtime, handler := browserNodeTestRuntime(t)
 	factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
 	if err != nil {
@@ -376,6 +378,26 @@ func TestGatewayBrowserWorkerPreservesCompanionCleanupRequired(t *testing.T) {
 	if err = opened.Owner.Close(t.Context()); !errors.Is(err, browser.ErrCleanupRequired) ||
 		!errors.Is(err, browser.ErrWorkerUnavailable) {
 		t.Fatalf("Close() cleanup-required error = %v", err)
+	}
+	handler.mu.Lock()
+	handler.closeFailureCode = ""
+	handler.mu.Unlock()
+	if err = opened.Owner.Close(t.Context()); err != nil {
+		t.Fatalf("Close() retry error = %v", err)
+	}
+	handler.mu.Lock()
+	closeInvocationIDs := append([]string(nil), handler.closeInvocationIDs...)
+	handler.mu.Unlock()
+	if len(closeInvocationIDs) != 2 {
+		t.Fatalf("companion close dispatch count = %d, want 2", len(closeInvocationIDs))
+	}
+	if closeInvocationIDs[0] == closeInvocationIDs[1] {
+		t.Fatalf("companion close retry reused invocation ID %q", closeInvocationIDs[0])
+	}
+	worker := opened.Owner.(*nodeBrowserWorker)
+	status, statusErr := worker.Status(t.Context())
+	if statusErr != nil || status != browser.WorkerLost {
+		t.Fatalf("Status() after successful close retry = %q, %v", status, statusErr)
 	}
 }
 
