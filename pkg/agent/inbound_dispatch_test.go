@@ -2,11 +2,15 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 )
@@ -20,6 +24,7 @@ func newInboundDispatchTestLoop(t *testing.T) (*AgentLoop, func()) {
 func TestBuildInboundMessageTurn_ConstructsDispatchEnvelope(t *testing.T) {
 	al, cleanup := newInboundDispatchTestLoop(t)
 	defer cleanup()
+	mediaRef := installInboundMediaRef(t, al)
 
 	msg := bus.NormalizeInboundMessage(bus.InboundMessage{
 		Context: bus.InboundContext{
@@ -34,7 +39,7 @@ func TestBuildInboundMessageTurn_ConstructsDispatchEnvelope(t *testing.T) {
 			DisplayName: "Anton",
 		},
 		Content: "hello",
-		Media:   []string{"media://one"},
+		Media:   []string{mediaRef},
 	})
 
 	turn, err := al.buildInboundMessageTurn(context.Background(), msg)
@@ -80,8 +85,8 @@ func TestBuildInboundMessageTurn_ConstructsDispatchEnvelope(t *testing.T) {
 	if turn.Options.Dispatch.UserMessage != "hello" {
 		t.Fatalf("Dispatch.UserMessage = %q, want hello", turn.Options.Dispatch.UserMessage)
 	}
-	if len(turn.Options.Dispatch.Media) != 1 || turn.Options.Dispatch.Media[0] != "media://one" {
-		t.Fatalf("Dispatch.Media = %v, want [media://one]", turn.Options.Dispatch.Media)
+	if len(turn.Options.Dispatch.Media) != 1 || turn.Options.Dispatch.Media[0] != mediaRef {
+		t.Fatalf("Dispatch.Media = %v, want [%s]", turn.Options.Dispatch.Media, mediaRef)
 	}
 	if turn.Options.Dispatch.SenderID() != "telegram:42" || turn.Options.SenderDisplayName != "Anton" {
 		t.Fatalf(
@@ -100,6 +105,45 @@ func TestBuildInboundMessageTurn_ConstructsDispatchEnvelope(t *testing.T) {
 	if turn.Options.ModelBinding.WorkspaceAgent != turn.Agent {
 		t.Fatal("ModelBinding.WorkspaceAgent does not match routed agent")
 	}
+}
+
+func TestBuildInboundMessageTurnRejectsOpaqueMediaWithoutStore(t *testing.T) {
+	al, cleanup := newInboundDispatchTestLoop(t)
+	defer cleanup()
+
+	_, err := al.buildInboundMessageTurn(t.Context(), bus.InboundMessage{
+		Context: bus.InboundContext{
+			Channel: "telegram", ChatID: "chat-1", ChatType: "direct", SenderID: "telegram:42",
+		},
+		Content: "[media only]",
+		Media:   []string{"media://unbound"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "media store is unavailable") {
+		t.Fatalf("buildInboundMessageTurn() error = %v, want unavailable media store", err)
+	}
+}
+
+func TestBindInboundMediaOwnerAllowsMissingStoreWithoutOpaqueMedia(t *testing.T) {
+	if err := bindInboundMediaOwnerForTarget(nil, nil, bus.InboundMessage{
+		Media: []string{"https://example.invalid/document.pdf"},
+	}); err != nil {
+		t.Fatalf("non-opaque media admission error = %v", err)
+	}
+}
+
+func installInboundMediaRef(t *testing.T, al *AgentLoop) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "inbound.pdf")
+	if err := os.WriteFile(path, []byte("%PDF-1.7\ninbound\n%%EOF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := media.NewFileMediaStore()
+	ref, err := store.Store(path, media.MediaMeta{Filename: "inbound.pdf"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.SetMediaStore(store)
+	return ref
 }
 
 func TestBuildInboundMessageTurnIgnoresLegacySessionKey(t *testing.T) {
@@ -256,6 +300,7 @@ func TestBuildInboundMessageTurn_PreparesInboundMessage(t *testing.T) {
 func TestBuildInboundMessageTurnPersistsEventTimeRelationForReplay(t *testing.T) {
 	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+	mediaRef := installInboundMediaRef(t, al)
 	spool, err := bus.NewInboundSpool(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewInboundSpool failed: %v", err)
@@ -273,7 +318,7 @@ func TestBuildInboundMessageTurnPersistsEventTimeRelationForReplay(t *testing.T)
 			ReceivedAt: currentReceivedAt,
 		},
 		Content: "[media only]",
-		Media:   []string{"media://image-1"},
+		Media:   []string{mediaRef},
 	}
 	target, err := al.resolveInboundDispatchTarget(msg)
 	if err != nil {

@@ -18,8 +18,11 @@ func bindInboundMediaOwnerForTarget(
 	target *inboundDispatchTarget,
 	msg bus.InboundMessage,
 ) error {
-	if !hasOpaqueMediaRefs(msg.Media) || resolver == nil {
+	if !hasOpaqueMediaRefs(msg.Media) {
 		return nil
+	}
+	if resolver == nil {
+		return errors.New("media store is unavailable for opaque inbound media")
 	}
 	owner, err := inboundMediaOwnerForTarget(target, msg)
 	if err != nil {

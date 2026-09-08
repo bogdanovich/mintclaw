@@ -1,6 +1,7 @@
 package document
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -275,6 +276,128 @@ func TestAcquireOwnedMediaDeniesMutationAfterAuthorizedOpen(t *testing.T) {
 	if worker.calls != 0 {
 		t.Fatalf("worker calls = %d, want 0", worker.calls)
 	}
+	assertEmptyDirectory(t, scratch)
+}
+
+func TestAcquireOwnedMediaDeniesGrowthAfterAuthorizedOpen(t *testing.T) {
+	root := directTempDir(t)
+	inputPath := filepath.Join(root, "owned.pdf")
+	data := []byte("%PDF-1.7\noriginal\n%%EOF\n")
+	writeFixture(t, inputPath, data)
+	store := media.NewFileMediaStore()
+	ref, err := store.Store(inputPath, media.MediaMeta{Filename: "owned.pdf"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testMediaOwner(t)
+	if err := store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	resolver := &mutatingOwnedMediaResolver{
+		FileMediaStore: store,
+		path:           inputPath,
+		replacement:    append(append([]byte(nil), data...), bytes.Repeat([]byte("x"), 64)...),
+	}
+	worker := &countingWorker{}
+	scratch := filepath.Join(root, "protected")
+	snapshot, report := acquireMediaWithWorker(
+		t.Context(), resolver, ref, owner,
+		AcquireOptions{ScratchRoot: scratch, MaxBytes: int64(len(data) + 1)},
+		"linux", "amd64", worker,
+	)
+	if snapshot != nil {
+		t.Fatal("grown authority-bound source returned a snapshot")
+	}
+	assertFailure(t, report, StateDenied, FailureSourceUnauthorized)
+	if worker.calls != 0 {
+		t.Fatalf("worker calls = %d, want 0", worker.calls)
+	}
+	assertPathAbsent(t, scratch)
+}
+
+func TestAcquireOwnedMediaReportsLimitForPinnedInput(t *testing.T) {
+	root := directTempDir(t)
+	inputPath := filepath.Join(root, "owned.pdf")
+	data := []byte("%PDF-1.7\noriginal\n%%EOF\n")
+	writeFixture(t, inputPath, data)
+	store := media.NewFileMediaStore()
+	ref, err := store.Store(inputPath, media.MediaMeta{Filename: "owned.pdf"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testMediaOwner(t)
+	if err := store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	worker := &countingWorker{}
+	scratch := filepath.Join(root, "protected")
+	snapshot, report := acquireMediaWithWorker(
+		t.Context(), store, ref, owner,
+		AcquireOptions{ScratchRoot: scratch, MaxBytes: int64(len(data) - 1)},
+		"linux", "amd64", worker,
+	)
+	if snapshot != nil {
+		t.Fatal("oversized pinned source returned a snapshot")
+	}
+	assertFailure(t, report, StateFailed, FailureLimitExceeded)
+	if worker.calls != 0 {
+		t.Fatalf("worker calls = %d, want 0", worker.calls)
+	}
+	assertPathAbsent(t, scratch)
+}
+
+func TestAcquireOwnedMediaDeniesGrowthBetweenVerificationReads(t *testing.T) {
+	root := directTempDir(t)
+	inputPath := filepath.Join(root, "owned.pdf")
+	data := []byte("%PDF-1.7\noriginal\n%%EOF\n")
+	writeFixture(t, inputPath, data)
+	store := media.NewFileMediaStore()
+	ref, err := store.Store(inputPath, media.MediaMeta{Filename: "owned.pdf"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testMediaOwner(t)
+	if err := store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.OpenOwned(ref, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = source.Close() }()
+	scratch := filepath.Join(root, "protected")
+	report := newReport("document_operation_growth_between_reads", int64(len(data)+1))
+	snapshot, report := acquireSnapshotSource(
+		t.Context(),
+		acquisitionSource{
+			file:               source.File,
+			expectedIdentity:   &source.Identity,
+			authorizationBound: true,
+			ref:                ref,
+			filename:           "owned.pdf",
+			kind:               "inbound_media",
+			authority:          documentAuthority(owner),
+		},
+		scratch,
+		report,
+		func() {
+			file, openErr := os.OpenFile(inputPath, os.O_WRONLY|os.O_APPEND, 0)
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			if _, writeErr := file.Write(bytes.Repeat([]byte("x"), 64)); writeErr != nil {
+				_ = file.Close()
+				t.Fatal(writeErr)
+			}
+			if closeErr := file.Close(); closeErr != nil {
+				t.Fatal(closeErr)
+			}
+		},
+	)
+	if snapshot != nil {
+		t.Fatal("source grown between reads returned a snapshot")
+	}
+	assertFailure(t, report, StateDenied, FailureSourceUnauthorized)
 	assertEmptyDirectory(t, scratch)
 }
 

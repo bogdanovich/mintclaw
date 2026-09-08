@@ -488,9 +488,37 @@ func TestInboundMediaOwnerConflictReleasesBeforeClaimOrQueue(t *testing.T) {
 	}
 }
 
+func TestInboundOpaqueMediaWithoutStoreReleasesBeforeClaimOrQueue(t *testing.T) {
+	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	trackingBus := &finalResponseAdmissionTestBus{MessageBus: msgBus}
+	setTestMessageBus(al, trackingBus)
+	msg := finalResponseAdmissionInboundMessage("spool-media-no-store")
+	msg.Media = []string{"media://unbound"}
+	target, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		t.Fatal("resolveSteeringTarget() rejected test inbound")
+	}
+
+	newInboundTurnCoordinator(al).handleInbound(t.Context(), msg)
+
+	acked, released, cause := trackingBus.ownership()
+	if len(acked) != 0 || !containsExactly(released, msg.SpoolID) ||
+		cause == nil || !strings.Contains(cause.Error(), "media store is unavailable") {
+		t.Fatalf("missing-store ownership = acked:%v released:%v cause:%v", acked, released, cause)
+	}
+	if got := al.ActiveTurnCount(); got != 0 {
+		t.Fatalf("active turns after missing-store admission = %d, want 0", got)
+	}
+	if got := al.pendingSteeringCountForScope(target.runtimeSessionScope()); got != 0 {
+		t.Fatalf("queued steering after missing-store admission = %d, want 0", got)
+	}
+}
+
 func TestBlockedRootClassifiesAndPersistsAdjacentFollowupForReplay(t *testing.T) {
 	al, _, msgBus, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
+	mediaRef := installInboundMediaRef(t, al)
 	spoolDir := t.TempDir()
 	spool, err := bus.NewInboundSpool(spoolDir)
 	if err != nil {
@@ -540,7 +568,7 @@ func TestBlockedRootClassifiesAndPersistsAdjacentFollowupForReplay(t *testing.T)
 			ReceivedAt: followAt,
 		},
 		Content: "[media only]",
-		Media:   []string{"media://image-1"},
+		Media:   []string{mediaRef},
 	}
 	if err = msgBus.PublishInbound(t.Context(), followup); err != nil {
 		t.Fatalf("PublishInbound(follow-up) error = %v", err)

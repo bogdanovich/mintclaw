@@ -1916,6 +1916,7 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 	provider := &recordingProvider{}
 	al := NewAgentLoop(cfg, msgBus, provider)
 	useTestSideQuestionProvider(al, provider)
+	mediaRef := "https://example.invalid/image.png"
 
 	response, err := al.processMessage(context.Background(), testInboundMessage(bus.InboundMessage{
 		Context: bus.InboundContext{
@@ -1928,7 +1929,7 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 		},
 
 		Content: "/btw describe this image",
-		Media:   []string{"media://image-1"},
+		Media:   []string{mediaRef},
 	}))
 	if err != nil {
 		t.Fatalf("processMessage() error = %v", err)
@@ -1955,7 +1956,7 @@ func TestProcessMessage_BtwCommandIncludesRequestContextAndMedia(t *testing.T) {
 	if lastMessage.Role != "user" || lastMessage.Content != "describe this image" {
 		t.Fatalf("last provider message = %+v, want stripped /btw question", lastMessage)
 	}
-	if !reflect.DeepEqual(lastMessage.Media, []string{"media://image-1"}) {
+	if !reflect.DeepEqual(lastMessage.Media, []string{mediaRef}) {
 		t.Fatalf("last provider media = %#v, want media ref", lastMessage.Media)
 	}
 }

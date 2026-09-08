@@ -345,7 +345,19 @@ func acquireSnapshotSource(
 	if closeSource {
 		defer func() { _ = source.Close() }()
 	}
-	if sourceInfo.Size() > report.Limits.MaxInputBytes {
+	if input.authorizationBound {
+		if input.expectedIdentity == nil || sourceInfo.Size() != input.expectedIdentity.Size {
+			return nil, unauthorizedSource(report)
+		}
+		if input.expectedIdentity.Size > report.Limits.MaxInputBytes {
+			return nil, failReport(
+				report,
+				StateFailed,
+				FailureLimitExceeded,
+				"document exceeds the input byte limit",
+			)
+		}
+	} else if sourceInfo.Size() > report.Limits.MaxInputBytes {
 		return nil, failReport(report, StateFailed, FailureLimitExceeded, "document exceeds the input byte limit")
 	}
 
@@ -464,10 +476,6 @@ func acquisitionFailure(report Report, err error) Report {
 func acquisitionSourceFailure(report Report, input acquisitionSource, err error) Report {
 	if !input.authorizationBound || errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) {
-		return acquisitionFailure(report, err)
-	}
-	var typed *acquisitionError
-	if errors.As(err, &typed) && typed.code == FailureLimitExceeded {
 		return acquisitionFailure(report, err)
 	}
 	return unauthorizedSource(report)
