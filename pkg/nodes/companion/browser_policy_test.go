@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
-	rootconfig "github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
@@ -565,7 +564,7 @@ func TestConfigRejectsAmbiguousCompanionEphemeralRuntime(t *testing.T) {
 		{
 			name: "derived lifecycle lock overlaps root",
 			mutate: func(profile *BrowserProfilePolicy, _ string) {
-				profile.EphemeralRoot = profile.LockFile + rootconfig.BrowserEphemeralLifecycleLockSuffix
+				profile.EphemeralRoot = profile.LockFile + browserpolicy.EphemeralLifecycleLockSuffix
 				_ = os.Mkdir(profile.EphemeralRoot, 0o700)
 			},
 			wantErr: "lifecycle lock must be outside ephemeral_root",

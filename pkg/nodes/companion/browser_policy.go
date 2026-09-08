@@ -14,7 +14,6 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/browseraction"
 	"github.com/bogdanovich/mintclaw/pkg/browserpolicy"
-	rootconfig "github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/nodes"
 )
 
@@ -280,7 +279,7 @@ func normalizeBrowserProfile(
 		)
 	}
 	if profile.Mode == nodes.BrowserProfileEphemeral &&
-		pathWithin(lockFile+rootconfig.BrowserEphemeralLifecycleLockSuffix, storageRoot) {
+		pathWithin(lockFile+browserpolicy.EphemeralLifecycleLockSuffix, storageRoot) {
 		return BrowserProfilePolicy{}, fmt.Errorf(
 			"lifecycle lock must be outside %s",
 			storageField,
@@ -579,7 +578,7 @@ func browserProfileStorageRoot(profile BrowserProfilePolicy) string {
 func browserProfileLockFiles(profile BrowserProfilePolicy) []string {
 	locks := []string{profile.LockFile}
 	if profile.Mode == nodes.BrowserProfileEphemeral {
-		locks = append(locks, profile.LockFile+rootconfig.BrowserEphemeralLifecycleLockSuffix)
+		locks = append(locks, profile.LockFile+browserpolicy.EphemeralLifecycleLockSuffix)
 	}
 	return locks
 }

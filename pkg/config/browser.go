@@ -47,7 +47,7 @@ const (
 	BrowserMaxPreparedSeconds           = 5 * 60
 	BrowserDefaultTarget                = "gateway"
 	BrowserDefaultProfile               = "managed"
-	BrowserEphemeralLifecycleLockSuffix = ".ephemeral-lifecycle"
+	BrowserEphemeralLifecycleLockSuffix = browserpolicy.EphemeralLifecycleLockSuffix
 	BrowserMaxConfiguredOrigins         = 64
 )
 
