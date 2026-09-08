@@ -5786,7 +5786,7 @@ func TestPlainGuidanceSupersedesPendingApprovalAndResumesOriginatingContinuation
 func TestSupersedingMediaRelationSurvivesRegistryReload(t *testing.T) {
 	workspace := t.TempDir()
 	registry := interactions.NewRegistry(interactions.WorkspaceStorePath(workspace))
-	receivedAt := time.Date(2026, 9, 7, 4, 0, 0, 0, time.UTC)
+	receivedAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
 	record, err := registry.Create(interactions.CreateRequest{
 		Kind: interactions.KindApproval,
 		Route: interactions.Route{
