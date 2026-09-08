@@ -19,21 +19,34 @@ func capabilitiesFor(goos, goarch string) CapabilityReport {
 	if goos == "linux" && goarch == "amd64" {
 		acquire = OperationCapability{State: CapabilitySupported}
 	}
-	workerReason := "document inspection backend is not selected yet"
+	inspect := OperationCapability{
+		State:  CapabilityUnavailable,
+		Reason: "document inspection is admitted only with the packaged linux/amd64 backend",
+	}
+	if goos == "linux" && goarch == "amd64" {
+		inspect = OperationCapability{State: CapabilitySupported}
+	}
+	laterReason := "document extraction and rendering are not implemented yet"
 	return CapabilityReport{
 		SchemaVersion: CapabilitySchemaVersion,
 		Platform:      goos,
 		Architecture:  goarch,
 		Operations: map[string]OperationCapability{
 			"acquire": acquire,
-			"inspect": {State: CapabilityUnavailable, Reason: workerReason},
-			"extract": {State: CapabilityUnavailable, Reason: workerReason},
-			"render":  {State: CapabilityUnavailable, Reason: workerReason},
+			"inspect": inspect,
+			"extract": {State: CapabilityUnavailable, Reason: laterReason},
+			"render":  {State: CapabilityUnavailable, Reason: laterReason},
 			"fields":  {State: CapabilityUnavailable, Reason: "AcroForm support is not implemented yet"},
 			"fill":    {State: CapabilityUnavailable, Reason: "AcroForm support is not implemented yet"},
 			"verify":  {State: CapabilityUnavailable, Reason: "document verification is not implemented yet"},
 			"flatten": {State: CapabilityUnavailable, Reason: "document transformation is not implemented yet"},
 		},
-		Limits: Limits{MaxInputBytes: DefaultMaxInputBytes},
+		Limits: Limits{
+			MaxInputBytes:     DefaultMaxInputBytes,
+			MaxPages:          DefaultMaxPages,
+			MaxContentBytes:   DefaultMaxContentBytes,
+			MaxObjects:        DefaultMaxObjects,
+			MaxRecursionDepth: DefaultMaxRecursionDepth,
+		},
 	}
 }

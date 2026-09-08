@@ -171,14 +171,25 @@ func acquireForPlatform(
 	goos string,
 	goarch string,
 ) (*Snapshot, Report) {
+	return acquireOperationForPlatform(ctx, inputPath, options, goos, goarch, operationAcquire)
+}
+
+func acquireOperationForPlatform(
+	ctx context.Context,
+	inputPath string,
+	options AcquireOptions,
+	goos string,
+	goarch string,
+	operation string,
+) (*Snapshot, Report) {
 	operationID := "document_operation_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	maxBytes := options.MaxBytes
 	if maxBytes <= 0 || maxBytes > DefaultMaxInputBytes {
 		maxBytes = DefaultMaxInputBytes
 	}
-	report := newReport(operationID, maxBytes)
+	report := newOperationReport(operationID, operation, maxBytes)
 
-	capability := capabilitiesFor(goos, goarch).Operations[operationAcquire]
+	capability := capabilitiesFor(goos, goarch).Operations[operation]
 	if capability.State != CapabilitySupported {
 		return nil, failReport(
 			report,
@@ -204,14 +215,27 @@ func acquireMediaForPlatform(
 	goos string,
 	goarch string,
 ) (*Snapshot, Report) {
+	return acquireMediaOperationForPlatform(ctx, resolver, ref, owner, options, goos, goarch, operationAcquire)
+}
+
+func acquireMediaOperationForPlatform(
+	ctx context.Context,
+	resolver OwnedMediaResolver,
+	ref string,
+	owner media.MediaOwner,
+	options AcquireOptions,
+	goos string,
+	goarch string,
+	operation string,
+) (*Snapshot, Report) {
 	operationID := "document_operation_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	maxBytes := options.MaxBytes
 	if maxBytes <= 0 || maxBytes > DefaultMaxInputBytes {
 		maxBytes = DefaultMaxInputBytes
 	}
-	report := newReport(operationID, maxBytes)
+	report := newOperationReport(operationID, operation, maxBytes)
 
-	capability := capabilitiesFor(goos, goarch).Operations[operationAcquire]
+	capability := capabilitiesFor(goos, goarch).Operations[operation]
 	if capability.State != CapabilitySupported {
 		return nil, failReport(report, StateUnavailable, FailureUnsupportedPlatform, capability.Reason)
 	}
@@ -281,12 +305,18 @@ func documentAuthority(owner media.MediaOwner) Authority {
 }
 
 func newReport(operationID string, maxBytes int64) Report {
+	return newOperationReport(operationID, operationAcquire, maxBytes)
+}
+
+func newOperationReport(operationID, operation string, maxBytes int64) Report {
+	limits := defaultInspectionLimits()
+	limits.MaxInputBytes = maxBytes
 	return Report{
 		SchemaVersion: ReportSchemaVersion,
 		OperationID:   operationID,
-		Operation:     operationAcquire,
+		Operation:     operation,
 		State:         StateFailed,
-		Limits:        Limits{MaxInputBytes: maxBytes},
+		Limits:        limits,
 	}
 }
 

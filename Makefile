@@ -1,4 +1,4 @@
-.PHONY: all build build-node build-node-broker install uninstall clean help test test-document integration-test build-all fmt fmt-check lint lint-docs fix
+.PHONY: all build build-node build-node-broker install uninstall clean help test test-document test-document-oracle integration-test build-all fmt fmt-check lint lint-docs fix
 
 # Build variables
 BINARY_NAME=mintclaw
@@ -377,6 +377,10 @@ test: generate
 test-document:
 	@$(GO) test $(GOFLAGS) ./pkg/document ./cmd/mintclaw/internal/document
 	@./scripts/document-worker-smoke.sh
+
+## test-document-oracle: Compare PDF0B fixtures with the independent Poppler oracle
+test-document-oracle:
+	@./scripts/document-inspection-oracle.sh
 
 ## integration-test: Run Docker-backed integration test suites
 integration-test:

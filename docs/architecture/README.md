@@ -65,6 +65,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
 - [Reliable PDF Support Roadmap Review](pdf-support-roadmap-review.md):
   architecture-completeness audit, admitted decisions, findings, and stop gates
   for the PDF execution program.
+- [PDF0B Implementation Goal](pdf0b-implementation-goal.md): bounded implementation contract,
+  acceptance criteria, deployment sequence, and the stop boundary before PDF1A.
+- [PDF0B Inspection Backend Decision](pdf0b-backend-decision.md): selected pdfcpu worker backend,
+  Poppler oracle, normalized facts, candidate evidence, packaging, and rollback boundary.
 - [Browser Capability B0 Admission](browser-capability-b0-admission.md):
   admitted no-blind-replay, exclusive stdio lease, MCP artifact ownership,
   specialist allowlist, diagnostics, deployment evidence, and exact stop

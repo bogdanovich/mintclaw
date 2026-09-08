@@ -1,0 +1,420 @@
+{
+  "schema_version": "mintclaw.document_inspection_fixture_manifest.v1",
+  "privacy": "synthetic_only",
+  "generator": "testdata/generate/main.go",
+  "license": "MIT (MintClaw repository)",
+  "fixtures": [
+    {
+      "id": "text",
+      "file": "text.pdf",
+      "sha256": "bb1c32a5cbf83bc27a6828ef35ad96e598e26882c07d1cb16bc2eeb805b98797",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "absent",
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "present",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "image-only",
+      "file": "image-only.pdf",
+      "sha256": "bd75944054f30fa20ad4891eb4e0e9c1c048837edbc43cf13502d3cafa9d9dc0",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "absent",
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "absent",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "name-operands-no-text",
+      "file": "name-operands-no-text.pdf",
+      "sha256": "9e0958f7b7524170eee8e147d5d7724ad0a8ec26d61a310c16b7b1334951bd8a",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "absent",
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "absent",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "inline-image",
+      "file": "inline-image.pdf",
+      "sha256": "8aaaf57ea79b7ceaa79f76e67091f4e3e54c063b42b0a8b05d6fc0c9d762ccf1",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "absent",
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "unknown",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "mixed-pages",
+      "file": "mixed-pages.pdf",
+      "sha256": "729816fff25f690a0b958f088b1e95db8c751812cf56532f6bc9186b7bd94e1e",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "absent",
+        "page_count": 2,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "mixed",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "acroform",
+      "file": "acroform.pdf",
+      "sha256": "24847246c3a322229c7ac86bb7fb6b3c794ae12d9d9f3d1531fa03afddd9098d",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "present",
+        "field_count": 1,
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "present",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "xfa-dynamic",
+      "file": "xfa-dynamic.pdf",
+      "sha256": "817ebbb9294e91e65810b6613960181f4d52083224f5ab257d0637adfc867358",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "present",
+        "field_count": 0,
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "present",
+        "xfa": "present",
+        "xfa_rendering": "dynamic",
+        "xfa_representation": "stream"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "hybrid-xfa-static",
+      "file": "hybrid-xfa-static.pdf",
+      "sha256": "d1112aedf1dd9494a3af161d1e6360f6656d52f52ae93f159bab56dbc019a29f",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "present",
+        "field_count": 1,
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "present",
+        "xfa": "present",
+        "xfa_rendering": "static",
+        "xfa_representation": "stream"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "xfa-decoded-limit",
+      "file": "xfa-decoded-limit.pdf",
+      "sha256": "0d3c8aee0ec516ea10a986d5375a031b385ed52ce60117ff8cccdf3dcc5ebade",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "inspection_limit",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "metadata-decoded-limit",
+      "file": "metadata-decoded-limit.pdf",
+      "sha256": "b436bafabf1718cbe4cb79750e2e8f72328dcd2dc7a28f811dd5904d08048ba5",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "inspection_limit",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "malformed-metadata",
+      "file": "malformed-metadata.pdf",
+      "sha256": "61cce7804ee4064423541b9d37220f63e19e7ba4b050c5d4f235fb268889841f",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "malformed_pdf",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "unsigned-signature",
+      "file": "unsigned-signature.pdf",
+      "sha256": "7a9480cb8c667524fe074d609edf3fa03d7e834d5d43f6dda8f5b165f7157727",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "present",
+        "field_count": 1,
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "present",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "signed-certified",
+      "file": "signed-certified.pdf",
+      "sha256": "13df3da7104177b3d44251546a8ae4fea29a000279807bb32c824b9975bd7e41",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "present",
+        "certified": "present",
+        "doc_mdp": "present",
+        "field_count": 1,
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "present",
+        "signature_count": 1,
+        "signatures": "present",
+        "state": "succeeded",
+        "text": "present",
+        "timestamped": "unknown",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "field-restricted",
+      "file": "field-restricted.pdf",
+      "sha256": "9555fc2db94830bbd6e481a91b15fb95731a529f57d00322f97cf47a4ab594e6",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "present",
+        "certified": "absent",
+        "field_count": 1,
+        "field_mdp": "present",
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "present",
+        "signature_count": 1,
+        "signatures": "present",
+        "state": "succeeded",
+        "text": "present",
+        "timestamped": "unknown",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "timestamped",
+      "file": "timestamped.pdf",
+      "sha256": "a0ceaae585cfe0a8bb2a5a8fd3ac7953ebf50b14559e987305fe749d37c6b54f",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "present",
+        "certified": "absent",
+        "field_count": 1,
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signature_count": 1,
+        "signatures": "present",
+        "state": "succeeded",
+        "text": "present",
+        "timestamped": "present",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "rights-enabled",
+      "file": "rights-enabled.pdf",
+      "sha256": "70ea986340e41a4f09250116ca5724f768c0af02caa912a6c7e3649e5186c11f",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "absent",
+        "certified": "absent",
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "present",
+        "signature_count": 1,
+        "signatures": "present",
+        "state": "succeeded",
+        "text": "present",
+        "timestamped": "unknown",
+        "usage_rights": "present",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "orphan-structure",
+      "file": "orphan-structure.pdf",
+      "sha256": "875afe55122c2036135302916c94f9398a37472dec7c30b00ca8142c1be6fdbc",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "acroform": "absent",
+        "page_count": 1,
+        "pdf_version": "1.7",
+        "restrictions": "absent",
+        "signatures": "absent",
+        "state": "succeeded",
+        "text": "absent",
+        "xfa": "absent"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "truncated",
+      "file": "truncated.pdf",
+      "sha256": "a5a64cd00c49bc259028363d937850f3859760538214f60fe3edbadfc009fa2f",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "malformed_pdf",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "malformed-xref",
+      "file": "malformed-xref.pdf",
+      "sha256": "c11c5612f2063a76af1643f057349fb7836f8981c2d6c43cca791e1856f680f9",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "malformed_pdf",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "oversized-stream-declaration",
+      "file": "oversized-stream-declaration.pdf",
+      "sha256": "17a26c1c582d105d9092e4ec835740050392066733307211ddb57a8accb6d80c",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "malformed_pdf",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "oversized-object-count",
+      "file": "oversized-object-count.pdf",
+      "sha256": "5a563476b2fddb9b34225f663824733272855d7199f7462772c7430a555f892a",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "malformed_pdf",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "decoded-content-limit",
+      "file": "decoded-content-limit.pdf",
+      "sha256": "3db020b688893dfd3579058288ac2f68e2db12e67c4117044514af8011b6a0f7",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "inspection_limit",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "decoded-content-array-limit",
+      "file": "decoded-content-array-limit.pdf",
+      "sha256": "6a014fa4f4d92aa93faeb052174ab6a567276097f9382de9f5b6d2efd21ea3f2",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "inspection_limit",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "adversarial-nesting",
+      "file": "adversarial-nesting.pdf",
+      "sha256": "389d3bb39a7ded090fb28572e03b5f26d250ad11c9eff13ef253d105fdec6369",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "malformed_pdf",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
+      "id": "encrypted-password-required",
+      "file": "encrypted-password-required.pdf",
+      "sha256": "21f9c187f338d75d49c9eb2d20047c41b554363a0be141e955ed06de9bf4766a",
+      "construction": "pdfcpu_v0.15.0_aes256_one_time_password_discarded",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "encryption": "present",
+        "failure_code": "password_required",
+        "password_required": "present",
+        "state": "unsupported"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    }
+  ]
+}

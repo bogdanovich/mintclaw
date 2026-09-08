@@ -4,6 +4,8 @@ package document
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -61,6 +63,55 @@ func TestProcessWorkerAcceptsAuthorityBoundMediaSnapshot(t *testing.T) {
 		t.Fatalf("close snapshot: %v", err)
 	}
 	assertEmptyDirectory(t, scratch)
+}
+
+func TestProcessInspectorSuccessUsesRealSubprocessAndCleansScratch(t *testing.T) {
+	snapshot, input := processInspectorFixture(t, "single")
+	t.Setenv(workerSecretCanary, "must-not-reach-worker")
+	worker := testProcessWorker("serve")
+
+	result := worker.Inspect(t.Context(), snapshot, input, defaultInspectionLimits())
+	if result.State != StateSucceeded || result.Input == nil || result.Inspection == nil ||
+		result.Inspection.ExtractableText.State != FactPresent {
+		t.Fatalf("worker result = %#v", result)
+	}
+	assertOnlySnapshotRemains(t, snapshot)
+}
+
+func TestProcessInspectorConcurrentOperationsAreIsolated(t *testing.T) {
+	const operations = 4
+	t.Setenv(workerSecretCanary, "must-not-reach-worker")
+	type fixture struct {
+		snapshot *Snapshot
+		input    DocumentRef
+	}
+	fixtures := make([]fixture, operations)
+	for index := range fixtures {
+		fixtures[index].snapshot, fixtures[index].input = processInspectorFixture(
+			t,
+			fmt.Sprintf("concurrent_%d", index),
+		)
+	}
+
+	results := make(chan WorkerResult, operations)
+	worker := testProcessWorker("serve")
+	// Cold pdfcpu workers under the race detector can take several seconds each.
+	worker.timeout = 15 * time.Second
+	for _, item := range fixtures {
+		go func(snapshot *Snapshot, input DocumentRef) {
+			results <- worker.Inspect(t.Context(), snapshot, input, defaultInspectionLimits())
+		}(item.snapshot, item.input)
+	}
+	for range operations {
+		result := <-results
+		if result.State != StateSucceeded || result.Input == nil || result.Inspection == nil ||
+			result.Inspection.ExtractableText.State != FactPresent {
+			t.Errorf("worker result = %#v", result)
+		}
+	}
+	for _, item := range fixtures {
+		assertOnlySnapshotRemains(t, item.snapshot)
+	}
 }
 
 func TestProcessWorkerKillsDescendantAfterSuccessfulLeaderExit(t *testing.T) {
@@ -137,6 +188,29 @@ func TestProcessWorkerCancellationKillsDescendantProcessGroup(t *testing.T) {
 		assertWorkerFailure(t, result, StateCanceled, FailureCanceled)
 	case <-time.After(5 * time.Second):
 		t.Fatal("canceled worker did not return")
+	}
+	waitForProcessExit(t, childPID)
+	assertOnlySnapshotRemains(t, snapshot)
+}
+
+func TestProcessInspectorCancellationKillsDescendantProcessGroup(t *testing.T) {
+	snapshot, input := processInspectorFixture(t, "canceled")
+	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+	worker := testProcessWorker("descendant", pidFile)
+	worker.timeout = time.Minute
+	ctx, cancel := context.WithCancel(t.Context())
+	resultCh := make(chan WorkerResult, 1)
+	go func() {
+		resultCh <- worker.Inspect(ctx, snapshot, input, defaultInspectionLimits())
+	}()
+
+	childPID := waitForWorkerChildPID(t, pidFile)
+	cancel()
+	select {
+	case result := <-resultCh:
+		assertWorkerFailure(t, result, StateCanceled, FailureCanceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled inspector did not return")
 	}
 	waitForProcessExit(t, childPID)
 	assertOnlySnapshotRemains(t, snapshot)
@@ -255,6 +329,30 @@ func processWorkerFixture(t *testing.T) (*Snapshot, DocumentRef) {
 		ContentType: request.Input.ContentType,
 		Size:        request.Input.Size,
 		SHA256:      request.Input.SHA256,
+	}
+}
+
+func processInspectorFixture(t *testing.T, operationID string) (*Snapshot, DocumentRef) {
+	t.Helper()
+	dir := filepath.Join(directTempDir(t), "operation")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("create operation directory: %v", err)
+	}
+	path := filepath.Join(dir, "snapshot.pdf")
+	data, err := os.ReadFile(filepath.Join("testdata", "text.pdf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixture(t, path, data)
+	if err = os.Chmod(path, 0o400); err != nil {
+		t.Fatalf("protect snapshot: %v", err)
+	}
+	digest := sha256.Sum256(data)
+	return &Snapshot{path: path, dir: dir}, DocumentRef{
+		Ref:         "document://local/document_operation_" + operationID,
+		ContentType: "application/pdf",
+		Size:        int64(len(data)),
+		SHA256:      hex.EncodeToString(digest[:]),
 	}
 }
 

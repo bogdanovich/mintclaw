@@ -4,9 +4,13 @@ package document
 import "time"
 
 const (
-	ReportSchemaVersion     = "mintclaw.document_report.v1"
-	CapabilitySchemaVersion = "mintclaw.document_capabilities.v1"
-	DefaultMaxInputBytes    = int64(20 * 1024 * 1024)
+	ReportSchemaVersion      = "mintclaw.document_report.v1"
+	CapabilitySchemaVersion  = "mintclaw.document_capabilities.v1"
+	DefaultMaxInputBytes     = int64(20 * 1024 * 1024)
+	DefaultMaxPages          = 2_000
+	DefaultMaxContentBytes   = int64(8 * 1024 * 1024)
+	DefaultMaxObjects        = 200_000
+	DefaultMaxRecursionDepth = 64
 )
 
 type State string
@@ -37,7 +41,20 @@ const (
 	FailureWorkerOutputLimit   FailureCode = "worker_output_limit"
 	FailureWorkerTimeout       FailureCode = "worker_timeout"
 	FailureWorkerInputMismatch FailureCode = "worker_input_mismatch"
+	FailureMalformedPDF        FailureCode = "malformed_pdf"
+	FailurePasswordRequired    FailureCode = "password_required"
+	FailureInspectionLimit     FailureCode = "inspection_limit"
+	FailureBackendUnavailable  FailureCode = "backend_unavailable"
 	FailureInternal            FailureCode = "internal_failure"
+)
+
+type FactState string
+
+const (
+	FactPresent FactState = "present"
+	FactAbsent  FactState = "absent"
+	FactMixed   FactState = "mixed"
+	FactUnknown FactState = "unknown"
 )
 
 type Authority struct {
@@ -63,7 +80,11 @@ type DocumentRef struct {
 }
 
 type Limits struct {
-	MaxInputBytes int64 `json:"max_input_bytes"`
+	MaxInputBytes     int64 `json:"max_input_bytes"`
+	MaxPages          int   `json:"max_pages"`
+	MaxContentBytes   int64 `json:"max_content_bytes"`
+	MaxObjects        int   `json:"max_objects"`
+	MaxRecursionDepth int   `json:"max_recursion_depth"`
 }
 
 type Failure struct {
@@ -72,13 +93,83 @@ type Failure struct {
 }
 
 type Report struct {
-	SchemaVersion string       `json:"schema_version"`
-	OperationID   string       `json:"operation_id"`
-	Operation     string       `json:"operation"`
-	State         State        `json:"state"`
-	Input         *DocumentRef `json:"input,omitempty"`
-	Limits        Limits       `json:"limits"`
-	Failure       *Failure     `json:"failure,omitempty"`
+	SchemaVersion string           `json:"schema_version"`
+	OperationID   string           `json:"operation_id"`
+	Operation     string           `json:"operation"`
+	State         State            `json:"state"`
+	Input         *DocumentRef     `json:"input,omitempty"`
+	Limits        Limits           `json:"limits"`
+	Inspection    *InspectionFacts `json:"inspection,omitempty"`
+	Failure       *Failure         `json:"failure,omitempty"`
+}
+
+type StringFact struct {
+	State FactState `json:"state"`
+	Value string    `json:"value,omitempty"`
+}
+
+type IntegerFact struct {
+	State FactState `json:"state"`
+	Value *int      `json:"value,omitempty"`
+}
+
+type BackendIdentity struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Role    string `json:"role"`
+}
+
+type EncryptionFacts struct {
+	State            FactState  `json:"state"`
+	PasswordRequired FactState  `json:"password_required"`
+	Permissions      StringFact `json:"permissions"`
+}
+
+type SignatureFacts struct {
+	State       FactState   `json:"state"`
+	Count       IntegerFact `json:"count"`
+	Certified   FactState   `json:"certified"`
+	Timestamped FactState   `json:"timestamped"`
+}
+
+type RestrictionFacts struct {
+	State                FactState `json:"state"`
+	EncryptedPermissions FactState `json:"encrypted_permissions"`
+	DocMDP               FactState `json:"doc_mdp"`
+	FieldMDP             FactState `json:"field_mdp"`
+	UsageRights          FactState `json:"usage_rights"`
+	ReaderExtensions     FactState `json:"reader_extensions"`
+}
+
+type AcroFormFacts struct {
+	State      FactState   `json:"state"`
+	FieldCount IntegerFact `json:"field_count"`
+}
+
+type XFAFacts struct {
+	State          FactState  `json:"state"`
+	Representation StringFact `json:"representation"`
+	Rendering      StringFact `json:"rendering"`
+}
+
+type TextFacts struct {
+	State            FactState `json:"state"`
+	PagesWithText    int       `json:"pages_with_text"`
+	PagesWithoutText int       `json:"pages_without_text"`
+	PagesUnknown     int       `json:"pages_unknown"`
+}
+
+type InspectionFacts struct {
+	Backend         BackendIdentity  `json:"backend"`
+	PDFVersion      StringFact       `json:"pdf_version"`
+	PageCount       IntegerFact      `json:"page_count"`
+	Encryption      EncryptionFacts  `json:"encryption"`
+	Signatures      SignatureFacts   `json:"signatures"`
+	Restrictions    RestrictionFacts `json:"restrictions"`
+	AcroForm        AcroFormFacts    `json:"acroform"`
+	XFA             XFAFacts         `json:"xfa"`
+	ExtractableText TextFacts        `json:"extractable_text"`
+	Warnings        []string         `json:"warnings,omitempty"`
 }
 
 type OperationCapability struct {

@@ -136,6 +136,117 @@ func TestAcquireCommandWritesReportAndMapsExitClass(t *testing.T) {
 	}
 }
 
+func TestInspectCommandWritesStableReportAndMapsExitClass(t *testing.T) {
+	pageCount := 2
+	fieldCount := 1
+	success := documentpkg.Report{
+		SchemaVersion: documentpkg.ReportSchemaVersion,
+		OperationID:   "document_operation_inspect",
+		Operation:     "inspect",
+		State:         documentpkg.StateSucceeded,
+		Input: &documentpkg.DocumentRef{
+			Ref: "document://local/inspect", OriginalFilename: "sample.pdf",
+			ContentType: "application/pdf", Size: 12, SHA256: "abc",
+			Authority: documentpkg.Authority{Kind: "local_operator"}, SourceKind: "local_file",
+			CleanupPolicy: "delete_on_operation_close",
+		},
+		Limits: documentpkg.Limits{
+			MaxInputBytes:     documentpkg.DefaultMaxInputBytes,
+			MaxPages:          documentpkg.DefaultMaxPages,
+			MaxContentBytes:   documentpkg.DefaultMaxContentBytes,
+			MaxObjects:        documentpkg.DefaultMaxObjects,
+			MaxRecursionDepth: documentpkg.DefaultMaxRecursionDepth,
+		},
+		Inspection: &documentpkg.InspectionFacts{
+			Backend:    documentpkg.BackendIdentity{Name: "pdfcpu", Version: "v0.15.0", Role: "production"},
+			PDFVersion: documentpkg.StringFact{State: documentpkg.FactPresent, Value: "1.7"},
+			PageCount:  documentpkg.IntegerFact{State: documentpkg.FactPresent, Value: &pageCount},
+			Encryption: documentpkg.EncryptionFacts{State: documentpkg.FactAbsent},
+			Signatures: documentpkg.SignatureFacts{State: documentpkg.FactAbsent},
+			AcroForm: documentpkg.AcroFormFacts{
+				State: documentpkg.FactPresent, FieldCount: documentpkg.IntegerFact{
+					State: documentpkg.FactPresent, Value: &fieldCount,
+				},
+			},
+			XFA:             documentpkg.XFAFacts{State: documentpkg.FactAbsent},
+			ExtractableText: documentpkg.TextFacts{State: documentpkg.FactMixed},
+		},
+	}
+	tests := []struct {
+		name     string
+		report   documentpkg.Report
+		wantCode int
+	}{
+		{name: "success", report: success},
+		{
+			name: "password required",
+			report: documentpkg.Report{
+				SchemaVersion: documentpkg.ReportSchemaVersion, OperationID: "operation_password",
+				Operation: "inspect", State: documentpkg.StateUnsupported,
+				Failure: &documentpkg.Failure{
+					Code: documentpkg.FailurePasswordRequired, Message: "password required",
+				},
+			},
+			wantCode: 3,
+		},
+		{
+			name: "malformed",
+			report: documentpkg.Report{
+				SchemaVersion: documentpkg.ReportSchemaVersion, OperationID: "operation_malformed",
+				Operation: "inspect", State: documentpkg.StateFailed,
+				Failure: &documentpkg.Failure{Code: documentpkg.FailureMalformedPDF, Message: "malformed"},
+			},
+			wantCode: 4,
+		},
+		{
+			name: "limit",
+			report: documentpkg.Report{
+				SchemaVersion: documentpkg.ReportSchemaVersion, OperationID: "operation_limit",
+				Operation: "inspect", State: documentpkg.StateFailed,
+				Failure: &documentpkg.Failure{Code: documentpkg.FailureInspectionLimit, Message: "limit"},
+			},
+			wantCode: 5,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			deps := commandDeps{
+				capabilities: documentpkg.Capabilities,
+				inspect: func(
+					context.Context,
+					string,
+					documentpkg.AcquireOptions,
+				) (*documentpkg.Snapshot, documentpkg.Report) {
+					return nil, test.report
+				},
+				scratchRoot: t.TempDir,
+			}
+			cmd := newDocumentCommand(deps)
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs([]string{"inspect", "--input", "/not/exposed.pdf", "--json"})
+			err := cmd.Execute()
+			if test.wantCode == 0 && err != nil {
+				t.Fatalf("execute inspect: %v", err)
+			}
+			if test.wantCode != 0 {
+				var exitErr *ExitError
+				if !errors.As(err, &exitErr) || exitErr.Code != test.wantCode {
+					t.Fatalf("error = %#v, want exit code %d", err, test.wantCode)
+				}
+			}
+			var got documentpkg.Report
+			if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+				t.Fatalf("decode output: %v\n%s", err, output.String())
+			}
+			if got.State != test.report.State || bytes.Contains(output.Bytes(), []byte("/not/exposed.pdf")) {
+				t.Fatalf("output = %s", output.String())
+			}
+		})
+	}
+}
+
 func TestPrivateWorkerCommandIsHiddenAndUsesInheritedInput(t *testing.T) {
 	request := documentpkg.WorkerRequest{
 		SchemaVersion: documentpkg.WorkerRequestSchemaVersion,
@@ -145,6 +256,13 @@ func TestPrivateWorkerCommandIsHiddenAndUsesInheritedInput(t *testing.T) {
 			ContentType: "application/pdf",
 			Size:        4,
 			SHA256:      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+		Limits: documentpkg.Limits{
+			MaxInputBytes:     documentpkg.DefaultMaxInputBytes,
+			MaxPages:          documentpkg.DefaultMaxPages,
+			MaxContentBytes:   documentpkg.DefaultMaxContentBytes,
+			MaxObjects:        documentpkg.DefaultMaxObjects,
+			MaxRecursionDepth: documentpkg.DefaultMaxRecursionDepth,
 		},
 	}
 	requestBytes, err := json.Marshal(request)

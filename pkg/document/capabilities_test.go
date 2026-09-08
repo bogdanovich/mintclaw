@@ -2,7 +2,7 @@ package document
 
 import "testing"
 
-func TestCapabilitiesAdmitOnlyLinuxAMD64Acquisition(t *testing.T) {
+func TestCapabilitiesAdmitOnlyLinuxAMD64AcquisitionAndInspection(t *testing.T) {
 	tests := []struct {
 		goos  string
 		arch  string
@@ -22,11 +22,17 @@ func TestCapabilitiesAdmitOnlyLinuxAMD64Acquisition(t *testing.T) {
 			if report.Operations["acquire"].State != test.state {
 				t.Fatalf("acquire state = %q, want %q", report.Operations["acquire"].State, test.state)
 			}
-			if report.Operations["inspect"].State != CapabilityUnavailable {
-				t.Fatalf("inspect must remain unavailable before the isolated worker lands")
+			if report.Operations["inspect"].State != test.state {
+				t.Fatalf("inspect state = %q, want %q", report.Operations["inspect"].State, test.state)
 			}
 			if report.Limits.MaxInputBytes != DefaultMaxInputBytes {
 				t.Fatalf("max input bytes = %d, want %d", report.Limits.MaxInputBytes, DefaultMaxInputBytes)
+			}
+			if report.Limits.MaxPages != DefaultMaxPages ||
+				report.Limits.MaxContentBytes != DefaultMaxContentBytes ||
+				report.Limits.MaxObjects != DefaultMaxObjects ||
+				report.Limits.MaxRecursionDepth != DefaultMaxRecursionDepth {
+				t.Fatalf("inspection limits = %#v", report.Limits)
 			}
 		})
 	}
