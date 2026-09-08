@@ -2,12 +2,17 @@
 
 ## Status And Objective
 
-Status: admitted, not started.
+Status: in progress. Phase 1 is complete and Phase 2 is active.
 
 Implement Browser Identity and Attached-User Profiles end to end under
 [Browser Capability B4 Admission](browser-capability-b4-admission.md). The goal
 ends only after all five phases are merged, deployed, and live-validated on the
 placements named by each phase, and global completion evidence is committed.
+
+Credential injection, 1Password integration, Google Secret Manager, and all
+other password-manager or secret-manager implementation are explicitly outside
+this execution goal. Persistent managed profile login through visible handoff
+is the current authentication mechanism.
 
 Implementation uses the MintClaw autonomous pull-request workflow. Each phase
 is a focused pull request or the smallest coherent dependent sequence. Do not
@@ -18,8 +23,8 @@ evidence is sufficient to continue safely.
 
 | Phase | Status | Required outcome |
 | --- | --- | --- |
-| 1. Profile authority and production cutover | In progress | Canonical multi-profile schema, private runtime mapping, safe discovery, and lossless migration of the deployed `managed` identity |
-| 2. Managed alias and revocation parity | Pending | Arbitrary managed aliases, exact grants, revision-bound revocation, lease isolation, and gateway/companion conformance |
+| 1. Profile authority and production cutover | [Complete](../operations/browser-b4-phase1-evidence.md) | Canonical multi-profile schema, private runtime mapping, safe discovery, and lossless migration of the deployed `managed` identity |
+| 2. Managed alias and revocation parity | In progress | Arbitrary managed aliases, exact grants, revision-bound revocation, lease isolation, and gateway/companion conformance |
 | 3. Ephemeral profiles | Pending | Fresh session-only identity with verified cleanup and quarantine semantics on gateway and companion |
 | 4. Gateway attached Chrome | Pending | Visible per-session Playwright-extension consent, selected-tab authority, detach, and gateway lifecycle evidence |
 | 5. Companion attached Chrome and closeout | Pending | The same attached contract on the Darwin companion plus global B4 production evidence and roadmap closeout |
