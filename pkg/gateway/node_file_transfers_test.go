@@ -338,6 +338,28 @@ func TestNodeFileTransferSnapshotsOnlyRetainedMedia(t *testing.T) {
 	); !errors.Is(err, nodes.ErrTransferArtifactNotFound) {
 		t.Fatalf("cross-actor media snapshot error = %v", err)
 	}
+	mutatingStore := &mutatingOwnedNodeTransferMediaStore{
+		FileMediaStore: store,
+		path:           sourcePath,
+		replacement:    []byte{0xff, 4, 3, 2, 1, 0},
+	}
+	if _, err := source.SnapshotUploadArtifact(
+		t.Context(),
+		owner,
+		"transfer-mutated-after-open",
+		"personal-vpn",
+		"profile-v1",
+		time.Now().Add(5*time.Minute).Unix(),
+		1024,
+		mediaRef,
+		mutatingStore,
+		mediaOwner,
+	); !errors.Is(err, nodes.ErrTransferArtifactNotFound) {
+		t.Fatalf("post-open mutated media snapshot error = %v", err)
+	}
+	if err := os.WriteFile(sourcePath, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if _, err := source.SnapshotUploadArtifact(
 		t.Context(),
@@ -604,6 +626,27 @@ func testNodeTransferMediaOwner(t *testing.T, actor string) media.MediaOwner {
 		t.Fatal(err)
 	}
 	return owner
+}
+
+type mutatingOwnedNodeTransferMediaStore struct {
+	*media.FileMediaStore
+	path        string
+	replacement []byte
+}
+
+func (store *mutatingOwnedNodeTransferMediaStore) OpenOwned(
+	ref string,
+	owner media.MediaOwner,
+) (*media.OwnedMediaSource, error) {
+	source, err := store.FileMediaStore.OpenOwned(ref, owner)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(store.path, store.replacement, 0o600); err != nil {
+		_ = source.Close()
+		return nil, err
+	}
+	return source, nil
 }
 
 func testNodeTransferOwner() nodes.TransferArtifactOwner {
