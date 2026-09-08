@@ -2,15 +2,18 @@
 
 ## Status
 
-Selected execution program. This roadmap specializes the repository-level
+Selected execution program. PDF0A is complete for `linux/amd64`; its merged,
+deployed evidence and remaining platform limits are recorded in the
+[PDF0A exit record](pdf0a-exit-record.md). PDF0B is the next admitted milestone,
+but requires its own bounded implementation goal. This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
 
-The program begins with PDF0A only after this roadmap and its
-[architecture review](pdf-support-roadmap-review.md) are merged. Later
-milestones are not pre-admitted implementation scope: each requires the prior
-milestone's exit evidence and a focused admission or goal that fixes its exact
-behavior, authority, dependencies, and completion gates.
+The program began with PDF0A after this roadmap and its
+[architecture review](pdf-support-roadmap-review.md) merged. Later milestones
+are not pre-admitted implementation scope: each requires the prior milestone's
+exit evidence and a focused admission or goal that fixes its exact behavior,
+authority, dependencies, and completion gates.
 
 ## Objective
 

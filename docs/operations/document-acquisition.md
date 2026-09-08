@@ -2,13 +2,15 @@
 
 ## Status
 
-PDF0A acquisition and subprocess-boundary slice. The command proves bounded
+PDF0A acquisition and subprocess-boundary slice, complete for `linux/amd64`.
+The [PDF0A exit record](../architecture/pdf0a-exit-record.md) contains merged-main deployment,
+runtime, rollback, and residual-limit evidence. The command proves bounded
 local-file acquisition, immutable identity, and a real short-lived worker
 handshake. The shared service additionally admits an inbound `media://`
 reference only for its immutable workspace, agent, actor, route, and session
 owner. It does not parse PDF objects, render pages, register an agent tool, or
-retain a durable document job. PDF0A closes only after merged-main Linux
-deployment evidence and its exit record are committed.
+retain a durable document job. PDF parsing and inspection remain unavailable;
+PDF0B is a separate milestone.
 
 The initial admitted runtime tuple is `linux/amd64`. Other platforms return a
 structured `unsupported_platform` result. This is intentional until the
@@ -131,6 +133,5 @@ seccomp, or container manager for this feature.
 
 PDF object inspection remains unavailable. macOS remains fail-closed until its
 separate parity slice proves the same worker, fixture, packaging, and cleanup
-contracts described in the roadmap. After the code-side tests in this slice,
-the remaining PDF0A work is merged-main Linux deployment evidence and the
-milestone exit record.
+contracts described in the roadmap. PDF0A is closed for `linux/amd64`; the next
+implementation goal may cover only the admitted PDF0B inspection and backend-decision boundary.
