@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"reflect"
 	"slices"
@@ -1410,13 +1411,44 @@ func TestBrowserActSchemaExplainsConditionalContextAuthority(t *testing.T) {
 	for _, name := range []string{"context_catalog_id", "context_generation"} {
 		property := properties[name].(map[string]any)
 		description, _ := property["description"].(string)
-		if !strings.Contains(description, "Conditionally required") {
+		if !strings.Contains(description, "only when") ||
+			!strings.Contains(description, "omit both") ||
+			!strings.Contains(description, "placeholder") {
 			t.Fatalf("%s description = %q", name, description)
 		}
 	}
 	action := properties["action"].(map[string]any)
 	if description, _ := action["description"].(string); !strings.Contains(description, "do not add unrelated") {
 		t.Fatalf("action description = %q", description)
+	}
+}
+
+func TestBrowserActRejectsIncompleteContextAuthorityWithRecovery(t *testing.T) {
+	for _, context := range []map[string]any{
+		{"context_catalog_id": "???", "context_generation": 0},
+		{"context_catalog_id": "catalog_1"},
+		{"context_generation": 1},
+	} {
+		t.Run(fmt.Sprint(context), func(t *testing.T) {
+			source := &fakeBrowserToolSource{available: true}
+			arguments := map[string]any{
+				"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+				"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+				"action": map[string]any{"kind": "navigate", "url": "https://example.com"},
+			}
+			for key, value := range context {
+				arguments[key] = value
+			}
+			result := NewBrowserActTool(browserToolTestConfig(), source).Execute(
+				browserToolTestContext(), arguments,
+			)
+			if result == nil || !result.IsError || source.prepareCalls != 0 ||
+				!strings.Contains(result.ContentForLLM(), `"code":"invalid_context_authority"`) ||
+				!strings.Contains(result.ContentForLLM(), `"action":"observe_again_copy_returned_context_or_omit_both"`) ||
+				!strings.Contains(result.ContentForLLM(), "Never invent placeholder values") {
+				t.Fatalf("invalid context authority result = %#v; prepare calls = %d", result, source.prepareCalls)
+			}
+		})
 	}
 }
 
