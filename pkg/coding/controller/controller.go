@@ -737,14 +737,6 @@ func (c *Controller) coordinate() {
 					request.reply <- err
 					continue
 				}
-				if accepted, exists := acceptedSteers[request.steer.ID]; exists {
-					if accepted == request.steer.Text {
-						request.reply <- nil
-					} else {
-						request.reply <- ErrSteerConflict
-					}
-					continue
-				}
 				switch {
 				case primary.is(operationReview):
 					request.reply <- ErrReviewActive
@@ -754,6 +746,14 @@ func (c *Controller) coordinate() {
 					continue
 				case !primary.is(operationTurn):
 					request.reply <- ErrNoActiveTurn
+					continue
+				}
+				if accepted, exists := acceptedSteers[request.steer.ID]; exists {
+					if accepted == request.steer.Text {
+						request.reply <- nil
+					} else {
+						request.reply <- ErrSteerConflict
+					}
 					continue
 				}
 				if len(acceptedSteers) >= frontend.MaxSteersPerTurn {

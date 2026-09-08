@@ -103,7 +103,7 @@ func (p *Pipeline) continueWithSteeringAtExit(
 	llm *LLMIterationState,
 	reason string,
 ) bool {
-	hadAdmittedPending := len(exec.pendingMessages) > 0
+	hadAdmittedPending := exec.pendingInputs.Len() > 0
 	steerMessages := p.dequeueOrSealSteeringAtExit(ts, hadAdmittedPending)
 	if len(steerMessages) == 0 && !hadAdmittedPending {
 		return false
@@ -111,7 +111,7 @@ func (p *Pipeline) continueWithSteeringAtExit(
 	cancelConfiguredStreamingLLM(turnCtx, llm)
 	if len(steerMessages) > 0 {
 		exec.markSteeringObserved()
-		exec.pendingMessages = append(exec.pendingMessages, steerMessages...)
+		exec.pendingInputs.AppendSteering(steerMessages...)
 	}
 	logger.InfoCF(
 		"agent",
@@ -120,7 +120,7 @@ func (p *Pipeline) continueWithSteeringAtExit(
 			"agent_id":       ts.agent.ID,
 			"iteration":      ts.currentIteration(),
 			"reason":         reason,
-			"pending_count":  len(exec.pendingMessages),
+			"pending_count":  exec.pendingInputs.Len(),
 			"steering_count": len(steerMessages),
 		},
 	)
@@ -178,7 +178,7 @@ func (p *Pipeline) continueWithPendingSubTurnResults(
 			}
 			content := p.filterPendingResultForLLM(result.ForLLM)
 			msg := subTurnResultPromptMessage(content)
-			exec.pendingMessages = append(exec.pendingMessages, msg)
+			exec.pendingInputs.AppendSubTurn(msg)
 			appended = true
 		}
 		if appended {

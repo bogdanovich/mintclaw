@@ -662,7 +662,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 						"iteration":      iteration,
 						"steering_count": len(steerMsgs),
 					})
-				exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+				exec.pendingInputs.AppendSteering(steerMsgs...)
 				return LLMCallOutcome{Control: turnStepContinue}, nil
 			}
 		}

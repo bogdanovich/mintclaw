@@ -57,10 +57,9 @@ func (p *Pipeline) runPreparedTurnLoop(
 		return true
 	}
 
-turnLoop:
 	for {
 		graceful, _ := ts.gracefulInterruptRequested()
-		canRun := ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || graceful ||
+		canRun := ts.currentIteration() < ts.agent.MaxIterations || exec.pendingInputs.Len() > 0 || graceful ||
 			exec.objectiveRepairPending
 		if terminalRequested || (!canRun && !p.continueWithPendingSubTurnResults(ts, exec)) {
 			if exec.terminal.content == "" {
@@ -100,18 +99,10 @@ turnLoop:
 		}
 		repairIteration := exec.objectiveRepairActive
 
-		var pendingMessages []providers.Message
-		if !repairIteration {
-			pendingMessages = append([]providers.Message(nil), exec.pendingMessages...)
-		}
-		if len(pendingMessages) > 0 {
-			exec.markSteeringObserved()
-			exec.pendingMessages = nil
-		}
 		if !repairIteration && iteration == 1 && !ts.opts.mode.skipsInitialSteeringPoll() {
 			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 				exec.markSteeringObserved()
-				pendingMessages = append(pendingMessages, steerMsgs...)
+				exec.pendingInputs.AppendSteering(steerMsgs...)
 			}
 		}
 
@@ -146,58 +137,36 @@ turnLoop:
 			if result, ok := ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
 				content := p.filterPendingResultForLLM(result.ForLLM)
 				msg := subTurnResultPromptMessage(content)
-				pendingMessages = append(pendingMessages, msg)
+				exec.pendingInputs.AppendSubTurn(msg)
 			}
 		}
 
-		// Inject pending steering messages
-		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(
-				pendingMessages,
+		// Pending input remains in the turn-owned FIFO until each message crosses
+		// both canonical persistence and live-context insertion.
+		if !repairIteration && exec.pendingInputs.Len() > 0 {
+			exec.markSteeringObserved()
+			injection, injectionErr := p.injectPendingTurnInputs(
+				turnCtx,
+				ts,
+				exec,
 				mediaResolver,
-				p.Context.CodingMedia,
 				maxMediaSize,
-				0,
 			)
-			totalContentLen := 0
-			for i, pm := range pendingMessages {
-				providerMsg := providerPromptMessageForTurn(resolvedPending[i])
-				exec.messages = append(exec.messages, providerMsg)
-				totalContentLen += len(providerMsg.Content)
-				if !ts.opts.NoHistory {
-					writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &pm)
-					if writeErr != nil {
-						turnStatus = TurnEndStatusError
-						if continueAfterExit("steering persistence error") {
-							continue turnLoop
-						}
-						return turnResult{}, turnStatus, fmt.Errorf("persist steering message: %w", writeErr)
-					}
-					ts.recordPersistedMessage(pm)
-					p.ingestMessage(turnCtx, ts, pm, nil)
-				}
-				if exec.shouldTrackTurnOwnedSteering(pm) {
-					ts.recordAcceptedSteeringMessage(pm)
-				}
-				logger.InfoCF("agent", "Injected steering message into context",
-					map[string]any{
-						"agent_id":    ts.agent.ID,
-						"iteration":   iteration,
-						"content_len": len(providerMsg.Content),
-						"media_count": len(pm.Media),
-					})
+			if injection.count > 0 {
+				p.emitEvent(
+					runtimeevents.KindAgentSteeringInjected,
+					ts.eventMeta("runTurn", "turn.steering.injected"),
+					SteeringInjectedPayload{
+						Count:           injection.count,
+						TotalContentLen: injection.totalContentLen,
+					},
+				)
 			}
-			p.emitEvent(
-				runtimeevents.KindAgentSteeringInjected,
-				ts.eventMeta("runTurn", "turn.steering.injected"),
-				SteeringInjectedPayload{
-					Count:           len(pendingMessages),
-					TotalContentLen: totalContentLen,
-				},
-			)
-			// Clear exec.pendingMessages after injection so InitialSteeringMessages
-			// are not re-injected on subsequent iterations (Issue 2 fix).
-			exec.pendingMessages = nil
+			if injectionErr != nil {
+				turnStatus = TurnEndStatusError
+				p.settlePendingTurnInputsAfterFailure(ts, exec)
+				return turnResult{}, turnStatus, injectionErr
+			}
 		}
 		logger.DebugCF("agent", "LLM iteration",
 			map[string]any{
@@ -258,13 +227,13 @@ turnLoop:
 			}
 			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 				exec.markSteeringObserved()
-				exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+				exec.pendingInputs.AppendSteering(steerMsgs...)
 			}
 			if result, ok := ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
 				content := p.filterPendingResultForLLM(result.ForLLM)
-				exec.pendingMessages = append(exec.pendingMessages, subTurnResultPromptMessage(content))
+				exec.pendingInputs.AppendSubTurn(subTurnResultPromptMessage(content))
 			}
-			if len(exec.pendingMessages) > 0 {
+			if exec.pendingInputs.Len() > 0 {
 				continue
 			}
 		}

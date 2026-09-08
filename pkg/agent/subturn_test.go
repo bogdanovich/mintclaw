@@ -2079,8 +2079,9 @@ func TestPendingSubTurnResultForcesIterationAtLoopLimit(t *testing.T) {
 	if !pipeline.continueWithPendingSubTurnResults(ts, exec) {
 		t.Fatal("pending result did not request another iteration")
 	}
-	if len(exec.pendingMessages) != 1 || !strings.Contains(exec.pendingMessages[0].Content, "boundary result") {
-		t.Fatalf("pending messages = %#v, want boundary result", exec.pendingMessages)
+	pending := exec.pendingInputs.Snapshot()
+	if len(pending) != 1 || !strings.Contains(pending[0].Content, "boundary result") {
+		t.Fatalf("pending messages = %#v, want boundary result", pending)
 	}
 
 	if pipeline.continueWithPendingSubTurnResults(ts, exec) {
@@ -2101,8 +2102,8 @@ func TestEmptyPendingSubTurnResultDoesNotResumeTerminalTurn(t *testing.T) {
 	if pipeline.continueWithPendingSubTurnResults(ts, exec) {
 		t.Fatal("empty subturn result requested another iteration")
 	}
-	if len(exec.pendingMessages) != 0 {
-		t.Fatalf("empty subturn result appended pending messages: %#v", exec.pendingMessages)
+	if exec.pendingInputs.Len() != 0 {
+		t.Fatalf("empty subturn result appended pending messages: %#v", exec.pendingInputs.Snapshot())
 	}
 	deliverSubTurnResult(nil, ts, "after-empty", &toolshared.ToolResult{ForLLM: "too late"})
 	if got := len(ts.pendingResults); got != 0 {

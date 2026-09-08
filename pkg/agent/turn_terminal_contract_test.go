@@ -60,8 +60,9 @@ func TestRequiredTerminalRenderDrainsSubturnResultsAfterRendering(t *testing.T) 
 	if !accepted || !outcome.resume || outcome.err != nil {
 		t.Fatalf("terminal outcome = %#v, child accepted = %v", outcome, accepted)
 	}
-	if !messageContentPresent(exec.pendingMessages, "late child result") {
-		t.Fatalf("pending messages omitted late child result: %#v", exec.pendingMessages)
+	pending := exec.pendingInputs.Snapshot()
+	if !messageContentPresent(pending, "late child result") {
+		t.Fatalf("pending messages omitted late child result: %#v", pending)
 	}
 }
 
@@ -104,8 +105,9 @@ func TestTerminalRenderSteeringCancelsConfiguredStream(t *testing.T) {
 	if streamer.canceled != 1 || llm.streamingPublisher != nil {
 		t.Fatalf("stream cancellation = %d, publisher = %#v", streamer.canceled, llm.streamingPublisher)
 	}
-	if !messageContentPresent(exec.pendingMessages, "new direction") {
-		t.Fatalf("pending messages omitted steering: %#v", exec.pendingMessages)
+	pending := exec.pendingInputs.Snapshot()
+	if !messageContentPresent(pending, "new direction") {
+		t.Fatalf("pending messages omitted steering: %#v", pending)
 	}
 }
 

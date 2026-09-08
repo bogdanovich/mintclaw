@@ -412,7 +412,7 @@ type toolCallState struct {
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
 // tool execution with async callbacks, media delivery, and steering injection.
 // Returns an explicit outcome indicating what the coordinator should do next:
-//   - turnStepContinue: all tool results handled, pendingMessages or steering exists, continue turn
+//   - turnStepContinue: all tool results handled, pending input or steering exists, continue turn
 //   - turnStepFinalize: tool loop exited with a terminal rendering policy
 //   - turnStepSuspend: durable continuation ownership moved outside this turn
 //   - turnStepAbort: stop for a hook or hard-abort request
@@ -1643,12 +1643,12 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 
 	// Continue if steering was captured while the emitted tool batch completed.
 	// The next model iteration receives every real result plus the new user input.
-	if len(exec.pendingMessages) > 0 {
+	if exec.pendingInputs.Len() > 0 {
 		exec.markAdditionalUserInputObserved()
 		logger.InfoCF("agent", "Pending steering after emitted tool batch; continuing turn",
 			map[string]any{
 				"agent_id":                  ts.agent.ID,
-				"pending_count":             len(exec.pendingMessages),
+				"pending_count":             exec.pendingInputs.Len(),
 				"tool_response_disposition": llm.toolResponseDisposition.String(),
 			})
 		llm.toolResponseDisposition = toolResponseNeedsModel
@@ -1665,7 +1665,7 @@ func (runner *toolLoopRunner) completeToolBatch(ctx context.Context) ToolLoopOut
 				"agent_id":       ts.agent.ID,
 				"steering_count": len(steerMsgs),
 			})
-		exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+		exec.pendingInputs.AppendSteering(steerMsgs...)
 		llm.toolResponseDisposition = toolResponseNeedsModel
 		return ToolLoopOutcome{Control: turnStepContinue}
 	}
@@ -2034,14 +2034,20 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 }
 
 func (r *toolLoopRunner) transferPendingSteeringOwnership() {
-	if r == nil || r.exec == nil || r.ts == nil || len(r.exec.pendingMessages) == 0 {
+	if r == nil || r.exec == nil || r.ts == nil || r.exec.pendingInputs.Len() == 0 {
 		return
 	}
-	remaining := r.exec.pendingMessages[:0]
-	returned := make([]providers.Message, 0, len(r.exec.pendingMessages))
-	for _, msg := range r.exec.pendingMessages {
+	pending := r.exec.pendingInputs.Drain()
+	remaining := make([]turnPendingInput, 0, len(pending))
+	returned := make([]providers.Message, 0, len(pending))
+	for _, input := range pending {
+		msg := input.message
+		if input.kind != turnPendingSteering {
+			remaining = append(remaining, input)
+			continue
+		}
 		if !r.exec.shouldTrackTurnOwnedSteering(msg) {
-			remaining = append(remaining, msg)
+			remaining = append(remaining, input)
 			continue
 		}
 		if msg.InboundSpoolID == "" {
@@ -2050,7 +2056,7 @@ func (r *toolLoopRunner) transferPendingSteeringOwnership() {
 		}
 		r.ts.recordAcceptedSteeringMessage(msg)
 	}
-	r.exec.pendingMessages = remaining
+	r.exec.pendingInputs.appendEntries(remaining...)
 	r.p.returnSteeringMessagesForTurn(r.ts, returned)
 }
 
@@ -2357,7 +2363,7 @@ func (r *toolLoopRunner) captureSteering(markAdditional bool) {
 	} else {
 		r.exec.markSteeringObserved()
 	}
-	r.exec.pendingMessages = append(r.exec.pendingMessages, steerMsgs...)
+	r.exec.pendingInputs.AppendSteering(steerMsgs...)
 }
 
 func (r *toolLoopRunner) skipPendingToolForGracefulInterrupt(
@@ -2427,7 +2433,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	// A genuine user message that arrives before suspension admission is already
 	// the next same-turn input. Do not open a second, stale interaction for it.
 	r.captureSteering(false)
-	if len(r.exec.pendingMessages) > 0 {
+	if r.exec.pendingInputs.Len() > 0 {
 		resolveCanceled()
 		_ = r.appendToolMessage(providers.Message{
 			Role:             "tool",

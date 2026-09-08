@@ -161,10 +161,10 @@ type ActiveTurnInfo struct {
 
 type turnExecution struct {
 	// Core message state (accumulates throughout the turn)
-	messages        []providers.Message // built from ContextBuilder, grows per-iteration
-	pendingMessages []providers.Message // steering/SubTurn messages awaiting injection
-	history         []providers.Message // from ContextManager.Assemble
-	summary         string
+	messages      []providers.Message // built from ContextBuilder, grows per-iteration
+	pendingInputs turnPendingInputs   // steering/SubTurn messages awaiting durable injection
+	history       []providers.Message // from ContextManager.Assemble
+	summary       string
 
 	// Turn output
 	deliverable              *taskresult.Deliverable
@@ -190,6 +190,114 @@ type turnExecution struct {
 	// but turn-end cleanup must not ack/release their inbound spool entries
 	// again or it can race with continuation-level cleanup.
 	initialSteeringSpoolIDs map[string]struct{}
+}
+
+// turnPendingInputs is the single owner of messages accepted for a later
+// model iteration. A message remains at the queue head until both its durable
+// append and live-context insertion complete. This prevents a local batch
+// copy from stranding an acknowledged steer when persistence fails midway.
+type turnPendingInputKind uint8
+
+const (
+	turnPendingSteering turnPendingInputKind = iota
+	turnPendingSubTurn
+)
+
+type turnPendingInput struct {
+	kind    turnPendingInputKind
+	message providers.Message
+}
+
+type turnPendingInputs struct {
+	entries []turnPendingInput
+	cursor  int
+}
+
+func newTurnPendingInputs(messages []providers.Message) turnPendingInputs {
+	var pending turnPendingInputs
+	pending.AppendSteering(messages...)
+	return pending
+}
+
+func (pending *turnPendingInputs) AppendSteering(messages ...providers.Message) {
+	pending.append(turnPendingSteering, messages...)
+}
+
+func (pending *turnPendingInputs) AppendSubTurn(messages ...providers.Message) {
+	pending.append(turnPendingSubTurn, messages...)
+}
+
+func (pending *turnPendingInputs) append(kind turnPendingInputKind, messages ...providers.Message) {
+	if pending == nil || len(messages) == 0 {
+		return
+	}
+	if pending.cursor == len(pending.entries) {
+		pending.entries = nil
+		pending.cursor = 0
+	}
+	for _, message := range messages {
+		pending.entries = append(pending.entries, turnPendingInput{kind: kind, message: message})
+	}
+}
+
+func (pending *turnPendingInputs) appendEntries(entries ...turnPendingInput) {
+	if pending == nil || len(entries) == 0 {
+		return
+	}
+	if pending.cursor == len(pending.entries) {
+		pending.entries = nil
+		pending.cursor = 0
+	}
+	pending.entries = append(pending.entries, entries...)
+}
+
+func (pending *turnPendingInputs) Len() int {
+	if pending == nil {
+		return 0
+	}
+	return len(pending.entries) - pending.cursor
+}
+
+func (pending *turnPendingInputs) Snapshot() []providers.Message {
+	entries := pending.snapshotEntries()
+	if len(entries) == 0 {
+		return nil
+	}
+	messages := make([]providers.Message, len(entries))
+	for index, entry := range entries {
+		messages[index] = entry.message
+	}
+	return messages
+}
+
+func (pending *turnPendingInputs) snapshotEntries() []turnPendingInput {
+	if pending == nil || pending.cursor >= len(pending.entries) {
+		return nil
+	}
+	return append([]turnPendingInput(nil), pending.entries[pending.cursor:]...)
+}
+
+func (pending *turnPendingInputs) CommitFront() bool {
+	if pending == nil || pending.cursor >= len(pending.entries) {
+		return false
+	}
+	pending.entries[pending.cursor] = turnPendingInput{}
+	pending.cursor++
+	if pending.cursor == len(pending.entries) {
+		pending.entries = nil
+		pending.cursor = 0
+	}
+	return true
+}
+
+func (pending *turnPendingInputs) Drain() []turnPendingInput {
+	entries := pending.snapshotEntries()
+	if pending != nil {
+		clear(pending.entries)
+		pending.entries = nil
+		pending.cursor = 0
+	}
+	return entries
 }
 
 // LLMIterationState owns data that is valid only for one model call and its
@@ -282,7 +390,7 @@ func newTurnExecution(
 		history:                 history,
 		summary:                 summary,
 		messages:                messages,
-		pendingMessages:         append([]providers.Message(nil), opts.InitialSteeringMessages...),
+		pendingInputs:           newTurnPendingInputs(opts.InitialSteeringMessages),
 		sawAdditionalUserInput:  len(opts.InitialSteeringMessages) > 0,
 		initialSteeringSpoolIDs: collectSteeringSpoolIDs(opts.InitialSteeringMessages),
 		loopGuard:               loopguard.New(agent.ToolLoopDetection),

@@ -176,6 +176,20 @@ func (p *Pipeline) sealSteeringAdmission(ts *turnState) {
 	ts.steeringAdmissionMu.Unlock()
 }
 
+// drainAndSealSteeringAdmission is the fatal pending-input boundary. It moves
+// every steer that was acknowledged before the gate closed into turn-owned
+// settlement state and prevents any later acknowledgement.
+func (p *Pipeline) drainAndSealSteeringAdmission(ts *turnState) []providers.Message {
+	if ts == nil {
+		return nil
+	}
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
+	messages := p.dequeueSteeringMessagesForTurn(ts)
+	ts.steeringOpen = false
+	return messages
+}
+
 func (p *Pipeline) returnSteeringMessagesForTurn(ts *turnState, messages []providers.Message) {
 	if p == nil || p.Context.Steering == nil || ts == nil || len(messages) == 0 {
 		return

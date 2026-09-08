@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -307,7 +308,7 @@ func TestExitGatewayKeepsTransferredSteeringAcrossSuspension(t *testing.T) {
 	}
 	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
 	exec.markSteeringObserved()
-	exec.pendingMessages = []providers.Message{{Role: "user", Content: "answer instead of suspending"}}
+	exec.pendingInputs.AppendSteering(providers.Message{Role: "user", Content: "answer instead of suspending"})
 
 	if !pipeline.continueWithSteeringAtExit(
 		t.Context(), ts, exec, newLLMIterationState(1), "tool suspension",
@@ -324,8 +325,166 @@ func TestExitGatewayKeepsTransferredSteeringAcrossSuspension(t *testing.T) {
 	}
 	if !pipeline.continueWithSteeringAtExit(
 		t.Context(), ts, exec, newLLMIterationState(2), "tool suspension",
-	) || !messageContentPresent(exec.pendingMessages, "additional answer") {
-		t.Fatalf("exit gateway pending messages = %#v", exec.pendingMessages)
+	) || !messageContentPresent(exec.pendingInputs.Snapshot(), "additional answer") {
+		t.Fatalf("exit gateway pending messages = %#v", exec.pendingInputs.Snapshot())
+	}
+}
+
+func TestPendingTurnInputPersistenceFailureRetainsFailingMessageAndSuffix(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	cause := errors.New("pending input write failed")
+	injected := &memory.IndeterminateAppendError{Err: cause}
+	store := &saveFailOnContentSessionStore{
+		SessionStore: session.NewMemoryStore(),
+		content:      "second guidance",
+		err:          injected,
+	}
+	agent.Sessions = store
+	sessionKey := "coding:pending-input-persistence"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	al.turns.registerActiveTurn(ts)
+	defer al.turns.clearActiveTurn(ts)
+	pipeline := newTestPipeline(al)
+	if !pipeline.openSteeringAdmission(ts) {
+		t.Fatal("failed to open steering admission")
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.pendingInputs.AppendSteering(
+		steeringPromptMessage(providers.Message{Role: "user", Content: "first guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "second guidance"}),
+	)
+	exec.pendingInputs.AppendSubTurn(
+		subTurnResultPromptMessage("child result between steering messages"),
+	)
+	exec.pendingInputs.AppendSteering(
+		steeringPromptMessage(providers.Message{Role: "user", Content: "third guidance"}),
+	)
+
+	outcome, err := pipeline.injectPendingTurnInputs(
+		t.Context(),
+		ts,
+		exec,
+		pipeline.Context.MediaResolver,
+		pipeline.maxMediaSize(),
+	)
+	if !errors.Is(err, cause) || !memory.IsIndeterminateAppendError(err) || outcome.count != 1 {
+		t.Fatalf("injection = %#v, %v, want one committed prefix then indeterminate error", outcome, err)
+	}
+	pending := exec.pendingInputs.Snapshot()
+	if len(pending) != 3 || pending[0].Content != "second guidance" ||
+		!strings.Contains(pending[1].Content, "child result between steering messages") ||
+		pending[2].Content != "third guidance" {
+		t.Fatalf("pending suffix = %#v", pending)
+	}
+	if len(exec.messages) != 1 || !strings.Contains(exec.messages[0].Content, "first guidance") {
+		t.Fatalf("model-visible prefix = %#v", exec.messages)
+	}
+	if history := store.GetHistory(sessionKey); len(history) != 1 || history[0].Content != "first guidance" {
+		t.Fatalf("durable prefix = %#v", history)
+	}
+	if accepted := ts.acceptedSteeringSnapshot(); len(accepted) != 1 || accepted[0].Content != "first guidance" {
+		t.Fatalf("accepted prefix = %#v", accepted)
+	}
+
+	pipeline.settlePendingTurnInputsAfterFailure(ts, exec)
+	if exec.pendingInputs.Len() != 0 {
+		t.Fatalf("settled pending inputs = %#v", exec.pendingInputs.Snapshot())
+	}
+	accepted := ts.acceptedSteeringSnapshot()
+	if len(accepted) != 3 || accepted[0].Content != "first guidance" ||
+		accepted[1].Content != "second guidance" || accepted[2].Content != "third guidance" {
+		t.Fatalf("settled steering ownership = %#v", accepted)
+	}
+	if err := al.SteerActiveCodingTurn(
+		agent.Workspace,
+		sessionKey,
+		agent.ID,
+		providers.Message{Role: "user", Content: "too late"},
+	); !errors.Is(err, ErrNoActiveSteerableTurn) {
+		t.Fatalf("late steer error = %v, want %v", err, ErrNoActiveSteerableTurn)
+	}
+}
+
+func TestPendingTurnInputCommittedAppendWarningAdvancesOnlyCommittedHead(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	cause := errors.New("journal metadata sync failed")
+	store := &committedWarningSessionStore{
+		SessionStore: session.NewMemoryStore(),
+		content:      "second guidance",
+		err:          cause,
+	}
+	agent.Sessions = store
+	sessionKey := "coding:pending-input-committed-warning"
+	spec := makeTestTurnSpec(sessionKey)
+	ts := newTurnState(agent, spec, turnEventScope{})
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.pendingInputs.AppendSteering(
+		steeringPromptMessage(providers.Message{Role: "user", Content: "first guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "second guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "third guidance"}),
+	)
+	pipeline := newTestPipeline(al)
+
+	outcome, err := pipeline.injectPendingTurnInputs(
+		t.Context(),
+		ts,
+		exec,
+		pipeline.Context.MediaResolver,
+		pipeline.maxMediaSize(),
+	)
+	if !errors.Is(err, cause) || !memory.IsCommittedAppendError(err) || outcome.count != 2 {
+		t.Fatalf("injection = %#v, %v, want two committed inputs then warning", outcome, err)
+	}
+	pending := exec.pendingInputs.Snapshot()
+	if len(pending) != 1 || pending[0].Content != "third guidance" {
+		t.Fatalf("pending suffix = %#v", pending)
+	}
+	if len(exec.messages) != 2 {
+		t.Fatalf("model-visible committed inputs = %#v", exec.messages)
+	}
+	history := store.GetHistory(sessionKey)
+	if len(history) != 2 || history[0].Content != "first guidance" || history[1].Content != "second guidance" {
+		t.Fatalf("durable committed inputs = %#v", history)
+	}
+}
+
+func TestRunTurnSettlesUnprocessedSteeringAfterPersistenceFailure(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	injected := errors.New("pending input write failed")
+	store := &saveFailOnContentSessionStore{
+		SessionStore: session.NewMemoryStore(),
+		content:      "second guidance",
+		err:          injected,
+	}
+	agent.Sessions = store
+	sessionKey := "coding:pending-input-turn-failure"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	spec.InitialSteeringMessages = []providers.Message{
+		steeringPromptMessage(providers.Message{Role: "user", Content: "first guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "second guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "third guidance"}),
+	}
+	ts := newTurnState(agent, spec, turnEventScope{})
+
+	if _, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al)); !errors.Is(err, injected) {
+		t.Fatalf("runTestTurn() error = %v, want %v", err, injected)
+	}
+	accepted := ts.acceptedSteeringSnapshot()
+	if len(accepted) != 3 || accepted[0].Content != "first guidance" ||
+		accepted[1].Content != "second guidance" || accepted[2].Content != "third guidance" {
+		t.Fatalf("settled steering ownership = %#v", accepted)
+	}
+	history := store.GetHistory(sessionKey)
+	if len(history) != 2 || history[0].Content != "test message" || history[1].Content != "first guidance" {
+		t.Fatalf("history after failed pending batch = %#v", history)
 	}
 }
 
@@ -1459,6 +1618,31 @@ type saveFailOnContentSessionStore struct {
 	content string
 	err     error
 	failed  bool
+}
+
+type committedWarningSessionStore struct {
+	session.SessionStore
+	mu      sync.Mutex
+	content string
+	err     error
+	warned  bool
+}
+
+func (s *committedWarningSessionStore) AppendTurnMessage(
+	ctx context.Context,
+	sessionKey string,
+	msg providers.Message,
+) error {
+	if err := s.SessionStore.AppendTurnMessage(ctx, sessionKey, msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.warned && strings.Contains(msg.Content, s.content) {
+		s.warned = true
+		return &memory.CommittedAppendError{Err: s.err}
+	}
+	return nil
 }
 
 func (s *saveFailOnContentSessionStore) AppendTurnMessage(

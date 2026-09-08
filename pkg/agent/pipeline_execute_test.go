@@ -2287,8 +2287,8 @@ func TestPipelineSteeringWinsBeforeSuspensionCommit(t *testing.T) {
 	); control.Control != turnStepContinue {
 		t.Fatalf("control = %v, want continue", control.Control)
 	}
-	if len(manager.requests) != 0 || len(exec.pendingMessages) != 1 {
-		t.Fatalf("requests = %d, pending = %#v", len(manager.requests), exec.pendingMessages)
+	if len(manager.requests) != 0 || exec.pendingInputs.Len() != 1 {
+		t.Fatalf("requests = %d, pending = %#v", len(manager.requests), exec.pendingInputs.Snapshot())
 	}
 	if len(exec.messages) != 1 || exec.messages[0].ToolCallID != "call-question" {
 		t.Fatalf("messages = %#v, want paired deferred result", exec.messages)

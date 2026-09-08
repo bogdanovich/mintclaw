@@ -630,8 +630,8 @@ func TestSteerIsExplicitActiveTurnCapabilityAndIdempotent(t *testing.T) {
 	if err := controller.AwaitTurn(t.Context()); err != nil {
 		t.Fatalf("AwaitTurn() error = %v", err)
 	}
-	if err := controller.Steer(t.Context(), input); err != nil {
-		t.Fatalf("post-settlement duplicate Steer() error = %v", err)
+	if err := controller.Steer(t.Context(), input); !errors.Is(err, ErrNoActiveTurn) {
+		t.Fatalf("post-settlement duplicate Steer() error = %v, want %v", err, ErrNoActiveTurn)
 	}
 	if err := controller.Steer(
 		t.Context(),
