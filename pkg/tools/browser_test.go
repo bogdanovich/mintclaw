@@ -1444,7 +1444,10 @@ func TestBrowserActRejectsIncompleteContextAuthorityWithRecovery(t *testing.T) {
 			)
 			if result == nil || !result.IsError || source.prepareCalls != 0 ||
 				!strings.Contains(result.ContentForLLM(), `"code":"invalid_context_authority"`) ||
-				!strings.Contains(result.ContentForLLM(), `"action":"observe_again_copy_returned_context_or_omit_both"`) ||
+				!strings.Contains(
+					result.ContentForLLM(),
+					`"action":"observe_again_copy_returned_context_or_omit_both"`,
+				) ||
 				!strings.Contains(result.ContentForLLM(), "Never invent placeholder values") {
 				t.Fatalf("invalid context authority result = %#v; prepare calls = %d", result, source.prepareCalls)
 			}
