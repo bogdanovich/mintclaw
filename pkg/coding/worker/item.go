@@ -92,6 +92,7 @@ type WriteAudit struct {
 type CommandStatus string
 
 const (
+	CommandUnknown   CommandStatus = "unknown"
 	CommandRunning   CommandStatus = "running"
 	CommandSucceeded CommandStatus = "succeeded"
 	CommandFailed    CommandStatus = "failed"
@@ -99,17 +100,39 @@ const (
 	CommandTimedOut  CommandStatus = "timed_out"
 )
 
+type CommandSource string
+
+const (
+	CommandSourceAgent     CommandSource = "agent"
+	CommandSourceUserShell CommandSource = "user_shell"
+)
+
+type CommandTranscriptEntry struct {
+	Sequence uint64 `json:"sequence"`
+	Stream   string `json:"stream"`
+	Text     string `json:"text"`
+}
+
 type Command struct {
-	Stdout     string        `json:"stdout,omitempty"`
-	Stderr     string        `json:"stderr,omitempty"`
-	Output     string        `json:"output,omitempty"`
-	Status     CommandStatus `json:"status,omitempty"`
-	SessionID  string        `json:"session_id,omitempty"`
-	ExitCode   *int          `json:"exit_code,omitempty"`
-	Truncated  bool          `json:"truncated,omitempty"`
-	Background bool          `json:"background,omitempty"`
-	Canceled   bool          `json:"canceled,omitempty"`
-	TimedOut   bool          `json:"timed_out,omitempty"`
+	Action      string                   `json:"action,omitempty"`
+	Command     string                   `json:"command,omitempty"`
+	CWD         string                   `json:"cwd,omitempty"`
+	Input       string                   `json:"input,omitempty"`
+	Source      CommandSource            `json:"source,omitempty"`
+	Stdout      string                   `json:"stdout,omitempty"`
+	Stderr      string                   `json:"stderr,omitempty"`
+	Output      string                   `json:"output,omitempty"`
+	Transcript  []CommandTranscriptEntry `json:"transcript,omitempty"`
+	Duration    int64                    `json:"duration_ns,omitempty"`
+	Status      CommandStatus            `json:"status,omitempty"`
+	SessionID   string                   `json:"session_id,omitempty"`
+	ExitCode    *int                     `json:"exit_code,omitempty"`
+	Truncated   bool                     `json:"truncated,omitempty"`
+	Background  bool                     `json:"background,omitempty"`
+	OwnsProcess bool                     `json:"owns_process,omitempty"`
+	Orphan      bool                     `json:"orphan,omitempty"`
+	Canceled    bool                     `json:"canceled,omitempty"`
+	TimedOut    bool                     `json:"timed_out,omitempty"`
 }
 
 type Tool struct {
@@ -296,21 +319,37 @@ func toolFromFrontend(source frontend.ToolState) *Tool {
 		})
 	}
 	if source.Command != nil {
+		action, actionTruncated := boundedWireStructural(source.Command.Action, MaxAttachmentMeta)
+		commandText, commandTruncated := boundedWireContent(source.Command.Command, MaxEventTextBytes)
+		cwd, cwdTruncated := boundedWireCommandCWD(source.Command.CWD)
+		input, inputTruncated := boundedWireContent(source.Command.Input, MaxEventTextBytes)
 		stdout, stdoutTruncated := boundedWireContent(source.Command.Stdout, MaxEventTextBytes)
 		stderr, stderrTruncated := boundedWireContent(source.Command.Stderr, MaxEventTextBytes)
 		commandOutput, commandOutputTruncated := boundedWireContent(source.Command.Output, MaxEventTextBytes)
 		sessionID, sessionIDTruncated := boundedWireStructural(source.Command.SessionID, MaxAttachmentMeta)
+		sourceName, sourceTruncated := commandSourceFromFrontend(source.Command.Source)
+		transcript, transcriptTruncated := commandTranscriptFromFrontend(source.Command.Transcript)
 		tool.Command = &Command{
-			Stdout:    stdout,
-			Stderr:    stderr,
-			Output:    commandOutput,
-			Status:    CommandStatus(source.Command.Status),
-			SessionID: sessionID,
-			Truncated: source.Command.Truncated || stdoutTruncated || stderrTruncated ||
-				commandOutputTruncated || sessionIDTruncated,
-			Background: source.Command.Background,
-			Canceled:   source.Command.Canceled,
-			TimedOut:   source.Command.TimedOut,
+			Action:     action,
+			Command:    commandText,
+			CWD:        cwd,
+			Input:      input,
+			Source:     sourceName,
+			Stdout:     stdout,
+			Stderr:     stderr,
+			Output:     commandOutput,
+			Transcript: transcript,
+			Duration:   max(0, int64(source.Command.Duration)),
+			Status:     CommandStatus(source.Command.Status),
+			SessionID:  sessionID,
+			Truncated: source.Command.Truncated || actionTruncated || commandTruncated || cwdTruncated ||
+				inputTruncated || stdoutTruncated || stderrTruncated || commandOutputTruncated ||
+				sessionIDTruncated || sourceTruncated || transcriptTruncated,
+			Background:  source.Command.Background,
+			OwnsProcess: source.Command.OwnsProcess,
+			Orphan:      source.Command.Orphan,
+			Canceled:    source.Command.Canceled,
+			TimedOut:    source.Command.TimedOut,
 		}
 		if source.Command.ExitCode != nil {
 			exitCode := *source.Command.ExitCode
@@ -318,6 +357,52 @@ func toolFromFrontend(source frontend.ToolState) *Tool {
 		}
 	}
 	return tool
+}
+
+func boundedWireCommandCWD(source string) (string, bool) {
+	bounded, truncated := boundedWireStructural(source, MaxPathBytes)
+	if bounded != "" && !validPath(bounded) {
+		return "", true
+	}
+	return bounded, truncated
+}
+
+func commandSourceFromFrontend(source frontend.CommandSource) (CommandSource, bool) {
+	switch source {
+	case frontend.CommandSourceAgent:
+		return CommandSourceAgent, false
+	case frontend.CommandSourceUserShell:
+		return CommandSourceUserShell, false
+	case "":
+		return "", false
+	default:
+		return "", true
+	}
+}
+
+func commandTranscriptFromFrontend(source []frontend.CommandTranscriptEntry) ([]CommandTranscriptEntry, bool) {
+	result := make([]CommandTranscriptEntry, 0, min(len(source), MaxCommandTranscript))
+	remaining := MaxEventTextBytes
+	truncated := len(source) > MaxCommandTranscript
+	for index, entry := range source {
+		if index >= MaxCommandTranscript || remaining <= 0 {
+			truncated = true
+			break
+		}
+		stream, streamTruncated := boundedWireStructural(entry.Stream, MaxAttachmentMeta)
+		if stream == "" {
+			stream = "unknown"
+			streamTruncated = true
+		}
+		text, textTruncated := boundedWireContent(entry.Text, remaining)
+		truncated = truncated || streamTruncated || textTruncated
+		remaining -= len(text)
+		if text == "" {
+			continue
+		}
+		result = append(result, CommandTranscriptEntry{Sequence: entry.Sequence, Stream: stream, Text: text})
+	}
+	return result, truncated
 }
 
 func planFromFrontend(source frontend.PlanState) *Plan {

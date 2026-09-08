@@ -64,9 +64,12 @@ func TestSnapshotFromFrontendProjectsCanonicalItemsWithoutFrontendLifecycle(t *t
 					Status:    frontend.ToolSucceeded,
 					Duration:  750 * time.Millisecond,
 					Command: &frontend.CommandState{
-						Output:   "contents",
-						Status:   frontend.CommandSucceeded,
-						ExitCode: &exitCode,
+						Action: "run", Command: "printf contents", CWD: "/repo", Source: frontend.CommandSourceAgent,
+						Output: "contents", Duration: 700 * time.Millisecond,
+						Transcript: []frontend.CommandTranscriptEntry{
+							{Sequence: 1, Stream: "stdout", Text: "contents"},
+						},
+						Status: frontend.CommandSucceeded, ExitCode: &exitCode, OwnsProcess: true,
 					},
 				},
 			},
@@ -103,6 +106,12 @@ func TestSnapshotFromFrontendProjectsCanonicalItemsWithoutFrontendLifecycle(t *t
 		snapshot.Items[1].Tool.Command == nil || snapshot.Items[1].Tool.Command.ExitCode == nil {
 		t.Fatalf("projected tool = %#v", snapshot.Items[1].Tool)
 	}
+	command := snapshot.Items[1].Tool.Command
+	if command.Command != "printf contents" || command.CWD != "/repo" || command.Source != CommandSourceAgent ||
+		command.Duration != int64(700*time.Millisecond) || !command.OwnsProcess ||
+		len(command.Transcript) != 1 || command.Transcript[0].Text != "contents" {
+		t.Fatalf("projected command = %#v", command)
+	}
 
 	raw, err := json.Marshal(snapshot.Items)
 	if err != nil {
@@ -128,6 +137,16 @@ func TestSnapshotFromFrontendProjectsCanonicalItemsWithoutFrontendLifecycle(t *t
 	}
 	if _, exists := wireTool["duration"]; exists {
 		t.Fatalf("wire tool contains ambiguous duration: %s", wireItems[1]["tool"])
+	}
+	var wireCommand map[string]json.RawMessage
+	if err := json.Unmarshal(wireTool["command"], &wireCommand); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := wireCommand["duration_ns"]; !exists {
+		t.Fatalf("wire command omits duration_ns: %s", wireTool["command"])
+	}
+	if _, exists := wireCommand["duration"]; exists {
+		t.Fatalf("wire command contains ambiguous duration: %s", wireTool["command"])
 	}
 }
 
@@ -274,11 +293,15 @@ func TestSnapshotFromFrontendNormalizesMaximumFrontendToolToEncodableWireItem(t 
 				Status:     frontend.ToolSucceeded,
 				WriteAudit: audits,
 				Command: &frontend.CommandState{
-					Stdout:    strings.Repeat("o", MaxEventTextBytes),
-					Stderr:    strings.Repeat("e", MaxEventTextBytes),
-					Output:    strings.Repeat("c", MaxEventTextBytes),
-					Status:    frontend.CommandSucceeded,
+					Action: strings.Repeat("r", MaxEventTextBytes), Command: strings.Repeat("m", MaxEventTextBytes),
+					CWD: strings.Repeat("d", MaxEventTextBytes), Input: strings.Repeat("i", MaxEventTextBytes),
+					Stdout: strings.Repeat("o", MaxEventTextBytes), Stderr: strings.Repeat("e", MaxEventTextBytes),
+					Output: strings.Repeat("c", MaxEventTextBytes), Status: frontend.CommandUnknown,
 					SessionID: strings.Repeat("s", MaxEventTextBytes),
+					Transcript: []frontend.CommandTranscriptEntry{
+						{Sequence: 1, Stream: "stdout", Text: strings.Repeat("t", MaxEventTextBytes)},
+						{Sequence: 2, Stream: "stderr", Text: "omitted"},
+					},
 				},
 			},
 		}},
@@ -296,6 +319,11 @@ func TestSnapshotFromFrontendNormalizesMaximumFrontendToolToEncodableWireItem(t 
 	}
 	if strings.ContainsRune(tool.Output, '\x1b') || strings.ContainsRune(tool.WriteAudit[0].Kind, '\n') {
 		t.Fatalf("normalized tool retains structural control: %#v", tool)
+	}
+	if tool.Command.Status != CommandUnknown || len(tool.Command.Action) > MaxAttachmentMeta ||
+		len(tool.Command.SessionID) > MaxAttachmentMeta || len(tool.Command.Transcript) != 1 ||
+		len(tool.Command.Transcript[0].Text) > MaxEventTextBytes {
+		t.Fatalf("normalized command lifecycle = %#v", tool.Command)
 	}
 	if err := validateSnapshot(binding.ControlIdentity(), snapshot); err != nil {
 		t.Fatalf("validateSnapshot() error = %v", err)

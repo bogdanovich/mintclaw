@@ -16,6 +16,7 @@ const (
 	MaxSnapshotItems        = 128
 	MaxSnapshotItemsBytes   = MaxSnapshotBytes
 	MaxEventWriteAudits     = 64
+	MaxCommandTranscript    = 128
 	MaxAuditTargetBytes     = 4 << 10
 	MaxEventPlanSteps       = 32
 	MaxPlanExplanationBytes = 4 << 10
@@ -403,14 +404,33 @@ func validTool(tool Tool) bool {
 		return true
 	}
 	command := tool.Command
-	if !validContentText(command.Stdout, MaxEventTextBytes, false) ||
+	if !validOptionalText(command.Action, MaxAttachmentMeta) ||
+		!validContentText(command.Command, MaxEventTextBytes, false) ||
+		!validOptionalPath(command.CWD) ||
+		!validContentText(command.Input, MaxEventTextBytes, false) ||
+		!validContentText(command.Stdout, MaxEventTextBytes, false) ||
 		!validContentText(command.Stderr, MaxEventTextBytes, false) ||
 		!validContentText(command.Output, MaxEventTextBytes, false) ||
-		!validOptionalText(command.SessionID, MaxEventTextBytes) {
+		!validOptionalText(command.SessionID, MaxAttachmentMeta) ||
+		command.Duration < 0 || len(command.Transcript) > MaxCommandTranscript {
 		return false
 	}
+	if command.Source != "" && command.Source != CommandSourceAgent && command.Source != CommandSourceUserShell {
+		return false
+	}
+	transcriptBytes := 0
+	for _, entry := range command.Transcript {
+		if !validBoundedText(entry.Stream, MaxAttachmentMeta) ||
+			!validContentText(entry.Text, MaxEventTextBytes, true) {
+			return false
+		}
+		transcriptBytes += len(entry.Text)
+		if transcriptBytes > MaxEventTextBytes {
+			return false
+		}
+	}
 	switch command.Status {
-	case CommandRunning, CommandSucceeded, CommandFailed, CommandCanceled, CommandTimedOut:
+	case CommandUnknown, CommandRunning, CommandSucceeded, CommandFailed, CommandCanceled, CommandTimedOut:
 		return true
 	default:
 		return false
