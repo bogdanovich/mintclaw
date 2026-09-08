@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/url"
 	"os"
 	"os/exec"
@@ -96,6 +97,94 @@ func TestNewRepositoryWithBaselineRejectsDifferentRepositoryAuthority(t *testing
 	_, err = NewRepositoryWithBaseline(other, other, Limits{}, baseline)
 	if err == nil || !strings.Contains(err.Error(), "repository baseline authority mismatch") {
 		t.Fatalf("NewRepositoryWithBaseline() error = %v", err)
+	}
+}
+
+func TestRepositoryBindToRootUsesCanonicalRootAndConfinedWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, "project")
+	workingDirectory := filepath.Join(projectRoot, "nested", "not-created-yet")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repository := NewRepository(projectRoot, workingDirectory, Limits{})
+	bound, err := repository.BindToRoot(projectRoot)
+	if err != nil || bound == nil {
+		t.Fatalf("BindToRoot(project) = %v, %v, want repository, nil", bound, err)
+	}
+	bound, err = repository.BindToRoot(filepath.Join(root, "other"))
+	if bound != nil || !errors.Is(err, ErrRepositoryAuthorityMismatch) {
+		t.Fatalf("BindToRoot(other) = %v, %v, want authority mismatch", bound, err)
+	}
+	outsideCWD := NewRepository(projectRoot, root, Limits{})
+	bound, err = outsideCWD.BindToRoot(projectRoot)
+	if bound != nil || !errors.Is(err, ErrRepositoryAuthorityMismatch) {
+		t.Fatalf("BindToRoot(outside cwd) = %v, %v, want authority mismatch", bound, err)
+	}
+	if runtime.GOOS != "windows" {
+		alias := filepath.Join(root, "project-alias")
+		if err := os.Symlink(projectRoot, alias); err != nil {
+			t.Fatal(err)
+		}
+		aliased := NewRepository(alias, filepath.Join(alias, "nested"), Limits{})
+		bound, err = aliased.BindToRoot(projectRoot)
+		if err != nil || bound == nil {
+			t.Fatalf("BindToRoot(symlink alias) = %v, %v, want repository, nil", bound, err)
+		}
+	}
+}
+
+func TestRepositoryBindToRootFreezesSymlinkAuthority(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink replacement requires privileges on Windows")
+	}
+	allowedRoot := initGitRepository(t)
+	otherRoot := initGitRepository(t)
+	alias := filepath.Join(t.TempDir(), "project-alias")
+	if err := os.Symlink(allowedRoot, alias); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := NewRepository(alias, alias, Limits{}).CaptureBaseline(t.Context(), BaselineRequest{
+		ProjectKey: "project-key", CapturedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withBaseline, err := NewRepositoryWithBaseline(alias, alias, Limits{}, baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := withBaseline.BindToRoot(allowedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(allowedRoot, "allowed.txt"), []byte("allowed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(otherRoot, "secret.txt"), []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(otherRoot, alias); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := repository.Diff(t.Context(), DiffTarget{Kind: DiffTargetCurrent})
+	if diff.UnavailableReason != "" || diff.Stale {
+		t.Fatalf("Diff() = %#v", diff)
+	}
+	requireDiffFile(t, diff, "allowed.txt")
+	if diff.BaselineID != baseline.BaselineID || diff.Provenance == nil ||
+		provenanceForPath(t, *diff.Provenance, "allowed.txt") != ProvenanceFirstObservedDuringThread {
+		t.Fatalf("bound repository lost baseline provenance: %#v", diff)
+	}
+	for _, file := range diff.Files {
+		if file.Path == "secret.txt" {
+			t.Fatalf("bound repository followed redirected alias: %#v", diff)
+		}
 	}
 }
 

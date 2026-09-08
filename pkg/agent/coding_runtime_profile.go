@@ -23,6 +23,7 @@ import (
 type CodingRuntimeProfile struct {
 	agentLayouts map[string]CodingRuntimeLayout
 	repositories map[string]*codingworkspace.Repository
+	readOnly     map[string]bool
 	storeFactory CodingRuntimeStoreFactory
 }
 
@@ -57,6 +58,10 @@ type CodingRuntimeBinding struct {
 	AgentID    string
 	Layout     CodingRuntimeLayout
 	Repository *codingworkspace.Repository
+	// ReadOnly removes every tool that can execute commands or mutate the
+	// execution root and confines filesystem readers to that root. Canonical
+	// thread and operational state remain writable.
+	ReadOnly bool
 }
 
 // NewCodingRuntimeProfile validates and indexes bindings without creating filesystem state.
@@ -77,6 +82,7 @@ func NewCodingRuntimeProfileWithStoreFactory(
 	profile := CodingRuntimeProfile{
 		agentLayouts: make(map[string]CodingRuntimeLayout, len(bindings)),
 		repositories: make(map[string]*codingworkspace.Repository, len(bindings)),
+		readOnly:     make(map[string]bool, len(bindings)),
 		storeFactory: storeFactory,
 	}
 	threadAgents := make(map[string]string, len(bindings))
@@ -106,7 +112,19 @@ func NewCodingRuntimeProfileWithStoreFactory(
 				codingworkspace.Limits{},
 			)
 		}
+		if binding.ReadOnly {
+			boundRepository, authorityErr := repository.BindToRoot(layout.ExecutionRoot())
+			if authorityErr != nil {
+				return CodingRuntimeProfile{}, fmt.Errorf(
+					"coding runtime profile: validate read-only repository authority for agent %q: %w",
+					agentID,
+					authorityErr,
+				)
+			}
+			repository = boundRepository
+		}
 		profile.repositories[agentID] = repository
+		profile.readOnly[agentID] = binding.ReadOnly
 		threadAgents[layout.ThreadID()] = agentID
 	}
 	if len(profile.agentLayouts) == 0 {
@@ -213,6 +231,14 @@ func (p CodingRuntimeProfile) AgentRepository(agentID string) (*codingworkspace.
 	return repository, ok && repository != nil
 }
 
+// AgentReadOnly reports whether the agent is bound to observation-only
+// execution-root authority. The boolean result distinguishes full authority
+// from an unknown agent binding.
+func (p CodingRuntimeProfile) AgentReadOnly(agentID string) (bool, bool) {
+	readOnly, ok := p.readOnly[routing.NormalizeAgentID(agentID)]
+	return readOnly, ok
+}
+
 func (al *AgentLoop) codingLayoutForWorkspace(workspace string) (CodingRuntimeLayout, bool) {
 	if al == nil {
 		return CodingRuntimeLayout{}, false
@@ -308,9 +334,11 @@ func (p CodingRuntimeProfile) preflightStatePaths(agentIDs []string) error {
 				err,
 			)
 		}
+		readOnly, _ := p.AgentReadOnly(agentID)
 		refreshedBindings = append(refreshedBindings, CodingRuntimeBinding{
-			AgentID: agentID,
-			Layout:  refreshedLayout,
+			AgentID:  agentID,
+			Layout:   refreshedLayout,
+			ReadOnly: readOnly,
 		})
 	}
 	refreshedProfile, err := NewCodingRuntimeProfileWithStoreFactory(p.storeFactory, refreshedBindings...)
