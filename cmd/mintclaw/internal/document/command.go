@@ -200,7 +200,7 @@ func newInspectCommand(deps commandDeps) *cobra.Command {
 
 func newExtractCommand(deps commandDeps) *cobra.Command {
 	var input, pageSelection, output string
-	var jsonOutput, overwrite bool
+	var jsonOutput bool
 	var maxCharacters int
 	cmd := &cobra.Command{
 		Use:   "extract",
@@ -221,7 +221,7 @@ func newExtractCommand(deps commandDeps) *cobra.Command {
 			})
 			var staged *stagedArtifactOutput
 			if snapshot != nil && report.State == documentpkg.StateSucceeded && len(report.Artifacts) == 1 {
-				if staged, err = stageArtifactFile(snapshot, report.Artifacts[0].Ref, output, overwrite); err != nil {
+				if staged, err = stageArtifactFile(snapshot, report.Artifacts[0].Ref, output); err != nil {
 					failArtifactPublication(&report)
 				}
 			}
@@ -249,7 +249,6 @@ func newExtractCommand(deps commandDeps) *cobra.Command {
 		StringVar(&pageSelection, "pages", "", "One-based pages, for example 1,3-5 (defaults to all within limit)")
 	cmd.Flags().StringVar(&output, "output", "", "Destination for the UTF-8 JSON Lines artifact")
 	cmd.Flags().IntVar(&maxCharacters, "max-characters", 0, "Lower the extraction character limit")
-	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "Atomically replace an existing output file")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable JSON output")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("output")
@@ -258,7 +257,7 @@ func newExtractCommand(deps commandDeps) *cobra.Command {
 
 func newRenderCommand(deps commandDeps) *cobra.Command {
 	var input, pageSelection, outputDirectory string
-	var jsonOutput, overwrite bool
+	var jsonOutput bool
 	var dpi, maxDimension int
 	cmd := &cobra.Command{
 		Use:   "render",
@@ -283,7 +282,6 @@ func newRenderCommand(deps commandDeps) *cobra.Command {
 					snapshot,
 					report.Artifacts,
 					outputDirectory,
-					overwrite,
 				); err != nil {
 					failArtifactPublication(&report)
 				}
@@ -313,7 +311,6 @@ func newRenderCommand(deps commandDeps) *cobra.Command {
 	cmd.Flags().StringVar(&outputDirectory, "output-dir", "", "Destination directory for page PNG artifacts")
 	cmd.Flags().IntVar(&dpi, "dpi", 0, "Lower the render DPI limit")
 	cmd.Flags().IntVar(&maxDimension, "max-dimension", 0, "Lower the maximum rendered edge")
-	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "Atomically replace an existing output directory")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit stable JSON output")
 	_ = cmd.MarkFlagRequired("input")
 	_ = cmd.MarkFlagRequired("output-dir")

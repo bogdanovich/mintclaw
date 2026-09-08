@@ -121,8 +121,11 @@ The extraction output is UTF-8 JSON Lines with an explicit one-based page on eve
 report contains the immutable source SHA-256, selected pages, character counts, backend identity,
 artifact size/digest, and no extracted content or path. The rendered directory contains only
 `page-0001.png`; for the synthetic crop-and-rotation fixture at 144 DPI it is 792 by 612 pixels. The
-report carries the same source digest and exact page mapping. Existing destinations require
-`--overwrite`. A failed or canceled operation publishes no output and leaves document scratch empty.
+report carries the same source digest and exact page mapping. PDF1A refuses every existing output
+path and does not expose an overwrite flag: choose a fresh path, or explicitly move/remove the old
+output before invoking MintClaw. This keeps publication on one atomic no-replace operation instead
+of attempting an unsafe directory exchange. A failed or canceled operation publishes no output and
+leaves document scratch empty.
 
 Check the protected-input disposition separately:
 

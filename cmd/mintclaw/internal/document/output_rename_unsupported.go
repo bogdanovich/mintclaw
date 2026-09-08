@@ -14,7 +14,3 @@ func openOutputIdentity(path string) (*os.File, error) {
 func renamePathNoReplace(_, _ string) error {
 	return errors.New("atomic document output publication is unavailable on this platform")
 }
-
-func exchangePaths(_, _ string) error {
-	return errors.New("atomic document output replacement is unavailable on this platform")
-}

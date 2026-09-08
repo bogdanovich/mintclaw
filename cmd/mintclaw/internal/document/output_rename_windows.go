@@ -3,7 +3,6 @@
 package document
 
 import (
-	"errors"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -23,8 +22,4 @@ func renamePathNoReplace(oldPath, newPath string) error {
 		return err
 	}
 	return windows.MoveFileEx(oldPointer, newPointer, windows.MOVEFILE_WRITE_THROUGH)
-}
-
-func exchangePaths(_, _ string) error {
-	return errors.New("atomic document output replacement is unavailable on this platform")
 }

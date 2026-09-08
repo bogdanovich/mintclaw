@@ -43,7 +43,16 @@ func TestParsePageSelectionRejectsRangesBeforeExpansion(t *testing.T) {
 	}
 }
 
-func TestPublishArtifactFileIsAtomicAndRequiresOverwrite(t *testing.T) {
+func TestReadCommandsDoNotExposeOverwrite(t *testing.T) {
+	if flag := newExtractCommand(commandDeps{}).Flags().Lookup("overwrite"); flag != nil {
+		t.Fatal("extract unexpectedly exposes --overwrite")
+	}
+	if flag := newRenderCommand(commandDeps{}).Flags().Lookup("overwrite"); flag != nil {
+		t.Fatal("render unexpectedly exposes --overwrite")
+	}
+}
+
+func TestPublishArtifactFileIsAtomicAndRefusesReplacement(t *testing.T) {
 	root := t.TempDir()
 	ref := "document-artifact://operation/extracted-text.jsonl"
 	source := filepath.Join(root, "extracted-text.jsonl")
@@ -55,16 +64,17 @@ func TestPublishArtifactFileIsAtomicAndRequiresOverwrite(t *testing.T) {
 	if err := os.WriteFile(destination, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := publishArtifactFile(snapshot, ref, destination, false); err == nil {
-		t.Fatal("publication replaced an existing destination without --overwrite")
+	if err := publishArtifactFile(snapshot, ref, destination); err == nil {
+		t.Fatal("publication replaced an existing destination")
 	}
 	if data, err := os.ReadFile(destination); err != nil || string(data) != "old" {
 		t.Fatalf("failed publication changed destination: %q, %v", data, err)
 	}
-	if err := publishArtifactFile(snapshot, ref, destination, true); err != nil {
+	freshDestination := filepath.Join(root, "fresh-result.jsonl")
+	if err := publishArtifactFile(snapshot, ref, freshDestination); err != nil {
 		t.Fatal(err)
 	}
-	if data, err := os.ReadFile(destination); err != nil || string(data) != "new" {
+	if data, err := os.ReadFile(freshDestination); err != nil || string(data) != "new" {
 		t.Fatalf("published output = %q, %v", data, err)
 	}
 }
@@ -77,13 +87,11 @@ func TestArtifactPublicationWaitsForSnapshotCleanup(t *testing.T) {
 	if err := os.WriteFile(source, []byte("new"), 0o400); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(destination, []byte("old"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	staged, err := stageArtifactFile(testArtifactOpener{ref: ref, path: source}, ref, destination, true)
+	staged, err := stageArtifactFile(testArtifactOpener{ref: ref, path: source}, ref, destination)
 	if err != nil {
 		t.Fatal(err)
 	}
+	stagePath := staged.path
 	report := documentpkg.Report{
 		State: documentpkg.StateSucceeded,
 		Artifacts: []documentpkg.Artifact{{
@@ -96,15 +104,15 @@ func TestArtifactPublicationWaitsForSnapshotCleanup(t *testing.T) {
 		report.Failure.Code != documentpkg.FailureInternal {
 		t.Fatalf("cleanup failure report = %#v", report)
 	}
-	if data, readErr := os.ReadFile(destination); readErr != nil || string(data) != "old" {
-		t.Fatalf("cleanup failure changed destination: %q, %v", data, readErr)
+	if _, statErr := os.Lstat(destination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("cleanup failure published destination: %v", statErr)
 	}
-	if _, statErr := os.Stat(staged.path); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(stagePath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("staged output survived cleanup failure: %v", statErr)
 	}
 }
 
-func TestArtifactOverwriteRejectsWrongDestinationTypes(t *testing.T) {
+func TestArtifactPublicationRejectsEveryExistingDestinationType(t *testing.T) {
 	root := t.TempDir()
 	ref := "document-artifact://operation/artifact"
 	source := filepath.Join(root, "artifact")
@@ -121,35 +129,24 @@ func TestArtifactOverwriteRejectsWrongDestinationTypes(t *testing.T) {
 	if err := os.WriteFile(canary, []byte("preserved"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stagedFile, err := stageArtifactFile(opener, ref, fileDestination, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = stagedFile.commit(); err == nil {
+	if err := publishArtifactFile(opener, ref, fileDestination); err == nil {
 		t.Fatal("file publication replaced a directory")
 	}
-	stagedFile.abort()
 	if data, readErr := os.ReadFile(canary); readErr != nil || string(data) != "preserved" {
 		t.Fatalf("file publication changed directory destination: %q, %v", data, readErr)
 	}
 
 	directoryDestination := filepath.Join(root, "directory-destination")
-	if err = os.WriteFile(directoryDestination, []byte("preserved"), 0o600); err != nil {
+	if err := os.WriteFile(directoryDestination, []byte("preserved"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stagedDirectory, err := stageArtifactDirectory(
+	if _, err := stageArtifactDirectory(
 		opener,
 		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
 		directoryDestination,
-		true,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = stagedDirectory.commit(); err == nil {
+	); err == nil {
 		t.Fatal("directory publication replaced a file")
 	}
-	stagedDirectory.abort()
 	if data, readErr := os.ReadFile(directoryDestination); readErr != nil || string(data) != "preserved" {
 		t.Fatalf("directory publication changed file destination: %q, %v", data, readErr)
 	}
@@ -167,7 +164,6 @@ func TestDirectoryPublicationDoesNotReplaceConcurrentDestination(t *testing.T) {
 		testArtifactOpener{ref: ref, path: source},
 		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
 		destination,
-		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -188,57 +184,35 @@ func TestDirectoryPublicationDoesNotReplaceConcurrentDestination(t *testing.T) {
 	}
 }
 
-func TestDirectoryOverwriteRejectsConcurrentDestinationIdentityChange(t *testing.T) {
+func TestFilePublicationDoesNotReplaceConcurrentDestination(t *testing.T) {
 	root := t.TempDir()
-	ref := "document-artifact://operation/page-0001.png"
-	source := filepath.Join(root, "source.png")
-	if err := os.WriteFile(source, []byte("page"), 0o400); err != nil {
+	ref := "document-artifact://operation/extracted-text.jsonl"
+	source := filepath.Join(root, "source.jsonl")
+	if err := os.WriteFile(source, []byte("new"), 0o400); err != nil {
 		t.Fatal(err)
 	}
-	destination := filepath.Join(root, "rendered")
-	if err := os.Mkdir(destination, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	concurrent := filepath.Join(root, "concurrent-rendered")
-	if err := os.Mkdir(concurrent, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	concurrentCanary := filepath.Join(concurrent, "concurrent-canary")
-	if err := os.WriteFile(concurrentCanary, []byte("preserved"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	staged, err := stageArtifactDirectory(
-		testArtifactOpener{ref: ref, path: source},
-		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
-		destination,
-		true,
-	)
+	destination := filepath.Join(root, "result.jsonl")
+	staged, err := stageArtifactFile(testArtifactOpener{ref: ref, path: source}, ref, destination)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var hookErr error
 	err = staged.commitWithHook(func() {
-		if hookErr = os.RemoveAll(destination); hookErr != nil {
-			return
-		}
-		hookErr = os.Rename(concurrent, destination)
+		hookErr = os.WriteFile(destination, []byte("concurrent"), 0o600)
 	})
 	if hookErr != nil {
 		t.Fatal(hookErr)
 	}
 	if err == nil {
-		t.Fatal("overwrite accepted a concurrently changed destination identity")
+		t.Fatal("publication replaced a concurrently created file")
 	}
-	if data, readErr := os.ReadFile(
-		filepath.Join(destination, "concurrent-canary"),
-	); readErr != nil ||
-		string(data) != "preserved" {
+	if data, readErr := os.ReadFile(destination); readErr != nil || string(data) != "concurrent" {
 		t.Fatalf("concurrent destination changed: %q, %v", data, readErr)
 	}
 	staged.abort()
 }
 
-func TestDirectoryOverwriteRejectsStageIdentityReplacement(t *testing.T) {
+func TestAbortDoesNotDeleteReplacementStage(t *testing.T) {
 	root := t.TempDir()
 	ref := "document-artifact://operation/page-0001.png"
 	source := filepath.Join(root, "source.png")
@@ -246,18 +220,10 @@ func TestDirectoryOverwriteRejectsStageIdentityReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(root, "rendered")
-	if err := os.Mkdir(destination, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	destinationCanary := filepath.Join(destination, "destination-canary")
-	if err := os.WriteFile(destinationCanary, []byte("old"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	staged, err := stageArtifactDirectory(
 		testArtifactOpener{ref: ref, path: source},
 		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
 		destination,
-		true,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -271,74 +237,18 @@ func TestDirectoryOverwriteRejectsStageIdentityReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	stagePath := staged.path
-	var hookErr error
-	err = staged.commitWithHook(func() {
-		if hookErr = os.RemoveAll(stagePath); hookErr != nil {
-			return
-		}
-		hookErr = os.Rename(replacement, stagePath)
-	})
-	if hookErr != nil {
-		t.Fatal(hookErr)
+	if err = os.RemoveAll(stagePath); err != nil {
+		t.Fatal(err)
 	}
-	if err == nil {
-		t.Fatal("overwrite published a replacement staged directory")
+	if err = os.Rename(replacement, stagePath); err != nil {
+		t.Fatal(err)
 	}
 	staged.abort()
-	if data, readErr := os.ReadFile(destinationCanary); readErr != nil || string(data) != "old" {
-		t.Fatalf("validated destination changed: %q, %v", data, readErr)
-	}
 	if data, readErr := os.ReadFile(
 		filepath.Join(stagePath, "replacement-canary"),
 	); readErr != nil ||
 		string(data) != "preserved" {
 		t.Fatalf("replacement stage was deleted: %q, %v", data, readErr)
-	}
-}
-
-func TestRollbackRefusesChangedExpectedIdentity(t *testing.T) {
-	root := t.TempDir()
-	left := filepath.Join(root, "left")
-	right := filepath.Join(root, "right")
-	replacement := filepath.Join(root, "replacement")
-	for path, marker := range map[string]string{left: "left", right: "right", replacement: "replacement"} {
-		if err := os.Mkdir(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(path, marker), []byte(marker), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var hookErr error
-	leftIdentity, err := openPathIdentity(left, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer leftIdentity.close()
-	rightIdentity, err := openPathIdentity(right, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rightIdentity.close()
-	if err = exchangePaths(left, right); err != nil {
-		t.Fatal(err)
-	}
-	err = rollbackVerifiedExchange(left, rightIdentity, right, leftIdentity, func() {
-		if hookErr = os.RemoveAll(left); hookErr != nil {
-			return
-		}
-		hookErr = os.Rename(replacement, left)
-	})
-	if hookErr != nil {
-		t.Fatal(hookErr)
-	}
-	if err == nil {
-		t.Fatal("rollback exchanged a changed observed identity")
-	}
-	for path, marker := range map[string]string{left: "replacement", right: "left"} {
-		if data, readErr := os.ReadFile(filepath.Join(path, marker)); readErr != nil || string(data) != marker {
-			t.Fatalf("rollback changed %s: %q, %v", path, data, readErr)
-		}
 	}
 }
 
