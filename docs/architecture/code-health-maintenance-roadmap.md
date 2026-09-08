@@ -308,6 +308,15 @@ Each non-stacked packet starts from the latest `origin/main`, uses a focused PR,
 and runs formatting, changed-package lint, affected tests, and broader tests in
 proportion to persistence, routing, delivery, or concurrency risk.
 
+## Delivery Evidence
+
+- M0 — merged in #1111 (`f4ad1954`): admitted this roadmap, linked it from the
+  active code-health architecture page, and reconciled the implemented TUI
+  milestones with the remaining migration plan.
+- M1 — merged in #1113 (`50451481`): made canonical snapshot reads strict and
+  context-aware across turn admission, rollback, recovery, relations, and
+  interaction paths while retaining tolerant reads only for passive callers.
+
 ## Separate Compatibility Closeouts
 
 The following work remains deliberately outside this roadmap:
