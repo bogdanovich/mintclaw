@@ -116,9 +116,20 @@ func boundCatalogMetadata(context *model.Context, root types.Dict, limit int64) 
 	if !found || metadata == nil {
 		return nil
 	}
-	stream, _, err := context.DereferenceStreamDict(metadata)
+	stream, previouslyValid, err := context.DereferenceStreamDict(metadata)
 	if err != nil || stream == nil {
 		return err
+	}
+	var metadataEntry *model.XRefTableEntry
+	if value, ok := metadata.(types.IndirectRef); ok {
+		entry, present := context.FindTableEntry(value.ObjectNumber.Value(), value.GenerationNumber.Value())
+		if !present || entry == nil || entry.Free {
+			return errors.New("catalog metadata object is unavailable")
+		}
+		metadataEntry = entry
+		defer func() {
+			metadataEntry.Valid = previouslyValid
+		}()
 	}
 	content, err := decodeBoundedStream(*stream, limit)
 	if errors.Is(err, filter.ErrUnsupportedFilter) {
@@ -128,13 +139,9 @@ func boundCatalogMetadata(context *model.Context, root types.Dict, limit int64) 
 		return fmt.Errorf("decode catalog metadata: %w", err)
 	}
 	stream.Content = content
-	switch value := metadata.(type) {
+	switch metadata.(type) {
 	case types.IndirectRef:
-		entry, ok := context.FindTableEntry(value.ObjectNumber.Value(), value.GenerationNumber.Value())
-		if !ok || entry == nil || entry.Free {
-			return errors.New("catalog metadata object is unavailable")
-		}
-		entry.Object = *stream
+		metadataEntry.Object = *stream
 	case types.StreamDict:
 		root["Metadata"] = *stream
 	}

@@ -180,6 +180,18 @@
       "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
     },
     {
+      "id": "malformed-metadata",
+      "file": "malformed-metadata.pdf",
+      "sha256": "61cce7804ee4064423541b9d37220f63e19e7ba4b050c5d4f235fb268889841f",
+      "construction": "deterministic_go_generator",
+      "license": "MIT (MintClaw repository)",
+      "expected": {
+        "failure_code": "malformed_pdf",
+        "state": "failed"
+      },
+      "evidence_test": "TestPDFCPUBackendMatchesInspectionManifest"
+    },
+    {
       "id": "unsigned-signature",
       "file": "unsigned-signature.pdf",
       "sha256": "7a9480cb8c667524fe074d609edf3fa03d7e834d5d43f6dda8f5b165f7157727",

@@ -69,6 +69,7 @@ func TestInspectionFixtureManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 		"decoded-content-limit":       false,
 		"decoded-content-array-limit": false,
 		"metadata-decoded-limit":      false,
+		"malformed-metadata":          false,
 		"xfa-decoded-limit":           false,
 	}
 	for _, fixture := range manifest.Fixtures {

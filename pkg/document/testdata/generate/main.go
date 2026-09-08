@@ -50,6 +50,7 @@ func main() {
 		xfaFixture("hybrid-xfa-static.pdf", true, "forbidden"),
 		xfaLimitFixture(),
 		metadataLimitFixture(),
+		malformedMetadataFixture(),
 		unsignedSignatureFixture(),
 		signedFixture("signed-certified.pdf", "Sig", "DocMDP"),
 		signedFixture("field-restricted.pdf", "Sig", "FieldMDP"),
@@ -218,6 +219,20 @@ func metadataLimitFixture() fixture {
 		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
 		stream("BT /F1 12 Tf 72 720 Td (Synthetic metadata limit fixture) Tj ET\n"),
 		flateStreamDict("/Type /Metadata /Subtype /XML", payload),
+	}}
+}
+
+func malformedMetadataFixture() fixture {
+	return fixture{name: "malformed-metadata.pdf", objects: []pdfObject{
+		catalog("2 0 R", "/Metadata 6 0 R"),
+		pages("3 0 R"),
+		page("2 0 R", "5 0 R", "/Font << /F1 4 0 R >>", ""),
+		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+		stream("BT /F1 12 Tf 72 720 Td (Synthetic malformed metadata fixture) Tj ET\n"),
+		flateStreamDict(
+			"/Type /Metadata /Subtype /BAD",
+			[]byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"/>`),
+		),
 	}}
 }
 
@@ -415,7 +430,7 @@ func manifestEntry(name, digest string) manifestFixture {
 		expected["timestamped"] = "unknown"
 		expected["restrictions"] = "present"
 		expected["usage_rights"] = "present"
-	case "truncated.pdf", "malformed-xref.pdf", "oversized-stream-declaration.pdf":
+	case "truncated.pdf", "malformed-xref.pdf", "oversized-stream-declaration.pdf", "malformed-metadata.pdf":
 		expected = map[string]interface{}{
 			"state":        "failed",
 			"failure_code": "malformed_pdf",
