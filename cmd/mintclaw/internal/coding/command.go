@@ -20,6 +20,7 @@ import (
 	codingpicker "github.com/bogdanovich/mintclaw/pkg/coding/picker"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
 	"github.com/bogdanovich/mintclaw/pkg/coding/tui"
+	"github.com/bogdanovich/mintclaw/pkg/coding/worker"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
@@ -36,6 +37,7 @@ type dependencies struct {
 	newPickerSource func(*thread.Store, thread.ProjectIdentity) (codingpicker.Source, error)
 	runPicker       func(context.Context, codingpicker.Source, tui.PickerOptions) (tui.PickerSelection, error)
 	reviewContext   func(context.Context) (context.Context, context.CancelFunc)
+	workerBuildID   func() (string, error)
 }
 
 func defaultDependencies() dependencies {
@@ -52,6 +54,7 @@ func defaultDependencies() dependencies {
 		newPickerSource: newPickerCatalogSource,
 		runPicker:       tui.RunPicker,
 		reviewContext:   newReviewSignalContext,
+		workerBuildID:   worker.CurrentExecutableBuildID,
 	}
 }
 
@@ -143,6 +146,7 @@ func newCodeCommand(deps dependencies) *cobra.Command {
 	)
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON")
 	cmd.AddCommand(newCodeExecCommand(deps))
+	cmd.AddCommand(newCodeWorkerCommand(deps))
 	return cmd
 }
 
@@ -166,6 +170,9 @@ func completeDependencies(deps dependencies) dependencies {
 	}
 	if deps.reviewContext == nil {
 		deps.reviewContext = newReviewSignalContext
+	}
+	if deps.workerBuildID == nil {
+		deps.workerBuildID = worker.CurrentExecutableBuildID
 	}
 	return deps
 }
@@ -919,13 +926,21 @@ func resultFor(
 }
 
 func runtimeLayoutFor(store *thread.Store, metadata thread.Metadata) (agent.CodingRuntimeLayout, error) {
+	return runtimeLayoutForExecutionRoot(store, metadata, metadata.Project.ProjectRoot)
+}
+
+func runtimeLayoutForExecutionRoot(
+	store *thread.Store,
+	metadata thread.Metadata,
+	executionRoot string,
+) (agent.CodingRuntimeLayout, error) {
 	stateRoot, err := store.ThreadRoot(metadata.ThreadID)
 	if err != nil {
 		return agent.CodingRuntimeLayout{}, err
 	}
 	layout, err := agent.NewCodingRuntimeLayout(
 		metadata.ThreadID,
-		metadata.Project.ProjectRoot,
+		executionRoot,
 		stateRoot,
 		codingInstructionRoots(store, metadata),
 	)
