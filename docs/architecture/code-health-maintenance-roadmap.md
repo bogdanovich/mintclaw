@@ -316,6 +316,9 @@ proportion to persistence, routing, delivery, or concurrency risk.
 - M1 — merged in #1113 (`50451481`): made canonical snapshot reads strict and
   context-aware across turn admission, rollback, recovery, relations, and
   interaction paths while retaining tolerant reads only for passive callers.
+- M2 — merged in #1123 (`3ab777be`): replaced the duplicated hook-response
+  state machine with a typed result source and one shared journaling, delivery,
+  suspension, loopguard, and terminal settlement path.
 
 ## Separate Compatibility Closeouts
 
