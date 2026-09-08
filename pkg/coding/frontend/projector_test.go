@@ -494,6 +494,27 @@ func TestCommandLifecycleCorrelatesEdgesWithoutCrossCallAttachment(t *testing.T)
 	}
 }
 
+func TestToolExplorationIsBoundedClonedAndRetainedThroughCompletion(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 16})
+	projector.ToolStarted("turn-1", "call-1", "read_file", "fields: path")
+	exploration := ExplorationState{
+		Operation: ExplorationRead, Path: strings.Repeat("p", 32), Workspace: "build",
+	}
+	projector.ToolExploration("turn-1", "call-1", exploration)
+	projector.ToolCompleted("turn-1", "call-1", "read_file", "", time.Second, false, nil)
+
+	tool := snapshotForTest(t, projector).Tools[0]
+	if tool.Status != ToolSucceeded || tool.Exploration == nil || tool.Exploration.Operation != ExplorationRead ||
+		len(tool.Exploration.Path) > 16 || !tool.Exploration.Truncated || tool.Exploration.Workspace != "build" {
+		t.Fatalf("completed exploration = %+v", tool)
+	}
+	cloned := snapshotForTest(t, projector)
+	cloned.Tools[0].Exploration.Path = "mutated"
+	if got := snapshotForTest(t, projector).Tools[0].Exploration.Path; got == "mutated" {
+		t.Fatal("exploration snapshot aliases projector state")
+	}
+}
+
 func TestOrphanCommandCompletionRemainsExplicit(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	exitCode := 0

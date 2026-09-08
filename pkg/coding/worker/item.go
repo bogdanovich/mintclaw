@@ -89,6 +89,22 @@ type WriteAudit struct {
 	Tool    string `json:"tool,omitempty"`
 }
 
+type ExplorationOperation string
+
+const (
+	ExplorationRead   ExplorationOperation = "read"
+	ExplorationList   ExplorationOperation = "list"
+	ExplorationSearch ExplorationOperation = "search"
+)
+
+type Exploration struct {
+	Operation ExplorationOperation `json:"operation"`
+	Path      string               `json:"path,omitempty"`
+	Pattern   string               `json:"pattern,omitempty"`
+	Workspace string               `json:"workspace,omitempty"`
+	Truncated bool                 `json:"truncated,omitempty"`
+}
+
 type CommandStatus string
 
 const (
@@ -146,6 +162,7 @@ type Tool struct {
 	OutputTruncated bool         `json:"output_truncated,omitempty"`
 	WriteAudit      []WriteAudit `json:"write_audit,omitempty"`
 	Command         *Command     `json:"command,omitempty"`
+	Exploration     *Exploration `json:"exploration,omitempty"`
 }
 
 type PlanStepStatus string
@@ -318,6 +335,11 @@ func toolFromFrontend(source frontend.ToolState) *Tool {
 			Tool:    auditTool,
 		})
 	}
+	if source.Exploration != nil {
+		exploration, truncated := explorationFromFrontend(*source.Exploration)
+		tool.Exploration = exploration
+		tool.Truncated = tool.Truncated || truncated
+	}
 	if source.Command != nil {
 		action, actionTruncated := boundedWireStructural(source.Command.Action, MaxAttachmentMeta)
 		commandText, commandTruncated := boundedWireContent(source.Command.Command, MaxEventTextBytes)
@@ -357,6 +379,25 @@ func toolFromFrontend(source frontend.ToolState) *Tool {
 		}
 	}
 	return tool
+}
+
+func explorationFromFrontend(source frontend.ExplorationState) (*Exploration, bool) {
+	operation := ExplorationOperation(source.Operation)
+	switch operation {
+	case ExplorationRead, ExplorationList, ExplorationSearch:
+	default:
+		return nil, true
+	}
+	path, pathTruncated := boundedWireStructural(source.Path, MaxExplorationValue)
+	pattern, patternTruncated := boundedWireStructural(source.Pattern, MaxExplorationValue)
+	workspace, workspaceTruncated := boundedWireStructural(source.Workspace, MaxExplorationValue)
+	return &Exploration{
+		Operation: operation,
+		Path:      path,
+		Pattern:   pattern,
+		Workspace: workspace,
+		Truncated: source.Truncated || pathTruncated || patternTruncated || workspaceTruncated,
+	}, false
 }
 
 func boundedWireCommandCWD(source string) (string, bool) {

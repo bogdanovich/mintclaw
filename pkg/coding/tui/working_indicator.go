@@ -336,7 +336,7 @@ func runningPhase(items []frontend.PresentationItem) workingPhase {
 			}
 			return workingPhaseRunning
 		}
-		if !nativeExplorationTool(tool.Name) {
+		if tool.Exploration == nil {
 			allExploration = false
 		}
 		if strings.TrimSpace(tool.Name) != "exec" {
@@ -350,15 +350,6 @@ func runningPhase(items []frontend.PresentationItem) workingPhase {
 		return workingPhaseExploring
 	}
 	return workingPhaseRunning
-}
-
-func nativeExplorationTool(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "list_dir", "read_file", "search_files", "repository_status", "repository_diff", "load_image":
-		return true
-	default:
-		return false
-	}
 }
 
 func (m *Model) syncWorkingIndicator() {

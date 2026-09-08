@@ -119,6 +119,7 @@ type Model struct {
 	historyDraft        string
 	selectedToolID      string
 	expandedToolID      string
+	toolSelectionActive bool
 	refreshingWorkspace bool
 	workspaceNotice     string
 	commandPanel        commandPanel
@@ -767,6 +768,7 @@ func (m *Model) normalizeToolSelection(tools []frontend.ToolState) {
 	if len(tools) == 0 {
 		m.selectedToolID = ""
 		m.expandedToolID = ""
+		m.toolSelectionActive = false
 		return
 	}
 	for _, tool := range tools {
@@ -797,6 +799,7 @@ func (m *Model) navigateTools(direction int) {
 	selected = (selected + direction + len(tools)) % len(tools)
 	m.selectedToolID = toolViewID(tools[selected])
 	m.expandedToolID = ""
+	m.toolSelectionActive = true
 	m.refreshViewport()
 	m.focusSelectedTool()
 }
@@ -808,6 +811,7 @@ func (m *Model) toggleSelectedTool() {
 		return
 	}
 	m.normalizeToolSelection(tools)
+	m.toolSelectionActive = true
 	selected := frontend.ToolState{}
 	for _, tool := range tools {
 		if toolViewID(tool) == m.selectedToolID {

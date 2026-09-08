@@ -113,16 +113,38 @@ func TestSanitizeToolObservationFailsClosedAndClonesCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, observation := range map[string]*ToolObservation{
-		"nil":       nil,
-		"empty":     {},
-		"ambiguous": {Command: command, Plan: &validPlan},
-		"bad plan":  {Plan: &PlanObservation{Steps: []PlanStepObservation{{Step: "one", Status: "blocked"}}}},
+		"nil":               nil,
+		"empty":             {},
+		"ambiguous":         {Command: command, Plan: &validPlan},
+		"ambiguous explore": {Exploration: &ExplorationObservation{Operation: ExplorationRead}, Plan: &validPlan},
+		"bad exploration":   {Exploration: &ExplorationObservation{Operation: "execute"}},
+		"bad plan":          {Plan: &PlanObservation{Steps: []PlanStepObservation{{Step: "one", Status: "blocked"}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if got := SanitizeToolObservation(observation); got != nil {
 				t.Fatalf("invalid union admitted: %#v", got)
 			}
 		})
+	}
+}
+
+func TestSanitizeToolObservationBoundsRedactsAndClonesExploration(t *testing.T) {
+	original := &ExplorationObservation{
+		Operation: ExplorationSearch,
+		Path:      strings.Repeat("p", maxExplorationValueBytes+1),
+		Pattern:   "sk-123456789abcdef",
+		Workspace: "build",
+	}
+	got := SanitizeToolObservation(&ToolObservation{Exploration: original})
+	if got == nil || got.Exploration == nil || got.Exploration.Operation != ExplorationSearch ||
+		!got.Exploration.Truncated || len(got.Exploration.Path) > maxExplorationValueBytes ||
+		strings.Contains(got.Exploration.Pattern, "123456789abcdef") || got.Exploration.Workspace != "build" {
+		t.Fatalf("safe exploration observation = %#v", got)
+	}
+	original.Path = "mutated"
+	original.Pattern = "mutated"
+	if got.Exploration.Path == "mutated" || got.Exploration.Pattern == "mutated" {
+		t.Fatalf("safe exploration aliases input: %#v", got)
 	}
 }
 

@@ -86,6 +86,26 @@ func NewRemoteWorkspaceTool(
 
 func (tool *RemoteWorkspaceTool) Name() string { return tool.local.Name() }
 
+// CodingStartObservation preserves a compatible native tool's typed coding
+// observation and adds only the admitted remote workspace alias. The wrapper
+// never promotes arbitrary proxy arguments into presentation state.
+func (tool *RemoteWorkspaceTool) CodingStartObservation(args map[string]any) *toolshared.ToolObservation {
+	if tool == nil || tool.local == nil {
+		return nil
+	}
+	provider, ok := tool.local.(toolshared.CodingObservationProvider)
+	if !ok {
+		return nil
+	}
+	observation := toolshared.SanitizeToolObservation(provider.CodingStartObservation(args))
+	if observation == nil || observation.Exploration == nil {
+		return observation
+	}
+	workspace, _ := args[remoteWorkspaceArgument].(string)
+	observation.Exploration.Workspace = strings.TrimSpace(workspace)
+	return toolshared.SanitizeToolObservation(observation)
+}
+
 func (tool *RemoteWorkspaceTool) Description() string {
 	description := tool.local.Description() +
 		" Omit remote_workspace for the current agent's gateway-local filesystem, or pass one configured remote " +

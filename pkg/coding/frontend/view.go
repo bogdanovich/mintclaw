@@ -141,17 +141,36 @@ const (
 )
 
 type ToolState struct {
-	TurnID          string        `json:"turn_id"`
-	CallID          string        `json:"call_id"`
-	Name            string        `json:"name"`
-	Arguments       string        `json:"arguments,omitempty"`
-	Output          string        `json:"output,omitempty"`
-	Status          ToolStatus    `json:"status"`
-	Duration        time.Duration `json:"duration,omitempty"`
-	OutputTruncated bool          `json:"output_truncated,omitempty"`
-	PlanObserved    bool          `json:"plan_observed,omitempty"`
-	WriteAudit      []WriteAudit  `json:"write_audit,omitempty"`
-	Command         *CommandState `json:"command,omitempty"`
+	TurnID          string            `json:"turn_id"`
+	CallID          string            `json:"call_id"`
+	Name            string            `json:"name"`
+	Arguments       string            `json:"arguments,omitempty"`
+	Output          string            `json:"output,omitempty"`
+	Status          ToolStatus        `json:"status"`
+	Duration        time.Duration     `json:"duration,omitempty"`
+	OutputTruncated bool              `json:"output_truncated,omitempty"`
+	PlanObserved    bool              `json:"plan_observed,omitempty"`
+	WriteAudit      []WriteAudit      `json:"write_audit,omitempty"`
+	Command         *CommandState     `json:"command,omitempty"`
+	Exploration     *ExplorationState `json:"exploration,omitempty"`
+}
+
+type ExplorationOperation string
+
+const (
+	ExplorationRead   ExplorationOperation = "read"
+	ExplorationList   ExplorationOperation = "list"
+	ExplorationSearch ExplorationOperation = "search"
+)
+
+// ExplorationState is bounded native-tool-owned read/list/search metadata.
+// It is never inferred from a shell command, tool name, or model-facing text.
+type ExplorationState struct {
+	Operation ExplorationOperation `json:"operation"`
+	Path      string               `json:"path,omitempty"`
+	Pattern   string               `json:"pattern,omitempty"`
+	Workspace string               `json:"workspace,omitempty"`
+	Truncated bool                 `json:"truncated,omitempty"`
 }
 
 type CommandStatus string

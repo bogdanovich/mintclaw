@@ -120,8 +120,17 @@ func (a *Adapter) project(event runtimeevents.Event) {
 		if ok {
 			a.projector.ToolStarted(turnID, payload.ToolCallID, payload.Tool, argumentShape(payload.Arguments))
 			observation := toolshared.SanitizeToolObservation(payload.Observation)
-			if observation != nil && observation.Command != nil {
-				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+			if observation != nil {
+				if observation.Command != nil {
+					a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
+				}
+				if observation.Exploration != nil {
+					a.projector.ToolExploration(
+						turnID,
+						payload.ToolCallID,
+						projectExploration(*observation.Exploration),
+					)
+				}
 			}
 		}
 	case runtimeevents.KindAgentToolExecProgress:
@@ -339,6 +348,16 @@ func projectCommand(command toolshared.CommandObservation) frontend.CommandState
 		Status: status, SessionID: command.SessionID, ExitCode: command.ExitCode,
 		Truncated: command.Truncated, Background: command.Background,
 		OwnsProcess: command.OwnsProcess, Canceled: command.Canceled, TimedOut: command.TimedOut,
+	}
+}
+
+func projectExploration(exploration toolshared.ExplorationObservation) frontend.ExplorationState {
+	return frontend.ExplorationState{
+		Operation: frontend.ExplorationOperation(exploration.Operation),
+		Path:      exploration.Path,
+		Pattern:   exploration.Pattern,
+		Workspace: exploration.Workspace,
+		Truncated: exploration.Truncated,
 	}
 }
 
