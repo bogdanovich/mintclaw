@@ -9,9 +9,22 @@ import (
 )
 
 func openExclusiveLeaseFile(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(
+		path,
+		os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK,
+		0o600,
+	)
 	if err != nil {
 		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errExclusiveLeaseUnsafe
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()

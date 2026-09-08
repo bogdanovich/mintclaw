@@ -44,6 +44,38 @@ func assertDirectoryEmpty(t *testing.T, path string) {
 	}
 }
 
+func TestRecoverEphemeralProfileRuntimeRejectsLifecycleLeaseSymlink(t *testing.T) {
+	runtime := ephemeralRuntimeFixture(t)
+	target := filepath.Join(filepath.Dir(runtime.EphemeralRoot), "outside-lock-target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, ephemeralLifecycleLockFile(runtime)); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	if err := recoverEphemeralProfileRuntime(runtime); err == nil {
+		t.Fatal("recoverEphemeralProfileRuntime() accepted a symlinked lifecycle lease")
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("lifecycle lease target permissions = %04o, want 0700", got)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(contents); got != "unchanged" {
+		t.Fatalf("lifecycle lease target contents = %q, want unchanged", got)
+	}
+}
+
 func TestEphemeralRuntimeLeaseRemovesOnlyAnchoredSessionDirectory(t *testing.T) {
 	runtime := ephemeralRuntimeFixture(t)
 	outside := filepath.Join(filepath.Dir(runtime.EphemeralRoot), "outside")

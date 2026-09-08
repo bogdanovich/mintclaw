@@ -42,7 +42,7 @@ func openExclusiveLeaseFile(path string) (*os.File, error) {
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		securityAttributes,
 		windows.OPEN_ALWAYS,
-		windows.FILE_ATTRIBUTE_NORMAL,
+		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT,
 		0,
 	)
 	if err != nil {
@@ -53,6 +53,9 @@ func openExclusiveLeaseFile(path string) (*os.File, error) {
 		return nil, err
 	}
 
+	if err := validateWindowsLeaseFileType(handle); err != nil {
+		return closeOnError(err)
+	}
 	if err := validateWindowsLeaseOwner(handle, owner); err != nil {
 		return closeOnError(err)
 	}
@@ -75,6 +78,21 @@ func openExclusiveLeaseFile(path string) (*os.File, error) {
 	}
 
 	return os.NewFile(uintptr(handle), path), nil
+}
+
+func validateWindowsLeaseFileType(handle windows.Handle) error {
+	fileType, err := windows.GetFileType(handle)
+	if err != nil || fileType != windows.FILE_TYPE_DISK {
+		return errExclusiveLeaseUnsafe
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return fmt.Errorf("read Windows lease file information: %w", err)
+	}
+	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+		return errExclusiveLeaseUnsafe
+	}
+	return nil
 }
 
 func validateWindowsLeaseOwner(handle windows.Handle, owner *windows.SID) error {

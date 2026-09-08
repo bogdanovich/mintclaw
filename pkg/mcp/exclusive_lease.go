@@ -7,7 +7,10 @@ import (
 	"sync"
 )
 
-var errExclusiveLeaseBusy = errors.New("exclusive lease busy")
+var (
+	errExclusiveLeaseBusy   = errors.New("exclusive lease busy")
+	errExclusiveLeaseUnsafe = errors.New("exclusive lease file is unsafe")
+)
 
 // ExclusiveLeaseBusyError classifies a configured MCP server lease that is
 // already held by another cooperating process.

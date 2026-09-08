@@ -46,3 +46,27 @@ func TestOpenExclusiveLeaseFileReplacesInheritedWindowsDACL(t *testing.T) {
 		t.Fatalf("validateOwnerOnlyWindowsDACL() error = %v", err)
 	}
 }
+
+func TestOpenExclusiveLeaseFileRejectsWindowsReparsePoint(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	leasePath := filepath.Join(t.TempDir(), "playwright.lock")
+	if err := os.Symlink(target, leasePath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	file, err := openExclusiveLeaseFile(leasePath)
+	if err == nil {
+		_ = file.Close()
+		t.Fatal("openExclusiveLeaseFile() accepted a reparse point")
+	}
+	contents, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if got := string(contents); got != "unchanged" {
+		t.Fatalf("target contents = %q, want unchanged", got)
+	}
+}
