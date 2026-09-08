@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image/png"
 	"io"
@@ -30,6 +31,8 @@ const (
 	popplerProbeTimeout     = 2 * time.Second
 	popplerStderrLimit      = 8 * 1024
 )
+
+var errPopplerTextOutputLimit = errors.New("document text output limit exceeded")
 
 type popplerReadBackend struct{}
 
@@ -191,17 +194,88 @@ func popplerPageText(data []byte, page, remaining int) (string, *Failure) {
 	)
 	command.Env = documentBackendEnvironment()
 	command.Stdin = bytes.NewReader(data)
-	stdout := newBoundedWorkerBuffer(DefaultMaxExtractChars*utf8.UTFMax + 1)
+	stdout := newBoundedTextOutput((remaining+1)*utf8.UTFMax, DefaultMaxContentBytes)
 	stderr := newBoundedWorkerBuffer(popplerStderrLimit)
 	command.Stdout = stdout
 	command.Stderr = stderr
-	if err := command.Run(); err != nil || stdout.exceeded || stderr.exceeded || !utf8.Valid(stdout.Bytes()) {
+	if err := command.Run(); err != nil || stdout.exceeded || stderr.exceeded {
 		return "", &Failure{
 			Code:    FailureExtractionLimit,
 			Message: "document text extraction failed or exceeded a limit",
 		}
 	}
-	return strings.TrimRight(string(stdout.Bytes()), "\f\r\n"), nil
+	text, valid := completeUTF8Prefix(stdout.Bytes(), stdout.truncated)
+	if !valid {
+		return "", &Failure{
+			Code:    FailureExtractionLimit,
+			Message: "document text extraction failed or exceeded a limit",
+		}
+	}
+	return strings.TrimRight(string(text), "\f\r\n"), nil
+}
+
+type boundedTextOutput struct {
+	buffer         bytes.Buffer
+	captureMaximum int
+	hardMaximum    int64
+	total          int64
+	truncated      bool
+	exceeded       bool
+}
+
+func newBoundedTextOutput(captureMaximum int, hardMaximum int64) *boundedTextOutput {
+	return &boundedTextOutput{captureMaximum: captureMaximum, hardMaximum: hardMaximum}
+}
+
+func (b *boundedTextOutput) Write(data []byte) (int, error) {
+	if len(data) == 0 {
+		return 0, nil
+	}
+	allowed := len(data)
+	if int64(allowed) > b.hardMaximum-b.total {
+		allowed = max(0, int(b.hardMaximum-b.total))
+		b.exceeded = true
+	}
+	b.capture(data[:allowed])
+	b.total += int64(allowed)
+	if b.exceeded {
+		return allowed, errPopplerTextOutputLimit
+	}
+	return len(data), nil
+}
+
+func (b *boundedTextOutput) capture(data []byte) {
+	remaining := b.captureMaximum - b.buffer.Len()
+	if remaining <= 0 {
+		b.truncated = b.truncated || len(data) > 0
+		return
+	}
+	if len(data) > remaining {
+		_, _ = b.buffer.Write(data[:remaining])
+		b.truncated = true
+		return
+	}
+	_, _ = b.buffer.Write(data)
+}
+
+func (b *boundedTextOutput) Bytes() []byte {
+	return b.buffer.Bytes()
+}
+
+func completeUTF8Prefix(data []byte, truncated bool) ([]byte, bool) {
+	if utf8.Valid(data) {
+		return data, true
+	}
+	if !truncated {
+		return nil, false
+	}
+	minimum := max(0, len(data)-(utf8.UTFMax-1))
+	for start := len(data) - 1; start >= minimum; start-- {
+		if utf8.Valid(data[:start]) && !utf8.FullRune(data[start:]) {
+			return data[:start], true
+		}
+	}
+	return nil, false
 }
 
 func truncateRunes(value string, maximum int) string {
@@ -229,7 +303,12 @@ func (popplerReadBackend) Render(data []byte, request WorkerRequest) backendRead
 	pages := make([]PageRenderFacts, 0, len(request.Read.Pages))
 	var totalBytes, totalPixels int64
 	for _, page := range request.Read.Pages {
-		width, height, failure := popplerPageDimensions(data, page, request.Read.Limits.DPI)
+		width, height, failure := popplerPageDimensions(
+			data,
+			page,
+			request.Read.Limits.DPI,
+			request.Read.Limits.MaxDimension,
+		)
 		if failure != nil {
 			return backendRead{State: StateFailed, Failure: failure}
 		}
@@ -289,7 +368,7 @@ func (popplerReadBackend) Render(data []byte, request WorkerRequest) backendRead
 	}
 }
 
-func popplerPageDimensions(data []byte, page, dpi int) (int, int, *Failure) {
+func popplerPageDimensions(data []byte, page, dpi, maxDimension int) (int, int, *Failure) {
 	command := exec.Command(
 		popplerInfoExecutable,
 		"-f", strconv.Itoa(page),
@@ -329,12 +408,24 @@ func popplerPageDimensions(data []byte, page, dpi int) (int, int, *Failure) {
 			rotation = parsed
 		}
 	}
-	if widthPoints <= 0 || heightPoints <= 0 ||
+	return boundedPageDimensions(widthPoints, heightPoints, dpi, maxDimension, rotation)
+}
+
+func boundedPageDimensions(widthPoints, heightPoints float64, dpi, maxDimension, rotation int) (int, int, *Failure) {
+	if widthPoints <= 0 || heightPoints <= 0 || math.IsNaN(widthPoints) || math.IsNaN(heightPoints) ||
+		math.IsInf(widthPoints, 0) || math.IsInf(heightPoints, 0) ||
 		(rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) {
 		return 0, 0, &Failure{Code: FailureArtifactInvalid, Message: "document page dimensions are unavailable"}
 	}
-	width := int(math.Ceil(widthPoints * float64(dpi) / 72))
-	height := int(math.Ceil(heightPoints * float64(dpi) / 72))
+	widthPixels := math.Ceil(widthPoints * float64(dpi) / 72)
+	heightPixels := math.Ceil(heightPoints * float64(dpi) / 72)
+	if math.IsNaN(widthPixels) || math.IsNaN(heightPixels) || math.IsInf(widthPixels, 0) ||
+		math.IsInf(heightPixels, 0) || widthPixels <= 0 || heightPixels <= 0 ||
+		widthPixels > float64(maxDimension) || heightPixels > float64(maxDimension) {
+		return 0, 0, &Failure{Code: FailureRenderLimit, Message: "document page dimensions exceed the render limit"}
+	}
+	width := int(widthPixels)
+	height := int(heightPixels)
 	if rotation == 90 || rotation == 270 {
 		width, height = height, width
 	}

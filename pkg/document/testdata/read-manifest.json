@@ -149,7 +149,7 @@
     {
       "id": "pixel-limit",
       "file": "extreme-dimensions.pdf",
-      "sha256": "03f56f6c20d3e6cdc566d8f7aeed3f0b7e54d52b8d99ee39055b9e886c20d8fa",
+      "sha256": "9b67d3697496188e2177f08a3ad232d0763dee252eb1fab3aee9782be05d4073",
       "pages": [1],
       "operations": ["render"],
       "expected_state": "failed",

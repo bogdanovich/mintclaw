@@ -218,13 +218,16 @@ func ambiguousReadingOrderFixture() fixture {
 }
 
 func extremeDimensionsFixture() fixture {
+	size := "1" + strings.Repeat("0", 90)
 	return fixture{name: "extreme-dimensions.pdf", objects: []pdfObject{
 		catalog("2 0 R", ""),
 		pages("3 0 R"),
-		rawObject(
-			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200000 200000] " +
+		rawObject(fmt.Sprintf(
+			"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %s %s] "+
 				"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-		),
+			size,
+			size,
+		)),
 		rawObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
 		stream("BT /F1 12 Tf 72 720 Td (MINTCLAW_EXTREME_DIMENSIONS) Tj ET\n"),
 	}}

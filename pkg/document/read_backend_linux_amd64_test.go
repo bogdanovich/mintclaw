@@ -3,12 +3,14 @@
 package document
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestReadBackendFixtureOutcomes(t *testing.T) {
@@ -150,5 +152,63 @@ func TestBoundExtractedPageTextDoesNotTruncateExactFinalPage(t *testing.T) {
 	bounded, characters, truncated = boundExtractedPageText(text+"2", 21, false)
 	if bounded != text || characters != 21 || !truncated {
 		t.Fatalf("over-budget page = %q, %d, %t", bounded, characters, truncated)
+	}
+}
+
+func TestBoundedTextOutputPreservesSupplementaryPlaneTruncation(t *testing.T) {
+	output := strings.Repeat("😀", DefaultMaxExtractChars+1) + "\n"
+	collector := newBoundedTextOutput(
+		(DefaultMaxExtractChars+1)*utf8.UTFMax,
+		DefaultMaxContentBytes,
+	)
+	if _, err := io.Copy(collector, strings.NewReader(output)); err != nil {
+		t.Fatal(err)
+	}
+	prefix, valid := completeUTF8Prefix(collector.Bytes(), collector.truncated)
+	if !valid {
+		t.Fatal("captured output is not a complete UTF-8 prefix")
+	}
+	bounded, characters, truncated := boundExtractedPageText(string(prefix), DefaultMaxExtractChars, false)
+	if !truncated || characters != DefaultMaxExtractChars ||
+		utf8.RuneCountInString(bounded) != DefaultMaxExtractChars {
+		t.Fatalf("supplementary-plane truncation = %d characters, truncated=%t", characters, truncated)
+	}
+}
+
+func TestBoundedTextOutputRejectsHardLimitAndInvalidUTF8(t *testing.T) {
+	collector := newBoundedTextOutput(8, 4)
+	written, err := collector.Write([]byte("12345"))
+	if written != 4 || !errors.Is(err, errPopplerTextOutputLimit) || !collector.exceeded {
+		t.Fatalf("hard limit = written %d, err %v, exceeded %t", written, err, collector.exceeded)
+	}
+	if _, valid := completeUTF8Prefix([]byte{'a', 0xff}, true); valid {
+		t.Fatal("invalid UTF-8 was accepted as an incomplete trailing rune")
+	}
+	partialRune := newBoundedTextOutput(6, 16)
+	if _, err = partialRune.Write([]byte("😀😀")); err != nil {
+		t.Fatal(err)
+	}
+	prefix, valid := completeUTF8Prefix(partialRune.Bytes(), partialRune.truncated)
+	if !valid || string(prefix) != "😀" {
+		t.Fatalf("partial trailing rune prefix = %q, valid=%t", prefix, valid)
+	}
+}
+
+func TestPopplerPageDimensionsRejectsNonRepresentablePixels(t *testing.T) {
+	_, _, failure := boundedPageDimensions(1e90, 1e90, DefaultRenderDPI, DefaultMaxRenderEdge, 0)
+	if failure == nil || failure.Code != FailureRenderLimit {
+		t.Fatalf("non-representable dimensions failure = %#v", failure)
+	}
+	if !readBackendAvailable() {
+		t.Skip("pinned Poppler 24.02.0 backend is unavailable")
+	}
+	data, err := os.ReadFile(filepath.Join("testdata", "extreme-dimensions.pdf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, failure = popplerPageDimensions(data, 1, DefaultRenderDPI, DefaultMaxRenderEdge)
+	if failure == nil || failure.Code != FailureRenderLimit ||
+		failure.Message != "document page dimensions exceed the render limit" {
+		t.Fatalf("fixture dimension preflight failure = %#v", failure)
 	}
 }
