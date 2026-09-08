@@ -209,50 +209,6 @@ func (p *toolCallRespProvider) GetDefaultModel() string {
 	return "tool-model"
 }
 
-type gatedToolCallRespProvider struct {
-	toolName string
-	started  chan struct{}
-	release  chan struct{}
-	mu       sync.Mutex
-	calls    int
-}
-
-func (p *gatedToolCallRespProvider) Chat(
-	ctx context.Context,
-	_ []providers.Message,
-	_ []providers.ToolDefinition,
-	_ string,
-	_ map[string]any,
-) (*providers.LLMResponse, error) {
-	p.mu.Lock()
-	p.calls++
-	call := p.calls
-	p.mu.Unlock()
-	if call != 1 {
-		return &providers.LLMResponse{Content: "must not continue", FinishReason: "stop"}, nil
-	}
-	close(p.started)
-	select {
-	case <-p.release:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	return &providers.LLMResponse{
-		ToolCalls:    []providers.ToolCall{{ID: "call_1", Name: p.toolName}},
-		FinishReason: "tool_calls",
-	}, nil
-}
-
-func (p *gatedToolCallRespProvider) GetDefaultModel() string {
-	return "gated-tool-model"
-}
-
-func (p *gatedToolCallRespProvider) callCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.calls
-}
-
 // errorProvider simulates various error conditions
 type errorProvider struct {
 	errType   string
@@ -2190,38 +2146,56 @@ func TestRunTurn_DelegatedSuspensionRequeuesAcceptedInboundSteering(t *testing.T
 }
 
 func TestRunTurn_DelegatedSuspensionReturnsInMemorySteering(t *testing.T) {
+	toolStarted := make(chan struct{})
+	toolRelease := make(chan struct{})
+	defer func() {
+		select {
+		case <-toolRelease:
+		default:
+			close(toolRelease)
+		}
+	}()
 	tool := &fixedToolResultTool{name: "delegated_task", result: &toolshared.ToolResult{
 		ForLLM:  "descendant task owns a durable continuation",
 		ForUser: "must not escape the suspension boundary",
 		Control: toolshared.ToolControl{TaskSuspended: true},
+	}, onExecute: func() {
+		close(toolStarted)
+		<-toolRelease
 	}}
-	provider := &gatedToolCallRespProvider{
-		toolName: tool.Name(), started: make(chan struct{}), release: make(chan struct{}),
-	}
+	provider := &toolCallRespProvider{toolName: tool.Name(), response: "must not continue"}
 	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
 	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
 	agent.Tools.Register(tool)
 
-	opts := normalizeTurnSpec(makeTestTurnSpec("delegated-suspension-memory-steering"))
+	opts := makeTestTurnSpec("delegated-suspension-memory-steering")
+	opts.mode = turnModeCoding
+	opts = normalizeTurnSpec(opts)
 	ts := newTurnState(agent, opts, turnEventScope{
 		turnID:  "turn-delegated-suspension-memory-steering",
 		context: newTurnContext(opts.Dispatch.InboundContext, nil, nil),
 	})
+	pipeline := newTestPipeline(al)
+	// This regression isolates steering ownership at the suspension boundary.
+	// Trusted-catalog admission and durable tool journaling have independent tests.
+	pipeline.trustAllTools = false
+	pipeline.durableToolLifecycle = false
 	type turnCompletion struct {
 		result turnResult
 		err    error
 	}
 	completed := make(chan turnCompletion, 1)
 	go func() {
-		result, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al))
+		result, err := runTestTurn(al, t.Context(), ts, pipeline)
 		completed <- turnCompletion{result: result, err: err}
 	}()
 	select {
-	case <-provider.started:
+	case <-toolStarted:
 	case <-time.After(2 * time.Second):
-		t.Fatal("provider did not start")
+		t.Fatal("delegated tool did not start")
 	}
-	if err := al.Steer(
+	if err := al.SteerActiveCodingTurn(
 		agent.Workspace,
 		ts.sessionKey,
 		agent.ID,
@@ -2229,7 +2203,7 @@ func TestRunTurn_DelegatedSuspensionReturnsInMemorySteering(t *testing.T) {
 	); err != nil {
 		t.Fatalf("Steer() error = %v", err)
 	}
-	close(provider.release)
+	close(toolRelease)
 	var completion turnCompletion
 	select {
 	case completion = <-completed:
@@ -2240,11 +2214,11 @@ func TestRunTurn_DelegatedSuspensionReturnsInMemorySteering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runTurn() error = %v", err)
 	}
-	if result.status != TurnEndStatusSuspended || provider.callCount() != 1 || tool.executions != 1 {
+	if result.status != TurnEndStatusSuspended || provider.callCount != 1 || tool.executions != 1 {
 		t.Fatalf(
 			"result = %#v, provider calls = %d, tool executions = %d",
 			result,
-			provider.callCount(),
+			provider.callCount,
 			tool.executions,
 		)
 	}

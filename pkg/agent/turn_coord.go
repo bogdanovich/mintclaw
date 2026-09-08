@@ -148,14 +148,18 @@ func (r *turnRunner) run(
 			Workspace:   ts.workspace,
 		},
 	)
-	if ts.observers.OnReady != nil {
-		ts.observers.OnReady()
-	}
-
 	if execute == nil {
 		result, turnStatus, err = pipeline.runTurnLoop(ctx, turnCtx, ts)
 	} else {
-		result, turnStatus, err = execute(ctx, turnCtx, ts, pipeline)
+		if !pipeline.openSteeringAdmission(ts) {
+			turnStatus = TurnEndStatusAborted
+			result, err = pipeline.abortTurn(ts)
+		} else {
+			if ts.observers.OnReady != nil {
+				ts.observers.OnReady()
+			}
+			result, turnStatus, err = execute(ctx, turnCtx, ts, pipeline)
+		}
 	}
 	return result, err
 }

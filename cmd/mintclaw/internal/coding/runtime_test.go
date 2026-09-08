@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1170,6 +1171,135 @@ func TestCodingDirectTurnOptionsEnableBackgroundCompactionForPersistentRuntime(t
 	}
 }
 
+func TestNativeCodingRuntimeSteerUsesBoundRuntimeScope(t *testing.T) {
+	var workspace, sessionKey, agentID string
+	var message providers.Message
+	clearCalls := 0
+	runtime := &nativeCodingRuntime{
+		workspace: "/tmp/execution-root",
+		metadata:  thread.Metadata{SessionKey: "coding:thread-1"},
+		steer: func(gotWorkspace, gotSessionKey, gotAgentID string, gotMessage providers.Message) error {
+			workspace = gotWorkspace
+			sessionKey = gotSessionKey
+			agentID = gotAgentID
+			message = gotMessage
+			return nil
+		},
+		clearCodingSteering: func(gotWorkspace, gotSessionKey string) int {
+			clearCalls++
+			if gotWorkspace != "/tmp/execution-root" || gotSessionKey != "coding:thread-1" {
+				t.Fatalf(
+					"clearCodingSteering() scope = (%q, %q), want (%q, %q)",
+					gotWorkspace,
+					gotSessionKey,
+					"/tmp/execution-root",
+					"coding:thread-1",
+				)
+			}
+			return 1
+		},
+	}
+	generation, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatalf("beginTurnControl() error = %v", err)
+	}
+	if err := runtime.Steer(t.Context(), frontend.SteerInput{ID: "steer-1", Text: "new guidance"}); err != nil {
+		t.Fatalf("Steer() error = %v", err)
+	}
+	if workspace != runtime.workspace || sessionKey != runtime.metadata.SessionKey || agentID != "main" ||
+		message.Role != "user" || message.Content != "new guidance" || message.InboundSpoolID != "" {
+		t.Fatalf(
+			"steer scope = workspace:%q session:%q agent:%q message:%+v",
+			workspace,
+			sessionKey,
+			agentID,
+			message,
+		)
+	}
+	runtime.finishTurnControl(generation)
+	runtime.finishTurnControl(generation)
+	if clearCalls != 1 {
+		t.Fatalf("clearCodingSteering() calls = %d, want 1", clearCalls)
+	}
+	if err := runtime.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "late", Text: "do not queue"},
+	); !errors.Is(
+		err,
+		controller.ErrNoActiveTurn,
+	) {
+		t.Fatalf("late Steer() error = %v, want %v", err, controller.ErrNoActiveTurn)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := runtime.Steer(
+		canceled,
+		frontend.SteerInput{ID: "steer-2", Text: "late"},
+	); !errors.Is(
+		err,
+		context.Canceled,
+	) {
+		t.Fatalf("canceled Steer() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestNativeCodingRuntimeMapsSealedAgentTurnToNoActiveTurn(t *testing.T) {
+	runtime := &nativeCodingRuntime{
+		workspace: "/tmp/execution-root",
+		metadata:  thread.Metadata{SessionKey: "coding:thread-1"},
+		steer: func(string, string, string, providers.Message) error {
+			return agent.ErrNoActiveSteerableTurn
+		},
+	}
+	generation, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.finishTurnControl(generation)
+	if err := runtime.Steer(
+		t.Context(),
+		frontend.SteerInput{ID: "sealed", Text: "too late"},
+	); !errors.Is(
+		err,
+		controller.ErrNoActiveTurn,
+	) {
+		t.Fatalf("Steer() error = %v, want %v", err, controller.ErrNoActiveTurn)
+	}
+}
+
+func TestNativeCodingRuntimePreservesSteeringForSuspendedContinuation(t *testing.T) {
+	status := &codingTurnStatusState{}
+	clearCalls := 0
+	runtime := &nativeCodingRuntime{
+		workspace:  "/tmp/execution-root",
+		metadata:   thread.Metadata{SessionKey: "coding:thread-1"},
+		turnStatus: status,
+		clearCodingSteering: func(string, string) int {
+			clearCalls++
+			return 1
+		},
+	}
+
+	suspendedGeneration, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status.observe(agent.TurnEndStatusSuspended)
+	runtime.finishTurnControl(suspendedGeneration)
+	if clearCalls != 0 {
+		t.Fatalf("suspended turn cleared scoped steering %d time(s), want 0", clearCalls)
+	}
+
+	completedGeneration, err := runtime.beginTurnControl()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.finishTurnControl(completedGeneration)
+	if clearCalls != 1 {
+		t.Fatalf("completed turn clear calls = %d, want 1", clearCalls)
+	}
+}
+
 func TestNativeRuntimeAdmitsAttachmentAndStoresExactReference(t *testing.T) {
 	store, lease, metadata := newRuntimeAttachmentThread(t)
 	sessions := session.NewMemoryStore()
@@ -1669,6 +1799,36 @@ func TestCodingCheckpointBusObservesMatchingTerminalCompaction(t *testing.T) {
 
 	if len(observed) != 1 || observed[0].TranscriptRevision != 7 {
 		t.Fatalf("observed compactions = %+v, want one matching terminal payload", observed)
+	}
+}
+
+func TestCodingCheckpointBusObservesMatchingTurnEnd(t *testing.T) {
+	t.Parallel()
+
+	var observed []agent.TurnEndStatus
+	checkpointBus := &codingCheckpointBus{
+		Bus:        runtimeevents.NewBus(),
+		sessionKey: "coding:thread",
+		observeTurnEnd: func(status agent.TurnEndStatus) {
+			observed = append(observed, status)
+		},
+	}
+	t.Cleanup(func() { _ = checkpointBus.Close() })
+	publish := func(component, sessionKey string, status agent.TurnEndStatus) {
+		t.Helper()
+		checkpointBus.PublishNonBlocking(runtimeevents.Event{
+			Kind:    runtimeevents.KindAgentTurnEnd,
+			Source:  runtimeevents.Source{Component: component},
+			Scope:   runtimeevents.Scope{SessionKey: sessionKey},
+			Payload: agent.TurnEndPayload{Status: status},
+		})
+	}
+
+	publish("agent", "coding:other", agent.TurnEndStatusSuspended)
+	publish("gateway", "coding:thread", agent.TurnEndStatusSuspended)
+	publish("agent", "coding:thread", agent.TurnEndStatusSuspended)
+	if !slices.Equal(observed, []agent.TurnEndStatus{agent.TurnEndStatusSuspended}) {
+		t.Fatalf("observed turn statuses = %v, want [suspended]", observed)
 	}
 }
 

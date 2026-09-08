@@ -362,8 +362,8 @@ func TestPipelineFinalHandledPendingReceiptLeavesBarrierUnresolved(t *testing.T)
 	if sibling.executions != 0 {
 		t.Fatalf("sibling executions = %d, want 0", sibling.executions)
 	}
-	if len(exec.pendingMessages) != 0 {
-		t.Fatalf("pending steering was not transferred: %#v", exec.pendingMessages)
+	if exec.pendingInputs.Len() != 0 {
+		t.Fatalf("pending steering was not transferred: %#v", exec.pendingInputs.Snapshot())
 	}
 	accepted := ts.acceptedSteeringSnapshot()
 	if len(accepted) != 1 || accepted[0].InboundSpoolID != steering.InboundSpoolID {

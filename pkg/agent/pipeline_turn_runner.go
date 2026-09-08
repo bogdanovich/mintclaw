@@ -17,6 +17,7 @@ func (p *Pipeline) runTurnLoop(
 ) (turnResult, TurnEndStatus, error) {
 	exec, err := p.SetupTurn(turnCtx, ts)
 	if err != nil {
+		p.sealSteeringAdmission(ts)
 		return turnResult{}, TurnEndStatusError, err
 	}
 	defer func() {
@@ -24,6 +25,13 @@ func (p *Pipeline) runTurnLoop(
 			exec.model.cleanup()
 		}
 	}()
+	if !p.openSteeringAdmission(ts) {
+		result, abortErr := p.abortTurn(ts)
+		return result, TurnEndStatusAborted, abortErr
+	}
+	if ts.observers.OnReady != nil {
+		ts.observers.OnReady()
+	}
 	return p.runPreparedTurnLoop(ctx, turnCtx, ts, exec)
 }
 
@@ -38,10 +46,25 @@ func (p *Pipeline) runPreparedTurnLoop(
 	mediaResolver := p.Context.MediaResolver
 	llm := newLLMIterationState(0)
 	terminalRequested := false
+	continueAfterRecoverableExit := func(reason string) bool {
+		if ts.opts.mode != turnModeCoding {
+			return false
+		}
+		if !p.continueWithSteeringAtExit(turnCtx, ts, exec, llm, reason) {
+			return false
+		}
+		turnStatus = TurnEndStatusCompleted
+		return true
+	}
+	settleFailedExit := func() {
+		if ts.opts.mode == turnModeCoding {
+			p.settlePendingTurnInputsAfterFailure(ts, exec)
+		}
+	}
 
 	for {
 		graceful, _ := ts.gracefulInterruptRequested()
-		canRun := ts.currentIteration() < ts.agent.MaxIterations || len(exec.pendingMessages) > 0 || graceful ||
+		canRun := ts.currentIteration() < ts.agent.MaxIterations || exec.pendingInputs.Len() > 0 || graceful ||
 			exec.objectiveRepairPending
 		if terminalRequested || (!canRun && !p.continueWithPendingSubTurnResults(ts, exec)) {
 			if exec.terminal.content == "" {
@@ -67,6 +90,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 		}
 		if ts.hardAbortRequested() {
 			turnStatus = TurnEndStatusAborted
+			p.sealSteeringAdmission(ts)
 			result, abortErr := p.abortTurn(ts)
 			return result, turnStatus, abortErr
 		}
@@ -80,18 +104,10 @@ func (p *Pipeline) runPreparedTurnLoop(
 		}
 		repairIteration := exec.objectiveRepairActive
 
-		var pendingMessages []providers.Message
-		if !repairIteration {
-			pendingMessages = append([]providers.Message(nil), exec.pendingMessages...)
-		}
-		if len(pendingMessages) > 0 {
-			exec.markSteeringObserved()
-			exec.pendingMessages = nil
-		}
 		if !repairIteration && iteration == 1 && !ts.opts.mode.skipsInitialSteeringPoll() {
 			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 				exec.markSteeringObserved()
-				pendingMessages = append(pendingMessages, steerMsgs...)
+				exec.pendingInputs.AppendSteering(steerMsgs...)
 			}
 		}
 
@@ -126,55 +142,36 @@ func (p *Pipeline) runPreparedTurnLoop(
 			if result, ok := ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
 				content := p.filterPendingResultForLLM(result.ForLLM)
 				msg := subTurnResultPromptMessage(content)
-				pendingMessages = append(pendingMessages, msg)
+				exec.pendingInputs.AppendSubTurn(msg)
 			}
 		}
 
-		// Inject pending steering messages
-		if len(pendingMessages) > 0 {
-			resolvedPending := resolveMediaRefs(
-				pendingMessages,
+		// Pending input remains in the turn-owned FIFO until each message crosses
+		// both canonical persistence and live-context insertion.
+		if !repairIteration && exec.pendingInputs.Len() > 0 {
+			exec.markSteeringObserved()
+			injection, injectionErr := p.injectPendingTurnInputs(
+				turnCtx,
+				ts,
+				exec,
 				mediaResolver,
-				p.Context.CodingMedia,
 				maxMediaSize,
-				0,
 			)
-			totalContentLen := 0
-			for i, pm := range pendingMessages {
-				providerMsg := providerPromptMessageForTurn(resolvedPending[i])
-				exec.messages = append(exec.messages, providerMsg)
-				totalContentLen += len(providerMsg.Content)
-				if !ts.opts.NoHistory {
-					writeErr := persistFullSessionMessage(turnCtx, ts.agent.Sessions, ts.sessionKey, &pm)
-					if writeErr != nil {
-						turnStatus = TurnEndStatusError
-						return turnResult{}, turnStatus, fmt.Errorf("persist steering message: %w", writeErr)
-					}
-					ts.recordPersistedMessage(pm)
-					p.ingestMessage(turnCtx, ts, pm, nil)
-				}
-				if exec.shouldTrackTurnOwnedSteering(pm) {
-					ts.recordAcceptedSteeringMessage(pm)
-				}
-				logger.InfoCF("agent", "Injected steering message into context",
-					map[string]any{
-						"agent_id":    ts.agent.ID,
-						"iteration":   iteration,
-						"content_len": len(providerMsg.Content),
-						"media_count": len(pm.Media),
-					})
+			if injection.count > 0 {
+				p.emitEvent(
+					runtimeevents.KindAgentSteeringInjected,
+					ts.eventMeta("runTurn", "turn.steering.injected"),
+					SteeringInjectedPayload{
+						Count:           injection.count,
+						TotalContentLen: injection.totalContentLen,
+					},
+				)
 			}
-			p.emitEvent(
-				runtimeevents.KindAgentSteeringInjected,
-				ts.eventMeta("runTurn", "turn.steering.injected"),
-				SteeringInjectedPayload{
-					Count:           len(pendingMessages),
-					TotalContentLen: totalContentLen,
-				},
-			)
-			// Clear exec.pendingMessages after injection so InitialSteeringMessages
-			// are not re-injected on subsequent iterations (Issue 2 fix).
-			exec.pendingMessages = nil
+			if injectionErr != nil {
+				turnStatus = TurnEndStatusError
+				p.settlePendingTurnInputsAfterFailure(ts, exec)
+				return turnResult{}, turnStatus, injectionErr
+			}
 		}
 		logger.DebugCF("agent", "LLM iteration",
 			map[string]any{
@@ -192,24 +189,32 @@ func (p *Pipeline) runPreparedTurnLoop(
 		}
 		if callErr != nil {
 			turnStatus = TurnEndStatusError
+			if isRecoverableModelExitError(callErr) && continueAfterRecoverableExit("model error") {
+				continue
+			}
+			settleFailedExit()
 			return turnResult{}, turnStatus, callErr
 		}
 		if llmOutcome.Control == turnStepAbort {
 			switch llmOutcome.AbortCause {
 			case turnAbortHard:
 				turnStatus = TurnEndStatusAborted
+				p.sealSteeringAdmission(ts)
 				result, abortErr := p.abortTurn(ts)
 				return result, turnStatus, abortErr
 			case turnAbortHook:
 				turnStatus = TurnEndStatusError
+				settleFailedExit()
 				return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
 			default:
 				turnStatus = TurnEndStatusError
+				settleFailedExit()
 				return turnResult{}, turnStatus, fmt.Errorf("model phase returned abort without a cause")
 			}
 		}
 		if llmOutcome.AbortCause != turnAbortNone {
 			turnStatus = TurnEndStatusError
+			settleFailedExit()
 			return turnResult{}, turnStatus, fmt.Errorf("model phase returned an abort cause without aborting")
 		}
 		exec.terminal = llmOutcome.terminalCandidate(exec.terminal)
@@ -222,13 +227,13 @@ func (p *Pipeline) runPreparedTurnLoop(
 			}
 			if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
 				exec.markSteeringObserved()
-				exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+				exec.pendingInputs.AppendSteering(steerMsgs...)
 			}
 			if result, ok := ts.dequeuePendingResult(); ok && result != nil && result.ForLLM != "" {
 				content := p.filterPendingResultForLLM(result.ForLLM)
-				exec.pendingMessages = append(exec.pendingMessages, subTurnResultPromptMessage(content))
+				exec.pendingInputs.AppendSubTurn(subTurnResultPromptMessage(content))
 			}
-			if len(exec.pendingMessages) > 0 {
+			if exec.pendingInputs.Len() > 0 {
 				continue
 			}
 		}
@@ -258,14 +263,17 @@ func (p *Pipeline) runPreparedTurnLoop(
 			toolOutcome := p.ExecuteTools(ctx, turnCtx, ts, exec, llm)
 			if toolOutcome.TurnErr != nil {
 				turnStatus = TurnEndStatusError
+				settleFailedExit()
 				return turnResult{}, turnStatus, toolOutcome.TurnErr
 			}
 			if toolOutcome.JournalErr != nil {
 				turnStatus = TurnEndStatusError
+				settleFailedExit()
 				return turnResult{}, turnStatus, toolOutcome.JournalErr
 			}
 			if toolOutcome.Control != turnStepAbort && toolOutcome.AbortCause != turnAbortNone {
 				turnStatus = TurnEndStatusError
+				settleFailedExit()
 				return turnResult{}, turnStatus, fmt.Errorf("tool phase returned an abort cause without aborting")
 			}
 			switch toolOutcome.Control {
@@ -296,21 +304,26 @@ func (p *Pipeline) runPreparedTurnLoop(
 				switch toolOutcome.AbortCause {
 				case turnAbortHard:
 					turnStatus = TurnEndStatusAborted
+					p.sealSteeringAdmission(ts)
 					result, abortErr := p.abortTurn(ts)
 					return result, turnStatus, abortErr
 				case turnAbortHook:
 					turnStatus = TurnEndStatusError
+					settleFailedExit()
 					return turnResult{}, turnStatus, fmt.Errorf("hook requested turn abort")
 				default:
 					turnStatus = TurnEndStatusError
+					settleFailedExit()
 					return turnResult{}, turnStatus, fmt.Errorf("tool phase returned abort without a cause")
 				}
 			default:
 				turnStatus = TurnEndStatusError
+				settleFailedExit()
 				return turnResult{}, turnStatus, fmt.Errorf("tool phase returned unknown step %d", toolOutcome.Control)
 			}
 		default:
 			turnStatus = TurnEndStatusError
+			settleFailedExit()
 			return turnResult{}, turnStatus, fmt.Errorf("model phase returned unknown step %d", llmOutcome.Control)
 		}
 	}

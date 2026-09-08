@@ -47,6 +47,7 @@ func (p *Pipeline) completeTerminal(
 	request terminalRequest,
 ) terminalGatewayOutcome {
 	if ts.hardAbortRequested() {
+		p.sealSteeringAdmission(ts)
 		result, err := p.abortTurn(ts)
 		return terminalGatewayOutcome{result: result, status: TurnEndStatusAborted, err: err}
 	}
@@ -55,6 +56,10 @@ func (p *Pipeline) completeTerminal(
 	if request.renderMode == terminalRenderExact {
 		if strings.TrimSpace(exec.terminal.content) == "" {
 			exec.terminal.content = "The tool loop was stopped by runtime safety protection."
+		}
+		if ts.opts.mode == turnModeCoding &&
+			p.continueWithSteeringAtExit(turnCtx, ts, exec, llm, "exact terminal transition") {
+			return terminalGatewayOutcome{status: status, resume: true}
 		}
 	} else {
 		if request.renderMode != terminalRenderRequired && p.continueWithPendingSubTurnResults(ts, exec) {
@@ -67,19 +72,7 @@ func (p *Pipeline) completeTerminal(
 			return terminalGatewayOutcome{status: status, resume: true}
 		}
 
-		if steerMsgs := p.dequeueSteeringMessagesForTurn(ts); len(steerMsgs) > 0 {
-			cancelConfiguredStreamingLLM(turnCtx, llm)
-			exec.markSteeringObserved()
-			logger.InfoCF(
-				"agent",
-				"Steering arrived during terminal render; continuing turn",
-				map[string]any{
-					"agent_id":       ts.agent.ID,
-					"iteration":      ts.currentIteration(),
-					"steering_count": len(steerMsgs),
-				},
-			)
-			exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+		if p.continueWithSteeringAtExit(turnCtx, ts, exec, llm, "terminal transition") {
 			return terminalGatewayOutcome{status: status, resume: true}
 		}
 		if p.continueWithPendingSubTurnResults(ts, exec) {
@@ -92,6 +85,7 @@ func (p *Pipeline) completeTerminal(
 	}
 
 	if ts.hardAbortRequested() {
+		p.sealSteeringAdmission(ts)
 		result, err := p.abortTurn(ts)
 		return terminalGatewayOutcome{result: result, status: TurnEndStatusAborted, err: err}
 	}
@@ -100,6 +94,40 @@ func (p *Pipeline) completeTerminal(
 		status = TurnEndStatusError
 	}
 	return terminalGatewayOutcome{result: result, status: status, err: err}
+}
+
+// continueWithSteeringAtExit is the single non-cancellation exit gateway for
+// active coding guidance. It either moves every admitted message into the
+// current turn's next iteration or seals admission before the caller exits.
+func (p *Pipeline) continueWithSteeringAtExit(
+	turnCtx context.Context,
+	ts *turnState,
+	exec *turnExecution,
+	llm *LLMIterationState,
+	reason string,
+) bool {
+	hadAdmittedSteering := exec.pendingInputs.HasSteering()
+	steerMessages := p.dequeueOrSealSteeringAtExit(ts, hadAdmittedSteering)
+	if len(steerMessages) == 0 && !hadAdmittedSteering {
+		return false
+	}
+	cancelConfiguredStreamingLLM(turnCtx, llm)
+	if len(steerMessages) > 0 {
+		exec.markSteeringObserved()
+		exec.pendingInputs.AppendSteering(steerMessages...)
+	}
+	logger.InfoCF(
+		"agent",
+		"Steering arrived during turn exit; continuing turn",
+		map[string]any{
+			"agent_id":       ts.agent.ID,
+			"iteration":      ts.currentIteration(),
+			"reason":         reason,
+			"pending_count":  exec.pendingInputs.Len(),
+			"steering_count": len(steerMessages),
+		},
+	)
+	return true
 }
 
 func (p *Pipeline) scheduleObjectiveOutcomeRepair(
@@ -153,7 +181,7 @@ func (p *Pipeline) continueWithPendingSubTurnResults(
 			}
 			content := p.filterPendingResultForLLM(result.ForLLM)
 			msg := subTurnResultPromptMessage(content)
-			exec.pendingMessages = append(exec.pendingMessages, msg)
+			exec.pendingInputs.AppendSubTurn(msg)
 			appended = true
 		}
 		if appended {

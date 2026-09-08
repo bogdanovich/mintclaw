@@ -126,6 +126,7 @@ type pipelineContextRuntime interface {
 
 type steeringDequeuer interface {
 	dequeueSteeringMessagesForTurn(scope runtimeSessionScope, senderID string) []providers.Message
+	drainSteeringMessagesForTurn(scope runtimeSessionScope, senderID string) []providers.Message
 	returnSteeringMessagesForTurn(scope runtimeSessionScope, messages []providers.Message)
 }
 

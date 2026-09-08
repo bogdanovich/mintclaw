@@ -19,6 +19,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/media"
+	"github.com/bogdanovich/mintclaw/pkg/memory"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
@@ -28,6 +29,679 @@ import (
 
 func userMessageContains(msg providers.Message, text string) bool {
 	return msg.Role == "user" && strings.Contains(msg.Content, text)
+}
+
+type steerExitProvider struct {
+	started chan struct{}
+	release chan struct{}
+
+	mu       sync.Mutex
+	calls    int
+	requests [][]providers.Message
+}
+
+type invalidToolBatchSteerProvider struct {
+	steer    func() error
+	calls    int
+	steerErr error
+}
+
+type authErrorSteerProvider struct {
+	steer    func() error
+	calls    int
+	steerErr error
+}
+
+func (provider *authErrorSteerProvider) Chat(
+	context.Context,
+	[]providers.Message,
+	[]providers.ToolDefinition,
+	string,
+	map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.calls++
+	provider.steerErr = provider.steer()
+	return nil, &providers.ProviderError{
+		Kind:        providers.ProviderErrorAuthentication,
+		HTTPStatus:  401,
+		SafeMessage: "authentication required",
+	}
+}
+
+func (*authErrorSteerProvider) GetDefaultModel() string { return "auth-error-model" }
+
+func (provider *invalidToolBatchSteerProvider) Chat(
+	context.Context,
+	[]providers.Message,
+	[]providers.ToolDefinition,
+	string,
+	map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.calls++
+	provider.steerErr = provider.steer()
+	return &providers.LLMResponse{
+		FinishReason: "tool_calls",
+		ToolCalls: []providers.ToolCall{
+			{ID: "duplicate-call", Name: "first"},
+			{ID: "duplicate-call", Name: "second"},
+		},
+	}, nil
+}
+
+func (*invalidToolBatchSteerProvider) GetDefaultModel() string { return "invalid-tool-batch-model" }
+
+func newSteerExitProvider() *steerExitProvider {
+	return &steerExitProvider{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (provider *steerExitProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.mu.Lock()
+	provider.calls++
+	call := provider.calls
+	provider.requests = append(provider.requests, append([]providers.Message(nil), messages...))
+	provider.mu.Unlock()
+	if call == 1 {
+		close(provider.started)
+		select {
+		case <-provider.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if call <= 3 {
+		return nil, &providers.ProviderError{
+			Kind:        providers.ProviderErrorNetwork,
+			SafeMessage: "temporary network failure",
+		}
+	}
+	return &providers.LLMResponse{Content: "recovered with guidance", FinishReason: "stop"}, nil
+}
+
+func (*steerExitProvider) GetDefaultModel() string { return "steer-exit-model" }
+
+func (provider *steerExitProvider) requestSnapshot() (int, [][]providers.Message) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	requests := make([][]providers.Message, len(provider.requests))
+	for index := range provider.requests {
+		requests[index] = append([]providers.Message(nil), provider.requests[index]...)
+	}
+	return provider.calls, requests
+}
+
+type blockingSetupContextManager struct {
+	started chan struct{}
+	release chan struct{}
+	err     error
+}
+
+type steerThenAbortHook struct {
+	abortingPipelineHook
+	enqueue func() error
+}
+
+func (hook *steerThenAbortHook) BeforeLLM(
+	_ context.Context,
+	request *LLMHookRequest,
+) (*LLMHookRequest, HookDecision) {
+	if err := hook.enqueue(); err != nil {
+		return request, HookDecision{Action: HookActionHardAbort, Reason: err.Error()}
+	}
+	return request, HookDecision{Action: HookActionAbortTurn}
+}
+
+func (manager *blockingSetupContextManager) Assemble(
+	ctx context.Context,
+	_ *AssembleRequest,
+) (*AssembleResponse, error) {
+	close(manager.started)
+	select {
+	case <-manager.release:
+		return nil, manager.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (*blockingSetupContextManager) Compact(context.Context, *CompactRequest) error { return nil }
+func (*blockingSetupContextManager) Ingest(context.Context, *IngestRequest) error   { return nil }
+func (*blockingSetupContextManager) Clear(context.Context, *AgentInstance, string) error {
+	return nil
+}
+
+func TestClearCodingSteeringIsProfileAndScopeBound(t *testing.T) {
+	scope := newRuntimeSessionScope("/repo", "coding:thread-1")
+	queue := newSteeringQueue(SteeringOneAtATime)
+	if err := queue.pushScopeWithSender(scope, providers.Message{Role: "user", Content: "late"}, ""); err != nil {
+		t.Fatal(err)
+	}
+	regular := &AgentLoop{steering: queue}
+	if cleared := regular.ClearCodingSteering(scope.workspace, scope.sessionKey); cleared != 0 {
+		t.Fatalf("regular runtime cleared %d message(s), want 0", cleared)
+	}
+	if depth := queue.lenScope(scope); depth != 1 {
+		t.Fatalf("regular runtime queue depth = %d, want 1", depth)
+	}
+	coding := &AgentLoop{steering: queue, codingProfile: &CodingRuntimeProfile{}}
+	if cleared := coding.ClearCodingSteering(scope.workspace, scope.sessionKey); cleared != 1 {
+		t.Fatalf("coding runtime cleared %d message(s), want 1", cleared)
+	}
+	if depth := queue.lenScope(scope); depth != 0 {
+		t.Fatalf("coding runtime queue depth = %d, want 0", depth)
+	}
+}
+
+func TestSteerActiveCodingTurnLinearizesWithTerminalSeal(t *testing.T) {
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	al.codingProfile = &CodingRuntimeProfile{}
+	agent := al.registry.GetDefaultAgent()
+	for iteration := 0; iteration < 100; iteration++ {
+		scope := newRuntimeSessionScope(agent.Workspace, fmt.Sprintf("coding:thread-%d", iteration))
+		turn := &turnState{
+			agentID:    agent.ID,
+			workspace:  agent.Workspace,
+			sessionKey: scope.sessionKey,
+			opts:       freezeTurnInput(turnSpec{mode: turnModeCoding}),
+		}
+		al.turns.registerActiveTurn(turn)
+		pipeline := &Pipeline{Context: PipelineContextServices{Steering: al.steering}}
+		if !pipeline.openSteeringAdmission(turn) {
+			t.Fatal("failed to open steering admission")
+		}
+
+		start := make(chan struct{})
+		steerResult := make(chan error, 1)
+		terminalResult := make(chan []providers.Message, 1)
+		go func() {
+			<-start
+			steerResult <- al.SteerActiveCodingTurn(
+				scope.workspace,
+				scope.sessionKey,
+				agent.ID,
+				providers.Message{Role: "user", Content: "race guidance"},
+			)
+		}()
+		go func() {
+			<-start
+			terminalResult <- pipeline.dequeueOrSealSteeringForTerminal(turn)
+		}()
+		close(start)
+		steerErr := <-steerResult
+		messages := <-terminalResult
+		switch {
+		case steerErr == nil && len(messages) == 1 && messages[0].Content == "race guidance":
+		case errors.Is(steerErr, ErrNoActiveSteerableTurn) && len(messages) == 0:
+		default:
+			t.Fatalf(
+				"iteration %d linearization = steer:%v messages:%#v",
+				iteration,
+				steerErr,
+				messages,
+			)
+		}
+		if len(messages) > 0 {
+			if remaining := pipeline.dequeueOrSealSteeringForTerminal(turn); len(remaining) != 0 {
+				t.Fatalf("iteration %d unexpected remaining steering: %#v", iteration, remaining)
+			}
+		}
+		if lateErr := al.SteerActiveCodingTurn(
+			scope.workspace,
+			scope.sessionKey,
+			agent.ID,
+			providers.Message{Role: "user", Content: "late"},
+		); !errors.Is(lateErr, ErrNoActiveSteerableTurn) {
+			t.Fatalf("iteration %d late steer error = %v", iteration, lateErr)
+		}
+		al.turns.clearActiveTurn(turn)
+	}
+}
+
+func TestCodingSteerRemainsClosedUntilSetupSucceeds(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	manager := &blockingSetupContextManager{
+		started: make(chan struct{}), release: make(chan struct{}), err: errors.New("setup failed"),
+	}
+	setTestContextManager(al, manager)
+	sessionKey := "coding:setup-failure"
+	ready := make(chan struct{}, 1)
+	result := make(chan error, 1)
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	spec.OnTurnReady = func() { ready <- struct{}{} }
+	go func() {
+		_, _, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, spec)
+		result <- err
+	}()
+
+	select {
+	case <-manager.started:
+	case <-time.After(time.Second):
+		t.Fatal("turn setup did not start")
+	}
+	if err := al.SteerActiveCodingTurn(
+		agent.Workspace,
+		sessionKey,
+		agent.ID,
+		providers.Message{Role: "user", Content: "must not be acknowledged"},
+	); !errors.Is(err, ErrNoActiveSteerableTurn) {
+		t.Fatalf("SteerActiveCodingTurn() during setup error = %v, want %v", err, ErrNoActiveSteerableTurn)
+	}
+	select {
+	case <-ready:
+		t.Fatal("turn reported ready before setup succeeded")
+	default:
+	}
+	close(manager.release)
+	if err := <-result; !errors.Is(err, manager.err) {
+		t.Fatalf("turn error = %v, want %v", err, manager.err)
+	}
+}
+
+func TestCodingSteerContinuesAfterModelExitError(t *testing.T) {
+	provider := newSteerExitProvider()
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	sessionKey := "coding:model-error-steer"
+	ready := make(chan struct{})
+	type result struct {
+		response string
+		status   TurnEndStatus
+		err      error
+	}
+	completed := make(chan result, 1)
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	spec.OnTurnReady = func() { close(ready) }
+	pipeline := newTestPipeline(al)
+	useRecordingRetrySleeper(pipeline)
+	go func() {
+		ts := newTurnState(agent, spec, turnEventScope{})
+		turnResult, err := runTestTurn(al, t.Context(), ts, pipeline)
+		completed <- result{response: turnResult.finalContent, status: turnResult.status, err: err}
+	}()
+
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("turn did not become steerable")
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("first model call did not start")
+	}
+	if err := al.SteerActiveCodingTurn(
+		agent.Workspace,
+		sessionKey,
+		agent.ID,
+		providers.Message{Role: "user", Content: "use the parser evidence"},
+	); err != nil {
+		t.Fatalf("SteerActiveCodingTurn() error = %v", err)
+	}
+	close(provider.release)
+
+	select {
+	case got := <-completed:
+		if got.err != nil || got.status != TurnEndStatusCompleted || got.response != "recovered with guidance" {
+			t.Fatalf("recovered turn = (%q, %q, %v)", got.response, got.status, got.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("turn did not recover after accepted steering")
+	}
+	calls, requests := provider.requestSnapshot()
+	if calls != 4 || len(requests) != 4 || !messageContentPresent(requests[3], "use the parser evidence") {
+		t.Fatalf("model requests = calls:%d requests:%#v", calls, requests)
+	}
+}
+
+func TestCodingSteerDoesNotOverrideAuthenticationFailure(t *testing.T) {
+	provider := &authErrorSteerProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	sessionKey := "coding:authentication-error-steer"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	provider.steer = func() error {
+		for _, content := range []string{"first accepted steer", "second accepted steer"} {
+			if err := al.SteerActiveCodingTurn(
+				agent.Workspace,
+				sessionKey,
+				agent.ID,
+				providers.Message{Role: "user", Content: content},
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if _, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al)); err == nil ||
+		!strings.Contains(err.Error(), "kind=authentication") {
+		t.Fatalf("runTestTurn() error = %v, want authentication failure", err)
+	}
+	if provider.steerErr != nil {
+		t.Fatalf("SteerActiveCodingTurn() error = %v", provider.steerErr)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls)
+	}
+	if mode := al.SteeringMode(); mode != SteeringOneAtATime {
+		t.Fatalf("steering mode = %q, want %q", mode, SteeringOneAtATime)
+	}
+	accepted := ts.acceptedSteeringSnapshot()
+	if len(accepted) != 2 || accepted[0].Content != "first accepted steer" ||
+		accepted[1].Content != "second accepted steer" {
+		t.Fatalf("settled steering = %#v", accepted)
+	}
+	if depth := al.steering.lenScope(ts.runtimeSessionScope()); depth != 0 {
+		t.Fatalf("steering queue depth = %d, want 0", depth)
+	}
+}
+
+func TestCodingSteerDoesNotOverridePostResponseValidationFailure(t *testing.T) {
+	provider := &invalidToolBatchSteerProvider{}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	sessionKey := "coding:invalid-tool-batch-steer"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	provider.steer = func() error {
+		return al.SteerActiveCodingTurn(
+			agent.Workspace,
+			sessionKey,
+			agent.ID,
+			providers.Message{Role: "user", Content: "must not bypass validation"},
+		)
+	}
+
+	if _, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al)); err == nil ||
+		!strings.Contains(err.Error(), "invalid coding tool-call batch") {
+		t.Fatalf("runTestTurn() error = %v, want invalid coding tool-call batch", err)
+	}
+	if provider.steerErr != nil {
+		t.Fatalf("SteerActiveCodingTurn() error = %v", provider.steerErr)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", provider.calls)
+	}
+	accepted := ts.acceptedSteeringSnapshot()
+	if len(accepted) != 1 || accepted[0].Content != "must not bypass validation" {
+		t.Fatalf("settled steering = %#v", accepted)
+	}
+	if depth := al.steering.lenScope(ts.runtimeSessionScope()); depth != 0 {
+		t.Fatalf("steering queue depth = %d, want 0", depth)
+	}
+}
+
+func TestCodingSteerDoesNotOverrideHookAbort(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	sessionKey := "coding:hook-abort-steer"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	pipeline := newTestPipeline(al)
+	pipeline.Interaction.Hooks = &steerThenAbortHook{
+		abortingPipelineHook: abortingPipelineHook{action: HookActionAbortTurn},
+		enqueue: func() error {
+			return al.steering.pushScopeWithSender(
+				ts.runtimeSessionScope(),
+				providers.Message{Role: "user", Content: "must not bypass policy"},
+				"",
+			)
+		},
+	}
+
+	if _, err := runTestTurn(al, t.Context(), ts, pipeline); err == nil ||
+		!strings.Contains(err.Error(), "hook requested turn abort") {
+		t.Fatalf("runTestTurn() error = %v, want hook abort", err)
+	}
+	accepted := ts.acceptedSteeringSnapshot()
+	if len(accepted) != 1 || accepted[0].Content != "must not bypass policy" {
+		t.Fatalf("settled steering = %#v", accepted)
+	}
+	if depth := al.steering.lenScope(ts.runtimeSessionScope()); depth != 0 {
+		t.Fatalf("steering queue depth = %d, want 0", depth)
+	}
+}
+
+func TestExitGatewayKeepsTransferredSteeringAcrossRecoverableExit(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	sessionKey := "coding:suspension-steer"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	al.turns.registerActiveTurn(ts)
+	defer al.turns.clearActiveTurn(ts)
+	pipeline := &Pipeline{Context: PipelineContextServices{Steering: al.steering}}
+	if !pipeline.openSteeringAdmission(ts) {
+		t.Fatal("failed to open steering admission")
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.markSteeringObserved()
+	exec.pendingInputs.AppendSteering(providers.Message{Role: "user", Content: "answer instead of suspending"})
+
+	if !pipeline.continueWithSteeringAtExit(
+		t.Context(), ts, exec, newLLMIterationState(1), "recoverable model exit",
+	) {
+		t.Fatal("exit gateway discarded already transferred steering")
+	}
+	if err := al.SteerActiveCodingTurn(
+		agent.Workspace,
+		sessionKey,
+		agent.ID,
+		providers.Message{Role: "user", Content: "additional answer"},
+	); err != nil {
+		t.Fatalf("SteerActiveCodingTurn() after resumed boundary error = %v", err)
+	}
+	if !pipeline.continueWithSteeringAtExit(
+		t.Context(), ts, exec, newLLMIterationState(2), "recoverable model exit",
+	) || !messageContentPresent(exec.pendingInputs.Snapshot(), "additional answer") {
+		t.Fatalf("exit gateway pending messages = %#v", exec.pendingInputs.Snapshot())
+	}
+}
+
+func TestPendingTurnInputPersistenceFailureRetainsFailingMessageAndSuffix(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	cause := errors.New("pending input write failed")
+	injected := &memory.IndeterminateAppendError{Err: cause}
+	store := &saveFailOnContentSessionStore{
+		SessionStore: session.NewMemoryStore(),
+		content:      "second guidance",
+		err:          injected,
+	}
+	agent.Sessions = store
+	sessionKey := "coding:pending-input-persistence"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	al.turns.registerActiveTurn(ts)
+	defer al.turns.clearActiveTurn(ts)
+	pipeline := newTestPipeline(al)
+	if !pipeline.openSteeringAdmission(ts) {
+		t.Fatal("failed to open steering admission")
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.pendingInputs.AppendSteering(
+		steeringPromptMessage(providers.Message{Role: "user", Content: "first guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "second guidance"}),
+	)
+	exec.pendingInputs.AppendSubTurn(
+		subTurnResultPromptMessage("child result between steering messages"),
+	)
+	exec.pendingInputs.AppendSteering(
+		steeringPromptMessage(providers.Message{Role: "user", Content: "third guidance"}),
+	)
+
+	outcome, err := pipeline.injectPendingTurnInputs(
+		t.Context(),
+		ts,
+		exec,
+		pipeline.Context.MediaResolver,
+		pipeline.maxMediaSize(),
+	)
+	if !errors.Is(err, cause) || !memory.IsIndeterminateAppendError(err) || outcome.count != 1 {
+		t.Fatalf("injection = %#v, %v, want one committed prefix then indeterminate error", outcome, err)
+	}
+	pending := exec.pendingInputs.Snapshot()
+	if len(pending) != 3 || pending[0].Content != "second guidance" ||
+		!strings.Contains(pending[1].Content, "child result between steering messages") ||
+		pending[2].Content != "third guidance" {
+		t.Fatalf("pending suffix = %#v", pending)
+	}
+	if len(exec.messages) != 1 || !strings.Contains(exec.messages[0].Content, "first guidance") {
+		t.Fatalf("model-visible prefix = %#v", exec.messages)
+	}
+	if history := store.GetHistory(sessionKey); len(history) != 1 || history[0].Content != "first guidance" {
+		t.Fatalf("durable prefix = %#v", history)
+	}
+	if accepted := ts.acceptedSteeringSnapshot(); len(accepted) != 1 || accepted[0].Content != "first guidance" {
+		t.Fatalf("accepted prefix = %#v", accepted)
+	}
+
+	pipeline.settlePendingTurnInputsAfterFailure(ts, exec)
+	if exec.pendingInputs.Len() != 0 {
+		t.Fatalf("settled pending inputs = %#v", exec.pendingInputs.Snapshot())
+	}
+	accepted := ts.acceptedSteeringSnapshot()
+	if len(accepted) != 3 || accepted[0].Content != "first guidance" ||
+		accepted[1].Content != "second guidance" || accepted[2].Content != "third guidance" {
+		t.Fatalf("settled steering ownership = %#v", accepted)
+	}
+	if err := al.SteerActiveCodingTurn(
+		agent.Workspace,
+		sessionKey,
+		agent.ID,
+		providers.Message{Role: "user", Content: "too late"},
+	); !errors.Is(err, ErrNoActiveSteerableTurn) {
+		t.Fatalf("late steer error = %v, want %v", err, ErrNoActiveSteerableTurn)
+	}
+}
+
+func TestPendingTurnInputCommittedAppendWarningAdvancesOnlyCommittedHead(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	cause := errors.New("journal metadata sync failed")
+	store := &committedWarningSessionStore{
+		SessionStore: session.NewMemoryStore(),
+		content:      "second guidance",
+		err:          cause,
+	}
+	agent.Sessions = store
+	sessionKey := "coding:pending-input-committed-warning"
+	spec := makeTestTurnSpec(sessionKey)
+	ts := newTurnState(agent, spec, turnEventScope{})
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.pendingInputs.AppendSteering(
+		steeringPromptMessage(providers.Message{Role: "user", Content: "first guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "second guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "third guidance"}),
+	)
+	pipeline := newTestPipeline(al)
+
+	outcome, err := pipeline.injectPendingTurnInputs(
+		t.Context(),
+		ts,
+		exec,
+		pipeline.Context.MediaResolver,
+		pipeline.maxMediaSize(),
+	)
+	if !errors.Is(err, cause) || !memory.IsCommittedAppendError(err) || outcome.count != 2 {
+		t.Fatalf("injection = %#v, %v, want two committed inputs then warning", outcome, err)
+	}
+	pending := exec.pendingInputs.Snapshot()
+	if len(pending) != 1 || pending[0].Content != "third guidance" {
+		t.Fatalf("pending suffix = %#v", pending)
+	}
+	if len(exec.messages) != 2 {
+		t.Fatalf("model-visible committed inputs = %#v", exec.messages)
+	}
+	history := store.GetHistory(sessionKey)
+	if len(history) != 2 || history[0].Content != "first guidance" || history[1].Content != "second guidance" {
+		t.Fatalf("durable committed inputs = %#v", history)
+	}
+}
+
+func TestRunTurnSettlesUnprocessedSteeringAfterPersistenceFailure(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	injected := errors.New("pending input write failed")
+	store := &saveFailOnContentSessionStore{
+		SessionStore: session.NewMemoryStore(),
+		content:      "second guidance",
+		err:          injected,
+	}
+	agent.Sessions = store
+	sessionKey := "coding:pending-input-turn-failure"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	spec.InitialSteeringMessages = []providers.Message{
+		steeringPromptMessage(providers.Message{Role: "user", Content: "first guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "second guidance"}),
+		steeringPromptMessage(providers.Message{Role: "user", Content: "third guidance"}),
+	}
+	ts := newTurnState(agent, spec, turnEventScope{})
+
+	if _, err := runTestTurn(al, t.Context(), ts, newTestPipeline(al)); !errors.Is(err, injected) {
+		t.Fatalf("runTestTurn() error = %v, want %v", err, injected)
+	}
+	accepted := ts.acceptedSteeringSnapshot()
+	if len(accepted) != 3 || accepted[0].Content != "first guidance" ||
+		accepted[1].Content != "second guidance" || accepted[2].Content != "third guidance" {
+		t.Fatalf("settled steering ownership = %#v", accepted)
+	}
+	history := store.GetHistory(sessionKey)
+	if len(history) != 2 || history[0].Content != "test message" || history[1].Content != "first guidance" {
+		t.Fatalf("history after failed pending batch = %#v", history)
+	}
+}
+
+func TestHardAbortSealsCodingSteeringAdmission(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	sessionKey := "coding:hard-abort-steer"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	al.turns.registerActiveTurn(ts)
+	defer al.turns.clearActiveTurn(ts)
+	pipeline := &Pipeline{Context: PipelineContextServices{Steering: al.steering}}
+	if !pipeline.openSteeringAdmission(ts) {
+		t.Fatal("failed to open steering admission")
+	}
+	if !ts.requestHardAbort() {
+		t.Fatal("hard abort was not recorded")
+	}
+	if err := al.SteerActiveCodingTurn(
+		agent.Workspace,
+		sessionKey,
+		agent.ID,
+		providers.Message{Role: "user", Content: "too late"},
+	); !errors.Is(err, ErrNoActiveSteerableTurn) {
+		t.Fatalf("SteerActiveCodingTurn() after hard abort error = %v, want %v", err, ErrNoActiveSteerableTurn)
+	}
 }
 
 func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelation(t *testing.T) {
@@ -1135,6 +1809,31 @@ type saveFailOnContentSessionStore struct {
 	failed  bool
 }
 
+type committedWarningSessionStore struct {
+	session.SessionStore
+	mu      sync.Mutex
+	content string
+	err     error
+	warned  bool
+}
+
+func (s *committedWarningSessionStore) AppendTurnMessage(
+	ctx context.Context,
+	sessionKey string,
+	msg providers.Message,
+) error {
+	if err := s.SessionStore.AppendTurnMessage(ctx, sessionKey, msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.warned && strings.Contains(msg.Content, s.content) {
+		s.warned = true
+		return &memory.CommittedAppendError{Err: s.err}
+	}
+	return nil
+}
+
 func (s *saveFailOnContentSessionStore) AppendTurnMessage(
 	ctx context.Context,
 	sessionKey string,
@@ -1668,6 +2367,11 @@ func TestAgentLoop_Run_BatchesDeferredMessagesBySenderIntoOneContinuationTurn(t 
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for first provider call to start")
 	}
+	active := onlyActiveTurnForTest(t, al)
+	if active == nil || active.SessionKey == "" {
+		t.Fatal("expected active turn with session key")
+	}
+	sessionScope := testRuntimeSessionScope(al, active.SessionKey)
 
 	if err := msgBus.PublishInbound(pubCtx, b1); err != nil {
 		t.Fatalf("publish b1 inbound: %v", err)
@@ -1676,6 +2380,13 @@ func TestAgentLoop_Run_BatchesDeferredMessagesBySenderIntoOneContinuationTurn(t 
 		t.Fatalf("publish b2 inbound: %v", err)
 	}
 	waitForSpoolEntries(t, spoolDir, "*.processing", 3)
+	deadline := time.Now().Add(2 * time.Second)
+	for al.pendingSteeringCountForScope(sessionScope) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for both B messages to enter steering queue")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	close(provider.releaseFirstCall)
 
@@ -2155,9 +2866,21 @@ func TestAgentLoop_Run_QueuedVoiceMessageIsTranscribedBeforeSteering(t *testing.
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for first provider call to start")
 	}
+	active := onlyActiveTurnForTest(t, al)
+	if active == nil || active.SessionKey == "" {
+		t.Fatal("expected active turn with session key")
+	}
+	sessionScope := testRuntimeSessionScope(al, active.SessionKey)
 
 	if err := msgBus.PublishInbound(pubCtx, late); err != nil {
 		t.Fatalf("publish late voice inbound: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for al.pendingSteeringCountForScope(sessionScope) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for transcribed voice message to enter steering queue")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	close(provider.releaseFirstCall)
