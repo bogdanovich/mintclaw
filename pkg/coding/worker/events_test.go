@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
 
 func validEventItem(sequence uint64) Item {
@@ -289,5 +293,90 @@ func TestEventPayloadSchemasRejectUnknownAndUnsafeContent(t *testing.T) {
 	})
 	if _, err := DecodeEventPayload(EventItemUpdated, raw); err != nil {
 		t.Fatalf("multiline content error = %v", err)
+	}
+}
+
+func TestMaximumQuestionAndProjectedItemsFitReadyAndSnapshotRecords(t *testing.T) {
+	binding := testBinding(t)
+	options := make([]QuestionOption, MaxQuestionOptions)
+	for index := range options {
+		options[index] = QuestionOption{
+			ID:          fmt.Sprintf("option-%02d", index),
+			Label:       strings.Repeat("l", MaxAttachmentMeta),
+			Description: strings.Repeat("d", MaxQuestionTextBytes),
+		}
+	}
+	source := frontend.ThreadSnapshot{
+		ThreadID: binding.ThreadID,
+		Activity: frontend.ActivityWaitingInput,
+		Items:    make([]frontend.PresentationItem, 40),
+	}
+	for index := range source.Items {
+		sequence := uint64(index + 1)
+		source.Items[index] = frontend.PresentationItem{
+			ID:       fmt.Sprintf("message:turn-1:%02d", index),
+			TurnID:   "turn-1",
+			Sequence: sequence,
+			Revision: 1,
+			Message: &frontend.TranscriptEntry{
+				Kind:     frontend.EntryAssistant,
+				Phase:    frontend.AssistantPhaseCommentary,
+				Text:     strings.Repeat("m", MaxEventTextBytes),
+				Complete: true,
+			},
+		}
+	}
+	snapshot := SnapshotFromFrontend(source)
+	snapshot.Question = &QuestionState{
+		QuestionID: "question-1",
+		Revision:   1,
+		Status:     QuestionWaiting,
+		Prompt:     strings.Repeat("p", MaxQuestionTextBytes),
+		Options:    options,
+	}
+	if err := validateSnapshot(binding.ControlIdentity(), snapshot); err != nil {
+		t.Fatalf("validateSnapshot(maximum question) error = %v", err)
+	}
+
+	readyPayload := mustPayload(t, WorkerReadyPayload{
+		ControlIdentity: binding.ControlIdentity(),
+		Snapshot:        snapshot,
+	})
+	if _, err := Encode(Record{
+		SchemaVersion: ProtocolV1,
+		Type:          RecordEvent,
+		Event:         EventWorkerReady,
+		Payload:       readyPayload,
+	}); err != nil {
+		t.Fatalf("Encode(worker.ready maximum snapshot) error = %v", err)
+	}
+
+	result := SnapshotResult{ControlIdentity: binding.ControlIdentity(), Snapshot: snapshot}
+	resultPayload := mustPayload(t, result)
+	if _, err := Encode(Record{
+		SchemaVersion: ProtocolV1,
+		Type:          RecordResponse,
+		ID:            "snapshot-maximum",
+		Method:        MethodSnapshotRead,
+		OK:            boolPointer(true),
+		Result:        resultPayload,
+	}); err != nil {
+		t.Fatalf("Encode(snapshot.read maximum result) error = %v", err)
+	}
+}
+
+func TestAggregatePayloadLimitRejectsOtherwiseStructuredOversizeError(t *testing.T) {
+	details := json.RawMessage(`{"value":"` + strings.Repeat("x", MaxWirePayloadBytes) + `"}`)
+	protocolError := ProtocolError{Code: ErrorInternal, Message: "failed", Details: details}
+	if err := protocolError.Validate(); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("ProtocolError.Validate() error = %v, want %v", err, ErrRecordTooLarge)
+	}
+	stopped := WorkerStoppedPayload{
+		ControlIdentity: testBinding(t).ControlIdentity(),
+		Reason:          WorkerStopFailed,
+		Error:           &protocolError,
+	}
+	if err := stopped.Validate(); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("WorkerStoppedPayload.Validate() error = %v, want %v", err, ErrRecordTooLarge)
 	}
 }

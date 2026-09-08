@@ -24,7 +24,10 @@ const (
 	ProtocolV1 = 1
 
 	// MaxRecordBytes bounds one JSON object without its JSONL delimiter.
-	MaxRecordBytes       = 2 << 20
+	MaxRecordBytes = 2 << 20
+	// MaxWirePayloadBytes leaves room for the largest closed protocol-v1
+	// request, response, or event envelope around one encoded payload.
+	MaxWirePayloadBytes  = MaxRecordBytes - (4 << 10)
 	MaxIDBytes           = 128
 	MaxBuildIDBytes      = 256
 	MaxModelIDBytes      = 256
@@ -123,9 +126,11 @@ func (protocolError ProtocolError) Validate() error {
 		return err
 	}
 	if len(protocolError.Details) != 0 {
-		return validateJSONObject("error details", protocolError.Details)
+		if err := validateJSONObject("error details", protocolError.Details); err != nil {
+			return err
+		}
 	}
-	return nil
+	return validateEncodedSize("protocol error", protocolError, MaxWirePayloadBytes)
 }
 
 // Record is one complete JSONL value. SchemaVersion is present on every
@@ -280,7 +285,9 @@ func DecodeRequestPayload(method Method, raw json.RawMessage) (any, error) {
 // response carries no data.
 type AckResult struct{}
 
-func (AckResult) Validate() error { return nil }
+func (result AckResult) Validate() error {
+	return validateEncodedSize("acknowledgement result", result, MaxWirePayloadBytes)
+}
 
 // DecodeResultPayload selects and validates a self-describing successful
 // response. Response envelopes retain the method so captured records remain
@@ -440,7 +447,10 @@ func (params InitializeParams) Validate() error {
 	if !validBuildID(params.ParentBuildID) {
 		return fmt.Errorf("%w: invalid parent build identity", ErrInvalidRecord)
 	}
-	return params.Binding.Validate()
+	if err := params.Binding.Validate(); err != nil {
+		return err
+	}
+	return validateEncodedSize("initialize request", params, MaxWirePayloadBytes)
 }
 
 type BoundIdentity struct {
@@ -454,7 +464,10 @@ func (identity BoundIdentity) Validate() error {
 		identity.WorkerBuildID != identity.Binding.ExpectedWorkerBuildID {
 		return fmt.Errorf("%w: worker protocol or build identity mismatch", ErrInvalidRecord)
 	}
-	return identity.Binding.Validate()
+	if err := identity.Binding.Validate(); err != nil {
+		return err
+	}
+	return validateEncodedSize("bound worker identity", identity, MaxWirePayloadBytes)
 }
 
 type TurnAttachment struct {
@@ -494,7 +507,7 @@ func (params TurnStartParams) Validate() error {
 		if err := thread.ValidatePrompt(params.Text); err != nil {
 			return fmt.Errorf("%w: %w", ErrInvalidRecord, err)
 		}
-		return nil
+		return validateEncodedSize("turn.start request", params, MaxWirePayloadBytes)
 	}
 	if len(params.Attachments) > frontend.MaxTurnAttachments || !utf8.ValidString(params.Text) ||
 		len(params.Text) > thread.MaxPromptBytes {
@@ -506,7 +519,7 @@ func (params TurnStartParams) Validate() error {
 			return fmt.Errorf("%w: invalid attachment %d", ErrInvalidRecord, index+1)
 		}
 	}
-	return nil
+	return validateEncodedSize("turn.start request", params, MaxWirePayloadBytes)
 }
 
 func (params TurnStartParams) FrontendInput() frontend.TurnInput {
@@ -548,9 +561,11 @@ func (params TurnSteerParams) Validate() error {
 		return fmt.Errorf("%w: %w", ErrInvalidRecord, err)
 	}
 	if params.QuestionAnswer != nil {
-		return params.QuestionAnswer.Validate()
+		if err := params.QuestionAnswer.Validate(); err != nil {
+			return err
+		}
 	}
-	return nil
+	return validateEncodedSize("turn.steer request", params, MaxWirePayloadBytes)
 }
 
 type GenerationParams struct {
@@ -558,7 +573,10 @@ type GenerationParams struct {
 }
 
 func (params GenerationParams) Validate() error {
-	return params.ControlIdentity.Validate()
+	if err := params.ControlIdentity.Validate(); err != nil {
+		return err
+	}
+	return validateEncodedSize("generation request", params, MaxWirePayloadBytes)
 }
 
 type InitializeResult struct {
@@ -566,7 +584,10 @@ type InitializeResult struct {
 }
 
 func (result InitializeResult) Validate() error {
-	return result.Identity.Validate()
+	if err := result.Identity.Validate(); err != nil {
+		return err
+	}
+	return validateEncodedSize("initialize result", result, MaxWirePayloadBytes)
 }
 
 func validIdentifier(value string) bool {
@@ -595,4 +616,15 @@ func validBoundedText(value string, maximum int) bool {
 func validOptionalText(value string, maximum int) bool {
 	return value == "" || len(value) <= maximum && utf8.ValidString(value) &&
 		!containsStructuralControl(value)
+}
+
+func validateEncodedSize(label string, value any, maximum int) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("%w: encode %s: %w", ErrInvalidRecord, label, err)
+	}
+	if len(encoded) > maximum {
+		return fmt.Errorf("%w: %s uses %d bytes; maximum is %d", ErrRecordTooLarge, label, len(encoded), maximum)
+	}
+	return nil
 }

@@ -299,6 +299,22 @@ func TestEveryCommandRequiresIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestTurnStartRejectsAggregatePayloadBeyondRecordBudget(t *testing.T) {
+	binding := testBinding(t)
+	attachments := make([]TurnAttachment, 32)
+	for index := range attachments {
+		attachments[index] = TurnAttachment{SourcePath: "/" + strings.Repeat("p", MaxPathBytes-1)}
+	}
+	params := TurnStartParams{
+		ControlIdentity: binding.ControlIdentity(),
+		Text:            strings.Repeat("x", thread.MaxPromptBytes),
+		Attachments:     attachments,
+	}
+	if err := params.Validate(); !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("TurnStartParams.Validate() error = %v, want %v", err, ErrRecordTooLarge)
+	}
+}
+
 func TestSuccessfulResultSchemasAreClosed(t *testing.T) {
 	binding := testBinding(t)
 	initialize := mustPayload(t, InitializeResult{Identity: BoundIdentity{

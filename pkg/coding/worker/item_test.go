@@ -244,3 +244,72 @@ func TestSnapshotFromFrontendBoundsUnsafeIdentitiesDeterministically(t *testing.
 		t.Fatalf("validateSnapshot() error = %v", err)
 	}
 }
+
+func TestSnapshotFromFrontendNormalizesMaximumFrontendToolToEncodableWireItem(t *testing.T) {
+	binding := testBinding(t)
+	audits := make([]frontend.WriteAudit, 128)
+	for index := range audits {
+		audits[index] = frontend.WriteAudit{
+			Kind:    "file\nchange",
+			Target:  strings.Repeat("t", MaxEventTextBytes),
+			Action:  "write",
+			Success: true,
+			Tool:    strings.Repeat("w", MaxEventTextBytes),
+		}
+	}
+	source := frontend.ThreadSnapshot{
+		ThreadID: binding.ThreadID,
+		Activity: frontend.ActivityIdle,
+		Items: []frontend.PresentationItem{{
+			ID:       "tool:turn-1:call-1",
+			TurnID:   "turn-1",
+			Sequence: 1,
+			Revision: 1,
+			Tool: &frontend.ToolState{
+				TurnID:     "turn-1",
+				CallID:     "call-1",
+				Name:       strings.Repeat("n", MaxEventTextBytes),
+				Arguments:  strings.Repeat("a", MaxEventTextBytes),
+				Output:     "output\x1b[31m",
+				Status:     frontend.ToolSucceeded,
+				WriteAudit: audits,
+				Command: &frontend.CommandState{
+					Stdout:    strings.Repeat("o", MaxEventTextBytes),
+					Stderr:    strings.Repeat("e", MaxEventTextBytes),
+					Output:    strings.Repeat("c", MaxEventTextBytes),
+					Status:    frontend.CommandSucceeded,
+					SessionID: strings.Repeat("s", MaxEventTextBytes),
+				},
+			},
+		}},
+	}
+
+	snapshot := SnapshotFromFrontend(source)
+	if len(snapshot.Items) != 1 || snapshot.Items[0].Tool == nil {
+		t.Fatalf("normalized snapshot items = %#v", snapshot.Items)
+	}
+	tool := snapshot.Items[0].Tool
+	if !tool.Truncated || len(tool.WriteAudit) != MaxEventWriteAudits ||
+		len(tool.Name) > MaxAttachmentMeta || len(tool.WriteAudit[0].Target) > MaxAuditTargetBytes ||
+		len(tool.WriteAudit[0].Tool) > MaxAttachmentMeta || tool.Command == nil || !tool.Command.Truncated {
+		t.Fatalf("normalized tool = %#v", tool)
+	}
+	if strings.ContainsRune(tool.Output, '\x1b') || strings.ContainsRune(tool.WriteAudit[0].Kind, '\n') {
+		t.Fatalf("normalized tool retains structural control: %#v", tool)
+	}
+	if err := validateSnapshot(binding.ControlIdentity(), snapshot); err != nil {
+		t.Fatalf("validateSnapshot() error = %v", err)
+	}
+	payload := mustPayload(t, ItemUpdatedPayload{
+		ControlIdentity: binding.ControlIdentity(),
+		Item:            snapshot.Items[0],
+	})
+	if _, err := Encode(Record{
+		SchemaVersion: ProtocolV1,
+		Type:          RecordEvent,
+		Event:         EventItemUpdated,
+		Payload:       payload,
+	}); err != nil {
+		t.Fatalf("Encode(maximum projected item) error = %v", err)
+	}
+}

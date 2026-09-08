@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"slices"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -116,6 +119,7 @@ type Tool struct {
 	Output          string       `json:"output,omitempty"`
 	Status          ToolStatus   `json:"status"`
 	Duration        int64        `json:"duration_ns,omitempty"`
+	Truncated       bool         `json:"truncated,omitempty"`
 	OutputTruncated bool         `json:"output_truncated,omitempty"`
 	WriteAudit      []WriteAudit `json:"write_audit,omitempty"`
 	Command         *Command     `json:"command,omitempty"`
@@ -159,6 +163,7 @@ type Item struct {
 // both the item-count and encoded-size budgets.
 func SnapshotFromFrontend(source frontend.ThreadSnapshot) Snapshot {
 	source = source.Clone()
+	status, _ := boundedWireContent(source.Status, MaxStatusBytes)
 	snapshot := Snapshot{
 		ThreadID:       source.ThreadID,
 		ActiveTurnID:   optionalBoundedWireIdentity(source.ActiveTurnID),
@@ -168,7 +173,7 @@ func SnapshotFromFrontend(source frontend.ThreadSnapshot) Snapshot {
 			UsedTokens:  source.ContextUsage.UsedTokens,
 			LimitTokens: source.ContextUsage.LimitTokens,
 		},
-		Status: source.Status,
+		Status: status,
 	}
 	if source.LastTurn != nil {
 		snapshot.LastTurn = &LastTurnOutcome{
@@ -210,12 +215,13 @@ func itemFromFrontend(source frontend.PresentationItem) Item {
 		Revision: source.Revision,
 	}
 	if source.Message != nil {
+		text, truncated := boundedWireContent(source.Message.Text, MaxEventTextBytes)
 		item.Message = &Message{
 			Kind:      MessageKind(source.Message.Kind),
 			Phase:     AssistantPhase(source.Message.Phase),
-			Text:      source.Message.Text,
+			Text:      text,
 			Complete:  source.Message.Complete,
-			Truncated: source.Message.Truncated,
+			Truncated: source.Message.Truncated || truncated,
 		}
 	}
 	if source.Tool != nil {
@@ -228,33 +234,61 @@ func itemFromFrontend(source frontend.PresentationItem) Item {
 }
 
 func toolFromFrontend(source frontend.ToolState) *Tool {
+	name, nameTruncated := boundedWireStructural(source.Name, MaxAttachmentMeta)
+	if name == "" {
+		name = "unknown"
+		nameTruncated = true
+	}
+	arguments, argumentsTruncated := boundedWireContent(source.Arguments, MaxEventTextBytes)
+	output, outputTruncated := boundedWireContent(source.Output, MaxEventTextBytes)
 	tool := &Tool{
 		CallID:          boundedWireIdentity(source.CallID),
-		Name:            source.Name,
-		Arguments:       source.Arguments,
-		Output:          source.Output,
+		Name:            name,
+		Arguments:       arguments,
+		Output:          output,
 		Status:          ToolStatus(source.Status),
-		Duration:        int64(source.Duration),
-		OutputTruncated: source.OutputTruncated,
-		WriteAudit:      make([]WriteAudit, len(source.WriteAudit)),
+		Duration:        max(0, int64(source.Duration)),
+		Truncated:       nameTruncated || argumentsTruncated,
+		OutputTruncated: source.OutputTruncated || outputTruncated,
+		WriteAudit:      make([]WriteAudit, 0, min(len(source.WriteAudit), MaxEventWriteAudits)),
+	}
+	if len(source.WriteAudit) > MaxEventWriteAudits {
+		tool.Truncated = true
 	}
 	for index, audit := range source.WriteAudit {
-		tool.WriteAudit[index] = WriteAudit{
-			Kind:    audit.Kind,
-			Target:  audit.Target,
-			Action:  audit.Action,
-			Success: audit.Success,
-			Tool:    audit.Tool,
+		if index >= MaxEventWriteAudits {
+			break
 		}
+		kind, kindTruncated := boundedWireStructural(audit.Kind, MaxAttachmentMeta)
+		target, targetTruncated := boundedWireStructural(audit.Target, MaxAuditTargetBytes)
+		action, actionTruncated := boundedWireStructural(audit.Action, MaxAttachmentMeta)
+		auditTool, toolTruncated := boundedWireStructural(audit.Tool, MaxAttachmentMeta)
+		if kind == "" || target == "" || action == "" {
+			tool.Truncated = true
+			continue
+		}
+		tool.Truncated = tool.Truncated || kindTruncated || targetTruncated || actionTruncated || toolTruncated
+		tool.WriteAudit = append(tool.WriteAudit, WriteAudit{
+			Kind:    kind,
+			Target:  target,
+			Action:  action,
+			Success: audit.Success,
+			Tool:    auditTool,
+		})
 	}
 	if source.Command != nil {
+		stdout, stdoutTruncated := boundedWireContent(source.Command.Stdout, MaxEventTextBytes)
+		stderr, stderrTruncated := boundedWireContent(source.Command.Stderr, MaxEventTextBytes)
+		commandOutput, commandOutputTruncated := boundedWireContent(source.Command.Output, MaxEventTextBytes)
+		sessionID, sessionIDTruncated := boundedWireStructural(source.Command.SessionID, MaxAttachmentMeta)
 		tool.Command = &Command{
-			Stdout:     source.Command.Stdout,
-			Stderr:     source.Command.Stderr,
-			Output:     source.Command.Output,
-			Status:     CommandStatus(source.Command.Status),
-			SessionID:  source.Command.SessionID,
-			Truncated:  source.Command.Truncated,
+			Stdout:    stdout,
+			Stderr:    stderr,
+			Output:    commandOutput,
+			Status:    CommandStatus(source.Command.Status),
+			SessionID: sessionID,
+			Truncated: source.Command.Truncated || stdoutTruncated || stderrTruncated ||
+				commandOutputTruncated || sessionIDTruncated,
 			Background: source.Command.Background,
 			Canceled:   source.Command.Canceled,
 			TimedOut:   source.Command.TimedOut,
@@ -268,12 +302,19 @@ func toolFromFrontend(source frontend.ToolState) *Tool {
 }
 
 func planFromFrontend(source frontend.PlanState) *Plan {
+	explanation, explanationTruncated := boundedWireContent(source.Explanation, MaxPlanExplanationBytes)
 	plan := &Plan{
-		CallID: boundedWireIdentity(source.CallID), Explanation: source.Explanation,
-		Steps: make([]PlanStep, len(source.Steps)), Truncated: source.Truncated,
+		CallID: boundedWireIdentity(source.CallID), Explanation: explanation,
+		Steps:     make([]PlanStep, 0, min(len(source.Steps), MaxEventPlanSteps)),
+		Truncated: source.Truncated || explanationTruncated || len(source.Steps) > MaxEventPlanSteps,
 	}
 	for index, step := range source.Steps {
-		plan.Steps[index] = PlanStep{Step: step.Step, Status: PlanStepStatus(step.Status)}
+		if index >= MaxEventPlanSteps {
+			break
+		}
+		text, truncated := boundedWireContent(step.Step, MaxPlanStepBytes)
+		plan.Truncated = plan.Truncated || truncated
+		plan.Steps = append(plan.Steps, PlanStep{Step: text, Status: PlanStepStatus(step.Status)})
 	}
 	return plan
 }
@@ -291,4 +332,53 @@ func optionalBoundedWireIdentity(value string) string {
 		return ""
 	}
 	return boundedWireIdentity(value)
+}
+
+func boundedWireContent(value string, maximum int) (string, bool) {
+	original := value
+	value = strings.ToValidUTF8(value, "�")
+	value = strings.Map(func(character rune) rune {
+		if character == '\n' || character == '\r' || character == '\t' {
+			return character
+		}
+		if character == '\x1b' || unicode.IsControl(character) {
+			return '�'
+		}
+		return character
+	}, value)
+	value, truncated := truncateWireText(value, maximum, "\n… worker projection truncated …")
+	return value, truncated || value != original
+}
+
+func boundedWireStructural(value string, maximum int) (string, bool) {
+	original := value
+	value = strings.ToValidUTF8(value, "�")
+	value = strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) {
+			return ' '
+		}
+		return character
+	}, value)
+	value = strings.TrimSpace(value)
+	value, truncated := truncateWireText(value, maximum, "…")
+	return value, truncated || value != original
+}
+
+func truncateWireText(value string, maximum int, marker string) (string, bool) {
+	if maximum <= 0 || len(value) <= maximum {
+		return value, false
+	}
+	if maximum <= len(marker) {
+		return marker[:validUTF8PrefixEnd(marker, maximum)], true
+	}
+	end := validUTF8PrefixEnd(value, maximum-len(marker))
+	return value[:end] + marker, true
+}
+
+func validUTF8PrefixEnd(value string, end int) int {
+	end = min(max(0, end), len(value))
+	for end > 0 && end < len(value) && !utf8.RuneStart(value[end]) {
+		end--
+	}
+	return end
 }

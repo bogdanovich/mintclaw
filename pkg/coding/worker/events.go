@@ -10,15 +10,19 @@ import (
 )
 
 const (
-	MaxEventTextBytes     = 64 << 10
-	MaxStatusBytes        = 4 << 10
-	MaxSnapshotItems      = 128
-	MaxSnapshotItemsBytes = MaxRecordBytes - (64 << 10)
-	MaxEventWriteAudits   = 64
-	MaxEventPlanSteps     = 32
-	MaxQuestionOptions    = 32
-	MaxQuestionTextBytes  = 8 << 10
-	MaxItemIdentityBytes  = 4 << 10
+	MaxEventTextBytes       = 64 << 10
+	MaxStatusBytes          = 4 << 10
+	MaxSnapshotBytes        = MaxWirePayloadBytes - (2 << 10)
+	MaxSnapshotItems        = 128
+	MaxSnapshotItemsBytes   = MaxSnapshotBytes - (512 << 10)
+	MaxEventWriteAudits     = 64
+	MaxAuditTargetBytes     = 4 << 10
+	MaxEventPlanSteps       = 32
+	MaxPlanExplanationBytes = 4 << 10
+	MaxPlanStepBytes        = 768
+	MaxQuestionOptions      = 32
+	MaxQuestionTextBytes    = 8 << 10
+	MaxItemIdentityBytes    = 4 << 10
 )
 
 type EventName string
@@ -66,7 +70,10 @@ type WorkerReadyPayload struct {
 }
 
 func (payload WorkerReadyPayload) Validate() error {
-	return validateSnapshot(payload.ControlIdentity, payload.Snapshot)
+	if err := validateSnapshot(payload.ControlIdentity, payload.Snapshot); err != nil {
+		return err
+	}
+	return validateEncodedSize("worker.ready payload", payload, MaxWirePayloadBytes)
 }
 
 // ItemUpdatedPayload carries one complete renderer-neutral item revision.
@@ -79,7 +86,10 @@ func (payload ItemUpdatedPayload) Validate() error {
 	if err := payload.ControlIdentity.Validate(); err != nil {
 		return err
 	}
-	return payload.Item.Validate()
+	if err := payload.Item.Validate(); err != nil {
+		return err
+	}
+	return validateEncodedSize("item.updated payload", payload, MaxWirePayloadBytes)
 }
 
 type StatusChangedPayload struct {
@@ -95,7 +105,7 @@ func (payload StatusChangedPayload) Validate() error {
 	if !validActivity(payload.Activity) || !validBoundedText(payload.Status, MaxStatusBytes) {
 		return fmt.Errorf("%w: malformed coding status event", ErrInvalidRecord)
 	}
-	return nil
+	return validateEncodedSize("status.changed payload", payload, MaxWirePayloadBytes)
 }
 
 type QuestionStatus string
@@ -154,7 +164,10 @@ func (payload QuestionStatePayload) Validate() error {
 	if err := payload.ControlIdentity.Validate(); err != nil {
 		return err
 	}
-	return payload.Question.Validate()
+	if err := payload.Question.Validate(); err != nil {
+		return err
+	}
+	return validateEncodedSize("question.changed payload", payload, MaxWirePayloadBytes)
 }
 
 type ContextUsagePayload struct {
@@ -169,7 +182,7 @@ func (payload ContextUsagePayload) Validate() error {
 	if !validContextUsage(payload.Usage) {
 		return fmt.Errorf("%w: malformed coding context usage", ErrInvalidRecord)
 	}
-	return nil
+	return validateEncodedSize("context.updated payload", payload, MaxWirePayloadBytes)
 }
 
 type TurnTerminalPayload struct {
@@ -187,7 +200,7 @@ func (payload TurnTerminalPayload) Validate() error {
 		!validContentText(payload.Status, MaxStatusBytes, true) {
 		return fmt.Errorf("%w: malformed coding terminal event", ErrInvalidRecord)
 	}
-	return nil
+	return validateEncodedSize("turn.terminal payload", payload, MaxWirePayloadBytes)
 }
 
 type WorkerStopReason string
@@ -218,11 +231,13 @@ func (payload WorkerStoppedPayload) Validate() error {
 		if payload.Error == nil {
 			return fmt.Errorf("%w: failed worker stop requires an error", ErrInvalidRecord)
 		}
-		return payload.Error.Validate()
+		if err := payload.Error.Validate(); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("%w: malformed worker stop reason", ErrInvalidRecord)
 	}
-	return nil
+	return validateEncodedSize("worker.stopped payload", payload, MaxWirePayloadBytes)
 }
 
 // DecodeEventPayload applies the closed-world schema owned by each event.
@@ -312,7 +327,7 @@ func validateSnapshot(identity ControlIdentity, snapshot Snapshot) error {
 	if !validContextUsage(snapshot.ContextUsage) {
 		return fmt.Errorf("%w: malformed coding snapshot context usage", ErrInvalidRecord)
 	}
-	return nil
+	return validateEncodedSize("coding worker snapshot", snapshot, MaxSnapshotBytes)
 }
 
 func (item Item) Validate() error {
@@ -365,7 +380,7 @@ func validMessage(message Message) bool {
 
 func validTool(tool Tool) bool {
 	if !validItemIdentity(tool.CallID) ||
-		!validBoundedText(tool.Name, MaxEventTextBytes) ||
+		!validBoundedText(tool.Name, MaxAttachmentMeta) ||
 		!validContentText(tool.Arguments, MaxEventTextBytes, false) ||
 		!validContentText(tool.Output, MaxEventTextBytes, false) ||
 		tool.Duration < 0 || len(tool.WriteAudit) > MaxEventWriteAudits {
@@ -378,7 +393,7 @@ func validTool(tool Tool) bool {
 	}
 	for _, audit := range tool.WriteAudit {
 		if !validBoundedText(audit.Kind, MaxAttachmentMeta) ||
-			!validBoundedText(audit.Target, MaxEventTextBytes) ||
+			!validBoundedText(audit.Target, MaxAuditTargetBytes) ||
 			!validBoundedText(audit.Action, MaxAttachmentMeta) ||
 			!validOptionalText(audit.Tool, MaxAttachmentMeta) {
 			return false
@@ -405,12 +420,12 @@ func validTool(tool Tool) bool {
 func validPlan(plan Plan) bool {
 	if !validItemIdentity(plan.CallID) || len(plan.Steps) == 0 ||
 		len(plan.Steps) > MaxEventPlanSteps ||
-		!validContentText(plan.Explanation, MaxEventTextBytes, false) {
+		!validContentText(plan.Explanation, MaxPlanExplanationBytes, false) {
 		return false
 	}
 	inProgress := 0
 	for _, step := range plan.Steps {
-		if !validContentText(step.Step, MaxEventTextBytes, true) {
+		if !validContentText(step.Step, MaxPlanStepBytes, true) {
 			return false
 		}
 		switch step.Status {
@@ -464,5 +479,8 @@ type SnapshotResult struct {
 }
 
 func (result SnapshotResult) Validate() error {
-	return validateSnapshot(result.ControlIdentity, result.Snapshot)
+	if err := validateSnapshot(result.ControlIdentity, result.Snapshot); err != nil {
+		return err
+	}
+	return validateEncodedSize("snapshot.read result", result, MaxWirePayloadBytes)
 }
