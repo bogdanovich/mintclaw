@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 )
 
 const (
@@ -100,6 +101,7 @@ func repositoryDiffFromFrontend(source codingworkspace.DiffResult) (*RepositoryD
 		hunks:     MaxRepositoryDiffHunks,
 		lines:     MaxRepositoryDiffLines,
 	}
+	privateKeys := &diagnostictrace.PrivateKeyBlockRedactor{}
 	targetRef, refTruncated := budget.structural(source.Target.Ref, MaxPathBytes)
 	result := &RepositoryDiff{
 		SchemaVersion:       codingworkspace.RepositoryDiffSchemaV1,
@@ -126,7 +128,7 @@ func repositoryDiffFromFrontend(source codingworkspace.DiffResult) (*RepositoryD
 		budget.truncated = true
 	}
 	for index := range min(len(source.Files), MaxRepositoryDiffFiles) {
-		file, ok := repositoryDiffFileFromFrontend(source.Files[index], budget)
+		file, ok := repositoryDiffFileFromFrontend(source.Files[index], budget, privateKeys)
 		if !ok {
 			return nil, true
 		}
@@ -143,6 +145,10 @@ func repositoryDiffFromFrontend(source codingworkspace.DiffResult) (*RepositoryD
 			Reason:        reason,
 		}
 		budget.truncated = budget.truncated || truncated
+	}
+	if privateKeys.Open() {
+		markLastWireRepositoryDiffHunkTruncated(result.Files)
+		budget.truncated = true
 	}
 	result.Truncated = result.Truncated || budget.truncated
 	return result, budget.truncated
@@ -179,6 +185,7 @@ func (budget *repositoryDiffWireBudget) content(value string, maximum int) (stri
 func repositoryDiffFileFromFrontend(
 	source codingworkspace.DiffFile,
 	budget *repositoryDiffWireBudget,
+	privateKeys *diagnostictrace.PrivateKeyBlockRedactor,
 ) (RepositoryDiffFile, bool) {
 	if source.Additions < 0 || source.Deletions < 0 || !validFrontendDiffProvenance(source.Provenance) {
 		return RepositoryDiffFile{}, false
@@ -224,7 +231,8 @@ func repositoryDiffFileFromFrontend(
 				return RepositoryDiffFile{}, false
 			}
 			budget.lines--
-			text, truncated := budget.content(sourceLine.Text, MaxRepositoryDiffLineBytes)
+			text, _ := privateKeys.RedactChunk(sourceLine.Text)
+			text, truncated := budget.content(text, MaxRepositoryDiffLineBytes)
 			hunk.Truncated = hunk.Truncated || truncated
 			file.Truncated = file.Truncated || truncated
 			hunk.Lines = append(hunk.Lines, RepositoryDiffLine{
@@ -242,6 +250,17 @@ func repositoryDiffFileFromFrontend(
 		budget.truncated = true
 	}
 	return file, true
+}
+
+func markLastWireRepositoryDiffHunkTruncated(files []RepositoryDiffFile) {
+	if len(files) == 0 {
+		return
+	}
+	file := &files[len(files)-1]
+	file.Truncated = true
+	if len(file.Hunks) != 0 {
+		file.Hunks[len(file.Hunks)-1].Truncated = true
+	}
 }
 
 func validFrontendDiffTarget(target codingworkspace.DiffTarget) bool {
@@ -284,6 +303,7 @@ func validRepositoryDiff(diff RepositoryDiff) bool {
 		return false
 	}
 	hunks, lines, textBytes := 0, 0, repositoryDiffTopLevelTextBytes(diff)
+	privateKeys := &diagnostictrace.PrivateKeyBlockRedactor{}
 	for _, file := range diff.Files {
 		if file.Path == "" || !validOptionalText(file.Path, MaxPathBytes) ||
 			!validOptionalText(file.OriginalPath, MaxPathBytes) || !validOptionalText(file.Status, MaxAttachmentMeta) ||
@@ -307,11 +327,14 @@ func validRepositoryDiff(diff RepositoryDiff) bool {
 					!validContentText(line.Text, MaxRepositoryDiffLineBytes, false) {
 					return false
 				}
+				if redacted, changed := privateKeys.RedactChunk(line.Text); changed || redacted != line.Text {
+					return false
+				}
 				textBytes += len(line.Text)
 			}
 		}
 	}
-	return hunks <= MaxRepositoryDiffHunks && lines <= MaxRepositoryDiffLines &&
+	return !privateKeys.Open() && hunks <= MaxRepositoryDiffHunks && lines <= MaxRepositoryDiffLines &&
 		textBytes <= MaxRepositoryDiffTextBytes
 }
 

@@ -250,6 +250,87 @@ func TestRepositoryDiffObservationIsBoundedRedactedAndIndependent(t *testing.T) 
 	}
 }
 
+func TestRepositoryDiffObservationRedactsPrivateKeyBlocksAcrossLines(t *testing.T) {
+	truncatedLines := make([]string, maxRepositoryDiffLines+2)
+	for index := range maxRepositoryDiffLines - 1 {
+		truncatedLines[index] = "safe context"
+	}
+	truncatedLines[maxRepositoryDiffLines-1] = "-----BEGIN PRIVATE KEY-----"
+	truncatedLines[maxRepositoryDiffLines] = "dW50ZXJtaW5hdGVkLWtleQ=="
+	truncatedLines[maxRepositoryDiffLines+1] = "-----END PRIVATE KEY-----"
+	for _, test := range []struct {
+		name          string
+		lines         []string
+		wantTruncated bool
+	}{
+		{
+			name: "matching terminator",
+			lines: []string{
+				"-----BEGIN OPENSSH PRIVATE KEY-----",
+				"c2VjcmV0LWtleS1tYXRlcmlhbA==",
+				"-----END RSA PRIVATE KEY-----",
+				"-----END OPENSSH PRIVATE KEY-----",
+				"safe suffix",
+			},
+		},
+		{
+			name: "unterminated block",
+			lines: []string{
+				"-----BEGIN PRIVATE KEY-----",
+				"dW50ZXJtaW5hdGVkLWtleQ==",
+				"otherwise safe-looking tail",
+			},
+			wantTruncated: true,
+		},
+		{
+			name:          "block truncated by line budget",
+			lines:         truncatedLines,
+			wantTruncated: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lines := make([]codingworkspace.DiffLine, len(test.lines))
+			for index, text := range test.lines {
+				lines[index] = codingworkspace.DiffLine{Kind: "addition", NewLine: index + 1, Text: text}
+			}
+			got := NewRepositoryDiffObservation(codingworkspace.DiffResult{
+				SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+				Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+				Files: []codingworkspace.DiffFile{{
+					Path: "id_private", Status: "A", Additions: len(lines),
+					Hunks: []codingworkspace.DiffHunk{{NewStart: 1, NewLines: len(lines), Lines: lines}},
+				}},
+				Additions: len(lines),
+			})
+			if got == nil || got.RepositoryDiff == nil {
+				t.Fatal("private-key repository diff was dropped")
+			}
+			diff := got.RepositoryDiff.Diff
+			var rendered []string
+			for _, line := range diff.Files[0].Hunks[0].Lines {
+				rendered = append(rendered, line.Text)
+			}
+			joined := strings.Join(rendered, "\n")
+			for _, secret := range []string{
+				"BEGIN", "END", "c2VjcmV0", "dW50ZXJtaW5hdGVk", "otherwise safe-looking tail",
+			} {
+				if strings.Contains(joined, secret) {
+					t.Fatalf("repository diff leaked %q: %q", secret, joined)
+				}
+			}
+			if diff.Truncated != test.wantTruncated {
+				t.Fatalf("repository diff truncated = %t, want %t", diff.Truncated, test.wantTruncated)
+			}
+			if test.wantTruncated && (!diff.Files[0].Truncated || !diff.Files[0].Hunks[0].Truncated) {
+				t.Fatalf("unterminated block did not fail closed: %#v", diff.Files[0])
+			}
+			if !test.wantTruncated && !strings.Contains(joined, "safe suffix") {
+				t.Fatalf("safe content after matching terminator was lost: %q", joined)
+			}
+		})
+	}
+}
+
 func TestRepositoryDiffObservationFailsClosedAndBoundsEvidence(t *testing.T) {
 	files := make([]codingworkspace.DiffFile, maxRepositoryDiffFiles+1)
 	for index := range files {

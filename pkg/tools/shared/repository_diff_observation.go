@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
+	"github.com/bogdanovich/mintclaw/pkg/diagnostictrace"
 )
 
 const (
@@ -72,6 +73,7 @@ func sanitizeRepositoryDiffObservation(
 	}
 
 	budget := newRepositoryDiffBudget()
+	privateKeys := &diagnostictrace.PrivateKeyBlockRedactor{}
 	diff.Target.Ref = budget.text(strings.TrimSpace(diff.Target.Ref), maxRepositoryDiffValueBytes)
 	diff.ResolvedRevision = budget.text(diff.ResolvedRevision, maxRepositoryDiffValueBytes)
 	diff.MergeBase = budget.text(diff.MergeBase, maxRepositoryDiffValueBytes)
@@ -92,7 +94,7 @@ func sanitizeRepositoryDiffObservation(
 		budget.truncated = true
 	}
 	for index := range min(len(files), maxRepositoryDiffFiles) {
-		file, ok := sanitizeRepositoryDiffFile(files[index], budget)
+		file, ok := sanitizeRepositoryDiffFile(files[index], budget, privateKeys)
 		if !ok {
 			return RepositoryDiffObservation{}, false
 		}
@@ -109,6 +111,10 @@ func sanitizeRepositoryDiffObservation(
 			return RepositoryDiffObservation{}, false
 		}
 		diff.Provenance = &provenance
+	}
+	if privateKeys.Open() {
+		markLastRepositoryDiffHunkTruncated(diff.Files)
+		budget.truncated = true
 	}
 	diff.Truncated = diff.Truncated || budget.truncated
 	return RepositoryDiffObservation{Diff: diff}, true
@@ -135,6 +141,7 @@ func validRepositoryDiffCounts(diff codingworkspace.DiffResult) bool {
 func sanitizeRepositoryDiffFile(
 	file codingworkspace.DiffFile,
 	budget *repositoryDiffBudget,
+	privateKeys *diagnostictrace.PrivateKeyBlockRedactor,
 ) (codingworkspace.DiffFile, bool) {
 	if file.Additions < 0 || file.Deletions < 0 || !validRepositoryDiffProvenance(file.Provenance) {
 		return codingworkspace.DiffFile{}, false
@@ -172,6 +179,7 @@ func sanitizeRepositoryDiffFile(
 				return codingworkspace.DiffFile{}, false
 			}
 			budget.lines--
+			line.Text, _ = privateKeys.RedactChunk(line.Text)
 			line.Text = budget.text(line.Text, maxRepositoryDiffLineBytes)
 			hunk.Lines = append(hunk.Lines, line)
 		}
@@ -186,6 +194,17 @@ func sanitizeRepositoryDiffFile(
 	}
 	budget.truncated = budget.truncated || file.Truncated
 	return file, true
+}
+
+func markLastRepositoryDiffHunkTruncated(files []codingworkspace.DiffFile) {
+	if len(files) == 0 {
+		return
+	}
+	file := &files[len(files)-1]
+	file.Truncated = true
+	if len(file.Hunks) != 0 {
+		file.Hunks[len(file.Hunks)-1].Truncated = true
+	}
 }
 
 func validRepositoryDiffLine(line codingworkspace.DiffLine) bool {

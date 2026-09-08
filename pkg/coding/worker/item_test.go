@@ -213,6 +213,125 @@ func TestSnapshotFromFrontendProjectsBoundedHistoricalRepositoryDiff(t *testing.
 	}
 }
 
+func TestSnapshotFromFrontendRedactsPrivateKeyBlocksAcrossDiffLines(t *testing.T) {
+	binding := testBinding(t)
+	truncatedLines := make([]string, MaxRepositoryDiffLines+2)
+	for index := range MaxRepositoryDiffLines - 1 {
+		truncatedLines[index] = "safe context"
+	}
+	truncatedLines[MaxRepositoryDiffLines-1] = "-----BEGIN PRIVATE KEY-----"
+	truncatedLines[MaxRepositoryDiffLines] = "dW50ZXJtaW5hdGVkLWtleQ=="
+	truncatedLines[MaxRepositoryDiffLines+1] = "-----END PRIVATE KEY-----"
+	for _, test := range []struct {
+		name          string
+		lines         []string
+		wantTruncated bool
+	}{
+		{
+			name: "matching terminator",
+			lines: []string{
+				"-----BEGIN OPENSSH PRIVATE KEY-----",
+				"c2VjcmV0LWtleS1tYXRlcmlhbA==",
+				"-----END OPENSSH PRIVATE KEY-----",
+				"safe suffix",
+			},
+		},
+		{
+			name: "unterminated block",
+			lines: []string{
+				"-----BEGIN PRIVATE KEY-----",
+				"dW50ZXJtaW5hdGVkLWtleQ==",
+				"otherwise safe-looking tail",
+			},
+			wantTruncated: true,
+		},
+		{
+			name:          "block truncated by line budget",
+			lines:         truncatedLines,
+			wantTruncated: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lines := make([]codingworkspace.DiffLine, len(test.lines))
+			for index, text := range test.lines {
+				lines[index] = codingworkspace.DiffLine{Kind: "addition", NewLine: index + 1, Text: text}
+			}
+			source := frontend.ThreadSnapshot{
+				ThreadID: binding.ThreadID,
+				Activity: frontend.ActivityIdle,
+				Items: []frontend.PresentationItem{{
+					ID: "tool:turn-1:call-key", TurnID: "turn-1", Sequence: 1, Revision: 1,
+					Kind: frontend.PresentationToolCall, Lifecycle: frontend.PresentationCompleted,
+					Tool: &frontend.ToolState{
+						TurnID: "turn-1", CallID: "call-key", Name: "repository_diff",
+						Status: frontend.ToolSucceeded,
+						RepositoryDiff: &codingworkspace.DiffResult{
+							SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+							Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+							Files: []codingworkspace.DiffFile{{
+								Path: "id_private", Status: "A", Additions: len(lines),
+								Hunks: []codingworkspace.DiffHunk{{
+									NewStart: 1, NewLines: len(lines), Lines: lines,
+								}},
+							}},
+							Additions: len(lines),
+						},
+					},
+				}},
+			}
+
+			snapshot := SnapshotFromFrontend(source, nil)
+			if err := validateSnapshot(binding.ControlIdentity(), snapshot); err != nil {
+				t.Fatalf("validateSnapshot() error = %v", err)
+			}
+			projected := snapshot.Items[0].Tool.RepositoryDiff
+			if projected == nil {
+				t.Fatal("private-key repository diff was dropped")
+			}
+			var rendered []string
+			for _, line := range projected.Files[0].Hunks[0].Lines {
+				rendered = append(rendered, line.Text)
+			}
+			joined := strings.Join(rendered, "\n")
+			for _, secret := range []string{
+				"BEGIN", "END", "c2VjcmV0", "dW50ZXJtaW5hdGVk", "otherwise safe-looking tail",
+			} {
+				if strings.Contains(joined, secret) {
+					t.Fatalf("worker repository diff leaked %q: %q", secret, joined)
+				}
+			}
+			if projected.Truncated != test.wantTruncated {
+				t.Fatalf("worker repository diff truncated = %t, want %t", projected.Truncated, test.wantTruncated)
+			}
+			if !test.wantTruncated && !strings.Contains(joined, "safe suffix") {
+				t.Fatalf("safe content after matching terminator was lost: %q", joined)
+			}
+		})
+	}
+}
+
+func TestRepositoryDiffValidationRejectsRawPrivateKeyBlocks(t *testing.T) {
+	diff := RepositoryDiff{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        RepositoryDiffTarget{Kind: string(codingworkspace.DiffTargetCurrent)},
+		Files: []RepositoryDiffFile{{
+			Path: "id_private", Status: "A", Additions: 3,
+			Hunks: []RepositoryDiffHunk{{
+				NewStart: 1, NewLines: 3,
+				Lines: []RepositoryDiffLine{
+					{Kind: "addition", NewLine: 1, Text: "-----BEGIN PRIVATE KEY-----"},
+					{Kind: "addition", NewLine: 2, Text: "c2VjcmV0LWtleS1tYXRlcmlhbA=="},
+					{Kind: "addition", NewLine: 3, Text: "-----END PRIVATE KEY-----"},
+				},
+			}},
+		}},
+		Additions: 3,
+	}
+	if validRepositoryDiff(diff) {
+		t.Fatal("raw private-key block was accepted by worker validation")
+	}
+}
+
 func TestSnapshotFromFrontendDropsRepositoryDiffWithControlBearingRef(t *testing.T) {
 	binding := testBinding(t)
 	for _, target := range []codingworkspace.DiffTarget{
