@@ -174,6 +174,70 @@ func TestToolRegistryDurableArgumentsOmitNullOptionalBrowserContext(t *testing.T
 	}
 }
 
+func TestBrowserActCanonicalArgumentsOmitNullCompatibilityPlaceholders(t *testing.T) {
+	tool := &BrowserActTool{}
+	original := map[string]any{
+		"browser_session_id": "session_1", "tab_id": "tab_primary",
+		"frame_id": nil, "context_catalog_id": nil, "context_generation": nil,
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"effect": nil, "confirmation": nil,
+		"action": map[string]any{
+			"kind": "navigate", "url": "https://example.com",
+			"ref": nil, "source_ref": nil, "destination_ref": nil,
+			"dialog_id": nil, "target": nil, "value": nil, "key": nil,
+			"direction": nil, "amount": nil, "decision": nil,
+			"artifact_ref": nil, "deliver": nil,
+		},
+	}
+
+	projected, err := tool.DurableArguments(original)
+	if err != nil {
+		t.Fatalf("DurableArguments() error = %v", err)
+	}
+	for _, field := range []string{
+		"frame_id", "context_catalog_id", "context_generation", "effect", "confirmation",
+	} {
+		if _, present := projected[field]; present {
+			t.Fatalf("durable arguments retained null optional field %q: %#v", field, projected)
+		}
+	}
+	projectedAction := projected["action"].(map[string]any)
+	if !reflect.DeepEqual(projectedAction, map[string]any{
+		"kind": "navigate", "url": "https://example.com",
+	}) {
+		t.Fatalf("canonical action = %#v", projectedAction)
+	}
+	originalAction := original["action"].(map[string]any)
+	if value, present := originalAction["ref"]; !present || value != nil {
+		t.Fatalf("live arguments were mutated: %#v", original)
+	}
+}
+
+func TestToolRegistryExecutesBrowserActionWithNullCompatibilityPlaceholders(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true, err: browser.ErrDenied}
+	registry := NewToolRegistry()
+	registry.Register(NewBrowserActTool(browserToolTestConfig(), source))
+	arguments := map[string]any{
+		"browser_session_id": "session_1", "tab_id": "tab_primary",
+		"frame_id": nil, "context_catalog_id": nil, "context_generation": nil,
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"effect": nil, "confirmation": nil,
+		"action": map[string]any{
+			"kind": "navigate", "url": "https://example.com",
+			"ref": nil, "target": nil, "value": nil, "amount": nil, "deliver": nil,
+		},
+	}
+
+	result := registry.Execute(browserToolTestContext(), "browser_act", arguments)
+	if result == nil || !result.IsError || source.prepareCalls != 1 || source.executeCalls != 0 {
+		t.Fatalf("Execute() result = %#v; prepare=%d execute=%d", result, source.prepareCalls, source.executeCalls)
+	}
+	if source.prepareRequest.Action.Kind != browser.ActionNavigate ||
+		source.prepareRequest.Action.URL != "https://example.com" {
+		t.Fatalf("prepare action = %#v", source.prepareRequest.Action)
+	}
+}
+
 func TestToolRegistryExecutesBrowserActionWithNullOptionalContext(t *testing.T) {
 	source := &fakeBrowserToolSource{available: true, err: browser.ErrDenied}
 	registry := NewToolRegistry()
