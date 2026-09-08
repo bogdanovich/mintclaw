@@ -67,6 +67,12 @@ type stagedArtifactOutput struct {
 	destination string
 	directory   bool
 	identity    *pathIdentity
+	entries     []stagedArtifactEntry
+}
+
+type stagedArtifactEntry struct {
+	name     string
+	identity *pathIdentity
 }
 
 type pathIdentity struct {
@@ -112,6 +118,10 @@ func (output *stagedArtifactOutput) clearStage() {
 	output.path = ""
 	output.identity.close()
 	output.identity = nil
+	for index := range output.entries {
+		output.entries[index].identity.close()
+	}
+	output.entries = nil
 }
 
 func (output *stagedArtifactOutput) bindStageIdentity() error {
@@ -132,7 +142,15 @@ func (output *stagedArtifactOutput) abort() {
 	}
 	if output.path != "" && output.identity != nil && output.identity.matches(output.path) {
 		if output.directory {
-			_ = os.RemoveAll(output.path)
+			for _, entry := range output.entries {
+				path := filepath.Join(output.path, entry.name)
+				if entry.identity != nil && entry.identity.matches(path) {
+					_ = os.Remove(path)
+				}
+			}
+			// Remove only an empty directory. A foreign entry is never deleted
+			// recursively merely because it appeared below MintClaw's stage.
+			_ = os.Remove(output.path)
 		} else {
 			_ = os.Remove(output.path)
 		}
@@ -145,16 +163,37 @@ func (output *stagedArtifactOutput) commit() error {
 }
 
 func (output *stagedArtifactOutput) commitWithHook(afterValidation func()) error {
+	if err := output.publishWithHook(afterValidation); err != nil {
+		return err
+	}
+	output.clearStage()
+	return nil
+}
+
+func (output *stagedArtifactOutput) commitRetainingIdentity() (*pathIdentity, error) {
+	if output == nil || output.directory {
+		return nil, errors.New("document staged file identity is invalid")
+	}
+	if err := output.publishWithHook(nil); err != nil {
+		return nil, err
+	}
+	identity := output.identity
+	output.path = ""
+	output.identity = nil
+	return identity, nil
+}
+
+func (output *stagedArtifactOutput) publishWithHook(afterValidation func()) error {
 	if output == nil || output.path == "" {
 		return errors.New("document output was not staged")
 	}
-	if output.identity == nil || !output.identity.matches(output.path) {
+	if !output.matchesStage(output.path) {
 		return errors.New("document staged output changed during publication")
 	}
 	if afterValidation != nil {
 		afterValidation()
 	}
-	if !output.identity.matches(output.path) {
+	if !output.matchesStage(output.path) {
 		return errors.New("document staged output changed during publication")
 	}
 	if err := renamePathNoReplace(output.path, output.destination); err != nil {
@@ -163,11 +202,40 @@ func (output *stagedArtifactOutput) commitWithHook(afterValidation func()) error
 		}
 		return err
 	}
-	if !output.identity.matches(output.destination) {
+	if !output.matchesStage(output.destination) {
 		return errors.New("document staged output identity changed during publication")
 	}
-	output.clearStage()
 	return nil
+}
+
+func (output *stagedArtifactOutput) matchesStage(root string) bool {
+	if output == nil || output.identity == nil || !output.identity.matches(root) {
+		return false
+	}
+	if !output.directory {
+		return len(output.entries) == 0
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != len(output.entries) {
+		return false
+	}
+	expected := make(map[string]*pathIdentity, len(output.entries))
+	for _, entry := range output.entries {
+		if entry.name == "" || entry.identity == nil {
+			return false
+		}
+		if _, exists := expected[entry.name]; exists {
+			return false
+		}
+		expected[entry.name] = entry.identity
+	}
+	for _, entry := range entries {
+		identity, ok := expected[entry.Name()]
+		if !ok || !identity.matches(filepath.Join(root, entry.Name())) {
+			return false
+		}
+	}
+	return true
 }
 
 func validOutputType(info os.FileInfo, directory bool) bool {
@@ -277,9 +345,22 @@ func stageArtifactDirectory(
 			return nil, errors.New("rendered artifact page mapping is invalid")
 		}
 		name := fmt.Sprintf("page-%04d.png", artifact.Pages[0])
-		if err = publishArtifactFile(snapshot, artifact.Ref, filepath.Join(stage, name)); err != nil {
+		path := filepath.Join(stage, name)
+		var stagedFile *stagedArtifactOutput
+		stagedFile, err = stageArtifactFile(snapshot, artifact.Ref, path)
+		if err != nil {
 			return nil, err
 		}
+		var identity *pathIdentity
+		identity, err = stagedFile.commitRetainingIdentity()
+		if err != nil {
+			stagedFile.abort()
+			return nil, err
+		}
+		output.entries = append(output.entries, stagedArtifactEntry{name: name, identity: identity})
+	}
+	if !output.matchesStage(stage) {
+		return nil, errors.New("document staged output changed during staging")
 	}
 	complete = true
 	return output, nil

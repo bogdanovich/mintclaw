@@ -184,6 +184,75 @@ func TestDirectoryPublicationDoesNotReplaceConcurrentDestination(t *testing.T) {
 	}
 }
 
+func TestDirectoryPublicationRejectsForeignStageEntryWithoutDeletingIt(t *testing.T) {
+	root := t.TempDir()
+	ref := "document-artifact://operation/page-0001.png"
+	source := filepath.Join(root, "source.png")
+	if err := os.WriteFile(source, []byte("page"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "rendered")
+	staged, err := stageArtifactDirectory(
+		testArtifactOpener{ref: ref, path: source},
+		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
+		destination,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagePath := staged.path
+	foreignPath := filepath.Join(stagePath, "foreign-canary")
+	var hookErr error
+	err = staged.commitWithHook(func() {
+		hookErr = os.WriteFile(foreignPath, []byte("preserved"), 0o600)
+	})
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if err == nil {
+		t.Fatal("publication accepted a foreign staging entry")
+	}
+	if _, statErr := os.Lstat(destination); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("foreign staging entry reached destination: %v", statErr)
+	}
+	staged.abort()
+	if data, readErr := os.ReadFile(foreignPath); readErr != nil || string(data) != "preserved" {
+		t.Fatalf("abort deleted foreign staging entry: %q, %v", data, readErr)
+	}
+	if _, statErr := os.Lstat(filepath.Join(stagePath, "page-0001.png")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("abort retained owned staged artifact: %v", statErr)
+	}
+}
+
+func TestDirectoryAbortPreservesReplacementArtifact(t *testing.T) {
+	root := t.TempDir()
+	ref := "document-artifact://operation/page-0001.png"
+	source := filepath.Join(root, "source.png")
+	if err := os.WriteFile(source, []byte("page"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := stageArtifactDirectory(
+		testArtifactOpener{ref: ref, path: source},
+		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
+		filepath.Join(root, "rendered"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagePath := staged.path
+	pagePath := filepath.Join(stagePath, "page-0001.png")
+	if err = os.Remove(pagePath); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(pagePath, []byte("foreign"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged.abort()
+	if data, readErr := os.ReadFile(pagePath); readErr != nil || string(data) != "foreign" {
+		t.Fatalf("abort deleted replacement artifact: %q, %v", data, readErr)
+	}
+}
+
 func TestFilePublicationDoesNotReplaceConcurrentDestination(t *testing.T) {
 	root := t.TempDir()
 	ref := "document-artifact://operation/extracted-text.jsonl"
