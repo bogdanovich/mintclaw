@@ -154,7 +154,7 @@ func presentationCellCommitted(lifecycle frontend.PresentationLifecycle) bool {
 	}
 }
 
-func (store semanticCellStore) cells() []semanticCell {
+func (store *semanticCellStore) cells() []semanticCell {
 	cells := make([]semanticCell, len(store.ordered))
 	for index, cell := range store.ordered {
 		cells[index] = cell
@@ -162,6 +162,159 @@ func (store semanticCellStore) cells() []semanticCell {
 	return cells
 }
 
+// flushActiveForShutdown freezes the renderer-owned mutable index after the
+// Bubble Tea program stops. It does not rewrite authoritative item lifecycle:
+// the final snapshot remains truthful about whether runtime work was active,
+// suspended, or unknown when the local frontend disappeared.
+func (store *semanticCellStore) flushActiveForShutdown() int {
+	if store == nil || len(store.active) == 0 {
+		return 0
+	}
+	flushed := len(store.active)
+	store.committed = append([]*presentationCell(nil), store.ordered...)
+	store.active = nil
+	return flushed
+}
+
 func cloneCellPresentationItem(item frontend.PresentationItem) frontend.PresentationItem {
 	return frontend.ThreadSnapshot{Items: []frontend.PresentationItem{item}}.Clone().Items[0]
+}
+
+func newHydratedSemanticCellStore(entries []frontend.TranscriptEntry) (semanticCellStore, error) {
+	items := make([]frontend.PresentationItem, 0, len(entries))
+	for index, source := range entries {
+		entry := source
+		if strings.TrimSpace(entry.ID) == "" {
+			entry.ID = fmt.Sprintf("hydrated-entry-%d", index)
+		}
+		entry.Complete = true
+		kind := frontend.PresentationError
+		switch entry.Kind {
+		case frontend.EntryUser:
+			kind = frontend.PresentationUserMessage
+		case frontend.EntryAssistant:
+			kind = frontend.PresentationAssistantMessage
+		case frontend.EntryReasoning:
+			kind = frontend.PresentationReasoning
+		case frontend.EntryTool:
+			kind = frontend.PresentationToolMessage
+		case frontend.EntryWarning:
+			kind = frontend.PresentationWarning
+		case frontend.EntryError:
+			kind = frontend.PresentationError
+		}
+		items = append(items, frontend.PresentationItem{
+			ID: entry.ID, TurnID: entry.TurnID, Sequence: uint64(index + 1), Revision: 1,
+			Kind: kind, Lifecycle: frontend.PresentationCompleted, Message: &entry,
+		})
+	}
+	return newSemanticCellStore(items)
+}
+
+func (m *Model) reconcileStaticCells(state frontend.ThreadSnapshot) {
+	if entry, ok := verifiedWritesEntry(state.ChangedFiles); ok {
+		m.staticCell(
+			"tui:compat:verified-writes",
+			cellStyleAccent,
+			entry.label,
+			entry.text,
+			entry.truncated,
+		)
+	} else {
+		delete(m.staticCells, "tui:compat:verified-writes")
+	}
+	if state.Workspace != nil {
+		entry := workspaceChangesEntry(*state.Workspace)
+		m.staticCell(
+			"tui:compat:workspace",
+			cellStyleAccent,
+			entry.label,
+			entry.text,
+			entry.truncated,
+		)
+	} else {
+		delete(m.staticCells, "tui:compat:workspace")
+	}
+}
+
+func (m *Model) staticCell(
+	id string,
+	role cellStyleRole,
+	label, text string,
+	truncated bool,
+) *staticSemanticCell {
+	if current := m.staticCells[id]; current != nil && current.matches(role, label, text, truncated) {
+		return current
+	}
+	revision := uint64(1)
+	if current := m.staticCells[id]; current != nil {
+		revision = current.identity.Revision + 1
+	}
+	cell := newStaticSemanticCell(id, revision, role, label, text, truncated)
+	m.staticCells[id] = cell
+	return cell
+}
+
+func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semanticCellRenderSpec {
+	specs := make([]semanticCellRenderSpec, 0, len(m.hydratedCells.ordered)+len(m.cells.ordered)+5)
+	if m.transcript.loading {
+		specs = append(specs, semanticCellRenderSpec{cell: m.staticCell(
+			"tui:notice:loading", cellStyleMuted, "Loading earlier transcript…", "", false,
+		)})
+	} else if !m.transcript.disabled && (m.transcript.hasOlder || state.HasOlderEntries) {
+		specs = append(specs, semanticCellRenderSpec{cell: m.staticCell(
+			"tui:notice:older", cellStyleMuted, "↑ More transcript available (Page Up)", "", false,
+		)})
+	}
+
+	liveMessageIDs := make(map[string]struct{}, len(m.cells.ordered))
+	for _, cell := range m.cells.ordered {
+		if cell.item.Message != nil {
+			liveMessageIDs[cell.item.Message.ID] = struct{}{}
+		}
+	}
+	for _, cell := range m.hydratedCells.ordered {
+		if cell.item.Message != nil {
+			if _, duplicate := liveMessageIDs[cell.item.Message.ID]; duplicate {
+				continue
+			}
+		}
+		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
+	}
+	for _, cell := range m.cells.ordered {
+		mode := cellRenderCompact
+		selected := false
+		if cell.item.Tool != nil {
+			viewID := toolViewID(*cell.item.Tool)
+			selected = viewID == m.selectedToolID
+			if viewID == m.expandedToolID {
+				mode = cellRenderFull
+			}
+		}
+		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: mode, selected: selected})
+	}
+	for _, id := range []string{"tui:compat:verified-writes", "tui:compat:workspace"} {
+		if cell := m.staticCells[id]; cell != nil {
+			specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
+		}
+	}
+	if m.transcript.hasNewer {
+		specs = append(specs, semanticCellRenderSpec{cell: m.staticCell(
+			"tui:notice:newer",
+			cellStyleMuted,
+			"↓ Newer hydrated transcript omitted; press Alt+End to reload latest",
+			"",
+			false,
+		)})
+	}
+	return specs
+}
+
+func (m *Model) selectedToolCellID() string {
+	for _, cell := range m.cells.ordered {
+		if cell.item.Tool != nil && toolViewID(*cell.item.Tool) == m.selectedToolID {
+			return cell.item.ID
+		}
+	}
+	return ""
 }

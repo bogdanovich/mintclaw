@@ -111,8 +111,15 @@ type semanticCell interface {
 	Render(cellRenderContext, cellRenderMode) cellDocument
 }
 
+type cellRenderCacheKey struct {
+	Context cellRenderContext
+	Mode    cellRenderMode
+}
+
 type presentationCell struct {
-	item frontend.PresentationItem
+	item         frontend.PresentationItem
+	renderCache  map[cellRenderCacheKey]cellDocument
+	renderMisses uint64
 }
 
 func newPresentationCell(item frontend.PresentationItem) *presentationCell {
@@ -130,8 +137,13 @@ func (cell *presentationCell) Identity() cellIdentity {
 }
 
 func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderMode) cellDocument {
+	context.Width = max(1, context.Width)
+	key := cellRenderCacheKey{Context: context, Mode: mode}
+	if document, ok := cell.renderCache[key]; ok {
+		return document
+	}
 	document := cell.semanticDocument(mode)
-	document = wrapCellDocument(document, max(1, context.Width))
+	document = wrapCellDocument(document, context.Width)
 	if mode == cellRenderPlain {
 		for lineIndex := range document.Lines {
 			for spanIndex := range document.Lines[lineIndex].Spans {
@@ -139,7 +151,16 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 			}
 		}
 	}
+	if cell.renderCache == nil {
+		cell.renderCache = make(map[cellRenderCacheKey]cellDocument)
+	}
+	cell.renderCache[key] = document
+	cell.renderMisses++
 	return document
+}
+
+func (cell *presentationCell) renderMissCount() uint64 {
+	return cell.renderMisses
 }
 
 func (cell *presentationCell) semanticDocument(mode cellRenderMode) cellDocument {
@@ -445,6 +466,39 @@ type cellLayoutBlock struct {
 
 type cellLayout struct {
 	Blocks []cellLayoutBlock
+}
+
+func (layout cellLayout) anchorAt(line int) transcriptAnchor {
+	for _, block := range layout.Blocks {
+		if line >= block.Start && line < block.End {
+			return transcriptAnchor{id: block.ID, offset: line - block.Start, valid: true}
+		}
+		if line < block.Start {
+			return transcriptAnchor{id: block.ID, before: true, valid: true}
+		}
+	}
+	if len(layout.Blocks) > 0 {
+		block := layout.Blocks[len(layout.Blocks)-1]
+		return transcriptAnchor{
+			id: block.ID, offset: max(0, block.End-block.Start-1), valid: true,
+		}
+	}
+	return transcriptAnchor{}
+}
+
+func (layout cellLayout) lineFor(anchor transcriptAnchor) (int, bool) {
+	if !anchor.valid {
+		return 0, false
+	}
+	for _, block := range layout.Blocks {
+		if block.ID == anchor.id {
+			if anchor.before {
+				return max(0, block.Start-1), true
+			}
+			return block.Start + min(anchor.offset, max(0, block.End-block.Start-1)), true
+		}
+	}
+	return 0, false
 }
 
 func renderSemanticCells(cells []semanticCell, context cellRenderContext, mode cellRenderMode) (string, cellLayout) {

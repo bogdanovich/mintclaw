@@ -126,6 +126,9 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		programFactory = defaultProgram
 	}
 	finalModel, runErr := programFactory(model, programOptions...).Run()
+	if rendered, ok := finalModel.(*Model); ok {
+		rendered.flushPresentationForShutdown()
+	}
 	if runErr != nil {
 		return fmt.Errorf("coding TUI: %w", runErr)
 	}

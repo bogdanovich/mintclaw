@@ -34,3 +34,16 @@ func noColorRequested(environment []string) bool {
 	}
 	return false
 }
+
+func currentCellColorLevel() cellColorLevel {
+	switch lipgloss.ColorProfile() {
+	case termenv.Ascii:
+		return cellColorNone
+	case termenv.ANSI:
+		return cellColorANSI16
+	case termenv.ANSI256:
+		return cellColorANSI256
+	default:
+		return cellColorTrueColor
+	}
+}

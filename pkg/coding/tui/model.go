@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -93,11 +92,16 @@ type Model struct {
 	ctx                 context.Context
 	snapshot            frontend.ThreadSnapshot
 	cells               semanticCellStore
+	hydratedCells       semanticCellStore
+	staticCells         map[string]*staticSemanticCell
+	document            semanticViewportDocument
 	updates             <-chan frontend.ThreadSnapshot
-	viewport            viewport.Model
+	viewport            semanticViewport
 	composer            textarea.Model
 	transcript          transcriptWindow
-	layout              transcriptLayout
+	layout              cellLayout
+	theme               cellTheme
+	colorLevel          cellColorLevel
 	width               int
 	height              int
 	interruptPending    bool
@@ -162,21 +166,26 @@ func NewModel(
 	)
 	composer.SetHeight(composerHeight)
 	composer.Focus()
-	return &Model{
+	model := &Model{
 		controller:         controller,
 		ctx:                ctx,
 		snapshot:           snapshot,
 		cells:              cells,
-		viewport:           viewport.New(80, 18),
+		staticCells:        make(map[string]*staticSemanticCell),
+		viewport:           newSemanticViewport(80, 18),
 		composer:           composer,
 		width:              80,
 		height:             24,
+		theme:              cellThemeDark,
+		colorLevel:         currentCellColorLevel(),
 		focused:            true,
 		historyIndex:       -1,
 		commandPanel:       initialCommandPanel(snapshot),
 		readClipboardImage: readSystemClipboardImage,
 		writePasteFile:     writePrivatePasteFile,
-	}, nil
+	}
+	model.refreshViewport()
+	return model, nil
 }
 
 func initialCommandPanel(snapshot frontend.ThreadSnapshot) commandPanel {
@@ -251,6 +260,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.Is(message.Err, frontend.ErrTranscriptPagingUnsupported) ||
 				errors.Is(message.Err, frontend.ErrTranscriptHistoryChanged) {
 				m.transcript = transcriptWindow{disabled: true}
+				m.hydratedCells = semanticCellStore{}
 				m.refreshViewport()
 				return m, nil
 			}
@@ -258,6 +268,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.transcript.apply(message.Page, message.Mode)
+		hydrated, err := newHydratedSemanticCellStore(m.transcript.historical)
+		if err != nil {
+			m.err = fmt.Errorf("hydrate semantic transcript cells: %w", err)
+			return m, nil
+		}
+		m.hydratedCells = hydrated
 		m.refreshViewport()
 		return m, nil
 	case WorkspaceRefreshMsg:
@@ -446,6 +462,10 @@ func (m *Model) Snapshot() frontend.ThreadSnapshot {
 	return m.snapshot.Clone()
 }
 
+func (m *Model) flushPresentationForShutdown() int {
+	return m.cells.flushActiveForShutdown()
+}
+
 func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
 	if snapshot.ThreadID != m.snapshot.ThreadID {
 		return errors.New("coding frontend snapshot changed thread ID")
@@ -501,6 +521,7 @@ func sameLastTurn(left, right *frontend.LastTurnOutcome) bool {
 }
 
 func (m *Model) resize(width, height int) {
+	position := m.captureViewportPosition()
 	m.width = max(1, width)
 	m.height = max(1, height)
 	composerRows := min(composerHeight, max(1, m.height/3))
@@ -508,7 +529,7 @@ func (m *Model) resize(width, height int) {
 	m.viewport.Height = max(1, m.height-composerRows-2)
 	m.composer.SetWidth(m.width)
 	m.composer.SetHeight(composerRows)
-	m.refreshViewport()
+	m.refreshViewportAt(position)
 }
 
 func clipLine(value string, width int) string {
@@ -520,29 +541,35 @@ func clipLine(value string, width int) string {
 }
 
 func (m *Model) refreshViewport() {
+	m.refreshViewportAt(m.captureViewportPosition())
+}
+
+type viewportPosition struct {
+	followBottom bool
+	anchor       transcriptAnchor
+}
+
+func (m *Model) captureViewportPosition() viewportPosition {
+	return viewportPosition{
+		followBottom: m.viewport.AtBottom(),
+		anchor:       m.layout.anchorAt(m.viewport.YOffset),
+	}
+}
+
+func (m *Model) refreshViewportAt(position viewportPosition) {
 	state := m.snapshot
 	m.normalizeToolSelection(state.Tools)
-	wasAtBottom := m.viewport.AtBottom()
-	anchor := m.layout.anchorAt(m.viewport.YOffset)
-	content, layout := renderTranscript(
-		buildTranscriptView(
-			m.transcript.entries(state.Entries),
-			state.Tools,
-			state.ChangedFiles,
-			state.Workspace,
-			m.selectedToolID,
-			m.expandedToolID,
-		),
-		m.viewport.Width,
-		!m.transcript.disabled && (m.transcript.hasOlder || state.HasOlderEntries),
-		m.transcript.hasNewer,
-		m.transcript.loading,
+	m.reconcileStaticCells(state)
+	m.document = reconcileSemanticViewportDocument(
+		m.document,
+		m.visibleSemanticCellSpecs(state),
+		cellRenderContext{Width: m.viewport.Width, Theme: m.theme, ColorLevel: m.colorLevel},
 	)
-	m.viewport.SetContent(strings.TrimSpace(content))
-	m.layout = layout
-	if wasAtBottom {
+	m.viewport.setDocument(m.document)
+	m.layout = m.document.layout
+	if position.followBottom {
 		m.viewport.GotoBottom()
-	} else if line, ok := layout.lineFor(anchor); ok {
+	} else if line, ok := m.layout.lineFor(position.anchor); ok {
 		m.viewport.SetYOffset(line)
 	}
 }
@@ -742,7 +769,7 @@ func (m *Model) toggleSelectedTool() {
 }
 
 func (m *Model) focusSelectedTool() {
-	if line, ok := m.layout.lineFor(transcriptAnchor{id: m.selectedToolID, valid: true}); ok {
+	if line, ok := m.layout.lineFor(transcriptAnchor{id: m.selectedToolCellID(), valid: true}); ok {
 		m.viewport.SetYOffset(line)
 	}
 }
