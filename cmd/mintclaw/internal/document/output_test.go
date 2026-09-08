@@ -155,6 +155,89 @@ func TestArtifactOverwriteRejectsWrongDestinationTypes(t *testing.T) {
 	}
 }
 
+func TestDirectoryPublicationDoesNotReplaceConcurrentDestination(t *testing.T) {
+	root := t.TempDir()
+	ref := "document-artifact://operation/page-0001.png"
+	source := filepath.Join(root, "source.png")
+	if err := os.WriteFile(source, []byte("page"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "rendered")
+	staged, err := stageArtifactDirectory(
+		testArtifactOpener{ref: ref, path: source},
+		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
+		destination,
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hookErr error
+	err = staged.commitWithHook(func() {
+		hookErr = os.Mkdir(destination, 0o700)
+	})
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if err == nil {
+		t.Fatal("publication replaced a concurrently created directory")
+	}
+	staged.abort()
+	if info, statErr := os.Stat(destination); statErr != nil || !info.IsDir() {
+		t.Fatalf("concurrent destination was not preserved: %#v, %v", info, statErr)
+	}
+}
+
+func TestDirectoryOverwriteRollsBackConcurrentIdentityChange(t *testing.T) {
+	root := t.TempDir()
+	ref := "document-artifact://operation/page-0001.png"
+	source := filepath.Join(root, "source.png")
+	if err := os.WriteFile(source, []byte("page"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "rendered")
+	if err := os.Mkdir(destination, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	concurrent := filepath.Join(root, "concurrent-rendered")
+	if err := os.Mkdir(concurrent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	concurrentCanary := filepath.Join(concurrent, "concurrent-canary")
+	if err := os.WriteFile(concurrentCanary, []byte("preserved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := stageArtifactDirectory(
+		testArtifactOpener{ref: ref, path: source},
+		[]documentpkg.Artifact{{Ref: ref, Pages: []int{1}}},
+		destination,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hookErr error
+	err = staged.commitWithHook(func() {
+		if hookErr = os.RemoveAll(destination); hookErr != nil {
+			return
+		}
+		hookErr = os.Rename(concurrent, destination)
+	})
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if err == nil {
+		t.Fatal("overwrite accepted a concurrently changed destination identity")
+	}
+	if data, readErr := os.ReadFile(
+		filepath.Join(destination, "concurrent-canary"),
+	); readErr != nil ||
+		string(data) != "preserved" {
+		t.Fatalf("concurrent destination changed: %q, %v", data, readErr)
+	}
+	staged.abort()
+}
+
 type testArtifactOpener struct {
 	ref  string
 	path string

@@ -81,54 +81,109 @@ func (output *stagedArtifactOutput) abort() {
 }
 
 func (output *stagedArtifactOutput) commit() error {
+	return output.commitWithHook(nil)
+}
+
+func (output *stagedArtifactOutput) commitWithHook(afterValidation func()) error {
 	if output == nil || output.path == "" {
 		return errors.New("document output was not staged")
 	}
 	if !output.overwrite {
-		if output.directory {
-			return os.Rename(output.path, output.destination)
+		if afterValidation != nil {
+			afterValidation()
 		}
-		if err := os.Link(output.path, output.destination); err != nil {
-			if errors.Is(err, os.ErrExist) {
+		if err := renamePathNoReplace(output.path, output.destination); err != nil {
+			if _, statErr := os.Lstat(output.destination); statErr == nil {
 				return errors.New("document output already exists; use --overwrite to replace it")
 			}
 			return err
 		}
-		_ = os.Remove(output.path)
+		output.path = ""
 		return nil
 	}
-	return replaceStagedPath(output.path, output.destination, output.directory)
+	return output.replaceWithHook(afterValidation)
 }
 
-func replaceStagedPath(stage, destination string, directory bool) error {
-	info, err := os.Lstat(destination)
+func (output *stagedArtifactOutput) replaceWithHook(afterValidation func()) error {
+	info, err := os.Lstat(output.destination)
 	if errors.Is(err, os.ErrNotExist) {
-		return os.Rename(stage, destination)
+		if afterValidation != nil {
+			afterValidation()
+		}
+		if err = renamePathNoReplace(output.path, output.destination); err == nil {
+			output.path = ""
+		}
+		return err
 	} else if err != nil {
 		return err
 	}
-	if (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) {
+	if !validOutputType(info, output.directory) {
 		return errors.New("document output destination has the wrong type")
 	}
-
-	parent := filepath.Dir(destination)
-	base := filepath.Base(destination)
-	backup, err := os.MkdirTemp(parent, "."+base+".mintclaw-backup-*")
+	identity, err := openOutputIdentity(output.destination)
 	if err != nil {
 		return err
 	}
-	if err = os.Remove(backup); err != nil {
+	defer func() { _ = identity.Close() }()
+	opened, statErr := identity.Stat()
+	current, currentErr := os.Lstat(output.destination)
+	if statErr != nil || currentErr != nil || !validOutputType(opened, output.directory) ||
+		!validOutputType(current, output.directory) || !os.SameFile(info, opened) || !os.SameFile(opened, current) {
+		return errors.New("document output destination changed during publication")
+	}
+	info = opened
+	backupRoot, err := os.MkdirTemp(
+		filepath.Dir(output.destination),
+		"."+filepath.Base(output.destination)+".mintclaw-backup-*",
+	)
+	if err != nil {
 		return err
 	}
-	if err = os.Rename(destination, backup); err != nil {
+	preserveBackup := false
+	defer func() {
+		if !preserveBackup {
+			_ = os.RemoveAll(backupRoot)
+		}
+	}()
+	if afterValidation != nil {
+		afterValidation()
+	}
+	if err = exchangePaths(output.path, output.destination); err != nil {
 		return err
 	}
-	if err = os.Rename(stage, destination); err != nil {
-		_ = os.Rename(backup, destination)
-		return err
+	moved, movedErr := os.Lstat(output.path)
+	if movedErr != nil || !validOutputType(moved, output.directory) || !os.SameFile(info, moved) {
+		if rollbackErr := exchangePaths(output.path, output.destination); rollbackErr != nil {
+			preserveBackup = true
+			output.path = ""
+			return fmt.Errorf("document output destination changed and rollback failed: %w", rollbackErr)
+		}
+		return errors.New("document output destination changed during publication")
 	}
-	_ = os.RemoveAll(backup)
+
+	backup := filepath.Join(backupRoot, "validated-destination")
+	if err = renamePathNoReplace(output.path, backup); err != nil {
+		output.path = ""
+		return nil
+	}
+	output.path = ""
+	backupInfo, statErr := os.Lstat(backup)
+	if statErr != nil || !validOutputType(backupInfo, output.directory) || !os.SameFile(info, backupInfo) {
+		preserveBackup = true
+		return nil
+	}
+	if output.directory {
+		if err = os.RemoveAll(backup); err != nil {
+			preserveBackup = true
+		}
+	} else if err = os.Remove(backup); err != nil {
+		preserveBackup = true
+	}
 	return nil
+}
+
+func validOutputType(info os.FileInfo, directory bool) bool {
+	return info != nil && ((directory && info.IsDir()) || (!directory && info.Mode().IsRegular()))
 }
 
 func stageArtifactFile(

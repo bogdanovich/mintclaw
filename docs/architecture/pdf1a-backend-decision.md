@@ -9,8 +9,8 @@ and page-render backend on `linux/amd64`:
 - `/usr/bin/pdfinfo` for crop-box, rotation, and pixel-budget preflight; and
 - `/usr/bin/pdftoppm` for one PNG per selected page.
 
-The backend is available only when all three commands report upstream version `24.02.0` and match
-the admitted executable SHA-256 identities:
+The backend is available only when all three executables match the admitted SHA-256 identities for
+the qualified upstream version `24.02.0`:
 
 | Executable | SHA-256 |
 | --- | --- |
@@ -59,7 +59,10 @@ runtime `npx`, and model-authored shell pipelines remain outside the production 
 
 ## Isolation and artifact boundary
 
-The gateway never invokes Poppler directly. PDF0A first copies and hashes the source into one
+The gateway never invokes Poppler directly, including during capability discovery. Runtime
+admission reads each executable without following a symlink and checks its exact digest without
+executing it. Inside the one-shot worker, each Poppler child is launched through the same verified,
+open executable inode at `/proc/self/fd/3`, closing the check-to-execute race. PDF0A first copies and hashes the source into one
 read-only operation snapshot. The existing private `mintclaw document _worker` child receives that
 snapshot through inherited descriptor 3, verifies its size and digest, and launches one absolute
 Poppler executable with a scrubbed environment, empty `PATH`, private working directory, 30-second

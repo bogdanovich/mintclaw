@@ -3,6 +3,7 @@
 package document
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -210,5 +211,41 @@ func TestPopplerPageDimensionsRejectsNonRepresentablePixels(t *testing.T) {
 	if failure == nil || failure.Code != FailureRenderLimit ||
 		failure.Message != "document page dimensions exceed the render limit" {
 		t.Fatalf("fixture dimension preflight failure = %#v", failure)
+	}
+}
+
+func TestVerifiedPopplerCommandBindsTheAdmittedExecutableIdentity(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "candidate")
+	if err := os.WriteFile(candidate, []byte("#!/bin/sh\nprintf original"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if command, executable, err := newVerifiedPopplerCommand(
+		candidate,
+		strings.Repeat("0", 64),
+	); err == nil || command != nil ||
+		executable != nil {
+		t.Fatalf("unadmitted executable command = %#v, file = %#v, err = %v", command, executable, err)
+	}
+	digest := executableSHA256(candidate)
+	command, executable, err := newVerifiedPopplerCommand(candidate, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = executable.Close() }()
+	if err = os.Rename(candidate, candidate+".admitted"); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(candidate, []byte("#!/bin/sh\nprintf replacement"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	command.Env = documentBackendEnvironment()
+	command.Stdout = &output
+	if err = command.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "original" {
+		t.Fatalf("verified command executed %q", output.String())
 	}
 }
