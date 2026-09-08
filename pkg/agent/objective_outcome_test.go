@@ -118,6 +118,39 @@ func TestObjectiveOutcomePreservesSuccessfulTerminalResult(t *testing.T) {
 	}
 }
 
+func TestObjectiveOutcomeProjectsOnlyAuthoritativeOutputForResultOnlySuccess(t *testing.T) {
+	const exactJSON = `{"ok":true,"safe_error":null}`
+	content := "Inspection finished.\n" + objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"text","text":` + strconv.Quote(exactJSON) + `}}],` +
+		`"missing_items":[],"result":"Inspection finished."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "return exact JSON", Kind: "result",
+	}})
+
+	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || clean != exactJSON {
+		t.Fatalf("result-only terminal projection = %q, outcome = %#v", clean, outcome)
+	}
+}
+
+func TestTerminalObjectiveResultRetainsSummaryForMixedActionAndResult(t *testing.T) {
+	outcome := &taskresult.Outcome{
+		Status: taskresult.OutcomeSucceeded,
+		CompletedItems: []taskresult.Item{
+			{Item: "publish listing", Kind: "external_action"},
+			{
+				Item: "return listing URL", Kind: "result",
+				Output: &taskresult.ObjectiveOutput{Kind: "text", Text: "https://example.com/listing/42"},
+			},
+		},
+	}
+	got := terminalObjectiveResult("Listing published.", outcome)
+	if got != "Listing published.\n\nhttps://example.com/listing/42" {
+		t.Fatalf("mixed terminal projection = %q", got)
+	}
+}
+
 func TestObjectiveOutcomeCarriesAcceptedRecordsIntoStandaloneResult(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +

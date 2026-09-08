@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -4611,6 +4612,82 @@ func TestDurableSyncDelegateUserOnlyPublishesExactlyOnce(t *testing.T) {
 	select {
 	case duplicate := <-msgBus.OutboundChan():
 		t.Fatalf("delegate user-only result published twice: %+v", duplicate)
+	default:
+	}
+}
+
+func TestDurableSyncDelegateUserOnlyPublishesAuthoritativeResultOutput(t *testing.T) {
+	const exactJSON = `{"ok":true,"safe_error":null}`
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{
+			ToolCalls: []providers.ToolCall{{
+				ID:   "call-delegate-user-only-objective",
+				Name: "delegate",
+				Arguments: map[string]any{
+					"agent_id":      "beta",
+					"task":          "return exact JSON",
+					"delivery_mode": string(toolshared.AsyncDeliveryUserOnly),
+					"objective_items": []any{map[string]any{
+						"item": "return exact JSON",
+						"kind": "result",
+					}},
+				},
+			}},
+		},
+		{
+			Content: "Inspection finished.\n" + objectiveOutcomeStart +
+				`{"status":"succeeded","completed_items":[{"objective_id":"objective_1",` +
+				`"receipt_ids":[],"output":{"kind":"text","text":` + strconv.Quote(exactJSON) +
+				`}}],"missing_items":[],"result":"Inspection finished."}` + objectiveOutcomeEnd,
+			FinishReason: "stop",
+		},
+	}}
+	al, cleanup := newMultiAgentLoop(t, provider)
+	defer cleanup()
+	installTestOutboundCoordinator(t, al, t.TempDir())
+	msgBus, ok := al.bus.(*bus.MessageBus)
+	if !ok {
+		t.Fatal("test agent loop does not use MessageBus")
+	}
+	alpha, ok := al.registry.GetAgent("alpha")
+	if !ok {
+		t.Fatal("alpha agent not found")
+	}
+	alpha.Subagents = &config.SubagentsConfig{AllowAgents: []string{"beta"}}
+	ctx := withOutboundTransaction(t.Context(), "spool-delegate-user-only-objective")
+
+	response, err := al.runAgentLoop(ctx, alpha, turnSpec{
+		Dispatch: DispatchRequest{
+			SessionKey:  "delegate-parent-objective-session",
+			UserMessage: "delegate this",
+			InboundContext: &bus.InboundContext{
+				Channel: "telegram",
+				ChatID:  "chat-1",
+			},
+		},
+		DefaultResponse:     defaultResponse,
+		ExpectFinalDelivery: true,
+		SendResponse:        false,
+		NoHistory:           true,
+	})
+	if err != nil {
+		t.Fatalf("runAgentLoop() error = %v", err)
+	}
+	if strings.TrimSpace(response) != "" {
+		t.Fatalf("handled parent response = %q, want empty", response)
+	}
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if outbound.Content != exactJSON {
+			t.Fatalf("delegate outbound = %q, want exact objective output %q", outbound.Content, exactJSON)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("delegate user-only objective result was not published")
+	}
+	select {
+	case duplicate := <-msgBus.OutboundChan():
+		t.Fatalf("delegate user-only objective result published twice: %+v", duplicate)
 	default:
 	}
 }
