@@ -32,8 +32,13 @@ func (r *mcpRuntime) initialize(load func() (*mcp.Manager, error)) error {
 	if r.initialized {
 		return r.initErr
 	}
+	manager, err := load()
+	if manager == nil && err == nil {
+		return nil
+	}
 	r.initialized = true
-	r.manager, r.initErr = load()
+	r.manager = manager
+	r.initErr = err
 	return r.initErr
 }
 
@@ -84,47 +89,50 @@ func (r *mcpRuntime) getManager() *mcp.Manager {
 // ensureMCPInitialized loads MCP servers/tools once so both Run() and direct
 // agent mode share the same initialization path.
 func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
-	al.mu.RLock()
-	isolatedToolBootstrap := al.isolatedToolBootstrap
-	cfg := al.cfg
-	registry := al.registry
-	runtimeEvents := al.runtimeEvents
-	al.mu.RUnlock()
-
-	if isolatedToolBootstrap || cfg == nil || registry == nil {
-		return nil
-	}
-	if !cfg.Tools.IsToolEnabled("mcp") {
-		return nil
-	}
-
-	if len(cfg.Tools.MCP.Servers) == 0 {
-		logger.WarnCF("agent", "MCP is enabled but no servers are configured, skipping MCP initialization", nil)
-		return nil
-	}
-
-	mcpCfg := filterMCPConfigServers(cfg.Tools.MCP, registry.allowedMCPServers())
-	if len(mcpCfg.Servers) == 0 {
-		logger.InfoCF(
-			"agent",
-			"No MCP servers selected after applying per-agent mcpServers allowlists",
-			nil,
-		)
-		return nil
-	}
-
-	findValidServer := false
-	for _, serverCfg := range mcpCfg.Servers {
-		if serverCfg.Enabled {
-			findValidServer = true
-		}
-	}
-	if !findValidServer {
-		logger.WarnCF("agent", "MCP is enabled but no valid servers are configured, skipping MCP initialization", nil)
+	if al == nil {
 		return nil
 	}
 
 	return al.mcp.initialize(func() (*mcp.Manager, error) {
+		al.mu.RLock()
+		isolatedToolBootstrap := al.isolatedToolBootstrap
+		cfg := al.cfg
+		registry := al.registry
+		runtimeEvents := al.runtimeEvents
+		al.mu.RUnlock()
+
+		if isolatedToolBootstrap || cfg == nil || registry == nil || !cfg.Tools.IsToolEnabled("mcp") {
+			return nil, nil
+		}
+		if len(cfg.Tools.MCP.Servers) == 0 {
+			logger.WarnCF("agent", "MCP is enabled but no servers are configured, skipping MCP initialization", nil)
+			return nil, nil
+		}
+
+		mcpCfg := filterMCPConfigServers(cfg.Tools.MCP, registry.allowedMCPServers())
+		if len(mcpCfg.Servers) == 0 {
+			logger.InfoCF(
+				"agent",
+				"No MCP servers selected after applying per-agent mcpServers allowlists",
+				nil,
+			)
+			return nil, nil
+		}
+		findValidServer := false
+		for _, serverCfg := range mcpCfg.Servers {
+			if serverCfg.Enabled {
+				findValidServer = true
+			}
+		}
+		if !findValidServer {
+			logger.WarnCF(
+				"agent",
+				"MCP is enabled but no valid servers are configured, skipping MCP initialization",
+				nil,
+			)
+			return nil, nil
+		}
+
 		mcpManager := mcp.NewManager(mcp.WithRuntimeEvents(runtimeEvents))
 
 		defaultAgent := registry.GetDefaultAgent()

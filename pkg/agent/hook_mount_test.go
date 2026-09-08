@@ -55,7 +55,7 @@ func TestHookRuntimeCachesFailureUntilReset(t *testing.T) {
 	}
 }
 
-func TestHookRuntimeResetSerializesUnmountAndReinitialize(t *testing.T) {
+func TestHookRuntimeResetFirstWaiterLoadsCurrentGeneration(t *testing.T) {
 	var runtime hookRuntime
 	if err := runtime.initialize(func() ([]string, error) {
 		return []string{"old-a", "old-b"}, nil
@@ -87,18 +87,21 @@ func TestHookRuntimeResetSerializesUnmountAndReinitialize(t *testing.T) {
 	<-unmountStarted
 
 	loadStarted := make(chan struct{})
+	configuredNames := []string{"old-config"}
+	loadCurrentGeneration := func() ([]string, error) {
+		close(loadStarted)
+		return slices.Clone(configuredNames), nil
+	}
 	initializeDone := make(chan error, 1)
 	go func() {
-		initializeDone <- runtime.initialize(func() ([]string, error) {
-			close(loadStarted)
-			return []string{"new"}, nil
-		})
+		initializeDone <- runtime.initialize(loadCurrentGeneration)
 	}()
 	select {
 	case <-loadStarted:
 		t.Fatal("reinitialization started before configured hooks were unmounted")
 	case <-time.After(50 * time.Millisecond):
 	}
+	configuredNames = []string{"new-config"}
 	close(releaseUnmount)
 	<-resetDone
 	select {
@@ -108,6 +111,12 @@ func TestHookRuntimeResetSerializesUnmountAndReinitialize(t *testing.T) {
 	}
 	if err := <-initializeDone; err != nil {
 		t.Fatalf("reinitialize error = %v", err)
+	}
+	runtime.mu.Lock()
+	mounted := slices.Clone(runtime.mounted)
+	runtime.mu.Unlock()
+	if !slices.Equal(mounted, []string{"new-config"}) {
+		t.Fatalf("mounted hooks = %v, want current generation [new-config]", mounted)
 	}
 	if !slices.Equal(unmounted, []string{"old-a", "old-b"}) {
 		t.Fatalf("unmounted hooks = %v, want [old-a old-b]", unmounted)

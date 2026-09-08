@@ -115,14 +115,11 @@ func (al *AgentLoop) ensureHooksInitialized(ctx context.Context) error {
 	if al.usesCodingProfile() {
 		return nil
 	}
-	al.mu.RLock()
-	cfg := al.cfg
-	al.mu.RUnlock()
-	if cfg == nil {
-		return nil
-	}
 
 	return al.hookRuntime.initialize(func() ([]string, error) {
+		al.mu.RLock()
+		cfg := al.cfg
+		al.mu.RUnlock()
 		return al.loadConfiguredHooks(ctx, cfg)
 	})
 }

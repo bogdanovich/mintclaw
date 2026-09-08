@@ -66,7 +66,7 @@ func TestMCPRuntimeResetClearsState(t *testing.T) {
 	}
 }
 
-func TestMCPRuntimeResetSerializesCloseAndReinitialize(t *testing.T) {
+func TestMCPRuntimeResetFirstWaiterLoadsCurrentGeneration(t *testing.T) {
 	var rt mcpRuntime
 	first := mcp.NewManager()
 	second := mcp.NewManager()
@@ -97,18 +97,21 @@ func TestMCPRuntimeResetSerializesCloseAndReinitialize(t *testing.T) {
 	<-closeStarted
 
 	loadStarted := make(chan struct{})
+	currentManager := first
+	loadCurrentGeneration := func() (*mcp.Manager, error) {
+		close(loadStarted)
+		return currentManager, nil
+	}
 	initializeDone := make(chan error, 1)
 	go func() {
-		initializeDone <- rt.initialize(func() (*mcp.Manager, error) {
-			close(loadStarted)
-			return second, nil
-		})
+		initializeDone <- rt.initialize(loadCurrentGeneration)
 	}()
 	select {
 	case <-loadStarted:
 		t.Fatal("reinitialization started before the previous manager closed")
 	case <-time.After(50 * time.Millisecond):
 	}
+	currentManager = second
 	close(releaseClose)
 	if err := <-resetDone; err != nil {
 		t.Fatalf("reset() error = %v", err)
