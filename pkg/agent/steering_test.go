@@ -46,7 +46,7 @@ func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelation(t *testing.T)
 			SenderID:         "mintclaw-user",
 			MessageID:        "live-request-1",
 			ReplyToMessageID: "origin-message-1",
-			Raw:              map[string]string{"session_id": "live-session"},
+			ClientSessionID:  "live-session",
 		},
 		SessionKey: "session-1",
 	}
@@ -80,7 +80,7 @@ func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelation(t *testing.T)
 			t.Fatalf("inbound identity = (%q, %q), want (mintclaw-user, direct)",
 				outbound.Context.SenderID, outbound.Context.ChatType)
 		}
-		if outbound.Context.Raw["session_id"] != "live-session" ||
+		if outbound.Context.ClientSessionID != "live-session" ||
 			outbound.Metadata.MessageKind != bus.OutboundMessageKindFinalReply {
 			t.Fatalf("outbound context = %#v, metadata = %#v", outbound.Context, outbound.Metadata)
 		}
@@ -114,7 +114,7 @@ func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelationOnError(t *tes
 			SenderID:         "mintclaw-user",
 			MessageID:        "live-error-request-1",
 			ReplyToMessageID: "origin-error-message-1",
-			Raw:              map[string]string{"session_id": "live-error-session"},
+			ClientSessionID:  "live-error-session",
 		},
 		SessionKey: "session-error-1",
 	}
@@ -151,7 +151,7 @@ func TestRunTurnAndDrainSteeringPreservesInitialRequestCorrelationOnError(t *tes
 				outbound.Context.ChatType,
 			)
 		}
-		if outbound.Context.Raw["session_id"] != "live-error-session" ||
+		if outbound.Context.ClientSessionID != "live-error-session" ||
 			outbound.Metadata.MessageKind != bus.OutboundMessageKindFinalReply ||
 			outbound.Metadata.OutboundKind != bus.OutboundKindFinal {
 			t.Fatalf("outbound context = %#v, metadata = %#v", outbound.Context, outbound.Metadata)

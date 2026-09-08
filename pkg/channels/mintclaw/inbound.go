@@ -145,9 +145,8 @@ func (c *MintClawChannel) handleMessageSend(pc *mintclawConn, msg MintClawMessag
 	senderID := "mintclaw-user"
 
 	metadata := map[string]string{
-		"platform":   "mintclaw",
-		"session_id": sessionID,
-		"conn_id":    pc.id,
+		"platform": "mintclaw",
+		"conn_id":  pc.id,
 	}
 
 	logger.DebugCF("mintclaw", "Received message", map[string]any{
@@ -167,12 +166,13 @@ func (c *MintClawChannel) handleMessageSend(pc *mintclawConn, msg MintClawMessag
 	}
 
 	inboundCtx := bus.InboundContext{
-		Channel:   "mintclaw",
-		ChatID:    chatID,
-		ChatType:  "direct",
-		SenderID:  senderID,
-		MessageID: msg.ID,
-		Raw:       metadata,
+		Channel:         "mintclaw",
+		ChatID:          chatID,
+		ChatType:        "direct",
+		SenderID:        senderID,
+		MessageID:       msg.ID,
+		ClientSessionID: sessionID,
+		Raw:             metadata,
 	}
 
 	_ = c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)

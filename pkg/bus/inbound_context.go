@@ -31,6 +31,7 @@ func (ctx InboundContext) isZero() bool {
 		ctx.OriginID == "" &&
 		ctx.OriginType == "" &&
 		ctx.SourceRef == "" &&
+		ctx.ClientSessionID == "" &&
 		!ctx.Mentioned &&
 		ctx.ReplyToMessageID == "" &&
 		ctx.ReplyToSenderID == "" &&
@@ -62,6 +63,7 @@ func normalizeInboundContext(ctx InboundContext) InboundContext {
 	if ctx.SourceRef == "" {
 		ctx.SourceRef = defaultSourceRef(ctx)
 	}
+	ctx.ClientSessionID = strings.TrimSpace(ctx.ClientSessionID)
 	ctx.ReplyToMessageID = strings.TrimSpace(ctx.ReplyToMessageID)
 	ctx.ReplyToSenderID = strings.TrimSpace(ctx.ReplyToSenderID)
 	if !ctx.ReceivedAt.IsZero() {
@@ -76,8 +78,27 @@ func normalizeInboundContext(ctx InboundContext) InboundContext {
 	ctx.ReplyHandles = cloneStringMap(ctx.ReplyHandles)
 	ctx.Raw = cloneStringMap(ctx.Raw)
 	ctx.Interaction = normalizeInboundInteractionProjection(ctx.Interaction)
+	migrateLegacyMintClawClientSessionID(&ctx)
 	migrateLegacyInboundInteractionProjection(&ctx)
 	return ctx
+}
+
+func migrateLegacyMintClawClientSessionID(ctx *InboundContext) {
+	if ctx == nil || len(ctx.Raw) == 0 {
+		return
+	}
+	switch normalizeKind(ctx.Channel) {
+	case "mintclaw", "mintclaw_client":
+	default:
+		return
+	}
+	if ctx.ClientSessionID == "" {
+		ctx.ClientSessionID = strings.TrimSpace(ctx.Raw[legacyInboundClientSessionIDKey])
+	}
+	delete(ctx.Raw, legacyInboundClientSessionIDKey)
+	if len(ctx.Raw) == 0 {
+		ctx.Raw = nil
+	}
 }
 
 func normalizeInboundInteractionProjection(

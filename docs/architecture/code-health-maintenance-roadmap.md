@@ -319,6 +319,9 @@ proportion to persistence, routing, delivery, or concurrency risk.
 - M2 — merged in #1123 (`3ab777be`): replaced the duplicated hook-response
   state machine with a typed result source and one shared journaling, delivery,
   suspension, loopguard, and terminal settlement path.
+- M3 — merged in #1126 (`a0c52dfe`): replaced resettable lazy initialization
+  with mutex-owned MCP and hook lifecycle state, including reset-first tests
+  that prevent stale configuration generations from being published.
 
 ## Separate Compatibility Closeouts
 

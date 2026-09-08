@@ -72,8 +72,11 @@ func TestHandleMessageSend_ForwardsMessageMetadata(t *testing.T) {
 		if inbound.Content != "hello" {
 			t.Fatalf("content = %q, want hello", inbound.Content)
 		}
-		if got := inbound.Context.Raw["session_id"]; got != "sess-1" {
-			t.Fatalf("session_id raw = %q, want sess-1", got)
+		if inbound.Context.ClientSessionID != "sess-1" {
+			t.Fatalf("client session ID = %q, want sess-1", inbound.Context.ClientSessionID)
+		}
+		if _, exists := inbound.Context.Raw["session_id"]; exists {
+			t.Fatalf("stable session provenance leaked into raw metadata: %#v", inbound.Context.Raw)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected inbound mintclaw message")
