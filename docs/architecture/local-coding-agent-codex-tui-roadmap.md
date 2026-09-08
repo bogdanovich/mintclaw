@@ -1,6 +1,7 @@
 # Codex-like coding TUI roadmap
 
-Status: proposed implementation roadmap
+Status: active implementation roadmap. TUI.0-TUI.5 are implemented; TUI.6-TUI.15
+remain planned.
 
 This roadmap defines how to evolve `mintclaw code` from its current functional
 terminal shell into a coding interface with the clarity, density, and live
@@ -418,6 +419,8 @@ Non-goals: changing runtime events or shipping a new look.
 
 ### TUI.1 — Ordered presentation item contract
 
+Status: implemented in PR #1012.
+
 Dependencies: TUI.0
 
 Effort: large
@@ -445,6 +448,8 @@ Non-goals: app-server IPC, revision replay, or replacing canonical JSONL.
 
 ### TUI.2 — Typed plan and tool observations
 
+Status: implemented in PR #1030.
+
 Dependencies: TUI.1
 
 Effort: medium
@@ -468,6 +473,8 @@ Done when:
 - secret/redaction tests cover typed and fallback observations.
 
 ### TUI.3 — Preserve inter-round commentary
+
+Status: implemented in PR #1093.
 
 Dependencies: TUI.1
 
@@ -494,6 +501,8 @@ Done when:
 
 ### TUI.4 — Committed-cell and active-cell store
 
+Status: implemented in PR #1106.
+
 Dependencies: TUI.1
 
 Effort: large
@@ -516,6 +525,8 @@ Done when:
 - race, leak, and long-output benchmarks stay within declared limits.
 
 ### TUI.5 — Live working indicator and motion system
+
+Status: implemented in PR #1109.
 
 Dependencies: TUI.4
 

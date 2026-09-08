@@ -62,3 +62,8 @@ The follow-up audit admitted a narrower program for deterministic inbound
 relations, typed inbound boundaries, and explicit coding controller operation
 state. Its evidence, scope limits, and ordered packets are recorded in the
 [Post-H8 Code Health Roadmap](code-health-followup-roadmap.md).
+
+A later maintenance audit found two remaining correctness and high-churn
+boundaries plus several smaller explicit-dependency cleanups. The scheduled
+packets and their anti-overengineering gates are recorded in the active
+[Code Health Maintenance Roadmap](code-health-maintenance-roadmap.md).
