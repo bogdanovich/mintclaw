@@ -119,7 +119,8 @@ func (request command) replyError(err error) {
 type operationKind uint8
 
 const (
-	operationTurn operationKind = iota
+	operationNone operationKind = iota
+	operationTurn
 	operationCompaction
 	operationWorkspaceRefresh
 	operationRepositoryStatus
@@ -465,15 +466,8 @@ func (c *Controller) coordinate() {
 	defer cancelRoot()
 	defer close(c.done)
 
-	var active bool
-	var hardCancelRequested bool
-	var compacting bool
-	var reviewing bool
-	var activeReviewID string
-	var reviewCancelCause error
-	var reviewCommitted bool
+	var primary primaryOperation
 	var closing bool
-	var operationCancel context.CancelCauseFunc
 	var pendingTurnAdmission *command
 	var pendingTurnReady <-chan struct{}
 	var pendingTurnCanceled <-chan struct{}
@@ -487,7 +481,7 @@ func (c *Controller) coordinate() {
 	var closeErr error
 
 	finishClose := func() bool {
-		if !closing || active || compacting || reviewing || activeEvidence != nil || len(evidenceQueue) != 0 {
+		if !closing || primary.active() || activeEvidence != nil || len(evidenceQueue) != 0 {
 			return false
 		}
 		closeErr = errors.Join(closeErr, c.runtime.Close())
@@ -567,28 +561,18 @@ func (c *Controller) coordinate() {
 			case <-pendingTurnReady:
 				pendingTurnAdmission.reply <- nil
 			default:
-				if operationCancel != nil {
-					operationCancel(context.Cause(pendingTurnAdmission.ctx))
-				}
+				primary.cancel(context.Cause(pendingTurnAdmission.ctx))
 				pendingTurnAdmission.reply <- pendingTurnAdmission.ctx.Err()
 			}
 			pendingTurnAdmission = nil
 			pendingTurnReady = nil
 			pendingTurnCanceled = nil
 		case update := <-c.reviewEvents:
-			if reviewing && update.reviewID == activeReviewID {
+			if primary.matchesReview(update.reviewID) {
 				_ = c.projector.ReviewEvent(update.reviewID, update.event)
 			}
 		case request := <-c.reviewCommits:
-			switch {
-			case !reviewing || request.reviewID != activeReviewID:
-				request.reply <- fmt.Errorf("coding review publication is no longer active")
-			case reviewCancelCause != nil:
-				request.reply <- reviewCancelCause
-			default:
-				reviewCommitted = true
-				request.reply <- nil
-			}
+			request.reply <- primary.commitReview(request.reviewID)
 		case result := <-c.evidenceResults:
 			if activeEvidence == nil || activeEvidence.id != result.id {
 				continue
@@ -636,26 +620,8 @@ func (c *Controller) coordinate() {
 				pendingTurnReady = nil
 				pendingTurnCanceled = nil
 			}
-			switch result.kind {
-			case operationTurn:
-				active = false
-				hardCancelRequested = false
-			case operationCompaction:
-				compacting = false
-			case operationReview:
-				if result.err == nil && !result.reviewCommitted {
-					result.err = fmt.Errorf("coding review returned before publication commit")
-				}
-				if result.reviewID == activeReviewID && result.reviewCommitted != reviewCommitted {
-					result.err = errors.Join(result.err, fmt.Errorf("coding review publication state mismatch"))
-				}
-				if result.reviewID == activeReviewID && !reviewCommitted && reviewCancelCause != nil {
-					result.err = errors.Join(result.err, reviewCancelCause)
-				}
-				reviewing = false
-				activeReviewID = ""
-				reviewCancelCause = nil
-				reviewCommitted = false
+			result.err = primary.finish(result)
+			if result.kind == operationReview {
 				if result.err != nil {
 					c.projector.ReviewInterrupted(result.reviewID)
 				} else if err := c.projector.ReviewCompleted(result.review); err != nil {
@@ -663,7 +629,6 @@ func (c *Controller) coordinate() {
 					c.projector.ReviewInterrupted(result.reviewID)
 				}
 			}
-			operationCancel = nil
 			c.projectOperationError(result)
 			if result.kind == operationTurn {
 				turnSettlementAvailable = true
@@ -692,131 +657,95 @@ func (c *Controller) coordinate() {
 					request.reply <- err
 					continue
 				}
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
-					request.reply <- ErrCompactionActive
-				case workspaceRefreshPending():
-					request.reply <- ErrWorkspaceRefreshActive
-				default:
-					active = true
-					turnSettlementAvailable = false
-					turnSettlementErr = nil
-					operationCtx, cancel := context.WithCancelCause(rootCtx)
-					operationCancel = cancel
-					ready := make(chan struct{})
-					var readyOnce sync.Once
-					go c.run(operationCtx, operationTurn, request.input, func() {
-						readyOnce.Do(func() { close(ready) })
-					})
-					pendingTurnAdmission = &request
-					pendingTurnReady = ready
-					pendingTurnCanceled = request.ctx.Done()
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
 				}
+				if workspaceRefreshPending() {
+					request.reply <- ErrWorkspaceRefreshActive
+					continue
+				}
+				turnSettlementAvailable = false
+				turnSettlementErr = nil
+				operationCtx := primary.start(rootCtx, operationTurn)
+				ready := make(chan struct{})
+				var readyOnce sync.Once
+				go c.run(operationCtx, operationTurn, request.input, func() {
+					readyOnce.Do(func() { close(ready) })
+				})
+				pendingTurnAdmission = &request
+				pendingTurnReady = ready
+				pendingTurnCanceled = request.ctx.Done()
 			case commandInterrupt:
-				if reviewing {
-					if reviewCommitted {
-						request.reply <- nil
-						continue
-					}
-					reviewCancelCause = context.Canceled
-					if operationCancel != nil {
-						operationCancel(context.Canceled)
-					}
+				if primary.is(operationReview) {
+					primary.cancel(context.Canceled)
 					request.reply <- nil
 					continue
 				}
-				if !active {
+				if !primary.is(operationTurn) {
 					request.reply <- ErrNoActiveTurn
 					continue
 				}
 				request.reply <- c.runtime.Interrupt(request.ctx)
 			case commandHardCancel:
-				if reviewing {
-					if reviewCommitted {
-						request.reply <- nil
-						continue
-					}
-					reviewCancelCause = ErrHardCanceled
-					if operationCancel != nil {
-						operationCancel(ErrHardCanceled)
-					}
+				if primary.is(operationReview) {
+					primary.cancel(ErrHardCanceled)
 					request.reply <- nil
 					continue
 				}
-				if !active {
+				if !primary.is(operationTurn) {
 					request.reply <- ErrNoActiveTurn
 					continue
 				}
 				err := c.runtime.HardCancel(request.ctx)
-				if operationCancel != nil {
-					operationCancel(ErrHardCanceled)
-				}
+				primary.cancel(ErrHardCanceled)
 				if err == nil {
-					hardCancelRequested = true
+					primary.recordTurnHardCancel()
 				}
 				request.reply <- err
 			case commandCompact:
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
-					request.reply <- ErrCompactionActive
-				case workspaceRefreshPending():
-					request.reply <- ErrWorkspaceRefreshActive
-				default:
-					compacting = true
-					operationCtx, cancel := context.WithCancelCause(rootCtx)
-					operationCancel = cancel
-					go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil)
-					request.reply <- nil
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
 				}
+				if workspaceRefreshPending() {
+					request.reply <- ErrWorkspaceRefreshActive
+					continue
+				}
+				operationCtx := primary.start(rootCtx, operationCompaction)
+				go c.run(operationCtx, operationCompaction, frontend.TurnInput{}, nil)
+				request.reply <- nil
 			case commandRename, commandArchive, commandUnarchive:
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
+				}
+				if backgroundCompactionActive() {
 					request.reply <- ErrCompactionActive
-				default:
-					if backgroundCompactionActive() {
-						request.reply <- ErrCompactionActive
-						continue
-					}
-					lifecycle, ok := c.runtime.(frontend.ThreadLifecycle)
-					if !ok {
-						request.reply <- ErrUnsupported
-						continue
-					}
-					if request.kind == commandRename {
-						request.reply <- lifecycle.Rename(request.ctx, request.content)
-					} else {
-						request.reply <- lifecycle.SetArchived(request.ctx, request.kind == commandArchive)
-					}
+					continue
+				}
+				lifecycle, ok := c.runtime.(frontend.ThreadLifecycle)
+				if !ok {
+					request.reply <- ErrUnsupported
+					continue
+				}
+				if request.kind == commandRename {
+					request.reply <- lifecycle.Rename(request.ctx, request.content)
+				} else {
+					request.reply <- lifecycle.SetArchived(request.ctx, request.kind == commandArchive)
 				}
 			case commandNewThread:
 				request.reply <- ErrUnsupported
 			case commandRefreshWorkspace:
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
-					request.reply <- ErrCompactionActive
-				default:
-					if _, ok := c.runtime.(workspaceEvidenceRefresher); !ok {
-						request.reply <- frontend.ErrWorkspaceRefreshUnsupported
-						continue
-					}
-					admitEvidence(operationWorkspaceRefresh, request)
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
 				}
+				if _, ok := c.runtime.(workspaceEvidenceRefresher); !ok {
+					request.reply <- frontend.ErrWorkspaceRefreshUnsupported
+					continue
+				}
+				admitEvidence(operationWorkspaceRefresh, request)
 			case commandRepositoryStatus:
 				if _, ok := c.runtime.(frontend.RepositoryEvidenceReader); !ok {
 					request.replyError(frontend.ErrWorkspaceRefreshUnsupported)
@@ -844,34 +773,29 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrUnsupported
 					continue
 				}
-				switch {
-				case active:
-					request.reply <- ErrTurnActive
-				case reviewing:
-					request.reply <- ErrReviewActive
-				case compacting:
-					request.reply <- ErrCompactionActive
-				case backgroundCompactionActive():
-					request.reply <- ErrCompactionActive
-				case workspaceRefreshPending():
-					request.reply <- ErrWorkspaceRefreshActive
-				default:
-					reviewID := codingreview.NewID()
-					if err := c.projector.ReviewEntered(reviewID, request.reviewTarget); err != nil {
-						request.reply <- err
-						continue
-					}
-					reviewing = true
-					activeReviewID = reviewID
-					reviewCommitted = false
-					operationCtx, cancel := context.WithCancelCause(rootCtx)
-					operationCancel = cancel
-					go c.runReview(operationCtx, runner, reviewID, request.reviewTarget)
-					request.reply <- nil
+				if err := primary.admissionError(); err != nil {
+					request.reply <- err
+					continue
 				}
+				if backgroundCompactionActive() {
+					request.reply <- ErrCompactionActive
+					continue
+				}
+				if workspaceRefreshPending() {
+					request.reply <- ErrWorkspaceRefreshActive
+					continue
+				}
+				reviewID := codingreview.NewID()
+				if err := c.projector.ReviewEntered(reviewID, request.reviewTarget); err != nil {
+					request.reply <- err
+					continue
+				}
+				operationCtx := primary.startReview(rootCtx, reviewID)
+				go c.runReview(operationCtx, runner, reviewID, request.reviewTarget)
+				request.reply <- nil
 			case commandAwaitTurn:
 				switch {
-				case active:
+				case primary.is(operationTurn):
 					turnWaiters = append(turnWaiters, request)
 				case turnSettlementAvailable:
 					request.reply <- turnSettlementErr
@@ -884,20 +808,15 @@ func (c *Controller) coordinate() {
 					continue
 				}
 				closing = true
-				if active && !hardCancelRequested {
+				if primary.is(operationTurn) && !primary.turnHardCancelRequested() {
 					err := c.runtime.HardCancel(context.WithoutCancel(request.ctx))
 					closeErr = errors.Join(closeErr, err)
-					hardCancelRequested = err == nil
-					if operationCancel != nil {
-						operationCancel(ErrHardCanceled)
+					if err == nil {
+						primary.recordTurnHardCancel()
 					}
-				} else if (compacting || reviewing) && operationCancel != nil {
-					if reviewing && !reviewCommitted {
-						reviewCancelCause = context.Canceled
-						operationCancel(context.Canceled)
-					} else if compacting {
-						operationCancel(context.Canceled)
-					}
+					primary.cancel(ErrHardCanceled)
+				} else if primary.is(operationCompaction) || primary.is(operationReview) {
+					primary.cancel(context.Canceled)
 				}
 				if activeEvidence != nil {
 					activeEvidence.cancel(context.Canceled)
