@@ -122,6 +122,25 @@ func TestDelegateTool_Parameters(t *testing.T) {
 	if additional, ok := acceptance["additionalProperties"].(bool); !ok || additional {
 		t.Fatalf("acceptance additionalProperties = %#v, want false", acceptance["additionalProperties"])
 	}
+	description, _ := objectiveItems["description"].(string)
+	acceptanceDescription, _ := acceptance["description"].(string)
+	outputKind := acceptance["properties"].(map[string]any)["output_kind"].(map[string]any)
+	outputKindDescription, _ := outputKind["description"].(string)
+	for _, required := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{"objective kind", description, "browser session are result objectives, never external_action"},
+		{"records shape", acceptanceDescription, "every field value is a non-empty string"},
+		{"typed result", acceptanceDescription, "booleans, numbers, or null values"},
+		{"exact JSON object", outputKindDescription, "every exact JSON value"},
+		{"exact JSON array", outputKindDescription, "including objects and arrays"},
+	} {
+		if !strings.Contains(required.text, required.want) {
+			t.Fatalf("%s description omitted %q: %q", required.name, required.want, required.text)
+		}
+	}
 	_, hasAgentID := props["agent_id"]
 	if !hasAgentID {
 		t.Error("agent_id parameter should exist")
