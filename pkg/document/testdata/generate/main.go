@@ -42,6 +42,8 @@ func main() {
 	fixtures := []fixture{
 		textFixture(),
 		imageOnlyFixture(),
+		nameOperandsFixture(),
+		inlineImageFixture(),
 		mixedFixture(),
 		acroFormFixture(),
 		xfaFixture("xfa-dynamic.pdf", false, "required"),
@@ -52,11 +54,13 @@ func main() {
 		signedFixture("field-restricted.pdf", "Sig", "FieldMDP"),
 		signedFixture("timestamped.pdf", "DocTimeStamp", ""),
 		rightsEnabledFixture(),
+		orphanStructureFixture(),
 		truncatedFixture(),
 		malformedXRefFixture(),
 		oversizedStreamDeclarationFixture(),
 		oversizedObjectCountFixture(),
 		decodedContentLimitFixture(),
+		decodedContentArrayLimitFixture(),
 		adversarialNestingFixture(),
 	}
 	result := manifest{
@@ -114,6 +118,24 @@ func imageOnlyFixture() fixture {
 		page("2 0 R", "5 0 R", "/XObject << /Im1 4 0 R >>", ""),
 		streamDict("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", []byte{0, 0, 0}),
 		stream("q 10 0 0 10 72 720 cm /Im1 Do Q\n"),
+	}}
+}
+
+func nameOperandsFixture() fixture {
+	return fixture{name: "name-operands-no-text.pdf", objects: []pdfObject{
+		catalog("2 0 R", ""),
+		pages("3 0 R"),
+		page("2 0 R", "4 0 R", "", ""),
+		stream("/BT /Tj BDC EMC\n"),
+	}}
+}
+
+func inlineImageFixture() fixture {
+	return fixture{name: "inline-image.pdf", objects: []pdfObject{
+		catalog("2 0 R", ""),
+		pages("3 0 R"),
+		page("2 0 R", "4 0 R", "", ""),
+		streamDict("", []byte("q BI /W 1 /H 1 /BPC 8 /CS /RGB ID \x00\x00\x00 EI Q\n")),
 	}}
 }
 
@@ -238,6 +260,18 @@ func rightsEnabledFixture() fixture {
 	}}
 }
 
+func orphanStructureFixture() fixture {
+	return fixture{name: "orphan-structure.pdf", objects: []pdfObject{
+		catalog("2 0 R", ""),
+		pages("3 0 R"),
+		page("2 0 R", "4 0 R", "", ""),
+		stream("0 0 m 10 10 l s\n"),
+		rawObject("<< /Fields [] /XFA 7 0 R >>"),
+		rawObject("<< /Reference [<< /TransformMethod /FieldMDP >>] >>"),
+		stream("<xdp:xdp><dynamicRender>required</dynamicRender></xdp:xdp>"),
+	}}
+}
+
 func truncatedFixture() fixture {
 	data := encodePDF(textFixture().objects)
 	return fixture{name: "truncated.pdf", data: data[:64]}
@@ -276,6 +310,17 @@ func decodedContentLimitFixture() fixture {
 	}}
 }
 
+func decodedContentArrayLimitFixture() fixture {
+	decoded := bytes.Repeat([]byte("A"), 5*1024*1024)
+	return fixture{name: "decoded-content-array-limit.pdf", objects: []pdfObject{
+		catalog("2 0 R", ""),
+		pages("3 0 R"),
+		page("2 0 R", "[4 0 R 5 0 R]", "", ""),
+		flateStream(decoded),
+		flateStream(decoded),
+	}}
+}
+
 func adversarialNestingFixture() fixture {
 	nested := strings.Repeat("<< /N ", 256) + "0" + strings.Repeat(" >>", 256)
 	return fixture{name: "adversarial-nesting.pdf", objects: []pdfObject{
@@ -299,8 +344,10 @@ func manifestEntry(name, digest string) manifestFixture {
 		"restrictions": "absent",
 	}
 	switch name {
-	case "image-only.pdf":
+	case "image-only.pdf", "name-operands-no-text.pdf", "orphan-structure.pdf":
 		expected["text"] = "absent"
+	case "inline-image.pdf":
+		expected["text"] = "unknown"
 	case "mixed-pages.pdf":
 		expected["page_count"] = 2
 		expected["text"] = "mixed"
@@ -364,7 +411,7 @@ func manifestEntry(name, digest string) manifestFixture {
 			"state":        "failed",
 			"failure_code": "malformed_pdf",
 		}
-	case "decoded-content-limit.pdf":
+	case "decoded-content-limit.pdf", "decoded-content-array-limit.pdf":
 		expected = map[string]interface{}{
 			"state":        "failed",
 			"failure_code": "inspection_limit",

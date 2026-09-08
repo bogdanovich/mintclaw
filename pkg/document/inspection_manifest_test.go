@@ -60,13 +60,15 @@ func TestInspectionFixtureManifestIsSyntheticCompleteAndCurrent(t *testing.T) {
 	}
 	required := map[string]bool{
 		"text": false, "image-only": false, "mixed-pages": false, "acroform": false,
+		"name-operands-no-text": false, "inline-image": false, "orphan-structure": false,
 		"xfa-dynamic": false, "hybrid-xfa-static": false, "unsigned-signature": false,
 		"signed-certified": false, "field-restricted": false, "timestamped": false, "rights-enabled": false,
 		"encrypted-password-required": false,
 		"truncated":                   false, "malformed-xref": false, "oversized-stream-declaration": false,
 		"oversized-object-count": false, "adversarial-nesting": false,
-		"decoded-content-limit": false,
-		"xfa-decoded-limit":     false,
+		"decoded-content-limit":       false,
+		"decoded-content-array-limit": false,
+		"xfa-decoded-limit":           false,
 	}
 	for _, fixture := range manifest.Fixtures {
 		seen, expected := required[fixture.ID]

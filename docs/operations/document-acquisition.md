@@ -29,9 +29,11 @@ same-owner inbound admission and refusal before snapshot creation for every work
 mismatch, invalid or released references, and replaced backing files.
 
 Inspection coverage adds text/image/mixed pages, AcroForm, XFA, signatures, restrictions, encryption,
-password-required refusal, malformed structures, deterministic limits, and strict parent-side result validation. On
-`linux/amd64`, real worker tests cover descriptor-only input, scrubbed environment, malformed or oversized output,
-crash, timeout, process-group cancellation, concurrent inspection, and worker-scratch cleanup.
+password-required refusal, malformed structures, deterministic limits, catalog/signature reachability, PDF name and
+inline-image token handling, and strict parent-side result validation. Single-stream and cumulative multi-stream
+decode limits are enforced before page assembly. On `linux/amd64`, real worker tests cover descriptor-only input,
+scrubbed environment, malformed or oversized output, crash, timeout, process-group cancellation, concurrent
+inspection, and worker-scratch cleanup.
 
 The synthetic inventories and evidence mappings are in `pkg/document/testdata/acquisition-manifest.json` and
 `pkg/document/testdata/inspection-manifest.json`. No fixture contains personal or production data. On a host with the

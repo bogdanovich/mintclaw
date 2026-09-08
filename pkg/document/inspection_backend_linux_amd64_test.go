@@ -135,20 +135,28 @@ func TestTextShowingOperatorScanner(t *testing.T) {
 	tests := []struct {
 		name string
 		data string
-		want bool
+		want FactState
 	}{
-		{name: "Tj", data: "BT (MintClaw) Tj ET", want: true},
-		{name: "TJ", data: "BT [(Mint) 20 (Claw)] TJ ET", want: true},
-		{name: "single quote", data: "BT (MintClaw) ' ET", want: true},
-		{name: "double quote", data: "BT 10 2 (MintClaw) \" ET", want: true},
-		{name: "outside text object", data: "(MintClaw) Tj"},
-		{name: "drawing only", data: "0 0 m 10 10 l s"},
-		{name: "operator in comment", data: "% BT (MintClaw) Tj ET\n0 0 m"},
+		{name: "Tj", data: "BT (MintClaw) Tj ET", want: FactPresent},
+		{name: "TJ", data: "BT [(Mint) 20 (Claw)] TJ ET", want: FactPresent},
+		{name: "single quote", data: "BT (MintClaw) ' ET", want: FactPresent},
+		{name: "double quote", data: "BT 10 2 (MintClaw) \" ET", want: FactPresent},
+		{name: "outside text object", data: "(MintClaw) Tj", want: FactAbsent},
+		{name: "drawing only", data: "0 0 m 10 10 l s", want: FactAbsent},
+		{name: "operator in comment", data: "% BT (MintClaw) Tj ET\n0 0 m", want: FactAbsent},
+		{name: "operators in names", data: "/BT /Tj BDC EMC", want: FactAbsent},
+		{name: "operators in dictionary", data: "<< /Begin /BT /Show /Tj >> BDC EMC", want: FactAbsent},
+		{
+			name: "operators in inline image",
+			data: "q BI /W 1 /H 1 /BPC 8 /CS /G ID fake BT (MintClaw) Tj EI Q",
+			want: FactUnknown,
+		},
+		{name: "unterminated string", data: "BT (MintClaw", want: FactUnknown},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := hasTextShowingOperator([]byte(test.data)); got != test.want {
-				t.Fatalf("hasTextShowingOperator(%q) = %v, want %v", test.data, got, test.want)
+			if got := textShowingOperatorState([]byte(test.data)); got != test.want {
+				t.Fatalf("textShowingOperatorState(%q) = %v, want %v", test.data, got, test.want)
 			}
 		})
 	}

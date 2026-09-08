@@ -45,6 +45,14 @@ arbitrary parser string, path, or document content into a successful report.
 `extractable_text` is deliberately a structural signal, not extracted text. A page is `present` when its decoded
 content contains a text-showing operator inside a text object, `absent` when it does not, `mixed` across different
 page outcomes, and `unknown` when the backend cannot inspect it. PDF1A will own actual text extraction and provenance.
+Names, strings, arrays, dictionaries, and comments are tokenized without treating their bytes as operators. A page
+containing an inline image remains `unknown` unless text was already proven before the image: binary inline-image
+termination is filter-dependent, so PDF0B refuses to interpret its payload as content syntax.
+
+Each page-content stream is decoded with the remaining aggregate content budget before page assembly. The worker
+rejects a single expansion or a multi-stream cumulative expansion at 8 MiB; it never calls pdfcpu's unbounded
+`ExtractPageContent` path. Form, XFA, and signature-restriction facts come only from objects linked by the catalog or a
+validated signed field. Unreferenced xref objects cannot assert those facts.
 
 Signature facts classify structural evidence only. Synthetic signatures deliberately do not claim cryptographic,
 certificate-chain, legal, LTV, or trust validity. A signed document may therefore report `timestamped: unknown` when
@@ -101,9 +109,10 @@ a stable structural-inspection API; it cannot provide deterministic headless fac
 - `pkg/document/testdata/generate/main.go` deterministically generates all non-encrypted fixtures from synthetic bytes.
   The AES-256 fixture was produced once with pdfcpu `v0.15.0`; its temporary user and owner passwords were discarded
   and are not stored in the repository.
-- Backend contract tests cover text, image-only, mixed pages, AcroForm, XFA-only, hybrid XFA, unsigned, signed,
-  certified, FieldMDP, timestamp, usage-rights, password-required, truncated, malformed-xref, invalid-length, nested,
-  page-limit, and content-limit inputs.
+- Backend contract tests cover text, image-only, mixed pages, name operands, inline images, AcroForm, XFA-only, hybrid
+  XFA, unsigned, signed, certified, FieldMDP, timestamp, usage-rights, orphan xref objects, password-required,
+  truncated, malformed-xref, invalid-length, nested, page-limit, single-stream decode limits, and cumulative
+  multi-stream content limits.
 - Real-process tests cover descriptor-only input, scrubbed environment, output limits, timeout, crash, descendant
   termination, concurrent isolation, and deterministic worker scratch cleanup.
 - `scripts/document-worker-smoke.sh` exercises the packaged CLI success and password-required paths without retaining

@@ -95,7 +95,12 @@ for fixture in manifest["fixtures"]:
     elif expected["acroform"] == "present":
         expected_form = "AcroForm"
     assert info["Form"] == expected_form, (fixture["id"], info["Form"], expected_form)
-    assert page_text_state(path, expected["page_count"]) == expected["text"], fixture["id"]
+    oracle_text = page_text_state(path, expected["page_count"])
+    if expected["text"] == "unknown":
+        assert oracle_text == "absent", fixture["id"]
+        differences.append("inline_image_text_signal_is_fail_closed")
+    else:
+        assert oracle_text == expected["text"], fixture["id"]
 
     signature_result = run("pdfsig", str(path))
     signature_output = signature_result.stdout + signature_result.stderr

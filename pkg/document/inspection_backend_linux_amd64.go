@@ -5,6 +5,7 @@ package document
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -41,7 +42,7 @@ func (pdfCPUInspectionBackend) Inspect(reader io.ReadSeeker, limits Limits) back
 	configuration.Limits.MaxObjectStreamFirst = limits.MaxContentBytes
 	configuration.Limits.MaxXRefEntries = limits.MaxObjects
 	configuration.Limits.MaxRecursionDepth = limits.MaxRecursionDepth
-	context, err := pdfcpuapi.ReadAndValidate(reader, configuration)
+	context, err := pdfcpuapi.ReadContext(reader, configuration)
 	if errors.Is(err, pdfcpucore.ErrWrongPassword) {
 		facts.Encryption.State = FactPresent
 		facts.Encryption.PasswordRequired = FactPresent
@@ -60,6 +61,20 @@ func (pdfCPUInspectionBackend) Inspect(reader io.ReadSeeker, limits Limits) back
 	if err != nil || context == nil || context.XRefTable == nil {
 		return failedInspection(FailureMalformedPDF, "PDF structure is malformed or unsupported")
 	}
+	preValidationRoot, err := context.Catalog()
+	if err != nil || preValidationRoot == nil {
+		return failedInspection(FailureMalformedPDF, "PDF catalog is malformed")
+	}
+	catalogAcroForm, catalogHasAcroForm := preValidationRoot.Find("AcroForm")
+	if catalogAcroForm != nil {
+		catalogAcroForm = catalogAcroForm.Clone()
+	}
+	if err = pdfcpuapi.ValidateContext(context); err != nil {
+		if isPDFCPUResourceLimit(err) {
+			return failedInspection(FailureInspectionLimit, "document exceeds an inspection limit")
+		}
+		return failedInspection(FailureMalformedPDF, "PDF structure is malformed or unsupported")
+	}
 	if context.PageCount < 0 || context.PageCount > limits.MaxPages {
 		return failedInspection(FailureInspectionLimit, "document exceeds the inspection page limit")
 	}
@@ -74,7 +89,7 @@ func (pdfCPUInspectionBackend) Inspect(reader io.ReadSeeker, limits Limits) back
 		return failedInspection(FailureMalformedPDF, "PDF catalog is malformed")
 	}
 	inspectRestrictions(context, root, facts)
-	if err = inspectForms(context, root, facts); err != nil {
+	if err = inspectForms(context, catalogAcroForm, catalogHasAcroForm, facts); err != nil {
 		if isPDFCPUResourceLimit(err) || strings.Contains(strings.ToLower(err.Error()), "inspection limit") {
 			return failedInspection(FailureInspectionLimit, "document exceeds an inspection limit")
 		}
@@ -168,8 +183,11 @@ func inspectRestrictions(context *model.Context, root types.Dict, facts *Inspect
 			encryptedPermissions = stateForBool(model.PermissionFlags(context.E.P) != model.PermissionsAll)
 		}
 	}
-	docMDP := stateForBool(context.CertifiedSigObjNr > 0 || hasTransformMethod(context, "DocMDP"))
-	fieldMDP := stateForBool(hasTransformMethod(context, "FieldMDP"))
+	docMDP := linkedSignatureTransformState(context, "DocMDP")
+	if context.CertifiedSigObjNr > 0 {
+		docMDP = FactPresent
+	}
+	fieldMDP := linkedSignatureTransformState(context, "FieldMDP")
 	usageRights := stateForBool(len(context.URSignature) > 0 || hasSignatureType(context, model.SigTypeUR))
 	_, readerExtensions := root.Find("Extensions")
 	facts.Restrictions = RestrictionFacts{
@@ -188,8 +206,13 @@ func inspectRestrictions(context *model.Context, root types.Dict, facts *Inspect
 	)
 }
 
-func inspectForms(context *model.Context, root types.Dict, facts *InspectionFacts) error {
-	acroForm, present, err := findAcroFormDictionary(context, root)
+func inspectForms(
+	context *model.Context,
+	catalogAcroForm types.Object,
+	catalogHasAcroForm bool,
+	facts *InspectionFacts,
+) error {
+	acroForm, present, err := findAcroFormDictionary(context, catalogAcroForm, catalogHasAcroForm)
 	if err != nil {
 		return err
 	}
@@ -238,35 +261,22 @@ func inspectForms(context *model.Context, root types.Dict, facts *InspectionFact
 	return nil
 }
 
-func findAcroFormDictionary(context *model.Context, root types.Dict) (types.Dict, bool, error) {
-	if len(context.Form) > 0 {
-		return context.Form, true, nil
+func findAcroFormDictionary(
+	context *model.Context,
+	catalogAcroForm types.Object,
+	catalogHasAcroForm bool,
+) (types.Dict, bool, error) {
+	if !catalogHasAcroForm {
+		return nil, false, nil
 	}
-	if acroObject, present := root.Find("AcroForm"); present && acroObject != nil {
-		acroForm, err := context.DereferenceDict(acroObject)
-		if err != nil || acroForm == nil {
-			return nil, false, errors.New("invalid AcroForm dictionary")
-		}
-		return acroForm, true, nil
+	if catalogAcroForm == nil {
+		return nil, false, errors.New("invalid AcroForm dictionary")
 	}
-	// pdfcpu removes the catalog entry after validation. An XFA-only form with
-	// an empty Fields array is not retained in Context.Form, so recover only
-	// the structurally unique AcroForm dictionary from the validated xref table.
-	for _, entry := range context.Table {
-		if entry == nil || entry.Free || entry.Object == nil {
-			continue
-		}
-		dictionary, ok := entry.Object.(types.Dict)
-		if !ok {
-			continue
-		}
-		_, hasFields := dictionary.Find("Fields")
-		_, hasXFA := dictionary.Find("XFA")
-		if hasFields && hasXFA {
-			return dictionary, true, nil
-		}
+	acroForm, err := context.DereferenceDict(catalogAcroForm)
+	if err != nil || acroForm == nil {
+		return nil, false, errors.New("invalid AcroForm dictionary")
 	}
-	return nil, false, nil
+	return acroForm, true, nil
 }
 
 func inspectXFAObject(context *model.Context, object types.Object) (string, []byte, error) {
@@ -298,11 +308,14 @@ func inspectXFAObject(context *model.Context, object types.Object) (string, []by
 }
 
 func decodeBoundedStream(stream types.StreamDict, limit int64) ([]byte, error) {
+	if limit < 0 {
+		return nil, fmt.Errorf("decoded stream exceeds inspection limit: %w", filter.ErrDecodeLimitExceeded)
+	}
 	if err := stream.DecodeWithLimit(limit); err != nil {
 		return nil, err
 	}
 	if int64(len(stream.Content)) > limit {
-		return nil, errors.New("decoded stream exceeds inspection limit")
+		return nil, fmt.Errorf("decoded stream exceeds inspection limit: %w", filter.ErrDecodeLimitExceeded)
 	}
 	return stream.Content, nil
 }
@@ -324,7 +337,7 @@ func classifyXFARendering(payload []byte) StringFact {
 func inspectText(context *model.Context, limits Limits, facts *InspectionFacts) error {
 	remaining := limits.MaxContentBytes
 	for page := 1; page <= context.PageCount; page++ {
-		content, err := pdfcpucore.ExtractPageContent(context, page)
+		data, err := boundedPageContent(context, page, remaining)
 		if err != nil {
 			if isPDFCPUResourceLimit(err) {
 				return err
@@ -332,15 +345,14 @@ func inspectText(context *model.Context, limits Limits, facts *InspectionFacts) 
 			facts.ExtractableText.PagesUnknown++
 			continue
 		}
-		data, err := io.ReadAll(io.LimitReader(content, remaining+1))
-		if err != nil || int64(len(data)) > remaining {
-			return errors.New("decoded page content exceeds limit")
-		}
 		remaining -= int64(len(data))
-		if hasTextShowingOperator(data) {
+		switch textShowingOperatorState(data) {
+		case FactPresent:
 			facts.ExtractableText.PagesWithText++
-		} else {
+		case FactAbsent:
 			facts.ExtractableText.PagesWithoutText++
+		default:
+			facts.ExtractableText.PagesUnknown++
 		}
 	}
 	facts.ExtractableText.State = textFactState(facts.ExtractableText)
@@ -350,8 +362,62 @@ func inspectText(context *model.Context, limits Limits, facts *InspectionFacts) 
 	return nil
 }
 
-func hasTextShowingOperator(data []byte) bool {
+func boundedPageContent(context *model.Context, page int, limit int64) ([]byte, error) {
+	pageDictionary, _, _, err := context.PageDict(page, false)
+	if err != nil {
+		return nil, fmt.Errorf("page %d dictionary: %w", page, err)
+	}
+	contentObject, found := pageDictionary.Find("Contents")
+	if !found || contentObject == nil {
+		return nil, nil
+	}
+	contentObject, err = context.Dereference(contentObject)
+	if err != nil {
+		return nil, fmt.Errorf("page %d content: %w", page, err)
+	}
+	if contentObject == nil {
+		return nil, nil
+	}
+	content := make([]byte, 0, int(limit))
+	appendStream := func(stream types.StreamDict) error {
+		remaining := limit - int64(len(content))
+		decoded, decodeErr := decodeBoundedStream(stream, remaining)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		content = append(content, decoded...)
+		return nil
+	}
+	switch value := contentObject.(type) {
+	case types.StreamDict:
+		if err = appendStream(value); err != nil {
+			return nil, fmt.Errorf("page %d content decode: %w", page, err)
+		}
+	case types.Array:
+		for _, item := range value {
+			if item == nil {
+				continue
+			}
+			stream, _, streamErr := context.DereferenceStreamDict(item)
+			if streamErr != nil {
+				return nil, fmt.Errorf("page %d content stream: %w", page, streamErr)
+			}
+			if stream == nil {
+				continue
+			}
+			if err = appendStream(*stream); err != nil {
+				return nil, fmt.Errorf("page %d content decode: %w", page, err)
+			}
+		}
+	default:
+		return nil, fmt.Errorf("page %d content must be a stream or array", page)
+	}
+	return content, nil
+}
+
+func textShowingOperatorState(data []byte) FactState {
 	inTextObject := false
+	containers := []byte{}
 	for index := 0; index < len(data); {
 		index = skipPDFContentSpace(data, index)
 		if index >= len(data) {
@@ -363,19 +429,60 @@ func hasTextShowingOperator(data []byte) bool {
 				index++
 			}
 			continue
+		case '/':
+			index++
+			for index < len(data) && !isPDFContentDelimiter(data[index]) {
+				index++
+			}
+			continue
 		case '(':
-			index = skipPDFLiteralString(data, index+1)
+			var closed bool
+			index, closed = skipPDFLiteralString(data, index+1)
+			if !closed {
+				return FactUnknown
+			}
 			continue
 		case '<':
 			if index+1 < len(data) && data[index+1] == '<' {
+				containers = append(containers, '>')
 				index += 2
 				continue
 			}
-			index++
-			for index < len(data) && data[index] != '>' {
-				index++
+			var closed bool
+			index, closed = skipPDFHexString(data, index+1)
+			if !closed {
+				return FactUnknown
 			}
+			continue
+		case '[':
+			containers = append(containers, ']')
 			index++
+			continue
+		case '{':
+			containers = append(containers, '}')
+			index++
+			continue
+		case ']':
+			if len(containers) == 0 || containers[len(containers)-1] != ']' {
+				return FactUnknown
+			}
+			containers = containers[:len(containers)-1]
+			index++
+			continue
+		case '}':
+			if len(containers) == 0 || containers[len(containers)-1] != '}' {
+				return FactUnknown
+			}
+			containers = containers[:len(containers)-1]
+			index++
+			continue
+		case '>':
+			if index+1 >= len(data) || data[index+1] != '>' || len(containers) == 0 ||
+				containers[len(containers)-1] != '>' {
+				return FactUnknown
+			}
+			containers = containers[:len(containers)-1]
+			index += 2
 			continue
 		}
 		start := index
@@ -383,27 +490,38 @@ func hasTextShowingOperator(data []byte) bool {
 			index++
 		}
 		token := string(data[start:index])
+		if index == start {
+			return FactUnknown
+		}
+		if len(containers) > 0 {
+			continue
+		}
 		switch token {
+		case "BI":
+			// Inline image termination is filter-dependent and binary payload may
+			// contain arbitrary operator-like bytes. Refuse to infer a text fact
+			// from the remainder instead of interpreting image data as PDF syntax.
+			return FactUnknown
 		case "BT":
 			inTextObject = true
 		case "ET":
 			inTextObject = false
 		case "Tj", "TJ", "'", "\"":
 			if inTextObject {
-				return true
+				return FactPresent
 			}
 		}
-		if index == start {
-			index++
-		}
 	}
-	return false
+	if inTextObject || len(containers) > 0 {
+		return FactUnknown
+	}
+	return FactAbsent
 }
 
 func skipPDFContentSpace(data []byte, index int) int {
 	for index < len(data) {
 		switch data[index] {
-		case 0, '\t', '\n', '\f', '\r', ' ', '[', ']', '{', '}':
+		case 0, '\t', '\n', '\f', '\r', ' ':
 			index++
 		default:
 			return index
@@ -412,11 +530,14 @@ func skipPDFContentSpace(data []byte, index int) int {
 	return index
 }
 
-func skipPDFLiteralString(data []byte, index int) int {
+func skipPDFLiteralString(data []byte, index int) (int, bool) {
 	depth := 1
 	for index < len(data) && depth > 0 {
 		switch data[index] {
 		case '\\':
+			if index+1 >= len(data) {
+				return len(data), false
+			}
 			index += 2
 			continue
 		case '(':
@@ -426,7 +547,17 @@ func skipPDFLiteralString(data []byte, index int) int {
 		}
 		index++
 	}
-	return index
+	return index, depth == 0
+}
+
+func skipPDFHexString(data []byte, index int) (int, bool) {
+	for index < len(data) {
+		if data[index] == '>' {
+			return index + 1, true
+		}
+		index++
+	}
+	return index, false
 }
 
 func isPDFContentDelimiter(value byte) bool {
@@ -444,52 +575,59 @@ func stateForBool(value bool) FactState {
 	return FactAbsent
 }
 
-func hasTransformMethod(context *model.Context, name string) bool {
-	for _, entry := range context.Table {
-		if entry == nil || entry.Free || entry.Object == nil {
-			continue
-		}
-		if dictionaryHasName(entry.Object, "TransformMethod", name) {
-			return true
-		}
-	}
-	return false
-}
-
-func dictionaryHasName(object types.Object, key, name string) bool {
-	return objectContainsName(object, key, name, 0)
-}
-
-func objectContainsName(object types.Object, key, name string, depth int) bool {
-	if depth > 8 {
-		return false
-	}
-	var dictionary types.Dict
-	switch value := object.(type) {
-	case types.Dict:
-		dictionary = value
-	case types.StreamDict:
-		dictionary = value.Dict
-	case types.Array:
-		for _, entry := range value {
-			if objectContainsName(entry, key, name, depth+1) {
-				return true
+func linkedSignatureTransformState(context *model.Context, name string) FactState {
+	unknown := false
+	for _, signatures := range context.Signatures {
+		for _, signature := range signatures {
+			if !signature.Signed || signature.ObjNr <= 0 {
+				continue
+			}
+			entry := context.Table[signature.ObjNr]
+			if entry == nil || entry.Free || entry.Object == nil {
+				unknown = true
+				continue
+			}
+			fieldDictionary, ok := entry.Object.(types.Dict)
+			if !ok {
+				unknown = true
+				continue
+			}
+			signatureObject, found := fieldDictionary.Find("V")
+			if !found || signatureObject == nil {
+				unknown = true
+				continue
+			}
+			signatureDictionary, signatureErr := context.DereferenceDict(signatureObject)
+			if signatureErr != nil || signatureDictionary == nil {
+				unknown = true
+				continue
+			}
+			referenceObject, found := signatureDictionary.Find("Reference")
+			if !found || referenceObject == nil {
+				continue
+			}
+			references, err := context.DereferenceArray(referenceObject)
+			if err != nil || references == nil {
+				unknown = true
+				continue
+			}
+			for _, reference := range references {
+				referenceDictionary, referenceErr := context.DereferenceDict(reference)
+				if referenceErr != nil || referenceDictionary == nil {
+					unknown = true
+					continue
+				}
+				method := referenceDictionary.NameEntry("TransformMethod")
+				if method != nil && *method == name {
+					return FactPresent
+				}
 			}
 		}
-		return false
-	default:
-		return false
 	}
-	entry := dictionary.NameEntry(key)
-	if entry != nil && *entry == name {
-		return true
+	if unknown {
+		return FactUnknown
 	}
-	for _, value := range dictionary {
-		if objectContainsName(value, key, name, depth+1) {
-			return true
-		}
-	}
-	return false
+	return FactAbsent
 }
 
 func hasSignatureType(context *model.Context, signatureType int) bool {
