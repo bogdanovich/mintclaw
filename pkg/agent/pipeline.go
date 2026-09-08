@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -66,6 +67,7 @@ type ToolSuspensionRequest struct {
 	Origin           interactions.Origin
 	ApprovalAction   string
 	ExecutionContext *bus.InboundContext
+	OutcomeReceipts  []taskresult.Receipt
 	Resolution       func(context.Context, interactions.Outcome) error
 }
 

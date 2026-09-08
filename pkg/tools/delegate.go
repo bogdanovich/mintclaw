@@ -150,7 +150,7 @@ func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *toolsh
 	if t.requiresObjectiveChecklist(agentID) && len(objectiveItems) == 0 {
 		return toolshared.ErrorResult(
 			"objective_items is required for this delegation target; " +
-				"retry delegate with every requested result or external action declared",
+				"retry delegate with every requested result, external action, or live handoff declared",
 		)
 	}
 

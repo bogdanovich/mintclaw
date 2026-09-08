@@ -713,3 +713,88 @@ func TestObjectiveOutcomeUserContentReplacesContradictoryPartialProse(t *testing
 		t.Fatalf("user content contradicts verified outcome: %q", got)
 	}
 }
+
+func TestExtractObjectiveOutcomeRequiresTrustedLiveHandoffReceipt(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":["interaction_1_receipt_1"]}],` +
+		`"missing_items":[],"result":"Browser control was handed off."}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand browser control to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+
+	_, outcome := extractObjectiveOutcomeWithReceipts(content, nil, nil, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		len(outcome.MissingItems) != 1 || !strings.Contains(outcome.MissingItems[0], "runtime receipt") {
+		t.Fatalf("unverified live handoff was accepted: %#v", outcome)
+	}
+
+	receipts := []taskresult.Receipt{{
+		ID: "interaction_1_receipt_1", Kind: taskresult.ObjectiveKindLiveHandoff,
+		Target: "browser_session:browser_session_1", Action: "handoff", Tool: "browser_session",
+		Metadata: map[string]string{
+			"resource_kind": "browser_session",
+			"resource_id":   "browser_session_1",
+		},
+	}}
+	clean, outcome := extractObjectiveOutcomeWithReceipts(content, nil, receipts, true, checklist)
+	if clean != "Browser control was handed off." || outcome == nil ||
+		outcome.Status != taskresult.OutcomeSucceeded || len(outcome.CompletedItems) != 1 ||
+		len(outcome.CompletedItems[0].Receipts) != 1 ||
+		outcome.CompletedItems[0].Receipts[0].ID != "interaction_1_receipt_1" {
+		t.Fatalf("verified live handoff was rejected: clean=%q outcome=%#v", clean, outcome)
+	}
+}
+
+func TestExtractObjectiveOutcomeDoesNotSubstituteExternalReceiptForLiveHandoff(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":["inv_external"]}],` +
+		`"missing_items":[],"result":"Browser control was handed off."}` +
+		objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand browser control to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+	receipts := []taskresult.Receipt{{
+		ID: "inv_external", Kind: taskresult.ObjectiveKindExternalAction,
+		Target: "https://example.com", Action: "click", Tool: "browser_act",
+	}}
+
+	_, outcome := extractObjectiveOutcomeWithReceipts(content, nil, receipts, true, checklist)
+	if outcome == nil || outcome.Status != taskresult.OutcomeBlocked || len(outcome.CompletedItems) != 0 ||
+		len(outcome.MissingItems) == 0 {
+		t.Fatalf("external receipt certified a live handoff: %#v", outcome)
+	}
+}
+
+func TestLiveHandoffRecoveryRequiresMissingReceiptAndTerminalClaim(t *testing.T) {
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "hand live resource to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+	}})
+	falseSuccess := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"The resource was left open."}` +
+		objectiveOutcomeEnd
+	instruction, recover := liveHandoffRecoveryInstruction(falseSuccess, nil, checklist)
+	if !recover || !strings.Contains(instruction, "handoff-capable tools") ||
+		!strings.Contains(instruction, "existing live resource") {
+		t.Fatalf("missing handoff did not schedule bounded recovery: %q, %t", instruction, recover)
+	}
+
+	receipts := []taskresult.Receipt{{
+		ID: "handoff_1", Kind: taskresult.ObjectiveKindLiveHandoff,
+		Action: "handoff", Metadata: map[string]string{"resource_kind": "terminal", "resource_id": "pty_1"},
+	}}
+	if instruction, recover = liveHandoffRecoveryInstruction(falseSuccess, receipts, checklist); recover {
+		t.Fatalf("verified handoff scheduled another recovery: %q", instruction)
+	}
+
+	reportedBlocked := objectiveOutcomeStart +
+		`{"status":"blocked","completed_items":[],"missing_items":["objective_1"],` +
+		`"explanation":"The live resource no longer exists."}` + objectiveOutcomeEnd
+	if instruction, recover = liveHandoffRecoveryInstruction(reportedBlocked, nil, checklist); recover {
+		t.Fatalf("producer-reported blocker scheduled side-effecting recovery: %q", instruction)
+	}
+}

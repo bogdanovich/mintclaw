@@ -12,6 +12,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/outbox"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -28,6 +29,27 @@ func (al *AgentLoop) cleanupInteractionOriginTools(
 	if agent == nil || agent.Tools == nil || strings.TrimSpace(record.Origin.ExecutionID) == "" {
 		return
 	}
+	cleanupCtx, cancel, err := interactionOriginToolContext(ctx, agent, record)
+	if err != nil {
+		return
+	}
+	defer cancel()
+	if err := agent.Tools.CleanupTurn(cleanupCtx); err != nil {
+		logger.WarnCF("agent", "Terminal interaction resource cleanup failed", map[string]any{
+			"agent_id":       agent.ID,
+			"interaction_id": record.ID,
+		})
+	}
+}
+
+func interactionOriginToolContext(
+	ctx context.Context,
+	agent *AgentInstance,
+	record interactions.Record,
+) (context.Context, context.CancelFunc, error) {
+	if agent == nil || strings.TrimSpace(record.Origin.ExecutionID) == "" {
+		return nil, nil, fmt.Errorf("interaction origin execution context is unavailable")
+	}
 	inbound := cloneInboundContext(record.Origin.ExecutionContext)
 	if inbound == nil {
 		fallback := inboundContextForInteraction(record.Route)
@@ -37,35 +59,68 @@ func (al *AgentLoop) cleanupInteractionOriginTools(
 	if routeSessionKey == "" {
 		routeSessionKey = strings.TrimSpace(record.Route.SessionKey)
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
-	defer cancel()
-	cleanupCtx = toolshared.WithToolInboundContext(
-		cleanupCtx,
+	toolCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+	toolCtx = toolshared.WithToolInboundContext(
+		toolCtx,
 		inbound.Channel,
 		inbound.ChatID,
 		inbound.MessageID,
 		inbound.ReplyToMessageID,
 	)
-	cleanupCtx = toolshared.WithToolInboundMetadata(cleanupCtx, *inbound)
-	cleanupCtx = toolshared.WithToolTopicID(cleanupCtx, originTopicID(inbound))
-	cleanupCtx = toolshared.WithToolSessionContext(
-		cleanupCtx,
+	toolCtx = toolshared.WithToolInboundMetadata(toolCtx, *inbound)
+	toolCtx = toolshared.WithToolTopicID(toolCtx, originTopicID(inbound))
+	toolCtx = toolshared.WithToolSessionContext(
+		toolCtx,
 		agent.ID,
 		record.Route.SessionKey,
 		nil,
 	)
-	cleanupCtx = toolshared.WithToolRouteSessionKey(cleanupCtx, routeSessionKey)
-	cleanupCtx = toolshared.WithToolExecutionIdentity(
-		cleanupCtx,
+	toolCtx = toolshared.WithToolRouteSessionKey(toolCtx, routeSessionKey)
+	toolCtx = toolshared.WithToolExecutionIdentity(
+		toolCtx,
 		agent.Workspace,
 		record.Origin.ExecutionID,
 	)
-	if err := agent.Tools.CleanupTurn(cleanupCtx); err != nil {
-		logger.WarnCF("agent", "Terminal interaction resource cleanup failed", map[string]any{
-			"agent_id":       agent.ID,
-			"interaction_id": record.ID,
-		})
+	return toolCtx, cancel, nil
+}
+
+func (al *AgentLoop) resolveDurableLiveHandoffs(
+	ctx context.Context,
+	agent *AgentInstance,
+	record interactions.Record,
+) error {
+	if al == nil || agent == nil || agent.Tools == nil {
+		return fmt.Errorf("live-resource handoff runtime is unavailable")
 	}
+	var liveReceipts []taskresult.Receipt
+	for _, receipt := range record.OutcomeReceipts {
+		if receipt.Kind == taskresult.ObjectiveKindLiveHandoff {
+			liveReceipts = append(liveReceipts, receipt)
+		}
+	}
+	if len(liveReceipts) == 0 {
+		return nil
+	}
+	toolCtx, cancel, err := interactionOriginToolContext(ctx, agent, record)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	for _, receipt := range liveReceipts {
+		handoff := toolshared.LiveResourceHandoff{
+			ResourceKind: strings.TrimSpace(receipt.Metadata["resource_kind"]),
+			ResourceID:   strings.TrimSpace(receipt.Metadata["resource_id"]),
+		}
+		toolName := strings.TrimSpace(receipt.Tool)
+		if toolName == "" || handoff.ResourceKind == "" || handoff.ResourceID == "" {
+			return fmt.Errorf("live-resource handoff receipt %q has no durable resolver binding", receipt.ID)
+		}
+		disposition := toolshared.LiveResourceHandoffDispositionForOutcome(record.Outcome)
+		if err := agent.Tools.ResolveLiveResourceHandoff(toolCtx, toolName, handoff, disposition); err != nil {
+			return fmt.Errorf("resolve live-resource handoff receipt %q: %w", receipt.ID, err)
+		}
+	}
+	return nil
 }
 
 type InteractionEventPayload struct {
@@ -243,10 +298,11 @@ func (runtime *humanInteractionRuntime) SuspendToolCall(
 				[]interactions.ObjectiveChecklistItem(nil),
 				request.Origin.ObjectiveChecklist...),
 		},
-		Questions:      request.Prompt.Questions,
-		PromptSummary:  request.Prompt.PromptSummary,
-		ApprovalAction: approvalAction,
-		ExpiresAt:      time.Now().Add(request.Prompt.Timeout),
+		Questions:       request.Prompt.Questions,
+		PromptSummary:   request.Prompt.PromptSummary,
+		ApprovalAction:  approvalAction,
+		OutcomeReceipts: taskresult.CloneReceipts(request.OutcomeReceipts),
+		ExpiresAt:       time.Now().Add(request.Prompt.Timeout),
 	})
 	if err != nil {
 		return ToolSuspensionDisposition{}, err

@@ -52,6 +52,7 @@ type FinalizationContext struct {
 	usage            finalizationUsage
 	deliverable      *taskresult.Deliverable
 	writeAudit       []toolshared.WriteAuditEntry
+	receipts         []taskresult.Receipt
 	followUps        []bus.InboundMessage
 	historyMessage   *providers.Message
 	stream           finalizationStream
@@ -108,6 +109,7 @@ func newFinalizationContext(
 		},
 		deliverable:    taskresult.CloneDeliverable(exec.deliverable),
 		writeAudit:     append([]toolshared.WriteAuditEntry(nil), exec.writeAudit...),
+		receipts:       taskresult.CloneReceipts(exec.receipts),
 		followUps:      append([]bus.InboundMessage(nil), ts.followUps...),
 		historyMessage: historyMessage,
 		stream: finalizationStream{
@@ -227,6 +229,7 @@ func (f *FinalizationContext) result(includeCompaction bool) turnResult {
 		usageTotalTokens:       f.usage.totalTokens,
 		deliverable:            taskresult.CloneDeliverable(f.deliverable),
 		writeAudit:             append([]toolshared.WriteAuditEntry(nil), f.writeAudit...),
+		receipts:               taskresult.CloneReceipts(f.receipts),
 		status:                 f.status,
 		followUps:              append([]bus.InboundMessage(nil), f.followUps...),
 		preferNewOutboundReply: f.delivery.preferNewOutboundReply,

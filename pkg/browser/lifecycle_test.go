@@ -978,6 +978,29 @@ func TestBrokerManagedRevocationBlocksControllerTransitions(t *testing.T) {
 			}
 		})
 
+		t.Run(test.name+"/release", func(t *testing.T) {
+			factory := &fakeWorkerFactory{}
+			broker := lifecycleTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)
+			owner := testOwner()
+			session, err := broker.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "managed",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			human, err := broker.Handoff(t.Context(), owner, session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			applyManagedRevocation(t, broker, test)
+			lost, err := broker.ReleaseHandoff(t.Context(), owner, human.ID)
+			if err != nil || lost.State != SessionLost || lost.SafeFailure != "policy_changed" ||
+				factory.workers[0].beginHumanCalls != 1 || factory.workers[0].endHumanCalls != 0 ||
+				factory.workers[0].closed != 1 {
+				t.Fatalf("revoked ReleaseHandoff() = %+v, %v; worker = %+v", lost, err, factory.workers[0])
+			}
+		})
+
 		t.Run(test.name+"/resume", func(t *testing.T) {
 			factory := &fakeWorkerFactory{}
 			broker := lifecycleTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)

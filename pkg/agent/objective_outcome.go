@@ -80,7 +80,8 @@ func normalizeObjectiveChecklist(specs []toolshared.ObjectiveSpec) []runtimeObje
 		item := boundedObjectiveText(spec.Item)
 		kind := strings.TrimSpace(spec.Kind)
 		acceptance, valid := normalizeObjectiveAcceptance(spec.Acceptance, kind)
-		if item == "" || (kind != "result" && kind != "external_action") || !valid ||
+		if item == "" || (kind != taskresult.ObjectiveKindResult &&
+			kind != taskresult.ObjectiveKindExternalAction && kind != taskresult.ObjectiveKindLiveHandoff) || !valid ||
 			len(items) >= objectiveOutcomeLimit {
 			return nil
 		}
@@ -120,7 +121,7 @@ func normalizeObjectiveAcceptance(
 	if input == nil {
 		return nil, true
 	}
-	if objectiveKind != "result" {
+	if objectiveKind != taskresult.ObjectiveKindResult {
 		return nil, false
 	}
 	outputKind := strings.TrimSpace(input.OutputKind)
@@ -169,7 +170,11 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 		"boolean, number, or null values. Use kind=artifact with stable artifact_refs. Satisfy each declared acceptance " +
 		"output_kind, required_fields, and min_items exactly. Set " +
 		"truncated=true if any requested output is missing due to size; truncated output is not accepted as complete. " +
-		"For result items, omit receipt_ids or use an empty array. "
+		"For result items, omit receipt_ids or use an empty array. " +
+		"For every live_handoff item, call a handoff-capable tool that returns a durable human-input suspension. " +
+		"Opening a live resource or saying it was left open does not complete that objective. Do not return a terminal " +
+		"outcome while the user should control the resource. After the user releases control and the continuation " +
+		"resumes, copy the runtime-provided handoff receipt ID into receipt_ids. "
 	if browser {
 		instruction += "Opening, navigating, observing, reading, and closing a browser session are result objectives, never " +
 			"external_action objectives. For browser_act click calls, declare effect from this checklist and the requested workflow: use read, " +
@@ -201,6 +206,16 @@ func extractObjectiveOutcome(
 	required bool,
 	checklists ...[]runtimeObjectiveItem,
 ) (string, *taskresult.Outcome) {
+	return extractObjectiveOutcomeWithReceipts(content, audits, nil, required, checklists...)
+}
+
+func extractObjectiveOutcomeWithReceipts(
+	content string,
+	audits []toolshared.WriteAuditEntry,
+	receipts []taskresult.Receipt,
+	required bool,
+	checklists ...[]runtimeObjectiveItem,
+) (string, *taskresult.Outcome) {
 	var checklist []runtimeObjectiveItem
 	if len(checklists) > 0 {
 		checklist = checklists[0]
@@ -224,7 +239,7 @@ func extractObjectiveOutcome(
 	if decoder.Decode(&reported) != nil || decoder.Decode(&struct{}{}) != io.EOF {
 		return clean, blockedObjectiveOutcome("objective outcome report was invalid")
 	}
-	outcome := validateObjectiveOutcome(reported, audits, checklist)
+	outcome := validateObjectiveOutcome(reported, audits, receipts, checklist)
 	if outcome.Status == taskresult.OutcomeSucceeded {
 		clean = terminalObjectiveResult(reported.Result, outcome)
 	}
@@ -234,6 +249,15 @@ func extractObjectiveOutcome(
 func objectiveOutcomeRepairInstruction(
 	content string,
 	audits []toolshared.WriteAuditEntry,
+	checklist []runtimeObjectiveItem,
+) (string, bool) {
+	return objectiveOutcomeRepairInstructionWithReceipts(content, audits, nil, checklist)
+}
+
+func objectiveOutcomeRepairInstructionWithReceipts(
+	content string,
+	audits []toolshared.WriteAuditEntry,
+	receipts []taskresult.Receipt,
 	checklist []runtimeObjectiveItem,
 ) (string, bool) {
 	start := strings.LastIndex(content, objectiveOutcomeStart)
@@ -248,7 +272,7 @@ func objectiveOutcomeRepairInstruction(
 			if strings.TrimSpace(reported.Status) != string(taskresult.OutcomeSucceeded) {
 				return "", false
 			}
-			outcome := validateObjectiveOutcome(reported, audits, checklist)
+			outcome := validateObjectiveOutcome(reported, audits, receipts, checklist)
 			if outcome.Status == taskresult.OutcomeSucceeded {
 				return "", false
 			}
@@ -269,6 +293,54 @@ func objectiveOutcomeRepairInstruction(
 		"partial or blocked and identify the missing objective instead of claiming succeeded.", true
 }
 
+func liveHandoffRecoveryInstruction(
+	content string,
+	receipts []taskresult.Receipt,
+	checklist []runtimeObjectiveItem,
+) (string, bool) {
+	required := 0
+	for _, item := range checklist {
+		if item.Kind == taskresult.ObjectiveKindLiveHandoff {
+			required++
+		}
+	}
+	if required == 0 {
+		return "", false
+	}
+	verified := 0
+	for _, receipt := range receipts {
+		if receipt.Kind == taskresult.ObjectiveKindLiveHandoff &&
+			strings.TrimSpace(receipt.ID) != "" &&
+			strings.TrimSpace(receipt.Action) == "handoff" &&
+			strings.TrimSpace(receipt.Metadata["resource_kind"]) != "" &&
+			strings.TrimSpace(receipt.Metadata["resource_id"]) != "" {
+			verified++
+		}
+	}
+	if verified >= required {
+		return "", false
+	}
+	start := strings.LastIndex(content, objectiveOutcomeStart)
+	end := strings.LastIndex(content, objectiveOutcomeEnd)
+	if start >= 0 && end >= start {
+		raw := strings.TrimSpace(content[start+len(objectiveOutcomeStart) : end])
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		var reported reportedObjectiveOutcome
+		if decoder.Decode(&reported) == nil && decoder.Decode(&struct{}{}) == io.EOF {
+			switch strings.TrimSpace(reported.Status) {
+			case string(taskresult.OutcomePartial), string(taskresult.OutcomeBlocked):
+				return "", false
+			}
+		}
+	}
+	return "Live-resource handoff recovery required: a declared live_handoff objective has no durable runtime " +
+		"receipt. Use one of the available handoff-capable tools to transfer the existing live resource to human " +
+		"control and enter durable suspension. Do not open a replacement resource, perform an external action, or " +
+		"return a terminal success. If the existing resource cannot be handed off, return a corrected partial or " +
+		"blocked outcome with the specific reason.", true
+}
+
 func terminalResultText(value string) string {
 	return strings.TrimSpace(value)
 }
@@ -276,6 +348,7 @@ func terminalResultText(value string) string {
 func validateObjectiveOutcome(
 	reported reportedObjectiveOutcome,
 	audits []toolshared.WriteAuditEntry,
+	verifiedReceipts []taskresult.Receipt,
 	checklist []runtimeObjectiveItem,
 ) *taskresult.Outcome {
 	status := strings.TrimSpace(reported.Status)
@@ -306,6 +379,23 @@ func validateObjectiveOutcome(
 			Tool: audit.Tool, Summary: audit.Summary, Metadata: copyObjectiveMetadata(audit.Metadata),
 		}
 	}
+	for _, receipt := range verifiedReceipts {
+		receipt.ID = strings.TrimSpace(receipt.ID)
+		receipt.Kind = strings.TrimSpace(receipt.Kind)
+		if receipt.ID == "" ||
+			(receipt.Kind != taskresult.ObjectiveKindExternalAction &&
+				receipt.Kind != taskresult.ObjectiveKindLiveHandoff) {
+			continue
+		}
+		if receipt.Kind == taskresult.ObjectiveKindLiveHandoff &&
+			(strings.TrimSpace(receipt.Action) != "handoff" ||
+				strings.TrimSpace(receipt.Metadata["resource_kind"]) == "" ||
+				strings.TrimSpace(receipt.Metadata["resource_id"]) == "") {
+			continue
+		}
+		receipt.Metadata = copyObjectiveMetadata(receipt.Metadata)
+		receipts[receipt.ID] = receipt
+	}
 	outcome := &taskresult.Outcome{Explanation: boundedObjectiveText(reported.Explanation)}
 	expected := make(map[string]runtimeObjectiveItem, len(checklist))
 	for _, item := range checklist {
@@ -314,6 +404,7 @@ func validateObjectiveOutcome(
 	partitioned := make(map[string]struct{}, len(checklist))
 	consumedReceipts := make(map[string]struct{})
 	missingExternalObjectives := 0
+	missingHandoffObjectives := 0
 	partitionValid := true
 	missingSeen := make(map[string]struct{})
 	appendMissing := func(item string) {
@@ -359,8 +450,11 @@ func validateObjectiveOutcome(
 			continue
 		}
 		partitioned[id] = struct{}{}
-		if item.Kind == "external_action" {
+		switch item.Kind {
+		case taskresult.ObjectiveKindExternalAction:
 			missingExternalObjectives++
+		case taskresult.ObjectiveKindLiveHandoff:
+			missingHandoffObjectives++
 		}
 		appendMissing(item.Item)
 	}
@@ -385,16 +479,16 @@ func validateObjectiveOutcome(
 		partitioned[id] = struct{}{}
 		item := taskresult.Item{Item: spec.Item, Kind: spec.Kind}
 		if item.Kind == "result" {
-			unexpectedExternalAction := false
+			unexpectedReceipt := false
 			for _, receiptID := range reportedItem.ReceiptIDs {
-				_, unexpectedExternalAction = receipts[strings.TrimSpace(receiptID)]
-				if unexpectedExternalAction {
+				_, unexpectedReceipt = receipts[strings.TrimSpace(receiptID)]
+				if unexpectedReceipt {
 					break
 				}
 			}
-			if unexpectedExternalAction {
+			if unexpectedReceipt {
 				partitionValid = false
-				appendMissing(item.Item + " (read-only result included a verified external-action receipt)")
+				appendMissing(item.Item + " (read-only result included a verified runtime receipt)")
 				continue
 			}
 			output, reason := normalizeObjectiveOutput(reportedItem.Output, spec.Acceptance)
@@ -421,14 +515,15 @@ func validateObjectiveOutcome(
 				continue
 			}
 			receipt, found := receipts[receiptID]
-			if !found {
+			if !found || receipt.Kind != item.Kind {
 				valid = false
 				continue
 			}
 			stagedReceiptIDs = append(stagedReceiptIDs, receiptID)
 			item.Receipts = append(item.Receipts, receipt)
 		}
-		if item.Kind == "external_action" && len(item.Receipts) == 0 {
+		if (item.Kind == taskresult.ObjectiveKindExternalAction ||
+			item.Kind == taskresult.ObjectiveKindLiveHandoff) && len(item.Receipts) == 0 {
 			valid = false
 		}
 		if !valid {
@@ -450,10 +545,17 @@ func validateObjectiveOutcome(
 	if missingResult {
 		appendMissing(objectiveOutcomeResultRequired)
 	}
-	unclaimedReceipts := 0
-	for receiptID := range receipts {
-		if _, consumed := consumedReceipts[receiptID]; !consumed {
-			unclaimedReceipts++
+	unclaimedExternalReceipts := 0
+	unclaimedHandoffReceipts := 0
+	for receiptID, receipt := range receipts {
+		if _, consumed := consumedReceipts[receiptID]; consumed {
+			continue
+		}
+		switch receipt.Kind {
+		case taskresult.ObjectiveKindExternalAction:
+			unclaimedExternalReceipts++
+		case taskresult.ObjectiveKindLiveHandoff:
+			unclaimedHandoffReceipts++
 		}
 	}
 	reportedStatus := strings.TrimSpace(reported.Status)
@@ -466,11 +568,19 @@ func validateObjectiveOutcome(
 	// extra external actions.
 	unverifiedPostcondition := reportedStatus == string(taskresult.OutcomePartial) ||
 		reportedStatus == string(taskresult.OutcomeBlocked)
-	if unclaimedReceipts > 0 &&
-		(!unverifiedPostcondition || !partitionValid || unclaimedReceipts != 1 || missingExternalObjectives != 1) {
+	if unclaimedExternalReceipts > 0 &&
+		(!unverifiedPostcondition || !partitionValid || unclaimedExternalReceipts != 1 ||
+			missingExternalObjectives != 1) {
 		appendPriorityMissing(
 			"an external browser action completed, but its receipt was not claimed by a completed " +
 				"external_action objective",
+		)
+	}
+	if unclaimedHandoffReceipts > 0 &&
+		(!unverifiedPostcondition || !partitionValid || unclaimedHandoffReceipts != 1 ||
+			missingHandoffObjectives != 1) {
+		appendPriorityMissing(
+			"a live resource handoff completed, but its receipt was not claimed by a completed live_handoff objective",
 		)
 	}
 	switch {

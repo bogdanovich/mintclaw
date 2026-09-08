@@ -120,6 +120,22 @@ func TestSubagentTool_Parameters(t *testing.T) {
 	if !ok || len(modelEnum) != 2 || modelEnum[0] != "gpt-5.6-luna" || modelEnum[1] != "gpt-5.6-sol" {
 		t.Fatalf("model enum = %#v, want sorted configured models", model["enum"])
 	}
+	objectives, ok := props["objective_items"].(map[string]any)
+	if !ok {
+		t.Fatal("Objective items parameter should exist")
+	}
+	objectiveDescription, _ := objectives["description"].(string)
+	if !strings.Contains(objectiveDescription, "use durable spawn or delegate") {
+		t.Fatalf("objective description does not direct live handoffs to durable tools: %q", objectiveDescription)
+	}
+	itemSchema := objectives["items"].(map[string]any)
+	itemProperties := itemSchema["properties"].(map[string]any)
+	kindSchema := itemProperties["kind"].(map[string]any)
+	kindEnum, ok := kindSchema["enum"].([]string)
+	if !ok || len(kindEnum) != 2 || kindEnum[0] != taskresult.ObjectiveKindResult ||
+		kindEnum[1] != taskresult.ObjectiveKindExternalAction {
+		t.Fatalf("synchronous objective kind enum = %#v, want result and external_action", kindSchema["enum"])
+	}
 
 	// Check required fields
 	required, ok := params["required"].([]string)
@@ -128,6 +144,19 @@ func TestSubagentTool_Parameters(t *testing.T) {
 	}
 	if len(required) != 1 || required[0] != "task" {
 		t.Errorf("Required should be ['task'], got: %v", required)
+	}
+}
+
+func TestSubagentToolRejectsLiveHandoffObjective(t *testing.T) {
+	manager := newTestSubagentManager(t, "test-model", t.TempDir())
+	result := newTestSubagentTool(t, manager).Execute(context.Background(), map[string]any{
+		"task": "leave the browser open for the user",
+		"objective_items": []any{map[string]any{
+			"item": "hand off the browser", "kind": taskresult.ObjectiveKindLiveHandoff,
+		}},
+	})
+	if result == nil || !result.IsError || !strings.Contains(result.ContentForLLM(), "kind result|external_action") {
+		t.Fatalf("live handoff objective result = %#v, want unsupported-kind error", result)
 	}
 }
 

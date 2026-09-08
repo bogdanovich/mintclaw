@@ -1063,6 +1063,7 @@ func (al *AgentLoop) publishInteractionNoticeAdmission(
 type interactionToolResultPayload struct {
 	InteractionID string               `json:"interaction_id"`
 	Outcome       interactions.Outcome `json:"outcome"`
+	ReceiptIDs    []string             `json:"receipt_ids,omitempty"`
 	Answers       map[string]string    `json:"answers,omitempty"`
 	Text          string               `json:"text,omitempty"`
 }
@@ -1274,8 +1275,12 @@ func extractResumedObjectiveOutcome(
 	record interactions.Record,
 ) (string, *taskresult.Outcome) {
 	required := strings.TrimSpace(record.Origin.TaskID) != "" && len(record.Origin.ObjectiveChecklist) > 0
-	return extractObjectiveOutcome(
-		content, audits, required, runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
+	return extractObjectiveOutcomeWithReceipts(
+		content,
+		audits,
+		record.OutcomeReceipts,
+		required,
+		runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist),
 	)
 }
 
@@ -1759,6 +1764,7 @@ func (al *AgentLoop) ensureInteractionToolResult(
 	payload := interactionToolResultPayload{
 		InteractionID: record.ID,
 		Outcome:       record.Outcome,
+		ReceiptIDs:    interactionOutcomeReceiptIDs(record),
 		Text:          record.Answer.Text,
 		Answers:       record.Answer.Values,
 	}

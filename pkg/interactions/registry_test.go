@@ -315,6 +315,35 @@ func TestRegistryPersistsOutcomeReceiptsAcrossReload(t *testing.T) {
 	}
 }
 
+func TestRegistryCreatesInteractionWithAtomicOutcomeReceipt(t *testing.T) {
+	registry, clock, path := newTestRegistry(t)
+	request := validCreate(clock, "interaction_handoff111111", "session-handoff")
+	request.OutcomeReceipts = []taskresult.Receipt{{
+		Kind:   taskresult.ObjectiveKindLiveHandoff,
+		Target: "browser_session:browser_session_1", Action: "handoff", Tool: "browser_session",
+		Metadata: map[string]string{
+			"resource_kind": "browser_session",
+			"resource_id":   "browser_session_1",
+		},
+	}}
+	record, err := registry.Create(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantID := record.ID + "_receipt_1"
+	if len(record.OutcomeReceipts) != 1 || record.OutcomeReceipts[0].ID != wantID {
+		t.Fatalf("created handoff receipts = %#v", record.OutcomeReceipts)
+	}
+
+	request.OutcomeReceipts[0].Metadata["resource_id"] = "mutated"
+	reloaded := NewRegistryWithOptions(path, Options{Now: clock.Now})
+	got, ok := reloaded.Get(record.ID)
+	if !ok || len(got.OutcomeReceipts) != 1 || got.OutcomeReceipts[0].ID != wantID ||
+		got.OutcomeReceipts[0].Metadata["resource_id"] != "browser_session_1" {
+		t.Fatalf("reloaded atomic handoff receipt = %#v, found=%t", got.OutcomeReceipts, ok)
+	}
+}
+
 func TestRegistryPersistsSupersedingApprovalGuidance(t *testing.T) {
 	registry, clock, path := newTestRegistry(t)
 	request := validCreate(clock, "interaction_steering111111", "owner-session")

@@ -16,6 +16,15 @@ type Tool interface {
 	Execute(ctx context.Context, args map[string]any) *ToolResult
 }
 
+// ObjectiveRecoveryProvider identifies a tool that can recover a missing
+// runtime-verifiable objective without exposing unrelated tools or operations
+// during the bounded repair pass. The returned schema is both model-visible
+// and runtime-enforced; implementations still return ordinary ToolResults and
+// the runtime validates their control-plane evidence independently.
+type ObjectiveRecoveryProvider interface {
+	ObjectiveRecoveryParameters(kind string) (map[string]any, bool)
+}
+
 // ArgumentsCanonicalizer returns a cloned, semantically equivalent argument
 // map for schema validation and execution. Implementations must not mutate the
 // provider-owned input map.

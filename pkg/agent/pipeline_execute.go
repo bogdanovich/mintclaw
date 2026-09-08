@@ -538,8 +538,36 @@ func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageRe
 		_ = runner.appendToolMessage(deniedMsg, toolMessagePersistOnly)
 		return true
 	}
+	denyByObjectiveRecovery := func() bool {
+		if exec.objectiveRepairToolKind == "" {
+			return false
+		}
+		if err := ts.agent.Tools.ValidateObjectiveRecoveryArguments(
+			toolName,
+			exec.objectiveRepairToolKind,
+			toolArgs,
+		); err != nil {
+			llm.toolResponseDisposition = toolResponseNeedsModel
+			content := "Tool execution denied by the objective-recovery capability: " + err.Error()
+			p.emitEvent(
+				runtimeevents.KindAgentToolExecSkipped,
+				ts.eventMeta("runTurn", "turn.tool.skipped"),
+				ToolExecSkippedPayload{ToolCallID: tc.ID, Tool: toolName, Reason: content},
+			)
+			_ = runner.appendToolMessage(providers.Message{
+				Role: "tool", Content: content, ToolCallID: tc.ID,
+			}, toolMessagePersistAndIngest)
+			return true
+		}
+		return false
+	}
 
 	if denyByTurnProfile() {
+		return skipToolCall()
+	}
+	// Recovery restrictions are a capability boundary, so reject the original
+	// model call before any process or in-process hook can handle it directly.
+	if denyByObjectiveRecovery() {
 		return skipToolCall()
 	}
 	if p.Interaction.Hooks != nil {
@@ -597,6 +625,11 @@ func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageRe
 		return skipToolCall()
 	}
 	if denyByTurnProfile() {
+		return skipToolCall()
+	}
+	// Hooks may rewrite an admitted call; enforce the same restricted schema
+	// again before the rewritten tool is allowed to proceed.
+	if denyByObjectiveRecovery() {
 		return skipToolCall()
 	}
 	toolArgs = ts.codingInstructions.normalizeArguments(toolName, toolArgs)
@@ -1136,6 +1169,7 @@ func (runner *toolLoopRunner) invokeToolCall(
 							if toolResult != nil && toolResult.Control.Suspension != nil &&
 								toolResp.Result.Control.Suspension == nil {
 								toolResp.Result.Control.ResolveSuspension = nil
+								toolResp.Result.Control.LiveHandoff = nil
 							}
 						}
 					}
@@ -1160,6 +1194,11 @@ func (runner *toolLoopRunner) invokeToolCall(
 
 	if toolResult == nil {
 		toolResult = toolshared.ErrorResult("hook returned nil tool result")
+	}
+	if toolResult.Control.LiveHandoff != nil && toolResult.Control.Suspension == nil {
+		toolResult = toolshared.ErrorResult(
+			"live-resource handoff requires a durable human-input suspension",
+		)
 	}
 	if call.taskSuspended {
 		toolResult.Control.TaskSuspended = true
@@ -2305,6 +2344,24 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		resolveCanceled()
 		return turnStepContinue, false, toolshared.ErrorResult(message)
 	}
+	var outcomeReceipts []taskresult.Receipt
+	if r.exec != nil {
+		outcomeReceipts = mergeOutcomeReceipts(
+			r.exec.receipts,
+			interactionOutcomeReceipts(r.exec.writeAudit),
+		)
+	}
+	if result.Control.LiveHandoff != nil {
+		if r.ts == nil || r.ts.agent == nil || r.ts.agent.Tools == nil ||
+			!r.ts.agent.Tools.SupportsLiveResourceHandoff(toolName) {
+			return fallback("live-resource handoff requires a durable tool-owned resolver")
+		}
+		receipt, receiptErr := liveResourceHandoffReceipt(result.Control.LiveHandoff, toolName)
+		if receiptErr != nil {
+			return fallback(receiptErr.Error())
+		}
+		outcomeReceipts = mergeOutcomeReceipts(outcomeReceipts, []taskresult.Receipt{receipt})
+	}
 	if r.ts == nil || r.ts.opts.NoHistory {
 		return fallback("request_user_input requires durable session history")
 	}
@@ -2375,6 +2432,7 @@ func (r *toolLoopRunner) trySuspendToolCall(
 		ApprovalAction:   strings.TrimSpace(approvalAction),
 		ExecutionContext: cloneInboundContext(originInbound),
 		Resolution:       result.Control.ResolveSuspension,
+		OutcomeReceipts:  outcomeReceipts,
 		Origin: interactions.Origin{
 			TurnID:                 r.ts.turnID,
 			ExecutionID:            effectiveToolExecutionID(r.ts),
@@ -2429,6 +2487,55 @@ func (r *toolLoopRunner) trySuspendToolCall(
 	return turnStepSuspend, true, nil
 }
 
+func liveResourceHandoffReceipt(
+	handoff *toolshared.LiveResourceHandoff,
+	toolName string,
+) (taskresult.Receipt, error) {
+	if handoff == nil {
+		return taskresult.Receipt{}, nil
+	}
+	resourceKind := strings.TrimSpace(handoff.ResourceKind)
+	resourceID := strings.TrimSpace(handoff.ResourceID)
+	if resourceKind == "" || len([]rune(resourceKind)) > 64 ||
+		resourceID == "" || len([]rune(resourceID)) > 512 {
+		return taskresult.Receipt{}, fmt.Errorf(
+			"live-resource handoff requires bounded resource kind and ID",
+		)
+	}
+	target := resourceKind + ":" + resourceID
+	if len([]rune(target)) > 1024 {
+		return taskresult.Receipt{}, fmt.Errorf("live-resource handoff target exceeds runtime bounds")
+	}
+	return taskresult.Receipt{
+		Kind:   taskresult.ObjectiveKindLiveHandoff,
+		Target: target,
+		Action: "handoff",
+		Tool:   strings.TrimSpace(toolName),
+		Metadata: map[string]string{
+			"resource_kind": resourceKind,
+			"resource_id":   resourceID,
+		},
+	}, nil
+}
+
+func mergeOutcomeReceipts(groups ...[]taskresult.Receipt) []taskresult.Receipt {
+	var merged []taskresult.Receipt
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		for _, receipt := range taskresult.CloneReceipts(group) {
+			receipt.ID = strings.TrimSpace(receipt.ID)
+			if receipt.ID != "" {
+				if _, duplicate := seen[receipt.ID]; duplicate {
+					continue
+				}
+				seen[receipt.ID] = struct{}{}
+			}
+			merged = append(merged, receipt)
+		}
+	}
+	return merged
+}
+
 func resolveCanceledToolSuspension(ctx context.Context, result *toolshared.ToolResult) {
 	if result == nil || result.Control.ResolveSuspension == nil {
 		return
@@ -2452,6 +2559,7 @@ func transferToolSuspensionResolution(current, replacement *toolshared.ToolResul
 	}
 	replacement.Control.Suspension = current.Control.Suspension
 	replacement.Control.ResolveSuspension = current.Control.ResolveSuspension
+	replacement.Control.LiveHandoff = current.Control.LiveHandoff
 	current.Control.ResolveSuspension = nil
 	return true
 }

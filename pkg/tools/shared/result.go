@@ -99,6 +99,50 @@ type ToolControl struct {
 	// ResolveSuspension performs the bounded domain transition after the
 	// interaction is answered, times out, is canceled, or fails.
 	ResolveSuspension func(context.Context, interactions.Outcome) error `json:"-"`
+
+	// LiveHandoff proves that the tool transferred one live resource to human
+	// control before requesting a durable suspension. The runtime, not the
+	// model, turns this proof into an objective receipt after it durably owns
+	// the suspension.
+	LiveHandoff *LiveResourceHandoff `json:"-"`
+}
+
+// LiveResourceHandoff identifies a successfully transferred live resource.
+// ResourceKind is an extensible tool-defined namespace (for example,
+// "browser_session"); ResourceID is the opaque identity already returned by
+// that tool. A handoff is valid only together with a durable suspension.
+type LiveResourceHandoff struct {
+	ResourceKind string
+	ResourceID   string
+}
+
+// LiveResourceHandoffDisposition is the tool-facing lifecycle decision for a
+// persisted handoff. It deliberately hides whether continuation came from a
+// question answer or an approval so resource tools share one stable contract.
+type LiveResourceHandoffDisposition string
+
+const (
+	LiveResourceHandoffResume  LiveResourceHandoffDisposition = "resume"
+	LiveResourceHandoffAbandon LiveResourceHandoffDisposition = "abandon"
+)
+
+// LiveResourceHandoffDispositionForOutcome maps interaction-specific success
+// values onto the resource lifecycle contract.
+func LiveResourceHandoffDispositionForOutcome(outcome interactions.Outcome) LiveResourceHandoffDisposition {
+	switch outcome {
+	case interactions.OutcomeAnswered, interactions.OutcomeAllowed:
+		return LiveResourceHandoffResume
+	default:
+		return LiveResourceHandoffAbandon
+	}
+}
+
+// LiveResourceHandoffResolver durably rebinds an affirmative interaction to the
+// live resource that issued its receipt. Implementations must be idempotent:
+// recovery may repeat resolution after a process restart. Returning an error
+// prevents the stale receipt from certifying a resource that no longer exists.
+type LiveResourceHandoffResolver interface {
+	ResolveLiveResourceHandoff(context.Context, LiveResourceHandoff, LiveResourceHandoffDisposition) error
 }
 
 // ToolDelivery is the single routing directive consumed by delivery code.
