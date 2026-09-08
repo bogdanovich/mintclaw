@@ -3,6 +3,7 @@ package integrationtools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,7 +43,11 @@ func (m *mockInstallRegistry) DownloadAndInstall(
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(validSkillMarkdown), 0o600); err != nil {
+	markdown := fmt.Sprintf(
+		"---\nname: %s\ndescription: Review pull requests\n---\n# PR Review\n",
+		filepath.Base(targetDir),
+	)
+	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(markdown), 0o600); err != nil {
 		return nil, err
 	}
 	return &skills.InstallResult{Version: "test"}, nil
@@ -165,19 +170,19 @@ func (m *mockFailingInstallRegistry) DownloadAndInstall(
 }
 
 func TestInstallSkillToolName(t *testing.T) {
-	tool := NewInstallSkillTool(skills.NewRegistryManager(), t.TempDir())
+	tool := NewInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	assert.Equal(t, "install_skill", tool.Name())
 }
 
 func TestInstallSkillToolMissingSlug(t *testing.T) {
-	tool := NewInstallSkillTool(skills.NewRegistryManager(), t.TempDir())
+	tool := NewInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	result := tool.Execute(context.Background(), map[string]any{})
 	assert.True(t, result.IsError)
 	assert.Contains(t, result.ForLLM, "identifier is required and must be a non-empty string")
 }
 
 func TestInstallSkillToolEmptySlug(t *testing.T) {
-	tool := NewInstallSkillTool(skills.NewRegistryManager(), t.TempDir())
+	tool := NewInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	result := tool.Execute(context.Background(), map[string]any{
 		"slug": "   ",
 	})
@@ -188,7 +193,7 @@ func TestInstallSkillToolEmptySlug(t *testing.T) {
 func TestInstallSkillToolUnsafeSlug(t *testing.T) {
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(skills.NewClawHubRegistry(skills.ClawHubConfig{Enabled: true}))
-	tool := NewInstallSkillTool(registryMgr, t.TempDir())
+	tool := NewInstallSkillTool(registryMgr, canonicalInstallTempDir(t))
 
 	cases := []string{
 		"../etc/passwd",
@@ -207,7 +212,7 @@ func TestInstallSkillToolUnsafeSlug(t *testing.T) {
 }
 
 func TestInstallSkillToolAlreadyExists(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInstallTempDir(t)
 	skillDir := filepath.Join(workspace, "skills", "existing-skill")
 	require.NoError(t, os.MkdirAll(skillDir, 0o755))
 
@@ -223,7 +228,7 @@ func TestInstallSkillToolAlreadyExists(t *testing.T) {
 }
 
 func TestInstallSkillToolRegistryNotFound(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInstallTempDir(t)
 	tool := NewInstallSkillTool(skills.NewRegistryManager(), workspace)
 	result := tool.Execute(context.Background(), map[string]any{
 		"slug":     "some-skill",
@@ -235,7 +240,7 @@ func TestInstallSkillToolRegistryNotFound(t *testing.T) {
 }
 
 func TestInstallSkillToolParameters(t *testing.T) {
-	tool := NewInstallSkillTool(skills.NewRegistryManager(), t.TempDir())
+	tool := NewInstallSkillTool(skills.NewRegistryManager(), canonicalInstallTempDir(t))
 	params := tool.Parameters()
 
 	props, ok := params["properties"].(map[string]any)
@@ -254,7 +259,7 @@ func TestInstallSkillToolParameters(t *testing.T) {
 func TestInstallSkillToolMissingRegistry(t *testing.T) {
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockGitHubInstallRegistry{})
-	tool := NewInstallSkillTool(registryMgr, t.TempDir())
+	tool := NewInstallSkillTool(registryMgr, canonicalInstallTempDir(t))
 	result := tool.Execute(context.Background(), map[string]any{
 		"slug": "some-skill",
 	})
@@ -269,7 +274,7 @@ func TestInstallSkillToolAllowsGitHubURLSlug(t *testing.T) {
 
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&stubGitHubInstallRegistry{GitHubRegistry: githubRegistry})
-	workspace := t.TempDir()
+	workspace := canonicalInstallTempDir(t)
 	tool := NewInstallSkillTool(registryMgr, workspace)
 
 	slug := "https://github.com/synthetic-lab/octofriend/tree/main/.agents/skills/pr-review"
@@ -281,10 +286,10 @@ func TestInstallSkillToolAllowsGitHubURLSlug(t *testing.T) {
 	assert.False(t, result.IsError)
 	assert.Contains(t, result.ForLLM, `Successfully installed skill`)
 
-	data, err := os.ReadFile(filepath.Join(workspace, "skills", "pr-review", ".skill-origin.json"))
+	data, err := os.ReadFile(filepath.Join(workspace, "skills", "pr-review", skills.OriginMetadataFilename))
 	require.NoError(t, err)
 
-	var meta originMeta
+	var meta skills.OriginMetadata
 	require.NoError(t, json.Unmarshal(data, &meta))
 	assert.Equal(t, "third_party", meta.OriginKind)
 	assert.Equal(t, "github", meta.Registry)
@@ -301,7 +306,7 @@ func TestInstallSkillToolPreservesGitHubSourceURLWithEnterpriseRegistry(t *testi
 
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&stubGitHubInstallRegistry{GitHubRegistry: githubRegistry})
-	workspace := t.TempDir()
+	workspace := canonicalInstallTempDir(t)
 	tool := NewInstallSkillTool(registryMgr, workspace)
 
 	slug := "https://github.com/synthetic-lab/octofriend/tree/main/.agents/skills/pr-review"
@@ -312,10 +317,10 @@ func TestInstallSkillToolPreservesGitHubSourceURLWithEnterpriseRegistry(t *testi
 
 	assert.False(t, result.IsError)
 
-	data, err := os.ReadFile(filepath.Join(workspace, "skills", "pr-review", ".skill-origin.json"))
+	data, err := os.ReadFile(filepath.Join(workspace, "skills", "pr-review", skills.OriginMetadataFilename))
 	require.NoError(t, err)
 
-	var meta originMeta
+	var meta skills.OriginMetadata
 	require.NoError(t, json.Unmarshal(data, &meta))
 	assert.Equal(t, "synthetic-lab/octofriend/.agents/skills/pr-review", meta.Slug)
 	assert.Equal(t, slug, meta.RegistryURL)
@@ -323,7 +328,7 @@ func TestInstallSkillToolPreservesGitHubSourceURLWithEnterpriseRegistry(t *testi
 }
 
 func TestInstallSkillToolRejectsInvalidInstalledSkill(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInstallTempDir(t)
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockInvalidInstallRegistry{})
 	tool := NewInstallSkillTool(registryMgr, workspace)
@@ -340,7 +345,7 @@ func TestInstallSkillToolRejectsInvalidInstalledSkill(t *testing.T) {
 }
 
 func TestInstallSkillToolRollsBackOnOriginMetadataWriteFailure(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInstallTempDir(t)
 	registryMgr := skills.NewRegistryManager()
 	registryMgr.AddRegistry(&mockInstallRegistry{})
 	tool := NewInstallSkillTool(registryMgr, workspace)
@@ -365,7 +370,7 @@ func TestInstallSkillToolRollsBackOnOriginMetadataWriteFailure(t *testing.T) {
 }
 
 func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterDownloadFailure(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInstallTempDir(t)
 	skillDir := filepath.Join(workspace, "skills", "existing-skill")
 	require.NoError(t, os.MkdirAll(skillDir, 0o755))
 	oldContent := []byte("---\nname: existing-skill\ndescription: Existing skill\n---\n# Existing\n")
@@ -390,7 +395,7 @@ func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterDownloadFailure
 }
 
 func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterMetadataFailure(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := canonicalInstallTempDir(t)
 	skillDir := filepath.Join(workspace, "skills", "existing-skill")
 	require.NoError(t, os.MkdirAll(skillDir, 0o755))
 	oldContent := []byte("---\nname: existing-skill\ndescription: Existing skill\n---\n# Existing\n")
@@ -420,4 +425,108 @@ func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterMetadataFailure
 	gotContent, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 	require.NoError(t, err)
 	assert.Equal(t, oldContent, gotContent)
+}
+
+func TestInstallSkillToolRejectsSymlinkWorkspaceSkillsRoot(t *testing.T) {
+	workspace := canonicalInstallTempDir(t)
+	outsideRoot := t.TempDir()
+	if err := os.Symlink(outsideRoot, filepath.Join(workspace, "skills")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(&mockInstallRegistry{})
+	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+		"slug":     "outside-skill",
+		"registry": "clawhub",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "invalid workspace skills directory")
+	_, err := os.Stat(filepath.Join(outsideRoot, "outside-skill"))
+	assert.True(t, os.IsNotExist(err), "installer wrote through workspace skills symlink: %v", err)
+}
+
+func TestInstallSkillToolRejectsSymlinkWorkspaceRoot(t *testing.T) {
+	outsideWorkspace := t.TempDir()
+	workspace := filepath.Join(canonicalInstallTempDir(t), "linked-workspace")
+	if err := os.Symlink(outsideWorkspace, workspace); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(&mockInstallRegistry{})
+	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+		"slug":     "outside-skill",
+		"registry": "clawhub",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "workspace root must be a real directory")
+	_, err := os.Stat(filepath.Join(outsideWorkspace, "skills", "outside-skill"))
+	assert.True(t, os.IsNotExist(err), "installer wrote through workspace symlink: %v", err)
+}
+
+func TestInstallSkillToolRejectsSymlinkWorkspaceAncestor(t *testing.T) {
+	safeParent := canonicalInstallTempDir(t)
+	outsideParent := canonicalInstallTempDir(t)
+	realWorkspace := filepath.Join(outsideParent, "workspace")
+	require.NoError(t, os.Mkdir(realWorkspace, 0o755))
+	linkedParent := filepath.Join(safeParent, "linked-parent")
+	if err := os.Symlink(outsideParent, linkedParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	workspace := filepath.Join(linkedParent, "workspace")
+
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(&mockInstallRegistry{})
+	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+		"slug":     "outside-skill",
+		"registry": "clawhub",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "workspace path contains a symlink component")
+	_, err := os.Stat(filepath.Join(realWorkspace, "skills", "outside-skill"))
+	assert.True(t, os.IsNotExist(err), "installer wrote through workspace ancestor symlink: %v", err)
+}
+
+func TestInstallSkillToolForceReinstallRestoresExactTreeAfterValidationFailure(t *testing.T) {
+	workspace := canonicalInstallTempDir(t)
+	skillDir := filepath.Join(workspace, "skills", "broken-skill")
+	require.NoError(t, os.MkdirAll(filepath.Join(skillDir, "references"), 0o755))
+	oldContent := []byte("---\nname: broken-skill\ndescription: Existing skill\n---\n# Existing\n")
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), oldContent, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "references", "guide.md"), []byte("old guide"), 0o640))
+	before, err := skills.NewWorkspaceSkillInventory(workspace).Inspect("broken-skill")
+	require.NoError(t, err)
+	require.True(t, before.Valid)
+
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(&mockInvalidInstallRegistry{})
+	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+		"slug":     "broken-skill",
+		"registry": "clawhub",
+		"force":    true,
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "not a valid skill")
+	after, err := skills.NewWorkspaceSkillInventory(workspace).Inspect("broken-skill")
+	require.NoError(t, err)
+	require.True(t, after.Valid)
+	assert.Equal(t, before.Revision, after.Revision)
+	backups, err := filepath.Glob(filepath.Join(workspace, "skills", ".broken-skill.mintclaw-backup-*"))
+	require.NoError(t, err)
+	assert.Empty(t, backups)
+}
+
+func canonicalInstallTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve temporary directory: %v", err)
+	}
+	return resolved
 }
