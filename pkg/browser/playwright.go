@@ -1779,7 +1779,10 @@ func (worker *playwrightWorker) Close(ctx context.Context) error {
 		outputErr = os.RemoveAll(worker.outputDir)
 	}
 	if clientErr != nil || proxyErr != nil || outputErr != nil {
-		return errors.Join(ErrWorkerUnavailable, ErrCleanupRequired)
+		if worker.ephemeralRuntime != nil {
+			return errors.Join(ErrWorkerUnavailable, ErrCleanupRequired)
+		}
+		return ErrWorkerUnavailable
 	}
 	ephemeralErr := error(nil)
 	if worker.ephemeralRuntime != nil {

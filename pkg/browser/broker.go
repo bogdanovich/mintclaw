@@ -530,7 +530,10 @@ func (broker *Broker) Open(ctx context.Context, request OpenRequest) (Session, e
 			return broker.reconcileFailedSessionMutationLocked(ctx, current, slot.safeFailure, persistReadyErr)
 		}
 		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-			return session, errors.Join(persistReadyErr, ErrWorkerUnavailable)
+			return session, preserveCleanupRequired(
+				errors.Join(persistReadyErr, ErrWorkerUnavailable),
+				closeErr,
+			)
 		}
 		session.State = SessionLost
 		clearSessionSnapshot(&session)
@@ -740,12 +743,15 @@ func (broker *Broker) finishFailedOpen(
 			}
 			return broker.reconcileFailedSessionMutationLocked(ctx, current, slot.safeFailure, updateErr)
 		}
-		_ = broker.cleanupSlot(ctx, slot)
-		return session, errors.Join(ErrWorkerUnavailable, updateErr)
+		baseErr := errors.Join(ErrWorkerUnavailable, updateErr)
+		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
+			return session, preserveCleanupRequired(baseErr, closeErr)
+		}
+		return session, baseErr
 	}
 	session = closing
 	if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-		return session, errors.Join(ErrWorkerUnavailable, ErrCleanupRequired)
+		return session, preserveCleanupRequired(ErrWorkerUnavailable, closeErr)
 	}
 
 	session.State = SessionLost
@@ -838,9 +844,9 @@ func (broker *Broker) Status(ctx context.Context, owner Owner, sessionID string)
 	if slot != nil {
 		slot.safeFailure = safeFailure
 		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
-			return Session{}, errors.Join(
+			return Session{}, preserveCleanupRequired(
 				fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
-				ErrCleanupRequired,
+				closeErr,
 			)
 		}
 	}
@@ -1372,17 +1378,14 @@ func (broker *Broker) finishSessionLocked(
 	}
 	if slot != nil {
 		if closeErr := broker.cleanupSlot(ctx, slot); closeErr != nil {
+			cleanupFailure := fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable)
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return Session{}, errors.Join(
-					fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
-					ErrCleanupRequired,
-					ctxErr,
+				return Session{}, preserveCleanupRequired(
+					errors.Join(cleanupFailure, ctxErr),
+					closeErr,
 				)
 			}
-			return Session{}, errors.Join(
-				fmt.Errorf("%w: worker cleanup failed", ErrWorkerUnavailable),
-				ErrCleanupRequired,
-			)
+			return Session{}, preserveCleanupRequired(cleanupFailure, closeErr)
 		}
 	}
 	session.State = desired
@@ -1721,6 +1724,13 @@ func (broker *Broker) cleanupSlot(ctx context.Context, slot *workerSlot) error {
 	}
 	slot.cleanupComplete = true
 	return nil
+}
+
+func preserveCleanupRequired(baseErr, cleanupErr error) error {
+	if errors.Is(cleanupErr, ErrCleanupRequired) {
+		return errors.Join(baseErr, ErrCleanupRequired)
+	}
+	return baseErr
 }
 
 func (broker *Broker) authorize(request OpenRequest) (config.BrowserTargetConfig, config.BrowserProfileConfig, error) {

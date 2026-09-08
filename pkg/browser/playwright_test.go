@@ -1823,6 +1823,42 @@ func TestPlaywrightEphemeralCleanupFailureRequiresOperatorAndBlocksReuse(t *test
 	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
 }
 
+func TestPlaywrightEphemeralManagerCloseFailureRetainsRuntimeForRetry(t *testing.T) {
+	root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
+	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakePlaywrightClient{catalog: playwrightCatalogFixture()}
+	factory.clientFactory = func() playwrightMCPClient { return client }
+	broker := newTestBroker(t, root, NewMemoryStore(), factory)
+	owner := testOwner()
+	session, err := broker.Open(context.Background(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "ephemeral",
+	})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	client.closeErr = errors.New("private manager close failure")
+	_, closeErr := broker.Close(context.Background(), owner, session.ID)
+	if !errors.Is(closeErr, ErrWorkerUnavailable) || !errors.Is(closeErr, ErrCleanupRequired) ||
+		strings.Contains(closeErr.Error(), "private") {
+		t.Fatalf("Close() error = %v", closeErr)
+	}
+	entries, readErr := os.ReadDir(runtimeConfig.EphemeralRoot)
+	if readErr != nil || len(entries) != 1 {
+		t.Fatalf("runtime retained for exact retry = %#v, %v", entries, readErr)
+	}
+
+	client.closeErr = nil
+	closed, err := broker.Close(context.Background(), owner, session.ID)
+	if err != nil || closed.State != SessionClosed {
+		t.Fatalf("Close() retry = %+v, %v", closed, err)
+	}
+	assertDirectoryEmpty(t, runtimeConfig.EphemeralRoot)
+}
+
 func TestPlaywrightEphemeralProfileRejectsPersistentHumanHandoff(t *testing.T) {
 	root, runtimeConfig := ephemeralPlaywrightConfig(t, true)
 	factory, err := NewPlaywrightProfileWorkerFactory(root, "gateway", "ephemeral")
@@ -2904,6 +2940,7 @@ func TestPlaywrightWorkerCloseFailureRetriesManagerCleanup(t *testing.T) {
 		cancelLifetime: cancelLifetime,
 	}
 	if err := worker.Close(context.Background()); !errors.Is(err, ErrWorkerUnavailable) ||
+		errors.Is(err, ErrCleanupRequired) ||
 		strings.Contains(err.Error(), "secret") {
 		t.Fatalf("Close() error = %v", err)
 	}
