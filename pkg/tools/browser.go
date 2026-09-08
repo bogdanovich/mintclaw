@@ -1570,12 +1570,12 @@ func (tool *BrowserActTool) DurableArguments(args map[string]any) (map[string]an
 	if tool != nil && tool.runtime != nil {
 		limits = tool.runtime.config.Limits.Effective()
 	}
-	if _, err := browseraction.DecodeModelAction(args["action"], limits.TextInputBytes); err != nil {
-		return nil, fmt.Errorf("validate browser action before durable projection: %w", err)
-	}
 	projected, err := tool.CanonicalArguments(args)
 	if err != nil {
 		return nil, err
+	}
+	if _, err = browseraction.DecodeModelAction(projected["action"], limits.TextInputBytes); err != nil {
+		return nil, fmt.Errorf("validate browser action before durable projection: %w", err)
 	}
 	action, ok := projected["action"].(map[string]any)
 	if !ok {
@@ -1599,8 +1599,12 @@ func (tool *BrowserActTool) DurableArguments(args map[string]any) (map[string]an
 	return projected, nil
 }
 
-// CanonicalArguments treats provider-emitted null optional context authority
-// exactly like omission while retaining a cloned execution map.
+// CanonicalArguments treats provider-emitted null optional fields exactly like
+// omission while retaining a cloned execution map. Compatibility schema
+// transforms flatten the action union for providers that cannot consume oneOf;
+// those providers can consequently emit null placeholders for fields belonging
+// to another action kind. Removing only null placeholders restores the strict
+// action shape without admitting a non-null cross-kind value.
 func (*BrowserActTool) CanonicalArguments(args map[string]any) (map[string]any, error) {
 	projected, err := cloneBrowserToolArguments(args)
 	if err != nil {
@@ -1610,12 +1614,19 @@ func (*BrowserActTool) CanonicalArguments(args map[string]any) (map[string]any, 
 	// null. The live action path already treats those values as absent; make
 	// the durable projection canonical before schema validation so persistence
 	// does not reject an otherwise valid top-level page action.
-	for _, field := range []string{"frame_id", "context_catalog_id", "context_generation"} {
+	for _, field := range []string{
+		"frame_id", "context_catalog_id", "context_generation", "effect", "confirmation",
+	} {
 		if value, present := projected[field]; present && value == nil {
 			delete(projected, field)
 		}
 	}
 	action, _ := projected["action"].(map[string]any)
+	for field, value := range action {
+		if value == nil {
+			delete(action, field)
+		}
+	}
 	kind, _ := action["kind"].(string)
 	if kind != string(browser.ActionClick) {
 		delete(projected, "effect")
