@@ -11,6 +11,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
+	taskregistry "github.com/bogdanovich/mintclaw/pkg/tasks"
 )
 
 type resumeInteractionCommand struct {
@@ -255,6 +256,13 @@ func (service interactionService) resumeOwned(
 	if readErr != nil {
 		return fmt.Errorf("read resumed interaction history: %w", readErr)
 	}
+	// Reconcile live resource ownership before either recovery finalizes cached
+	// model output or a new continuation can consume the persisted receipt.
+	if err := runtime.resolveDurableLiveHandoffs(ctx, agent, resuming); err != nil {
+		return service.failUnavailableLiveHandoff(
+			ctx, registry, interactionWorkspace, agent, resuming, err,
+		)
+	}
 	if finalContent, recoveredDeliverable, ok := interactionFinalAfterToolResult(
 		continuationHistory, record.Origin.ToolCallID,
 	); ok {
@@ -302,6 +310,7 @@ func (service interactionService) resumeOwned(
 	continuationOpts.InteractionOriginExecution = record.Origin.ExecutionID
 	continuationOpts.InteractionOriginContext = cloneInboundContext(record.Origin.ExecutionContext)
 	continuationOpts.ObjectiveChecklist = runtimeObjectiveChecklist(record.Origin.ObjectiveChecklist)
+	continuationOpts.InitialReceipts = taskresult.CloneReceipts(record.OutcomeReceipts)
 	continuationOpts.ExpectFinalDelivery = deliveryObservation != nil
 	continuationOpts.FinalDeliveryObservation = deliveryObservation
 	continuationOpts.InitialSteeringMessages = supersedingSteering
@@ -358,6 +367,33 @@ func (service interactionService) resumeOwned(
 		}
 	}
 	return deliveryErr
+}
+
+func (service interactionService) failUnavailableLiveHandoff(
+	ctx context.Context,
+	registry *interactions.Registry,
+	workspace string,
+	agent *AgentInstance,
+	record interactions.Record,
+	resolveErr error,
+) error {
+	current, ok := registry.Get(record.ID)
+	if !ok {
+		return errors.Join(resolveErr, interactions.ErrNotFound)
+	}
+	const code = "live_handoff_resource_unavailable"
+	failed, failErr := registry.Fail(current.ID, current.Revision, code, resolveErr.Error())
+	if failErr != nil {
+		return errors.Join(resolveErr, failErr)
+	}
+	service.runtime.cleanupInteractionOriginTools(ctx, agent, failed)
+	taskErr := service.runtime.failInteractionTask(
+		workspace,
+		failed,
+		taskregistry.StatusFailed,
+		"live resource became unavailable before interaction continuation",
+	)
+	return errors.Join(resolveErr, taskErr)
 }
 
 func (service interactionService) finalizeResumedInteraction(

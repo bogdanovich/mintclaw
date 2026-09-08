@@ -20,6 +20,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/identity"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	"github.com/bogdanovich/mintclaw/pkg/tools/loopguard"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
@@ -545,6 +546,23 @@ func (*BrowserSessionTool) ToolLoopSemantics() loopguard.Semantics {
 	return loopguard.SemanticsMutating
 }
 
+func (*BrowserSessionTool) ObjectiveRecoveryParameters(kind string) (map[string]any, bool) {
+	if strings.TrimSpace(kind) != taskresult.ObjectiveKindLiveHandoff {
+		return nil, false
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"operation": map[string]any{"type": "string", "enum": []string{"handoff"}},
+			"browser_session_id": map[string]any{
+				"type":        "string",
+				"description": "Broker-issued ID of the existing live browser session to hand to the user.",
+			},
+		},
+		"required": []string{"operation", "browser_session_id"}, "additionalProperties": false,
+	}, true
+}
+
 type browserSessionView struct {
 	BrowserSessionID     string                  `json:"browser_session_id"`
 	State                browser.SessionState    `json:"state"`
@@ -637,6 +655,11 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 	}
 	result := tool.runtime.result(browserSessionResult(session))
 	if operation == "handoff" && result != nil && !result.IsError {
+		handoff := toolshared.LiveResourceHandoff{
+			ResourceKind: "browser_session",
+			ResourceID:   session.ID,
+		}
+		result.Control.LiveHandoff = &handoff
 		result.Control.Suspension = &interactions.SuspensionRequest{
 			Kind: interactions.KindQuestion,
 			Questions: []interactions.Question{
@@ -650,19 +673,65 @@ func (tool *BrowserSessionTool) Execute(ctx context.Context, args map[string]any
 			Timeout:       time.Duration(tool.runtime.config.Limits.Effective().PreparedSeconds) * time.Second,
 		}
 		result.Control.ResolveSuspension = func(resolutionCtx context.Context, outcome interactions.Outcome) error {
-			if outcome == interactions.OutcomeAnswered {
-				_, resolutionErr := tool.runtime.source.ReleaseHandoff(resolutionCtx, owner, session.ID)
-				if resolutionErr == nil {
-					return nil
-				}
-				_, closeErr := tool.runtime.source.Close(context.WithoutCancel(resolutionCtx), owner, session.ID)
-				return errors.Join(resolutionErr, closeErr)
-			}
-			_, resolutionErr := tool.runtime.source.Close(resolutionCtx, owner, session.ID)
-			return resolutionErr
+			return tool.resolveLiveResourceHandoffForOwner(
+				resolutionCtx,
+				owner,
+				handoff,
+				toolshared.LiveResourceHandoffDispositionForOutcome(outcome),
+			)
 		}
 	}
 	return result
+}
+
+// ResolveLiveResourceHandoff implements the durable, idempotent handoff
+// binding used after interaction or gateway restart.
+func (tool *BrowserSessionTool) ResolveLiveResourceHandoff(
+	ctx context.Context,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) error {
+	if tool == nil || tool.runtime == nil || tool.runtime.source == nil ||
+		strings.TrimSpace(handoff.ResourceKind) != "browser_session" ||
+		strings.TrimSpace(handoff.ResourceID) == "" {
+		return errors.New("browser live-resource handoff binding is invalid")
+	}
+	owner, err := browserOwnerFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	return tool.resolveLiveResourceHandoffForOwner(ctx, owner, handoff, disposition)
+}
+
+func (tool *BrowserSessionTool) resolveLiveResourceHandoffForOwner(
+	ctx context.Context,
+	owner browser.Owner,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) error {
+	sessionID := strings.TrimSpace(handoff.ResourceID)
+	if disposition != toolshared.LiveResourceHandoffResume {
+		_, closeErr := tool.runtime.source.Close(ctx, owner, sessionID)
+		return closeErr
+	}
+	released, releaseErr := tool.runtime.source.ReleaseHandoff(ctx, owner, sessionID)
+	if releaseErr == nil {
+		if released.State == browser.SessionReady && released.Controller == browser.ControllerResumePending {
+			return nil
+		}
+		releaseErr = fmt.Errorf(
+			"browser live-resource handoff release returned unusable state %q with controller %q",
+			released.State,
+			released.Controller,
+		)
+	}
+	status, statusErr := tool.runtime.source.Status(context.WithoutCancel(ctx), owner, sessionID)
+	if statusErr == nil && status.State == browser.SessionReady &&
+		(status.Controller == browser.ControllerResumePending || status.Controller == browser.ControllerAgent) {
+		return nil
+	}
+	_, closeErr := tool.runtime.source.Close(context.WithoutCancel(ctx), owner, sessionID)
+	return errors.Join(releaseErr, statusErr, closeErr)
 }
 
 func (*BrowserContextsTool) Name() string { return "browser_contexts" }

@@ -718,7 +718,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 			FinalContentProtected: sensitiveDiagnosticResponse,
 		}, nil
 	}
-	if exec.objectiveRepairActive {
+	if exec.objectiveRepairActive && exec.objectiveRepairToolKind == "" {
 		cancelConfiguredStreamingLLM(turnCtx, llm)
 		logger.WarnCF("agent", "Ignored tool calls during objective finalization repair", map[string]any{
 			"agent_id":   ts.agent.ID,

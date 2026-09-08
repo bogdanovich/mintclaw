@@ -4,6 +4,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 // turnSpec is the mutable admission request assembled by entrypoints. It is
@@ -14,6 +15,7 @@ type turnSpec struct {
 	ModelBinding                 effectiveModelBinding
 	TaskID                       string // Durable task owning this turn, when one exists
 	ObjectiveChecklist           []runtimeObjectiveItem
+	InitialReceipts              []taskresult.Receipt
 	InteractionWorkspace         string              // Workspace owning inbound interaction routing
 	InteractionSessionKey        string              // User-facing session that owns interaction answers
 	InteractionRouteKey          string              // Routed scope key that owns interaction answers
@@ -48,6 +50,7 @@ type turnIdentity struct {
 	ModelBinding               effectiveModelBinding
 	TaskID                     string
 	ObjectiveChecklist         []runtimeObjectiveItem
+	InitialReceipts            []taskresult.Receipt
 	InteractionWorkspace       string
 	InteractionSessionKey      string
 	InteractionRouteKey        string
@@ -102,6 +105,7 @@ func freezeTurnInput(spec turnSpec) turnInput {
 			ModelBinding:               cloneEffectiveModelBinding(spec.ModelBinding),
 			TaskID:                     spec.TaskID,
 			ObjectiveChecklist:         cloneRuntimeObjectiveChecklist(spec.ObjectiveChecklist),
+			InitialReceipts:            taskresult.CloneReceipts(spec.InitialReceipts),
 			InteractionWorkspace:       spec.InteractionWorkspace,
 			InteractionSessionKey:      spec.InteractionSessionKey,
 			InteractionRouteKey:        spec.InteractionRouteKey,

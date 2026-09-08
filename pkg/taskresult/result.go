@@ -4,6 +4,12 @@ package taskresult
 
 const ReportSchemaV1 = "deliverable_report.v1"
 
+const (
+	ObjectiveKindResult         = "result"
+	ObjectiveKindExternalAction = "external_action"
+	ObjectiveKindLiveHandoff    = "live_handoff"
+)
+
 // Deliverable describes what a task produced, independent from model context,
 // user-facing wording, and delivery state.
 type Deliverable struct {
@@ -80,8 +86,9 @@ type ObjectiveOutput struct {
 	Truncated    bool                `json:"truncated,omitempty"`
 }
 
-// Receipt is durable, non-sensitive evidence that an external action reached
-// a successful terminal state. Protected page content must not be stored here.
+// Receipt is durable, non-sensitive runtime evidence that a verifiable
+// objective transition completed. Protected resource content must not be
+// stored here.
 type Receipt struct {
 	ID       string            `json:"id"`
 	Kind     string            `json:"kind"`

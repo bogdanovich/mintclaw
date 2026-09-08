@@ -752,9 +752,10 @@ func spawnSubTurn(
 	turnRes, turnErr := al.turns.currentRunner().run(childCtx, childTS, nil)
 	var objectiveOutcome *taskresult.Outcome
 	if turnErr == nil && turnRes.status != TurnEndStatusSuspended {
-		turnRes.finalContent, objectiveOutcome = extractObjectiveOutcome(
+		turnRes.finalContent, objectiveOutcome = extractObjectiveOutcomeWithReceipts(
 			turnRes.finalContent,
 			turnRes.writeAudit,
+			turnRes.receipts,
 			requireObjectiveOutcome,
 			objectiveChecklist,
 		)

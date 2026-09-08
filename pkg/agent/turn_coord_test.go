@@ -97,11 +97,12 @@ func (p *simpleConvProvider) GetDefaultModel() string {
 }
 
 type sequenceProvider struct {
-	responses []*providers.LLMResponse
-	errors    []error
-	requests  [][]providers.Message
-	callCount int
-	mu        sync.Mutex
+	responses    []*providers.LLMResponse
+	errors       []error
+	requests     [][]providers.Message
+	toolRequests [][]providers.ToolDefinition
+	callCount    int
+	mu           sync.Mutex
 }
 
 func (p *sequenceProvider) Chat(
@@ -117,6 +118,7 @@ func (p *sequenceProvider) Chat(
 	idx := p.callCount
 	p.callCount++
 	p.requests = append(p.requests, append([]providers.Message(nil), messages...))
+	p.toolRequests = append(p.toolRequests, append([]providers.ToolDefinition(nil), tools...))
 
 	if idx < len(p.errors) && p.errors[idx] != nil {
 		return nil, p.errors[idx]

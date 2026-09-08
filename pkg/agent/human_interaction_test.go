@@ -166,6 +166,21 @@ type durableApprovalHook struct {
 	calls         int
 }
 
+type selectiveDurableApprovalHook struct {
+	durableApprovalHook
+	tool string
+}
+
+func (hook *selectiveDurableApprovalHook) ApproveTool(
+	ctx context.Context,
+	request *ToolApprovalRequest,
+) (ApprovalDecision, error) {
+	if request == nil || request.Tool != hook.tool {
+		return ApprovalDecision{Approved: true}, nil
+	}
+	return hook.durableApprovalHook.ApproveTool(ctx, request)
+}
+
 type durableApprovalHardAbortHook struct{ durableApprovalHook }
 
 func (*durableApprovalHardAbortHook) AfterTool(
@@ -346,6 +361,8 @@ func (tool *blockingApprovalTool) Execute(
 
 type approvalBindingTool struct {
 	executions           int
+	resourceReady        func() bool
+	resourceReadyAtExec  bool
 	bindingCalls         []string
 	bindingContinuations []bool
 	executionIDs         []string
@@ -355,12 +372,49 @@ type approvalBindingTool struct {
 type browserHandoffContinuationTool struct {
 	ownerExecutionID      string
 	released              bool
+	resourceResolutionErr error
+	resolutionCalls       int
+	cleanupCalls          int
 	operations            []string
 	executionIDs          []string
 	approvalContinuations []bool
 }
 
 func (*browserHandoffContinuationTool) Name() string { return "browser_handoff_continuation" }
+
+func (*browserHandoffContinuationTool) ObjectiveRecoveryParameters(kind string) (map[string]any, bool) {
+	if kind != taskresult.ObjectiveKindLiveHandoff {
+		return nil, false
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"operation": map[string]any{"type": "string", "enum": []string{"handoff"}},
+		},
+		"required": []string{"operation"}, "additionalProperties": false,
+	}, true
+}
+
+func (tool *browserHandoffContinuationTool) CleanupTurn(context.Context) error {
+	tool.cleanupCalls++
+	return nil
+}
+
+func (tool *browserHandoffContinuationTool) ResolveLiveResourceHandoff(
+	_ context.Context,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) error {
+	tool.resolutionCalls++
+	if handoff.ResourceKind != "browser_session" || handoff.ResourceID != "browser_session_test" {
+		return errors.New("invalid test browser handoff binding")
+	}
+	if tool.resourceResolutionErr != nil {
+		return tool.resourceResolutionErr
+	}
+	tool.released = disposition == toolshared.LiveResourceHandoffResume
+	return nil
+}
 
 func (*browserHandoffContinuationTool) Description() string {
 	return "Exercise browser ownership across a human handoff continuation"
@@ -397,6 +451,9 @@ func (tool *browserHandoffContinuationTool) Execute(
 		return &toolshared.ToolResult{
 			ForLLM: `{"controller":"human"}`,
 			Control: toolshared.ToolControl{
+				LiveHandoff: &toolshared.LiveResourceHandoff{
+					ResourceKind: "browser_session", ResourceID: "browser_session_test",
+				},
 				Suspension: &interactions.SuspensionRequest{
 					Kind: interactions.KindQuestion, PromptSummary: "Release browser control", Timeout: time.Minute,
 					Questions: []interactions.Question{{
@@ -404,9 +461,14 @@ func (tool *browserHandoffContinuationTool) Execute(
 						Question: "Release browser control?",
 					}},
 				},
-				ResolveSuspension: func(_ context.Context, outcome interactions.Outcome) error {
-					tool.released = outcome == interactions.OutcomeAnswered
-					return nil
+				ResolveSuspension: func(resolutionCtx context.Context, outcome interactions.Outcome) error {
+					return tool.ResolveLiveResourceHandoff(
+						resolutionCtx,
+						toolshared.LiveResourceHandoff{
+							ResourceKind: "browser_session", ResourceID: "browser_session_test",
+						},
+						toolshared.LiveResourceHandoffDispositionForOutcome(outcome),
+					)
 				},
 			},
 		}
@@ -448,6 +510,9 @@ func (t *approvalBindingTool) ApprovalArguments(
 
 func (t *approvalBindingTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
 	t.executions++
+	if t.resourceReady != nil {
+		t.resourceReadyAtExec = t.resourceReady()
+	}
 	return toolshared.NewToolResult("prepared action completed")
 }
 
@@ -4318,7 +4383,10 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 	}
 	registry := al.interactionRegistryForWorkspace(agent.Workspace)
 	record, ok := activeInteractionForSession(registry, "session-browser-owner")
-	if !ok || record.Kind != interactions.KindQuestion || record.Origin.ExecutionID == "" {
+	if !ok || record.Kind != interactions.KindQuestion || record.Origin.ExecutionID == "" ||
+		len(record.OutcomeReceipts) != 1 ||
+		record.OutcomeReceipts[0].Kind != taskresult.ObjectiveKindLiveHandoff ||
+		record.OutcomeReceipts[0].ID != record.ID+"_receipt_1" || tool.cleanupCalls != 0 {
 		t.Fatalf("browser handoff interaction = %#v, found=%t", record, ok)
 	}
 	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
@@ -4336,6 +4404,21 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 	if !tool.released || !reflect.DeepEqual(tool.operations, []string{"handoff", "resume", "observe"}) {
 		t.Fatalf("browser continuation operations = %#v, released=%t", tool.operations, tool.released)
 	}
+	if tool.cleanupCalls != 1 {
+		t.Fatalf("browser cleanup calls after resumed terminal turn = %d, want 1", tool.cleanupCalls)
+	}
+	receiptVisible := false
+	for _, request := range provider.requests[1:] {
+		for _, message := range request {
+			if strings.Contains(message.Content, record.ID+"_receipt_1") {
+				receiptVisible = true
+				break
+			}
+		}
+	}
+	if !receiptVisible {
+		t.Fatal("resumed continuation did not receive the trusted live-handoff receipt ID")
+	}
 	if len(tool.executionIDs) != 3 {
 		t.Fatalf("browser execution identities = %#v", tool.executionIDs)
 	}
@@ -4349,6 +4432,408 @@ func TestQuestionContinuationPreservesBrowserOwnerWithoutApproval(t *testing.T) 
 				record.Origin.ExecutionID,
 			)
 		}
+	}
+}
+
+func TestLiveHandoffObjectiveRecoversFalseTerminalClaimIntoSuspension(t *testing.T) {
+	falseTerminal := "Amazon is open and left for manual control.\n" + objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[` +
+		`{"objective_id":"objective_1","receipt_ids":[]}],` +
+		`"missing_items":[],"result":"Amazon is open and left for manual control."}` +
+		objectiveOutcomeEnd
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{Content: falseTerminal, FinishReason: "stop"},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-invalid-recovery", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "resume"},
+		}}},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-recovery-handoff", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}}},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-live-handoff", SenderID: "user-live-handoff",
+	}
+
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-live-handoff", SessionKey: "session-live-handoff",
+			UserMessage: "open Amazon and give me control", InboundContext: inbound,
+		},
+		ObjectiveChecklist: normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+			Item: "hand the live browser session to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+		}}),
+		InitialReceipts: []taskresult.Receipt{{
+			ID: "prior_receipt", Kind: taskresult.ObjectiveKindExternalAction,
+			Target: "service:item", Action: "update", Tool: "service_tool",
+		}},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("live-handoff recovery turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+	if provider.callCount != 3 || len(provider.toolRequests) != 3 ||
+		len(provider.toolRequests[1]) != 1 ||
+		provider.toolRequests[1][0].Function.Name != "browser_handoff_continuation" {
+		t.Fatalf("recovery tool exposure = %#v, calls=%d", provider.toolRequests, provider.callCount)
+	}
+	recoveryParameters := provider.toolRequests[1][0].Function.Parameters
+	properties, _ := recoveryParameters["properties"].(map[string]any)
+	operation, _ := properties["operation"].(map[string]any)
+	operations, _ := operation["enum"].([]string)
+	if !reflect.DeepEqual(operations, []string{"handoff"}) {
+		t.Fatalf("recovery operation schema = %#v", recoveryParameters)
+	}
+	if !reflect.DeepEqual(tool.operations, []string{"handoff"}) {
+		t.Fatalf("recovery executed an operation outside its restricted schema: %#v", tool.operations)
+	}
+	record, ok := activeInteractionForSession(
+		al.interactionRegistryForWorkspace(agent.Workspace),
+		"session-live-handoff",
+	)
+	if !ok || len(record.OutcomeReceipts) != 2 || record.OutcomeReceipts[0].ID != "prior_receipt" ||
+		record.OutcomeReceipts[1].Kind != taskresult.ObjectiveKindLiveHandoff || tool.cleanupCalls != 0 {
+		t.Fatalf("durable live handoff = %#v, found=%t, cleanup=%d", record, ok, tool.cleanupCalls)
+	}
+}
+
+func TestMixedExternalActionAndLiveHandoffReceiptsSurviveRegistryRestart(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-external-action", Name: "browser_act", Arguments: map[string]any{},
+		}}},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-mixed-handoff", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}}},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	actionTool := &journalReceiptApprovalTool{}
+	handoffTool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(actionTool)
+	agent.Tools.Register(handoffTool)
+
+	const sessionKey = "session-mixed-receipts"
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-mixed-receipts", SenderID: "user-mixed-receipts",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-mixed-receipts", SessionKey: sessionKey,
+			UserMessage: "commit the action and hand me the live browser", InboundContext: inbound,
+		},
+		ObjectiveChecklist: normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{
+			{Item: "commit the requested action", Kind: taskresult.ObjectiveKindExternalAction},
+			{Item: "hand the live browser to the user", Kind: taskresult.ObjectiveKindLiveHandoff},
+		}),
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("mixed-objective turn = (%q, %q, %v)", response, turnStatus, err)
+	}
+
+	reloaded := interactions.NewRegistry(interactions.WorkspaceStorePath(agent.Workspace))
+	if err := reloaded.LastLoadError(); err != nil {
+		t.Fatalf("reload interaction registry: %v", err)
+	}
+	record, ok := activeInteractionForSession(reloaded, sessionKey)
+	if !ok || len(record.OutcomeReceipts) != 2 || actionTool.executions != 1 || handoffTool.cleanupCalls != 0 {
+		t.Fatalf(
+			"reloaded mixed handoff = %#v, found=%t, action executions=%d, cleanup=%d",
+			record,
+			ok,
+			actionTool.executions,
+			handoffTool.cleanupCalls,
+		)
+	}
+	var externalReceiptID, handoffReceiptID string
+	for _, receipt := range record.OutcomeReceipts {
+		switch receipt.Kind {
+		case taskresult.ObjectiveKindExternalAction:
+			externalReceiptID = receipt.ID
+		case taskresult.ObjectiveKindLiveHandoff:
+			handoffReceiptID = receipt.ID
+		}
+	}
+	if externalReceiptID != "inv-journal" || handoffReceiptID == "" {
+		t.Fatalf("reloaded mixed receipts = %#v", record.OutcomeReceipts)
+	}
+
+	final := objectiveOutcomeStart + fmt.Sprintf(
+		`{"status":"succeeded","completed_items":[`+
+			`{"objective_id":"objective_1","receipt_ids":[%q]},`+
+			`{"objective_id":"objective_2","receipt_ids":[%q]}],`+
+			`"missing_items":[],"result":"Action committed and browser handed off."}`,
+		externalReceiptID,
+		handoffReceiptID,
+	) + objectiveOutcomeEnd
+	_, outcome := extractResumedObjectiveOutcome(final, interactionOutcomeAudits(record), record)
+	if outcome == nil || outcome.Status != taskresult.OutcomeSucceeded || len(outcome.CompletedItems) != 2 {
+		t.Fatalf("restarted mixed-objective outcome = %#v", outcome)
+	}
+}
+
+func TestLiveHandoffRestartFailsWhenDurableResourceIsLost(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-lost-handoff", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}}},
+		{Content: "stale receipt must not reach this continuation", FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+
+	const sessionKey = "session-lost-live-handoff"
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-lost-live-handoff", SenderID: "user-lost-live-handoff",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-lost-live-handoff", SessionKey: sessionKey,
+			UserMessage: "hand me the live browser", InboundContext: inbound,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial lost-resource handoff = (%q, %q, %v)", response, turnStatus, err)
+	}
+
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, sessionKey)
+	if !ok || len(record.OutcomeReceipts) != 1 {
+		t.Fatalf("durable handoff before restart = %#v, found=%t", record, ok)
+	}
+	// Reconstruct the interaction runtime without the in-memory answer callback,
+	// as a process restart would, while the browser broker reports the session lost.
+	al.interactions.resolutions.Delete(record.ID)
+	al.interactions.registries.Delete(agent.Workspace)
+	tool.resourceResolutionErr = errors.New("test browser resource is unavailable")
+	registry = al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok = activeInteractionForSession(registry, sessionKey)
+	if !ok {
+		t.Fatal("durable handoff was not reloaded after restart")
+	}
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "release_browser: release", Values: map[string]string{"release_browser": "release"},
+		MessageID: "lost-browser-release", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = al.resumeClaimedInteraction(t.Context(), registry, agent.Workspace, agent, nil, *inbound, record)
+	if err == nil || !strings.Contains(err.Error(), "test browser resource is unavailable") {
+		t.Fatalf("resume error = %v, want lost durable resource", err)
+	}
+	failed, ok := registry.Get(record.ID)
+	if !ok || failed.Status != interactions.StatusFailed ||
+		failed.FailureCode != "live_handoff_resource_unavailable" {
+		t.Fatalf("lost-resource interaction = %#v, found=%t", failed, ok)
+	}
+	if provider.callCount != 1 || tool.resolutionCalls != 1 || tool.cleanupCalls != 1 {
+		t.Fatalf(
+			"lost-resource continuation calls = %d, resolver calls = %d, cleanup calls = %d",
+			provider.callCount,
+			tool.resolutionCalls,
+			tool.cleanupCalls,
+		)
+	}
+}
+
+func TestLiveHandoffCachedFinalRestartFailsWhenAuthorityIsRevokedDuringHumanControl(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{
+		ToolCalls: []providers.ToolCall{{
+			ID: "call-cached-lost-handoff", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}},
+	}}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	tool := &browserHandoffContinuationTool{}
+	agent.Tools.Register(tool)
+
+	const sessionKey = "session-cached-lost-live-handoff"
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-cached-lost-handoff", SenderID: "user-cached-lost-handoff",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-cached-lost-handoff", SessionKey: sessionKey,
+			UserMessage: "hand me the live browser", InboundContext: inbound,
+		},
+		ObjectiveChecklist: normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+			Item: "hand the live browser to the user", Kind: taskresult.ObjectiveKindLiveHandoff,
+		}}),
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial cached-final handoff = (%q, %q, %v)", response, turnStatus, err)
+	}
+
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok := activeInteractionForSession(registry, sessionKey)
+	if !ok || len(record.OutcomeReceipts) != 1 {
+		t.Fatalf("durable cached-final handoff = %#v, found=%t", record, ok)
+	}
+	record, err = registry.ClaimAnswer(record.ID, record.Revision, interactions.Answer{
+		Text: "release_browser: release", Values: map[string]string{"release_browser": "release"},
+		MessageID: "cached-lost-browser-release", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.ensureInteractionToolResult(t.Context(), agent, record); err != nil {
+		t.Fatal(err)
+	}
+	record, err = registry.MarkResuming(record.ID, record.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := objectiveOutcomeStart + fmt.Sprintf(
+		`{"status":"succeeded","completed_items":[`+
+			`{"objective_id":"objective_1","receipt_ids":[%q]}],`+
+			`"missing_items":[],"result":"Browser handoff completed."}`,
+		record.OutcomeReceipts[0].ID,
+	) + objectiveOutcomeEnd
+	if err = agent.Sessions.AppendTurnMessage(t.Context(), sessionKey, providers.Message{
+		Role: "assistant", Content: final,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The final assistant message is durable, but managed authority is revoked
+	// during human control before restart recovery can deliver it.
+	al.interactions.registries.Delete(agent.Workspace)
+	tool.resourceResolutionErr = errors.New("test browser authority was revoked during human control")
+	registry = al.interactionRegistryForWorkspace(agent.Workspace)
+	record, ok = registry.Get(record.ID)
+	if !ok || record.Status != interactions.StatusResuming {
+		t.Fatalf("reloaded cached-final interaction = %#v, found=%t", record, ok)
+	}
+	err = al.resumeClaimedInteraction(t.Context(), registry, agent.Workspace, agent, nil, *inbound, record)
+	if err == nil || !strings.Contains(err.Error(), "authority was revoked during human control") {
+		t.Fatalf("cached-final resume error = %v, want revoked durable resource authority", err)
+	}
+	failed, ok := registry.Get(record.ID)
+	if !ok || failed.Status != interactions.StatusFailed ||
+		failed.FailureCode != "live_handoff_resource_unavailable" {
+		t.Fatalf("cached-final lost-resource interaction = %#v, found=%t", failed, ok)
+	}
+	if provider.callCount != 1 || tool.resolutionCalls != 2 || tool.cleanupCalls != 1 {
+		t.Fatalf(
+			"cached-final continuation calls = %d, resolver calls = %d, cleanup calls = %d",
+			provider.callCount,
+			tool.resolutionCalls,
+			tool.cleanupCalls,
+		)
+	}
+}
+
+func TestLiveHandoffApprovalRestartPreservesInheritedResource(t *testing.T) {
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-handoff-before-approval", Name: "browser_handoff_continuation",
+			Arguments: map[string]any{"operation": "handoff"},
+		}}},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-approved-after-handoff", Name: "approval_binding",
+			Arguments: map[string]any{"mutable": "model-value"},
+		}}},
+		{Content: "approved continuation kept the browser resource", FinishReason: "stop"},
+	}}
+	al, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	installInteractionChannelManager(t, al, newInteractionChannelManager())
+	handoffTool := &browserHandoffContinuationTool{}
+	approvalTool := &approvalBindingTool{resourceReady: func() bool { return handoffTool.released }}
+	agent.Tools.Register(handoffTool)
+	agent.Tools.Register(approvalTool)
+	hook := &selectiveDurableApprovalHook{tool: "approval_binding"}
+	hook.actionSummary = "Run the protected action after browser handoff"
+	if err := al.MountHook(NamedHook("approval-after-handoff", hook)); err != nil {
+		t.Fatal(err)
+	}
+	const sessionKey = "session-handoff-approval-restart"
+	inbound := &bus.InboundContext{
+		Channel: "telegram", ChatID: "chat-handoff-approval", SenderID: "user-handoff-approval",
+	}
+	response, turnStatus, err := runAgentLoopWithStatusForTest(t.Context(), al, agent, turnSpec{
+		Dispatch: DispatchRequest{
+			RouteSessionKey: "route-handoff-approval", SessionKey: sessionKey,
+			UserMessage: "hand me the browser, then run the protected action", InboundContext: inbound,
+		},
+		DefaultResponse: defaultResponse, EnableSummary: true, SendResponse: false,
+	})
+	if err != nil || response != "" || turnStatus != TurnEndStatusSuspended {
+		t.Fatalf("initial handoff = (%q, %q, %v)", response, turnStatus, err)
+	}
+	registry := al.interactionRegistryForWorkspace(agent.Workspace)
+	handoff, ok := activeInteractionForSession(registry, sessionKey)
+	if !ok || handoff.Kind != interactions.KindQuestion {
+		t.Fatalf("handoff interaction = %#v, found=%t", handoff, ok)
+	}
+	handoff, err = registry.ClaimAnswer(handoff.ID, handoff.Revision, interactions.Answer{
+		Text: "release_browser: release", Values: map[string]string{"release_browser": "release"},
+		MessageID: "handoff-release-before-approval", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAnswered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, *inbound, handoff,
+	); err != nil {
+		t.Fatal(err)
+	}
+	approval, ok := activeInteractionForSession(registry, sessionKey)
+	if !ok || approval.Kind != interactions.KindApproval || len(approval.OutcomeReceipts) != 1 ||
+		approval.OutcomeReceipts[0].Kind != taskresult.ObjectiveKindLiveHandoff {
+		t.Fatalf("approval after handoff = %#v, found=%t", approval, ok)
+	}
+	al.interactions.registries.Delete(agent.Workspace)
+	registry = al.interactionRegistryForWorkspace(agent.Workspace)
+	approval, ok = activeInteractionForSession(registry, sessionKey)
+	if !ok || approval.Kind != interactions.KindApproval {
+		t.Fatalf("reloaded approval after handoff = %#v, found=%t", approval, ok)
+	}
+	approval, err = registry.ClaimAnswer(approval.ID, approval.Revision, interactions.Answer{
+		Text: "allow_once", MessageID: "approval-after-handoff", ReceivedAt: time.Now().UnixMilli(),
+	}, interactions.OutcomeAllowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = al.resumeClaimedInteraction(
+		t.Context(), registry, agent.Workspace, agent, nil, *inbound, approval,
+	); err != nil {
+		t.Fatal(err)
+	}
+	resolved, ok := registry.Get(approval.ID)
+	if !ok || resolved.Status != interactions.StatusResolved {
+		t.Fatalf("resolved approval after handoff = %#v, found=%t", resolved, ok)
+	}
+	if approvalTool.executions != 1 || !approvalTool.resourceReadyAtExec ||
+		!handoffTool.released || handoffTool.resolutionCalls != 3 || handoffTool.cleanupCalls != 1 ||
+		provider.callCount != 3 {
+		t.Fatalf(
+			"handoff approval continuation = executions:%d ready:%t released:%t resolutions:%d cleanup:%d calls:%d",
+			approvalTool.executions,
+			approvalTool.resourceReadyAtExec,
+			handoffTool.released,
+			handoffTool.resolutionCalls,
+			handoffTool.cleanupCalls,
+			provider.callCount,
+		)
 	}
 }
 

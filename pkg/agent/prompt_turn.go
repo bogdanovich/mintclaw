@@ -1,12 +1,14 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 func promptBuildRequestForTurn(
@@ -29,7 +31,7 @@ func promptBuildRequestForTurn(
 		SenderDisplayName:      ts.opts.SenderDisplayName,
 		CurrentMessageRelation: relation,
 		ActiveSkills:           activeSkillNames(ts.agent, ts.opts.TurnProfile, ts.opts.ForcedSkills),
-		Overlays:               promptOverlays(ts.opts.ActiveGoal),
+		Overlays:               promptOverlays(ts.opts.ActiveGoal, ts.opts.InitialReceipts),
 		BackgroundTaskSafety:   !ts.opts.NoHistory,
 		CodingContext:          ts.opts.CodingContext,
 	}
@@ -96,7 +98,7 @@ func promptBuildRequestForTurnSpec(
 		SenderDisplayName:      opts.SenderDisplayName,
 		CurrentMessageRelation: relation,
 		ActiveSkills:           activeSkillNames(agent, opts.TurnProfile, opts.ForcedSkills),
-		Overlays:               promptOverlays(opts.ActiveGoal),
+		Overlays:               promptOverlays(opts.ActiveGoal, opts.InitialReceipts),
 		BackgroundTaskSafety:   !opts.NoHistory,
 		CodingContext:          opts.CodingContext,
 	}
@@ -144,7 +146,7 @@ func relationForPromptInput(
 	return standaloneInboundMessageRelation(currentMessage, media)
 }
 
-func promptOverlays(activeGoal string) []PromptPart {
+func promptOverlays(activeGoal string, receipts []taskresult.Receipt) []PromptPart {
 	var overlays []PromptPart
 	if activeGoal = strings.TrimSpace(activeGoal); activeGoal != "" {
 		overlays = append(overlays, PromptPart{
@@ -158,8 +160,46 @@ func promptOverlays(activeGoal string) []PromptPart {
 			Cache:   PromptCacheNone,
 		})
 	}
+	if content := objectiveReceiptPromptContent(receipts); content != "" {
+		overlays = append(overlays, PromptPart{
+			ID:      "context.objective_receipts",
+			Layer:   PromptLayerContext,
+			Slot:    PromptSlotRuntime,
+			Source:  PromptSource{ID: PromptSourceRuntime, Name: "interaction.objective_receipts"},
+			Title:   "verified objective receipts",
+			Content: content,
+			Stable:  false,
+			Cache:   PromptCacheNone,
+		})
+	}
 
 	return overlays
+}
+
+func objectiveReceiptPromptContent(receipts []taskresult.Receipt) string {
+	type promptReceipt struct {
+		ID   string `json:"id"`
+		Kind string `json:"kind"`
+	}
+	verified := make([]promptReceipt, 0, min(len(receipts), objectiveOutcomeLimit))
+	for _, receipt := range receipts {
+		id := strings.TrimSpace(receipt.ID)
+		kind := strings.TrimSpace(receipt.Kind)
+		if id == "" || kind == "" || len(verified) >= objectiveOutcomeLimit {
+			continue
+		}
+		verified = append(verified, promptReceipt{ID: id, Kind: kind})
+	}
+	if len(verified) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(verified)
+	if err != nil {
+		return ""
+	}
+	return "Runtime-verified objective receipts available to claim in the final " + objectiveOutcomeStart +
+		" block: " + string(encoded) + ". Use each ID only for a completed objective of the same kind; " +
+		"never invent or alter a receipt ID."
 }
 
 func promptContentBlock(part PromptPart, cache *providers.CacheControl) providers.ContentBlock {

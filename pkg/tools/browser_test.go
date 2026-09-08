@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/config"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	providercommon "github.com/bogdanovich/mintclaw/pkg/providers/common"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -43,6 +44,9 @@ type fakeBrowserToolSource struct {
 	contextResult         browser.ContextResult
 	diagnostics           browser.DiagnosticSummary
 	err                   error
+	releaseErr            error
+	statusErr             error
+	closeErr              error
 	observeErrors         []error
 	executeErr            error
 
@@ -73,6 +77,7 @@ type fakeBrowserToolSource struct {
 	actions                []browser.ActionKind
 	cleanupOwner           browser.Owner
 	cleanupCalls           int
+	closeCalls             int
 }
 
 func TestBrowserActDurableArgumentsRedactFillWithoutMutatingExecution(t *testing.T) {
@@ -504,7 +509,11 @@ func (source *fakeBrowserToolSource) ReleaseHandoff(
 	result := source.handoff
 	result.Owner = owner
 	result.Controller = browser.ControllerResumePending
-	return result, source.err
+	err := source.releaseErr
+	if err == nil {
+		err = source.err
+	}
+	return result, err
 }
 
 func (source *fakeBrowserToolSource) Status(
@@ -515,7 +524,11 @@ func (source *fakeBrowserToolSource) Status(
 	source.statusCalls++
 	source.statusOwner = owner
 	source.statusSessionID = sessionID
-	return source.status, source.err
+	err := source.statusErr
+	if err == nil {
+		err = source.err
+	}
+	return source.status, err
 }
 
 func (source *fakeBrowserToolSource) Close(
@@ -523,9 +536,14 @@ func (source *fakeBrowserToolSource) Close(
 	owner browser.Owner,
 	sessionID string,
 ) (browser.Session, error) {
+	source.closeCalls++
 	source.statusOwner = owner
 	source.statusSessionID = sessionID
-	return source.status, source.err
+	err := source.closeErr
+	if err == nil {
+		err = source.err
+	}
+	return source.status, err
 }
 
 func (source *fakeBrowserToolSource) Observe(
@@ -1181,11 +1199,35 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 		t.Fatalf("handoff capabilities = %#v", targets)
 	}
 	tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+	parameters, supportsHandoff := tool.ObjectiveRecoveryParameters(taskresult.ObjectiveKindLiveHandoff)
+	_, supportsExternal := tool.ObjectiveRecoveryParameters(taskresult.ObjectiveKindExternalAction)
+	if !supportsHandoff || parameters == nil || supportsExternal {
+		t.Fatal("browser session objective recovery capability is invalid")
+	}
+	recoveryRegistry := NewToolRegistry()
+	recoveryRegistry.Register(tool)
+	if err := recoveryRegistry.ValidateObjectiveRecoveryArguments(
+		"browser_session",
+		taskresult.ObjectiveKindLiveHandoff,
+		map[string]any{"operation": "handoff", "browser_session_id": "browser_session_1"},
+	); err != nil {
+		t.Fatalf("valid handoff recovery arguments were rejected: %v", err)
+	}
+	if err := recoveryRegistry.ValidateObjectiveRecoveryArguments(
+		"browser_session",
+		taskresult.ObjectiveKindLiveHandoff,
+		map[string]any{"operation": "close", "browser_session_id": "browser_session_1"},
+	); err == nil {
+		t.Fatal("recovery capability allowed closing the live browser session")
+	}
 	handoff := tool.Execute(browserToolTestContext(), map[string]any{
 		"operation": "handoff", "browser_session_id": "browser_session_1",
 	})
 	if handoff == nil || handoff.IsError || handoff.Control.Suspension == nil ||
 		handoff.Control.ResolveSuspension == nil ||
+		handoff.Control.LiveHandoff == nil ||
+		handoff.Control.LiveHandoff.ResourceKind != "browser_session" ||
+		handoff.Control.LiveHandoff.ResourceID != "browser_session_1" ||
 		handoff.Control.Suspension.Kind != interactions.KindQuestion ||
 		len(handoff.Control.Suspension.Questions) != 1 ||
 		strings.Contains(strings.ToLower(handoff.ContentForLLM()), "token") {
@@ -1214,6 +1256,76 @@ func TestBrowserSessionHandoffSuspendsForRoutedHumanRelease(t *testing.T) {
 	if resume == nil || resume.IsError || resume.Control.Suspension != nil {
 		t.Fatalf("resume result = %#v", resume)
 	}
+}
+
+func TestBrowserSessionDurableHandoffResolutionFailsClosedAfterRecoveryLoss(t *testing.T) {
+	handoff := toolshared.LiveResourceHandoff{
+		ResourceKind: "browser_session", ResourceID: "browser_session_1",
+	}
+	t.Run("abandoned handoff", func(t *testing.T) {
+		source := &fakeBrowserToolSource{}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		if err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffAbandon,
+		); err != nil {
+			t.Fatalf("abandoned handoff resolution = %v", err)
+		}
+		if source.closeCalls != 1 || source.statusCalls != 0 {
+			t.Fatalf("abandoned resolver status=%d, close=%d", source.statusCalls, source.closeCalls)
+		}
+	})
+	t.Run("lost resource", func(t *testing.T) {
+		source := &fakeBrowserToolSource{
+			releaseErr: browser.ErrConflict,
+			status: browser.Session{
+				ID: "browser_session_1", State: browser.SessionLost,
+			},
+		}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffResume,
+		)
+		if err == nil || source.statusCalls != 1 || source.closeCalls != 1 {
+			t.Fatalf("lost handoff resolution = %v, status=%d, close=%d", err, source.statusCalls, source.closeCalls)
+		}
+	})
+	t.Run("managed authority revoked during human control", func(t *testing.T) {
+		revoked := browser.Session{
+			ID: "browser_session_1", State: browser.SessionLost, SafeFailure: "policy_changed",
+		}
+		source := &fakeBrowserToolSource{handoff: revoked, status: revoked}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffResume,
+		)
+		if err == nil || !strings.Contains(err.Error(), "unusable state") ||
+			source.statusCalls != 1 || source.closeCalls != 1 {
+			t.Fatalf(
+				"revoked handoff resolution = %v, status=%d, close=%d",
+				err,
+				source.statusCalls,
+				source.closeCalls,
+			)
+		}
+	})
+	t.Run("idempotent release", func(t *testing.T) {
+		source := &fakeBrowserToolSource{
+			releaseErr: browser.ErrConflict,
+			status: browser.Session{
+				ID: "browser_session_1", State: browser.SessionReady,
+				Controller: browser.ControllerResumePending,
+			},
+		}
+		tool := NewBrowserSessionTool(browserToolTestConfig(), source)
+		if err := tool.ResolveLiveResourceHandoff(
+			browserToolTestContext(), handoff, toolshared.LiveResourceHandoffResume,
+		); err != nil {
+			t.Fatalf("idempotent handoff resolution = %v", err)
+		}
+		if source.statusCalls != 1 || source.closeCalls != 0 {
+			t.Fatalf("idempotent resolver status=%d, close=%d", source.statusCalls, source.closeCalls)
+		}
+	})
 }
 
 func TestBrowserScreenshotIsNotAdvertisedOrCapturedWhenDeliveryIsUnsupported(t *testing.T) {

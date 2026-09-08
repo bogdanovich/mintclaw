@@ -603,7 +603,7 @@ func (r *Registry) transition(
 	)
 }
 
-// RecordOutcomeReceipts durably attaches safe external-action evidence to an
+// RecordOutcomeReceipts durably attaches safe runtime evidence to an
 // interaction before its continuation is allowed to finalize. Replays are
 // idempotent by receipt ID.
 func (r *Registry) RecordOutcomeReceipts(
@@ -735,23 +735,64 @@ func (r *Registry) buildRecord(req CreateRequest, now int64) (Record, error) {
 	if len(id) < 8 || len(id) > 128 || !regexpID.MatchString(id) {
 		return Record{}, fmt.Errorf("%w: id must be 8 to 128 characters", ErrInvalidInteraction)
 	}
+	receipts, err := initialOutcomeReceipts(id, req.OutcomeReceipts)
+	if err != nil {
+		return Record{}, err
+	}
 	expiresAt := req.ExpiresAt.UnixMilli()
 	if req.ExpiresAt.IsZero() || expiresAt <= now {
 		return Record{}, fmt.Errorf("%w: expiry must be in the future", ErrInvalidInteraction)
 	}
 	return Record{
-		ID:             id,
-		ShortID:        shortID(id),
-		Kind:           req.Kind,
-		Status:         StatusCreated,
-		Revision:       1,
-		Route:          normalizeRoute(req.Route),
-		Origin:         normalizeOrigin(req.Origin),
-		Questions:      cloneQuestions(req.Questions),
-		PromptSummary:  bounded(strings.TrimSpace(req.PromptSummary), MaxSummaryLength),
-		ApprovalAction: bounded(strings.TrimSpace(req.ApprovalAction), MaxApprovalAction),
-		CreatedAt:      now,
-		UpdatedAt:      now,
-		ExpiresAt:      expiresAt,
+		ID:              id,
+		ShortID:         shortID(id),
+		Kind:            req.Kind,
+		Status:          StatusCreated,
+		Revision:        1,
+		Route:           normalizeRoute(req.Route),
+		Origin:          normalizeOrigin(req.Origin),
+		Questions:       cloneQuestions(req.Questions),
+		PromptSummary:   bounded(strings.TrimSpace(req.PromptSummary), MaxSummaryLength),
+		ApprovalAction:  bounded(strings.TrimSpace(req.ApprovalAction), MaxApprovalAction),
+		OutcomeReceipts: receipts,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		ExpiresAt:       expiresAt,
 	}, nil
+}
+
+func initialOutcomeReceipts(interactionID string, input []taskresult.Receipt) ([]taskresult.Receipt, error) {
+	if len(input) > MaxOutcomeReceipts {
+		return nil, fmt.Errorf(
+			"%w: initial outcome receipts cannot exceed %d",
+			ErrInvalidInteraction,
+			MaxOutcomeReceipts,
+		)
+	}
+	receipts := taskresult.CloneReceipts(input)
+	seen := make(map[string]struct{}, len(receipts))
+	for index := range receipts {
+		receipt := &receipts[index]
+		receipt.ID = strings.TrimSpace(receipt.ID)
+		if receipt.ID == "" {
+			receipt.ID = fmt.Sprintf("%s_receipt_%d", interactionID, index+1)
+		}
+		receipt.Kind = strings.TrimSpace(receipt.Kind)
+		receipt.Target = strings.TrimSpace(receipt.Target)
+		receipt.Action = strings.TrimSpace(receipt.Action)
+		receipt.Tool = strings.TrimSpace(receipt.Tool)
+		receipt.Summary = strings.TrimSpace(receipt.Summary)
+		if !validBoundedString(receipt.ID, 256) || receipt.Kind == "" ||
+			!validBoundedString(receipt.Kind, 64) || receipt.Target == "" ||
+			!validBoundedString(receipt.Target, 1024) || receipt.Action == "" ||
+			!validBoundedString(receipt.Action, 128) || !validBoundedString(receipt.Tool, 128) ||
+			!validBoundedString(receipt.Summary, MaxSummaryLength) {
+			return nil, fmt.Errorf("%w: initial outcome receipt is invalid", ErrInvalidInteraction)
+		}
+		if _, duplicate := seen[receipt.ID]; duplicate {
+			return nil, fmt.Errorf("%w: duplicate initial outcome receipt ID", ErrInvalidInteraction)
+		}
+		seen[receipt.ID] = struct{}{}
+	}
+	return receipts, nil
 }

@@ -532,9 +532,10 @@ func (d *recordingToolResultDelivery) applySyncToolResultDelivery(
 }
 
 type toolResultRespondHook struct {
-	result        *toolshared.ToolResult
-	approvalCalls int
-	afterCalls    int
+	result          *toolshared.ToolResult
+	beforeToolCalls int
+	approvalCalls   int
+	afterCalls      int
 }
 
 type dropToolSuspensionHook struct{}
@@ -591,6 +592,7 @@ func (h *toolResultRespondHook) BeforeTool(
 	_ context.Context,
 	req *ToolCallHookRequest,
 ) (*ToolCallHookRequest, HookDecision) {
+	h.beforeToolCalls++
 	next := req.Clone()
 	next.HookResult = h.result
 	return next, HookDecision{Action: HookActionRespond}
@@ -860,6 +862,70 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 	}
 	if llm.toolResponseDisposition != toolResponseNeedsModel {
 		t.Fatal("unhandled tool result did not require another model response")
+	}
+}
+
+func TestObjectiveRecoveryRejectsCallBeforeBeforeToolHook(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	tool := &fixedToolResultTool{name: "unrelated-tool", result: toolshared.NewToolResult("unexpected")}
+	registry.Register(tool)
+	agent := &AgentInstance{ID: "main", Tools: registry, Sessions: session.NewMemoryStore()}
+	ts := &turnState{
+		agent: agent, agentID: agent.ID, turnID: "recovery-admission-turn",
+		sessionKey: "recovery-admission-session",
+		opts: freezeTurnInput(turnSpec{
+			NoHistory: true,
+			Dispatch:  DispatchRequest{SessionKey: "recovery-admission-session"},
+		}),
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	exec.objectiveRepairToolKind = taskresult.ObjectiveKindLiveHandoff
+	llm := newLLMIterationState(1)
+	hook := &toolResultRespondHook{result: toolshared.NewToolResult("hook bypassed recovery capability")}
+	runner := &toolLoopRunner{
+		p:       &Pipeline{Interaction: PipelineInteractionServices{Hooks: hook}},
+		turnCtx: t.Context(),
+		ts:      ts,
+		exec:    exec,
+		llm:     llm,
+	}
+	call := &toolCallState{
+		request: providers.ToolCall{ID: "recovery-call", Name: tool.Name(), Arguments: map[string]any{}},
+		name:    tool.Name(), arguments: map[string]any{},
+	}
+
+	result := runner.admitToolCall(call)
+	if result.disposition != toolCallSkip || hook.beforeToolCalls != 0 || tool.executions != 0 {
+		t.Fatalf(
+			"recovery admission = result:%+v hook calls:%d tool executions:%d",
+			result,
+			hook.beforeToolCalls,
+			tool.executions,
+		)
+	}
+	if len(runner.messages) != 1 ||
+		!strings.Contains(runner.messages[0].Content, "objective-recovery capability") {
+		t.Fatalf("recovery denial messages = %#v", runner.messages)
+	}
+}
+
+func TestMergeOutcomeReceiptsDeduplicatesByID(t *testing.T) {
+	inherited := []taskresult.Receipt{{
+		ID: " receipt-1 ", Kind: taskresult.ObjectiveKindExternalAction,
+		Metadata: map[string]string{"source": "inherited"},
+	}}
+	merged := mergeOutcomeReceipts(
+		inherited,
+		[]taskresult.Receipt{{ID: "receipt-1", Kind: taskresult.ObjectiveKindExternalAction}},
+		[]taskresult.Receipt{{Kind: taskresult.ObjectiveKindLiveHandoff}},
+	)
+	if len(merged) != 2 || merged[0].ID != "receipt-1" ||
+		merged[1].Kind != taskresult.ObjectiveKindLiveHandoff {
+		t.Fatalf("merged receipts = %#v", merged)
+	}
+	merged[0].Metadata["source"] = "mutated"
+	if inherited[0].Metadata["source"] != "inherited" {
+		t.Fatal("merged receipt metadata aliases its input")
 	}
 }
 

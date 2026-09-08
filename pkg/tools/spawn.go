@@ -139,7 +139,7 @@ func (t *SpawnTool) execute(
 	if t.requiresObjectiveChecklist(targetAgentID) && len(objectiveItems) == 0 {
 		return toolshared.ErrorResult(
 			"objective_items is required when spawning a browser-capable agent; " +
-				"retry spawn with every requested result or external action declared",
+				"retry spawn with every requested result, external action, or live handoff declared",
 		)
 	}
 

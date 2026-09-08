@@ -6,6 +6,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
+	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
 
 type terminalRequest struct {
@@ -141,17 +142,29 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 		strings.TrimSpace(terminal.content) == "" {
 		return false
 	}
-	instruction, repair := objectiveOutcomeRepairInstruction(
+	instruction, repair := liveHandoffRecoveryInstruction(
 		terminal.content,
-		exec.writeAudit,
+		exec.receipts,
 		ts.opts.ObjectiveChecklist,
 	)
+	repairToolKind := ""
+	if repair {
+		repairToolKind = taskresult.ObjectiveKindLiveHandoff
+	} else {
+		instruction, repair = objectiveOutcomeRepairInstructionWithReceipts(
+			terminal.content,
+			exec.writeAudit,
+			exec.receipts,
+			ts.opts.ObjectiveChecklist,
+		)
+	}
 	if !repair {
 		return false
 	}
 	cancelConfiguredStreamingLLM(turnCtx, llm)
 	exec.objectiveRepairAttempted = true
 	exec.objectiveRepairPending = true
+	exec.objectiveRepairToolKind = repairToolKind
 	exec.objectiveRepairTailIndex = len(ts.liveTurnMessagesSnapshot())
 	exec.objectiveRepairMessages = []providers.Message{
 		{Role: "assistant", Content: terminal.content},
@@ -161,6 +174,7 @@ func (p *Pipeline) scheduleObjectiveOutcomeRepair(
 	logger.WarnCF("agent", "Scheduled objective finalization repair", map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": ts.currentIteration(),
+		"tool_kind": repairToolKind,
 	})
 	return true
 }

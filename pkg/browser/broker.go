@@ -951,6 +951,9 @@ func (broker *Broker) ReleaseHandoff(ctx context.Context, owner Owner, sessionID
 	if !session.Owner.Equal(owner) {
 		return Session{}, ErrNotFound
 	}
+	if !broker.sessionAuthorityCurrent(session) {
+		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
+	}
 	if session.State != SessionReady || session.Controller != ControllerHuman {
 		return Session{}, ErrConflict
 	}

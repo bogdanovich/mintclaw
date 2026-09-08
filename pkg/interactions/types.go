@@ -84,6 +84,7 @@ const (
 	MaxSummaryLength        = 1000
 	MaxApprovalAction       = 2000
 	MaxExecutionContext     = 64 * 1024
+	MaxOutcomeReceipts      = 64
 )
 
 var questionIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -231,14 +232,15 @@ type ObservationSnapshot struct {
 }
 
 type CreateRequest struct {
-	ID             string
-	Kind           Kind
-	Route          Route
-	Origin         Origin
-	Questions      []Question
-	PromptSummary  string
-	ApprovalAction string
-	ExpiresAt      time.Time
+	ID              string
+	Kind            Kind
+	Route           Route
+	Origin          Origin
+	Questions       []Question
+	PromptSummary   string
+	ApprovalAction  string
+	OutcomeReceipts []taskresult.Receipt
+	ExpiresAt       time.Time
 }
 
 type Stats struct {

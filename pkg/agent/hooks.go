@@ -993,6 +993,10 @@ func cloneToolResult(result *toolshared.ToolResult) *toolshared.ToolResult {
 	}
 
 	cloned := *result
+	if result.Control.LiveHandoff != nil {
+		handoff := *result.Control.LiveHandoff
+		cloned.Control.LiveHandoff = &handoff
+	}
 	if len(result.Media) > 0 {
 		cloned.Media = append([]string(nil), result.Media...)
 	}

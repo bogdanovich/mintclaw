@@ -239,6 +239,81 @@ func (r *ToolRegistry) LoopSemantics(name string) loopguard.Semantics {
 	}
 }
 
+// ObjectiveRecoveryParameters returns the restricted argument schema that one
+// visible trusted tool opts in to for a bounded objective-recovery pass.
+func (r *ToolRegistry) ObjectiveRecoveryParameters(name, kind string) (map[string]any, bool) {
+	tool, ok := r.Get(name)
+	if !ok || tool == nil {
+		return nil, false
+	}
+	return objectiveRecoveryParameters(tool, kind)
+}
+
+func objectiveRecoveryParameters(tool toolshared.Tool, kind string) (map[string]any, bool) {
+	provider, ok := tool.(toolshared.ObjectiveRecoveryProvider)
+	if !ok {
+		return nil, false
+	}
+	parameters, ok := provider.ObjectiveRecoveryParameters(strings.TrimSpace(kind))
+	return parameters, ok && parameters != nil
+}
+
+// SupportsObjectiveRecovery reports whether one visible trusted tool opts in
+// to the bounded repair path for the requested objective kind.
+func (r *ToolRegistry) SupportsObjectiveRecovery(name, kind string) bool {
+	_, ok := r.ObjectiveRecoveryParameters(name, kind)
+	return ok
+}
+
+// ValidateObjectiveRecoveryArguments applies the recovery-only schema before
+// the trusted tool executes. Normal tool arguments remain unchanged outside
+// the bounded recovery pass.
+func (r *ToolRegistry) ValidateObjectiveRecoveryArguments(name, kind string, args map[string]any) error {
+	tool, ok := r.Get(name)
+	if !ok || tool == nil {
+		return fmt.Errorf("tool %q is unavailable for objective recovery", name)
+	}
+	parameters, ok := objectiveRecoveryParameters(tool, kind)
+	if !ok {
+		return fmt.Errorf("tool %q is unavailable for %q objective recovery", name, kind)
+	}
+	canonical, err := canonicalRegisteredToolArguments(tool, args)
+	if err != nil {
+		return err
+	}
+	return validateToolArgs(parameters, canonical)
+}
+
+// SupportsLiveResourceHandoff reports whether the registered tool can
+// durably rebind and validate its handoff after process restart.
+func (r *ToolRegistry) SupportsLiveResourceHandoff(name string) bool {
+	tool, ok := r.Get(name)
+	if !ok || tool == nil {
+		return false
+	}
+	_, ok = tool.(toolshared.LiveResourceHandoffResolver)
+	return ok
+}
+
+// ResolveLiveResourceHandoff invokes the trusted registered tool's
+// idempotent durable handoff resolver.
+func (r *ToolRegistry) ResolveLiveResourceHandoff(
+	ctx context.Context,
+	name string,
+	handoff toolshared.LiveResourceHandoff,
+	disposition toolshared.LiveResourceHandoffDisposition,
+) error {
+	tool, ok := r.Get(name)
+	if !ok || tool == nil {
+		return fmt.Errorf("live-resource handoff tool %q is unavailable", name)
+	}
+	resolver, ok := tool.(toolshared.LiveResourceHandoffResolver)
+	if !ok {
+		return fmt.Errorf("tool %q does not support durable live-resource handoff resolution", name)
+	}
+	return resolver.ResolveLiveResourceHandoff(ctx, handoff, disposition)
+}
+
 // HasRegistered reports whether a tool name is present in the registry,
 // including hidden tools whose TTL is currently zero.
 func (r *ToolRegistry) HasRegistered(name string) bool {

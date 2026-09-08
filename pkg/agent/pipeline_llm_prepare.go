@@ -48,7 +48,14 @@ func (p *Pipeline) prepareLLMRequest(
 	llm.gracefulTerminal, _ = ts.gracefulInterruptRequested()
 	llm.providerToolDefs = filterToolsByTurnProfile(ts.agent.Tools.ToProviderDefs(), ts.profile)
 	llm.useNativeSearch = p.nativeSearchEnabled(ts.profile, exec.model.activeProvider)
-	if exec.objectiveRepairActive {
+	if exec.objectiveRepairToolKind != "" {
+		llm.providerToolDefs = objectiveRecoveryToolDefs(
+			ts,
+			llm.providerToolDefs,
+			exec.objectiveRepairToolKind,
+		)
+		llm.useNativeSearch = false
+	} else if exec.objectiveRepairActive {
 		llm.providerToolDefs = nil
 		llm.useNativeSearch = false
 	}
@@ -132,7 +139,15 @@ func (p *Pipeline) prepareLLMRequest(
 			return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 		}
 	}
-	if exec.objectiveRepairActive {
+	if exec.objectiveRepairToolKind != "" {
+		llm.providerToolDefs = objectiveRecoveryToolDefs(
+			ts,
+			llm.providerToolDefs,
+			exec.objectiveRepairToolKind,
+		)
+		llm.useNativeSearch = false
+		delete(llm.llmOpts, "native_search")
+	} else if exec.objectiveRepairActive {
 		llm.providerToolDefs = nil
 		llm.useNativeSearch = false
 		delete(llm.llmOpts, "native_search")
@@ -184,4 +199,24 @@ func (p *Pipeline) prepareLLMRequest(
 	})
 
 	return llmStageResult{}, nil
+}
+
+func objectiveRecoveryToolDefs(
+	ts *turnState,
+	definitions []providers.ToolDefinition,
+	kind string,
+) []providers.ToolDefinition {
+	if ts == nil || ts.agent == nil || ts.agent.Tools == nil {
+		return nil
+	}
+	filtered := make([]providers.ToolDefinition, 0, len(definitions))
+	for _, definition := range definitions {
+		name := definition.Function.Name
+		parameters, ok := ts.agent.Tools.ObjectiveRecoveryParameters(name, kind)
+		if ok {
+			definition.Function.Parameters = parameters
+			filtered = append(filtered, definition)
+		}
+	}
+	return filtered
 }

@@ -122,6 +122,7 @@ type turnResult struct {
 	usageTotalTokens       int
 	deliverable            *taskresult.Deliverable
 	writeAudit             []toolshared.WriteAuditEntry
+	receipts               []taskresult.Receipt
 	status                 TurnEndStatus
 	followUps              []bus.InboundMessage
 	preferNewOutboundReply bool
@@ -170,6 +171,7 @@ type turnExecution struct {
 	deliverable              *taskresult.Deliverable
 	actionLog                []TurnActionRecord
 	writeAudit               []toolshared.WriteAuditEntry
+	receipts                 []taskresult.Receipt
 	finalRenderToolCalls     map[string]finalRenderToolCallState
 	sawSteering              bool
 	sawAdditionalUserInput   bool
@@ -178,6 +180,7 @@ type turnExecution struct {
 	objectiveRepairActive    bool
 	objectiveRepairMessages  []providers.Message
 	objectiveRepairTailIndex int
+	objectiveRepairToolKind  string
 	terminal                 terminalContent
 
 	loopGuard *loopguard.Controller
@@ -405,6 +408,7 @@ func newTurnExecution(
 		pendingInputs:           newTurnPendingInputs(opts.InitialSteeringMessages),
 		sawAdditionalUserInput:  len(opts.InitialSteeringMessages) > 0,
 		initialSteeringSpoolIDs: collectSteeringSpoolIDs(opts.InitialSteeringMessages),
+		receipts:                taskresult.CloneReceipts(opts.InitialReceipts),
 		loopGuard:               loopguard.New(agent.ToolLoopDetection),
 	}
 }
