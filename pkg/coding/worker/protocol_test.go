@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -439,6 +440,103 @@ func TestRequestPayloadRejectsUnsafeText(t *testing.T) {
 	}
 	if _, err := Encode(record); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("Encode(unsafe steer) error = %v, want %v", err, ErrInvalidRecord)
+	}
+}
+
+func TestDecodeRequestRejectsControlsInStructuralFields(t *testing.T) {
+	binding := testBinding(t)
+	for name, control := range map[string]string{
+		"line feed":         "\n",
+		"carriage return":   "\r",
+		"tab":               "\t",
+		"non-ASCII control": "\u0085",
+	} {
+		t.Run(name, func(t *testing.T) {
+			initialize := InitializeParams{
+				MinProtocolVersion: ProtocolV1,
+				MaxProtocolVersion: ProtocolV1,
+				ParentBuildID:      "parent" + control + "build",
+				Binding:            binding,
+			}
+			raw := mustPayload(t, initialize)
+			if _, err := DecodeRequestPayload(MethodInitialize, raw); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("DecodeRequestPayload() error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
+func TestDecodeInitializeRejectsControlInModel(t *testing.T) {
+	binding := testBinding(t)
+	binding.Model = "gpt\t5"
+	initialize := InitializeParams{
+		MinProtocolVersion: ProtocolV1,
+		MaxProtocolVersion: ProtocolV1,
+		ParentBuildID:      "parent-test-build",
+		Binding:            binding,
+	}
+	raw := mustPayload(t, initialize)
+	if _, err := DecodeRequestPayload(MethodInitialize, raw); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("DecodeRequestPayload() error = %v, want %v", err, ErrInvalidRecord)
+	}
+}
+
+func TestDecodeStartRejectsControlsInAttachmentMetadata(t *testing.T) {
+	binding := testBinding(t)
+	for name, control := range map[string]string{
+		"line feed":         "\n",
+		"carriage return":   "\r",
+		"tab":               "\t",
+		"non-ASCII control": "\u0085",
+	} {
+		t.Run(name, func(t *testing.T) {
+			start := TurnStartParams{
+				ControlIdentity: binding.ControlIdentity(),
+				Attachments: []TurnAttachment{{
+					SourcePath:  filepath.Join(binding.ExecutionRoot, "screen.png"),
+					Filename:    "screen" + control + ".png",
+					ContentType: "image/png",
+				}},
+			}
+			raw := mustPayload(t, start)
+			if _, err := DecodeRequestPayload(MethodTurnStart, raw); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("DecodeRequestPayload() error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
+func TestDecodeInitializeRejectsControlsInProjectPaths(t *testing.T) {
+	for name, control := range map[string]string{
+		"line feed":         "\n",
+		"carriage return":   "\r",
+		"tab":               "\t",
+		"non-ASCII control": "\u0085",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "project"+control+"root")
+			if err := os.Mkdir(root, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			project, err := thread.ResolveProject(t.Context(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding := testBinding(t)
+			binding.Project = project
+			binding.ExecutionRoot = project.ProjectRoot
+			binding.ExecutionRootIdentity = ExecutionRootIdentity(project.ProjectRoot)
+			initialize := InitializeParams{
+				MinProtocolVersion: ProtocolV1,
+				MaxProtocolVersion: ProtocolV1,
+				ParentBuildID:      "parent-test-build",
+				Binding:            binding,
+			}
+			raw := mustPayload(t, initialize)
+			if _, err := DecodeRequestPayload(MethodInitialize, raw); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("DecodeRequestPayload() error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
 	}
 }
 

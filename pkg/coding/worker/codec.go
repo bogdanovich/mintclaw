@@ -89,6 +89,10 @@ func MarshalPayload(value any) (json.RawMessage, error) {
 }
 
 func validateProtocolText(raw json.RawMessage) error {
+	return validateProtocolTextWith(raw, containsTerminalControl)
+}
+
+func validateProtocolTextWith(raw json.RawMessage, containsUnsafe func(string) bool) error {
 	if err := requireValidJSONText(raw); err != nil {
 		return fmt.Errorf("%w: malformed protocol payload: %w", ErrInvalidRecord, err)
 	}
@@ -105,7 +109,7 @@ func validateProtocolText(raw json.RawMessage) error {
 	inspect = func(current any) error {
 		switch typed := current.(type) {
 		case string:
-			if !utf8.ValidString(typed) || containsTerminalControl(typed) {
+			if !utf8.ValidString(typed) || containsUnsafe(typed) {
 				return fmt.Errorf("%w: protocol payload contains unsafe or oversized text", ErrInvalidRecord)
 			}
 		case []any:
@@ -116,7 +120,7 @@ func validateProtocolText(raw json.RawMessage) error {
 			}
 		case map[string]any:
 			for key, entry := range typed {
-				if !utf8.ValidString(key) || containsTerminalControl(key) {
+				if !utf8.ValidString(key) || containsUnsafe(key) {
 					return fmt.Errorf("%w: protocol payload contains unsafe or oversized text", ErrInvalidRecord)
 				}
 				if err := inspect(entry); err != nil {
@@ -138,6 +142,10 @@ func containsTerminalControl(value string) bool {
 	})
 }
 
+func containsStructuralControl(value string) bool {
+	return strings.ContainsFunc(value, unicode.IsControl)
+}
+
 func validateStructuredText(value any) error {
 	if err := validateProducerText(value); err != nil {
 		return err
@@ -146,7 +154,7 @@ func validateStructuredText(value any) error {
 	if err != nil {
 		return fmt.Errorf("%w: encode protocol value for text validation: %w", ErrInvalidRecord, err)
 	}
-	return validateProtocolText(raw)
+	return validateProtocolTextWith(raw, containsStructuralControl)
 }
 
 func validateJSONObject(label string, raw json.RawMessage) error {

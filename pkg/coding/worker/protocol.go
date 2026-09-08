@@ -331,8 +331,11 @@ func (binding Binding) Validate() error {
 		return fmt.Errorf("%w: invalid project identity: %w", ErrInvalidRecord, err)
 	}
 	if !validPath(binding.Project.ProjectRoot) || !validPath(binding.Project.InvocationCWD) ||
-		!validPath(binding.ExecutionRoot) {
-		return fmt.Errorf("%w: project and execution roots must be bounded clean absolute paths", ErrInvalidRecord)
+		!validOptionalPath(binding.Project.GitWorktreeRoot) || !validOptionalPath(binding.Project.GitDir) ||
+		!validOptionalPath(binding.Project.GitCommonDir) ||
+		containsStructuralControl(binding.Project.GitOrigin) ||
+		containsStructuralControl(binding.Project.GitBranch) || !validPath(binding.ExecutionRoot) {
+		return fmt.Errorf("%w: invalid project or execution identity text", ErrInvalidRecord)
 	}
 	if binding.ExecutionRootIdentity != ExecutionRootIdentity(binding.ExecutionRoot) {
 		return fmt.Errorf("%w: execution root identity does not match its path", ErrInvalidRecord)
@@ -517,26 +520,24 @@ func validIdentifier(value string) bool {
 
 func validBuildID(value string) bool {
 	return len(value) > 0 && len(value) <= MaxBuildIDBytes && utf8.ValidString(value) &&
-		value == strings.TrimSpace(value) && !containsUnsafeControl(value)
+		value == strings.TrimSpace(value) && !containsStructuralControl(value)
 }
 
 func validPath(value string) bool {
 	return value != "" && len(value) <= MaxPathBytes && utf8.ValidString(value) &&
-		filepath.IsAbs(value) && filepath.Clean(value) == value && !containsUnsafeControl(value)
+		filepath.IsAbs(value) && filepath.Clean(value) == value && !containsStructuralControl(value)
+}
+
+func validOptionalPath(value string) bool {
+	return value == "" || validPath(value)
 }
 
 func validBoundedText(value string, maximum int) bool {
 	return value != "" && len(value) <= maximum && utf8.ValidString(value) &&
-		value == strings.TrimSpace(value) && !containsUnsafeControl(value)
+		value == strings.TrimSpace(value) && !containsStructuralControl(value)
 }
 
 func validOptionalText(value string, maximum int) bool {
 	return value == "" || len(value) <= maximum && utf8.ValidString(value) &&
-		!strings.ContainsRune(value, 0) && !strings.ContainsRune(value, '\x1b')
-}
-
-func containsUnsafeControl(value string) bool {
-	return strings.ContainsFunc(value, func(character rune) bool {
-		return character == '\x1b' || character == 0 || character == '\x7f'
-	})
+		!containsStructuralControl(value)
 }
