@@ -1,8 +1,10 @@
 package agent
 
 import (
+	"strings"
 	"testing"
 
+	agenttools "github.com/bogdanovich/mintclaw/pkg/tools"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -59,5 +61,30 @@ func TestCodingToolObservationAdmitsOnlySafePlanUnion(t *testing.T) {
 	}}
 	if got := codingToolObservation(ts, invalid); got != nil {
 		t.Fatalf("invalid plan observation admitted = %#v", got)
+	}
+}
+
+func TestCodingToolStartObservationUsesNativeProviderOnlyForCodingTurns(t *testing.T) {
+	execTool, err := agenttools.NewExecTool(t.TempDir(), false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := agenttools.NewToolRegistry()
+	registry.Register(execTool)
+	arguments := map[string]any{
+		"action": "run", "command": "printf sk-123456789abcdef", "background": true,
+	}
+	if got := codingToolStartObservation(&turnState{}, registry, "exec", arguments); got != nil {
+		t.Fatalf("personal turn start observation = %+v", got)
+	}
+	ts := &turnState{opts: freezeTurnInput(turnSpec{CodingContext: CodingPromptContext{SessionKey: "thread-1"}})}
+	got := codingToolStartObservation(ts, registry, "exec", arguments)
+	if got == nil || got.Command == nil || got.Command.Action != "run" || !got.Command.Background ||
+		got.Command.OwnsProcess || got.Command.Status != "running" ||
+		strings.Contains(got.Command.Command, "123456789abcdef") {
+		t.Fatalf("coding start observation = %+v", got)
+	}
+	if observation := codingToolStartObservation(ts, registry, "missing", arguments); observation != nil {
+		t.Fatalf("missing tool observation = %+v", observation)
 	}
 }

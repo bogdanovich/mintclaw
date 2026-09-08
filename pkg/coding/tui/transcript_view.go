@@ -278,7 +278,8 @@ func toolStatusText(status frontend.ToolStatus) string {
 
 func toolHasDisplayOutput(tool frontend.ToolState) bool {
 	return tool.Command != nil &&
-		(tool.Command.Stdout != "" || tool.Command.Stderr != "" || tool.Command.Output != "")
+		(tool.Command.Stdout != "" || tool.Command.Stderr != "" || tool.Command.Output != "" ||
+			len(tool.Command.Transcript) != 0)
 }
 
 func expandedToolOutput(tool frontend.ToolState) []string {

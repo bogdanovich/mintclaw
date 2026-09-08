@@ -630,6 +630,9 @@ func (p *Projector) ToolStarted(turnID, callID, name, arguments string) {
 		}
 		tool.Name = name
 		tool.Arguments = arguments
+		if tool.Command != nil {
+			tool.Command.Orphan = false
+		}
 		if !terminalToolStatus(tool.Status) {
 			tool.Status = ToolRunning
 			tool.Duration = 0
@@ -665,10 +668,30 @@ func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandStat
 		tool := toolFromPresentationItems(state.Items, turnID, callID)
 		if tool.CallID == "" {
 			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
+			command.Orphan = true
 		}
+		command = p.boundedCommand(command)
+		command = mergeCommandState(tool.Command, command)
 		command = p.boundedCommand(command)
 		tool.Command = &command
 		tool.Output, tool.OutputTruncated = commandDisplayOutput(command, p.limits.TextBytes)
+		if command.OwnsProcess {
+			if command.Duration > 0 {
+				tool.Duration = command.Duration
+			}
+			switch command.Status {
+			case CommandRunning:
+				tool.Status = ToolRunning
+			case CommandSucceeded:
+				tool.Status = ToolSucceeded
+			case CommandFailed, CommandTimedOut:
+				tool.Status = ToolFailed
+			case CommandCanceled:
+				tool.Status = ToolInterrupted
+			case CommandUnknown:
+				tool.Status = ToolUnknown
+			}
+		}
 		p.upsertTool(state, tool)
 	})
 }
@@ -746,18 +769,28 @@ func (p *Projector) ToolCompleted(
 		if failed {
 			tool.Status = ToolFailed
 		}
-		if tool.Command != nil {
+		if tool.Command != nil && tool.Command.Status == CommandRunning && failed {
+			tool.Command.Status = CommandFailed
+		}
+		if tool.Command != nil && tool.Command.OwnsProcess {
 			switch tool.Command.Status {
 			case CommandCanceled:
 				tool.Status = ToolInterrupted
 			case CommandFailed, CommandTimedOut:
 				tool.Status = ToolFailed
+			case CommandRunning:
+				if tool.Command.Background {
+					tool.Status = ToolRunning
+				}
 			}
 		}
 		if terminalToolStatus(previousStatus) {
 			tool.Status = previousStatus
 		}
-		tool.Duration = duration
+		if tool.Command == nil || !tool.Command.OwnsProcess ||
+			!terminalCommandStatus(tool.Command.Status) || tool.Command.Duration <= 0 {
+			tool.Duration = duration
+		}
 		if output != "" || tool.Command == nil {
 			tool.Output, tool.OutputTruncated = boundText(output, p.limits.TextBytes)
 		}
@@ -1121,7 +1154,16 @@ func (p *Projector) finishTurn(
 		for i := range items {
 			if items[i].Tool != nil && items[i].TurnID == turnID && items[i].Tool.Status == ToolRunning {
 				tool := cloneTool(*items[i].Tool)
+				if tool.Command != nil && tool.Command.Background && tool.Command.OwnsProcess &&
+					strings.TrimSpace(tool.Command.SessionID) != "" {
+					continue
+				}
 				tool.Status = toolStatus
+				if tool.Command != nil &&
+					(tool.Command.Status == CommandRunning || tool.Command.Status == CommandUnknown) {
+					tool.Command.Status = CommandCanceled
+					tool.Command.Canceled = true
+				}
 				p.upsertTool(state, tool)
 			}
 		}
@@ -1199,9 +1241,133 @@ func (p *Projector) boundedCommand(command CommandState) CommandState {
 	command.Stdout = stdout
 	command.Stderr = stderr
 	command.Output = output
+	command.Action, _ = boundText(command.Action, p.limits.TextBytes)
+	var commandTruncated bool
+	command.Command, commandTruncated = boundText(command.Command, p.limits.TextBytes)
+	command.CWD, _ = boundText(command.CWD, p.limits.TextBytes)
+	var inputTruncated bool
+	command.Input, inputTruncated = boundText(command.Input, p.limits.TextBytes)
 	command.SessionID, _ = boundText(command.SessionID, p.limits.TextBytes)
-	command.Truncated = command.Truncated || stdoutTruncated || stderrTruncated || outputTruncated
+	var transcriptTruncated bool
+	command.Transcript, transcriptTruncated = boundCommandTranscript(command.Transcript, p.limits.TextBytes)
+	command.Truncated = command.Truncated || stdoutTruncated || stderrTruncated || outputTruncated ||
+		commandTruncated || inputTruncated || transcriptTruncated
 	return command
+}
+
+func mergeCommandState(current *CommandState, update CommandState) CommandState {
+	if current == nil {
+		return update
+	}
+	merged := *current
+	if update.Action != "" {
+		merged.Action = update.Action
+	}
+	if update.Command != "" {
+		merged.Command = update.Command
+	}
+	if update.CWD != "" {
+		merged.CWD = update.CWD
+	}
+	if update.Input != "" {
+		merged.Input = update.Input
+	}
+	if update.Source != "" {
+		merged.Source = update.Source
+	}
+	if update.Stdout != "" {
+		merged.Stdout = update.Stdout
+	}
+	if update.Stderr != "" {
+		merged.Stderr = update.Stderr
+	}
+	if update.Output != "" {
+		merged.Output = update.Output
+	}
+	if update.Status != "" && update.Status != CommandUnknown &&
+		(!terminalCommandStatus(merged.Status) || terminalCommandStatus(update.Status)) {
+		merged.Status = update.Status
+	}
+	if update.Duration > 0 {
+		merged.Duration = update.Duration
+	}
+	if update.SessionID != "" {
+		merged.SessionID = update.SessionID
+	}
+	if update.ExitCode != nil {
+		exitCode := *update.ExitCode
+		merged.ExitCode = &exitCode
+	}
+	if update.OwnsProcess && terminalCommandStatus(update.Status) && len(update.Transcript) != 0 {
+		merged.Transcript = slices.Clone(update.Transcript)
+	} else {
+		merged.Transcript = mergeCommandTranscript(merged.Transcript, update.Transcript)
+	}
+	merged.Truncated = merged.Truncated || update.Truncated
+	merged.Background = merged.Background || update.Background
+	merged.OwnsProcess = merged.OwnsProcess || update.OwnsProcess
+	merged.Orphan = merged.Orphan || update.Orphan
+	merged.Canceled = merged.Canceled || update.Canceled
+	merged.TimedOut = merged.TimedOut || update.TimedOut
+	return merged
+}
+
+func terminalCommandStatus(status CommandStatus) bool {
+	switch status {
+	case CommandSucceeded, CommandFailed, CommandCanceled, CommandTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+func mergeCommandTranscript(groups ...[]CommandTranscriptEntry) []CommandTranscriptEntry {
+	entries := make(map[uint64]CommandTranscriptEntry)
+	zero := make([]CommandTranscriptEntry, 0)
+	for _, group := range groups {
+		for _, entry := range group {
+			if entry.Sequence == 0 {
+				zero = append(zero, entry)
+				continue
+			}
+			entries[entry.Sequence] = entry
+		}
+	}
+	sequences := make([]uint64, 0, len(entries))
+	for sequence := range entries {
+		sequences = append(sequences, sequence)
+	}
+	slices.Sort(sequences)
+	result := make([]CommandTranscriptEntry, 0, len(zero)+len(sequences))
+	result = append(result, zero...)
+	for _, sequence := range sequences {
+		result = append(result, entries[sequence])
+	}
+	return result
+}
+
+func boundCommandTranscript(
+	entries []CommandTranscriptEntry,
+	maximum int,
+) ([]CommandTranscriptEntry, bool) {
+	result := make([]CommandTranscriptEntry, 0, min(len(entries), defaultToolLimit))
+	remaining := maximum
+	truncated := false
+	for _, entry := range entries {
+		if len(result) == defaultToolLimit || remaining <= 0 {
+			truncated = true
+			break
+		}
+		entry.Stream, _ = boundText(entry.Stream, maximum)
+		var textTruncated bool
+		entry.Text, textTruncated = boundText(entry.Text, remaining)
+		truncated = truncated || textTruncated
+		remaining -= len(entry.Text)
+		if entry.Text != "" {
+			result = append(result, entry)
+		}
+	}
+	return result, truncated
 }
 
 func (p *Projector) boundedPlan(plan PlanState) (PlanState, bool) {
@@ -1288,6 +1454,13 @@ func commandDisplayOutput(command CommandState, maximum int) (string, bool) {
 			output += "\nSTDERR:\n"
 		}
 		output += command.Stderr
+	}
+	if output == "" && len(command.Transcript) != 0 {
+		var transcript strings.Builder
+		for _, entry := range command.Transcript {
+			transcript.WriteString(entry.Text)
+		}
+		output = transcript.String()
 	}
 	output, truncated := boundText(output, maximum)
 	return output, command.Truncated || truncated
@@ -1385,6 +1558,7 @@ func cloneTool(tool ToolState) ToolState {
 	tool.WriteAudit = slices.Clone(tool.WriteAudit)
 	if tool.Command != nil {
 		command := *tool.Command
+		command.Transcript = slices.Clone(command.Transcript)
 		if command.ExitCode != nil {
 			exitCode := *command.ExitCode
 			command.ExitCode = &exitCode

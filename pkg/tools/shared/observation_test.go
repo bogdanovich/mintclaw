@@ -87,20 +87,24 @@ func TestNewPlanObservationRejectsInvalidPlans(t *testing.T) {
 func TestSanitizeToolObservationFailsClosedAndClonesCommand(t *testing.T) {
 	exitCode := 7
 	command := &CommandObservation{
-		Stdout:   strings.Repeat("o", maxCommandOutputBytes+1),
-		Output:   "Bearer abcdefghijklmnop",
-		Status:   "failed",
-		ExitCode: &exitCode,
+		Action: "run", Command: "printf sk-123456789abcdef", CWD: "/repo", Input: "Bearer abcdefghijklmnop",
+		Source: "agent", Stdout: strings.Repeat("o", maxCommandOutputBytes+1),
+		Output: "Bearer abcdefghijklmnop", Status: "failed", ExitCode: &exitCode,
+		Transcript: []CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "safe output"}},
 	}
 	got := SanitizeToolObservation(&ToolObservation{Command: command})
 	if got == nil || got.Command == nil || !got.Command.Truncated ||
 		len(got.Command.Stdout) > maxCommandOutputBytes || strings.Contains(got.Command.Output, "abcdefghijklmnop") ||
-		got.Command.ExitCode == nil || *got.Command.ExitCode != 7 {
+		strings.Contains(got.Command.Command, "123456789abcdef") ||
+		strings.Contains(got.Command.Input, "abcdefghijklmnop") || got.Command.ExitCode == nil ||
+		*got.Command.ExitCode != 7 || len(got.Command.Transcript) != 1 {
 		t.Fatalf("safe command observation = %#v", got)
 	}
 	command.Stdout = "mutated"
+	command.Transcript[0].Text = "mutated transcript"
 	exitCode = 9
-	if got.Command.Stdout == "mutated" || *got.Command.ExitCode != 7 {
+	if got.Command.Stdout == "mutated" || got.Command.Transcript[0].Text == "mutated transcript" ||
+		*got.Command.ExitCode != 7 {
 		t.Fatalf("safe command observation aliases input: %#v", got)
 	}
 
@@ -119,5 +123,60 @@ func TestSanitizeToolObservationFailsClosedAndClonesCommand(t *testing.T) {
 				t.Fatalf("invalid union admitted: %#v", got)
 			}
 		})
+	}
+}
+
+func TestSanitizeCommandTranscriptIsByteAndItemBounded(t *testing.T) {
+	entries := make([]CommandTranscriptEntry, maxCommandTranscriptEntries+20)
+	for index := range entries {
+		entries[index] = CommandTranscriptEntry{
+			Sequence: uint64(index + 1), Stream: "stdout", Text: strings.Repeat("界", 1024),
+		}
+	}
+	got := SanitizeToolObservation(&ToolObservation{Command: &CommandObservation{Transcript: entries}})
+	if got == nil || got.Command == nil || !got.Command.Truncated ||
+		len(got.Command.Transcript) > maxCommandTranscriptEntries {
+		t.Fatalf("bounded command transcript = %#v", got)
+	}
+	total := 0
+	for _, entry := range got.Command.Transcript {
+		total += len(entry.Text)
+		if !utf8.ValidString(entry.Text) {
+			t.Fatalf("invalid UTF-8 transcript entry: %q", entry.Text)
+		}
+	}
+	if total > maxCommandOutputBytes {
+		t.Fatalf("transcript bytes = %d, want <= %d", total, maxCommandOutputBytes)
+	}
+}
+
+func TestSanitizeCommandTranscriptRedactsAcrossAdjacentFragments(t *testing.T) {
+	got := SanitizeToolObservation(&ToolObservation{Command: &CommandObservation{Transcript: []CommandTranscriptEntry{
+		{Sequence: 1, Stream: "stdout", Text: "sk-1234"},
+		{Sequence: 2, Stream: "stdout", Text: "56789abcdef"},
+		{Sequence: 3, Stream: "stderr", Text: "safe"},
+	}}})
+	if got == nil || got.Command == nil || len(got.Command.Transcript) != 2 ||
+		got.Command.Transcript[0].Sequence != 1 || got.Command.Transcript[0].Text != "[REDACTED]" ||
+		got.Command.Transcript[1].Text != "safe" {
+		t.Fatalf("sanitized fragmented transcript = %#v", got)
+	}
+}
+
+func TestCommandObservationSinkIsOptionalAndReceivesIndependentSafeValues(t *testing.T) {
+	PublishCommandObservation(t.Context(), CommandObservation{Output: "ignored"})
+
+	var received []CommandObservation
+	ctx := WithCommandObservationSink(t.Context(), func(observation CommandObservation) {
+		received = append(received, observation)
+	})
+	original := CommandObservation{
+		Command: "echo safe", Status: "running",
+		Transcript: []CommandTranscriptEntry{{Sequence: 1, Stream: "stdout", Text: "one"}},
+	}
+	PublishCommandObservation(ctx, original)
+	original.Transcript[0].Text = "mutated"
+	if len(received) != 1 || received[0].Transcript[0].Text != "one" {
+		t.Fatalf("command observation sink = %+v", received)
 	}
 }

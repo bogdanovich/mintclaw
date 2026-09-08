@@ -38,6 +38,8 @@ const (
 
 	// KindAgentToolExecStart is emitted before a tool executes.
 	KindAgentToolExecStart Kind = "agent.tool.exec_start"
+	// KindAgentToolExecProgress carries a bounded typed observation while a tool executes.
+	KindAgentToolExecProgress Kind = "agent.tool.exec_progress"
 	// KindAgentToolExecEnd is emitted after a tool finishes.
 	KindAgentToolExecEnd Kind = "agent.tool.exec_end"
 	// KindAgentToolExecSkipped is emitted when a tool call is skipped.
@@ -163,6 +165,7 @@ var knownKinds = []Kind{
 	KindAgentSessionSummarize,
 	KindAgentMemoryMutation,
 	KindAgentToolExecStart,
+	KindAgentToolExecProgress,
 	KindAgentToolExecEnd,
 	KindAgentToolExecSkipped,
 	KindAgentToolLoopDecision,

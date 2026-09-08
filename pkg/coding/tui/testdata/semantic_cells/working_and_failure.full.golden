@@ -1,10 +1,11 @@
 • The first attempt failed; I’m narrowing the retry.
 
-• Ran exec [failed] · 3s
-  exit: 1
-  stderr:
-    package test failed
+! Command failed go test ./pkg/coding/tui · 3s
+  $ go test ./pkg/coding/tui
+    stderr> package test failed
+  failed · exit 1 · 3s
 
-• Ran exec [running] · 9s
-  stdout:
-    running focused retry
+• Running go test ./pkg/coding/tui -run TestFocused
+  $ go test ./pkg/coding/tui -run TestFocused
+    stdout> running focused retry
+  running · 9s

@@ -691,6 +691,15 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	case "ctrl+o":
 		m.toggleSelectedTool()
 		return true, nil
+	case "ctrl+t":
+		if m.commandPanel == commandPanelTranscript {
+			m.commandPanel = commandPanelNone
+		} else {
+			m.commandPanel = commandPanelTranscript
+		}
+		m.commandPanelOffset = 0
+		m.err = nil
+		return true, nil
 	case "enter":
 		m.supersedeEvidenceRequest()
 		if message.Paste {

@@ -193,6 +193,26 @@ func runtimeEventLogSafePayload(payload any) any {
 		safe := *value
 		safe.DiagnosticMessage = ""
 		return &safe
+	case ToolExecStartPayload:
+		value.Observation = nil
+		return value
+	case *ToolExecStartPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		safe.Observation = nil
+		return &safe
+	case ToolExecProgressPayload:
+		value.Observation = nil
+		return value
+	case *ToolExecProgressPayload:
+		if value == nil {
+			return value
+		}
+		safe := *value
+		safe.Observation = nil
+		return &safe
 	case ToolExecEndPayload:
 		value.Observation = nil
 		return value
@@ -408,6 +428,8 @@ func appendRuntimeEventPayloadSummary(fields map[string]any, payload any) {
 	case ToolExecStartPayload:
 		fields["tool"] = payload.Tool
 		fields["args_count"] = len(payload.Arguments)
+	case ToolExecProgressPayload:
+		fields["tool"] = payload.Tool
 	case ToolExecEndPayload:
 		fields["tool"] = payload.Tool
 		fields["duration_ms"] = payload.Duration.Milliseconds()

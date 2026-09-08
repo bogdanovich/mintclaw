@@ -157,6 +157,7 @@ type ToolState struct {
 type CommandStatus string
 
 const (
+	CommandUnknown   CommandStatus = "unknown"
 	CommandRunning   CommandStatus = "running"
 	CommandSucceeded CommandStatus = "succeeded"
 	CommandFailed    CommandStatus = "failed"
@@ -164,18 +165,40 @@ const (
 	CommandTimedOut  CommandStatus = "timed_out"
 )
 
+type CommandSource string
+
+const (
+	CommandSourceAgent     CommandSource = "agent"
+	CommandSourceUserShell CommandSource = "user_shell"
+)
+
+type CommandTranscriptEntry struct {
+	Sequence uint64 `json:"sequence"`
+	Stream   string `json:"stream"`
+	Text     string `json:"text"`
+}
+
 // CommandState is bounded tool-owned process output and lifecycle state.
 type CommandState struct {
-	Stdout     string        `json:"stdout,omitempty"`
-	Stderr     string        `json:"stderr,omitempty"`
-	Output     string        `json:"output,omitempty"`
-	Status     CommandStatus `json:"status,omitempty"`
-	SessionID  string        `json:"session_id,omitempty"`
-	ExitCode   *int          `json:"exit_code,omitempty"`
-	Truncated  bool          `json:"truncated,omitempty"`
-	Background bool          `json:"background,omitempty"`
-	Canceled   bool          `json:"canceled,omitempty"`
-	TimedOut   bool          `json:"timed_out,omitempty"`
+	Action      string                   `json:"action,omitempty"`
+	Command     string                   `json:"command,omitempty"`
+	CWD         string                   `json:"cwd,omitempty"`
+	Input       string                   `json:"input,omitempty"`
+	Source      CommandSource            `json:"source,omitempty"`
+	Stdout      string                   `json:"stdout,omitempty"`
+	Stderr      string                   `json:"stderr,omitempty"`
+	Output      string                   `json:"output,omitempty"`
+	Transcript  []CommandTranscriptEntry `json:"transcript,omitempty"`
+	Duration    time.Duration            `json:"duration,omitempty"`
+	Status      CommandStatus            `json:"status,omitempty"`
+	SessionID   string                   `json:"session_id,omitempty"`
+	ExitCode    *int                     `json:"exit_code,omitempty"`
+	Truncated   bool                     `json:"truncated,omitempty"`
+	Background  bool                     `json:"background,omitempty"`
+	OwnsProcess bool                     `json:"owns_process,omitempty"`
+	Orphan      bool                     `json:"orphan,omitempty"`
+	Canceled    bool                     `json:"canceled,omitempty"`
+	TimedOut    bool                     `json:"timed_out,omitempty"`
 }
 
 type PlanStepStatus = codingplan.StepStatus

@@ -248,9 +248,18 @@ type SessionSummarizePayload struct {
 
 // ToolExecStartPayload describes a tool execution request.
 type ToolExecStartPayload struct {
-	ToolCallID string
-	Tool       string
-	Arguments  map[string]any
+	ToolCallID  string
+	Tool        string
+	Arguments   map[string]any
+	Observation *toolshared.ToolObservation
+}
+
+// ToolExecProgressPayload carries a bounded tool-owned observation correlated
+// to the same provider call identity as start and end.
+type ToolExecProgressPayload struct {
+	ToolCallID  string
+	Tool        string
+	Observation *toolshared.ToolObservation
 }
 
 // ToolExecEndPayload describes the outcome of a tool execution.

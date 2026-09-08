@@ -5,7 +5,9 @@
     → Implement the semantic cells
     □ Run focused validation
 
-• Ran exec [succeeded] · 2.4s
+• Ran go test ./pkg/coding/tui · 2.4s
+  └ stdout> focused tests passed
+  ctrl+t to view full transcript
 
 • Updated Plan
   └ Implementation and focused
