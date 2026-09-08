@@ -295,7 +295,11 @@ type ViewSource interface {
 	Subscribe(context.Context) (ThreadSnapshot, <-chan ThreadSnapshot, error)
 }
 
-const MaxTurnAttachments = 32
+const (
+	MaxTurnAttachments = 32
+	MaxSteerIDBytes    = 128
+	MaxSteersPerTurn   = 256
+)
 
 // TurnAttachment is one caller-owned file proposed for admission with a turn.
 // Path is ephemeral input: runtimes must copy and replace it with a durable,
@@ -318,6 +322,21 @@ type TurnInput struct {
 func (input TurnInput) Clone() TurnInput {
 	input.Attachments = append([]TurnAttachment(nil), input.Attachments...)
 	return input
+}
+
+// SteerInput is one append-only instruction for the currently active turn.
+// ID is caller-owned idempotency identity: retrying the same ID and text is a
+// no-op, while reusing an ID for different text is rejected.
+type SteerInput struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// Steerer is an optional controller capability for same-turn guidance. It is
+// separate from CommandSink so local frontends do not need to expose remote
+// worker controls.
+type Steerer interface {
+	Steer(context.Context, SteerInput) error
 }
 
 // CommandSink is the write side of the frontend controller boundary. Runtime
