@@ -1482,6 +1482,22 @@ func TestBrowserActRegistryPreservesMistypedContextAuthorityRecovery(t *testing.
 	}
 }
 
+func TestBrowserActRegistryDoesNotMaskMixedSchemaFailure(t *testing.T) {
+	source := &fakeBrowserToolSource{available: true}
+	registry := NewToolRegistry()
+	registry.Register(NewBrowserActTool(browserToolTestConfig(), source))
+	result := registry.Execute(browserToolTestContext(), "browser_act", map[string]any{
+		"browser_session_id": "browser_session_1", "tab_id": "tab_primary",
+		"snapshot_id": "snapshot_1", "snapshot_generation": 1,
+		"context_catalog_id": 42, "context_generation": 1,
+	})
+	if result == nil || !result.IsError || source.prepareCalls != 0 ||
+		!strings.Contains(result.ContentForLLM(), "invalid arguments for tool") ||
+		strings.Contains(result.ContentForLLM(), `"code":"invalid_context_authority"`) {
+		t.Fatalf("mixed schema result = %#v; prepare calls = %d", result, source.prepareCalls)
+	}
+}
+
 func TestBrowserActionToolStaleErrorInstructsAuthorityCopy(t *testing.T) {
 	result := browserActionToolError(browser.ErrStale)
 	if result == nil || !result.IsError ||

@@ -1665,8 +1665,17 @@ func (*BrowserActTool) ProtectedDurableResult(map[string]any) bool { return true
 // when malformed context-authority fields would otherwise be rejected by the
 // registry before Execute can classify them. All other schema failures retain
 // the registry's generic fail-closed response.
-func (*BrowserActTool) SafeSchemaValidationFailure(args map[string]any) *toolshared.ToolResult {
+func (tool *BrowserActTool) SafeSchemaValidationFailure(args map[string]any) *toolshared.ToolResult {
 	if !browserActionContextAuthorityInvalid(args) {
+		return nil
+	}
+	withoutContextAuthority := make(map[string]any, len(args))
+	for field, value := range args {
+		if field != "context_catalog_id" && field != "context_generation" {
+			withoutContextAuthority[field] = value
+		}
+	}
+	if validateToolArgs(tool.Parameters(), withoutContextAuthority) != nil {
 		return nil
 	}
 	return browserActionToolError(errBrowserActionContextAuthority)
