@@ -34,6 +34,32 @@ type exclusiveServerLease struct {
 	once sync.Once
 }
 
+type exclusiveLeaseParent struct {
+	file     *os.File
+	path     string
+	identity os.FileInfo
+}
+
+func (parent *exclusiveLeaseParent) validate() error {
+	if parent == nil || parent.file == nil || parent.identity == nil {
+		return errExclusiveLeaseUnsafe
+	}
+	opened, openedErr := parent.file.Stat()
+	current, currentErr := os.Lstat(parent.path)
+	if openedErr != nil || currentErr != nil || !current.IsDir() ||
+		current.Mode()&os.ModeSymlink != 0 ||
+		!os.SameFile(parent.identity, opened) || !os.SameFile(parent.identity, current) {
+		return errExclusiveLeaseUnsafe
+	}
+	return nil
+}
+
+func (parent *exclusiveLeaseParent) close() {
+	if parent != nil && parent.file != nil {
+		_ = parent.file.Close()
+	}
+}
+
 // ExclusiveServerLease is a process-scoped owner of the same lock used by a
 // private MCP server. It lets trusted lifecycle code reconcile host-owned
 // state only while no server process can be using that state.
