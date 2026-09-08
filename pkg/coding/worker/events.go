@@ -210,6 +210,7 @@ type WorkerStopReason string
 const (
 	WorkerStopCompleted WorkerStopReason = "completed"
 	WorkerStopShutdown  WorkerStopReason = "shutdown"
+	WorkerStopIdle      WorkerStopReason = "idle_timeout"
 	WorkerStopCanceled  WorkerStopReason = "canceled"
 	WorkerStopFailed    WorkerStopReason = "failed"
 )
@@ -225,7 +226,7 @@ func (payload WorkerStoppedPayload) Validate() error {
 		return err
 	}
 	switch payload.Reason {
-	case WorkerStopCompleted, WorkerStopShutdown, WorkerStopCanceled:
+	case WorkerStopCompleted, WorkerStopShutdown, WorkerStopIdle, WorkerStopCanceled:
 		if payload.Error != nil {
 			return fmt.Errorf("%w: successful worker stop contains an error", ErrInvalidRecord)
 		}
