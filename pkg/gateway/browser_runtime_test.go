@@ -148,6 +148,189 @@ func TestBrowserRuntimeRetainsOwnershipUntilWorkerShutdownSucceeds(t *testing.T)
 	reopened.Close()
 }
 
+type gatewayManagedRevocationTestCase struct {
+	name          string
+	mutate        func(*config.Config)
+	runtimeWanted bool
+}
+
+func gatewayManagedRevocationTestCases(root string) []gatewayManagedRevocationTestCase {
+	return []gatewayManagedRevocationTestCase{
+		{
+			name: "profile disabled",
+			mutate: func(cfg *config.Config) {
+				cfg.Tools.Browser = config.BrowserToolsConfig{}
+			},
+		},
+		{
+			name: "profile revision changed", runtimeWanted: true,
+			mutate: func(cfg *config.Config) {
+				target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+				profile := target.Profiles[config.BrowserDefaultProfile]
+				profile.Revision = "managed-v2"
+				target.Profiles[config.BrowserDefaultProfile] = profile
+				cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			},
+		},
+		{
+			name: "actor grant removed", runtimeWanted: true,
+			mutate: func(cfg *config.Config) {
+				target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+				profile := target.Profiles[config.BrowserDefaultProfile]
+				profile.AllowedActors = []string{"actor_2"}
+				target.Profiles[config.BrowserDefaultProfile] = profile
+				cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			},
+		},
+		{
+			name: "agent grant removed", runtimeWanted: true,
+			mutate: func(cfg *config.Config) {
+				cfg.Tools.Browser.Agents = []string{"replacement"}
+				target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+				profile := target.Profiles[config.BrowserDefaultProfile]
+				profile.AllowedAgents = []string{"replacement"}
+				target.Profiles[config.BrowserDefaultProfile] = profile
+				cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			},
+		},
+		{
+			name: "runtime mapping changed", runtimeWanted: true,
+			mutate: func(cfg *config.Config) {
+				profileDirectory := filepath.Join(root, "browser-profile-v2")
+				target := cfg.Tools.Browser.Targets[config.BrowserDefaultTarget]
+				profile := target.Profiles[config.BrowserDefaultProfile]
+				profile.Runtime.ProfileDirectory = profileDirectory
+				profile.Runtime.LockFile = filepath.Join(root, "browser-locks", "managed-v2.lock")
+				target.Profiles[config.BrowserDefaultProfile] = profile
+				cfg.Tools.Browser.Targets[config.BrowserDefaultTarget] = target
+			},
+		},
+	}
+}
+
+func TestGatewayBrowserGenerationReplacementRevokesManagedAuthority(t *testing.T) {
+	for _, test := range gatewayManagedRevocationTestCases("") {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			runtimeRoot, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Mkdir(filepath.Join(runtimeRoot, "browser-profile-v2"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			current := gatewayBrowserConfig(root)
+			store, err := browser.NewFileStore(filepath.Join(runtimeRoot, "state", "browser", browserStateFile), 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker := &gatewayTestBrowserWorker{}
+			broker, err := browser.NewBroker(current, store, &gatewayTestBrowserFactory{worker: worker})
+			if err != nil {
+				store.Close()
+				t.Fatal(err)
+			}
+			if _, err = broker.Open(t.Context(), browser.OpenRequest{
+				Owner: browser.Owner{
+					ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
+					SessionKey: "session_1", ExecutionID: "execution_1",
+				},
+				Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+			}); err != nil {
+				store.Close()
+				t.Fatal(err)
+			}
+			services := &services{Browser: &browserRuntime{broker: broker, store: store}}
+			replacement := gatewayBrowserConfig(root)
+			for _, candidate := range gatewayManagedRevocationTestCases(runtimeRoot) {
+				if candidate.name == test.name {
+					candidate.mutate(replacement)
+					break
+				}
+			}
+			if replacement.Tools.Browser.Enabled {
+				if _, factoryErr := newGatewayBrowserWorkerFactory(replacement, nil); factoryErr != nil {
+					t.Fatalf("prepare replacement worker factory: %v", factoryErr)
+				}
+			}
+
+			if err = closeBrowserRuntime(t.Context(), services); err != nil {
+				t.Fatalf("close retired generation: %v", err)
+			}
+			if worker.closeCalls.Load() != 1 || services.Browser != nil {
+				t.Fatalf(
+					"retired generation close calls = %d, runtime = %+v",
+					worker.closeCalls.Load(),
+					services.Browser,
+				)
+			}
+			if err = setupBrowserRuntime(t.Context(), replacement, services); err != nil {
+				t.Fatalf("publish replacement generation: %v", err)
+			}
+			if (services.Browser != nil) != test.runtimeWanted {
+				t.Fatalf("replacement runtime = %+v, wanted = %v", services.Browser, test.runtimeWanted)
+			}
+			if err = closeBrowserRuntime(t.Context(), services); err != nil {
+				t.Fatalf("close replacement generation: %v", err)
+			}
+		})
+	}
+}
+
+func TestGatewayBrowserGenerationCleanupFailureBlocksManagedReplacement(t *testing.T) {
+	for _, test := range gatewayManagedRevocationTestCases("") {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			runtimeRoot, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current := gatewayBrowserConfig(root)
+			worker := &gatewayTestBrowserWorker{closeErr: errors.New("cleanup outcome unknown")}
+			broker, err := browser.NewBroker(
+				current, browser.NewMemoryStore(), &gatewayTestBrowserFactory{worker: worker},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = broker.Open(t.Context(), browser.OpenRequest{
+				Owner: browser.Owner{
+					ActorID: browser.OpaqueActorID("actor_1"), AgentID: browser.OpaqueAgentID("browser"),
+					SessionKey: "session_1", ExecutionID: "execution_1",
+				},
+				Target: config.BrowserDefaultTarget, Profile: config.BrowserDefaultProfile,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &browserRuntime{broker: broker}
+			services := &services{Browser: runtime}
+			replacement := gatewayBrowserConfig(root)
+			for _, candidate := range gatewayManagedRevocationTestCases(runtimeRoot) {
+				if candidate.name == test.name {
+					candidate.mutate(replacement)
+					break
+				}
+			}
+
+			if err = closeBrowserRuntime(t.Context(), services); err == nil || services.Browser != runtime {
+				t.Fatalf("failed retirement error = %v, runtime = %+v", err, services.Browser)
+			}
+			if err = setupBrowserRuntime(
+				t.Context(),
+				replacement,
+				services,
+			); err == nil ||
+				services.Browser != runtime {
+				t.Fatalf("replacement during quarantine error = %v, runtime = %+v", err, services.Browser)
+			}
+			worker.closeErr = nil
+			if err = closeBrowserRuntime(t.Context(), services); err != nil || services.Browser != nil {
+				t.Fatalf("retirement retry error = %v, runtime = %+v", err, services.Browser)
+			}
+		})
+	}
+}
+
 func TestServiceShutdownReportsBrowserCleanupFailure(t *testing.T) {
 	workerErr := errors.New("browser worker still running")
 	worker := &gatewayTestBrowserWorker{closeErr: workerErr}

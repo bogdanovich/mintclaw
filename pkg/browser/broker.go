@@ -883,6 +883,9 @@ func (broker *Broker) Handoff(ctx context.Context, owner Owner, sessionID string
 	if !session.Owner.Equal(owner) {
 		return Session{}, ErrNotFound
 	}
+	if !broker.sessionAuthorityCurrent(session) {
+		return broker.finishSessionLocked(ctx, session, SessionLost, "policy_changed")
+	}
 	if session.State != SessionReady || session.EffectiveController() != ControllerAgent {
 		return Session{}, ErrConflict
 	}
@@ -990,6 +993,9 @@ func (broker *Broker) Resume(ctx context.Context, owner Owner, sessionID string)
 	}
 	if !pending.Owner.Equal(owner) {
 		return Session{}, ErrNotFound
+	}
+	if !broker.sessionAuthorityCurrent(pending) {
+		return broker.finishSessionLocked(ctx, pending, SessionLost, "policy_changed")
 	}
 	if pending.State != SessionReady || pending.Controller != ControllerResumePending {
 		return Session{}, ErrConflict

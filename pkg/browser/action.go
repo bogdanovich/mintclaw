@@ -1582,8 +1582,17 @@ func (broker *Broker) sessionAuthorityCurrent(session Session) bool {
 	if session.ProfileRevision == "" || session.PolicyRevision != broker.policyRevision {
 		return false
 	}
-	profile, ok := broker.browserProfile(session)
-	return ok && profile.Enabled && profile.Revision == session.ProfileRevision
+	if !broker.config.Enabled || !contains(broker.config.Agents, session.Owner.AgentID) {
+		return false
+	}
+	target, ok := broker.config.Targets[session.Target]
+	if !ok || !target.Enabled {
+		return false
+	}
+	profile, ok := target.Profiles[session.Profile]
+	return ok && profile.Enabled && profile.Revision == session.ProfileRevision &&
+		contains(profile.AllowedAgents, session.Owner.AgentID) &&
+		contains(profile.AllowedActors, session.Owner.ActorID)
 }
 
 func (broker *Broker) driverActionForPrepared(
