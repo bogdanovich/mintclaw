@@ -1878,6 +1878,73 @@ func TestGatewayBrowserWorkerPinsSessionToResolvedNodeAuthority(t *testing.T) {
 	}
 }
 
+func TestGatewayBrowserWorkerRejectsManagedRevocationCatalogBeforeDispatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*nodes.CapabilityCatalog)
+	}{
+		{
+			name: "profile disabled",
+			mutate: func(catalog *nodes.CapabilityCatalog) {
+				catalog.Commands = slices.DeleteFunc(catalog.Commands, func(command nodes.CommandDescriptor) bool {
+					return nodes.IsBrowserCommand(command.Name)
+				})
+			},
+		},
+		{name: "profile revision changed", mutate: browserNodeTestProfileRevisionMutation("managed-v2")},
+		{name: "actor grant removed", mutate: browserNodeTestProfileRevisionMutation("actor-grant-v2")},
+		{name: "agent grant removed", mutate: browserNodeTestProfileRevisionMutation("agent-grant-v2")},
+		{name: "runtime mapping changed", mutate: browserNodeTestProfileRevisionMutation("runtime-map-v2")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, runtime, handler := browserNodeTestRuntime(t)
+			factory, err := newGatewayBrowserWorkerFactory(cfg, runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opened, err := factory.Open(t.Context(), browser.WorkerOpenRequest{
+				Owner: browser.Owner{
+					ActorID: browser.OpaqueActorID("actor_test"), AgentID: browser.OpaqueAgentID("browser"),
+					SessionKey: "session_test", ExecutionID: "execution_test",
+				},
+				SessionID: "browser_session_test", Target: "companion",
+				Profile: "managed", ProfileRevision: "managed-v1", DryRun: true,
+				Limits: cfg.Tools.Browser.Limits.Effective(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = browserNodeTestMutateCatalog(t, runtime, test.mutate); err != nil {
+				t.Fatal(err)
+			}
+
+			worker := opened.Owner.(*nodeBrowserWorker)
+			if _, err = worker.Observe(t.Context()); !errors.Is(err, browser.ErrDenied) {
+				t.Fatalf("Observe() after revocation error = %v, want denied", err)
+			}
+			handler.mu.Lock()
+			commands := append([]string(nil), handler.commands...)
+			handler.mu.Unlock()
+			if want := []string{nodes.BrowserCommandSessionOpen}; !slices.Equal(commands, want) {
+				t.Fatalf("companion commands after revocation = %#v, want %#v", commands, want)
+			}
+		})
+	}
+}
+
+func browserNodeTestProfileRevisionMutation(
+	revision string,
+) func(*nodes.CapabilityCatalog) {
+	return func(catalog *nodes.CapabilityCatalog) {
+		for commandIndex := range catalog.Commands {
+			for profileIndex := range catalog.Commands[commandIndex].BrowserProfiles {
+				catalog.Commands[commandIndex].BrowserProfiles[profileIndex].Revision = revision
+			}
+		}
+	}
+}
+
 func browserNodeTestMutateCatalog(
 	t *testing.T,
 	runtime *nodeAdmissionRuntime,

@@ -730,6 +730,342 @@ func TestBrokerProfileRevisionChangeInvalidatesSession(t *testing.T) {
 	}
 }
 
+type managedRevocationTestCase struct {
+	name             string
+	mutate           func(*config.BrowserToolsConfig)
+	replacementOwner Owner
+	replacementReady bool
+}
+
+func managedRevocationTestCases() []managedRevocationTestCase {
+	owner := testOwner()
+	actorReplacement := owner
+	actorReplacement.ActorID = OpaqueActorID("telegram:replacement")
+	agentReplacement := owner
+	agentReplacement.AgentID = OpaqueAgentID("replacement")
+	return []managedRevocationTestCase{
+		{
+			name: "profile disabled",
+			mutate: func(browser *config.BrowserToolsConfig) {
+				browser.Enabled = false
+				browser.Agents = nil
+				browser.Targets = nil
+			},
+		},
+		{
+			name: "profile revision changed",
+			mutate: func(browser *config.BrowserToolsConfig) {
+				target := browser.Targets["gateway"]
+				profile := target.Profiles["managed"]
+				profile.Revision = "managed-v2"
+				target.Profiles["managed"] = profile
+				browser.Targets["gateway"] = target
+			},
+			replacementOwner: owner, replacementReady: true,
+		},
+		{
+			name: "actor grant removed",
+			mutate: func(browser *config.BrowserToolsConfig) {
+				target := browser.Targets["gateway"]
+				profile := target.Profiles["managed"]
+				profile.AllowedActors = []string{"telegram:replacement"}
+				target.Profiles["managed"] = profile
+				browser.Targets["gateway"] = target
+			},
+			replacementOwner: actorReplacement, replacementReady: true,
+		},
+		{
+			name: "agent grant removed",
+			mutate: func(browser *config.BrowserToolsConfig) {
+				browser.Agents = []string{"replacement"}
+				target := browser.Targets["gateway"]
+				profile := target.Profiles["managed"]
+				profile.AllowedAgents = []string{"replacement"}
+				target.Profiles["managed"] = profile
+				browser.Targets["gateway"] = target
+			},
+			replacementOwner: agentReplacement, replacementReady: true,
+		},
+		{
+			name: "runtime mapping changed",
+			mutate: func(browser *config.BrowserToolsConfig) {
+				target := browser.Targets["gateway"]
+				profile := target.Profiles["managed"]
+				profile.Runtime.ProfileDirectory = "/var/lib/mintclaw/browser/replacement"
+				profile.Runtime.LockFile = "/var/lib/mintclaw/browser-replacement.lock"
+				target.Profiles["managed"] = profile
+				browser.Targets["gateway"] = target
+			},
+			replacementOwner: owner, replacementReady: true,
+		},
+	}
+}
+
+func applyManagedRevocation(t *testing.T, broker *Broker, test managedRevocationTestCase) {
+	t.Helper()
+	next := admittedBrowserConfig()
+	test.mutate(&next.Tools.Browser)
+	replacement, err := NewBroker(next, NewMemoryStore(), &fakeWorkerFactory{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.config = replacement.config
+	broker.policyRevision = replacement.policyRevision
+}
+
+func TestBrokerManagedRevocationClosesBeforeReplacementAuthority(t *testing.T) {
+	for _, test := range managedRevocationTestCases() {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore()
+			factory := &fakeWorkerFactory{}
+			broker := lifecycleTestBroker(t, admittedBrowserConfig(), store, factory)
+			owner := testOwner()
+			session, err := broker.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "managed",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			applyManagedRevocation(t, broker, test)
+
+			lost, err := broker.Status(t.Context(), owner, session.ID)
+			if err != nil || lost.State != SessionLost || lost.SafeFailure != "policy_changed" ||
+				factory.workers[0].closed != 1 {
+				t.Fatalf("revoked Status() = %+v, %v; worker = %+v", lost, err, factory.workers[0])
+			}
+			if _, err = broker.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "managed",
+			}); test.replacementReady && test.replacementOwner.Equal(owner) {
+				if err != nil {
+					t.Fatalf("replacement Open() error = %v", err)
+				}
+			} else if !errors.Is(err, ErrDenied) {
+				t.Fatalf("revoked owner Open() error = %v, want denied", err)
+			}
+			if test.replacementReady && !test.replacementOwner.Equal(owner) {
+				if _, err = broker.Open(t.Context(), OpenRequest{
+					Owner: test.replacementOwner, Target: "gateway", Profile: "managed",
+				}); err != nil {
+					t.Fatalf("replacement principal Open() error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestBrokerManagedRevocationCleanupFailureQuarantinesReplacement(t *testing.T) {
+	for _, test := range managedRevocationTestCases() {
+		t.Run(test.name, func(t *testing.T) {
+			store := NewMemoryStore()
+			factory := &fakeWorkerFactory{}
+			broker := lifecycleTestBroker(t, admittedBrowserConfig(), store, factory)
+			owner := testOwner()
+			session, err := broker.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "managed",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			factory.workers[0].closeErr = errors.New("cleanup outcome unknown")
+			applyManagedRevocation(t, broker, test)
+
+			if _, err = broker.Status(t.Context(), owner, session.ID); !errors.Is(err, ErrWorkerUnavailable) {
+				t.Fatalf("revoked Status() error = %v, want worker unavailable", err)
+			}
+			stored, err := store.GetSession(t.Context(), session.ID)
+			if err != nil || stored.State != SessionClosing {
+				t.Fatalf("quarantined session = %+v, %v", stored, err)
+			}
+			if test.replacementReady {
+				if _, err = broker.Open(t.Context(), OpenRequest{
+					Owner: test.replacementOwner, Target: "gateway", Profile: "managed",
+				}); !errors.Is(err, ErrBusy) {
+					t.Fatalf("replacement Open() during quarantine error = %v, want busy", err)
+				}
+			}
+
+			factory.workers[0].closeErr = nil
+			lost, err := broker.Status(t.Context(), owner, session.ID)
+			if err != nil || lost.State != SessionLost || lost.SafeFailure != "policy_changed" {
+				t.Fatalf("cleanup retry Status() = %+v, %v", lost, err)
+			}
+			if test.replacementReady {
+				if _, err = broker.Open(t.Context(), OpenRequest{
+					Owner: test.replacementOwner, Target: "gateway", Profile: "managed",
+				}); err != nil {
+					t.Fatalf("replacement Open() after cleanup error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestBrokerSessionAuthorityRechecksEveryManagedGrant(t *testing.T) {
+	profileMutation := func(mutate func(*config.BrowserProfileConfig)) func(*config.BrowserToolsConfig) {
+		return func(browser *config.BrowserToolsConfig) {
+			target := browser.Targets["gateway"]
+			profile := target.Profiles["managed"]
+			mutate(&profile)
+			target.Profiles["managed"] = profile
+			browser.Targets["gateway"] = target
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*config.BrowserToolsConfig)
+	}{
+		{name: "browser disabled", mutate: func(browser *config.BrowserToolsConfig) { browser.Enabled = false }},
+		{name: "target disabled", mutate: func(browser *config.BrowserToolsConfig) {
+			target := browser.Targets["gateway"]
+			target.Enabled = false
+			browser.Targets["gateway"] = target
+		}},
+		{name: "profile disabled", mutate: profileMutation(func(profile *config.BrowserProfileConfig) {
+			profile.Enabled = false
+		})},
+		{name: "profile revision changed", mutate: profileMutation(func(profile *config.BrowserProfileConfig) {
+			profile.Revision = "managed-v2"
+		})},
+		{name: "global agent grant removed", mutate: func(browser *config.BrowserToolsConfig) {
+			browser.Agents = []string{OpaqueAgentID("replacement")}
+		}},
+		{name: "profile agent grant removed", mutate: profileMutation(func(profile *config.BrowserProfileConfig) {
+			profile.AllowedAgents = []string{OpaqueAgentID("replacement")}
+		})},
+		{name: "profile actor grant removed", mutate: profileMutation(func(profile *config.BrowserProfileConfig) {
+			profile.AllowedActors = []string{OpaqueActorID("telegram:replacement")}
+		})},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			broker := lifecycleTestBroker(
+				t, admittedBrowserConfig(), NewMemoryStore(), &fakeWorkerFactory{},
+			)
+			session, err := broker.Open(t.Context(), OpenRequest{
+				Owner: testOwner(), Target: "gateway", Profile: "managed",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !broker.sessionAuthorityCurrent(session) {
+				t.Fatal("initial session authority is not current")
+			}
+			test.mutate(&broker.config)
+			if broker.sessionAuthorityCurrent(session) {
+				t.Fatal("isolated revoked authority remained current")
+			}
+		})
+	}
+}
+
+func TestBrokerManagedRevocationBlocksControllerTransitions(t *testing.T) {
+	for _, test := range managedRevocationTestCases() {
+		t.Run(test.name+"/handoff", func(t *testing.T) {
+			factory := &fakeWorkerFactory{}
+			broker := lifecycleTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)
+			owner := testOwner()
+			session, err := broker.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "managed",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			applyManagedRevocation(t, broker, test)
+			lost, err := broker.Handoff(t.Context(), owner, session.ID)
+			if err != nil || lost.State != SessionLost || lost.SafeFailure != "policy_changed" ||
+				factory.workers[0].beginHumanCalls != 0 || factory.workers[0].closed != 1 {
+				t.Fatalf("revoked Handoff() = %+v, %v; worker = %+v", lost, err, factory.workers[0])
+			}
+		})
+
+		t.Run(test.name+"/resume", func(t *testing.T) {
+			factory := &fakeWorkerFactory{}
+			broker := lifecycleTestBroker(t, admittedBrowserConfig(), NewMemoryStore(), factory)
+			owner := testOwner()
+			session, err := broker.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "managed",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			human, err := broker.Handoff(t.Context(), owner, session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending, err := broker.ReleaseHandoff(t.Context(), owner, human.ID)
+			if err != nil || pending.Controller != ControllerResumePending {
+				t.Fatalf("ReleaseHandoff() = %+v, %v", pending, err)
+			}
+			applyManagedRevocation(t, broker, test)
+			lost, err := broker.Resume(t.Context(), owner, pending.ID)
+			if err != nil || lost.State != SessionLost || lost.SafeFailure != "policy_changed" ||
+				factory.workers[0].beginHumanCalls != 1 || factory.workers[0].endHumanCalls != 1 ||
+				factory.workers[0].closed != 1 {
+				t.Fatalf("revoked Resume() = %+v, %v; worker = %+v", lost, err, factory.workers[0])
+			}
+		})
+	}
+}
+
+func TestBrokerManagedRevocationRestartDoesNotRestoreRetiredAuthority(t *testing.T) {
+	for _, test := range managedRevocationTestCases() {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state", "browser.json")
+			store, err := NewFileStore(path, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := testOwner()
+			original := lifecycleTestBroker(t, admittedBrowserConfig(), store, &fakeWorkerFactory{})
+			session, err := original.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "managed",
+			})
+			if err != nil {
+				store.Close()
+				t.Fatal(err)
+			}
+			store.Close() // Simulate process loss before the in-memory worker can be reconciled.
+
+			next := admittedBrowserConfig()
+			test.mutate(&next.Tools.Browser)
+			reopened, err := NewFileStore(path, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(reopened.Close)
+			recovered, err := NewBroker(next, reopened, &fakeWorkerFactory{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovered.newID = func() (string, error) { return "browser_session_replacement", nil }
+			if err = recovered.Recover(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			lost, err := reopened.GetSession(t.Context(), session.ID)
+			if err != nil || lost.State != SessionLost || lost.SafeFailure != "gateway_restarted" {
+				t.Fatalf("recovered retired session = %+v, %v", lost, err)
+			}
+
+			if _, err = recovered.Open(t.Context(), OpenRequest{
+				Owner: owner, Target: "gateway", Profile: "managed",
+			}); test.replacementReady && test.replacementOwner.Equal(owner) {
+				if err != nil {
+					t.Fatalf("replacement Open() error = %v", err)
+				}
+			} else if !errors.Is(err, ErrDenied) {
+				t.Fatalf("retired owner Open() error = %v, want denied", err)
+			}
+			if test.replacementReady && !test.replacementOwner.Equal(owner) {
+				if _, err = recovered.Open(t.Context(), OpenRequest{
+					Owner: test.replacementOwner, Target: "gateway", Profile: "managed",
+				}); err != nil {
+					t.Fatalf("replacement principal Open() error = %v", err)
+				}
+			}
+		})
+	}
+}
+
 func lifecycleTestBroker(t *testing.T, cfg *config.Config, store Store, factory WorkerFactory) *Broker {
 	t.Helper()
 	broker, err := NewBroker(cfg, store, factory)
