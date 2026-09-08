@@ -91,7 +91,10 @@ func (tool *RepositoryDiffTool) Execute(ctx context.Context, args map[string]any
 	if err != nil {
 		return toolshared.ErrorResult(err.Error())
 	}
-	return repositoryJSONResult(tool.repository.Diff(ctx, target))
+	diff := tool.repository.Diff(ctx, target)
+	result := repositoryJSONResult(diff)
+	result.Observation = toolshared.NewRepositoryDiffObservation(diff)
+	return result
 }
 
 func repositoryDiffTarget(args map[string]any) (codingworkspace.DiffTarget, error) {

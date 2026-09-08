@@ -46,6 +46,9 @@ func SanitizeToolObservation(observation *ToolObservation) *ToolObservation {
 	if observation.Plan != nil {
 		variants++
 	}
+	if observation.RepositoryDiff != nil {
+		variants++
+	}
 	if variants != 1 {
 		return nil
 	}
@@ -59,6 +62,13 @@ func SanitizeToolObservation(observation *ToolObservation) *ToolObservation {
 			return nil
 		}
 		return &ToolObservation{Exploration: &exploration}
+	}
+	if observation.RepositoryDiff != nil {
+		repositoryDiff, ok := sanitizeRepositoryDiffObservation(*observation.RepositoryDiff)
+		if !ok {
+			return nil
+		}
+		return &ToolObservation{RepositoryDiff: &repositoryDiff}
 	}
 	plan, err := NewPlanObservation(observation.Plan.Explanation, observation.Plan.Steps)
 	if err != nil {

@@ -156,6 +156,13 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				a.projector.ToolPlanObserved(turnID, payload.ToolCallID)
 				a.projector.PlanUpdated(turnID, payload.ToolCallID, projectPlan(*observation.Plan))
 			}
+			if observation != nil && observation.RepositoryDiff != nil && !payload.IsError {
+				a.projector.ToolRepositoryDiff(
+					turnID,
+					payload.ToolCallID,
+					observation.RepositoryDiff.Diff,
+				)
+			}
 			audit := projectWriteAudit(payload.WriteAudit)
 			a.projector.ToolCompleted(
 				turnID,

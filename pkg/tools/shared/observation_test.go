@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 func TestNewPlanObservationPreservesValidatedOrderAndRedactsSecrets(t *testing.T) {
@@ -200,5 +202,110 @@ func TestCommandObservationSinkIsOptionalAndReceivesIndependentSafeValues(t *tes
 	original.Transcript[0].Text = "mutated"
 	if len(received) != 1 || received[0].Transcript[0].Text != "one" {
 		t.Fatalf("command observation sink = %+v", received)
+	}
+}
+
+func TestRepositoryDiffObservationIsBoundedRedactedAndIndependent(t *testing.T) {
+	diff := codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Files: []codingworkspace.DiffFile{{
+			Path:       "pkg/sk-123456789abcdef.go",
+			Status:     " M",
+			Additions:  1,
+			Provenance: codingworkspace.ProvenanceFirstObservedDuringThread,
+			Hunks: []codingworkspace.DiffHunk{{
+				OldStart: 1, OldLines: 1, NewStart: 1, NewLines: 1,
+				Lines: []codingworkspace.DiffLine{{
+					Kind: "addition", NewLine: 1, Text: "Authorization: Bearer abcdefghijklmnop",
+				}},
+			}},
+		}},
+		Additions: 1,
+		Provenance: &codingworkspace.ProvenanceResult{
+			BaselineID: "baseline",
+			Paths: []codingworkspace.ProvenancePath{{
+				Path: "pkg/sk-123456789abcdef.go", Status: " M",
+				Provenance: codingworkspace.ProvenanceFirstObservedDuringThread,
+			}},
+		},
+	}
+	got := NewRepositoryDiffObservation(diff)
+	if got == nil || got.RepositoryDiff == nil || len(got.RepositoryDiff.Diff.Files) != 1 {
+		t.Fatalf("repository diff observation = %#v", got)
+	}
+	observed := got.RepositoryDiff.Diff
+	joined := observed.Files[0].Path + observed.Files[0].Hunks[0].Lines[0].Text +
+		observed.Provenance.Paths[0].Path
+	if strings.Contains(joined, "123456789abcdef") || strings.Contains(joined, "abcdefghijklmnop") ||
+		!strings.Contains(joined, "[REDACTED]") {
+		t.Fatalf("repository diff was not redacted: %#v", observed)
+	}
+	diff.Files[0].Path = "mutated.go"
+	diff.Files[0].Hunks[0].Lines[0].Text = "mutated"
+	diff.Provenance.Paths[0].Path = "mutated.go"
+	if observed.Files[0].Path == "mutated.go" || observed.Files[0].Hunks[0].Lines[0].Text == "mutated" ||
+		observed.Provenance.Paths[0].Path == "mutated.go" {
+		t.Fatalf("repository diff observation aliases input: %#v", observed)
+	}
+}
+
+func TestRepositoryDiffObservationFailsClosedAndBoundsEvidence(t *testing.T) {
+	files := make([]codingworkspace.DiffFile, maxRepositoryDiffFiles+1)
+	for index := range files {
+		files[index] = codingworkspace.DiffFile{
+			Path: "file.go", Status: "M", Additions: maxRepositoryDiffLines + 1,
+			Hunks: []codingworkspace.DiffHunk{{
+				OldStart: 1, OldLines: 1, NewStart: 1, NewLines: maxRepositoryDiffLines + 1,
+				Lines: []codingworkspace.DiffLine{{
+					Kind: "addition", NewLine: 1, Text: strings.Repeat("x", maxRepositoryDiffLineBytes+1),
+				}},
+			}},
+		}
+	}
+	got := NewRepositoryDiffObservation(codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Files:         files,
+		Additions:     maxRepositoryDiffLines + 1,
+	})
+	if got == nil || got.RepositoryDiff == nil || !got.RepositoryDiff.Diff.Truncated ||
+		len(got.RepositoryDiff.Diff.Files) > maxRepositoryDiffFiles ||
+		len(got.RepositoryDiff.Diff.Files[0].Hunks[0].Lines[0].Text) > maxRepositoryDiffLineBytes {
+		t.Fatalf("bounded repository diff observation = %#v", got)
+	}
+
+	validDiff := codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+	}
+	for name, observation := range map[string]*ToolObservation{
+		"ambiguous": {
+			Command: &CommandObservation{}, RepositoryDiff: &RepositoryDiffObservation{Diff: validDiff},
+		},
+		"schema": {RepositoryDiff: &RepositoryDiffObservation{Diff: codingworkspace.DiffResult{
+			SchemaVersion: "future", Target: validDiff.Target,
+		}}},
+		"target": {RepositoryDiff: &RepositoryDiffObservation{Diff: codingworkspace.DiffResult{
+			SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+			Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase},
+		}}},
+		"negative": {RepositoryDiff: &RepositoryDiffObservation{Diff: codingworkspace.DiffResult{
+			SchemaVersion: codingworkspace.RepositoryDiffSchemaV1, Target: validDiff.Target, Additions: -1,
+		}}},
+		"line kind": {RepositoryDiff: &RepositoryDiffObservation{Diff: codingworkspace.DiffResult{
+			SchemaVersion: codingworkspace.RepositoryDiffSchemaV1, Target: validDiff.Target,
+			Files: []codingworkspace.DiffFile{{
+				Path: "bad.go", Hunks: []codingworkspace.DiffHunk{{
+					Lines: []codingworkspace.DiffLine{{Kind: "execute"}},
+				}},
+			}},
+		}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if sanitized := SanitizeToolObservation(observation); sanitized != nil {
+				t.Fatalf("invalid repository diff admitted: %#v", sanitized)
+			}
+		})
 	}
 }

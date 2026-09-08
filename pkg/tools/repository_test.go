@@ -46,11 +46,14 @@ func TestRepositoryStatusToolReturnsSchemaVersionedEvidenceSilently(t *testing.T
 func TestRepositoryDiffToolValidatesAndForwardsTypedTargets(t *testing.T) {
 	fake := &fakeRepositoryEvidence{diff: codingworkspace.DiffResult{
 		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase, Ref: "main"},
 	}}
 	tool := NewRepositoryDiffTool(fake)
 	result := tool.Execute(t.Context(), map[string]any{"target": "base", "ref": "main"})
 	if result.IsError || fake.target.Kind != codingworkspace.DiffTargetBase || fake.target.Ref != "main" ||
-		tool.ToolLoopSemantics() != loopguard.SemanticsReadOnlyIdempotent {
+		tool.ToolLoopSemantics() != loopguard.SemanticsReadOnlyIdempotent || result.Observation == nil ||
+		result.Observation.RepositoryDiff == nil ||
+		result.Observation.RepositoryDiff.Diff.SchemaVersion != codingworkspace.RepositoryDiffSchemaV1 {
 		t.Fatalf("result/target = %#v / %#v", result, fake.target)
 	}
 	for _, args := range []map[string]any{

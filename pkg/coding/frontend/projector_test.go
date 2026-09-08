@@ -221,6 +221,44 @@ func TestRepositoryStatusAdvanceClearsObsoleteMutableDiff(t *testing.T) {
 	}
 }
 
+func TestToolRepositoryDiffRemainsHistoricalAcrossCurrentDiffRefresh(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.ToolStarted("turn-1", "call-1", "repository_diff", "target:string")
+	historical := codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Generation:    "historical-generation",
+		Files: []codingworkspace.DiffFile{{
+			Path: "historical.go",
+			Hunks: []codingworkspace.DiffHunk{{Lines: []codingworkspace.DiffLine{{
+				Kind: "addition", NewLine: 1, Text: "historical",
+			}}}},
+		}},
+		Additions: 1,
+	}
+	projector.ToolRepositoryDiff("turn-1", "call-1", historical)
+	projector.ToolCompleted("turn-1", "call-1", "repository_diff", "", time.Second, false, nil)
+	projector.RepositoryDiffUpdated(codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Generation:    "current-generation",
+		Files:         []codingworkspace.DiffFile{{Path: "current.go"}},
+	})
+
+	snapshot := snapshotForTest(t, projector)
+	if snapshot.RepositoryDiff == nil || snapshot.RepositoryDiff.Files[0].Path != "current.go" ||
+		len(snapshot.Tools) != 1 || snapshot.Tools[0].RepositoryDiff == nil ||
+		snapshot.Tools[0].RepositoryDiff.Generation != "historical-generation" ||
+		snapshot.Tools[0].RepositoryDiff.Files[0].Path != "historical.go" {
+		t.Fatalf("current/historical repository diff = %#v / %#v", snapshot.RepositoryDiff, snapshot.Tools)
+	}
+	snapshot.Tools[0].RepositoryDiff.Files[0].Path = "consumer.go"
+	stable := snapshotForTest(t, projector)
+	if stable.Tools[0].RepositoryDiff.Files[0].Path != "historical.go" {
+		t.Fatalf("historical repository diff aliases consumer: %#v", stable.Tools[0].RepositoryDiff)
+	}
+}
+
 func TestWorkspaceAdvanceInvalidatesMutableRepositoryEvidence(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	workspace := codingworkspace.Snapshot{ProjectRoot: "/repo", CWD: "/repo"}

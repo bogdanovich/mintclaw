@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
+	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
 func TestSnapshotFromFrontendProjectsCanonicalItemsWithoutFrontendLifecycle(t *testing.T) {
@@ -147,6 +148,63 @@ func TestSnapshotFromFrontendProjectsCanonicalItemsWithoutFrontendLifecycle(t *t
 	}
 	if _, exists := wireCommand["duration"]; exists {
 		t.Fatalf("wire command contains ambiguous duration: %s", wireTool["command"])
+	}
+}
+
+func TestSnapshotFromFrontendProjectsBoundedHistoricalRepositoryDiff(t *testing.T) {
+	binding := testBinding(t)
+	lines := make([]codingworkspace.DiffLine, MaxRepositoryDiffLines+1)
+	for index := range lines {
+		lines[index] = codingworkspace.DiffLine{
+			Kind: "addition", NewLine: index + 1, Text: "line\x1b[31m",
+		}
+	}
+	diff := &codingworkspace.DiffResult{
+		SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+		Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+		Files: []codingworkspace.DiffFile{{
+			Path: "pkg/current.go", Status: " M", Additions: len(lines),
+			Provenance: codingworkspace.ProvenanceFirstObservedDuringThread,
+			Hunks: []codingworkspace.DiffHunk{{
+				OldStart: 1, OldLines: 1, NewStart: 1, NewLines: len(lines), Lines: lines,
+			}},
+		}},
+		Additions: len(lines),
+	}
+	source := frontend.ThreadSnapshot{
+		ThreadID: binding.ThreadID,
+		Activity: frontend.ActivityIdle,
+		Items: []frontend.PresentationItem{{
+			ID: "tool:turn-1:call-1", TurnID: "turn-1", Sequence: 1, Revision: 1,
+			Kind: frontend.PresentationToolCall, Lifecycle: frontend.PresentationCompleted,
+			Tool: &frontend.ToolState{
+				TurnID: "turn-1", CallID: "call-1", Name: "repository_diff",
+				Status: frontend.ToolSucceeded, RepositoryDiff: diff,
+			},
+		}},
+	}
+	snapshot := SnapshotFromFrontend(source, nil)
+	if len(snapshot.Items) != 1 || snapshot.Items[0].Tool == nil ||
+		snapshot.Items[0].Tool.RepositoryDiff == nil {
+		t.Fatalf("repository diff worker projection = %#v", snapshot.Items)
+	}
+	projected := snapshot.Items[0].Tool.RepositoryDiff
+	if !projected.Truncated || len(projected.Files) != 1 ||
+		len(projected.Files[0].Hunks[0].Lines) > MaxRepositoryDiffLines ||
+		strings.Contains(projected.Files[0].Hunks[0].Lines[0].Text, "\x1b") {
+		t.Fatalf("bounded repository diff worker projection = %#v", projected)
+	}
+	if err := snapshot.Items[0].Validate(); err != nil {
+		t.Fatalf("projected repository diff is invalid: %v", err)
+	}
+	diff.Files[0].Path = "mutated.go"
+	if projected.Files[0].Path != "pkg/current.go" {
+		t.Fatalf("worker repository diff aliases frontend state: %#v", projected)
+	}
+
+	snapshot.Items[0].Tool.RepositoryDiff.Files[0].Hunks[0].Lines[0].Kind = "execute"
+	if err := snapshot.Items[0].Validate(); err == nil {
+		t.Fatal("invalid repository diff line kind was accepted")
 	}
 }
 

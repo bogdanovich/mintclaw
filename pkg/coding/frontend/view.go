@@ -141,18 +141,19 @@ const (
 )
 
 type ToolState struct {
-	TurnID          string            `json:"turn_id"`
-	CallID          string            `json:"call_id"`
-	Name            string            `json:"name"`
-	Arguments       string            `json:"arguments,omitempty"`
-	Output          string            `json:"output,omitempty"`
-	Status          ToolStatus        `json:"status"`
-	Duration        time.Duration     `json:"duration,omitempty"`
-	OutputTruncated bool              `json:"output_truncated,omitempty"`
-	PlanObserved    bool              `json:"plan_observed,omitempty"`
-	WriteAudit      []WriteAudit      `json:"write_audit,omitempty"`
-	Command         *CommandState     `json:"command,omitempty"`
-	Exploration     *ExplorationState `json:"exploration,omitempty"`
+	TurnID          string                      `json:"turn_id"`
+	CallID          string                      `json:"call_id"`
+	Name            string                      `json:"name"`
+	Arguments       string                      `json:"arguments,omitempty"`
+	Output          string                      `json:"output,omitempty"`
+	Status          ToolStatus                  `json:"status"`
+	Duration        time.Duration               `json:"duration,omitempty"`
+	OutputTruncated bool                        `json:"output_truncated,omitempty"`
+	PlanObserved    bool                        `json:"plan_observed,omitempty"`
+	WriteAudit      []WriteAudit                `json:"write_audit,omitempty"`
+	Command         *CommandState               `json:"command,omitempty"`
+	Exploration     *ExplorationState           `json:"exploration,omitempty"`
+	RepositoryDiff  *codingworkspace.DiffResult `json:"repository_diff,omitempty"`
 }
 
 type ExplorationOperation string
