@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -102,6 +103,8 @@ type Model struct {
 	layout              cellLayout
 	theme               cellTheme
 	colorLevel          cellColorLevel
+	working             workingIndicator
+	keys                keyMap
 	width               int
 	height              int
 	interruptPending    bool
@@ -138,6 +141,20 @@ var _ tea.Model = (*Model)(nil)
 func NewModel(
 	ctx context.Context,
 	controller frontend.Controller,
+) (*Model, error) {
+	return newModel(ctx, controller, modelOptions{})
+}
+
+type modelOptions struct {
+	motionMode    MotionMode
+	interruptKeys []string
+	now           func() time.Time
+}
+
+func newModel(
+	ctx context.Context,
+	controller frontend.Controller,
+	options modelOptions,
 ) (*Model, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -178,12 +195,16 @@ func NewModel(
 		height:             24,
 		theme:              cellThemeDark,
 		colorLevel:         currentCellColorLevel(),
+		working:            newWorkingIndicator(options.motionMode, options.now),
+		keys:               newKeyMap(options.interruptKeys),
 		focused:            true,
 		historyIndex:       -1,
 		commandPanel:       initialCommandPanel(snapshot),
 		readClipboardImage: readSystemClipboardImage,
 		writePasteFile:     writePrivatePasteFile,
 	}
+	model.syncWorkingIndicator()
+	model.updateSurfaceDimensions()
 	model.refreshViewport()
 	return model, nil
 }
@@ -221,6 +242,9 @@ func (m *Model) Init() tea.Cmd {
 		textarea.Blink,
 		subscribeCmd(m.ctx, m.controller),
 	}
+	if command := m.scheduleWorkingTick(); command != nil {
+		commands = append(commands, command)
+	}
 	if pager, ok := m.controller.(frontend.TranscriptPager); ok {
 		m.transcript.loading = true
 		commands = append(commands, transcriptPageCmd(m.ctx, pager, -1, transcriptPageInitial))
@@ -232,7 +256,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		m.resize(message.Width, message.Height)
-		return m, nil
+		return m, m.scheduleWorkingTick()
 	case SubscriptionMsg:
 		if message.Err != nil {
 			m.err = message.Err
@@ -243,7 +267,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.updates = message.Updates
-		return m, nextSnapshotCmd(m.ctx, m.updates)
+		return m, tea.Batch(nextSnapshotCmd(m.ctx, m.updates), m.scheduleWorkingTick())
 	case SnapshotMsg:
 		if message.Err != nil {
 			m.err = message.Err
@@ -253,7 +277,12 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = err
 			return m, nil
 		}
-		return m, nextSnapshotCmd(m.ctx, m.updates)
+		return m, tea.Batch(nextSnapshotCmd(m.ctx, m.updates), m.scheduleWorkingTick())
+	case workingTickMsg:
+		if !m.working.acceptTick(message) {
+			return m, nil
+		}
+		return m, m.scheduleWorkingTick()
 	case TranscriptPageMsg:
 		m.transcript.loading = false
 		if message.Err != nil {
@@ -370,9 +399,13 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case SubmitResultMsg:
 		m.submitting = false
 		if message.Err != nil {
+			position := m.captureViewportPosition()
 			m.initialTurnPending = false
 			m.interruptPending = false
 			m.err = message.Err
+			m.syncWorkingIndicator()
+			m.updateSurfaceDimensions()
+			m.refreshViewportAt(position)
 			return m, nil
 		}
 		m.err = nil
@@ -383,9 +416,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.composer.Reset()
 		m.historyIndex = -1
 		m.historyDraft = ""
-		return m, nil
+		return m, m.scheduleWorkingTick()
 	case tea.KeyMsg:
-		if message.String() == "ctrl+c" {
+		if key.Matches(message, m.keys.interrupt) {
 			return m.handleInterrupt()
 		}
 		if handled, command := m.handleComposerKey(message); handled {
@@ -396,10 +429,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.FocusMsg:
 		m.focused = true
 		m.composer.Focus()
-		return m, textarea.Blink
+		return m, tea.Batch(textarea.Blink, m.scheduleWorkingTick())
 	case tea.BlurMsg:
 		m.focused = false
 		m.composer.Blur()
+		m.working.stopTicks()
 		return m, nil
 	}
 
@@ -440,6 +474,9 @@ func (m *Model) View() string {
 	if m.commandPanel != commandPanelNone {
 		body = m.commandPanelView()
 	}
+	if working := m.workingLine(); working != "" {
+		body += "\n" + clipLine(working, m.width)
+	}
 	return body + "\n" + m.composer.View() + "\n" + clipLine(status, m.width)
 }
 
@@ -470,6 +507,7 @@ func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
 	if snapshot.ThreadID != m.snapshot.ThreadID {
 		return errors.New("coding frontend snapshot changed thread ID")
 	}
+	position := m.captureViewportPosition()
 	cells, err := reconcileSemanticCellStore(m.cells, snapshot.Items)
 	if err != nil {
 		return fmt.Errorf("update semantic cell store: %w", err)
@@ -482,7 +520,9 @@ func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
 	if !activeWork(snapshot.Activity) {
 		m.interruptPending = false
 	}
-	m.refreshViewport()
+	m.syncWorkingIndicator()
+	m.updateSurfaceDimensions()
+	m.refreshViewportAt(position)
 	return nil
 }
 
@@ -491,8 +531,12 @@ func (m *Model) Dimensions() (int, int) {
 }
 
 func (m *Model) admitInitialTurn() {
+	position := m.captureViewportPosition()
 	m.initialTurnPending = true
 	m.admittedLastTurn = cloneLastTurn(m.snapshot.LastTurn)
+	m.syncWorkingIndicator()
+	m.updateSurfaceDimensions()
+	m.refreshViewportAt(position)
 }
 
 func (m *Model) initialTurnResolvedBy(snapshot frontend.ThreadSnapshot) bool {
@@ -525,11 +569,20 @@ func (m *Model) resize(width, height int) {
 	m.width = max(1, width)
 	m.height = max(1, height)
 	composerRows := min(composerHeight, max(1, m.height/3))
-	m.viewport.Width = m.width
-	m.viewport.Height = max(1, m.height-composerRows-2)
 	m.composer.SetWidth(m.width)
 	m.composer.SetHeight(composerRows)
+	m.updateSurfaceDimensions()
 	m.refreshViewportAt(position)
+}
+
+func (m *Model) updateSurfaceDimensions() {
+	composerRows := min(composerHeight, max(1, m.height/3))
+	workingRows := 0
+	if m.workingSurfaceVisible() {
+		workingRows = 1
+	}
+	m.viewport.Width = m.width
+	m.viewport.Height = max(1, m.height-composerRows-workingRows-2)
 }
 
 func clipLine(value string, width int) string {

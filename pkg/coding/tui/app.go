@@ -57,8 +57,15 @@ type Options struct {
 	AlternateScreen bool
 	ReportFocus     bool
 	NoColor         bool
-	Environment     []string
-	newProgram      func(tea.Model, ...tea.ProgramOption) program
+	// MotionMode defaults to animated and can be set to reduced or disabled.
+	// MINTCLAW_TUI_MOTION provides the same choice for CLI sessions.
+	MotionMode MotionMode
+	// InterruptKeys remaps interruption and the live hint together. The first
+	// key is displayed; Ctrl+C is the default.
+	InterruptKeys []string
+	Environment   []string
+	newProgram    func(tea.Model, ...tea.ProgramOption) program
+	now           func() time.Time
 }
 
 type program interface {
@@ -87,7 +94,15 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	defer cancelFrontend()
 
 	configureColorProfile(options.NoColor, options.Environment)
-	model, err := NewModel(frontendCtx, controller)
+	motionMode, err := resolveMotionMode(options.MotionMode, options.Environment)
+	if err != nil {
+		return err
+	}
+	model, err := newModel(frontendCtx, controller, modelOptions{
+		motionMode:    motionMode,
+		interruptKeys: options.InterruptKeys,
+		now:           options.now,
+	})
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)
 	}

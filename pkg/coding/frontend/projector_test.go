@@ -329,7 +329,8 @@ func TestSubscribeReturnsCurrentViewAndPublishesLaterViews(t *testing.T) {
 
 	projector.TurnStarted("turn-1", "fix it")
 	updated := <-updates
-	if updated.Activity != ActivityRunning || len(updated.Entries) != 1 || updated.Entries[0].Text != "fix it" {
+	if updated.Activity != ActivityRunning || updated.ActiveTurnID != "turn-1" ||
+		len(updated.Entries) != 1 || updated.Entries[0].Text != "fix it" {
 		t.Fatalf("updated view = %+v", updated)
 	}
 	updated.Entries[0].Text = "consumer-mutated"
@@ -381,7 +382,8 @@ func TestLifecycleProjectsOneCurrentView(t *testing.T) {
 	projector.TurnCompleted("turn-1", "completed")
 
 	view := snapshotForTest(t, projector)
-	if view.Activity != ActivityIdle || view.LastTurn == nil || view.LastTurn.Outcome != TurnOutcomeCompleted {
+	if view.Activity != ActivityIdle || view.ActiveTurnID != "" ||
+		view.LastTurn == nil || view.LastTurn.Outcome != TurnOutcomeCompleted {
 		t.Fatalf("terminal view = %+v", view)
 	}
 	if len(view.Tools) != 1 || view.Tools[0].TurnID != "turn-1" ||

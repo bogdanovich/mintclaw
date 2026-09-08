@@ -163,6 +163,7 @@ func (p *Projector) TurnStarted(turnID, userMessage string) {
 	p.mutate(func(state *ThreadSnapshot) {
 		turnID = presentationTurnID(turnID)
 		p.activeTurnID = turnID
+		state.ActiveTurnID = turnID
 		p.markTurnStarted(turnID)
 		state.Activity = ActivityRunning
 		state.Status = "running"
@@ -1067,6 +1068,7 @@ func (p *Projector) finishTurn(
 	p.mutate(func(state *ThreadSnapshot) {
 		if p.activeTurnID == turnID {
 			p.activeTurnID = ""
+			state.ActiveTurnID = ""
 		}
 		if p.foregroundCompactionActive && p.foregroundCompactionTurnID == turnID {
 			p.foregroundCompactionTurnID = ""

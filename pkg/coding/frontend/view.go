@@ -265,11 +265,12 @@ type CompactionState struct {
 // It is not the canonical coding transcript and may omit old entries and large
 // output.
 type ThreadSnapshot struct {
-	ThreadID string             `json:"thread_id"`
-	Metadata ThreadMetadata     `json:"metadata,omitempty"`
-	Activity Activity           `json:"activity"`
-	LastTurn *LastTurnOutcome   `json:"last_turn,omitempty"`
-	Items    []PresentationItem `json:"items,omitempty"`
+	ThreadID     string             `json:"thread_id"`
+	ActiveTurnID string             `json:"active_turn_id,omitempty"`
+	Metadata     ThreadMetadata     `json:"metadata,omitempty"`
+	Activity     Activity           `json:"activity"`
+	LastTurn     *LastTurnOutcome   `json:"last_turn,omitempty"`
+	Items        []PresentationItem `json:"items,omitempty"`
 	// Entries and Tools are compatibility projections derived from Items while
 	// the existing TUI migrates to semantic cells.
 	Entries          []TranscriptEntry             `json:"entries,omitempty"`
