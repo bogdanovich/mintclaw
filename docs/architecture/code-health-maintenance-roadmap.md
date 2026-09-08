@@ -322,6 +322,9 @@ proportion to persistence, routing, delivery, or concurrency risk.
 - M3 — merged in #1126 (`a0c52dfe`): replaced resettable lazy initialization
   with mutex-owned MCP and hook lifecycle state, including reset-first tests
   that prevent stale configuration generations from being published.
+- M4 — merged in #1130 (`a96321a6`): moved MintClaw client session provenance
+  into the typed inbound contract and retained the old raw key only in bounded
+  durable-spool normalization for supported legacy records.
 
 ## Separate Compatibility Closeouts
 

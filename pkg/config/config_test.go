@@ -3092,44 +3092,45 @@ func TestLoadConfig_MixedKeys_NoPassphrase(t *testing.T) {
 	}
 }
 
-// TestRepositorySave_UsesPassphraseProvider verifies that Repository.Save encrypts plaintext
-// api_keys using credential.PassphraseProvider() rather than os.Getenv directly.
-// This matters for the launcher, which clears the environment variable and redirects
-// PassphraseProvider to an in-memory SecureStore.
-func TestRepositorySave_UsesPassphraseProvider(t *testing.T) {
+// TestRepositorySaveUsesExplicitPassphraseSource verifies that a repository
+// encrypts with its own source rather than consulting the process environment.
+func TestRepositorySaveUsesExplicitPassphraseSource(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 
-	// Ensure the env var is empty — passphrase must come from PassphraseProvider only.
+	// The repository must not fall back to the environment.
 	t.Setenv("MINTCLAW_KEY_PASSPHRASE", "")
 	mustSetupSSHKey(t)
 
-	// Replace PassphraseProvider with an in-memory function (simulating SecureStore).
-	const testPassphrase = "provider-passphrase"
-	orig := credential.PassphraseProvider
-	credential.PassphraseProvider = func() string { return testPassphrase }
-	t.Cleanup(func() { credential.PassphraseProvider = orig })
+	const testPassphrase = "repository-passphrase"
+	repository := NewRepositoryWithPassphraseSource(
+		cfgPath,
+		func() string { return testPassphrase },
+	)
 
 	cfg := DefaultConfig()
 	cfg.ModelList = []*ModelConfig{
 		{ModelName: "test", Provider: "openai", Model: "gpt-4", APIKeys: SimpleSecureStrings("sk-plaintext")},
 	}
-	if err := saveTestConfig(cfgPath, cfg); err != nil {
+	if _, err := repository.Save(cfg); err != nil {
 		t.Fatalf("Repository.Save: %v", err)
 	}
 
 	raw, _ := os.ReadFile(filepath.Join(dir, SecurityConfigFile))
 	if !strings.Contains(string(raw), "enc://") {
 		t.Errorf(
-			"Repository.Save should have encrypted plaintext key via PassphraseProvider; got:\n%s",
+			"Repository.Save should have encrypted plaintext key via its passphrase source; got:\n%s",
 			raw,
 		)
 	}
+	if strings.Contains(string(raw), "sk-plaintext") {
+		t.Fatalf("Repository.Save persisted plaintext credentials:\n%s", raw)
+	}
 }
 
-// TestLoadConfig_UsesPassphraseProvider verifies that LoadConfig decrypts enc:// keys
-// using credential.PassphraseProvider() rather than os.Getenv directly.
-func TestLoadConfig_UsesPassphraseProvider(t *testing.T) {
+// TestRepositoryReadUsesExplicitPassphraseSource verifies that repository reads
+// use the same explicit dependency as writes.
+func TestRepositoryReadUsesExplicitPassphraseSource(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 
@@ -3156,17 +3157,16 @@ func TestLoadConfig_UsesPassphraseProvider(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 
-	// Redirect PassphraseProvider — env var is empty, so without this the load would fail.
-	orig := credential.PassphraseProvider
-	credential.PassphraseProvider = func() string { return testPassphrase }
-	t.Cleanup(func() { credential.PassphraseProvider = orig })
-
 	t.Logf("cfgPath: %s", cfgPath)
 
-	cfg, err := LoadConfig(cfgPath)
+	snapshot, err := NewRepositoryWithPassphraseSource(
+		cfgPath,
+		func() string { return testPassphrase },
+	).ReadOnly()
 	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+		t.Fatalf("Repository.ReadOnly: %v", err)
 	}
+	cfg := snapshot.Config
 	if cfg.ModelList[0].APIKey() != plainKey {
 		t.Errorf("api_key = %q, want %q", cfg.ModelList[0].APIKey(), plainKey)
 	}
