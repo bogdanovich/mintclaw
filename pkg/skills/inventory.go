@@ -23,6 +23,8 @@ const (
 	defaultManagedSkillMaxFiles   = 512
 	defaultManagedSkillMaxBytes   = 16 * 1024 * 1024
 	defaultManagedSkillMaxPath    = 1024
+
+	managedSkillRevisionModeMask = fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
 )
 
 var (
@@ -60,8 +62,9 @@ type ManagedSkill struct {
 }
 
 type WorkspaceSkillInventory struct {
-	skillsRoot string
-	limits     ManagedSkillLimits
+	workspaceRoot string
+	skillsRoot    string
+	limits        ManagedSkillLimits
 }
 
 func NewWorkspaceSkillInventory(workspace string) *WorkspaceSkillInventory {
@@ -72,9 +75,11 @@ func NewWorkspaceSkillInventoryWithLimits(
 	workspace string,
 	limits ManagedSkillLimits,
 ) *WorkspaceSkillInventory {
+	workspaceRoot := filepath.Clean(workspace)
 	return &WorkspaceSkillInventory{
-		skillsRoot: filepath.Join(filepath.Clean(workspace), "skills"),
-		limits:     normalizeManagedSkillLimits(limits),
+		workspaceRoot: workspaceRoot,
+		skillsRoot:    filepath.Join(workspaceRoot, "skills"),
+		limits:        normalizeManagedSkillLimits(limits),
 	}
 }
 
@@ -83,6 +88,13 @@ func NewWorkspaceSkillInventoryWithLimits(
 func (inventory *WorkspaceSkillInventory) ValidateRoot() error {
 	if inventory == nil {
 		return errors.New("workspace skill inventory is required")
+	}
+	workspaceInfo, err := os.Lstat(inventory.workspaceRoot)
+	if err != nil {
+		return fmt.Errorf("inspect workspace root: %w", err)
+	}
+	if workspaceInfo.Mode()&os.ModeSymlink != 0 || !workspaceInfo.IsDir() {
+		return errors.New("workspace root must be a real directory")
 	}
 	rootInfo, err := os.Lstat(inventory.skillsRoot)
 	if err != nil {
@@ -301,7 +313,7 @@ func (inventory *WorkspaceSkillInventory) scanTree(root string) (string, int, in
 		_, _ = hash.Write([]byte{kind})
 		writeManagedHashString(hash, entry.relative)
 		var mode [4]byte
-		binary.BigEndian.PutUint32(mode[:], uint32(entry.info.Mode().Perm()))
+		binary.BigEndian.PutUint32(mode[:], uint32(entry.info.Mode()&managedSkillRevisionModeMask))
 		_, _ = hash.Write(mode[:])
 		if entry.directory {
 			continue

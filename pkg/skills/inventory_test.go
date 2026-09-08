@@ -95,6 +95,21 @@ func TestWorkspaceSkillInventoryRevisionTracksContentAndMode(t *testing.T) {
 	if modeChanged.Revision == contentChanged.Revision {
 		t.Fatal("mode change did not change managed skill revision")
 	}
+
+	if err := os.Chmod(scriptPath, 0o755|os.ModeSetuid); err != nil {
+		t.Skipf("special permission bits unavailable: %v", err)
+	}
+	info, err := os.Stat(scriptPath)
+	if err != nil {
+		t.Fatalf("stat special-mode script: %v", err)
+	}
+	if info.Mode()&os.ModeSetuid == 0 {
+		t.Skip("filesystem did not retain the setuid mode bit")
+	}
+	specialModeChanged := mustInspectManagedSkill(t, inventory, "test-skill")
+	if specialModeChanged.Revision == modeChanged.Revision {
+		t.Fatal("special permission bit change did not change managed skill revision")
+	}
 }
 
 func TestWorkspaceSkillInventoryRejectsSymlinks(t *testing.T) {

@@ -447,6 +447,26 @@ func TestInstallSkillToolRejectsSymlinkWorkspaceSkillsRoot(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "installer wrote through workspace skills symlink: %v", err)
 }
 
+func TestInstallSkillToolRejectsSymlinkWorkspaceRoot(t *testing.T) {
+	outsideWorkspace := t.TempDir()
+	workspace := filepath.Join(t.TempDir(), "linked-workspace")
+	if err := os.Symlink(outsideWorkspace, workspace); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(&mockInstallRegistry{})
+	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+		"slug":     "outside-skill",
+		"registry": "clawhub",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "workspace root must be a real directory")
+	_, err := os.Stat(filepath.Join(outsideWorkspace, "skills", "outside-skill"))
+	assert.True(t, os.IsNotExist(err), "installer wrote through workspace symlink: %v", err)
+}
+
 func TestInstallSkillToolForceReinstallRestoresExactTreeAfterValidationFailure(t *testing.T) {
 	workspace := t.TempDir()
 	skillDir := filepath.Join(workspace, "skills", "broken-skill")
