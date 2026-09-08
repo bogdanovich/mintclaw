@@ -784,6 +784,73 @@ func TestBrokerRejectsSecondProfileSessionBeforeWorkerOpen(t *testing.T) {
 	}
 }
 
+func TestBrokerSeparatesProfileLeaseFromGlobalSessionCapacity(t *testing.T) {
+	root := admittedBrowserConfig()
+	target := root.Tools.Browser.Targets["gateway"]
+	personal := target.Profiles["managed"]
+	personal.Revision = "personal-v1"
+	personal.Runtime.ProfileDirectory = "/var/lib/mintclaw/browser/personal"
+	personal.Runtime.LockFile = "/var/lib/mintclaw/browser-personal.lock"
+	target.Profiles["personal"] = personal
+	root.Tools.Browser.Targets["gateway"] = target
+	store := NewMemoryStore()
+	factory := &fakeWorkerFactory{}
+	broker := newTestBroker(t, root, store, factory)
+	owner := testOwner()
+
+	managed, err := broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	})
+	if err != nil {
+		t.Fatalf("Open(managed) error = %v", err)
+	}
+	sameOwner := owner
+	sameOwner.ExecutionID = "execution_same_profile"
+	if _, err = broker.Open(t.Context(), OpenRequest{
+		Owner: sameOwner, Target: "gateway", Profile: "managed",
+	}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Open(busy managed) error = %v, want ErrBusy", err)
+	}
+	personalAvailability, err := broker.ProfileAvailability(t.Context(), "gateway", "personal")
+	if err != nil || personalAvailability != (ProfileAvailability{
+		Status: "busy", Reason: "session_capacity",
+	}) {
+		t.Fatalf("personal availability = %#v, %v", personalAvailability, err)
+	}
+	otherOwner := owner
+	otherOwner.ExecutionID = "execution_other_profile"
+	if _, err = broker.Open(t.Context(), OpenRequest{
+		Owner: otherOwner, Target: "gateway", Profile: "personal",
+	}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("Open(personal at capacity) error = %v, want ErrCapacity", err)
+	}
+	if len(factory.requests) != 1 {
+		t.Fatalf("worker opens at capacity = %d, want 1", len(factory.requests))
+	}
+	if _, err = broker.Close(t.Context(), owner, managed.ID); err != nil {
+		t.Fatalf("Close(managed) error = %v", err)
+	}
+	personalSession, err := broker.Open(t.Context(), OpenRequest{
+		Owner: otherOwner, Target: "gateway", Profile: "personal",
+	})
+	if err != nil {
+		t.Fatalf("Open(personal after release) error = %v", err)
+	}
+	if personalSession.Profile != "personal" || len(factory.requests) != 2 ||
+		factory.requests[1].Profile != "personal" {
+		t.Fatalf("personal session = %#v, requests = %#v", personalSession, factory.requests)
+	}
+	if _, err = broker.Close(t.Context(), otherOwner, personalSession.ID); err != nil {
+		t.Fatalf("Close(personal) error = %v", err)
+	}
+	owner.ExecutionID = "execution_reuse_managed"
+	if _, err = broker.Open(t.Context(), OpenRequest{
+		Owner: owner, Target: "gateway", Profile: "managed",
+	}); err != nil {
+		t.Fatalf("Open(managed reuse) error = %v", err)
+	}
+}
+
 func TestBrokerPersistsSafeLostStateWhenWorkerOpenFails(t *testing.T) {
 	store := NewMemoryStore()
 	factory := &fakeWorkerFactory{openErr: errors.New("secret executable path")}

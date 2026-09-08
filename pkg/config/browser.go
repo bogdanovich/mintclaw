@@ -269,17 +269,10 @@ func (cfg *Config) validateBrowserTarget(name string, target BrowserTargetConfig
 	if len(target.Profiles) > 8 {
 		return fmt.Errorf("invalid tools.browser.targets.%s.profiles: exceeds 8 entries", name)
 	}
-	enabledProfiles := 0
 	for profileName, profile := range target.Profiles {
 		if err := validateBrowserProfile(name, profileName, profile); err != nil {
 			return err
 		}
-		if profile.Enabled {
-			enabledProfiles++
-		}
-	}
-	if enabledProfiles > 1 {
-		return fmt.Errorf("browser target %q supports one enabled profile during B4 phase 1", name)
 	}
 	placement := target.EffectivePlacement()
 	switch placement {
@@ -536,9 +529,8 @@ type browserGatewayRuntimeIdentity struct {
 }
 
 // validateBrowserGatewayRuntimeIdentities keeps managed Chrome identities
-// distinct across the whole gateway configuration. Phase 1 still admits only
-// one enabled gateway target and profile; enforcing the invariant here makes a
-// later multi-profile admission unable to expose shared storage accidentally.
+// distinct across the whole gateway configuration. Multiple aliases may be
+// enabled, but they must never expose shared storage or lock ownership.
 func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetConfig) error {
 	identities := make([]browserGatewayRuntimeIdentity, 0)
 	for targetName, target := range targets {
@@ -583,6 +575,13 @@ func validateBrowserGatewayRuntimeIdentities(targets map[string]BrowserTargetCon
 			if left.lockFile == right.lockFile {
 				return fmt.Errorf(
 					"browser profiles %q and %q reuse the same lock_file",
+					leftName, rightName,
+				)
+			}
+			if browserRuntimePathContains(left.profileDirectory, right.lockFile) ||
+				browserRuntimePathContains(right.profileDirectory, left.lockFile) {
+				return fmt.Errorf(
+					"browser profiles %q and %q have a lock_file inside another profile_directory",
 					leftName, rightName,
 				)
 			}

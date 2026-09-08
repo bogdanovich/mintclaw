@@ -1525,6 +1525,15 @@ func TestBrowserToolStaleErrorRemainsOperationNeutral(t *testing.T) {
 	}
 }
 
+func TestBrowserToolSessionCapacityErrorIsDistinctAndBounded(t *testing.T) {
+	result := browserToolError(browser.ErrCapacity)
+	if result == nil || !result.IsError ||
+		!strings.Contains(result.ContentForLLM(), `"code":"session_capacity"`) ||
+		!strings.Contains(result.ContentForLLM(), `"action":"close_or_wait"`) {
+		t.Fatalf("session-capacity browser result = %#v", result)
+	}
+}
+
 func TestBrowserToolSnapshotTransferErrorIsSafeAndRetryable(t *testing.T) {
 	result := browserToolError(browser.ErrSnapshotTransfer)
 	if result == nil || !result.IsError ||

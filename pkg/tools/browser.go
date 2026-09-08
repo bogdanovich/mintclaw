@@ -2134,6 +2134,12 @@ func browserToolError(err error) *toolshared.ToolResult {
 	switch {
 	case errors.Is(err, browser.ErrBusy):
 		return browserErrorResult("profile_busy", "The browser profile is already in use.", "close_or_wait")
+	case errors.Is(err, browser.ErrCapacity):
+		return browserErrorResult(
+			"session_capacity",
+			"Browser session capacity is exhausted.",
+			"close_or_wait",
+		)
 	case errors.Is(err, browser.ErrNotFound):
 		return browserErrorResult("not_found", "The browser session or action was not found.", "open_session")
 	case errors.Is(err, browser.ErrStale):

@@ -65,6 +65,35 @@ func TestBrowserConfigAcceptsCanonicalManagedProfileAuthority(t *testing.T) {
 	}
 }
 
+func TestBrowserConfigAcceptsMultipleManagedAliasesWithDistinctRuntimeIdentity(t *testing.T) {
+	cfg := browserConfigFixture(t)
+	target := cfg.Tools.Browser.Targets[BrowserDefaultTarget]
+	managed := target.Profiles[BrowserDefaultProfile]
+	managed.Revision = "managed-v1"
+	managed.AllowedAgents = []string{"browser"}
+	managed.AllowedActors = []string{"telegram:123456"}
+	managed.Runtime = BrowserProfileRuntimeConfig{
+		ProfileDirectory: "/var/lib/mintclaw/browser/managed",
+		LockFile:         "/run/mintclaw/browser-managed.lock",
+	}
+	personal := managed
+	personal.Revision = "personal-v1"
+	personal.Runtime = BrowserProfileRuntimeConfig{
+		ProfileDirectory: "/var/lib/mintclaw/browser/personal",
+		LockFile:         "/run/mintclaw/browser-personal.lock",
+	}
+	target.Profiles[BrowserDefaultProfile] = managed
+	target.Profiles["personal"] = personal
+	cfg.Tools.Browser.Targets[BrowserDefaultTarget] = target
+	server := cfg.Tools.MCP.Servers["playwright"]
+	server.ExclusiveLockFile = ""
+	cfg.Tools.MCP.Servers["playwright"] = server
+
+	if err := cfg.ValidateBrowserConfig(); err != nil {
+		t.Fatalf("ValidateBrowserConfig() multiple aliases error = %v", err)
+	}
+}
+
 func TestBrowserConfigRejectsIncompleteCanonicalProfileAuthority(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -191,6 +220,21 @@ func TestBrowserConfigRejectsConflictingCanonicalGatewayRuntimeIdentities(t *tes
 				runtime.LockFile = existing.LockFile
 			},
 			wantErr: "reuse the same lock_file",
+		},
+		{
+			name: "lock file inside existing profile directory",
+			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
+				runtime.LockFile = filepath.Join(existing.ProfileDirectory, "personal.lock")
+			},
+			wantErr: "lock_file inside another profile_directory",
+		},
+		{
+			name: "existing lock file inside other profile directory",
+			mutate: func(runtime *BrowserProfileRuntimeConfig, existing BrowserProfileRuntimeConfig) {
+				runtime.ProfileDirectory = filepath.Dir(existing.LockFile)
+				runtime.LockFile = "/var/lib/mintclaw/browser-personal.lock"
+			},
+			wantErr: "lock_file inside another profile_directory",
 		},
 	}
 
@@ -845,23 +889,6 @@ func TestBrowserConfigRejectsAuthorityExpansion(t *testing.T) {
 				cfg.Tools.Browser.Targets["gateway"] = target
 			},
 			wantErr: "must not set allowed_origins",
-		},
-		{
-			name: "second profile",
-			mutate: func(cfg *Config) {
-				target := cfg.Tools.Browser.Targets["gateway"]
-				other := target.Profiles["managed"]
-				other.Revision = "other-v1"
-				other.Runtime.ProfileDirectory = filepath.Join(
-					filepath.Dir(other.Runtime.ProfileDirectory), "other",
-				)
-				other.Runtime.LockFile = filepath.Join(
-					filepath.Dir(other.Runtime.LockFile), "other.lock",
-				)
-				target.Profiles["other"] = other
-				cfg.Tools.Browser.Targets["gateway"] = target
-			},
-			wantErr: "supports one enabled profile during B4 phase 1",
 		},
 		{
 			name: "private origin",
