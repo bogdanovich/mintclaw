@@ -638,6 +638,9 @@ func renderObjectiveOutput(label string, output *taskresult.ObjectiveOutput) str
 		return output.Text
 	case "records":
 		lines := []string{strings.TrimSpace(label) + ":"}
+		if len(output.Records) == 0 {
+			return strings.Join(append(lines, "- (no records)"), "\n")
+		}
 		for _, record := range output.Records {
 			keys := make([]string, 0, len(record))
 			for key := range record {

@@ -151,6 +151,22 @@ func TestTerminalObjectiveResultRetainsSummaryForMixedActionAndResult(t *testing
 	}
 }
 
+func TestObjectiveOutcomeProjectsEmptyResultOnlyRecordsExplicitly(t *testing.T) {
+	content := objectiveOutcomeStart +
+		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
+		`"output":{"kind":"records","records":[]}}],` +
+		`"missing_items":[],"result":"No matches found."}` + objectiveOutcomeEnd
+	checklist := normalizeObjectiveChecklist([]toolshared.ObjectiveSpec{{
+		Item: "return matches", Kind: "result",
+		Acceptance: &taskresult.ObjectiveAcceptance{OutputKind: "records"},
+	}})
+
+	clean, outcome := extractObjectiveOutcome(content, nil, true, checklist)
+	if outcome.Status != taskresult.OutcomeSucceeded || clean != "return matches:\n- (no records)" {
+		t.Fatalf("empty records terminal projection = %q, outcome = %#v", clean, outcome)
+	}
+}
+
 func TestObjectiveOutcomeCarriesAcceptedRecordsIntoStandaloneResult(t *testing.T) {
 	content := objectiveOutcomeStart +
 		`{"status":"succeeded","completed_items":[{"objective_id":"objective_1","receipt_ids":[],` +
