@@ -14,7 +14,7 @@ const (
 	MaxStatusBytes          = 4 << 10
 	MaxSnapshotBytes        = MaxWirePayloadBytes - (2 << 10)
 	MaxSnapshotItems        = 128
-	MaxSnapshotItemsBytes   = MaxSnapshotBytes - (512 << 10)
+	MaxSnapshotItemsBytes   = MaxSnapshotBytes
 	MaxEventWriteAudits     = 64
 	MaxAuditTargetBytes     = 4 << 10
 	MaxEventPlanSteps       = 32

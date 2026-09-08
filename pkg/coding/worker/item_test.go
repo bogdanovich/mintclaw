@@ -91,7 +91,7 @@ func TestSnapshotFromFrontendProjectsCanonicalItemsWithoutFrontendLifecycle(t *t
 		},
 	}
 
-	snapshot := SnapshotFromFrontend(source)
+	snapshot := SnapshotFromFrontend(source, nil)
 	if err := validateSnapshot(binding.ControlIdentity(), snapshot); err != nil {
 		t.Fatalf("validateSnapshot() error = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestSnapshotFromFrontendRetainsNewestCountBoundedSuffix(t *testing.T) {
 		}
 	}
 
-	snapshot := SnapshotFromFrontend(source)
+	snapshot := SnapshotFromFrontend(source, nil)
 	if len(snapshot.Items) != MaxSnapshotItems || !snapshot.ItemsTruncated {
 		t.Fatalf("bounded snapshot items = %d, truncated = %t", len(snapshot.Items), snapshot.ItemsTruncated)
 	}
@@ -190,7 +190,7 @@ func TestSnapshotFromFrontendRetainsNewestByteBoundedSuffix(t *testing.T) {
 		}
 	}
 
-	snapshot := SnapshotFromFrontend(source)
+	snapshot := SnapshotFromFrontend(source, nil)
 	if len(snapshot.Items) == 0 || len(snapshot.Items) >= len(source.Items) || !snapshot.ItemsTruncated {
 		t.Fatalf("byte-bounded snapshot items = %d, truncated = %t", len(snapshot.Items), snapshot.ItemsTruncated)
 	}
@@ -233,7 +233,7 @@ func TestSnapshotFromFrontendBoundsUnsafeIdentitiesDeterministically(t *testing.
 		}},
 	}
 
-	snapshot := SnapshotFromFrontend(source)
+	snapshot := SnapshotFromFrontend(source, nil)
 	if !strings.HasPrefix(snapshot.ActiveTurnID, "wire:") ||
 		snapshot.LastTurn == nil || snapshot.LastTurn.TurnID != snapshot.ActiveTurnID ||
 		snapshot.Items[0].TurnID != snapshot.ActiveTurnID ||
@@ -284,7 +284,7 @@ func TestSnapshotFromFrontendNormalizesMaximumFrontendToolToEncodableWireItem(t 
 		}},
 	}
 
-	snapshot := SnapshotFromFrontend(source)
+	snapshot := SnapshotFromFrontend(source, nil)
 	if len(snapshot.Items) != 1 || snapshot.Items[0].Tool == nil {
 		t.Fatalf("normalized snapshot items = %#v", snapshot.Items)
 	}

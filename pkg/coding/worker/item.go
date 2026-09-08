@@ -160,8 +160,9 @@ type Item struct {
 
 // SnapshotFromFrontend copies the bounded protocol-v1 projection from the
 // in-process frontend snapshot. It retains the newest canonical items that fit
-// both the item-count and encoded-size budgets.
-func SnapshotFromFrontend(source frontend.ThreadSnapshot) Snapshot {
+// both the item-count and encoded-size budgets after accounting for the actual
+// encoded pending question.
+func SnapshotFromFrontend(source frontend.ThreadSnapshot, question *QuestionState) Snapshot {
 	source = source.Clone()
 	status, _ := boundedWireContent(source.Status, MaxStatusBytes)
 	snapshot := Snapshot{
@@ -175,19 +176,25 @@ func SnapshotFromFrontend(source frontend.ThreadSnapshot) Snapshot {
 		},
 		Status: status,
 	}
+	if question != nil {
+		clonedQuestion := *question
+		clonedQuestion.Options = slices.Clone(question.Options)
+		snapshot.Question = &clonedQuestion
+	}
 	if source.LastTurn != nil {
 		snapshot.LastTurn = &LastTurnOutcome{
 			TurnID:  boundedWireIdentity(source.LastTurn.TurnID),
 			Outcome: TurnOutcome(source.LastTurn.Outcome),
 		}
 	}
-	// Account for the encoded JSON array brackets up front, then for the
-	// comma before every item after the first.
+	itemsBudget := snapshotItemsBudget(snapshot)
+	// Account for the encoded JSON array brackets up front, then for the comma
+	// before every item after the first.
 	usedBytes := 2
 	for index := len(source.Items) - 1; index >= 0; index-- {
 		item := itemFromFrontend(source.Items[index])
 		encoded, err := json.Marshal(item)
-		if err != nil || len(encoded) > MaxSnapshotItemsBytes {
+		if err != nil || len(encoded) > itemsBudget {
 			snapshot.ItemsTruncated = true
 			break
 		}
@@ -196,7 +203,7 @@ func SnapshotFromFrontend(source frontend.ThreadSnapshot) Snapshot {
 			separatorBytes = 1
 		}
 		if len(snapshot.Items) >= MaxSnapshotItems ||
-			usedBytes+separatorBytes+len(encoded) > MaxSnapshotItemsBytes {
+			usedBytes+separatorBytes+len(encoded) > itemsBudget {
 			snapshot.ItemsTruncated = true
 			break
 		}
@@ -205,6 +212,18 @@ func SnapshotFromFrontend(source frontend.ThreadSnapshot) Snapshot {
 	}
 	slices.Reverse(snapshot.Items)
 	return snapshot
+}
+
+func snapshotItemsBudget(snapshot Snapshot) int {
+	snapshot.Items = nil
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return 0
+	}
+	// Items are omitted from the base snapshot. Account for the comma, key,
+	// colon, and array that are added when at least one item is present.
+	const itemsMemberBytes = len(`,"items":`)
+	return max(0, MaxSnapshotBytes-len(encoded)-itemsMemberBytes)
 }
 
 func itemFromFrontend(source frontend.PresentationItem) Item {

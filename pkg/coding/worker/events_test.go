@@ -296,20 +296,20 @@ func TestEventPayloadSchemasRejectUnknownAndUnsafeContent(t *testing.T) {
 	}
 }
 
-func TestMaximumQuestionAndProjectedItemsFitReadyAndSnapshotRecords(t *testing.T) {
+func TestEscapingHeavyMaximumQuestionAndDenseItemsFitSnapshotRecords(t *testing.T) {
 	binding := testBinding(t)
 	options := make([]QuestionOption, MaxQuestionOptions)
 	for index := range options {
 		options[index] = QuestionOption{
 			ID:          fmt.Sprintf("option-%02d", index),
-			Label:       strings.Repeat("l", MaxAttachmentMeta),
-			Description: strings.Repeat("d", MaxQuestionTextBytes),
+			Label:       strings.Repeat("<", MaxAttachmentMeta),
+			Description: strings.Repeat("<", MaxQuestionTextBytes),
 		}
 	}
 	source := frontend.ThreadSnapshot{
 		ThreadID: binding.ThreadID,
 		Activity: frontend.ActivityWaitingInput,
-		Items:    make([]frontend.PresentationItem, 40),
+		Items:    make([]frontend.PresentationItem, MaxSnapshotItems),
 	}
 	for index := range source.Items {
 		sequence := uint64(index + 1)
@@ -321,18 +321,39 @@ func TestMaximumQuestionAndProjectedItemsFitReadyAndSnapshotRecords(t *testing.T
 			Message: &frontend.TranscriptEntry{
 				Kind:     frontend.EntryAssistant,
 				Phase:    frontend.AssistantPhaseCommentary,
-				Text:     strings.Repeat("m", MaxEventTextBytes),
+				Text:     strings.Repeat("<", 4<<10),
 				Complete: true,
 			},
 		}
 	}
-	snapshot := SnapshotFromFrontend(source)
-	snapshot.Question = &QuestionState{
+	question := &QuestionState{
 		QuestionID: "question-1",
 		Revision:   1,
 		Status:     QuestionWaiting,
-		Prompt:     strings.Repeat("p", MaxQuestionTextBytes),
+		Prompt:     strings.Repeat("<", MaxQuestionTextBytes),
 		Options:    options,
+	}
+	snapshot := SnapshotFromFrontend(source, question)
+	if len(snapshot.Items) == 0 || len(snapshot.Items) >= len(source.Items) || !snapshot.ItemsTruncated {
+		t.Fatalf("dense snapshot items = %d, truncated = %t", len(snapshot.Items), snapshot.ItemsTruncated)
+	}
+	questionBytes, marshalErr := json.Marshal(question)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if len(questionBytes) <= 512<<10 {
+		t.Fatalf("escaping-heavy question uses only %d bytes", len(questionBytes))
+	}
+	itemBytes, marshalErr := json.Marshal(snapshot.Items)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	nextItemBytes, marshalErr := json.Marshal(itemFromFrontend(source.Items[0]))
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if remaining := snapshotItemsBudget(snapshot) - len(itemBytes); remaining >= len(nextItemBytes)+1 {
+		t.Fatalf("snapshot item budget has %d avoidable bytes remaining", remaining)
 	}
 	if err := validateSnapshot(binding.ControlIdentity(), snapshot); err != nil {
 		t.Fatalf("validateSnapshot(maximum question) error = %v", err)
