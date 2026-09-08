@@ -160,14 +160,6 @@ type reviewCommitRequest struct {
 	reply    chan error
 }
 
-type evidenceOperation struct {
-	id      uint64
-	kind    operationKind
-	request command
-	ctx     context.Context
-	cancel  context.CancelCauseFunc
-}
-
 // Controller serializes coding commands while exposing the current in-process
 // presentation view. Exactly one actor owns admission state.
 type Controller struct {
@@ -528,15 +520,13 @@ func (c *Controller) coordinate() {
 	var turnWaiters []command
 	var turnSettlementAvailable bool
 	var turnSettlementErr error
-	var activeEvidence *evidenceOperation
-	var evidenceQueue []evidenceOperation
-	var nextEvidenceID uint64
+	var evidence evidenceQueueState
 	var closeReplies []chan error
 	var closeErr error
 	var turnSteering *turnSteeringState
 
 	finishClose := func() bool {
-		if !closing || primary.active() || activeEvidence != nil || len(evidenceQueue) != 0 {
+		if !closing || primary.active() || !evidence.empty() {
 			return false
 		}
 		closeErr = errors.Join(closeErr, c.runtime.Close())
@@ -549,58 +539,21 @@ func (c *Controller) coordinate() {
 		return true
 	}
 
-	pruneCanceledEvidence := func() {
-		retained := evidenceQueue[:0]
-		for _, operation := range evidenceQueue {
-			if err := operation.ctx.Err(); err != nil {
-				operation.cancel(context.Canceled)
-				operation.request.replyError(err)
-			} else {
-				retained = append(retained, operation)
-			}
-		}
-		clear(evidenceQueue[len(retained):])
-		evidenceQueue = retained
-	}
-
-	workspaceRefreshPending := func() bool {
-		if activeEvidence != nil && activeEvidence.kind == operationWorkspaceRefresh {
-			return true
-		}
-		for _, operation := range evidenceQueue {
-			if operation.kind == operationWorkspaceRefresh && operation.ctx.Err() == nil {
-				return true
-			}
-		}
-		return false
-	}
-
 	backgroundCompactionActive := func() bool {
 		observer, ok := c.runtime.(frontend.BackgroundCompactionObserver)
 		return ok && observer.BackgroundCompactionActive()
 	}
 
 	startNextEvidence := func() {
-		pruneCanceledEvidence()
-		if closing || activeEvidence != nil || len(evidenceQueue) == 0 {
+		operation, ok := evidence.startNext(closing)
+		if !ok {
 			return
 		}
-		operation := evidenceQueue[0]
-		evidenceQueue = evidenceQueue[1:]
-		activeEvidence = &operation
 		go c.runEvidence(operation.ctx, operation.id, operation.kind, operation.request)
 	}
 
 	admitEvidence := func(kind operationKind, request command) {
-		nextEvidenceID++
-		operationCtx, cancel := context.WithCancelCause(request.ctx)
-		evidenceQueue = append(evidenceQueue, evidenceOperation{
-			id:      nextEvidenceID,
-			kind:    kind,
-			request: request,
-			ctx:     operationCtx,
-			cancel:  cancel,
-		})
+		evidence.admit(kind, request)
 		startNextEvidence()
 	}
 
@@ -631,15 +584,11 @@ func (c *Controller) coordinate() {
 		case request := <-c.reviewCommits:
 			request.reply <- primary.commitReview(request.reviewID)
 		case result := <-c.evidenceResults:
-			if activeEvidence == nil || activeEvidence.id != result.id {
+			var matched bool
+			result.err, matched = evidence.complete(result.id, result.err)
+			if !matched {
 				continue
 			}
-			operation := *activeEvidence
-			if err := operation.ctx.Err(); err != nil {
-				result.err = err
-			}
-			operation.cancel(context.Canceled)
-			activeEvidence = nil
 			if result.err == nil {
 				switch result.kind {
 				case operationWorkspaceRefresh, operationRepositoryStatus:
@@ -709,7 +658,7 @@ func (c *Controller) coordinate() {
 				request.replyError(ErrClosed)
 				continue
 			}
-			pruneCanceledEvidence()
+			evidence.pruneCanceled()
 			switch request.kind {
 			case commandSubmit:
 				if err := request.ctx.Err(); err != nil {
@@ -720,7 +669,7 @@ func (c *Controller) coordinate() {
 					request.reply <- err
 					continue
 				}
-				if workspaceRefreshPending() {
+				if evidence.workspaceRefreshPending() {
 					request.reply <- ErrWorkspaceRefreshActive
 					continue
 				}
@@ -796,7 +745,7 @@ func (c *Controller) coordinate() {
 					request.reply <- err
 					continue
 				}
-				if workspaceRefreshPending() {
+				if evidence.workspaceRefreshPending() {
 					request.reply <- ErrWorkspaceRefreshActive
 					continue
 				}
@@ -869,7 +818,7 @@ func (c *Controller) coordinate() {
 					request.reply <- ErrCompactionActive
 					continue
 				}
-				if workspaceRefreshPending() {
+				if evidence.workspaceRefreshPending() {
 					request.reply <- ErrWorkspaceRefreshActive
 					continue
 				}
@@ -907,14 +856,7 @@ func (c *Controller) coordinate() {
 				} else if primary.is(operationCompaction) || primary.is(operationReview) {
 					primary.cancel(context.Canceled)
 				}
-				if activeEvidence != nil {
-					activeEvidence.cancel(context.Canceled)
-				}
-				for _, operation := range evidenceQueue {
-					operation.cancel(context.Canceled)
-					operation.request.replyError(context.Canceled)
-				}
-				evidenceQueue = nil
+				evidence.cancelAll(context.Canceled)
 				if finishClose() {
 					return
 				}
