@@ -17,6 +17,7 @@ const (
 	MaxSnapshotItemsBytes   = MaxSnapshotBytes
 	MaxEventWriteAudits     = 64
 	MaxCommandTranscript    = 128
+	MaxExplorationValue     = 1 << 10
 	MaxAuditTargetBytes     = 4 << 10
 	MaxEventPlanSteps       = 32
 	MaxPlanExplanationBytes = 4 << 10
@@ -400,6 +401,11 @@ func validTool(tool Tool) bool {
 			return false
 		}
 	}
+	if tool.Exploration != nil {
+		if tool.Command != nil || !validExploration(*tool.Exploration) {
+			return false
+		}
+	}
 	if tool.Command == nil {
 		return true
 	}
@@ -435,6 +441,17 @@ func validTool(tool Tool) bool {
 	default:
 		return false
 	}
+}
+
+func validExploration(exploration Exploration) bool {
+	switch exploration.Operation {
+	case ExplorationRead, ExplorationList, ExplorationSearch:
+	default:
+		return false
+	}
+	return validOptionalText(exploration.Path, MaxExplorationValue) &&
+		validOptionalText(exploration.Pattern, MaxExplorationValue) &&
+		validOptionalText(exploration.Workspace, MaxExplorationValue)
 }
 
 func validPlan(plan Plan) bool {

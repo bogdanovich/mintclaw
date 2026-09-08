@@ -602,6 +602,9 @@ Done when:
 
 ### TUI.8 — Exploration classification and command grouping
 
+Status: implemented. See the
+[TUI.8 exit record](local-coding-agent-tui-8-exit.md).
+
 Dependencies: TUI.7
 
 Effort: medium

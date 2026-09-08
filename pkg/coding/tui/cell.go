@@ -157,6 +157,11 @@ func (cell *presentationCell) Render(context cellRenderContext, mode cellRenderM
 			cell.commandDocument(*cell.item.Tool, *cell.item.Tool.Command, mode, context.Width),
 			context.Width,
 		)
+	} else if cell.item.Tool != nil && cell.item.Tool.Exploration != nil {
+		document = wrapCellDocument(
+			cell.explorationDocument(*cell.item.Tool, *cell.item.Tool.Exploration, mode),
+			context.Width,
+		)
 	} else {
 		document = wrapCellDocument(cell.semanticDocument(mode), context.Width)
 	}
@@ -334,6 +339,9 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 	if tool.Command != nil {
 		return cell.commandDocument(*tool, *tool.Command, mode, 120)
 	}
+	if tool.Exploration != nil {
+		return cell.explorationDocument(*tool, *tool.Exploration, mode)
+	}
 	name := strings.TrimSpace(sanitizeTerminalText(tool.Name))
 	if name == "" {
 		name = "tool"
@@ -361,6 +369,73 @@ func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {
 			logicalCellLines("  output:\n"+indentCellEvidence(output), cellStyleDefault)...)
 	}
 	return cellDocument{Lines: lines, Truncated: tool.OutputTruncated || toolCommandTruncated(tool.Command)}
+}
+
+func (cell *presentationCell) explorationDocument(
+	tool frontend.ToolState,
+	exploration frontend.ExplorationState,
+	mode cellRenderMode,
+) cellDocument {
+	title := "• Explored"
+	role := cellStyleSuccess
+	switch tool.Status {
+	case frontend.ToolRunning:
+		title = "• Exploring"
+		role = cellStyleAccent
+	case frontend.ToolFailed:
+		title = "! Exploration failed"
+		role = cellStyleFailure
+	case frontend.ToolInterrupted:
+		title = "! Exploration interrupted"
+		role = cellStyleFailure
+	case frontend.ToolSuspended:
+		title = "• Exploration suspended"
+		role = cellStyleMuted
+	case frontend.ToolUnknown:
+		title = "? Exploration outcome unknown"
+		role = cellStyleMuted
+	}
+	lines := []cellLine{styledCellLine(title+commandDurationSuffix(tool.Duration), role)}
+	lines = append(lines, logicalCellLines("  └ "+explorationDetail(exploration), cellStyleMuted)...)
+	if exploration.Truncated {
+		lines = append(lines, styledCellLine("    [… exploration label bounded …]", cellStyleMuted))
+	}
+	if mode != cellRenderCompact {
+		if output := sanitizeTerminalText(tool.Output); strings.TrimSpace(output) != "" {
+			lines = append(lines, logicalCellLines("  output:\n"+indentCellEvidence(output), cellStyleDefault)...)
+		}
+		lines = append(lines, styledCellLine("  "+toolStatusLabel(tool.Status), lifecycleCellRole(cell.item.Lifecycle)))
+	}
+	return cellDocument{
+		Lines: lines, Truncated: tool.OutputTruncated || exploration.Truncated,
+		TruncationVisible: exploration.Truncated,
+	}
+}
+
+func explorationDetail(exploration frontend.ExplorationState) string {
+	path := boundedSingleLine(exploration.Path, 1024)
+	if path == "" {
+		path = "."
+	}
+	workspace := boundedSingleLine(exploration.Workspace, 1024)
+	workspaceSuffix := ""
+	if workspace != "" {
+		workspaceSuffix = " on " + workspace
+	}
+	switch exploration.Operation {
+	case frontend.ExplorationRead:
+		return "Read " + path + workspaceSuffix
+	case frontend.ExplorationList:
+		return "List " + path + workspaceSuffix
+	case frontend.ExplorationSearch:
+		pattern := boundedSingleLine(exploration.Pattern, 1024)
+		if pattern == "" {
+			pattern = "pattern"
+		}
+		return "Search " + strconv.Quote(pattern) + " in " + path + workspaceSuffix
+	default:
+		return "Inspect " + path + workspaceSuffix
+	}
 }
 
 func (cell *presentationCell) commandDocument(

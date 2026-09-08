@@ -20,6 +20,7 @@ const (
 	maxCommandIdentityBytes      = 1 << 10
 	maxCommandTranscriptEntries  = 256
 	maxCommandRedactionLookahead = 1 << 10
+	maxExplorationValueBytes     = 1 << 10
 )
 
 // NewPlanObservation validates, redacts, bounds, and clones one plan before it
@@ -32,12 +33,32 @@ func NewPlanObservation(explanation string, steps []PlanStepObservation) (PlanOb
 // the value is empty, ambiguous, or invalid. This is the fail-closed admission
 // boundary used after hooks and again by coding frontends.
 func SanitizeToolObservation(observation *ToolObservation) *ToolObservation {
-	if observation == nil || (observation.Command == nil) == (observation.Plan == nil) {
+	if observation == nil {
+		return nil
+	}
+	variants := 0
+	if observation.Command != nil {
+		variants++
+	}
+	if observation.Exploration != nil {
+		variants++
+	}
+	if observation.Plan != nil {
+		variants++
+	}
+	if variants != 1 {
 		return nil
 	}
 	if observation.Command != nil {
 		command := sanitizeCommandObservation(*observation.Command)
 		return &ToolObservation{Command: &command}
+	}
+	if observation.Exploration != nil {
+		exploration, ok := sanitizeExplorationObservation(*observation.Exploration)
+		if !ok {
+			return nil
+		}
+		return &ToolObservation{Exploration: &exploration}
 	}
 	plan, err := NewPlanObservation(observation.Plan.Explanation, observation.Plan.Steps)
 	if err != nil {
@@ -45,6 +66,33 @@ func SanitizeToolObservation(observation *ToolObservation) *ToolObservation {
 	}
 	plan.Truncated = plan.Truncated || observation.Plan.Truncated
 	return &ToolObservation{Plan: &plan}
+}
+
+func sanitizeExplorationObservation(
+	exploration ExplorationObservation,
+) (ExplorationObservation, bool) {
+	switch exploration.Operation {
+	case ExplorationRead, ExplorationList, ExplorationSearch:
+	default:
+		return ExplorationObservation{}, false
+	}
+	var truncated bool
+	exploration.Path, truncated = sanitizeObservationText(
+		strings.TrimSpace(exploration.Path),
+		maxExplorationValueBytes,
+	)
+	exploration.Truncated = exploration.Truncated || truncated
+	exploration.Pattern, truncated = sanitizeObservationText(
+		strings.TrimSpace(exploration.Pattern),
+		maxExplorationValueBytes,
+	)
+	exploration.Truncated = exploration.Truncated || truncated
+	exploration.Workspace, truncated = sanitizeObservationText(
+		strings.TrimSpace(exploration.Workspace),
+		maxExplorationValueBytes,
+	)
+	exploration.Truncated = exploration.Truncated || truncated
+	return exploration, true
 }
 
 func sanitizeCommandObservation(command CommandObservation) CommandObservation {

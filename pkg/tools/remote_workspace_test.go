@@ -467,6 +467,23 @@ func TestRemoteWorkspaceReadToolPreservesLineModeForPathOnlyCall(t *testing.T) {
 	}
 }
 
+func TestRemoteWorkspaceReadToolPreservesTypedExplorationAndAlias(t *testing.T) {
+	remote := &remoteWorkspaceReadSource{}
+	local := fstools.NewReadFileLinesTool(t.TempDir(), false, fstools.MaxReadFileSize)
+	tool, err := NewRemoteWorkspaceTool(local, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation := toolshared.SanitizeToolObservation(tool.CodingStartObservation(map[string]any{
+		"path": "README.md", "remote_workspace": "vpn", "ignored": "must not be projected",
+	}))
+	if observation == nil || observation.Exploration == nil ||
+		observation.Exploration.Operation != toolshared.ExplorationRead ||
+		observation.Exploration.Path != "README.md" || observation.Exploration.Workspace != "vpn" {
+		t.Fatalf("remote exploration observation = %#v", observation)
+	}
+}
+
 func TestRemoteWorkspaceReadToolDoesNotFallbackUnknownAlias(t *testing.T) {
 	local := &remoteWorkspaceLocalTool{}
 	remote := &remoteWorkspaceReadSource{}

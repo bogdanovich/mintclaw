@@ -659,6 +659,22 @@ func (p *Projector) ToolOutput(turnID, callID, output string) {
 	})
 }
 
+// ToolExploration projects bounded metadata emitted by a native read-only
+// tool. It does not classify by tool name or parse arbitrary shell text.
+func (p *Projector) ToolExploration(turnID, callID string, exploration ExplorationState) {
+	p.mutate(func(state *ThreadSnapshot) {
+		turnID = presentationTurnID(turnID)
+		callID = boundPresentationIdentity(callID)
+		tool := toolFromPresentationItems(state.Items, turnID, callID)
+		if tool.CallID == "" {
+			tool = ToolState{TurnID: turnID, CallID: callID, Status: ToolUnknown}
+		}
+		exploration = p.boundedExploration(exploration)
+		tool.Exploration = &exploration
+		p.upsertTool(state, tool)
+	})
+}
+
 // ToolCommandOutput projects bounded process state owned by the command tool.
 // It never derives command output or lifecycle state from model-facing prose.
 func (p *Projector) ToolCommandOutput(turnID, callID string, command CommandState) {
@@ -1227,7 +1243,22 @@ func (p *Projector) boundedTool(tool ToolState) ToolState {
 		command := p.boundedCommand(*tool.Command)
 		tool.Command = &command
 	}
+	if tool.Exploration != nil {
+		exploration := p.boundedExploration(*tool.Exploration)
+		tool.Exploration = &exploration
+	}
 	return tool
+}
+
+func (p *Projector) boundedExploration(exploration ExplorationState) ExplorationState {
+	var truncated bool
+	exploration.Path, truncated = boundText(exploration.Path, p.limits.TextBytes)
+	exploration.Truncated = exploration.Truncated || truncated
+	exploration.Pattern, truncated = boundText(exploration.Pattern, p.limits.TextBytes)
+	exploration.Truncated = exploration.Truncated || truncated
+	exploration.Workspace, truncated = boundText(exploration.Workspace, p.limits.TextBytes)
+	exploration.Truncated = exploration.Truncated || truncated
+	return exploration
 }
 
 func (p *Projector) boundedCommand(command CommandState) CommandState {
@@ -1556,6 +1587,10 @@ func cloneTools(tools []ToolState) []ToolState {
 
 func cloneTool(tool ToolState) ToolState {
 	tool.WriteAudit = slices.Clone(tool.WriteAudit)
+	if tool.Exploration != nil {
+		exploration := *tool.Exploration
+		tool.Exploration = &exploration
+	}
 	if tool.Command != nil {
 		command := *tool.Command
 		command.Transcript = slices.Clone(command.Transcript)

@@ -1509,6 +1509,18 @@ func TestCloneToolObservationClonesCommandTranscript(t *testing.T) {
 	}
 }
 
+func TestCloneToolObservationClonesExploration(t *testing.T) {
+	original := &toolshared.ToolObservation{Exploration: &toolshared.ExplorationObservation{
+		Operation: toolshared.ExplorationSearch, Path: "pkg", Pattern: "ToolStarted", Workspace: "build",
+	}}
+	cloned := cloneToolObservation(original)
+	original.Exploration.Path = "mutated"
+	if cloned == nil || cloned.Exploration == nil || cloned.Exploration.Path != "pkg" ||
+		cloned.Exploration.Pattern != "ToolStarted" || cloned.Exploration.Workspace != "build" {
+		t.Fatalf("exploration observation clone = %+v", cloned)
+	}
+}
+
 type respondWithMediaHook struct {
 	respondTools    map[string]bool
 	media           []string

@@ -385,6 +385,87 @@ func TestAdapterProjectsCommandStartProgressAndCompletionByCallID(t *testing.T) 
 	}
 }
 
+func TestAdapterProjectsTypedExplorationStartByCallID(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{TextBytes: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{
+		SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+	}
+	wrapped.PublishNonBlocking(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentToolExecStart, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Payload: agent.ToolExecStartPayload{
+			ToolCallID: "call-search", Tool: "search_files",
+			Arguments: map[string]any{"pattern": "must remain shape-only"},
+			Observation: &toolshared.ToolObservation{Exploration: &toolshared.ExplorationObservation{
+				Operation: toolshared.ExplorationSearch,
+				Path:      strings.Repeat("p", 64),
+				Pattern:   "ToolStarted",
+			}},
+		},
+	})
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].CallID != "call-search" ||
+		snapshot.Tools[0].Exploration == nil ||
+		snapshot.Tools[0].Exploration.Operation != frontend.ExplorationSearch ||
+		snapshot.Tools[0].Exploration.Pattern != "ToolStarted" ||
+		len(snapshot.Tools[0].Exploration.Path) > 32 || !snapshot.Tools[0].Exploration.Truncated ||
+		strings.Contains(snapshot.Tools[0].Arguments, "must remain") {
+		t.Fatalf("projected exploration = %+v", snapshot.Tools)
+	}
+}
+
+func TestAdapterKeepsSkippedExplorationVisibleAsFailure(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{
+		SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
+	}
+	publish := func(kind runtimeevents.Kind, payload any) {
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+		})
+	}
+	publish(runtimeevents.KindAgentToolExecStart, agent.ToolExecStartPayload{
+		ToolCallID: "call-read", Tool: "read_file",
+		Observation: &toolshared.ToolObservation{Exploration: &toolshared.ExplorationObservation{
+			Operation: toolshared.ExplorationRead, Path: "pkg/missing.go",
+		}},
+	})
+	publish(runtimeevents.KindAgentToolExecSkipped, agent.ToolExecSkippedPayload{
+		ToolCallID: "call-read", Tool: "read_file",
+	})
+
+	snapshot, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Exploration == nil ||
+		snapshot.Tools[0].Status != frontend.ToolFailed ||
+		snapshot.Tools[0].Output != "tool skipped" {
+		t.Fatalf("skipped exploration projection = %+v", snapshot.Tools)
+	}
+}
+
 func TestProjectCommandMapsCompletedNonzeroExitToFailure(t *testing.T) {
 	exitCode := 7
 	command := projectCommand(toolshared.CommandObservation{Status: "done", ExitCode: &exitCode})

@@ -9,6 +9,8 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/routing"
 	"github.com/bogdanovich/mintclaw/pkg/session"
+	"github.com/bogdanovich/mintclaw/pkg/tools"
+	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
@@ -101,5 +103,26 @@ func TestCodingTurnEmitsCorrelatedCommandStartProgressAndEnd(t *testing.T) {
 	if !ok || end.ToolCallID != start.ToolCallID || end.Observation == nil || end.Observation.Command == nil ||
 		end.Observation.Command.Status != "succeeded" {
 		t.Fatalf("command end = %#v", received[2].Payload)
+	}
+}
+
+func TestCodingToolStartObservationAdmitsNativeExplorationOnlyForCodingTurns(t *testing.T) {
+	registry := tools.NewToolRegistry()
+	read := fstools.NewReadFileTool(t.TempDir(), true, fstools.MaxReadFileSize)
+	registry.Register(read)
+	arguments := map[string]any{"path": "pkg/agent/pipeline.go", "ignored": "do not project"}
+
+	ts := &turnState{opts: turnInput{turnPromptInput: turnPromptInput{
+		CodingContext: CodingPromptContext{SessionKey: "thread-1"},
+	}}}
+	observation := codingToolStartObservation(ts, registry, read.Name(), arguments)
+	if observation == nil || observation.Exploration == nil ||
+		observation.Exploration.Operation != toolshared.ExplorationRead ||
+		observation.Exploration.Path != "pkg/agent/pipeline.go" ||
+		observation.Command != nil || observation.Plan != nil {
+		t.Fatalf("coding exploration observation = %#v", observation)
+	}
+	if observation := codingToolStartObservation(&turnState{}, registry, read.Name(), arguments); observation != nil {
+		t.Fatalf("chat turn leaked coding observation = %#v", observation)
 	}
 }

@@ -37,7 +37,7 @@ func TestWorkingIndicatorPhasesUseTypedStateWithoutLeakingToolNames(t *testing.T
 			name: "exploring",
 			snapshot: frontend.ThreadSnapshot{
 				Activity: frontend.ActivityRunning,
-				Items:    []frontend.PresentationItem{activeToolItem("read_file", nil)},
+				Items:    []frontend.PresentationItem{activeExplorationItem("read_file")},
 			},
 			want: workingPhaseExploring,
 		},
@@ -274,6 +274,9 @@ func TestWorkingSurfaceAccessibilityFixturesKeepExplicitState(t *testing.T) {
 	}
 	projector.TurnStarted("turn-1", "inspect")
 	projector.ToolStarted("turn-1", "call-1", "read_file", "redacted")
+	projector.ToolExploration("turn-1", "call-1", frontend.ExplorationState{
+		Operation: frontend.ExplorationRead, Path: "README.md",
+	})
 	clock := &workingTestClock{now: time.Date(2026, 9, 7, 12, 0, 9, 0, time.UTC)}
 
 	fixtures := []struct {
@@ -387,4 +390,12 @@ func activeToolItem(name string, command *frontend.CommandState) frontend.Presen
 			Status: frontend.ToolRunning, Command: command,
 		},
 	}
+}
+
+func activeExplorationItem(name string) frontend.PresentationItem {
+	item := activeToolItem(name, nil)
+	item.Tool.Exploration = &frontend.ExplorationState{
+		Operation: frontend.ExplorationRead, Path: "README.md",
+	}
+	return item
 }

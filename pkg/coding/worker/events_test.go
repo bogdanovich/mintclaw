@@ -219,6 +219,42 @@ func TestItemRequiresOneValidNestedPayload(t *testing.T) {
 	}
 }
 
+func TestToolExplorationWireValidationFailsClosed(t *testing.T) {
+	valid := Item{
+		ID: "tool:turn-1:call-1", TurnID: "turn-1", Sequence: 1, Revision: 1,
+		Tool: &Tool{
+			CallID: "call-1", Name: "read_file", Status: ToolSucceeded,
+			Exploration: &Exploration{Operation: ExplorationRead, Path: "README.md"},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid exploration item: %v", err)
+	}
+	for name, mutate := range map[string]func(*Tool){
+		"unknown operation": func(tool *Tool) {
+			tool.Exploration.Operation = "execute"
+		},
+		"oversized path": func(tool *Tool) {
+			tool.Exploration.Path = strings.Repeat("p", MaxExplorationValue+1)
+		},
+		"ambiguous command": func(tool *Tool) {
+			tool.Command = &Command{Status: CommandSucceeded}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			item := valid
+			tool := *valid.Tool
+			exploration := *valid.Tool.Exploration
+			tool.Exploration = &exploration
+			item.Tool = &tool
+			mutate(item.Tool)
+			if err := item.Validate(); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("Validate() error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
 func TestQuestionAndWorkerStopInvariants(t *testing.T) {
 	question := QuestionState{
 		QuestionID: "question-1",

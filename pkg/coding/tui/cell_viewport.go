@@ -157,6 +157,9 @@ func sameSemanticCellInstance(left, right semanticCell) bool {
 	case *staticSemanticCell:
 		right, ok := right.(*staticSemanticCell)
 		return ok && left == right
+	case *activityGroupCell:
+		right, ok := right.(*activityGroupCell)
+		return ok && left.Identity() == right.Identity()
 	default:
 		return false
 	}

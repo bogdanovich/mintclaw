@@ -281,21 +281,11 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 		}
 		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
 	}
-	for _, cell := range m.cells.ordered {
-		if redundantNativePlanTool(cell) {
-			continue
-		}
-		mode := cellRenderCompact
-		selected := false
-		if cell.item.Tool != nil {
-			viewID := toolViewID(*cell.item.Tool)
-			selected = viewID == m.selectedToolID
-			if viewID == m.expandedToolID {
-				mode = cellRenderFull
-			}
-		}
-		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: mode, selected: selected})
+	selectedToolID := ""
+	if m.toolSelectionActive {
+		selectedToolID = m.selectedToolID
 	}
+	specs = append(specs, groupedLiveCellSpecs(m.cells.ordered, selectedToolID, m.expandedToolID)...)
 	for _, id := range []string{"tui:compat:verified-writes", "tui:compat:workspace"} {
 		if cell := m.staticCells[id]; cell != nil {
 			specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})

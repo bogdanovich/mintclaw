@@ -150,6 +150,41 @@ func TestSnapshotFromFrontendProjectsCanonicalItemsWithoutFrontendLifecycle(t *t
 	}
 }
 
+func TestSnapshotFromFrontendProjectsBoundedTypedExploration(t *testing.T) {
+	binding := testBinding(t)
+	source := frontend.ThreadSnapshot{
+		ThreadID: binding.ThreadID,
+		Activity: frontend.ActivityRunning,
+		Items: []frontend.PresentationItem{{
+			ID: "tool:turn-1:call-search", TurnID: "turn-1", Sequence: 1, Revision: 1,
+			Tool: &frontend.ToolState{
+				CallID: "call-search", Name: "search_files", Status: frontend.ToolRunning,
+				Exploration: &frontend.ExplorationState{
+					Operation: frontend.ExplorationSearch,
+					Path:      strings.Repeat("p", MaxExplorationValue+20),
+					Pattern:   "needle\nvalue",
+					Workspace: "build",
+				},
+			},
+		}},
+	}
+
+	snapshot := SnapshotFromFrontend(source, nil)
+	if err := validateSnapshot(binding.ControlIdentity(), snapshot); err != nil {
+		t.Fatalf("validateSnapshot() error = %v", err)
+	}
+	if len(snapshot.Items) != 1 || snapshot.Items[0].Tool == nil ||
+		snapshot.Items[0].Tool.Exploration == nil {
+		t.Fatalf("projected exploration items = %#v", snapshot.Items)
+	}
+	exploration := snapshot.Items[0].Tool.Exploration
+	if exploration.Operation != ExplorationSearch || len(exploration.Path) > MaxExplorationValue ||
+		exploration.Pattern != "needle value" || exploration.Workspace != "build" ||
+		!exploration.Truncated {
+		t.Fatalf("projected exploration = %#v", exploration)
+	}
+}
+
 func TestSnapshotFromFrontendRetainsNewestCountBoundedSuffix(t *testing.T) {
 	binding := testBinding(t)
 	source := frontend.ThreadSnapshot{
