@@ -923,6 +923,10 @@ func TestRunAgentLoopFinalHandledConfirmedSettlementReachesNextProviderAndHistor
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for durable final-handled outbound")
 	}
+	if !outbound.TraceSettlement || len(outbound.TraceScopes) != 1 ||
+		!outbound.TraceScopes[0].Complete() || outbound.TraceScopes[0].Workspace != agent.Workspace {
+		t.Fatalf("final-handled outbound trace settlement = %#v", outbound)
+	}
 	if outbound.DeliveryID == "" {
 		t.Fatalf("outbound delivery ID is empty: %#v", outbound)
 	}
