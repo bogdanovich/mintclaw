@@ -923,6 +923,53 @@ func TestGetSnapshotReturnsHistoryAndSummary(t *testing.T) {
 	}
 }
 
+func TestGetSnapshotReconcilesInterruptedReplacement(t *testing.T) {
+	store := newTestStore(t)
+	ctx := t.Context()
+	const sessionKey = "interrupted-snapshot"
+	for _, content := range []string{"hidden-old", "visible-old"} {
+		if err := store.AddMessage(ctx, sessionKey, "user", content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.TruncateHistory(ctx, sessionKey, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := store.readMeta(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := encodeJSONL([]providers.Message{{Role: "assistant", Content: "replacement"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.HistoryHasPrevious = true
+	meta.HistoryPreviousCount = meta.Count
+	meta.HistoryPreviousSkip = meta.Skip
+	meta.HistoryTargetDigest = digestJSONL(replacement)
+	meta.Count = 1
+	meta.Skip = 0
+	if err = store.beginHistoryMutation(sessionKey, &meta, true); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := store.GetSnapshot(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("GetSnapshot() error = %v", err)
+	}
+	if len(snapshot.History) != 1 || snapshot.History[0].Content != "visible-old" {
+		t.Fatalf("GetSnapshot() history = %#v, want prior visible history", snapshot.History)
+	}
+	reconciled, err := store.readMeta(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.HistoryDirty || reconciled.Count != 2 || reconciled.Skip != 1 {
+		t.Fatalf("reconciled metadata = %#v", reconciled)
+	}
+}
+
 func TestSetSummary_GetSummary(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

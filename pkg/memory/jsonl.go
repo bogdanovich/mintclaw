@@ -946,6 +946,9 @@ func (s *JSONLStore) GetSnapshot(
 	if err != nil {
 		return SessionSnapshot{}, err
 	}
+	if recoveryErr := s.reconcileDirtyHistory(ctx, sessionKey, &meta); recoveryErr != nil {
+		return SessionSnapshot{}, recoveryErr
+	}
 
 	// Pass meta.Skip so readMessages skips those lines without
 	// unmarshaling them — avoids wasted CPU on truncated messages.
