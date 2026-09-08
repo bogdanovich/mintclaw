@@ -8,7 +8,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/bogdanovich/mintclaw/pkg/credential"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 )
 
@@ -131,9 +130,7 @@ func (s SecureString) IsZero() bool {
 
 func NewSecureString(value string) *SecureString {
 	s := &SecureString{}
-	if err := s.fromRaw(value); err != nil {
-		logger.Warn(fmt.Sprintf("NewSecureString.fromRaw error: %s", err))
-	}
+	s.fromRaw(value)
 	return s
 }
 
@@ -164,63 +161,37 @@ func (s *SecureString) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &v); err != nil {
 		return err
 	}
-	return s.fromRaw(v)
+	s.fromRaw(v)
+	return nil
 }
 
 func (s SecureString) MarshalYAML() (any, error) {
-	// Preserve raw value if it is already a reference (enc:// or file://)
-	if strings.HasPrefix(s.raw, credential.EncScheme) || strings.HasPrefix(s.raw, credential.FileScheme) {
+	if s.raw != "" {
 		return s.raw, nil
 	}
-	// If resolved is a reference format (e.g. set via Set), copy back to raw
-	if strings.HasPrefix(s.resolved, credential.EncScheme) || strings.HasPrefix(s.resolved, credential.FileScheme) {
-		s.raw = s.resolved
-		return s.raw, nil
-	}
-	// Try to encrypt the resolved value
-	if passphrase := credential.PassphraseProvider(); passphrase != "" {
-		encrypted, err := credential.Encrypt(passphrase, "", s.resolved)
-		if err != nil {
-			logger.Errorf("Encrypt error: %v", err)
-			return nil, err
-		}
-		s.raw = encrypted
-	} else {
-		s.raw = s.resolved
-	}
-	return s.raw, nil
+	return s.resolved, nil
 }
 
 func (s *SecureString) UnmarshalYAML(value *yaml.Node) error {
-	return s.fromRaw(value.Value)
+	s.fromRaw(value.Value)
+	return nil
 }
 
-func (s *SecureString) fromRaw(v string) error {
+func (s *SecureString) fromRaw(v string) {
 	s.raw = v
-	if strings.HasPrefix(v, credential.FileScheme) {
-		// Relative file references need the owning repository path. The loader
-		// resolves them after environment and channel settings are initialized.
+	if hasCredentialReferencePrefix(v) {
+		// References are resolved only by the owning configuration repository,
+		// which supplies both the base path and passphrase source.
 		s.resolved = ""
-		return nil
-	}
-	if strings.HasPrefix(v, credential.EncScheme) {
-		// Encrypted values are path-independent, so standalone channel decoding
-		// can retain its historical eager validation and decryption behavior.
-		resolved, err := credential.NewResolver("").Resolve(v)
-		if err != nil {
-			logger.Errorf("Resolve error: %v", err)
-			return err
-		}
-		s.resolved = resolved
-		return nil
+		return
 	}
 	s.resolved = v
-	return nil
 }
 
 func (s *SecureString) UnmarshalText(text []byte) error {
 	v := string(text)
-	return s.fromRaw(v)
+	s.fromRaw(v)
+	return nil
 }
 
 type SecureModelList []*ModelConfig

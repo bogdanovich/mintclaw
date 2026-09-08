@@ -1,12 +1,55 @@
 package credential_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/credential"
 )
+
+func TestResolverUsesExplicitPassphraseSource(t *testing.T) {
+	dir := t.TempDir()
+	sshKeyPath := filepath.Join(dir, "mintclaw_ed25519.key")
+	if err := os.WriteFile(sshKeyPath, []byte("fake-ssh-key\n"), 0o600); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	t.Setenv(credential.SSHKeyPathEnvVar, sshKeyPath)
+	t.Setenv(credential.PassphraseEnvVar, "wrong-environment-passphrase")
+
+	const passphrase = "explicit-passphrase"
+	const plaintext = "sk-explicit-secret"
+	encrypted, err := credential.Encrypt(passphrase, "", plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	resolver := credential.NewResolverWithPassphraseSource(
+		dir,
+		func() string { return passphrase },
+	)
+	got, err := resolver.Resolve(encrypted)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got != plaintext {
+		t.Fatalf("Resolve() = %q, want %q", got, plaintext)
+	}
+
+	_, err = credential.NewResolverWithPassphraseSource(
+		dir,
+		func() string { return "wrong-explicit-passphrase" },
+	).Resolve(encrypted)
+	if !errors.Is(err, credential.ErrDecryptionFailed) {
+		t.Fatalf("wrong-source error = %v, want ErrDecryptionFailed", err)
+	}
+
+	_, err = credential.NewResolverWithPassphraseSource(dir, nil).Resolve(encrypted)
+	if !errors.Is(err, credential.ErrPassphraseRequired) {
+		t.Fatalf("nil-source error = %v, want ErrPassphraseRequired", err)
+	}
+}
 
 func TestResolve_PlainKey(t *testing.T) {
 	r := credential.NewResolver(t.TempDir())

@@ -17,6 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/bogdanovich/mintclaw/pkg/credential"
 	"github.com/bogdanovich/mintclaw/pkg/fileutil"
 )
 
@@ -194,10 +195,27 @@ func saveSecurityConfig(securityPath string, sec *Config) error {
 }
 
 func marshalSecurityConfig(sec *Config) ([]byte, error) {
+	return marshalSecurityConfigWithPassphraseSource(sec, credential.EnvironmentPassphraseSource())
+}
+
+func marshalSecurityConfigWithPassphraseSource(
+	sec *Config,
+	source credential.PassphraseSource,
+) ([]byte, error) {
+	var document yaml.Node
+	if err := document.Encode(sec); err != nil {
+		return nil, fmt.Errorf("failed to marshal security config: %w", err)
+	}
+	if passphrase := source.Passphrase(); passphrase != "" {
+		if err := encryptSecurityDocumentValues(&document, passphrase); err != nil {
+			return nil, err
+		}
+	}
+
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
-	err := enc.Encode(sec)
+	err := enc.Encode(&document)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal security config: %w", err)
 	}
@@ -205,6 +223,38 @@ func marshalSecurityConfig(sec *Config) ([]byte, error) {
 		return nil, fmt.Errorf("close security config encoder: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+func encryptSecurityDocumentValues(node *yaml.Node, passphrase string) error {
+	if node == nil {
+		return nil
+	}
+	switch node.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode:
+		for _, child := range node.Content {
+			if err := encryptSecurityDocumentValues(child, passphrase); err != nil {
+				return err
+			}
+		}
+	case yaml.MappingNode:
+		for index := 1; index < len(node.Content); index += 2 {
+			if err := encryptSecurityDocumentValues(node.Content[index], passphrase); err != nil {
+				return err
+			}
+		}
+	case yaml.AliasNode:
+		return encryptSecurityDocumentValues(node.Alias, passphrase)
+	case yaml.ScalarNode:
+		if node.Tag != "!!str" || node.Value == "" || hasCredentialReferencePrefix(node.Value) {
+			return nil
+		}
+		encrypted, err := credential.Encrypt(passphrase, "", node.Value)
+		if err != nil {
+			return fmt.Errorf("encrypt security config value: %w", err)
+		}
+		node.Value = encrypted
+	}
+	return nil
 }
 
 // SensitiveDataCache caches the strings.Replacer for filtering sensitive data.

@@ -32,11 +32,23 @@ func LoadConfigReadOnly(path string) (*Config, error) {
 	return loadConfigReadOnly(path, true)
 }
 
-func loadConfigForUpdate(path string) (*Config, error) {
-	return loadConfigReadOnly(path, false)
+func loadConfigForUpdate(path string, source credential.PassphraseSource) (*Config, error) {
+	return loadConfigReadOnlyWithPassphraseSource(path, false, source)
 }
 
 func loadConfigReadOnly(path string, applyRuntimeOverrides bool) (*Config, error) {
+	return loadConfigReadOnlyWithPassphraseSource(
+		path,
+		applyRuntimeOverrides,
+		credential.EnvironmentPassphraseSource(),
+	)
+}
+
+func loadConfigReadOnlyWithPassphraseSource(
+	path string,
+	applyRuntimeOverrides bool,
+	source credential.PassphraseSource,
+) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -64,7 +76,7 @@ func loadConfigReadOnly(path string, applyRuntimeOverrides bool) (*Config, error
 		return nil, fmt.Errorf("failed to load security config: %w", err)
 	}
 
-	resolver := credential.NewResolver(filepath.Dir(path))
+	resolver := credential.NewResolverWithPassphraseSource(filepath.Dir(path), source)
 	if err = finalizeLoadedConfig(cfg, resolver, applyRuntimeOverrides); err != nil {
 		return nil, err
 	}
@@ -473,6 +485,14 @@ func (c *Config) ValidateRequestUserInputConfig() error {
 // public config. Security entries for removed registries are admitted only
 // while the existing overlay is decoded and are not copied into the result.
 func (c *Config) SecurityCopyForReplacement(path string, current *Config) error {
+	return c.securityCopyForReplacement(path, current, credential.EnvironmentPassphraseSource())
+}
+
+func (c *Config) securityCopyForReplacement(
+	path string,
+	current *Config,
+	source credential.PassphraseSource,
+) error {
 	if c == nil {
 		return errors.New("config is nil")
 	}
@@ -513,7 +533,10 @@ func (c *Config) SecurityCopyForReplacement(path string, current *Config) error 
 			return fmt.Errorf("restore replacement channel security: %w", err)
 		}
 	}
-	if err = c.ResolveCredentialReferences(path); err != nil {
+	if err = resolveConfigSecrets(
+		c,
+		credential.NewResolverWithPassphraseSource(filepath.Dir(path), source),
+	); err != nil {
 		return fmt.Errorf("resolve replacement credentials: %w", err)
 	}
 	return nil
