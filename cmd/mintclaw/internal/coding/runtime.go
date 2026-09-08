@@ -114,6 +114,7 @@ type nativeCodingRuntime struct {
 	sessions        session.SessionStore
 	readTurnHistory func(context.Context, session.SessionStore, string) ([]providers.Message, error)
 	metadata        thread.Metadata
+	workspace       string
 	model           string
 	provider        string
 	repository      *codingworkspace.Repository
@@ -131,11 +132,17 @@ type nativeCodingRuntime struct {
 		string,
 		agent.DirectTurnOptions,
 	) (string, error)
-	historyCursor  memory.HistoryCursor
-	closeOnce      sync.Once
-	operationalMu  sync.Mutex
-	operationalErr error
-	closeErr       error
+	steer                func(string, string, string, providers.Message) error
+	clearCodingSteering  func(string, string) int
+	turnStatus           *codingTurnStatusState
+	turnControlMu        sync.Mutex
+	nextTurnGeneration   uint64
+	activeTurnGeneration uint64
+	historyCursor        memory.HistoryCursor
+	closeOnce            sync.Once
+	operationalMu        sync.Mutex
+	operationalErr       error
+	closeErr             error
 }
 
 // codingCheckpointBus keeps durable coding-thread metadata observation in the
@@ -146,6 +153,7 @@ type codingCheckpointBus struct {
 	sessionKey        string
 	observeCompaction func(agent.ContextCompressLifecyclePayload)
 	observePlan       func(codingplan.State)
+	observeTurnEnd    func(agent.TurnEndStatus)
 }
 
 var _ runtimeevents.Bus = (*codingCheckpointBus)(nil)
@@ -169,6 +177,11 @@ func (b *codingCheckpointBus) observeEvent(event runtimeevents.Event) {
 		return
 	}
 	switch event.Kind {
+	case runtimeevents.KindAgentTurnEnd:
+		payload, ok := event.Payload.(agent.TurnEndPayload)
+		if ok && b.observeTurnEnd != nil {
+			b.observeTurnEnd(payload.Status)
+		}
 	case runtimeevents.KindAgentContextCompressEnd:
 		payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
 		if ok && b.observeCompaction != nil {
@@ -184,6 +197,42 @@ func (b *codingCheckpointBus) observeEvent(event runtimeevents.Event) {
 			b.observePlan(codingplan.Clone(*observation.Plan))
 		}
 	}
+}
+
+// codingTurnStatusState derives the latest root-turn terminal status from the
+// agent's canonical lifecycle event. It does not own or synthesize lifecycle;
+// the controller uses it only to decide whether scoped steering still belongs
+// to a durable suspended continuation.
+type codingTurnStatusState struct {
+	mu     sync.Mutex
+	status agent.TurnEndStatus
+}
+
+func (s *codingTurnStatusState) reset() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.status = ""
+	s.mu.Unlock()
+}
+
+func (s *codingTurnStatusState) observe(status agent.TurnEndStatus) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.status = status
+	s.mu.Unlock()
+}
+
+func (s *codingTurnStatusState) suspended() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.status == agent.TurnEndStatusSuspended
 }
 
 const codingResumeRecoveryTimeout = 30 * time.Second
@@ -239,6 +288,7 @@ func openNativeCodingRuntime(
 	messageBus := bus.NewMessageBus()
 	baseEventBus := runtimeevents.NewBus()
 	var eventBus runtimeevents.Bus = baseEventBus
+	turnStatus := &codingTurnStatusState{}
 	if projector != nil {
 		eventBus, err = agentadapter.WrapBus(
 			baseEventBus,
@@ -252,13 +302,12 @@ func openNativeCodingRuntime(
 		}
 		messageBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, request.Metadata.SessionKey))
 	}
-	if compactionObserver != nil || planObserver != nil {
-		eventBus = &codingCheckpointBus{
-			Bus:               eventBus,
-			sessionKey:        request.Metadata.SessionKey,
-			observeCompaction: compactionObserver,
-			observePlan:       planObserver,
-		}
+	eventBus = &codingCheckpointBus{
+		Bus:               eventBus,
+		sessionKey:        request.Metadata.SessionKey,
+		observeCompaction: compactionObserver,
+		observePlan:       planObserver,
+		observeTurnEnd:    turnStatus.observe,
 	}
 	attachmentMedia, err := newCodingAttachmentMediaStore(request.Store, request.Lease, request.Metadata.ThreadID)
 	if err != nil {
@@ -310,22 +359,26 @@ func openNativeCodingRuntime(
 		}
 	}
 	runtime := &nativeCodingRuntime{
-		loop:            loop,
-		messageBus:      messageBus,
-		eventBus:        baseEventBus,
-		sessions:        loop.GetRegistry().GetDefaultAgent().Sessions,
-		readTurnHistory: readTurnHistory,
-		metadata:        request.Metadata,
-		model:           modelName,
-		provider:        providerName,
-		repository:      repository,
-		reviewer:        reviewer,
-		streaming:       projector != nil,
-		store:           request.Store,
-		lease:           request.Lease,
-		attachmentMedia: attachmentMedia,
-		now:             time.Now,
-		processDirect:   loop.ProcessDirectInputWithOptions,
+		loop:                loop,
+		messageBus:          messageBus,
+		eventBus:            baseEventBus,
+		sessions:            loop.GetRegistry().GetDefaultAgent().Sessions,
+		readTurnHistory:     readTurnHistory,
+		metadata:            request.Metadata,
+		workspace:           layout.ExecutionRoot(),
+		model:               modelName,
+		provider:            providerName,
+		repository:          repository,
+		reviewer:            reviewer,
+		streaming:           projector != nil,
+		store:               request.Store,
+		lease:               request.Lease,
+		attachmentMedia:     attachmentMedia,
+		now:                 time.Now,
+		processDirect:       loop.ProcessDirectInputWithOptions,
+		steer:               loop.SteerActiveCodingTurn,
+		clearCodingSteering: loop.ClearCodingSteering,
+		turnStatus:          turnStatus,
 	}
 	if projector != nil {
 		runtime.historyCursor, err = codingHistoryCursor(
@@ -600,6 +653,60 @@ func codingDirectTurnOptions(streaming bool, onReady func()) agent.DirectTurnOpt
 
 func (r *nativeCodingRuntime) Interrupt(_ context.Context) error {
 	return r.loop.InterruptGracefulSession(r.metadata.SessionKey, "finish the current work and summarize")
+}
+
+func (r *nativeCodingRuntime) Steer(ctx context.Context, input frontend.SteerInput) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	r.turnControlMu.Lock()
+	defer r.turnControlMu.Unlock()
+	if r.activeTurnGeneration == 0 {
+		return controller.ErrNoActiveTurn
+	}
+	steer := r.steer
+	if steer == nil && r.loop != nil {
+		steer = r.loop.SteerActiveCodingTurn
+	}
+	if steer == nil {
+		return fmt.Errorf("coding runtime: steering is unavailable")
+	}
+	err := steer(
+		r.workspace,
+		r.metadata.SessionKey,
+		"main",
+		providers.Message{Role: "user", Content: input.Text},
+	)
+	if errors.Is(err, agent.ErrNoActiveSteerableTurn) {
+		return controller.ErrNoActiveTurn
+	}
+	return err
+}
+
+func (r *nativeCodingRuntime) beginTurnControl() (uint64, error) {
+	r.turnControlMu.Lock()
+	defer r.turnControlMu.Unlock()
+	if r.activeTurnGeneration != 0 {
+		return 0, controller.ErrTurnActive
+	}
+	r.nextTurnGeneration++
+	r.activeTurnGeneration = r.nextTurnGeneration
+	r.turnStatus.reset()
+	return r.activeTurnGeneration, nil
+}
+
+func (r *nativeCodingRuntime) finishTurnControl(generation uint64) {
+	r.turnControlMu.Lock()
+	defer r.turnControlMu.Unlock()
+	if generation == 0 || r.activeTurnGeneration != generation {
+		return
+	}
+	r.activeTurnGeneration = 0
+	if r.clearCodingSteering != nil && !r.turnStatus.suspended() {
+		r.clearCodingSteering(r.workspace, r.metadata.SessionKey)
+	}
 }
 
 func (r *nativeCodingRuntime) HardCancel(_ context.Context) error {
@@ -1069,7 +1176,12 @@ func (r *nativeControllerRuntime) RunTurn(
 	input frontend.TurnInput,
 	onReady func(),
 ) error {
+	generation, err := r.beginTurnControl()
+	if err != nil {
+		return err
+	}
 	outcome, turnErr := r.runTurn(ctx, input, onReady)
+	r.finishTurnControl(generation)
 	return r.persistTurnOutcome(turnDisplayContent(input), outcome, turnErr)
 }
 

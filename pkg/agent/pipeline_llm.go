@@ -29,6 +29,26 @@ type llmStageResult struct {
 	outcome     LLMCallOutcome
 }
 
+// recoverableModelExitError marks an error produced by an exhausted provider
+// call while the turn context remained usable. Validation, projection,
+// persistence, configuration, and delivery errors deliberately stay unmarked.
+type recoverableModelExitError struct {
+	err error
+}
+
+func (err *recoverableModelExitError) Error() string {
+	return err.err.Error()
+}
+
+func (err *recoverableModelExitError) Unwrap() error {
+	return err.err
+}
+
+func isRecoverableModelExitError(err error) bool {
+	var recoverable *recoverableModelExitError
+	return errors.As(err, &recoverable)
+}
+
 func completeLLMStage(outcome LLMCallOutcome) llmStageResult {
 	return llmStageResult{disposition: llmStageComplete, outcome: outcome}
 }
@@ -193,6 +213,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 
 	// Retry loop
 	var err error
+	recoverableProviderExit := false
 	maxRetries, backoffSecs := p.llmRetrySettings()
 	for retry := 0; retry <= maxRetries; retry++ {
 		llm.callMessages = codingMessagesForProviderCall(
@@ -204,6 +225,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			primaryCandidateProvider(exec.model.activeCandidates),
 		)
 		llm.response, err = callLLM(llm.callMessages, llm.providerToolDefs)
+		recoverableProviderExit = false
 		if err == nil {
 			break
 		}
@@ -212,6 +234,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 		}
 		if isConfiguredStreamingTerminalError(err) {
+			recoverableProviderExit = false
 			break
 		}
 
@@ -265,6 +288,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 
 		errMsg := strings.ToLower(err.Error())
 		retryReason, isTransientError := transientLLMRetryReason(err)
+		recoverableProviderExit = isTransientError && turnCtx.Err() == nil
 		isContextError := !isTransientError &&
 			(strings.Contains(errMsg, "context_length_exceeded") ||
 				strings.Contains(errMsg, "context window") ||
@@ -302,6 +326,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 					return completeLLMStage(LLMCallOutcome{Control: turnStepAbort, AbortCause: turnAbortHard}), nil
 				}
 				err = sleepErr
+				recoverableProviderExit = false
 				break
 			}
 			continue
@@ -370,6 +395,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			compactCancel()
 			if snapshotErr := ts.refreshCanonicalRestorePointFromSession(ctx); snapshotErr != nil {
 				err = snapshotErr
+				recoverableProviderExit = false
 				break
 			}
 			persistedTurn := ts.persistedMessagesSnapshot()
@@ -383,6 +409,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 			})
 			if asmErr != nil {
 				err = fmt.Errorf("reassemble context after compaction: %w", asmErr)
+				recoverableProviderExit = false
 				break
 			}
 			if asmResp != nil {
@@ -480,9 +507,13 @@ func (p *Pipeline) invokeLLMWithRetry(
 					"context window still exceeded after retry compaction; refusing to drop active turn messages: %w",
 					err,
 				)
+				recoverableProviderExit = false
 				break
 			}
 			continue
+		}
+		if isContextError || isVisionUnsupportedError(err) || turnCtx.Err() != nil {
+			recoverableProviderExit = false
 		}
 		break
 	}
@@ -503,7 +534,11 @@ func (p *Pipeline) invokeLLMWithRetry(
 				"model":     llm.llmModel,
 				"error":     err.Error(),
 			})
-		return llmStageResult{}, fmt.Errorf("LLM call failed after retries: %w", err)
+		callErr := fmt.Errorf("LLM call failed after retries: %w", err)
+		if recoverableProviderExit {
+			return llmStageResult{}, &recoverableModelExitError{err: callErr}
+		}
+		return llmStageResult{}, callErr
 	}
 	return llmStageResult{}, nil
 }
@@ -667,7 +702,7 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 						"iteration":      iteration,
 						"steering_count": len(steerMsgs),
 					})
-				exec.pendingMessages = append(exec.pendingMessages, steerMsgs...)
+				exec.pendingInputs.AppendSteering(steerMsgs...)
 				return LLMCallOutcome{Control: turnStepContinue}, nil
 			}
 		}

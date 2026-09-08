@@ -149,8 +149,9 @@ jobs:
         run: >-
           go test -count=1 -race -tags goolm,stdjson
           -run
-          '^(TestConcurrentBuildSystemPromptWithCache|TestFinish_ConcurrentCalls|TestDeliverSubTurnResult_RaceWithFinish|TestSteeringQueue_ConcurrentAccess|TestCronService_ConcurrentAccess|TestConcurrent_AddAndRead|TestConcurrent_SummarizeRace)$'
+          '^(TestConcurrentBuildSystemPromptWithCache|TestFinish_ConcurrentCalls|TestDeliverSubTurnResult_RaceWithFinish|TestSteeringQueue_ConcurrentAccess|TestSteerActiveCodingTurnLinearizesWithTerminalSeal|TestCodingSuspensionCommitRejectsLaterSteering|TestRunTurn_DelegatedSuspensionReturnsInMemorySteering|TestNativeCodingRuntimePreservesSteeringForSuspendedContinuation|TestCronService_ConcurrentAccess|TestConcurrent_AddAndRead|TestConcurrent_SummarizeRace)$'
           ./pkg/agent
+          ./cmd/mintclaw/internal/coding
           ./pkg/cron
           ./pkg/memory
 

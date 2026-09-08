@@ -60,8 +60,9 @@ func TestRequiredTerminalRenderDrainsSubturnResultsAfterRendering(t *testing.T) 
 	if !accepted || !outcome.resume || outcome.err != nil {
 		t.Fatalf("terminal outcome = %#v, child accepted = %v", outcome, accepted)
 	}
-	if !messageContentPresent(exec.pendingMessages, "late child result") {
-		t.Fatalf("pending messages omitted late child result: %#v", exec.pendingMessages)
+	pending := exec.pendingInputs.Snapshot()
+	if !messageContentPresent(pending, "late child result") {
+		t.Fatalf("pending messages omitted late child result: %#v", pending)
 	}
 }
 
@@ -104,8 +105,106 @@ func TestTerminalRenderSteeringCancelsConfiguredStream(t *testing.T) {
 	if streamer.canceled != 1 || llm.streamingPublisher != nil {
 		t.Fatalf("stream cancellation = %d, publisher = %#v", streamer.canceled, llm.streamingPublisher)
 	}
-	if !messageContentPresent(exec.pendingMessages, "new direction") {
-		t.Fatalf("pending messages omitted steering: %#v", exec.pendingMessages)
+	pending := exec.pendingInputs.Snapshot()
+	if !messageContentPresent(pending, "new direction") {
+		t.Fatalf("pending messages omitted steering: %#v", pending)
+	}
+}
+
+func TestExactTerminalPreservesRegularTurnBehavior(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	pipeline := newTestPipeline(al)
+	ts := newTurnState(agent, makeTestTurnSpec("regular-exact-terminal"), turnEventScope{})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if err := al.steering.pushScopeWithSender(
+		ts.runtimeSessionScope(),
+		providers.Message{Role: "user", Content: "next regular turn"},
+		"",
+	); err != nil {
+		t.Fatalf("push steering: %v", err)
+	}
+
+	outcome := pipeline.completeTerminal(
+		t.Context(),
+		ts,
+		exec,
+		newLLMIterationState(1),
+		TurnEndStatusCompleted,
+		terminalRequest{content: terminalContent{content: "safety stop"}, renderMode: terminalRenderExact},
+	)
+	if outcome.resume || outcome.err != nil || outcome.result.finalContent != "safety stop" {
+		t.Fatalf("regular exact terminal outcome = %#v", outcome)
+	}
+	if depth := al.steering.lenScope(ts.runtimeSessionScope()); depth != 1 {
+		t.Fatalf("regular steering queue depth = %d, want 1", depth)
+	}
+}
+
+func TestExactTerminalContinuesForAcceptedCodingSteering(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	pipeline := newTestPipeline(al)
+	spec := makeTestTurnSpec("coding-exact-terminal")
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	if err := al.steering.pushScopeWithSender(
+		ts.runtimeSessionScope(),
+		providers.Message{Role: "user", Content: "recover with this evidence"},
+		"",
+	); err != nil {
+		t.Fatalf("push steering: %v", err)
+	}
+
+	outcome := pipeline.completeTerminal(
+		t.Context(),
+		ts,
+		exec,
+		newLLMIterationState(1),
+		TurnEndStatusCompleted,
+		terminalRequest{content: terminalContent{content: "safety stop"}, renderMode: terminalRenderExact},
+	)
+	if !outcome.resume || outcome.err != nil {
+		t.Fatalf("coding exact terminal outcome = %#v", outcome)
+	}
+	if pending := exec.pendingInputs.Snapshot(); !messageContentPresent(pending, "recover with this evidence") {
+		t.Fatalf("coding exact terminal pending input = %#v", pending)
+	}
+}
+
+func TestExactTerminalDoesNotTreatCodingSubTurnResultAsSteering(t *testing.T) {
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	pipeline := newTestPipeline(al)
+	spec := makeTestTurnSpec("coding-exact-terminal-subturn")
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	exec.pendingInputs.AppendSubTurn(subTurnResultPromptMessage("child-only result"))
+
+	outcome := pipeline.completeTerminal(
+		t.Context(),
+		ts,
+		exec,
+		newLLMIterationState(1),
+		TurnEndStatusCompleted,
+		terminalRequest{content: terminalContent{content: "safety stop"}, renderMode: terminalRenderExact},
+	)
+	if outcome.resume || outcome.err != nil || outcome.result.finalContent != "safety stop" {
+		t.Fatalf("coding sub-turn-only exact terminal outcome = %#v", outcome)
+	}
+	if !messageContentPresent(exec.pendingInputs.Snapshot(), "child-only result") {
+		t.Fatalf("exact terminal consumed pending sub-turn result: %#v", exec.pendingInputs.Snapshot())
 	}
 }
 

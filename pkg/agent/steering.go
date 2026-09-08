@@ -16,6 +16,8 @@ import (
 	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
+var ErrNoActiveSteerableTurn = errors.New("no active steerable turn")
+
 // SteeringMode controls how queued steering messages are dequeued.
 type SteeringMode string
 
@@ -153,6 +155,31 @@ func (sq *steeringQueue) dequeueSteeringMessagesForTurn(
 		return nil
 	}
 	return sq.dequeueScopeForTurn(scope, senderID)
+}
+
+// drainSteeringMessagesForTurn removes every entry owned by the active turn,
+// independent of the normal one-at-a-time presentation policy. Fatal turn
+// settlement must account for all messages whose admission was acknowledged.
+func (sq *steeringQueue) drainSteeringMessagesForTurn(
+	scope runtimeSessionScope,
+	senderID string,
+) []providers.Message {
+	if sq == nil {
+		return nil
+	}
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+
+	senderID = strings.TrimSpace(senderID)
+	if senderID != "" {
+		return entryMessages(sq.dequeueForTurnLocked(scope, senderID))
+	}
+	queue := sq.queues[scope]
+	if len(queue) == 0 {
+		return nil
+	}
+	delete(sq.queues, scope)
+	return entryMessages(queue)
 }
 
 func (sq *steeringQueue) dequeueScopeForContinuation(scope runtimeSessionScope) []providers.Message {
@@ -356,6 +383,32 @@ func (al *AgentLoop) Steer(
 	return al.enqueueSteeringMessageWithSender(scope, agentID, "", msg)
 }
 
+// SteerActiveCodingTurn atomically admits guidance only while the scoped
+// coding turn still has a terminal queue poll ahead of it. A successful
+// return therefore cannot race terminal settlement and leak or disappear.
+func (al *AgentLoop) SteerActiveCodingTurn(
+	workspace, sessionKey, agentID string,
+	msg providers.Message,
+) error {
+	if !al.usesCodingProfile() || al.turns == nil {
+		return ErrNoActiveSteerableTurn
+	}
+	scope := newRuntimeSessionScope(workspace, sessionKey)
+	if !scope.complete() {
+		return fmt.Errorf("steering workspace and session are required")
+	}
+	ts := al.turns.activeTurnState(scope)
+	if ts == nil || ts.opts.mode != turnModeCoding {
+		return ErrNoActiveSteerableTurn
+	}
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
+	if !ts.steeringOpen || al.turns.activeTurnState(scope) != ts {
+		return ErrNoActiveSteerableTurn
+	}
+	return al.enqueueSteeringMessageWithSender(scope, agentID, "", msg)
+}
+
 func (al *AgentLoop) enqueueSteeringMessageWithSender(
 	scope runtimeSessionScope,
 	agentID, senderID string,
@@ -448,6 +501,20 @@ func (al *AgentLoop) SetSteeringMode(mode SteeringMode) {
 		return
 	}
 	al.steering.setMode(mode)
+}
+
+// ClearCodingSteering discards steering that a direct coding runtime did not
+// consume before its turn ended. Coding profiles have no inbound channel
+// spool, so these messages must never carry into a later root turn.
+func (al *AgentLoop) ClearCodingSteering(workspace, sessionKey string) int {
+	if !al.usesCodingProfile() || al.steering == nil {
+		return 0
+	}
+	scope := newRuntimeSessionScope(workspace, sessionKey)
+	if !scope.complete() {
+		return 0
+	}
+	return al.steering.clearScope(scope)
 }
 
 func (al *AgentLoop) dequeueSteeringMessagesForScope(scope runtimeSessionScope) []providers.Message {

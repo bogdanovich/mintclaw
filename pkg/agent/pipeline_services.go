@@ -124,6 +124,101 @@ func (p *Pipeline) dequeueSteeringMessagesForTurn(ts *turnState) []providers.Mes
 	)
 }
 
+func (p *Pipeline) drainSteeringMessagesForTurn(ts *turnState) []providers.Message {
+	if p == nil || p.Context.Steering == nil || ts == nil {
+		return nil
+	}
+	return p.Context.Steering.drainSteeringMessagesForTurn(
+		ts.runtimeSessionScope(),
+		ts.opts.Dispatch.SenderID(),
+	)
+}
+
+// dequeueOrSealSteeringForTerminal performs the final queue observation under
+// the same turn-owned gate used by active coding steering admission. Once it
+// returns no messages, a concurrent coding steer must fail instead of being
+// acknowledged after the turn has lost its last opportunity to consume it.
+func (p *Pipeline) dequeueOrSealSteeringForTerminal(ts *turnState) []providers.Message {
+	return p.dequeueOrSealSteeringAtExit(ts, false)
+}
+
+// dequeueOrSealSteeringAtExit linearizes a turn exit with both steering that
+// is still queued and steering already transferred into the next iteration.
+func (p *Pipeline) dequeueOrSealSteeringAtExit(
+	ts *turnState,
+	hasAdmittedSteering bool,
+) []providers.Message {
+	if ts == nil {
+		return nil
+	}
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
+	messages := p.dequeueSteeringMessagesForTurn(ts)
+	if len(messages) == 0 && !hasAdmittedSteering {
+		ts.steeringOpen = false
+	}
+	return messages
+}
+
+// openSteeringAdmission exposes a coding turn only after setup has completed
+// and only if a hard cancellation did not win the same admission boundary.
+func (p *Pipeline) openSteeringAdmission(ts *turnState) bool {
+	if ts == nil {
+		return false
+	}
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
+	if ts.hardAbortRequested() {
+		return false
+	}
+	ts.steeringOpen = true
+	return true
+}
+
+// sealSteeringAdmission gives explicit cancellation and hard-abort exits
+// priority over queued guidance while preventing any later acknowledgement.
+func (p *Pipeline) sealSteeringAdmission(ts *turnState) {
+	if ts == nil {
+		return
+	}
+	ts.steeringAdmissionMu.Lock()
+	ts.steeringOpen = false
+	ts.steeringAdmissionMu.Unlock()
+}
+
+// drainAndSealSteeringAdmission is the fatal pending-input boundary. It moves
+// every steer that was acknowledged before the gate closed into turn-owned
+// settlement state and prevents any later acknowledgement.
+func (p *Pipeline) drainAndSealSteeringAdmission(ts *turnState) []providers.Message {
+	if ts == nil {
+		return nil
+	}
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
+	messages := p.drainSteeringMessagesForTurn(ts)
+	ts.steeringOpen = false
+	return messages
+}
+
+// dequeueOrSealSteeringForSuspension gives already-admitted guidance priority
+// over creating durable human-interaction ownership. When no guidance is
+// queued, admission closes before the suspension manager can commit, so a
+// later steer cannot be acknowledged against a suspended turn.
+func (p *Pipeline) dequeueOrSealSteeringForSuspension(ts *turnState) ([]providers.Message, bool) {
+	if ts == nil || ts.opts.mode != turnModeCoding {
+		return nil, false
+	}
+	ts.steeringAdmissionMu.Lock()
+	defer ts.steeringAdmissionMu.Unlock()
+
+	messages := p.dequeueSteeringMessagesForTurn(ts)
+	if len(messages) > 0 {
+		return messages, false
+	}
+	ts.steeringOpen = false
+	return nil, true
+}
+
 func (p *Pipeline) returnSteeringMessagesForTurn(ts *turnState, messages []providers.Message) {
 	if p == nil || p.Context.Steering == nil || ts == nil || len(messages) == 0 {
 		return

@@ -635,6 +635,34 @@ type fakeToolSuspensionManager struct {
 	err          error
 }
 
+type gatedToolSuspensionManager struct {
+	started     chan struct{}
+	release     chan struct{}
+	requests    []ToolSuspensionRequest
+	disposition ToolSuspensionDisposition
+}
+
+func (manager *gatedToolSuspensionManager) SuspendToolCall(
+	ctx context.Context,
+	request ToolSuspensionRequest,
+) (ToolSuspensionDisposition, error) {
+	close(manager.started)
+	select {
+	case <-manager.release:
+		manager.requests = append(manager.requests, request)
+		return manager.disposition, nil
+	case <-ctx.Done():
+		return ToolSuspensionDisposition{}, ctx.Err()
+	}
+}
+
+func (*gatedToolSuspensionManager) ConsumeApproval(
+	context.Context,
+	ToolApprovalConsumptionRequest,
+) error {
+	return nil
+}
+
 func (m *fakeToolSuspensionManager) SuspendToolCall(
 	_ context.Context,
 	request ToolSuspensionRequest,
@@ -2295,11 +2323,94 @@ func TestPipelineSteeringWinsBeforeSuspensionCommit(t *testing.T) {
 	); control.Control != turnStepContinue {
 		t.Fatalf("control = %v, want continue", control.Control)
 	}
-	if len(manager.requests) != 0 || len(exec.pendingMessages) != 1 {
-		t.Fatalf("requests = %d, pending = %#v", len(manager.requests), exec.pendingMessages)
+	if len(manager.requests) != 0 || exec.pendingInputs.Len() != 1 {
+		t.Fatalf("requests = %d, pending = %#v", len(manager.requests), exec.pendingInputs.Snapshot())
 	}
 	if len(exec.messages) != 1 || exec.messages[0].ToolCallID != "call-question" {
 		t.Fatalf("messages = %#v, want paired deferred result", exec.messages)
+	}
+}
+
+func TestCodingSuspensionCommitRejectsLaterSteering(t *testing.T) {
+	suspensionTool := &fixedToolResultTool{
+		name: "blocking_question",
+		result: &toolshared.ToolResult{
+			Control: toolshared.ToolControl{Suspension: &interactions.SuspensionRequest{
+				Kind: interactions.KindQuestion,
+				Questions: []interactions.Question{{
+					ID: "mode", Question: "Which mode?",
+				}},
+				Timeout: time.Minute,
+			}},
+			Delivery: toolshared.ToolDelivery{Intent: toolshared.DeliverySilent},
+		},
+	}
+	al, agent, cleanup := newTurnCoordTestLoop(t, &sequenceProvider{})
+	defer cleanup()
+	al.codingProfile = &CodingRuntimeProfile{}
+	agent.Tools = tools.NewToolRegistry()
+	agent.Tools.Register(suspensionTool)
+	sessionKey := "coding:suspension-steering-race"
+	spec := makeTestTurnSpec(sessionKey)
+	spec.mode = turnModeCoding
+	ts := newTurnState(agent, spec, turnEventScope{})
+	al.turns.registerActiveTurn(ts)
+	defer al.turns.clearActiveTurn(ts)
+
+	manager := &gatedToolSuspensionManager{
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+		disposition: ToolSuspensionDisposition{InteractionID: "interaction-committed", Durable: true},
+	}
+	pipeline := newTestPipeline(al)
+	pipeline.trustAllTools = false
+	pipeline.durableToolLifecycle = false
+	pipeline.Interaction.Suspension = manager
+	if !pipeline.openSteeringAdmission(ts) {
+		t.Fatal("failed to open steering admission")
+	}
+	exec := newTurnExecution(agent, ts.opts, nil, "", nil)
+	llm := newLLMIterationState(1)
+	llm.normalizedToolCalls = []providers.ToolCall{{ID: "call-question", Name: suspensionTool.Name()}}
+	llm.assistantToolCallsPersisted = true
+	outcome := make(chan ToolLoopOutcome, 1)
+	go func() {
+		outcome <- pipeline.ExecuteTools(t.Context(), t.Context(), ts, exec, llm)
+	}()
+
+	select {
+	case <-manager.started:
+	case got := <-outcome:
+		t.Fatalf("ExecuteTools() returned before suspension commit: %#v; messages=%#v", got, exec.messages)
+	case <-time.After(time.Second):
+		t.Fatal("suspension manager did not start")
+	}
+	if steerErr := al.SteerActiveCodingTurn(
+		agent.Workspace,
+		sessionKey,
+		agent.ID,
+		providers.Message{Role: "user", Content: "arrived after suspension admission"},
+	); !errors.Is(steerErr, ErrNoActiveSteerableTurn) {
+		t.Fatalf("SteerActiveCodingTurn() error = %v, want %v", steerErr, ErrNoActiveSteerableTurn)
+	}
+	close(manager.release)
+
+	select {
+	case got := <-outcome:
+		if got.Control != turnStepSuspend || got.SuspendedInteractionID != "interaction-committed" {
+			t.Fatalf("ExecuteTools() outcome = %#v, want committed suspension", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ExecuteTools() did not finish")
+	}
+	if len(manager.requests) != 1 || exec.pendingInputs.Len() != 0 {
+		t.Fatalf("suspension requests = %d, pending inputs = %#v", len(manager.requests), exec.pendingInputs.Snapshot())
+	}
+	if accepted := ts.acceptedSteeringSnapshot(); len(accepted) != 0 {
+		t.Fatalf("accepted steering = %#v, want none", accepted)
+	}
+	if depth := al.steering.lenScope(ts.runtimeSessionScope()); depth != 0 {
+		t.Fatalf("steering queue depth = %d, want 0", depth)
 	}
 }
 
@@ -2385,6 +2496,13 @@ func (s *delayedSteering) dequeueSteeringMessagesForTurn(runtimeSessionScope, st
 	return messages
 }
 
+func (s *delayedSteering) drainSteeringMessagesForTurn(
+	scope runtimeSessionScope,
+	senderID string,
+) []providers.Message {
+	return s.dequeueSteeringMessagesForTurn(scope, senderID)
+}
+
 func (s *delayedSteering) returnSteeringMessagesForTurn(
 	_ runtimeSessionScope,
 	messages []providers.Message,
@@ -2396,6 +2514,13 @@ func (s *oneShotLoopGuardSteering) dequeueSteeringMessagesForTurn(runtimeSession
 	messages := s.messages
 	s.messages = nil
 	return messages
+}
+
+func (s *oneShotLoopGuardSteering) drainSteeringMessagesForTurn(
+	scope runtimeSessionScope,
+	senderID string,
+) []providers.Message {
+	return s.dequeueSteeringMessagesForTurn(scope, senderID)
 }
 
 func (s *oneShotLoopGuardSteering) returnSteeringMessagesForTurn(
