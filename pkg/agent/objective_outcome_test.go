@@ -49,6 +49,11 @@ func TestBrowserObjectiveOutcomeInstructionDrivesClickEffectFromWorkflow(t *test
 		},
 	))
 	for _, required := range []string{
+		"browser session are result objectives, never external_action objectives",
+		"every field value in every record must be a non-empty JSON string",
+		"Records are only for non-exact tabular or list output",
+		"for every exact JSON value, including objects and arrays",
+		"boolean, number, or null values",
 		"declare effect from this checklist and the requested workflow",
 		"read, navigation, or local_edit for non-committing UI steps",
 		"external_commit only immediately before an important external state change",

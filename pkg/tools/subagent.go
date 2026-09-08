@@ -163,19 +163,25 @@ func (sm *SubagentManager) spawnWithModel(
 func objectiveItemsParameter() map[string]any {
 	return map[string]any{
 		"type":        "array",
-		"description": "Declared verification contract for the child. Required for targets configured to use it. Include every outcome the caller needs verified; use external_action for state changes and result for read-only findings. If an external action should occur only after approval, include the pending state change as external_action and instruct the child to invoke the approval-bound tool so the runtime can suspend before commit; never model the approval boundary as a result or ask the child to stop before the tool call. The runtime does not infer omitted intent from task prose.",
+		"description": "Declared verification contract for the child. Required for targets configured to use it. Include every outcome the caller needs verified. Use external_action only for a durable requested external state change such as publish, send, purchase, delete, save, or submit. Opening, navigating, observing, reading, and closing a browser session are result objectives, never external_action objectives. If an external action should occur only after approval, include the pending state change as external_action and instruct the child to invoke the approval-bound tool so the runtime can suspend before commit; never model the approval boundary as a result or ask the child to stop before the tool call. The runtime does not infer omitted intent from task prose.",
 		"items": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"item": map[string]any{"type": "string"},
-				"kind": map[string]any{"type": "string", "enum": []string{"result", "external_action"}},
+				"kind": map[string]any{
+					"type":        "string",
+					"enum":        []string{"result", "external_action"},
+					"description": "Use result for read-only findings and browser lifecycle work. Use external_action only for a durable requested external state change.",
+				},
 				"acceptance": map[string]any{
 					"type":                 "object",
-					"description":          "Optional machine-checkable shape for a result objective. Use records with required_fields for requested lists or tables, text for prose, and artifact for stable output references.",
+					"description":          "Optional machine-checkable shape for a result objective. Use records only for non-exact collections or tables whose every field value is a non-empty string. Use text for prose, every exact JSON value (including objects and arrays), or results containing booleans, numbers, or null values. Use artifact for stable output references.",
 					"additionalProperties": false,
 					"properties": map[string]any{
 						"output_kind": map[string]any{
-							"type": "string", "enum": []string{"text", "records", "artifact"},
+							"type":        "string",
+							"enum":        []string{"text", "records", "artifact"},
+							"description": "records is string-only non-exact tabular data; choose text for every exact JSON value, including objects and arrays, or typed scalar fields.",
 						},
 						"required_fields": map[string]any{
 							"type": "array", "items": map[string]any{"type": "string"},

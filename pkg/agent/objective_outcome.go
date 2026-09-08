@@ -163,12 +163,16 @@ func objectiveOutcomeInstruction(task string, checklist []runtimeObjectiveItem, 
 		". Put every checklist ID exactly once in completed_items or missing_items; never add or rename IDs. " +
 		"Every completed result item must include output containing the actual standalone result, never a claim that " +
 		"the result appears elsewhere in tool output or prior context. Use kind=text with non-empty text for prose, " +
-		"kind=records with the complete records array for requested lists or tables, or kind=artifact with stable " +
-		"artifact_refs. Satisfy each declared acceptance output_kind, required_fields, and min_items exactly. Set " +
+		"kind=records with the complete records array only for requested lists or tables; every field value in every " +
+		"record must be a non-empty JSON string. Records are only for non-exact tabular or list output. Use kind=text " +
+		"for every exact JSON value, including objects and arrays, or any result containing " +
+		"boolean, number, or null values. Use kind=artifact with stable artifact_refs. Satisfy each declared acceptance " +
+		"output_kind, required_fields, and min_items exactly. Set " +
 		"truncated=true if any requested output is missing due to size; truncated output is not accepted as complete. " +
 		"For result items, omit receipt_ids or use an empty array. "
 	if browser {
-		instruction += "For browser_act click calls, declare effect from this checklist and the requested workflow: use read, " +
+		instruction += "Opening, navigating, observing, reading, and closing a browser session are result objectives, never " +
+			"external_action objectives. For browser_act click calls, declare effect from this checklist and the requested workflow: use read, " +
 			"navigation, or local_edit for non-committing UI steps; use external_commit only immediately before an " +
 			"important external state change; use unknown only when the workflow impact is genuinely unclear. " +
 			"Do not infer click effect from the element role or HTTP method. " +
