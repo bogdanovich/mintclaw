@@ -593,19 +593,38 @@ func normalizeObjectiveOutput(
 }
 
 func terminalObjectiveResult(summary string, outcome *taskresult.Outcome) string {
-	parts := make([]string, 0, len(outcome.CompletedItems)+1)
-	if summary = strings.TrimSpace(summary); summary != "" {
-		parts = append(parts, summary)
-	}
+	outputs := make([]string, 0, len(outcome.CompletedItems))
+	resultOnly := len(outcome.CompletedItems) > 0
 	for _, item := range outcome.CompletedItems {
-		if item.Kind != "result" || item.Output == nil {
+		if item.Kind != "result" {
+			resultOnly = false
+			continue
+		}
+		if item.Output == nil {
 			continue
 		}
 		rendered := renderObjectiveOutput(item.Item, item.Output)
-		if rendered == "" || strings.Contains(summary, rendered) {
+		if rendered == "" {
 			continue
 		}
-		parts = append(parts, rendered)
+		outputs = append(outputs, rendered)
+	}
+	// A result objective's standalone output is the validated payload promised
+	// to the caller. For result-only tasks, projecting the producer's separate
+	// summary as well can corrupt exact output formats or duplicate facts. Mixed
+	// action/result tasks retain the summary because it reports verified effects
+	// that result outputs do not represent.
+	if resultOnly && len(outputs) > 0 {
+		return strings.Join(outputs, "\n\n")
+	}
+	parts := make([]string, 0, len(outputs)+1)
+	if summary = strings.TrimSpace(summary); summary != "" {
+		parts = append(parts, summary)
+	}
+	for _, rendered := range outputs {
+		if !strings.Contains(summary, rendered) {
+			parts = append(parts, rendered)
+		}
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -619,6 +638,9 @@ func renderObjectiveOutput(label string, output *taskresult.ObjectiveOutput) str
 		return output.Text
 	case "records":
 		lines := []string{strings.TrimSpace(label) + ":"}
+		if len(output.Records) == 0 {
+			return strings.Join(append(lines, "- (no records)"), "\n")
+		}
 		for _, record := range output.Records {
 			keys := make([]string, 0, len(record))
 			for key := range record {
