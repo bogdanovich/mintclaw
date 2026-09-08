@@ -3,6 +3,7 @@ package integrationtools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,7 +43,11 @@ func (m *mockInstallRegistry) DownloadAndInstall(
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(validSkillMarkdown), 0o600); err != nil {
+	markdown := fmt.Sprintf(
+		"---\nname: %s\ndescription: Review pull requests\n---\n# PR Review\n",
+		filepath.Base(targetDir),
+	)
+	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(markdown), 0o600); err != nil {
 		return nil, err
 	}
 	return &skills.InstallResult{Version: "test"}, nil
@@ -281,10 +286,10 @@ func TestInstallSkillToolAllowsGitHubURLSlug(t *testing.T) {
 	assert.False(t, result.IsError)
 	assert.Contains(t, result.ForLLM, `Successfully installed skill`)
 
-	data, err := os.ReadFile(filepath.Join(workspace, "skills", "pr-review", ".skill-origin.json"))
+	data, err := os.ReadFile(filepath.Join(workspace, "skills", "pr-review", skills.OriginMetadataFilename))
 	require.NoError(t, err)
 
-	var meta originMeta
+	var meta skills.OriginMetadata
 	require.NoError(t, json.Unmarshal(data, &meta))
 	assert.Equal(t, "third_party", meta.OriginKind)
 	assert.Equal(t, "github", meta.Registry)
@@ -312,10 +317,10 @@ func TestInstallSkillToolPreservesGitHubSourceURLWithEnterpriseRegistry(t *testi
 
 	assert.False(t, result.IsError)
 
-	data, err := os.ReadFile(filepath.Join(workspace, "skills", "pr-review", ".skill-origin.json"))
+	data, err := os.ReadFile(filepath.Join(workspace, "skills", "pr-review", skills.OriginMetadataFilename))
 	require.NoError(t, err)
 
-	var meta originMeta
+	var meta skills.OriginMetadata
 	require.NoError(t, json.Unmarshal(data, &meta))
 	assert.Equal(t, "synthetic-lab/octofriend/.agents/skills/pr-review", meta.Slug)
 	assert.Equal(t, slug, meta.RegistryURL)
@@ -420,4 +425,54 @@ func TestInstallSkillToolForceReinstallRestoresPreviousSkillAfterMetadataFailure
 	gotContent, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
 	require.NoError(t, err)
 	assert.Equal(t, oldContent, gotContent)
+}
+
+func TestInstallSkillToolRejectsSymlinkWorkspaceSkillsRoot(t *testing.T) {
+	workspace := t.TempDir()
+	outsideRoot := t.TempDir()
+	if err := os.Symlink(outsideRoot, filepath.Join(workspace, "skills")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(&mockInstallRegistry{})
+	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+		"slug":     "outside-skill",
+		"registry": "clawhub",
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "invalid workspace skills directory")
+	_, err := os.Stat(filepath.Join(outsideRoot, "outside-skill"))
+	assert.True(t, os.IsNotExist(err), "installer wrote through workspace skills symlink: %v", err)
+}
+
+func TestInstallSkillToolForceReinstallRestoresExactTreeAfterValidationFailure(t *testing.T) {
+	workspace := t.TempDir()
+	skillDir := filepath.Join(workspace, "skills", "broken-skill")
+	require.NoError(t, os.MkdirAll(filepath.Join(skillDir, "references"), 0o755))
+	oldContent := []byte("---\nname: broken-skill\ndescription: Existing skill\n---\n# Existing\n")
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"), oldContent, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "references", "guide.md"), []byte("old guide"), 0o640))
+	before, err := skills.NewWorkspaceSkillInventory(workspace).Inspect("broken-skill")
+	require.NoError(t, err)
+	require.True(t, before.Valid)
+
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(&mockInvalidInstallRegistry{})
+	result := NewInstallSkillTool(registryMgr, workspace).Execute(context.Background(), map[string]any{
+		"slug":     "broken-skill",
+		"registry": "clawhub",
+		"force":    true,
+	})
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.ForLLM, "not a valid skill")
+	after, err := skills.NewWorkspaceSkillInventory(workspace).Inspect("broken-skill")
+	require.NoError(t, err)
+	require.True(t, after.Valid)
+	assert.Equal(t, before.Revision, after.Revision)
+	backups, err := filepath.Glob(filepath.Join(workspace, "skills", ".broken-skill.mintclaw-backup-*"))
+	require.NoError(t, err)
+	assert.Empty(t, backups)
 }
