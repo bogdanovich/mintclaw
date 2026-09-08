@@ -3,8 +3,6 @@ package commands
 import (
 	"context"
 	"time"
-
-	"github.com/bogdanovich/mintclaw/pkg/config"
 )
 
 type MCPServerInfo struct {
@@ -92,32 +90,32 @@ type GoalInfo struct {
 // per-request by the agent loop so that per-request state (like session scope)
 // can coexist with long-lived callbacks (like GetModelInfo).
 type Runtime struct {
-	Config             *config.Config
-	GetModelInfo       func() (name, provider string)
-	GetModelSelection  func() ModelSelectionInfo
-	ListModels         func() []ConfiguredModelInfo
-	AskSideQuestion    func(ctx context.Context, question string) (string, error)
-	ListAgentIDs       func() []string
-	ListDefinitions    func() []Definition
-	ListSkillNames     func() []string
-	ListMCPServers     func(ctx context.Context) []MCPServerInfo
-	ListMCPTools       func(ctx context.Context, serverName string) ([]MCPToolInfo, error)
-	GetEnabledChannels func() []string
-	GetCurrentTurn     func() *TurnInfo
-	GetContextStats    func() *ContextStats
-	SetSessionModel    func(value string) error
-	ClearSessionModel  func() error
-	SwitchChannel      func(value string) error
-	ResetSession       func(clearOverride bool) (sessionKey string, err error)
-	StartFreshSession  func() (sessionKey string, err error)
-	SetToolFeedback    func(mode string) (enabled bool, source string, err error)
-	GetToolFeedback    func() (enabled bool, source string)
-	ClearHistory       func() error
-	ReloadConfig       func() error
-	StopActiveTurn     func() (StopResult, error)
-	GetGoal            func() (GoalInfo, bool, error)
-	CreateGoal         func(objective string) (GoalInfo, error)
-	EditGoal           func(objective string) (GoalInfo, error)
-	SetGoalStatus      func(status, note string) (GoalInfo, error)
-	ClearGoal          func() error
+	MCPIntegrationEnabled bool
+	GetModelInfo          func() (name, provider string)
+	GetModelSelection     func() ModelSelectionInfo
+	ListModels            func() []ConfiguredModelInfo
+	AskSideQuestion       func(ctx context.Context, question string) (string, error)
+	ListAgentIDs          func() []string
+	ListDefinitions       func() []Definition
+	ListSkillNames        func() []string
+	ListMCPServers        func(ctx context.Context) []MCPServerInfo
+	ListMCPTools          func(ctx context.Context, serverName string) ([]MCPToolInfo, error)
+	GetEnabledChannels    func() []string
+	GetCurrentTurn        func() *TurnInfo
+	GetContextStats       func() *ContextStats
+	SetSessionModel       func(value string) error
+	ClearSessionModel     func() error
+	SwitchChannel         func(value string) error
+	ResetSession          func(clearOverride bool) (sessionKey string, err error)
+	StartFreshSession     func() (sessionKey string, err error)
+	SetToolFeedback       func(mode string) (enabled bool, source string, err error)
+	GetToolFeedback       func() (enabled bool, source string)
+	ClearHistory          func() error
+	ReloadConfig          func() error
+	StopActiveTurn        func() (StopResult, error)
+	GetGoal               func() (GoalInfo, bool, error)
+	CreateGoal            func(objective string) (GoalInfo, error)
+	EditGoal              func(objective string) (GoalInfo, error)
+	SetGoalStatus         func(status, note string) (GoalInfo, error)
+	ClearGoal             func() error
 }

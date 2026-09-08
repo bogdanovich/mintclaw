@@ -325,6 +325,9 @@ proportion to persistence, routing, delivery, or concurrency risk.
 - M4 — merged in #1130 (`a96321a6`): moved MintClaw client session provenance
   into the typed inbound contract and retained the old raw key only in bounded
   durable-spool normalization for supported legacy records.
+- M5 — merged in #1132 (`7a243ea9`): made credential passphrase sources
+  repository- and resolver-owned, moved encryption to the security-document
+  boundary, and removed mutable package-global credential state.
 
 ## Separate Compatibility Closeouts
 
