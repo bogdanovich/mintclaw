@@ -1,6 +1,7 @@
 # Post-H8 Code Health Roadmap
 
-Status: admitted for implementation.
+Status: implementation complete. F0-F4 delivered the admitted changes. F5 was
+intentionally skipped because its evidence gate was not met.
 
 Baseline: `origin/main` at `16bd8536` on 2026-09-06. The H0-H8 program is
 complete; this roadmap covers the smaller correctness and maintainability
@@ -45,12 +46,12 @@ packages.
 
 ### Maintainability risk: coding controller primary-operation state
 
-`pkg/coding/controller/controller.go` coordinates turn, compaction, review,
-cancel, evidence, and close paths with several related booleans and repeated
-admission checks. The reviewer and thread packages already have useful
-boundaries; the admitted change is only to make the controller's legal primary
-operation transitions explicit. A new generic runtime supervisor is not
-justified.
+Before F4, `pkg/coding/controller/controller.go` coordinated turn, compaction,
+review, cancel, evidence, and close paths with several related booleans and
+repeated admission checks. `primaryOperation` now owns that mutually exclusive
+state and its start, cancel, commit, and finish transitions. Evidence queueing
+remains separate because it is genuinely concurrent. The reviewer and thread
+package boundaries remain unchanged; no generic runtime supervisor was added.
 
 ### Conditional layout issue: human interaction ingress
 
@@ -176,6 +177,11 @@ Completion gate:
 
 ### F4: make coding primary-operation state explicit
 
+Status: implemented. One concrete actor-owned state now represents idle, turn,
+compaction, or review, exposes the admission conflict matrix in one place, and
+owns cancellation and settlement invariants. Existing controller lifecycle
+tests and focused state characterization tests cover the preserved behavior.
+
 Scope:
 
 - write characterization tests for turn, compaction, review, cancel, evidence,
@@ -195,6 +201,11 @@ Completion gate:
 ### F5: conditionally split human-interaction phases
 
 This packet is admitted only as a conditional cleanup, not scheduled work.
+
+Status: intentionally skipped. The F3 typed-projection work did not require a
+mixed change across resume-flight coordination, delivery, and transcript
+repair, so a mechanical file split would not have made that change smaller or
+easier to review.
 
 Trigger:
 
