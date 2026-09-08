@@ -84,7 +84,12 @@ func normalizeInboundContext(ctx InboundContext) InboundContext {
 }
 
 func migrateLegacyMintClawClientSessionID(ctx *InboundContext) {
-	if ctx == nil || !strings.EqualFold(ctx.Channel, "mintclaw") || len(ctx.Raw) == 0 {
+	if ctx == nil || len(ctx.Raw) == 0 {
+		return
+	}
+	switch normalizeKind(ctx.Channel) {
+	case "mintclaw", "mintclaw_client":
+	default:
 		return
 	}
 	if ctx.ClientSessionID == "" {
