@@ -794,7 +794,7 @@ func TestStatusPanelIncludesCurrentAuthoritativePlan(t *testing.T) {
 		"progress: 1/3 completed",
 		"note: Continue after resume.",
 		"✔ Inspect",
-		"□ Implement",
+		"→ Implement",
 		"□ Verify",
 	} {
 		if !strings.Contains(status, want) {

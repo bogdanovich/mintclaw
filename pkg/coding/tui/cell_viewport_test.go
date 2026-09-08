@@ -75,7 +75,7 @@ func TestSemanticViewportStylesNativePlanWithoutLosingPlainFallback(t *testing.T
 	plainText := strings.Join(plain, "\n")
 	if strings.Contains(plainText, "\x1b") || ansi.Strip(joined) != plainText ||
 		!strings.Contains(plainText, "  └ Implement in order.") ||
-		!strings.Contains(plainText, "    ✔ Inspect") || !strings.Contains(plainText, "    □ Implement") {
+		!strings.Contains(plainText, "    ✔ Inspect") || !strings.Contains(plainText, "    → Implement") {
 		t.Fatalf("plan fallback = %q; styled = %q", plainText, joined)
 	}
 }
@@ -118,6 +118,7 @@ func TestNativePlanPreservesStatusGlyphBeforeDecorativeIndentAtTinyWidths(t *tes
 		Kind: frontend.PresentationPlanUpdate, Lifecycle: frontend.PresentationCompleted,
 		Plan: &frontend.PlanState{Steps: []frontend.PlanStepState{
 			{Step: "Done", Status: frontend.PlanStepCompleted},
+			{Step: "Now", Status: frontend.PlanStepInProgress},
 			{Step: "Later", Status: frontend.PlanStepPending},
 		}},
 	})
@@ -127,7 +128,7 @@ func TestNativePlanPreservesStatusGlyphBeforeDecorativeIndentAtTinyWidths(t *tes
 			cellRenderCompact,
 		)
 		text := document.plainText()
-		if !strings.Contains(text, "✔") || !strings.Contains(text, "□") {
+		if !strings.Contains(text, "✔") || !strings.Contains(text, "→") || !strings.Contains(text, "□") {
 			t.Fatalf("width %d dropped plan status glyph: %q", width, text)
 		}
 		for _, line := range document.Lines {

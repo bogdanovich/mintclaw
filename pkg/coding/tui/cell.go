@@ -257,7 +257,7 @@ func planStepCellStyle(status frontend.PlanStepStatus) (string, cellStyleRole) {
 	case frontend.PlanStepCompleted:
 		return "✔", cellStylePlanCompleted
 	case frontend.PlanStepInProgress:
-		return "□", cellStylePlanCurrent
+		return "→", cellStylePlanCurrent
 	default:
 		return "□", cellStylePlanPending
 	}

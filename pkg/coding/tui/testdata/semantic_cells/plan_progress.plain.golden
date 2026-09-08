@@ -2,7 +2,7 @@
   └ The contract is stable;
     implementation is active.
     ✔ Inspect the presentation contract
-    □ Implement the semantic cells
+    → Implement the semantic cells
     □ Run focused validation
 
 • Ran exec [succeeded] · 2.4s

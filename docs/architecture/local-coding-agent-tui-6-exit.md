@@ -13,7 +13,8 @@ canonical transcript prose to recover a checklist.
 
 - `Updated Plan` uses the Codex-like connector hierarchy, an optional muted
   explanation, checked and crossed-out completed steps, a bold cyan current
-  step, and muted pending steps. `✔` and `□` preserve meaning without color.
+  step, and muted pending steps. `✔`, `→`, and `□` preserve every state without
+  color.
 - Plan text reflows from source state at each admitted width. Control data,
   invalid UTF-8, secrets, step count, individual fields, and total bytes are
   sanitized or bounded before reaching presentation or disk.

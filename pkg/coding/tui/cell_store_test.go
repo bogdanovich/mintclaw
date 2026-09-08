@@ -211,7 +211,7 @@ func TestModelRendersAuthoritativeSemanticCells(t *testing.T) {
 		t.Fatalf("updated model semantic cells = %+v", model.cells)
 	}
 	if after := renderedModelTranscript(model, 80); after == before ||
-		!strings.Contains(after, "• Updated Plan") || !strings.Contains(after, "□ Inspect") {
+		!strings.Contains(after, "• Updated Plan") || !strings.Contains(after, "→ Inspect") {
 		t.Fatalf("semantic plan cell was not visible:\nbefore: %q\n after: %q", before, after)
 	}
 }
