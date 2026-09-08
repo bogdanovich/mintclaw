@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"unicode"
@@ -240,20 +241,29 @@ func (record Record) validateEvent() error {
 const (
 	MaxEventTextBytes    = 64 << 10
 	MaxEventItems        = 128
-	MaxEventEntries      = 64
-	MaxEventTools        = 64
-	MaxEventChangedFiles = 128
 	MaxEventWriteAudits  = 64
 	MaxEventPlanSteps    = 32
 	MaxQuestionOptions   = 32
 	MaxQuestionTextBytes = 8 << 10
 )
 
+// Snapshot is the bounded worker-wire projection of the authoritative
+// frontend view. Repository state, review state, workspace paths, compaction
+// diagnostics, metadata, and compatibility projections stay in-process.
+type Snapshot struct {
+	ThreadID     string                      `json:"thread_id"`
+	Activity     frontend.Activity           `json:"activity"`
+	LastTurn     *frontend.LastTurnOutcome   `json:"last_turn,omitempty"`
+	Items        []frontend.PresentationItem `json:"items,omitempty"`
+	ContextUsage frontend.ContextUsage       `json:"context_usage,omitempty"`
+	Status       string                      `json:"status,omitempty"`
+}
+
 // WorkerReadyPayload is emitted only after the bound controller and thread
 // lease are ready to accept commands.
 type WorkerReadyPayload struct {
 	ControlIdentity
-	Snapshot frontend.ThreadSnapshot `json:"snapshot"`
+	Snapshot Snapshot `json:"snapshot"`
 }
 
 func (payload WorkerReadyPayload) Validate() error {
@@ -272,6 +282,7 @@ func (payload ItemUpdatedPayload) Validate() error {
 	}
 	if !validIdentifier(payload.Item.ID) || !validIdentifier(payload.Item.TurnID) ||
 		payload.Item.Sequence == 0 || payload.Item.Revision == 0 ||
+		payload.Item.Duration < 0 ||
 		!validPresentationKind(payload.Item.Kind) || !validPresentationLifecycle(payload.Item.Lifecycle) {
 		return fmt.Errorf("%w: malformed coding item event", ErrInvalidRecord)
 	}
@@ -458,31 +469,28 @@ func DecodeEventPayload(event EventName, raw json.RawMessage) (any, error) {
 	return payload, nil
 }
 
-func validateSnapshotEvent(identity ControlIdentity, snapshot frontend.ThreadSnapshot) error {
+func validateSnapshotEvent(identity ControlIdentity, snapshot Snapshot) error {
 	if err := identity.Validate(); err != nil {
 		return err
 	}
+	if err := validateStructuredText(snapshot); err != nil {
+		return err
+	}
 	parsed, err := uuid.Parse(snapshot.ThreadID)
-	if err != nil || parsed.String() != snapshot.ThreadID || !validActivity(snapshot.Activity) {
+	if err != nil || parsed.String() != snapshot.ThreadID || !validActivity(snapshot.Activity) ||
+		(snapshot.Status != "" && !validBoundedText(snapshot.Status, MaxStatusBytes)) {
 		return fmt.Errorf("%w: malformed coding worker snapshot", ErrInvalidRecord)
 	}
-	if len(snapshot.Items) > MaxEventItems || len(snapshot.Entries) > MaxEventEntries ||
-		len(snapshot.Tools) > MaxEventTools || len(snapshot.ChangedFiles) > MaxEventChangedFiles {
+	if snapshot.LastTurn != nil &&
+		(!validIdentifier(snapshot.LastTurn.TurnID) || !validTurnOutcome(snapshot.LastTurn.Outcome)) {
+		return fmt.Errorf("%w: malformed coding worker snapshot terminal state", ErrInvalidRecord)
+	}
+	if len(snapshot.Items) > MaxEventItems {
 		return fmt.Errorf("%w: coding worker snapshot exceeds collection limits", ErrInvalidRecord)
 	}
 	for _, item := range snapshot.Items {
 		if err := (ItemUpdatedPayload{ControlIdentity: identity, Item: item}).Validate(); err != nil {
 			return err
-		}
-	}
-	for _, entry := range snapshot.Entries {
-		if !validTranscriptEntry(entry) {
-			return fmt.Errorf("%w: malformed coding snapshot entry", ErrInvalidRecord)
-		}
-	}
-	for _, tool := range snapshot.Tools {
-		if !validToolState(tool) {
-			return fmt.Errorf("%w: malformed coding snapshot tool", ErrInvalidRecord)
 		}
 	}
 	if snapshot.ContextUsage.UsedTokens < 0 || snapshot.ContextUsage.LimitTokens < 0 {
@@ -552,9 +560,12 @@ func validTranscriptEntry(entry frontend.TranscriptEntry) bool {
 		return false
 	}
 	switch entry.Kind {
-	case frontend.EntryUser, frontend.EntryAssistant, frontend.EntryReasoning, frontend.EntryTool,
+	case frontend.EntryAssistant:
+		return entry.Phase == "" || entry.Phase == frontend.AssistantPhaseCommentary ||
+			entry.Phase == frontend.AssistantPhaseFinal
+	case frontend.EntryUser, frontend.EntryReasoning, frontend.EntryTool,
 		frontend.EntryWarning, frontend.EntryError:
-		return true
+		return entry.Phase == ""
 	default:
 		return false
 	}
@@ -581,8 +592,17 @@ func presentationKindMatchesEntry(kind frontend.PresentationKind, entry frontend
 
 func validToolState(tool frontend.ToolState) bool {
 	if !validIdentifier(tool.TurnID) || !validIdentifier(tool.CallID) ||
-		!validBoundedText(tool.Name, MaxAttachmentMeta) || len(tool.WriteAudit) > MaxEventWriteAudits {
+		!validBoundedText(tool.Name, MaxAttachmentMeta) || tool.Duration < 0 ||
+		len(tool.WriteAudit) > MaxEventWriteAudits {
 		return false
+	}
+	for _, audit := range tool.WriteAudit {
+		if !validBoundedText(audit.Kind, MaxAttachmentMeta) ||
+			!validBoundedText(audit.Target, MaxEventTextBytes) ||
+			!validBoundedText(audit.Action, MaxAttachmentMeta) ||
+			!validOptionalText(audit.Tool, MaxAttachmentMeta) {
+			return false
+		}
 	}
 	switch tool.Status {
 	case frontend.ToolRunning, frontend.ToolSuspended, frontend.ToolSucceeded,
@@ -1014,13 +1034,10 @@ func (result InitializeResult) Validate() error {
 
 type SnapshotResult struct {
 	ControlIdentity
-	Snapshot frontend.ThreadSnapshot `json:"snapshot"`
+	Snapshot Snapshot `json:"snapshot"`
 }
 
 func (result SnapshotResult) Validate() error {
-	if err := validateStructuredText(result); err != nil {
-		return err
-	}
 	return validateSnapshotEvent(result.ControlIdentity, result.Snapshot)
 }
 
@@ -1080,7 +1097,7 @@ func decodeStrict(data []byte, destination any) error {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return errors.New("empty JSON")
 	}
-	if err := rejectDuplicateMembers(data); err != nil {
+	if err := validateJSONMembers(data, reflect.TypeOf(destination)); err != nil {
 		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
@@ -1095,10 +1112,12 @@ func decodeStrict(data []byte, destination any) error {
 	return nil
 }
 
-func rejectDuplicateMembers(data []byte) error {
+var rawMessageType = reflect.TypeOf(json.RawMessage{})
+
+func validateJSONMembers(data []byte, destinationType reflect.Type) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
-	if err := scanJSONValue(decoder); err != nil {
+	if err := scanJSONValue(decoder, destinationType); err != nil {
 		return err
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
@@ -1107,7 +1126,7 @@ func rejectDuplicateMembers(data []byte) error {
 	return nil
 }
 
-func scanJSONValue(decoder *json.Decoder) error {
+func scanJSONValue(decoder *json.Decoder, destinationType reflect.Type) error {
 	token, err := decoder.Token()
 	if err != nil {
 		return err
@@ -1118,6 +1137,8 @@ func scanJSONValue(decoder *json.Decoder) error {
 	}
 	switch delimiter {
 	case '{':
+		fields, exact := exactJSONFields(destinationType)
+		childType := mapElementType(destinationType)
 		seen := make(map[string]struct{})
 		for decoder.More() {
 			member, memberErr := decoder.Token()
@@ -1132,13 +1153,21 @@ func scanJSONValue(decoder *json.Decoder) error {
 				return fmt.Errorf("duplicate JSON member %q", name)
 			}
 			seen[name] = struct{}{}
-			if scanErr := scanJSONValue(decoder); scanErr != nil {
+			if exact {
+				var allowed bool
+				childType, allowed = fields[name]
+				if !allowed {
+					return fmt.Errorf("non-canonical JSON member %q", name)
+				}
+			}
+			if scanErr := scanJSONValue(decoder, childType); scanErr != nil {
 				return scanErr
 			}
 		}
 	case '[':
+		childType := collectionElementType(destinationType)
 		for decoder.More() {
-			if scanErr := scanJSONValue(decoder); scanErr != nil {
+			if scanErr := scanJSONValue(decoder, childType); scanErr != nil {
 				return scanErr
 			}
 		}
@@ -1155,6 +1184,65 @@ func scanJSONValue(decoder *json.Decoder) error {
 	}
 	if closing != expected {
 		return errors.New("mismatched JSON delimiter")
+	}
+	return nil
+}
+
+func exactJSONFields(destinationType reflect.Type) (map[string]reflect.Type, bool) {
+	destinationType = indirectJSONType(destinationType)
+	if destinationType == nil || destinationType == rawMessageType || destinationType.Kind() != reflect.Struct {
+		return nil, false
+	}
+	fields := make(map[string]reflect.Type)
+	collectExactJSONFields(destinationType, fields)
+	return fields, true
+}
+
+func collectExactJSONFields(destinationType reflect.Type, fields map[string]reflect.Type) {
+	for index := 0; index < destinationType.NumField(); index++ {
+		field := destinationType.Field(index)
+		if field.PkgPath != "" {
+			continue
+		}
+		tag := field.Tag.Get("json")
+		name, _, _ := strings.Cut(tag, ",")
+		if name == "-" {
+			continue
+		}
+		if field.Anonymous && name == "" {
+			embeddedType := indirectJSONType(field.Type)
+			if embeddedType != nil && embeddedType.Kind() == reflect.Struct && embeddedType != rawMessageType {
+				collectExactJSONFields(embeddedType, fields)
+				continue
+			}
+		}
+		if name == "" {
+			name = field.Name
+		}
+		fields[name] = field.Type
+	}
+}
+
+func indirectJSONType(destinationType reflect.Type) reflect.Type {
+	for destinationType != nil && destinationType.Kind() == reflect.Pointer {
+		destinationType = destinationType.Elem()
+	}
+	return destinationType
+}
+
+func mapElementType(destinationType reflect.Type) reflect.Type {
+	destinationType = indirectJSONType(destinationType)
+	if destinationType != nil && destinationType.Kind() == reflect.Map {
+		return destinationType.Elem()
+	}
+	return nil
+}
+
+func collectionElementType(destinationType reflect.Type) reflect.Type {
+	destinationType = indirectJSONType(destinationType)
+	if destinationType != nil &&
+		(destinationType.Kind() == reflect.Array || destinationType.Kind() == reflect.Slice) {
+		return destinationType.Elem()
 	}
 	return nil
 }

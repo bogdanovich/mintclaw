@@ -331,7 +331,7 @@ func TestRecordDispatchesClosedRequestAndResultSchemas(t *testing.T) {
 
 	snapshotResult := SnapshotResult{
 		ControlIdentity: binding.ControlIdentity(),
-		Snapshot: frontend.ThreadSnapshot{
+		Snapshot: Snapshot{
 			ThreadID: binding.ThreadID, Activity: frontend.ActivityRunning,
 		},
 	}
@@ -351,6 +351,12 @@ func TestRecordDispatchesClosedRequestAndResultSchemas(t *testing.T) {
 	if _, err := Encode(snapshotResponse); !errors.Is(err, ErrInvalidRecord) {
 		t.Fatalf("Encode(malformed snapshot response) error = %v, want %v", err, ErrInvalidRecord)
 	}
+	snapshotResult.Snapshot.Activity = frontend.ActivityIdle
+	snapshotResult.Snapshot.LastTurn = &frontend.LastTurnOutcome{TurnID: "turn-1", Outcome: "teleported"}
+	snapshotResponse.Result = mustPayload(t, snapshotResult)
+	if _, err := Encode(snapshotResponse); !errors.Is(err, ErrInvalidRecord) {
+		t.Fatalf("Encode(malformed last turn) error = %v, want %v", err, ErrInvalidRecord)
+	}
 }
 
 func TestEventPayloadSchemasAreClosedAndRequired(t *testing.T) {
@@ -365,7 +371,7 @@ func TestEventPayloadSchemasAreClosedAndRequired(t *testing.T) {
 			name: "ready", event: EventWorkerReady,
 			payload: WorkerReadyPayload{
 				ControlIdentity: identity,
-				Snapshot: frontend.ThreadSnapshot{
+				Snapshot: Snapshot{
 					ThreadID: binding.ThreadID, Activity: frontend.ActivityIdle,
 				},
 			},
@@ -497,6 +503,56 @@ func TestDecodePayloadRejectsUnknownAndDuplicateFields(t *testing.T) {
 		if err := DecodePayload(raw, &destination); !errors.Is(err, ErrInvalidRecord) {
 			t.Fatalf("DecodePayload(%s) error = %v, want %v", raw, err, ErrInvalidRecord)
 		}
+	}
+}
+
+func TestDecodeRejectsCaseFoldedJSONAliasesAtEveryDepth(t *testing.T) {
+	for name, malformed := range map[string][]byte{
+		"top-level alias": []byte(
+			`{"SCHEMA_VERSION":1,"type":"request","id":"r","method":"snapshot.read","params":{}}`,
+		),
+		"top-level alias beside canonical": []byte(
+			`{"schema_version":1,"SCHEMA_VERSION":1,"type":"request","id":"r","method":"snapshot.read","params":{}}`,
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(malformed); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("Decode() error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+
+	identityJSON := `"task_generation_id":"task-generation-1","worker_generation_id":"worker-generation-1"`
+	for name, raw := range map[string]json.RawMessage{
+		"embedded alias": json.RawMessage(
+			`{"TASK_ID":"task-1",` + identityJSON + `}`,
+		),
+		"embedded alias beside canonical": json.RawMessage(
+			`{"task_id":"task-1","TASK_ID":"changed",` + identityJSON + `}`,
+		),
+		"nested snapshot alias": json.RawMessage(
+			`{"task_id":"task-1",` + identityJSON +
+				`,"snapshot":{"THREAD_ID":"00000000-0000-0000-0000-000000000000","activity":"idle"}}`,
+		),
+		"nested collection alias": json.RawMessage(
+			`{"task_id":"task-1",` + identityJSON +
+				`,"attachments":[{"SOURCE_PATH":"/tmp/screen.png"}]}`,
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var destination any
+			switch name {
+			case "nested snapshot alias":
+				destination = &WorkerReadyPayload{}
+			case "nested collection alias":
+				destination = &TurnStartParams{}
+			default:
+				destination = &GenerationParams{}
+			}
+			if err := DecodePayload(raw, destination); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("DecodePayload(%s) error = %v, want %v", raw, err, ErrInvalidRecord)
+			}
+		})
 	}
 }
 
