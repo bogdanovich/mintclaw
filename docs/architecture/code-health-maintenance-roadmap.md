@@ -292,6 +292,32 @@ Completion gate:
 - any admitted extraction is delivered in its own PR with public behavior and
   concurrency tests preserved.
 
+Checkpoint record (2026-09-08, `origin/main` at `1979c935`):
+
+- `Controller.coordinate` was 408 lines with cyclomatic complexity 105. Since
+  2026-08-25 its file had 16 commits, including nine fixes, and `+1067/-370`
+  lines of churn. Primary-operation and steering state already had concrete
+  actor-owned helpers, while repository/workspace evidence still kept its
+  active operation, FIFO queue, cancellation, stale-result identity, and close
+  drain invariants as local variables and closures.
+- Four consecutive evidence fixes (`6f4212c0`, `9fc36f87`, `298d39a2`, and
+  `84900235`) established those same coupled invariants. This admits one
+  bounded extraction: a concrete `evidenceQueueState` owned and called only by
+  the controller actor. Execution and result projection remain in the
+  controller; no interface, event framework, or duplicate state is added.
+- `frontend.Projector` and its presentation helper total 1,875 lines. Their 21
+  unique commits over the same period included 12 fixes and `+1477/-449` lines
+  of churn, but no individual projector method exceeded complexity 30. The
+  active [TUI.7 PR #1124](https://github.com/bogdanovich/mintclaw/pull/1124)
+  also changes projector semantics. The checkpoint therefore records no
+  projector extraction: method ownership is already bounded, and another split
+  during semantic migration would create churn without an independent state
+  invariant.
+- After the admitted controller extraction, `coordinate` is 358 lines with
+  complexity 91. The metric remains high because the actor intentionally owns
+  command admission and result linearization; further splitting is not admitted
+  without another independently changing invariant cluster.
+
 ## Execution Order
 
 1. M0 lands first as a docs-only PR.
@@ -328,6 +354,9 @@ proportion to persistence, routing, delivery, or concurrency risk.
 - M5 — merged in #1132 (`7a243ea9`): made credential passphrase sources
   repository- and resolver-owned, moved encryption to the security-document
   boundary, and removed mutable package-global credential state.
+- M6 — merged in #1134 (`1979c935`): replaced the central command callback
+  block with concrete MCP, goal, model, session, and context capability binders
+  and removed the root configuration dependency from `commands.Runtime`.
 
 ## Separate Compatibility Closeouts
 
