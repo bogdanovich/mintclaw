@@ -60,6 +60,8 @@ func TestRepositoryDiffToolValidatesAndForwardsTypedTargets(t *testing.T) {
 		{"target": "base"},
 		{"target": "current", "ref": "main"},
 		{"target": "unsupported"},
+		{"target": "base", "ref": "main\x1b"},
+		{"target": "commit", "ref": "\u0085"},
 	} {
 		if result := tool.Execute(t.Context(), args); !result.IsError {
 			t.Fatalf("invalid args accepted: %#v => %#v", args, result)

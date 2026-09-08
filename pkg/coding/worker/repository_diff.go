@@ -245,11 +245,14 @@ func repositoryDiffFileFromFrontend(
 }
 
 func validFrontendDiffTarget(target codingworkspace.DiffTarget) bool {
+	if !validOptionalText(target.Ref, MaxPathBytes) || target.Ref != strings.TrimSpace(target.Ref) {
+		return false
+	}
 	switch target.Kind {
 	case codingworkspace.DiffTargetCurrent:
-		return strings.TrimSpace(target.Ref) == ""
+		return target.Ref == ""
 	case codingworkspace.DiffTargetBase, codingworkspace.DiffTargetCommit:
-		return strings.TrimSpace(target.Ref) != ""
+		return target.Ref != ""
 	default:
 		return false
 	}

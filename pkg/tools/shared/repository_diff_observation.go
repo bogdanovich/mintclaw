@@ -2,6 +2,8 @@ package toolshared
 
 import (
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
@@ -113,6 +115,9 @@ func sanitizeRepositoryDiffObservation(
 }
 
 func validRepositoryDiffTarget(target codingworkspace.DiffTarget) bool {
+	if !utf8.ValidString(target.Ref) || strings.IndexFunc(target.Ref, unicode.IsControl) >= 0 {
+		return false
+	}
 	switch target.Kind {
 	case codingworkspace.DiffTargetCurrent:
 		return strings.TrimSpace(target.Ref) == ""

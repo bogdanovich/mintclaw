@@ -213,6 +213,42 @@ func TestSnapshotFromFrontendProjectsBoundedHistoricalRepositoryDiff(t *testing.
 	}
 }
 
+func TestSnapshotFromFrontendDropsRepositoryDiffWithControlBearingRef(t *testing.T) {
+	binding := testBinding(t)
+	for _, target := range []codingworkspace.DiffTarget{
+		{Kind: codingworkspace.DiffTargetBase, Ref: "main\x1b"},
+		{Kind: codingworkspace.DiffTargetCommit, Ref: "\u0085"},
+	} {
+		t.Run(string(target.Kind), func(t *testing.T) {
+			source := frontend.ThreadSnapshot{
+				ThreadID: binding.ThreadID,
+				Activity: frontend.ActivityIdle,
+				Items: []frontend.PresentationItem{{
+					ID: "tool:turn-1:call-1", TurnID: "turn-1", Sequence: 1, Revision: 1,
+					Kind: frontend.PresentationToolCall, Lifecycle: frontend.PresentationCompleted,
+					Tool: &frontend.ToolState{
+						TurnID: "turn-1", CallID: "call-1", Name: "repository_diff",
+						Status: frontend.ToolSucceeded,
+						RepositoryDiff: &codingworkspace.DiffResult{
+							SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+							Target:        target,
+						},
+					},
+				}},
+			}
+
+			snapshot := SnapshotFromFrontend(source, nil)
+			if err := validateSnapshot(binding.ControlIdentity(), snapshot); err != nil {
+				t.Fatalf("validateSnapshot() error = %v", err)
+			}
+			if len(snapshot.Items) != 1 || snapshot.Items[0].Tool == nil ||
+				snapshot.Items[0].Tool.RepositoryDiff != nil || !snapshot.Items[0].Tool.Truncated {
+				t.Fatalf("control-bearing repository diff projection = %#v", snapshot.Items)
+			}
+		})
+	}
+}
+
 func TestSnapshotFromFrontendProjectsBoundedTypedExploration(t *testing.T) {
 	binding := testBinding(t)
 	source := frontend.ThreadSnapshot{

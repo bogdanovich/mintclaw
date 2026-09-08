@@ -290,6 +290,14 @@ func TestRepositoryDiffObservationFailsClosedAndBoundsEvidence(t *testing.T) {
 			SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
 			Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase},
 		}}},
+		"base control ref": {RepositoryDiff: &RepositoryDiffObservation{Diff: codingworkspace.DiffResult{
+			SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+			Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetBase, Ref: "main\x1b"},
+		}}},
+		"commit control ref": {RepositoryDiff: &RepositoryDiffObservation{Diff: codingworkspace.DiffResult{
+			SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+			Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCommit, Ref: "\u0085"},
+		}}},
 		"negative": {RepositoryDiff: &RepositoryDiffObservation{Diff: codingworkspace.DiffResult{
 			SchemaVersion: codingworkspace.RepositoryDiffSchemaV1, Target: validDiff.Target, Additions: -1,
 		}}},
