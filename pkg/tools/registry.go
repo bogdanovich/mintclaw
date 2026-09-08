@@ -87,6 +87,13 @@ type safeApprovalDenialProvider interface {
 	SafeApprovalDenialResult() *toolshared.ToolResult
 }
 
+// schemaValidationFailureProvider lets a trusted tool replace only a
+// recognized schema-validation failure with bounded, actionable guidance.
+// Returning nil preserves the registry's generic validation failure.
+type schemaValidationFailureProvider interface {
+	SafeSchemaValidationFailure(map[string]any) *toolshared.ToolResult
+}
+
 // SafeApprovalDenialResult returns a tool-authored, model-safe denial for an
 // approval-preparation error. Ordinary errors are never forwarded to the
 // model through this path.
@@ -530,6 +537,12 @@ func (r *ToolRegistry) executeToolWithContext(
 	if err := validateRegisteredToolArguments(tool, args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
+		if provider, ok := tool.(schemaValidationFailureProvider); ok {
+			if result := provider.SafeSchemaValidationFailure(args); result != nil &&
+				result.IsError && strings.TrimSpace(result.ContentForLLM()) != "" {
+				return result
+			}
+		}
 		return toolshared.ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
 			WithError(fmt.Errorf("argument validation failed: %w", err))
 	}

@@ -1661,6 +1661,17 @@ func (*BrowserActTool) ProtectedDurableArguments(args map[string]any) bool {
 // whether the current action arguments are sensitive.
 func (*BrowserActTool) ProtectedDurableResult(map[string]any) bool { return true }
 
+// SafeSchemaValidationFailure preserves browser-specific recovery guidance
+// when malformed context-authority fields would otherwise be rejected by the
+// registry before Execute can classify them. All other schema failures retain
+// the registry's generic fail-closed response.
+func (*BrowserActTool) SafeSchemaValidationFailure(args map[string]any) *toolshared.ToolResult {
+	if !browserActionContextAuthorityInvalid(args) {
+		return nil
+	}
+	return browserActionToolError(errBrowserActionContextAuthority)
+}
+
 func cloneBrowserToolArguments(args map[string]any) (map[string]any, error) {
 	encoded, err := json.Marshal(args)
 	if err != nil {
@@ -1930,13 +1941,9 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 	sessionID, sessionOK := args["browser_session_id"].(string)
 	tabID, tabOK := args["tab_id"].(string)
 	frameID, _ := args["frame_id"].(string)
-	catalogID, catalogOK := args["context_catalog_id"].(string)
-	_, catalogPresent := args["context_catalog_id"]
-	contextGeneration, contextGenerationOK := browserInteger(args["context_generation"])
-	_, contextGenerationPresent := args["context_generation"]
-	if catalogPresent != contextGenerationPresent ||
-		(catalogPresent && (!catalogOK || catalogID == "" ||
-			!contextGenerationOK || contextGeneration < 1)) {
+	catalogID, _ := args["context_catalog_id"].(string)
+	contextGeneration, _ := browserInteger(args["context_generation"])
+	if browserActionContextAuthorityInvalid(args) {
 		return browser.Preparation{}, errBrowserActionContextAuthority
 	}
 	snapshotID, snapshotOK := args["snapshot_id"].(string)
@@ -1950,6 +1957,16 @@ func (tool *BrowserActTool) prepare(ctx context.Context, args map[string]any) (b
 		SnapshotID: snapshotID, SnapshotGeneration: uint64(generation), Action: action,
 		DeclaredEffect: declaredEffect, Confirmation: confirmation,
 	})
+}
+
+func browserActionContextAuthorityInvalid(args map[string]any) bool {
+	catalogID, catalogOK := args["context_catalog_id"].(string)
+	_, catalogPresent := args["context_catalog_id"]
+	contextGeneration, contextGenerationOK := browserInteger(args["context_generation"])
+	_, contextGenerationPresent := args["context_generation"]
+	return catalogPresent != contextGenerationPresent ||
+		(catalogPresent && (!catalogOK || catalogID == "" ||
+			!contextGenerationOK || contextGeneration < 1))
 }
 
 func browserInteger(value any) (int, bool) {
