@@ -87,7 +87,6 @@ type Client struct {
 	events        []RetainedEvent
 	eventBytes    int
 	nextCursor    uint64
-	sawWorkerStop bool
 	eventIdentity *ControlIdentity
 	err           error
 	done          chan struct{}
@@ -389,14 +388,7 @@ func (client *Client) readRecords() {
 	for {
 		received := client.reader.read()
 		if received.err != nil {
-			client.mu.Lock()
-			graceful := client.sawWorkerStop && errors.Is(received.err, io.EOF)
-			client.mu.Unlock()
-			if graceful {
-				client.finish(nil)
-			} else {
-				client.finish(errors.Join(ErrWorkerDisconnected, received.err))
-			}
+			client.finish(errors.Join(ErrWorkerDisconnected, received.err))
 			return
 		}
 		switch received.record.Type {
@@ -408,6 +400,10 @@ func (client *Client) readRecords() {
 		case RecordEvent:
 			if !client.retainEvent(received.record) {
 				client.finish(ErrClientProtocol)
+				return
+			}
+			if received.record.Event == EventWorkerStopped {
+				client.finish(nil)
 				return
 			}
 		default:
@@ -484,9 +480,6 @@ func (client *Client) retainEvent(record Record) bool {
 		evicted := client.events[0]
 		client.eventBytes -= len(evicted.Record.Payload) + clientEventEnvelopeBytes
 		client.events = client.events[1:]
-	}
-	if record.Event == EventWorkerStopped {
-		client.sawWorkerStop = true
 	}
 	client.mu.Unlock()
 	select {

@@ -271,6 +271,9 @@ func TestWorkerServerClientControlsOneTaskAndProjectsSemanticEvents(t *testing.T
 	if err := harness.client.StartTurn(t.Context(), "start-1", start); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
+	assertRemoteCode(t, harness.client.Shutdown(t.Context(), "shutdown-active", GenerationParams{
+		ControlIdentity: binding.ControlIdentity(),
+	}), ErrorTurnActive)
 	if err := harness.client.StartTurn(t.Context(), "start-1", start); err != nil {
 		t.Fatalf("idempotent StartTurn() error = %v", err)
 	}
@@ -700,6 +703,56 @@ func TestInitializedWorkerExitsAfterBoundedIdleWindow(t *testing.T) {
 	}
 }
 
+func TestIdleWorkerCloseFailureReportsWorkerFailure(t *testing.T) {
+	binding := testBinding(t)
+	controllers := make(chan *workerTestController, 1)
+	server, err := NewServer(ServerConfig{
+		BuildID:     testWorkerBuildID,
+		IdleTimeout: 50 * time.Millisecond,
+		Open: func(_ context.Context, binding Binding) (TaskController, error) {
+			controllerInstance, openErr := newWorkerTestController(binding)
+			if openErr != nil {
+				return nil, openErr
+			}
+			controllerInstance.closeErr = errors.New("controller close failed")
+			controllers <- controllerInstance
+			return controllerInstance, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, serverDone := startPipeServer(t, server)
+	if _, err = client.Initialize(t.Context(), "initialize-1", InitializeParams{
+		MinProtocolVersion: ProtocolV1,
+		MaxProtocolVersion: ProtocolV1,
+		ParentBuildID:      "parent-build",
+		Binding:            binding,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-controllers
+	waitForWorkerEvent(t, client, EventWorkerReady)
+	waitDone(t, client.Done())
+	stopped := waitForWorkerEvent(t, client, EventWorkerStopped)
+	payload, err := DecodeEventPayload(EventWorkerStopped, stopped.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := payload.(*WorkerStoppedPayload)
+	if outcome.Reason != WorkerStopFailed || outcome.Error == nil || outcome.Error.Code != ErrorInternal {
+		t.Fatalf("idle stop outcome = %#v, want failed internal error", outcome)
+	}
+	select {
+	case err = <-serverDone:
+		if !errors.Is(err, ErrTaskFailed) {
+			t.Fatalf("Serve() error = %v, want %v", err, ErrTaskFailed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not exit after idle cleanup failure")
+	}
+}
+
 func TestCanceledTurnWithFinalizationFailureReportsWorkerFailure(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -931,6 +984,80 @@ func TestClientBindsLateInitializeResponseBeforeReadyEvent(t *testing.T) {
 	}
 	if err := <-workerDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClientStopsAtWorkerStoppedWithoutWaitingForEOF(t *testing.T) {
+	binding := testBinding(t)
+	client, requests, responses := newManualClient(t)
+	workerDone := make(chan error, 1)
+	go func() {
+		reader, err := newWireReader(requests)
+		if err != nil {
+			workerDone <- err
+			return
+		}
+		initialize := reader.read()
+		if initialize.err != nil {
+			workerDone <- initialize.err
+			return
+		}
+		result := InitializeResult{Identity: BoundIdentity{
+			ProtocolVersion: ProtocolV1,
+			WorkerBuildID:   testWorkerBuildID,
+			Binding:         binding,
+		}}
+		if _, err = writeWireRecord(responses, successfulResponse(initialize.record, result)); err != nil {
+			workerDone <- err
+			return
+		}
+		stopped, err := eventRecord(projectedEvent{
+			name: EventWorkerStopped,
+			payload: WorkerStoppedPayload{
+				ControlIdentity: binding.ControlIdentity(),
+				Reason:          WorkerStopShutdown,
+			},
+		})
+		if err != nil {
+			workerDone <- err
+			return
+		}
+		if _, err = writeWireRecord(responses, stopped); err != nil {
+			workerDone <- err
+			return
+		}
+		postTerminal, err := eventRecord(projectedEvent{
+			name: EventStatusChanged,
+			payload: StatusChangedPayload{
+				ControlIdentity: binding.ControlIdentity(),
+				Activity:        ActivityIdle,
+				Status:          "must not be retained",
+			},
+		})
+		if err == nil {
+			_, err = writeWireRecord(responses, postTerminal)
+		}
+		workerDone <- err
+	}()
+
+	if _, err := client.Initialize(t.Context(), "initialize-1", InitializeParams{
+		MinProtocolVersion: ProtocolV1,
+		MaxProtocolVersion: ProtocolV1,
+		ParentBuildID:      "parent-build",
+		Binding:            binding,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitDone(t, client.Done())
+	if err := client.Err(); err != nil {
+		t.Fatalf("client terminal error = %v", err)
+	}
+	page := client.EventsAfter(0)
+	if len(page.Events) != 1 || page.Events[0].Record.Event != EventWorkerStopped {
+		t.Fatalf("events after worker stop = %#v", page.Events)
+	}
+	if err := <-workerDone; err == nil {
+		t.Fatal("post-terminal worker write unexpectedly succeeded")
 	}
 }
 

@@ -156,7 +156,12 @@ func (server *Server) Serve(ctx context.Context, input io.ReadCloser, output io.
 		case settlement := <-session.turnDone:
 			return session.finishTurn(output, settlement)
 		case <-idle:
-			_ = session.closeController()
+			if closeErr := session.closeController(); closeErr != nil {
+				if err = session.emitStopped(output, WorkerStopFailed, protocolError(ErrorInternal)); err != nil {
+					return ErrControlStreamUncertain
+				}
+				return ErrTaskFailed
+			}
 			if err = session.emitStopped(output, WorkerStopIdle, nil); err != nil {
 				return ErrControlStreamUncertain
 			}
@@ -294,6 +299,9 @@ func (session *serverSession) execute(
 		case MethodSnapshotRead:
 			return session.snapshotResponse(ctx, request)
 		case MethodShutdown:
+			if session.turnStarted {
+				return failedResponse(request, protocolError(ErrorTurnActive)), nil, false
+			}
 			err = session.closeController()
 			if err != nil {
 				return failedResponse(request, mapControllerError(request.Method, err)), nil, true
