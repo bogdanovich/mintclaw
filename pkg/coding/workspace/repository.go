@@ -144,6 +144,67 @@ func NewRepository(projectRoot, cwd string, limits Limits) *Repository {
 	}
 }
 
+// BoundToRoot reports whether the repository's configured evidence root is
+// canonically identical to root and its working directory is confined below
+// it. The check resolves symlinks through the nearest existing ancestor, so it
+// also applies before a not-yet-created project directory exists.
+func (repository *Repository) BoundToRoot(root string) (bool, error) {
+	if repository == nil {
+		return false, nil
+	}
+	canonicalRoot, err := resolveRepositoryAuthorityPath(root)
+	if err != nil {
+		return false, fmt.Errorf("resolve authority root: %w", err)
+	}
+	canonicalProjectRoot, err := resolveRepositoryAuthorityPath(repository.projectRoot)
+	if err != nil {
+		return false, fmt.Errorf("resolve repository root: %w", err)
+	}
+	canonicalCWD, err := resolveRepositoryAuthorityPath(repository.cwd)
+	if err != nil {
+		return false, fmt.Errorf("resolve repository working directory: %w", err)
+	}
+	if canonicalProjectRoot != canonicalRoot {
+		return false, nil
+	}
+	relativeCWD, err := filepath.Rel(canonicalRoot, canonicalCWD)
+	if err != nil {
+		return false, fmt.Errorf("compare repository working directory authority: %w", err)
+	}
+	return relativeCWD == "." || filepath.IsLocal(relativeCWD), nil
+}
+
+func resolveRepositoryAuthorityPath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("make path absolute: %w", err)
+	}
+	cleaned := filepath.Clean(absolute)
+	for current := cleaned; ; current = filepath.Dir(current) {
+		_, lstatErr := os.Lstat(current)
+		if lstatErr == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(current)
+			if resolveErr != nil {
+				return "", fmt.Errorf("resolve existing ancestor: %w", resolveErr)
+			}
+			relative, relErr := filepath.Rel(current, cleaned)
+			if relErr != nil {
+				return "", fmt.Errorf("resolve path relative to existing ancestor: %w", relErr)
+			}
+			return filepath.Clean(filepath.Join(resolved, relative)), nil
+		}
+		if !os.IsNotExist(lstatErr) {
+			return "", fmt.Errorf("inspect path ancestor: %w", lstatErr)
+		}
+		if filepath.Dir(current) == current {
+			return "", fmt.Errorf("path has no resolvable ancestor")
+		}
+	}
+}
+
 func (repository *Repository) Status(ctx context.Context) StatusResult {
 	result := StatusResult{SchemaVersion: RepositoryStatusSchemaV1}
 	if repository == nil {

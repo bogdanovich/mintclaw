@@ -99,6 +99,41 @@ func TestNewRepositoryWithBaselineRejectsDifferentRepositoryAuthority(t *testing
 	}
 }
 
+func TestRepositoryBoundToRootUsesCanonicalRootAndConfinedWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, "project")
+	workingDirectory := filepath.Join(projectRoot, "nested", "not-created-yet")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repository := NewRepository(projectRoot, workingDirectory, Limits{})
+	bound, err := repository.BoundToRoot(projectRoot)
+	if err != nil || !bound {
+		t.Fatalf("BoundToRoot(project) = %v, %v, want true, nil", bound, err)
+	}
+	bound, err = repository.BoundToRoot(filepath.Join(root, "other"))
+	if err != nil || bound {
+		t.Fatalf("BoundToRoot(other) = %v, %v, want false, nil", bound, err)
+	}
+	outsideCWD := NewRepository(projectRoot, root, Limits{})
+	bound, err = outsideCWD.BoundToRoot(projectRoot)
+	if err != nil || bound {
+		t.Fatalf("BoundToRoot(outside cwd) = %v, %v, want false, nil", bound, err)
+	}
+	if runtime.GOOS != "windows" {
+		alias := filepath.Join(root, "project-alias")
+		if err := os.Symlink(projectRoot, alias); err != nil {
+			t.Fatal(err)
+		}
+		aliased := NewRepository(alias, filepath.Join(alias, "nested"), Limits{})
+		bound, err = aliased.BoundToRoot(projectRoot)
+		if err != nil || !bound {
+			t.Fatalf("BoundToRoot(symlink alias) = %v, %v, want true, nil", bound, err)
+		}
+	}
+}
+
 func TestRepositoryDiffPreservesCachedDeletionAndSamePathUntrackedFile(t *testing.T) {
 	root := initGitRepository(t)
 	runGitTest(t, root, "rm", "--cached", "tracked.txt")

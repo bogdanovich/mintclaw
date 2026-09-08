@@ -513,6 +513,35 @@ func TestNewCodingAgentLoopReadOnlyAuthorityOmitsMutationTools(t *testing.T) {
 	}
 }
 
+func TestCodingRuntimeProfileRejectsReadOnlyRepositoryFromDifferentRoot(t *testing.T) {
+	root := t.TempDir()
+	executionRoot := filepath.Join(root, "project")
+	otherRoot := filepath.Join(root, "other")
+	for _, directory := range []string{executionRoot, otherRoot} {
+		if err := os.Mkdir(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	layout, err := NewCodingRuntimeLayout(
+		"thread-read-only-mismatched-repository",
+		executionRoot,
+		filepath.Join(root, "private", "main"),
+		[]string{executionRoot},
+	)
+	if err != nil {
+		t.Fatalf("NewCodingRuntimeLayout() error = %v", err)
+	}
+	profile, err := NewCodingRuntimeProfile(CodingRuntimeBinding{
+		AgentID:    "main",
+		Layout:     layout,
+		Repository: codingworkspace.NewRepository(otherRoot, otherRoot, codingworkspace.Limits{}),
+		ReadOnly:   true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "read-only repository authority") {
+		t.Fatalf("NewCodingRuntimeProfile() = %#v, %v, want mismatched authority rejection", profile, err)
+	}
+}
+
 func TestCodingRuntimeUsesIsolatedPromptAndSessionIdentity(t *testing.T) {
 	root := t.TempDir()
 	executionRoot := filepath.Join(root, "project")
