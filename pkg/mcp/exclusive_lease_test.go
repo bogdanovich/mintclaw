@@ -38,6 +38,20 @@ func TestExclusiveServerLeaseIsNonBlockingAndReleasable(t *testing.T) {
 	reacquired.release()
 }
 
+func TestExclusiveServerLeaseKeepsDistinctPathsIndependent(t *testing.T) {
+	root := t.TempDir()
+	first, err := acquireExclusiveServerLease("first", filepath.Join(root, "first.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.release()
+	second, err := acquireExclusiveServerLease("second", filepath.Join(root, "second.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.release()
+}
+
 func TestExclusiveServerLeaseRetainsCanonicalNamespaceReservation(t *testing.T) {
 	root := t.TempDir()
 	parent := filepath.Join(root, "locks")

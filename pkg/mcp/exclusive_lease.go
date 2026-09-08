@@ -40,25 +40,37 @@ type exclusiveServerLease struct {
 }
 
 type exclusiveLeaseNamespace struct {
-	file   *os.File
-	parent *exclusiveLeaseParent
+	mu      sync.Mutex
+	closeFn func() error
+	closed  bool
 }
 
 func (namespace *exclusiveLeaseNamespace) validate() error {
 	if namespace == nil {
 		return nil
 	}
-	return namespace.parent.validateLeaf(namespace.file)
+	namespace.mu.Lock()
+	defer namespace.mu.Unlock()
+	if namespace.closed || namespace.closeFn == nil {
+		return errExclusiveLeaseUnsafe
+	}
+	return nil
 }
 
 func (namespace *exclusiveLeaseNamespace) close() error {
 	if namespace == nil {
 		return nil
 	}
-	unlockErr := releaseExclusiveFileLock(namespace.file)
-	fileErr := namespace.file.Close()
-	namespace.parent.close()
-	return errors.Join(unlockErr, fileErr)
+	namespace.mu.Lock()
+	defer namespace.mu.Unlock()
+	if namespace.closed {
+		return nil
+	}
+	if namespace.closeFn == nil {
+		return errExclusiveLeaseUnsafe
+	}
+	namespace.closed = true
+	return namespace.closeFn()
 }
 
 type exclusiveLeaseParent struct {

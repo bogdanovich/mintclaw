@@ -3,7 +3,9 @@
 package mcp
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +61,78 @@ func TestExclusiveServerLeaseRejectsCrossProcessParentRebindContender(t *testing
 	if err = lease.close(); err != nil {
 		t.Fatalf("release after parent restore error = %v", err)
 	}
+}
+
+func TestExclusiveServerLeaseRejectsCrossProcessGuardAndParentRebindContender(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "locks")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(parent, "playwright.lock")
+	legacyGuard := legacyExclusiveLeaseGuardPath(t, path)
+	createExclusiveLeaseTestFile(t, legacyGuard)
+	legacyGuardMoved := legacyGuard + ".rebound"
+	t.Cleanup(func() {
+		_ = os.Remove(legacyGuard)
+		_ = os.Remove(legacyGuardMoved)
+	})
+
+	lease, err := acquireExclusiveServerLease("playwright", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(legacyGuard, legacyGuardMoved); err != nil {
+		t.Fatal(err)
+	}
+	createExclusiveLeaseTestFile(t, legacyGuard)
+	movedParent := parent + "-moved"
+	if err = os.Rename(parent, movedParent); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestExclusiveServerLeaseCrossProcessHelper$")
+	command.Env = append(os.Environ(), exclusiveLeaseHelperPathEnv+"="+path)
+	if output, runErr := command.CombinedOutput(); runErr != nil {
+		t.Fatalf("helper-process contender error = %v, output = %s", runErr, output)
+	}
+
+	if err = os.Remove(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(movedParent, parent); err != nil {
+		t.Fatal(err)
+	}
+	if err = lease.close(); err != nil {
+		t.Fatalf("release after namespace restore error = %v", err)
+	}
+}
+
+func createExclusiveLeaseTestFile(t *testing.T, path string) {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func legacyExclusiveLeaseGuardPath(t *testing.T, path string) string {
+	t.Helper()
+	root, err := filepath.EvalSymlinks("/tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256([]byte(path))
+	return filepath.Join(
+		root,
+		fmt.Sprintf(".mintclaw-exclusive-lease-%d-%x.lock", os.Geteuid(), digest),
+	)
 }
 
 func assertExclusiveLeaseFileSecurity(t *testing.T, path string) {
