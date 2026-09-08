@@ -48,7 +48,29 @@ func Decode(data []byte) (Record, error) {
 	if err := record.Validate(); err != nil {
 		return Record{}, err
 	}
+	members, err := topLevelMembers(data)
+	if err != nil {
+		return Record{}, fmt.Errorf("%w: inspect record shape: %w", ErrInvalidRecord, err)
+	}
+	if err := record.validateWireShape(members); err != nil {
+		return Record{}, err
+	}
 	return record, nil
+}
+
+func topLevelMembers(data []byte) (map[string]json.RawMessage, error) {
+	var members map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&members); err != nil {
+		return nil, err
+	}
+	if members == nil {
+		return nil, errors.New("record must be an object")
+	}
+	if err := requireDecoderEOF(decoder); err != nil {
+		return nil, err
+	}
+	return members, nil
 }
 
 // DecodePayload applies the v1 closed-world field policy to one params or

@@ -194,6 +194,35 @@ func (record Record) validateResponse() error {
 	return record.Error.Validate()
 }
 
+func (record Record) validateWireShape(members map[string]json.RawMessage) error {
+	required := []string{"schema_version", "type", "id", "method"}
+	switch record.Type {
+	case RecordRequest:
+		required = append(required, "params")
+		if record.Method.RequiresIdempotencyKey() {
+			required = append(required, "idempotency_key")
+		}
+	case RecordResponse:
+		required = append(required, "ok")
+		if record.OK != nil && *record.OK {
+			required = append(required, "result")
+		} else {
+			required = append(required, "error")
+		}
+	default:
+		return fmt.Errorf("%w: unsupported record type %q", ErrInvalidRecord, record.Type)
+	}
+	if len(members) != len(required) {
+		return fmt.Errorf("%w: non-canonical %s envelope fields", ErrInvalidRecord, record.Type)
+	}
+	for _, name := range required {
+		if _, present := members[name]; !present {
+			return fmt.Errorf("%w: %s envelope is missing %q", ErrInvalidRecord, record.Type, name)
+		}
+	}
+	return nil
+}
+
 // DecodeRequestPayload selects and validates the closed request schema owned
 // by method. Worker implementations consume this dispatcher instead of
 // reproducing method switches at each transport boundary.

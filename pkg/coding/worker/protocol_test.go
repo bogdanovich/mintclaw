@@ -365,6 +365,41 @@ func TestRecordSeparatesRequestAndResponseFields(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsPresentZeroFieldsFromOtherEnvelopeVariant(t *testing.T) {
+	identity := `{"task_id":"task-1","task_generation_id":"task-generation-1",` +
+		`"worker_generation_id":"worker-generation-1"}`
+	for name, raw := range map[string][]byte{
+		"request null ok": []byte(
+			`{"schema_version":1,"type":"request","id":"request-1",` +
+				`"method":"turn.interrupt","idempotency_key":"interrupt-1","params":` + identity +
+				`,"ok":null}`,
+		),
+		"request null error": []byte(
+			`{"schema_version":1,"type":"request","id":"request-1",` +
+				`"method":"turn.interrupt","idempotency_key":"interrupt-1","params":` + identity +
+				`,"error":null}`,
+		),
+		"response empty idempotency key": []byte(
+			`{"schema_version":1,"type":"response","id":"request-1",` +
+				`"method":"turn.interrupt","ok":true,"result":{},"idempotency_key":""}`,
+		),
+		"response null params": []byte(
+			`{"schema_version":1,"type":"response","id":"request-1",` +
+				`"method":"turn.interrupt","ok":true,"result":{},"params":null}`,
+		),
+		"successful response null error": []byte(
+			`{"schema_version":1,"type":"response","id":"request-1",` +
+				`"method":"turn.interrupt","ok":true,"result":{},"error":null}`,
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(raw); !errors.Is(err, ErrInvalidRecord) {
+				t.Fatalf("Decode() error = %v, want %v", err, ErrInvalidRecord)
+			}
+		})
+	}
+}
+
 func TestDecodeRejectsCaseFoldedJSONAliasesAtEveryDepth(t *testing.T) {
 	topLevel := []byte(
 		"{\"SCHEMA_VERSION\":1,\"type\":\"request\",\"id\":\"r\"," +
