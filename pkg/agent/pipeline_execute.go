@@ -392,6 +392,13 @@ func skipToolCall() toolCallStageResult {
 	return toolCallStageResult{disposition: toolCallSkip}
 }
 
+type toolResultSource uint8
+
+const (
+	toolResultInvoked toolResultSource = iota
+	toolResultHook
+)
+
 type toolCallState struct {
 	index            int
 	request          providers.ToolCall
@@ -407,6 +414,7 @@ type toolCallState struct {
 	toolRegistry     *tools.ToolRegistry
 	protectedResult  bool
 	taskSuspended    bool
+	resultSource     toolResultSource
 }
 
 // ExecuteTools executes the tool loop, handling BeforeTool/ApproveTool/AfterTool hooks,
@@ -479,28 +487,26 @@ func (runner *toolLoopRunner) executeToolCall(
 		name:      tc.Name,
 		arguments: cloneStringAnyMap(tc.Arguments),
 	}
-	if result := runner.admitToolCall(ctx, call); result.disposition != toolCallProceed {
+	if result := runner.admitToolCall(call); result.disposition != toolCallProceed {
 		return result
 	}
-	if result := runner.approveToolCall(ctx, call); result.disposition != toolCallProceed {
-		return result
-	}
-	if result := runner.invokeToolCall(ctx, call); result.disposition != toolCallProceed {
-		return result
+	if call.resultSource != toolResultHook {
+		if result := runner.approveToolCall(ctx, call); result.disposition != toolCallProceed {
+			return result
+		}
+		if result := runner.invokeToolCall(ctx, call); result.disposition != toolCallProceed {
+			return result
+		}
 	}
 	return runner.persistToolCallResult(ctx, call)
 }
 
-func (runner *toolLoopRunner) admitToolCall(
-	ctx context.Context,
-	call *toolCallState,
-) toolCallStageResult {
+func (runner *toolLoopRunner) admitToolCall(call *toolCallState) toolCallStageResult {
 	p := runner.p
 	turnCtx := runner.turnCtx
 	ts := runner.ts
 	exec := runner.exec
 	llm := runner.llm
-	iteration := llm.iteration
 	i := call.index
 	tc := call.request
 
@@ -551,222 +557,9 @@ func (runner *toolLoopRunner) admitToolCall(
 			}
 		case HookActionRespond:
 			if toolReq != nil && toolReq.HookResult != nil {
-				if !ts.tryMarkToolExecutionStarted() {
-					return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
-				}
-				hookResult := normalizeToolResultForSyncDelivery(ts, toolReq.HookResult)
-				auditArgs := tools.ToolLogArguments(toolName, toolArgs)
-				argsJSON, _ := json.Marshal(auditArgs)
-				argsPreview := utils.Truncate(string(argsJSON), 200)
-				logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s(%s)", toolName, argsPreview),
-					map[string]any{
-						"agent_id":  ts.agent.ID,
-						"tool":      toolName,
-						"iteration": iteration,
-					})
-
-				p.emitEvent(
-					runtimeevents.KindAgentToolExecStart,
-					ts.eventMeta("runTurn", "turn.tool.start"),
-					ToolExecStartPayload{
-						ToolCallID: tc.ID,
-						Tool:       toolName,
-						Arguments:  cloneEventArguments(auditArgs),
-					},
-				)
-
-				p.publishToolFeedbackForCall(turnCtx, ts, llm.response, tc, toolName, auditArgs, runner.messages)
-
-				toolDuration := time.Duration(0)
-
-				verifiedWrite := hasVerifiedWriteAudit(hookResult.WriteAudit)
-				exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, hookResult.WriteAudit)
-				recordFinalRenderToolCall(exec, tc.ID, toolName, verifiedWrite)
-				if bindErr := bindNodeFileMediaOwner(
-					p.Context.MediaResolver,
-					ts,
-					hookResult.Media,
-				); bindErr != nil {
-					logger.WarnCF("media", "Failed to bind tool media ownership", map[string]any{
-						"tool":        toolName,
-						"media_count": len(hookResult.Media),
-					})
-				}
-				var toolResultMedia []string
-				if len(hookResult.Media) > 0 && !hookResult.Delivery.IsFinalHandled() {
-					toolResultMedia = append(toolResultMedia, hookResult.Media...)
-				}
-				if len(hookResult.ContextMedia) > 0 && !hookResult.Delivery.IsFinalHandled() {
-					toolResultMedia = append(toolResultMedia, hookResult.ContextMedia...)
-				}
-				if !hookResult.Delivery.IsFinalHandled() && !hookResult.Delivery.IsImmediate() {
-					attachMediaArtifacts(hookResult, p.Context.MediaResolver)
-				}
-				loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
-				_, semantics := p.beforeToolLoopDecision(ts, exec, toolName, loopArguments)
-				protectedResult := ts.agent.Tools.ProtectedDurableResult(toolName, toolArgs)
-				var contentForLLM string
-				var durableContent string
-				terminalBatch := false
-				var terminalTurnErr error
-				loopDecision := loopguard.Decision{}
-				if requiresTerminalDeliverySettlement(ts, hookResult) {
-					settlement, aborted, err := runner.settleTerminalDelivery(
-						ctx,
-						tc.ID,
-						i,
-						toolName,
-						hookResult,
-						loopArguments,
-						semantics,
-						protectedResult,
-					)
-					if err != nil {
-						return stopToolBatch(ToolLoopOutcome{})
-					}
-					if aborted {
-						return stopToolBatch(ToolLoopOutcome{
-							Control: turnStepAbort, AbortCause: turnAbortHard,
-						})
-					}
-					hookResult = settlement.result
-					contentForLLM = settlement.contentForLLM
-					durableContent = settlement.durableContent
-					loopDecision = settlement.loopDecision
-					terminalBatch = settlement.completesToolBatch
-					terminalTurnErr = settlement.turnErr
-					runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
-				} else {
-					contentForLLM = p.filterToolContentForLLM(hookResult.ContentForLLM())
-					loopDecision = p.afterToolLoopDecision(
-						ts, exec, toolName, loopArguments, hookResult, contentForLLM, semantics,
-					)
-					contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
-					toolResultMsg := providers.Message{
-						Role:             "tool",
-						Content:          contentForLLM,
-						ToolCallID:       tc.ID,
-						ToolResultStatus: toolResultContextStatus(hookResult),
-						Media:            toolResultMedia,
-						Deliverable:      taskresult.CloneDeliverable(hookResult.Deliverable),
-					}
-					durableContent = durableToolResultContent(contentForLLM, protectedResult)
-					durableToolResultMsg := durableToolResultJournalMessage(
-						toolResultMsg,
-						hookResult,
-						durableContent,
-					)
-					if protectedResult {
-						durableToolResultMsg.Media = nil
-						durableToolResultMsg.Deliverable = nil
-					}
-					if hookResult.Control.TaskSuspended {
-						runner.commitDelegatedTaskSuspensionBatch(toolResultMsg, durableToolResultMsg, i+1)
-					} else {
-						aborted, err := runner.commitExecutedToolResult(&toolResultMsg, &durableToolResultMsg)
-						if err != nil {
-							return stopToolBatch(ToolLoopOutcome{})
-						}
-						if aborted {
-							return stopToolBatch(ToolLoopOutcome{
-								Control: turnStepAbort, AbortCause: turnAbortHard,
-							})
-						}
-
-						runner.bindImmediateDeliverySettlement(
-							toolResultMsg,
-							durableToolResultMsg,
-							hookResult,
-							protectedResult,
-						)
-						attachments, deliveredResult := p.applySyncToolResultDelivery(ctx, ts, hookResult, toolName)
-						hookResult = deliveredResult
-						runner.handledAttachments = append(runner.handledAttachments, attachments...)
-					}
-				}
-				if !protectedResult && hookResult.Deliverable != nil {
-					recordDeliverable(exec, hookResult.Deliverable)
-				}
-
-				shouldSendForUser := !hookResult.Delivery.IsFinalHandled() &&
-					terminalTurnErr == nil &&
-					!ts.opts.SuppressToolUserDelivery &&
-					!hookResult.Delivery.SuppressesImplicitUserOutput() &&
-					hookResult.ForUser != "" &&
-					ts.opts.SendResponse
-				if shouldSendForUser {
-					_ = p.bus.PublishOutbound(ctx, outboundMessageForTurn(ts, hookResult.ForUser))
-				}
-
-				if !hookResult.Delivery.IsFinalHandled() {
-					llm.toolResponseDisposition = toolResponseNeedsModel
-				}
-
-				p.emitEvent(
-					runtimeevents.KindAgentToolExecEnd,
-					ts.eventMeta("runTurn", "turn.tool.end"),
-					ToolExecEndPayload{
-						ToolCallID: tc.ID,
-						Tool:       toolName,
-						Duration:   toolDuration,
-						ForLLMLen:  len(contentForLLM),
-						ForUserLen: len(hookResult.ForUser),
-						IsError:    hookResult.IsError,
-						Async:      hookResult.Control.Async,
-						Suspended:  hookResult.Control.TaskSuspended,
-						ResultHash: diagnosticSafeHash(p.Cfg, durableContent),
-						DiagnosticResult: diagnosticTextPreview(
-							p.Cfg, durableContent, diagnosticToolResultBytes,
-						),
-						WriteAudit:  append([]toolshared.WriteAuditEntry(nil), hookResult.WriteAudit...),
-						Observation: codingToolObservation(ts, hookResult.Observation),
-					},
-				)
-				p.refreshCodingWorkspaceAfterTool(ts, toolName, hookResult)
-				errorSummary := toolErrorSummary(hookResult)
-				if protectedResult && hookResult.IsError {
-					errorSummary = "protected tool result omitted"
-				}
-				ts.recordToolExecution(
-					toolName,
-					!hookResult.IsError,
-					errorSummary,
-					inferSkillNamesFromToolCall(ts, toolName, toolArgs),
-				)
-				if hookResult.Control.TaskSuspended {
-					return runner.stopForDelegatedTaskSuspension(ctx)
-				}
-				if terminalTurnErr != nil {
-					exec.messages = runner.messages
-					return stopToolBatch(ToolLoopOutcome{
-						Control: turnStepFinalize,
-						TurnErr: terminalTurnErr,
-					})
-				}
-
-				if loopDecision.Action == loopguard.ActionHalt {
-					if !terminalBatch {
-						runner.appendSkippedToolMessages(
-							i+1,
-							"tool loop emergency halt",
-							"Skipped because tool-loop protection stopped the current turn.",
-						)
-					}
-					exec.messages = runner.messages
-					return stopToolBatch(ToolLoopOutcome{
-						Control:      turnStepFinalize,
-						FinalContent: loopDecision.Message,
-						TerminalMode: terminalRenderExact,
-					})
-				}
-				if terminalBatch {
-					exec.messages = runner.messages
-					return stopToolBatch(runner.completeToolBatch(ctx))
-				}
-
-				runner.captureAfterToolSteering(true)
-
-				return skipToolCall()
+				call.name = toolName
+				call.arguments = toolArgs
+				return runner.prepareHookToolCallResult(call, toolReq.HookResult)
 			}
 			logger.WarnCF("agent", "Hook returned respond action but no HookResult provided",
 				map[string]any{
@@ -841,6 +634,57 @@ func (runner *toolLoopRunner) admitToolCall(
 	call.arguments = toolArgs
 	call.loopSemantics = toolSemantics
 	call.loopArguments = loopArguments
+	return toolCallStageResult{}
+}
+
+func (runner *toolLoopRunner) prepareHookToolCallResult(
+	call *toolCallState,
+	result *toolshared.ToolResult,
+) toolCallStageResult {
+	p := runner.p
+	ts := runner.ts
+	llm := runner.llm
+	toolName := call.name
+	toolArgs := call.arguments
+
+	if !ts.tryMarkToolExecutionStarted() {
+		return stopToolBatch(ToolLoopOutcome{Control: turnStepAbort, AbortCause: turnAbortHard})
+	}
+	auditArgs := tools.ToolLogArguments(toolName, toolArgs)
+	argsJSON, _ := json.Marshal(auditArgs)
+	argsPreview := utils.Truncate(string(argsJSON), 200)
+	logger.InfoCF("agent", fmt.Sprintf("Tool call (hook respond): %s(%s)", toolName, argsPreview), map[string]any{
+		"agent_id":  ts.agent.ID,
+		"tool":      toolName,
+		"iteration": llm.iteration,
+	})
+	p.emitEvent(
+		runtimeevents.KindAgentToolExecStart,
+		ts.eventMeta("runTurn", "turn.tool.start"),
+		ToolExecStartPayload{
+			ToolCallID: call.request.ID,
+			Tool:       toolName,
+			Arguments:  cloneEventArguments(auditArgs),
+		},
+	)
+	p.publishToolFeedbackForCall(
+		runner.turnCtx,
+		ts,
+		llm.response,
+		call.request,
+		toolName,
+		auditArgs,
+		runner.messages,
+	)
+
+	loopArguments := durableToolLoopArguments(ts.agent.Tools, toolName, toolArgs)
+	_, semantics := p.beforeToolLoopDecision(ts, runner.exec, toolName, loopArguments)
+	call.result = normalizeToolResultForSyncDelivery(ts, result)
+	call.duration = 0
+	call.loopArguments = loopArguments
+	call.loopSemantics = semantics
+	call.protectedResult = ts.agent.Tools.ProtectedDurableResult(toolName, toolArgs)
+	call.resultSource = toolResultHook
 	return toolCallStageResult{}
 }
 
@@ -1388,7 +1232,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	verifiedWrite := hasVerifiedWriteAudit(toolResult.WriteAudit)
 	toolSummary := strings.TrimSpace(toolResult.ForUser)
-	if toolSummary != "" {
+	if call.resultSource != toolResultHook && toolSummary != "" {
 		exec.actionLog = appendTurnActionRecord(
 			exec.actionLog,
 			"tool_result",
@@ -1401,6 +1245,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 
 	exec.writeAudit = appendTurnWriteAudit(exec.writeAudit, toolName, toolResult.WriteAudit)
 	recordFinalRenderToolCall(exec, toolCallID, toolName, verifiedWrite)
+	bindToolResultMediaOwner(p, ts, toolName, toolResult)
 	if !toolResult.Delivery.IsFinalHandled() && !toolResult.Delivery.IsImmediate() {
 		attachMediaArtifacts(toolResult, p.Context.MediaResolver)
 	}
@@ -1438,10 +1283,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		runner.handledAttachments = append(runner.handledAttachments, settlement.attachments...)
 	} else {
 		toolResultMsg := buildToolResultJournalMessage(
-			p,
-			ts,
 			toolCallID,
-			toolName,
 			toolResult,
 			p.filterToolContentForLLM(toolResult.ContentForLLM()),
 		)
@@ -1546,7 +1388,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		})
 	}
 
-	if toolResult.IsError {
+	if call.resultSource != toolResultHook && toolResult.IsError {
 		errSummary := toolErrorSummary(toolResult)
 		if isFatalMCPTransportErrorSummary(errSummary) {
 			if mcpServerName != "" {
@@ -1606,7 +1448,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		return stopToolBatch(runner.completeToolBatch(ctx))
 	}
 
-	runner.captureAfterToolSteering(false)
+	runner.captureAfterToolSteering(call.resultSource == toolResultHook)
 	return toolCallStageResult{}
 }
 
@@ -1852,11 +1694,9 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	} else {
 		ctx = context.WithoutCancel(ctx)
 	}
+	bindToolResultMediaOwner(r.p, r.ts, toolCall.Name, result)
 	msg := buildToolResultJournalMessage(
-		r.p,
-		r.ts,
 		toolCall.ID,
-		toolCall.Name,
 		result,
 		r.p.filterToolContentForLLM(result.ContentForLLM()),
 	)
@@ -1877,19 +1717,27 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	)
 }
 
-func buildToolResultJournalMessage(
+func bindToolResultMediaOwner(
 	pipeline *Pipeline,
 	ts *turnState,
-	toolCallID string,
 	toolName string,
 	result *toolshared.ToolResult,
-	content string,
-) providers.Message {
+) {
+	if result == nil {
+		return
+	}
 	if bindErr := bindNodeFileMediaOwner(pipeline.Context.MediaResolver, ts, result.Media); bindErr != nil {
 		logger.WarnCF("media", "Failed to bind tool media ownership", map[string]any{
 			"tool": toolName, "media_count": len(result.Media),
 		})
 	}
+}
+
+func buildToolResultJournalMessage(
+	toolCallID string,
+	result *toolshared.ToolResult,
+	content string,
+) providers.Message {
 	message := providers.Message{
 		Role: "tool", Content: content, ToolCallID: toolCallID,
 		ToolResultStatus: toolResultContextStatus(result),
@@ -2001,10 +1849,7 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	)
 	content = appendToolLoopGuidance(content, decision)
 	settledMsg := buildToolResultJournalMessage(
-		r.p,
-		r.ts,
 		toolCallID,
-		toolName,
 		settledResult,
 		content,
 	)

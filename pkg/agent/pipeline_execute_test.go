@@ -46,7 +46,7 @@ func TestToolResultJournalKeepsContextMediaLiveOnly(t *testing.T) {
 		t.Fatalf("context-only media was promoted to a deliverable: %#v", result)
 	}
 	live := buildToolResultJournalMessage(
-		&Pipeline{}, &turnState{}, "call-image", "coding_attachment", result, result.ForLLM,
+		"call-image", result, result.ForLLM,
 	)
 	durable := durableToolResultJournalMessage(live, result, live.Content)
 	if len(live.Media) != 1 || live.Media[0] != result.ContextMedia[0] {
@@ -68,7 +68,7 @@ func TestToolResultJournalPreservesDeliverableForInteractionRecovery(t *testing.
 		},
 	})
 	message := buildToolResultJournalMessage(
-		&Pipeline{}, &turnState{}, "call-1", "test_tool", result, result.ForLLM,
+		"call-1", result, result.ForLLM,
 	)
 	result.Deliverable.Metadata["producer"] = "mutated"
 	if message.Deliverable == nil || message.Deliverable.Text != "tool-owned result" ||
@@ -532,7 +532,9 @@ func (d *recordingToolResultDelivery) applySyncToolResultDelivery(
 }
 
 type toolResultRespondHook struct {
-	result *toolshared.ToolResult
+	result        *toolshared.ToolResult
+	approvalCalls int
+	afterCalls    int
 }
 
 type dropToolSuspensionHook struct{}
@@ -598,10 +600,12 @@ func (h *toolResultRespondHook) AfterTool(
 	_ context.Context,
 	resp *ToolResultHookResponse,
 ) (*ToolResultHookResponse, HookDecision) {
+	h.afterCalls++
 	return resp, HookDecision{Action: HookActionContinue}
 }
 
-func (*toolResultRespondHook) ApproveTool(context.Context, *ToolApprovalRequest) ApprovalDecision {
+func (h *toolResultRespondHook) ApproveTool(context.Context, *ToolApprovalRequest) ApprovalDecision {
+	h.approvalCalls++
 	return ApprovalDecision{Approved: true}
 }
 
@@ -789,7 +793,7 @@ func TestToolCallStagesKeepAdmissionInvocationAndPersistenceSeparate(t *testing.
 		arguments: map[string]any{},
 	}
 
-	if result := runner.admitToolCall(t.Context(), call); result.disposition != toolCallProceed {
+	if result := runner.admitToolCall(call); result.disposition != toolCallProceed {
 		t.Fatalf("admitToolCall() disposition = %v, outcome = %+v", result.disposition, result.outcome)
 	}
 	if tool.executions != 0 || call.result != nil || len(runner.messages) != 0 {
@@ -1631,8 +1635,9 @@ func TestPipelineHookDelegatedTaskSuspensionTerminatesToolBatch(t *testing.T) {
 		Control: toolshared.ToolControl{TaskSuspended: true},
 	}
 	feedback := &immediateDeliveryFeedbackManager{}
+	hook := &toolResultRespondHook{result: hookResult}
 	pipeline := &Pipeline{Interaction: PipelineInteractionServices{
-		Hooks:        &toolResultRespondHook{result: hookResult},
+		Hooks:        hook,
 		ToolFeedback: feedback,
 	}}
 
@@ -1642,6 +1647,9 @@ func TestPipelineHookDelegatedTaskSuspensionTerminatesToolBatch(t *testing.T) {
 	}
 	if firstTool.executions != 0 || deferredTool.executions != 0 {
 		t.Fatalf("hooked/deferred executions = %d/%d, want 0/0", firstTool.executions, deferredTool.executions)
+	}
+	if hook.approvalCalls != 0 || hook.afterCalls != 0 {
+		t.Fatalf("hook approval/after calls = %d/%d, want 0/0", hook.approvalCalls, hook.afterCalls)
 	}
 	if hookResult.ForUser != "" || !hookResult.Delivery.IsFinalHandled() {
 		t.Fatalf("hook suspension was not normalized for terminal runtime handling: %#v", hookResult)
