@@ -80,10 +80,10 @@ type idempotentNodeTransferMediaStore interface {
 }
 
 type ownedNodeTransferMediaStore interface {
-	ResolveOwnedWithMeta(
+	OpenOwned(
 		ref string,
 		owner media.MediaOwner,
-	) (localPath string, meta media.MediaMeta, err error)
+	) (*media.OwnedMediaSource, error)
 }
 
 func newNodeFileTransferSource(
@@ -273,12 +273,16 @@ func (source *nodeFileTransferSource) openUploadSource(
 	if !ok {
 		return nil, nil, media.MediaMeta{}, nodes.ErrTransferArtifactNotFound
 	}
-	localPath, meta, err := ownedStore.ResolveOwnedWithMeta(artifactRef, mediaOwner)
+	mediaSource, err := ownedStore.OpenOwned(artifactRef, mediaOwner)
 	if err != nil {
 		return nil, nil, media.MediaMeta{}, nodes.ErrTransferArtifactNotFound
 	}
-	file, info, err := openNodeTransferMedia(localPath)
-	return file, info, meta, err
+	info, err := mediaSource.File.Stat()
+	if err != nil {
+		_ = mediaSource.Close()
+		return nil, nil, media.MediaMeta{}, nodes.ErrTransferArtifactNotFound
+	}
+	return mediaSource.File, info, mediaSource.Meta, nil
 }
 
 func (source *nodeFileTransferSource) InspectFile(

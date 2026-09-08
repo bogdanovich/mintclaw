@@ -54,6 +54,46 @@ func TestBindInboundMediaOwnerUsesExactActorAndRoute(t *testing.T) {
 	}
 }
 
+func TestInboundMediaOwnerSeparatesEffectiveSessionsOnOneRoute(t *testing.T) {
+	store := media.NewFileMediaStore()
+	path := filepath.Join(t.TempDir(), "inbound.bin")
+	if err := os.WriteFile(path, []byte("owned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := store.Store(path, media.MediaMeta{Source: "telegram"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "telegram", ChatID: "chat-1", ActorID: "actor-a"},
+		Media:   []string{ref},
+	}
+	first := &inboundDispatchTarget{
+		Agent:      &AgentInstance{ID: "main", Workspace: "/workspace/main"},
+		Allocation: session.Allocation{RouteScopeKey: "telegram:chat-1"},
+		SessionKey: "session-1",
+	}
+	second := *first
+	second.SessionKey = "session-2"
+	ownerA, err := inboundMediaOwnerForTarget(first, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerB, err := inboundMediaOwnerForTarget(&second, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ownerA.RouteID != ownerB.RouteID || ownerA.SessionID == ownerB.SessionID {
+		t.Fatalf("owners do not isolate effective session: first=%#v second=%#v", ownerA, ownerB)
+	}
+	if err := store.BindOwner(ref, ownerA); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ResolveOwnedWithMeta(ref, ownerB); err == nil {
+		t.Fatal("second effective session resolved first session media")
+	}
+}
+
 func TestBindInboundMediaOwnerDoesNotDependOnNodeUploadAuthority(t *testing.T) {
 	store := media.NewFileMediaStore()
 	path := filepath.Join(t.TempDir(), "inbound.bin")

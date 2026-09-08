@@ -410,7 +410,8 @@ func (resolver *countingOwnedMediaResolver) OpenOwned(
 func testMediaOwner(t *testing.T) media.MediaOwner {
 	t.Helper()
 	owner, err := media.NewMediaOwner(
-		"/workspace/main", "main", "actor-a", "telegram:chat-1:topic-1", "telegram", "chat-1", "topic-1",
+		"/workspace/main", "main", "actor-a", "telegram:chat-1:topic-1", "session-1",
+		"telegram", "chat-1", "topic-1",
 	)
 	if err != nil {
 		t.Fatal(err)

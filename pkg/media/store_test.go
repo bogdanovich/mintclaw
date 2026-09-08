@@ -1063,13 +1063,13 @@ func TestPersistentMediaOwnerIsExactAndImmutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	ownerA, err := NewMediaOwner(
-		"/workspace/main", "main", "actor-a", "route-1", "telegram", "chat-1", "topic-1",
+		"/workspace/main", "main", "actor-a", "route-1", "session-1", "telegram", "chat-1", "topic-1",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ownerB, err := NewMediaOwner(
-		"/workspace/main", "main", "actor-b", "route-1", "telegram", "chat-1", "topic-1",
+		"/workspace/main", "main", "actor-b", "route-1", "session-1", "telegram", "chat-1", "topic-1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1130,7 +1130,7 @@ func TestBindOwnerBackfillsLegacyIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner, err := NewMediaOwner(
-		"/workspace/main", "main", "actor-a", "route-1", "telegram", "chat-1", "topic-1",
+		"/workspace/main", "main", "actor-a", "route-1", "session-1", "telegram", "chat-1", "topic-1",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1163,6 +1163,34 @@ func TestBindOwnerBackfillsLegacyIdentity(t *testing.T) {
 	}
 	if err := opened.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestResolveOwnedWithMetaRejectsReplacedBytes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "owned.bin")
+	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewFileMediaStore()
+	ref, err := store.Store(path, MediaMeta{Source: "telegram"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := NewMediaOwner(
+		"/workspace/main", "main", "actor-a", "route-1", "session-1", "telegram", "chat-1", "topic-1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replaced"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ResolveOwnedWithMeta(ref, owner); err == nil {
+		t.Fatal("authority-scoped path resolution accepted replaced bytes")
 	}
 }
 

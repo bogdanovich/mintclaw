@@ -75,6 +75,7 @@ type OwnedMediaSource struct {
 	File     *os.File
 	Meta     MediaMeta
 	Identity ContentIdentity
+	path     string
 }
 
 func (source *OwnedMediaSource) Close() error {
@@ -89,19 +90,20 @@ func (source *OwnedMediaSource) Close() error {
 // NewMediaOwner derives an exact owner without retaining raw routing or actor
 // identifiers in the media index.
 func NewMediaOwner(
-	workspace, agentID, actorID, routeSession, channel, chatID, topicID string,
+	workspace, agentID, actorID, routeSession, effectiveSession, channel, chatID, topicID string,
 ) (MediaOwner, error) {
 	workspace = strings.TrimSpace(workspace)
 	agentID = strings.TrimSpace(agentID)
 	actorID = strings.TrimSpace(actorID)
 	routeSession = strings.TrimSpace(routeSession)
+	effectiveSession = strings.TrimSpace(effectiveSession)
 	channel = strings.TrimSpace(channel)
 	chatID = strings.TrimSpace(chatID)
 	topicID = strings.TrimSpace(topicID)
 	if workspace == "" || agentID == "" || actorID == "" ||
-		routeSession == "" || channel == "" || chatID == "" {
+		routeSession == "" || effectiveSession == "" || channel == "" || chatID == "" {
 		return MediaOwner{}, errors.New(
-			"media owner requires workspace, agent, actor, route, channel, and chat",
+			"media owner requires workspace, agent, actor, route, session, channel, and chat",
 		)
 	}
 	return MediaOwner{
@@ -115,7 +117,7 @@ func NewMediaOwner(
 			topicID,
 			routeSession,
 		),
-		SessionID: mediaOwnerCorrelation("session", routeSession),
+		SessionID: mediaOwnerCorrelation("session", effectiveSession),
 	}, nil
 }
 
@@ -697,7 +699,7 @@ func (s *FileMediaStore) OpenOwned(ref string, owner MediaOwner) (*OwnedMediaSou
 		return nil, errors.New("media store: owned source is unavailable")
 	}
 	return &OwnedMediaSource{
-		File: file, Meta: entry.meta, Identity: identity,
+		File: file, Meta: entry.meta, Identity: identity, path: entry.path,
 	}, nil
 }
 
@@ -706,17 +708,16 @@ func (s *FileMediaStore) ResolveOwnedWithMeta(
 	ref string,
 	owner MediaOwner,
 ) (string, MediaMeta, error) {
-	if err := owner.validate(); err != nil {
+	source, err := s.OpenOwned(ref, owner)
+	if err != nil {
 		return "", MediaMeta{}, err
 	}
-	s.mu.RLock()
-	entry, found := s.refs[ref]
-	owned := found && entry.owner != nil && *entry.owner == owner
-	s.mu.RUnlock()
-	if !owned {
-		return "", MediaMeta{}, errors.New("media store: ref is not owned by this route")
+	path := source.path
+	meta := source.Meta
+	if err := source.Close(); err != nil {
+		return "", MediaMeta{}, errors.New("media store: owned source is unavailable")
 	}
-	return s.resolve(ref)
+	return path, meta, nil
 }
 
 func cloneMediaOwner(owner *MediaOwner) *MediaOwner {

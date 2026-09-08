@@ -99,11 +99,16 @@ func inboundMediaOwnerForTarget(
 	if routeSession == "" {
 		routeSession = strings.TrimSpace(target.SessionKey)
 	}
+	effectiveSession := strings.TrimSpace(target.SessionKey)
+	if effectiveSession == "" {
+		effectiveSession = routeSession
+	}
 	return media.NewMediaOwner(
 		target.Agent.Workspace,
 		target.Agent.ID,
 		actorID,
 		routeSession,
+		effectiveSession,
 		msg.Context.Channel,
 		msg.Context.ChatID,
 		originTopicID(&msg.Context),
@@ -133,11 +138,16 @@ func nodeFileMediaOwnerForTurn(ts *turnState) (media.MediaOwner, error) {
 	if routeSession == "" {
 		routeSession = strings.TrimSpace(ts.opts.Dispatch.SessionKey)
 	}
+	effectiveSession := strings.TrimSpace(ts.opts.Dispatch.SessionKey)
+	if effectiveSession == "" {
+		effectiveSession = routeSession
+	}
 	return media.NewMediaOwner(
 		ts.workspace,
 		ts.agent.ID,
 		actorID,
 		routeSession,
+		effectiveSession,
 		ts.channel,
 		ts.chatID,
 		topicID,

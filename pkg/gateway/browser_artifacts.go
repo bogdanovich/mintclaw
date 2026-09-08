@@ -445,8 +445,12 @@ func browserScreenshotMediaOwner(ctx context.Context, workspace string) (media.M
 	if routeSession == "" {
 		routeSession = strings.TrimSpace(toolshared.ToolSessionKey(ctx))
 	}
+	effectiveSession := strings.TrimSpace(toolshared.ToolSessionKey(ctx))
+	if effectiveSession == "" {
+		effectiveSession = routeSession
+	}
 	return media.NewMediaOwner(
-		workspace, toolshared.ToolAgentID(ctx), actorID, routeSession,
+		workspace, toolshared.ToolAgentID(ctx), actorID, routeSession, effectiveSession,
 		toolshared.ToolChannel(ctx), toolshared.ToolChatID(ctx), toolshared.ToolTopicID(ctx),
 	)
 }

@@ -353,6 +353,23 @@ func TestNodeFileTransferSnapshotsOnlyRetainedMedia(t *testing.T) {
 	); !errors.Is(err, nodes.ErrTransferArtifactNotFound) {
 		t.Fatalf("model path snapshot error = %v", err)
 	}
+	if err := os.WriteFile(sourcePath, []byte{5, 4, 3, 2, 1, 0}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.SnapshotUploadArtifact(
+		t.Context(),
+		owner,
+		"transfer-replaced-media",
+		"personal-vpn",
+		"profile-v1",
+		time.Now().Add(5*time.Minute).Unix(),
+		1024,
+		mediaRef,
+		store,
+		mediaOwner,
+	); !errors.Is(err, nodes.ErrTransferArtifactNotFound) {
+		t.Fatalf("replaced owned media snapshot error = %v", err)
+	}
 	otherOwner := owner
 	otherOwner.ActorID = "actor-2"
 	if _, _, err := spool.ResolveOwned(otherOwner, record.Ref); !errors.Is(
@@ -578,6 +595,7 @@ func testNodeTransferMediaOwner(t *testing.T, actor string) media.MediaOwner {
 		"main",
 		actor,
 		"telegram:chat-1",
+		"session-1",
 		"telegram",
 		"chat-1",
 		"topic-1",
