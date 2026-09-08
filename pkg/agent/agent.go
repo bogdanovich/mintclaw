@@ -443,7 +443,10 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 	}
 
 	opts = normalizeTurnSpec(opts)
-	opts.Dispatch = normalizeDispatchInboundRelation(agent, opts.Dispatch, time.Now())
+	opts.Dispatch, err = normalizeDispatchInboundRelation(ctx, agent, opts.Dispatch, time.Now())
+	if err != nil {
+		return turnResult{}, err
+	}
 	opts, err = resolveTurnProfileOptions(al.GetConfig(), opts)
 	if err != nil {
 		return turnResult{}, err
@@ -481,7 +484,10 @@ func (al *AgentLoop) runAgentLoopWithExecution(
 			input.Dispatch.SessionScope,
 		),
 	)
-	ts := newTurnStateFromInput(agent, input, opts.ApprovalGrant, turnScope)
+	ts, err := newTurnStateFromInput(ctx, agent, input, opts.ApprovalGrant, turnScope)
+	if err != nil {
+		return turnResult{}, &turnAdmissionError{err: err}
+	}
 	if input.observers.FinalDelivery != nil {
 		input.observers.FinalDelivery.observeTurn(
 			runtimeevents.NewTraceScope(turnScope.workspace, turnScope.turnID),

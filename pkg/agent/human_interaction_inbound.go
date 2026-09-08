@@ -1285,7 +1285,10 @@ func (al *AgentLoop) prepareApprovedInteractionTool(
 	agent *AgentInstance,
 	record interactions.Record,
 ) (*interactionContinuationExecutor, error) {
-	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(record))
+	history, err := agent.Sessions.ReadTurnHistory(ctx, interactionContinuationSessionKey(record))
+	if err != nil {
+		return nil, fmt.Errorf("read approval interaction history: %w", err)
+	}
 	toolCall, ok := interactionOriginToolCall(history, record.Origin.ToolCallID)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -1337,10 +1340,11 @@ func (al *AgentLoop) prepareApprovedInteractionTool(
 		return nil
 	}
 	executor.validateTool = func() error {
-		if _, resultIndex := interactionToolPairIndexes(
-			agent.Sessions.GetHistory(interactionContinuationSessionKey(record)),
-			record.Origin.ToolCallID,
-		); resultIndex < 0 {
+		history, err := agent.Sessions.ReadTurnHistory(ctx, interactionContinuationSessionKey(record))
+		if err != nil {
+			return fmt.Errorf("validate approved interaction history: %w", err)
+		}
+		if _, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID); resultIndex < 0 {
 			return fmt.Errorf("approved tool execution did not persist a matching result")
 		}
 		_, exists := registry.Get(record.ID)
@@ -1738,7 +1742,10 @@ func (al *AgentLoop) ensureInteractionToolResult(
 	agent *AgentInstance,
 	record interactions.Record,
 ) error {
-	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(record))
+	history, err := agent.Sessions.ReadTurnHistory(ctx, interactionContinuationSessionKey(record))
+	if err != nil {
+		return fmt.Errorf("read interaction history before result repair: %w", err)
+	}
 	originIndex, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
 	if originIndex < 0 {
 		return fmt.Errorf("originating tool call %q is missing from session history", record.Origin.ToolCallID)
@@ -1773,7 +1780,10 @@ func (al *AgentLoop) ensureInteractionCancellationToolResult(
 	record interactions.Record,
 	code string,
 ) error {
-	history := agent.Sessions.GetHistory(interactionContinuationSessionKey(record))
+	history, err := agent.Sessions.ReadTurnHistory(ctx, interactionContinuationSessionKey(record))
+	if err != nil {
+		return fmt.Errorf("read interaction history before cancellation repair: %w", err)
+	}
 	originIndex, resultIndex := interactionToolPairIndexes(history, record.Origin.ToolCallID)
 	if originIndex < 0 {
 		return fmt.Errorf("originating tool call %q is missing from session history", record.Origin.ToolCallID)

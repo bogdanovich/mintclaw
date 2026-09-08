@@ -99,9 +99,13 @@ func (e *interactionContinuationExecutor) execute(
 				return turnResult{}, TurnEndStatusError, validateErr
 			}
 		}
-		if repairErr := repairJournaledToolPair(
-			exec, ts.agent.Sessions.GetHistory(ts.sessionKey), e.approvedTool.ID,
-		); repairErr != nil {
+		history, readErr := ts.agent.Sessions.ReadTurnHistory(turnCtx, ts.sessionKey)
+		if readErr != nil {
+			return turnResult{}, TurnEndStatusError, fmt.Errorf(
+				"read approved tool history for repair: %w", readErr,
+			)
+		}
+		if repairErr := repairJournaledToolPair(exec, history, e.approvedTool.ID); repairErr != nil {
 			return turnResult{}, TurnEndStatusError, repairErr
 		}
 		ts.consumeApprovalGrant()

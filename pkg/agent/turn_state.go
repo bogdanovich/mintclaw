@@ -413,15 +413,22 @@ type turnState struct {
 // newTurnState preserves the canonical test-construction seam while production
 // entrypoints pass an already-frozen input to newTurnStateFromInput.
 func newTurnState(agent *AgentInstance, spec turnSpec, scope turnEventScope) *turnState {
-	return newTurnStateFromInput(agent, freezeTurnInput(spec), spec.ApprovalGrant, scope)
+	state, err := newTurnStateFromInput(
+		context.Background(), agent, freezeTurnInput(spec), spec.ApprovalGrant, scope,
+	)
+	if err != nil {
+		panic(fmt.Sprintf("construct test turn state: %v", err))
+	}
+	return state
 }
 
 func newTurnStateFromInput(
+	ctx context.Context,
 	agent *AgentInstance,
 	opts turnInput,
 	approvalGrant *ToolApprovalGrant,
 	scope turnEventScope,
-) *turnState {
+) (*turnState, error) {
 	if approvalGrant != nil {
 		grant := *approvalGrant
 		approvalGrant = &grant
@@ -463,13 +470,18 @@ func newTurnStateFromInput(
 		observers:     opts.observers,
 	}
 
-	// Bind session store and capture initial history length for rollback logic
+	// Bind the store and capture one canonical state for rollback logic. A read
+	// failure must not be reinterpreted as an empty pre-turn session.
 	var history []providers.Message
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		history = agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
+		snapshot, err := agent.Sessions.ReadTurnSnapshot(ctx, opts.Dispatch.SessionKey)
+		if err != nil {
+			return nil, fmt.Errorf("read canonical turn snapshot: %w", err)
+		}
+		history = snapshot.History
 		ts.initialHistoryLength = len(history)
-		ts.captureCanonicalRestorePoint(history, agent.Sessions.GetSummary(opts.Dispatch.SessionKey))
+		ts.captureCanonicalRestorePoint(history, snapshot.Summary)
 	}
 	if agent != nil && agent.ContextBuilder != nil {
 		ts.codingInstructions = newCodingInstructionTurnState(
@@ -478,7 +490,7 @@ func newTurnStateFromInput(
 		)
 	}
 
-	return ts
+	return ts, nil
 }
 
 func (ts *turnState) currentApprovalGrant() *ToolApprovalGrant {
@@ -1032,12 +1044,15 @@ func (ts *turnState) acceptedSteeringSnapshot() []providers.Message {
 	return append([]providers.Message(nil), ts.acceptedSteering...)
 }
 
-func (ts *turnState) refreshCanonicalRestorePointFromSession() {
+func (ts *turnState) refreshCanonicalRestorePointFromSession(ctx context.Context) error {
 	if ts == nil || ts.session == nil {
-		return
+		return nil
 	}
-	history := ts.session.GetHistory(ts.sessionKey)
-	summary := ts.session.GetSummary(ts.sessionKey)
+	snapshot, err := ts.session.ReadTurnSnapshot(ctx, ts.sessionKey)
+	if err != nil {
+		return fmt.Errorf("refresh canonical turn snapshot: %w", err)
+	}
+	history := snapshot.History
 
 	persisted := ts.persistedMessagesSnapshot()
 
@@ -1045,7 +1060,8 @@ func (ts *turnState) refreshCanonicalRestorePointFromSession() {
 		history = append([]providers.Message(nil), history[:len(history)-matched]...)
 	}
 
-	ts.captureCanonicalRestorePoint(history, summary)
+	ts.captureCanonicalRestorePoint(history, snapshot.Summary)
+	return nil
 }
 
 func (ts *turnState) restoreSession() error {

@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
@@ -9,6 +11,18 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
+
+type snapshotReadFailingSessionStore struct {
+	session.SessionStore
+	err error
+}
+
+func (s *snapshotReadFailingSessionStore) ReadTurnSnapshot(
+	context.Context,
+	string,
+) (session.TurnSnapshot, error) {
+	return session.TurnSnapshot{}, s.err
+}
 
 func TestFreezeTurnInputOwnsRuntimeSnapshot(t *testing.T) {
 	observation := &finalDeliveryObservation{}
@@ -105,7 +119,10 @@ func TestFreezeTurnInputDetachesEmptySessionScopeCollections(t *testing.T) {
 func TestTurnApprovalGrantIsMutableStateNotInput(t *testing.T) {
 	grant := &ToolApprovalGrant{InteractionID: "interaction-1", Revision: 2}
 	input := freezeTurnInput(turnSpec{ApprovalGrant: grant})
-	state := newTurnStateFromInput(&AgentInstance{}, input, grant, turnEventScope{})
+	state, err := newTurnStateFromInput(t.Context(), &AgentInstance{}, input, grant, turnEventScope{})
+	if err != nil {
+		t.Fatalf("newTurnStateFromInput() error = %v", err)
+	}
 	grant.InteractionID = "mutated"
 
 	if got := state.currentApprovalGrant(); got == nil || got.InteractionID != "interaction-1" {
@@ -114,5 +131,23 @@ func TestTurnApprovalGrantIsMutableStateNotInput(t *testing.T) {
 	state.consumeApprovalGrant()
 	if got := state.currentApprovalGrant(); got != nil {
 		t.Fatalf("approval grant after consumption = %#v", got)
+	}
+}
+
+func TestNewTurnStateRejectsCanonicalSnapshotReadFailure(t *testing.T) {
+	wantErr := errors.New("canonical snapshot unavailable")
+	store := session.NewMemoryStore()
+	agent := &AgentInstance{Sessions: &snapshotReadFailingSessionStore{
+		SessionStore: store,
+		err:          wantErr,
+	}}
+	input := freezeTurnInput(makeTestTurnSpec("snapshot-failure"))
+
+	state, err := newTurnStateFromInput(t.Context(), agent, input, nil, turnEventScope{})
+	if state != nil {
+		t.Fatalf("newTurnStateFromInput() state = %#v, want nil", state)
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("newTurnStateFromInput() error = %v, want %v", err, wantErr)
 	}
 }

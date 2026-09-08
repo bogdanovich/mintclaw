@@ -24,6 +24,9 @@ type Store interface {
 	// Returns an empty string if no summary exists.
 	GetSummary(ctx context.Context, sessionKey string) (string, error)
 
+	// GetSnapshot returns history and summary from one canonical session state.
+	GetSnapshot(ctx context.Context, sessionKey string) (SessionSnapshot, error)
+
 	// SetSummary updates the conversation summary for a session.
 	SetSummary(ctx context.Context, sessionKey, summary string) error
 
@@ -62,6 +65,12 @@ type Store interface {
 	GetSessionMeta(ctx context.Context, sessionKey string) (SessionMeta, error)
 	UpsertSessionMeta(ctx context.Context, sessionKey string, scope json.RawMessage, clientSessionID string) error
 	ClearSessionClientIDs(ctx context.Context, sessionKey string) error
+}
+
+// SessionSnapshot is the canonical state required to restore one session.
+type SessionSnapshot struct {
+	History []providers.Message
+	Summary string
 }
 
 // HistoryRevision identifies the canonical visible history for a session.

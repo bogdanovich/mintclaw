@@ -218,7 +218,10 @@ func TestNormalizeDispatchInboundRelationUsesEventTimeInsteadOfProcessingTime(t 
 		},
 	}
 
-	got := normalizeDispatchInboundRelation(agent, dispatch, processingAt)
+	got, err := normalizeDispatchInboundRelation(t.Context(), agent, dispatch, processingAt)
+	if err != nil {
+		t.Fatalf("normalizeDispatchInboundRelation() error = %v", err)
+	}
 
 	if got.InboundContext.Relation.Kind != InboundRelationAdjacentFollowupMedia {
 		t.Fatalf(

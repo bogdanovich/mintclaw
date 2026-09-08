@@ -328,16 +328,12 @@ func TestJSONLStoreHistoryPagesUseCanonicalMessageDecoder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	history, err := store.GetHistory(t.Context(), sessionKey)
-	if err != nil {
-		t.Fatal(err)
+	if _, err = store.GetHistory(t.Context(), sessionKey); err == nil {
+		t.Fatal("GetHistory() accepted a non-current committed record")
 	}
 	page, err := store.GetHistoryPage(t.Context(), sessionKey, HistoryPageRequest{Before: -1, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(history) != 1 || history[0].Content != "current" {
-		t.Fatalf("GetHistory() = %+v, want only current record", history)
 	}
 	if page.Total != 1 || len(page.Messages) != 1 || page.Messages[0].Content != "current" {
 		t.Fatalf("GetHistoryPage() = %+v, want same canonical record", page)
@@ -894,6 +890,136 @@ func TestGetHistory_Ordering(t *testing.T) {
 		if history[i].Content != expected {
 			t.Errorf("msg[%d].Content = %q, want %q", i, history[i].Content, expected)
 		}
+	}
+}
+
+func TestGetSnapshotReturnsHistoryAndSummary(t *testing.T) {
+	store := newTestStore(t)
+	ctx := t.Context()
+	if err := store.AddMessage(ctx, "snapshot", "user", "current"); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	if err := store.SetSummary(ctx, "snapshot", "current summary"); err != nil {
+		t.Fatalf("SetSummary: %v", err)
+	}
+
+	snapshot, err := store.GetSnapshot(ctx, "snapshot")
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	if len(snapshot.History) != 1 || snapshot.History[0].Content != "current" ||
+		snapshot.Summary != "current summary" {
+		t.Fatalf("GetSnapshot() = %#v", snapshot)
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err = store.GetSnapshot(canceled, "snapshot"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetSnapshot() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestGetSnapshotReconcilesInterruptedReplacement(t *testing.T) {
+	store := newTestStore(t)
+	ctx := t.Context()
+	const sessionKey = "interrupted-snapshot"
+	for _, content := range []string{"hidden-old", "visible-old"} {
+		if err := store.AddMessage(ctx, sessionKey, "user", content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.TruncateHistory(ctx, sessionKey, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := store.readMeta(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := encodeJSONL([]providers.Message{{Role: "assistant", Content: "replacement"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.HistoryHasPrevious = true
+	meta.HistoryPreviousCount = meta.Count
+	meta.HistoryPreviousSkip = meta.Skip
+	meta.HistoryTargetDigest = digestJSONL(replacement)
+	meta.Count = 1
+	meta.Skip = 0
+	if err = store.beginHistoryMutation(sessionKey, &meta, true); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := store.GetSnapshot(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("GetSnapshot() error = %v", err)
+	}
+	if len(snapshot.History) != 1 || snapshot.History[0].Content != "visible-old" {
+		t.Fatalf("GetSnapshot() history = %#v, want prior visible history", snapshot.History)
+	}
+	reconciled, err := store.readMeta(sessionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.HistoryDirty || reconciled.Count != 2 || reconciled.Skip != 1 {
+		t.Fatalf("reconciled metadata = %#v", reconciled)
+	}
+}
+
+func TestGetSnapshotRejectsMissingOrCorruptCommittedHistory(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, store *JSONLStore, sessionKey string)
+	}{
+		{
+			name: "missing file",
+			mutate: func(t *testing.T, store *JSONLStore, sessionKey string) {
+				t.Helper()
+				if err := os.Remove(store.jsonlPath(sessionKey)); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "truncated file",
+			mutate: func(t *testing.T, store *JSONLStore, sessionKey string) {
+				t.Helper()
+				data, err := os.ReadFile(store.jsonlPath(sessionKey))
+				if err != nil {
+					t.Fatal(err)
+				}
+				firstRecordEnd := bytes.IndexByte(data, '\n') + 1
+				if err = os.WriteFile(store.jsonlPath(sessionKey), data[:firstRecordEnd], 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "malformed record",
+			mutate: func(t *testing.T, store *JSONLStore, sessionKey string) {
+				t.Helper()
+				if err := os.WriteFile(store.jsonlPath(sessionKey), []byte("not-json\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestStore(t)
+			const sessionKey = "invalid-committed-snapshot"
+			for _, content := range []string{"first", "second"} {
+				if err := store.AddMessage(t.Context(), sessionKey, "user", content); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tt.mutate(t, store, sessionKey)
+
+			if _, err := store.GetSnapshot(t.Context(), sessionKey); err == nil {
+				t.Fatal("GetSnapshot() error = nil, want committed history validation failure")
+			}
+		})
 	}
 }
 
@@ -1524,10 +1650,16 @@ func TestCrashRecovery_PartialLine(t *testing.T) {
 	}
 	_ = f.Close()
 
-	// GetHistory should return only the valid message.
-	history, err := store.GetHistory(ctx, "crash")
+	// Canonical reads fail closed instead of silently inventing a partial
+	// conversation from the valid prefix.
+	if _, err = store.GetHistory(ctx, "crash"); err == nil {
+		t.Fatal("GetHistory accepted a partial JSONL record")
+	}
+
+	// Passive diagnostics retain their tolerant best-effort view.
+	history, err := readMessages(ctx, jsonlPath, 0)
 	if err != nil {
-		t.Fatalf("GetHistory: %v", err)
+		t.Fatalf("readMessages: %v", err)
 	}
 	if len(history) != 1 {
 		t.Fatalf("expected 1 valid message, got %d", len(history))

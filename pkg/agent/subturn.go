@@ -651,7 +651,10 @@ func spawnSubTurn(
 	)
 
 	// Create child turnState using the new API
-	childTS := newTurnStateFromInput(&agent, input, nil, scope)
+	childTS, err := newTurnStateFromInput(childCtx, &agent, input, nil, scope)
+	if err != nil {
+		return nil, fmt.Errorf("initialize child turn: %w", err)
+	}
 
 	// Set SubTurn-specific fields
 	childTS.critical = cfg.Critical
@@ -945,6 +948,28 @@ func (e *ephemeralSessionStore) RestoreTurnSnapshot(
 	e.summary = summary
 	e.truncateLocked()
 	return nil
+}
+
+func (e *ephemeralSessionStore) ReadTurnSnapshot(
+	ctx context.Context,
+	_ string,
+) (session.TurnSnapshot, error) {
+	if ctx != nil {
+		if err := context.Cause(ctx); err != nil {
+			return session.TurnSnapshot{}, err
+		}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ctx != nil {
+		if err := context.Cause(ctx); err != nil {
+			return session.TurnSnapshot{}, err
+		}
+	}
+	return session.TurnSnapshot{
+		History: append([]providers.Message(nil), e.history...),
+		Summary: e.summary,
+	}, nil
 }
 
 func (e *ephemeralSessionStore) ReplaceTurnHistory(

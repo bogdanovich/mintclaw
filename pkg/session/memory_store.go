@@ -144,6 +144,28 @@ func (s *MemoryStore) RestoreTurnSnapshot(
 	return s.replaceTurnSnapshot(ctx, sessionKey, history, summary, true)
 }
 
+func (s *MemoryStore) ReadTurnSnapshot(
+	ctx context.Context,
+	sessionKey string,
+) (TurnSnapshot, error) {
+	if err := contextCause(ctx); err != nil {
+		return TurnSnapshot{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := contextCause(ctx); err != nil {
+		return TurnSnapshot{}, err
+	}
+	stored := s.sessions[sessionKey]
+	if stored == nil {
+		return TurnSnapshot{History: []providers.Message{}}, nil
+	}
+	return TurnSnapshot{
+		History: cloneSessionMessages(stored.messages),
+		Summary: stored.summary,
+	}, nil
+}
+
 func (s *MemoryStore) ReplaceTurnHistory(
 	ctx context.Context,
 	sessionKey string,

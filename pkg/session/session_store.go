@@ -63,15 +63,23 @@ type TurnJournal interface {
 	AppendTurnMessage(ctx context.Context, sessionKey string, msg providers.Message) error
 }
 
-// TurnSnapshotStore restores the canonical pre-turn state when execution is
-// aborted before any external side effect may have started.
+// TurnSnapshotStore reads and restores the canonical pre-turn state when
+// execution is aborted before any external side effect may have started.
 type TurnSnapshotStore interface {
+	ReadTurnSnapshot(ctx context.Context, sessionKey string) (TurnSnapshot, error)
 	RestoreTurnSnapshot(
 		ctx context.Context,
 		sessionKey string,
 		history []providers.Message,
 		summary string,
 	) error
+}
+
+// TurnSnapshot is the canonical history and summary captured for one turn
+// restore point.
+type TurnSnapshot struct {
+	History []providers.Message
+	Summary string
 }
 
 func contextCause(ctx context.Context) error {

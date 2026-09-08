@@ -171,7 +171,11 @@ func (al *AgentLoop) prepareInboundMessageForTarget(
 	if msg.Context.Relation.IsZero() {
 		var history []providers.Message
 		if target != nil && target.Agent != nil && target.Agent.Sessions != nil {
-			history = target.Agent.Sessions.GetHistory(target.SessionKey)
+			var err error
+			history, err = target.Agent.Sessions.ReadTurnHistory(ctx, target.SessionKey)
+			if err != nil {
+				return msg, fmt.Errorf("read canonical history for inbound relation: %w", err)
+			}
 		}
 		history = historyWithPendingRelationRoot(history, target, msg)
 		msg.Context.Relation = classifyPromptCurrentMessageRelation(
@@ -239,12 +243,13 @@ func (root inboundRelationRoot) matches(msg bus.InboundMessage) bool {
 }
 
 func normalizeDispatchInboundRelation(
+	ctx context.Context,
 	agent *AgentInstance,
 	dispatch DispatchRequest,
 	fallback time.Time,
-) DispatchRequest {
+) (DispatchRequest, error) {
 	if dispatch.InboundContext == nil {
-		return dispatch
+		return dispatch, nil
 	}
 	inboundContext := *dispatch.InboundContext
 	dispatch.InboundContext = &inboundContext
@@ -252,11 +257,15 @@ func normalizeDispatchInboundRelation(
 		dispatch.InboundContext.ReceivedAt = fallback.UTC()
 	}
 	if !dispatch.InboundContext.Relation.IsZero() {
-		return dispatch
+		return dispatch, nil
 	}
 	var history []providers.Message
 	if agent != nil && agent.Sessions != nil {
-		history = agent.Sessions.GetHistory(dispatch.SessionKey)
+		var err error
+		history, err = agent.Sessions.ReadTurnHistory(ctx, dispatch.SessionKey)
+		if err != nil {
+			return dispatch, fmt.Errorf("read canonical history for dispatch relation: %w", err)
+		}
 	}
 	dispatch.InboundContext.Relation = classifyPromptCurrentMessageRelation(
 		dispatch.UserMessage,
@@ -266,5 +275,5 @@ func normalizeDispatchInboundRelation(
 		history,
 		dispatch.InboundContext.ReceivedAt,
 	)
-	return dispatch
+	return dispatch, nil
 }
