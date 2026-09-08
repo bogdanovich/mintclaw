@@ -18,6 +18,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/coding/controller"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend/agentadapter"
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	codingreview "github.com/bogdanovich/mintclaw/pkg/coding/review"
 	codingreviewer "github.com/bogdanovich/mintclaw/pkg/coding/reviewer"
 	"github.com/bogdanovich/mintclaw/pkg/coding/thread"
@@ -30,6 +31,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/session"
 	"github.com/bogdanovich/mintclaw/pkg/tools"
 	fstools "github.com/bogdanovich/mintclaw/pkg/tools/fs"
+	toolshared "github.com/bogdanovich/mintclaw/pkg/tools/shared"
 )
 
 type codingTurnRequest struct {
@@ -96,12 +98,13 @@ func (r nativeCodingTurnRunner) Run(
 	ctx context.Context,
 	request codingTurnRequest,
 ) (codingTurnOutcome, error) {
-	runtime, err := openNativeCodingRuntime(r, request, nil, nil)
+	checkpointState := newCodingMetadataState(request.Store, request.Lease, request.Metadata, time.Now)
+	runtime, err := openNativeCodingRuntime(r, request, nil, nil, checkpointState.observePlan)
 	if err != nil {
 		return codingTurnOutcome{}, err
 	}
 	outcome, turnErr := runtime.runTurn(ctx, request.Input, nil)
-	return outcome, errors.Join(turnErr, runtime.Close())
+	return outcome, errors.Join(turnErr, runtime.Close(), checkpointState.accumulatedError())
 }
 
 type nativeCodingRuntime struct {
@@ -140,8 +143,9 @@ type nativeCodingRuntime struct {
 // the same lifecycle event.
 type codingCheckpointBus struct {
 	runtimeevents.Bus
-	sessionKey string
-	observe    func(agent.ContextCompressLifecyclePayload)
+	sessionKey        string
+	observeCompaction func(agent.ContextCompressLifecyclePayload)
+	observePlan       func(codingplan.State)
 }
 
 var _ runtimeevents.Bus = (*codingCheckpointBus)(nil)
@@ -160,14 +164,25 @@ func (b *codingCheckpointBus) PublishNonBlocking(event runtimeevents.Event) runt
 }
 
 func (b *codingCheckpointBus) observeEvent(event runtimeevents.Event) {
-	if b == nil || b.observe == nil || event.Kind != runtimeevents.KindAgentContextCompressEnd ||
-		event.Source.Component != "agent" ||
+	if b == nil || event.Source.Component != "agent" ||
 		(b.sessionKey != "" && event.Scope.SessionKey != b.sessionKey) {
 		return
 	}
-	payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
-	if ok {
-		b.observe(payload)
+	switch event.Kind {
+	case runtimeevents.KindAgentContextCompressEnd:
+		payload, ok := event.Payload.(agent.ContextCompressLifecyclePayload)
+		if ok && b.observeCompaction != nil {
+			b.observeCompaction(payload)
+		}
+	case runtimeevents.KindAgentToolExecEnd:
+		payload, ok := event.Payload.(agent.ToolExecEndPayload)
+		if !ok || b.observePlan == nil || payload.Suspended || payload.IsError {
+			return
+		}
+		observation := toolshared.SanitizeToolObservation(payload.Observation)
+		if observation != nil && observation.Plan != nil {
+			b.observePlan(codingplan.Clone(*observation.Plan))
+		}
 	}
 }
 
@@ -178,6 +193,7 @@ func openNativeCodingRuntime(
 	request codingTurnRequest,
 	projector *frontend.Projector,
 	compactionObserver func(agent.ContextCompressLifecyclePayload),
+	planObserver func(codingplan.State),
 ) (*nativeCodingRuntime, error) {
 	constructionCtx := context.Background()
 	cancelConstruction := func() {}
@@ -236,11 +252,12 @@ func openNativeCodingRuntime(
 		}
 		messageBus.SetStreamDelegate(frontend.NewStreamDelegate(projector, request.Metadata.SessionKey))
 	}
-	if compactionObserver != nil {
+	if compactionObserver != nil || planObserver != nil {
 		eventBus = &codingCheckpointBus{
-			Bus:        eventBus,
-			sessionKey: request.Metadata.SessionKey,
-			observe:    compactionObserver,
+			Bus:               eventBus,
+			sessionKey:        request.Metadata.SessionKey,
+			observeCompaction: compactionObserver,
+			observePlan:       planObserver,
 		}
 	}
 	attachmentMedia, err := newCodingAttachmentMediaStore(request.Store, request.Lease, request.Metadata.ThreadID)
@@ -622,6 +639,7 @@ type codingMetadataState struct {
 	mu       sync.Mutex
 	metadata thread.Metadata
 	store    *thread.Store
+	lease    *thread.Lease
 	now      func() time.Time
 	save     func(thread.Metadata) error
 	err      error
@@ -629,13 +647,14 @@ type codingMetadataState struct {
 
 func newCodingMetadataState(
 	store *thread.Store,
+	lease *thread.Lease,
 	metadata thread.Metadata,
 	now func() time.Time,
 ) *codingMetadataState {
 	if now == nil {
 		now = time.Now
 	}
-	return &codingMetadataState{store: store, metadata: metadata, now: now}
+	return &codingMetadataState{store: store, lease: lease, metadata: metadata, now: now}
 }
 
 func (s *codingMetadataState) update(
@@ -665,10 +684,38 @@ func (s *codingMetadataState) observeCompaction(payload agent.ContextCompressLif
 		}
 	})
 	if checkpointErr != nil {
-		s.mu.Lock()
-		s.err = errors.Join(s.err, checkpointErr)
-		s.mu.Unlock()
+		s.recordError(checkpointErr)
 	}
+}
+
+func (s *codingMetadataState) observePlan(plan codingplan.State) {
+	if s == nil {
+		return
+	}
+	checkpoint, err := thread.NewCurrentPlanCheckpoint(plan, s.now())
+	if err != nil {
+		s.recordError(err)
+		return
+	}
+	s.mu.Lock()
+	store, lease, metadata := s.store, s.lease, s.metadata
+	s.mu.Unlock()
+	if store == nil || lease == nil {
+		s.recordError(fmt.Errorf("coding current plan store is unavailable"))
+		return
+	}
+	if err := store.SaveCurrentPlan(context.Background(), lease, metadata, checkpoint); err != nil {
+		s.recordError(err)
+	}
+}
+
+func (s *codingMetadataState) recordError(err error) {
+	if s == nil || err == nil {
+		return
+	}
+	s.mu.Lock()
+	s.err = errors.Join(s.err, err)
+	s.mu.Unlock()
 }
 
 func (s *codingMetadataState) recordTurn(
@@ -1084,6 +1131,8 @@ func newNativeCodingControllerWithDependencies(
 	}
 	var latestReview codingreview.Result
 	var hasLatestReview bool
+	var currentPlan thread.CurrentPlanCheckpoint
+	var hasCurrentPlan bool
 	restoreCtx := context.Background()
 	cancelRestore := func() {}
 	if resumed {
@@ -1097,14 +1146,27 @@ func newNativeCodingControllerWithDependencies(
 			cancelRestore()
 			return nil, fmt.Errorf("coding controller: restore latest review: %w", err)
 		}
+		currentPlan, hasCurrentPlan, err = request.Store.LoadCurrentPlan(
+			restoreCtx,
+			request.Lease,
+			request.Metadata,
+		)
+		if err != nil {
+			cancelRestore()
+			return nil, fmt.Errorf("coding controller: restore current plan: %w", err)
+		}
 	}
 	defer cancelRestore()
-	metadataState := newCodingMetadataState(request.Store, request.Metadata, now)
+	if hasCurrentPlan {
+		projector.PlanRestored(currentPlan.Plan)
+	}
+	metadataState := newCodingMetadataState(request.Store, request.Lease, request.Metadata, now)
 	native, err := openNativeCodingRuntime(
 		dependencies,
 		request,
 		projector,
 		metadataState.observeCompaction,
+		metadataState.observePlan,
 	)
 	if err != nil {
 		return nil, err

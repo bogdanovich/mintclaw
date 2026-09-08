@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
+	codingplan "github.com/bogdanovich/mintclaw/pkg/coding/plan"
 	"github.com/bogdanovich/mintclaw/pkg/interactions"
 	"github.com/bogdanovich/mintclaw/pkg/taskresult"
 )
@@ -163,27 +164,20 @@ type CommandObservation struct {
 }
 
 // PlanStepStatus is one of the validated update_plan lifecycle states.
-type PlanStepStatus string
+type PlanStepStatus = codingplan.StepStatus
 
 const (
-	PlanStepPending    PlanStepStatus = "pending"
-	PlanStepInProgress PlanStepStatus = "in_progress"
-	PlanStepCompleted  PlanStepStatus = "completed"
+	PlanStepPending    = codingplan.StepPending
+	PlanStepInProgress = codingplan.StepInProgress
+	PlanStepCompleted  = codingplan.StepCompleted
 )
 
 // PlanStepObservation is one bounded, ordered plan step.
-type PlanStepObservation struct {
-	Step   string
-	Status PlanStepStatus
-}
+type PlanStepObservation = codingplan.Step
 
 // PlanObservation is trusted presentation input produced from a validated
 // update_plan call. It is not reconstructed from ForLLM or tool arguments.
-type PlanObservation struct {
-	Explanation string
-	Steps       []PlanStepObservation
-	Truncated   bool
-}
+type PlanObservation = codingplan.State
 
 type OutboundDelivery struct {
 	Channel          string                `json:"channel,omitempty"`

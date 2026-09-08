@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -41,6 +44,98 @@ func TestPresentationCellCachesByRevisionWidthThemeColorAndMode(t *testing.T) {
 	}
 	if store.ordered[0] == cell || store.ordered[0].renderMissCount() != 0 {
 		t.Fatalf("revision did not create an empty immutable cache: %+v", store.ordered[0])
+	}
+}
+
+func TestSemanticViewportStylesNativePlanWithoutLosingPlainFallback(t *testing.T) {
+	cell := newPresentationCell(frontend.PresentationItem{
+		ID: "plan", TurnID: "turn", Sequence: 1, Revision: 1,
+		Kind: frontend.PresentationPlanUpdate, Lifecycle: frontend.PresentationCompleted,
+		Plan: &frontend.PlanState{
+			Explanation: "Implement in order.",
+			Steps: []frontend.PlanStepState{
+				{Step: "Inspect", Status: frontend.PlanStepCompleted},
+				{Step: "Implement", Status: frontend.PlanStepInProgress},
+				{Step: "Verify", Status: frontend.PlanStepPending},
+			},
+		},
+	})
+	context := cellRenderContext{Width: 80, Theme: cellThemeDark, ColorLevel: cellColorTrueColor}
+	styled := renderSemanticCellLines(semanticCellRenderSpec{cell: cell, mode: cellRenderCompact}, context)
+	joined := strings.Join(styled, "\n")
+	for _, sequence := range []string{"\x1b[1m", "\x1b[2;3m", "\x1b[2;9m", "\x1b[1;38;2;92;200;255m", "\x1b[2m"} {
+		if !strings.Contains(joined, sequence) {
+			t.Fatalf("styled plan omits %q: %q", sequence, joined)
+		}
+	}
+	plain := renderSemanticCellLines(
+		semanticCellRenderSpec{cell: cell, mode: cellRenderCompact},
+		cellRenderContext{Width: 80, Theme: cellThemeDark, ColorLevel: cellColorNone},
+	)
+	plainText := strings.Join(plain, "\n")
+	if strings.Contains(plainText, "\x1b") || ansi.Strip(joined) != plainText ||
+		!strings.Contains(plainText, "  └ Implement in order.") ||
+		!strings.Contains(plainText, "    ✔ Inspect") || !strings.Contains(plainText, "    → Implement") {
+		t.Fatalf("plan fallback = %q; styled = %q", plainText, joined)
+	}
+}
+
+func TestNativePlanReflowsWithinTinyUnicodeWidths(t *testing.T) {
+	cell := newPresentationCell(frontend.PresentationItem{
+		ID: "plan", TurnID: "turn", Sequence: 1, Revision: 1,
+		Kind: frontend.PresentationPlanUpdate, Lifecycle: frontend.PresentationCompleted,
+		Plan: &frontend.PlanState{
+			Explanation: "界 architecture",
+			Steps:       []frontend.PlanStepState{{Step: "Verify 👩🏽‍💻 safely", Status: frontend.PlanStepInProgress}},
+			Truncated:   true,
+		},
+	})
+	for width := 1; width <= 12; width++ {
+		document := cell.Render(
+			cellRenderContext{Width: width, Theme: cellThemeLight, ColorLevel: cellColorNone},
+			cellRenderCompact,
+		)
+		compact := strings.Map(func(value rune) rune {
+			if unicode.IsSpace(value) {
+				return -1
+			}
+			return value
+		}, document.plainText())
+		if !document.Truncated || !strings.Contains(compact, "[…truncated]") {
+			t.Fatalf("width %d omitted truncation marker: %q", width, document.plainText())
+		}
+		for _, line := range document.Lines {
+			if visible := ansi.StringWidth(line.plainText()); visible > width {
+				t.Fatalf("width %d produced line width %d: %q", width, visible, line.plainText())
+			}
+		}
+	}
+}
+
+func TestNativePlanPreservesStatusGlyphBeforeDecorativeIndentAtTinyWidths(t *testing.T) {
+	cell := newPresentationCell(frontend.PresentationItem{
+		ID: "plan", TurnID: "turn", Sequence: 1, Revision: 1,
+		Kind: frontend.PresentationPlanUpdate, Lifecycle: frontend.PresentationCompleted,
+		Plan: &frontend.PlanState{Steps: []frontend.PlanStepState{
+			{Step: "Done", Status: frontend.PlanStepCompleted},
+			{Step: "Now", Status: frontend.PlanStepInProgress},
+			{Step: "Later", Status: frontend.PlanStepPending},
+		}},
+	})
+	for width := 1; width <= 6; width++ {
+		document := cell.Render(
+			cellRenderContext{Width: width, Theme: cellThemeDark, ColorLevel: cellColorNone},
+			cellRenderCompact,
+		)
+		text := document.plainText()
+		if !strings.Contains(text, "✔") || !strings.Contains(text, "→") || !strings.Contains(text, "□") {
+			t.Fatalf("width %d dropped plan status glyph: %q", width, text)
+		}
+		for _, line := range document.Lines {
+			if visible := ansi.StringWidth(line.plainText()); visible > width {
+				t.Fatalf("width %d produced line width %d: %q", width, visible, line.plainText())
+			}
+		}
 	}
 }
 

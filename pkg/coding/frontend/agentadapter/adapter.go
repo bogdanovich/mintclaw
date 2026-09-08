@@ -131,7 +131,8 @@ func (a *Adapter) project(event runtimeevents.Event) {
 			if observation != nil && observation.Command != nil {
 				a.projector.ToolCommandOutput(turnID, payload.ToolCallID, projectCommand(*observation.Command))
 			}
-			if observation != nil && observation.Plan != nil {
+			if observation != nil && observation.Plan != nil && !payload.IsError {
+				a.projector.ToolPlanObserved(turnID, payload.ToolCallID)
 				a.projector.PlanUpdated(turnID, payload.ToolCallID, projectPlan(*observation.Plan))
 			}
 			audit := projectWriteAudit(payload.WriteAudit)
@@ -317,16 +318,9 @@ func projectCommand(command toolshared.CommandObservation) frontend.CommandState
 }
 
 func projectPlan(plan toolshared.PlanObservation) frontend.PlanState {
-	steps := make([]frontend.PlanStepState, len(plan.Steps))
-	for index, step := range plan.Steps {
-		steps[index] = frontend.PlanStepState{
-			Step:   step.Step,
-			Status: frontend.PlanStepStatus(step.Status),
-		}
-	}
 	return frontend.PlanState{
 		Explanation: plan.Explanation,
-		Steps:       steps,
+		Steps:       slices.Clone(plan.Steps),
 		Truncated:   plan.Truncated,
 	}
 }

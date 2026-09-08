@@ -550,6 +550,9 @@ Done when:
 
 ### TUI.6 — Native plan checklist cell
 
+Status: implemented. See the
+[TUI.6 exit record](local-coding-agent-tui-6-exit.md).
+
 Dependencies: TUI.2, TUI.4
 
 Effort: small
