@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
 const workerSecretCanary = "MINTCLAW_DOCUMENT_SECRET_CANARY"
@@ -28,6 +30,37 @@ func TestProcessWorkerSuccessUsesRealSubprocessAndCleansScratch(t *testing.T) {
 		t.Fatalf("worker result = %#v", result)
 	}
 	assertOnlySnapshotRemains(t, snapshot)
+}
+
+func TestProcessWorkerAcceptsAuthorityBoundMediaSnapshot(t *testing.T) {
+	root := directTempDir(t)
+	inputPath := filepath.Join(root, "inbound.pdf")
+	writeFixture(t, inputPath, []byte("%PDF-1.7\nauthority-bound real worker\n%%EOF\n"))
+	store := media.NewFileMediaStore()
+	ref, err := store.Store(inputPath, media.MediaMeta{Filename: "inbound.pdf"}, "inbound")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testMediaOwner(t)
+	if err := store.BindOwner(ref, owner); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(workerSecretCanary, "must-not-reach-worker")
+	scratch := filepath.Join(root, "protected")
+	snapshot, report := acquireMediaWithWorker(
+		t.Context(), store, ref, owner, AcquireOptions{ScratchRoot: scratch},
+		"linux", "amd64", testProcessWorker("serve"),
+	)
+	if snapshot == nil || report.State != StateSucceeded || report.Input == nil {
+		t.Fatalf("report = %#v, want succeeded input", report)
+	}
+	if report.Input.SourceRef != ref || report.Input.Authority != documentAuthority(owner) {
+		t.Fatalf("owned input = %#v", report.Input)
+	}
+	if err := snapshot.Close(); err != nil {
+		t.Fatalf("close snapshot: %v", err)
+	}
+	assertEmptyDirectory(t, scratch)
 }
 
 func TestProcessWorkerKillsDescendantAfterSuccessfulLeaderExit(t *testing.T) {

@@ -9,7 +9,10 @@ func TestCapabilitiesAdmitOnlyLinuxAMD64Acquisition(t *testing.T) {
 		state string
 	}{
 		{goos: "linux", arch: "amd64", state: CapabilitySupported},
+		{goos: "linux", arch: "386", state: CapabilityUnavailable},
+		{goos: "linux", arch: "arm", state: CapabilityUnavailable},
 		{goos: "linux", arch: "arm64", state: CapabilityUnavailable},
+		{goos: "darwin", arch: "amd64", state: CapabilityUnavailable},
 		{goos: "darwin", arch: "arm64", state: CapabilityUnavailable},
 		{goos: "windows", arch: "amd64", state: CapabilityUnavailable},
 	}

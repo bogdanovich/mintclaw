@@ -115,9 +115,13 @@ func (w *processWorker) Verify(ctx context.Context, snapshot *Snapshot, input Do
 }
 
 func newWorkerRequest(input DocumentRef) WorkerRequest {
+	operationID := input.Ref
+	if separator := strings.LastIndex(operationID, "/"); separator >= 0 {
+		operationID = operationID[separator+1:]
+	}
 	return WorkerRequest{
 		SchemaVersion: WorkerRequestSchemaVersion,
-		OperationID:   strings.TrimPrefix(input.Ref, "document://local/"),
+		OperationID:   operationID,
 		Operation:     workerOperationVerify,
 		Input: WorkerInput{
 			ContentType: input.ContentType,

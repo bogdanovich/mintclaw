@@ -4,12 +4,31 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/media"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 )
 
-type nodeFileMediaOwnerBinder interface {
+type mediaOwnerBinder interface {
 	BindOwner(ref string, owner media.MediaOwner) error
+}
+
+func bindInboundMediaOwnerForTarget(
+	resolver mediaResolver,
+	target *inboundDispatchTarget,
+	msg bus.InboundMessage,
+) error {
+	if !hasOpaqueMediaRefs(msg.Media) {
+		return nil
+	}
+	if resolver == nil {
+		return errors.New("media store is unavailable for opaque inbound media")
+	}
+	owner, err := inboundMediaOwnerForTarget(target, msg)
+	if err != nil {
+		return err
+	}
+	return bindMediaOwnerRefs(resolver, owner, msg.Media)
 }
 
 func bindNodeFileMediaOwner(
@@ -21,13 +40,28 @@ func bindNodeFileMediaOwner(
 		ts.agent.Tools == nil || !ts.agent.Tools.HasRegistered("nodes_upload") {
 		return nil
 	}
-	binder, ok := resolver.(nodeFileMediaOwnerBinder)
-	if !ok {
-		return errors.New("media store does not support durable owner binding")
+	return bindTurnMediaOwner(resolver, ts, refs)
+}
+
+func bindTurnMediaOwner(
+	resolver mediaResolver,
+	ts *turnState,
+	refs []string,
+) error {
+	if !hasOpaqueMediaRefs(refs) || resolver == nil || ts == nil || ts.agent == nil {
+		return nil
 	}
 	owner, err := nodeFileMediaOwnerForTurn(ts)
 	if err != nil {
 		return err
+	}
+	return bindMediaOwnerRefs(resolver, owner, refs)
+}
+
+func bindMediaOwnerRefs(resolver mediaResolver, owner media.MediaOwner, refs []string) error {
+	binder, ok := resolver.(mediaOwnerBinder)
+	if !ok {
+		return errors.New("media store does not support durable owner binding")
 	}
 	var bindErr error
 	for _, ref := range refs {
@@ -39,6 +73,49 @@ func bindNodeFileMediaOwner(
 		}
 	}
 	return bindErr
+}
+
+func hasOpaqueMediaRefs(refs []string) bool {
+	for _, ref := range refs {
+		if strings.HasPrefix(strings.TrimSpace(ref), "media://") {
+			return true
+		}
+	}
+	return false
+}
+
+func inboundMediaOwnerForTarget(
+	target *inboundDispatchTarget,
+	msg bus.InboundMessage,
+) (media.MediaOwner, error) {
+	if target == nil || target.Agent == nil {
+		return media.MediaOwner{}, errors.New("inbound media owner is unavailable")
+	}
+	actorID := strings.TrimSpace(msg.Context.ActorID)
+	if actorID == "" {
+		actorID = strings.TrimSpace(msg.Context.SenderID)
+	}
+	if actorID == "" {
+		actorID = target.Agent.ID
+	}
+	routeSession := strings.TrimSpace(target.Allocation.RouteScopeKey)
+	if routeSession == "" {
+		routeSession = strings.TrimSpace(target.SessionKey)
+	}
+	effectiveSession := strings.TrimSpace(target.SessionKey)
+	if effectiveSession == "" {
+		effectiveSession = routeSession
+	}
+	return media.NewMediaOwner(
+		target.Agent.Workspace,
+		target.Agent.ID,
+		actorID,
+		routeSession,
+		effectiveSession,
+		msg.Context.Channel,
+		msg.Context.ChatID,
+		originTopicID(&msg.Context),
+	)
 }
 
 func nodeFileMediaOwnerForTurn(ts *turnState) (media.MediaOwner, error) {
@@ -64,11 +141,16 @@ func nodeFileMediaOwnerForTurn(ts *turnState) (media.MediaOwner, error) {
 	if routeSession == "" {
 		routeSession = strings.TrimSpace(ts.opts.Dispatch.SessionKey)
 	}
+	effectiveSession := strings.TrimSpace(ts.opts.Dispatch.SessionKey)
+	if effectiveSession == "" {
+		effectiveSession = routeSession
+	}
 	return media.NewMediaOwner(
 		ts.workspace,
 		ts.agent.ID,
 		actorID,
 		routeSession,
+		effectiveSession,
 		ts.channel,
 		ts.chatID,
 		topicID,

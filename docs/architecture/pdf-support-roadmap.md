@@ -40,12 +40,14 @@ defines the product architecture.
 
 MintClaw already provides useful foundations:
 
-- inbound channel attachments can be durably indexed behind `media://`
-  references, but ordinary channel refs are not yet uniformly owner-bound or
-  content-addressed;
+- inbound channel attachments are durably indexed behind `media://`
+  references and ordinary turn admission binds them to exact workspace,
+  agent, actor, route, and session authority plus an immutable size/SHA-256
+  identity;
 - `MediaStore` retains filename, content type, local backing path, lifecycle
-  scope, cleanup policy, and creation time, but not an immutable content
-  digest for every reference;
+  scope, cleanup policy, and creation time; authority-bound references also
+  retain the admitted content identity, while generic unowned references do
+  not;
 - typed task deliverables and outbound media delivery can represent produced
   artifacts without parsing final chat prose;
 - workspace-local scratch storage and cleanup conventions already exist;
@@ -1001,6 +1003,56 @@ After the relevant read/write contract is stable:
 PDF1B and PDF1C are not prerequisites for ordinary AcroForm filling unless the
 selected form requires native-provider analysis or encryption. PDF4 may end
 with detection-and-refusal only without blocking the other expansion slices.
+
+## macOS Parity Lane
+
+Linux-first delivery does not silently make a capability portable. Every
+milestone or separately admitted slice that first ships on Linux carries a
+matching macOS parity item. Both Apple silicon (`darwin/arm64`) and Intel
+(`darwin/amd64`) remain `unavailable` until the exact tuple has its own
+evidence; success on one does not advertise the other. A skill, browser
+viewer, in-process parser, or unrestricted shell command is never a fallback
+for a missing macOS worker.
+
+All macOS parity work follows the same gate:
+
+1. its Linux milestone is merged with an exit record and the normalized
+   request, report, authority, limit, artifact, and failure contracts are
+   frozen for that slice;
+2. the identical synthetic fixture manifest and backend contract suite run on
+   real macOS hardware, with platform-specific expected differences declared
+   in the manifest rather than hidden in prose;
+3. a packaged short-lived worker proves descriptor-only immutable input,
+   scrubbed environment, private scratch, runtime and output bounds,
+   descendant termination, cancellation, cleanup, and no in-process fallback;
+4. dependency acquisition, universal/per-architecture packaging, signing,
+   notarization where applicable, install, update, and rollback are
+   reproducible and do not download software during an operation; and
+5. only then does the capability registry advertise that exact macOS tuple,
+   with CLI and packaged-app smoke evidence recorded in a parity exit record.
+
+The per-slice parity backlog is explicit:
+
+| Linux-first slice | macOS prerequisite and shared proof | macOS advertising gate |
+| --- | --- | --- |
+| PDF0A acquisition | Port the one-shot worker launcher without changing `DocumentRef` or the fixture manifest; prove inherited immutable input, process-tree cancellation, limits, privacy, and cleanup on both architectures. | `acquire` becomes supported only for the architecture whose real-process and packaged CLI smokes pass. |
+| PDF0B inspection/backend | Package the selected parser and independent oracle with identical normalized inspection facts and malformed/encrypted/XFA refusal fixtures. | Each inspection operation is enabled only for a tuple with pinned backend, SBOM, cancellation, malformed-input, and rollback evidence. |
+| PDF1A local read/render | Package the selected extractor, renderer, fonts, and PDF skill inputs; run the same page-provenance, visual-golden, agent, channel, and delivery-recovery fixtures. | `extract`/`render` and the deferred agent capability remain unavailable until CLI, packaged app, agent loop, channel, privacy, and cleanup all pass. |
+| PDF1B provider-native adapters | Reuse the same immutable snapshot and disclosure contracts; prove that provider routing and the PDF1A fallback preserve digest, page limits, privacy, and cancellation on macOS. | Enable each provider/model pair independently only after adapter conformance; no native-provider claim can mask an unavailable local operation. |
+| PDF1C protected input/crypto | Qualify the macOS secret resolver, process handoff, supported crypto revisions, permissions, deletion, restart, and absence from argv/environment/history/traces. | Advertise each crypto capability only after both architecture-specific packaging and secret-leak negative tests pass. |
+| PDF2 AcroForm | Package the admitted writer plus independent renderer/reader and fonts; reuse structural, visual, signature/encryption refusal, journal, and outbox fixtures. | `fields`/`fill`/`verify`/`flatten` are enabled separately only after transactional write, visual verification, recovery, and delivery proof. |
+| PDF3 conversational forms | Reuse the platform-neutral job, interaction, and protected-ledger contracts while proving macOS storage protection, restart, compaction, deletion, and final-delivery behavior. | The workflow is advertised only when all underlying document operations are supported on that tuple and protected-state E2E passes. |
+| PDF4 XFA | Package the admitted XFA engine and independent oracle with deny-network/filesystem execution and the full static/dynamic/malicious fixture matrix. | Enable only the precisely proven subset; otherwise macOS remains detection-and-refusal-only. |
+| PDF5A OCR | Pin engine, language data, models, and resource limits; run identical page/region/confidence goldens. | Enable per architecture and language pack only after packaging, accuracy, privacy, cancellation, and rollback evidence. |
+| PDF5B tables | Run the same cell/merge/coordinate/provenance fixtures against the packaged extractor. | Enable only after normalized structural and visual-golden parity passes. |
+| PDF5C transformations/redaction | Reuse byte-loss, metadata-removal, structural, visual, and recovery fixtures with packaged backends. | Enable each transform independently; redaction requires proof that content is absent, not hidden. |
+| PDF5D generation | Package fonts and generators and run the same metadata, accessibility, reading-order, and rendering goldens. | Enable only after reproducible output and accessibility/visual verification pass. |
+| PDF6 companion placement | Qualify the macOS companion worker, capability/version reporting, update, rollback, cancellation, artifact transfer, and no-replay behavior for one already-admitted operation. | Advertise per companion tuple only after the full local contract plus remote production qualification passes. |
+
+Parity is intentionally implemented as focused follow-up slices, not folded
+into the Linux milestone after the fact. A parity PR may add platform launch
+and packaging code, but it may not fork document semantics or weaken a typed
+failure to make a fixture pass.
 
 ## PR And Goal Discipline
 

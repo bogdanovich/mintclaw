@@ -1,0 +1,96 @@
+{
+  "schema_version": "mintclaw.document_fixture_manifest.v1",
+  "privacy": "synthetic_only",
+  "fixtures": [
+    {
+      "id": "normal-pdf",
+      "construction": "checked_in",
+      "source": "acquisition-fixture.pdf",
+      "expected_state": "succeeded",
+      "evidence_test": "TestAcquireSnapshotCreatesImmutableIdentityAndCleansUp"
+    },
+    {
+      "id": "same-name-different-bytes",
+      "construction": "runtime_generated",
+      "expected_state": "succeeded",
+      "evidence_test": "TestAcquireSnapshotSeparatesEqualNamesWithDifferentBytes"
+    },
+    {
+      "id": "symlink",
+      "construction": "runtime_generated",
+      "expected_state": "failed",
+      "failure_code": "invalid_input",
+      "evidence_test": "TestAcquireSnapshotRejectsUnsafeAndUnsupportedInputs"
+    },
+    {
+      "id": "fifo",
+      "construction": "runtime_generated",
+      "expected_state": "failed",
+      "failure_code": "invalid_input",
+      "evidence_test": "TestAcquireSnapshotRejectsFIFOAndDevice"
+    },
+    {
+      "id": "device",
+      "construction": "host_fixture",
+      "source": "/dev/null",
+      "expected_state": "failed",
+      "failure_code": "invalid_input",
+      "evidence_test": "TestAcquireSnapshotRejectsFIFOAndDevice"
+    },
+    {
+      "id": "path-replacement",
+      "construction": "runtime_generated",
+      "expected_state": "failed",
+      "failure_code": "invalid_input",
+      "evidence_test": "TestOpenRegularSourceDoesNotBlockAfterFIFOReplacement"
+    },
+    {
+      "id": "mid-copy-mutation",
+      "construction": "runtime_generated",
+      "expected_state": "failed",
+      "failure_code": "source_changed",
+      "evidence_test": "TestAcquireSnapshotDetectsMidCopyMutation"
+    },
+    {
+      "id": "oversized-input",
+      "construction": "runtime_generated",
+      "expected_state": "failed",
+      "failure_code": "limit_exceeded",
+      "evidence_test": "TestAcquireSnapshotRejectsUnsafeAndUnsupportedInputs"
+    },
+    {
+      "id": "cancellation",
+      "construction": "runtime_generated",
+      "expected_state": "canceled",
+      "failure_code": "canceled",
+      "evidence_test": "TestAcquireSnapshotRejectsUnsafeAndUnsupportedInputs"
+    },
+    {
+      "id": "worker-crash",
+      "construction": "runtime_generated",
+      "expected_state": "failed",
+      "failure_code": "worker_crashed",
+      "evidence_test": "TestProcessWorkerReturnsTypedTerminalFailures"
+    },
+    {
+      "id": "worker-timeout",
+      "construction": "runtime_generated",
+      "expected_state": "failed",
+      "failure_code": "worker_timeout",
+      "evidence_test": "TestProcessWorkerReturnsTypedTerminalFailures"
+    },
+    {
+      "id": "worker-output-limit",
+      "construction": "runtime_generated",
+      "expected_state": "failed",
+      "failure_code": "worker_output_limit",
+      "evidence_test": "TestProcessWorkerReturnsTypedTerminalFailures"
+    },
+    {
+      "id": "concurrent-acquisition",
+      "construction": "runtime_generated",
+      "expected_state": "succeeded",
+      "evidence_test": "TestAcquireOwnedMediaConcurrentSnapshotsAreIndependent"
+    }
+  ]
+}

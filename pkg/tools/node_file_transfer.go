@@ -1799,11 +1799,16 @@ func nodeFileMediaOwner(ctx context.Context) (media.MediaOwner, error) {
 	if routeSession == "" {
 		routeSession = strings.TrimSpace(toolshared.ToolSessionKey(ctx))
 	}
+	effectiveSession := strings.TrimSpace(toolshared.ToolSessionKey(ctx))
+	if effectiveSession == "" {
+		effectiveSession = routeSession
+	}
 	return media.NewMediaOwner(
 		toolshared.ToolWorkspace(ctx),
 		toolshared.ToolAgentID(ctx),
 		actorID,
 		routeSession,
+		effectiveSession,
 		toolshared.ToolChannel(ctx),
 		toolshared.ToolChatID(ctx),
 		toolshared.ToolTopicID(ctx),

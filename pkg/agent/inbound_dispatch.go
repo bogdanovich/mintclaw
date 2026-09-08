@@ -65,10 +65,14 @@ func (al *AgentLoop) buildInboundMessageTurn(
 		msg = al.prepareInboundMessageForAgent(ctx, msg)
 		return inboundMessageTurn{Message: msg}, nil
 	}
+	msg = bus.NormalizeInboundMessage(msg)
 
 	target, err := al.resolveInboundDispatchTarget(msg)
 	if err != nil {
 		return inboundMessageTurn{}, err
+	}
+	if err := bindInboundMediaOwnerForTarget(al.mediaStore, target, msg); err != nil {
+		return inboundMessageTurn{}, fmt.Errorf("admit inbound media: %w", err)
 	}
 	return al.buildInboundMessageTurnForTarget(ctx, msg, target)
 }

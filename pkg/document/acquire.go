@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/bogdanovich/mintclaw/pkg/media"
 )
 
 const (
@@ -25,6 +27,23 @@ const (
 type AcquireOptions struct {
 	ScratchRoot string
 	MaxBytes    int64
+}
+
+// OwnedMediaResolver resolves one opaque media reference only when the caller
+// presents the exact authority durably bound to it.
+type OwnedMediaResolver interface {
+	OpenOwned(string, media.MediaOwner) (*media.OwnedMediaSource, error)
+}
+
+type acquisitionSource struct {
+	path               string
+	file               *os.File
+	expectedIdentity   *media.ContentIdentity
+	authorizationBound bool
+	ref                string
+	filename           string
+	kind               string
+	authority          Authority
 }
 
 type Snapshot struct {
@@ -60,6 +79,28 @@ func Acquire(ctx context.Context, inputPath string, options AcquireOptions) (*Sn
 	return acquireWithWorker(ctx, inputPath, options, runtime.GOOS, runtime.GOARCH, NewProcessWorker())
 }
 
+// AcquireMedia admits an opaque MediaStore reference only for its exact
+// durable owner, then sends the resulting immutable snapshot through the same
+// mandatory worker boundary as local operator acquisition.
+func AcquireMedia(
+	ctx context.Context,
+	resolver OwnedMediaResolver,
+	ref string,
+	owner media.MediaOwner,
+	options AcquireOptions,
+) (*Snapshot, Report) {
+	return acquireMediaWithWorker(
+		ctx,
+		resolver,
+		ref,
+		owner,
+		options,
+		runtime.GOOS,
+		runtime.GOARCH,
+		NewProcessWorker(),
+	)
+}
+
 func acquireWithWorker(
 	ctx context.Context,
 	inputPath string,
@@ -69,6 +110,15 @@ func acquireWithWorker(
 	worker Worker,
 ) (*Snapshot, Report) {
 	snapshot, report := acquireForPlatform(ctx, inputPath, options, goos, goarch)
+	return verifyAcquiredSnapshot(ctx, snapshot, report, worker)
+}
+
+func verifyAcquiredSnapshot(
+	ctx context.Context,
+	snapshot *Snapshot,
+	report Report,
+	worker Worker,
+) (*Snapshot, Report) {
 	if snapshot == nil || report.State != StateSucceeded || report.Input == nil {
 		return snapshot, report
 	}
@@ -100,6 +150,20 @@ func acquireWithWorker(
 	return cleanupAcquisitionFailure(snapshot, failReport(report, state, failure.Code, failure.Message))
 }
 
+func acquireMediaWithWorker(
+	ctx context.Context,
+	resolver OwnedMediaResolver,
+	ref string,
+	owner media.MediaOwner,
+	options AcquireOptions,
+	goos string,
+	goarch string,
+	worker Worker,
+) (*Snapshot, Report) {
+	snapshot, report := acquireMediaForPlatform(ctx, resolver, ref, owner, options, goos, goarch)
+	return verifyAcquiredSnapshot(ctx, snapshot, report, worker)
+}
+
 func acquireForPlatform(
 	ctx context.Context,
 	inputPath string,
@@ -123,7 +187,97 @@ func acquireForPlatform(
 			capability.Reason,
 		)
 	}
-	return acquireSnapshot(ctx, inputPath, options.ScratchRoot, report, nil)
+	return acquireSnapshotSource(ctx, acquisitionSource{
+		path:      inputPath,
+		filename:  filepath.Base(inputPath),
+		kind:      "local_file",
+		authority: Authority{Kind: "local_operator"},
+	}, options.ScratchRoot, report, nil)
+}
+
+func acquireMediaForPlatform(
+	ctx context.Context,
+	resolver OwnedMediaResolver,
+	ref string,
+	owner media.MediaOwner,
+	options AcquireOptions,
+	goos string,
+	goarch string,
+) (*Snapshot, Report) {
+	operationID := "document_operation_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	maxBytes := options.MaxBytes
+	if maxBytes <= 0 || maxBytes > DefaultMaxInputBytes {
+		maxBytes = DefaultMaxInputBytes
+	}
+	report := newReport(operationID, maxBytes)
+
+	capability := capabilitiesFor(goos, goarch).Operations[operationAcquire]
+	if capability.State != CapabilitySupported {
+		return nil, failReport(report, StateUnavailable, FailureUnsupportedPlatform, capability.Reason)
+	}
+	if resolver == nil || !validOwnedMediaInput(ref, owner) {
+		return nil, unauthorizedSource(report)
+	}
+	source, err := resolver.OpenOwned(ref, owner)
+	if err != nil || source == nil || source.File == nil {
+		return nil, unauthorizedSource(report)
+	}
+	defer func() { _ = source.Close() }()
+	return acquireSnapshotSource(ctx, acquisitionSource{
+		file:               source.File,
+		expectedIdentity:   &source.Identity,
+		authorizationBound: true,
+		ref:                ref,
+		filename:           safeMediaFilename(source.Meta.Filename),
+		kind:               "inbound_media",
+		authority:          documentAuthority(owner),
+	}, options.ScratchRoot, report, nil)
+}
+
+func validOwnedMediaInput(ref string, owner media.MediaOwner) bool {
+	if !strings.HasPrefix(strings.TrimSpace(ref), "media://") {
+		return false
+	}
+	for _, value := range []string{
+		owner.WorkspaceID,
+		owner.AgentID,
+		owner.ActorID,
+		owner.RouteID,
+		owner.SessionID,
+	} {
+		if strings.TrimSpace(value) == "" || len(value) > 96 {
+			return false
+		}
+	}
+	return true
+}
+
+func unauthorizedSource(report Report) Report {
+	return failReport(
+		report,
+		StateDenied,
+		FailureSourceUnauthorized,
+		"document source is unavailable for this authority",
+	)
+}
+
+func safeMediaFilename(filename string) string {
+	filename = filepath.Base(strings.ReplaceAll(strings.TrimSpace(filename), "\\", "/"))
+	if filename == "." || filename == "" {
+		return "document.pdf"
+	}
+	return filename
+}
+
+func documentAuthority(owner media.MediaOwner) Authority {
+	return Authority{
+		Kind:        "inbound_media",
+		WorkspaceID: owner.WorkspaceID,
+		AgentID:     owner.AgentID,
+		ActorID:     owner.ActorID,
+		RouteID:     owner.RouteID,
+		SessionID:   owner.SessionID,
+	}
 }
 
 func newReport(operationID string, maxBytes int64) Report {
@@ -150,19 +304,60 @@ func acquireSnapshot(
 	report Report,
 	afterFirstRead func(),
 ) (*Snapshot, Report) {
+	return acquireSnapshotSource(ctx, acquisitionSource{
+		path:      inputPath,
+		filename:  filepath.Base(inputPath),
+		kind:      "local_file",
+		authority: Authority{Kind: "local_operator"},
+	}, scratchRoot, report, afterFirstRead)
+}
+
+func acquireSnapshotSource(
+	ctx context.Context,
+	input acquisitionSource,
+	scratchRoot string,
+	report Report,
+	afterFirstRead func(),
+) (*Snapshot, Report) {
 	if err := ctx.Err(); err != nil {
 		return nil, failReport(report, StateCanceled, FailureCanceled, "document acquisition was canceled")
 	}
-	if strings.TrimSpace(inputPath) == "" || strings.TrimSpace(scratchRoot) == "" {
+	if (input.file == nil && strings.TrimSpace(input.path) == "") || strings.TrimSpace(scratchRoot) == "" {
 		return nil, failReport(report, StateFailed, FailureInvalidInput, "input and protected scratch are required")
 	}
 
-	source, sourceInfo, err := openRegularSource(inputPath)
-	if err != nil {
-		return nil, acquisitionFailure(report, err)
+	source := input.file
+	var sourceInfo os.FileInfo
+	var err error
+	closeSource := false
+	if source == nil {
+		source, sourceInfo, err = openRegularSource(input.path)
+		closeSource = true
+	} else {
+		sourceInfo, err = source.Stat()
+		if err == nil && !sourceInfo.Mode().IsRegular() {
+			err = &acquisitionError{code: FailureInvalidInput, err: errors.New("source is not a regular file")}
+		}
 	}
-	defer func() { _ = source.Close() }()
-	if sourceInfo.Size() > report.Limits.MaxInputBytes {
+	if err != nil {
+		return nil, acquisitionSourceFailure(report, input, err)
+	}
+	if closeSource {
+		defer func() { _ = source.Close() }()
+	}
+	if input.authorizationBound {
+		if input.expectedIdentity == nil || sourceInfo.Size() != input.expectedIdentity.Size {
+			return nil, unauthorizedSource(report)
+		}
+		if input.expectedIdentity.Size > report.Limits.MaxInputBytes {
+			return nil, failReport(
+				report,
+				StateFailed,
+				FailureLimitExceeded,
+				"document exceeds the input byte limit",
+			)
+		}
+	} else if sourceInfo.Size() > report.Limits.MaxInputBytes {
 		return nil, failReport(report, StateFailed, FailureLimitExceeded, "document exceeds the input byte limit")
 	}
 
@@ -174,16 +369,30 @@ func acquireSnapshot(
 
 	digest, size, err := copyAndHash(ctx, source, snapshot.path, report.Limits.MaxInputBytes)
 	if err != nil {
-		return cleanupAcquisitionFailure(snapshot, acquisitionFailure(report, err))
+		return cleanupAcquisitionFailure(snapshot, acquisitionSourceFailure(report, input, err))
 	}
 	if afterFirstRead != nil {
 		afterFirstRead()
 	}
-	stable, err := verifyStableSource(ctx, inputPath, source, sourceInfo, digest, size, report.Limits.MaxInputBytes)
+	stable, err := verifyStableAcquisitionSource(
+		ctx,
+		input.path,
+		source,
+		sourceInfo,
+		digest,
+		size,
+		report.Limits.MaxInputBytes,
+		input.file != nil,
+	)
 	if err != nil {
-		return cleanupAcquisitionFailure(snapshot, acquisitionFailure(report, err))
+		return cleanupAcquisitionFailure(snapshot, acquisitionSourceFailure(report, input, err))
 	}
-	if !stable {
+	identityMatches := input.expectedIdentity == nil ||
+		(input.expectedIdentity.Size == size && input.expectedIdentity.SHA256 == digest)
+	if !stable || !identityMatches {
+		if input.authorizationBound {
+			return cleanupAcquisitionFailure(snapshot, unauthorizedSource(report))
+		}
 		return cleanupAcquisitionFailure(
 			snapshot,
 			failReport(report, StateFailed, FailureSourceChanged, "document changed during acquisition"),
@@ -211,13 +420,14 @@ func acquireSnapshot(
 
 	report.State = StateSucceeded
 	report.Input = &DocumentRef{
-		Ref:              "document://local/" + report.OperationID,
-		OriginalFilename: filepath.Base(inputPath),
+		Ref:              "document://" + input.kind + "/" + report.OperationID,
+		SourceRef:        input.ref,
+		OriginalFilename: input.filename,
 		ContentType:      contentType,
 		Size:             size,
 		SHA256:           digest,
-		Authority:        Authority{Kind: "local_operator"},
-		SourceKind:       "local_file",
+		Authority:        input.authority,
+		SourceKind:       input.kind,
 		CreatedAt:        time.Now().UTC(),
 		CleanupPolicy:    "delete_on_operation_close",
 	}
@@ -261,6 +471,14 @@ func acquisitionFailure(report Report, err error) Report {
 		}
 	}
 	return failReport(report, StateFailed, FailureInternal, "document acquisition failed")
+}
+
+func acquisitionSourceFailure(report Report, input acquisitionSource, err error) Report {
+	if !input.authorizationBound || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) {
+		return acquisitionFailure(report, err)
+	}
+	return unauthorizedSource(report)
 }
 
 func openRegularSource(path string) (*os.File, os.FileInfo, error) {
@@ -394,6 +612,39 @@ func verifyStableSource(
 	return count == wantSize && digest == wantDigest &&
 		initial.Size() == final.Size() && initial.ModTime().Equal(final.ModTime()) &&
 		current.Mode()&os.ModeSymlink == 0 && os.SameFile(initial, final) && os.SameFile(final, current), nil
+}
+
+func verifyStableAcquisitionSource(
+	ctx context.Context,
+	path string,
+	source *os.File,
+	initial os.FileInfo,
+	wantDigest string,
+	wantSize int64,
+	maxBytes int64,
+	openedByAuthority bool,
+) (bool, error) {
+	if !openedByAuthority {
+		return verifyStableSource(ctx, path, source, initial, wantDigest, wantSize, maxBytes)
+	}
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return false, err
+	}
+	hash := sha256.New()
+	count, err := io.Copy(hash, io.LimitReader(&contextReader{ctx: ctx, reader: source}, maxBytes+1))
+	if err != nil {
+		return false, err
+	}
+	if count > maxBytes {
+		return false, &acquisitionError{code: FailureLimitExceeded, err: fmt.Errorf("input exceeded limit")}
+	}
+	final, err := source.Stat()
+	if err != nil {
+		return false, err
+	}
+	digest := hex.EncodeToString(hash.Sum(nil))
+	return count == wantSize && digest == wantDigest && initial.Size() == final.Size() &&
+		initial.ModTime().Equal(final.ModTime()) && os.SameFile(initial, final), nil
 }
 
 func detectPDF(path string) (string, error) {

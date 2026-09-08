@@ -80,10 +80,17 @@ type idempotentNodeTransferMediaStore interface {
 }
 
 type ownedNodeTransferMediaStore interface {
-	ResolveOwnedWithMeta(
+	OpenOwned(
 		ref string,
 		owner media.MediaOwner,
-	) (localPath string, meta media.MediaMeta, err error)
+	) (*media.OwnedMediaSource, error)
+}
+
+type nodeFileUploadSource struct {
+	file     *os.File
+	initial  os.FileInfo
+	meta     media.MediaMeta
+	identity media.ContentIdentity
 }
 
 func newNodeFileTransferSource(
@@ -168,7 +175,7 @@ func (source *nodeFileTransferSource) SnapshotUploadArtifact(
 	if maxBytes <= 0 || maxBytes > nodes.MaxTransferArtifactBytes {
 		return nodes.TransferArtifactRecord{}, nodes.ErrTransferSizeExceeded
 	}
-	file, initial, meta, openErr := source.openUploadSource(
+	uploadSource, openErr := source.openUploadSource(
 		owner,
 		strings.TrimSpace(artifactRef),
 		store,
@@ -177,14 +184,22 @@ func (source *nodeFileTransferSource) SnapshotUploadArtifact(
 	if openErr != nil {
 		return nodes.TransferArtifactRecord{}, openErr
 	}
+	file := uploadSource.file
 	defer func() { _ = file.Close() }()
+	if uploadSource.identity.Size > maxBytes {
+		return nodes.TransferArtifactRecord{}, nodes.ErrTransferSizeExceeded
+	}
 	digest := sha256.New()
 	size, copyErr := io.Copy(digest, io.LimitReader(file, maxBytes+1))
 	if copyErr != nil || size > maxBytes {
-		return nodes.TransferArtifactRecord{}, nodes.ErrTransferSizeExceeded
+		return nodes.TransferArtifactRecord{}, nodes.ErrTransferArtifactNotFound
+	}
+	digestHex := hex.EncodeToString(digest.Sum(nil))
+	if size != uploadSource.identity.Size || digestHex != uploadSource.identity.SHA256 {
+		return nodes.TransferArtifactRecord{}, nodes.ErrTransferArtifactNotFound
 	}
 	afterHash, statErr := file.Stat()
-	if statErr != nil || !os.SameFile(initial, afterHash) || afterHash.Size() != size {
+	if statErr != nil || !os.SameFile(uploadSource.initial, afterHash) || afterHash.Size() != size {
 		return nodes.TransferArtifactRecord{}, errors.New("gateway upload artifact changed while hashing")
 	}
 	if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
@@ -195,10 +210,10 @@ func (source *nodeFileTransferSource) SnapshotUploadArtifact(
 		Direction:       nodes.TransferDirectionUpload,
 		Target:          target,
 		ProfileRevision: profileRevision,
-		Filename:        safeNodeTransferFilename(meta.Filename, initial.Name()),
-		ContentType:     safeNodeTransferContentType(meta.ContentType),
-		DeclaredSize:    size,
-		SHA256:          hex.EncodeToString(digest.Sum(nil)),
+		Filename:        safeNodeTransferFilename(uploadSource.meta.Filename, uploadSource.initial.Name()),
+		ContentType:     safeNodeTransferContentType(uploadSource.meta.ContentType),
+		DeclaredSize:    uploadSource.identity.Size,
+		SHA256:          uploadSource.identity.SHA256,
 		ExpiresAt:       expiresAt,
 	}
 	writer, retained, created, beginErr := source.spool.Begin(owner, spec)
@@ -235,7 +250,7 @@ func (source *nodeFileTransferSource) SnapshotUploadArtifact(
 		}
 	}
 	finalInfo, finalStatErr := file.Stat()
-	if finalStatErr != nil || !os.SameFile(initial, finalInfo) || finalInfo.Size() != size {
+	if finalStatErr != nil || !os.SameFile(uploadSource.initial, finalInfo) || finalInfo.Size() != size {
 		return nodes.TransferArtifactRecord{}, errors.New("gateway upload artifact changed while snapshotting")
 	}
 	retained, commitErr := writer.Commit()
@@ -250,35 +265,48 @@ func (source *nodeFileTransferSource) openUploadSource(
 	artifactRef string,
 	store media.MediaStore,
 	mediaOwner media.MediaOwner,
-) (*os.File, os.FileInfo, media.MediaMeta, error) {
+) (nodeFileUploadSource, error) {
 	if strings.HasPrefix(artifactRef, nodes.TransferArtifactRefPrefix) {
 		file, artifact, err := source.spool.ResolveRoutedDownload(owner, artifactRef)
 		if err != nil {
-			return nil, nil, media.MediaMeta{}, err
+			return nodeFileUploadSource{}, err
 		}
 		info, statErr := file.Stat()
 		if statErr != nil {
 			_ = file.Close()
-			return nil, nil, media.MediaMeta{}, statErr
+			return nodeFileUploadSource{}, statErr
 		}
-		return file, info, media.MediaMeta{
-			Filename:    artifact.Spec.Filename,
-			ContentType: artifact.Spec.ContentType,
+		return nodeFileUploadSource{
+			file:    file,
+			initial: info,
+			meta: media.MediaMeta{
+				Filename:    artifact.Spec.Filename,
+				ContentType: artifact.Spec.ContentType,
+			},
+			identity: media.ContentIdentity{
+				Size: artifact.Spec.DeclaredSize, SHA256: artifact.Spec.SHA256,
+			},
 		}, nil
 	}
 	if store == nil {
-		return nil, nil, media.MediaMeta{}, nodes.ErrTransferArtifactNotFound
+		return nodeFileUploadSource{}, nodes.ErrTransferArtifactNotFound
 	}
 	ownedStore, ok := store.(ownedNodeTransferMediaStore)
 	if !ok {
-		return nil, nil, media.MediaMeta{}, nodes.ErrTransferArtifactNotFound
+		return nodeFileUploadSource{}, nodes.ErrTransferArtifactNotFound
 	}
-	localPath, meta, err := ownedStore.ResolveOwnedWithMeta(artifactRef, mediaOwner)
+	mediaSource, err := ownedStore.OpenOwned(artifactRef, mediaOwner)
 	if err != nil {
-		return nil, nil, media.MediaMeta{}, nodes.ErrTransferArtifactNotFound
+		return nodeFileUploadSource{}, nodes.ErrTransferArtifactNotFound
 	}
-	file, info, err := openNodeTransferMedia(localPath)
-	return file, info, meta, err
+	info, err := mediaSource.File.Stat()
+	if err != nil {
+		_ = mediaSource.Close()
+		return nodeFileUploadSource{}, nodes.ErrTransferArtifactNotFound
+	}
+	return nodeFileUploadSource{
+		file: mediaSource.File, initial: info, meta: mediaSource.Meta, identity: mediaSource.Identity,
+	}, nil
 }
 
 func (source *nodeFileTransferSource) InspectFile(
