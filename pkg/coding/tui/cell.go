@@ -226,25 +226,28 @@ func (cell *presentationCell) planDocument(width int) cellDocument {
 	if plan == nil {
 		return cellDocument{}
 	}
-	lines := wrappedPlanText("Updated Plan", "• ", "  ", cellStylePlanTitle, width)
+	lines := wrappedPlanText("Updated Plan", "• ", "  ", "", cellStylePlanTitle, width)
 	bodyStarted := false
-	appendBody := func(text, firstIndent, nextIndent string, role cellStyleRole) {
+	appendBody := func(text, firstIndent, nextIndent, essentialPrefix string, role cellStyleRole) {
 		outer := "    "
 		if !bodyStarted {
 			outer = "  └ "
 		}
-		lines = append(lines, wrappedPlanText(text, outer+firstIndent, "    "+nextIndent, role, width)...)
+		lines = append(
+			lines,
+			wrappedPlanText(text, outer+firstIndent, "    "+nextIndent, essentialPrefix, role, width)...,
+		)
 		bodyStarted = true
 	}
 	if explanation := strings.TrimSpace(sanitizeTerminalText(plan.Explanation)); explanation != "" {
-		appendBody(explanation, "", "", cellStylePlanExplanation)
+		appendBody(explanation, "", "", "", cellStylePlanExplanation)
 	}
 	for _, step := range plan.Steps {
 		glyph, role := planStepCellStyle(step.Status)
-		appendBody(sanitizeTerminalText(step.Step), glyph+" ", "  ", role)
+		appendBody(sanitizeTerminalText(step.Step), glyph+" ", "  ", glyph, role)
 	}
 	if plan.Truncated {
-		appendBody("[…truncated]", "", "", cellStyleMuted)
+		appendBody("[…truncated]", "", "", "", cellStyleMuted)
 	}
 	return cellDocument{Lines: lines, Truncated: plan.Truncated}
 }
@@ -262,6 +265,7 @@ func planStepCellStyle(status frontend.PlanStepStatus) (string, cellStyleRole) {
 
 func wrappedPlanText(
 	value, initialPrefix, continuationPrefix string,
+	essentialPrefix string,
 	role cellStyleRole,
 	width int,
 ) []cellLine {
@@ -271,12 +275,18 @@ func wrappedPlanText(
 	lines := make([]cellLine, 0, len(logical))
 	first := true
 	for _, text := range logical {
-		prefix := continuationPrefix
+		continuation := fitPlanPrefix(continuationPrefix, "", width)
+		prefix := continuation
 		if first {
 			prefix = initialPrefix
 		}
-		prefix = ansi.Truncate(prefix, max(0, width-1), "")
-		bodyWidth := max(1, width-ansi.StringWidth(prefix))
+		prefix = fitPlanPrefix(prefix, essentialPrefix, width)
+		if essentialPrefix != "" && ansi.StringWidth(prefix) >= width {
+			lines = append(lines, styledCellLine(prefix, role))
+			first = false
+			prefix = continuation
+		}
+		bodyWidth := max(1, width-max(ansi.StringWidth(prefix), ansi.StringWidth(continuation)))
 		text = replaceOverwideCellGraphemes(text, bodyWidth)
 		parts := strings.Split(ansi.Wrap(text, bodyWidth, ""), "\n")
 		if len(parts) == 0 {
@@ -285,13 +295,28 @@ func wrappedPlanText(
 		for index, part := range parts {
 			linePrefix := prefix
 			if !first || index > 0 {
-				linePrefix = ansi.Truncate(continuationPrefix, max(0, width-1), "")
+				linePrefix = continuation
 			}
 			lines = append(lines, styledCellLine(linePrefix+part, role))
 			first = false
 		}
 	}
 	return lines
+}
+
+func fitPlanPrefix(prefix, essential string, width int) string {
+	width = max(1, width)
+	maximum := max(0, width-1)
+	if ansi.StringWidth(prefix) <= maximum {
+		return prefix
+	}
+	if essential == "" {
+		return ""
+	}
+	if width == 1 {
+		return ansi.Truncate(essential, width, "")
+	}
+	return ansi.Truncate(essential+" ", maximum, "")
 }
 
 func (cell *presentationCell) toolDocument(mode cellRenderMode) cellDocument {

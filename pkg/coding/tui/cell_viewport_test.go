@@ -112,6 +112,32 @@ func TestNativePlanReflowsWithinTinyUnicodeWidths(t *testing.T) {
 	}
 }
 
+func TestNativePlanPreservesStatusGlyphBeforeDecorativeIndentAtTinyWidths(t *testing.T) {
+	cell := newPresentationCell(frontend.PresentationItem{
+		ID: "plan", TurnID: "turn", Sequence: 1, Revision: 1,
+		Kind: frontend.PresentationPlanUpdate, Lifecycle: frontend.PresentationCompleted,
+		Plan: &frontend.PlanState{Steps: []frontend.PlanStepState{
+			{Step: "Done", Status: frontend.PlanStepCompleted},
+			{Step: "Later", Status: frontend.PlanStepPending},
+		}},
+	})
+	for width := 1; width <= 6; width++ {
+		document := cell.Render(
+			cellRenderContext{Width: width, Theme: cellThemeDark, ColorLevel: cellColorNone},
+			cellRenderCompact,
+		)
+		text := document.plainText()
+		if !strings.Contains(text, "✔") || !strings.Contains(text, "□") {
+			t.Fatalf("width %d dropped plan status glyph: %q", width, text)
+		}
+		for _, line := range document.Lines {
+			if visible := ansi.StringWidth(line.plainText()); visible > width {
+				t.Fatalf("width %d produced line width %d: %q", width, visible, line.plainText())
+			}
+		}
+	}
+}
+
 func TestSemanticViewportRendersOnlyChangedActiveBlock(t *testing.T) {
 	items := make([]frontend.PresentationItem, 0, 65)
 	for index := range 64 {
