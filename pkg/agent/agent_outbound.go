@@ -478,7 +478,7 @@ func (al *AgentLoop) deliverToolResultToUserWithScopes(
 	if al == nil || ts == nil || result == nil {
 		return nil, toolResultDeliveryNone, nil
 	}
-	if toolName == "final_turn" {
+	if toolName == "final_turn" || (result.Delivery.IsFinalHandled() && len(traceScopes) == 0) {
 		traceScopes = []runtimeevents.TraceScope{
 			runtimeevents.NewTraceScope(ts.workspace, ts.turnID),
 		}
