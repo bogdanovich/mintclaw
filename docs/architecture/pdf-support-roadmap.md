@@ -5,7 +5,8 @@
 Selected execution program. PDF0A and PDF0B are complete for `linux/amd64`; their merged,
 deployed evidence and remaining platform limits are recorded in the
 [PDF0A exit record](pdf0a-exit-record.md) and [PDF0B exit record](pdf0b-exit-record.md).
-PDF1A is the next sequenced milestone but is not admitted until it has its own bounded goal.
+PDF1A is admitted for `linux/amd64` under its bounded
+[implementation goal](pdf1a-implementation-goal.md). No later PDF milestone is admitted.
 This roadmap specializes the repository-level
 [`Reliable Document And PDF Workflows`](../../ROADMAP.md#9-reliable-document-and-pdf-workflows)
 direction into ordered, testable MintClaw milestones.
@@ -704,6 +705,12 @@ platform gates, ship acquisition and explicit inspection-unavailable only. Do
 not enable a less constrained parser as a fallback.
 
 ### PDF1A: Local read, extract, render, and agent/channel slice
+
+#### Admission status
+
+Admitted for `linux/amd64` under the [PDF1A implementation goal](pdf1a-implementation-goal.md).
+The goal permits at most two dependent implementation PRs, exact merged-main deployment, and one
+docs-only exit record, then stops before PDF1B, PDF1C, or PDF2.
 
 #### Operator outcome
 

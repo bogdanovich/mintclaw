@@ -71,6 +71,8 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   Poppler oracle, normalized facts, candidate evidence, packaging, and rollback boundary.
 - [PDF0B Exit Record](pdf0b-exit-record.md): merged implementation, 25-fixture and oracle evidence,
   exact deployment, live trace, rollback, residual limits, and the stop boundary before PDF1A.
+- [PDF1A Implementation Goal](pdf1a-implementation-goal.md): admitted Linux read/extract/render,
+  private artifact handoff, deferred tool and skill, typed routing, channel proof, and stop gates.
 - [Browser Capability B0 Admission](browser-capability-b0-admission.md):
   admitted no-blind-replay, exclusive stdio lease, MCP artifact ownership,
   specialist allowlist, diagnostics, deployment evidence, and exact stop
