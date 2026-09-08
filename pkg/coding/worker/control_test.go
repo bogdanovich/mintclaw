@@ -369,6 +369,8 @@ func TestWorkerQuestionAnswerRequiresExactCorrelation(t *testing.T) {
 	if err = harness.client.Steer(t.Context(), "answer-request-2", stale); err != nil {
 		t.Fatalf("correlated answer error = %v", err)
 	}
+	stale.QuestionAnswer.AnswerID = "competing-answer"
+	assertRemoteCode(t, harness.client.Steer(t.Context(), "answer-request-3", stale), ErrorSteerConflict)
 	controllerInstance.mu.Lock()
 	if len(controllerInstance.steers) != 1 || controllerInstance.steers[0].ID != "answer-1" {
 		t.Fatalf("question steers = %#v", controllerInstance.steers)
@@ -762,8 +764,9 @@ func TestClientAcceptsLateResponseForCanceledCallAndContinues(t *testing.T) {
 }
 
 func TestClientEventHistoryIsBoundedAndReportsGap(t *testing.T) {
-	client := &Client{wake: make(chan struct{}, 1)}
 	binding := testBinding(t)
+	identity := binding.ControlIdentity()
+	client := &Client{wake: make(chan struct{}, 1), eventIdentity: &identity}
 	for index := 0; index < MaxClientEvents+20; index++ {
 		record, err := eventRecord(projectedEvent{
 			name: EventContextUsage,
@@ -806,6 +809,66 @@ func TestClientEventHistoryIsBoundedAndReportsGap(t *testing.T) {
 	if !page.HistoryGap || len(page.Events) >= 160 || client.eventBytes > MaxClientEventBytes {
 		t.Fatalf("byte-bounded event page = %d events, %d bytes, gap=%t",
 			len(page.Events), client.eventBytes, page.HistoryGap)
+	}
+}
+
+func TestClientRejectsEventOutsideInitializedControlIdentity(t *testing.T) {
+	binding := testBinding(t)
+	client, requests, responses := newManualClient(t)
+	workerDone := make(chan error, 1)
+	go func() {
+		reader, err := newWireReader(requests)
+		if err != nil {
+			workerDone <- err
+			return
+		}
+		request := reader.read()
+		if request.err != nil {
+			workerDone <- request.err
+			return
+		}
+		result := InitializeResult{Identity: BoundIdentity{
+			ProtocolVersion: ProtocolV1,
+			WorkerBuildID:   testWorkerBuildID,
+			Binding:         binding,
+		}}
+		if _, err = writeWireRecord(responses, successfulResponse(request.record, result)); err != nil {
+			workerDone <- err
+			return
+		}
+		wrong := binding.ControlIdentity()
+		wrong.WorkerGenerationID = "unrelated-worker-generation"
+		stopped, err := eventRecord(projectedEvent{
+			name: EventWorkerStopped,
+			payload: WorkerStoppedPayload{
+				ControlIdentity: wrong,
+				Reason:          WorkerStopCompleted,
+			},
+		})
+		if err == nil {
+			_, err = writeWireRecord(responses, stopped)
+		}
+		_ = responses.Close()
+		workerDone <- err
+	}()
+
+	if _, err := client.Initialize(t.Context(), "initialize-1", InitializeParams{
+		MinProtocolVersion: ProtocolV1,
+		MaxProtocolVersion: ProtocolV1,
+		ParentBuildID:      "parent-build",
+		Binding:            binding,
+	}); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+	waitDone(t, client.Done())
+	if !errors.Is(client.Err(), ErrClientProtocol) {
+		t.Fatalf("mismatched event error = %v, want %v", client.Err(), ErrClientProtocol)
+	}
+	if page := client.EventsAfter(0); len(page.Events) != 0 {
+		t.Fatalf("retained mismatched events = %d, want 0", len(page.Events))
+	}
+	if err := <-workerDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

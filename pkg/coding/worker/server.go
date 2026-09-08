@@ -218,6 +218,7 @@ type serverSession struct {
 	turnDone         <-chan error
 	turnStarted      bool
 	controllerClosed bool
+	acceptedQuestion *QuestionAnswerRef
 	idempotency      map[string]cachedOperation
 }
 
@@ -291,6 +292,10 @@ func (session *serverSession) execute(
 		}
 		if err == nil {
 			err = session.controller.Steer(ctx, frontend.SteerInput{ID: steerID, Text: typed.Text})
+			if err == nil && typed.QuestionAnswer != nil {
+				accepted := *typed.QuestionAnswer
+				session.acceptedQuestion = &accepted
+			}
 		}
 	case *GenerationParams:
 		switch request.Method {
@@ -406,6 +411,11 @@ func (session *serverSession) authorizeQuestion(reference QuestionAnswerRef) err
 		return errQuestionNotSteerable
 	}
 	if question.QuestionID != reference.QuestionID || question.Revision != reference.QuestionRevision {
+		return errQuestionConflict
+	}
+	if session.acceptedQuestion != nil &&
+		session.acceptedQuestion.QuestionID == reference.QuestionID &&
+		session.acceptedQuestion.QuestionRevision == reference.QuestionRevision {
 		return errQuestionConflict
 	}
 	return nil

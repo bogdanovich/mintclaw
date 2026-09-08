@@ -68,8 +68,9 @@ type EventPage struct {
 }
 
 type pendingCall struct {
-	method Method
-	reply  chan Record
+	method            Method
+	reply             chan Record
+	initializeBinding *Binding
 }
 
 type Client struct {
@@ -87,6 +88,7 @@ type Client struct {
 	eventBytes    int
 	nextCursor    uint64
 	sawWorkerStop bool
+	eventIdentity *ControlIdentity
 	err           error
 	done          chan struct{}
 	wake          chan struct{}
@@ -235,6 +237,15 @@ func (client *Client) Call(
 	}
 
 	call := pendingCall{method: method, reply: make(chan Record, 1)}
+	if method == MethodInitialize {
+		decoded, decodeErr := DecodeRequestPayload(method, raw)
+		if decodeErr != nil {
+			client.writeGate <- struct{}{}
+			return nil, decodeErr
+		}
+		binding := decoded.(*InitializeParams).Binding
+		call.initializeBinding = &binding
+	}
 	client.mu.Lock()
 	if client.err != nil || client.isDoneLocked() {
 		closedErr := client.closedErrorLocked()
@@ -395,7 +406,10 @@ func (client *Client) readRecords() {
 				return
 			}
 		case RecordEvent:
-			client.retainEvent(received.record)
+			if !client.retainEvent(received.record) {
+				client.finish(ErrClientProtocol)
+				return
+			}
 		default:
 			client.finish(ErrClientProtocol)
 			return
@@ -411,6 +425,10 @@ func (client *Client) deliverResponse(response Record) bool {
 		if pending.method != response.Method {
 			return false
 		}
+		if pending.initializeBinding != nil &&
+			!client.bindInitializedResponseLocked(response, *pending.initializeBinding) {
+			return false
+		}
 		delete(client.pending, response.ID)
 		pending.reply <- cloneRecord(response)
 		return true
@@ -423,9 +441,38 @@ func (client *Client) deliverResponse(response Record) bool {
 	return false
 }
 
-func (client *Client) retainEvent(record Record) {
+func (client *Client) bindInitializedResponseLocked(response Record, binding Binding) bool {
+	if response.OK == nil || !*response.OK {
+		return true
+	}
+	result, err := DecodeResultPayload(MethodInitialize, response.Result)
+	if err != nil {
+		return false
+	}
+	initialized, ok := result.(*InitializeResult)
+	if !ok || initialized.Identity.Binding != binding ||
+		initialized.Identity.WorkerBuildID != binding.ExpectedWorkerBuildID {
+		return false
+	}
+	identity := binding.ControlIdentity()
+	if client.eventIdentity != nil && *client.eventIdentity != identity {
+		return false
+	}
+	client.eventIdentity = &identity
+	return true
+}
+
+func (client *Client) retainEvent(record Record) bool {
+	identity, ok := eventControlIdentity(record)
+	if !ok {
+		return false
+	}
 	encodedBytes := len(record.Payload) + clientEventEnvelopeBytes
 	client.mu.Lock()
+	if client.eventIdentity == nil || *client.eventIdentity != identity {
+		client.mu.Unlock()
+		return false
+	}
 	client.nextCursor++
 	client.events = append(client.events, RetainedEvent{Cursor: client.nextCursor, Record: cloneRecord(record)})
 	client.eventBytes += encodedBytes
@@ -441,6 +488,32 @@ func (client *Client) retainEvent(record Record) {
 	select {
 	case client.wake <- struct{}{}:
 	default:
+	}
+	return true
+}
+
+func eventControlIdentity(record Record) (ControlIdentity, bool) {
+	payload, err := DecodeEventPayload(record.Event, record.Payload)
+	if err != nil {
+		return ControlIdentity{}, false
+	}
+	switch typed := payload.(type) {
+	case *WorkerReadyPayload:
+		return typed.ControlIdentity, true
+	case *ItemUpdatedPayload:
+		return typed.ControlIdentity, true
+	case *StatusChangedPayload:
+		return typed.ControlIdentity, true
+	case *QuestionStatePayload:
+		return typed.ControlIdentity, true
+	case *ContextUsagePayload:
+		return typed.ControlIdentity, true
+	case *TurnTerminalPayload:
+		return typed.ControlIdentity, true
+	case *WorkerStoppedPayload:
+		return typed.ControlIdentity, true
+	default:
+		return ControlIdentity{}, false
 	}
 }
 
