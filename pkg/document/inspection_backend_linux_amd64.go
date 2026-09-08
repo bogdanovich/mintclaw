@@ -308,7 +308,7 @@ func inspectXFAObject(context *model.Context, object types.Object) (string, []by
 }
 
 func decodeBoundedStream(stream types.StreamDict, limit int64) ([]byte, error) {
-	if limit < 0 {
+	if limit <= 0 {
 		return nil, fmt.Errorf("decoded stream exceeds inspection limit: %w", filter.ErrDecodeLimitExceeded)
 	}
 	if err := stream.DecodeWithLimit(limit); err != nil {

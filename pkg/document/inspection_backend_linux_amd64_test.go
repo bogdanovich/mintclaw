@@ -4,9 +4,14 @@ package document
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	pdfcpuapi "github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/filter"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
 func TestPDFCPUBackendMatchesInspectionManifest(t *testing.T) {
@@ -129,6 +134,23 @@ func TestPDFCPUBackendReturnsTypedMalformedAndLimits(t *testing.T) {
 		StateFailed,
 		FailureInspectionLimit,
 	)
+}
+
+func TestBoundedPageContentRejectsStreamAfterExactBudget(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "decoded-content-array-limit.pdf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := model.NewDefaultConfiguration()
+	configuration.ValidationMode = model.ValidationRelaxed
+	context, err := pdfcpuapi.ReadAndValidate(bytes.NewReader(data), configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const firstStreamBytes = int64(5 * 1024 * 1024)
+	if _, err = boundedPageContent(context, 1, firstStreamBytes); !errors.Is(err, filter.ErrDecodeLimitExceeded) {
+		t.Fatalf("boundedPageContent error = %v, want decode limit", err)
+	}
 }
 
 func TestTextShowingOperatorScanner(t *testing.T) {
