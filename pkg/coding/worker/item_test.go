@@ -202,6 +202,11 @@ func TestSnapshotFromFrontendProjectsBoundedHistoricalRepositoryDiff(t *testing.
 		t.Fatalf("worker repository diff aliases frontend state: %#v", projected)
 	}
 
+	snapshot.Items[0].Tool.Name = "read_file"
+	if err := snapshot.Items[0].Validate(); err == nil {
+		t.Fatal("repository diff attached to the wrong tool name was accepted")
+	}
+	snapshot.Items[0].Tool.Name = "repository_diff"
 	snapshot.Items[0].Tool.RepositoryDiff.Files[0].Hunks[0].Lines[0].Kind = "execute"
 	if err := snapshot.Items[0].Validate(); err == nil {
 		t.Fatal("invalid repository diff line kind was accepted")

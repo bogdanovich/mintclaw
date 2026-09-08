@@ -408,7 +408,7 @@ func validTool(tool Tool) bool {
 		}
 	}
 	if tool.RepositoryDiff != nil {
-		if tool.Command != nil || !validRepositoryDiff(*tool.RepositoryDiff) {
+		if tool.Command != nil || tool.Name != "repository_diff" || !validRepositoryDiff(*tool.RepositoryDiff) {
 			return false
 		}
 	}

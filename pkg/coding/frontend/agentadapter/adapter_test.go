@@ -440,10 +440,14 @@ func TestAdapterProjectsRepositoryDiffEndByExactCallID(t *testing.T) {
 	scope := runtimeevents.Scope{
 		SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1"),
 	}
-	for _, callID := range []string{"call-a", "call-b"} {
+	for _, call := range []struct{ id, tool string }{
+		{id: "call-a", tool: "repository_diff"},
+		{id: "call-b", tool: "repository_diff"},
+		{id: "call-wrong-tool", tool: "read_file"},
+	} {
 		wrapped.PublishNonBlocking(runtimeevents.Event{
 			Kind: runtimeevents.KindAgentToolExecStart, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
-			Payload: agent.ToolExecStartPayload{ToolCallID: callID, Tool: "repository_diff"},
+			Payload: agent.ToolExecStartPayload{ToolCallID: call.id, Tool: call.tool},
 		})
 	}
 	wrapped.PublishNonBlocking(runtimeevents.Event{
@@ -457,6 +461,17 @@ func TestAdapterProjectsRepositoryDiffEndByExactCallID(t *testing.T) {
 			}),
 		},
 	})
+	wrapped.PublishNonBlocking(runtimeevents.Event{
+		Kind: runtimeevents.KindAgentToolExecEnd, Source: runtimeevents.Source{Component: "agent"}, Scope: scope,
+		Payload: agent.ToolExecEndPayload{
+			ToolCallID: "call-wrong-tool", Tool: "read_file",
+			Observation: toolshared.NewRepositoryDiffObservation(codingworkspace.DiffResult{
+				SchemaVersion: codingworkspace.RepositoryDiffSchemaV1,
+				Target:        codingworkspace.DiffTarget{Kind: codingworkspace.DiffTargetCurrent},
+				Files:         []codingworkspace.DiffFile{{Path: "must-not-project.go"}},
+			}),
+		},
+	})
 
 	snapshot, err := projector.Snapshot(t.Context())
 	if err != nil {
@@ -466,9 +481,10 @@ func TestAdapterProjectsRepositoryDiffEndByExactCallID(t *testing.T) {
 	for _, tool := range snapshot.Tools {
 		byCall[tool.CallID] = tool
 	}
-	if len(byCall) != 2 || byCall["call-a"].RepositoryDiff != nil ||
+	if len(byCall) != 3 || byCall["call-a"].RepositoryDiff != nil ||
 		byCall["call-b"].RepositoryDiff == nil || byCall["call-b"].RepositoryDiff.Files[0].Path != "only-b.go" ||
-		byCall["call-b"].Status != frontend.ToolSucceeded {
+		byCall["call-b"].Status != frontend.ToolSucceeded || byCall["call-wrong-tool"].RepositoryDiff != nil ||
+		byCall["call-wrong-tool"].Status != frontend.ToolSucceeded {
 		t.Fatalf("repository diff call correlation = %#v", byCall)
 	}
 }

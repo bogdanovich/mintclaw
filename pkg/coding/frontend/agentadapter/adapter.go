@@ -156,7 +156,8 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				a.projector.ToolPlanObserved(turnID, payload.ToolCallID)
 				a.projector.PlanUpdated(turnID, payload.ToolCallID, projectPlan(*observation.Plan))
 			}
-			if observation != nil && observation.RepositoryDiff != nil && !payload.IsError {
+			if observation != nil && observation.RepositoryDiff != nil && !payload.IsError &&
+				payload.Tool == "repository_diff" {
 				a.projector.ToolRepositoryDiff(
 					turnID,
 					payload.ToolCallID,
