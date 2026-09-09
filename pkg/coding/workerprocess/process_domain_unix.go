@@ -44,4 +44,10 @@ func (domain processDomain) stop(_ time.Duration) error {
 	return nil
 }
 
-func (domain processDomain) close() error { return nil }
+func (domain processDomain) close() error {
+	// command.Wait has reaped the leader before close is called. If any
+	// descendant survived, however, it still belongs to the leader's process
+	// group and keeps that group ID allocated. Drain the group before waiting
+	// for inherited stderr descriptors to reach EOF.
+	return domain.stop(DefaultStopTimeout)
+}
