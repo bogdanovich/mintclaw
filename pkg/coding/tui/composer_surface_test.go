@@ -32,6 +32,25 @@ func TestComposerUsesOneIdleRowAndGrowsForWrappedMultilineInput(t *testing.T) {
 	}
 }
 
+func TestComposerGrowthUsesTextareaWordBoundaryWrapping(t *testing.T) {
+	model, err := newTestModel(newController(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.resize(12, 24)
+	model = updateModel(t, model, tea.KeyMsg{
+		Type: tea.KeyRunes, Runes: []rune("aaaaaa bbbbbb cccccc"),
+	})
+	wrappedRows := model.composer.LineInfo().Height
+	if wrappedRows != 3 || model.composer.Height() != wrappedRows {
+		t.Fatalf(
+			"word-boundary composer rows = %d, textarea wrapped rows = %d; want 3",
+			model.composer.Height(),
+			wrappedRows,
+		)
+	}
+}
+
 func TestActiveTurnEnterQueuesGuidanceOutsideSubmittedHistory(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {

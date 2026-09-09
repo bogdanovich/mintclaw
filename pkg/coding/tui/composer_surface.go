@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/bubbles/textarea"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
@@ -17,13 +17,24 @@ func (m *Model) desiredComposerRows() int {
 	if value == "" {
 		return 1
 	}
-	width := max(1, m.composer.Width())
+	rows := textareaWrappedRows(value, m.composer.Width())
+	return min(maximum, max(1, rows))
+}
+
+// textareaWrappedRows asks Bubbles itself for each logical line's wrapped
+// height. Aggregate display width is insufficient because textarea wraps at
+// word boundaries before falling back to hard wrapping.
+func textareaWrappedRows(value string, width int) int {
+	probe := textarea.New()
+	probe.Prompt = ""
+	probe.ShowLineNumbers = false
+	probe.SetWidth(max(1, width))
 	rows := 0
 	for _, line := range strings.Split(value, "\n") {
-		lineWidth := ansi.StringWidth(line)
-		rows += max(1, (lineWidth+width-1)/width)
+		probe.SetValue(line)
+		rows += max(1, probe.LineInfo().Height)
 	}
-	return min(maximum, max(1, rows))
+	return rows
 }
 
 func (m *Model) syncComposerDimensions() bool {
