@@ -302,6 +302,10 @@ func (controllerInstance *processTestController) Submit(_ context.Context, input
 		return controller.ErrTurnActive
 	}
 	controllerInstance.active = true
+	if err := maybeStartProcessTestDescendant(); err != nil {
+		controllerInstance.active = false
+		return err
+	}
 	controllerInstance.projector.TurnStarted("turn-1", input.Text)
 	return nil
 }
