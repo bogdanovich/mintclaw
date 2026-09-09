@@ -1922,6 +1922,8 @@ Dependencies: P5.6
 The TUI-specific first-paint, update, reflow, hydration, overlay, search, and
 bounded-session baselines are recorded in the
 [TUI.15 performance checkpoint](local-coding-agent-tui-15-performance.md).
+The merged [TUI.15 exit record](local-coding-agent-tui-15-exit.md) audits those
+budgets together with terminal, recovery, safety, and presentation parity.
 Cold/warm runtime startup, first-token, catalogue, and full-process memory work
 remain owned by this broader P8.1 packet.
 
@@ -1942,6 +1944,11 @@ Done when:
 #### P8.2 — Cross-platform terminal and process verification
 
 Dependencies: P4.5, P7.1
+
+The TUI-specific PTY, SSH-shaped, tmux, narrow-terminal, interruption,
+compaction, crash/resume, and provider-fallback matrix is recorded in the
+[TUI.15 exit record](local-coding-agent-tui-15-exit.md). Broader Windows PTY,
+common-shell, installer, and release-platform qualification remains here.
 
 Scope:
 

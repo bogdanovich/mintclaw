@@ -1,9 +1,7 @@
 # Local Coding Agent TUI.15 Migration Checkpoint
 
-Status: first TUI.15 implementation packet. Performance and diagnostics are
-implemented by the later
-[TUI.15 performance checkpoint](local-coding-agent-tui-15-performance.md); PTY,
-documentation, and final parity gates remain open.
+Status: first TUI.15 implementation packet. The complete initiative is closed
+by the later [TUI.15 exit record](local-coding-agent-tui-15-exit.md).
 
 This checkpoint implements the destructive migration portion of
 [TUI.15](local-coding-agent-codex-tui-roadmap.md#tui15--migration-performance-and-parity-closeout).
@@ -82,13 +80,13 @@ audit over the affected frontend, TUI, and coding CLI packages found none of
 the compatibility synchronizer, changed-file projection, flat renderer,
 generic tool-selection state, or removed keybindings.
 
-## Work still required for TUI.15 exit
+## Later TUI.15 packets
 
-The [performance checkpoint](local-coding-agent-tui-15-performance.md) now owns
+The [performance checkpoint](local-coding-agent-tui-15-performance.md) owns
 privacy-safe presentation diagnostics; first-paint, update, resize/reflow,
 long-transcript, hydration, overlay, and search benchmarks; and bounded
-four-hour synthetic-session evidence. The remaining packet owns the SSH, tmux,
+four-hour synthetic-session evidence. The final
+[exit record](local-coding-agent-tui-15-exit.md) owns the SSH, tmux,
 narrow-terminal, interruption, compaction, crash/resume, and provider-fallback
-PTY matrix. It will also publish current rich/raw-mode and binding
-documentation, link the final exit record from the main coding-agent roadmap,
-and perform the requirement-by-requirement parity audit.
+PTY matrix, current rich/raw-mode and binding documentation, main-roadmap link,
+and requirement-by-requirement parity audit.
