@@ -162,7 +162,7 @@ func (budget *repositoryDiffWireBudget) structural(value string, maximum int) (s
 		budget.truncated = true
 		return "", true
 	}
-	value, truncated := boundedWireStructural(value, min(maximum, budget.remaining))
+	value, truncated := canonicalRepositoryDiffStructural(value, min(maximum, budget.remaining))
 	budget.remaining -= len(value)
 	budget.truncated = budget.truncated || truncated
 	return value, truncated
@@ -176,10 +176,24 @@ func (budget *repositoryDiffWireBudget) content(value string, maximum int) (stri
 		budget.truncated = true
 		return "", true
 	}
-	value, truncated := boundedWireContent(value, min(maximum, budget.remaining))
+	value, truncated := canonicalRepositoryDiffContent(value, min(maximum, budget.remaining))
 	budget.remaining -= len(value)
 	budget.truncated = budget.truncated || truncated
 	return value, truncated
+}
+
+func canonicalRepositoryDiffStructural(value string, maximum int) (string, bool) {
+	original := value
+	value = (diagnostictrace.Redactor{}).RedactText(value, maximum)
+	value, normalized := boundedWireStructural(value, maximum)
+	return value, normalized || value != original
+}
+
+func canonicalRepositoryDiffContent(value string, maximum int) (string, bool) {
+	original := value
+	value = (diagnostictrace.Redactor{}).RedactText(value, maximum)
+	value, normalized := boundedWireContent(value, maximum)
+	return value, normalized || value != original
 }
 
 func repositoryDiffFileFromFrontend(
@@ -290,26 +304,31 @@ func validFrontendDiffProvenance(provenance codingworkspace.ProvenanceKind) bool
 func validRepositoryDiff(diff RepositoryDiff) bool {
 	if diff.SchemaVersion != codingworkspace.RepositoryDiffSchemaV1 || diff.Additions < 0 || diff.Deletions < 0 ||
 		diff.BinaryFiles < 0 || len(diff.Files) > MaxRepositoryDiffFiles || !validRepositoryDiffTarget(diff.Target) ||
-		!validOptionalText(diff.ResolvedRevision, MaxPathBytes) || !validOptionalText(diff.MergeBase, MaxPathBytes) ||
-		!validOptionalText(diff.Head, MaxPathBytes) || !validOptionalText(diff.Branch, MaxPathBytes) ||
-		!validOptionalText(diff.Generation, MaxPathBytes) ||
-		!validOptionalText(diff.EvidenceGeneration, MaxPathBytes) ||
-		!validContentText(diff.UnavailableReason, MaxEventTextBytes, false) ||
-		!validContentText(diff.Warning, MaxEventTextBytes, false) ||
-		!validOptionalText(diff.BaselineID, MaxPathBytes) {
+		!validCanonicalRepositoryDiffStructural(diff.ResolvedRevision, MaxPathBytes, false) ||
+		!validCanonicalRepositoryDiffStructural(diff.MergeBase, MaxPathBytes, false) ||
+		!validCanonicalRepositoryDiffStructural(diff.Head, MaxPathBytes, false) ||
+		!validCanonicalRepositoryDiffStructural(diff.Branch, MaxPathBytes, false) ||
+		!validCanonicalRepositoryDiffStructural(diff.Generation, MaxPathBytes, false) ||
+		!validCanonicalRepositoryDiffStructural(diff.EvidenceGeneration, MaxPathBytes, false) ||
+		!validCanonicalRepositoryDiffContent(diff.UnavailableReason, MaxEventTextBytes, false) ||
+		!validCanonicalRepositoryDiffContent(diff.Warning, MaxEventTextBytes, false) ||
+		!validCanonicalRepositoryDiffStructural(diff.BaselineID, MaxPathBytes, false) {
 		return false
 	}
-	if diff.Provenance != nil && !validContentText(diff.Provenance.Reason, MaxEventTextBytes, false) {
+	if diff.Provenance != nil &&
+		!validCanonicalRepositoryDiffContent(diff.Provenance.Reason, MaxEventTextBytes, false) {
 		return false
 	}
 	hunks, lines, textBytes := 0, 0, repositoryDiffTopLevelTextBytes(diff)
 	privateKeys := &diagnostictrace.PrivateKeyBlockRedactor{}
 	for _, file := range diff.Files {
-		if file.Path == "" || !validOptionalText(file.Path, MaxPathBytes) ||
-			!validOptionalText(file.OriginalPath, MaxPathBytes) || !validOptionalText(file.Status, MaxAttachmentMeta) ||
-			!validContentText(file.Omitted, MaxEventTextBytes, false) || file.Additions < 0 || file.Deletions < 0 ||
+		if !validCanonicalRepositoryDiffStructural(file.Path, MaxPathBytes, true) ||
+			!validCanonicalRepositoryDiffStructural(file.OriginalPath, MaxPathBytes, false) ||
+			!validCanonicalRepositoryDiffStructural(file.Status, MaxAttachmentMeta, false) ||
+			!validCanonicalRepositoryDiffContent(file.Omitted, MaxEventTextBytes, false) ||
+			file.Additions < 0 || file.Deletions < 0 ||
 			!validWireDiffProvenance(file.Provenance) ||
-			!validContentText(file.ProvenanceReason, MaxEventTextBytes, false) {
+			!validCanonicalRepositoryDiffContent(file.ProvenanceReason, MaxEventTextBytes, false) {
 			return false
 		}
 		textBytes += len(file.Path) + len(file.OriginalPath) + len(file.Status) + len(file.Omitted) +
@@ -317,14 +336,14 @@ func validRepositoryDiff(diff RepositoryDiff) bool {
 		hunks += len(file.Hunks)
 		for _, hunk := range file.Hunks {
 			if hunk.OldStart < 0 || hunk.OldLines < 0 || hunk.NewStart < 0 || hunk.NewLines < 0 ||
-				!validContentText(hunk.Header, MaxEventTextBytes, false) {
+				!validCanonicalRepositoryDiffContent(hunk.Header, MaxEventTextBytes, false) {
 				return false
 			}
 			textBytes += len(hunk.Header)
 			lines += len(hunk.Lines)
 			for _, line := range hunk.Lines {
 				if line.OldLine < 0 || line.NewLine < 0 || !validRepositoryDiffLineKind(line.Kind) ||
-					!validContentText(line.Text, MaxRepositoryDiffLineBytes, false) {
+					!validCanonicalRepositoryDiffContent(line.Text, MaxRepositoryDiffLineBytes, false) {
 					return false
 				}
 				if redacted, changed := privateKeys.RedactChunk(line.Text); changed || redacted != line.Text {
@@ -339,7 +358,7 @@ func validRepositoryDiff(diff RepositoryDiff) bool {
 }
 
 func validRepositoryDiffTarget(target RepositoryDiffTarget) bool {
-	if !validOptionalText(target.Ref, MaxPathBytes) {
+	if !validCanonicalRepositoryDiffStructural(target.Ref, MaxPathBytes, false) {
 		return false
 	}
 	switch target.Kind {
@@ -350,6 +369,22 @@ func validRepositoryDiffTarget(target RepositoryDiffTarget) bool {
 	default:
 		return false
 	}
+}
+
+func validCanonicalRepositoryDiffStructural(value string, maximum int, required bool) bool {
+	if !validOptionalText(value, maximum) || (required && value == "") {
+		return false
+	}
+	canonical, _ := canonicalRepositoryDiffStructural(value, maximum)
+	return canonical == value
+}
+
+func validCanonicalRepositoryDiffContent(value string, maximum int, required bool) bool {
+	if !validContentText(value, maximum, required) {
+		return false
+	}
+	canonical, _ := canonicalRepositoryDiffContent(value, maximum)
+	return canonical == value
 }
 
 func validRepositoryDiffLineKind(kind string) bool {
