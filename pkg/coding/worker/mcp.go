@@ -142,7 +142,7 @@ func validMCP(observation MCP) bool {
 		return false
 	}
 	if observation.Outcome == MCPOutcomeRunning || observation.LoopHaltCount <= 0 ||
-		observation.LoopHaltThreshold <= 0 {
+		observation.LoopHaltThreshold <= 0 || observation.LoopHaltCount < observation.LoopHaltThreshold {
 		return false
 	}
 	if observation.LoopHaltCode == mcpLoopHaltIdenticalSuccess {

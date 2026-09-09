@@ -155,6 +155,11 @@ func TestMCPWireValidationFailsClosed(t *testing.T) {
 		"failed result":      func(tool *Tool) { tool.MCP.Outcome = MCPOutcomeFailed },
 		"secret JSON":        func(tool *Tool) { tool.MCP.Result = `{"password":"plain-canary"}` },
 		"halt without count": func(tool *Tool) { tool.MCP.LoopHaltCode = mcpLoopHaltIdenticalSuccess },
+		"halt below threshold": func(tool *Tool) {
+			tool.MCP.LoopHaltCode = mcpLoopHaltIdenticalSuccess
+			tool.MCP.LoopHaltCount = 3
+			tool.MCP.LoopHaltThreshold = 4
+		},
 		"unknown halt": func(tool *Tool) {
 			tool.MCP.LoopHaltCode = "arbitrary"
 			tool.MCP.LoopHaltCount = 4
@@ -176,6 +181,21 @@ func TestMCPWireValidationFailsClosed(t *testing.T) {
 		"ambiguous command": func(tool *Tool) { tool.Command = &Command{Status: CommandSucceeded} },
 		"ambiguous exploration": func(tool *Tool) {
 			tool.Exploration = &Exploration{Operation: ExplorationRead, Path: "README.md"}
+		},
+		"running outcome on succeeded tool": func(tool *Tool) {
+			tool.MCP.Outcome = MCPOutcomeRunning
+			tool.MCP.Result = ""
+		},
+		"succeeded outcome on failed tool": func(tool *Tool) { tool.Status = ToolFailed },
+		"canceled outcome on failed tool": func(tool *Tool) {
+			tool.Status = ToolFailed
+			tool.MCP.Outcome = MCPOutcomeCanceled
+			tool.MCP.Result = ""
+		},
+		"failed outcome on interrupted tool": func(tool *Tool) {
+			tool.Status = ToolInterrupted
+			tool.MCP.Outcome = MCPOutcomeFailed
+			tool.MCP.Result = ""
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

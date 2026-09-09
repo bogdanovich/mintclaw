@@ -139,6 +139,10 @@ func TestSanitizeToolObservationFailsClosedAndClonesCommand(t *testing.T) {
 			Server: "github", Tool: "search", Outcome: MCPOutcomeSucceeded,
 			LoopHaltCode: "arbitrary", LoopHaltCount: 4, LoopHaltThreshold: 4,
 		}},
+		"mcp halt below threshold": {MCP: &MCPObservation{
+			Server: "github", Tool: "search", Outcome: MCPOutcomeSucceeded,
+			LoopHaltCode: mcpLoopHaltIdenticalSuccess, LoopHaltCount: 3, LoopHaltThreshold: 4,
+		}},
 		"successful failure halt": {MCP: &MCPObservation{
 			Server: "github", Tool: "search", Outcome: MCPOutcomeSucceeded,
 			LoopHaltCode: mcpLoopHaltRepeatedFailure, LoopHaltCount: 4, LoopHaltThreshold: 4,

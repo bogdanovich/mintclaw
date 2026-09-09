@@ -118,7 +118,7 @@ func sanitizeMCPObservation(observation MCPObservation) (MCPObservation, bool) {
 			return MCPObservation{}, false
 		}
 		if observation.Outcome == MCPOutcomeRunning || observation.LoopHaltCount <= 0 ||
-			observation.LoopHaltThreshold <= 0 {
+			observation.LoopHaltThreshold <= 0 || observation.LoopHaltCount < observation.LoopHaltThreshold {
 			return MCPObservation{}, false
 		}
 		if observation.LoopHaltCode == mcpLoopHaltIdenticalSuccess &&
