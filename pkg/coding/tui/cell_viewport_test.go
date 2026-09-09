@@ -32,6 +32,9 @@ func TestPresentationCellCachesByRevisionWidthThemeColorAndMode(t *testing.T) {
 	if misses := cell.renderMissCount(); misses != 5 {
 		t.Fatalf("distinct render key misses = %d, want 5", misses)
 	}
+	if entries := len(cell.renderCache); entries > maxCellRenderCacheEntries {
+		t.Fatalf("render cache entries = %d, want at most %d", entries, maxCellRenderCacheEntries)
+	}
 
 	revised := semanticMessageItem("assistant-1", 1, 8, frontend.PresentationCompleted, "revised response")
 	store, err := newSemanticCellStore([]frontend.PresentationItem{cell.item})

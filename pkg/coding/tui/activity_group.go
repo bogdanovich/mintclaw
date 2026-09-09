@@ -62,10 +62,7 @@ func (cell *activityGroupCell) Render(context cellRenderContext, mode cellRender
 			}
 		}
 	}
-	if cell.renderCache == nil {
-		cell.renderCache = make(map[cellRenderCacheKey]cellDocument)
-	}
-	cell.renderCache[key] = document
+	cell.renderCache = storeCellRenderDocument(cell.renderCache, key, document)
 	return document
 }
 

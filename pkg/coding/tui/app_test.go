@@ -28,6 +28,8 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 	controller := newController(t)
 	controller.AssistantAccumulated("turn-1", strings.Repeat("x", finalAnswerBytes+100), true)
 	output := &bytes.Buffer{}
+	var reported PresentationDiagnostics
+	closedBeforeReport := false
 
 	err := Run(t.Context(), controller, Options{
 		Output: output,
@@ -38,6 +40,10 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 			}},
 		},
 		AlternateScreen: true,
+		ReportDiagnostics: func(diagnostics PresentationDiagnostics) {
+			reported = diagnostics
+			closedBeforeReport = controller.closes.Load() == 1
+		},
 		newProgram: func(model tea.Model, _ ...tea.ProgramOption) program {
 			rendered, ok := model.(*Model)
 			if !ok || !rendered.initialTurnPending {
@@ -59,6 +65,12 @@ func TestRunClosesControllerAndLeavesBoundedAlternateScreenSummary(t *testing.T)
 	}
 	if !strings.Contains(output.String(), "thread-1") || len(output.String()) > finalAnswerBytes+200 {
 		t.Fatalf("final summary is missing or unbounded: bytes=%d", output.Len())
+	}
+	if reported.SnapshotUpdates == 0 || reported.RenderPasses == 0 {
+		t.Fatalf("presentation diagnostics were not reported: %+v", reported)
+	}
+	if !closedBeforeReport {
+		t.Fatal("presentation diagnostics were reported before controller cleanup")
 	}
 }
 

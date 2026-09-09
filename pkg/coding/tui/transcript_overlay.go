@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,6 +48,7 @@ type transcriptOverlayState struct {
 	followBottom            bool
 	notice                  string
 	copyRequestID           uint64
+	lines                   []transcriptOverlayLine
 	savedViewportPosition   viewportPosition
 	savedComposerFocus      bool
 	savedCommandPanel       commandPanel
@@ -102,6 +104,9 @@ func (m *Model) closeTranscriptOverlay() tea.Cmd {
 	m.transcriptOverlay.searching = false
 	m.transcriptOverlay.help = false
 	m.transcriptOverlay.copyRequestID++
+	m.transcriptOverlay.lines = nil
+	m.transcriptOverlay.matches = nil
+	m.transcriptOverlay.matchIndex = -1
 	m.transcriptOverlay.queryInput.Blur()
 	m.commandPanel = savedPanel
 	m.commandPanelOffset = savedPanelOffset
@@ -116,9 +121,12 @@ func (m *Model) syncTranscriptOverlay() {
 	if !m.transcriptOverlay.active {
 		return
 	}
+	started := m.diagnosticTime()
 	lines := m.transcriptOverlayLines()
+	m.transcriptOverlay.lines = lines
 	m.transcriptOverlay.sync(lines)
 	m.transcriptOverlay.queryInput.Width = max(1, m.width)
+	m.diagnostics.observeOverlayBuild(elapsedDiagnosticTime(started, m.diagnosticTime()))
 }
 
 func (state *transcriptOverlayState) sync(lines []transcriptOverlayLine) {
@@ -235,24 +243,35 @@ func transcriptFoldedMatchOffset(value, foldedQuery string) (int, bool) {
 	if foldedQuery == "" {
 		return 0, false
 	}
-	var folded strings.Builder
-	byteOffsets := make([]int, 0, len(value))
-	fold := cases.Fold()
-	for sourceOffset, char := range value {
-		part := fold.String(string(char))
-		folded.WriteString(part)
-		for range len(part) {
-			byteOffsets = append(byteOffsets, sourceOffset)
-		}
+	if asciiText(value) && asciiText(foldedQuery) {
+		match := strings.Index(strings.ToLower(value), foldedQuery)
+		return match, match >= 0
 	}
-	match := strings.Index(folded.String(), foldedQuery)
+	fold := cases.Fold()
+	match := strings.Index(fold.String(value), foldedQuery)
 	if match < 0 {
 		return 0, false
 	}
-	if match >= len(byteOffsets) {
-		return len(value), true
+	foldedOffset := 0
+	for sourceOffset, char := range value {
+		if foldedOffset == match {
+			return sourceOffset, true
+		}
+		foldedOffset += len(fold.String(string(char)))
+		if foldedOffset > match {
+			return sourceOffset, true
+		}
 	}
-	return byteOffsets[match], true
+	return len(value), true
+}
+
+func asciiText(value string) bool {
+	for index := range len(value) {
+		if value[index] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 func (state *transcriptOverlayState) moveMatch(lines []transcriptOverlayLine, direction int) {
@@ -313,8 +332,7 @@ func (m *Model) handleTranscriptOverlayKey(message tea.KeyMsg) (bool, tea.Cmd) {
 	if !state.active {
 		return false, nil
 	}
-	lines := m.transcriptOverlayLines()
-	state.sync(lines)
+	lines := state.lines
 	if state.searching {
 		switch message.String() {
 		case "esc":
@@ -323,7 +341,9 @@ func (m *Model) handleTranscriptOverlayKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			state.queryInput.Blur()
 			return true, nil
 		case "enter":
+			started := m.diagnosticTime()
 			state.applySearch(lines)
+			m.diagnostics.observeTranscriptSearch(elapsedDiagnosticTime(started, m.diagnosticTime()))
 			return true, nil
 		}
 		var command tea.Cmd
@@ -489,8 +509,7 @@ func (m *Model) transcriptOverlayContentHeight() int {
 
 func (m *Model) transcriptOverlayView() string {
 	state := &m.transcriptOverlay
-	lines := m.transcriptOverlayLines()
-	state.sync(lines)
+	lines := state.lines
 	if m.height <= 0 {
 		return ""
 	}

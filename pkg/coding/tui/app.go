@@ -64,8 +64,11 @@ type Options struct {
 	// key is displayed; Ctrl+C is the default.
 	InterruptKeys []string
 	Environment   []string
-	newProgram    func(tea.Model, ...tea.ProgramOption) program
-	now           func() time.Time
+	// ReportDiagnostics receives content-free presentation counters after the
+	// terminal program has restored the user's shell and the controller closes.
+	ReportDiagnostics func(PresentationDiagnostics)
+	newProgram        func(tea.Model, ...tea.ProgramOption) program
+	now               func() time.Time
 }
 
 type program interface {
@@ -84,6 +87,14 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	var finalDiagnostics *PresentationDiagnostics
+	if options.ReportDiagnostics != nil {
+		defer func() {
+			if finalDiagnostics != nil {
+				options.ReportDiagnostics(*finalDiagnostics)
+			}
+		}()
 	}
 	defer func() {
 		closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), defaultCloseTimeout)
@@ -150,6 +161,8 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 	finalModel, runErr := programFactory(model, programOptions...).Run()
 	if rendered, ok := finalModel.(*Model); ok {
 		rendered.flushPresentationForShutdown()
+		diagnostics := rendered.Diagnostics()
+		finalDiagnostics = &diagnostics
 	}
 	if runErr != nil {
 		return fmt.Errorf("coding TUI: %w", runErr)
