@@ -5,11 +5,48 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
 
 const syntheticPresentationSessionMinutes = 4 * 60
+
+func TestFirstPaintIncludesFirstCompleteView(t *testing.T) {
+	started := time.Date(2026, time.September, 9, 12, 0, 0, 0, time.UTC)
+	clock := &diagnosticTestClock{now: started}
+	model, err := newModel(t.Context(), newController(t), modelOptions{diagnosticNow: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostics := model.Diagnostics(); diagnostics.FirstPaint != 0 {
+		t.Fatalf("first paint before View = %s, want zero", diagnostics.FirstPaint)
+	}
+
+	clock.Advance(137 * time.Millisecond)
+	_ = model.View()
+	if diagnostics := model.Diagnostics(); diagnostics.FirstPaint != 137*time.Millisecond {
+		t.Fatalf("first paint after View = %s, want 137ms", diagnostics.FirstPaint)
+	}
+
+	clock.Advance(time.Second)
+	_ = model.View()
+	if diagnostics := model.Diagnostics(); diagnostics.FirstPaint != 137*time.Millisecond {
+		t.Fatalf("first paint after subsequent View = %s, want the original 137ms", diagnostics.FirstPaint)
+	}
+}
+
+type diagnosticTestClock struct {
+	now time.Time
+}
+
+func (clock *diagnosticTestClock) Now() time.Time {
+	return clock.now
+}
+
+func (clock *diagnosticTestClock) Advance(duration time.Duration) {
+	clock.now = clock.now.Add(duration)
+}
 
 func TestFourHourPresentationSessionRemainsStructurallyBounded(t *testing.T) {
 	projector, err := frontend.NewProjector("long-session", frontend.ProjectionLimits{})

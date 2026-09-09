@@ -151,6 +151,8 @@ type Model struct {
 	clipboardPasteBusy  bool
 	home                string
 	diagnosticNow       func() time.Time
+	firstPaintStarted   time.Time
+	firstPaintRecorded  bool
 	diagnostics         presentationDiagnosticsState
 }
 
@@ -241,6 +243,7 @@ func newModel(
 		writeClipboardText: options.copyText,
 		home:               options.home,
 		diagnosticNow:      diagnosticNow,
+		firstPaintStarted:  firstPaintStarted,
 	}
 	if model.writeClipboardText == nil {
 		model.writeClipboardText = writeSystemClipboardText
@@ -248,9 +251,11 @@ func newModel(
 	model.syncWorkingIndicator()
 	model.updateSurfaceDimensions()
 	model.refreshViewport()
-	firstPaintFinished := model.diagnosticTime()
-	model.diagnostics.FirstPaint = elapsedDiagnosticTime(firstPaintStarted, firstPaintFinished)
-	model.diagnostics.observeSnapshot(snapshot, model.diagnostics.FirstPaint, 0)
+	model.diagnostics.observeSnapshot(
+		snapshot,
+		elapsedDiagnosticTime(firstPaintStarted, model.diagnosticTime()),
+		0,
+	)
 	return model, nil
 }
 
@@ -556,6 +561,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) View() string {
+	if !m.firstPaintRecorded {
+		defer m.observeFirstPaint()
+	}
 	if m.transcriptOverlay.active {
 		return m.transcriptOverlayView()
 	}
@@ -593,6 +601,14 @@ func (m *Model) View() string {
 	}
 	sections = append(sections, m.composer.View(), clipLine(status, m.width))
 	return strings.Join(sections, "\n")
+}
+
+func (m *Model) observeFirstPaint() {
+	if m.firstPaintRecorded {
+		return
+	}
+	m.diagnostics.FirstPaint = elapsedDiagnosticTime(m.firstPaintStarted, m.diagnosticTime())
+	m.firstPaintRecorded = true
 }
 
 func (m *Model) ComposerValue() string {
