@@ -66,8 +66,8 @@ func TestSlashHelpAndUnknownCommandState(t *testing.T) {
 		t.Fatalf("help transition = panel=%v draft=%q command=%v", model.commandPanel, model.ComposerValue(), command)
 	}
 	for _, want := range []string{
-		"MintClaw coding commands", "/compact", "/attach <paths…>", "/rename <title>", "/new", "/exit",
-		"Ctrl+J newline", "Ctrl+V paste clipboard image", "Ctrl+R refresh repository", "Ctrl+T full transcript",
+		"MintClaw coding commands", "/transcript", "/compact", "/attach <paths…>", "/rename <title>", "/new", "/exit",
+		"Ctrl+J newline", "Ctrl+V paste clipboard image", "Ctrl+R refresh repository", "Ctrl+T transcript overlay",
 		"Esc close panel",
 	} {
 		if !strings.Contains(model.View(), want) {

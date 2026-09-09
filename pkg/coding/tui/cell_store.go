@@ -470,16 +470,29 @@ func (m *Model) selectedToolCellID() string {
 	return ""
 }
 
-// fullTranscriptPanelLines renders the currently hydrated transcript window
-// without terminal styling. It intentionally reuses the semantic cells so a
-// command's compact preview and complete evidence cannot diverge.
+// fullTranscriptPanelLines preserves the legacy panel fixture while the
+// interactive overlay consumes the keyed, copy-safe content below.
 func (m *Model) fullTranscriptPanelLines() []string {
-	context := cellRenderContext{Width: max(1, m.width), Theme: m.theme, ColorLevel: cellColorNone}
 	lines := []string{"Full transcript · copy-safe plain text · Ctrl+T or Esc closes"}
+	for _, line := range m.transcriptOverlayLines() {
+		lines = append(lines, line.text)
+	}
+	return lines
+}
+
+// transcriptOverlayLines renders the currently hydrated transcript window
+// without terminal styling. Stable line keys preserve selection when earlier
+// history is prepended. Semantic cells keep compact previews and full evidence
+// from diverging.
+func (m *Model) transcriptOverlayLines() []transcriptOverlayLine {
+	context := cellRenderContext{Width: max(1, m.width-2), Theme: m.theme, ColorLevel: cellColorNone}
+	lines := make([]transcriptOverlayLine, 0, len(m.cells.ordered)*2)
 	if m.transcript.loading {
-		lines = append(lines, "[earlier transcript loading]")
+		lines = append(lines, transcriptOverlayLine{key: "notice:loading", text: "[earlier transcript loading]"})
 	} else if !m.transcript.disabled && (m.transcript.hasOlder || m.snapshot.HasOlderEntries) {
-		lines = append(lines, "[earlier transcript omitted; close this panel and press Page Up to load more]")
+		lines = append(lines, transcriptOverlayLine{
+			key: "notice:older", text: "[earlier transcript omitted; press Page Up at the top to load more]",
+		})
 	}
 
 	liveMessageIDs := make(map[string]struct{}, len(m.cells.ordered))
@@ -488,6 +501,7 @@ func (m *Model) fullTranscriptPanelLines() []string {
 			liveMessageIDs[cell.item.Message.ID] = struct{}{}
 		}
 	}
+	emittedCells := 0
 	appendCell := func(cell semanticCell) {
 		if cell == nil {
 			return
@@ -497,10 +511,16 @@ func (m *Model) fullTranscriptPanelLines() []string {
 		if text == "" {
 			return
 		}
-		if len(lines) > 0 && lines[len(lines)-1] != "" {
-			lines = append(lines, "")
+		identity := cell.Identity().ID
+		if emittedCells > 0 {
+			lines = append(lines, transcriptOverlayLine{key: "gap:" + identity})
 		}
-		lines = append(lines, strings.Split(sanitizeTerminalText(text), "\n")...)
+		for index, rendered := range strings.Split(sanitizeTerminalText(text), "\n") {
+			lines = append(lines, transcriptOverlayLine{
+				key: fmt.Sprintf("cell:%s:%d", identity, index), text: rendered,
+			})
+		}
+		emittedCells++
 	}
 	for _, cell := range m.hydratedCells.ordered {
 		if cell.item.Message != nil {
@@ -517,7 +537,15 @@ func (m *Model) fullTranscriptPanelLines() []string {
 		appendCell(cell)
 	}
 	if m.transcript.hasNewer {
-		lines = append(lines, "", "[newer hydrated transcript omitted; close this panel and press Alt+End]")
+		lines = append(lines,
+			transcriptOverlayLine{key: "gap:notice:newer"},
+			transcriptOverlayLine{
+				key: "notice:newer", text: "[newer hydrated transcript omitted; press End to reload latest]",
+			},
+		)
+	}
+	if len(lines) == 0 {
+		lines = append(lines, transcriptOverlayLine{key: "notice:empty", text: "[transcript is empty]"})
 	}
 	return lines
 }

@@ -94,6 +94,13 @@ type ClipboardImageMsg struct {
 	Err  error
 }
 
+// TranscriptCopyMsg reports one plain-text clipboard operation.
+type TranscriptCopyMsg struct {
+	RequestID uint64
+	Scope     string
+	Err       error
+}
+
 // Model is the bounded terminal view of one frontend controller. It never owns
 // an agent runtime or canonical transcript state.
 type Model struct {
@@ -108,6 +115,7 @@ type Model struct {
 	viewport            semanticViewport
 	composer            textarea.Model
 	transcript          transcriptWindow
+	transcriptOverlay   transcriptOverlayState
 	layout              cellLayout
 	theme               cellTheme
 	colorLevel          cellColorLevel
@@ -142,6 +150,7 @@ type Model struct {
 	nextSteerNumber     uint64
 	readClipboardImage  clipboardImageReader
 	writePasteFile      pasteFileWriter
+	writeClipboardText  clipboardTextWriter
 	clipboardPasteBusy  bool
 	home                string
 }
@@ -163,6 +172,7 @@ type modelOptions struct {
 	now           func() time.Time
 	home          string
 	theme         cellTheme
+	copyText      clipboardTextWriter
 }
 
 func newModel(
@@ -211,6 +221,7 @@ func newModel(
 		staticCells:        make(map[string]*staticSemanticCell),
 		viewport:           newSemanticViewport(80, 18),
 		composer:           composer,
+		transcriptOverlay:  newTranscriptOverlayState(),
 		width:              80,
 		height:             24,
 		theme:              theme,
@@ -222,7 +233,11 @@ func newModel(
 		commandPanel:       initialCommandPanel(snapshot),
 		readClipboardImage: readSystemClipboardImage,
 		writePasteFile:     writePrivatePasteFile,
+		writeClipboardText: options.copyText,
 		home:               options.home,
+	}
+	if model.writeClipboardText == nil {
+		model.writeClipboardText = writeSystemClipboardText
 	}
 	model.syncWorkingIndicator()
 	model.updateSurfaceDimensions()
@@ -321,9 +336,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.transcript = transcriptWindow{disabled: true}
 				m.hydratedCells = semanticCellStore{}
 				m.refreshViewport()
+				m.syncTranscriptOverlay()
 				return m, nil
 			}
 			m.err = message.Err
+			m.syncTranscriptOverlay()
 			return m, nil
 		}
 		m.transcript.apply(message.Page, message.Mode)
@@ -334,6 +351,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.hydratedCells = hydrated
 		m.refreshViewport()
+		m.syncTranscriptOverlay()
 		return m, nil
 	case WorkspaceRefreshMsg:
 		if message.RequestID == 0 || message.RequestID != m.activeEvidenceReq {
@@ -407,6 +425,16 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = nil
 		m.reflowComposer()
 		return m, textarea.Blink
+	case TranscriptCopyMsg:
+		if !m.transcriptOverlay.active || message.RequestID != m.transcriptOverlay.copyRequestID {
+			return m, nil
+		}
+		if message.Err != nil {
+			m.transcriptOverlay.notice = "Copy failed: " + message.Err.Error()
+		} else {
+			m.transcriptOverlay.notice = "Copied " + message.Scope
+		}
+		return m, nil
 	case SubscriptionErrorMsg:
 		if message.Err != nil && !errors.Is(message.Err, context.Canceled) {
 			m.err = message.Err
@@ -467,6 +495,11 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if key.Matches(message, m.keys.interrupt) {
 			return m.handleInterrupt()
 		}
+		if m.transcriptOverlay.active {
+			if handled, command := m.handleTranscriptOverlayKey(message); handled {
+				return m, command
+			}
+		}
 		if handled, command := m.handleComposerKey(message); handled {
 			return m, command
 		}
@@ -474,6 +507,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleInterrupt()
 	case tea.FocusMsg:
 		m.focused = true
+		if m.transcriptOverlay.active {
+			return m, m.scheduleWorkingTick()
+		}
 		m.composer.Focus()
 		return m, tea.Batch(textarea.Blink, m.scheduleWorkingTick())
 	case tea.BlurMsg:
@@ -495,6 +531,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) View() string {
+	if m.transcriptOverlay.active {
+		return m.transcriptOverlayView()
+	}
 	status := m.statusLine()
 	if m.clipboardPasteBusy {
 		status = "reading clipboard image…"
@@ -574,6 +613,7 @@ func (m *Model) installSnapshot(snapshot frontend.ThreadSnapshot) error {
 	m.syncWorkingIndicator()
 	m.updateSurfaceDimensions()
 	m.refreshViewportAt(position)
+	m.syncTranscriptOverlay()
 	return nil
 }
 
@@ -623,6 +663,7 @@ func (m *Model) resize(width, height int) {
 	m.syncComposerDimensions()
 	m.updateSurfaceDimensions()
 	m.refreshViewportAt(position)
+	m.syncTranscriptOverlay()
 }
 
 func (m *Model) updateSurfaceDimensions() {
@@ -743,14 +784,8 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.toggleSelectedTool()
 		return true, nil
 	case "ctrl+t":
-		if m.commandPanel == commandPanelTranscript {
-			m.commandPanel = commandPanelNone
-		} else {
-			m.commandPanel = commandPanelTranscript
-		}
-		m.commandPanelOffset = 0
 		m.err = nil
-		return true, nil
+		return true, m.openTranscriptOverlay()
 	case "enter":
 		m.supersedeEvidenceRequest()
 		if message.Paste {

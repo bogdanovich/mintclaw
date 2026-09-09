@@ -108,6 +108,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		now:           options.now,
 		home:          statusHomeDirectory(options.Environment),
 		theme:         theme,
+		copyText:      newClipboardTextWriter(terminalOutput(options.Output), options.Environment),
 	})
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)
@@ -161,6 +162,13 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		}
 	}
 	return nil
+}
+
+func terminalOutput(configured io.Writer) io.Writer {
+	if configured != nil {
+		return configured
+	}
+	return os.Stdout
 }
 
 // FinalSummary is deliberately bounded: alternate-screen exit leaves useful
