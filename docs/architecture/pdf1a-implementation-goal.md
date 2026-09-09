@@ -2,8 +2,9 @@
 
 ## Status
 
-Admitted implementation contract for PDF1A on `linux/amd64`. PDF0A immutable acquisition and the
-mandatory one-shot worker, plus PDF0B structural inspection, are complete and remain prerequisites.
+Completed on `linux/amd64`; see the [PDF1A exit record](pdf1a-exit-record.md). PDF0A immutable
+acquisition and the mandatory one-shot worker, plus PDF0B structural inspection, are complete and
+remain prerequisites.
 This document is the source of truth for PDF1A scope, pull-request boundaries, evidence, deployment,
 and completion.
 
