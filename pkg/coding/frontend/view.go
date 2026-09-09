@@ -413,7 +413,7 @@ type ThreadSnapshot struct {
 	Activity      Activity            `json:"activity"`
 	LastTurn      *LastTurnOutcome    `json:"last_turn,omitempty"`
 	Items         []PresentationItem  `json:"items,omitempty"`
-	PendingInputs []PendingInputState `json:"pending_inputs,omitempty"`
+	PendingInputs []PendingInputState `json:"-"`
 	// Entries and Tools are compatibility projections derived from Items while
 	// the existing TUI migrates to semantic cells.
 	Entries          []TranscriptEntry             `json:"entries,omitempty"`
@@ -485,10 +485,10 @@ type SteerInput struct {
 // both canonical persistence and live-context insertion. It is rendered
 // outside submitted transcript history.
 type PendingInputState struct {
-	ID        string `json:"id"`
-	TurnID    string `json:"turn_id"`
-	Text      string `json:"text"`
-	Truncated bool   `json:"truncated,omitempty"`
+	ID        string `json:"-"`
+	TurnID    string `json:"-"`
+	Text      string `json:"-"`
+	Truncated bool   `json:"-"`
 }
 
 // Steerer is an optional controller capability for same-turn guidance. It is

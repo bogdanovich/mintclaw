@@ -51,7 +51,9 @@ appearing prematurely as submitted history.
 Admission is scoped to the current active turn, duplicate IDs are idempotent,
 and only the most recent `MaxSteersPerTurn` entries are retained. Completed,
 failed, and interrupted turns clear their pending entries. A suspended turn may
-retain already-admitted guidance until its continuation resolves it.
+retain already-admitted guidance until its continuation resolves it. The field
+and its element fields use `json:"-"`, so neither an ordinary snapshot marshal
+nor a direct pending-state marshal can produce the correlation ID or raw text.
 
 The agent event bus continues to serialize only safe steering metadata such as
 counts, lengths, roles, and hashes. Raw pending text is carried only by the

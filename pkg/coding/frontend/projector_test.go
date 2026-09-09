@@ -2,6 +2,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -74,6 +75,29 @@ func TestSteeringMovesFromPendingSurfaceToTranscriptOnInjection(t *testing.T) {
 	projector.SteeringInjected("turn-1", []SteerInput{{ID: "steer-1", Text: "focus on the parser"}})
 	if duplicate := snapshotForTest(t, projector); len(duplicate.Entries) != 2 {
 		t.Fatalf("duplicate receipt duplicated transcript: %+v", duplicate.Entries)
+	}
+}
+
+func TestPendingSteeringIsExcludedFromSerializedSnapshots(t *testing.T) {
+	const (
+		privateID   = "private-steer-id"
+		privateText = "private same-turn guidance"
+	)
+	snapshot := ThreadSnapshot{
+		ThreadID: "thread-1",
+		PendingInputs: []PendingInputState{{
+			ID: privateID, TurnID: "turn-1", Text: privateText, Truncated: true,
+		}},
+	}
+	for _, value := range []any{snapshot, snapshot.PendingInputs[0]} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), privateID) || strings.Contains(string(encoded), privateText) ||
+			strings.Contains(string(encoded), "pending_inputs") {
+			t.Fatalf("serialized pending steering leaked presentation-only state: %s", encoded)
+		}
 	}
 }
 
