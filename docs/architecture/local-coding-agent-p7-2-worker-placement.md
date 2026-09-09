@@ -2,8 +2,8 @@
 
 Roadmap packet: [P7.2 — Optional local coding daemon investigation](local-coding-agent-roadmap.md#p72--optional-local-coding-daemon-investigation).
 
-Status: placement decision complete; the admitted task-scoped worker control
-boundary remains to be implemented before P7.4.
+Status: complete. Merged implementation and validation evidence are recorded
+in the [P7.2 exit record](local-coding-agent-p7-2-exit.md).
 
 ## Decision
 
