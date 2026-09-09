@@ -19,12 +19,10 @@ func (s *Store) ReserveThreadLease(threadID string) (*Lease, error) {
 	if err != nil {
 		return nil, err
 	}
-	if closeErr := errors.Join(threadRoot.Close(), threadsRoot.Close()); closeErr != nil {
-		return nil, fmt.Errorf(
-			"coding thread store: close new thread reservation: %w",
-			errors.Join(closeErr, lease.Release()),
-		)
-	}
+	// The published thread lock, not these preparation handles, now owns
+	// writer authority. A close error must not turn success into an unlocked
+	// partial thread, so cleanup is deliberately best-effort here.
+	_ = s.closeReservationRoots(threadRoot, threadsRoot)
 	return lease, nil
 }
 

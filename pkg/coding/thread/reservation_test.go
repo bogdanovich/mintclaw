@@ -72,6 +72,45 @@ func TestReserveThreadLeaseIsExclusiveAndDoesNotPublishMetadata(t *testing.T) {
 	}
 }
 
+func TestReserveThreadLeaseKeepsAuthorityWhenPreparationRootCloseFails(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	injectedErr := errors.New("injected root close failure")
+	store.closeReservationRoots = func(threadRoot, threadsRoot *os.Root) error {
+		return errors.Join(threadRoot.Close(), threadsRoot.Close(), injectedErr)
+	}
+	threadID := uuid.NewString()
+	lease, err := store.ReserveThreadLease(threadID)
+	if err != nil {
+		t.Fatalf("ReserveThreadLease() error = %v", err)
+	}
+	if err := store.ValidateLease(lease, threadID); err != nil {
+		t.Fatalf("ValidateLease() error = %v", err)
+	}
+	contenderStore, err := NewStore(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contender, err := contenderStore.AcquireLease(threadID); !errors.Is(err, ErrLeaseBusy) {
+		if contender != nil {
+			_ = contender.Release()
+		}
+		t.Fatalf("AcquireLease(contender) error = %v, want %v", err, ErrLeaseBusy)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	successor, err := contenderStore.AcquireLease(threadID)
+	if err != nil {
+		t.Fatalf("AcquireLease(after release) error = %v", err)
+	}
+	if err := successor.Release(); err != nil {
+		t.Fatalf("successor Release() error = %v", err)
+	}
+}
+
 func TestReserveThreadLeaseHasOneConcurrentWinner(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "coding"))
 	if err != nil {
