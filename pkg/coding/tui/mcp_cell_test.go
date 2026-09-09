@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
@@ -115,15 +114,11 @@ func TestMCPCompactPreviewIsBoundedAndFullEvidenceIsExpandable(t *testing.T) {
 	}
 	model.resize(80, 24)
 	compact := model.document.text()
-	if !strings.Contains(compact, "result omitted; Ctrl+O expands") || strings.Contains(compact, "line-7") {
+	if !strings.Contains(compact, "result omitted; Ctrl+T opens full transcript") ||
+		strings.Contains(compact, "line-7") {
 		t.Fatalf("compact MCP evidence is not bounded: %q", compact)
 	}
-	model.navigateTools(1)
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
-	if !strings.Contains(model.document.text(), "line-7") || model.expandedToolID == "" {
-		t.Fatalf("Ctrl+O did not expose full MCP evidence: %q", model.document.text())
-	}
-	plain := strings.Join(model.fullTranscriptPanelLines(), "\n")
+	plain := strings.Join(transcriptOverlayLogicalLines(model.transcriptOverlayLines()), "\n")
 	if !strings.Contains(plain, "line-7") || strings.Contains(plain, "\x1b") {
 		t.Fatalf("copy-safe transcript omitted or styled MCP evidence: %q", plain)
 	}

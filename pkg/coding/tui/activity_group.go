@@ -183,8 +183,6 @@ func activityGroupRevision(kind activityGroupKind, members []*presentationCell) 
 
 func groupedLiveCellSpecs(
 	cells []*presentationCell,
-	selectedToolID string,
-	expandedToolID string,
 ) []semanticCellRenderSpec {
 	specs := make([]semanticCellRenderSpec, 0, len(cells))
 	for index := 0; index < len(cells); {
@@ -193,12 +191,10 @@ func groupedLiveCellSpecs(
 			index++
 			continue
 		}
-		if groupableExplorationCell(cell, selectedToolID, expandedToolID) {
+		if groupableExplorationCell(cell) {
 			end := contiguousActivityGroupEnd(
 				cells,
 				index,
-				selectedToolID,
-				expandedToolID,
 				groupableExplorationCell,
 			)
 			if end-index > 1 {
@@ -209,12 +205,10 @@ func groupedLiveCellSpecs(
 				continue
 			}
 		}
-		if groupableSuccessfulCommandCell(cell, selectedToolID, expandedToolID) {
+		if groupableSuccessfulCommandCell(cell) {
 			end := contiguousActivityGroupEnd(
 				cells,
 				index,
-				selectedToolID,
-				expandedToolID,
 				groupableSuccessfulCommandCell,
 			)
 			if end-index > 1 {
@@ -225,34 +219,31 @@ func groupedLiveCellSpecs(
 				continue
 			}
 		}
-		specs = append(specs, individualCellSpec(cell, selectedToolID, expandedToolID))
+		specs = append(specs, semanticCellRenderSpec{cell: cell, mode: cellRenderCompact})
 		index++
 	}
 	return specs
 }
 
-type activityGroupPredicate func(*presentationCell, string, string) bool
+type activityGroupPredicate func(*presentationCell) bool
 
 func contiguousActivityGroupEnd(
 	cells []*presentationCell,
 	start int,
-	selectedToolID string,
-	expandedToolID string,
 	predicate activityGroupPredicate,
 ) int {
 	turnID := cells[start].item.TurnID
 	end := start
 	for end < len(cells) && cells[end] != nil && cells[end].item.TurnID == turnID &&
-		predicate(cells[end], selectedToolID, expandedToolID) {
+		predicate(cells[end]) {
 		end++
 	}
 	return end
 }
 
-func groupableExplorationCell(cell *presentationCell, selectedToolID, expandedToolID string) bool {
+func groupableExplorationCell(cell *presentationCell) bool {
 	if cell == nil || cell.item.Tool == nil || cell.item.Tool.Exploration == nil ||
-		cell.item.Tool.Command != nil || len(cell.item.Tool.WriteAudit) != 0 ||
-		cellToolSelected(cell, selectedToolID, expandedToolID) {
+		cell.item.Tool.Command != nil || len(cell.item.Tool.WriteAudit) != 0 {
 		return false
 	}
 	switch cell.item.Tool.Status {
@@ -264,9 +255,9 @@ func groupableExplorationCell(cell *presentationCell, selectedToolID, expandedTo
 	}
 }
 
-func groupableSuccessfulCommandCell(cell *presentationCell, selectedToolID, expandedToolID string) bool {
+func groupableSuccessfulCommandCell(cell *presentationCell) bool {
 	if cell == nil || cell.item.Tool == nil || cell.item.Tool.Command == nil ||
-		len(cell.item.Tool.WriteAudit) != 0 || cellToolSelected(cell, selectedToolID, expandedToolID) {
+		len(cell.item.Tool.WriteAudit) != 0 {
 		return false
 	}
 	tool := cell.item.Tool
@@ -275,29 +266,4 @@ func groupableSuccessfulCommandCell(cell *presentationCell, selectedToolID, expa
 	return cell.item.Lifecycle == frontend.PresentationCompleted && tool.Status == frontend.ToolSucceeded &&
 		command.Status == frontend.CommandSucceeded && command.OwnsProcess && !command.Background &&
 		!command.Orphan && command.Source != frontend.CommandSourceUserShell && (action == "" || action == "run")
-}
-
-func cellToolSelected(cell *presentationCell, selectedToolID, expandedToolID string) bool {
-	if cell == nil || cell.item.Tool == nil {
-		return false
-	}
-	viewID := toolViewID(*cell.item.Tool)
-	return viewID == selectedToolID || viewID == expandedToolID
-}
-
-func individualCellSpec(
-	cell *presentationCell,
-	selectedToolID string,
-	expandedToolID string,
-) semanticCellRenderSpec {
-	spec := semanticCellRenderSpec{cell: cell, mode: cellRenderCompact}
-	if cell == nil || cell.item.Tool == nil {
-		return spec
-	}
-	viewID := toolViewID(*cell.item.Tool)
-	spec.selected = viewID == selectedToolID
-	if viewID == expandedToolID {
-		spec.mode = cellRenderFull
-	}
-	return spec
 }

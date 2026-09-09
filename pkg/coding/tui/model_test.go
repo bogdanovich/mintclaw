@@ -19,7 +19,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
@@ -685,106 +684,6 @@ func TestComposerUnicodeCursorStaysWithinNarrowCellBounds(t *testing.T) {
 	}
 }
 
-func TestTranscriptRenderingIsCellBoundedAndSanitizesControls(t *testing.T) {
-	entries := []frontend.TranscriptEntry{{
-		ID:   "unicode",
-		Kind: frontend.EntryAssistant,
-		Text: "界 e\u0301 👩🏽‍💻 אבג \x1b[31mred\x1b[0m\x07 " + strings.Repeat("界", 20) +
-			strings.Repeat("a", 30),
-	}}
-	tools := []frontend.ToolState{{
-		CallID: "call-1", Name: "exec", Arguments: "SECRET-ARG", Output: "SECRET-OUTPUT", Status: frontend.ToolRunning,
-	}}
-	content, layout := renderTranscript(
-		buildTranscriptView(entries, tools, nil, nil, "view:tool::call-1", ""),
-		12,
-		false,
-		false,
-		false,
-	)
-	if len(layout.blocks) != 2 || !strings.Contains(content, "▶ Tool") || !strings.Contains(content, "[running]") {
-		t.Fatalf("semantic transcript = %q layout=%+v", content, layout)
-	}
-	if strings.Contains(content, "SECRET") || strings.Contains(content, "\x1b") || strings.Contains(content, "\x07") {
-		t.Fatalf("unsafe terminal/tool content leaked: %q", content)
-	}
-	for _, line := range strings.Split(content, "\n") {
-		if width := ansi.StringWidth(line); width > 12 {
-			t.Fatalf("rendered line width=%d > 12: %q", width, line)
-		}
-	}
-}
-
-func TestTranscriptKeepsFinalAssistantAnswerAfterToolsAndRepositoryState(t *testing.T) {
-	entries := []frontend.TranscriptEntry{
-		{ID: "user", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "inspect", Complete: true},
-		{ID: "assistant", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "final answer", Complete: true},
-	}
-	tools := []frontend.ToolState{
-		{TurnID: "turn-1", CallID: "call-1", Name: "exec", Status: frontend.ToolSucceeded},
-	}
-	workspace := &codingworkspace.Snapshot{ProjectRoot: "/work/project", CWD: "/work/project"}
-	display := buildTranscriptView(entries, tools, nil, workspace, "", "")
-	if len(display) != 4 {
-		t.Fatalf("display entries = %+v", display)
-	}
-	wantIDs := []string{"user", "view:tool:turn-1:call-1", "view:workspace", "assistant"}
-	for index, want := range wantIDs {
-		if display[index].id != want {
-			t.Fatalf("display[%d].id = %q, want %q; display=%+v", index, display[index].id, want, display)
-		}
-	}
-}
-
-func TestTranscriptKeepsCompletedAssistantAfterLaterTurnWarning(t *testing.T) {
-	entries := []frontend.TranscriptEntry{
-		{ID: "user", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "inspect", Complete: true},
-		{ID: "assistant", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "final answer", Complete: true},
-		{ID: "fallback", TurnID: "turn-1", Kind: frontend.EntryWarning, Text: "provider fallback", Complete: true},
-	}
-	display := buildTranscriptView(entries, nil, nil, nil, "", "")
-	wantIDs := []string{"user", "fallback", "assistant"}
-	assertTranscriptViewIDs(t, display, wantIDs)
-}
-
-func TestTranscriptKeepsIncompleteAssistantBeforeLaterTurnError(t *testing.T) {
-	entries := []frontend.TranscriptEntry{
-		{ID: "user", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "inspect", Complete: true},
-		{ID: "assistant", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "partial answer"},
-		{ID: "error", TurnID: "turn-1", Kind: frontend.EntryError, Text: "provider failed", Complete: true},
-	}
-	display := buildTranscriptView(entries, nil, nil, nil, "", "")
-	wantIDs := []string{"user", "assistant", "error"}
-	assertTranscriptViewIDs(t, display, wantIDs)
-}
-
-func TestTranscriptKeepsRepositoryStateWithNewestLiveTurn(t *testing.T) {
-	entries := []frontend.TranscriptEntry{
-		{ID: "user-1", TurnID: "turn-1", Kind: frontend.EntryUser, Text: "first", Complete: true},
-		{ID: "assistant-1", TurnID: "turn-1", Kind: frontend.EntryAssistant, Text: "done", Complete: true},
-		{ID: "user-2", TurnID: "turn-2", Kind: frontend.EntryUser, Text: "second", Complete: true},
-	}
-	tools := []frontend.ToolState{
-		{TurnID: "turn-2", CallID: "call-2", Name: "exec", Status: frontend.ToolRunning},
-	}
-	workspace := &codingworkspace.Snapshot{ProjectRoot: "/work/project", CWD: "/work/project"}
-	display := buildTranscriptView(entries, tools, nil, workspace, "", "")
-	wantIDs := []string{"user-1", "assistant-1", "user-2", "view:tool:turn-2:call-2", "view:workspace"}
-	assertTranscriptViewIDs(t, display, wantIDs)
-}
-
-func assertTranscriptViewIDs(t *testing.T, display []transcriptViewEntry, want []string) {
-	t.Helper()
-	if len(display) != len(want) {
-		t.Fatalf("display entries = %+v, want IDs %v", display, want)
-	}
-	for index, wantID := range want {
-		if display[index].id != wantID {
-			t.Fatalf("display[%d].id = %q, want %q; display=%+v", index, display[index].id, wantID, display)
-		}
-	}
-}
-
 func TestUnsupportedOrChangedHistoryDisablesPagingWithoutFrontendError(t *testing.T) {
 	controller := newController(t)
 	model, err := newTestModel(controller)
@@ -923,7 +822,7 @@ func TestModelConsumesLatestCoalescedView(t *testing.T) {
 	controller.AssistantAccumulated("turn-1", "working", false)
 	model = updateModel(t, model, nextSnapshotCmd(t.Context(), model.updates)())
 	state := model.Snapshot()
-	if len(state.Entries) != 2 || state.Entries[1].Text != "working" {
+	if len(state.Messages()) != 2 || state.Messages()[1].Text != "working" {
 		t.Fatalf("coalesced model view = %+v", state)
 	}
 }
@@ -1102,10 +1001,10 @@ func TestModelKeepsLongBoundedHistoryUsableAtNarrowSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 12, Height: 7})
-	if view := model.View(); view == "" || len(snapshot.Entries) != 128 || !snapshot.HasOlderEntries {
+	if view := model.View(); view == "" || len(snapshot.Messages()) != 128 || !snapshot.HasOlderEntries {
 		t.Fatalf(
 			"long-history model is not bounded and renderable: entries=%d older=%v",
-			len(snapshot.Entries),
+			len(snapshot.Messages()),
 			snapshot.HasOlderEntries,
 		)
 	}
@@ -1140,7 +1039,7 @@ func TestNextSnapshotCommandUsesExistingSubscription(t *testing.T) {
 	if !ok {
 		t.Fatalf("subscription message = %T", message)
 	}
-	if len(update.Snapshot.Entries) != 1 || update.Snapshot.Entries[0].Text != "inspect" {
+	if len(update.Snapshot.Messages()) != 1 || update.Snapshot.Messages()[0].Text != "inspect" {
 		t.Fatalf("subscription view = %+v", update.Snapshot)
 	}
 }

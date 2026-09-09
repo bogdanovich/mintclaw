@@ -15,7 +15,7 @@ import (
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 )
 
-func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *testing.T) {
+func TestToolCellsExposeLifecycleAndFullTranscriptWithoutArguments(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -50,22 +50,17 @@ func TestToolCardsExposeLifecycleAndExpandedBoundedOutputWithoutArguments(t *tes
 		t.Fatalf("collapsed card leaked arguments or omitted bounded command evidence: %q", collapsed)
 	}
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}, Alt: true})
-	if model.selectedToolID != "view:tool:turn-1:interrupted" {
-		t.Fatalf("Alt+K selected %q", model.selectedToolID)
-	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
-	expanded := renderedModelTranscript(model, 100)
+	full := strings.Join(transcriptOverlayLogicalLines(model.transcriptOverlayLines()), "\n")
 	for _, want := range []string{
 		"Command interrupted", "exit 130", "execution: background", "[… transcript bounded …]", "stdout>",
 		"safe stdout", "stderr>", "safe stderr", "· 1.5s",
 	} {
-		if !strings.Contains(expanded, want) {
-			t.Fatalf("expanded card omits %q: %q", want, expanded)
+		if !strings.Contains(full, want) {
+			t.Fatalf("full transcript omits %q: %q", want, full)
 		}
 	}
-	if strings.Contains(expanded, "SECRET_TOKEN") || strings.Contains(expanded, "secret command") {
-		t.Fatalf("expanded card leaked arguments: %q", expanded)
+	if strings.Contains(full, "SECRET_TOKEN") || strings.Contains(full, "secret command") {
+		t.Fatalf("full transcript leaked arguments: %q", full)
 	}
 }
 
@@ -102,8 +97,8 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Tools) != 1 || snapshot.Tools[0].Output != "" {
-		t.Fatalf("ordinary tool projection = %+v", snapshot.Tools)
+	if len(snapshot.ToolStates()) != 1 || snapshot.ToolStates()[0].Output != "" {
+		t.Fatalf("ordinary tool projection = %+v", snapshot.ToolStates())
 	}
 	model, err := newTestModel(&fakeController{Projector: projector})
 	if err != nil {
@@ -116,9 +111,9 @@ func TestOrdinaryToolAdapterOutputRemainsNonExpandableAndRedacted(t *testing.T) 
 			t.Fatalf("ordinary tool card leaked %q: %q", forbidden, rendered)
 		}
 	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlO})
-	if model.expandedToolID != "" || strings.Contains(renderedModelTranscript(model, 80), "SECRET-PATH") {
-		t.Fatalf("ordinary tool card expanded without bounded presentation output: %+v", model)
+	full := strings.Join(transcriptOverlayLogicalLines(model.transcriptOverlayLines()), "\n")
+	if strings.Contains(full, "SECRET-PATH") {
+		t.Fatalf("ordinary tool evidence exposed redacted arguments: %q", full)
 	}
 }
 
@@ -167,7 +162,7 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 		ProjectRoot: "/work/mintclaw", Model: "gpt-coding", Provider: "openai",
 	})
 	projector.ContextUsage(2_000, 10_000)
-	projector.FilesChanged("turn-1", "call-1", []frontend.WriteAudit{{
+	projector.ToolCompleted("turn-1", "call-1", "write_file", "", 0, false, []frontend.WriteAudit{{
 		Kind: "file", Target: "verified.go", Action: "update", Success: true, Tool: "write_file",
 	}})
 	projector.WorkspaceUpdated(codingworkspace.Snapshot{
@@ -196,7 +191,7 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 	model.resize(120, 30)
 	content := renderedModelTranscript(model, 120)
 	for _, want := range []string{
-		"Verified writes", "update verified.go", "Repository changes", "repository is dirty",
+		"Edited 1 file", "update verified.go", "Repository changes", "repository is dirty",
 		"diff stat: 1 files · +12 -3", " M tracked.go", "Ctrl+R refresh repository status",
 	} {
 		if !strings.Contains(content, want) {
@@ -231,6 +226,102 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 			model.statusLine(),
 			renderedModelTranscript(model, 120),
 		)
+	}
+}
+
+func TestRepositoryStatePrecedesTurnBoundaryAndFinalAnswer(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector.TurnStarted("turn-1", "fix it")
+	projector.ToolCompleted("turn-1", "call-1", "write_file", "", time.Second, false, []frontend.WriteAudit{{
+		Kind: "file", Target: "main.go", Action: "update", Success: true,
+	}})
+	projector.WorkspaceUpdated(codingworkspace.Snapshot{
+		ProjectRoot: "/work/mintclaw",
+		CWD:         "/work/mintclaw",
+		Git:         codingworkspace.GitState{Available: true, StatusAvailable: true, Dirty: true},
+		ChangedPaths: []codingworkspace.ChangedPath{{
+			Path: "main.go", Status: " M",
+		}},
+	})
+	projector.AssistantAccumulated("turn-1", "The fix is complete.", true)
+	projector.TurnCompleted("turn-1", "completed")
+
+	model, err := newTestModel(&fakeController{Projector: projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := renderedModelTranscript(model, 100)
+	repositoryIndex := strings.Index(content, "Repository changes")
+	boundaryIndex := strings.Index(content, "────────")
+	finalIndex := strings.Index(content, "The fix is complete.")
+	if repositoryIndex < 0 || boundaryIndex <= repositoryIndex || finalIndex <= boundaryIndex {
+		t.Fatalf(
+			"terminal transcript order repository=%d boundary=%d final=%d: %q",
+			repositoryIndex,
+			boundaryIndex,
+			finalIndex,
+			content,
+		)
+	}
+}
+
+func TestRepositoryStatePrecedesTerminalBoundaryWithoutFinalAnswer(t *testing.T) {
+	tests := []struct {
+		name     string
+		finish   func(*frontend.Projector)
+		boundary string
+	}{
+		{
+			name: "failed",
+			finish: func(projector *frontend.Projector) {
+				projector.TurnFailed("turn-1", "failed")
+			},
+			boundary: "Work failed",
+		},
+		{
+			name: "interrupted",
+			finish: func(projector *frontend.Projector) {
+				projector.TurnInterrupted("turn-1", "interrupted")
+			},
+			boundary: "Work interrupted",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			projector.TurnStarted("turn-1", "fix it")
+			projector.ToolCompleted("turn-1", "call-1", "write_file", "", time.Second, false, []frontend.WriteAudit{{
+				Kind: "file", Target: "main.go", Action: "update", Success: true,
+			}})
+			projector.WorkspaceUpdated(codingworkspace.Snapshot{
+				ProjectRoot: "/work/mintclaw",
+				CWD:         "/work/mintclaw",
+				Git:         codingworkspace.GitState{Available: true, StatusAvailable: true, Dirty: true},
+			})
+			test.finish(projector)
+
+			model, err := newTestModel(&fakeController{Projector: projector})
+			if err != nil {
+				t.Fatal(err)
+			}
+			content := renderedModelTranscript(model, 100)
+			repositoryIndex := strings.Index(content, "Repository changes")
+			boundaryIndex := strings.Index(content, test.boundary)
+			if repositoryIndex < 0 || boundaryIndex <= repositoryIndex {
+				t.Fatalf(
+					"terminal transcript order repository=%d boundary=%d: %q",
+					repositoryIndex,
+					boundaryIndex,
+					content,
+				)
+			}
+		})
 	}
 }
 

@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -95,244 +94,6 @@ func mergeTranscriptEntries(groups ...[]frontend.TranscriptEntry) []frontend.Tra
 	return merged
 }
 
-type transcriptViewEntry struct {
-	id        string
-	label     string
-	text      string
-	truncated bool
-}
-
-func buildTranscriptView(
-	entries []frontend.TranscriptEntry,
-	tools []frontend.ToolState,
-	changedFiles []frontend.ChangedFile,
-	workspace *codingworkspace.Snapshot,
-	selectedToolID string,
-	expandedToolID string,
-) []transcriptViewEntry {
-	display := make([]transcriptViewEntry, 0, len(entries)+len(tools)+2)
-	toolsByTurn := make(map[string][]frontend.ToolState)
-	for _, tool := range tools {
-		toolsByTurn[tool.TurnID] = append(toolsByTurn[tool.TurnID], tool)
-	}
-	appendTools := func(turnID string) {
-		for _, tool := range toolsByTurn[turnID] {
-			id := toolViewID(tool)
-			display = append(display, transcriptViewEntry{
-				id:    id,
-				label: toolCardLabel(tool, id == selectedToolID),
-				text:  toolCardText(tool, id == expandedToolID),
-			})
-		}
-		delete(toolsByTurn, turnID)
-	}
-	appendRepositoryState := func() {
-		if entry, ok := verifiedWritesEntry(changedFiles); ok {
-			display = append(display, entry)
-		}
-		if workspace != nil {
-			display = append(display, workspaceChangesEntry(*workspace))
-		}
-	}
-	lastEntryByTurn := make(map[string]int)
-	latestTurnID := ""
-	for index := range entries {
-		turnID := entries[index].TurnID
-		if turnID != "" {
-			lastEntryByTurn[turnID] = index
-			latestTurnID = turnID
-		}
-	}
-	deferredAssistants := make(map[string][]frontend.TranscriptEntry)
-	latestTurnHasCompletedAnswer := false
-	for index, entry := range entries {
-		if entry.Kind == frontend.EntryAssistant && entry.Complete {
-			deferredAssistants[entry.TurnID] = append(deferredAssistants[entry.TurnID], entry)
-			latestTurnHasCompletedAnswer = latestTurnHasCompletedAnswer || entry.TurnID == latestTurnID
-		} else {
-			display = appendTranscriptViewEntry(display, entry)
-		}
-		if index != lastEntryByTurn[entry.TurnID] {
-			continue
-		}
-		appendTools(entry.TurnID)
-		if entry.TurnID == latestTurnID && latestTurnHasCompletedAnswer {
-			continue
-		}
-		for _, assistant := range deferredAssistants[entry.TurnID] {
-			display = appendTranscriptViewEntry(display, assistant)
-		}
-		delete(deferredAssistants, entry.TurnID)
-	}
-	for _, tool := range tools {
-		appendTools(tool.TurnID)
-	}
-	appendRepositoryState()
-	for _, assistant := range deferredAssistants[latestTurnID] {
-		display = appendTranscriptViewEntry(display, assistant)
-	}
-	return display
-}
-
-func appendTranscriptViewEntry(
-	display []transcriptViewEntry,
-	entry frontend.TranscriptEntry,
-) []transcriptViewEntry {
-	return append(display, transcriptViewEntry{
-		id: entry.ID, label: transcriptEntryLabel(entry.Kind), text: entry.Text, truncated: entry.Truncated,
-	})
-}
-
-func toolViewID(tool frontend.ToolState) string {
-	return "view:tool:" + tool.TurnID + ":" + tool.CallID
-}
-
-func toolCardLabel(tool frontend.ToolState, selected bool) string {
-	marker := " "
-	if selected {
-		marker = "▶"
-	}
-	name := boundedSingleLine(tool.Name, 256)
-	if tool.MCP != nil {
-		name = boundedSingleLine(tool.MCP.Server+"."+tool.MCP.Tool, 256)
-	}
-	if name == "" {
-		name = "tool"
-	}
-	return fmt.Sprintf("%s Tool %s %s", marker, toolStatusMarker(tool.Status), name)
-}
-
-func toolStatusMarker(status frontend.ToolStatus) string {
-	switch status {
-	case frontend.ToolRunning:
-		return "[running]"
-	case frontend.ToolSuspended:
-		return "[suspended]"
-	case frontend.ToolSucceeded:
-		return "[ok]"
-	case frontend.ToolFailed:
-		return "[failed]"
-	case frontend.ToolInterrupted:
-		return "[interrupted]"
-	default:
-		return "[unknown]"
-	}
-}
-
-func toolCardText(tool frontend.ToolState, expanded bool) string {
-	metadata := make([]string, 0, 8)
-	metadata = append(metadata, "status "+toolStatusText(tool.Status))
-	if tool.Duration > 0 {
-		metadata = append(metadata, "duration "+formatToolDuration(tool.Duration))
-	}
-	if command := tool.Command; command != nil {
-		commandStatus := strings.TrimSpace(string(command.Status))
-		if commandStatus == "" {
-			commandStatus = "unknown"
-		}
-		metadata = append(metadata, "command "+commandStatus)
-		if command.ExitCode != nil {
-			metadata = append(metadata, "exit "+strconv.Itoa(*command.ExitCode))
-		}
-		if command.Background {
-			metadata = append(metadata, "background")
-		}
-		if command.Canceled {
-			metadata = append(metadata, "canceled")
-		}
-		if command.TimedOut {
-			metadata = append(metadata, "timed out")
-		}
-	}
-	if observation := tool.MCP; observation != nil {
-		metadata = append(metadata, "mcp "+string(observation.Outcome))
-		if observation.LoopHaltCode != "" {
-			metadata = append(metadata, "turn halted")
-		}
-		if purpose := strings.TrimSpace(observation.Purpose); purpose != "" {
-			metadata = append(metadata, "purpose "+boundedSingleLine(purpose, 512))
-		}
-	}
-	lines := []string{strings.Join(metadata, " · ")}
-	truncated := tool.OutputTruncated || tool.Command != nil && tool.Command.Truncated ||
-		tool.MCP != nil && tool.MCP.Truncated
-	if truncated {
-		lines = append(lines, "[output truncated]")
-	}
-	writeLines := make([]string, 0, len(tool.WriteAudit))
-	for _, audit := range tool.WriteAudit {
-		if !audit.Success || audit.Kind != "file" {
-			continue
-		}
-		writeLines = append(
-			writeLines,
-			"  "+strings.TrimSpace(boundedSingleLine(audit.Action, 128)+" "+boundedSingleLine(audit.Target, 512)),
-		)
-	}
-	if len(writeLines) > 0 {
-		lines = append(lines, "verified writes:")
-		lines = append(lines, writeLines...)
-	}
-	if !expanded {
-		if toolHasDisplayOutput(tool) {
-			lines = append(lines, "output available · Alt+J/K select · Ctrl+O expand")
-		}
-		return strings.Join(lines, "\n")
-	}
-	lines = append(lines, expandedToolOutput(tool)...)
-	lines = append(lines, "Ctrl+O collapse")
-	return strings.Join(lines, "\n")
-}
-
-func toolStatusText(status frontend.ToolStatus) string {
-	value := strings.TrimSpace(string(status))
-	if value == "" {
-		return "unknown"
-	}
-	return value
-}
-
-func toolHasDisplayOutput(tool frontend.ToolState) bool {
-	return tool.Command != nil &&
-		(tool.Command.Stdout != "" || tool.Command.Stderr != "" || tool.Command.Output != "" ||
-			len(tool.Command.Transcript) != 0) ||
-		tool.MCP != nil && (tool.MCP.Result != "" || tool.MCP.Error != "")
-}
-
-func toolHasExpandableEvidence(tool frontend.ToolState) bool {
-	return tool.RepositoryDiff != nil || toolHasDisplayOutput(tool)
-}
-
-func expandedToolOutput(tool frontend.ToolState) []string {
-	if tool.MCP != nil {
-		if tool.MCP.Error != "" {
-			return []string{"error:", tool.MCP.Error}
-		}
-		if tool.MCP.Result != "" {
-			return []string{"result:", tool.MCP.Result}
-		}
-		return []string{"result: (empty)"}
-	}
-	if tool.Command == nil {
-		return nil
-	}
-	command := tool.Command
-	lines := make([]string, 0, 6)
-	if command.Stdout != "" {
-		lines = append(lines, "stdout:", command.Stdout)
-	}
-	if command.Stderr != "" {
-		lines = append(lines, "stderr:", command.Stderr)
-	}
-	if command.Stdout == "" && command.Stderr == "" && command.Output != "" {
-		lines = append(lines, "output:", command.Output)
-	}
-	if len(lines) == 0 {
-		lines = append(lines, "output: (empty)")
-	}
-	return lines
-}
-
 func formatToolDuration(duration time.Duration) string {
 	switch {
 	case duration < time.Second:
@@ -344,22 +105,13 @@ func formatToolDuration(duration time.Duration) string {
 	}
 }
 
-func verifiedWritesEntry(files []frontend.ChangedFile) (transcriptViewEntry, bool) {
-	if len(files) == 0 {
-		return transcriptViewEntry{}, false
-	}
-	lines := []string{"Successful file write audits from this session:"}
-	for _, file := range files {
-		lines = append(lines, boundedSingleLine(file.Action, 128)+" "+boundedSingleLine(file.Path, 512))
-	}
-	return transcriptViewEntry{
-		id:    "view:verified-writes",
-		label: "Verified writes",
-		text:  strings.Join(lines, "\n"),
-	}, true
+type staticCellContent struct {
+	label     string
+	text      string
+	truncated bool
 }
 
-func workspaceChangesEntry(snapshot codingworkspace.Snapshot) transcriptViewEntry {
+func workspaceChangesEntry(snapshot codingworkspace.Snapshot) staticCellContent {
 	lines := make([]string, 0, len(snapshot.ChangedPaths)+5)
 	switch {
 	case !snapshot.Git.Available:
@@ -395,7 +147,7 @@ func workspaceChangesEntry(snapshot codingworkspace.Snapshot) transcriptViewEntr
 		lines = append(lines, "warning: "+boundedSingleLine(snapshot.Warning, 512))
 	}
 	lines = append(lines, "Ctrl+R refresh repository status")
-	return transcriptViewEntry{id: "view:workspace", label: "Repository changes", text: strings.Join(lines, "\n")}
+	return staticCellContent{label: "Repository changes", text: strings.Join(lines, "\n")}
 }
 
 func boundedSingleLine(value string, maximumBytes int) string {
@@ -411,90 +163,11 @@ func boundedSingleLine(value string, maximumBytes int) string {
 	return value + "…"
 }
 
-type transcriptBlock struct {
-	id    string
-	start int
-	end   int
-}
-
-type transcriptLayout struct {
-	blocks []transcriptBlock
-}
-
 type transcriptAnchor struct {
 	id     string
 	offset int
 	before bool
 	valid  bool
-}
-
-func renderTranscript(
-	entries []transcriptViewEntry,
-	width int,
-	hasOlder bool,
-	hasNewer bool,
-	loading bool,
-) (string, transcriptLayout) {
-	width = max(1, width)
-	var content strings.Builder
-	layout := transcriptLayout{blocks: make([]transcriptBlock, 0, len(entries))}
-	line := 0
-	appendText := func(value string) {
-		if content.Len() > 0 {
-			content.WriteByte('\n')
-			line++
-		}
-		content.WriteString(value)
-		line += strings.Count(value, "\n")
-	}
-	if loading {
-		appendText("Loading earlier transcript…")
-	} else if hasOlder {
-		appendText("↑ More transcript available (Page Up)")
-	}
-	for _, entry := range entries {
-		if content.Len() > 0 {
-			content.WriteString("\n\n")
-			line += 2
-		}
-		start := line
-		label := sanitizeTerminalText(entry.label)
-		body := sanitizeTerminalText(entry.text)
-		if entry.truncated {
-			body += "\n[…truncated]"
-		}
-		wrapped := ansi.Wrap(body, max(1, width-2), "")
-		block := ansi.Wrap(label, width, "")
-		if wrapped != "" {
-			block += "\n" + indentTranscript(wrapped, "  ")
-		}
-		content.WriteString(block)
-		line += strings.Count(block, "\n")
-		layout.blocks = append(layout.blocks, transcriptBlock{id: entry.id, start: start, end: line + 1})
-	}
-	if hasNewer {
-		appendText("↓ Newer hydrated transcript omitted; press Alt+End to reload latest")
-	}
-	return content.String(), layout
-}
-
-func transcriptEntryLabel(kind frontend.EntryKind) string {
-	switch kind {
-	case frontend.EntryUser:
-		return "You"
-	case frontend.EntryAssistant:
-		return "MintClaw"
-	case frontend.EntryReasoning:
-		return "Reasoning"
-	case frontend.EntryTool:
-		return "Tool"
-	case frontend.EntryWarning:
-		return "Warning"
-	case frontend.EntryError:
-		return "Error"
-	default:
-		return "Transcript"
-	}
 }
 
 func sanitizeTerminalText(value string) string {

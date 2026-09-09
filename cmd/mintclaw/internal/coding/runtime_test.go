@@ -612,8 +612,9 @@ func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(snapshot.Entries) < 2 || snapshot.Entries[len(snapshot.Entries)-1].Text != "working" {
-		t.Fatalf("streamed entries = %#v", snapshot.Entries)
+	messages := snapshot.Messages()
+	if len(messages) < 2 || messages[len(messages)-1].Text != "working" {
+		t.Fatalf("streamed entries = %#v", messages)
 	}
 	if err := frontendController.Submit(
 		t.Context(),
@@ -668,7 +669,7 @@ func TestNativeControllerDrivesHeadlessTurnWithoutReviewerCapability(t *testing.
 	if snapshot.LastCompaction.Background {
 		t.Fatal("manual compaction was projected as background work")
 	}
-	for _, entry := range snapshot.Entries {
+	for _, entry := range snapshot.Messages() {
 		if entry.ID == "controller:turn-error" {
 			t.Fatalf("intentional interruption was projected as a controller failure: %#v", entry)
 		}
@@ -2063,9 +2064,9 @@ func TestNativeControllerRestoresCurrentPlanWithoutInventingToolHistory(t *testi
 	}
 	current := snapshot.CurrentPlan()
 	if current == nil || current.Explanation != "Continue after restart." || len(current.Steps) != 1 ||
-		current.Steps[0].Step != "Verify the implementation" || len(snapshot.Tools) != 0 {
+		current.Steps[0].Step != "Verify the implementation" || len(snapshot.ToolStates()) != 0 {
 		_ = frontendController.Close(t.Context())
-		t.Fatalf("restored current plan = %+v, tools=%+v", current, snapshot.Tools)
+		t.Fatalf("restored current plan = %+v, tools=%+v", current, snapshot.ToolStates())
 	}
 	if err := frontendController.Close(t.Context()); err != nil {
 		t.Fatal(err)

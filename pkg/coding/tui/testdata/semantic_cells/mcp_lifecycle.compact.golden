@@ -9,7 +9,7 @@
     beta
     gamma
     delta
-    … result omitted; Ctrl+O expands …
+    … result omitted; Ctrl+T opens full transcript …
 
 ! MCP call failed github.create_issue · 800ms
   purpose: Create an issue

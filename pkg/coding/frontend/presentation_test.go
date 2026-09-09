@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -61,10 +62,10 @@ func TestPresentationItemsPreserveCausalOrderAndStableLifecycle(t *testing.T) {
 		tool.Duration != 2500*time.Millisecond || tool.Tool == nil || tool.Tool.Status != ToolSucceeded {
 		t.Fatalf("completed tool = %+v", tool)
 	}
-	if len(completed.Entries) != 3 || completed.Entries[0].Kind != EntryUser ||
-		completed.Entries[1].Kind != EntryAssistant || completed.Entries[2].Kind != EntryWarning ||
-		len(completed.Tools) != 1 || completed.Tools[0].CallID != "call-1" {
-		t.Fatalf("compatibility projection = %+v", completed)
+	if len(completed.Messages()) != 3 || completed.Messages()[0].Kind != EntryUser ||
+		completed.Messages()[1].Kind != EntryAssistant || completed.Messages()[2].Kind != EntryWarning ||
+		len(completed.ToolStates()) != 1 || completed.ToolStates()[0].CallID != "call-1" {
+		t.Fatalf("authoritative payload accessors = %+v", completed)
 	}
 
 	now = now.Add(time.Minute)
@@ -219,7 +220,7 @@ func TestSuspendedToolCanResumeWithoutLosingIdentity(t *testing.T) {
 	}
 }
 
-func TestPresentationProjectionIsBoundedAndCompatibilityIsDerived(t *testing.T) {
+func TestPresentationProjectionIsBoundedAndPayloadAccessorsReadItems(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{Entries: 2, Tools: 1})
 	projector.TurnStarted("turn-1", "first")
 	projector.AssistantAccumulated("turn-1", "answer", true)
@@ -228,15 +229,38 @@ func TestPresentationProjectionIsBoundedAndCompatibilityIsDerived(t *testing.T) 
 	projector.ToolStarted("turn-2", "call-2", "second_tool", "")
 
 	view := snapshotForTest(t, projector)
-	if !view.HasOlderEntries || len(view.Items) != 3 || len(view.Entries) != 2 || len(view.Tools) != 1 {
+	if !view.HasOlderEntries || len(view.Items) != 3 || len(view.Messages()) != 2 || len(view.ToolStates()) != 1 {
 		t.Fatalf("bounded projection = %+v", view)
 	}
-	if view.Entries[0].Kind != EntryAssistant || view.Entries[1].Text != "second" ||
-		view.Tools[0].CallID != "call-2" {
-		t.Fatalf("derived compatibility projection = %+v", view)
+	if view.Messages()[0].Kind != EntryAssistant || view.Messages()[1].Text != "second" ||
+		view.ToolStates()[0].CallID != "call-2" {
+		t.Fatalf("payload accessors = %+v", view)
 	}
 	assertItemsStrictlyOrdered(t, view.Items)
-	assertCompatibilityDerivedFromItems(t, view)
+	assertPayloadAccessorsReadItems(t, view)
+}
+
+func TestThreadSnapshotJSONContainsOnlyAuthoritativePresentationItems(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{})
+	projector.TurnStarted("turn-1", "inspect")
+	projector.ToolStarted("turn-1", "call-1", "exec", "fields: command")
+
+	encoded, err := json.Marshal(snapshotForTest(t, projector))
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	fields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("decode snapshot fields: %v", err)
+	}
+	if _, exists := fields["items"]; !exists {
+		t.Fatalf("authoritative items missing from snapshot JSON: %s", encoded)
+	}
+	for _, legacy := range []string{"entries", "tools", "changed_files"} {
+		if _, exists := fields[legacy]; exists {
+			t.Fatalf("legacy projection %q remains in snapshot JSON: %s", legacy, encoded)
+		}
+	}
 }
 
 func TestPlanPresentationPreservesTypedOrderLifecycleAndIdentity(t *testing.T) {
@@ -264,8 +288,8 @@ func TestPlanPresentationPreservesTypedOrderLifecycleAndIdentity(t *testing.T) {
 	}
 	assertPresentationSequences(t, view.Items, []uint64{2, 3})
 	if !reflect.DeepEqual(view.Items[1].Plan.Steps, plan.Steps) ||
-		view.Items[1].Plan.Explanation != plan.Explanation || len(view.Tools) != 1 || len(view.Entries) != 0 {
-		t.Fatalf("typed plan or compatibility projection = %+v", view)
+		view.Items[1].Plan.Explanation != plan.Explanation || len(view.ToolStates()) != 1 || len(view.Messages()) != 0 {
+		t.Fatalf("typed plan or authoritative payload accessors = %+v", view)
 	}
 	before := view.Items[1]
 	now = now.Add(time.Minute)
@@ -309,7 +333,7 @@ func TestPlanRestoredCreatesCurrentPlanWithoutToolHistory(t *testing.T) {
 		Steps:       []PlanStepState{{Step: "Verify", Status: PlanStepInProgress}},
 	})
 	view := snapshotForTest(t, projector)
-	if len(view.Items) != 1 || view.Items[0].Plan == nil || len(view.Tools) != 0 ||
+	if len(view.Items) != 1 || view.Items[0].Plan == nil || len(view.ToolStates()) != 0 ||
 		view.Items[0].Plan.CallID != "restored-current-plan" ||
 		view.Items[0].Plan.Steps[0].Step != "Verify" {
 		t.Fatalf("restored plan projection = %+v", view)
@@ -375,7 +399,7 @@ func TestPlanPresentationIsSeparatelyBoundedAndRejectsInvalidPlans(t *testing.T)
 		})
 	}
 	view := snapshotForTest(t, projector)
-	if len(view.Items) != 2 || len(view.Tools) != 1 || view.Tools[0].CallID != "call-2" {
+	if len(view.Items) != 2 || len(view.ToolStates()) != 1 || view.ToolStates()[0].CallID != "call-2" {
 		t.Fatalf("separately bounded presentation = %+v", view)
 	}
 	var plan *PlanState
@@ -599,7 +623,7 @@ func assertItemsStrictlyOrdered(t *testing.T, items []PresentationItem) {
 	}
 }
 
-func assertCompatibilityDerivedFromItems(t *testing.T, view ThreadSnapshot) {
+func assertPayloadAccessorsReadItems(t *testing.T, view ThreadSnapshot) {
 	t.Helper()
 	var entries []TranscriptEntry
 	var tools []ToolState
@@ -611,12 +635,12 @@ func assertCompatibilityDerivedFromItems(t *testing.T, view ThreadSnapshot) {
 			tools = append(tools, *item.Tool)
 		}
 	}
-	if !reflect.DeepEqual(entries, view.Entries) || !reflect.DeepEqual(tools, view.Tools) {
+	if !reflect.DeepEqual(entries, view.Messages()) || !reflect.DeepEqual(tools, view.ToolStates()) {
 		t.Fatalf(
-			"compatibility is not derived from items: items=%+v entries=%+v tools=%+v",
+			"payload accessors do not reflect items: items=%+v messages=%+v tools=%+v",
 			view.Items,
-			view.Entries,
-			view.Tools,
+			view.Messages(),
+			view.ToolStates(),
 		)
 	}
 }

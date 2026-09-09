@@ -134,9 +134,6 @@ type Model struct {
 	composerHistory     []string
 	historyIndex        int
 	historyDraft        string
-	selectedToolID      string
-	expandedToolID      string
-	toolSelectionActive bool
 	refreshingWorkspace bool
 	workspaceNotice     string
 	commandPanel        commandPanel
@@ -577,7 +574,7 @@ func (m *Model) ComposerValue() string {
 // TranscriptEntries exposes semantic view state for deterministic frontend
 // tests without requiring full-screen golden snapshots.
 func (m *Model) TranscriptEntries() []frontend.TranscriptEntry {
-	return m.transcript.entries(m.snapshot.Entries)
+	return m.transcript.entries(m.snapshot.Messages())
 }
 
 // ViewportOffset reports the semantic transcript scroll position.
@@ -702,7 +699,6 @@ func (m *Model) captureViewportPosition() viewportPosition {
 
 func (m *Model) refreshViewportAt(position viewportPosition) {
 	state := m.snapshot
-	m.normalizeToolSelection(state.Tools)
 	m.reconcileStaticCells(state)
 	m.document = reconcileSemanticViewportDocument(
 		m.document,
@@ -774,15 +770,6 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		m.refreshingWorkspace = true
 		m.workspaceNotice = ""
 		return true, workspaceRefreshCmd(m.ctx, refresher, m.beginEvidenceRequest())
-	case "alt+j":
-		m.navigateTools(1)
-		return true, nil
-	case "alt+k":
-		m.navigateTools(-1)
-		return true, nil
-	case "ctrl+o":
-		m.toggleSelectedTool()
-		return true, nil
 	case "ctrl+t":
 		m.err = nil
 		return true, m.openTranscriptOverlay()
@@ -874,84 +861,6 @@ func (m *Model) acceptsSteeringInput() bool {
 	}
 	return m.snapshot.Activity == frontend.ActivityRunning ||
 		m.snapshot.Activity == frontend.ActivityCompacting
-}
-
-func (m *Model) normalizeToolSelection(tools []frontend.ToolState) {
-	tools = navigableToolStates(tools)
-	if len(tools) == 0 {
-		m.selectedToolID = ""
-		m.expandedToolID = ""
-		m.toolSelectionActive = false
-		return
-	}
-	for _, tool := range tools {
-		if toolViewID(tool) == m.selectedToolID {
-			return
-		}
-	}
-	m.selectedToolID = toolViewID(tools[len(tools)-1])
-	if m.expandedToolID != m.selectedToolID {
-		m.expandedToolID = ""
-	}
-}
-
-func (m *Model) navigateTools(direction int) {
-	tools := navigableToolStates(m.snapshot.Tools)
-	if len(tools) == 0 {
-		m.workspaceNotice = "no tool cards"
-		return
-	}
-	m.normalizeToolSelection(tools)
-	selected := 0
-	for index, tool := range tools {
-		if toolViewID(tool) == m.selectedToolID {
-			selected = index
-			break
-		}
-	}
-	selected = (selected + direction + len(tools)) % len(tools)
-	m.selectedToolID = toolViewID(tools[selected])
-	m.expandedToolID = ""
-	m.toolSelectionActive = true
-	m.refreshViewport()
-	m.focusSelectedTool()
-}
-
-func (m *Model) toggleSelectedTool() {
-	tools := navigableToolStates(m.snapshot.Tools)
-	if len(tools) == 0 {
-		m.workspaceNotice = "no tool cards"
-		return
-	}
-	m.normalizeToolSelection(tools)
-	m.toolSelectionActive = true
-	selected := frontend.ToolState{}
-	for _, tool := range tools {
-		if toolViewID(tool) == m.selectedToolID {
-			selected = tool
-			break
-		}
-	}
-	if !toolHasExpandableEvidence(selected) {
-		m.expandedToolID = ""
-		m.workspaceNotice = "bounded tool output unavailable"
-		m.refreshViewport()
-		m.focusSelectedTool()
-		return
-	}
-	if m.expandedToolID == m.selectedToolID {
-		m.expandedToolID = ""
-	} else {
-		m.expandedToolID = m.selectedToolID
-	}
-	m.refreshViewport()
-	m.focusSelectedTool()
-}
-
-func (m *Model) focusSelectedTool() {
-	if line, ok := m.layout.lineFor(transcriptAnchor{id: m.selectedToolCellID(), valid: true}); ok {
-		m.viewport.SetYOffset(line)
-	}
 }
 
 func (m *Model) rememberPrompt(prompt string) {

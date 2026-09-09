@@ -596,8 +596,8 @@ func classifyExecError(err error, snapshot *frontend.ThreadSnapshot) *ExitError 
 			snapshot.LastCompaction.TurnID == turnID {
 			return &ExitError{Code: ExitCodeContextFailure, Category: ExecFailureContext, Err: err}
 		}
-		for _, tool := range snapshot.Tools {
-			if tool.TurnID == turnID && tool.Status == frontend.ToolFailed {
+		for _, item := range snapshot.Items {
+			if item.Tool != nil && item.Tool.TurnID == turnID && item.Tool.Status == frontend.ToolFailed {
 				return &ExitError{Code: ExitCodeToolFailure, Category: ExecFailureTool, Err: err}
 			}
 		}

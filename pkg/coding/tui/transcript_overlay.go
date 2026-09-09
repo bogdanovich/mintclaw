@@ -49,7 +49,6 @@ type transcriptOverlayState struct {
 	copyRequestID           uint64
 	savedViewportPosition   viewportPosition
 	savedComposerFocus      bool
-	savedToolSelection      bool
 	savedCommandPanel       commandPanel
 	savedCommandPanelOffset int
 }
@@ -82,7 +81,6 @@ func (m *Model) openTranscriptOverlay() tea.Cmd {
 	m.transcriptOverlay.notice = ""
 	m.transcriptOverlay.savedViewportPosition = m.captureViewportPosition()
 	m.transcriptOverlay.savedComposerFocus = m.composer.Focused()
-	m.transcriptOverlay.savedToolSelection = m.toolSelectionActive
 	m.transcriptOverlay.savedCommandPanel = m.commandPanel
 	m.transcriptOverlay.savedCommandPanelOffset = m.commandPanelOffset
 	m.transcriptOverlay.followBottom = true
@@ -98,7 +96,6 @@ func (m *Model) closeTranscriptOverlay() tea.Cmd {
 	}
 	savedPosition := m.transcriptOverlay.savedViewportPosition
 	savedFocus := m.transcriptOverlay.savedComposerFocus
-	savedToolSelection := m.transcriptOverlay.savedToolSelection
 	savedPanel := m.transcriptOverlay.savedCommandPanel
 	savedPanelOffset := m.transcriptOverlay.savedCommandPanelOffset
 	m.transcriptOverlay.active = false
@@ -106,7 +103,6 @@ func (m *Model) closeTranscriptOverlay() tea.Cmd {
 	m.transcriptOverlay.help = false
 	m.transcriptOverlay.copyRequestID++
 	m.transcriptOverlay.queryInput.Blur()
-	m.toolSelectionActive = savedToolSelection
 	m.commandPanel = savedPanel
 	m.commandPanelOffset = savedPanelOffset
 	m.refreshViewportAt(savedPosition)

@@ -183,9 +183,6 @@ func (a *Adapter) project(event runtimeevents.Event) {
 				payload.IsError,
 				audit,
 			)
-			if hasChangedFiles(audit) {
-				a.projector.FilesChanged(turnID, payload.ToolCallID, audit)
-			}
 		}
 	case runtimeevents.KindAgentToolExecSkipped:
 		payload, ok := event.Payload.(agent.ToolExecSkippedPayload)
@@ -350,15 +347,6 @@ func projectMCP(observation toolshared.MCPObservation) frontend.MCPState {
 		LoopHaltCount:     observation.LoopHaltCount,
 		LoopHaltThreshold: observation.LoopHaltThreshold,
 	}
-}
-
-func hasChangedFiles(audit []frontend.WriteAudit) bool {
-	for _, entry := range audit {
-		if entry.Success && entry.Kind == "file" && strings.TrimSpace(entry.Target) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func projectCommand(command toolshared.CommandObservation) frontend.CommandState {

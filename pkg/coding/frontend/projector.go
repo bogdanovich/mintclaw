@@ -540,7 +540,6 @@ func (p *Projector) rebuildStreamMessageProjection(state *ThreadSnapshot, protec
 		}
 	}
 	p.pruneTurnOrderingState(state)
-	p.syncCompatibilityProjection(state)
 }
 
 func (p *Projector) recordEntryVersion(
@@ -997,33 +996,6 @@ func (p *Projector) ToolCompleted(
 	})
 }
 
-// FilesChanged promotes only successful, verified file write audits into the
-// bounded changed-file projection.
-func (p *Projector) FilesChanged(turnID, callID string, audit []WriteAudit) {
-	p.mutate(func(state *ThreadSnapshot) {
-		turnID = presentationTurnID(turnID)
-		callID = boundPresentationIdentity(callID)
-		changed := make([]ChangedFile, 0, min(len(audit), p.limits.Tools))
-		for _, entry := range audit {
-			if !entry.Success || entry.Kind != "file" || strings.TrimSpace(entry.Target) == "" {
-				continue
-			}
-			changed = replaceChangedFile(changed, p.boundedChangedFile(ChangedFile{
-				Path: entry.Target, Action: entry.Action, Tool: entry.Tool, TurnID: turnID, CallID: callID,
-			}))
-			if overflow := len(changed) - p.limits.Tools; overflow > 0 {
-				changed = slices.Clone(changed[overflow:])
-			}
-		}
-		for _, file := range changed {
-			state.ChangedFiles = replaceChangedFile(state.ChangedFiles, file)
-		}
-		if overflow := len(state.ChangedFiles) - p.limits.Tools; overflow > 0 {
-			state.ChangedFiles = slices.Clone(state.ChangedFiles[overflow:])
-		}
-	})
-}
-
 // ToolSuspended records that durable continuation ownership moved outside the
 // running turn. The tool has not succeeded or failed and may be resumed after
 // the pending human interaction is resolved.
@@ -1446,7 +1418,6 @@ func (p *Projector) publicSnapshotLocked() ThreadSnapshot {
 		_, deferred := p.deferredAssistantItems[item.ID]
 		return deferred
 	})
-	p.syncCompatibilityProjection(&current)
 	return current
 }
 
@@ -1698,15 +1669,6 @@ func (p *Projector) boundedPlan(plan PlanState) (PlanState, bool) {
 	return plan, true
 }
 
-func (p *Projector) boundedChangedFile(file ChangedFile) ChangedFile {
-	file.Path, _ = boundText(file.Path, p.limits.TextBytes)
-	file.Action, _ = boundText(file.Action, p.limits.TextBytes)
-	file.Tool, _ = boundText(file.Tool, p.limits.TextBytes)
-	file.TurnID, _ = boundText(file.TurnID, p.limits.TextBytes)
-	file.CallID, _ = boundText(file.CallID, p.limits.TextBytes)
-	return file
-}
-
 func (p *Projector) boundedWriteAudit(audit []WriteAudit) []WriteAudit {
 	if len(audit) == 0 {
 		return nil
@@ -1722,16 +1684,6 @@ func (p *Projector) boundedWriteAudit(audit []WriteAudit) []WriteAudit {
 		result[i].Tool, _ = boundText(result[i].Tool, p.limits.TextBytes)
 	}
 	return result
-}
-
-func replaceChangedFile(files []ChangedFile, replacement ChangedFile) []ChangedFile {
-	result := make([]ChangedFile, 0, len(files)+1)
-	for _, file := range files {
-		if file.Path != replacement.Path {
-			result = append(result, file)
-		}
-	}
-	return append(result, replacement)
 }
 
 func commandDisplayOutput(command CommandState, maximum int) (string, bool) {
@@ -1802,9 +1754,6 @@ func contextError(ctx context.Context) error {
 func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 	snapshot.Items = clonePresentationItems(snapshot.Items)
 	snapshot.PendingInputs = slices.Clone(snapshot.PendingInputs)
-	snapshot.Entries = slices.Clone(snapshot.Entries)
-	snapshot.Tools = cloneTools(snapshot.Tools)
-	snapshot.ChangedFiles = slices.Clone(snapshot.ChangedFiles)
 	if snapshot.Runtime != nil {
 		runtimeStatus := *snapshot.Runtime
 		runtimeStatus.InstructionSources = slices.Clone(runtimeStatus.InstructionSources)
@@ -1845,14 +1794,6 @@ func cloneSnapshot(snapshot ThreadSnapshot) ThreadSnapshot {
 // consumer.
 func (snapshot ThreadSnapshot) Clone() ThreadSnapshot {
 	return cloneSnapshot(snapshot)
-}
-
-func cloneTools(tools []ToolState) []ToolState {
-	tools = slices.Clone(tools)
-	for i := range tools {
-		tools[i] = cloneTool(tools[i])
-	}
-	return tools
 }
 
 func cloneTool(tool ToolState) ToolState {

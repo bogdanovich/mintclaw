@@ -59,7 +59,7 @@ func TestExplorationGroupDeduplicatesLabelsAndKeepsActiveCallsVisible(t *testing
 		explorationTestCell("failed", 4, frontend.PresentationFailed, frontend.ToolFailed,
 			frontend.ExplorationState{Operation: frontend.ExplorationList, Path: "missing"}),
 	}
-	specs := groupedLiveCellSpecs(cells, "", "")
+	specs := groupedLiveCellSpecs(cells)
 	if len(specs) != 2 {
 		t.Fatalf("grouped exploration specs = %d, want 2", len(specs))
 	}
@@ -90,7 +90,7 @@ func TestExplorationGroupDeduplicatesOnlyAdjacentLabels(t *testing.T) {
 		explorationTestCell("read-a-again", 3, frontend.PresentationCompleted, frontend.ToolSucceeded,
 			frontend.ExplorationState{Operation: frontend.ExplorationRead, Path: "pkg/a.go"}),
 	}
-	specs := groupedLiveCellSpecs(cells, "", "")
+	specs := groupedLiveCellSpecs(cells)
 	if len(specs) != 1 {
 		t.Fatalf("exploration specs = %+v", specs)
 	}
@@ -116,8 +116,6 @@ func TestSuccessfulCommandGroupsFlushAtSemanticBarriers(t *testing.T) {
 
 	specs := groupedLiveCellSpecs(
 		[]*presentationCell{first, second, failure, third, commentary, fourth},
-		"",
-		"",
 	)
 	if len(specs) != 5 {
 		t.Fatalf("command grouping specs = %d, want 5", len(specs))
@@ -159,7 +157,7 @@ func TestSuccessfulCommandGroupingFlushesBeforeEveryRequiredBarrier(t *testing.T
 				commandTestCell("before", 1, frontend.ToolSucceeded, frontend.CommandSucceeded),
 				barrier,
 				commandTestCell("after", 3, frontend.ToolSucceeded, frontend.CommandSucceeded),
-			}, "", "")
+			})
 			if len(specs) != 3 {
 				t.Fatalf("barrier specs = %d, want 3", len(specs))
 			}
@@ -169,24 +167,6 @@ func TestSuccessfulCommandGroupingFlushesBeforeEveryRequiredBarrier(t *testing.T
 				}
 			}
 		})
-	}
-}
-
-func TestSelectingGroupedToolRestoresItsIndividualCell(t *testing.T) {
-	first := commandTestCell("first", 1, frontend.ToolSucceeded, frontend.CommandSucceeded)
-	second := commandTestCell("second", 2, frontend.ToolSucceeded, frontend.CommandSucceeded)
-	if specs := groupedLiveCellSpecs([]*presentationCell{first, second}, "", ""); len(specs) != 1 {
-		t.Fatalf("unselected command specs = %d, want 1", len(specs))
-	}
-	selected := toolViewID(*first.item.Tool)
-	specs := groupedLiveCellSpecs([]*presentationCell{first, second}, selected, "")
-	if len(specs) != 2 || !specs[0].selected {
-		t.Fatalf("selected command specs = %+v", specs)
-	}
-	for _, spec := range specs {
-		if _, grouped := spec.cell.(*activityGroupCell); grouped {
-			t.Fatal("selected group did not restore individual cells")
-		}
 	}
 }
 
@@ -227,14 +207,7 @@ func TestFullTranscriptPreservesCallsHiddenByCompactGroupsInCausalOrder(t *testi
 	if !strings.Contains(compact, "Explored") || !strings.Contains(compact, "Ran 2 commands") {
 		t.Fatalf("compact transcript omitted groups: %q", compact)
 	}
-	model.navigateTools(-1)
-	navigated := renderedModelTranscript(model, 100)
-	if strings.Contains(navigated, "Ran 2 commands") ||
-		!strings.Contains(navigated, "Ran printf first") ||
-		!strings.Contains(navigated, "Ran printf second") {
-		t.Fatalf("explicit navigation did not restore command cells: %q", navigated)
-	}
-	full := strings.Join(model.fullTranscriptPanelLines(), "\n")
+	full := strings.Join(transcriptOverlayLogicalLines(model.transcriptOverlayLines()), "\n")
 	wants := []string{
 		"Read pkg/a.go", `Search "needle" in pkg`, "$ printf first", "output-command-a",
 		"$ printf second", "output-command-b",
