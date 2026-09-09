@@ -771,7 +771,7 @@ func (r *nativeCodingRuntime) Steer(ctx context.Context, input frontend.SteerInp
 		r.workspace,
 		r.metadata.SessionKey,
 		"main",
-		providers.Message{Role: "user", Content: input.Text},
+		providers.Message{Role: "user", Content: input.Text, CodingSteerID: input.ID},
 	)
 	if errors.Is(err, agent.ErrNoActiveSteerableTurn) {
 		return controller.ErrNoActiveTurn

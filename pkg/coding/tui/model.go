@@ -19,7 +19,7 @@ import (
 	codingworkspace "github.com/bogdanovich/mintclaw/pkg/coding/workspace"
 )
 
-const composerHeight = 4
+const maxComposerHeight = 4
 
 type SnapshotMsg struct {
 	Snapshot frontend.ThreadSnapshot
@@ -55,6 +55,14 @@ type CommandResultMsg struct {
 type SubmitResultMsg struct {
 	Submission composerSubmission
 	Err        error
+}
+
+// SteerResultMsg completes same-turn guidance admission. A failed admission
+// keeps the draft available for retry or submission as the next turn.
+type SteerResultMsg struct {
+	Input frontend.SteerInput
+	Draft string
+	Err   error
 }
 
 // TranscriptPageMsg delivers optional canonical transcript hydration.
@@ -113,6 +121,7 @@ type Model struct {
 	focused             bool
 	err                 error
 	submitting          bool
+	steering            bool
 	pendingSlashCommand string
 	composerHistory     []string
 	historyIndex        int
@@ -130,6 +139,7 @@ type Model struct {
 	pasteDirectory      string
 	nextPasteNumber     int
 	nextImageNumber     int
+	nextSteerNumber     uint64
 	readClipboardImage  clipboardImageReader
 	writePasteFile      pasteFileWriter
 	clipboardPasteBusy  bool
@@ -152,6 +162,7 @@ type modelOptions struct {
 	interruptKeys []string
 	now           func() time.Time
 	home          string
+	theme         cellTheme
 }
 
 func newModel(
@@ -179,13 +190,19 @@ func newModel(
 	composer := textarea.New()
 	configureComposerStyles(&composer)
 	composer.ShowLineNumbers = false
-	composer.Placeholder = "Ask MintClaw to do anything…"
+	composer.Prompt = "› "
+	composer.Placeholder = "Ask MintClaw to do anything"
 	composer.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("ctrl+j", "shift+enter"),
 		key.WithHelp("ctrl+j", "new line"),
 	)
-	composer.SetHeight(composerHeight)
+	composer.SetWidth(80)
+	composer.SetHeight(1)
 	composer.Focus()
+	theme := options.theme
+	if theme == cellThemeUnknown {
+		theme = cellThemeDark
+	}
 	model := &Model{
 		controller:         controller,
 		ctx:                ctx,
@@ -196,7 +213,7 @@ func newModel(
 		composer:           composer,
 		width:              80,
 		height:             24,
-		theme:              cellThemeDark,
+		theme:              theme,
 		colorLevel:         currentCellColorLevel(),
 		working:            newWorkingIndicator(options.motionMode, options.now),
 		keys:               newKeyMap(options.interruptKeys),
@@ -227,17 +244,26 @@ func initialCommandPanel(snapshot frontend.ThreadSnapshot) commandPanel {
 
 func configureComposerStyles(composer *textarea.Model) {
 	terminalDefault := lipgloss.NewStyle()
+	prompt := terminalDefault.Bold(true)
 
 	// bubbles/textarea defaults the focused cursor line to a forced white or
 	// black background. Do not guess the terminal theme for the foreground,
 	// either: inherit both colors so contrast follows the user's terminal.
+	composer.FocusedStyle.Base = terminalDefault
 	composer.FocusedStyle.CursorLine = terminalDefault
+	composer.FocusedStyle.CursorLineNumber = terminalDefault
+	composer.FocusedStyle.LineNumber = terminalDefault
 	composer.FocusedStyle.Text = terminalDefault
 	composer.FocusedStyle.Placeholder = terminalDefault
+	composer.FocusedStyle.Prompt = prompt
 	composer.FocusedStyle.EndOfBuffer = terminalDefault
+	composer.BlurredStyle.Base = terminalDefault
 	composer.BlurredStyle.CursorLine = terminalDefault
+	composer.BlurredStyle.CursorLineNumber = terminalDefault
+	composer.BlurredStyle.LineNumber = terminalDefault
 	composer.BlurredStyle.Text = terminalDefault
 	composer.BlurredStyle.Placeholder = terminalDefault
+	composer.BlurredStyle.Prompt = prompt
 	composer.BlurredStyle.EndOfBuffer = terminalDefault
 }
 
@@ -379,6 +405,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
+		m.reflowComposer()
 		return m, textarea.Blink
 	case SubscriptionErrorMsg:
 		if message.Err != nil && !errors.Is(message.Err, context.Canceled) {
@@ -420,6 +447,21 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.composer.Reset()
 		m.historyIndex = -1
 		m.historyDraft = ""
+		m.reflowComposer()
+		return m, m.scheduleWorkingTick()
+	case SteerResultMsg:
+		m.submitting = false
+		m.steering = false
+		if message.Err != nil {
+			m.err = fmt.Errorf("queue guidance: %w", message.Err)
+			return m, nil
+		}
+		m.err = nil
+		m.rememberPrompt(message.Draft)
+		m.composer.Reset()
+		m.historyIndex = -1
+		m.historyDraft = ""
+		m.reflowComposer()
 		return m, m.scheduleWorkingTick()
 	case tea.KeyMsg:
 		if key.Matches(message, m.keys.interrupt) {
@@ -448,6 +490,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	m.composer, command = m.composer.Update(message)
 	commands = append(commands, command)
 	m.pruneDetachedAttachments()
+	m.reflowComposer()
 	return m, tea.Batch(commands...)
 }
 
@@ -459,6 +502,9 @@ func (m *Model) View() string {
 	if m.submitting {
 		status = "submitting prompt…"
 	}
+	if m.steering {
+		status = "queueing guidance…"
+	}
 	if m.pendingSlashCommand != "" {
 		status = m.pendingSlashCommand + " command…"
 	}
@@ -468,20 +514,21 @@ func (m *Model) View() string {
 	if !m.focused {
 		status = "terminal unfocused · " + status
 	}
-	if m.height <= 2 {
-		return clipLine(status, m.width)
-	}
 	if m.height <= 4 {
-		return m.composer.View() + "\n" + clipLine(status, m.width)
+		return m.tinyView(status)
 	}
-	body := m.viewport.View()
+	sections := []string{m.viewport.View()}
 	if m.commandPanel != commandPanelNone {
-		body = m.commandPanelView()
+		sections[0] = m.commandPanelView()
 	}
 	if working := m.workingLine(); working != "" {
-		body += "\n" + clipLine(working, m.width)
+		sections = append(sections, clipLine(working, m.width))
 	}
-	return body + "\n" + m.composer.View() + "\n" + clipLine(status, m.width)
+	if pending := m.pendingGuidanceView(); pending != "" {
+		sections = append(sections, pending)
+	}
+	sections = append(sections, m.composer.View(), clipLine(status, m.width))
+	return strings.Join(sections, "\n")
 }
 
 func (m *Model) ComposerValue() string {
@@ -572,21 +619,20 @@ func (m *Model) resize(width, height int) {
 	position := m.captureViewportPosition()
 	m.width = max(1, width)
 	m.height = max(1, height)
-	composerRows := min(composerHeight, max(1, m.height/3))
 	m.composer.SetWidth(m.width)
-	m.composer.SetHeight(composerRows)
+	m.syncComposerDimensions()
 	m.updateSurfaceDimensions()
 	m.refreshViewportAt(position)
 }
 
 func (m *Model) updateSurfaceDimensions() {
-	composerRows := min(composerHeight, max(1, m.height/3))
+	composerRows := m.composer.Height()
 	workingRows := 0
 	if m.workingSurfaceVisible() {
 		workingRows = 1
 	}
 	m.viewport.Width = m.width
-	m.viewport.Height = max(1, m.height-composerRows-workingRows-2)
+	m.viewport.Height = max(1, m.height-composerRows-workingRows-m.pendingGuidanceRows()-2)
 }
 
 func clipLine(value string, width int) string {
@@ -655,6 +701,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		}
 		if handled {
 			m.err = nil
+			m.reflowComposer()
 			return true, textarea.Blink
 		}
 	}
@@ -720,7 +767,25 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if handled, command := m.handleSlashCommand(draft); handled {
+			m.reflowComposer()
 			return true, command
+		}
+		if m.acceptsSteeringInput() {
+			if len(m.composerAttachments) > 0 {
+				m.err = errors.New("attachments cannot be queued as same-turn guidance; wait for the active turn")
+				return true, nil
+			}
+			steerer, ok := m.controller.(frontend.Steerer)
+			if !ok {
+				m.err = errors.New("same-turn guidance is unavailable; wait for the active turn")
+				return true, nil
+			}
+			m.nextSteerNumber++
+			input := frontend.SteerInput{ID: fmt.Sprintf("tui-steer-%d", m.nextSteerNumber), Text: draft}
+			m.submitting = true
+			m.steering = true
+			m.err = nil
+			return true, steerCmd(m.ctx, steerer, input, draft)
 		}
 		submission := m.prepareSubmission(draft)
 		m.submitting = true
@@ -733,6 +798,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.navigateHistory(-1)
+		m.reflowComposer()
 		return true, textarea.Blink
 	case "alt+down":
 		if len(m.composerAttachments) > 0 {
@@ -740,6 +806,7 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		m.navigateHistory(1)
+		m.reflowComposer()
 		return true, textarea.Blink
 	case "alt+end":
 		if m.transcript.hasNewer && !m.transcript.loading {
@@ -764,6 +831,14 @@ func (m *Model) handleComposerKey(message tea.KeyMsg) (bool, tea.Cmd) {
 		}
 	}
 	return false, nil
+}
+
+func (m *Model) acceptsSteeringInput() bool {
+	if strings.TrimSpace(m.snapshot.ActiveTurnID) == "" {
+		return false
+	}
+	return m.snapshot.Activity == frontend.ActivityRunning ||
+		m.snapshot.Activity == frontend.ActivityCompacting
 }
 
 func (m *Model) normalizeToolSelection(tools []frontend.ToolState) {
@@ -970,6 +1045,24 @@ func submitCmd(
 			Submission: submission,
 			Err:        controller.Submit(ctx, submission.input),
 		}
+	}
+}
+
+func steerCmd(
+	ctx context.Context,
+	steerer frontend.Steerer,
+	input frontend.SteerInput,
+	draft string,
+) tea.Cmd {
+	return func() tea.Msg {
+		if steerer == nil {
+			return SteerResultMsg{
+				Input: input,
+				Draft: draft,
+				Err:   errors.New("coding steering is unavailable"),
+			}
+		}
+		return SteerResultMsg{Input: input, Draft: draft, Err: steerer.Steer(ctx, input)}
 	}
 }
 

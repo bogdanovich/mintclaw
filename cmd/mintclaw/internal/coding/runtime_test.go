@@ -1271,7 +1271,8 @@ func TestNativeCodingRuntimeSteerUsesBoundRuntimeScope(t *testing.T) {
 		t.Fatalf("Steer() error = %v", err)
 	}
 	if workspace != runtime.workspace || sessionKey != runtime.metadata.SessionKey || agentID != "main" ||
-		message.Role != "user" || message.Content != "new guidance" || message.InboundSpoolID != "" {
+		message.Role != "user" || message.Content != "new guidance" || message.InboundSpoolID != "" ||
+		message.CodingSteerID != "steer-1" {
 		t.Fatalf(
 			"steer scope = workspace:%q session:%q agent:%q message:%+v",
 			workspace,

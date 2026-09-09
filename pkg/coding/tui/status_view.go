@@ -37,6 +37,9 @@ func (m *Model) statusLine() string {
 	if state.ContextUsage.LimitTokens > 0 {
 		segments = append(segments, contextStatus(state.ContextUsage))
 	}
+	if len(state.PendingInputs) > 0 && m.pendingGuidanceRows() == 0 {
+		segments = append(segments, fmt.Sprintf("%d guidance queued", len(state.PendingInputs)))
+	}
 	if !m.refreshingWorkspace && strings.TrimSpace(m.workspaceNotice) == "" {
 		segments = append(segments, "Ctrl+R refresh")
 	}

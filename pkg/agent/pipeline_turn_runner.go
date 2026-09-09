@@ -164,6 +164,7 @@ func (p *Pipeline) runPreparedTurnLoop(
 					SteeringInjectedPayload{
 						Count:           injection.count,
 						TotalContentLen: injection.totalContentLen,
+						CodingSteers:    injection.codingSteers,
 					},
 				)
 			}

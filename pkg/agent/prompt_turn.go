@@ -310,6 +310,7 @@ func steeringPromptMessage(msg providers.Message) providers.Message {
 }
 
 func providerPromptMessageForTurn(msg providers.Message) providers.Message {
+	msg.CodingSteerID = ""
 	if msg.PromptSlot != string(PromptSlotSteering) {
 		return msg
 	}

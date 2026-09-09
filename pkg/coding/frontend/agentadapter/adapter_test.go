@@ -1,6 +1,7 @@
 package agentadapter
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -889,6 +890,70 @@ func TestAdapterLateCompactionStartPreservesAcceptedInterrupt(t *testing.T) {
 	if snapshot.Activity != frontend.ActivityInterrupting || snapshot.Status != "interrupt requested" ||
 		snapshot.LastCompaction == nil || snapshot.LastCompaction.Status != frontend.CompactionRunning {
 		t.Fatalf("late compaction snapshot = %+v", snapshot)
+	}
+}
+
+func TestAdapterProjectsCodingSteeringWithoutInterruptingActiveTurn(t *testing.T) {
+	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventBus := runtimeevents.NewBus()
+	wrapped, err := WrapBus(eventBus, projector, "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wrapped.Close() })
+	scope := runtimeevents.Scope{SessionKey: "thread-1", TraceScope: runtimeevents.NewTraceScope("/repo", "turn-1")}
+	publish := func(kind runtimeevents.Kind, payload any) {
+		wrapped.PublishNonBlocking(runtimeevents.Event{
+			Kind: kind, Source: runtimeevents.Source{Component: "agent"}, Scope: scope, Payload: payload,
+		})
+	}
+	publish(runtimeevents.KindAgentTurnStart, agent.TurnStartPayload{UserMessage: "inspect"})
+	publish(runtimeevents.KindAgentInterruptReceived, agent.InterruptReceivedPayload{
+		Kind: agent.InterruptKindSteering, CodingSteerID: "steer-1", CodingSteerText: "focus on parser",
+	})
+
+	pending, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Activity != frontend.ActivityRunning || len(pending.PendingInputs) != 1 ||
+		len(pending.Entries) != 1 {
+		t.Fatalf("accepted steering projection = %+v", pending)
+	}
+	publish(runtimeevents.KindAgentSteeringInjected, agent.SteeringInjectedPayload{
+		Count:        1,
+		CodingSteers: []agent.CodingSteerReceipt{{ID: "steer-1", Text: "focus on parser"}},
+	})
+	injected, err := projector.Snapshot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if injected.Activity != frontend.ActivityRunning || len(injected.PendingInputs) != 0 ||
+		len(injected.Entries) != 2 || injected.Entries[1].Text != "focus on parser" {
+		t.Fatalf("injected steering projection = %+v", injected)
+	}
+}
+
+func TestCodingSteeringReceiptFieldsAreNotSerialized(t *testing.T) {
+	secret := "private-guidance-not-for-event-json"
+	for _, payload := range []any{
+		agent.InterruptReceivedPayload{
+			Kind: agent.InterruptKindSteering, CodingSteerID: "private-id", CodingSteerText: secret,
+		},
+		agent.SteeringInjectedPayload{
+			Count: 1, CodingSteers: []agent.CodingSteerReceipt{{ID: "private-id", Text: secret}},
+		},
+	} {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), secret) || strings.Contains(string(encoded), "private-id") {
+			t.Fatalf("serialized coding steer receipt leaked internal fields: %s", encoded)
+		}
 	}
 }
 

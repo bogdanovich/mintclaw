@@ -406,13 +406,14 @@ type CompactionState struct {
 // It is not the canonical coding transcript and may omit old entries and large
 // output.
 type ThreadSnapshot struct {
-	ThreadID     string             `json:"thread_id"`
-	ActiveTurnID string             `json:"active_turn_id,omitempty"`
-	Metadata     ThreadMetadata     `json:"metadata,omitempty"`
-	Runtime      *RuntimeStatus     `json:"runtime,omitempty"`
-	Activity     Activity           `json:"activity"`
-	LastTurn     *LastTurnOutcome   `json:"last_turn,omitempty"`
-	Items        []PresentationItem `json:"items,omitempty"`
+	ThreadID      string              `json:"thread_id"`
+	ActiveTurnID  string              `json:"active_turn_id,omitempty"`
+	Metadata      ThreadMetadata      `json:"metadata,omitempty"`
+	Runtime       *RuntimeStatus      `json:"runtime,omitempty"`
+	Activity      Activity            `json:"activity"`
+	LastTurn      *LastTurnOutcome    `json:"last_turn,omitempty"`
+	Items         []PresentationItem  `json:"items,omitempty"`
+	PendingInputs []PendingInputState `json:"-"`
 	// Entries and Tools are compatibility projections derived from Items while
 	// the existing TUI migrates to semantic cells.
 	Entries          []TranscriptEntry             `json:"entries,omitempty"`
@@ -478,6 +479,16 @@ func (input TurnInput) Clone() TurnInput {
 type SteerInput struct {
 	ID   string `json:"id"`
 	Text string `json:"text"`
+}
+
+// PendingInputState is accepted same-turn guidance that has not yet crossed
+// both canonical persistence and live-context insertion. It is rendered
+// outside submitted transcript history.
+type PendingInputState struct {
+	ID        string `json:"-"`
+	TurnID    string `json:"-"`
+	Text      string `json:"-"`
+	Truncated bool   `json:"-"`
 }
 
 // Steerer is an optional controller capability for same-turn guidance. It is

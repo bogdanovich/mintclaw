@@ -10,6 +10,7 @@ import (
 type pendingInputInjection struct {
 	count           int
 	totalContentLen int
+	codingSteers    []CodingSteerReceipt
 }
 
 // injectPendingTurnInputs advances the turn-owned FIFO one message at a time.
@@ -39,6 +40,8 @@ func (p *Pipeline) injectPendingTurnInputs(
 	for index := range pending {
 		input := pending[index]
 		message := input.message
+		codingSteerID := message.CodingSteerID
+		message.CodingSteerID = ""
 		providerMessage := providerPromptMessageForTurn(resolved[index])
 		var writeErr error
 		if !ts.opts.NoHistory {
@@ -59,6 +62,12 @@ func (p *Pipeline) injectPendingTurnInputs(
 		}
 		outcome.count++
 		outcome.totalContentLen += len(providerMessage.Content)
+		if input.kind == turnPendingSteering && codingSteerID != "" {
+			outcome.codingSteers = append(outcome.codingSteers, CodingSteerReceipt{
+				ID:   codingSteerID,
+				Text: message.Content,
+			})
+		}
 		logger.InfoCF("agent", "Injected pending input into context", map[string]any{
 			"agent_id":    ts.agent.ID,
 			"iteration":   ts.currentIteration(),

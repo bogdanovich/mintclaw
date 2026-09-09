@@ -39,12 +39,22 @@ func TestComposerInheritsTerminalColors(t *testing.T) {
 		name  string
 		style lipgloss.Style
 	}{
+		{name: "focused base", style: model.composer.FocusedStyle.Base},
 		{name: "focused cursor line", style: model.composer.FocusedStyle.CursorLine},
+		{name: "focused cursor line number", style: model.composer.FocusedStyle.CursorLineNumber},
+		{name: "focused line number", style: model.composer.FocusedStyle.LineNumber},
 		{name: "focused text", style: model.composer.FocusedStyle.Text},
 		{name: "focused placeholder", style: model.composer.FocusedStyle.Placeholder},
+		{name: "focused prompt", style: model.composer.FocusedStyle.Prompt},
+		{name: "focused end of buffer", style: model.composer.FocusedStyle.EndOfBuffer},
+		{name: "blurred base", style: model.composer.BlurredStyle.Base},
 		{name: "blurred cursor line", style: model.composer.BlurredStyle.CursorLine},
+		{name: "blurred cursor line number", style: model.composer.BlurredStyle.CursorLineNumber},
+		{name: "blurred line number", style: model.composer.BlurredStyle.LineNumber},
 		{name: "blurred text", style: model.composer.BlurredStyle.Text},
 		{name: "blurred placeholder", style: model.composer.BlurredStyle.Placeholder},
+		{name: "blurred prompt", style: model.composer.BlurredStyle.Prompt},
+		{name: "blurred end of buffer", style: model.composer.BlurredStyle.EndOfBuffer},
 	}
 	for _, tc := range styles {
 		if foreground := tc.style.GetForeground(); foreground != (lipgloss.NoColor{}) {
@@ -62,9 +72,15 @@ func TestComposerInvitesAnyTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const want = "Ask MintClaw to do anything…"
+	const want = "Ask MintClaw to do anything"
 	if model.composer.Placeholder != want {
 		t.Fatalf("composer placeholder = %q, want %q", model.composer.Placeholder, want)
+	}
+	if model.composer.Prompt != "› " {
+		t.Fatalf("composer prompt = %q, want %q", model.composer.Prompt, "› ")
+	}
+	if model.composer.Height() != 1 {
+		t.Fatalf("idle composer height = %d, want 1", model.composer.Height())
 	}
 }
 
@@ -74,10 +90,13 @@ type fakeController struct {
 	hardCancels  atomic.Int32
 	closes       atomic.Int32
 	submits      atomic.Int32
+	steerCalls   atomic.Int32
 	mu           sync.Mutex
 	prompts      []string
 	inputs       []frontend.TurnInput
+	steers       []frontend.SteerInput
 	submitErr    error
+	steerErr     error
 	refreshes    atomic.Int32
 	refreshErr   error
 	refreshState *codingworkspace.Snapshot
@@ -117,6 +136,27 @@ func (f *fakeController) submittedPrompts() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.prompts)
+}
+
+func (f *fakeController) Steer(_ context.Context, input frontend.SteerInput) error {
+	f.steerCalls.Add(1)
+	f.mu.Lock()
+	f.steers = append(f.steers, input)
+	err := f.steerErr
+	f.mu.Unlock()
+	if err == nil {
+		snapshot, snapshotErr := f.Snapshot(context.Background())
+		if snapshotErr == nil {
+			f.SteeringAccepted(snapshot.ActiveTurnID, input)
+		}
+	}
+	return err
+}
+
+func (f *fakeController) steeredInputs() []frontend.SteerInput {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.steers)
 }
 
 func (f *fakeController) RefreshWorkspace(context.Context) error {

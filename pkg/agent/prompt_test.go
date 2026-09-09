@@ -422,14 +422,18 @@ func TestSteeringPromptMessage_PreservesCanonicalContent(t *testing.T) {
 
 func TestProviderPromptMessageForTurn_WrapsSteeringContract(t *testing.T) {
 	raw := steeringPromptMessage(providers.Message{
-		Role:    "user",
-		Content: "use this photo too",
-		Media:   []string{"media://photo"},
+		Role:          "user",
+		Content:       "use this photo too",
+		Media:         []string{"media://photo"},
+		CodingSteerID: "steer-1",
 	})
 	msg := providerPromptMessageForTurn(raw)
 
 	if raw.Content != "use this photo too" {
 		t.Fatalf("raw Content = %q, want unchanged user content", raw.Content)
+	}
+	if msg.CodingSteerID != "" || raw.CodingSteerID != "steer-1" {
+		t.Fatalf("provider correlation = %q, raw correlation = %q", msg.CodingSteerID, raw.CodingSteerID)
 	}
 	for _, want := range []string{
 		"[Mid-turn user message]",
