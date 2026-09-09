@@ -144,7 +144,7 @@ setup, tool configuration, and CLI behavior live in the documentation.
 | --- | --- |
 | Install and configure | [Docker and quick start](docs/guides/docker.md) · [Configuration](docs/guides/configuration.md) |
 | Connect models and chat apps | [Providers and models](docs/guides/providers.md) · [Chat apps](docs/guides/chat-apps.md) |
-| Run durable workflows | [Spawn and async tasks](docs/guides/spawn-tasks.md) · [Human interaction](docs/guides/human-interaction.md) · [Cron](docs/reference/cron.md) |
+| Run durable workflows | [Local coding agent](docs/guides/coding-agent.md) · [Spawn and async tasks](docs/guides/spawn-tasks.md) · [Human interaction](docs/guides/human-interaction.md) · [Cron](docs/reference/cron.md) |
 | Extend the runtime | [Tools](docs/reference/tools_configuration.md) · [MCP CLI](docs/reference/mcp-cli.md) · [Node companion](docs/guides/node-companion.md) |
 | Understand behavior | [Architecture](docs/architecture/README.md) · [Sessions](docs/guides/session-guide.md) · [Steering](docs/architecture/steering.md) |
 | Operate safely | [Doctor](docs/reference/doctor.md) · [Security](docs/security/README.md) · [Troubleshooting](docs/operations/troubleshooting.md) |

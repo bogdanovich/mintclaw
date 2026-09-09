@@ -6,6 +6,7 @@ Task-oriented guides for setup, configuration, and common MintClaw workflows.
 - [Android Termux Guide](android-termux.md): run the MintClaw terminal binary on an ARM64 Android phone.
 - [Configuration Guide](configuration.md): environment variables, workspace layout, routing, and sandbox settings.
 - [Session Guide](session-guide.md): how session scope affects memory sharing, summaries, and isolation.
+- [Local Coding Agent](coding-agent.md): start, resume, operate, recover, and automate durable repository sessions.
 - [Routing Guide](routing-guide.md): agent dispatch, session overrides, and light-model routing.
 - [Chat Apps Configuration](chat-apps.md): supported chat platforms and channel-specific setup paths.
 - [Providers & Model Configuration](providers.md): `model_list`, providers, and model routing.

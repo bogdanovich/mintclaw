@@ -1,8 +1,7 @@
 # Local Coding Agent TUI.15 Performance Checkpoint
 
-Status: second TUI.15 implementation packet; PTY/platform validation, current
-user documentation, the final parity audit, and the merged exit record remain
-open.
+Status: second TUI.15 implementation packet. The complete initiative is closed
+by the later [TUI.15 exit record](local-coding-agent-tui-15-exit.md).
 
 This checkpoint implements the performance, bounded-session, and privacy-safe
 diagnostics portion of
@@ -127,7 +126,7 @@ go test -run '^$' \
   -benchmem -count=3 ./pkg/coding/tui
 ```
 
-The final packet remains responsible for the SSH/tmux/narrow-terminal,
-interruption, compaction, crash/restart, and provider-fallback PTY matrix,
-current user-facing rich/raw and binding documentation, and the complete
-requirement-by-requirement TUI.15 exit audit.
+The final [TUI.15 exit record](local-coding-agent-tui-15-exit.md) owns the
+SSH/tmux/narrow-terminal, interruption, compaction, crash/restart, and
+provider-fallback PTY matrix, current user-facing rich/raw and binding
+documentation, and the complete requirement-by-requirement audit.
