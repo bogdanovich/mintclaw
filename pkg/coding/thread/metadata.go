@@ -312,6 +312,7 @@ type Store struct {
 	syncDir                func(string) error
 	closeReservationRoots  func(*os.Root, *os.Root) error
 	renameReservation      func(*os.Root, string, string) error
+	renameUnpublishedFork  func(*os.Root, string, string) error
 	retainReservationLease func(*Lease)
 
 	afterAttachmentGCCommitValidation  func()
@@ -338,15 +339,18 @@ func NewStore(root string) (*Store, error) {
 		return nil, fmt.Errorf("coding thread store: resolve root: %w", err)
 	}
 	return &Store{
-		root:                   resolved,
-		durableRoot:            durableRoot,
-		mkdirDurable:           fileutil.MkdirAllDurable,
-		writeAtomic:            fileutil.WriteFileAtomic,
-		writeRoot:              writeRootFileAtomic,
-		writeReview:            writeRootFileExclusiveAtomic,
-		syncRoot:               syncRootDirectory,
-		syncDir:                fileutil.SyncDirectory,
-		renameReservation:      renameThreadReservationNoReplace,
+		root:              resolved,
+		durableRoot:       durableRoot,
+		mkdirDurable:      fileutil.MkdirAllDurable,
+		writeAtomic:       fileutil.WriteFileAtomic,
+		writeRoot:         writeRootFileAtomic,
+		writeReview:       writeRootFileExclusiveAtomic,
+		syncRoot:          syncRootDirectory,
+		syncDir:           fileutil.SyncDirectory,
+		renameReservation: renameThreadReservationNoReplace,
+		renameUnpublishedFork: func(root *os.Root, oldName, newName string) error {
+			return root.Rename(oldName, newName)
+		},
 		retainReservationLease: retainFailedReservationLease,
 		closeReservationRoots: func(threadRoot, threadsRoot *os.Root) error {
 			return errors.Join(threadRoot.Close(), threadsRoot.Close())

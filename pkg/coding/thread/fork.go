@@ -667,28 +667,30 @@ func syncRootDirectory(root *os.Root) error {
 func (s *Store) quarantineUnpublishedFork(lease *Lease, threadID string, operationErr error) error {
 	root, err := os.OpenRoot(s.root)
 	if err != nil {
+		s.retainReservationLease(lease)
 		return errors.Join(
 			operationErr,
 			fmt.Errorf("coding thread fork: anchor cleanup root: %w", err),
-			lease.Release(),
 		)
 	}
 	defer func() { _ = root.Close() }()
 	if err := ensureDirectTrashDirectory(root, "trash"); err != nil {
-		return errors.Join(operationErr, err, lease.Release())
+		s.retainReservationLease(lease)
+		return errors.Join(operationErr, err)
 	}
 	quarantineDir := filepath.Join("trash", "fork-preparations")
 	if err := ensureDirectTrashDirectory(root, quarantineDir); err != nil {
-		return errors.Join(operationErr, err, lease.Release())
+		s.retainReservationLease(lease)
+		return errors.Join(operationErr, err)
 	}
 	quarantineID := threadID + "-" + NewThreadID()
 	activeName := filepath.Join("threads", threadID)
 	quarantineName := filepath.Join(quarantineDir, quarantineID)
-	if err := root.Rename(activeName, quarantineName); err != nil {
+	if err := s.renameUnpublishedFork(root, activeName, quarantineName); err != nil {
+		s.retainReservationLease(lease)
 		return errors.Join(
 			operationErr,
 			fmt.Errorf("coding thread fork: quarantine unpublished target: %w", err),
-			lease.Release(),
 		)
 	}
 	identityErr := validateQuarantinedForkLease(root, quarantineName, lease)
