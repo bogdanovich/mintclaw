@@ -73,8 +73,10 @@ Internal architecture notes for major runtime mechanisms and subsystem design.
   exact deployment, live trace, rollback, residual limits, and the stop boundary before PDF1A.
 - [PDF1A Read and Render Backend Decision](pdf1a-backend-decision.md): pinned Poppler production
   executables, ClawPDF/PDFium oracle, worker artifact boundary, qualification evidence, and rollback.
-- [PDF1A Implementation Goal](pdf1a-implementation-goal.md): admitted Linux read/extract/render,
-  private artifact handoff, deferred tool and skill, typed routing, channel proof, and stop gates.
+- [PDF1A Implementation Goal](pdf1a-implementation-goal.md): completed Linux read/extract/render
+  contract, private artifact handoff, deferred tool and skill, typed routing, and stop gates.
+- [PDF1A Exit Record](pdf1a-exit-record.md): merged read/render and agent/channel revisions, exact
+  deployment, backend and oracle evidence, live trace, rollback, residual limits, and stop boundary.
 - [Browser Capability B0 Admission](browser-capability-b0-admission.md):
   admitted no-blind-replay, exclusive stdio lease, MCP artifact ownership,
   specialist allowlist, diagnostics, deployment evidence, and exact stop

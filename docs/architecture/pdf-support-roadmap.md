@@ -706,11 +706,12 @@ not enable a less constrained parser as a fallback.
 
 ### PDF1A: Local read, extract, render, and agent/channel slice
 
-#### Admission status
+#### Completion status
 
-Admitted for `linux/amd64` under the [PDF1A implementation goal](pdf1a-implementation-goal.md).
-The goal permits at most two dependent implementation PRs, exact merged-main deployment, and one
-docs-only exit record, then stops before PDF1B, PDF1C, or PDF2.
+Completed for `linux/amd64` under the [PDF1A implementation goal](pdf1a-implementation-goal.md) and
+[PDF1A exit record](pdf1a-exit-record.md). Two implementation PRs, exact merged-main deployment,
+the deployed CLI/agent/channel harness, and the content-safe live trace are complete. The roadmap
+stops before PDF1B, PDF1C, PDF2, or the separately admitted macOS parity lane.
 
 #### Operator outcome
 
