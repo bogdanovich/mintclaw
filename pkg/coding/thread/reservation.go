@@ -6,11 +6,30 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // ErrThreadExists classifies an exact new-thread reservation that would reuse
 // any pre-existing thread directory, including unpublished partial state.
 var ErrThreadExists = errors.New("coding thread already exists")
+
+var failedReservationLeases = struct {
+	sync.Mutex
+	leases []*Lease
+}{}
+
+// retainFailedReservationLease deliberately keeps a failed reservation's
+// writer authority until process exit. If an active reservation cannot be
+// hidden after a post-publication failure, releasing its lease would let a
+// later writer adopt state whose creation was reported as failed.
+func retainFailedReservationLease(lease *Lease) {
+	if lease == nil {
+		return
+	}
+	failedReservationLeases.Lock()
+	defer failedReservationLeases.Unlock()
+	failedReservationLeases.leases = append(failedReservationLeases.leases, lease)
+}
 
 // ReserveThreadLease durably reserves a new thread and returns its first
 // writer lease without exposing an unlocked active directory.
@@ -56,7 +75,7 @@ func (s *Store) reservePinnedThreadLease(threadID string) (*os.Root, *os.Root, *
 			fmt.Errorf("coding thread store: sync prepared thread: %w", syncErr),
 		)
 	}
-	if publishErr := renameThreadReservationNoReplace(threadsRoot, stagingName, threadID); publishErr != nil {
+	if publishErr := s.renameReservation(threadsRoot, stagingName, threadID); publishErr != nil {
 		if errors.Is(publishErr, fs.ErrExist) {
 			return abort(stagingName, lease, fmt.Errorf("%w: %q", ErrThreadExists, threadID))
 		}
@@ -172,10 +191,10 @@ func (s *Store) quarantineThreadReservation(
 	lease *Lease,
 ) error {
 	quarantineName := ".thread-quarantine-" + NewThreadID()
-	renameErr := renameThreadReservationNoReplace(threadsRoot, activeName, quarantineName)
+	renameErr := s.renameReservation(threadsRoot, activeName, quarantineName)
 	if renameErr != nil {
 		if lease != nil {
-			renameErr = errors.Join(renameErr, lease.Release())
+			s.retainReservationLease(lease)
 		}
 		return fmt.Errorf("coding thread store: quarantine failed reservation: %w", renameErr)
 	}

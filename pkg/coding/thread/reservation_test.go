@@ -111,6 +111,64 @@ func TestReserveThreadLeaseKeepsAuthorityWhenPreparationRootCloseFails(t *testin
 	}
 }
 
+func TestReserveThreadLeaseRetainsAuthorityWhenPublishedQuarantineFails(t *testing.T) {
+	store, err := NewStore(filepath.Join(t.TempDir(), "coding"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := uuid.NewString()
+	injectedSyncErr := errors.New("injected published reservation sync failure")
+	injectedQuarantineErr := errors.New("injected reservation quarantine failure")
+	originalRename := store.renameReservation
+	store.renameReservation = func(root *os.Root, oldName, newName string) error {
+		if oldName == threadID {
+			return injectedQuarantineErr
+		}
+		return originalRename(root, oldName, newName)
+	}
+	store.afterThreadReservationPublished = func() {
+		store.syncRoot = func(*os.Root) error { return injectedSyncErr }
+	}
+	var retained *Lease
+	store.retainReservationLease = func(lease *Lease) { retained = lease }
+
+	lease, err := store.ReserveThreadLease(threadID)
+	if lease != nil {
+		_ = lease.Release()
+		t.Fatal("ReserveThreadLease() returned a lease with a failed reservation")
+	}
+	if !errors.Is(err, injectedSyncErr) || !errors.Is(err, injectedQuarantineErr) {
+		t.Fatalf("ReserveThreadLease() error = %v, want sync and quarantine failures", err)
+	}
+	if retained == nil {
+		t.Fatal("failed active reservation did not retain its writer lease")
+	}
+	if err := store.ValidateLease(retained, threadID); err != nil {
+		t.Fatalf("ValidateLease(retained) error = %v", err)
+	}
+
+	contenderStore, err := NewStore(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contender, err := contenderStore.AcquireLease(threadID); !errors.Is(err, ErrLeaseBusy) {
+		if contender != nil {
+			_ = contender.Release()
+		}
+		t.Fatalf("AcquireLease(contender) error = %v, want %v", err, ErrLeaseBusy)
+	}
+	if err := retained.Release(); err != nil {
+		t.Fatalf("Release(retained) error = %v", err)
+	}
+	successor, err := contenderStore.AcquireLease(threadID)
+	if err != nil {
+		t.Fatalf("AcquireLease(after retained release) error = %v", err)
+	}
+	if err := successor.Release(); err != nil {
+		t.Fatalf("successor Release() error = %v", err)
+	}
+}
+
 func TestReserveThreadLeaseHasOneConcurrentWinner(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "coding"))
 	if err != nil {
