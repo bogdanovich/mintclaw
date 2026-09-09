@@ -1339,7 +1339,7 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		toolResultMsg := buildToolResultJournalMessage(
 			toolCallID,
 			toolResult,
-			p.filterToolContentForLLM(toolResult.ContentForLLM()),
+			p.filterToolContentForLLM(toolResult.ContentForModel()),
 		)
 		contentForLLM = toolResultMsg.Content
 		loopDecision = p.afterToolLoopDecision(
@@ -1348,7 +1348,9 @@ func (runner *toolLoopRunner) persistToolCallResult(
 		contentForLLM = appendToolLoopGuidance(contentForLLM, loopDecision)
 
 		toolResultMsg.Content = contentForLLM
-		durableContent = durableToolResultContent(contentForLLM, protectedResult)
+		durableContent = p.filterToolContentForLLM(toolResult.ContentForLLM())
+		durableContent = appendToolLoopGuidance(durableContent, loopDecision)
+		durableContent = durableToolResultContent(durableContent, protectedResult)
 		durableToolResultMsg := durableToolResultJournalMessage(toolResultMsg, toolResult, durableContent)
 		if protectedResult {
 			durableToolResultMsg.Media = nil
@@ -1772,12 +1774,13 @@ func (r *toolLoopRunner) journalHardAbortedToolResult(
 	msg := buildToolResultJournalMessage(
 		toolCall.ID,
 		result,
-		r.p.filterToolContentForLLM(result.ContentForLLM()),
+		r.p.filterToolContentForLLM(result.ContentForModel()),
 	)
+	durableContent := r.p.filterToolContentForLLM(result.ContentForLLM())
 	durableMsg := durableToolResultJournalMessage(
 		msg,
 		result,
-		durableToolResultContent(msg.Content, protectedResult),
+		durableToolResultContent(durableContent, protectedResult),
 	)
 	if protectedResult {
 		durableMsg.Media = nil
@@ -1911,7 +1914,7 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 	if settledResult != nil && settledResult.Delivery.IsFinalHandled() {
 		markToolResultMediaDelivered(settledResult, deliveredToolResultMediaRefs(settledResult))
 	}
-	content := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
+	content := r.p.filterToolContentForLLM(settledResult.ContentForModel())
 	decision := r.p.afterToolLoopDecision(
 		r.ts,
 		r.exec,
@@ -1927,7 +1930,9 @@ func (r *toolLoopRunner) settleTerminalDelivery(
 		settledResult,
 		content,
 	)
-	durableContent := durableToolResultContent(content, protectedResult)
+	durableContent := r.p.filterToolContentForLLM(settledResult.ContentForLLM())
+	durableContent = appendToolLoopGuidance(durableContent, decision)
+	durableContent = durableToolResultContent(durableContent, protectedResult)
 	settledDurableMsg := durableToolResultJournalMessage(settledMsg, settledResult, durableContent)
 	if protectedResult {
 		settledDurableMsg.Media = nil
@@ -2651,6 +2656,11 @@ func toolExecutionContextForTurn(ctx context.Context, ts *turnState) context.Con
 	)
 	ctx = toolshared.WithToolHistoryDisabled(ctx, ts.opts.NoHistory)
 	ctx = toolshared.WithToolRouteSessionKey(ctx, ts.opts.Dispatch.RouteSessionKey)
+	documentRefs := make([]string, 0, len(ts.documentProjections))
+	for _, projection := range ts.documentProjections {
+		documentRefs = append(documentRefs, projection.Ref)
+	}
+	ctx = toolshared.WithToolDocumentContext(ctx, documentRefs, ts.documentVisionAvailable)
 	return toolshared.WithToolExecutionIdentity(ctx, ts.workspace, effectiveToolExecutionID(ts))
 }
 

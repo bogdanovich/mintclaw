@@ -63,6 +63,11 @@ type ToolResult struct {
 	// persisted in canonical tool-result history.
 	ContextMedia []string `json:"-"`
 
+	// ContextText contains protected text exposed only to the current model
+	// turn. It is deliberately separate from ForLLM so canonical history,
+	// durable task state, and diagnostic previews retain only the safe report.
+	ContextText string `json:"-"`
+
 	// Deliverable describes the actual artifact/result produced by the tool,
 	// independent from LLM context or user-facing phrasing.
 	Deliverable *taskresult.Deliverable `json:"deliverable,omitempty"`
@@ -329,6 +334,20 @@ func (tr *ToolResult) ContentForLLM() string {
 		return content
 	}
 	return ""
+}
+
+// ContentForModel returns the live current-turn projection. Durable callers
+// must use ContentForLLM so protected ContextText cannot enter history or
+// diagnostic previews.
+func (tr *ToolResult) ContentForModel() string {
+	content := tr.ContentForLLM()
+	if tr == nil || strings.TrimSpace(tr.ContextText) == "" {
+		return content
+	}
+	if content == "" {
+		return tr.ContextText
+	}
+	return content + "\n" + tr.ContextText
 }
 
 func deliverableArtifactTags(deliverable *taskresult.Deliverable) []string {

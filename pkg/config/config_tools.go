@@ -316,6 +316,7 @@ type ToolsConfig struct {
 	Approval         ToolApprovalConfig          `json:"approval,omitempty"         yaml:"-"`
 	Web              WebToolsConfig              `json:"web"                        yaml:"web,omitempty"`
 	Cron             CronToolsConfig             `json:"cron"                       yaml:"-"`
+	Document         ToolConfig                  `json:"document"                   yaml:"-"                                                       envPrefix:"MINTCLAW_TOOLS_DOCUMENT_"`
 	Exec             ExecConfig                  `json:"exec"                       yaml:"-"`
 	Skills           SkillsToolsConfig           `json:"skills"                     yaml:"skills,omitempty"`
 	MediaCleanup     MediaCleanupConfig          `json:"media_cleanup"              yaml:"-"`

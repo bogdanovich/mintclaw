@@ -107,6 +107,8 @@ var (
 	ctxKeyRecoverableOutbound = &toolCtxKey{"recoverableOutbound"}
 	ctxKeyHistoryDisabled     = &toolCtxKey{"historyDisabled"}
 	ctxKeyCommandObservation  = &toolCtxKey{"commandObservation"}
+	ctxKeyDocumentMediaRefs   = &toolCtxKey{"documentMediaRefs"}
+	ctxKeyDocumentVision      = &toolCtxKey{"documentVision"}
 )
 
 type commandObservationSink func(CommandObservation)
@@ -236,6 +238,19 @@ func WithToolApprovalContinuation(ctx context.Context, resumed bool) context.Con
 // allow-all approval policy. It does not represent a consumed human grant.
 func WithToolApprovalBypass(ctx context.Context, bypass bool) context.Context {
 	return context.WithValue(ctx, ctxKeyApprovalBypass, bypass)
+}
+
+// WithToolDocumentContext carries the exact current-turn document refs and
+// whether the selected model route has an explicitly configured image path.
+func WithToolDocumentContext(ctx context.Context, refs []string, visionAvailable bool) context.Context {
+	allowed := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref != "" {
+			allowed[ref] = struct{}{}
+		}
+	}
+	ctx = context.WithValue(ctx, ctxKeyDocumentMediaRefs, allowed)
+	return context.WithValue(ctx, ctxKeyDocumentVision, visionAvailable)
 }
 
 // ToolChannel extracts the channel from ctx, or "" if unset.
@@ -407,6 +422,24 @@ func ToolApprovalContinuation(ctx context.Context) bool {
 func ToolApprovalBypass(ctx context.Context) bool {
 	bypass, _ := ctx.Value(ctxKeyApprovalBypass).(bool)
 	return bypass
+}
+
+// ToolDocumentRefAllowed reports whether ref was authoritatively projected
+// from the current inbound turn. Guessing an older route-owned ref is denied.
+func ToolDocumentRefAllowed(ctx context.Context, ref string) bool {
+	allowed, ok := ctx.Value(ctxKeyDocumentMediaRefs).(map[string]struct{})
+	if !ok {
+		return false
+	}
+	_, ok = allowed[ref]
+	return ok
+}
+
+// ToolDocumentVisionAvailable reports whether rendered document pages can be
+// passed through the selected route's configured image-input path.
+func ToolDocumentVisionAvailable(ctx context.Context) bool {
+	available, _ := ctx.Value(ctxKeyDocumentVision).(bool)
+	return available
 }
 
 // ToolRouteSessionKey extracts the canonical routed conversation key from ctx.

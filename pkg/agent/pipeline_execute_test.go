@@ -57,6 +57,22 @@ func TestToolResultJournalKeepsContextMediaLiveOnly(t *testing.T) {
 	}
 }
 
+func TestToolResultJournalKeepsContextTextLiveOnly(t *testing.T) {
+	result := &toolshared.ToolResult{
+		ForLLM:      `{"state":"succeeded","pages":[1]}`,
+		ContextText: "[page 1]\nprivate document text",
+	}
+	live := buildToolResultJournalMessage("call-document", result, result.ContentForModel())
+	durable := durableToolResultJournalMessage(live, result, result.ContentForLLM())
+	if !strings.Contains(live.Content, "private document text") {
+		t.Fatalf("live message lost context text: %q", live.Content)
+	}
+	if strings.Contains(durable.Content, "private document text") ||
+		durable.Content != result.ContentForLLM() {
+		t.Fatalf("durable message exposed context text: %q", durable.Content)
+	}
+}
+
 func TestToolResultJournalPreservesDeliverableForInteractionRecovery(t *testing.T) {
 	result := (&toolshared.ToolResult{ForLLM: "tool result"}).WithDeliverable(&taskresult.Deliverable{
 		Text:      "tool-owned result",

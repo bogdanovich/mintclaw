@@ -15,6 +15,7 @@ import (
 
 	"github.com/bogdanovich/mintclaw/pkg/bus"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/providers"
 	"github.com/bogdanovich/mintclaw/pkg/session"
@@ -478,6 +479,10 @@ type turnState struct {
 	workspace   string
 	userMessage string
 	media       []string
+
+	documentProjections     []document.AttachmentProjection
+	documentRejections      []documentAttachmentRejection
+	documentVisionAvailable bool
 
 	phase            TurnPhase
 	iteration        int

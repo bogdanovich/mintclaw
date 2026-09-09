@@ -184,6 +184,21 @@ func (m *modelExecutionManager) selectCandidates(
 	return m.applyStickyAutoFallback(decision, routeSessionKey)
 }
 
+func (m *modelExecutionManager) selectPrimaryCandidates(
+	execution effectiveExecutionState,
+	routeSessionKey string,
+) modelSelectionDecision {
+	decision := modelSelectionDecision{
+		selectedCandidates: append([]providers.FallbackCandidate(nil), execution.Candidates...),
+		activeCandidates:   append([]providers.FallbackCandidate(nil), execution.Candidates...),
+		model:              resolvedCandidateModel(execution.Candidates, execution.Model),
+	}
+	if strings.TrimSpace(routeSessionKey) == "" {
+		return decision
+	}
+	return m.applyStickyAutoFallback(decision, routeSessionKey)
+}
+
 func (m *modelExecutionManager) applyStickyAutoFallback(
 	decision modelSelectionDecision,
 	routeSessionKey string,

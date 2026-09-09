@@ -72,6 +72,7 @@ extraction=$smoke_root/extraction.json
 extracted_text=$smoke_root/extracted-text.jsonl
 rendering=$smoke_root/rendering.json
 rendered_pages=$smoke_root/rendered-pages
+agent_channel_log=$smoke_root/agent-channel.log
 smoke_home=$smoke_root/home
 
 "$binary" document capabilities --json >"$capabilities"
@@ -82,6 +83,14 @@ MINTCLAW_HOME=$smoke_home "$binary" document extract \
 MINTCLAW_HOME=$smoke_home "$binary" document render \
 	--input "$repo/pkg/document/testdata/rotated-crop.pdf" \
 	--pages 1 --output-dir "$rendered_pages" --json >"$rendering"
+(
+	cd "$repo"
+	MINTCLAW_REQUIRE_DOCUMENT_AGENT_E2E=1 go test \
+		-count=1 \
+		-tags goolm,stdjson,integration \
+		-run '^TestDocumentPDFTelegramVerticalSlice$' \
+		./pkg/agent
+) >"$agent_channel_log"
 
 expected_digest=$(sha256sum "$input" | awk '{print $1}')
 python3 - \
@@ -151,5 +160,7 @@ echo "fixture=$fixture"
 echo "sha256=$expected_digest"
 echo "state=succeeded"
 echo "scratch=clean"
+echo "agent_channel=passed"
+echo "marker=MINTCLAW_PDF1A_AGENT_CHANNEL_OK"
 echo "marker=MINTCLAW_PDF1A_DEPLOYED_OK"
 REMOTE
