@@ -128,12 +128,6 @@ func TestCompactionSurfacesDistinguishModeAndReportMetrics(t *testing.T) {
 		TokensBefore: 2400, TokensAfter: 900, TokensSaved: 1500, TokenCountsObserved: true,
 		SummariesCreated: 3, LeafSummaries: 2, CondensedSummaries: 1, Duration: 1500 * time.Millisecond,
 	}
-	footer := compactionFooter(compaction)
-	for _, want := range []string{"blocking", "2.4k→900", "1.5k saved"} {
-		if !strings.Contains(footer, want) {
-			t.Fatalf("compaction footer omits %q: %q", want, footer)
-		}
-	}
 	panel := strings.Join(compactionStatusLines(compaction), "\n")
 	for _, want := range []string{
 		"last compaction: completed (blocking)",
@@ -151,9 +145,6 @@ func TestCompactionSurfacesDistinguishModeAndReportMetrics(t *testing.T) {
 
 	compaction.Status = frontend.CompactionFailed
 	compaction.Background = true
-	if got := compactionFooter(compaction); got != "background compaction failed; work can continue" {
-		t.Fatalf("background failure footer = %q", got)
-	}
 	if got := compactionContinuation(compaction); !strings.HasPrefix(got, "work can continue") {
 		t.Fatalf("background failure continuation = %q", got)
 	}
@@ -161,9 +152,6 @@ func TestCompactionSurfacesDistinguishModeAndReportMetrics(t *testing.T) {
 	compaction.Status = frontend.CompactionRunning
 	compaction.Reason = "summarize"
 	compaction.Background = false
-	if got := compactionFooter(compaction); got != "blocking compaction running (session summarization)" {
-		t.Fatalf("foreground summarize footer = %q", got)
-	}
 	panel = strings.Join(compactionStatusLines(compaction), "\n")
 	if !strings.Contains(panel, "compaction trigger: session summarization") {
 		t.Fatalf("foreground summarize panel = %q", panel)
@@ -217,8 +205,7 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 	}
 	status := model.statusLine()
 	for _, want := range []string{
-		"project mintclaw", "branch main", "model gpt-coding/openai", "context 20% (2.0k/10.0k)",
-		"activity idle",
+		"gpt-coding/openai", "/work/mintclaw", "main", "context 20% (2.0k/10.0k)",
 	} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status omits %q: %q", want, status)
@@ -236,7 +223,7 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 		t.Fatal(err)
 	}
 	model = updateModel(t, model, SnapshotMsg{Snapshot: latest})
-	if controller.refreshes.Load() != 1 || !strings.Contains(model.statusLine(), "branch feature/refreshed") ||
+	if controller.refreshes.Load() != 1 || !strings.Contains(model.statusLine(), "feature/refreshed") ||
 		!strings.Contains(renderedModelTranscript(model, 120), "repository is clean") {
 		t.Fatalf(
 			"refreshed state calls=%d status=%q content=%q",
@@ -247,7 +234,7 @@ func TestRepositoryAndStatusSurfacesRefreshFromAuthoritativeSnapshot(t *testing.
 	}
 }
 
-func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
+func TestStatusFooterKeepsStableFactsAndLeavesActivityToWorkingLine(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -256,6 +243,7 @@ func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
 		ProjectRoot: "/work/representative-project", Model: "representative-coding-model", Provider: "provider",
 	})
 	projector.ContextUsage(20_000, 100_000)
+	projector.RuntimeStatusUpdated(frontend.RuntimeStatus{ReasoningEffort: "medium"})
 	projector.WorkspaceUpdated(codingworkspace.Snapshot{
 		ProjectRoot: "/work/representative-project",
 		CWD:         "/work/representative-project",
@@ -271,7 +259,9 @@ func TestStatusFooterKeepsActivityAtCommonWidths(t *testing.T) {
 	for _, width := range []int{40, 80} {
 		model.resize(width, 20)
 		status := model.statusLine()
-		if !strings.Contains(status, "activity running") || ansi.StringWidth(status) > width {
+		if !strings.Contains(status, "representative-coding-model/provider") ||
+			strings.Contains(status, "activity") || strings.Contains(status, "running") ||
+			ansi.StringWidth(status) > width {
 			t.Fatalf("width %d status = %q (%d cells)", width, status, ansi.StringWidth(status))
 		}
 	}

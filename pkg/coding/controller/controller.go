@@ -45,6 +45,10 @@ type workspaceEvidenceRefresher interface {
 	RefreshWorkspaceEvidence(context.Context) (codingworkspace.StatusResult, error)
 }
 
+type runtimeStatusReader interface {
+	RuntimeStatus(context.Context) frontend.RuntimeStatus
+}
+
 type steeringRuntime interface {
 	Steer(context.Context, frontend.SteerInput) error
 }
@@ -142,6 +146,7 @@ type operationResult struct {
 	kind            operationKind
 	request         command
 	status          codingworkspace.StatusResult
+	runtimeStatus   *frontend.RuntimeStatus
 	diff            codingworkspace.DiffResult
 	review          codingreview.Result
 	reviewID        string
@@ -592,7 +597,11 @@ func (c *Controller) coordinate() {
 			if result.err == nil {
 				switch result.kind {
 				case operationWorkspaceRefresh, operationRepositoryStatus:
-					c.projector.RepositoryStatusUpdated(result.status)
+					if result.runtimeStatus != nil {
+						c.projector.RepositoryStatusAndRuntimeUpdated(result.status, *result.runtimeStatus)
+					} else {
+						c.projector.RepositoryStatusUpdated(result.status)
+					}
 				case operationRepositoryDiff:
 					c.projector.RepositoryDiffUpdated(result.diff)
 				}
@@ -978,6 +987,12 @@ func (c *Controller) runEvidence(ctx context.Context, id uint64, kind operationK
 		result.status, result.err = c.runtime.(frontend.RepositoryEvidenceReader).RepositoryStatus(ctx)
 	case operationRepositoryDiff:
 		result.diff, result.err = c.runtime.(frontend.RepositoryEvidenceReader).RepositoryDiff(ctx, request.diffTarget)
+	}
+	if result.err == nil && (kind == operationWorkspaceRefresh || kind == operationRepositoryStatus) {
+		if reader, ok := c.runtime.(runtimeStatusReader); ok {
+			status := reader.RuntimeStatus(ctx)
+			result.runtimeStatus = &status
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		result.err = err

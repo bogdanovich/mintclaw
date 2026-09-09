@@ -128,6 +128,66 @@ type ThreadMetadata struct {
 	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 }
 
+// PermissionMode is the effective filesystem/tool access granted to the
+// coding runtime. It describes actual runtime construction, not a user-facing
+// claim inferred from model output.
+type PermissionMode string
+
+const (
+	PermissionFullAccess PermissionMode = "full_access"
+	PermissionReadOnly   PermissionMode = "read_only"
+)
+
+// AutonomyMode describes whether tool execution pauses for approvals.
+type AutonomyMode string
+
+const (
+	AutonomyYolo AutonomyMode = "yolo"
+)
+
+// ProviderAccountState is a redacted provider credential summary. It never
+// carries account IDs, email addresses, tokens, or API key material.
+type ProviderAccountState string
+
+const (
+	ProviderAccountAuthenticated ProviderAccountState = "authenticated"
+	ProviderAccountConfigured    ProviderAccountState = "configured"
+	ProviderAccountNeedsRefresh  ProviderAccountState = "needs_refresh"
+	ProviderAccountExpired       ProviderAccountState = "expired"
+)
+
+type ProviderAccount struct {
+	Provider   string               `json:"provider,omitempty"`
+	AuthMethod string               `json:"auth_method,omitempty"`
+	State      ProviderAccountState `json:"state,omitempty"`
+}
+
+// InstructionSource is a content-free description of one project instruction
+// file that was admitted by the coding instruction loader.
+type InstructionSource struct {
+	Path      string `json:"path"`
+	Scope     string `json:"scope,omitempty"`
+	Label     string `json:"label,omitempty"`
+	Global    bool   `json:"global,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// RuntimeStatus contains bounded, renderer-neutral operational facts that are
+// known only after constructing a coding runtime. Durable thread metadata stays
+// separate because these values are recomputed on every new or resumed run.
+type RuntimeStatus struct {
+	Version                     string              `json:"version,omitempty"`
+	Resumed                     bool                `json:"resumed,omitempty"`
+	ReasoningEffort             string              `json:"reasoning_effort,omitempty"`
+	ReasoningConfigured         bool                `json:"reasoning_configured,omitempty"`
+	Permission                  PermissionMode      `json:"permission,omitempty"`
+	Autonomy                    AutonomyMode        `json:"autonomy,omitempty"`
+	InstructionSources          []InstructionSource `json:"instruction_sources,omitempty"`
+	InstructionSourcesTruncated bool                `json:"instruction_sources_truncated,omitempty"`
+	InstructionWarningCount     int                 `json:"instruction_warning_count,omitempty"`
+	Account                     *ProviderAccount    `json:"account,omitempty"`
+}
+
 // WriteAudit is a verified write-side effect reported by a tool. Descriptive
 // model output is never promoted into this structure.
 type WriteAudit struct {
@@ -349,6 +409,7 @@ type ThreadSnapshot struct {
 	ThreadID     string             `json:"thread_id"`
 	ActiveTurnID string             `json:"active_turn_id,omitempty"`
 	Metadata     ThreadMetadata     `json:"metadata,omitempty"`
+	Runtime      *RuntimeStatus     `json:"runtime,omitempty"`
 	Activity     Activity           `json:"activity"`
 	LastTurn     *LastTurnOutcome   `json:"last_turn,omitempty"`
 	Items        []PresentationItem `json:"items,omitempty"`

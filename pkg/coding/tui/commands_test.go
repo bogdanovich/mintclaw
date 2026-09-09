@@ -370,8 +370,8 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 
 	enterPanelCommand(t, model, "/status")
 	for _, want := range []string{
-		"Current coding thread status", "Parser work", "branch: main", "repository: dirty",
-		"model: coding-model/openai", "context: 20%",
+		"MintClaw coding session", "Parser work", "Branch  main", "Repository  dirty",
+		"Model  coding-model", "Provider  openai", "Context  20%",
 	} {
 		if !strings.Contains(model.View(), want) {
 			t.Fatalf("status panel omits %q: %q", want, model.View())
@@ -389,7 +389,8 @@ func TestReadOnlyCommandPanelsFollowCurrentSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
-	if !strings.Contains(model.View(), "branch: feature/live") || !strings.Contains(model.View(), "repository: clean") {
+	if !strings.Contains(model.View(), "Branch  feature/live") ||
+		!strings.Contains(model.View(), "Repository  clean") {
 		t.Fatalf("status panel did not converge to current view: %q", model.View())
 	}
 
@@ -740,13 +741,14 @@ func TestCommandPanelsEscapeStructuredSnapshotFields(t *testing.T) {
 
 	status := statusPanelContent(snapshot)
 	for _, want := range []string{
-		`thread: thread\nforged-thread\tcell`,
-		`title: title\nforged-title\tcell`,
-		`activity: running/working\nforged-status\tcell`,
-		`project: /project\nforged-project`,
-		`cwd: /cwd\tforged-cwd`,
-		`model: model\nforged-model/provider\tforged-provider`,
-		`branch: branch\nforged-branch`,
+		`Session: thread\nforged-thread\tcell`,
+		`Thread: title\nforged-title\tcell`,
+		`Activity: running/working\nforged-status\tcell`,
+		`Project: /project\nforged-project`,
+		`Directory: /cwd\tforged-cwd`,
+		`Model: model\nforged-model`,
+		`Provider: provider\tforged-provider`,
+		`Branch: branch\nforged-branch`,
 	} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("escaped status panel omits %q: %q", want, status)
@@ -791,9 +793,8 @@ func TestStatusPanelIncludesCurrentAuthoritativePlan(t *testing.T) {
 	}
 	status := statusPanelContent(snapshot)
 	for _, want := range []string{
-		"Current plan",
-		"progress: 1/3 completed",
-		"note: Continue after resume.",
+		"Plan: 1/3 completed",
+		"Continue after resume.",
 		"✔ Inspect",
 		"→ Implement",
 		"□ Verify",
@@ -822,9 +823,10 @@ func TestTypedSlashCommandsAndLiteralSlashPrompt(t *testing.T) {
 	}
 	model = updateModel(t, model, SnapshotMsg{Snapshot: snapshot})
 	enterPanelCommand(t, model, "/status")
-	if !strings.Contains(model.View(), "last compaction: completed (blocking)") ||
-		!strings.Contains(model.View(), "compaction tokens saved: 256") ||
-		!strings.Contains(model.View(), "compaction continuation: work can continue") {
+	plainStatus := RenderStatusPlain(snapshot, "")
+	if !strings.Contains(plainStatus, "Compaction: completed (blocking)") ||
+		!strings.Contains(plainStatus, "Activity: idle/context compacted; 256 tokens saved") ||
+		!strings.Contains(model.View(), "Compaction  completed (blocking)") {
 		t.Fatalf("compact did not converge through current view: %q", model.View())
 	}
 

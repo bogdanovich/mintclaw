@@ -102,6 +102,7 @@ func Run(ctx context.Context, controller frontend.Controller, options Options) (
 		motionMode:    motionMode,
 		interruptKeys: options.InterruptKeys,
 		now:           options.now,
+		home:          statusHomeDirectory(options.Environment),
 	})
 	if err != nil {
 		return fmt.Errorf("coding TUI model: %w", err)

@@ -119,6 +119,7 @@ type nativeCodingRuntime struct {
 	workspace       string
 	model           string
 	provider        string
+	runtimeStatus   frontend.RuntimeStatus
 	repository      *codingworkspace.Repository
 	reviewer        *codingreviewer.Executor
 	streaming       bool
@@ -374,6 +375,7 @@ func openNativeCodingRuntime(
 		workspace:           layout.ExecutionRoot(),
 		model:               modelName,
 		provider:            providerName,
+		runtimeStatus:       codingFrontendRuntimeStatus(loop, runtimeCfg, providerName, request.ReadOnly),
 		repository:          repository,
 		reviewer:            reviewer,
 		streaming:           projector != nil,
@@ -398,6 +400,82 @@ func openNativeCodingRuntime(
 		}
 	}
 	return runtime, nil
+}
+
+func codingFrontendRuntimeStatus(
+	loop *agent.AgentLoop,
+	runtimeCfg *config.Config,
+	providerName string,
+	readOnly bool,
+) frontend.RuntimeStatus {
+	status := frontend.RuntimeStatus{
+		Version:    config.FormatVersion(),
+		Permission: frontend.PermissionFullAccess,
+		Autonomy:   frontend.AutonomyYolo,
+	}
+	if readOnly {
+		status.Permission = frontend.PermissionReadOnly
+	}
+	if loop != nil && loop.GetRegistry() != nil {
+		if instance := loop.GetRegistry().GetDefaultAgent(); instance != nil {
+			status.ReasoningEffort = string(instance.ThinkingLevel)
+			status.ReasoningConfigured = instance.ThinkingLevelConfigured
+		}
+	}
+	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(loop)
+	if runtimeCfg != nil && len(runtimeCfg.ModelList) > 0 {
+		status.Account = codingProviderAccount(providerName, runtimeCfg.ModelList[0])
+	}
+	return status
+}
+
+func codingFrontendInstructionStatus(loop *agent.AgentLoop) ([]frontend.InstructionSource, int) {
+	if loop == nil || loop.GetRegistry() == nil {
+		return nil, 0
+	}
+	instance := loop.GetRegistry().GetDefaultAgent()
+	if instance == nil || instance.ContextBuilder == nil {
+		return nil, 0
+	}
+	instructions := instance.ContextBuilder.CodingInstructionStatus()
+	sources := make([]frontend.InstructionSource, len(instructions.Sources))
+	for index, source := range instructions.Sources {
+		sources[index] = frontend.InstructionSource{
+			Path:      source.Path,
+			Scope:     source.Scope,
+			Label:     source.Label,
+			Global:    source.Global,
+			Truncated: source.Truncated,
+		}
+	}
+	return sources, instructions.WarningCount
+}
+
+func codingProviderAccount(providerName string, model *config.ModelConfig) *frontend.ProviderAccount {
+	if model == nil {
+		return nil
+	}
+	method := strings.ToLower(strings.TrimSpace(model.AuthMethod))
+	var state frontend.ProviderAccountState
+	switch method {
+	case "oauth", "token":
+		// Provider construction proves that credential material was found, but
+		// it does not perform a remote account health check.
+		state = frontend.ProviderAccountConfigured
+	case "":
+		if model.APIKey() == "" {
+			return nil
+		}
+		method = "api_key"
+		state = frontend.ProviderAccountConfigured
+	default:
+		state = frontend.ProviderAccountConfigured
+	}
+	return &frontend.ProviderAccount{
+		Provider:   strings.TrimSpace(providerName),
+		AuthMethod: method,
+		State:      state,
+	}
 }
 
 type nativeReviewerToolset struct {
@@ -920,6 +998,15 @@ func (r *nativeControllerRuntime) BackgroundCompactionActive() bool {
 	return r.loop != nil && r.loop.CodingBackgroundCompactionActive(r.metadata.ThreadID)
 }
 
+func (r *nativeControllerRuntime) RuntimeStatus(_ context.Context) frontend.RuntimeStatus {
+	if r == nil {
+		return frontend.RuntimeStatus{}
+	}
+	status := r.runtimeStatus
+	status.InstructionSources, status.InstructionWarningCount = codingFrontendInstructionStatus(r.loop)
+	return status
+}
+
 func (r *nativeControllerRuntime) Rename(_ context.Context, title string) error {
 	candidate, err := r.metadataState.rename(title)
 	if err != nil {
@@ -1305,6 +1392,8 @@ func newNativeCodingControllerWithDependencies(
 	if err != nil {
 		return nil, err
 	}
+	native.runtimeStatus.Resumed = resumed
+	projector.RuntimeStatusUpdated(native.runtimeStatus)
 	if hasLatestReview {
 		current := native.repository.Diff(restoreCtx, latestReview.Target.DiffTarget())
 		latestReview = codingreviewer.ReconcileRestoredEvidence(latestReview, current)

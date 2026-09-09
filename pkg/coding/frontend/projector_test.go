@@ -125,6 +125,59 @@ func TestWorkspaceUpdateDoesNotAliasCallerOrConsumerState(t *testing.T) {
 	}
 }
 
+func TestRuntimeStatusProjectionIsBoundedNormalizedAndIndependent(t *testing.T) {
+	projector := newTestProjector(t, ProjectionLimits{TextBytes: 64})
+	sources := make([]InstructionSource, maxInstructionSources+2)
+	for index := range sources {
+		sources[index] = InstructionSource{
+			Path:  fmt.Sprintf("/project/scope-%02d/AGENTS.md", index),
+			Scope: fmt.Sprintf("/project/scope-%02d", index),
+			Label: "AGENTS.md",
+		}
+	}
+	status := RuntimeStatus{
+		Version:                 "v1.2.3",
+		Resumed:                 true,
+		ReasoningEffort:         "medium",
+		ReasoningConfigured:     true,
+		Permission:              PermissionFullAccess,
+		Autonomy:                AutonomyYolo,
+		InstructionSources:      sources,
+		InstructionWarningCount: -1,
+		Account: &ProviderAccount{
+			Provider: "openai", AuthMethod: "oauth", State: ProviderAccountAuthenticated,
+		},
+	}
+	projector.RuntimeStatusUpdated(status)
+	status.InstructionSources[0].Path = "caller mutation"
+	status.Account.Provider = "caller mutation"
+
+	view := snapshotForTest(t, projector)
+	if view.Runtime == nil || !view.Runtime.Resumed || view.Runtime.Permission != PermissionFullAccess ||
+		view.Runtime.Autonomy != AutonomyYolo || len(view.Runtime.InstructionSources) != maxInstructionSources ||
+		!view.Runtime.InstructionSourcesTruncated || view.Runtime.InstructionWarningCount != 0 ||
+		view.Runtime.InstructionSources[0].Path == "caller mutation" ||
+		view.Runtime.Account == nil || view.Runtime.Account.Provider != "openai" {
+		t.Fatalf("runtime status projection = %+v", view.Runtime)
+	}
+	view.Runtime.InstructionSources[0].Path = "consumer mutation"
+	view.Runtime.Account.Provider = "consumer mutation"
+	stable := snapshotForTest(t, projector)
+	if stable.Runtime.InstructionSources[0].Path == "consumer mutation" ||
+		stable.Runtime.Account.Provider != "openai" {
+		t.Fatalf("runtime status aliases consumer state = %+v", stable.Runtime)
+	}
+
+	projector.RuntimeStatusUpdated(RuntimeStatus{
+		Permission: "forged", Autonomy: "prompt_every_time",
+		Account: &ProviderAccount{State: "forged"},
+	})
+	view = snapshotForTest(t, projector)
+	if view.Runtime.Permission != "" || view.Runtime.Autonomy != "" || view.Runtime.Account.State != "" {
+		t.Fatalf("invalid runtime enums survived normalization = %+v", view.Runtime)
+	}
+}
+
 func TestRepositoryEvidenceUpdatesDoNotAliasNestedState(t *testing.T) {
 	projector := newTestProjector(t, ProjectionLimits{})
 	status := codingworkspace.StatusResult{
