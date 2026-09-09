@@ -424,6 +424,9 @@ func DefaultConfig() *Config {
 				ExecTimeoutMinutes: 5,
 				AllowCommand:       true,
 			},
+			Document: ToolConfig{
+				Enabled: true,
+			},
 			Exec: ExecConfig{
 				ToolConfig: ToolConfig{
 					Enabled: true,

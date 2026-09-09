@@ -10699,6 +10699,96 @@ type toolOverflowProvider struct {
 	retryMessages []providers.Message
 }
 
+type liveContextRetryTool struct {
+	secret string
+	media  string
+}
+
+func (*liveContextRetryTool) Name() string { return "live_context_retry_test" }
+
+func (*liveContextRetryTool) Description() string { return "return protected one-shot model context" }
+
+func (*liveContextRetryTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false}
+}
+
+func (tool *liveContextRetryTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return &toolshared.ToolResult{
+		ForLLM:       `{"state":"succeeded"}`,
+		ContextText:  tool.secret,
+		ContextMedia: []string{tool.media},
+	}
+}
+
+type liveContextRetryNoopTool struct{}
+
+func (*liveContextRetryNoopTool) Name() string { return "live_context_retry_noop" }
+
+func (*liveContextRetryNoopTool) Description() string { return "continue the live-context retry test" }
+
+func (*liveContextRetryNoopTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "additionalProperties": false}
+}
+
+func (*liveContextRetryNoopTool) Execute(context.Context, map[string]any) *toolshared.ToolResult {
+	return toolshared.SilentResult("continued")
+}
+
+type liveContextRetryProvider struct {
+	mode     string
+	calls    int
+	requests [][]providers.Message
+}
+
+func (provider *liveContextRetryProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	provider.calls++
+	provider.requests = append(provider.requests, append([]providers.Message(nil), messages...))
+	switch provider.mode {
+	case "retry_pending":
+		switch provider.calls {
+		case 1:
+			return liveContextToolCallResponse("live-context-call"), nil
+		case 2:
+			return nil, errors.New("context_window_exceeded")
+		case 3:
+			return liveContextNoopCallResponse(), nil
+		default:
+			return &providers.LLMResponse{Content: "pending retry completed"}, nil
+		}
+	default:
+		switch provider.calls {
+		case 1:
+			return liveContextToolCallResponse("live-context-call"), nil
+		case 2:
+			return liveContextNoopCallResponse(), nil
+		case 3:
+			return nil, errors.New("context_window_exceeded")
+		default:
+			return &providers.LLMResponse{Content: "post-consumption retry completed"}, nil
+		}
+	}
+}
+
+func (*liveContextRetryProvider) GetDefaultModel() string { return "test-model" }
+
+func liveContextToolCallResponse(id string) *providers.LLMResponse {
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: id, Type: "function", Name: "live_context_retry_test", Arguments: map[string]any{},
+	}}}
+}
+
+func liveContextNoopCallResponse() *providers.LLMResponse {
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: "live-context-noop", Type: "function", Name: "live_context_retry_noop", Arguments: map[string]any{},
+	}}}
+}
+
 type protectedToolOverflowProvider struct {
 	calls         int
 	retryMessages []providers.Message
@@ -10847,6 +10937,72 @@ func TestProcessMessage_ContextOverflowRetryPreservesLiveProtectedToolResult(t *
 	}
 }
 
+func TestProcessMessage_ContextOverflowRetryPreservesThenConsumesLiveOnlyContext(t *testing.T) {
+	const secret = "pending extracted PDF text 0e9ed452"
+	const renderedPage = "data:image/png;base64,cGVuZGluZy1wYWdl"
+	provider := &liveContextRetryProvider{mode: "retry_pending"}
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	al.registry = NewAgentRegistry(al.cfg, provider)
+	al.RegisterTool(&liveContextRetryTool{secret: secret, media: renderedPage})
+	al.RegisterTool(&liveContextRetryNoopTool{})
+
+	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "test", ChatID: "pending-live-context-retry"},
+		Content: "read the current document",
+	}))
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "pending retry completed" || provider.calls != 4 {
+		t.Fatalf("response = %q, calls = %d", response, provider.calls)
+	}
+	for _, call := range []int{1, 2} {
+		if !messagesContainText(provider.requests[call], secret) ||
+			!messagesContainExactMedia(provider.requests[call], renderedPage) {
+			t.Fatalf("call %d lost pending live context: %#v", call+1, provider.requests[call])
+		}
+	}
+	if messagesContainText(provider.requests[3], secret) ||
+		messagesContainExactMedia(provider.requests[3], renderedPage) {
+		t.Fatalf("successful retry did not consume live context: %#v", provider.requests[3])
+	}
+}
+
+func TestProcessMessage_ContextOverflowRetryCannotResurrectConsumedLiveOnlyContext(t *testing.T) {
+	const secret = "consumed extracted PDF text 52ee2688"
+	const renderedPage = "data:image/png;base64,Y29uc3VtZWQtcGFnZQ=="
+	provider := &liveContextRetryProvider{mode: "retry_after_consumption"}
+	al, _, _, _, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	defer al.Close()
+	al.registry = NewAgentRegistry(al.cfg, provider)
+	al.RegisterTool(&liveContextRetryTool{secret: secret, media: renderedPage})
+	al.RegisterTool(&liveContextRetryNoopTool{})
+
+	response, err := al.processMessage(t.Context(), testInboundMessage(bus.InboundMessage{
+		Context: bus.InboundContext{Channel: "test", ChatID: "consumed-live-context-retry"},
+		Content: "read the current document",
+	}))
+	if err != nil {
+		t.Fatalf("processMessage() error = %v", err)
+	}
+	if response != "post-consumption retry completed" || provider.calls != 4 {
+		t.Fatalf("response = %q, calls = %d", response, provider.calls)
+	}
+	if !messagesContainText(provider.requests[1], secret) ||
+		!messagesContainExactMedia(provider.requests[1], renderedPage) {
+		t.Fatalf("first successful consumer did not receive live context: %#v", provider.requests[1])
+	}
+	for _, call := range []int{2, 3} {
+		if messagesContainText(provider.requests[call], secret) ||
+			messagesContainExactMedia(provider.requests[call], renderedPage) {
+			t.Fatalf("call %d resurrected consumed live context: %#v", call+1, provider.requests[call])
+		}
+	}
+}
+
 func messageContentIndex(messages []providers.Message, content string) int {
 	for i, message := range messages {
 		if strings.Contains(message.Content, content) {
@@ -10865,6 +11021,15 @@ func messageMediaIndex(messages []providers.Message, prefix string) int {
 		}
 	}
 	return -1
+}
+
+func messagesContainExactMedia(messages []providers.Message, mediaRef string) bool {
+	for _, message := range messages {
+		if slices.Contains(message.Media, mediaRef) {
+			return true
+		}
+	}
+	return false
 }
 
 func messageContentPresent(messages []providers.Message, content string) bool {

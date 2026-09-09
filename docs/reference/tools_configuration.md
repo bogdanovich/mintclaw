@@ -23,6 +23,9 @@ MintClaw's tools configuration is located in the `tools` field of `config.json`.
     "cron": {
       ...
     },
+    "document": {
+      "enabled": true
+    },
     "skills": {
       ...
     }
@@ -110,6 +113,30 @@ state. Human approval remains opt-in through a trusted approval hook.
 
 See [Durable Human Interaction](../guides/human-interaction.md) for answer
 formats, approval behavior, restart semantics, storage, and debugging.
+
+## Document Tool
+
+The first-party `document` tool provides bounded PDF inspection, extraction,
+and page rendering through the shared one-shot document worker.
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `tools.document.enabled` | bool | `true` | Permit registration of the hidden document tool when the qualified platform backend is available |
+
+The tool is not part of the normal model schema. An authority-bound PDF
+attachment activates the checked-in `pdf` skill, and the model discovers the
+tool through `tool_search_tool_bm25`. Per-agent and turn-profile tool/skill
+policies still apply. On unsupported platforms or without the exact packaged
+backend, enabling this setting does not advertise document operations.
+
+Page rendering also requires an explicit `model_list[].capabilities.vision`
+entry. Use `"vision": {}` to assert that the same model supports image input,
+or set its `model` field to a configured vision-model alias. See
+[Document acquisition and inspection](../operations/document-acquisition.md#agent-and-channel-workflow)
+for the workflow, limits, and Telegram test procedure. A retained render is a
+delivery-only artifact: its structured report is returned to the model, while
+the retained PNG is sent through the durable outbox and omitted from provider
+context.
 
 ## Web Tools
 

@@ -229,6 +229,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install pinned document runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes poppler-utils
+
       - name: Run real companion vertical tests
         run: bash ./scripts/run-go-integration-tests.sh
 

@@ -34,6 +34,34 @@ type futureTrustedNodeTool struct {
 	bypassTargets map[string]struct{}
 }
 
+type hiddenCleanupTool struct {
+	mockRegistryTool
+	cleanupCalls int
+}
+
+func (tool *hiddenCleanupTool) CleanupTurn(context.Context) error {
+	tool.cleanupCalls++
+	return nil
+}
+
+func TestToolRegistryCleanupTurnIncludesExpiredHiddenTools(t *testing.T) {
+	registry := NewToolRegistry()
+	tool := &hiddenCleanupTool{mockRegistryTool: mockRegistryTool{name: "document"}}
+	registry.RegisterHidden(tool)
+	registry.PromoteTools([]string{tool.Name()}, 1)
+	registry.TickTTL()
+	if _, visible := registry.Get(tool.Name()); visible {
+		t.Fatal("hidden cleanup tool remained visible after its TTL expired")
+	}
+
+	if err := registry.CleanupTurn(t.Context()); err != nil {
+		t.Fatalf("CleanupTurn() error = %v", err)
+	}
+	if tool.cleanupCalls != 1 {
+		t.Fatalf("CleanupTurn() calls = %d, want 1", tool.cleanupCalls)
+	}
+}
+
 func (tool *futureTrustedNodeTool) approvalBypassOwner() toolshared.Tool { return tool }
 
 func (tool *futureTrustedNodeTool) approvalBypassesTarget(target string) bool {

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -174,6 +175,54 @@ func TestLLMCallStagesKeepPreparationInvocationAndNormalizationSeparate(t *testi
 			total,
 		)
 	}
+}
+
+func TestSuccessfulLLMCallConsumesLiveOnlyToolText(t *testing.T) {
+	const secret = "private extracted PDF text 8d5f94"
+	provider := &sequenceProvider{responses: []*providers.LLMResponse{{Content: "done"}}}
+	loop, agent, cleanup := newTurnCoordTestLoop(t, provider)
+	defer cleanup()
+	pipeline := newTestPipeline(loop)
+	ts := newTurnState(agent, makeTestTurnSpec("live-document-context-session"), turnEventScope{
+		turnID: "live-document-context-turn", context: newTurnContext(nil, nil, nil),
+	})
+	exec, err := pipeline.SetupTurn(t.Context(), ts)
+	if err != nil {
+		t.Fatalf("SetupTurn() error = %v", err)
+	}
+	durable := `{"state":"succeeded","pages":[1]}`
+	exec.messages = append(exec.messages, providers.Message{
+		Role: "tool", ToolCallID: "document-extract", Content: durable + "\n" + secret,
+	})
+	exec.liveToolContexts = []liveToolContextProjection{{
+		toolCallID: "document-extract", durableContent: durable,
+	}}
+	ts.recordPersistedMessagePair(exec.messages[len(exec.messages)-1], providers.Message{
+		Role: "tool", ToolCallID: "document-extract", Content: durable,
+	})
+
+	outcome, err := pipeline.CallLLM(t.Context(), t.Context(), ts, exec, newLLMIterationState(2))
+	if err != nil || outcome.Control != turnStepFinalize {
+		t.Fatalf("CallLLM() outcome=%#v error=%v", outcome, err)
+	}
+	if len(provider.requests) != 1 || !messagesContainText(provider.requests[0], secret) {
+		t.Fatalf("provider did not receive the one-shot context: %#v", provider.requests)
+	}
+	if messagesContainText(exec.messages, secret) || len(exec.liveToolContexts) != 0 {
+		t.Fatalf("consumed context remained live after the model call: %#v", exec.messages)
+	}
+	if messagesContainText(ts.liveTurnMessagesSnapshot(), secret) {
+		t.Fatalf("consumed context remained in retry snapshot: %#v", ts.liveTurnMessagesSnapshot())
+	}
+}
+
+func messagesContainText(messages []providers.Message, text string) bool {
+	for _, message := range messages {
+		if strings.Contains(message.Content, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBrowserDiagnosticsFollowUpMarksTerminalOutcomeProtected(t *testing.T) {

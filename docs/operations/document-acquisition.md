@@ -2,8 +2,8 @@
 
 ## Status
 
-PDF0A acquisition, PDF0B inspection, and PDF1A local extraction/rendering are available for the
-qualified `linux/amd64` bundle. The
+PDF0A acquisition, PDF0B inspection, and the PDF1A local and agent/channel read paths are available
+for the qualified `linux/amd64` bundle. The
 [PDF0A exit record](../architecture/pdf0a-exit-record.md) contains merged-main deployment and rollback evidence for
 the acquisition foundation. The [PDF0B backend decision](../architecture/pdf0b-backend-decision.md) records parser
 qualification, normalization, oracle, packaging, and residual limits.
@@ -13,10 +13,8 @@ rollback contract.
 
 The commands prove bounded local-file acquisition, immutable identity, and deterministic parsing in a short-lived
 worker. The shared service also admits an inbound `media://` reference only for its immutable workspace, agent, actor,
-route, and session owner. PDF0B does not render or return document content. PDF1A core adds local
-operator read commands but does not yet register the deferred agent tool; that arrives in the
-dependent PDF1A agent/channel PR. These milestones do not accept passwords or retain a durable
-document job. Those behaviors remain outside this operator-only milestone.
+route, and session owner. The agent uses the same service through one hidden `document` tool and one
+on-demand `pdf` skill. These milestones do not accept passwords or retain a durable document job.
 
 Only `linux/amd64` is admitted. Other platforms return a structured `unsupported_platform` result before opening the
 input. This remains intentional until each tuple proves the same worker, packaged backend, and fixture contracts.
@@ -44,7 +42,17 @@ inspection, and worker-scratch cleanup.
 PDF1A coverage adds ordered page selection, character and pixel budgets, UTF-8 text, image-only and
 mixed pages, crop and rotation, AcroForm appearances, XFA refusal, signed classification,
 password/malformed refusal, exact backend identity, private artifact adoption, atomic CLI
-publication, truncation, and no retained partial output.
+publication, truncation, and no retained partial output. The integration suite additionally covers
+an authority-bound Telegram attachment, hidden-tool discovery, inspect-first extraction, protected
+live-only text, page provenance, retained rendering, and confirmed outbox delivery:
+
+```sh
+MINTCLAW_REQUIRE_DOCUMENT_AGENT_E2E=1 go test \
+  -count=1 \
+  -tags goolm,stdjson,integration \
+  -run '^TestDocumentPDFTelegramVerticalSlice$' \
+  ./pkg/agent
+```
 
 The synthetic inventories and evidence mappings are in `pkg/document/testdata/acquisition-manifest.json` and
 `pkg/document/testdata/inspection-manifest.json`, and `pkg/document/testdata/read-manifest.json`. No
@@ -58,8 +66,8 @@ PDF1A_CLAWPDF_ROOT=/tmp/clawpdf-0.3.2/package make test-document-read-oracle
 
 ## Inbound service contract
 
-Inbound adapters bind ordinary turn media before agent execution, independently of node file-transfer policy. A future
-agent adapter will use the same service boundary as the CLI:
+Inbound adapters bind ordinary turn media before agent execution, independently of node file-transfer policy. The
+agent adapter uses the same service boundary as the CLI:
 
 ```go
 snapshot, report := document.AcquireMedia(ctx, mediaStore, mediaRef, owner, options)
@@ -76,6 +84,64 @@ exists.
 
 A successful report retains the opaque source reference and safe correlations, but never the backing path or bytes.
 The worker receives only content type, size, SHA-256, explicit limits, and the immutable snapshot descriptor.
+
+## Agent And Channel Workflow
+
+`tools.document.enabled` defaults to `true`, but the `document` tool is registered only when the
+qualified inspection, extraction, and rendering backend is present. It remains hidden until the
+model calls the existing `tool_search_tool_bm25`. A verified current PDF activates the checked-in
+`pdf` skill and forces the primary model route; an unrelated turn receives neither the skill body
+nor the `document` schema. Tool and skill allowlists remain authoritative and can still deny the
+workflow.
+
+The attachment classifier trusts the bytes, not the caption, filename, or sender MIME alone. It
+projects only the exact current `media://` ref, detected content type, byte size, and untrusted
+presentation filename to the model. The tool will not accept a local path, a guessed ref, or an
+older attachment from the same route. A claimed PDF whose bytes do not begin with an admitted PDF
+signature is refused before skill activation.
+
+The skill directs the model to inspect first and then select explicit, sorted, one-based pages.
+Extraction may expose at most 32 KiB of page-labelled text to the next model call. That text is not
+written to canonical tool-result history or ordinary diagnostic previews; durable state retains
+only safe reports, source/artifact digests, page numbers, counts, states, and opaque refs. Reading
+more requires another bounded page selection.
+
+Rendering is available only when the selected model entry explicitly declares an image-input path.
+An empty vision override asserts that the same model accepts images; a named override routes the
+rendered PNG through the existing vision-model path:
+
+```json
+{
+  "tools": {
+    "document": {
+      "enabled": true
+    }
+  },
+  "model_list": [
+    {
+      "model_name": "primary",
+      "provider": "openai",
+      "model": "gpt-5.4",
+      "enabled": true,
+      "capabilities": {
+        "vision": {}
+      }
+    }
+  ]
+}
+```
+
+Use `"vision": {"model": "vision-model-alias"}` when a separate configured model should receive
+page images. Without either declaration, `render` returns `vision_unavailable`; MintClaw does not
+guess that a model can see images. PDF bytes are never sent through provider-native document input.
+
+By default rendered pages are current-turn model context and are released at turn completion. The
+model sets `retain: true` only when the user asked to receive them. Retained PNGs are registered in
+the authority-bound `MediaStore`, represented by a canonical `taskresult.Deliverable`, and sent by
+the existing durable outbox. Their structured render report remains available to the next model
+call, but the delivery-only PNG is not added to provider context. Confirmed, definitely failed, and
+ambiguous channel acceptance keep their existing meanings; an ambiguous attempt is not replayed
+under a new delivery identity.
 
 ## Manual Linux smoke
 
@@ -161,9 +227,30 @@ scripts/document-deployed-smoke.sh --host server@oc
 ```
 
 The harness uses `/home/server/src/mintclaw/build/mintclaw` and checked-in `text.pdf`; it never reads a live profile. It
-prints the deployed SHA, fixture digest, `state=succeeded`, `scratch=clean`, and
-`marker=MINTCLAW_DOCUMENT_INSPECT_OK`. It fails if either report exposes the repository path or protected scratch
-survives. Omit `--host` to try `server@oc` and then `server@oc-ts`.
+prints the deployed SHA, fixture digest, `state=succeeded`, `scratch=clean`,
+`marker=MINTCLAW_PDF1A_AGENT_CHANNEL_OK`, and `marker=MINTCLAW_PDF1A_DEPLOYED_OK`. It runs the
+real-process agent/channel vertical test and fails if a report exposes the repository path or
+protected scratch survives. Omit `--host` to try `server@oc` and then `server@oc-ts`.
+
+## Manual Telegram Checklist
+
+Use only the checked-in synthetic fixtures; do not use a personal document as release evidence.
+
+1. Confirm the deployed profile has `tools.document.enabled: true`. For the scan/render step,
+   confirm the primary model has `capabilities.vision` as described above.
+2. Send `pkg/document/testdata/text.pdf` as a Telegram file and ask: `Read the marker on page 1 and
+   cite the page.` Confirm the answer says `MintClaw text fixture` and cites page 1.
+3. Send `pkg/document/testdata/rotated-crop.pdf` and ask: `Render page 1 and send that rendered page
+   back to me.` Confirm exactly one PNG arrives and no duplicate appears after waiting or restarting
+   the gateway.
+4. Send a plain-text file renamed to `.pdf`. Confirm MintClaw returns a typed unsupported/refused
+   result and does not claim it read the file.
+5. Make local copies of checked-in `text.pdf` and `unicode.pdf` using the same presentation filename,
+   send them in separate turns, and confirm each answer remains bound to its own opaque ref and
+   source digest.
+6. Inspect the new completed diagnostic trace. It must show the `document` lifecycle, selected page,
+   counts, digests, state, and delivery outcome, but no extracted marker text, image bytes, protected
+   path, or raw filename. Follow [Debugging MintClaw](debug.md) for the trace location and commands.
 
 ## Unsupported-platform smoke
 
@@ -186,8 +273,8 @@ decoded-content, runtime, and output limits. It does not claim host-level networ
 Future document operations may add stronger confinement only by qualifying a ready, packaged primitive; MintClaw will
 not build a custom namespace, seccomp, or container manager for this feature.
 
-Local PDF extraction and rendering are available only for the admitted bundle. Form writes,
-password handling, OCR, provider-native PDF input, and agent/channel exposure remain unavailable in
-the core slice. macOS stays fail-closed until its later roadmap parity slice proves worker, fixture,
+Local and agent PDF extraction and rendering are available only for the admitted bundle. Form
+writes, password handling, OCR, provider-native PDF input, and companion placement remain
+unavailable. macOS stays fail-closed until its later roadmap parity slice proves worker, fixture,
 packaging, signing, update, rollback, privacy, cancellation, and cleanup contracts on both
 architectures.

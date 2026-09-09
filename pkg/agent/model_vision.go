@@ -173,7 +173,7 @@ func (p *Pipeline) callCandidateWithCapabilities(
 	)
 	visionModel, visionFallbacks, useVision := resolveVisionOverrideModel(candidateConfig)
 	if !hasMediaRefs(messages) || !useVision {
-		return p.callResolvedFallbackCandidate(
+		response, err := p.callResolvedFallbackCandidate(
 			ctx,
 			ts,
 			exec,
@@ -184,6 +184,11 @@ func (p *Pipeline) callCandidateWithCapabilities(
 			messages,
 			toolDefs,
 		)
+		if err == nil {
+			llm.documentVisionResolved = true
+			llm.documentVisionAvailable = documentVisionPathConfigured(candidateConfig) || len(routePath) > 0
+		}
+		return response, err
 	}
 	if p.Context.ModelExecution == nil {
 		return nil, fmt.Errorf("vision override %q cannot be resolved", visionModel)
@@ -239,6 +244,41 @@ func (p *Pipeline) callCandidateWithCapabilities(
 		return nil, fmt.Errorf("vision override %q resolved no candidates", visionModel)
 	}
 	return callVisionCandidate(ctx, visionExecution.Candidates[0])
+}
+
+func (p *Pipeline) documentVisionCandidates(
+	workspace string,
+	candidates []providers.FallbackCandidate,
+) []providers.FallbackCandidate {
+	eligible := make([]providers.FallbackCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		candidateConfig := p.activeModelConfig(
+			workspace,
+			[]providers.FallbackCandidate{candidate},
+			candidate.Model,
+		)
+		if documentVisionPathConfigured(candidateConfig) {
+			eligible = append(eligible, candidate)
+		}
+	}
+	return eligible
+}
+
+func (p *Pipeline) recordSuccessfulDocumentVisionCandidate(
+	ts *turnState,
+	llm *LLMIterationState,
+	candidate providers.FallbackCandidate,
+) {
+	if p == nil || ts == nil || ts.agent == nil || llm == nil {
+		return
+	}
+	candidateConfig := p.activeModelConfig(
+		ts.agent.Workspace,
+		[]providers.FallbackCandidate{candidate},
+		candidate.Model,
+	)
+	llm.documentVisionResolved = true
+	llm.documentVisionAvailable = documentVisionPathConfigured(candidateConfig)
 }
 
 func cloneVisionRoutePath(routePath map[string]struct{}) map[string]struct{} {

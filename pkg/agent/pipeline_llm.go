@@ -94,22 +94,51 @@ func (p *Pipeline) invokeLLMWithRetry(
 
 		defer p.trackActiveRequest()()
 
-		if response, handled, streamErr := p.tryConfiguredStreamingLLM(
-			providerCtx,
-			ts,
-			exec,
-			llm,
-			messagesForCall,
-			toolDefsForCall,
-		); handled {
-			return response, streamErr
+		candidatesForCall := exec.model.activeCandidates
+		documentVisionRouteAuthorized := exec.model.visionRoute == visionRouteModelOverride
+		if llm.requiresDocumentVision && hasMediaRefs(messagesForCall) && !documentVisionRouteAuthorized {
+			candidatesForCall = p.documentVisionCandidates(ts.agent.Workspace, candidatesForCall)
+			if len(candidatesForCall) == 0 {
+				return nil, errors.New("document render context requires a configured vision-capable model route")
+			}
 		}
 
-		if len(exec.model.activeCandidates) > 1 && p.Interaction.Fallback != nil {
+		tryStreaming := true
+		if llm.requiresDocumentVision && len(candidatesForCall) > 0 && !documentVisionRouteAuthorized {
+			candidateConfig := p.activeModelConfig(
+				ts.agent.Workspace,
+				[]providers.FallbackCandidate{candidatesForCall[0]},
+				candidatesForCall[0].Model,
+			)
+			_, _, usesOverride := resolveVisionOverrideModel(candidateConfig)
+			tryStreaming = !usesOverride
+		}
+		if tryStreaming {
+			if response, handled, streamErr := p.tryConfiguredStreamingLLM(
+				providerCtx,
+				ts,
+				exec,
+				llm,
+				messagesForCall,
+				toolDefsForCall,
+			); handled {
+				if streamErr == nil && len(candidatesForCall) > 0 {
+					if documentVisionRouteAuthorized {
+						llm.documentVisionResolved = true
+						llm.documentVisionAvailable = true
+					} else {
+						p.recordSuccessfulDocumentVisionCandidate(ts, llm, candidatesForCall[0])
+					}
+				}
+				return response, streamErr
+			}
+		}
+
+		if len(candidatesForCall) > 1 && p.Interaction.Fallback != nil {
 			fallbackAttempt := 0
 			fbResult, fbErr := p.Interaction.Fallback.ExecuteCandidateObserved(
 				providerCtx,
-				exec.model.activeCandidates,
+				candidatesForCall,
 				func(ctx context.Context, candidate providers.FallbackCandidate) (*providers.LLMResponse, error) {
 					return p.callFallbackCandidateWithCapabilities(
 						ctx,
@@ -160,6 +189,10 @@ func (p *Pipeline) invokeLLMWithRetry(
 			if fbErr != nil {
 				return nil, fbErr
 			}
+			if documentVisionRouteAuthorized {
+				llm.documentVisionResolved = true
+				llm.documentVisionAvailable = true
+			}
 			if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
 				logger.InfoCF(
 					"agent",
@@ -168,7 +201,7 @@ func (p *Pipeline) invokeLLMWithRetry(
 					map[string]any{"agent_id": ts.agent.ID, "iteration": iteration},
 				)
 			}
-			for _, candidate := range exec.model.activeCandidates {
+			for _, candidate := range candidatesForCall {
 				if candidate.StableKey() != fbResult.IdentityKey {
 					continue
 				}
@@ -187,6 +220,24 @@ func (p *Pipeline) invokeLLMWithRetry(
 			}
 			return fbResult.Response, nil
 		}
+		if llm.requiresDocumentVision && hasMediaRefs(messagesForCall) {
+			candidate := candidatesForCall[0]
+			resp, err := p.callFallbackCandidateWithCapabilities(
+				providerCtx,
+				ts,
+				exec,
+				llm,
+				candidate,
+				messagesForCall,
+				toolDefsForCall,
+			)
+			if err == nil && documentVisionRouteAuthorized {
+				llm.documentVisionResolved = true
+				llm.documentVisionAvailable = true
+			}
+			return resp, err
+		}
+
 		resp, err := exec.model.activeProvider.Chat(
 			providerCtx,
 			messagesForCall,
@@ -194,6 +245,14 @@ func (p *Pipeline) invokeLLMWithRetry(
 			llm.llmModel,
 			llm.llmOpts,
 		)
+		if err == nil && len(candidatesForCall) > 0 {
+			if documentVisionRouteAuthorized {
+				llm.documentVisionResolved = true
+				llm.documentVisionAvailable = true
+			} else {
+				p.recordSuccessfulDocumentVisionCandidate(ts, llm, candidatesForCall[0])
+			}
+		}
 		if err == nil &&
 			exec.model.autoFallback &&
 			strings.TrimSpace(ts.modelBinding.autoFallbackRouteSessionKey()) != "" &&
@@ -550,6 +609,13 @@ func (p *Pipeline) normalizeAndDispatchLLMResponse(
 	llm *LLMIterationState,
 ) (LLMCallOutcome, error) {
 	iteration := llm.iteration
+	// A successful provider call has consumed live-only tool context. Keep the
+	// call-local copy available for response diagnostics, then replace the turn
+	// transcript with its durable projection before any next tool/model phase.
+	defer exec.consumeLiveToolContexts(ts)
+	if ts != nil {
+		ts.documentVisionAvailable = llm.documentVisionResolved && llm.documentVisionAvailable
+	}
 
 	if p.Interaction.Hooks != nil {
 		llmResp, decision := p.Interaction.Hooks.AfterLLM(turnCtx, &LLMHookResponse{
@@ -923,6 +989,7 @@ func (p *Pipeline) applyBeforeLLMModelRewrite(
 	exec.model.llmModelName = resolvedCandidateModelName(execution.Candidates, rawModel)
 	exec.model.usedLight = false
 	exec.model.autoFallback = false
+	exec.model.visionRoute = visionRouteSameModel
 	return nil
 }
 

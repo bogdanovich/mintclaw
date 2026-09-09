@@ -620,6 +620,8 @@ func (t *ToolsConfig) IsToolEnabled(name string) bool {
 		return t.Web.Enabled
 	case "cron":
 		return t.Cron.Enabled
+	case "document":
+		return t.Document.Enabled
 	case "exec":
 		return t.Exec.Enabled
 	case "skills":

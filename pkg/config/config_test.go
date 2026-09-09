@@ -2227,6 +2227,16 @@ func TestDefaultConfig_SearchFilesEnabled(t *testing.T) {
 	}
 }
 
+func TestDefaultConfig_DocumentEnabled(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.Tools.Document.Enabled {
+		t.Fatal("DefaultConfig().Tools.Document.Enabled should be true")
+	}
+	if !cfg.Tools.IsToolEnabled("document") {
+		t.Fatal("DefaultConfig().Tools.IsToolEnabled(document) should be true")
+	}
+}
+
 func TestDefaultConfig_MessageMediaDisabled(t *testing.T) {
 	cfg := DefaultConfig()
 	if !cfg.Tools.Message.Enabled {
@@ -2294,6 +2304,26 @@ func TestLoadConfig_SearchFilesCanBeDisabled(t *testing.T) {
 	}
 	if cfg.Tools.IsToolEnabled("search_files") {
 		t.Fatal("LoadConfig().Tools.IsToolEnabled(search_files) should be false")
+	}
+}
+
+func TestLoadConfig_DocumentCanBeDisabled(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	raw := "{\n  \"version\": 4,\n  \"tools\": {\n    \"document\": {\n      \"enabled\": false\n    }\n  }\n}\n"
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	cfg, err := LoadConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Tools.Document.Enabled {
+		t.Fatal("LoadConfig().Tools.Document.Enabled should be false")
+	}
+	if cfg.Tools.IsToolEnabled("document") {
+		t.Fatal("LoadConfig().Tools.IsToolEnabled(document) should be false")
 	}
 }
 

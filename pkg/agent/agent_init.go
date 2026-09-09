@@ -13,6 +13,7 @@ import (
 	"github.com/bogdanovich/mintclaw/pkg/channels"
 	"github.com/bogdanovich/mintclaw/pkg/commands"
 	"github.com/bogdanovich/mintclaw/pkg/config"
+	"github.com/bogdanovich/mintclaw/pkg/document"
 	runtimeevents "github.com/bogdanovich/mintclaw/pkg/events"
 	"github.com/bogdanovich/mintclaw/pkg/logger"
 	"github.com/bogdanovich/mintclaw/pkg/media"
@@ -341,6 +342,11 @@ func registerSharedTools(
 			}
 			registerToolIfAllowed(agent, messageTool)
 		}
+		if cfg.Tools.IsToolEnabled("document") && documentToolAvailable() {
+			if registerHiddenToolIfAllowed(agent, tools.NewDocumentTool()) {
+				ensureDocumentToolDiscovery(agent)
+			}
+		}
 		if cfg.Tools.IsToolEnabled("reaction") {
 			reactionTool := integrationtools.NewReactionTool()
 			reactionTool.SetReactionCallback(
@@ -504,6 +510,29 @@ func registerSharedTools(
 			}
 		}
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.ToolPolicy, agent.Tools)
+	}
+}
+
+func documentToolAvailable() bool {
+	capabilities := document.Capabilities()
+	for _, operation := range []string{"inspect", "extract", "render"} {
+		if capabilities.Operations[operation].State != document.CapabilitySupported {
+			return false
+		}
+	}
+	return true
+}
+
+func ensureDocumentToolDiscovery(agent *AgentInstance) {
+	if agent == nil || agent.Tools == nil {
+		return
+	}
+	const (
+		discoveryTTL = 5
+		maxResults   = 5
+	)
+	if !agent.Tools.HasRegistered(tools.BM25SearchToolName) {
+		registerToolIfAllowed(agent, tools.NewBM25SearchTool(agent.Tools, discoveryTTL, maxResults))
 	}
 }
 

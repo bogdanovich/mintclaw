@@ -57,6 +57,126 @@ func TestToolResultJournalKeepsContextMediaLiveOnly(t *testing.T) {
 	}
 }
 
+func TestToolResultJournalKeepsContextTextLiveOnly(t *testing.T) {
+	result := &toolshared.ToolResult{
+		ForLLM:      `{"state":"succeeded","pages":[1]}`,
+		ContextText: "[page 1]\nprivate document text",
+	}
+	live := buildToolResultJournalMessage("call-document", result, result.ContentForModel())
+	durable := durableToolResultJournalMessage(live, result, result.ContentForLLM())
+	if !strings.Contains(live.Content, "private document text") {
+		t.Fatalf("live message lost context text: %q", live.Content)
+	}
+	if strings.Contains(durable.Content, "private document text") ||
+		durable.Content != result.ContentForLLM() {
+		t.Fatalf("durable message exposed context text: %q", durable.Content)
+	}
+}
+
+func TestLiveToolContextIsAggregateBoundedAndConsumedAfterOneModelCall(t *testing.T) {
+	exec := &turnExecution{}
+	ts := &turnState{}
+	runner := &toolLoopRunner{exec: exec}
+	first := &toolshared.ToolResult{
+		ForLLM:      `{"state":"succeeded","pages":[1]}`,
+		ContextText: strings.Repeat("a", 20*1024),
+	}
+	second := &toolshared.ToolResult{
+		ForLLM:      `{"state":"succeeded","pages":[2]}`,
+		ContextText: strings.Repeat("b", 20*1024),
+		ContextMedia: []string{
+			"media://document/rendered-page-2",
+		},
+	}
+
+	for index, result := range []*toolshared.ToolResult{first, second} {
+		callID := fmt.Sprintf("call-document-%d", index+1)
+		contextText := runner.takeLiveToolContextText(result)
+		live := buildToolResultJournalMessage(callID, result, liveToolResultContent(result, contextText))
+		durable := durableToolResultJournalMessage(live, result, result.ContentForLLM())
+		runner.messages = append(runner.messages, live)
+		ts.recordPersistedMessagePair(live, durable)
+		runner.registerLiveToolContext(
+			callID,
+			durable,
+			contextText != "",
+			len(result.ContextMedia) > 0,
+			len(result.ContextMedia) > 0,
+		)
+	}
+	exec.messages = runner.messages
+
+	if exec.liveToolContextTextBytes != maxLiveToolContextTextBytes {
+		t.Fatalf(
+			"aggregate live text = %d bytes, want %d",
+			exec.liveToolContextTextBytes,
+			maxLiveToolContextTextBytes,
+		)
+	}
+	visibleTextBytes := len(exec.messages[0].Content) - len(first.ContentForLLM()) - 1 +
+		len(exec.messages[1].Content) - len(second.ContentForLLM()) - 1
+	if visibleTextBytes != maxLiveToolContextTextBytes {
+		t.Fatalf(
+			"model-visible extracted text = %d bytes, want %d",
+			visibleTextBytes,
+			maxLiveToolContextTextBytes,
+		)
+	}
+	if !exec.hasLiveDocumentContextMedia() {
+		t.Fatal("rendered page was not tracked as live-only model context")
+	}
+	if !strings.Contains(exec.messages[1].Content, liveToolContextTruncatedMarker) {
+		t.Fatalf("aggregate truncation was not disclosed to the model: %q", exec.messages[1].Content)
+	}
+
+	// Context-window recovery rebuilds exec.messages and may shift message
+	// indexes. Consumption must use stable tool-call identity and must also
+	// replace the protected turn-tail snapshot used by a later retry rebuild.
+	exec.messages = append([]providers.Message{{Role: "system", Content: "rebuilt prefix"}}, exec.messages...)
+	exec.consumeLiveToolContexts(ts)
+	for _, message := range exec.messages {
+		if strings.Contains(message.Content, strings.Repeat("a", 32)) ||
+			strings.Contains(message.Content, strings.Repeat("b", 32)) || len(message.Media) != 0 {
+			t.Fatalf("consumed live context remained in the turn transcript: %#v", exec.messages)
+		}
+	}
+	if len(exec.liveToolContexts) != 0 || exec.hasLiveDocumentContextMedia() {
+		t.Fatalf("consumed projections remained pending: %#v", exec.liveToolContexts)
+	}
+	for _, message := range ts.liveTurnMessagesSnapshot() {
+		if strings.Contains(message.Content, strings.Repeat("a", 32)) ||
+			strings.Contains(message.Content, strings.Repeat("b", 32)) || len(message.Media) != 0 {
+			t.Fatalf("consumed live context remained in retry snapshot: %#v", ts.liveTurnMessagesSnapshot())
+		}
+	}
+}
+
+func TestDocumentRetainedRenderMediaIsDeliveryOnly(t *testing.T) {
+	const ref = "media://document/retained-page"
+	result := (&toolshared.ToolResult{
+		ForLLM: "retained render delivered",
+		Media:  []string{ref},
+		Deliverable: &taskresult.Deliverable{
+			Artifacts: []taskresult.Artifact{{Ref: ref, Kind: "image"}},
+		},
+	}).WithDeliveryIntent(toolshared.DeliveryImmediateContinue)
+
+	projected := toolResultForModelContext("document", result)
+	live := buildToolResultJournalMessage("document-render", projected, projected.ContentForLLM())
+	durable := durableToolResultJournalMessage(live, projected, projected.ContentForLLM())
+	if len(live.Media) != 0 || len(durable.Media) != 0 {
+		t.Fatalf("retained document render entered model context: live=%#v durable=%#v", live, durable)
+	}
+	if projected.Deliverable == nil || len(result.Media) != 1 || result.Media[0] != ref {
+		t.Fatalf("delivery artifact was removed from the original result: projected=%#v result=%#v", projected, result)
+	}
+
+	nonDocument := toolResultForModelContext("coding_attachment", result)
+	if len(nonDocument.Media) != 1 || nonDocument.Media[0] != ref {
+		t.Fatalf("unrelated tool media semantics changed: %#v", nonDocument)
+	}
+}
+
 func TestToolResultJournalPreservesDeliverableForInteractionRecovery(t *testing.T) {
 	result := (&toolshared.ToolResult{ForLLM: "tool result"}).WithDeliverable(&taskresult.Deliverable{
 		Text:      "tool-owned result",

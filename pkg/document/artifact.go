@@ -18,7 +18,10 @@ import (
 
 var renderedArtifactName = regexp.MustCompile(`^page-[0-9]{4}\.png$`)
 
-type extractedPageArtifact struct {
+// ExtractedPage is one verified page record from an extraction artifact.
+// Text is protected document content and must not be placed in durable logs,
+// traces, or canonical tool-result history.
+type ExtractedPage struct {
 	Page      int    `json:"page"`
 	Text      string `json:"text"`
 	Truncated bool   `json:"truncated,omitempty"`
@@ -133,7 +136,7 @@ func validateExtractedArtifact(data []byte, result *WorkerResult, artifact Artif
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	for index, facts := range result.Extraction.Pages {
-		var page extractedPageArtifact
+		var page ExtractedPage
 		if err := decoder.Decode(&page); err != nil || page.Page != facts.Page ||
 			utf8.RuneCountInString(page.Text) != facts.Characters || page.Truncated != facts.Truncated ||
 			artifact.Pages[index] != page.Page {
@@ -145,6 +148,45 @@ func validateExtractedArtifact(data []byte, result *WorkerResult, artifact Artif
 		return errors.New("document extracted text artifact contains unexpected records")
 	}
 	return nil
+}
+
+// ReadExtractedPages decodes the already verified extraction artifact owned
+// by snapshot. The report descriptor supplies the exact artifact identity and
+// byte bound; callers never select an artifact by local path.
+func ReadExtractedPages(snapshot *Snapshot, report Report) ([]ExtractedPage, error) {
+	if snapshot == nil || report.State != StateSucceeded || report.Extraction == nil ||
+		len(report.Artifacts) != 1 {
+		return nil, errors.New("document extraction artifact is unavailable")
+	}
+	artifact := report.Artifacts[0]
+	if artifact.Kind != "extracted_text" || artifact.ContentType != "application/x-ndjson" ||
+		artifact.Size <= 0 || artifact.Size > DefaultMaxArtifactBytes {
+		return nil, errors.New("document extraction artifact is invalid")
+	}
+	reader, err := snapshot.OpenArtifact(artifact.Ref)
+	if err != nil {
+		return nil, errors.New("document extraction artifact is unavailable")
+	}
+	defer func() { _ = reader.Close() }()
+	data, err := io.ReadAll(io.LimitReader(reader, artifact.Size+1))
+	if err != nil || int64(len(data)) != artifact.Size {
+		return nil, errors.New("document extraction artifact is invalid")
+	}
+	result := &WorkerResult{Extraction: report.Extraction}
+	if err := validateExtractedArtifact(data, result, artifact); err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	pages := make([]ExtractedPage, 0, len(report.Extraction.Pages))
+	for range report.Extraction.Pages {
+		var page ExtractedPage
+		if err := decoder.Decode(&page); err != nil {
+			return nil, errors.New("document extraction artifact is invalid")
+		}
+		pages = append(pages, page)
+	}
+	return pages, nil
 }
 
 func validateRenderedArtifact(data []byte, result *WorkerResult, artifact Artifact, limits ReadLimits) error {
