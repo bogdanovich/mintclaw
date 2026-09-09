@@ -36,6 +36,8 @@ func TestTerminateKillsUnixWorkerDescendants(t *testing.T) {
 		t.Fatal(err)
 	}
 	pid := waitForDescendantPID(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	waitForUnixDescendantTracking(t, process, pid)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	if err = process.Terminate(ctx); err != nil {
@@ -60,6 +62,8 @@ func TestNormalCompletionDrainsUnixWorkerDescendantsHoldingStderr(t *testing.T) 
 		t.Fatal(err)
 	}
 	pid := waitForDescendantPID(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	waitForUnixDescendantTracking(t, process, pid)
 	if err = process.Steer(t.Context(), "steer-1", "finish", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -93,10 +97,34 @@ func maybeStartProcessTestDescendant() error {
 	command := exec.Command(os.Args[0], "-test.run=^TestWorkerProcessDescendantHelper$")
 	command.Env = append(os.Environ(), workerProcessDescendantHelper+"=1")
 	command.Stderr = os.Stderr
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := command.Start(); err != nil {
 		return err
 	}
 	return os.WriteFile(pidFile, []byte(strconv.Itoa(command.Process.Pid)), 0o600)
+}
+
+func waitForUnixDescendantTracking(t *testing.T, process *Process, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		process.domain.state.mu.Lock()
+		tracked := false
+		for identity := range process.domain.state.owned {
+			if identity.pid == pid {
+				tracked = true
+				break
+			}
+		}
+		process.domain.state.mu.Unlock()
+		if tracked {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for escaped descendant tracking")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func waitForDescendantPID(t *testing.T, path string) int {
