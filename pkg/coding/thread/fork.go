@@ -693,19 +693,19 @@ func (s *Store) quarantineUnpublishedFork(lease *Lease, threadID string, operati
 			fmt.Errorf("coding thread fork: quarantine unpublished target: %w", err),
 		)
 	}
-	identityErr := validateQuarantinedForkLease(root, quarantineName, lease)
+	identityErr := s.validateQuarantinedFork(root, quarantineName, lease)
 	if identityErr != nil {
 		restoreErr := root.Rename(quarantineName, activeName)
 		syncErr := errors.Join(
 			fileutil.SyncDirectory(filepath.Join(s.root, "threads")),
 			fileutil.SyncDirectory(filepath.Join(s.root, quarantineDir)),
 		)
+		s.retainReservationLease(lease)
 		return errors.Join(
 			operationErr,
 			fmt.Errorf("coding thread fork: cleanup target identity changed: %w", identityErr),
 			restoreErr,
 			syncErr,
-			lease.Release(),
 		)
 	}
 	syncErr := errors.Join(

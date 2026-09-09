@@ -771,6 +771,72 @@ func TestForkThreadRetainsTargetLeaseWhenActiveQuarantineFails(t *testing.T) {
 	}
 }
 
+func TestForkThreadRetainsTargetLeaseWhenQuarantinedIdentityIsUncertain(t *testing.T) {
+	store, source := newLeaseTestThread(t)
+	writeForkTestHistory(t, store, source, []providers.Message{{
+		Role: "user", Content: "source", RootTurnStart: true,
+	}})
+	sourceLease, err := store.AcquireLease(source.ThreadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sourceLease.Release() })
+	targetID := NewThreadID()
+	injectedWriteErr := errors.New("injected fork metadata write failure")
+	injectedIdentityErr := errors.New("injected quarantined identity inspection failure")
+	originalWrite := store.writeRoot
+	store.writeRoot = func(root *os.Root, name string, data []byte, mode os.FileMode) error {
+		if name == metadataFileName {
+			return injectedWriteErr
+		}
+		return originalWrite(root, name, data, mode)
+	}
+	store.validateQuarantinedFork = func(*os.Root, string, *Lease) error {
+		return injectedIdentityErr
+	}
+	var retained *Lease
+	store.retainReservationLease = func(lease *Lease) { retained = lease }
+
+	_, _, forkErr := store.ForkThread(t.Context(), sourceLease, ForkOptions{
+		TargetThreadID: targetID, Project: source.Project, At: time.Now(),
+	})
+	if !errors.Is(forkErr, injectedWriteErr) || !errors.Is(forkErr, injectedIdentityErr) ||
+		IsCommittedForkError(forkErr) {
+		t.Fatalf("failed fork classification = %v", forkErr)
+	}
+	if retained == nil {
+		t.Fatal("uncertain quarantined fork target did not retain its writer lease")
+	}
+	targetRoot, err := store.ThreadRoot(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(targetRoot); err != nil {
+		t.Fatalf("uncertain target was not restored to the active namespace: %v", err)
+	}
+
+	contenderStore, err := NewStore(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contender, err := contenderStore.AcquireLease(targetID); !errors.Is(err, ErrLeaseBusy) {
+		if contender != nil {
+			_ = contender.Release()
+		}
+		t.Fatalf("AcquireLease(contender) error = %v, want %v", err, ErrLeaseBusy)
+	}
+	if err := retained.Release(); err != nil {
+		t.Fatalf("Release(retained target) error = %v", err)
+	}
+	successor, err := contenderStore.AcquireLease(targetID)
+	if err != nil {
+		t.Fatalf("AcquireLease(after retained release) error = %v", err)
+	}
+	if err := successor.Release(); err != nil {
+		t.Fatalf("successor Release() error = %v", err)
+	}
+}
+
 func TestForkThreadDoesNotReserveThroughReplacedThreadsRoot(t *testing.T) {
 	store, source := newLeaseTestThread(t)
 	writeForkTestHistory(t, store, source, []providers.Message{{

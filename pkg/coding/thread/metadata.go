@@ -301,19 +301,20 @@ func truncateUTF8(value string, maxBytes int) string {
 // Store atomically persists direct-addressable thread metadata below one
 // external coding state root.
 type Store struct {
-	root                   string
-	durableRoot            string
-	catalogMu              sync.Mutex
-	mkdirDurable           func(string, string, os.FileMode) error
-	writeAtomic            func(string, []byte, os.FileMode) error
-	writeRoot              func(*os.Root, string, []byte, os.FileMode) error
-	writeReview            func(*os.Root, string, []byte, os.FileMode) error
-	syncRoot               func(*os.Root) error
-	syncDir                func(string) error
-	closeReservationRoots  func(*os.Root, *os.Root) error
-	renameReservation      func(*os.Root, string, string) error
-	renameUnpublishedFork  func(*os.Root, string, string) error
-	retainReservationLease func(*Lease)
+	root                    string
+	durableRoot             string
+	catalogMu               sync.Mutex
+	mkdirDurable            func(string, string, os.FileMode) error
+	writeAtomic             func(string, []byte, os.FileMode) error
+	writeRoot               func(*os.Root, string, []byte, os.FileMode) error
+	writeReview             func(*os.Root, string, []byte, os.FileMode) error
+	syncRoot                func(*os.Root) error
+	syncDir                 func(string) error
+	closeReservationRoots   func(*os.Root, *os.Root) error
+	renameReservation       func(*os.Root, string, string) error
+	renameUnpublishedFork   func(*os.Root, string, string) error
+	validateQuarantinedFork func(*os.Root, string, *Lease) error
+	retainReservationLease  func(*Lease)
 
 	afterAttachmentGCCommitValidation  func()
 	afterAttachmentGCQuarantinePublish func()
@@ -351,7 +352,8 @@ func NewStore(root string) (*Store, error) {
 		renameUnpublishedFork: func(root *os.Root, oldName, newName string) error {
 			return root.Rename(oldName, newName)
 		},
-		retainReservationLease: retainFailedReservationLease,
+		validateQuarantinedFork: validateQuarantinedForkLease,
+		retainReservationLease:  retainFailedReservationLease,
 		closeReservationRoots: func(threadRoot, threadsRoot *os.Root) error {
 			return errors.Join(threadRoot.Close(), threadsRoot.Close())
 		},
