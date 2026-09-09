@@ -151,6 +151,67 @@ func TestLauncherRejectsBuildMismatchBeforeStartingProcess(t *testing.T) {
 	}
 }
 
+func TestResultOutcomeRequiresAuthenticatedWorkerStop(t *testing.T) {
+	tests := []struct {
+		name   string
+		result Result
+		want   Outcome
+	}{
+		{name: "missing stop", result: Result{ProcessError: errors.New("crash")}, want: OutcomeUncertain},
+		{
+			name: "completed",
+			result: Result{WorkerStop: &worker.WorkerStoppedPayload{
+				Reason: worker.WorkerStopCompleted,
+			}},
+			want: OutcomeCompleted,
+		},
+		{
+			name: "canceled",
+			result: Result{WorkerStop: &worker.WorkerStoppedPayload{
+				Reason: worker.WorkerStopCanceled,
+			}},
+			want: OutcomeInterrupted,
+		},
+		{
+			name: "shutdown",
+			result: Result{WorkerStop: &worker.WorkerStoppedPayload{
+				Reason: worker.WorkerStopShutdown,
+			}},
+			want: OutcomeShutdown,
+		},
+		{
+			name: "idle",
+			result: Result{WorkerStop: &worker.WorkerStoppedPayload{
+				Reason: worker.WorkerStopIdle,
+			}},
+			want: OutcomeIdle,
+		},
+		{
+			name: "failed",
+			result: Result{WorkerStop: &worker.WorkerStoppedPayload{
+				Reason: worker.WorkerStopFailed,
+				Error:  &worker.ProtocolError{Code: worker.ErrorInternal},
+			}},
+			want: OutcomeFailed,
+		},
+		{
+			name: "worker reported uncertain",
+			result: Result{WorkerStop: &worker.WorkerStoppedPayload{
+				Reason: worker.WorkerStopFailed,
+				Error:  &worker.ProtocolError{Code: worker.ErrorUncertain},
+			}},
+			want: OutcomeUncertain,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.result.Outcome(); got != test.want {
+				t.Fatalf("Outcome() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestBoundedBufferRetainsPrefixAndReportsTruncation(t *testing.T) {
 	buffer := &boundedBuffer{limit: 5}
 	if written, err := buffer.Write([]byte("abcdefgh")); err != nil || written != 8 {

@@ -255,6 +255,44 @@ type Result struct {
 	Diagnostics  Diagnostics
 }
 
+// Outcome is the supervisor-facing classification of one worker generation.
+// An authenticated worker.stopped event is the only source of a known task
+// outcome. Process exit or control-stream loss without that event is uncertain
+// and must never be treated as permission to replay the accepted turn.
+type Outcome string
+
+const (
+	OutcomeCompleted   Outcome = "completed"
+	OutcomeInterrupted Outcome = "interrupted"
+	OutcomeShutdown    Outcome = "shutdown"
+	OutcomeIdle        Outcome = "idle_timeout"
+	OutcomeFailed      Outcome = "failed"
+	OutcomeUncertain   Outcome = "uncertain"
+)
+
+func (result Result) Outcome() Outcome {
+	if result.WorkerStop == nil {
+		return OutcomeUncertain
+	}
+	switch result.WorkerStop.Reason {
+	case worker.WorkerStopCompleted:
+		return OutcomeCompleted
+	case worker.WorkerStopCanceled:
+		return OutcomeInterrupted
+	case worker.WorkerStopShutdown:
+		return OutcomeShutdown
+	case worker.WorkerStopIdle:
+		return OutcomeIdle
+	case worker.WorkerStopFailed:
+		if result.WorkerStop.Error != nil && result.WorkerStop.Error.Code == worker.ErrorUncertain {
+			return OutcomeUncertain
+		}
+		return OutcomeFailed
+	default:
+		return OutcomeUncertain
+	}
+}
+
 func (process *Process) Binding() worker.Binding {
 	if process == nil {
 		return worker.Binding{}
