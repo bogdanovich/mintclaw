@@ -74,11 +74,11 @@ git diff --check
 The lint run reported `0 issues`. The test suite includes JSON regression
 coverage proving the legacy snapshot fields are absent, semantic
 compact/full/plain goldens, complete-overlay evidence tests, and a regression
-that keeps current repository state before the turn separator and final
-response. A production-source audit over the affected frontend, TUI, and
-coding CLI packages found none of the compatibility synchronizer,
-changed-file projection, flat renderer, generic tool-selection state, or
-removed keybindings.
+that keeps current repository state before the terminal turn separator, both
+with a final response and after failed or interrupted work. A production-source
+audit over the affected frontend, TUI, and coding CLI packages found none of
+the compatibility synchronizer, changed-file projection, flat renderer,
+generic tool-selection state, or removed keybindings.
 
 ## Work still required for TUI.15 exit
 

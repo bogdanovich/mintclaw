@@ -410,7 +410,7 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 	}
 	liveSpecs := groupedLiveCellSpecs(m.cells.ordered)
 	if cell := m.staticCells["tui:workspace"]; cell != nil {
-		liveSpecs = insertWorkspaceBeforeFinalAnswer(
+		liveSpecs = insertWorkspaceBeforeTurnCompletion(
 			liveSpecs,
 			semanticCellRenderSpec{cell: cell, mode: cellRenderCompact},
 		)
@@ -428,26 +428,29 @@ func (m *Model) visibleSemanticCellSpecs(state frontend.ThreadSnapshot) []semant
 	return specs
 }
 
-// insertWorkspaceBeforeFinalAnswer keeps the final response as the terminal
-// transcript cell. A turn separator belongs immediately beside that response,
-// so current repository state precedes the pair. Historical hydrated turns are
-// unaffected because the current workspace describes only the live snapshot.
-func insertWorkspaceBeforeFinalAnswer(
+// insertWorkspaceBeforeTurnCompletion keeps the terminal separator and final
+// response at the end of the turn. A failed or interrupted turn can end with
+// the separator alone. Historical hydrated turns are unaffected because the
+// current workspace describes only the live snapshot.
+func insertWorkspaceBeforeTurnCompletion(
 	specs []semanticCellRenderSpec,
 	workspace semanticCellRenderSpec,
 ) []semanticCellRenderSpec {
 	index := len(specs)
 	if index > 0 {
-		final, ok := specs[index-1].cell.(*presentationCell)
-		if ok && final.item.Kind == frontend.PresentationFinalAnswer {
+		terminal, ok := specs[index-1].cell.(*presentationCell)
+		switch {
+		case ok && terminal.item.Kind == frontend.PresentationFinalAnswer:
 			index--
 			if index > 0 {
 				boundary, boundaryOK := specs[index-1].cell.(*presentationCell)
 				if boundaryOK && boundary.item.Kind == frontend.PresentationTurnSeparator &&
-					boundary.item.TurnID == final.item.TurnID {
+					boundary.item.TurnID == terminal.item.TurnID {
 					index--
 				}
 			}
+		case ok && terminal.item.Kind == frontend.PresentationTurnSeparator:
+			index--
 		}
 	}
 	specs = append(specs, semanticCellRenderSpec{})

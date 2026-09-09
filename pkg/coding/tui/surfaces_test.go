@@ -268,6 +268,63 @@ func TestRepositoryStatePrecedesTurnBoundaryAndFinalAnswer(t *testing.T) {
 	}
 }
 
+func TestRepositoryStatePrecedesTerminalBoundaryWithoutFinalAnswer(t *testing.T) {
+	tests := []struct {
+		name     string
+		finish   func(*frontend.Projector)
+		boundary string
+	}{
+		{
+			name: "failed",
+			finish: func(projector *frontend.Projector) {
+				projector.TurnFailed("turn-1", "failed")
+			},
+			boundary: "Work failed",
+		},
+		{
+			name: "interrupted",
+			finish: func(projector *frontend.Projector) {
+				projector.TurnInterrupted("turn-1", "interrupted")
+			},
+			boundary: "Work interrupted",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			projector.TurnStarted("turn-1", "fix it")
+			projector.ToolCompleted("turn-1", "call-1", "write_file", "", time.Second, false, []frontend.WriteAudit{{
+				Kind: "file", Target: "main.go", Action: "update", Success: true,
+			}})
+			projector.WorkspaceUpdated(codingworkspace.Snapshot{
+				ProjectRoot: "/work/mintclaw",
+				CWD:         "/work/mintclaw",
+				Git:         codingworkspace.GitState{Available: true, StatusAvailable: true, Dirty: true},
+			})
+			test.finish(projector)
+
+			model, err := newTestModel(&fakeController{Projector: projector})
+			if err != nil {
+				t.Fatal(err)
+			}
+			content := renderedModelTranscript(model, 100)
+			repositoryIndex := strings.Index(content, "Repository changes")
+			boundaryIndex := strings.Index(content, test.boundary)
+			if repositoryIndex < 0 || boundaryIndex <= repositoryIndex {
+				t.Fatalf(
+					"terminal transcript order repository=%d boundary=%d: %q",
+					repositoryIndex,
+					boundaryIndex,
+					content,
+				)
+			}
+		})
+	}
+}
+
 func TestStatusFooterKeepsStableFactsAndLeavesActivityToWorkingLine(t *testing.T) {
 	projector, err := frontend.NewProjector("thread-1", frontend.ProjectionLimits{})
 	if err != nil {
