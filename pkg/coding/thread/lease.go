@@ -21,8 +21,11 @@ const (
 	// MaxLeaseOwnerBytes bounds untrusted diagnostic data in thread.lock.
 	MaxLeaseOwnerBytes = 4 * 1024
 
-	leaseFileName       = "thread.lock"
-	leaseHostnameMaxLen = 255
+	leaseFileName        = "thread.lock"
+	catalogLeaseFileName = "catalog.lock"
+	leaseHostnameMaxLen  = 255
+	catalogLeaseRetry    = 10 * time.Millisecond
+	catalogOpenAttempts  = 10
 )
 
 // ErrLeaseBusy classifies a coding thread already owned by another process.
@@ -79,6 +82,13 @@ type Lease struct {
 	once      sync.Once
 	released  bool
 	err       error
+}
+
+type catalogLease struct {
+	file  *os.File
+	mutex *sync.Mutex
+	once  sync.Once
+	err   error
 }
 
 // ThreadID returns the leased coding thread ID.
@@ -138,9 +148,22 @@ func (l *Lease) withActive(storeRoot string, threadID string, operation func() e
 	return operation()
 }
 
-// AcquireLease takes a non-blocking writer lease on an existing coding thread.
+// AcquireLease waits for any in-progress reservation handoff, then takes a
+// non-blocking writer lease on an existing coding thread.
 func (s *Store) AcquireLease(threadID string) (*Lease, error) {
-	return s.acquireLease(threadID, newLeaseOwner())
+	catalogLease, err := s.acquireCatalogLease()
+	if err != nil {
+		return nil, err
+	}
+	lease, acquireErr := s.acquireLease(threadID, newLeaseOwner())
+	releaseErr := releaseCatalogLease(catalogLease)
+	if acquireErr != nil || releaseErr != nil {
+		if lease != nil {
+			releaseErr = errors.Join(releaseErr, lease.Release())
+		}
+		return nil, errors.Join(acquireErr, releaseErr)
+	}
+	return lease, nil
 }
 
 func newLeaseOwner() LeaseOwner {
@@ -157,13 +180,25 @@ func newLeaseOwner() LeaseOwner {
 
 // InspectLease probes the authoritative lock without writing an owner record.
 // It is suitable for picker diagnostics only and never grants write access.
-func (s *Store) InspectLease(threadID string) (LeaseInspection, error) {
+func (s *Store) InspectLease(threadID string) (inspection LeaseInspection, resultErr error) {
 	if s == nil {
 		return LeaseInspection{}, fmt.Errorf("coding thread store is nil")
 	}
 	if err := validateThreadID(threadID); err != nil {
 		return LeaseInspection{}, err
 	}
+	catalogLease, err := s.acquireCatalogLease()
+	if err != nil {
+		return LeaseInspection{}, err
+	}
+	defer func() {
+		if releaseErr := releaseCatalogLease(catalogLease); releaseErr != nil {
+			resultErr = errors.Join(
+				resultErr,
+				fmt.Errorf("coding thread lease inspection: release catalog gate: %w", releaseErr),
+			)
+		}
+	}()
 	file, err := s.openLeaseFile(threadID)
 	if err != nil {
 		return LeaseInspection{}, fmt.Errorf("coding thread lease inspection: open %q: %w", threadID, err)
@@ -187,6 +222,112 @@ func (s *Store) InspectLease(threadID string) (LeaseInspection, error) {
 		)
 	}
 	return LeaseInspection{}, nil
+}
+
+func (s *Store) acquireCatalogLease() (*catalogLease, error) {
+	if s == nil {
+		return nil, fmt.Errorf("coding thread store is nil")
+	}
+	s.catalogMu.Lock()
+	acquired := false
+	defer func() {
+		if !acquired {
+			s.catalogMu.Unlock()
+		}
+	}()
+	relativeRoot, err := filepath.Rel(s.durableRoot, s.root)
+	if err != nil {
+		return nil, fmt.Errorf("coding thread catalog lease: resolve store root: %w", err)
+	}
+	if !filepath.IsLocal(relativeRoot) {
+		return nil, fmt.Errorf("coding thread catalog lease: store root escapes durable root")
+	}
+	if relativeRoot != "." {
+		if mkdirErr := s.mkdirDurable(s.durableRoot, relativeRoot, 0o700); mkdirErr != nil {
+			return nil, fmt.Errorf("coding thread catalog lease: create store root: %w", mkdirErr)
+		}
+	}
+	root, err := openCatalogRoot(s.root)
+	if err != nil {
+		return nil, fmt.Errorf("coding thread catalog lease: open store root: %w", err)
+	}
+	var file *os.File
+	var openErr error
+	for attempt := 0; attempt < catalogOpenAttempts; attempt++ {
+		file, openErr = openLeaseFile(root, catalogLeaseFileName)
+		if openErr == nil || !os.IsNotExist(openErr) {
+			break
+		}
+		time.Sleep(catalogLeaseRetry)
+	}
+	closeErr := root.Close()
+	if openErr != nil {
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil, fmt.Errorf("coding thread catalog lease: open lock file: %w", errors.Join(openErr, closeErr))
+	}
+	if closeErr != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("coding thread catalog lease: close store root: %w", closeErr)
+	}
+	for {
+		lockErr := tryAcquireThreadLeaseFile(file)
+		if lockErr == nil {
+			break
+		}
+		if !errors.Is(lockErr, ErrLeaseBusy) {
+			_ = file.Close()
+			return nil, fmt.Errorf("coding thread catalog lease: lock: %w", lockErr)
+		}
+		time.Sleep(catalogLeaseRetry)
+	}
+	if validationErr := s.validateCatalogLeasePath(file); validationErr != nil {
+		_ = releaseThreadLeaseFile(file)
+		_ = file.Close()
+		return nil, fmt.Errorf("coding thread catalog lease: revalidate locked path: %w", validationErr)
+	}
+	acquired = true
+	return &catalogLease{file: file, mutex: &s.catalogMu}, nil
+}
+
+func (s *Store) validateCatalogLeasePath(locked *os.File) error {
+	root, err := openCatalogRoot(s.root)
+	if err != nil {
+		return err
+	}
+	current, openErr := openLeaseFile(root, catalogLeaseFileName)
+	closeErr := root.Close()
+	if joinedErr := errors.Join(openErr, closeErr); joinedErr != nil {
+		if current != nil {
+			_ = current.Close()
+		}
+		return joinedErr
+	}
+	defer func() { _ = current.Close() }()
+	lockedInfo, err := locked.Stat()
+	if err != nil {
+		return err
+	}
+	currentInfo, err := current.Stat()
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(lockedInfo, currentInfo) {
+		return fmt.Errorf("locked file no longer identifies the active catalog path")
+	}
+	return nil
+}
+
+func releaseCatalogLease(lease *catalogLease) error {
+	if lease == nil {
+		return nil
+	}
+	lease.once.Do(func() {
+		lease.err = errors.Join(releaseThreadLeaseFile(lease.file), lease.file.Close())
+		lease.mutex.Unlock()
+	})
+	return lease.err
 }
 
 func (s *Store) acquireLease(threadID string, owner LeaseOwner) (*Lease, error) {
@@ -221,6 +362,32 @@ func (s *Store) acquireLease(threadID string, owner LeaseOwner) (*Lease, error) 
 		_ = releaseThreadLeaseFile(file)
 		_ = file.Close()
 		return nil, fmt.Errorf("coding thread lease: record owner for %q: %w", threadID, err)
+	}
+	return &Lease{storeRoot: s.root, threadID: threadID, owner: owner, file: file}, nil
+}
+
+func (s *Store) acquirePinnedThreadLease(root *os.Root, activePath, threadID string) (*Lease, error) {
+	owner := newLeaseOwner()
+	if err := owner.validate(); err != nil {
+		return nil, err
+	}
+	file, err := openPinnedThreadLeaseFile(root, activePath)
+	if err != nil {
+		return nil, err
+	}
+	if err := tryAcquireThreadLeaseFile(file); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := s.validateAcquiredLeasePath(threadID, file); err != nil {
+		_ = releaseThreadLeaseFile(file)
+		_ = file.Close()
+		return nil, err
+	}
+	if err := writeLeaseOwner(file, owner); err != nil {
+		_ = releaseThreadLeaseFile(file)
+		_ = file.Close()
+		return nil, err
 	}
 	return &Lease{storeRoot: s.root, threadID: threadID, owner: owner, file: file}, nil
 }

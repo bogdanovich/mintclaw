@@ -6,15 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // The fallback targets supported by Go but not MintClaw releases retain the
 // rooted path contract. They do not claim cross-process lease support.
 func openThreadLeaseFile(root *catalogDirectory) (*os.File, error) {
-	if root == nil || root.root == nil {
+	return openLeaseFile(root, leaseFileName)
+}
+
+func openLeaseFile(root *catalogDirectory, name string) (*os.File, error) {
+	if root == nil || root.root == nil || !filepath.IsLocal(name) {
 		return nil, fmt.Errorf("coding thread lease: thread directory is closed")
 	}
-	file, err := root.root.OpenFile(leaseFileName, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := root.root.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}

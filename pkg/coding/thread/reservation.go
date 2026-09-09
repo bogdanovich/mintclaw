@@ -11,17 +11,48 @@ import (
 // any pre-existing thread directory, including unpublished partial state.
 var ErrThreadExists = errors.New("coding thread already exists")
 
-// ReserveThread durably and exclusively reserves a new thread directory. In
-// contrast to ProvisionThread, it never adopts an existing directory.
-func (s *Store) ReserveThread(threadID string) error {
+// ReserveThreadLease durably reserves a new thread and returns its first
+// writer lease without exposing an unlocked active directory.
+func (s *Store) ReserveThreadLease(threadID string) (*Lease, error) {
+	threadsRoot, threadRoot, lease, err := s.reservePinnedThreadLease(threadID)
+	if err != nil {
+		return nil, err
+	}
+	if closeErr := errors.Join(threadRoot.Close(), threadsRoot.Close()); closeErr != nil {
+		return nil, fmt.Errorf(
+			"coding thread store: close new thread reservation: %w",
+			errors.Join(closeErr, lease.Release()),
+		)
+	}
+	return lease, nil
+}
+
+func (s *Store) reservePinnedThreadLease(threadID string) (*os.Root, *os.Root, *Lease, error) {
+	catalogLease, err := s.acquireCatalogLease()
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	threadsRoot, threadRoot, err := s.reserveThreadDirectory(threadID)
 	if err != nil {
-		return err
+		return nil, nil, nil, errors.Join(err, releaseCatalogLease(catalogLease))
 	}
-	if err := errors.Join(threadRoot.Close(), threadsRoot.Close()); err != nil {
-		return fmt.Errorf("coding thread store: close new thread reservation: %w", err)
+	if s.afterThreadReservation != nil {
+		s.afterThreadReservation()
 	}
-	return nil
+	activePath := filepath.Join(s.root, "threads", threadID)
+	lease, acquireErr := s.acquirePinnedThreadLease(threadRoot, activePath, threadID)
+	releaseErr := releaseCatalogLease(catalogLease)
+	if acquireErr != nil || releaseErr != nil {
+		if lease != nil {
+			releaseErr = errors.Join(releaseErr, lease.Release())
+		}
+		closeErr := errors.Join(threadRoot.Close(), threadsRoot.Close())
+		return nil, nil, nil, fmt.Errorf(
+			"coding thread store: acquire new thread lease; reservation left in place: %w",
+			errors.Join(acquireErr, releaseErr, closeErr),
+		)
+	}
+	return threadsRoot, threadRoot, lease, nil
 }
 
 func (s *Store) reserveThreadDirectory(threadID string) (*os.Root, *os.Root, error) {

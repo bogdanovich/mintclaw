@@ -185,10 +185,7 @@ func prepareNewNativeWorkerThread(
 	if _, layoutErr := runtimeLayoutForExecutionRoot(store, metadata, binding.ExecutionRoot); layoutErr != nil {
 		return thread.Metadata{}, nil, layoutErr
 	}
-	if reserveErr := store.ReserveThread(binding.ThreadID); reserveErr != nil {
-		return thread.Metadata{}, nil, reserveErr
-	}
-	lease, err := store.AcquireLease(binding.ThreadID)
+	lease, err := store.ReserveThreadLease(binding.ThreadID)
 	if err != nil {
 		return thread.Metadata{}, nil, err
 	}

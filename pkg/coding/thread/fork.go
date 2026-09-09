@@ -500,17 +500,9 @@ func (s *Store) publishFork(
 	if err != nil {
 		return err
 	}
-	threadsRoot, targetRoot, provisionErr := s.provisionForkTarget(child.ThreadID)
+	threadsRoot, targetRoot, targetLease, provisionErr := s.provisionForkTarget(child.ThreadID)
 	if provisionErr != nil {
 		return provisionErr
-	}
-	targetLease, err := s.acquireForkTargetLease(targetRoot, result.StateRoot, child.ThreadID)
-	if err != nil {
-		closeErr := errors.Join(targetRoot.Close(), threadsRoot.Close())
-		return fmt.Errorf(
-			"coding thread fork: acquire pinned target lease; reservation left in place: %w",
-			errors.Join(err, closeErr),
-		)
 	}
 	var sessionsRoot *os.Root
 	abort := func(operationErr error) error {
@@ -838,15 +830,15 @@ func verifyForkSnapshotFile(ctx context.Context, root *catalogDirectory, name st
 	return nil
 }
 
-func (s *Store) provisionForkTarget(threadID string) (*os.Root, *os.Root, error) {
-	threadsRoot, targetRoot, err := s.reserveThreadDirectory(threadID)
+func (s *Store) provisionForkTarget(threadID string) (*os.Root, *os.Root, *Lease, error) {
+	threadsRoot, targetRoot, lease, err := s.reservePinnedThreadLease(threadID)
 	if errors.Is(err, ErrThreadExists) {
-		return nil, nil, fmt.Errorf("coding thread fork: target thread already exists")
+		return nil, nil, nil, fmt.Errorf("coding thread fork: target thread already exists")
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("coding thread fork: reserve target thread: %w", err)
+		return nil, nil, nil, fmt.Errorf("coding thread fork: reserve target thread: %w", err)
 	}
-	return threadsRoot, targetRoot, nil
+	return threadsRoot, targetRoot, lease, nil
 }
 
 func openPinnedCatalogRoot(path string) (*os.Root, error) {
@@ -876,25 +868,4 @@ func openPinnedCatalogRoot(path string) (*os.Root, error) {
 		return nil, fmt.Errorf("active catalog root changed while pinning")
 	}
 	return root, nil
-}
-
-func (s *Store) acquireForkTargetLease(root *os.Root, targetPath, threadID string) (*Lease, error) {
-	owner := newLeaseOwner()
-	if err := owner.validate(); err != nil {
-		return nil, err
-	}
-	file, err := openPinnedThreadLeaseFile(root, targetPath)
-	if err != nil {
-		return nil, err
-	}
-	if err := tryAcquireThreadLeaseFile(file); err != nil {
-		_ = file.Close()
-		return nil, err
-	}
-	if err := writeLeaseOwner(file, owner); err != nil {
-		_ = releaseThreadLeaseFile(file)
-		_ = file.Close()
-		return nil, err
-	}
-	return &Lease{storeRoot: s.root, threadID: threadID, owner: owner, file: file}, nil
 }

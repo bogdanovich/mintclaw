@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -302,6 +303,7 @@ func truncateUTF8(value string, maxBytes int) string {
 type Store struct {
 	root         string
 	durableRoot  string
+	catalogMu    sync.Mutex
 	mkdirDurable func(string, string, os.FileMode) error
 	writeAtomic  func(string, []byte, os.FileMode) error
 	writeRoot    func(*os.Root, string, []byte, os.FileMode) error
@@ -314,6 +316,7 @@ type Store struct {
 	afterAttachmentBlobPublication     func()
 	afterAttachmentManifestValidation  func()
 	afterReviewResultRead              func()
+	afterThreadReservation             func()
 }
 
 // NewStore creates a side-effect-free metadata store descriptor.
