@@ -153,10 +153,10 @@ func TestFullTranscriptPanelIsPlainCompleteBoundedAndToggleable(t *testing.T) {
 	model.transcript.hasOlder = true
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlT})
-	if model.commandPanel != commandPanelTranscript {
-		t.Fatalf("Ctrl+T opened panel %v", model.commandPanel)
+	if !model.transcriptOverlay.active {
+		t.Fatal("Ctrl+T did not open the transcript overlay")
 	}
-	content := strings.Join(model.commandPanelLines(), "\n")
+	content := model.transcriptOverlayView()
 	for _, want := range []string{
 		"Full transcript", "earlier transcript omitted", "› inspect", "$ printf output", "stdout> first",
 		"stderr> second", "succeeded · exit 0 · 1s",
@@ -174,7 +174,7 @@ func TestFullTranscriptPanelIsPlainCompleteBoundedAndToggleable(t *testing.T) {
 		}
 	}
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyCtrlT})
-	if model.commandPanel != commandPanelNone {
-		t.Fatalf("second Ctrl+T left panel %v", model.commandPanel)
+	if model.transcriptOverlay.active {
+		t.Fatal("second Ctrl+T left transcript overlay open")
 	}
 }

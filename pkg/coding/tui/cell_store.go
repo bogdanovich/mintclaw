@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/bogdanovich/mintclaw/pkg/coding/frontend"
 )
 
@@ -470,16 +472,42 @@ func (m *Model) selectedToolCellID() string {
 	return ""
 }
 
-// fullTranscriptPanelLines renders the currently hydrated transcript window
-// without terminal styling. It intentionally reuses the semantic cells so a
-// command's compact preview and complete evidence cannot diverge.
+// fullTranscriptPanelLines preserves the legacy panel fixture while the
+// interactive overlay consumes the keyed, copy-safe content below.
 func (m *Model) fullTranscriptPanelLines() []string {
-	context := cellRenderContext{Width: max(1, m.width), Theme: m.theme, ColorLevel: cellColorNone}
 	lines := []string{"Full transcript · copy-safe plain text · Ctrl+T or Esc closes"}
+	for _, line := range m.transcriptOverlayLines() {
+		lines = append(lines, line.text)
+	}
+	return lines
+}
+
+// transcriptOverlayLines renders the currently hydrated transcript window
+// without terminal styling. Stable line keys preserve selection when earlier
+// history is prepended. Semantic cells keep compact previews and full evidence
+// from diverging.
+func (m *Model) transcriptOverlayLines() []transcriptOverlayLine {
+	// Projection payloads are bounded to 64 KiB by default. Render well above
+	// that bound so logical line identity never depends on terminal width; the
+	// overlay applies its own grapheme-aware visual wrapping below.
+	const logicalRenderWidth = 1 << 20
+	context := cellRenderContext{Width: logicalRenderWidth, Theme: m.theme, ColorLevel: cellColorNone}
+	visualWidth := max(1, m.width-2)
+	lines := make([]transcriptOverlayLine, 0, len(m.cells.ordered)*2)
 	if m.transcript.loading {
-		lines = append(lines, "[earlier transcript loading]")
+		lines = appendTranscriptOverlayLogicalLine(
+			lines,
+			"notice:loading",
+			"[earlier transcript loading]",
+			visualWidth,
+		)
 	} else if !m.transcript.disabled && (m.transcript.hasOlder || m.snapshot.HasOlderEntries) {
-		lines = append(lines, "[earlier transcript omitted; close this panel and press Page Up to load more]")
+		lines = appendTranscriptOverlayLogicalLine(
+			lines,
+			"notice:older",
+			"[earlier transcript omitted; press Page Up at the top to load more]",
+			visualWidth,
+		)
 	}
 
 	liveMessageIDs := make(map[string]struct{}, len(m.cells.ordered))
@@ -488,6 +516,7 @@ func (m *Model) fullTranscriptPanelLines() []string {
 			liveMessageIDs[cell.item.Message.ID] = struct{}{}
 		}
 	}
+	emittedCells := 0
 	appendCell := func(cell semanticCell) {
 		if cell == nil {
 			return
@@ -497,10 +526,19 @@ func (m *Model) fullTranscriptPanelLines() []string {
 		if text == "" {
 			return
 		}
-		if len(lines) > 0 && lines[len(lines)-1] != "" {
-			lines = append(lines, "")
+		identity := cell.Identity().ID
+		if emittedCells > 0 {
+			lines = appendTranscriptOverlayLogicalLine(lines, "gap:"+identity, "", visualWidth)
 		}
-		lines = append(lines, strings.Split(sanitizeTerminalText(text), "\n")...)
+		for index, logical := range strings.Split(sanitizeTerminalText(text), "\n") {
+			lines = appendTranscriptOverlayLogicalLine(
+				lines,
+				fmt.Sprintf("cell:%s:%d", identity, index),
+				logical,
+				visualWidth,
+			)
+		}
+		emittedCells++
 	}
 	for _, cell := range m.hydratedCells.ordered {
 		if cell.item.Message != nil {
@@ -517,7 +555,63 @@ func (m *Model) fullTranscriptPanelLines() []string {
 		appendCell(cell)
 	}
 	if m.transcript.hasNewer {
-		lines = append(lines, "", "[newer hydrated transcript omitted; close this panel and press Alt+End]")
+		lines = appendTranscriptOverlayLogicalLine(lines, "gap:notice:newer", "", visualWidth)
+		lines = appendTranscriptOverlayLogicalLine(
+			lines,
+			"notice:newer",
+			"[newer hydrated transcript omitted; press End to reload latest]",
+			visualWidth,
+		)
+	}
+	if len(lines) == 0 {
+		lines = appendTranscriptOverlayLogicalLine(lines, "notice:empty", "[transcript is empty]", visualWidth)
+	}
+	return lines
+}
+
+func appendTranscriptOverlayLogicalLine(
+	lines []transcriptOverlayLine,
+	key string,
+	logicalText string,
+	width int,
+) []transcriptOverlayLine {
+	logicalText = sanitizeTerminalText(logicalText)
+	width = max(1, width)
+	if logicalText == "" {
+		return append(lines, transcriptOverlayLine{key: key, logicalText: logicalText})
+	}
+	start := 0
+	lineStart := 0
+	lineWidth := 0
+	var visual strings.Builder
+	flush := func(end int) {
+		lines = append(lines, transcriptOverlayLine{
+			key: key, text: visual.String(), logicalText: logicalText, start: lineStart, end: end,
+		})
+		visual.Reset()
+		lineStart = end
+		lineWidth = 0
+	}
+	for start < len(logicalText) {
+		cluster, clusterWidth := ansi.FirstGraphemeCluster(logicalText[start:], ansi.GraphemeWidth)
+		if cluster == "" {
+			break
+		}
+		end := start + len(cluster)
+		if lineWidth > 0 && lineWidth+clusterWidth > width {
+			flush(start)
+		}
+		if clusterWidth > width {
+			visual.WriteRune('�')
+			lineWidth++
+		} else {
+			visual.WriteString(cluster)
+			lineWidth += clusterWidth
+		}
+		start = end
+	}
+	if visual.Len() > 0 || lineStart == len(logicalText) {
+		flush(len(logicalText))
 	}
 	return lines
 }

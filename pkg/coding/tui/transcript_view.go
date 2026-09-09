@@ -502,11 +502,19 @@ func sanitizeTerminalText(value string) string {
 	value = strings.ReplaceAll(value, "\r\n", "\n")
 	value = strings.ReplaceAll(value, "\r", "\n")
 	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+		if r == '\n' || r == '\t' {
 			return r
 		}
-		return -1
+		if unicode.IsControl(r) || unsafeBidiControl(r) {
+			return -1
+		}
+		return r
 	}, value)
+}
+
+func unsafeBidiControl(r rune) bool {
+	return r == '\u061c' || r == '\u200e' || r == '\u200f' ||
+		(r >= '\u202a' && r <= '\u202e') || (r >= '\u2066' && r <= '\u206f')
 }
 
 func indentTranscript(value string, prefix string) string {

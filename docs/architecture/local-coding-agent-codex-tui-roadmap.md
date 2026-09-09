@@ -1,7 +1,7 @@
 # Codex-like coding TUI roadmap
 
-Status: active implementation roadmap. TUI.0-TUI.13 are implemented, and
-TUI.14-TUI.15 remain planned.
+Status: active implementation roadmap. TUI.0-TUI.14 are implemented, and
+TUI.15 remains planned.
 
 This roadmap defines how to evolve `mintclaw code` from its current functional
 terminal shell into a coding interface with the clarity, density, and live
@@ -720,6 +720,9 @@ Done when:
 
 ### TUI.12 — Codex-like status card and footer hierarchy
 
+Status: implemented. See the
+[TUI.12 exit record](local-coding-agent-tui-12-exit.md).
+
 Dependencies: TUI.5
 
 Effort: medium
@@ -745,6 +748,9 @@ Done when:
 
 ### TUI.13 — Composer, queued input, and visual hierarchy polish
 
+Status: implemented. See the
+[TUI.13 exit record](local-coding-agent-tui-13-exit.md).
+
 Dependencies: TUI.5, TUI.11
 
 Effort: medium
@@ -767,6 +773,9 @@ Done when:
 - tiny terminals always leave a usable composer row and interrupt path.
 
 ### TUI.14 — Transcript navigation, search, copy, and accessibility
+
+Status: implemented. See the
+[TUI.14 exit record](local-coding-agent-tui-14-exit.md).
 
 Dependencies: TUI.7, TUI.9, TUI.10
 

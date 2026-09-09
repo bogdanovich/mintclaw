@@ -25,7 +25,6 @@ const (
 	commandPanelModel
 	commandPanelDiff
 	commandPanelReview
-	commandPanelTranscript
 )
 
 type parsedSlashCommand struct {
@@ -114,6 +113,13 @@ func (m *Model) handleSlashCommand(value string) (bool, tea.Cmd) {
 		return true, textarea.Blink
 	case "/help", "/?":
 		return show(commandPanelHelp)
+	case "/transcript":
+		if !noArgs() {
+			return true, nil
+		}
+		m.err = nil
+		m.clearCommandDraft()
+		return true, m.openTranscriptOverlay()
 	case "/status":
 		if !noArgs() {
 			return true, nil
@@ -321,12 +327,7 @@ func (m *Model) commandPanelLines() []string {
 	if m.commandPanel == commandPanelStatus {
 		return renderStatusCard(m.snapshot, m.width, m.home)
 	}
-	var content string
-	if m.commandPanel == commandPanelTranscript {
-		content = strings.Join(m.fullTranscriptPanelLines(), "\n")
-	} else {
-		content = commandPanelContent(m.commandPanel, m.snapshot)
-	}
+	content := commandPanelContent(m.commandPanel, m.snapshot)
 	content = sanitizeTerminalText(content)
 	logical := strings.Split(strings.Trim(content, "\n"), "\n")
 	lines := make([]string, 0, len(logical))
@@ -364,6 +365,7 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"/help              show commands and keyboard bindings",
 			"/status            show live thread and workspace status",
 			"/model             show the current model and provider",
+			"/transcript        search and copy the retained transcript",
 			"/diff [target]     show bounded hunks for current, base, or commit",
 			"/review [target] [-- instructions]  run a read-only local review",
 			"/attach <paths…>   attach local files to the draft",
@@ -376,7 +378,8 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			"Keyboard",
 			"Enter submit · Ctrl+J newline · Ctrl+V paste clipboard image · Ctrl+C interrupt/exit",
 			"PgUp/PgDown scroll panel or transcript · Alt+End latest · Ctrl+R refresh repository",
-			"Alt+J/Alt+K select tool · Ctrl+O expand tool · Ctrl+T full transcript · Esc close panel",
+			"Alt+J/Alt+K select tool · Ctrl+O expand tool · Ctrl+T transcript overlay · Esc close panel",
+			"Transcript: / find · n/N match · c copy line · C copy all · ? help · Esc close",
 			"Start a prompt with // when its text must begin with a slash.",
 		}, "\n")
 	case commandPanelStatus:
@@ -394,8 +397,6 @@ func commandPanelContent(panel commandPanel, snapshot frontend.ThreadSnapshot) s
 			return "Local code review\nphase: waiting for admission"
 		}
 		return codingreview.RenderStatePlain(*snapshot.Review)
-	case commandPanelTranscript:
-		return ""
 	default:
 		return ""
 	}
